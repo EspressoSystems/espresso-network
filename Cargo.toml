@@ -282,7 +282,8 @@ trait-set = "0.3.0"
 url = { version = "2.3", features = ["serde"] }
 vbs = "0.1"
 vec1 = { version = "1", features = ["serde"] }
-vergen = { version = "8.3", features = ["git", "gitcl"] }
+vergen = { version = "9", features = ["build", "cargo"] }
+vergen-gitcl = "9"
 zeroize = "1.7"
 
 # Push CDN imports

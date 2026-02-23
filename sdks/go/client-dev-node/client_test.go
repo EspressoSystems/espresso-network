@@ -52,13 +52,18 @@ func runDevNode(ctx context.Context, tmpDir string) func() {
 		panic(err)
 	}
 
-	invocation := []string{
-		"run",
-		"-p",
-		"espresso-dev-node",
+	var p *exec.Cmd
+	if bin := os.Getenv("ESPRESSO_DEV_NODE_BIN"); bin != "" {
+		if _, err := os.Stat(bin); err != nil {
+			panic(fmt.Sprintf("ESPRESSO_DEV_NODE_BIN=%s does not exist: %v", bin, err))
+		}
+		fmt.Println("using pre-built espresso-dev-node binary:", bin)
+		p = exec.CommandContext(ctx, bin)
+	} else {
+		fmt.Println("ESPRESSO_DEV_NODE_BIN not set, falling back to cargo run (this will compile espresso-dev-node)")
+		p = exec.CommandContext(ctx, "cargo", "run", "-p", "espresso-dev-node")
+		p.Dir = workingDir
 	}
-	p := exec.CommandContext(ctx, "cargo", invocation...)
-	p.Dir = workingDir
 
 	env := os.Environ()
 	env = append(env, "ESPRESSO_SEQUENCER_API_PORT=21000")
