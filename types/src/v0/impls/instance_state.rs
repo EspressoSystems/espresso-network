@@ -30,6 +30,7 @@ use crate::{
     v0_3::{RegisteredValidator, RewardAmount},
     AuthenticatedValidatorMap, EpochCommittees, PubKey, RegisteredValidatorMap,
 };
+
 /// Represents the immutable state of a node.
 ///
 /// For mutable state, use `ValidatedState`.
@@ -248,10 +249,17 @@ impl NodeState {
             epoch_start_block: 0,
             light_client_contract_address: Cache::builder().max_capacity(1).build(),
             token_contract_address: Cache::builder().max_capacity(1).build(),
-            finalized_hotshot_height: Cache::builder()
-                .max_capacity(1)
-                .time_to_live(Duration::from_secs(30))
-                .build(),
+            finalized_hotshot_height: if cfg!(any(test, feature = "testing")) {
+                Cache::builder()
+                    .max_capacity(1)
+                    .time_to_live(Duration::from_secs(1))
+                    .build()
+            } else {
+                Cache::builder()
+                    .max_capacity(1)
+                    .time_to_live(Duration::from_secs(30))
+                    .build()
+            },
         }
     }
 
@@ -512,10 +520,7 @@ pub mod mock {
     use crate::{
         retain_accounts,
         v0_3::{RewardAccountProofV1, RewardAccountV1, RewardMerkleCommitmentV1},
-        v0_4::{
-            PermittedRewardMerkleTreeV2, RewardAccountProofV2, RewardAccountV2,
-            RewardMerkleCommitmentV2,
-        },
+        v0_4::{PermittedRewardMerkleTreeV2, RewardAccountV2, RewardMerkleCommitmentV2},
         BackoffParams, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment, Leaf2,
     };
 
@@ -632,18 +637,6 @@ pub mod mock {
             tokio::time::sleep(self.delay).await;
 
             Ok(ChainConfig::default())
-        }
-
-        async fn try_fetch_reward_accounts_v2(
-            &self,
-            _retry: usize,
-            _instance: &NodeState,
-            _height: u64,
-            _view: ViewNumber,
-            _reward_merkle_tree_root: RewardMerkleCommitmentV2,
-            _accounts: &[RewardAccountV2],
-        ) -> anyhow::Result<Vec<RewardAccountProofV2>> {
-            anyhow::bail!("unimplemented")
         }
 
         async fn try_fetch_reward_merkle_tree_v2(

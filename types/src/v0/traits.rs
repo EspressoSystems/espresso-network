@@ -45,10 +45,7 @@ use crate::{
         ChainConfig, RegisteredValidator, RewardAccountProofV1, RewardAccountV1, RewardAmount,
         RewardMerkleCommitmentV1,
     },
-    v0_4::{
-        PermittedRewardMerkleTreeV2, RewardAccountProofV2, RewardAccountV2,
-        RewardMerkleCommitmentV2,
-    },
+    v0_4::{PermittedRewardMerkleTreeV2, RewardAccountV2, RewardMerkleCommitmentV2},
     AuthenticatedValidatorMap, BlockMerkleTree, Event, FeeAccount, FeeAccountProof,
     FeeMerkleCommitment, Leaf2, NetworkConfig, PubKey, SeqTypes,
 };
@@ -178,17 +175,6 @@ pub trait StateCatchup: Send + Sync {
             .await
     }
 
-    /// Fetch the given list of reward accounts without retrying on transient errors.
-    async fn try_fetch_reward_accounts_v2(
-        &self,
-        retry: usize,
-        instance: &NodeState,
-        height: u64,
-        view: ViewNumber,
-        reward_merkle_tree_root: RewardMerkleCommitmentV2,
-        accounts: &[RewardAccountV2],
-    ) -> anyhow::Result<Vec<RewardAccountProofV2>>;
-
     /// Fetch the given reward merkle tree without retrying on transient errors.
     async fn try_fetch_reward_merkle_tree_v2(
         &self,
@@ -198,41 +184,6 @@ pub trait StateCatchup: Send + Sync {
         reward_merkle_tree_root: RewardMerkleCommitmentV2,
         accounts: Arc<Vec<RewardAccountV2>>,
     ) -> anyhow::Result<PermittedRewardMerkleTreeV2>;
-
-    /// Fetch the given list of reward accounts, retrying on transient errors.
-    async fn fetch_reward_accounts_v2(
-        &self,
-        instance: &NodeState,
-        height: u64,
-        view: ViewNumber,
-        reward_merkle_tree_root: RewardMerkleCommitmentV2,
-        accounts: Vec<RewardAccountV2>,
-    ) -> anyhow::Result<Vec<RewardAccountProofV2>> {
-        self.backoff()
-            .retry(self, |provider, retry| {
-                let accounts = &accounts;
-                async move {
-                    provider
-                        .try_fetch_reward_accounts_v2(
-                            retry,
-                            instance,
-                            height,
-                            view,
-                            reward_merkle_tree_root,
-                            accounts,
-                        )
-                        .await
-                        .map_err(|err| {
-                            err.context(format!(
-                                "fetching reward accounts {accounts:?}, height {height}, view \
-                                 {view}"
-                            ))
-                        })
-                }
-                .boxed()
-            })
-            .await
-    }
 
     async fn fetch_reward_merkle_tree_v2(
         &self,
@@ -439,27 +390,6 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
         (**self).fetch_chain_config(commitment).await
     }
 
-    async fn try_fetch_reward_accounts_v2(
-        &self,
-        retry: usize,
-        instance: &NodeState,
-        height: u64,
-        view: ViewNumber,
-        reward_merkle_tree_root: RewardMerkleCommitmentV2,
-        accounts: &[RewardAccountV2],
-    ) -> anyhow::Result<Vec<RewardAccountProofV2>> {
-        (**self)
-            .try_fetch_reward_accounts_v2(
-                retry,
-                instance,
-                height,
-                view,
-                reward_merkle_tree_root,
-                accounts,
-            )
-            .await
-    }
-
     async fn try_fetch_reward_merkle_tree_v2(
         &self,
         retry: usize,
@@ -470,19 +400,6 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
     ) -> anyhow::Result<PermittedRewardMerkleTreeV2> {
         (**self)
             .try_fetch_reward_merkle_tree_v2(retry, height, view, reward_merkle_tree_root, accounts)
-            .await
-    }
-
-    async fn fetch_reward_accounts_v2(
-        &self,
-        instance: &NodeState,
-        height: u64,
-        view: ViewNumber,
-        reward_merkle_tree_root: RewardMerkleCommitmentV2,
-        accounts: Vec<RewardAccountV2>,
-    ) -> anyhow::Result<Vec<RewardAccountProofV2>> {
-        (**self)
-            .fetch_reward_accounts_v2(instance, height, view, reward_merkle_tree_root, accounts)
             .await
     }
 
@@ -981,6 +898,9 @@ pub trait SequencerPersistence:
         self.migrate_vid_shares().await?;
         self.migrate_quorum_proposals().await?;
         self.migrate_quorum_certificates().await?;
+        self.migrate_reward_merkle_tree_v2()
+            .await
+            .context("failed to migrate reward merkle tree v2")?;
         self.migrate_validator_authenticated().await?;
 
         tracing::warn!("consensus storage has been migrated to new types");

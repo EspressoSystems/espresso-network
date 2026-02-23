@@ -5,7 +5,7 @@ use std::{
     env,
 };
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use committable::Committable;
 use espresso_types::{
     v0_3::RewardAccountV1,
@@ -13,7 +13,10 @@ use espresso_types::{
     FeeAccount, FeeMerkleTree, PubKey, Transaction,
 };
 
-use crate::{api::data_source::TokenDataSource, U256};
+use crate::{
+    api::{data_source::TokenDataSource, RewardAmount, RewardMerkleTreeV2Data},
+    U256,
+};
 // re-exported here to avoid breaking changes in consumers
 // "deprecated" does not work with "pub use": https://github.com/rust-lang/rust/issues/30827
 #[deprecated(note = "use espresso_types::ADVZNamespaceProofQueryData")]
@@ -185,7 +188,55 @@ where
                     ),
                     status: StatusCode::NOT_FOUND,
                 })
-                .map(|proof| proof.balance)
+                .map(|proof| Some(RewardAmount(proof.balance)))
+        }
+        .boxed()
+    })?
+    .get("get_reward_amounts", move |req, state| {
+        async move {
+            let height = req.integer_param("height")?;
+            let limit: usize = req.integer_param("limit")?;
+            let offset = req.integer_param("offset")?;
+
+            if limit > 10_000 {
+                return Err(merklized_state::Error::Custom {
+                    message: format!("limit {limit} exceeds maximum allowed 10000"),
+                    status: StatusCode::BAD_REQUEST,
+                });
+            }
+
+            let tree_bytes =
+                state
+                    .load_tree(height)
+                    .await
+                    .map_err(|err| merklized_state::Error::Custom {
+                        message: format!(
+                            "failed to load RewardMerkleTreeV2Data from storage at height \
+                             {height}: {err}"
+                        ),
+                        status: StatusCode::NOT_FOUND,
+                    })?;
+
+            let tree_data = bincode::deserialize::<RewardMerkleTreeV2Data>(&tree_bytes)
+                .context(
+                    "Failed to deserialize RewardMerkleTreeV2 for height {height} from storage; \
+                     this should never happen.",
+                )
+                .map_err(|err| merklized_state::Error::Custom {
+                    message: format!(
+                        "failed to load RewardMerkleTreeV2Data from storage at height {height}: \
+                         {err}"
+                    ),
+                    status: StatusCode::NOT_FOUND,
+                })?;
+
+            let result = tree_data.balances[offset..(offset + limit)]
+                .iter()
+                .rev()
+                .cloned()
+                .collect::<Vec<_>>();
+
+            Ok(result)
         }
         .boxed()
     })?
@@ -535,6 +586,22 @@ where
         }
         .boxed()
     })?
+    .at("current_vote_participation", |_, state| {
+        async move {
+            Ok(state
+                .read(|state| state.current_vote_participation().boxed())
+                .await)
+        }
+        .boxed()
+    })?
+    .at("previous_vote_participation", |_, state| {
+        async move {
+            Ok(state
+                .read(|state| state.previous_vote_participation().boxed())
+                .await)
+        }
+        .boxed()
+    })?
     .at("get_block_reward", |req, state| {
         async move {
             let epoch = req
@@ -748,57 +815,21 @@ where
         }
         .boxed()
     })?
-    .get("reward_amounts", move |req, state| {
+    .get("reward_amounts", move |_req, _state| {
         async move {
-            let height = req
-                .integer_param::<_, u64>("height")
-                .map_err(Error::from_request_error)?;
-            let offset = req
-                .integer_param::<_, u64>("offset")
-                .map_err(Error::from_request_error)?;
-            let limit = req
-                .integer_param::<_, u64>("limit")
-                .map_err(Error::from_request_error)?;
-
-            if limit > 10_000 {
-                return Err(Error::catch_all(
-                    StatusCode::BAD_REQUEST,
-                    format!("limit {limit} exceeds maximum allowed 10000"),
-                ));
-            }
-
-            state
-                .get_all_reward_accounts(height, offset, limit)
-                .await
-                .map_err(|err| Error::catch_all(StatusCode::NOT_FOUND, format!("{err:#}")))
+            Err::<u64, _>(Error::catch_all(
+                StatusCode::NOT_FOUND,
+                "catchup/reward-amounts is deprecated".to_string(),
+            ))
         }
         .boxed()
     })?
-    .at("reward_accounts_v2", move |req, state| {
+    .at("reward_accounts_v2", move |_req, _state| {
         async move {
-            let (height, view) = parse_height_view(&req)?;
-            let accounts = req
-                .body_auto::<Vec<RewardAccountV2>, ApiVer>(ApiVer::instance())
-                .map_err(Error::from_request_error)?;
-
-            state
-                .read(|state| {
-                    async move {
-                        state
-                            .get_reward_accounts_v2(
-                                &state.node_state().await,
-                                height,
-                                view,
-                                &accounts,
-                            )
-                            .await
-                            .map_err(|err| {
-                                Error::catch_all(StatusCode::NOT_FOUND, format!("{err:#}"))
-                            })
-                    }
-                    .boxed()
-                })
-                .await
+            Err::<u64, _>(Error::catch_all(
+                StatusCode::NOT_FOUND,
+                "catchup/reward-accounts-v2 is deprecated".to_string(),
+            ))
         }
         .boxed()
     })?

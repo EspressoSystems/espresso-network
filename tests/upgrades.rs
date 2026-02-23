@@ -97,7 +97,7 @@ where
     // Calculate reward claim deadline if applicable
     let reward_claim_deadline_block_height =
         if Target::version() >= DrbAndHeaderUpgradeVersion::version() {
-            // Rewards should be claimable after 2 epochs on the upgrade version (min 200 blocks)
+            // Rewards should be claimable after 3 epochs on the upgrade version
             let upgrade = genesis
                 .upgrades
                 .get(&Target::version())
@@ -106,18 +106,18 @@ where
                 UpgradeMode::View(view_upgrade) => view_upgrade.start_proposing_view,
                 UpgradeMode::Time(_) => panic!("time-based upgrades not supported in tests"),
             };
-            Some(start_proposing_view + (epoch_length * 2).max(300))
+            Some(start_proposing_view + (epoch_length * 3).max(600))
         } else {
             None
         };
 
-    // Run for a least 3 epochs plus a few blocks to confirm we can make progress once
+    // Run for a least 4 epochs to confirm we can make progress once
     // we are using the stake table from the contract.
     // Ensure we run long enough to check rewards if applicable
     let expected_block_height = if let Some(deadline) = reward_claim_deadline_block_height {
-        (epoch_length * 3 + 10).max(deadline)
+        (epoch_length * 4 + 10).max(deadline)
     } else {
-        epoch_length * 3 + 10
+        epoch_length * 4 + 10
     };
 
     // verify native demo continues to work after upgrade

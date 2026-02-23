@@ -173,6 +173,11 @@ pub(crate) trait StakeTableDataSource<T: NodeType> {
     fn previous_proposal_participation(
         &self,
     ) -> impl Send + Future<Output = HashMap<BLSPubKey, f64>>;
+    /// Get the current vote participation.
+    fn current_vote_participation(&self) -> impl Send + Future<Output = HashMap<BLSPubKey, f64>>;
+
+    /// Get the previous vote participation.
+    fn previous_vote_participation(&self) -> impl Send + Future<Output = HashMap<BLSPubKey, f64>>;
 
     fn get_all_validators(
         &self,
@@ -297,13 +302,6 @@ pub(crate) trait CatchupDataSource: Sync {
         view: ViewNumber,
         accounts: &[RewardAccountV2],
     ) -> impl Send + Future<Output = anyhow::Result<RewardMerkleTreeV2>>;
-
-    fn get_all_reward_accounts(
-        &self,
-        height: u64,
-        offset: u64,
-        limit: u64,
-    ) -> impl Send + Future<Output = anyhow::Result<Vec<(RewardAccountV2, RewardAmount)>>>;
 
     fn get_reward_account_v1(
         &self,
