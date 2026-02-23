@@ -1,7 +1,7 @@
 #[cfg(all(feature = "testing", not(debug_assertions), not(clippy)))]
 compile_error!(
-    "testing feature must not be enabled in release builds. \
-     If this is intentional, comment out this check."
+    "testing feature must not be enabled in release builds. If this is intentional, comment out \
+     this check."
 );
 
 use anyhow::Context;
