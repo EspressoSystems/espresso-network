@@ -36,7 +36,7 @@ use hotshot_task_impls::{
 };
 use hotshot_types::{
     consensus::OuterConsensus,
-    constants::EVENT_CHANNEL_SIZE,
+    constants::{BROADCAST_CHANNEL_CAPACITY, EVENT_CHANNEL_SIZE},
     message::{
         GeneralConsensusMessage, Message, MessageKind, SequencingMessage, UpgradeLock,
         EXTERNAL_MESSAGE_VERSION,
