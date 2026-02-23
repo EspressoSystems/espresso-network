@@ -230,7 +230,7 @@ where
                     status: StatusCode::NOT_FOUND,
                 })?;
 
-            let end = std::cmp::max(offset + limit, tree_data.balances.len());
+            let end = std::cmp::min(offset + limit, tree_data.balances.len());
 
             let result = tree_data
                 .balances
