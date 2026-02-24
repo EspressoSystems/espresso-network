@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use espresso_types::v0::traits::MembershipPersistence;
 use sequencer::{
     api::data_source::{DataSourceOptions, SequencerDataSource},
     persistence,
@@ -13,6 +14,12 @@ use sequencer_utils::logging;
 struct Options {
     #[clap(flatten)]
     logging: logging::Config,
+
+    /// Only clear stake table events
+    /// This can be used to recover from a fatal error when applying stake table events without
+    /// deleting any other data
+    #[clap(long)]
+    stake_table_only: bool,
 
     #[command(subcommand)]
     command: Command,
@@ -32,13 +39,25 @@ async fn main() -> anyhow::Result<()> {
     opt.logging.init();
 
     match opt.command {
-        Command::Fs(opt) => {
-            tracing::warn!("resetting file system storage {opt:?}");
-            reset_storage(opt).await
+        Command::Fs(persistence_opt) => {
+            if opt.stake_table_only {
+                tracing::warn!(
+                    "clearing stake table events from file system storage {persistence_opt:?}"
+                );
+                clear_stake_table_events(persistence_opt).await
+            } else {
+                tracing::warn!("resetting file system storage {persistence_opt:?}");
+                reset_storage(persistence_opt).await
+            }
         },
-        Command::Sql(opt) => {
-            tracing::warn!("resetting SQL storage {opt:?}");
-            reset_storage(*opt).await
+        Command::Sql(persistence_opt) => {
+            if opt.stake_table_only {
+                tracing::warn!("clearing stake table events from SQL storage {persistence_opt:?}");
+                clear_stake_table_events(*persistence_opt).await
+            } else {
+                tracing::warn!("resetting SQL storage {persistence_opt:?}");
+                reset_storage(*persistence_opt).await
+            }
         },
     }
 }
@@ -49,5 +68,11 @@ async fn reset_storage<O: DataSourceOptions>(opt: O) -> anyhow::Result<()> {
     // Reset consensus storage.
     opt.reset().await?;
 
+    Ok(())
+}
+
+async fn clear_stake_table_events<O: DataSourceOptions>(mut opt: O) -> anyhow::Result<()> {
+    let persistence = opt.create().await?;
+    persistence.delete_stake_tables().await?;
     Ok(())
 }

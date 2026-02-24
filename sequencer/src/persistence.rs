@@ -118,7 +118,7 @@ mod tests {
             EventConsumer, EventsPersistenceRead, MembershipPersistence, NullEventConsumer,
             PersistenceOptions, SequencerPersistence,
         },
-        v0_3::{AuthenticatedValidator, Fetcher, RegisteredValidator},
+        v0_3::{AuthenticatedValidator, EventKey, Fetcher, RegisteredValidator, StakeTableEvent},
         Event, L1Client, L1ClientOptions, Leaf, Leaf2, NodeState, PubKey, SeqTypes,
         SequencerVersions, ValidatedState,
     };
@@ -127,7 +127,9 @@ mod tests {
         types::{BLSPubKey, SignatureKey},
         InitializerEpochInfo,
     };
-    use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
+    use hotshot_contract_adapter::{
+        sol_types::StakeTableV2::Delegated, stake_table::StakeTableContractVersion,
+    };
     use hotshot_example_types::node_types::TestVersions;
     use hotshot_query_service::{availability::BlockQueryData, testing::mocks::MockVersions};
     use hotshot_types::{
@@ -1752,6 +1754,79 @@ mod tests {
             iter.next()
         );
         assert_eq!(None, iter.next());
+
+        Ok(())
+    }
+
+    #[rstest_reuse::apply(persistence_types)]
+    pub async fn test_delete_stake_tables<P: TestablePersistence>(
+        _p: PhantomData<P>,
+    ) -> anyhow::Result<()> {
+        let tmp = P::tmp_storage().await;
+        let mut opt = P::options(&tmp);
+        let storage = opt.create().await.unwrap();
+
+        let event1 = StakeTableEvent::Delegate(Delegated {
+            delegator: Address::ZERO,
+            validator: Address::ZERO,
+            amount: U256::from(100),
+        });
+        let event2 = StakeTableEvent::Delegate(Delegated {
+            delegator: Address::ZERO,
+            validator: Address::ZERO,
+            amount: U256::from(200),
+        });
+
+        let l1_block = 42u64;
+        let events: Vec<(EventKey, StakeTableEvent)> =
+            vec![((l1_block, 0), event1), ((l1_block, 1), event2)];
+
+        storage.store_events(l1_block, events.clone()).await?;
+
+        let (read_offset, loaded_events) = storage.load_events(0_u64, l1_block).await?;
+        assert!(read_offset.is_some());
+        assert_eq!(loaded_events.len(), 2);
+        assert_eq!(loaded_events, events);
+
+        // Store some validators
+        let v = RegisteredValidator::mock();
+        let mut vmap = IndexMap::new();
+        vmap.insert(v.account, v);
+        storage
+            .store_all_validators(EpochNumber::new(1), vmap.clone())
+            .await?;
+
+        let loaded = storage
+            .load_all_validators(EpochNumber::new(1), 0, 10)
+            .await?;
+        assert_eq!(loaded.len(), 1);
+
+        storage.delete_stake_tables().await?;
+
+        // Events cleared
+        let (read_offset, loaded_events) = storage.load_events(0_u64, l1_block).await?;
+        assert!(read_offset.is_none());
+        assert!(loaded_events.is_empty());
+
+        // Validators cleared
+        let loaded = storage
+            .load_all_validators(EpochNumber::new(1), 0, 10)
+            .await
+            .unwrap_or_default();
+        assert!(loaded.is_empty());
+
+        let event3 = StakeTableEvent::Delegate(Delegated {
+            delegator: Address::ZERO,
+            validator: Address::ZERO,
+            amount: U256::from(300),
+        });
+        let new_events: Vec<(EventKey, StakeTableEvent)> = vec![((l1_block, 0), event3)];
+        storage.store_events(l1_block, new_events.clone()).await?;
+
+        let (read_offset, loaded_events) = storage.load_events(0_u64, l1_block).await?;
+        assert!(read_offset.is_some());
+        assert_eq!(loaded_events.len(), 1);
+        assert_eq!(loaded_events, new_events);
 
         Ok(())
     }
