@@ -1712,7 +1712,7 @@ mod test {
         // there should be multiple nodes with same index but different created time
         let (count,) = query_as::<(i64,)>(
             " SELECT count(*) FROM (SELECT count(*) as count FROM test_tree GROUP BY path having \
-             count(*) > 1)",
+             count(*) > 1) AS s",
         )
         .fetch_one(tx.as_mut())
         .await
@@ -1731,7 +1731,7 @@ mod test {
         let mut tx = storage.read().await.unwrap();
         let (count,) = query_as::<(i64,)>(
             "SELECT count(*) FROM (SELECT count(*) as count FROM test_tree GROUP BY path having \
-             count(*) > 1)",
+             count(*) > 1) AS s",
         )
         .fetch_one(tx.as_mut())
         .await
