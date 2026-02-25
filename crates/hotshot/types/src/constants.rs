@@ -38,7 +38,7 @@ pub const COMBINED_NETWORK_DELAY_DURATION: u64 = 5000;
 pub const REQUEST_DATA_DELAY: u64 = 5000;
 
 /// Default channel size for consensus event sharing
-pub const EVENT_CHANNEL_SIZE: usize = 1_000;
+pub const EVENT_CHANNEL_SIZE: usize = 10_000;
 
 /// Default channel size for HotShot -> application communication
 pub const EXTERNAL_EVENT_CHANNEL_SIZE: usize = 1_000;
