@@ -56,8 +56,8 @@ intervene to rescue protocol funds and return them to the Asset Recovery Address
 
 **Asset Recovery Address (ARA) (Arbitrum One) :** `0x5e37B8038615EF3D75cf28b5982C4CBF065401fB`
 
-**Reward**: Up to 10% of rescued assets, capped at a maximum of $1,000,000. All funds must be returned to the ARA within
-**6 hours** of rescue. If you cannot meet this deadline, notify us immediately at security@espressosys.com.
+**Reward**: Up to 10% of rescued assets, capped at a maximum of $X. All funds must be returned to the ARA within **6
+hours** of rescue. If you cannot meet this deadline, notify us immediately at security@espressosys.com.
 
 The full agreement text is maintained by SEAL at:
 https://github.com/security-alliance/safe-harbor/blob/main/documents/agreement.md
