@@ -40,17 +40,19 @@ pub trait TestSystemExt {
     /// Create an export-calldata command with sender-address for validation
     fn export_calldata_cmd(&self) -> Command;
 
-    // Used in node_signatures.rs but not all test binaries
+    // Used in cli.rs but not all test binaries
     #[allow(dead_code)]
     /// Create an export-node-signatures command with system keys and address
     fn export_node_signatures_cmd(&self) -> Result<Command>;
 
+    #[allow(dead_code)]
     fn bls_private_key_str(&self) -> Result<String>;
 
     // Used in cli.rs but not all test binaries
     #[allow(dead_code)]
     fn bls_public_key_str(&self) -> String;
 
+    #[allow(dead_code)]
     fn state_private_key_str(&self) -> Result<String>;
 
     // Used in cli.rs parametrized tests, not all test binaries

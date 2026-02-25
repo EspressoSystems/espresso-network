@@ -297,6 +297,17 @@ mod test {
             ),
             "{lines:#?}"
         );
+        let build_info_line = lines
+            .iter()
+            .find(|l| l.starts_with("consensus_build_info{"));
+        assert!(
+            build_info_line.is_some(),
+            "missing consensus_build_info metric: {lines:#?}"
+        );
+        assert!(
+            build_info_line.unwrap().contains("testing=\"yes\""),
+            "expected testing=yes in test builds: {lines:#?}"
+        );
 
         task.abort();
     }
