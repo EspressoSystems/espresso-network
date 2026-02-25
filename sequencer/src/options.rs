@@ -457,10 +457,9 @@ fn build_version() -> String {
         "no"
     };
     format!(
-        "{}\nfeatures: {}\ntarget: {}\ntesting: {}",
+        "{}\nfeatures: {}\ntesting: {}",
         info.clap_version(),
         env!("VERGEN_CARGO_FEATURES"),
-        env!("VERGEN_CARGO_TARGET_TRIPLE"),
         testing,
     )
 }

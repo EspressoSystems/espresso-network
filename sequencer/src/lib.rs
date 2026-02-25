@@ -239,7 +239,6 @@ where
                 "branch".into(),
                 "debug".into(),
                 "features".into(),
-                "target".into(),
                 "testing".into(),
             ],
         )
@@ -247,9 +246,8 @@ where
             info.build_timestamp.into(),
             info.git_dirty.into(),
             info.git_branch.into(),
-            env!("VERGEN_CARGO_DEBUG").into(),
+            info.is_debug.to_string().into(),
             env!("VERGEN_CARGO_FEATURES").into(),
-            env!("VERGEN_CARGO_TARGET_TRIPLE").into(),
             if cfg!(feature = "testing") {
                 "yes"
             } else {
