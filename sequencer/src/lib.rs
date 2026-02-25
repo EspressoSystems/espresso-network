@@ -246,7 +246,7 @@ where
             info.build_timestamp.into(),
             info.git_dirty.into(),
             info.git_branch.into(),
-            info.is_debug.to_string().into(),
+            info.is_debug.to_string(),
             env!("VERGEN_CARGO_FEATURES").into(),
             if cfg!(feature = "testing") {
                 "yes"
