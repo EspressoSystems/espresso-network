@@ -666,7 +666,7 @@ impl<S: RewardMerkleTreeStorage> IntoIterator for StorageBackedRewardMerkleTreeV
 /// # Arguments
 /// * `node` - Root node to traverse (can be Empty, Leaf, Branch, or ForgettenSubtree)
 /// * `entries` - Mutable vector to append discovered (account, balance) pairs
-fn collect_merkle_leaves(
+pub(crate) fn collect_merkle_leaves(
     node: &storage::InnerRewardMerkleTreeRoot,
     entries: &mut Vec<(RewardAccountV2, RewardAmount)>,
 ) {

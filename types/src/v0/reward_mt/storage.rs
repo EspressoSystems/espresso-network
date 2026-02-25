@@ -18,7 +18,7 @@ use jf_merkle_tree_compat::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    reward_mt::{RewardMerkleProof, REWARD_MERKLE_TREE_V2_INNER_HEIGHT},
+    reward_mt::{collect_merkle_leaves, RewardMerkleProof, REWARD_MERKLE_TREE_V2_INNER_HEIGHT},
     sparse_mt::{Keccak256Hasher, KeccakNode},
     v0_3::RewardAmount,
     v0_4::{RewardAccountV2, REWARD_MERKLE_TREE_V2_ARITY, REWARD_MERKLE_TREE_V2_HEIGHT},
@@ -307,69 +307,27 @@ pub trait RewardMerkleTreeStorage {
             },
         )?
     }
-
-    /// Remove an account from memory (for sparse tree optimization).
-    ///
-    /// **Note**: Currently not fully implemented. The inner tree's `forget_internal`
-    /// is called but trees are not actually made sparse. This is a placeholder for
-    /// future sparse tree support where nodes can be pruned from memory while
-    /// preserving the root hash.
-    ///
-    /// # Arguments
-    /// * `pos` - Account address to forget
-    ///
-    /// # Returns
-    /// - `Ok(value, proof)` - Account found, returns balance and proof before forgetting
-    /// - `NotInMemory` - Already forgotten or never existed
-    /// - `NotFound(())` - Account doesn't exist
-    ///
-    /// # Errors
-    /// Returns storage error if IO operation fails
-    #[allow(unused)]
-    fn forget(
-        &self,
-        pos: impl Borrow<RewardAccountV2>,
-    ) -> Result<LookupResult<RewardAmount, RewardMerkleProof, ()>, Self::Error> {
-        let pos = pos.borrow();
-        let outer_index = OuterIndex::new(pos);
-        let path =
-            <RewardAccountV2 as ToTraversalPath<REWARD_MERKLE_TREE_V2_ARITY>>::to_traversal_path(
-                pos,
-                REWARD_MERKLE_TREE_V2_HEIGHT,
-            );
-        let inner_path = &path[..REWARD_MERKLE_TREE_V2_INNER_HEIGHT];
-        self.with_tree_mut(
-            &outer_index,
-            |tree| -> LookupResult<RewardAmount, RewardMerkleProof, ()> {
-                let (root, result) =
-                    tree.forget_internal(REWARD_MERKLE_TREE_V2_INNER_HEIGHT, inner_path);
-                match result {
-                    LookupResult::Ok(value, proof) => {
-                        *tree = root;
-                        LookupResult::Ok(value, MerkleProof::new(*pos, proof))
-                    },
-                    LookupResult::NotInMemory => LookupResult::NotInMemory,
-                    LookupResult::NotFound(_) => LookupResult::NotFound(()),
-                }
-            },
-        )
-    }
 }
 
 /// In-memory storage with single-entry cache.
 ///
 /// # Design
 ///
-/// Stores all 16 inner tree roots in a HashMap, with a single-entry cache for the
-/// most recently accessed partition. This provides excellent performance for
-/// sequential access patterns (common during block processing) while keeping
-/// memory overhead minimal.
+/// Stores each partition as a flat `Vec<(RewardAccountV2, RewardAmount)>` entry list
+/// in a HashMap. Only the currently-active partition is held as a live
+/// `InnerRewardMerkleTreeRoot` in the single-entry cache; all other partitions
+/// stay as compact entry lists.
+///
+/// On a cache miss the entry list is rebuilt into a tree (same logic as
+/// `RewardMerkleTreeFSStorage::load_from_disk`). On eviction the live tree is
+/// reduced back to an entry list via `collect_merkle_leaves` (same logic as
+/// `RewardMerkleTreeFSStorage::flush_cache`).
 ///
 /// # Caching Strategy
 ///
-/// - **Cache hit**: Direct access to cached tree (no HashMap lookup)
-/// - **Cache miss**: Flush current cache to HashMap, load new tree into cache
-/// - **On drop**: Cache is automatically flushed (no data loss)
+/// - **Cache hit**: Direct access to the live tree (no rebuild)
+/// - **Cache miss**: Evict current entry, rebuild tree from stored entries
+/// - **On drop**: Cache is automatically flushed back to entry list
 ///
 /// # Thread Safety
 ///
@@ -390,13 +348,14 @@ pub trait RewardMerkleTreeStorage {
 /// - Long-term persistence (loses state on restart)
 #[derive(Debug)]
 pub struct CachedInMemoryStorage {
-    /// Main storage: HashMap of outer index → inner tree root
-    /// All non-cached trees live here
-    roots: RwLock<HashMap<OuterIndex, InnerRewardMerkleTreeRoot>>,
+    /// Backing store: HashMap of outer index → flat list of (account, amount) pairs.
+    /// The tree is rebuilt from this list when the partition is loaded into cache.
+    storage: RwLock<HashMap<OuterIndex, Vec<(RewardAccountV2, RewardAmount)>>>,
 
-    /// Single-entry cache: (partition_index, tree_root)
-    /// The most recently accessed partition is kept here for fast access
-    cache: RwLock<Option<(OuterIndex, InnerRewardMerkleTreeRoot)>>,
+    /// Single-entry cache: (partition_index, live tree root, dirty).
+    /// `dirty` is `true` if the tree has been mutated since loading; only dirty
+    /// entries are written back on eviction.
+    cache: RwLock<Option<(OuterIndex, InnerRewardMerkleTreeRoot, bool)>>,
 }
 
 // Manual Clone implementation
@@ -404,22 +363,22 @@ impl Clone for CachedInMemoryStorage {
     fn clone(&self) -> Self {
         self.flush_cache(); // Ensure cache is flushed before cloning
         Self {
-            roots: RwLock::new(self.roots.read().unwrap().clone()),
-            cache: RwLock::new(self.cache.read().unwrap().clone()),
+            storage: RwLock::new(self.storage.read().unwrap().clone()),
+            cache: RwLock::new(None),
         }
     }
 }
 
-// Manual Serialize implementation
+// Manual Serialize implementation — flush cache so storage is fully up-to-date.
 impl Serialize for CachedInMemoryStorage {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
         use serde::ser::SerializeStruct;
-        let mut state = serializer.serialize_struct("CachedInMemoryStorage", 2)?;
-        state.serialize_field("roots", &*self.roots.read().unwrap())?;
-        state.serialize_field("cache", &*self.cache.read().unwrap())?;
+        self.flush_cache();
+        let mut state = serializer.serialize_struct("CachedInMemoryStorage", 1)?;
+        state.serialize_field("storage", &*self.storage.read().unwrap())?;
         state.end()
     }
 }
@@ -432,25 +391,25 @@ impl<'de> Deserialize<'de> for CachedInMemoryStorage {
     {
         #[derive(Deserialize)]
         struct CachedInMemoryStorageData {
-            roots: HashMap<OuterIndex, InnerRewardMerkleTreeRoot>,
-            cache: Option<(OuterIndex, InnerRewardMerkleTreeRoot)>,
+            storage: HashMap<OuterIndex, Vec<(RewardAccountV2, RewardAmount)>>,
         }
 
         let data = CachedInMemoryStorageData::deserialize(deserializer)?;
         Ok(Self {
-            roots: RwLock::new(data.roots),
-            cache: RwLock::new(data.cache),
+            storage: RwLock::new(data.storage),
+            cache: RwLock::new(None),
         })
     }
 }
 
-// Manual PartialEq implementation that compares logical content
+// Manual PartialEq implementation that compares logical content.
+// Both entry lists are produced by deterministic tree traversal so ordering is
+// canonical — direct Vec comparison is sufficient.
 impl PartialEq for CachedInMemoryStorage {
     fn eq(&self, other: &Self) -> bool {
-        // Flush both caches before comparison
         self.flush_cache();
         other.flush_cache();
-        *self.roots.read().unwrap() == *other.roots.read().unwrap()
+        *self.storage.read().unwrap() == *other.storage.read().unwrap()
     }
 }
 
@@ -467,7 +426,7 @@ impl CachedInMemoryStorage {
     /// ```
     pub fn new() -> Self {
         Self {
-            roots: RwLock::new(HashMap::new()),
+            storage: RwLock::new(HashMap::new()),
             cache: RwLock::new(None),
         }
     }
@@ -488,49 +447,60 @@ impl CachedInMemoryStorage {
     /// ```
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
-            roots: RwLock::new(HashMap::with_capacity(capacity)),
+            storage: RwLock::new(HashMap::with_capacity(capacity)),
             cache: RwLock::new(None),
         }
     }
 
     /// Get the number of non-empty partitions (excluding cached partition).
     ///
-    /// Returns the count of inner trees stored in the HashMap. The cached tree
-    /// (if any) is not included in this count. For total partitions, check if
-    /// cache is populated and add 1 if the cached index isn't in roots.
-    ///
     /// # Returns
-    /// Number of partitions in persistent storage (0-16)
+    /// Number of partitions in backing storage (0-16)
     pub fn len(&self) -> usize {
-        self.roots.read().unwrap().len()
+        self.storage.read().unwrap().len()
     }
 
-    /// Check if storage is empty (no partitions in HashMap, ignoring cache).
-    ///
-    /// Returns `true` if no inner trees are stored in the HashMap. The cache
-    /// may still contain a tree.
-    ///
-    /// # Returns
-    /// Whether persistent storage is empty
+    /// Check if storage is empty (no partitions in backing map, ignoring cache).
     pub fn is_empty(&self) -> bool {
-        self.roots.read().unwrap().is_empty()
+        self.storage.read().unwrap().is_empty()
     }
 
-    /// Clear all stored roots and cache, resetting to empty state.
-    ///
-    /// Removes all inner trees from both HashMap and cache. After calling this,
-    /// the storage is equivalent to freshly created with `new()`.
+    /// Clear all stored entries and cache, resetting to empty state.
     pub fn clear(&self) {
-        self.roots.write().unwrap().clear();
+        self.storage.write().unwrap().clear();
         *self.cache.write().unwrap() = None;
+    }
+
+    /// Rebuild an inner tree from a flat list of (account, amount) entries.
+    ///
+    /// Mirrors the reconstruction logic in `RewardMerkleTreeFSStorage::load_from_disk`.
+    fn build_tree(entries: Vec<(RewardAccountV2, RewardAmount)>) -> InnerRewardMerkleTreeRoot {
+        let mut root = Arc::new(MerkleNode::Empty);
+        for (account, amount) in entries {
+            let path = <RewardAccountV2 as ToTraversalPath<REWARD_MERKLE_TREE_V2_ARITY>>::to_traversal_path(
+                &account,
+                REWARD_MERKLE_TREE_V2_HEIGHT,
+            );
+            let inner_path = &path[..REWARD_MERKLE_TREE_V2_INNER_HEIGHT];
+            let (new_root, ..) = root
+                .update_with_internal::<Keccak256Hasher, REWARD_MERKLE_TREE_V2_ARITY, _>(
+                    REWARD_MERKLE_TREE_V2_INNER_HEIGHT,
+                    account,
+                    inner_path,
+                    |_| Some(amount),
+                )
+                .expect("Building tree from valid entries should not fail");
+            root = new_root;
+        }
+        root
     }
 
     /// Load an inner tree into the single-entry cache (internal).
     ///
     /// If the requested tree is already cached, does nothing. Otherwise:
-    /// 1. Flushes current cache to HashMap
-    /// 2. Loads requested tree from HashMap (or creates Empty if not found)
-    /// 3. Stores in cache for fast access
+    /// 1. Flushes current cache back to entry list
+    /// 2. Rebuilds the requested tree from its stored entry list (or starts empty)
+    /// 3. Stores the live tree in the cache
     ///
     /// # Arguments
     /// * `index` - Partition index to load
@@ -538,7 +508,7 @@ impl CachedInMemoryStorage {
         // Check if the requested tree is already cached
         {
             let cache = self.cache.read().unwrap();
-            if let Some((cached_index, _)) = &*cache {
+            if let Some((cached_index, ..)) = &*cache {
                 if cached_index == index {
                     return; // Already cached
                 }
@@ -548,26 +518,38 @@ impl CachedInMemoryStorage {
         // Flush the current cache if it exists
         self.flush_cache();
 
-        // Load the tree from storage or create a new one
-        let tree = self
-            .roots
-            .write()
-            .unwrap()
-            .remove(index)
-            .unwrap_or_else(|| Arc::new(MerkleNode::Empty));
+        // Clone the entry list from backing storage (do NOT remove it — the data
+        // must stay there so a clean eviction can skip the write-back, parallel
+        // to how fs_storage leaves the file on disk when not dirty).
+        let entries = self.storage.read().unwrap().get(index).cloned();
+        let tree = match entries {
+            Some(entries) => Self::build_tree(entries),
+            None => Arc::new(MerkleNode::Empty),
+        };
 
-        // Cache the tree
-        *self.cache.write().unwrap() = Some((*index, tree));
+        *self.cache.write().unwrap() = Some((*index, tree, false));
     }
 
-    /// Write cached tree back to HashMap (internal).
+    /// Evict the cached tree back to a flat entry list (internal).
     ///
-    /// If cache contains a tree, moves it from cache to HashMap. Called automatically
-    /// before loading a different partition or when comparing storage instances.
+    /// Mirrors `RewardMerkleTreeFSStorage::flush_cache`: only dirty entries are
+    /// written back to `storage`, saving the `collect_merkle_leaves` traversal
+    /// for partitions that were only read. Empty partitions are removed rather
+    /// than stored as empty Vecs.
     fn flush_cache(&self) {
         let mut cache = self.cache.write().unwrap();
-        if let Some((index, tree)) = cache.take() {
-            self.roots.write().unwrap().insert(index, tree);
+        if let Some((index, tree, dirty)) = cache.as_ref() {
+            if *dirty {
+                let mut entries = Vec::new();
+                collect_merkle_leaves(tree, &mut entries);
+                let mut storage = self.storage.write().unwrap();
+                if entries.is_empty() {
+                    storage.remove(index);
+                } else {
+                    storage.insert(*index, entries);
+                }
+            }
+            cache.take();
         }
     }
 }
@@ -590,7 +572,7 @@ impl RewardMerkleTreeStorage for CachedInMemoryStorage {
 
         // Execute the closure with the cached tree
         let cache = self.cache.read().unwrap();
-        let (_, root) = cache.as_ref().expect("Tree should be in cache after load");
+        let (_, root, _) = cache.as_ref().expect("Tree should be in cache after load");
         Ok(f(root))
     }
 
@@ -601,34 +583,37 @@ impl RewardMerkleTreeStorage for CachedInMemoryStorage {
         // Load into cache if needed
         self.load_into_cache(index);
 
-        // Execute the closure with the cached tree
+        // Execute the closure with the cached tree; mark dirty since the caller
+        // may mutate the tree.
         let mut cache = self.cache.write().unwrap();
-        let (_, root) = cache.as_mut().expect("Tree should be in cache after load");
-        Ok(f(root))
+        let (_, root, dirty) = cache.as_mut().expect("Tree should be in cache after load");
+        let result = f(root);
+        *dirty = true;
+        Ok(result)
     }
 
     fn exists(&self, index: &OuterIndex) -> bool {
         // Check if it's in the cache first
         {
             let cache = self.cache.read().unwrap();
-            if let Some((cached_index, _)) = &*cache {
+            if let Some((cached_index, ..)) = &*cache {
                 if cached_index == index {
                     return true;
                 }
             }
         }
-        // Otherwise check persistent storage
-        self.roots.read().unwrap().contains_key(index)
+        // Otherwise check backing storage
+        self.storage.read().unwrap().contains_key(index)
     }
 
     fn indices(&self) -> Vec<OuterIndex> {
-        let roots = self.roots.read().unwrap();
-        let mut indices: Vec<_> = roots.keys().copied().collect();
+        let storage = self.storage.read().unwrap();
+        let mut indices: Vec<_> = storage.keys().copied().collect();
 
-        // Include cached index if it's not in persistent storage
+        // Include cached index if it's not already in backing storage
         let cache = self.cache.read().unwrap();
-        if let Some((cached_index, _)) = &*cache {
-            if !roots.contains_key(cached_index) {
+        if let Some((cached_index, ..)) = &*cache {
+            if !storage.contains_key(cached_index) {
                 indices.push(*cached_index);
             }
         }
