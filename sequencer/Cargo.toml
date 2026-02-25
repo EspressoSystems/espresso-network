@@ -128,7 +128,6 @@ vid = { path = "../vid" }
 [build-dependencies]
 anyhow = { workspace = true }
 vergen = { workspace = true }
-vergen-gitcl = { workspace = true }
 
 [dev-dependencies]
 escargot = "0.5.10"

@@ -64,7 +64,10 @@ jobs:
             save-cache: true
 
     steps:
+      # Full history needed for `git describe` to find tags (used in binary version output)
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: rui314/setup-mold@v1
 
       - name: Enable Rust Caching
@@ -127,7 +130,10 @@ jobs:
             save-cache: true
 
     steps:
+      # Full history needed for `git describe` to find tags (used in binary version output)
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: rui314/setup-mold@v1
 
       - name: Enable Rust Caching

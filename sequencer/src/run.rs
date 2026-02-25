@@ -445,9 +445,9 @@ mod test {
             lines.contains(
                 &format!(
                     "consensus_version{{desc=\"{}\",rev=\"{}\",timestamp=\"{}\"}} 1",
-                    env!("VERGEN_GIT_DESCRIBE"),
-                    env!("VERGEN_GIT_SHA"),
-                    env!("VERGEN_GIT_COMMIT_TIMESTAMP"),
+                    sequencer_utils::build_info::GIT_DESCRIBE,
+                    sequencer_utils::build_info::GIT_SHA,
+                    sequencer_utils::build_info::GIT_COMMIT_TIMESTAMP,
                 )
                 .as_str()
             ),

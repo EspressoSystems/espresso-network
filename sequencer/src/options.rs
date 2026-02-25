@@ -450,21 +450,15 @@ fn get_default_node_type() -> String {
 }
 
 fn build_version() -> String {
+    let info = sequencer_utils::build_info!();
     let testing = if cfg!(feature = "testing") {
         "yes"
     } else {
         "no"
     };
     format!(
-        "\ndescribe: {}\nrev: {}\ndirty: {}\nbranch: {}\ncommit-timestamp: {}\nbuild-timestamp: \
-         {}\ndebug: {}\nfeatures: {}\ntarget: {}\ntesting: {}",
-        env!("VERGEN_GIT_DESCRIBE"),
-        env!("VERGEN_GIT_SHA"),
-        env!("VERGEN_GIT_DIRTY"),
-        env!("VERGEN_GIT_BRANCH"),
-        env!("VERGEN_GIT_COMMIT_TIMESTAMP"),
-        env!("VERGEN_BUILD_TIMESTAMP"),
-        env!("VERGEN_CARGO_DEBUG"),
+        "{}\nfeatures: {}\ntarget: {}\ntesting: {}",
+        info.clap_version(),
         env!("VERGEN_CARGO_FEATURES"),
         env!("VERGEN_CARGO_TARGET_TRIPLE"),
         testing,

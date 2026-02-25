@@ -26,6 +26,11 @@ toml = { workspace = true }
 tracing = "0.1.37"
 url = "2.3.1"
 
+[build-dependencies]
+anyhow = { workspace = true }
+vergen = { workspace = true }
+vergen-gitcl = { workspace = true }
+
 [dev-dependencies]
 test-log = { workspace = true }
 
