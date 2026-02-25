@@ -204,38 +204,48 @@ impl RewardMerkleTreeFSStorage {
         }
     }
 
-    /// Load an inner tree into the single-entry cache (internal).
+    /// Ensure the requested partition is in the cache (internal).
     ///
-    /// If the requested tree is already cached, does nothing. Otherwise:
-    /// 1. Flushes current cache to disk
-    /// 2. Loads requested tree from disk (or creates Empty if file doesn't exist)
-    /// 3. Stores in cache for fast access
+    /// Called while **holding the cache write lock** (passed as `cache`), so the
+    /// load and the subsequent closure call in `with_tree`/`with_tree_mut` are
+    /// one uninterrupted critical section — eliminating the TOCTOU race that
+    /// would exist if the lock were released between loading and using.
     ///
-    /// # Arguments
-    /// * `index` - Partition index to load
+    /// Cannot call `self.flush_cache()` here (that would deadlock by trying to
+    /// re-acquire the write lock), so the eviction logic is inlined.
     ///
     /// # Returns
-    /// - `Ok(())` - Tree loaded into cache
-    /// - `Err(io::Error)` - Disk I/O failure
-    fn load_into_cache(&self, index: &OuterIndex) -> io::Result<()> {
-        // Check if the requested tree is already cached
-        {
-            let cache = self.cache.read().unwrap();
-            if let Some((cached_index, ..)) = &*cache {
-                if cached_index == index {
-                    return Ok(()); // Already cached
-                }
+    /// - `Ok(())` - Partition is now in `cache`
+    /// - `Err(io::Error)` - Disk I/O failure during eviction or load
+    fn ensure_loaded(
+        &self,
+        cache: &mut Option<(OuterIndex, InnerRewardMerkleTreeRoot, bool)>,
+        index: &OuterIndex,
+    ) -> io::Result<()> {
+        // Already cached — nothing to do
+        if let Some((cached_index, ..)) = cache.as_ref() {
+            if cached_index == index {
+                return Ok(());
             }
         }
 
-        // Flush the current cache if it exists
-        self.flush_cache()?;
+        // Evict the current entry: only write back if dirty (inline flush logic)
+        if let Some((evict_index, root, dirty)) = cache.take() {
+            if dirty {
+                let temp_path = self.temp_write_path();
+                let mut entries = Vec::new();
+                collect_merkle_leaves(&root, &mut entries);
+                let bytes = bincode::serialize(&entries)
+                    .map_err(|e| io::Error::new(ErrorKind::InvalidData, e))?;
+                fs::write(&temp_path, bytes)?;
+                let path = self.file_path(&evict_index);
+                fs::rename(&temp_path, &path)?;
+            }
+        }
 
-        // Load the tree from disk or create a new one
+        // Load the tree from disk; mark as clean since it was just loaded
         let root = self.load_from_disk(index)?;
-
-        // Cache the tree; mark as clean since it was just loaded from disk
-        *self.cache.write().unwrap() = Some((*index, root, false));
+        *cache = Some((*index, root, false));
         Ok(())
     }
 
@@ -293,11 +303,9 @@ impl RewardMerkleTreeStorage for RewardMerkleTreeFSStorage {
     where
         F: FnOnce(&InnerRewardMerkleTreeRoot) -> R,
     {
-        // Load into cache if needed
-        self.load_into_cache(index)?;
-
-        // Execute the closure with the cached tree
-        let cache = self.cache.read().unwrap();
+        // Hold the write lock for the entire operation to eliminate TOCTOU races.
+        let mut cache = self.cache.write().unwrap();
+        self.ensure_loaded(&mut *cache, index)?;
         let (_, tree, _) = cache.as_ref().expect("Tree should be in cache after load");
         Ok(f(tree))
     }
@@ -306,12 +314,9 @@ impl RewardMerkleTreeStorage for RewardMerkleTreeFSStorage {
     where
         F: FnOnce(&mut InnerRewardMerkleTreeRoot) -> R,
     {
-        // Load into cache if needed
-        self.load_into_cache(index)?;
-
-        // Execute the closure with the cached tree; mark dirty since the caller
-        // may mutate the tree
+        // Hold the write lock for the entire operation to eliminate TOCTOU races.
         let mut cache = self.cache.write().unwrap();
+        self.ensure_loaded(&mut *cache, index)?;
         let (_, tree, dirty) = cache.as_mut().expect("Tree should be in cache after load");
         let result = f(tree);
         *dirty = true;
@@ -332,37 +337,33 @@ impl RewardMerkleTreeStorage for RewardMerkleTreeFSStorage {
         self.file_path(index).exists()
     }
 
-    fn indices(&self) -> Vec<OuterIndex> {
-        let mut indices = Vec::new();
+    fn get_entries(&self) -> Result<Vec<(RewardAccountV2, RewardAmount)>, Self::Error> {
+        let cache = self.cache.read().unwrap();
+        let cached = cache.as_ref();
+        let mut all_entries = Vec::new();
 
-        // Read all tree files from the storage directory
-        if let Ok(entries) = fs::read_dir(&self.storage_dir) {
-            for entry in entries.flatten() {
-                if let Ok(file_name) = entry.file_name().into_string() {
-                    // Parse files matching "tree_XX.bin" pattern
-                    if file_name.starts_with("tree_") && file_name.ends_with(".bin") {
-                        let hex_str = &file_name[5..7]; // Extract "XX" from "tree_XX.bin"
-                        if let Ok(value) = u8::from_str_radix(hex_str, 16) {
-                            if value <= OuterIndex::MAX {
-                                indices.push(OuterIndex(value));
-                            }
-                        }
-                    }
+        for i in 0u8..16 {
+            let idx = OuterIndex(i);
+            if let Some((cached_idx, tree, _)) = cached {
+                if *cached_idx == idx {
+                    collect_merkle_leaves(tree, &mut all_entries);
+                    continue;
                 }
             }
-        }
-
-        // Include cached index if it's not on disk yet
-        let cache = self.cache.read().unwrap();
-        if let Some((cached_index, ..)) = &*cache {
-            if !self.file_path(cached_index).exists() {
-                indices.push(*cached_index);
+            let path = self.file_path(&idx);
+            match fs::read(&path) {
+                Ok(bytes) => {
+                    let entries: Vec<(RewardAccountV2, RewardAmount)> =
+                        bincode::deserialize(&bytes)
+                            .map_err(|e| io::Error::new(ErrorKind::InvalidData, e))?;
+                    all_entries.extend(entries);
+                },
+                Err(e) if e.kind() == ErrorKind::NotFound => {},
+                Err(e) => return Err(e),
             }
         }
 
-        indices.sort();
-        indices.dedup();
-        indices
+        Ok(all_entries)
     }
 }
 

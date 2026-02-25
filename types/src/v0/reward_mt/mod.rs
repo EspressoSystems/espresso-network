@@ -621,11 +621,9 @@ impl<S: RewardMerkleTreeStorage> StorageBackedRewardMerkleTreeV2<S> {
 
 /// Consumes the tree and returns an iterator over all (account, balance) pairs.
 ///
-/// # Performance Note
-///
-/// This operation loads all 16 inner trees (even if sparse) and traverses them
-/// recursively to collect leaf entries. For trees with many accounts, this can
-/// be memory-intensive. Consider using storage-level iteration if available.
+/// Uses `get_entries` to read flat entry lists directly from the storage backend,
+/// bypassing Merkle tree construction. Only the cached partition (at most 1) requires
+/// a tree traversal; the remaining partitions are read as flat entry lists.
 ///
 /// # Example
 ///
@@ -641,20 +639,10 @@ impl<S: RewardMerkleTreeStorage> IntoIterator for StorageBackedRewardMerkleTreeV
     type IntoIter = <std::vec::Vec<(RewardAccountV2, RewardAmount)> as IntoIterator>::IntoIter;
 
     fn into_iter(self) -> Self::IntoIter {
-        // Collect all entries from all inner trees
-        let indices = self.storage.indices();
-        let mut all_entries = Vec::new();
-
-        for outer_idx in indices {
-            self.storage
-                .with_tree(&outer_idx, |root| {
-                    // Traverse the MerkleNode tree to collect all leaf entries
-                    collect_merkle_leaves(root, &mut all_entries);
-                })
-                .expect("Storage operation failed during iteration");
-        }
-
-        all_entries.into_iter()
+        self.storage
+            .get_entries()
+            .expect("Storage operation failed during iteration")
+            .into_iter()
     }
 }
 
