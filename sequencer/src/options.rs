@@ -722,8 +722,9 @@ mod tests {
             "commit-timestamp:",
             "build-timestamp:",
             "debug:",
+            "os:",
+            "arch:",
             "features:",
-            "target:",
             "testing:",
         ] {
             assert!(version.contains(field), "missing {field}: {version}");
