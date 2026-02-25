@@ -86,6 +86,9 @@ pub trait ValidatedState<TYPES: NodeType>:
 
     /// Gets called to notify the persistence backend that this state has been committed
     fn on_commit(&self);
+
+    /// reduces the reward tree to its root commitment
+    fn reduce_reward_tree(&self) -> Self;
 }
 
 /// extra functions required on state to be usable by hotshot-testing

@@ -130,6 +130,10 @@ impl<TYPES: NodeType> ValidatedState<TYPES> for TestValidatedState {
     fn genesis(_instance: &Self::Instance) -> (Self, Self::Delta) {
         (Self::default(), TestStateDelta {})
     }
+
+    fn reduce_reward_tree(&self) -> Self {
+        self.clone()
+    }
 }
 
 impl<TYPES: NodeType<BlockPayload = TestBlockPayload>> TestableState<TYPES> for TestValidatedState {

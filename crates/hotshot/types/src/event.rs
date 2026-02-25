@@ -42,6 +42,31 @@ impl<TYPES: NodeType> Event<TYPES> {
             event: self.event.to_legacy()?,
         })
     }
+
+    // reduces the reward tree in the event
+    pub fn reduce_reward_tree(event: Arc<Self>) -> Arc<Self> {
+        match &event.event {
+            EventType::Decide {
+                leaf_chain,
+                committing_qc,
+                deciding_qc,
+                block_size,
+            } => {
+                let reduced_leaf_chain = reduce_reward_tree(leaf_chain);
+
+                Arc::new(Self {
+                    view_number: event.view_number,
+                    event: EventType::Decide {
+                        leaf_chain: reduced_leaf_chain,
+                        committing_qc: committing_qc.clone(),
+                        deciding_qc: deciding_qc.clone(),
+                        block_size: *block_size,
+                    },
+                })
+            },
+            _ => event,
+        }
+    }
 }
 
 /// The pre-epoch version of an Event
@@ -133,6 +158,35 @@ impl<TYPES: NodeType> LegacyLeafInfo<TYPES> {
             vid_share,
         }
     }
+}
+
+pub fn reduce_reward_tree<TYPES: NodeType>(
+    leaf_chain: &Arc<LeafChain<TYPES>>,
+) -> Arc<LeafChain<TYPES>> {
+    let mut result = vec![];
+
+    for leaf in leaf_chain.iter() {
+        let LeafInfo {
+            leaf,
+            state,
+            delta,
+            vid_share,
+            state_cert,
+        } = leaf;
+
+        let reduced_state = Arc::new(state.reduce_reward_tree());
+        let reduced_leaf = LeafInfo {
+            leaf: leaf.clone(),
+            state: reduced_state,
+            delta: delta.clone(),
+            vid_share: vid_share.clone(),
+            state_cert: state_cert.clone(),
+        };
+
+        result.push(reduced_leaf);
+    }
+
+    Arc::new(result)
 }
 
 /// The chain of decided leaves with its corresponding state and VID info.
