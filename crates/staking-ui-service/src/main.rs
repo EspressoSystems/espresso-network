@@ -588,10 +588,7 @@ mod test {
                 reward_contract_address: deployment.reward_claim_addr,
                 ..Default::default()
             },
-            espresso_options: QueryServiceOptions {
-                url: None,
-                stream_timeout: Duration::from_secs(60),
-            },
+            espresso_options: QueryServiceOptions::null(),
             port,
             persistence: sql::PersistenceOptions {
                 path: tmp.path().join("temp.db"),

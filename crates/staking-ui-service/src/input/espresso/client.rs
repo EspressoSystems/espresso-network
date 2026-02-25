@@ -7,10 +7,15 @@ use espresso_types::{
     AuthenticatedValidatorMap, Leaf2, SeqTypes, calculate_proportion_staked_and_reward_rate,
     config::PublicNetworkConfig, parse_duration, v0_3::RewardAmount, v0_4::RewardAccountV2,
 };
-use futures::{Stream, StreamExt, TryFutureExt, TryStreamExt, stream};
+use futures::{
+    Stream, StreamExt, TryFutureExt, TryStreamExt,
+    stream::{self, BoxStream},
+};
 use hotshot_query_service::{availability::LeafQueryData, types::HeightIndexed};
 use hotshot_types::utils::{epoch_from_block_number, root_block_in_epoch};
+use reqwest::StatusCode;
 use surf_disco::{Client, Url};
+use tide_disco::Error as _;
 use tokio::time::{sleep, timeout};
 use tracing::instrument;
 use vbs::version::StaticVersion;
@@ -28,6 +33,15 @@ type FormatVersion = StaticVersion<0, 1>;
 /// Configuration for a HotShot query service client.
 #[derive(Debug, Parser)]
 pub struct QueryServiceOptions {
+    /// Timeout for HTTP requests.
+    #[clap(
+        long,
+        env = "ESPRESSO_STAKING_SERVICE_HTTP_TIMEOUT",
+        value_parser = parse_duration,
+        default_value = "3s",
+    )]
+    pub http_timeout: Duration,
+
     /// Reconnect WebSocket streams after this long without a new message.
     #[clap(
         long,
@@ -36,6 +50,17 @@ pub struct QueryServiceOptions {
         default_value = "1m",
     )]
     pub stream_timeout: Duration,
+
+    /// Interval between polling Espresso for new blocks.
+    ///
+    /// If not set (the default), the client will use a WebSocket stream to discover new blocks
+    /// rather than polling.
+    #[clap(
+        long = "espresso-polling-interval",
+        env = "ESPRESSO_STAKING_SERVICE_ESPRESSO_POLLING_INTERVAL",
+        value_parser = parse_duration,
+    )]
+    pub polling_interval: Option<Duration>,
 
     /// URL for an Espresso query service.
     #[clap(long = "espresso-url", env = "ESPRESSO_STAKING_SERVICE_ESPRESSO_URL")]
@@ -47,6 +72,13 @@ impl QueryServiceOptions {
     pub fn new(url: Url) -> Self {
         QueryServiceOptions::parse_from(["--", "--espresso-url", url.as_str()])
     }
+
+    /// Options with default values and no URL.
+    ///
+    /// This is useful when configuring the service with the Espresso client disabled.
+    pub fn null() -> Self {
+        QueryServiceOptions::parse_from(["--"])
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -54,6 +86,7 @@ pub struct QueryServiceClient {
     inner: Client<hotshot_query_service::Error, FormatVersion>,
     epoch_start_block: u64,
     epoch_height: u64,
+    polling_interval: Option<Duration>,
     stream_timeout: Duration,
     initial_token_supply: ESPTokenAmount,
 }
@@ -67,7 +100,9 @@ impl QueryServiceClient {
         let url = opt.url.ok_or_else(|| {
             Error::internal().context("Espresso URL must be provided when not in L1-only mode")
         })?;
-        let inner = Client::new(url);
+        let inner = Client::builder(url)
+            .set_timeout(Some(opt.http_timeout))
+            .build();
 
         // Get the epoch height. We need this for multiple endpoints, and it never changes, so we
         // fetch it now and cache it.
@@ -77,16 +112,88 @@ impl QueryServiceClient {
             inner,
             epoch_height: config.hotshot_config().blocks_per_epoch(),
             epoch_start_block: config.hotshot_config().epoch_start_block(),
+            polling_interval: opt.polling_interval,
             stream_timeout: opt.stream_timeout,
             initial_token_supply,
         })
+    }
+
+    /// An HTTP polling-based leaf stream.
+    fn poll_leaves(&self, from: u64, interval: Duration) -> BoxStream<'_, (Leaf2, BitVec)> {
+        stream::unfold((self.clone(), from), move |(client, from)| async move {
+            // Try to get the next leaf until we succeed.
+            let leaf = loop {
+                let leaf = match client
+                    .inner
+                    .get(&format!("availability/leaf/{from}"))
+                    .send()
+                    .await
+                {
+                    Err(err) if err.status() == StatusCode::NOT_FOUND => {
+                        tracing::debug!(from, "leaf is not yet available: {err:#}");
+                        None
+                    }
+                    Err(err) => {
+                        tracing::error!(from, "unexpected error from query service: {err:#}");
+                        None
+                    }
+                    Ok(leaf) => Self::extract_leaf_data(leaf).ok(),
+                };
+
+                // After making a request, regardless of whether we actually got the leaf or not,
+                // wait for the polling interval to pass before retrying or trying for the next
+                // leaf.
+                sleep(interval).await;
+
+                if let Some(leaf) = leaf {
+                    // If we successfully got the leaf, yield it via the output stream.
+                    break leaf;
+                }
+            };
+
+            // Yield the leaf and then move on to the next one.
+            Some((leaf, (client, from + 1)))
+        })
+        .boxed()
+    }
+
+    /// A WebSocket-based leaf stream.
+    fn stream_leaves(&self, from: u64) -> BoxStream<'_, (Leaf2, BitVec)> {
+        let fallible_stream = self.fallible_leaves(from);
+        stream::unfold(
+            (fallible_stream, self.clone(), from),
+            |(mut fallible_stream, client, from)| async move {
+                // Try to get the next leaf until we succeed.
+                loop {
+                    match fallible_stream.next().await {
+                        Some(Ok(leaf)) => {
+                            // On success advance `from` by 1, so that if we reconnect after this,
+                            // we will start from the next leaf after this one.
+                            tracing::debug!(from, ?leaf, "got new Espresso leaf");
+                            return Some((leaf, (fallible_stream, client, from + 1)));
+                        }
+                        Some(Err(err)) => {
+                            tracing::error!("error from leaf stream: {err:#}");
+                        }
+                        None => {
+                            tracing::error!("leaf stream ended unexpectedly, reconnecting");
+                            fallible_stream = client.fallible_leaves(from);
+                        }
+                    }
+
+                    // If there was any kind of error, pause a bit before retrying.
+                    sleep(Duration::from_secs(1)).await;
+                }
+            },
+        )
+        .boxed()
     }
 
     /// A fallible leaf stream.
     ///
     /// This stream wraps a raw socket connection, which might encounter an error or end at any
     /// time. This can be further processed into an infinite, infallible stream by dropping errors
-    /// and reconnecting when the stream ends (as in [`EspressoClient::leaves`]).
+    /// and reconnecting when the stream ends (as in [`Self::stream_leaves`]).
     fn fallible_leaves(
         &self,
         from: u64,
@@ -100,15 +207,7 @@ impl QueryServiceClient {
 
         // Map the result and error types.
         let socket_stream = socket_stream.map(|res| match res {
-            Ok(leaf) => {
-                let signers = leaf.qc().signatures.as_ref().ok_or_else(|| {
-                    Error::internal().context(format!(
-                        "QC for leaf {} is missing signers bitmap",
-                        leaf.height()
-                    ))
-                })?;
-                Ok((leaf.leaf().clone(), signers.1.clone()))
-            }
+            Ok(leaf) => Self::extract_leaf_data(leaf),
             Err(err) => Err(Error::from(err)),
         });
 
@@ -136,6 +235,17 @@ impl QueryServiceClient {
 
         // Make it `Unpin`
         try_stream.boxed()
+    }
+
+    /// Get just the necessary information for a leaf stream out of a [`LeafQueryData`] object.
+    fn extract_leaf_data(leaf: LeafQueryData<SeqTypes>) -> Result<(Leaf2, BitVec)> {
+        let signers = leaf.qc().signatures.as_ref().ok_or_else(|| {
+            Error::internal().context(format!(
+                "QC for leaf {} is missing signers bitmap",
+                leaf.height()
+            ))
+        })?;
+        Ok((leaf.leaf().clone(), signers.1.clone()))
     }
 }
 
@@ -311,34 +421,11 @@ impl EspressoClient for QueryServiceClient {
     }
 
     fn leaves(&self, from: u64) -> impl Send + Unpin + Stream<Item = (Leaf2, BitVec)> {
-        let fallible_stream = self.fallible_leaves(from);
-        stream::unfold(
-            (fallible_stream, self.clone(), from),
-            |(mut fallible_stream, client, from)| async move {
-                // Try to get the next leaf until we succeed.
-                loop {
-                    match fallible_stream.next().await {
-                        Some(Ok(leaf)) => {
-                            // On success advance `from` by 1, so that if we reconnect after this,
-                            // we will start from the next leaf after this one.
-                            tracing::debug!(from, ?leaf, "got new Espresso leaf");
-                            return Some((leaf, (fallible_stream, client, from + 1)));
-                        }
-                        Some(Err(err)) => {
-                            tracing::error!("error from leaf stream: {err:#}");
-                        }
-                        None => {
-                            tracing::error!("leaf stream ended unexpectedly, reconnecting");
-                            fallible_stream = client.fallible_leaves(from);
-                        }
-                    }
-
-                    // If there was any kind of error, pause a bit before retrying.
-                    sleep(Duration::from_secs(1)).await;
-                }
-            },
-        )
-        .boxed()
+        if let Some(interval) = self.polling_interval {
+            self.poll_leaves(from, interval)
+        } else {
+            self.stream_leaves(from)
+        }
     }
 }
 
@@ -470,8 +557,7 @@ mod test {
         assert_eq!(err.status(), StatusCode::NOT_FOUND);
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_leaves_reconnect() {
+    async fn test_leaves_reconnect_helper(ws: bool) {
         let port = pick_unused_port().unwrap();
 
         // We need persistence so that we can restart the network and have it resume where it left
@@ -490,10 +576,17 @@ mod test {
         let mut network = TestNetwork::new(config, V::new()).await;
 
         let opt = QueryServiceOptions {
-            url: Some(format!("http://localhost:{port}").parse().unwrap()),
+            polling_interval: if ws {
+                None
+            } else {
+                Some(Duration::from_secs(1))
+            },
+
             // Have a fast timeout since this test is going to intentionally disrupt the connection,
             // and we want it to recover and finish quickly.
             stream_timeout: Duration::from_secs(1),
+            http_timeout: Duration::from_secs(1),
+            ..QueryServiceOptions::new(format!("http://localhost:{port}").parse().unwrap())
         };
         let client = QueryServiceClient::new(opt, DEFAULT_TOKEN_SUPPLY)
             .await
@@ -510,7 +603,8 @@ mod test {
         drop(network);
 
         // If we keep consuming leaves we will eventually block (once we've consumed everything that
-        // had already been buffered in the WebSocket connection).
+        // had already been buffered in the WebSocket connection, or, with HTTP, once we start
+        // failing requests because the server has gone down.).
         let mut next_leaf = 5;
         let mut leaves = Box::pin(leaves.peekable());
         loop {
@@ -530,6 +624,9 @@ mod test {
             }
         }
 
+        // Let the stream run with the server down for a few seconds.
+        sleep(Duration::from_secs(5)).await;
+
         // Restart the server so the stream can reconnect.
         let config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(options)
@@ -546,6 +643,16 @@ mod test {
         // runtime goes away. This doesn't affect the test results but it avoids an ugly stack dump.
         drop(leaves);
         network.stop_consensus().await;
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_leaves_reconnect_ws() {
+        test_leaves_reconnect_helper(true).await;
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_leaves_reconnect_http() {
+        test_leaves_reconnect_helper(false).await;
     }
 
     async fn wait_for_leaves(
