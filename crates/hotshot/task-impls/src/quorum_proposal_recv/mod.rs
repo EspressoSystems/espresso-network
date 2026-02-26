@@ -149,8 +149,20 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
     ) {
         match event.as_ref() {
             HotShotEvent::QuorumProposalRecv(proposal, sender) => {
-                tracing::debug!(
-                    "Quorum proposal recv for view {}",
+                let sender_bytes = SignatureKey::to_bytes(sender);
+                let sender_hex: String = sender_bytes
+                    .iter()
+                    .take(4)
+                    .map(|b| format!("{b:02x}"))
+                    .collect();
+                let now_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64;
+                let header_ts_ms = proposal.data.block_header().timestamp_millis();
+                let age_ms = now_ms.saturating_sub(header_ts_ms);
+                tracing::info!(
+                    "Quorum proposal recv for view {}, sender={sender_hex}, age_ms={age_ms}",
                     proposal.data.view_number()
                 );
                 if self.consensus.read().await.cur_view() > proposal.data.view_number()

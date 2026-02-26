@@ -935,6 +935,7 @@ impl ValidatedState {
 
         // Ensure merkle tree has frontier
         if self.need_to_fetch_blocks_mt_frontier() {
+            let _t = std::time::Instant::now();
             tracing::info!(
                 parent_height,
                 ?parent_view,
@@ -948,10 +949,17 @@ impl ValidatedState {
                     &mut validated_state.block_merkle_tree,
                 )
                 .await?;
+            tracing::info!(
+                parent_height,
+                ?parent_view,
+                elapsed = ?_t.elapsed(),
+                "fetched block frontier from peers",
+            );
         }
 
         // Fetch missing fee state entries
         if !missing_accounts.is_empty() {
+            let _t = std::time::Instant::now();
             tracing::info!(
                 parent_height,
                 ?parent_view,
@@ -975,6 +983,13 @@ impl ValidatedState {
                     .remember(&mut validated_state.fee_merkle_tree)
                     .expect("proof previously verified");
             }
+            tracing::info!(
+                parent_height,
+                ?parent_view,
+                num_proofs = missing_account_proofs.len(),
+                elapsed = ?_t.elapsed(),
+                "fetched missing accounts from peers",
+            );
         }
 
         let mut delta = Delta::default();
@@ -1157,6 +1172,7 @@ impl HotShotState<SeqTypes> for ValidatedState {
         version: Version,
         view_number: u64,
     ) -> Result<(Self, Self::Delta), Self::Error> {
+        let _validate_start = std::time::Instant::now();
         // Preferably we would do all validation that does not require catchup first, but this would
         // require some refactoring of the header validation code that is out of scope for now.
         // Record the time when validation started to later use it to validate the timestamp drift.
@@ -1193,11 +1209,10 @@ impl HotShotState<SeqTypes> for ValidatedState {
         .await?
         .state;
 
-        // log successful progress about once in 10 - 20 seconds,
-        // TODO: we may want to make this configurable
-        if parent_leaf.view_number().u64().is_multiple_of(10) {
-            tracing::info!("validated and applied new header");
-        }
+        tracing::info!(
+            "validated and applied new header, elapsed={:?}",
+            _validate_start.elapsed(),
+        );
         Ok((validated_state, delta))
     }
     /// Construct the state with the given block header.
