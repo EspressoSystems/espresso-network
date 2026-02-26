@@ -1712,7 +1712,7 @@
 <a href=#1712 id=1712 data-nosnippet>1712</a>        // there should be multiple nodes with same index but different created time
 <a href=#1713 id=1713 data-nosnippet>1713</a>        </span><span class="kw">let </span>(count,) = query_as::&lt;(i64,)&gt;(
 <a href=#1714 id=1714 data-nosnippet>1714</a>            <span class="string">" SELECT count(*) FROM (SELECT count(*) as count FROM test_tree GROUP BY path having \
-<a href=#1715 id=1715 data-nosnippet>1715</a>             count(*) &gt; 1)"</span>,
+<a href=#1715 id=1715 data-nosnippet>1715</a>             count(*) &gt; 1) AS s"</span>,
 <a href=#1716 id=1716 data-nosnippet>1716</a>        )
 <a href=#1717 id=1717 data-nosnippet>1717</a>        .fetch_one(tx.as_mut())
 <a href=#1718 id=1718 data-nosnippet>1718</a>        .<span class="kw">await
@@ -1731,7 +1731,7 @@
 <a href=#1731 id=1731 data-nosnippet>1731</a>        <span class="kw">let </span><span class="kw-2">mut </span>tx = storage.read().<span class="kw">await</span>.unwrap();
 <a href=#1732 id=1732 data-nosnippet>1732</a>        <span class="kw">let </span>(count,) = query_as::&lt;(i64,)&gt;(
 <a href=#1733 id=1733 data-nosnippet>1733</a>            <span class="string">"SELECT count(*) FROM (SELECT count(*) as count FROM test_tree GROUP BY path having \
-<a href=#1734 id=1734 data-nosnippet>1734</a>             count(*) &gt; 1)"</span>,
+<a href=#1734 id=1734 data-nosnippet>1734</a>             count(*) &gt; 1) AS s"</span>,
 <a href=#1735 id=1735 data-nosnippet>1735</a>        )
 <a href=#1736 id=1736 data-nosnippet>1736</a>        .fetch_one(tx.as_mut())
 <a href=#1737 id=1737 data-nosnippet>1737</a>        .<span class="kw">await

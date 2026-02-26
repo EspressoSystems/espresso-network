@@ -709,7 +709,7 @@
 <a href=#709 id=709 data-nosnippet>709</a>
 <a href=#710 id=710 data-nosnippet>710</a>        <span class="kw">let </span>sub_query = <span class="macro">format!</span>(
 <a href=#711 id=711 data-nosnippet>711</a>            <span class="string">"SELECT * FROM (SELECT * FROM {table} WHERE path = {node_path} AND created &lt;= $1 \
-<a href=#712 id=712 data-nosnippet>712</a>             ORDER BY created DESC LIMIT 1)"</span>,
+<a href=#712 id=712 data-nosnippet>712</a>             ORDER BY created DESC LIMIT 1) AS latest_node"</span>,
 <a href=#713 id=713 data-nosnippet>713</a>        );
 <a href=#714 id=714 data-nosnippet>714</a>
 <a href=#715 id=715 data-nosnippet>715</a>        sub_queries.push(sub_query);
