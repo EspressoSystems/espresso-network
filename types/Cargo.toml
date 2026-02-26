@@ -65,7 +65,6 @@ sha3 = "0.10"
 static_assertions = { workspace = true }
 surf-disco = { workspace = true }
 tagged-base64 = { workspace = true }
-tempfile = { workspace = true }
 thiserror = { workspace = true }
 tide-disco = { workspace = true }
 time = { workspace = true }
@@ -79,6 +78,7 @@ vid = { workspace = true }
 
 [dev-dependencies]
 criterion = "0.5"
+tempfile = { workspace = true }
 espresso-contract-deployer = { path = "../contracts/rust/deployer" }
 espresso-types = { path = ".", features = [ "testing" ] }
 rand_chacha = { workspace = true }

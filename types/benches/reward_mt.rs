@@ -22,6 +22,7 @@ use espresso_types::{
 use jf_merkle_tree_compat::{MerkleTreeScheme, UniversalMerkleTreeScheme};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
+use tempfile::TempDir;
 
 // ---------------------------------------------------------------------------
 // Tracking allocator for memory measurement
@@ -101,13 +102,16 @@ fn build_in_memory(kv_pairs: &[(RewardAccountV2, RewardAmount)]) -> InMemoryRewa
     tree
 }
 
-fn build_fs(kv_pairs: &[(RewardAccountV2, RewardAmount)]) -> FileBackedRewardMerkleTreeV2 {
-    let storage = RewardMerkleTreeFSStorage::tempfile().unwrap();
+fn build_fs(
+    kv_pairs: &[(RewardAccountV2, RewardAmount)],
+) -> (FileBackedRewardMerkleTreeV2, TempDir) {
+    let tmp = TempDir::new().unwrap();
+    let storage = RewardMerkleTreeFSStorage::new(tmp.path()).unwrap();
     let mut tree = FileBackedRewardMerkleTreeV2::new_with_storage(storage);
     for (account, amount) in kv_pairs {
         tree.update(*account, *amount).unwrap();
     }
-    tree
+    (tree, tmp)
 }
 
 // ---------------------------------------------------------------------------
@@ -146,7 +150,7 @@ fn measure_memory(
 
     // FS (sorted construction to avoid cache thrashing)
     let before = allocated_bytes();
-    let tree = build_fs(sorted_pairs);
+    let (tree, _tmp) = build_fs(sorted_pairs);
     let after = allocated_bytes();
     let delta = after.saturating_sub(before);
     println!(
@@ -155,6 +159,7 @@ fn measure_memory(
         delta as f64 / 1_048_576.0
     );
     drop(tree);
+    drop(_tmp);
 
     println!();
 }
@@ -204,13 +209,17 @@ fn bench_construct(c: &mut Criterion) {
     // FS — random order (worst case: ~10K disk writes + reads)
     group.bench_function("fs_random", |b| {
         b.iter_batched(
-            || RewardMerkleTreeFSStorage::tempfile().unwrap(),
-            |storage| {
+            || {
+                let tmp = TempDir::new().unwrap();
+                let storage = RewardMerkleTreeFSStorage::new(tmp.path()).unwrap();
+                (storage, tmp)
+            },
+            |(storage, tmp)| {
                 let mut tree = FileBackedRewardMerkleTreeV2::new_with_storage(storage);
                 for (account, amount) in &kv_pairs {
                     tree.update(*account, *amount).unwrap();
                 }
-                tree
+                (tree, tmp)
             },
             criterion::BatchSize::PerIteration,
         );
@@ -219,13 +228,17 @@ fn bench_construct(c: &mut Criterion) {
     // FS — sorted by partition (best case: 16 disk writes + reads)
     group.bench_function("fs_sorted", |b| {
         b.iter_batched(
-            || RewardMerkleTreeFSStorage::tempfile().unwrap(),
-            |storage| {
+            || {
+                let tmp = TempDir::new().unwrap();
+                let storage = RewardMerkleTreeFSStorage::new(tmp.path()).unwrap();
+                (storage, tmp)
+            },
+            |(storage, tmp)| {
                 let mut tree = FileBackedRewardMerkleTreeV2::new_with_storage(storage);
                 for (account, amount) in &sorted_pairs {
                     tree.update(*account, *amount).unwrap();
                 }
-                tree
+                (tree, tmp)
             },
             criterion::BatchSize::PerIteration,
         );
@@ -286,7 +299,7 @@ fn bench_lookup_all(c: &mut Criterion) {
     group.bench_function("fs_random", |b| {
         b.iter_batched(
             || build_fs(&sorted_pairs),
-            |tree| {
+            |(tree, _tmp)| {
                 for (account, _) in &kv_pairs {
                     let _ = black_box(tree.lookup(*account));
                 }
@@ -299,7 +312,7 @@ fn bench_lookup_all(c: &mut Criterion) {
     group.bench_function("fs_sorted", |b| {
         b.iter_batched(
             || build_fs(&sorted_pairs),
-            |tree| {
+            |(tree, _tmp)| {
                 for (account, _) in &sorted_pairs {
                     let _ = black_box(tree.lookup(*account));
                 }

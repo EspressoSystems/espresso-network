@@ -99,36 +99,6 @@ impl RewardMerkleTreeFSStorage {
         })
     }
 
-    /// Creates file system storage in a temporary directory.
-    ///
-    /// Uses `tempfile::tempdir()` to create a directory in the system temp location.
-    /// The directory is marked with `.keep()` so it persists even after the TempDir
-    /// handle is dropped, but will typically be cleaned up on system reboot.
-    ///
-    /// # Use Cases
-    ///
-    /// - Testing (create isolated storage per test)
-    /// - Development (quick storage without manual directory management)
-    /// - Short-lived processes that don't need persistence
-    ///
-    /// # Warning
-    ///
-    /// The temp directory may be cleaned up by the OS. For production use, call
-    /// `new()` with an explicit directory path.
-    ///
-    /// # Panics
-    ///
-    /// Panics if temporary directory creation fails (extremely rare, indicates
-    /// system-level issues like no disk space or permission denied).
-    pub fn tempfile() -> io::Result<Self> {
-        let storage_dir = tempfile::tempdir()?.keep();
-
-        Ok(Self {
-            storage_dir,
-            cache: RwLock::new(None),
-        })
-    }
-
     /// Get the storage directory path.
     ///
     /// # Returns
@@ -229,18 +199,22 @@ impl RewardMerkleTreeFSStorage {
             }
         }
 
-        // Evict the current entry: only write back if dirty (inline flush logic)
-        if let Some((evict_index, root, dirty)) = cache.take() {
-            if dirty {
+        // Evict the current entry: only write back if dirty (inline flush logic).
+        // Use as_ref() so the cache entry is NOT removed before the write succeeds —
+        // if any fallible op returns Err, the dirty data remains in cache.
+        if let Some((evict_index, root, dirty)) = cache.as_ref() {
+            if *dirty {
                 let temp_path = self.temp_write_path();
                 let mut entries = Vec::new();
-                collect_merkle_leaves(&root, &mut entries);
+                collect_merkle_leaves(root, &mut entries);
                 let bytes = bincode::serialize(&entries)
                     .map_err(|e| io::Error::new(ErrorKind::InvalidData, e))?;
                 fs::write(&temp_path, bytes)?;
-                let path = self.file_path(&evict_index);
+                let path = self.file_path(evict_index);
                 fs::rename(&temp_path, &path)?;
             }
+            // Only clear after write-back succeeds (or entry was clean).
+            cache.take();
         }
 
         // Load the tree from disk; mark as clean since it was just loaded
@@ -397,7 +371,8 @@ mod tests {
 
     #[test]
     fn test_fs_storage_creation() {
-        let storage = RewardMerkleTreeFSStorage::tempfile().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let storage = RewardMerkleTreeFSStorage::new(tmp.path()).unwrap();
 
         assert!(storage.storage_dir().exists());
     }
@@ -407,7 +382,8 @@ mod tests {
         let mut rng = ChaCha20Rng::seed_from_u64(42);
 
         // Create two-level tree with FS storage
-        let storage = RewardMerkleTreeFSStorage::tempfile().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let storage = RewardMerkleTreeFSStorage::new(tmp.path()).unwrap();
         let mut two_level_tree = StorageBackedRewardMerkleTreeV2::new_with_storage(storage);
 
         // Create single-level tree for comparison
@@ -446,7 +422,8 @@ mod tests {
     fn test_lookup_and_proof_verification() {
         let mut rng = ChaCha20Rng::seed_from_u64(123);
 
-        let storage = RewardMerkleTreeFSStorage::tempfile().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let storage = RewardMerkleTreeFSStorage::new(tmp.path()).unwrap();
         let mut tree = StorageBackedRewardMerkleTreeV2::new_with_storage(storage);
         let mut accounts = Vec::new();
 
@@ -490,7 +467,8 @@ mod tests {
     fn test_universal_lookup() {
         let mut rng = ChaCha20Rng::seed_from_u64(456);
 
-        let storage = RewardMerkleTreeFSStorage::tempfile().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let storage = RewardMerkleTreeFSStorage::new(tmp.path()).unwrap();
         let mut tree = StorageBackedRewardMerkleTreeV2::new_with_storage(storage);
 
         let account = random_account(&mut rng);
@@ -539,7 +517,8 @@ mod tests {
     fn test_update_existing_account() {
         let mut rng = ChaCha20Rng::seed_from_u64(101112);
 
-        let storage = RewardMerkleTreeFSStorage::tempfile().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let storage = RewardMerkleTreeFSStorage::new(tmp.path()).unwrap();
         let mut two_level_tree = StorageBackedRewardMerkleTreeV2::new_with_storage(storage);
         let mut single_level_tree = InnerRewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
 
@@ -586,7 +565,8 @@ mod tests {
         }
 
         // Build two-level tree from kv set
-        let storage = RewardMerkleTreeFSStorage::tempfile().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let storage = RewardMerkleTreeFSStorage::new(tmp.path()).unwrap();
         let two_level_tree = StorageBackedRewardMerkleTreeV2::from_kv_set_with_storage(
             REWARD_MERKLE_TREE_V2_HEIGHT,
             &kv_pairs,
@@ -620,7 +600,8 @@ mod tests {
     fn test_update_with_custom_function() {
         let mut rng = ChaCha20Rng::seed_from_u64(222324);
 
-        let storage = RewardMerkleTreeFSStorage::tempfile().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let storage = RewardMerkleTreeFSStorage::new(tmp.path()).unwrap();
         let mut two_level_tree = StorageBackedRewardMerkleTreeV2::new_with_storage(storage);
         let mut single_level_tree = InnerRewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
 
@@ -668,7 +649,8 @@ mod tests {
     fn test_remove_account() {
         let mut rng = ChaCha20Rng::seed_from_u64(252627);
 
-        let storage = RewardMerkleTreeFSStorage::tempfile().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let storage = RewardMerkleTreeFSStorage::new(tmp.path()).unwrap();
         let mut two_level_tree = StorageBackedRewardMerkleTreeV2::new_with_storage(storage);
         let mut single_level_tree = InnerRewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
 
@@ -703,7 +685,8 @@ mod tests {
     fn test_stress_with_many_operations() {
         let mut rng = ChaCha20Rng::seed_from_u64(282930);
 
-        let storage = RewardMerkleTreeFSStorage::tempfile().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let storage = RewardMerkleTreeFSStorage::new(tmp.path()).unwrap();
         let mut two_level_tree = StorageBackedRewardMerkleTreeV2::new_with_storage(storage);
         let mut single_level_tree = InnerRewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
 
