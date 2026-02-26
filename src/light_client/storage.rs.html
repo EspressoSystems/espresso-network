@@ -503,8 +503,8 @@
 <a href=#503 id=503 data-nosnippet>503</a>
 <a href=#504 id=504 data-nosnippet>504</a><span class="attr">#[cfg(test)]
 <a href=#505 id=505 data-nosnippet>505</a></span><span class="kw">mod </span>test {
-<a href=#506 id=506 data-nosnippet>506</a>    <span class="kw">use </span>espresso_types::EpochVersion;
-<a href=#507 id=507 data-nosnippet>507</a>    <span class="kw">use </span>pretty_assertions::assert_eq;
+<a href=#506 id=506 data-nosnippet>506</a>    <span class="kw">use </span>pretty_assertions::assert_eq;
+<a href=#507 id=507 data-nosnippet>507</a>    <span class="kw">use </span>versions::EPOCH_VERSION;
 <a href=#508 id=508 data-nosnippet>508</a>
 <a href=#509 id=509 data-nosnippet>509</a>    <span class="kw">use super</span>::<span class="kw-2">*</span>;
 <a href=#510 id=510 data-nosnippet>510</a>    <span class="kw">use </span><span class="kw">crate</span>::testing::{leaf_chain, random_validator};
@@ -518,7 +518,7 @@
 <a href=#518 id=518 data-nosnippet>518</a>        </span><span class="macro">assert_eq!</span>(db.block_height().<span class="kw">await</span>.unwrap(), <span class="number">0</span>);
 <a href=#519 id=519 data-nosnippet>519</a>
 <a href=#520 id=520 data-nosnippet>520</a>        <span class="comment">// Test with nonconsecutive leaves.
-<a href=#521 id=521 data-nosnippet>521</a>        </span><span class="kw">let </span>leaf = leaf_chain::&lt;EpochVersion&gt;(<span class="number">100</span>..<span class="number">101</span>).<span class="kw">await</span>.remove(<span class="number">0</span>);
+<a href=#521 id=521 data-nosnippet>521</a>        </span><span class="kw">let </span>leaf = leaf_chain(<span class="number">100</span>..<span class="number">101</span>, EPOCH_VERSION).<span class="kw">await</span>.remove(<span class="number">0</span>);
 <a href=#522 id=522 data-nosnippet>522</a>        db.insert_leaf(leaf).<span class="kw">await</span>.unwrap();
 <a href=#523 id=523 data-nosnippet>523</a>        <span class="macro">assert_eq!</span>(db.block_height().<span class="kw">await</span>.unwrap(), <span class="number">101</span>);
 <a href=#524 id=524 data-nosnippet>524</a>    }
@@ -528,7 +528,7 @@
 <a href=#528 id=528 data-nosnippet>528</a>    </span><span class="kw">async fn </span>test_leaf_upper_bound_exact() {
 <a href=#529 id=529 data-nosnippet>529</a>        <span class="kw">let </span>db = SqliteStorage::default().<span class="kw">await</span>.unwrap();
 <a href=#530 id=530 data-nosnippet>530</a>
-<a href=#531 id=531 data-nosnippet>531</a>        <span class="kw">let </span>leaf = leaf_chain::&lt;EpochVersion&gt;(<span class="number">0</span>..<span class="number">1</span>).<span class="kw">await</span>.remove(<span class="number">0</span>);
+<a href=#531 id=531 data-nosnippet>531</a>        <span class="kw">let </span>leaf = leaf_chain(<span class="number">0</span>..<span class="number">1</span>, EPOCH_VERSION).<span class="kw">await</span>.remove(<span class="number">0</span>);
 <a href=#532 id=532 data-nosnippet>532</a>        db.insert_leaf(leaf.clone()).<span class="kw">await</span>.unwrap();
 <a href=#533 id=533 data-nosnippet>533</a>        <span class="macro">assert_eq!</span>(
 <a href=#534 id=534 data-nosnippet>534</a>            db.leaf_upper_bound(LeafId::Number(<span class="number">0</span>))
@@ -573,7 +573,7 @@
 <a href=#573 id=573 data-nosnippet>573</a>    </span><span class="kw">async fn </span>test_leaf_upper_bound_loose() {
 <a href=#574 id=574 data-nosnippet>574</a>        <span class="kw">let </span>db = SqliteStorage::default().<span class="kw">await</span>.unwrap();
 <a href=#575 id=575 data-nosnippet>575</a>
-<a href=#576 id=576 data-nosnippet>576</a>        <span class="kw">let </span>leaves = leaf_chain::&lt;EpochVersion&gt;(<span class="number">0</span>..=<span class="number">1</span>).<span class="kw">await</span>;
+<a href=#576 id=576 data-nosnippet>576</a>        <span class="kw">let </span>leaves = leaf_chain(<span class="number">0</span>..=<span class="number">1</span>, EPOCH_VERSION).<span class="kw">await</span>;
 <a href=#577 id=577 data-nosnippet>577</a>        db.insert_leaf(leaves[<span class="number">1</span>].clone()).<span class="kw">await</span>.unwrap();
 <a href=#578 id=578 data-nosnippet>578</a>        <span class="macro">assert_eq!</span>(
 <a href=#579 id=579 data-nosnippet>579</a>            db.leaf_upper_bound(LeafId::Number(<span class="number">0</span>))
@@ -603,7 +603,7 @@
 <a href=#603 id=603 data-nosnippet>603</a>    </span><span class="kw">async fn </span>test_leaf_upper_bound_least_upper_bound() {
 <a href=#604 id=604 data-nosnippet>604</a>        <span class="kw">let </span>db = SqliteStorage::default().<span class="kw">await</span>.unwrap();
 <a href=#605 id=605 data-nosnippet>605</a>
-<a href=#606 id=606 data-nosnippet>606</a>        <span class="kw">let </span>leaves = leaf_chain::&lt;EpochVersion&gt;(<span class="number">0</span>..=<span class="number">2</span>).<span class="kw">await</span>;
+<a href=#606 id=606 data-nosnippet>606</a>        <span class="kw">let </span>leaves = leaf_chain(<span class="number">0</span>..=<span class="number">2</span>, EPOCH_VERSION).<span class="kw">await</span>;
 <a href=#607 id=607 data-nosnippet>607</a>        db.insert_leaf(leaves[<span class="number">2</span>].clone()).<span class="kw">await</span>.unwrap();
 <a href=#608 id=608 data-nosnippet>608</a>        db.insert_leaf(leaves[<span class="number">1</span>].clone()).<span class="kw">await</span>.unwrap();
 <a href=#609 id=609 data-nosnippet>609</a>        <span class="macro">assert_eq!</span>(
@@ -620,7 +620,7 @@
 <a href=#620 id=620 data-nosnippet>620</a>    </span><span class="kw">async fn </span>test_leaf_upper_bound_not_found() {
 <a href=#621 id=621 data-nosnippet>621</a>        <span class="kw">let </span>db = SqliteStorage::default().<span class="kw">await</span>.unwrap();
 <a href=#622 id=622 data-nosnippet>622</a>
-<a href=#623 id=623 data-nosnippet>623</a>        <span class="kw">let </span>leaves = leaf_chain::&lt;EpochVersion&gt;(<span class="number">0</span>..=<span class="number">1</span>).<span class="kw">await</span>;
+<a href=#623 id=623 data-nosnippet>623</a>        <span class="kw">let </span>leaves = leaf_chain(<span class="number">0</span>..=<span class="number">1</span>, EPOCH_VERSION).<span class="kw">await</span>;
 <a href=#624 id=624 data-nosnippet>624</a>        db.insert_leaf(leaves[<span class="number">0</span>].clone()).<span class="kw">await</span>.unwrap();
 <a href=#625 id=625 data-nosnippet>625</a>        <span class="macro">assert_eq!</span>(db.leaf_upper_bound(LeafId::Number(<span class="number">1</span>)).<span class="kw">await</span>.unwrap(), <span class="prelude-val">None</span>);
 <a href=#626 id=626 data-nosnippet>626</a>        <span class="macro">assert_eq!</span>(
@@ -642,7 +642,7 @@
 <a href=#642 id=642 data-nosnippet>642</a>        .<span class="kw">await
 <a href=#643 id=643 data-nosnippet>643</a>        </span>.unwrap();
 <a href=#644 id=644 data-nosnippet>644</a>
-<a href=#645 id=645 data-nosnippet>645</a>        <span class="kw">let </span>leaves = leaf_chain::&lt;EpochVersion&gt;(<span class="number">0</span>..=<span class="number">1</span>).<span class="kw">await</span>;
+<a href=#645 id=645 data-nosnippet>645</a>        <span class="kw">let </span>leaves = leaf_chain(<span class="number">0</span>..=<span class="number">1</span>, EPOCH_VERSION).<span class="kw">await</span>;
 <a href=#646 id=646 data-nosnippet>646</a>        db.insert_leaf(leaves[<span class="number">1</span>].clone()).<span class="kw">await</span>.unwrap();
 <a href=#647 id=647 data-nosnippet>647</a>        db.insert_leaf(leaves[<span class="number">0</span>].clone()).<span class="kw">await</span>.unwrap();
 <a href=#648 id=648 data-nosnippet>648</a>
@@ -667,7 +667,7 @@
 <a href=#667 id=667 data-nosnippet>667</a>        .<span class="kw">await
 <a href=#668 id=668 data-nosnippet>668</a>        </span>.unwrap();
 <a href=#669 id=669 data-nosnippet>669</a>
-<a href=#670 id=670 data-nosnippet>670</a>        <span class="kw">let </span>leaves = leaf_chain::&lt;EpochVersion&gt;(<span class="number">0</span>..=<span class="number">2</span>).<span class="kw">await</span>;
+<a href=#670 id=670 data-nosnippet>670</a>        <span class="kw">let </span>leaves = leaf_chain(<span class="number">0</span>..=<span class="number">2</span>, EPOCH_VERSION).<span class="kw">await</span>;
 <a href=#671 id=671 data-nosnippet>671</a>        db.insert_leaf(leaves[<span class="number">0</span>].clone()).<span class="kw">await</span>.unwrap();
 <a href=#672 id=672 data-nosnippet>672</a>        db.insert_leaf(leaves[<span class="number">1</span>].clone()).<span class="kw">await</span>.unwrap();
 <a href=#673 id=673 data-nosnippet>673</a>
@@ -711,7 +711,7 @@
 <a href=#711 id=711 data-nosnippet>711</a>    </span><span class="kw">async fn </span>test_get_leaves_in_range() {
 <a href=#712 id=712 data-nosnippet>712</a>        <span class="kw">let </span>db = SqliteStorage::default().<span class="kw">await</span>.unwrap();
 <a href=#713 id=713 data-nosnippet>713</a>
-<a href=#714 id=714 data-nosnippet>714</a>        <span class="kw">let </span>leaves = leaf_chain::&lt;EpochVersion&gt;(<span class="number">0</span>..<span class="number">5</span>).<span class="kw">await</span>;
+<a href=#714 id=714 data-nosnippet>714</a>        <span class="kw">let </span>leaves = leaf_chain(<span class="number">0</span>..<span class="number">5</span>, EPOCH_VERSION).<span class="kw">await</span>;
 <a href=#715 id=715 data-nosnippet>715</a>        <span class="kw">for </span>leaf <span class="kw">in </span><span class="kw-2">&amp;</span>leaves {
 <a href=#716 id=716 data-nosnippet>716</a>            db.insert_leaf(leaf.clone()).<span class="kw">await</span>.unwrap();
 <a href=#717 id=717 data-nosnippet>717</a>        }
@@ -725,7 +725,7 @@
 <a href=#725 id=725 data-nosnippet>725</a>    </span><span class="kw">async fn </span>test_get_leaves_in_range_not_found() {
 <a href=#726 id=726 data-nosnippet>726</a>        <span class="kw">let </span>db = SqliteStorage::default().<span class="kw">await</span>.unwrap();
 <a href=#727 id=727 data-nosnippet>727</a>
-<a href=#728 id=728 data-nosnippet>728</a>        <span class="kw">let </span>leaves = leaf_chain::&lt;EpochVersion&gt;(<span class="number">0</span>..<span class="number">3</span>).<span class="kw">await</span>;
+<a href=#728 id=728 data-nosnippet>728</a>        <span class="kw">let </span>leaves = leaf_chain(<span class="number">0</span>..<span class="number">3</span>, EPOCH_VERSION).<span class="kw">await</span>;
 <a href=#729 id=729 data-nosnippet>729</a>        <span class="kw">for </span>leaf <span class="kw">in </span><span class="kw-2">&amp;</span>leaves {
 <a href=#730 id=730 data-nosnippet>730</a>            db.insert_leaf(leaf.clone()).<span class="kw">await</span>.unwrap();
 <a href=#731 id=731 data-nosnippet>731</a>        }

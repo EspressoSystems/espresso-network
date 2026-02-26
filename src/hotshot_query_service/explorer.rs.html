@@ -407,7 +407,7 @@
 <a href=#407 id=407 data-nosnippet>407</a>        availability,
 <a href=#408 id=408 data-nosnippet>408</a>        testing::{
 <a href=#409 id=409 data-nosnippet>409</a>            consensus::{MockNetwork, MockSqlDataSource},
-<a href=#410 id=410 data-nosnippet>410</a>            mocks::{mock_transaction, MockBase, MockTypes, MockVersions},
+<a href=#410 id=410 data-nosnippet>410</a>            mocks::{mock_transaction, MockBase, MockTypes},
 <a href=#411 id=411 data-nosnippet>411</a>        },
 <a href=#412 id=412 data-nosnippet>412</a>        ApiState, Error,
 <a href=#413 id=413 data-nosnippet>413</a>    };
@@ -863,7 +863,7 @@
 <a href=#863 id=863 data-nosnippet>863</a>
 <a href=#864 id=864 data-nosnippet>864</a>    <span class="kw">async fn </span>test_api_helper() {
 <a href=#865 id=865 data-nosnippet>865</a>        <span class="comment">// Create the consensus network.
-<a href=#866 id=866 data-nosnippet>866</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>network = MockNetwork::&lt;MockSqlDataSource, MockVersions&gt;::init().<span class="kw">await</span>;
+<a href=#866 id=866 data-nosnippet>866</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>network = MockNetwork::&lt;MockSqlDataSource&gt;::init().<span class="kw">await</span>;
 <a href=#867 id=867 data-nosnippet>867</a>        network.start().<span class="kw">await</span>;
 <a href=#868 id=868 data-nosnippet>868</a>
 <a href=#869 id=869 data-nosnippet>869</a>        <span class="comment">// Start the web server.

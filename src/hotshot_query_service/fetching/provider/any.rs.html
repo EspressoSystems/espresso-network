@@ -220,7 +220,7 @@
 <a href=#220 id=220 data-nosnippet>220</a>        task::BackgroundTask,
 <a href=#221 id=221 data-nosnippet>221</a>        testing::{
 <a href=#222 id=222 data-nosnippet>222</a>            consensus::{MockDataSource, MockNetwork},
-<a href=#223 id=223 data-nosnippet>223</a>            mocks::{MockBase, MockTypes, MockVersions},
+<a href=#223 id=223 data-nosnippet>223</a>            mocks::{MockBase, MockTypes},
 <a href=#224 id=224 data-nosnippet>224</a>        },
 <a href=#225 id=225 data-nosnippet>225</a>        types::HeightIndexed,
 <a href=#226 id=226 data-nosnippet>226</a>        ApiState, Error,
@@ -231,7 +231,7 @@
 <a href=#231 id=231 data-nosnippet>231</a>    <span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
 <a href=#232 id=232 data-nosnippet>232</a>    </span><span class="kw">async fn </span>test_fetch_first_provider_fails() {
 <a href=#233 id=233 data-nosnippet>233</a>        <span class="comment">// Create the consensus network.
-<a href=#234 id=234 data-nosnippet>234</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>network = MockNetwork::&lt;MockDataSource, MockVersions&gt;::init().<span class="kw">await</span>;
+<a href=#234 id=234 data-nosnippet>234</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>network = MockNetwork::&lt;MockDataSource&gt;::init().<span class="kw">await</span>;
 <a href=#235 id=235 data-nosnippet>235</a>
 <a href=#236 id=236 data-nosnippet>236</a>        <span class="comment">// Start a web server that the non-consensus node can use to fetch blocks.
 <a href=#237 id=237 data-nosnippet>237</a>        </span><span class="kw">let </span>port = reserve_tcp_port().unwrap();

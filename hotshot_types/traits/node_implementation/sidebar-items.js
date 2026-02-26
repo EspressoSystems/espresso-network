@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"trait":["ConsensusTime","NodeImplementation","NodeType","TestableNodeImplementation","Versions"]};
+window.SIDEBAR_ITEMS = {"trait":["ConsensusTime","NodeImplementation","NodeType","TestableNodeImplementation"]};

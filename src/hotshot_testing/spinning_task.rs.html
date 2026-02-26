@@ -34,7 +34,7 @@
 <a href=#34 id=34 data-nosnippet>34</a>    traits::{
 <a href=#35 id=35 data-nosnippet>35</a>        election::Membership,
 <a href=#36 id=36 data-nosnippet>36</a>        network::{AsyncGenerator, ConnectedNetwork},
-<a href=#37 id=37 data-nosnippet>37</a>        node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
+<a href=#37 id=37 data-nosnippet>37</a>        node_implementation::{ConsensusTime, NodeImplementation, NodeType},
 <a href=#38 id=38 data-nosnippet>38</a>    },
 <a href=#39 id=39 data-nosnippet>39</a>    utils::genesis_epoch_from_version,
 <a href=#40 id=40 data-nosnippet>40</a>    vote::HasViewNumber,
@@ -57,124 +57,124 @@
 <a href=#57 id=57 data-nosnippet>57</a>    TYPES: NodeType,
 <a href=#58 id=58 data-nosnippet>58</a>    N: ConnectedNetwork&lt;TYPES::SignatureKey&gt;,
 <a href=#59 id=59 data-nosnippet>59</a>    I: TestableNodeImplementation&lt;TYPES&gt;,
-<a href=#60 id=60 data-nosnippet>60</a>    V: Versions,
-<a href=#61 id=61 data-nosnippet>61</a>&gt; {
-<a href=#62 id=62 data-nosnippet>62</a>    <span class="doccomment">/// epoch height
-<a href=#63 id=63 data-nosnippet>63</a>    </span><span class="kw">pub </span>epoch_height: u64,
-<a href=#64 id=64 data-nosnippet>64</a>    <span class="doccomment">/// Epoch start block
-<a href=#65 id=65 data-nosnippet>65</a>    </span><span class="kw">pub </span>epoch_start_block: u64,
-<a href=#66 id=66 data-nosnippet>66</a>    <span class="doccomment">/// Saved epoch information. This must be sorted ascending by epoch.
-<a href=#67 id=67 data-nosnippet>67</a>    </span><span class="kw">pub </span>start_epoch_info: Vec&lt;InitializerEpochInfo&lt;TYPES&gt;&gt;,
-<a href=#68 id=68 data-nosnippet>68</a>    <span class="doccomment">/// handle to the nodes
-<a href=#69 id=69 data-nosnippet>69</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) handles: Arc&lt;RwLock&lt;Vec&lt;Node&lt;TYPES, I, V&gt;&gt;&gt;&gt;,
-<a href=#70 id=70 data-nosnippet>70</a>    <span class="doccomment">/// late start nodes
-<a href=#71 id=71 data-nosnippet>71</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) late_start: HashMap&lt;u64, LateStartNode&lt;TYPES, I, V&gt;&gt;,
-<a href=#72 id=72 data-nosnippet>72</a>    <span class="doccomment">/// time based changes
-<a href=#73 id=73 data-nosnippet>73</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) changes: BTreeMap&lt;TYPES::View, Vec&lt;ChangeNode&gt;&gt;,
-<a href=#74 id=74 data-nosnippet>74</a>    <span class="doccomment">/// most recent view seen by spinning task
-<a href=#75 id=75 data-nosnippet>75</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) latest_view: <span class="prelude-ty">Option</span>&lt;TYPES::View&gt;,
-<a href=#76 id=76 data-nosnippet>76</a>    <span class="doccomment">/// Last decided leaf that can be used as the anchor leaf to initialize the node.
-<a href=#77 id=77 data-nosnippet>77</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) last_decided_leaf: Leaf2&lt;TYPES&gt;,
-<a href=#78 id=78 data-nosnippet>78</a>    <span class="doccomment">/// Highest qc seen in the test for restarting nodes
-<a href=#79 id=79 data-nosnippet>79</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) high_qc: QuorumCertificate2&lt;TYPES&gt;,
-<a href=#80 id=80 data-nosnippet>80</a>    <span class="doccomment">/// Next epoch highest qc seen in the test for restarting nodes
-<a href=#81 id=81 data-nosnippet>81</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) next_epoch_high_qc: <span class="prelude-ty">Option</span>&lt;NextEpochQuorumCertificate2&lt;TYPES&gt;&gt;,
-<a href=#82 id=82 data-nosnippet>82</a>    <span class="doccomment">/// Add specified delay to async calls
-<a href=#83 id=83 data-nosnippet>83</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) async_delay_config: HashMap&lt;u64, DelayConfig&gt;,
-<a href=#84 id=84 data-nosnippet>84</a>    <span class="doccomment">/// Context stored for nodes to be restarted with
-<a href=#85 id=85 data-nosnippet>85</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) restart_contexts: HashMap&lt;usize, RestartContext&lt;TYPES, N, I, V&gt;&gt;,
-<a href=#86 id=86 data-nosnippet>86</a>    <span class="doccomment">/// Generate network channel for restart nodes
-<a href=#87 id=87 data-nosnippet>87</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) channel_generator: AsyncGenerator&lt;Network&lt;TYPES, I&gt;&gt;,
-<a href=#88 id=88 data-nosnippet>88</a>    <span class="doccomment">/// The light client state update certificate
-<a href=#89 id=89 data-nosnippet>89</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) state_cert: <span class="prelude-ty">Option</span>&lt;LightClientStateUpdateCertificateV2&lt;TYPES&gt;&gt;,
-<a href=#90 id=90 data-nosnippet>90</a>    <span class="doccomment">/// Node stakes
-<a href=#91 id=91 data-nosnippet>91</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) node_stakes: TestNodeStakes,
-<a href=#92 id=92 data-nosnippet>92</a>}
-<a href=#93 id=93 data-nosnippet>93</a>
-<a href=#94 id=94 data-nosnippet>94</a><span class="attr">#[async_trait]
-<a href=#95 id=95 data-nosnippet>95</a></span><span class="kw">impl</span>&lt;
-<a href=#96 id=96 data-nosnippet>96</a>        TYPES: NodeType&lt;
-<a href=#97 id=97 data-nosnippet>97</a>            InstanceState = TestInstanceState,
-<a href=#98 id=98 data-nosnippet>98</a>            ValidatedState = TestValidatedState,
-<a href=#99 id=99 data-nosnippet>99</a>            BlockHeader = TestBlockHeader,
-<a href=#100 id=100 data-nosnippet>100</a>        &gt;,
-<a href=#101 id=101 data-nosnippet>101</a>        I: TestableNodeImplementation&lt;TYPES&gt;,
-<a href=#102 id=102 data-nosnippet>102</a>        N: ConnectedNetwork&lt;TYPES::SignatureKey&gt;,
-<a href=#103 id=103 data-nosnippet>103</a>        V: Versions,
-<a href=#104 id=104 data-nosnippet>104</a>    &gt; TestTaskState <span class="kw">for </span>SpinningTask&lt;TYPES, N, I, V&gt;
-<a href=#105 id=105 data-nosnippet>105</a><span class="kw">where
-<a href=#106 id=106 data-nosnippet>106</a>    </span>I: TestableNodeImplementation&lt;TYPES&gt;,
-<a href=#107 id=107 data-nosnippet>107</a>    I: NodeImplementation&lt;TYPES, Network = N, Storage = TestStorage&lt;TYPES&gt;&gt;,
-<a href=#108 id=108 data-nosnippet>108</a>    &lt;TYPES <span class="kw">as </span>NodeType&gt;::Membership: Membership&lt;TYPES, Storage = TestStorage&lt;TYPES&gt;&gt;,
-<a href=#109 id=109 data-nosnippet>109</a>{
-<a href=#110 id=110 data-nosnippet>110</a>    <span class="kw">type </span>Event = Event&lt;TYPES&gt;;
-<a href=#111 id=111 data-nosnippet>111</a>    <span class="kw">type </span>Error = Error;
-<a href=#112 id=112 data-nosnippet>112</a>
-<a href=#113 id=113 data-nosnippet>113</a>    <span class="kw">async fn </span>handle_event(<span class="kw-2">&amp;mut </span><span class="self">self</span>, (message, _id): (<span class="self">Self</span>::Event, usize)) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#114 id=114 data-nosnippet>114</a>        <span class="kw">let </span>Event { view_number, event } = message;
-<a href=#115 id=115 data-nosnippet>115</a>
-<a href=#116 id=116 data-nosnippet>116</a>        <span class="kw">if let </span>EventType::Decide { leaf_chain, .. } = event {
-<a href=#117 id=117 data-nosnippet>117</a>            <span class="kw">let </span>leaf = leaf_chain.first().unwrap().leaf.clone();
-<a href=#118 id=118 data-nosnippet>118</a>            <span class="kw">if </span>leaf.view_number() &gt; <span class="self">self</span>.last_decided_leaf.view_number() {
-<a href=#119 id=119 data-nosnippet>119</a>                <span class="self">self</span>.last_decided_leaf = leaf;
-<a href=#120 id=120 data-nosnippet>120</a>            }
-<a href=#121 id=121 data-nosnippet>121</a>        } <span class="kw">else if let </span>EventType::QuorumProposal {
-<a href=#122 id=122 data-nosnippet>122</a>            proposal,
-<a href=#123 id=123 data-nosnippet>123</a>            sender: <span class="kw">_</span>,
-<a href=#124 id=124 data-nosnippet>124</a>        } = event
-<a href=#125 id=125 data-nosnippet>125</a>        {
-<a href=#126 id=126 data-nosnippet>126</a>            <span class="kw">if </span>proposal.data.justify_qc().view_number() &gt; <span class="self">self</span>.high_qc.view_number() {
-<a href=#127 id=127 data-nosnippet>127</a>                <span class="self">self</span>.high_qc = proposal.data.justify_qc().clone();
-<a href=#128 id=128 data-nosnippet>128</a>            }
-<a href=#129 id=129 data-nosnippet>129</a>        } <span class="kw">else if let </span>EventType::ViewTimeout { view_number } = event {
-<a href=#130 id=130 data-nosnippet>130</a>            <span class="macro">tracing::error!</span>(<span class="string">"View timeout for view {view_number}"</span>);
-<a href=#131 id=131 data-nosnippet>131</a>        }
-<a href=#132 id=132 data-nosnippet>132</a>
-<a href=#133 id=133 data-nosnippet>133</a>        <span class="kw">let </span><span class="kw-2">mut </span>new_nodes = <span class="macro">vec!</span>[];
-<a href=#134 id=134 data-nosnippet>134</a>        <span class="kw">let </span><span class="kw-2">mut </span>new_networks = <span class="macro">vec!</span>[];
-<a href=#135 id=135 data-nosnippet>135</a>        <span class="comment">// if we have not seen this view before
-<a href=#136 id=136 data-nosnippet>136</a>        </span><span class="kw">if </span><span class="self">self</span>.latest_view.is_none() || view_number &gt; <span class="self">self</span>.latest_view.unwrap() {
-<a href=#137 id=137 data-nosnippet>137</a>            <span class="comment">// perform operations on the nodes
-<a href=#138 id=138 data-nosnippet>138</a>            </span><span class="kw">if let </span><span class="prelude-val">Some</span>(operations) = <span class="self">self</span>.changes.remove(<span class="kw-2">&amp;</span>view_number) {
-<a href=#139 id=139 data-nosnippet>139</a>                <span class="kw">for </span>ChangeNode { idx, updown } <span class="kw">in </span>operations {
-<a href=#140 id=140 data-nosnippet>140</a>                    <span class="kw">match </span>updown {
-<a href=#141 id=141 data-nosnippet>141</a>                        NodeAction::Up =&gt; {
-<a href=#142 id=142 data-nosnippet>142</a>                            <span class="kw">let </span>node_id = idx.try_into().unwrap();
-<a href=#143 id=143 data-nosnippet>143</a>                            <span class="kw">if let </span><span class="prelude-val">Some</span>(node) = <span class="self">self</span>.late_start.remove(<span class="kw-2">&amp;</span>node_id) {
-<a href=#144 id=144 data-nosnippet>144</a>                                <span class="macro">tracing::error!</span>(<span class="string">"Node {idx} spinning up late"</span>);
-<a href=#145 id=145 data-nosnippet>145</a>                                <span class="kw">let </span>network = <span class="kw">if let </span><span class="prelude-val">Some</span>(network) = node.network {
-<a href=#146 id=146 data-nosnippet>146</a>                                    network
-<a href=#147 id=147 data-nosnippet>147</a>                                } <span class="kw">else </span>{
-<a href=#148 id=148 data-nosnippet>148</a>                                    <span class="kw">let </span>generated_network = (<span class="self">self</span>.channel_generator)(node_id).<span class="kw">await</span>;
-<a href=#149 id=149 data-nosnippet>149</a>                                    generated_network.wait_for_ready().<span class="kw">await</span>;
-<a href=#150 id=150 data-nosnippet>150</a>                                    generated_network
-<a href=#151 id=151 data-nosnippet>151</a>                                };
-<a href=#152 id=152 data-nosnippet>152</a>                                <span class="kw">let </span>node_id = idx.try_into().unwrap();
-<a href=#153 id=153 data-nosnippet>153</a>                                <span class="kw">let </span>context = <span class="kw">match </span>node.context {
-<a href=#154 id=154 data-nosnippet>154</a>                                    LateNodeContext::InitializedContext(context) =&gt; context,
-<a href=#155 id=155 data-nosnippet>155</a>                                    <span class="comment">// Node not initialized. Initialize it
-<a href=#156 id=156 data-nosnippet>156</a>                                    // based on the received leaf.
-<a href=#157 id=157 data-nosnippet>157</a>                                    </span>LateNodeContext::UninitializedContext(late_context_params) =&gt; {
-<a href=#158 id=158 data-nosnippet>158</a>                                        <span class="kw">let </span>LateNodeContextParameters {
-<a href=#159 id=159 data-nosnippet>159</a>                                            storage,
-<a href=#160 id=160 data-nosnippet>160</a>                                            memberships,
-<a href=#161 id=161 data-nosnippet>161</a>                                            config,
-<a href=#162 id=162 data-nosnippet>162</a>                                        } = late_context_params;
-<a href=#163 id=163 data-nosnippet>163</a>
-<a href=#164 id=164 data-nosnippet>164</a>                                        <span class="kw">let </span>initializer = HotShotInitializer::&lt;TYPES&gt;::load(
-<a href=#165 id=165 data-nosnippet>165</a>                                            TestInstanceState::new(
-<a href=#166 id=166 data-nosnippet>166</a>                                                <span class="self">self</span>.async_delay_config
-<a href=#167 id=167 data-nosnippet>167</a>                                                    .get(<span class="kw-2">&amp;</span>node_id)
-<a href=#168 id=168 data-nosnippet>168</a>                                                    .cloned()
-<a href=#169 id=169 data-nosnippet>169</a>                                                    .unwrap_or_default(),
-<a href=#170 id=170 data-nosnippet>170</a>                                            ),
-<a href=#171 id=171 data-nosnippet>171</a>                                            <span class="self">self</span>.epoch_height,
-<a href=#172 id=172 data-nosnippet>172</a>                                            <span class="self">self</span>.epoch_start_block,
-<a href=#173 id=173 data-nosnippet>173</a>                                            <span class="self">self</span>.start_epoch_info.clone(),
-<a href=#174 id=174 data-nosnippet>174</a>                                            <span class="self">self</span>.last_decided_leaf.clone(),
-<a href=#175 id=175 data-nosnippet>175</a>                                            (
-<a href=#176 id=176 data-nosnippet>176</a>                                                TYPES::View::genesis(),
-<a href=#177 id=177 data-nosnippet>177</a>                                                genesis_epoch_from_version::&lt;V, TYPES&gt;(),
+<a href=#60 id=60 data-nosnippet>60</a>&gt; {
+<a href=#61 id=61 data-nosnippet>61</a>    <span class="doccomment">/// epoch height
+<a href=#62 id=62 data-nosnippet>62</a>    </span><span class="kw">pub </span>epoch_height: u64,
+<a href=#63 id=63 data-nosnippet>63</a>    <span class="doccomment">/// Epoch start block
+<a href=#64 id=64 data-nosnippet>64</a>    </span><span class="kw">pub </span>epoch_start_block: u64,
+<a href=#65 id=65 data-nosnippet>65</a>    <span class="doccomment">/// Saved epoch information. This must be sorted ascending by epoch.
+<a href=#66 id=66 data-nosnippet>66</a>    </span><span class="kw">pub </span>start_epoch_info: Vec&lt;InitializerEpochInfo&lt;TYPES&gt;&gt;,
+<a href=#67 id=67 data-nosnippet>67</a>    <span class="doccomment">/// handle to the nodes
+<a href=#68 id=68 data-nosnippet>68</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) handles: Arc&lt;RwLock&lt;Vec&lt;Node&lt;TYPES, I&gt;&gt;&gt;&gt;,
+<a href=#69 id=69 data-nosnippet>69</a>    <span class="doccomment">/// late start nodes
+<a href=#70 id=70 data-nosnippet>70</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) late_start: HashMap&lt;u64, LateStartNode&lt;TYPES, I&gt;&gt;,
+<a href=#71 id=71 data-nosnippet>71</a>    <span class="doccomment">/// time based changes
+<a href=#72 id=72 data-nosnippet>72</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) changes: BTreeMap&lt;TYPES::View, Vec&lt;ChangeNode&gt;&gt;,
+<a href=#73 id=73 data-nosnippet>73</a>    <span class="doccomment">/// most recent view seen by spinning task
+<a href=#74 id=74 data-nosnippet>74</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) latest_view: <span class="prelude-ty">Option</span>&lt;TYPES::View&gt;,
+<a href=#75 id=75 data-nosnippet>75</a>    <span class="doccomment">/// Last decided leaf that can be used as the anchor leaf to initialize the node.
+<a href=#76 id=76 data-nosnippet>76</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) last_decided_leaf: Leaf2&lt;TYPES&gt;,
+<a href=#77 id=77 data-nosnippet>77</a>    <span class="doccomment">/// Highest qc seen in the test for restarting nodes
+<a href=#78 id=78 data-nosnippet>78</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) high_qc: QuorumCertificate2&lt;TYPES&gt;,
+<a href=#79 id=79 data-nosnippet>79</a>    <span class="doccomment">/// Next epoch highest qc seen in the test for restarting nodes
+<a href=#80 id=80 data-nosnippet>80</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) next_epoch_high_qc: <span class="prelude-ty">Option</span>&lt;NextEpochQuorumCertificate2&lt;TYPES&gt;&gt;,
+<a href=#81 id=81 data-nosnippet>81</a>    <span class="doccomment">/// Add specified delay to async calls
+<a href=#82 id=82 data-nosnippet>82</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) async_delay_config: HashMap&lt;u64, DelayConfig&gt;,
+<a href=#83 id=83 data-nosnippet>83</a>    <span class="doccomment">/// Context stored for nodes to be restarted with
+<a href=#84 id=84 data-nosnippet>84</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) restart_contexts: HashMap&lt;usize, RestartContext&lt;TYPES, N, I&gt;&gt;,
+<a href=#85 id=85 data-nosnippet>85</a>    <span class="doccomment">/// Generate network channel for restart nodes
+<a href=#86 id=86 data-nosnippet>86</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) channel_generator: AsyncGenerator&lt;Network&lt;TYPES, I&gt;&gt;,
+<a href=#87 id=87 data-nosnippet>87</a>    <span class="doccomment">/// The light client state update certificate
+<a href=#88 id=88 data-nosnippet>88</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) state_cert: <span class="prelude-ty">Option</span>&lt;LightClientStateUpdateCertificateV2&lt;TYPES&gt;&gt;,
+<a href=#89 id=89 data-nosnippet>89</a>    <span class="doccomment">/// Node stakes
+<a href=#90 id=90 data-nosnippet>90</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) node_stakes: TestNodeStakes,
+<a href=#91 id=91 data-nosnippet>91</a>}
+<a href=#92 id=92 data-nosnippet>92</a>
+<a href=#93 id=93 data-nosnippet>93</a><span class="attr">#[async_trait]
+<a href=#94 id=94 data-nosnippet>94</a></span><span class="kw">impl</span>&lt;
+<a href=#95 id=95 data-nosnippet>95</a>        TYPES: NodeType&lt;
+<a href=#96 id=96 data-nosnippet>96</a>            InstanceState = TestInstanceState,
+<a href=#97 id=97 data-nosnippet>97</a>            ValidatedState = TestValidatedState,
+<a href=#98 id=98 data-nosnippet>98</a>            BlockHeader = TestBlockHeader,
+<a href=#99 id=99 data-nosnippet>99</a>        &gt;,
+<a href=#100 id=100 data-nosnippet>100</a>        I: TestableNodeImplementation&lt;TYPES&gt;,
+<a href=#101 id=101 data-nosnippet>101</a>        N: ConnectedNetwork&lt;TYPES::SignatureKey&gt;,
+<a href=#102 id=102 data-nosnippet>102</a>    &gt; TestTaskState <span class="kw">for </span>SpinningTask&lt;TYPES, N, I&gt;
+<a href=#103 id=103 data-nosnippet>103</a><span class="kw">where
+<a href=#104 id=104 data-nosnippet>104</a>    </span>I: TestableNodeImplementation&lt;TYPES&gt;,
+<a href=#105 id=105 data-nosnippet>105</a>    I: NodeImplementation&lt;TYPES, Network = N, Storage = TestStorage&lt;TYPES&gt;&gt;,
+<a href=#106 id=106 data-nosnippet>106</a>    &lt;TYPES <span class="kw">as </span>NodeType&gt;::Membership: Membership&lt;TYPES, Storage = TestStorage&lt;TYPES&gt;&gt;,
+<a href=#107 id=107 data-nosnippet>107</a>{
+<a href=#108 id=108 data-nosnippet>108</a>    <span class="kw">type </span>Event = Event&lt;TYPES&gt;;
+<a href=#109 id=109 data-nosnippet>109</a>    <span class="kw">type </span>Error = Error;
+<a href=#110 id=110 data-nosnippet>110</a>
+<a href=#111 id=111 data-nosnippet>111</a>    <span class="kw">async fn </span>handle_event(<span class="kw-2">&amp;mut </span><span class="self">self</span>, (message, _id): (<span class="self">Self</span>::Event, usize)) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#112 id=112 data-nosnippet>112</a>        <span class="kw">let </span>Event { view_number, event } = message;
+<a href=#113 id=113 data-nosnippet>113</a>
+<a href=#114 id=114 data-nosnippet>114</a>        <span class="kw">if let </span>EventType::Decide { leaf_chain, .. } = event {
+<a href=#115 id=115 data-nosnippet>115</a>            <span class="kw">let </span>leaf = leaf_chain.first().unwrap().leaf.clone();
+<a href=#116 id=116 data-nosnippet>116</a>            <span class="kw">if </span>leaf.view_number() &gt; <span class="self">self</span>.last_decided_leaf.view_number() {
+<a href=#117 id=117 data-nosnippet>117</a>                <span class="self">self</span>.last_decided_leaf = leaf;
+<a href=#118 id=118 data-nosnippet>118</a>            }
+<a href=#119 id=119 data-nosnippet>119</a>        } <span class="kw">else if let </span>EventType::QuorumProposal {
+<a href=#120 id=120 data-nosnippet>120</a>            proposal,
+<a href=#121 id=121 data-nosnippet>121</a>            sender: <span class="kw">_</span>,
+<a href=#122 id=122 data-nosnippet>122</a>        } = event
+<a href=#123 id=123 data-nosnippet>123</a>        {
+<a href=#124 id=124 data-nosnippet>124</a>            <span class="kw">if </span>proposal.data.justify_qc().view_number() &gt; <span class="self">self</span>.high_qc.view_number() {
+<a href=#125 id=125 data-nosnippet>125</a>                <span class="self">self</span>.high_qc = proposal.data.justify_qc().clone();
+<a href=#126 id=126 data-nosnippet>126</a>            }
+<a href=#127 id=127 data-nosnippet>127</a>        } <span class="kw">else if let </span>EventType::ViewTimeout { view_number } = event {
+<a href=#128 id=128 data-nosnippet>128</a>            <span class="macro">tracing::error!</span>(<span class="string">"View timeout for view {view_number}"</span>);
+<a href=#129 id=129 data-nosnippet>129</a>        }
+<a href=#130 id=130 data-nosnippet>130</a>
+<a href=#131 id=131 data-nosnippet>131</a>        <span class="kw">let </span><span class="kw-2">mut </span>new_nodes = <span class="macro">vec!</span>[];
+<a href=#132 id=132 data-nosnippet>132</a>        <span class="kw">let </span><span class="kw-2">mut </span>new_networks = <span class="macro">vec!</span>[];
+<a href=#133 id=133 data-nosnippet>133</a>        <span class="comment">// if we have not seen this view before
+<a href=#134 id=134 data-nosnippet>134</a>        </span><span class="kw">if </span><span class="self">self</span>.latest_view.is_none() || view_number &gt; <span class="self">self</span>.latest_view.unwrap() {
+<a href=#135 id=135 data-nosnippet>135</a>            <span class="comment">// perform operations on the nodes
+<a href=#136 id=136 data-nosnippet>136</a>            </span><span class="kw">if let </span><span class="prelude-val">Some</span>(operations) = <span class="self">self</span>.changes.remove(<span class="kw-2">&amp;</span>view_number) {
+<a href=#137 id=137 data-nosnippet>137</a>                <span class="kw">for </span>ChangeNode { idx, updown } <span class="kw">in </span>operations {
+<a href=#138 id=138 data-nosnippet>138</a>                    <span class="kw">match </span>updown {
+<a href=#139 id=139 data-nosnippet>139</a>                        NodeAction::Up =&gt; {
+<a href=#140 id=140 data-nosnippet>140</a>                            <span class="kw">let </span>node_id = idx.try_into().unwrap();
+<a href=#141 id=141 data-nosnippet>141</a>                            <span class="kw">if let </span><span class="prelude-val">Some</span>(node) = <span class="self">self</span>.late_start.remove(<span class="kw-2">&amp;</span>node_id) {
+<a href=#142 id=142 data-nosnippet>142</a>                                <span class="macro">tracing::error!</span>(<span class="string">"Node {idx} spinning up late"</span>);
+<a href=#143 id=143 data-nosnippet>143</a>                                <span class="kw">let </span>network = <span class="kw">if let </span><span class="prelude-val">Some</span>(network) = node.network {
+<a href=#144 id=144 data-nosnippet>144</a>                                    network
+<a href=#145 id=145 data-nosnippet>145</a>                                } <span class="kw">else </span>{
+<a href=#146 id=146 data-nosnippet>146</a>                                    <span class="kw">let </span>generated_network = (<span class="self">self</span>.channel_generator)(node_id).<span class="kw">await</span>;
+<a href=#147 id=147 data-nosnippet>147</a>                                    generated_network.wait_for_ready().<span class="kw">await</span>;
+<a href=#148 id=148 data-nosnippet>148</a>                                    generated_network
+<a href=#149 id=149 data-nosnippet>149</a>                                };
+<a href=#150 id=150 data-nosnippet>150</a>                                <span class="kw">let </span>node_id = idx.try_into().unwrap();
+<a href=#151 id=151 data-nosnippet>151</a>                                <span class="kw">let </span>context = <span class="kw">match </span>node.context {
+<a href=#152 id=152 data-nosnippet>152</a>                                    LateNodeContext::InitializedContext(context) =&gt; context,
+<a href=#153 id=153 data-nosnippet>153</a>                                    <span class="comment">// Node not initialized. Initialize it
+<a href=#154 id=154 data-nosnippet>154</a>                                    // based on the received leaf.
+<a href=#155 id=155 data-nosnippet>155</a>                                    </span>LateNodeContext::UninitializedContext(late_context_params) =&gt; {
+<a href=#156 id=156 data-nosnippet>156</a>                                        <span class="kw">let </span>LateNodeContextParameters {
+<a href=#157 id=157 data-nosnippet>157</a>                                            storage,
+<a href=#158 id=158 data-nosnippet>158</a>                                            memberships,
+<a href=#159 id=159 data-nosnippet>159</a>                                            config,
+<a href=#160 id=160 data-nosnippet>160</a>                                        } = late_context_params;
+<a href=#161 id=161 data-nosnippet>161</a>
+<a href=#162 id=162 data-nosnippet>162</a>                                        <span class="kw">let </span>initializer = HotShotInitializer::&lt;TYPES&gt;::load(
+<a href=#163 id=163 data-nosnippet>163</a>                                            TestInstanceState::new(
+<a href=#164 id=164 data-nosnippet>164</a>                                                <span class="self">self</span>.async_delay_config
+<a href=#165 id=165 data-nosnippet>165</a>                                                    .get(<span class="kw-2">&amp;</span>node_id)
+<a href=#166 id=166 data-nosnippet>166</a>                                                    .cloned()
+<a href=#167 id=167 data-nosnippet>167</a>                                                    .unwrap_or_default(),
+<a href=#168 id=168 data-nosnippet>168</a>                                            ),
+<a href=#169 id=169 data-nosnippet>169</a>                                            <span class="self">self</span>.epoch_height,
+<a href=#170 id=170 data-nosnippet>170</a>                                            <span class="self">self</span>.epoch_start_block,
+<a href=#171 id=171 data-nosnippet>171</a>                                            <span class="self">self</span>.start_epoch_info.clone(),
+<a href=#172 id=172 data-nosnippet>172</a>                                            <span class="self">self</span>.last_decided_leaf.clone(),
+<a href=#173 id=173 data-nosnippet>173</a>                                            (
+<a href=#174 id=174 data-nosnippet>174</a>                                                TYPES::View::genesis(),
+<a href=#175 id=175 data-nosnippet>175</a>                                                genesis_epoch_from_version::&lt;TYPES&gt;(
+<a href=#176 id=176 data-nosnippet>176</a>                                                    config.upgrade.base,
+<a href=#177 id=177 data-nosnippet>177</a>                                                ),
 <a href=#178 id=178 data-nosnippet>178</a>                                            ),
 <a href=#179 id=179 data-nosnippet>179</a>                                            (<span class="self">self</span>.high_qc.clone(), <span class="self">self</span>.next_epoch_high_qc.clone()),
 <a href=#180 id=180 data-nosnippet>180</a>                                            TYPES::View::genesis(),
@@ -266,176 +266,176 @@
 <a href=#266 id=266 data-nosnippet>266</a>                                <span class="kw">let </span>last_actioned_view = storage.last_actioned_view().<span class="kw">await</span>;
 <a href=#267 id=267 data-nosnippet>267</a>                                <span class="kw">let </span>start_epoch = storage.last_actioned_epoch().<span class="kw">await</span>;
 <a href=#268 id=268 data-nosnippet>268</a>                                <span class="kw">let </span>high_qc = storage.high_qc_cloned().<span class="kw">await</span>.unwrap_or(
-<a href=#269 id=269 data-nosnippet>269</a>                                    QuorumCertificate2::genesis::&lt;V&gt;(
+<a href=#269 id=269 data-nosnippet>269</a>                                    QuorumCertificate2::genesis(
 <a href=#270 id=270 data-nosnippet>270</a>                                        <span class="kw-2">&amp;</span>TestValidatedState::default(),
 <a href=#271 id=271 data-nosnippet>271</a>                                        <span class="kw-2">&amp;</span>TestInstanceState::default(),
-<a href=#272 id=272 data-nosnippet>272</a>                                    )
-<a href=#273 id=273 data-nosnippet>273</a>                                    .<span class="kw">await</span>,
-<a href=#274 id=274 data-nosnippet>274</a>                                );
-<a href=#275 id=275 data-nosnippet>275</a>                                <span class="kw">let </span>state_cert = storage.state_cert_cloned().<span class="kw">await</span>;
-<a href=#276 id=276 data-nosnippet>276</a>                                <span class="kw">let </span>saved_proposals = storage.proposals_cloned().<span class="kw">await</span>;
-<a href=#277 id=277 data-nosnippet>277</a>                                <span class="kw">let </span><span class="kw-2">mut </span>vid_shares = BTreeMap::new();
-<a href=#278 id=278 data-nosnippet>278</a>                                <span class="kw">for </span>(view, hash_map) <span class="kw">in </span>storage.vids_cloned().<span class="kw">await </span>{
-<a href=#279 id=279 data-nosnippet>279</a>                                    <span class="kw">let </span><span class="kw-2">mut </span>converted_hash_map = HashMap::new();
-<a href=#280 id=280 data-nosnippet>280</a>                                    <span class="kw">for </span>(key, proposal) <span class="kw">in </span>hash_map {
-<a href=#281 id=281 data-nosnippet>281</a>                                        converted_hash_map
-<a href=#282 id=282 data-nosnippet>282</a>                                            .entry(key)
-<a href=#283 id=283 data-nosnippet>283</a>                                            .or_insert_with(BTreeMap::new)
-<a href=#284 id=284 data-nosnippet>284</a>                                            .insert(
-<a href=#285 id=285 data-nosnippet>285</a>                                                proposal.data.target_epoch(),
-<a href=#286 id=286 data-nosnippet>286</a>                                                convert_proposal(proposal),
-<a href=#287 id=287 data-nosnippet>287</a>                                            );
-<a href=#288 id=288 data-nosnippet>288</a>                                    }
-<a href=#289 id=289 data-nosnippet>289</a>                                    vid_shares.insert(view, converted_hash_map);
-<a href=#290 id=290 data-nosnippet>290</a>                                }
-<a href=#291 id=291 data-nosnippet>291</a>                                <span class="kw">let </span>decided_upgrade_certificate =
-<a href=#292 id=292 data-nosnippet>292</a>                                    storage.decided_upgrade_certificate().<span class="kw">await</span>;
-<a href=#293 id=293 data-nosnippet>293</a>
-<a href=#294 id=294 data-nosnippet>294</a>                                <span class="kw">let </span>initializer = HotShotInitializer::&lt;TYPES&gt;::load(
-<a href=#295 id=295 data-nosnippet>295</a>                                    TestInstanceState::new(
-<a href=#296 id=296 data-nosnippet>296</a>                                        <span class="self">self</span>.async_delay_config
-<a href=#297 id=297 data-nosnippet>297</a>                                            .get(<span class="kw-2">&amp;</span>node_id)
-<a href=#298 id=298 data-nosnippet>298</a>                                            .cloned()
-<a href=#299 id=299 data-nosnippet>299</a>                                            .unwrap_or_default(),
-<a href=#300 id=300 data-nosnippet>300</a>                                    ),
-<a href=#301 id=301 data-nosnippet>301</a>                                    <span class="self">self</span>.epoch_height,
-<a href=#302 id=302 data-nosnippet>302</a>                                    <span class="self">self</span>.epoch_start_block,
-<a href=#303 id=303 data-nosnippet>303</a>                                    <span class="self">self</span>.start_epoch_info.clone(),
-<a href=#304 id=304 data-nosnippet>304</a>                                    <span class="self">self</span>.last_decided_leaf.clone(),
-<a href=#305 id=305 data-nosnippet>305</a>                                    (start_view, start_epoch),
-<a href=#306 id=306 data-nosnippet>306</a>                                    (high_qc, next_epoch_high_qc),
-<a href=#307 id=307 data-nosnippet>307</a>                                    last_actioned_view,
-<a href=#308 id=308 data-nosnippet>308</a>                                    saved_proposals,
-<a href=#309 id=309 data-nosnippet>309</a>                                    vid_shares,
-<a href=#310 id=310 data-nosnippet>310</a>                                    decided_upgrade_certificate,
-<a href=#311 id=311 data-nosnippet>311</a>                                    state_cert,
-<a href=#312 id=312 data-nosnippet>312</a>                                );
-<a href=#313 id=313 data-nosnippet>313</a>                                <span class="comment">// We assign node's public key and stake value rather than read from config file since it's a test
-<a href=#314 id=314 data-nosnippet>314</a>                                </span><span class="kw">let </span>validator_config = ValidatorConfig::generated_from_seed_indexed(
-<a href=#315 id=315 data-nosnippet>315</a>                                    [<span class="number">0u8</span>; <span class="number">32</span>],
-<a href=#316 id=316 data-nosnippet>316</a>                                    node_id,
-<a href=#317 id=317 data-nosnippet>317</a>                                    <span class="self">self</span>.node_stakes.get(node_id),
-<a href=#318 id=318 data-nosnippet>318</a>                                    <span class="comment">// For tests, make the node DA based on its index
-<a href=#319 id=319 data-nosnippet>319</a>                                    </span>node_id &lt; config.da_staked_committee_size <span class="kw">as </span>u64,
-<a href=#320 id=320 data-nosnippet>320</a>                                );
-<a href=#321 id=321 data-nosnippet>321</a>                                <span class="kw">let </span>internal_chan = broadcast(EVENT_CHANNEL_SIZE);
-<a href=#322 id=322 data-nosnippet>322</a>                                <span class="kw">let </span>context =
-<a href=#323 id=323 data-nosnippet>323</a>                                    TestRunner::&lt;TYPES, I, V, N&gt;::add_node_with_config_and_channels(
-<a href=#324 id=324 data-nosnippet>324</a>                                        node_id,
-<a href=#325 id=325 data-nosnippet>325</a>                                        generated_network.clone(),
-<a href=#326 id=326 data-nosnippet>326</a>                                        Arc::clone(<span class="kw-2">&amp;</span>membership),
-<a href=#327 id=327 data-nosnippet>327</a>                                        initializer,
-<a href=#328 id=328 data-nosnippet>328</a>                                        config,
-<a href=#329 id=329 data-nosnippet>329</a>                                        validator_config,
-<a href=#330 id=330 data-nosnippet>330</a>                                        storage.clone(),
-<a href=#331 id=331 data-nosnippet>331</a>                                        internal_chan,
-<a href=#332 id=332 data-nosnippet>332</a>                                        (
-<a href=#333 id=333 data-nosnippet>333</a>                                            node.handle.external_channel_sender(),
-<a href=#334 id=334 data-nosnippet>334</a>                                            node.handle.event_stream_known_impl().new_receiver(),
-<a href=#335 id=335 data-nosnippet>335</a>                                        ),
-<a href=#336 id=336 data-nosnippet>336</a>                                    )
-<a href=#337 id=337 data-nosnippet>337</a>                                    .<span class="kw">await</span>;
-<a href=#338 id=338 data-nosnippet>338</a>                                <span class="macro">tracing::info!</span>(
-<a href=#339 id=339 data-nosnippet>339</a>                                    <span class="string">"Node {} restarting in view {} with start view {}"</span>,
-<a href=#340 id=340 data-nosnippet>340</a>                                    idx,
-<a href=#341 id=341 data-nosnippet>341</a>                                    view_number + delay_views,
-<a href=#342 id=342 data-nosnippet>342</a>                                    start_view
-<a href=#343 id=343 data-nosnippet>343</a>                                );
-<a href=#344 id=344 data-nosnippet>344</a>                                <span class="kw">if </span>delay_views == <span class="number">0 </span>{
-<a href=#345 id=345 data-nosnippet>345</a>                                    new_nodes.push((context, idx));
-<a href=#346 id=346 data-nosnippet>346</a>                                    new_networks.push(generated_network.clone());
-<a href=#347 id=347 data-nosnippet>347</a>                                } <span class="kw">else </span>{
-<a href=#348 id=348 data-nosnippet>348</a>                                    <span class="kw">let </span>up_view = view_number + delay_views;
-<a href=#349 id=349 data-nosnippet>349</a>                                    <span class="kw">let </span>change = ChangeNode {
-<a href=#350 id=350 data-nosnippet>350</a>                                        idx,
-<a href=#351 id=351 data-nosnippet>351</a>                                        updown: NodeAction::RestartUp,
-<a href=#352 id=352 data-nosnippet>352</a>                                    };
-<a href=#353 id=353 data-nosnippet>353</a>                                    <span class="self">self</span>.changes.entry(up_view).or_default().push(change);
-<a href=#354 id=354 data-nosnippet>354</a>                                    <span class="kw">let </span>new_ctx = RestartContext {
-<a href=#355 id=355 data-nosnippet>355</a>                                        context,
-<a href=#356 id=356 data-nosnippet>356</a>                                        network: generated_network.clone(),
-<a href=#357 id=357 data-nosnippet>357</a>                                    };
-<a href=#358 id=358 data-nosnippet>358</a>                                    <span class="self">self</span>.restart_contexts.insert(idx, new_ctx);
-<a href=#359 id=359 data-nosnippet>359</a>                                }
-<a href=#360 id=360 data-nosnippet>360</a>                            }
-<a href=#361 id=361 data-nosnippet>361</a>                        },
-<a href=#362 id=362 data-nosnippet>362</a>                        NodeAction::RestartUp =&gt; {
-<a href=#363 id=363 data-nosnippet>363</a>                            <span class="kw">if let </span><span class="prelude-val">Some</span>(ctx) = <span class="self">self</span>.restart_contexts.remove(<span class="kw-2">&amp;</span>idx) {
-<a href=#364 id=364 data-nosnippet>364</a>                                new_nodes.push((ctx.context, idx));
-<a href=#365 id=365 data-nosnippet>365</a>                                new_networks.push(ctx.network.clone());
-<a href=#366 id=366 data-nosnippet>366</a>                            }
-<a href=#367 id=367 data-nosnippet>367</a>                        },
-<a href=#368 id=368 data-nosnippet>368</a>                        NodeAction::NetworkUp =&gt; {
-<a href=#369 id=369 data-nosnippet>369</a>                            <span class="kw">if let </span><span class="prelude-val">Some</span>(handle) = <span class="self">self</span>.handles.write().<span class="kw">await</span>.get(idx) {
-<a href=#370 id=370 data-nosnippet>370</a>                                <span class="macro">tracing::error!</span>(<span class="string">"Node {idx} networks resuming"</span>);
-<a href=#371 id=371 data-nosnippet>371</a>                                handle.network.resume();
-<a href=#372 id=372 data-nosnippet>372</a>                            }
-<a href=#373 id=373 data-nosnippet>373</a>                        },
-<a href=#374 id=374 data-nosnippet>374</a>                        NodeAction::NetworkDown =&gt; {
-<a href=#375 id=375 data-nosnippet>375</a>                            <span class="kw">if let </span><span class="prelude-val">Some</span>(handle) = <span class="self">self</span>.handles.write().<span class="kw">await</span>.get(idx) {
-<a href=#376 id=376 data-nosnippet>376</a>                                <span class="macro">tracing::error!</span>(<span class="string">"Node {idx} networks pausing"</span>);
-<a href=#377 id=377 data-nosnippet>377</a>                                handle.network.pause();
-<a href=#378 id=378 data-nosnippet>378</a>                            }
-<a href=#379 id=379 data-nosnippet>379</a>                        },
-<a href=#380 id=380 data-nosnippet>380</a>                    }
-<a href=#381 id=381 data-nosnippet>381</a>                }
-<a href=#382 id=382 data-nosnippet>382</a>            }
-<a href=#383 id=383 data-nosnippet>383</a>            <span class="kw">let </span><span class="kw-2">mut </span>ready_futs = <span class="macro">vec!</span>[];
-<a href=#384 id=384 data-nosnippet>384</a>            <span class="kw">while let </span><span class="prelude-val">Some</span>(net) = new_networks.pop() {
-<a href=#385 id=385 data-nosnippet>385</a>                ready_futs.push(<span class="kw">async move </span>{
-<a href=#386 id=386 data-nosnippet>386</a>                    net.wait_for_ready().<span class="kw">await</span>;
-<a href=#387 id=387 data-nosnippet>387</a>                });
-<a href=#388 id=388 data-nosnippet>388</a>            }
-<a href=#389 id=389 data-nosnippet>389</a>            join_all(ready_futs).<span class="kw">await</span>;
-<a href=#390 id=390 data-nosnippet>390</a>
-<a href=#391 id=391 data-nosnippet>391</a>            <span class="kw">let </span><span class="kw-2">mut </span>start_futs = <span class="macro">vec!</span>[];
-<a href=#392 id=392 data-nosnippet>392</a>
-<a href=#393 id=393 data-nosnippet>393</a>            <span class="kw">while let </span><span class="prelude-val">Some</span>((node, id)) = new_nodes.pop() {
-<a href=#394 id=394 data-nosnippet>394</a>                <span class="kw">let </span>handles = <span class="self">self</span>.handles.clone();
-<a href=#395 id=395 data-nosnippet>395</a>                <span class="kw">let </span>fut = <span class="kw">async move </span>{
-<a href=#396 id=396 data-nosnippet>396</a>                    <span class="macro">tracing::info!</span>(<span class="string">"Starting node {id} back up"</span>);
-<a href=#397 id=397 data-nosnippet>397</a>                    node.network.wait_for_ready().<span class="kw">await</span>;
-<a href=#398 id=398 data-nosnippet>398</a>                    <span class="kw">let </span>handle = node.run_tasks().<span class="kw">await</span>;
-<a href=#399 id=399 data-nosnippet>399</a>
-<a href=#400 id=400 data-nosnippet>400</a>                    <span class="comment">// Create the node and add it to the state, so we can shut them
-<a href=#401 id=401 data-nosnippet>401</a>                    // down properly later to avoid the overflow error in the overall
-<a href=#402 id=402 data-nosnippet>402</a>                    // safety task.
-<a href=#403 id=403 data-nosnippet>403</a>                    </span><span class="kw">let </span>node = Node {
-<a href=#404 id=404 data-nosnippet>404</a>                        node_id: id.try_into().unwrap(),
-<a href=#405 id=405 data-nosnippet>405</a>                        network: node.network.clone(),
-<a href=#406 id=406 data-nosnippet>406</a>                        handle,
-<a href=#407 id=407 data-nosnippet>407</a>                    };
-<a href=#408 id=408 data-nosnippet>408</a>                    node.handle.hotshot.start_consensus().<span class="kw">await</span>;
-<a href=#409 id=409 data-nosnippet>409</a>
-<a href=#410 id=410 data-nosnippet>410</a>                    handles.write().<span class="kw">await</span>[id] = node;
-<a href=#411 id=411 data-nosnippet>411</a>                };
-<a href=#412 id=412 data-nosnippet>412</a>                start_futs.push(fut);
-<a href=#413 id=413 data-nosnippet>413</a>            }
-<a href=#414 id=414 data-nosnippet>414</a>            <span class="kw">if </span>!start_futs.is_empty() {
-<a href=#415 id=415 data-nosnippet>415</a>                join_all(start_futs).<span class="kw">await</span>;
-<a href=#416 id=416 data-nosnippet>416</a>                <span class="macro">tracing::info!</span>(<span class="string">"Nodes all started"</span>);
-<a href=#417 id=417 data-nosnippet>417</a>            }
-<a href=#418 id=418 data-nosnippet>418</a>
-<a href=#419 id=419 data-nosnippet>419</a>            <span class="comment">// update our latest view
-<a href=#420 id=420 data-nosnippet>420</a>            </span><span class="self">self</span>.latest_view = <span class="prelude-val">Some</span>(view_number);
-<a href=#421 id=421 data-nosnippet>421</a>        }
-<a href=#422 id=422 data-nosnippet>422</a>
-<a href=#423 id=423 data-nosnippet>423</a>        <span class="prelude-val">Ok</span>(())
-<a href=#424 id=424 data-nosnippet>424</a>    }
-<a href=#425 id=425 data-nosnippet>425</a>
-<a href=#426 id=426 data-nosnippet>426</a>    <span class="kw">async fn </span>check(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; TestResult {
-<a href=#427 id=427 data-nosnippet>427</a>        TestResult::Pass
-<a href=#428 id=428 data-nosnippet>428</a>    }
-<a href=#429 id=429 data-nosnippet>429</a>}
-<a href=#430 id=430 data-nosnippet>430</a>
-<a href=#431 id=431 data-nosnippet>431</a><span class="attr">#[derive(Clone)]
-<a href=#432 id=432 data-nosnippet>432</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">struct </span>RestartContext&lt;
-<a href=#433 id=433 data-nosnippet>433</a>    TYPES: NodeType,
-<a href=#434 id=434 data-nosnippet>434</a>    N: ConnectedNetwork&lt;TYPES::SignatureKey&gt;,
-<a href=#435 id=435 data-nosnippet>435</a>    I: TestableNodeImplementation&lt;TYPES&gt;,
-<a href=#436 id=436 data-nosnippet>436</a>    V: Versions,
+<a href=#272 id=272 data-nosnippet>272</a>                                        config.upgrade,
+<a href=#273 id=273 data-nosnippet>273</a>                                    )
+<a href=#274 id=274 data-nosnippet>274</a>                                    .<span class="kw">await</span>,
+<a href=#275 id=275 data-nosnippet>275</a>                                );
+<a href=#276 id=276 data-nosnippet>276</a>                                <span class="kw">let </span>state_cert = storage.state_cert_cloned().<span class="kw">await</span>;
+<a href=#277 id=277 data-nosnippet>277</a>                                <span class="kw">let </span>saved_proposals = storage.proposals_cloned().<span class="kw">await</span>;
+<a href=#278 id=278 data-nosnippet>278</a>                                <span class="kw">let </span><span class="kw-2">mut </span>vid_shares = BTreeMap::new();
+<a href=#279 id=279 data-nosnippet>279</a>                                <span class="kw">for </span>(view, hash_map) <span class="kw">in </span>storage.vids_cloned().<span class="kw">await </span>{
+<a href=#280 id=280 data-nosnippet>280</a>                                    <span class="kw">let </span><span class="kw-2">mut </span>converted_hash_map = HashMap::new();
+<a href=#281 id=281 data-nosnippet>281</a>                                    <span class="kw">for </span>(key, proposal) <span class="kw">in </span>hash_map {
+<a href=#282 id=282 data-nosnippet>282</a>                                        converted_hash_map
+<a href=#283 id=283 data-nosnippet>283</a>                                            .entry(key)
+<a href=#284 id=284 data-nosnippet>284</a>                                            .or_insert_with(BTreeMap::new)
+<a href=#285 id=285 data-nosnippet>285</a>                                            .insert(
+<a href=#286 id=286 data-nosnippet>286</a>                                                proposal.data.target_epoch(),
+<a href=#287 id=287 data-nosnippet>287</a>                                                convert_proposal(proposal),
+<a href=#288 id=288 data-nosnippet>288</a>                                            );
+<a href=#289 id=289 data-nosnippet>289</a>                                    }
+<a href=#290 id=290 data-nosnippet>290</a>                                    vid_shares.insert(view, converted_hash_map);
+<a href=#291 id=291 data-nosnippet>291</a>                                }
+<a href=#292 id=292 data-nosnippet>292</a>                                <span class="kw">let </span>decided_upgrade_certificate =
+<a href=#293 id=293 data-nosnippet>293</a>                                    storage.decided_upgrade_certificate().<span class="kw">await</span>;
+<a href=#294 id=294 data-nosnippet>294</a>
+<a href=#295 id=295 data-nosnippet>295</a>                                <span class="kw">let </span>initializer = HotShotInitializer::&lt;TYPES&gt;::load(
+<a href=#296 id=296 data-nosnippet>296</a>                                    TestInstanceState::new(
+<a href=#297 id=297 data-nosnippet>297</a>                                        <span class="self">self</span>.async_delay_config
+<a href=#298 id=298 data-nosnippet>298</a>                                            .get(<span class="kw-2">&amp;</span>node_id)
+<a href=#299 id=299 data-nosnippet>299</a>                                            .cloned()
+<a href=#300 id=300 data-nosnippet>300</a>                                            .unwrap_or_default(),
+<a href=#301 id=301 data-nosnippet>301</a>                                    ),
+<a href=#302 id=302 data-nosnippet>302</a>                                    <span class="self">self</span>.epoch_height,
+<a href=#303 id=303 data-nosnippet>303</a>                                    <span class="self">self</span>.epoch_start_block,
+<a href=#304 id=304 data-nosnippet>304</a>                                    <span class="self">self</span>.start_epoch_info.clone(),
+<a href=#305 id=305 data-nosnippet>305</a>                                    <span class="self">self</span>.last_decided_leaf.clone(),
+<a href=#306 id=306 data-nosnippet>306</a>                                    (start_view, start_epoch),
+<a href=#307 id=307 data-nosnippet>307</a>                                    (high_qc, next_epoch_high_qc),
+<a href=#308 id=308 data-nosnippet>308</a>                                    last_actioned_view,
+<a href=#309 id=309 data-nosnippet>309</a>                                    saved_proposals,
+<a href=#310 id=310 data-nosnippet>310</a>                                    vid_shares,
+<a href=#311 id=311 data-nosnippet>311</a>                                    decided_upgrade_certificate,
+<a href=#312 id=312 data-nosnippet>312</a>                                    state_cert,
+<a href=#313 id=313 data-nosnippet>313</a>                                );
+<a href=#314 id=314 data-nosnippet>314</a>                                <span class="comment">// We assign node's public key and stake value rather than read from config file since it's a test
+<a href=#315 id=315 data-nosnippet>315</a>                                </span><span class="kw">let </span>validator_config = ValidatorConfig::generated_from_seed_indexed(
+<a href=#316 id=316 data-nosnippet>316</a>                                    [<span class="number">0u8</span>; <span class="number">32</span>],
+<a href=#317 id=317 data-nosnippet>317</a>                                    node_id,
+<a href=#318 id=318 data-nosnippet>318</a>                                    <span class="self">self</span>.node_stakes.get(node_id),
+<a href=#319 id=319 data-nosnippet>319</a>                                    <span class="comment">// For tests, make the node DA based on its index
+<a href=#320 id=320 data-nosnippet>320</a>                                    </span>node_id &lt; config.da_staked_committee_size <span class="kw">as </span>u64,
+<a href=#321 id=321 data-nosnippet>321</a>                                );
+<a href=#322 id=322 data-nosnippet>322</a>                                <span class="kw">let </span>internal_chan = broadcast(EVENT_CHANNEL_SIZE);
+<a href=#323 id=323 data-nosnippet>323</a>                                <span class="kw">let </span>context =
+<a href=#324 id=324 data-nosnippet>324</a>                                    TestRunner::&lt;TYPES, I, N&gt;::add_node_with_config_and_channels(
+<a href=#325 id=325 data-nosnippet>325</a>                                        node_id,
+<a href=#326 id=326 data-nosnippet>326</a>                                        generated_network.clone(),
+<a href=#327 id=327 data-nosnippet>327</a>                                        Arc::clone(<span class="kw-2">&amp;</span>membership),
+<a href=#328 id=328 data-nosnippet>328</a>                                        initializer,
+<a href=#329 id=329 data-nosnippet>329</a>                                        config,
+<a href=#330 id=330 data-nosnippet>330</a>                                        validator_config,
+<a href=#331 id=331 data-nosnippet>331</a>                                        storage.clone(),
+<a href=#332 id=332 data-nosnippet>332</a>                                        internal_chan,
+<a href=#333 id=333 data-nosnippet>333</a>                                        (
+<a href=#334 id=334 data-nosnippet>334</a>                                            node.handle.external_channel_sender(),
+<a href=#335 id=335 data-nosnippet>335</a>                                            node.handle.event_stream_known_impl().new_receiver(),
+<a href=#336 id=336 data-nosnippet>336</a>                                        ),
+<a href=#337 id=337 data-nosnippet>337</a>                                    )
+<a href=#338 id=338 data-nosnippet>338</a>                                    .<span class="kw">await</span>;
+<a href=#339 id=339 data-nosnippet>339</a>                                <span class="macro">tracing::info!</span>(
+<a href=#340 id=340 data-nosnippet>340</a>                                    <span class="string">"Node {} restarting in view {} with start view {}"</span>,
+<a href=#341 id=341 data-nosnippet>341</a>                                    idx,
+<a href=#342 id=342 data-nosnippet>342</a>                                    view_number + delay_views,
+<a href=#343 id=343 data-nosnippet>343</a>                                    start_view
+<a href=#344 id=344 data-nosnippet>344</a>                                );
+<a href=#345 id=345 data-nosnippet>345</a>                                <span class="kw">if </span>delay_views == <span class="number">0 </span>{
+<a href=#346 id=346 data-nosnippet>346</a>                                    new_nodes.push((context, idx));
+<a href=#347 id=347 data-nosnippet>347</a>                                    new_networks.push(generated_network.clone());
+<a href=#348 id=348 data-nosnippet>348</a>                                } <span class="kw">else </span>{
+<a href=#349 id=349 data-nosnippet>349</a>                                    <span class="kw">let </span>up_view = view_number + delay_views;
+<a href=#350 id=350 data-nosnippet>350</a>                                    <span class="kw">let </span>change = ChangeNode {
+<a href=#351 id=351 data-nosnippet>351</a>                                        idx,
+<a href=#352 id=352 data-nosnippet>352</a>                                        updown: NodeAction::RestartUp,
+<a href=#353 id=353 data-nosnippet>353</a>                                    };
+<a href=#354 id=354 data-nosnippet>354</a>                                    <span class="self">self</span>.changes.entry(up_view).or_default().push(change);
+<a href=#355 id=355 data-nosnippet>355</a>                                    <span class="kw">let </span>new_ctx = RestartContext {
+<a href=#356 id=356 data-nosnippet>356</a>                                        context,
+<a href=#357 id=357 data-nosnippet>357</a>                                        network: generated_network.clone(),
+<a href=#358 id=358 data-nosnippet>358</a>                                    };
+<a href=#359 id=359 data-nosnippet>359</a>                                    <span class="self">self</span>.restart_contexts.insert(idx, new_ctx);
+<a href=#360 id=360 data-nosnippet>360</a>                                }
+<a href=#361 id=361 data-nosnippet>361</a>                            }
+<a href=#362 id=362 data-nosnippet>362</a>                        },
+<a href=#363 id=363 data-nosnippet>363</a>                        NodeAction::RestartUp =&gt; {
+<a href=#364 id=364 data-nosnippet>364</a>                            <span class="kw">if let </span><span class="prelude-val">Some</span>(ctx) = <span class="self">self</span>.restart_contexts.remove(<span class="kw-2">&amp;</span>idx) {
+<a href=#365 id=365 data-nosnippet>365</a>                                new_nodes.push((ctx.context, idx));
+<a href=#366 id=366 data-nosnippet>366</a>                                new_networks.push(ctx.network.clone());
+<a href=#367 id=367 data-nosnippet>367</a>                            }
+<a href=#368 id=368 data-nosnippet>368</a>                        },
+<a href=#369 id=369 data-nosnippet>369</a>                        NodeAction::NetworkUp =&gt; {
+<a href=#370 id=370 data-nosnippet>370</a>                            <span class="kw">if let </span><span class="prelude-val">Some</span>(handle) = <span class="self">self</span>.handles.write().<span class="kw">await</span>.get(idx) {
+<a href=#371 id=371 data-nosnippet>371</a>                                <span class="macro">tracing::error!</span>(<span class="string">"Node {idx} networks resuming"</span>);
+<a href=#372 id=372 data-nosnippet>372</a>                                handle.network.resume();
+<a href=#373 id=373 data-nosnippet>373</a>                            }
+<a href=#374 id=374 data-nosnippet>374</a>                        },
+<a href=#375 id=375 data-nosnippet>375</a>                        NodeAction::NetworkDown =&gt; {
+<a href=#376 id=376 data-nosnippet>376</a>                            <span class="kw">if let </span><span class="prelude-val">Some</span>(handle) = <span class="self">self</span>.handles.write().<span class="kw">await</span>.get(idx) {
+<a href=#377 id=377 data-nosnippet>377</a>                                <span class="macro">tracing::error!</span>(<span class="string">"Node {idx} networks pausing"</span>);
+<a href=#378 id=378 data-nosnippet>378</a>                                handle.network.pause();
+<a href=#379 id=379 data-nosnippet>379</a>                            }
+<a href=#380 id=380 data-nosnippet>380</a>                        },
+<a href=#381 id=381 data-nosnippet>381</a>                    }
+<a href=#382 id=382 data-nosnippet>382</a>                }
+<a href=#383 id=383 data-nosnippet>383</a>            }
+<a href=#384 id=384 data-nosnippet>384</a>            <span class="kw">let </span><span class="kw-2">mut </span>ready_futs = <span class="macro">vec!</span>[];
+<a href=#385 id=385 data-nosnippet>385</a>            <span class="kw">while let </span><span class="prelude-val">Some</span>(net) = new_networks.pop() {
+<a href=#386 id=386 data-nosnippet>386</a>                ready_futs.push(<span class="kw">async move </span>{
+<a href=#387 id=387 data-nosnippet>387</a>                    net.wait_for_ready().<span class="kw">await</span>;
+<a href=#388 id=388 data-nosnippet>388</a>                });
+<a href=#389 id=389 data-nosnippet>389</a>            }
+<a href=#390 id=390 data-nosnippet>390</a>            join_all(ready_futs).<span class="kw">await</span>;
+<a href=#391 id=391 data-nosnippet>391</a>
+<a href=#392 id=392 data-nosnippet>392</a>            <span class="kw">let </span><span class="kw-2">mut </span>start_futs = <span class="macro">vec!</span>[];
+<a href=#393 id=393 data-nosnippet>393</a>
+<a href=#394 id=394 data-nosnippet>394</a>            <span class="kw">while let </span><span class="prelude-val">Some</span>((node, id)) = new_nodes.pop() {
+<a href=#395 id=395 data-nosnippet>395</a>                <span class="kw">let </span>handles = <span class="self">self</span>.handles.clone();
+<a href=#396 id=396 data-nosnippet>396</a>                <span class="kw">let </span>fut = <span class="kw">async move </span>{
+<a href=#397 id=397 data-nosnippet>397</a>                    <span class="macro">tracing::info!</span>(<span class="string">"Starting node {id} back up"</span>);
+<a href=#398 id=398 data-nosnippet>398</a>                    node.network.wait_for_ready().<span class="kw">await</span>;
+<a href=#399 id=399 data-nosnippet>399</a>                    <span class="kw">let </span>handle = node.run_tasks().<span class="kw">await</span>;
+<a href=#400 id=400 data-nosnippet>400</a>
+<a href=#401 id=401 data-nosnippet>401</a>                    <span class="comment">// Create the node and add it to the state, so we can shut them
+<a href=#402 id=402 data-nosnippet>402</a>                    // down properly later to avoid the overflow error in the overall
+<a href=#403 id=403 data-nosnippet>403</a>                    // safety task.
+<a href=#404 id=404 data-nosnippet>404</a>                    </span><span class="kw">let </span>node = Node {
+<a href=#405 id=405 data-nosnippet>405</a>                        node_id: id.try_into().unwrap(),
+<a href=#406 id=406 data-nosnippet>406</a>                        network: node.network.clone(),
+<a href=#407 id=407 data-nosnippet>407</a>                        handle,
+<a href=#408 id=408 data-nosnippet>408</a>                    };
+<a href=#409 id=409 data-nosnippet>409</a>                    node.handle.hotshot.start_consensus().<span class="kw">await</span>;
+<a href=#410 id=410 data-nosnippet>410</a>
+<a href=#411 id=411 data-nosnippet>411</a>                    handles.write().<span class="kw">await</span>[id] = node;
+<a href=#412 id=412 data-nosnippet>412</a>                };
+<a href=#413 id=413 data-nosnippet>413</a>                start_futs.push(fut);
+<a href=#414 id=414 data-nosnippet>414</a>            }
+<a href=#415 id=415 data-nosnippet>415</a>            <span class="kw">if </span>!start_futs.is_empty() {
+<a href=#416 id=416 data-nosnippet>416</a>                join_all(start_futs).<span class="kw">await</span>;
+<a href=#417 id=417 data-nosnippet>417</a>                <span class="macro">tracing::info!</span>(<span class="string">"Nodes all started"</span>);
+<a href=#418 id=418 data-nosnippet>418</a>            }
+<a href=#419 id=419 data-nosnippet>419</a>
+<a href=#420 id=420 data-nosnippet>420</a>            <span class="comment">// update our latest view
+<a href=#421 id=421 data-nosnippet>421</a>            </span><span class="self">self</span>.latest_view = <span class="prelude-val">Some</span>(view_number);
+<a href=#422 id=422 data-nosnippet>422</a>        }
+<a href=#423 id=423 data-nosnippet>423</a>
+<a href=#424 id=424 data-nosnippet>424</a>        <span class="prelude-val">Ok</span>(())
+<a href=#425 id=425 data-nosnippet>425</a>    }
+<a href=#426 id=426 data-nosnippet>426</a>
+<a href=#427 id=427 data-nosnippet>427</a>    <span class="kw">async fn </span>check(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; TestResult {
+<a href=#428 id=428 data-nosnippet>428</a>        TestResult::Pass
+<a href=#429 id=429 data-nosnippet>429</a>    }
+<a href=#430 id=430 data-nosnippet>430</a>}
+<a href=#431 id=431 data-nosnippet>431</a>
+<a href=#432 id=432 data-nosnippet>432</a><span class="attr">#[derive(Clone)]
+<a href=#433 id=433 data-nosnippet>433</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">struct </span>RestartContext&lt;
+<a href=#434 id=434 data-nosnippet>434</a>    TYPES: NodeType,
+<a href=#435 id=435 data-nosnippet>435</a>    N: ConnectedNetwork&lt;TYPES::SignatureKey&gt;,
+<a href=#436 id=436 data-nosnippet>436</a>    I: TestableNodeImplementation&lt;TYPES&gt;,
 <a href=#437 id=437 data-nosnippet>437</a>&gt; {
-<a href=#438 id=438 data-nosnippet>438</a>    context: Arc&lt;SystemContext&lt;TYPES, I, V&gt;&gt;,
+<a href=#438 id=438 data-nosnippet>438</a>    context: Arc&lt;SystemContext&lt;TYPES, I&gt;&gt;,
 <a href=#439 id=439 data-nosnippet>439</a>    network: Arc&lt;N&gt;,
 <a href=#440 id=440 data-nosnippet>440</a>}
 <a href=#441 id=441 data-nosnippet>441</a>

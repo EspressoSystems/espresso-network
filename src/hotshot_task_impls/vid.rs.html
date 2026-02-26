@@ -17,7 +17,7 @@
 <a href=#17 id=17 data-nosnippet>17</a>    simple_vote::HasEpoch,
 <a href=#18 id=18 data-nosnippet>18</a>    traits::{
 <a href=#19 id=19 data-nosnippet>19</a>        block_contents::BlockHeader,
-<a href=#20 id=20 data-nosnippet>20</a>        node_implementation::{NodeImplementation, NodeType, Versions},
+<a href=#20 id=20 data-nosnippet>20</a>        node_implementation::{NodeImplementation, NodeType},
 <a href=#21 id=21 data-nosnippet>21</a>        signature_key::SignatureKey,
 <a href=#22 id=22 data-nosnippet>22</a>        BlockPayload,
 <a href=#23 id=23 data-nosnippet>23</a>    },
@@ -32,7 +32,7 @@
 <a href=#32 id=32 data-nosnippet>32</a>};
 <a href=#33 id=33 data-nosnippet>33</a>
 <a href=#34 id=34 data-nosnippet>34</a><span class="doccomment">/// Tracks state of a VID task
-<a href=#35 id=35 data-nosnippet>35</a></span><span class="kw">pub struct </span>VidTaskState&lt;TYPES: NodeType, I: NodeImplementation&lt;TYPES&gt;, V: Versions&gt; {
+<a href=#35 id=35 data-nosnippet>35</a></span><span class="kw">pub struct </span>VidTaskState&lt;TYPES: NodeType, I: NodeImplementation&lt;TYPES&gt;&gt; {
 <a href=#36 id=36 data-nosnippet>36</a>    <span class="doccomment">/// View number this view is executing in.
 <a href=#37 id=37 data-nosnippet>37</a>    </span><span class="kw">pub </span>cur_view: TYPES::View,
 <a href=#38 id=38 data-nosnippet>38</a>
@@ -58,13 +58,13 @@
 <a href=#58 id=58 data-nosnippet>58</a>    </span><span class="kw">pub </span>id: u64,
 <a href=#59 id=59 data-nosnippet>59</a>
 <a href=#60 id=60 data-nosnippet>60</a>    <span class="doccomment">/// Lock for a decided upgrade
-<a href=#61 id=61 data-nosnippet>61</a>    </span><span class="kw">pub </span>upgrade_lock: UpgradeLock&lt;TYPES, V&gt;,
+<a href=#61 id=61 data-nosnippet>61</a>    </span><span class="kw">pub </span>upgrade_lock: UpgradeLock&lt;TYPES&gt;,
 <a href=#62 id=62 data-nosnippet>62</a>
 <a href=#63 id=63 data-nosnippet>63</a>    <span class="doccomment">/// Number of blocks in an epoch, zero means there are no epochs
 <a href=#64 id=64 data-nosnippet>64</a>    </span><span class="kw">pub </span>epoch_height: u64,
 <a href=#65 id=65 data-nosnippet>65</a>}
 <a href=#66 id=66 data-nosnippet>66</a>
-<a href=#67 id=67 data-nosnippet>67</a><span class="kw">impl</span>&lt;TYPES: NodeType, I: NodeImplementation&lt;TYPES&gt;, V: Versions&gt; VidTaskState&lt;TYPES, I, V&gt; {
+<a href=#67 id=67 data-nosnippet>67</a><span class="kw">impl</span>&lt;TYPES: NodeType, I: NodeImplementation&lt;TYPES&gt;&gt; VidTaskState&lt;TYPES, I&gt; {
 <a href=#68 id=68 data-nosnippet>68</a>    <span class="doccomment">/// main task event handler
 <a href=#69 id=69 data-nosnippet>69</a>    </span><span class="attr">#[instrument(skip_all, fields(id = <span class="self">self</span>.id, view = <span class="kw-2">*</span><span class="self">self</span>.cur_view, epoch = <span class="self">self</span>.cur_epoch.map(|x| <span class="kw-2">*</span>x)), name = <span class="string">"VID Main Task"</span>, level = <span class="string">"error"</span>, target = <span class="string">"VidTaskState"</span>)]
 <a href=#70 id=70 data-nosnippet>70</a>    </span><span class="kw">pub async fn </span>handle(
@@ -104,7 +104,7 @@
 <a href=#104 id=104 data-nosnippet>104</a>                <span class="kw">let </span>VidDisperseAndDuration {
 <a href=#105 id=105 data-nosnippet>105</a>                    disperse: vid_disperse,
 <a href=#106 id=106 data-nosnippet>106</a>                    duration: disperse_duration,
-<a href=#107 id=107 data-nosnippet>107</a>                } = VidDisperse::calculate_vid_disperse::&lt;V&gt;(
+<a href=#107 id=107 data-nosnippet>107</a>                } = VidDisperse::calculate_vid_disperse(
 <a href=#108 id=108 data-nosnippet>108</a>                    <span class="kw-2">&amp;</span>payload,
 <a href=#109 id=109 data-nosnippet>109</a>                    <span class="kw-2">&amp;</span><span class="self">self</span>.membership_coordinator,
 <a href=#110 id=110 data-nosnippet>110</a>                    <span class="kw-2">*</span>view_number,
@@ -226,7 +226,7 @@
 <a href=#226 id=226 data-nosnippet>226</a>                <span class="kw">let </span>VidDisperseAndDuration {
 <a href=#227 id=227 data-nosnippet>227</a>                    disperse: next_epoch_vid_disperse,
 <a href=#228 id=228 data-nosnippet>228</a>                    duration: <span class="kw">_</span>,
-<a href=#229 id=229 data-nosnippet>229</a>                } = VidDisperse::calculate_vid_disperse::&lt;V&gt;(
+<a href=#229 id=229 data-nosnippet>229</a>                } = VidDisperse::calculate_vid_disperse(
 <a href=#230 id=230 data-nosnippet>230</a>                    <span class="kw-2">&amp;</span>payload.payload,
 <a href=#231 id=231 data-nosnippet>231</a>                    <span class="kw-2">&amp;</span><span class="self">self</span>.membership_coordinator,
 <a href=#232 id=232 data-nosnippet>232</a>                    proposal_view_number,
@@ -270,23 +270,21 @@
 <a href=#270 id=270 data-nosnippet>270</a>    </span>}
 <a href=#271 id=271 data-nosnippet>271</a>}
 <a href=#272 id=272 data-nosnippet>272</a>
-<a href=#273 id=273 data-nosnippet>273</a><span class="attr">#[async_trait]
-<a href=#274 id=274 data-nosnippet>274</a></span><span class="doccomment">/// task state implementation for VID Task
-<a href=#275 id=275 data-nosnippet>275</a></span><span class="kw">impl</span>&lt;TYPES: NodeType, I: NodeImplementation&lt;TYPES&gt;, V: Versions&gt; TaskState
-<a href=#276 id=276 data-nosnippet>276</a>    <span class="kw">for </span>VidTaskState&lt;TYPES, I, V&gt;
-<a href=#277 id=277 data-nosnippet>277</a>{
-<a href=#278 id=278 data-nosnippet>278</a>    <span class="kw">type </span>Event = HotShotEvent&lt;TYPES&gt;;
-<a href=#279 id=279 data-nosnippet>279</a>
-<a href=#280 id=280 data-nosnippet>280</a>    <span class="kw">async fn </span>handle_event(
-<a href=#281 id=281 data-nosnippet>281</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-<a href=#282 id=282 data-nosnippet>282</a>        event: Arc&lt;<span class="self">Self</span>::Event&gt;,
-<a href=#283 id=283 data-nosnippet>283</a>        sender: <span class="kw-2">&amp;</span>Sender&lt;Arc&lt;<span class="self">Self</span>::Event&gt;&gt;,
-<a href=#284 id=284 data-nosnippet>284</a>        _receiver: <span class="kw-2">&amp;</span>Receiver&lt;Arc&lt;<span class="self">Self</span>::Event&gt;&gt;,
-<a href=#285 id=285 data-nosnippet>285</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#286 id=286 data-nosnippet>286</a>        <span class="self">self</span>.handle(event, sender.clone()).<span class="kw">await</span>;
-<a href=#287 id=287 data-nosnippet>287</a>        <span class="prelude-val">Ok</span>(())
-<a href=#288 id=288 data-nosnippet>288</a>    }
-<a href=#289 id=289 data-nosnippet>289</a>
-<a href=#290 id=290 data-nosnippet>290</a>    <span class="kw">fn </span>cancel_subtasks(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {}
-<a href=#291 id=291 data-nosnippet>291</a>}
+<a href=#273 id=273 data-nosnippet>273</a><span class="doccomment">/// task state implementation for VID Task
+<a href=#274 id=274 data-nosnippet>274</a></span><span class="attr">#[async_trait]
+<a href=#275 id=275 data-nosnippet>275</a></span><span class="kw">impl</span>&lt;TYPES: NodeType, I: NodeImplementation&lt;TYPES&gt;&gt; TaskState <span class="kw">for </span>VidTaskState&lt;TYPES, I&gt; {
+<a href=#276 id=276 data-nosnippet>276</a>    <span class="kw">type </span>Event = HotShotEvent&lt;TYPES&gt;;
+<a href=#277 id=277 data-nosnippet>277</a>
+<a href=#278 id=278 data-nosnippet>278</a>    <span class="kw">async fn </span>handle_event(
+<a href=#279 id=279 data-nosnippet>279</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+<a href=#280 id=280 data-nosnippet>280</a>        event: Arc&lt;<span class="self">Self</span>::Event&gt;,
+<a href=#281 id=281 data-nosnippet>281</a>        sender: <span class="kw-2">&amp;</span>Sender&lt;Arc&lt;<span class="self">Self</span>::Event&gt;&gt;,
+<a href=#282 id=282 data-nosnippet>282</a>        _receiver: <span class="kw-2">&amp;</span>Receiver&lt;Arc&lt;<span class="self">Self</span>::Event&gt;&gt;,
+<a href=#283 id=283 data-nosnippet>283</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#284 id=284 data-nosnippet>284</a>        <span class="self">self</span>.handle(event, sender.clone()).<span class="kw">await</span>;
+<a href=#285 id=285 data-nosnippet>285</a>        <span class="prelude-val">Ok</span>(())
+<a href=#286 id=286 data-nosnippet>286</a>    }
+<a href=#287 id=287 data-nosnippet>287</a>
+<a href=#288 id=288 data-nosnippet>288</a>    <span class="kw">fn </span>cancel_subtasks(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {}
+<a href=#289 id=289 data-nosnippet>289</a>}
 </code></pre></div></section></main></body></html>

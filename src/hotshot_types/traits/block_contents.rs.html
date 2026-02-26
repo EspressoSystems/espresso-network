@@ -23,7 +23,7 @@
 <a href=#23 id=23 data-nosnippet>23</a><span class="kw">use </span>serde::{de::DeserializeOwned, Deserialize, Serialize};
 <a href=#24 id=24 data-nosnippet>24</a><span class="kw">use </span>vbs::version::Version;
 <a href=#25 id=25 data-nosnippet>25</a>
-<a href=#26 id=26 data-nosnippet>26</a><span class="kw">use super</span>::{node_implementation::Versions, signature_key::BuilderSignatureKey};
+<a href=#26 id=26 data-nosnippet>26</a><span class="kw">use </span><span class="kw">super</span>::signature_key::BuilderSignatureKey;
 <a href=#27 id=27 data-nosnippet>27</a><span class="kw">use crate</span>::{
 <a href=#28 id=28 data-nosnippet>28</a>    data::{Leaf2, VidCommitment},
 <a href=#29 id=29 data-nosnippet>29</a>    light_client::LightClientState,
@@ -182,43 +182,44 @@
 <a href=#182 id=182 data-nosnippet>182</a>    ) -&gt; <span class="kw">impl </span>Future&lt;Output = <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>, <span class="self">Self</span>::Error&gt;&gt; + Send;
 <a href=#183 id=183 data-nosnippet>183</a>
 <a href=#184 id=184 data-nosnippet>184</a>    <span class="doccomment">/// Build the genesis header, payload, and metadata.
-<a href=#185 id=185 data-nosnippet>185</a>    </span><span class="kw">fn </span>genesis&lt;V: Versions&gt;(
+<a href=#185 id=185 data-nosnippet>185</a>    </span><span class="kw">fn </span>genesis(
 <a href=#186 id=186 data-nosnippet>186</a>        instance_state: <span class="kw-2">&amp;</span>&lt;TYPES::ValidatedState <span class="kw">as </span>ValidatedState&lt;TYPES&gt;&gt;::Instance,
 <a href=#187 id=187 data-nosnippet>187</a>        payload: TYPES::BlockPayload,
 <a href=#188 id=188 data-nosnippet>188</a>        metadata: <span class="kw-2">&amp;</span>&lt;TYPES::BlockPayload <span class="kw">as </span>BlockPayload&lt;TYPES&gt;&gt;::Metadata,
-<a href=#189 id=189 data-nosnippet>189</a>    ) -&gt; <span class="self">Self</span>;
-<a href=#190 id=190 data-nosnippet>190</a>
-<a href=#191 id=191 data-nosnippet>191</a>    <span class="doccomment">/// Get the block number.
-<a href=#192 id=192 data-nosnippet>192</a>    </span><span class="kw">fn </span>block_number(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; u64;
-<a href=#193 id=193 data-nosnippet>193</a>
-<a href=#194 id=194 data-nosnippet>194</a>    <span class="doccomment">/// Get the timestamp.
-<a href=#195 id=195 data-nosnippet>195</a>    </span><span class="kw">fn </span>timestamp(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; u64;
-<a href=#196 id=196 data-nosnippet>196</a>
-<a href=#197 id=197 data-nosnippet>197</a>    <span class="doccomment">/// Get the timestamp in milliseconds.
-<a href=#198 id=198 data-nosnippet>198</a>    </span><span class="kw">fn </span>timestamp_millis(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; u64;
-<a href=#199 id=199 data-nosnippet>199</a>
-<a href=#200 id=200 data-nosnippet>200</a>    <span class="doccomment">/// Get the payload commitment.
-<a href=#201 id=201 data-nosnippet>201</a>    </span><span class="kw">fn </span>payload_commitment(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; VidCommitment;
-<a href=#202 id=202 data-nosnippet>202</a>
-<a href=#203 id=203 data-nosnippet>203</a>    <span class="doccomment">/// Get the metadata.
-<a href=#204 id=204 data-nosnippet>204</a>    </span><span class="kw">fn </span>metadata(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>&lt;TYPES::BlockPayload <span class="kw">as </span>BlockPayload&lt;TYPES&gt;&gt;::Metadata;
-<a href=#205 id=205 data-nosnippet>205</a>
-<a href=#206 id=206 data-nosnippet>206</a>    <span class="doccomment">/// Get the protocol version for this block.
-<a href=#207 id=207 data-nosnippet>207</a>    </span><span class="kw">fn </span>version(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Version;
-<a href=#208 id=208 data-nosnippet>208</a>
-<a href=#209 id=209 data-nosnippet>209</a>    <span class="doccomment">/// Get the builder commitment
-<a href=#210 id=210 data-nosnippet>210</a>    </span><span class="kw">fn </span>builder_commitment(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; BuilderCommitment;
-<a href=#211 id=211 data-nosnippet>211</a>
-<a href=#212 id=212 data-nosnippet>212</a>    <span class="doccomment">/// Get the light client state
-<a href=#213 id=213 data-nosnippet>213</a>    </span><span class="kw">fn </span>get_light_client_state(<span class="kw-2">&amp;</span><span class="self">self</span>, view: TYPES::View) -&gt; anyhow::Result&lt;LightClientState&gt;;
-<a href=#214 id=214 data-nosnippet>214</a>
-<a href=#215 id=215 data-nosnippet>215</a>    <span class="doccomment">/// Returns the `auth_root` value for versions &gt;= V4 (`DrbAndHeaderUpgrade`).
-<a href=#216 id=216 data-nosnippet>216</a>    ///
-<a href=#217 id=217 data-nosnippet>217</a>    /// For versions &lt; V4, this will return `None`.
-<a href=#218 id=218 data-nosnippet>218</a>    ///
-<a href=#219 id=219 data-nosnippet>219</a>    /// The `auth_root` is a 32-byte hash calculated using the reward Merkle tree
-<a href=#220 id=220 data-nosnippet>220</a>    /// digest and other values.  
-<a href=#221 id=221 data-nosnippet>221</a>    /// It is used by the reward claim contract to verify the reward claim
-<a href=#222 id=222 data-nosnippet>222</a>    </span><span class="kw">fn </span>auth_root(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; anyhow::Result&lt;FixedBytes&lt;<span class="number">32</span>&gt;&gt;;
-<a href=#223 id=223 data-nosnippet>223</a>}
+<a href=#189 id=189 data-nosnippet>189</a>        version: Version,
+<a href=#190 id=190 data-nosnippet>190</a>    ) -&gt; <span class="self">Self</span>;
+<a href=#191 id=191 data-nosnippet>191</a>
+<a href=#192 id=192 data-nosnippet>192</a>    <span class="doccomment">/// Get the block number.
+<a href=#193 id=193 data-nosnippet>193</a>    </span><span class="kw">fn </span>block_number(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; u64;
+<a href=#194 id=194 data-nosnippet>194</a>
+<a href=#195 id=195 data-nosnippet>195</a>    <span class="doccomment">/// Get the timestamp.
+<a href=#196 id=196 data-nosnippet>196</a>    </span><span class="kw">fn </span>timestamp(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; u64;
+<a href=#197 id=197 data-nosnippet>197</a>
+<a href=#198 id=198 data-nosnippet>198</a>    <span class="doccomment">/// Get the timestamp in milliseconds.
+<a href=#199 id=199 data-nosnippet>199</a>    </span><span class="kw">fn </span>timestamp_millis(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; u64;
+<a href=#200 id=200 data-nosnippet>200</a>
+<a href=#201 id=201 data-nosnippet>201</a>    <span class="doccomment">/// Get the payload commitment.
+<a href=#202 id=202 data-nosnippet>202</a>    </span><span class="kw">fn </span>payload_commitment(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; VidCommitment;
+<a href=#203 id=203 data-nosnippet>203</a>
+<a href=#204 id=204 data-nosnippet>204</a>    <span class="doccomment">/// Get the metadata.
+<a href=#205 id=205 data-nosnippet>205</a>    </span><span class="kw">fn </span>metadata(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>&lt;TYPES::BlockPayload <span class="kw">as </span>BlockPayload&lt;TYPES&gt;&gt;::Metadata;
+<a href=#206 id=206 data-nosnippet>206</a>
+<a href=#207 id=207 data-nosnippet>207</a>    <span class="doccomment">/// Get the protocol version for this block.
+<a href=#208 id=208 data-nosnippet>208</a>    </span><span class="kw">fn </span>version(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Version;
+<a href=#209 id=209 data-nosnippet>209</a>
+<a href=#210 id=210 data-nosnippet>210</a>    <span class="doccomment">/// Get the builder commitment
+<a href=#211 id=211 data-nosnippet>211</a>    </span><span class="kw">fn </span>builder_commitment(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; BuilderCommitment;
+<a href=#212 id=212 data-nosnippet>212</a>
+<a href=#213 id=213 data-nosnippet>213</a>    <span class="doccomment">/// Get the light client state
+<a href=#214 id=214 data-nosnippet>214</a>    </span><span class="kw">fn </span>get_light_client_state(<span class="kw-2">&amp;</span><span class="self">self</span>, view: TYPES::View) -&gt; anyhow::Result&lt;LightClientState&gt;;
+<a href=#215 id=215 data-nosnippet>215</a>
+<a href=#216 id=216 data-nosnippet>216</a>    <span class="doccomment">/// Returns the `auth_root` value for versions &gt;= V4 (`DrbAndHeaderUpgrade`).
+<a href=#217 id=217 data-nosnippet>217</a>    ///
+<a href=#218 id=218 data-nosnippet>218</a>    /// For versions &lt; V4, this will return `None`.
+<a href=#219 id=219 data-nosnippet>219</a>    ///
+<a href=#220 id=220 data-nosnippet>220</a>    /// The `auth_root` is a 32-byte hash calculated using the reward Merkle tree
+<a href=#221 id=221 data-nosnippet>221</a>    /// digest and other values.
+<a href=#222 id=222 data-nosnippet>222</a>    /// It is used by the reward claim contract to verify the reward claim
+<a href=#223 id=223 data-nosnippet>223</a>    </span><span class="kw">fn </span>auth_root(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; anyhow::Result&lt;FixedBytes&lt;<span class="number">32</span>&gt;&gt;;
+<a href=#224 id=224 data-nosnippet>224</a>}
 </code></pre></div></section></main></body></html>

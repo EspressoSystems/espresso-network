@@ -243,7 +243,7 @@
 <a href=#243 id=243 data-nosnippet>243</a>        task::BackgroundTask,
 <a href=#244 id=244 data-nosnippet>244</a>        testing::{
 <a href=#245 id=245 data-nosnippet>245</a>            consensus::{MockDataSource, MockNetwork, MockSqlDataSource},
-<a href=#246 id=246 data-nosnippet>246</a>            mocks::{mock_transaction, MockBase, MockTypes, MockVersions},
+<a href=#246 id=246 data-nosnippet>246</a>            mocks::{mock_transaction, MockBase, MockTypes},
 <a href=#247 id=247 data-nosnippet>247</a>        },
 <a href=#248 id=248 data-nosnippet>248</a>        ApiState, Error, Header,
 <a href=#249 id=249 data-nosnippet>249</a>    };
@@ -253,7 +253,7 @@
 <a href=#253 id=253 data-nosnippet>253</a>        <span class="kw">let </span>window_limit = <span class="number">78</span>;
 <a href=#254 id=254 data-nosnippet>254</a>
 <a href=#255 id=255 data-nosnippet>255</a>        <span class="comment">// Create the consensus network.
-<a href=#256 id=256 data-nosnippet>256</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>network = MockNetwork::&lt;MockDataSource, MockVersions&gt;::init().<span class="kw">await</span>;
+<a href=#256 id=256 data-nosnippet>256</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>network = MockNetwork::&lt;MockDataSource&gt;::init().<span class="kw">await</span>;
 <a href=#257 id=257 data-nosnippet>257</a>        <span class="kw">let </span><span class="kw-2">mut </span>events = network.handle().event_stream();
 <a href=#258 id=258 data-nosnippet>258</a>        network.start().<span class="kw">await</span>;
 <a href=#259 id=259 data-nosnippet>259</a>
@@ -431,7 +431,7 @@
 <a href=#431 id=431 data-nosnippet>431</a>    <span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
 <a href=#432 id=432 data-nosnippet>432</a>    </span><span class="kw">async fn </span>test_aggregate_ranges() {
 <a href=#433 id=433 data-nosnippet>433</a>        <span class="comment">// Create the consensus network.
-<a href=#434 id=434 data-nosnippet>434</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>network = MockNetwork::&lt;MockSqlDataSource, MockVersions&gt;::init().<span class="kw">await</span>;
+<a href=#434 id=434 data-nosnippet>434</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>network = MockNetwork::&lt;MockSqlDataSource&gt;::init().<span class="kw">await</span>;
 <a href=#435 id=435 data-nosnippet>435</a>        <span class="kw">let </span><span class="kw-2">mut </span>events = network.handle().event_stream();
 <a href=#436 id=436 data-nosnippet>436</a>        network.start().<span class="kw">await</span>;
 <a href=#437 id=437 data-nosnippet>437</a>

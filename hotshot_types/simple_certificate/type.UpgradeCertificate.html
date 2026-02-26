@@ -14,11 +14,11 @@
 decide)</p>
 <h5 id="errors"><a class="doc-anchor" href="#errors">§</a>Errors</h5>
 <p>Returns an error when the certificate is no longer relevant</p>
-</div></details><details class="toggle method-toggle" open><summary><section id="method.validate" class="method"><a class="src rightside" href="../../src/hotshot_types/simple_certificate.rs.html#454-475">Source</a><h4 class="code-header">pub async fn <a href="#method.validate" class="fn">validate</a>&lt;V: <a class="trait" href="../traits/node_implementation/trait.Versions.html" title="trait hotshot_types::traits::node_implementation::Versions">Versions</a>&gt;(
+</div></details><details class="toggle method-toggle" open><summary><section id="method.validate" class="method"><a class="src rightside" href="../../src/hotshot_types/simple_certificate.rs.html#454-475">Source</a><h4 class="code-header">pub async fn <a href="#method.validate" class="fn">validate</a>(
     upgrade_certificate: &amp;<a class="enum" href="https://doc.rust-lang.org/1.93.1/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;Self&gt;,
     membership: &amp;<a class="struct" href="../epoch_membership/struct.EpochMembership.html" title="struct hotshot_types::epoch_membership::EpochMembership">EpochMembership</a>&lt;TYPES&gt;,
     epoch: <a class="enum" href="https://doc.rust-lang.org/1.93.1/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;TYPES::<a class="associatedtype" href="../traits/node_implementation/trait.NodeType.html#associatedtype.Epoch" title="type hotshot_types::traits::node_implementation::NodeType::Epoch">Epoch</a>&gt;,
-    upgrade_lock: &amp;<a class="struct" href="../message/struct.UpgradeLock.html" title="struct hotshot_types::message::UpgradeLock">UpgradeLock</a>&lt;TYPES, V&gt;,
+    upgrade_lock: &amp;<a class="struct" href="../message/struct.UpgradeLock.html" title="struct hotshot_types::message::UpgradeLock">UpgradeLock</a>&lt;TYPES&gt;,
 ) -&gt; <a class="type" href="../../hotshot_utils/anytrace/type.Result.html" title="type hotshot_utils::anytrace::Result">Result</a>&lt;<a class="primitive" href="https://doc.rust-lang.org/1.93.1/std/primitive.unit.html">()</a>&gt;</h4></section></summary><div class="docblock"><p>Validate an upgrade certificate.</p>
 <h5 id="errors-1"><a class="doc-anchor" href="#errors-1">§</a>Errors</h5>
 <p>Returns an error when the upgrade certificate is invalid.</p>

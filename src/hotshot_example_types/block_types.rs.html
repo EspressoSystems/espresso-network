@@ -21,7 +21,7 @@
 <a href=#21 id=21 data-nosnippet>21</a>            BlockHeader, BuilderFee, EncodeBytes, TestableBlock, Transaction,
 <a href=#22 id=22 data-nosnippet>22</a>            GENESIS_VID_NUM_STORAGE_NODES,
 <a href=#23 id=23 data-nosnippet>23</a>        },
-<a href=#24 id=24 data-nosnippet>24</a>        node_implementation::{ConsensusTime, NodeType, Versions},
+<a href=#24 id=24 data-nosnippet>24</a>        node_implementation::{ConsensusTime, NodeType},
 <a href=#25 id=25 data-nosnippet>25</a>        BlockPayload, ValidatedState,
 <a href=#26 id=26 data-nosnippet>26</a>    },
 <a href=#27 id=27 data-nosnippet>27</a>    utils::BuilderCommitment,
@@ -31,7 +31,7 @@
 <a href=#31 id=31 data-nosnippet>31</a><span class="kw">use </span>sha3::{Digest, Keccak256};
 <a href=#32 id=32 data-nosnippet>32</a><span class="kw">use </span>thiserror::Error;
 <a href=#33 id=33 data-nosnippet>33</a><span class="kw">use </span>time::OffsetDateTime;
-<a href=#34 id=34 data-nosnippet>34</a><span class="kw">use </span>vbs::version::{StaticVersionType, Version};
+<a href=#34 id=34 data-nosnippet>34</a><span class="kw">use </span>vbs::version::Version;
 <a href=#35 id=35 data-nosnippet>35</a>
 <a href=#36 id=36 data-nosnippet>36</a><span class="kw">use crate</span>::{
 <a href=#37 id=37 data-nosnippet>37</a>    node_types::TestTypes,
@@ -352,21 +352,21 @@
 <a href=#352 id=352 data-nosnippet>352</a>        ))
 <a href=#353 id=353 data-nosnippet>353</a>    }
 <a href=#354 id=354 data-nosnippet>354</a>
-<a href=#355 id=355 data-nosnippet>355</a>    <span class="kw">fn </span>genesis&lt;V: Versions&gt;(
+<a href=#355 id=355 data-nosnippet>355</a>    <span class="kw">fn </span>genesis(
 <a href=#356 id=356 data-nosnippet>356</a>        _instance_state: <span class="kw-2">&amp;</span>&lt;TYPES::ValidatedState <span class="kw">as </span>ValidatedState&lt;TYPES&gt;&gt;::Instance,
 <a href=#357 id=357 data-nosnippet>357</a>        payload: TYPES::BlockPayload,
 <a href=#358 id=358 data-nosnippet>358</a>        metadata: <span class="kw-2">&amp;</span>&lt;TYPES::BlockPayload <span class="kw">as </span>BlockPayload&lt;TYPES&gt;&gt;::Metadata,
-<a href=#359 id=359 data-nosnippet>359</a>    ) -&gt; <span class="self">Self </span>{
-<a href=#360 id=360 data-nosnippet>360</a>        <span class="kw">let </span>builder_commitment =
-<a href=#361 id=361 data-nosnippet>361</a>            &lt;TestBlockPayload <span class="kw">as </span>BlockPayload&lt;TYPES&gt;&gt;::builder_commitment(<span class="kw-2">&amp;</span>payload, metadata);
-<a href=#362 id=362 data-nosnippet>362</a>
-<a href=#363 id=363 data-nosnippet>363</a>        <span class="kw">let </span>payload_bytes = payload.encode();
-<a href=#364 id=364 data-nosnippet>364</a>        <span class="kw">let </span>genesis_version = V::Base::version();
-<a href=#365 id=365 data-nosnippet>365</a>        <span class="kw">let </span>payload_commitment = vid_commitment::&lt;V&gt;(
+<a href=#359 id=359 data-nosnippet>359</a>        version: Version,
+<a href=#360 id=360 data-nosnippet>360</a>    ) -&gt; <span class="self">Self </span>{
+<a href=#361 id=361 data-nosnippet>361</a>        <span class="kw">let </span>builder_commitment =
+<a href=#362 id=362 data-nosnippet>362</a>            &lt;TestBlockPayload <span class="kw">as </span>BlockPayload&lt;TYPES&gt;&gt;::builder_commitment(<span class="kw-2">&amp;</span>payload, metadata);
+<a href=#363 id=363 data-nosnippet>363</a>
+<a href=#364 id=364 data-nosnippet>364</a>        <span class="kw">let </span>payload_bytes = payload.encode();
+<a href=#365 id=365 data-nosnippet>365</a>        <span class="kw">let </span>payload_commitment = vid_commitment(
 <a href=#366 id=366 data-nosnippet>366</a>            <span class="kw-2">&amp;</span>payload_bytes,
 <a href=#367 id=367 data-nosnippet>367</a>            <span class="kw-2">&amp;</span>metadata.encode(),
 <a href=#368 id=368 data-nosnippet>368</a>            GENESIS_VID_NUM_STORAGE_NODES,
-<a href=#369 id=369 data-nosnippet>369</a>            genesis_version,
+<a href=#369 id=369 data-nosnippet>369</a>            version,
 <a href=#370 id=370 data-nosnippet>370</a>        );
 <a href=#371 id=371 data-nosnippet>371</a>
 <a href=#372 id=372 data-nosnippet>372</a>        <span class="self">Self </span>{
@@ -377,7 +377,7 @@
 <a href=#377 id=377 data-nosnippet>377</a>            timestamp: <span class="number">0</span>,
 <a href=#378 id=378 data-nosnippet>378</a>            timestamp_millis: <span class="number">0</span>,
 <a href=#379 id=379 data-nosnippet>379</a>            random: <span class="number">0</span>,
-<a href=#380 id=380 data-nosnippet>380</a>            version: genesis_version,
+<a href=#380 id=380 data-nosnippet>380</a>            version,
 <a href=#381 id=381 data-nosnippet>381</a>        }
 <a href=#382 id=382 data-nosnippet>382</a>    }
 <a href=#383 id=383 data-nosnippet>383</a>

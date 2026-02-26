@@ -125,7 +125,7 @@
 <a href=#125 id=125 data-nosnippet>125</a>        task::BackgroundTask,
 <a href=#126 id=126 data-nosnippet>126</a>        testing::{
 <a href=#127 id=127 data-nosnippet>127</a>            consensus::{MockDataSource, MockNetwork},
-<a href=#128 id=128 data-nosnippet>128</a>            mocks::{MockBase, MockVersions},
+<a href=#128 id=128 data-nosnippet>128</a>            mocks::MockBase,
 <a href=#129 id=129 data-nosnippet>129</a>            sleep,
 <a href=#130 id=130 data-nosnippet>130</a>        },
 <a href=#131 id=131 data-nosnippet>131</a>        ApiState, Error,
@@ -134,7 +134,7 @@
 <a href=#134 id=134 data-nosnippet>134</a>    <span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
 <a href=#135 id=135 data-nosnippet>135</a>    </span><span class="kw">async fn </span>test_api() {
 <a href=#136 id=136 data-nosnippet>136</a>        <span class="comment">// Create the consensus network.
-<a href=#137 id=137 data-nosnippet>137</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>network = MockNetwork::&lt;MockDataSource, MockVersions&gt;::init().<span class="kw">await</span>;
+<a href=#137 id=137 data-nosnippet>137</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>network = MockNetwork::&lt;MockDataSource&gt;::init().<span class="kw">await</span>;
 <a href=#138 id=138 data-nosnippet>138</a>
 <a href=#139 id=139 data-nosnippet>139</a>        <span class="comment">// Start the web server.
 <a href=#140 id=140 data-nosnippet>140</a>        </span><span class="kw">let </span>port = reserve_tcp_port().unwrap();

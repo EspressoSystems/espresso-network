@@ -24,7 +24,7 @@ variable.</p>
 </span><span class="attr">#[cfg(feature = <span class="string">"embedded-db"</span>)]
 </span><span class="kw">let </span><span class="kw-2">mut </span>migrations: Vec&lt;Migration&gt; =
     <span class="macro">include_migrations!</span>(<span class="string">"$CARGO_MANIFEST_DIR/migrations/sqlite"</span>).collect();
-    
+
     migrations.sort();
     <span class="macro">assert_eq!</span>(migrations[<span class="number">0</span>].version(), <span class="number">10</span>);
     <span class="macro">assert_eq!</span>(migrations[<span class="number">0</span>].name(), <span class="string">"init_schema"</span>);</code></pre></div>

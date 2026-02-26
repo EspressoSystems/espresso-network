@@ -39,7 +39,7 @@
 <a href=#39 id=39 data-nosnippet>39</a>    traits::{
 <a href=#40 id=40 data-nosnippet>40</a>        block_contents::{BlockHeader, BuilderFee},
 <a href=#41 id=41 data-nosnippet>41</a>        metrics::{Counter, Gauge, Histogram, Metrics, NoMetrics},
-<a href=#42 id=42 data-nosnippet>42</a>        node_implementation::{ConsensusTime, NodeType, Versions},
+<a href=#42 id=42 data-nosnippet>42</a>        node_implementation::{ConsensusTime, NodeType},
 <a href=#43 id=43 data-nosnippet>43</a>        signature_key::{SignatureKey, StakeTableEntryType},
 <a href=#44 id=44 data-nosnippet>44</a>        BlockPayload, ValidatedState,
 <a href=#45 id=45 data-nosnippet>45</a>    },
@@ -1569,13 +1569,13 @@
 <a href=#1569 id=1569 data-nosnippet>1569</a>    /// and updates `vid_shares` map with the signed `VidDisperseShare` proposals.
 <a href=#1570 id=1570 data-nosnippet>1570</a>    /// Returned `Option` indicates whether the update has actually happened or not.
 <a href=#1571 id=1571 data-nosnippet>1571</a>    </span><span class="attr">#[instrument(skip_all, target = <span class="string">"Consensus"</span>, fields(view = <span class="kw-2">*</span>view))]
-<a href=#1572 id=1572 data-nosnippet>1572</a>    </span><span class="kw">pub async fn </span>calculate_and_update_vid&lt;V: Versions&gt;(
+<a href=#1572 id=1572 data-nosnippet>1572</a>    </span><span class="kw">pub async fn </span>calculate_and_update_vid(
 <a href=#1573 id=1573 data-nosnippet>1573</a>        consensus: OuterConsensus&lt;TYPES&gt;,
 <a href=#1574 id=1574 data-nosnippet>1574</a>        view: &lt;TYPES <span class="kw">as </span>NodeType&gt;::View,
 <a href=#1575 id=1575 data-nosnippet>1575</a>        target_epoch: <span class="prelude-ty">Option</span>&lt;&lt;TYPES <span class="kw">as </span>NodeType&gt;::Epoch&gt;,
 <a href=#1576 id=1576 data-nosnippet>1576</a>        membership_coordinator: EpochMembershipCoordinator&lt;TYPES&gt;,
 <a href=#1577 id=1577 data-nosnippet>1577</a>        private_key: <span class="kw-2">&amp;</span>&lt;TYPES::SignatureKey <span class="kw">as </span>SignatureKey&gt;::PrivateKey,
-<a href=#1578 id=1578 data-nosnippet>1578</a>        upgrade_lock: <span class="kw-2">&amp;</span>UpgradeLock&lt;TYPES, V&gt;,
+<a href=#1578 id=1578 data-nosnippet>1578</a>        upgrade_lock: <span class="kw-2">&amp;</span>UpgradeLock&lt;TYPES&gt;,
 <a href=#1579 id=1579 data-nosnippet>1579</a>    ) -&gt; <span class="prelude-ty">Option</span>&lt;()&gt; {
 <a href=#1580 id=1580 data-nosnippet>1580</a>        <span class="kw">let </span>payload_with_metadata = Arc::clone(consensus.read().<span class="kw">await</span>.saved_payloads().get(<span class="kw-2">&amp;</span>view)<span class="question-mark">?</span>);
 <a href=#1581 id=1581 data-nosnippet>1581</a>        <span class="kw">let </span>epoch = consensus
@@ -1589,7 +1589,7 @@
 <a href=#1589 id=1589 data-nosnippet>1589</a>        <span class="kw">let </span>VidDisperseAndDuration {
 <a href=#1590 id=1590 data-nosnippet>1590</a>            disperse: vid,
 <a href=#1591 id=1591 data-nosnippet>1591</a>            duration: disperse_duration,
-<a href=#1592 id=1592 data-nosnippet>1592</a>        } = VidDisperse::calculate_vid_disperse::&lt;V&gt;(
+<a href=#1592 id=1592 data-nosnippet>1592</a>        } = VidDisperse::calculate_vid_disperse(
 <a href=#1593 id=1593 data-nosnippet>1593</a>            <span class="kw-2">&amp;</span>payload_with_metadata.payload,
 <a href=#1594 id=1594 data-nosnippet>1594</a>            <span class="kw-2">&amp;</span>membership_coordinator,
 <a href=#1595 id=1595 data-nosnippet>1595</a>            view,

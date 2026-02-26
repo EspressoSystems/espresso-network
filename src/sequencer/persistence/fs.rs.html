@@ -2324,186 +2324,186 @@
 <a href=#2324 id=2324 data-nosnippet>2324</a>    <span class="kw">use </span>committable::{Commitment, CommitmentBoundsArkless, Committable};
 <a href=#2325 id=2325 data-nosnippet>2325</a>    <span class="kw">use </span>espresso_types::{Header, Leaf, NodeState, PubKey, ValidatedState};
 <a href=#2326 id=2326 data-nosnippet>2326</a>    <span class="kw">use </span>hotshot::types::SignatureKey;
-<a href=#2327 id=2327 data-nosnippet>2327</a>    <span class="kw">use </span>hotshot_example_types::node_types::TestVersions;
-<a href=#2328 id=2328 data-nosnippet>2328</a>    <span class="kw">use </span>hotshot_query_service::testing::mocks::MockVersions;
+<a href=#2327 id=2327 data-nosnippet>2327</a>    <span class="kw">use </span>hotshot_example_types::node_types::TEST_VERSIONS;
+<a href=#2328 id=2328 data-nosnippet>2328</a>    <span class="kw">use </span>hotshot_query_service::testing::mocks::MOCK_UPGRADE;
 <a href=#2329 id=2329 data-nosnippet>2329</a>    <span class="kw">use </span>hotshot_types::{
 <a href=#2330 id=2330 data-nosnippet>2330</a>        data::QuorumProposal2,
 <a href=#2331 id=2331 data-nosnippet>2331</a>        light_client::LightClientState,
 <a href=#2332 id=2332 data-nosnippet>2332</a>        simple_certificate::QuorumCertificate,
 <a href=#2333 id=2333 data-nosnippet>2333</a>        simple_vote::QuorumData,
-<a href=#2334 id=2334 data-nosnippet>2334</a>        traits::{
-<a href=#2335 id=2335 data-nosnippet>2335</a>            block_contents::GENESIS_VID_NUM_STORAGE_NODES, node_implementation::Versions,
-<a href=#2336 id=2336 data-nosnippet>2336</a>            EncodeBytes,
-<a href=#2337 id=2337 data-nosnippet>2337</a>        },
-<a href=#2338 id=2338 data-nosnippet>2338</a>        vid::advz::advz_scheme,
-<a href=#2339 id=2339 data-nosnippet>2339</a>    };
-<a href=#2340 id=2340 data-nosnippet>2340</a>    <span class="kw">use </span>jf_advz::VidScheme;
-<a href=#2341 id=2341 data-nosnippet>2341</a>    <span class="kw">use </span>serde_json::json;
-<a href=#2342 id=2342 data-nosnippet>2342</a>    <span class="kw">use </span>tempfile::TempDir;
-<a href=#2343 id=2343 data-nosnippet>2343</a>    <span class="kw">use </span>vbs::version::StaticVersionType;
-<a href=#2344 id=2344 data-nosnippet>2344</a>
-<a href=#2345 id=2345 data-nosnippet>2345</a>    <span class="kw">use super</span>::<span class="kw-2">*</span>;
-<a href=#2346 id=2346 data-nosnippet>2346</a>    <span class="kw">use crate</span>::{persistence::tests::TestablePersistence, BLSPubKey};
+<a href=#2334 id=2334 data-nosnippet>2334</a>        traits::{block_contents::GENESIS_VID_NUM_STORAGE_NODES, EncodeBytes},
+<a href=#2335 id=2335 data-nosnippet>2335</a>        vid::advz::advz_scheme,
+<a href=#2336 id=2336 data-nosnippet>2336</a>    };
+<a href=#2337 id=2337 data-nosnippet>2337</a>    <span class="kw">use </span>jf_advz::VidScheme;
+<a href=#2338 id=2338 data-nosnippet>2338</a>    <span class="kw">use </span>serde_json::json;
+<a href=#2339 id=2339 data-nosnippet>2339</a>    <span class="kw">use </span>tempfile::TempDir;
+<a href=#2340 id=2340 data-nosnippet>2340</a>
+<a href=#2341 id=2341 data-nosnippet>2341</a>    <span class="kw">use super</span>::<span class="kw-2">*</span>;
+<a href=#2342 id=2342 data-nosnippet>2342</a>    <span class="kw">use crate</span>::{persistence::tests::TestablePersistence, BLSPubKey};
+<a href=#2343 id=2343 data-nosnippet>2343</a>
+<a href=#2344 id=2344 data-nosnippet>2344</a>    <span class="attr">#[async_trait]
+<a href=#2345 id=2345 data-nosnippet>2345</a>    </span><span class="kw">impl </span>TestablePersistence <span class="kw">for </span>Persistence {
+<a href=#2346 id=2346 data-nosnippet>2346</a>        <span class="kw">type </span>Storage = TempDir;
 <a href=#2347 id=2347 data-nosnippet>2347</a>
-<a href=#2348 id=2348 data-nosnippet>2348</a>    <span class="attr">#[async_trait]
-<a href=#2349 id=2349 data-nosnippet>2349</a>    </span><span class="kw">impl </span>TestablePersistence <span class="kw">for </span>Persistence {
-<a href=#2350 id=2350 data-nosnippet>2350</a>        <span class="kw">type </span>Storage = TempDir;
+<a href=#2348 id=2348 data-nosnippet>2348</a>        <span class="kw">async fn </span>tmp_storage() -&gt; <span class="self">Self</span>::Storage {
+<a href=#2349 id=2349 data-nosnippet>2349</a>            TempDir::new().unwrap()
+<a href=#2350 id=2350 data-nosnippet>2350</a>        }
 <a href=#2351 id=2351 data-nosnippet>2351</a>
-<a href=#2352 id=2352 data-nosnippet>2352</a>        <span class="kw">async fn </span>tmp_storage() -&gt; <span class="self">Self</span>::Storage {
-<a href=#2353 id=2353 data-nosnippet>2353</a>            TempDir::new().unwrap()
+<a href=#2352 id=2352 data-nosnippet>2352</a>        <span class="kw">fn </span>options(storage: <span class="kw-2">&amp;</span><span class="self">Self</span>::Storage) -&gt; <span class="kw">impl </span>PersistenceOptions&lt;Persistence = <span class="self">Self</span>&gt; {
+<a href=#2353 id=2353 data-nosnippet>2353</a>            Options::new(storage.path().into())
 <a href=#2354 id=2354 data-nosnippet>2354</a>        }
-<a href=#2355 id=2355 data-nosnippet>2355</a>
-<a href=#2356 id=2356 data-nosnippet>2356</a>        <span class="kw">fn </span>options(storage: <span class="kw-2">&amp;</span><span class="self">Self</span>::Storage) -&gt; <span class="kw">impl </span>PersistenceOptions&lt;Persistence = <span class="self">Self</span>&gt; {
-<a href=#2357 id=2357 data-nosnippet>2357</a>            Options::new(storage.path().into())
-<a href=#2358 id=2358 data-nosnippet>2358</a>        }
-<a href=#2359 id=2359 data-nosnippet>2359</a>    }
-<a href=#2360 id=2360 data-nosnippet>2360</a>
-<a href=#2361 id=2361 data-nosnippet>2361</a>    <span class="attr">#[test]
-<a href=#2362 id=2362 data-nosnippet>2362</a>    </span><span class="kw">fn </span>test_config_migrations_add_builder_urls() {
-<a href=#2363 id=2363 data-nosnippet>2363</a>        <span class="kw">let </span>before = <span class="macro">json!</span>({
-<a href=#2364 id=2364 data-nosnippet>2364</a>            <span class="string">"config"</span>: {
-<a href=#2365 id=2365 data-nosnippet>2365</a>                <span class="string">"builder_url"</span>: <span class="string">"https://test:8080"</span>,
-<a href=#2366 id=2366 data-nosnippet>2366</a>                <span class="string">"start_proposing_view"</span>: <span class="number">1</span>,
-<a href=#2367 id=2367 data-nosnippet>2367</a>                <span class="string">"stop_proposing_view"</span>: <span class="number">2</span>,
-<a href=#2368 id=2368 data-nosnippet>2368</a>                <span class="string">"start_voting_view"</span>: <span class="number">1</span>,
-<a href=#2369 id=2369 data-nosnippet>2369</a>                <span class="string">"stop_voting_view"</span>: <span class="number">2</span>,
-<a href=#2370 id=2370 data-nosnippet>2370</a>                <span class="string">"start_proposing_time"</span>: <span class="number">1</span>,
-<a href=#2371 id=2371 data-nosnippet>2371</a>                <span class="string">"stop_proposing_time"</span>: <span class="number">2</span>,
-<a href=#2372 id=2372 data-nosnippet>2372</a>                <span class="string">"start_voting_time"</span>: <span class="number">1</span>,
-<a href=#2373 id=2373 data-nosnippet>2373</a>                <span class="string">"stop_voting_time"</span>: <span class="number">2
-<a href=#2374 id=2374 data-nosnippet>2374</a>            </span>}
-<a href=#2375 id=2375 data-nosnippet>2375</a>        });
-<a href=#2376 id=2376 data-nosnippet>2376</a>        <span class="kw">let </span>after = <span class="macro">json!</span>({
-<a href=#2377 id=2377 data-nosnippet>2377</a>            <span class="string">"config"</span>: {
-<a href=#2378 id=2378 data-nosnippet>2378</a>                <span class="string">"builder_urls"</span>: [<span class="string">"https://test:8080"</span>],
-<a href=#2379 id=2379 data-nosnippet>2379</a>                <span class="string">"start_proposing_view"</span>: <span class="number">1</span>,
-<a href=#2380 id=2380 data-nosnippet>2380</a>                <span class="string">"stop_proposing_view"</span>: <span class="number">2</span>,
-<a href=#2381 id=2381 data-nosnippet>2381</a>                <span class="string">"start_voting_view"</span>: <span class="number">1</span>,
-<a href=#2382 id=2382 data-nosnippet>2382</a>                <span class="string">"stop_voting_view"</span>: <span class="number">2</span>,
-<a href=#2383 id=2383 data-nosnippet>2383</a>                <span class="string">"start_proposing_time"</span>: <span class="number">1</span>,
-<a href=#2384 id=2384 data-nosnippet>2384</a>                <span class="string">"stop_proposing_time"</span>: <span class="number">2</span>,
-<a href=#2385 id=2385 data-nosnippet>2385</a>                <span class="string">"start_voting_time"</span>: <span class="number">1</span>,
-<a href=#2386 id=2386 data-nosnippet>2386</a>                <span class="string">"stop_voting_time"</span>: <span class="number">2</span>,
-<a href=#2387 id=2387 data-nosnippet>2387</a>                <span class="string">"epoch_height"</span>: <span class="number">0</span>,
-<a href=#2388 id=2388 data-nosnippet>2388</a>                <span class="string">"drb_difficulty"</span>: <span class="number">0</span>,
-<a href=#2389 id=2389 data-nosnippet>2389</a>                <span class="string">"drb_upgrade_difficulty"</span>: <span class="number">0</span>,
-<a href=#2390 id=2390 data-nosnippet>2390</a>                <span class="string">"da_committees"</span>: [],
-<a href=#2391 id=2391 data-nosnippet>2391</a>            }
-<a href=#2392 id=2392 data-nosnippet>2392</a>        });
-<a href=#2393 id=2393 data-nosnippet>2393</a>
-<a href=#2394 id=2394 data-nosnippet>2394</a>        <span class="macro">assert_eq!</span>(migrate_network_config(before).unwrap(), after);
-<a href=#2395 id=2395 data-nosnippet>2395</a>    }
-<a href=#2396 id=2396 data-nosnippet>2396</a>
-<a href=#2397 id=2397 data-nosnippet>2397</a>    <span class="attr">#[test]
-<a href=#2398 id=2398 data-nosnippet>2398</a>    </span><span class="kw">fn </span>test_config_migrations_existing_builder_urls() {
-<a href=#2399 id=2399 data-nosnippet>2399</a>        <span class="kw">let </span>before = <span class="macro">json!</span>({
-<a href=#2400 id=2400 data-nosnippet>2400</a>            <span class="string">"config"</span>: {
-<a href=#2401 id=2401 data-nosnippet>2401</a>                <span class="string">"builder_urls"</span>: [<span class="string">"https://test:8080"</span>, <span class="string">"https://test:8081"</span>],
-<a href=#2402 id=2402 data-nosnippet>2402</a>                <span class="string">"start_proposing_view"</span>: <span class="number">1</span>,
-<a href=#2403 id=2403 data-nosnippet>2403</a>                <span class="string">"stop_proposing_view"</span>: <span class="number">2</span>,
-<a href=#2404 id=2404 data-nosnippet>2404</a>                <span class="string">"start_voting_view"</span>: <span class="number">1</span>,
-<a href=#2405 id=2405 data-nosnippet>2405</a>                <span class="string">"stop_voting_view"</span>: <span class="number">2</span>,
-<a href=#2406 id=2406 data-nosnippet>2406</a>                <span class="string">"start_proposing_time"</span>: <span class="number">1</span>,
-<a href=#2407 id=2407 data-nosnippet>2407</a>                <span class="string">"stop_proposing_time"</span>: <span class="number">2</span>,
-<a href=#2408 id=2408 data-nosnippet>2408</a>                <span class="string">"start_voting_time"</span>: <span class="number">1</span>,
-<a href=#2409 id=2409 data-nosnippet>2409</a>                <span class="string">"stop_voting_time"</span>: <span class="number">2</span>,
-<a href=#2410 id=2410 data-nosnippet>2410</a>                <span class="string">"epoch_height"</span>: <span class="number">0</span>,
-<a href=#2411 id=2411 data-nosnippet>2411</a>                <span class="string">"drb_difficulty"</span>: <span class="number">0</span>,
-<a href=#2412 id=2412 data-nosnippet>2412</a>                <span class="string">"drb_upgrade_difficulty"</span>: <span class="number">0</span>,
-<a href=#2413 id=2413 data-nosnippet>2413</a>                <span class="string">"da_committees"</span>: [],
-<a href=#2414 id=2414 data-nosnippet>2414</a>            }
-<a href=#2415 id=2415 data-nosnippet>2415</a>        });
-<a href=#2416 id=2416 data-nosnippet>2416</a>
-<a href=#2417 id=2417 data-nosnippet>2417</a>        <span class="macro">assert_eq!</span>(migrate_network_config(before.clone()).unwrap(), before);
-<a href=#2418 id=2418 data-nosnippet>2418</a>    }
-<a href=#2419 id=2419 data-nosnippet>2419</a>
-<a href=#2420 id=2420 data-nosnippet>2420</a>    <span class="attr">#[test]
-<a href=#2421 id=2421 data-nosnippet>2421</a>    </span><span class="kw">fn </span>test_config_migrations_add_upgrade_params() {
-<a href=#2422 id=2422 data-nosnippet>2422</a>        <span class="kw">let </span>before = <span class="macro">json!</span>({
-<a href=#2423 id=2423 data-nosnippet>2423</a>            <span class="string">"config"</span>: {
-<a href=#2424 id=2424 data-nosnippet>2424</a>                <span class="string">"builder_urls"</span>: [<span class="string">"https://test:8080"</span>, <span class="string">"https://test:8081"</span>]
-<a href=#2425 id=2425 data-nosnippet>2425</a>            }
-<a href=#2426 id=2426 data-nosnippet>2426</a>        });
-<a href=#2427 id=2427 data-nosnippet>2427</a>        <span class="kw">let </span>after = <span class="macro">json!</span>({
-<a href=#2428 id=2428 data-nosnippet>2428</a>            <span class="string">"config"</span>: {
-<a href=#2429 id=2429 data-nosnippet>2429</a>                <span class="string">"builder_urls"</span>: [<span class="string">"https://test:8080"</span>, <span class="string">"https://test:8081"</span>],
-<a href=#2430 id=2430 data-nosnippet>2430</a>                <span class="string">"start_proposing_view"</span>: <span class="number">9007199254740991u64</span>,
-<a href=#2431 id=2431 data-nosnippet>2431</a>                <span class="string">"stop_proposing_view"</span>: <span class="number">0</span>,
-<a href=#2432 id=2432 data-nosnippet>2432</a>                <span class="string">"start_voting_view"</span>: <span class="number">9007199254740991u64</span>,
-<a href=#2433 id=2433 data-nosnippet>2433</a>                <span class="string">"stop_voting_view"</span>: <span class="number">0</span>,
-<a href=#2434 id=2434 data-nosnippet>2434</a>                <span class="string">"start_proposing_time"</span>: <span class="number">9007199254740991u64</span>,
-<a href=#2435 id=2435 data-nosnippet>2435</a>                <span class="string">"stop_proposing_time"</span>: <span class="number">0</span>,
-<a href=#2436 id=2436 data-nosnippet>2436</a>                <span class="string">"start_voting_time"</span>: <span class="number">9007199254740991u64</span>,
-<a href=#2437 id=2437 data-nosnippet>2437</a>                <span class="string">"stop_voting_time"</span>: <span class="number">0</span>,
-<a href=#2438 id=2438 data-nosnippet>2438</a>                <span class="string">"epoch_height"</span>: <span class="number">0</span>,
-<a href=#2439 id=2439 data-nosnippet>2439</a>                <span class="string">"drb_difficulty"</span>: <span class="number">0</span>,
-<a href=#2440 id=2440 data-nosnippet>2440</a>                <span class="string">"drb_upgrade_difficulty"</span>: <span class="number">0</span>,
-<a href=#2441 id=2441 data-nosnippet>2441</a>                <span class="string">"da_committees"</span>: [],
-<a href=#2442 id=2442 data-nosnippet>2442</a>            }
-<a href=#2443 id=2443 data-nosnippet>2443</a>        });
-<a href=#2444 id=2444 data-nosnippet>2444</a>
-<a href=#2445 id=2445 data-nosnippet>2445</a>        <span class="macro">assert_eq!</span>(migrate_network_config(before).unwrap(), after);
-<a href=#2446 id=2446 data-nosnippet>2446</a>    }
-<a href=#2447 id=2447 data-nosnippet>2447</a>
-<a href=#2448 id=2448 data-nosnippet>2448</a>    <span class="attr">#[test]
-<a href=#2449 id=2449 data-nosnippet>2449</a>    </span><span class="kw">fn </span>test_config_migrations_existing_upgrade_params() {
-<a href=#2450 id=2450 data-nosnippet>2450</a>        <span class="kw">let </span>before = <span class="macro">json!</span>({
-<a href=#2451 id=2451 data-nosnippet>2451</a>            <span class="string">"config"</span>: {
-<a href=#2452 id=2452 data-nosnippet>2452</a>                <span class="string">"builder_urls"</span>: [<span class="string">"https://test:8080"</span>, <span class="string">"https://test:8081"</span>],
-<a href=#2453 id=2453 data-nosnippet>2453</a>                <span class="string">"start_proposing_view"</span>: <span class="number">1</span>,
-<a href=#2454 id=2454 data-nosnippet>2454</a>                <span class="string">"stop_proposing_view"</span>: <span class="number">2</span>,
-<a href=#2455 id=2455 data-nosnippet>2455</a>                <span class="string">"start_voting_view"</span>: <span class="number">1</span>,
-<a href=#2456 id=2456 data-nosnippet>2456</a>                <span class="string">"stop_voting_view"</span>: <span class="number">2</span>,
-<a href=#2457 id=2457 data-nosnippet>2457</a>                <span class="string">"start_proposing_time"</span>: <span class="number">1</span>,
-<a href=#2458 id=2458 data-nosnippet>2458</a>                <span class="string">"stop_proposing_time"</span>: <span class="number">2</span>,
-<a href=#2459 id=2459 data-nosnippet>2459</a>                <span class="string">"start_voting_time"</span>: <span class="number">1</span>,
-<a href=#2460 id=2460 data-nosnippet>2460</a>                <span class="string">"stop_voting_time"</span>: <span class="number">2</span>,
-<a href=#2461 id=2461 data-nosnippet>2461</a>                <span class="string">"epoch_height"</span>: <span class="number">0</span>,
-<a href=#2462 id=2462 data-nosnippet>2462</a>                <span class="string">"drb_difficulty"</span>: <span class="number">0</span>,
-<a href=#2463 id=2463 data-nosnippet>2463</a>                <span class="string">"drb_upgrade_difficulty"</span>: <span class="number">0</span>,
-<a href=#2464 id=2464 data-nosnippet>2464</a>                <span class="string">"da_committees"</span>: [],
-<a href=#2465 id=2465 data-nosnippet>2465</a>            }
-<a href=#2466 id=2466 data-nosnippet>2466</a>        });
-<a href=#2467 id=2467 data-nosnippet>2467</a>
-<a href=#2468 id=2468 data-nosnippet>2468</a>        <span class="macro">assert_eq!</span>(migrate_network_config(before.clone()).unwrap(), before);
-<a href=#2469 id=2469 data-nosnippet>2469</a>    }
-<a href=#2470 id=2470 data-nosnippet>2470</a>
-<a href=#2471 id=2471 data-nosnippet>2471</a>    <span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
-<a href=#2472 id=2472 data-nosnippet>2472</a>    </span><span class="kw">pub async fn </span>test_consensus_migration() {
-<a href=#2473 id=2473 data-nosnippet>2473</a>        <span class="kw">let </span>rows = <span class="number">300</span>;
-<a href=#2474 id=2474 data-nosnippet>2474</a>        <span class="kw">let </span>tmp = Persistence::tmp_storage().<span class="kw">await</span>;
-<a href=#2475 id=2475 data-nosnippet>2475</a>        <span class="kw">let </span><span class="kw-2">mut </span>opt = Persistence::options(<span class="kw-2">&amp;</span>tmp);
-<a href=#2476 id=2476 data-nosnippet>2476</a>        <span class="kw">let </span>storage = opt.create().<span class="kw">await</span>.unwrap();
-<a href=#2477 id=2477 data-nosnippet>2477</a>
-<a href=#2478 id=2478 data-nosnippet>2478</a>        <span class="kw">let </span>inner = storage.inner.read().<span class="kw">await</span>;
-<a href=#2479 id=2479 data-nosnippet>2479</a>
-<a href=#2480 id=2480 data-nosnippet>2480</a>        <span class="kw">let </span>decided_leaves_path = inner.decided_leaf_path();
-<a href=#2481 id=2481 data-nosnippet>2481</a>        fs::create_dir_all(decided_leaves_path.clone()).expect(<span class="string">"failed to create proposals dir"</span>);
-<a href=#2482 id=2482 data-nosnippet>2482</a>
-<a href=#2483 id=2483 data-nosnippet>2483</a>        <span class="kw">let </span>qp_dir_path = inner.quorum_proposals_dir_path();
-<a href=#2484 id=2484 data-nosnippet>2484</a>        fs::create_dir_all(qp_dir_path.clone()).expect(<span class="string">"failed to create proposals dir"</span>);
+<a href=#2355 id=2355 data-nosnippet>2355</a>    }
+<a href=#2356 id=2356 data-nosnippet>2356</a>
+<a href=#2357 id=2357 data-nosnippet>2357</a>    <span class="attr">#[test]
+<a href=#2358 id=2358 data-nosnippet>2358</a>    </span><span class="kw">fn </span>test_config_migrations_add_builder_urls() {
+<a href=#2359 id=2359 data-nosnippet>2359</a>        <span class="kw">let </span>before = <span class="macro">json!</span>({
+<a href=#2360 id=2360 data-nosnippet>2360</a>            <span class="string">"config"</span>: {
+<a href=#2361 id=2361 data-nosnippet>2361</a>                <span class="string">"builder_url"</span>: <span class="string">"https://test:8080"</span>,
+<a href=#2362 id=2362 data-nosnippet>2362</a>                <span class="string">"start_proposing_view"</span>: <span class="number">1</span>,
+<a href=#2363 id=2363 data-nosnippet>2363</a>                <span class="string">"stop_proposing_view"</span>: <span class="number">2</span>,
+<a href=#2364 id=2364 data-nosnippet>2364</a>                <span class="string">"start_voting_view"</span>: <span class="number">1</span>,
+<a href=#2365 id=2365 data-nosnippet>2365</a>                <span class="string">"stop_voting_view"</span>: <span class="number">2</span>,
+<a href=#2366 id=2366 data-nosnippet>2366</a>                <span class="string">"start_proposing_time"</span>: <span class="number">1</span>,
+<a href=#2367 id=2367 data-nosnippet>2367</a>                <span class="string">"stop_proposing_time"</span>: <span class="number">2</span>,
+<a href=#2368 id=2368 data-nosnippet>2368</a>                <span class="string">"start_voting_time"</span>: <span class="number">1</span>,
+<a href=#2369 id=2369 data-nosnippet>2369</a>                <span class="string">"stop_voting_time"</span>: <span class="number">2
+<a href=#2370 id=2370 data-nosnippet>2370</a>            </span>}
+<a href=#2371 id=2371 data-nosnippet>2371</a>        });
+<a href=#2372 id=2372 data-nosnippet>2372</a>        <span class="kw">let </span>after = <span class="macro">json!</span>({
+<a href=#2373 id=2373 data-nosnippet>2373</a>            <span class="string">"config"</span>: {
+<a href=#2374 id=2374 data-nosnippet>2374</a>                <span class="string">"builder_urls"</span>: [<span class="string">"https://test:8080"</span>],
+<a href=#2375 id=2375 data-nosnippet>2375</a>                <span class="string">"start_proposing_view"</span>: <span class="number">1</span>,
+<a href=#2376 id=2376 data-nosnippet>2376</a>                <span class="string">"stop_proposing_view"</span>: <span class="number">2</span>,
+<a href=#2377 id=2377 data-nosnippet>2377</a>                <span class="string">"start_voting_view"</span>: <span class="number">1</span>,
+<a href=#2378 id=2378 data-nosnippet>2378</a>                <span class="string">"stop_voting_view"</span>: <span class="number">2</span>,
+<a href=#2379 id=2379 data-nosnippet>2379</a>                <span class="string">"start_proposing_time"</span>: <span class="number">1</span>,
+<a href=#2380 id=2380 data-nosnippet>2380</a>                <span class="string">"stop_proposing_time"</span>: <span class="number">2</span>,
+<a href=#2381 id=2381 data-nosnippet>2381</a>                <span class="string">"start_voting_time"</span>: <span class="number">1</span>,
+<a href=#2382 id=2382 data-nosnippet>2382</a>                <span class="string">"stop_voting_time"</span>: <span class="number">2</span>,
+<a href=#2383 id=2383 data-nosnippet>2383</a>                <span class="string">"epoch_height"</span>: <span class="number">0</span>,
+<a href=#2384 id=2384 data-nosnippet>2384</a>                <span class="string">"drb_difficulty"</span>: <span class="number">0</span>,
+<a href=#2385 id=2385 data-nosnippet>2385</a>                <span class="string">"drb_upgrade_difficulty"</span>: <span class="number">0</span>,
+<a href=#2386 id=2386 data-nosnippet>2386</a>                <span class="string">"da_committees"</span>: [],
+<a href=#2387 id=2387 data-nosnippet>2387</a>            }
+<a href=#2388 id=2388 data-nosnippet>2388</a>        });
+<a href=#2389 id=2389 data-nosnippet>2389</a>
+<a href=#2390 id=2390 data-nosnippet>2390</a>        <span class="macro">assert_eq!</span>(migrate_network_config(before).unwrap(), after);
+<a href=#2391 id=2391 data-nosnippet>2391</a>    }
+<a href=#2392 id=2392 data-nosnippet>2392</a>
+<a href=#2393 id=2393 data-nosnippet>2393</a>    <span class="attr">#[test]
+<a href=#2394 id=2394 data-nosnippet>2394</a>    </span><span class="kw">fn </span>test_config_migrations_existing_builder_urls() {
+<a href=#2395 id=2395 data-nosnippet>2395</a>        <span class="kw">let </span>before = <span class="macro">json!</span>({
+<a href=#2396 id=2396 data-nosnippet>2396</a>            <span class="string">"config"</span>: {
+<a href=#2397 id=2397 data-nosnippet>2397</a>                <span class="string">"builder_urls"</span>: [<span class="string">"https://test:8080"</span>, <span class="string">"https://test:8081"</span>],
+<a href=#2398 id=2398 data-nosnippet>2398</a>                <span class="string">"start_proposing_view"</span>: <span class="number">1</span>,
+<a href=#2399 id=2399 data-nosnippet>2399</a>                <span class="string">"stop_proposing_view"</span>: <span class="number">2</span>,
+<a href=#2400 id=2400 data-nosnippet>2400</a>                <span class="string">"start_voting_view"</span>: <span class="number">1</span>,
+<a href=#2401 id=2401 data-nosnippet>2401</a>                <span class="string">"stop_voting_view"</span>: <span class="number">2</span>,
+<a href=#2402 id=2402 data-nosnippet>2402</a>                <span class="string">"start_proposing_time"</span>: <span class="number">1</span>,
+<a href=#2403 id=2403 data-nosnippet>2403</a>                <span class="string">"stop_proposing_time"</span>: <span class="number">2</span>,
+<a href=#2404 id=2404 data-nosnippet>2404</a>                <span class="string">"start_voting_time"</span>: <span class="number">1</span>,
+<a href=#2405 id=2405 data-nosnippet>2405</a>                <span class="string">"stop_voting_time"</span>: <span class="number">2</span>,
+<a href=#2406 id=2406 data-nosnippet>2406</a>                <span class="string">"epoch_height"</span>: <span class="number">0</span>,
+<a href=#2407 id=2407 data-nosnippet>2407</a>                <span class="string">"drb_difficulty"</span>: <span class="number">0</span>,
+<a href=#2408 id=2408 data-nosnippet>2408</a>                <span class="string">"drb_upgrade_difficulty"</span>: <span class="number">0</span>,
+<a href=#2409 id=2409 data-nosnippet>2409</a>                <span class="string">"da_committees"</span>: [],
+<a href=#2410 id=2410 data-nosnippet>2410</a>            }
+<a href=#2411 id=2411 data-nosnippet>2411</a>        });
+<a href=#2412 id=2412 data-nosnippet>2412</a>
+<a href=#2413 id=2413 data-nosnippet>2413</a>        <span class="macro">assert_eq!</span>(migrate_network_config(before.clone()).unwrap(), before);
+<a href=#2414 id=2414 data-nosnippet>2414</a>    }
+<a href=#2415 id=2415 data-nosnippet>2415</a>
+<a href=#2416 id=2416 data-nosnippet>2416</a>    <span class="attr">#[test]
+<a href=#2417 id=2417 data-nosnippet>2417</a>    </span><span class="kw">fn </span>test_config_migrations_add_upgrade_params() {
+<a href=#2418 id=2418 data-nosnippet>2418</a>        <span class="kw">let </span>before = <span class="macro">json!</span>({
+<a href=#2419 id=2419 data-nosnippet>2419</a>            <span class="string">"config"</span>: {
+<a href=#2420 id=2420 data-nosnippet>2420</a>                <span class="string">"builder_urls"</span>: [<span class="string">"https://test:8080"</span>, <span class="string">"https://test:8081"</span>]
+<a href=#2421 id=2421 data-nosnippet>2421</a>            }
+<a href=#2422 id=2422 data-nosnippet>2422</a>        });
+<a href=#2423 id=2423 data-nosnippet>2423</a>        <span class="kw">let </span>after = <span class="macro">json!</span>({
+<a href=#2424 id=2424 data-nosnippet>2424</a>            <span class="string">"config"</span>: {
+<a href=#2425 id=2425 data-nosnippet>2425</a>                <span class="string">"builder_urls"</span>: [<span class="string">"https://test:8080"</span>, <span class="string">"https://test:8081"</span>],
+<a href=#2426 id=2426 data-nosnippet>2426</a>                <span class="string">"start_proposing_view"</span>: <span class="number">9007199254740991u64</span>,
+<a href=#2427 id=2427 data-nosnippet>2427</a>                <span class="string">"stop_proposing_view"</span>: <span class="number">0</span>,
+<a href=#2428 id=2428 data-nosnippet>2428</a>                <span class="string">"start_voting_view"</span>: <span class="number">9007199254740991u64</span>,
+<a href=#2429 id=2429 data-nosnippet>2429</a>                <span class="string">"stop_voting_view"</span>: <span class="number">0</span>,
+<a href=#2430 id=2430 data-nosnippet>2430</a>                <span class="string">"start_proposing_time"</span>: <span class="number">9007199254740991u64</span>,
+<a href=#2431 id=2431 data-nosnippet>2431</a>                <span class="string">"stop_proposing_time"</span>: <span class="number">0</span>,
+<a href=#2432 id=2432 data-nosnippet>2432</a>                <span class="string">"start_voting_time"</span>: <span class="number">9007199254740991u64</span>,
+<a href=#2433 id=2433 data-nosnippet>2433</a>                <span class="string">"stop_voting_time"</span>: <span class="number">0</span>,
+<a href=#2434 id=2434 data-nosnippet>2434</a>                <span class="string">"epoch_height"</span>: <span class="number">0</span>,
+<a href=#2435 id=2435 data-nosnippet>2435</a>                <span class="string">"drb_difficulty"</span>: <span class="number">0</span>,
+<a href=#2436 id=2436 data-nosnippet>2436</a>                <span class="string">"drb_upgrade_difficulty"</span>: <span class="number">0</span>,
+<a href=#2437 id=2437 data-nosnippet>2437</a>                <span class="string">"da_committees"</span>: [],
+<a href=#2438 id=2438 data-nosnippet>2438</a>            }
+<a href=#2439 id=2439 data-nosnippet>2439</a>        });
+<a href=#2440 id=2440 data-nosnippet>2440</a>
+<a href=#2441 id=2441 data-nosnippet>2441</a>        <span class="macro">assert_eq!</span>(migrate_network_config(before).unwrap(), after);
+<a href=#2442 id=2442 data-nosnippet>2442</a>    }
+<a href=#2443 id=2443 data-nosnippet>2443</a>
+<a href=#2444 id=2444 data-nosnippet>2444</a>    <span class="attr">#[test]
+<a href=#2445 id=2445 data-nosnippet>2445</a>    </span><span class="kw">fn </span>test_config_migrations_existing_upgrade_params() {
+<a href=#2446 id=2446 data-nosnippet>2446</a>        <span class="kw">let </span>before = <span class="macro">json!</span>({
+<a href=#2447 id=2447 data-nosnippet>2447</a>            <span class="string">"config"</span>: {
+<a href=#2448 id=2448 data-nosnippet>2448</a>                <span class="string">"builder_urls"</span>: [<span class="string">"https://test:8080"</span>, <span class="string">"https://test:8081"</span>],
+<a href=#2449 id=2449 data-nosnippet>2449</a>                <span class="string">"start_proposing_view"</span>: <span class="number">1</span>,
+<a href=#2450 id=2450 data-nosnippet>2450</a>                <span class="string">"stop_proposing_view"</span>: <span class="number">2</span>,
+<a href=#2451 id=2451 data-nosnippet>2451</a>                <span class="string">"start_voting_view"</span>: <span class="number">1</span>,
+<a href=#2452 id=2452 data-nosnippet>2452</a>                <span class="string">"stop_voting_view"</span>: <span class="number">2</span>,
+<a href=#2453 id=2453 data-nosnippet>2453</a>                <span class="string">"start_proposing_time"</span>: <span class="number">1</span>,
+<a href=#2454 id=2454 data-nosnippet>2454</a>                <span class="string">"stop_proposing_time"</span>: <span class="number">2</span>,
+<a href=#2455 id=2455 data-nosnippet>2455</a>                <span class="string">"start_voting_time"</span>: <span class="number">1</span>,
+<a href=#2456 id=2456 data-nosnippet>2456</a>                <span class="string">"stop_voting_time"</span>: <span class="number">2</span>,
+<a href=#2457 id=2457 data-nosnippet>2457</a>                <span class="string">"epoch_height"</span>: <span class="number">0</span>,
+<a href=#2458 id=2458 data-nosnippet>2458</a>                <span class="string">"drb_difficulty"</span>: <span class="number">0</span>,
+<a href=#2459 id=2459 data-nosnippet>2459</a>                <span class="string">"drb_upgrade_difficulty"</span>: <span class="number">0</span>,
+<a href=#2460 id=2460 data-nosnippet>2460</a>                <span class="string">"da_committees"</span>: [],
+<a href=#2461 id=2461 data-nosnippet>2461</a>            }
+<a href=#2462 id=2462 data-nosnippet>2462</a>        });
+<a href=#2463 id=2463 data-nosnippet>2463</a>
+<a href=#2464 id=2464 data-nosnippet>2464</a>        <span class="macro">assert_eq!</span>(migrate_network_config(before.clone()).unwrap(), before);
+<a href=#2465 id=2465 data-nosnippet>2465</a>    }
+<a href=#2466 id=2466 data-nosnippet>2466</a>
+<a href=#2467 id=2467 data-nosnippet>2467</a>    <span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
+<a href=#2468 id=2468 data-nosnippet>2468</a>    </span><span class="kw">pub async fn </span>test_consensus_migration() {
+<a href=#2469 id=2469 data-nosnippet>2469</a>        <span class="kw">let </span>rows = <span class="number">300</span>;
+<a href=#2470 id=2470 data-nosnippet>2470</a>        <span class="kw">let </span>tmp = Persistence::tmp_storage().<span class="kw">await</span>;
+<a href=#2471 id=2471 data-nosnippet>2471</a>        <span class="kw">let </span><span class="kw-2">mut </span>opt = Persistence::options(<span class="kw-2">&amp;</span>tmp);
+<a href=#2472 id=2472 data-nosnippet>2472</a>        <span class="kw">let </span>storage = opt.create().<span class="kw">await</span>.unwrap();
+<a href=#2473 id=2473 data-nosnippet>2473</a>
+<a href=#2474 id=2474 data-nosnippet>2474</a>        <span class="kw">let </span>inner = storage.inner.read().<span class="kw">await</span>;
+<a href=#2475 id=2475 data-nosnippet>2475</a>
+<a href=#2476 id=2476 data-nosnippet>2476</a>        <span class="kw">let </span>decided_leaves_path = inner.decided_leaf_path();
+<a href=#2477 id=2477 data-nosnippet>2477</a>        fs::create_dir_all(decided_leaves_path.clone()).expect(<span class="string">"failed to create proposals dir"</span>);
+<a href=#2478 id=2478 data-nosnippet>2478</a>
+<a href=#2479 id=2479 data-nosnippet>2479</a>        <span class="kw">let </span>qp_dir_path = inner.quorum_proposals_dir_path();
+<a href=#2480 id=2480 data-nosnippet>2480</a>        fs::create_dir_all(qp_dir_path.clone()).expect(<span class="string">"failed to create proposals dir"</span>);
+<a href=#2481 id=2481 data-nosnippet>2481</a>
+<a href=#2482 id=2482 data-nosnippet>2482</a>        <span class="kw">let </span>state_cert_dir_path = inner.state_cert_dir_path();
+<a href=#2483 id=2483 data-nosnippet>2483</a>        fs::create_dir_all(state_cert_dir_path.clone()).expect(<span class="string">"failed to create state cert dir"</span>);
+<a href=#2484 id=2484 data-nosnippet>2484</a>        drop(inner);
 <a href=#2485 id=2485 data-nosnippet>2485</a>
-<a href=#2486 id=2486 data-nosnippet>2486</a>        <span class="kw">let </span>state_cert_dir_path = inner.state_cert_dir_path();
-<a href=#2487 id=2487 data-nosnippet>2487</a>        fs::create_dir_all(state_cert_dir_path.clone()).expect(<span class="string">"failed to create state cert dir"</span>);
-<a href=#2488 id=2488 data-nosnippet>2488</a>        drop(inner);
-<a href=#2489 id=2489 data-nosnippet>2489</a>
-<a href=#2490 id=2490 data-nosnippet>2490</a>        <span class="macro">assert!</span>(storage.load_state_cert().<span class="kw">await</span>.unwrap().is_none());
-<a href=#2491 id=2491 data-nosnippet>2491</a>
-<a href=#2492 id=2492 data-nosnippet>2492</a>        <span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>..rows {
-<a href=#2493 id=2493 data-nosnippet>2493</a>            <span class="kw">let </span>view = ViewNumber::new(i);
-<a href=#2494 id=2494 data-nosnippet>2494</a>            <span class="kw">let </span>validated_state = ValidatedState::default();
-<a href=#2495 id=2495 data-nosnippet>2495</a>            <span class="kw">let </span>instance_state = NodeState::default();
-<a href=#2496 id=2496 data-nosnippet>2496</a>
-<a href=#2497 id=2497 data-nosnippet>2497</a>            <span class="kw">let </span>(pubkey, privkey) = BLSPubKey::generated_from_seed_indexed([<span class="number">0</span>; <span class="number">32</span>], i);
-<a href=#2498 id=2498 data-nosnippet>2498</a>            <span class="kw">let </span>(payload, metadata) =
-<a href=#2499 id=2499 data-nosnippet>2499</a>                Payload::from_transactions([], <span class="kw-2">&amp;</span>validated_state, <span class="kw-2">&amp;</span>instance_state)
-<a href=#2500 id=2500 data-nosnippet>2500</a>                    .<span class="kw">await
-<a href=#2501 id=2501 data-nosnippet>2501</a>                    </span>.unwrap();
-<a href=#2502 id=2502 data-nosnippet>2502</a>
-<a href=#2503 id=2503 data-nosnippet>2503</a>            <span class="kw">let </span>payload_bytes = payload.encode();
-<a href=#2504 id=2504 data-nosnippet>2504</a>
-<a href=#2505 id=2505 data-nosnippet>2505</a>            <span class="kw">let </span>block_header =
-<a href=#2506 id=2506 data-nosnippet>2506</a>                Header::genesis::&lt;TestVersions&gt;(<span class="kw-2">&amp;</span>instance_state, payload.clone(), <span class="kw-2">&amp;</span>metadata);
+<a href=#2486 id=2486 data-nosnippet>2486</a>        <span class="macro">assert!</span>(storage.load_state_cert().<span class="kw">await</span>.unwrap().is_none());
+<a href=#2487 id=2487 data-nosnippet>2487</a>
+<a href=#2488 id=2488 data-nosnippet>2488</a>        <span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>..rows {
+<a href=#2489 id=2489 data-nosnippet>2489</a>            <span class="kw">let </span>view = ViewNumber::new(i);
+<a href=#2490 id=2490 data-nosnippet>2490</a>            <span class="kw">let </span>validated_state = ValidatedState::default();
+<a href=#2491 id=2491 data-nosnippet>2491</a>            <span class="kw">let </span>instance_state = NodeState::default();
+<a href=#2492 id=2492 data-nosnippet>2492</a>
+<a href=#2493 id=2493 data-nosnippet>2493</a>            <span class="kw">let </span>(pubkey, privkey) = BLSPubKey::generated_from_seed_indexed([<span class="number">0</span>; <span class="number">32</span>], i);
+<a href=#2494 id=2494 data-nosnippet>2494</a>            <span class="kw">let </span>(payload, metadata) =
+<a href=#2495 id=2495 data-nosnippet>2495</a>                Payload::from_transactions([], <span class="kw-2">&amp;</span>validated_state, <span class="kw-2">&amp;</span>instance_state)
+<a href=#2496 id=2496 data-nosnippet>2496</a>                    .<span class="kw">await
+<a href=#2497 id=2497 data-nosnippet>2497</a>                    </span>.unwrap();
+<a href=#2498 id=2498 data-nosnippet>2498</a>
+<a href=#2499 id=2499 data-nosnippet>2499</a>            <span class="kw">let </span>payload_bytes = payload.encode();
+<a href=#2500 id=2500 data-nosnippet>2500</a>
+<a href=#2501 id=2501 data-nosnippet>2501</a>            <span class="kw">let </span>block_header = Header::genesis(
+<a href=#2502 id=2502 data-nosnippet>2502</a>                <span class="kw-2">&amp;</span>instance_state,
+<a href=#2503 id=2503 data-nosnippet>2503</a>                payload.clone(),
+<a href=#2504 id=2504 data-nosnippet>2504</a>                <span class="kw-2">&amp;</span>metadata,
+<a href=#2505 id=2505 data-nosnippet>2505</a>                TEST_VERSIONS.test.base,
+<a href=#2506 id=2506 data-nosnippet>2506</a>            );
 <a href=#2507 id=2507 data-nosnippet>2507</a>
 <a href=#2508 id=2508 data-nosnippet>2508</a>            <span class="kw">let </span>state_cert = LightClientStateUpdateCertificateV2::&lt;SeqTypes&gt; {
 <a href=#2509 id=2509 data-nosnippet>2509</a>                epoch: EpochNumber::new(i),
@@ -2549,10 +2549,10 @@
 <a href=#2549 id=2549 data-nosnippet>2549</a>            };
 <a href=#2550 id=2550 data-nosnippet>2550</a>
 <a href=#2551 id=2551 data-nosnippet>2551</a>            <span class="kw">let </span><span class="kw-2">mut </span>leaf = Leaf::from_quorum_proposal(<span class="kw-2">&amp;</span>quorum_proposal);
-<a href=#2552 id=2552 data-nosnippet>2552</a>            leaf.fill_block_payload::&lt;TestVersions&gt;(
+<a href=#2552 id=2552 data-nosnippet>2552</a>            leaf.fill_block_payload(
 <a href=#2553 id=2553 data-nosnippet>2553</a>                payload,
 <a href=#2554 id=2554 data-nosnippet>2554</a>                GENESIS_VID_NUM_STORAGE_NODES,
-<a href=#2555 id=2555 data-nosnippet>2555</a>                &lt;TestVersions <span class="kw">as </span>Versions&gt;::Base::VERSION,
+<a href=#2555 id=2555 data-nosnippet>2555</a>                TEST_VERSIONS.test.base,
 <a href=#2556 id=2556 data-nosnippet>2556</a>            )
 <a href=#2557 id=2557 data-nosnippet>2557</a>            .unwrap();
 <a href=#2558 id=2558 data-nosnippet>2558</a>
@@ -2714,7 +2714,7 @@
 <a href=#2714 id=2714 data-nosnippet>2714</a>        <span class="kw">let </span>storage = Persistence::connect(<span class="kw-2">&amp;</span>tmp).<span class="kw">await</span>;
 <a href=#2715 id=2715 data-nosnippet>2715</a>
 <a href=#2716 id=2716 data-nosnippet>2716</a>        <span class="comment">// Generate a couple of valid quorum proposals.
-<a href=#2717 id=2717 data-nosnippet>2717</a>        </span><span class="kw">let </span>leaf = Leaf2::genesis::&lt;MockVersions&gt;(<span class="kw-2">&amp;</span>Default::default(), <span class="kw-2">&amp;</span>NodeState::mock()).<span class="kw">await</span>;
+<a href=#2717 id=2717 data-nosnippet>2717</a>        </span><span class="kw">let </span>leaf = Leaf2::genesis(<span class="kw-2">&amp;</span>Default::default(), <span class="kw-2">&amp;</span>NodeState::mock(), MOCK_UPGRADE.base).<span class="kw">await</span>;
 <a href=#2718 id=2718 data-nosnippet>2718</a>        <span class="kw">let </span>privkey = PubKey::generated_from_seed_indexed([<span class="number">0</span>; <span class="number">32</span>], <span class="number">1</span>).<span class="number">1</span>;
 <a href=#2719 id=2719 data-nosnippet>2719</a>        <span class="kw">let </span>signature = PubKey::sign(<span class="kw-2">&amp;</span>privkey, <span class="kw-2">&amp;</span>[]).unwrap();
 <a href=#2720 id=2720 data-nosnippet>2720</a>        <span class="kw">let </span><span class="kw-2">mut </span>quorum_proposal = Proposal {
@@ -2723,345 +2723,347 @@
 <a href=#2723 id=2723 data-nosnippet>2723</a>                    epoch: <span class="prelude-val">None</span>,
 <a href=#2724 id=2724 data-nosnippet>2724</a>                    block_header: leaf.block_header().clone(),
 <a href=#2725 id=2725 data-nosnippet>2725</a>                    view_number: ViewNumber::genesis(),
-<a href=#2726 id=2726 data-nosnippet>2726</a>                    justify_qc: QuorumCertificate2::genesis::&lt;TestVersions&gt;(
+<a href=#2726 id=2726 data-nosnippet>2726</a>                    justify_qc: QuorumCertificate2::genesis(
 <a href=#2727 id=2727 data-nosnippet>2727</a>                        <span class="kw-2">&amp;</span>Default::default(),
 <a href=#2728 id=2728 data-nosnippet>2728</a>                        <span class="kw-2">&amp;</span>NodeState::mock(),
-<a href=#2729 id=2729 data-nosnippet>2729</a>                    )
-<a href=#2730 id=2730 data-nosnippet>2730</a>                    .<span class="kw">await</span>,
-<a href=#2731 id=2731 data-nosnippet>2731</a>                    upgrade_certificate: <span class="prelude-val">None</span>,
-<a href=#2732 id=2732 data-nosnippet>2732</a>                    view_change_evidence: <span class="prelude-val">None</span>,
-<a href=#2733 id=2733 data-nosnippet>2733</a>                    next_drb_result: <span class="prelude-val">None</span>,
-<a href=#2734 id=2734 data-nosnippet>2734</a>                    next_epoch_justify_qc: <span class="prelude-val">None</span>,
-<a href=#2735 id=2735 data-nosnippet>2735</a>                    state_cert: <span class="prelude-val">None</span>,
-<a href=#2736 id=2736 data-nosnippet>2736</a>                },
-<a href=#2737 id=2737 data-nosnippet>2737</a>            },
-<a href=#2738 id=2738 data-nosnippet>2738</a>            signature,
-<a href=#2739 id=2739 data-nosnippet>2739</a>            _pd: Default::default(),
-<a href=#2740 id=2740 data-nosnippet>2740</a>        };
-<a href=#2741 id=2741 data-nosnippet>2741</a>
-<a href=#2742 id=2742 data-nosnippet>2742</a>        <span class="comment">// Store quorum proposals.
-<a href=#2743 id=2743 data-nosnippet>2743</a>        </span><span class="kw">let </span>quorum_proposal1 = quorum_proposal.clone();
-<a href=#2744 id=2744 data-nosnippet>2744</a>        storage
-<a href=#2745 id=2745 data-nosnippet>2745</a>            .append_quorum_proposal2(<span class="kw-2">&amp;</span>quorum_proposal1)
-<a href=#2746 id=2746 data-nosnippet>2746</a>            .<span class="kw">await
-<a href=#2747 id=2747 data-nosnippet>2747</a>            </span>.unwrap();
-<a href=#2748 id=2748 data-nosnippet>2748</a>        quorum_proposal.data.proposal.view_number = ViewNumber::new(<span class="number">1</span>);
-<a href=#2749 id=2749 data-nosnippet>2749</a>        <span class="kw">let </span>quorum_proposal2 = quorum_proposal.clone();
-<a href=#2750 id=2750 data-nosnippet>2750</a>        storage
-<a href=#2751 id=2751 data-nosnippet>2751</a>            .append_quorum_proposal2(<span class="kw-2">&amp;</span>quorum_proposal2)
-<a href=#2752 id=2752 data-nosnippet>2752</a>            .<span class="kw">await
-<a href=#2753 id=2753 data-nosnippet>2753</a>            </span>.unwrap();
-<a href=#2754 id=2754 data-nosnippet>2754</a>
-<a href=#2755 id=2755 data-nosnippet>2755</a>        <span class="comment">// Change one of the file extensions. It can happen that we end up with files with the wrong
-<a href=#2756 id=2756 data-nosnippet>2756</a>        // extension if, for example, the node is killed before cleaning up a swap file.
-<a href=#2757 id=2757 data-nosnippet>2757</a>        </span>fs::rename(
-<a href=#2758 id=2758 data-nosnippet>2758</a>            tmp.path().join(<span class="string">"quorum_proposals2/1.txt"</span>),
-<a href=#2759 id=2759 data-nosnippet>2759</a>            tmp.path().join(<span class="string">"quorum_proposals2/1.swp"</span>),
-<a href=#2760 id=2760 data-nosnippet>2760</a>        )
-<a href=#2761 id=2761 data-nosnippet>2761</a>        .unwrap();
-<a href=#2762 id=2762 data-nosnippet>2762</a>
-<a href=#2763 id=2763 data-nosnippet>2763</a>        <span class="comment">// Loading should simply ignore the unrecognized extension.
-<a href=#2764 id=2764 data-nosnippet>2764</a>        </span><span class="macro">assert_eq!</span>(
-<a href=#2765 id=2765 data-nosnippet>2765</a>            storage.load_quorum_proposals().<span class="kw">await</span>.unwrap(),
-<a href=#2766 id=2766 data-nosnippet>2766</a>            [(ViewNumber::genesis(), quorum_proposal1)]
-<a href=#2767 id=2767 data-nosnippet>2767</a>                .into_iter()
-<a href=#2768 id=2768 data-nosnippet>2768</a>                .collect::&lt;BTreeMap&lt;<span class="kw">_</span>, <span class="kw">_</span>&gt;&gt;()
-<a href=#2769 id=2769 data-nosnippet>2769</a>        );
-<a href=#2770 id=2770 data-nosnippet>2770</a>    }
-<a href=#2771 id=2771 data-nosnippet>2771</a>
-<a href=#2772 id=2772 data-nosnippet>2772</a>    <span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
-<a href=#2773 id=2773 data-nosnippet>2773</a>    </span><span class="kw">async fn </span>test_load_quorum_proposals_malformed_data() {
-<a href=#2774 id=2774 data-nosnippet>2774</a>        <span class="kw">let </span>tmp = Persistence::tmp_storage().<span class="kw">await</span>;
-<a href=#2775 id=2775 data-nosnippet>2775</a>        <span class="kw">let </span>storage = Persistence::connect(<span class="kw-2">&amp;</span>tmp).<span class="kw">await</span>;
-<a href=#2776 id=2776 data-nosnippet>2776</a>
-<a href=#2777 id=2777 data-nosnippet>2777</a>        <span class="comment">// Generate a valid quorum proposal.
-<a href=#2778 id=2778 data-nosnippet>2778</a>        </span><span class="kw">let </span>leaf: Leaf2 = Leaf::genesis::&lt;MockVersions&gt;(<span class="kw-2">&amp;</span>Default::default(), <span class="kw-2">&amp;</span>NodeState::mock())
-<a href=#2779 id=2779 data-nosnippet>2779</a>            .<span class="kw">await
-<a href=#2780 id=2780 data-nosnippet>2780</a>            </span>.into();
-<a href=#2781 id=2781 data-nosnippet>2781</a>        <span class="kw">let </span>privkey = PubKey::generated_from_seed_indexed([<span class="number">0</span>; <span class="number">32</span>], <span class="number">1</span>).<span class="number">1</span>;
-<a href=#2782 id=2782 data-nosnippet>2782</a>        <span class="kw">let </span>signature = PubKey::sign(<span class="kw-2">&amp;</span>privkey, <span class="kw-2">&amp;</span>[]).unwrap();
-<a href=#2783 id=2783 data-nosnippet>2783</a>        <span class="kw">let </span>quorum_proposal = Proposal {
-<a href=#2784 id=2784 data-nosnippet>2784</a>            data: QuorumProposalWrapper::&lt;SeqTypes&gt; {
-<a href=#2785 id=2785 data-nosnippet>2785</a>                proposal: QuorumProposal2::&lt;SeqTypes&gt; {
-<a href=#2786 id=2786 data-nosnippet>2786</a>                    epoch: <span class="prelude-val">None</span>,
-<a href=#2787 id=2787 data-nosnippet>2787</a>                    block_header: leaf.block_header().clone(),
-<a href=#2788 id=2788 data-nosnippet>2788</a>                    view_number: ViewNumber::new(<span class="number">1</span>),
-<a href=#2789 id=2789 data-nosnippet>2789</a>                    justify_qc: QuorumCertificate2::genesis::&lt;TestVersions&gt;(
-<a href=#2790 id=2790 data-nosnippet>2790</a>                        <span class="kw-2">&amp;</span>Default::default(),
-<a href=#2791 id=2791 data-nosnippet>2791</a>                        <span class="kw-2">&amp;</span>NodeState::mock(),
-<a href=#2792 id=2792 data-nosnippet>2792</a>                    )
-<a href=#2793 id=2793 data-nosnippet>2793</a>                    .<span class="kw">await</span>,
-<a href=#2794 id=2794 data-nosnippet>2794</a>                    upgrade_certificate: <span class="prelude-val">None</span>,
-<a href=#2795 id=2795 data-nosnippet>2795</a>                    view_change_evidence: <span class="prelude-val">None</span>,
-<a href=#2796 id=2796 data-nosnippet>2796</a>                    next_drb_result: <span class="prelude-val">None</span>,
-<a href=#2797 id=2797 data-nosnippet>2797</a>                    next_epoch_justify_qc: <span class="prelude-val">None</span>,
-<a href=#2798 id=2798 data-nosnippet>2798</a>                    state_cert: <span class="prelude-val">None</span>,
-<a href=#2799 id=2799 data-nosnippet>2799</a>                },
-<a href=#2800 id=2800 data-nosnippet>2800</a>            },
-<a href=#2801 id=2801 data-nosnippet>2801</a>            signature,
-<a href=#2802 id=2802 data-nosnippet>2802</a>            _pd: Default::default(),
-<a href=#2803 id=2803 data-nosnippet>2803</a>        };
-<a href=#2804 id=2804 data-nosnippet>2804</a>
-<a href=#2805 id=2805 data-nosnippet>2805</a>        <span class="comment">// First store an invalid quorum proposal.
-<a href=#2806 id=2806 data-nosnippet>2806</a>        </span>fs::create_dir_all(tmp.path().join(<span class="string">"quorum_proposals2"</span>)).unwrap();
-<a href=#2807 id=2807 data-nosnippet>2807</a>        fs::write(
-<a href=#2808 id=2808 data-nosnippet>2808</a>            tmp.path().join(<span class="string">"quorum_proposals2/0.txt"</span>),
-<a href=#2809 id=2809 data-nosnippet>2809</a>            <span class="string">"invalid data"</span>.as_bytes(),
-<a href=#2810 id=2810 data-nosnippet>2810</a>        )
-<a href=#2811 id=2811 data-nosnippet>2811</a>        .unwrap();
-<a href=#2812 id=2812 data-nosnippet>2812</a>
-<a href=#2813 id=2813 data-nosnippet>2813</a>        <span class="comment">// Store valid quorum proposal.
-<a href=#2814 id=2814 data-nosnippet>2814</a>        </span>storage
-<a href=#2815 id=2815 data-nosnippet>2815</a>            .append_quorum_proposal2(<span class="kw-2">&amp;</span>quorum_proposal)
-<a href=#2816 id=2816 data-nosnippet>2816</a>            .<span class="kw">await
-<a href=#2817 id=2817 data-nosnippet>2817</a>            </span>.unwrap();
-<a href=#2818 id=2818 data-nosnippet>2818</a>
-<a href=#2819 id=2819 data-nosnippet>2819</a>        <span class="comment">// Loading should ignore the invalid data and return the valid proposal.
-<a href=#2820 id=2820 data-nosnippet>2820</a>        </span><span class="macro">assert_eq!</span>(
-<a href=#2821 id=2821 data-nosnippet>2821</a>            storage.load_quorum_proposals().<span class="kw">await</span>.unwrap(),
-<a href=#2822 id=2822 data-nosnippet>2822</a>            [(ViewNumber::new(<span class="number">1</span>), quorum_proposal)]
-<a href=#2823 id=2823 data-nosnippet>2823</a>                .into_iter()
-<a href=#2824 id=2824 data-nosnippet>2824</a>                .collect::&lt;BTreeMap&lt;<span class="kw">_</span>, <span class="kw">_</span>&gt;&gt;()
-<a href=#2825 id=2825 data-nosnippet>2825</a>        );
-<a href=#2826 id=2826 data-nosnippet>2826</a>    }
-<a href=#2827 id=2827 data-nosnippet>2827</a>
-<a href=#2828 id=2828 data-nosnippet>2828</a>    <span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
-<a href=#2829 id=2829 data-nosnippet>2829</a>    </span><span class="kw">async fn </span>test_store_events_empty() {
-<a href=#2830 id=2830 data-nosnippet>2830</a>        <span class="kw">let </span>tmp = Persistence::tmp_storage().<span class="kw">await</span>;
-<a href=#2831 id=2831 data-nosnippet>2831</a>        <span class="kw">let </span><span class="kw-2">mut </span>opt = Persistence::options(<span class="kw-2">&amp;</span>tmp);
-<a href=#2832 id=2832 data-nosnippet>2832</a>        <span class="kw">let </span>storage = opt.create().<span class="kw">await</span>.unwrap();
-<a href=#2833 id=2833 data-nosnippet>2833</a>
-<a href=#2834 id=2834 data-nosnippet>2834</a>        <span class="macro">assert_eq!</span>(storage.load_events(<span class="number">0</span>, <span class="number">100</span>).<span class="kw">await</span>.unwrap(), (<span class="prelude-val">None</span>, <span class="macro">vec!</span>[]));
+<a href=#2729 id=2729 data-nosnippet>2729</a>                        TEST_VERSIONS.test,
+<a href=#2730 id=2730 data-nosnippet>2730</a>                    )
+<a href=#2731 id=2731 data-nosnippet>2731</a>                    .<span class="kw">await</span>,
+<a href=#2732 id=2732 data-nosnippet>2732</a>                    upgrade_certificate: <span class="prelude-val">None</span>,
+<a href=#2733 id=2733 data-nosnippet>2733</a>                    view_change_evidence: <span class="prelude-val">None</span>,
+<a href=#2734 id=2734 data-nosnippet>2734</a>                    next_drb_result: <span class="prelude-val">None</span>,
+<a href=#2735 id=2735 data-nosnippet>2735</a>                    next_epoch_justify_qc: <span class="prelude-val">None</span>,
+<a href=#2736 id=2736 data-nosnippet>2736</a>                    state_cert: <span class="prelude-val">None</span>,
+<a href=#2737 id=2737 data-nosnippet>2737</a>                },
+<a href=#2738 id=2738 data-nosnippet>2738</a>            },
+<a href=#2739 id=2739 data-nosnippet>2739</a>            signature,
+<a href=#2740 id=2740 data-nosnippet>2740</a>            _pd: Default::default(),
+<a href=#2741 id=2741 data-nosnippet>2741</a>        };
+<a href=#2742 id=2742 data-nosnippet>2742</a>
+<a href=#2743 id=2743 data-nosnippet>2743</a>        <span class="comment">// Store quorum proposals.
+<a href=#2744 id=2744 data-nosnippet>2744</a>        </span><span class="kw">let </span>quorum_proposal1 = quorum_proposal.clone();
+<a href=#2745 id=2745 data-nosnippet>2745</a>        storage
+<a href=#2746 id=2746 data-nosnippet>2746</a>            .append_quorum_proposal2(<span class="kw-2">&amp;</span>quorum_proposal1)
+<a href=#2747 id=2747 data-nosnippet>2747</a>            .<span class="kw">await
+<a href=#2748 id=2748 data-nosnippet>2748</a>            </span>.unwrap();
+<a href=#2749 id=2749 data-nosnippet>2749</a>        quorum_proposal.data.proposal.view_number = ViewNumber::new(<span class="number">1</span>);
+<a href=#2750 id=2750 data-nosnippet>2750</a>        <span class="kw">let </span>quorum_proposal2 = quorum_proposal.clone();
+<a href=#2751 id=2751 data-nosnippet>2751</a>        storage
+<a href=#2752 id=2752 data-nosnippet>2752</a>            .append_quorum_proposal2(<span class="kw-2">&amp;</span>quorum_proposal2)
+<a href=#2753 id=2753 data-nosnippet>2753</a>            .<span class="kw">await
+<a href=#2754 id=2754 data-nosnippet>2754</a>            </span>.unwrap();
+<a href=#2755 id=2755 data-nosnippet>2755</a>
+<a href=#2756 id=2756 data-nosnippet>2756</a>        <span class="comment">// Change one of the file extensions. It can happen that we end up with files with the wrong
+<a href=#2757 id=2757 data-nosnippet>2757</a>        // extension if, for example, the node is killed before cleaning up a swap file.
+<a href=#2758 id=2758 data-nosnippet>2758</a>        </span>fs::rename(
+<a href=#2759 id=2759 data-nosnippet>2759</a>            tmp.path().join(<span class="string">"quorum_proposals2/1.txt"</span>),
+<a href=#2760 id=2760 data-nosnippet>2760</a>            tmp.path().join(<span class="string">"quorum_proposals2/1.swp"</span>),
+<a href=#2761 id=2761 data-nosnippet>2761</a>        )
+<a href=#2762 id=2762 data-nosnippet>2762</a>        .unwrap();
+<a href=#2763 id=2763 data-nosnippet>2763</a>
+<a href=#2764 id=2764 data-nosnippet>2764</a>        <span class="comment">// Loading should simply ignore the unrecognized extension.
+<a href=#2765 id=2765 data-nosnippet>2765</a>        </span><span class="macro">assert_eq!</span>(
+<a href=#2766 id=2766 data-nosnippet>2766</a>            storage.load_quorum_proposals().<span class="kw">await</span>.unwrap(),
+<a href=#2767 id=2767 data-nosnippet>2767</a>            [(ViewNumber::genesis(), quorum_proposal1)]
+<a href=#2768 id=2768 data-nosnippet>2768</a>                .into_iter()
+<a href=#2769 id=2769 data-nosnippet>2769</a>                .collect::&lt;BTreeMap&lt;<span class="kw">_</span>, <span class="kw">_</span>&gt;&gt;()
+<a href=#2770 id=2770 data-nosnippet>2770</a>        );
+<a href=#2771 id=2771 data-nosnippet>2771</a>    }
+<a href=#2772 id=2772 data-nosnippet>2772</a>
+<a href=#2773 id=2773 data-nosnippet>2773</a>    <span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
+<a href=#2774 id=2774 data-nosnippet>2774</a>    </span><span class="kw">async fn </span>test_load_quorum_proposals_malformed_data() {
+<a href=#2775 id=2775 data-nosnippet>2775</a>        <span class="kw">let </span>tmp = Persistence::tmp_storage().<span class="kw">await</span>;
+<a href=#2776 id=2776 data-nosnippet>2776</a>        <span class="kw">let </span>storage = Persistence::connect(<span class="kw-2">&amp;</span>tmp).<span class="kw">await</span>;
+<a href=#2777 id=2777 data-nosnippet>2777</a>
+<a href=#2778 id=2778 data-nosnippet>2778</a>        <span class="comment">// Generate a valid quorum proposal.
+<a href=#2779 id=2779 data-nosnippet>2779</a>        </span><span class="kw">let </span>leaf: Leaf2 = Leaf::genesis(<span class="kw-2">&amp;</span>Default::default(), <span class="kw-2">&amp;</span>NodeState::mock(), MOCK_UPGRADE.base)
+<a href=#2780 id=2780 data-nosnippet>2780</a>            .<span class="kw">await
+<a href=#2781 id=2781 data-nosnippet>2781</a>            </span>.into();
+<a href=#2782 id=2782 data-nosnippet>2782</a>        <span class="kw">let </span>privkey = PubKey::generated_from_seed_indexed([<span class="number">0</span>; <span class="number">32</span>], <span class="number">1</span>).<span class="number">1</span>;
+<a href=#2783 id=2783 data-nosnippet>2783</a>        <span class="kw">let </span>signature = PubKey::sign(<span class="kw-2">&amp;</span>privkey, <span class="kw-2">&amp;</span>[]).unwrap();
+<a href=#2784 id=2784 data-nosnippet>2784</a>        <span class="kw">let </span>quorum_proposal = Proposal {
+<a href=#2785 id=2785 data-nosnippet>2785</a>            data: QuorumProposalWrapper::&lt;SeqTypes&gt; {
+<a href=#2786 id=2786 data-nosnippet>2786</a>                proposal: QuorumProposal2::&lt;SeqTypes&gt; {
+<a href=#2787 id=2787 data-nosnippet>2787</a>                    epoch: <span class="prelude-val">None</span>,
+<a href=#2788 id=2788 data-nosnippet>2788</a>                    block_header: leaf.block_header().clone(),
+<a href=#2789 id=2789 data-nosnippet>2789</a>                    view_number: ViewNumber::new(<span class="number">1</span>),
+<a href=#2790 id=2790 data-nosnippet>2790</a>                    justify_qc: QuorumCertificate2::genesis(
+<a href=#2791 id=2791 data-nosnippet>2791</a>                        <span class="kw-2">&amp;</span>Default::default(),
+<a href=#2792 id=2792 data-nosnippet>2792</a>                        <span class="kw-2">&amp;</span>NodeState::mock(),
+<a href=#2793 id=2793 data-nosnippet>2793</a>                        TEST_VERSIONS.test,
+<a href=#2794 id=2794 data-nosnippet>2794</a>                    )
+<a href=#2795 id=2795 data-nosnippet>2795</a>                    .<span class="kw">await</span>,
+<a href=#2796 id=2796 data-nosnippet>2796</a>                    upgrade_certificate: <span class="prelude-val">None</span>,
+<a href=#2797 id=2797 data-nosnippet>2797</a>                    view_change_evidence: <span class="prelude-val">None</span>,
+<a href=#2798 id=2798 data-nosnippet>2798</a>                    next_drb_result: <span class="prelude-val">None</span>,
+<a href=#2799 id=2799 data-nosnippet>2799</a>                    next_epoch_justify_qc: <span class="prelude-val">None</span>,
+<a href=#2800 id=2800 data-nosnippet>2800</a>                    state_cert: <span class="prelude-val">None</span>,
+<a href=#2801 id=2801 data-nosnippet>2801</a>                },
+<a href=#2802 id=2802 data-nosnippet>2802</a>            },
+<a href=#2803 id=2803 data-nosnippet>2803</a>            signature,
+<a href=#2804 id=2804 data-nosnippet>2804</a>            _pd: Default::default(),
+<a href=#2805 id=2805 data-nosnippet>2805</a>        };
+<a href=#2806 id=2806 data-nosnippet>2806</a>
+<a href=#2807 id=2807 data-nosnippet>2807</a>        <span class="comment">// First store an invalid quorum proposal.
+<a href=#2808 id=2808 data-nosnippet>2808</a>        </span>fs::create_dir_all(tmp.path().join(<span class="string">"quorum_proposals2"</span>)).unwrap();
+<a href=#2809 id=2809 data-nosnippet>2809</a>        fs::write(
+<a href=#2810 id=2810 data-nosnippet>2810</a>            tmp.path().join(<span class="string">"quorum_proposals2/0.txt"</span>),
+<a href=#2811 id=2811 data-nosnippet>2811</a>            <span class="string">"invalid data"</span>.as_bytes(),
+<a href=#2812 id=2812 data-nosnippet>2812</a>        )
+<a href=#2813 id=2813 data-nosnippet>2813</a>        .unwrap();
+<a href=#2814 id=2814 data-nosnippet>2814</a>
+<a href=#2815 id=2815 data-nosnippet>2815</a>        <span class="comment">// Store valid quorum proposal.
+<a href=#2816 id=2816 data-nosnippet>2816</a>        </span>storage
+<a href=#2817 id=2817 data-nosnippet>2817</a>            .append_quorum_proposal2(<span class="kw-2">&amp;</span>quorum_proposal)
+<a href=#2818 id=2818 data-nosnippet>2818</a>            .<span class="kw">await
+<a href=#2819 id=2819 data-nosnippet>2819</a>            </span>.unwrap();
+<a href=#2820 id=2820 data-nosnippet>2820</a>
+<a href=#2821 id=2821 data-nosnippet>2821</a>        <span class="comment">// Loading should ignore the invalid data and return the valid proposal.
+<a href=#2822 id=2822 data-nosnippet>2822</a>        </span><span class="macro">assert_eq!</span>(
+<a href=#2823 id=2823 data-nosnippet>2823</a>            storage.load_quorum_proposals().<span class="kw">await</span>.unwrap(),
+<a href=#2824 id=2824 data-nosnippet>2824</a>            [(ViewNumber::new(<span class="number">1</span>), quorum_proposal)]
+<a href=#2825 id=2825 data-nosnippet>2825</a>                .into_iter()
+<a href=#2826 id=2826 data-nosnippet>2826</a>                .collect::&lt;BTreeMap&lt;<span class="kw">_</span>, <span class="kw">_</span>&gt;&gt;()
+<a href=#2827 id=2827 data-nosnippet>2827</a>        );
+<a href=#2828 id=2828 data-nosnippet>2828</a>    }
+<a href=#2829 id=2829 data-nosnippet>2829</a>
+<a href=#2830 id=2830 data-nosnippet>2830</a>    <span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
+<a href=#2831 id=2831 data-nosnippet>2831</a>    </span><span class="kw">async fn </span>test_store_events_empty() {
+<a href=#2832 id=2832 data-nosnippet>2832</a>        <span class="kw">let </span>tmp = Persistence::tmp_storage().<span class="kw">await</span>;
+<a href=#2833 id=2833 data-nosnippet>2833</a>        <span class="kw">let </span><span class="kw-2">mut </span>opt = Persistence::options(<span class="kw-2">&amp;</span>tmp);
+<a href=#2834 id=2834 data-nosnippet>2834</a>        <span class="kw">let </span>storage = opt.create().<span class="kw">await</span>.unwrap();
 <a href=#2835 id=2835 data-nosnippet>2835</a>
-<a href=#2836 id=2836 data-nosnippet>2836</a>        <span class="comment">// Storing an empty events list still updates the latest L1 block.
-<a href=#2837 id=2837 data-nosnippet>2837</a>        </span><span class="kw">for </span>i <span class="kw">in </span><span class="number">1</span>..=<span class="number">2 </span>{
-<a href=#2838 id=2838 data-nosnippet>2838</a>            <span class="macro">tracing::info!</span>(i, <span class="string">"update l1 height"</span>);
-<a href=#2839 id=2839 data-nosnippet>2839</a>            storage.store_events(i, <span class="macro">vec!</span>[]).<span class="kw">await</span>.unwrap();
-<a href=#2840 id=2840 data-nosnippet>2840</a>            <span class="macro">assert_eq!</span>(
-<a href=#2841 id=2841 data-nosnippet>2841</a>                storage.load_events(<span class="number">0</span>, <span class="number">100</span>).<span class="kw">await</span>.unwrap(),
-<a href=#2842 id=2842 data-nosnippet>2842</a>                (<span class="prelude-val">Some</span>(EventsPersistenceRead::UntilL1Block(i)), <span class="macro">vec!</span>[])
-<a href=#2843 id=2843 data-nosnippet>2843</a>            );
-<a href=#2844 id=2844 data-nosnippet>2844</a>        }
-<a href=#2845 id=2845 data-nosnippet>2845</a>    }
-<a href=#2846 id=2846 data-nosnippet>2846</a>
-<a href=#2847 id=2847 data-nosnippet>2847</a>    <span class="attr">#[allow(deprecated)]
-<a href=#2848 id=2848 data-nosnippet>2848</a>    #[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
-<a href=#2849 id=2849 data-nosnippet>2849</a>    </span><span class="kw">async fn </span>test_migrate_validator_authenticated() {
-<a href=#2850 id=2850 data-nosnippet>2850</a>        <span class="kw">use </span>std::collections::HashMap;
-<a href=#2851 id=2851 data-nosnippet>2851</a>
-<a href=#2852 id=2852 data-nosnippet>2852</a>        <span class="kw">use </span>alloy::primitives::{Address, U256};
-<a href=#2853 id=2853 data-nosnippet>2853</a>        <span class="kw">use </span>espresso_types::v0_3::Validator;
-<a href=#2854 id=2854 data-nosnippet>2854</a>        <span class="kw">use </span>indexmap::IndexMap;
-<a href=#2855 id=2855 data-nosnippet>2855</a>
-<a href=#2856 id=2856 data-nosnippet>2856</a>        <span class="kw">type </span>LegacyValidatorMap = IndexMap&lt;Address, Validator&lt;BLSPubKey&gt;&gt;;
+<a href=#2836 id=2836 data-nosnippet>2836</a>        <span class="macro">assert_eq!</span>(storage.load_events(<span class="number">0</span>, <span class="number">100</span>).<span class="kw">await</span>.unwrap(), (<span class="prelude-val">None</span>, <span class="macro">vec!</span>[]));
+<a href=#2837 id=2837 data-nosnippet>2837</a>
+<a href=#2838 id=2838 data-nosnippet>2838</a>        <span class="comment">// Storing an empty events list still updates the latest L1 block.
+<a href=#2839 id=2839 data-nosnippet>2839</a>        </span><span class="kw">for </span>i <span class="kw">in </span><span class="number">1</span>..=<span class="number">2 </span>{
+<a href=#2840 id=2840 data-nosnippet>2840</a>            <span class="macro">tracing::info!</span>(i, <span class="string">"update l1 height"</span>);
+<a href=#2841 id=2841 data-nosnippet>2841</a>            storage.store_events(i, <span class="macro">vec!</span>[]).<span class="kw">await</span>.unwrap();
+<a href=#2842 id=2842 data-nosnippet>2842</a>            <span class="macro">assert_eq!</span>(
+<a href=#2843 id=2843 data-nosnippet>2843</a>                storage.load_events(<span class="number">0</span>, <span class="number">100</span>).<span class="kw">await</span>.unwrap(),
+<a href=#2844 id=2844 data-nosnippet>2844</a>                (<span class="prelude-val">Some</span>(EventsPersistenceRead::UntilL1Block(i)), <span class="macro">vec!</span>[])
+<a href=#2845 id=2845 data-nosnippet>2845</a>            );
+<a href=#2846 id=2846 data-nosnippet>2846</a>        }
+<a href=#2847 id=2847 data-nosnippet>2847</a>    }
+<a href=#2848 id=2848 data-nosnippet>2848</a>
+<a href=#2849 id=2849 data-nosnippet>2849</a>    <span class="attr">#[allow(deprecated)]
+<a href=#2850 id=2850 data-nosnippet>2850</a>    #[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
+<a href=#2851 id=2851 data-nosnippet>2851</a>    </span><span class="kw">async fn </span>test_migrate_validator_authenticated() {
+<a href=#2852 id=2852 data-nosnippet>2852</a>        <span class="kw">use </span>std::collections::HashMap;
+<a href=#2853 id=2853 data-nosnippet>2853</a>
+<a href=#2854 id=2854 data-nosnippet>2854</a>        <span class="kw">use </span>alloy::primitives::{Address, U256};
+<a href=#2855 id=2855 data-nosnippet>2855</a>        <span class="kw">use </span>espresso_types::v0_3::Validator;
+<a href=#2856 id=2856 data-nosnippet>2856</a>        <span class="kw">use </span>indexmap::IndexMap;
 <a href=#2857 id=2857 data-nosnippet>2857</a>
-<a href=#2858 id=2858 data-nosnippet>2858</a>        <span class="kw">let </span>tmp = Persistence::tmp_storage().<span class="kw">await</span>;
-<a href=#2859 id=2859 data-nosnippet>2859</a>        <span class="kw">let </span><span class="kw-2">mut </span>opt = Persistence::options(<span class="kw-2">&amp;</span>tmp);
-<a href=#2860 id=2860 data-nosnippet>2860</a>        <span class="kw">let </span>storage = opt.create().<span class="kw">await</span>.unwrap();
-<a href=#2861 id=2861 data-nosnippet>2861</a>
-<a href=#2862 id=2862 data-nosnippet>2862</a>        <span class="comment">// Create legacy validator data (without `authenticated` field)
-<a href=#2863 id=2863 data-nosnippet>2863</a>        </span><span class="kw">let </span>legacy_validator = Validator {
-<a href=#2864 id=2864 data-nosnippet>2864</a>            account: Address::random(),
-<a href=#2865 id=2865 data-nosnippet>2865</a>            stake_table_key: BLSPubKey::generated_from_seed_indexed([<span class="number">0u8</span>; <span class="number">32</span>], <span class="number">0</span>).<span class="number">0</span>,
-<a href=#2866 id=2866 data-nosnippet>2866</a>            state_ver_key: hotshot_types::light_client::StateVerKey::default(),
-<a href=#2867 id=2867 data-nosnippet>2867</a>            stake: U256::from(<span class="number">1000</span>),
-<a href=#2868 id=2868 data-nosnippet>2868</a>            commission: <span class="number">100</span>,
-<a href=#2869 id=2869 data-nosnippet>2869</a>            delegators: HashMap::new(),
-<a href=#2870 id=2870 data-nosnippet>2870</a>        };
-<a href=#2871 id=2871 data-nosnippet>2871</a>
-<a href=#2872 id=2872 data-nosnippet>2872</a>        <span class="kw">let </span><span class="kw-2">mut </span>legacy_map: LegacyValidatorMap = IndexMap::new();
-<a href=#2873 id=2873 data-nosnippet>2873</a>        legacy_map.insert(legacy_validator.account, legacy_validator.clone());
-<a href=#2874 id=2874 data-nosnippet>2874</a>
-<a href=#2875 id=2875 data-nosnippet>2875</a>        <span class="comment">// Serialize in the legacy format: (ValidatorMap, Option&lt;RewardAmount&gt;, Option&lt;StakeTableHash&gt;)
-<a href=#2876 id=2876 data-nosnippet>2876</a>        </span><span class="kw">type </span>LegacyStakeTuple = (
-<a href=#2877 id=2877 data-nosnippet>2877</a>            LegacyValidatorMap,
-<a href=#2878 id=2878 data-nosnippet>2878</a>            <span class="prelude-ty">Option</span>&lt;RewardAmount&gt;,
-<a href=#2879 id=2879 data-nosnippet>2879</a>            <span class="prelude-ty">Option</span>&lt;StakeTableHash&gt;,
-<a href=#2880 id=2880 data-nosnippet>2880</a>        );
-<a href=#2881 id=2881 data-nosnippet>2881</a>        <span class="kw">let </span>legacy_data: LegacyStakeTuple = (legacy_map, <span class="prelude-val">None</span>, <span class="prelude-val">None</span>);
-<a href=#2882 id=2882 data-nosnippet>2882</a>        <span class="kw">let </span>bytes = bincode::serialize(<span class="kw-2">&amp;</span>legacy_data).unwrap();
-<a href=#2883 id=2883 data-nosnippet>2883</a>
-<a href=#2884 id=2884 data-nosnippet>2884</a>        <span class="comment">// Write directly to the stake table file
-<a href=#2885 id=2885 data-nosnippet>2885</a>        </span><span class="kw">let </span>inner = storage.inner.read().<span class="kw">await</span>;
-<a href=#2886 id=2886 data-nosnippet>2886</a>        <span class="kw">let </span>path = inner.stake_table_dir_path();
-<a href=#2887 id=2887 data-nosnippet>2887</a>        drop(inner);
-<a href=#2888 id=2888 data-nosnippet>2888</a>        fs::create_dir_all(<span class="kw-2">&amp;</span>path).unwrap();
-<a href=#2889 id=2889 data-nosnippet>2889</a>        <span class="kw">let </span>file_path = path.join(<span class="string">"1.txt"</span>);
-<a href=#2890 id=2890 data-nosnippet>2890</a>        fs::write(<span class="kw-2">&amp;</span>file_path, <span class="kw-2">&amp;</span>bytes).unwrap();
-<a href=#2891 id=2891 data-nosnippet>2891</a>
-<a href=#2892 id=2892 data-nosnippet>2892</a>        <span class="comment">// Run migration
-<a href=#2893 id=2893 data-nosnippet>2893</a>        </span>storage.migrate_validator_authenticated().<span class="kw">await</span>.unwrap();
-<a href=#2894 id=2894 data-nosnippet>2894</a>
-<a href=#2895 id=2895 data-nosnippet>2895</a>        <span class="comment">// Loading should succeed after migration
-<a href=#2896 id=2896 data-nosnippet>2896</a>        </span><span class="kw">let </span>result = storage.load_stake(EpochNumber::new(<span class="number">1</span>)).<span class="kw">await</span>;
-<a href=#2897 id=2897 data-nosnippet>2897</a>        <span class="macro">assert!</span>(result.is_ok(), <span class="string">"load_stake should succeed after migration"</span>);
-<a href=#2898 id=2898 data-nosnippet>2898</a>        <span class="kw">let </span>stake = result.unwrap();
-<a href=#2899 id=2899 data-nosnippet>2899</a>        <span class="macro">assert!</span>(stake.is_some(), <span class="string">"stake should be present"</span>);
-<a href=#2900 id=2900 data-nosnippet>2900</a>        <span class="kw">let </span>(validators, reward, hash) = stake.unwrap();
-<a href=#2901 id=2901 data-nosnippet>2901</a>        <span class="macro">assert_eq!</span>(validators.len(), <span class="number">1</span>);
-<a href=#2902 id=2902 data-nosnippet>2902</a>        <span class="macro">assert!</span>(reward.is_none());
-<a href=#2903 id=2903 data-nosnippet>2903</a>        <span class="macro">assert!</span>(hash.is_none());
-<a href=#2904 id=2904 data-nosnippet>2904</a>
-<a href=#2905 id=2905 data-nosnippet>2905</a>        <span class="comment">// Verify the migrated validator has correct data
-<a href=#2906 id=2906 data-nosnippet>2906</a>        </span><span class="kw">let </span>migrated = validators.get(<span class="kw-2">&amp;</span>legacy_validator.account).unwrap();
-<a href=#2907 id=2907 data-nosnippet>2907</a>        <span class="macro">assert_eq!</span>(migrated.stake_table_key, legacy_validator.stake_table_key);
-<a href=#2908 id=2908 data-nosnippet>2908</a>        <span class="macro">assert_eq!</span>(migrated.stake, legacy_validator.stake);
-<a href=#2909 id=2909 data-nosnippet>2909</a>
-<a href=#2910 id=2910 data-nosnippet>2910</a>        <span class="comment">// Running migration again should be a no-op (idempotent)
-<a href=#2911 id=2911 data-nosnippet>2911</a>        </span>storage.migrate_validator_authenticated().<span class="kw">await</span>.unwrap();
-<a href=#2912 id=2912 data-nosnippet>2912</a>
-<a href=#2913 id=2913 data-nosnippet>2913</a>        <span class="comment">// Still loadable
-<a href=#2914 id=2914 data-nosnippet>2914</a>        </span><span class="kw">let </span>result2 = storage.load_stake(EpochNumber::new(<span class="number">1</span>)).<span class="kw">await</span>;
-<a href=#2915 id=2915 data-nosnippet>2915</a>        <span class="macro">assert!</span>(result2.is_ok());
-<a href=#2916 id=2916 data-nosnippet>2916</a>    }
-<a href=#2917 id=2917 data-nosnippet>2917</a>
-<a href=#2918 id=2918 data-nosnippet>2918</a>    <span class="attr">#[allow(deprecated)]
-<a href=#2919 id=2919 data-nosnippet>2919</a>    #[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
-<a href=#2920 id=2920 data-nosnippet>2920</a>    </span><span class="kw">async fn </span>test_migrate_validator_authenticated_json_files() {
-<a href=#2921 id=2921 data-nosnippet>2921</a>        <span class="kw">use </span>std::collections::HashMap;
-<a href=#2922 id=2922 data-nosnippet>2922</a>
-<a href=#2923 id=2923 data-nosnippet>2923</a>        <span class="kw">use </span>alloy::primitives::{Address, U256};
-<a href=#2924 id=2924 data-nosnippet>2924</a>        <span class="kw">use </span>espresso_types::v0_3::Validator;
-<a href=#2925 id=2925 data-nosnippet>2925</a>        <span class="kw">use </span>indexmap::IndexMap;
-<a href=#2926 id=2926 data-nosnippet>2926</a>
-<a href=#2927 id=2927 data-nosnippet>2927</a>        <span class="kw">type </span>LegacyValidatorMap = IndexMap&lt;Address, Validator&lt;BLSPubKey&gt;&gt;;
+<a href=#2858 id=2858 data-nosnippet>2858</a>        <span class="kw">type </span>LegacyValidatorMap = IndexMap&lt;Address, Validator&lt;BLSPubKey&gt;&gt;;
+<a href=#2859 id=2859 data-nosnippet>2859</a>
+<a href=#2860 id=2860 data-nosnippet>2860</a>        <span class="kw">let </span>tmp = Persistence::tmp_storage().<span class="kw">await</span>;
+<a href=#2861 id=2861 data-nosnippet>2861</a>        <span class="kw">let </span><span class="kw-2">mut </span>opt = Persistence::options(<span class="kw-2">&amp;</span>tmp);
+<a href=#2862 id=2862 data-nosnippet>2862</a>        <span class="kw">let </span>storage = opt.create().<span class="kw">await</span>.unwrap();
+<a href=#2863 id=2863 data-nosnippet>2863</a>
+<a href=#2864 id=2864 data-nosnippet>2864</a>        <span class="comment">// Create legacy validator data (without `authenticated` field)
+<a href=#2865 id=2865 data-nosnippet>2865</a>        </span><span class="kw">let </span>legacy_validator = Validator {
+<a href=#2866 id=2866 data-nosnippet>2866</a>            account: Address::random(),
+<a href=#2867 id=2867 data-nosnippet>2867</a>            stake_table_key: BLSPubKey::generated_from_seed_indexed([<span class="number">0u8</span>; <span class="number">32</span>], <span class="number">0</span>).<span class="number">0</span>,
+<a href=#2868 id=2868 data-nosnippet>2868</a>            state_ver_key: hotshot_types::light_client::StateVerKey::default(),
+<a href=#2869 id=2869 data-nosnippet>2869</a>            stake: U256::from(<span class="number">1000</span>),
+<a href=#2870 id=2870 data-nosnippet>2870</a>            commission: <span class="number">100</span>,
+<a href=#2871 id=2871 data-nosnippet>2871</a>            delegators: HashMap::new(),
+<a href=#2872 id=2872 data-nosnippet>2872</a>        };
+<a href=#2873 id=2873 data-nosnippet>2873</a>
+<a href=#2874 id=2874 data-nosnippet>2874</a>        <span class="kw">let </span><span class="kw-2">mut </span>legacy_map: LegacyValidatorMap = IndexMap::new();
+<a href=#2875 id=2875 data-nosnippet>2875</a>        legacy_map.insert(legacy_validator.account, legacy_validator.clone());
+<a href=#2876 id=2876 data-nosnippet>2876</a>
+<a href=#2877 id=2877 data-nosnippet>2877</a>        <span class="comment">// Serialize in the legacy format: (ValidatorMap, Option&lt;RewardAmount&gt;, Option&lt;StakeTableHash&gt;)
+<a href=#2878 id=2878 data-nosnippet>2878</a>        </span><span class="kw">type </span>LegacyStakeTuple = (
+<a href=#2879 id=2879 data-nosnippet>2879</a>            LegacyValidatorMap,
+<a href=#2880 id=2880 data-nosnippet>2880</a>            <span class="prelude-ty">Option</span>&lt;RewardAmount&gt;,
+<a href=#2881 id=2881 data-nosnippet>2881</a>            <span class="prelude-ty">Option</span>&lt;StakeTableHash&gt;,
+<a href=#2882 id=2882 data-nosnippet>2882</a>        );
+<a href=#2883 id=2883 data-nosnippet>2883</a>        <span class="kw">let </span>legacy_data: LegacyStakeTuple = (legacy_map, <span class="prelude-val">None</span>, <span class="prelude-val">None</span>);
+<a href=#2884 id=2884 data-nosnippet>2884</a>        <span class="kw">let </span>bytes = bincode::serialize(<span class="kw-2">&amp;</span>legacy_data).unwrap();
+<a href=#2885 id=2885 data-nosnippet>2885</a>
+<a href=#2886 id=2886 data-nosnippet>2886</a>        <span class="comment">// Write directly to the stake table file
+<a href=#2887 id=2887 data-nosnippet>2887</a>        </span><span class="kw">let </span>inner = storage.inner.read().<span class="kw">await</span>;
+<a href=#2888 id=2888 data-nosnippet>2888</a>        <span class="kw">let </span>path = inner.stake_table_dir_path();
+<a href=#2889 id=2889 data-nosnippet>2889</a>        drop(inner);
+<a href=#2890 id=2890 data-nosnippet>2890</a>        fs::create_dir_all(<span class="kw-2">&amp;</span>path).unwrap();
+<a href=#2891 id=2891 data-nosnippet>2891</a>        <span class="kw">let </span>file_path = path.join(<span class="string">"1.txt"</span>);
+<a href=#2892 id=2892 data-nosnippet>2892</a>        fs::write(<span class="kw-2">&amp;</span>file_path, <span class="kw-2">&amp;</span>bytes).unwrap();
+<a href=#2893 id=2893 data-nosnippet>2893</a>
+<a href=#2894 id=2894 data-nosnippet>2894</a>        <span class="comment">// Run migration
+<a href=#2895 id=2895 data-nosnippet>2895</a>        </span>storage.migrate_validator_authenticated().<span class="kw">await</span>.unwrap();
+<a href=#2896 id=2896 data-nosnippet>2896</a>
+<a href=#2897 id=2897 data-nosnippet>2897</a>        <span class="comment">// Loading should succeed after migration
+<a href=#2898 id=2898 data-nosnippet>2898</a>        </span><span class="kw">let </span>result = storage.load_stake(EpochNumber::new(<span class="number">1</span>)).<span class="kw">await</span>;
+<a href=#2899 id=2899 data-nosnippet>2899</a>        <span class="macro">assert!</span>(result.is_ok(), <span class="string">"load_stake should succeed after migration"</span>);
+<a href=#2900 id=2900 data-nosnippet>2900</a>        <span class="kw">let </span>stake = result.unwrap();
+<a href=#2901 id=2901 data-nosnippet>2901</a>        <span class="macro">assert!</span>(stake.is_some(), <span class="string">"stake should be present"</span>);
+<a href=#2902 id=2902 data-nosnippet>2902</a>        <span class="kw">let </span>(validators, reward, hash) = stake.unwrap();
+<a href=#2903 id=2903 data-nosnippet>2903</a>        <span class="macro">assert_eq!</span>(validators.len(), <span class="number">1</span>);
+<a href=#2904 id=2904 data-nosnippet>2904</a>        <span class="macro">assert!</span>(reward.is_none());
+<a href=#2905 id=2905 data-nosnippet>2905</a>        <span class="macro">assert!</span>(hash.is_none());
+<a href=#2906 id=2906 data-nosnippet>2906</a>
+<a href=#2907 id=2907 data-nosnippet>2907</a>        <span class="comment">// Verify the migrated validator has correct data
+<a href=#2908 id=2908 data-nosnippet>2908</a>        </span><span class="kw">let </span>migrated = validators.get(<span class="kw-2">&amp;</span>legacy_validator.account).unwrap();
+<a href=#2909 id=2909 data-nosnippet>2909</a>        <span class="macro">assert_eq!</span>(migrated.stake_table_key, legacy_validator.stake_table_key);
+<a href=#2910 id=2910 data-nosnippet>2910</a>        <span class="macro">assert_eq!</span>(migrated.stake, legacy_validator.stake);
+<a href=#2911 id=2911 data-nosnippet>2911</a>
+<a href=#2912 id=2912 data-nosnippet>2912</a>        <span class="comment">// Running migration again should be a no-op (idempotent)
+<a href=#2913 id=2913 data-nosnippet>2913</a>        </span>storage.migrate_validator_authenticated().<span class="kw">await</span>.unwrap();
+<a href=#2914 id=2914 data-nosnippet>2914</a>
+<a href=#2915 id=2915 data-nosnippet>2915</a>        <span class="comment">// Still loadable
+<a href=#2916 id=2916 data-nosnippet>2916</a>        </span><span class="kw">let </span>result2 = storage.load_stake(EpochNumber::new(<span class="number">1</span>)).<span class="kw">await</span>;
+<a href=#2917 id=2917 data-nosnippet>2917</a>        <span class="macro">assert!</span>(result2.is_ok());
+<a href=#2918 id=2918 data-nosnippet>2918</a>    }
+<a href=#2919 id=2919 data-nosnippet>2919</a>
+<a href=#2920 id=2920 data-nosnippet>2920</a>    <span class="attr">#[allow(deprecated)]
+<a href=#2921 id=2921 data-nosnippet>2921</a>    #[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
+<a href=#2922 id=2922 data-nosnippet>2922</a>    </span><span class="kw">async fn </span>test_migrate_validator_authenticated_json_files() {
+<a href=#2923 id=2923 data-nosnippet>2923</a>        <span class="kw">use </span>std::collections::HashMap;
+<a href=#2924 id=2924 data-nosnippet>2924</a>
+<a href=#2925 id=2925 data-nosnippet>2925</a>        <span class="kw">use </span>alloy::primitives::{Address, U256};
+<a href=#2926 id=2926 data-nosnippet>2926</a>        <span class="kw">use </span>espresso_types::v0_3::Validator;
+<a href=#2927 id=2927 data-nosnippet>2927</a>        <span class="kw">use </span>indexmap::IndexMap;
 <a href=#2928 id=2928 data-nosnippet>2928</a>
-<a href=#2929 id=2929 data-nosnippet>2929</a>        <span class="kw">let </span>tmp = Persistence::tmp_storage().<span class="kw">await</span>;
-<a href=#2930 id=2930 data-nosnippet>2930</a>        <span class="kw">let </span><span class="kw-2">mut </span>opt = Persistence::options(<span class="kw-2">&amp;</span>tmp);
-<a href=#2931 id=2931 data-nosnippet>2931</a>        <span class="kw">let </span>storage = opt.create().<span class="kw">await</span>.unwrap();
-<a href=#2932 id=2932 data-nosnippet>2932</a>
-<a href=#2933 id=2933 data-nosnippet>2933</a>        <span class="comment">// Create legacy validator data (without `authenticated` field)
-<a href=#2934 id=2934 data-nosnippet>2934</a>        </span><span class="kw">let </span>legacy_validator = Validator {
-<a href=#2935 id=2935 data-nosnippet>2935</a>            account: Address::random(),
-<a href=#2936 id=2936 data-nosnippet>2936</a>            stake_table_key: BLSPubKey::generated_from_seed_indexed([<span class="number">0u8</span>; <span class="number">32</span>], <span class="number">0</span>).<span class="number">0</span>,
-<a href=#2937 id=2937 data-nosnippet>2937</a>            state_ver_key: hotshot_types::light_client::StateVerKey::default(),
-<a href=#2938 id=2938 data-nosnippet>2938</a>            stake: U256::from(<span class="number">2000</span>),
-<a href=#2939 id=2939 data-nosnippet>2939</a>            commission: <span class="number">200</span>,
-<a href=#2940 id=2940 data-nosnippet>2940</a>            delegators: HashMap::new(),
-<a href=#2941 id=2941 data-nosnippet>2941</a>        };
-<a href=#2942 id=2942 data-nosnippet>2942</a>
-<a href=#2943 id=2943 data-nosnippet>2943</a>        <span class="kw">let </span><span class="kw-2">mut </span>legacy_map: LegacyValidatorMap = IndexMap::new();
-<a href=#2944 id=2944 data-nosnippet>2944</a>        legacy_map.insert(legacy_validator.account, legacy_validator.clone());
-<a href=#2945 id=2945 data-nosnippet>2945</a>
-<a href=#2946 id=2946 data-nosnippet>2946</a>        <span class="comment">// Write legacy format to validators JSON file
-<a href=#2947 id=2947 data-nosnippet>2947</a>        </span><span class="kw">let </span>inner = storage.inner.read().<span class="kw">await</span>;
-<a href=#2948 id=2948 data-nosnippet>2948</a>        <span class="kw">let </span>path = inner.stake_table_dir_path();
-<a href=#2949 id=2949 data-nosnippet>2949</a>        drop(inner);
-<a href=#2950 id=2950 data-nosnippet>2950</a>        <span class="kw">let </span>validators_dir = path.join(<span class="string">"validators"</span>);
-<a href=#2951 id=2951 data-nosnippet>2951</a>        fs::create_dir_all(<span class="kw-2">&amp;</span>validators_dir).unwrap();
-<a href=#2952 id=2952 data-nosnippet>2952</a>        <span class="kw">let </span>file_path = validators_dir.join(<span class="string">"epoch_1.json"</span>);
-<a href=#2953 id=2953 data-nosnippet>2953</a>        <span class="kw">let </span>legacy_json = serde_json::to_string_pretty(<span class="kw-2">&amp;</span>legacy_map).unwrap();
-<a href=#2954 id=2954 data-nosnippet>2954</a>        fs::write(<span class="kw-2">&amp;</span>file_path, <span class="kw-2">&amp;</span>legacy_json).unwrap();
-<a href=#2955 id=2955 data-nosnippet>2955</a>
-<a href=#2956 id=2956 data-nosnippet>2956</a>        <span class="comment">// Run migration
-<a href=#2957 id=2957 data-nosnippet>2957</a>        </span>storage.migrate_validator_authenticated().<span class="kw">await</span>.unwrap();
-<a href=#2958 id=2958 data-nosnippet>2958</a>
-<a href=#2959 id=2959 data-nosnippet>2959</a>        <span class="comment">// Loading should succeed after migration
-<a href=#2960 id=2960 data-nosnippet>2960</a>        </span><span class="kw">let </span>result = storage
-<a href=#2961 id=2961 data-nosnippet>2961</a>            .load_all_validators(EpochNumber::new(<span class="number">1</span>), <span class="number">0</span>, <span class="number">100</span>)
-<a href=#2962 id=2962 data-nosnippet>2962</a>            .<span class="kw">await</span>;
-<a href=#2963 id=2963 data-nosnippet>2963</a>        <span class="macro">assert!</span>(
-<a href=#2964 id=2964 data-nosnippet>2964</a>            result.is_ok(),
-<a href=#2965 id=2965 data-nosnippet>2965</a>            <span class="string">"load_all_validators should succeed after migration"
-<a href=#2966 id=2966 data-nosnippet>2966</a>        </span>);
-<a href=#2967 id=2967 data-nosnippet>2967</a>        <span class="kw">let </span>validators = result.unwrap();
-<a href=#2968 id=2968 data-nosnippet>2968</a>        <span class="macro">assert_eq!</span>(validators.len(), <span class="number">1</span>);
-<a href=#2969 id=2969 data-nosnippet>2969</a>
-<a href=#2970 id=2970 data-nosnippet>2970</a>        <span class="comment">// Verify the migrated validator has correct data and authenticated=true
-<a href=#2971 id=2971 data-nosnippet>2971</a>        </span><span class="kw">let </span>migrated = <span class="kw-2">&amp;</span>validators[<span class="number">0</span>];
-<a href=#2972 id=2972 data-nosnippet>2972</a>        <span class="macro">assert_eq!</span>(migrated.account, legacy_validator.account);
-<a href=#2973 id=2973 data-nosnippet>2973</a>        <span class="macro">assert_eq!</span>(migrated.stake_table_key, legacy_validator.stake_table_key);
-<a href=#2974 id=2974 data-nosnippet>2974</a>        <span class="macro">assert_eq!</span>(migrated.stake, legacy_validator.stake);
-<a href=#2975 id=2975 data-nosnippet>2975</a>        <span class="macro">assert!</span>(
-<a href=#2976 id=2976 data-nosnippet>2976</a>            migrated.authenticated,
-<a href=#2977 id=2977 data-nosnippet>2977</a>            <span class="string">"migrated validator should be authenticated"
-<a href=#2978 id=2978 data-nosnippet>2978</a>        </span>);
-<a href=#2979 id=2979 data-nosnippet>2979</a>
-<a href=#2980 id=2980 data-nosnippet>2980</a>        <span class="comment">// Running migration again should be a no-op (idempotent)
-<a href=#2981 id=2981 data-nosnippet>2981</a>        </span>storage.migrate_validator_authenticated().<span class="kw">await</span>.unwrap();
-<a href=#2982 id=2982 data-nosnippet>2982</a>
-<a href=#2983 id=2983 data-nosnippet>2983</a>        <span class="comment">// Still loadable
-<a href=#2984 id=2984 data-nosnippet>2984</a>        </span><span class="kw">let </span>result2 = storage
-<a href=#2985 id=2985 data-nosnippet>2985</a>            .load_all_validators(EpochNumber::new(<span class="number">1</span>), <span class="number">0</span>, <span class="number">100</span>)
-<a href=#2986 id=2986 data-nosnippet>2986</a>            .<span class="kw">await</span>;
-<a href=#2987 id=2987 data-nosnippet>2987</a>        <span class="macro">assert!</span>(result2.is_ok());
-<a href=#2988 id=2988 data-nosnippet>2988</a>    }
-<a href=#2989 id=2989 data-nosnippet>2989</a>
-<a href=#2990 id=2990 data-nosnippet>2990</a>    <span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
-<a href=#2991 id=2991 data-nosnippet>2991</a>    </span><span class="kw">async fn </span>test_store_all_validators_authenticated_and_unauthenticated() {
-<a href=#2992 id=2992 data-nosnippet>2992</a>        <span class="kw">use </span>std::collections::HashMap;
-<a href=#2993 id=2993 data-nosnippet>2993</a>
-<a href=#2994 id=2994 data-nosnippet>2994</a>        <span class="kw">use </span>alloy::primitives::{Address, U256};
-<a href=#2995 id=2995 data-nosnippet>2995</a>        <span class="kw">use </span>espresso_types::v0_3::RegisteredValidator;
-<a href=#2996 id=2996 data-nosnippet>2996</a>        <span class="kw">use </span>indexmap::IndexMap;
-<a href=#2997 id=2997 data-nosnippet>2997</a>
-<a href=#2998 id=2998 data-nosnippet>2998</a>        <span class="kw">let </span>tmp = Persistence::tmp_storage().<span class="kw">await</span>;
-<a href=#2999 id=2999 data-nosnippet>2999</a>        <span class="kw">let </span><span class="kw-2">mut </span>opt = Persistence::options(<span class="kw-2">&amp;</span>tmp);
-<a href=#3000 id=3000 data-nosnippet>3000</a>        <span class="kw">let </span>storage = opt.create().<span class="kw">await</span>.unwrap();
-<a href=#3001 id=3001 data-nosnippet>3001</a>
-<a href=#3002 id=3002 data-nosnippet>3002</a>        <span class="comment">// Create an authenticated validator
-<a href=#3003 id=3003 data-nosnippet>3003</a>        </span><span class="kw">let </span>authenticated_validator = RegisteredValidator {
-<a href=#3004 id=3004 data-nosnippet>3004</a>            account: Address::random(),
-<a href=#3005 id=3005 data-nosnippet>3005</a>            stake_table_key: BLSPubKey::generated_from_seed_indexed([<span class="number">0u8</span>; <span class="number">32</span>], <span class="number">0</span>).<span class="number">0</span>,
-<a href=#3006 id=3006 data-nosnippet>3006</a>            state_ver_key: hotshot_types::light_client::StateVerKey::default(),
-<a href=#3007 id=3007 data-nosnippet>3007</a>            stake: U256::from(<span class="number">1000</span>),
-<a href=#3008 id=3008 data-nosnippet>3008</a>            commission: <span class="number">100</span>,
-<a href=#3009 id=3009 data-nosnippet>3009</a>            delegators: HashMap::new(),
-<a href=#3010 id=3010 data-nosnippet>3010</a>            authenticated: <span class="bool-val">true</span>,
-<a href=#3011 id=3011 data-nosnippet>3011</a>        };
-<a href=#3012 id=3012 data-nosnippet>3012</a>
-<a href=#3013 id=3013 data-nosnippet>3013</a>        <span class="comment">// Create an unauthenticated validator
-<a href=#3014 id=3014 data-nosnippet>3014</a>        </span><span class="kw">let </span>unauthenticated_validator = RegisteredValidator {
-<a href=#3015 id=3015 data-nosnippet>3015</a>            account: Address::random(),
-<a href=#3016 id=3016 data-nosnippet>3016</a>            stake_table_key: BLSPubKey::generated_from_seed_indexed([<span class="number">0u8</span>; <span class="number">32</span>], <span class="number">1</span>).<span class="number">0</span>,
-<a href=#3017 id=3017 data-nosnippet>3017</a>            state_ver_key: hotshot_types::light_client::StateVerKey::default(),
-<a href=#3018 id=3018 data-nosnippet>3018</a>            stake: U256::from(<span class="number">2000</span>),
-<a href=#3019 id=3019 data-nosnippet>3019</a>            commission: <span class="number">200</span>,
-<a href=#3020 id=3020 data-nosnippet>3020</a>            delegators: HashMap::new(),
-<a href=#3021 id=3021 data-nosnippet>3021</a>            authenticated: <span class="bool-val">false</span>,
-<a href=#3022 id=3022 data-nosnippet>3022</a>        };
-<a href=#3023 id=3023 data-nosnippet>3023</a>
-<a href=#3024 id=3024 data-nosnippet>3024</a>        <span class="kw">let </span><span class="kw-2">mut </span>validators: IndexMap&lt;Address, RegisteredValidator&lt;BLSPubKey&gt;&gt; = IndexMap::new();
-<a href=#3025 id=3025 data-nosnippet>3025</a>        validators.insert(
-<a href=#3026 id=3026 data-nosnippet>3026</a>            authenticated_validator.account,
-<a href=#3027 id=3027 data-nosnippet>3027</a>            authenticated_validator.clone(),
-<a href=#3028 id=3028 data-nosnippet>3028</a>        );
-<a href=#3029 id=3029 data-nosnippet>3029</a>        validators.insert(
-<a href=#3030 id=3030 data-nosnippet>3030</a>            unauthenticated_validator.account,
-<a href=#3031 id=3031 data-nosnippet>3031</a>            unauthenticated_validator.clone(),
-<a href=#3032 id=3032 data-nosnippet>3032</a>        );
-<a href=#3033 id=3033 data-nosnippet>3033</a>
-<a href=#3034 id=3034 data-nosnippet>3034</a>        <span class="comment">// Store both validators
-<a href=#3035 id=3035 data-nosnippet>3035</a>        </span>storage
-<a href=#3036 id=3036 data-nosnippet>3036</a>            .store_all_validators(EpochNumber::new(<span class="number">1</span>), validators)
-<a href=#3037 id=3037 data-nosnippet>3037</a>            .<span class="kw">await
-<a href=#3038 id=3038 data-nosnippet>3038</a>            </span>.unwrap();
-<a href=#3039 id=3039 data-nosnippet>3039</a>
-<a href=#3040 id=3040 data-nosnippet>3040</a>        <span class="comment">// Load and verify
-<a href=#3041 id=3041 data-nosnippet>3041</a>        </span><span class="kw">let </span>loaded = storage
-<a href=#3042 id=3042 data-nosnippet>3042</a>            .load_all_validators(EpochNumber::new(<span class="number">1</span>), <span class="number">0</span>, <span class="number">100</span>)
-<a href=#3043 id=3043 data-nosnippet>3043</a>            .<span class="kw">await
-<a href=#3044 id=3044 data-nosnippet>3044</a>            </span>.unwrap();
-<a href=#3045 id=3045 data-nosnippet>3045</a>        <span class="macro">assert_eq!</span>(loaded.len(), <span class="number">2</span>);
-<a href=#3046 id=3046 data-nosnippet>3046</a>
-<a href=#3047 id=3047 data-nosnippet>3047</a>        <span class="comment">// Find each validator and verify authenticated state is preserved
-<a href=#3048 id=3048 data-nosnippet>3048</a>        </span><span class="kw">let </span>loaded_auth = loaded
-<a href=#3049 id=3049 data-nosnippet>3049</a>            .iter()
-<a href=#3050 id=3050 data-nosnippet>3050</a>            .find(|v| v.account == authenticated_validator.account)
-<a href=#3051 id=3051 data-nosnippet>3051</a>            .unwrap();
-<a href=#3052 id=3052 data-nosnippet>3052</a>        <span class="macro">assert!</span>(
-<a href=#3053 id=3053 data-nosnippet>3053</a>            loaded_auth.authenticated,
-<a href=#3054 id=3054 data-nosnippet>3054</a>            <span class="string">"authenticated validator should remain authenticated"
-<a href=#3055 id=3055 data-nosnippet>3055</a>        </span>);
-<a href=#3056 id=3056 data-nosnippet>3056</a>
-<a href=#3057 id=3057 data-nosnippet>3057</a>        <span class="kw">let </span>loaded_unauth = loaded
-<a href=#3058 id=3058 data-nosnippet>3058</a>            .iter()
-<a href=#3059 id=3059 data-nosnippet>3059</a>            .find(|v| v.account == unauthenticated_validator.account)
-<a href=#3060 id=3060 data-nosnippet>3060</a>            .unwrap();
-<a href=#3061 id=3061 data-nosnippet>3061</a>        <span class="macro">assert!</span>(
-<a href=#3062 id=3062 data-nosnippet>3062</a>            !loaded_unauth.authenticated,
-<a href=#3063 id=3063 data-nosnippet>3063</a>            <span class="string">"unauthenticated validator should remain unauthenticated"
-<a href=#3064 id=3064 data-nosnippet>3064</a>        </span>);
-<a href=#3065 id=3065 data-nosnippet>3065</a>    }
-<a href=#3066 id=3066 data-nosnippet>3066</a>}
+<a href=#2929 id=2929 data-nosnippet>2929</a>        <span class="kw">type </span>LegacyValidatorMap = IndexMap&lt;Address, Validator&lt;BLSPubKey&gt;&gt;;
+<a href=#2930 id=2930 data-nosnippet>2930</a>
+<a href=#2931 id=2931 data-nosnippet>2931</a>        <span class="kw">let </span>tmp = Persistence::tmp_storage().<span class="kw">await</span>;
+<a href=#2932 id=2932 data-nosnippet>2932</a>        <span class="kw">let </span><span class="kw-2">mut </span>opt = Persistence::options(<span class="kw-2">&amp;</span>tmp);
+<a href=#2933 id=2933 data-nosnippet>2933</a>        <span class="kw">let </span>storage = opt.create().<span class="kw">await</span>.unwrap();
+<a href=#2934 id=2934 data-nosnippet>2934</a>
+<a href=#2935 id=2935 data-nosnippet>2935</a>        <span class="comment">// Create legacy validator data (without `authenticated` field)
+<a href=#2936 id=2936 data-nosnippet>2936</a>        </span><span class="kw">let </span>legacy_validator = Validator {
+<a href=#2937 id=2937 data-nosnippet>2937</a>            account: Address::random(),
+<a href=#2938 id=2938 data-nosnippet>2938</a>            stake_table_key: BLSPubKey::generated_from_seed_indexed([<span class="number">0u8</span>; <span class="number">32</span>], <span class="number">0</span>).<span class="number">0</span>,
+<a href=#2939 id=2939 data-nosnippet>2939</a>            state_ver_key: hotshot_types::light_client::StateVerKey::default(),
+<a href=#2940 id=2940 data-nosnippet>2940</a>            stake: U256::from(<span class="number">2000</span>),
+<a href=#2941 id=2941 data-nosnippet>2941</a>            commission: <span class="number">200</span>,
+<a href=#2942 id=2942 data-nosnippet>2942</a>            delegators: HashMap::new(),
+<a href=#2943 id=2943 data-nosnippet>2943</a>        };
+<a href=#2944 id=2944 data-nosnippet>2944</a>
+<a href=#2945 id=2945 data-nosnippet>2945</a>        <span class="kw">let </span><span class="kw-2">mut </span>legacy_map: LegacyValidatorMap = IndexMap::new();
+<a href=#2946 id=2946 data-nosnippet>2946</a>        legacy_map.insert(legacy_validator.account, legacy_validator.clone());
+<a href=#2947 id=2947 data-nosnippet>2947</a>
+<a href=#2948 id=2948 data-nosnippet>2948</a>        <span class="comment">// Write legacy format to validators JSON file
+<a href=#2949 id=2949 data-nosnippet>2949</a>        </span><span class="kw">let </span>inner = storage.inner.read().<span class="kw">await</span>;
+<a href=#2950 id=2950 data-nosnippet>2950</a>        <span class="kw">let </span>path = inner.stake_table_dir_path();
+<a href=#2951 id=2951 data-nosnippet>2951</a>        drop(inner);
+<a href=#2952 id=2952 data-nosnippet>2952</a>        <span class="kw">let </span>validators_dir = path.join(<span class="string">"validators"</span>);
+<a href=#2953 id=2953 data-nosnippet>2953</a>        fs::create_dir_all(<span class="kw-2">&amp;</span>validators_dir).unwrap();
+<a href=#2954 id=2954 data-nosnippet>2954</a>        <span class="kw">let </span>file_path = validators_dir.join(<span class="string">"epoch_1.json"</span>);
+<a href=#2955 id=2955 data-nosnippet>2955</a>        <span class="kw">let </span>legacy_json = serde_json::to_string_pretty(<span class="kw-2">&amp;</span>legacy_map).unwrap();
+<a href=#2956 id=2956 data-nosnippet>2956</a>        fs::write(<span class="kw-2">&amp;</span>file_path, <span class="kw-2">&amp;</span>legacy_json).unwrap();
+<a href=#2957 id=2957 data-nosnippet>2957</a>
+<a href=#2958 id=2958 data-nosnippet>2958</a>        <span class="comment">// Run migration
+<a href=#2959 id=2959 data-nosnippet>2959</a>        </span>storage.migrate_validator_authenticated().<span class="kw">await</span>.unwrap();
+<a href=#2960 id=2960 data-nosnippet>2960</a>
+<a href=#2961 id=2961 data-nosnippet>2961</a>        <span class="comment">// Loading should succeed after migration
+<a href=#2962 id=2962 data-nosnippet>2962</a>        </span><span class="kw">let </span>result = storage
+<a href=#2963 id=2963 data-nosnippet>2963</a>            .load_all_validators(EpochNumber::new(<span class="number">1</span>), <span class="number">0</span>, <span class="number">100</span>)
+<a href=#2964 id=2964 data-nosnippet>2964</a>            .<span class="kw">await</span>;
+<a href=#2965 id=2965 data-nosnippet>2965</a>        <span class="macro">assert!</span>(
+<a href=#2966 id=2966 data-nosnippet>2966</a>            result.is_ok(),
+<a href=#2967 id=2967 data-nosnippet>2967</a>            <span class="string">"load_all_validators should succeed after migration"
+<a href=#2968 id=2968 data-nosnippet>2968</a>        </span>);
+<a href=#2969 id=2969 data-nosnippet>2969</a>        <span class="kw">let </span>validators = result.unwrap();
+<a href=#2970 id=2970 data-nosnippet>2970</a>        <span class="macro">assert_eq!</span>(validators.len(), <span class="number">1</span>);
+<a href=#2971 id=2971 data-nosnippet>2971</a>
+<a href=#2972 id=2972 data-nosnippet>2972</a>        <span class="comment">// Verify the migrated validator has correct data and authenticated=true
+<a href=#2973 id=2973 data-nosnippet>2973</a>        </span><span class="kw">let </span>migrated = <span class="kw-2">&amp;</span>validators[<span class="number">0</span>];
+<a href=#2974 id=2974 data-nosnippet>2974</a>        <span class="macro">assert_eq!</span>(migrated.account, legacy_validator.account);
+<a href=#2975 id=2975 data-nosnippet>2975</a>        <span class="macro">assert_eq!</span>(migrated.stake_table_key, legacy_validator.stake_table_key);
+<a href=#2976 id=2976 data-nosnippet>2976</a>        <span class="macro">assert_eq!</span>(migrated.stake, legacy_validator.stake);
+<a href=#2977 id=2977 data-nosnippet>2977</a>        <span class="macro">assert!</span>(
+<a href=#2978 id=2978 data-nosnippet>2978</a>            migrated.authenticated,
+<a href=#2979 id=2979 data-nosnippet>2979</a>            <span class="string">"migrated validator should be authenticated"
+<a href=#2980 id=2980 data-nosnippet>2980</a>        </span>);
+<a href=#2981 id=2981 data-nosnippet>2981</a>
+<a href=#2982 id=2982 data-nosnippet>2982</a>        <span class="comment">// Running migration again should be a no-op (idempotent)
+<a href=#2983 id=2983 data-nosnippet>2983</a>        </span>storage.migrate_validator_authenticated().<span class="kw">await</span>.unwrap();
+<a href=#2984 id=2984 data-nosnippet>2984</a>
+<a href=#2985 id=2985 data-nosnippet>2985</a>        <span class="comment">// Still loadable
+<a href=#2986 id=2986 data-nosnippet>2986</a>        </span><span class="kw">let </span>result2 = storage
+<a href=#2987 id=2987 data-nosnippet>2987</a>            .load_all_validators(EpochNumber::new(<span class="number">1</span>), <span class="number">0</span>, <span class="number">100</span>)
+<a href=#2988 id=2988 data-nosnippet>2988</a>            .<span class="kw">await</span>;
+<a href=#2989 id=2989 data-nosnippet>2989</a>        <span class="macro">assert!</span>(result2.is_ok());
+<a href=#2990 id=2990 data-nosnippet>2990</a>    }
+<a href=#2991 id=2991 data-nosnippet>2991</a>
+<a href=#2992 id=2992 data-nosnippet>2992</a>    <span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
+<a href=#2993 id=2993 data-nosnippet>2993</a>    </span><span class="kw">async fn </span>test_store_all_validators_authenticated_and_unauthenticated() {
+<a href=#2994 id=2994 data-nosnippet>2994</a>        <span class="kw">use </span>std::collections::HashMap;
+<a href=#2995 id=2995 data-nosnippet>2995</a>
+<a href=#2996 id=2996 data-nosnippet>2996</a>        <span class="kw">use </span>alloy::primitives::{Address, U256};
+<a href=#2997 id=2997 data-nosnippet>2997</a>        <span class="kw">use </span>espresso_types::v0_3::RegisteredValidator;
+<a href=#2998 id=2998 data-nosnippet>2998</a>        <span class="kw">use </span>indexmap::IndexMap;
+<a href=#2999 id=2999 data-nosnippet>2999</a>
+<a href=#3000 id=3000 data-nosnippet>3000</a>        <span class="kw">let </span>tmp = Persistence::tmp_storage().<span class="kw">await</span>;
+<a href=#3001 id=3001 data-nosnippet>3001</a>        <span class="kw">let </span><span class="kw-2">mut </span>opt = Persistence::options(<span class="kw-2">&amp;</span>tmp);
+<a href=#3002 id=3002 data-nosnippet>3002</a>        <span class="kw">let </span>storage = opt.create().<span class="kw">await</span>.unwrap();
+<a href=#3003 id=3003 data-nosnippet>3003</a>
+<a href=#3004 id=3004 data-nosnippet>3004</a>        <span class="comment">// Create an authenticated validator
+<a href=#3005 id=3005 data-nosnippet>3005</a>        </span><span class="kw">let </span>authenticated_validator = RegisteredValidator {
+<a href=#3006 id=3006 data-nosnippet>3006</a>            account: Address::random(),
+<a href=#3007 id=3007 data-nosnippet>3007</a>            stake_table_key: BLSPubKey::generated_from_seed_indexed([<span class="number">0u8</span>; <span class="number">32</span>], <span class="number">0</span>).<span class="number">0</span>,
+<a href=#3008 id=3008 data-nosnippet>3008</a>            state_ver_key: hotshot_types::light_client::StateVerKey::default(),
+<a href=#3009 id=3009 data-nosnippet>3009</a>            stake: U256::from(<span class="number">1000</span>),
+<a href=#3010 id=3010 data-nosnippet>3010</a>            commission: <span class="number">100</span>,
+<a href=#3011 id=3011 data-nosnippet>3011</a>            delegators: HashMap::new(),
+<a href=#3012 id=3012 data-nosnippet>3012</a>            authenticated: <span class="bool-val">true</span>,
+<a href=#3013 id=3013 data-nosnippet>3013</a>        };
+<a href=#3014 id=3014 data-nosnippet>3014</a>
+<a href=#3015 id=3015 data-nosnippet>3015</a>        <span class="comment">// Create an unauthenticated validator
+<a href=#3016 id=3016 data-nosnippet>3016</a>        </span><span class="kw">let </span>unauthenticated_validator = RegisteredValidator {
+<a href=#3017 id=3017 data-nosnippet>3017</a>            account: Address::random(),
+<a href=#3018 id=3018 data-nosnippet>3018</a>            stake_table_key: BLSPubKey::generated_from_seed_indexed([<span class="number">0u8</span>; <span class="number">32</span>], <span class="number">1</span>).<span class="number">0</span>,
+<a href=#3019 id=3019 data-nosnippet>3019</a>            state_ver_key: hotshot_types::light_client::StateVerKey::default(),
+<a href=#3020 id=3020 data-nosnippet>3020</a>            stake: U256::from(<span class="number">2000</span>),
+<a href=#3021 id=3021 data-nosnippet>3021</a>            commission: <span class="number">200</span>,
+<a href=#3022 id=3022 data-nosnippet>3022</a>            delegators: HashMap::new(),
+<a href=#3023 id=3023 data-nosnippet>3023</a>            authenticated: <span class="bool-val">false</span>,
+<a href=#3024 id=3024 data-nosnippet>3024</a>        };
+<a href=#3025 id=3025 data-nosnippet>3025</a>
+<a href=#3026 id=3026 data-nosnippet>3026</a>        <span class="kw">let </span><span class="kw-2">mut </span>validators: IndexMap&lt;Address, RegisteredValidator&lt;BLSPubKey&gt;&gt; = IndexMap::new();
+<a href=#3027 id=3027 data-nosnippet>3027</a>        validators.insert(
+<a href=#3028 id=3028 data-nosnippet>3028</a>            authenticated_validator.account,
+<a href=#3029 id=3029 data-nosnippet>3029</a>            authenticated_validator.clone(),
+<a href=#3030 id=3030 data-nosnippet>3030</a>        );
+<a href=#3031 id=3031 data-nosnippet>3031</a>        validators.insert(
+<a href=#3032 id=3032 data-nosnippet>3032</a>            unauthenticated_validator.account,
+<a href=#3033 id=3033 data-nosnippet>3033</a>            unauthenticated_validator.clone(),
+<a href=#3034 id=3034 data-nosnippet>3034</a>        );
+<a href=#3035 id=3035 data-nosnippet>3035</a>
+<a href=#3036 id=3036 data-nosnippet>3036</a>        <span class="comment">// Store both validators
+<a href=#3037 id=3037 data-nosnippet>3037</a>        </span>storage
+<a href=#3038 id=3038 data-nosnippet>3038</a>            .store_all_validators(EpochNumber::new(<span class="number">1</span>), validators)
+<a href=#3039 id=3039 data-nosnippet>3039</a>            .<span class="kw">await
+<a href=#3040 id=3040 data-nosnippet>3040</a>            </span>.unwrap();
+<a href=#3041 id=3041 data-nosnippet>3041</a>
+<a href=#3042 id=3042 data-nosnippet>3042</a>        <span class="comment">// Load and verify
+<a href=#3043 id=3043 data-nosnippet>3043</a>        </span><span class="kw">let </span>loaded = storage
+<a href=#3044 id=3044 data-nosnippet>3044</a>            .load_all_validators(EpochNumber::new(<span class="number">1</span>), <span class="number">0</span>, <span class="number">100</span>)
+<a href=#3045 id=3045 data-nosnippet>3045</a>            .<span class="kw">await
+<a href=#3046 id=3046 data-nosnippet>3046</a>            </span>.unwrap();
+<a href=#3047 id=3047 data-nosnippet>3047</a>        <span class="macro">assert_eq!</span>(loaded.len(), <span class="number">2</span>);
+<a href=#3048 id=3048 data-nosnippet>3048</a>
+<a href=#3049 id=3049 data-nosnippet>3049</a>        <span class="comment">// Find each validator and verify authenticated state is preserved
+<a href=#3050 id=3050 data-nosnippet>3050</a>        </span><span class="kw">let </span>loaded_auth = loaded
+<a href=#3051 id=3051 data-nosnippet>3051</a>            .iter()
+<a href=#3052 id=3052 data-nosnippet>3052</a>            .find(|v| v.account == authenticated_validator.account)
+<a href=#3053 id=3053 data-nosnippet>3053</a>            .unwrap();
+<a href=#3054 id=3054 data-nosnippet>3054</a>        <span class="macro">assert!</span>(
+<a href=#3055 id=3055 data-nosnippet>3055</a>            loaded_auth.authenticated,
+<a href=#3056 id=3056 data-nosnippet>3056</a>            <span class="string">"authenticated validator should remain authenticated"
+<a href=#3057 id=3057 data-nosnippet>3057</a>        </span>);
+<a href=#3058 id=3058 data-nosnippet>3058</a>
+<a href=#3059 id=3059 data-nosnippet>3059</a>        <span class="kw">let </span>loaded_unauth = loaded
+<a href=#3060 id=3060 data-nosnippet>3060</a>            .iter()
+<a href=#3061 id=3061 data-nosnippet>3061</a>            .find(|v| v.account == unauthenticated_validator.account)
+<a href=#3062 id=3062 data-nosnippet>3062</a>            .unwrap();
+<a href=#3063 id=3063 data-nosnippet>3063</a>        <span class="macro">assert!</span>(
+<a href=#3064 id=3064 data-nosnippet>3064</a>            !loaded_unauth.authenticated,
+<a href=#3065 id=3065 data-nosnippet>3065</a>            <span class="string">"unauthenticated validator should remain unauthenticated"
+<a href=#3066 id=3066 data-nosnippet>3066</a>        </span>);
+<a href=#3067 id=3067 data-nosnippet>3067</a>    }
+<a href=#3068 id=3068 data-nosnippet>3068</a>}
 </code></pre></div></section></main></body></html>
