@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use alloy::primitives::U256;
 use hotshot_example_types::node_types::{
-    DaCommitteeTestVersions, MemoryImpl, TestTypes, TestTypesRandomizedLeader,
+    MemoryImpl, TestTypes, TestTypesRandomizedLeader, TEST_VERSIONS,
 };
 use hotshot_macros::cross_tests;
 use hotshot_testing::{
@@ -24,7 +24,7 @@ cross_tests!(
     TestName: test_da_committees_downhalf,
     Impls: [MemoryImpl],
     Types: [TestTypes, TestTypesRandomizedLeader],
-    Versions: [DaCommitteeTestVersions],
+    Versions: [TEST_VERSIONS.da_committee],
     Ignore: false,
     Metadata: {
         let mut metadata = TestDescription {
@@ -97,7 +97,7 @@ cross_tests!(
     TestName: test_da_committees_uphalf,
     Impls: [MemoryImpl],
     Types: [TestTypes, TestTypesRandomizedLeader],
-    Versions: [DaCommitteeTestVersions],
+    Versions: [TEST_VERSIONS.da_committee],
     Ignore: false,
     Metadata: {
         let mut metadata = TestDescription::default();
@@ -162,7 +162,7 @@ cross_tests!(
     TestName: test_da_committees_changehalf,
     Impls: [MemoryImpl],
     Types: [TestTypes, TestTypesRandomizedLeader],
-    Versions: [DaCommitteeTestVersions],
+    Versions: [TEST_VERSIONS.da_committee],
     Ignore: false,
     Metadata: {
         let mut metadata = TestDescription::default();
@@ -241,7 +241,7 @@ cross_tests!(
     TestName: test_da_committees_changehalf_small,
     Impls: [MemoryImpl],
     Types: [TestTypes, TestTypesRandomizedLeader],
-    Versions: [DaCommitteeTestVersions],
+    Versions: [TEST_VERSIONS.da_committee],
     Ignore: false,
     Metadata: {
         let mut metadata = TestDescription {

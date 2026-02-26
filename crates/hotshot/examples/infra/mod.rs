@@ -61,7 +61,7 @@ use hotshot_types::{
         block_contents::{BlockHeader, TestableBlock},
         election::Membership,
         network::ConnectedNetwork,
-        node_implementation::{ConsensusTime, NodeType, Versions},
+        node_implementation::{ConsensusTime, NodeType},
         states::TestableState,
     },
     utils::genesis_epoch_from_version,
@@ -343,7 +343,6 @@ pub trait RunDa<
     TYPES: NodeType<InstanceState = TestInstanceState>,
     NETWORK: ConnectedNetwork<TYPES::SignatureKey>,
     NODE: NodeImplementation<TYPES, Network = NETWORK, Storage = TestStorage<TYPES>>,
-    V: Versions,
 > where
     <TYPES as NodeType>::ValidatedState: TestableState<TYPES>,
     <TYPES as NodeType>::BlockPayload: TestableBlock<TYPES>,
@@ -363,12 +362,13 @@ pub trait RunDa<
     /// # Panics if it cannot generate a genesis block, fails to initialize HotShot, or cannot
     /// get the anchored view
     /// Note: sequencing leaf does not have state, so does not return state
-    async fn initialize_state_and_hotshot(&self) -> SystemContextHandle<TYPES, NODE, V> {
-        let initializer = hotshot::HotShotInitializer::<TYPES>::from_genesis::<V>(
+    async fn initialize_state_and_hotshot(&self) -> SystemContextHandle<TYPES, NODE> {
+        let initializer = hotshot::HotShotInitializer::<TYPES>::from_genesis(
             TestInstanceState::default(),
             self.config().config.epoch_height,
             self.config().config.epoch_start_block,
             vec![],
+            self.config().config.upgrade,
         )
         .await
         .expect("Couldn't generate genesis block");
@@ -417,7 +417,7 @@ pub trait RunDa<
     #[allow(clippy::too_many_lines)]
     async fn run_hotshot(
         &self,
-        context: SystemContextHandle<TYPES, NODE, V>,
+        context: SystemContextHandle<TYPES, NODE>,
         transactions: &mut Vec<TestTransaction>,
         transactions_to_send_per_round: u64,
         transaction_size_in_bytes: u64,
@@ -535,7 +535,9 @@ pub trait RunDa<
         let num_eligible_leaders = context
             .hotshot
             .membership_coordinator
-            .membership_for_epoch(genesis_epoch_from_version::<V, TYPES>())
+            .membership_for_epoch(genesis_epoch_from_version::<TYPES>(
+                context.hotshot.upgrade_lock.upgrade.base,
+            ))
             .await
             .unwrap()
             .stake_table()
@@ -630,8 +632,7 @@ impl<
             Network = PushCdnNetwork<TYPES::SignatureKey>,
             Storage = TestStorage<TYPES>,
         >,
-        V: Versions,
-    > RunDa<TYPES, PushCdnNetwork<TYPES::SignatureKey>, NODE, V> for PushCdnDaRun<TYPES>
+    > RunDa<TYPES, PushCdnNetwork<TYPES::SignatureKey>, NODE> for PushCdnDaRun<TYPES>
 where
     <TYPES as NodeType>::ValidatedState: TestableState<TYPES>,
     <TYPES as NodeType>::BlockPayload: TestableBlock<TYPES>,
@@ -712,8 +713,7 @@ impl<
             InstanceState = TestInstanceState,
         >,
         NODE: NodeImplementation<TYPES, Network = Libp2pNetwork<TYPES>, Storage = TestStorage<TYPES>>,
-        V: Versions,
-    > RunDa<TYPES, Libp2pNetwork<TYPES>, NODE, V> for Libp2pDaRun<TYPES>
+    > RunDa<TYPES, Libp2pNetwork<TYPES>, NODE> for Libp2pDaRun<TYPES>
 where
     <TYPES as NodeType>::ValidatedState: TestableState<TYPES>,
     <TYPES as NodeType>::BlockPayload: TestableBlock<TYPES>,
@@ -815,8 +815,7 @@ impl<
             InstanceState = TestInstanceState,
         >,
         NODE: NodeImplementation<TYPES, Network = CombinedNetworks<TYPES>, Storage = TestStorage<TYPES>>,
-        V: Versions,
-    > RunDa<TYPES, CombinedNetworks<TYPES>, NODE, V> for CombinedDaRun<TYPES>
+    > RunDa<TYPES, CombinedNetworks<TYPES>, NODE> for CombinedDaRun<TYPES>
 where
     <TYPES as NodeType>::ValidatedState: TestableState<TYPES>,
     <TYPES as NodeType>::BlockPayload: TestableBlock<TYPES>,
@@ -834,7 +833,6 @@ where
             TYPES,
             Libp2pNetwork<TYPES>,
             Libp2pImpl,
-            V,
         >>::initialize_networking(
             config.clone(),
             validator_config.clone(),
@@ -847,7 +845,6 @@ where
             TYPES,
             PushCdnNetwork<TYPES::SignatureKey>,
             PushCdnImpl,
-            V,
         >>::initialize_networking(
             config.clone(),
             validator_config.clone(),
@@ -898,8 +895,7 @@ pub async fn main_entry_point<
     >,
     NETWORK: ConnectedNetwork<TYPES::SignatureKey>,
     NODE: NodeImplementation<TYPES, Network = NETWORK, Storage = TestStorage<TYPES>>,
-    V: Versions,
-    RUNDA: RunDa<TYPES, NETWORK, NODE, V>,
+    RUNDA: RunDa<TYPES, NETWORK, NODE>,
 >(
     args: ValidatorArgs,
 ) where

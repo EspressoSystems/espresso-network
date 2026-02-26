@@ -66,9 +66,10 @@ impl HeaderProof {
 
 #[cfg(test)]
 mod test {
-    use espresso_types::{EpochVersion, BLOCK_MERKLE_TREE_HEIGHT};
+    use espresso_types::BLOCK_MERKLE_TREE_HEIGHT;
     use jf_merkle_tree_compat::{prelude::SHA3MerkleTree, AppendableMerkleTreeScheme};
     use pretty_assertions::assert_eq;
+    use versions::EPOCH_VERSION;
 
     use super::*;
     use crate::testing::leaf_chain;
@@ -76,7 +77,7 @@ mod test {
     #[tokio::test]
     #[test_log::test]
     async fn test_header_proof_valid() {
-        let leaves = leaf_chain::<EpochVersion>(0..=3).await;
+        let leaves = leaf_chain(0..=3, EPOCH_VERSION).await;
 
         // Use an appendable `MerkleTree` rather than a `BlockMerkleTree` (which is a
         // `LightweightMerkleTree`) so we can look up paths for previously inserted elements.
@@ -96,7 +97,7 @@ mod test {
     #[tokio::test]
     #[test_log::test]
     async fn test_header_proof_invalid_wrong_path() {
-        let leaves = leaf_chain::<EpochVersion>(0..=1).await;
+        let leaves = leaf_chain(0..=1, EPOCH_VERSION).await;
         let mt = BlockMerkleTree::from_elems(
             Some(BLOCK_MERKLE_TREE_HEIGHT),
             [leaves[0].block_hash(), leaves[1].block_hash()],
@@ -117,7 +118,7 @@ mod test {
     #[tokio::test]
     #[test_log::test]
     async fn test_header_proof_invalid_wrong_height() {
-        let leaf = leaf_chain::<EpochVersion>(0..1).await.remove(0);
+        let leaf = leaf_chain(0..1, EPOCH_VERSION).await.remove(0);
         let mts = [0, 1]
             .into_iter()
             .map(|height_diff| {

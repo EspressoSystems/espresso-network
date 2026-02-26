@@ -57,7 +57,7 @@ use num_traits::{FromPrimitive, Zero};
 use thiserror::Error;
 use tokio::{spawn, time::sleep};
 use tracing::Instrument;
-use vbs::version::StaticVersionType;
+use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION};
 
 #[cfg(any(test, feature = "testing"))]
 use super::v0_3::DAMembers;
@@ -77,7 +77,6 @@ use crate::{
         StakeTableError, ASSUMED_BLOCK_TIME_SECONDS, BLOCKS_PER_YEAR, COMMISSION_BASIS_POINTS,
         INFLATION_RATE, MILLISECONDS_PER_YEAR,
     },
-    DrbAndHeaderUpgradeVersion, EpochVersion,
 };
 
 type Epoch = <SeqTypes as NodeType>::Epoch;
@@ -1432,7 +1431,7 @@ where
                         r#"
                     Failed to complete operation `{operation_name}` after `{}`.
                     error: {err}
-                    
+
 
                     This might be caused by:
                     - The current block range being too large for your RPC provider.
@@ -1623,7 +1622,7 @@ impl EpochCommittees {
             },
         };
 
-        if header.version() <= EpochVersion::version() {
+        if header.version() <= EPOCH_VERSION {
             return fixed_block_reward.context(format!(
                 "Fixed block reward not found for current_epoch={current_epoch}"
             ));
@@ -2265,7 +2264,7 @@ impl Membership<SeqTypes> for EpochCommittees {
         let mut block_reward = None;
         // Even if the current header is the root of the epoch which falls in the post upgrade
         // we use the fixed block reward
-        if version == EpochVersion::version() {
+        if version == EPOCH_VERSION {
             let reward =
                 Self::fetch_and_update_fixed_block_reward(membership.clone(), epoch).await?;
             block_reward = Some(reward);
@@ -2331,7 +2330,7 @@ impl Membership<SeqTypes> for EpochCommittees {
         // If we are past the DRB+Header upgrade point,
         // and don't have block reward
         // calculate the dynamic block reward based on validator info and block header.
-        if block_reward.is_none() && version >= DrbAndHeaderUpgradeVersion::version() {
+        if block_reward.is_none() && version >= DRB_AND_HEADER_UPGRADE_VERSION {
             tracing::info!(?epoch, "calculating dynamic block reward");
             let reader = membership.read().await;
             let reward = reader

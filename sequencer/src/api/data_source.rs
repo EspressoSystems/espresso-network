@@ -28,10 +28,7 @@ use hotshot_types::{
     data::{EpochNumber, VidShare, ViewNumber},
     light_client::LCV3StateSignatureRequestBody,
     simple_certificate::LightClientStateUpdateCertificateV2,
-    traits::{
-        network::ConnectedNetwork,
-        node_implementation::{NodeType, Versions},
-    },
+    traits::{network::ConnectedNetwork, node_implementation::NodeType},
     PeerConfig,
 };
 use indexmap::IndexMap;
@@ -90,7 +87,7 @@ pub trait SequencerDataSource:
 pub type Provider = AnyProvider<SeqTypes>;
 
 /// Create a provider for fetching missing data from a list of peer query services.
-pub fn provider<V: Versions>(
+pub fn provider(
     peers: impl IntoIterator<Item = Url>,
     bind_version: SequencerApiVersion,
 ) -> Provider {

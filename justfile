@@ -81,28 +81,28 @@ check *args:
 build profile="dev" features="":
     # postgres
     cargo build --profile {{profile}} {{features}}
-    # embedded-db 
+    # embedded-db
     cargo build --profile {{profile}} -p sequencer-sqlite -p espresso-dev-node {{features}}
 
-demo-native-fee *args: (build "test" "--no-default-features --features fee")
+demo-native-fee *args: (build "test" "--no-default-features")
     ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo.toml scripts/demo-native -f process-compose.yaml {{args}}
 
-demo-native-pos *args: (build "test" "--no-default-features --features fee,pos")
+demo-native-pos *args: (build "test" "--no-default-features")
     ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo-pos.toml scripts/demo-native -f process-compose.yaml {{args}}
 
-demo-native-pos-base *args: (build "test" "--no-default-features --features pos")
+demo-native-pos-base *args: (build "test" "--no-default-features")
     ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo-pos-base.toml scripts/demo-native -f process-compose.yaml {{args}}
 
-demo-native-drb-header-upgrade *args: (build "test" "--no-default-features --features pos,drb-and-header")
+demo-native-drb-header-upgrade *args: (build "test" "--no-default-features")
     ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo-drb-header-upgrade.toml scripts/demo-native -f process-compose.yaml {{args}}
 
-demo-native-drb-header *args: (build "test" "--no-default-features --features drb-and-header")
+demo-native-drb-header *args: (build "test" "--no-default-features")
     ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo-drb-header.toml scripts/demo-native -f process-compose.yaml {{args}}
 
-demo-native-fee-to-drb-header-upgrade *args: (build "test" "--no-default-features --features fee,drb-and-header")
+demo-native-fee-to-drb-header-upgrade *args: (build "test" "--no-default-features")
     ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo-fee-to-drb-header-upgrade.toml scripts/demo-native -f process-compose.yaml {{args}}
 
-demo-native-da-committees *args: (build "test" "--no-default-features --features da-upgrade")
+demo-native-da-committees *args: (build "test" "--no-default-features")
     ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo-da-committees.toml scripts/demo-native -f process-compose.yaml {{args}}
 
 demo-native-benchmark:
@@ -171,31 +171,31 @@ test-demo test_name:
 	set -euo pipefail
 	case "{{test_name}}" in
 		base)
-			features="--no-default-features --features fee"
+			features="--no-default-features"
 			test="test_native_demo_base"
 			;;
 		pos-upgrade)
-			features="--no-default-features --features fee,pos"
+			features="--no-default-features"
 			test="test_native_demo_pos_upgrade"
 			;;
 		pos-base)
-			features="--no-default-features --features pos"
+			features="--no-default-features"
 			test="test_native_demo_pos_base"
 			;;
 		fee-to-drb-header-upgrade)
-			features="--no-default-features --features fee,drb-and-header"
+			features="--no-default-features"
 			test="test_native_demo_fee_to_drb_header_upgrade"
 			;;
 		drb-header-upgrade)
-			features="--no-default-features --features pos,drb-and-header"
+			features="--no-default-features"
 			test="test_native_demo_drb_header_upgrade"
 			;;
 		drb-header-base)
-			features="--no-default-features --features drb-and-header"
+			features="--no-default-features"
 			test="test_native_demo_drb_header_base"
 			;;
 		da-committees)
-			features="--no-default-features --features da-upgrade"
+			features="--no-default-features"
 			test="test_native_demo_drb_header_base"
 			;;
 		*)

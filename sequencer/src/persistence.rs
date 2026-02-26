@@ -119,8 +119,7 @@ mod tests {
             PersistenceOptions, SequencerPersistence,
         },
         v0_3::{AuthenticatedValidator, EventKey, Fetcher, RegisteredValidator, StakeTableEvent},
-        Event, L1Client, L1ClientOptions, Leaf, Leaf2, NodeState, PubKey, SeqTypes,
-        SequencerVersions, ValidatedState,
+        Event, L1Client, L1ClientOptions, Leaf, Leaf2, NodeState, PubKey, SeqTypes, ValidatedState,
     };
     use futures::{future::join_all, StreamExt, TryStreamExt};
     use hotshot::{
@@ -130,8 +129,8 @@ mod tests {
     use hotshot_contract_adapter::{
         sol_types::StakeTableV2::Delegated, stake_table::StakeTableContractVersion,
     };
-    use hotshot_example_types::node_types::TestVersions;
-    use hotshot_query_service::{availability::BlockQueryData, testing::mocks::MockVersions};
+    use hotshot_example_types::node_types::TEST_VERSIONS;
+    use hotshot_query_service::{availability::BlockQueryData, testing::mocks::MOCK_UPGRADE};
     use hotshot_types::{
         data::{
             ns_table::parse_ns_table, vid_commitment, vid_disperse::AvidMDisperseShare,
@@ -146,11 +145,7 @@ mod tests {
             UpgradeCertificate,
         },
         simple_vote::{NextEpochQuorumData2, QuorumData2, UpgradeProposalData, VersionedVoteData},
-        traits::{
-            block_contents::BlockHeader,
-            node_implementation::{ConsensusTime, Versions},
-            EncodeBytes,
-        },
+        traits::{block_contents::BlockHeader, node_implementation::ConsensusTime, EncodeBytes},
         utils::EpochTransitionIndicator,
         vid::avidm::{init_avidm_param, AvidMScheme},
         vote::HasViewNumber,
@@ -161,7 +156,8 @@ mod tests {
     use test_utils::reserve_tcp_port;
     use tide_disco::error::ServerError;
     use tokio::{spawn, time::sleep};
-    use vbs::version::{StaticVersion, StaticVersionType, Version};
+    use vbs::version::Version;
+    use versions::{version, Upgrade};
 
     use crate::{
         api::{
@@ -428,7 +424,7 @@ mod tests {
         // Make a header
         let instance_state = NodeState::mock();
         let validated_state = hotshot_types::traits::ValidatedState::genesis(&instance_state).0;
-        let leaf: Leaf2 = Leaf::genesis::<MockVersions>(&validated_state, &instance_state)
+        let leaf: Leaf2 = Leaf::genesis(&validated_state, &instance_state, MOCK_UPGRADE.base)
             .await
             .into();
         let header = leaf.block_header().clone();
@@ -505,8 +501,12 @@ mod tests {
             None
         );
 
-        let leaf: Leaf2 =
-            Leaf2::genesis::<TestVersions>(&ValidatedState::default(), &NodeState::mock()).await;
+        let leaf: Leaf2 = Leaf2::genesis(
+            &ValidatedState::default(),
+            &NodeState::mock(),
+            TEST_VERSIONS.test.base,
+        )
+        .await;
         let leaf_payload = leaf.block_payload().unwrap();
         let leaf_payload_bytes_arc = leaf_payload.encode();
 
@@ -538,9 +538,10 @@ mod tests {
                     epoch: None,
                     block_header: leaf.block_header().clone(),
                     view_number: ViewNumber::genesis(),
-                    justify_qc: QuorumCertificate2::genesis::<TestVersions>(
+                    justify_qc: QuorumCertificate2::genesis(
                         &ValidatedState::default(),
                         &NodeState::mock(),
+                        TEST_VERSIONS.test,
                     )
                     .await,
                     upgrade_certificate: None,
@@ -610,11 +611,11 @@ mod tests {
             _pd: Default::default(),
         };
 
-        let vid_commitment = vid_commitment::<TestVersions>(
+        let vid_commitment = vid_commitment(
             &leaf_payload_bytes_arc,
             &leaf.block_header().metadata().encode(),
             2,
-            <TestVersions as Versions>::Base::VERSION,
+            TEST_VERSIONS.test.base,
         );
 
         storage
@@ -939,12 +940,16 @@ mod tests {
             None
         );
 
-        let upgrade_lock = UpgradeLock::<SeqTypes, TestVersions>::new();
+        let upgrade_lock = UpgradeLock::<SeqTypes>::new(TEST_VERSIONS.test);
 
         let genesis_view = ViewNumber::genesis();
 
-        let leaf =
-            Leaf2::genesis::<TestVersions>(&ValidatedState::default(), &NodeState::default()).await;
+        let leaf = Leaf2::genesis(
+            &ValidatedState::default(),
+            &NodeState::default(),
+            TEST_VERSIONS.test.base,
+        )
+        .await;
         let data: NextEpochQuorumData2<SeqTypes> = QuorumData2 {
             leaf_commit: leaf.commit(),
             epoch: Some(EpochNumber::new(1)),
@@ -998,10 +1003,13 @@ mod tests {
         // Create a short blockchain.
         let mut chain = vec![];
 
-        let leaf: Leaf2 =
-            Leaf::genesis::<MockVersions>(&ValidatedState::default(), &NodeState::mock())
-                .await
-                .into();
+        let leaf: Leaf2 = Leaf::genesis(
+            &ValidatedState::default(),
+            &NodeState::mock(),
+            MOCK_UPGRADE.base,
+        )
+        .await
+        .into();
         let leaf_payload = leaf.block_payload().unwrap();
         let leaf_payload_bytes_arc = leaf_payload.encode();
         let avidm_param = init_avidm_param(2).unwrap();
@@ -1031,9 +1039,10 @@ mod tests {
             proposal: QuorumProposal2::<SeqTypes> {
                 block_header: leaf.block_header().clone(),
                 view_number: ViewNumber::genesis(),
-                justify_qc: QuorumCertificate::genesis::<TestVersions>(
+                justify_qc: QuorumCertificate::genesis(
                     &ValidatedState::default(),
                     &NodeState::mock(),
+                    TEST_VERSIONS.test,
                 )
                 .await
                 .to_qc2(),
@@ -1045,9 +1054,10 @@ mod tests {
                 state_cert: None,
             },
         };
-        let mut qc = QuorumCertificate2::genesis::<TestVersions>(
+        let mut qc = QuorumCertificate2::genesis(
             &ValidatedState::default(),
             &NodeState::mock(),
+            TEST_VERSIONS.test,
         )
         .await;
 
@@ -1065,11 +1075,11 @@ mod tests {
             _pd: Default::default(),
         };
 
-        let vid_commitment = vid_commitment::<TestVersions>(
+        let vid_commitment = vid_commitment(
             &leaf_payload_bytes_arc,
             &leaf.block_header().metadata().encode(),
             2,
-            <TestVersions as Versions>::Base::VERSION,
+            TEST_VERSIONS.test.base,
         );
 
         for i in 0..4 {
@@ -1211,8 +1221,12 @@ mod tests {
         let storage = options.create().await.unwrap();
 
         // Add some "old" data, from view 0.
-        let leaf =
-            Leaf::genesis::<MockVersions>(&ValidatedState::default(), &NodeState::mock()).await;
+        let leaf = Leaf::genesis(
+            &ValidatedState::default(),
+            &NodeState::mock(),
+            MOCK_UPGRADE.base,
+        )
+        .await;
         let leaf_payload = leaf.block_payload().unwrap();
         let leaf_payload_bytes_arc = leaf_payload.encode();
         let avidm_param = init_avidm_param(2).unwrap();
@@ -1246,9 +1260,10 @@ mod tests {
             proposal: QuorumProposal2::<SeqTypes> {
                 block_header: leaf.block_header().clone(),
                 view_number: ViewNumber::genesis(),
-                justify_qc: QuorumCertificate::genesis::<TestVersions>(
+                justify_qc: QuorumCertificate::genesis(
                     &ValidatedState::default(),
                     &NodeState::mock(),
+                    TEST_VERSIONS.test,
                 )
                 .await
                 .to_qc2(),
@@ -1389,7 +1404,6 @@ mod tests {
         _p: PhantomData<P>,
     ) -> anyhow::Result<()> {
         let epoch_height = 20;
-        type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
 
         let network_config = TestConfigBuilder::default()
             .epoch_height(epoch_height)
@@ -1416,17 +1430,23 @@ mod tests {
         // Build the config with PoS hook
         let l1_url = network_config.l1_url();
 
+        let upgrade = Upgrade::trivial(version(0, 3));
+
         let testnet_config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(query_api_options)
             .network_config(network_config.clone())
             .persistences(persistence_options.clone())
-            .pos_hook::<PosVersion>(DelegationConfig::MultipleDelegators, stake_table_version)
+            .pos_hook(
+                DelegationConfig::MultipleDelegators,
+                stake_table_version,
+                upgrade,
+            )
             .await
             .expect("Pos deployment failed")
             .build();
 
         //start the network
-        let test_network = TestNetwork::new(testnet_config, PosVersion::new()).await;
+        let test_network = TestNetwork::new(testnet_config, upgrade).await;
 
         let client: Client<ServerError, SequencerApiVersion> = Client::new(
             format!("http://localhost:{query_service_port}")
@@ -1918,16 +1938,21 @@ mod tests {
         let tmp = P::tmp_storage().await;
         let storage = P::connect(&tmp).await;
 
-        let genesis_leaf: Leaf2 =
-            Leaf2::genesis::<TestVersions>(&ValidatedState::default(), &NodeState::mock()).await;
+        let genesis_leaf: Leaf2 = Leaf2::genesis(
+            &ValidatedState::default(),
+            &NodeState::mock(),
+            TEST_VERSIONS.test.base,
+        )
+        .await;
         let mut quorum_proposal = QuorumProposalWrapper::<SeqTypes> {
             proposal: QuorumProposal2::<SeqTypes> {
                 epoch: None,
                 block_header: genesis_leaf.block_header().clone(),
                 view_number: genesis_leaf.view_number(),
-                justify_qc: QuorumCertificate2::genesis::<TestVersions>(
+                justify_qc: QuorumCertificate2::genesis(
                     &ValidatedState::default(),
                     &NodeState::mock(),
+                    TEST_VERSIONS.test,
                 )
                 .await,
                 upgrade_certificate: None,

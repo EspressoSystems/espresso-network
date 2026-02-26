@@ -21,7 +21,7 @@ use hotshot_types::{
             BlockHeader, BuilderFee, EncodeBytes, TestableBlock, Transaction,
             GENESIS_VID_NUM_STORAGE_NODES,
         },
-        node_implementation::{ConsensusTime, NodeType, Versions},
+        node_implementation::{ConsensusTime, NodeType},
         BlockPayload, ValidatedState,
     },
     utils::BuilderCommitment,
@@ -31,7 +31,7 @@ use serde::{Deserialize, Serialize};
 use sha3::{Digest, Keccak256};
 use thiserror::Error;
 use time::OffsetDateTime;
-use vbs::version::{StaticVersionType, Version};
+use vbs::version::Version;
 
 use crate::{
     node_types::TestTypes,
@@ -352,21 +352,21 @@ impl<
         ))
     }
 
-    fn genesis<V: Versions>(
+    fn genesis(
         _instance_state: &<TYPES::ValidatedState as ValidatedState<TYPES>>::Instance,
         payload: TYPES::BlockPayload,
         metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
+        version: Version,
     ) -> Self {
         let builder_commitment =
             <TestBlockPayload as BlockPayload<TYPES>>::builder_commitment(&payload, metadata);
 
         let payload_bytes = payload.encode();
-        let genesis_version = V::Base::version();
-        let payload_commitment = vid_commitment::<V>(
+        let payload_commitment = vid_commitment(
             &payload_bytes,
             &metadata.encode(),
             GENESIS_VID_NUM_STORAGE_NODES,
-            genesis_version,
+            version,
         );
 
         Self {
@@ -377,7 +377,7 @@ impl<
             timestamp: 0,
             timestamp_millis: 0,
             random: 0,
-            version: genesis_version,
+            version,
         }
     }
 

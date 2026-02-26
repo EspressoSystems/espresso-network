@@ -24,7 +24,7 @@ use hotshot_types::{
     stake_table::HSStakeTable,
     traits::{
         metrics::Metrics,
-        node_implementation::{ConsensusTime, NodeType, Versions},
+        node_implementation::{ConsensusTime, NodeType},
         storage::Storage,
         ValidatedState as HotShotState,
     },
@@ -33,6 +33,7 @@ use hotshot_types::{
 };
 use indexmap::IndexMap;
 use serde::{de::DeserializeOwned, Serialize};
+use versions::Upgrade;
 
 use super::{
     impls::NodeState,
@@ -639,9 +640,10 @@ pub trait SequencerPersistence:
     /// if there is no saved state). Also returns the anchor view number, which can be used as a
     /// reference point to process any events which were not processed before a previous shutdown,
     /// if applicable,.
-    async fn load_consensus_state<V: Versions>(
+    async fn load_consensus_state(
         &self,
         state: NodeState,
+        upgrade: Upgrade,
     ) -> anyhow::Result<(HotShotInitializer<SeqTypes>, Option<ViewNumber>)> {
         let genesis_validated_state = ValidatedState::genesis(&state).0;
         let highest_voted_view = match self
@@ -699,9 +701,13 @@ pub trait SequencerPersistence:
             None => {
                 tracing::info!("no saved leaf, starting from genesis leaf");
                 (
-                    hotshot_types::data::Leaf2::genesis::<V>(&genesis_validated_state, &state)
-                        .await,
-                    QuorumCertificate2::genesis::<V>(&genesis_validated_state, &state).await,
+                    hotshot_types::data::Leaf2::genesis(
+                        &genesis_validated_state,
+                        &state,
+                        upgrade.base,
+                    )
+                    .await,
+                    QuorumCertificate2::genesis(&genesis_validated_state, &state, upgrade).await,
                     None,
                 )
             },
@@ -728,7 +734,7 @@ pub trait SequencerPersistence:
         // unnecessary catchup from starting in a view earlier than the anchor leaf.
         let restart_view = max(restart_view, leaf.view_number());
         // TODO:
-        let epoch = genesis_epoch_from_version::<V, SeqTypes>();
+        let epoch = genesis_epoch_from_version::<SeqTypes>(upgrade.base);
 
         let config = self.load_config().await.context("loading config")?;
         let epoch_height = config

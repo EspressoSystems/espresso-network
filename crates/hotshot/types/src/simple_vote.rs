@@ -9,7 +9,6 @@
 use std::{
     fmt::Debug,
     hash::Hash,
-    marker::PhantomData,
     ops::{Deref, DerefMut},
 };
 
@@ -25,7 +24,7 @@ use crate::{
     light_client::{CircuitField, LightClientState, StakeTableState},
     message::UpgradeLock,
     traits::{
-        node_implementation::{ConsensusTime, NodeType, Versions},
+        node_implementation::{ConsensusTime, NodeType},
         signature_key::{SignatureKey, StateSignatureKey},
     },
     vote::{HasViewNumber, Vote},
@@ -258,12 +257,12 @@ impl<TYPES: NodeType, DATA: Voteable<TYPES> + 'static> SimpleVote<TYPES, DATA> {
     /// Creates and signs a simple vote
     /// # Errors
     /// If we are unable to sign the data
-    pub async fn create_signed_vote<V: Versions>(
+    pub async fn create_signed_vote(
         data: DATA,
         view: TYPES::View,
         pub_key: &TYPES::SignatureKey,
         private_key: &<TYPES::SignatureKey as SignatureKey>::PrivateKey,
-        upgrade_lock: &UpgradeLock<TYPES, V>,
+        upgrade_lock: &UpgradeLock<TYPES>,
     ) -> Result<Self> {
         let commit = VersionedVoteData::new(data.clone(), view, upgrade_lock)
             .await?
@@ -286,7 +285,7 @@ impl<TYPES: NodeType, DATA: Voteable<TYPES> + 'static> SimpleVote<TYPES, DATA> {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 /// A wrapper for vote data that carries a view number and an `upgrade_lock`, allowing switching the commitment calculation dynamically depending on the version
-pub struct VersionedVoteData<TYPES: NodeType, DATA: Voteable<TYPES>, V: Versions> {
+pub struct VersionedVoteData<TYPES: NodeType, DATA: Voteable<TYPES>> {
     /// underlying vote data
     data: DATA,
 
@@ -295,12 +294,9 @@ pub struct VersionedVoteData<TYPES: NodeType, DATA: Voteable<TYPES>, V: Versions
 
     /// version applied to the view number
     version: Version,
-
-    /// phantom data
-    _pd: PhantomData<V>,
 }
 
-impl<TYPES: NodeType, DATA: Voteable<TYPES>, V: Versions> VersionedVoteData<TYPES, DATA, V> {
+impl<TYPES: NodeType, DATA: Voteable<TYPES>> VersionedVoteData<TYPES, DATA> {
     /// Create a new `VersionedVoteData` struct
     ///
     /// # Errors
@@ -309,7 +305,7 @@ impl<TYPES: NodeType, DATA: Voteable<TYPES>, V: Versions> VersionedVoteData<TYPE
     pub async fn new(
         data: DATA,
         view: TYPES::View,
-        upgrade_lock: &UpgradeLock<TYPES, V>,
+        upgrade_lock: &UpgradeLock<TYPES>,
     ) -> Result<Self> {
         let version = upgrade_lock.version(view).await?;
 
@@ -317,7 +313,6 @@ impl<TYPES: NodeType, DATA: Voteable<TYPES>, V: Versions> VersionedVoteData<TYPE
             data,
             view,
             version,
-            _pd: PhantomData,
         })
     }
 
@@ -327,7 +322,7 @@ impl<TYPES: NodeType, DATA: Voteable<TYPES>, V: Versions> VersionedVoteData<TYPE
     pub async fn new_infallible(
         data: DATA,
         view: TYPES::View,
-        upgrade_lock: &UpgradeLock<TYPES, V>,
+        upgrade_lock: &UpgradeLock<TYPES>,
     ) -> Self {
         let version = upgrade_lock.version_infallible(view).await;
 
@@ -335,14 +330,11 @@ impl<TYPES: NodeType, DATA: Voteable<TYPES>, V: Versions> VersionedVoteData<TYPE
             data,
             view,
             version,
-            _pd: PhantomData,
         }
     }
 }
 
-impl<TYPES: NodeType, DATA: Voteable<TYPES>, V: Versions> Committable
-    for VersionedVoteData<TYPES, DATA, V>
-{
+impl<TYPES: NodeType, DATA: Voteable<TYPES>> Committable for VersionedVoteData<TYPES, DATA> {
     fn commit(&self) -> Commitment<Self> {
         committable::RawCommitmentBuilder::new("Vote")
             .var_size_bytes(self.data.commit().as_ref())

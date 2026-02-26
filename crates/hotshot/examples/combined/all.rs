@@ -17,7 +17,7 @@ use hotshot::{
     traits::implementations::{KeyPair, TestingDef, WrappedSignatureKey},
     types::SignatureKey,
 };
-use hotshot_example_types::{node_types::TestVersions, state_types::TestTypes};
+use hotshot_example_types::state_types::TestTypes;
 use hotshot_orchestrator::client::ValidatorArgs;
 use hotshot_types::traits::node_implementation::NodeType;
 use infra::{gen_local_address, BUILDER_BASE_PORT, VALIDATOR_BASE_PORT};
@@ -150,14 +150,12 @@ async fn main() {
         let builder_address = gen_local_address::<BUILDER_BASE_PORT>(i);
 
         let node = spawn(async move {
-            infra::main_entry_point::<TestTypes, Network, NodeImpl, TestVersions, ThisRun>(
-                ValidatorArgs {
-                    url: orchestrator_url,
-                    advertise_address: Some(advertise_address.to_string()),
-                    builder_address: Some(builder_address),
-                    network_config_file: None,
-                },
-            )
+            infra::main_entry_point::<TestTypes, Network, NodeImpl, ThisRun>(ValidatorArgs {
+                url: orchestrator_url,
+                advertise_address: Some(advertise_address.to_string()),
+                builder_address: Some(builder_address),
+                network_config_file: None,
+            })
             .await;
         });
         nodes.push(node);

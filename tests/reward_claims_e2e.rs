@@ -8,7 +8,7 @@ use alloy::{
     rpc::client::RpcClient,
 };
 use espresso_contract_deployer::{build_signer, Contract};
-use espresso_types::{DrbAndHeaderUpgradeVersion, L1ClientOptions, SeqTypes, SequencerVersions};
+use espresso_types::{L1ClientOptions, SeqTypes};
 use hotshot_contract_adapter::{
     reward::RewardClaimInput,
     sol_types::{EspTokenV2, LightClientV3, RewardClaim},
@@ -35,8 +35,7 @@ use test_utils::reserve_tcp_port;
 use tokio::spawn;
 use url::Url;
 use vbs::version::StaticVersionType;
-
-type ConsensusVersion = SequencerVersions<DrbAndHeaderUpgradeVersion, DrbAndHeaderUpgradeVersion>;
+use versions::{Upgrade, DRB_AND_HEADER_UPGRADE_VERSION};
 
 const TEST_MNEMONIC: &str = "test test test test test test test test test test test junk";
 const BLOCKS_PER_EPOCH: u64 = 7;
@@ -88,12 +87,16 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
         .api_config(SqlDataSource::options(&storage[0], api_options))
         .network_config(network_config)
         .persistences(persistence.clone())
-        .pos_hook::<ConsensusVersion>(DelegationConfig::default(), StakeTableContractVersion::V2)
+        .pos_hook(
+            DelegationConfig::default(),
+            StakeTableContractVersion::V2,
+            Upgrade::trivial(DRB_AND_HEADER_UPGRADE_VERSION),
+        )
         .await?
         .build();
 
     println!("Starting Espresso TestNetwork with {} nodes...", NUM_NODES);
-    let network = TestNetwork::new(config, ConsensusVersion::new()).await;
+    let network = TestNetwork::new(config, Upgrade::trivial(DRB_AND_HEADER_UPGRADE_VERSION)).await;
     println!("TestNetwork started successfully");
 
     let contracts = network.contracts.unwrap();
