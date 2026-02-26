@@ -657,11 +657,14 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
             signature,
             _pd: PhantomData,
         };
-        tracing::error!(
-            "Sending proposal for view {}, height {}, justify_qc view: {}",
+        let res_stats = leader_resource_stats();
+        tracing::info!(
+            "Sending proposal for view {}, height {}, justify_qc view: {}, view_elapsed={:?}, {}",
             proposed_leaf.view_number(),
             proposed_leaf.height(),
-            proposed_leaf.justify_qc().view_number()
+            proposed_leaf.justify_qc().view_number(),
+            self.view_start_time.elapsed(),
+            res_stats,
         );
 
         // Send the trace when we generate the proposal event
@@ -944,4 +947,65 @@ pub(super) async fn handle_eqc_formed<
         event_sender,
     )
     .await;
+}
+
+/// Read lightweight resource stats from /proc and cgroup fs.
+/// Only called on the leader path (~once per 100 views), so overhead is negligible.
+/// Returns a pre-formatted string for direct inclusion in the log line.
+/// On non-Linux (e.g. macOS tests), returns "resource_stats=unavailable".
+fn leader_resource_stats() -> String {
+    // VmRSS from /proc/self/status (resident set size in kB)
+    let rss_kb = std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|s| {
+            s.lines()
+                .find(|l| l.starts_with("VmRSS:"))
+                .and_then(|l| {
+                    l.split_whitespace()
+                        .nth(1)
+                        .and_then(|v| v.parse::<u64>().ok())
+                })
+        });
+
+    // Memory PSI avg10 from /proc/pressure/memory
+    // Format: "some avg10=X.XX avg60=... avg300=... total=..."
+    let mem_psi_some = std::fs::read_to_string("/proc/pressure/memory")
+        .ok()
+        .and_then(|s| {
+            s.lines()
+                .find(|l| l.starts_with("some"))
+                .and_then(|l| {
+                    l.split_whitespace()
+                        .find(|t| t.starts_with("avg10="))
+                        .map(|t| t[6..].to_string())
+                })
+        });
+
+    // cgroup v2 memory usage and limit
+    let cgroup_current_mb = std::fs::read_to_string("/sys/fs/cgroup/memory.current")
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .map(|b| b / (1024 * 1024));
+    let cgroup_max_mb = std::fs::read_to_string("/sys/fs/cgroup/memory.max")
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .map(|b| b / (1024 * 1024));
+
+    if rss_kb.is_none() && mem_psi_some.is_none() && cgroup_current_mb.is_none() {
+        return "resource_stats=unavailable".to_string();
+    }
+
+    format!(
+        "rss_mb={}, mem_psi_avg10={}, cgroup_mem_mb={}/{}",
+        rss_kb
+            .map(|k| format!("{}", k / 1024))
+            .unwrap_or_else(|| "n/a".into()),
+        mem_psi_some.unwrap_or_else(|| "n/a".into()),
+        cgroup_current_mb
+            .map(|m| m.to_string())
+            .unwrap_or_else(|| "n/a".into()),
+        cgroup_max_mb
+            .map(|m| m.to_string())
+            .unwrap_or_else(|| "n/a".into()),
+    )
 }

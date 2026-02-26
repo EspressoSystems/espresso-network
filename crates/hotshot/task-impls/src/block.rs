@@ -97,7 +97,13 @@ impl<TYPES: NodeType> Mempool<TYPES> {
             view,
         });
         let elapsed = now.elapsed();
-        tracing::info!("Received transactions in {elapsed:?}");
+        let mempool_len = self.transactions.len();
+        let mempool_bytes: u64 = self.transactions.iter().map(|t| t.len).sum();
+        tracing::info!(
+            mempool_len,
+            mempool_mb = mempool_bytes / (1024 * 1024),
+            "Received transaction, elapsed={elapsed:?}",
+        );
     }
 
     fn decide_block(
@@ -115,11 +121,21 @@ impl<TYPES: NodeType> Mempool<TYPES> {
             self.recently_decided_transactions
                 .put(txn_commit.clone(), true);
         }
+        let before_len = self.transactions.len();
         self.transactions
             .retain(|tx| !txn_set.contains(&tx.commit) && tx.view >= view);
         self.recently_proposed_blocks.remove(&view);
+        let removed = before_len - self.transactions.len();
+        let mempool_len = self.transactions.len();
+        let mempool_bytes: u64 = self.transactions.iter().map(|t| t.len).sum();
         let elapsed = now.elapsed();
-        tracing::info!("Mempool processed block in {elapsed:?}");
+        tracing::info!(
+            decided_txns = txn_set.len(),
+            removed,
+            mempool_len,
+            mempool_mb = mempool_bytes / (1024 * 1024),
+            "Mempool processed block, elapsed={elapsed:?}",
+        );
     }
 
     fn receive_block(
@@ -380,6 +396,14 @@ impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
     }
 
     async fn build_block(&mut self, block_view: TYPES::View) -> Option<PayloadWithMetadata<TYPES>> {
+        let mempool_len = self.mempool.transactions.len();
+        let mempool_bytes: u64 = self.mempool.transactions.iter().map(|t| t.len).sum();
+        tracing::info!(
+            ?block_view,
+            mempool_len,
+            mempool_mb = mempool_bytes / (1024 * 1024),
+            "Building block from mempool",
+        );
         let mut transactions = self.mempool.transactions.clone();
         let mut view = block_view - 1;
         let mut in_flight_txns = HashSet::new();
