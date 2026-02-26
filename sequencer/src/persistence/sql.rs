@@ -2997,6 +2997,34 @@ impl MembershipPersistence for Persistence {
         }
     }
 
+    async fn delete_stake_tables(&self) -> anyhow::Result<()> {
+        let mut tx = self.db.write().await?;
+        #[cfg(not(feature = "embedded-db"))]
+        query(
+            "TRUNCATE stake_table_events, stake_table_events_l1_block, epoch_drb_and_root, \
+             stake_table_validators",
+        )
+        .execute(tx.as_mut())
+        .await?;
+        #[cfg(feature = "embedded-db")]
+        {
+            query("DELETE FROM stake_table_events")
+                .execute(tx.as_mut())
+                .await?;
+            query("DELETE FROM stake_table_events_l1_block")
+                .execute(tx.as_mut())
+                .await?;
+            query("DELETE FROM epoch_drb_and_root")
+                .execute(tx.as_mut())
+                .await?;
+            query("DELETE FROM stake_table_validators")
+                .execute(tx.as_mut())
+                .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
     async fn store_all_validators(
         &self,
         epoch: EpochNumber,
@@ -3314,7 +3342,7 @@ mod test {
     use committable::{Commitment, CommitmentBoundsArkless};
     use espresso_types::{traits::NullEventConsumer, Header, Leaf, NodeState, ValidatedState};
     use futures::stream::TryStreamExt;
-    use hotshot_example_types::node_types::TestVersions;
+    use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_types::{
         data::{
             ns_table::parse_ns_table, vid_disperse::AvidMDisperseShare, EpochNumber,
@@ -3325,7 +3353,6 @@ mod test {
         simple_vote::QuorumData,
         traits::{
             block_contents::{BlockHeader, GENESIS_VID_NUM_STORAGE_NODES},
-            node_implementation::Versions,
             signature_key::SignatureKey,
             EncodeBytes,
         },
@@ -3336,7 +3363,6 @@ mod test {
         },
     };
     use jf_advz::VidScheme;
-    use vbs::version::StaticVersionType;
 
     use super::*;
     use crate::{persistence::tests::TestablePersistence as _, BLSPubKey, PubKey};
@@ -3344,10 +3370,13 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_quorum_proposals_leaf_hash_migration() {
         // Create some quorum proposals to test with.
-        let leaf: Leaf2 =
-            Leaf::genesis::<TestVersions>(&ValidatedState::default(), &NodeState::mock())
-                .await
-                .into();
+        let leaf: Leaf2 = Leaf::genesis(
+            &ValidatedState::default(),
+            &NodeState::mock(),
+            TEST_VERSIONS.test.base,
+        )
+        .await
+        .into();
         let privkey = BLSPubKey::generated_from_seed_indexed([0; 32], 1).1;
         let signature = PubKey::sign(&privkey, &[]).unwrap();
         let mut quorum_proposal = Proposal {
@@ -3355,9 +3384,10 @@ mod test {
                 epoch: None,
                 block_header: leaf.block_header().clone(),
                 view_number: ViewNumber::genesis(),
-                justify_qc: QuorumCertificate::genesis::<TestVersions>(
+                justify_qc: QuorumCertificate::genesis(
                     &ValidatedState::default(),
                     &NodeState::mock(),
+                    TEST_VERSIONS.test,
                 )
                 .await
                 .to_qc2(),
@@ -3640,8 +3670,12 @@ mod test {
         let storage = Persistence::connect(&tmp).await;
 
         // Mock up some data.
-        let leaf =
-            Leaf2::genesis::<TestVersions>(&ValidatedState::default(), &NodeState::mock()).await;
+        let leaf = Leaf2::genesis(
+            &ValidatedState::default(),
+            &NodeState::mock(),
+            TEST_VERSIONS.test.base,
+        )
+        .await;
         let leaf_payload = leaf.block_payload().unwrap();
         let leaf_payload_bytes_arc = leaf_payload.encode();
 
@@ -3778,8 +3812,12 @@ mod test {
         let data_view = ViewNumber::new(1);
 
         // Populate some data.
-        let leaf =
-            Leaf2::genesis::<TestVersions>(&ValidatedState::default(), &NodeState::mock()).await;
+        let leaf = Leaf2::genesis(
+            &ValidatedState::default(),
+            &NodeState::mock(),
+            TEST_VERSIONS.test.base,
+        )
+        .await;
         let leaf_payload = leaf.block_payload().unwrap();
         let leaf_payload_bytes_arc = leaf_payload.encode();
 
@@ -3814,9 +3852,10 @@ mod test {
                 epoch: None,
                 block_header: leaf.block_header().clone(),
                 view_number: data_view,
-                justify_qc: QuorumCertificate2::genesis::<TestVersions>(
+                justify_qc: QuorumCertificate2::genesis(
                     &ValidatedState::default(),
                     &NodeState::mock(),
+                    TEST_VERSIONS.test,
                 )
                 .await,
                 upgrade_certificate: None,
@@ -3944,8 +3983,12 @@ mod test {
 
             let payload_bytes = payload.encode();
 
-            let block_header =
-                Header::genesis::<TestVersions>(&instance_state, payload.clone(), &metadata);
+            let block_header = Header::genesis(
+                &instance_state,
+                payload.clone(),
+                &metadata,
+                TEST_VERSIONS.test.base,
+            );
 
             let null_quorum_data = QuorumData {
                 leaf_commit: Commitment::<Leaf>::default_commitment_no_preimage(),
@@ -3982,10 +4025,10 @@ mod test {
                 .unwrap();
 
             let mut leaf = Leaf::from_quorum_proposal(&quorum_proposal);
-            leaf.fill_block_payload::<TestVersions>(
+            leaf.fill_block_payload(
                 payload,
                 GENESIS_VID_NUM_STORAGE_NODES,
-                <TestVersions as Versions>::Base::VERSION,
+                TEST_VERSIONS.test.base,
             )
             .unwrap();
 
@@ -4214,7 +4257,7 @@ mod test {
 #[cfg(not(feature = "embedded-db"))]
 mod postgres_tests {
     use espresso_types::{FeeAccount, Header, Leaf, NodeState, Transaction as Tx};
-    use hotshot_example_types::node_types::TestVersions;
+    use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_query_service::{
         availability::BlockQueryData, data_source::storage::UpdateAvailabilityStorage,
     };
@@ -4252,9 +4295,9 @@ mod postgres_tests {
 
         let validated_state = Default::default();
         let justify_qc =
-            QuorumCertificate::genesis::<TestVersions>(&validated_state, &instance_state).await;
+            QuorumCertificate::genesis(&validated_state, &instance_state, TEST_VERSIONS.test).await;
         let view_number: ViewNumber = justify_qc.view_number + 1;
-        let parent_leaf = Leaf::genesis::<TestVersions>(&validated_state, &instance_state)
+        let parent_leaf = Leaf::genesis(&validated_state, &instance_state, TEST_VERSIONS.test.base)
             .await
             .into();
 
@@ -4263,7 +4306,7 @@ mod postgres_tests {
                 .await
                 .unwrap();
         let payload_bytes = payload.encode();
-        let payload_commitment = vid_commitment::<TestVersions>(
+        let payload_commitment = vid_commitment(
             &payload_bytes,
             &ns_table.encode(),
             GENESIS_VID_NUM_STORAGE_NODES,

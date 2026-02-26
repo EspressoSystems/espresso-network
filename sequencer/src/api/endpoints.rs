@@ -36,10 +36,7 @@ use hotshot_query_service::{
 };
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
-    traits::{
-        network::ConnectedNetwork,
-        node_implementation::{ConsensusTime, Versions},
-    },
+    traits::{network::ConnectedNetwork, node_implementation::ConsensusTime},
 };
 use jf_merkle_tree_compat::MerkleTreeScheme;
 use serde::de::Error as _;
@@ -379,17 +376,17 @@ where
     Ok(api)
 }
 
-type ExplorerApi<N, P, D, V, ApiVer> = Api<AvailState<N, P, D, V>, explorer::Error, ApiVer>;
+type ExplorerApi<N, P, D, ApiVer> = Api<AvailState<N, P, D>, explorer::Error, ApiVer>;
 
-pub(super) fn explorer<N, P, D, V: Versions>(
+pub(super) fn explorer<N, P, D>(
     api_ver: semver::Version,
-) -> Result<ExplorerApi<N, P, D, V, SequencerApiVersion>>
+) -> Result<ExplorerApi<N, P, D, SequencerApiVersion>>
 where
     N: ConnectedNetwork<PubKey>,
     D: ExplorerDataSource<SeqTypes> + Send + Sync + 'static,
     P: SequencerPersistence,
 {
-    let api = explorer::define_api::<AvailState<N, P, D, V>, SeqTypes, _>(
+    let api = explorer::define_api::<AvailState<N, P, D>, SeqTypes, _>(
         SequencerApiVersion::instance(),
         api_ver,
     )?;
@@ -898,11 +895,10 @@ where
     Ok(api)
 }
 
-type MerklizedStateApi<N, P, D, V, ApiVer> =
-    Api<AvailState<N, P, D, V>, merklized_state::Error, ApiVer>;
-pub(super) fn merklized_state<N, P, D, S, V: Versions, const ARITY: usize>(
+type MerklizedStateApi<N, P, D, ApiVer> = Api<AvailState<N, P, D>, merklized_state::Error, ApiVer>;
+pub(super) fn merklized_state<N, P, D, S, const ARITY: usize>(
     api_ver: semver::Version,
-) -> Result<MerklizedStateApi<N, P, D, V, SequencerApiVersion>>
+) -> Result<MerklizedStateApi<N, P, D, SequencerApiVersion>>
 where
     N: ConnectedNetwork<PubKey>,
     D: MerklizedStateDataSource<SeqTypes, S, ARITY>
@@ -915,7 +911,7 @@ where
     for<'a> <S::Commit as TryFrom<&'a TaggedBase64>>::Error: std::fmt::Display,
 {
     let api = merklized_state::define_api::<
-        AvailState<N, P, D, V>,
+        AvailState<N, P, D>,
         SeqTypes,
         S,
         SequencerApiVersion,

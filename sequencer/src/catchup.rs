@@ -23,8 +23,8 @@ use espresso_types::{
         forgotten_accounts_include, PermittedRewardMerkleTreeV2, RewardAccountProofV2,
         RewardAccountV2, RewardMerkleCommitmentV2, RewardMerkleTreeV2,
     },
-    BackoffParams, BlockMerkleTree, EpochVersion, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
-    FeeMerkleTree, Leaf2, NodeState, PubKey, SeqTypes, SequencerVersions, ValidatedState,
+    BackoffParams, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
+    FeeMerkleTree, Leaf2, NodeState, PubKey, SeqTypes, ValidatedState,
 };
 use futures::{
     future::{Future, FutureExt, TryFuture, TryFutureExt},
@@ -41,7 +41,7 @@ use hotshot_types::{
     traits::{
         metrics::{Counter, CounterFamily, Metrics},
         network::ConnectedNetwork,
-        node_implementation::{ConsensusTime as _, NodeType, Versions},
+        node_implementation::{ConsensusTime as _, NodeType},
         ValidatedState as ValidatedStateTrait,
     },
     utils::{verify_leaf_chain, View, ViewInner},
@@ -58,6 +58,7 @@ use tokio::time::timeout;
 use tokio_util::task::AbortOnDropHandle;
 use url::Url;
 use vbs::version::StaticVersionType;
+use versions::EPOCH_VERSION;
 
 use crate::api::{BlocksFrontier, RewardMerkleTreeDataSource, RewardMerkleTreeV2Data};
 
@@ -388,7 +389,7 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
             &stake_table,
             success_threshold,
             height,
-            &UpgradeLock::<SeqTypes, SequencerVersions<EpochVersion, EpochVersion>>::new(),
+            &UpgradeLock::<SeqTypes>::new(versions::Upgrade::trivial(EPOCH_VERSION)),
         )
         .await
         .with_context(|| format!("failed to verify leaf chain at height {height}"))
@@ -694,7 +695,7 @@ where
             &stake_table,
             success_threshold,
             height,
-            &UpgradeLock::<SeqTypes, SequencerVersions<EpochVersion, EpochVersion>>::new(),
+            &UpgradeLock::<SeqTypes>::new(versions::Upgrade::trivial(EPOCH_VERSION)),
         )
         .await
         .with_context(|| "failed to verify leaf chain")?;
@@ -1639,11 +1640,7 @@ impl StateCatchup for ParallelStateCatchup {
 /// Add accounts to the in-memory consensus state.
 /// We use this during catchup after receiving verified accounts.
 #[allow(clippy::type_complexity)]
-pub async fn add_fee_accounts_to_state<
-    N: ConnectedNetwork<PubKey>,
-    V: Versions,
-    P: SequencerPersistence,
->(
+pub async fn add_fee_accounts_to_state<N: ConnectedNetwork<PubKey>, P: SequencerPersistence>(
     consensus: &Arc<RwLock<Consensus<SeqTypes>>>,
     view: &<SeqTypes as NodeType>::View,
     accounts: &[FeeAccount],
@@ -1699,7 +1696,6 @@ pub async fn add_fee_accounts_to_state<
 #[allow(clippy::type_complexity)]
 pub async fn add_v2_reward_accounts_to_state<
     N: ConnectedNetwork<PubKey>,
-    V: Versions,
     P: SequencerPersistence,
 >(
     consensus: &Arc<RwLock<Consensus<SeqTypes>>>,
@@ -1757,7 +1753,6 @@ pub async fn add_v2_reward_accounts_to_state<
 #[allow(clippy::type_complexity)]
 pub async fn add_v1_reward_accounts_to_state<
     N: ConnectedNetwork<PubKey>,
-    V: Versions,
     P: SequencerPersistence,
 >(
     consensus: &Arc<RwLock<Consensus<SeqTypes>>>,

@@ -709,7 +709,7 @@ fn build_get_path_query<'q>(
 
         let sub_query = format!(
             "SELECT * FROM (SELECT * FROM {table} WHERE path = {node_path} AND created <= $1 \
-             ORDER BY created DESC LIMIT 1)",
+             ORDER BY created DESC LIMIT 1) AS latest_node",
         );
 
         sub_queries.push(sub_query);

@@ -27,6 +27,7 @@ members = [
     "crates/hotshot/testing",
     "crates/hotshot/types",
     "crates/hotshot/utils",
+    "crates/versions",
     "espresso-dev-node",
     "hotshot-events-service",
     "hotshot-query-service",
@@ -40,6 +41,7 @@ members = [
     "sequencer-sqlite",
     "slow-tests",
     "staking-cli",
+    "test-utils",
     "tests",
     "types",
     "utils",
@@ -83,6 +85,7 @@ default-members = [
     "sequencer",
     "slow-tests",
     "staking-cli",
+    "test-utils",
     "tests",
     "types",
     "utils",
@@ -97,6 +100,7 @@ edition = "2021"
 
 [workspace.dependencies]
 alloy = { version = "1.0", features = [
+    "eips",
     "provider-ws",
     "json-rpc",
     "signer-mnemonic",
@@ -153,7 +157,7 @@ multiaddr = { version = "0.18" }
 nohash-hasher = "0.2.0"
 num_cpus = "1"
 parking_lot = { version = "0.12", features = ["send_guard"] }
-quickcheck = "1.0"
+quickcheck = "1.1"
 semver = "1"
 serde-inline-default = "0.2"
 serde_bytes = { version = "0.11" }
@@ -194,6 +198,7 @@ hotshot-utils = { path = "crates/hotshot/utils" }
 
 espresso-types = { path = "types" }
 light-client = { path = "light-client" }
+test-utils = { path = "test-utils" }
 
 # VID import
 vid = { path = "vid", features = ["parallel", "keccak256"] }
@@ -248,7 +253,6 @@ log-panics = { version = "2.0", features = ["with-backtrace"] }
 lru = "0.12"
 num-traits = "0.2"
 paste = "1.0"
-portpicker = "0.1.1"
 pretty_assertions = { version = "1.4", features = ["unstable"] }
 priority-queue = "2"
 rand = "0.8.5"
@@ -279,6 +283,7 @@ trait-set = "0.3.0"
 url = { version = "2.3", features = ["serde"] }
 vbs = "0.1"
 vec1 = { version = "1", features = ["serde"] }
+versions = { path = "crates/versions" }
 vergen = { version = "9", features = ["build", "cargo"] }
 vergen-gitcl = "9"
 zeroize = "1.7"

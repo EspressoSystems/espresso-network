@@ -3,13 +3,13 @@ version: "3"
 # When adding/removing native processes (non-docker commands), update the NATIVE_PROCESSES
 # array in scripts/cleanup-process-compose to ensure proper cleanup on test failures.
 
-availability:
+x-availability:
   # terminate process compose if process exits
   run-forever: &run-forever
     exit_on_skipped: true
     exit_on_end: true
   # terminate process compose if process exits with non-zero exit code
-  run-forever: &exit-ok
+  exit-ok: &exit-ok
     exit_on_skipped: true
     restart: exit_on_failure
 

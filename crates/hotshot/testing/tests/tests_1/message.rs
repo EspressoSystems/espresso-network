@@ -8,7 +8,7 @@
 use std::marker::PhantomData;
 
 use committable::Committable;
-use hotshot_example_types::node_types::TestTypes;
+use hotshot_example_types::node_types::{TEST_VERSIONS, TestTypes};
 use hotshot_types::{
     message::{GeneralConsensusMessage, Message, MessageKind, SequencingMessage},
     signature_key::BLSPubKey,
@@ -64,7 +64,7 @@ fn version_number_at_start_of_serialization() {
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_certificate2_validity() {
     use futures::StreamExt;
-    use hotshot_example_types::node_types::{MemoryImpl, TestTypes, TestVersions};
+    use hotshot_example_types::node_types::{MemoryImpl, TestTypes};
     use hotshot_testing::{helpers::build_system_handle, view_generator::TestViewGenerator};
     use hotshot_types::{
         data::{Leaf, Leaf2},
@@ -75,11 +75,11 @@ async fn test_certificate2_validity() {
     let node_id = 1;
 
     let (handle, _, _, node_key_map) =
-        build_system_handle::<TestTypes, MemoryImpl, TestVersions>(node_id).await;
+        build_system_handle::<TestTypes, MemoryImpl>(node_id).await;
     let membership = handle.hotshot.membership_coordinator.clone();
 
     let mut generator =
-        TestViewGenerator::<TestVersions>::generate(membership.clone(), node_key_map);
+        TestViewGenerator::generate(membership.clone(), node_key_map, TEST_VERSIONS.test);
 
     let mut proposals = Vec::new();
     let mut leaders = Vec::new();

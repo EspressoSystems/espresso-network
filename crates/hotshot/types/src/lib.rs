@@ -21,6 +21,7 @@ use traits::{
 use url::Url;
 use vbs::version::Version;
 use vec1::Vec1;
+use versions::Upgrade;
 
 use crate::utils::bincode_opts;
 pub mod bundle;
@@ -243,7 +244,7 @@ pub struct HotShotConfig<TYPES: NodeType> {
     pub stop_voting_time: u64,
     /// Number of blocks in an epoch, zero means there are no epochs
     pub epoch_height: u64,
-    /// Epoch start block   
+    /// Epoch start block
     #[serde(default = "default_epoch_start_block")]
     pub epoch_start_block: u64,
     /// Stake table capacity for light client use
@@ -253,6 +254,8 @@ pub struct HotShotConfig<TYPES: NodeType> {
     pub drb_difficulty: u64,
     /// number of iterations in the DRB calculation
     pub drb_upgrade_difficulty: u64,
+    /// Configured version upgrade.
+    pub upgrade: Upgrade,
 }
 
 fn default_epoch_start_block() -> u64 {

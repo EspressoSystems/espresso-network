@@ -11,8 +11,7 @@ use espresso_types::{
         RewardMerkleTreeV1, REWARD_MERKLE_TREE_V1_HEIGHT,
     },
     v0_4::{PermittedRewardMerkleTreeV2, RewardAccountV2, RewardMerkleTreeV2},
-    BlockMerkleTree, DrbAndHeaderUpgradeVersion, EpochVersion, FeeAccount, FeeMerkleTree, Leaf2,
-    NodeState, ValidatedState,
+    BlockMerkleTree, FeeAccount, FeeMerkleTree, Leaf2, NodeState, ValidatedState,
 };
 use futures::future::Future;
 use hotshot::traits::ValidatedState as _;
@@ -41,7 +40,7 @@ use jf_merkle_tree_compat::{
     LookupResult, MerkleTreeScheme,
 };
 use sqlx::{Encode, Row, Type};
-use vbs::version::StaticVersionType;
+use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION};
 
 use super::{
     data_source::{Provider, SequencerDataSource},
@@ -756,9 +755,7 @@ async fn load_v1_reward_accounts(
         .context(format!("leaf {height} not available"))?;
     let header = leaf.header();
 
-    if header.version() < EpochVersion::version()
-        || header.version() >= DrbAndHeaderUpgradeVersion::version()
-    {
+    if header.version() < EPOCH_VERSION || header.version() >= DRB_AND_HEADER_UPGRADE_VERSION {
         return Ok((
             RewardMerkleTreeV1::new(REWARD_MERKLE_TREE_V1_HEIGHT),
             leaf.leaf().clone(),
@@ -1179,7 +1176,7 @@ async fn reward_header_dependencies(
 
         let version = header.version();
         // Skip if version is less than epoch version
-        if version < EpochVersion::version() {
+        if version < EPOCH_VERSION {
             continue;
         }
 
