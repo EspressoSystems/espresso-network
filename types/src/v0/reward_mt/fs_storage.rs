@@ -305,7 +305,7 @@ impl RewardMerkleTreeStorage for RewardMerkleTreeFSStorage {
     {
         // Hold the write lock for the entire operation to eliminate TOCTOU races.
         let mut cache = self.cache.write().unwrap();
-        self.ensure_loaded(&mut *cache, index)?;
+        self.ensure_loaded(&mut cache, index)?;
         let (_, tree, _) = cache.as_ref().expect("Tree should be in cache after load");
         Ok(f(tree))
     }
@@ -316,7 +316,7 @@ impl RewardMerkleTreeStorage for RewardMerkleTreeFSStorage {
     {
         // Hold the write lock for the entire operation to eliminate TOCTOU races.
         let mut cache = self.cache.write().unwrap();
-        self.ensure_loaded(&mut *cache, index)?;
+        self.ensure_loaded(&mut cache, index)?;
         let (_, tree, dirty) = cache.as_mut().expect("Tree should be in cache after load");
         let result = f(tree);
         *dirty = true;
