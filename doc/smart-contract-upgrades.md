@@ -139,14 +139,19 @@ parameter types) in the most derived contract in the inheritance hierarchy.
 All implementation contracts MUST call `_disableInitializers()` in their constructor to prevent direct initialization of
 the implementation (only the proxy should be initialized).
 
-**Pattern:** contract MyContract is Initializable, OwnableUpgradeable, UUPSUpgradeable { constructor() {
-\_disableInitializers(); // ✅ REQUIRED }
+**Pattern:**
+
+```solidity
+contract MyContract is Initializable, OwnableUpgradeable, UUPSUpgradeable {
+    constructor() {
+        _disableInitializers(); // REQUIRED
+    }
 
     function initialize(...) external initializer {
         // initialization logic
     }
-
 }
+```
 
 #### New State Variables
 
