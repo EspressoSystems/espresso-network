@@ -70,16 +70,14 @@ https://github.com/security-alliance/safe-harbor/blob/main/documents/agreement.m
 
 The following deployed contracts on **Ethereum Mainnet** and **Arbitrum** are in scope:
 
-| Contract                                  | Description                                               |
-| ----------------------------------------- | --------------------------------------------------------- |
-| `StakeTableV2`                            | Validator registration, staking, delegations, withdrawals |
-| `LightClientV3` / `LightClientArbitrumV3` | HotShot state proof verification, block commitments       |
-| `EspTokenV2`                              | ESP ERC-20 token                                          |
-| `RewardClaim`                             | Validator reward distribution via merkle proof            |
-| `FeeContract`                             | Builder fee deposits                                      |
-| `OpsTimelock` / `SafeExitTimelock`        | Timelock governance contracts                             |
-
-> Replace with actual deployed addresses once confirmed on mainnet.
+| Contract                                                                                                                                                                                 | Description                                               |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| [`StakeTableV2`](https://etherscan.io/address/0xcef474d372b5b09defe2af187bf17338dc704451)                                                                                                | Validator registration, staking, delegations, withdrawals |
+| [`LightClientV3`](https://etherscan.io/address/0x95ca91cea73239b15e5d2e5a74d02d6b5e0ae458) / `LightClientArbitrumV3`                                                                     | HotShot state proof verification, block commitments       |
+| [`EspTokenV2`](https://etherscan.io/address/0x031de51f3e8016514bd0963d0b2ab825a591db9a)                                                                                                  | ESP ERC-20 token                                          |
+| [`RewardClaim`](https://etherscan.io/address/0x67c966a0ecdd5c33608be7810414e5b54da878d8)                                                                                                 | Validator reward distribution via merkle proof            |
+| [`FeeContract`](https://etherscan.io/address/0x9fce21c3f7600aa63392a5f5713986b39bb98884)                                                                                                 | Builder fee deposits                                      |
+| [`OpsTimelock`](https://etherscan.io/address/0x67861f1ef4db9bcaddd8c5e86db92386dd4ec700) / [`SafeExitTimelock`](https://etherscan.io/address/0x6e7941fe8f9c751363b5c156419a0c8912dea6b2) | Timelock governance contracts                             |
 
 ### In Scope - Protocol & Infrastructure
 
