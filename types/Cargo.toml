@@ -78,6 +78,7 @@ vec1 = { workspace = true }
 vid = { workspace = true }
 
 [dev-dependencies]
+criterion = "0.5"
 espresso-contract-deployer = { path = "../contracts/rust/deployer" }
 espresso-types = { path = ".", features = [ "testing" ] }
 rand_chacha = { workspace = true }
@@ -85,6 +86,10 @@ rstest = { workspace = true }
 rstest_reuse = { workspace = true }
 test-log = { workspace = true }
 test-utils = { workspace = true }
+
+[[bench]]
+name = "reward_mt"
+harness = false
 
 [lints]
 workspace = true
