@@ -1,31 +1,24 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use espresso_types::{DrbAndHeaderUpgradeVersion, EpochVersion, FeeVersion, UpgradeMode};
+use espresso_types::UpgradeMode;
 use futures::{future::join_all, StreamExt};
 use hotshot_types::utils::epoch_from_block_number;
 use sequencer::Genesis;
-use vbs::version::StaticVersionType;
+use versions::{Upgrade, DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, FEE_VERSION};
 
 use crate::{
     common::{load_genesis_file, NativeDemo, TestRequirements, TestRuntime},
     smoke::assert_native_demo_works,
 };
 
-async fn assert_upgrade_happens<Base, Target>(genesis: &Genesis) -> Result<()>
-where
-    Base: StaticVersionType,
-    Target: StaticVersionType,
-{
+async fn assert_upgrade_happens(genesis: &Genesis, upgrade: Upgrade) -> Result<()> {
     dotenvy::dotenv()?;
 
     let mut runtime = TestRuntime::from_requirements(Default::default())
         .await
         .unwrap();
     println!("Testing upgrade {runtime:?}");
-
-    let base_version = Base::version();
-    let upgrade_version = Target::version();
 
     let initial = runtime.test_state().await;
     println!("Initial State:{initial}");
@@ -57,15 +50,15 @@ where
         // TODO is it possible to discover the view at which upgrade should be finished?
         // First few views should be `Base` version.
         if header.height() <= 20 {
-            assert_eq!(header.version(), base_version);
+            assert_eq!(header.version(), upgrade.base);
         }
 
-        if header.version() == upgrade_version {
+        if header.version() == upgrade.target {
             println!("header version matched! height={:?}", header.height());
             break;
         }
 
-        let wait_until_view = match genesis.upgrades[&upgrade_version].mode.clone() {
+        let wait_until_view = match genesis.upgrades[&upgrade.target].mode.clone() {
             // It usually takes about 120 blocks to get to the upgrade, wait a bit longer.
             UpgradeMode::View(upgrade) => upgrade.start_proposing_view + 200,
             UpgradeMode::Time(_time_based_upgrade) => {
@@ -81,11 +74,7 @@ where
     Ok(())
 }
 
-async fn run_upgrade_test<Base, Target>(genesis_path: &str) -> Result<()>
-where
-    Base: StaticVersionType,
-    Target: StaticVersionType,
-{
+async fn run_upgrade_test(genesis_path: &str, upgrade: Upgrade) -> Result<()> {
     let genesis = load_genesis_file(genesis_path)?;
     let _demo = NativeDemo::run(
         None,
@@ -96,7 +85,7 @@ where
     )?;
 
     assert_native_demo_works(Default::default()).await?;
-    assert_upgrade_happens::<Base, Target>(&genesis).await?;
+    assert_upgrade_happens(&genesis, upgrade).await?;
 
     let epoch_length = genesis.epoch_height.expect("epoch_height set in genesis");
     let epoch_start_block = genesis.epoch_start_block.unwrap_or(1);
@@ -104,7 +93,7 @@ where
     let first_epoch = epoch_from_block_number(epoch_start_block, epoch_length);
     let first_reward_block = (first_epoch + 1) * epoch_length + 1;
 
-    let first_reward_block = if Target::version() >= DrbAndHeaderUpgradeVersion::version() {
+    let first_reward_block = if upgrade.target >= DRB_AND_HEADER_UPGRADE_VERSION {
         Some(first_reward_block)
     } else {
         None
@@ -134,21 +123,27 @@ where
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_native_demo_pos_upgrade() -> Result<()> {
-    run_upgrade_test::<FeeVersion, EpochVersion>("data/genesis/demo-pos.toml").await
+    run_upgrade_test(
+        "data/genesis/demo-pos.toml",
+        Upgrade::new(FEE_VERSION, EPOCH_VERSION),
+    )
+    .await
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_native_demo_drb_header_upgrade() -> Result<()> {
-    run_upgrade_test::<EpochVersion, DrbAndHeaderUpgradeVersion>(
+    run_upgrade_test(
         "data/genesis/demo-drb-header-upgrade.toml",
+        Upgrade::new(EPOCH_VERSION, DRB_AND_HEADER_UPGRADE_VERSION),
     )
     .await
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_native_demo_fee_to_drb_header_upgrade() -> Result<()> {
-    run_upgrade_test::<FeeVersion, DrbAndHeaderUpgradeVersion>(
+    run_upgrade_test(
         "data/genesis/demo-fee-to-drb-header-upgrade.toml",
+        Upgrade::new(FEE_VERSION, DRB_AND_HEADER_UPGRADE_VERSION),
     )
     .await
 }

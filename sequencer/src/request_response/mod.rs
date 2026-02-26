@@ -4,7 +4,7 @@ use data_source::DataSource;
 use derive_more::derive::Deref;
 use espresso_types::{traits::SequencerPersistence, PubKey, SeqTypes};
 use hotshot::{traits::NodeImplementation, types::BLSPrivKey};
-use hotshot_types::traits::{network::ConnectedNetwork, node_implementation::Versions};
+use hotshot_types::traits::network::ConnectedNetwork;
 use network::Sender;
 use recipient_source::RecipientSource;
 use request::{Request, Response};
@@ -24,7 +24,6 @@ pub mod request;
 #[derive(Clone, Deref)]
 pub struct RequestResponseProtocol<
     I: NodeImplementation<SeqTypes>,
-    V: Versions,
     N: ConnectedNetwork<PubKey>,
     P: SequencerPersistence,
 > {
@@ -35,8 +34,8 @@ pub struct RequestResponseProtocol<
         Sender,
         Receiver<Bytes>,
         Request,
-        RecipientSource<I, V>,
-        DataSource<I, V, N, P>,
+        RecipientSource<I>,
+        DataSource<I, N, P>,
         PubKey,
     >,
 
@@ -50,12 +49,8 @@ pub struct RequestResponseProtocol<
     private_key: BLSPrivKey,
 }
 
-impl<
-        I: NodeImplementation<SeqTypes>,
-        V: Versions,
-        N: ConnectedNetwork<PubKey>,
-        P: SequencerPersistence,
-    > RequestResponseProtocol<I, V, N, P>
+impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerPersistence>
+    RequestResponseProtocol<I, N, P>
 {
     /// Create a new RequestResponseProtocol from the inner
     pub fn new(
@@ -67,10 +62,10 @@ impl<
         receiver: Receiver<Bytes>,
         // The recipient source that [`RequestResponseProtocol`] will use to get the recipients
         // that a specific message should expect responses from
-        recipient_source: RecipientSource<I, V>,
+        recipient_source: RecipientSource<I>,
         // The [response] data source that [`RequestResponseProtocol`] will use to derive the
         // response data for a specific request
-        data_source: DataSource<I, V, N, P>,
+        data_source: DataSource<I, N, P>,
         // The public key of this node
         public_key: PubKey,
         // The private key of this node
@@ -91,12 +86,8 @@ impl<
     }
 }
 
-impl<
-        I: NodeImplementation<SeqTypes>,
-        V: Versions,
-        N: ConnectedNetwork<PubKey>,
-        P: SequencerPersistence,
-    > RequestResponseProtocol<I, V, N, P>
+impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerPersistence>
+    RequestResponseProtocol<I, N, P>
 {
     pub async fn request_indefinitely<F, Fut, O>(
         &self,

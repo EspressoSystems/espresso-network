@@ -7,7 +7,7 @@
 //! A multi validator
 use clap::Parser;
 use hotshot::helpers::initialize_logging;
-use hotshot_example_types::{node_types::TestVersions, state_types::TestTypes};
+use hotshot_example_types::state_types::TestTypes;
 use hotshot_orchestrator::client::{MultiValidatorArgs, ValidatorArgs};
 use tokio::spawn;
 use tracing::instrument;
@@ -34,7 +34,7 @@ async fn main() {
         let args = args.clone();
 
         let node = spawn(async move {
-            infra::main_entry_point::<TestTypes, Network, NodeImpl, TestVersions, ThisRun>(
+            infra::main_entry_point::<TestTypes, Network, NodeImpl, ThisRun>(
                 ValidatorArgs::from_multi_args(args, node_index),
             )
             .await;

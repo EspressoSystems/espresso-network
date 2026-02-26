@@ -14,8 +14,7 @@ use espresso_types::{
         RewardAccountProofV2, RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleTreeV2,
         REWARD_MERKLE_TREE_V2_HEIGHT,
     },
-    BlockMerkleTree, DrbAndHeaderUpgradeVersion, EpochVersion, FeeAccount, FeeMerkleTree, Leaf2,
-    NodeState, ValidatedState,
+    BlockMerkleTree, FeeAccount, FeeMerkleTree, Leaf2, NodeState, ValidatedState,
 };
 use hotshot::traits::ValidatedState as _;
 use hotshot_query_service::{
@@ -45,7 +44,7 @@ use jf_merkle_tree_compat::{
 };
 use serde_json::Value;
 use sqlx::{Encode, Type};
-use vbs::version::StaticVersionType;
+use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION};
 
 use super::{
     data_source::{Provider, SequencerDataSource},
@@ -306,7 +305,7 @@ impl CatchupStorage for SqlStorage {
             .await
             .context(format!("header {height} not available"))?;
 
-        if header.version() < DrbAndHeaderUpgradeVersion::version() {
+        if header.version() < DRB_AND_HEADER_UPGRADE_VERSION {
             return Ok(Vec::new());
         }
 
@@ -635,9 +634,7 @@ async fn load_v1_reward_accounts(
         .context(format!("leaf {height} not available"))?;
     let header = leaf.header();
 
-    if header.version() < EpochVersion::version()
-        || header.version() >= DrbAndHeaderUpgradeVersion::version()
-    {
+    if header.version() < EPOCH_VERSION || header.version() >= DRB_AND_HEADER_UPGRADE_VERSION {
         return Ok((
             RewardMerkleTreeV1::new(REWARD_MERKLE_TREE_V1_HEIGHT),
             leaf.leaf().clone(),
@@ -746,7 +743,7 @@ async fn load_v2_reward_accounts(
     let header = leaf.header();
 
     // If the header is before the epoch version, we can return the new reward merkle tree
-    if header.version() <= EpochVersion::version() {
+    if header.version() <= EPOCH_VERSION {
         return Ok((
             RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT),
             leaf.leaf().clone(),
@@ -1145,7 +1142,7 @@ async fn reward_header_dependencies(
 
         let version = header.version();
         // Skip if version is less than epoch version
-        if version < EpochVersion::version() {
+        if version < EPOCH_VERSION {
             continue;
         }
 

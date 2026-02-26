@@ -10,10 +10,7 @@ normal = ["hotshot-testing"]
 [package.metadata.cargo-machete]
 ignored = ["vergen", "vergen-gitcl", "include_dir", "hotshot_builder_api"]
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [features]
-default = ["fee", "pos", "drb-and-header", "da-upgrade"]
 testing = [
     "hotshot-testing",
     "espresso-types/testing",
@@ -23,13 +20,8 @@ testing = [
 ]
 benchmarking = []
 embedded-db = ["hotshot-query-service/embedded-db", "sqlx/sqlite"]
-fee = []
-pos = []
-drb-and-header = []
-da-upgrade = []
 
 [dependencies]
-
 alloy = { workspace = true }
 anyhow = { workspace = true }
 ark-ff = { workspace = true }
@@ -121,6 +113,7 @@ toml = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 url = { workspace = true }
+versions = { workspace = true }
 vbs = { workspace = true }
 vec1 = { workspace = true }
 vid = { path = "../vid" }

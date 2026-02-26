@@ -6,7 +6,7 @@
 
 use std::time::Duration;
 
-use hotshot_example_types::node_types::{CombinedImpl, TestTypes, TestVersions};
+use hotshot_example_types::node_types::{CombinedImpl, TestTypes};
 use hotshot_testing::{
     block_builder::SimpleBuilderImplementation,
     completion_task::{CompletionTaskDescription, TimeBasedCompletionTaskDescription},
@@ -24,7 +24,7 @@ use tracing::instrument;
 async fn test_combined_network() {
     use hotshot_testing::block_builder::SimpleBuilderImplementation;
 
-    let mut metadata: TestDescription<TestTypes, CombinedImpl, TestVersions> = TestDescription {
+    let mut metadata: TestDescription<TestTypes, CombinedImpl> = TestDescription {
         timing_data: TimingData {
             next_view_timeout: 10_000,
 
@@ -51,7 +51,7 @@ async fn test_combined_network() {
 #[instrument]
 async fn test_combined_network_cdn_crash() {
 
-    let mut metadata: TestDescription<TestTypes, CombinedImpl, TestVersions> = TestDescription {
+    let mut metadata: TestDescription<TestTypes, CombinedImpl> = TestDescription {
         timing_data: TimingData {
             next_view_timeout: 10_000,
             ..Default::default()
@@ -96,7 +96,7 @@ async fn test_combined_network_cdn_crash() {
 #[instrument]
 async fn test_combined_network_reup() {
 
-    let mut metadata: TestDescription<TestTypes, CombinedImpl, TestVersions> = TestDescription {
+    let mut metadata: TestDescription<TestTypes, CombinedImpl> = TestDescription {
         timing_data: TimingData {
             next_view_timeout: 10_000,
 
@@ -146,7 +146,7 @@ async fn test_combined_network_reup() {
 #[instrument]
 async fn test_combined_network_half_dc() {
 
-    let mut metadata: TestDescription<TestTypes, CombinedImpl, TestVersions> = TestDescription {
+    let mut metadata: TestDescription<TestTypes, CombinedImpl> = TestDescription {
         timing_data: TimingData {
             next_view_timeout: 10_000,
 
@@ -219,7 +219,7 @@ fn generate_random_node_changes(
 #[ignore]
 async fn test_stress_combined_network_fuzzy() {
 
-    let mut metadata: TestDescription<TestTypes, CombinedImpl, TestVersions> = TestDescription {
+    let mut metadata: TestDescription<TestTypes, CombinedImpl> = TestDescription {
         timing_data: TimingData {
             next_view_timeout: 10_000,
             ..Default::default()

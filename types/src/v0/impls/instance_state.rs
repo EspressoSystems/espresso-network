@@ -9,8 +9,6 @@ use hotshot_types::{
     data::EpochNumber, epoch_membership::EpochMembershipCoordinator, traits::states::InstanceState,
     HotShotConfig,
 };
-#[cfg(any(test, feature = "testing"))]
-use vbs::version::StaticVersionType;
 use vbs::version::Version;
 
 use super::{
@@ -61,7 +59,7 @@ pub struct NodeState {
     /// Current version of the sequencer.
     ///
     /// This version is checked to determine if an upgrade is planned,
-    /// and which version variant for versioned types  
+    /// and which version variant for versioned types
     /// to use in functions such as genesis.
     /// (example: genesis returns V2 Header if version is 0.2)
     pub current_version: Version,
@@ -179,7 +177,7 @@ impl NodeState {
     #[cfg(any(test, feature = "testing"))]
     pub fn mock() -> Self {
         use hotshot_example_types::storage_types::TestStorage;
-        use vbs::version::StaticVersion;
+        use versions::version;
 
         use crate::v0_3::Fetcher;
 
@@ -202,16 +200,16 @@ impl NodeState {
             chain_config,
             l1,
             Arc::new(mock::MockStateCatchup::default()),
-            StaticVersion::<0, 1>::version(),
+            version(0, 1),
             coordinator,
-            Version { major: 0, minor: 1 },
+            version(0, 1),
         )
     }
 
     #[cfg(any(test, feature = "testing"))]
     pub fn mock_v2() -> Self {
         use hotshot_example_types::storage_types::TestStorage;
-        use vbs::version::StaticVersion;
+        use versions::version;
 
         use crate::v0_3::Fetcher;
 
@@ -234,16 +232,16 @@ impl NodeState {
             chain_config,
             l1,
             Arc::new(mock::MockStateCatchup::default()),
-            StaticVersion::<0, 2>::version(),
+            version(0, 2),
             coordinator,
-            Version { major: 0, minor: 2 },
+            version(0, 2),
         )
     }
 
     #[cfg(any(test, feature = "testing"))]
     pub fn mock_v3() -> Self {
         use hotshot_example_types::storage_types::TestStorage;
-        use vbs::version::StaticVersion;
+        use versions::version;
 
         use crate::v0_3::Fetcher;
         let l1 = L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
@@ -264,9 +262,9 @@ impl NodeState {
             ChainConfig::default(),
             l1,
             mock::MockStateCatchup::default(),
-            StaticVersion::<0, 3>::version(),
+            version(0, 3),
             coordinator,
-            Version { major: 0, minor: 3 },
+            version(0, 3),
         )
     }
 
@@ -336,7 +334,7 @@ impl From<BTreeMap<Version, Upgrade>> for UpgradeMap {
 impl Default for NodeState {
     fn default() -> Self {
         use hotshot_example_types::storage_types::TestStorage;
-        use vbs::version::StaticVersion;
+        use versions::version;
 
         use crate::v0_3::Fetcher;
 
@@ -359,9 +357,9 @@ impl Default for NodeState {
             chain_config,
             l1,
             Arc::new(mock::MockStateCatchup::default()),
-            StaticVersion::<0, 1>::version(),
+            version(0, 1),
             coordinator,
-            Version { major: 0, minor: 1 },
+            version(0, 1),
         )
     }
 }

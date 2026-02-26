@@ -33,7 +33,7 @@ use hotshot_types::{
     traits::{
         election::Membership,
         network::ConnectedNetwork,
-        node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
+        node_implementation::{ConsensusTime, NodeImplementation, NodeType},
     },
     vote::HasViewNumber,
 };
@@ -48,7 +48,7 @@ pub struct BadProposalViewDos {
 }
 
 #[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> EventTransformerState<TYPES, I, V>
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> EventTransformerState<TYPES, I>
     for BadProposalViewDos
 {
     async fn recv_handler(&mut self, event: &HotShotEvent<TYPES>) -> Vec<HotShotEvent<TYPES>> {
@@ -60,7 +60,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> EventTransforme
         event: &HotShotEvent<TYPES>,
         _public_key: &TYPES::SignatureKey,
         _private_key: &<TYPES::SignatureKey as SignatureKey>::PrivateKey,
-        _upgrade_lock: &UpgradeLock<TYPES, V>,
+        _upgrade_lock: &UpgradeLock<TYPES>,
         consensus: OuterConsensus<TYPES>,
         _membership_coordinator: EpochMembershipCoordinator<TYPES>,
         _network: Arc<I::Network>,
@@ -93,7 +93,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> EventTransforme
 pub struct DoubleProposeVote;
 
 #[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> EventTransformerState<TYPES, I, V>
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> EventTransformerState<TYPES, I>
     for DoubleProposeVote
 {
     async fn recv_handler(&mut self, event: &HotShotEvent<TYPES>) -> Vec<HotShotEvent<TYPES>> {
@@ -105,7 +105,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> EventTransforme
         event: &HotShotEvent<TYPES>,
         _public_key: &TYPES::SignatureKey,
         _private_key: &<TYPES::SignatureKey as SignatureKey>::PrivateKey,
-        _upgrade_lock: &UpgradeLock<TYPES, V>,
+        _upgrade_lock: &UpgradeLock<TYPES>,
         _consensus: OuterConsensus<TYPES>,
         _membership_coordinator: EpochMembershipCoordinator<TYPES>,
         _network: Arc<I::Network>,
@@ -177,8 +177,8 @@ impl<TYPES: NodeType> DishonestLeader<TYPES> {
 }
 
 #[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES> + std::fmt::Debug, V: Versions>
-    EventTransformerState<TYPES, I, V> for DishonestLeader<TYPES>
+impl<TYPES: NodeType, I: NodeImplementation<TYPES> + std::fmt::Debug>
+    EventTransformerState<TYPES, I> for DishonestLeader<TYPES>
 {
     async fn recv_handler(&mut self, event: &HotShotEvent<TYPES>) -> Vec<HotShotEvent<TYPES>> {
         vec![event.clone()]
@@ -189,7 +189,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + std::fmt::Debug, V: Version
         event: &HotShotEvent<TYPES>,
         _public_key: &TYPES::SignatureKey,
         _private_key: &<TYPES::SignatureKey as SignatureKey>::PrivateKey,
-        _upgrade_lock: &UpgradeLock<TYPES, V>,
+        _upgrade_lock: &UpgradeLock<TYPES>,
         _consensus: OuterConsensus<TYPES>,
         _membership_coordinator: EpochMembershipCoordinator<TYPES>,
         _network: Arc<I::Network>,
@@ -223,8 +223,8 @@ pub struct DishonestDa {
 }
 
 #[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES> + std::fmt::Debug, V: Versions>
-    EventTransformerState<TYPES, I, V> for DishonestDa
+impl<TYPES: NodeType, I: NodeImplementation<TYPES> + std::fmt::Debug>
+    EventTransformerState<TYPES, I> for DishonestDa
 {
     async fn recv_handler(&mut self, event: &HotShotEvent<TYPES>) -> Vec<HotShotEvent<TYPES>> {
         vec![event.clone()]
@@ -235,7 +235,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + std::fmt::Debug, V: Version
         event: &HotShotEvent<TYPES>,
         _public_key: &TYPES::SignatureKey,
         _private_key: &<TYPES::SignatureKey as SignatureKey>::PrivateKey,
-        _upgrade_lock: &UpgradeLock<TYPES, V>,
+        _upgrade_lock: &UpgradeLock<TYPES>,
         _consensus: OuterConsensus<TYPES>,
         _membership_coordinator: EpochMembershipCoordinator<TYPES>,
         _network: Arc<I::Network>,
@@ -271,8 +271,8 @@ pub struct ViewDelay<TYPES: NodeType> {
 }
 
 #[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES> + std::fmt::Debug, V: Versions>
-    EventTransformerState<TYPES, I, V> for ViewDelay<TYPES>
+impl<TYPES: NodeType, I: NodeImplementation<TYPES> + std::fmt::Debug>
+    EventTransformerState<TYPES, I> for ViewDelay<TYPES>
 {
     async fn recv_handler(&mut self, event: &HotShotEvent<TYPES>) -> Vec<HotShotEvent<TYPES>> {
         let correct_event = vec![event.clone()];
@@ -307,7 +307,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + std::fmt::Debug, V: Version
         event: &HotShotEvent<TYPES>,
         _public_key: &TYPES::SignatureKey,
         _private_key: &<TYPES::SignatureKey as SignatureKey>::PrivateKey,
-        _upgrade_lock: &UpgradeLock<TYPES, V>,
+        _upgrade_lock: &UpgradeLock<TYPES>,
         _consensus: OuterConsensus<TYPES>,
         _membership_coordinator: EpochMembershipCoordinator<TYPES>,
         _network: Arc<I::Network>,
@@ -325,8 +325,8 @@ pub struct DishonestVoting<TYPES: NodeType> {
 }
 
 #[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES> + std::fmt::Debug, V: Versions>
-    EventTransformerState<TYPES, I, V> for DishonestVoting<TYPES>
+impl<TYPES: NodeType, I: NodeImplementation<TYPES> + std::fmt::Debug>
+    EventTransformerState<TYPES, I> for DishonestVoting<TYPES>
 {
     async fn recv_handler(&mut self, event: &HotShotEvent<TYPES>) -> Vec<HotShotEvent<TYPES>> {
         vec![event.clone()]
@@ -337,7 +337,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + std::fmt::Debug, V: Version
         event: &HotShotEvent<TYPES>,
         public_key: &TYPES::SignatureKey,
         private_key: &<TYPES::SignatureKey as SignatureKey>::PrivateKey,
-        upgrade_lock: &UpgradeLock<TYPES, V>,
+        upgrade_lock: &UpgradeLock<TYPES>,
         _consensus: OuterConsensus<TYPES>,
         _membership_coordinator: EpochMembershipCoordinator<TYPES>,
         _network: Arc<I::Network>,
@@ -362,10 +362,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + std::fmt::Debug, V: Version
 
     fn add_network_event_task(
         &self,
-        handle: &mut SystemContextHandle<TYPES, I, V>,
+        handle: &mut SystemContextHandle<TYPES, I>,
         network: Arc<<I as NodeImplementation<TYPES>>::Network>,
     ) {
-        let network_state: NetworkEventTaskState<_, V, _, _> = NetworkEventTaskState {
+        let network_state: NetworkEventTaskState<_, _, _> = NetworkEventTaskState {
             network,
             view: TYPES::View::genesis(),
             epoch: None,
@@ -404,8 +404,8 @@ pub struct DishonestVoter<TYPES: NodeType> {
 }
 
 #[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES> + std::fmt::Debug, V: Versions>
-    EventTransformerState<TYPES, I, V> for DishonestVoter<TYPES>
+impl<TYPES: NodeType, I: NodeImplementation<TYPES> + std::fmt::Debug>
+    EventTransformerState<TYPES, I> for DishonestVoter<TYPES>
 {
     async fn recv_handler(&mut self, event: &HotShotEvent<TYPES>) -> Vec<HotShotEvent<TYPES>> {
         vec![event.clone()]
@@ -416,7 +416,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + std::fmt::Debug, V: Version
         event: &HotShotEvent<TYPES>,
         public_key: &TYPES::SignatureKey,
         private_key: &<TYPES::SignatureKey as SignatureKey>::PrivateKey,
-        upgrade_lock: &UpgradeLock<TYPES, V>,
+        upgrade_lock: &UpgradeLock<TYPES>,
         _consensus: OuterConsensus<TYPES>,
         _membership_coordinator: EpochMembershipCoordinator<TYPES>,
         _network: Arc<I::Network>,
@@ -485,7 +485,7 @@ pub struct DishonestViewSyncRelay {
 }
 
 #[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> EventTransformerState<TYPES, I, V>
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> EventTransformerState<TYPES, I>
     for DishonestViewSyncRelay
 {
     async fn send_handler(
@@ -493,7 +493,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> EventTransforme
         event: &HotShotEvent<TYPES>,
         _public_key: &TYPES::SignatureKey,
         _private_key: &<TYPES::SignatureKey as SignatureKey>::PrivateKey,
-        upgrade_lock: &UpgradeLock<TYPES, V>,
+        upgrade_lock: &UpgradeLock<TYPES>,
         _consensus: OuterConsensus<TYPES>,
         membership_coordinator: EpochMembershipCoordinator<TYPES>,
         network: Arc<I::Network>,
@@ -725,7 +725,7 @@ pub struct DishonestViewSyncWrongEpoch<TYPES: NodeType> {
 }
 
 #[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> EventTransformerState<TYPES, I, V>
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> EventTransformerState<TYPES, I>
     for DishonestViewSyncWrongEpoch<TYPES>
 {
     async fn send_handler(
@@ -733,7 +733,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> EventTransforme
         event: &HotShotEvent<TYPES>,
         public_key: &TYPES::SignatureKey,
         private_key: &<TYPES::SignatureKey as SignatureKey>::PrivateKey,
-        upgrade_lock: &UpgradeLock<TYPES, V>,
+        upgrade_lock: &UpgradeLock<TYPES>,
         _consensus: OuterConsensus<TYPES>,
         _membership_coordinator: EpochMembershipCoordinator<TYPES>,
         _network: Arc<I::Network>,

@@ -1,12 +1,7 @@
-use std::marker::PhantomData;
-
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
     signature_key::{BLSPubKey, SchnorrPubKey},
-    traits::{
-        node_implementation::{NodeType, Versions},
-        signature_key::SignatureKey,
-    },
+    traits::{node_implementation::NodeType, signature_key::SignatureKey},
 };
 use serde::{Deserialize, Serialize};
 
@@ -18,6 +13,7 @@ pub mod sparse_mt;
 pub mod traits;
 mod txproof;
 mod utils;
+
 pub use header::Header;
 #[cfg(any(test, feature = "testing"))]
 pub use impls::mock;
@@ -34,7 +30,7 @@ pub use impls::{
 pub use nsproof::*;
 pub use txproof::*;
 pub use utils::*;
-use vbs::version::{StaticVersion, StaticVersionType};
+use vbs::version::StaticVersion;
 
 // This is the single source of truth for minor versions supported by this major version.
 //
@@ -134,6 +130,7 @@ reexport_unchanged_types!(
 pub use v0_3::StateCertQueryDataV1;
 pub(crate) use v0_3::{L1ClientMetrics, L1Event, L1State, L1UpdateTask};
 pub use v0_4::StateCertQueryDataV2;
+use versions::version;
 
 #[derive(
     Clone, Copy, Debug, Default, Hash, Eq, PartialEq, PartialOrd, Ord, Deserialize, Serialize,
@@ -154,46 +151,14 @@ impl NodeType for SeqTypes {
     type StateSignatureKey = SchnorrPubKey;
 }
 
-#[derive(Clone, Default, Debug, Copy)]
-pub struct SequencerVersions<Base: StaticVersionType, Upgrade: StaticVersionType> {
-    _pd: PhantomData<(Base, Upgrade)>,
-}
+pub const MOCK_SEQUENCER_VERSIONS: versions::Upgrade =
+    versions::Upgrade::new(version(0, 1), version(0, 2));
 
-impl<Base: StaticVersionType, Upgrade: StaticVersionType> SequencerVersions<Base, Upgrade> {
-    pub fn new() -> Self {
-        Self {
-            _pd: Default::default(),
-        }
-    }
-}
-
-impl<Base: StaticVersionType + 'static, Upgrade: StaticVersionType + 'static> Versions
-    for SequencerVersions<Base, Upgrade>
-{
-    type Base = Base;
-    type Upgrade = Upgrade;
-    const UPGRADE_HASH: [u8; 32] = [
-        1, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0,
-        0, 0,
-    ];
-
-    type Epochs = EpochVersion;
-    type DrbAndHeaderUpgrade = DrbAndHeaderUpgradeVersion;
-    type Vid2Upgrade = Vid2UpgradeVersion;
-}
-
-pub type MockSequencerVersions = SequencerVersions<StaticVersion<0, 1>, StaticVersion<0, 2>>;
-
-pub type V0_0 = StaticVersion<0, 0>;
-pub type V0_1 = StaticVersion<0, 1>;
 pub type FeeVersion = StaticVersion<0, 2>;
 pub type EpochVersion = StaticVersion<0, 3>;
 pub type DrbAndHeaderUpgradeVersion = StaticVersion<0, 4>;
 pub type DaUpgradeVersion = StaticVersion<0, 5>;
 pub type Vid2UpgradeVersion = StaticVersion<0, 6>;
-
-/// The highest protocol version supported by this version of the software.
-pub type MaxSupportedVersion = DaUpgradeVersion;
 
 pub type Leaf = hotshot_types::data::Leaf<SeqTypes>;
 pub type Leaf2 = hotshot_types::data::Leaf2<SeqTypes>;

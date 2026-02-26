@@ -23,10 +23,7 @@ use hotshot_query_service::{
 };
 use hotshot_types::{
     data::ViewNumber,
-    traits::{
-        network::ConnectedNetwork,
-        node_implementation::{ConsensusTime, Versions},
-    },
+    traits::{network::ConnectedNetwork, node_implementation::ConsensusTime},
     vote::HasViewNumber,
 };
 use itertools::Itertools;
@@ -53,17 +50,16 @@ pub enum Storage {
 }
 
 /// A type alias for the consensus handle
-type Consensus<I, V> = Arc<SystemContext<SeqTypes, I, V>>;
+type Consensus<I> = Arc<SystemContext<SeqTypes, I>>;
 
 #[derive(Clone)]
 pub struct DataSource<
     I: NodeImplementation<SeqTypes>,
-    V: Versions,
     N: ConnectedNetwork<PubKey>,
     P: SequencerPersistence,
 > {
     /// The consensus handle
-    pub consensus: Consensus<I, V>,
+    pub consensus: Consensus<I>,
     /// The node's state
     pub node_state: NodeState,
     /// The storage
@@ -76,12 +72,8 @@ pub struct DataSource<
 
 /// Implement the trait that allows the [`RequestResponseProtocol`] to calculate/derive a response for a specific request
 #[async_trait]
-impl<
-        I: NodeImplementation<SeqTypes>,
-        V: Versions,
-        N: ConnectedNetwork<PubKey>,
-        P: SequencerPersistence,
-    > DataSourceTrait<Request> for DataSource<I, V, N, P>
+impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerPersistence>
+    DataSourceTrait<Request> for DataSource<I, N, P>
 {
     async fn derive_response_for(&self, request: &Request) -> Result<Response> {
         match request {
@@ -107,7 +99,7 @@ impl<
 
                 // If we successfully fetched accounts from storage, try to add them back into the in-memory
                 // state.
-                if let Err(err) = add_fee_accounts_to_state::<N, V, P>(
+                if let Err(err) = add_fee_accounts_to_state::<N, P>(
                     &self.consensus.consensus(),
                     &ViewNumber::new(*view),
                     accounts,
@@ -251,7 +243,7 @@ impl<
 
                 // If we successfully fetched accounts from storage, try to add them back into the in-memory
                 // state.
-                if let Err(err) = add_v2_reward_accounts_to_state::<N, V, P>(
+                if let Err(err) = add_v2_reward_accounts_to_state::<N, P>(
                     &self.consensus.consensus(),
                     &ViewNumber::new(*view),
                     accounts,
@@ -296,7 +288,7 @@ impl<
 
                 // If we successfully fetched accounts from storage, try to add them back into the in-memory
                 // state.
-                if let Err(err) = add_v1_reward_accounts_to_state::<N, V, P>(
+                if let Err(err) = add_v1_reward_accounts_to_state::<N, P>(
                     &self.consensus.consensus(),
                     &ViewNumber::new(*view),
                     accounts,
