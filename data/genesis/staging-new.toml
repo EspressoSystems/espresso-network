@@ -41,7 +41,7 @@ version = "0.4"
 [upgrade.drb_and_header.chain_config]
 chain_id = 888888888
 base_fee = "1 wei"
-max_block_size = "1mb"
+max_block_size = "5mb"
 fee_recipient = "0x0000000000000000000000000000000000000000"
 fee_contract = "0xa15bb66138824a1c7167f5e85b957d04dd34e468"
 stake_table_contract = "0x05b4cb126885fb10464fdd12666feb25e2563b76"
