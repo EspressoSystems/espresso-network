@@ -455,7 +455,7 @@
 <a href=#455 id=455 data-nosnippet>455</a>                <span class="kw">let </span>maybe_cancel_sender =
 <a href=#456 id=456 data-nosnippet>456</a>                    <span class="self">self</span>.proposal_dependencies.remove(<span class="kw-2">&amp;</span>TYPES::View::new(view));
 <a href=#457 id=457 data-nosnippet>457</a>                <span class="kw">if </span>maybe_cancel_sender.as_ref().is_some_and(|s| !s.is_closed()) {
-<a href=#458 id=458 data-nosnippet>458</a>                    <span class="macro">tracing::error!</span>(<span class="string">"Aborting proposal dependency task for view {view}"</span>);
+<a href=#458 id=458 data-nosnippet>458</a>                    <span class="macro">tracing::debug!</span>(<span class="string">"Aborting proposal dependency task for view {view}"</span>);
 <a href=#459 id=459 data-nosnippet>459</a>                    <span class="kw">let _ </span>= maybe_cancel_sender.unwrap().try_broadcast(());
 <a href=#460 id=460 data-nosnippet>460</a>                }
 <a href=#461 id=461 data-nosnippet>461</a>            }
@@ -744,7 +744,7 @@
 <a href=#744 id=744 data-nosnippet>744</a>        <span class="kw">let </span>keep = <span class="self">self</span>.proposal_dependencies.split_off(<span class="kw-2">&amp;</span>view);
 <a href=#745 id=745 data-nosnippet>745</a>        <span class="kw">while let </span><span class="prelude-val">Some</span>((view, cancel_sender)) = <span class="self">self</span>.proposal_dependencies.pop_first() {
 <a href=#746 id=746 data-nosnippet>746</a>            <span class="kw">if </span>!cancel_sender.is_closed() {
-<a href=#747 id=747 data-nosnippet>747</a>                <span class="macro">tracing::error!</span>(<span class="string">"Aborting proposal dependency task for view {view}"</span>);
+<a href=#747 id=747 data-nosnippet>747</a>                <span class="macro">tracing::debug!</span>(<span class="string">"Aborting proposal dependency task for view {view}"</span>);
 <a href=#748 id=748 data-nosnippet>748</a>                <span class="kw">let _ </span>= cancel_sender.try_broadcast(());
 <a href=#749 id=749 data-nosnippet>749</a>            }
 <a href=#750 id=750 data-nosnippet>750</a>        }
@@ -770,7 +770,7 @@
 <a href=#770 id=770 data-nosnippet>770</a>    <span class="kw">fn </span>cancel_subtasks(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
 <a href=#771 id=771 data-nosnippet>771</a>        <span class="kw">while let </span><span class="prelude-val">Some</span>((view, cancel_sender)) = <span class="self">self</span>.proposal_dependencies.pop_first() {
 <a href=#772 id=772 data-nosnippet>772</a>            <span class="kw">if </span>!cancel_sender.is_closed() {
-<a href=#773 id=773 data-nosnippet>773</a>                <span class="macro">tracing::error!</span>(<span class="string">"Aborting proposal dependency task for view {view}"</span>);
+<a href=#773 id=773 data-nosnippet>773</a>                <span class="macro">tracing::debug!</span>(<span class="string">"Aborting proposal dependency task for view {view}"</span>);
 <a href=#774 id=774 data-nosnippet>774</a>                <span class="kw">let _ </span>= cancel_sender.try_broadcast(());
 <a href=#775 id=775 data-nosnippet>775</a>            }
 <a href=#776 id=776 data-nosnippet>776</a>        }

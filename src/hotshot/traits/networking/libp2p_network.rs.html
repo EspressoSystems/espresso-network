@@ -908,7 +908,7 @@
 <a href=#908 id=908 data-nosnippet>908</a>        <span class="kw">let </span>pid = <span class="kw">match </span><span class="self">self
 <a href=#909 id=909 data-nosnippet>909</a>            </span>.inner
 <a href=#910 id=910 data-nosnippet>910</a>            .handle
-<a href=#911 id=911 data-nosnippet>911</a>            .lookup_node(<span class="kw-2">&amp;</span>recipient, <span class="self">self</span>.inner.dht_timeout)
+<a href=#911 id=911 data-nosnippet>911</a>            .lookup_node(<span class="kw-2">&amp;</span>recipient, Duration::from_secs(<span class="number">2</span>))
 <a href=#912 id=912 data-nosnippet>912</a>            .<span class="kw">await
 <a href=#913 id=913 data-nosnippet>913</a>        </span>{
 <a href=#914 id=914 data-nosnippet>914</a>            <span class="prelude-val">Ok</span>(pid) =&gt; pid,
