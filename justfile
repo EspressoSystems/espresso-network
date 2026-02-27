@@ -73,12 +73,10 @@ clippy *args:
     cargo clippy --workspace --features "embedded-db testing" --all-targets {{args}}
 
 check *args:
-    # postgres (all workspace members except embedded-db and crypto-helper crates)
-    cargo check --workspace --exclude sequencer-sqlite --exclude espresso-dev-node --exclude espresso-crypto-helper {{args}}
+    # postgres (all workspace members except embedded-db crates)
+    cargo check --workspace --exclude sequencer-sqlite --exclude espresso-dev-node {{args}}
     # embedded-db
     cargo check -p sequencer-sqlite -p espresso-dev-node {{args}}
-    # crypto-helper separately (vendored openssl must not leak to workspace)
-    cargo check -p espresso-crypto-helper {{args}}
 
 build profile="dev" features="":
     # postgres
