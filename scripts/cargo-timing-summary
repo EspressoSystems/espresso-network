@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+readonly SCRIPT_NAME="${0##*/}"
+
+usage() {
+  cat <<EOF
+Usage: ${SCRIPT_NAME} [-h|--help] <cargo-timing.html>
+
+Extract top-20 slowest crates from a cargo-timing HTML file and
+output a markdown summary table.
+
+Arguments:
+  cargo-timing.html   Path to a cargo-timing*.html file
+
+Options:
+  -h, --help          Show this help
+EOF
+}
+
+err() {
+  echo "${SCRIPT_NAME}: $*" >&2
+}
+
+main() {
+  local file=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    -*)
+      err "Unknown option: $1"
+      usage >&2
+      exit 1
+      ;;
+    *)
+      file="$1"
+      shift
+      ;;
+    esac
+  done
+
+  if [[ -z "${file}" ]]; then
+    usage >&2
+    exit 1
+  fi
+
+  if [[ ! -f "${file}" ]]; then
+    echo "File not found: ${file}" >&2
+    exit 0
+  fi
+
+  if ! command -v jq &>/dev/null; then
+    err "jq is required but not installed"
+    exit 1
+  fi
+
+  local duration
+  duration=$(sed -n 's/^DURATION = \([0-9]*\);$/\1/p' "${file}")
+
+  if [[ -z "${duration}" ]]; then
+    err "Could not extract DURATION from ${file}"
+    exit 1
+  fi
+
+  local json
+  json=$(sed -n '/^const UNIT_DATA = \[$/,/^\];$/{ /^const UNIT_DATA/d; /^\];$/d; p; }' "${file}")
+
+  if [[ -z "${json}" ]]; then
+    echo "## Cargo Build Timings (total: ${duration}s)"
+    echo ""
+    echo "No unit data found."
+    exit 0
+  fi
+
+  echo "## Cargo Build Timings (total: ${duration}s)"
+  echo ""
+  echo "| Crate | Target | Duration |"
+  echo "|-------|--------|----------|"
+
+  echo "[${json}]" |
+    jq -r '
+      sort_by(-.duration)
+      | .[0:20]
+      | .[]
+      | .target as $t
+      | ($t | gsub("^ +"; "") | gsub("\\\\\""; "\"")) as $clean
+      | "| \(.name) | \($clean) | \(.duration)s |"
+    '
+}
+
+main "$@"
