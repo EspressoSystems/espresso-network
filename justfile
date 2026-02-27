@@ -133,7 +133,8 @@ anvil *args:
 # sequencer-sqlite: no tests, enables embedded-db feature
 # slow-tests: slow and serial tests
 # espresso-dev-node: enables embedded-db
-nextest_excludes := "--exclude sequencer-sqlite --exclude hotshot-testing --exclude slow-tests --exclude espresso-dev-node --exclude hotshot-examples"
+# espresso-crypto-helper: vendored openssl leaks to workspace via feature unification
+nextest_excludes := "--exclude sequencer-sqlite --exclude hotshot-testing --exclude slow-tests --exclude espresso-dev-node --exclude hotshot-examples --exclude espresso-crypto-helper"
 
 nextest *args:
     cargo nextest run --locked --workspace {{nextest_excludes}} --lib --bins --tests --verbose {{args}}
