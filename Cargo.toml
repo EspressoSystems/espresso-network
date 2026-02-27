@@ -313,17 +313,14 @@ inherits = "dev"
 strip = "none"
 debug = "full"
 
-# Don't optimize the binaries in the workspace. Compilation of dependencies can be cached
-# effectively on the CI because they rarely change, whereas the workspace code usually changes and
-# workspace compilation artifacts are therefore not cached. However, some of our tests don't work if
-# we don't have any optimizations in the workspace.
+# Workspace crates: opt-level 0 (not cached on CI, recompile every run).
+# Dependencies: opt-level 1 via "*" (cached on CI, rarely recompile).
+# compute-heavy crates: opt-level 3 (tests too slow without optimization).
 [profile.test]
-opt-level = 1
+opt-level = 0
 
-[profile.test.package.sequencer]
-opt-level = 0
-[profile.test.package.hotshot-testing]
-opt-level = 0
+[profile.test.package."*"]
+opt-level = 1
 [profile.test.package.hotshot-state-prover]
 opt-level = 3
 [profile.test.package.jf-merkle-tree]
