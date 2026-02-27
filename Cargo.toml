@@ -322,7 +322,7 @@ debug = "full"
 # Workspace crates: opt-level 0 (not cached on CI, recompile every run).
 # Dependencies: opt-level 1 via "*" (cached on CI, rarely recompile).
 # Consensus crates: opt-level 1 (hotshot tests fail with too many failed views at opt-level 0).
-# ZK-heavy crates: opt-level 3 (tests too slow without optimization).
+# Crypto/ZK-heavy crates: opt-level 3 (finite field math, merkle trees, proofs).
 [profile.test]
 opt-level = 0
 
@@ -361,6 +361,16 @@ opt-level = 1
 [profile.test.package.hotshot-state-prover]
 opt-level = 3
 [profile.test.package.jf-merkle-tree]
+opt-level = 3
+[profile.test.package.ark-ff]
+opt-level = 3
+[profile.test.package.ark-ec]
+opt-level = 3
+[profile.test.package.ark-bn254]
+opt-level = 3
+[profile.test.package.ark-bls12-381]
+opt-level = 3
+[profile.test.package.ark-poly]
 opt-level = 3
 
 [profile.test-docker]
