@@ -60,8 +60,12 @@ struct ReceivedTransaction<TYPES: NodeType> {
     view: TYPES::View,
 }
 
+/// Maximum total size of transactions held in the mempool.
+const MAX_MEMPOOL_SIZE: u64 = 500 * 1024 * 1024; // 500 MB
+
 pub struct Mempool<TYPES: NodeType> {
     max_block_size: u64,
+    total_bytes: u64,
     transactions: Vec<ReceivedTransaction<TYPES>>,
     recently_decided_transactions: lru::LruCache<Commitment<TYPES::Transaction>, bool>,
     recently_proposed_blocks: HashMap<TYPES::View, Vec<TYPES::Transaction>>,
@@ -71,6 +75,7 @@ impl<TYPES: NodeType> Mempool<TYPES> {
     pub fn new(max_block_size: u64) -> Self {
         Self {
             max_block_size,
+            total_bytes: 0,
             transactions: Vec::new(),
             recently_decided_transactions: lru::LruCache::new(NonZero::new(1000).unwrap()),
             recently_proposed_blocks: HashMap::new(),
@@ -90,6 +95,18 @@ impl<TYPES: NodeType> Mempool<TYPES> {
             return;
         }
 
+        if self.total_bytes + len > MAX_MEMPOOL_SIZE {
+            tracing::warn!(
+                mempool_len = self.transactions.len(),
+                mempool_mb = self.total_bytes / (1024 * 1024),
+                max_mempool_mb = MAX_MEMPOOL_SIZE / (1024 * 1024),
+                tx_len = len,
+                "Rejecting transaction: mempool size cap reached",
+            );
+            return;
+        }
+
+        self.total_bytes += len;
         self.transactions.push(ReceivedTransaction {
             tx: transaction,
             len,
@@ -97,11 +114,9 @@ impl<TYPES: NodeType> Mempool<TYPES> {
             view,
         });
         let elapsed = now.elapsed();
-        let mempool_len = self.transactions.len();
-        let mempool_bytes: u64 = self.transactions.iter().map(|t| t.len).sum();
         tracing::info!(
-            mempool_len,
-            mempool_mb = mempool_bytes / (1024 * 1024),
+            mempool_len = self.transactions.len(),
+            mempool_mb = self.total_bytes / (1024 * 1024),
             "Received transaction, elapsed={elapsed:?}",
         );
     }
@@ -126,14 +141,15 @@ impl<TYPES: NodeType> Mempool<TYPES> {
             .retain(|tx| !txn_set.contains(&tx.commit) && tx.view >= view);
         self.recently_proposed_blocks.remove(&view);
         let removed = before_len - self.transactions.len();
-        let mempool_len = self.transactions.len();
-        let mempool_bytes: u64 = self.transactions.iter().map(|t| t.len).sum();
+
+        self.total_bytes = self.transactions.iter().map(|t| t.len).sum();
+
         let elapsed = now.elapsed();
         tracing::info!(
             decided_txns = txn_set.len(),
             removed,
-            mempool_len,
-            mempool_mb = mempool_bytes / (1024 * 1024),
+            mempool_len = self.transactions.len(),
+            mempool_mb = self.total_bytes / (1024 * 1024),
             "Mempool processed block, elapsed={elapsed:?}",
         );
     }
@@ -396,12 +412,10 @@ impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
     }
 
     async fn build_block(&mut self, block_view: TYPES::View) -> Option<PayloadWithMetadata<TYPES>> {
-        let mempool_len = self.mempool.transactions.len();
-        let mempool_bytes: u64 = self.mempool.transactions.iter().map(|t| t.len).sum();
         tracing::info!(
             ?block_view,
-            mempool_len,
-            mempool_mb = mempool_bytes / (1024 * 1024),
+            mempool_len = self.mempool.transactions.len(),
+            mempool_mb = self.mempool.total_bytes / (1024 * 1024),
             "Building block from mempool",
         );
         let mut transactions = self.mempool.transactions.clone();
