@@ -8,5 +8,5 @@ edition = "2021"
 [dependencies]
 anyhow = { workspace = true }
 # disable default features to allow including versions on demand
-sequencer = { path = "../sequencer", default-features = false, features = ["embedded-db"] }
+sequencer = { workspace = true, default-features = false, features = ["embedded-db"] }
 tokio = { workspace = true }

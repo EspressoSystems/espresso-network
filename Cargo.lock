@@ -3017,7 +3017,7 @@ dependencies = [
  "bon",
  "bs58",
  "bytes 1.11.1",
- "criterion 0.8.1",
+ "criterion",
  "ed25519-compact",
  "hotshot-types",
  "nohash-hasher",
@@ -3443,32 +3443,6 @@ dependencies = [
 
 [[package]]
 name = "criterion"
-version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f2b12d017a929603d80db1831cd3a24082f8137ce19c69e6447f54f5fc8d692f"
-dependencies = [
- "anes",
- "cast",
- "ciborium",
- "clap 4.5.53",
- "criterion-plot 0.5.0",
- "is-terminal",
- "itertools 0.10.5",
- "num-traits",
- "once_cell",
- "oorandom",
- "plotters",
- "rayon",
- "regex",
- "serde",
- "serde_derive",
- "serde_json",
- "tinytemplate",
- "walkdir",
-]
-
-[[package]]
-name = "criterion"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4d883447757bb0ee46f233e9dc22eb84d93a9508c9b868687b274fc431d886bf"
@@ -3478,7 +3452,7 @@ dependencies = [
  "cast",
  "ciborium",
  "clap 4.5.53",
- "criterion-plot 0.8.1",
+ "criterion-plot",
  "itertools 0.13.0",
  "num-traits",
  "oorandom",
@@ -3490,16 +3464,6 @@ dependencies = [
  "serde_json",
  "tinytemplate",
  "walkdir",
-]
-
-[[package]]
-name = "criterion-plot"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6b50826342786a51a89e2da3a28f1c32b06e387201bc2d19791f622c673706b1"
-dependencies = [
- "cast",
- "itertools 0.10.5",
 ]
 
 [[package]]
@@ -4457,7 +4421,7 @@ dependencies = [
  "hotshot-query-service",
  "hotshot-state-prover",
  "hotshot-types",
- "itertools 0.12.1",
+ "itertools 0.14.0",
  "jf-merkle-tree-compat",
  "rand 0.8.5",
  "rstest",
@@ -4531,7 +4495,7 @@ dependencies = [
  "humantime",
  "indexmap 2.12.1",
  "insta",
- "itertools 0.12.1",
+ "itertools 0.14.0",
  "jf-advz",
  "jf-merkle-tree-compat",
  "jf-utils",
@@ -5940,7 +5904,7 @@ dependencies = [
  "hotshot-testing",
  "hotshot-types",
  "include_dir",
- "itertools 0.12.1",
+ "itertools 0.14.0",
  "jf-advz",
  "jf-merkle-tree-compat",
  "lazy_static",
@@ -5995,7 +5959,7 @@ dependencies = [
  "hotshot-query-service",
  "hotshot-task-impls",
  "hotshot-types",
- "itertools 0.12.1",
+ "itertools 0.14.0",
  "jf-crhf",
  "jf-pcs",
  "jf-plonk 0.7.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-plonk-v0.7.0)",
@@ -6806,17 +6770,6 @@ checksum = "4f867b9d1d896b67beb18518eda36fdb77a32ea590de864f1325b294a6d14397"
 dependencies = [
  "memchr",
  "serde",
-]
-
-[[package]]
-name = "is-terminal"
-version = "0.4.17"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
-dependencies = [
- "hermit-abi 0.5.2",
- "libc",
- "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -10757,7 +10710,7 @@ dependencies = [
  "hotshot-types",
  "include_dir",
  "indexmap 2.12.1",
- "itertools 0.12.1",
+ "itertools 0.14.0",
  "jf-advz",
  "jf-crhf",
  "jf-merkle-tree-compat",
@@ -11218,7 +11171,7 @@ dependencies = [
  "hotshot-query-service",
  "hotshot-testing",
  "hotshot-types",
- "itertools 0.12.1",
+ "itertools 0.14.0",
  "jf-merkle-tree-compat",
  "rand 0.8.5",
  "reqwest",
@@ -13202,7 +13155,7 @@ dependencies = [
  "ark-serialize 0.5.0",
  "ark-std 0.5.0",
  "base64-bytes",
- "criterion 0.5.1",
+ "criterion",
  "displaydoc",
  "jf-crhf",
  "jf-merkle-tree",

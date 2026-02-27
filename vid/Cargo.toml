@@ -15,26 +15,26 @@ keccak256 = []
 [dependencies]
 anyhow = { workspace = true }
 ark-bn254 = { workspace = true }
-ark-ff = { workspace = true, features = [ "asm" ] }
+ark-ff = { workspace = true }
 ark-poly = { workspace = true }
 ark-serialize = { workspace = true }
 ark-std = { workspace = true }
 base64-bytes = { workspace = true }
-displaydoc = "0.2"
+displaydoc = { workspace = true }
 jf-crhf = { workspace = true }
-jf-merkle-tree = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-merkle-tree-v0.4.0" }
-jf-poseidon2 = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-poseidon2-v0.2.0", features = ["bn254"] }
+jf-merkle-tree = { workspace = true }
+jf-poseidon2 = { workspace = true }
 jf-utils = { workspace = true }
-p3-maybe-rayon = "0.2"
-reed-solomon-simd = "3.1.0"
+p3-maybe-rayon = { workspace = true }
+reed-solomon-simd = { workspace = true }
 serde = { workspace = true }
 sha2 = { workspace = true }
-sha3 = { version = "0.10" }
+sha3 = { workspace = true }
 tagged-base64 = { workspace = true }
 
 [dev-dependencies]
 ark-bls12-381 = { workspace = true }
-criterion = "0.5"
+criterion = { workspace = true }
 rand = { workspace = true }
 
 [[bench]]

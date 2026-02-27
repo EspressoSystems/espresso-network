@@ -10,7 +10,7 @@ async-broadcast = { workspace = true }
 async-trait = { workspace = true }
 bincode = { workspace = true }
 blake3 = { workspace = true }
-byteorder = { version = "1", default-features = false }
+byteorder = { workspace = true }
 dashmap = { workspace = true }
 derive_more = { workspace = true }
 hotshot-types = { workspace = true }
