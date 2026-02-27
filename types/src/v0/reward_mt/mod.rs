@@ -304,12 +304,12 @@ impl<S: RewardMerkleTreeStorage> StorageBackedRewardMerkleTreeV2<S> {
     /// # Arguments
     /// * `proof` - Inner proof (156-bit) to extend (modified in place)
     /// * `outer_proof` - Outer proof (4-bit) to append
-    fn patch_membership_proof(proof: &mut RewardMerkleProof, outer_proof: &OuterRewardMerkleProof) {
-        outer_proof
-            .proof
-            .iter()
-            .skip(1)
-            .for_each(|node| match node {
+    fn patch_membership_proof(
+        proof: &mut RewardMerkleProof,
+        outer_proof: &OuterRewardMerkleProof,
+    ) -> anyhow::Result<()> {
+        for node in &outer_proof.proof[1..] {
+            match node {
                 MerkleNode::Branch { value, children } => proof.proof.push(MerkleNode::Branch {
                     value: *value,
                     children: children
@@ -326,8 +326,16 @@ impl<S: RewardMerkleTreeStorage> StorageBackedRewardMerkleTreeV2<S> {
                         .collect::<Vec<_>>(),
                 }),
                 MerkleNode::Empty => proof.proof.push(RewardMerkleNode::Empty),
-                _ => unreachable!("Proof nodes in outer tree should be branches or empty"),
-            });
+                _ => {
+                    return Err(anyhow::anyhow!(
+                        "Outer merkle tree proof contains invalid node type: expected Branch or \
+                         Empty, found {:?}",
+                        node
+                    ));
+                },
+            }
+        }
+        Ok(())
     }
 }
 
@@ -450,7 +458,7 @@ impl<S: RewardMerkleTreeStorage> StorageBackedRewardMerkleTreeV2<S> {
     pub fn lookup(
         &self,
         index: impl Borrow<RewardAccountV2>,
-    ) -> Result<LookupResult<RewardAmount, RewardMerkleProof, ()>, S::Error> {
+    ) -> anyhow::Result<LookupResult<RewardAmount, RewardMerkleProof, ()>> {
         let outer_index = OuterIndex::new(index.borrow());
         let outer_proof = match self.outer.lookup(outer_index) {
             LookupResult::Ok(_, proof) => proof,
@@ -461,7 +469,7 @@ impl<S: RewardMerkleTreeStorage> StorageBackedRewardMerkleTreeV2<S> {
         };
         match self.storage.lookup(index)? {
             LookupResult::Ok(value, mut proof) => {
-                Self::patch_membership_proof(&mut proof, &outer_proof);
+                Self::patch_membership_proof(&mut proof, &outer_proof)?;
                 Ok(LookupResult::Ok(value, proof))
             },
             LookupResult::NotInMemory => Ok(LookupResult::NotInMemory),
@@ -528,7 +536,7 @@ impl<S: RewardMerkleTreeStorage> StorageBackedRewardMerkleTreeV2<S> {
     pub fn universal_lookup(
         &self,
         index: impl Borrow<RewardAccountV2>,
-    ) -> Result<LookupResult<RewardAmount, RewardMerkleProof, RewardMerkleProof>, S::Error> {
+    ) -> anyhow::Result<LookupResult<RewardAmount, RewardMerkleProof, RewardMerkleProof>> {
         let index = index.borrow();
         let outer_index = OuterIndex::new(index);
         let outer_proof = match self.outer.universal_lookup(outer_index) {
@@ -541,18 +549,18 @@ impl<S: RewardMerkleTreeStorage> StorageBackedRewardMerkleTreeV2<S> {
                     *index,
                     vec![MerkleNode::Empty; REWARD_MERKLE_TREE_V2_INNER_HEIGHT + 1],
                 );
-                Self::patch_membership_proof(&mut proof, &outer_proof);
+                Self::patch_membership_proof(&mut proof, &outer_proof)?;
                 return Ok(LookupResult::NotFound(proof));
             },
         };
         match self.storage.lookup(index)? {
             LookupResult::Ok(value, mut proof) => {
-                Self::patch_membership_proof(&mut proof, &outer_proof);
+                Self::patch_membership_proof(&mut proof, &outer_proof)?;
                 Ok(LookupResult::Ok(value, proof))
             },
             LookupResult::NotInMemory => Ok(LookupResult::NotInMemory),
             LookupResult::NotFound(mut proof) => {
-                Self::patch_membership_proof(&mut proof, &outer_proof);
+                Self::patch_membership_proof(&mut proof, &outer_proof)?;
                 Ok(LookupResult::NotFound(proof))
             },
         }
@@ -578,7 +586,7 @@ impl<S: RewardMerkleTreeStorage> StorageBackedRewardMerkleTreeV2<S> {
     pub fn forget(
         &mut self,
         index: impl Borrow<RewardAccountV2>,
-    ) -> Result<LookupResult<RewardAmount, RewardMerkleProof, ()>, S::Error> {
+    ) -> anyhow::Result<LookupResult<RewardAmount, RewardMerkleProof, ()>> {
         self.lookup(index)
     }
 
@@ -603,7 +611,7 @@ impl<S: RewardMerkleTreeStorage> StorageBackedRewardMerkleTreeV2<S> {
     pub fn universal_forget(
         &mut self,
         pos: RewardAccountV2,
-    ) -> Result<LookupResult<RewardAmount, RewardMerkleProof, RewardMerkleProof>, S::Error> {
+    ) -> anyhow::Result<LookupResult<RewardAmount, RewardMerkleProof, RewardMerkleProof>> {
         self.universal_lookup(pos)
     }
 
