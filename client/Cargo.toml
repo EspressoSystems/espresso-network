@@ -8,7 +8,7 @@ publish = false
 [dependencies]
 alloy = { workspace = true }
 anyhow = { workspace = true }
-espresso-types = { path = "../types" }
+espresso-types = { workspace = true }
 futures = { workspace = true }
 jf-merkle-tree-compat = { workspace = true }
 surf-disco = { workspace = true }

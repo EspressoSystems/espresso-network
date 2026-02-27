@@ -12,7 +12,7 @@ async-trait = { workspace = true }
 bincode = { workspace = true }
 chrono = { workspace = true }
 committable = { workspace = true }
-derive_more = { workspace = true, features = ["debug"] }
+derive_more = { workspace = true }
 either = { workspace = true }
 futures = { workspace = true }
 hex = { workspace = true }
@@ -24,8 +24,8 @@ hotshot-task-impls = { workspace = true }
 hotshot-testing = { workspace = true }
 hotshot-types = { workspace = true }
 jf-advz = { workspace = true }
-nonempty-collections = "0.2"
-quick_cache = "0.6"
+nonempty-collections = { workspace = true }
+quick_cache = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true }
 sha2 = { workspace = true }
