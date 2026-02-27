@@ -344,6 +344,8 @@ opt-level = 1
 opt-level = 1
 [profile.test.package.hotshot-builder-api]
 opt-level = 1
+[profile.test.package.hotshot-builder-legacy]
+opt-level = 1
 [profile.test.package.hotshot-utils]
 opt-level = 1
 [profile.test.package.hotshot-state-prover]
