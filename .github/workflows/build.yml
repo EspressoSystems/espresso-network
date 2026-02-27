@@ -84,15 +84,12 @@ jobs:
           scripts/ci-build-binary ${{ matrix.binary }}
 
       - name: Upload cargo timings
-        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: cargo-timings-build-amd-${{ matrix.binary }}
           path: target/cargo-timings/cargo-timing.html
-          if-no-files-found: ignore
 
       - name: Cargo timing summary
-        if: always()
         run: scripts/cargo-timing-summary target/cargo-timings/cargo-timing.html >> "$GITHUB_STEP_SUMMARY"
 
       - name: Move binaries to upload directory
@@ -158,15 +155,12 @@ jobs:
           scripts/ci-build-binary ${{ matrix.binary }}
 
       - name: Upload cargo timings
-        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: cargo-timings-build-arm-${{ matrix.binary }}
           path: target/cargo-timings/cargo-timing.html
-          if-no-files-found: ignore
 
       - name: Cargo timing summary
-        if: always()
         run: scripts/cargo-timing-summary target/cargo-timings/cargo-timing.html >> "$GITHUB_STEP_SUMMARY"
 
       - name: Move binaries to upload directory

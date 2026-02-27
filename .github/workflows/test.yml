@@ -59,15 +59,12 @@ jobs:
           path: nextest-archive-postgres.tar.zst
 
       - name: Upload cargo timings
-        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: cargo-timings-test-postgres
           path: target/cargo-timings/cargo-timing.html
-          if-no-files-found: ignore
 
       - name: Cargo timing summary
-        if: always()
         run: scripts/cargo-timing-summary target/cargo-timings/cargo-timing.html >> "$GITHUB_STEP_SUMMARY"
 
   build-test-artifacts-sqlite:
@@ -102,15 +99,12 @@ jobs:
           path: nextest-archive-sqlite.tar.zst
 
       - name: Upload cargo timings
-        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: cargo-timings-test-sqlite
           path: target/cargo-timings/cargo-timing.html
-          if-no-files-found: ignore
 
       - name: Cargo timing summary
-        if: always()
         run: scripts/cargo-timing-summary target/cargo-timings/cargo-timing.html >> "$GITHUB_STEP_SUMMARY"
 
   build-test-bins:
@@ -134,15 +128,12 @@ jobs:
         timeout-minutes: 60
 
       - name: Upload cargo timings
-        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: cargo-timings-test-bins
           path: target/cargo-timings/cargo-timing.html
-          if-no-files-found: ignore
 
       - name: Cargo timing summary
-        if: always()
         run: scripts/cargo-timing-summary target/cargo-timings/cargo-timing.html >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload archive to workflow
