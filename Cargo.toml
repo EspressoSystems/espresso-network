@@ -48,9 +48,10 @@ members = [
     "vid",
 ]
 
-# All crates except sequencer-sqlite, espresso-dev-node, and hotshot-examples.
+# All crates except sequencer-sqlite, espresso-dev-node, hotshot-examples, and crypto-helper.
 # sequencer-sqlite/espresso-dev-node: embedded-db feature conflict
 # hotshot-examples: no tests, only needed for manual testing via `just hotshot::example`
+# crypto-helper: vendored openssl leaks to workspace via feature unification
 default-members = [
     "alloy-compat",
     "benchmark-stats",
@@ -81,7 +82,6 @@ default-members = [
     "light-client-query-service",
     "node-metrics",
     "request-response",
-    "sdks/crypto-helper",
     "sequencer",
     "slow-tests",
     "staking-cli",

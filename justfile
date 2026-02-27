@@ -67,16 +67,20 @@ lint *args:
     just clippy {{args}} -- -D warnings
 
 clippy *args:
-    # check all targets in workspace (excluding embedded-db crates)
-    cargo clippy --workspace --exclude sequencer-sqlite --exclude espresso-dev-node --features testing --all-targets {{args}}
+    # check all targets in workspace (excluding embedded-db and crypto-helper crates)
+    cargo clippy --workspace --exclude sequencer-sqlite --exclude espresso-dev-node --exclude espresso-crypto-helper --features testing --all-targets {{args}}
     # check entire workspace (including sequencer-sqlite crate) with embedded-db feature
-    cargo clippy --workspace --features "embedded-db testing" --all-targets {{args}}
+    cargo clippy --workspace --exclude espresso-crypto-helper --features "embedded-db testing" --all-targets {{args}}
+    # crypto-helper separately (vendored openssl must not leak to workspace)
+    cargo clippy -p espresso-crypto-helper --all-targets {{args}}
 
 check *args:
-    # postgres (all workspace members except embedded-db crates)
-    cargo check --workspace --exclude sequencer-sqlite --exclude espresso-dev-node {{args}}
+    # postgres (all workspace members except embedded-db and crypto-helper crates)
+    cargo check --workspace --exclude sequencer-sqlite --exclude espresso-dev-node --exclude espresso-crypto-helper {{args}}
     # embedded-db
     cargo check -p sequencer-sqlite -p espresso-dev-node {{args}}
+    # crypto-helper separately (vendored openssl must not leak to workspace)
+    cargo check -p espresso-crypto-helper {{args}}
 
 build profile="dev" features="":
     # postgres
@@ -134,10 +138,10 @@ anvil *args:
 nextest_excludes := "--exclude sequencer-sqlite --exclude hotshot-testing --exclude slow-tests --exclude espresso-dev-node --exclude hotshot-examples"
 
 nextest *args:
-    cargo nextest run --locked --workspace {{nextest_excludes}} --verbose {{args}}
+    cargo nextest run --locked --workspace {{nextest_excludes}} --lib --bins --tests --verbose {{args}}
 
 nextest-archive archive-file *args:
-    cargo nextest archive --locked --workspace {{nextest_excludes}} --archive-file {{archive-file}} {{args}}
+    cargo nextest archive --locked --workspace {{nextest_excludes}} --lib --bins --tests --archive-file {{archive-file}} {{args}}
 
 test *args:
     @echo 'Omitting slow tests. Use `test-slow` for those. Or `test-all` for all tests.'
