@@ -25,7 +25,7 @@ use hotshot_builder_api::{
         },
         data_source::{AcceptsTxnSubmits, BuilderDataSource},
     },
-    v0_2::block_info::AvailableBlockHeaderInputV1,
+    v0_2::block_info::{AvailableBlockHeaderInputV1, AvailableBlockHeaderInputV2Legacy},
 };
 use hotshot_builder_shared::{
     block::{BlockId, BuilderStateId, ReceivedTransaction, TransactionSource},
@@ -44,7 +44,9 @@ use hotshot_types::{
         EncodeBytes,
     },
     utils::BuilderCommitment,
+    vid::advz::advz_scheme,
 };
+use jf_advz::VidScheme;
 use tagged_base64::TaggedBase64;
 use tide_disco::{app::AppError, method::ReadState, App};
 use tokio::{
@@ -560,10 +562,11 @@ where
     pub(crate) async fn claim_block_header_input_implementation(
         &self,
         block_id: BlockId<Types>,
-    ) -> Result<(bool, AvailableBlockHeaderInputV1<Types>), Error<Types>> {
+    ) -> Result<(bool, AvailableBlockHeaderInputV2Legacy<Types>), Error<Types>> {
         let metadata;
         let offered_fee;
         let truncated;
+        let block_payload;
         {
             // We store this read lock guard separately to make it explicit
             // that this will end up holding a lock for the duration of this
@@ -581,16 +584,29 @@ where
             metadata = block_info.metadata.clone();
             offered_fee = block_info.offered_fee;
             truncated = block_info.truncated;
+            block_payload = block_info.block_payload.clone();
         };
 
         // TODO Add precompute back.
 
+        let response_block_hash = block_payload.builder_commitment(&metadata);
+        let signature_over_builder_commitment =
+            <Types as NodeType>::BuilderSignatureKey::sign_builder_message(
+                &self.builder_keys.1,
+                response_block_hash.as_ref(),
+            )
+            .map_err(Error::Signing)?;
         let signature_over_fee_info =
             Types::BuilderSignatureKey::sign_fee(&self.builder_keys.1, offered_fee, &metadata)
                 .map_err(Error::Signing)?;
 
-        let response = AvailableBlockHeaderInputV1::<Types> {
+        let vid_commitment = advz_scheme(self.num_nodes.load(Ordering::Relaxed))
+            .commit_only(&block_payload.encode())
+            .unwrap();
+        let response = AvailableBlockHeaderInputV2Legacy::<Types> {
+            vid_commitment,
             fee_signature: signature_over_fee_info,
+            message_signature: signature_over_builder_commitment,
             sender: self.builder_keys.0.clone(),
         };
         info!("Sending Claim Block Header Input response");
@@ -705,7 +721,7 @@ where
         view_number: u64,
         sender: Types::SignatureKey,
         signature: &<<Types as NodeType>::SignatureKey as SignatureKey>::PureAssembledSignatureType,
-    ) -> Result<AvailableBlockHeaderInputV1<Types>, BuildError> {
+    ) -> Result<AvailableBlockHeaderInputV2Legacy<Types>, BuildError> {
         let start = Instant::now();
         // verify the signature
         if !sender.validate(signature, block_hash.as_ref()) {

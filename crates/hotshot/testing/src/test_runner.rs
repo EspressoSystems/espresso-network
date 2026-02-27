@@ -508,16 +508,18 @@ where
             )
             .await;
 
+            let num_nodes = config.known_nodes_with_stake.len();
+
             match node_id.cmp(&(config.da_staked_committee_size as u64 - 1)) {
                 std::cmp::Ordering::Less => {
                     if let Some(task) = builder_tasks.pop() {
-                        task.start(Box::new(handle.event_stream()))
+                        task.start(num_nodes, Box::new(handle.event_stream()))
                     }
                 },
                 std::cmp::Ordering::Equal => {
                     // If we have more builder tasks than DA nodes, pin them all on the last node.
                     while let Some(task) = builder_tasks.pop() {
-                        task.start(Box::new(handle.event_stream()))
+                        task.start(num_nodes, Box::new(handle.event_stream()))
                     }
                 },
                 std::cmp::Ordering::Greater => {},

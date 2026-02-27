@@ -16,6 +16,7 @@ use super::{
     block_info::{AvailableBlockData, AvailableBlockHeaderInputV1, AvailableBlockInfo},
     builder::{BuildError, TransactionStatus},
 };
+use crate::v0_1::block_info::AvailableBlockHeaderInputV2Legacy;
 
 #[async_trait]
 pub trait BuilderDataSource<TYPES: NodeType> {
@@ -55,7 +56,7 @@ pub trait BuilderDataSource<TYPES: NodeType> {
         view_number: u64,
         sender: TYPES::SignatureKey,
         signature: &<TYPES::SignatureKey as SignatureKey>::PureAssembledSignatureType,
-    ) -> Result<AvailableBlockHeaderInputV1<TYPES>, BuildError>;
+    ) -> Result<AvailableBlockHeaderInputV2Legacy<TYPES>, BuildError>;
 
     /// To get the builder's address
     async fn builder_address(&self) -> Result<TYPES::BuilderSignatureKey, BuildError>;

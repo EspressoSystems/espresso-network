@@ -16,18 +16,22 @@ use hotshot_builder_api::{
         block_info::{AvailableBlockData, AvailableBlockInfo},
         builder::{Error, Options},
     },
-    v0_2::block_info::AvailableBlockHeaderInputV1,
+    v0_2::block_info::{AvailableBlockHeaderInputV1, AvailableBlockHeaderInputV2Legacy},
 };
 use hotshot_types::{
     constants::LEGACY_BUILDER_MODULE,
+    data::vid_commitment,
     traits::{
-        block_contents::EncodeBytes, node_implementation::NodeType,
+        block_contents::EncodeBytes,
+        node_implementation::{NodeType, Versions},
         signature_key::BuilderSignatureKey,
     },
+    vid::advz::advz_scheme,
 };
+use jf_advz::VidScheme;
 use tide_disco::{method::ReadState, App, Url};
 use tokio::spawn;
-use vbs::version::StaticVersionType;
+use vbs::version::{StaticVersionType, Version};
 
 use crate::test_builder::BuilderChange;
 
@@ -55,6 +59,7 @@ where
 pub trait BuilderTask<TYPES: NodeType>: Send + Sync {
     fn start(
         self: Box<Self>,
+        num_storage_nodes: usize,
         stream: Box<dyn Stream<Item = Event<TYPES>> + std::marker::Unpin + Send + 'static>,
     );
 }
@@ -64,7 +69,7 @@ pub trait BuilderTask<TYPES: NodeType>: Send + Sync {
 struct BlockEntry<TYPES: NodeType> {
     metadata: AvailableBlockInfo<TYPES>,
     payload: Option<AvailableBlockData<TYPES>>,
-    header_input: Option<AvailableBlockHeaderInputV1<TYPES>>,
+    header_input: Option<AvailableBlockHeaderInputV2Legacy<TYPES>>,
 }
 
 /// Construct a tide disco app that mocks the builder API 0.1 + 0.3.
@@ -159,6 +164,7 @@ pub fn run_builder_source_0_1<TYPES, Source>(
 /// Helper function to construct all builder data structures from a list of transactions
 async fn build_block<TYPES: NodeType>(
     transactions: Vec<TYPES::Transaction>,
+    num_storage_nodes: usize,
     pub_key: TYPES::BuilderSignatureKey,
     priv_key: <TYPES::BuilderSignatureKey as BuilderSignatureKey>::BuilderPrivateKey,
 ) -> BlockEntry<TYPES>
@@ -172,6 +178,12 @@ where
     )
     .await
     .expect("failed to build block payload from transactions");
+
+    let encoded_transactions = block_payload.encode();
+
+    let vid_commitment = advz_scheme(num_storage_nodes)
+        .commit_only(&encoded_transactions)
+        .unwrap();
 
     let commitment = block_payload.builder_commitment(&metadata);
 
@@ -194,7 +206,7 @@ where
         block_payload,
         metadata,
         sender: pub_key.clone(),
-        signature: signature_over_builder_commitment,
+        signature: signature_over_builder_commitment.clone(),
     };
     let metadata = AvailableBlockInfo {
         sender: pub_key.clone(),
@@ -204,8 +216,10 @@ where
         offered_fee: 123,
         _phantom: std::marker::PhantomData,
     };
-    let header_input = AvailableBlockHeaderInputV1 {
+    let header_input = AvailableBlockHeaderInputV2Legacy {
+        vid_commitment,
         fee_signature: signature_over_fee_info,
+        message_signature: signature_over_builder_commitment,
         sender: pub_key,
     };
 
