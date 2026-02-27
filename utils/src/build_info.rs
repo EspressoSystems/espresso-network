@@ -5,7 +5,6 @@ pub const GIT_SHA: &str = env!("VERGEN_GIT_SHA");
 pub const GIT_DIRTY: &str = env!("VERGEN_GIT_DIRTY");
 pub const GIT_BRANCH: &str = env!("VERGEN_GIT_BRANCH");
 pub const GIT_COMMIT_TIMESTAMP: &str = env!("VERGEN_GIT_COMMIT_TIMESTAMP");
-pub const BUILD_TIMESTAMP: &str = env!("VERGEN_BUILD_TIMESTAMP");
 
 /// Build and git metadata for version output.
 ///
@@ -34,7 +33,6 @@ pub struct BuildInfo {
     pub git_dirty: &'static str,
     pub git_branch: &'static str,
     pub git_commit_timestamp: &'static str,
-    pub build_timestamp: &'static str,
     pub is_debug: bool,
     pub os: &'static str,
     pub arch: &'static str,
@@ -54,10 +52,9 @@ impl fmt::Display for BuildInfo {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "describe: {}", self.git_describe)?;
         writeln!(f, "rev: {}", self.git_sha)?;
-        writeln!(f, "dirty: {}", self.git_dirty)?;
+        writeln!(f, "modified: {}", self.git_dirty)?;
         writeln!(f, "branch: {}", self.git_branch)?;
         writeln!(f, "commit-timestamp: {}", self.git_commit_timestamp)?;
-        writeln!(f, "build-timestamp: {}", self.build_timestamp)?;
         writeln!(f, "debug: {}", self.is_debug)?;
         writeln!(f, "os: {}", self.os)?;
         write!(f, "arch: {}", self.arch)
@@ -75,7 +72,6 @@ macro_rules! build_info {
             git_dirty: $crate::build_info::GIT_DIRTY,
             git_branch: $crate::build_info::GIT_BRANCH,
             git_commit_timestamp: $crate::build_info::GIT_COMMIT_TIMESTAMP,
-            build_timestamp: $crate::build_info::BUILD_TIMESTAMP,
             is_debug: cfg!(debug_assertions),
             os: std::env::consts::OS,
             arch: std::env::consts::ARCH,
@@ -92,10 +88,9 @@ mod test {
         for field in [
             "describe:",
             "rev:",
-            "dirty:",
+            "modified:",
             "branch:",
             "commit-timestamp:",
-            "build-timestamp:",
             "debug:",
             "os:",
             "arch:",

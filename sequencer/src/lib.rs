@@ -228,26 +228,17 @@ where
         .text_family(
             "build_info".into(),
             vec![
-                "build_timestamp".into(),
-                "dirty".into(),
+                "modified".into(),
                 "branch".into(),
                 "debug".into(),
                 "features".into(),
-                "testing".into(),
             ],
         )
         .create(vec![
-            info.build_timestamp.into(),
             info.git_dirty.into(),
             info.git_branch.into(),
             info.is_debug.to_string(),
             env!("VERGEN_CARGO_FEATURES").into(),
-            if cfg!(feature = "testing") {
-                "yes"
-            } else {
-                "no"
-            }
-            .into(),
         ]);
 
     // Expose Node Entity Information via the status/metrics API

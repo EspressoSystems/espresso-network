@@ -304,9 +304,18 @@ mod test {
             build_info_line.is_some(),
             "missing consensus_build_info metric: {lines:#?}"
         );
+        let build_info_line = build_info_line.unwrap();
         assert!(
-            build_info_line.unwrap().contains("testing=\"yes\""),
-            "expected testing=yes in test builds: {lines:#?}"
+            build_info_line.contains("modified="),
+            "expected modified= in build_info: {lines:#?}"
+        );
+        assert!(
+            build_info_line.contains("features="),
+            "expected features= in build_info: {lines:#?}"
+        );
+        assert!(
+            build_info_line.contains("testing"),
+            "expected testing in features: {lines:#?}"
         );
 
         task.abort();

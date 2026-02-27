@@ -13100,7 +13100,6 @@ dependencies = [
  "derive_builder",
  "regex",
  "rustversion",
- "time 0.3.47",
  "vergen-lib",
 ]
 

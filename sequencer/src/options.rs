@@ -451,16 +451,10 @@ fn get_default_node_type() -> String {
 
 fn build_version() -> String {
     let info = sequencer_utils::build_info!();
-    let testing = if cfg!(feature = "testing") {
-        "yes"
-    } else {
-        "no"
-    };
     format!(
-        "{}\nfeatures: {}\ntesting: {}",
+        "{}\nfeatures: {}",
         info.clap_version(),
         env!("VERGEN_CARGO_FEATURES"),
-        testing,
     )
 }
 
@@ -717,15 +711,13 @@ mod tests {
         for field in [
             "describe:",
             "rev:",
-            "dirty:",
+            "modified:",
             "branch:",
             "commit-timestamp:",
-            "build-timestamp:",
             "debug:",
             "os:",
             "arch:",
             "features:",
-            "testing:",
         ] {
             assert!(version.contains(field), "missing {field}: {version}");
         }
@@ -734,8 +726,8 @@ mod tests {
             "expected debug build in test: {version}"
         );
         assert!(
-            version.contains("testing: yes"),
-            "expected testing enabled in test builds: {version}"
+            version.contains("testing"),
+            "expected testing in features: {version}"
         );
     }
 }
