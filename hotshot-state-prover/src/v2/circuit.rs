@@ -9,20 +9,14 @@ use hotshot_contract_adapter::{
     u256_to_field,
 };
 use hotshot_types::light_client::{GenericLightClientState, GenericStakeTableState};
-use jf_plonk::PlonkError;
-use jf_relation::{BoolVar, Circuit, CircuitError, PlonkCircuit, Variable};
-use jf_rescue::{gadgets::RescueNativeGadget, RescueParameter};
-use jf_signature::{
+use jf_plonk_compat::PlonkError;
+use jf_relation_compat::{BoolVar, Circuit, CircuitError, PlonkCircuit, Variable};
+use jf_rescue_compat::{gadgets::RescueNativeGadget, RescueParameter};
+use jf_signature::schnorr::{Signature, VerKey as SchnorrVerKey};
+use jf_signature_compat::{
     gadgets::schnorr::{SignatureGadget, VerKeyVar},
-    schnorr::{Signature, VerKey as SchnorrVerKey},
+    schnorr::{Signature as UnsafeSignature, VerKey as UnsafeSchnorrVerKey},
 };
-
-// TODO: (alex) overwrite GenericPublicInput instead when circuit is updated
-#[derive(Clone, Debug)]
-pub struct NewGenericPublicInput<F: PrimeField> {
-    pub voting_st_state: GenericStakeTableState<F>,
-    pub auth_root: F,
-}
 
 /// Public input to the light client state prover service
 #[derive(Clone, Debug)]
@@ -218,9 +212,22 @@ where
     SigIter::Item: Borrow<Signature<P>>,
     SigIter::IntoIter: ExactSizeIterator,
 {
-    let stake_table_entries = stake_table_entries.into_iter();
+    use std::str::FromStr;
+    let stake_table_entries = stake_table_entries
+        .into_iter()
+        .map(|entry| {
+            let (vk, amount) = entry.borrow();
+            (
+                UnsafeSchnorrVerKey::from_str(&vk.to_string()).unwrap(),
+                *amount,
+            )
+        })
+        .collect::<Vec<_>>();
     let signer_bit_vec = signer_bit_vec.into_iter();
-    let signatures = signatures.into_iter();
+    let signatures = signatures
+        .into_iter()
+        .map(|sig| UnsafeSignature::from_str(&sig.borrow().to_string()).unwrap())
+        .collect::<Vec<_>>();
     if stake_table_entries.len() > stake_table_capacity {
         return Err(PlonkError::CircuitError(CircuitError::ParameterError(
             format!(
@@ -254,10 +261,10 @@ where
     // creating variables for stake table entries
     let stake_table_entries_pad_len = stake_table_capacity - stake_table_entries.len();
     let mut stake_table_var = stake_table_entries
-        .map(|item| {
-            let item = item.borrow();
-            let state_ver_key = circuit.create_signature_vk_variable(&item.0)?;
-            let stake_amount = circuit.create_variable(u256_to_field::<F>(item.1))?;
+        .into_iter()
+        .map(|(vk, amount): (UnsafeSchnorrVerKey<P>, U256)| {
+            let state_ver_key = circuit.create_signature_vk_variable(&vk)?;
+            let stake_amount = circuit.create_variable(u256_to_field::<F>(amount))?;
             Ok(StakeTableEntryVar {
                 state_ver_key,
                 stake_amount,
@@ -268,7 +275,7 @@ where
         (0..stake_table_entries_pad_len)
             .map(|_| {
                 let state_ver_key =
-                    circuit.create_signature_vk_variable(&SchnorrVerKey::<P>::default())?;
+                    circuit.create_signature_vk_variable(&UnsafeSchnorrVerKey::<P>::default())?;
                 let stake_amount = circuit.create_variable(F::default())?;
                 Ok(StakeTableEntryVar {
                     state_ver_key,
@@ -281,11 +288,12 @@ where
     // creating variables for signatures
     let sig_pad_len = stake_table_capacity - signatures.len();
     let mut sig_vars = signatures
-        .map(|sig| circuit.create_signature_variable(sig.borrow()))
+        .into_iter()
+        .map(|sig: UnsafeSignature<P>| circuit.create_signature_variable(&sig))
         .collect::<Result<Vec<_>, CircuitError>>()?;
     sig_vars.extend(
         (0..sig_pad_len)
-            .map(|_| circuit.create_signature_variable(&Signature::<P>::default()))
+            .map(|_| circuit.create_signature_variable(&UnsafeSignature::<P>::default()))
             .collect::<Result<Vec<_>, CircuitError>>()?,
     );
 
@@ -438,7 +446,7 @@ mod tests {
         signature_key::SchnorrPubKey,
         traits::signature_key::LCV2StateSignatureKey,
     };
-    use jf_relation::Circuit;
+    use jf_relation_compat::Circuit;
     use jf_signature::schnorr::Signature;
     use jf_utils::test_rng;
 

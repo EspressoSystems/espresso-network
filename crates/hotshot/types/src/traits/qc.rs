@@ -12,7 +12,7 @@ use ark_std::{
     vec::Vec,
 };
 use bitvec::prelude::*;
-use digest::generic_array::{ArrayLength, GenericArray};
+use generic_array::{ArrayLength, GenericArray};
 use jf_signature::{AggregateableSignatureSchemes, SignatureError};
 
 /// Trait for validating a QC built from different signatures on the same message
@@ -26,7 +26,7 @@ pub trait QuorumCertificateScheme<A: AggregateableSignatureSchemes> {
     type QcVerifierParams<'a>;
 
     /// Allows to fix the size of the message at compilation time.
-    type MessageLength: ArrayLength<A::MessageUnit>;
+    type MessageLength: ArrayLength;
 
     /// Type of the actual quorum certificate object
     type Qc;
@@ -92,6 +92,16 @@ pub trait QuorumCertificateScheme<A: AggregateableSignatureSchemes> {
     fn trace(
         qc_vp: &Self::QcVerifierParams<'_>,
         message: &GenericArray<A::MessageUnit, Self::MessageLength>,
+        qc: &Self::Qc,
+    ) -> Result<Vec<A::VerificationKey>, SignatureError>;
+
+    /// Get the list of signers given a qc without checking the signature
+    ///
+    /// # Errors
+    ///
+    /// Return error if the inputs mismatch (e.g. wrong verifier parameter or original message).
+    fn signers(
+        qc_vp: &Self::QcVerifierParams<'_>,
         qc: &Self::Qc,
     ) -> Result<Vec<A::VerificationKey>, SignatureError>;
 }

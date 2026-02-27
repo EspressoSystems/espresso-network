@@ -40,7 +40,7 @@ use hotshot_types::{
 };
 use hotshot_utils::anytrace::*;
 use tracing::instrument;
-use vbs::version::StaticVersionType;
+use versions::EPOCH_VERSION;
 
 use crate::{
     events::HotShotEvent,
@@ -48,7 +48,7 @@ use crate::{
         broadcast_event, check_qc_state_cert_correspondence, parent_leaf_and_state,
         validate_light_client_state_update_certificate, validate_qc_and_next_epoch_qc,
     },
-    quorum_proposal::{QuorumProposalTaskState, UpgradeLock, Versions},
+    quorum_proposal::{QuorumProposalTaskState, UpgradeLock},
 };
 
 /// Proposal dependency types. These types represent events that precipitate a proposal.
@@ -74,7 +74,7 @@ pub(crate) enum ProposalDependency {
 }
 
 /// Handler for the proposal dependency
-pub struct ProposalDependencyHandle<TYPES: NodeType, V: Versions> {
+pub struct ProposalDependencyHandle<TYPES: NodeType> {
     /// Latest view number that has been proposed for (proxy for cur_view).
     pub latest_proposed_view: TYPES::View,
 
@@ -114,7 +114,7 @@ pub struct ProposalDependencyHandle<TYPES: NodeType, V: Versions> {
     pub formed_upgrade_certificate: Option<UpgradeCertificate<TYPES>>,
 
     /// Lock for a decided upgrade
-    pub upgrade_lock: UpgradeLock<TYPES, V>,
+    pub upgrade_lock: UpgradeLock<TYPES>,
 
     /// The node's id
     pub id: u64,
@@ -124,9 +124,11 @@ pub struct ProposalDependencyHandle<TYPES: NodeType, V: Versions> {
 
     /// Number of blocks in an epoch, zero means there are no epochs
     pub epoch_height: u64,
+
+    pub cancel_receiver: Receiver<()>,
 }
 
-impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
+impl<TYPES: NodeType> ProposalDependencyHandle<TYPES> {
     /// Return the next HighQc we get from the event stream
     async fn wait_for_qc_event(
         &self,
@@ -167,6 +169,7 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
                         if validate_light_client_state_update_certificate(
                             state_cert,
                             &self.membership.coordinator,
+                            &self.upgrade_lock,
                         )
                         .await
                         .is_err()
@@ -374,6 +377,7 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
                         if validate_light_client_state_update_certificate(
                             state_cert,
                             &self.membership.coordinator,
+                            &self.upgrade_lock,
                         )
                         .await
                         .is_err()
@@ -502,7 +506,7 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
         let builder_commitment = commitment_and_metadata.builder_commitment.clone();
         let metadata = commitment_and_metadata.metadata.clone();
 
-        if version >= V::Epochs::VERSION
+        if version >= EPOCH_VERSION
             && parent_qc.view_number()
                 > self
                     .upgrade_lock
@@ -557,7 +561,7 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
         .wrap()
         .context(warn!("Failed to construct block header"))?;
         let epoch = option_epoch_from_block_number::<TYPES>(
-            version >= V::Epochs::VERSION,
+            version >= EPOCH_VERSION,
             block_header.block_number(),
             self.epoch_height,
         );
@@ -587,8 +591,8 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
                 maybe_next_epoch_qc
                     .as_ref()
                     .is_some_and(|neqc| neqc.data.leaf_commit == parent_qc.data.leaf_commit),
-                "Jusify QC on our proposal is for an epoch transition block but we don't have the \
-                 corresponding next epoch QC. Do not propose."
+                "Justify QC on our proposal is for an epoch transition block but we don't have \
+                 the corresponding next epoch QC. Do not propose."
             );
             maybe_next_epoch_qc
         } else {
@@ -754,7 +758,7 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
                 ));
             }
             (qc, next_epoch_qc, state_cert)
-        } else if version < V::Epochs::VERSION {
+        } else if version < EPOCH_VERSION {
             (self.consensus.read().await.high_qc().clone(), None, None)
         } else if proposal_cert.is_some() {
             // If we have a view change evidence, we need to wait to propose with the transition QC
@@ -830,16 +834,26 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
             maybe_state_cert,
         )
         .await
+        .inspect_err(|e| tracing::error!("Failed to publish proposal: {e:?}"))
     }
 }
 
-impl<TYPES: NodeType, V: Versions> HandleDepOutput for ProposalDependencyHandle<TYPES, V> {
+impl<TYPES: NodeType> HandleDepOutput for ProposalDependencyHandle<TYPES> {
     type Output = Vec<Vec<Vec<Arc<HotShotEvent<TYPES>>>>>;
 
     #[allow(clippy::no_effect_underscore_binding, clippy::too_many_lines)]
     #[instrument(skip_all, fields(id = self.id, view_number = *self.view_number, latest_proposed_view = *self.latest_proposed_view))]
     async fn handle_dep_result(self, res: Self::Output) {
-        let result = self.handle_proposal_deps(&res).await;
+        let mut cancel_receiver = self.cancel_receiver.clone();
+        let result = tokio::select! {
+            result = self.handle_proposal_deps(&res) => {
+                result
+            }
+            _ = cancel_receiver.recv() => {
+                tracing::warn!("Proposal dependency task cancelled");
+                return;
+            }
+        };
         if result.is_err() {
             log!(result);
             self.print_proposal_events(&res)
@@ -847,15 +861,11 @@ impl<TYPES: NodeType, V: Versions> HandleDepOutput for ProposalDependencyHandle<
     }
 }
 
-pub(super) async fn handle_eqc_formed<
-    TYPES: NodeType,
-    I: NodeImplementation<TYPES>,
-    V: Versions,
->(
+pub(super) async fn handle_eqc_formed<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     cert_view: TYPES::View,
     leaf_commit: Commitment<Leaf2<TYPES>>,
     block_number: Option<u64>,
-    task_state: &mut QuorumProposalTaskState<TYPES, I, V>,
+    task_state: &mut QuorumProposalTaskState<TYPES, I>,
     event_sender: &Sender<Arc<HotShotEvent<TYPES>>>,
 ) {
     if !task_state.upgrade_lock.epochs_enabled(cert_view).await {

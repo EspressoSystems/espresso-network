@@ -9,13 +9,13 @@ use ark_serialize::{
     CanonicalDeserialize, CanonicalSerialize, Compress, Read, SerializationError, Valid, Validate,
 };
 use hotshot::types::BLSPubKey;
-use hotshot_contract_adapter::sol_types::AccruedRewardsProofSol;
+use hotshot_contract_adapter::reward::RewardProofSiblings;
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
     traits::{election::Membership, node_implementation::ConsensusTime},
     utils::epoch_from_block_number,
 };
-use jf_merkle_tree::{
+use jf_merkle_tree_compat::{
     prelude::MerkleNode, ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme,
     LookupResult, MerkleTreeScheme, PersistentUniversalMerkleTreeScheme, ToTraversalPath,
     UniversalMerkleTreeScheme,
@@ -24,10 +24,11 @@ use num_traits::CheckedSub;
 use sequencer_utils::{
     impl_serde_from_string_or_integer, impl_to_fixed_bytes, ser::FromStringOrInteger,
 };
-use vbs::version::StaticVersionType;
+use vbs::version::Version;
+use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION};
 
 use super::{
-    v0_3::{RewardAmount, Validator, COMMISSION_BASIS_POINTS},
+    v0_3::{AuthenticatedValidator, RewardAmount, COMMISSION_BASIS_POINTS},
     v0_4::{
         RewardAccountProofV2, RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleCommitmentV2,
         RewardMerkleProofV2, RewardMerkleTreeV2,
@@ -41,7 +42,7 @@ use crate::{
         RewardMerkleTreeV1,
     },
     v0_4::{Delta, REWARD_MERKLE_TREE_V2_ARITY, REWARD_MERKLE_TREE_V2_HEIGHT},
-    DrbAndHeaderUpgradeVersion, EpochVersion, FeeAccount,
+    FeeAccount,
 };
 
 impl_serde_from_string_or_integer!(RewardAmount);
@@ -80,8 +81,8 @@ impl FromStringOrInteger for RewardAmount {
     }
 
     fn from_string(s: String) -> anyhow::Result<Self> {
-        // For backwards compatibility, we have an ad hoc parser for WEI amounts represented as hex
-        // strings.
+        // For backwards compatibility, we have an ad hoc parser for WEI amounts
+        // represented as hex strings.
         if let Some(s) = s.strip_prefix("0x") {
             return Ok(Self(s.parse()?));
         }
@@ -412,16 +413,14 @@ impl RewardAccountProofV2 {
     }
 }
 
-impl TryInto<AccruedRewardsProofSol> for RewardAccountProofV2 {
+impl TryInto<RewardProofSiblings> for RewardAccountProofV2 {
     type Error = anyhow::Error;
 
     /// Generate a Solidity-compatible proof for this account
     ///
     /// The proof is returned without leaf value. The caller is expected to
     /// obtain the leaf value from the jellyfish proof (Self).
-    ///
-    /// TODO: review error handling / panics
-    fn try_into(self) -> anyhow::Result<AccruedRewardsProofSol> {
+    fn try_into(self) -> anyhow::Result<RewardProofSiblings> {
         // NOTE: rustfmt fails to format this file if the nesting is too deep.
         let proof = if let RewardMerkleProofV2::Presence(proof) = &self.proof {
             proof
@@ -438,7 +437,7 @@ impl TryInto<AccruedRewardsProofSol> for RewardAccountProofV2 {
             bail!("Invalid proof: unexpected path length: {}", path.len());
         };
 
-        let siblings: Vec<B256> = proof
+        let siblings: [B256; REWARD_MERKLE_TREE_V2_HEIGHT] = proof
             .proof
             .iter()
             .enumerate()
@@ -476,9 +475,12 @@ impl TryInto<AccruedRewardsProofSol> for RewardAccountProofV2 {
                 }
                 _ => None,
             })
-            .collect();
+            .collect::<Vec<B256>>().try_into().map_err(|err: Vec<_>| {
+                panic!("Invalid proof length: {:?}, this should never happen", err.len())
+            })
+            .unwrap();
 
-        Ok(AccruedRewardsProofSol { siblings })
+        Ok(siblings.into())
     }
 }
 
@@ -616,14 +618,14 @@ impl ComputedRewards {
 }
 
 pub struct RewardDistributor {
-    validator: Validator<BLSPubKey>,
+    validator: AuthenticatedValidator<BLSPubKey>,
     block_reward: RewardAmount,
     total_distributed: RewardAmount,
 }
 
 impl RewardDistributor {
     pub fn new(
-        validator: Validator<BLSPubKey>,
+        validator: AuthenticatedValidator<BLSPubKey>,
         block_reward: RewardAmount,
         total_distributed: RewardAmount,
     ) -> Self {
@@ -634,7 +636,7 @@ impl RewardDistributor {
         }
     }
 
-    pub fn validator(&self) -> Validator<BLSPubKey> {
+    pub fn validator(&self) -> AuthenticatedValidator<BLSPubKey> {
         self.validator.clone()
     }
 
@@ -693,12 +695,12 @@ impl RewardDistributor {
 
     pub fn apply_rewards(
         &mut self,
-        version: vbs::version::Version,
+        version: Version,
         state: &mut ValidatedState,
     ) -> anyhow::Result<()> {
         let computed_rewards = self.compute_rewards()?;
 
-        if version <= EpochVersion::version() {
+        if version <= EPOCH_VERSION {
             for (address, reward) in computed_rewards.all_rewards() {
                 Self::update_reward_balance(
                     &mut state.reward_merkle_tree_v1,
@@ -788,7 +790,7 @@ pub async fn distribute_block_reward(
     validated_state: &mut ValidatedState,
     parent_leaf: &Leaf2,
     view_number: ViewNumber,
-    version: vbs::version::Version,
+    version: Version,
 ) -> anyhow::Result<Option<RewardDistributor>> {
     let height = parent_leaf.height() + 1;
 
@@ -829,7 +831,7 @@ pub async fn distribute_block_reward(
     let mut previously_distributed = parent_header.total_reward_distributed().unwrap_or_default();
 
     // Decide whether to use a fixed or dynamic block reward.
-    let block_reward = if version >= DrbAndHeaderUpgradeVersion::version() {
+    let block_reward = if version >= DRB_AND_HEADER_UPGRADE_VERSION {
         instance_state
             .block_reward(EpochNumber::new(*epoch))
             .await
@@ -842,9 +844,7 @@ pub async fn distribute_block_reward(
     // and the parent block is from V3 (which does not have a previously distributed reward field),
     // we need to recompute the previously distributed rewards
     // using the fixed block reward and the number of blocks in which fixed reward was distributed
-    if version >= DrbAndHeaderUpgradeVersion::version()
-        && parent_header.version() == EpochVersion::version()
-    {
+    if version >= DRB_AND_HEADER_UPGRADE_VERSION && parent_header.version() == EPOCH_VERSION {
         ensure!(
             instance_state.epoch_start_block != 0,
             "epoch_start_block is zero"
@@ -898,7 +898,7 @@ pub async fn get_leader_and_fetch_missing_rewards(
     validated_state: &mut ValidatedState,
     parent_leaf: &Leaf2,
     view: ViewNumber,
-) -> anyhow::Result<Validator<BLSPubKey>> {
+) -> anyhow::Result<AuthenticatedValidator<BLSPubKey>> {
     let parent_height = parent_leaf.height();
     let parent_view = parent_leaf.view_number();
     let new_height = parent_height + 1;
@@ -920,6 +920,8 @@ pub async fn get_leader_and_fetch_missing_rewards(
         .leader(view, Some(epoch))
         .context(format!("leader for epoch {epoch:?} not found"))?;
 
+    tracing::debug!("Selected leader: {leader} for view {view} and epoch {epoch}");
+
     let validator = membership
         .get_validator_config(&epoch, leader)
         .context("validator not found")?;
@@ -938,7 +940,7 @@ pub async fn get_leader_and_fetch_missing_rewards(
 
     let parent_header = parent_leaf.block_header();
 
-    if parent_header.version() <= EpochVersion::version() {
+    if parent_header.version() <= EPOCH_VERSION {
         let accts: HashSet<_> = reward_accounts
             .into_iter()
             .map(RewardAccountV1::from)
@@ -972,12 +974,13 @@ pub async fn get_leader_and_fetch_missing_rewards(
         }
     } else {
         let missing_reward_accts = validated_state.forgotten_reward_accounts_v2(reward_accounts);
-
+        let reward_merkle_tree_root = validated_state.reward_merkle_tree_v2.commitment();
         if !missing_reward_accts.is_empty() {
             tracing::warn!(
                 parent_height,
                 ?parent_view,
                 ?missing_reward_accts,
+                %reward_merkle_tree_root,
                 "fetching missing reward accounts from peers"
             );
 
@@ -987,7 +990,7 @@ pub async fn get_leader_and_fetch_missing_rewards(
                     instance_state,
                     parent_height,
                     parent_view,
-                    validated_state.reward_merkle_tree_v2.commitment(),
+                    reward_merkle_tree_root,
                     missing_reward_accts,
                 )
                 .await?;
@@ -1008,40 +1011,44 @@ pub mod tests {
 
     use super::*;
 
+    fn make_distributor(commission: u16) -> RewardDistributor {
+        RewardDistributor::new(
+            AuthenticatedValidator::mock_with_commission(commission),
+            RewardAmount(U256::from(1902000000000000000_u128)),
+            U256::ZERO.into(),
+        )
+    }
+
+    fn total_rewards(rewards: ComputedRewards) -> U256 {
+        rewards
+            .all_rewards()
+            .iter()
+            .fold(U256::ZERO, |acc, (_, r)| acc + r.0)
+    }
+
     // TODO: current tests are just sanity checks, we need more.
 
     #[test]
     fn test_reward_calculation_sanity_checks() {
-        // This test verifies that the total rewards distributed match the block reward.
-        // Due to rounding effects in distribution, the validator may receive a slightly higher amount
+        // This test verifies that the total rewards distributed match the block reward. Due to
+        // rounding effects in distribution, the validator may receive a slightly higher amount
         // because the remainder after delegator distribution is sent to the validator.
 
-        let validator = Validator::mock();
-        let mut distributor = RewardDistributor::new(
-            validator,
-            RewardAmount(U256::from(1902000000000000000_u128)),
-            U256::ZERO.into(),
-        );
+        let distributor = make_distributor(500);
         let rewards = distributor.compute_rewards().unwrap();
-        let total = |rewards: ComputedRewards| {
-            rewards
-                .all_rewards()
-                .iter()
-                .fold(U256::ZERO, |acc, (_, r)| acc + r.0)
-        };
-        assert_eq!(total(rewards.clone()), distributor.block_reward.0);
+        assert_eq!(total_rewards(rewards.clone()), distributor.block_reward.0);
 
-        distributor.validator.commission = 0;
+        let distributor = make_distributor(0);
         let rewards = distributor.compute_rewards().unwrap();
-        assert_eq!(total(rewards.clone()), distributor.block_reward.0);
+        assert_eq!(total_rewards(rewards.clone()), distributor.block_reward.0);
 
-        distributor.validator.commission = 10000;
+        let distributor = make_distributor(10000);
         let rewards = distributor.compute_rewards().unwrap();
-        assert_eq!(total(rewards.clone()), distributor.block_reward.0);
+        assert_eq!(total_rewards(rewards.clone()), distributor.block_reward.0);
         let leader_commission = rewards.leader_commission();
         assert_eq!(*leader_commission, distributor.block_reward);
 
-        distributor.validator.commission = 10001;
+        let distributor = make_distributor(10001);
         assert!(distributor
             .compute_rewards()
             .err()
@@ -1052,24 +1059,15 @@ pub mod tests {
 
     #[test]
     fn test_compute_rewards_validator_commission() {
-        let validator = Validator::mock();
-        let mut distributor = RewardDistributor::new(
-            validator.clone(),
-            RewardAmount(U256::from(1902000000000000000_u128)),
-            U256::ZERO.into(),
-        );
-        distributor.validator.commission = 0;
-
+        let distributor = make_distributor(0);
         let rewards = distributor.compute_rewards().unwrap();
-
         let leader_commission = rewards.leader_commission();
         let percentage =
             leader_commission.0 * U256::from(COMMISSION_BASIS_POINTS) / distributor.block_reward.0;
         assert_eq!(percentage, U256::ZERO);
 
         // 3%
-        distributor.validator.commission = 300;
-
+        let distributor = make_distributor(300);
         let rewards = distributor.compute_rewards().unwrap();
         let leader_commission = rewards.leader_commission();
         let percentage =
@@ -1078,8 +1076,7 @@ pub mod tests {
         assert_eq!(percentage, U256::from(300));
 
         //100%
-        distributor.validator.commission = 10000;
-
+        let distributor = make_distributor(10000);
         let rewards = distributor.compute_rewards().unwrap();
         let leader_commission = rewards.leader_commission();
         assert_eq!(*leader_commission, distributor.block_reward);

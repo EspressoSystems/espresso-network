@@ -1,48 +1,37 @@
+mod external_event_handler;
+mod message_compat_tests;
+mod proposal_fetcher;
+mod request_response;
+
 pub mod api;
 pub mod catchup;
 pub mod context;
 pub mod genesis;
-mod proposal_fetcher;
-mod request_response;
-
-mod external_event_handler;
+pub mod network;
 pub mod options;
+pub mod persistence;
+pub mod run;
+pub mod state;
+pub mod state_cert;
 pub mod state_signature;
+pub mod util;
 
-mod restart_tests;
-
-mod message_compat_tests;
-
-use std::sync::Arc;
+use std::{fmt::Debug, marker::PhantomData, sync::Arc, time::Duration};
 
 use alloy::primitives::U256;
 use anyhow::Context;
 use async_lock::{Mutex, RwLock};
 use catchup::{ParallelStateCatchup, StatePeers};
 use context::SequencerContext;
+use derivative::Derivative;
 use espresso_types::{
     traits::{EventConsumer, MembershipPersistence},
+    v0::traits::SequencerPersistence,
     v0_3::Fetcher,
     BackoffParams, EpochCommittees, L1ClientOptions, NodeState, PubKey, SeqTypes, ValidatedState,
 };
-use genesis::L1Finalized;
-use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtPersistentStorage;
-use libp2p::Multiaddr;
-use network::libp2p::split_off_peer_id;
-use options::Identity;
-use proposal_fetcher::ProposalFetcherConfig;
-use tokio::select;
-use tracing::info;
-use url::Url;
-
-use crate::request_response::data_source::Storage as RequestResponseStorage;
-pub mod persistence;
-pub mod state;
-use std::{fmt::Debug, marker::PhantomData, time::Duration};
-
-use derivative::Derivative;
-use espresso_types::v0::traits::SequencerPersistence;
 pub use genesis::Genesis;
+use genesis::L1Finalized;
 use hotshot::{
     traits::implementations::{
         derive_libp2p_multiaddr, derive_libp2p_peer_id, CdnMetricsValue, CdnTopic,
@@ -51,6 +40,7 @@ use hotshot::{
     },
     types::SignatureKey,
 };
+use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtPersistentStorage;
 use hotshot_orchestrator::client::{get_complete_config, OrchestratorClient};
 use hotshot_types::{
     data::ViewNumber,
@@ -60,21 +50,28 @@ use hotshot_types::{
     traits::{
         metrics::{Metrics, NoMetrics},
         network::ConnectedNetwork,
-        node_implementation::{NodeImplementation, NodeType, Versions},
+        node_implementation::{NodeImplementation, NodeType},
         storage::Storage,
     },
     utils::BuilderCommitment,
     ValidatorConfig,
 };
+use libp2p::Multiaddr;
+use network::libp2p::split_off_peer_id;
+use options::Identity;
 pub use options::Options;
-use serde::{Deserialize, Serialize};
-use vbs::version::{StaticVersion, StaticVersionType};
-pub mod network;
-
-mod run;
+use proposal_fetcher::ProposalFetcherConfig;
 pub use run::main;
+use serde::{Deserialize, Serialize};
+use tokio::select;
+use tracing::info;
+use url::Url;
+use vbs::version::StaticVersion;
+
+use crate::request_response::data_source::Storage as RequestResponseStorage;
 
 pub const RECENT_STAKE_TABLES_LIMIT: u64 = 20;
+
 /// The Sequencer node is generic over the hotshot CommChannel.
 #[derive(Derivative, Serialize, Deserialize)]
 #[derivative(
@@ -110,11 +107,17 @@ pub struct NetworkParams {
     pub cdn_endpoint: String,
     pub orchestrator_url: Url,
     pub state_relay_server_url: Url,
+
+    /// The URLs of the builders to use for submitting transactions
+    pub builder_urls: Vec<Url>,
+
     pub private_staking_key: BLSPrivKey,
     pub private_state_key: StateSignKey,
     pub state_peers: Vec<Url>,
     pub config_peers: Option<Vec<Url>>,
     pub catchup_backoff: BackoffParams,
+    /// Base timeout for catchup requests to peers.
+    pub catchup_base_timeout: Duration,
     /// The address to advertise as our public API's URL
     pub public_api_url: Option<Url>,
 
@@ -192,23 +195,20 @@ pub struct L1Params {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub async fn init_node<
-    P: SequencerPersistence + MembershipPersistence + DhtPersistentStorage,
-    V: Versions,
->(
+pub async fn init_node<P>(
     genesis: Genesis,
     network_params: NetworkParams,
     metrics: &dyn Metrics,
     mut persistence: P,
     l1_params: L1Params,
     storage: Option<RequestResponseStorage>,
-    seq_versions: V,
     event_consumer: impl EventConsumer + 'static,
     is_da: bool,
     identity: Identity,
     proposal_fetcher_config: ProposalFetcherConfig,
-) -> anyhow::Result<SequencerContext<network::Production, P, V>>
+) -> anyhow::Result<SequencerContext<network::Production, P>>
 where
+    P: SequencerPersistence + MembershipPersistence + DhtPersistentStorage,
     Arc<P>: Storage<SeqTypes>,
 {
     // Expose git information via status API.
@@ -223,12 +223,41 @@ where
             env!("VERGEN_GIT_COMMIT_TIMESTAMP").into(),
         ]);
 
+    metrics
+        .text_family(
+            "build_info".into(),
+            vec![
+                "build_timestamp".into(),
+                "dirty".into(),
+                "branch".into(),
+                "debug".into(),
+                "features".into(),
+                "target".into(),
+                "testing".into(),
+            ],
+        )
+        .create(vec![
+            env!("VERGEN_BUILD_TIMESTAMP").into(),
+            env!("VERGEN_GIT_DIRTY").into(),
+            env!("VERGEN_GIT_BRANCH").into(),
+            env!("VERGEN_CARGO_DEBUG").into(),
+            env!("VERGEN_CARGO_FEATURES").into(),
+            env!("VERGEN_CARGO_TARGET_TRIPLE").into(),
+            if cfg!(feature = "testing") {
+                "yes"
+            } else {
+                "no"
+            }
+            .into(),
+        ]);
+
     // Expose Node Entity Information via the status/metrics API
     metrics
         .text_family(
             "node_identity_general".into(),
             vec![
                 "name".into(),
+                "description".into(),
                 "company_name".into(),
                 "company_website".into(),
                 "operating_system".into(),
@@ -237,15 +266,16 @@ where
             ],
         )
         .create(vec![
-            identity.node_name.unwrap_or("".into()),
-            identity.company_name.unwrap_or("".into()),
+            identity.node_name.unwrap_or_default(),
+            identity.node_description.unwrap_or_default(),
+            identity.company_name.unwrap_or_default(),
             identity
                 .company_website
                 .map(|u| u.into())
-                .unwrap_or("".into()),
-            identity.operating_system.unwrap_or("".into()),
-            identity.node_type.unwrap_or("".into()),
-            identity.network_type.unwrap_or("".into()),
+                .unwrap_or_default(),
+            identity.operating_system.unwrap_or_default(),
+            identity.node_type.unwrap_or_default(),
+            identity.network_type.unwrap_or_default(),
         ]);
 
     // Expose Node Identity Location via the status/metrics API
@@ -255,15 +285,52 @@ where
             vec!["country".into(), "latitude".into(), "longitude".into()],
         )
         .create(vec![
-            identity.country_code.unwrap_or("".into()),
-            identity
-                .latitude
-                .map(|l| l.to_string())
-                .unwrap_or("".into()),
+            identity.country_code.unwrap_or_default(),
+            identity.latitude.map(|l| l.to_string()).unwrap_or_default(),
             identity
                 .longitude
                 .map(|l| l.to_string())
-                .unwrap_or("".into()),
+                .unwrap_or_default(),
+        ]);
+
+    // Expose icons for node dashboard via the status/metrics API
+    metrics
+        .text_family(
+            "node_identity_icon".into(),
+            vec![
+                "small_1x".into(),
+                "small_2x".into(),
+                "small_3x".into(),
+                "large_1x".into(),
+                "large_2x".into(),
+                "large_3x".into(),
+            ],
+        )
+        .create(vec![
+            identity
+                .icon_14x14_1x
+                .map(|u| u.to_string())
+                .unwrap_or_default(),
+            identity
+                .icon_14x14_2x
+                .map(|u| u.to_string())
+                .unwrap_or_default(),
+            identity
+                .icon_14x14_3x
+                .map(|u| u.to_string())
+                .unwrap_or_default(),
+            identity
+                .icon_24x24_1x
+                .map(|u| u.to_string())
+                .unwrap_or_default(),
+            identity
+                .icon_24x24_2x
+                .map(|u| u.to_string())
+                .unwrap_or_default(),
+            identity
+                .icon_24x24_3x
+                .map(|u| u.to_string())
+                .unwrap_or_default(),
         ]);
 
     // Stick our public key in `metrics` so it is easily accessible via the status API.
@@ -327,6 +394,7 @@ where
             let peers = StatePeers::<SequencerApiVersion>::from_urls(
                 peers,
                 network_params.catchup_backoff,
+                network_params.catchup_base_timeout,
                 &NoMetrics,
             );
             let config = peers.fetch_config(validator_config.clone()).await?;
@@ -367,8 +435,14 @@ where
         },
     };
 
-    if let Some(upgrade) = genesis.upgrades.get(&V::Upgrade::VERSION) {
+    if let Some(upgrade) = genesis.upgrades.get(&genesis.upgrade_version) {
         upgrade.set_hotshot_config_parameters(&mut network_config.config);
+    }
+
+    // Override the builder URLs in the network config with the ones from the command line
+    // if any were provided
+    if !network_params.builder_urls.is_empty() {
+        network_config.config.builder_urls = network_params.builder_urls.try_into().unwrap();
     }
 
     let epoch_height = genesis.epoch_height.unwrap_or_default();
@@ -379,16 +453,25 @@ where
         .stake_table_capacity
         .unwrap_or(hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY);
 
+    let version_upgrade = versions::Upgrade::new(genesis.base_version, genesis.upgrade_version);
+
     tracing::warn!("setting epoch_height={epoch_height:?}");
     tracing::warn!("setting drb_difficulty={drb_difficulty:?}");
     tracing::warn!("setting drb_upgrade_difficulty={drb_upgrade_difficulty:?}");
     tracing::warn!("setting epoch_start_block={epoch_start_block:?}");
     tracing::warn!("setting stake_table_capacity={stake_table_capacity:?}");
+    tracing::warn!("setting version_upgrade={version_upgrade}");
     network_config.config.epoch_height = epoch_height;
     network_config.config.drb_difficulty = drb_difficulty;
     network_config.config.drb_upgrade_difficulty = drb_upgrade_difficulty;
     network_config.config.epoch_start_block = epoch_start_block;
     network_config.config.stake_table_capacity = stake_table_capacity;
+    network_config.config.upgrade = version_upgrade;
+
+    if let Some(da_committees) = &genesis.da_committees {
+        tracing::warn!("setting da_committees from genesis: {da_committees:?}");
+        network_config.config.da_committees = da_committees.clone();
+    }
 
     // If the `Libp2p` bootstrap nodes were supplied via the command line, override those
     // present in the config file.
@@ -467,9 +550,20 @@ where
         .with_metrics(metrics)
         .connect(l1_params.urls)
         .with_context(|| "failed to create L1 client")?;
+
+    info!("Validating fee contract");
+
     genesis.validate_fee_contract(&l1_client).await?;
 
+    info!("Fee contract validated. Spawning L1 tasks");
+
     l1_client.spawn_tasks().await;
+
+    info!(
+        "L1 tasks spawned. Waiting for L1 genesis: {:?}",
+        genesis.l1_finalized
+    );
+
     let l1_genesis = match genesis.l1_finalized {
         L1Finalized::Block(b) => b,
         L1Finalized::Number { number } => l1_client.wait_for_finalized_block(number).await,
@@ -480,8 +574,11 @@ where
         },
     };
 
+    info!("L1 genesis found: {:?}", l1_genesis);
+
+    let genesis_chain_config = genesis.header.chain_config;
     let mut genesis_state = ValidatedState {
-        chain_config: genesis.chain_config.into(),
+        chain_config: genesis_chain_config.into(),
         ..Default::default()
     };
     for (address, amount) in genesis.accounts {
@@ -496,6 +593,7 @@ where
     let state_peers = StatePeers::<SequencerApiVersion>::from_urls(
         network_params.state_peers,
         network_params.catchup_backoff,
+        network_params.catchup_base_timeout,
         metrics,
     );
     state_catchup_providers.add_provider(Arc::new(state_peers));
@@ -523,8 +621,14 @@ where
         l1_client.clone(),
         genesis.chain_config,
     );
+
+    info!("Spawning update loop");
+
     fetcher.spawn_update_loop().await;
+    info!("Update loop spawned. Fetching block reward");
+
     let block_reward = fetcher.fetch_fixed_block_reward().await.ok();
+    info!("Block reward fetched: {:?}", block_reward);
     // Create the HotShot membership
     let mut membership = EpochCommittees::new_stake(
         network_config.config.known_nodes_with_stake.clone(),
@@ -533,7 +637,9 @@ where
         fetcher,
         epoch_height,
     );
+    info!("Membership created. Reloading stake");
     membership.reload_stake(RECENT_STAKE_TABLES_LIMIT).await;
+    info!("Stake reloaded");
 
     let membership: Arc<RwLock<EpochCommittees>> = Arc::new(RwLock::new(membership));
     let persistence = Arc::new(persistence);
@@ -545,13 +651,14 @@ where
 
     let instance_state = NodeState {
         chain_config: genesis.chain_config,
+        genesis_chain_config,
         l1_client,
         genesis_header: genesis.header,
         genesis_state,
         l1_genesis: Some(l1_genesis),
         node_id: node_index,
         upgrades: genesis.upgrades,
-        current_version: V::Base::VERSION,
+        current_version: genesis.base_version,
         epoch_height: Some(epoch_height),
         state_catchup: Arc::new(state_catchup_providers.clone()),
         coordinator: coordinator.clone(),
@@ -561,10 +668,10 @@ where
 
     // Initialize the Libp2p network
     let network = {
+        info!("Initializing Libp2p network");
         let p2p_network = Libp2pNetwork::from_config(
             network_config.clone(),
             persistence.clone(),
-            coordinator.membership().clone(),
             gossip_config,
             request_response_config,
             libp2p_bind_address,
@@ -581,6 +688,8 @@ where
                 network_params.libp2p_bind_address
             )
         })?;
+
+        info!("Libp2p network initialized");
 
         tracing::warn!("Waiting for at least one connection to be initialized");
         select! {
@@ -613,7 +722,6 @@ where
         metrics,
         genesis.stake_table.capacity,
         event_consumer,
-        seq_versions,
         proposal_fetcher_config,
     )
     .await?;
@@ -630,6 +738,7 @@ pub fn empty_builder_commitment() -> BuilderCommitment {
 #[cfg(any(test, feature = "testing"))]
 pub mod testing {
     use std::{
+        cmp::max,
         collections::{BTreeMap, HashMap},
         time::Duration,
     };
@@ -637,13 +746,13 @@ pub mod testing {
     use alloy::{
         network::EthereumWallet,
         node_bindings::{Anvil, AnvilInstance},
-        primitives::U256,
+        primitives::{Address, U256},
         providers::{
             fillers::{
                 BlobGasFiller, ChainIdFiller, FillProvider, GasFiller, JoinFill, NonceFiller,
             },
             layers::AnvilProvider,
-            ProviderBuilder, RootProvider,
+            Provider, ProviderBuilder, RootProvider,
         },
         signers::{
             k256::ecdsa::SigningKey,
@@ -655,7 +764,7 @@ pub mod testing {
     use committable::Committable;
     use espresso_contract_deployer::{
         builder::DeployerArgsBuilder, network_config::light_client_genesis_from_stake_table,
-        Contract, Contracts,
+        Contract, Contracts, DEFAULT_EXIT_ESCROW_PERIOD_SECONDS,
     };
     use espresso_types::{
         eth_signature_key::EthKeyPair,
@@ -672,7 +781,7 @@ pub mod testing {
             implementations::{MasterMap, MemoryNetwork},
             BlockPayload,
         },
-        types::EventType::Decide,
+        types::EventType::{self, Decide},
     };
     use hotshot_builder_refactored::service::{
         BuilderConfig as LegacyBuilderConfig, GlobalState as LegacyGlobalState,
@@ -681,21 +790,24 @@ pub mod testing {
         BuilderTask, SimpleBuilderImplementation, TestBuilderImplementation,
     };
     use hotshot_types::{
+        data::EpochNumber,
         event::LeafInfo,
         light_client::StateKeyPair,
         signature_key::BLSKeyPair,
         traits::{
             block_contents::BlockHeader, metrics::NoMetrics, network::Topic,
-            signature_key::BuilderSignatureKey, EncodeBytes,
+            node_implementation::ConsensusTime as _, signature_key::BuilderSignatureKey,
+            EncodeBytes,
         },
         HotShotConfig, PeerConfig,
     };
-    use portpicker::pick_unused_port;
     use rand::SeedableRng as _;
     use rand_chacha::ChaCha20Rng;
-    use staking_cli::demo::{setup_stake_table_contract_for_test, DelegationConfig};
+    use staking_cli::demo::{DelegationConfig, StakingTransactions};
+    use test_utils::reserve_tcp_port;
     use tokio::spawn;
-    use vbs::version::Version;
+    use vbs::version::{StaticVersionType, Version};
+    use versions::{EPOCH_VERSION, VERSION_0_1};
 
     use super::*;
     use crate::{
@@ -740,7 +852,10 @@ pub mod testing {
         max_block_size: Option<u64>,
     ) -> (Box<dyn BuilderTask<SeqTypes>>, Url) {
         let builder_key_pair = TestConfig::<0>::builder_key();
-        let port = port.unwrap_or_else(|| pick_unused_port().expect("No ports available"));
+        let port = match port {
+            Some(p) => p,
+            None => reserve_tcp_port().expect("OS should have ephemeral ports available"),
+        };
 
         // This should never fail.
         let url: Url = format!("http://localhost:{port}")
@@ -769,14 +884,15 @@ pub mod testing {
             .into_app()
             .expect("Failed to create builder tide-disco app");
 
-        spawn(
+        spawn(async move {
             app.serve(
                 format!("http://0.0.0.0:{port}")
                     .parse::<Url>()
                     .expect("Failed to parse builder listener"),
                 EpochVersion::instance(),
-            ),
-        );
+            )
+            .await
+        });
 
         // Pass on the builder task to be injected in the testing harness
         (Box::new(LegacyBuilderImplementation { global_state }), url)
@@ -785,7 +901,10 @@ pub mod testing {
     pub async fn run_test_builder<const NUM_NODES: usize>(
         port: Option<u16>,
     ) -> (Box<dyn BuilderTask<SeqTypes>>, Url) {
-        let port = port.unwrap_or_else(|| pick_unused_port().expect("No ports available"));
+        let port = match port {
+            Some(p) => p,
+            None => reserve_tcp_port().expect("OS should have ephemeral ports available"),
+        };
 
         // This should never fail.
         let url: Url = format!("http://localhost:{port}")
@@ -793,18 +912,17 @@ pub mod testing {
             .expect("Failed to parse builder URL");
         tracing::info!("Starting test builder on {url}");
 
-        (
-            <SimpleBuilderImplementation as TestBuilderImplementation<SeqTypes>>::start(
-                NUM_NODES,
-                format!("http://0.0.0.0:{port}")
-                    .parse()
-                    .expect("Failed to parse builder listener"),
-                (),
-                HashMap::new(),
-            )
-            .await,
-            url,
+        let task = <SimpleBuilderImplementation as TestBuilderImplementation<SeqTypes>>::start(
+            NUM_NODES,
+            format!("http://0.0.0.0:{port}")
+                .parse()
+                .expect("Failed to parse builder listener"),
+            (),
+            HashMap::new(),
         )
+        .await;
+
+        (task, url)
     }
 
     pub struct TestConfigBuilder<const NUM_NODES: usize> {
@@ -877,10 +995,15 @@ pub mod testing {
             self
         }
 
-        pub fn upgrades<V: Versions>(mut self, upgrades: BTreeMap<Version, Upgrade>) -> Self {
-            let upgrade = upgrades.get(&<V as Versions>::Upgrade::VERSION).unwrap();
+        pub fn upgrades(mut self, v: Version, upgrades: BTreeMap<Version, Upgrade>) -> Self {
+            let upgrade = upgrades.get(&v).unwrap();
             upgrade.set_hotshot_config_parameters(&mut self.config);
             self.upgrades = upgrades;
+            self
+        }
+
+        pub fn version_upgrade(mut self, u: versions::Upgrade) -> Self {
+            self.config.upgrade = u;
             self
         }
 
@@ -888,7 +1011,7 @@ pub mod testing {
         /// by adding a branch to the `match` statement.
         pub async fn set_upgrades(mut self, version: Version) -> Self {
             let upgrade = match version {
-                version if version >= EpochVersion::VERSION => {
+                version if version >= EPOCH_VERSION => {
                     tracing::debug!(?version, "upgrade version");
                     let blocks_per_epoch = self.config.epoch_height;
                     let epoch_start_block = self.config.epoch_start_block;
@@ -904,17 +1027,21 @@ pub mod testing {
 
                     let deployer = ProviderBuilder::new()
                         .wallet(EthereumWallet::from(self.signer.clone()))
-                        .on_http(self.l1_url.clone());
+                        .connect_http(self.l1_url.clone());
 
                     let mut contracts = Contracts::new();
                     let args = DeployerArgsBuilder::default()
                         .deployer(deployer.clone())
+                        .rpc_url(self.l1_url.clone())
                         .mock_light_client(true)
                         .genesis_lc_state(genesis_state)
                         .genesis_st_state(genesis_stake)
                         .blocks_per_epoch(blocks_per_epoch)
                         .epoch_start_block(epoch_start_block)
-                        .exit_escrow_period(U256::from(blocks_per_epoch * 15 + 100))
+                        .exit_escrow_period(U256::from(max(
+                            blocks_per_epoch * 15 + 100,
+                            DEFAULT_EXIT_ESCROW_PERIOD_SECONDS,
+                        )))
                         .multisig_pauser(self.signer.address())
                         .token_name("Espresso".to_string())
                         .token_symbol("ESP".to_string())
@@ -936,15 +1063,19 @@ pub mod testing {
                     let st_addr = contracts
                         .address(Contract::StakeTableProxy)
                         .expect("StakeTableProxy address not found");
-                    setup_stake_table_contract_for_test(
+                    StakingTransactions::create(
                         self.l1_url.clone(),
                         &deployer,
                         st_addr,
                         validators,
+                        None,
                         DelegationConfig::default(),
                     )
                     .await
-                    .expect("stake table setup failed");
+                    .expect("stake table setup failed")
+                    .apply_all()
+                    .await
+                    .expect("send all txns failed");
 
                     Upgrade::pos_view_based(st_addr)
                 },
@@ -1014,21 +1145,22 @@ pub mod testing {
 
             let master_map = MasterMap::new();
 
+            let builder_port = reserve_tcp_port().unwrap();
+
             let config: HotShotConfig<SeqTypes> = HotShotConfig {
                 fixed_leader_for_gpuvid: 0,
                 num_nodes_with_stake: num_nodes.try_into().unwrap(),
                 known_da_nodes: known_nodes_with_stake.clone(),
+                da_committees: Default::default(),
                 known_nodes_with_stake: known_nodes_with_stake.clone(),
                 next_view_timeout: Duration::from_secs(5).as_millis() as u64,
                 num_bootstrap: 1usize,
                 da_staked_committee_size: num_nodes,
                 view_sync_timeout: Duration::from_secs(1),
                 data_request_delay: Duration::from_secs(1),
-                builder_urls: vec1::vec1![Url::parse(&format!(
-                    "http://127.0.0.1:{}",
-                    pick_unused_port().unwrap()
-                ))
-                .unwrap()],
+                builder_urls: vec1::vec1![
+                    Url::parse(&format!("http://127.0.0.1:{builder_port}")).unwrap()
+                ],
                 builder_timeout: Duration::from_secs(1),
                 start_threshold: (
                     known_nodes_with_stake.clone().len() as u64,
@@ -1047,9 +1179,12 @@ pub mod testing {
                 stake_table_capacity: hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY,
                 drb_difficulty: 10,
                 drb_upgrade_difficulty: 20,
+                upgrade: versions::Upgrade::trivial(VERSION_0_1),
             };
 
-            let anvil = Anvil::new().args(["--slots-in-an-epoch", "0"]).spawn();
+            let anvil = Anvil::new()
+                .args(["--slots-in-an-epoch", "0", "--balance", "1000000"])
+                .spawn();
 
             let l1_client = L1Client::anvil(&anvil).expect("failed to create l1 client");
             let anvil_provider = AnvilProvider::new(l1_client.provider, Arc::new(anvil));
@@ -1118,6 +1253,7 @@ pub mod testing {
         pub fn l1_url(&self) -> Url {
             self.l1_url.clone()
         }
+
         pub fn anvil(&self) -> Option<&AnvilFillProvider> {
             self.anvil_provider.as_ref()
         }
@@ -1134,10 +1270,24 @@ pub mod testing {
             staking_priv_keys(&self.priv_keys, &self.state_key_pairs, self.num_nodes())
         }
 
-        pub async fn init_nodes<V: Versions>(
+        pub fn validator_providers(&self) -> Vec<(Address, impl Provider + Clone)> {
+            self.staking_priv_keys()
+                .into_iter()
+                .map(|(signer, ..)| {
+                    (
+                        signer.address(),
+                        ProviderBuilder::new()
+                            .wallet(EthereumWallet::from(signer))
+                            .connect_http(self.l1_url.clone()),
+                    )
+                })
+                .collect()
+        }
+
+        pub async fn init_nodes(
             &self,
-            bind_version: V,
-        ) -> Vec<SequencerContext<network::Memory, NoStorage, V>> {
+            upgrade: versions::Upgrade,
+        ) -> Vec<SequencerContext<network::Memory, NoStorage>> {
             join_all((0..self.num_nodes()).map(|i| async move {
                 self.init_node(
                     i,
@@ -1148,7 +1298,7 @@ pub mod testing {
                     &NoMetrics,
                     STAKE_TABLE_CAPACITY_FOR_TEST,
                     NullEventConsumer,
-                    bind_version,
+                    upgrade,
                     Default::default(),
                 )
                 .await
@@ -1161,7 +1311,7 @@ pub mod testing {
         }
 
         #[allow(clippy::too_many_arguments)]
-        pub async fn init_node<V: Versions, P: PersistenceOptions>(
+        pub async fn init_node<P: PersistenceOptions>(
             &self,
             i: usize,
             mut state: ValidatedState,
@@ -1171,10 +1321,11 @@ pub mod testing {
             metrics: &dyn Metrics,
             stake_table_capacity: usize,
             event_consumer: impl EventConsumer + 'static,
-            bind_version: V,
+            upgrade: versions::Upgrade,
             upgrades: BTreeMap<Version, Upgrade>,
-        ) -> SequencerContext<network::Memory, P::Persistence, V> {
-            let config = self.config.clone();
+        ) -> SequencerContext<network::Memory, P::Persistence> {
+            let mut config = self.config.clone();
+            config.upgrade = upgrade;
             let my_peer_config = &config.known_nodes_with_stake[i];
             let is_da = config.known_da_nodes.contains(my_peer_config);
 
@@ -1273,11 +1424,11 @@ pub mod testing {
                 chain_config,
                 l1_client,
                 Arc::new(catchup_providers.clone()),
-                V::Base::VERSION,
+                config.upgrade.base,
                 coordinator.clone(),
-                V::Base::VERSION,
+                config.upgrade.base,
             )
-            .with_current_version(V::Base::version())
+            .with_current_version(config.upgrade.base)
             .with_genesis(state)
             .with_epoch_height(config.epoch_height)
             .with_upgrades(upgrades)
@@ -1308,7 +1459,6 @@ pub mod testing {
                 metrics,
                 stake_table_capacity,
                 event_consumer,
-                bind_version,
                 Default::default(),
             )
             .await
@@ -1357,16 +1507,39 @@ pub mod testing {
             }
         }
     }
+
+    /// Waits until a node has reached the given target epoch (exclusive).
+    /// The function returns once the first event indicates an epoch higher than `target_epoch`.
+    pub async fn wait_for_epochs(
+        events: &mut (impl futures::Stream<Item = hotshot_types::event::Event<SeqTypes>>
+                  + std::marker::Unpin),
+        epoch_height: u64,
+        target_epoch: u64,
+    ) {
+        while let Some(event) = events.next().await {
+            if let EventType::Decide { leaf_chain, .. } = event.event {
+                let leaf = leaf_chain[0].leaf.clone();
+                let epoch = leaf.epoch(epoch_height);
+                println!(
+                    "Node decided at height: {}, epoch: {epoch:?}",
+                    leaf.height(),
+                );
+
+                if epoch > Some(EpochNumber::new(target_epoch)) {
+                    break;
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 mod test {
-
     use alloy::node_bindings::Anvil;
-    use espresso_types::{Header, MockSequencerVersions, NamespaceId, Payload, Transaction};
+    use espresso_types::{Header, NamespaceId, Payload, Transaction, MOCK_SEQUENCER_VERSIONS};
     use futures::StreamExt;
     use hotshot::types::EventType::Decide;
-    use hotshot_example_types::node_types::TestVersions;
+    use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_types::{
         event::LeafInfo,
         traits::block_contents::{BlockHeader, BlockPayload},
@@ -1390,7 +1563,7 @@ mod test {
 
         config.set_builder_urls(vec1::vec1![builder_url]);
 
-        let handles = config.init_nodes(MockSequencerVersions::new()).await;
+        let handles = config.init_nodes(MOCK_SEQUENCER_VERSIONS).await;
 
         let handle_0 = &handles[0];
 
@@ -1428,7 +1601,7 @@ mod test {
         let (builder_task, builder_url) = run_test_builder::<NUM_NODES>(None).await;
 
         config.set_builder_urls(vec1::vec1![builder_url]);
-        let handles = config.init_nodes(MockSequencerVersions::new()).await;
+        let handles = config.init_nodes(MOCK_SEQUENCER_VERSIONS).await;
 
         let handle_0 = &handles[0];
 
@@ -1449,7 +1622,12 @@ mod test {
                     .unwrap();
 
             let genesis_state = NodeState::mock();
-            Header::genesis::<TestVersions>(&genesis_state, genesis_payload, &genesis_ns_table)
+            Header::genesis(
+                &genesis_state,
+                genesis_payload,
+                &genesis_ns_table,
+                TEST_VERSIONS.test.base,
+            )
         };
 
         loop {

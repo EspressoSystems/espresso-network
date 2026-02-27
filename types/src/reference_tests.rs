@@ -23,28 +23,28 @@
 
 use std::{fmt::Debug, path::Path, str::FromStr};
 
-use alloy::primitives::U256;
+use alloy::primitives::{Address, U160, U256};
 use committable::Committable;
-use hotshot_example_types::node_types::TestVersions;
-use hotshot_query_service::{
-    availability::{
-        BlockQueryData, LeafQueryData, LeafQueryDataLegacy, PayloadQueryData, StateCertQueryDataV1,
-        StateCertQueryDataV2, TransactionQueryData, TransactionWithProofQueryData,
-        VidCommonQueryData,
-    },
-    testing::mocks::MockVersions,
-    VidCommon,
+use espresso_types::{StateCertQueryDataV1, StateCertQueryDataV2};
+use hotshot_example_types::node_types::TEST_VERSIONS;
+use hotshot_query_service::availability::{
+    BlockQueryData, LeafQueryData, LeafQueryDataLegacy, PayloadQueryData, TransactionQueryData,
+    TransactionWithProofQueryData, VidCommonQueryData,
 };
 use hotshot_types::{
-    data::vid_commitment,
+    data::{vid_commitment, VidCommon},
     simple_certificate::{
         LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
     },
     traits::{signature_key::BuilderSignatureKey, BlockPayload, EncodeBytes},
-    vid::{advz::advz_scheme, avidm::init_avidm_param},
+    vid::{
+        advz::advz_scheme,
+        avidm::init_avidm_param,
+        avidm_gf2::{init_avidm_gf2_param, AvidmGf2Scheme},
+    },
 };
-use jf_merkle_tree::MerkleTreeScheme;
-use jf_vid::VidScheme;
+use jf_advz::VidScheme;
+use jf_merkle_tree_compat::{MerkleTreeScheme, UniversalMerkleTreeScheme};
 use pretty_assertions::assert_eq;
 use rand::{Rng, RngCore};
 use sequencer_utils::commitment_to_u256;
@@ -52,18 +52,22 @@ use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value;
 use tagged_base64::TaggedBase64;
 use vbs::{
-    version::{StaticVersion, StaticVersionType, Version},
+    version::{StaticVersion, Version},
     BinarySerializer,
 };
+use versions::version;
 
 use crate::{
-    active_validator_set_from_l1_events,
     v0_1::{self, ADVZNsProof},
     v0_2,
-    v0_3::{EventKey, StakeTableEvent},
-    ADVZNamespaceProofQueryData, FeeAccount, FeeInfo, Header, L1BlockInfo, NamespaceId,
-    NamespaceProofQueryData, NodeState, NsProof, NsTable, Payload, SeqTypes, StakeTableHash,
-    Transaction, ValidatedState,
+    v0_3::{EventKey, RewardAmount, StakeTableEvent},
+    v0_4::{
+        RewardAccountProofV2, RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleTreeV2,
+        REWARD_MERKLE_TREE_V2_HEIGHT,
+    },
+    validator_set_from_l1_events, ADVZNamespaceProofQueryData, FeeAccount, FeeInfo, Header,
+    L1BlockInfo, NamespaceId, NamespaceProofQueryData, NodeState, NsProof, NsTable, Payload,
+    SeqTypes, StakeTableHash, Transaction, ValidatedState,
 };
 
 type V1Serializer = vbs::Serializer<StaticVersion<0, 1>>;
@@ -99,7 +103,7 @@ async fn reference_payload() -> Payload {
 }
 
 async fn reference_block() -> BlockQueryData<SeqTypes> {
-    let header = reference_header(Version { major: 0, minor: 1 }).await;
+    let header = reference_header(version(0, 1)).await;
     let payload = reference_payload().await;
     BlockQueryData::new(header, payload)
 }
@@ -153,8 +157,8 @@ async fn reference_ns_proof_enum_avidm() -> NamespaceProofQueryData {
         .find_ns_id(&(REFERENCE_NAMESPACE_ID.into()))
         .unwrap();
 
-    let avid_m_param = init_avidm_param(10).unwrap();
-    let proof = NsProof::new(&payload, &ns_index, &VidCommon::V1(avid_m_param));
+    let avidm_param = init_avidm_param(10).unwrap();
+    let proof = NsProof::new(&payload, &ns_index, &VidCommon::V1(avidm_param));
     let transactions = proof
         .as_ref()
         .unwrap()
@@ -215,9 +219,10 @@ fn reference_stake_table_hash() -> StakeTableHash {
     let events: Vec<(EventKey, StakeTableEvent)> = serde_json::from_str(&events_json).unwrap();
 
     // Reconstruct stake table from events
-    let (_, hash) =
-        active_validator_set_from_l1_events(events.into_iter().map(|(_, e)| e)).unwrap();
-    hash
+    validator_set_from_l1_events(events.into_iter().map(|(_, e)| e))
+        .unwrap()
+        .stake_table_hash
+        .unwrap()
 }
 
 const REFERENCE_FEE_INFO_COMMITMENT: &str = "FEE_INFO~xCCeTjJClBtwtOUrnAmT65LNTQGceuyjSJHUFfX6VRXR";
@@ -227,8 +232,7 @@ async fn reference_header(version: Version) -> Header {
     let fee_info = reference_fee_info();
     let payload = reference_payload().await;
     let ns_table = payload.ns_table().clone();
-    let payload_commitment =
-        vid_commitment::<MockVersions>(&payload.encode(), &ns_table.encode(), 1, version);
+    let payload_commitment = vid_commitment(&payload.encode(), &ns_table.encode(), 1, version);
     let builder_commitment = payload.builder_commitment(&ns_table);
     let builder_signature =
         FeeAccount::sign_fee(&builder_key, fee_info.amount().as_u64().unwrap(), &ns_table).unwrap();
@@ -261,7 +265,7 @@ async fn reference_header(version: Version) -> Header {
 
 const REFERENCE_V1_HEADER_COMMITMENT: &str = "BLOCK~dh1KpdvvxSvnnPpOi2yI3DOg8h6ltr2Kv13iRzbQvtN2";
 const REFERENCE_V2_HEADER_COMMITMENT: &str = "BLOCK~V0GJjL19nCrlm9n1zZ6gaOKEekSMCT6uR5P-h7Gi6UJR";
-const REFERENCE_V3_HEADER_COMMITMENT: &str = "BLOCK~jcrvSlMuQnR2bK6QtraQ4RhlP_F3-v_vae5Zml0rtPbl";
+const REFERENCE_V3_HEADER_COMMITMENT: &str = "BLOCK~qKb0axY9NwpusJn5ZFhjJAyG8IYpJpHN2-BDIsIkhrEd";
 const REFERENCE_V4_HEADER_COMMITMENT: &str = "BLOCK~hPVq9NasWW1vVYGGGr0PSRv1TV3nUV_8ARw5fWHlQLx3";
 
 fn reference_transaction<R>(ns_id: NamespaceId, rng: &mut R) -> Transaction
@@ -480,7 +484,7 @@ async fn test_reference_header_v1() {
     reference_test(
         "v1",
         "header",
-        reference_header(StaticVersion::<0, 1>::version()).await,
+        reference_header(version(0, 1)).await,
         REFERENCE_V1_HEADER_COMMITMENT,
     );
 }
@@ -490,7 +494,7 @@ async fn test_reference_header_v2() {
     reference_test(
         "v2",
         "header",
-        reference_header(StaticVersion::<0, 2>::version()).await,
+        reference_header(version(0, 2)).await,
         REFERENCE_V2_HEADER_COMMITMENT,
     );
 }
@@ -500,7 +504,7 @@ async fn test_reference_header_v3() {
     reference_test(
         "v3",
         "header",
-        reference_header(StaticVersion::<0, 3>::version()).await,
+        reference_header(version(0, 3)).await,
         REFERENCE_V3_HEADER_COMMITMENT,
     );
 }
@@ -510,7 +514,7 @@ async fn test_reference_header_v4() {
     reference_test(
         "v4",
         "header",
-        reference_header(StaticVersion::<0, 4>::version()).await,
+        reference_header(version(0, 4)).await,
         REFERENCE_V4_HEADER_COMMITMENT,
     );
 }
@@ -548,9 +552,12 @@ async fn test_reference_ns_proof_enum_avidm() {
 async fn test_leaf_query_data_legacy_v1() {
     let validated_state = ValidatedState::default();
     let instance_state = NodeState::default();
-    let leaf =
-        LeafQueryDataLegacy::<SeqTypes>::genesis::<TestVersions>(&validated_state, &instance_state)
-            .await;
+    let leaf = LeafQueryDataLegacy::<SeqTypes>::genesis(
+        &validated_state,
+        &instance_state,
+        TEST_VERSIONS.test,
+    )
+    .await;
     reference_test_without_committable("v1", "leaf_query_data_legacy", &leaf);
 }
 
@@ -558,9 +565,12 @@ async fn test_leaf_query_data_legacy_v1() {
 async fn test_leaf_query_data_legacy_v2() {
     let validated_state = ValidatedState::default();
     let instance_state = NodeState::default();
-    let leaf =
-        LeafQueryDataLegacy::<SeqTypes>::genesis::<TestVersions>(&validated_state, &instance_state)
-            .await;
+    let leaf = LeafQueryDataLegacy::<SeqTypes>::genesis(
+        &validated_state,
+        &instance_state,
+        TEST_VERSIONS.test,
+    )
+    .await;
     reference_test_without_committable("v2", "leaf_query_data_legacy", &leaf);
 }
 
@@ -570,7 +580,8 @@ async fn test_leaf_query_data_v3() {
     let validated_state = ValidatedState::default();
     let instance_state = NodeState::default();
     let leaf =
-        LeafQueryData::<SeqTypes>::genesis::<TestVersions>(&validated_state, &instance_state).await;
+        LeafQueryData::<SeqTypes>::genesis(&validated_state, &instance_state, TEST_VERSIONS.test)
+            .await;
     reference_test_without_committable("v3", "leaf_query_data", &leaf);
 }
 
@@ -590,7 +601,7 @@ async fn test_payload_query_data() {
 // v0 is the `VidCommon`` v0 variant
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_vid_common_v0_query_data() {
-    let header = reference_header(Version { major: 0, minor: 1 }).await;
+    let header = reference_header(version(0, 1)).await;
     let payload = reference_payload().await;
     let encoded = payload.encode();
 
@@ -604,11 +615,30 @@ async fn test_vid_common_v0_query_data() {
 // v1 is the `VidCommon`` v1 variant
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_vid_common_v1_query_data() {
-    let header = reference_header(Version { major: 0, minor: 1 }).await;
-    let avid_m_param = init_avidm_param(10).unwrap();
-    let vid = VidCommonQueryData::<SeqTypes>::new(header, VidCommon::V1(avid_m_param));
+    let header = reference_header(version(0, 1)).await;
+    let avidm_param = init_avidm_param(10).unwrap();
+    let vid = VidCommonQueryData::<SeqTypes>::new(header, VidCommon::V1(avidm_param));
 
     reference_test_without_committable("v1", "vid_common_v1", &vid);
+}
+
+// v2 is the `VidCommon`` v2 variant
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_vid_common_v2_query_data() {
+    let header = reference_header(version(0, 1)).await;
+    let payload = reference_payload().await;
+    let encoded = payload.encode();
+    let payload_byte_len = payload.byte_len();
+    let ns_table = payload.ns_table();
+    let ns_table = ns_table
+        .iter()
+        .map(|index| ns_table.ns_range(&index, &payload_byte_len).0)
+        .collect::<Vec<_>>();
+    let param = init_avidm_gf2_param(10).unwrap();
+    let (_, common) = AvidmGf2Scheme::commit(&param, &encoded, ns_table).unwrap();
+    let vid = VidCommonQueryData::<SeqTypes>::new(header, VidCommon::V2(common));
+
+    reference_test_without_committable("v2", "vid_common_v2", &vid);
 }
 
 // Transaction query data
@@ -620,10 +650,10 @@ async fn test_transaction_query_data() {
         .enumerate()
         .enumerate()
         .map(|(i, (index, _))| {
-            let avid_m_param = init_avidm_param(10).unwrap();
+            let avidm_param = init_avidm_param(10).unwrap();
             let vid = VidCommonQueryData::<SeqTypes>::new(
                 block.header().clone(),
-                VidCommon::V1(avid_m_param),
+                VidCommon::V1(avidm_param),
             );
 
             let tx = block.transaction(&index).unwrap();
@@ -650,4 +680,46 @@ async fn test_state_cert_query_data_v4() {
     let light_client_cert = LightClientStateUpdateCertificateV2::<SeqTypes>::genesis();
     let state_cert = StateCertQueryDataV2(light_client_cert);
     reference_test_without_committable("v4", "state_cert", &state_cert);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_reward_proof_endpoint_serialization() {
+    let mut settings = insta::Settings::clone_current();
+
+    let data_dir =
+        Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap()).join("../data/insta_snapshots");
+
+    settings.set_snapshot_path(data_dir);
+
+    let mut reward_merkle_tree_v2 = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
+    let address = Address::from_slice(&[1; 20]);
+    let balance: U256 = 123_u64.try_into().unwrap();
+    let reward_amount = RewardAmount(balance);
+    reward_merkle_tree_v2
+        .update(RewardAccountV2::from(address), reward_amount)
+        .unwrap();
+
+    // Add some more entries to avoid having all zero siblings in the proof
+    for i in 0..100u64 {
+        let address = Address::from(U160::from(i + 1));
+        let balance: U256 = U256::from((i + 1) * 100);
+        let reward_amount = RewardAmount(balance);
+        reward_merkle_tree_v2
+            .update(RewardAccountV2::from(address), reward_amount)
+            .unwrap();
+    }
+
+    let (proof, _) = RewardAccountProofV2::prove(&reward_merkle_tree_v2, address).unwrap();
+
+    let reward_proof = RewardAccountQueryDataV2 { balance, proof };
+
+    settings.bind(|| {
+        insta::assert_yaml_snapshot!("reward_proof_v2", reward_proof);
+    });
+
+    let reward_claim_input = reward_proof.to_reward_claim_input().unwrap();
+
+    settings.bind(|| {
+        insta::assert_yaml_snapshot!("reward_claim_input_v2", reward_claim_input);
+    });
 }

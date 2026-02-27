@@ -10,29 +10,32 @@
 // You should have received a copy of the GNU General Public License along with this program. If not,
 // see <https://www.gnu.org/licenses/>.
 
-use hotshot::traits::{
-    election::static_committee::StaticCommittee, implementations::MemoryNetwork, NodeImplementation,
-};
+use hotshot::traits::{implementations::MemoryNetwork, NodeImplementation};
 use hotshot_example_types::{
-    block_types::{TestBlockHeader, TestBlockPayload, TestTransaction},
+    block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
+    membership::{static_committee::StaticStakeTable, strict_membership::StrictMembership},
     state_types::{TestInstanceState, TestValidatedState},
     storage_types::TestStorage,
 };
 use hotshot_types::{
-    data::{QuorumProposal, ViewNumber},
+    data::{QuorumProposal, VidCommitment, VidCommon, ViewNumber},
     signature_key::{BLSPubKey, SchnorrPubKey},
-    traits::node_implementation::{NodeType, Versions},
+    traits::node_implementation::NodeType,
 };
-use jf_merkle_tree::{
+use jf_merkle_tree_compat::{
     prelude::{MerkleProof, Sha3Digest, Sha3Node},
     universal_merkle_tree::UniversalMerkleTree,
     ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme,
 };
 use serde::{Deserialize, Serialize};
 use vbs::version::StaticVersion;
+use versions::{version, Upgrade};
 
 use crate::{
-    availability::{QueryableHeader, QueryablePayload, TransactionIndex, VidCommonQueryData},
+    availability::{
+        QueryableHeader, QueryablePayload, TransactionIndex, VerifiableInclusion,
+        VidCommonQueryData,
+    },
     explorer::traits::{ExplorerHeader, ExplorerTransaction},
     merklized_state::MerklizedState,
     types::HeightIndexed,
@@ -111,9 +114,25 @@ impl HeightIndexed for MockHeader {
     }
 }
 
+/// A naive inclusion proof for `MockPayload` and `MockTransaction`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MockInclusionProof(MockPayload);
+
+impl VerifiableInclusion<MockTypes> for MockInclusionProof {
+    fn verify(
+        &self,
+        _metadata: &TestMetadata,
+        tx: &MockTransaction,
+        _payload_commitment: &VidCommitment,
+        _common: &VidCommon,
+    ) -> bool {
+        self.0.transactions.contains(tx)
+    }
+}
+
 impl QueryablePayload<MockTypes> for MockPayload {
     type Iter<'a> = <Vec<TransactionIndex<MockTypes>> as IntoIterator>::IntoIter;
-    type InclusionProof = ();
+    type InclusionProof = MockInclusionProof;
 
     fn len(&self, _meta: &Self::Metadata) -> usize {
         self.transactions.len()
@@ -143,7 +162,7 @@ impl QueryablePayload<MockTypes> for MockPayload {
         _vid: &VidCommonQueryData<MockTypes>,
         _index: &TransactionIndex<MockTypes>,
     ) -> Option<Self::InclusionProof> {
-        Some(())
+        Some(MockInclusionProof(self.clone()))
     }
 }
 
@@ -161,29 +180,16 @@ impl NodeType for MockTypes {
     type Transaction = MockTransaction;
     type InstanceState = TestInstanceState;
     type ValidatedState = TestValidatedState;
-    type Membership = StaticCommittee<Self>;
+    type Membership = StrictMembership<MockTypes, StaticStakeTable<BLSPubKey, SchnorrPubKey>>;
     type BuilderSignatureKey = BLSPubKey;
     type StateSignatureKey = SchnorrPubKey;
 }
 
-#[derive(Clone, Debug, Copy)]
-pub struct MockVersions {}
+pub const MOCK_UPGRADE: Upgrade = Upgrade::new(version(0, 1), version(0, 2));
 
-impl Versions for MockVersions {
-    type Base = StaticVersion<0, 1>;
-    type Upgrade = StaticVersion<0, 2>;
-    const UPGRADE_HASH: [u8; 32] = [
-        1, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0,
-        0, 0,
-    ];
-    type Epochs = StaticVersion<0, 4>;
-    type DrbAndHeaderUpgrade = StaticVersion<0, 5>;
-}
+pub type MockBase = StaticVersion<0, 1>;
 
-/// A type alias for the mock base version
-pub type MockBase = <MockVersions as Versions>::Base;
-
-pub type MockMembership = StaticCommittee<MockTypes>;
+pub type MockMembership = StrictMembership<MockTypes, StaticStakeTable<BLSPubKey, SchnorrPubKey>>;
 pub type MockQuorumProposal = QuorumProposal<MockTypes>;
 pub type MockNetwork = MemoryNetwork<BLSPubKey>;
 

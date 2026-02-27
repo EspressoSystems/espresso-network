@@ -2,7 +2,7 @@
 //! It also includes some trait implementations that cannot be implemented in an external crate.
 use std::{cmp::max, collections::BTreeMap, fmt::Debug, ops::Range, sync::Arc};
 
-use alloy::primitives::U256;
+use alloy::primitives::{Address, U256};
 use anyhow::{bail, ensure, Context};
 use async_trait::async_trait;
 use committable::Commitment;
@@ -11,7 +11,6 @@ use hotshot::{types::EventType, HotShotInitializer, InitializerEpochInfo};
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtPersistentStorage;
 use hotshot_types::{
     data::{
-        vid_disperse::{ADVZDisperseShare, VidDisperseShare2},
         DaProposal, DaProposal2, EpochNumber, QuorumProposal, QuorumProposal2,
         QuorumProposalWrapper, VidCommitment, VidDisperseShare, ViewNumber,
     },
@@ -19,20 +18,22 @@ use hotshot_types::{
     event::{HotShotAction, LeafInfo},
     message::{convert_proposal, Proposal},
     simple_certificate::{
-        LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2, QuorumCertificate,
-        QuorumCertificate2, UpgradeCertificate,
+        CertificatePair, LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2,
+        QuorumCertificate, QuorumCertificate2, UpgradeCertificate,
     },
     stake_table::HSStakeTable,
     traits::{
         metrics::Metrics,
-        node_implementation::{ConsensusTime, NodeType, Versions},
+        node_implementation::{ConsensusTime, NodeType},
         storage::Storage,
         ValidatedState as HotShotState,
     },
     utils::genesis_epoch_from_version,
     vote::HasViewNumber,
 };
+use indexmap::IndexMap;
 use serde::{de::DeserializeOwned, Serialize};
+use versions::Upgrade;
 
 use super::{
     impls::NodeState,
@@ -42,11 +43,12 @@ use super::{
 use crate::{
     v0::impls::{StakeTableHash, ValidatedState},
     v0_3::{
-        ChainConfig, RewardAccountProofV1, RewardAccountV1, RewardAmount, RewardMerkleCommitmentV1,
+        ChainConfig, RegisteredValidator, RewardAccountProofV1, RewardAccountV1, RewardAmount,
+        RewardMerkleCommitmentV1,
     },
     v0_4::{RewardAccountProofV2, RewardAccountV2, RewardMerkleCommitmentV2},
-    BlockMerkleTree, Event, FeeAccount, FeeAccountProof, FeeMerkleCommitment, Leaf2, NetworkConfig,
-    SeqTypes, ValidatorMap,
+    AuthenticatedValidatorMap, BlockMerkleTree, Event, FeeAccount, FeeAccountProof,
+    FeeMerkleCommitment, Leaf2, NetworkConfig, PubKey, SeqTypes,
 };
 
 #[async_trait]
@@ -266,6 +268,28 @@ pub trait StateCatchup: Send + Sync {
             .await
     }
 
+    /// Fetch the state certificate for a given epoch without retrying on transient errors.
+    async fn try_fetch_state_cert(
+        &self,
+        retry: usize,
+        epoch: u64,
+    ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>>;
+
+    /// Fetch the state certificate for a given epoch, retrying on transient errors.
+    async fn fetch_state_cert(
+        &self,
+        epoch: u64,
+    ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
+        self.backoff()
+            .retry(self, |provider, retry| {
+                provider
+                    .try_fetch_state_cert(retry, epoch)
+                    .map_err(|err| err.context(format!("fetching state cert for epoch {epoch}")))
+                    .boxed()
+            })
+            .await
+    }
+
     /// Returns true if the catchup provider is local (e.g. does not make calls to remote resources).
     fn is_local(&self) -> bool;
 
@@ -442,6 +466,21 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
             .await
     }
 
+    async fn try_fetch_state_cert(
+        &self,
+        retry: usize,
+        epoch: u64,
+    ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
+        (**self).try_fetch_state_cert(retry, epoch).await
+    }
+
+    async fn fetch_state_cert(
+        &self,
+        epoch: u64,
+    ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
+        (**self).fetch_state_cert(epoch).await
+    }
+
     fn backoff(&self) -> &BackoffParams {
         (**self).backoff()
     }
@@ -467,19 +506,24 @@ pub trait PersistenceOptions: Clone + Send + Sync + Debug + 'static {
 /// Determine the read state based on the queried block range.
 // - If the persistence returned events up to the requested block, the read is complete.
 /// - Otherwise, indicate that the read is up to the last processed block.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EventsPersistenceRead {
     Complete,
     UntilL1Block(u64),
 }
 
+/// Tuple type for stake table data: (validators, block_reward, stake_table_hash)
+pub type StakeTuple = (
+    AuthenticatedValidatorMap,
+    Option<RewardAmount>,
+    Option<StakeTableHash>,
+);
+
 #[async_trait]
 /// Trait used by `Memberships` implementations to interact with persistence layer.
 pub trait MembershipPersistence: Send + Sync + 'static {
     /// Load stake table for epoch from storage
-    async fn load_stake(
-        &self,
-        epoch: EpochNumber,
-    ) -> anyhow::Result<Option<(ValidatorMap, Option<RewardAmount>, Option<StakeTableHash>)>>;
+    async fn load_stake(&self, epoch: EpochNumber) -> anyhow::Result<Option<StakeTuple>>;
 
     /// Load stake tables for storage for latest `n` known epochs
     async fn load_latest_stake(&self, limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>>;
@@ -488,7 +532,7 @@ pub trait MembershipPersistence: Send + Sync + 'static {
     async fn store_stake(
         &self,
         epoch: EpochNumber,
-        stake: ValidatorMap,
+        stake: AuthenticatedValidatorMap,
         block_reward: Option<RewardAmount>,
         stake_table_hash: Option<StakeTableHash>,
     ) -> anyhow::Result<()>;
@@ -500,16 +544,33 @@ pub trait MembershipPersistence: Send + Sync + 'static {
     ) -> anyhow::Result<()>;
     async fn load_events(
         &self,
+        from_l1_block: u64,
         l1_finalized: u64,
     ) -> anyhow::Result<(
         Option<EventsPersistenceRead>,
         Vec<(EventKey, StakeTableEvent)>,
     )>;
+
+    /// Delete all stake table events, the L1 block tracker, and the epoch DRB and root data.
+    async fn delete_stake_tables(&self) -> anyhow::Result<()>;
+
+    async fn store_all_validators(
+        &self,
+        epoch: EpochNumber,
+        all_validators: IndexMap<Address, RegisteredValidator<PubKey>>,
+    ) -> anyhow::Result<()>;
+
+    async fn load_all_validators(
+        &self,
+        epoch: EpochNumber,
+        offset: u64,
+        limit: u64,
+    ) -> anyhow::Result<Vec<RegisteredValidator<PubKey>>>;
 }
 
 #[async_trait]
 pub trait SequencerPersistence:
-    Sized + Send + Sync + Clone + 'static + DhtPersistentStorage
+    Sized + Send + Sync + Clone + 'static + DhtPersistentStorage + MembershipPersistence
 {
     /// Use this storage as a state catchup backend, if supported.
     fn into_catchup_provider(
@@ -560,15 +621,29 @@ pub trait SequencerPersistence:
         &self,
     ) -> anyhow::Result<Option<LightClientStateUpdateCertificateV2<SeqTypes>>>;
 
+    /// Get a state certificate for an epoch.
+    async fn get_state_cert_by_epoch(
+        &self,
+        epoch: u64,
+    ) -> anyhow::Result<Option<LightClientStateUpdateCertificateV2<SeqTypes>>>;
+
+    /// Insert a state certificate for a given epoch.
+    async fn insert_state_cert(
+        &self,
+        epoch: u64,
+        cert: LightClientStateUpdateCertificateV2<SeqTypes>,
+    ) -> anyhow::Result<()>;
+
     /// Load the latest known consensus state.
     ///
     /// Returns an initializer to resume HotShot from the latest saved state (or start from genesis,
     /// if there is no saved state). Also returns the anchor view number, which can be used as a
     /// reference point to process any events which were not processed before a previous shutdown,
     /// if applicable,.
-    async fn load_consensus_state<V: Versions>(
+    async fn load_consensus_state(
         &self,
         state: NodeState,
+        upgrade: Upgrade,
     ) -> anyhow::Result<(HotShotInitializer<SeqTypes>, Option<ViewNumber>)> {
         let genesis_validated_state = ValidatedState::genesis(&state).0;
         let highest_voted_view = match self
@@ -626,9 +701,13 @@ pub trait SequencerPersistence:
             None => {
                 tracing::info!("no saved leaf, starting from genesis leaf");
                 (
-                    hotshot_types::data::Leaf2::genesis::<V>(&genesis_validated_state, &state)
-                        .await,
-                    QuorumCertificate2::genesis::<V>(&genesis_validated_state, &state).await,
+                    hotshot_types::data::Leaf2::genesis(
+                        &genesis_validated_state,
+                        &state,
+                        upgrade.base,
+                    )
+                    .await,
+                    QuorumCertificate2::genesis(&genesis_validated_state, &state, upgrade).await,
                     None,
                 )
             },
@@ -655,7 +734,7 @@ pub trait SequencerPersistence:
         // unnecessary catchup from starting in a view earlier than the anchor leaf.
         let restart_view = max(restart_view, leaf.view_number());
         // TODO:
-        let epoch = genesis_epoch_from_version::<V, SeqTypes>();
+        let epoch = genesis_epoch_from_version::<SeqTypes>(upgrade.base);
 
         let config = self.load_config().await.context("loading config")?;
         let epoch_height = config
@@ -724,7 +803,13 @@ pub trait SequencerPersistence:
 
     /// Update storage based on an event from consensus.
     async fn handle_event(&self, event: &Event, consumer: &(impl EventConsumer + 'static)) {
-        if let EventType::Decide { leaf_chain, qc, .. } = &event.event {
+        if let EventType::Decide {
+            leaf_chain,
+            committing_qc,
+            deciding_qc,
+            ..
+        } = &event.event
+        {
             let Some(LeafInfo { leaf, .. }) = leaf_chain.first() else {
                 // No new leaves.
                 return;
@@ -733,14 +818,14 @@ pub trait SequencerPersistence:
             // Associate each decided leaf with a QC.
             let chain = leaf_chain.iter().zip(
                 // The first (most recent) leaf corresponds to the QC triggering the decide event.
-                std::iter::once((**qc).clone())
+                std::iter::once((**committing_qc).clone())
                     // Moving backwards in the chain, each leaf corresponds with the subsequent
                     // leaf's justify QC.
-                    .chain(leaf_chain.iter().map(|leaf| leaf.leaf.justify_qc())),
+                    .chain(leaf_chain.iter().map(|leaf| CertificatePair::for_parent(&leaf.leaf))),
             );
 
             if let Err(err) = self
-                .append_decided_leaves(leaf.view_number(), chain, consumer)
+                .append_decided_leaves(leaf.view_number(), chain, deciding_qc.clone(), consumer)
                 .await
             {
                 tracing::error!(
@@ -779,7 +864,8 @@ pub trait SequencerPersistence:
     async fn append_decided_leaves(
         &self,
         decided_view: ViewNumber,
-        leaf_chain: impl IntoIterator<Item = (&LeafInfo<SeqTypes>, QuorumCertificate2<SeqTypes>)> + Send,
+        leaf_chain: impl IntoIterator<Item = (&LeafInfo<SeqTypes>, CertificatePair<SeqTypes>)> + Send,
+        deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
         consumer: &(impl EventConsumer + 'static),
     ) -> anyhow::Result<()>;
 
@@ -788,12 +874,7 @@ pub trait SequencerPersistence:
     ) -> anyhow::Result<Option<(Leaf2, QuorumCertificate2<SeqTypes>)>>;
     async fn append_vid(
         &self,
-        proposal: &Proposal<SeqTypes, ADVZDisperseShare<SeqTypes>>,
-    ) -> anyhow::Result<()>;
-    // TODO: merge these two `append_vid`s
-    async fn append_vid2(
-        &self,
-        proposal: &Proposal<SeqTypes, VidDisperseShare2<SeqTypes>>,
+        proposal: &Proposal<SeqTypes, VidDisperseShare<SeqTypes>>,
     ) -> anyhow::Result<()>;
     async fn append_da(
         &self,
@@ -831,7 +912,8 @@ pub trait SequencerPersistence:
         &self,
         decided_upgrade_certificate: Option<UpgradeCertificate<SeqTypes>>,
     ) -> anyhow::Result<()>;
-    async fn migrate_consensus(&self) -> anyhow::Result<()> {
+
+    async fn migrate_storage(&self) -> anyhow::Result<()> {
         tracing::warn!("migrating consensus data...");
 
         self.migrate_anchor_leaf().await?;
@@ -839,11 +921,14 @@ pub trait SequencerPersistence:
         self.migrate_vid_shares().await?;
         self.migrate_quorum_proposals().await?;
         self.migrate_quorum_certificates().await?;
+        self.migrate_validator_authenticated().await?;
 
         tracing::warn!("consensus storage has been migrated to new types");
 
         Ok(())
     }
+
+    async fn migrate_validator_authenticated(&self) -> anyhow::Result<()>;
 
     async fn migrate_anchor_leaf(&self) -> anyhow::Result<()>;
     async fn migrate_da_proposals(&self) -> anyhow::Result<()>;
@@ -929,16 +1014,9 @@ impl EventConsumer for NullEventConsumer {
 impl<P: SequencerPersistence> Storage<SeqTypes> for Arc<P> {
     async fn append_vid(
         &self,
-        proposal: &Proposal<SeqTypes, ADVZDisperseShare<SeqTypes>>,
+        proposal: &Proposal<SeqTypes, VidDisperseShare<SeqTypes>>,
     ) -> anyhow::Result<()> {
         (**self).append_vid(proposal).await
-    }
-
-    async fn append_vid2(
-        &self,
-        proposal: &Proposal<SeqTypes, VidDisperseShare2<SeqTypes>>,
-    ) -> anyhow::Result<()> {
-        (**self).append_vid2(proposal).await
     }
 
     async fn append_da(

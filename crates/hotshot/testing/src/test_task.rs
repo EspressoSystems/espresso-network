@@ -4,7 +4,7 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::{num::NonZeroUsize, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 use async_broadcast::{Receiver, Sender};
 use async_lock::RwLock;
@@ -17,10 +17,7 @@ use hotshot::{
 use hotshot_task_impls::{events::HotShotEvent, network::NetworkMessageTaskState};
 use hotshot_types::{
     message::UpgradeLock,
-    traits::{
-        network::ConnectedNetwork,
-        node_implementation::{NodeType, Versions},
-    },
+    traits::{network::ConnectedNetwork, node_implementation::NodeType},
 };
 use tokio::{
     spawn,
@@ -92,15 +89,14 @@ impl<TYPES: NodeType> TestTaskState for AnyTestTaskState<TYPES> {
 }
 
 #[async_trait]
-pub trait TestTaskStateSeed<TYPES, I, V>: Send
+pub trait TestTaskStateSeed<TYPES, I>: Send
 where
     TYPES: NodeType,
     I: TestableNodeImplementation<TYPES>,
-    V: Versions,
 {
     async fn into_state(
         self: Box<Self>,
-        handles: Arc<RwLock<Vec<Node<TYPES, I, V>>>>,
+        handles: Arc<RwLock<Vec<Node<TYPES, I>>>>,
     ) -> AnyTestTaskState<TYPES>;
 }
 
@@ -176,22 +172,20 @@ impl<S: TestTaskState + Send + 'static> TestTask<S> {
 /// Add the network task to handle messages and publish events.
 pub async fn add_network_message_test_task<
     TYPES: NodeType,
-    V: Versions,
     NET: ConnectedNetwork<TYPES::SignatureKey>,
 >(
     internal_event_stream: Sender<Arc<HotShotEvent<TYPES>>>,
     external_event_stream: Sender<Event<TYPES>>,
-    upgrade_lock: UpgradeLock<TYPES, V>,
+    upgrade_lock: UpgradeLock<TYPES>,
     channel: Arc<NET>,
     public_key: TYPES::SignatureKey,
     id: u64,
 ) -> JoinHandle<()> {
     let net = Arc::clone(&channel);
-    let network_state: NetworkMessageTaskState<_, _> = NetworkMessageTaskState {
+    let network_state: NetworkMessageTaskState<_> = NetworkMessageTaskState {
         internal_event_stream: internal_event_stream.clone(),
         external_event_stream: external_event_stream.clone(),
         public_key,
-        transactions_cache: lru::LruCache::new(NonZeroUsize::new(100_000).unwrap()),
         upgrade_lock: upgrade_lock.clone(),
         id,
     };

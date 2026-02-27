@@ -20,7 +20,7 @@ use futures::stream::BoxStream;
 use hotshot::types::Event;
 use hotshot_events_service::events_source::{EventFilterSet, EventsSource, StartupInfo};
 use hotshot_types::{data::VidShare, event::LegacyEvent, traits::node_implementation::NodeType};
-use jf_merkle_tree::prelude::MerkleProof;
+use jf_merkle_tree_compat::prelude::MerkleProof;
 use tagged_base64::TaggedBase64;
 
 use super::VersionedDataSource;
@@ -28,8 +28,8 @@ use crate::{
     availability::{
         AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, BlockWithTransaction, Fetch,
         FetchStream, LeafId, LeafQueryData, NamespaceId, PayloadMetadata, PayloadQueryData,
-        QueryableHeader, QueryablePayload, StateCertQueryDataV2, TransactionHash,
-        UpdateAvailabilityData, VidCommonMetadata, VidCommonQueryData,
+        QueryableHeader, QueryablePayload, TransactionHash, UpdateAvailabilityData,
+        VidCommonMetadata, VidCommonQueryData,
     },
     data_source::storage::pruning::PrunedHeightDataSource,
     explorer::{self, ExplorerDataSource, ExplorerHeader, ExplorerTransaction},
@@ -310,9 +310,6 @@ where
     ) -> Fetch<BlockWithTransaction<Types>> {
         self.data_source.get_block_containing_transaction(h).await
     }
-    async fn get_state_cert(&self, epoch: u64) -> Fetch<StateCertQueryDataV2<Types>> {
-        self.data_source.get_state_cert(epoch).await
-    }
 }
 
 impl<D, U, Types> UpdateAvailabilityData<Types> for ExtensibleDataSource<D, U>
@@ -444,6 +441,19 @@ where
     ) -> anyhow::Result<()> {
         self.data_source
             .insert_merkle_nodes(path, traversal_path, block_number)
+            .await
+    }
+
+    async fn insert_merkle_nodes_batch(
+        &mut self,
+        proofs: Vec<(
+            MerkleProof<State::Entry, State::Key, State::T, ARITY>,
+            Vec<usize>,
+        )>,
+        block_number: u64,
+    ) -> anyhow::Result<()> {
+        self.data_source
+            .insert_merkle_nodes_batch(proofs, block_number)
             .await
     }
 }

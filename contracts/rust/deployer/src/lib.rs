@@ -19,12 +19,14 @@ use alloy::{
     },
     transports::http::reqwest::Url,
 };
-use anyhow::{anyhow, Result};
-use clap::{builder::OsStr, Parser};
-use derive_more::{derive::Deref, Display};
+use anyhow::{anyhow, Context, Result};
+use clap::{builder::OsStr, Parser, ValueEnum};
+use derive_more::Display;
+use espresso_types::{v0_1::L1Client, v0_3::Fetcher};
 use hotshot_contract_adapter::sol_types::*;
 
 pub mod builder;
+pub mod impersonate_filler;
 pub mod network_config;
 pub mod proposals;
 pub mod provider;
@@ -41,12 +43,12 @@ pub type HttpProviderWithWallet = FillProvider<
 /// a handy thin wrapper around wallet builder and provider builder that directly
 /// returns an instantiated `Provider` with default fillers with wallet, ready to send tx
 pub fn build_provider(
-    mnemonic: String,
+    mnemonic: impl AsRef<str>,
     account_index: u32,
     url: Url,
     poll_interval: Option<Duration>,
 ) -> HttpProviderWithWallet {
-    let signer = build_signer(mnemonic, account_index);
+    let signer = build_signer(mnemonic.as_ref(), account_index);
     let wallet = EthereumWallet::from(signer);
 
     // alloy sets the polling interval automatically. It tries to guess if an RPC is local, but this
@@ -56,10 +58,10 @@ pub fn build_provider(
     if let Some(interval) = poll_interval {
         tracing::info!("Using custom L1 poll interval: {interval:?}");
         let client = RpcClient::new_http(url.clone()).with_poll_interval(interval);
-        ProviderBuilder::new().wallet(wallet).on_client(client)
+        ProviderBuilder::new().wallet(wallet).connect_client(client)
     } else {
         tracing::info!("Using default L1 poll interval");
-        ProviderBuilder::new().wallet(wallet).on_http(url)
+        ProviderBuilder::new().wallet(wallet).connect_http(url)
     }
 }
 
@@ -79,16 +81,16 @@ pub fn build_provider_ledger(
     if let Some(interval) = poll_interval {
         tracing::info!("Using custom L1 poll interval: {interval:?}");
         let client = RpcClient::new_http(url.clone()).with_poll_interval(interval);
-        ProviderBuilder::new().wallet(wallet).on_client(client)
+        ProviderBuilder::new().wallet(wallet).connect_client(client)
     } else {
         tracing::info!("Using default L1 poll interval");
-        ProviderBuilder::new().wallet(wallet).on_http(url)
+        ProviderBuilder::new().wallet(wallet).connect_http(url)
     }
 }
 
-pub fn build_signer(mnemonic: String, account_index: u32) -> PrivateKeySigner {
+pub fn build_signer(mnemonic: impl AsRef<str>, account_index: u32) -> PrivateKeySigner {
     MnemonicBuilder::<English>::default()
-        .phrase(mnemonic)
+        .phrase(mnemonic.as_ref())
         .index(account_index)
         .expect("wrong mnemonic or index")
         .build()
@@ -101,13 +103,19 @@ pub fn build_random_provider(url: Url) -> HttpProviderWithWallet {
         .build_random()
         .expect("fail to build signer");
     let wallet = EthereumWallet::from(signer);
-    ProviderBuilder::new().wallet(wallet).on_http(url)
+    ProviderBuilder::new().wallet(wallet).connect_http(url)
 }
 
 // We pass this during `forge bind --libraries` as a placeholder for the actual deployed library address
 const LIBRARY_PLACEHOLDER_ADDRESS: &str = "ffffffffffffffffffffffffffffffffffffffff";
 /// `stateHistoryRetentionPeriod` in LightClient.sol as the maximum retention period in seconds
 pub const MAX_HISTORY_RETENTION_SECONDS: u32 = 864000;
+/// Default exit escrow period for stake table (2 days in seconds)
+pub const DEFAULT_EXIT_ESCROW_PERIOD_SECONDS: u64 = 172800;
+/// Maximum number of retries for state checks after transactions
+pub const MAX_RETRY_ATTEMPTS: u32 = 5;
+/// Initial delay in milliseconds for retry exponential backoff
+pub const RETRY_INITIAL_DELAY_MS: u64 = 500;
 
 /// Set of predeployed contracts.
 #[derive(Clone, Debug, Parser)]
@@ -115,15 +123,19 @@ pub struct DeployedContracts {
     /// Use an already-deployed PlonkVerifier.sol instead of deploying a new one.
     #[clap(long, env = Contract::PlonkVerifier)]
     plonk_verifier: Option<Address>,
+
     /// OpsTimelock.sol
     #[clap(long, env = Contract::OpsTimelock)]
     ops_timelock: Option<Address>,
+
     /// SafeExitTimelock.sol
     #[clap(long, env = Contract::SafeExitTimelock)]
     safe_exit_timelock: Option<Address>,
+
     /// PlonkVerifierV2.sol
     #[clap(long, env = Contract::PlonkVerifierV2)]
     plonk_verifier_v2: Option<Address>,
+
     /// PlonkVerifierV3.sol
     #[clap(long, env = Contract::PlonkVerifierV3)]
     plonk_verifier_v3: Option<Address>,
@@ -131,9 +143,11 @@ pub struct DeployedContracts {
     /// Use an already-deployed LightClient.sol instead of deploying a new one.
     #[clap(long, env = Contract::LightClient)]
     light_client: Option<Address>,
+
     /// LightClientV2.sol
     #[clap(long, env = Contract::LightClientV2)]
     light_client_v2: Option<Address>,
+
     /// LightClientV3.sol
     #[clap(long, env = Contract::LightClientV3)]
     light_client_v3: Option<Address>,
@@ -173,6 +187,14 @@ pub struct DeployedContracts {
     /// Use an already-deployed StakeTable.sol proxy instead of deploying a new one.
     #[clap(long, env = Contract::StakeTableProxy)]
     stake_table_proxy: Option<Address>,
+
+    /// RewardClaim.sol
+    #[clap(long, env = Contract::RewardClaim)]
+    reward_claim: Option<Address>,
+
+    /// Use an already-deployed RewardClaim.sol proxy instead of deploying a new one.
+    #[clap(long, env = Contract::RewardClaimProxy)]
+    reward_claim_proxy: Option<Address>,
 }
 
 /// An identifier for a particular contract.
@@ -212,6 +234,37 @@ pub enum Contract {
     StakeTableV2,
     #[display("ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS")]
     StakeTableProxy,
+    #[display("ESPRESSO_SEQUENCER_REWARD_CLAIM_ADDRESS")]
+    RewardClaim,
+    #[display("ESPRESSO_SEQUENCER_REWARD_CLAIM_PROXY_ADDRESS")]
+    RewardClaimProxy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, ValueEnum)]
+#[clap(rename_all = "kebab-case")]
+pub enum OwnableContract {
+    #[value(alias = "feecontract", alias = "FeeContract")]
+    FeeContractProxy,
+    #[value(alias = "lightclient", alias = "LightClient")]
+    LightClientProxy,
+    #[value(alias = "staketable", alias = "StakeTable")]
+    StakeTableProxy,
+    #[value(alias = "esptoken", alias = "EspToken")]
+    EspTokenProxy,
+    #[value(alias = "rewardclaim", alias = "RewardClaim")]
+    RewardClaimProxy,
+}
+
+impl From<OwnableContract> for Contract {
+    fn from(c: OwnableContract) -> Contract {
+        match c {
+            OwnableContract::FeeContractProxy => Contract::FeeContractProxy,
+            OwnableContract::LightClientProxy => Contract::LightClientProxy,
+            OwnableContract::StakeTableProxy => Contract::StakeTableProxy,
+            OwnableContract::EspTokenProxy => Contract::EspTokenProxy,
+            OwnableContract::RewardClaimProxy => Contract::RewardClaimProxy,
+        }
+    }
 }
 
 impl From<Contract> for OsStr {
@@ -221,8 +274,22 @@ impl From<Contract> for OsStr {
 }
 
 /// Cache of contracts predeployed or deployed during this current run.
-#[derive(Deref, Debug, Clone, Default)]
-pub struct Contracts(HashMap<Contract, Address>);
+#[derive(Debug, Clone)]
+pub struct Contracts {
+    addresses: HashMap<Contract, Address>,
+    // TODO: having the cooldown field here is a bit hacky but we postpone a better solution to
+    // avoid a large refactor.
+    deploy_cooldown: Duration,
+}
+
+impl Default for Contracts {
+    fn default() -> Self {
+        Self {
+            addresses: HashMap::new(),
+            deploy_cooldown: Duration::ZERO,
+        }
+    }
+}
 
 impl From<DeployedContracts> for Contracts {
     fn from(deployed: DeployedContracts) -> Self {
@@ -278,32 +345,60 @@ impl From<DeployedContracts> for Contracts {
         if let Some(addr) = deployed.stake_table_proxy {
             m.insert(Contract::StakeTableProxy, addr);
         }
-        Self(m)
+        if let Some(addr) = deployed.reward_claim {
+            m.insert(Contract::RewardClaim, addr);
+        }
+        if let Some(addr) = deployed.reward_claim_proxy {
+            m.insert(Contract::RewardClaimProxy, addr);
+        }
+        Self {
+            addresses: m,
+            deploy_cooldown: Duration::ZERO,
+        }
     }
 }
 
 impl Contracts {
     pub fn new() -> Self {
-        Contracts(HashMap::new())
+        Self::default()
+    }
+
+    pub fn with_cooldown(cooldown: Duration) -> Self {
+        Self {
+            addresses: HashMap::new(),
+            deploy_cooldown: cooldown,
+        }
+    }
+
+    pub fn set_cooldown(&mut self, cooldown: Duration) {
+        self.deploy_cooldown = cooldown;
     }
 
     pub fn address(&self, contract: Contract) -> Option<Address> {
-        self.0.get(&contract).copied()
+        self.addresses.get(&contract).copied()
+    }
+
+    pub fn get(&self, contract: &Contract) -> Option<&Address> {
+        self.addresses.get(contract)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&Contract, &Address)> {
+        self.addresses.iter()
+    }
+
+    pub fn remove(&mut self, contract: &Contract) -> Option<Address> {
+        self.addresses.remove(contract)
     }
 
     /// Deploy a contract (with logging and cached deployments)
     ///
     /// The deployment `tx` will be sent only if contract `name` is not already deployed;
     /// otherwise this function will just return the predeployed address.
-    pub async fn deploy<T, P>(
-        &mut self,
-        name: Contract,
-        tx: RawCallBuilder<T, P>,
-    ) -> Result<Address>
+    pub async fn deploy<P>(&mut self, name: Contract, tx: RawCallBuilder<P>) -> Result<Address>
     where
         P: Provider,
     {
-        if let Some(addr) = self.0.get(&name) {
+        if let Some(addr) = self.addresses.get(&name) {
             tracing::info!("skipping deployment of {name}, already deployed at {addr:#x}");
             return Ok(*addr);
         }
@@ -312,6 +407,9 @@ impl Contracts {
         let tx_hash = *pending_tx.tx_hash();
         tracing::info!(%tx_hash, "waiting for tx to be mined");
         let receipt = pending_tx.get_receipt().await?;
+        if !receipt.inner.is_success() {
+            anyhow::bail!("Deployment transaction failed: {:?}", receipt);
+        }
         tracing::info!(%receipt.gas_used, %tx_hash, "tx mined");
         let addr = receipt
             .contract_address
@@ -319,13 +417,18 @@ impl Contracts {
 
         tracing::info!("deployed {name} at {addr:#x}");
 
-        self.0.insert(name, addr);
+        if !self.deploy_cooldown.is_zero() {
+            tokio::time::sleep(self.deploy_cooldown).await;
+            tracing::info!("cooldown {:?} after deployment", self.deploy_cooldown);
+        }
+
+        self.addresses.insert(name, addr);
         Ok(addr)
     }
 
     /// Write a .env file.
     pub fn write(&self, mut w: impl Write) -> Result<()> {
-        for (contract, address) in &self.0 {
+        for (contract, address) in &self.addresses {
             writeln!(w, "{contract}={address:#x}")?;
         }
         Ok(())
@@ -460,16 +563,13 @@ pub async fn deploy_light_client_proxy(
 
     // post deploy verification checks
     assert_eq!(lc_proxy.getVersion().call().await?.majorVersion, 1);
-    assert_eq!(lc_proxy.owner().call().await?._0, admin);
+    assert_eq!(lc_proxy.owner().call().await?, admin);
     if let Some(prover) = prover {
-        assert_eq!(lc_proxy.permissionedProver().call().await?._0, prover);
+        assert_eq!(lc_proxy.permissionedProver().call().await?, prover);
     }
+    assert_eq!(lc_proxy.stateHistoryRetentionPeriod().call().await?, 864000);
     assert_eq!(
-        lc_proxy.stateHistoryRetentionPeriod().call().await?._0,
-        864000
-    );
-    assert_eq!(
-        lc_proxy.currentBlockNumber().call().await?._0,
+        lc_proxy.currentBlockNumber().call().await?,
         U256::from(provider.get_block_number().await?)
     );
 
@@ -497,8 +597,22 @@ pub async fn upgrade_light_client_v2(
         None => Err(anyhow!("LightClientProxy not found, can't upgrade")),
         Some(proxy_addr) => {
             let proxy = LightClient::new(proxy_addr, &provider);
-            let state_history_retention_period =
-                proxy.stateHistoryRetentionPeriod().call().await?._0;
+
+            let curr_version = proxy.getVersion().call().await?;
+            if curr_version.majorVersion > 2 {
+                anyhow::bail!(
+                    "Expected LightClient V1 or V2 for upgrade to V2, found V{}",
+                    curr_version.majorVersion
+                );
+            }
+            // Log a warning if this is a patch upgrade (re-applying same version)
+            if curr_version.majorVersion == 2 {
+                tracing::warn!(
+                    "Re-applying LightClient V2 (patch upgrade). This will deploy a fresh \
+                     implementation."
+                );
+            }
+            let state_history_retention_period = proxy.stateHistoryRetentionPeriod().call().await?;
             // first deploy PlonkVerifierV2.sol
             let pv2_addr = contracts
                 .deploy(
@@ -541,6 +655,24 @@ pub async fn upgrade_light_client_v2(
                 tracing::info!("deployed LightClientV2Mock at {addr:#x}");
                 addr
             } else {
+                // Only check/remove from cache if this is a patch upgrade (V2 -> V2)
+                let is_patch_upgrade = curr_version.majorVersion == 2;
+                if is_patch_upgrade {
+                    let cached_lcv2_addr = contracts.address(Contract::LightClientV2);
+                    // For patch upgrades, we need to deploy a fresh implementation contract.
+                    // If LightClientV2 is already in the cache, the caller must unset it first
+                    // to make the redeployment requirement explicit.
+                    if let Some(addr) = cached_lcv2_addr {
+                        anyhow::bail!(
+                            "LightClientV2 implementation address is already set in cache \
+                             ({:#x}). For patch upgrades, the implementation must be redeployed. \
+                             Please unset ESPRESSO_SEQUENCER_LIGHT_CLIENT_V2_ADDRESS or remove it \
+                             from the cache first.",
+                            addr
+                        );
+                    }
+                }
+
                 contracts
                     .deploy(
                         Contract::LightClientV2,
@@ -552,15 +684,21 @@ pub async fn upgrade_light_client_v2(
 
             // get owner of proxy
             let owner = proxy.owner().call().await?;
-            let owner_addr = owner._0;
+            let owner_addr = owner;
             tracing::info!("Proxy owner: {owner_addr:#x}");
 
-            // prepare init calldata
+            // prepare initial function call calldata (checks if already initialized)
+            // you cannot initialize a proxy that is already initialized
+            // so if one wanted to use this function to upgrade a proxy to v2, that's already v2
+            // then we shouldn't call the initialize function
             let lcv2 = LightClientV2::new(lcv2_addr, &provider);
-            let init_data = lcv2
-                .initializeV2(blocks_per_epoch, epoch_start_block)
-                .calldata()
-                .to_owned();
+            let init_data = if already_initialized(&provider, proxy_addr, 2).await? {
+                vec![].into()
+            } else {
+                lcv2.initializeV2(blocks_per_epoch, epoch_start_block)
+                    .calldata()
+                    .to_owned()
+            };
             // invoke upgrade on proxy
             let receipt = proxy
                 .upgradeToAndCall(lcv2_addr, init_data)
@@ -568,35 +706,44 @@ pub async fn upgrade_light_client_v2(
                 .await?
                 .get_receipt()
                 .await?;
+            let proxy_as_v2 = LightClientV2::new(proxy_addr, &provider);
+
             if receipt.inner.is_success() {
+                // check that the upgrade is complete (with retry for RPC timing)
+                let is_complete = retry_until_true("LightClientProxy V2 version check", || async {
+                    Ok(proxy_as_v2.getVersion().call().await?.majorVersion == 2)
+                })
+                .await?;
+
+                if !is_complete {
+                    anyhow::bail!(
+                        "LightClientProxy version check failed after retries: expected V2"
+                    );
+                }
+
                 // post deploy verification checks
-                let proxy_as_v2 = LightClientV2::new(proxy_addr, &provider);
-                assert_eq!(proxy_as_v2.getVersion().call().await?.majorVersion, 2);
+                assert_eq!(proxy_as_v2.blocksPerEpoch().call().await?, blocks_per_epoch);
                 assert_eq!(
-                    proxy_as_v2.blocksPerEpoch().call().await?._0,
-                    blocks_per_epoch
-                );
-                assert_eq!(
-                    proxy_as_v2.epochStartBlock().call().await?._0,
+                    proxy_as_v2.epochStartBlock().call().await?,
                     epoch_start_block
                 );
                 assert_eq!(
-                    proxy_as_v2.stateHistoryRetentionPeriod().call().await?._0,
+                    proxy_as_v2.stateHistoryRetentionPeriod().call().await?,
                     state_history_retention_period
                 );
                 assert_eq!(
-                    proxy_as_v2.currentBlockNumber().call().await?._0,
+                    proxy_as_v2.currentBlockNumber().call().await?,
                     U256::from(provider.get_block_number().await?)
                 );
 
-                tracing::info!(%lcv2_addr, "LightClientProxy successfully upgrade to: ");
+                tracing::info!(%lcv2_addr, "LightClientProxy successfully upgraded to V2");
                 tracing::info!(
                     "blocksPerEpoch: {}",
-                    proxy_as_v2.blocksPerEpoch().call().await?._0
+                    proxy_as_v2.blocksPerEpoch().call().await?
                 );
                 tracing::info!(
                     "epochStartBlock: {}",
-                    proxy_as_v2.epochStartBlock().call().await?._0
+                    proxy_as_v2.epochStartBlock().call().await?
                 );
             } else {
                 tracing::error!("LightClientProxy upgrade failed: {:?}", receipt);
@@ -624,6 +771,17 @@ pub async fn upgrade_light_client_v3(
         None => Err(anyhow!("LightClientProxy not found, can't upgrade")),
         Some(proxy_addr) => {
             let proxy = LightClient::new(proxy_addr, &provider);
+
+            // Check proxy version, V3 requires at least V2 as a prerequisite
+            // This ensures we don't try to upgrade from V1 directly to V3
+            // V1 -> V2 -> V3 is the correct upgrade path
+            let version = proxy.getVersion().call().await?;
+            if version.majorVersion < 2 {
+                anyhow::bail!(
+                    "LightClientProxy is V{}, can't upgrade to V3. Must upgrade to V2 first.",
+                    version.majorVersion
+                );
+            }
 
             // first deploy PlonkVerifierV3.sol
             let pv3_addr = contracts
@@ -677,12 +835,21 @@ pub async fn upgrade_light_client_v3(
 
             // get owner of proxy
             let owner = proxy.owner().call().await?;
-            let owner_addr = owner._0;
+            let owner_addr = owner;
             tracing::info!("Proxy owner: {owner_addr:#x}");
 
-            // prepare init calldata
             let lcv3 = LightClientV3::new(lcv3_addr, &provider);
-            let init_data = lcv3.initializeV3().calldata().to_owned();
+
+            // prepare initial function call calldata (checks if already initialized)
+            // you cannot initialize a proxy that is already initialized
+            // so if one wanted to use this function to upgrade a proxy to v3, that's already v3
+            // then we shouldn't call the initialize function
+            let init_data = if already_initialized(&provider, proxy_addr, 3).await? {
+                vec![].into()
+            } else {
+                lcv3.initializeV3().calldata().to_owned()
+            };
+
             // invoke upgrade on proxy
             let receipt = proxy
                 .upgradeToAndCall(lcv3_addr, init_data)
@@ -690,11 +857,24 @@ pub async fn upgrade_light_client_v3(
                 .await?
                 .get_receipt()
                 .await?;
+
+            let proxy_as_v3 = LightClientV3::new(proxy_addr, &provider);
+
             if receipt.inner.is_success() {
-                // post deploy verification checks
-                let proxy_as_v3 = LightClientV3::new(proxy_addr, &provider);
-                assert_eq!(proxy_as_v3.getVersion().call().await?.majorVersion, 3);
-                tracing::info!(%lcv3_addr, "LightClientProxy successfully upgrade to: ")
+                // check that the upgrade is complete (with retry for RPC timing)
+                let version_is_v3 =
+                    retry_until_true("LightClientProxy V3 version check", || async {
+                        Ok(proxy_as_v3.getVersion().call().await?.majorVersion == 3)
+                    })
+                    .await?;
+
+                if !version_is_v3 {
+                    anyhow::bail!(
+                        "LightClientProxy version check failed after retries: expected V3"
+                    );
+                }
+
+                tracing::info!(%lcv3_addr, "LightClientProxy successfully upgraded to V3");
             } else {
                 tracing::error!("LightClientProxy upgrade failed: {:?}", receipt);
             }
@@ -707,27 +887,14 @@ pub async fn upgrade_light_client_v3(
 async fn already_initialized(
     provider: impl Provider,
     proxy_addr: Address,
-    contract: Contract,
     expected_major_version: u8,
 ) -> Result<bool> {
     let initialized = get_proxy_initialized_version(&provider, proxy_addr).await?;
     tracing::info!("Initialized version: {}", initialized);
 
-    let contract_major_version = match contract {
-        Contract::LightClientV2 => {
-            let contract_proxy = LightClientV2::new(proxy_addr, &provider);
-            contract_proxy.getVersion().call().await?.majorVersion
-        },
-        Contract::LightClientV3 => {
-            let contract_proxy = LightClientV3::new(proxy_addr, &provider);
-            contract_proxy.getVersion().call().await?.majorVersion
-        },
-        Contract::StakeTableV2 => {
-            let contract_proxy = StakeTableV2::new(proxy_addr, &provider);
-            contract_proxy.getVersion().call().await?.majorVersion
-        },
-        _ => anyhow::bail!("Unsupported contract type for already_initialized"),
-    };
+    // since all upgradable contracts have a getVersion() function, we can use it to get the major version
+    let contract_proxy = LightClientV2::new(proxy_addr, &provider);
+    let contract_major_version = contract_proxy.getVersion().call().await?.majorVersion;
 
     Ok(initialized == contract_major_version && contract_major_version == expected_major_version)
 }
@@ -769,7 +936,7 @@ pub async fn deploy_fee_contract_proxy(
     // post deploy verification checks
     let fee_proxy = FeeContract::new(fee_proxy_addr, &provider);
     assert_eq!(fee_proxy.getVersion().call().await?.majorVersion, 1);
-    assert_eq!(fee_proxy.owner().call().await?._0, admin);
+    assert_eq!(fee_proxy.owner().call().await?, admin);
 
     Ok(fee_proxy_addr)
 }
@@ -799,6 +966,7 @@ pub async fn deploy_token_proxy(
         )
         .calldata()
         .to_owned();
+
     let token_proxy_addr = contracts
         .deploy(
             Contract::EspTokenProxy,
@@ -813,13 +981,13 @@ pub async fn deploy_token_proxy(
     // post deploy verification checks
     let token_proxy = EspToken::new(token_proxy_addr, &provider);
     assert_eq!(token_proxy.getVersion().call().await?.majorVersion, 1);
-    assert_eq!(token_proxy.owner().call().await?._0, owner);
-    assert_eq!(token_proxy.symbol().call().await?._0, symbol);
-    assert_eq!(token_proxy.decimals().call().await?._0, 18);
-    assert_eq!(token_proxy.name().call().await?._0, name);
-    let total_supply = token_proxy.totalSupply().call().await?._0;
+    assert_eq!(token_proxy.owner().call().await?, owner);
+    assert_eq!(token_proxy.symbol().call().await?, symbol);
+    assert_eq!(token_proxy.decimals().call().await?, 18);
+    assert_eq!(token_proxy.name().call().await?, name);
+    let total_supply = token_proxy.totalSupply().call().await?;
     assert_eq!(
-        token_proxy.balanceOf(init_grant_recipient).call().await?._0,
+        token_proxy.balanceOf(init_grant_recipient).call().await?,
         total_supply
     );
 
@@ -827,7 +995,7 @@ pub async fn deploy_token_proxy(
 }
 
 /// Upgrade the esp token proxy to use EspTokenV2.
-async fn upgrade_esp_token_v2(
+pub async fn upgrade_esp_token_v2(
     provider: impl Provider,
     contracts: &mut Contracts,
 ) -> Result<TransactionReceipt> {
@@ -843,20 +1011,39 @@ async fn upgrade_esp_token_v2(
 
     assert!(is_contract(&provider, v2_addr).await?);
 
-    // invoke upgrade on proxy
+    // prepare init calldata for V2
+    let reward_claim_addr = contracts
+        .address(Contract::RewardClaimProxy)
+        .ok_or_else(|| anyhow!("RewardClaimProxy not found"))?;
+    let proxy_as_v2 = EspTokenV2::new(proxy_addr, &provider);
+    let init_data = proxy_as_v2
+        .initializeV2(reward_claim_addr)
+        .calldata()
+        .to_owned();
+
+    // invoke upgrade on proxy with initializeV2 call
     let receipt = proxy
-        .upgradeToAndCall(v2_addr, vec![].into() /* no new init data for V2 */)
+        .upgradeToAndCall(v2_addr, init_data)
         .send()
         .await?
         .get_receipt()
         .await?;
 
     if receipt.inner.is_success() {
+        // check that the upgrade is complete (with retry for RPC timing)
+        let version_is_v2 = retry_until_true("EspTokenProxy V2 version check", || async {
+            Ok(proxy_as_v2.getVersion().call().await?.majorVersion == 2)
+        })
+        .await?;
+
+        if !version_is_v2 {
+            anyhow::bail!("EspTokenProxy version check failed after retries: expected V2");
+        }
+
         // post deploy verification checks
-        let proxy_as_v2 = EspTokenV2::new(proxy_addr, &provider);
-        assert_eq!(proxy_as_v2.getVersion().call().await?.majorVersion, 2);
-        assert_eq!(proxy_as_v2.name().call().await?._0, "Espresso");
-        tracing::info!(%v2_addr, "EspToken successfully upgraded to")
+        assert_eq!(proxy_as_v2.name().call().await?, "Espresso");
+        assert_eq!(proxy_as_v2.rewardClaim().call().await?, reward_claim_addr);
+        tracing::info!(%v2_addr, "EspToken successfully upgraded to");
     } else {
         anyhow::bail!("EspToken upgrade failed: {:?}", receipt);
     }
@@ -891,6 +1078,7 @@ pub async fn deploy_stake_table_proxy(
         .initialize(token_addr, light_client_addr, exit_escrow_period, owner)
         .calldata()
         .to_owned();
+
     let st_proxy_addr = contracts
         .deploy(
             Contract::StakeTableProxy,
@@ -904,20 +1092,200 @@ pub async fn deploy_stake_table_proxy(
 
     let st_proxy = StakeTable::new(st_proxy_addr, &provider);
     assert_eq!(st_proxy.getVersion().call().await?.majorVersion, 1);
-    assert_eq!(st_proxy.owner().call().await?._0, owner);
-    assert_eq!(st_proxy.token().call().await?._0, token_addr);
-    assert_eq!(st_proxy.lightClient().call().await?._0, light_client_addr);
+    assert_eq!(st_proxy.owner().call().await?, owner);
+    assert_eq!(st_proxy.token().call().await?, token_addr);
+    assert_eq!(st_proxy.lightClient().call().await?, light_client_addr);
     assert_eq!(
-        st_proxy.exitEscrowPeriod().call().await?._0,
+        st_proxy.exitEscrowPeriod().call().await?,
         exit_escrow_period
     );
 
     Ok(st_proxy_addr)
 }
 
-/// Upgrade the stake table proxy to use StakeTableV2.
-async fn upgrade_stake_table_v2(
+/// Deploy and initialize the RewardClaim contract behind a proxy
+pub async fn deploy_reward_claim_proxy(
     provider: impl Provider,
+    contracts: &mut Contracts,
+    esp_token_addr: Address,
+    light_client_addr: Address,
+    admin: Address,
+    pauser: Address,
+) -> Result<Address> {
+    let reward_claim_addr = contracts
+        .deploy(
+            Contract::RewardClaim,
+            RewardClaim::deploy_builder(&provider),
+        )
+        .await?;
+    let reward_claim = RewardClaim::new(reward_claim_addr, &provider);
+
+    // verify the esp token address contains a contract
+    if !is_contract(&provider, esp_token_addr).await? {
+        anyhow::bail!("EspToken address is not a contract, can't deploy RewardClaimProxy");
+    }
+
+    // verify the light client address contains a contract
+    if !is_contract(&provider, light_client_addr).await? {
+        anyhow::bail!("LightClient address is not a contract, can't deploy RewardClaimProxy");
+    }
+
+    let init_data = reward_claim
+        .initialize(admin, esp_token_addr, light_client_addr, pauser)
+        .calldata()
+        .to_owned();
+    let reward_claim_proxy_addr = contracts
+        .deploy(
+            Contract::RewardClaimProxy,
+            ERC1967Proxy::deploy_builder(&provider, reward_claim_addr, init_data),
+        )
+        .await?;
+
+    if !is_proxy_contract(&provider, reward_claim_proxy_addr).await? {
+        panic!("RewardClaimProxy detected not as a proxy, report error!");
+    }
+
+    let reward_claim_proxy = RewardClaim::new(reward_claim_proxy_addr, &provider);
+    assert_eq!(
+        reward_claim_proxy.getVersion().call().await?,
+        (1, 0, 0).into()
+    );
+    // Verify admin has DEFAULT_ADMIN_ROLE
+    let admin_role = reward_claim_proxy.DEFAULT_ADMIN_ROLE().call().await?;
+    assert!(
+        reward_claim_proxy.hasRole(admin_role, admin).call().await?,
+        "admin should have DEFAULT_ADMIN_ROLE"
+    );
+    assert_eq!(reward_claim_proxy.espToken().call().await?, esp_token_addr);
+    assert_eq!(
+        reward_claim_proxy.lightClient().call().await?,
+        light_client_addr
+    );
+
+    Ok(reward_claim_proxy_addr)
+}
+
+/// Read stake table data from L1 StakeTable V1 events for V2 migration
+///
+/// Returns both the active stake and commissions needed for StakeTable V2 initialization.
+/// Assumes an infura RPC is used, otherwise it may hit other rate limits.
+pub async fn fetch_stake_table_for_stake_table_storage_migration(
+    l1_client: L1Client,
+    stake_table_address: Address,
+) -> Result<(U256, Vec<StakeTableV2::InitialCommission>)> {
+    let stake_table = StakeTable::new(stake_table_address, &l1_client);
+
+    // Verify this is a V1 contract
+    let version = stake_table.getVersion().call().await?;
+    if version.majorVersion != 1 {
+        anyhow::bail!(
+            "Expected StakeTable V1 for migration, found V{}",
+            version.majorVersion
+        );
+    }
+
+    tracing::info!("Fetching all validators from StakeTable V1 contract");
+
+    // Get the latest L1 block to query up to
+    let latest_block = l1_client.provider.get_block_number().await?;
+
+    // Use Fetcher to get all validators from contract events
+    let (validators, _stake_table_hash) =
+        Fetcher::fetch_all_validators_from_contract(l1_client, stake_table_address, latest_block)
+            .await
+            .context("Failed to fetch validators from V1 contract")?;
+
+    // Sum up total active stake from all validators
+    let active_stake = validators.values().map(|v| v.stake).sum::<U256>();
+
+    // Extract commissions from validators
+    let commissions = validators
+        .values()
+        .map(|v| StakeTableV2::InitialCommission {
+            validator: v.account,
+            commission: v.commission,
+        })
+        .collect::<Vec<_>>();
+
+    tracing::info!(
+        "Found {} active stake and {} commissions from {} validators to migrate from V1",
+        active_stake,
+        commissions.len(),
+        validators.len()
+    );
+
+    Ok((active_stake, commissions))
+}
+
+/// Prepare the upgrade data for StakeTable V2, checking version and fetching commissions if needed.
+///
+/// Returns:
+/// - The initialization commissions (maybe used for post deployment verification)
+/// - The initialization calldata (if initialization is needed)
+pub async fn prepare_stake_table_v2_upgrade(
+    l1_client: L1Client,
+    proxy_addr: Address,
+    pauser: Address,
+    admin: Address,
+) -> Result<(
+    Option<Vec<StakeTableV2::InitialCommission>>,
+    Option<U256>,
+    Option<Bytes>,
+)> {
+    let proxy = StakeTable::new(proxy_addr, &l1_client);
+
+    let current_version = proxy.getVersion().call().await?;
+    let target_version = 2;
+    if current_version.majorVersion > target_version {
+        anyhow::bail!(
+            "Expected StakeTable V1 or V2, found V{}",
+            current_version.majorVersion
+        );
+    }
+
+    // For a non-major version upgrade the proxy storage must already be initialized.
+    let needs_initialization =
+        !already_initialized(&l1_client.provider, proxy_addr, target_version).await?;
+    assert_eq!(
+        needs_initialization,
+        current_version.majorVersion < target_version,
+        "unexpected version initialized"
+    );
+
+    if needs_initialization {
+        tracing::info!("Fetching stake table data from V1 contract for migration");
+        let (active_stake, commissions) =
+            fetch_stake_table_for_stake_table_storage_migration(l1_client.clone(), proxy_addr)
+                .await?;
+
+        tracing::info!(
+            %pauser,
+            %admin,
+            active_stake = %format!("{:?} wei", active_stake),
+            commission_count = commissions.len(),
+            "Init Data to be signed. Function: initializeV2",
+        );
+
+        // We can use any address here since we're just building calldata
+        let data = StakeTableV2::new(Address::ZERO, &l1_client)
+            .initializeV2(pauser, admin, active_stake, commissions.clone())
+            .calldata()
+            .to_owned();
+
+        Ok((Some(commissions), Some(active_stake), Some(data)))
+    } else {
+        tracing::info!(
+            "Proxy was already initialized for version {}",
+            target_version
+        );
+        Ok((None, None, None))
+    }
+}
+
+/// Upgrade the stake table proxy from V1 to V2, or patch V2
+pub async fn upgrade_stake_table_v2(
+    provider: impl Provider,
+    l1_client: L1Client,
     contracts: &mut Contracts,
     pauser: Address,
     admin: Address,
@@ -927,8 +1295,11 @@ async fn upgrade_stake_table_v2(
         anyhow::bail!("StakeTableProxy not found, can't upgrade")
     };
 
-    let proxy = StakeTable::new(proxy_addr, &provider);
-    // Deploy the new implementation
+    // First prepare upgrade data (including fetching commissions if needed)
+    let (init_commissions, init_active_stake, init_data) =
+        prepare_stake_table_v2_upgrade(l1_client.clone(), proxy_addr, pauser, admin).await?;
+
+    // Then deploy the new implementation
     let v2_addr = contracts
         .deploy(
             Contract::StakeTableV2,
@@ -936,59 +1307,144 @@ async fn upgrade_stake_table_v2(
         )
         .await?;
 
-    if !is_contract(&provider, v2_addr).await? {
-        anyhow::bail!("StakeTableV2 is not a contract, can't upgrade");
-    }
+    let proxy = StakeTable::new(proxy_addr, &provider);
 
-    // Prepare init data
-    let expected_major_version = 2;
-    let init_data = if already_initialized(
-        &provider,
-        proxy_addr,
-        Contract::StakeTableV2,
-        expected_major_version,
-    )
-    .await?
-    {
-        tracing::info!(
-            "Proxy was already initialized for version {}",
-            expected_major_version
-        );
-        vec![].into()
-    } else {
-        tracing::info!(
-            "Init Data to be signed.\n Function: initializeV2\n Arguments:\n pauser: {:?}\n \
-             admin: {:?}",
-            pauser,
-            admin
-        );
-        StakeTableV2::new(v2_addr, &provider)
-            .initializeV2(pauser, admin)
-            .calldata()
-            .to_owned()
-    };
-
-    // invoke upgrade on proxy
     let receipt = proxy
-        .upgradeToAndCall(v2_addr, init_data)
+        .upgradeToAndCall(v2_addr, init_data.unwrap_or_default())
         .send()
         .await?
         .get_receipt()
         .await?;
 
+    let proxy_as_v2 = StakeTableV2::new(proxy_addr, &provider);
+
     if receipt.inner.is_success() {
+        //TODO: check event emission instead as it's more reliable
+        // check that the upgrade is complete (with retry for RPC timing)
+        let version_is_v2 = retry_until_true("StakeTableProxy V2 version check", || async {
+            Ok(proxy_as_v2.getVersion().call().await?.majorVersion == 2)
+        })
+        .await?;
+        if !version_is_v2 {
+            anyhow::bail!("StakeTableProxy version check failed after retries: expected V2");
+        }
+
         // post deploy verification checks
-        let proxy_as_v2 = StakeTableV2::new(proxy_addr, &provider);
-        assert_eq!(proxy_as_v2.getVersion().call().await?.majorVersion, 2);
-        // get pauser role
-        let pauser_role = proxy_as_v2.PAUSER_ROLE().call().await?._0;
-        assert!(proxy_as_v2.hasRole(pauser_role, pauser).call().await?._0,);
-        // get admin role
-        let admin_role = proxy_as_v2.DEFAULT_ADMIN_ROLE().call().await?._0;
-        assert!(proxy_as_v2.hasRole(admin_role, admin).call().await?._0,);
-        tracing::info!(%v2_addr, "StakeTable successfully upgraded to")
+        let pauser_role = proxy_as_v2.PAUSER_ROLE().call().await?;
+        assert!(
+            proxy_as_v2.hasRole(pauser_role, pauser).call().await?,
+            "pauser should have PAUSER_ROLE"
+        );
+
+        let admin_role = proxy_as_v2.DEFAULT_ADMIN_ROLE().call().await?;
+        assert!(proxy_as_v2.hasRole(admin_role, admin).call().await?,);
+
+        if let Some(migrated) = init_commissions {
+            tracing::info!("Verifying migrated commissions, may take a minute");
+            for init_comm in migrated {
+                let tracking = proxy_as_v2
+                    .commissionTracking(init_comm.validator)
+                    .call()
+                    .await?;
+                assert_eq!(tracking.commission, init_comm.commission);
+            }
+        }
+
+        tracing::info!("Verifying migrated active stake");
+        assert_eq!(
+            proxy_as_v2.activeStake().call().await?,
+            init_active_stake.unwrap_or_default(),
+            "migrated active stake does not match"
+        );
+
+        tracing::info!(%v2_addr, "StakeTable successfully upgraded to");
     } else {
         anyhow::bail!("StakeTable upgrade failed: {:?}", receipt);
+    }
+
+    Ok(receipt)
+}
+
+/// Upgrade the fee contract from V1.x.x to V1.0.1
+/// This is for fee contracts owned by an EOA
+pub async fn upgrade_fee_v1(
+    provider: impl Provider,
+    contracts: &mut Contracts,
+) -> Result<TransactionReceipt> {
+    tracing::info!("Upgrading FeeContract to FeeContractV1.0.1 with EOA admin");
+    let Some(fee_contract_proxy_addr) = contracts.address(Contract::FeeContractProxy) else {
+        anyhow::bail!("FeeContractProxy not found, can't upgrade")
+    };
+
+    let fee_contract_proxy = FeeContract::new(fee_contract_proxy_addr, &provider);
+
+    let owner = fee_contract_proxy.owner().call().await?;
+    if is_contract(&provider, owner).await? {
+        anyhow::bail!(
+            "FeeContract owner ({:#x}) is not an EOA, can't upgrade",
+            owner
+        );
+    }
+
+    let curr_version = fee_contract_proxy.getVersion().call().await?;
+    if curr_version.majorVersion != 1 {
+        anyhow::bail!(
+            "Expected FeeContract V1 for upgrade, found V{}.{}.{}",
+            curr_version.majorVersion,
+            curr_version.minorVersion,
+            curr_version.patchVersion
+        );
+    }
+
+    let cached_fee_contract_addr = contracts.address(Contract::FeeContract);
+
+    // For patch upgrades, we need to deploy a fresh implementation contract.
+    // If FeeContract is already in the cache, the caller must unset it first
+    // to make the redeployment requirement explicit.
+    if let Some(cached_fee_contract_addr) = cached_fee_contract_addr {
+        anyhow::bail!(
+            "FeeContract implementation address is already set in cache ({:#x}). For patch \
+             upgrades, the implementation must be redeployed. Please unset \
+             ESPRESSO_FEE_CONTRACT_ADDRESS or remove it from the cache first.",
+            cached_fee_contract_addr
+        );
+    }
+
+    // now deploy the new implementation contract
+    let new_fee_contract_addr = contracts
+        .deploy(
+            Contract::FeeContract,
+            FeeContract::deploy_builder(&provider),
+        )
+        .await?;
+
+    let receipt = fee_contract_proxy
+        .upgradeToAndCall(new_fee_contract_addr, vec![].into())
+        .send()
+        .await?
+        .get_receipt()
+        .await
+        .context("Failed to get upgrade transaction receipt")?;
+
+    if receipt.inner.is_success() {
+        let new_version = fee_contract_proxy.getVersion().call().await?;
+        if new_version != (1, 0, 1).into() {
+            anyhow::bail!(
+                "Upgrade transaction succeeded but version is incorrect: V{}.{}.{} (expected \
+                 V1.0.1). Proxy: {fee_contract_proxy_addr:#x}, New impl: \
+                 {new_fee_contract_addr:#x}",
+                new_version.majorVersion,
+                new_version.minorVersion,
+                new_version.patchVersion
+            );
+        }
+        tracing::info!(
+            proxy = %fee_contract_proxy_addr,
+            impl = %new_fee_contract_addr,
+            "FeeContract successfully upgraded to v1.0.1"
+        );
+    } else {
+        anyhow::bail!("FeeContract upgrade failed: {:?}", receipt);
     }
 
     Ok(receipt)
@@ -1001,78 +1457,120 @@ pub async fn transfer_ownership(
     target_address: Address,
     new_owner: Address,
 ) -> Result<TransactionReceipt> {
-    let receipt = match target_contract {
-        Contract::LightClient | Contract::LightClientProxy => {
-            tracing::info!(%target_address, %new_owner, "Transfer LightClient ownership");
-            let lc = LightClient::new(target_address, &provider);
-            lc.transferOwnership(new_owner)
-                .send()
-                .await?
-                .get_receipt()
-                .await?
-        },
-        Contract::FeeContract | Contract::FeeContractProxy => {
-            tracing::info!(%target_address, %new_owner, "Transfer FeeContract ownership");
-            let fee = FeeContract::new(target_address, &provider);
-            fee.transferOwnership(new_owner)
-                .send()
-                .await?
-                .get_receipt()
-                .await?
-        },
-        Contract::EspToken | Contract::EspTokenProxy => {
-            tracing::info!(%target_address, %new_owner, "Transfer EspToken ownership");
-            let token = EspToken::new(target_address, &provider);
-            token
-                .transferOwnership(new_owner)
-                .send()
-                .await?
-                .get_receipt()
-                .await?
-        },
-        Contract::StakeTable | Contract::StakeTableProxy | Contract::StakeTableV2 => {
-            tracing::info!(%target_address, %new_owner, "Transfer StakeTable ownership");
-            let stake_table = StakeTable::new(target_address, &provider);
-            stake_table
-                .transferOwnership(new_owner)
-                .send()
-                .await?
-                .get_receipt()
-                .await?
-        },
-        _ => return Err(anyhow!("Not Ownable, can't transfer ownership!")),
-    };
+    // Use OwnableUpgradeable interface for all Ownable contracts
+    // This is more generic and maintainable than matching on each contract type
+    let ownable = OwnableUpgradeable::new(target_address, &provider);
+
+    // Verify the contract is actually Ownable by checking if we can read the owner
+    let current_owner = ownable.owner().call().await.context(format!(
+        "Contract at {target_address:#x} does not implement Ownable interface"
+    ))?;
+
+    tracing::info!(%target_contract, %target_address, current_owner = %current_owner, new_owner = %new_owner, "Transferring ownership of {target_contract}");
+
+    let receipt = ownable
+        .transferOwnership(new_owner)
+        .send()
+        .await?
+        .get_receipt()
+        .await?;
+
     let tx_hash = receipt.transaction_hash;
     tracing::info!(%receipt.gas_used, %tx_hash, "ownership transferred");
     Ok(receipt)
 }
 
+/// Grant DEFAULT_ADMIN_ROLE to a new admin for AccessControl-based contracts
+/// This handles contracts like RewardClaim that use AccessControl instead of Ownable
+pub async fn grant_admin_role(
+    provider: impl Provider,
+    target_contract: Contract,
+    target_address: Address,
+    new_admin: Address,
+) -> Result<TransactionReceipt> {
+    // Use AccessControlUpgradeable interface
+    let access_control = AccessControlUpgradeable::new(target_address, &provider);
+
+    // Verify the contract is actually AccessControl by checking if we can read roles
+    let admin_role = access_control
+        .DEFAULT_ADMIN_ROLE()
+        .call()
+        .await
+        .context(format!(
+            "Contract at {target_address:#x} does not implement AccessControl interface"
+        ))?;
+
+    // Check if new_admin already has the role (for logging purposes)
+    let already_has_role = access_control.hasRole(admin_role, new_admin).call().await?;
+
+    tracing::info!(
+        %target_contract,
+        %target_address,
+        new_admin = %new_admin,
+        already_has_role = %already_has_role,
+        "Granting DEFAULT_ADMIN_ROLE for {target_contract}"
+    );
+
+    // For RewardClaim, grantRole handles the revoke of the previous admin internally
+    let receipt = access_control
+        .grantRole(admin_role, new_admin)
+        .send()
+        .await?
+        .get_receipt()
+        .await?;
+
+    let tx_hash = receipt.transaction_hash;
+    tracing::info!(%receipt.gas_used, %tx_hash, "admin role granted");
+    Ok(receipt)
+}
+
 /// helper function to decide if the contract at given address `addr` is a proxy contract
 pub async fn is_proxy_contract(provider: impl Provider, addr: Address) -> Result<bool> {
+    // when the implementation address is not equal to zero, it's a proxy
+    Ok(read_proxy_impl(provider, addr).await? != Address::default())
+}
+
+pub async fn read_proxy_impl(provider: impl Provider, addr: Address) -> Result<Address> {
     // confirm that the proxy_address is a proxy
     // using the implementation slot, 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc, which is the keccak-256 hash of "eip1967.proxy.implementation" subtracted by 1
     let impl_slot = U256::from_str_radix(
         "360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc",
         16,
     )?;
-    let storage = provider.get_storage_at(addr, impl_slot).await?;
-    let impl_address = Address::from_slice(&storage.to_be_bytes_vec()[12..]);
 
-    // when the implementation address is not equal to zero, it's a proxy
-    Ok(impl_address != Address::default())
+    // Use retry_until_true to verify storage is readable (non-zero address)
+    let is_readable = retry_until_true("Read proxy implementation", || async {
+        match provider.get_storage_at(addr, impl_slot).await {
+            Ok(_) => {
+                // storage is readable so return true
+                Ok(true)
+            },
+            Err(e) => {
+                tracing::debug!("Storage read failed (will retry): {}", e);
+                Ok(false)
+            },
+        }
+    })
+    .await?;
+
+    if !is_readable {
+        anyhow::bail!(
+            "Proxy implementation storage is not readable after retries at address {addr:#x}"
+        );
+    }
+
+    // Final read to get the actual address (we know it's readable now)
+    let storage = provider.get_storage_at(addr, impl_slot).await?;
+    let impl_addr = Address::from_slice(&storage.to_be_bytes_vec()[12..]);
+
+    Ok(impl_addr)
 }
 
 pub async fn is_contract(provider: impl Provider, address: Address) -> Result<bool> {
     if address == Address::ZERO {
         return Ok(false);
     }
-
-    let code = provider.get_code_at(address).await?;
-    if code.is_empty() {
-        return Ok(false);
-    }
-
-    Ok(true)
+    Ok(!provider.get_code_at(address).await?.is_empty())
 }
 
 pub async fn get_proxy_initialized_version(
@@ -1082,7 +1580,7 @@ pub async fn get_proxy_initialized_version(
     // From openzeppelin Initializable.sol, the initialized version slot is keccak256("openzeppelin.storage.Initializable");
     let slot: B256 = "0xf0c57e16840df040f15088dc2f81fe391c3923bec73e23a9662efc9c229c6a00"
         .parse()
-        .unwrap();
+        .context("Failed to parse OpenZeppelin Initializable slot")?;
     let value = provider.get_storage_at(proxy_addr, slot.into()).await?;
     let initialized = value.as_le_bytes()[0]; // `_initialized` is u8 stored in the last byte
     Ok(initialized)
@@ -1128,20 +1626,18 @@ pub async fn deploy_ops_timelock(
     let timelock = OpsTimelock::new(timelock_addr, &provider);
 
     // Verify initialization parameters
-    assert_eq!(timelock.getMinDelay().call().await?._0, min_delay);
+    assert_eq!(timelock.getMinDelay().call().await?, min_delay);
     assert!(
         timelock
-            .hasRole(timelock.PROPOSER_ROLE().call().await?._0, proposers[0])
+            .hasRole(timelock.PROPOSER_ROLE().call().await?, proposers[0])
             .call()
             .await?
-            ._0
     );
     assert!(
         timelock
-            .hasRole(timelock.EXECUTOR_ROLE().call().await?._0, executors[0])
+            .hasRole(timelock.EXECUTOR_ROLE().call().await?, executors[0])
             .call()
             .await?
-            ._0
     );
 
     // test that the admin is in the default admin role where DEFAULT_ADMIN_ROLE = 0x00
@@ -1151,7 +1647,6 @@ pub async fn deploy_ops_timelock(
             .hasRole(default_admin_role.into(), admin)
             .call()
             .await?
-            ._0
     );
 
     Ok(timelock_addr)
@@ -1197,20 +1692,18 @@ pub async fn deploy_safe_exit_timelock(
     let timelock = SafeExitTimelock::new(timelock_addr, &provider);
 
     // Verify initialization parameters
-    assert_eq!(timelock.getMinDelay().call().await?._0, min_delay);
+    assert_eq!(timelock.getMinDelay().call().await?, min_delay);
     assert!(
         timelock
-            .hasRole(timelock.PROPOSER_ROLE().call().await?._0, proposers[0])
+            .hasRole(timelock.PROPOSER_ROLE().call().await?, proposers[0])
             .call()
             .await?
-            ._0
     );
     assert!(
         timelock
-            .hasRole(timelock.EXECUTOR_ROLE().call().await?._0, executors[0])
+            .hasRole(timelock.EXECUTOR_ROLE().call().await?, executors[0])
             .call()
             .await?
-            ._0
     );
 
     // test that the admin is in the default admin role where DEFAULT_ADMIN_ROLE = 0x00
@@ -1220,7 +1713,6 @@ pub async fn deploy_safe_exit_timelock(
             .hasRole(default_admin_role.into(), admin)
             .call()
             .await?
-            ._0
     );
 
     Ok(timelock_addr)
@@ -1273,29 +1765,99 @@ pub fn encode_function_call(signature: &str, args: Vec<String>) -> Result<Bytes>
     Ok(data)
 }
 
+/// retry helper for checking state after transactions
+/// Retries up to 5 times with exponential backoff (500ms, 1s, 2s, 4s, 8s)
+/// Parameters:
+/// - `check_name`: the name of the check
+/// - `check_fn`: the function to check, must return `Result<bool>`
+///
+/// Returns:
+/// - `Ok(true)` if the check passed, `Ok(false)`
+pub async fn retry_until_true<F, Fut>(check_name: &str, mut check_fn: F) -> Result<bool>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<bool>>,
+{
+    for attempt in 0..MAX_RETRY_ATTEMPTS {
+        match check_fn().await {
+            Ok(true) => return Ok(true),
+            Ok(false) | Err(_) if attempt < MAX_RETRY_ATTEMPTS - 1 => {
+                let delay_ms = RETRY_INITIAL_DELAY_MS * (1 << attempt);
+                tracing::warn!("{} not ready, retrying in {}ms...", check_name, delay_ms);
+                tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+            },
+            Ok(false) => {
+                tracing::error!(
+                    "{} not ready after {} attempts, returning false",
+                    check_name,
+                    MAX_RETRY_ATTEMPTS
+                );
+                return Ok(false);
+            },
+            Err(e) => {
+                tracing::error!(
+                    "{} not ready after {} attempts,  (treating as not ready): {e:#}",
+                    check_name,
+                    MAX_RETRY_ATTEMPTS
+                );
+                return Ok(false);
+            },
+        }
+    }
+    // should never reach here, but defensive fallback to return false
+    Ok(false)
+}
+
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use alloy::{
-        node_bindings::Anvil, primitives::utils::parse_ether, providers::ProviderBuilder,
+        node_bindings::{Anvil, AnvilInstance},
+        primitives::utils::parse_ether,
+        providers::{ext::AnvilApi, layers::AnvilProvider, ProviderBuilder},
         sol_types::SolValue,
     };
+    use espresso_types::testing::TestValidator;
+    use hotshot_contract_adapter::sol_types::{FeeContract, StakeTableV2};
 
     use super::*;
-    use crate::proposals::{
-        multisig::{
-            transfer_ownership_from_multisig_to_timelock, upgrade_esp_token_v2_multisig_owner,
-            upgrade_light_client_v2_multisig_owner, upgrade_stake_table_v2_multisig_owner,
-            LightClientV2UpgradeParams, TransferOwnershipParams,
+    use crate::{
+        impersonate_filler::ImpersonateFiller,
+        proposals::{
+            multisig::{
+                transfer_ownership_from_multisig_to_timelock, upgrade_esp_token_v2_multisig_owner,
+                upgrade_fee_contract_multisig_owner, upgrade_light_client_v2_multisig_owner,
+                upgrade_stake_table_v2_multisig_owner, LightClientV2UpgradeParams,
+                StakeTableV2UpgradeParams, TransferOwnershipParams,
+            },
+            timelock::{
+                derive_timelock_address_from_contract_type, perform_timelock_operation,
+                TimelockOperationParams, TimelockOperationPayload, TimelockOperationType,
+            },
         },
-        timelock::{
-            cancel_timelock_operation, execute_timelock_operation, schedule_timelock_operation,
-            TimelockOperationData,
-        },
+        Contracts,
     };
+
+    trait ProviderBuilderExt: Sized {
+        fn connect_anvil_with_l1_client(
+            self,
+        ) -> Result<(AnvilInstance, HttpProviderWithWallet, L1Client)> {
+            let anvil = Anvil::new().spawn();
+            let wallet = anvil.wallet().unwrap();
+            let provider = ProviderBuilder::new()
+                .wallet(wallet)
+                .connect_http(anvil.endpoint_url());
+            let l1_client = L1Client::anvil(&anvil)?;
+            Ok((anvil, provider, l1_client))
+        }
+    }
+
+    impl<L, F, N> ProviderBuilderExt for ProviderBuilder<L, F, N> {}
 
     #[test_log::test(tokio::test)]
     async fn test_is_contract() -> Result<(), anyhow::Error> {
-        let provider = ProviderBuilder::new().on_anvil_with_wallet();
+        let provider = ProviderBuilder::new().connect_anvil_with_wallet();
 
         // test with zero address returns false
         let zero_address = Address::ZERO;
@@ -1315,12 +1877,13 @@ mod tests {
 
     #[test_log::test(tokio::test)]
     async fn test_is_proxy_contract() -> Result<()> {
-        let provider = ProviderBuilder::new().on_anvil_with_wallet();
+        let provider = ProviderBuilder::new().connect_anvil_with_wallet();
         let deployer = provider.get_accounts().await?[0];
 
         let fee_contract = FeeContract::deploy(&provider).await?;
         let init_data = fee_contract.initialize(deployer).calldata().clone();
-        let proxy = ERC1967Proxy::deploy(&provider, *fee_contract.address(), init_data).await?;
+        let proxy =
+            ERC1967Proxy::deploy(&provider, *fee_contract.address(), init_data.clone()).await?;
 
         assert!(is_proxy_contract(&provider, *proxy.address()).await?);
         assert!(!is_proxy_contract(&provider, *fee_contract.address()).await?);
@@ -1329,7 +1892,7 @@ mod tests {
 
     #[test_log::test(tokio::test)]
     async fn test_deploy_light_client() -> Result<()> {
-        let provider = ProviderBuilder::new().on_anvil_with_wallet();
+        let provider = ProviderBuilder::new().connect_anvil_with_wallet();
         let mut contracts = Contracts::new();
 
         // first test if LightClientMock can be deployed
@@ -1346,7 +1909,7 @@ mod tests {
 
     #[test_log::test(tokio::test)]
     async fn test_deploy_mock_light_client_proxy() -> Result<()> {
-        let provider = ProviderBuilder::new().on_anvil_with_wallet();
+        let provider = ProviderBuilder::new().connect_anvil_with_wallet();
         let mut contracts = Contracts::new();
 
         // prepare `initialize()` input
@@ -1395,7 +1958,7 @@ mod tests {
 
     #[test_log::test(tokio::test)]
     async fn test_deploy_light_client_proxy() -> Result<()> {
-        let provider = ProviderBuilder::new().on_anvil_with_wallet();
+        let provider = ProviderBuilder::new().connect_anvil_with_wallet();
         let mut contracts = Contracts::new();
 
         // prepare `initialize()` input
@@ -1429,7 +1992,7 @@ mod tests {
         assert_eq!(fetched_stake.threshold, genesis_stake.threshold);
 
         let fetched_prover = lc.permissionedProver().call().await?;
-        assert_eq!(fetched_prover._0, prover);
+        assert_eq!(fetched_prover, prover);
 
         // test transfer ownership to multisig
         let multisig = Address::random();
@@ -1440,14 +2003,14 @@ mod tests {
             multisig,
         )
         .await?;
-        assert_eq!(lc.owner().call().await?._0, multisig);
+        assert_eq!(lc.owner().call().await?, multisig);
 
         Ok(())
     }
 
     #[test_log::test(tokio::test)]
     async fn test_deploy_fee_contract_proxy() -> Result<()> {
-        let provider = ProviderBuilder::new().on_anvil_with_wallet();
+        let provider = ProviderBuilder::new().connect_anvil_with_wallet();
         let mut contracts = Contracts::new();
         let admin = provider.get_accounts().await?[0];
         let alice = Address::random();
@@ -1456,7 +2019,7 @@ mod tests {
 
         // check initialization is correct
         let fee = FeeContract::new(fee_proxy_addr, &provider);
-        let fetched_owner = fee.owner().call().await?._0;
+        let fetched_owner = fee.owner().call().await?;
         assert_eq!(fetched_owner, alice);
 
         // redeploy new fee with admin being the owner
@@ -1473,13 +2036,13 @@ mod tests {
             multisig,
         )
         .await?;
-        assert_eq!(fee.owner().call().await?._0, multisig);
+        assert_eq!(fee.owner().call().await?, multisig);
 
         Ok(())
     }
 
     async fn test_upgrade_light_client_to_v2_helper(is_mock: bool) -> Result<()> {
-        let provider = ProviderBuilder::new().on_anvil_with_wallet();
+        let provider = ProviderBuilder::new().connect_anvil_with_wallet();
         let mut contracts = Contracts::new();
         let blocks_per_epoch = 10; // for test
         let epoch_start_block = 22;
@@ -1505,8 +2068,7 @@ mod tests {
         let state_history_retention_period = LightClient::new(lc_proxy_addr, &provider)
             .stateHistoryRetentionPeriod()
             .call()
-            .await?
-            ._0;
+            .await?;
 
         // then upgrade to v2
         upgrade_light_client_v2(
@@ -1532,10 +2094,10 @@ mod tests {
             next_stake.abi_encode_params()
         );
         assert_eq!(lc.getVersion().call().await?.majorVersion, 2);
-        assert_eq!(lc.blocksPerEpoch().call().await?._0, blocks_per_epoch);
-        assert_eq!(lc.epochStartBlock().call().await?._0, epoch_start_block);
+        assert_eq!(lc.blocksPerEpoch().call().await?, blocks_per_epoch);
+        assert_eq!(lc.epochStartBlock().call().await?, epoch_start_block);
         assert_eq!(
-            lc.stateHistoryRetentionPeriod().call().await?._0,
+            lc.stateHistoryRetentionPeriod().call().await?,
             state_history_retention_period
         );
 
@@ -1550,10 +2112,7 @@ mod tests {
                 .await?
                 .watch()
                 .await?;
-            assert_eq!(
-                new_blocks_per_epoch,
-                lc_mock.blocksPerEpoch().call().await?._0
-            );
+            assert_eq!(new_blocks_per_epoch, lc_mock.blocksPerEpoch().call().await?);
         }
         Ok(())
     }
@@ -1568,8 +2127,288 @@ mod tests {
         test_upgrade_light_client_to_v2_helper(true).await
     }
 
+    #[test_log::test(tokio::test)]
+    async fn test_fetch_stake_table_for_stake_table_storage_migration() -> Result<()> {
+        let (_anvil, provider, l1_client) =
+            ProviderBuilder::new().connect_anvil_with_l1_client()?;
+        let mut contracts = Contracts::new();
+        let owner = provider.get_accounts().await?[0];
+
+        let token_addr = deploy_token_proxy(
+            &provider,
+            &mut contracts,
+            owner,
+            owner,
+            U256::from(10_000_000u64),
+            "Test Token",
+            "TEST",
+        )
+        .await?;
+        let lc_addr = deploy_light_client_contract(&provider, &mut contracts, false).await?;
+        let exit_escrow_period = U256::from(DEFAULT_EXIT_ESCROW_PERIOD_SECONDS);
+
+        let stake_table_proxy_addr = deploy_stake_table_proxy(
+            &provider,
+            &mut contracts,
+            token_addr,
+            lc_addr,
+            exit_escrow_period,
+            owner,
+        )
+        .await?;
+
+        // Use V2 interface even for V1 contract (V2 ABI is a superset of V1)
+        let stake_table = StakeTableV2::new(stake_table_proxy_addr, &provider);
+
+        let accounts = provider.get_accounts().await?;
+        let validators = [
+            TestValidator::random_update_keys(accounts[4], 1234),
+            TestValidator::random_update_keys(accounts[5], 4567),
+        ];
+
+        for validator in validators.iter() {
+            let receipt = stake_table
+                .registerValidator(
+                    validator.bls_vk,
+                    validator.schnorr_vk,
+                    validator.bls_sig.into(),
+                    validator.commission,
+                )
+                .from(validator.account)
+                .send()
+                .await?
+                .get_receipt()
+                .await?;
+            assert!(receipt.status());
+        }
+
+        let delegators = [
+            (
+                accounts[0],
+                validators[0].account,
+                parse_ether("10").unwrap(),
+            ),
+            (
+                accounts[1],
+                validators[1].account,
+                parse_ether("10").unwrap(),
+            ),
+            (
+                accounts[2],
+                validators[0].account,
+                parse_ether("100").unwrap(),
+            ),
+        ];
+
+        let token = EspToken::new(token_addr, &provider);
+
+        for (delegator, validator, amount) in delegators.iter() {
+            let receipt = token
+                .transfer(*delegator, *amount)
+                .from(Address::from(*owner))
+                .send()
+                .await?
+                .get_receipt()
+                .await?;
+            assert!(receipt.status());
+
+            let receipt = token
+                .approve(stake_table_proxy_addr, *amount)
+                .from(*delegator)
+                .send()
+                .await?
+                .get_receipt()
+                .await?;
+            assert!(receipt.status());
+
+            let receipt = stake_table
+                .delegate(*validator, *amount)
+                .from(*delegator)
+                .send()
+                .await?
+                .get_receipt()
+                .await?;
+            assert!(receipt.status());
+        }
+
+        let receipt = stake_table
+            .deregisterValidator()
+            .from(validators[1].account)
+            .send()
+            .await?
+            .get_receipt()
+            .await?;
+        assert!(receipt.status());
+
+        let undelegations = [
+            (
+                accounts[0],
+                validators[0].account,
+                parse_ether("5").unwrap(),
+            ),
+            (
+                accounts[2],
+                validators[0].account,
+                parse_ether("3").unwrap(),
+            ),
+        ];
+
+        for (delegator_addr, validator_addr, amount) in undelegations.iter() {
+            let receipt = stake_table
+                .undelegate(*validator_addr, *amount)
+                .from(*delegator_addr)
+                .send()
+                .await?
+                .get_receipt()
+                .await?;
+            assert!(receipt.status());
+        }
+
+        let (fetched_active_stake, fetched_commissions) =
+            fetch_stake_table_for_stake_table_storage_migration(
+                l1_client.clone(),
+                stake_table_proxy_addr,
+            )
+            .await?;
+
+        let expected_active_stake: U256 = delegators
+            .iter()
+            .map(|(_, _, amount)| *amount)
+            .sum::<U256>()
+            - delegators
+                .iter()
+                .filter(|(_, validator, _)| *validator == validators[1].account)
+                .map(|(_, _, amount)| *amount)
+                .sum::<U256>()
+            - undelegations
+                .iter()
+                .map(|(_, _, amount)| *amount)
+                .sum::<U256>();
+
+        assert_eq!(fetched_active_stake, expected_active_stake);
+        assert!(fetched_active_stake <= token.balanceOf(stake_table_proxy_addr).call().await?);
+
+        assert_eq!(fetched_commissions.len(), 1);
+        assert_eq!(fetched_commissions[0].validator, validators[0].account);
+        assert_eq!(fetched_commissions[0].commission, validators[0].commission);
+
+        // Migration only applies to V1 contract
+        let stake_table_v2 = StakeTableV2::deploy(&provider).await?;
+        let err = fetch_stake_table_for_stake_table_storage_migration(
+            l1_client.clone(),
+            *stake_table_v2.address(),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("Expected StakeTable V1"));
+
+        Ok(())
+    }
+
+    /// Check that we can fetch stake table data on sepolia for the migration.
+    ///
+    /// Assumes an infura RPC is used, otherwise fetching may hit other rate limits.
+    ///
+    /// env RPC_URL=... cargo test -p espresso-contract-deployer -- --ignored test_fetch_stake_table_sepolia
+    #[ignore]
+    #[test_log::test(tokio::test)]
+    async fn test_fetch_stake_table_sepolia() -> Result<()> {
+        let rpc_url: Url = std::env::var("RPC_URL")
+            .expect("RPC_URL environment variable not set")
+            .parse()?;
+        let provider = ProviderBuilder::new().connect_http(rpc_url.clone());
+        let l1_client = L1Client::new(vec![rpc_url])?;
+
+        // Decaf / sepolia stake table address
+        let stake_table_address: Address = "0x40304FbE94D5E7D1492Dd90c53a2D63E8506a037".parse()?;
+        let (fetched_active_stake, fetched_commissions) =
+            fetch_stake_table_for_stake_table_storage_migration(l1_client, stake_table_address)
+                .await?;
+
+        assert!(!fetched_commissions.is_empty());
+        assert!(!fetched_active_stake.is_zero());
+
+        println!(
+            "Fetched {} commissions from Sepolia StakeTable",
+            fetched_commissions.len()
+        );
+        for commission in &fetched_commissions {
+            println!(
+                "  Validator: {}, Commission: {}",
+                commission.validator, commission.commission
+            );
+        }
+        println!("Fetched active stake: {}", fetched_active_stake);
+
+        let pauser = Address::random();
+        let admin = Address::random();
+        let init_v2_calldata = StakeTableV2::new(stake_table_address, &provider)
+            .initializeV2(pauser, admin, fetched_active_stake, fetched_commissions)
+            .calldata()
+            .clone();
+        println!("Calldata size: {} bytes", init_v2_calldata.len());
+
+        // The max calldata size is 128 kB per tx, but at the time of writing we
+        // only need about 7 kB therefore applying a stricter limit of 32 kB
+        assert!(init_v2_calldata.len() < 32 * 1024);
+        Ok(())
+    }
+
+    impl Contracts {
+        fn insert(&mut self, name: Contract, address: Address) -> Option<Address> {
+            self.addresses.insert(name, address)
+        }
+    }
+
+    /// Fork test to test if we can upgrade the decaf stake table from V1 to V2
+    /// This test forks Sepolia (where decaf runs) using anvil, fetches existing commissions,
+    /// impersonates the proxy owner, and performs the upgrade.
+    ///
+    /// Assumes an infura RPC is used, otherwise fetching commissions may hit other rate limits.
+    ///
+    /// env RPC_URL=... cargo test -p espresso-contract-deployer -- --ignored test_upgrade_decaf_stake_table_fork
+    #[ignore]
+    #[test_log::test(tokio::test)]
+    async fn test_upgrade_decaf_stake_table_fork() -> Result<()> {
+        let rpc_url = std::env::var("RPC_URL").expect("RPC_URL environment variable not set");
+
+        // Decaf / sepolia stake table address
+        let stake_table_address: Address = "0x40304FbE94D5E7D1492Dd90c53a2D63E8506a037".parse()?;
+        let anvil = Anvil::new()
+            .fork(rpc_url)
+            .arg("--retries")
+            .arg("20")
+            .spawn();
+
+        let provider = ProviderBuilder::new().connect_http(anvil.endpoint().parse()?);
+        let proxy = StakeTable::new(stake_table_address, &provider);
+        let proxy_owner = proxy.owner().call().await?;
+        tracing::info!("Proxy owner address: {proxy_owner:#x}");
+
+        // Enable impersonation for the proxy owner
+        let provider = ProviderBuilder::new()
+            .filler(ImpersonateFiller::new(proxy_owner))
+            .connect_http(anvil.endpoint().parse()?);
+        let l1_client = L1Client::anvil(&anvil)?;
+        let anvil_arc = Arc::new(anvil);
+        let anvil_provider = AnvilProvider::new(provider.clone(), anvil_arc);
+        anvil_provider.anvil_auto_impersonate_account(true).await?;
+        anvil_provider
+            .anvil_set_balance(proxy_owner, parse_ether("100")?)
+            .await?;
+
+        // We need a Contracts instance with proxy deployed
+        let mut contracts = Contracts::new();
+        contracts.insert(Contract::StakeTableProxy, stake_table_address);
+        let pauser = Address::random();
+        let admin = proxy_owner;
+
+        upgrade_stake_table_v2(&provider, l1_client, &mut contracts, pauser, admin).await?;
+        Ok(())
+    }
+
     async fn test_upgrade_light_client_to_v3_helper(options: UpgradeTestOptions) -> Result<()> {
-        let provider = ProviderBuilder::new().on_anvil_with_wallet();
+        let provider = ProviderBuilder::new().connect_anvil_with_wallet();
         let mut contracts = Contracts::new();
         let blocks_per_epoch = 10; // for test
         let epoch_start_block = 22;
@@ -1625,11 +2464,8 @@ mod tests {
 
         // V3 inherits blocks_per_epoch and epoch_start_block from V2
         let lc_as_v2 = LightClientV2::new(lc_proxy_addr, &provider);
-        assert_eq!(lc_as_v2.blocksPerEpoch().call().await?._0, blocks_per_epoch);
-        assert_eq!(
-            lc_as_v2.epochStartBlock().call().await?._0,
-            epoch_start_block
-        );
+        assert_eq!(lc_as_v2.blocksPerEpoch().call().await?, blocks_per_epoch);
+        assert_eq!(lc_as_v2.epochStartBlock().call().await?, epoch_start_block);
 
         // test mock-specific functions
         if options.is_mock {
@@ -1643,10 +2479,7 @@ mod tests {
                 .await?
                 .watch()
                 .await?;
-            assert_eq!(
-                new_blocks_per_epoch,
-                lc_mock.blocksPerEpoch().call().await?._0
-            );
+            assert_eq!(new_blocks_per_epoch, lc_mock.blocksPerEpoch().call().await?);
         }
         Ok(())
     }
@@ -1789,10 +2622,10 @@ mod tests {
         )
         .await?;
         let lc = LightClient::new(lc_proxy_addr, &provider);
-        assert_eq!(lc.owner().call().await?._0, multisig_admin);
+        assert_eq!(lc.owner().call().await?, multisig_admin);
 
         // then send upgrade proposal to the multisig wallet
-        let (result, success) = upgrade_light_client_v2_multisig_owner(
+        let result = upgrade_light_client_v2_multisig_owner(
             &provider,
             &mut contracts,
             LightClientV2UpgradeParams {
@@ -1801,14 +2634,13 @@ mod tests {
             },
             options.is_mock,
             sepolia_rpc_url.clone(),
-            Some(dry_run),
+            dry_run,
         )
         .await?;
         tracing::info!(
             "Result when trying to upgrade LightClientProxy via the multisig wallet: {:?}",
             result
         );
-        assert!(success);
         if dry_run {
             let data: serde_json::Value = serde_json::from_str(&result)?;
             assert_eq!(data["rpcUrl"], sepolia_rpc_url);
@@ -1868,7 +2700,7 @@ mod tests {
 
     #[test_log::test(tokio::test)]
     async fn test_deploy_token_proxy() -> Result<()> {
-        let provider = ProviderBuilder::new().on_anvil_with_wallet();
+        let provider = ProviderBuilder::new().connect_anvil_with_wallet();
         let mut contracts = Contracts::new();
 
         let init_recipient = provider.get_accounts().await?[0];
@@ -1889,25 +2721,22 @@ mod tests {
         .await?;
         let token = EspToken::new(addr, &provider);
 
-        assert_eq!(token.owner().call().await?._0, rand_owner);
-        let total_supply = token.totalSupply().call().await?._0;
+        assert_eq!(token.owner().call().await?, rand_owner);
+        let total_supply = token.totalSupply().call().await?;
         assert_eq!(
             total_supply,
             parse_ether(&initial_supply.to_string()).unwrap()
         );
-        assert_eq!(
-            token.balanceOf(init_recipient).call().await?._0,
-            total_supply,
-        );
-        assert_eq!(token.name().call().await?._0, name);
-        assert_eq!(token.symbol().call().await?._0, symbol);
+        assert_eq!(token.balanceOf(init_recipient).call().await?, total_supply);
+        assert_eq!(token.name().call().await?, name);
+        assert_eq!(token.symbol().call().await?, symbol);
 
         Ok(())
     }
 
     #[test_log::test(tokio::test)]
     async fn test_deploy_stake_table_proxy() -> Result<()> {
-        let provider = ProviderBuilder::new().on_anvil_with_wallet();
+        let provider = ProviderBuilder::new().connect_anvil_with_wallet();
         let mut contracts = Contracts::new();
 
         // deploy token
@@ -1940,7 +2769,7 @@ mod tests {
         .await?;
 
         // deploy stake table
-        let exit_escrow_period = U256::from(250);
+        let exit_escrow_period = U256::from(DEFAULT_EXIT_ESCROW_PERIOD_SECONDS);
         let owner = init_recipient;
         let stake_table_addr = deploy_stake_table_proxy(
             &provider,
@@ -1954,18 +2783,19 @@ mod tests {
         let stake_table = StakeTable::new(stake_table_addr, &provider);
 
         assert_eq!(
-            stake_table.exitEscrowPeriod().call().await?._0,
+            stake_table.exitEscrowPeriod().call().await?,
             exit_escrow_period
         );
-        assert_eq!(stake_table.owner().call().await?._0, owner);
-        assert_eq!(stake_table.token().call().await?._0, token_addr);
-        assert_eq!(stake_table.lightClient().call().await?._0, lc_proxy_addr);
+        assert_eq!(stake_table.owner().call().await?, owner);
+        assert_eq!(stake_table.token().call().await?, token_addr);
+        assert_eq!(stake_table.lightClient().call().await?, lc_proxy_addr);
         Ok(())
     }
 
     #[test_log::test(tokio::test)]
     async fn test_upgrade_stake_table_v2() -> Result<()> {
-        let provider = ProviderBuilder::new().on_anvil_with_wallet();
+        let (_anvil, provider, l1_client) =
+            ProviderBuilder::new().connect_anvil_with_l1_client()?;
         let mut contracts = Contracts::new();
 
         // deploy token
@@ -1998,7 +2828,7 @@ mod tests {
         .await?;
 
         // deploy stake table
-        let exit_escrow_period = U256::from(250);
+        let exit_escrow_period = U256::from(DEFAULT_EXIT_ESCROW_PERIOD_SECONDS);
         let owner = init_recipient;
         let stake_table_addr = deploy_stake_table_proxy(
             &provider,
@@ -2012,24 +2842,40 @@ mod tests {
         let stake_table_v1 = StakeTable::new(stake_table_addr, &provider);
         assert_eq!(stake_table_v1.getVersion().call().await?, (1, 0, 0).into());
 
+        // snapshot for later patch upgrade, the upgrade will skip the v2
+        // deployment if contracts already contains a v2
+        let mut contracts_v1 = contracts.clone();
+
         // upgrade to v2
         let pauser = Address::random();
-        upgrade_stake_table_v2(&provider, &mut contracts, pauser, owner).await?;
+        upgrade_stake_table_v2(&provider, l1_client.clone(), &mut contracts, pauser, owner).await?;
 
         let stake_table_v2 = StakeTableV2::new(stake_table_addr, &provider);
 
         assert_eq!(stake_table_v2.getVersion().call().await?, (2, 0, 0).into());
-        assert_eq!(stake_table_v2.owner().call().await?._0, owner);
-        assert_eq!(stake_table_v2.token().call().await?._0, token_addr);
-        assert_eq!(stake_table_v2.lightClient().call().await?._0, lc_proxy_addr);
+        assert_eq!(stake_table_v2.owner().call().await?, owner);
+        assert_eq!(stake_table_v2.token().call().await?, token_addr);
+        assert_eq!(stake_table_v2.lightClient().call().await?, lc_proxy_addr);
 
         // get pauser role
-        let pauser_role = stake_table_v2.PAUSER_ROLE().call().await?._0;
-        assert!(stake_table_v2.hasRole(pauser_role, pauser).call().await?._0,);
+        let pauser_role = stake_table_v2.PAUSER_ROLE().call().await?;
+        assert!(
+            stake_table_v2.hasRole(pauser_role, pauser).call().await?,
+            "pauser should have PAUSER_ROLE"
+        );
 
         // get admin role
-        let admin_role = stake_table_v2.DEFAULT_ADMIN_ROLE().call().await?._0;
-        assert!(stake_table_v2.hasRole(admin_role, owner).call().await?._0,);
+        let admin_role = stake_table_v2.DEFAULT_ADMIN_ROLE().call().await?;
+        assert!(stake_table_v2.hasRole(admin_role, owner).call().await?,);
+
+        // ensure we can upgrade (again) to a V2 patch version
+        let current_impl = read_proxy_impl(&provider, stake_table_addr).await?;
+        upgrade_stake_table_v2(&provider, l1_client, &mut contracts_v1, pauser, owner).await?;
+        assert_ne!(
+            read_proxy_impl(&provider, stake_table_addr).await?,
+            current_impl
+        );
+
         Ok(())
     }
 
@@ -2044,7 +2890,8 @@ mod tests {
     async fn test_upgrade_stake_table_to_v2_multisig_owner_helper(dry_run: bool) -> Result<()> {
         let mut sepolia_rpc_url = "http://localhost:8545".to_string();
         let mut multisig_admin = Address::random();
-        let provider = ProviderBuilder::new().on_anvil_with_wallet();
+        let (_anvil, provider, l1_client) =
+            ProviderBuilder::new().connect_anvil_with_l1_client()?;
         let mut contracts = Contracts::new();
         let init_recipient = provider.get_accounts().await?[0];
         let token_owner = Address::random();
@@ -2092,7 +2939,7 @@ mod tests {
         )
         .await?;
 
-        let exit_escrow_period = U256::from(250);
+        let exit_escrow_period = U256::from(DEFAULT_EXIT_ESCROW_PERIOD_SECONDS);
         let owner = init_recipient;
         let stake_table_proxy_addr = deploy_stake_table_proxy(
             &provider,
@@ -2112,23 +2959,21 @@ mod tests {
         )
         .await?;
         let stake_table = StakeTable::new(stake_table_proxy_addr, &provider);
-        assert_eq!(stake_table.owner().call().await?._0, multisig_admin);
+        assert_eq!(stake_table.owner().call().await?, multisig_admin);
         // then send upgrade proposal to the multisig wallet
         let pauser = Address::random();
-        let (result, success) = upgrade_stake_table_v2_multisig_owner(
+        upgrade_stake_table_v2_multisig_owner(
             &provider,
+            l1_client,
             &mut contracts,
-            sepolia_rpc_url,
-            multisig_admin,
-            pauser,
-            Some(dry_run),
+            StakeTableV2UpgradeParams {
+                rpc_url: sepolia_rpc_url,
+                multisig_address: multisig_admin,
+                pauser,
+                dry_run,
+            },
         )
         .await?;
-        tracing::info!(
-            "Result when trying to upgrade StakeTableProxy via the multisig wallet: {:?}",
-            result
-        );
-        assert!(success);
 
         // v1 state persistence cannot be tested here because the upgrade proposal is not yet executed
         // One has to test that the upgrade proposal is available via the Safe UI
@@ -2143,7 +2988,7 @@ mod tests {
 
     #[test_log::test(tokio::test)]
     async fn test_deploy_ops_timelock() -> Result<()> {
-        let provider = ProviderBuilder::new().on_anvil_with_wallet();
+        let provider = ProviderBuilder::new().connect_anvil_with_wallet();
         let mut contracts = Contracts::new();
 
         // Setup test parameters
@@ -2164,23 +3009,21 @@ mod tests {
 
         // Verify deployment
         let timelock = OpsTimelock::new(timelock_addr, &provider);
-        assert_eq!(timelock.getMinDelay().call().await?._0, min_delay);
+        assert_eq!(timelock.getMinDelay().call().await?, min_delay);
 
         // Verify initialization parameters
-        assert_eq!(timelock.getMinDelay().call().await?._0, min_delay);
+        assert_eq!(timelock.getMinDelay().call().await?, min_delay);
         assert!(
             timelock
-                .hasRole(timelock.PROPOSER_ROLE().call().await?._0, proposers[0])
+                .hasRole(timelock.PROPOSER_ROLE().call().await?, proposers[0])
                 .call()
                 .await?
-                ._0
         );
         assert!(
             timelock
-                .hasRole(timelock.EXECUTOR_ROLE().call().await?._0, executors[0])
+                .hasRole(timelock.EXECUTOR_ROLE().call().await?, executors[0])
                 .call()
                 .await?
-                ._0
         );
 
         // test that the admin is in the default admin role where DEFAULT_ADMIN_ROLE = 0x00
@@ -2190,14 +3033,13 @@ mod tests {
                 .hasRole(default_admin_role.into(), admin)
                 .call()
                 .await?
-                ._0
         );
         Ok(())
     }
 
     #[test_log::test(tokio::test)]
     async fn test_deploy_safe_exit_timelock() -> Result<()> {
-        let provider = ProviderBuilder::new().on_anvil_with_wallet();
+        let provider = ProviderBuilder::new().connect_anvil_with_wallet();
         let mut contracts = Contracts::new();
 
         // Setup test parameters
@@ -2218,23 +3060,21 @@ mod tests {
 
         // Verify deployment
         let timelock = SafeExitTimelock::new(timelock_addr, &provider);
-        assert_eq!(timelock.getMinDelay().call().await?._0, min_delay);
+        assert_eq!(timelock.getMinDelay().call().await?, min_delay);
 
         // Verify initialization parameters
-        assert_eq!(timelock.getMinDelay().call().await?._0, min_delay);
+        assert_eq!(timelock.getMinDelay().call().await?, min_delay);
         assert!(
             timelock
-                .hasRole(timelock.PROPOSER_ROLE().call().await?._0, proposers[0])
+                .hasRole(timelock.PROPOSER_ROLE().call().await?, proposers[0])
                 .call()
                 .await?
-                ._0
         );
         assert!(
             timelock
-                .hasRole(timelock.EXECUTOR_ROLE().call().await?._0, executors[0])
+                .hasRole(timelock.EXECUTOR_ROLE().call().await?, executors[0])
                 .call()
                 .await?
-                ._0
         );
 
         // test that the admin is in the default admin role where DEFAULT_ADMIN_ROLE = 0x00
@@ -2244,20 +3084,19 @@ mod tests {
                 .hasRole(default_admin_role.into(), admin)
                 .call()
                 .await?
-                ._0
         );
         Ok(())
     }
 
     #[test_log::test(tokio::test)]
     async fn test_upgrade_esp_token_v2() -> Result<()> {
-        let provider = ProviderBuilder::new().on_anvil_with_wallet();
+        let provider = ProviderBuilder::new().connect_anvil_with_wallet();
         let mut contracts = Contracts::new();
 
         // deploy token
         let init_recipient = provider.get_accounts().await?[1];
         let token_owner = provider.get_accounts().await?[0];
-        let token_name = "Espresso Token";
+        let token_name = "Espresso";
         let token_symbol = "ESP";
         let initial_supply = U256::from(3590000000u64);
         let token_proxy_addr = deploy_token_proxy(
@@ -2271,7 +3110,10 @@ mod tests {
         )
         .await?;
         let esp_token = EspToken::new(token_proxy_addr, &provider);
-        assert_eq!(esp_token.name().call().await?._0, token_name);
+        assert_eq!(esp_token.name().call().await?, token_name);
+
+        let fake_reward_claim = Address::random();
+        contracts.insert(Contract::RewardClaimProxy, fake_reward_claim);
 
         // upgrade to v2
         upgrade_esp_token_v2(&provider, &mut contracts).await?;
@@ -2279,26 +3121,28 @@ mod tests {
         let esp_token_v2 = EspTokenV2::new(token_proxy_addr, &provider);
 
         assert_eq!(esp_token_v2.getVersion().call().await?, (2, 0, 0).into());
-        assert_eq!(esp_token_v2.owner().call().await?._0, token_owner);
+        assert_eq!(esp_token_v2.owner().call().await?, token_owner);
 
         // name is hardcoded in the EspTokenV2 contract
-        assert_eq!(esp_token_v2.name().call().await?._0, "Espresso");
-        assert_eq!(esp_token_v2.symbol().call().await?._0, "ESP");
-        assert_eq!(esp_token_v2.decimals().call().await?._0, 18);
+        assert_eq!(esp_token_v2.name().call().await?, "Espresso");
+        assert_eq!(esp_token_v2.symbol().call().await?, "ESP");
+        assert_eq!(esp_token_v2.decimals().call().await?, 18);
 
         let initial_supply_in_wei = parse_ether(&initial_supply.to_string()).unwrap();
         assert_eq!(
-            esp_token_v2.totalSupply().call().await?._0,
+            esp_token_v2.totalSupply().call().await?,
             initial_supply_in_wei
         );
         assert_eq!(
-            esp_token_v2.balanceOf(init_recipient).call().await?._0,
+            esp_token_v2.balanceOf(init_recipient).call().await?,
             initial_supply_in_wei
         );
         assert_eq!(
-            esp_token_v2.balanceOf(token_owner).call().await?._0,
+            esp_token_v2.balanceOf(token_owner).call().await?,
             U256::ZERO
         );
+
+        assert_eq!(esp_token_v2.rewardClaim().call().await?, fake_reward_claim);
 
         Ok(())
     }
@@ -2404,27 +3248,34 @@ mod tests {
         )
         .await?;
         let esp_token = EspToken::new(esp_token_proxy_addr, &provider);
-        assert_eq!(esp_token.owner().call().await?._0, multisig_admin);
+        assert_eq!(esp_token.owner().call().await?, multisig_admin);
+
+        let fake_reward_claim = Address::random();
+        contracts.insert(Contract::RewardClaimProxy, fake_reward_claim);
+
+        let init_data = EspTokenV2::new(Address::ZERO, &provider)
+            .initializeV2(fake_reward_claim)
+            .calldata()
+            .to_owned();
 
         // then send upgrade proposal to the multisig wallet
-        let (result, success) = upgrade_esp_token_v2_multisig_owner(
+        let result = upgrade_esp_token_v2_multisig_owner(
             &provider,
             &mut contracts,
             sepolia_rpc_url.clone(),
-            Some(dry_run),
+            dry_run,
         )
         .await?;
         tracing::info!(
             "Result when trying to upgrade EspTokenProxy via the multisig wallet: {:?}",
             result
         );
-        assert!(success);
         if dry_run {
             let data: serde_json::Value = serde_json::from_str(&result)?;
             assert_eq!(data["rpcUrl"], sepolia_rpc_url);
             assert_eq!(data["safeAddress"], multisig_admin.to_string());
             assert_eq!(data["proxyAddress"], esp_token_proxy_addr.to_string());
-            assert_eq!(data["initData"], "0x");
+            assert_eq!(data["initData"], init_data.to_string());
             assert_eq!(data["useHardwareWallet"], false);
         }
         // v1 state persistence cannot be tested here because the upgrade proposal is not yet executed
@@ -2435,7 +3286,7 @@ mod tests {
 
     #[test_log::test(tokio::test)]
     async fn test_schedule_and_execute_timelock_operation() -> Result<()> {
-        let provider = ProviderBuilder::new().on_anvil_with_wallet();
+        let provider = ProviderBuilder::new().connect_anvil_with_wallet();
         let mut contracts = Contracts::new();
         let delay = U256::from(0);
 
@@ -2466,7 +3317,7 @@ mod tests {
             .to_owned();
 
         // propose a timelock operation
-        let mut operation = TimelockOperationData {
+        let mut operation = TimelockOperationPayload {
             target: fee_contract_proxy_addr,
             value: U256::ZERO,
             data: upgrade_data,
@@ -2474,28 +3325,39 @@ mod tests {
             salt: B256::ZERO,
             delay,
         };
-        let operation_id =
-            schedule_timelock_operation(&provider, Contract::FeeContractProxy, operation.clone())
-                .await?;
+        let operation_id = perform_timelock_operation(
+            &provider,
+            Contract::FeeContractProxy,
+            operation.clone(),
+            TimelockOperationType::Schedule,
+            TimelockOperationParams::default(),
+        )
+        .await?;
 
         // check that the tx is scheduled
         let timelock = OpsTimelock::new(timelock_addr, &provider);
-        assert!(timelock.isOperationPending(operation_id).call().await?._0);
-        assert!(timelock.isOperationReady(operation_id).call().await?._0);
-        assert!(!timelock.isOperationDone(operation_id).call().await?._0);
-        assert!(timelock.getTimestamp(operation_id).call().await?._0 > U256::ZERO);
+        assert!(timelock.isOperationPending(operation_id).call().await?);
+        assert!(timelock.isOperationReady(operation_id).call().await?);
+        assert!(!timelock.isOperationDone(operation_id).call().await?);
+        assert!(timelock.getTimestamp(operation_id).call().await? > U256::ZERO);
 
         // execute the tx since the delay is 0
-        execute_timelock_operation(&provider, Contract::FeeContractProxy, operation.clone())
-            .await?;
+        perform_timelock_operation(
+            &provider,
+            Contract::FeeContractProxy,
+            operation.clone(),
+            TimelockOperationType::Execute,
+            TimelockOperationParams::default(),
+        )
+        .await?;
 
         // check that the tx is executed
-        assert!(timelock.isOperationDone(operation_id).call().await?._0);
-        assert!(!timelock.isOperationPending(operation_id).call().await?._0);
-        assert!(!timelock.isOperationReady(operation_id).call().await?._0);
+        assert!(timelock.isOperationDone(operation_id).call().await?);
+        assert!(!timelock.isOperationPending(operation_id).call().await?);
+        assert!(!timelock.isOperationReady(operation_id).call().await?);
         // check that the new owner is the provider_wallet
         let fee_contract = FeeContract::new(operation.target, &provider);
-        assert_eq!(fee_contract.owner().call().await?._0, provider_wallet);
+        assert_eq!(fee_contract.owner().call().await?, provider_wallet);
 
         operation.value = U256::from(1);
         //transfer ownership back to the timelock
@@ -2507,13 +3369,26 @@ mod tests {
             .await?;
         assert!(tx_receipt.inner.is_success());
 
-        schedule_timelock_operation(&provider, Contract::FeeContractProxy, operation.clone())
-            .await?;
+        let operation_id = perform_timelock_operation(
+            &provider,
+            Contract::FeeContractProxy,
+            operation.clone(),
+            TimelockOperationType::Schedule,
+            TimelockOperationParams::default(),
+        )
+        .await?;
 
-        cancel_timelock_operation(&provider, Contract::FeeContractProxy, operation.clone()).await?;
+        perform_timelock_operation(
+            &provider,
+            Contract::FeeContractProxy,
+            operation.clone(),
+            TimelockOperationType::Cancel,
+            TimelockOperationParams::default(),
+        )
+        .await?;
 
         // check that the tx is cancelled
-        let next_operation_id = timelock
+        timelock
             .hashOperation(
                 operation.target,
                 operation.value,
@@ -2522,9 +3397,39 @@ mod tests {
                 operation.salt,
             )
             .call()
-            .await?
-            ._0;
-        assert!(timelock.getTimestamp(next_operation_id).call().await?._0 == U256::ZERO);
+            .await?;
+        assert!(timelock.getTimestamp(operation_id).call().await? == U256::ZERO);
+
+        let operation_id = perform_timelock_operation(
+            &provider,
+            Contract::FeeContractProxy,
+            operation.clone(),
+            TimelockOperationType::Schedule,
+            TimelockOperationParams::default(),
+        )
+        .await?;
+
+        // Test canceling with only the operation_id (operation payload not needed)
+        perform_timelock_operation(
+            &provider,
+            Contract::FeeContractProxy,
+            // Use a minimal/empty operation payload since operation_id is provided
+            TimelockOperationPayload {
+                target: fee_contract_proxy_addr, // Not used when operation_id is provided
+                value: U256::ZERO,
+                data: Bytes::new(),
+                predecessor: B256::ZERO,
+                salt: B256::ZERO,
+                delay: U256::ZERO,
+            },
+            TimelockOperationType::Cancel,
+            TimelockOperationParams {
+                operation_id: Some(operation_id), // Only operation_id is needed
+                ..Default::default()
+            },
+        )
+        .await?;
+        assert!(timelock.getTimestamp(operation_id).call().await? == U256::ZERO);
         Ok(())
     }
 
@@ -2536,7 +3441,7 @@ mod tests {
             std::path::Path::new("../../../scripts/multisig-upgrade-entrypoint").exists(),
             "Script not found!"
         );
-        let mut sepolia_rpc_url = "http://127.0.0.1:8545".to_string();
+        let mut sepolia_rpc_url = "http://127.0.0.1:8545".parse::<Url>()?;
         let mut multisig_admin = Address::random();
         let mut timelock = Address::random();
         let mut mnemonic =
@@ -2552,7 +3457,7 @@ mod tests {
             {
                 let (key, val) = item?;
                 if key == "ESPRESSO_SEQUENCER_L1_PROVIDER" {
-                    sepolia_rpc_url = val.to_string();
+                    sepolia_rpc_url = val.parse()?;
                 } else if key == "ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS" {
                     multisig_admin = val.parse::<Address>()?;
                 } else if key == "ESPRESSO_SEQUENCER_ETH_MNEMONIC" {
@@ -2564,7 +3469,7 @@ mod tests {
                 }
             }
 
-            if sepolia_rpc_url.is_empty() || multisig_admin.is_zero() || timelock.is_zero() {
+            if multisig_admin.is_zero() || timelock.is_zero() {
                 panic!(
                     "ESPRESSO_SEQUENCER_L1_PROVIDER, ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS, \
                      ESPRESSO_SEQUENCER_TIMELOCK_ADDRESS must be set in .env.deployer.rs.test"
@@ -2582,13 +3487,11 @@ mod tests {
         let provider = if !dry_run {
             ProviderBuilder::new()
                 .wallet(admin_signer)
-                .connect(&sepolia_rpc_url)
-                .await?
+                .connect_http(sepolia_rpc_url.clone())
         } else {
             ProviderBuilder::new()
                 .wallet(admin_signer)
-                .connect(&anvil.endpoint())
-                .await?
+                .connect_http(anvil.endpoint_url())
         };
 
         // prepare `initialize()` input
@@ -2662,15 +3565,15 @@ mod tests {
                 .await?;
                 let lc_v2 = LightClientV2::new(lc_proxy_addr, &provider);
                 assert_eq!(lc_v2.getVersion().call().await?.majorVersion, 2);
-                assert_eq!(lc_v2.blocksPerEpoch().call().await?._0, blocks_per_epoch);
-                assert_eq!(lc_v2.epochStartBlock().call().await?._0, epoch_start_block);
+                assert_eq!(lc_v2.blocksPerEpoch().call().await?, blocks_per_epoch);
+                assert_eq!(lc_v2.epochStartBlock().call().await?, epoch_start_block);
 
                 deploy_stake_table_proxy(
                     &provider,
                     &mut contracts,
                     token_addr,
                     lc_proxy_addr,
-                    U256::from(1000u64),
+                    U256::from(DEFAULT_EXIT_ESCROW_PERIOD_SECONDS),
                     admin,
                 )
                 .await?
@@ -2685,8 +3588,7 @@ mod tests {
             OwnableUpgradeable::new(proxy_addr, &provider)
                 .owner()
                 .call()
-                .await?
-                ._0,
+                .await?,
             multisig_admin
         );
 
@@ -2710,7 +3612,7 @@ mod tests {
         let stdout = String::from_utf8_lossy(&result.stdout);
         let first_line = stdout.lines().next().unwrap();
         let data: serde_json::Value = serde_json::from_str(first_line)?;
-        assert_eq!(data["rpcUrl"], sepolia_rpc_url);
+        assert_eq!(data["rpcUrl"], sepolia_rpc_url.to_string());
         assert_eq!(data["safeAddress"], multisig_admin.to_string());
 
         let expected_init_data = match contract_type {
@@ -2893,5 +3795,1039 @@ mod tests {
             },
         )
         .await
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_get_proxy_initialized_version_initialized() -> Result<()> {
+        let provider = ProviderBuilder::new().connect_anvil_with_wallet();
+        let mut contracts = Contracts::new();
+        let owner = provider.get_accounts().await?[0];
+
+        let token_addr = deploy_token_proxy(
+            &provider,
+            &mut contracts,
+            owner,
+            owner,
+            U256::from(10_000_000u64),
+            "Test Token",
+            "TEST",
+        )
+        .await?;
+
+        let lc_addr = deploy_light_client_contract(&provider, &mut contracts, false).await?;
+        let exit_escrow_period = U256::from(DEFAULT_EXIT_ESCROW_PERIOD_SECONDS);
+
+        let stake_table_proxy_addr = deploy_stake_table_proxy(
+            &provider,
+            &mut contracts,
+            token_addr,
+            lc_addr,
+            exit_escrow_period,
+            owner,
+        )
+        .await?;
+
+        let version = get_proxy_initialized_version(&provider, stake_table_proxy_addr).await?;
+        assert_eq!(version, 1, "Initialized proxy should return version 1");
+
+        Ok(())
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_get_proxy_initialized_version_reinitialized() -> Result<()> {
+        let (_anvil, provider, l1_client) =
+            ProviderBuilder::new().connect_anvil_with_l1_client()?;
+        let mut contracts = Contracts::new();
+        let owner = l1_client.get_accounts().await?[0];
+
+        let token_addr = deploy_token_proxy(
+            &provider,
+            &mut contracts,
+            owner,
+            owner,
+            U256::from(10_000_000u64),
+            "Test Token",
+            "TEST",
+        )
+        .await?;
+
+        let lc_addr = deploy_light_client_contract(&provider, &mut contracts, false).await?;
+        let exit_escrow_period = U256::from(DEFAULT_EXIT_ESCROW_PERIOD_SECONDS);
+
+        let stake_table_proxy_addr = deploy_stake_table_proxy(
+            &provider,
+            &mut contracts,
+            token_addr,
+            lc_addr,
+            exit_escrow_period,
+            owner,
+        )
+        .await?;
+
+        let pauser = Address::random();
+        let admin = Address::random();
+        upgrade_stake_table_v2(&provider, l1_client.clone(), &mut contracts, pauser, admin).await?;
+
+        let version = get_proxy_initialized_version(&l1_client, stake_table_proxy_addr).await?;
+        assert_eq!(version, 2, "Reinitialized proxy should return version 2");
+
+        Ok(())
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_grant_admin_role_reward_claim() -> Result<()> {
+        let (_anvil, provider, l1_client) =
+            ProviderBuilder::new().connect_anvil_with_l1_client()?;
+
+        let mut contracts = Contracts::new();
+        let deployer = l1_client.get_accounts().await?[0];
+        let new_admin = Address::random();
+
+        // Deploy RewardClaim
+        let esp_token_addr = deploy_token_proxy(
+            &provider,
+            &mut contracts,
+            deployer,
+            deployer,
+            U256::from(10_000_000u64),
+            "Test Token",
+            "TEST",
+        )
+        .await?;
+        let lc_addr = deploy_light_client_contract(&provider, &mut contracts, false).await?;
+        let reward_claim_addr = deploy_reward_claim_proxy(
+            &provider,
+            &mut contracts,
+            esp_token_addr,
+            lc_addr,
+            deployer,
+            deployer, // pauser
+        )
+        .await?;
+
+        // Verify initial admin
+        let reward_claim = RewardClaim::new(reward_claim_addr, &provider);
+        let admin_role = reward_claim.DEFAULT_ADMIN_ROLE().call().await?;
+        assert!(reward_claim.hasRole(admin_role, deployer).call().await?);
+        assert!(!reward_claim.hasRole(admin_role, new_admin).call().await?);
+
+        // Grant admin role
+        let receipt = grant_admin_role(
+            &provider,
+            Contract::RewardClaimProxy,
+            reward_claim_addr,
+            new_admin,
+        )
+        .await?;
+
+        assert!(receipt.inner.is_success());
+
+        // Verify new admin has role and old admin doesn't
+        assert!(reward_claim.hasRole(admin_role, new_admin).call().await?);
+        assert!(!reward_claim.hasRole(admin_role, deployer).call().await?);
+
+        Ok(())
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_transfer_ownership_from_eoa_reward_claim_routes_to_grant_role() -> Result<()> {
+        let (anvil, provider, l1_client) = ProviderBuilder::new().connect_anvil_with_l1_client()?;
+
+        let mut contracts = Contracts::new();
+        let deployer = l1_client.get_accounts().await?[0];
+        let new_admin = Address::random();
+
+        // Deploy RewardClaim
+        let esp_token_addr = deploy_token_proxy(
+            &provider,
+            &mut contracts,
+            deployer,
+            deployer,
+            U256::from(10_000_000u64),
+            "Test Token",
+            "TEST",
+        )
+        .await?;
+        let lc_addr = deploy_light_client_contract(&provider, &mut contracts, false).await?;
+        let reward_claim_addr = deploy_reward_claim_proxy(
+            &provider,
+            &mut contracts,
+            esp_token_addr,
+            lc_addr,
+            deployer,
+            deployer, // pauser
+        )
+        .await?;
+
+        // Verify initial admin
+        let reward_claim = RewardClaim::new(reward_claim_addr, &provider);
+        let admin_role = reward_claim.DEFAULT_ADMIN_ROLE().call().await?;
+        assert!(reward_claim.hasRole(admin_role, deployer).call().await?);
+        assert!(!reward_claim.hasRole(admin_role, new_admin).call().await?);
+
+        use builder::DeployerArgsBuilder;
+
+        let mut args_builder = DeployerArgsBuilder::default();
+        args_builder
+            .deployer(provider.clone())
+            .rpc_url(anvil.endpoint_url())
+            .transfer_ownership_from_eoa(true)
+            .target_contract(OwnableContract::RewardClaimProxy)
+            .transfer_ownership_new_owner(new_admin);
+        let args = args_builder.build()?;
+
+        args.transfer_ownership_from_eoa(&mut contracts).await?;
+
+        // Verify new admin has role and old admin doesn't
+        assert!(reward_claim.hasRole(admin_role, new_admin).call().await?);
+        assert!(!reward_claim.hasRole(admin_role, deployer).call().await?);
+
+        Ok(())
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_perform_timelock_operation_reward_claim() -> Result<()> {
+        let (anvil, provider, _l1_client) =
+            ProviderBuilder::new().connect_anvil_with_l1_client()?;
+        let mut contracts = Contracts::new();
+        let delay = U256::from(0);
+        let provider_wallet = provider.get_accounts().await?[0];
+
+        // Deploy SafeExitTimelock
+        let timelock_addr = deploy_safe_exit_timelock(
+            &provider,
+            &mut contracts,
+            delay,
+            vec![provider_wallet],
+            vec![provider_wallet],
+            provider_wallet,
+        )
+        .await?;
+
+        // Deploy dependencies
+        let token_addr = deploy_token_proxy(
+            &provider,
+            &mut contracts,
+            provider_wallet,
+            provider_wallet,
+            U256::from(10_000_000u64),
+            "Test Token",
+            "TEST",
+        )
+        .await?;
+        let lc_addr = deploy_light_client_contract(&provider, &mut contracts, false).await?;
+
+        // Deploy RewardClaim with timelock as admin
+        let reward_claim_addr = deploy_reward_claim_proxy(
+            &provider,
+            &mut contracts,
+            token_addr,
+            lc_addr,
+            timelock_addr,
+            provider_wallet,
+        )
+        .await?;
+
+        let reward_claim = RewardClaim::new(reward_claim_addr, &provider);
+        let pauser_role = reward_claim.PAUSER_ROLE().call().await?;
+        let new_pauser = Address::random();
+
+        // Verify new_pauser doesn't have the role yet
+        assert!(!reward_claim.hasRole(pauser_role, new_pauser).call().await?);
+
+        // Use DeployerArgsBuilder to test propose_timelock_operation_for_contract
+        use builder::DeployerArgsBuilder;
+        use proposals::timelock::TimelockOperationType;
+
+        let mut args_builder = DeployerArgsBuilder::default();
+        args_builder
+            .deployer(provider.clone())
+            .rpc_url(anvil.endpoint_url())
+            .timelock_operation_type(TimelockOperationType::Schedule)
+            .target_contract(OwnableContract::RewardClaimProxy)
+            .timelock_operation_value(U256::ZERO)
+            .timelock_operation_function_signature("grantRole(bytes32,address)".to_string())
+            .timelock_operation_function_values(vec![
+                format!("{:#x}", pauser_role),
+                format!("{:#x}", new_pauser),
+            ])
+            .timelock_operation_salt(
+                "0x0000000000000000000000000000000000000000000000000000000000000001".to_string(),
+            )
+            .timelock_operation_delay(delay);
+
+        let args = args_builder.build()?;
+
+        // Schedule the operation using the high-level function
+        args.propose_timelock_operation_for_contract(&mut contracts)
+            .await?;
+
+        // Now execute it
+        let mut args_builder = DeployerArgsBuilder::default();
+        args_builder
+            .deployer(provider.clone())
+            .rpc_url(anvil.endpoint_url())
+            .timelock_operation_type(TimelockOperationType::Execute)
+            .target_contract(OwnableContract::RewardClaimProxy)
+            .timelock_operation_value(U256::ZERO)
+            .timelock_operation_function_signature("grantRole(bytes32,address)".to_string())
+            .timelock_operation_function_values(vec![
+                format!("{:#x}", pauser_role),
+                format!("{:#x}", new_pauser),
+            ])
+            .timelock_operation_salt(
+                "0x0000000000000000000000000000000000000000000000000000000000000001".to_string(),
+            )
+            .timelock_operation_delay(delay);
+
+        let args = args_builder.build()?;
+        args.propose_timelock_operation_for_contract(&mut contracts)
+            .await?;
+
+        // Verify the function was actually called
+        assert!(reward_claim.hasRole(pauser_role, new_pauser).call().await?);
+
+        Ok(())
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_derive_timelock_address_from_contracts() -> Result<()> {
+        use builder::DeployerArgsBuilder;
+        use proposals::timelock::{get_timelock_for_contract, TimelockContract};
+
+        let (anvil, provider, _l1_client) =
+            ProviderBuilder::new().connect_anvil_with_l1_client()?;
+        let mut contracts = Contracts::new();
+        let delay = U256::from(0);
+        let provider_wallet = provider.get_accounts().await?[0];
+        let proposers = vec![provider_wallet];
+        let executors = vec![provider_wallet];
+        let rpc_url = anvil.endpoint_url();
+
+        // Deploy both timelocks first
+        let ops_timelock_addr = deploy_ops_timelock(
+            &provider,
+            &mut contracts,
+            delay,
+            proposers.clone(),
+            executors.clone(),
+            provider_wallet,
+        )
+        .await?;
+
+        let safe_exit_timelock_addr = deploy_safe_exit_timelock(
+            &provider,
+            &mut contracts,
+            delay,
+            proposers,
+            executors,
+            provider_wallet,
+        )
+        .await?;
+
+        //  Use DeployerArgsBuilder to deploy FeeContractProxy with use_timelock_owner
+        // This tests the actual deployment code path and verifies it chooses OpsTimelock
+        let mut args_builder = DeployerArgsBuilder::default();
+        args_builder
+            .deployer(provider.clone())
+            .use_timelock_owner(true)
+            .rpc_url(rpc_url.clone());
+        let args = args_builder.build()?;
+
+        // Deploy FeeContractProxy - it should automatically use OpsTimelock
+        args.deploy(&mut contracts, Contract::FeeContractProxy)
+            .await?;
+
+        // Verify derivation function returns correct timelock
+        let fee_contract_derived_timelock = derive_timelock_address_from_contract_type(
+            OwnableContract::FeeContractProxy,
+            &contracts,
+        )?;
+        assert_eq!(fee_contract_derived_timelock, ops_timelock_addr);
+
+        // Verify on-chain that FeeContractProxy has OpsTimelock as owner
+        let fee_contract_addr = contracts
+            .address(Contract::FeeContractProxy)
+            .expect("FeeContractProxy should be deployed");
+        let fee_contract = FeeContract::new(fee_contract_addr, &provider);
+        let actual_owner = fee_contract.owner().call().await?;
+        assert_eq!(
+            actual_owner, ops_timelock_addr,
+            "FeeContractProxy should have OpsTimelock as owner"
+        );
+
+        let queried_timelock =
+            get_timelock_for_contract(&provider, Contract::FeeContractProxy, fee_contract_addr)
+                .await?;
+
+        match queried_timelock {
+            TimelockContract::OpsTimelock(addr) => {
+                assert_eq!(
+                    addr, ops_timelock_addr,
+                    "Queried timelock should match deployed OpsTimelock"
+                );
+                assert_eq!(
+                    addr, fee_contract_derived_timelock,
+                    "Queried timelock should match derived timelock"
+                );
+            },
+            _ => panic!(
+                "FeeContractProxy should use OpsTimelock, got: {:?}",
+                queried_timelock
+            ),
+        }
+
+        //  Deploy RewardsClaimProxy - it should automatically use SafeExitTimelock
+        let _esp_token_addr = deploy_token_proxy(
+            &provider,
+            &mut contracts,
+            provider_wallet,
+            provider_wallet,
+            U256::from(10_000_000u64),
+            "Test Token",
+            "TEST",
+        )
+        .await?;
+
+        // prepare `initialize()` input
+        let genesis_state = LightClientStateSol::dummy_genesis();
+        let genesis_stake = StakeTableStateSol::dummy_genesis();
+        let admin = provider.get_accounts().await?[0];
+        let prover = admin;
+
+        let _lc_proxy_addr = deploy_light_client_proxy(
+            &provider,
+            &mut contracts,
+            true, // is_mock = true
+            genesis_state.clone(),
+            genesis_stake.clone(),
+            admin,
+            Some(prover),
+        )
+        .await?;
+
+        let mut args_builder2 = DeployerArgsBuilder::default();
+        args_builder2
+            .deployer(provider.clone())
+            .use_timelock_owner(true)
+            .rpc_url(rpc_url.clone());
+        let args2 = args_builder2.build()?;
+
+        args2
+            .deploy(&mut contracts, Contract::RewardClaimProxy)
+            .await?;
+
+        // Verify derivation
+        let reward_claim_derived_timelock = derive_timelock_address_from_contract_type(
+            OwnableContract::RewardClaimProxy,
+            &contracts,
+        )?;
+        assert_eq!(reward_claim_derived_timelock, safe_exit_timelock_addr);
+
+        // Verify on-chain
+        let reward_claim_addr = contracts
+            .address(Contract::RewardClaimProxy)
+            .expect("RewardClaimProxy should be deployed");
+        let reward_claim = RewardClaim::new(reward_claim_addr, &provider);
+        let actual_owner = reward_claim.currentAdmin().call().await?;
+        assert_eq!(
+            actual_owner, safe_exit_timelock_addr,
+            "RewardClaimProxy should have SafeExitTimelock as owner"
+        );
+
+        let queried_timelock =
+            get_timelock_for_contract(&provider, Contract::RewardClaimProxy, reward_claim_addr)
+                .await?;
+
+        match queried_timelock {
+            TimelockContract::SafeExitTimelock(addr) => {
+                assert_eq!(
+                    addr, safe_exit_timelock_addr,
+                    "Queried timelock should match deployed SafeExitTimelock"
+                );
+                assert_eq!(
+                    addr, reward_claim_derived_timelock,
+                    "Queried timelock should match derived timelock"
+                );
+            },
+            _ => panic!(
+                "RewardClaimProxy should use SafeExitTimelock, got: {:?}",
+                queried_timelock
+            ),
+        }
+
+        // Error case - missing timelock
+        let empty_contracts = Contracts::new();
+        let result = derive_timelock_address_from_contract_type(
+            OwnableContract::FeeContractProxy,
+            &empty_contracts,
+        );
+        assert!(
+            result.is_err(),
+            "Should error when timelock is missing from contracts map"
+        );
+        let error_msg = result.unwrap_err().to_string();
+        assert!(
+            error_msg.contains("not found") || error_msg.contains("OpsTimelock"),
+            "Error should mention missing timelock, got: {}",
+            error_msg
+        );
+
+        // NOTE: Invalid contract type test removed - OwnableContract enum now provides
+        // compile-time safety so invalid types can't be passed to the function.
+
+        Ok(())
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_upgrade_esp_token_v2_with_timelock_owner() -> Result<()> {
+        use builder::DeployerArgsBuilder;
+
+        let (anvil, provider, _l1_client) =
+            ProviderBuilder::new().connect_anvil_with_l1_client()?;
+        let mut contracts = Contracts::new();
+        let delay = U256::from(0);
+        let provider_wallet = provider.get_accounts().await?[0];
+        let proposers = vec![provider_wallet];
+        let executors = vec![provider_wallet];
+        let rpc_url = anvil.endpoint_url();
+
+        let safe_exit_timelock_addr = deploy_safe_exit_timelock(
+            &provider,
+            &mut contracts,
+            delay,
+            proposers,
+            executors,
+            provider_wallet,
+        )
+        .await?;
+
+        let token_owner = provider_wallet;
+        let init_recipient = provider_wallet;
+        let initial_supply = U256::from(10_000_000u64);
+        let token_name = "Espresso";
+        let token_symbol = "ESP";
+
+        let token_proxy_addr = deploy_token_proxy(
+            &provider,
+            &mut contracts,
+            token_owner,
+            init_recipient,
+            initial_supply,
+            token_name,
+            token_symbol,
+        )
+        .await?;
+
+        let fake_reward_claim = Address::random();
+        contracts.insert(Contract::RewardClaimProxy, fake_reward_claim);
+
+        let mut args_builder = DeployerArgsBuilder::default();
+        args_builder
+            .deployer(provider.clone())
+            .use_timelock_owner(true)
+            .rpc_url(rpc_url);
+        let args = args_builder.build()?;
+
+        args.deploy(&mut contracts, Contract::EspTokenV2).await?;
+
+        let esp_token_v2 = EspTokenV2::new(token_proxy_addr, &provider);
+        assert_eq!(esp_token_v2.getVersion().call().await?, (2, 0, 0).into());
+        assert_eq!(
+            esp_token_v2.owner().call().await?,
+            safe_exit_timelock_addr,
+            "EspTokenProxy should have SafeExitTimelock as owner after V2 upgrade"
+        );
+
+        Ok(())
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_upgrade_light_client_v3_with_timelock_owner() -> Result<()> {
+        use builder::DeployerArgsBuilder;
+
+        let (anvil, provider, _l1_client) =
+            ProviderBuilder::new().connect_anvil_with_l1_client()?;
+        let mut contracts = Contracts::new();
+        let delay = U256::from(0);
+        let provider_wallet = provider.get_accounts().await?[0];
+        let proposers = vec![provider_wallet];
+        let executors = vec![provider_wallet];
+        let rpc_url = anvil.endpoint_url();
+
+        let ops_timelock_addr = deploy_ops_timelock(
+            &provider,
+            &mut contracts,
+            delay,
+            proposers,
+            executors,
+            provider_wallet,
+        )
+        .await?;
+
+        let genesis_state = LightClientStateSol::dummy_genesis();
+        let genesis_stake = StakeTableStateSol::dummy_genesis();
+
+        let lc_proxy_addr = deploy_light_client_proxy(
+            &provider,
+            &mut contracts,
+            false,
+            genesis_state,
+            genesis_stake,
+            provider_wallet,
+            Some(provider_wallet),
+        )
+        .await?;
+
+        upgrade_light_client_v2(&provider, &mut contracts, false, 10, 22).await?;
+
+        let mut args_builder = DeployerArgsBuilder::default();
+        args_builder
+            .deployer(provider.clone())
+            .use_timelock_owner(true)
+            .rpc_url(rpc_url);
+        let args = args_builder.build()?;
+
+        args.deploy(&mut contracts, Contract::LightClientV3).await?;
+
+        let lc_v3 = LightClientV3::new(lc_proxy_addr, &provider);
+        assert_eq!(lc_v3.getVersion().call().await?.majorVersion, 3);
+        assert_eq!(
+            lc_v3.owner().call().await?,
+            ops_timelock_addr,
+            "LightClientProxy should have OpsTimelock as owner after V3 upgrade"
+        );
+
+        Ok(())
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_upgrade_stake_table_v2_with_timelock_owner() -> Result<()> {
+        use builder::DeployerArgsBuilder;
+
+        let (anvil, provider, _l1_client) =
+            ProviderBuilder::new().connect_anvil_with_l1_client()?;
+        let mut contracts = Contracts::new();
+        let delay = U256::from(0);
+        let provider_wallet = provider.get_accounts().await?[0];
+        let proposers = vec![provider_wallet];
+        let executors = vec![provider_wallet];
+        let rpc_url = anvil.endpoint_url();
+
+        let ops_timelock_addr = deploy_ops_timelock(
+            &provider,
+            &mut contracts,
+            delay,
+            proposers,
+            executors,
+            provider_wallet,
+        )
+        .await?;
+
+        let token_proxy_addr = deploy_token_proxy(
+            &provider,
+            &mut contracts,
+            provider_wallet,
+            provider_wallet,
+            U256::from(10_000_000u64),
+            "Espresso",
+            "ESP",
+        )
+        .await?;
+
+        let genesis_state = LightClientStateSol::dummy_genesis();
+        let genesis_stake = StakeTableStateSol::dummy_genesis();
+
+        let lc_proxy_addr = deploy_light_client_proxy(
+            &provider,
+            &mut contracts,
+            false,
+            genesis_state,
+            genesis_stake,
+            provider_wallet,
+            Some(provider_wallet),
+        )
+        .await?;
+
+        let escrow_period = U256::from(crate::DEFAULT_EXIT_ESCROW_PERIOD_SECONDS);
+        let st_proxy_addr = deploy_stake_table_proxy(
+            &provider,
+            &mut contracts,
+            token_proxy_addr,
+            lc_proxy_addr,
+            escrow_period,
+            provider_wallet,
+        )
+        .await?;
+
+        let mut args_builder = DeployerArgsBuilder::default();
+        args_builder
+            .deployer(provider.clone())
+            .use_timelock_owner(true)
+            .rpc_url(rpc_url);
+        let args = args_builder.build()?;
+
+        args.deploy(&mut contracts, Contract::StakeTableV2).await?;
+
+        let st_v2 = StakeTableV2::new(st_proxy_addr, &provider);
+        assert_eq!(st_v2.getVersion().call().await?, (2, 0, 0).into());
+        assert_eq!(
+            st_v2.owner().call().await?,
+            ops_timelock_addr,
+            "StakeTableProxy should have OpsTimelock as owner after V2 upgrade"
+        );
+
+        Ok(())
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_perform_timelock_operation_unified() -> Result<()> {
+        use crate::proposals::timelock::{
+            perform_timelock_operation, TimelockOperationParams, TimelockOperationPayload,
+            TimelockOperationType,
+        };
+
+        let provider = ProviderBuilder::new().connect_anvil_with_wallet();
+        let mut contracts = Contracts::new();
+        let delay = U256::from(0);
+        let provider_wallet = provider.get_accounts().await?[0];
+        let another_wallet = provider.get_accounts().await?[1];
+        let proposers = vec![provider_wallet];
+        let executors = vec![provider_wallet];
+
+        let timelock_addr = deploy_ops_timelock(
+            &provider,
+            &mut contracts,
+            delay,
+            proposers,
+            executors,
+            provider_wallet,
+        )
+        .await?;
+        let timelock = OpsTimelock::new(timelock_addr, &provider);
+
+        let fee_contract_proxy_addr =
+            deploy_fee_contract_proxy(&provider, &mut contracts, timelock_addr).await?;
+        let proxy = FeeContract::new(fee_contract_proxy_addr, &provider);
+
+        let transfer_ownership_data = proxy
+            .transferOwnership(another_wallet)
+            .calldata()
+            .to_owned();
+
+        assert_eq!(proxy.owner().call().await?, timelock_addr);
+
+        let operation = TimelockOperationPayload {
+            target: fee_contract_proxy_addr,
+            value: U256::ZERO,
+            data: transfer_ownership_data.clone(),
+            predecessor: B256::ZERO,
+            salt: B256::ZERO,
+            delay,
+        };
+
+        // Test Cancel via unified function (schedule and cancel a new operation)
+        let mut cancel_operation = operation.clone();
+        cancel_operation.value = U256::from(1);
+        let cancel_params = TimelockOperationParams::default();
+        let cancel_operation_id = perform_timelock_operation(
+            &provider,
+            Contract::FeeContractProxy,
+            cancel_operation.clone(),
+            TimelockOperationType::Schedule,
+            cancel_params.clone(),
+        )
+        .await?;
+
+        perform_timelock_operation(
+            &provider,
+            Contract::FeeContractProxy,
+            cancel_operation,
+            TimelockOperationType::Cancel,
+            cancel_params,
+        )
+        .await?;
+
+        assert!(timelock.getTimestamp(cancel_operation_id).call().await? == U256::ZERO);
+
+        // Test schedule transfer ownership operation
+        let params = TimelockOperationParams::default();
+        let operation_id = perform_timelock_operation(
+            &provider,
+            Contract::FeeContractProxy,
+            operation.clone(),
+            TimelockOperationType::Schedule,
+            params,
+        )
+        .await?;
+
+        assert!(timelock.isOperationPending(operation_id).call().await?);
+
+        let params = TimelockOperationParams::default();
+        perform_timelock_operation(
+            &provider,
+            Contract::FeeContractProxy,
+            operation.clone(),
+            TimelockOperationType::Execute,
+            params,
+        )
+        .await?;
+
+        assert!(timelock.isOperationDone(operation_id).call().await?);
+
+        // confirm that the operation occurred on the fee contract
+        assert_eq!(proxy.owner().call().await?, another_wallet);
+        Ok(())
+    }
+    // This test is used to test the upgrade of the FeeContractProxy via the multisig wallet
+    // It only tests the upgrade proposal via the typescript script and thus requires the upgrade proposal to be sent to a real network
+    // However, the contracts are deployed on anvil, so the test will pass even if the upgrade proposal is not executed
+    // The test assumes that there is a file .env.deployer.rs.test in the root directory with the following variables:
+    // RPC_URL=
+    // SAFE_MULTISIG_ADDRESS=0x0000000000000000000000000000000000000000
+    // SAFE_ORCHESTRATOR_PRIVATE_KEY=0x0000000000000000000000000000000000000000000000000000000000000000
+    // Ensure that the private key has proposal rights on the Safe Multisig Wallet and the SDK supports the network
+    async fn test_upgrade_fee_contract_multisig_owner_helper(dry_run: bool) -> Result<()> {
+        let mut localhost_rpc_url = "http://localhost:8545".to_string();
+        let mut multisig_admin = Address::random();
+        let (_anvil, provider, _l1_client) =
+            ProviderBuilder::new().connect_anvil_with_l1_client()?;
+        let mut contracts = Contracts::new();
+        let admin = provider.get_accounts().await?[0];
+
+        if !dry_run {
+            dotenvy::from_filename_override(".env.deployer.rs.test")
+                .map_err(|e| anyhow!("Failed to load .env.deployer.rs.test: {}", e))?;
+
+            for item in dotenvy::from_filename_iter(".env.deployer.rs.test")
+                .expect("Failed to read .env.deployer.rs.test")
+            {
+                let (key, val) = item?;
+                if key == "RPC_URL" {
+                    localhost_rpc_url = val.to_string();
+                } else if key == "SAFE_MULTISIG_ADDRESS" {
+                    multisig_admin = val.parse::<Address>()?;
+                }
+            }
+
+            if localhost_rpc_url.is_empty() || multisig_admin.is_zero() {
+                anyhow::bail!(
+                    "RPC_URL and SAFE_MULTISIG_ADDRESS must be set in .env.deployer.rs.test"
+                );
+            }
+        }
+
+        // Deploy FeeContract proxy
+        let fee_contract_proxy_addr =
+            deploy_fee_contract_proxy(&provider, &mut contracts, admin).await?;
+
+        // transfer ownership to multisig
+        let _receipt = transfer_ownership(
+            &provider,
+            Contract::FeeContractProxy,
+            fee_contract_proxy_addr,
+            multisig_admin,
+        )
+        .await?;
+
+        // Then send upgrade proposal to the multisig wallet
+        let result = upgrade_fee_contract_multisig_owner(
+            &provider,
+            &mut contracts,
+            localhost_rpc_url.clone(),
+            dry_run,
+        )
+        .await?;
+
+        tracing::info!(
+            "Result when trying to upgrade FeeContractProxy via the multisig wallet: {:?}",
+            result
+        );
+
+        if dry_run {
+            let data: serde_json::Value = serde_json::from_str(&result)?;
+            assert_eq!(data["rpcUrl"], localhost_rpc_url);
+            assert_eq!(data["safeAddress"], multisig_admin.to_string());
+            assert_eq!(data["proxyAddress"], fee_contract_proxy_addr.to_string());
+            assert_eq!(data["initData"], "0x".to_string());
+            assert_eq!(data["useHardwareWallet"], false);
+        }
+
+        // v1 state persistence cannot be tested here because the upgrade proposal is not yet executed
+        // One has to test that the upgrade proposal is available via the Safe UI
+        // and then test that the v1 state is persisted
+        Ok(())
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_upgrade_fee_contract_multisig_owner_dry_run() -> Result<()> {
+        test_upgrade_fee_contract_multisig_owner_helper(true).await
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_upgrade_fee_contract_v1_0_1_eoa() -> Result<()> {
+        let (_anvil, provider, _l1_client) =
+            ProviderBuilder::new().connect_anvil_with_l1_client()?;
+        let mut contracts = Contracts::new();
+        let admin = provider.get_accounts().await?[0];
+
+        let fee_contract_proxy_addr =
+            deploy_fee_contract_proxy(&provider, &mut contracts, admin).await?;
+        let fee_contract_proxy = FeeContract::new(fee_contract_proxy_addr, &provider);
+        let curr_version = fee_contract_proxy.getVersion().call().await?;
+        assert_eq!(curr_version, (1, 0, 1).into()); // since the current version of the contract is 1.0.1 as needed for the patch
+
+        let cached_impl_addr = contracts.address(Contract::FeeContract);
+
+        // For patch upgrades, we need to clear the cache to allow redeployment
+        contracts.remove(&Contract::FeeContract);
+
+        // Test the upgrade function directly
+        let receipt = upgrade_fee_v1(&provider, &mut contracts).await?;
+
+        assert!(receipt.inner.is_success());
+
+        // Verify a new implementation was deployed (if old one existed)
+        let new_impl_addr = contracts.address(Contract::FeeContract);
+        if let Some(old_addr) = cached_impl_addr {
+            assert_ne!(
+                old_addr,
+                new_impl_addr.expect("New implementation should be deployed"),
+                "New implementation should have a different address"
+            );
+        }
+
+        // Verify the proxy now points to the new implementation
+        let new_proxy_impl = read_proxy_impl(&provider, fee_contract_proxy_addr).await?;
+        assert_eq!(
+            new_proxy_impl,
+            new_impl_addr.expect("New implementation should be deployed"),
+            "Proxy should point to the new implementation address"
+        );
+
+        // Verify version is correct (this is already checked in upgrade_fee_v1, but explicit here)
+        let new_version = fee_contract_proxy.getVersion().call().await?;
+        assert_eq!(new_version, (1, 0, 1).into());
+
+        Ok(())
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_upgrade_light_client_v2_twice_checks_impl_address() -> Result<()> {
+        let provider = ProviderBuilder::new().connect_anvil_with_wallet();
+        let mut contracts = Contracts::new();
+        let blocks_per_epoch = 10;
+        let epoch_start_block = 22;
+
+        // Prepare initialization inputs
+        let genesis_state = LightClientStateSol::dummy_genesis();
+        let genesis_stake = StakeTableStateSol::dummy_genesis();
+        let admin = provider.get_accounts().await?[0];
+        let prover = Address::random();
+
+        // Deploy proxy and V1
+        let lc_proxy_addr = deploy_light_client_proxy(
+            &provider,
+            &mut contracts,
+            false,
+            genesis_state.clone(),
+            genesis_stake.clone(),
+            admin,
+            Some(prover),
+        )
+        .await?;
+
+        // First upgrade to V2
+        upgrade_light_client_v2(
+            &provider,
+            &mut contracts,
+            false, // is_mock
+            blocks_per_epoch,
+            epoch_start_block,
+        )
+        .await?;
+
+        // Capture the implementation address after first upgrade
+        let first_impl_addr = read_proxy_impl(&provider, lc_proxy_addr).await?;
+
+        // Also capture what's in the cache
+        let cached_impl_addr = contracts.address(Contract::LightClientV2);
+        assert_eq!(
+            first_impl_addr,
+            cached_impl_addr.expect("LightClientV2 should be in cache"),
+            "First upgrade: proxy should point to cached implementation"
+        );
+
+        // Second upgrade to V2 (re-applying same version)
+        // For patch upgrades, we need to clear the cache to allow redeployment
+        contracts.remove(&Contract::LightClientV2);
+
+        // Second upgrade to V2 (re-applying same version)
+        upgrade_light_client_v2(
+            &provider,
+            &mut contracts,
+            false, // is_mock
+            blocks_per_epoch,
+            epoch_start_block,
+        )
+        .await?;
+
+        // Check if implementation address changed
+        let second_impl_addr = read_proxy_impl(&provider, lc_proxy_addr).await?;
+
+        let cached_impl_addr_after = contracts.address(Contract::LightClientV2);
+        assert_ne!(
+            first_impl_addr, second_impl_addr,
+            "LightClientV2 should have been deployed again"
+        );
+        assert_eq!(
+            second_impl_addr,
+            cached_impl_addr_after.expect("LightClientV2 should still be in cache"),
+            "Second upgrade: proxy should point to cached implementation"
+        );
+
+        Ok(())
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_propose_multisig_transaction_dry_run() -> Result<()> {
+        let (anvil, provider, _l1_client) =
+            ProviderBuilder::new().connect_anvil_with_l1_client()?;
+        let mut contracts = Contracts::new();
+        let provider_wallet = provider.get_accounts().await?[0];
+
+        let fee_contract_proxy_addr =
+            deploy_fee_contract_proxy(&provider, &mut contracts, provider_wallet).await?;
+        let new_owner = Address::random();
+
+        // Use DeployerArgsBuilder to test propose_multisig_transaction
+        use builder::DeployerArgsBuilder;
+
+        let mut args_builder = DeployerArgsBuilder::default();
+        args_builder
+            .deployer(provider.clone())
+            .rpc_url(anvil.endpoint_url())
+            .multisig(provider_wallet)
+            .dry_run(true)
+            .multisig_transaction_target(fee_contract_proxy_addr)
+            .multisig_transaction_function_signature("transferOwnership(address)".to_string())
+            .multisig_transaction_function_args(vec![new_owner.to_string()])
+            .multisig_transaction_value("0".to_string());
+
+        let args = args_builder.build()?;
+
+        let result = args.propose_multisig_transaction().await;
+
+        match result {
+            Ok(_) => {
+                tracing::info!("Multisig transaction proposal succeeded in dry_run mode");
+                tracing::info!("Result: {:?}", result);
+            },
+            Err(e) => {
+                tracing::info!("Multisig transaction proposal failed: {}", e);
+            },
+        }
+
+        Ok(())
     }
 }

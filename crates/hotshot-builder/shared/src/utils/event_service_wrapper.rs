@@ -6,7 +6,7 @@ use futures::{stream::unfold, Stream, StreamExt};
 use hotshot::types::Event;
 use hotshot_events_service::events::Error as EventStreamError;
 use hotshot_types::traits::node_implementation::NodeType;
-use surf_disco::{client::HealthStatus, Client};
+use surf_disco::{client::HealthStatus, reexports::WebSocketConfig, Client};
 use tokio::time::{sleep, timeout};
 use tracing::{error, warn};
 use url::Url;
@@ -31,7 +31,7 @@ pub struct EventServiceStream<Types: NodeType, V: StaticVersionType> {
 
 impl<Types: NodeType, ApiVer: StaticVersionType + 'static> EventServiceStream<Types, ApiVer> {
     /// Maximum period between events, once it elapsed we assume
-    /// udnerlying connection silently went down and attempt to reconnect
+    /// underlying connection silently went down and attempt to reconnect
     const MAX_WAIT_PERIOD: Duration = Duration::from_secs(10);
     const RETRY_PERIOD: Duration = Duration::from_secs(1);
     const CONNECTION_TIMEOUT: Duration = Duration::from_secs(60);
@@ -64,8 +64,16 @@ impl<Types: NodeType, ApiVer: StaticVersionType + 'static> EventServiceStream<Ty
 
         tracing::info!("Builder client connected to the hotshot events API");
 
+        // Create a new [`WebSocketConfig`]. We trust the events service on our nodes to not
+        // send us malicious messages.
+        let websocket_config = WebSocketConfig {
+            max_message_size: None,
+            max_frame_size: None,
+            ..Default::default()
+        };
+
         Ok(client
-            .socket("hotshot-events/events")
+            .socket_with_config("hotshot-events/events", websocket_config)
             .subscribe::<Event<Types>>()
             .await?)
     }
@@ -243,12 +251,8 @@ mod tests {
     async fn test_event_stream_wrapper() {
         const TIMEOUT: Duration = Duration::from_secs(3);
 
-        let url: Url = format!(
-            "http://localhost:{}",
-            portpicker::pick_unused_port().unwrap()
-        )
-        .parse()
-        .unwrap();
+        let port = test_utils::reserve_tcp_port().unwrap();
+        let url: Url = format!("http://localhost:{port}").parse().unwrap();
 
         let app_handle = run_app("hotshot-events", url.clone());
 
@@ -288,12 +292,8 @@ mod tests {
     async fn test_event_stream_wrapper_with_idle_timeout() {
         const TIMEOUT: Duration = Duration::from_secs(3);
 
-        let url: Url = format!(
-            "http://localhost:{}",
-            portpicker::pick_unused_port().unwrap()
-        )
-        .parse()
-        .unwrap();
+        let port = test_utils::reserve_tcp_port().unwrap();
+        let url: Url = format!("http://localhost:{port}").parse().unwrap();
 
         let app_handle = run_app("hotshot-events", url.clone());
 

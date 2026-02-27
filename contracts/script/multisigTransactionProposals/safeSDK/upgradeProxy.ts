@@ -183,6 +183,7 @@ async function proposeUpgradeTransaction(
     safeSDK,
     upgradeData.proxyAddress,
     data,
+    "0",
     upgradeData.useHardwareWallet,
   );
 

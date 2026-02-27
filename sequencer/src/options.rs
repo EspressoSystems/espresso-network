@@ -44,6 +44,7 @@ use crate::{api, persistence, proposal_fetcher::ProposalFetcherConfig};
 // default value, even if it is a bit arbitrary.
 #[derive(Parser, Clone, Derivative)]
 #[derivative(Debug(bound = ""))]
+#[command(version = build_version())]
 pub struct Options {
     /// URL of the HotShot orchestrator.
     #[clap(
@@ -239,6 +240,10 @@ pub struct Options {
     )]
     pub libp2p_bootstrap_nodes: Option<Vec<Multiaddr>>,
 
+    /// The URL of the builders to use for submitting transactions
+    #[clap(long, env = "ESPRESSO_SEQUENCER_BUILDER_URLS", value_delimiter = ',')]
+    pub builder_urls: Vec<Url>,
+
     /// URL of the Light Client State Relay Server
     #[clap(
         long,
@@ -343,6 +348,12 @@ pub struct Options {
     #[clap(flatten)]
     pub catchup_backoff: BackoffParams,
 
+    /// Base timeout for catchup requests to peers.
+    ///
+    /// This is the initial per peer timeout for HTTP requests during state catchup
+    #[clap(long, env = "ESPRESSO_SEQUENCER_CATCHUP_BASE_TIMEOUT", default_value = "2s", value_parser = parse_duration)]
+    pub catchup_base_timeout: Duration,
+
     #[clap(flatten)]
     pub logging: logging::Config,
 
@@ -404,6 +415,8 @@ pub struct Identity {
 
     #[clap(long, env = "ESPRESSO_SEQUENCER_IDENTITY_NODE_NAME")]
     pub node_name: Option<String>,
+    #[clap(long, env = "ESPRESSO_SEQUENCER_IDENTITY_NODE_DESCRIPTION")]
+    pub node_description: Option<String>,
 
     #[clap(long, env = "ESPRESSO_SEQUENCER_IDENTITY_COMPANY_NAME")]
     pub company_name: Option<String>,
@@ -415,12 +428,47 @@ pub struct Identity {
     pub node_type: Option<String>,
     #[clap(long, env = "ESPRESSO_SEQUENCER_IDENTITY_NETWORK_TYPE")]
     pub network_type: Option<String>,
+
+    #[clap(long, env = "ESPRESSO_SEQUENCER_IDENTITY_ICON_14x14_1x")]
+    pub icon_14x14_1x: Option<Url>,
+    #[clap(long, env = "ESPRESSO_SEQUENCER_IDENTITY_ICON_14x14_2x")]
+    pub icon_14x14_2x: Option<Url>,
+    #[clap(long, env = "ESPRESSO_SEQUENCER_IDENTITY_ICON_14x14_3x")]
+    pub icon_14x14_3x: Option<Url>,
+    #[clap(long, env = "ESPRESSO_SEQUENCER_IDENTITY_ICON_24x24_1x")]
+    pub icon_24x24_1x: Option<Url>,
+    #[clap(long, env = "ESPRESSO_SEQUENCER_IDENTITY_ICON_24x24_2x")]
+    pub icon_24x24_2x: Option<Url>,
+    #[clap(long, env = "ESPRESSO_SEQUENCER_IDENTITY_ICON_24x24_3x")]
+    pub icon_24x24_3x: Option<Url>,
 }
 
 /// get_default_node_type returns the current public facing binary name and
 /// version of this program.
 fn get_default_node_type() -> String {
     format!("espresso-sequencer {}", env!("CARGO_PKG_VERSION"))
+}
+
+fn build_version() -> String {
+    let testing = if cfg!(feature = "testing") {
+        "yes"
+    } else {
+        "no"
+    };
+    format!(
+        "\ndescribe: {}\nrev: {}\ndirty: {}\nbranch: {}\ncommit-timestamp: {}\nbuild-timestamp: \
+         {}\ndebug: {}\nfeatures: {}\ntarget: {}\ntesting: {}",
+        env!("VERGEN_GIT_DESCRIBE"),
+        env!("VERGEN_GIT_SHA"),
+        env!("VERGEN_GIT_DIRTY"),
+        env!("VERGEN_GIT_BRANCH"),
+        env!("VERGEN_GIT_COMMIT_TIMESTAMP"),
+        env!("VERGEN_BUILD_TIMESTAMP"),
+        env!("VERGEN_CARGO_DEBUG"),
+        env!("VERGEN_CARGO_FEATURES"),
+        env!("VERGEN_CARGO_TARGET_TRIPLE"),
+        testing,
+    )
 }
 
 // The Debug implementation for Url is noisy, we just want to see the URL
@@ -524,6 +572,9 @@ impl ModuleArgs {
                 SequencerModule::Explorer(m) => {
                     curr = m.add(&mut modules.explorer, &mut provided)?
                 },
+                SequencerModule::LightClient(m) => {
+                    curr = m.add(&mut modules.light_client, &mut provided)?
+                },
             }
         }
 
@@ -558,6 +609,7 @@ module!("catchup", api::options::Catchup, requires: "http");
 module!("config", api::options::Config, requires: "http");
 module!("hotshot-events", api::options::HotshotEvents, requires: "http");
 module!("explorer", api::options::Explorer, requires: "http", "storage-sql");
+module!("light-client", api::options::LightClient, requires: "http", "storage-sql");
 
 #[derive(Clone, Debug, Args)]
 struct Module<Options: ModuleInfo> {
@@ -638,6 +690,13 @@ enum SequencerModule {
     ///
     /// This module requires the http and storage-sql modules to be started.
     Explorer(Module<api::options::Explorer>),
+    /// Run the light client API module.
+    ///
+    /// This module provides data and proofs necessary for an untrusting light client to retrieve
+    /// and verify Espresso data from this server.
+    ///
+    /// This module requires the http and storage-sql modules to be started.
+    LightClient(Module<api::options::LightClient>),
 }
 
 #[derive(Clone, Debug, Default)]
@@ -652,4 +711,37 @@ pub struct Modules {
     pub config: Option<api::options::Config>,
     pub hotshot_events: Option<api::options::HotshotEvents>,
     pub explorer: Option<api::options::Explorer>,
+    pub light_client: Option<api::options::LightClient>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_build_version() {
+        let version = build_version();
+        for field in [
+            "describe:",
+            "rev:",
+            "dirty:",
+            "branch:",
+            "commit-timestamp:",
+            "build-timestamp:",
+            "debug:",
+            "features:",
+            "target:",
+            "testing:",
+        ] {
+            assert!(version.contains(field), "missing {field}: {version}");
+        }
+        assert!(
+            version.contains("debug: true"),
+            "expected debug build in test: {version}"
+        );
+        assert!(
+            version.contains("testing: yes"),
+            "expected testing enabled in test builds: {version}"
+        );
+    }
 }

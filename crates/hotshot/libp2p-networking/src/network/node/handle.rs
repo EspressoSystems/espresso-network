@@ -33,7 +33,7 @@ use crate::network::{
 #[derive(Debug, Clone)]
 pub struct NetworkNodeHandle<T: NodeType> {
     /// network configuration
-    network_config: NetworkNodeConfig<T>,
+    network_config: NetworkNodeConfig,
 
     /// send an action to the networkbehaviour
     send_network: UnboundedSender<ClientRequest>,
@@ -88,12 +88,12 @@ impl NetworkNodeReceiver {
 /// # Errors
 /// Errors if spawning the task fails
 pub async fn spawn_network_node<T: NodeType, D: DhtPersistentStorage>(
-    config: NetworkNodeConfig<T>,
+    config: NetworkNodeConfig,
     dht_persistent_storage: D,
     consensus_key_to_pid_map: Arc<Mutex<BiMap<T::SignatureKey, PeerId>>>,
     id: usize,
 ) -> Result<(NetworkNodeReceiver, NetworkNodeHandle<T>), NetworkError> {
-    let mut network = NetworkNode::new(
+    let mut network: NetworkNode<T, _> = NetworkNode::new(
         config.clone(),
         dht_persistent_storage,
         Arc::clone(&consensus_key_to_pid_map),
@@ -485,7 +485,7 @@ impl<T: NodeType> NetworkNodeHandle<T> {
 
     /// Return a reference to the network config
     #[must_use]
-    pub fn config(&self) -> &NetworkNodeConfig<T> {
+    pub fn config(&self) -> &NetworkNodeConfig {
         &self.network_config
     }
 }

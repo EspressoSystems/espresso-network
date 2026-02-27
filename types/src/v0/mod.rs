@@ -1,12 +1,7 @@
-use std::marker::PhantomData;
-
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
     signature_key::{BLSPubKey, SchnorrPubKey},
-    traits::{
-        node_implementation::{NodeType, Versions},
-        signature_key::SignatureKey,
-    },
+    traits::{node_implementation::NodeType, signature_key::SignatureKey},
 };
 use serde::{Deserialize, Serialize};
 
@@ -14,15 +9,20 @@ pub mod config;
 mod header;
 mod impls;
 mod nsproof;
-mod sparse_mt;
+pub mod sparse_mt;
 pub mod traits;
 mod txproof;
 mod utils;
+
 pub use header::Header;
-#[allow(unused_imports)]
-pub(crate) use impls::active_validator_set_from_l1_events;
 #[cfg(any(test, feature = "testing"))]
 pub use impls::mock;
+// export reward types for staking-ui-service
+pub use impls::reward::{ComputedRewards, RewardDistributor};
+#[cfg(any(test, feature = "testing"))]
+pub use impls::testing;
+#[allow(unused_imports)]
+pub(crate) use impls::validator_set_from_l1_events;
 pub use impls::{
     get_l1_deposits, retain_accounts, validators_from_l1_events, BuilderValidationError,
     EpochCommittees, FeeError, ProposalValidationError, StateValidationError,
@@ -30,7 +30,7 @@ pub use impls::{
 pub use nsproof::*;
 pub use txproof::*;
 pub use utils::*;
-use vbs::version::{StaticVersion, StaticVersionType};
+use vbs::version::StaticVersion;
 
 // This is the single source of truth for minor versions supported by this major version.
 //
@@ -42,7 +42,7 @@ use vbs::version::{StaticVersion, StaticVersionType};
 // instead we write `with_minor_versions!(some_macro!(args))`.
 macro_rules! with_minor_versions {
     ($m:ident!($($arg:tt),*)) => {
-        $m!($($arg,)* v0_1, v0_2, v0_3, v0_4);
+        $m!($($arg,)* v0_1, v0_2, v0_3, v0_4, v0_5, v0_6);
     };
 }
 
@@ -127,7 +127,10 @@ reexport_unchanged_types!(
     BlockSize,
 );
 
+pub use v0_3::StateCertQueryDataV1;
 pub(crate) use v0_3::{L1ClientMetrics, L1Event, L1State, L1UpdateTask};
+pub use v0_4::StateCertQueryDataV2;
+use versions::version;
 
 #[derive(
     Clone, Copy, Debug, Default, Hash, Eq, PartialEq, PartialOrd, Ord, Deserialize, Serialize,
@@ -148,40 +151,14 @@ impl NodeType for SeqTypes {
     type StateSignatureKey = SchnorrPubKey;
 }
 
-#[derive(Clone, Default, Debug, Copy)]
-pub struct SequencerVersions<Base: StaticVersionType, Upgrade: StaticVersionType> {
-    _pd: PhantomData<(Base, Upgrade)>,
-}
+pub const MOCK_SEQUENCER_VERSIONS: versions::Upgrade =
+    versions::Upgrade::new(version(0, 1), version(0, 2));
 
-impl<Base: StaticVersionType, Upgrade: StaticVersionType> SequencerVersions<Base, Upgrade> {
-    pub fn new() -> Self {
-        Self {
-            _pd: Default::default(),
-        }
-    }
-}
-
-impl<Base: StaticVersionType + 'static, Upgrade: StaticVersionType + 'static> Versions
-    for SequencerVersions<Base, Upgrade>
-{
-    type Base = Base;
-    type Upgrade = Upgrade;
-    const UPGRADE_HASH: [u8; 32] = [
-        1, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0,
-        0, 0,
-    ];
-
-    type Epochs = EpochVersion;
-    type DrbAndHeaderUpgrade = DrbAndHeaderUpgradeVersion;
-}
-
-pub type MockSequencerVersions = SequencerVersions<StaticVersion<0, 1>, StaticVersion<0, 2>>;
-
-pub type V0_0 = StaticVersion<0, 0>;
-pub type V0_1 = StaticVersion<0, 1>;
 pub type FeeVersion = StaticVersion<0, 2>;
 pub type EpochVersion = StaticVersion<0, 3>;
 pub type DrbAndHeaderUpgradeVersion = StaticVersion<0, 4>;
+pub type DaUpgradeVersion = StaticVersion<0, 5>;
+pub type Vid2UpgradeVersion = StaticVersion<0, 6>;
 
 pub type Leaf = hotshot_types::data::Leaf<SeqTypes>;
 pub type Leaf2 = hotshot_types::data::Leaf2<SeqTypes>;
@@ -193,9 +170,14 @@ pub type PrivKey = <PubKey as SignatureKey>::PrivateKey;
 
 pub type NetworkConfig = hotshot_types::network::NetworkConfig<SeqTypes>;
 
-pub use self::impls::{NodeState, RewardDistributor, UpgradeMap, ValidatedState, ValidatorMap};
+pub use self::impls::{
+    AuthenticatedValidatorMap, NodeState, RegisteredValidatorMap, UpgradeMap, ValidatedState,
+};
 pub use crate::{
-    v0::impls::StakeTableHash,
+    v0::impls::{
+        calculate_proportion_staked_and_reward_rate, select_active_validator_set,
+        to_registered_validator_map, StakeTableHash, StakeTableState,
+    },
     v0_1::{
         BLOCK_MERKLE_TREE_HEIGHT, FEE_MERKLE_TREE_HEIGHT, NS_ID_BYTE_LEN, NS_OFFSET_BYTE_LEN,
         NUM_NSS_BYTE_LEN, NUM_TXS_BYTE_LEN, TX_OFFSET_BYTE_LEN,

@@ -123,12 +123,10 @@ mod tests {
         run_test,
         validation::BuilderValidationConfig,
     };
-    use hotshot_example_types::node_types::{MemoryImpl, TestTypes, TestVersions};
+    use hotshot_example_types::node_types::{MemoryImpl, TestTypes, TEST_VERSIONS};
     use hotshot_macros::cross_tests;
     use hotshot_testing::{
-        completion_task::{CompletionTaskDescription, TimeBasedCompletionTaskDescription},
-        overall_safety_task::OverallSafetyPropertiesDescription,
-        test_builder::TestDescription,
+        overall_safety_task::OverallSafetyPropertiesDescription, test_builder::TestDescription,
     };
 
     use crate::testing::integration::LegacyBuilderImpl;
@@ -144,11 +142,6 @@ mod tests {
             txn_description: hotshot_testing::txn_task::TxnTaskDescription::RoundRobinTimeBased(
                 Duration::MAX,
             ),
-            completion_task_description: CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
-                TimeBasedCompletionTaskDescription {
-                    duration: Duration::from_secs(60),
-                },
-            ),
             overall_safety_properties: OverallSafetyPropertiesDescription {
                 num_successful_views,
                 ..Default::default()
@@ -158,7 +151,7 @@ mod tests {
 
         metadata.test_config.epoch_height = 0;
 
-        run_test::<TestVersions, LegacyBuilderImpl>(
+        run_test::<LegacyBuilderImpl>(
             metadata,
             BuilderValidationConfig {
                 expected_txn_num: num_successful_views * min_txns_per_view,
@@ -181,17 +174,12 @@ mod tests {
         Impls: [MemoryImpl],
         BuilderImpls: [LegacyBuilderImpl],
         Types: [TestTypes],
-        Versions: [TestVersions],
+        Versions: [TEST_VERSIONS.test],
         Ignore: true,
         Metadata: {
             let mut metadata = TestDescription {
                 validate_transactions : hotshot_testing::test_builder::nonempty_block_threshold((90,100)),
                 txn_description : hotshot_testing::txn_task::TxnTaskDescription::RoundRobinTimeBased(Duration::from_millis(10)),
-                completion_task_description : CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
-                            TimeBasedCompletionTaskDescription {
-                                duration: Duration::from_secs(120),
-                            },
-                ),
                 overall_safety_properties: OverallSafetyPropertiesDescription {
                     num_successful_views: 50,
                     ..Default::default()

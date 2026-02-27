@@ -9,7 +9,7 @@ use hotshot_types::{
     utils::BuilderCommitment,
     vid::advz::{ADVZCommon, ADVZScheme},
 };
-use jf_vid::VidScheme;
+use jf_advz::VidScheme;
 use sha2::Digest;
 use thiserror::Error;
 
@@ -70,7 +70,7 @@ impl Payload {
     // PRIVATE HELPERS START HERE
 
     /// Need a sync version of [`BlockPayload::from_transactions`] in order to impl [`BlockPayload::empty`].
-    fn from_transactions_sync(
+    pub fn from_transactions_sync(
         transactions: impl IntoIterator<Item = <Self as BlockPayload<SeqTypes>>::Transaction> + Send,
         chain_config: ChainConfig,
     ) -> Result<

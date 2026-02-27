@@ -36,7 +36,7 @@ use hotshot_types::{
     traits::{
         election::Membership,
         network::ConnectedNetwork,
-        node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
+        node_implementation::{ConsensusTime, NodeImplementation, NodeType},
     },
     HotShotConfig, ValidatorConfig,
 };
@@ -59,6 +59,7 @@ use crate::{
 };
 
 pub trait TaskErr: std::error::Error + Sync + Send + 'static {}
+
 impl<T: std::error::Error + Sync + Send + 'static> TaskErr for T {}
 
 impl<
@@ -68,12 +69,12 @@ impl<
             BlockHeader = TestBlockHeader,
         >,
         I: TestableNodeImplementation<TYPES>,
-        V: Versions,
         N: ConnectedNetwork<TYPES::SignatureKey>,
-    > TestRunner<TYPES, I, V, N>
+    > TestRunner<TYPES, I, N>
 where
     I: TestableNodeImplementation<TYPES>,
     I: NodeImplementation<TYPES, Network = N, Storage = TestStorage<TYPES>>,
+    <TYPES as NodeType>::Membership: Membership<TYPES, Storage = TestStorage<TYPES>>,
 {
     /// execute test
     ///
@@ -177,14 +178,16 @@ where
             late_start,
             latest_view: None,
             changes,
-            last_decided_leaf: Leaf2::genesis::<V>(
+            last_decided_leaf: Leaf2::genesis(
                 &TestValidatedState::default(),
                 &TestInstanceState::default(),
+                launcher.metadata.test_config.upgrade.base,
             )
             .await,
-            high_qc: QuorumCertificate2::genesis::<V>(
+            high_qc: QuorumCertificate2::genesis(
                 &TestValidatedState::default(),
                 &TestInstanceState::default(),
+                launcher.metadata.test_config.upgrade,
             )
             .await,
             next_epoch_high_qc: None,
@@ -194,7 +197,7 @@ where
             state_cert: None,
             node_stakes: launcher.metadata.node_stakes.clone(),
         };
-        let spinning_task = TestTask::<SpinningTask<TYPES, N, I, V>>::new(
+        let spinning_task = TestTask::<SpinningTask<TYPES, N, I>>::new(
             spinning_task_state,
             event_rxs.clone(),
             test_receiver.clone(),
@@ -211,10 +214,9 @@ where
                 test_sender.clone(),
                 launcher.metadata.overall_safety_properties.decide_timeout,
             ),
-            _pd: PhantomData,
         };
 
-        let consistency_task = TestTask::<ConsistencyTask<TYPES, V>>::new(
+        let consistency_task = TestTask::<ConsistencyTask<TYPES>>::new(
             consistency_task_state,
             event_rxs.clone(),
             test_receiver.clone(),
@@ -314,8 +316,15 @@ where
     ) -> (Vec<Box<dyn BuilderTask<TYPES>>>, Vec<Url>) {
         let mut builder_tasks = Vec::new();
         let mut builder_urls = Vec::new();
-        for metadata in &self.launcher.metadata.builders {
-            let builder_port = portpicker::pick_unused_port().expect("No free ports");
+
+        let mut ports = Vec::new();
+        for _ in &self.launcher.metadata.builders {
+            let port =
+                test_utils::reserve_tcp_port().expect("OS should have ephemeral ports available");
+            ports.push(port);
+        }
+
+        for (metadata, builder_port) in self.launcher.metadata.builders.iter().zip(&ports) {
             let builder_url =
                 Url::parse(&format!("http://localhost:{builder_port}")).expect("Invalid URL");
             let builder_task = B::start(
@@ -377,6 +386,19 @@ where
 
             networks_ready.push(networks_ready_future);
 
+            // See whether or not we should be DA
+            let is_da = node_id < config.da_staked_committee_size as u64;
+
+            // We assign node's public key and stake value rather than read from config file since it's a test
+            let validator_config = ValidatorConfig::<TYPES>::generated_from_seed_indexed(
+                [0u8; 32],
+                node_id,
+                self.launcher.metadata.node_stakes.get(node_id),
+                is_da,
+            );
+
+            let public_key = validator_config.public_key.clone();
+
             if late_start.contains(&node_id) {
                 if self.launcher.metadata.skip_late {
                     self.late_start.insert(
@@ -385,10 +407,14 @@ where
                             network: None,
                             context: LateNodeContext::UninitializedContext(
                                 LateNodeContextParameters {
-                                    storage,
-                                    memberships: <TYPES as NodeType>::Membership::new(
+                                    storage: storage.clone(),
+                                    memberships: <TYPES as NodeType>::Membership::new::<I>(
                                         config.known_nodes_with_stake.clone(),
                                         config.known_da_nodes.clone(),
+                                        storage.clone(),
+                                        network.clone(),
+                                        public_key.clone(),
+                                        config.epoch_height,
                                     ),
                                     config,
                                 },
@@ -396,7 +422,7 @@ where
                         },
                     );
                 } else {
-                    let initializer = HotShotInitializer::<TYPES>::from_genesis::<V>(
+                    let initializer = HotShotInitializer::<TYPES>::from_genesis(
                         TestInstanceState::new(
                             self.launcher
                                 .metadata
@@ -412,27 +438,21 @@ where
                             drb_result: INITIAL_DRB_RESULT,
                             block_header: None,
                         }],
+                        config.upgrade,
                     )
                     .await
                     .unwrap();
 
-                    // See whether or not we should be DA
-                    let is_da = node_id < config.da_staked_committee_size as u64;
-
-                    // We assign node's public key and stake value rather than read from config file since it's a test
-                    let validator_config = ValidatorConfig::generated_from_seed_indexed(
-                        [0u8; 32],
-                        node_id,
-                        self.launcher.metadata.node_stakes.get(node_id),
-                        is_da,
-                    );
-
                     let hotshot = Self::add_node_with_config(
                         node_id,
                         network.clone(),
-                        <TYPES as NodeType>::Membership::new(
+                        <TYPES as NodeType>::Membership::new::<I>(
                             config.known_nodes_with_stake.clone(),
                             config.known_da_nodes.clone(),
+                            storage.clone(),
+                            network.clone(),
+                            public_key.clone(),
+                            config.epoch_height,
                         ),
                         initializer,
                         config,
@@ -451,10 +471,14 @@ where
             } else {
                 uninitialized_nodes.push((
                     node_id,
-                    network,
-                    <TYPES as NodeType>::Membership::new(
+                    network.clone(),
+                    <TYPES as NodeType>::Membership::new::<I>(
                         config.known_nodes_with_stake.clone(),
                         config.known_da_nodes.clone(),
+                        storage.clone(),
+                        network,
+                        public_key.clone(),
+                        config.epoch_height,
                     ),
                     config,
                     storage,
@@ -530,7 +554,7 @@ where
         config: HotShotConfig<TYPES>,
         validator_config: ValidatorConfig<TYPES>,
         storage: I::Storage,
-    ) -> Arc<SystemContext<TYPES, I, V>> {
+    ) -> Arc<SystemContext<TYPES, I>> {
         // Get key pair for certificate aggregation
         let private_key = validator_config.private_key.clone();
         let public_key = validator_config.public_key.clone();
@@ -574,7 +598,7 @@ where
             Receiver<Arc<HotShotEvent<TYPES>>>,
         ),
         external_channel: (Sender<Event<TYPES>>, Receiver<Event<TYPES>>),
-    ) -> Arc<SystemContext<TYPES, I, V>> {
+    ) -> Arc<SystemContext<TYPES, I>> {
         // Get key pair for certificate aggregation
         let private_key = validator_config.private_key.clone();
         let public_key = validator_config.public_key.clone();
@@ -601,13 +625,13 @@ where
 }
 
 /// a node participating in a test
-pub struct Node<TYPES: NodeType, I: TestableNodeImplementation<TYPES>, V: Versions> {
+pub struct Node<TYPES: NodeType, I: TestableNodeImplementation<TYPES>> {
     /// The node's unique identifier
     pub node_id: u64,
     /// The underlying network belonging to the node
     pub network: Network<TYPES, I>,
     /// The handle to the node's internals
-    pub handle: SystemContextHandle<TYPES, I, V>,
+    pub handle: SystemContextHandle<TYPES, I>,
 }
 
 /// This type combines all of the parameters needed to build the context for a node that started
@@ -625,10 +649,10 @@ pub struct LateNodeContextParameters<TYPES: NodeType, I: TestableNodeImplementat
 
 /// The late node context dictates how we're building a node that started late during the test.
 #[allow(clippy::large_enum_variant)]
-pub enum LateNodeContext<TYPES: NodeType, I: TestableNodeImplementation<TYPES>, V: Versions> {
+pub enum LateNodeContext<TYPES: NodeType, I: TestableNodeImplementation<TYPES>> {
     /// The system context that we're passing directly to the node, this means the node is already
     /// initialized successfully.
-    InitializedContext(Arc<SystemContext<TYPES, I, V>>),
+    InitializedContext(Arc<SystemContext<TYPES, I>>),
 
     /// The system context that we're passing to the node when it is not yet initialized, so we're
     /// initializing it based on the received leaf and init parameters.
@@ -638,12 +662,12 @@ pub enum LateNodeContext<TYPES: NodeType, I: TestableNodeImplementation<TYPES>, 
 }
 
 /// A yet-to-be-started node that participates in tests
-pub struct LateStartNode<TYPES: NodeType, I: TestableNodeImplementation<TYPES>, V: Versions> {
+pub struct LateStartNode<TYPES: NodeType, I: TestableNodeImplementation<TYPES>> {
     /// The underlying network belonging to the node
     pub network: Option<Network<TYPES, I>>,
     /// Either the context to which we will use to launch HotShot for initialized node when it's
     /// time, or the parameters that will be used to initialize the node and launch HotShot.
-    pub context: LateNodeContext<TYPES, I, V>,
+    pub context: LateNodeContext<TYPES, I>,
 }
 
 /// The runner of a test network
@@ -651,15 +675,14 @@ pub struct LateStartNode<TYPES: NodeType, I: TestableNodeImplementation<TYPES>, 
 pub struct TestRunner<
     TYPES: NodeType,
     I: TestableNodeImplementation<TYPES>,
-    V: Versions,
     N: ConnectedNetwork<TYPES::SignatureKey>,
 > {
     /// test launcher, contains a bunch of useful metadata and closures
-    pub(crate) launcher: TestLauncher<TYPES, I, V>,
+    pub(crate) launcher: TestLauncher<TYPES, I>,
     /// nodes in the test
-    pub(crate) nodes: Vec<Node<TYPES, I, V>>,
+    pub(crate) nodes: Vec<Node<TYPES, I>>,
     /// nodes with a late start
-    pub(crate) late_start: HashMap<u64, LateStartNode<TYPES, I, V>>,
+    pub(crate) late_start: HashMap<u64, LateStartNode<TYPES, I>>,
     /// the next node unique identifier
     pub(crate) next_node_id: u64,
     /// Phantom for N

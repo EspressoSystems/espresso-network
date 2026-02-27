@@ -3,12 +3,14 @@
 use alloy::primitives::U256;
 use ark_ff::{BigInteger, PrimeField};
 
-#[allow(dead_code)]
+// See https://github.com/foundry-rs/foundry/issues/11712 regarding unused attributes
+#[allow(dead_code, unused_attributes)]
 pub(crate) mod bindings;
 mod copy;
 pub mod evm;
 pub mod jellyfish;
 pub mod light_client;
+pub mod reward;
 pub mod sol_types;
 pub mod stake_table;
 

@@ -12,6 +12,7 @@ import (
 
 	types "github.com/EspressoSystems/espresso-network/sdks/go/types"
 	common "github.com/EspressoSystems/espresso-network/sdks/go/types/common"
+	"github.com/coder/websocket"
 )
 
 var _ QueryService = (*Client)(nil)
@@ -104,6 +105,30 @@ func (c *Client) FetchTransactionByHash(ctx context.Context, hash *types.TaggedB
 	return res, nil
 }
 
+func (c *Client) FetchNamespaceTransactionsInRange(ctx context.Context, from uint64, until uint64, namespace uint64) ([]types.NamespaceTransactionsRangeData, error) {
+	limits, err := c.FetchLimits(ctx)
+	if err != nil {
+		return nil, err
+	}
+	// check that from and until are within limits
+	if until-from > limits.LargeObjectRangeLimit {
+		return nil, fmt.Errorf("range too large: %d > %d", until-from, limits.LargeObjectRangeLimit)
+	}
+	var res []types.NamespaceTransactionsRangeData
+	if err := c.get(ctx, &res, "availability/block/%d/%d/namespace/%d", from, until, namespace); err != nil {
+		return nil, err
+	}
+	return res, nil
+}
+
+func (c *Client) FetchLimits(ctx context.Context) (types.LimitsData, error) {
+	var res types.LimitsData
+	if err := c.get(ctx, &res, "availability/limits"); err != nil {
+		return types.LimitsData{}, err
+	}
+	return res, nil
+}
+
 // Fetches a block merkle proof at the snapshot rootHeight for the leaf at the provided HotShot height
 func (c *Client) FetchBlockMerkleProof(ctx context.Context, rootHeight uint64, hotshotHeight uint64) (types.HotShotBlockMerkleProof, error) {
 	var res types.HotShotBlockMerkleProof
@@ -175,6 +200,76 @@ func (c *Client) SubmitTransaction(ctx context.Context, tx types.Transaction) (*
 	}
 
 	return &hash, nil
+}
+
+// Stream of JSON-encoded objects over a WebSocket connection
+type WsStream[S any] struct {
+	conn *websocket.Conn
+}
+
+func (s *WsStream[S]) NextRaw(ctx context.Context) (json.RawMessage, error) {
+	typ, msg, err := s.conn.Read(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrEphemeral, err)
+	}
+	if typ != websocket.MessageText {
+		return nil, fmt.Errorf("%w: %v", ErrPermanent, err)
+	}
+	return msg, nil
+}
+
+func (s *WsStream[S]) Next(ctx context.Context) (*S, error) {
+	typ, msg, err := s.conn.Read(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrEphemeral, err)
+	}
+	if typ != websocket.MessageText {
+		return nil, fmt.Errorf("%w: %v", ErrPermanent, err)
+	}
+	var data S
+	if err := json.Unmarshal(msg, &data); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrPermanent, err)
+	}
+	return &data, nil
+}
+
+func (s *WsStream[S]) Close() error {
+	return s.conn.Close(websocket.StatusNormalClosure, "")
+}
+
+// Open a `Stream` of Espresso transactions starting from a specific block height.
+func (c *Client) StreamTransactions(ctx context.Context, height uint64) (Stream[types.TransactionQueryData], error) {
+	opts := &websocket.DialOptions{}
+	opts.HTTPClient = c.client
+	url := c.baseUrl + fmt.Sprintf("availability/stream/transactions/%d", height)
+	conn, _, err := websocket.Dial(ctx, url, opts)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrEphemeral, err)
+	}
+	return &WsStream[types.TransactionQueryData]{conn: conn}, nil
+}
+
+// Open a `Stream` of Espresso transactions starting from a specific block height, filtered by namespace.
+func (c *Client) StreamTransactionsInNamespace(ctx context.Context, height uint64, namespace uint64) (Stream[types.TransactionQueryData], error) {
+	opts := &websocket.DialOptions{}
+	opts.HTTPClient = c.client
+	url := c.baseUrl + fmt.Sprintf("availability/stream/transactions/%d/namespace/%d", height, namespace)
+	conn, _, err := websocket.Dial(ctx, url, opts)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrEphemeral, err)
+	}
+	return &WsStream[types.TransactionQueryData]{conn: conn}, nil
+}
+
+func (c *Client) StreamPayloads(ctx context.Context, height uint64) (Stream[types.PayloadQueryData], error) {
+	opts := &websocket.DialOptions{}
+	opts.HTTPClient = c.client
+	url := c.baseUrl + fmt.Sprintf("availability/stream/payloads/%d", height)
+	conn, _, err := websocket.Dial(ctx, url, opts)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrEphemeral, err)
+	}
+	return &WsStream[types.PayloadQueryData]{conn: conn}, nil
 }
 
 type NamespaceResponse struct {

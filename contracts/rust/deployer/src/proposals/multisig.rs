@@ -10,22 +10,28 @@ use alloy::{
     providers::Provider,
 };
 use anyhow::{anyhow, Context, Result};
+use espresso_types::v0_1::L1Client;
 use hotshot_contract_adapter::sol_types::{
-    EspToken, EspTokenV2, LightClient, LightClientV2, LightClientV2Mock, LightClientV3,
-    LightClientV3Mock, OwnableUpgradeable, PlonkVerifierV2, PlonkVerifierV3, StakeTable,
-    StakeTableV2,
+    EspToken, EspTokenV2, FeeContract, LightClient, LightClientV2, LightClientV2Mock,
+    LightClientV3, LightClientV3Mock, OwnableUpgradeable, PlonkVerifierV2, PlonkVerifierV3,
+    StakeTable, StakeTableV2,
 };
+use url::Url;
 
 use crate::{Contract, Contracts, LIBRARY_PLACEHOLDER_ADDRESS};
 
 #[derive(Clone)]
 pub struct TransferOwnershipParams {
     pub new_owner: Address,
-    pub rpc_url: String,
+    pub rpc_url: Url,
     pub safe_addr: Address,
     pub use_hardware_wallet: bool,
     pub dry_run: bool,
 }
+
+const TRANSFER_OWNERSHIP_SCRIPT: &str = "transferOwnership.ts";
+const UPGRADE_PROXY_SCRIPT: &str = "upgradeProxy.ts";
+const PROPOSE_TRANSACTION_GENERIC_SCRIPT: &str = "proposeTransactionGeneric.ts";
 
 /// Call the transfer ownership script to transfer ownership of a contract to a new owner
 ///
@@ -39,14 +45,14 @@ pub async fn call_transfer_ownership_script(
 ) -> Result<Output, anyhow::Error> {
     let script_path = find_script_path()?;
     let output = Command::new(script_path)
-        .arg("transferOwnership.ts")
+        .arg(TRANSFER_OWNERSHIP_SCRIPT)
         .arg("--from-rust")
         .arg("--proxy")
         .arg(proxy_addr.to_string())
         .arg("--new-owner")
         .arg(params.new_owner.to_string())
         .arg("--rpc-url")
-        .arg(params.rpc_url)
+        .arg(params.rpc_url.to_string())
         .arg("--safe-address")
         .arg(params.safe_addr.to_string())
         .arg("--dry-run")
@@ -83,7 +89,8 @@ pub async fn transfer_ownership_from_multisig_to_timelock(
         Contract::LightClientProxy
         | Contract::FeeContractProxy
         | Contract::EspTokenProxy
-        | Contract::StakeTableProxy => {
+        | Contract::StakeTableProxy
+        | Contract::RewardClaimProxy => {
             let addr = contracts
                 .address(contract)
                 .ok_or_else(|| anyhow!("{contract} (multisig owner) not found, can't upgrade"))?;
@@ -93,7 +100,7 @@ pub async fn transfer_ownership_from_multisig_to_timelock(
     };
     tracing::info!("{} found at {proxy_addr:#x}", contract);
 
-    let owner_addr = proxy_instance.owner().call().await?._0;
+    let owner_addr = proxy_instance.owner().call().await?;
 
     if !params.dry_run && !crate::is_contract(provider, owner_addr).await? {
         tracing::error!("Proxy owner is not a contract. Expected: {owner_addr:#x}");
@@ -155,16 +162,15 @@ pub fn find_script_path() -> Result<PathBuf> {
 /// - `dry_run`: Whether to do a dry run
 ///
 /// Returns:
-/// - A tuple of (stdout, success) from the script execution
+/// - stdout from the script execution
 pub async fn call_upgrade_proxy_script(
     proxy_addr: Address,
     new_impl_addr: Address,
     init_data: String,
     rpc_url: String,
     safe_addr: Address,
-    dry_run: Option<bool>,
-) -> Result<(String, bool), anyhow::Error> {
-    let dry_run = dry_run.unwrap_or(false);
+    dry_run: bool,
+) -> anyhow::Result<String> {
     tracing::info!("Dry run: {}", dry_run);
     tracing::info!(
         "Attempting to send the upgrade proposal to multisig: {}",
@@ -174,7 +180,7 @@ pub async fn call_upgrade_proxy_script(
     let script_path = find_script_path()?;
 
     let output = Command::new(script_path)
-        .arg("upgradeProxy.ts")
+        .arg(UPGRADE_PROXY_SCRIPT)
         .arg("--from-rust")
         .arg("--proxy")
         .arg(proxy_addr.to_string())
@@ -197,9 +203,9 @@ pub async fn call_upgrade_proxy_script(
     let stderr = String::from_utf8_lossy(&output.stderr);
     // if stderr is not empty, return the stderr
     if !output.status.success() {
-        return Err(anyhow!("Upgrade script failed: {}", stderr));
+        anyhow::bail!("Upgrade script failed: {}", stderr);
     }
-    Ok((stdout.to_string(), true))
+    Ok(stdout.to_string())
 }
 
 /// Verify the node js files are present and can be executed.
@@ -212,7 +218,7 @@ pub async fn verify_node_js_files() -> Result<()> {
         String::from("0x"),
         String::from("https://sepolia.infura.io/v3/"),
         Address::random(),
-        Some(true),
+        true,
     )
     .await?;
     tracing::info!("Node.js files verified successfully");
@@ -241,20 +247,16 @@ pub async fn upgrade_light_client_v2_multisig_owner(
     params: LightClientV2UpgradeParams,
     is_mock: bool,
     rpc_url: String,
-    dry_run: Option<bool>,
-) -> Result<(String, bool)> {
+    dry_run: bool,
+) -> Result<String> {
     let expected_major_version: u8 = 2;
-    let dry_run = dry_run.unwrap_or_else(|| {
-        tracing::warn!("Dry run not specified, defaulting to false");
-        false
-    });
 
     let proxy_addr = contracts
         .address(Contract::LightClientProxy)
         .ok_or_else(|| anyhow!("LightClientProxy (multisig owner) not found, can't upgrade"))?;
     tracing::info!("LightClientProxy found at {proxy_addr:#x}");
     let proxy = LightClient::new(proxy_addr, &provider);
-    let owner_addr = proxy.owner().call().await?._0;
+    let owner_addr = proxy.owner().call().await?;
 
     if !dry_run && !crate::is_contract(&provider, owner_addr).await? {
         tracing::error!("Proxy owner is not a contract. Expected: {owner_addr:#x}");
@@ -317,32 +319,29 @@ pub async fn upgrade_light_client_v2_multisig_owner(
         (Address::random(), Address::random())
     };
 
-    // Prepare init data
-    let init_data = if crate::already_initialized(
-        &provider,
-        proxy_addr,
-        Contract::LightClientV2,
-        expected_major_version,
-    )
-    .await?
-    {
-        tracing::info!(
-            "Proxy was already initialized for version {}",
-            expected_major_version
-        );
-        vec![].into()
-    } else {
-        tracing::info!(
-            "Init Data to be signed.\n Function: initializeV2\n Arguments:\n blocks_per_epoch: \
-             {:?}\n epoch_start_block: {:?}",
-            params.blocks_per_epoch,
-            params.epoch_start_block
-        );
-        LightClientV2::new(lcv2_addr, &provider)
-            .initializeV2(params.blocks_per_epoch, params.epoch_start_block)
-            .calldata()
-            .to_owned()
-    };
+    // Prepare init data (checks if already initialized)
+    // you cannot initialize a proxy that is already initialized
+    // so if one wanted to use this function to upgrade a proxy to v2, that's already v2
+    // then we shouldn't call the initialize function
+    let init_data =
+        if crate::already_initialized(&provider, proxy_addr, expected_major_version).await? {
+            tracing::info!(
+                "Proxy was already initialized for version {}",
+                expected_major_version
+            );
+            vec![].into()
+        } else {
+            tracing::info!(
+                "Init Data to be signed.\n Function: initializeV2\n Arguments:\n \
+                 blocks_per_epoch: {:?}\n epoch_start_block: {:?}",
+                params.blocks_per_epoch,
+                params.epoch_start_block
+            );
+            LightClientV2::new(lcv2_addr, &provider)
+                .initializeV2(params.blocks_per_epoch, params.epoch_start_block)
+                .calldata()
+                .to_owned()
+        };
 
     // invoke upgrade on proxy via the safeSDK
     let result = call_upgrade_proxy_script(
@@ -351,7 +350,7 @@ pub async fn upgrade_light_client_v2_multisig_owner(
         init_data.to_string(),
         rpc_url,
         owner_addr,
-        Some(dry_run),
+        dry_run,
     )
     .await?;
 
@@ -390,20 +389,16 @@ pub async fn upgrade_light_client_v3_multisig_owner(
     contracts: &mut Contracts,
     is_mock: bool,
     rpc_url: String,
-    dry_run: Option<bool>,
-) -> Result<(String, bool)> {
+    dry_run: bool,
+) -> Result<String> {
     let expected_major_version: u8 = 3;
-    let dry_run = dry_run.unwrap_or_else(|| {
-        tracing::warn!("Dry run not specified, defaulting to false");
-        false
-    });
 
     let proxy_addr = contracts
         .address(Contract::LightClientProxy)
         .ok_or_else(|| anyhow!("LightClientProxy (multisig owner) not found, can't upgrade"))?;
     tracing::info!("LightClientProxy found at {proxy_addr:#x}");
     let proxy = LightClient::new(proxy_addr, &provider);
-    let owner_addr = proxy.owner().call().await?._0;
+    let owner_addr = proxy.owner().call().await?;
 
     if !dry_run && !crate::is_contract(&provider, owner_addr).await? {
         tracing::error!("Proxy owner is not a contract. Expected: {owner_addr:#x}");
@@ -466,30 +461,27 @@ pub async fn upgrade_light_client_v3_multisig_owner(
         (Address::random(), Address::random())
     };
 
-    // Prepare init data
-    let init_data = if crate::already_initialized(
-        &provider,
-        proxy_addr,
-        Contract::LightClientV3,
-        expected_major_version,
-    )
-    .await?
-    {
-        tracing::info!(
-            "Proxy was already initialized for version {}",
-            expected_major_version
-        );
-        vec![].into()
-    } else {
-        tracing::info!(
-            "Init Data to be signed.\n Function: initializeV3\n Arguments: none (V3 inherits from \
-             V2)"
-        );
-        LightClientV3::new(lcv3_addr, &provider)
-            .initializeV3()
-            .calldata()
-            .to_owned()
-    };
+    // Prepare init data (checks if already initialized)
+    // you cannot initialize a proxy that is already initialized
+    // so if one wanted to use this function to upgrade a proxy to v3, that's already v3
+    // then we shouldn't call the initialize function
+    let init_data =
+        if crate::already_initialized(&provider, proxy_addr, expected_major_version).await? {
+            tracing::info!(
+                "Proxy was already initialized for version {}",
+                expected_major_version
+            );
+            vec![].into()
+        } else {
+            tracing::info!(
+                "Init Data to be signed.\n Function: initializeV3\n Arguments: none (V3 inherits \
+                 from V2)"
+            );
+            LightClientV3::new(lcv3_addr, &provider)
+                .initializeV3()
+                .calldata()
+                .to_owned()
+        };
 
     // invoke upgrade on proxy via the safeSDK
     let result = call_upgrade_proxy_script(
@@ -498,7 +490,7 @@ pub async fn upgrade_light_client_v3_multisig_owner(
         init_data.to_string(),
         rpc_url,
         owner_addr,
-        Some(dry_run),
+        dry_run,
     )
     .await?;
 
@@ -531,25 +523,21 @@ pub async fn upgrade_esp_token_v2_multisig_owner(
     provider: impl Provider,
     contracts: &mut Contracts,
     rpc_url: String,
-    dry_run: Option<bool>,
-) -> Result<(String, bool)> {
-    let dry_run = dry_run.unwrap_or_else(|| {
-        tracing::warn!("Dry run not specified, defaulting to false");
-        false
-    });
-
+    dry_run: bool,
+) -> Result<String> {
     let proxy_addr = contracts
         .address(Contract::EspTokenProxy)
         .ok_or_else(|| anyhow!("EspTokenProxy (multisig owner) not found, can't upgrade"))?;
     tracing::info!("EspTokenProxy found at {proxy_addr:#x}");
     let proxy = EspToken::new(proxy_addr, &provider);
-    let owner_addr = proxy.owner().call().await?._0;
+    let owner_addr = proxy.owner().call().await?;
 
     if !dry_run {
         tracing::info!("Checking if owner is a contract");
-        assert!(
+        anyhow::ensure!(
             crate::is_contract(&provider, owner_addr).await?,
-            "Owner is not a contract so not a multisig wallet"
+            "Owner {:#x} is not a contract so not a multisig wallet",
+            owner_addr
         );
     }
 
@@ -563,8 +551,14 @@ pub async fn upgrade_esp_token_v2_multisig_owner(
         Address::random()
     };
 
-    // no reinitializer so empty init data
-    let init_data = "0x".to_string();
+    let reward_claim_addr = contracts
+        .address(Contract::RewardClaimProxy)
+        .ok_or_else(|| anyhow!("RewardClaimProxy not found"))?;
+    let proxy_as_v2 = EspTokenV2::new(proxy_addr, &provider);
+    let init_data = proxy_as_v2
+        .initializeV2(reward_claim_addr)
+        .calldata()
+        .to_owned();
 
     // invoke upgrade on proxy via the safeSDK
     let result = call_upgrade_proxy_script(
@@ -573,19 +567,32 @@ pub async fn upgrade_esp_token_v2_multisig_owner(
         init_data.to_string(),
         rpc_url,
         owner_addr,
-        Some(dry_run),
+        dry_run,
     )
     .await?;
 
-    tracing::info!("No init data to be signed");
+    tracing::info!(
+        %reward_claim_addr,
+        "Data to be signed: Function: initializeV2 Arguments:"
+    );
+
     if !dry_run {
         tracing::info!(
-                "EspTokenProxy upgrade proposal sent. Send this link to the signers to sign the proposal: https://app.safe.global/transactions/queue?safe={}",
-                owner_addr
-            );
+            "EspTokenProxy upgrade proposal sent. Send this link to the signers to \
+                 sign the proposal: https://app.safe.global/transactions/queue?safe={}",
+            owner_addr
+        );
     }
 
     Ok(result)
+}
+
+#[derive(Clone, Debug)]
+pub struct StakeTableV2UpgradeParams {
+    pub rpc_url: String,
+    pub multisig_address: Address,
+    pub pauser: Address,
+    pub dry_run: bool,
 }
 
 /// Upgrade the stake table proxy to use StakeTableV2.
@@ -598,89 +605,202 @@ pub async fn upgrade_esp_token_v2_multisig_owner(
 /// This function can only be called on a real network supported by the safeSDK
 pub async fn upgrade_stake_table_v2_multisig_owner(
     provider: impl Provider,
+    l1_client: L1Client,
+    contracts: &mut Contracts,
+    params: StakeTableV2UpgradeParams,
+) -> Result<()> {
+    tracing::info!("Upgrading StakeTableProxy to StakeTableV2 using multisig owner");
+    let dry_run = params.dry_run;
+    let Some(proxy_addr) = contracts.address(Contract::StakeTableProxy) else {
+        anyhow::bail!("StakeTableProxy not found, can't upgrade")
+    };
+
+    let proxy = StakeTable::new(proxy_addr, &provider);
+    let owner = proxy.owner().call().await?;
+    let owner_addr = owner;
+
+    if owner_addr != params.multisig_address {
+        anyhow::bail!(
+            "Proxy not owned by multisig. expected: {:#x}, got: {owner_addr:#x}",
+            params.multisig_address
+        );
+    }
+    if !dry_run && !crate::is_contract(&provider, owner_addr).await? {
+        tracing::error!("Proxy owner is not a contract. Expected: {owner_addr:#x}");
+        anyhow::bail!("Proxy owner is not a contract");
+    }
+    // TODO: check if owner is a SAFE multisig
+
+    let (_init_commissions, _init_active_stake, init_data) =
+        crate::prepare_stake_table_v2_upgrade(l1_client, proxy_addr, params.pauser, owner_addr)
+            .await?;
+
+    let stake_table_v2_addr = contracts
+        .deploy(
+            Contract::StakeTableV2,
+            StakeTableV2::deploy_builder(&provider),
+        )
+        .await?;
+
+    // invoke upgrade on proxy via the safeSDK
+    call_upgrade_proxy_script(
+        proxy_addr,
+        stake_table_v2_addr,
+        init_data.unwrap_or_default().to_string(),
+        params.rpc_url,
+        owner_addr,
+        dry_run,
+    )
+    .await
+    .context("Calling upgrade proxy script failed")?;
+
+    tracing::info!("StakeTableProxy upgrade proposal sent");
+
+    Ok(())
+}
+
+/// Call the generic proposal script to create a Safe multisig proposal
+#[allow(clippy::too_many_arguments)]
+pub async fn call_propose_transaction_generic_script(
+    target: Address,
+    function_signature: String,
+    function_args: Vec<String>,
+    rpc_url: String,
+    safe_address: Address,
+    use_hardware_wallet: bool,
+    value: Option<String>,
+    dry_run: bool,
+) -> Result<Output> {
+    let script_path = find_script_path()?;
+
+    let mut cmd = Command::new(script_path);
+    cmd.arg(PROPOSE_TRANSACTION_GENERIC_SCRIPT)
+        .arg("--from-rust")
+        .arg("--target")
+        .arg(target.to_string())
+        .arg("--function-signature")
+        .arg(&function_signature)
+        .arg("--function-args");
+
+    for arg in &function_args {
+        cmd.arg(arg);
+    }
+
+    cmd.arg("--value")
+        .arg(value.unwrap_or_else(|| "0".to_string()))
+        .arg("--rpc-url")
+        .arg(&rpc_url)
+        .arg("--safe-address")
+        .arg(safe_address.to_string())
+        .arg("--use-hardware-wallet")
+        .arg(use_hardware_wallet.to_string())
+        .arg("--dry-run")
+        .arg(dry_run.to_string())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let output = cmd.output().map_err(|e| {
+        anyhow::anyhow!(
+            "Failed to execute {PROPOSE_TRANSACTION_GENERIC_SCRIPT} script: {}",
+            e
+        )
+    })?;
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if !output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        anyhow::bail!(
+            "{PROPOSE_TRANSACTION_GENERIC_SCRIPT} script failed:\nSTDOUT: {}\nSTDERR: {}",
+            stdout,
+            stderr
+        );
+    }
+
+    Ok(output)
+}
+/// Upgrade the FeeContract proxy to a new implementation (patch upgrade).
+/// Internally, first detect existence of proxy, then deploy new FeeContract implementation, then upgrade.
+/// Assumes:
+/// - the proxy is already deployed.
+/// - the proxy is owned by a multisig.
+///
+/// Returns the url link to the upgrade proposal
+/// This function can only be called on a real network supported by the safeSDK
+pub async fn upgrade_fee_contract_multisig_owner(
+    provider: impl Provider,
     contracts: &mut Contracts,
     rpc_url: String,
-    multisig_address: Address,
-    pauser: Address,
-    dry_run: Option<bool>,
-) -> Result<(String, bool)> {
-    tracing::info!("Upgrading StakeTableProxy to StakeTableV2 using multisig owner");
-    let dry_run = dry_run.unwrap_or(false);
-    match contracts.address(Contract::StakeTableProxy) {
-        // check if proxy already exists
-        None => Err(anyhow!("StakeTableProxy not found, can't upgrade")),
-        Some(proxy_addr) => {
-            let proxy = StakeTable::new(proxy_addr, &provider);
-            let owner = proxy.owner().call().await?;
-            let owner_addr = owner._0;
-            if owner_addr != multisig_address {
-                tracing::error!(
-                    "Proxy is not owned by the multisig. Expected: {multisig_address:#x}, Got: \
-                     {owner_addr:#x}"
-                );
-                anyhow::bail!("Proxy is not owned by the multisig");
-            }
-            if !dry_run && !crate::is_contract(&provider, owner_addr).await? {
-                tracing::error!("Proxy owner is not a contract. Expected: {owner_addr:#x}");
-                anyhow::bail!("Proxy owner is not a contract");
-            }
-            // TODO: check if owner is a SAFE multisig
+    dry_run: bool,
+) -> Result<String> {
+    let proxy_addr = contracts
+        .address(Contract::FeeContractProxy)
+        .ok_or_else(|| anyhow!("FeeContractProxy (multisig owner) not found, can't upgrade"))?;
+    tracing::info!("FeeContractProxy found at {proxy_addr:#x}");
+    let proxy = FeeContract::new(proxy_addr, &provider);
+    let owner_addr = proxy.owner().call().await?;
 
-            // first deploy StakeTableV2.sol implementation
-            let stake_table_v2_addr = contracts
-                .deploy(
-                    Contract::StakeTableV2,
-                    StakeTableV2::deploy_builder(&provider),
-                )
-                .await?;
-
-            // prepare init data
-            let expected_major_version = 2;
-            let init_data = if crate::already_initialized(
-                &provider,
-                proxy_addr,
-                Contract::StakeTableV2,
-                expected_major_version,
-            )
-            .await?
-            {
-                tracing::info!(
-                    "Proxy was already initialized for version {}",
-                    expected_major_version
-                );
-                vec![].into()
-            } else {
-                tracing::info!(
-                    "Init Data to be signed.\n Function: initializeV2\n Arguments:\n pauser: \
-                     {:?}\n admin: {:?}",
-                    pauser,
-                    owner_addr
-                );
-                StakeTableV2::new(stake_table_v2_addr, &provider)
-                    .initializeV2(pauser, owner_addr)
-                    .calldata()
-                    .to_owned()
-            };
-
-            // invoke upgrade on proxy via the safeSDK
-            let result = call_upgrade_proxy_script(
-                proxy_addr,
-                stake_table_v2_addr,
-                init_data.to_string(),
-                rpc_url,
-                owner_addr,
-                Some(dry_run),
-            )
-            .await;
-
-            // Check the result directly
-            if let Err(ref err) = result {
-                tracing::error!("StakeTableProxy upgrade failed: {:?}", err);
-            } else {
-                tracing::info!("StakeTableProxy upgrade proposal sent");
-                // IDEA: add a function to wait for the proposal to be executed
-            }
-            Ok(result.context("Upgrade proposal failed")?)
-        },
+    // Verify current version before upgrading
+    let curr_version = proxy.getVersion().call().await?;
+    if curr_version.majorVersion != 1 {
+        anyhow::bail!(
+            "Expected FeeContract V1.x for upgrade to V1.0.1, found V{}.{}.{}",
+            curr_version.majorVersion,
+            curr_version.minorVersion,
+            curr_version.patchVersion
+        );
     }
+
+    if !dry_run && !crate::is_contract(&provider, owner_addr).await? {
+        tracing::error!("Proxy owner is not a contract. Expected: {owner_addr:#x}");
+        anyhow::bail!("Proxy owner is not a contract. Expected: {owner_addr:#x}");
+    }
+
+    // Deploy new implementation (with patch version)
+    let fee_contract_addr = if !dry_run {
+        let cached_fee_contract_addr = contracts.address(Contract::FeeContract);
+
+        // For patch upgrades, we need to deploy a fresh implementation contract.
+        // If FeeContract is already in the cache, the caller must unset it first
+        // to make the redeployment requirement explicit.
+        if let Some(cached_fee_contract_addr) = cached_fee_contract_addr {
+            anyhow::bail!(
+                "FeeContract implementation address is already set in cache ({:#x}). For patch \
+                 upgrades, the implementation must be redeployed. Please unset \
+                 ESPRESSO_FEE_CONTRACT_ADDRESS or remove it from the cache first.",
+                cached_fee_contract_addr
+            );
+        }
+
+        let new_fee_contract_addr = contracts
+            .deploy(
+                Contract::FeeContract,
+                FeeContract::deploy_builder(&provider),
+            )
+            .await?;
+
+        new_fee_contract_addr
+    } else {
+        // Use dummy address for dry run
+        Address::random()
+    };
+
+    // invoke upgrade on proxy via the safeSDK
+    let result = call_upgrade_proxy_script(
+        proxy_addr,
+        fee_contract_addr,
+        "0x".to_string(),
+        rpc_url,
+        owner_addr,
+        dry_run,
+    )
+    .await?;
+
+    if !dry_run {
+        tracing::info!(
+            "FeeContractProxy upgrade proposal sent. Send this link to the signers to sign the proposal: https://app.safe.global/transactions/queue?safe={}",
+            owner_addr
+        );
+    }
+
+    Ok(result)
 }

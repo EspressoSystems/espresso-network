@@ -1,6 +1,6 @@
 use std::fmt;
 
-use alloy::primitives::{FixedBytes, Keccak256};
+use alloy::primitives::{Keccak256, B256};
 use anyhow::{ensure, Context};
 use ark_serialize::CanonicalSerialize;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
@@ -11,13 +11,13 @@ use hotshot_types::{
     light_client::LightClientState,
     traits::{
         block_contents::{BlockHeader, BuilderFee, GENESIS_VID_NUM_STORAGE_NODES},
-        node_implementation::{ConsensusTime, NodeType, Versions},
+        node_implementation::{ConsensusTime, NodeType},
         signature_key::BuilderSignatureKey,
         BlockPayload, EncodeBytes, ValidatedState as _,
     },
     utils::{epoch_from_block_number, is_ge_epoch_root, BuilderCommitment},
 };
-use jf_merkle_tree::{AppendableMerkleTreeScheme, MerkleCommitment, MerkleTreeScheme};
+use jf_merkle_tree_compat::{AppendableMerkleTreeScheme, MerkleCommitment, MerkleTreeScheme};
 use serde::{
     de::{self, MapAccess, SeqAccess, Visitor},
     Deserialize, Deserializer, Serialize, Serializer,
@@ -25,7 +25,8 @@ use serde::{
 use serde_json::{Map, Value};
 use thiserror::Error;
 use time::OffsetDateTime;
-use vbs::version::{StaticVersionType, Version};
+use vbs::version::Version;
+use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION};
 
 use super::{
     instance_state::NodeState, state::ValidatedState, v0_1::IterableFeeInfo, v0_3::ChainConfig,
@@ -43,9 +44,9 @@ use crate::{
         REWARD_MERKLE_TREE_V1_HEIGHT,
     },
     v0_4::{self, RewardMerkleCommitmentV2},
-    BlockMerkleCommitment, DrbAndHeaderUpgradeVersion, EpochVersion, FeeAccount, FeeAmount,
-    FeeInfo, FeeMerkleCommitment, Header, L1BlockInfo, L1Snapshot, Leaf2, NamespaceId, NsIndex,
-    NsTable, PayloadByteLen, SeqTypes, TimestampMillis, UpgradeType,
+    v0_5, BlockMerkleCommitment, FeeAccount, FeeAmount, FeeInfo, FeeMerkleCommitment, Header,
+    L1BlockInfo, L1Snapshot, Leaf2, NamespaceId, NsIndex, NsTable, PayloadByteLen, SeqTypes,
+    TimestampMillis, UpgradeType,
 };
 
 impl v0_1::Header {
@@ -96,6 +97,11 @@ impl Committable for Header {
                 .u64_field("version_minor", 4)
                 .field("fields", fields.commit())
                 .finalize(),
+            Self::V5(fields) => RawCommitmentBuilder::new(&Self::tag())
+                .u64_field("version_major", 0)
+                .u64_field("version_minor", 5)
+                .field("fields", fields.commit())
+                .finalize(),
         }
     }
 
@@ -125,6 +131,11 @@ impl Serialize for Header {
             .serialize(serializer),
             Self::V4(fields) => VersionedHeader {
                 version: EitherOrVersion::Version(Version { major: 0, minor: 4 }),
+                fields: fields.clone(),
+            }
+            .serialize(serializer),
+            Self::V5(fields) => VersionedHeader {
+                version: EitherOrVersion::Version(Version { major: 0, minor: 5 }),
                 fields: fields.clone(),
             }
             .serialize(serializer),
@@ -177,6 +188,10 @@ impl<'de> Deserialize<'de> for Header {
                         seq.next_element()?
                             .ok_or_else(|| de::Error::missing_field("fields"))?,
                     )),
+                    EitherOrVersion::Version(Version { major: 0, minor: 5 }) => Ok(Header::V5(
+                        seq.next_element()?
+                            .ok_or_else(|| de::Error::missing_field("fields"))?,
+                    )),
                     EitherOrVersion::Version(v) => {
                         Err(serde::de::Error::custom(format!("invalid version {v:?}")))
                     },
@@ -209,6 +224,9 @@ impl<'de> Deserialize<'de> for Header {
                             serde_json::from_value(fields.clone()).map_err(de::Error::custom)?,
                         )),
                         EitherOrVersion::Version(Version { major: 0, minor: 4 }) => Ok(Header::V4(
+                            serde_json::from_value(fields.clone()).map_err(de::Error::custom)?,
+                        )),
+                        EitherOrVersion::Version(Version { major: 0, minor: 5 }) => Ok(Header::V5(
                             serde_json::from_value(fields.clone()).map_err(de::Error::custom)?,
                         )),
                         EitherOrVersion::Version(v) => {
@@ -269,6 +287,7 @@ impl Header {
             Self::V2(_) => Version { major: 0, minor: 2 },
             Self::V3(_) => Version { major: 0, minor: 3 },
             Self::V4(_) => Version { major: 0, minor: 4 },
+            Self::V5(_) => Version { major: 0, minor: 5 },
         }
     }
     #[allow(clippy::too_many_arguments)]
@@ -361,6 +380,24 @@ impl Header {
                 total_reward_distributed: total_reward_distributed.unwrap_or_default(),
                 next_stake_table_hash,
             }),
+            (0, 5) => Self::V5(v0_5::Header {
+                chain_config: chain_config.into(),
+                height,
+                timestamp,
+                timestamp_millis: TimestampMillis::from_millis(timestamp_millis),
+                l1_head,
+                l1_finalized,
+                payload_commitment,
+                builder_commitment,
+                ns_table,
+                block_merkle_tree_root,
+                fee_merkle_tree_root,
+                fee_info: fee_info[0], // NOTE this is asserted to exist above
+                builder_signature: builder_signature.first().copied(),
+                reward_merkle_tree_root: reward_merkle_tree_root_v2,
+                total_reward_distributed: total_reward_distributed.unwrap_or_default(),
+                next_stake_table_hash,
+            }),
             // This case should never occur
             // but if it does, we must panic
             // because we don't have the versioned types for this version
@@ -370,8 +407,18 @@ impl Header {
 
     pub fn next_stake_table_hash(&self) -> Option<StakeTableHash> {
         match self {
-            Self::V4(fields) => fields.next_stake_table_hash,
+            Self::V4(fields) | Self::V5(fields) => fields.next_stake_table_hash,
             _ => None,
+        }
+    }
+
+    pub fn set_next_stake_table_hash(&mut self, hash: StakeTableHash) -> bool {
+        match self {
+            Self::V4(fields) | Self::V5(fields) => {
+                fields.next_stake_table_hash = Some(hash);
+                true
+            },
+            _ => false,
         }
     }
 }
@@ -384,6 +431,7 @@ macro_rules! field {
             Self::V2(data) => &data.$name,
             Self::V3(data) => &data.$name,
             Self::V4(data) => &data.$name,
+            Self::V5(data) => &data.$name,
         }
     };
 }
@@ -395,6 +443,7 @@ macro_rules! field_mut {
             Self::V2(data) => &mut data.$name,
             Self::V3(data) => &mut data.$name,
             Self::V4(data) => &mut data.$name,
+            Self::V5(data) => &mut data.$name,
         }
     };
 }
@@ -600,6 +649,26 @@ impl Header {
                     .unwrap_or_default(),
                 next_stake_table_hash,
             }),
+            (0, 5) => Self::V5(v0_5::Header {
+                chain_config: chain_config.into(),
+                height,
+                timestamp,
+                timestamp_millis: TimestampMillis::from_millis(timestamp_millis),
+                l1_head: l1.head,
+                l1_finalized: l1.finalized,
+                payload_commitment,
+                builder_commitment,
+                ns_table,
+                block_merkle_tree_root,
+                fee_merkle_tree_root,
+                reward_merkle_tree_root: state.reward_merkle_tree_v2.commitment(),
+                fee_info: fee_info[0],
+                builder_signature: builder_signature.first().copied(),
+                total_reward_distributed: reward_distributor
+                    .map(|r| r.total_distributed())
+                    .unwrap_or_default(),
+                next_stake_table_hash,
+            }),
             // This case should never occur
             // but if it does, we must panic
             // because we don't have the versioned types for this version
@@ -642,6 +711,7 @@ impl Header {
             Self::V2(fields) => v0_3::ResolvableChainConfig::from(&fields.chain_config),
             Self::V3(fields) => fields.chain_config,
             Self::V4(fields) => fields.chain_config,
+            Self::V5(fields) => fields.chain_config,
         }
     }
 
@@ -659,6 +729,7 @@ impl Header {
             Self::V2(fields) => fields.timestamp,
             Self::V3(fields) => fields.timestamp,
             Self::V4(fields) => fields.timestamp,
+            Self::V5(fields) => fields.timestamp,
         }
     }
 
@@ -668,6 +739,7 @@ impl Header {
             Self::V2(fields) => fields.timestamp * 1_000,
             Self::V3(fields) => fields.timestamp * 1_000,
             Self::V4(fields) => fields.timestamp_millis.u64(),
+            Self::V5(fields) => fields.timestamp_millis.u64(),
         }
     }
 
@@ -683,6 +755,10 @@ impl Header {
                 fields.timestamp = timestamp;
             },
             Self::V4(fields) => {
+                fields.timestamp = timestamp;
+                fields.timestamp_millis = TimestampMillis::from_millis(timestamp_millis);
+            },
+            Self::V5(fields) => {
                 fields.timestamp = timestamp;
                 fields.timestamp_millis = TimestampMillis::from_millis(timestamp_millis);
             },
@@ -763,6 +839,10 @@ impl Header {
         field!(self.ns_table)
     }
 
+    pub fn ns_table_mut(&mut self) -> &mut NsTable {
+        &mut *field_mut!(self.ns_table)
+    }
+
     /// Root Commitment of Block Merkle Tree
     pub fn block_merkle_tree_root(&self) -> BlockMerkleCommitment {
         *field!(self.block_merkle_tree_root)
@@ -788,6 +868,7 @@ impl Header {
             Self::V2(fields) => vec![fields.fee_info],
             Self::V3(fields) => vec![fields.fee_info],
             Self::V4(fields) => vec![fields.fee_info],
+            Self::V5(fields) => vec![fields.fee_info],
         }
     }
 
@@ -800,6 +881,7 @@ impl Header {
             Self::V2(_) => Either::Left(empty_reward_merkle_tree.commitment()),
             Self::V3(fields) => Either::Left(fields.reward_merkle_tree_root),
             Self::V4(fields) => Either::Right(fields.reward_merkle_tree_root),
+            Self::V5(fields) => Either::Right(fields.reward_merkle_tree_root),
         }
     }
 
@@ -821,13 +903,14 @@ impl Header {
             Self::V2(fields) => fields.builder_signature.as_slice().to_vec(),
             Self::V3(fields) => fields.builder_signature.as_slice().to_vec(),
             Self::V4(fields) => fields.builder_signature.as_slice().to_vec(),
+            Self::V5(fields) => fields.builder_signature.as_slice().to_vec(),
         }
     }
 
     pub fn total_reward_distributed(&self) -> Option<RewardAmount> {
         match self {
             Self::V1(_) | Self::V2(_) | Self::V3(_) => None,
-            Self::V4(fields) => Some(fields.total_reward_distributed),
+            Self::V4(fields) | Self::V5(fields) => Some(fields.total_reward_distributed),
         }
     }
 }
@@ -893,6 +976,7 @@ impl BlockHeader<SeqTypes> for Header {
                     UpgradeType::Fee { chain_config } => chain_config,
                     UpgradeType::Epoch { chain_config } => chain_config,
                     UpgradeType::DrbAndHeader { chain_config } => chain_config,
+                    UpgradeType::Da { chain_config } => chain_config,
                 },
                 None => Header::get_chain_config(&validated_state, instance_state).await?,
             }
@@ -976,7 +1060,7 @@ impl BlockHeader<SeqTypes> for Header {
         }
 
         let mut rewards = None;
-        if version >= EpochVersion::version() {
+        if version >= EPOCH_VERSION {
             rewards = distribute_block_reward(
                 instance_state,
                 &mut validated_state,
@@ -989,7 +1073,7 @@ impl BlockHeader<SeqTypes> for Header {
 
         let mut next_stake_table_hash = None;
 
-        if version >= DrbAndHeaderUpgradeVersion::version() {
+        if version >= DRB_AND_HEADER_UPGRADE_VERSION {
             let epoch_height = instance_state
                 .epoch_height
                 .context("epoch height not in instance state")?;
@@ -1006,8 +1090,8 @@ impl BlockHeader<SeqTypes> for Header {
 
                 let epoch = EpochNumber::new(epoch_from_block_number(height + 1, epoch_height));
 
-                // first 2 epochs don't have stake table hash because they are configured.
-                if epoch > first_epoch + 1 {
+                // first 2 epochs don't have a stake table hash because they are configured.
+                if epoch > first_epoch {
                     let epoch_membership = coordinator
                         .stake_table_for_epoch(Some(epoch + 1))
                         .await
@@ -1045,17 +1129,18 @@ impl BlockHeader<SeqTypes> for Header {
         )?)
     }
 
-    fn genesis<V: Versions>(
+    fn genesis(
         instance_state: &NodeState,
         payload: <SeqTypes as NodeType>::BlockPayload,
         metadata: &<<SeqTypes as NodeType>::BlockPayload as BlockPayload<SeqTypes>>::Metadata,
+        _: Version,
     ) -> Self {
         let payload_bytes = payload.encode();
         let builder_commitment = payload.builder_commitment(metadata);
 
         let vid_commitment_version = instance_state.genesis_version;
 
-        let payload_commitment = vid_commitment::<V>(
+        let payload_commitment = vid_commitment(
             &payload_bytes,
             &metadata.encode(),
             GENESIS_VID_NUM_STORAGE_NODES,
@@ -1081,7 +1166,7 @@ impl BlockHeader<SeqTypes> for Header {
         //  The Header is versioned,
         //  so we create the genesis header for the current version of the sequencer.
         Self::create(
-            instance_state.chain_config,
+            instance_state.genesis_header.chain_config,
             0,
             timestamp,
             timestamp_millis,
@@ -1117,6 +1202,10 @@ impl BlockHeader<SeqTypes> for Header {
         self.height()
     }
 
+    fn version(&self) -> Version {
+        self.version()
+    }
+
     fn payload_commitment(&self) -> VidCommitment {
         self.payload_commitment()
     }
@@ -1149,18 +1238,18 @@ impl BlockHeader<SeqTypes> for Header {
         })
     }
 
-    fn auth_root(&self) -> anyhow::Result<FixedBytes<32>> {
+    fn auth_root(&self) -> anyhow::Result<B256> {
         match self {
-            Header::V1(_) | Header::V2(_) | Header::V3(_) => Ok(FixedBytes::from([0u8; 32])),
-            Header::V4(header) => {
+            Header::V1(_) | Header::V2(_) | Header::V3(_) => Ok(B256::ZERO),
+            Header::V4(header) | Header::V5(header) => {
                 // Temporary placeholder values for future fields
-                let placeholder_1 = [0; 32];
-                let placeholder_2 = [0; 32];
-                let placeholder_3 = [0; 32];
-                let placeholder_4 = [0; 32];
-                let placeholder_5 = [0; 32];
-                let placeholder_6 = [0; 32];
-                let placeholder_7 = [0; 32];
+                let placeholder_1 = B256::ZERO;
+                let placeholder_2 = B256::ZERO;
+                let placeholder_3 = B256::ZERO;
+                let placeholder_4 = B256::ZERO;
+                let placeholder_5 = B256::ZERO;
+                let placeholder_6 = B256::ZERO;
+                let placeholder_7 = B256::ZERO;
 
                 let mut hasher = Keccak256::new();
 
@@ -1241,10 +1330,11 @@ mod test_headers {
         node_bindings::Anvil,
         primitives::{Address, U256},
     };
-    use hotshot_query_service::testing::mocks::MockVersions;
+    use hotshot_query_service::testing::mocks::MOCK_UPGRADE;
     use hotshot_types::traits::signature_key::BuilderSignatureKey;
     use v0_1::{BlockMerkleTree, FeeMerkleTree, L1Client};
     use vbs::{bincode_serializer::BincodeSerializer, version::StaticVersion, BinarySerializer};
+    use versions::version;
 
     use super::*;
     use crate::{
@@ -1350,7 +1440,7 @@ mod test_headers {
                 self.timestamp_millis,
                 validated_state.clone(),
                 genesis.instance_state.chain_config,
-                Version { major: 0, minor: 1 },
+                version(0, 1),
                 None,
                 None,
             )
@@ -1550,7 +1640,7 @@ mod test_headers {
         async fn default() -> Self {
             let instance_state = NodeState::mock();
             let validated_state = ValidatedState::genesis(&instance_state).0;
-            let leaf: Leaf2 = Leaf::genesis::<MockVersions>(&validated_state, &instance_state)
+            let leaf: Leaf2 = Leaf::genesis(&validated_state, &instance_state, MOCK_UPGRADE.base)
                 .await
                 .into();
             let header = leaf.block_header().clone();
@@ -1570,7 +1660,7 @@ mod test_headers {
         let anvil = Anvil::new().block_time(1u64).spawn();
         let mut genesis_state = NodeState::mock()
             .with_l1(L1Client::new(vec![anvil.endpoint_url()]).expect("Failed to create L1 client"))
-            .with_current_version(StaticVersion::<0, 1>::version());
+            .with_current_version(version(0, 1));
 
         let genesis = GenesisForTest::default().await;
 
@@ -1622,7 +1712,7 @@ mod test_headers {
             builder_commitment.clone(),
             ns_table,
             builder_fee,
-            StaticVersion::<0, 1>::version(),
+            version(0, 1),
             *parent_leaf.view_number() + 1,
         )
         .await
@@ -1646,7 +1736,7 @@ mod test_headers {
                 &genesis_state.state_catchup,
                 &parent_leaf,
                 &proposal,
-                StaticVersion::<0, 1>::version(),
+                version(0, 1),
                 parent_leaf.view_number() + 1,
             )
             .await
@@ -1713,7 +1803,7 @@ mod test_headers {
             }],
             Default::default(),
             None,
-            Version { major: 0, minor: 1 },
+            version(0, 1),
             None,
         );
 
@@ -1745,7 +1835,7 @@ mod test_headers {
             }],
             Default::default(),
             None,
-            Version { major: 0, minor: 2 },
+            version(0, 2),
             None,
         );
 
@@ -1777,7 +1867,7 @@ mod test_headers {
             }],
             Default::default(),
             None,
-            Version { major: 0, minor: 3 },
+            version(0, 3),
             None,
         );
 

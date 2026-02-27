@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use alloy::primitives::U256;
 use hotshot_example_types::node_types::{
-    EpochsTestVersions, Libp2pImpl, MemoryImpl, PushCdnImpl, TestTypes,
+    CliquenetImpl, Libp2pImpl, MemoryImpl, PushCdnImpl, TestTypes, TEST_VERSIONS,
 };
 use hotshot_macros::cross_tests;
 use hotshot_testing::{
@@ -23,16 +23,16 @@ use hotshot_testing::{
 // and can tailor our view failure set against that.
 cross_tests!(
     TestName: test_unequal_stake_success_with_failing_majority_count,
-    Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl],
+    Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl, CliquenetImpl],
     Types: [TestTypes],
-    Versions: [EpochsTestVersions],
+    Versions: [TEST_VERSIONS.epoch],
     Ignore: false,
     Metadata: {
         let mut metadata = TestDescription {
             // allow more time to pass in CI
             completion_task_description: CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
                                              TimeBasedCompletionTaskDescription {
-                                                 duration: Duration::from_secs(120),
+                                                 duration: Duration::from_secs(200),
                                              },
                                          ),
             ..TestDescription::default_with_stake(
@@ -43,6 +43,7 @@ cross_tests!(
                 ).set_num_nodes(9, 3)
         };
         metadata.test_config.epoch_height = 10;
+        metadata.timing_data.next_view_timeout = 3000;
         let dead_nodes = vec![
             ChangeNode {
                 idx: 3,
@@ -67,11 +68,13 @@ cross_tests!(
             node_changes: vec![(5, dead_nodes)]
         };
 
+        let views = (3..50).collect::<Vec<_>>();
+
         // We're going to have a lot of view failures of course, but with equal stake we should stop making progress at view 3
-        metadata.overall_safety_properties.num_successful_views = 10;
+        metadata.overall_safety_properties.num_successful_views = 20;
+        metadata.overall_safety_properties.decide_timeout = Duration::from_secs(60);
         metadata.overall_safety_properties.expected_view_failures = vec![5];
-        metadata.overall_safety_properties.possible_view_failures = vec![4, 6, 11, 12, 13, 14, 15];
-        metadata.overall_safety_properties.decide_timeout = Duration::from_secs(30);
+        metadata.overall_safety_properties.possible_view_failures = views;
 
         metadata
     },

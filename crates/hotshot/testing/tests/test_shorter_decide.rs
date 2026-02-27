@@ -4,15 +4,13 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::time::Duration;
-
 use hotshot_example_types::node_types::{
-    CombinedImpl, EpochsTestVersions, Libp2pImpl, PushCdnImpl, TestTwoStakeTablesTypes, TestTypes,
+    CliquenetImpl, CombinedImpl, Libp2pImpl, PushCdnImpl, TestTwoStakeTablesTypes, TestTypes,
+    TEST_VERSIONS,
 };
 use hotshot_macros::cross_tests;
 use hotshot_testing::{
     block_builder::SimpleBuilderImplementation,
-    completion_task::{CompletionTaskDescription, TimeBasedCompletionTaskDescription},
     spinning_task::{ChangeNode, NodeAction, SpinningTaskDescription},
     test_builder::TestDescription,
 };
@@ -20,19 +18,12 @@ use hotshot_testing::{
 // This test fails with the old decide rule
 cross_tests!(
     TestName: test_shorter_decide,
-    Impls: [Libp2pImpl, PushCdnImpl, CombinedImpl],
+    Impls: [Libp2pImpl, PushCdnImpl, CombinedImpl, CliquenetImpl],
     Types: [TestTypes, TestTwoStakeTablesTypes],
-    Versions: [EpochsTestVersions],
+    Versions: [TEST_VERSIONS.epoch],
     Ignore: false,
     Metadata: {
-        let mut metadata = TestDescription {
-            completion_task_description: CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
-                TimeBasedCompletionTaskDescription {
-                    duration: Duration::from_millis(100000),
-                },
-            ),
-            ..TestDescription::default()
-        };
+        let mut metadata = TestDescription::default();
         // after the first 3 leaders the next leader is down. It's a hack to make sure we decide in
         // 3 views or else we get a timeout
         let dead_nodes = vec![

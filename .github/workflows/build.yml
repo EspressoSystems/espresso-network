@@ -29,12 +29,14 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # ensure non-PR jobs run in parallel
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   RUST_LOG: info,libp2p=off,node=error
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
 
 jobs:
   build-amd:
@@ -57,15 +59,13 @@ jobs:
             save-cache: true
 
           - binary: espresso-dev-node
-            # uses differend features testing,emdbedded-db
+            # uses different features testing,emdbedded-db
             shared-key: espresso-dev-node
             save-cache: true
 
     steps:
+      - uses: actions/checkout@v4
       - uses: rui314/setup-mold@v1
-
-      - name: Checkout Repository
-        uses: actions/checkout@v4
 
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
@@ -122,15 +122,13 @@ jobs:
             save-cache: true
 
           - binary: espresso-dev-node
-            # uses differend features testing,emdbedded-db
+            # uses different features testing,emdbedded-db
             shared-key: espresso-dev-node
             save-cache: true
 
     steps:
+      - uses: actions/checkout@v4
       - uses: rui314/setup-mold@v1
-
-      - name: Checkout Repository
-        uses: actions/checkout@v4
 
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
@@ -167,10 +165,6 @@ jobs:
   build-dockers-amd:
     needs: build-amd
     runs-on: ubuntu-latest
-    # This is non-deterministic, a limitation of GHA. We but we only need the
-    # tag like (:main) at the end which is the same for each matrix build.
-    outputs:
-      tags: ${{ steps.metadata.outputs.tags }}
     strategy:
       matrix:
         service:
@@ -430,10 +424,8 @@ jobs:
     runs-on: ubuntu-latest
     needs: [build-dockers-amd]
     steps:
+      - uses: actions/checkout@v4
       - uses: taiki-e/install-action@just
-
-      - name: Checkout Repository
-        uses: actions/checkout@v4
 
       - name: Download artifacts
         uses: actions/download-artifact@v4
@@ -449,9 +441,13 @@ jobs:
             docker load --input $file
           done
 
-      - name: Match the docker image tag built or pushed to the registry
+      - name: Set docker image tag for compose
         run: |
-          DOCKER_TAG=$(echo ${{ needs.build-dockers-amd.outputs.tags }} | sed 's/.*://')
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            DOCKER_TAG="pr-${{ github.event.pull_request.number }}"
+          else
+            DOCKER_TAG=$(echo "${{ github.ref_name }}" | tr '/' '-')
+          fi
           echo DOCKER_TAG=$DOCKER_TAG >> $GITHUB_ENV
 
       - name: Pull remaining docker images
@@ -469,14 +465,16 @@ jobs:
     runs-on: ubuntu-latest
     needs: [build-dockers-amd, create-multiplatform-docker-image]
     steps:
+      - uses: actions/checkout@v4
       - uses: taiki-e/install-action@just
 
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Match the docker image tag built or pushed to the registry
+      - name: Set docker image tag for compose
         run: |
-          DOCKER_TAG=$(echo ${{ needs.build-dockers-amd.outputs.tags }} | sed 's/.*://')
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            DOCKER_TAG="pr-${{ github.event.pull_request.number }}"
+          else
+            DOCKER_TAG=$(echo "${{ github.ref_name }}" | tr '/' '-')
+          fi
           echo DOCKER_TAG=$DOCKER_TAG >> $GITHUB_ENV
 
       - name: Pull the docker images

@@ -3,15 +3,17 @@
 use std::{
     collections::{BTreeSet, HashMap},
     env,
-    time::Duration,
 };
 
 use anyhow::Result;
 use committable::Committable;
 use espresso_types::{
-    v0_1::ADVZNsProof, v0_3::RewardAccountV1, v0_4::RewardAccountV2, FeeAccount, FeeMerkleTree,
-    NamespaceId, NsProof, PubKey, Transaction,
+    v0_3::RewardAccountV1,
+    v0_4::{RewardAccountV2, RewardClaimError},
+    FeeAccount, FeeMerkleTree, PubKey, Transaction,
 };
+
+use crate::{api::data_source::TokenDataSource, U256};
 // re-exported here to avoid breaking changes in consumers
 // "deprecated" does not work with "pub use": https://github.com/rust-lang/rust/issues/30827
 #[deprecated(note = "use espresso_types::ADVZNamespaceProofQueryData")]
@@ -19,41 +21,36 @@ pub type ADVZNamespaceProofQueryData = espresso_types::ADVZNamespaceProofQueryDa
 #[deprecated(note = "use espresso_types::NamespaceProofQueryData")]
 pub type NamespaceProofQueryData = espresso_types::NamespaceProofQueryData;
 
-use futures::{try_join, FutureExt};
+use futures::FutureExt;
 use hotshot_query_service::{
-    availability::{self, AvailabilityDataSource, CustomSnafu, FetchBlockSnafu},
+    availability::AvailabilityDataSource,
     explorer::{self, ExplorerDataSource},
     merklized_state::{
         self, MerklizedState, MerklizedStateDataSource, MerklizedStateHeightPersistence, Snapshot,
     },
     node::{self, NodeDataSource},
-    ApiState, Error, VidCommon,
+    Error,
 };
 use hotshot_types::{
-    data::{EpochNumber, VidCommitment, VidShare, ViewNumber},
-    traits::{
-        network::ConnectedNetwork,
-        node_implementation::{ConsensusTime, Versions},
-    },
-    vid::avidm::AvidMShare,
+    data::{EpochNumber, ViewNumber},
+    traits::{network::ConnectedNetwork, node_implementation::ConsensusTime},
 };
-use jf_merkle_tree::MerkleTreeScheme;
+use jf_merkle_tree_compat::MerkleTreeScheme;
 use serde::de::Error as _;
-use snafu::OptionExt;
 use tagged_base64::TaggedBase64;
 use tide_disco::{method::ReadState, Api, Error as _, RequestParams, StatusCode};
-use tracing::warn;
 use vbs::version::{StaticVersion, StaticVersionType};
-use vid::avid_m::namespaced::NsAvidMScheme;
 
-use super::{
-    data_source::{
-        CatchupDataSource, HotShotConfigDataSource, NodeStateDataSource, RequestResponseDataSource,
-        SequencerDataSource, StakeTableDataSource, StateSignatureDataSource, SubmitDataSource,
-    },
-    StorageState,
+use super::data_source::{
+    CatchupDataSource, HotShotConfigDataSource, NodeStateDataSource, StakeTableDataSource,
+    StateSignatureDataSource, SubmitDataSource,
 };
-use crate::{SeqTypes, SequencerApiVersion, SequencerPersistence};
+use crate::{
+    api::RewardAccountProofDataSource, SeqTypes, SequencerApiVersion, SequencerPersistence,
+};
+
+mod availability;
+pub(super) use availability::*;
 
 pub(super) fn fee<State, Ver>(
     api_ver: semver::Version,
@@ -92,8 +89,14 @@ where
     Ok(api)
 }
 
+pub enum RewardMerkleTreeVersion {
+    V1,
+    V2,
+}
+
 pub(super) fn reward<State, Ver, MT, const ARITY: usize>(
     api_ver: semver::Version,
+    merkle_tree_version: RewardMerkleTreeVersion,
 ) -> Result<Api<State, merklized_state::Error, Ver>>
 where
     State: 'static + Send + Sync + ReadState,
@@ -103,6 +106,7 @@ where
     <MT as MerklizedState<SeqTypes, ARITY>>::Entry: std::marker::Copy,
     <State as ReadState>::State: Send
         + Sync
+        + RewardAccountProofDataSource
         + MerklizedStateDataSource<SeqTypes, MT, ARITY>
         + MerklizedStateHeightPersistence,
 {
@@ -141,375 +145,191 @@ where
                     status: StatusCode::BAD_REQUEST,
                 })?;
             let path = state.get_path(snapshot, key).await?;
+
+            let last_height = state.get_last_state_height().await?;
+
+            if height > last_height {
+                return Err(merklized_state::Error::Custom {
+                    message: format!(
+                        "requested height {height} is greater than last known height {last_height}"
+                    ),
+                    status: StatusCode::BAD_REQUEST,
+                });
+            }
+
             Ok(path.elem().copied())
         }
         .boxed()
     })?;
-    Ok(api)
-}
 
-pub(super) type AvailState<N, P, D, ApiVer> = ApiState<StorageState<N, P, D, ApiVer>>;
-
-type AvailabilityApi<N, P, D, V, ApiVer> = Api<AvailState<N, P, D, V>, availability::Error, ApiVer>;
-
-// TODO (abdul): replace snafu with `this_error` in  hotshot query service
-// Snafu has been replaced by `this_error` everywhere.
-// However, the query service still uses snafu
-pub(super) fn availability<N, P, D, V: Versions>(
-    api_ver: semver::Version,
-) -> Result<AvailabilityApi<N, P, D, V, SequencerApiVersion>>
-where
-    N: ConnectedNetwork<PubKey>,
-    D: SequencerDataSource + Send + Sync + 'static,
-    P: SequencerPersistence,
-{
-    let mut options = availability::Options::default();
-    let extension = toml::from_str(include_str!("../../api/availability.toml"))?;
-    options.extensions.push(extension);
-    let timeout = options.fetch_timeout;
-
-    let mut api = availability::define_api::<AvailState<N, P, D, _>, SeqTypes, _>(
-        &options,
-        SequencerApiVersion::instance(),
-        api_ver.clone(),
-    )?;
-
-    if api_ver.major == 1 {
-        if api_ver.minor >= 1 {
-            // >= V1.1 api returns both correct and incorrect encoding proofs
-            api.get("getnamespaceproof", move |req, state| {
+    match merkle_tree_version {
+        RewardMerkleTreeVersion::V1 => {
+            api.get("get_reward_account_proof", move |req, state| {
                 async move {
-                    let height: usize = req.integer_param("height")?;
-                    let ns_id = NamespaceId::from(req.integer_param::<_, u32>("namespace")?);
-                    let (block, common) = try_join!(
-                        async move {
-                            state
-                                .get_block(height)
-                                .await
-                                .with_timeout(timeout)
-                                .await
-                                .context(FetchBlockSnafu {
-                                    resource: height.to_string(),
-                                })
-                        },
-                        async move {
-                            state
-                                .get_vid_common(height)
-                                .await
-                                .with_timeout(timeout)
-                                .await
-                                .context(FetchBlockSnafu {
-                                    resource: height.to_string(),
-                                })
-                        }
-                    )?;
+                    let address = req.string_param("address")?;
+                    let height = req.integer_param("height")?;
+                    let account = address
+                        .parse()
+                        .map_err(|_| merklized_state::Error::Custom {
+                            message: format!("invalid reward address: {address}"),
+                            status: StatusCode::BAD_REQUEST,
+                        })?;
 
-                    let ns_table = block.payload().ns_table();
-                    if let Some(ns_index) = ns_table.find_ns_id(&ns_id) {
-                        match NsProof::v1_1_new_with_correct_encoding(
-                            block.payload(),
-                            &ns_index,
-                            common.common(),
-                        ) {
-                            Some(proof) => Ok(espresso_types::NamespaceProofQueryData {
-                                transactions: proof.export_all_txs(&ns_id),
-                                proof: Some(proof),
-                            }),
-                            None => {
-                                // if we fail to generate the correct encoding proof, we try to generate the incorrect encoding proof
-                                tracing::debug!(
-                                    "Failed to generate namespace proof for block {height} and \
-                                     namespace {ns_id}, trying to generate incorrect encoding \
-                                     proof"
-                                );
-                                let mut vid_shares = state
-                                    .request_vid_shares(
-                                        height as u64,
-                                        common.clone(),
-                                        Duration::from_secs(40),
-                                    )
-                                    .await
-                                    .map_err(|err| {
-                                        warn!("Failed to request VID shares from network: {err:#}");
-                                        hotshot_query_service::availability::Error::Custom {
-                                            message: "Failed to request VID shares from network"
-                                                .to_string(),
-                                            status: StatusCode::NOT_FOUND,
-                                        }
-                                    })?;
-                                let vid_share = state.vid_share(height).await;
-                                if let Ok(vid_share) = vid_share {
-                                    vid_shares.push(vid_share);
-                                };
-
-                                // Collect the shares as V1 shares
-                                let vid_shares: Vec<AvidMShare> = vid_shares
-                                    .into_iter()
-                                    .filter_map(|share| {
-                                        if let VidShare::V1(share) = share {
-                                            Some(share)
-                                        } else {
-                                            None
-                                        }
-                                    })
-                                    .collect();
-
-                                match NsProof::v1_1_new_with_incorrect_encoding(
-                                    &vid_shares,
-                                    ns_table,
-                                    &ns_index,
-                                    &common.payload_hash(),
-                                    common.common(),
-                                ) {
-                                    Some(proof) => Ok(espresso_types::NamespaceProofQueryData {
-                                        transactions: vec![],
-                                        proof: Some(proof),
-                                    }),
-                                    None => {
-                                        warn!("Failed to generate proof of incorrect encoding");
-                                        Err(availability::Error::Custom {
-                                            message: "Failed to generate proof of incorrect \
-                                                      encoding"
-                                                .to_string(),
-                                            status: StatusCode::INTERNAL_SERVER_ERROR,
-                                        })
-                                    },
-                                }
-                            },
-                        }
-                    } else {
-                        // ns_id not found in ns_table
-                        Err(availability::Error::Custom {
-                            message: "Namespace not found".to_string(),
+                    state
+                        .load_v1_reward_account_proof(height, account)
+                        .await
+                        .map_err(|err| merklized_state::Error::Custom {
+                            message: format!(
+                                "failed to load v1 reward account {address} at height {height}: \
+                                 {err}"
+                            ),
                             status: StatusCode::NOT_FOUND,
                         })
-                    }
                 }
                 .boxed()
-            })?
-            .at("incorrect_encoding_proof", |req, state| {
+            })?;
+        },
+        RewardMerkleTreeVersion::V2 => {
+            api.get("get_reward_account_proof", move |req, state| {
                 async move {
-                    // Get the block number from the request
-                    let block_number =
-                        req.integer_param::<_, u64>("block_number").map_err(|_| {
-                            hotshot_query_service::availability::Error::Custom {
-                                message: "Block number is required".to_string(),
-                                status: StatusCode::BAD_REQUEST,
-                            }
+                    let address = req.string_param("address")?;
+                    let height = req.integer_param("height")?;
+                    let account = address
+                        .parse()
+                        .map_err(|_| merklized_state::Error::Custom {
+                            message: format!("invalid reward address: {address}"),
+                            status: StatusCode::BAD_REQUEST,
                         })?;
 
-                    // Get or fetch the VID common data for the given block number
-                    // TODO: Time this out
-                    let vid_common = state
-                        .read(|state| state.get_vid_common(block_number as usize).boxed())
+                    state
+                        .load_v2_reward_account_proof(height, account)
                         .await
-                        .await;
-
-                    // Request the VID shares from other nodes. Use the VID common and common metadata to
-                    // verify that they are correct
-                    let vid_common_clone = vid_common.clone();
-                    let mut vid_shares = state
-                        .read(|state| {
-                            state.request_vid_shares(
-                                block_number,
-                                vid_common_clone,
-                                Duration::from_secs(40),
-                            )
+                        .map_err(|err| merklized_state::Error::Custom {
+                            message: format!(
+                                "failed to load v2 reward account {address} at height {height}: \
+                                 {err}"
+                            ),
+                            status: StatusCode::NOT_FOUND,
                         })
-                        .await
-                        .map_err(|err| {
-                            warn!("Failed to request VID shares from network: {err:#}");
-                            hotshot_query_service::availability::Error::Custom {
-                                message: "Failed to request VID shares from network".to_string(),
-                                status: StatusCode::NOT_FOUND,
-                            }
+                }
+                .boxed()
+            })?;
+
+            api.get("get_reward_claim_input", move |req, state| {
+                async move {
+                    let address = req.string_param("address")?;
+                    let height = req.integer_param("height")?;
+                    let account = address
+                        .parse()
+                        .map_err(|_| merklized_state::Error::Custom {
+                            message: format!("invalid reward address: {address}"),
+                            status: StatusCode::BAD_REQUEST,
                         })?;
 
-                    // Get our own share and add it. We don't need to verify here
-                    let vid_share = state
-                        .read(|state| state.vid_share(block_number as usize).boxed())
-                        .await;
-                    if let Ok(vid_share) = vid_share {
-                        vid_shares.push(vid_share);
-                    };
+                    let proof = state
+                        .load_v2_reward_account_proof(height, account)
+                        .await
+                        .map_err(|err| merklized_state::Error::Custom {
+                            message: format!(
+                                "failed to load v2 reward account {address} at height {height}: \
+                                 {err}"
+                            ),
+                            status: StatusCode::NOT_FOUND,
+                        })?;
 
-                    // Get the total VID weight based on the VID common data
-                    let avidm_param = match vid_common.common() {
-                        VidCommon::V0(_) => {
-                            // TODO: This needs to be done via the stake table
-                            return Err(hotshot_query_service::availability::Error::Custom {
-                                message: "V0 shares not supported yet".to_string(),
+                    // Auth root inputs (other than the reward merkle tree root) are currently
+                    // all zero placeholder values. This may be extended in the future.
+                    let claim_input = match proof.to_reward_claim_input() {
+                        Ok(input) => input,
+                        Err(RewardClaimError::ZeroRewardError) => {
+                            return Err(merklized_state::Error::Custom {
+                                message: format!(
+                                    "zero reward balance for {address} at height {height}"
+                                ),
                                 status: StatusCode::NOT_FOUND,
+                            })
+                        },
+                        Err(RewardClaimError::ProofConversionError(err)) => {
+                            let message = format!(
+                                "failed to create solidity proof for {address} at height \
+                                 {height}: {err}",
+                            );
+                            tracing::warn!("{message}");
+                            // Normally we would not want to return the internal error via the
+                            // API response but this is an error that should never occur. No
+                            // secret data involved so it seems fine to return it.
+                            return Err(merklized_state::Error::Custom {
+                                message,
+                                status: StatusCode::INTERNAL_SERVER_ERROR,
                             });
                         },
-                        VidCommon::V1(v1) => v1,
                     };
 
-                    // Get the payload hash
-                    let VidCommitment::V1(local_payload_hash) = vid_common.payload_hash() else {
-                        return Err(hotshot_query_service::availability::Error::Custom {
-                            message: "V0 shares not supported yet".to_string(),
-                            status: StatusCode::NOT_FOUND,
-                        });
-                    };
-
-                    // Collect the shares as V1 shares
-                    let avidm_shares: Vec<AvidMShare> = vid_shares
-                        .into_iter()
-                        .filter_map(|share| {
-                            if let VidShare::V1(share) = share {
-                                Some(share)
-                            } else {
-                                None
-                            }
-                        })
-                        .collect();
-
-                    match NsAvidMScheme::proof_of_incorrect_encoding(
-                        avidm_param,
-                        &local_payload_hash,
-                        &avidm_shares,
-                    ) {
-                        Ok(proof) => Ok(proof),
-                        Err(err) => {
-                            warn!("Failed to generate proof of incorrect encoding: {err:#}");
-                            Err(hotshot_query_service::availability::Error::Custom {
-                                message: "Failed to generate proof of incorrect encoding"
-                                    .to_string(),
-                                status: StatusCode::INTERNAL_SERVER_ERROR,
-                            })
-                        },
-                    }
+                    Ok(claim_input)
                 }
                 .boxed()
             })?;
-        } else {
-            // V1.0 api only returns the correct encoding proof
-            api.get("getnamespaceproof", move |req, state| {
-                async move {
-                    let height: usize = req.integer_param("height")?;
-                    let ns_id = NamespaceId::from(req.integer_param::<_, u32>("namespace")?);
-                    let (block, common) = try_join!(
-                        async move {
-                            state
-                                .get_block(height)
-                                .await
-                                .with_timeout(timeout)
-                                .await
-                                .context(FetchBlockSnafu {
-                                    resource: height.to_string(),
-                                })
-                        },
-                        async move {
-                            state
-                                .get_vid_common(height)
-                                .await
-                                .with_timeout(timeout)
-                                .await
-                                .context(FetchBlockSnafu {
-                                    resource: height.to_string(),
-                                })
-                        }
-                    )?;
-
-                    if let Some(ns_index) = block.payload().ns_table().find_ns_id(&ns_id) {
-                        let proof = NsProof::new(block.payload(), &ns_index, common.common())
-                            .context(CustomSnafu {
-                                message: format!("failed to make proof for namespace {ns_id}"),
-                                status: StatusCode::NOT_FOUND,
-                            })?;
-
-                        Ok(espresso_types::NamespaceProofQueryData {
-                            transactions: proof.export_all_txs(&ns_id),
-                            proof: Some(proof),
-                        })
-                    } else {
-                        // ns_id not found in ns_table
-                        Ok(espresso_types::NamespaceProofQueryData {
-                            proof: None,
-                            transactions: Vec::new(),
-                        })
-                    }
-                }
-                .boxed()
-            })?;
-        }
-    } else {
-        api.get("getnamespaceproof", move |req, state| {
-            async move {
-                let height: usize = req.integer_param("height")?;
-                let ns_id = NamespaceId::from(req.integer_param::<_, u32>("namespace")?);
-                let (block, common) = try_join!(
-                    async move {
-                        state
-                            .get_block(height)
-                            .await
-                            .with_timeout(timeout)
-                            .await
-                            .context(FetchBlockSnafu {
-                                resource: height.to_string(),
-                            })
-                    },
-                    async move {
-                        state
-                            .get_vid_common(height)
-                            .await
-                            .with_timeout(timeout)
-                            .await
-                            .context(FetchBlockSnafu {
-                                resource: height.to_string(),
-                            })
-                    }
-                )?;
-
-                if let Some(ns_index) = block.payload().ns_table().find_ns_id(&ns_id) {
-                    let VidCommon::V0(common) = &common.common().clone() else {
-                        return Err(availability::Error::Custom {
-                            message: "Unsupported VID version, use new API version instead."
-                                .to_string(),
-                            status: StatusCode::NOT_FOUND,
-                        });
-                    };
-                    let proof = ADVZNsProof::new(block.payload(), &ns_index, common).context(
-                        CustomSnafu {
-                            message: format!("failed to make proof for namespace {ns_id}"),
-                            status: StatusCode::NOT_FOUND,
-                        },
-                    )?;
-
-                    Ok(espresso_types::ADVZNamespaceProofQueryData {
-                        transactions: proof.export_all_txs(&ns_id),
-                        proof: Some(proof),
-                    })
-                } else {
-                    // ns_id not found in ns_table
-                    Ok(espresso_types::ADVZNamespaceProofQueryData {
-                        proof: None,
-                        transactions: Vec::new(),
-                    })
-                }
-            }
-            .boxed()
-        })?;
+        },
     }
 
     Ok(api)
 }
 
-type ExplorerApi<N, P, D, V, ApiVer> = Api<AvailState<N, P, D, V>, explorer::Error, ApiVer>;
+type ExplorerApi<N, P, D, ApiVer> = Api<AvailState<N, P, D>, explorer::Error, ApiVer>;
 
-pub(super) fn explorer<N, P, D, V: Versions>(
+pub(super) fn explorer<N, P, D>(
     api_ver: semver::Version,
-) -> Result<ExplorerApi<N, P, D, V, SequencerApiVersion>>
+) -> Result<ExplorerApi<N, P, D, SequencerApiVersion>>
 where
     N: ConnectedNetwork<PubKey>,
     D: ExplorerDataSource<SeqTypes> + Send + Sync + 'static,
     P: SequencerPersistence,
 {
-    let api = explorer::define_api::<AvailState<N, P, D, V>, SeqTypes, _>(
+    let api = explorer::define_api::<AvailState<N, P, D>, SeqTypes, _>(
         SequencerApiVersion::instance(),
         api_ver,
     )?;
+    Ok(api)
+}
+
+pub(super) fn token<S>(api_ver: semver::Version) -> Result<Api<S, node::Error, StaticVersion<0, 1>>>
+where
+    S: 'static + Send + Sync + ReadState,
+    <S as ReadState>::State: Send
+        + Sync
+        + TokenDataSource<SeqTypes>
+        + NodeDataSource<SeqTypes>
+        + AvailabilityDataSource<SeqTypes>,
+{
+    // Extend the base API
+    let mut options = node::Options::default();
+    let extension = toml::from_str(include_str!("../../api/token.toml"))?;
+    options.extensions.push(extension);
+
+    // Create the base API with our extensions
+    let mut api =
+        node::define_api::<S, SeqTypes, _>(&options, SequencerApiVersion::instance(), api_ver)?;
+
+    // Tack on the application logic
+    api.at("get_total_minted_supply", |_, state| {
+        async move {
+            let value = state
+                .read(|state| state.get_total_supply_l1().boxed())
+                .await
+                .map_err(|err| node::Error::Custom {
+                    message: format!("failed to get total supply. err={err:#}"),
+                    status: StatusCode::NOT_FOUND,
+                })?;
+
+            let scale = U256::from(10u64.pow(18));
+            let quotient = value / scale;
+            let remainder = value % scale;
+
+            Ok(format!("{quotient}.{remainder}"))
+        }
+        .boxed()
+    })?;
+
     Ok(api)
 }
 
@@ -566,6 +386,42 @@ where
         }
         .boxed()
     })?
+    .at("da_stake_table", |req, state| {
+        async move {
+            // Try to get the epoch from the request. If this fails, error
+            // as it was probably a mistake
+            let epoch = req
+                .opt_integer_param("epoch_number")
+                .map_err(|_| hotshot_query_service::node::Error::Custom {
+                    message: "Epoch number is required".to_string(),
+                    status: StatusCode::BAD_REQUEST,
+                })?
+                .map(EpochNumber::new);
+
+            state
+                .read(|state| state.get_da_stake_table(epoch).boxed())
+                .await
+                .map_err(|err| node::Error::Custom {
+                    message: format!(
+                        "failed to get DA stake table for epoch={epoch:?}. err={err:#}"
+                    ),
+                    status: StatusCode::NOT_FOUND,
+                })
+        }
+        .boxed()
+    })?
+    .at("da_stake_table_current", |_, state| {
+        async move {
+            state
+                .read(|state| state.get_da_stake_table_current().boxed())
+                .await
+                .map_err(|err| node::Error::Custom {
+                    message: format!("failed to get current DA stake table. err={err:#}"),
+                    status: StatusCode::NOT_FOUND,
+                })
+        }
+        .boxed()
+    })?
     .at("get_validators", |req, state| {
         async move {
             let epoch = req.integer_param::<_, u64>("epoch_number").map_err(|_| {
@@ -585,6 +441,39 @@ where
         }
         .boxed()
     })?
+    .at("get_all_validators", |req, state| {
+        async move {
+            let epoch = req.integer_param::<_, u64>("epoch_number").map_err(|_| {
+                hotshot_query_service::node::Error::Custom {
+                    message: "Epoch number is required".to_string(),
+                    status: StatusCode::BAD_REQUEST,
+                }
+            })?;
+
+            let offset = req.integer_param::<_, u64>("offset")?;
+
+            let limit = req.integer_param::<_, u64>("limit")?;
+            if limit > 1000 {
+                return Err(hotshot_query_service::node::Error::Custom {
+                    message: "Limit cannot be greater than 1000".to_string(),
+                    status: StatusCode::BAD_REQUEST,
+                });
+            }
+
+            state
+                .read(|state| {
+                    state
+                        .get_all_validators(EpochNumber::new(epoch), offset, limit)
+                        .boxed()
+                })
+                .await
+                .map_err(|err| hotshot_query_service::node::Error::Custom {
+                    message: format!("failed to get all validators : err: {err}"),
+                    status: StatusCode::INTERNAL_SERVER_ERROR,
+                })
+        }
+        .boxed()
+    })?
     .at("current_proposal_participation", |_, state| {
         async move {
             Ok(state
@@ -597,6 +486,22 @@ where
         async move {
             Ok(state
                 .read(|state| state.previous_proposal_participation().boxed())
+                .await)
+        }
+        .boxed()
+    })?
+    .at("current_vote_participation", |_, state| {
+        async move {
+            Ok(state
+                .read(|state| state.current_vote_participation().boxed())
+                .await)
+        }
+        .boxed()
+    })?
+    .at("previous_vote_participation", |_, state| {
+        async move {
+            Ok(state
+                .read(|state| state.previous_vote_participation().boxed())
                 .await)
         }
         .boxed()
@@ -814,6 +719,32 @@ where
         }
         .boxed()
     })?
+    .get("reward_amounts", move |req, state| {
+        async move {
+            let height = req
+                .integer_param::<_, u64>("height")
+                .map_err(Error::from_request_error)?;
+            let offset = req
+                .integer_param::<_, u64>("offset")
+                .map_err(Error::from_request_error)?;
+            let limit = req
+                .integer_param::<_, u64>("limit")
+                .map_err(Error::from_request_error)?;
+
+            if limit > 10_000 {
+                return Err(Error::catch_all(
+                    StatusCode::BAD_REQUEST,
+                    format!("limit {limit} exceeds maximum allowed 10000"),
+                ));
+            }
+
+            state
+                .get_all_reward_accounts(height, offset, limit)
+                .await
+                .map_err(|err| Error::catch_all(StatusCode::NOT_FOUND, format!("{err:#}")))
+        }
+        .boxed()
+    })?
     .at("reward_accounts_v2", move |req, state| {
         async move {
             let (height, view) = parse_height_view(&req)?;
@@ -882,16 +813,27 @@ where
                 .map_err(|err| Error::catch_all(StatusCode::NOT_FOUND, format!("{err:#}")))
         }
         .boxed()
+    })?
+    .get("state_cert", |req, state| {
+        async move {
+            let epoch = req
+                .integer_param("epoch")
+                .map_err(Error::from_request_error)?;
+            state
+                .get_state_cert(epoch)
+                .await
+                .map_err(|err| Error::catch_all(StatusCode::NOT_FOUND, format!("{err:#}")))
+        }
+        .boxed()
     })?;
 
     Ok(api)
 }
 
-type MerklizedStateApi<N, P, D, V, ApiVer> =
-    Api<AvailState<N, P, D, V>, merklized_state::Error, ApiVer>;
-pub(super) fn merklized_state<N, P, D, S, V: Versions, const ARITY: usize>(
+type MerklizedStateApi<N, P, D, ApiVer> = Api<AvailState<N, P, D>, merklized_state::Error, ApiVer>;
+pub(super) fn merklized_state<N, P, D, S, const ARITY: usize>(
     api_ver: semver::Version,
-) -> Result<MerklizedStateApi<N, P, D, V, SequencerApiVersion>>
+) -> Result<MerklizedStateApi<N, P, D, SequencerApiVersion>>
 where
     N: ConnectedNetwork<PubKey>,
     D: MerklizedStateDataSource<SeqTypes, S, ARITY>
@@ -904,7 +846,7 @@ where
     for<'a> <S::Commit as TryFrom<&'a TaggedBase64>>::Error: std::fmt::Display,
 {
     let api = merklized_state::define_api::<
-        AvailState<N, P, D, V>,
+        AvailState<N, P, D>,
         SeqTypes,
         S,
         SequencerApiVersion,

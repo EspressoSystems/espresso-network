@@ -5,12 +5,6 @@ version = { workspace = true }
 authors = { workspace = true }
 edition = { workspace = true }
 
-[features]
-default = ["fee", "pos", "drb-and-header"]
-fee = ["sequencer/fee"]
-pos = ["sequencer/pos"]
-drb-and-header = ["sequencer/drb-and-header"]
-
 [dependencies]
 alloy = { workspace = true }
 anyhow = { workspace = true }
@@ -28,21 +22,22 @@ hotshot-events-service = { workspace = true }
 hotshot-example-types = { workspace = true }
 hotshot-state-prover = { workspace = true }
 hotshot-types = { workspace = true }
-portpicker = { workspace = true }
-rand = "0.8.5"
+rand = { workspace = true }
 sequencer = { path = "../../sequencer", default-features = false }
 sequencer-utils = { path = "../../utils" }
 surf-disco = { workspace = true }
+test-utils = { workspace = true }
 tide-disco = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
 vbs = { workspace = true }
 vec1 = { workspace = true }
+versions = { workspace = true }
 
 [dev-dependencies]
 jf-signature = { workspace = true, features = ["bls"] }
-sequencer = { path = "../../sequencer", features = ["testing"] }
+sequencer = { path = "../../sequencer", default-features = false, features = ["testing"] }
 tempfile = { workspace = true }
 test-log = { workspace = true }
 

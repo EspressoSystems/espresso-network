@@ -163,26 +163,26 @@ contract UpgradeLightClientWithoutMultisigAdminScript is Script {
         string memory seedPhrase = vm.envString("MNEMONIC");
         uint32 seedPhraseOffset = uint32(vm.envUint("MNEMONIC_OFFSET"));
         (address admin,) = deriveRememberKey(seedPhrase, seedPhraseOffset);
-        vm.startBroadcast(admin);
 
-        address proxy = upgradeLightClient(mostRecentlyDeployedProxy, address(new LCV2()));
+        address proxy = upgradeLightClient(admin, mostRecentlyDeployedProxy, address(new LCV2()));
         return proxy;
     }
 
     /// @notice upgrades the light client contract by calling the upgrade function the
     /// implementation contract via
     /// the proxy
+    /// @param admin address of admin to broadcast as
     /// @param proxyAddress address of proxy
     /// @param newLightClient address of new implementation
     /// @return address of the proxy
-    function upgradeLightClient(address proxyAddress, address newLightClient)
+    function upgradeLightClient(address admin, address proxyAddress, address newLightClient)
         public
         returns (address)
     {
         LC proxy = LC(proxyAddress); //make the function call on the previous implementation
+        vm.broadcast(admin);
         proxy.upgradeToAndCall(newLightClient, ""); //proxy address now points to the new
             // implementation
-        vm.stopBroadcast();
         return address(proxy);
     }
 }
@@ -201,26 +201,26 @@ contract UpgradeToSameLightClientWithoutMultisigAdminScript is Script {
         string memory seedPhrase = vm.envString("MNEMONIC");
         uint32 seedPhraseOffset = uint32(vm.envUint("MNEMONIC_OFFSET"));
         (address admin,) = deriveRememberKey(seedPhrase, seedPhraseOffset);
-        vm.startBroadcast(admin);
 
-        address proxy = upgradeLightClient(mostRecentlyDeployedProxy, address(new LC()));
+        address proxy = upgradeLightClient(admin, mostRecentlyDeployedProxy, address(new LC()));
         return proxy;
     }
 
     /// @notice upgrades the light client contract by calling the upgrade function the
     /// implementation contract via
     /// the proxy
+    /// @param admin address of admin to broadcast as
     /// @param proxyAddress address of proxy
     /// @param newLightClient address of new implementation
     /// @return address of the proxy
-    function upgradeLightClient(address proxyAddress, address newLightClient)
+    function upgradeLightClient(address admin, address proxyAddress, address newLightClient)
         public
         returns (address)
     {
+        vm.broadcast(admin);
         LC proxy = LC(proxyAddress); //make the function call on the previous implementation
         proxy.upgradeToAndCall(newLightClient, ""); //proxy address now points to the new
             // implementation
-        vm.stopBroadcast();
         return address(proxy);
     }
 }

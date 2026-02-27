@@ -1,11 +1,8 @@
 use anyhow::Context;
 use clap::Parser;
-use espresso_types::traits::SequencerPersistence;
-#[allow(unused_imports)]
-use espresso_types::{traits::NullEventConsumer, FeeVersion, SequencerVersions, V0_0};
+use espresso_types::traits::{NullEventConsumer, SequencerPersistence};
 use futures::future::FutureExt;
-use hotshot_types::traits::{metrics::NoMetrics, node_implementation::Versions};
-use vbs::version::StaticVersionType;
+use hotshot_types::traits::metrics::NoMetrics;
 
 use super::{
     api::{self, data_source::DataSourceOptions},
@@ -19,137 +16,32 @@ pub async fn main() -> anyhow::Result<()> {
     let opt = Options::parse();
     opt.logging.init();
 
-    let modules = opt.modules();
+    let mut modules = opt.modules();
     tracing::warn!(?modules, "sequencer starting up");
 
     let genesis = Genesis::from_file(&opt.genesis_file)?;
     tracing::warn!(?genesis, "genesis");
 
-    let base = genesis.base_version;
-    let upgrade = genesis.upgrade_version;
-
-    match (base, upgrade) {
-        #[cfg(all(feature = "pos", feature = "drb-and-header"))]
-        (
-            espresso_types::EpochVersion::VERSION,
-            espresso_types::DrbAndHeaderUpgradeVersion::VERSION,
-        ) => {
-            run(
-                genesis,
-                modules,
-                opt,
-                SequencerVersions::<
-                    espresso_types::EpochVersion,
-                    espresso_types::DrbAndHeaderUpgradeVersion,
-                >::new(),
-            )
-            .await
-        },
-        #[cfg(all(feature = "fee", feature = "drb-and-header"))]
-        (
-            espresso_types::FeeVersion::VERSION,
-            espresso_types::DrbAndHeaderUpgradeVersion::VERSION,
-        ) => {
-            run(
-                genesis,
-                modules,
-                opt,
-                SequencerVersions::<
-                    espresso_types::FeeVersion,
-                    espresso_types::DrbAndHeaderUpgradeVersion,
-                >::new(),
-            )
-            .await
-        },
-        #[cfg(feature = "drb-and-header")]
-        (espresso_types::DrbAndHeaderUpgradeVersion::VERSION, _) => {
-            run(
-                genesis,
-                modules,
-                opt,
-                SequencerVersions::<
-                    espresso_types::DrbAndHeaderUpgradeVersion,
-                    espresso_types::DrbAndHeaderUpgradeVersion,
-                >::new(),
-            )
-            .await
-        },
-        #[cfg(all(feature = "fee", feature = "pos"))]
-        (FeeVersion::VERSION, espresso_types::EpochVersion::VERSION) => {
-            run(
-                genesis,
-                modules,
-                opt,
-                SequencerVersions::<espresso_types::FeeVersion, espresso_types::EpochVersion>::new(
-                ),
-            )
-            .await
-        },
-        #[cfg(feature = "pos")]
-        (espresso_types::EpochVersion::VERSION, espresso_types::EpochVersion::VERSION) => {
-            run(
-                genesis,
-                modules,
-                opt,
-                // Specifying V0_0 disables upgrades
-                SequencerVersions::<espresso_types::EpochVersion, espresso_types::EpochVersion>::new(),
-            )
-            .await
-        },
-        #[cfg(feature = "fee")]
-        (FeeVersion::VERSION, espresso_types::FeeVersion::VERSION) => {
-            run(
-                genesis,
-                modules,
-                opt,
-                SequencerVersions::<FeeVersion, espresso_types::FeeVersion>::new(),
-            )
-            .await
-        },
-        _ => panic!(
-            "Invalid base ({base}) and upgrade ({upgrade}) versions specified in the toml file."
-        ),
-    }
-}
-
-async fn run<V>(
-    genesis: Genesis,
-    mut modules: Modules,
-    opt: Options,
-    versions: V,
-) -> anyhow::Result<()>
-where
-    V: Versions,
-{
     if let Some(storage) = modules.storage_fs.take() {
-        run_with_storage(genesis, modules, opt, storage, versions).await
+        run_with_storage(genesis, modules, opt, storage).await
     } else if let Some(storage) = modules.storage_sql.take() {
-        run_with_storage(genesis, modules, opt, storage, versions).await
+        run_with_storage(genesis, modules, opt, storage).await
     } else {
         // Persistence is required. If none is provided, just use the local file system.
-        run_with_storage(
-            genesis,
-            modules,
-            opt,
-            persistence::fs::Options::default(),
-            versions,
-        )
-        .await
+        run_with_storage(genesis, modules, opt, persistence::fs::Options::default()).await
     }
 }
 
-async fn run_with_storage<S, V>(
+async fn run_with_storage<S>(
     genesis: Genesis,
     modules: Modules,
     opt: Options,
     storage_opt: S,
-    versions: V,
 ) -> anyhow::Result<()>
 where
     S: DataSourceOptions,
-    V: Versions,
 {
-    let ctx = init_with_storage(genesis, modules, opt, storage_opt, versions).await?;
+    let ctx = init_with_storage(genesis, modules, opt, storage_opt).await?;
 
     // Start doing consensus.
     ctx.start_consensus().await;
@@ -158,16 +50,14 @@ where
     Ok(())
 }
 
-pub(crate) async fn init_with_storage<S, V>(
+pub async fn init_with_storage<S>(
     genesis: Genesis,
     modules: Modules,
     opt: Options,
     mut storage_opt: S,
-    versions: V,
-) -> anyhow::Result<SequencerContext<network::Production, S::Persistence, V>>
+) -> anyhow::Result<SequencerContext<network::Production, S::Persistence>>
 where
     S: DataSourceOptions,
-    V: Versions,
 {
     let (private_staking_key, private_state_key) = opt.private_keys()?;
     let l1_params = L1Params {
@@ -181,6 +71,7 @@ where
         libp2p_bind_address: opt.libp2p_bind_address,
         libp2p_bootstrap_nodes: opt.libp2p_bootstrap_nodes,
         orchestrator_url: opt.orchestrator_url,
+        builder_urls: opt.builder_urls,
         state_relay_server_url: opt.state_relay_server_url,
         public_api_url: opt.public_api_url,
         private_staking_key,
@@ -188,6 +79,7 @@ where
         state_peers: opt.state_peers,
         config_peers: opt.config_peers,
         catchup_backoff: opt.catchup_backoff,
+        catchup_base_timeout: opt.catchup_base_timeout,
         libp2p_history_gossip: opt.libp2p_history_gossip,
         libp2p_history_length: opt.libp2p_history_length,
         libp2p_max_ihave_length: opt.libp2p_max_ihave_length,
@@ -215,7 +107,7 @@ where
 
     let persistence = storage_opt.create().await?;
     persistence
-        .migrate_consensus()
+        .migrate_storage()
         .await
         .context("failed to migrate consensus data")?;
 
@@ -245,6 +137,9 @@ where
             if let Some(explorer) = modules.explorer {
                 http_opt = http_opt.explorer(explorer);
             }
+            if let Some(light_client) = modules.light_client {
+                http_opt = http_opt.light_client(light_client);
+            }
             if let Some(config) = modules.config {
                 http_opt = http_opt.config(config);
             }
@@ -259,7 +154,6 @@ where
                             persistence,
                             l1_params,
                             storage,
-                            versions,
                             consumer,
                             opt.is_da,
                             opt.identity,
@@ -279,7 +173,6 @@ where
                 persistence,
                 l1_params,
                 None,
-                versions,
                 NullEventConsumer,
                 opt.is_da,
                 opt.identity,
@@ -296,11 +189,11 @@ where
 mod test {
     use std::time::Duration;
 
-    use espresso_types::{MockSequencerVersions, PubKey};
+    use espresso_types::PubKey;
     use hotshot_types::{light_client::StateKeyPair, traits::signature_key::SignatureKey};
-    use portpicker::pick_unused_port;
     use surf_disco::{error::ClientError, Client, Url};
     use tempfile::TempDir;
+    use test_utils::reserve_tcp_port;
     use tokio::spawn;
     use vbs::version::Version;
 
@@ -317,7 +210,7 @@ mod test {
         let (pub_key, priv_key) = PubKey::generated_from_seed_indexed([0; 32], 0);
         let state_key = StateKeyPair::generate_from_seed_indexed([0; 32], 0);
 
-        let port = pick_unused_port().unwrap();
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         let tmp = TempDir::new().unwrap();
 
         let genesis_file = tmp.path().join("genesis.toml");
@@ -336,6 +229,7 @@ mod test {
             epoch_start_block: None,
             stake_table_capacity: None,
             genesis_version: Version { major: 0, minor: 1 },
+            da_committees: None,
         };
         genesis.to_file(&genesis_file).unwrap();
 
@@ -364,14 +258,8 @@ mod test {
         // populate some metrics.
         tracing::info!(port, "starting sequencer");
         let task = spawn(async move {
-            if let Err(err) = init_with_storage(
-                genesis,
-                modules,
-                opt,
-                fs::Options::new(tmp.path().into()),
-                MockSequencerVersions::new(),
-            )
-            .await
+            if let Err(err) =
+                init_with_storage(genesis, modules, opt, fs::Options::new(tmp.path().into())).await
             {
                 tracing::error!("failed to start sequencer: {err:#}");
             }
@@ -408,6 +296,17 @@ mod test {
                 .as_str()
             ),
             "{lines:#?}"
+        );
+        let build_info_line = lines
+            .iter()
+            .find(|l| l.starts_with("consensus_build_info{"));
+        assert!(
+            build_info_line.is_some(),
+            "missing consensus_build_info metric: {lines:#?}"
+        );
+        assert!(
+            build_info_line.unwrap().contains("testing=\"yes\""),
+            "expected testing=yes in test builds: {lines:#?}"
         );
 
         task.abort();

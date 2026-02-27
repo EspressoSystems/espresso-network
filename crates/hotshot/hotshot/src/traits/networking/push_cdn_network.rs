@@ -39,7 +39,6 @@ use hotshot_types::{
     traits::{
         metrics::{Counter, Metrics, NoMetrics},
         network::{BroadcastDelay, ConnectedNetwork, Topic as HotShotTopic},
-        node_implementation::NodeType,
         signature_key::SignatureKey,
     },
     utils::bincode_opts,
@@ -49,11 +48,17 @@ use num_enum::{IntoPrimitive, TryFromPrimitive};
 use parking_lot::Mutex;
 #[cfg(feature = "hotshot-testing")]
 use rand::{rngs::StdRng, RngCore, SeedableRng};
-use tokio::{spawn, sync::mpsc::error::TrySendError, time::sleep};
+#[cfg(feature = "hotshot-testing")]
+use test_utils::reserve_tcp_port;
+use tokio::sync::mpsc::error::TrySendError;
+#[cfg(feature = "hotshot-testing")]
+use tokio::{spawn, time::sleep};
 #[cfg(feature = "hotshot-testing")]
 use tracing::error;
 
 use super::NetworkError;
+#[cfg(feature = "hotshot-testing")]
+use crate::NodeType;
 
 /// CDN-specific metrics
 #[derive(Clone)]
@@ -139,18 +144,29 @@ impl<T: SignatureKey> Serializable for WrappedSignatureKey<T> {
 /// Uses the real protocols and a Redis discovery client.
 pub struct ProductionDef<K: SignatureKey + 'static>(PhantomData<K>);
 impl<K: SignatureKey + 'static> RunDef for ProductionDef<K> {
-    type User = UserDef<K>;
+    type User = UserDefQuic<K>;
+    type User2 = UserDefTcp<K>;
     type Broker = BrokerDef<K>;
     type DiscoveryClientType = Redis;
     type Topic = Topic;
 }
 
 /// The user definition for the Push CDN.
-/// Uses the TCP+TLS protocol and untrusted middleware.
-pub struct UserDef<K: SignatureKey + 'static>(PhantomData<K>);
-impl<K: SignatureKey + 'static> ConnectionDef for UserDef<K> {
+/// Uses the Quic protocol and untrusted middleware.
+/// RM TODO: Remove this, switching to TCP singularly when everyone has updated
+pub struct UserDefQuic<K: SignatureKey + 'static>(PhantomData<K>);
+impl<K: SignatureKey + 'static> ConnectionDef for UserDefQuic<K> {
     type Scheme = WrappedSignatureKey<K>;
     type Protocol = Quic;
+    type MessageHook = NoMessageHook;
+}
+
+/// The user definition for the Push CDN.
+/// Uses the TCP protocol and untrusted middleware.
+pub struct UserDefTcp<K: SignatureKey + 'static>(PhantomData<K>);
+impl<K: SignatureKey + 'static> ConnectionDef for UserDefTcp<K> {
+    type Scheme = WrappedSignatureKey<K>;
+    type Protocol = Tcp;
     type MessageHook = NoMessageHook;
 }
 
@@ -170,7 +186,7 @@ impl<K: SignatureKey> ConnectionDef for BrokerDef<K> {
 pub struct ClientDef<K: SignatureKey + 'static>(PhantomData<K>);
 impl<K: SignatureKey> ConnectionDef for ClientDef<K> {
     type Scheme = WrappedSignatureKey<K>;
-    type Protocol = Quic;
+    type Protocol = Tcp;
     type MessageHook = NoMessageHook;
 }
 
@@ -178,7 +194,8 @@ impl<K: SignatureKey> ConnectionDef for ClientDef<K> {
 /// Uses the real protocols, but with an embedded discovery client.
 pub struct TestingDef<K: SignatureKey + 'static>(PhantomData<K>);
 impl<K: SignatureKey + 'static> RunDef for TestingDef<K> {
-    type User = UserDef<K>;
+    type User = UserDefQuic<K>;
+    type User2 = UserDefTcp<K>;
     type Broker = BrokerDef<K>;
     type DiscoveryClientType = Embedded;
     type Topic = Topic;
@@ -259,6 +276,17 @@ impl<K: SignatureKey + 'static> PushCdnNetwork<K> {
     /// - If we fail to serialize the message
     /// - If we fail to send the broadcast message.
     async fn broadcast_message(&self, message: Vec<u8>, topic: Topic) -> Result<(), NetworkError> {
+        // If the message should also go to us, add it to the internal queue
+        if self
+            .client
+            .subscribed_topics
+            .read()
+            .await
+            .contains(&(topic.clone() as u8))
+        {
+            self.internal_queue.lock().push_back(message.clone());
+        }
+
         // If we're paused, don't send the message
         #[cfg(feature = "hotshot-testing")]
         if self.is_paused.load(Ordering::Relaxed) {
@@ -313,20 +341,17 @@ impl<TYPES: NodeType> TestableNetworkingImplementation<TYPES>
             .to_string_lossy()
             .into_owned();
 
-        // Pick some unused public ports
-        let public_address_1 = format!(
-            "127.0.0.1:{}",
-            portpicker::pick_unused_port().expect("could not find an open port")
-        );
-        let public_address_2 = format!(
-            "127.0.0.1:{}",
-            portpicker::pick_unused_port().expect("could not find an open port")
-        );
+        // Atomically bind to unused public ports
+        let public_port_1 = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let public_port_2 = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let public_address_1 = format!("127.0.0.1:{public_port_1}");
+        let public_address_2 = format!("127.0.0.1:{public_port_2}");
 
         // 2 brokers
         for i in 0..2 {
-            // Get the ports to bind to
-            let private_port = portpicker::pick_unused_port().expect("could not find an open port");
+            // Atomically bind to a private port
+            let private_port =
+                reserve_tcp_port().expect("OS should have ephemeral ports available");
 
             // Extrapolate addresses
             let private_address = format!("127.0.0.1:{private_port}");
@@ -380,8 +405,8 @@ impl<TYPES: NodeType> TestableNetworkingImplementation<TYPES>
             });
         }
 
-        // Get the port to use for the marshal
-        let marshal_port = portpicker::pick_unused_port().expect("could not find an open port");
+        // Atomically bind to an available port for the marshal
+        let marshal_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         // Configure the marshal
         let marshal_endpoint = format!("127.0.0.1:{marshal_port}");
@@ -493,6 +518,7 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for PushCdnNetwork<K> {
     /// - If we fail to send the broadcast message.
     async fn broadcast_message(
         &self,
+        _: ViewNumber,
         message: Vec<u8>,
         topic: HotShotTopic,
         _broadcast_delay: BroadcastDelay,
@@ -502,6 +528,8 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for PushCdnNetwork<K> {
         if self.is_paused.load(Ordering::Relaxed) {
             return Ok(());
         }
+
+        // Broadcast the message
         self.broadcast_message(message, topic.into())
             .await
             .inspect_err(|_e| {
@@ -516,6 +544,7 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for PushCdnNetwork<K> {
     /// - If we fail to send the broadcast message.
     async fn da_broadcast_message(
         &self,
+        _: ViewNumber,
         message: Vec<u8>,
         _recipients: Vec<K>,
         _broadcast_delay: BroadcastDelay,
@@ -525,6 +554,8 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for PushCdnNetwork<K> {
         if self.is_paused.load(Ordering::Relaxed) {
             return Ok(());
         }
+
+        // Broadcast the message
         self.broadcast_message(message, Topic::Da)
             .await
             .inspect_err(|_e| {
@@ -536,7 +567,12 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for PushCdnNetwork<K> {
     ///
     /// - If we fail to serialize the message
     /// - If we fail to send the direct message
-    async fn direct_message(&self, message: Vec<u8>, recipient: K) -> Result<(), NetworkError> {
+    async fn direct_message(
+        &self,
+        _: ViewNumber,
+        message: Vec<u8>,
+        recipient: K,
+    ) -> Result<(), NetworkError> {
         // If the message is to ourselves, just add it to the internal queue
         if recipient == self.public_key {
             self.internal_queue.lock().push_back(message);

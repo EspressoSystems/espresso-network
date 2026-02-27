@@ -19,37 +19,36 @@ use async_lock::RwLock;
 use committable::Committable;
 use hotshot_utils::anytrace::*;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use vbs::{
-    version::{StaticVersion, StaticVersionType, Version},
-    BinarySerializer, Serializer,
-};
+use vbs::version::Version;
+use versions::{Upgrade, DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, VID2_UPGRADE_VERSION};
 
 /// The version we should expect for external messages
 pub const EXTERNAL_MESSAGE_VERSION: Version = Version { major: 0, minor: 0 };
 
 use crate::{
     data::{
-        vid_disperse::{ADVZDisperseShare, VidDisperseShare2},
         DaProposal, DaProposal2, Leaf, Leaf2, QuorumProposal, QuorumProposal2,
-        QuorumProposalWrapper, UpgradeProposal,
+        QuorumProposal2Legacy, QuorumProposalWrapper, UpgradeProposal, VidDisperseShare0,
+        VidDisperseShare1, VidDisperseShare2,
     },
     epoch_membership::EpochMembership,
     request_response::ProposalRequestPayload,
     simple_certificate::{
-        DaCertificate, DaCertificate2, EpochRootQuorumCertificate, NextEpochQuorumCertificate2,
-        QuorumCertificate2, UpgradeCertificate, ViewSyncCommitCertificate,
-        ViewSyncCommitCertificate2, ViewSyncFinalizeCertificate, ViewSyncFinalizeCertificate2,
-        ViewSyncPreCommitCertificate, ViewSyncPreCommitCertificate2,
+        DaCertificate, DaCertificate2, EpochRootQuorumCertificateV1, EpochRootQuorumCertificateV2,
+        NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate,
+        ViewSyncCommitCertificate, ViewSyncCommitCertificate2, ViewSyncFinalizeCertificate,
+        ViewSyncFinalizeCertificate2, ViewSyncPreCommitCertificate, ViewSyncPreCommitCertificate2,
     },
     simple_vote::{
-        DaVote, DaVote2, EpochRootQuorumVote, HasEpoch, QuorumVote, QuorumVote2, TimeoutVote,
-        TimeoutVote2, UpgradeVote, ViewSyncCommitVote, ViewSyncCommitVote2, ViewSyncFinalizeVote,
-        ViewSyncFinalizeVote2, ViewSyncPreCommitVote, ViewSyncPreCommitVote2,
+        DaVote, DaVote2, EpochRootQuorumVote, EpochRootQuorumVote2, HasEpoch, QuorumVote,
+        QuorumVote2, TimeoutVote, TimeoutVote2, UpgradeVote, ViewSyncCommitVote,
+        ViewSyncCommitVote2, ViewSyncFinalizeVote, ViewSyncFinalizeVote2, ViewSyncPreCommitVote,
+        ViewSyncPreCommitVote2,
     },
     traits::{
         election::Membership,
         network::{DataRequest, ResponseMessage, ViewMessage},
-        node_implementation::{ConsensusTime, NodeType, Versions},
+        node_implementation::{ConsensusTime, NodeType},
         signature_key::SignatureKey,
     },
     utils::mnemonic,
@@ -233,7 +232,7 @@ pub enum GeneralConsensusMessage<TYPES: NodeType> {
     ProposalResponse(Proposal<TYPES, QuorumProposal<TYPES>>),
 
     /// Message with a quorum proposal.
-    Proposal2(Proposal<TYPES, QuorumProposal2<TYPES>>),
+    Proposal2Legacy(Proposal<TYPES, QuorumProposal2Legacy<TYPES>>),
 
     /// Message with a quorum vote.
     Vote2(QuorumVote2<TYPES>),
@@ -242,7 +241,7 @@ pub enum GeneralConsensusMessage<TYPES: NodeType> {
     EpochRootQuorumVote(EpochRootQuorumVote<TYPES>),
 
     /// A replica has responded with a valid proposal.
-    ProposalResponse2(Proposal<TYPES, QuorumProposal2<TYPES>>),
+    ProposalResponse2Legacy(Proposal<TYPES, QuorumProposal2Legacy<TYPES>>),
 
     /// Message for the next leader containing our highest QC
     HighQc(
@@ -256,8 +255,8 @@ pub enum GeneralConsensusMessage<TYPES: NodeType> {
         NextEpochQuorumCertificate2<TYPES>,
     ),
 
-    /// Message for the next leader containing the epoch root QC
-    EpochRootQc(EpochRootQuorumCertificate<TYPES>),
+    /// Message for the next leader containing the epoch root QC from older consensus version.
+    EpochRootQcV1(EpochRootQuorumCertificateV1<TYPES>),
 
     /// Message with a view sync pre-commit vote
     ViewSyncPreCommitVote2(ViewSyncPreCommitVote2<TYPES>),
@@ -279,6 +278,18 @@ pub enum GeneralConsensusMessage<TYPES: NodeType> {
 
     /// Message with a Timeout vote
     TimeoutVote2(TimeoutVote2<TYPES>),
+
+    /// Message for the next leader containing the epoch root QC
+    EpochRootQc(EpochRootQuorumCertificateV2<TYPES>),
+
+    /// Message with a quorum proposal.
+    Proposal2(Proposal<TYPES, QuorumProposal2<TYPES>>),
+
+    /// A replica has responded with a valid proposal.
+    ProposalResponse2(Proposal<TYPES, QuorumProposal2<TYPES>>),
+
+    /// Message with an epoch root quorum vote.
+    EpochRootQuorumVote2(EpochRootQuorumVote2<TYPES>),
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Hash, Eq)]
@@ -297,7 +308,7 @@ pub enum DaConsensusMessage<TYPES: NodeType> {
     /// Initiate VID dispersal.
     ///
     /// Like [`DaProposal`]. Use `Msg` suffix to distinguish from `VidDisperse`.
-    VidDisperseMsg(Proposal<TYPES, ADVZDisperseShare<TYPES>>),
+    VidDisperseMsg(Proposal<TYPES, VidDisperseShare0<TYPES>>),
 
     /// Proposal for data availability committee
     DaProposal2(Proposal<TYPES, DaProposal2<TYPES>>),
@@ -308,9 +319,10 @@ pub enum DaConsensusMessage<TYPES: NodeType> {
     /// Certificate data is available
     DaCertificate2(DaCertificate2<TYPES>),
 
-    /// Initiate VID dispersal.
-    ///
-    /// Like [`DaProposal`]. Use `Msg` suffix to distinguish from `VidDisperse`.
+    /// VID dispersal for AvidM Scheme.
+    VidDisperseMsg1(Proposal<TYPES, VidDisperseShare1<TYPES>>),
+
+    /// VID dispersal for AvidmGf2 Scheme.
     VidDisperseMsg2(Proposal<TYPES, VidDisperseShare2<TYPES>>),
 }
 
@@ -337,6 +349,11 @@ impl<TYPES: NodeType> SequencingMessage<TYPES> {
                         // this should match replica upon receipt
                         p.data.view_number()
                     },
+                    GeneralConsensusMessage::Proposal2Legacy(p) => {
+                        // view of leader in the leaf when proposal
+                        // this should match replica upon receipt
+                        p.data.view_number()
+                    },
                     GeneralConsensusMessage::Proposal2(p) => {
                         // view of leader in the leaf when proposal
                         // this should match replica upon receipt
@@ -344,6 +361,9 @@ impl<TYPES: NodeType> SequencingMessage<TYPES> {
                     },
                     GeneralConsensusMessage::ProposalRequested(req, _) => req.view_number,
                     GeneralConsensusMessage::ProposalResponse(proposal) => {
+                        proposal.data.view_number()
+                    },
+                    GeneralConsensusMessage::ProposalResponse2Legacy(proposal) => {
                         proposal.data.view_number()
                     },
                     GeneralConsensusMessage::ProposalResponse2(proposal) => {
@@ -388,7 +408,9 @@ impl<TYPES: NodeType> SequencingMessage<TYPES> {
                     GeneralConsensusMessage::HighQc(qc, _)
                     | GeneralConsensusMessage::ExtendedQc(qc, _) => qc.view_number(),
                     GeneralConsensusMessage::EpochRootQuorumVote(vote) => vote.view_number(),
+                    GeneralConsensusMessage::EpochRootQuorumVote2(vote) => vote.view_number(),
                     GeneralConsensusMessage::EpochRootQc(root_qc) => root_qc.view_number(),
+                    GeneralConsensusMessage::EpochRootQcV1(root_qc) => root_qc.view_number(),
                 }
             },
             SequencingMessage::Da(da_message) => {
@@ -408,6 +430,7 @@ impl<TYPES: NodeType> SequencingMessage<TYPES> {
                     },
                     DaConsensusMessage::DaVote2(vote_message) => vote_message.view_number(),
                     DaConsensusMessage::DaCertificate2(cert) => cert.view_number,
+                    DaConsensusMessage::VidDisperseMsg1(disperse) => disperse.data.view_number(),
                     DaConsensusMessage::VidDisperseMsg2(disperse) => disperse.data.view_number(),
                 }
             },
@@ -424,6 +447,11 @@ impl<TYPES: NodeType> SequencingMessage<TYPES> {
                         // this should match replica upon receipt
                         p.data.epoch()
                     },
+                    GeneralConsensusMessage::Proposal2Legacy(p) => {
+                        // view of leader in the leaf when proposal
+                        // this should match replica upon receipt
+                        p.data.epoch()
+                    },
                     GeneralConsensusMessage::Proposal2(p) => {
                         // view of leader in the leaf when proposal
                         // this should match replica upon receipt
@@ -431,6 +459,9 @@ impl<TYPES: NodeType> SequencingMessage<TYPES> {
                     },
                     GeneralConsensusMessage::ProposalRequested(..) => None,
                     GeneralConsensusMessage::ProposalResponse(proposal) => proposal.data.epoch(),
+                    GeneralConsensusMessage::ProposalResponse2Legacy(proposal) => {
+                        proposal.data.epoch()
+                    },
                     GeneralConsensusMessage::ProposalResponse2(proposal) => proposal.data.epoch(),
                     GeneralConsensusMessage::Vote(vote_message) => vote_message.epoch(),
                     GeneralConsensusMessage::Vote2(vote_message) => vote_message.epoch(),
@@ -461,7 +492,9 @@ impl<TYPES: NodeType> SequencingMessage<TYPES> {
                     GeneralConsensusMessage::HighQc(qc, _)
                     | GeneralConsensusMessage::ExtendedQc(qc, _) => qc.epoch(),
                     GeneralConsensusMessage::EpochRootQuorumVote(vote) => vote.epoch(),
+                    GeneralConsensusMessage::EpochRootQuorumVote2(vote) => vote.epoch(),
                     GeneralConsensusMessage::EpochRootQc(root_qc) => root_qc.epoch(),
+                    GeneralConsensusMessage::EpochRootQcV1(root_qc) => root_qc.epoch(),
                 }
             },
             SequencingMessage::Da(da_message) => {
@@ -474,6 +507,7 @@ impl<TYPES: NodeType> SequencingMessage<TYPES> {
                     DaConsensusMessage::DaVote(vote_message) => vote_message.epoch(),
                     DaConsensusMessage::DaCertificate(cert) => cert.epoch(),
                     DaConsensusMessage::VidDisperseMsg(disperse) => disperse.data.epoch(),
+                    DaConsensusMessage::VidDisperseMsg1(disperse) => disperse.data.epoch(),
                     DaConsensusMessage::VidDisperseMsg2(disperse) => disperse.data.epoch(),
                     DaConsensusMessage::DaProposal2(p) => {
                         // view of leader in the leaf when proposal
@@ -544,11 +578,11 @@ where
     /// Checks that the signature of the quorum proposal is valid.
     /// # Errors
     /// Returns an error when the proposal signature is invalid.
-    pub async fn validate_signature<V: Versions>(
+    pub async fn validate_signature(
         &self,
         membership: &TYPES::Membership,
         _epoch_height: u64,
-        upgrade_lock: &UpgradeLock<TYPES, V>,
+        upgrade_lock: &UpgradeLock<TYPES>,
     ) -> Result<()> {
         let view_number = self.data.view_number();
         let view_leader_key = membership.leader(view_number, None)?;
@@ -587,32 +621,31 @@ where
     }
 }
 
+/// A lock for an upgrade certificate decided by HotShot.
 #[derive(Clone, Debug)]
-/// A lock for an upgrade certificate decided by HotShot, which doubles as `PhantomData` for an instance of the `Versions` trait.
-pub struct UpgradeLock<TYPES: NodeType, V: Versions> {
-    /// a shared lock to an upgrade certificate decided by consensus
+#[non_exhaustive]
+pub struct UpgradeLock<TYPES: NodeType> {
     pub decided_upgrade_certificate: Arc<RwLock<Option<UpgradeCertificate<TYPES>>>>,
-
-    /// phantom data for the `Versions` trait
-    pub _pd: PhantomData<V>,
+    pub upgrade: Upgrade,
 }
 
-impl<TYPES: NodeType, V: Versions> UpgradeLock<TYPES, V> {
-    #[allow(clippy::new_without_default)]
+impl<TYPES: NodeType> UpgradeLock<TYPES> {
     /// Create a new `UpgradeLock` for a fresh instance of HotShot
-    pub fn new() -> Self {
+    pub fn new(upgrade: Upgrade) -> Self {
         Self {
             decided_upgrade_certificate: Arc::new(RwLock::new(None)),
-            _pd: PhantomData::<V>,
+            upgrade,
         }
     }
 
-    #[allow(clippy::new_without_default)]
     /// Create a new `UpgradeLock` from an optional upgrade certificate
-    pub fn from_certificate(certificate: &Option<UpgradeCertificate<TYPES>>) -> Self {
+    pub fn from_certificate(
+        upgrade: Upgrade,
+        certificate: &Option<UpgradeCertificate<TYPES>>,
+    ) -> Self {
         Self {
             decided_upgrade_certificate: Arc::new(RwLock::new(certificate.clone())),
-            _pd: PhantomData::<V>,
+            upgrade,
         }
     }
 
@@ -633,16 +666,16 @@ impl<TYPES: NodeType, V: Versions> UpgradeLock<TYPES, V> {
         let version = match *upgrade_certificate {
             Some(ref cert) => {
                 if view >= cert.data.new_version_first_view {
-                    if cert.data.new_version == V::Upgrade::VERSION {
-                        V::Upgrade::VERSION
+                    if cert.data.new_version == self.upgrade.target {
+                        self.upgrade.target
                     } else {
                         bail!("The network has upgraded to a new version that we do not support!");
                     }
                 } else {
-                    V::Base::VERSION
+                    self.upgrade.base
                 }
             },
-            None => V::Base::VERSION,
+            None => self.upgrade.base,
         };
 
         Ok(version)
@@ -662,18 +695,32 @@ impl<TYPES: NodeType, V: Versions> UpgradeLock<TYPES, V> {
                     cert.data.old_version
                 }
             },
-            None => V::Base::VERSION,
+            None => self.upgrade.base,
         }
     }
 
     /// Return whether epochs are enabled in the given view
     pub async fn epochs_enabled(&self, view: TYPES::View) -> bool {
-        self.version_infallible(view).await >= V::Epochs::VERSION
+        self.version_infallible(view).await >= EPOCH_VERSION
+    }
+
+    /// Return whether `QuorumProposal2Legacy` is the correct message type for the given view
+    pub async fn proposal2_legacy_version(&self, view: TYPES::View) -> bool {
+        self.epochs_enabled(view).await && !self.upgraded_drb_and_header(view).await
+    }
+
+    /// Return whether `QuorumProposal2` is the correct message type for the given view
+    pub async fn proposal2_version(&self, view: TYPES::View) -> bool {
+        self.epochs_enabled(view).await && self.upgraded_drb_and_header(view).await
     }
 
     /// Return whether epochs are enabled in the given view
     pub async fn upgraded_drb_and_header(&self, view: TYPES::View) -> bool {
-        self.version_infallible(view).await >= V::DrbAndHeaderUpgrade::VERSION
+        self.version_infallible(view).await >= DRB_AND_HEADER_UPGRADE_VERSION
+    }
+
+    pub async fn upgraded_vid2(&self, view: TYPES::View) -> bool {
+        self.version_infallible(view).await >= VID2_UPGRADE_VERSION
     }
 
     /// Serialize a message with a version number, using `message.view_number()` and an optional decided upgrade certificate to determine the message's version.
@@ -689,16 +736,13 @@ impl<TYPES: NodeType, V: Versions> UpgradeLock<TYPES, V> {
 
         let version = self.version(view).await?;
 
-        let serialized_message = match version {
-            // Associated constants cannot be used in pattern matches, so we do this trick instead.
-            v if v == V::Base::VERSION => Serializer::<V::Base>::serialize(&message),
-            v if v == V::Upgrade::VERSION => Serializer::<V::Upgrade>::serialize(&message),
-            v => {
-                bail!(
-                    "Attempted to serialize with version {v}, which is incompatible. This should \
-                     be impossible."
-                );
-            },
+        let serialized_message = if version == self.upgrade.base || version == self.upgrade.target {
+            versions::encode(version, message)
+        } else {
+            bail!(
+                "Attempted to serialize with version {version}, which is incompatible. This \
+                 should be impossible."
+            );
         };
 
         serialized_message
@@ -712,35 +756,29 @@ impl<TYPES: NodeType, V: Versions> UpgradeLock<TYPES, V> {
     /// # Errors
     ///
     /// Errors if deserialization fails.
-    pub async fn deserialize<M: HasViewNumber<TYPES> + for<'a> Deserialize<'a>>(
+    pub async fn deserialize<M: Debug + HasViewNumber<TYPES> + DeserializeOwned>(
         &self,
         message: &[u8],
     ) -> Result<(M, Version)> {
-        // Get the actual version from the message itself
-        let actual_version = Version::deserialize(message)
+        let (version, deserialized_message) = versions::decode::<M>(message)
             .wrap()
-            .context(info!("Failed to read message version!"))?
-            .0;
+            .context(info!("Failed to read version and message!"))?;
 
-        // Deserialize the message using the stated version
-        let deserialized_message: M = match actual_version {
-            // Special case: external messages (version 0.0)
-            v if v == EXTERNAL_MESSAGE_VERSION => {
-                Serializer::<StaticVersion<0, 0>>::deserialize(message)
-            },
-            v if v == V::Base::VERSION => Serializer::<V::Base>::deserialize(message),
-            v if v == V::Upgrade::VERSION => Serializer::<V::Upgrade>::deserialize(message),
-            v => {
-                bail!("Cannot deserialize message with stated version {v}");
-            },
+        if EXTERNAL_MESSAGE_VERSION != version
+            && self.upgrade.base != version
+            && self.upgrade.target != version
+        {
+            bail!(warn!(
+                "Received a message with state version {version} which is invalid for its view: \
+                 {:?}",
+                deserialized_message
+            ));
         }
-        .wrap()
-        .context(info!("Failed to deserialize message!"))?;
 
         // If the message is version 0.0, just return the deserialized message and the version.
         // We don't care about it matching the expected version for the view number.
-        if actual_version == EXTERNAL_MESSAGE_VERSION {
-            return Ok((deserialized_message, actual_version));
+        if version == EXTERNAL_MESSAGE_VERSION {
+            return Ok((deserialized_message, version));
         }
 
         // Get the view number associated with the message
@@ -750,13 +788,13 @@ impl<TYPES: NodeType, V: Versions> UpgradeLock<TYPES, V> {
         let expected_version = self.version(view).await?;
 
         // Check that the actual version matches the expected version
-        if actual_version != expected_version {
+        if version != expected_version {
             return Err(error!(format!(
                 "Message has invalid version number for its view. Expected: {expected_version}, \
-                 Actual: {actual_version}, View: {view:?}"
+                 Actual: {version}, View: {view:?}\n\n{deserialized_message:?}"
             )));
         };
 
-        Ok((deserialized_message, actual_version))
+        Ok((deserialized_message, version))
     }
 }

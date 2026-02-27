@@ -8,7 +8,7 @@ use espresso_types::{
     v0::traits::{EventConsumer, NullEventConsumer, PersistenceOptions, SequencerPersistence},
     v0_3::RewardMerkleTreeV1,
     v0_4::RewardMerkleTreeV2,
-    BlockMerkleTree, PubKey,
+    BlockMerkleTree, PubKey, SeqTypes,
 };
 use futures::{
     channel::oneshot,
@@ -23,9 +23,8 @@ use hotshot_query_service::{
 use hotshot_types::traits::{
     metrics::{Metrics, NoMetrics},
     network::ConnectedNetwork,
-    node_implementation::Versions,
 };
-use jf_merkle_tree::MerkleTreeScheme;
+use jf_merkle_tree_compat::MerkleTreeScheme;
 use tide_disco::{listener::RateLimitListener, method::ReadState, Api, App, Url};
 use vbs::version::StaticVersionType;
 
@@ -34,11 +33,12 @@ use super::{
         provider, CatchupDataSource, HotShotConfigDataSource, NodeStateDataSource, Provider,
         SequencerDataSource, StateSignatureDataSource, SubmitDataSource,
     },
-    endpoints, fs, sql,
+    endpoints, fs, light_client, sql,
     update::ApiEventConsumer,
     ApiState, StorageState,
 };
 use crate::{
+    api::endpoints::RewardMerkleTreeVersion,
     catchup::CatchupStorage,
     context::{SequencerContext, TaskList},
     persistence,
@@ -57,6 +57,7 @@ pub struct Options {
     pub config: Option<Config>,
     pub hotshot_events: Option<HotshotEvents>,
     pub explorer: Option<Explorer>,
+    pub light_client: Option<LightClient>,
     pub storage_fs: Option<persistence::fs::Options>,
     pub storage_sql: Option<persistence::sql::Options>,
 }
@@ -72,6 +73,7 @@ impl From<Http> for Options {
             config: None,
             hotshot_events: None,
             explorer: None,
+            light_client: None,
             storage_fs: None,
             storage_sql: None,
         }
@@ -134,6 +136,12 @@ impl Options {
         self
     }
 
+    /// Add a light client API module.
+    pub fn light_client(mut self, opt: LightClient) -> Self {
+        self.light_client = Some(opt);
+        self
+    }
+
     /// Whether these options will run the query API.
     pub fn has_query_module(&self) -> bool {
         self.query.is_some() && (self.storage_fs.is_some() || self.storage_sql.is_some())
@@ -144,10 +152,7 @@ impl Options {
     /// The function `init_context` is used to create a sequencer context from a metrics object and
     /// optional saved consensus state. The metrics object is created from the API data source, so
     /// that consensus will populuate metrics that can then be read and served by the API.
-    pub async fn serve<N, P, F, V: Versions + 'static>(
-        mut self,
-        init_context: F,
-    ) -> anyhow::Result<SequencerContext<N, P, V>>
+    pub async fn serve<N, P, F>(mut self, init_context: F) -> anyhow::Result<SequencerContext<N, P>>
     where
         N: ConnectedNetwork<PubKey>,
         P: SequencerPersistence,
@@ -155,7 +160,7 @@ impl Options {
             Box<dyn Metrics>,
             Box<dyn EventConsumer>,
             Option<RequestResponseStorage>,
-        ) -> BoxFuture<'static, anyhow::Result<SequencerContext<N, P, V>>>,
+        ) -> BoxFuture<'static, anyhow::Result<SequencerContext<N, P>>>,
     {
         // Create a channel to send the context to the web server after it is initialized. This
         // allows the web server to start before initialization can complete, since initialization
@@ -259,15 +264,15 @@ impl Options {
         Ok(ctx.with_task_list(tasks))
     }
 
-    async fn init_app_modules<N, P, D, V: Versions>(
+    async fn init_app_modules<N, P, D>(
         &self,
         ds: D,
-        state: ApiState<N, P, V>,
+        state: ApiState<N, P>,
         bind_version: SequencerApiVersion,
     ) -> anyhow::Result<(
         Box<dyn Metrics>,
-        Arc<StorageState<N, P, D, V>>,
-        App<AppState<StorageState<N, P, D, V>>, Error>,
+        Arc<StorageState<N, P, D>>,
+        App<AppState<StorageState<N, P, D>>, Error>,
     )>
     where
         N: ConnectedNetwork<PubKey>,
@@ -276,7 +281,7 @@ impl Options {
     {
         let metrics = ds.populate_metrics();
         let ds = Arc::new(ExtensibleDataSource::new(ds, state.clone()));
-        let api_state: endpoints::AvailState<N, P, D, V> = ds.clone().into();
+        let api_state: endpoints::AvailState<N, P, D> = ds.clone().into();
         let mut app = App::<_, Error>::with_state(api_state);
 
         // Initialize v0 and v1 status API.
@@ -297,6 +302,10 @@ impl Options {
 
         register_api("node", &mut app, move |ver| {
             endpoints::node(ver).context("failed to define node api")
+        })?;
+
+        register_api("token", &mut app, move |ver| {
+            endpoints::token(ver).context("failed to define token api")
         })?;
 
         // Initialize submit API
@@ -326,11 +335,11 @@ impl Options {
         Ok((metrics, ds, app))
     }
 
-    async fn init_with_query_module_fs<N, P, V: Versions + 'static>(
+    async fn init_with_query_module_fs<N, P>(
         &self,
         query_opt: Query,
         mod_opt: persistence::fs::Options,
-        state: ApiState<N, P, V>,
+        state: ApiState<N, P>,
         tasks: &mut TaskList,
         bind_version: SequencerApiVersion,
     ) -> anyhow::Result<(
@@ -344,7 +353,7 @@ impl Options {
     {
         let ds = <fs::DataSource as SequencerDataSource>::create(
             mod_opt,
-            provider::<V>(query_opt.peers, bind_version),
+            provider(query_opt.peers, bind_version),
             false,
         )
         .await?;
@@ -369,11 +378,11 @@ impl Options {
         ))
     }
 
-    async fn init_with_query_module_sql<N, P, V: Versions + 'static>(
+    async fn init_with_query_module_sql<N, P>(
         self,
         query_opt: Query,
         mod_opt: persistence::sql::Options,
-        state: ApiState<N, P, V>,
+        state: ApiState<N, P>,
         tasks: &mut TaskList,
         bind_version: SequencerApiVersion,
     ) -> anyhow::Result<(
@@ -411,7 +420,7 @@ impl Options {
         // Initialize merklized state module for block merkle tree
 
         register_api("block-state", &mut app, move |ver| {
-            endpoints::merklized_state::<N, P, _, BlockMerkleTree, _, 3>(ver)
+            endpoints::merklized_state::<N, P, _, BlockMerkleTree, 3>(ver)
                 .context("failed to define block-state api")
         })?;
 
@@ -427,7 +436,7 @@ impl Options {
                 SequencerApiVersion,
                 RewardMerkleTreeV1,
                 { RewardMerkleTreeV1::ARITY },
-            >(ver)
+            >(ver, RewardMerkleTreeVersion::V1)
             .context("failed to define reward-state api")
         })?;
 
@@ -438,7 +447,7 @@ impl Options {
                 SequencerApiVersion,
                 RewardMerkleTreeV2,
                 { RewardMerkleTreeV2::ARITY },
-            >(ver)
+            >(ver, RewardMerkleTreeVersion::V2)
             .context("failed to define reward-state api")
         })?;
 
@@ -454,6 +463,14 @@ impl Options {
         // Initialize hotshot events API if enabled
         if self.hotshot_events.is_some() {
             self.init_hotshot_events_module(&mut app)?;
+        }
+
+        // Initialize light client API if enabled.
+        if self.light_client.is_some() {
+            register_api("light-client", &mut app, move |ver| {
+                light_client::define_api::<_, SequencerApiVersion>(Default::default(), ver)
+                    .context("failed to define light client api")
+            })?;
         }
 
         tasks.spawn(
@@ -524,8 +541,7 @@ impl Options {
     fn init_hotshot_events_module<S>(&self, app: &mut App<S, Error>) -> anyhow::Result<()>
     where
         S: 'static + Send + Sync + ReadState,
-        S::State:
-            Send + Sync + hotshot_events_service::events_source::EventsSource<crate::SeqTypes>,
+        S::State: Send + Sync + hotshot_events_service::events_source::EventsSource<SeqTypes>,
     {
         tracing::info!("Initializing HotShot events API at /hotshot-events");
         register_api("hotshot-events", app, move |ver| {
@@ -629,6 +645,10 @@ pub struct HotshotEvents;
 #[derive(Parser, Clone, Copy, Debug, Default)]
 pub struct Explorer;
 
+/// Options for the light client API module.
+#[derive(Parser, Clone, Copy, Debug, Default)]
+pub struct LightClient;
+
 /// Registers two versions (v0 and v1) of the same API module under the given path.
 fn register_api<E, S, F, ModuleError, ModuleVersion>(
     path: &'static str,
@@ -643,7 +663,7 @@ where
     F: Fn(semver::Version) -> anyhow::Result<Api<S, ModuleError, ModuleVersion>>,
 {
     let v0 = "0.0.1".parse().unwrap();
-    let v1 = "1.0.0".parse().unwrap();
+    let v1 = "1.1.0".parse().unwrap();
     let result1 = f(v0)?;
     let result2 = f(v1)?;
 

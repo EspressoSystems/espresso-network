@@ -32,8 +32,9 @@ use hotshot_types::{
         LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2, QuorumCertificate2,
     },
     traits::{
+        election::Membership,
         network::{AsyncGenerator, ConnectedNetwork},
-        node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
+        node_implementation::{ConsensusTime, NodeImplementation, NodeType},
     },
     utils::genesis_epoch_from_version,
     vote::HasViewNumber,
@@ -56,7 +57,6 @@ pub struct SpinningTask<
     TYPES: NodeType,
     N: ConnectedNetwork<TYPES::SignatureKey>,
     I: TestableNodeImplementation<TYPES>,
-    V: Versions,
 > {
     /// epoch height
     pub epoch_height: u64,
@@ -65,9 +65,9 @@ pub struct SpinningTask<
     /// Saved epoch information. This must be sorted ascending by epoch.
     pub start_epoch_info: Vec<InitializerEpochInfo<TYPES>>,
     /// handle to the nodes
-    pub(crate) handles: Arc<RwLock<Vec<Node<TYPES, I, V>>>>,
+    pub(crate) handles: Arc<RwLock<Vec<Node<TYPES, I>>>>,
     /// late start nodes
-    pub(crate) late_start: HashMap<u64, LateStartNode<TYPES, I, V>>,
+    pub(crate) late_start: HashMap<u64, LateStartNode<TYPES, I>>,
     /// time based changes
     pub(crate) changes: BTreeMap<TYPES::View, Vec<ChangeNode>>,
     /// most recent view seen by spinning task
@@ -81,7 +81,7 @@ pub struct SpinningTask<
     /// Add specified delay to async calls
     pub(crate) async_delay_config: HashMap<u64, DelayConfig>,
     /// Context stored for nodes to be restarted with
-    pub(crate) restart_contexts: HashMap<usize, RestartContext<TYPES, N, I, V>>,
+    pub(crate) restart_contexts: HashMap<usize, RestartContext<TYPES, N, I>>,
     /// Generate network channel for restart nodes
     pub(crate) channel_generator: AsyncGenerator<Network<TYPES, I>>,
     /// The light client state update certificate
@@ -99,11 +99,11 @@ impl<
         >,
         I: TestableNodeImplementation<TYPES>,
         N: ConnectedNetwork<TYPES::SignatureKey>,
-        V: Versions,
-    > TestTaskState for SpinningTask<TYPES, N, I, V>
+    > TestTaskState for SpinningTask<TYPES, N, I>
 where
     I: TestableNodeImplementation<TYPES>,
     I: NodeImplementation<TYPES, Network = N, Storage = TestStorage<TYPES>>,
+    <TYPES as NodeType>::Membership: Membership<TYPES, Storage = TestStorage<TYPES>>,
 {
     type Event = Event<TYPES>;
     type Error = Error;
@@ -111,12 +111,7 @@ where
     async fn handle_event(&mut self, (message, _id): (Self::Event, usize)) -> Result<()> {
         let Event { view_number, event } = message;
 
-        if let EventType::Decide {
-            leaf_chain,
-            qc: _,
-            block_size: _,
-        } = event
-        {
+        if let EventType::Decide { leaf_chain, .. } = event {
             let leaf = leaf_chain.first().unwrap().leaf.clone();
             if leaf.view_number() > self.last_decided_leaf.view_number() {
                 self.last_decided_leaf = leaf;
@@ -177,7 +172,9 @@ where
                                             self.last_decided_leaf.clone(),
                                             (
                                                 TYPES::View::genesis(),
-                                                genesis_epoch_from_version::<V, TYPES>(),
+                                                genesis_epoch_from_version::<TYPES>(
+                                                    config.upgrade.base,
+                                                ),
                                             ),
                                             (self.high_qc.clone(), self.next_epoch_high_qc.clone()),
                                             TYPES::View::genesis(),
@@ -250,7 +247,18 @@ where
                                 };
 
                                 let storage = node.handle.storage().clone();
-                                let memberships = node.handle.membership_coordinator.clone();
+
+                                let membership = Arc::new(RwLock::new(
+                                    <TYPES as NodeType>::Membership::new::<I>(
+                                        node.handle.hotshot.config.known_nodes_with_stake.clone(),
+                                        node.handle.hotshot.config.known_da_nodes.clone(),
+                                        node.handle.storage().clone(),
+                                        generated_network.clone(),
+                                        node.handle.public_key().clone(),
+                                        node.handle.hotshot.config.epoch_height,
+                                    ),
+                                ));
+
                                 let config = node.handle.hotshot.config.clone();
 
                                 let next_epoch_high_qc = storage.next_epoch_high_qc_cloned().await;
@@ -258,9 +266,10 @@ where
                                 let last_actioned_view = storage.last_actioned_view().await;
                                 let start_epoch = storage.last_actioned_epoch().await;
                                 let high_qc = storage.high_qc_cloned().await.unwrap_or(
-                                    QuorumCertificate2::genesis::<V>(
+                                    QuorumCertificate2::genesis(
                                         &TestValidatedState::default(),
                                         &TestInstanceState::default(),
+                                        config.upgrade,
                                     )
                                     .await,
                                 );
@@ -274,7 +283,7 @@ where
                                             .entry(key)
                                             .or_insert_with(BTreeMap::new)
                                             .insert(
-                                                proposal.data.target_epoch,
+                                                proposal.data.target_epoch(),
                                                 convert_proposal(proposal),
                                             );
                                     }
@@ -312,10 +321,10 @@ where
                                 );
                                 let internal_chan = broadcast(EVENT_CHANNEL_SIZE);
                                 let context =
-                                    TestRunner::<TYPES, I, V, N>::add_node_with_config_and_channels(
+                                    TestRunner::<TYPES, I, N>::add_node_with_config_and_channels(
                                         node_id,
                                         generated_network.clone(),
-                                        Arc::clone(memberships.membership()),
+                                        Arc::clone(&membership),
                                         initializer,
                                         config,
                                         validator_config,
@@ -386,6 +395,7 @@ where
                 let handles = self.handles.clone();
                 let fut = async move {
                     tracing::info!("Starting node {id} back up");
+                    node.network.wait_for_ready().await;
                     let handle = node.run_tasks().await;
 
                     // Create the node and add it to the state, so we can shut them
@@ -424,9 +434,8 @@ pub(crate) struct RestartContext<
     TYPES: NodeType,
     N: ConnectedNetwork<TYPES::SignatureKey>,
     I: TestableNodeImplementation<TYPES>,
-    V: Versions,
 > {
-    context: Arc<SystemContext<TYPES, I, V>>,
+    context: Arc<SystemContext<TYPES, I>>,
     network: Arc<N>,
 }
 

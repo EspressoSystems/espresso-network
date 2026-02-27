@@ -7,12 +7,13 @@
 //! Provides the core consensus types
 
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, HashSet},
     mem::ManuallyDrop,
     ops::{Deref, DerefMut},
     sync::Arc,
 };
 
+use alloy::primitives::U256;
 use async_lock::{RwLock, RwLockReadGuard, RwLockUpgradableReadGuard, RwLockWriteGuard};
 use committable::{Commitment, Committable};
 use hotshot_utils::anytrace::*;
@@ -34,17 +35,18 @@ use crate::{
         QuorumCertificate2,
     },
     simple_vote::HasEpoch,
+    stake_table::{HSStakeTable, StakeTableEntries},
     traits::{
         block_contents::{BlockHeader, BuilderFee},
         metrics::{Counter, Gauge, Histogram, Metrics, NoMetrics},
-        node_implementation::{ConsensusTime, NodeType, Versions},
-        signature_key::SignatureKey,
+        node_implementation::{ConsensusTime, NodeType},
+        signature_key::{SignatureKey, StakeTableEntryType},
         BlockPayload, ValidatedState,
     },
     utils::{
-        epoch_from_block_number, is_epoch_root, is_epoch_transition, is_ge_epoch_root,
-        is_last_block, is_transition_block, option_epoch_from_block_number, BuilderCommitment,
-        LeafCommitment, StateAndDelta, Terminator,
+        epoch_from_block_number, is_epoch_root, is_epoch_transition, is_last_block,
+        is_transition_block, option_epoch_from_block_number, BuilderCommitment, LeafCommitment,
+        StateAndDelta, Terminator,
     },
     vote::{Certificate, HasViewNumber},
 };
@@ -217,6 +219,7 @@ impl<'a, TYPES: NodeType> ConsensusUpgradableReadLockGuard<'a, TYPES> {
 
     /// Upgrades the inner `RwLockUpgradableReadGuard` and leaves debug traces
     #[instrument(skip_all, target = "ConsensusUpgradableReadLockGuard")]
+    #[allow(unused_assignments)] // `taken` is read in Drop impl
     pub async fn upgrade(mut guard: Self) -> ConsensusWriteLockGuard<'a, TYPES> {
         let inner_guard = unsafe { ManuallyDrop::take(&mut guard.lock_guard) };
         guard.taken = true;
@@ -342,8 +345,13 @@ impl<TYPES: NodeType> ValidatorParticipation<TYPES> {
             num_proposed as f64 / num_leader as f64
         };
         let last_epoch_participation = self.last_epoch_participation.get(&key);
-        let last_epoch_participation_ratio =
-            last_epoch_participation.map(|(leader, proposed)| *leader as f64 / *proposed as f64);
+        let last_epoch_participation_ratio = last_epoch_participation.map(|(leader, proposed)| {
+            if *leader == 0 {
+                0.0
+            } else {
+                *proposed as f64 / *leader as f64
+            }
+        });
         (
             current_epoch_participation_ratio,
             last_epoch_participation_ratio,
@@ -353,14 +361,224 @@ impl<TYPES: NodeType> ValidatorParticipation<TYPES> {
     fn current_proposal_participation(&self) -> HashMap<TYPES::SignatureKey, f64> {
         self.current_epoch_participation
             .iter()
-            .map(|(key, (leader, proposed))| (key.clone(), *leader as f64 / *proposed as f64))
+            .map(|(key, (leader, proposed))| {
+                (
+                    key.clone(),
+                    if *leader == 0 {
+                        0.0
+                    } else {
+                        *proposed as f64 / *leader as f64
+                    },
+                )
+            })
             .collect()
     }
     fn previous_proposal_participation(&self) -> HashMap<TYPES::SignatureKey, f64> {
         self.last_epoch_participation
             .iter()
-            .map(|(key, (leader, proposed))| (key.clone(), *leader as f64 / *proposed as f64))
+            .map(|(key, (leader, proposed))| {
+                (
+                    key.clone(),
+                    if *leader == 0 {
+                        0.0
+                    } else {
+                        *proposed as f64 / *leader as f64
+                    },
+                )
+            })
             .collect()
+    }
+}
+
+#[derive(Clone, Debug)]
+struct VoteParticipation<TYPES: NodeType> {
+    /// Current epoch
+    epoch: Option<TYPES::Epoch>,
+
+    /// Current stake_table
+    stake_table: HSStakeTable<TYPES>,
+
+    /// Success threshold
+    success_threshold: U256,
+
+    /// Set of views in the current epoch
+    view_set: HashSet<TYPES::View>,
+
+    /// Number of views in the current epoch
+    current_epoch_num_views: u64,
+
+    /// Current epoch participation by key maps key -> num times voted
+    current_epoch_participation:
+        HashMap<<TYPES::SignatureKey as SignatureKey>::VerificationKeyType, u64>,
+
+    /// Number of views in the last epoch
+    last_epoch_num_views: u64,
+
+    /// Last epoch participation by key maps key -> num times voted
+    last_epoch_participation:
+        HashMap<<TYPES::SignatureKey as SignatureKey>::VerificationKeyType, u64>,
+}
+
+impl<TYPES: NodeType> VoteParticipation<TYPES> {
+    fn new(
+        stake_table: HSStakeTable<TYPES>,
+        success_threshold: U256,
+        epoch: Option<TYPES::Epoch>,
+    ) -> Self {
+        let current_epoch_participation: HashMap<_, _> = stake_table
+            .iter()
+            .map({
+                |peer_config| {
+                    (
+                        peer_config
+                            .stake_table_entry
+                            .public_key()
+                            .to_verification_key(),
+                        0u64,
+                    )
+                }
+            })
+            .collect();
+        Self {
+            epoch,
+            stake_table,
+            success_threshold,
+            view_set: HashSet::new(),
+            current_epoch_num_views: 0u64,
+            current_epoch_participation,
+            last_epoch_num_views: 0u64,
+            last_epoch_participation: HashMap::new(),
+        }
+    }
+
+    fn update_participation(&mut self, qc: QuorumCertificate2<TYPES>) -> Result<()> {
+        ensure!(
+            qc.epoch() == self.epoch,
+            warn!(
+                "Incorrect epoch while updating vote participation, current epoch: {:?}, QC epoch \
+                 {:?}",
+                self.epoch,
+                qc.epoch()
+            )
+        );
+        ensure!(
+            !self.view_set.contains(&qc.view_number()),
+            info!(
+                "Participation for view {} already updated",
+                qc.view_number()
+            )
+        );
+        let signers = qc
+            .signers(
+                &StakeTableEntries::<TYPES>::from(self.stake_table.clone()).0,
+                self.success_threshold,
+            )
+            .context(|e| warn!("Tracing signers: {e}"))?;
+        for vk in signers {
+            let Some(votes) = self.current_epoch_participation.get_mut(&vk) else {
+                bail!(warn!(
+                    "Trying to update vote participation for unknown key: {:?}",
+                    vk
+                ));
+            };
+            *votes += 1;
+        }
+        self.view_set.insert(qc.view_number());
+        self.current_epoch_num_views += 1;
+        Ok(())
+    }
+
+    fn update_participation_epoch(
+        &mut self,
+        stake_table: HSStakeTable<TYPES>,
+        success_threshold: U256,
+        epoch: Option<TYPES::Epoch>,
+    ) -> Result<()> {
+        ensure!(
+            epoch > self.epoch,
+            info!(
+                "New epoch not greater than current epoch while updating vote participation \
+                 epoch, current epoch: {:?}, new epoch {:?}",
+                self.epoch, epoch
+            )
+        );
+
+        self.epoch = epoch;
+        self.last_epoch_participation = self.current_epoch_participation.clone();
+        self.last_epoch_num_views = self.current_epoch_num_views;
+        self.current_epoch_num_views = 0;
+        self.view_set = HashSet::new();
+        let current_epoch_participation: HashMap<_, _> = stake_table
+            .iter()
+            .map({
+                |peer_config| {
+                    (
+                        peer_config
+                            .stake_table_entry
+                            .public_key()
+                            .to_verification_key(),
+                        0u64,
+                    )
+                }
+            })
+            .collect();
+        self.current_epoch_participation = current_epoch_participation;
+        self.stake_table = stake_table;
+        self.success_threshold = success_threshold;
+        Ok(())
+    }
+
+    fn get_participation(&self, key: TYPES::SignatureKey) -> (Option<f64>, Option<f64>) {
+        let maybe_current_num_votes = self
+            .current_epoch_participation
+            .get(&key.to_verification_key());
+
+        let current_epoch_vote_ratio = maybe_current_num_votes
+            .map(|num_votes| Self::calculate_ratio(num_votes, self.current_epoch_num_views));
+
+        let maybe_last_num_votes = self
+            .last_epoch_participation
+            .get(&key.to_verification_key());
+
+        let last_epoch_vote_ratio = maybe_last_num_votes
+            .map(|num_votes| Self::calculate_ratio(num_votes, self.last_epoch_num_views));
+
+        (current_epoch_vote_ratio, last_epoch_vote_ratio)
+    }
+
+    fn current_vote_participation(
+        &self,
+    ) -> HashMap<<TYPES::SignatureKey as SignatureKey>::VerificationKeyType, f64> {
+        self.current_epoch_participation
+            .iter()
+            .map(|(key, votes)| {
+                (
+                    key.clone(),
+                    Self::calculate_ratio(votes, self.current_epoch_num_views),
+                )
+            })
+            .collect()
+    }
+    fn previous_vote_participation(
+        &self,
+    ) -> HashMap<<TYPES::SignatureKey as SignatureKey>::VerificationKeyType, f64> {
+        self.last_epoch_participation
+            .iter()
+            .map(|(key, votes)| {
+                (
+                    key.clone(),
+                    Self::calculate_ratio(votes, self.last_epoch_num_views),
+                )
+            })
+            .collect()
+    }
+
+    fn calculate_ratio(num_votes: &u64, total_views: u64) -> f64 {
+        if total_views == 0 {
+            0.0
+        } else {
+            *num_votes as f64 / total_views as f64
+        }
     }
 }
 
@@ -418,6 +636,9 @@ pub struct Consensus<TYPES: NodeType> {
 
     /// Track the participation of each validator in the current epoch and previous epoch
     validator_participation: ValidatorParticipation<TYPES>,
+
+    /// Track the vote participation of each node in the current epoch and previous epoch
+    vote_participation: VoteParticipation<TYPES>,
 
     /// A reference to the metrics trait
     pub metrics: Arc<ConsensusMetricsValue>,
@@ -574,6 +795,8 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         state_cert: Option<LightClientStateUpdateCertificateV2<TYPES>>,
         drb_difficulty: u64,
         drb_upgrade_difficulty: u64,
+        stake_table: HSStakeTable<TYPES>,
+        success_threshold: U256,
     ) -> Self {
         let transition_qc = if let Some(ref next_epoch_high_qc) = next_epoch_high_qc {
             if high_qc
@@ -614,6 +837,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
             state_cert,
             drb_difficulty,
             validator_participation: ValidatorParticipation::new(),
+            vote_participation: VoteParticipation::new(stake_table, success_threshold, cur_epoch),
             drb_upgrade_difficulty,
         }
     }
@@ -778,6 +1002,41 @@ impl<TYPES: NodeType> Consensus<TYPES> {
     pub fn previous_proposal_participation(&self) -> HashMap<TYPES::SignatureKey, f64> {
         self.validator_participation
             .previous_proposal_participation()
+    }
+
+    /// Update the vote participation
+    pub fn update_vote_participation(&mut self, qc: QuorumCertificate2<TYPES>) -> Result<()> {
+        self.vote_participation.update_participation(qc)
+    }
+
+    /// Update the vote participation epoch
+    pub fn update_vote_participation_epoch(
+        &mut self,
+        stake_table: HSStakeTable<TYPES>,
+        success_threshold: U256,
+        epoch: Option<TYPES::Epoch>,
+    ) -> Result<()> {
+        self.vote_participation
+            .update_participation_epoch(stake_table, success_threshold, epoch)
+    }
+
+    /// Get the vote participation
+    pub fn get_participation(&self, key: TYPES::SignatureKey) -> (Option<f64>, Option<f64>) {
+        self.vote_participation.get_participation(key)
+    }
+
+    /// Get the current vote participation
+    pub fn current_vote_participation(
+        &self,
+    ) -> HashMap<<TYPES::SignatureKey as SignatureKey>::VerificationKeyType, f64> {
+        self.vote_participation.current_vote_participation()
+    }
+
+    /// Get the previous vote participation
+    pub fn previous_vote_participation(
+        &self,
+    ) -> HashMap<<TYPES::SignatureKey as SignatureKey>::VerificationKeyType, f64> {
+        self.vote_participation.previous_vote_participation()
     }
 
     /// Get the parent Leaf Info from a given leaf and our public key.
@@ -1310,13 +1569,13 @@ impl<TYPES: NodeType> Consensus<TYPES> {
     /// and updates `vid_shares` map with the signed `VidDisperseShare` proposals.
     /// Returned `Option` indicates whether the update has actually happened or not.
     #[instrument(skip_all, target = "Consensus", fields(view = *view))]
-    pub async fn calculate_and_update_vid<V: Versions>(
+    pub async fn calculate_and_update_vid(
         consensus: OuterConsensus<TYPES>,
         view: <TYPES as NodeType>::View,
         target_epoch: Option<<TYPES as NodeType>::Epoch>,
         membership_coordinator: EpochMembershipCoordinator<TYPES>,
         private_key: &<TYPES::SignatureKey as SignatureKey>::PrivateKey,
-        upgrade_lock: &UpgradeLock<TYPES, V>,
+        upgrade_lock: &UpgradeLock<TYPES>,
     ) -> Option<()> {
         let payload_with_metadata = Arc::clone(consensus.read().await.saved_payloads().get(&view)?);
         let epoch = consensus
@@ -1330,7 +1589,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         let VidDisperseAndDuration {
             disperse: vid,
             duration: disperse_duration,
-        } = VidDisperse::calculate_vid_disperse::<V>(
+        } = VidDisperse::calculate_vid_disperse(
             &payload_with_metadata.payload,
             &membership_coordinator,
             view,
@@ -1342,13 +1601,12 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         .await
         .ok()?;
 
-        let shares = VidDisperseShare::from_vid_disperse(vid);
         let mut consensus_writer = consensus.write().await;
         consensus_writer
             .metrics
             .vid_disperse_duration
             .add_point(disperse_duration.as_secs_f64());
-        for share in shares {
+        for share in vid.to_shares() {
             if let Some(prop) = share.to_proposal(private_key) {
                 consensus_writer.update_vid_shares(view, prop);
             }
@@ -1383,16 +1641,6 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         let old_epoch = epoch_from_block_number(parent_leaf.height(), self.epoch_height);
 
         new_epoch - 1 == old_epoch && is_last_block(parent_leaf.height(), self.epoch_height)
-    }
-
-    /// Returns true if our high QC is for the block equal or greater than the root epoch block
-    pub fn is_high_qc_ge_root_block(&self) -> bool {
-        let Some(leaf) = self.saved_leaves.get(&self.high_qc().data.leaf_commit) else {
-            tracing::trace!("We don't have a leaf corresponding to the high QC");
-            return false;
-        };
-        let block_height = leaf.height();
-        is_ge_epoch_root(block_height, self.epoch_height)
     }
 }
 

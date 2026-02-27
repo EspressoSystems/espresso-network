@@ -8,13 +8,14 @@ use espresso_types::{
     config::PublicNetworkConfig,
     v0::traits::{PersistenceOptions, SequencerPersistence},
     v0_3::{
-        ChainConfig, RewardAccountProofV1, RewardAccountQueryDataV1, RewardAccountV1, RewardAmount,
-        RewardMerkleTreeV1, Validator,
+        AuthenticatedValidator, ChainConfig, RegisteredValidator, RewardAccountProofV1,
+        RewardAccountQueryDataV1, RewardAccountV1, RewardAmount, RewardMerkleTreeV1,
+        StakeTableEvent,
     },
     v0_4::{RewardAccountProofV2, RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleTreeV2},
     FeeAccount, FeeAccountProof, FeeMerkleTree, Leaf2, NodeState, PubKey, Transaction,
 };
-use futures::future::Future;
+use futures::future::{BoxFuture, Future};
 use hotshot::types::BLSPubKey;
 use hotshot_query_service::{
     availability::{AvailabilityDataSource, VidCommonQueryData},
@@ -26,10 +27,8 @@ use hotshot_query_service::{
 use hotshot_types::{
     data::{EpochNumber, VidShare, ViewNumber},
     light_client::LCV3StateSignatureRequestBody,
-    traits::{
-        network::ConnectedNetwork,
-        node_implementation::{NodeType, Versions},
-    },
+    simple_certificate::LightClientStateUpdateCertificateV2,
+    traits::{network::ConnectedNetwork, node_implementation::NodeType},
     PeerConfig,
 };
 use indexmap::IndexMap;
@@ -41,7 +40,7 @@ use super::{
     options::{Options, Query},
     sql, AccountQueryData, BlocksFrontier,
 };
-use crate::{persistence, SeqTypes, SequencerApiVersion};
+use crate::{persistence, state_cert::StateCertFetchError, SeqTypes, SequencerApiVersion, U256};
 
 pub trait DataSourceOptions: PersistenceOptions {
     type DataSource: SequencerDataSource<Options = Self>;
@@ -88,7 +87,7 @@ pub trait SequencerDataSource:
 pub type Provider = AnyProvider<SeqTypes>;
 
 /// Create a provider for fetching missing data from a list of peer query services.
-pub fn provider<V: Versions>(
+pub fn provider(
     peers: impl IntoIterator<Item = Url>,
     bind_version: SequencerApiVersion,
 ) -> Provider {
@@ -117,6 +116,11 @@ pub(crate) trait NodeStateDataSource {
     fn node_state(&self) -> impl Send + Future<Output = NodeState>;
 }
 
+pub(crate) trait TokenDataSource<T: NodeType> {
+    /// Get the stake table for a given epoch
+    fn get_total_supply_l1(&self) -> impl Send + Future<Output = anyhow::Result<U256>>;
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(bound = "T: NodeType")]
 pub struct StakeTableWithEpochNumber<T: NodeType> {
@@ -136,11 +140,22 @@ pub(crate) trait StakeTableDataSource<T: NodeType> {
         &self,
     ) -> impl Send + Future<Output = anyhow::Result<StakeTableWithEpochNumber<T>>>;
 
+    /// Get the DA stake table for a given epoch
+    fn get_da_stake_table(
+        &self,
+        epoch: Option<<T as NodeType>::Epoch>,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<PeerConfig<T>>>>;
+
+    /// Get the DA stake table for the current epoch if not provided
+    fn get_da_stake_table_current(
+        &self,
+    ) -> impl Send + Future<Output = anyhow::Result<StakeTableWithEpochNumber<T>>>;
+
     /// Get all the validators
     fn get_validators(
         &self,
         epoch: <T as NodeType>::Epoch,
-    ) -> impl Send + Future<Output = anyhow::Result<IndexMap<Address, Validator<BLSPubKey>>>>;
+    ) -> impl Send + Future<Output = anyhow::Result<IndexMap<Address, AuthenticatedValidator<BLSPubKey>>>>;
 
     fn get_block_reward(
         &self,
@@ -155,6 +170,40 @@ pub(crate) trait StakeTableDataSource<T: NodeType> {
     fn previous_proposal_participation(
         &self,
     ) -> impl Send + Future<Output = HashMap<BLSPubKey, f64>>;
+    /// Get the current vote participation.
+    fn current_vote_participation(&self) -> impl Send + Future<Output = HashMap<BLSPubKey, f64>>;
+
+    /// Get the previous vote participation.
+    fn previous_vote_participation(&self) -> impl Send + Future<Output = HashMap<BLSPubKey, f64>>;
+
+    fn get_all_validators(
+        &self,
+        epoch: <T as NodeType>::Epoch,
+        offset: u64,
+        limit: u64,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<RegisteredValidator<PubKey>>>>;
+
+    /// Get stake table events from L1 blocks `from_l1_block..=to_l1_block`.
+    fn stake_table_events(
+        &self,
+        from_l1_block: u64,
+        to_l1_block: u64,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<StakeTableEvent>>>;
+}
+
+// Thin wrapper trait to access persistence methods from API handlers
+#[async_trait]
+pub(crate) trait StateCertDataSource {
+    async fn get_state_cert_by_epoch(
+        &self,
+        epoch: u64,
+    ) -> anyhow::Result<Option<LightClientStateUpdateCertificateV2<SeqTypes>>>;
+
+    async fn insert_state_cert(
+        &self,
+        epoch: u64,
+        cert: LightClientStateUpdateCertificateV2<SeqTypes>,
+    ) -> anyhow::Result<()>;
 }
 
 pub(crate) trait CatchupDataSource: Sync {
@@ -251,6 +300,13 @@ pub(crate) trait CatchupDataSource: Sync {
         accounts: &[RewardAccountV2],
     ) -> impl Send + Future<Output = anyhow::Result<RewardMerkleTreeV2>>;
 
+    fn get_all_reward_accounts(
+        &self,
+        height: u64,
+        offset: u64,
+        limit: u64,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<(RewardAccountV2, RewardAmount)>>>;
+
     fn get_reward_account_v1(
         &self,
         instance: &NodeState,
@@ -276,16 +332,29 @@ pub(crate) trait CatchupDataSource: Sync {
         view: ViewNumber,
         accounts: &[RewardAccountV1],
     ) -> impl Send + Future<Output = anyhow::Result<RewardMerkleTreeV1>>;
+
+    fn get_state_cert(
+        &self,
+        epoch: u64,
+    ) -> impl Send + Future<Output = anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>>>;
 }
 
-#[async_trait]
 pub trait RequestResponseDataSource<Types: NodeType> {
-    async fn request_vid_shares(
+    fn request_vid_shares(
         &self,
         block_number: u64,
         vid_common_data: VidCommonQueryData<Types>,
         duration: Duration,
-    ) -> anyhow::Result<Vec<VidShare>>;
+    ) -> impl Future<Output = BoxFuture<'static, anyhow::Result<Vec<VidShare>>>> + Send;
+}
+
+#[async_trait]
+pub trait StateCertFetchingDataSource<Types: NodeType> {
+    async fn request_state_cert(
+        &self,
+        epoch: u64,
+        timeout: Duration,
+    ) -> Result<LightClientStateUpdateCertificateV2<Types>, StateCertFetchError>;
 }
 
 #[cfg(any(test, feature = "testing"))]

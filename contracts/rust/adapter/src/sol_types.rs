@@ -23,11 +23,12 @@ use alloy::sol;
 /// - structs should be exported and renamed with `xxSol` suffix to avoid confusion with other rust types
 ///   - see module doc for more explanation on types duplication issue in alloy
 pub use crate::bindings::{
-    erc1967proxy::ERC1967Proxy,
-    esptoken::EspToken,
-    esptokenv2::EspTokenV2,
-    feecontract::FeeContract::{self, Deposit},
-    lightclient::{
+    access_control_upgradeable::AccessControlUpgradeable,
+    erc1967_proxy::ERC1967Proxy,
+    esp_token::EspToken,
+    esp_token_v2::EspTokenV2,
+    fee_contract::FeeContract::{self, Deposit},
+    light_client::{
         IPlonkVerifier::{PlonkProof as PlonkProofSol, VerifyingKey as VerifyingKeySol},
         LightClient::{
             self, LightClientErrors, LightClientInstance, LightClientState as LightClientStateSol,
@@ -35,23 +36,20 @@ pub use crate::bindings::{
         },
         BN254::G1Point as G1PointSol,
     },
-    lightclientmock::{self, LightClientMock},
-    lightclientv2::{self, LightClientV2},
-    lightclientv2mock::{self, LightClientV2Mock},
-    lightclientv3::{self, LightClientV3},
-    lightclientv3mock::{self, LightClientV3Mock},
-    opstimelock::OpsTimelock,
-    ownableupgradeable::OwnableUpgradeable,
-    plonkverifier::PlonkVerifier,
-    plonkverifierv2::PlonkVerifierV2,
-    plonkverifierv3::PlonkVerifierV3,
-    rewardclaimprototypemock::{
-        RewardClaimPrototypeMock,
-        RewardMerkleTreeVerifier::AccruedRewardsProof as AccruedRewardsProofSol,
-    },
-    safeexittimelock::SafeExitTimelock,
-    staketable::StakeTable,
-    staketablev2::{
+    light_client_mock::{self, LightClientMock},
+    light_client_v2::{self, LightClientV2},
+    light_client_v2_mock::{self, LightClientV2Mock},
+    light_client_v3::{self, LightClientV3},
+    light_client_v3_mock::{self, LightClientV3Mock},
+    ops_timelock::OpsTimelock,
+    ownable_upgradeable::OwnableUpgradeable,
+    plonk_verifier::PlonkVerifier,
+    plonk_verifier_v2::PlonkVerifierV2,
+    plonk_verifier_v3::PlonkVerifierV3,
+    reward_claim::RewardClaim,
+    safe_exit_timelock::SafeExitTimelock,
+    stake_table::StakeTable,
+    stake_table_v2::{
         self, EdOnBN254::EdOnBN254Point as EdOnBN254PointSol, StakeTableV2,
         BN254::G2Point as G2PointSol,
     },
@@ -79,7 +77,6 @@ sol! {
         uint256 v;
         uint256 u;
     }
-
 }
 
 // Due to <https://github.com/foundry-rs/foundry/issues/10153> the rust bindings contain duplicate types for our solidity types.
@@ -92,31 +89,31 @@ impl From<LightClient::genesisStateReturn> for LightClientStateSol {
     }
 }
 
-impl From<lightclientmock::LightClient::LightClientState> for LightClientStateSol {
-    fn from(v: lightclientmock::LightClient::LightClientState) -> Self {
+impl From<light_client_mock::LightClient::LightClientState> for LightClientStateSol {
+    fn from(v: light_client_mock::LightClient::LightClientState) -> Self {
         unsafe { std::mem::transmute(v) }
     }
 }
-impl From<lightclientmock::LightClientMock::finalizedStateReturn> for LightClientStateSol {
-    fn from(v: lightclientmock::LightClientMock::finalizedStateReturn) -> Self {
+impl From<light_client_mock::LightClientMock::finalizedStateReturn> for LightClientStateSol {
+    fn from(v: light_client_mock::LightClientMock::finalizedStateReturn) -> Self {
         unsafe { std::mem::transmute(v) }
     }
 }
 
-impl From<LightClientStateSol> for lightclientmock::LightClient::LightClientState {
+impl From<LightClientStateSol> for light_client_mock::LightClient::LightClientState {
     fn from(v: LightClientStateSol) -> Self {
         unsafe { std::mem::transmute(v) }
     }
 }
 
-impl From<PlonkProofSol> for lightclientmock::IPlonkVerifier::PlonkProof {
+impl From<PlonkProofSol> for light_client_mock::IPlonkVerifier::PlonkProof {
     fn from(v: PlonkProofSol) -> Self {
         unsafe { std::mem::transmute(v) }
     }
 }
 
-impl From<lightclientmock::LightClientMock::genesisStateReturn> for LightClientStateSol {
-    fn from(v: lightclientmock::LightClientMock::genesisStateReturn) -> Self {
+impl From<light_client_mock::LightClientMock::genesisStateReturn> for LightClientStateSol {
+    fn from(v: light_client_mock::LightClientMock::genesisStateReturn) -> Self {
         unsafe { std::mem::transmute(v) }
     }
 }
@@ -133,28 +130,28 @@ impl From<LightClientV2::votingStakeTableStateReturn> for StakeTableStateSol {
     }
 }
 
-impl From<lightclientv2mock::LightClient::LightClientState> for LightClientStateSol {
-    fn from(v: lightclientv2mock::LightClient::LightClientState) -> Self {
+impl From<light_client_v2_mock::LightClient::LightClientState> for LightClientStateSol {
+    fn from(v: light_client_v2_mock::LightClient::LightClientState) -> Self {
         unsafe { std::mem::transmute(v) }
     }
 }
-impl From<LightClientStateSol> for lightclientv2mock::LightClient::LightClientState {
+impl From<LightClientStateSol> for light_client_v2_mock::LightClient::LightClientState {
     fn from(v: LightClientStateSol) -> Self {
         unsafe { std::mem::transmute(v) }
     }
 }
-impl From<LightClientStateSol> for lightclientv2::LightClient::LightClientState {
+impl From<LightClientStateSol> for light_client_v2::LightClient::LightClientState {
     fn from(v: LightClientStateSol) -> Self {
         unsafe { std::mem::transmute(v) }
     }
 }
 
-impl From<StakeTableStateSol> for lightclientv2::LightClient::StakeTableState {
+impl From<StakeTableStateSol> for light_client_v2::LightClient::StakeTableState {
     fn from(v: StakeTableStateSol) -> Self {
         unsafe { std::mem::transmute(v) }
     }
 }
-impl From<StakeTableStateSol> for lightclientv2mock::LightClient::StakeTableState {
+impl From<StakeTableStateSol> for light_client_v2_mock::LightClient::StakeTableState {
     fn from(v: StakeTableStateSol) -> Self {
         unsafe { std::mem::transmute(v) }
     }
@@ -172,7 +169,7 @@ impl From<LightClientV2Mock::finalizedStateReturn> for LightClientStateSol {
     }
 }
 
-impl From<PlonkProofSol> for lightclientv2::IPlonkVerifier::PlonkProof {
+impl From<PlonkProofSol> for light_client_v2::IPlonkVerifier::PlonkProof {
     fn from(v: PlonkProofSol) -> Self {
         unsafe { std::mem::transmute(v) }
     }
@@ -184,14 +181,14 @@ impl From<LightClientV2Mock::votingStakeTableStateReturn> for StakeTableStateSol
     }
 }
 
-impl From<G1PointSol> for staketablev2::BN254::G1Point {
+impl From<G1PointSol> for stake_table_v2::BN254::G1Point {
     fn from(v: G1PointSol) -> Self {
         unsafe { std::mem::transmute(v) }
     }
 }
 
-impl From<staketablev2::BN254::G1Point> for G1PointSol {
-    fn from(v: staketablev2::BN254::G1Point) -> Self {
+impl From<stake_table_v2::BN254::G1Point> for G1PointSol {
+    fn from(v: stake_table_v2::BN254::G1Point) -> Self {
         unsafe { std::mem::transmute(v) }
     }
 }
@@ -209,38 +206,38 @@ impl From<LightClientV3::votingStakeTableStateReturn> for StakeTableStateSol {
     }
 }
 
-impl From<LightClientStateSol> for lightclientv3::LightClient::LightClientState {
+impl From<LightClientStateSol> for light_client_v3::LightClient::LightClientState {
     fn from(v: LightClientStateSol) -> Self {
         unsafe { std::mem::transmute(v) }
     }
 }
 
-impl From<StakeTableStateSol> for lightclientv3::LightClient::StakeTableState {
+impl From<StakeTableStateSol> for light_client_v3::LightClient::StakeTableState {
     fn from(v: StakeTableStateSol) -> Self {
         unsafe { std::mem::transmute(v) }
     }
 }
 
-impl From<PlonkProofSol> for lightclientv3::IPlonkVerifier::PlonkProof {
+impl From<PlonkProofSol> for light_client_v3::IPlonkVerifier::PlonkProof {
     fn from(v: PlonkProofSol) -> Self {
         unsafe { std::mem::transmute(v) }
     }
 }
 
 // Transmute conversion functions for LightClientV3Mock
-impl From<lightclientv3mock::LightClient::LightClientState> for LightClientStateSol {
-    fn from(v: lightclientv3mock::LightClient::LightClientState) -> Self {
+impl From<light_client_v3_mock::LightClient::LightClientState> for LightClientStateSol {
+    fn from(v: light_client_v3_mock::LightClient::LightClientState) -> Self {
         unsafe { std::mem::transmute(v) }
     }
 }
 
-impl From<LightClientStateSol> for lightclientv3mock::LightClient::LightClientState {
+impl From<LightClientStateSol> for light_client_v3_mock::LightClient::LightClientState {
     fn from(v: LightClientStateSol) -> Self {
         unsafe { std::mem::transmute(v) }
     }
 }
 
-impl From<StakeTableStateSol> for lightclientv3mock::LightClient::StakeTableState {
+impl From<StakeTableStateSol> for light_client_v3_mock::LightClient::StakeTableState {
     fn from(v: StakeTableStateSol) -> Self {
         unsafe { std::mem::transmute(v) }
     }
@@ -264,14 +261,8 @@ impl From<LightClientV3Mock::votingStakeTableStateReturn> for StakeTableStateSol
     }
 }
 
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-use self::{
-    staketablev2::{EdOnBN254::EdOnBN254Point, BN254::G2Point},
-    StakeTableV2::{
-        ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated, Undelegated, ValidatorExit,
-        ValidatorRegistered, ValidatorRegisteredV2,
-    },
+use self::StakeTableV2::{
+    ConsensusKeysUpdated, ConsensusKeysUpdatedV2, ValidatorRegistered, ValidatorRegisteredV2,
 };
 
 impl PartialEq for ValidatorRegistered {
@@ -312,249 +303,99 @@ impl PartialEq for ConsensusKeysUpdatedV2 {
     }
 }
 
-impl Serialize for ValidatorRegistered {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        (&self.account, &self.blsVk, &self.schnorrVk, self.commission).serialize(serializer)
+impl Clone for StakeTableV2::StakeTableV2Events {
+    fn clone(&self) -> Self {
+        match self {
+            Self::ValidatorRegistered(v) => Self::ValidatorRegistered(*v),
+            Self::ValidatorRegisteredV2(v) => Self::ValidatorRegisteredV2(v.clone()),
+            Self::ValidatorExit(v) => Self::ValidatorExit(*v),
+            Self::ValidatorExitV2(v) => Self::ValidatorExitV2(v.clone()),
+            Self::Delegated(v) => Self::Delegated(*v),
+            Self::Undelegated(v) => Self::Undelegated(*v),
+            Self::UndelegatedV2(v) => Self::UndelegatedV2(v.clone()),
+            Self::ConsensusKeysUpdated(v) => Self::ConsensusKeysUpdated(*v),
+            Self::ConsensusKeysUpdatedV2(v) => Self::ConsensusKeysUpdatedV2(v.clone()),
+            Self::CommissionUpdated(v) => Self::CommissionUpdated(v.clone()),
+            Self::ExitEscrowPeriodUpdated(v) => Self::ExitEscrowPeriodUpdated(v.clone()),
+            Self::MaxCommissionIncreaseUpdated(v) => Self::MaxCommissionIncreaseUpdated(v.clone()),
+            Self::MinCommissionUpdateIntervalUpdated(v) => {
+                Self::MinCommissionUpdateIntervalUpdated(v.clone())
+            },
+            Self::OwnershipTransferred(v) => Self::OwnershipTransferred(v.clone()),
+            Self::Paused(v) => Self::Paused(v.clone()),
+            Self::Unpaused(v) => Self::Unpaused(v.clone()),
+            Self::Initialized(v) => Self::Initialized(v.clone()),
+            Self::RoleAdminChanged(v) => Self::RoleAdminChanged(v.clone()),
+            Self::RoleGranted(v) => Self::RoleGranted(v.clone()),
+            Self::RoleRevoked(v) => Self::RoleRevoked(v.clone()),
+            Self::WithdrawalClaimed(v) => Self::WithdrawalClaimed(v.clone()),
+            Self::Upgraded(v) => Self::Upgraded(v.clone()),
+            Self::ValidatorExitClaimed(v) => Self::ValidatorExitClaimed(v.clone()),
+            Self::Withdrawal(v) => Self::Withdrawal(v.clone()),
+            Self::MetadataUriUpdated(v) => Self::MetadataUriUpdated(v.clone()),
+            Self::MinDelegateAmountUpdated(v) => Self::MinDelegateAmountUpdated(v.clone()),
+        }
     }
 }
 
-#[allow(non_snake_case)]
-impl<'de> Deserialize<'de> for ValidatorRegistered {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let (account, blsVk, schnorrVk, commission) = <(_, _, _, u16)>::deserialize(deserializer)?;
-        Ok(Self {
-            account,
-            blsVk,
-            schnorrVk,
-            commission,
-        })
+impl std::fmt::Debug for StakeTableV2::StakeTableV2Events {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Self::ValidatorRegistered(_) => write!(f, "ValidatorRegistered(_)"),
+            Self::ValidatorRegisteredV2(_) => write!(f, "ValidatorRegisteredV2(_)"),
+            Self::ValidatorExit(v) => write!(f, "ValidatorExit({v:?})"),
+            Self::ValidatorExitV2(v) => write!(f, "ValidatorExitV2({v:?})"),
+            Self::Delegated(v) => write!(f, "Delegated({v:?})"),
+            Self::Undelegated(v) => write!(f, "Undelegated({v:?})"),
+            Self::UndelegatedV2(v) => write!(f, "UndelegatedV2({v:?})"),
+            Self::ConsensusKeysUpdated(_) => write!(f, "ConsensusKeysUpdated(_)"),
+            Self::ConsensusKeysUpdatedV2(_) => write!(f, "ConsensusKeysUpdatedV2(_)"),
+            Self::CommissionUpdated(v) => write!(f, "CommissionUpdated({v:?})"),
+            Self::ExitEscrowPeriodUpdated(v) => write!(f, "ExitEscrowPeriodUpdated({v:?})"),
+            Self::MaxCommissionIncreaseUpdated(v) => {
+                write!(f, "MaxCommissionIncreaseUpdated({v:?})")
+            },
+            Self::MinCommissionUpdateIntervalUpdated(v) => {
+                write!(f, "MinCommissionUpdateIntervalUpdated({v:?})")
+            },
+            Self::OwnershipTransferred(v) => write!(f, "OwnershipTransferred({v:?})"),
+            Self::Paused(v) => write!(f, "Paused({v:?})"),
+            Self::Unpaused(v) => write!(f, "Unpaused({v:?})"),
+            Self::Initialized(v) => write!(f, "Initialized({v:?})"),
+            Self::RoleAdminChanged(v) => write!(f, "RoleAdminChanged({v:?})"),
+            Self::RoleGranted(v) => write!(f, "RoleGranted({v:?})"),
+            Self::RoleRevoked(v) => write!(f, "RoleRevoked({v:?})"),
+            Self::WithdrawalClaimed(v) => write!(f, "WithdrawalClaimed({v:?})"),
+            Self::Upgraded(v) => write!(f, "Upgraded({v:?})"),
+            Self::ValidatorExitClaimed(v) => write!(f, "ValidatorExitClaimed({v:?})"),
+            Self::Withdrawal(v) => write!(f, "Withdrawal({v:?})"),
+            Self::MetadataUriUpdated(v) => write!(f, "MetadataUriUpdated({v:?})"),
+            Self::MinDelegateAmountUpdated(v) => write!(f, "MinDelegateAmountUpdated({v:?})"),
+        }
     }
 }
+#[cfg(test)]
+mod tests {
+    use alloy::{primitives::U256, sol_types::private::Address};
 
-impl Serialize for ValidatorRegisteredV2 {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        (
-            &self.account,
-            &self.blsVK,
-            &self.schnorrVK,
-            self.commission,
-            &self.blsSig,
-            &self.schnorrSig,
-        )
-            .serialize(serializer)
-    }
-}
+    use crate::sol_types::StakeTableV2::CommissionUpdated;
 
-#[allow(non_snake_case)]
-impl<'de> Deserialize<'de> for ValidatorRegisteredV2 {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let (account, blsVK, schnorrVK, commission, blsSig, schnorrSig) =
-            <(_, _, _, u16, _, _)>::deserialize(deserializer)?;
-        Ok(ValidatorRegisteredV2 {
-            account,
-            blsVK,
-            schnorrVK,
-            commission,
-            blsSig,
-            schnorrSig,
-        })
-    }
-}
+    #[test]
+    fn test_commission_updated_serde_roundtrip() {
+        let original = CommissionUpdated {
+            validator: Address::random(),
+            timestamp: U256::from(999),
+            oldCommission: 123,
+            newCommission: 456,
+        };
 
-impl Serialize for EdOnBN254Point {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        (self.x, self.y).serialize(serializer)
-    }
-}
+        let serialized = bincode::serialize(&original).expect("Failed to serialize");
+        let deserialized: CommissionUpdated =
+            bincode::deserialize(&serialized).expect("Failed to deserialize");
 
-impl<'de> Deserialize<'de> for EdOnBN254Point {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let (x, y) = Deserialize::deserialize(deserializer)?;
-        Ok(Self { x, y })
-    }
-}
-
-impl Serialize for G2Point {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        (&self.x0, &self.x1, &self.y0, &self.y1).serialize(serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for G2Point {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let (x0, x1, y0, y1) = Deserialize::deserialize(deserializer)?;
-
-        Ok(Self { x0, x1, y0, y1 })
-    }
-}
-
-impl Serialize for staketablev2::BN254::G1Point {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        (&self.x, &self.y).serialize(serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for staketablev2::BN254::G1Point {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let (x, y) = Deserialize::deserialize(deserializer)?;
-        Ok(Self { x, y })
-    }
-}
-
-impl Serialize for ValidatorExit {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        (&self.validator,).serialize(serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for ValidatorExit {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let (validator,): (alloy::sol_types::private::Address,) =
-            Deserialize::deserialize(deserializer)?;
-        Ok(ValidatorExit { validator })
-    }
-}
-
-impl Serialize for Delegated {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        (&self.delegator, &self.validator, &self.amount).serialize(serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for Delegated {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let (delegator, validator, amount) = Deserialize::deserialize(deserializer)?;
-
-        Ok(Delegated {
-            delegator,
-            validator,
-            amount,
-        })
-    }
-}
-
-impl Serialize for Undelegated {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        (&self.delegator, &self.validator, &self.amount).serialize(serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for Undelegated {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let (delegator, validator, amount) = Deserialize::deserialize(deserializer)?;
-
-        Ok(Undelegated {
-            delegator,
-            validator,
-            amount,
-        })
-    }
-}
-
-impl Serialize for ConsensusKeysUpdated {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        (&self.account, &self.blsVK, &self.schnorrVK).serialize(serializer)
-    }
-}
-
-#[allow(non_snake_case)]
-impl<'de> Deserialize<'de> for ConsensusKeysUpdated {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let (account, blsVK, schnorrVK) = Deserialize::deserialize(deserializer)?;
-
-        Ok(ConsensusKeysUpdated {
-            account,
-            blsVK,
-            schnorrVK,
-        })
-    }
-}
-
-impl Serialize for ConsensusKeysUpdatedV2 {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        (
-            &self.account,
-            &self.blsVK,
-            &self.schnorrVK,
-            &self.blsSig,
-            &self.schnorrSig,
-        )
-            .serialize(serializer)
-    }
-}
-
-#[allow(non_snake_case)]
-impl<'de> Deserialize<'de> for ConsensusKeysUpdatedV2 {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let (account, blsVK, schnorrVK, blsSig, schnorrSig) =
-            Deserialize::deserialize(deserializer)?;
-
-        Ok(ConsensusKeysUpdatedV2 {
-            account,
-            blsVK,
-            schnorrVK,
-            blsSig,
-            schnorrSig,
-        })
+        assert_eq!(original.validator, deserialized.validator);
+        assert_eq!(original.timestamp, deserialized.timestamp);
+        assert_eq!(original.oldCommission, deserialized.oldCommission);
+        assert_eq!(original.newCommission, deserialized.newCommission);
     }
 }

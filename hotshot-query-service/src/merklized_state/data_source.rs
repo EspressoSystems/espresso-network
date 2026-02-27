@@ -23,7 +23,7 @@ use async_trait::async_trait;
 use derivative::Derivative;
 use derive_more::with_trait::Display;
 use hotshot_types::traits::node_implementation::NodeType;
-use jf_merkle_tree::{
+use jf_merkle_tree_compat::{
     prelude::MerkleProof, DigestAlgorithm, Element, ForgetableMerkleTreeScheme, Index,
     MerkleCommitment, NodeValue, ToTraversalPath,
 };
@@ -57,6 +57,14 @@ pub trait UpdateStateData<Types: NodeType, State: MerklizedState<Types, ARITY>, 
         &mut self,
         path: MerkleProof<State::Entry, State::Key, State::T, ARITY>,
         traversal_path: Vec<usize>,
+        block_number: u64,
+    ) -> anyhow::Result<()>;
+    async fn insert_merkle_nodes_batch(
+        &mut self,
+        proofs: Vec<(
+            MerkleProof<State::Entry, State::Key, State::T, ARITY>,
+            Vec<usize>,
+        )>,
         block_number: u64,
     ) -> anyhow::Result<()>;
 }

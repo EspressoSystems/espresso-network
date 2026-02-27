@@ -19,12 +19,12 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
     simple_certificate::{
-        EpochRootQuorumCertificate, LightClientStateUpdateCertificateV2,
+        EpochRootQuorumCertificateV2, LightClientStateUpdateCertificateV2,
         NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate,
     },
     stake_table::StakeTableEntries,
     traits::{
-        node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
+        node_implementation::{ConsensusTime, NodeImplementation, NodeType},
         signature_key::SignatureKey,
         storage::Storage,
     },
@@ -43,7 +43,7 @@ use crate::{
 mod handlers;
 
 /// The state for the quorum proposal task.
-pub struct QuorumProposalTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> {
+pub struct QuorumProposalTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>> {
     /// Latest view number that has been proposed for.
     pub latest_proposed_view: TYPES::View,
 
@@ -93,7 +93,7 @@ pub struct QuorumProposalTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>
     pub formed_upgrade_certificate: Option<UpgradeCertificate<TYPES>>,
 
     /// Lock for a decided upgrade
-    pub upgrade_lock: UpgradeLock<TYPES, V>,
+    pub upgrade_lock: UpgradeLock<TYPES>,
 
     /// Number of blocks in an epoch, zero means there are no epochs
     pub epoch_height: u64,
@@ -105,9 +105,7 @@ pub struct QuorumProposalTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>
     pub first_epoch: Option<(TYPES::View, TYPES::Epoch)>,
 }
 
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
-    QuorumProposalTaskState<TYPES, I, V>
-{
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> QuorumProposalTaskState<TYPES, I> {
     /// Create an event dependency
     #[instrument(skip_all, fields(id = self.id, latest_proposed_view = *self.latest_proposed_view), name = "Create event dependency", level = "info")]
     fn create_event_dependency(
@@ -431,6 +429,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                 id: self.id,
                 view_start_time: Instant::now(),
                 epoch_height: self.epoch_height,
+                cancel_receiver,
             },
         );
         self.proposal_dependencies
@@ -557,7 +556,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                 },
             },
 
-            HotShotEvent::EpochRootQcFormed(EpochRootQuorumCertificate { qc, state_cert }) => {
+            HotShotEvent::EpochRootQcFormed(EpochRootQuorumCertificateV2 { qc, state_cert }) => {
                 // Only update if the qc is from a newer view
                 if qc.view_number() <= self.consensus.read().await.high_qc().view_number {
                     tracing::trace!(
@@ -754,8 +753,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
 }
 
 #[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TaskState
-    for QuorumProposalTaskState<TYPES, I, V>
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TaskState
+    for QuorumProposalTaskState<TYPES, I>
 {
     type Event = HotShotEvent<TYPES>;
 

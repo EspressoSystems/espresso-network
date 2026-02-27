@@ -28,7 +28,7 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     network::NetworkConfig,
     storage_metrics::StorageMetricsValue,
-    traits::{metrics::Metrics, network::ConnectedNetwork, node_implementation::Versions},
+    traits::{metrics::Metrics, network::ConnectedNetwork},
     PeerConfig, ValidatorConfig,
 };
 use parking_lot::Mutex;
@@ -52,20 +52,20 @@ use crate::{
 };
 
 /// The consensus handle
-pub type Consensus<N, P, V> = SystemContextHandle<SeqTypes, Node<N, P>, V>;
+pub type Consensus<N, P> = SystemContextHandle<SeqTypes, Node<N, P>>;
 
 /// The sequencer context contains a consensus handle and other sequencer specific information.
 #[derive(Derivative, Clone)]
 #[derivative(Debug(bound = ""))]
-pub struct SequencerContext<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> {
+pub struct SequencerContext<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> {
     /// The consensus handle
     #[derivative(Debug = "ignore")]
-    handle: Arc<RwLock<Consensus<N, P, V>>>,
+    handle: Arc<RwLock<Consensus<N, P>>>,
 
     /// The request-response protocol
     #[derivative(Debug = "ignore")]
     #[allow(dead_code)]
-    pub request_response_protocol: RequestResponseProtocol<Node<N, P>, V, N, P>,
+    pub request_response_protocol: RequestResponseProtocol<Node<N, P>, N, P>,
 
     /// Context for generating state signatures.
     state_signer: Arc<RwLock<StateSigner<SequencerApiVersion>>>,
@@ -90,7 +90,7 @@ pub struct SequencerContext<N: ConnectedNetwork<PubKey>, P: SequencerPersistence
     validator_config: ValidatorConfig<SeqTypes>,
 }
 
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> SequencerContext<N, P, V> {
+impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P> {
     #[tracing::instrument(skip_all, fields(node_id = instance_state.node_id))]
     #[allow(clippy::too_many_arguments)]
     pub async fn init(
@@ -106,7 +106,6 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
         metrics: &dyn Metrics,
         stake_table_capacity: usize,
         event_consumer: impl PersistenceEventConsumer + 'static,
-        _: V,
         proposal_fetcher_cfg: ProposalFetcherConfig,
     ) -> anyhow::Result<Self> {
         let config = &network_config.config;
@@ -123,7 +122,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
 
         // Load saved consensus state from storage.
         let (initializer, anchor_view) = persistence
-            .load_consensus_state::<V>(instance_state.clone())
+            .load_consensus_state(instance_state.clone(), config.upgrade)
             .await?;
 
         tracing::warn!(
@@ -196,6 +195,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
             DataSource {
                 node_state: instance_state.clone(),
                 storage,
+                persistence: persistence.clone(),
                 consensus: handle.hotshot.clone(),
                 phantom: PhantomData,
             },
@@ -210,7 +210,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
 
         // Create the external event handler
         let mut tasks = TaskList::default();
-        let external_event_handler = ExternalEventHandler::<V>::new(
+        let external_event_handler = ExternalEventHandler::new(
             &mut tasks,
             request_response_sender,
             outbound_message_receiver,
@@ -241,11 +241,11 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
     /// Constructor
     #[allow(clippy::too_many_arguments)]
     fn new(
-        handle: Consensus<N, P, V>,
+        handle: Consensus<N, P>,
         persistence: Arc<P>,
         state_signer: StateSigner<SequencerApiVersion>,
-        external_event_handler: ExternalEventHandler<V>,
-        request_response_protocol: RequestResponseProtocol<Node<N, P>, V, N, P>,
+        external_event_handler: ExternalEventHandler,
+        request_response_protocol: RequestResponseProtocol<Node<N, P>, N, P>,
         event_streamer: Arc<RwLock<EventsStreamer<SeqTypes>>>,
         node_state: NodeState,
         network_config: NetworkConfig<SeqTypes>,
@@ -331,7 +331,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
     }
 
     /// Return a reference to the underlying consensus handle.
-    pub fn consensus(&self) -> Arc<RwLock<Consensus<N, P, V>>> {
+    pub fn consensus(&self) -> Arc<RwLock<Consensus<N, P>>> {
         Arc::clone(&self.handle)
     }
 
@@ -429,9 +429,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Drop
-    for SequencerContext<N, P, V>
-{
+impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> Drop for SequencerContext<N, P> {
     fn drop(&mut self) {
         if !self.detached {
             // Spawn a task to shut down the context
@@ -454,26 +452,25 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Drop
 
 #[tracing::instrument(skip_all, fields(node_id))]
 #[allow(clippy::too_many_arguments)]
-async fn handle_events<N, P, V>(
-    consensus: Arc<RwLock<Consensus<N, P, V>>>,
+async fn handle_events<N, P>(
+    consensus: Arc<RwLock<Consensus<N, P>>>,
     node_id: u64,
     mut events: impl Stream<Item = Event<SeqTypes>> + Unpin,
     persistence: Arc<P>,
     state_signer: Arc<RwLock<StateSigner<SequencerApiVersion>>>,
-    external_event_handler: ExternalEventHandler<V>,
+    external_event_handler: ExternalEventHandler,
     events_streamer: Option<Arc<RwLock<EventsStreamer<SeqTypes>>>>,
     event_consumer: impl PersistenceEventConsumer + 'static,
     anchor_view: Option<ViewNumber>,
 ) where
     N: ConnectedNetwork<PubKey>,
     P: SequencerPersistence,
-    V: Versions,
 {
     if let Some(view) = anchor_view {
         // Process and clean up any leaves that we may have persisted last time we were running but
         // failed to handle due to a shutdown.
         if let Err(err) = persistence
-            .append_decided_leaves(view, vec![], &event_consumer)
+            .append_decided_leaves(view, vec![], None, &event_consumer)
             .await
         {
             tracing::warn!(

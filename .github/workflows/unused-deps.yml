@@ -4,6 +4,9 @@ on:
 
 name: udeps
 
+env:
+  CARGO_INCREMENTAL: "0"
+
 jobs:
   check:
     name: Rust project

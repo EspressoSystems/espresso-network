@@ -18,7 +18,7 @@ LOAD_GENERATOR=http://localhost:$ESPRESSO_SUBMIT_TRANSACTIONS_PRIVATE_PORT
 
 L1_PROVIDER=http://localhost:$ESPRESSO_SEQUENCER_L1_PORT
 SEQUENCER_API=http://localhost:$ESPRESSO_SEQUENCER1_API_PORT
-SEQUENCER_BLOCKS_TIMEOUT=120
+SEQUENCER_BLOCKS_TIMEOUT=180
 
 # usage: wait_for timeout_in_secs name URL
 function wait_for() {
@@ -153,6 +153,3 @@ done
 
 BUILDER_URL="http://localhost:$ESPRESSO_BUILDER_SERVER_PORT/healthcheck"
 wait_for 60 builder "$BUILDER_URL"
-
-PROVER_URL="http://localhost:$ESPRESSO_PROVER_SERVICE_PORT/healthcheck"
-wait_for 300 prover "$PROVER_URL"

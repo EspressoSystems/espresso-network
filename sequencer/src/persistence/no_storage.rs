@@ -4,10 +4,11 @@ use std::{collections::BTreeMap, sync::Arc};
 use anyhow::bail;
 use async_trait::async_trait;
 use espresso_types::{
-    traits::{EventsPersistenceRead, MembershipPersistence},
+    traits::{EventsPersistenceRead, MembershipPersistence, StakeTuple},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
-    v0_3::{EventKey, IndexedStake, RewardAmount, StakeTableEvent},
-    Leaf2, NetworkConfig, StakeTableHash, ValidatorMap,
+    v0_3::{EventKey, IndexedStake, RegisteredValidator, RewardAmount, StakeTableEvent},
+    AuthenticatedValidatorMap, Leaf2, NetworkConfig, PubKey, RegisteredValidatorMap,
+    StakeTableHash,
 };
 use hotshot::InitializerEpochInfo;
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::{
@@ -15,7 +16,6 @@ use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::{
 };
 use hotshot_types::{
     data::{
-        vid_disperse::{ADVZDisperseShare, VidDisperseShare2},
         DaProposal, DaProposal2, EpochNumber, QuorumProposalWrapper, VidCommitment,
         VidDisperseShare,
     },
@@ -23,10 +23,11 @@ use hotshot_types::{
     event::{Event, EventType, HotShotAction, LeafInfo},
     message::Proposal,
     simple_certificate::{
-        LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2, QuorumCertificate2,
-        UpgradeCertificate,
+        CertificatePair, LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2,
+        QuorumCertificate2, UpgradeCertificate,
     },
     traits::metrics::Metrics,
+    vote::HasViewNumber,
 };
 
 use crate::{NodeType, SeqTypes, ViewNumber};
@@ -65,7 +66,8 @@ impl SequencerPersistence for NoStorage {
     async fn append_decided_leaves(
         &self,
         view_number: ViewNumber,
-        leaves: impl IntoIterator<Item = (&LeafInfo<SeqTypes>, QuorumCertificate2<SeqTypes>)> + Send,
+        leaves: impl IntoIterator<Item = (&LeafInfo<SeqTypes>, CertificatePair<SeqTypes>)> + Send,
+        deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
         consumer: &impl EventConsumer,
     ) -> anyhow::Result<()> {
         let leaves = leaves
@@ -73,12 +75,21 @@ impl SequencerPersistence for NoStorage {
             .map(|(info_ref, qc)| (info_ref.clone(), qc))
             .collect::<Vec<_>>();
         for (leaf_info, qc) in leaves {
+            // Insert the deciding QC at the appropriate position, with the last decide event in the
+            // chain.
+            let deciding_qc = if let Some(deciding_qc) = &deciding_qc {
+                (deciding_qc.view_number() == qc.view_number() + 1).then_some(deciding_qc.clone())
+            } else {
+                None
+            };
+
             consumer
                 .handle_event(&Event {
                     view_number,
                     event: EventType::Decide {
                         leaf_chain: Arc::new(vec![leaf_info.clone()]),
-                        qc: Arc::new(qc),
+                        committing_qc: Arc::new(qc),
+                        deciding_qc,
                         block_size: None,
                     },
                 })
@@ -135,13 +146,7 @@ impl SequencerPersistence for NoStorage {
 
     async fn append_vid(
         &self,
-        _proposal: &Proposal<SeqTypes, ADVZDisperseShare<SeqTypes>>,
-    ) -> anyhow::Result<()> {
-        Ok(())
-    }
-    async fn append_vid2(
-        &self,
-        _proposal: &Proposal<SeqTypes, VidDisperseShare2<SeqTypes>>,
+        _proposal: &Proposal<SeqTypes, VidDisperseShare<SeqTypes>>,
     ) -> anyhow::Result<()> {
         Ok(())
     }
@@ -221,16 +226,24 @@ impl SequencerPersistence for NoStorage {
     async fn migrate_anchor_leaf(&self) -> anyhow::Result<()> {
         Ok(())
     }
+
     async fn migrate_da_proposals(&self) -> anyhow::Result<()> {
         Ok(())
     }
+
     async fn migrate_vid_shares(&self) -> anyhow::Result<()> {
         Ok(())
     }
+
     async fn migrate_quorum_proposals(&self) -> anyhow::Result<()> {
         Ok(())
     }
+
     async fn migrate_quorum_certificates(&self) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn migrate_validator_authenticated(&self) -> anyhow::Result<()> {
         Ok(())
     }
 
@@ -274,15 +287,27 @@ impl SequencerPersistence for NoStorage {
         Ok(None)
     }
 
+    async fn get_state_cert_by_epoch(
+        &self,
+        _epoch: u64,
+    ) -> anyhow::Result<Option<LightClientStateUpdateCertificateV2<SeqTypes>>> {
+        Ok(None)
+    }
+
+    async fn insert_state_cert(
+        &self,
+        _epoch: u64,
+        _cert: LightClientStateUpdateCertificateV2<SeqTypes>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
     fn enable_metrics(&mut self, _metrics: &dyn Metrics) {}
 }
 
 #[async_trait]
 impl MembershipPersistence for NoStorage {
-    async fn load_stake(
-        &self,
-        _epoch: EpochNumber,
-    ) -> anyhow::Result<Option<(ValidatorMap, Option<RewardAmount>, Option<StakeTableHash>)>> {
+    async fn load_stake(&self, _epoch: EpochNumber) -> anyhow::Result<Option<StakeTuple>> {
         Ok(None)
     }
 
@@ -293,7 +318,7 @@ impl MembershipPersistence for NoStorage {
     async fn store_stake(
         &self,
         _epoch: EpochNumber,
-        _stake: ValidatorMap,
+        _stake: AuthenticatedValidatorMap,
         _block_reward: Option<RewardAmount>,
         _stake_table_hash: Option<StakeTableHash>,
     ) -> anyhow::Result<()> {
@@ -309,12 +334,34 @@ impl MembershipPersistence for NoStorage {
     }
     async fn load_events(
         &self,
+        _from_l1_block: u64,
         _l1_block: u64,
     ) -> anyhow::Result<(
         Option<EventsPersistenceRead>,
         Vec<(EventKey, StakeTableEvent)>,
     )> {
         Ok((None, Vec::new()))
+    }
+
+    async fn delete_stake_tables(&self) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn store_all_validators(
+        &self,
+        _epoch: EpochNumber,
+        _all_validators: RegisteredValidatorMap,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn load_all_validators(
+        &self,
+        _epoch: EpochNumber,
+        _offset: u64,
+        _limit: u64,
+    ) -> anyhow::Result<Vec<RegisteredValidator<PubKey>>> {
+        Ok(Default::default())
     }
 }
 

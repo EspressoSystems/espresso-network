@@ -13,14 +13,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     data::{
-        vid_disperse::ADVZDisperseShare, DaProposal, DaProposal2, Leaf, Leaf2, QuorumProposal,
-        QuorumProposalWrapper, UpgradeProposal, VidDisperseShare,
+        DaProposal, DaProposal2, Leaf, Leaf2, QuorumProposal, QuorumProposalWrapper,
+        UpgradeProposal, VidDisperseShare, VidDisperseShare0,
     },
     error::HotShotError,
     message::{convert_proposal, Proposal},
-    simple_certificate::{
-        LightClientStateUpdateCertificateV2, QuorumCertificate, QuorumCertificate2,
-    },
+    simple_certificate::{CertificatePair, LightClientStateUpdateCertificateV2, QuorumCertificate},
     traits::{node_implementation::NodeType, ValidatedState},
 };
 
@@ -99,7 +97,7 @@ impl<TYPES: NodeType> LeafInfo<TYPES> {
                 .vid_share
                 .map(|share| match share {
                     VidDisperseShare::V0(share) => Ok(share),
-                    VidDisperseShare::V1(_) => Err(error!("VID share is post-epoch")),
+                    _ => Err(error!("VID share is post-epoch")),
                 })
                 .transpose()?,
         })
@@ -117,7 +115,7 @@ pub struct LegacyLeafInfo<TYPES: NodeType> {
     /// Optional application-specific state delta.
     pub delta: Option<Arc<<<TYPES as NodeType>::ValidatedState as ValidatedState<TYPES>>::Delta>>,
     /// Optional VID share data.
-    pub vid_share: Option<ADVZDisperseShare<TYPES>>,
+    pub vid_share: Option<VidDisperseShare0<TYPES>>,
 }
 
 impl<TYPES: NodeType> LegacyLeafInfo<TYPES> {
@@ -126,7 +124,7 @@ impl<TYPES: NodeType> LegacyLeafInfo<TYPES> {
         leaf: Leaf<TYPES>,
         state: Arc<<TYPES as NodeType>::ValidatedState>,
         delta: Option<Arc<<<TYPES as NodeType>::ValidatedState as ValidatedState<TYPES>>::Delta>>,
-        vid_share: Option<ADVZDisperseShare<TYPES>>,
+        vid_share: Option<VidDisperseShare0<TYPES>>,
     ) -> Self {
         Self {
             leaf,
@@ -201,7 +199,12 @@ pub enum EventType<TYPES: NodeType> {
         ///
         /// Note that the QC for each additional leaf in the chain can be obtained from the leaf
         /// before it using
-        qc: Arc<QuorumCertificate2<TYPES>>,
+        committing_qc: Arc<CertificatePair<TYPES>>,
+        /// A QC signing the leaf corresponding to `qc`.
+        ///
+        /// Together with `qc`, this forms a 2-chain, which is sufficient for a light client to
+        /// verify that the leaf chain contained in this event is in fact decided.
+        deciding_qc: Option<Arc<CertificatePair<TYPES>>>,
         /// Optional information of the number of transactions in the block, for logging purposes.
         block_size: Option<u64>,
     },
@@ -266,8 +269,9 @@ impl<TYPES: NodeType> EventType<TYPES> {
             EventType::Error { error } => LegacyEventType::Error { error },
             EventType::Decide {
                 leaf_chain,
-                qc,
+                committing_qc: qc,
                 block_size,
+                ..
             } => LegacyEventType::Decide {
                 leaf_chain: Arc::new(
                     leaf_chain
@@ -276,7 +280,7 @@ impl<TYPES: NodeType> EventType<TYPES> {
                         .map(LeafInfo::to_legacy_unsafe)
                         .collect::<anyhow::Result<_, _>>()?,
                 ),
-                qc: Arc::new(qc.as_ref().clone().to_qc()),
+                qc: Arc::new(qc.qc().clone().to_qc()),
                 block_size,
             },
             EventType::ReplicaViewTimeout { view_number } => {

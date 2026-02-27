@@ -5,7 +5,6 @@
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
 /// Sortition trait
-pub mod election;
 mod networking;
 mod node_implementation;
 
@@ -27,5 +26,6 @@ pub mod implementations {
             CdnMetricsValue, KeyPair, ProductionDef, PushCdnNetwork, TestingDef, Topic as CdnTopic,
             WrappedSignatureKey,
         },
+        Cliquenet,
     };
 }

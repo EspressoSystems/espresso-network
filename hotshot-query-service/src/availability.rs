@@ -31,7 +31,7 @@ use std::{fmt::Display, path::PathBuf, time::Duration};
 use derive_more::From;
 use futures::{FutureExt, StreamExt, TryFutureExt, TryStreamExt};
 use hotshot_types::{
-    data::{Leaf, Leaf2, QuorumProposal, VidCommitment},
+    data::{Leaf, Leaf2, QuorumProposal, VidCommitment, VidCommon},
     simple_certificate::QuorumCertificate,
     traits::node_implementation::NodeType,
 };
@@ -40,7 +40,7 @@ use snafu::{OptionExt, Snafu};
 use tide_disco::{api::ApiError, method::ReadState, Api, RequestError, RequestParams, StatusCode};
 use vbs::version::StaticVersionType;
 
-use crate::{api::load_api, types::HeightIndexed, Header, Payload, QueryError, VidCommon};
+use crate::{api::load_api, types::HeightIndexed, Header, Payload, QueryError};
 
 pub(crate) mod data_source;
 mod fetch;
@@ -734,33 +734,6 @@ where
             })
         }
         .boxed()
-    })?
-    .at("get_state_cert", move |req, state| {
-        async move {
-            let epoch = req.integer_param("epoch")?;
-            let fetch = state
-                .read(|state| state.get_state_cert(epoch).boxed())
-                .await;
-            fetch
-                .with_timeout(timeout)
-                .await
-                .context(FetchStateCertSnafu { epoch })
-                .map(StateCertQueryDataV1::from)
-        }
-        .boxed()
-    })?
-    .at("get_state_cert_v2", move |req, state| {
-        async move {
-            let epoch = req.integer_param("epoch")?;
-            let fetch = state
-                .read(|state| state.get_state_cert(epoch).boxed())
-                .await;
-            fetch
-                .with_timeout(timeout)
-                .await
-                .context(FetchStateCertSnafu { epoch })
-        }
-        .boxed()
     })?;
     Ok(api)
 }
@@ -827,15 +800,12 @@ mod test {
     use async_lock::RwLock;
     use committable::Committable;
     use futures::future::FutureExt;
-    use hotshot_example_types::node_types::EpochsTestVersions;
-    use hotshot_types::{
-        data::Leaf2, simple_certificate::QuorumCertificate2,
-        traits::node_implementation::ConsensusTime,
-    };
-    use portpicker::pick_unused_port;
+    use hotshot_example_types::node_types::TEST_VERSIONS;
+    use hotshot_types::{data::Leaf2, simple_certificate::QuorumCertificate2};
     use serde::de::DeserializeOwned;
     use surf_disco::{Client, Error as _};
     use tempfile::TempDir;
+    use test_utils::reserve_tcp_port;
     use tide_disco::App;
     use toml::toml;
 
@@ -846,7 +816,7 @@ mod test {
         task::BackgroundTask,
         testing::{
             consensus::{MockDataSource, MockNetwork, MockSqlDataSource},
-            mocks::{mock_transaction, MockBase, MockHeader, MockPayload, MockTypes, MockVersions},
+            mocks::{mock_transaction, MockBase, MockHeader, MockPayload, MockTypes, MOCK_UPGRADE},
         },
         types::HeightIndexed,
         ApiState, Error, Header,
@@ -891,7 +861,7 @@ mod test {
         // Check the consistency of every block/leaf pair.
         for i in 0..height {
             // Limit the number of blocks we validate in order to
-            // speeed up the tests.
+            // speed up the tests.
             if ![0, 1, height / 2, height - 1].contains(&i) {
                 continue;
             }
@@ -1070,31 +1040,38 @@ mod test {
                         .hash()
                 );
 
-                // We can also get the transaction with proof omitted.
-                assert_eq!(
-                    txn.hash(),
-                    client
-                        .get::<TransactionWithProofQueryData<MockTypes>>(&format!(
-                            "transaction/{}/{}/proof",
-                            i, j.position
-                        ))
-                        .send()
-                        .await
-                        .unwrap()
-                        .hash()
-                );
-                assert_eq!(
-                    txn.hash(),
-                    client
-                        .get::<TransactionWithProofQueryData<MockTypes>>(&format!(
-                            "transaction/hash/{}/proof",
-                            txn.hash()
-                        ))
-                        .send()
-                        .await
-                        .unwrap()
-                        .hash()
-                );
+                let tx_with_proof = client
+                    .get::<TransactionWithProofQueryData<MockTypes>>(&format!(
+                        "transaction/{}/{}/proof",
+                        i, j.position
+                    ))
+                    .send()
+                    .await
+                    .unwrap();
+                assert_eq!(txn.hash(), tx_with_proof.hash());
+                assert!(tx_with_proof.proof().verify(
+                    block.metadata(),
+                    txn.transaction(),
+                    &block.payload_hash(),
+                    common.common()
+                ));
+
+                // Similar to above, but by hash
+                let tx_with_proof = client
+                    .get::<TransactionWithProofQueryData<MockTypes>>(&format!(
+                        "transaction/hash/{}/proof",
+                        txn.hash()
+                    ))
+                    .send()
+                    .await
+                    .unwrap();
+                assert_eq!(txn.hash(), tx_with_proof.hash());
+                assert!(tx_with_proof.proof().verify(
+                    block.metadata(),
+                    txn.transaction(),
+                    &block.payload_hash(),
+                    common.common()
+                ));
             }
 
             let block_range: Vec<BlockQueryData<MockTypes>> = client
@@ -1134,11 +1111,11 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_api() {
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
+        let mut network = MockNetwork::<MockDataSource>::init().await;
         network.start().await;
 
         // Start the web server.
-        let port = pick_unused_port().unwrap();
+        let port = reserve_tcp_port().unwrap();
         let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
         let options = Options {
             small_object_range_limit: 500,
@@ -1229,7 +1206,7 @@ mod test {
         // Check the consistency of every block/leaf pair.
         for i in 0..height {
             // Limit the number of blocks we validate in order to
-            // speeed up the tests.
+            // speed up the tests.
             if ![0, 1, height / 2, height - 1].contains(&i) {
                 continue;
             }
@@ -1478,12 +1455,12 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_api_epochs() {
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource, EpochsTestVersions>::init().await;
+        let mut network = MockNetwork::<MockDataSource>::init().await;
         let epoch_height = network.epoch_height();
         network.start().await;
 
         // Start the web server.
-        let port = pick_unused_port().unwrap();
+        let port = reserve_tcp_port().unwrap();
         let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
         app.register_module(
             "availability",
@@ -1526,27 +1503,17 @@ mod test {
             }
         }
 
-        for epoch in 1..4 {
-            let state_cert: StateCertQueryDataV2<MockTypes> = client
-                .get(&format!("state-cert-v2/{epoch}"))
-                .send()
-                .await
-                .unwrap();
-            tracing::info!("state-cert: {state_cert:?}");
-            assert_eq!(state_cert.0.epoch.u64(), epoch);
-        }
-
         network.shut_down().await;
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_old_api() {
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
+        let mut network = MockNetwork::<MockDataSource>::init().await;
         network.start().await;
 
         // Start the web server.
-        let port = pick_unused_port().unwrap();
+        let port = reserve_tcp_port().unwrap();
 
         let options = Options {
             small_object_range_limit: 500,
@@ -1636,8 +1603,6 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_extensions() {
-        use hotshot_example_types::node_types::TestVersions;
-
         let dir = TempDir::with_prefix("test_availability_extensions").unwrap();
         let data_source = ExtensibleDataSource::new(
             MockDataSource::create(dir.path(), Default::default())
@@ -1647,16 +1612,22 @@ mod test {
         );
 
         // mock up some consensus data.
-        let leaf =
-            Leaf2::<MockTypes>::genesis::<MockVersions>(&Default::default(), &Default::default())
-                .await;
-        let qc =
-            QuorumCertificate2::genesis::<TestVersions>(&Default::default(), &Default::default())
-                .await;
+        let leaf = Leaf2::<MockTypes>::genesis(
+            &Default::default(),
+            &Default::default(),
+            MOCK_UPGRADE.base,
+        )
+        .await;
+        let qc = QuorumCertificate2::genesis(
+            &Default::default(),
+            &Default::default(),
+            TEST_VERSIONS.test,
+        )
+        .await;
         let leaf = LeafQueryData::new(leaf, qc).unwrap();
         let block = BlockQueryData::new(leaf.header().clone(), MockPayload::genesis());
         data_source
-            .append(BlockInfo::new(leaf, Some(block.clone()), None, None, None))
+            .append(BlockInfo::new(leaf, Some(block.clone()), None, None))
             .await
             .unwrap();
 
@@ -1707,7 +1678,7 @@ mod test {
         let mut app = App::<_, Error>::with_state(RwLock::new(data_source));
         app.register_module("availability", api).unwrap();
 
-        let port = pick_unused_port().unwrap();
+        let port = reserve_tcp_port().unwrap();
         let _server = BackgroundTask::spawn(
             "server",
             app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
@@ -1742,11 +1713,11 @@ mod test {
         let small_object_range_limit = 3;
 
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
+        let mut network = MockNetwork::<MockDataSource>::init().await;
         network.start().await;
 
         // Start the web server.
-        let port = pick_unused_port().unwrap();
+        let port = reserve_tcp_port().unwrap();
         let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
         app.register_module(
             "availability",
@@ -1832,11 +1803,11 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_header_endpoint() {
         // Create the consensus network.
-        let mut network = MockNetwork::<MockSqlDataSource, MockVersions>::init().await;
+        let mut network = MockNetwork::<MockSqlDataSource>::init().await;
         network.start().await;
 
         // Start the web server.
-        let port = pick_unused_port().unwrap();
+        let port = reserve_tcp_port().unwrap();
         let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
         app.register_module(
             "availability",
@@ -1872,11 +1843,11 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_leaf_only_ds() {
         // Create the consensus network.
-        let mut network = MockNetwork::<MockSqlDataSource, MockVersions>::init_with_leaf_ds().await;
+        let mut network = MockNetwork::<MockSqlDataSource>::init_with_leaf_ds().await;
         network.start().await;
 
         // Start the web server.
-        let port = pick_unused_port().unwrap();
+        let port = reserve_tcp_port().unwrap();
         let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
         app.register_module(
             "availability",

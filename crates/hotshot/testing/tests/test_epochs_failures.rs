@@ -7,8 +7,8 @@
 use std::time::Duration;
 
 use hotshot_example_types::node_types::{
-    CombinedImpl, EpochsTestVersions, Libp2pImpl, MemoryImpl, PushCdnImpl,
-    TestConsecutiveLeaderTypes, TestTwoStakeTablesTypes, TestTypes,
+    CliquenetImpl, CombinedImpl, Libp2pImpl, MemoryImpl, PushCdnImpl, TestConsecutiveLeaderTypes,
+    TestTwoStakeTablesTypes, TestTypes, TEST_VERSIONS,
 };
 use hotshot_macros::cross_tests;
 use hotshot_testing::{
@@ -20,9 +20,9 @@ use hotshot_testing::{
 
 cross_tests!(
     TestName: test_with_failures_2_with_epochs,
-    Impls: [Libp2pImpl, PushCdnImpl, CombinedImpl],
+    Impls: [Libp2pImpl, PushCdnImpl, CombinedImpl, CliquenetImpl],
     Types: [TestTwoStakeTablesTypes],
-    Versions: [EpochsTestVersions],
+    Versions: [TEST_VERSIONS.epoch],
     Ignore: false,
     Metadata: {
         let mut metadata = TestDescription::default_more_nodes().set_num_nodes(12,12);
@@ -46,7 +46,6 @@ cross_tests!(
         metadata.overall_safety_properties.num_successful_views = 20;
         metadata.overall_safety_properties.expected_view_failures = vec![5, 11, 17, 23, 29];
         metadata.overall_safety_properties.possible_view_failures = vec![4, 10, 16, 22, 28];
-        metadata.overall_safety_properties.decide_timeout = Duration::from_secs(20);
 
         metadata
     }
@@ -54,9 +53,9 @@ cross_tests!(
 
 cross_tests!(
     TestName: test_with_double_leader_failures_with_epochs,
-    Impls: [Libp2pImpl, PushCdnImpl, CombinedImpl],
+    Impls: [Libp2pImpl, PushCdnImpl, CombinedImpl, CliquenetImpl],
     Types: [TestConsecutiveLeaderTypes],
-    Versions: [EpochsTestVersions],
+    Versions: [TEST_VERSIONS.epoch],
     Ignore: false,
     Metadata: {
         let mut metadata = TestDescription::default_more_nodes().set_num_nodes(12,12);
@@ -82,7 +81,6 @@ cross_tests!(
             view_spin_node_down + 1,
             view_spin_node_down + 2
         ];
-        metadata.overall_safety_properties.decide_timeout = Duration::from_secs(20);
         // Make sure we keep committing rounds after the bad leaders, but not the full 50 because of the numerous timeouts
         metadata.overall_safety_properties.num_successful_views = 13;
 
@@ -96,9 +94,9 @@ cross_tests!(
 
 cross_tests!(
     TestName: test_with_failures_half_f_epochs_1,
-    Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl],
+    Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl, CliquenetImpl],
     Types: [TestTypes],
-    Versions: [EpochsTestVersions],
+    Versions: [TEST_VERSIONS.epoch],
     Ignore: false,
     Metadata: {
         let mut metadata = TestDescription::default_more_nodes();
@@ -122,7 +120,6 @@ cross_tests!(
         };
 
         metadata.overall_safety_properties.expected_view_failures = vec![16, 17, 18, 19];
-        metadata.overall_safety_properties.decide_timeout = Duration::from_secs(24);
         // Make sure we keep committing rounds after the bad leaders, but not the full 50 because of the numerous timeouts
         metadata.overall_safety_properties.num_successful_views = 19;
         metadata
@@ -130,10 +127,10 @@ cross_tests!(
 );
 
 cross_tests!(
-    TestName: test_with_failures_half_f_epochs_2,
-    Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl],
+        TestName: test_with_failures_half_f_epochs_2,
+        Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl, CliquenetImpl],
     Types: [TestTwoStakeTablesTypes],
-    Versions: [EpochsTestVersions],
+    Versions: [TEST_VERSIONS.epoch],
     Ignore: false,
     Metadata: {
         let mut metadata = TestDescription::default_more_nodes();
@@ -170,9 +167,9 @@ cross_tests!(
 
 cross_tests!(
     TestName: test_with_failures_f_epochs_1,
-    Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl],
+    Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl, CliquenetImpl],
     Types: [TestTypes],
-    Versions: [EpochsTestVersions],
+    Versions: [TEST_VERSIONS.epoch],
     Ignore: false,
     Metadata: {
         let mut metadata = TestDescription::default_more_nodes();
@@ -217,9 +214,9 @@ cross_tests!(
 
 cross_tests!(
     TestName: test_with_failures_f_epochs_2,
-    Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl],
+    Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl, CliquenetImpl],
     Types: [TestTwoStakeTablesTypes],
-    Versions: [EpochsTestVersions],
+    Versions: [TEST_VERSIONS.epoch],
     Ignore: false,
     Metadata: {
         let mut metadata = TestDescription::default_more_nodes();

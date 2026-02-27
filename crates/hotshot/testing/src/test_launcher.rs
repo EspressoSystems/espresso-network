@@ -11,7 +11,7 @@ use hotshot_example_types::storage_types::TestStorage;
 use hotshot_types::{
     traits::{
         network::{AsyncGenerator, ConnectedNetwork},
-        node_implementation::{NodeType, Versions},
+        node_implementation::NodeType,
     },
     HotShotConfig, ValidatorConfig,
 };
@@ -38,20 +38,20 @@ pub struct ResourceGenerators<TYPES: NodeType, I: TestableNodeImplementation<TYP
 }
 
 /// test launcher
-pub struct TestLauncher<TYPES: NodeType, I: TestableNodeImplementation<TYPES>, V: Versions> {
+pub struct TestLauncher<TYPES: NodeType, I: TestableNodeImplementation<TYPES>> {
     /// generator for resources
     pub resource_generators: ResourceGenerators<TYPES, I>,
     /// metadata used for tasks
-    pub metadata: TestDescription<TYPES, I, V>,
+    pub metadata: TestDescription<TYPES, I>,
     /// any additional test tasks to run
-    pub additional_test_tasks: Vec<Box<dyn TestTaskStateSeed<TYPES, I, V>>>,
+    pub additional_test_tasks: Vec<Box<dyn TestTaskStateSeed<TYPES, I>>>,
 }
 
-impl<TYPES: NodeType, I: TestableNodeImplementation<TYPES>, V: Versions> TestLauncher<TYPES, I, V> {
+impl<TYPES: NodeType, I: TestableNodeImplementation<TYPES>> TestLauncher<TYPES, I> {
     /// launch the test
     #[must_use]
-    pub fn launch<N: ConnectedNetwork<TYPES::SignatureKey>>(self) -> TestRunner<TYPES, I, V, N> {
-        TestRunner::<TYPES, I, V, N> {
+    pub fn launch<N: ConnectedNetwork<TYPES::SignatureKey>>(self) -> TestRunner<TYPES, I, N> {
+        TestRunner::<TYPES, I, N> {
             launcher: self,
             nodes: Vec::new(),
             late_start: HashMap::new(),

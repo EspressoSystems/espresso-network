@@ -5,7 +5,7 @@ use hotshot_types::{
     traits::EncodeBytes,
     vid::advz::{advz_scheme, ADVZCommon, ADVZScheme},
 };
-use jf_vid::{
+use jf_advz::{
     payload_prover::{PayloadProver, Statement},
     VidScheme,
 };
@@ -132,7 +132,7 @@ impl ADVZNsProof {
                 let ns_id = ns_table.read_ns_id_unchecked(&self.ns_index);
                 Some((self.ns_payload.export_all_txs(&ns_id), ns_id))
             },
-            VidCommitment::V1(_) => None,
+            _ => None,
         }
     }
 
@@ -172,7 +172,7 @@ mod tests {
         traits::EncodeBytes,
         vid::advz::{advz_scheme, ADVZScheme},
     };
-    use jf_vid::{VidDisperse, VidScheme};
+    use jf_advz::{VidDisperse, VidScheme};
 
     use crate::{v0::impls::block::test::ValidTest, v0_1::ADVZNsProof, Payload};
 

@@ -73,11 +73,11 @@ impl TestServiceWrapper {
         global_state: Arc<GlobalState<TestTypes>>,
         event_stream_sender: Sender<Event<TestTypes>>,
     ) -> Self {
-        let port = portpicker::pick_unused_port().unwrap();
+        let port = test_utils::reserve_tcp_port().unwrap();
         let url: Url = format!("http://localhost:{port}").parse().unwrap();
         let app = Arc::clone(&global_state).into_app().unwrap();
         spawn(app.serve(url.clone(), StaticVersion::<0, 1> {}));
-        let client = BuilderClient::new(url);
+        let client = BuilderClient::new(url, Duration::from_secs(5));
         assert!(client.connect(Duration::from_secs(1)).await);
         Self {
             event_sender: event_stream_sender,

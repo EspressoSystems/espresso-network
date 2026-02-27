@@ -9,13 +9,12 @@ use alloy::{
     rpc::types::TransactionReceipt,
 };
 use anyhow::{anyhow, Context, Result};
-use espresso_types::SeqTypes;
+use espresso_types::{SeqTypes, StateCertQueryDataV2};
 use futures::FutureExt;
 use hotshot_contract_adapter::{
     field_to_u256,
     sol_types::{LightClientStateSol, LightClientV3, PlonkProofSol, StakeTableStateSol},
 };
-use hotshot_query_service::availability::StateCertQueryDataV2;
 use hotshot_task_impls::helpers::derive_signed_state_digest;
 use hotshot_types::{
     data::EpochNumber,
@@ -205,6 +204,14 @@ async fn generate_proof(
     signature_map: HashMap<StateVerKey, StateSignature>,
     proving_key: &ProvingKey,
 ) -> Result<(Proof, PublicInput), ProverError> {
+    // Check whether the local stake table matches the one on the contract
+    // If there's a mismatch, the contract won't accept the generated proof
+    if state.st_state != current_stake_table_state {
+        return Err(ProverError::StakeTableMismatch(
+            current_stake_table_state,
+            state.st_state,
+        ));
+    }
     // Stake table update is already handled in the epoch catchup
     let entries = state
         .stake_table
@@ -362,7 +369,7 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
     let wallet = EthereumWallet::from(state.config.signer.clone());
     let provider = ProviderBuilder::new()
         .wallet(wallet)
-        .on_client(state.config.l1_rpc_client.clone());
+        .connect_client(state.config.l1_rpc_client.clone());
 
     // only sync light client state when gas price is sane
     if let Some(max_gas_price) = state.config.max_gas_price {
@@ -683,7 +690,7 @@ mod tests {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_read_contract_state() -> Result<()> {
-        let provider = ProviderBuilder::new().on_anvil_with_wallet();
+        let provider = ProviderBuilder::new().connect_anvil_with_wallet();
         let mut contracts = Contracts::new();
         let rng = &mut test_rng();
         let genesis_state = LightClientStateSol::dummy_genesis();
@@ -730,8 +737,6 @@ mod tests {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_submit_state_and_proof() -> Result<()> {
-        // TODO(Chengyu): disabled because it's under development
-
         let pp = MockSystemParam::init();
         let mut ledger = MockLedger::init(pp, NUM_INIT_VALIDATORS);
         let genesis_state: LightClientStateSol = ledger.light_client_state().into();
@@ -741,7 +746,7 @@ mod tests {
         let wallet = anvil.wallet().unwrap();
         let provider = ProviderBuilder::new()
             .wallet(wallet)
-            .on_http(anvil.endpoint_url());
+            .connect_http(anvil.endpoint_url());
         let mut contracts = Contracts::new();
 
         let lc_proxy_addr = deploy_and_upgrade(

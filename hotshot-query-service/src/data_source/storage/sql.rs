@@ -20,7 +20,7 @@ use committable::Committable;
 #[cfg(not(feature = "embedded-db"))]
 use futures::future::FutureExt;
 use hotshot_types::{
-    data::{Leaf, Leaf2, VidShare},
+    data::{Leaf, Leaf2, VidCommon, VidShare},
     simple_certificate::{QuorumCertificate, QuorumCertificate2},
     traits::{metrics::Metrics, node_implementation::NodeType},
     vid::advz::{ADVZCommon, ADVZShare},
@@ -46,7 +46,7 @@ use crate::{
     metrics::PrometheusMetrics,
     node::BlockId,
     status::HasMetrics,
-    Header, QueryError, QueryResult, VidCommon,
+    Header, QueryError, QueryResult,
 };
 pub extern crate sqlx;
 pub use sqlx::{Database, Sqlite};
@@ -98,7 +98,7 @@ pub use crate::include_migrations;
 /// #[cfg(feature = "embedded-db")]
 /// let mut migrations: Vec<Migration> =
 ///     include_migrations!("$CARGO_MANIFEST_DIR/migrations/sqlite").collect();
-///    
+///
 ///     migrations.sort();
 ///     assert_eq!(migrations[0].version(), 10);
 ///     assert_eq!(migrations[0].name(), "init_schema");
@@ -216,9 +216,16 @@ fn add_custom_migrations(
 pub struct Config {
     #[cfg(feature = "embedded-db")]
     db_opt: SqliteConnectOptions,
+
     #[cfg(not(feature = "embedded-db"))]
     db_opt: PgConnectOptions,
+
     pool_opt: PoolOptions<Db>,
+
+    /// Extra pool_opt to allow separately configuring the connection pool for query service
+    #[cfg(not(feature = "embedded-db"))]
+    pool_opt_query: PoolOptions<Db>,
+
     #[cfg(not(feature = "embedded-db"))]
     schema: String,
     reset: bool,
@@ -275,6 +282,7 @@ impl From<PgConnectOptions> for Config {
         Self {
             db_opt,
             pool_opt: PoolOptions::default(),
+            pool_opt_query: PoolOptions::default(),
             schema: "hotshot".into(),
             reset: false,
             migrations: vec![],
@@ -437,6 +445,12 @@ impl Config {
     /// automatically closed to reduce load on the server.
     pub fn idle_connection_timeout(mut self, timeout: Duration) -> Self {
         self.pool_opt = self.pool_opt.idle_timeout(Some(timeout));
+
+        #[cfg(not(feature = "embedded-db"))]
+        {
+            self.pool_opt_query = self.pool_opt_query.idle_timeout(Some(timeout));
+        }
+
         self
     }
 
@@ -448,6 +462,12 @@ impl Config {
     /// server implementation.
     pub fn connection_timeout(mut self, timeout: Duration) -> Self {
         self.pool_opt = self.pool_opt.max_lifetime(Some(timeout));
+
+        #[cfg(not(feature = "embedded-db"))]
+        {
+            self.pool_opt = self.pool_opt.max_lifetime(Some(timeout));
+        }
+
         self
     }
 
@@ -461,12 +481,24 @@ impl Config {
         self
     }
 
+    #[cfg(not(feature = "embedded-db"))]
+    pub fn query_min_connections(mut self, min: u32) -> Self {
+        self.pool_opt_query = self.pool_opt_query.min_connections(min);
+        self
+    }
+
     /// Set the maximum number of connections to maintain at any time.
     ///
     /// Once `max` connections are in use simultaneously, further attempts to acquire a connection
     /// (or begin a transaction) will block until one of the existing connections is released.
     pub fn max_connections(mut self, max: u32) -> Self {
         self.pool_opt = self.pool_opt.max_connections(max);
+        self
+    }
+
+    #[cfg(not(feature = "embedded-db"))]
+    pub fn query_max_connections(mut self, max: u32) -> Self {
+        self.pool_opt_query = self.pool_opt_query.max_connections(max);
         self
     }
 
@@ -477,6 +509,26 @@ impl Config {
         self.db_opt = self
             .db_opt
             .log_slow_statements(LevelFilter::Warn, threshold);
+        self
+    }
+
+    /// Set the maximum time a single SQL statement is allowed to run before being canceled.
+    ///
+    /// This helps prevent queries from running indefinitely even when the client is dropped
+    #[cfg(not(feature = "embedded-db"))]
+    pub fn statement_timeout(mut self, timeout: Duration) -> Self {
+        // Format duration as milliseconds
+        // PostgreSQL interprets values without units as milliseconds
+        let timeout_ms = timeout.as_millis();
+        self.db_opt = self
+            .db_opt
+            .options([("statement_timeout", timeout_ms.to_string())]);
+        self
+    }
+
+    /// not supported for SQLite.
+    #[cfg(feature = "embedded-db")]
+    pub fn statement_timeout(self, _timeout: Duration) -> Self {
         self
     }
 }
@@ -497,25 +549,49 @@ pub struct Pruner {
     minimum_retention_height: Option<u64>,
 }
 
+#[derive(PartialEq)]
+pub enum StorageConnectionType {
+    Sequencer,
+    Query,
+}
+
 impl SqlStorage {
     pub fn pool(&self) -> Pool<Db> {
         self.pool.clone()
     }
+
     /// Connect to a remote database.
-    pub async fn connect(mut config: Config) -> Result<Self, Error> {
+    #[allow(unused_variables)]
+    pub async fn connect(
+        mut config: Config,
+        connection_type: StorageConnectionType,
+    ) -> Result<Self, Error> {
         let metrics = PrometheusMetrics::default();
         let pool_metrics = PoolMetrics::new(&*metrics.subgroup("sql".into()));
+
+        #[cfg(feature = "embedded-db")]
         let pool = config.pool_opt.clone();
+        #[cfg(not(feature = "embedded-db"))]
+        let pool = match connection_type {
+            StorageConnectionType::Sequencer => config.pool_opt.clone(),
+            StorageConnectionType::Query => config.pool_opt_query.clone(),
+        };
+
         let pruner_cfg = config.pruner_cfg;
 
-        // re-use the same pool if present and return early
-        if let Some(pool) = config.pool {
-            return Ok(Self {
-                metrics,
-                pool_metrics,
-                pool,
-                pruner_cfg,
-            });
+        // Only reuse the same pool if we're using sqlite
+        if cfg!(feature = "embedded-db") || connection_type == StorageConnectionType::Sequencer {
+            // re-use the same pool if present and return early
+            if let Some(pool) = config.pool {
+                return Ok(Self {
+                    metrics,
+                    pool_metrics,
+                    pool,
+                    pruner_cfg,
+                });
+            }
+        } else if config.pool.is_some() {
+            tracing::info!("not reusing existing pool for query connection");
         }
 
         #[cfg(not(feature = "embedded-db"))]
@@ -541,6 +617,12 @@ impl SqlStorage {
 
         // Create or connect to the schema for this query service.
         let mut conn = pool.acquire().await?;
+
+        // Disable statement timeout for migrations, as they can take a long time
+        #[cfg(not(feature = "embedded-db"))]
+        query("SET statement_timeout = 0")
+            .execute(conn.as_mut())
+            .await?;
 
         #[cfg(not(feature = "embedded-db"))]
         if config.reset {
@@ -913,7 +995,7 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
             let rows = QueryBuilder::default()
                 .query(
                     "SELECT leaf, qc, common as vid_common, share as vid_share
-                    FROM leaf INNER JOIN vid on leaf.height = vid.height 
+                    FROM leaf INNER JOIN vid on leaf.height = vid.height
                     WHERE leaf.height >= $1 AND leaf.height < $2",
                 )
                 .bind(offset)
@@ -986,7 +1068,7 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
             // This ensures the next iteration starts from the next unseen leaf
             offset += limit as i64;
 
-            query_builder.push_values(leaf_rows.into_iter(), |mut b, row| {
+            query_builder.push_values(leaf_rows, |mut b, row| {
                 b.push_bind(row.0)
                     .push_bind(row.1)
                     .push_bind(row.2)
@@ -1016,7 +1098,7 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
             let mut query_builder: sqlx::QueryBuilder<Db> =
                 sqlx::QueryBuilder::new("INSERT INTO vid2 (height, common, share) ");
 
-            query_builder.push_values(vid_rows.into_iter(), |mut b, row| {
+            query_builder.push_values(vid_rows, |mut b, row| {
                 b.push_bind(row.0).push_bind(row.1).push_bind(row.2);
             });
             query_builder.push(" ON CONFLICT DO NOTHING");
@@ -1066,8 +1148,8 @@ pub mod testing {
         time::Duration,
     };
 
-    use portpicker::pick_unused_port;
     use refinery::Migration;
+    use test_utils::reserve_tcp_port;
     use tokio::{net::TcpStream, time::timeout};
 
     use super::Config;
@@ -1125,7 +1207,7 @@ pub mod testing {
             // "free" port on that system.
             // We *might* be able to get away with this as any remote docker
             // host should hopefully be pretty open with it's port space.
-            let port = pick_unused_port().unwrap();
+            let port = reserve_tcp_port().unwrap();
             let host = docker_hostname.unwrap_or("localhost".to_string());
 
             let mut cmd = Command::new("docker");
@@ -1335,14 +1417,14 @@ pub mod testing {
                 id {hash_pk},
                 value {binary}  NOT NULL UNIQUE
             );
-    
+
             ALTER TABLE header
             ADD column test_merkle_tree_root text
             GENERATED ALWAYS as {root_stored_column} STORED;
 
             CREATE TABLE {name}
             (
-                path JSONB NOT NULL, 
+                path JSONB NOT NULL,
                 created BIGINT NOT NULL,
                 hash_id INT NOT NULL,
                 children JSONB,
@@ -1365,7 +1447,7 @@ mod test {
     use committable::{Commitment, CommitmentBoundsArkless, Committable};
     use hotshot::traits::BlockPayload;
     use hotshot_example_types::{
-        node_types::TestVersions,
+        node_types::TEST_VERSIONS,
         state_types::{TestInstanceState, TestValidatedState},
     };
     use hotshot_types::{
@@ -1373,24 +1455,23 @@ mod test {
         simple_vote::QuorumData,
         traits::{
             block_contents::{BlockHeader, GENESIS_VID_NUM_STORAGE_NODES},
-            node_implementation::{ConsensusTime, Versions},
+            node_implementation::ConsensusTime,
             EncodeBytes,
         },
         vid::advz::advz_scheme,
     };
-    use jf_merkle_tree::{
+    use jf_advz::VidScheme;
+    use jf_merkle_tree_compat::{
         prelude::UniversalMerkleTree, MerkleTreeScheme, ToTraversalPath, UniversalMerkleTreeScheme,
     };
-    use jf_vid::VidScheme;
     use tokio::time::sleep;
-    use vbs::version::StaticVersionType;
 
     use super::{testing::TmpDb, *};
     use crate::{
         availability::LeafQueryData,
         data_source::storage::{pruning::PrunedHeightStorage, UpdateAvailabilityStorage},
         merklized_state::{MerklizedState, UpdateStateData},
-        testing::mocks::{MockHeader, MockMerkleTree, MockPayload, MockTypes, MockVersions},
+        testing::mocks::{MockHeader, MockMerkleTree, MockPayload, MockTypes, MOCK_UPGRADE},
     };
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -1405,7 +1486,7 @@ mod test {
                 if !migrations {
                     cfg = cfg.no_migrations();
                 }
-                let client = SqlStorage::connect(cfg).await?;
+                let client = SqlStorage::connect(cfg, StorageConnectionType::Query).await?;
                 Ok::<_, Error>(client)
             }
         };
@@ -1482,10 +1563,13 @@ mod test {
         let db = TmpDb::init().await;
         let cfg = db.config();
 
-        let mut storage = SqlStorage::connect(cfg).await.unwrap();
-        let mut leaf = LeafQueryData::<MockTypes>::genesis::<TestVersions>(
+        let mut storage = SqlStorage::connect(cfg, StorageConnectionType::Query)
+            .await
+            .unwrap();
+        let mut leaf = LeafQueryData::<MockTypes>::genesis(
             &TestValidatedState::default(),
             &TestInstanceState::default(),
+            TEST_VERSIONS.test,
         )
         .await;
         // insert some mock data
@@ -1571,7 +1655,9 @@ mod test {
         let db = TmpDb::init().await;
         let config = db.config();
 
-        let storage = SqlStorage::connect(config).await.unwrap();
+        let storage = SqlStorage::connect(config, StorageConnectionType::Query)
+            .await
+            .unwrap();
         let mut test_tree: UniversalMerkleTree<_, _, _, 8, _> =
             MockMerkleTree::new(MockMerkleTree::tree_height());
 
@@ -1626,7 +1712,7 @@ mod test {
         // there should be multiple nodes with same index but different created time
         let (count,) = query_as::<(i64,)>(
             " SELECT count(*) FROM (SELECT count(*) as count FROM test_tree GROUP BY path having \
-             count(*) > 1)",
+             count(*) > 1) AS s",
         )
         .fetch_one(tx.as_mut())
         .await
@@ -1645,7 +1731,7 @@ mod test {
         let mut tx = storage.read().await.unwrap();
         let (count,) = query_as::<(i64,)>(
             "SELECT count(*) FROM (SELECT count(*) as count FROM test_tree GROUP BY path having \
-             count(*) > 1)",
+             count(*) > 1) AS s",
         )
         .fetch_one(tx.as_mut())
         .await
@@ -1660,10 +1746,13 @@ mod test {
     async fn test_minimum_retention_pruning() {
         let db = TmpDb::init().await;
 
-        let mut storage = SqlStorage::connect(db.config()).await.unwrap();
-        let mut leaf = LeafQueryData::<MockTypes>::genesis::<TestVersions>(
+        let mut storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+        let mut leaf = LeafQueryData::<MockTypes>::genesis(
             &TestValidatedState::default(),
             &TestInstanceState::default(),
+            TEST_VERSIONS.test,
         )
         .await;
         // insert some mock data
@@ -1736,7 +1825,9 @@ mod test {
         let db = TmpDb::init().await;
         let cfg = db.config();
 
-        let storage = SqlStorage::connect(cfg).await.unwrap();
+        let storage = SqlStorage::connect(cfg, StorageConnectionType::Query)
+            .await
+            .unwrap();
         assert!(storage
             .read()
             .await
@@ -1767,7 +1858,9 @@ mod test {
         let num_rows = 500;
         let db = TmpDb::init().await;
 
-        let storage = SqlStorage::connect(db.config()).await.unwrap();
+        let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
 
         for i in 0..num_rows {
             let view = ViewNumber::new(i);
@@ -1782,10 +1875,11 @@ mod test {
             .await
             .unwrap();
 
-            let mut block_header = <MockHeader as BlockHeader<MockTypes>>::genesis::<MockVersions>(
+            let mut block_header = <MockHeader as BlockHeader<MockTypes>>::genesis(
                 &instance_state,
                 payload.clone(),
                 &metadata,
+                MOCK_UPGRADE.base,
             );
 
             block_header.block_number = i;
@@ -1811,10 +1905,10 @@ mod test {
             };
 
             let mut leaf = Leaf::from_quorum_proposal(&quorum_proposal);
-            leaf.fill_block_payload::<MockVersions>(
+            leaf.fill_block_payload(
                 payload.clone(),
                 GENESIS_VID_NUM_STORAGE_NODES,
-                <MockVersions as Versions>::Base::VERSION,
+                MOCK_UPGRADE.base,
             )
             .unwrap();
             qc.data.leaf_commit = <Leaf<MockTypes> as Committable>::commit(&leaf);
@@ -1915,7 +2009,9 @@ mod test {
         let db = TmpDb::init().await;
         let config = db.config();
 
-        let storage = SqlStorage::connect(config).await.unwrap();
+        let storage = SqlStorage::connect(config, StorageConnectionType::Query)
+            .await
+            .unwrap();
 
         let mut tx = storage.write().await.unwrap();
 

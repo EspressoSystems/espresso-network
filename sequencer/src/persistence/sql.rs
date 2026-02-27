@@ -6,6 +6,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use alloy::primitives::Address;
 use anyhow::{bail, Context};
 use async_trait::async_trait;
 use clap::Parser;
@@ -14,11 +15,14 @@ use derivative::Derivative;
 use derive_more::derive::{From, Into};
 use espresso_types::{
     parse_duration, parse_size,
-    traits::{EventsPersistenceRead, MembershipPersistence},
+    traits::{EventsPersistenceRead, MembershipPersistence, StakeTuple},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence, StateCatchup},
-    v0_3::{EventKey, IndexedStake, RewardAmount, StakeTableEvent},
-    BackoffParams, BlockMerkleTree, FeeMerkleTree, Leaf, Leaf2, NetworkConfig, Payload,
-    StakeTableHash, ValidatorMap,
+    v0_3::{
+        AuthenticatedValidator, EventKey, IndexedStake, RegisteredValidator, RewardAmount,
+        StakeTableEvent,
+    },
+    AuthenticatedValidatorMap, BackoffParams, BlockMerkleTree, FeeMerkleTree, Leaf, Leaf2,
+    NetworkConfig, Payload, PubKey, RegisteredValidatorMap, StakeTableHash,
 };
 use futures::stream::StreamExt;
 use hotshot::InitializerEpochInfo;
@@ -32,7 +36,7 @@ use hotshot_query_service::{
             pruning::PrunerCfg,
             sql::{
                 include_migrations, query_as, syntax_helpers::MAX_FN, Config, Db, Read, SqlStorage,
-                Transaction, TransactionMode, Write,
+                StorageConnectionType, Transaction, TransactionMode, Write,
             },
         },
         Transaction as _, VersionedDataSource,
@@ -42,19 +46,17 @@ use hotshot_query_service::{
         Provider,
     },
     merklized_state::MerklizedState,
-    VidCommon,
 };
 use hotshot_types::{
     data::{
-        vid_disperse::{ADVZDisperseShare, VidDisperseShare2},
         DaProposal, DaProposal2, EpochNumber, QuorumProposal, QuorumProposalWrapper,
-        QuorumProposalWrapperLegacy, VidCommitment, VidDisperseShare,
+        QuorumProposalWrapperLegacy, VidCommitment, VidCommon, VidDisperseShare, VidDisperseShare0,
     },
     drb::{DrbInput, DrbResult},
     event::{Event, EventType, HotShotAction, LeafInfo},
     message::{convert_proposal, Proposal},
     simple_certificate::{
-        LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
+        CertificatePair, LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
         NextEpochQuorumCertificate2, QuorumCertificate, QuorumCertificate2, UpgradeCertificate,
     },
     traits::{
@@ -64,12 +66,14 @@ use hotshot_types::{
     },
     vote::HasViewNumber,
 };
+use indexmap::IndexMap;
 use itertools::Itertools;
-use sqlx::{query, Executor, Row};
+use sqlx::{query, Executor, QueryBuilder, Row};
 
 use crate::{
-    catchup::SqlStateCatchup, persistence::persistence_metrics::PersistenceMetricsValue, NodeType,
-    SeqTypes, ViewNumber, RECENT_STAKE_TABLES_LIMIT,
+    catchup::SqlStateCatchup,
+    persistence::{migrate_network_config, persistence_metrics::PersistenceMetricsValue},
+    NodeType, SeqTypes, ViewNumber, RECENT_STAKE_TABLES_LIMIT,
 };
 
 /// Options for Postgres-backed persistence.
@@ -119,7 +123,7 @@ pub struct SqliteOptions {
         env = "ESPRESSO_SEQUENCER_STORAGE_PATH",
         value_parser = build_sqlite_path
     )]
-    pub(crate) path: Option<PathBuf>,
+    pub(crate) path: PathBuf,
 }
 
 pub fn build_sqlite_path(path: &str) -> anyhow::Result<PathBuf> {
@@ -229,6 +233,13 @@ pub struct Options {
     #[clap(long, env = "ESPRESSO_SEQUENCER_DATABASE_SLOW_STATEMENT_THRESHOLD", value_parser = parse_duration, default_value = "1s")]
     pub(crate) slow_statement_threshold: Duration,
 
+    /// The maximum time a single SQL statement is allowed to run before being canceled.
+    ///
+    /// This helps prevent queries from running indefinitely and consuming resources.
+    /// Set to 10 minutes by default
+    #[clap(long, env = "ESPRESSO_SEQUENCER_DATABASE_STATEMENT_TIMEOUT", value_parser = parse_duration, default_value = "10m")]
+    pub(crate) statement_timeout: Duration,
+
     /// The minimum number of database connections to maintain at any time.
     ///
     /// The database client will, to the best of its ability, maintain at least `min` open
@@ -241,6 +252,12 @@ pub struct Options {
     )]
     pub(crate) min_connections: u32,
 
+    /// Allows setting a different maximum number of connections for query operations.
+    /// Default value of None implies using the min_connections value.
+    #[cfg(not(feature = "embedded-db"))]
+    #[clap(long, env = "ESPRESSO_SEQUENCER_DATABASE_QUERY_MIN_CONNECTIONS", default_value = None)]
+    pub(crate) query_min_connections: Option<u32>,
+
     /// The maximum number of database connections to maintain at any time.
     ///
     /// Once `max` connections are in use simultaneously, further attempts to acquire a connection
@@ -251,6 +268,12 @@ pub struct Options {
         default_value = "25"
     )]
     pub(crate) max_connections: u32,
+
+    /// Allows setting a different maximum number of connections for query operations.
+    /// Default value of None implies using the max_connections value.
+    #[cfg(not(feature = "embedded-db"))]
+    #[clap(long, env = "ESPRESSO_SEQUENCER_DATABASE_QUERY_MAX_CONNECTIONS", default_value = None)]
+    pub(crate) query_max_connections: Option<u32>,
 
     /// Sets the batch size for the types migration.
     /// Determines how many `(leaf, vid)` rows are selected from the old types table
@@ -309,6 +332,7 @@ impl From<PostgresOptions> for Config {
         cfg = cfg.idle_connection_timeout(Duration::from_secs(120));
         cfg = cfg.connection_timeout(Duration::from_secs(10240));
         cfg = cfg.slow_statement_threshold(Duration::from_secs(1));
+        cfg = cfg.statement_timeout(Duration::from_secs(600)); // 10 minutes default
 
         cfg
     }
@@ -319,14 +343,13 @@ impl From<SqliteOptions> for Config {
     fn from(opt: SqliteOptions) -> Self {
         let mut cfg = Config::default();
 
-        if let Some(path) = opt.path {
-            cfg = cfg.db_path(path);
-        }
+        cfg = cfg.db_path(opt.path);
 
         cfg = cfg.max_connections(20);
         cfg = cfg.idle_connection_timeout(Duration::from_secs(120));
         cfg = cfg.connection_timeout(Duration::from_secs(10240));
         cfg = cfg.slow_statement_threshold(Duration::from_secs(2));
+        cfg = cfg.statement_timeout(Duration::from_secs(600));
         cfg
     }
 }
@@ -340,6 +363,7 @@ impl From<PostgresOptions> for Options {
             idle_connection_timeout: Duration::from_secs(120),
             connection_timeout: Duration::from_secs(10240),
             slow_statement_threshold: Duration::from_secs(1),
+            statement_timeout: Duration::from_secs(600),
             ..Default::default()
         }
     }
@@ -350,11 +374,23 @@ impl From<SqliteOptions> for Options {
     fn from(opt: SqliteOptions) -> Self {
         Options {
             sqlite_options: opt,
-            max_connections: 10,
+            max_connections: 5,
             idle_connection_timeout: Duration::from_secs(120),
             connection_timeout: Duration::from_secs(10240),
             slow_statement_threshold: Duration::from_secs(1),
-            ..Default::default()
+            uri: None,
+            statement_timeout: Duration::from_secs(600),
+            prune: false,
+            pruning: Default::default(),
+            consensus_pruning: Default::default(),
+            fetch_rate_limit: None,
+            active_fetch_delay: None,
+            chunk_fetch_delay: None,
+            archive: false,
+            lightweight: false,
+            min_connections: 0,
+            types_migration_batch_size: None,
+            pool: None,
         }
     }
 }
@@ -374,8 +410,18 @@ impl TryFrom<&Options> for Config {
         cfg = cfg.max_connections(opt.max_connections);
         cfg = cfg.idle_connection_timeout(opt.idle_connection_timeout);
         cfg = cfg.min_connections(opt.min_connections);
+
+        #[cfg(not(feature = "embedded-db"))]
+        {
+            cfg =
+                cfg.query_max_connections(opt.query_max_connections.unwrap_or(opt.max_connections));
+            cfg =
+                cfg.query_min_connections(opt.query_min_connections.unwrap_or(opt.min_connections));
+        }
+
         cfg = cfg.connection_timeout(opt.connection_timeout);
         cfg = cfg.slow_statement_threshold(opt.slow_statement_threshold);
+        cfg = cfg.statement_timeout(opt.statement_timeout);
 
         #[cfg(not(feature = "embedded-db"))]
         {
@@ -416,9 +462,7 @@ impl TryFrom<&Options> for Config {
                 "$CARGO_MANIFEST_DIR/api/migrations/sqlite"
             ));
 
-            if let Some(path) = &opt.sqlite_options.path {
-                cfg = cfg.db_path(path.clone());
-            }
+            cfg = cfg.db_path(opt.sqlite_options.path.clone());
         }
 
         if opt.prune {
@@ -485,6 +529,12 @@ pub struct PruningOptions {
     /// This value corresponds to `N` in the SQLite PRAGMA `incremental_vacuum(N)`,
     #[clap(long, env = "ESPRESSO_SEQUENCER_PRUNER_INCREMENTAL_VACUUM_PAGES")]
     pages: Option<u64>,
+}
+
+impl Default for PruningOptions {
+    fn default() -> Self {
+        Self::parse_from(std::iter::empty::<String>())
+    }
 }
 
 impl From<PruningOptions> for PrunerCfg {
@@ -579,6 +629,12 @@ pub struct ConsensusPruningOptions {
     target_usage: u64,
 }
 
+impl Default for ConsensusPruningOptions {
+    fn default() -> Self {
+        Self::parse_from(std::iter::empty::<String>())
+    }
+}
+
 #[async_trait]
 impl PersistenceOptions for Options {
     type Persistence = Persistence;
@@ -591,7 +647,7 @@ impl PersistenceOptions for Options {
     async fn create(&mut self) -> anyhow::Result<Self::Persistence> {
         let config = (&*self).try_into()?;
         let persistence = Persistence {
-            db: SqlStorage::connect(config).await?,
+            db: SqlStorage::connect(config, StorageConnectionType::Sequencer).await?,
             gc_opt: self.consensus_pruning,
             internal_metrics: PersistenceMetricsValue::default(),
         };
@@ -601,8 +657,25 @@ impl PersistenceOptions for Options {
     }
 
     async fn reset(self) -> anyhow::Result<()> {
-        SqlStorage::connect(Config::try_from(&self)?.reset_schema()).await?;
+        SqlStorage::connect(
+            Config::try_from(&self)?.reset_schema(),
+            StorageConnectionType::Sequencer,
+        )
+        .await?;
         Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum DataMigration {
+    ValidatorAuthenticated,
+}
+
+impl DataMigration {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::ValidatorAuthenticated => "validator_authenticated",
+        }
     }
 }
 
@@ -651,7 +724,42 @@ impl Persistence {
         tx.commit().await
     }
 
-    async fn generate_decide_events(&self, consumer: &impl EventConsumer) -> anyhow::Result<()> {
+    async fn is_migration_complete(&self, name: &str, table_name: &str) -> anyhow::Result<bool> {
+        let mut tx = self.db.read().await?;
+        let (completed,): (bool,) =
+            query_as("SELECT completed FROM data_migrations WHERE name = $1 AND table_name = $2")
+                .bind(name)
+                .bind(table_name)
+                .fetch_one(tx.as_mut())
+                .await
+                .context("migration tracking row missing - schema may be out of sync")?;
+        Ok(completed)
+    }
+
+    async fn mark_migration_complete(
+        tx: &mut Transaction<Write>,
+        name: &str,
+        table_name: &str,
+        migrated_rows: usize,
+    ) -> anyhow::Result<()> {
+        tx.execute(
+            query(
+                "UPDATE data_migrations SET completed = true, migrated_rows = $1 WHERE name = $2 \
+                 AND table_name = $3",
+            )
+            .bind(migrated_rows as i64)
+            .bind(name)
+            .bind(table_name),
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn generate_decide_events(
+        &self,
+        deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
+        consumer: &impl EventConsumer,
+    ) -> anyhow::Result<()> {
         let mut last_processed_view: Option<i64> = self
             .db
             .read()
@@ -676,12 +784,14 @@ impl Persistence {
                 Some(v) => v + 1,
                 None => 0,
             };
+            tracing::debug!(?from_view, "generate decide event");
 
             let mut parent = None;
-            let mut rows =
-                query("SELECT leaf, qc FROM anchor_leaf2 WHERE view >= $1 ORDER BY view")
-                    .bind(from_view)
-                    .fetch(tx.as_mut());
+            let mut rows = query(
+                "SELECT leaf, qc, next_epoch_qc FROM anchor_leaf2 WHERE view >= $1 ORDER BY view",
+            )
+            .bind(from_view)
+            .fetch(tx.as_mut());
             let mut leaves = vec![];
             let mut final_qc = None;
             while let Some(row) = rows.next().await {
@@ -699,6 +809,12 @@ impl Persistence {
                 let leaf = bincode::deserialize::<Leaf2>(&leaf_data)?;
                 let qc_data: Vec<u8> = row.get("qc");
                 let qc = bincode::deserialize::<QuorumCertificate2<SeqTypes>>(&qc_data)?;
+                let next_epoch_qc = match row.get::<Option<Vec<u8>>, _>("next_epoch_qc") {
+                    Some(bytes) => {
+                        Some(bincode::deserialize::<NextEpochQuorumCertificate2<SeqTypes>>(&bytes)?)
+                    },
+                    None => None,
+                };
                 let height = leaf.block_header().block_number();
 
                 // Ensure we are only dealing with a consecutive chain of leaves. We don't want to
@@ -716,7 +832,7 @@ impl Persistence {
                 }
                 parent = Some(height);
                 leaves.push(leaf);
-                final_qc = Some(qc);
+                final_qc = Some(CertificatePair::new(qc, next_epoch_qc));
             }
             drop(rows);
 
@@ -823,18 +939,35 @@ impl Persistence {
                 })
                 .collect();
 
-            // Generate decide event for the consumer.
-            tracing::debug!(?to_view, ?final_qc, ?leaf_chain, "generating decide event");
-            consumer
-                .handle_event(&Event {
-                    view_number: to_view,
-                    event: EventType::Decide {
-                        leaf_chain: Arc::new(leaf_chain),
-                        qc: Arc::new(final_qc),
-                        block_size: None,
-                    },
-                })
-                .await?;
+            {
+                // Generate decide event for the consumer.
+                tracing::debug!(
+                    ?from_view,
+                    ?to_view,
+                    ?final_qc,
+                    ?leaf_chain,
+                    "generating decide event"
+                );
+                // Insert the deciding QC at the appropriate position, with the last decide event in
+                // the chain.
+                let deciding_qc = if let Some(deciding_qc) = &deciding_qc {
+                    (deciding_qc.view_number() == final_qc.view_number() + 1)
+                        .then_some(deciding_qc.clone())
+                } else {
+                    None
+                };
+                consumer
+                    .handle_event(&Event {
+                        view_number: to_view,
+                        event: EventType::Decide {
+                            leaf_chain: Arc::new(leaf_chain),
+                            committing_qc: Arc::new(final_qc),
+                            deciding_qc,
+                            block_size: None,
+                        },
+                    })
+                    .await?;
+            }
 
             let mut tx = self.db.write().await?;
 
@@ -1050,8 +1183,12 @@ impl SequencerPersistence for Persistence {
             tracing::info!("config not found");
             return Ok(None);
         };
-        let config = row.try_get("config")?;
-        Ok(serde_json::from_value(config)?)
+        let json = row.try_get("config")?;
+
+        let json = migrate_network_config(json).context("migration of network config failed")?;
+        let config = serde_json::from_value(json).context("malformed config file")?;
+
+        Ok(Some(config))
     }
 
     async fn save_config(&self, cfg: &NetworkConfig) -> anyhow::Result<()> {
@@ -1067,12 +1204,13 @@ impl SequencerPersistence for Persistence {
     async fn append_decided_leaves(
         &self,
         view: ViewNumber,
-        leaf_chain: impl IntoIterator<Item = (&LeafInfo<SeqTypes>, QuorumCertificate2<SeqTypes>)> + Send,
+        leaf_chain: impl IntoIterator<Item = (&LeafInfo<SeqTypes>, CertificatePair<SeqTypes>)> + Send,
+        deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
         consumer: &(impl EventConsumer + 'static),
     ) -> anyhow::Result<()> {
         let values = leaf_chain
             .into_iter()
-            .map(|(info, qc2)| {
+            .map(|(info, cert)| {
                 // The leaf may come with a large payload attached. We don't care about this payload
                 // because we already store it separately, as part of the DA proposal. Storing it
                 // here contributes to load on the DB for no reason, so we remove it before
@@ -1080,10 +1218,14 @@ impl SequencerPersistence for Persistence {
                 let mut leaf = info.leaf.clone();
                 leaf.unfill_block_payload();
 
-                let view = qc2.view_number.u64() as i64;
+                let view = cert.view_number().u64() as i64;
                 let leaf_bytes = bincode::serialize(&leaf)?;
-                let qc_bytes = bincode::serialize(&qc2)?;
-                Ok((view, leaf_bytes, qc_bytes))
+                let qc_bytes = bincode::serialize(cert.qc())?;
+                let next_epoch_qc_bytes = match cert.next_epoch_qc() {
+                    Some(qc) => Some(bincode::serialize(qc)?),
+                    None => None,
+                };
+                Ok((view, leaf_bytes, qc_bytes, next_epoch_qc_bytes))
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
 
@@ -1091,13 +1233,18 @@ impl SequencerPersistence for Persistence {
         // event consumer later fails, there is no need to abort the storage of the leaves.
         let mut tx = self.db.write().await?;
 
-        tx.upsert("anchor_leaf2", ["view", "leaf", "qc"], ["view"], values)
-            .await?;
+        tx.upsert(
+            "anchor_leaf2",
+            ["view", "leaf", "qc", "next_epoch_qc"],
+            ["view"],
+            values,
+        )
+        .await?;
         tx.commit().await?;
 
         // Generate an event for the new leaves and, only if it succeeds, clean up data we no longer
         // need.
-        if let Err(err) = self.generate_decide_events(consumer).await {
+        if let Err(err) = self.generate_decide_events(deciding_qc, consumer).await {
             // GC/event processing failure is not an error, since by this point we have at least
             // managed to persist the decided leaves successfully, and GC will just run again at the
             // next decide. Log an error but do not return it.
@@ -1276,13 +1423,11 @@ impl SequencerPersistence for Persistence {
 
     async fn append_vid(
         &self,
-        proposal: &Proposal<SeqTypes, ADVZDisperseShare<SeqTypes>>,
+        proposal: &Proposal<SeqTypes, VidDisperseShare<SeqTypes>>,
     ) -> anyhow::Result<()> {
-        let view = proposal.data.view_number.u64();
-        let payload_hash = proposal.data.payload_commitment;
-        let proposal: Proposal<SeqTypes, VidDisperseShare<SeqTypes>> =
-            convert_proposal(proposal.clone());
-        let data_bytes = bincode::serialize(&proposal).unwrap();
+        let view = proposal.data.view_number().u64();
+        let payload_hash = proposal.data.payload_commitment();
+        let data_bytes = bincode::serialize(proposal).unwrap();
 
         let now = Instant::now();
         let mut tx = self.db.write().await?;
@@ -1296,31 +1441,6 @@ impl SequencerPersistence for Persistence {
         let res = tx.commit().await;
         self.internal_metrics
             .internal_append_vid_duration
-            .add_point(now.elapsed().as_secs_f64());
-        res
-    }
-    async fn append_vid2(
-        &self,
-        proposal: &Proposal<SeqTypes, VidDisperseShare2<SeqTypes>>,
-    ) -> anyhow::Result<()> {
-        let view = proposal.data.view_number.u64();
-        let payload_hash = proposal.data.payload_commitment;
-        let proposal: Proposal<SeqTypes, VidDisperseShare<SeqTypes>> =
-            convert_proposal(proposal.clone());
-        let data_bytes = bincode::serialize(&proposal).unwrap();
-
-        let now = Instant::now();
-        let mut tx = self.db.write().await?;
-        tx.upsert(
-            "vid_share2",
-            ["view", "data", "payload_hash"],
-            ["view"],
-            [(view as i64, data_bytes, payload_hash.to_string())],
-        )
-        .await?;
-        let res = tx.commit().await;
-        self.internal_metrics
-            .internal_append_vid2_duration
             .add_point(now.elapsed().as_secs_f64());
         res
     }
@@ -1518,7 +1638,7 @@ impl SequencerPersistence for Persistence {
 
             offset = values.last().context("last row")?.0;
 
-            query_builder.push_values(values.into_iter(), |mut b, (view, leaf, qc)| {
+            query_builder.push_values(values, |mut b, (view, leaf, qc)| {
                 b.push_bind(view).push_bind(leaf).push_bind(qc);
             });
 
@@ -1621,7 +1741,7 @@ impl SequencerPersistence for Persistence {
                 sqlx::QueryBuilder::new("INSERT INTO da_proposal2 (view, payload_hash, data) ");
 
             offset = values.last().context("last row")?.0;
-            query_builder.push_values(values.into_iter(), |mut b, (view, payload_hash, data)| {
+            query_builder.push_values(values, |mut b, (view, payload_hash, data)| {
                 b.push_bind(view).push_bind(payload_hash).push_bind(data);
             });
             query_builder.push(" ON CONFLICT DO NOTHING");
@@ -1703,7 +1823,7 @@ impl SequencerPersistence for Persistence {
                 let data: Vec<u8> = row.try_get("data")?;
                 let payload_hash: String = row.try_get("payload_hash")?;
 
-                let vid_share: Proposal<SeqTypes, ADVZDisperseShare<SeqTypes>> =
+                let vid_share: Proposal<SeqTypes, VidDisperseShare0<SeqTypes>> =
                     bincode::deserialize(&data)?;
                 let vid_share2: Proposal<SeqTypes, VidDisperseShare<SeqTypes>> =
                     convert_proposal(vid_share);
@@ -1719,7 +1839,7 @@ impl SequencerPersistence for Persistence {
 
             offset = values.last().context("last row")?.0;
 
-            query_builder.push_values(values.into_iter(), |mut b, (view, payload_hash, data)| {
+            query_builder.push_values(values, |mut b, (view, payload_hash, data)| {
                 b.push_bind(view).push_bind(payload_hash).push_bind(data);
             });
 
@@ -1820,7 +1940,7 @@ impl SequencerPersistence for Persistence {
                 sqlx::QueryBuilder::new("INSERT INTO quorum_proposals2 (view, leaf_hash, data) ");
 
             offset = values.last().context("last row")?.0;
-            query_builder.push_values(values.into_iter(), |mut b, (view, leaf_hash, data)| {
+            query_builder.push_values(values, |mut b, (view, leaf_hash, data)| {
                 b.push_bind(view).push_bind(leaf_hash).push_bind(data);
             });
 
@@ -1920,7 +2040,7 @@ impl SequencerPersistence for Persistence {
 
             offset = values.last().context("last row")?.0;
 
-            query_builder.push_values(values.into_iter(), |mut b, (view, leaf_hash, data)| {
+            query_builder.push_values(values, |mut b, (view, leaf_hash, data)| {
                 b.push_bind(view).push_bind(leaf_hash).push_bind(data);
             });
 
@@ -1962,6 +2082,125 @@ impl SequencerPersistence for Persistence {
         .await?;
         tx.commit().await?;
         tracing::info!("updated epoch_migration table for quorum_certificate");
+
+        Ok(())
+    }
+
+    /// Ensure the `authenticated` field is explicitly set for all validators.
+    ///
+    /// This field was added to track validators with invalid Schnorr signatures.
+    /// All existing validators were authenticated (they passed validation before storage),
+    /// so we set authenticated=true for any records missing this field.
+    ///
+    /// # Migration Invariant
+    ///
+    /// This migration sets `authenticated=true` for all existing records. This is safe because:
+    /// - All validators in the database passed full signature validation before storage
+    /// - The normal registration path validates both BLS and Schnorr signatures
+    /// - Only after the `authenticated` field was added do we track unauthenticated validators
+    async fn migrate_validator_authenticated(&self) -> anyhow::Result<()> {
+        #[allow(deprecated)]
+        use espresso_types::v0_3::Validator;
+
+        let name = DataMigration::ValidatorAuthenticated.as_str();
+
+        // Migrate bincode storage (epoch_drb_and_root.stake).
+        // We expect less than 10k epochs/rows, so we do it all in one transaction.
+        if !self
+            .is_migration_complete(name, "epoch_drb_and_root")
+            .await?
+        {
+            let rows: Vec<(i64, Vec<u8>)> = {
+                let mut tx = self.db.read().await?;
+                query_as("SELECT epoch, stake FROM epoch_drb_and_root WHERE stake IS NOT NULL")
+                    .fetch_all(tx.as_mut())
+                    .await?
+            };
+
+            let num_rows = rows.len();
+            let mut tx = self.db.write().await?;
+            for (epoch, stake_bytes) in rows {
+                #[allow(deprecated)]
+                let old_validators: IndexMap<Address, Validator<PubKey>> =
+                    bincode::deserialize(&stake_bytes).context("deserializing stake table")?;
+                let validators: AuthenticatedValidatorMap = old_validators
+                    .into_iter()
+                    .map(|(addr, v)| {
+                        let registered = v.migrate();
+                        (
+                            addr,
+                            AuthenticatedValidator::try_from(registered)
+                                .expect("migrate() sets authenticated=true"),
+                        )
+                    })
+                    .collect();
+
+                let new_bytes =
+                    bincode::serialize(&validators).context("serializing stake table")?;
+
+                tracing::debug!(
+                    epoch,
+                    "migrating validator authenticated field in stake table"
+                );
+                tx.execute(
+                    query("UPDATE epoch_drb_and_root SET stake = $1 WHERE epoch = $2")
+                        .bind(&new_bytes)
+                        .bind(epoch),
+                )
+                .await?;
+            }
+            Self::mark_migration_complete(&mut tx, name, "epoch_drb_and_root", num_rows).await?;
+            tx.commit().await?;
+            tracing::info!(
+                num_rows,
+                "validator authenticated migration completed for epoch_drb_and_root"
+            );
+        }
+
+        // Migrate JSONB storage (stake_table_validators).
+        // We expect less than 10k epochs/rows, so we do it all in one transaction.
+        if !self
+            .is_migration_complete(name, "stake_table_validators")
+            .await?
+        {
+            let rows: Vec<(i64, String, serde_json::Value)> = {
+                let mut tx = self.db.read().await?;
+                query_as("SELECT epoch, address, validator FROM stake_table_validators")
+                    .fetch_all(tx.as_mut())
+                    .await?
+            };
+
+            let num_rows = rows.len();
+            let mut tx = self.db.write().await?;
+            for (epoch, address, validator_json) in rows {
+                #[allow(deprecated)]
+                let old_validator: Validator<PubKey> =
+                    serde_json::from_value(validator_json.clone())
+                        .context("deserializing validator")?;
+                let validator = old_validator.migrate();
+
+                let new_json = serde_json::to_value(&validator).context("serializing validator")?;
+
+                tracing::debug!(epoch, %address, "migrating validator authenticated field");
+                tx.execute(
+                    query(
+                        "UPDATE stake_table_validators SET validator = $1 WHERE epoch = $2 AND \
+                         address = $3",
+                    )
+                    .bind(&new_json)
+                    .bind(epoch)
+                    .bind(&address),
+                )
+                .await?;
+            }
+            Self::mark_migration_complete(&mut tx, name, "stake_table_validators", num_rows)
+                .await?;
+            tx.commit().await?;
+            tracing::info!(
+                num_rows,
+                "validator authenticated migration completed for stake_table_validators"
+            );
+        }
 
         Ok(())
     }
@@ -2100,7 +2339,9 @@ impl SequencerPersistence for Persistence {
 
     async fn store_drb_input(&self, drb_input: DrbInput) -> anyhow::Result<()> {
         if let Ok(loaded_drb_input) = self.load_drb_input(drb_input.epoch).await {
-            if loaded_drb_input.iteration >= drb_input.iteration {
+            if loaded_drb_input.difficulty_level != drb_input.difficulty_level {
+                tracing::error!("Overwriting {loaded_drb_input:?} in storage with {drb_input:?}");
+            } else if loaded_drb_input.iteration >= drb_input.iteration {
                 anyhow::bail!(
                     "DrbInput in storage {:?} is more recent than {:?}, refusing to update",
                     loaded_drb_input,
@@ -2202,6 +2443,64 @@ impl SequencerPersistence for Persistence {
         Ok(Some(cert))
     }
 
+    async fn get_state_cert_by_epoch(
+        &self,
+        epoch: u64,
+    ) -> anyhow::Result<Option<LightClientStateUpdateCertificateV2<SeqTypes>>> {
+        let Some(row) = self
+            .db
+            .read()
+            .await?
+            .fetch_optional(
+                query("SELECT state_cert FROM finalized_state_cert WHERE epoch = $1")
+                    .bind(epoch as i64),
+            )
+            .await?
+        else {
+            return Ok(None);
+        };
+        let bytes: Vec<u8> = row.get("state_cert");
+
+        let cert = match bincode::deserialize(&bytes) {
+            Ok(cert) => cert,
+            Err(err) => {
+                tracing::info!(
+                    error = %err,
+                    "Failed to deserialize state certificate with v2. attempting with v1"
+                );
+
+                let v1_cert =
+                    bincode::deserialize::<LightClientStateUpdateCertificateV1<SeqTypes>>(&bytes)
+                        .with_context(|| {
+                        format!("Failed to deserialize using both v1 and v2. error: {err}")
+                    })?;
+
+                v1_cert.into()
+            },
+        };
+
+        Ok(Some(cert))
+    }
+
+    async fn insert_state_cert(
+        &self,
+        epoch: u64,
+        cert: LightClientStateUpdateCertificateV2<SeqTypes>,
+    ) -> anyhow::Result<()> {
+        let bytes = bincode::serialize(&cert)
+            .with_context(|| format!("Failed to serialize state cert for epoch {epoch}"))?;
+
+        let mut tx = self.db.write().await?;
+
+        tx.upsert(
+            "finalized_state_cert",
+            ["epoch", "state_cert"],
+            ["epoch"],
+            [(epoch as i64, bytes)],
+        )
+        .await
+    }
+
     async fn load_start_epoch_info(&self) -> anyhow::Result<Vec<InitializerEpochInfo<SeqTypes>>> {
         let rows = self
             .db
@@ -2253,10 +2552,7 @@ impl SequencerPersistence for Persistence {
 
 #[async_trait]
 impl MembershipPersistence for Persistence {
-    async fn load_stake(
-        &self,
-        epoch: EpochNumber,
-    ) -> anyhow::Result<Option<(ValidatorMap, Option<RewardAmount>, Option<StakeTableHash>)>> {
+    async fn load_stake(&self, epoch: EpochNumber) -> anyhow::Result<Option<StakeTuple>> {
         let result = self
             .db
             .read()
@@ -2275,8 +2571,9 @@ impl MembershipPersistence for Persistence {
                 let stake_table_bytes: Vec<u8> = row.get("stake");
                 let reward_bytes: Option<Vec<u8>> = row.get("block_reward");
                 let stake_table_hash_bytes: Option<Vec<u8>> = row.get("stake_table_hash");
-                let stake_table = bincode::deserialize(&stake_table_bytes)
-                    .context("deserializing stake table")?;
+                let stake_table: AuthenticatedValidatorMap =
+                    bincode::deserialize(&stake_table_bytes)
+                        .context("deserializing stake table")?;
                 let reward: Option<RewardAmount> = reward_bytes
                     .map(|b| bincode::deserialize(&b).context("deserializing block_reward"))
                     .transpose()?;
@@ -2293,8 +2590,8 @@ impl MembershipPersistence for Persistence {
         let mut tx = self.db.read().await?;
 
         let rows = match query_as::<(i64, Vec<u8>, Option<Vec<u8>>, Option<Vec<u8>>)>(
-            "SELECT epoch, stake, block_reward, stake_table_hash FROM epoch_drb_and_root ORDER BY \
-             epoch DESC LIMIT $1",
+            "SELECT epoch, stake, block_reward, stake_table_hash FROM epoch_drb_and_root WHERE \
+             stake is NOT NULL ORDER BY epoch DESC LIMIT $1",
         )
         .bind(limit as i64)
         .fetch_all(tx.as_mut())
@@ -2311,7 +2608,7 @@ impl MembershipPersistence for Persistence {
             .into_iter()
             .map(
                 |(id, stake_bytes, reward_bytes_opt, stake_table_hash_bytes_opt)| {
-                    let stake_table =
+                    let stake_table: AuthenticatedValidatorMap =
                         bincode::deserialize(&stake_bytes).context("deserializing stake table")?;
 
                     let block_reward: Option<RewardAmount> = reward_bytes_opt
@@ -2337,7 +2634,7 @@ impl MembershipPersistence for Persistence {
     async fn store_stake(
         &self,
         epoch: EpochNumber,
-        stake: ValidatorMap,
+        stake: AuthenticatedValidatorMap,
         block_reward: Option<RewardAmount>,
         stake_table_hash: Option<StakeTableHash>,
     ) -> anyhow::Result<()> {
@@ -2370,10 +2667,6 @@ impl MembershipPersistence for Persistence {
         l1_finalized: u64,
         events: Vec<(EventKey, StakeTableEvent)>,
     ) -> anyhow::Result<()> {
-        if events.is_empty() {
-            return Ok(());
-        }
-
         let mut tx = self.db.write().await?;
 
         // check last l1 block if there is any
@@ -2397,28 +2690,31 @@ impl MembershipPersistence for Persistence {
             return Ok(());
         }
 
-        let mut query_builder: sqlx::QueryBuilder<Db> =
-            sqlx::QueryBuilder::new("INSERT INTO stake_table_events (l1_block, log_index, event) ");
+        if !events.is_empty() {
+            let mut query_builder: sqlx::QueryBuilder<Db> = sqlx::QueryBuilder::new(
+                "INSERT INTO stake_table_events (l1_block, log_index, event) ",
+            );
 
-        let events = events
-            .into_iter()
-            .map(|((block_number, index), event)| {
-                Ok((
-                    i64::try_from(block_number)?,
-                    i64::try_from(index)?,
-                    serde_json::to_value(event).context("l1 event to value")?,
-                ))
-            })
-            .collect::<anyhow::Result<Vec<_>>>()?;
+            let events = events
+                .into_iter()
+                .map(|((block_number, index), event)| {
+                    Ok((
+                        i64::try_from(block_number)?,
+                        i64::try_from(index)?,
+                        serde_json::to_value(event).context("l1 event to value")?,
+                    ))
+                })
+                .collect::<anyhow::Result<Vec<_>>>()?;
 
-        query_builder.push_values(events.into_iter(), |mut b, (l1_block, log_index, event)| {
-            b.push_bind(l1_block).push_bind(log_index).push_bind(event);
-        });
+            query_builder.push_values(events, |mut b, (l1_block, log_index, event)| {
+                b.push_bind(l1_block).push_bind(log_index).push_bind(event);
+            });
 
-        query_builder.push(" ON CONFLICT DO NOTHING");
-        let query = query_builder.build();
+            query_builder.push(" ON CONFLICT DO NOTHING");
+            let query = query_builder.build();
 
-        query.execute(tx.as_mut()).await?;
+            query.execute(tx.as_mut()).await?;
+        }
 
         // update l1 block
         tx.upsert(
@@ -2446,6 +2742,7 @@ impl MembershipPersistence for Persistence {
     ///
     async fn load_events(
         &self,
+        from_l1_block: u64,
         to_l1_block: u64,
     ) -> anyhow::Result<(
         Option<EventsPersistenceRead>,
@@ -2476,9 +2773,10 @@ impl MembershipPersistence for Persistence {
         };
 
         let rows = query(
-            "SELECT l1_block, log_index, event FROM stake_table_events WHERE l1_block <= $1 ORDER \
-             BY l1_block ASC, log_index ASC",
+            "SELECT l1_block, log_index, event FROM stake_table_events WHERE $1 <= l1_block AND \
+             l1_block <= $2 ORDER BY l1_block ASC, log_index ASC",
         )
+        .bind(i64::try_from(from_l1_block)?)
         .bind(query_l1_block)
         .fetch_all(tx.as_mut())
         .await?;
@@ -2507,6 +2805,99 @@ impl MembershipPersistence for Persistence {
                 events,
             ))
         }
+    }
+
+    async fn delete_stake_tables(&self) -> anyhow::Result<()> {
+        let mut tx = self.db.write().await?;
+        #[cfg(not(feature = "embedded-db"))]
+        query(
+            "TRUNCATE stake_table_events, stake_table_events_l1_block, epoch_drb_and_root, \
+             stake_table_validators",
+        )
+        .execute(tx.as_mut())
+        .await?;
+        #[cfg(feature = "embedded-db")]
+        {
+            query("DELETE FROM stake_table_events")
+                .execute(tx.as_mut())
+                .await?;
+            query("DELETE FROM stake_table_events_l1_block")
+                .execute(tx.as_mut())
+                .await?;
+            query("DELETE FROM epoch_drb_and_root")
+                .execute(tx.as_mut())
+                .await?;
+            query("DELETE FROM stake_table_validators")
+                .execute(tx.as_mut())
+                .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    async fn store_all_validators(
+        &self,
+        epoch: EpochNumber,
+        all_validators: RegisteredValidatorMap,
+    ) -> anyhow::Result<()> {
+        let mut tx = self.db.write().await?;
+
+        if all_validators.is_empty() {
+            return Ok(());
+        }
+
+        let mut query_builder =
+            QueryBuilder::new("INSERT INTO stake_table_validators (epoch, address, validator) ");
+
+        query_builder.push_values(all_validators, |mut b, (address, validator)| {
+            let validator_json =
+                serde_json::to_value(&validator).expect("cannot serialize validator to json");
+            b.push_bind(epoch.u64() as i64)
+                .push_bind(address.to_string())
+                .push_bind(validator_json);
+        });
+
+        query_builder
+            .push(" ON CONFLICT (epoch, address) DO UPDATE SET validator = EXCLUDED.validator");
+
+        let query = query_builder.build();
+
+        query.execute(tx.as_mut()).await?;
+
+        tx.commit().await?;
+        Ok(())
+    }
+
+    async fn load_all_validators(
+        &self,
+        epoch: EpochNumber,
+        offset: u64,
+        limit: u64,
+    ) -> anyhow::Result<Vec<RegisteredValidator<PubKey>>> {
+        let mut tx = self.db.read().await?;
+
+        // Use LOWER(address) in ORDER BY to ensure consistent ordering for SQlite and Postgres.
+        // Postgres sorts text case sensitively by default, while SQLite sorts case insensitively.
+        // Applying LOWER() makes the result consistent.
+        let rows = query(
+            "SELECT address, validator
+         FROM stake_table_validators
+         WHERE epoch = $1
+         ORDER BY LOWER(address) ASC
+         LIMIT $2 OFFSET $3",
+        )
+        .bind(epoch.u64() as i64)
+        .bind(limit as i64)
+        .bind(offset as i64)
+        .fetch_all(tx.as_mut())
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                let validator_json: serde_json::Value = row.try_get("validator")?;
+                serde_json::from_value::<RegisteredValidator<PubKey>>(validator_json)
+                    .map_err(Into::into)
+            })
+            .collect()
     }
 }
 
@@ -2606,6 +2997,7 @@ impl Provider<SeqTypes, VidCommonRequest> for Persistence {
         match share.data {
             VidDisperseShare::V0(vid) => Some(VidCommon::V0(vid.common)),
             VidDisperseShare::V1(vid) => Some(VidCommon::V1(vid.common)),
+            VidDisperseShare::V2(vid) => Some(VidCommon::V2(vid.common)),
         }
     }
 }
@@ -2749,10 +3141,7 @@ mod testing {
 
             #[cfg(feature = "embedded-db")]
             {
-                SqliteOptions {
-                    path: Some(db.path()),
-                }
-                .into()
+                SqliteOptions { path: db.path() }.into()
             }
         }
     }
@@ -2760,21 +3149,20 @@ mod testing {
 
 #[cfg(test)]
 mod test {
-
     use committable::{Commitment, CommitmentBoundsArkless};
     use espresso_types::{traits::NullEventConsumer, Header, Leaf, NodeState, ValidatedState};
     use futures::stream::TryStreamExt;
-    use hotshot_example_types::node_types::TestVersions;
+    use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_types::{
         data::{
-            ns_table::parse_ns_table, vid_disperse::VidDisperseShare2, EpochNumber, QuorumProposal2,
+            ns_table::parse_ns_table, vid_disperse::AvidMDisperseShare, EpochNumber,
+            QuorumProposal2,
         },
         message::convert_proposal,
         simple_certificate::QuorumCertificate,
         simple_vote::QuorumData,
         traits::{
             block_contents::{BlockHeader, GENESIS_VID_NUM_STORAGE_NODES},
-            node_implementation::Versions,
             signature_key::SignatureKey,
             EncodeBytes,
         },
@@ -2784,8 +3172,7 @@ mod test {
             avidm::{init_avidm_param, AvidMScheme},
         },
     };
-    use jf_vid::VidScheme;
-    use vbs::version::StaticVersionType;
+    use jf_advz::VidScheme;
 
     use super::*;
     use crate::{persistence::tests::TestablePersistence as _, BLSPubKey, PubKey};
@@ -2793,10 +3180,13 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_quorum_proposals_leaf_hash_migration() {
         // Create some quorum proposals to test with.
-        let leaf: Leaf2 =
-            Leaf::genesis::<TestVersions>(&ValidatedState::default(), &NodeState::mock())
-                .await
-                .into();
+        let leaf: Leaf2 = Leaf::genesis(
+            &ValidatedState::default(),
+            &NodeState::mock(),
+            TEST_VERSIONS.test.base,
+        )
+        .await
+        .into();
         let privkey = BLSPubKey::generated_from_seed_indexed([0; 32], 1).1;
         let signature = PubKey::sign(&privkey, &[]).unwrap();
         let mut quorum_proposal = Proposal {
@@ -2804,9 +3194,10 @@ mod test {
                 epoch: None,
                 block_header: leaf.block_header().clone(),
                 view_number: ViewNumber::genesis(),
-                justify_qc: QuorumCertificate::genesis::<TestVersions>(
+                justify_qc: QuorumCertificate::genesis(
                     &ValidatedState::default(),
                     &NodeState::mock(),
+                    TEST_VERSIONS.test,
                 )
                 .await
                 .to_qc2(),
@@ -2870,13 +3261,231 @@ mod test {
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_validator_authenticated_migration() {
+        // Create a mock registered validator
+        let mut validator = RegisteredValidator::mock();
+        validator.delegators.clear(); // Simplify for test
+        validator.stake = alloy::primitives::U256::from(1000u64);
+
+        let epoch = 1i64;
+        let address = validator.account;
+
+        // Serialize to JSON and remove the `authenticated` field to simulate old data
+        let mut validator_json = serde_json::to_value(&validator).unwrap();
+        validator_json
+            .as_object_mut()
+            .unwrap()
+            .remove("authenticated");
+
+        // Use the deprecated Validator type for bincode storage to simulate old data format
+        // (which has no `authenticated` field)
+        #[allow(deprecated)]
+        let old_validator: espresso_types::v0_3::Validator<BLSPubKey> =
+            serde_json::from_value(validator_json.clone()).unwrap();
+        let mut validator_map: IndexMap<Address, _> = IndexMap::new();
+        validator_map.insert(address, old_validator);
+        let stake_bytes = bincode::serialize(&validator_map).unwrap();
+
+        // Create persistence and insert data directly
+        let db = Persistence::tmp_storage().await;
+
+        // First, create a persistence to set up the schema, then insert raw data
+        let persistence = Persistence::connect(&db).await;
+        let mut tx = persistence.db.write().await.unwrap();
+
+        // Insert into stake_table_validators with JSON missing the authenticated field
+        tx.execute(
+            query(
+                "INSERT INTO stake_table_validators (epoch, address, validator) VALUES ($1, $2, \
+                 $3)",
+            )
+            .bind(epoch)
+            .bind(format!("{:?}", address))
+            .bind(&validator_json),
+        )
+        .await
+        .unwrap();
+
+        // Insert into epoch_drb_and_root with bincode data
+        tx.execute(
+            query("INSERT INTO epoch_drb_and_root (epoch, stake) VALUES ($1, $2)")
+                .bind(epoch)
+                .bind(&stake_bytes),
+        )
+        .await
+        .unwrap();
+
+        // Reset migration state so it runs again on the newly inserted old-format data
+        tx.execute(query(
+            "UPDATE data_migrations SET completed = false, migrated_rows = 0 WHERE name = \
+             'validator_authenticated'",
+        ))
+        .await
+        .unwrap();
+
+        tx.commit().await.unwrap();
+
+        // Verify the data was inserted with missing authenticated field in JSON
+        {
+            let mut tx = persistence.db.read().await.unwrap();
+            let row: (serde_json::Value,) =
+                query_as("SELECT validator FROM stake_table_validators WHERE epoch = $1")
+                    .bind(epoch)
+                    .fetch_one(tx.as_mut())
+                    .await
+                    .unwrap();
+            let json_obj = row.0.as_object().unwrap();
+            assert!(!json_obj.contains_key("authenticated"));
+        }
+
+        // Create a new persistence and run migrations
+        let persistence = Persistence::connect(&db).await;
+        persistence.migrate_storage().await.unwrap();
+
+        // Verify stake_table_validators now has authenticated explicitly set
+        {
+            let mut tx = persistence.db.read().await.unwrap();
+            let row: (serde_json::Value,) =
+                query_as("SELECT validator FROM stake_table_validators WHERE epoch = $1")
+                    .bind(epoch)
+                    .fetch_one(tx.as_mut())
+                    .await
+                    .unwrap();
+            let json_obj = row.0.as_object().unwrap();
+            assert!(json_obj.contains_key("authenticated"));
+            assert_eq!(
+                json_obj.get("authenticated").unwrap(),
+                &serde_json::Value::Bool(true)
+            );
+        }
+
+        // Verify epoch_drb_and_root stake was migrated to AuthenticatedValidatorMap
+        {
+            let mut tx = persistence.db.read().await.unwrap();
+            let row: (Vec<u8>,) = query_as("SELECT stake FROM epoch_drb_and_root WHERE epoch = $1")
+                .bind(epoch)
+                .fetch_one(tx.as_mut())
+                .await
+                .unwrap();
+            // Deserializing as AuthenticatedValidatorMap verifies authenticated=true
+            // (AuthenticatedValidator's Deserialize impl rejects authenticated=false)
+            let migrated_map: AuthenticatedValidatorMap = bincode::deserialize(&row.0).unwrap();
+            assert!(migrated_map.contains_key(&address));
+        }
+
+        // Verify migrated_rows was set correctly
+        {
+            let mut tx = persistence.db.read().await.unwrap();
+            let row: (bool, i64) = query_as(
+                "SELECT completed, migrated_rows FROM data_migrations WHERE name = \
+                 'validator_authenticated' AND table_name = 'epoch_drb_and_root'",
+            )
+            .fetch_one(tx.as_mut())
+            .await
+            .unwrap();
+            assert!(row.0);
+            assert_eq!(row.1, 1);
+
+            let row: (bool, i64) = query_as(
+                "SELECT completed, migrated_rows FROM data_migrations WHERE name = \
+                 'validator_authenticated' AND table_name = 'stake_table_validators'",
+            )
+            .fetch_one(tx.as_mut())
+            .await
+            .unwrap();
+            assert!(row.0);
+            assert_eq!(row.1, 1);
+        }
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_store_all_validators_authenticated_and_unauthenticated() {
+        use std::collections::HashMap;
+
+        use alloy::primitives::{Address, U256};
+        use hotshot_types::light_client::StateVerKey;
+        use indexmap::IndexMap;
+
+        let tmp = Persistence::tmp_storage().await;
+        let storage = Persistence::connect(&tmp).await;
+
+        // Create an authenticated validator
+        let authenticated_validator = RegisteredValidator {
+            account: Address::random(),
+            stake_table_key: BLSPubKey::generated_from_seed_indexed([0u8; 32], 0).0,
+            state_ver_key: StateVerKey::default(),
+            stake: U256::from(1000),
+            commission: 100,
+            delegators: HashMap::new(),
+            authenticated: true,
+        };
+
+        // Create an unauthenticated validator
+        let unauthenticated_validator = RegisteredValidator {
+            account: Address::random(),
+            stake_table_key: BLSPubKey::generated_from_seed_indexed([0u8; 32], 1).0,
+            state_ver_key: StateVerKey::default(),
+            stake: U256::from(2000),
+            commission: 200,
+            delegators: HashMap::new(),
+            authenticated: false,
+        };
+
+        let mut validators: IndexMap<Address, RegisteredValidator<BLSPubKey>> = IndexMap::new();
+        validators.insert(
+            authenticated_validator.account,
+            authenticated_validator.clone(),
+        );
+        validators.insert(
+            unauthenticated_validator.account,
+            unauthenticated_validator.clone(),
+        );
+
+        // Store both validators
+        storage
+            .store_all_validators(EpochNumber::new(1), validators)
+            .await
+            .unwrap();
+
+        // Load and verify
+        let loaded = storage
+            .load_all_validators(EpochNumber::new(1), 0, 100)
+            .await
+            .unwrap();
+        assert_eq!(loaded.len(), 2);
+
+        // Find each validator and verify authenticated state is preserved
+        let loaded_auth = loaded
+            .iter()
+            .find(|v| v.account == authenticated_validator.account)
+            .unwrap();
+        assert!(
+            loaded_auth.authenticated,
+            "authenticated validator should remain authenticated"
+        );
+
+        let loaded_unauth = loaded
+            .iter()
+            .find(|v| v.account == unauthenticated_validator.account)
+            .unwrap();
+        assert!(
+            !loaded_unauth.authenticated,
+            "unauthenticated validator should remain unauthenticated"
+        );
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_fetching_providers() {
         let tmp = Persistence::tmp_storage().await;
         let storage = Persistence::connect(&tmp).await;
 
         // Mock up some data.
-        let leaf =
-            Leaf2::genesis::<TestVersions>(&ValidatedState::default(), &NodeState::mock()).await;
+        let leaf = Leaf2::genesis(
+            &ValidatedState::default(),
+            &NodeState::mock(),
+            TEST_VERSIONS.test.base,
+        )
+        .await;
         let leaf_payload = leaf.block_payload().unwrap();
         let leaf_payload_bytes_arc = leaf_payload.encode();
 
@@ -2891,18 +3500,20 @@ mod test {
             AvidMScheme::ns_disperse(&avidm_param, &weights, &leaf_payload_bytes_arc, ns_table)
                 .unwrap();
         let (pubkey, privkey) = BLSPubKey::generated_from_seed_indexed([0; 32], 1);
-        let vid_share = VidDisperseShare2::<SeqTypes> {
-            view_number: ViewNumber::new(0),
-            payload_commitment,
-            share: shares[0].clone(),
-            recipient_key: pubkey,
-            epoch: None,
-            target_epoch: None,
-            common: avidm_param.clone(),
-        }
-        .to_proposal(&privkey)
-        .unwrap()
-        .clone();
+        let vid_share = convert_proposal(
+            AvidMDisperseShare::<SeqTypes> {
+                view_number: ViewNumber::new(0),
+                payload_commitment,
+                share: shares[0].clone(),
+                recipient_key: pubkey,
+                epoch: None,
+                target_epoch: None,
+                common: avidm_param.clone(),
+            }
+            .to_proposal(&privkey)
+            .unwrap()
+            .clone(),
+        );
 
         let quorum_proposal = QuorumProposalWrapper::<SeqTypes> {
             proposal: QuorumProposal2::<SeqTypes> {
@@ -2956,10 +3567,7 @@ mod test {
             .append_da2(&da_proposal, VidCommitment::V1(payload_commitment))
             .await
             .unwrap();
-        storage
-            .append_vid2(&convert_proposal(vid_share.clone()))
-            .await
-            .unwrap();
+        storage.append_vid(&vid_share).await.unwrap();
         storage
             .append_quorum_proposal2(&quorum_proposal)
             .await
@@ -2975,17 +3583,13 @@ mod test {
         assert_eq!(
             Some(VidCommon::V1(avidm_param)),
             storage
-                .fetch(VidCommonRequest(VidCommitment::V1(
-                    vid_share.data.payload_commitment
-                )))
+                .fetch(VidCommonRequest(vid_share.data.payload_commitment()))
                 .await
         );
         assert_eq!(
             leaf_payload,
             storage
-                .fetch(PayloadRequest(VidCommitment::V1(
-                    vid_share.data.payload_commitment
-                )))
+                .fetch(PayloadRequest(vid_share.data.payload_commitment()))
                 .await
                 .unwrap()
         );
@@ -3018,8 +3622,12 @@ mod test {
         let data_view = ViewNumber::new(1);
 
         // Populate some data.
-        let leaf =
-            Leaf2::genesis::<TestVersions>(&ValidatedState::default(), &NodeState::mock()).await;
+        let leaf = Leaf2::genesis(
+            &ValidatedState::default(),
+            &NodeState::mock(),
+            TEST_VERSIONS.test.base,
+        )
+        .await;
         let leaf_payload = leaf.block_payload().unwrap();
         let leaf_payload_bytes_arc = leaf_payload.encode();
 
@@ -3035,26 +3643,29 @@ mod test {
                 .unwrap();
 
         let (pubkey, privkey) = BLSPubKey::generated_from_seed_indexed([0; 32], 1);
-        let vid = VidDisperseShare2::<SeqTypes> {
-            view_number: data_view,
-            payload_commitment,
-            share: shares[0].clone(),
-            recipient_key: pubkey,
-            epoch: None,
-            target_epoch: None,
-            common: avidm_param,
-        }
-        .to_proposal(&privkey)
-        .unwrap()
-        .clone();
+        let vid = convert_proposal(
+            AvidMDisperseShare::<SeqTypes> {
+                view_number: data_view,
+                payload_commitment,
+                share: shares[0].clone(),
+                recipient_key: pubkey,
+                epoch: None,
+                target_epoch: None,
+                common: avidm_param,
+            }
+            .to_proposal(&privkey)
+            .unwrap()
+            .clone(),
+        );
         let quorum_proposal = QuorumProposalWrapper::<SeqTypes> {
             proposal: QuorumProposal2::<SeqTypes> {
                 epoch: None,
                 block_header: leaf.block_header().clone(),
                 view_number: data_view,
-                justify_qc: QuorumCertificate2::genesis::<TestVersions>(
+                justify_qc: QuorumCertificate2::genesis(
                     &ValidatedState::default(),
                     &NodeState::mock(),
+                    TEST_VERSIONS.test,
                 )
                 .await,
                 upgrade_certificate: None,
@@ -3088,7 +3699,7 @@ mod test {
         };
 
         tracing::info!(?vid, ?da_proposal, ?quorum_proposal, "append data");
-        storage.append_vid2(&vid).await.unwrap();
+        storage.append_vid(&vid).await.unwrap();
         storage
             .append_da2(&da_proposal, VidCommitment::V1(payload_commitment))
             .await
@@ -3102,12 +3713,12 @@ mod test {
         // the target, because of the minimum retention.
         tracing::info!("decide view 1");
         storage
-            .append_decided_leaves(data_view + 1, [], &NullEventConsumer)
+            .append_decided_leaves(data_view + 1, [], None, &NullEventConsumer)
             .await
             .unwrap();
         assert_eq!(
             storage.load_vid_share(data_view).await.unwrap().unwrap(),
-            convert_proposal(vid)
+            vid
         );
         assert_eq!(
             storage.load_da_proposal(data_view).await.unwrap().unwrap(),
@@ -3122,7 +3733,7 @@ mod test {
         // retention) so it gets pruned.
         tracing::info!("decide view 2");
         storage
-            .append_decided_leaves(data_view + 2, [], &NullEventConsumer)
+            .append_decided_leaves(data_view + 2, [], None, &NullEventConsumer)
             .await
             .unwrap();
         assert!(storage.load_vid_share(data_view).await.unwrap().is_none(),);
@@ -3182,8 +3793,12 @@ mod test {
 
             let payload_bytes = payload.encode();
 
-            let block_header =
-                Header::genesis::<TestVersions>(&instance_state, payload.clone(), &metadata);
+            let block_header = Header::genesis(
+                &instance_state,
+                payload.clone(),
+                &metadata,
+                TEST_VERSIONS.test.base,
+            );
 
             let null_quorum_data = QuorumData {
                 leaf_commit: Commitment::<Leaf>::default_commitment_no_preimage(),
@@ -3220,10 +3835,10 @@ mod test {
                 .unwrap();
 
             let mut leaf = Leaf::from_quorum_proposal(&quorum_proposal);
-            leaf.fill_block_payload::<TestVersions>(
+            leaf.fill_block_payload(
                 payload,
                 GENESIS_VID_NUM_STORAGE_NODES,
-                <TestVersions as Versions>::Base::VERSION,
+                TEST_VERSIONS.test.base,
             )
             .unwrap();
 
@@ -3265,7 +3880,7 @@ mod test {
                 .disperse(payload_bytes.clone())
                 .unwrap();
 
-            let vid = ADVZDisperseShare::<SeqTypes> {
+            let vid = VidDisperseShare0::<SeqTypes> {
                 view_number: ViewNumber::new(i),
                 payload_commitment: Default::default(),
                 share: disperse.shares[0].clone(),
@@ -3294,7 +3909,7 @@ mod test {
             };
 
             storage
-                .append_vid(&vid.to_proposal(&privkey).unwrap())
+                .append_vid(&convert_proposal(vid.to_proposal(&privkey).unwrap()))
                 .await
                 .unwrap();
             storage
@@ -3333,7 +3948,7 @@ mod test {
             tx.commit().await.expect("failed to commit");
         }
 
-        storage.migrate_consensus().await.unwrap();
+        storage.migrate_storage().await.unwrap();
 
         let mut tx = storage.db.read().await.unwrap();
         let (anchor_leaf2_count,) = query_as::<(i64,)>("SELECT COUNT(*) from anchor_leaf2")
@@ -3403,7 +4018,48 @@ mod test {
             "Wrong light client state update certificate in the storage",
         );
 
-        storage.migrate_consensus().await.unwrap();
+        storage.migrate_storage().await.unwrap();
+    }
+
+    /// Regression test for an ambiguous behavior in `store_events`/`load_events`.
+    ///
+    /// Previously, `store_events` did nothing when given an empty events list (in fact,
+    /// `fetch_and_store_stake_table_events` was not even calling it). But this means that the
+    /// `stake_table_events_l1_block` column does not get updated when we enter a new epoch with no
+    /// new stake table events. This makes it impossible to distinguish between two very different
+    /// scenarios:
+    ///
+    /// 1. The node has successfully processed events through the latest L1 finalized block, but
+    ///    there are no new events from the last epoch.
+    /// 2. The node is lagging behind the latest L1 finalized block, and is possibly missing some
+    ///    new events.
+    ///
+    /// In scenario 1, clients of this node should be able to treat the empty list of stake table
+    /// events as authoritative, and derive the stake table for the next epoch (which will end up
+    /// being the same as the previous one. However, in scenario 2, clients need to wait, because we
+    /// don't yet know whether there could be any events that modify the stake table. Thus,
+    /// distinguishing these two scenarios is important.
+    ///
+    /// This regression test ensures that even if there are no new events, at least the
+    /// `stake_table_events_l1_block` column gets updated. We can then distinguish the two scenarios
+    /// using the `EventsPersistenceRead`` return value from load_events.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_store_events_empty() {
+        let tmp = Persistence::tmp_storage().await;
+        let mut opt = Persistence::options(&tmp);
+        let storage = opt.create().await.unwrap();
+
+        assert_eq!(storage.load_events(0, 100).await.unwrap(), (None, vec![]));
+
+        // Storing an empty events list still updates the latest L1 block.
+        for i in 1..=2 {
+            tracing::info!(i, "update l1 height");
+            storage.store_events(i, vec![]).await.unwrap();
+            assert_eq!(
+                storage.load_events(0, 100).await.unwrap(),
+                (Some(EventsPersistenceRead::UntilL1Block(i)), vec![])
+            );
+        }
     }
 }
 
@@ -3411,7 +4067,7 @@ mod test {
 #[cfg(not(feature = "embedded-db"))]
 mod postgres_tests {
     use espresso_types::{FeeAccount, Header, Leaf, NodeState, Transaction as Tx};
-    use hotshot_example_types::node_types::TestVersions;
+    use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_query_service::{
         availability::BlockQueryData, data_source::storage::UpdateAvailabilityStorage,
     };
@@ -3449,9 +4105,9 @@ mod postgres_tests {
 
         let validated_state = Default::default();
         let justify_qc =
-            QuorumCertificate::genesis::<TestVersions>(&validated_state, &instance_state).await;
+            QuorumCertificate::genesis(&validated_state, &instance_state, TEST_VERSIONS.test).await;
         let view_number: ViewNumber = justify_qc.view_number + 1;
-        let parent_leaf = Leaf::genesis::<TestVersions>(&validated_state, &instance_state)
+        let parent_leaf = Leaf::genesis(&validated_state, &instance_state, TEST_VERSIONS.test.base)
             .await
             .into();
 
@@ -3460,7 +4116,7 @@ mod postgres_tests {
                 .await
                 .unwrap();
         let payload_bytes = payload.encode();
-        let payload_commitment = vid_commitment::<TestVersions>(
+        let payload_commitment = vid_commitment(
             &payload_bytes,
             &ns_table.encode(),
             GENESIS_VID_NUM_STORAGE_NODES,

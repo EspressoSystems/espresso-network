@@ -17,7 +17,7 @@ contract LightClientV3 is LightClientV2 {
     /// @notice Unfortunate re-declaration since V2 mark firstEpoch as private
     uint64 internal _firstEpoch;
 
-    function initializeV3() public reinitializer(3) {
+    function initializeV3() public onlyOwner reinitializer(3) {
         _firstEpoch = epochFromBlockNumber(epochStartBlock, blocksPerEpoch);
     }
 

@@ -18,7 +18,7 @@ use async_trait::async_trait;
 use futures::future::Future;
 use hotshot::types::{Event, EventType};
 use hotshot_types::{
-    data::{ns_table::parse_ns_table, Leaf2, VidCommitment, VidDisperseShare, VidShare},
+    data::{ns_table::parse_ns_table, Leaf2, VidCommitment, VidCommon, VidDisperseShare, VidShare},
     event::LeafInfo,
     traits::{
         block_contents::{BlockHeader, BlockPayload, EncodeBytes, GENESIS_VID_NUM_STORAGE_NODES},
@@ -27,16 +27,18 @@ use hotshot_types::{
     vid::{
         advz::advz_scheme,
         avidm::{init_avidm_param, AvidMScheme},
+        avidm_gf2::{init_avidm_gf2_param, AvidmGf2Scheme},
     },
+    vote::HasViewNumber,
 };
-use jf_vid::VidScheme;
+use jf_advz::VidScheme;
 
 use crate::{
     availability::{
         BlockInfo, BlockQueryData, LeafQueryData, QueryableHeader, QueryablePayload,
-        StateCertQueryDataV2, UpdateAvailabilityData, VidCommonQueryData,
+        UpdateAvailabilityData, VidCommonQueryData,
     },
-    Header, Payload, VidCommon,
+    Header, Payload,
 };
 
 /// An extension trait for types which implement the update trait for each API module.
@@ -79,9 +81,15 @@ where
     Payload<Types>: QueryablePayload<Types>,
 {
     async fn update(&self, event: &Event<Types>) -> Result<(), u64> {
-        if let EventType::Decide { leaf_chain, qc, .. } = &event.event {
+        if let EventType::Decide {
+            leaf_chain,
+            committing_qc,
+            deciding_qc,
+            ..
+        } = &event.event
+        {
             // `qc` justifies the first (most recent) leaf...
-            let qcs = once((**qc).clone())
+            let qcs = once(committing_qc.qc().clone())
                 // ...and each leaf in the chain justifies the subsequent leaf (its parent) through
                 // `leaf.justify_qc`.
                 .chain(leaf_chain.iter().map(|leaf| leaf.leaf.justify_qc()))
@@ -95,7 +103,7 @@ where
                 LeafInfo {
                     leaf: leaf2,
                     vid_share,
-                    state_cert,
+                    state_cert: _,
                     ..
                 },
             ) in qcs.zip(leaf_chain.iter().rev())
@@ -108,7 +116,7 @@ where
                         tracing::error!(
                             height,
                             ?leaf2,
-                            ?qc,
+                            ?committing_qc,
                             "inconsistent leaf; cannot append leaf information: {err:#}"
                         );
                         return Err(leaf2.block_header().block_number());
@@ -136,6 +144,13 @@ where
                         )),
                         Some(VidShare::V1(share.share.clone())),
                     ),
+                    Some(VidDisperseShare::V2(share)) => (
+                        Some(VidCommonQueryData::new(
+                            leaf2.block_header().clone(),
+                            VidCommon::V2(share.common.clone()),
+                        )),
+                        Some(VidShare::V2(share.share.clone())),
+                    ),
                     None => {
                         if leaf2.view_number().u64() == 0 {
                             // HotShot does not run VID in consensus for the genesis block. In this case,
@@ -159,16 +174,15 @@ where
                     tracing::info!(height, "VID not available at decide");
                 }
 
-                if let Err(err) = self
-                    .append(BlockInfo::new(
-                        leaf_data,
-                        block_data,
-                        vid_common,
-                        vid_share,
-                        state_cert.clone().map(StateCertQueryDataV2),
-                    ))
-                    .await
-                {
+                let mut info = BlockInfo::new(leaf_data, block_data, vid_common, vid_share);
+                if let Some(deciding_qc) = deciding_qc {
+                    if committing_qc.view_number() == info.leaf.leaf().view_number() {
+                        let qc_chain =
+                            [committing_qc.as_ref().clone(), deciding_qc.as_ref().clone()];
+                        info = info.with_qc_chain(qc_chain);
+                    }
+                }
+                if let Err(err) = self.append(info).await {
                     tracing::error!(height, "failed to append leaf information: {err:#}");
                     return Err(leaf2.block_header().block_number());
                 }
@@ -222,6 +236,26 @@ fn genesis_vid<Types: NodeType>(
             Ok((
                 VidCommonQueryData::new(leaf.block_header().clone(), VidCommon::V1(avidm_param)),
                 VidShare::V1(shares.remove(0)),
+            ))
+        },
+        VidCommitment::V2(commit) => {
+            let avidm_gf2_param = init_avidm_gf2_param(GENESIS_VID_NUM_STORAGE_NODES)?;
+            let weights = vec![1; GENESIS_VID_NUM_STORAGE_NODES];
+            let ns_table = parse_ns_table(bytes.len(), &leaf.block_header().metadata().encode());
+
+            let (calculated_commit, common, mut shares) =
+                AvidmGf2Scheme::ns_disperse(&avidm_gf2_param, &weights, &bytes, ns_table).unwrap();
+
+            ensure!(
+                calculated_commit == commit,
+                "computed VID commit {} for genesis block does not match header commit {}",
+                calculated_commit,
+                commit
+            );
+
+            Ok((
+                VidCommonQueryData::new(leaf.block_header().clone(), VidCommon::V2(common)),
+                VidShare::V2(shares.remove(0)),
             ))
         },
     }

@@ -1258,6 +1258,11 @@
   },
   {
     "type": "error",
+    "name": "InvalidScalar",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "NoChangeRequired",
     "inputs": []
   },
@@ -1292,6 +1297,11 @@
         "internalType": "address"
       }
     ]
+  },
+  {
+    "type": "error",
+    "name": "OwnershipCannotBeRenounced",
+    "inputs": []
   },
   {
     "type": "error",

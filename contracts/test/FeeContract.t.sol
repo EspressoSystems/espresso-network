@@ -197,6 +197,25 @@ contract FeeContractUpgradabilityTest is Test {
 
         assertEq(balance, 0);
     }
+
+    // test renounceOwnership reverts
+    function test_renounceOwnership_Reverts() public {
+        vm.prank(admin);
+        vm.expectRevert(FeeContract.OwnershipCannotBeRenounced.selector);
+        feeContractProxy.renounceOwnership();
+    }
+
+    // test renounceOwnership by non-owner reverts
+    function test_renounceOwnership_ByNonOwnerReverts() public {
+        address otherUser = makeAddr("otherUser");
+        vm.prank(otherUser);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                OwnableUpgradeable.OwnableUnauthorizedAccount.selector, otherUser
+            )
+        );
+        feeContractProxy.renounceOwnership();
+    }
 }
 
 contract FeeContractV2Test is Initializable, OwnableUpgradeable, UUPSUpgradeable {

@@ -2,9 +2,13 @@
 use std::collections::BTreeMap;
 
 use hotshot::traits::BlockPayload;
-use hotshot_query_service::{availability::QueryablePayload, VidCommon};
-use hotshot_types::{data::VidCommitment, traits::EncodeBytes, vid::advz::advz_scheme};
-use jf_vid::VidScheme;
+use hotshot_query_service::availability::{QueryablePayload, VerifiableInclusion};
+use hotshot_types::{
+    data::{VidCommitment, VidCommon},
+    traits::EncodeBytes,
+    vid::advz::advz_scheme,
+};
+use jf_advz::VidScheme;
 use rand::RngCore;
 
 use crate::{
@@ -67,9 +71,7 @@ async fn basic_correctness() {
                 assert_eq!(tx, tx2);
                 tx_proof
             };
-            assert!(tx_proof2
-                .verify(block.ns_table(), &tx, &vid_commit, &vid_common)
-                .unwrap());
+            assert!(tx_proof2.verify(block.ns_table(), &tx, &vid_commit, &vid_common));
         }
         assert!(
             all_txs.is_empty(),

@@ -1,22 +1,18 @@
 pub use async_broadcast::broadcast;
-pub use hotshot::traits::election::static_committee::StaticCommittee;
 pub use hotshot_types::{
-    data::{EpochNumber, Leaf, ViewNumber},
+    data::{Leaf, ViewNumber},
     message::Proposal,
     signature_key::BLSPubKey,
     simple_certificate::{QuorumCertificate2, SimpleCertificate, SuccessThreshold},
-    traits::{
-        block_contents::BlockPayload,
-        node_implementation::{ConsensusTime, NodeType},
-    },
+    traits::{block_contents::BlockPayload, node_implementation::ConsensusTime},
 };
-use vbs::version::StaticVersionType;
 
 pub use crate::builder_state::{BuilderState, MessageType};
+
 /// The following tests are performed:
 #[cfg(test)]
 mod tests {
-    use std::{collections::VecDeque, hash::Hash, marker::PhantomData, sync::Arc, time::Duration};
+    use std::{collections::VecDeque, marker::PhantomData, sync::Arc, time::Duration};
 
     use async_lock::RwLock;
     use committable::{Commitment, CommitmentBoundsArkless, Committable};
@@ -31,17 +27,15 @@ mod tests {
     };
     use hotshot_example_types::{
         block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
-        node_types::TestVersions,
+        node_types::{TestTypes, TEST_VERSIONS},
         state_types::{TestInstanceState, TestValidatedState},
     };
     use hotshot_types::{
         data::{vid_commitment, DaProposal2, Leaf2, QuorumProposal2, QuorumProposalWrapper},
-        signature_key::{BuilderKey, SchnorrPubKey},
         simple_vote::QuorumData2,
-        traits::{block_contents::BlockHeader, node_implementation::Versions, EncodeBytes},
+        traits::{block_contents::BlockHeader, EncodeBytes},
         utils::{BuilderCommitment, EpochTransitionIndicator},
     };
-    use serde::{Deserialize, Serialize};
     use sha2::{Digest, Sha256};
     use tokio::time::{error::Elapsed, timeout};
     use tracing_subscriber::EnvFilter;
@@ -62,33 +56,6 @@ mod tests {
             .with_env_filter(EnvFilter::from_default_env())
             .try_init();
         tracing::info!("Testing the builder core with multiple messages from the channels");
-        #[derive(
-            Copy,
-            Clone,
-            Debug,
-            Default,
-            Hash,
-            PartialEq,
-            Eq,
-            PartialOrd,
-            Ord,
-            Serialize,
-            Deserialize,
-        )]
-        struct TestTypes;
-        impl NodeType for TestTypes {
-            type View = ViewNumber;
-            type Epoch = EpochNumber;
-            type BlockHeader = TestBlockHeader;
-            type BlockPayload = TestBlockPayload;
-            type SignatureKey = BLSPubKey;
-            type Transaction = TestTransaction;
-            type ValidatedState = TestValidatedState;
-            type InstanceState = TestInstanceState;
-            type Membership = StaticCommittee<Self>;
-            type BuilderSignatureKey = BuilderKey;
-            type StateSignatureKey = SchnorrPubKey;
-        }
         // no of test messages to send
         let num_test_messages = 5;
         let multiplication_factor = 5;
@@ -112,11 +79,11 @@ mod tests {
         let (builder_pub_key, builder_private_key) =
             BLSPubKey::generated_from_seed_indexed(seed, 2011_u64);
         // instantiate the global state also
-        let initial_commitment = vid_commitment::<TestVersions>(
+        let initial_commitment = vid_commitment(
             &[],
             &[],
             TEST_NUM_NODES_IN_VID_COMPUTATION,
-            <TestVersions as Versions>::Base::VERSION,
+            TEST_VERSIONS.test.base,
         );
         let global_state = Arc::new(RwLock::new(GlobalState::<TestTypes>::new(
             bootstrap_sender,
@@ -130,7 +97,7 @@ mod tests {
             TEST_MAX_TX_NUM,
         )));
 
-        let bootstrap_builder_state = BuilderState::<TestTypes, TestVersions>::new(
+        let bootstrap_builder_state = BuilderState::<TestTypes>::new(
             ParentBlockReferences {
                 view_number: ViewNumber::new(0),
                 vid_commitment: initial_commitment,
@@ -168,9 +135,10 @@ mod tests {
         let mut previous_commitment = initial_commitment;
         let mut previous_view = ViewNumber::new(0);
         let mut previous_quorum_proposal = {
-            let previous_jc = QuorumCertificate2::<TestTypes>::genesis::<TestVersions>(
+            let previous_jc = QuorumCertificate2::<TestTypes>::genesis(
                 &TestValidatedState::default(),
                 &TestInstanceState::default(),
+                TEST_VERSIONS.test,
             )
             .await;
 
@@ -186,6 +154,7 @@ mod tests {
                             num_transactions: 0,
                         },
                         random: 1, // arbitrary
+                        version: TEST_VERSIONS.test.base,
                     },
                     view_number: ViewNumber::new(0),
                     justify_qc: previous_jc.clone(),
@@ -335,11 +304,11 @@ mod tests {
                          nodes:{NUM_NODES_IN_VID_COMPUTATION}"
                     );
 
-                    let block_payload_commitment = vid_commitment::<TestVersions>(
+                    let block_payload_commitment = vid_commitment(
                         &encoded_transactions,
                         &metadata.encode(),
                         NUM_NODES_IN_VID_COMPUTATION,
-                        <TestVersions as Versions>::Base::VERSION,
+                        TEST_VERSIONS.test.base,
                     );
 
                     tracing::debug!("Block Payload vid commitment: {block_payload_commitment:?}");
@@ -358,6 +327,7 @@ mod tests {
                         timestamp_millis: round as u64 * 1_000,
                         metadata,
                         random: 1, // arbitrary
+                        version: TEST_VERSIONS.test.base,
                     };
 
                     let justify_qc = {
@@ -435,9 +405,10 @@ mod tests {
                 // This may not be necessary for this test
                 let decide_message = {
                     let leaf = match round {
-                        0 => Leaf::genesis::<TestVersions>(
+                        0 => Leaf::genesis(
                             &TestValidatedState::default(),
                             &TestInstanceState::default(),
+                            TEST_VERSIONS.test.base,
                         )
                         .await
                         .into(),
@@ -452,10 +423,10 @@ mod tests {
                                 &quorum_certificate_message.proposal.data,
                             );
                             current_leaf
-                                .fill_block_payload::<TestVersions>(
+                                .fill_block_payload(
                                     block_payload,
                                     NUM_NODES_IN_VID_COMPUTATION,
-                                    <TestVersions as Versions>::Base::VERSION,
+                                    TEST_VERSIONS.test.base,
                                 )
                                 .unwrap();
                             current_leaf

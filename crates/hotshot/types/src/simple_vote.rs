@@ -9,7 +9,6 @@
 use std::{
     fmt::Debug,
     hash::Hash,
-    marker::PhantomData,
     ops::{Deref, DerefMut},
 };
 
@@ -25,7 +24,7 @@ use crate::{
     light_client::{CircuitField, LightClientState, StakeTableState},
     message::UpgradeLock,
     traits::{
-        node_implementation::{ConsensusTime, NodeType, Versions},
+        node_implementation::{ConsensusTime, NodeType},
         signature_key::{SignatureKey, StateSignatureKey},
     },
     vote::{HasViewNumber, Vote},
@@ -258,12 +257,12 @@ impl<TYPES: NodeType, DATA: Voteable<TYPES> + 'static> SimpleVote<TYPES, DATA> {
     /// Creates and signs a simple vote
     /// # Errors
     /// If we are unable to sign the data
-    pub async fn create_signed_vote<V: Versions>(
+    pub async fn create_signed_vote(
         data: DATA,
         view: TYPES::View,
         pub_key: &TYPES::SignatureKey,
         private_key: &<TYPES::SignatureKey as SignatureKey>::PrivateKey,
-        upgrade_lock: &UpgradeLock<TYPES, V>,
+        upgrade_lock: &UpgradeLock<TYPES>,
     ) -> Result<Self> {
         let commit = VersionedVoteData::new(data.clone(), view, upgrade_lock)
             .await?
@@ -286,7 +285,7 @@ impl<TYPES: NodeType, DATA: Voteable<TYPES> + 'static> SimpleVote<TYPES, DATA> {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 /// A wrapper for vote data that carries a view number and an `upgrade_lock`, allowing switching the commitment calculation dynamically depending on the version
-pub struct VersionedVoteData<TYPES: NodeType, DATA: Voteable<TYPES>, V: Versions> {
+pub struct VersionedVoteData<TYPES: NodeType, DATA: Voteable<TYPES>> {
     /// underlying vote data
     data: DATA,
 
@@ -295,12 +294,9 @@ pub struct VersionedVoteData<TYPES: NodeType, DATA: Voteable<TYPES>, V: Versions
 
     /// version applied to the view number
     version: Version,
-
-    /// phantom data
-    _pd: PhantomData<V>,
 }
 
-impl<TYPES: NodeType, DATA: Voteable<TYPES>, V: Versions> VersionedVoteData<TYPES, DATA, V> {
+impl<TYPES: NodeType, DATA: Voteable<TYPES>> VersionedVoteData<TYPES, DATA> {
     /// Create a new `VersionedVoteData` struct
     ///
     /// # Errors
@@ -309,7 +305,7 @@ impl<TYPES: NodeType, DATA: Voteable<TYPES>, V: Versions> VersionedVoteData<TYPE
     pub async fn new(
         data: DATA,
         view: TYPES::View,
-        upgrade_lock: &UpgradeLock<TYPES, V>,
+        upgrade_lock: &UpgradeLock<TYPES>,
     ) -> Result<Self> {
         let version = upgrade_lock.version(view).await?;
 
@@ -317,7 +313,6 @@ impl<TYPES: NodeType, DATA: Voteable<TYPES>, V: Versions> VersionedVoteData<TYPE
             data,
             view,
             version,
-            _pd: PhantomData,
         })
     }
 
@@ -327,7 +322,7 @@ impl<TYPES: NodeType, DATA: Voteable<TYPES>, V: Versions> VersionedVoteData<TYPE
     pub async fn new_infallible(
         data: DATA,
         view: TYPES::View,
-        upgrade_lock: &UpgradeLock<TYPES, V>,
+        upgrade_lock: &UpgradeLock<TYPES>,
     ) -> Self {
         let version = upgrade_lock.version_infallible(view).await;
 
@@ -335,14 +330,11 @@ impl<TYPES: NodeType, DATA: Voteable<TYPES>, V: Versions> VersionedVoteData<TYPE
             data,
             view,
             version,
-            _pd: PhantomData,
         }
     }
 }
 
-impl<TYPES: NodeType, DATA: Voteable<TYPES>, V: Versions> Committable
-    for VersionedVoteData<TYPES, DATA, V>
-{
+impl<TYPES: NodeType, DATA: Voteable<TYPES>> Committable for VersionedVoteData<TYPES, DATA> {
     fn commit(&self) -> Commitment<Self> {
         committable::RawCommitmentBuilder::new("Vote")
             .var_size_bytes(self.data.commit().as_ref())
@@ -954,6 +946,19 @@ pub struct LightClientStateUpdateVote<TYPES: NodeType> {
     pub next_stake_table_state: StakeTableState,
     /// The signature to the light client state
     pub signature: <TYPES::StateSignatureKey as StateSignatureKey>::StateSignature,
+}
+
+/// Type for light client state update vote
+#[derive(Serialize, Deserialize, Eq, Hash, PartialEq, Debug, Clone)]
+pub struct LightClientStateUpdateVote2<TYPES: NodeType> {
+    /// The epoch number
+    pub epoch: TYPES::Epoch,
+    /// The light client state
+    pub light_client_state: LightClientState,
+    /// The next stake table state
+    pub next_stake_table_state: StakeTableState,
+    /// The signature to the light client state
+    pub signature: <TYPES::StateSignatureKey as StateSignatureKey>::StateSignature,
     /// The signature to the light client V2 state
     pub v2_signature: <TYPES::StateSignatureKey as StateSignatureKey>::StateSignature,
     /// The auth root
@@ -963,6 +968,31 @@ pub struct LightClientStateUpdateVote<TYPES: NodeType> {
     /// It's here because it's hard to derive in the implementation of `LightClientStateUpdateVoteAccumulator`.
     #[serde(with = "canonical")]
     pub signed_state_digest: CircuitField,
+}
+
+impl<TYPES: NodeType> LightClientStateUpdateVote<TYPES> {
+    pub fn to_vote2(self) -> LightClientStateUpdateVote2<TYPES> {
+        LightClientStateUpdateVote2 {
+            epoch: self.epoch,
+            light_client_state: self.light_client_state,
+            next_stake_table_state: self.next_stake_table_state,
+            signature: self.signature.clone(),
+            v2_signature: self.signature,
+            auth_root: Default::default(),
+            signed_state_digest: Default::default(),
+        }
+    }
+}
+
+impl<TYPES: NodeType> LightClientStateUpdateVote2<TYPES> {
+    pub fn to_vote(self) -> LightClientStateUpdateVote<TYPES> {
+        LightClientStateUpdateVote {
+            epoch: self.epoch,
+            light_client_state: self.light_client_state,
+            next_stake_table_state: self.next_stake_table_state,
+            signature: self.v2_signature,
+        }
+    }
 }
 
 impl<TYPES: NodeType> HasViewNumber<TYPES> for LightClientStateUpdateVote<TYPES> {
@@ -984,6 +1014,31 @@ pub struct EpochRootQuorumVote<TYPES: NodeType> {
     pub state_vote: LightClientStateUpdateVote<TYPES>,
 }
 
+#[derive(Serialize, Deserialize, Eq, Hash, PartialEq, Debug, Clone)]
+#[serde(bound(deserialize = "QuorumVote2<TYPES>:for<'a> Deserialize<'a>"))]
+pub struct EpochRootQuorumVote2<TYPES: NodeType> {
+    pub vote: QuorumVote2<TYPES>,
+    pub state_vote: LightClientStateUpdateVote2<TYPES>,
+}
+
+impl<TYPES: NodeType> EpochRootQuorumVote<TYPES> {
+    pub fn to_vote2(self) -> EpochRootQuorumVote2<TYPES> {
+        EpochRootQuorumVote2 {
+            vote: self.vote,
+            state_vote: self.state_vote.to_vote2(),
+        }
+    }
+}
+
+impl<TYPES: NodeType> EpochRootQuorumVote2<TYPES> {
+    pub fn to_vote(self) -> EpochRootQuorumVote<TYPES> {
+        EpochRootQuorumVote {
+            vote: self.vote,
+            state_vote: self.state_vote.to_vote(),
+        }
+    }
+}
+
 impl<TYPES: NodeType> HasViewNumber<TYPES> for EpochRootQuorumVote<TYPES> {
     fn view_number(&self) -> TYPES::View {
         self.vote.view_number()
@@ -991,6 +1046,18 @@ impl<TYPES: NodeType> HasViewNumber<TYPES> for EpochRootQuorumVote<TYPES> {
 }
 
 impl<TYPES: NodeType> HasEpoch<TYPES> for EpochRootQuorumVote<TYPES> {
+    fn epoch(&self) -> Option<TYPES::Epoch> {
+        self.vote.epoch()
+    }
+}
+
+impl<TYPES: NodeType> HasViewNumber<TYPES> for EpochRootQuorumVote2<TYPES> {
+    fn view_number(&self) -> TYPES::View {
+        self.vote.view_number()
+    }
+}
+
+impl<TYPES: NodeType> HasEpoch<TYPES> for EpochRootQuorumVote2<TYPES> {
     fn epoch(&self) -> Option<TYPES::Epoch> {
         self.vote.epoch()
     }

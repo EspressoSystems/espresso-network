@@ -9,13 +9,13 @@ set -euo pipefail
 
 case "$1" in
     "sequencer")
-        cargo build --locked --release --bin sequencer
+        cargo build --locked --release -p sequencer --bin sequencer
         ;;
     "sequencer-sqlite")
         cargo build --locked --release -p sequencer-sqlite
         ;;
     "espresso-dev-node")
-        cargo build --locked --release --features "embedded-db testing" --bin espresso-dev-node
+        cargo build --locked --release -p espresso-dev-node
         ;;
     "other")
         BINS="$(cargo metadata --no-deps --format-version 1 \

@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SLEEP_INTERVAL="${1:-10}"
+
+echo "Starting reward claiming loop (checking every ${SLEEP_INTERVAL}s)..."
+
+while true; do
+  unclaimed=$(staking-cli unclaimed-rewards)
+  if [ "$unclaimed" != "0 ESP" ]; then
+    echo "Claiming $unclaimed..."
+    staking-cli claim-rewards
+    echo "Successfully claimed rewards"
+  else
+    echo "No rewards to claim yet ($unclaimed)"
+  fi
+  sleep "$SLEEP_INTERVAL"
+done

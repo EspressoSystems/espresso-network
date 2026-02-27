@@ -133,6 +133,8 @@ contract LightClient is Initializable, OwnableUpgradeable, UUPSUpgradeable {
     error InvalidHotShotBlockForCommitmentCheck();
     /// @notice Invalid Max Block States
     error InvalidMaxStateHistory();
+    /// @notice Cannot renounce ownership
+    error OwnershipCannotBeRenounced();
 
     /// @notice Constructor disables initializers to prevent the implementation contract from being
     /// initialized
@@ -181,6 +183,13 @@ contract LightClient is Initializable, OwnableUpgradeable, UUPSUpgradeable {
     /// @notice only the owner can authorize an upgrade
     function _authorizeUpgrade(address newImplementation) internal virtual override onlyOwner {
         emit Upgrade(newImplementation);
+    }
+
+    /// @notice Cannot renounce ownership
+    /// @dev Override renounceOwnership() to revert, preventing accidental or malicious ownership
+    /// renunciation
+    function renounceOwnership() public virtual override onlyOwner {
+        revert OwnershipCannotBeRenounced();
     }
 
     /// @dev Initialization of contract variables happens in this method because the LightClient

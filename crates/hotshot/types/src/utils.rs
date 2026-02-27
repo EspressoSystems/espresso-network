@@ -28,13 +28,14 @@ use serde::{Deserialize, Serialize};
 use sha2::Digest;
 use tagged_base64::tagged;
 use typenum::Unsigned;
-use vbs::version::StaticVersionType;
+use vbs::version::Version;
+use versions::EPOCH_VERSION;
 
 use crate::{
     data::{Leaf2, VidCommitment},
     stake_table::StakeTableEntries,
     traits::{
-        node_implementation::{ConsensusTime, NodeType, Versions},
+        node_implementation::{ConsensusTime, NodeType},
         ValidatedState,
     },
     vote::{Certificate, HasViewNumber},
@@ -104,12 +105,12 @@ pub type StateAndDelta<TYPES> = (
     Option<Arc<<<TYPES as NodeType>::ValidatedState as ValidatedState<TYPES>>::Delta>>,
 );
 
-pub async fn verify_leaf_chain<T: NodeType, V: Versions>(
+pub async fn verify_leaf_chain<T: NodeType>(
     mut leaf_chain: Vec<Leaf2<T>>,
     stake_table: &[PeerConfig<T>],
     success_threshold: U256,
     expected_height: u64,
-    upgrade_lock: &crate::message::UpgradeLock<T, V>,
+    upgrade_lock: &crate::message::UpgradeLock<T>,
 ) -> anyhow::Result<Leaf2<T>> {
     // Sort the leaf chain by view number
     leaf_chain.sort_by_key(|l| l.view_number());
@@ -298,21 +299,21 @@ impl AsRef<Sha256Digest> for BuilderCommitment {
     }
 }
 
-/// For the wire format, we use bincode with the following options:
-///   - No upper size limit
-///   - Little endian encoding
-///   - Varint encoding
-///   - Reject trailing bytes
-#[allow(clippy::type_complexity)]
-#[must_use]
-#[allow(clippy::type_complexity)]
-pub fn bincode_opts() -> WithOtherTrailing<
+type BincodeOpts = WithOtherTrailing<
     WithOtherIntEncoding<
         WithOtherEndian<WithOtherLimit<DefaultOptions, bincode::config::Infinite>, LittleEndian>,
         FixintEncoding,
     >,
     RejectTrailing,
-> {
+>;
+
+/// For the wire format, we use bincode with the following options:
+///   - No upper size limit
+///   - Little endian encoding
+///   - Varint encoding
+///   - Reject trailing bytes
+#[must_use]
+pub fn bincode_opts() -> BincodeOpts {
     bincode::DefaultOptions::new()
         .with_no_limit()
         .with_little_endian()
@@ -327,7 +328,7 @@ pub fn epoch_from_block_number(block_number: u64, epoch_height: u64) -> u64 {
         0
     } else if block_number == 0 {
         1
-    } else if block_number % epoch_height == 0 {
+    } else if block_number.is_multiple_of(epoch_height) {
         block_number / epoch_height
     } else {
         block_number / epoch_height + 1
@@ -372,7 +373,7 @@ pub fn option_epoch_from_block_number<TYPES: NodeType>(
             None
         } else if block_number == 0 {
             Some(1u64)
-        } else if block_number % epoch_height == 0 {
+        } else if block_number.is_multiple_of(epoch_height) {
             Some(block_number / epoch_height)
         } else {
             Some(block_number / epoch_height + 1)
@@ -383,10 +384,10 @@ pub fn option_epoch_from_block_number<TYPES: NodeType>(
     }
 }
 
-/// Returns Some(1) if epochs are enabled by V::Base, otherwise returns None
+/// Returns Some(1) if epochs are enabled by `base`, otherwise returns None
 #[must_use]
-pub fn genesis_epoch_from_version<V: Versions, TYPES: NodeType>() -> Option<TYPES::Epoch> {
-    (V::Base::VERSION >= V::Epochs::VERSION).then(|| TYPES::Epoch::new(1))
+pub fn genesis_epoch_from_version<TYPES: NodeType>(base: Version) -> Option<TYPES::Epoch> {
+    (base >= EPOCH_VERSION).then(|| TYPES::Epoch::new(1))
 }
 
 /// A function for generating a cute little user mnemonic from a hash
@@ -413,7 +414,7 @@ pub fn is_transition_block(block_number: u64, epoch_height: u64) -> bool {
     if block_number == 0 || epoch_height == 0 {
         false
     } else {
-        (block_number + 3) % epoch_height == 0
+        (block_number + 3).is_multiple_of(epoch_height)
     }
 }
 /// returns true if it's the first transition block (epoch height - 2)
@@ -425,13 +426,13 @@ pub fn is_first_transition_block(block_number: u64, epoch_height: u64) -> bool {
         block_number % epoch_height == epoch_height - 2
     }
 }
-/// Returns true if the block is part of the epoch transition (including the last non null block)  
+/// Returns true if the block is part of the epoch transition (including the last non null block)
 #[must_use]
 pub fn is_epoch_transition(block_number: u64, epoch_height: u64) -> bool {
     if block_number == 0 || epoch_height == 0 {
         false
     } else {
-        block_number % epoch_height >= epoch_height - 3 || block_number % epoch_height == 0
+        block_number % epoch_height >= epoch_height - 3 || block_number.is_multiple_of(epoch_height)
     }
 }
 
@@ -441,12 +442,12 @@ pub fn is_last_block(block_number: u64, epoch_height: u64) -> bool {
     if block_number == 0 || epoch_height == 0 {
         false
     } else {
-        block_number % epoch_height == 0
+        block_number.is_multiple_of(epoch_height)
     }
 }
 
 /// Returns true if the block number is in trasntion but not the transition block
-/// or the last block in the epoch.  
+/// or the last block in the epoch.
 ///
 /// This function is useful for determining if a proposal extending this QC must follow
 /// the special rules for transition blocks.
@@ -467,7 +468,7 @@ pub fn is_epoch_root(block_number: u64, epoch_height: u64) -> bool {
     if block_number == 0 || epoch_height == 0 {
         false
     } else {
-        (block_number + 5) % epoch_height == 0
+        (block_number + 5).is_multiple_of(epoch_height)
     }
 }
 
@@ -477,7 +478,7 @@ pub fn is_ge_epoch_root(block_number: u64, epoch_height: u64) -> bool {
     if block_number == 0 || epoch_height == 0 {
         false
     } else {
-        block_number % epoch_height == 0 || block_number % epoch_height >= epoch_height - 5
+        block_number.is_multiple_of(epoch_height) || block_number % epoch_height >= epoch_height - 5
     }
 }
 
@@ -486,7 +487,7 @@ pub fn is_gt_epoch_root(block_number: u64, epoch_height: u64) -> bool {
     if block_number == 0 || epoch_height == 0 {
         false
     } else {
-        block_number % epoch_height == 0 || block_number % epoch_height > epoch_height - 5
+        block_number.is_multiple_of(epoch_height) || block_number % epoch_height > epoch_height - 5
     }
 }
 

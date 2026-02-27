@@ -20,10 +20,8 @@ fixed-leader-election = []
 async-lock = { workspace = true }
 async-trait = { workspace = true }
 
-cdn-broker = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "0.5.8", package = "cdn-broker", features = [
-    "global-permits",
-] }
-cdn-marshal = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "0.5.8", package = "cdn-marshal" }
+cdn-broker = { workspace = true }
+cdn-marshal = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true, optional = true }
 espresso-types = { path = "../../../types" }
@@ -35,19 +33,18 @@ hotshot-orchestrator = { workspace = true }
 hotshot-testing = { workspace = true }
 hotshot-types = { workspace = true }
 local-ip-address = "0.6"
-portpicker = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true }
 sequencer = { path = "../../../sequencer", default-features = false }
 serde = { workspace = true, features = ["rc"] }
 sha2 = { workspace = true }
 surf-disco = { workspace = true }
+test-utils = { workspace = true }
 time = { workspace = true }
 tokio = { workspace = true }
 
 tracing = { workspace = true }
 url = { workspace = true }
-workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [dev-dependencies]
 anyhow = { workspace = true }

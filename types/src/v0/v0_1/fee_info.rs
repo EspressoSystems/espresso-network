@@ -2,7 +2,7 @@ use alloy::primitives::{Address, U256};
 use alloy_compat::ethers_serde;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use derive_more::{Add, Display, From, Into, Mul, Sub};
-use jf_merkle_tree::{MerkleTreeScheme, UniversalMerkleTreeScheme};
+use jf_merkle_tree_compat::{MerkleTreeScheme, UniversalMerkleTreeScheme};
 use serde::{Deserialize, Serialize};
 
 use crate::FeeMerkleTree;
@@ -90,7 +90,6 @@ pub struct AccountQueryData {
     pub balance: U256,
     pub proof: FeeAccountProof,
 }
-
 
 /// Methods for use w/ Vec<FeeInfo>
 pub trait IterableFeeInfo {

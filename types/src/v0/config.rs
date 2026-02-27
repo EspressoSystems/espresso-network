@@ -4,11 +4,12 @@ use hotshot_types::{
     network::{
         BuilderType, CombinedNetworkConfig, Libp2pConfig, NetworkConfig, RandomBuilderConfig,
     },
-    HotShotConfig, PeerConfig, ValidatorConfig,
+    HotShotConfig, PeerConfig, ValidatorConfig, VersionedDaCommittee,
 };
 use serde::{Deserialize, Serialize};
 use tide_disco::Url;
 use vec1::Vec1;
+use versions::{Upgrade, VERSION_0_1};
 
 use crate::{PubKey, SeqTypes};
 
@@ -55,6 +56,8 @@ pub struct PublicHotShotConfig {
     num_nodes_with_stake: NonZeroUsize,
     known_nodes_with_stake: Vec<PeerConfig<SeqTypes>>,
     known_da_nodes: Vec<PeerConfig<SeqTypes>>,
+    #[serde(default)]
+    da_committees: Vec<VersionedDaCommittee<SeqTypes>>,
     da_staked_committee_size: usize,
     fixed_leader_for_gpuvid: usize,
     next_view_timeout: u64,
@@ -79,6 +82,8 @@ pub struct PublicHotShotConfig {
     drb_difficulty: u64,
     #[serde(default = "default_drb_upgrade_difficulty")]
     drb_upgrade_difficulty: u64,
+    #[serde(default = "default_version_upgrade")]
+    upgrade: Upgrade,
 }
 
 fn default_stake_table_capacity() -> usize {
@@ -95,6 +100,11 @@ fn default_drb_upgrade_difficulty() -> u64 {
     0
 }
 
+/// Default version upgrade (intended to be overwritten)
+fn default_version_upgrade() -> Upgrade {
+    Upgrade::trivial(VERSION_0_1)
+}
+
 impl From<HotShotConfig<SeqTypes>> for PublicHotShotConfig {
     fn from(v: HotShotConfig<SeqTypes>) -> Self {
         // Destructure all fields from HotShotConfig to return an error
@@ -105,6 +115,7 @@ impl From<HotShotConfig<SeqTypes>> for PublicHotShotConfig {
             num_nodes_with_stake,
             known_nodes_with_stake,
             known_da_nodes,
+            da_committees,
             da_staked_committee_size,
             fixed_leader_for_gpuvid,
             next_view_timeout,
@@ -126,6 +137,7 @@ impl From<HotShotConfig<SeqTypes>> for PublicHotShotConfig {
             stake_table_capacity,
             drb_difficulty,
             drb_upgrade_difficulty,
+            upgrade,
         } = v;
 
         Self {
@@ -133,6 +145,7 @@ impl From<HotShotConfig<SeqTypes>> for PublicHotShotConfig {
             num_nodes_with_stake,
             known_nodes_with_stake,
             known_da_nodes,
+            da_committees,
             da_staked_committee_size,
             fixed_leader_for_gpuvid,
             next_view_timeout,
@@ -154,6 +167,7 @@ impl From<HotShotConfig<SeqTypes>> for PublicHotShotConfig {
             stake_table_capacity,
             drb_difficulty,
             drb_upgrade_difficulty,
+            upgrade,
         }
     }
 }
@@ -165,6 +179,7 @@ impl PublicHotShotConfig {
             num_nodes_with_stake: self.num_nodes_with_stake,
             known_nodes_with_stake: self.known_nodes_with_stake,
             known_da_nodes: self.known_da_nodes,
+            da_committees: self.da_committees,
             da_staked_committee_size: self.da_staked_committee_size,
             fixed_leader_for_gpuvid: self.fixed_leader_for_gpuvid,
             next_view_timeout: self.next_view_timeout,
@@ -186,6 +201,7 @@ impl PublicHotShotConfig {
             stake_table_capacity: self.stake_table_capacity,
             drb_difficulty: self.drb_difficulty,
             drb_upgrade_difficulty: self.drb_upgrade_difficulty,
+            upgrade: self.upgrade,
         }
     }
 
@@ -196,9 +212,11 @@ impl PublicHotShotConfig {
     pub fn known_da_nodes(&self) -> Vec<PeerConfig<SeqTypes>> {
         self.known_da_nodes.clone()
     }
+
     pub fn blocks_per_epoch(&self) -> u64 {
         self.epoch_height
     }
+
     pub fn epoch_start_block(&self) -> u64 {
         self.epoch_start_block
     }

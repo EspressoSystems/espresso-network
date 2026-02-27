@@ -10,7 +10,7 @@ alloy = { workspace = true }
 anyhow = { workspace = true }
 espresso-types = { path = "../types" }
 futures = { workspace = true }
-jf-merkle-tree = { workspace = true }
+jf-merkle-tree-compat = { workspace = true }
 surf-disco = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }

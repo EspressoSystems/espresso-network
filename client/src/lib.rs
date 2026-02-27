@@ -4,7 +4,7 @@ use alloy::primitives::Address;
 use anyhow::Context;
 use espresso_types::{FeeAccount, FeeAmount, FeeMerkleTree, Header};
 use futures::{stream::BoxStream, StreamExt};
-use jf_merkle_tree::{
+use jf_merkle_tree_compat::{
     prelude::{MerkleProof, Sha3Node},
     MerkleTreeScheme,
 };

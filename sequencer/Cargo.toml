@@ -8,30 +8,20 @@ edition = "2021"
 normal = ["hotshot-testing"]
 
 [package.metadata.cargo-machete]
-ignored = ["vergen", "include_dir", "hotshot_builder_api"]
-
-[[bin]]
-name = "espresso-dev-node"
-path = "src/bin/espresso-dev-node.rs"
-required-features = ["testing", "embedded-db"]
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+ignored = ["vergen", "vergen-gitcl", "include_dir", "hotshot_builder_api"]
 
 [features]
-default = ["fee", "pos", "drb-and-header"]
 testing = [
     "hotshot-testing",
     "espresso-types/testing",
+    "light-client/testing",
     "sequencer-utils/testing",
     "hotshot-query-service/testing",
 ]
 benchmarking = []
 embedded-db = ["hotshot-query-service/embedded-db", "sqlx/sqlite"]
-fee = []
-pos = []
-drb-and-header = []
 
 [dependencies]
-
 alloy = { workspace = true }
 anyhow = { workspace = true }
 ark-ff = { workspace = true }
@@ -45,13 +35,11 @@ byteorder = "1"
 hotshot-builder-refactored = { path = "../crates/hotshot-builder/refactored" }
 
 # CDN imports
-cdn-broker = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "0.5.1-upgrade", package = "cdn-broker", features = [
-    "global-permits",
-] }
-cdn-marshal = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "0.5.1-upgrade", package = "cdn-marshal" }
+cdn-broker = { workspace = true }
+cdn-marshal = { workspace = true }
 clap = { workspace = true }
 client = { path = "../client" }
-committable = "0.2"
+committable = { workspace = true }
 csv = "1"
 derivative = "2.2"
 derive_more = { workspace = true }
@@ -74,19 +62,21 @@ hotshot-task-impls = { workspace = true }
 hotshot-testing = { workspace = true, optional = true }
 hotshot-types = { workspace = true }
 
+light-client = { workspace = true }
+
 include_dir = "0.7"
 indexmap = { workspace = true }
 itertools = { workspace = true }
 jf-crhf = { workspace = true }
-jf-merkle-tree = { workspace = true }
+jf-merkle-tree-compat = { workspace = true }
 jf-rescue = { workspace = true }
 
+jf-advz = { workspace = true }
 jf-signature = { workspace = true, features = ["bls", "schnorr"] }
-jf-vid = { workspace = true }
 libp2p = { workspace = true }
+moka = { workspace = true }
 num_enum = "0.7"
 parking_lot = "0.12"
-portpicker = { workspace = true }
 priority-queue = { workspace = true }
 rand = { workspace = true }
 rand_chacha = { workspace = true }
@@ -113,6 +103,8 @@ strum = { workspace = true }
 surf-disco = { workspace = true }
 tagged-base64 = { workspace = true }
 tempfile = { workspace = true }
+test-utils = { workspace = true }
+thiserror = { workspace = true }
 tide-disco = { workspace = true }
 time = { workspace = true }
 tokio = { workspace = true }
@@ -121,6 +113,7 @@ toml = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 url = { workspace = true }
+versions = { workspace = true }
 vbs = { workspace = true }
 vec1 = { workspace = true }
 vid = { path = "../vid" }
@@ -128,6 +121,7 @@ vid = { path = "../vid" }
 [build-dependencies]
 anyhow = { workspace = true }
 vergen = { workspace = true }
+vergen-gitcl = { workspace = true }
 
 [dev-dependencies]
 escargot = "0.5.10"
@@ -141,6 +135,7 @@ reqwest = { workspace = true }
 test-log = { workspace = true }
 
 # Enable "testing" feature when running tests
+light-client = { workspace = true, features = ["testing"] }
 sequencer = { path = ".", features = ["testing"] }
 tempfile = { workspace = true }
 

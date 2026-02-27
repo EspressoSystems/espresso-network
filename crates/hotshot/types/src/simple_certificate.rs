@@ -19,7 +19,7 @@ use hotshot_utils::anytrace::*;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    data::serialize_signature2,
+    data::{serialize_signature2, Leaf2},
     epoch_membership::EpochMembership,
     light_client::{LightClientState, StakeTableState},
     message::UpgradeLock,
@@ -31,9 +31,10 @@ use crate::{
     },
     stake_table::{HSStakeTable, StakeTableEntries},
     traits::{
-        node_implementation::{ConsensusTime, NodeType, Versions},
+        node_implementation::{ConsensusTime, NodeType},
         signature_key::{SignatureKey, StateSignatureKey},
     },
+    utils::is_epoch_transition,
     vote::{Certificate, HasViewNumber},
     PeerConfig,
 };
@@ -112,6 +113,26 @@ impl<TYPES: NodeType, VOTEABLE: Voteable<TYPES>, THRESHOLD: Threshold<TYPES>>
             _pd: pd,
         }
     }
+
+    fn signers(
+        &self,
+        stake_table: &[<TYPES::SignatureKey as SignatureKey>::StakeTableEntry],
+        threshold: U256,
+    ) -> Result<Vec<<TYPES::SignatureKey as SignatureKey>::VerificationKeyType>> {
+        if self.view_number == TYPES::View::genesis() {
+            return Ok(vec![]);
+        }
+        let real_qc_pp =
+            <TYPES::SignatureKey as SignatureKey>::public_parameter(stake_table, threshold);
+
+        let Some(ref signatures) = self.signatures else {
+            bail!("No signatures found while retrieving signers");
+        };
+
+        <TYPES::SignatureKey as SignatureKey>::signers(&real_qc_pp, signatures)
+            .wrap()
+            .context(|e| warn!("Tracing signers: {e}"))
+    }
 }
 
 impl<TYPES: NodeType, VOTEABLE: Voteable<TYPES> + Committable, THRESHOLD: Threshold<TYPES>>
@@ -137,8 +158,8 @@ impl<TYPES: NodeType, THRESHOLD: Threshold<TYPES>> Certificate<TYPES, DaData>
     type Voteable = DaData;
     type Threshold = THRESHOLD;
 
-    fn create_signed_certificate<V: Versions>(
-        vote_commitment: Commitment<VersionedVoteData<TYPES, DaData, V>>,
+    fn create_signed_certificate(
+        vote_commitment: Commitment<VersionedVoteData<TYPES, DaData>>,
         data: Self::Voteable,
         sig: <TYPES::SignatureKey as SignatureKey>::QcType,
         view: TYPES::View,
@@ -153,11 +174,11 @@ impl<TYPES: NodeType, THRESHOLD: Threshold<TYPES>> Certificate<TYPES, DaData>
             _pd: PhantomData,
         }
     }
-    async fn is_valid_cert<V: Versions>(
+    async fn is_valid_cert(
         &self,
         stake_table: &[<TYPES::SignatureKey as SignatureKey>::StakeTableEntry],
         threshold: U256,
-        upgrade_lock: &UpgradeLock<TYPES, V>,
+        upgrade_lock: &UpgradeLock<TYPES>,
     ) -> Result<()> {
         if self.view_number == TYPES::View::genesis() {
             return Ok(());
@@ -166,13 +187,20 @@ impl<TYPES: NodeType, THRESHOLD: Threshold<TYPES>> Certificate<TYPES, DaData>
             <TYPES::SignatureKey as SignatureKey>::public_parameter(stake_table, threshold);
         let commit = self.data_commitment(upgrade_lock).await?;
 
-        <TYPES::SignatureKey as SignatureKey>::check(
-            &real_qc_pp,
-            commit.as_ref(),
-            self.signatures.as_ref().unwrap(),
-        )
-        .wrap()
-        .context(|e| warn!("Signature check failed: {e}"))
+        let Some(ref signatures) = self.signatures else {
+            bail!("No signatures found while validating certificate");
+        };
+
+        <TYPES::SignatureKey as SignatureKey>::check(&real_qc_pp, commit.as_ref(), signatures)
+            .wrap()
+            .context(|e| warn!("Signature check failed: {e}"))
+    }
+    fn signers(
+        &self,
+        stake_table: &[<TYPES::SignatureKey as SignatureKey>::StakeTableEntry],
+        threshold: U256,
+    ) -> Result<Vec<<TYPES::SignatureKey as SignatureKey>::VerificationKeyType>> {
+        self.signers(stake_table, threshold)
     }
     /// Proxy's to `Membership.stake`
     async fn stake_table_entry(
@@ -196,10 +224,10 @@ impl<TYPES: NodeType, THRESHOLD: Threshold<TYPES>> Certificate<TYPES, DaData>
     fn data(&self) -> &Self::Voteable {
         &self.data
     }
-    async fn data_commitment<V: Versions>(
+    async fn data_commitment(
         &self,
-        upgrade_lock: &UpgradeLock<TYPES, V>,
-    ) -> Result<Commitment<VersionedVoteData<TYPES, DaData, V>>> {
+        upgrade_lock: &UpgradeLock<TYPES>,
+    ) -> Result<Commitment<VersionedVoteData<TYPES, DaData>>> {
         Ok(
             VersionedVoteData::new(self.data.clone(), self.view_number, upgrade_lock)
                 .await?
@@ -214,8 +242,8 @@ impl<TYPES: NodeType, THRESHOLD: Threshold<TYPES>> Certificate<TYPES, DaData2<TY
     type Voteable = DaData2<TYPES>;
     type Threshold = THRESHOLD;
 
-    fn create_signed_certificate<V: Versions>(
-        vote_commitment: Commitment<VersionedVoteData<TYPES, DaData2<TYPES>, V>>,
+    fn create_signed_certificate(
+        vote_commitment: Commitment<VersionedVoteData<TYPES, DaData2<TYPES>>>,
         data: Self::Voteable,
         sig: <TYPES::SignatureKey as SignatureKey>::QcType,
         view: TYPES::View,
@@ -230,11 +258,11 @@ impl<TYPES: NodeType, THRESHOLD: Threshold<TYPES>> Certificate<TYPES, DaData2<TY
             _pd: PhantomData,
         }
     }
-    async fn is_valid_cert<V: Versions>(
+    async fn is_valid_cert(
         &self,
         stake_table: &[<TYPES::SignatureKey as SignatureKey>::StakeTableEntry],
         threshold: U256,
-        upgrade_lock: &UpgradeLock<TYPES, V>,
+        upgrade_lock: &UpgradeLock<TYPES>,
     ) -> Result<()> {
         if self.view_number == TYPES::View::genesis() {
             return Ok(());
@@ -250,6 +278,13 @@ impl<TYPES: NodeType, THRESHOLD: Threshold<TYPES>> Certificate<TYPES, DaData2<TY
         )
         .wrap()
         .context(|e| warn!("Signature check failed: {e}"))
+    }
+    fn signers(
+        &self,
+        stake_table: &[<TYPES::SignatureKey as SignatureKey>::StakeTableEntry],
+        threshold: U256,
+    ) -> Result<Vec<<TYPES::SignatureKey as SignatureKey>::VerificationKeyType>> {
+        self.signers(stake_table, threshold)
     }
     /// Proxy's to `Membership.stake`
     async fn stake_table_entry(
@@ -273,10 +308,10 @@ impl<TYPES: NodeType, THRESHOLD: Threshold<TYPES>> Certificate<TYPES, DaData2<TY
     fn data(&self) -> &Self::Voteable {
         &self.data
     }
-    async fn data_commitment<V: Versions>(
+    async fn data_commitment(
         &self,
-        upgrade_lock: &UpgradeLock<TYPES, V>,
-    ) -> Result<Commitment<VersionedVoteData<TYPES, DaData2<TYPES>, V>>> {
+        upgrade_lock: &UpgradeLock<TYPES>,
+    ) -> Result<Commitment<VersionedVoteData<TYPES, DaData2<TYPES>>>> {
         Ok(
             VersionedVoteData::new(self.data.clone(), self.view_number, upgrade_lock)
                 .await?
@@ -294,8 +329,8 @@ impl<
     type Voteable = VOTEABLE;
     type Threshold = THRESHOLD;
 
-    fn create_signed_certificate<V: Versions>(
-        vote_commitment: Commitment<VersionedVoteData<TYPES, VOTEABLE, V>>,
+    fn create_signed_certificate(
+        vote_commitment: Commitment<VersionedVoteData<TYPES, VOTEABLE>>,
         data: Self::Voteable,
         sig: <TYPES::SignatureKey as SignatureKey>::QcType,
         view: TYPES::View,
@@ -310,11 +345,11 @@ impl<
             _pd: PhantomData,
         }
     }
-    async fn is_valid_cert<V: Versions>(
+    async fn is_valid_cert(
         &self,
         stake_table: &[<TYPES::SignatureKey as SignatureKey>::StakeTableEntry],
         threshold: U256,
-        upgrade_lock: &UpgradeLock<TYPES, V>,
+        upgrade_lock: &UpgradeLock<TYPES>,
     ) -> Result<()> {
         if self.view_number == TYPES::View::genesis() {
             return Ok(());
@@ -330,6 +365,13 @@ impl<
         )
         .wrap()
         .context(|e| warn!("Signature check failed: {e}"))
+    }
+    fn signers(
+        &self,
+        stake_table: &[<TYPES::SignatureKey as SignatureKey>::StakeTableEntry],
+        threshold: U256,
+    ) -> Result<Vec<<TYPES::SignatureKey as SignatureKey>::VerificationKeyType>> {
+        self.signers(stake_table, threshold)
     }
     async fn threshold(membership: &EpochMembership<TYPES>) -> U256 {
         THRESHOLD::threshold(membership).await
@@ -354,10 +396,10 @@ impl<
     fn data(&self) -> &Self::Voteable {
         &self.data
     }
-    async fn data_commitment<V: Versions>(
+    async fn data_commitment(
         &self,
-        upgrade_lock: &UpgradeLock<TYPES, V>,
-    ) -> Result<Commitment<VersionedVoteData<TYPES, VOTEABLE, V>>> {
+        upgrade_lock: &UpgradeLock<TYPES>,
+    ) -> Result<Commitment<VersionedVoteData<TYPES, VOTEABLE>>> {
         Ok(
             VersionedVoteData::new(self.data.clone(), self.view_number, upgrade_lock)
                 .await?
@@ -409,11 +451,11 @@ impl<TYPES: NodeType> UpgradeCertificate<TYPES> {
     /// Validate an upgrade certificate.
     /// # Errors
     /// Returns an error when the upgrade certificate is invalid.
-    pub async fn validate<V: Versions>(
+    pub async fn validate(
         upgrade_certificate: &Option<Self>,
         membership: &EpochMembership<TYPES>,
         epoch: Option<TYPES::Epoch>,
-        upgrade_lock: &UpgradeLock<TYPES, V>,
+        upgrade_lock: &UpgradeLock<TYPES>,
     ) -> Result<()> {
         ensure!(epoch == membership.epoch(), "Epochs don't match!");
         if let Some(ref cert) = upgrade_certificate {
@@ -783,7 +825,7 @@ impl<TYPES: NodeType> From<LightClientStateUpdateCertificateV1<TYPES>>
             signatures: v1
                 .signatures
                 .into_iter()
-                .map(|(key, sig)| (key, sig.clone(), sig)) // Cloning the signatues here because we use it only for storage.
+                .map(|(key, sig)| (key, sig.clone(), sig)) // Cloning the signatures here because we use it only for storage.
                 .collect(),
             auth_root: Default::default(),
         }
@@ -844,19 +886,170 @@ impl<TYPES: NodeType> LightClientStateUpdateCertificateV2<TYPES> {
 
 #[derive(Serialize, Deserialize, Eq, Hash, PartialEq, Debug, Clone)]
 #[serde(bound(deserialize = "QuorumCertificate2<TYPES>:for<'a> Deserialize<'a>"))]
-pub struct EpochRootQuorumCertificate<TYPES: NodeType> {
+pub struct EpochRootQuorumCertificateV2<TYPES: NodeType> {
     pub qc: QuorumCertificate2<TYPES>,
     pub state_cert: LightClientStateUpdateCertificateV2<TYPES>,
 }
 
-impl<TYPES: NodeType> HasViewNumber<TYPES> for EpochRootQuorumCertificate<TYPES> {
+impl<TYPES: NodeType> HasViewNumber<TYPES> for EpochRootQuorumCertificateV2<TYPES> {
     fn view_number(&self) -> TYPES::View {
         self.qc.view_number()
     }
 }
 
-impl<TYPES: NodeType> HasEpoch<TYPES> for EpochRootQuorumCertificate<TYPES> {
+impl<TYPES: NodeType> HasEpoch<TYPES> for EpochRootQuorumCertificateV2<TYPES> {
     fn epoch(&self) -> Option<TYPES::Epoch> {
         self.qc.epoch()
+    }
+}
+
+#[derive(Serialize, Deserialize, Eq, Hash, PartialEq, Debug, Clone)]
+#[serde(bound(deserialize = "QuorumCertificate2<TYPES>:for<'a> Deserialize<'a>"))]
+pub struct EpochRootQuorumCertificateV1<TYPES: NodeType> {
+    pub qc: QuorumCertificate2<TYPES>,
+    pub state_cert: LightClientStateUpdateCertificateV1<TYPES>,
+}
+
+impl<TYPES: NodeType> HasViewNumber<TYPES> for EpochRootQuorumCertificateV1<TYPES> {
+    fn view_number(&self) -> TYPES::View {
+        self.qc.view_number()
+    }
+}
+
+impl<TYPES: NodeType> HasEpoch<TYPES> for EpochRootQuorumCertificateV1<TYPES> {
+    fn epoch(&self) -> Option<TYPES::Epoch> {
+        self.qc.epoch()
+    }
+}
+
+impl<TYPES: NodeType> From<EpochRootQuorumCertificateV1<TYPES>>
+    for EpochRootQuorumCertificateV2<TYPES>
+{
+    fn from(root_qc: EpochRootQuorumCertificateV1<TYPES>) -> Self {
+        Self {
+            qc: root_qc.qc,
+            state_cert: root_qc.state_cert.into(),
+        }
+    }
+}
+
+impl<TYPES: NodeType> From<EpochRootQuorumCertificateV2<TYPES>>
+    for EpochRootQuorumCertificateV1<TYPES>
+{
+    fn from(root_qc: EpochRootQuorumCertificateV2<TYPES>) -> Self {
+        Self {
+            qc: root_qc.qc,
+            state_cert: root_qc.state_cert.into(),
+        }
+    }
+}
+
+/// A pair of QCs (or a single QC) attesting to a leaf.
+///
+/// Generally we only need a single QC, but during an epoch transition, we require a pair: one
+/// signed by the current membership and one signed by the next epoch's membership. This type
+/// encapsulates both.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(bound = "")]
+pub struct CertificatePair<TYPES: NodeType> {
+    /// The basic QC.
+    qc: QuorumCertificate2<TYPES>,
+
+    /// A QC from the next epoch's membership, if this QC is part of an epoch transition.
+    next_epoch_qc: Option<NextEpochQuorumCertificate2<TYPES>>,
+}
+
+impl<TYPES: NodeType> CertificatePair<TYPES> {
+    /// Create a certificate pair.
+    pub fn new(
+        qc: QuorumCertificate2<TYPES>,
+        next_epoch_qc: Option<NextEpochQuorumCertificate2<TYPES>>,
+    ) -> Self {
+        Self { qc, next_epoch_qc }
+    }
+
+    /// Create a certificate for a non-epoch-transitioning block.
+    pub fn non_epoch_change(qc: QuorumCertificate2<TYPES>) -> Self {
+        Self::new(qc, None)
+    }
+
+    /// Create a certificate for the parent of a leaf, using the justifying QCs in the leaf.
+    pub fn for_parent(leaf: &Leaf2<TYPES>) -> Self {
+        Self {
+            qc: leaf.justify_qc(),
+            next_epoch_qc: leaf.next_epoch_justify_qc(),
+        }
+    }
+
+    /// The raw QC.
+    pub fn qc(&self) -> &QuorumCertificate2<TYPES> {
+        &self.qc
+    }
+
+    /// A raw QC from the subsequent epoch's quorum, if this certificate is part of an epoch change.
+    pub fn next_epoch_qc(&self) -> Option<&NextEpochQuorumCertificate2<TYPES>> {
+        self.next_epoch_qc.as_ref()
+    }
+
+    /// The leaf commitment signed by this certificate.
+    pub fn leaf_commit(&self) -> Commitment<Leaf2<TYPES>> {
+        self.qc.data.leaf_commit
+    }
+
+    /// The epoch number this certificate belongs to.
+    ///
+    /// [`None`] if this certificate originated before epochs were enabled.
+    pub fn epoch(&self) -> Option<TYPES::Epoch> {
+        self.qc.data.epoch
+    }
+
+    /// The block number attached to this certificate.
+    ///
+    /// [`None`] if this certificate originated before epochs were enabled.
+    pub fn block_number(&self) -> Option<u64> {
+        self.qc.data.block_number
+    }
+
+    /// Verify that the next epoch QC is present and consistent if required.
+    ///
+    /// This checks that if required, the next epoch QC is present and is consistent with the
+    /// primary QC. It does not check the signature on either QC, only that the data being signed
+    /// over is consistent between the two.
+    ///
+    /// Returns the next epoch QC if it is present and invariants are satisfied. Returns an error if
+    /// a required next epoch QC is missing or if it is inconsistent with the primary QC. Returns
+    /// [`None`] if a next epoch QC is not required for this certificate.
+    pub fn verify_next_epoch_qc(
+        &self,
+        epoch_height: u64,
+    ) -> Result<Option<&NextEpochQuorumCertificate2<TYPES>>> {
+        let block_number = self.qc.data.block_number.context(warn!(
+            "QC for epoch {:?} has no block number",
+            self.qc.data.epoch
+        ))?;
+        if !is_epoch_transition(block_number, epoch_height) {
+            tracing::debug!(
+                block_number,
+                epoch_height,
+                "QC is not in an epoch transition"
+            );
+            return Ok(None);
+        }
+
+        let next_epoch_qc = self.next_epoch_qc.as_ref().context(warn!(
+            "Received High QC for the transition block {block_number} but not the next epoch QC"
+        ))?;
+
+        // The signature from the next epoch must be over the same data.
+        ensure!(self.qc.view_number == next_epoch_qc.view_number);
+        ensure!(self.qc.data == *next_epoch_qc.data);
+
+        Ok(Some(next_epoch_qc))
+    }
+}
+
+impl<TYPES: NodeType> HasViewNumber<TYPES> for CertificatePair<TYPES> {
+    fn view_number(&self) -> TYPES::View {
+        self.qc.view_number()
     }
 }

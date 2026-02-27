@@ -186,7 +186,7 @@ impl<T: Clone + Send + Sync + 'static> Dependency<T> for EventDependency<T> {
                     }
                 }
                 _ = self.cancel_receiver.recv() => {
-                   tracing::error!("{} dependency cancelled", self.dependency_name);
+                   tracing::warn!("{} dependency cancelled", self.dependency_name);
                    return None;
                 }
             }

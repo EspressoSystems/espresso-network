@@ -11,7 +11,9 @@ import (
 
 	tagged_base64 "github.com/EspressoSystems/espresso-network/sdks/go/tagged-base64"
 	types "github.com/EspressoSystems/espresso-network/sdks/go/types"
+	"github.com/EspressoSystems/espresso-network/sdks/go/verification"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/stretchr/testify/require"
 )
 
 var workingDir = "../../../"
@@ -67,6 +69,43 @@ func TestApiWithEspressoDevNode(t *testing.T) {
 	}
 	fmt.Println("submitted transaction with hash", hash)
 
+	stream, err := client.StreamTransactions(ctx, 1)
+	require.NoError(t, err)
+
+	txData, err := stream.Next(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, txData)
+	require.Equal(t, txData.Transaction.Payload, tx.Payload)
+	require.Equal(t, txData.Transaction.Namespace, tx.Namespace)
+
+	// Test streaming with namespace filter
+	nsStream, err := client.StreamTransactionsInNamespace(ctx, 1, tx.Namespace)
+	require.NoError(t, err)
+
+	nsTxData, err := nsStream.Next(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, nsTxData)
+	require.Equal(t, nsTxData.Transaction.Payload, tx.Payload)
+	require.Equal(t, nsTxData.Transaction.Namespace, tx.Namespace)
+
+	payloadStream, err := client.StreamPayloads(ctx, 1)
+	require.NoError(t, err)
+
+	for {
+		timeoutCtx, cancel := context.WithTimeout(ctx, time.Second)
+		blockData, err := payloadStream.Next(timeoutCtx)
+		cancel()
+		require.NoError(t, err)
+		require.NotNil(t, blockData)
+		if blockData.Height == nsTxData.BlockHeight {
+			txns, err := verification.DecodePayload(blockData.BlockPayload)
+			require.NoError(t, err)
+			require.NotNil(t, txns)
+			require.Equal(t, txns[0].Payload, tx.Payload)
+			require.Equal(t, txns[0].Namespace, tx.Namespace)
+			break
+		}
+	}
 }
 
 func runDevNode(ctx context.Context, tmpDir string) func() {
@@ -75,14 +114,18 @@ func runDevNode(ctx context.Context, tmpDir string) func() {
 		panic(err)
 	}
 
-	invocation := []string{
-		"run",
-		"--bin",
-		"espresso-dev-node",
-		"--features=testing,embedded-db",
+	var p *exec.Cmd
+	if bin := os.Getenv("ESPRESSO_DEV_NODE_BIN"); bin != "" {
+		if _, err := os.Stat(bin); err != nil {
+			panic(fmt.Sprintf("ESPRESSO_DEV_NODE_BIN=%s does not exist: %v", bin, err))
+		}
+		fmt.Println("using pre-built espresso-dev-node binary:", bin)
+		p = exec.CommandContext(ctx, bin)
+	} else {
+		fmt.Println("ESPRESSO_DEV_NODE_BIN not set, falling back to cargo run (this will compile espresso-dev-node)")
+		p = exec.CommandContext(ctx, "cargo", "run", "-p", "espresso-dev-node")
+		p.Dir = workingDir
 	}
-	p := exec.CommandContext(ctx, "cargo", invocation...)
-	p.Dir = workingDir
 
 	env := os.Environ()
 	env = append(env, "ESPRESSO_SEQUENCER_API_PORT=21000")
@@ -164,5 +207,43 @@ func TestExplorerFetchTransactionByHash(t *testing.T) {
 	_, err = client.FetchExplorerTransactionByHash(ctx, txHash)
 	if err != nil {
 		t.Fatal("failed to fetch block height", err)
+	}
+}
+
+func TestNamespaceTransactionsInRange(t *testing.T) {
+	ctx := context.Background()
+	client := NewClient("https://query.decaf.testnet.espresso.network")
+
+	namespace := uint64(22266222)
+	startHeight := uint64(6386698)
+	endHeight := uint64(6386700)
+
+	blocksWithNamespaceTransactions, err := client.FetchNamespaceTransactionsInRange(ctx, startHeight, endHeight, namespace)
+	if err != nil {
+		t.Fatal("failed to fetch namespace transactions in range", err)
+	}
+
+	if len(blocksWithNamespaceTransactions) != 2 {
+		t.Fatalf("expected 2 blocks with namespace transactions, got %d", len(blocksWithNamespaceTransactions))
+	}
+
+	for _, blocks := range blocksWithNamespaceTransactions {
+		for _, tx := range blocks.Transactions {
+			if tx.Namespace != namespace {
+				t.Fatalf("expected namespace %d, got %d", namespace, tx.Namespace)
+			}
+			if len(tx.Payload) == 0 {
+				t.Fatal("transaction payload is empty")
+			}
+		}
+	}
+
+	startHeight = uint64(6386698)
+	endHeight = uint64(6389700)
+
+	// test if startHeight and endHeight are greater than 100 (which is the limit) then it throws an error
+	_, err = client.FetchNamespaceTransactionsInRange(ctx, startHeight, endHeight, namespace)
+	if err == nil {
+		t.Fatal("expected error for large range, but got none")
 	}
 }

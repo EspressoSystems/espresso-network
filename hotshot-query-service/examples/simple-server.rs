@@ -35,7 +35,7 @@ use hotshot_query_service::{
     status::UpdateStatusData,
     testing::{
         consensus::DataSourceLifeCycle,
-        mocks::{MockBase, MockMembership, MockNodeImpl, MockTypes, MockVersions},
+        mocks::{MockBase, MockMembership, MockNodeImpl, MockTypes, MOCK_UPGRADE},
     },
     Error,
 };
@@ -49,6 +49,7 @@ use hotshot_types::{
     traits::{election::Membership, network::Topic},
     HotShotConfig, PeerConfig,
 };
+use test_utils::reserve_tcp_port;
 use tracing_subscriber::EnvFilter;
 use url::Url;
 use vbs::version::StaticVersionType;
@@ -151,7 +152,7 @@ async fn main() -> Result<(), Error> {
 
 async fn init_consensus(
     data_sources: &[DataSource],
-) -> Vec<SystemContextHandle<MockTypes, MockNodeImpl, MockVersions>> {
+) -> Vec<SystemContextHandle<MockTypes, MockNodeImpl>> {
     let (pub_keys, priv_keys): (Vec<_>, Vec<_>) = (0..data_sources.len())
         .map(|i| BLSPubKey::generated_from_seed_indexed([0; 32], i as u64))
         .unzip();
@@ -171,13 +172,8 @@ async fn init_consensus(
     // Get the number of nodes with stake
     let num_nodes_with_stake = NonZeroUsize::new(pub_keys.len()).unwrap();
 
-    let membership = MockMembership::new(
-        known_nodes_with_stake.clone(),
-        known_nodes_with_stake.clone(),
-    );
-
     // Pick a random, unused port for the builder server
-    let builder_port = portpicker::pick_unused_port().expect("No ports available");
+    let builder_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
     let builder_url =
         Url::parse(&format!("http://0.0.0.0:{builder_port}")).expect("Failed to parse URL");
@@ -201,6 +197,7 @@ async fn init_consensus(
         next_view_timeout: 10000,
         num_bootstrap: 0,
         known_da_nodes: known_nodes_with_stake.clone(),
+        da_committees: Default::default(),
         da_staked_committee_size: pub_keys.len(),
         data_request_delay: Duration::from_millis(200),
         view_sync_timeout: Duration::from_millis(250),
@@ -222,6 +219,7 @@ async fn init_consensus(
         stake_table_capacity: hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY,
         drb_difficulty: 0,
         drb_upgrade_difficulty: 0,
+        upgrade: MOCK_UPGRADE,
     };
 
     let nodes = join_all(priv_keys.into_iter().zip(data_sources).enumerate().map(
@@ -234,7 +232,7 @@ async fn init_consensus(
                 .map(|kp| kp.sign_key())
                 .collect::<Vec<_>>();
 
-            let membership = membership.clone();
+            let known_nodes_with_stake_clone = known_nodes_with_stake.clone();
             async move {
                 let network = Arc::new(MemoryNetwork::new(
                     &pub_keys[node_id],
@@ -244,6 +242,16 @@ async fn init_consensus(
                 ));
 
                 let storage: TestStorage<MockTypes> = TestStorage::default();
+
+                let membership = MockMembership::new::<MockNodeImpl>(
+                    known_nodes_with_stake_clone.clone(),
+                    known_nodes_with_stake_clone,
+                    storage.clone(),
+                    network.clone(),
+                    pub_keys[node_id],
+                    config.epoch_height,
+                );
+
                 let coordinator = EpochMembershipCoordinator::new(
                     Arc::new(RwLock::new(membership)),
                     config.epoch_height,
@@ -258,11 +266,12 @@ async fn init_consensus(
                     config,
                     coordinator,
                     network,
-                    HotShotInitializer::from_genesis::<MockVersions>(
+                    HotShotInitializer::from_genesis(
                         TestInstanceState::default(),
                         0,
                         0,
                         vec![],
+                        MOCK_UPGRADE,
                     )
                     .await
                     .unwrap(),

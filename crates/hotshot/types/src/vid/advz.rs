@@ -9,17 +9,17 @@
 use std::{fmt::Debug, ops::Range};
 
 use ark_bn254::Bn254;
-use jf_pcs::{
-    prelude::{UnivariateKzgPCS, UnivariateUniversalParams},
-    PolynomialCommitmentScheme,
-};
-use jf_vid::{
+use jf_advz::{
     advz::{
         self,
         payload_prover::{LargeRangeProof, SmallRangeProof},
     },
     payload_prover::{PayloadProver, Statement},
     VidDisperse, VidResult, VidScheme,
+};
+use jf_pcs::{
+    prelude::{UnivariateKzgPCS, UnivariateUniversalParams},
+    PolynomialCommitmentScheme,
 };
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};

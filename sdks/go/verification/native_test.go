@@ -7,6 +7,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/EspressoSystems/espresso-network/sdks/go/types/common"
 )
 
 type merkleProofTestData struct {
@@ -102,5 +104,50 @@ func TestNamespaceProofVerification(t *testing.T) {
 	msg := "namespace mismatch"
 	if !strings.Contains(err.Error(), msg) {
 		log.Fatalf("Expected error message to contain '%v', got: %v", msg, err.Error())
+	}
+}
+
+func TestDecodePayload(t *testing.T) {
+	file, err := os.Open("./payload_test_data.json")
+	if err != nil {
+		log.Fatalf("Failed to open file: %v", err)
+	}
+	defer file.Close()
+
+	bytes, err := io.ReadAll(file)
+	if err != nil {
+		log.Fatalf("Failed to read file")
+	}
+
+	var data common.BlockPayload
+
+	if err := json.Unmarshal(bytes, &data); err != nil {
+		log.Fatalf("Failed to unmarshal the test data: %v", err)
+	}
+
+	// Test successful decoding
+	transactions, err := decodePayload(data.RawPayload, data.NsTable.Bytes)
+	if err != nil {
+		t.Fatalf("Failed to decode payload: %v", err)
+	}
+
+	// Verify we got transactions
+	if len(transactions) != 1 {
+		t.Fatalf("Expected to decode a transaction, got none")
+	}
+
+	// Test with empty payload
+	emptyTransactions, err := decodePayload([]byte{}, []byte{00,00,00,00})
+	if err != nil {
+		t.Fatalf("Failed to decode empty payload: %v", err)
+	}
+	if len(emptyTransactions) != 0 {
+		t.Fatalf("Expected 0 transactions from empty payload, got %d", len(emptyTransactions))
+	}
+
+	// Test with invalid ns_table (too short to be valid)
+	_, err = decodePayload([]byte{}, []byte{})
+	if err == nil {
+		t.Fatalf("Expected error with invalid ns_table, but got none")
 	}
 }

@@ -1,23 +1,24 @@
 use alloy::{
     primitives::{utils::format_ether, Address},
-    providers::ProviderBuilder,
+    providers::{Provider, ProviderBuilder},
 };
 use anyhow::{Context as _, Result};
 use espresso_types::{
-    v0_3::{Fetcher, Validator},
+    v0_3::{Fetcher, RegisteredValidator},
     L1Client,
 };
 use hotshot_contract_adapter::sol_types::StakeTableV2;
+pub use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
 use hotshot_types::signature_key::BLSPubKey;
 use url::Url;
 
-use crate::parse::Commission;
+use crate::{output::output_success, parse::Commission};
 
 pub async fn stake_table_info(
     l1_url: Url,
     stake_table_address: Address,
     l1_block_number: u64,
-) -> Result<Vec<Validator<BLSPubKey>>> {
+) -> Result<Vec<RegisteredValidator<BLSPubKey>>> {
     let l1 = L1Client::new(vec![l1_url])?;
     let (validators, _) =
         Fetcher::fetch_all_validators_from_contract(l1, stake_table_address, l1_block_number)
@@ -29,7 +30,10 @@ pub async fn stake_table_info(
         .collect())
 }
 
-pub fn display_stake_table(stake_table: Vec<Validator<BLSPubKey>>, compact: bool) -> Result<()> {
+pub fn display_stake_table(
+    stake_table: Vec<RegisteredValidator<BLSPubKey>>,
+    compact: bool,
+) -> Result<()> {
     let mut stake_table = stake_table.clone();
     stake_table.sort_by(|a, b| a.stake.cmp(&b.stake));
 
@@ -42,14 +46,14 @@ pub fn display_stake_table(stake_table: Vec<Validator<BLSPubKey>>, compact: bool
         } else {
             bls_key.to_string()
         };
-        tracing::info!(
+        output_success(format!(
             "Validator {}: {key_str} comm={comm} stake={} ESP",
             validator.account,
             format_ether(validator.stake),
-        );
+        ));
 
         if validator.delegators.is_empty() {
-            tracing::info!(" - No delegators");
+            output_success(" - No delegators");
             continue;
         }
 
@@ -57,18 +61,18 @@ pub fn display_stake_table(stake_table: Vec<Validator<BLSPubKey>>, compact: bool
         let mut delegators = validator.delegators.iter().collect::<Vec<_>>();
         delegators.sort_by(|a, b| a.0.cmp(b.0));
         for (delegator, stake) in delegators {
-            tracing::info!(
+            output_success(format!(
                 " - Delegator {delegator}: stake={} ESP",
                 format_ether(*stake)
-            );
+            ));
         }
     }
     Ok(())
 }
 
 pub async fn fetch_token_address(rpc_url: Url, stake_table_address: Address) -> Result<Address> {
-    let provider = ProviderBuilder::new().on_http(rpc_url);
-    Ok(StakeTableV2::new(stake_table_address, provider)
+    let provider = ProviderBuilder::new().connect_http(rpc_url);
+    StakeTableV2::new(stake_table_address, provider)
         .token()
         .call()
         .await
@@ -76,6 +80,18 @@ pub async fn fetch_token_address(rpc_url: Url, stake_table_address: Address) -> 
             format!(
                 "Failed to fetch token address from stake table contract at {stake_table_address}"
             )
-        })?
-        ._0)
+        })
+}
+
+pub async fn fetch_stake_table_version(
+    provider: impl Provider,
+    stake_table_address: Address,
+) -> Result<StakeTableContractVersion> {
+    let stake_table = StakeTableV2::new(stake_table_address, provider);
+    stake_table
+        .getVersion()
+        .call()
+        .await?
+        .try_into()
+        .with_context(|| "Failed to parse stake table contract version")
 }

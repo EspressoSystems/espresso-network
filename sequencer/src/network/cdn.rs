@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 
 use bincode::Options;
 use cdn_broker::reexports::{
-    connection::protocols::{Quic, Tcp, TcpTls},
+    connection::protocols::{Quic, Tcp},
     crypto::signature::{Serializable, SignatureScheme},
     def::{hook::NoMessageHook, ConnectionDef, RunDef, Topic as TopicTrait},
     discovery::{Embedded, Redis},
@@ -108,7 +108,7 @@ impl<TYPES: NodeType> RunDef for ProductionDef<TYPES> {
 
 /// The user definition for the Push CDN.
 /// Uses the Quic protocol and untrusted middleware.
-/// RM TODO: Remove this, switching to TCP+TLS singularly when everyone has updated
+/// RM TODO: Remove this, switching to TCP singularly when everyone has updated
 pub struct UserDefQuic<TYPES: NodeType>(PhantomData<TYPES>);
 impl<TYPES: NodeType> ConnectionDef for UserDefQuic<TYPES> {
     type Scheme = WrappedSignatureKey<TYPES::SignatureKey>;
@@ -116,12 +116,12 @@ impl<TYPES: NodeType> ConnectionDef for UserDefQuic<TYPES> {
     type MessageHook = NoMessageHook;
 }
 
-/// The (parallel, TCP) user definition for the Push CDN.
-/// Uses the TCP+TLS protocol and untrusted middleware.
+/// The user definition for the Push CDN.
+/// Uses the TCP protocol and untrusted middleware.
 pub struct UserDefTcp<TYPES: NodeType>(PhantomData<TYPES>);
 impl<TYPES: NodeType> ConnectionDef for UserDefTcp<TYPES> {
     type Scheme = WrappedSignatureKey<TYPES::SignatureKey>;
-    type Protocol = TcpTls;
+    type Protocol = Tcp;
     type MessageHook = NoMessageHook;
 }
 
@@ -134,14 +134,14 @@ impl<TYPES: NodeType> ConnectionDef for BrokerDef<TYPES> {
     type MessageHook = NoMessageHook;
 }
 
-/// The client definition for the Push CDN. Uses the Quic
+/// The client definition for the Push CDN. Uses the TCP
 /// protocol and no middleware. Differs from the user
 /// definition in that is on the client-side.
 #[derive(Clone)]
 pub struct ClientDef<TYPES: NodeType>(PhantomData<TYPES>);
 impl<TYPES: NodeType> ConnectionDef for ClientDef<TYPES> {
     type Scheme = WrappedSignatureKey<TYPES::SignatureKey>;
-    type Protocol = Quic;
+    type Protocol = Tcp;
     type MessageHook = NoMessageHook;
 }
 

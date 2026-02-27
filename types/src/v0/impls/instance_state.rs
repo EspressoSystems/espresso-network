@@ -9,13 +9,11 @@ use hotshot_types::{
     data::EpochNumber, epoch_membership::EpochMembershipCoordinator, traits::states::InstanceState,
     HotShotConfig,
 };
-#[cfg(any(test, feature = "testing"))]
-use vbs::version::StaticVersionType;
 use vbs::version::Version;
 
 use super::{
     state::ValidatedState,
-    traits::{EventsPersistenceRead, MembershipPersistence},
+    traits::{EventsPersistenceRead, MembershipPersistence, StakeTuple},
     v0_1::NoStorage,
     v0_3::{EventKey, IndexedStake, StakeTableEvent},
     SeqTypes, UpgradeType, ViewBasedUpgrade,
@@ -25,8 +23,8 @@ use crate::{
         impls::StakeTableHash, traits::StateCatchup, v0_3::ChainConfig, GenesisHeader, L1BlockInfo,
         L1Client, Timestamp, Upgrade, UpgradeMode,
     },
-    v0_3::RewardAmount,
-    EpochCommittees, ValidatorMap,
+    v0_3::{RegisteredValidator, RewardAmount},
+    AuthenticatedValidatorMap, EpochCommittees, PubKey, RegisteredValidatorMap,
 };
 
 /// Represents the immutable state of a node.
@@ -41,6 +39,7 @@ pub struct NodeState {
     pub state_catchup: Arc<dyn StateCatchup>,
     pub genesis_header: GenesisHeader,
     pub genesis_state: ValidatedState,
+    pub genesis_chain_config: ChainConfig,
     pub l1_genesis: Option<L1BlockInfo>,
     #[debug(skip)]
     pub coordinator: EpochMembershipCoordinator<SeqTypes>,
@@ -60,7 +59,7 @@ pub struct NodeState {
     /// Current version of the sequencer.
     ///
     /// This version is checked to determine if an upgrade is planned,
-    /// and which version variant for versioned types  
+    /// and which version variant for versioned types
     /// to use in functions such as genesis.
     /// (example: genesis returns V2 Header if version is 0.2)
     pub current_version: Version,
@@ -82,10 +81,7 @@ impl NodeState {
 
 #[async_trait]
 impl MembershipPersistence for NoStorage {
-    async fn load_stake(
-        &self,
-        _epoch: EpochNumber,
-    ) -> anyhow::Result<Option<(ValidatorMap, Option<RewardAmount>, Option<StakeTableHash>)>> {
+    async fn load_stake(&self, _epoch: EpochNumber) -> anyhow::Result<Option<StakeTuple>> {
         Ok(None)
     }
 
@@ -96,7 +92,7 @@ impl MembershipPersistence for NoStorage {
     async fn store_stake(
         &self,
         _epoch: EpochNumber,
-        _stake: ValidatorMap,
+        _stake: AuthenticatedValidatorMap,
         _block_reward: Option<RewardAmount>,
         _stake_table_hash: Option<StakeTableHash>,
     ) -> anyhow::Result<()> {
@@ -113,11 +109,33 @@ impl MembershipPersistence for NoStorage {
 
     async fn load_events(
         &self,
+        _from_l1_block: u64,
         _l1_block: u64,
     ) -> anyhow::Result<(
         Option<EventsPersistenceRead>,
         Vec<(EventKey, StakeTableEvent)>,
     )> {
+        bail!("unimplemented")
+    }
+
+    async fn delete_stake_tables(&self) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn store_all_validators(
+        &self,
+        _epoch: EpochNumber,
+        _all_validators: RegisteredValidatorMap,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn load_all_validators(
+        &self,
+        _epoch: EpochNumber,
+        _offset: u64,
+        _limit: u64,
+    ) -> anyhow::Result<Vec<RegisteredValidator<PubKey>>> {
         bail!("unimplemented")
     }
 }
@@ -135,9 +153,13 @@ impl NodeState {
         Self {
             node_id,
             chain_config,
+            genesis_chain_config: chain_config,
             l1_client,
             state_catchup: Arc::new(catchup),
-            genesis_header: Default::default(),
+            genesis_header: GenesisHeader {
+                timestamp: Default::default(),
+                chain_config,
+            },
             genesis_state: ValidatedState {
                 chain_config: chain_config.into(),
                 ..Default::default()
@@ -155,7 +177,7 @@ impl NodeState {
     #[cfg(any(test, feature = "testing"))]
     pub fn mock() -> Self {
         use hotshot_example_types::storage_types::TestStorage;
-        use vbs::version::StaticVersion;
+        use versions::version;
 
         use crate::v0_3::Fetcher;
 
@@ -165,7 +187,7 @@ impl NodeState {
 
         let membership = Arc::new(RwLock::new(EpochCommittees::new_stake(
             vec![],
-            vec![],
+            Default::default(),
             None,
             Fetcher::mock(),
             0,
@@ -178,16 +200,16 @@ impl NodeState {
             chain_config,
             l1,
             Arc::new(mock::MockStateCatchup::default()),
-            StaticVersion::<0, 1>::version(),
+            version(0, 1),
             coordinator,
-            Version { major: 0, minor: 1 },
+            version(0, 1),
         )
     }
 
     #[cfg(any(test, feature = "testing"))]
     pub fn mock_v2() -> Self {
         use hotshot_example_types::storage_types::TestStorage;
-        use vbs::version::StaticVersion;
+        use versions::version;
 
         use crate::v0_3::Fetcher;
 
@@ -197,7 +219,7 @@ impl NodeState {
 
         let membership = Arc::new(RwLock::new(EpochCommittees::new_stake(
             vec![],
-            vec![],
+            Default::default(),
             None,
             Fetcher::mock(),
             0,
@@ -210,16 +232,16 @@ impl NodeState {
             chain_config,
             l1,
             Arc::new(mock::MockStateCatchup::default()),
-            StaticVersion::<0, 2>::version(),
+            version(0, 2),
             coordinator,
-            Version { major: 0, minor: 2 },
+            version(0, 2),
         )
     }
 
     #[cfg(any(test, feature = "testing"))]
     pub fn mock_v3() -> Self {
         use hotshot_example_types::storage_types::TestStorage;
-        use vbs::version::StaticVersion;
+        use versions::version;
 
         use crate::v0_3::Fetcher;
         let l1 = L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
@@ -227,7 +249,7 @@ impl NodeState {
 
         let membership = Arc::new(RwLock::new(EpochCommittees::new_stake(
             vec![],
-            vec![],
+            Default::default(),
             None,
             Fetcher::mock(),
             0,
@@ -240,9 +262,9 @@ impl NodeState {
             ChainConfig::default(),
             l1,
             mock::MockStateCatchup::default(),
-            StaticVersion::<0, 3>::version(),
+            version(0, 3),
             coordinator,
-            Version { major: 0, minor: 3 },
+            version(0, 3),
         )
     }
 
@@ -312,7 +334,7 @@ impl From<BTreeMap<Version, Upgrade>> for UpgradeMap {
 impl Default for NodeState {
     fn default() -> Self {
         use hotshot_example_types::storage_types::TestStorage;
-        use vbs::version::StaticVersion;
+        use versions::version;
 
         use crate::v0_3::Fetcher;
 
@@ -322,7 +344,7 @@ impl Default for NodeState {
 
         let membership = Arc::new(RwLock::new(EpochCommittees::new_stake(
             vec![],
-            vec![],
+            Default::default(),
             None,
             Fetcher::mock(),
             0,
@@ -335,9 +357,9 @@ impl Default for NodeState {
             chain_config,
             l1,
             Arc::new(mock::MockStateCatchup::default()),
-            StaticVersion::<0, 1>::version(),
+            version(0, 1),
             coordinator,
-            Version { major: 0, minor: 1 },
+            version(0, 1),
         )
     }
 }
@@ -399,8 +421,11 @@ pub mod mock {
     use anyhow::Context;
     use async_trait::async_trait;
     use committable::Commitment;
-    use hotshot_types::{data::ViewNumber, stake_table::HSStakeTable};
-    use jf_merkle_tree::{ForgetableMerkleTreeScheme, MerkleTreeScheme};
+    use hotshot_types::{
+        data::ViewNumber, simple_certificate::LightClientStateUpdateCertificateV2,
+        stake_table::HSStakeTable,
+    };
+    use jf_merkle_tree_compat::{ForgetableMerkleTreeScheme, MerkleTreeScheme};
 
     use super::*;
     use crate::{
@@ -410,10 +435,21 @@ pub mod mock {
         BackoffParams, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment, Leaf2,
     };
 
-    #[derive(Debug, Clone, Default)]
+    #[derive(Debug, Clone)]
     pub struct MockStateCatchup {
         backoff: BackoffParams,
         state: HashMap<ViewNumber, Arc<ValidatedState>>,
+        delay: std::time::Duration,
+    }
+
+    impl Default for MockStateCatchup {
+        fn default() -> Self {
+            Self {
+                backoff: Default::default(),
+                state: Default::default(),
+                delay: std::time::Duration::ZERO,
+            }
+        }
     }
 
     impl FromIterator<(ViewNumber, Arc<ValidatedState>)> for MockStateCatchup {
@@ -421,7 +457,15 @@ pub mod mock {
             Self {
                 backoff: Default::default(),
                 state: iter.into_iter().collect(),
+                delay: std::time::Duration::ZERO,
             }
+        }
+    }
+
+    impl MockStateCatchup {
+        pub fn with_delay(mut self, delay: std::time::Duration) -> Self {
+            self.delay = delay;
+            self
         }
     }
 
@@ -446,6 +490,8 @@ pub mod mock {
             fee_merkle_tree_root: FeeMerkleCommitment,
             accounts: &[FeeAccount],
         ) -> anyhow::Result<Vec<FeeAccountProof>> {
+            tokio::time::sleep(self.delay).await;
+
             let src = &self.state[&view].fee_merkle_tree;
             assert_eq!(src.commitment(), fee_merkle_tree_root);
 
@@ -458,9 +504,9 @@ pub mod mock {
             for account in accounts {
                 let (proof, _) = FeeAccountProof::prove(&tree, (*account).into())
                     .context(format!("response missing fee account {account}"))?;
-                proof
-                    .verify(&fee_merkle_tree_root)
-                    .context(format!("invalid proof for fee account {account}"))?;
+                proof.verify(&fee_merkle_tree_root).context(format!(
+                    "invalid proof for fee account {account}, root: {fee_merkle_tree_root}"
+                ))?;
                 proofs.push(proof);
             }
 
@@ -475,6 +521,8 @@ pub mod mock {
             view: ViewNumber,
             mt: &mut BlockMerkleTree,
         ) -> anyhow::Result<()> {
+            tokio::time::sleep(self.delay).await;
+
             tracing::info!("catchup: fetching frontier for view {view}");
             let src = &self.state[&view].block_merkle_tree;
 
@@ -497,6 +545,8 @@ pub mod mock {
             _retry: usize,
             _commitment: Commitment<ChainConfig>,
         ) -> anyhow::Result<ChainConfig> {
+            tokio::time::sleep(self.delay).await;
+
             Ok(ChainConfig::default())
         }
 
@@ -521,6 +571,14 @@ pub mod mock {
             _reward_merkle_tree_root: RewardMerkleCommitmentV1,
             _accounts: &[RewardAccountV1],
         ) -> anyhow::Result<Vec<RewardAccountProofV1>> {
+            anyhow::bail!("unimplemented")
+        }
+
+        async fn try_fetch_state_cert(
+            &self,
+            _retry: usize,
+            _epoch: u64,
+        ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
             anyhow::bail!("unimplemented")
         }
 

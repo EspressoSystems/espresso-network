@@ -26,12 +26,16 @@ use hotshot_types::{
         convert_proposal, GeneralConsensusMessage, Message, MessageKind, Proposal,
         SequencingMessage, UpgradeLock,
     },
-    simple_vote::{HasEpoch, QuorumVote2},
+    simple_vote::{
+        HasEpoch, QuorumVote2, ViewSyncPreCommitData, ViewSyncPreCommitData2,
+        ViewSyncPreCommitVote, ViewSyncPreCommitVote2,
+    },
     traits::{
         election::Membership,
         network::ConnectedNetwork,
-        node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
+        node_implementation::{ConsensusTime, NodeImplementation, NodeType},
     },
+    vote::HasViewNumber,
 };
 
 #[derive(Debug)]
@@ -44,7 +48,7 @@ pub struct BadProposalViewDos {
 }
 
 #[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> EventTransformerState<TYPES, I, V>
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> EventTransformerState<TYPES, I>
     for BadProposalViewDos
 {
     async fn recv_handler(&mut self, event: &HotShotEvent<TYPES>) -> Vec<HotShotEvent<TYPES>> {
@@ -56,7 +60,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> EventTransforme
         event: &HotShotEvent<TYPES>,
         _public_key: &TYPES::SignatureKey,
         _private_key: &<TYPES::SignatureKey as SignatureKey>::PrivateKey,
-        _upgrade_lock: &UpgradeLock<TYPES, V>,
+        _upgrade_lock: &UpgradeLock<TYPES>,
         consensus: OuterConsensus<TYPES>,
         _membership_coordinator: EpochMembershipCoordinator<TYPES>,
         _network: Arc<I::Network>,
@@ -89,7 +93,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> EventTransforme
 pub struct DoubleProposeVote;
 
 #[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> EventTransformerState<TYPES, I, V>
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> EventTransformerState<TYPES, I>
     for DoubleProposeVote
 {
     async fn recv_handler(&mut self, event: &HotShotEvent<TYPES>) -> Vec<HotShotEvent<TYPES>> {
@@ -101,7 +105,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> EventTransforme
         event: &HotShotEvent<TYPES>,
         _public_key: &TYPES::SignatureKey,
         _private_key: &<TYPES::SignatureKey as SignatureKey>::PrivateKey,
-        _upgrade_lock: &UpgradeLock<TYPES, V>,
+        _upgrade_lock: &UpgradeLock<TYPES>,
         _consensus: OuterConsensus<TYPES>,
         _membership_coordinator: EpochMembershipCoordinator<TYPES>,
         _network: Arc<I::Network>,
@@ -173,8 +177,8 @@ impl<TYPES: NodeType> DishonestLeader<TYPES> {
 }
 
 #[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES> + std::fmt::Debug, V: Versions>
-    EventTransformerState<TYPES, I, V> for DishonestLeader<TYPES>
+impl<TYPES: NodeType, I: NodeImplementation<TYPES> + std::fmt::Debug>
+    EventTransformerState<TYPES, I> for DishonestLeader<TYPES>
 {
     async fn recv_handler(&mut self, event: &HotShotEvent<TYPES>) -> Vec<HotShotEvent<TYPES>> {
         vec![event.clone()]
@@ -185,7 +189,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + std::fmt::Debug, V: Version
         event: &HotShotEvent<TYPES>,
         _public_key: &TYPES::SignatureKey,
         _private_key: &<TYPES::SignatureKey as SignatureKey>::PrivateKey,
-        _upgrade_lock: &UpgradeLock<TYPES, V>,
+        _upgrade_lock: &UpgradeLock<TYPES>,
         _consensus: OuterConsensus<TYPES>,
         _membership_coordinator: EpochMembershipCoordinator<TYPES>,
         _network: Arc<I::Network>,
@@ -219,8 +223,8 @@ pub struct DishonestDa {
 }
 
 #[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES> + std::fmt::Debug, V: Versions>
-    EventTransformerState<TYPES, I, V> for DishonestDa
+impl<TYPES: NodeType, I: NodeImplementation<TYPES> + std::fmt::Debug>
+    EventTransformerState<TYPES, I> for DishonestDa
 {
     async fn recv_handler(&mut self, event: &HotShotEvent<TYPES>) -> Vec<HotShotEvent<TYPES>> {
         vec![event.clone()]
@@ -231,7 +235,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + std::fmt::Debug, V: Version
         event: &HotShotEvent<TYPES>,
         _public_key: &TYPES::SignatureKey,
         _private_key: &<TYPES::SignatureKey as SignatureKey>::PrivateKey,
-        _upgrade_lock: &UpgradeLock<TYPES, V>,
+        _upgrade_lock: &UpgradeLock<TYPES>,
         _consensus: OuterConsensus<TYPES>,
         _membership_coordinator: EpochMembershipCoordinator<TYPES>,
         _network: Arc<I::Network>,
@@ -267,8 +271,8 @@ pub struct ViewDelay<TYPES: NodeType> {
 }
 
 #[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES> + std::fmt::Debug, V: Versions>
-    EventTransformerState<TYPES, I, V> for ViewDelay<TYPES>
+impl<TYPES: NodeType, I: NodeImplementation<TYPES> + std::fmt::Debug>
+    EventTransformerState<TYPES, I> for ViewDelay<TYPES>
 {
     async fn recv_handler(&mut self, event: &HotShotEvent<TYPES>) -> Vec<HotShotEvent<TYPES>> {
         let correct_event = vec![event.clone()];
@@ -303,7 +307,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + std::fmt::Debug, V: Version
         event: &HotShotEvent<TYPES>,
         _public_key: &TYPES::SignatureKey,
         _private_key: &<TYPES::SignatureKey as SignatureKey>::PrivateKey,
-        _upgrade_lock: &UpgradeLock<TYPES, V>,
+        _upgrade_lock: &UpgradeLock<TYPES>,
         _consensus: OuterConsensus<TYPES>,
         _membership_coordinator: EpochMembershipCoordinator<TYPES>,
         _network: Arc<I::Network>,
@@ -321,8 +325,8 @@ pub struct DishonestVoting<TYPES: NodeType> {
 }
 
 #[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES> + std::fmt::Debug, V: Versions>
-    EventTransformerState<TYPES, I, V> for DishonestVoting<TYPES>
+impl<TYPES: NodeType, I: NodeImplementation<TYPES> + std::fmt::Debug>
+    EventTransformerState<TYPES, I> for DishonestVoting<TYPES>
 {
     async fn recv_handler(&mut self, event: &HotShotEvent<TYPES>) -> Vec<HotShotEvent<TYPES>> {
         vec![event.clone()]
@@ -333,7 +337,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + std::fmt::Debug, V: Version
         event: &HotShotEvent<TYPES>,
         public_key: &TYPES::SignatureKey,
         private_key: &<TYPES::SignatureKey as SignatureKey>::PrivateKey,
-        upgrade_lock: &UpgradeLock<TYPES, V>,
+        upgrade_lock: &UpgradeLock<TYPES>,
         _consensus: OuterConsensus<TYPES>,
         _membership_coordinator: EpochMembershipCoordinator<TYPES>,
         _network: Arc<I::Network>,
@@ -358,10 +362,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + std::fmt::Debug, V: Version
 
     fn add_network_event_task(
         &self,
-        handle: &mut SystemContextHandle<TYPES, I, V>,
+        handle: &mut SystemContextHandle<TYPES, I>,
         network: Arc<<I as NodeImplementation<TYPES>>::Network>,
     ) {
-        let network_state: NetworkEventTaskState<_, V, _, _> = NetworkEventTaskState {
+        let network_state: NetworkEventTaskState<_, _, _> = NetworkEventTaskState {
             network,
             view: TYPES::View::genesis(),
             epoch: None,
@@ -400,8 +404,8 @@ pub struct DishonestVoter<TYPES: NodeType> {
 }
 
 #[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES> + std::fmt::Debug, V: Versions>
-    EventTransformerState<TYPES, I, V> for DishonestVoter<TYPES>
+impl<TYPES: NodeType, I: NodeImplementation<TYPES> + std::fmt::Debug>
+    EventTransformerState<TYPES, I> for DishonestVoter<TYPES>
 {
     async fn recv_handler(&mut self, event: &HotShotEvent<TYPES>) -> Vec<HotShotEvent<TYPES>> {
         vec![event.clone()]
@@ -412,7 +416,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + std::fmt::Debug, V: Version
         event: &HotShotEvent<TYPES>,
         public_key: &TYPES::SignatureKey,
         private_key: &<TYPES::SignatureKey as SignatureKey>::PrivateKey,
-        upgrade_lock: &UpgradeLock<TYPES, V>,
+        upgrade_lock: &UpgradeLock<TYPES>,
         _consensus: OuterConsensus<TYPES>,
         _membership_coordinator: EpochMembershipCoordinator<TYPES>,
         _network: Arc<I::Network>,
@@ -481,7 +485,7 @@ pub struct DishonestViewSyncRelay {
 }
 
 #[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> EventTransformerState<TYPES, I, V>
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> EventTransformerState<TYPES, I>
     for DishonestViewSyncRelay
 {
     async fn send_handler(
@@ -489,7 +493,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> EventTransforme
         event: &HotShotEvent<TYPES>,
         _public_key: &TYPES::SignatureKey,
         _private_key: &<TYPES::SignatureKey as SignatureKey>::PrivateKey,
-        upgrade_lock: &UpgradeLock<TYPES, V>,
+        upgrade_lock: &UpgradeLock<TYPES>,
         _consensus: OuterConsensus<TYPES>,
         membership_coordinator: EpochMembershipCoordinator<TYPES>,
         network: Arc<I::Network>,
@@ -545,7 +549,11 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> EventTransforme
                         );
                     };
                     let transmit_result = network
-                        .direct_message(serialized_message.clone(), node.clone())
+                        .direct_message(
+                            view_number.u64().into(),
+                            serialized_message.clone(),
+                            node.clone(),
+                        )
                         .await;
                     match transmit_result {
                         Ok(()) => tracing::info!(
@@ -623,7 +631,11 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> EventTransforme
                         );
                     };
                     let transmit_result = network
-                        .direct_message(serialized_message.clone(), node.clone())
+                        .direct_message(
+                            view_number.u64().into(),
+                            serialized_message.clone(),
+                            node.clone(),
+                        )
                         .await;
                     match transmit_result {
                         Ok(()) => tracing::info!(
@@ -680,7 +692,11 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> EventTransforme
                         );
                     };
                     let transmit_result = network
-                        .direct_message(serialized_message.clone(), node.clone())
+                        .direct_message(
+                            view_number.u64().into(),
+                            serialized_message.clone(),
+                            node.clone(),
+                        )
                         .await;
                     match transmit_result {
                         Ok(()) => tracing::info!(
@@ -692,6 +708,92 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> EventTransforme
                     }
                 }
                 vec![]
+            },
+            _ => vec![event.clone()],
+        }
+    }
+
+    async fn recv_handler(&mut self, event: &HotShotEvent<TYPES>) -> Vec<HotShotEvent<TYPES>> {
+        vec![event.clone()]
+    }
+}
+
+#[derive(Debug)]
+pub struct DishonestViewSyncWrongEpoch<TYPES: NodeType> {
+    pub first_dishonest_view_number: u64,
+    pub epoch_modifier: fn(TYPES::Epoch) -> TYPES::Epoch,
+}
+
+#[async_trait]
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> EventTransformerState<TYPES, I>
+    for DishonestViewSyncWrongEpoch<TYPES>
+{
+    async fn send_handler(
+        &mut self,
+        event: &HotShotEvent<TYPES>,
+        public_key: &TYPES::SignatureKey,
+        private_key: &<TYPES::SignatureKey as SignatureKey>::PrivateKey,
+        upgrade_lock: &UpgradeLock<TYPES>,
+        _consensus: OuterConsensus<TYPES>,
+        _membership_coordinator: EpochMembershipCoordinator<TYPES>,
+        _network: Arc<I::Network>,
+    ) -> Vec<HotShotEvent<TYPES>> {
+        match event {
+            HotShotEvent::QuorumProposalSend(proposal, _) => {
+                if self.first_dishonest_view_number > proposal.data.view_number().u64() {
+                    return vec![event.clone()];
+                }
+                vec![]
+            },
+            HotShotEvent::QuorumVoteSend(vote) => {
+                if self.first_dishonest_view_number > vote.view_number().u64() {
+                    return vec![event.clone()];
+                }
+                vec![]
+            },
+            HotShotEvent::TimeoutVoteSend(vote) => {
+                if self.first_dishonest_view_number > vote.view_number().u64() {
+                    return vec![event.clone()];
+                }
+                vec![]
+            },
+            HotShotEvent::ViewSyncPreCommitVoteSend(vote) => {
+                if self.first_dishonest_view_number > vote.view_number().u64() {
+                    return vec![event.clone()];
+                }
+                let view_number = vote.data.round;
+                let vote = if upgrade_lock.epochs_enabled(view_number).await {
+                    ViewSyncPreCommitVote2::<TYPES>::create_signed_vote(
+                        ViewSyncPreCommitData2 {
+                            relay: 0,
+                            round: view_number,
+                            epoch: vote.data.epoch.map(self.epoch_modifier),
+                        },
+                        view_number,
+                        public_key,
+                        private_key,
+                        upgrade_lock,
+                    )
+                    .await
+                    .context("Failed to sign pre commit vote!")
+                    .unwrap()
+                } else {
+                    let vote = ViewSyncPreCommitVote::<TYPES>::create_signed_vote(
+                        ViewSyncPreCommitData {
+                            relay: 0,
+                            round: view_number,
+                        },
+                        view_number,
+                        public_key,
+                        private_key,
+                        upgrade_lock,
+                    )
+                    .await
+                    .context("Failed to sign pre commit vote!")
+                    .unwrap();
+                    vote.to_vote2()
+                };
+                vec![HotShotEvent::ViewSyncPreCommitVoteSend(vote)]
             },
             _ => vec![event.clone()],
         }

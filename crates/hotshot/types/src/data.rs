@@ -21,14 +21,14 @@ use async_lock::RwLock;
 use bincode::Options;
 use committable::{Commitment, CommitmentBoundsArkless, Committable, RawCommitmentBuilder};
 use hotshot_utils::anytrace::*;
-use jf_vid::VidScheme;
+use jf_advz::VidScheme;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
-use tagged_base64::TaggedBase64;
+use tagged_base64::{TaggedBase64, Tb64Error};
 use thiserror::Error;
-use vbs::version::{StaticVersionType, Version};
+use vbs::version::Version;
 use vec1::Vec1;
-use vid_disperse::{ADVZDisperse, ADVZDisperseShare, AvidMDisperse, VidDisperseShare2};
+use versions::{Upgrade, EPOCH_VERSION, VID2_UPGRADE_VERSION};
 
 use crate::{
     drb::DrbResult,
@@ -44,7 +44,7 @@ use crate::{
     simple_vote::{HasEpoch, QuorumData, QuorumData2, UpgradeProposalData, VersionedVoteData},
     traits::{
         block_contents::{BlockHeader, BuilderFee, EncodeBytes, TestableBlock},
-        node_implementation::{ConsensusTime, NodeType, Versions},
+        node_implementation::{ConsensusTime, NodeType},
         signature_key::SignatureKey,
         states::TestableState,
         BlockPayload,
@@ -54,8 +54,9 @@ use crate::{
         EpochTransitionIndicator,
     },
     vid::{
-        advz::{advz_scheme, ADVZCommitment, ADVZShare},
-        avidm::{init_avidm_param, AvidMCommitment, AvidMScheme, AvidMShare},
+        advz::{advz_scheme, ADVZScheme},
+        avidm::{init_avidm_param, AvidMScheme},
+        avidm_gf2::{init_avidm_gf2_param, AvidmGf2Scheme},
     },
     vote::{Certificate, HasViewNumber},
 };
@@ -76,6 +77,18 @@ macro_rules! impl_u64_wrapper {
             /// Return the u64 format
             fn u64(&self) -> u64 {
                 self.0
+            }
+        }
+
+        impl From<u64> for $t {
+            fn from(n: u64) -> Self {
+                Self(n)
+            }
+        }
+
+        impl From<$t> for u64 {
+            fn from(n: $t) -> Self {
+                n.0
             }
         }
 
@@ -206,6 +219,11 @@ where
     pub view_number: TYPES::View,
 }
 
+/// Type aliases for different versions of VID commitments
+pub type VidCommitment0 = crate::vid::advz::ADVZCommitment;
+pub type VidCommitment1 = crate::vid::avidm::AvidMCommitment;
+pub type VidCommitment2 = crate::vid::avidm_gf2::AvidmGf2Commitment;
+
 /// VID Commitment type
 #[derive(Clone, Copy, Eq, PartialEq, Hash, Serialize, Deserialize, Ord, PartialOrd)]
 #[serde(
@@ -213,8 +231,9 @@ where
     into = "tagged_base64::TaggedBase64"
 )]
 pub enum VidCommitment {
-    V0(ADVZCommitment),
-    V1(AvidMCommitment),
+    V0(VidCommitment0),
+    V1(VidCommitment1),
+    V2(VidCommitment2),
 }
 
 impl Default for VidCommitment {
@@ -240,6 +259,7 @@ impl From<VidCommitment> for TaggedBase64 {
         match val {
             VidCommitment::V0(comm) => comm.into(),
             VidCommitment::V1(comm) => comm.into(),
+            VidCommitment::V2(comm) => comm.into(),
         }
     }
 }
@@ -249,6 +269,7 @@ impl From<&VidCommitment> for TaggedBase64 {
         match val {
             VidCommitment::V0(comm) => comm.into(),
             VidCommitment::V1(comm) => comm.into(),
+            VidCommitment::V2(comm) => comm.into(),
         }
     }
 }
@@ -257,9 +278,12 @@ impl TryFrom<TaggedBase64> for VidCommitment {
     type Error = tagged_base64::Tb64Error;
 
     fn try_from(value: TaggedBase64) -> std::result::Result<Self, Self::Error> {
-        ADVZCommitment::try_from(&value)
-            .map(Self::V0)
-            .or(AvidMCommitment::try_from(value).map(Self::V1))
+        match value.tag().as_str() {
+            "HASH" => VidCommitment0::try_from(value).map(Self::V0),
+            "AvidMCommit" => VidCommitment1::try_from(value).map(Self::V1),
+            "AvidmGf2Commit" => VidCommitment2::try_from(value).map(Self::V2),
+            _ => Err(Tb64Error::InvalidTag),
+        }
     }
 }
 
@@ -267,9 +291,12 @@ impl<'a> TryFrom<&'a TaggedBase64> for VidCommitment {
     type Error = tagged_base64::Tb64Error;
 
     fn try_from(value: &'a TaggedBase64) -> std::result::Result<Self, Self::Error> {
-        ADVZCommitment::try_from(value)
-            .map(Self::V0)
-            .or(AvidMCommitment::try_from(value).map(Self::V1))
+        match value.tag().as_str() {
+            "HASH" => VidCommitment0::try_from(value).map(Self::V0),
+            "AvidMCommit" => VidCommitment1::try_from(value).map(Self::V1),
+            "AvidmGf2Commit" => VidCommitment2::try_from(value).map(Self::V2),
+            _ => Err(Tb64Error::InvalidTag),
+        }
     }
 }
 
@@ -283,15 +310,21 @@ impl std::str::FromStr for VidCommitment {
 }
 
 // TODO(Chengyu): cannot have this because of `impl<H> From<Output<H>> for HasherNode<H>`.
-// impl From<ADVZCommitment> for VidCommitment {
-//     fn from(comm: ADVZCommitment) -> Self {
-//         Self::V0(comm)
+// impl From<VidCommitment1> for VidCommitment {
+//     fn from(comm: VidCommitment1) -> Self {
+//         Self::V1(comm)
 //     }
 // }
 
-impl From<AvidMCommitment> for VidCommitment {
-    fn from(comm: AvidMCommitment) -> Self {
+impl From<VidCommitment1> for VidCommitment {
+    fn from(comm: VidCommitment1) -> Self {
         Self::V1(comm)
+    }
+}
+
+impl From<VidCommitment2> for VidCommitment {
+    fn from(comm: VidCommitment2) -> Self {
+        Self::V2(comm)
     }
 }
 
@@ -300,6 +333,7 @@ impl AsRef<[u8]> for VidCommitment {
         match self {
             Self::V0(comm) => comm.as_ref(),
             Self::V1(comm) => comm.as_ref(),
+            Self::V2(comm) => comm.as_ref(),
         }
     }
 }
@@ -309,23 +343,7 @@ impl AsRef<[u8; 32]> for VidCommitment {
         match self {
             Self::V0(comm) => comm.as_ref().as_ref(),
             Self::V1(comm) => comm.as_ref(),
-        }
-    }
-}
-
-impl VidCommitment {
-    /// Unwrap an ADVZCommitment. Panic if incorrect version.
-    pub fn unwrap_v0(self) -> ADVZCommitment {
-        match self {
-            VidCommitment::V0(comm) => comm,
-            _ => panic!("Unexpected version for this commitment"),
-        }
-    }
-    /// Unwrap an AvidMCommitment. Panic if incorrect version.
-    pub fn unwrap_v1(self) -> AvidMCommitment {
-        match self {
-            VidCommitment::V1(comm) => comm,
-            _ => panic!("Unexpected version for this commitment"),
+            Self::V2(comm) => comm.as_ref(),
         }
     }
 }
@@ -336,13 +354,13 @@ impl VidCommitment {
 /// If the VID computation fails.
 #[must_use]
 #[allow(clippy::panic)]
-pub fn vid_commitment<V: Versions>(
+pub fn vid_commitment(
     encoded_transactions: &[u8],
     metadata: &[u8],
     total_weight: usize,
     version: Version,
 ) -> VidCommitment {
-    if version < V::Epochs::VERSION {
+    if version < EPOCH_VERSION {
         let encoded_tx_len = encoded_transactions.len();
         advz_scheme(total_weight)
             .commit_only(encoded_transactions)
@@ -354,7 +372,7 @@ pub fn vid_commitment<V: Versions>(
                      error: {err}"
                 )
             })
-    } else {
+    } else if version < VID2_UPGRADE_VERSION {
         let param = init_avidm_param(total_weight).unwrap();
         let encoded_tx_len = encoded_transactions.len();
         AvidMScheme::commit(
@@ -364,26 +382,88 @@ pub fn vid_commitment<V: Versions>(
         )
         .map(VidCommitment::V1)
         .unwrap()
+    } else {
+        let param = init_avidm_gf2_param(total_weight).unwrap();
+        let encoded_tx_len = encoded_transactions.len();
+        AvidmGf2Scheme::commit(
+            &param,
+            encoded_transactions,
+            ns_table::parse_ns_table(encoded_tx_len, metadata),
+        )
+        .map(|(comm, _)| VidCommitment::V2(comm))
+        .unwrap()
     }
 }
+
+/// Type aliases for different versions of VID commons
+pub type VidCommon0 = crate::vid::advz::ADVZCommon;
+pub type VidCommon1 = crate::vid::avidm::AvidMCommon;
+pub type VidCommon2 = crate::vid::avidm_gf2::AvidmGf2Common;
+
+/// VID Common type to be shared among parties.
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+pub enum VidCommon {
+    V0(VidCommon0),
+    V1(VidCommon1),
+    V2(VidCommon2),
+}
+
+impl From<VidCommon1> for VidCommon {
+    fn from(comm: VidCommon1) -> Self {
+        Self::V1(comm)
+    }
+}
+
+impl From<VidCommon2> for VidCommon {
+    fn from(comm: VidCommon2) -> Self {
+        Self::V2(comm)
+    }
+}
+
+impl VidCommon {
+    pub fn is_consistent(&self, comm: &VidCommitment) -> bool {
+        match (self, comm) {
+            (Self::V0(common), VidCommitment::V0(comm)) => {
+                ADVZScheme::is_consistent(comm, common).is_ok()
+            },
+            (Self::V1(_), VidCommitment::V1(_)) => true,
+            (Self::V2(common), VidCommitment::V2(comm)) => {
+                AvidmGf2Scheme::is_consistent(comm, common)
+            },
+            _ => false,
+        }
+    }
+}
+
+/// Type aliases for different versions of VID shares
+pub type VidShare0 = crate::vid::advz::ADVZShare;
+pub type VidShare1 = crate::vid::avidm::AvidMShare;
+pub type VidShare2 = crate::vid::avidm_gf2::AvidmGf2Share;
 
 /// VID share type
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum VidShare {
-    V0(ADVZShare),
-    V1(AvidMShare),
+    V0(VidShare0),
+    V1(VidShare1),
+    V2(VidShare2),
 }
 
 // TODO(Chengyu): cannot have this
-// impl From<ADVZShare> for VidShare {
-//     fn from(share: ADVZShare) -> Self {
+// impl From<VidShare0> for VidShare {
+//     fn from(share: VidShare0) -> Self {
 //         Self::V0(share)
 //     }
 // }
 
-impl From<AvidMShare> for VidShare {
-    fn from(share: AvidMShare) -> Self {
+impl From<VidShare1> for VidShare {
+    fn from(share: VidShare1) -> Self {
         Self::V1(share)
+    }
+}
+
+impl From<VidShare2> for VidShare {
+    fn from(share: VidShare2) -> Self {
+        Self::V2(share)
     }
 }
 
@@ -398,6 +478,11 @@ pub struct VidDisperseAndDuration<TYPES: NodeType> {
     pub duration: Duration,
 }
 
+/// Type aliases for different versions of VID disperse
+pub type VidDisperse0<TYPES> = vid_disperse::ADVZDisperse<TYPES>;
+pub type VidDisperse1<TYPES> = vid_disperse::AvidMDisperse<TYPES>;
+pub type VidDisperse2<TYPES> = vid_disperse::AvidmGf2Disperse<TYPES>;
+
 /// VID dispersal data
 ///
 /// Like [`DaProposal`].
@@ -407,20 +492,28 @@ pub struct VidDisperseAndDuration<TYPES: NodeType> {
 #[serde(bound = "TYPES: NodeType")]
 pub enum VidDisperse<TYPES: NodeType> {
     /// Disperse type for first VID version
-    V0(vid_disperse::ADVZDisperse<TYPES>),
-    /// Place holder for VID upgrade
-    V1(vid_disperse::AvidMDisperse<TYPES>),
+    V0(VidDisperse0<TYPES>),
+    /// Disperse type for AvidM Scheme
+    V1(VidDisperse1<TYPES>),
+    /// Disperse type for AvidmGf2 Scheme
+    V2(VidDisperse2<TYPES>),
 }
 
-impl<TYPES: NodeType> From<vid_disperse::ADVZDisperse<TYPES>> for VidDisperse<TYPES> {
-    fn from(disperse: vid_disperse::ADVZDisperse<TYPES>) -> Self {
+impl<TYPES: NodeType> From<VidDisperse0<TYPES>> for VidDisperse<TYPES> {
+    fn from(disperse: VidDisperse0<TYPES>) -> Self {
         Self::V0(disperse)
     }
 }
 
-impl<TYPES: NodeType> From<vid_disperse::AvidMDisperse<TYPES>> for VidDisperse<TYPES> {
-    fn from(disperse: vid_disperse::AvidMDisperse<TYPES>) -> Self {
+impl<TYPES: NodeType> From<VidDisperse1<TYPES>> for VidDisperse<TYPES> {
+    fn from(disperse: VidDisperse1<TYPES>) -> Self {
         Self::V1(disperse)
+    }
+}
+
+impl<TYPES: NodeType> From<VidDisperse2<TYPES>> for VidDisperse<TYPES> {
+    fn from(disperse: VidDisperse2<TYPES>) -> Self {
+        Self::V2(disperse)
     }
 }
 
@@ -429,6 +522,7 @@ impl<TYPES: NodeType> HasViewNumber<TYPES> for VidDisperse<TYPES> {
         match self {
             Self::V0(disperse) => disperse.view_number(),
             Self::V1(disperse) => disperse.view_number(),
+            Self::V2(disperse) => disperse.view_number(),
         }
     }
 }
@@ -438,6 +532,7 @@ impl<TYPES: NodeType> HasEpoch<TYPES> for VidDisperse<TYPES> {
         match self {
             Self::V0(disperse) => disperse.epoch(),
             Self::V1(disperse) => disperse.epoch(),
+            Self::V2(disperse) => disperse.epoch(),
         }
     }
 }
@@ -449,31 +544,33 @@ impl<TYPES: NodeType> VidDisperse<TYPES> {
     /// # Errors
     /// Returns an error if the disperse or commitment calculation fails
     #[allow(clippy::panic)]
-    pub async fn calculate_vid_disperse<V: Versions>(
+    pub async fn calculate_vid_disperse(
         payload: &TYPES::BlockPayload,
         membership: &EpochMembershipCoordinator<TYPES>,
         view: TYPES::View,
         target_epoch: Option<TYPES::Epoch>,
         data_epoch: Option<TYPES::Epoch>,
         metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
-        upgrade_lock: &UpgradeLock<TYPES, V>,
+        upgrade_lock: &UpgradeLock<TYPES>,
     ) -> Result<VidDisperseAndDuration<TYPES>> {
-        let version = upgrade_lock.version_infallible(view).await;
-        if version < V::Epochs::VERSION {
-            ADVZDisperse::calculate_vid_disperse(
+        let epochs_enabled = upgrade_lock.epochs_enabled(view).await;
+        let upgraded_vid2 = upgrade_lock.upgraded_vid2(view).await;
+        if upgraded_vid2 {
+            VidDisperse2::calculate_vid_disperse(
                 payload,
                 membership,
                 view,
                 target_epoch,
                 data_epoch,
+                metadata,
             )
             .await
             .map(|(disperse, duration)| VidDisperseAndDuration {
-                disperse: Self::V0(disperse),
+                disperse: Self::V2(disperse),
                 duration,
             })
-        } else {
-            AvidMDisperse::calculate_vid_disperse(
+        } else if epochs_enabled {
+            VidDisperse1::calculate_vid_disperse(
                 payload,
                 membership,
                 view,
@@ -486,6 +583,19 @@ impl<TYPES: NodeType> VidDisperse<TYPES> {
                 disperse: Self::V1(disperse),
                 duration,
             })
+        } else {
+            VidDisperse0::calculate_vid_disperse(
+                payload,
+                membership,
+                view,
+                target_epoch,
+                data_epoch,
+            )
+            .await
+            .map(|(disperse, duration)| VidDisperseAndDuration {
+                disperse: Self::V0(disperse),
+                duration,
+            })
         }
     }
 
@@ -494,6 +604,7 @@ impl<TYPES: NodeType> VidDisperse<TYPES> {
         match self {
             Self::V0(disperse) => VidCommitment::V0(disperse.payload_commitment),
             Self::V1(disperse) => disperse.payload_commitment.into(),
+            Self::V2(disperse) => disperse.payload_commitment.into(),
         }
     }
 
@@ -502,6 +613,7 @@ impl<TYPES: NodeType> VidDisperse<TYPES> {
         match self {
             Self::V0(disperse) => disperse.payload_commitment.as_ref(),
             Self::V1(disperse) => disperse.payload_commitment.as_ref(),
+            Self::V2(disperse) => disperse.payload_commitment.as_ref(),
         }
     }
 
@@ -510,39 +622,90 @@ impl<TYPES: NodeType> VidDisperse<TYPES> {
         match self {
             Self::V0(share) => share.view_number = view_number,
             Self::V1(share) => share.view_number = view_number,
+            Self::V2(share) => share.view_number = view_number,
+        }
+    }
+
+    pub fn to_shares(self) -> Vec<VidDisperseShare<TYPES>> {
+        match self {
+            VidDisperse::V0(disperse) => disperse
+                .to_shares()
+                .into_iter()
+                .map(|share| VidDisperseShare::V0(share))
+                .collect(),
+            VidDisperse::V1(disperse) => disperse
+                .to_shares()
+                .into_iter()
+                .map(|share| VidDisperseShare::V1(share))
+                .collect(),
+            VidDisperse::V2(disperse) => disperse
+                .to_shares()
+                .into_iter()
+                .map(|share| VidDisperseShare::V2(share))
+                .collect(),
+        }
+    }
+
+    /// Split a VID share proposal into a proposal for each recipient.
+    pub fn to_share_proposals(
+        proposal: Proposal<TYPES, Self>,
+    ) -> Vec<Proposal<TYPES, VidDisperseShare<TYPES>>> {
+        match proposal.data {
+            VidDisperse::V0(disperse) => disperse
+                .to_share_proposals(&proposal.signature)
+                .into_iter()
+                .map(|proposal| convert_proposal(proposal))
+                .collect(),
+            VidDisperse::V1(disperse) => disperse
+                .to_share_proposals(&proposal.signature)
+                .into_iter()
+                .map(|proposal| convert_proposal(proposal))
+                .collect(),
+            VidDisperse::V2(disperse) => disperse
+                .to_share_proposals(&proposal.signature)
+                .into_iter()
+                .map(|proposal| convert_proposal(proposal))
+                .collect(),
         }
     }
 }
+
+/// Type aliases for different versions of VID disperse shares
+pub type VidDisperseShare0<TYPES> = vid_disperse::ADVZDisperseShare<TYPES>;
+pub type VidDisperseShare1<TYPES> = vid_disperse::AvidMDisperseShare<TYPES>;
+pub type VidDisperseShare2<TYPES> = vid_disperse::AvidmGf2DisperseShare<TYPES>;
 
 /// VID share and associated metadata for a single node
 #[derive(Debug, Serialize, Deserialize, Clone, Eq, PartialEq, Hash)]
 #[serde(bound = "TYPES: NodeType")]
 pub enum VidDisperseShare<TYPES: NodeType> {
     /// VID disperse share type for first version VID
-    V0(vid_disperse::ADVZDisperseShare<TYPES>),
+    V0(VidDisperseShare0<TYPES>),
     /// VID disperse share type after epoch upgrade and VID upgrade
-    V1(vid_disperse::VidDisperseShare2<TYPES>),
+    V1(VidDisperseShare1<TYPES>),
+    /// VID disperse share type for AvidmGf2 Scheme
+    V2(VidDisperseShare2<TYPES>),
+}
+
+impl<TYPES: NodeType> From<VidDisperseShare0<TYPES>> for VidDisperseShare<TYPES> {
+    fn from(share: VidDisperseShare0<TYPES>) -> Self {
+        Self::V0(share)
+    }
+}
+
+impl<TYPES: NodeType> From<VidDisperseShare1<TYPES>> for VidDisperseShare<TYPES> {
+    fn from(share: VidDisperseShare1<TYPES>) -> Self {
+        Self::V1(share)
+    }
+}
+
+impl<TYPES: NodeType> From<VidDisperseShare2<TYPES>> for VidDisperseShare<TYPES> {
+    fn from(share: VidDisperseShare2<TYPES>) -> Self {
+        Self::V2(share)
+    }
 }
 
 impl<TYPES: NodeType> VidDisperseShare<TYPES> {
-    /// Create a vector of `VidDisperseShare` from `VidDisperse`
-    pub fn from_vid_disperse(vid_disperse: VidDisperse<TYPES>) -> Vec<Self> {
-        match vid_disperse {
-            VidDisperse::V0(vid_disperse) => {
-                ADVZDisperseShare::<TYPES>::from_advz_disperse(vid_disperse)
-                    .into_iter()
-                    .map(|share| Self::V0(share))
-                    .collect()
-            },
-            VidDisperse::V1(vid_disperse) => {
-                VidDisperseShare2::<TYPES>::from_vid_disperse(vid_disperse)
-                    .into_iter()
-                    .map(|share| Self::V1(share))
-                    .collect()
-            },
-        }
-    }
-
     /// Consume `self` and return a `Proposal`
     pub fn to_proposal(
         self,
@@ -551,6 +714,7 @@ impl<TYPES: NodeType> VidDisperseShare<TYPES> {
         let payload_commitment_ref: &[u8] = match &self {
             Self::V0(share) => share.payload_commitment.as_ref(),
             Self::V1(share) => share.payload_commitment.as_ref(),
+            Self::V2(share) => share.payload_commitment.as_ref(),
         };
         let Ok(signature) = TYPES::SignatureKey::sign(private_key, payload_commitment_ref) else {
             tracing::error!("VID: failed to sign dispersal share payload");
@@ -563,33 +727,12 @@ impl<TYPES: NodeType> VidDisperseShare<TYPES> {
         })
     }
 
-    /// Split a VID share proposal into a proposal for each recipient.
-    pub fn to_vid_share_proposals(
-        vid_disperse_proposal: Proposal<TYPES, VidDisperse<TYPES>>,
-    ) -> Vec<Proposal<TYPES, Self>> {
-        match vid_disperse_proposal.data {
-            VidDisperse::V0(disperse) => ADVZDisperseShare::to_vid_share_proposals(
-                disperse,
-                &vid_disperse_proposal.signature,
-            )
-            .into_iter()
-            .map(|proposal| convert_proposal(proposal))
-            .collect(),
-            VidDisperse::V1(disperse) => VidDisperseShare2::to_vid_share_proposals(
-                disperse,
-                &vid_disperse_proposal.signature,
-            )
-            .into_iter()
-            .map(|proposal| convert_proposal(proposal))
-            .collect(),
-        }
-    }
-
     /// Return the internal `recipient_key`
     pub fn recipient_key(&self) -> &TYPES::SignatureKey {
         match self {
             Self::V0(share) => &share.recipient_key,
             Self::V1(share) => &share.recipient_key,
+            Self::V2(share) => &share.recipient_key,
         }
     }
 
@@ -598,6 +741,7 @@ impl<TYPES: NodeType> VidDisperseShare<TYPES> {
         match self {
             Self::V0(share) => share.payload_byte_len(),
             Self::V1(share) => share.payload_byte_len(),
+            Self::V2(share) => share.payload_byte_len(),
         }
     }
 
@@ -606,6 +750,7 @@ impl<TYPES: NodeType> VidDisperseShare<TYPES> {
         match self {
             Self::V0(share) => share.payload_commitment.as_ref(),
             Self::V1(share) => share.payload_commitment.as_ref(),
+            Self::V2(share) => share.payload_commitment.as_ref(),
         }
     }
 
@@ -614,6 +759,7 @@ impl<TYPES: NodeType> VidDisperseShare<TYPES> {
         match self {
             Self::V0(share) => VidCommitment::V0(share.payload_commitment),
             Self::V1(share) => share.payload_commitment.into(),
+            Self::V2(share) => share.payload_commitment.into(),
         }
     }
 
@@ -622,17 +768,16 @@ impl<TYPES: NodeType> VidDisperseShare<TYPES> {
         match self {
             Self::V0(_) => None,
             Self::V1(share) => share.target_epoch,
+            Self::V2(share) => share.target_epoch,
         }
     }
 
     /// Internally verify the share given necessary information
-    ///
-    /// # Errors
-    #[allow(clippy::result_unit_err)]
-    pub fn verify_share(&self, total_nodes: usize) -> std::result::Result<(), ()> {
+    pub fn verify(&self, total_nodes: usize) -> bool {
         match self {
-            Self::V0(share) => share.verify_share(total_nodes),
-            Self::V1(share) => share.verify_share(total_nodes),
+            Self::V0(share) => share.verify(total_nodes),
+            Self::V1(share) => share.verify(total_nodes),
+            Self::V2(share) => share.verify(total_nodes),
         }
     }
 
@@ -641,6 +786,7 @@ impl<TYPES: NodeType> VidDisperseShare<TYPES> {
         match self {
             Self::V0(share) => share.view_number = view_number,
             Self::V1(share) => share.view_number = view_number,
+            Self::V2(share) => share.view_number = view_number,
         }
     }
 }
@@ -650,6 +796,7 @@ impl<TYPES: NodeType> HasViewNumber<TYPES> for VidDisperseShare<TYPES> {
         match self {
             Self::V0(disperse) => disperse.view_number(),
             Self::V1(disperse) => disperse.view_number(),
+            Self::V2(disperse) => disperse.view_number(),
         }
     }
 }
@@ -659,19 +806,8 @@ impl<TYPES: NodeType> HasEpoch<TYPES> for VidDisperseShare<TYPES> {
         match self {
             Self::V0(_) => None,
             Self::V1(share) => share.epoch(),
+            Self::V2(share) => share.epoch(),
         }
-    }
-}
-
-impl<TYPES: NodeType> From<vid_disperse::ADVZDisperseShare<TYPES>> for VidDisperseShare<TYPES> {
-    fn from(share: vid_disperse::ADVZDisperseShare<TYPES>) -> Self {
-        Self::V0(share)
-    }
-}
-
-impl<TYPES: NodeType> From<vid_disperse::VidDisperseShare2<TYPES>> for VidDisperseShare<TYPES> {
-    fn from(share: vid_disperse::VidDisperseShare2<TYPES>) -> Self {
-        Self::V1(share)
     }
 }
 
@@ -804,7 +940,7 @@ pub struct QuorumProposal2<TYPES: NodeType> {
 /// Legacy version of `QuorumProposal2` corresponding to consensus protocol version V3.
 ///
 /// `QuorumProposal2` state_cert field was updated to use new
-/// `LightClientStateUpdateCertificateV2`.  
+/// `LightClientStateUpdateCertificateV2`.
 /// This legacy version uses the older `LightClientStateUpdateCertificateV1`
 /// format for backward compatibility.
 ///
@@ -847,17 +983,33 @@ pub struct QuorumProposal2Legacy<TYPES: NodeType> {
 }
 
 impl<TYPES: NodeType> From<QuorumProposal2Legacy<TYPES>> for QuorumProposal2<TYPES> {
-    fn from(v3: QuorumProposal2Legacy<TYPES>) -> Self {
+    fn from(quorum_proposal2: QuorumProposal2Legacy<TYPES>) -> Self {
         Self {
-            block_header: v3.block_header,
-            view_number: v3.view_number,
-            epoch: v3.epoch,
-            justify_qc: v3.justify_qc,
-            next_epoch_justify_qc: v3.next_epoch_justify_qc,
-            upgrade_certificate: v3.upgrade_certificate,
-            view_change_evidence: v3.view_change_evidence,
-            next_drb_result: v3.next_drb_result,
-            state_cert: v3.state_cert.map(Into::into),
+            block_header: quorum_proposal2.block_header,
+            view_number: quorum_proposal2.view_number,
+            epoch: quorum_proposal2.epoch,
+            justify_qc: quorum_proposal2.justify_qc,
+            next_epoch_justify_qc: quorum_proposal2.next_epoch_justify_qc,
+            upgrade_certificate: quorum_proposal2.upgrade_certificate,
+            view_change_evidence: quorum_proposal2.view_change_evidence,
+            next_drb_result: quorum_proposal2.next_drb_result,
+            state_cert: quorum_proposal2.state_cert.map(Into::into),
+        }
+    }
+}
+
+impl<TYPES: NodeType> From<QuorumProposal2<TYPES>> for QuorumProposal2Legacy<TYPES> {
+    fn from(quorum_proposal2: QuorumProposal2<TYPES>) -> Self {
+        Self {
+            block_header: quorum_proposal2.block_header,
+            view_number: quorum_proposal2.view_number,
+            epoch: quorum_proposal2.epoch,
+            justify_qc: quorum_proposal2.justify_qc,
+            next_epoch_justify_qc: quorum_proposal2.next_epoch_justify_qc,
+            upgrade_certificate: quorum_proposal2.upgrade_certificate,
+            view_change_evidence: quorum_proposal2.view_change_evidence,
+            next_drb_result: quorum_proposal2.next_drb_result,
+            state_cert: quorum_proposal2.state_cert.map(Into::into),
         }
     }
 }
@@ -865,7 +1017,7 @@ impl<TYPES: NodeType> From<QuorumProposal2Legacy<TYPES>> for QuorumProposal2<TYP
 /// Wrapper type for a legacy quorum proposal.
 ///
 /// This is used to encapsulate a [`QuorumProposal2Legacy`] when working with
-/// data from older consensus protocol versions (e.g., V3).  
+/// data from older consensus protocol versions (e.g., V3).
 /// Primarily used for deserialization of legacy proposals
 #[derive(derive_more::Debug, Serialize, Deserialize, Clone, Eq, PartialEq, Hash)]
 #[serde(bound(deserialize = ""))]
@@ -894,9 +1046,9 @@ impl<TYPES: NodeType> QuorumProposal2<TYPES> {
     /// Validates whether the epoch is consistent with the version and the block number
     /// # Errors
     /// Returns an error if the epoch is inconsistent with the version or the block number
-    pub async fn validate_epoch<V: Versions>(
+    pub async fn validate_epoch(
         &self,
-        upgrade_lock: &UpgradeLock<TYPES, V>,
+        upgrade_lock: &UpgradeLock<TYPES>,
         epoch_height: u64,
     ) -> Result<()> {
         let calculated_epoch = option_epoch_from_block_number::<TYPES>(
@@ -951,9 +1103,9 @@ impl<TYPES: NodeType> QuorumProposalWrapper<TYPES> {
     /// Validates whether the epoch is consistent with the version and the block number
     /// # Errors
     /// Returns an error if the epoch is inconsistent with the version or the block number
-    pub async fn validate_epoch<V: Versions>(
+    pub async fn validate_epoch(
         &self,
-        upgrade_lock: &UpgradeLock<TYPES, V>,
+        upgrade_lock: &UpgradeLock<TYPES>,
         epoch_height: u64,
     ) -> Result<()> {
         self.proposal
@@ -975,6 +1127,14 @@ impl<TYPES: NodeType> From<QuorumProposal<TYPES>> for QuorumProposalWrapper<TYPE
     }
 }
 
+impl<TYPES: NodeType> From<QuorumProposal2Legacy<TYPES>> for QuorumProposalWrapper<TYPES> {
+    fn from(quorum_proposal: QuorumProposal2Legacy<TYPES>) -> Self {
+        Self {
+            proposal: quorum_proposal.into(),
+        }
+    }
+}
+
 impl<TYPES: NodeType> From<QuorumProposal2<TYPES>> for QuorumProposalWrapper<TYPES> {
     fn from(quorum_proposal2: QuorumProposal2<TYPES>) -> Self {
         Self {
@@ -984,6 +1144,12 @@ impl<TYPES: NodeType> From<QuorumProposal2<TYPES>> for QuorumProposalWrapper<TYP
 }
 
 impl<TYPES: NodeType> From<QuorumProposalWrapper<TYPES>> for QuorumProposal<TYPES> {
+    fn from(quorum_proposal_wrapper: QuorumProposalWrapper<TYPES>) -> Self {
+        quorum_proposal_wrapper.proposal.into()
+    }
+}
+
+impl<TYPES: NodeType> From<QuorumProposalWrapper<TYPES>> for QuorumProposal2Legacy<TYPES> {
     fn from(quorum_proposal_wrapper: QuorumProposalWrapper<TYPES>) -> Self {
         quorum_proposal_wrapper.proposal.into()
     }
@@ -1103,8 +1269,7 @@ impl_has_epoch!(
 impl_has_none_epoch!(
     QuorumProposal<TYPES>,
     DaProposal<TYPES>,
-    UpgradeProposal<TYPES>,
-    ADVZDisperseShare<TYPES>
+    UpgradeProposal<TYPES>
 );
 
 impl<TYPES: NodeType> HasEpoch<TYPES> for QuorumProposalWrapper<TYPES> {
@@ -1231,11 +1396,12 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
     /// Panics if the genesis payload (`TYPES::BlockPayload::genesis()`) is malformed (unable to be
     /// interpreted as bytes).
     #[must_use]
-    pub async fn genesis<V: Versions>(
+    pub async fn genesis(
         validated_state: &TYPES::ValidatedState,
         instance_state: &TYPES::InstanceState,
+        version: Version,
     ) -> Self {
-        let epoch = genesis_epoch_from_version::<V, TYPES>();
+        let epoch = genesis_epoch_from_version::<TYPES>(version);
 
         let (payload, metadata) =
             TYPES::BlockPayload::from_transactions([], validated_state, instance_state)
@@ -1245,9 +1411,9 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
         let genesis_view = TYPES::View::genesis();
 
         let block_header =
-            TYPES::BlockHeader::genesis::<V>(instance_state, payload.clone(), &metadata);
+            TYPES::BlockHeader::genesis(instance_state, payload.clone(), &metadata, version);
 
-        let block_number = if V::Base::VERSION < V::Epochs::VERSION {
+        let block_number = if version < EPOCH_VERSION {
             None
         } else {
             Some(0u64)
@@ -1302,6 +1468,12 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
     pub fn justify_qc(&self) -> QuorumCertificate2<TYPES> {
         self.justify_qc.clone()
     }
+    /// The QC linking this leaf to its parent in the chain, signed by the next epoch's quorum.
+    ///
+    /// Only available for QCs that are part of an epoch transition.
+    pub fn next_epoch_justify_qc(&self) -> Option<NextEpochQuorumCertificate2<TYPES>> {
+        self.next_epoch_justify_qc.clone()
+    }
     /// The QC linking this leaf to its parent in the chain.
     pub fn upgrade_certificate(&self) -> Option<UpgradeCertificate<TYPES>> {
         self.upgrade_certificate.clone()
@@ -1325,14 +1497,14 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
     ///
     /// Fails if the payload commitment doesn't match `self.block_header.payload_commitment()`
     /// or if the transactions are of invalid length
-    pub fn fill_block_payload<V: Versions>(
+    pub fn fill_block_payload(
         &mut self,
         block_payload: TYPES::BlockPayload,
         num_storage_nodes: usize,
         version: Version,
     ) -> std::result::Result<(), BlockError> {
         let encoded_txns = block_payload.encode();
-        let commitment = vid_commitment::<V>(
+        let commitment = vid_commitment(
             &encoded_txns,
             &self.block_header.metadata().encode(),
             num_storage_nodes,
@@ -1481,10 +1653,7 @@ impl<TYPES: NodeType> Leaf<TYPES> {
     #[allow(clippy::unused_async)]
     /// Calculate the leaf commitment,
     /// which is gated on the version to include the block header.
-    pub async fn commit<V: Versions>(
-        &self,
-        _upgrade_lock: &UpgradeLock<TYPES, V>,
-    ) -> Commitment<Self> {
+    pub async fn commit(&self, _upgrade_lock: &UpgradeLock<TYPES>) -> Commitment<Self> {
         <Self as Committable>::commit(self)
     }
 }
@@ -1557,26 +1726,27 @@ impl<TYPES: NodeType> Display for Leaf<TYPES> {
 }
 
 impl<TYPES: NodeType> QuorumCertificate<TYPES> {
-    #[must_use]
     /// Creat the Genesis certificate
-    pub async fn genesis<V: Versions>(
+    #[must_use]
+    pub async fn genesis(
         validated_state: &TYPES::ValidatedState,
         instance_state: &TYPES::InstanceState,
+        upgrade: Upgrade,
     ) -> Self {
         // since this is genesis, we should never have a decided upgrade certificate.
-        let upgrade_lock = UpgradeLock::<TYPES, V>::new();
+        let upgrade_lock = UpgradeLock::<TYPES>::new(upgrade);
 
         let genesis_view = <TYPES::View as ConsensusTime>::genesis();
 
         let data = QuorumData {
-            leaf_commit: Leaf::genesis::<V>(validated_state, instance_state)
+            leaf_commit: Leaf::genesis(validated_state, instance_state, upgrade.base)
                 .await
                 .commit(&upgrade_lock)
                 .await,
         };
 
         let versioned_data =
-            VersionedVoteData::<_, _, V>::new_infallible(data.clone(), genesis_view, &upgrade_lock)
+            VersionedVoteData::<_, _>::new_infallible(data.clone(), genesis_view, &upgrade_lock)
                 .await;
 
         let bytes: [u8; 32] = versioned_data.commit().into();
@@ -1592,18 +1762,19 @@ impl<TYPES: NodeType> QuorumCertificate<TYPES> {
 }
 
 impl<TYPES: NodeType> QuorumCertificate2<TYPES> {
-    #[must_use]
     /// Create the Genesis certificate
-    pub async fn genesis<V: Versions>(
+    #[must_use]
+    pub async fn genesis(
         validated_state: &TYPES::ValidatedState,
         instance_state: &TYPES::InstanceState,
+        upgrade: Upgrade,
     ) -> Self {
         // since this is genesis, we should never have a decided upgrade certificate.
-        let upgrade_lock = UpgradeLock::<TYPES, V>::new();
+        let upgrade_lock = UpgradeLock::<TYPES>::new(upgrade);
 
         let genesis_view = <TYPES::View as ConsensusTime>::genesis();
 
-        let genesis_leaf = Leaf2::genesis::<V>(validated_state, instance_state).await;
+        let genesis_leaf = Leaf2::genesis(validated_state, instance_state, upgrade.base).await;
         let block_number = if upgrade_lock.epochs_enabled(genesis_view).await {
             Some(genesis_leaf.height())
         } else {
@@ -1611,12 +1782,12 @@ impl<TYPES: NodeType> QuorumCertificate2<TYPES> {
         };
         let data = QuorumData2 {
             leaf_commit: genesis_leaf.commit(),
-            epoch: genesis_epoch_from_version::<V, TYPES>(), // #3967 make sure this is enough of a gate for epochs
+            epoch: genesis_epoch_from_version::<TYPES>(upgrade.base), // #3967 make sure this is enough of a gate for epochs
             block_number,
         };
 
         let versioned_data =
-            VersionedVoteData::<_, _, V>::new_infallible(data.clone(), genesis_view, &upgrade_lock)
+            VersionedVoteData::<_, _>::new_infallible(data.clone(), genesis_view, &upgrade_lock)
                 .await;
 
         let bytes: [u8; 32] = versioned_data.commit().into();
@@ -1639,9 +1810,10 @@ impl<TYPES: NodeType> Leaf<TYPES> {
     /// Panics if the genesis payload (`TYPES::BlockPayload::genesis()`) is malformed (unable to be
     /// interpreted as bytes).
     #[must_use]
-    pub async fn genesis<V: Versions>(
+    pub async fn genesis(
         validated_state: &TYPES::ValidatedState,
         instance_state: &TYPES::InstanceState,
+        version: Version,
     ) -> Self {
         let (payload, metadata) =
             TYPES::BlockPayload::from_transactions([], validated_state, instance_state)
@@ -1651,7 +1823,7 @@ impl<TYPES: NodeType> Leaf<TYPES> {
         let genesis_view = TYPES::View::genesis();
 
         let block_header =
-            TYPES::BlockHeader::genesis::<V>(instance_state, payload.clone(), &metadata);
+            TYPES::BlockHeader::genesis(instance_state, payload.clone(), &metadata, version);
 
         let null_quorum_data = QuorumData {
             leaf_commit: Commitment::<Leaf<TYPES>>::default_commitment_no_preimage(),
@@ -1712,14 +1884,14 @@ impl<TYPES: NodeType> Leaf<TYPES> {
     ///
     /// Fails if the payload commitment doesn't match `self.block_header.payload_commitment()`
     /// or if the transactions are of invalid length
-    pub fn fill_block_payload<V: Versions>(
+    pub fn fill_block_payload(
         &mut self,
         block_payload: TYPES::BlockPayload,
         num_storage_nodes: usize,
         version: Version,
     ) -> std::result::Result<(), BlockError> {
         let encoded_txns = block_payload.encode();
-        let commitment = vid_commitment::<V>(
+        let commitment = vid_commitment(
             &encoded_txns,
             &self.block_header.metadata().encode(),
             num_storage_nodes,
@@ -1947,16 +2119,15 @@ impl<TYPES: NodeType> Leaf<TYPES> {
 pub mod null_block {
     #![allow(missing_docs)]
 
-    use jf_vid::VidScheme;
-    use vbs::version::StaticVersionType;
+    use jf_advz::VidScheme;
+    use vbs::version::Version;
+    use versions::EPOCH_VERSION;
 
     use crate::{
         data::VidCommitment,
         traits::{
-            block_contents::BuilderFee,
-            node_implementation::{NodeType, Versions},
-            signature_key::BuilderSignatureKey,
-            BlockPayload,
+            block_contents::BuilderFee, node_implementation::NodeType,
+            signature_key::BuilderSignatureKey, BlockPayload,
         },
         vid::advz::advz_scheme,
     };
@@ -1970,7 +2141,7 @@ pub mod null_block {
     // TODO(Chengyu): fix it. Empty commitment must be computed at every upgrade.
     // #[memoize(SharedCache, Capacity: 10)]
     #[must_use]
-    pub fn commitment<V: Versions>(num_storage_nodes: usize) -> Option<VidCommitment> {
+    pub fn commitment(num_storage_nodes: usize) -> Option<VidCommitment> {
         let vid_result = advz_scheme(num_storage_nodes).commit_only(Vec::new());
 
         match vid_result {
@@ -1981,9 +2152,9 @@ pub mod null_block {
 
     /// Builder fee data for a null block payload
     #[must_use]
-    pub fn builder_fee<TYPES: NodeType, V: Versions>(
+    pub fn builder_fee<TYPES: NodeType>(
         num_storage_nodes: usize,
-        version: vbs::version::Version,
+        version: Version,
     ) -> Option<BuilderFee<TYPES>> {
         /// Arbitrary fee amount, this block doesn't actually come from a builder
         const FEE_AMOUNT: u64 = 0;
@@ -1993,7 +2164,7 @@ pub mod null_block {
                 [0_u8; 32], 0,
             );
 
-        if version >= V::Epochs::VERSION {
+        if version >= EPOCH_VERSION {
             let (_null_block, null_block_metadata) =
                 <TYPES::BlockPayload as BlockPayload<TYPES>>::empty();
 
@@ -2014,7 +2185,7 @@ pub mod null_block {
                 &priv_key,
                 FEE_AMOUNT,
                 &null_block_metadata,
-                &commitment::<V>(num_storage_nodes)?,
+                &commitment(num_storage_nodes)?,
             ) {
                 Ok(sig) => Some(BuilderFee {
                     fee_amount: FEE_AMOUNT,
@@ -2071,7 +2242,7 @@ mod test {
 
     #[test]
     fn test_vid_commitment_display() {
-        let vc = VidCommitment::V0(ADVZCommitment::default());
+        let vc = VidCommitment::V0(VidCommitment0::default());
         assert_eq!(
             format!("{vc}"),
             "HASH~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAI"
@@ -2081,9 +2252,7 @@ mod test {
             "HASH~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAI"
         );
 
-        let vc = VidCommitment::V1(AvidMCommitment {
-            commit: Default::default(),
-        });
+        let vc = VidCommitment::V1(VidCommitment1::default());
         assert_eq!(
             format!("{vc}"),
             "AvidMCommit~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADr"
@@ -2091,6 +2260,16 @@ mod test {
         assert_eq!(
             format!("{vc:?}"),
             "AvidMCommit~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADr"
+        );
+
+        let vc = VidCommitment::V2(VidCommitment2::default());
+        assert_eq!(
+            format!("{vc}"),
+            "AvidmGf2Commit~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACq"
+        );
+        assert_eq!(
+            format!("{vc:?}"),
+            "AvidmGf2Commit~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACq"
         );
     }
 }

@@ -129,21 +129,24 @@ pub mod availability_tests {
 
     use committable::Committable;
     use futures::stream::StreamExt;
-    use hotshot_types::data::Leaf2;
+    use hotshot_types::{data::Leaf2, vote::HasViewNumber};
 
     use super::test_helpers::*;
     use crate::{
         availability::{payload_size, BlockId},
-        data_source::storage::NodeStorage,
+        data_source::storage::{AvailabilityStorage, NodeStorage},
         node::NodeDataSource,
         testing::{
             consensus::{MockNetwork, TestableDataSource},
-            mocks::{mock_transaction, MockTypes, MockVersions},
+            mocks::{mock_transaction, MockTypes},
         },
         types::HeightIndexed,
     };
 
-    async fn validate(ds: &impl TestableDataSource) {
+    async fn validate<D: TestableDataSource>(ds: &D)
+    where
+        for<'a> D::ReadOnly<'a>: AvailabilityStorage<MockTypes> + NodeStorage<MockTypes>,
+    {
         // Check the consistency of every block/leaf pair. Keep track of payloads and transactions
         // we've seen so we can detect duplicates.
         let mut seen_payloads = HashMap::new();
@@ -287,14 +290,31 @@ pub mod availability_tests {
                 }
             }
         }
+
+        // Validate consistency of latest QC chain (only available after epoch upgrade).
+        {
+            let mut tx = ds.read().await.unwrap();
+            let block_height = NodeStorage::block_height(&mut tx).await.unwrap();
+            let last_leaf = tx.get_leaf((block_height - 1).into()).await.unwrap();
+
+            if last_leaf.qc().data.epoch.is_some() {
+                tracing::info!(block_height, "checking QC chain");
+                let qc_chain = tx.latest_qc_chain().await.unwrap().unwrap();
+
+                assert_eq!(last_leaf.height(), (block_height - 1) as u64);
+                assert_eq!(qc_chain[0].view_number(), last_leaf.leaf().view_number());
+                assert_eq!(qc_chain[0].leaf_commit(), last_leaf.hash());
+                assert_eq!(qc_chain[1].view_number(), qc_chain[0].view_number() + 1);
+            }
+        }
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     pub async fn test_update<D: TestableDataSource>()
     where
-        for<'a> D::ReadOnly<'a>: NodeStorage<MockTypes>,
+        for<'a> D::ReadOnly<'a>: AvailabilityStorage<MockTypes> + NodeStorage<MockTypes>,
     {
-        let mut network = MockNetwork::<D, MockVersions>::init().await;
+        let mut network = MockNetwork::<D>::init().await;
         let ds = network.data_source();
 
         network.start().await;
@@ -367,7 +387,7 @@ pub mod availability_tests {
     where
         for<'a> D::ReadOnly<'a>: NodeStorage<MockTypes>,
     {
-        let mut network = MockNetwork::<D, MockVersions>::init().await;
+        let mut network = MockNetwork::<D>::init().await;
         let ds = network.data_source();
         network.start().await;
 
@@ -463,7 +483,7 @@ pub mod availability_tests {
     where
         for<'a> D::ReadOnly<'a>: NodeStorage<MockTypes>,
     {
-        let mut network = MockNetwork::<D, MockVersions>::init().await;
+        let mut network = MockNetwork::<D>::init().await;
         let ds = network.data_source();
         network.start().await;
 
@@ -545,7 +565,10 @@ pub mod availability_tests {
 #[espresso_macros::generic_tests]
 pub mod persistence_tests {
     use committable::Committable;
-    use hotshot_example_types::state_types::{TestInstanceState, TestValidatedState};
+    use hotshot_example_types::{
+        node_types::TEST_VERSIONS,
+        state_types::{TestInstanceState, TestValidatedState},
+    };
     use hotshot_types::simple_certificate::QuorumCertificate2;
 
     use crate::{
@@ -570,20 +593,20 @@ pub mod persistence_tests {
             + AvailabilityStorage<MockTypes>
             + NodeStorage<MockTypes>,
     {
-        use hotshot_example_types::node_types::TestVersions;
-
         let storage = D::create(0).await;
         let ds = D::connect(&storage).await;
 
         // Mock up some consensus data.
-        let mut qc = QuorumCertificate2::<MockTypes>::genesis::<TestVersions>(
+        let mut qc = QuorumCertificate2::<MockTypes>::genesis(
             &TestValidatedState::default(),
             &TestInstanceState::default(),
+            TEST_VERSIONS.test,
         )
         .await;
-        let mut leaf = Leaf2::<MockTypes>::genesis::<TestVersions>(
+        let mut leaf = Leaf2::<MockTypes>::genesis(
             &TestValidatedState::default(),
             &TestInstanceState::default(),
+            TEST_VERSIONS.test.base,
         )
         .await;
         // Increment the block number, to distinguish this block from the genesis block, which
@@ -620,20 +643,20 @@ pub mod persistence_tests {
     where
         for<'a> D::Transaction<'a>: UpdateAvailabilityStorage<MockTypes>,
     {
-        use hotshot_example_types::node_types::TestVersions;
-
         let storage = D::create(0).await;
         let ds = D::connect(&storage).await;
 
         // Mock up some consensus data.
-        let mut qc = QuorumCertificate2::<MockTypes>::genesis::<TestVersions>(
+        let mut qc = QuorumCertificate2::<MockTypes>::genesis(
             &TestValidatedState::default(),
             &TestInstanceState::default(),
+            TEST_VERSIONS.test,
         )
         .await;
-        let mut leaf = Leaf2::<MockTypes>::genesis::<TestVersions>(
+        let mut leaf = Leaf2::<MockTypes>::genesis(
             &TestValidatedState::default(),
             &TestInstanceState::default(),
+            TEST_VERSIONS.test.base,
         )
         .await;
         // Increment the block number, to distinguish this block from the genesis block, which
@@ -681,20 +704,20 @@ pub mod persistence_tests {
             + NodeStorage<MockTypes>,
         for<'a> D::ReadOnly<'a>: NodeStorage<MockTypes>,
     {
-        use hotshot_example_types::node_types::TestVersions;
-
         let storage = D::create(0).await;
         let ds = D::connect(&storage).await;
 
         // Mock up some consensus data.
-        let mut mock_qc = QuorumCertificate2::<MockTypes>::genesis::<TestVersions>(
+        let mut mock_qc = QuorumCertificate2::<MockTypes>::genesis(
             &TestValidatedState::default(),
             &TestInstanceState::default(),
+            TEST_VERSIONS.test,
         )
         .await;
-        let mut mock_leaf = Leaf2::<MockTypes>::genesis::<TestVersions>(
+        let mut mock_leaf = Leaf2::<MockTypes>::genesis(
             &TestValidatedState::default(),
             &TestInstanceState::default(),
+            TEST_VERSIONS.test.base,
         )
         .await;
         // Increment the block number, to distinguish this block from the genesis block, which
@@ -764,19 +787,19 @@ pub mod node_tests {
     use hotshot::traits::BlockPayload;
     use hotshot_example_types::{
         block_types::{TestBlockHeader, TestBlockPayload, TestMetadata},
-        node_types::TestTypes,
+        node_types::{TestTypes, TEST_VERSIONS},
         state_types::{TestInstanceState, TestValidatedState},
     };
     use hotshot_types::{
-        data::{vid_commitment, VidCommitment, VidShare},
+        data::{vid_commitment, VidCommitment, VidCommon, VidShare, ViewNumber},
+        simple_certificate::{CertificatePair, QuorumCertificate2},
         traits::{
             block_contents::{BlockHeader, EncodeBytes},
-            node_implementation::Versions,
+            node_implementation::ConsensusTime,
         },
         vid::advz::{advz_scheme, ADVZScheme},
     };
-    use jf_vid::VidScheme;
-    use vbs::version::StaticVersionType;
+    use jf_advz::VidScheme;
 
     use crate::{
         availability::{BlockInfo, BlockQueryData, LeafQueryData, VidCommonQueryData},
@@ -787,11 +810,11 @@ pub mod node_tests {
         node::{BlockId, NodeDataSource, SyncStatus, TimeWindowQueryData, WindowStart},
         testing::{
             consensus::{MockNetwork, TestableDataSource},
-            mocks::{mock_transaction, MockPayload, MockTypes, MockVersions},
+            mocks::{mock_transaction, MockPayload, MockTypes},
             sleep,
         },
         types::HeightIndexed,
-        Header, VidCommon,
+        Header, Leaf2,
     };
 
     fn block_header_timestamp(header: &Header<MockTypes>) -> u64 {
@@ -803,8 +826,6 @@ pub mod node_tests {
     where
         for<'a> D::Transaction<'a>: UpdateAvailabilityStorage<MockTypes>,
     {
-        use hotshot_example_types::node_types::TestVersions;
-
         let storage = D::create(0).await;
         let ds = D::connect(&storage).await;
 
@@ -813,16 +834,18 @@ pub mod node_tests {
 
         // Generate some mock leaves and blocks to insert.
         let mut leaves = vec![
-            LeafQueryData::<MockTypes>::genesis::<TestVersions>(
+            LeafQueryData::<MockTypes>::genesis(
                 &TestValidatedState::default(),
                 &TestInstanceState::default(),
+                TEST_VERSIONS.test,
             )
             .await,
         ];
         let mut blocks = vec![
-            BlockQueryData::<MockTypes>::genesis::<TestVersions>(
+            BlockQueryData::<MockTypes>::genesis(
                 &TestValidatedState::default(),
                 &TestInstanceState::default(),
+                TEST_VERSIONS.test.base,
             )
             .await,
         ];
@@ -952,8 +975,6 @@ pub mod node_tests {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     pub async fn test_counters<D: TestableDataSource>() {
-        use hotshot_example_types::node_types::TestVersions;
-
         let storage = D::create(0).await;
         let ds = D::connect(&storage).await;
 
@@ -977,12 +998,8 @@ pub mod node_tests {
                 .await
                 .unwrap();
             let encoded = payload.encode();
-            let payload_commitment = vid_commitment::<TestVersions>(
-                &encoded,
-                &metadata.encode(),
-                1,
-                <TestVersions as Versions>::Base::VERSION,
-            );
+            let payload_commitment =
+                vid_commitment(&encoded, &metadata.encode(), 1, TEST_VERSIONS.test.base);
             let header = TestBlockHeader {
                 block_number: i,
                 payload_commitment,
@@ -996,16 +1013,18 @@ pub mod node_tests {
                     num_transactions: 7, // arbitrary
                 },
                 random: 1, // arbitrary
+                version: TEST_VERSIONS.test.base,
             };
 
-            let mut leaf = LeafQueryData::<MockTypes>::genesis::<TestVersions>(
+            let mut leaf = LeafQueryData::<MockTypes>::genesis(
                 &TestValidatedState::default(),
                 &TestInstanceState::default(),
+                TEST_VERSIONS.test,
             )
             .await;
             *leaf.leaf.block_header_mut() = header.clone();
             let block = BlockQueryData::new(header, payload);
-            ds.append(BlockInfo::new(leaf, Some(block.clone()), None, None, None))
+            ds.append(BlockInfo::new(leaf, Some(block.clone()), None, None))
                 .await
                 .unwrap();
             assert_eq!(
@@ -1046,7 +1065,7 @@ pub mod node_tests {
     where
         for<'a> D::ReadOnly<'a>: NodeStorage<MockTypes>,
     {
-        let mut network = MockNetwork::<D, MockVersions>::init().await;
+        let mut network = MockNetwork::<D>::init().await;
         let ds = network.data_source();
 
         network.start().await;
@@ -1073,8 +1092,6 @@ pub mod node_tests {
         for<'a> D::Transaction<'a>: UpdateAvailabilityStorage<MockTypes>,
         for<'a> D::ReadOnly<'a>: NodeStorage<MockTypes>,
     {
-        use hotshot_example_types::node_types::TestVersions;
-
         let storage = D::create(0).await;
         let ds = D::connect(&storage).await;
 
@@ -1083,9 +1100,10 @@ pub mod node_tests {
         let disperse = vid.disperse([]).unwrap();
 
         // Insert test data with VID common and a share.
-        let leaf = LeafQueryData::<MockTypes>::genesis::<TestVersions>(
+        let leaf = LeafQueryData::<MockTypes>::genesis(
             &TestValidatedState::default(),
             &TestInstanceState::default(),
+            TEST_VERSIONS.test,
         )
         .await;
         let common = VidCommonQueryData::new(leaf.header().clone(), VidCommon::V0(disperse.common));
@@ -1094,7 +1112,6 @@ pub mod node_tests {
             None,
             Some(common.clone()),
             Some(VidShare::V0(disperse.shares[0].clone())),
-            None,
         ))
         .await
         .unwrap();
@@ -1128,7 +1145,7 @@ pub mod node_tests {
     where
         for<'a> D::ReadOnly<'a>: NodeStorage<MockTypes>,
     {
-        let mut network = MockNetwork::<D, MockVersions>::init().await;
+        let mut network = MockNetwork::<D>::init().await;
         let ds = network.data_source();
 
         network.start().await;
@@ -1205,7 +1222,7 @@ pub mod node_tests {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     pub async fn test_timestamp_window<D: TestableDataSource>() {
-        let mut network = MockNetwork::<D, MockVersions>::init().await;
+        let mut network = MockNetwork::<D>::init().await;
         let ds = network.data_source();
 
         network.start().await;
@@ -1388,6 +1405,97 @@ pub mod node_tests {
         assert_eq!(res.window, blocks[2..].to_vec());
         assert_eq!(res.next, Some(test_blocks[2][0].clone()));
     }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    pub async fn test_latest_qc_chain<D: TestableDataSource>()
+    where
+        for<'a> D::ReadOnly<'a>: NodeStorage<MockTypes>,
+        for<'a> D::Transaction<'a>: UpdateAvailabilityStorage<MockTypes>,
+    {
+        let storage = D::create(0).await;
+        let ds = D::connect(&storage).await;
+
+        {
+            let mut tx = ds.read().await.unwrap();
+            assert_eq!(tx.latest_qc_chain().await.unwrap(), None);
+        }
+
+        async fn leaf_with_qc_chain(
+            number: u64,
+        ) -> (LeafQueryData<MockTypes>, [CertificatePair<MockTypes>; 2]) {
+            let mut leaf = Leaf2::<MockTypes>::genesis(
+                &Default::default(),
+                &Default::default(),
+                TEST_VERSIONS.test.base,
+            )
+            .await;
+            leaf.block_header_mut().block_number = number;
+
+            let mut qc1 = QuorumCertificate2::<MockTypes>::genesis(
+                &Default::default(),
+                &Default::default(),
+                TEST_VERSIONS.test,
+            )
+            .await;
+            qc1.view_number = ViewNumber::new(1);
+            qc1.data.leaf_commit = Committable::commit(&leaf);
+
+            let mut qc2 = qc1.clone();
+            qc2.view_number += 1;
+
+            let leaf = LeafQueryData::new(leaf, qc1.clone()).unwrap();
+            (
+                leaf,
+                [
+                    CertificatePair::non_epoch_change(qc1),
+                    CertificatePair::non_epoch_change(qc2),
+                ],
+            )
+        }
+
+        // Insert a leaf with QC chain.
+        {
+            let (leaf, qcs) = leaf_with_qc_chain(2).await;
+            let mut tx = ds.write().await.unwrap();
+            tx.insert_leaf_with_qc_chain(leaf, Some(qcs.clone()))
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+
+            assert_eq!(
+                ds.read().await.unwrap().latest_qc_chain().await.unwrap(),
+                Some(qcs)
+            );
+        }
+
+        // Insert a later leaf without a QC chain. This should clear the previously saved QC chain,
+        // which is no longer up to date.
+        {
+            let (leaf, _) = leaf_with_qc_chain(3).await;
+            let mut tx = ds.write().await.unwrap();
+            tx.insert_leaf_with_qc_chain(leaf, None).await.unwrap();
+            tx.commit().await.unwrap();
+
+            assert_eq!(
+                ds.read().await.unwrap().latest_qc_chain().await.unwrap(),
+                None
+            );
+        }
+
+        // Insert an earlier leaf with a QC chain. This should not be saved since it is not the
+        // latest leaf.
+        {
+            let (leaf, qcs) = leaf_with_qc_chain(1).await;
+            let mut tx = ds.write().await.unwrap();
+            tx.insert_leaf_with_qc_chain(leaf, Some(qcs)).await.unwrap();
+            tx.commit().await.unwrap();
+
+            assert_eq!(
+                ds.read().await.unwrap().latest_qc_chain().await.unwrap(),
+                None
+            );
+        }
+    }
 }
 
 /// Generic tests we can instantiate for all the status data sources.
@@ -1400,14 +1508,14 @@ pub mod status_tests {
         status::StatusDataSource,
         testing::{
             consensus::{DataSourceLifeCycle, MockNetwork},
-            mocks::{mock_transaction, MockVersions},
+            mocks::mock_transaction,
             sleep,
         },
     };
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     pub async fn test_metrics<D: DataSourceLifeCycle + StatusDataSource>() {
-        let mut network = MockNetwork::<D, MockVersions>::init().await;
+        let mut network = MockNetwork::<D>::init().await;
         let ds = network.data_source();
 
         {

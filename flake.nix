@@ -14,34 +14,42 @@
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
-  # See https://github.com/EspressoSystems/espresso-network/issues/3240
-  inputs.nixpkgs-legacy-process-compose.url = "github:NixOS/nixpkgs/3730d8a308f94996a9ba7c7138ede69c1b9ac4ae";
-
-  inputs.foundry-nix.url = "github:shazow/foundry.nix/monthly"; # Use monthly branch for permanent releases
+  # Use ...foundry.nix/stable for latest stable release
+  # On 1.4 foundry's formatting is a bit strange, so we pin 1.3.6 for now
+  inputs.foundry-nix.url = "github:shazow/foundry.nix/e632b06dc759e381ef04f15ff9541f889eda6013";
+  inputs.foundry-nix.inputs.nixpkgs.follows = "nixpkgs";
 
   inputs.rust-overlay.url = "github:oxalica/rust-overlay";
+  inputs.rust-overlay.inputs.nixpkgs.follows = "nixpkgs";
 
-  inputs.nixpkgs-cross-overlay.url =
-    "github:alekseysidorov/nixpkgs-cross-overlay";
+  inputs.nixpkgs-cross-overlay.url = "github:alekseysidorov/nixpkgs-cross-overlay";
+  inputs.nixpkgs-cross-overlay.inputs.nixpkgs.follows = "nixpkgs";
 
   inputs.flake-utils.url = "github:numtide/flake-utils";
 
   inputs.solc-bin.url = "github:EspressoSystems/nix-solc-bin";
+  inputs.solc-bin.inputs.nixpkgs.follows = "nixpkgs";
+
   inputs.flake-compat.url = "github:edolstra/flake-compat";
   inputs.flake-compat.flake = false;
 
-  inputs.pre-commit-hooks.url = "github:cachix/pre-commit-hooks.nix";
+  inputs.git-hooks.url = "github:cachix/git-hooks.nix";
+  inputs.git-hooks.inputs.nixpkgs.follows = "nixpkgs";
+
+  # Pinned echidna version - current nixpkgs version fails to build
+  # See https://hydra.nixos.org/job/nixos/trunk-combined/nixpkgs.echidna.x86_64-linux for build status
+  inputs.echidna-nixpkgs.url = "github:NixOS/nixpkgs/08dacfca559e1d7da38f3cf05f1f45ee9bfd213c";
 
   outputs =
     { self
     , nixpkgs
-    , nixpkgs-legacy-process-compose
     , foundry-nix
     , rust-overlay
     , nixpkgs-cross-overlay
     , flake-utils
-    , pre-commit-hooks
+    , git-hooks
     , solc-bin
+    , echidna-nixpkgs
     , ...
     }:
     flake-utils.lib.eachDefaultSystem (system:
@@ -62,42 +70,15 @@
         export PATH="$CARGO_TARGET_DIR/debug:$PATH"
       '';
 
-      solhintPkg = { buildNpmPackage, fetchFromGitHub }:
-        buildNpmPackage rec {
-          pname = "solhint";
-          version = "5.05"; # TODO: normally semver, tag screwed up
-          src = fetchFromGitHub {
-            owner = "protofire";
-            repo = pname;
-            rev = "refs/tags/v${version}";
-            hash = "sha256-F8x3a9OKOQuhMRq6CHh5cVlOS72h+YGHTxnKKAh6c9A=";
-          };
-          npmDepsHash = "sha256-FKoh5D6sjZwhu1Kp+pedb8q6Bv0YYFBimdulugZ2RT0=";
-          dontNpmBuild = true;
-        };
-
       overlays = [
         (import rust-overlay)
         foundry-nix.overlay
         solc-bin.overlays.default
         (final: prev: {
-          solhint =
-            solhintPkg { inherit (prev) buildNpmPackage fetchFromGitHub; };
+          solhint = prev.callPackage ./nix/solhint { };
         })
+
         (final: prev: {
-          process-compose =
-            (import nixpkgs-legacy-process-compose { inherit system; }).process-compose;
-        })
-
-        # The mold linker is around 50% faster on Linux than the default linker.
-        # This overlays a mkShell that is configured to use mold on Linux.
-        (final: prev: prev.lib.optionalAttrs prev.stdenv.isLinux {
-          mkShell = prev.mkShell.override {
-            stdenv = prev.stdenvAdapters.useMoldLinker prev.clangStdenv;
-          };
-        })
-
-        (final: prev: rec {
           golangci-lint = prev.golangci-lint.overrideAttrs (old: rec {
             version = "1.64.8";
             src = prev.fetchFromGitHub {
@@ -109,8 +90,19 @@
             vendorHash = "sha256-/iq7Ju7c2gS7gZn3n+y0kLtPn2Nn8HY/YdqSDYjtEkI=";
           });
         })
+
+        (final: prev: {
+          prek-as-pre-commit = final.runCommand "prek-as-pre-commit" { } ''
+            mkdir -p $out/bin
+            ln -s ${final.prek}/bin/prek $out/bin/pre-commit
+          '';
+        })
       ];
       pkgs = import nixpkgs { inherit system overlays; };
+      myShell = pkgs.mkShellNoCC.override (pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
+        # The mold linker is around 50% faster on Linux than the default linker.
+        stdenv = pkgs.stdenvAdapters.useMoldLinker pkgs.clangStdenv;
+      });
       crossShell = { config }:
         let
           localSystem = system;
@@ -131,8 +123,14 @@
     in
     with pkgs; {
       checks = {
-        pre-commit-check = pre-commit-hooks.lib.${system}.run {
+        pre-commit-check = git-hooks.lib.${system}.run {
           src = ./.;
+          # Use the rust pre-commit implementation `prek`
+          imports = [
+            ({ lib, ... }: {
+              config.package = lib.mkForce prek;
+            })
+          ];
           hooks = {
             doc = {
               enable = true;
@@ -172,7 +170,7 @@
             solhint = {
               enable = true;
               description = "Solidity linter";
-              entry = "solhint --fix --noPrompt 'contracts/{script,src,test}/**/*.sol'";
+              entry = "solhint 'contracts/{script,src,test}/**/*.sol'";
               types_or = [ "solidity" ];
               pass_filenames = true;
             };
@@ -209,9 +207,10 @@
             extensions = [ "rust-analyzer" "rustfmt" ];
           });
           solc = pkgs.solc-bin."0.8.28";
+          pre-commit = self.checks.${system}.pre-commit-check;
         in
-        mkShell (rustEnvVars // {
-          buildInputs = [
+        myShell (rustEnvVars // {
+          packages = [
             # Rust dependencies
             pkg-config
             openssl
@@ -233,6 +232,8 @@
 
             # Tools
             nixpkgs-fmt
+            prek
+            prek-as-pre-commit # compat to allow running pre-commit
             entr
             process-compose
             lazydocker # a docker compose TUI
@@ -253,16 +254,19 @@
             (python3.withPackages (ps: with ps; [ black ]))
             libusb1
             yarn
+            mdbook
+            bc
 
             go
             golangci-lint
             # provides abigen
             go-ethereum
-          ] ++ lib.optionals stdenv.isDarwin
-            [ darwin.apple_sdk.frameworks.SystemConfiguration ]
+          ] ++ lib.optionals stdenv.isDarwin [ darwin.libresolv ]
           ++ lib.optionals (!stdenv.isDarwin) [ cargo-watch ] # broken on OSX
-          ;
-          shellHook = rustShellHook + ''
+          ++ pre-commit.enabledPackages;
+          shellHook = ''
+            ${rustShellHook}
+
             # Add the local scripts to the PATH
             export PATH="$my_pwd/scripts:$PATH"
 
@@ -272,10 +276,24 @@
             # Prevent cargo aliases from using programs in `~/.cargo` to avoid conflicts
             # with rustup installations.
             export CARGO_HOME=$HOME/.cargo-nix
-          '' + self.checks.${system}.pre-commit-check.shellHook;
+
+            ${pre-commit.shellHook}
+          '';
           RUST_SRC_PATH = "${stableToolchain}/lib/rustlib/src/rust/library";
           FOUNDRY_SOLC = "${solc}/bin/solc";
         });
+        devShells.dockerShell = pkgs.mkShell {
+          inputsFrom = [ self.devShells.${system}.default ];
+          packages = [ pkgs.docker ];
+          shellHook = lib.concatStringsSep "\n" [ 
+            self.devShells.${system}.default
+
+            ''
+            # Required for demo-native to run with docker-rootless
+            export DOCKER_HOST=unix://$XDG_RUNTIME_DIR/docker.sock
+            ''
+          ];
+        };
       devShells.crossShell =
         crossShell { config = "x86_64-unknown-linux-musl"; };
       devShells.armCrossShell =
@@ -286,8 +304,8 @@
             extensions = [ "rustfmt" "clippy" "llvm-tools-preview" "rust-src" ];
           };
         in
-        mkShell (rustEnvVars // {
-          buildInputs = [
+        myShell (rustEnvVars // {
+          packages = [
             # Rust dependencies
             pkg-config
             openssl
@@ -301,8 +319,8 @@
         let
           toolchain = pkgs.rust-bin.nightly.latest.minimal;
         in
-        mkShell (rustEnvVars // {
-          buildInputs = [
+        myShell (rustEnvVars // {
+          packages = [
             # Rust dependencies
             pkg-config
             openssl
@@ -312,7 +330,8 @@
             grcov
           ];
           CARGO_INCREMENTAL = "0";
-          shellHook = rustShellHook + ''
+          shellHook = ''
+            ${rustShellHook}
             RUSTFLAGS="$RUSTFLAGS -Zprofile -Ccodegen-units=1 -Cinline-threshold=0 -Clink-dead-code -Coverflow-checks=off -Cpanic=abort -Zpanic_abort_tests -Cdebuginfo=2"
           '';
           RUSTDOCFLAGS = "-Zprofile -Ccodegen-units=1 -Cinline-threshold=0 -Clink-dead-code -Coverflow-checks=off -Cpanic=abort -Zpanic_abort_tests";
@@ -324,8 +343,8 @@
             extensions = [ "rustfmt" "clippy" "llvm-tools-preview" "rust-src" ];
           };
         in
-        mkShell (rustEnvVars // {
-          buildInputs = [
+        myShell (rustEnvVars // {
+          packages = [
             # Rust dependencies
             pkg-config
             openssl
@@ -340,17 +359,18 @@
       devShells.echidna =
         let
           solc = pkgs.solc-bin."0.8.28";
+          echidna-pkgs = import echidna-nixpkgs { inherit system; };
         in
-        mkShell {
-          buildInputs = [
+        myShell {
+          packages = [
             # Foundry tools
             foundry-bin
             solc
 
             # Security analysis tools
-            slither-analyzer
-            echidna
-            python3.pkgs.crytic-compile
+            echidna-pkgs.slither-analyzer
+            echidna-pkgs.echidna
+            echidna-pkgs.python3.pkgs.crytic-compile
           ];
           FOUNDRY_SOLC = "${solc}/bin/solc";
         };

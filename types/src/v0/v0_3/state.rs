@@ -1,6 +1,6 @@
 use alloy::primitives::{Address, U256};
 use derive_more::{derive::AddAssign, Add, Display, From, Into, Mul, Sub};
-use jf_merkle_tree::{
+use jf_merkle_tree_compat::{
     prelude::{Sha3Digest, Sha3Node},
     universal_merkle_tree::UniversalMerkleTree,
     MerkleTreeScheme, UniversalMerkleTreeScheme,
@@ -8,7 +8,7 @@ use jf_merkle_tree::{
 use serde::{Deserialize, Serialize};
 
 pub const REWARD_MERKLE_TREE_V1_HEIGHT: usize = 20;
-const REWARD_MERKLE_TREE_V1_ARITY: usize = 256;
+pub const REWARD_MERKLE_TREE_V1_ARITY: usize = 256;
 
 pub type RewardMerkleTreeV1 = UniversalMerkleTree<
     RewardAmount,

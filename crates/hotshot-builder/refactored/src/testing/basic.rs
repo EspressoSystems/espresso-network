@@ -12,13 +12,13 @@ use hotshot_builder_shared::{
 };
 use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
-    node_types::{TestTypes, TestVersions},
+    node_types::{TestTypes, TEST_VERSIONS},
     state_types::{TestInstanceState, TestValidatedState},
 };
 use hotshot_types::{
     data::{Leaf2, QuorumProposal2, QuorumProposalWrapper, VidCommitment, ViewNumber},
     event::LeafInfo,
-    simple_certificate::QuorumCertificate2,
+    simple_certificate::{CertificatePair, QuorumCertificate2},
     traits::{
         block_contents::BlockHeader,
         node_implementation::{ConsensusTime, NodeType},
@@ -194,15 +194,17 @@ async fn test_pruning() {
     // everything else is boilerplate.
 
     let mock_qc =
-        QuorumCertificate2::genesis::<TestVersions>(&Default::default(), &Default::default()).await;
+        QuorumCertificate2::genesis(&Default::default(), &Default::default(), TEST_VERSIONS.test)
+            .await;
     let leaf = Leaf2::from_quorum_proposal(&QuorumProposalWrapper {
         proposal: QuorumProposal2 {
-            block_header: <TestBlockHeader as BlockHeader<TestTypes>>::genesis::<TestVersions>(
+            block_header: <TestBlockHeader as BlockHeader<TestTypes>>::genesis(
                 &Default::default(),
                 TestBlockPayload::genesis(),
                 &TestMetadata {
                     num_transactions: 0,
                 },
+                TEST_VERSIONS.test.base,
             ),
             view_number: ViewNumber::new(DECIDE_VIEW),
             justify_qc: mock_qc.clone(),
@@ -225,7 +227,8 @@ async fn test_pruning() {
                     vid_share: None,
                     state_cert: None,
                 }]),
-                qc: Arc::new(mock_qc),
+                committing_qc: Arc::new(CertificatePair::non_epoch_change(mock_qc.clone())),
+                deciding_qc: None,
                 block_size: None,
             },
         })

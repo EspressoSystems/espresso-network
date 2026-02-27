@@ -2,7 +2,7 @@
 
 [![Build](https://github.com/EspressoSystems/espresso-network/actions/workflows/build.yml/badge.svg)](https://github.com/EspressoSystems/espresso-network/actions/workflows/build.yml)
 [![Test](https://github.com/EspressoSystems/espresso-network/actions/workflows/test.yml/badge.svg)](https://github.com/EspressoSystems/espresso-network/actions/workflows/test.yml)
-[![Docs rust](https://github.com/EspressoSystems/espresso-network/actions/workflows/doc-rust.yml/badge.svg)](https://github.com/EspressoSystems/espresso-network/actions/workflows/doc-rust.yml)
+[![Docs](https://github.com/EspressoSystems/espresso-network/actions/workflows/docs.yml/badge.svg)](https://github.com/EspressoSystems/espresso-network/actions/workflows/docs.yml)
 [![Contracts](https://github.com/EspressoSystems/espresso-network/actions/workflows/contracts.yml/badge.svg)](https://github.com/EspressoSystems/espresso-network/actions/workflows/contracts.yml)
 [![Lint](https://github.com/EspressoSystems/espresso-network/actions/workflows/lint.yml/badge.svg)](https://github.com/EspressoSystems/espresso-network/actions/workflows/lint.yml)
 [![Audit](https://github.com/EspressoSystems/espresso-network/actions/workflows/audit.yml/badge.svg)](https://github.com/EspressoSystems/espresso-network/actions/workflows/audit.yml)
@@ -15,7 +15,9 @@ The Espresso Network is the global confirmation layer for rollups in the Ethereu
 composable blockchains, providing a high trust, fast, and verifiable way to process inputs on any chain, providing fast
 confirmations in return.
 
-[Official Documentation](https://docs.espressosys.com/network/)
+- [Official Documentation](https://docs.espressosys.com/network/)
+- [Rust Documentation](https://sequencer.docs.espressosys.com/sequencer/)
+- [Smart Contract Documentation](https://sequencer.docs.espressosys.com/contracts/)
 
 ### Architecture
 
@@ -38,7 +40,8 @@ a dockerized Espresso Sequencer network with an example Layer 2 rollup applicati
 
 - Obtain code: `git clone git@github.com:EspressoSystems/espresso-network`.
 - Make sure [nix](https://nixos.org/download.html) is installed.
-- Activate the environment with `nix-shell`, or `nix develop`, or `direnv allow` if using [direnv](https://direnv.net/).
+- Activate the environment with `nix-shell`, or `nix develop`. If using [direnv](https://direnv.net/), copy
+  `.envrc.example` to `.envrc.local` (or create your own `.envrc.local` file) and run `direnv allow`.
 - For installation without nix please see [ubuntu.md](./doc/ubuntu.md).
 
 ## Documentation
@@ -48,16 +51,22 @@ Please note the disclaimer about API stability at the end of the readme.
 
 To generate the documentation locally and view it in the browser, run
 
-    just doc --open
+```sh
+just doc --open
+```
 
 ## Run the tests
 
-    just pull # to pull docker images
-    just test
+```sh
+just pull # to pull docker images
+just test
+```
 
 ## Building figures
 
-    make doc
+```sh
+make doc
+```
 
 ## Building and running
 
@@ -138,15 +147,21 @@ forge doc
 
 To deploy the contracts to a local testnet, first run a dev chain (e.g. `anvil`), then run
 
-    forge script DeployHotShot --broadcast --rpc-url local
+```sh
+forge script DeployHotShot --broadcast --rpc-url local
+```
 
 To deploy to sepolia set `SEPOLIA_RPC_URL` and `MNEMONIC` env vars and run
 
-    forge script DeployHotShot --broadcast --rpc-url sepolia
+```sh
+forge script DeployHotShot --broadcast --rpc-url sepolia
+```
 
 To additionally verify the contract on etherscan set the `ETHERSCAN_API_KEY` env var and run
 
-    forge script DeployHotShot --broadcast --rpc-url sepolia --verify
+```sh
+forge script DeployHotShot --broadcast --rpc-url sepolia --verify
+```
 
 Running the script will save a file with details about the deployment in `contracts/broadcast/$CHAIN_ID`.
 
@@ -236,11 +251,11 @@ docker run --env-file .env.docker -e RUST_LOG=debug ...
 The gas consumption for verifying a plonk proof as well as updating the state of the light client contract can be seen
 by running:
 
-```
-> just gas-benchmarks
-> cat gas-benchmarks.txt
-[PASS] test_verify_succeeds() (gas: 507774)
-[PASS] testCorrectUpdateBench() (gas: 594533)
+```sh
+just gas-benchmarks
+cat gas-benchmarks.txt
+# [PASS] test_verify_succeeds() (gas: 507774)
+# [PASS] testCorrectUpdateBench() (gas: 594533)
 ```
 
 In order to profile the gas consumption of the light client contract do the following:

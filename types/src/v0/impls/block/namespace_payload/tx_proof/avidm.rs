@@ -1,5 +1,7 @@
-use hotshot_query_service::VidCommon;
-use hotshot_types::{data::VidCommitment, vid::avidm::AvidMCommon};
+use hotshot_types::{
+    data::{VidCommitment, VidCommon},
+    vid::avidm::AvidMCommon,
+};
 
 use crate::{
     v0_3::{AvidMNsProof, AvidMTxProof},
@@ -74,16 +76,18 @@ impl AvidMTxProof {
         tx: &Transaction,
         commit: &VidCommitment,
         common: &VidCommon,
-    ) -> Option<bool> {
+    ) -> bool {
         let VidCommon::V1(common) = common else {
             tracing::info!("VID version mismatch");
-            return None;
+            return false;
         };
 
-        let (txs, _) = self.ns_proof.verify(ns_table, commit, common)?;
+        let Some((txs, _)) = self.ns_proof.verify(ns_table, commit, common) else {
+            return false;
+        };
         if self.tx_index.0 > txs.len() {
-            return Some(false);
+            return false;
         }
-        Some(&txs[self.tx_index.0] == tx)
+        &txs[self.tx_index.0] == tx
     }
 }

@@ -18,3 +18,4 @@
 
 pub mod advz;
 pub mod avidm;
+pub mod avidm_gf2;

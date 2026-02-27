@@ -17,12 +17,13 @@ use hotshot_types::{
     message::Proposal,
     request_response::ProposalRequestPayload,
     simple_certificate::{
-        DaCertificate2, EpochRootQuorumCertificate, NextEpochQuorumCertificate2, QuorumCertificate,
-        QuorumCertificate2, TimeoutCertificate, TimeoutCertificate2, UpgradeCertificate,
-        ViewSyncCommitCertificate2, ViewSyncFinalizeCertificate2, ViewSyncPreCommitCertificate2,
+        DaCertificate2, EpochRootQuorumCertificateV2, NextEpochQuorumCertificate2,
+        QuorumCertificate, QuorumCertificate2, TimeoutCertificate, TimeoutCertificate2,
+        UpgradeCertificate, ViewSyncCommitCertificate2, ViewSyncFinalizeCertificate2,
+        ViewSyncPreCommitCertificate2,
     },
     simple_vote::{
-        DaVote2, EpochRootQuorumVote, QuorumVote2, TimeoutVote2, UpgradeVote, ViewSyncCommitVote2,
+        DaVote2, EpochRootQuorumVote2, QuorumVote2, TimeoutVote2, UpgradeVote, ViewSyncCommitVote2,
         ViewSyncFinalizeVote2, ViewSyncPreCommitVote2,
     },
     traits::{
@@ -79,7 +80,7 @@ pub enum HotShotEvent<TYPES: NodeType> {
     QuorumVoteRecv(QuorumVote2<TYPES>),
     /// A quorum vote for the epoch root has been received from the network; handled by the consensus task
     /// An additional light client state update vote is bundled with the quorum vote
-    EpochRootQuorumVoteRecv(EpochRootQuorumVote<TYPES>),
+    EpochRootQuorumVoteRecv(EpochRootQuorumVote2<TYPES>),
     /// A timeout vote received from the network; handled by consensus task
     TimeoutVoteRecv(TimeoutVote2<TYPES>),
     /// Send a timeout vote to the network; emitted by consensus task replicas
@@ -104,7 +105,7 @@ pub enum HotShotEvent<TYPES: NodeType> {
     /// Broadcast a quorum vote to form an eQC; emitted by a replica in the consensus task after seeing a valid quorum proposal
     ExtendedQuorumVoteSend(QuorumVote2<TYPES>),
     /// Send a epoch root quorum vote to the next leader; emitted by a replica in the consensus task after seeing a valid quorum proposal
-    EpochRootQuorumVoteSend(EpochRootQuorumVote<TYPES>),
+    EpochRootQuorumVoteSend(EpochRootQuorumVote2<TYPES>),
     /// A quorum proposal with the given parent leaf is validated.
     /// The full validation checks include:
     /// 1. The proposal is not for an old view
@@ -138,7 +139,7 @@ pub enum HotShotEvent<TYPES: NodeType> {
     /// The next leader has collected enough votes to form a QC; emitted by the next leader in the consensus task; an internal event only
     Qc2Formed(Either<QuorumCertificate2<TYPES>, TimeoutCertificate2<TYPES>>),
     /// The next leader has collected enough votes to form an epoch root QC; emitted by the next leader in the consensus task; an internal event only
-    EpochRootQcFormed(EpochRootQuorumCertificate<TYPES>),
+    EpochRootQcFormed(EpochRootQuorumCertificateV2<TYPES>),
     /// The next leader has collected enough votes from the next epoch nodes to form a QC; emitted by the next leader in the consensus task; an internal event only
     NextEpochQc2Formed(Either<NextEpochQuorumCertificate2<TYPES>, TimeoutCertificate<TYPES>>),
     /// A validator formed both a current epoch eQC and a next epoch eQC
@@ -289,12 +290,12 @@ pub enum HotShotEvent<TYPES: NodeType> {
 
     /// A replica sends us an epoch root QC
     EpochRootQcSend(
-        EpochRootQuorumCertificate<TYPES>,
+        EpochRootQuorumCertificateV2<TYPES>,
         TYPES::SignatureKey,
         TYPES::SignatureKey,
     ),
     /// A replica receives an epoch root QC
-    EpochRootQcRecv(EpochRootQuorumCertificate<TYPES>, TYPES::SignatureKey),
+    EpochRootQcRecv(EpochRootQuorumCertificateV2<TYPES>, TYPES::SignatureKey),
     /// We decided the given leaves
     LeavesDecided(Vec<Leaf2<TYPES>>),
 }

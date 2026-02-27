@@ -10,6 +10,7 @@ testing = ["espresso-types/testing", "hotshot-query-service/testing"]
 
 [dependencies]
 alloy = { workspace = true }
+anyhow = { workspace = true }
 async-lock = { workspace = true }
 async-trait = { workspace = true }
 bincode = { workspace = true }
@@ -29,7 +30,7 @@ tokio = { workspace = true }
 # Dependencies for feature `testing`
 hotshot-types = { workspace = true }
 prometheus-parse = { version = "^0.2.5" }
-reqwest = { workspace = true }
+reqwest = { workspace = true, features = ["rustls-tls"] }
 surf-disco = { workspace = true }
 tide-disco = { workspace = true }
 time = { workspace = true }

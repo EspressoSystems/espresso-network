@@ -1,11 +1,11 @@
 use std::fmt;
 
-use alloy::hex;
+use alloy::{hex, primitives::B256};
 use anyhow::Result;
 use ark_serialize::{
     CanonicalDeserialize, CanonicalSerialize, Compress, Read, SerializationError, Valid, Validate,
 };
-use jf_merkle_tree::DigestAlgorithm;
+use jf_merkle_tree_compat::DigestAlgorithm;
 use sha3::{Digest as _, Keccak256};
 
 use crate::{v0_3::RewardAmount, v0_4::RewardAccountV2};
@@ -19,6 +19,12 @@ impl fmt::Debug for KeccakNode {
         f.debug_tuple("KeccakNode")
             .field(&hex::encode(self.0))
             .finish()
+    }
+}
+
+impl From<KeccakNode> for B256 {
+    fn from(val: KeccakNode) -> Self {
+        val.0.into()
     }
 }
 
@@ -66,7 +72,7 @@ impl Valid for KeccakNode {
 pub struct Keccak256Hasher;
 
 impl DigestAlgorithm<RewardAmount, RewardAccountV2, KeccakNode> for Keccak256Hasher {
-    fn digest(data: &[KeccakNode]) -> Result<KeccakNode, jf_merkle_tree::MerkleTreeError> {
+    fn digest(data: &[KeccakNode]) -> Result<KeccakNode, jf_merkle_tree_compat::MerkleTreeError> {
         let mut hasher = Keccak256::new();
 
         // Hash the concatenated node data directly (no domain separator)
@@ -81,7 +87,7 @@ impl DigestAlgorithm<RewardAmount, RewardAccountV2, KeccakNode> for Keccak256Has
     fn digest_leaf(
         _pos: &RewardAccountV2,
         elem: &RewardAmount,
-    ) -> Result<KeccakNode, jf_merkle_tree::MerkleTreeError> {
+    ) -> Result<KeccakNode, jf_merkle_tree_compat::MerkleTreeError> {
         // First hash of the value
         let mut hasher = Keccak256::new();
         hasher.update(elem.0.to_be_bytes::<32>()); // 32-byte value as big-endian

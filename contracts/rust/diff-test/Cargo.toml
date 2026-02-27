@@ -18,9 +18,11 @@ ark-ff = { workspace = true }
 ark-poly = { workspace = true }
 ark-std = { workspace = true }
 clap = { version = "^4.4", features = ["derive"] }
+espresso-types = { path = "../../../types" }
 hotshot-contract-adapter = { workspace = true }
 hotshot-state-prover = { workspace = true }
 hotshot-types = { workspace = true }
+jf-merkle-tree-compat = { workspace = true }
 jf-pcs = { workspace = true }
 jf-plonk = { workspace = true }
 jf-signature = { workspace = true }

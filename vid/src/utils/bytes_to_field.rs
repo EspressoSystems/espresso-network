@@ -16,7 +16,7 @@ use ark_ff::{BigInteger, PrimeField};
 ///
 /// [doctest ignored because it's a private module.]
 /// ```ignore
-/// # use jf_vid::advz::{bytes_to_field};
+/// # use jf_advz::advz::{bytes_to_field};
 /// # use ark_ed_on_bn254::Fr as Fr254;
 /// let bytes = [1, 2, 3];
 /// let mut elems_iter = bytes_to_field::<_, Fr254>(bytes);
@@ -50,7 +50,7 @@ where
 ///
 /// [doctest ignored because it's a private module.]
 /// ```ignore
-/// # use jf_vid::advz::{bytes_to_field, field_to_bytes};
+/// # use jf_advz::advz::{bytes_to_field, field_to_bytes};
 /// # use ark_ed_on_bn254::Fr as Fr254;
 /// let bytes = [1, 2, 3];
 /// let mut bytes_iter = field_to_bytes(bytes_to_field::<_, Fr254>(bytes));

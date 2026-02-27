@@ -2,36 +2,84 @@ use alloy::{
     eips::BlockId,
     network::EthereumWallet,
     primitives::{utils::parse_ether, Address, U256},
-    signers::local::{coins_bip39::English, MnemonicBuilder},
+    signers::local::{coins_bip39::English, MnemonicBuilder, PrivateKeySigner},
 };
 use anyhow::{bail, Result};
-use clap::{Parser, Subcommand};
+use clap::{ArgAction, Parser, Subcommand};
 use clap_serde_derive::ClapSerde;
-use demo::DelegationConfig;
 use espresso_contract_deployer::provider::connect_ledger;
-pub(crate) use hotshot_types::{light_client::StateSignKey, signature_key::BLSPrivKey};
+pub(crate) use hotshot_types::{
+    light_client::StateSignKey,
+    signature_key::{BLSPrivKey, BLSPubKey},
+};
 pub(crate) use jf_signature::bls_over_bn254::KeyPair as BLSKeyPair;
-use parse::Commission;
+use metadata::MetadataUriArgs;
 use sequencer_utils::logging;
 use serde::{Deserialize, Serialize};
+use signature::OutputArgs;
 use url::Url;
 
-pub mod claim;
-pub mod delegation;
+pub(crate) mod claim;
+mod cli;
+pub(crate) mod concurrent;
+pub(crate) mod delegation;
+/// Used by sequencer, espresso-dev-node, staking-ui-service tests.
 pub mod demo;
-pub mod info;
-pub mod l1;
-pub mod parse;
-pub mod registration;
+pub(crate) mod info;
+pub(crate) mod l1;
+pub(crate) mod metadata;
+// TODO: Replace with imports from staking-ui-service once version compatibility is resolved
+pub(crate) mod metadata_types;
+// TODO: Replace with imports from staking-ui-service once version compatibility is resolved
+pub(crate) mod openmetrics;
+pub(crate) mod output;
+pub(crate) mod parse;
+pub(crate) mod receipt;
+pub(crate) mod registration;
+pub(crate) mod signature;
+pub(crate) mod transaction;
+pub(crate) mod tx_log;
 
+/// Used by staking-cli integration tests.
+#[cfg(feature = "testing")]
 pub mod deploy;
 
-pub const DEV_MNEMONIC: &str = "test test test test test test test test test test test junk";
+pub use cli::run;
+// Used by staking-cli integration tests.
+pub use metadata::fetch_metadata;
+// Used by staking-cli integration tests.
+pub use parse::Commission;
+// Used by sequencer tests.
+pub use registration::{fetch_commission, update_commission};
+// Used by staking-cli integration tests.
+pub use signature::NodeSignatures;
+// Used by staking-cli integration tests.
+pub use transaction::Transaction;
+// Used by staking-cli integration tests.
+pub use tx_log::TxLog;
 
-/// CLI to interact with the Espresso stake table contract
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub(crate) enum Network {
+    Mainnet,
+    Decaf,
+    Local,
+}
+
+/// Used by staking-ui-service, sequencer tests, staking-cli integration tests.
+pub const DEV_MNEMONIC: &str = "test test test test test test test test test test test junk";
+/// Private key for account index 0 derived from DEV_MNEMONIC.
+///
+/// Used by staking-cli integration tests.
+pub const DEV_PRIVATE_KEY: &str =
+    "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+
+/// Mnemonic account index where demo validators start (indices 0-19 reserved for other uses).
+pub const DEMO_VALIDATOR_START_INDEX: u32 = 20;
+
+/// CLI to interact with the Espresso stake table contract.
 #[derive(ClapSerde, Clone, Debug, Deserialize, Serialize)]
 #[command(version, about, long_about = None)]
-pub struct Config {
+pub(crate) struct Config {
     /// L1 Ethereum RPC.
     #[clap(long, env = "L1_PROVIDER")]
     #[default(Url::parse("http://localhost:8545").unwrap())]
@@ -47,8 +95,37 @@ pub struct Config {
     #[clap(long, env = "STAKE_TABLE_ADDRESS")]
     pub stake_table_address: Address,
 
+    /// Espresso sequencer API URL for reward claims.
+    #[clap(long, env = "ESPRESSO_URL")]
+    pub espresso_url: Option<Url>,
+
     #[clap(flatten)]
+    #[serde(default)]
     pub signer: SignerConfig,
+
+    /// Export calldata for multisig wallets instead of sending transaction.
+    #[clap(
+        long,
+        env = "EXPORT_CALLDATA",
+        action = ArgAction::SetTrue,
+        conflicts_with_all = ["mnemonic", "private_key", "ledger"]
+    )]
+    #[serde(skip)]
+    pub export_calldata: bool,
+
+    /// Sender address for calldata export (required for simulation).
+    #[clap(long, env = "SENDER_ADDRESS")]
+    #[serde(skip)]
+    pub sender_address: Option<Address>,
+
+    /// Skip eth_call validation when exporting calldata.
+    #[clap(long, env = "SKIP_SIMULATION", action = ArgAction::SetTrue, requires = "export_calldata")]
+    #[serde(skip)]
+    pub skip_simulation: bool,
+
+    #[clap(flatten)]
+    #[serde(skip)]
+    pub output: OutputArgs,
 
     #[clap(flatten)]
     #[serde(skip)]
@@ -60,10 +137,14 @@ pub struct Config {
 }
 
 #[derive(ClapSerde, Parser, Clone, Debug, Deserialize, Serialize)]
-pub struct SignerConfig {
+pub(crate) struct SignerConfig {
     /// The mnemonic to use when deriving the key.
     #[clap(long, env = "MNEMONIC")]
     pub mnemonic: Option<String>,
+
+    /// Raw private key (hex-encoded with or without 0x prefix).
+    #[clap(long, env = "PRIVATE_KEY")]
+    pub private_key: Option<String>,
 
     /// The mnemonic account index to use when deriving the key.
     #[clap(long, env = "ACCOUNT_INDEX")]
@@ -79,10 +160,13 @@ pub struct SignerConfig {
 }
 
 #[derive(Clone, Debug)]
-pub enum ValidSignerConfig {
+pub(crate) enum ValidSignerConfig {
     Mnemonic {
         mnemonic: String,
         account_index: u32,
+    },
+    PrivateKey {
+        private_key: String,
     },
     Ledger {
         account_index: usize,
@@ -96,23 +180,25 @@ impl TryFrom<SignerConfig> for ValidSignerConfig {
         let account_index = config
             .account_index
             .ok_or_else(|| anyhow::anyhow!("Account index must be provided"))?;
-        if let Some(mnemonic) = config.mnemonic {
+        if config.ledger {
+            Ok(ValidSignerConfig::Ledger {
+                account_index: account_index as usize,
+            })
+        } else if let Some(private_key) = config.private_key {
+            Ok(ValidSignerConfig::PrivateKey { private_key })
+        } else if let Some(mnemonic) = config.mnemonic {
             Ok(ValidSignerConfig::Mnemonic {
                 mnemonic,
                 account_index,
             })
-        } else if config.ledger {
-            Ok(ValidSignerConfig::Ledger {
-                account_index: account_index as usize,
-            })
         } else {
-            bail!("Either mnemonic or --ledger flag must be provided")
+            bail!("Either --mnemonic, --private-key, or --ledger flag must be provided")
         }
     }
 }
 
 impl ValidSignerConfig {
-    pub async fn wallet(&self) -> Result<(EthereumWallet, Address)> {
+    pub async fn wallet(&self) -> Result<EthereumWallet> {
         match self {
             ValidSignerConfig::Mnemonic {
                 mnemonic,
@@ -122,15 +208,15 @@ impl ValidSignerConfig {
                     .phrase(mnemonic)
                     .index(*account_index)?
                     .build()?;
-                let account = signer.address();
-                let wallet = EthereumWallet::from(signer);
-                Ok((wallet, account))
+                Ok(EthereumWallet::from(signer))
+            },
+            ValidSignerConfig::PrivateKey { private_key } => {
+                let signer: PrivateKeySigner = private_key.parse()?;
+                Ok(EthereumWallet::from(signer))
             },
             ValidSignerConfig::Ledger { account_index } => {
                 let signer = connect_ledger(*account_index).await?;
-                let account = signer.get_address().await?;
-                let wallet = EthereumWallet::from(signer);
-                Ok((wallet, account))
+                Ok(EthereumWallet::from(signer))
             },
         }
     }
@@ -142,6 +228,18 @@ impl Default for Commands {
             l1_block_number: None,
             compact: false,
         }
+    }
+}
+
+impl Commands {
+    pub(crate) fn needs_token_address(&self) -> bool {
+        matches!(
+            self,
+            Commands::Approve { .. }
+                | Commands::Transfer { .. }
+                | Commands::TokenBalance { .. }
+                | Commands::TokenAllowance { .. }
+        )
     }
 }
 
@@ -163,7 +261,7 @@ impl Config {
 }
 
 #[derive(Subcommand, Debug, Clone)]
-pub enum Commands {
+pub(crate) enum Commands {
     /// Display version information of the staking-cli.
     Version,
     /// Display the current configuration
@@ -171,16 +269,24 @@ pub enum Commands {
     /// Initialize the config file with deployment and wallet info.
     Init {
         /// The mnemonic to use when deriving the key.
-        #[clap(long, env = "MNEMONIC", required_unless_present = "ledger")]
+        #[clap(long, env = "MNEMONIC", required_unless_present_any = ["ledger", "private_key"])]
         mnemonic: Option<String>,
 
-        /// The mnemonic account index to use when deriving the key.
+        /// Raw private key (hex-encoded with or without 0x prefix).
+        #[clap(long, env = "PRIVATE_KEY", required_unless_present_any = ["ledger", "mnemonic"], conflicts_with = "account_index")]
+        private_key: Option<String>,
+
+        /// The account index for key derivation (only used with mnemonic or ledger).
         #[clap(long, env = "ACCOUNT_INDEX", default_value_t = 0)]
         account_index: u32,
 
-        /// The ledger account index to use when deriving the key.
-        #[clap(long, env = "LEDGER_INDEX", required_unless_present = "mnemonic")]
+        /// Use a ledger hardware wallet.
+        #[clap(long, env = "LEDGER_INDEX", required_unless_present_any = ["mnemonic", "private_key"])]
         ledger: bool,
+
+        /// Network to configure (mainnet, decaf, or local).
+        #[clap(long, value_enum, env = "NETWORK")]
+        network: Network,
     },
     /// Remove the config file.
     Purge {
@@ -204,34 +310,40 @@ pub enum Commands {
     Account,
     /// Register to become a validator.
     RegisterValidator {
-        /// The consensus signing key. Used to sign a message to prove ownership of the key.
-        #[clap(long, value_parser = parse::parse_bls_priv_key, env = "CONSENSUS_PRIVATE_KEY")]
-        consensus_private_key: BLSPrivKey,
-
-        /// The state signing key.
-        ///
-        /// TODO: Used to sign a message to prove ownership of the key.
-        #[clap(long, value_parser = parse::parse_state_priv_key, env = "STATE_PRIVATE_KEY")]
-        state_private_key: StateSignKey,
+        #[clap(flatten)]
+        signature_args: signature::NodeSignatureArgs,
 
         /// The commission to charge delegators
         #[clap(long, value_parser = parse::parse_commission, env = "COMMISSION")]
         commission: Commission,
+
+        #[clap(flatten)]
+        metadata_uri_args: MetadataUriArgs,
     },
     /// Update a validators Espresso consensus signing keys.
     UpdateConsensusKeys {
-        /// The consensus signing key. Used to sign a message to prove ownership of the key.
-        #[clap(long, value_parser = parse::parse_bls_priv_key, env = "CONSENSUS_PRIVATE_KEY")]
-        consensus_private_key: BLSPrivKey,
-
-        /// The state signing key.
-        ///
-        /// TODO: Used to sign a message to prove ownership of the key.
-        #[clap(long, value_parser = parse::parse_state_priv_key, env = "STATE_PRIVATE_KEY")]
-        state_private_key: StateSignKey,
+        #[clap(flatten)]
+        signature_args: signature::NodeSignatureArgs,
     },
     /// Deregister a validator.
     DeregisterValidator {},
+    /// Update validator commission rate.
+    UpdateCommission {
+        /// The new commission rate to set
+        #[clap(long, value_parser = parse::parse_commission, env = "NEW_COMMISSION")]
+        new_commission: Commission,
+    },
+    /// Update validator metadata URL.
+    UpdateMetadataUri {
+        #[clap(flatten)]
+        metadata_uri_args: MetadataUriArgs,
+
+        /// The consensus public key for metadata validation.
+        ///
+        /// Required for metadata validation unless --skip-metadata-validation is set.
+        #[clap(long, value_parser = parse::parse_bls_pub_key, env = "CONSENSUS_PUBLIC_KEY")]
+        consensus_public_key: Option<BLSPubKey>,
+    },
     /// Approve stake table contract to move tokens
     Approve {
         #[clap(long, value_parser = parse_ether)]
@@ -263,6 +375,14 @@ pub enum Commands {
         #[clap(long)]
         validator_address: Address,
     },
+    /// Claim staking rewards.
+    ClaimRewards {},
+    /// Check unclaimed staking rewards.
+    UnclaimedRewards {
+        /// The address to check.
+        #[clap(long)]
+        address: Option<Address>,
+    },
     /// Check ESP token balance.
     TokenBalance {
         /// The address to check.
@@ -285,15 +405,50 @@ pub enum Commands {
         #[clap(long, value_parser = parse_ether)]
         amount: U256,
     },
-    /// Register the validators and delegates for the local demo.
+    /// Demo commands for testing and development
+    Demo(demo::Demo),
+    /// [DEPRECATED] Use `demo stake` instead. Register validators and create delegators for demo.
+    #[clap(hide = true)]
     StakeForDemo {
         /// The number of validators to register.
-        ///
-        /// The default (5) works for the local native and docker demos.
         #[clap(long, default_value_t = 5)]
         num_validators: u16,
 
-        #[arg(long, value_enum, default_value_t = DelegationConfig::default())]
-        delegation_config: DelegationConfig,
+        /// The number of delegators to create per validator.
+        #[clap(long, env = "NUM_DELEGATORS_PER_VALIDATOR", value_parser = clap::value_parser!(u64).range(..=100000))]
+        num_delegators_per_validator: Option<u64>,
+
+        #[clap(long, value_enum, env = "DELEGATION_CONFIG", default_value_t = demo::DelegationConfig::default())]
+        delegation_config: demo::DelegationConfig,
+
+        /// Number of concurrent transaction submissions
+        #[clap(long, default_value_t = tx_log::DEFAULT_CONCURRENCY)]
+        concurrency: usize,
+    },
+    /// Export validator node signatures for address validation.
+    ExportNodeSignatures {
+        /// The Ethereum address to sign.
+        #[clap(long)]
+        address: Address,
+
+        /// The BLS private key for signing.
+        #[clap(long, value_parser = parse::parse_bls_priv_key, env = "BLS_PRIVATE_KEY")]
+        consensus_private_key: BLSPrivKey,
+
+        /// The Schnorr private key for signing.
+        #[clap(long, value_parser = parse::parse_state_priv_key, env = "SCHNORR_PRIVATE_KEY")]
+        state_private_key: StateSignKey,
+
+        #[clap(flatten)]
+        output_args: signature::OutputArgs,
+    },
+    /// Preview metadata from a URL without registering.
+    ///
+    /// Fetches and displays validator metadata from a URL. Useful for verifying
+    /// your metadata endpoint before registration.
+    PreviewMetadata {
+        /// URL where validator metadata is hosted (JSON or OpenMetrics format).
+        #[clap(long, env = "METADATA_URI")]
+        metadata_uri: String,
     },
 }

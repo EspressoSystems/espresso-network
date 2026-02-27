@@ -11,7 +11,6 @@ use std::{
 
 use hotshot_types::traits::node_implementation::NodeType;
 use thiserror::Error;
-use tracing::error;
 
 /// convenience type alias for state and block
 pub type StateAndBlock<S, B> = (Vec<S>, Vec<B>);
@@ -100,7 +99,7 @@ impl Default for OverallSafetyPropertiesDescription {
             transaction_threshold: 0,
             expected_view_failures: vec![],
             possible_view_failures: vec![],
-            decide_timeout: Duration::from_secs(4),
+            decide_timeout: Duration::from_secs(60),
         }
     }
 }

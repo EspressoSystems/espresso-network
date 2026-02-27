@@ -1,29 +1,31 @@
 use std::time::Instant;
 
+use alloy::primitives::U256;
 use anyhow::Result;
 use futures::StreamExt;
 
-use crate::common::{NativeDemo, TestConfig, TestRequirements};
+use crate::common::{NativeDemo, TestRequirements, TestRuntime, TestState};
 
 pub async fn assert_native_demo_works(requirements: TestRequirements) -> Result<()> {
-    let start = Instant::now();
     dotenvy::dotenv()?;
 
-    let testing = TestConfig::new(requirements.clone()).await.unwrap();
+    println!("{:#?}", requirements);
 
-    println!("Waiting on readiness");
-    let _ = testing.readiness().await?;
+    let mut runtime = TestRuntime::from_requirements(requirements.clone()).await?;
+    let start = Instant::now();
 
-    let initial = testing.test_state().await;
+    let initial = runtime.test_state().await;
     println!("Initial State: {initial}");
 
-    let mut sub = testing
-        .espresso
+    let client = client::SequencerClient::new(runtime.config.sequencer_api_url.clone());
+    let mut sub = client
         .subscribe_blocks(initial.block_height.unwrap())
         .await?;
 
     let old = initial.clone();
     let mut blocks_without_tx = 0;
+    let mut iteration = 0u64;
+    let mut prev_printed = None;
 
     loop {
         match tokio::time::timeout(requirements.block_timeout, sub.next()).await {
@@ -32,8 +34,19 @@ pub async fn assert_native_demo_works(requirements: TestRequirements) -> Result<
             Err(_) => panic!("No new blocks after {:?}", requirements.block_timeout),
         };
 
-        let new = testing.test_state().await;
-        println!("New State:{new}");
+        let new = runtime.test_state().await;
+        iteration += 1;
+
+        let significant_change = prev_printed.as_ref().is_none_or(|prev: &TestState| {
+            new.light_client_finalized_block_height != prev.light_client_finalized_block_height
+                || new.rewards_claimed != prev.rewards_claimed
+        });
+        let power_of_two = iteration.is_power_of_two();
+
+        if significant_change || power_of_two {
+            println!("State (block {}):{new}", new.block_height.unwrap());
+            prev_printed = Some(new.clone());
+        }
 
         let num_new_tx = new.txn_count - old.txn_count;
         if num_new_tx == 0 {
@@ -54,7 +67,6 @@ pub async fn assert_native_demo_works(requirements: TestRequirements) -> Result<
             panic!("Balance not conserved");
         }
 
-        // Timeout if tests take too long.
         if start.elapsed() > requirements.global_timeout {
             panic!(
                 "Timeout waiting for block height, transaction count, and light client updates to \
@@ -62,27 +74,28 @@ pub async fn assert_native_demo_works(requirements: TestRequirements) -> Result<
             );
         }
 
-        // test that we progress EXPECTED_BLOCK_HEIGHT blocks from where we started
-        if new.block_height.unwrap() < testing.expected_block_height() {
-            println!(
-                "waiting for block height have={} want={}",
-                new.block_height.unwrap(),
-                testing.expected_block_height()
-            );
+        if new.block_height.unwrap() < runtime.expected_block_height() {
             continue;
         }
 
-        if new.txn_count - initial.txn_count < testing.expected_txn_count() {
-            println!(
-                "waiting for transaction count have={} want={}",
-                new.txn_count - initial.txn_count,
-                testing.expected_txn_count()
-            );
+        if new.txn_count < runtime.expected_txn_count() {
             continue;
         }
+
+        if let Some(_first_reward_block) = requirements.first_reward_block {
+            if new.rewards_claimed == U256::ZERO {
+                continue;
+            }
+            println!(
+                "Rewards claimed: {} at block {}",
+                new.rewards_claimed,
+                new.block_height.unwrap()
+            );
+        }
+
         break;
     }
-    println!("Final State: {}", testing.test_state().await);
+    println!("Final State: {}", runtime.test_state().await);
     Ok(())
 }
 

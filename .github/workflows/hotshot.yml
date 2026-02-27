@@ -10,8 +10,12 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ (github.ref == 'refs/heads/main' && github.run_number) || github.ref }}
-  cancel-in-progress: true
+  # ensure non-PR jobs run in parallel
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_INCREMENTAL: "0"
 
 jobs:
   build-matrix:
@@ -19,8 +23,8 @@ jobs:
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
-      - uses: taiki-e/install-action@just
       - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@just
       - id: set-matrix
         run: echo "matrix=$(just hotshot::matrix)" >> "$GITHUB_OUTPUT"
 

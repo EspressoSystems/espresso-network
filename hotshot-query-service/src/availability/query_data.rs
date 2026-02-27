@@ -13,28 +13,24 @@
 use std::{collections::HashMap, fmt::Debug, hash::Hash};
 
 use committable::{Commitment, Committable};
-use derive_more::derive::From;
 use hotshot_types::{
-    data::{Leaf, Leaf2, VidCommitment, VidShare},
-    simple_certificate::{
-        LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
-        QuorumCertificate2,
-    },
+    data::{Leaf, Leaf2, VidCommitment, VidCommon, VidShare},
+    simple_certificate::QuorumCertificate2,
     traits::{
         self,
         block_contents::{BlockHeader, GENESIS_VID_NUM_STORAGE_NODES},
-        node_implementation::{NodeType, Versions},
+        node_implementation::NodeType,
         EncodeBytes,
     },
     vid::advz::{advz_scheme, ADVZCommitment, ADVZCommon},
 };
-use jf_vid::VidScheme;
+use jf_advz::VidScheme;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use snafu::{ensure, Snafu};
+use vbs::version::Version;
+use versions::Upgrade;
 
-use crate::{
-    types::HeightIndexed, Header, Metadata, Payload, QuorumCertificate, Transaction, VidCommon,
-};
+use crate::{types::HeightIndexed, Header, Metadata, Payload, QuorumCertificate, Transaction};
 
 pub type LeafHash<Types> = Commitment<Leaf2<Types>>;
 pub type LeafHashLegacy<Types> = Commitment<Leaf<Types>>;
@@ -89,6 +85,26 @@ where
     pub position: u32,
 }
 
+/// The proof system and the statement which is proved will vary by application, with different
+/// applications proving stronger or weaker statements depending on the trust assumptions at
+/// play. Some may prove a very strong statement (for example, a shared sequencer proving that
+/// the transaction belongs not only to the block but to a section of the block dedicated to a
+/// specific rollup), otherwise may prove something substantially weaker (for example, a trusted
+/// query service may use `()` for the proof).
+pub trait VerifiableInclusion<Types: NodeType>:
+    Clone + Debug + PartialEq + Eq + Serialize + DeserializeOwned + Send + Sync
+{
+    /// Verify the inclusion proof against a payload commitment.
+    /// Returns `None` on error.
+    fn verify(
+        &self,
+        metadata: &Metadata<Types>,
+        tx: &Transaction<Types>,
+        payload_commitment: &VidCommitment,
+        common: &VidCommon,
+    ) -> bool;
+}
+
 /// A block payload whose contents (e.g. individual transactions) can be examined.
 ///
 /// Note to implementers: this trait has only a few required methods. The provided methods, for
@@ -107,14 +123,7 @@ where
         Self: 'a;
 
     /// A proof that a certain transaction exists in the block.
-    ///
-    /// The proof system and the statement which is proved will vary by application, with different
-    /// applications proving stronger or weaker statements depending on the trust assumptions at
-    /// play. Some may prove a very strong statement (for example, a shared sequencer proving that
-    /// the transaction belongs not only to the block but to a section of the block dedicated to a
-    /// specific rollup), otherwise may prove something substantially weaker (for example, a trusted
-    /// query service may use `()` for the proof).
-    type InclusionProof: Clone + Debug + PartialEq + Eq + Serialize + DeserializeOwned + Send + Sync;
+    type InclusionProof: VerifiableInclusion<Types>;
 
     /// The number of transactions in the block.
     fn len(&self, meta: &Self::Metadata) -> usize;
@@ -260,13 +269,14 @@ impl<Types: NodeType> LeafQueryDataLegacy<Types> {
         Ok(Self { leaf, qc })
     }
 
-    pub async fn genesis<HsVer: Versions>(
+    pub async fn genesis(
         validated_state: &Types::ValidatedState,
         instance_state: &Types::InstanceState,
+        upgrade: Upgrade,
     ) -> Self {
         Self {
-            leaf: Leaf::genesis::<HsVer>(validated_state, instance_state).await,
-            qc: QuorumCertificate::genesis::<HsVer>(validated_state, instance_state).await,
+            leaf: Leaf::genesis(validated_state, instance_state, upgrade.base).await,
+            qc: QuorumCertificate::genesis(validated_state, instance_state, upgrade).await,
         }
     }
 
@@ -329,13 +339,14 @@ impl<Types: NodeType> LeafQueryData<Types> {
         Ok(Self { leaf, qc })
     }
 
-    pub async fn genesis<HsVer: Versions>(
+    pub async fn genesis(
         validated_state: &Types::ValidatedState,
         instance_state: &Types::InstanceState,
+        upgrade: Upgrade,
     ) -> Self {
         Self {
-            leaf: Leaf2::genesis::<HsVer>(validated_state, instance_state).await,
-            qc: QuorumCertificate2::genesis::<HsVer>(validated_state, instance_state).await,
+            leaf: Leaf2::genesis(validated_state, instance_state, upgrade.base).await,
+            qc: QuorumCertificate2::genesis(validated_state, instance_state, upgrade).await,
         }
     }
 
@@ -420,15 +431,16 @@ impl<Types: NodeType> BlockQueryData<Types> {
         }
     }
 
-    pub async fn genesis<HsVer: Versions>(
+    pub async fn genesis(
         validated_state: &Types::ValidatedState,
         instance_state: &Types::InstanceState,
+        base: Version,
     ) -> Self
     where
         Header<Types>: QueryableHeader<Types>,
         Payload<Types>: QueryablePayload<Types>,
     {
-        let leaf = Leaf2::<Types>::genesis::<HsVer>(validated_state, instance_state).await;
+        let leaf = Leaf2::<Types>::genesis(validated_state, instance_state, base).await;
         Self::new(leaf.block_header().clone(), leaf.block_payload().unwrap())
     }
 
@@ -574,15 +586,16 @@ impl<Types: NodeType> PayloadQueryData<Types> {
         })
     }
 
-    pub async fn genesis<HsVer: Versions>(
+    pub async fn genesis(
         validated_state: &Types::ValidatedState,
         instance_state: &Types::InstanceState,
+        base: Version,
     ) -> Self
     where
         Header<Types>: QueryableHeader<Types>,
         Payload<Types>: QueryablePayload<Types>,
     {
-        BlockQueryData::genesis::<HsVer>(validated_state, instance_state)
+        BlockQueryData::genesis(validated_state, instance_state, base)
             .await
             .into()
     }
@@ -633,11 +646,12 @@ impl<Types: NodeType> ADVZCommonQueryData<Types> {
         })
     }
 
-    pub async fn genesis<HsVer: Versions>(
+    pub async fn genesis(
         validated_state: &Types::ValidatedState,
         instance_state: &Types::InstanceState,
+        base: Version,
     ) -> anyhow::Result<Self> {
-        let leaf = Leaf::<Types>::genesis::<HsVer>(validated_state, instance_state).await;
+        let leaf = Leaf::<Types>::genesis(validated_state, instance_state, base).await;
         let payload = leaf.block_payload().unwrap();
         let bytes = payload.encode();
         let disperse = advz_scheme(GENESIS_VID_NUM_STORAGE_NODES)
@@ -691,11 +705,12 @@ impl<Types: NodeType> VidCommonQueryData<Types> {
         }
     }
 
-    pub async fn genesis<HsVer: Versions>(
+    pub async fn genesis(
         validated_state: &Types::ValidatedState,
         instance_state: &Types::InstanceState,
+        base: Version,
     ) -> Self {
-        let leaf = Leaf::<Types>::genesis::<HsVer>(validated_state, instance_state).await;
+        let leaf = Leaf::<Types>::genesis(validated_state, instance_state, base).await;
         let payload = leaf.block_payload().unwrap();
         let bytes = payload.encode();
         let disperse = advz_scheme(GENESIS_VID_NUM_STORAGE_NODES)
@@ -1073,39 +1088,8 @@ where
     }
 }
 
-/// A wrapper around `LightClientStateUpdateCertificateV2`.
-///
-/// The V2 certificate includes additional fields compared to earlier versions:
-/// - Light client v3 signatures
-/// - `auth_root` — used by the reward claim contract to verify that its
-///   calculated `auth_root` matches the one in the Light Client contract.
-///
-/// This struct is returned by the `state-cert-v2` API.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, From)]
-#[serde(bound = "")]
-pub struct StateCertQueryDataV2<Types: NodeType>(pub LightClientStateUpdateCertificateV2<Types>);
-
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Limits {
     pub small_object_range_limit: usize,
     pub large_object_range_limit: usize,
-}
-
-impl<Types: NodeType> HeightIndexed for StateCertQueryDataV2<Types> {
-    fn height(&self) -> u64 {
-        self.0.light_client_state.block_height
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, From)]
-#[serde(bound = "")]
-pub struct StateCertQueryDataV1<Types: NodeType>(pub LightClientStateUpdateCertificateV1<Types>);
-
-impl<Types> From<StateCertQueryDataV2<Types>> for StateCertQueryDataV1<Types>
-where
-    Types: NodeType,
-{
-    fn from(cert: StateCertQueryDataV2<Types>) -> Self {
-        Self(cert.0.into())
-    }
 }

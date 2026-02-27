@@ -50,6 +50,10 @@ contract StakeTableV2InvariantTest is StdInvariant, Test {
         invariant_ContractBalanceMatchesTrackedDelegations();
         invariant_TotalSupply();
 
+        // verify the total stake invariants
+        invariant_activeStakeMatchesTracked();
+        invariant_ValidatorStakeNotExceedsContractBalance();
+
         // additionally check the actor balances
         assertActorsRecoveredFunds();
     }
@@ -91,6 +95,24 @@ contract StakeTableV2InvariantTest is StdInvariant, Test {
             handler.token().totalSupply(),
             handler.getTestState().trackedTotalSupply,
             "Total supply invariant violated"
+        );
+    }
+
+    /// @dev Contract's activeStake should match tracked activeStake
+    function invariant_activeStakeMatchesTracked() public view {
+        assertEq(
+            handler.stakeTable().activeStake(),
+            handler.getActiveStake(),
+            "Contract activeStake does not match tracked activeStake"
+        );
+    }
+
+    /// @dev Total validator stake should not exceed contract balance
+    function invariant_ValidatorStakeNotExceedsContractBalance() public view {
+        assertLe(
+            handler.stakeTable().activeStake(),
+            handler.stakeTable().token().balanceOf(address(handler.stakeTable())),
+            "Total validator stake should not exceed contract balance"
         );
     }
 }

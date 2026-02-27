@@ -17,9 +17,8 @@ use async_lock::RwLock;
 use async_trait::async_trait;
 use hotshot_types::{
     data::{
-        vid_disperse::{ADVZDisperseShare, VidDisperseShare2},
         DaProposal, DaProposal2, QuorumProposal, QuorumProposal2, QuorumProposalWrapper,
-        VidCommitment,
+        VidCommitment, VidDisperseShare,
     },
     drb::{DrbInput, DrbResult},
     event::HotShotAction,
@@ -39,22 +38,16 @@ use crate::testable_delay::{DelayConfig, SupportedTraitTypesForAsyncDelay, Testa
 
 type VidShares<TYPES> = BTreeMap<
     <TYPES as NodeType>::View,
-    HashMap<<TYPES as NodeType>::SignatureKey, Proposal<TYPES, ADVZDisperseShare<TYPES>>>,
+    HashMap<<TYPES as NodeType>::SignatureKey, Proposal<TYPES, VidDisperseShare<TYPES>>>,
 >;
-type VidShares2<TYPES> = BTreeMap<
-    <TYPES as NodeType>::View,
-    HashMap<<TYPES as NodeType>::SignatureKey, Proposal<TYPES, VidDisperseShare2<TYPES>>>,
->;
-
 #[derive(Clone, Debug)]
 pub struct TestStorageState<TYPES: NodeType> {
     vids: VidShares<TYPES>,
-    vid2: VidShares2<TYPES>,
     das: HashMap<TYPES::View, Proposal<TYPES, DaProposal<TYPES>>>,
     da2s: HashMap<TYPES::View, Proposal<TYPES, DaProposal2<TYPES>>>,
-    proposals: BTreeMap<TYPES::View, Proposal<TYPES, QuorumProposal<TYPES>>>,
-    proposals2: BTreeMap<TYPES::View, Proposal<TYPES, QuorumProposal2<TYPES>>>,
-    proposals_wrapper: BTreeMap<TYPES::View, Proposal<TYPES, QuorumProposalWrapper<TYPES>>>,
+    pub proposals: BTreeMap<TYPES::View, Proposal<TYPES, QuorumProposal<TYPES>>>,
+    pub proposals2: BTreeMap<TYPES::View, Proposal<TYPES, QuorumProposal2<TYPES>>>,
+    pub proposals_wrapper: BTreeMap<TYPES::View, Proposal<TYPES, QuorumProposalWrapper<TYPES>>>,
     high_qc: Option<hotshot_types::simple_certificate::QuorumCertificate<TYPES>>,
     high_qc2: Option<hotshot_types::simple_certificate::QuorumCertificate2<TYPES>>,
     eqc: Option<(
@@ -76,7 +69,6 @@ impl<TYPES: NodeType> Default for TestStorageState<TYPES> {
     fn default() -> Self {
         Self {
             vids: BTreeMap::new(),
-            vid2: BTreeMap::new(),
             das: HashMap::new(),
             da2s: HashMap::new(),
             proposals: BTreeMap::new(),
@@ -99,7 +91,7 @@ impl<TYPES: NodeType> Default for TestStorageState<TYPES> {
 
 #[derive(Clone, Debug)]
 pub struct TestStorage<TYPES: NodeType> {
-    inner: Arc<RwLock<TestStorageState<TYPES>>>,
+    pub inner: Arc<RwLock<TestStorageState<TYPES>>>,
     /// `should_return_err` is a testing utility to validate negative cases.
     pub should_return_err: Arc<AtomicBool>,
     pub delay_config: DelayConfig,
@@ -157,8 +149,8 @@ impl<TYPES: NodeType> TestStorage<TYPES> {
     pub async fn last_actioned_epoch(&self) -> Option<TYPES::Epoch> {
         self.inner.read().await.epoch
     }
-    pub async fn vids_cloned(&self) -> VidShares2<TYPES> {
-        self.inner.read().await.vid2.clone()
+    pub async fn vids_cloned(&self) -> VidShares<TYPES> {
+        self.inner.read().await.vids.clone()
     }
 
     pub async fn state_cert_cloned(&self) -> Option<LightClientStateUpdateCertificateV2<TYPES>> {
@@ -174,7 +166,7 @@ impl<TYPES: NodeType> TestStorage<TYPES> {
 
 #[async_trait]
 impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
-    async fn append_vid(&self, proposal: &Proposal<TYPES, ADVZDisperseShare<TYPES>>) -> Result<()> {
+    async fn append_vid(&self, proposal: &Proposal<TYPES, VidDisperseShare<TYPES>>) -> Result<()> {
         if self.should_return_err.load(Ordering::Relaxed) {
             bail!("Failed to append VID proposal to storage");
         }
@@ -182,26 +174,9 @@ impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
         let mut inner = self.inner.write().await;
         inner
             .vids
-            .entry(proposal.data.view_number)
+            .entry(proposal.data.view_number())
             .or_default()
-            .insert(proposal.data.recipient_key.clone(), proposal.clone());
-        Ok(())
-    }
-
-    async fn append_vid2(
-        &self,
-        proposal: &Proposal<TYPES, VidDisperseShare2<TYPES>>,
-    ) -> Result<()> {
-        if self.should_return_err.load(Ordering::Relaxed) {
-            bail!("Failed to append VID proposal to storage");
-        }
-        Self::run_delay_settings_from_config(&self.delay_config).await;
-        let mut inner = self.inner.write().await;
-        inner
-            .vid2
-            .entry(proposal.data.view_number)
-            .or_default()
-            .insert(proposal.data.recipient_key.clone(), proposal.clone());
+            .insert(proposal.data.recipient_key().clone(), proposal.clone());
         Ok(())
     }
 
@@ -415,7 +390,7 @@ impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
         Ok(())
     }
 
-    async fn migrate_consensus(&self) -> Result<()> {
+    async fn migrate_storage(&self) -> Result<()> {
         let mut storage_writer = self.inner.write().await;
 
         for (view, proposal) in storage_writer.proposals.clone().iter() {

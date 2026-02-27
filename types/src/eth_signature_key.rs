@@ -4,7 +4,7 @@ use std::{
 };
 
 use alloy::{
-    primitives::{Address, PrimitiveSignature},
+    primitives::{Address, Signature},
     signers::{
         self,
         k256::ecdsa::{SigningKey, VerifyingKey},
@@ -17,7 +17,7 @@ use alloy::{
     },
 };
 use alloy_compat::ethers_serde;
-use derive_more::*;
+use derive_more::{Debug, Deref, From, Into};
 use hotshot_types::traits::signature_key::{BuilderSignatureKey, PrivateSignatureKey};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -165,7 +165,7 @@ pub struct SigningError(#[from] signers::Error);
     self::Debug, Clone, Copy, Hash, Deref, PartialEq, Eq, From, Into, Serialize, Deserialize,
 )]
 #[serde(transparent)]
-pub struct BuilderSignature(#[serde(with = "ethers_serde::signature")] pub PrimitiveSignature);
+pub struct BuilderSignature(#[serde(with = "ethers_serde::signature")] pub Signature);
 
 impl BuilderSignatureKey for FeeAccount {
     type BuilderPrivateKey = EthKeyPair;
