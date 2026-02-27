@@ -342,6 +342,10 @@ opt-level = 1
 opt-level = 1
 [profile.test.package.vid]
 opt-level = 1
+[profile.test.package.hotshot-builder-api]
+opt-level = 1
+[profile.test.package.hotshot-utils]
+opt-level = 1
 [profile.test.package.hotshot-state-prover]
 opt-level = 3
 [profile.test.package.jf-merkle-tree]
