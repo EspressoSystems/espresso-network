@@ -2,7 +2,7 @@ use std::{
     fmt::{Debug, Display},
     marker::PhantomData,
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::Context;
@@ -486,9 +486,14 @@ async fn handle_events<N, P, V>(
     }
 
     while let Some(event) = events.next().await {
+        let event_name = event_type_name(&event);
         tracing::debug!(node_id, ?event, "consensus event");
+
+        let t_start = Instant::now();
+
         // Store latest consensus state.
         persistence.handle_event(&event, &event_consumer).await;
+        let t_persistence = t_start.elapsed();
 
         // Generate state signature.
         state_signer
@@ -496,6 +501,7 @@ async fn handle_events<N, P, V>(
             .await
             .handle_event(&event, consensus.clone())
             .await;
+        let t_signer = t_start.elapsed() - t_persistence;
 
         // Handle external messages
         if let EventType::ExternalMessageReceived { data, .. } = &event.event {
@@ -503,11 +509,57 @@ async fn handle_events<N, P, V>(
                 tracing::warn!("Failed to handle external message: {:?}", err);
             };
         }
+        let t_external = t_start.elapsed() - t_persistence - t_signer;
 
         // Send the event via the event streaming service
         if let Some(events_streamer) = events_streamer.as_ref() {
             events_streamer.write().await.handle_event(event).await;
         }
+        let t_total = t_start.elapsed();
+        let t_streamer = t_total - t_persistence - t_signer - t_external;
+
+        // Log timing for every event at info level, and warn for slow events.
+        let slow_threshold = Duration::from_millis(200);
+        if t_total >= slow_threshold {
+            tracing::warn!(
+                node_id,
+                event = event_name,
+                total_ms = t_total.as_millis() as u64,
+                persistence_ms = t_persistence.as_millis() as u64,
+                state_signer_ms = t_signer.as_millis() as u64,
+                external_handler_ms = t_external.as_millis() as u64,
+                events_streamer_ms = t_streamer.as_millis() as u64,
+                "slow event processing"
+            );
+        } else {
+            tracing::info!(
+                node_id,
+                event = event_name,
+                total_ms = t_total.as_millis() as u64,
+                persistence_ms = t_persistence.as_millis() as u64,
+                state_signer_ms = t_signer.as_millis() as u64,
+                external_handler_ms = t_external.as_millis() as u64,
+                events_streamer_ms = t_streamer.as_millis() as u64,
+                "event processing timing"
+            );
+        }
+    }
+}
+
+/// Return a short string name for the event variant, for use in structured logging.
+fn event_type_name(event: &Event<SeqTypes>) -> &'static str {
+    match &event.event {
+        EventType::Error { .. } => "Error",
+        EventType::Decide { .. } => "Decide",
+        EventType::ReplicaViewTimeout { .. } => "ReplicaViewTimeout",
+        EventType::ViewFinished { .. } => "ViewFinished",
+        EventType::ViewTimeout { .. } => "ViewTimeout",
+        EventType::Transactions { .. } => "Transactions",
+        EventType::DaProposal { .. } => "DaProposal",
+        EventType::QuorumProposal { .. } => "QuorumProposal",
+        EventType::UpgradeProposal { .. } => "UpgradeProposal",
+        EventType::ExternalMessageReceived { .. } => "ExternalMessageReceived",
+        _ => "Unknown",
     }
 }
 

@@ -719,6 +719,8 @@ impl Persistence {
             .await?
             .map(|row| row.get("last_processed_view"));
         loop {
+            let t_loop_start = Instant::now();
+
             // In SQLite, overlapping read and write transactions can lead to database errors. To
             // avoid this:
             // - start a read transaction to query and collect all the necessary data.
@@ -846,6 +848,7 @@ impl Persistence {
                     );
                 })?;
             drop(tx);
+            let t_read = t_loop_start.elapsed();
 
             // Collate all the information by view number and construct a chain of leaves.
             let leaf_chain = leaves
@@ -919,6 +922,7 @@ impl Persistence {
                     })
                     .await?;
             }
+            let t_consumer = t_loop_start.elapsed() - t_read;
 
             let mut tx = self.db.write().await?;
 
@@ -990,6 +994,19 @@ impl Persistence {
             .await?;
 
             tx.commit().await?;
+            let t_write = t_loop_start.elapsed() - t_read - t_consumer;
+            let t_total = t_loop_start.elapsed();
+
+            tracing::info!(
+                ?from_view,
+                ?to_view,
+                total_ms = t_total.as_millis() as u64,
+                read_ms = t_read.as_millis() as u64,
+                consumer_ms = t_consumer.as_millis() as u64,
+                write_commit_ms = t_write.as_millis() as u64,
+                "generate_decide_events iteration timing"
+            );
+
             last_processed_view = Some(to_view.u64() as i64);
         }
     }
@@ -1159,6 +1176,8 @@ impl SequencerPersistence for Persistence {
         deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
         consumer: &(impl EventConsumer + 'static),
     ) -> anyhow::Result<()> {
+        let t_start = Instant::now();
+
         let values = leaf_chain
             .into_iter()
             .map(|(info, cert)| {
@@ -1192,6 +1211,7 @@ impl SequencerPersistence for Persistence {
         )
         .await?;
         tx.commit().await?;
+        let t_leaf_write = t_start.elapsed();
 
         // Generate an event for the new leaves and, only if it succeeds, clean up data we no longer
         // need.
@@ -1202,12 +1222,24 @@ impl SequencerPersistence for Persistence {
             tracing::warn!(?view, "event processing failed: {err:#}");
             return Ok(());
         }
+        let t_generate_events = t_start.elapsed() - t_leaf_write;
 
         // Garbage collect data which was not included in any decide event, but which at this point
         // is old enough to just forget about.
         if let Err(err) = self.prune(view).await {
             tracing::warn!(?view, "pruning failed: {err:#}");
         }
+        let t_prune = t_start.elapsed() - t_leaf_write - t_generate_events;
+        let t_total = t_start.elapsed();
+
+        tracing::info!(
+            ?view,
+            total_ms = t_total.as_millis() as u64,
+            leaf_write_ms = t_leaf_write.as_millis() as u64,
+            generate_events_ms = t_generate_events.as_millis() as u64,
+            prune_ms = t_prune.as_millis() as u64,
+            "append_decided_leaves timing"
+        );
 
         Ok(())
     }
