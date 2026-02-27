@@ -7,7 +7,7 @@
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use alloy::{
@@ -58,6 +58,34 @@ use tracing::instrument;
 use vbs::version::StaticVersionType;
 
 use crate::{events::HotShotEvent, quorum_proposal_recv::ValidationInfo, request::REQUEST_TIMEOUT};
+
+pub async fn wait_for_previous_view<TYPES: NodeType>(
+    view_number: TYPES::View,
+    mut receiver: Receiver<Arc<HotShotEvent<TYPES>>>,
+) -> Option<()> {
+    tokio::time::timeout(Duration::from_secs(6), async move {
+        while let Ok(event) = receiver.recv_direct().await {
+            match event.as_ref() {
+                HotShotEvent::ViewValidated(view) => {
+                    if *view == view_number {
+                        return Some(());
+                    }
+                },
+                HotShotEvent::ViewValidationCancelled(view) => {
+                    if *view == view_number {
+                        tracing::warn!("View validation cancelled for view {view_number}");
+                        return None;
+                    }
+                },
+                _ => continue,
+            }
+        }
+        None
+    })
+    .await
+    .inspect_err(|e| tracing::warn!("Failed to wait for previous view {view_number}: {e}"))
+    .ok()?
+}
 
 /// Trigger a request to the network for a proposal for a view and wait for the response or timeout.
 #[instrument(skip_all)]
@@ -721,6 +749,26 @@ pub(crate) async fn parent_leaf_and_state<TYPES: NodeType, V: Versions>(
     parent_qc: &QuorumCertificate2<TYPES>,
     epoch_height: u64,
 ) -> Result<(Leaf2<TYPES>, Arc<<TYPES as NodeType>::ValidatedState>)> {
+    let receiver = event_receiver.clone();
+    let wait_for_previous = {
+        let reader = consensus.read().await;
+        !reader
+            .validated_state_map()
+            .contains_key(&parent_qc.view_number())
+            || reader.is_view_validating(parent_qc.view_number())
+    };
+    if wait_for_previous {
+        if wait_for_previous_view(parent_qc.view_number(), receiver)
+            .await
+            .is_some()
+        {
+            tracing::info!(
+                "Successfully waited for previous view {:?}",
+                parent_qc.view_number()
+            );
+        }
+    }
+
     let consensus_reader = consensus.read().await;
     let vsm_contains_parent_view = consensus_reader
         .validated_state_map()

@@ -125,6 +125,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
             result
         }
         _ = cancel_receiver.recv() => {
+            self.consensus.write().await.remove_in_progress_state_validation(self.view_number);
             tracing::warn!("Vote dependency task cancelled");
             return;
         }
@@ -355,7 +356,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
         }
 
         // Update internal state
-        update_shared_state::<TYPES, V>(
+        let result = update_shared_state::<TYPES, V>(
             OuterConsensus::new(Arc::clone(&self.consensus.inner_consensus)),
             self.sender.clone(),
             self.receiver.clone(),
@@ -371,7 +372,19 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
             self.epoch_height,
         )
         .await
-        .context(error!("Failed to update shared consensus state"))?;
+        .context(error!("Failed to update shared consensus state"));
+        if result.is_err() {
+            self.consensus
+                .write()
+                .await
+                .remove_in_progress_state_validation(self.view_number);
+            broadcast_event(
+                Arc::new(HotShotEvent::ViewValidationCancelled(self.view_number)),
+                &self.sender,
+            )
+            .await;
+            return result;
+        }
 
         let cur_epoch = option_epoch_from_block_number::<TYPES>(
             leaf.with_epoch,
@@ -817,6 +830,15 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                 // cancel old tasks
                 let current_tasks = self.vote_dependencies.split_off(&view);
                 while let Some((view, cancel_sender)) = self.vote_dependencies.pop_last() {
+                    broadcast_event(
+                        Arc::new(HotShotEvent::ViewValidationCancelled(view)),
+                        &event_sender,
+                    )
+                    .await;
+                    self.consensus
+                        .write()
+                        .await
+                        .remove_in_progress_state_validation(view);
                     if !cancel_sender.is_closed() {
                         tracing::error!("Aborting vote dependency task for view {view}");
                         let _ = cancel_sender.try_broadcast(());
@@ -832,6 +854,15 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                 // cancel old tasks
                 let current_tasks = self.vote_dependencies.split_off(&view);
                 while let Some((view, cancel_sender)) = self.vote_dependencies.pop_last() {
+                    broadcast_event(
+                        Arc::new(HotShotEvent::ViewValidationCancelled(view)),
+                        &event_sender,
+                    )
+                    .await;
+                    self.consensus
+                        .write()
+                        .await
+                        .remove_in_progress_state_validation(view);
                     if !cancel_sender.is_closed() {
                         tracing::error!("Aborting vote dependency task for view {view}");
                         let _ = cancel_sender.try_broadcast(());

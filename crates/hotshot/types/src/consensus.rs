@@ -7,7 +7,7 @@
 //! Provides the core consensus types
 
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     mem::ManuallyDrop,
     ops::{Deref, DerefMut},
     sync::Arc,
@@ -590,6 +590,10 @@ pub struct Consensus<TYPES: NodeType> {
     /// The validated states that are currently loaded in memory.
     validated_state_map: BTreeMap<TYPES::View, View<TYPES>>,
 
+    /// The views that are currently in progress of being validated.
+    /// and we expect a state for them to be created soon.
+    in_progress_state_validation: BTreeSet<TYPES::View>,
+
     /// All the VID shares we've received for current and future views.
     vid_shares: VidShares<TYPES>,
 
@@ -818,6 +822,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         };
         Consensus {
             validated_state_map,
+            in_progress_state_validation: BTreeSet::new(),
             vid_shares: vid_shares.unwrap_or_default(),
             saved_da_certs: HashMap::new(),
             cur_view,
@@ -1274,6 +1279,17 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         Ok(())
     }
 
+    pub fn remove_in_progress_state_validation(&mut self, view_number: TYPES::View) {
+        self.in_progress_state_validation.remove(&view_number);
+    }
+    pub fn insert_in_progress_state_validation(&mut self, view_number: TYPES::View) {
+        self.in_progress_state_validation.insert(view_number);
+    }
+
+    pub fn is_view_validating(&self, view_number: TYPES::View) -> bool {
+        self.in_progress_state_validation.contains(&view_number)
+    }
+
     /// Update the saved leaves with a new leaf.
     fn update_saved_leaves(&mut self, leaf: Leaf2<TYPES>) {
         self.saved_leaves.insert(leaf.commit(), leaf);
@@ -1511,6 +1527,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         self.saved_payloads = self.saved_payloads.split_off(&gc_view);
         self.vid_shares = self.vid_shares.split_off(&gc_view);
         self.last_proposals = self.last_proposals.split_off(&gc_view);
+        self.in_progress_state_validation = self.in_progress_state_validation.split_off(&gc_view);
     }
 
     /// Gets the last decided leaf.

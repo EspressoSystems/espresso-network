@@ -40,7 +40,7 @@ use crate::{
     events::HotShotEvent,
     helpers::{
         broadcast_event, decide_from_proposal, decide_from_proposal_2, derive_signed_state_digest,
-        fetch_proposal, handle_drb_result, LeafChainTraversalOutcome,
+        fetch_proposal, handle_drb_result, wait_for_previous_view, LeafChainTraversalOutcome,
     },
     quorum_vote::Versions,
 };
@@ -364,6 +364,10 @@ pub(crate) async fn update_shared_state<TYPES: NodeType, V: Versions>(
     let version = upgrade_lock.version(view_number).await?;
 
     let now = Instant::now();
+    consensus
+        .write()
+        .await
+        .insert_in_progress_state_validation(view_number);
     let (validated_state, state_delta) = parent_state
         .validate_and_apply_header(
             &instance_state,
@@ -390,6 +394,7 @@ pub(crate) async fn update_shared_state<TYPES: NodeType, V: Versions>(
     ) {
         tracing::trace!("{e:?}");
     }
+    consensus_writer.remove_in_progress_state_validation(view_number);
     let update_leaf_duration = now.elapsed();
 
     consensus_writer
@@ -401,6 +406,7 @@ pub(crate) async fn update_shared_state<TYPES: NodeType, V: Versions>(
         .update_leaf_duration
         .add_point(update_leaf_duration.as_secs_f64());
     drop(consensus_writer);
+    broadcast_event(Arc::new(HotShotEvent::ViewValidated(view_number)), &sender).await;
     tracing::debug!("update_leaf time: {update_leaf_duration:?}");
 
     Ok(())
