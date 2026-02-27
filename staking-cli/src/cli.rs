@@ -22,7 +22,6 @@ use hotshot_types::{
     light_client::{StateKeyPair, StateVerKey},
     signature_key::BLSPubKey,
 };
-use sysinfo::System;
 
 #[cfg(feature = "testing")]
 use crate::deploy::deploy_contracts_for_testing;
@@ -296,10 +295,7 @@ pub async fn run() -> Result<()> {
             return Ok(());
         },
         Commands::Version => {
-            println!("staking-cli version: {}", env!("CARGO_PKG_VERSION"));
-            println!("{}", git_version::git_version!(prefix = "git rev: "));
-            println!("OS: {}", System::long_os_version().unwrap_or_default());
-            println!("Arch: {}", System::cpu_arch());
+            print!("{}", sequencer_utils::build_info!().with_header());
             return Ok(());
         },
         Commands::ExportNodeSignatures {

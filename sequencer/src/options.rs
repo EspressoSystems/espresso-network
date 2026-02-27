@@ -450,24 +450,11 @@ fn get_default_node_type() -> String {
 }
 
 fn build_version() -> String {
-    let testing = if cfg!(feature = "testing") {
-        "yes"
-    } else {
-        "no"
-    };
+    let info = sequencer_utils::build_info!();
     format!(
-        "\ndescribe: {}\nrev: {}\ndirty: {}\nbranch: {}\ncommit-timestamp: {}\nbuild-timestamp: \
-         {}\ndebug: {}\nfeatures: {}\ntarget: {}\ntesting: {}",
-        env!("VERGEN_GIT_DESCRIBE"),
-        env!("VERGEN_GIT_SHA"),
-        env!("VERGEN_GIT_DIRTY"),
-        env!("VERGEN_GIT_BRANCH"),
-        env!("VERGEN_GIT_COMMIT_TIMESTAMP"),
-        env!("VERGEN_BUILD_TIMESTAMP"),
-        env!("VERGEN_CARGO_DEBUG"),
+        "{}\nfeatures: {}",
+        info.clap_version(),
         env!("VERGEN_CARGO_FEATURES"),
-        env!("VERGEN_CARGO_TARGET_TRIPLE"),
-        testing,
     )
 }
 
@@ -724,14 +711,13 @@ mod tests {
         for field in [
             "describe:",
             "rev:",
-            "dirty:",
+            "modified:",
             "branch:",
             "commit-timestamp:",
-            "build-timestamp:",
             "debug:",
+            "os:",
+            "arch:",
             "features:",
-            "target:",
-            "testing:",
         ] {
             assert!(version.contains(field), "missing {field}: {version}");
         }
@@ -740,8 +726,8 @@ mod tests {
             "expected debug build in test: {version}"
         );
         assert!(
-            version.contains("testing: yes"),
-            "expected testing enabled in test builds: {version}"
+            version.contains("testing"),
+            "expected testing in features: {version}"
         );
     }
 }
