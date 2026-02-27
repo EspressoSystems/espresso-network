@@ -315,11 +315,26 @@ debug = "full"
 
 # Workspace crates: opt-level 0 (not cached on CI, recompile every run).
 # Dependencies: opt-level 1 via "*" (cached on CI, rarely recompile).
-# compute-heavy crates: opt-level 3 (tests too slow without optimization).
+# Consensus crates: opt-level 1 (hotshot tests fail with too many failed views at opt-level 0).
+# ZK-heavy crates: opt-level 3 (tests too slow without optimization).
 [profile.test]
 opt-level = 0
 
 [profile.test.package."*"]
+opt-level = 1
+[profile.test.package.hotshot]
+opt-level = 1
+[profile.test.package.hotshot-types]
+opt-level = 1
+[profile.test.package.hotshot-task-impls]
+opt-level = 1
+[profile.test.package.hotshot-task]
+opt-level = 1
+[profile.test.package.hotshot-example-types]
+opt-level = 1
+[profile.test.package.espresso-types]
+opt-level = 1
+[profile.test.package.vid]
 opt-level = 1
 [profile.test.package.hotshot-state-prover]
 opt-level = 3
