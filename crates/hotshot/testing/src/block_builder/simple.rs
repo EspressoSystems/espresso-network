@@ -29,7 +29,7 @@ use hotshot_builder_api::{
         block_info::{AvailableBlockData, AvailableBlockInfo},
         builder::{BuildError, Error, Options},
     },
-    v0_2::block_info::AvailableBlockHeaderInputV1,
+    v0_2::block_info::{AvailableBlockHeaderInputV1, AvailableBlockHeaderInputV2Legacy},
 };
 use hotshot_types::{
     constants::LEGACY_BUILDER_MODULE,
@@ -170,8 +170,13 @@ where
             return Ok(vec![]);
         }
 
-        let block_entry =
-            build_block::<TYPES>(transactions, self.pub_key.clone(), self.priv_key.clone()).await;
+        let block_entry = build_block::<TYPES>(
+            transactions,
+            RwLock::read(&self.num_nodes).await.clone(),
+            self.pub_key.clone(),
+            self.priv_key.clone(),
+        )
+        .await;
 
         let metadata = block_entry.metadata.clone();
 
@@ -235,7 +240,7 @@ where
         _view_number: u64,
         _sender: TYPES::SignatureKey,
         _signature: &<TYPES::SignatureKey as SignatureKey>::PureAssembledSignatureType,
-    ) -> Result<AvailableBlockHeaderInputV1<TYPES>, BuildError> {
+    ) -> Result<AvailableBlockHeaderInputV2Legacy<TYPES>, BuildError> {
         if self.should_fail_claims.load(Ordering::Relaxed) {
             return Err(BuildError::Missing);
         }
@@ -289,6 +294,7 @@ pub struct SimpleBuilderTask<TYPES: NodeType> {
 impl<TYPES: NodeType> BuilderTask<TYPES> for SimpleBuilderTask<TYPES> {
     fn start(
         mut self: Box<Self>,
+        num_nodes: usize,
         mut stream: Box<dyn Stream<Item = Event<TYPES>> + std::marker::Unpin + Send + 'static>,
     ) {
         spawn(async move {

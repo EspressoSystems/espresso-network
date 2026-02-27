@@ -5620,6 +5620,7 @@ dependencies = [
  "hotshot-task-impls",
  "hotshot-testing",
  "hotshot-types",
+ "jf-advz",
  "lru 0.12.5",
  "num_cpus",
  "portpicker",

@@ -15,11 +15,11 @@ use futures::{future::BoxFuture, stream::StreamExt, Stream};
 use hotshot::types::Event;
 use hotshot_builder_api::{
     v0_1::{
-        block_info::{AvailableBlockData, AvailableBlockHeaderInputV1, AvailableBlockInfo},
+        block_info::{AvailableBlockData, AvailableBlockInfo},
         builder::BuildError,
         data_source::{AcceptsTxnSubmits, BuilderDataSource},
     },
-    v0_2::builder::TransactionStatus,
+    v0_2::{block_info::AvailableBlockHeaderInputV2Legacy, builder::TransactionStatus},
 };
 use hotshot_builder_shared::block::{BlockId, BuilderStateId, ParentBlockReferences};
 use hotshot_types::{
@@ -30,9 +30,12 @@ use hotshot_types::{
         block_contents::{BlockPayload, Transaction},
         node_implementation::{ConsensusTime, NodeType},
         signature_key::{BuilderSignatureKey, SignatureKey},
+        EncodeBytes,
     },
     utils::BuilderCommitment,
+    vid::advz::advz_scheme,
 };
+use jf_advz::VidScheme;
 use lru::LruCache;
 use sha2::{Digest, Sha256};
 use tagged_base64::TaggedBase64;
@@ -878,7 +881,7 @@ impl<Types: NodeType> ProxyGlobalState<Types> {
         view_number: u64,
         sender: Types::SignatureKey,
         signature: &<<Types as NodeType>::SignatureKey as SignatureKey>::PureAssembledSignatureType,
-    ) -> Result<AvailableBlockHeaderInputV1<Types>, ClaimBlockHeaderInputError<Types>> {
+    ) -> Result<AvailableBlockHeaderInputV2Legacy<Types>, ClaimBlockHeaderInputError<Types>> {
         let id = BlockId {
             hash: block_hash.clone(),
             view: Types::View::new(view_number),
@@ -909,18 +912,31 @@ impl<Types: NodeType> ProxyGlobalState<Types> {
                     block_info.metadata.clone(),
                     block_info.offered_fee,
                     block_info.truncated,
+                    block_info.block_payload.clone(),
                 )
             })
         };
 
         // TODO Add precompute back.
-        if let Some((metadata, offered_fee, _)) = extracted_block_info_option {
+        if let Some((metadata, offered_fee, _, block_payload)) = extracted_block_info_option {
+            let response_block_hash = block_payload.builder_commitment(&metadata);
+            let signature_over_builder_commitment =
+                <Types as NodeType>::BuilderSignatureKey::sign_builder_message(
+                    &sign_key,
+                    response_block_hash.as_ref(),
+                )
+                .map_err(ClaimBlockHeaderInputError::FailedToSignFeeInfo)?;
             let signature_over_fee_info =
                 Types::BuilderSignatureKey::sign_fee(&sign_key, offered_fee, &metadata)
                     .map_err(ClaimBlockHeaderInputError::FailedToSignFeeInfo)?;
 
-            let response = AvailableBlockHeaderInputV1::<Types> {
+            let vid_commitment = advz_scheme(self.global_state.read_arc().await.num_nodes)
+                .commit_only(&block_payload.encode())
+                .unwrap();
+            let response = AvailableBlockHeaderInputV2Legacy::<Types> {
+                vid_commitment,
                 fee_signature: signature_over_fee_info,
+                message_signature: signature_over_builder_commitment,
                 sender: pub_key.clone(),
             };
             tracing::info!("Sending Claim Block Header Input response for {id}");
@@ -988,7 +1004,7 @@ where
         view_number: u64,
         sender: Types::SignatureKey,
         signature: &<<Types as NodeType>::SignatureKey as SignatureKey>::PureAssembledSignatureType,
-    ) -> Result<AvailableBlockHeaderInputV1<Types>, BuildError> {
+    ) -> Result<AvailableBlockHeaderInputV2Legacy<Types>, BuildError> {
         Ok(self
             .claim_block_header_input_implementation(block_hash, view_number, sender, signature)
             .await?)

@@ -21,7 +21,7 @@ use super::{
     data_source::{AcceptsTxnSubmits, BuilderDataSource},
     Version,
 };
-use crate::api::load_api;
+use crate::{api::load_api, v0_1::block_info::AvailableBlockHeaderInputV2Legacy};
 
 #[derive(Args, Default)]
 pub struct Options {
@@ -215,18 +215,13 @@ where
                 let view_number = req.integer_param("view_number")?;
                 let signature = try_extract_param(&req, "signature")?;
                 let sender = try_extract_param(&req, "sender")?;
-                let out = state
+                state
                     .claim_block_header_input(&block_hash, view_number, sender, &signature)
                     .await
                     .map_err(|source| Error::BlockClaim {
                         source,
                         resource: block_hash.to_string(),
-                    });
-
-                out.map(|input| AvailableBlockHeaderInputV2::<Types> {
-                    fee_signature: input.fee_signature,
-                    sender: input.sender,
-                })
+                    })
             }
             .boxed()
         })?

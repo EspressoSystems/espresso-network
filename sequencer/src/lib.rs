@@ -842,6 +842,7 @@ pub mod testing {
     impl BuilderTask<SeqTypes> for LegacyBuilderImplementation {
         fn start(
             self: Box<Self>,
+            _num_nodes: usize,
             stream: Box<
                 dyn futures::prelude::Stream<Item = hotshot::types::Event<SeqTypes>>
                     + std::marker::Unpin
