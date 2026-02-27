@@ -58,6 +58,7 @@ pretty_assertions = { workspace = true }
 rand = { workspace = true }
 sequencer-utils = { workspace = true }
 serde = { workspace = true }
+serde_bytes = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }                                                         # TODO temporary, used only for VID, should be set in hotshot
 sha3 = { workspace = true }
@@ -77,12 +78,19 @@ versions = { workspace = true }
 vid = { workspace = true }
 
 [dev-dependencies]
+criterion = "0.5"
+tempfile = { workspace = true }
 espresso-contract-deployer = { workspace = true }
 espresso-types = { path = ".", features = [ "testing" ] }
+rand_chacha = { workspace = true }
 rstest = { workspace = true }
 rstest_reuse = { workspace = true }
 test-log = { workspace = true }
 test-utils = { workspace = true }
+
+[[bench]]
+name = "reward_mt"
+harness = false
 
 [lints]
 workspace = true
