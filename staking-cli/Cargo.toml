@@ -13,31 +13,31 @@ alloy = { workspace = true }
 anyhow = { workspace = true }
 ark-serialize = { workspace = true }
 clap = { workspace = true }
-clap-serde = "0.5.1"
-clap-serde-derive = "0.2.1"
+clap-serde = { workspace = true }
+clap-serde-derive = { workspace = true }
 derive_more = { workspace = true }
-directories = "6.0.0"
+directories = { workspace = true }
 dotenvy = { workspace = true }
-espresso-contract-deployer = { path = "../contracts/rust/deployer" }
-espresso-types = { version = "0.1.0", path = "../types" }
-futures-util = "0.3.31"
-git-version = "0.3.9"
+espresso-contract-deployer = { workspace = true }
+espresso-types = { workspace = true }
+futures-util = { workspace = true }
+git-version = { workspace = true }
 hotshot-contract-adapter = { workspace = true }
 hotshot-state-prover = { workspace = true }
 hotshot-types = { workspace = true }
 jf-merkle-tree-compat = { workspace = true }
-jf-signature = { workspace = true, features = ["bls", "schnorr"] }
-prometheus-parse = "0.2"
+jf-signature = { workspace = true }
+prometheus-parse = { workspace = true }
 rand = { workspace = true }
 rand_chacha = { workspace = true }
 reqwest = { workspace = true }
 rstest = { workspace = true }
 rstest_reuse = { workspace = true }
-rust_decimal = "1.36.0"
-sequencer-utils = { version = "0.1.0", path = "../utils" }
+rust_decimal = { workspace = true }
+sequencer-utils = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-sysinfo = "0.33.1"
+sysinfo = { workspace = true }
 tagged-base64 = { workspace = true }
 test-utils = { path = "../test-utils", optional = true }
 thiserror = { workspace = true }
@@ -46,11 +46,11 @@ toml = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 url = { workspace = true }
-warp = { version = "0.4", features = ["server"], optional = true }
+warp = { workspace = true, optional = true }
 
 [dev-dependencies]
-assert_cmd = "2.0.17"
-predicates = "3.1.3"
+assert_cmd = { workspace = true }
+predicates = { workspace = true }
 pretty_assertions = { workspace = true }
 staking-cli = { path = ".", features = ["testing"] }
 tempfile = { workspace = true }

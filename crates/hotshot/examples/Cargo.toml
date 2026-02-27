@@ -28,7 +28,7 @@ cdn-broker = { workspace = true }
 cdn-marshal = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true }
-espresso-types = { path = "../../../types" }
+espresso-types = { workspace = true }
 futures = { workspace = true }
 hotshot = { workspace = true }
 hotshot-example-types = { workspace = true }
@@ -36,10 +36,10 @@ hotshot-libp2p-networking = { workspace = true }
 hotshot-orchestrator = { workspace = true }
 hotshot-testing = { workspace = true }
 hotshot-types = { workspace = true }
-local-ip-address = "0.6"
+local-ip-address = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true }
-serde = { workspace = true, features = ["rc"] }
+serde = { workspace = true }
 sha2 = { workspace = true }
 surf-disco = { workspace = true }
 test-utils = { workspace = true }
@@ -51,7 +51,7 @@ url = { workspace = true }
 
 [dev-dependencies]
 anyhow = { workspace = true }
-tracing-subscriber = "0.3"
+tracing-subscriber = { workspace = true }
 
 # Common
 [[example]]

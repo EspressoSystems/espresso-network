@@ -52,18 +52,18 @@ async-lock = { workspace = true }
 async-trait = { workspace = true }
 
 # Dependencies enabled by feature "file-system-data-source".
-atomic_store = { git = "https://github.com/EspressoSystems/atomicstore.git", tag = "0.1.5", optional = true }
-backoff = "0.4"
+atomic_store = { workspace = true, optional = true }
+backoff = { workspace = true }
 bincode = { workspace = true }
 chrono = { workspace = true }
 committable = { workspace = true }
-custom_debug = "0.6"
+custom_debug = { workspace = true }
 derivative = { workspace = true }
 derive_more = { workspace = true }
 either = { workspace = true }
 
 # Dependencies enabled by feature "testing".
-espresso-macros = { git = "https://github.com/EspressoSystems/espresso-macros.git", tag = "0.1.0", optional = true }
+espresso-macros = { workspace = true, optional = true }
 futures = { workspace = true }
 hotshot = { workspace = true }
 hotshot-events-service = { workspace = true }
@@ -72,47 +72,35 @@ hotshot-testing = { workspace = true }
 hotshot-types = { workspace = true }
 
 # Dependencies enabled by feature "sql-data-source".
-include_dir = { version = "0.7", optional = true }
-itertools = "0.12.1"
+include_dir = { workspace = true, optional = true }
+itertools = { workspace = true }
 jf-advz = { workspace = true }
-jf-merkle-tree-compat = { workspace = true, features = [
-    "std",
-] }
-lazy_static = "1"
-log = { version = "0.4", optional = true }
-prometheus = { version = "0.13", default-features = false }
+jf-merkle-tree-compat = { workspace = true }
+lazy_static = { workspace = true }
+log = { workspace = true, optional = true }
+prometheus = { workspace = true }
 rand = { workspace = true, optional = true }
-refinery = { version = "0.8", features = ["tokio-postgres"], optional = true }
-refinery-core = { version = "0.8", optional = true }
+refinery = { workspace = true, optional = true }
+refinery-core = { workspace = true, optional = true }
 semver = { workspace = true }
-serde = { workspace = true, features = ["derive"] }
-serde_json = "1.0"
-snafu = "0.8"
-sqlx = { version = "0.8", features = [
-    "bit-vec",
-    "postgres",
-    "runtime-tokio",
-    "tls-native-tls",
-], optional = true }
-surf-disco = "0.9"
+serde = { workspace = true }
+serde_json = { workspace = true }
+snafu = { workspace = true }
+sqlx = { workspace = true, optional = true }
+surf-disco = { workspace = true }
 tagged-base64 = { workspace = true }
-tempfile = { version = "3.10", optional = true }
+tempfile = { workspace = true, optional = true }
 test-utils = { workspace = true, optional = true }
-tide-disco = "0.9"
-time = "0.3"
-tokio = { version = "1", default-features = false, features = [
-    "rt-multi-thread",
-    "macros",
-    "parking_lot",
-    "sync",
-] }
-toml = "0.8"
-tracing = "0.1"
+tide-disco = { workspace = true }
+time = { workspace = true }
+tokio = { workspace = true }
+toml = { workspace = true }
+tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-trait-variant = "0.1"
-url = "2"
-vbs = "0.1"
-vec1 = "1.12"
+trait-variant = { workspace = true }
+url = { workspace = true }
+vbs = { workspace = true }
+vec1 = { workspace = true }
 versions = { workspace = true }
 
 # Dependencies enabled by feature "backtrace-on-stack-overflow".
@@ -127,12 +115,12 @@ versions = { workspace = true }
 backtrace-on-stack-overflow = { version = "0.3", optional = true }
 
 [dev-dependencies]
-clap = { version = "4.5", features = ["derive", "env"] }
-espresso-macros = { git = "https://github.com/EspressoSystems/espresso-macros.git", tag = "0.1.0" }
+clap = { workspace = true }
+espresso-macros = { workspace = true }
 generic-array = "0.14"
 rand = { workspace = true }
 reqwest = { workspace = true }
-tempfile = "3.10"
+tempfile = { workspace = true }
 test-log = { workspace = true }
 test-utils = { workspace = true }
 
