@@ -46,7 +46,7 @@ jobs:
 
       - name: Run clippy
         run: |
-          cargo clippy --workspace --exclude sequencer-sqlite --exclude espresso-dev-node --exclude espresso-crypto-helper --features testing --all-targets --keep-going -- -D warnings
+          cargo clippy --workspace --exclude sequencer-sqlite --exclude espresso-dev-node --features testing --all-targets --keep-going -- -D warnings
 
   clippy-embedded:
       name: clippy (embedded-db)
@@ -60,21 +60,4 @@ jobs:
 
         - name: Run clippy
           run: |
-            cargo clippy --workspace --exclude espresso-crypto-helper --features "embedded-db testing" --all-targets --keep-going -- -D warnings
-
-  # crypto-helper uses openssl = { features = ["vendored"] } for cross-compiling.
-  # Cargo feature unification leaks "vendored" to the entire workspace, adding ~3min
-  # to compile openssl from source. Lint it separately to keep it isolated.
-  clippy-crypto-helper:
-      name: clippy (crypto-helper)
-      runs-on: ubuntu-latest
-      steps:
-        - uses: actions/checkout@v4
-        - uses: Swatinem/rust-cache@v2
-          with:
-            save-if: false
-            shared-key: cargo-clippy
-
-        - name: Run clippy
-          run: |
-            cargo clippy -p espresso-crypto-helper --all-targets --keep-going -- -D warnings
+            cargo clippy --workspace --features "embedded-db testing" --all-targets --keep-going -- -D warnings

@@ -67,12 +67,10 @@ lint *args:
     just clippy {{args}} -- -D warnings
 
 clippy *args:
-    # check all targets in workspace (excluding embedded-db and crypto-helper crates)
-    cargo clippy --workspace --exclude sequencer-sqlite --exclude espresso-dev-node --exclude espresso-crypto-helper --features testing --all-targets {{args}}
+    # check all targets in workspace (excluding embedded-db crates)
+    cargo clippy --workspace --exclude sequencer-sqlite --exclude espresso-dev-node --features testing --all-targets {{args}}
     # check entire workspace (including sequencer-sqlite crate) with embedded-db feature
-    cargo clippy --workspace --exclude espresso-crypto-helper --features "embedded-db testing" --all-targets {{args}}
-    # crypto-helper separately (vendored openssl must not leak to workspace)
-    cargo clippy -p espresso-crypto-helper --all-targets {{args}}
+    cargo clippy --workspace --features "embedded-db testing" --all-targets {{args}}
 
 check *args:
     # postgres (all workspace members except embedded-db and crypto-helper crates)
