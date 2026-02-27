@@ -26,7 +26,7 @@ use hotshot_builder_api::{
         builder::BuildError,
         data_source::BuilderDataSource,
     },
-    v0_2::block_info::AvailableBlockHeaderInputV1,
+    v0_2::block_info::{AvailableBlockHeaderInputV1, AvailableBlockHeaderInputV2Legacy},
 };
 use hotshot_example_types::block_types::TestTransaction;
 use hotshot_types::{
@@ -68,6 +68,7 @@ impl RandomBuilderImplementation {
             should_fail_claims: Arc::new(AtomicBool::new(false)),
         };
         let task = RandomBuilderTask {
+            num_nodes,
             blocks,
             config,
             changes,
@@ -102,6 +103,7 @@ where
 }
 
 pub struct RandomBuilderTask<TYPES: NodeType<Transaction = TestTransaction>> {
+    num_nodes: Arc<RwLock<usize>>,
     config: RandomBuilderConfig,
     changes: HashMap<u64, BuilderChange>,
     change_sender: Sender<BuilderChange>,
@@ -113,6 +115,7 @@ pub struct RandomBuilderTask<TYPES: NodeType<Transaction = TestTransaction>> {
 impl<TYPES: NodeType<Transaction = TestTransaction>> RandomBuilderTask<TYPES> {
     async fn build_blocks(
         options: RandomBuilderConfig,
+        num_nodes: usize,
         pub_key: <TYPES as NodeType>::BuilderSignatureKey,
         priv_key: <<TYPES as NodeType>::BuilderSignatureKey as BuilderSignatureKey>::BuilderPrivateKey,
         blocks: Arc<RwLock<LruCache<BuilderCommitment, BlockEntry<TYPES>>>>,
@@ -137,7 +140,9 @@ impl<TYPES: NodeType<Transaction = TestTransaction>> RandomBuilderTask<TYPES> {
                 .collect();
 
             // Let new VID scheme ship with Epochs upgrade.
-            let block = build_block::<TYPES>(transactions, pub_key.clone(), priv_key.clone()).await;
+            let block =
+                build_block::<TYPES>(transactions, num_nodes, pub_key.clone(), priv_key.clone())
+                    .await;
 
             let push_result = blocks
                 .write()
@@ -164,10 +169,12 @@ where
 {
     fn start(
         mut self: Box<Self>,
+        num_nodes: usize,
         mut stream: Box<dyn Stream<Item = Event<TYPES>> + std::marker::Unpin + Send + 'static>,
     ) {
         let mut task = Some(spawn(Self::build_blocks(
             self.config.clone(),
+            num_nodes,
             self.pub_key.clone(),
             self.priv_key.clone(),
             self.blocks.clone(),
@@ -187,6 +194,7 @@ where
                                         if task.is_none() {
                                             task = Some(spawn(Self::build_blocks(
                                                 self.config.clone(),
+                                                num_nodes,
                                                 self.pub_key.clone(),
                                                 self.priv_key.clone(),
                                                 self.blocks.clone(),
@@ -317,7 +325,7 @@ impl<TYPES: NodeType> BuilderDataSource<TYPES> for RandomBuilderSource<TYPES> {
         _view_number: u64,
         _sender: TYPES::SignatureKey,
         _signature: &<TYPES::SignatureKey as SignatureKey>::PureAssembledSignatureType,
-    ) -> Result<AvailableBlockHeaderInputV1<TYPES>, BuildError> {
+    ) -> Result<AvailableBlockHeaderInputV2Legacy<TYPES>, BuildError> {
         if self.should_fail_claims.load(Ordering::Relaxed) {
             return Err(BuildError::Missing);
         }

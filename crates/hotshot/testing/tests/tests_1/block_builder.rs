@@ -46,7 +46,7 @@ async fn test_random_block_builder() {
         HashMap::new(),
     )
     .await;
-    task.start(Box::new(futures::stream::empty()));
+    task.start(1, Box::new(futures::stream::empty()));
 
     let builder_started = Instant::now();
 

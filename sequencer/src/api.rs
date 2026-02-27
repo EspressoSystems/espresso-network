@@ -2051,7 +2051,7 @@ pub mod test_helpers {
 
             // Hook the builder(s) up to the event stream from the first node
             for builder_task in builder_tasks {
-                builder_task.start(Box::new(handle_0.event_stream().await));
+                builder_task.start(NUM_NODES, Box::new(handle_0.event_stream().await));
             }
 
             for ctx in &nodes {
