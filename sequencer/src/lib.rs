@@ -57,6 +57,7 @@ use hotshot_types::{
     ValidatorConfig,
 };
 use libp2p::Multiaddr;
+use moka::future::Cache;
 use network::libp2p::split_off_peer_id;
 use options::Identity;
 pub use options::Options;
@@ -654,6 +655,12 @@ where
         coordinator: coordinator.clone(),
         genesis_version: genesis.genesis_version,
         epoch_start_block: genesis.epoch_start_block.unwrap_or_default(),
+        light_client_contract_address: Cache::builder().max_capacity(1).build(),
+        token_contract_address: Cache::builder().max_capacity(1).build(),
+        finalized_hotshot_height: Cache::builder()
+            .max_capacity(1)
+            .time_to_live(Duration::from_secs(30))
+            .build(),
     };
 
     // Initialize the Libp2p network
