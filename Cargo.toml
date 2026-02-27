@@ -348,6 +348,16 @@ opt-level = 1
 opt-level = 1
 [profile.test.package.hotshot-utils]
 opt-level = 1
+[profile.test.package.hotshot-libp2p-networking]
+opt-level = 1
+[profile.test.package.hotshot-contract-adapter]
+opt-level = 1
+[profile.test.package.cliquenet]
+opt-level = 1
+[profile.test.package.hotshot-macros]
+opt-level = 1
+[profile.test.package.test-utils]
+opt-level = 1
 [profile.test.package.hotshot-state-prover]
 opt-level = 3
 [profile.test.package.jf-merkle-tree]
