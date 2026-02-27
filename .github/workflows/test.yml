@@ -48,11 +48,6 @@ jobs:
       - name: Show memory
         run: free -h
 
-      - name: Collect Workflow Telemetry
-        uses: catchpoint/workflow-telemetry-action@v2
-        with:
-          comment_on_pr: false
-
       - name: Build and archive tests
         run: just nextest-archive nextest-archive-postgres.tar.zst --timings
 
@@ -95,11 +90,6 @@ jobs:
 
       - name: Show memory
         run: free -h
-
-      - name: Collect Workflow Telemetry
-        uses: catchpoint/workflow-telemetry-action@v2
-        with:
-          comment_on_pr: false
 
       - name: Build and archive tests
         run: just nextest-archive nextest-archive-sqlite.tar.zst --features "embedded-db,testing" --timings
@@ -381,11 +371,6 @@ jobs:
       - name: Configure PATH
         run: PATH="$PWD/target/debug:$PATH"
 
-      - name: Collect Workflow Telemetry
-        uses: catchpoint/workflow-telemetry-action@master
-        with:
-          comment_on_pr: false
-
       - name: Test Integration
         env:
           NEXTEST_PROFILE: integration
@@ -434,11 +419,6 @@ jobs:
           mv test-binaries/* target/debug
           mv test-binaries-sqlite/* target/debug
           chmod -c +x target/debug/*
-
-      - name: Collect Workflow Telemetry
-        uses: catchpoint/workflow-telemetry-action@v2
-        with:
-          comment_on_pr: false
 
       - name: Test Demo
         run: |
