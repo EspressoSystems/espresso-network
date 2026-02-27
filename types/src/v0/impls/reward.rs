@@ -24,7 +24,8 @@ use num_traits::CheckedSub;
 use sequencer_utils::{
     impl_serde_from_string_or_integer, impl_to_fixed_bytes, ser::FromStringOrInteger,
 };
-use vbs::version::StaticVersionType;
+use vbs::version::Version;
+use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION};
 
 use super::{
     v0_3::{AuthenticatedValidator, RewardAmount, COMMISSION_BASIS_POINTS},
@@ -41,7 +42,7 @@ use crate::{
         RewardMerkleTreeV1,
     },
     v0_4::{Delta, REWARD_MERKLE_TREE_V2_ARITY, REWARD_MERKLE_TREE_V2_HEIGHT},
-    DrbAndHeaderUpgradeVersion, EpochVersion, FeeAccount,
+    FeeAccount,
 };
 
 impl_serde_from_string_or_integer!(RewardAmount);
@@ -694,12 +695,12 @@ impl RewardDistributor {
 
     pub fn apply_rewards(
         &mut self,
-        version: vbs::version::Version,
+        version: Version,
         state: &mut ValidatedState,
     ) -> anyhow::Result<()> {
         let computed_rewards = self.compute_rewards()?;
 
-        if version <= EpochVersion::version() {
+        if version <= EPOCH_VERSION {
             for (address, reward) in computed_rewards.all_rewards() {
                 Self::update_reward_balance(
                     &mut state.reward_merkle_tree_v1,
@@ -789,7 +790,7 @@ pub async fn distribute_block_reward(
     validated_state: &mut ValidatedState,
     parent_leaf: &Leaf2,
     view_number: ViewNumber,
-    version: vbs::version::Version,
+    version: Version,
 ) -> anyhow::Result<Option<RewardDistributor>> {
     let height = parent_leaf.height() + 1;
 
@@ -830,7 +831,7 @@ pub async fn distribute_block_reward(
     let mut previously_distributed = parent_header.total_reward_distributed().unwrap_or_default();
 
     // Decide whether to use a fixed or dynamic block reward.
-    let block_reward = if version >= DrbAndHeaderUpgradeVersion::version() {
+    let block_reward = if version >= DRB_AND_HEADER_UPGRADE_VERSION {
         instance_state
             .block_reward(EpochNumber::new(*epoch))
             .await
@@ -843,9 +844,7 @@ pub async fn distribute_block_reward(
     // and the parent block is from V3 (which does not have a previously distributed reward field),
     // we need to recompute the previously distributed rewards
     // using the fixed block reward and the number of blocks in which fixed reward was distributed
-    if version >= DrbAndHeaderUpgradeVersion::version()
-        && parent_header.version() == EpochVersion::version()
-    {
+    if version >= DRB_AND_HEADER_UPGRADE_VERSION && parent_header.version() == EPOCH_VERSION {
         ensure!(
             instance_state.epoch_start_block != 0,
             "epoch_start_block is zero"
@@ -941,7 +940,7 @@ pub async fn get_leader_and_fetch_missing_rewards(
 
     let parent_header = parent_leaf.block_header();
 
-    if parent_header.version() <= EpochVersion::version() {
+    if parent_header.version() <= EPOCH_VERSION {
         let accts: HashSet<_> = reward_accounts
             .into_iter()
             .map(RewardAccountV1::from)

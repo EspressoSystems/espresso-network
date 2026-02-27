@@ -5,13 +5,6 @@ authors = { workspace = true }
 edition = { workspace = true }
 publish = false
 
-[features]
-default = ["fee", "pos", "drb-and-header", "da-upgrade"]
-fee = ["sequencer/fee"]
-pos = ["sequencer/pos"]
-drb-and-header = ["sequencer/drb-and-header"]
-da-upgrade = ["sequencer/da-upgrade"]
-
 [dependencies]
 hotshot-query-service = { workspace = true }
 serde_json = { workspace = true }
@@ -19,20 +12,20 @@ serde_json = { workspace = true }
 [dev-dependencies]
 alloy = { workspace = true }
 anyhow = { workspace = true }
-client = { path = "../client" }
+client = { workspace = true }
 dotenvy = { workspace = true }
-espresso-contract-deployer = { path = "../contracts/rust/deployer" }
-espresso-types = { path = "../types", features = ["testing"] }
+espresso-contract-deployer = { workspace = true }
+espresso-types = { workspace = true, features = ["testing"] }
 futures = { workspace = true }
-hotshot-contract-adapter = { path = "../contracts/rust/adapter" }
-hotshot-state-prover = { path = "../hotshot-state-prover" }
-hotshot-types = { path = "../crates/hotshot/types" }
+hotshot-contract-adapter = { workspace = true }
+hotshot-state-prover = { workspace = true }
+hotshot-types = { workspace = true }
 jf-signature = { workspace = true }
 rand = { workspace = true }
-reqwest = { workspace = true, features = ["json"] }
-sequencer = { path = "../sequencer", default-features = false, features = ["testing"] }
-sequencer-utils = { path = "../utils" }
-staking-cli = { path = "../staking-cli" }
+reqwest = { workspace = true }
+sequencer = { workspace = true, default-features = false, features = ["testing"] }
+sequencer-utils = { workspace = true }
+staking-cli = { workspace = true }
 surf-disco = { workspace = true }
 tagged-base64 = { workspace = true }
 tempfile = { workspace = true }
@@ -43,6 +36,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 url = { workspace = true }
 vbs = { workspace = true }
+versions = { workspace = true }
 
 [[test]]
 name = "integration"

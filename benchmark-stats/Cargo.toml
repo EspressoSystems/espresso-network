@@ -8,9 +8,9 @@ license = "MIT"
 [dependencies]
 chrono = { workspace = true }
 clap = { workspace = true }
-csv = "1"
-espresso-types = { path = "../types" }
+csv = { workspace = true }
+espresso-types = { workspace = true }
 hotshot-task-impls = { workspace = true }
 hotshot-types = { workspace = true }
-plotly = "0.13.5"
+plotly = { workspace = true }
 serde = { workspace = true }

@@ -7,13 +7,13 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use hotshot_example_types::node_types::{MemoryImpl, TestTypes, TestVersions};
+use hotshot_example_types::node_types::{MemoryImpl, TestTypes};
 use hotshot_task_impls::quorum_proposal::QuorumProposalTaskState;
 use hotshot_types::simple_certificate::UpgradeCertificate;
 
 use crate::predicates::{Predicate, PredicateResult};
 
-type QuorumProposalTaskTestState = QuorumProposalTaskState<TestTypes, MemoryImpl, TestVersions>;
+type QuorumProposalTaskTestState = QuorumProposalTaskState<TestTypes, MemoryImpl>;
 
 type UpgradeCertCallback =
     Arc<dyn Fn(Arc<Option<UpgradeCertificate<TestTypes>>>) -> bool + Send + Sync>;
