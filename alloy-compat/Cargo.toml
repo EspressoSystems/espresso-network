@@ -7,7 +7,7 @@ edition = { workspace = true }
 
 [dependencies]
 alloy = { workspace = true }
-ethers-core = "2.0"
+ethers-core = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true }
 

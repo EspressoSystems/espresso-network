@@ -17,20 +17,20 @@ bincode = { workspace = true }
 bitvec = { workspace = true }
 circular-buffer = { workspace = true }
 clap = { workspace = true }
-espresso-types = { path = "../types" }
+espresso-types = { workspace = true }
 futures = { workspace = true }
 hotshot = { workspace = true }
 hotshot-example-types = { workspace = true }
 hotshot-query-service = { workspace = true }
 indexmap = { workspace = true }
 serde = { workspace = true }
-serde_json = { version = "^1.0.113" }
+serde_json = { workspace = true }
 tokio = { workspace = true }
 
 # Dependencies for feature `testing`
 hotshot-types = { workspace = true }
-prometheus-parse = { version = "^0.2.5" }
-reqwest = { workspace = true, features = ["rustls-tls"] }
+prometheus-parse = { workspace = true }
+reqwest = { workspace = true }
 surf-disco = { workspace = true }
 tide-disco = { workspace = true }
 time = { workspace = true }

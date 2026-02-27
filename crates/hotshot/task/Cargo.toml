@@ -4,19 +4,13 @@ name = "hotshot-task"
 version = { workspace = true }
 edition = { workspace = true }
 license = "MIT"
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 async-broadcast = { workspace = true }
 async-trait = { workspace = true }
 futures = { workspace = true }
 hotshot-utils = { workspace = true }
-tokio = { workspace = true, features = [
-    "time",
-    "rt-multi-thread",
-    "macros",
-    "sync",
-] }
+tokio = { workspace = true }
 tracing = { workspace = true }
 
 [lints]
