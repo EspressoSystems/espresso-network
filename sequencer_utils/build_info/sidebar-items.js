@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["GIT_BRANCH","GIT_COMMIT_TIMESTAMP","GIT_DESCRIBE","GIT_DIRTY","GIT_SHA"],"struct":["BuildInfo"]};

@@ -289,9 +289,9 @@
 <a href=#289 id=289 data-nosnippet>289</a>            lines.contains(
 <a href=#290 id=290 data-nosnippet>290</a>                <span class="kw-2">&amp;</span><span class="macro">format!</span>(
 <a href=#291 id=291 data-nosnippet>291</a>                    <span class="string">"consensus_version{{desc=\"{}\",rev=\"{}\",timestamp=\"{}\"}} 1"</span>,
-<a href=#292 id=292 data-nosnippet>292</a>                    <span class="macro">env!</span>(<span class="string">"VERGEN_GIT_DESCRIBE"</span>),
-<a href=#293 id=293 data-nosnippet>293</a>                    <span class="macro">env!</span>(<span class="string">"VERGEN_GIT_SHA"</span>),
-<a href=#294 id=294 data-nosnippet>294</a>                    <span class="macro">env!</span>(<span class="string">"VERGEN_GIT_COMMIT_TIMESTAMP"</span>),
+<a href=#292 id=292 data-nosnippet>292</a>                    sequencer_utils::build_info::GIT_DESCRIBE,
+<a href=#293 id=293 data-nosnippet>293</a>                    sequencer_utils::build_info::GIT_SHA,
+<a href=#294 id=294 data-nosnippet>294</a>                    sequencer_utils::build_info::GIT_COMMIT_TIMESTAMP,
 <a href=#295 id=295 data-nosnippet>295</a>                )
 <a href=#296 id=296 data-nosnippet>296</a>                .as_str()
 <a href=#297 id=297 data-nosnippet>297</a>            ),
@@ -304,12 +304,21 @@
 <a href=#304 id=304 data-nosnippet>304</a>            build_info_line.is_some(),
 <a href=#305 id=305 data-nosnippet>305</a>            <span class="string">"missing consensus_build_info metric: {lines:#?}"
 <a href=#306 id=306 data-nosnippet>306</a>        </span>);
-<a href=#307 id=307 data-nosnippet>307</a>        <span class="macro">assert!</span>(
-<a href=#308 id=308 data-nosnippet>308</a>            build_info_line.unwrap().contains(<span class="string">"testing=\"yes\""</span>),
-<a href=#309 id=309 data-nosnippet>309</a>            <span class="string">"expected testing=yes in test builds: {lines:#?}"
-<a href=#310 id=310 data-nosnippet>310</a>        </span>);
-<a href=#311 id=311 data-nosnippet>311</a>
-<a href=#312 id=312 data-nosnippet>312</a>        task.abort();
-<a href=#313 id=313 data-nosnippet>313</a>    }
-<a href=#314 id=314 data-nosnippet>314</a>}
+<a href=#307 id=307 data-nosnippet>307</a>        <span class="kw">let </span>build_info_line = build_info_line.unwrap();
+<a href=#308 id=308 data-nosnippet>308</a>        <span class="macro">assert!</span>(
+<a href=#309 id=309 data-nosnippet>309</a>            build_info_line.contains(<span class="string">"modified="</span>),
+<a href=#310 id=310 data-nosnippet>310</a>            <span class="string">"expected modified= in build_info: {lines:#?}"
+<a href=#311 id=311 data-nosnippet>311</a>        </span>);
+<a href=#312 id=312 data-nosnippet>312</a>        <span class="macro">assert!</span>(
+<a href=#313 id=313 data-nosnippet>313</a>            build_info_line.contains(<span class="string">"features="</span>),
+<a href=#314 id=314 data-nosnippet>314</a>            <span class="string">"expected features= in build_info: {lines:#?}"
+<a href=#315 id=315 data-nosnippet>315</a>        </span>);
+<a href=#316 id=316 data-nosnippet>316</a>        <span class="macro">assert!</span>(
+<a href=#317 id=317 data-nosnippet>317</a>            build_info_line.contains(<span class="string">"testing"</span>),
+<a href=#318 id=318 data-nosnippet>318</a>            <span class="string">"expected testing in features: {lines:#?}"
+<a href=#319 id=319 data-nosnippet>319</a>        </span>);
+<a href=#320 id=320 data-nosnippet>320</a>
+<a href=#321 id=321 data-nosnippet>321</a>        task.abort();
+<a href=#322 id=322 data-nosnippet>322</a>    }
+<a href=#323 id=323 data-nosnippet>323</a>}
 </code></pre></div></section></main></body></html>

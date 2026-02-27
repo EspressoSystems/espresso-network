@@ -78,7 +78,7 @@
 <a href=#78 id=78 data-nosnippet>78</a>
 <a href=#79 id=79 data-nosnippet>79</a><span class="doccomment">/// CLI to interact with the Espresso stake table contract.
 <a href=#80 id=80 data-nosnippet>80</a></span><span class="attr">#[derive(ClapSerde, Clone, Debug, Deserialize, Serialize)]
-<a href=#81 id=81 data-nosnippet>81</a>#[command(version, about, long_about = <span class="prelude-val">None</span>)]
+<a href=#81 id=81 data-nosnippet>81</a>#[command(version, long_version = <span class="macro">sequencer_utils::build_info!</span>().clap_version(), about, long_about = <span class="prelude-val">None</span>)]
 <a href=#82 id=82 data-nosnippet>82</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">struct </span>Config {
 <a href=#83 id=83 data-nosnippet>83</a>    <span class="doccomment">/// L1 Ethereum RPC.
 <a href=#84 id=84 data-nosnippet>84</a>    </span><span class="attr">#[clap(long, env = <span class="string">"L1_PROVIDER"</span>)]
