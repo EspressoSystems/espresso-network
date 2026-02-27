@@ -17,12 +17,12 @@ hotshot-types = { workspace = true }
 rand = { workspace = true }
 semver = { workspace = true }
 serde = { workspace = true }
-snafu = "0.8"
-tide-disco = "0.9"
+snafu = { workspace = true }
+tide-disco = { workspace = true }
 tokio = { workspace = true }
 toml = { workspace = true }
 tracing = { workspace = true }
-tracing-test = "0.2"
+tracing-test = { workspace = true }
 vbs = { workspace = true }
 
 [dev-dependencies]

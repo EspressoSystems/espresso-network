@@ -18,6 +18,7 @@ use std::{
         BTreeMap,
     },
     hash::Hash,
+    iter,
     ops::{Bound, Deref, RangeBounds},
     path::Path,
 };
@@ -452,7 +453,7 @@ where
     let end = range.end_bound().cloned();
 
     // Advance the underlying iterator to the start of the range.
-    let pos = match start {
+    let mut pos = match start {
         Bound::Included(n) => {
             if n > 0 {
                 iter.nth(n - 1);
@@ -466,7 +467,7 @@ where
         Bound::Unbounded => 0,
     };
 
-    itertools::unfold((iter, end, pos), |(iter, end, pos)| {
+    iter::from_fn(move || {
         // Check if we have reached the end of the range.
         let reached_end = match end {
             Bound::Included(n) => pos > n,
@@ -477,7 +478,7 @@ where
             return None;
         }
         let opt = iter.next()?;
-        *pos += 1;
+        pos += 1;
         Some(opt.context(MissingSnafu))
     })
 }
