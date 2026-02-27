@@ -59,8 +59,8 @@ impl PermittedRewardMerkleTreeV2 {
             .await
             .context("Failed to acquire permit for RewardMerkleTreeV2")?;
 
-        let tree = RewardMerkleTreeV2::from_kv_set(REWARD_MERKLE_TREE_V2_HEIGHT, balances)
-            .context("Failed to rebuild reward merkle tree from balances")?;
+        let tree = tokio::task::spawn_blocking(move || RewardMerkleTreeV2::from_kv_set(REWARD_MERKLE_TREE_V2_HEIGHT, balances).context("Failed to rebuild reward merkle tree from balances")).await??;
+            
 
         Ok(PermittedRewardMerkleTreeV2 {
             tree,

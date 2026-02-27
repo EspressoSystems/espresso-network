@@ -693,10 +693,10 @@ impl RewardDistributor {
     }
 
     pub fn apply_rewards(
-        &mut self,
+        mut self,
         version: vbs::version::Version,
-        state: &mut ValidatedState,
-    ) -> anyhow::Result<()> {
+        mut state: ValidatedState,
+    ) -> anyhow::Result<(Self, ValidatedState)> {
         let computed_rewards = self.compute_rewards()?;
 
         if version <= EpochVersion::version() {
@@ -721,7 +721,7 @@ impl RewardDistributor {
 
         self.total_distributed += self.block_reward();
 
-        Ok(())
+        Ok((self, state))
     }
 
     /// Computes the reward in a block for the validator and its delegators
@@ -786,11 +786,11 @@ impl RewardDistributor {
 /// on the protocol version.
 pub async fn distribute_block_reward(
     instance_state: &NodeState,
-    validated_state: &mut ValidatedState,
+    mut validated_state: ValidatedState,
     parent_leaf: &Leaf2,
     view_number: ViewNumber,
     version: vbs::version::Version,
-) -> anyhow::Result<Option<RewardDistributor>> {
+) -> anyhow::Result<(Option<RewardDistributor>, ValidatedState)> {
     let height = parent_leaf.height() + 1;
 
     let epoch_height = instance_state
@@ -810,7 +810,7 @@ pub async fn distribute_block_reward(
     // Rewards are distributed only if the current epoch is not the first or second epoch
     // this is because we don't have stake table from the contract for the first two epochs
     if epoch <= first_epoch + 1 {
-        return Ok(None);
+        return Ok((None, validated_state));
     }
 
     // Determine who the block leader is for this view and ensure missing block
@@ -818,7 +818,7 @@ pub async fn distribute_block_reward(
 
     let leader = get_leader_and_fetch_missing_rewards(
         instance_state,
-        validated_state,
+        &mut validated_state,
         parent_leaf,
         view_number,
     )
@@ -883,15 +883,17 @@ pub async fn distribute_block_reward(
 
     if block_reward.0.is_zero() {
         tracing::info!("block reward is zero. height={height}. epoch={epoch}");
-        return Ok(None);
+        return Ok((None, validated_state));
     }
 
-    let mut reward_distributor =
-        RewardDistributor::new(leader, block_reward, previously_distributed);
+    let reward_distributor = RewardDistributor::new(leader, block_reward, previously_distributed);
 
-    reward_distributor.apply_rewards(version, validated_state)?;
+    let (reward_distributor, state) = tokio::task::spawn_blocking(move || {
+        reward_distributor.apply_rewards(version, validated_state)
+    })
+    .await??;
 
-    Ok(Some(reward_distributor))
+    Ok((Some(reward_distributor), state))
 }
 
 pub async fn get_leader_and_fetch_missing_rewards(
