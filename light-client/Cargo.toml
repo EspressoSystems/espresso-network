@@ -34,8 +34,8 @@ static_assertions = { workspace = true }
 surf-disco = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
-versions = { workspace = true }
 vbs = { workspace = true }
+versions = { workspace = true }
 
 clap = { workspace = true, optional = true }
 

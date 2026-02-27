@@ -5834,7 +5834,6 @@ dependencies = [
  "local-ip-address",
  "rand 0.8.5",
  "reqwest",
- "sequencer",
  "serde",
  "sha2 0.10.9",
  "surf-disco",

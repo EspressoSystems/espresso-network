@@ -7,8 +7,8 @@ use async_once_cell::Lazy;
 use async_trait::async_trait;
 use committable::Commitment;
 use data_source::{
-    CatchupDataSource, RequestResponseDataSource, StakeTableDataSource, StakeTableWithEpochNumber,
-    StateCertDataSource, StateCertFetchingDataSource, SubmitDataSource,
+    CatchupDataSource, RequestResponseDataSource, StakeTableDataSource, StateCertDataSource,
+    StateCertFetchingDataSource, SubmitDataSource,
 };
 use derivative::Derivative;
 use espresso_types::{
@@ -22,7 +22,7 @@ use espresso_types::{
     },
     v0_4::{RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleTreeV2},
     AccountQueryData, AuthenticatedValidatorMap, BlockMerkleTree, FeeAccount, FeeMerkleTree, Leaf2,
-    NodeState, PubKey, Transaction,
+    NodeState, PubKey, StakeTableWithEpochNumber, Transaction,
 };
 use futures::{
     future::{BoxFuture, Future, FutureExt},
@@ -3636,6 +3636,95 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_hotshot_event_streaming() {
         run_hotshot_event_streaming_test("").await;
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_event_streaming_default_routes_to_v1_with_decide() {
+        use hotshot_types::event::LegacyEvent;
+
+        let query_service_port =
+            reserve_tcp_port().expect("OS should have ephemeral ports available");
+
+        let base_url: Url = format!("http://localhost:{query_service_port}")
+            .parse()
+            .unwrap();
+
+        let options = Options::with_port(query_service_port).hotshot_events(HotshotEvents);
+
+        let network_config = TestConfigBuilder::default().build();
+        let config = TestNetworkConfigBuilder::default()
+            .api_config(options)
+            .network_config(network_config)
+            .build();
+        let _network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
+
+        let client: Client<ServerError, SequencerApiVersion> = Client::new(base_url.clone());
+
+        let mut events = client
+            .socket("hotshot-events/events")
+            .subscribe::<Event<SeqTypes>>()
+            .await
+            .unwrap();
+
+        let mut got_decide = false;
+        for _ in 0..200 {
+            let event = events
+                .next()
+                .await
+                .expect("stream should not end")
+                .expect("event should deserialize");
+            if let EventType::Decide {
+                leaf_chain,
+                committing_qc,
+                ..
+            } = &event.event
+            {
+                assert!(!leaf_chain.is_empty(), "leaf chain should not be empty");
+                let _ = committing_qc.view_number();
+                got_decide = true;
+                break;
+            }
+        }
+        assert!(
+            got_decide,
+            "should receive a Decide event via the default (v1) endpoint"
+        );
+
+        let v0_client: Client<ServerError, SequencerApiVersion> = Client::new(
+            format!("http://localhost:{query_service_port}/v0")
+                .parse()
+                .unwrap(),
+        );
+
+        let mut legacy_events = v0_client
+            .socket("hotshot-events/events")
+            .subscribe::<LegacyEvent<SeqTypes>>()
+            .await
+            .unwrap();
+
+        let mut got_legacy_decide = false;
+        for _ in 0..200 {
+            let event = legacy_events
+                .next()
+                .await
+                .expect("legacy stream should not end")
+                .expect("legacy event should deserialize");
+            if let hotshot_types::event::LegacyEventType::Decide { leaf_chain, qc, .. } =
+                &event.event
+            {
+                assert!(
+                    !leaf_chain.is_empty(),
+                    "legacy leaf chain should not be empty"
+                );
+                let _ = qc.view_number();
+                got_legacy_decide = true;
+                break;
+            }
+        }
+        assert!(
+            got_legacy_decide,
+            "should receive a LegacyEvent::Decide via the v0 endpoint"
+        );
     }
 
     // TODO when `EPOCH_VERSION` becomes base version we can merge this

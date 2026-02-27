@@ -2,6 +2,7 @@ use hotshot_types::{
     data::{EpochNumber, ViewNumber},
     signature_key::{BLSPubKey, SchnorrPubKey},
     traits::{node_implementation::NodeType, signature_key::SignatureKey},
+    PeerConfig,
 };
 use serde::{Deserialize, Serialize};
 
@@ -149,6 +150,13 @@ impl NodeType for SeqTypes {
     type Membership = EpochCommittees;
     type BuilderSignatureKey = FeeAccount;
     type StateSignatureKey = SchnorrPubKey;
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(bound = "T: NodeType")]
+pub struct StakeTableWithEpochNumber<T: NodeType> {
+    pub epoch: Option<EpochNumber>,
+    pub stake_table: Vec<PeerConfig<T>>,
 }
 
 pub const MOCK_SEQUENCER_VERSIONS: versions::Upgrade =

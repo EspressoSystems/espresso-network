@@ -13,7 +13,8 @@ use espresso_types::{
         StakeTableEvent,
     },
     v0_4::{RewardAccountProofV2, RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleTreeV2},
-    FeeAccount, FeeAccountProof, FeeMerkleTree, Leaf2, NodeState, PubKey, Transaction,
+    FeeAccount, FeeAccountProof, FeeMerkleTree, Leaf2, NodeState, PubKey,
+    StakeTableWithEpochNumber, Transaction,
 };
 use futures::future::{BoxFuture, Future};
 use hotshot::types::BLSPubKey;
@@ -32,7 +33,6 @@ use hotshot_types::{
     PeerConfig,
 };
 use indexmap::IndexMap;
-use serde::{Deserialize, Serialize};
 use tide_disco::Url;
 
 use super::{
@@ -119,13 +119,6 @@ pub(crate) trait NodeStateDataSource {
 pub(crate) trait TokenDataSource<T: NodeType> {
     /// Get the stake table for a given epoch
     fn get_total_supply_l1(&self) -> impl Send + Future<Output = anyhow::Result<U256>>;
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(bound = "T: NodeType")]
-pub struct StakeTableWithEpochNumber<T: NodeType> {
-    pub epoch: Option<EpochNumber>,
-    pub stake_table: Vec<PeerConfig<T>>,
 }
 
 pub(crate) trait StakeTableDataSource<T: NodeType> {
