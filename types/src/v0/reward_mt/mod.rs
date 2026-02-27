@@ -6,7 +6,6 @@
 //! # Storage Implementations
 //!
 //! - [`storage::CachedInMemoryStorage`] - In-memory with cache (default)
-//! - [`fs_storage::RewardMerkleTreeFSStorage`] - File system backed, persistent
 //!
 //! # Example
 //!
@@ -33,7 +32,6 @@ use crate::{
     v0::{sparse_mt::KeccakNode, v0_3::RewardAmount, v0_4::RewardAccountV2},
 };
 
-pub mod fs_storage;
 pub mod storage;
 
 /// Total height of the reward Merkle tree (160 bits = Ethereum address space)
@@ -350,17 +348,6 @@ impl<S: RewardMerkleTreeStorage> StorageBackedRewardMerkleTreeV2<S> {
 pub type InMemoryRewardMerkleTreeV2 =
     StorageBackedRewardMerkleTreeV2<storage::CachedInMemoryStorage>;
 
-/// Two-level reward Merkle tree with file system storage.
-///
-/// Persistent storage that survives process restarts, suitable for:
-/// - Nodes that maintain full reward state
-/// - Archival nodes
-/// - Long-running sequencers
-///
-/// Uses [`fs_storage::RewardMerkleTreeFSStorage`] with bincode serialization.
-pub type FileBackedRewardMerkleTreeV2 =
-    StorageBackedRewardMerkleTreeV2<fs_storage::RewardMerkleTreeFSStorage>;
-
 /// Canonical reward Merkle tree type (single-level, 160-bit).
 ///
 /// This is the "reference" implementation used for:
@@ -368,8 +355,8 @@ pub type FileBackedRewardMerkleTreeV2 =
 /// - Understanding the logical tree structure
 /// - Generating test vectors
 ///
-/// Production code uses [`InMemoryRewardMerkleTreeV2`] or [`FileBackedRewardMerkleTreeV2`]
-/// for better performance and storage efficiency.
+/// Production code uses [`InMemoryRewardMerkleTreeV2`] for better performance and storage
+/// efficiency.
 pub type RewardMerkleTreeV2 = InnerRewardMerkleTreeV2;
 
 // Convenience methods for the default cached storage implementation
