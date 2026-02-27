@@ -48,8 +48,9 @@ members = [
     "vid",
 ]
 
-# All crates except sequencer-sqlite and espresso-dev-node, to avoid turning on embedded-db feature
-# for the whole workspace by default.
+# All crates except sequencer-sqlite, espresso-dev-node, and hotshot-examples.
+# sequencer-sqlite/espresso-dev-node: embedded-db feature conflict
+# hotshot-examples: no tests, only needed for manual testing via `just hotshot::example`
 default-members = [
     "alloy-compat",
     "benchmark-stats",
@@ -62,7 +63,6 @@ default-members = [
     "crates/cliquenet",
     "crates/hotshot/builder-api",
     "crates/hotshot/example-types",
-    "crates/hotshot/examples",
     "crates/hotshot/hotshot",
     "crates/hotshot/libp2p-networking",
     "crates/hotshot/macros",

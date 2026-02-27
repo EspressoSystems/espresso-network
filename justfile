@@ -67,14 +67,14 @@ lint *args:
     just clippy {{args}} -- -D warnings
 
 clippy *args:
-    # check all targets in default workspace members
-    cargo clippy --features testing --all-targets {{args}}
+    # check all targets in workspace (excluding embedded-db crates)
+    cargo clippy --workspace --exclude sequencer-sqlite --exclude espresso-dev-node --features testing --all-targets {{args}}
     # check entire workspace (including sequencer-sqlite crate) with embedded-db feature
     cargo clippy --workspace --features "embedded-db testing" --all-targets {{args}}
 
 check *args:
-    # postgres
-    cargo check {{args}}
+    # postgres (all workspace members except embedded-db crates)
+    cargo check --workspace --exclude sequencer-sqlite --exclude espresso-dev-node {{args}}
     # embedded-db
     cargo check -p sequencer-sqlite -p espresso-dev-node {{args}}
 
@@ -131,7 +131,7 @@ anvil *args:
 # sequencer-sqlite: no tests, enables embedded-db feature
 # slow-tests: slow and serial tests
 # espresso-dev-node: enables embedded-db
-nextest_excludes := "--exclude sequencer-sqlite --exclude hotshot-testing --exclude slow-tests --exclude espresso-dev-node"
+nextest_excludes := "--exclude sequencer-sqlite --exclude hotshot-testing --exclude slow-tests --exclude espresso-dev-node --exclude hotshot-examples"
 
 nextest *args:
     cargo nextest run --locked --workspace {{nextest_excludes}} --verbose {{args}}
