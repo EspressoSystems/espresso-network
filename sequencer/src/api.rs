@@ -7,8 +7,8 @@ use async_once_cell::Lazy;
 use async_trait::async_trait;
 use committable::Commitment;
 use data_source::{
-    CatchupDataSource, RequestResponseDataSource, StakeTableDataSource, StakeTableWithEpochNumber,
-    StateCertDataSource, StateCertFetchingDataSource, SubmitDataSource,
+    CatchupDataSource, RequestResponseDataSource, StakeTableDataSource, StateCertDataSource,
+    StateCertFetchingDataSource, SubmitDataSource,
 };
 use derivative::Derivative;
 use espresso_types::{
@@ -22,7 +22,7 @@ use espresso_types::{
     },
     v0_4::{RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleTreeV2},
     AccountQueryData, AuthenticatedValidatorMap, BlockMerkleTree, FeeAccount, FeeMerkleTree, Leaf2,
-    NodeState, PubKey, Transaction,
+    NodeState, PubKey, StakeTableWithEpochNumber, Transaction,
 };
 use futures::{
     future::{BoxFuture, Future, FutureExt},

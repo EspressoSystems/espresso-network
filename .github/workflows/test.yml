@@ -48,13 +48,8 @@ jobs:
       - name: Show memory
         run: free -h
 
-      - name: Collect Workflow Telemetry
-        uses: catchpoint/workflow-telemetry-action@v2
-        with:
-          comment_on_pr: false
-
       - name: Build and archive tests
-        run: just nextest-archive nextest-archive-postgres.tar.zst
+        run: just nextest-archive nextest-archive-postgres.tar.zst --timings
 
       - name: Upload archive to workflow
         uses: actions/upload-artifact@v4
@@ -62,6 +57,15 @@ jobs:
           name: nextest-archive-postgres
           if-no-files-found: error
           path: nextest-archive-postgres.tar.zst
+
+      - name: Upload cargo timings
+        uses: actions/upload-artifact@v4
+        with:
+          name: cargo-timings-test-postgres
+          path: target/cargo-timings/cargo-timing.html
+
+      - name: Cargo timing summary
+        run: scripts/cargo-timing-summary target/cargo-timings/cargo-timing.html >> "$GITHUB_STEP_SUMMARY"
 
   build-test-artifacts-sqlite:
     name: Build test artifacts (sqlite)
@@ -84,13 +88,8 @@ jobs:
       - name: Show memory
         run: free -h
 
-      - name: Collect Workflow Telemetry
-        uses: catchpoint/workflow-telemetry-action@v2
-        with:
-          comment_on_pr: false
-
       - name: Build and archive tests
-        run: just nextest-archive nextest-archive-sqlite.tar.zst --features "embedded-db,testing"
+        run: just nextest-archive nextest-archive-sqlite.tar.zst --features "embedded-db,testing" --timings
 
       - name: Upload archive to workflow
         uses: actions/upload-artifact@v4
@@ -98,6 +97,15 @@ jobs:
           name: nextest-archive-sqlite
           if-no-files-found: error
           path: nextest-archive-sqlite.tar.zst
+
+      - name: Upload cargo timings
+        uses: actions/upload-artifact@v4
+        with:
+          name: cargo-timings-test-sqlite
+          path: target/cargo-timings/cargo-timing.html
+
+      - name: Cargo timing summary
+        run: scripts/cargo-timing-summary target/cargo-timings/cargo-timing.html >> "$GITHUB_STEP_SUMMARY"
 
   build-test-bins:
     name: Build test binaries
@@ -116,8 +124,17 @@ jobs:
 
       - name: Build all binaries (postgres)
         run: |
-          cargo build --locked --profile test --bins
+          cargo build --locked --profile test --bins --timings
         timeout-minutes: 60
+
+      - name: Upload cargo timings
+        uses: actions/upload-artifact@v4
+        with:
+          name: cargo-timings-test-bins
+          path: target/cargo-timings/cargo-timing.html
+
+      - name: Cargo timing summary
+        run: scripts/cargo-timing-summary target/cargo-timings/cargo-timing.html >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload archive to workflow
         uses: actions/upload-artifact@v4
@@ -345,11 +362,6 @@ jobs:
       - name: Configure PATH
         run: PATH="$PWD/target/debug:$PATH"
 
-      - name: Collect Workflow Telemetry
-        uses: catchpoint/workflow-telemetry-action@master
-        with:
-          comment_on_pr: false
-
       - name: Test Integration
         env:
           NEXTEST_PROFILE: integration
@@ -398,11 +410,6 @@ jobs:
           mv test-binaries/* target/debug
           mv test-binaries-sqlite/* target/debug
           chmod -c +x target/debug/*
-
-      - name: Collect Workflow Telemetry
-        uses: catchpoint/workflow-telemetry-action@v2
-        with:
-          comment_on_pr: false
 
       - name: Test Demo
         run: |

@@ -101,9 +101,9 @@ toml = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 url = { workspace = true }
-versions = { workspace = true }
 vbs = { workspace = true }
 vec1 = { workspace = true }
+versions = { workspace = true }
 vid = { workspace = true }
 
 [build-dependencies]

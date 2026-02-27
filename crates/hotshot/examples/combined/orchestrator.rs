@@ -10,12 +10,8 @@ pub mod types;
 
 use hotshot::helpers::initialize_logging;
 use hotshot_example_types::state_types::TestTypes;
+use hotshot_examples::infra::{read_orchestrator_init_config, run_orchestrator, OrchestratorArgs};
 use tracing::instrument;
-
-use crate::infra::{read_orchestrator_init_config, run_orchestrator, OrchestratorArgs};
-/// general infra used for this example
-#[path = "../infra/mod.rs"]
-pub mod infra;
 
 #[tokio::main]
 #[instrument]

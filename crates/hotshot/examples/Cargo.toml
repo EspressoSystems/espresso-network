@@ -7,6 +7,10 @@ readme = "README.md"
 version = { workspace = true }
 license = "MIT"
 
+[lib]
+name = "hotshot_examples"
+path = "src/lib.rs"
+
 [features]
 default = ["docs", "doc-images", "hotshot-testing"]
 
@@ -23,7 +27,7 @@ async-trait = { workspace = true }
 cdn-broker = { workspace = true }
 cdn-marshal = { workspace = true }
 chrono = { workspace = true }
-clap = { workspace = true, optional = true }
+clap = { workspace = true }
 espresso-types = { workspace = true }
 futures = { workspace = true }
 hotshot = { workspace = true }
@@ -35,21 +39,18 @@ hotshot-types = { workspace = true }
 local-ip-address = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true }
-sequencer = { workspace = true, default-features = false }
 serde = { workspace = true }
 sha2 = { workspace = true }
 surf-disco = { workspace = true }
 test-utils = { workspace = true }
 time = { workspace = true }
 tokio = { workspace = true }
-
+toml = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
 anyhow = { workspace = true }
-clap = { workspace = true }
-toml = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 # Common
