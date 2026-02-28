@@ -412,7 +412,8 @@ impl TryFrom<&Options> for Config {
     fn try_from(opt: &Options) -> Result<Self, Self::Error> {
         let mut cfg = match &opt.uri {
             Some(uri) => Config::parse(uri)?,
-            None => Self::default(),
+            None if opt.sqlite_options.path.is_some() => Config::sqlite_default(),
+            None => Config::postgres_default(),
         };
 
         if let Some(pool) = &opt.pool {
@@ -481,6 +482,68 @@ impl TryFrom<&Options> for Config {
         }
 
         Ok(cfg)
+    }
+}
+
+#[cfg(test)]
+mod backend_selection_tests {
+    use std::path::PathBuf;
+
+    use hotshot_query_service::data_source::storage::sql::DbBackend;
+
+    use super::*;
+
+    fn backend_for(opt: &Options) -> DbBackend {
+        Config::try_from(opt).unwrap().backend()
+    }
+
+    #[test]
+    fn test_postgres_uri() {
+        let opt = Options {
+            uri: Some("postgres://user:pass@localhost:5432/db".into()),
+            ..Default::default()
+        };
+        assert_eq!(backend_for(&opt), DbBackend::Postgres);
+    }
+
+    #[test]
+    fn test_sqlite_uri() {
+        let opt = Options {
+            uri: Some("sqlite:///tmp/test.db".into()),
+            ..Default::default()
+        };
+        assert_eq!(backend_for(&opt), DbBackend::Sqlite);
+    }
+
+    #[test]
+    fn test_sqlite_path_no_uri() {
+        let opt = Options {
+            sqlite_options: SqliteOptions {
+                path: Some(PathBuf::from("/tmp/test.db")),
+            },
+            ..Default::default()
+        };
+        assert_eq!(backend_for(&opt), DbBackend::Sqlite);
+    }
+
+    #[test]
+    fn test_postgres_options_no_uri() {
+        let opt = Options {
+            postgres_options: PostgresOptions {
+                host: Some("localhost".into()),
+                port: Some(5432),
+                user: Some("root".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert_eq!(backend_for(&opt), DbBackend::Postgres);
+    }
+
+    #[test]
+    fn test_no_uri_no_path_defaults_to_postgres() {
+        let opt = Options::default();
+        assert_eq!(backend_for(&opt), DbBackend::Postgres);
     }
 }
 
