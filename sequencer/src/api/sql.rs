@@ -1315,8 +1315,8 @@ mod tests {
         data_source::{
             storage::{
                 sql::{
-                    testing::TmpDb, DbBackend, SqlStorage, StorageConnectionType,
-                    Transaction as SqlTransaction, Write,
+                    include_migrations, testing::TmpDb, DbBackend, SqlStorage,
+                    StorageConnectionType, Transaction as SqlTransaction, Write,
                 },
                 MerklizedStateStorage,
             },
@@ -1409,7 +1409,19 @@ mod tests {
     #[apply(sql_backends)]
     async fn test_reward_accounts_batch_insertion(#[case] backend: DbBackend) {
         let db = TmpDb::init_for(backend).await;
-        let cfg = db.config();
+        let mut cfg = db.config();
+        match backend {
+            DbBackend::Postgres => {
+                cfg = cfg.migrations(include_migrations!(
+                    "$CARGO_MANIFEST_DIR/api/migrations/postgres"
+                ));
+            },
+            DbBackend::Sqlite => {
+                cfg = cfg.migrations(include_migrations!(
+                    "$CARGO_MANIFEST_DIR/api/migrations/sqlite"
+                ));
+            },
+        }
         let storage = SqlStorage::connect(cfg, StorageConnectionType::Query)
             .await
             .expect("failed to connect to storage");
