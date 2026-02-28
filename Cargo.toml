@@ -106,7 +106,7 @@ ark-ed-on-bn254 = "0.5"
 ark-ff = { version = "0.5", features = [ "asm" ] }
 ark-poly = "0.5"
 ark-serialize = { version = "0.5", features = ["derive"] }
-ark-srs = "0.3.3"
+ark-srs = { git = "https://github.com/EspressoSystems/ark-srs", tag = "v0.3.4" }
 ark-std = "0.5"
 assert_cmd = "2.0.17"
 async-broadcast = "0.7.0"
