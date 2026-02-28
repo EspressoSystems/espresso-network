@@ -208,6 +208,8 @@ where
 #[cfg(all(test, not(target_os = "windows")))]
 mod test {
     use futures::stream::StreamExt;
+    use rstest::rstest;
+    use rstest_reuse::{self, apply, template};
     use test_utils::reserve_tcp_port;
     use tide_disco::App;
     use vbs::version::StaticVersionType;
@@ -215,7 +217,7 @@ mod test {
     use super::*;
     use crate::{
         availability::{define_api, AvailabilityDataSource, UpdateAvailabilityData},
-        data_source::storage::sql::testing::TmpDb,
+        data_source::storage::sql::{testing::TmpDb, DbBackend},
         fetching::provider::{NoFetching, QueryServiceProvider},
         task::BackgroundTask,
         testing::{
@@ -226,10 +228,17 @@ mod test {
         ApiState, Error,
     };
 
+    #[template]
+    #[rstest]
+    #[case::postgres(DbBackend::Postgres)]
+    #[case::sqlite(DbBackend::Sqlite)]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    fn sql_backends(#[case] backend: DbBackend) {}
+
     type Provider = AnyProvider<MockTypes>;
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_fetch_first_provider_fails() {
+    #[apply(sql_backends)]
+    async fn test_fetch_first_provider_fails(#[case] backend: DbBackend) {
         // Create the consensus network.
         let mut network = MockNetwork::<MockDataSource>::init().await;
 
@@ -252,7 +261,7 @@ mod test {
         );
 
         // Start a data source which is not receiving events from consensus, only from a peer.
-        let db = TmpDb::init().await;
+        let db = TmpDb::init_for(backend).await;
         let provider =
             Provider::default()
                 .with_provider(NoFetching)

@@ -770,6 +770,8 @@ mod test {
         UniversalMerkleTreeScheme,
     };
     use rand::{seq::IteratorRandom, RngCore};
+    use rstest::rstest;
+    use rstest_reuse::{self, apply, template};
 
     use super::*;
     use crate::{
@@ -781,12 +783,19 @@ mod test {
         testing::mocks::{MockMerkleTree, MockTypes},
     };
 
+    #[template]
+    #[rstest]
+    #[case::postgres(DbBackend::Postgres)]
+    #[case::sqlite(DbBackend::Sqlite)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_merklized_state_storage() {
+    fn sql_backends(#[case] backend: DbBackend) {}
+
+    #[apply(sql_backends)]
+    async fn test_merklized_state_storage(#[case] backend: DbBackend) {
         // In this test we insert some entries into the tree and update the database
         // Each entry's merkle path is compared with the path from the tree
 
-        let db = TmpDb::init().await;
+        let db = TmpDb::init_for(backend).await;
         let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
             .await
             .unwrap();
@@ -948,15 +957,15 @@ mod test {
         assert_eq!(path_with_bh_1, proof_bh_1);
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_merklized_state_non_membership_proof() {
+    #[apply(sql_backends)]
+    async fn test_merklized_state_non_membership_proof(#[case] backend: DbBackend) {
         // This test updates the Merkle tree with a new entry and inserts the corresponding Merkle nodes into the database with created = 1.
         // A Merkle node is then deleted from the tree.
         // The database is then updated to reflect the deletion of the entry with a created (block height) of 2
         // As the leaf node becomes a non-member, we do a universal lookup to obtain its non-membership proof path.
         // It is expected that the path retrieved from the tree matches the path obtained from the database.
 
-        let db = TmpDb::init().await;
+        let db = TmpDb::init_for(backend).await;
         let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
             .await
             .unwrap();
@@ -1087,9 +1096,9 @@ mod test {
         assert_eq!(proof_bh_1, proof_before_remove, "merkle paths dont match");
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_merklized_state_non_membership_proof_unseen_entry() {
-        let db = TmpDb::init().await;
+    #[apply(sql_backends)]
+    async fn test_merklized_state_non_membership_proof_unseen_entry(#[case] backend: DbBackend) {
+        let db = TmpDb::init_for(backend).await;
         let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
             .await
             .unwrap();
@@ -1158,11 +1167,11 @@ mod test {
         }
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_merklized_storage_with_commit() {
+    #[apply(sql_backends)]
+    async fn test_merklized_storage_with_commit(#[case] backend: DbBackend) {
         // This test insert a merkle path into the database and queries the path using the merkle commitment
 
-        let db = TmpDb::init().await;
+        let db = TmpDb::init_for(backend).await;
         let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
             .await
             .unwrap();
@@ -1223,8 +1232,8 @@ mod test {
 
         assert_eq!(merkle_proof, proof.clone(), "merkle paths mismatch");
     }
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_merklized_state_missing_state() {
+    #[apply(sql_backends)]
+    async fn test_merklized_state_missing_state(#[case] backend: DbBackend) {
         // This test checks that header commitment matches the root hash.
         // For this, the header merkle root commitment field is not updated, which should result in an error
         // The full merkle path verification is also done by recomputing the root hash
@@ -1232,7 +1241,7 @@ mod test {
         // The entry of the index is updated, and the updated nodes are inserted with created (bh) = 2.
         // A node which is in the traversal path with bh = 2 is deleted, so the get_path should return an error as an older version of one of the nodes is used.
 
-        let db = TmpDb::init().await;
+        let db = TmpDb::init_for(backend).await;
         let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
             .await
             .unwrap();
@@ -1402,9 +1411,9 @@ mod test {
         assert!(merkle_path.is_err());
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_merklized_state_snapshot() {
-        let db = TmpDb::init().await;
+    #[apply(sql_backends)]
+    async fn test_merklized_state_snapshot(#[case] backend: DbBackend) {
+        let db = TmpDb::init_for(backend).await;
         let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
             .await
             .unwrap();
@@ -1583,8 +1592,8 @@ mod test {
         validate(&storage, &test_tree, &expected, 1).await;
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_merklized_state_missing_leaf() {
+    #[apply(sql_backends)]
+    async fn test_merklized_state_missing_leaf(#[case] backend: DbBackend) {
         // Check that if a leaf is missing but its ancestors are present/key is in the tree, we
         // catch it rather than interpreting the entry as an empty node by default. Note that this
         // scenario should be impossible in normal usage, since we never store or delete partial
@@ -1592,7 +1601,7 @@ mod test {
         // corruption.
 
         for tree_size in 1..=3 {
-            let db = TmpDb::init().await;
+            let db = TmpDb::init_for(backend).await;
             let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
                 .await
                 .unwrap();

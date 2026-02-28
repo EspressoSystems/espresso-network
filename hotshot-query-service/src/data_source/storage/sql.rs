@@ -1383,7 +1383,7 @@ pub mod testing {
     use test_utils::reserve_tcp_port;
     use tokio::{net::TcpStream, time::timeout};
 
-    use super::Config;
+    use super::{Config, DbBackend};
     use crate::testing::sleep;
 
     #[derive(Debug)]
@@ -1418,6 +1418,13 @@ pub mod testing {
 
         pub async fn init() -> Self {
             Self::init_postgres(false).await
+        }
+
+        pub async fn init_for(backend: DbBackend) -> Self {
+            match backend {
+                DbBackend::Postgres => Self::init_postgres(false).await,
+                DbBackend::Sqlite => Self::init_sqlite(false),
+            }
         }
 
         pub async fn persistent() -> Self {
@@ -1707,6 +1714,8 @@ mod test {
     use jf_merkle_tree_compat::{
         prelude::UniversalMerkleTree, MerkleTreeScheme, ToTraversalPath, UniversalMerkleTreeScheme,
     };
+    use rstest::rstest;
+    use rstest_reuse::{self, apply, template};
     use tokio::time::sleep;
 
     use super::{testing::TmpDb, *};
@@ -1717,9 +1726,16 @@ mod test {
         testing::mocks::{MockHeader, MockMerkleTree, MockPayload, MockTypes, MOCK_UPGRADE},
     };
 
+    #[template]
+    #[rstest]
+    #[case::postgres(DbBackend::Postgres)]
+    #[case::sqlite(DbBackend::Sqlite)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_migrations() {
-        let db = TmpDb::init().await;
+    fn sql_backends(#[case] backend: DbBackend) {}
+
+    #[apply(sql_backends)]
+    async fn test_migrations(#[case] backend: DbBackend) {
+        let db = TmpDb::init_for(backend).await;
         let cfg = db.config();
 
         let connect = |migrations: bool, custom_migrations| {
@@ -1810,9 +1826,9 @@ mod test {
         }
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_target_period_pruning() {
-        let db = TmpDb::init().await;
+    #[apply(sql_backends)]
+    async fn test_target_period_pruning(#[case] backend: DbBackend) {
+        let db = TmpDb::init_for(backend).await;
         let cfg = db.config();
 
         let mut storage = SqlStorage::connect(cfg, StorageConnectionType::Query)
@@ -1900,9 +1916,9 @@ mod test {
         )
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_merklized_state_pruning() {
-        let db = TmpDb::init().await;
+    #[apply(sql_backends)]
+    async fn test_merklized_state_pruning(#[case] backend: DbBackend) {
+        let db = TmpDb::init_for(backend).await;
         let config = db.config();
 
         let storage = SqlStorage::connect(config, StorageConnectionType::Query)
@@ -1996,9 +2012,9 @@ mod test {
         assert!(count == 0);
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_minimum_retention_pruning() {
-        let db = TmpDb::init().await;
+    #[apply(sql_backends)]
+    async fn test_minimum_retention_pruning(#[case] backend: DbBackend) {
+        let db = TmpDb::init_for(backend).await;
 
         let mut storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
             .await
@@ -2074,9 +2090,9 @@ mod test {
         assert_eq!(header_rows, 0);
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_pruned_height_storage() {
-        let db = TmpDb::init().await;
+    #[apply(sql_backends)]
+    async fn test_pruned_height_storage(#[case] backend: DbBackend) {
+        let db = TmpDb::init_for(backend).await;
         let cfg = db.config();
 
         let storage = SqlStorage::connect(cfg, StorageConnectionType::Query)
@@ -2107,10 +2123,10 @@ mod test {
         }
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_types_migration() {
+    #[apply(sql_backends)]
+    async fn test_types_migration(#[case] backend: DbBackend) {
         let num_rows = 500;
-        let db = TmpDb::init().await;
+        let db = TmpDb::init_for(backend).await;
 
         let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
             .await
@@ -2262,9 +2278,9 @@ mod test {
         assert_eq!(vid_count as u64, num_rows, "not all vid migrated");
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_transaction_upsert_retries() {
-        let db = TmpDb::init().await;
+    #[apply(sql_backends)]
+    async fn test_transaction_upsert_retries(#[case] backend: DbBackend) {
+        let db = TmpDb::init_for(backend).await;
         let config = db.config();
 
         let storage = SqlStorage::connect(config, StorageConnectionType::Query)

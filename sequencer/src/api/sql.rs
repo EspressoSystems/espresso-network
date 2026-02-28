@@ -1313,10 +1313,9 @@ mod tests {
     };
     use hotshot_query_service::{
         data_source::{
-            sql::Config,
             storage::{
                 sql::{
-                    testing::TmpDb, SqlStorage, StorageConnectionType,
+                    testing::TmpDb, DbBackend, SqlStorage, StorageConnectionType,
                     Transaction as SqlTransaction, Write,
                 },
                 MerklizedStateStorage,
@@ -1328,9 +1327,17 @@ mod tests {
     use jf_merkle_tree_compat::{
         LookupResult, MerkleTreeScheme, ToTraversalPath, UniversalMerkleTreeScheme,
     };
+    use rstest::rstest;
+    use rstest_reuse::{self, apply, template};
 
-    use super::impl_testable_data_source::tmp_options;
     use crate::SeqTypes;
+
+    #[template]
+    #[rstest]
+    #[case::postgres(DbBackend::Postgres)]
+    #[case::sqlite(DbBackend::Sqlite)]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    fn sql_backends(#[case] backend: DbBackend) {}
 
     fn make_reward_account(i: usize) -> RewardAccountV2 {
         let mut addr_bytes = [0u8; 20];
@@ -1399,17 +1406,10 @@ mod tests {
         .expect("failed to batch insert proofs");
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_reward_accounts_batch_insertion() {
-        // Batch insertion of 1000 accounts at height 1
-        // Balance updates for some accounts at height 2
-        // New accounts added at height 2
-        // More balance updates at height 3
-        // Querying correct balances at each height snapshot
-
-        let db = TmpDb::init().await;
-        let opt = tmp_options(&db);
-        let cfg = Config::try_from(&opt).expect("failed to create config from options");
+    #[apply(sql_backends)]
+    async fn test_reward_accounts_batch_insertion(#[case] backend: DbBackend) {
+        let db = TmpDb::init_for(backend).await;
+        let cfg = db.config();
         let storage = SqlStorage::connect(cfg, StorageConnectionType::Query)
             .await
             .expect("failed to connect to storage");

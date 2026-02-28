@@ -5895,6 +5895,8 @@ dependencies = [
  "refinery",
  "refinery-core",
  "reqwest",
+ "rstest",
+ "rstest_reuse",
  "semver 1.0.27",
  "serde",
  "serde_json",

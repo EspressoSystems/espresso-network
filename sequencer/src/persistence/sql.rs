@@ -3371,7 +3371,7 @@ async fn fetch_leaf_from_proposals<Mode: TransactionMode>(
 
 #[cfg(test)]
 mod testing {
-    use hotshot_query_service::data_source::storage::sql::testing::TmpDb;
+    use hotshot_query_service::data_source::storage::sql::{testing::TmpDb, DbBackend};
 
     use super::*;
     use crate::persistence::tests::TestablePersistence;
@@ -3382,6 +3382,10 @@ mod testing {
 
         async fn tmp_storage() -> Self::Storage {
             Arc::new(TmpDb::init().await)
+        }
+
+        async fn tmp_storage_for(backend: DbBackend) -> Self::Storage {
+            Arc::new(TmpDb::init_for(backend).await)
         }
 
         #[allow(refining_impl_trait)]
@@ -3406,6 +3410,7 @@ mod test {
     use committable::{Commitment, CommitmentBoundsArkless};
     use espresso_types::{traits::NullEventConsumer, Header, Leaf, NodeState, ValidatedState};
     use hotshot_example_types::node_types::TEST_VERSIONS;
+    use hotshot_query_service::data_source::storage::sql::DbBackend;
     use hotshot_types::{
         data::{
             ns_table::parse_ns_table, vid_disperse::AvidMDisperseShare, EpochNumber,
@@ -3426,13 +3431,21 @@ mod test {
         },
     };
     use jf_advz::VidScheme;
+    use rstest::rstest;
+    use rstest_reuse::{self, apply, template};
 
     use super::*;
     use crate::{persistence::tests::TestablePersistence as _, BLSPubKey, PubKey};
 
+    #[template]
+    #[rstest]
+    #[case::postgres(DbBackend::Postgres)]
+    #[case::sqlite(DbBackend::Sqlite)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_quorum_proposals_leaf_hash_migration() {
-        // Create some quorum proposals to test with.
+    fn sql_backends(#[case] backend: DbBackend) {}
+
+    #[apply(sql_backends)]
+    async fn test_quorum_proposals_leaf_hash_migration(#[case] backend: DbBackend) {
         let leaf: Leaf2 = Leaf::genesis(
             &ValidatedState::default(),
             &NodeState::mock(),
@@ -3473,8 +3486,7 @@ mod test {
             convert_proposal(quorum_proposal.clone());
         let qps = [qp1, qp2];
 
-        // Create persistence and add the quorum proposals with NULL leaf hash.
-        let db = Persistence::tmp_storage().await;
+        let db = Persistence::tmp_storage_for(backend).await;
         let persistence = Persistence::connect(&db).await;
         let mut tx = persistence.db.write().await.unwrap();
         let params = qps
@@ -3512,25 +3524,21 @@ mod test {
         }
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_validator_authenticated_migration() {
-        // Create a mock registered validator
+    #[apply(sql_backends)]
+    async fn test_validator_authenticated_migration(#[case] backend: DbBackend) {
         let mut validator = RegisteredValidator::mock();
-        validator.delegators.clear(); // Simplify for test
+        validator.delegators.clear();
         validator.stake = alloy::primitives::U256::from(1000u64);
 
         let epoch = 1i64;
         let address = validator.account;
 
-        // Serialize to JSON and remove the `authenticated` field to simulate old data
         let mut validator_json = serde_json::to_value(&validator).unwrap();
         validator_json
             .as_object_mut()
             .unwrap()
             .remove("authenticated");
 
-        // Use the deprecated Validator type for bincode storage to simulate old data format
-        // (which has no `authenticated` field)
         #[allow(deprecated)]
         let old_validator: espresso_types::v0_3::Validator<BLSPubKey> =
             serde_json::from_value(validator_json.clone()).unwrap();
@@ -3538,8 +3546,7 @@ mod test {
         validator_map.insert(address, old_validator);
         let stake_bytes = bincode::serialize(&validator_map).unwrap();
 
-        // Create persistence and insert data directly
-        let db = Persistence::tmp_storage().await;
+        let db = Persistence::tmp_storage_for(backend).await;
 
         // First, create a persistence to set up the schema, then insert raw data
         let persistence = Persistence::connect(&db).await;
@@ -3664,15 +3671,17 @@ mod test {
         }
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_store_all_validators_authenticated_and_unauthenticated() {
+    #[apply(sql_backends)]
+    async fn test_store_all_validators_authenticated_and_unauthenticated(
+        #[case] backend: DbBackend,
+    ) {
         use std::collections::HashMap;
 
         use alloy::primitives::{Address, U256};
         use hotshot_types::light_client::StateVerKey;
         use indexmap::IndexMap;
 
-        let tmp = Persistence::tmp_storage().await;
+        let tmp = Persistence::tmp_storage_for(backend).await;
         let storage = Persistence::connect(&tmp).await;
 
         // Create an authenticated validator
@@ -3740,9 +3749,9 @@ mod test {
         );
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_fetching_providers() {
-        let tmp = Persistence::tmp_storage().await;
+    #[apply(sql_backends)]
+    async fn test_fetching_providers(#[case] backend: DbBackend) {
+        let tmp = Persistence::tmp_storage_for(backend).await;
         let storage = Persistence::connect(&tmp).await;
 
         // Mock up some data.
@@ -3879,8 +3888,8 @@ mod test {
     /// retained for view 2, and then asserts that it is pruned by view 3. There are various
     /// different configurations that can achieve this behavior, such that the data is retained and
     /// then pruned due to different logic and code paths.
-    async fn test_pruning_helper(pruning_opt: ConsensusPruningOptions) {
-        let tmp = Persistence::tmp_storage().await;
+    async fn test_pruning_helper(backend: DbBackend, pruning_opt: ConsensusPruningOptions) {
+        let tmp = Persistence::tmp_storage_for(backend).await;
         let mut opt = Persistence::options(&tmp);
         opt.consensus_pruning = pruning_opt;
         let storage = opt.create().await.unwrap();
@@ -4007,37 +4016,35 @@ mod test {
         storage.load_quorum_proposal(data_view).await.unwrap_err();
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_pruning_minimum_retention() {
-        test_pruning_helper(ConsensusPruningOptions {
-            // Use a very low target usage, to show that we still retain data up to the minimum
-            // retention even when usage is above target.
-            target_usage: 0,
-            minimum_retention: 1,
-            // Use a very high target retention, so that pruning is only triggered by the minimum
-            // retention.
-            target_retention: u64::MAX,
-        })
+    #[apply(sql_backends)]
+    async fn test_pruning_minimum_retention(#[case] backend: DbBackend) {
+        test_pruning_helper(
+            backend,
+            ConsensusPruningOptions {
+                target_usage: 0,
+                minimum_retention: 1,
+                target_retention: u64::MAX,
+            },
+        )
         .await
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_pruning_target_retention() {
-        test_pruning_helper(ConsensusPruningOptions {
-            target_retention: 1,
-            // Use a very low minimum retention, so that data is only kept around due to the target
-            // retention.
-            minimum_retention: 0,
-            // Use a very high target usage, so that pruning is only triggered by the target
-            // retention.
-            target_usage: u64::MAX,
-        })
+    #[apply(sql_backends)]
+    async fn test_pruning_target_retention(#[case] backend: DbBackend) {
+        test_pruning_helper(
+            backend,
+            ConsensusPruningOptions {
+                target_retention: 1,
+                minimum_retention: 0,
+                target_usage: u64::MAX,
+            },
+        )
         .await
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_consensus_migration() {
-        let tmp = Persistence::tmp_storage().await;
+    #[apply(sql_backends)]
+    async fn test_consensus_migration(#[case] backend: DbBackend) {
+        let tmp = Persistence::tmp_storage_for(backend).await;
         let mut opt = Persistence::options(&tmp);
 
         let storage = opt.create().await.unwrap();
@@ -4313,9 +4320,9 @@ mod test {
     /// This regression test ensures that even if there are no new events, at least the
     /// `stake_table_events_l1_block` column gets updated. We can then distinguish the two scenarios
     /// using the `EventsPersistenceRead`` return value from load_events.
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_store_events_empty() {
-        let tmp = Persistence::tmp_storage().await;
+    #[apply(sql_backends)]
+    async fn test_store_events_empty(#[case] backend: DbBackend) {
+        let tmp = Persistence::tmp_storage_for(backend).await;
         let mut opt = Persistence::options(&tmp);
         let storage = opt.create().await.unwrap();
 
