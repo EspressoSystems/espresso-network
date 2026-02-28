@@ -31,10 +31,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: slow-tests-sqlite
-            build-cmd: just test-slow --features embedded-db --no-run
-            run-cmd: just test-slow --features embedded-db --no-fail-fast
-          - name: slow-tests-postgres
+          - name: slow-tests
             build-cmd: just test-slow --no-run
             run-cmd: just test-slow --no-fail-fast
           - name: espresso-dev-node-tests

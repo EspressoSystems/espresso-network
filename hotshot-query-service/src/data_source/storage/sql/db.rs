@@ -10,46 +10,133 @@
 // You should have received a copy of the GNU General Public License along with this program. If not,
 // see <https://www.gnu.org/licenses/>.
 
-/// The underlying database type for a SQL data source.
-///
-/// Currently, only PostgreSQL and SQLite are supported, with selection based on the "embedded-db" feature flag.
-/// - When the "embedded-db" feature is enabled, SQLite is used.
-/// - When it’s disabled, PostgreSQL is used.
-///
-/// ### Design Choice
-/// The reason for taking this approach over sqlx's Any database is that we can support SQL types
-/// which are implemented for the two backends we care about (Postgres and SQLite) but not for _any_
-/// SQL database, such as MySQL. Crucially, JSON types fall in this category.
-///
-/// The reason for taking this approach rather than writing all of our code to be generic over the
-/// Database implementation is that sqlx does not have the necessary trait bounds on all of the
-/// associated types (e.g. Database::Connection does not implement Executor for all possible
-/// databases, the Executor impl lives on each concrete connection type) and Rust does not provide
-/// a good way of encapsulating a collection of trait bounds on associated types. Thus, our function
-/// signatures become untenably messy with bounds like
-///
-/// ```rust
-/// # use sqlx::{Database, Encode, Executor, IntoArguments, Type};
-/// fn foo<DB: Database>()
-/// where
-///     for<'a> &'a mut DB::Connection: Executor<'a>,
-///     for<'q> DB::Arguments<'q>: IntoArguments<'q, DB>,
-///     for<'a> i64: Type<DB> + Encode<'a, DB>,
-/// {}
-/// ```
-#[cfg(feature = "embedded-db")]
-pub type Db = sqlx::Sqlite;
-#[cfg(not(feature = "embedded-db"))]
-pub type Db = sqlx::Postgres;
+use sqlx::pool::Pool;
 
-#[cfg(feature = "embedded-db")]
-pub mod syntax_helpers {
-    pub const MAX_FN: &str = "MAX";
-    pub const BINARY_TYPE: &str = "BLOB";
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DbBackend {
+    Postgres,
+    Sqlite,
 }
 
-#[cfg(not(feature = "embedded-db"))]
-pub mod syntax_helpers {
-    pub const MAX_FN: &str = "GREATEST";
-    pub const BINARY_TYPE: &str = "BYTEA";
+#[derive(Clone, Debug)]
+pub enum SqlPool {
+    Postgres(Pool<sqlx::Postgres>),
+    Sqlite(Pool<sqlx::Sqlite>),
 }
+
+pub enum BackendTransaction {
+    Postgres(sqlx::Transaction<'static, sqlx::Postgres>),
+    Sqlite(sqlx::Transaction<'static, sqlx::Sqlite>),
+}
+
+impl std::fmt::Debug for BackendTransaction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Postgres(_) => f.debug_tuple("Postgres").finish(),
+            Self::Sqlite(_) => f.debug_tuple("Sqlite").finish(),
+        }
+    }
+}
+
+pub struct SyntaxHelpers {
+    pub max_fn: &'static str,
+    pub binary_type: &'static str,
+}
+
+pub mod syntax_helpers {
+    pub const POSTGRES: super::SyntaxHelpers = super::SyntaxHelpers {
+        max_fn: "GREATEST",
+        binary_type: "BYTEA",
+    };
+
+    pub const SQLITE: super::SyntaxHelpers = super::SyntaxHelpers {
+        max_fn: "MAX",
+        binary_type: "BLOB",
+    };
+
+    pub static MAX_FN: &str = "GREATEST";
+    pub static BINARY_TYPE: &str = "BYTEA";
+}
+
+impl SqlPool {
+    pub fn backend(&self) -> DbBackend {
+        match self {
+            Self::Postgres(_) => DbBackend::Postgres,
+            Self::Sqlite(_) => DbBackend::Sqlite,
+        }
+    }
+
+    pub fn syntax(&self) -> &'static SyntaxHelpers {
+        match self {
+            Self::Postgres(_) => &syntax_helpers::POSTGRES,
+            Self::Sqlite(_) => &syntax_helpers::SQLITE,
+        }
+    }
+
+    pub async fn begin(&self) -> anyhow::Result<BackendTransaction> {
+        match self {
+            Self::Postgres(pool) => {
+                let tx = pool.begin().await?;
+                Ok(BackendTransaction::Postgres(tx))
+            },
+            Self::Sqlite(pool) => {
+                let tx = pool.begin().await?;
+                Ok(BackendTransaction::Sqlite(tx))
+            },
+        }
+    }
+
+    pub async fn acquire(&self) -> anyhow::Result<BackendPoolConnection> {
+        match self {
+            Self::Postgres(pool) => {
+                let conn = pool.acquire().await?;
+                Ok(BackendPoolConnection::Postgres(conn))
+            },
+            Self::Sqlite(pool) => {
+                let conn = pool.acquire().await?;
+                Ok(BackendPoolConnection::Sqlite(conn))
+            },
+        }
+    }
+}
+
+pub enum BackendPoolConnection {
+    Postgres(sqlx::pool::PoolConnection<sqlx::Postgres>),
+    Sqlite(sqlx::pool::PoolConnection<sqlx::Sqlite>),
+}
+
+impl BackendTransaction {
+    pub fn backend(&self) -> DbBackend {
+        match self {
+            Self::Postgres(_) => DbBackend::Postgres,
+            Self::Sqlite(_) => DbBackend::Sqlite,
+        }
+    }
+
+    pub async fn commit(self) -> anyhow::Result<()> {
+        match self {
+            Self::Postgres(tx) => tx.commit().await?,
+            Self::Sqlite(tx) => tx.commit().await?,
+        }
+        Ok(())
+    }
+
+    pub async fn rollback(self) -> anyhow::Result<()> {
+        match self {
+            Self::Postgres(tx) => tx.rollback().await?,
+            Self::Sqlite(tx) => tx.rollback().await?,
+        }
+        Ok(())
+    }
+}
+
+macro_rules! with_backend {
+    ($self:expr, |$tx:ident| $body:expr) => {
+        match &mut $self.inner {
+            $crate::data_source::storage::sql::db::BackendTransaction::Postgres($tx) => $body,
+            $crate::data_source::storage::sql::db::BackendTransaction::Sqlite($tx) => $body,
+        }
+    };
+}
+
+pub(crate) use with_backend;

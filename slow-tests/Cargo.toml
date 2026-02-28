@@ -4,9 +4,6 @@ version = "0.1.0"
 authors = ["Espresso Systems <hello@espressosys.com>"]
 edition = "2021"
 
-[features]
-embedded-db = ["sequencer/embedded-db"]
-
 [dependencies]
 alloy = { workspace = true }
 anyhow = { workspace = true }

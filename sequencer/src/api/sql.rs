@@ -20,7 +20,7 @@ use hotshot_query_service::{
     data_source::{
         sql::{Config, SqlDataSource, Transaction},
         storage::{
-            sql::{query_as, Db, TransactionMode, Write},
+            sql::{BackendTransaction, TransactionMode, Write},
             AvailabilityStorage, MerklizedStateStorage, NodeStorage, SqlStorage,
         },
         VersionedDataSource,
@@ -41,6 +41,15 @@ use jf_merkle_tree_compat::{
 };
 use sqlx::{Encode, Row, Type};
 use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION};
+
+macro_rules! with_backend {
+    ($tx:expr, |$inner:ident| $body:expr) => {
+        match &mut $tx.inner {
+            BackendTransaction::Postgres($inner) => $body,
+            BackendTransaction::Sqlite($inner) => $body,
+        }
+    };
+}
 
 use super::{
     data_source::{Provider, SequencerDataSource},
@@ -172,23 +181,25 @@ impl RewardMerkleTreeDataSource for SqlStorage {
                 .await
                 .context("opening transaction for state update")?;
 
-            let row = sqlx::query(
-                r#"
-                SELECT balances
-                FROM reward_merkle_tree_v2_data
-                WHERE height = $1
-                "#,
-            )
-            .bind(height as i64)
-            .fetch_optional(tx.as_mut())
-            .await?
-            .context(format!(
-                "No reward merkle tree for height {} in storage",
-                height
-            ))?;
+            with_backend!(tx, |inner_tx| {
+                let row = sqlx::query(
+                    r#"
+                    SELECT balances
+                    FROM reward_merkle_tree_v2_data
+                    WHERE height = $1
+                    "#,
+                )
+                .bind(height as i64)
+                .fetch_optional(inner_tx.as_mut())
+                .await?
+                .context(format!(
+                    "No reward merkle tree for height {} in storage",
+                    height
+                ))?;
 
-            row.try_get::<Vec<u8>, _>("balances")
-                .context("Missing field balances from row; this should never happen")
+                row.try_get::<Vec<u8>, _>("balances")
+                    .context("Missing field balances from row; this should never happen")
+            })
         }
     }
 
@@ -250,21 +261,23 @@ impl RewardMerkleTreeDataSource for SqlStorage {
                 .await
                 .context("opening transaction for state update")?;
 
-            let row = sqlx::query(
-                r#"
-                SELECT proof 
-                FROM reward_merkle_tree_v2_proofs
-                WHERE height = $1 AND account = $2
-                "#,
-            )
-            .bind(height as i64)
-            .bind(account)
-            .fetch_optional(tx.as_mut())
-            .await?
-            .context(format!("Missing proofs at height {}", height))?;
+            with_backend!(tx, |inner_tx| {
+                let row = sqlx::query(
+                    r#"
+                    SELECT proof
+                    FROM reward_merkle_tree_v2_proofs
+                    WHERE height = $1 AND account = $2
+                    "#,
+                )
+                .bind(height as i64)
+                .bind(account.clone())
+                .fetch_optional(inner_tx.as_mut())
+                .await?
+                .context(format!("Missing proofs at height {}", height))?;
 
-            row.try_get::<Vec<u8>, _>("proof")
-                .context("Missing field proof from row; this should never happen")
+                row.try_get::<Vec<u8>, _>("proof")
+                    .context("Missing field proof from row; this should never happen")
+            })
         }
     }
 
@@ -278,22 +291,24 @@ impl RewardMerkleTreeDataSource for SqlStorage {
                 .await
                 .context("opening transaction for state update")?;
 
-            let row = sqlx::query(
-                r#"
-                SELECT proof 
-                FROM reward_merkle_tree_v2_proofs
-                WHERE account = $1
-                ORDER BY height DESC
-                LIMIT 1
-                "#,
-            )
-            .bind(account)
-            .fetch_optional(tx.as_mut())
-            .await?
-            .context("Missing proofs")?;
+            with_backend!(tx, |inner_tx| {
+                let row = sqlx::query(
+                    r#"
+                    SELECT proof
+                    FROM reward_merkle_tree_v2_proofs
+                    WHERE account = $1
+                    ORDER BY height DESC
+                    LIMIT 1
+                    "#,
+                )
+                .bind(account.clone())
+                .fetch_optional(inner_tx.as_mut())
+                .await?
+                .context("Missing proofs")?;
 
-            row.try_get::<Vec<u8>, _>("proof")
-                .context("Missing field proof from row; this should never happen")
+                row.try_get::<Vec<u8>, _>("proof")
+                    .context("Missing field proof from row; this should never happen")
+            })
         }
     }
 
@@ -305,15 +320,10 @@ impl RewardMerkleTreeDataSource for SqlStorage {
                     .await
                     .context("opening transaction for state update")?;
 
-                sqlx::query(
-                    r#"
-                  DELETE FROM reward_merkle_tree_v2_data
-                  WHERE height < $1
-                "#,
-                )
-                .bind(height as i64)
-                .fetch_optional(tx.as_mut())
-                .await?;
+                tx.query("DELETE FROM reward_merkle_tree_v2_data WHERE height < $1")
+                    .bind(height as i64)
+                    .fetch_optional(&mut tx)
+                    .await?;
 
                 hotshot_query_service::data_source::Transaction::commit(tx)
                     .await
@@ -327,15 +337,10 @@ impl RewardMerkleTreeDataSource for SqlStorage {
                     .await
                     .context("opening transaction for state update")?;
 
-                sqlx::query(
-                    r#"
-                  DELETE FROM reward_merkle_tree_v2_proofs
-                  WHERE height < $1
-                "#,
-                )
-                .bind(height as i64)
-                .fetch_optional(tx.as_mut())
-                .await?;
+                tx.query("DELETE FROM reward_merkle_tree_v2_proofs WHERE height < $1")
+                    .bind(height as i64)
+                    .fetch_optional(&mut tx)
+                    .await?;
 
                 hotshot_query_service::data_source::Transaction::commit(tx)
                     .await
@@ -352,20 +357,22 @@ impl RewardMerkleTreeDataSource for SqlStorage {
                 return false;
             };
 
-            sqlx::query_as(
-                r#"
-                SELECT EXISTS(
-                SELECT 1 FROM reward_merkle_tree_v2_proofs
-                WHERE height = $1
+            with_backend!(tx, |inner_tx| {
+                sqlx::query_as::<_, (bool,)>(
+                    r#"
+                    SELECT EXISTS(
+                    SELECT 1 FROM reward_merkle_tree_v2_proofs
+                    WHERE height = $1
+                    )
+                    "#,
                 )
-                "#,
-            )
-            .bind(height as i64)
-            .fetch_one(tx.as_mut())
-            .await
-            .ok()
-            .unwrap_or((false,))
-            .0
+                .bind(height as i64)
+                .fetch_one(inner_tx.as_mut())
+                .await
+                .ok()
+                .unwrap_or((false,))
+                .0
+            })
         }
     }
 }
@@ -914,11 +921,16 @@ async fn load_chain_config<Mode: TransactionMode>(
     tx: &mut Transaction<Mode>,
     commitment: Commitment<ChainConfig>,
 ) -> anyhow::Result<ChainConfig> {
-    let (data,) = query_as::<(Vec<u8>,)>("SELECT data from chain_config where commitment = $1")
-        .bind(commitment.to_string())
-        .fetch_one(tx.as_mut())
-        .await
-        .unwrap();
+    let commitment_str = commitment.to_string();
+    let data: Vec<u8> = with_backend!(tx, |inner_tx| {
+        let (data,) =
+            sqlx::query_as::<_, (Vec<u8>,)>("SELECT data from chain_config where commitment = $1")
+                .bind(commitment_str.clone())
+                .fetch_one(inner_tx.as_mut())
+                .await
+                .unwrap();
+        data
+    });
 
     bincode::deserialize(&data[..]).context("failed to deserialize")
 }
@@ -1227,14 +1239,20 @@ async fn get_leaf_from_proposal<Mode, P>(
     param: P,
 ) -> anyhow::Result<Leaf2>
 where
-    P: Type<Db> + for<'q> Encode<'q, Db>,
+    P: Type<sqlx::Postgres>
+        + for<'q> Encode<'q, sqlx::Postgres>
+        + Type<sqlx::Sqlite>
+        + for<'q> Encode<'q, sqlx::Sqlite>
+        + Clone
+        + Send,
 {
-    let (data,) = query_as::<(Vec<u8>,)>(&format!(
-        "SELECT data FROM quorum_proposals2 WHERE {where_clause} LIMIT 1",
-    ))
-    .bind(param)
-    .fetch_one(tx.as_mut())
-    .await?;
+    let sql = format!("SELECT data FROM quorum_proposals2 WHERE {where_clause} LIMIT 1");
+    let (data,) = with_backend!(tx, |inner_tx| {
+        sqlx::query_as::<_, (Vec<u8>,)>(&sql)
+            .bind(param.clone())
+            .fetch_one(inner_tx.as_mut())
+            .await
+    })?;
     let proposal: Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>> =
         bincode::deserialize(&data)?;
     Ok(Leaf2::from_quorum_proposal(&proposal.data))
@@ -1249,24 +1267,14 @@ pub(crate) mod impl_testable_data_source {
     use crate::api::{self, data_source::testing::TestableSequencerDataSource};
 
     pub fn tmp_options(db: &TmpDb) -> Options {
-        #[cfg(not(feature = "embedded-db"))]
-        {
-            let opt = crate::persistence::sql::PostgresOptions {
-                port: Some(db.port()),
-                host: Some(db.host()),
-                user: Some("postgres".into()),
-                password: Some("password".into()),
-                ..Default::default()
-            };
-
-            opt.into()
-        }
-
-        #[cfg(feature = "embedded-db")]
-        {
-            let opt = crate::persistence::sql::SqliteOptions { path: db.path() };
-            opt.into()
-        }
+        let opt = crate::persistence::sql::PostgresOptions {
+            port: Some(db.port()),
+            host: Some(db.host()),
+            user: Some("postgres".into()),
+            password: Some("password".into()),
+            ..Default::default()
+        };
+        opt.into()
     }
 
     #[async_trait]

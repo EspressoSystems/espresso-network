@@ -44,7 +44,6 @@ get_proc_cwd() {
 # Update this list when adding/removing processes in process-compose.yaml
 NATIVE_PROCESSES=(
 	sequencer
-	sequencer-sqlite
 	orchestrator
 	state-relay-server
 	cdn-marshal

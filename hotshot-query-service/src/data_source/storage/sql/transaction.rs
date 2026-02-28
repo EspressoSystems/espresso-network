@@ -23,10 +23,7 @@ use std::{collections::HashMap, marker::PhantomData, time::Instant};
 use anyhow::{bail, Context};
 use async_trait::async_trait;
 use committable::Committable;
-use derive_more::{Deref, DerefMut};
-use futures::future::Future;
-#[cfg(feature = "embedded-db")]
-use futures::stream::TryStreamExt;
+use futures::{future::Future, stream::TryStreamExt};
 use hotshot_types::{
     data::VidShare,
     simple_certificate::CertificatePair,
@@ -39,19 +36,14 @@ use hotshot_types::{
 };
 use itertools::Itertools;
 use jf_merkle_tree_compat::prelude::MerkleProof;
-pub use sqlx::Executor;
-use sqlx::{pool::Pool, query_builder::Separated, Encode, Execute, FromRow, QueryBuilder, Type};
+use sqlx::{query_builder::Separated, Database, Encode, Execute, Executor, QueryBuilder, Type};
 
-#[cfg(not(feature = "embedded-db"))]
-use super::queries::state::batch_insert_hashes;
-#[cfg(feature = "embedded-db")]
-use super::queries::state::build_hash_batch_insert;
 use super::{
+    db::{with_backend, BackendTransaction, DbBackend, SqlPool},
     queries::{
         self,
-        state::{collect_nodes_from_proofs, Node},
+        state::{batch_insert_hashes, build_hash_batch_insert, collect_nodes_from_proofs, Node},
     },
-    Database, Db,
 };
 use crate::{
     availability::{
@@ -66,20 +58,6 @@ use crate::{
     Header, Payload, QueryError, QueryResult,
 };
 
-pub type Query<'q> = sqlx::query::Query<'q, Db, <Db as Database>::Arguments<'q>>;
-pub type QueryAs<'q, T> = sqlx::query::QueryAs<'q, Db, T, <Db as Database>::Arguments<'q>>;
-
-pub fn query(sql: &str) -> Query<'_> {
-    sqlx::query(sql)
-}
-
-pub fn query_as<'q, T>(sql: &'q str) -> QueryAs<'q, T>
-where
-    T: for<'r> FromRow<'r, <Db as Database>::Row>,
-{
-    sqlx::query_as(sql)
-}
-
 /// Marker type indicating a transaction with read-write access to the database.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Write;
@@ -90,54 +68,32 @@ pub struct Read;
 
 /// Trait for marker types indicating what type of access a transaction has to the database.
 pub trait TransactionMode: Send + Sync {
-    fn begin(
-        conn: &mut <Db as Database>::Connection,
-    ) -> impl Future<Output = anyhow::Result<()>> + Send;
+    fn begin(tx: &mut BackendTransaction) -> impl Future<Output = anyhow::Result<()>> + Send;
 
     fn display() -> &'static str;
 }
 
 impl TransactionMode for Write {
-    #[allow(unused_variables)]
-    async fn begin(conn: &mut <Db as Database>::Connection) -> anyhow::Result<()> {
-        // SQLite automatically sets the read/write mode of a transactions based on the statements
-        // in it. However, there is still a good reason to explicitly enable write mode right from
-        // the start: if a transaction first executes a read statement and then a write statement,
-        // it will be upgraded from a read transaction to a write transaction. Because this involves
-        // obtaining a different kind of lock while already holding one, it can cause a deadlock,
-        // e.g.:
-        // * Transaction A executes a read statement, obtaining a read lock
-        // * Transaction B executes a write statement and begins waiting for a write lock
-        // * Transaction A executes a write statement and begins waiting for a write lock
-        //
-        // Transaction A can never obtain its write lock because it must first wait for transaction
-        // B to get a write lock, which cannot happen because B is in turn waiting for A to release
-        // its read lock.
-        //
-        // This type of deadlock cannot happen if transaction A immediately starts as a write, since
-        // it will then only ever try to acquire one type of lock (a write lock). By working with
-        // this restriction (transactions are either readers or writers, but never upgradable), we
-        // avoid deadlock, we more closely imitate the concurrency semantics of postgres, and we
-        // take advantage of the SQLite busy timeout, which may allow a transaction to acquire a
-        // lock and succeed (after a small delay), even when there was a conflicting transaction in
-        // progress. Whereas a deadlock is always an automatic rollback.
-        //
-        // The proper way to begin a write transaction in SQLite is with `BEGIN IMMEDIATE`. However,
-        // sqlx does not expose any way to customize the `BEGIN` statement that starts a
-        // transaction. A serviceable workaround is to perform some write statement before performing
-        // any read statement, ensuring that the first lock we acquire is exclusive. A write
-        // statement that has no actual effect on the database is suitable for this purpose, hence
-        // the `WHERE false`.
-        #[cfg(feature = "embedded-db")]
-        conn.execute("UPDATE pruned_height SET id = id WHERE false")
-            .await?;
-
-        // With Postgres things are much more straightforward: just tell Postgres we want a write
-        // transaction immediately after opening it.
-        #[cfg(not(feature = "embedded-db"))]
-        conn.execute("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
-            .await?;
-
+    async fn begin(tx: &mut BackendTransaction) -> anyhow::Result<()> {
+        match tx {
+            BackendTransaction::Postgres(inner) => {
+                inner
+                    .as_mut()
+                    .execute("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+                    .await?;
+            },
+            BackendTransaction::Sqlite(inner) => {
+                // SQLite automatically sets the read/write mode of a transaction based on the
+                // statements in it. However, we explicitly enable write mode from the start to
+                // avoid deadlocks from lock upgrades. The proper way is `BEGIN IMMEDIATE`, but
+                // sqlx doesn't expose that. A serviceable workaround is performing a write
+                // statement first.
+                inner
+                    .as_mut()
+                    .execute("UPDATE pruned_height SET id = id WHERE false")
+                    .await?;
+            },
+        }
         Ok(())
     }
 
@@ -147,20 +103,16 @@ impl TransactionMode for Write {
 }
 
 impl TransactionMode for Read {
-    #[allow(unused_variables)]
-    async fn begin(conn: &mut <Db as Database>::Connection) -> anyhow::Result<()> {
-        // With Postgres, we explicitly set the transaction mode to specify that we want the
-        // strongest possible consistency semantics in case of competing transactions
-        // (SERIALIZABLE), and we want to wait until this is possible rather than failing
-        // (DEFERRABLE).
-        //
-        // With SQLite, there is nothing to be done here, as SQLite automatically starts
-        // transactions in read-only mode, and always has serializable concurrency unless we
-        // explicitly opt in to dirty reads with a pragma.
-        #[cfg(not(feature = "embedded-db"))]
-        conn.execute("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE, READ ONLY, DEFERRABLE")
-            .await?;
-
+    async fn begin(tx: &mut BackendTransaction) -> anyhow::Result<()> {
+        match tx {
+            BackendTransaction::Postgres(inner) => {
+                inner
+                    .as_mut()
+                    .execute("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE, READ ONLY, DEFERRABLE")
+                    .await?;
+            },
+            BackendTransaction::Sqlite(_) => {},
+        }
         Ok(())
     }
 
@@ -219,89 +171,105 @@ impl<Mode> Drop for TransactionMetricsGuard<Mode> {
 }
 
 /// An atomic SQL transaction.
-#[derive(Debug, Deref, DerefMut)]
+#[derive(Debug)]
 pub struct Transaction<Mode> {
-    #[deref]
-    #[deref_mut]
-    inner: sqlx::Transaction<'static, Db>,
+    pub inner: BackendTransaction,
     metrics: TransactionMetricsGuard<Mode>,
 }
 
+impl<Mode> Transaction<Mode> {
+    pub fn backend(&self) -> DbBackend {
+        self.inner.backend()
+    }
+
+    pub async fn execute(
+        &mut self,
+        q: super::queries::BackendQuery<'_>,
+    ) -> Result<u64, sqlx::Error> {
+        q.execute(self).await
+    }
+
+    pub async fn fetch_one(
+        &mut self,
+        q: super::queries::BackendQuery<'_>,
+    ) -> Result<super::queries::BackendRow, sqlx::Error> {
+        q.fetch_one(self).await
+    }
+
+    pub async fn fetch_optional(
+        &mut self,
+        q: super::queries::BackendQuery<'_>,
+    ) -> Result<Option<super::queries::BackendRow>, sqlx::Error> {
+        q.fetch_optional(self).await
+    }
+
+    pub async fn fetch_all(
+        &mut self,
+        q: super::queries::BackendQuery<'_>,
+    ) -> Result<Vec<super::queries::BackendRow>, sqlx::Error> {
+        q.fetch_all(self).await
+    }
+
+    pub fn query<'a>(&self, sql: &'a str) -> super::queries::BackendQuery<'a> {
+        super::queries::query(self.backend(), sql)
+    }
+
+    pub fn query_as<'a, T>(&self, sql: &'a str) -> super::queries::BackendQueryAs<'a, T>
+    where
+        T: for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow> + Send + Unpin,
+        T: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>,
+    {
+        super::queries::query_as(self.backend(), sql)
+    }
+}
+
 impl<Mode: TransactionMode> Transaction<Mode> {
-    pub(super) async fn new(pool: &Pool<Db>, metrics: PoolMetrics) -> anyhow::Result<Self> {
+    pub(super) async fn new(pool: &SqlPool, metrics: PoolMetrics) -> anyhow::Result<Self> {
         let mut inner = pool.begin().await?;
         let metrics = TransactionMetricsGuard::begin(metrics);
-        Mode::begin(inner.as_mut()).await?;
+        Mode::begin(&mut inner).await?;
         Ok(Self { inner, metrics })
     }
 }
 
 impl<Mode: TransactionMode> update::Transaction for Transaction<Mode> {
-    async fn commit(mut self) -> anyhow::Result<()> {
-        self.inner.commit().await?;
-        self.metrics.set_closed(CloseType::Commit);
+    async fn commit(self) -> anyhow::Result<()> {
+        let Self { inner, mut metrics } = self;
+        inner.commit().await?;
+        metrics.set_closed(CloseType::Commit);
         Ok(())
     }
-    fn revert(mut self) -> impl Future + Send {
+    fn revert(self) -> impl Future + Send {
         async move {
-            self.inner.rollback().await.unwrap();
-            self.metrics.set_closed(CloseType::Revert);
+            let Self { inner, mut metrics } = self;
+            inner.rollback().await.unwrap();
+            metrics.set_closed(CloseType::Revert);
         }
     }
 }
 
 /// A collection of parameters which can be bound to a SQL query.
 ///
-/// This trait allows us to carry around hetergenous lists of parameters (e.g. tuples) and bind them
-/// to a query at the last moment before executing. This means we can manipulate the parameters
-/// independently of the query before executing it. For example, by requiring a trait bound of
-/// `Params<'p> + Clone`, we get a list (or tuple) of parameters which can be cloned and then bound
-/// to a query, which allows us to keep a copy of the parameters around in order to retry the query
-/// if it fails.
-///
-/// # Lifetimes
-///
-/// A SQL [`Query`] with lifetime `'q` borrows from both it's SQL statement (`&'q str`) and its
-/// parameters (bound via `bind<'q>`). Sometimes, though, it is necessary for the statement and its
-/// parameters to have different (but overlapping) lifetimes. For example, the parameters might be
-/// passed in and owned by the caller, while the query string is constructed in the callee and its
-/// lifetime is limited to the callee scope. (See for example the [`upsert`](Transaction::upsert)
-/// function which does exactly this.)
-///
-/// We could rectify this situation with a trait bound like `P: for<'q> Params<'q>`, meaning `P`
-/// must be bindable to a query with a lifetime chosen by the callee. However, when `P` is an
-/// associated type, such as an element of an iterator, as in
-/// `<I as IntoIter>::Item: for<'q> Params<'q>`, [a current limitation](https://blog.rust-lang.org/2022/10/28/gats-stabilization.html#implied-static-requirement-from-higher-ranked-trait-bounds.)
-/// in the Rust compiler then requires `P: 'static`, which we don't necessarily want: the caller
-/// should be able to pass in a reference to avoid expensive cloning.
-///
-/// So, instead, we work around this by making it explicit in the [`Params`] trait that the lifetime
-/// of the query we're binding to (`'q`) may be different than the lifetime of the parameters (`'p`)
-/// as long as the parameters outlive the duration of the query (the `'p: 'q`) bound on the
-/// [`bind`](Self::bind) function.
-pub trait Params<'p> {
+/// Generic over `DB: Database` so it works with both Postgres and SQLite inside `with_backend!`.
+pub trait Params<'p, DB: Database> {
     fn bind<'q, 'r>(
         self,
-        q: &'q mut Separated<'r, 'p, Db, &'static str>,
-    ) -> &'q mut Separated<'r, 'p, Db, &'static str>
+        q: &'q mut Separated<'r, 'p, DB, &'static str>,
+    ) -> &'q mut Separated<'r, 'p, DB, &'static str>
     where
         'p: 'r;
 }
 
 /// A collection of parameters with a statically known length.
-///
-/// This is a simple trick for enforcing at compile time that a list of parameters has a certain
-/// length, such as matching the length of a list of column names. This can prevent easy mistakes
-/// like leaving out a parameter. It is implemented for tuples up to length 8.
-pub trait FixedLengthParams<'p, const N: usize>: Params<'p> {}
+pub trait FixedLengthParams<'p, DB: Database, const N: usize>: Params<'p, DB> {}
 
 macro_rules! impl_tuple_params {
     ($n:literal, ($($t:ident,)+)) => {
-        impl<'p,  $($t),+> Params<'p> for ($($t,)+)
+        impl<'p, DB: Database, $($t),+> Params<'p, DB> for ($($t,)+)
         where $(
-            $t: 'p +  Encode<'p, Db> + Type<Db>
-        ),+{
-            fn bind<'q, 'r>(self, q: &'q mut Separated<'r, 'p, Db, &'static str>) ->   &'q mut Separated<'r, 'p, Db, &'static str>
+            $t: 'p + Encode<'p, DB> + Type<DB>
+        ),+ {
+            fn bind<'q, 'r>(self, q: &'q mut Separated<'r, 'p, DB, &'static str>) -> &'q mut Separated<'r, 'p, DB, &'static str>
             where 'p: 'r,
             {
                 #[allow(non_snake_case)]
@@ -313,9 +281,9 @@ macro_rules! impl_tuple_params {
             }
         }
 
-        impl<'p, $($t),+> FixedLengthParams<'p, $n> for ($($t,)+)
+        impl<'p, DB: Database, $($t),+> FixedLengthParams<'p, DB, $n> for ($($t,)+)
         where $(
-            $t: 'p + for<'q> Encode<'q, Db> + Type<Db>
+            $t: 'p + for<'q> Encode<'q, DB> + Type<DB>
         ),+ {
         }
     };
@@ -334,12 +302,17 @@ pub fn build_where_in<'a, I>(
     query: &'a str,
     column: &'a str,
     values: I,
+    backend: DbBackend,
 ) -> QueryResult<(queries::QueryBuilder<'a>, String)>
 where
     I: IntoIterator,
-    I::Item: 'a + Encode<'a, Db> + Type<Db>,
+    I::Item: 'a
+        + Encode<'a, sqlx::Postgres>
+        + Type<sqlx::Postgres>
+        + Encode<'a, sqlx::Sqlite>
+        + Type<sqlx::Sqlite>,
 {
-    let mut builder = queries::QueryBuilder::default();
+    let mut builder = queries::QueryBuilder::new(backend);
     let params = values
         .into_iter()
         .map(|v| Ok(format!("{} ", builder.bind(v)?)))
@@ -370,7 +343,8 @@ impl Transaction<Write> {
     ) -> anyhow::Result<()>
     where
         R: IntoIterator,
-        R::Item: 'p + FixedLengthParams<'p, N>,
+        R::Item:
+            'p + FixedLengthParams<'p, sqlx::Postgres, N> + FixedLengthParams<'p, sqlx::Sqlite, N>,
     {
         let set_columns = columns
             .iter()
@@ -389,29 +363,31 @@ impl Transaction<Write> {
             return Ok(());
         }
 
-        let mut query_builder =
-            QueryBuilder::new(format!("INSERT INTO \"{table}\" ({columns_str}) "));
-        query_builder.push_values(rows, |mut b, row| {
-            row.bind(&mut b);
-        });
-        query_builder.push(format!(" ON CONFLICT ({pk}) DO UPDATE SET {set_columns}"));
+        with_backend!(self, |tx| {
+            let mut query_builder =
+                QueryBuilder::new(format!("INSERT INTO \"{table}\" ({columns_str}) "));
+            query_builder.push_values(rows, |mut b, row| {
+                row.bind(&mut b);
+            });
+            query_builder.push(format!(" ON CONFLICT ({pk}) DO UPDATE SET {set_columns}"));
 
-        let query = query_builder.build();
-        let statement = query.sql();
+            let query = query_builder.build();
+            let statement = query.sql();
 
-        let res = self.execute(query).await.inspect_err(|err| {
-            tracing::error!(statement, "error in statement execution: {err:#}");
-        })?;
-        let rows_modified = res.rows_affected() as usize;
-        if rows_modified != num_rows {
-            let error = format!(
-                "unexpected number of rows modified: expected {num_rows}, got {rows_modified}. \
-                 query: {statement}"
-            );
-            tracing::error!(error);
-            bail!(error);
-        }
-        Ok(())
+            let res = query.execute(tx.as_mut()).await.inspect_err(|err| {
+                tracing::error!(statement, "error in statement execution: {err:#}");
+            })?;
+            let rows_modified = res.rows_affected() as usize;
+            if rows_modified != num_rows {
+                let error = format!(
+                    "unexpected number of rows modified: expected {num_rows}, got \
+                     {rows_modified}. query: {statement}"
+                );
+                tracing::error!(error);
+                bail!(error);
+            }
+            Ok(())
+        })
     }
 }
 
@@ -423,25 +399,29 @@ impl Transaction<Write> {
         state_tables: Vec<String>,
         height: u64,
     ) -> anyhow::Result<()> {
-        self.execute(query("DELETE FROM header WHERE height <= $1").bind(height as i64))
-            .await?;
+        with_backend!(self, |tx| {
+            sqlx::query("DELETE FROM header WHERE height <= $1")
+                .bind(height as i64)
+                .execute(tx.as_mut())
+                .await
+                .map(|_| ())
+        })?;
 
-        // prune merklized state tables
-        // only delete nodes having created < h AND
-        // is not the newest node with its position
         for state_table in state_tables {
-            self.execute(
-                query(&format!(
+            with_backend!(self, |tx| {
+                sqlx::query(&format!(
                     "
                 DELETE FROM {state_table} WHERE (path, created) IN
-                (SELECT path, created FROM 
-                (SELECT path, created, 
-                ROW_NUMBER() OVER (PARTITION BY path ORDER BY created DESC) as rank 
+                (SELECT path, created FROM
+                (SELECT path, created,
+                ROW_NUMBER() OVER (PARTITION BY path ORDER BY created DESC) as rank
                 FROM {state_table} WHERE created <= $1) ranked_nodes WHERE rank != 1)"
                 ))
-                .bind(height as i64),
-            )
-            .await?;
+                .bind(height as i64)
+                .execute(tx.as_mut())
+                .await
+                .map(|_| ())
+            })?;
         }
 
         self.save_pruned_height(height).await?;
@@ -450,8 +430,6 @@ impl Transaction<Write> {
 
     /// Record the height of the latest pruned header.
     pub(super) async fn save_pruned_height(&mut self, height: u64) -> anyhow::Result<()> {
-        // id is set to 1 so that there is only one row in the table.
-        // height is updated if the row already exists.
         self.upsert(
             "pruned_height",
             ["id", "last_height"],
@@ -475,8 +453,6 @@ where
     ) -> anyhow::Result<()> {
         let height = leaf.height();
 
-        // Ignore the leaf if it is below the pruned height. This can happen if, for instance, the
-        // fetcher is racing with the pruner.
         if let Some(pruned_height) = self.load_pruned_height().await? {
             if height <= pruned_height {
                 tracing::info!(
@@ -488,8 +464,6 @@ where
             }
         }
 
-        // While we don't necessarily have the full block for this leaf yet, we can initialize the
-        // header table with block metadata taken from the leaf.
         let header_json = serde_json::to_value(leaf.leaf().block_header())
             .context("failed to serialize header")?;
         self.upsert(
@@ -506,19 +480,14 @@ where
         )
         .await?;
 
-        // Similarly, we can initialize the payload table with a null payload, which can help us
-        // distinguish between blocks that haven't been produced yet and blocks we haven't received
-        // yet when answering queries.
-        // We don't overwrite the payload if it already exists.
-        // During epoch transition in PoS, the same height block is sent multiple times.
-        // The first block may have the payload, but subsequent blocks might be missing it.
-        // Overwriting would cause the payload to be lost since the block height is the same
-        let query = query("INSERT INTO payload (height) VALUES ($1) ON CONFLICT DO NOTHING")
-            .bind(height as i64);
-        query.execute(self.as_mut()).await?;
+        with_backend!(self, |tx| {
+            sqlx::query("INSERT INTO payload (height) VALUES ($1) ON CONFLICT DO NOTHING")
+                .bind(height as i64)
+                .execute(tx.as_mut())
+                .await
+                .map(|_| ())
+        })?;
 
-        // Finally, we insert the leaf itself, which references the header row we created.
-        // Serialize the full leaf and QC to JSON for easy storage.
         let leaf_json = serde_json::to_value(leaf.leaf()).context("failed to serialize leaf")?;
         let qc_json = serde_json::to_value(leaf.qc()).context("failed to serialize QC")?;
         self.upsert(
@@ -537,10 +506,6 @@ where
 
         let block_height = NodeStorage::<Types>::block_height(self).await? as u64;
         if height + 1 >= block_height {
-            // If this is the latest leaf we know about, also store it's QC chain so that we can
-            // prove to clients that this leaf is finalized. (If it is not the latest leaf, this
-            // is unnecessary, since we can prove it is an ancestor of some later, finalized
-            // leaf.)
             let qcs = serde_json::to_value(&qc_chain)?;
             self.upsert("latest_qc_chain", ["id", "qcs"], ["id"], [(1i32, qcs)])
                 .await?;
@@ -552,8 +517,6 @@ where
     async fn insert_block(&mut self, block: BlockQueryData<Types>) -> anyhow::Result<()> {
         let height = block.height();
 
-        // Ignore the block if it is below the pruned height. This can happen if, for instance, the
-        // fetcher is racing with the pruner.
         if let Some(pruned_height) = self.load_pruned_height().await? {
             if height <= pruned_height {
                 tracing::info!(
@@ -565,8 +528,6 @@ where
             }
         }
 
-        // The header and payload tables should already have been initialized when we inserted the
-        // corresponding leaf. All we have to do is add the payload itself and its size.
         let payload = block.payload.encode();
 
         self.upsert(
@@ -582,7 +543,6 @@ where
         )
         .await?;
 
-        // Index the transactions and namespaces in the block.
         let mut rows = vec![];
         for (txn_ix, txn) in block.enumerate() {
             let ns_id = block.header().namespace_id(&txn_ix.ns_index).unwrap();
@@ -614,8 +574,6 @@ where
     ) -> anyhow::Result<()> {
         let height = common.height();
 
-        // Ignore the object if it is below the pruned height. This can happen if, for instance, the
-        // fetcher is racing with the pruner.
         if let Some(pruned_height) = self.load_pruned_height().await? {
             if height <= pruned_height {
                 tracing::info!(
@@ -639,9 +597,6 @@ where
             )
             .await
         } else {
-            // Don't touch the `share` column at all if we don't have a share to insert. It's
-            // possible that this column already exists, and we are just upserting the common data,
-            // in which case we don't want to overwrite the share with NULL.
             self.upsert(
                 "vid2",
                 ["height", "common"],
@@ -702,22 +657,18 @@ impl<Types: NodeType, State: MerklizedState<Types, ARITY>, const ARITY: usize>
         let (mut all_nodes, all_hashes) = collect_nodes_from_proofs(&proofs)?;
         let hashes: Vec<Vec<u8>> = all_hashes.into_iter().collect();
 
-        #[cfg(not(feature = "embedded-db"))]
-        let nodes_hash_ids: HashMap<Vec<u8>, i32> = batch_insert_hashes(hashes, self).await?;
-
-        #[cfg(feature = "embedded-db")]
-        let nodes_hash_ids: HashMap<Vec<u8>, i32> = {
-            let mut hash_ids: HashMap<Vec<u8>, i32> = HashMap::with_capacity(hashes.len());
-            for hash_chunk in hashes.chunks(20) {
-                let (query, sql) = build_hash_batch_insert(hash_chunk)?;
-                let chunk_ids: HashMap<Vec<u8>, i32> = query
-                    .query_as(&sql)
-                    .fetch(self.as_mut())
-                    .try_collect()
-                    .await?;
-                hash_ids.extend(chunk_ids);
-            }
-            hash_ids
+        let nodes_hash_ids: HashMap<Vec<u8>, i32> = match self.inner.backend() {
+            DbBackend::Postgres => batch_insert_hashes(hashes, self).await?,
+            DbBackend::Sqlite => {
+                let mut hash_ids: HashMap<Vec<u8>, i32> = HashMap::with_capacity(hashes.len());
+                for hash_chunk in hashes.chunks(20) {
+                    let (query, sql) = build_hash_batch_insert(hash_chunk, DbBackend::Sqlite)?;
+                    let chunk_ids: HashMap<Vec<u8>, i32> =
+                        query.query_as(&sql).fetch(self).try_collect().await?;
+                    hash_ids.extend(chunk_ids);
+                }
+                hash_ids
+            },
         };
 
         for (node, children, hash) in &mut all_nodes {
@@ -748,11 +699,12 @@ impl<Types: NodeType, State: MerklizedState<Types, ARITY>, const ARITY: usize>
 #[async_trait]
 impl<Mode: TransactionMode> PrunedHeightStorage for Transaction<Mode> {
     async fn load_pruned_height(&mut self) -> anyhow::Result<Option<u64>> {
-        let Some((height,)) =
-            query_as::<(i64,)>("SELECT last_height FROM pruned_height ORDER BY id DESC LIMIT 1")
-                .fetch_optional(self.as_mut())
-                .await?
-        else {
+        let result: Option<(i64,)> = with_backend!(self, |tx| {
+            sqlx::query_as("SELECT last_height FROM pruned_height ORDER BY id DESC LIMIT 1")
+                .fetch_optional(tx.as_mut())
+                .await
+        })?;
+        let Some((height,)) = result else {
             return Ok(None);
         };
         Ok(Some(height as u64))

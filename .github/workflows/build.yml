@@ -46,20 +46,14 @@ jobs:
       matrix:
         include:
           - binary: sequencer
-            shared-key: postgres
+            shared-key: sequencer
             save-cache: false
 
           - binary: other
-            shared-key: postgres
-            save-cache: true
-
-          - binary: sequencer-sqlite
-            # uses it's own lock file
-            shared-key: sequencer-embedded
+            shared-key: sequencer
             save-cache: true
 
           - binary: espresso-dev-node
-            # uses different features testing,emdbedded-db
             shared-key: espresso-dev-node
             save-cache: true
 
@@ -109,20 +103,14 @@ jobs:
       matrix:
         include:
           - binary: sequencer
-            shared-key: postgres
+            shared-key: sequencer
             save-cache: false
 
           - binary: other
-            shared-key: postgres
-            save-cache: true
-
-          - binary: sequencer-sqlite
-            # uses it's own lock file
-            shared-key: sequencer-embedded
+            shared-key: sequencer
             save-cache: true
 
           - binary: espresso-dev-node
-            # uses different features testing,emdbedded-db
             shared-key: espresso-dev-node
             save-cache: true
 

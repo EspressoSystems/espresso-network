@@ -234,12 +234,14 @@ HotShot supports protocol upgrades via an `UpgradeProposal` mechanism. See `doc/
 
 ## Feature Flags
 
-| Feature          | Default | Purpose                  |
-| ---------------- | ------- | ------------------------ |
-| `embedded-db`    | No      | SQLite backend           |
+| Feature       | Default | Purpose            |
+| ------------- | ------- | ------------------ |
+| `postgres`    | Yes     | PostgreSQL backend |
+| `embedded-db` | No      | SQLite backend     |
 
 **IMPORTANT:** `embedded-db` requires sqlx with different features than PostgreSQL. Since Rust features are additive and
-global to compilation, use `sequencer-sqlite` crate for SQLite builds.
+global to compilation, use `--no-default-features --features embedded-db` for SQLite builds. The `sequencer-sqlite`
+binary is built via `cargo build -p sequencer --no-default-features --features embedded-db --bin sequencer-sqlite`.
 
 ## Testing
 

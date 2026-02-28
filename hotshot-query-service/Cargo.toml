@@ -20,18 +20,13 @@ license = "GPL-3.0-or-later"
 [features]
 default = ["file-system-data-source", "metrics-data-source", "sql-data-source"]
 
-# Enables support for an embedded SQLite database instead of PostgreSQL.
-# Ideal for lightweight nodes that benefit from pruning and merklized state storage,
-# offering advantages over file system storage.
-embedded-db = ["sqlx/sqlite"]
-
 # Enable the availability data source backed by the local file system.
 file-system-data-source = ["atomic_store"]
 
 # Enable a lightweight data source for status APIs without the archival availability API.
 metrics-data-source = []
 
-# Enable the availability data source backed by a Postgres database.
+# Enable the availability data source backed by a SQL database (Postgres and SQLite).
 sql-data-source = ["include_dir", "refinery", "refinery-core", "sqlx", "log"]
 
 # Enable extra features useful for writing tests with a query service.

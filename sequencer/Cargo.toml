@@ -10,7 +10,12 @@ normal = ["hotshot-testing"]
 [package.metadata.cargo-machete]
 ignored = ["vergen", "vergen-gitcl", "include_dir", "hotshot_builder_api"]
 
+[[bin]]
+name = "sequencer"
+path = "src/main.rs"
+
 [features]
+default = []
 testing = [
     "hotshot-testing",
     "espresso-types/testing",
@@ -19,7 +24,6 @@ testing = [
     "hotshot-query-service/testing",
 ]
 benchmarking = []
-embedded-db = ["hotshot-query-service/embedded-db", "sqlx/sqlite"]
 
 [dependencies]
 alloy = { workspace = true }
@@ -123,7 +127,7 @@ test-log = { workspace = true }
 
 # Enable "testing" feature when running tests
 light-client = { workspace = true, features = ["testing"] }
-sequencer = { path = ".", features = ["testing"] }
+sequencer = { path = ".", default-features = false, features = ["testing"] }
 tempfile = { workspace = true }
 
 [lints]

@@ -34,8 +34,8 @@ jobs:
       - name: Check formatting
         run: cargo +nightly fmt -- --check
 
-  clippy-postgres:
-    name: clippy (postgres)
+  clippy:
+    name: clippy
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -47,17 +47,3 @@ jobs:
       - name: Run clippy
         run: |
           cargo clippy --features testing --all-targets --keep-going -- -D warnings
-
-  clippy-embedded:
-      name: clippy (embedded-db)
-      runs-on: ubuntu-latest
-      steps:
-        - uses: actions/checkout@v4
-        - uses: Swatinem/rust-cache@v2
-          with:
-            save-if: false
-            shared-key: cargo-clippy
-
-        - name: Run clippy
-          run: |
-            cargo clippy --workspace --features "embedded-db testing" --all-targets --keep-going -- -D warnings
