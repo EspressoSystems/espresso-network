@@ -171,7 +171,7 @@ jobs:
         run: |
           cargo nextest run --archive-file nextest-archive-postgres.tar.zst  --verbose --no-fail-fast \
           --workspace-remap $PWD \
-          --partition hash:${{ matrix.partition }}/10
+          --partition hash:${{ matrix.partition }}/20
         timeout-minutes: 30
 
   test-go-sdk:
