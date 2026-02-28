@@ -496,11 +496,18 @@ async fn handle_events<N, P, V>(
         let t_persistence = t_start.elapsed();
 
         // Generate state signature.
-        state_signer
-            .write()
-            .await
-            .handle_event(&event, consensus.clone())
-            .await;
+        {
+            let state_signer = state_signer.clone();
+            let consensus = consensus.clone();
+            let event = event.clone();
+            tokio::spawn(async move {
+                state_signer
+                    .write()
+                    .await
+                    .handle_event(&event, consensus)
+                    .await;
+            });
+        }
         let t_signer = t_start.elapsed() - t_persistence;
 
         // Handle external messages
