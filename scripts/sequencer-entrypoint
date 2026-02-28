@@ -1,8 +1,0 @@
-#!/usr/bin/env bash
-set -eEu -o pipefail
-
-# Trap SIGTERM and SIGINT signals and send them to the process group
-trap "trap - SIGTERM && kill -- -$$" SIGINT SIGTERM EXIT
-
-echo "Starting sequencer..."
-/bin/sequencer "$@"

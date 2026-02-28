@@ -174,6 +174,7 @@ pub struct Options {
     /// URI to set a baseline and then use other parameters to override or add configuration. In
     /// addition, there are some parameters which cannot be set via the URI, such as TLS.
     // Hide from debug output since may contain sensitive data.
+    #[clap(long, env = "ESPRESSO_SEQUENCER_DATABASE_URI")]
     #[derivative(Debug = "ignore")]
     pub(crate) uri: Option<String>,
 

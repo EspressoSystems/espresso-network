@@ -5,6 +5,11 @@ ARG TARGETARCH
 COPY target/$TARGETARCH/release/sequencer /bin/sequencer
 RUN chmod +x /bin/sequencer
 
+# Deprecated wrappers for backward compat with old Docker image paths.
+COPY scripts/sequencer-postgres /bin/sequencer-postgres
+COPY scripts/sequencer-sqlite /bin/sequencer-sqlite
+RUN chmod +x /bin/sequencer-postgres /bin/sequencer-sqlite
+
 COPY target/$TARGETARCH/release/utils /bin/utils
 RUN chmod +x /bin/utils
 

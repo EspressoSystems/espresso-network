@@ -25,7 +25,6 @@ fast finality and cross-rollup composability. This repo contains:
 **NEVER:**
 
 - Modify V1 contract storage layout (V2 inherits V1; changing V1 breaks upgrades)
-- Combine `embedded-db` feature with default features (sqlx feature conflict)
 - Use `just test` during iteration (compiles everything; use `cargo test -p <package>`)
 - Read from non-finalized L1 blocks (reorg risk)
 
@@ -39,7 +38,7 @@ cargo clippy -p <package> --tests
 cargo test -p <package> -- <test_name>
 
 # Full workspace (pre-commit only)
-just check                            # Check postgres + embedded-db variants
+just check                            # Check workspace
 just lint                             # Clippy with -D warnings
 just test                             # Run nextest (skips slow tests)
 
@@ -232,16 +231,10 @@ HotShot supports protocol upgrades via an `UpgradeProposal` mechanism. See `doc/
 - View-based: `start_proposing_view`, `stop_proposing_view`, `start_voting_view`, `stop_voting_view`
 - Time-based: Same parameters but with Unix timestamps
 
-## Feature Flags
+## Database Backends
 
-| Feature       | Default | Purpose            |
-| ------------- | ------- | ------------------ |
-| `postgres`    | Yes     | PostgreSQL backend |
-| `embedded-db` | No      | SQLite backend     |
-
-**IMPORTANT:** `embedded-db` requires sqlx with different features than PostgreSQL. Since Rust features are additive and
-global to compilation, use `--no-default-features --features embedded-db` for SQLite builds. The `sequencer-sqlite`
-binary is built via `cargo build -p sequencer --no-default-features --features embedded-db --bin sequencer-sqlite`.
+Both PostgreSQL and SQLite are supported in a single binary, selected at runtime by the connection URL scheme
+(`postgres://` or `sqlite://`). No feature flags are needed to switch backends.
 
 ## Testing
 
@@ -282,11 +275,11 @@ For node operator details, see https://docs.espressosys.com/network/guides/node-
 
 ### Storage Backends
 
-| Backend    | Module                   | Production Use          | Merklized State | Pruning |
-| ---------- | ------------------------ | ----------------------- | --------------- | ------- |
-| PostgreSQL | `sql.rs`                 | Yes (DA/Archival)       | Yes             | Yes     |
-| Filesystem | `fs.rs`                  | Yes (non-DA validators) | No              | Limited |
-| SQLite     | `sql.rs` + `embedded-db` | Not yet                 | Yes             | Yes     |
+| Backend    | Module   | Production Use          | Merklized State | Pruning |
+| ---------- | -------- | ----------------------- | --------------- | ------- |
+| PostgreSQL | `sql.rs` | Yes (DA/Archival)       | Yes             | Yes     |
+| Filesystem | `fs.rs`  | Yes (non-DA validators) | No              | Limited |
+| SQLite     | `sql.rs` | Not yet                 | Yes             | Yes     |
 
 ### Storage Migrations
 
