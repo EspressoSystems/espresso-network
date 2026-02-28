@@ -19,6 +19,15 @@ pub enum DbBackend {
     Sqlite,
 }
 
+impl DbBackend {
+    pub fn syntax(&self) -> &'static SyntaxHelpers {
+        match self {
+            Self::Postgres => &syntax_helpers::POSTGRES,
+            Self::Sqlite => &syntax_helpers::SQLITE,
+        }
+    }
+}
+
 /// A connection pool that dispatches to either PostgreSQL or SQLite at runtime.
 ///
 /// Currently, only PostgreSQL and SQLite are supported. The backend is selected at runtime based on
@@ -89,9 +98,6 @@ pub mod syntax_helpers {
         max_fn: "MAX",
         binary_type: "BLOB",
     };
-
-    pub static MAX_FN: &str = "GREATEST";
-    pub static BINARY_TYPE: &str = "BYTEA";
 }
 
 impl SqlPool {

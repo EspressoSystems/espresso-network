@@ -37,9 +37,8 @@ use hotshot_query_service::{
         storage::{
             pruning::PrunerCfg,
             sql::{
-                include_migrations, query, query_as, syntax_helpers::MAX_FN, BackendTransaction,
-                Config, DbBackend, Read, SqlPool, SqlStorage, StorageConnectionType, Transaction,
-                TransactionMode, Write,
+                include_migrations, query, query_as, BackendTransaction, Config, DbBackend, Read,
+                SqlPool, SqlStorage, StorageConnectionType, Transaction, TransactionMode, Write,
             },
             AvailabilityStorage,
         },
@@ -1748,12 +1747,13 @@ impl SequencerPersistence for Persistence {
             return Ok(());
         }
 
+        let mut tx = self.db.write().await?;
+        let max_fn = tx.backend().syntax().max_fn;
+
         let stmt = format!(
             "INSERT INTO highest_voted_view (id, view) VALUES (0, $1)
-            ON CONFLICT (id) DO UPDATE SET view = {MAX_FN}(highest_voted_view.view, excluded.view)"
+            ON CONFLICT (id) DO UPDATE SET view = {max_fn}(highest_voted_view.view, excluded.view)"
         );
-
-        let mut tx = self.db.write().await?;
         tx.execute(query(tx.backend(), &stmt).bind(view.u64() as i64))
             .await?;
 
@@ -1761,7 +1761,7 @@ impl SequencerPersistence for Persistence {
             let restart_view = view + 1;
             let stmt = format!(
                 "INSERT INTO restart_view (id, view) VALUES (0, $1)
-                ON CONFLICT (id) DO UPDATE SET view = {MAX_FN}(restart_view.view, excluded.view)"
+                ON CONFLICT (id) DO UPDATE SET view = {max_fn}(restart_view.view, excluded.view)"
             );
             tx.execute(query(tx.backend(), &stmt).bind(restart_view.u64() as i64))
                 .await?;
