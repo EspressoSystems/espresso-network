@@ -813,6 +813,8 @@ impl Persistence {
                     let row = match row {
                         Ok(row) => row,
                         Err(err) => {
+                            // If there's an error getting a row, try generating an event with the rows
+                            // we do have.
                             tracing::warn!("error loading row: {err:#}");
                             break;
                         },
@@ -831,6 +833,9 @@ impl Persistence {
                     };
                     let height = leaf.block_header().block_number();
 
+                    // Ensure we are only dealing with a consecutive chain of leaves. We don't want to
+                    // garbage collect any views for which we missed a leaf or decide event; at least
+                    // not right away, in case we need to recover that data later.
                     if let Some(parent) = parent {
                         if height != parent + 1 {
                             tracing::debug!(
@@ -1839,6 +1844,8 @@ impl SequencerPersistence for Persistence {
                         .push_bind(leaf.clone())
                         .push_bind(qc.clone());
                 });
+                // Offset tracking prevents duplicate inserts
+                // Added as a safeguard.
                 query_builder.push(" ON CONFLICT DO NOTHING");
                 query_builder
                     .build()

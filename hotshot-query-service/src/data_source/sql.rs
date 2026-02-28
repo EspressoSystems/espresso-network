@@ -101,6 +101,28 @@ impl Config {
 /// ```
 ///
 /// For SQLite, simply provide the file path, and the file will be created if it does not already exist.
+///
+/// One could then connect to a PostgreSQL database with the following [`Config`]:
+///
+/// ```
+/// # use hotshot_query_service::data_source::sql::Config;
+/// Config::default()
+///     .host("postgres.database.hostname")
+///     .database("hotshot_query_service")
+///     .user("hotshot_user")
+///     .password("password")
+/// # ;
+/// ```
+///
+/// Or, to use SQLite, configure it with a file path:
+///
+/// ```
+/// # use hotshot_query_service::data_source::sql::Config;
+/// Config::sqlite_default()
+///     .db_path("temp.db".into())
+/// # ;
+/// ```
+///
 /// ## Resetting
 ///
 /// In general, resetting the database when necessary is left up to the administrator. However, for

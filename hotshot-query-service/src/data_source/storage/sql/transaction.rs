@@ -76,18 +76,44 @@ pub trait TransactionMode: Send + Sync {
 impl TransactionMode for Write {
     async fn begin(tx: &mut BackendTransaction) -> anyhow::Result<()> {
         match tx {
+            // With Postgres things are much more straightforward: just tell Postgres we want a
+            // write transaction immediately after opening it.
             BackendTransaction::Postgres(inner) => {
                 inner
                     .as_mut()
                     .execute("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
                     .await?;
             },
+            // SQLite automatically sets the read/write mode of a transactions based on the
+            // statements in it. However, there is still a good reason to explicitly enable write
+            // mode right from the start: if a transaction first executes a read statement and then
+            // a write statement, it will be upgraded from a read transaction to a write
+            // transaction. Because this involves obtaining a different kind of lock while already
+            // holding one, it can cause a deadlock, e.g.:
+            // * Transaction A executes a read statement, obtaining a read lock
+            // * Transaction B executes a write statement and begins waiting for a write lock
+            // * Transaction A executes a write statement and begins waiting for a write lock
+            //
+            // Transaction A can never obtain its write lock because it must first wait for
+            // transaction B to get a write lock, which cannot happen because B is in turn waiting
+            // for A to release its read lock.
+            //
+            // This type of deadlock cannot happen if transaction A immediately starts as a write,
+            // since it will then only ever try to acquire one type of lock (a write lock). By
+            // working with this restriction (transactions are either readers or writers, but never
+            // upgradable), we avoid deadlock, we more closely imitate the concurrency semantics of
+            // postgres, and we take advantage of the SQLite busy timeout, which may allow a
+            // transaction to acquire a lock and succeed (after a small delay), even when there was
+            // a conflicting transaction in progress. Whereas a deadlock is always an automatic
+            // rollback.
+            //
+            // The proper way to begin a write transaction in SQLite is with `BEGIN IMMEDIATE`.
+            // However, sqlx does not expose any way to customize the `BEGIN` statement that starts
+            // a transaction. A serviceable workaround is to perform some write statement before
+            // performing any read statement, ensuring that the first lock we acquire is exclusive.
+            // A write statement that has no actual effect on the database is suitable for this
+            // purpose, hence the `WHERE false`.
             BackendTransaction::Sqlite(inner) => {
-                // SQLite automatically sets the read/write mode of a transaction based on the
-                // statements in it. However, we explicitly enable write mode from the start to
-                // avoid deadlocks from lock upgrades. The proper way is `BEGIN IMMEDIATE`, but
-                // sqlx doesn't expose that. A serviceable workaround is performing a write
-                // statement first.
                 inner
                     .as_mut()
                     .execute("UPDATE pruned_height SET id = id WHERE false")
@@ -105,12 +131,19 @@ impl TransactionMode for Write {
 impl TransactionMode for Read {
     async fn begin(tx: &mut BackendTransaction) -> anyhow::Result<()> {
         match tx {
+            // With Postgres, we explicitly set the transaction mode to specify that we want the
+            // strongest possible consistency semantics in case of competing transactions
+            // (SERIALIZABLE), and we want to wait until this is possible rather than failing
+            // (DEFERRABLE).
             BackendTransaction::Postgres(inner) => {
                 inner
                     .as_mut()
                     .execute("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE, READ ONLY, DEFERRABLE")
                     .await?;
             },
+            // With SQLite, there is nothing to be done here, as SQLite automatically starts
+            // transactions in read-only mode, and always has serializable concurrency unless we
+            // explicitly opt in to dirty reads with a pragma.
             BackendTransaction::Sqlite(_) => {},
         }
         Ok(())
@@ -250,7 +283,35 @@ impl<Mode: TransactionMode> update::Transaction for Transaction<Mode> {
 
 /// A collection of parameters which can be bound to a SQL query.
 ///
-/// Generic over `DB: Database` so it works with both Postgres and SQLite inside `with_backend!`.
+/// This trait allows us to carry around hetergenous lists of parameters (e.g. tuples) and bind them
+/// to a query at the last moment before executing. This means we can manipulate the parameters
+/// independently of the query before executing it. For example, by requiring a trait bound of
+/// `Params<'p> + Clone`, we get a list (or tuple) of parameters which can be cloned and then bound
+/// to a query, which allows us to keep a copy of the parameters around in order to retry the query
+/// if it fails.
+///
+/// Generic over `DB: Database` so it works with both Postgres and SQLite via runtime dispatch.
+///
+/// # Lifetimes
+///
+/// A SQL query with lifetime `'q` borrows from both it's SQL statement (`&'q str`) and its
+/// parameters (bound via `bind<'q>`). Sometimes, though, it is necessary for the statement and its
+/// parameters to have different (but overlapping) lifetimes. For example, the parameters might be
+/// passed in and owned by the caller, while the query string is constructed in the callee and its
+/// lifetime is limited to the callee scope. (See for example the [`upsert`](Transaction::upsert)
+/// function which does exactly this.)
+///
+/// We could rectify this situation with a trait bound like `P: for<'q> Params<'q>`, meaning `P`
+/// must be bindable to a query with a lifetime chosen by the callee. However, when `P` is an
+/// associated type, such as an element of an iterator, as in
+/// `<I as IntoIter>::Item: for<'q> Params<'q>`, [a current limitation](https://blog.rust-lang.org/2022/10/28/gats-stabilization.html#implied-static-requirement-from-higher-ranked-trait-bounds.)
+/// in the Rust compiler then requires `P: 'static`, which we don't necessarily want: the caller
+/// should be able to pass in a reference to avoid expensive cloning.
+///
+/// So, instead, we work around this by making it explicit in the [`Params`] trait that the lifetime
+/// of the query we're binding to (`'q`) may be different than the lifetime of the parameters (`'p`)
+/// as long as the parameters outlive the duration of the query (the `'p: 'q`) bound on the
+/// [`bind`](Self::bind) function.
 pub trait Params<'p, DB: Database> {
     fn bind<'q, 'r>(
         self,
@@ -261,6 +322,10 @@ pub trait Params<'p, DB: Database> {
 }
 
 /// A collection of parameters with a statically known length.
+///
+/// This is a simple trick for enforcing at compile time that a list of parameters has a certain
+/// length, such as matching the length of a list of column names. This can prevent easy mistakes
+/// like leaving out a parameter. It is implemented for tuples up to length 8.
 pub trait FixedLengthParams<'p, DB: Database, const N: usize>: Params<'p, DB> {}
 
 macro_rules! impl_tuple_params {
@@ -407,6 +472,9 @@ impl Transaction<Write> {
                 .map(|_| ())
         })?;
 
+        // prune merklized state tables
+        // only delete nodes having created < h AND
+        // is not the newest node with its position
         for state_table in state_tables {
             with_backend!(self, |tx| {
                 sqlx::query(&format!(
@@ -430,6 +498,8 @@ impl Transaction<Write> {
 
     /// Record the height of the latest pruned header.
     pub(super) async fn save_pruned_height(&mut self, height: u64) -> anyhow::Result<()> {
+        // id is set to 1 so that there is only one row in the table.
+        // height is updated if the row already exists.
         self.upsert(
             "pruned_height",
             ["id", "last_height"],
@@ -453,6 +523,8 @@ where
     ) -> anyhow::Result<()> {
         let height = leaf.height();
 
+        // Ignore the leaf if it is below the pruned height. This can happen if, for instance, the
+        // fetcher is racing with the pruner.
         if let Some(pruned_height) = self.load_pruned_height().await? {
             if height <= pruned_height {
                 tracing::info!(
@@ -464,6 +536,8 @@ where
             }
         }
 
+        // While we don't necessarily have the full block for this leaf yet, we can initialize the
+        // header table with block metadata taken from the leaf.
         let header_json = serde_json::to_value(leaf.leaf().block_header())
             .context("failed to serialize header")?;
         self.upsert(
@@ -480,6 +554,13 @@ where
         )
         .await?;
 
+        // Similarly, we can initialize the payload table with a null payload, which can help us
+        // distinguish between blocks that haven't been produced yet and blocks we haven't received
+        // yet when answering queries.
+        // We don't overwrite the payload if it already exists.
+        // During epoch transition in PoS, the same height block is sent multiple times.
+        // The first block may have the payload, but subsequent blocks might be missing it.
+        // Overwriting would cause the payload to be lost since the block height is the same
         with_backend!(self, |tx| {
             sqlx::query("INSERT INTO payload (height) VALUES ($1) ON CONFLICT DO NOTHING")
                 .bind(height as i64)
@@ -488,6 +569,8 @@ where
                 .map(|_| ())
         })?;
 
+        // Finally, we insert the leaf itself, which references the header row we created.
+        // Serialize the full leaf and QC to JSON for easy storage.
         let leaf_json = serde_json::to_value(leaf.leaf()).context("failed to serialize leaf")?;
         let qc_json = serde_json::to_value(leaf.qc()).context("failed to serialize QC")?;
         self.upsert(
@@ -506,6 +589,10 @@ where
 
         let block_height = NodeStorage::<Types>::block_height(self).await? as u64;
         if height + 1 >= block_height {
+            // If this is the latest leaf we know about, also store it's QC chain so that we can
+            // prove to clients that this leaf is finalized. (If it is not the latest leaf, this
+            // is unnecessary, since we can prove it is an ancestor of some later, finalized
+            // leaf.)
             let qcs = serde_json::to_value(&qc_chain)?;
             self.upsert("latest_qc_chain", ["id", "qcs"], ["id"], [(1i32, qcs)])
                 .await?;
@@ -517,6 +604,8 @@ where
     async fn insert_block(&mut self, block: BlockQueryData<Types>) -> anyhow::Result<()> {
         let height = block.height();
 
+        // Ignore the block if it is below the pruned height. This can happen if, for instance, the
+        // fetcher is racing with the pruner.
         if let Some(pruned_height) = self.load_pruned_height().await? {
             if height <= pruned_height {
                 tracing::info!(
@@ -528,6 +617,8 @@ where
             }
         }
 
+        // The header and payload tables should already have been initialized when we inserted the
+        // corresponding leaf. All we have to do is add the payload itself and its size.
         let payload = block.payload.encode();
 
         self.upsert(
@@ -543,6 +634,7 @@ where
         )
         .await?;
 
+        // Index the transactions and namespaces in the block.
         let mut rows = vec![];
         for (txn_ix, txn) in block.enumerate() {
             let ns_id = block.header().namespace_id(&txn_ix.ns_index).unwrap();
@@ -574,6 +666,8 @@ where
     ) -> anyhow::Result<()> {
         let height = common.height();
 
+        // Ignore the object if it is below the pruned height. This can happen if, for instance,
+        // the fetcher is racing with the pruner.
         if let Some(pruned_height) = self.load_pruned_height().await? {
             if height <= pruned_height {
                 tracing::info!(
@@ -597,6 +691,9 @@ where
             )
             .await
         } else {
+            // Don't touch the `share` column at all if we don't have a share to insert. It's
+            // possible that this column already exists, and we are just upserting the common data,
+            // in which case we don't want to overwrite the share with NULL.
             self.upsert(
                 "vid2",
                 ["height", "common"],

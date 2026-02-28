@@ -12,18 +12,53 @@
 
 use sqlx::pool::Pool;
 
+/// Identifies which concrete database backend is in use.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DbBackend {
     Postgres,
     Sqlite,
 }
 
+/// A connection pool that dispatches to either PostgreSQL or SQLite at runtime.
+///
+/// Currently, only PostgreSQL and SQLite are supported. The backend is selected at runtime based on
+/// the connection URL, with enum variants dispatching to the concrete sqlx pool types.
+///
+/// ### Design Choice
+/// The reason for using concrete backend types (dispatched via enum) over sqlx's Any database is
+/// that we can support SQL types which are implemented for the two backends we care about (Postgres
+/// and SQLite) but not for _any_ SQL database, such as MySQL. Crucially, JSON types fall in this
+/// category.
+///
+/// The reason for taking this approach rather than writing all of our code to be generic over the
+/// Database implementation is that sqlx does not have the necessary trait bounds on all of the
+/// associated types (e.g. Database::Connection does not implement Executor for all possible
+/// databases, the Executor impl lives on each concrete connection type) and Rust does not provide
+/// a good way of encapsulating a collection of trait bounds on associated types. Thus, our function
+/// signatures become untenably messy with bounds like
+///
+/// ```rust
+/// # use sqlx::{Database, Encode, Executor, IntoArguments, Type};
+/// fn foo<DB: Database>()
+/// where
+///     for<'a> &'a mut DB::Connection: Executor<'a>,
+///     for<'q> DB::Arguments<'q>: IntoArguments<'q, DB>,
+///     for<'a> i64: Type<DB> + Encode<'a, DB>,
+/// {}
+/// ```
+///
+/// Instead, we use concrete types for each backend and dispatch at runtime via this enum and the
+/// corresponding [`BackendTransaction`] and [`BackendPoolConnection`] enums. The [`with_backend!`]
+/// macro provides ergonomic access to the inner concrete transaction type.
 #[derive(Clone, Debug)]
 pub enum SqlPool {
     Postgres(Pool<sqlx::Postgres>),
     Sqlite(Pool<sqlx::Sqlite>),
 }
 
+/// An active database transaction, dispatching to the concrete backend transaction type.
+///
+/// See [`SqlPool`] for why we use concrete types rather than `sqlx::Any` or generics.
 pub enum BackendTransaction {
     Postgres(sqlx::Transaction<'static, sqlx::Postgres>),
     Sqlite(sqlx::Transaction<'static, sqlx::Sqlite>),
@@ -38,6 +73,7 @@ impl std::fmt::Debug for BackendTransaction {
     }
 }
 
+/// Backend-specific SQL syntax differences (e.g. function names, type names).
 pub struct SyntaxHelpers {
     pub max_fn: &'static str,
     pub binary_type: &'static str,
@@ -100,6 +136,9 @@ impl SqlPool {
     }
 }
 
+/// A pooled database connection, dispatching to the concrete backend connection type.
+///
+/// See [`SqlPool`] for why we use concrete types rather than `sqlx::Any` or generics.
 pub enum BackendPoolConnection {
     Postgres(sqlx::pool::PoolConnection<sqlx::Postgres>),
     Sqlite(sqlx::pool::PoolConnection<sqlx::Sqlite>),
@@ -130,6 +169,10 @@ impl BackendTransaction {
     }
 }
 
+/// Dispatch on the concrete backend transaction type.
+///
+/// Provides a binding to the inner `sqlx::Transaction` regardless of which backend is active,
+/// allowing callers to write backend-agnostic code that still operates on concrete types.
 macro_rules! with_backend {
     ($self:expr, |$tx:ident| $body:expr) => {
         match &mut $self.inner {

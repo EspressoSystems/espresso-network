@@ -215,7 +215,11 @@ pub enum Config {
 pub struct PostgresConfig {
     db_opt: PgConnectOptions,
     pool_opt: PoolOptions<sqlx::Postgres>,
+    /// Extra pool options to allow separately configuring the connection pool for query service.
     pool_opt_query: PoolOptions<sqlx::Postgres>,
+    /// The name of the schema to use for queries.
+    ///
+    /// The default schema is named `hotshot` and is created via the default migrations.
     schema: String,
     reset: bool,
     migrations: Vec<Migration>,
@@ -345,6 +349,8 @@ impl Config {
 
     /// Set the hostname of the database server.
     ///
+    /// The default is `localhost`.
+    ///
     /// Only applicable to Postgres configs; ignored for SQLite.
     pub fn host(mut self, host: impl Into<String>) -> Self {
         if let Self::Postgres(ref mut cfg) = self {
@@ -354,6 +360,8 @@ impl Config {
     }
 
     /// Set the port on which to connect to the database.
+    ///
+    /// The default is 5432, the default Postgres port.
     ///
     /// Only applicable to Postgres configs; ignored for SQLite.
     pub fn port(mut self, port: u16) -> Self {
@@ -395,6 +403,10 @@ impl Config {
 
     /// Use TLS for an encrypted connection to the database.
     ///
+    /// Note that an encrypted connection may be established even if this option is not set, as long
+    /// as both the client and server support it. This option merely causes connection to fail if an
+    /// encrypted stream cannot be established.
+    ///
     /// Only applicable to Postgres configs; ignored for SQLite.
     pub fn tls(mut self) -> Self {
         if let Self::Postgres(ref mut cfg) = self {
@@ -404,6 +416,8 @@ impl Config {
     }
 
     /// Set the name of the schema to use for queries.
+    ///
+    /// The default schema is named `hotshot` and is created via the default migrations.
     ///
     /// Only applicable to Postgres configs; ignored for SQLite.
     pub fn schema(mut self, schema: impl Into<String>) -> Self {
@@ -607,10 +621,14 @@ impl Config {
 
     /// Set the maximum time a single SQL statement is allowed to run before being canceled.
     ///
+    /// This helps prevent queries from running indefinitely even when the client is dropped.
+    ///
     /// For Postgres, this sets the `statement_timeout` connection option.
     /// For SQLite, this is a no-op (not supported).
     pub fn statement_timeout(mut self, timeout: Duration) -> Self {
         if let Self::Postgres(ref mut cfg) = self {
+            // Format duration as milliseconds.
+            // PostgreSQL interprets values without units as milliseconds.
             let timeout_ms = timeout.as_millis();
             cfg.db_opt = cfg
                 .db_opt
@@ -681,6 +699,7 @@ impl SqlStorage {
             StorageConnectionType::Query => config.pool_opt_query.clone(),
         };
 
+        // Re-use the same pool if present and return early.
         if connection_type == StorageConnectionType::Sequencer {
             if let Some(ref pool) = config.pool {
                 return Ok(Self {
@@ -708,8 +727,10 @@ impl SqlStorage {
 
         let pg_pool = pool_opt.connect_with(config.db_opt.clone()).await?;
 
+        // Create or connect to the schema for this query service.
         let mut conn = pg_pool.acquire().await?;
 
+        // Disable statement timeout for migrations, as they can take a long time.
         sqlx::query("SET statement_timeout = 0")
             .execute(conn.as_mut())
             .await?;
@@ -724,6 +745,7 @@ impl SqlStorage {
             .execute(conn.as_mut())
             .await?;
 
+        // Get migrations and interleave with custom migrations, sorting by version number.
         validate_migrations(&mut config.migrations)?;
         let migrations = add_custom_migrations(
             default_migrations(DbBackend::Postgres),
@@ -731,10 +753,14 @@ impl SqlStorage {
         )
         .collect::<Vec<_>>();
 
+        // Get a migration runner. Depending on the config, we can either use this to actually run
+        // the migrations or just check if the database is up to date.
         let runner = refinery::Runner::new(&migrations).set_grouped(true);
 
         let mut backend_conn = BackendPoolConnection::Postgres(conn);
         if config.no_migrations {
+            // We've been asked not to run any migrations. Abort if the DB is not already up to
+            // date.
             let last_applied = runner
                 .get_last_applied_migration_async(&mut Migrator::from(&mut backend_conn))
                 .await?;
@@ -746,6 +772,7 @@ impl SqlStorage {
                 )));
             }
         } else {
+            // Run migrations using refinery.
             match runner
                 .run_async(&mut Migrator::from(&mut backend_conn))
                 .await
@@ -761,6 +788,8 @@ impl SqlStorage {
         }
 
         if config.archive {
+            // If running in archive mode, ensure the pruned height is set to 0, so the fetcher
+            // will reconstruct previously pruned data.
             match &mut backend_conn {
                 BackendPoolConnection::Postgres(c) => {
                     sqlx::query("DELETE FROM pruned_height WHERE id = 1")
@@ -791,6 +820,7 @@ impl SqlStorage {
     ) -> Result<Self, Error> {
         let pruner_cfg = config.pruner_cfg.clone();
 
+        // Re-use the same pool if present and return early.
         if let Some(ref pool) = config.pool {
             return Ok(Self {
                 metrics,
@@ -812,6 +842,7 @@ impl SqlStorage {
 
         let conn = sq_pool.acquire().await?;
 
+        // Get migrations and interleave with custom migrations, sorting by version number.
         validate_migrations(&mut config.migrations)?;
         let migrations = add_custom_migrations(
             default_migrations(DbBackend::Sqlite),
@@ -819,10 +850,14 @@ impl SqlStorage {
         )
         .collect::<Vec<_>>();
 
+        // Get a migration runner. Depending on the config, we can either use this to actually run
+        // the migrations or just check if the database is up to date.
         let runner = refinery::Runner::new(&migrations).set_grouped(true);
 
         let mut backend_conn = BackendPoolConnection::Sqlite(conn);
         if config.no_migrations {
+            // We've been asked not to run any migrations. Abort if the DB is not already up to
+            // date.
             let last_applied = runner
                 .get_last_applied_migration_async(&mut Migrator::from(&mut backend_conn))
                 .await?;
@@ -834,6 +869,7 @@ impl SqlStorage {
                 )));
             }
         } else {
+            // Run migrations using refinery.
             match runner
                 .run_async(&mut Migrator::from(&mut backend_conn))
                 .await
@@ -849,6 +885,8 @@ impl SqlStorage {
         }
 
         if config.archive {
+            // If running in archive mode, ensure the pruned height is set to 0, so the fetcher
+            // will reconstruct previously pruned data.
             match &mut backend_conn {
                 BackendPoolConnection::Sqlite(c) => {
                     sqlx::query("DELETE FROM pruned_height WHERE id = 1")
@@ -1000,6 +1038,9 @@ impl PruneStorage for SqlStorage {
         Ok(size as u64)
     }
 
+    /// Trigger incremental vacuum to free up space in the SQLite database.
+    /// Note: We don't vacuum the Postgres database, as there is no manual trigger for incremental
+    /// vacuum, and a full vacuum can take a lot of time.
     async fn vacuum(&self) -> anyhow::Result<()> {
         if self.pool.backend() != DbBackend::Sqlite {
             return Ok(());

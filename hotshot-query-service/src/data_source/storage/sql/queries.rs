@@ -331,6 +331,31 @@ where
 /// a string which can be used to represent that argument in the statement (e.g. `$1` for the first
 /// argument bound). This makes it easier to programmatically construct queries where the statement
 /// is not a compile time constant.
+///
+/// # Example
+///
+/// ```ignore
+/// use hotshot_query_service::{
+///     data_source::storage::sql::{QueryBuilder, Transaction},
+///     QueryResult,
+/// };
+///
+/// async fn search_and_maybe_filter<Mode>(
+///     tx: &mut Transaction<Mode>,
+///     id: Option<i64>,
+/// ) -> QueryResult<Vec<BackendRow>> {
+///     let mut query = QueryBuilder::new(tx.backend());
+///     let mut sql = "SELECT * FROM table".to_string();
+///     if let Some(id) = id {
+///         sql = format!("{sql} WHERE id = {}", query.bind(id)?);
+///     }
+///     let results = query
+///         .query(&sql)
+///         .fetch_all(tx)
+///         .await?;
+///     Ok(results)
+/// }
+/// ```
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub struct QueryBuilder<'a> {
@@ -488,17 +513,21 @@ const BLOCK_COLUMNS: &str =
     "h.hash AS hash, h.data AS header_data, p.size AS payload_size, p.data AS payload_data";
 
 impl_from_row_for_both!(BlockQueryData<Types>, |row| {
+    // First, check if we have the payload for this block yet.
     let size: Option<i32> = row.try_get("payload_size")?;
     let payload_data: Option<Vec<u8>> = row.try_get("payload_data")?;
     let (size, payload_data) = size.zip(payload_data).ok_or(sqlx::Error::RowNotFound)?;
     let size = size as u64;
 
+    // Reconstruct the full header.
     let header_data = row.try_get("header_data")?;
     let header: Header<Types> =
         serde_json::from_value(header_data).decode_error("malformed header")?;
 
+    // Reconstruct the full block payload.
     let payload = Payload::<Types>::from_bytes(&payload_data, header.metadata());
 
+    // Reconstruct the query data by adding metadata.
     let hash: String = row.try_get("hash")?;
     let hash = hash.parse().decode_error("malformed block hash")?;
 
@@ -615,10 +644,14 @@ impl_from_row_for_both!(VidCommonMetadata<Types>, |row| {
 
 const HEADER_COLUMNS: &str = "h.data AS data";
 
+// We can't implement `FromRow` for `Header<Types>` since `Header<Types>` is not actually a type
+// defined in this crate; it's just an alias for `Types::BlockHeader`. So this standalone function
+// will have to do.
 fn parse_header<Types>(row: BackendRow) -> sqlx::Result<Header<Types>>
 where
     Types: NodeType,
 {
+    // Reconstruct the full header.
     let data = row.try_get("data")?;
     serde_json::from_value(data).decode_error("malformed header")
 }
