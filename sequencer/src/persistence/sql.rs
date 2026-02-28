@@ -137,7 +137,7 @@ pub struct SqliteOptions {
         env = "ESPRESSO_SEQUENCER_STORAGE_PATH",
         value_parser = build_sqlite_path
     )]
-    pub(crate) path: PathBuf,
+    pub(crate) path: Option<PathBuf>,
 }
 
 pub fn build_sqlite_path(path: &str) -> anyhow::Result<PathBuf> {
@@ -352,7 +352,9 @@ impl From<SqliteOptions> for Config {
     fn from(opt: SqliteOptions) -> Self {
         let mut cfg = Config::sqlite_default();
 
-        cfg = cfg.db_path(opt.path);
+        if let Some(path) = opt.path {
+            cfg = cfg.db_path(path);
+        }
 
         cfg = cfg.max_connections(20);
         cfg = cfg.idle_connection_timeout(Duration::from_secs(120));
@@ -465,7 +467,9 @@ impl TryFrom<&Options> for Config {
                     "$CARGO_MANIFEST_DIR/api/migrations/sqlite"
                 ));
 
-                cfg = cfg.db_path(opt.sqlite_options.path.clone());
+                if let Some(path) = &opt.sqlite_options.path {
+                    cfg = cfg.db_path(path.clone());
+                }
             },
         }
 
@@ -3399,7 +3403,10 @@ mod testing {
                     ..Default::default()
                 }
                 .into(),
-                TmpDb::Sqlite { .. } => SqliteOptions { path: db.path() }.into(),
+                TmpDb::Sqlite { .. } => SqliteOptions {
+                    path: Some(db.path()),
+                }
+                .into(),
             }
         }
     }
