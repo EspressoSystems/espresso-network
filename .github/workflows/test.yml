@@ -40,7 +40,7 @@ jobs:
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: test-artifacts
+          shared-key: test
           prefix-key: v1-rust
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-provider: github
@@ -73,9 +73,9 @@ jobs:
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: build-test-bins
+          shared-key: test
           prefix-key: v1-rust
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: false
           cache-provider: github
 
       - name: Build all binaries
@@ -123,7 +123,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           save-if: false
-          shared-key: build-test-bins
+          shared-key: test
           prefix-key: v1-rust
           cache-provider: github
 
