@@ -27,6 +27,7 @@ jf-merkle-tree-compat = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true }
 rstest = { workspace = true }
+rstest_reuse = { workspace = true }
 sequencer = { workspace = true, default-features = false, features = ["testing"] }
 serde = { workspace = true }
 serde_json = { workspace = true }

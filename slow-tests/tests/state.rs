@@ -13,7 +13,8 @@ use hotshot_query_service::{
     data_source::{
         sql::Config,
         storage::sql::{
-            testing::TmpDb, SqlStorage, StorageConnectionType, Transaction as SqlTransaction, Write,
+            testing::TmpDb, DbBackend, SqlStorage, StorageConnectionType,
+            Transaction as SqlTransaction, Write,
         },
         Transaction, VersionedDataSource,
     },
@@ -24,6 +25,8 @@ use jf_merkle_tree_compat::{
     prelude::{MerkleProof, Sha3Node},
     LookupResult, MerkleTreeScheme, ToTraversalPath, UniversalMerkleTreeScheme,
 };
+use rstest::rstest;
+use rstest_reuse::{self, apply, template};
 use sequencer::{
     api::{
         data_source::testing::TestableSequencerDataSource,
@@ -40,11 +43,18 @@ use tide_disco::error::ServerError;
 use tokio::time::sleep;
 use versions::{Upgrade, EPOCH_VERSION};
 
+#[template]
+#[rstest]
+#[case::postgres(DbBackend::Postgres)]
+#[case::sqlite(DbBackend::Sqlite)]
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_merklized_state_api() {
+fn sql_backends(#[case] backend: DbBackend) {}
+
+#[apply(sql_backends)]
+async fn slow_test_merklized_state_api(#[case] backend: DbBackend) {
     let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
-    let storage = SqlDataSource::create_storage().await;
+    let storage = TmpDb::init_for(backend).await;
 
     let options = SqlDataSource::options(&storage, Options::with_port(port));
 
@@ -181,9 +191,9 @@ async fn batch_insert_proofs(
     .expect("failed to batch insert proofs");
 }
 
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_batch_insertion_20k_accounts() {
-    let db = TmpDb::init().await;
+#[apply(sql_backends)]
+async fn slow_test_batch_insertion_20k_accounts(#[case] backend: DbBackend) {
+    let db = TmpDb::init_for(backend).await;
     let opt = SqlDataSource::persistence_options(&db);
     let cfg = Config::try_from(&opt).expect("failed to create config from options");
     let storage = SqlStorage::connect(cfg, StorageConnectionType::Query)

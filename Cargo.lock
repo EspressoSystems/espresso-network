@@ -11142,6 +11142,7 @@ dependencies = [
  "rand 0.8.5",
  "reqwest",
  "rstest",
+ "rstest_reuse",
  "sequencer",
  "serde",
  "serde_json",
