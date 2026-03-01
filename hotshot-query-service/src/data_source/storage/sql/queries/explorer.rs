@@ -274,7 +274,7 @@ where
     ) -> Result<Vec<BlockSummary<Types>>, GetBlockSummariesError> {
         let request = &request.0;
 
-        let blocks: Vec<BlockSummary<Types>> = with_backend!(self, |tx| {
+        let blocks: Vec<BlockQueryData<Types>> = with_backend!(self, |tx| {
             let query_stmt = match request.target {
                 BlockIdentifier::Latest => sqlx::query(&GET_BLOCK_SUMMARIES_QUERY_FOR_LATEST)
                     .bind(request.num_blocks.get() as i64),
@@ -290,22 +290,23 @@ where
 
             query_stmt
                 .fetch(tx.as_mut())
-                .map(|row| {
-                    let bqd = BlockQueryData::from_row(&row?)?;
-                    bqd.try_into().decode_error("malformed block summary")
-                })
+                .map(|row| BlockQueryData::from_row(&row?))
                 .try_collect()
                 .await
         })?;
 
-        Ok(blocks)
+        blocks
+            .into_iter()
+            .map(|b| b.try_into().decode_error("malformed block summary"))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(GetBlockSummariesError::from)
     }
 
     async fn get_block_detail(
         &mut self,
         request: BlockIdentifier<Types>,
     ) -> Result<BlockDetail<Types>, GetBlockDetailError> {
-        let block: BlockDetail<Types> = with_backend!(self, |tx| {
+        let block: BlockQueryData<Types> = with_backend!(self, |tx| {
             let query_stmt = match request {
                 BlockIdentifier::Latest => sqlx::query(&GET_BLOCK_DETAIL_QUERY_FOR_LATEST),
                 BlockIdentifier::Height(height) => {
@@ -317,11 +318,13 @@ where
             };
 
             let query_result = query_stmt.fetch_one(tx.as_mut()).await?;
-            let bqd = BlockQueryData::from_row(&query_result)?;
-            bqd.try_into().decode_error("malformed block detail")
+            BlockQueryData::from_row(&query_result)
         })?;
 
-        Ok(block)
+        block
+            .try_into()
+            .decode_error("malformed block detail")
+            .map_err(GetBlockDetailError::from)
     }
 
     async fn get_transaction_summaries(
@@ -378,7 +381,7 @@ where
         // transactions from that point.  We then grab only the blocks for those
         // identified transactions, as only those blocks are needed to pull all
         // of the relevant transactions.
-        let transaction_summary_vec: Vec<TransactionSummary<Types>> = with_backend!(self, |tx| {
+        let blocks: Vec<BlockQueryData<Types>> = with_backend!(self, |tx| {
             let query_stmt = match filter {
                 TransactionSummaryFilter::RollUp(ns) => {
                     sqlx::query(&GET_BLOCKS_CONTAINING_TRANSACTIONS_IN_NAMESPACE_QUERY)
@@ -401,45 +404,44 @@ where
                 },
             };
 
-            let blocks: Vec<BlockQueryData<Types>> = query_stmt
+            query_stmt
                 .fetch(tx.as_mut())
                 .map(|row| BlockQueryData::from_row(&row?))
                 .try_collect()
                 .await
-                .map_err(QueryError::from)?;
+        })?;
 
-            blocks
-                .into_iter()
-                .flat_map(|block| {
-                    tracing::info!(height = block.height(), "selected block");
-                    block
-                        .enumerate()
-                        .filter(|(ix, _)| {
-                            if let TransactionSummaryFilter::RollUp(ns) = filter {
-                                let tx_ns = QueryableHeader::<Types>::namespace_id(
-                                    block.header(),
-                                    &ix.ns_index,
-                                );
-                                tx_ns.as_ref() == Some(ns)
-                            } else {
-                                true
+        let transaction_summary_vec: Vec<TransactionSummary<Types>> = blocks
+            .into_iter()
+            .flat_map(|block| {
+                tracing::info!(height = block.height(), "selected block");
+                block
+                    .enumerate()
+                    .filter(|(ix, _)| {
+                        if let TransactionSummaryFilter::RollUp(ns) = filter {
+                            let tx_ns = QueryableHeader::<Types>::namespace_id(
+                                block.header(),
+                                &ix.ns_index,
+                            );
+                            tx_ns.as_ref() == Some(ns)
+                        } else {
+                            true
+                        }
+                    })
+                    .enumerate()
+                    .map(|(index, (_, txn))| {
+                        TransactionSummary::try_from((&block, index, txn)).map_err(|err| {
+                            QueryError::Error {
+                                message: err.to_string(),
                             }
                         })
-                        .enumerate()
-                        .map(|(index, (_, txn))| {
-                            TransactionSummary::try_from((&block, index, txn)).map_err(|err| {
-                                QueryError::Error {
-                                    message: err.to_string(),
-                                }
-                            })
-                        })
-                        .collect::<Vec<QueryResult<TransactionSummary<Types>>>>()
-                        .into_iter()
-                        .rev()
-                        .collect::<Vec<QueryResult<TransactionSummary<Types>>>>()
-                })
-                .try_collect()
-        })?;
+                    })
+                    .collect::<Vec<QueryResult<TransactionSummary<Types>>>>()
+                    .into_iter()
+                    .rev()
+                    .collect::<Vec<QueryResult<TransactionSummary<Types>>>>()
+            })
+            .try_collect()?;
 
         Ok(transaction_summary_vec
             .into_iter()
@@ -510,62 +512,65 @@ where
     async fn get_explorer_summary(
         &mut self,
     ) -> Result<ExplorerSummary<Types>, GetExplorerSummaryError> {
-        let mut histograms: ExplorerHistograms = with_backend!(self, |tx| {
-            sqlx::query(
-                "SELECT
-                    h.height AS height,
-                    h.timestamp AS timestamp,
-                    h.timestamp - lead(timestamp) OVER (ORDER BY h.height DESC) AS time,
-                    p.size AS size,
-                    p.num_transactions AS transactions
-                FROM header AS h
-                JOIN payload AS p ON
-                    p.height = h.height
-                WHERE
-                    h.height IN (SELECT height FROM header ORDER BY height DESC LIMIT $1)
-                ORDER BY h.height
-                ",
-            )
-            .bind((EXPLORER_SUMMARY_HISTOGRAM_NUM_ENTRIES + 1) as i64)
-            .fetch(tx.as_mut())
-            .map(|row_result| {
-                row_result.and_then(|row| {
-                    let height: i64 = row.try_get("height")?;
-                    let timestamp: i64 = row.try_get("timestamp")?;
-                    let time: Option<i64> = row.try_get("time")?;
-                    let size: Option<i32> = row.try_get("size")?;
-                    let num_transactions: i32 = row.try_get("transactions")?;
-                    Ok((height, timestamp, time, size, num_transactions))
-                })
-            })
-            .try_fold(
-                ExplorerHistograms {
-                    block_time: VecDeque::with_capacity(EXPLORER_SUMMARY_HISTOGRAM_NUM_ENTRIES),
-                    block_size: VecDeque::with_capacity(EXPLORER_SUMMARY_HISTOGRAM_NUM_ENTRIES),
-                    block_transactions: VecDeque::with_capacity(
-                        EXPLORER_SUMMARY_HISTOGRAM_NUM_ENTRIES,
-                    ),
-                    block_heights: VecDeque::with_capacity(EXPLORER_SUMMARY_HISTOGRAM_NUM_ENTRIES),
-                },
-                |mut histograms, (height, _timestamp, time, size, num_transactions)| async move {
-                    histograms.block_time.push_back(time.map(|i| i as u64));
-                    histograms.block_size.push_back(size.map(|i| i as u64));
-                    histograms
-                        .block_transactions
-                        .push_back(num_transactions as u64);
-                    histograms.block_heights.push_back(height as u64);
-                    Ok::<_, sqlx::Error>(histograms)
-                },
-            )
-            .await
-        })?;
+        let histograms = {
+            let histogram_query_result: Vec<(i64, i64, Option<i64>, Option<i32>, i32)> =
+                with_backend!(self, |tx| {
+                    sqlx::query(
+                        "SELECT
+                            h.height AS height,
+                            h.timestamp AS timestamp,
+                            h.timestamp - lead(timestamp) OVER (ORDER BY h.height DESC) AS time,
+                            p.size AS size,
+                            p.num_transactions AS transactions
+                        FROM header AS h
+                        JOIN payload AS p ON
+                            p.height = h.height
+                        WHERE
+                            h.height IN (SELECT height FROM header ORDER BY height DESC LIMIT $1)
+                        ORDER BY h.height
+                        ",
+                    )
+                    .bind((EXPLORER_SUMMARY_HISTOGRAM_NUM_ENTRIES + 1) as i64)
+                    .fetch(tx.as_mut())
+                    .map(|row_result| {
+                        row_result.map(|row| {
+                            let height: i64 = row.try_get("height").unwrap();
+                            let timestamp: i64 = row.try_get("timestamp").unwrap();
+                            let time: Option<i64> = row.try_get("time").unwrap();
+                            let size: Option<i32> = row.try_get("size").unwrap();
+                            let num_transactions: i32 = row.try_get("transactions").unwrap();
+                            (height, timestamp, time, size, num_transactions)
+                        })
+                    })
+                    .try_collect()
+                    .await
+                })?;
 
-        while histograms.block_time.len() > EXPLORER_SUMMARY_HISTOGRAM_NUM_ENTRIES {
-            histograms.block_time.pop_front();
-            histograms.block_size.pop_front();
-            histograms.block_transactions.pop_front();
-            histograms.block_heights.pop_front();
-        }
+            let mut histograms = ExplorerHistograms {
+                block_time: VecDeque::with_capacity(EXPLORER_SUMMARY_HISTOGRAM_NUM_ENTRIES),
+                block_size: VecDeque::with_capacity(EXPLORER_SUMMARY_HISTOGRAM_NUM_ENTRIES),
+                block_transactions: VecDeque::with_capacity(EXPLORER_SUMMARY_HISTOGRAM_NUM_ENTRIES),
+                block_heights: VecDeque::with_capacity(EXPLORER_SUMMARY_HISTOGRAM_NUM_ENTRIES),
+            };
+
+            for (height, _timestamp, time, size, num_transactions) in histogram_query_result {
+                histograms.block_time.push_back(time.map(|i| i as u64));
+                histograms.block_size.push_back(size.map(|i| i as u64));
+                histograms
+                    .block_transactions
+                    .push_back(num_transactions as u64);
+                histograms.block_heights.push_back(height as u64);
+            }
+
+            while histograms.block_time.len() > EXPLORER_SUMMARY_HISTOGRAM_NUM_ENTRIES {
+                histograms.block_time.pop_front();
+                histograms.block_size.pop_front();
+                histograms.block_transactions.pop_front();
+                histograms.block_heights.pop_front();
+            }
+
+            histograms
+        };
 
         let genesis_overview = {
             let blocks = NodeStorage::<Types>::block_height(self).await? as u64;
@@ -629,14 +634,18 @@ where
                     ORDER BY h.height DESC
                     LIMIT 1"
             );
-            let block: BlockSummary<Types> = with_backend!(self, |tx| {
+            let block: BlockQueryData<Types> = with_backend!(self, |tx| {
                 let row = sqlx::query(block_query.as_str())
                     .bind(&search_query_string)
                     .fetch_one(tx.as_mut())
                     .await?;
-                let bqd = BlockQueryData::from_row(&row)?;
-                bqd.try_into().decode_error("malformed block summary")
+                BlockQueryData::from_row(&row)
             })?;
+
+            let block: BlockSummary<Types> = block
+                .try_into()
+                .decode_error("malformed block summary")
+                .map_err(GetSearchResultsError::from)?;
 
             Ok(SearchResult {
                 blocks: vec![block],
@@ -652,35 +661,28 @@ where
                     ORDER BY h.height DESC
                     LIMIT 5"
             );
-            let transactions_query_result: Vec<TransactionSummary<Types>> = with_backend!(
-                self,
-                |tx| {
-                    let blocks: Vec<BlockQueryData<Types>> =
-                        sqlx::query(transactions_query.as_str())
-                            .bind(&search_query_string)
-                            .fetch(tx.as_mut())
-                            .map(|row| BlockQueryData::from_row(&row?))
-                            .try_collect()
-                            .await
-                            .map_err(QueryError::from)?;
+            let blocks: Vec<BlockQueryData<Types>> = with_backend!(self, |tx| {
+                sqlx::query(transactions_query.as_str())
+                    .bind(&search_query_string)
+                    .fetch(tx.as_mut())
+                    .map(|row| BlockQueryData::from_row(&row?))
+                    .try_collect()
+                    .await
+            })?;
 
-                    blocks
-                        .iter()
-                        .flat_map(|block| {
-                            block
-                                .enumerate()
-                                .enumerate()
-                                .filter(|(_, (_, txn))| {
-                                    txn.commit().to_string() == search_query_string
-                                })
-                                .map(|(offset, (_, txn))| {
-                                    Ok(TransactionSummary::try_from((block, offset, txn))?)
-                                })
-                                .collect::<Vec<QueryResult<TransactionSummary<Types>>>>()
+            let transactions_query_result: Vec<TransactionSummary<Types>> = blocks
+                .iter()
+                .flat_map(|block| {
+                    block
+                        .enumerate()
+                        .enumerate()
+                        .filter(|(_, (_, txn))| txn.commit().to_string() == search_query_string)
+                        .map(|(offset, (_, txn))| {
+                            Ok(TransactionSummary::try_from((block, offset, txn))?)
                         })
-                        .try_collect::<TransactionSummary<Types>, Vec<TransactionSummary<Types>>, QueryError>()
-                }
-            )?;
+                        .collect::<Vec<QueryResult<TransactionSummary<Types>>>>()
+                })
+                .try_collect::<TransactionSummary<Types>, Vec<TransactionSummary<Types>>, QueryError>()?;
 
             Ok(SearchResult {
                 blocks: Vec::new(),
