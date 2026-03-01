@@ -39,7 +39,7 @@ contract ERC1967Proxy is Proxy {
      *
      * TIP: To get this value clients can read directly from the storage slot shown below (specified
      * by EIP1967) using
-     * the https://eth.wiki/json-rpc/API#eth_getstorageat[`eth_getStorageAt`] RPC call.
+     * the https://ethereum.org#eth_getstorageat[`eth_getStorageAt`] RPC call.
      * `0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc`
      */
     function _implementation() internal view virtual override returns (address) {
