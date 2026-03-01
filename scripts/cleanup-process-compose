@@ -64,7 +64,7 @@ kill_project_processes() {
 
 	# Collect PIDs first to avoid subshell issues when killing
 	local pids
-	pids=$(pgrep -fA "$proc_name" 2>/dev/null) || true
+	pids=$(pgrep -f "$proc_name" 2>/dev/null) || true
 
 	for pid in $pids; do
 		local proc_cwd
