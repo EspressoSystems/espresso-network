@@ -27,8 +27,8 @@ env:
   PC_LOG_FILE: /tmp/pc-logs.log
 
 jobs:
-  build-test-artifacts-postgres:
-    name: Build test artifacts (postgres)
+  build-test-artifacts:
+    name: Build test artifacts
     runs-on: ubuntu-24.04-8core
     steps:
       - uses: actions/checkout@v4
@@ -54,14 +54,14 @@ jobs:
           comment_on_pr: false
 
       - name: Build and archive tests
-        run: just nextest-archive nextest-archive-postgres.tar.zst
+        run: just nextest-archive nextest-archive.tar.zst
 
       - name: Upload archive to workflow
         uses: actions/upload-artifact@v4
         with:
-          name: nextest-archive-postgres
+          name: nextest-archive
           if-no-files-found: error
-          path: nextest-archive-postgres.tar.zst
+          path: nextest-archive.tar.zst
 
   build-test-bins:
     name: Build test binaries
@@ -78,7 +78,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-provider: github
 
-      - name: Build all binaries (postgres)
+      - name: Build all binaries
         run: |
           cargo build --locked --profile test --bins
         timeout-minutes: 60
@@ -140,8 +140,8 @@ jobs:
           path: |
             target/debug/espresso-dev-node
 
-  test-postgres:
-    needs: build-test-artifacts-postgres
+  test:
+    needs: build-test-artifacts
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -165,11 +165,11 @@ jobs:
       - name: Download archive
         uses: actions/download-artifact@v4
         with:
-          name: nextest-archive-postgres
+          name: nextest-archive
 
       - name: Test
         run: |
-          cargo nextest run --archive-file nextest-archive-postgres.tar.zst  --verbose --no-fail-fast \
+          cargo nextest run --archive-file nextest-archive.tar.zst --verbose --no-fail-fast \
           --workspace-remap $PWD \
           --partition hash:${{ matrix.partition }}/20
         timeout-minutes: 30
@@ -208,7 +208,7 @@ jobs:
           ESPRESSO_DEV_NODE_BIN: ${{ github.workspace }}/test-binaries-dev-node/espresso-dev-node
 
   test-integration:
-    needs: [build-test-bins, build-test-artifacts-postgres]
+    needs: [build-test-bins, build-test-artifacts]
     strategy:
       matrix:
         include:
@@ -235,7 +235,7 @@ jobs:
 
       - name: Move files
         run: |
-          mv nextest-archive-postgres/* .
+          mv nextest-archive/* .
           mkdir -p target/debug
           mv test-binaries/* target/debug
           chmod -c +x target/debug/*
@@ -252,7 +252,7 @@ jobs:
         env:
           NEXTEST_PROFILE: integration
         run: |
-          cargo nextest run --archive-file nextest-archive-postgres.tar.zst --verbose --no-fail-fast --nocapture \
+          cargo nextest run --archive-file nextest-archive.tar.zst --verbose --no-fail-fast --nocapture \
           --workspace-remap $PWD ${{ matrix.test-name }}
         timeout-minutes: 60
 
@@ -322,7 +322,7 @@ jobs:
 
   # This job enables having a single required status check in github for all GCL tests.
   aggregate-gcl-tests:
-    needs: [test-postgres, test-go-sdk, demo-native, test-integration]
+    needs: [test, test-go-sdk, demo-native, test-integration]
     runs-on: ubuntu-latest
     # explicitly run and fail the job if dependencies failed
     if: ${{ always() && !cancelled() }}
