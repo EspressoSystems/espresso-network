@@ -31,9 +31,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: slow-tests
+          - name: slow-tests (1/3)
             build-cmd: just test-slow --no-run
-            run-cmd: just test-slow --no-fail-fast
+            run-cmd: just test-slow --no-fail-fast --partition hash:1/3
+          - name: slow-tests (2/3)
+            build-cmd: just test-slow --no-run
+            run-cmd: just test-slow --no-fail-fast --partition hash:2/3
+          - name: slow-tests (3/3)
+            build-cmd: just test-slow --no-run
+            run-cmd: just test-slow --no-fail-fast --partition hash:3/3
           - name: espresso-dev-node-tests
             build-cmd: just test-dev-node --no-run
             run-cmd: just test-dev-node --no-fail-fast
@@ -55,10 +61,10 @@ jobs:
 
       # NOTE: no rust cache, these tests are very slow anyway
 
-      - name: Build slow test
+      - name: Build tests
         run: ${{ matrix.build-cmd }}
 
-      - name: Run slow test
+      - name: Run tests
         run: ${{ matrix.run-cmd }}
         timeout-minutes: 90
 
