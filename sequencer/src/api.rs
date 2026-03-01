@@ -2932,7 +2932,10 @@ mod test {
         },
         data_source::{
             sql::Config,
-            storage::{SqlStorage, StorageConnectionType},
+            storage::{
+                sql::{testing::TmpDb, DbBackend},
+                SqlStorage, StorageConnectionType,
+            },
             VersionedDataSource,
         },
         explorer::TransactionSummariesResponse,
@@ -2955,6 +2958,7 @@ mod test {
     use pretty_assertions::assert_matches;
     use rand::seq::SliceRandom;
     use rstest::rstest;
+    use rstest_reuse::{self, apply, template};
     use staking_cli::{demo::DelegationConfig, fetch_commission, update_commission};
     use surf_disco::Client;
     use test_helpers::{
@@ -3012,6 +3016,13 @@ mod test {
     const POS_V3: Upgrade = Upgrade::trivial(version(0, 3));
     const POS_V4: Upgrade = Upgrade::trivial(version(0, 4));
 
+    #[template]
+    #[rstest]
+    #[case::postgres(DbBackend::Postgres)]
+    #[case::sqlite(DbBackend::Sqlite)]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    fn sql_backends(#[case] backend: DbBackend) {}
+
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_healthcheck() {
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
@@ -3050,11 +3061,11 @@ mod test {
         catchup_test_helper(|opt| opt).await
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_leaf_only_data_source() {
+    #[apply(sql_backends)]
+    async fn test_leaf_only_data_source(#[case] backend: DbBackend) {
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
-        let storage = SqlDataSource::create_storage().await;
+        let storage = TmpDb::init_for(backend).await;
         let options =
             SqlDataSource::leaf_only_ds_options(&storage, Options::with_port(port)).unwrap();
 
@@ -3665,11 +3676,11 @@ mod test {
         network.server.shut_down().await;
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    pub(crate) async fn test_restart() {
+    #[apply(sql_backends)]
+    pub(crate) async fn test_restart(#[case] backend: DbBackend) {
         const NUM_NODES: usize = 5;
         // Initialize nodes.
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let storage = join_all((0..NUM_NODES).map(|_| TmpDb::init_for(backend))).await;
         let persistence: [_; NUM_NODES] = storage
             .iter()
             .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
@@ -3977,8 +3988,8 @@ mod test {
         );
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_pos_rewards_basic() -> anyhow::Result<()> {
+    #[apply(sql_backends)]
+    async fn test_pos_rewards_basic(#[case] backend: DbBackend) -> anyhow::Result<()> {
         // Basic PoS rewards test:
         // - Sets up a single validator and a single delegator (the node itself).
         // - Sets the number of blocks in each epoch to 20.
@@ -3995,7 +4006,7 @@ mod test {
 
         const NUM_NODES: usize = 1;
         // Initialize nodes.
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let storage = join_all((0..NUM_NODES).map(|_| TmpDb::init_for(backend))).await;
         let persistence: [_; NUM_NODES] = storage
             .iter()
             .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
@@ -4077,8 +4088,8 @@ mod test {
         Ok(())
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_cumulative_pos_rewards() -> anyhow::Result<()> {
+    #[apply(sql_backends)]
+    async fn test_cumulative_pos_rewards(#[case] backend: DbBackend) -> anyhow::Result<()> {
         // This test registers 5 validators and multiple delegators for each validator.
         // One of the delegators is also a validator.
         // The test verifies that the cumulative reward at each block height equals
@@ -4094,7 +4105,7 @@ mod test {
 
         const NUM_NODES: usize = 5;
         // Initialize nodes.
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let storage = join_all((0..NUM_NODES).map(|_| TmpDb::init_for(backend))).await;
         let persistence: [_; NUM_NODES] = storage
             .iter()
             .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
@@ -4205,8 +4216,10 @@ mod test {
         Ok(())
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_stake_table_duplicate_events_from_contract() -> anyhow::Result<()> {
+    #[apply(sql_backends)]
+    async fn test_stake_table_duplicate_events_from_contract(
+        #[case] backend: DbBackend,
+    ) -> anyhow::Result<()> {
         // TODO(abdul): This test currently uses TestNetwork only for contract deployment and for L1 block number.
         // Once the stake table deployment logic is refactored and isolated, TestNetwork here will be unnecessary
 
@@ -4220,7 +4233,7 @@ mod test {
 
         const NUM_NODES: usize = 5;
         // Initialize nodes.
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let storage = join_all((0..NUM_NODES).map(|_| TmpDb::init_for(backend))).await;
         let persistence: [_; NUM_NODES] = storage
             .iter()
             .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
@@ -4318,8 +4331,8 @@ mod test {
         Ok(())
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_rewards_v4() -> anyhow::Result<()> {
+    #[apply(sql_backends)]
+    async fn test_rewards_v4(#[case] backend: DbBackend) -> anyhow::Result<()> {
         // This test verifies PoS reward distribution logic for multiple delegators per validator.
         //
         //  assertions:
@@ -4339,7 +4352,7 @@ mod test {
 
         const NUM_NODES: usize = 5;
 
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let storage = join_all((0..NUM_NODES).map(|_| TmpDb::init_for(backend))).await;
         let persistence: [_; NUM_NODES] = storage
             .iter()
             .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
@@ -4594,7 +4607,10 @@ mod test {
     #[case(POS_V3)]
     #[case(POS_V4)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_node_stake_table_api(#[case] upgrade: Upgrade) {
+    async fn test_node_stake_table_api(
+        #[case] upgrade: Upgrade,
+        #[values(DbBackend::Postgres, DbBackend::Sqlite)] backend: DbBackend,
+    ) {
         let epoch_height = 20;
 
         let network_config = TestConfigBuilder::default()
@@ -4605,7 +4621,7 @@ mod test {
 
         const NUM_NODES: usize = 2;
         // Initialize nodes.
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let storage = join_all((0..NUM_NODES).map(|_| TmpDb::init_for(backend))).await;
         let persistence: [_; NUM_NODES] = storage
             .iter()
             .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
@@ -4672,7 +4688,10 @@ mod test {
     #[case(POS_V3)]
     #[case(POS_V4)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_epoch_stake_table_catchup(#[case] upgrade: Upgrade) {
+    async fn test_epoch_stake_table_catchup(
+        #[case] upgrade: Upgrade,
+        #[values(DbBackend::Postgres, DbBackend::Sqlite)] backend: DbBackend,
+    ) {
         const EPOCH_HEIGHT: u64 = 10;
         const NUM_NODES: usize = 6;
 
@@ -4683,7 +4702,7 @@ mod test {
             .build();
 
         // Initialize storage for each node
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let storage = join_all((0..NUM_NODES).map(|_| TmpDb::init_for(backend))).await;
 
         let persistence_options: [_; NUM_NODES] = storage
             .iter()
@@ -4749,7 +4768,7 @@ mod test {
         }
 
         // add node 1 to the network with fresh storage
-        let storage = SqlDataSource::create_storage().await;
+        let storage = TmpDb::init_for(backend).await;
         let options = <SqlDataSource as TestableSequencerDataSource>::persistence_options(&storage);
         tracing::info!("Restarting peer 0");
         let node = network
@@ -4809,7 +4828,10 @@ mod test {
     #[case(POS_V3)]
     #[case(POS_V4)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_epoch_stake_table_catchup_stress(#[case] upgrade: Upgrade) {
+    async fn test_epoch_stake_table_catchup_stress(
+        #[case] upgrade: Upgrade,
+        #[values(DbBackend::Postgres, DbBackend::Sqlite)] backend: DbBackend,
+    ) {
         const EPOCH_HEIGHT: u64 = 10;
         const NUM_NODES: usize = 6;
 
@@ -4820,7 +4842,7 @@ mod test {
             .build();
 
         // Initialize storage for each node
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let storage = join_all((0..NUM_NODES).map(|_| TmpDb::init_for(backend))).await;
 
         let persistence_options: [_; NUM_NODES] = storage
             .iter()
@@ -4888,7 +4910,7 @@ mod test {
         }
 
         // add node 1 to the network with fresh storage
-        let storage = SqlDataSource::create_storage().await;
+        let storage = TmpDb::init_for(backend).await;
         let options = <SqlDataSource as TestableSequencerDataSource>::persistence_options(&storage);
 
         tracing::info!("Restarting peer 0");
@@ -4961,6 +4983,7 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_merklized_state_catchup_on_restart(
         #[case] upgrade: Upgrade,
+        #[values(DbBackend::Postgres, DbBackend::Sqlite)] backend: DbBackend,
     ) -> anyhow::Result<()> {
         // This test verifies that a query node can catch up on
         // merklized state after being offline for multiple epochs.
@@ -4984,7 +5007,7 @@ mod test {
         tracing::info!("API PORT = {api_port}");
         const NUM_NODES: usize = 5;
 
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let storage = join_all((0..NUM_NODES).map(|_| TmpDb::init_for(backend))).await;
         let persistence: [_; NUM_NODES] = storage
             .iter()
             .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
@@ -5185,7 +5208,10 @@ mod test {
     #[case(POS_V3)]
     #[case(POS_V4)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_state_reconstruction(#[case] upgrade: Upgrade) -> anyhow::Result<()> {
+    async fn test_state_reconstruction(
+        #[case] upgrade: Upgrade,
+        #[values(DbBackend::Postgres, DbBackend::Sqlite)] backend: DbBackend,
+    ) -> anyhow::Result<()> {
         // This test verifies that a query node can successfully reconstruct its state
         // after being shut down from the database
         //
@@ -5212,7 +5238,7 @@ mod test {
         tracing::info!("API PORT = {api_port}");
         const NUM_NODES: usize = 5;
 
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let storage = join_all((0..NUM_NODES).map(|_| TmpDb::init_for(backend))).await;
         let persistence: [_; NUM_NODES] = storage
             .iter()
             .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
@@ -5512,7 +5538,10 @@ mod test {
     #[case(POS_V3)]
     #[case(POS_V4)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_block_reward_api(#[case] upgrade: Upgrade) -> anyhow::Result<()> {
+    async fn test_block_reward_api(
+        #[case] upgrade: Upgrade,
+        #[values(DbBackend::Postgres, DbBackend::Sqlite)] backend: DbBackend,
+    ) -> anyhow::Result<()> {
         let epoch_height = 10;
 
         let network_config = TestConfigBuilder::default()
@@ -5523,7 +5552,7 @@ mod test {
 
         const NUM_NODES: usize = 1;
         // Initialize nodes.
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let storage = join_all((0..NUM_NODES).map(|_| TmpDb::init_for(backend))).await;
         let persistence: [_; NUM_NODES] = storage
             .iter()
             .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
@@ -5585,7 +5614,10 @@ mod test {
     #[rstest]
     #[case(POS_V4)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_token_supply_api(#[case] upgrade: Upgrade) -> anyhow::Result<()> {
+    async fn test_token_supply_api(
+        #[case] upgrade: Upgrade,
+        #[values(DbBackend::Postgres, DbBackend::Sqlite)] backend: DbBackend,
+    ) -> anyhow::Result<()> {
         let epoch_height = 10;
 
         let network_config = TestConfigBuilder::default()
@@ -5596,7 +5628,7 @@ mod test {
 
         const NUM_NODES: usize = 1;
         // Initialize nodes.
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let storage = join_all((0..NUM_NODES).map(|_| TmpDb::init_for(backend))).await;
         let persistence: [_; NUM_NODES] = storage
             .iter()
             .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
@@ -5654,8 +5686,10 @@ mod test {
         Ok(())
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_scanning_token_contract_initialized_event() -> anyhow::Result<()> {
+    #[apply(sql_backends)]
+    async fn test_scanning_token_contract_initialized_event(
+        #[case] backend: DbBackend,
+    ) -> anyhow::Result<()> {
         use espresso_types::v0_3::ChainConfig;
 
         let blocks_per_epoch = 10;
@@ -5706,7 +5740,7 @@ mod test {
 
         let l1_url = network_config.l1_url().clone();
 
-        let storage = SqlDataSource::create_storage().await;
+        let storage = TmpDb::init_for(backend).await;
         let mut opt = <SqlDataSource as TestableSequencerDataSource>::persistence_options(&storage);
         let persistence = opt.create().await.unwrap();
 
@@ -5774,14 +5808,14 @@ mod test {
         Ok(())
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_tx_metadata() {
+    #[apply(sql_backends)]
+    async fn test_tx_metadata(#[case] backend: DbBackend) {
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         let url = format!("http://localhost:{port}").parse().unwrap();
         let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
 
-        let storage = SqlDataSource::create_storage().await;
+        let storage = TmpDb::init_for(backend).await;
         let network_config = TestConfigBuilder::default().build();
         let config = TestNetworkConfigBuilder::default()
             .api_config(
@@ -5854,8 +5888,8 @@ mod test {
 
     use rand::thread_rng;
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_aggregator_namespace_endpoints() {
+    #[apply(sql_backends)]
+    async fn test_aggregator_namespace_endpoints(#[case] backend: DbBackend) {
         let mut rng = thread_rng();
 
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
@@ -5867,7 +5901,7 @@ mod test {
         let options = Options::with_port(port).submit(Default::default());
         const NUM_NODES: usize = 2;
         // Initialize storage for each node
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let storage = join_all((0..NUM_NODES).map(|_| TmpDb::init_for(backend))).await;
 
         let persistence_options: [_; NUM_NODES] = storage
             .iter()
@@ -6028,8 +6062,8 @@ mod test {
         );
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_stream_transactions_endpoint() {
+    #[apply(sql_backends)]
+    async fn test_stream_transactions_endpoint(#[case] backend: DbBackend) {
         // This test submits transactions to a sequencer for multiple namespaces,
         // waits for them to be decided, and then verifies that:
         // 1. All transactions appear in the transaction stream.
@@ -6046,7 +6080,7 @@ mod test {
         let options = Options::with_port(port).submit(Default::default());
         const NUM_NODES: usize = 2;
         // Initialize storage for each node
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let storage = join_all((0..NUM_NODES).map(|_| TmpDb::init_for(backend))).await;
 
         let persistence_options: [_; NUM_NODES] = storage
             .iter()
@@ -6151,7 +6185,10 @@ mod test {
     #[case(POS_V3)]
     #[case(POS_V4)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_v3_and_v4_reward_tree_updates(#[case] upgrade: Upgrade) -> anyhow::Result<()> {
+    async fn test_v3_and_v4_reward_tree_updates(
+        #[case] upgrade: Upgrade,
+        #[values(DbBackend::Postgres, DbBackend::Sqlite)] backend: DbBackend,
+    ) -> anyhow::Result<()> {
         // This test checks that the correct merkle tree is updated based on version
         //
         // When the protocol version is v3:
@@ -6172,7 +6209,7 @@ mod test {
         tracing::info!("API PORT = {api_port}");
         const NUM_NODES: usize = 5;
 
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let storage = join_all((0..NUM_NODES).map(|_| TmpDb::init_for(backend))).await;
         let persistence: [_; NUM_NODES] = storage
             .iter()
             .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
@@ -6236,7 +6273,10 @@ mod test {
     #[case(POS_V3)]
     #[case(POS_V4)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    pub(crate) async fn test_state_cert_query(#[case] upgrade: Upgrade) {
+    pub(crate) async fn test_state_cert_query(
+        #[case] upgrade: Upgrade,
+        #[values(DbBackend::Postgres, DbBackend::Sqlite)] backend: DbBackend,
+    ) {
         const TEST_EPOCH_HEIGHT: u64 = 10;
         const TEST_EPOCHS: u64 = 5;
 
@@ -6249,7 +6289,7 @@ mod test {
         tracing::info!("API PORT = {api_port}");
         const NUM_NODES: usize = 2;
 
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let storage = join_all((0..NUM_NODES).map(|_| TmpDb::init_for(backend))).await;
         let persistence: [_; NUM_NODES] = storage
             .iter()
             .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
@@ -6367,7 +6407,10 @@ mod test {
     #[case(POS_V3)]
     #[case(POS_V4)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    pub(crate) async fn test_state_cert_catchup(#[case] upgrade: Upgrade) {
+    pub(crate) async fn test_state_cert_catchup(
+        #[case] upgrade: Upgrade,
+        #[values(DbBackend::Postgres, DbBackend::Sqlite)] backend: DbBackend,
+    ) {
         const EPOCH_HEIGHT: u64 = 10;
 
         let network_config = TestConfigBuilder::default()
@@ -6379,7 +6422,7 @@ mod test {
         tracing::info!("API PORT = {api_port}");
         const NUM_NODES: usize = 5;
 
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let storage = join_all((0..NUM_NODES).map(|_| TmpDb::init_for(backend))).await;
         let persistence: [_; NUM_NODES] = storage
             .iter()
             .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
@@ -6424,7 +6467,7 @@ mod test {
         network.peers.remove(0);
 
         let new_storage: hotshot_query_service::data_source::sql::testing::TmpDb =
-            SqlDataSource::create_storage().await;
+            TmpDb::init_for(backend).await;
         let new_persistence: persistence::sql::Options =
             <SqlDataSource as TestableSequencerDataSource>::persistence_options(&new_storage);
 
@@ -6488,8 +6531,8 @@ mod test {
         }
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_integration_commission_updates() -> anyhow::Result<()> {
+    #[apply(sql_backends)]
+    async fn test_integration_commission_updates(#[case] backend: DbBackend) -> anyhow::Result<()> {
         const NUM_NODES: usize = 3;
         const EPOCH_HEIGHT: u64 = 10;
 
@@ -6499,7 +6542,7 @@ mod test {
         let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         // Initialize storage for nodes
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let storage = join_all((0..NUM_NODES).map(|_| TmpDb::init_for(backend))).await;
         let persistence: [_; NUM_NODES] = storage
             .iter()
             .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
@@ -6644,7 +6687,10 @@ mod test {
     #[case(POS_V3)]
     #[case(POS_V4)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_reward_proof_endpoint(#[case] upgrade: Upgrade) -> anyhow::Result<()> {
+    async fn test_reward_proof_endpoint(
+        #[case] upgrade: Upgrade,
+        #[values(DbBackend::Postgres, DbBackend::Sqlite)] backend: DbBackend,
+    ) -> anyhow::Result<()> {
         const EPOCH_HEIGHT: u64 = 10;
         const NUM_NODES: usize = 5;
 
@@ -6655,7 +6701,7 @@ mod test {
         let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         println!("API PORT = {api_port}");
 
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let storage = join_all((0..NUM_NODES).map(|_| TmpDb::init_for(backend))).await;
         let persistence: [_; NUM_NODES] = storage
             .iter()
             .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
@@ -6782,8 +6828,8 @@ mod test {
         Ok(())
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_all_validators_endpoint() -> anyhow::Result<()> {
+    #[apply(sql_backends)]
+    async fn test_all_validators_endpoint(#[case] backend: DbBackend) -> anyhow::Result<()> {
         const EPOCH_HEIGHT: u64 = 20;
 
         let network_config = TestConfigBuilder::default()
@@ -6794,7 +6840,7 @@ mod test {
 
         const NUM_NODES: usize = 5;
 
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let storage = join_all((0..NUM_NODES).map(|_| TmpDb::init_for(backend))).await;
         let persistence: [_; NUM_NODES] = storage
             .iter()
             .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
@@ -6875,8 +6921,10 @@ mod test {
         Ok(())
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_reward_accounts_catchup_endpoint() -> anyhow::Result<()> {
+    #[apply(sql_backends)]
+    async fn test_reward_accounts_catchup_endpoint(
+        #[case] backend: DbBackend,
+    ) -> anyhow::Result<()> {
         const EPOCH_HEIGHT: u64 = 10;
         const NUM_NODES: usize = 3;
 
@@ -6887,7 +6935,7 @@ mod test {
         let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         println!("API PORT = {api_port}");
 
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let storage = join_all((0..NUM_NODES).map(|_| TmpDb::init_for(backend))).await;
         let persistence: [_; NUM_NODES] = storage
             .iter()
             .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
@@ -7188,8 +7236,8 @@ mod test {
         network.server.shut_down().await;
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_light_client_completeness() {
+    #[apply(sql_backends)]
+    async fn test_light_client_completeness(#[case] backend: DbBackend) {
         // Run the through a protocol upgrade and epoch change, then check that we are able to get a
         // correct light client proof for every finalized leaf.
 
@@ -7207,7 +7255,7 @@ mod test {
             .await
             .build();
 
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let storage = join_all((0..NUM_NODES).map(|_| TmpDb::init_for(backend))).await;
         let persistence: [_; NUM_NODES] = storage
             .iter()
             .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)

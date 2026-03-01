@@ -1267,14 +1267,20 @@ pub(crate) mod impl_testable_data_source {
     use crate::api::{self, data_source::testing::TestableSequencerDataSource};
 
     pub fn tmp_options(db: &TmpDb) -> Options {
-        let opt = crate::persistence::sql::PostgresOptions {
-            port: Some(db.port()),
-            host: Some(db.host()),
-            user: Some("postgres".into()),
-            password: Some("password".into()),
-            ..Default::default()
-        };
-        opt.into()
+        match db {
+            TmpDb::Postgres { .. } => crate::persistence::sql::PostgresOptions {
+                port: Some(db.port()),
+                host: Some(db.host()),
+                user: Some("postgres".into()),
+                password: Some("password".into()),
+                ..Default::default()
+            }
+            .into(),
+            TmpDb::Sqlite { .. } => crate::persistence::sql::SqliteOptions {
+                path: Some(db.path()),
+            }
+            .into(),
+        }
     }
 
     #[async_trait]
