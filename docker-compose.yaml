@@ -4,14 +4,30 @@ networks:
 
 services:
   demo-l1-network:
-    image: ghcr.io/espressosystems/geth-l1:main
-    command: --dev --dev.period=1
+    image: ghcr.io/paradigmxyz/reth:v1.10.2
+    command:
+      - node
+      - --dev
+      - --dev.block-time
+      - 1s
+      - --http
+      - --http.addr
+      - "0.0.0.0"
+      - --http.api
+      - eth,net,web3,debug,txpool
+      - --ws
+      - --ws.addr
+      - "0.0.0.0"
+      - --ws.api
+      - eth,net,web3
     ports:
       - $ESPRESSO_SEQUENCER_L1_PORT:8545
       - $ESPRESSO_SEQUENCER_L1_WS_PORT:8546
-    volumes:
-      - "./geth-config/genesis-default.json:/genesis.json"
-      - "./geth-config/test-jwt-secret.txt:/config/test-jwt-secret.txt"
+    healthcheck:
+      test: ["CMD-SHELL", "ss -tln | grep -q :8545 || exit 1"]
+      interval: 1s
+      timeout: 1s
+      retries: 20
 
   deploy-sequencer-contracts:
     image: ghcr.io/espressosystems/espresso-sequencer/deploy:${DOCKER_TAG:-main}
