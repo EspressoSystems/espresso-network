@@ -216,7 +216,7 @@ async fn validate_current_epoch<TYPES: NodeType, I: NodeImplementation<TYPES>, V
         .data
         .block_number
     else {
-        bail!("High QC has no block number");
+        return Ok(());
     };
 
     ensure!(
