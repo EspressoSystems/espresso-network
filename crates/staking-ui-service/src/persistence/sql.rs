@@ -17,7 +17,7 @@ use crate::{
 use alloy::primitives::U256;
 use anyhow::Context;
 use clap::Parser;
-use futures::{TryStreamExt, future::try_join_all};
+use futures::TryStreamExt;
 use serde_json::Value;
 use sqlx::{
     ConnectOptions, QueryBuilder,
@@ -98,11 +98,17 @@ impl Persistence {
     async fn load_finalized_snapshot(&self) -> Result<Option<Snapshot>> {
         tracing::info!("loading finalized snapshot from database");
 
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .context("transaction to load finalized snapshot")?;
+
         // The l1_block table has only one row, representing the latest finalized block
         let block_row = sqlx::query_as::<_, (String, i64, String, i64, i64)>(
             "SELECT hash, number, parent_hash, timestamp, exit_escrow_period FROM l1_block LIMIT 1",
         )
-        .fetch_optional(&self.pool)
+        .fetch_optional(tx.as_mut())
         .await?;
 
         let Some((hash, number, parent_hash, timestamp, exit_escrow_period)) = block_row else {
@@ -124,7 +130,7 @@ impl Persistence {
         let node_rows = sqlx::query_as::<_, (String, String, String, f64, String, Option<Value>)>(
             "SELECT address, staking_key, state_key, commission, stake, metadata FROM node",
         )
-        .fetch_all(&self.pool)
+        .fetch_all(tx.as_mut())
         .await?;
 
         let mut node_set = NodeSet::default();
@@ -143,102 +149,101 @@ impl Persistence {
             node_set.push(node);
         }
 
-        // Load all wallets and their delegations in parallel
+        // Load all wallets, delegations and pending withdrawals
         let wallet_rows =
             sqlx::query_as::<_, (String, String)>("SELECT address, claimed_rewards FROM wallet")
-                .fetch_all(&self.pool)
+                .fetch_all(tx.as_mut())
                 .await?;
 
-        let wallet_futures =
-            wallet_rows
-                .into_iter()
-                .map(|(wallet_address, claimed_rewards_str)| {
-                    let pool = self.pool.clone();
-                    async move {
-                        let address: Address = wallet_address
-                            .parse()
-                            .context("failed to parse wallet address")?;
-                        let claimed_rewards = U256::from_str(&claimed_rewards_str)
-                            .context("failed to parse claimed rewards")?;
+        let all_delegations = sqlx::query_as::<_, (String, String, String)>(
+            "SELECT delegator, node, amount FROM delegation",
+        )
+        .fetch_all(tx.as_mut())
+        .await?;
 
-                        // Get active delegations
-                        let delegation_rows = sqlx::query_as::<_, (String, String)>(
-                            "SELECT node, amount
-                             FROM delegation
-                             WHERE delegator = $1",
-                        )
-                        .bind(&wallet_address)
-                        .fetch_all(&pool)
-                        .await?;
+        let all_pending = sqlx::query_as::<_, (String, String, String, String, i64)>(
+            "SELECT delegator, node, withdrawal_type, amount, unlocks_at FROM pending_withdrawals",
+        )
+        .fetch_all(tx.as_mut())
+        .await?;
 
-                        let mut nodes = im::OrdMap::new();
-                        for (node_str, amount_str) in delegation_rows {
-                            let node: Address =
-                                node_str.parse().context("failed to parse node address")?;
-                            let amount = U256::from_str(&amount_str)
-                                .context("failed to parse delegation amount")?;
-                            if !amount.is_zero() {
-                                let delegation = Delegation {
-                                    delegator: address,
-                                    node,
-                                    amount,
-                                };
-                                nodes.insert(node, delegation);
-                            }
-                        }
+        let mut delegations_by_wallet: HashMap<String, Vec<(String, String)>> = HashMap::new();
+        for (delegator, node, amount) in all_delegations {
+            delegations_by_wallet
+                .entry(delegator)
+                .or_default()
+                .push((node, amount));
+        }
 
-                        // Get pending withdrawals
-                        let pending_rows = sqlx::query_as::<_, (String, String, String, i64)>(
-                            "SELECT node, withdrawal_type, amount, unlocks_at
-                             FROM pending_withdrawals
-                             WHERE delegator = $1",
-                        )
-                        .bind(&wallet_address)
-                        .fetch_all(&pool)
-                        .await?;
+        let mut pending_by_wallet: HashMap<String, Vec<(String, String, String, i64)>> =
+            HashMap::new();
+        for (delegator, node, withdrawal_type, amount, unlocks_at) in all_pending {
+            pending_by_wallet.entry(delegator).or_default().push((
+                node,
+                withdrawal_type,
+                amount,
+                unlocks_at,
+            ));
+        }
 
-                        let mut pending_undelegations = im::OrdMap::new();
-                        let mut pending_exits = im::OrdMap::new();
-
-                        for (node_str, withdrawal_type_str, amount_str, available_time) in
-                            pending_rows
-                        {
-                            let node: Address =
-                                node_str.parse().context("failed to parse node address")?;
-                            let amount = U256::from_str(&amount_str)
-                                .context("failed to parse pending amount")?;
-                            let withdrawal_type = WithdrawalType::try_from(withdrawal_type_str)?;
-
-                            let withdrawal = PendingWithdrawal {
-                                delegator: address,
-                                node,
-                                amount,
-                                available_time: available_time as u64,
-                            };
-
-                            match withdrawal_type {
-                                WithdrawalType::Undelegation => {
-                                    pending_undelegations.insert(node, withdrawal);
-                                }
-                                WithdrawalType::Exit => {
-                                    pending_exits.insert(node, withdrawal);
-                                }
-                            }
-                        }
-
-                        let wallet = Wallet {
-                            nodes,
-                            pending_undelegations,
-                            pending_exits,
-                            claimed_rewards,
-                        };
-                        Ok::<_, anyhow::Error>((address, wallet))
-                    }
-                });
-
-        let wallet_results = try_join_all(wallet_futures).await?;
         let mut wallets = Wallets::default();
-        for (address, wallet) in wallet_results {
+        for (wallet_address, claimed_rewards_str) in wallet_rows {
+            let address: Address = wallet_address
+                .parse()
+                .context("failed to parse wallet address")?;
+            let claimed_rewards =
+                U256::from_str(&claimed_rewards_str).context("failed to parse claimed rewards")?;
+
+            let mut nodes = im::OrdMap::new();
+            if let Some(delegation_rows) = delegations_by_wallet.remove(&wallet_address) {
+                for (node_str, amount_str) in delegation_rows {
+                    let node: Address = node_str.parse().context("failed to parse node address")?;
+                    let amount =
+                        U256::from_str(&amount_str).context("failed to parse delegation amount")?;
+                    if !amount.is_zero() {
+                        let delegation = Delegation {
+                            delegator: address,
+                            node,
+                            amount,
+                        };
+                        nodes.insert(node, delegation);
+                    }
+                }
+            }
+
+            let mut pending_undelegations = im::OrdMap::new();
+            let mut pending_exits = im::OrdMap::new();
+            if let Some(pending_rows) = pending_by_wallet.remove(&wallet_address) {
+                for (node_str, withdrawal_type_str, amount_str, available_time) in pending_rows {
+                    let node: Address = node_str.parse().context("failed to parse node address")?;
+                    let amount =
+                        U256::from_str(&amount_str).context("failed to parse pending amount")?;
+                    let withdrawal_type = WithdrawalType::try_from(withdrawal_type_str)?;
+
+                    let withdrawal = PendingWithdrawal {
+                        delegator: address,
+                        node,
+                        amount,
+                        available_time: available_time as u64,
+                    };
+
+                    match withdrawal_type {
+                        WithdrawalType::Undelegation => {
+                            pending_undelegations.insert(node, withdrawal);
+                        }
+                        WithdrawalType::Exit => {
+                            pending_exits.insert(node, withdrawal);
+                        }
+                    }
+                }
+            }
+
+            let wallet = Wallet {
+                nodes,
+                pending_undelegations,
+                pending_exits,
+                claimed_rewards,
+            };
             wallets.insert(address, wallet);
         }
 
