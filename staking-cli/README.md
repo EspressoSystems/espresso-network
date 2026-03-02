@@ -64,7 +64,8 @@ For brevity what follows assumes the `staking-cli` binary is in the `PATH` (or a
 
 To show help for a command run `staking-cli COMMAND --help`, for example `staking-cli delegate --help`.
 
-If you run into any problems please open an issue on https://github.com/EspressoSystems/espresso-network.
+If you run into any problems please open an issue on https://github.com/EspressoSystems/espresso-network and include the
+full output of `staking-cli version` in your report.
 
 To build tools that interact with the stake table contract the ABI can be found at
 [../contracts/artifacts/abi/StakeTable.json](../contracts/artifacts/abi/StakeTable.json).

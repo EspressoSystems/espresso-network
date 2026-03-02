@@ -101,15 +101,14 @@ toml = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 url = { workspace = true }
-versions = { workspace = true }
 vbs = { workspace = true }
 vec1 = { workspace = true }
+versions = { workspace = true }
 vid = { workspace = true }
 
 [build-dependencies]
 anyhow = { workspace = true }
 vergen = { workspace = true }
-vergen-gitcl = { workspace = true }
 
 [dev-dependencies]
 escargot = { workspace = true }
