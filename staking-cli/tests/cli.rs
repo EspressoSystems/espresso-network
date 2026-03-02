@@ -62,26 +62,59 @@ fn test_cli_version() -> Result<()> {
     Ok(())
 }
 
+#[rstest::rstest]
+#[case::account(&["account"])]
+#[case::register_validator(&["register-validator", "--node-signatures", "/dev/null", "--commission", "10", "--metadata-uri", "http://x", "--skip-metadata-validation"])]
+#[case::update_consensus_keys(&["update-consensus-keys", "--node-signatures", "/dev/null"])]
+#[case::deregister_validator(&["deregister-validator"])]
+#[case::update_commission(&["update-commission", "--new-commission", "10"])]
+#[case::update_metadata_uri(&["update-metadata-uri", "--metadata-uri", "http://x", "--skip-metadata-validation"])]
+#[case::approve(&["approve", "--amount", "100"])]
+#[case::delegate(&["delegate", "--validator-address", "0x1111111111111111111111111111111111111111", "--amount", "100"])]
+#[case::undelegate(&["undelegate", "--validator-address", "0x1111111111111111111111111111111111111111", "--amount", "100"])]
+#[case::claim_withdrawal(&["claim-withdrawal", "--validator-address", "0x1111111111111111111111111111111111111111"])]
+#[case::claim_validator_exit(&["claim-validator-exit", "--validator-address", "0x1111111111111111111111111111111111111111"])]
+#[case::claim_rewards(&["--espresso-url", "http://localhost:1", "claim-rewards"])]
+#[case::transfer(&["transfer", "--amount", "100", "--to", "0x1111111111111111111111111111111111111111"])]
 #[test_log::test(tokio::test)]
-async fn test_cli_missing_signer_error() -> Result<()> {
+async fn test_cli_missing_signer_error(#[case] args: &[&str]) -> Result<()> {
     let system = deploy::TestSystem::deploy().await?;
+    let tmpdir = tempfile::tempdir()?;
+    let config_path = tmpdir.path().join("config.toml");
 
-    // Run a command that requires signing without providing any signer
     base_cmd()
+        .arg("-c")
+        .arg(&config_path)
         .arg("--rpc-url")
         .arg(system.rpc_url.to_string())
         .arg("--stake-table-address")
         .arg(system.stake_table.to_string())
-        .arg("--account-index")
-        .arg("0")
-        .arg("delegate")
-        .arg("--validator-address")
-        .arg("0x1111111111111111111111111111111111111111")
-        .arg("--amount")
-        .arg("100")
+        .args(args)
         .assert()
         .failure()
-        .stderr(str::contains("Signer configuration required"));
+        .stderr(str::contains("--mnemonic, --private-key, or --ledger"));
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
+async fn test_cli_private_key_without_account_index() -> Result<()> {
+    let system = deploy::TestSystem::deploy().await?;
+    let tmpdir = tempfile::tempdir()?;
+    let config_path = tmpdir.path().join("config.toml");
+
+    base_cmd()
+        .arg("-c")
+        .arg(&config_path)
+        .arg("--rpc-url")
+        .arg(system.rpc_url.to_string())
+        .arg("--stake-table-address")
+        .arg(system.stake_table.to_string())
+        .arg("--private-key")
+        .arg(TEST_PRIVATE_KEY)
+        .arg("account")
+        .assert()
+        .success();
 
     Ok(())
 }

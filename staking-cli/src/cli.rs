@@ -184,7 +184,9 @@ fn resolve_node_signatures(
         let input = NodeSignatureInput::try_from((signature_args.clone(), sender_address))?;
         NodeSignatures::try_from(input)
     } else {
-        let wallet = wallet.ok_or_else(|| anyhow::anyhow!("Signer configuration required"))?;
+        let wallet = wallet.ok_or_else(|| {
+            anyhow::anyhow!("Either --mnemonic, --private-key, or --ledger flag must be provided")
+        })?;
         let address = NetworkWallet::<Ethereum>::default_signer_address(wallet);
         let input = NodeSignatureInput::try_from((signature_args.clone(), Some(address)))?;
         NodeSignatures::try_from((input, wallet))
@@ -394,17 +396,27 @@ pub async fn run() -> Result<()> {
         Address::ZERO
     };
 
-    let wallet =
-        if let Ok(signer_config) = TryInto::<ValidSignerConfig>::try_into(config.signer.clone()) {
-            signer_config.wallet().await.ok()
-        } else {
-            None
-        };
+    let (wallet, signer_error) = match TryInto::<ValidSignerConfig>::try_into(config.signer.clone())
+    {
+        Ok(signer_config) => match signer_config.wallet().await {
+            Ok(w) => (Some(w), None),
+            Err(e) => (None, Some(e.to_string())),
+        },
+        Err(e) => (None, Some(e.to_string())),
+    };
+    let require_wallet = || -> anyhow::Error {
+        anyhow::anyhow!(
+            "{}",
+            signer_error
+                .as_deref()
+                .unwrap_or("failed to initialize wallet")
+        )
+    };
 
     // Commands that just read from chain
     if let Commands::Account = config.commands {
         let account = NetworkWallet::<Ethereum>::default_signer_address(
-            wallet.as_ref().context("Signer configuration required")?,
+            wallet.as_ref().ok_or_else(&require_wallet)?,
         );
         println!("{account}");
         return Ok(());
@@ -607,6 +619,9 @@ pub async fn run() -> Result<()> {
                      deprecated."
                 );
             }
+            if !config.export_calldata {
+                wallet.as_ref().ok_or_else(&require_wallet)?;
+            }
             let payload = resolve_node_signatures(
                 signature_args,
                 config.export_calldata,
@@ -640,7 +655,8 @@ pub async fn run() -> Result<()> {
                      deprecated."
                 );
             }
-            if let Some(w) = wallet.as_ref() {
+            if !config.export_calldata {
+                let w = wallet.as_ref().ok_or_else(&require_wallet)?;
                 let addr = NetworkWallet::<Ethereum>::default_signer_address(w);
                 tracing::info!("Updating validator {} with new keys", addr);
             }
@@ -730,7 +746,7 @@ pub async fn run() -> Result<()> {
                 })?
             } else {
                 NetworkWallet::<Ethereum>::default_signer_address(
-                    wallet.as_ref().context("Signer configuration required")?,
+                    wallet.as_ref().ok_or_else(&require_wallet)?,
                 )
             };
             fetch_claim_rewards_inputs(
@@ -785,9 +801,7 @@ pub async fn run() -> Result<()> {
     }
 
     // For execution, we need the wallet
-    let wallet = wallet.ok_or_else(|| {
-        anyhow::anyhow!("Signer configuration required for transaction execution")
-    })?;
+    let wallet = wallet.ok_or_else(&require_wallet)?;
     let account = NetworkWallet::<Ethereum>::default_signer_address(&wallet);
 
     // Check that our Ethereum balance isn't zero before proceeding.

@@ -177,16 +177,19 @@ impl TryFrom<SignerConfig> for ValidSignerConfig {
     type Error = anyhow::Error;
 
     fn try_from(config: SignerConfig) -> Result<Self> {
-        let account_index = config
-            .account_index
-            .ok_or_else(|| anyhow::anyhow!("Account index must be provided"))?;
         if config.ledger {
+            let account_index = config.account_index.ok_or_else(|| {
+                anyhow::anyhow!("--account-index is required when using --ledger")
+            })?;
             Ok(ValidSignerConfig::Ledger {
                 account_index: account_index as usize,
             })
         } else if let Some(private_key) = config.private_key {
             Ok(ValidSignerConfig::PrivateKey { private_key })
         } else if let Some(mnemonic) = config.mnemonic {
+            let account_index = config.account_index.ok_or_else(|| {
+                anyhow::anyhow!("--account-index is required when using --mnemonic")
+            })?;
             Ok(ValidSignerConfig::Mnemonic {
                 mnemonic,
                 account_index,
@@ -451,4 +454,105 @@ pub(crate) enum Commands {
         #[clap(long, env = "METADATA_URI")]
         metadata_uri: String,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_matches;
+
+    use super::*;
+
+    const EMPTY: SignerConfig = SignerConfig {
+        private_key: None,
+        mnemonic: None,
+        ledger: false,
+        account_index: None,
+    };
+
+    #[test]
+    fn test_private_key_without_account_index() {
+        let config = SignerConfig {
+            private_key: Some(DEV_PRIVATE_KEY.into()),
+            ..EMPTY
+        };
+        let valid = ValidSignerConfig::try_from(config).unwrap();
+        assert_matches!(valid, ValidSignerConfig::PrivateKey { .. });
+    }
+
+    #[test]
+    fn test_private_key_with_account_index() {
+        let config = SignerConfig {
+            private_key: Some(DEV_PRIVATE_KEY.into()),
+            account_index: Some(0),
+            ..EMPTY
+        };
+        let valid = ValidSignerConfig::try_from(config).unwrap();
+        assert_matches!(valid, ValidSignerConfig::PrivateKey { .. });
+    }
+
+    #[test]
+    fn test_mnemonic_without_account_index() {
+        let config = SignerConfig {
+            mnemonic: Some(DEV_MNEMONIC.into()),
+            ..EMPTY
+        };
+        let err = ValidSignerConfig::try_from(config).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("--account-index is required when using --mnemonic"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_mnemonic_with_account_index() {
+        let config = SignerConfig {
+            mnemonic: Some(DEV_MNEMONIC.into()),
+            account_index: Some(5),
+            ..EMPTY
+        };
+        let valid = ValidSignerConfig::try_from(config).unwrap();
+        assert_matches!(
+            valid,
+            ValidSignerConfig::Mnemonic {
+                account_index: 5,
+                ..
+            }
+        );
+    }
+
+    #[test]
+    fn test_ledger_without_account_index() {
+        let config = SignerConfig {
+            ledger: true,
+            ..EMPTY
+        };
+        let err = ValidSignerConfig::try_from(config).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("--account-index is required when using --ledger"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_ledger_with_account_index() {
+        let config = SignerConfig {
+            ledger: true,
+            account_index: Some(2),
+            ..EMPTY
+        };
+        let valid = ValidSignerConfig::try_from(config).unwrap();
+        assert_matches!(valid, ValidSignerConfig::Ledger { account_index: 2 });
+    }
+
+    #[test]
+    fn test_no_signer_provided() {
+        let err = ValidSignerConfig::try_from(EMPTY).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Either --mnemonic, --private-key, or --ledger"),
+            "unexpected error: {err}"
+        );
+    }
 }
