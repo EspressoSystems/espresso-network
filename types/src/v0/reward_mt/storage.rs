@@ -18,7 +18,7 @@ use jf_merkle_tree_compat::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    reward_mt::{collect_merkle_leaves, RewardMerkleProof, REWARD_MERKLE_TREE_V2_INNER_HEIGHT},
+    reward_mt::{RewardMerkleProof, REWARD_MERKLE_TREE_V2_INNER_HEIGHT},
     sparse_mt::{Keccak256Hasher, KeccakNode},
     v0_3::RewardAmount,
     v0_4::{RewardAccountV2, REWARD_MERKLE_TREE_V2_ARITY, REWARD_MERKLE_TREE_V2_HEIGHT},
@@ -307,6 +307,33 @@ pub trait RewardMerkleTreeStorage {
                 Ok((result, delta, tree.value()))
             },
         )?
+    }
+}
+
+/// Recursively traverses a merkle tree node and collects all leaf entries.
+///
+/// Performs depth-first traversal of the tree structure, extracting account-balance
+/// pairs from leaf nodes. Skips empty nodes and forgotten subtrees.
+///
+/// # Arguments
+/// * `node` - Root node to traverse (can be Empty, Leaf, Branch, or ForgettenSubtree)
+/// * `entries` - Mutable vector to append discovered (account, balance) pairs
+fn collect_merkle_leaves(
+    node: &InnerRewardMerkleTreeRoot,
+    entries: &mut Vec<(RewardAccountV2, RewardAmount)>,
+) {
+    match node.as_ref() {
+        MerkleNode::Leaf { pos, elem, .. } => {
+            entries.push((*pos, *elem));
+        },
+        MerkleNode::Branch { children, .. } => {
+            for child in children.iter() {
+                collect_merkle_leaves(child, entries);
+            }
+        },
+        MerkleNode::Empty | MerkleNode::ForgettenSubtree { .. } => {
+            // No leaves to collect
+        },
     }
 }
 
@@ -993,7 +1020,7 @@ mod tests {
     }
 
     #[test]
-    fn test_into_iter() {
+    fn test_get_entries() {
         let mut rng = ChaCha20Rng::seed_from_u64(424344);
 
         let mut tree = InMemoryRewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
@@ -1007,8 +1034,9 @@ mod tests {
             tree.update(account, amount).unwrap();
         }
 
-        // Collect entries from iterator
-        let collected_entries: std::collections::HashMap<_, _> = tree.into_iter().collect();
+        // Collect entries via get_entries
+        let collected_entries: std::collections::HashMap<_, _> =
+            tree.get_entries().unwrap().into_iter().collect();
 
         // Verify all expected entries are present
         assert_eq!(

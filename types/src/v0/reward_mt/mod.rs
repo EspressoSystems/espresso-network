@@ -450,7 +450,9 @@ impl<S: RewardMerkleTreeStorage> StorageBackedRewardMerkleTreeV2<S> {
         let outer_proof = match self.outer.lookup(outer_index) {
             LookupResult::Ok(_, proof) => proof,
             LookupResult::NotInMemory => {
-                unreachable!("Outer reward merkle tree will never be forgetten.")
+                return Err(anyhow::anyhow!(
+                    "Never should happen: outer reward merkle tree not in memory"
+                ));
             },
             LookupResult::NotFound(_) => return Ok(LookupResult::NotFound(())),
         };
@@ -529,7 +531,9 @@ impl<S: RewardMerkleTreeStorage> StorageBackedRewardMerkleTreeV2<S> {
         let outer_proof = match self.outer.universal_lookup(outer_index) {
             LookupResult::Ok(_, proof) => proof,
             LookupResult::NotInMemory => {
-                unreachable!("Outer reward merkle tree will never be forgetten.")
+                return Err(anyhow::anyhow!(
+                    "Never should happen: outer reward merkle tree not in memory"
+                ));
             },
             LookupResult::NotFound(outer_proof) => {
                 let mut proof = RewardMerkleProof::new(
@@ -612,58 +616,25 @@ impl<S: RewardMerkleTreeStorage> StorageBackedRewardMerkleTreeV2<S> {
     ) -> anyhow::Result<()> {
         Ok(())
     }
-}
 
-/// Consumes the tree and returns an iterator over all (account, balance) pairs.
-///
-/// Uses `get_entries` to read flat entry lists directly from the storage backend,
-/// bypassing Merkle tree construction. Only the cached partition (at most 1) requires
-/// a tree traversal; the remaining partitions are read as flat entry lists.
-///
-/// # Example
-///
-/// ```rust,ignore
-/// let tree = InMemoryRewardMerkleTreeV2::from_kv_set(height, accounts)?;
-/// for (account, balance) in tree {
-///     println!("{:?}: {}", account, balance);
-/// }
-/// ```
-impl<S: RewardMerkleTreeStorage> IntoIterator for StorageBackedRewardMerkleTreeV2<S> {
-    type Item = (RewardAccountV2, RewardAmount);
-
-    type IntoIter = <std::vec::Vec<(RewardAccountV2, RewardAmount)> as IntoIterator>::IntoIter;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.storage
-            .get_entries()
-            .expect("Storage operation failed during iteration")
-            .into_iter()
-    }
-}
-
-/// Recursively traverses a merkle tree node and collects all leaf entries.
-///
-/// Performs depth-first traversal of the tree structure, extracting account-balance
-/// pairs from leaf nodes. Skips empty nodes and forgotten subtrees.
-///
-/// # Arguments
-/// * `node` - Root node to traverse (can be Empty, Leaf, Branch, or ForgettenSubtree)
-/// * `entries` - Mutable vector to append discovered (account, balance) pairs
-pub(crate) fn collect_merkle_leaves(
-    node: &storage::InnerRewardMerkleTreeRoot,
-    entries: &mut Vec<(RewardAccountV2, RewardAmount)>,
-) {
-    match node.as_ref() {
-        MerkleNode::Leaf { pos, elem, .. } => {
-            entries.push((*pos, *elem));
-        },
-        MerkleNode::Branch { children, .. } => {
-            for child in children.iter() {
-                collect_merkle_leaves(child, entries);
-            }
-        },
-        MerkleNode::Empty | MerkleNode::ForgettenSubtree { .. } => {
-            // No leaves to collect
-        },
+    /// Consume the tree and return all (account, balance) pairs.
+    ///
+    /// Reads flat entry lists directly from the storage backend, bypassing Merkle
+    /// tree construction. Only the cached partition (at most 1) requires a tree
+    /// traversal; the remaining partitions are read as flat entry lists.
+    ///
+    /// # Errors
+    /// Returns a storage error if reading entries from the backend fails.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let tree = InMemoryRewardMerkleTreeV2::from_kv_set(height, accounts)?;
+    /// for (account, balance) in tree.get_entries()? {
+    ///     println!("{:?}: {}", account, balance);
+    /// }
+    /// ```
+    pub fn get_entries(self) -> anyhow::Result<Vec<(RewardAccountV2, RewardAmount)>> {
+        Ok(self.storage.get_entries()?)
     }
 }
