@@ -24,7 +24,7 @@ use std::{
     time::Duration,
 };
 use tide_disco::Url;
-use tokio::time::sleep;
+use tokio::time::{sleep, timeout};
 
 /// Builder for creating an RpcStream.
 struct RpcStreamBuilder {
@@ -118,6 +118,7 @@ impl RpcStreamBuilder {
         tracing::info!(%url, "Successfully connected to WebSocket provider and subscribed to blocks");
 
         let retry_delay = self.options.l1_retry_delay;
+        let subscription_timeout = self.options.subscription_timeout;
         let provider = self.provider.clone();
         let stake_table_address = self.options.stake_table_address;
         let reward_contract_address = self.options.reward_contract_address;
@@ -131,7 +132,19 @@ impl RpcStreamBuilder {
                 let provider = provider.clone();
 
                 async move {
-                    let head = stream.next().await?;
+                    let head = match timeout(subscription_timeout, stream.next()).await {
+                        Ok(item) => item?,
+                        Err(err) => {
+                            tracing::warn!(
+                                ?subscription_timeout,
+                                "did not receive new L1 head within expected timeout: {err:#}",
+                            );
+                            // If the stream times out, just end it. We will end up reconnecting
+                            // the stream at the higher level where we already handle reconnects
+                            // (`stream_with_reconnect`).
+                            return None;
+                        }
+                    };
                     let blocks =
                         process_block_header(provider, &mut last_block_number, head, retry_delay);
                     Some((blocks, (stream, last_block_number, ws)))
@@ -1273,5 +1286,38 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_ws_timeout() {
+        let anvil = Anvil::new()
+            .block_time(2)
+            .args(["--slots-in-an-epoch", "0"])
+            .spawn();
+        let http_url = anvil.endpoint().parse::<Url>().unwrap();
+        let ws_url = anvil.ws_endpoint().parse::<Url>().unwrap();
+
+        let options = L1ClientOptions {
+            http_providers: vec![http_url.clone()],
+            l1_ws_provider: Some(vec![ws_url.clone()]),
+            stake_table_address: Address::ZERO,
+            reward_contract_address: Address::ZERO,
+            subscription_timeout: Duration::from_secs(1),
+            ..Default::default()
+        };
+        let builder = RpcStreamBuilder::new(options).unwrap();
+
+        // Slow down the block time, in order to test the stream timeout.
+        let provider = ProviderBuilder::new().connect_http(http_url);
+        provider.anvil_set_interval_mining(10).await.unwrap();
+
+        // Ensure timeout actually happens.
+        let mut stream = builder.create_ws_stream(&ws_url, None).await.unwrap();
+        assert!(stream.next().await.is_none());
+
+        // Now check that the higher-level stream with reconnects is still able to yield blocks.
+        let mut stream = builder.build().await;
+        stream.next().await.unwrap();
     }
 }
