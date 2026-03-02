@@ -1244,11 +1244,23 @@ pub(crate) async fn validate_proposal_view_and_certs<
 
 /// Helper function to send events and log errors
 pub async fn broadcast_event<E: Clone + std::fmt::Debug>(event: E, sender: &Sender<E>) {
+    let receiver_count = sender.receiver_count();
+    let queue_len = sender.len();
+
+    // Log channel stats every ~500 events to track receiver_count and queue fill level
+    if queue_len > 0 && queue_len % 500 == 0 {
+        tracing::warn!(
+            "channel_stats: receiver_count={receiver_count}, queue_len={queue_len}, capacity={}",
+            sender.capacity(),
+        );
+    }
+
     match sender.broadcast_direct(event).await {
         Ok(None) => (),
         Ok(Some(overflowed)) => {
             tracing::error!(
-                "Event sender queue overflow, Oldest event removed form queue: {overflowed:?}"
+                "Event sender queue overflow, Oldest event removed form queue: {overflowed:?}, \
+                 receiver_count={receiver_count}, queue_len={queue_len}",
             );
         },
         Err(SendError(e)) => {
