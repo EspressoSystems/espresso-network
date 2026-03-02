@@ -134,6 +134,25 @@ parameter types) in the most derived contract in the inheritance hierarchy.
 - new logic
 - modifying existing logic (function overriding)
 
+### Implementation Constructor Pattern
+
+All implementation contracts MUST call `_disableInitializers()` in their constructor to prevent direct initialization of
+the implementation (only the proxy should be initialized).
+
+**Pattern:**
+
+```solidity
+contract MyContract is Initializable, OwnableUpgradeable, UUPSUpgradeable {
+    constructor() {
+        _disableInitializers(); // REQUIRED
+    }
+
+    function initialize(...) external initializer {
+        // initialization logic
+    }
+}
+```
+
 #### New State Variables
 
 Thanks to C3 linearization, the order in which you inherit from the previous version of the contract dictates the
