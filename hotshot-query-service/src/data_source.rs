@@ -61,7 +61,7 @@ mod test_helpers {
     };
 
     /// Apply an upper bound to a range based on the currently available block height.
-    async fn bound_range<R, D>(ds: &D, range: R) -> impl RangeBounds<usize>
+    async fn bound_range<R, D>(ds: &D, range: R) -> impl RangeBounds<usize> + use<R, D>
     where
         D: TestableDataSource,
         R: RangeBounds<usize>,

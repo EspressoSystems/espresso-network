@@ -5,28 +5,28 @@ use async_broadcast::broadcast;
 use committable::{Commitment, Committable};
 use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestTransaction},
-    node_types::{TestTypes, TEST_VERSIONS},
+    node_types::{TEST_VERSIONS, TestTypes},
     state_types::{TestInstanceState, TestValidatedState},
 };
 use hotshot_types::{
     data::{
-        random_commitment, vid_commitment, DaProposal2, Leaf, Leaf2, QuorumProposal2,
-        QuorumProposalWrapper, ViewNumber,
+        DaProposal2, Leaf, Leaf2, QuorumProposal2, QuorumProposalWrapper, ViewNumber,
+        random_commitment, vid_commitment,
     },
     event::LeafInfo,
     message::UpgradeLock,
     simple_certificate::{QuorumCertificate, QuorumCertificate2},
     simple_vote::{QuorumData2, VersionedVoteData},
     traits::{
+        BlockPayload, EncodeBytes,
         block_contents::GENESIS_VID_NUM_STORAGE_NODES,
         node_implementation::{ConsensusTime, NodeType},
-        BlockPayload, EncodeBytes,
     },
     utils::{BuilderCommitment, EpochTransitionIndicator},
     vid::advz::advz_scheme,
 };
 use jf_advz::VidScheme;
-use rand::{distributions::Standard, thread_rng, Rng};
+use rand::{Rng, distributions::Standard, thread_rng};
 
 use super::constants::{TEST_CHANNEL_BUFFER_SIZE, TEST_NUM_NODES_IN_VID_COMPUTATION};
 use crate::{block::ParentBlockReferences, state::BuilderState};
@@ -198,7 +198,7 @@ pub fn parent_references(view: u64) -> ParentBlockReferences<TestTypes> {
         builder_commitment: BuilderCommitment::from_bytes(
             rng.sample_iter(Standard).take(32).collect::<Vec<_>>(),
         ),
-        tx_count: rng.gen(),
+        tx_count: rng.r#gen(),
         last_nonempty_view: None,
     }
 }

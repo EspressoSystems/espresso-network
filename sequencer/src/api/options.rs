@@ -560,7 +560,7 @@ impl Options {
         port: u16,
         app: App<S, E>,
         bind_version: ApiVer,
-    ) -> impl Future<Output = anyhow::Result<()>>
+    ) -> impl Future<Output = anyhow::Result<()>> + use<S, E, ApiVer>
     where
         S: Send + Sync + 'static,
         E: Send + Sync + tide_disco::Error,

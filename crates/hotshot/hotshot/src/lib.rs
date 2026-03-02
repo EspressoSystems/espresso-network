@@ -12,9 +12,9 @@
 pub mod documentation;
 
 use committable::Committable;
-use futures::future::{select, Either};
+use futures::future::{Either, select};
 use hotshot_types::{
-    drb::{drb_difficulty_selector, DrbResult, INITIAL_DRB_RESULT},
+    drb::{DrbResult, INITIAL_DRB_RESULT, drb_difficulty_selector},
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
     simple_certificate::{CertificatePair, LightClientStateUpdateCertificateV2},
@@ -33,7 +33,7 @@ pub mod types;
 
 pub mod tasks;
 use hotshot_types::data::QuorumProposalWrapper;
-use versions::{Upgrade, EPOCH_VERSION};
+use versions::{EPOCH_VERSION, Upgrade};
 
 /// Contains helper functions for the crate
 pub mod helpers;
@@ -46,7 +46,7 @@ use std::{
 };
 
 use alloy::primitives::U256;
-use async_broadcast::{broadcast, InactiveReceiver, Receiver, Sender};
+use async_broadcast::{InactiveReceiver, Receiver, Sender, broadcast};
 use async_lock::RwLock;
 use async_trait::async_trait;
 use futures::join;
@@ -56,6 +56,7 @@ use hotshot_task_impls::{events::HotShotEvent, helpers::broadcast_event};
 /// Reexport error type
 pub use hotshot_types::error::HotShotError;
 use hotshot_types::{
+    HotShotConfig,
     consensus::{
         Consensus, ConsensusMetricsValue, OuterConsensus, PayloadWithMetadata, VidShares, View,
         ViewInner,
@@ -75,7 +76,6 @@ use hotshot_types::{
         states::ValidatedState,
     },
     utils::{genesis_epoch_from_version, option_epoch_from_block_number},
-    HotShotConfig,
 };
 use hotshot_utils::warn;
 /// Reexport rand crate
@@ -429,12 +429,12 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
                 .await;
             // If we already have an epoch root, we can trigger catchup for the epoch
             // which that root applies to.
-            if let Some(high_qc_block_number) = high_qc_block_number {
-                if is_ge_epoch_root(high_qc_block_number, config.epoch_height) {
-                    let _ = membership_coordinator
-                        .stake_table_for_epoch(Some(epoch + 2))
-                        .await;
-                }
+            if let Some(high_qc_block_number) = high_qc_block_number
+                && is_ge_epoch_root(high_qc_block_number, config.epoch_height)
+            {
+                let _ = membership_coordinator
+                    .stake_table_for_epoch(Some(epoch + 2))
+                    .await;
             }
 
             if let Ok(drb_result) = storage.load_drb_result(epoch + 1).await {
@@ -1025,7 +1025,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TwinsHandlerState<TYPES, I>
         &mut self,
         event: &HotShotEvent<TYPES>,
     ) -> Vec<Either<HotShotEvent<TYPES>, HotShotEvent<TYPES>>> {
-        let random: bool = rand::thread_rng().gen();
+        let random: bool = rand::thread_rng().r#gen();
 
         #[allow(clippy::match_bool)]
         match random {

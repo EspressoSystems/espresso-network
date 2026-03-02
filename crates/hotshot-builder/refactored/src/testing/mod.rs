@@ -7,7 +7,7 @@ use std::{cell::LazyCell, sync::Arc, time::Duration};
 use async_broadcast::Sender;
 use committable::Commitment;
 use hotshot::{
-    rand::{thread_rng, Rng},
+    rand::{Rng, thread_rng},
     types::{BLSPubKey, Event, EventType, SignatureKey},
 };
 use hotshot_builder_api::v0_1::{
@@ -183,7 +183,7 @@ impl TestServiceWrapper {
 
     /// Submits transactions randomly either through public or private mempool
     pub(crate) async fn submit_transactions(&self, transactions: Vec<TestTransaction>) {
-        if thread_rng().gen() {
+        if thread_rng().r#gen() {
             self.submit_transactions_public(transactions).await
         } else {
             self.submit_transactions_private(transactions)

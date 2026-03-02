@@ -10,12 +10,13 @@
 pub mod task_state;
 use std::{collections::BTreeMap, fmt::Debug, sync::Arc, time::Duration};
 
-use async_broadcast::{broadcast, RecvError};
+use async_broadcast::{RecvError, broadcast};
 use async_lock::RwLock;
 use async_trait::async_trait;
 use futures::{
+    StreamExt,
     future::{BoxFuture, FutureExt},
-    stream, StreamExt,
+    stream,
 };
 use hotshot_task::task::Task;
 #[cfg(feature = "rewind")]
@@ -25,7 +26,7 @@ use hotshot_task_impls::{
     events::HotShotEvent,
     network::{NetworkEventTaskState, NetworkMessageTaskState},
     request::NetworkRequestState,
-    response::{run_response_task, NetworkResponseState},
+    response::{NetworkResponseState, run_response_task},
     stats::StatsTaskState,
     transactions::TransactionTaskState,
     upgrade::UpgradeTaskState,
@@ -35,7 +36,7 @@ use hotshot_task_impls::{
 use hotshot_types::{
     consensus::OuterConsensus,
     constants::EVENT_CHANNEL_SIZE,
-    message::{Message, MessageKind, UpgradeLock, EXTERNAL_MESSAGE_VERSION},
+    message::{EXTERNAL_MESSAGE_VERSION, Message, MessageKind, UpgradeLock},
     storage_metrics::StorageMetricsValue,
     traits::{
         network::ConnectedNetwork,
@@ -46,10 +47,10 @@ use tokio::{spawn, time::sleep};
 use vbs::version::Version;
 
 use crate::{
-    genesis_epoch_from_version, tasks::task_state::CreateTaskState, types::SystemContextHandle,
     ConsensusApi, ConsensusMetricsValue, ConsensusTaskRegistry, EpochMembershipCoordinator,
     HotShotConfig, HotShotInitializer, NetworkTaskRegistry, SignatureKey, StateSignatureKey,
-    SystemContext,
+    SystemContext, genesis_epoch_from_version, tasks::task_state::CreateTaskState,
+    types::SystemContextHandle,
 };
 
 /// event for global event stream

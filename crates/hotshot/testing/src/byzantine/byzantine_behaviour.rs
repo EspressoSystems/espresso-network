@@ -14,8 +14,8 @@ use hotshot::{
 use hotshot_task_impls::{
     events::HotShotEvent,
     network::{
-        test::{ModifierClosure, NetworkEventTaskStateModifier},
         NetworkEventTaskState,
+        test::{ModifierClosure, NetworkEventTaskStateModifier},
     },
 };
 use hotshot_types::{
@@ -23,8 +23,8 @@ use hotshot_types::{
     data::QuorumProposalWrapper,
     epoch_membership::EpochMembershipCoordinator,
     message::{
-        convert_proposal, GeneralConsensusMessage, Message, MessageKind, Proposal,
-        SequencingMessage, UpgradeLock,
+        GeneralConsensusMessage, Message, MessageKind, Proposal, SequencingMessage, UpgradeLock,
+        convert_proposal,
     },
     simple_vote::{
         HasEpoch, QuorumVote2, ViewSyncPreCommitData, ViewSyncPreCommitData2,

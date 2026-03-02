@@ -198,7 +198,7 @@ where
         ))
     }
 
-    /// Catches the membership up to the epoch passed as an argument.  
+    /// Catches the membership up to the epoch passed as an argument.
     /// To do this, try to get the stake table for the epoch containing this epoch's root and
     /// the stake table for the epoch containing this epoch's drb result.
     /// If they do not exist, then go one by one back until we find a stake table.

@@ -13,7 +13,7 @@ use hotshot_types::{
     simple_certificate::EpochRootQuorumCertificateV2,
     simple_vote::{EpochRootQuorumVote2, HasEpoch, QuorumVote2, TimeoutData2, TimeoutVote2},
     traits::node_implementation::{ConsensusTime, NodeImplementation, NodeType},
-    utils::{is_epoch_root, is_epoch_transition, is_last_block, EpochTransitionIndicator},
+    utils::{EpochTransitionIndicator, is_epoch_root, is_epoch_transition, is_last_block},
     vote::{HasViewNumber, Vote},
 };
 use hotshot_utils::anytrace::*;
@@ -384,10 +384,10 @@ pub(crate) async fn handle_view_change<TYPES: NodeType, I: NodeImplementation<TY
         .read()
         .await
         .clone();
-    if let Some(cert) = decided_upgrade_certificate_read {
-        if new_view_number == cert.data.new_version_first_view {
-            tracing::error!("Version upgraded based on a decided upgrade cert: {cert:?}");
-        }
+    if let Some(cert) = decided_upgrade_certificate_read
+        && new_view_number == cert.data.new_version_first_view
+    {
+        tracing::error!("Version upgraded based on a decided upgrade cert: {cert:?}");
     }
 
     // Spawn a timeout task if we did actually update view

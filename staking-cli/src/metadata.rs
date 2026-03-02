@@ -2,7 +2,7 @@
 
 use std::{fmt, str::FromStr, time::Duration};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::{ArgAction, Args as ClapArgs};
 use hotshot_types::signature_key::BLSPubKey;
 use thiserror::Error;
@@ -316,10 +316,12 @@ mod test {
         let url_str = format!("https://example.com/{}", long_path);
         let result = url_str.parse::<MetadataUri>();
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("cannot exceed 2048 bytes"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("cannot exceed 2048 bytes")
+        );
     }
 
     #[test]

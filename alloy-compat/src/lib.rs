@@ -87,7 +87,7 @@ pub mod ethers_serde {
         use super::*;
 
         pub fn serialize<S: Serializer>(v: &Address, serializer: S) -> Result<S::Ok, S::Error> {
-            let v_ethers = H160(v.0 .0);
+            let v_ethers = H160(v.0.0);
             v_ethers.serialize(serializer)
         }
         pub fn deserialize<'de, D: Deserializer<'de>>(
@@ -130,7 +130,7 @@ pub mod ethers_serde {
             serializer: S,
         ) -> Result<S::Ok, S::Error> {
             if let Some(v) = v {
-                let v_ethers = H160(v.0 .0);
+                let v_ethers = H160(v.0.0);
                 Some(v_ethers).serialize(serializer)
             } else {
                 v.serialize(serializer)

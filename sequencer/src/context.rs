@@ -316,7 +316,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
     }
 
     /// Stream consensus events.
-    pub async fn event_stream(&self) -> impl Stream<Item = Event<SeqTypes>> {
+    pub async fn event_stream(&self) -> impl Stream<Item = Event<SeqTypes>> + use<N, P> {
         self.handle.read().await.event_stream()
     }
 

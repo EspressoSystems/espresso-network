@@ -36,6 +36,7 @@ use hotshot_types::{
     simple_vote::HasEpoch,
     stake_table::StakeTableEntries,
     traits::{
+        BlockPayload, ValidatedState,
         block_contents::BlockHeader,
         election::Membership,
         node_implementation::{ConsensusTime, NodeImplementation, NodeType},
@@ -43,11 +44,10 @@ use hotshot_types::{
             LCV2StateSignatureKey, LCV3StateSignatureKey, SignatureKey, StakeTableEntryType,
         },
         storage::Storage,
-        BlockPayload, ValidatedState,
     },
     utils::{
-        epoch_from_block_number, is_epoch_root, is_epoch_transition, is_transition_block,
-        option_epoch_from_block_number, Terminator, View, ViewInner,
+        Terminator, View, ViewInner, epoch_from_block_number, is_epoch_root, is_epoch_transition,
+        is_transition_block, option_epoch_from_block_number,
     },
     vote::{Certificate, HasViewNumber},
 };
@@ -454,14 +454,14 @@ pub async fn decide_from_proposal_2<TYPES: NodeType, I: NodeImplementation<TYPES
         // unwrap is safe, we just checked that he option is some
         let info = &mut current_leaf_info.unwrap();
         // Check if there's a new upgrade certificate available.
-        if let Some(cert) = info.leaf.upgrade_certificate() {
-            if info.leaf.upgrade_certificate() != *existing_upgrade_cert_reader {
-                if cert.data.decide_by < decided_view_number {
-                    tracing::warn!("Failed to decide an upgrade certificate in time. Ignoring.");
-                } else {
-                    tracing::info!("Reached decide on upgrade certificate: {cert:?}");
-                    res.decided_upgrade_cert = Some(cert.clone());
-                }
+        if let Some(cert) = info.leaf.upgrade_certificate()
+            && info.leaf.upgrade_certificate() != *existing_upgrade_cert_reader
+        {
+            if cert.data.decide_by < decided_view_number {
+                tracing::warn!("Failed to decide an upgrade certificate in time. Ignoring.");
+            } else {
+                tracing::info!("Reached decide on upgrade certificate: {cert:?}");
+                res.decided_upgrade_cert = Some(cert.clone());
             }
         }
 
@@ -615,16 +615,16 @@ pub async fn decide_from_proposal<TYPES: NodeType, I: NodeImplementation<TYPES>>
                 }
 
                 // Check if there's a new upgrade certificate available.
-                if let Some(cert) = leaf.upgrade_certificate() {
-                    if leaf.upgrade_certificate() != *existing_upgrade_cert_reader {
-                        if cert.data.decide_by < view_number {
-                            tracing::warn!(
-                                "Failed to decide an upgrade certificate in time. Ignoring."
-                            );
-                        } else {
-                            tracing::info!("Reached decide on upgrade certificate: {cert:?}");
-                            res.decided_upgrade_cert = Some(cert.clone());
-                        }
+                if let Some(cert) = leaf.upgrade_certificate()
+                    && leaf.upgrade_certificate() != *existing_upgrade_cert_reader
+                {
+                    if cert.data.decide_by < view_number {
+                        tracing::warn!(
+                            "Failed to decide an upgrade certificate in time. Ignoring."
+                        );
+                    } else {
+                        tracing::info!("Reached decide on upgrade certificate: {cert:?}");
+                        res.decided_upgrade_cert = Some(cert.clone());
                     }
                 }
                 // If the block payload is available for this leaf, include it in
@@ -827,18 +827,17 @@ pub(crate) async fn update_high_qc<TYPES: NodeType, I: NodeImplementation<TYPES>
                 .await
                 .update_state_cert(state_cert.clone())?;
         }
-        if let Some(ref next_epoch_justify_qc) = maybe_next_epoch_justify_qc {
-            if let Err(e) = validation_info
+        if let Some(next_epoch_justify_qc) = maybe_next_epoch_justify_qc
+            && let Err(e) = validation_info
                 .storage
                 .update_next_epoch_high_qc2(next_epoch_justify_qc.clone())
                 .await
-            {
-                bail!("Failed to store next epoch High QC, not voting; error = {e:?}");
-            }
+        {
+            bail!("Failed to store next epoch High QC, not voting; error = {e:?}");
         }
     }
     let mut consensus_writer = validation_info.consensus.write().await;
-    if let Some(ref next_epoch_justify_qc) = maybe_next_epoch_justify_qc {
+    if let Some(next_epoch_justify_qc) = maybe_next_epoch_justify_qc {
         if justify_qc
             .data
             .block_number
@@ -1281,20 +1280,20 @@ pub async fn validate_qc_and_next_epoch_qc<TYPES: NodeType>(
     }
 
     // Check the next epoch QC if required.
-    if upgrade_lock.epochs_enabled(cert.view_number()).await {
-        if let Some(next_epoch_qc) = cert.verify_next_epoch_qc(epoch_height)? {
-            epoch_membership = epoch_membership.next_epoch_stake_table().await?;
-            let membership_next_stake_table = epoch_membership.stake_table().await;
-            let membership_next_success_threshold = epoch_membership.success_threshold().await;
-            next_epoch_qc
-                .is_valid_cert(
-                    &StakeTableEntries::<TYPES>::from(membership_next_stake_table).0,
-                    membership_next_success_threshold,
-                    upgrade_lock,
-                )
-                .await
-                .context(|e| warn!("Invalid next epoch certificate: {e}"))?;
-        }
+    if upgrade_lock.epochs_enabled(cert.view_number()).await
+        && let Some(next_epoch_qc) = cert.verify_next_epoch_qc(epoch_height)?
+    {
+        epoch_membership = epoch_membership.next_epoch_stake_table().await?;
+        let membership_next_stake_table = epoch_membership.stake_table().await;
+        let membership_next_success_threshold = epoch_membership.success_threshold().await;
+        next_epoch_qc
+            .is_valid_cert(
+                &StakeTableEntries::<TYPES>::from(membership_next_stake_table).0,
+                membership_next_success_threshold,
+                upgrade_lock,
+            )
+            .await
+            .context(|e| warn!("Invalid next epoch certificate: {e}"))?;
     }
 
     Ok(())
@@ -1404,15 +1403,14 @@ pub async fn wait_for_second_vid_share<TYPES: NodeType>(
         .and_then(|key_map| key_map.get(vid_share.data.recipient_key()))
         .and_then(|epoch_map| epoch_map.get(&target_epoch))
         .cloned();
-    if let Some(second_vid_share) = maybe_second_vid_share {
-        if (target_epoch == da_cert.epoch()
+    if let Some(second_vid_share) = maybe_second_vid_share
+        && ((target_epoch == da_cert.epoch()
             && second_vid_share.data.payload_commitment() == da_cert.data().payload_commit)
             || (target_epoch != da_cert.epoch()
                 && Some(second_vid_share.data.payload_commitment())
-                    == da_cert.data().next_epoch_payload_commit)
-        {
-            return Ok(second_vid_share);
-        }
+                    == da_cert.data().next_epoch_payload_commit))
+    {
+        return Ok(second_vid_share);
     }
 
     let receiver = receiver.clone();
@@ -1462,10 +1460,11 @@ pub async fn broadcast_view_change<TYPES: NodeType>(
     first_epoch: Option<(TYPES::View, TYPES::Epoch)>,
 ) {
     let mut broadcast_epoch = epoch;
-    if let Some((first_epoch_view, first_epoch)) = first_epoch {
-        if new_view_number == first_epoch_view && broadcast_epoch != Some(first_epoch) {
-            broadcast_epoch = Some(first_epoch);
-        }
+    if let Some((first_epoch_view, first_epoch)) = first_epoch
+        && new_view_number == first_epoch_view
+        && broadcast_epoch != Some(first_epoch)
+    {
+        broadcast_epoch = Some(first_epoch);
     }
     tracing::trace!("Sending ViewChange for view {new_view_number} and epoch {broadcast_epoch:?}");
     broadcast_event(

@@ -11,13 +11,13 @@ use std::{
     sync::Arc,
 };
 
-use async_broadcast::{broadcast, Receiver, Sender};
+use async_broadcast::{Receiver, Sender, broadcast};
 use async_lock::RwLock;
 use futures::future::join_all;
 use hotshot::{
+    HotShotInitializer, InitializerEpochInfo, SystemContext,
     traits::TestableNodeImplementation,
     types::{Event, SystemContextHandle},
-    HotShotInitializer, InitializerEpochInfo, SystemContext,
 };
 use hotshot_example_types::{
     block_types::TestBlockHeader,
@@ -26,6 +26,7 @@ use hotshot_example_types::{
 };
 use hotshot_task_impls::events::HotShotEvent;
 use hotshot_types::{
+    HotShotConfig, ValidatorConfig,
     consensus::ConsensusMetricsValue,
     constants::EVENT_CHANNEL_SIZE,
     data::Leaf2,
@@ -38,7 +39,6 @@ use hotshot_types::{
         network::ConnectedNetwork,
         node_implementation::{ConsensusTime, NodeImplementation, NodeType},
     },
-    HotShotConfig, ValidatorConfig,
 };
 use tide_disco::Url;
 #[allow(deprecated)]
@@ -53,7 +53,7 @@ use crate::{
     spinning_task::{ChangeNode, NodeAction, SpinningTask},
     test_builder::create_test_handle,
     test_launcher::{Network, TestLauncher},
-    test_task::{spawn_timeout_task, TestResult, TestTask},
+    test_task::{TestResult, TestTask, spawn_timeout_task},
     txn_task::TxnTaskDescription,
     view_sync_task::ViewSyncTask,
 };
@@ -63,14 +63,14 @@ pub trait TaskErr: std::error::Error + Sync + Send + 'static {}
 impl<T: std::error::Error + Sync + Send + 'static> TaskErr for T {}
 
 impl<
-        TYPES: NodeType<
+    TYPES: NodeType<
             InstanceState = TestInstanceState,
             ValidatedState = TestValidatedState,
             BlockHeader = TestBlockHeader,
         >,
-        I: TestableNodeImplementation<TYPES>,
-        N: ConnectedNetwork<TYPES::SignatureKey>,
-    > TestRunner<TYPES, I, N>
+    I: TestableNodeImplementation<TYPES>,
+    N: ConnectedNetwork<TYPES::SignatureKey>,
+> TestRunner<TYPES, I, N>
 where
     I: TestableNodeImplementation<TYPES>,
     I: NodeImplementation<TYPES, Network = N, Storage = TestStorage<TYPES>>,

@@ -518,7 +518,7 @@ impl<T: Queryable> ResourceManager<T> {
 
         let mut i = 0;
         loop {
-            match f().into_future().await {
+            match TryFutureExt::into_future(f()).await {
                 Ok(res) if i == 0 => {
                     // Succeeded on the first try, get on with it.
                     return Ok(res);
@@ -528,7 +528,7 @@ impl<T: Queryable> ResourceManager<T> {
                     // be sure the endpoint is healed.
                     tracing::info!("succeeded after {i} retries; checking health");
                     for _ in 0..self.cfg.min_retries {
-                        f().into_future().await.context(
+                        TryFutureExt::into_future(f()).await.context(
                             "operation is flaky; succeeded on retry but not fully healed",
                         )?;
                     }

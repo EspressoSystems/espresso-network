@@ -19,8 +19,8 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     event::{Event, EventType, HotShotAction},
     message::{
-        convert_proposal, DaConsensusMessage, DataMessage, GeneralConsensusMessage, Message,
-        MessageKind, Proposal, SequencingMessage, UpgradeLock,
+        DaConsensusMessage, DataMessage, GeneralConsensusMessage, Message, MessageKind, Proposal,
+        SequencingMessage, UpgradeLock, convert_proposal,
     },
     simple_vote::HasEpoch,
     storage_metrics::StorageMetricsValue,
@@ -1667,11 +1667,8 @@ pub mod test {
         pub modifier: Arc<ModifierClosure<TYPES>>,
     }
 
-    impl<
-            TYPES: NodeType,
-            NET: ConnectedNetwork<TYPES::SignatureKey>,
-            S: Storage<TYPES> + 'static,
-        > NetworkEventTaskStateModifier<TYPES, NET, S>
+    impl<TYPES: NodeType, NET: ConnectedNetwork<TYPES::SignatureKey>, S: Storage<TYPES> + 'static>
+        NetworkEventTaskStateModifier<TYPES, NET, S>
     {
         /// Handles the received event modifying it before sending on the network.
         pub async fn handle(&mut self, event: Arc<HotShotEvent<TYPES>>) {
@@ -1694,11 +1691,8 @@ pub mod test {
     }
 
     #[async_trait]
-    impl<
-            TYPES: NodeType,
-            NET: ConnectedNetwork<TYPES::SignatureKey>,
-            S: Storage<TYPES> + 'static,
-        > TaskState for NetworkEventTaskStateModifier<TYPES, NET, S>
+    impl<TYPES: NodeType, NET: ConnectedNetwork<TYPES::SignatureKey>, S: Storage<TYPES> + 'static>
+        TaskState for NetworkEventTaskStateModifier<TYPES, NET, S>
     {
         type Event = HotShotEvent<TYPES>;
 

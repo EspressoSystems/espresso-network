@@ -9,8 +9,8 @@ use std::{
 };
 
 use hotshot::traits::{
-    implementations::{Cliquenet, CombinedNetworks, Libp2pNetwork, MemoryNetwork, PushCdnNetwork},
     NodeImplementation,
+    implementations::{Cliquenet, CombinedNetworks, Libp2pNetwork, MemoryNetwork, PushCdnNetwork},
 };
 use hotshot_types::{
     constants::TEST_UPGRADE_CONSTANTS,
@@ -21,7 +21,7 @@ use hotshot_types::{
 };
 use serde::{Deserialize, Serialize};
 use vbs::version::StaticVersion;
-use versions::{version, Upgrade};
+use versions::{Upgrade, version};
 
 pub use crate::membership::helpers::{RandomOverlapQuorumFilterConfig, StableQuorumFilterConfig};
 use crate::{
@@ -362,7 +362,7 @@ mod tests {
         utils::{genesis_epoch_from_version, option_epoch_from_block_number},
     };
     use serde::{Deserialize, Serialize};
-    use versions::{version, Upgrade, EPOCH_VERSION};
+    use versions::{EPOCH_VERSION, Upgrade, version};
 
     use crate::node_types::{NodeType, TestTypes};
     #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Hash, Eq)]

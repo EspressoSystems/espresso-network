@@ -10,17 +10,17 @@ use std::{collections::HashMap, marker::PhantomData, num::NonZeroUsize, time::Du
 
 /// a local caching layer for the DHT key value pairs
 use futures::{
-    channel::{mpsc, oneshot::Sender},
     SinkExt,
+    channel::{mpsc, oneshot::Sender},
 };
 use hotshot_types::traits::signature_key::SignatureKey;
 use lazy_static::lazy_static;
 use libp2p::kad::{
-    /* handler::KademliaHandlerIn, */ store::MemoryStore, BootstrapOk, GetClosestPeersOk,
-    GetRecordOk, GetRecordResult, ProgressStep, PutRecordResult, QueryId, QueryResult, Record,
+    Behaviour as KademliaBehaviour, BootstrapError, Event as KademliaEvent, store::RecordStore,
 };
 use libp2p::kad::{
-    store::RecordStore, Behaviour as KademliaBehaviour, BootstrapError, Event as KademliaEvent,
+    BootstrapOk, GetClosestPeersOk, GetRecordOk, GetRecordResult, ProgressStep, PutRecordResult,
+    QueryId, QueryResult, Record, /* handler::KademliaHandlerIn, */ store::MemoryStore,
 };
 use libp2p_identity::PeerId;
 use store::{
@@ -292,8 +292,8 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
         };
 
         // If we have more than one record or the query has completed, we can return the record to the client.
-        if found || last {
-            if let Some(KadGetQuery {
+        if (found || last)
+            && let Some(KadGetQuery {
                 backoff,
                 progress,
                 notify,
@@ -301,62 +301,61 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
                 retry_count,
                 records,
             }) = self.in_progress_record_queries.remove(&id)
-            {
-                // Remove the key from the outstanding queries so we are in sync
-                self.outstanding_dht_query_keys.remove(&key);
+        {
+            // Remove the key from the outstanding queries so we are in sync
+            self.outstanding_dht_query_keys.remove(&key);
 
-                // `notify` is all channels that are still open
-                let notify = notify
-                    .into_iter()
-                    .filter(|n| !n.is_canceled())
-                    .collect::<Vec<_>>();
+            // `notify` is all channels that are still open
+            let notify = notify
+                .into_iter()
+                .filter(|n| !n.is_canceled())
+                .collect::<Vec<_>>();
 
-                // If all are closed, we can exit
-                if notify.is_empty() {
-                    return;
-                }
+            // If all are closed, we can exit
+            if notify.is_empty() {
+                return;
+            }
 
-                // Find the record with the highest expiry
-                if let Some(record) = records.into_iter().max_by_key(|r| r.expires.unwrap()) {
-                    // Only return the record if we can store it (validation passed)
-                    if store.put(record.clone()).is_ok() {
-                        // Send the record to all channels that are still open
-                        for n in notify {
-                            if n.send(record.value.clone()).is_err() {
-                                warn!(
-                                    "Get DHT: channel closed before get record request result \
-                                     could be sent"
-                                );
-                            }
+            // Find the record with the highest expiry
+            if let Some(record) = records.into_iter().max_by_key(|r| r.expires.unwrap()) {
+                // Only return the record if we can store it (validation passed)
+                if store.put(record.clone()).is_ok() {
+                    // Send the record to all channels that are still open
+                    for n in notify {
+                        if n.send(record.value.clone()).is_err() {
+                            warn!(
+                                "Get DHT: channel closed before get record request result could \
+                                 be sent"
+                            );
                         }
-                    } else {
-                        error!("Failed to store record in local store");
                     }
+                } else {
+                    error!("Failed to store record in local store");
                 }
-                // disagreement => query more nodes
-                else {
-                    // there is some internal disagreement or not enough nodes returned
-                    // Initiate new query that hits more replicas
-                    if retry_count > 0 {
-                        let new_retry_count = retry_count - 1;
-                        warn!(
-                            "Get DHT: Internal disagreement for get dht request {progress:?}! \
-                             requerying with more nodes. {new_retry_count:?} retries left"
-                        );
-                        self.retry_get(KadGetQuery {
-                            backoff,
-                            progress: DHTProgress::NotStarted,
-                            notify,
-                            key,
-                            retry_count: new_retry_count,
-                            records: Vec::new(),
-                        });
-                    }
+            }
+            // disagreement => query more nodes
+            else {
+                // there is some internal disagreement or not enough nodes returned
+                // Initiate new query that hits more replicas
+                if retry_count > 0 {
+                    let new_retry_count = retry_count - 1;
                     warn!(
-                        "Get DHT: Internal disagreement for get dht request {progress:?}! Giving \
-                         up because out of retries. "
+                        "Get DHT: Internal disagreement for get dht request {progress:?}! \
+                         requerying with more nodes. {new_retry_count:?} retries left"
                     );
+                    self.retry_get(KadGetQuery {
+                        backoff,
+                        progress: DHTProgress::NotStarted,
+                        notify,
+                        key,
+                        retry_count: new_retry_count,
+                        records: Vec::new(),
+                    });
                 }
+                warn!(
+                    "Get DHT: Internal disagreement for get dht request {progress:?}! Giving up \
+                     because out of retries. "
+                );
             }
         }
     }
@@ -401,6 +400,7 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
             spawn(async move { tx.send(bootstrap::InputEvent::BootstrapFinished).await });
         }
     }
+
     #[allow(clippy::too_many_lines)]
     /// handle a DHT event
     pub fn dht_handle_event(
@@ -427,10 +427,10 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
                 ..
             } => match r {
                 Ok(GetClosestPeersOk { key, peers: _ }) => {
-                    if let Some(chan) = self.in_progress_get_closest_peers.remove(&query_id) {
-                        if chan.send(()).is_err() {
-                            warn!("DHT: finished query but client was no longer interested");
-                        };
+                    if let Some(chan) = self.in_progress_get_closest_peers.remove(&query_id)
+                        && chan.send(()).is_err()
+                    {
+                        warn!("DHT: finished query but client was no longer interested");
                     };
                     debug!("Successfully got closest peers for key {key:?}");
                 },

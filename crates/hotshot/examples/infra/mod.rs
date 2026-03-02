@@ -19,19 +19,18 @@ use async_lock::RwLock;
 use async_trait::async_trait;
 use cdn_broker::reexports::crypto::signature::KeyPair;
 use chrono::Utc;
-use clap::{value_parser, Arg, Command, Parser};
+use clap::{Arg, Command, Parser, value_parser};
 use futures::StreamExt;
 use hotshot::{
+    SystemContext,
     traits::{
-        implementations::{
-            derive_libp2p_multiaddr, derive_libp2p_peer_id, CdnMetricsValue, CdnTopic,
-            CombinedNetworks, Libp2pMetricsValue, Libp2pNetwork, PushCdnNetwork,
-            WrappedSignatureKey,
-        },
         BlockPayload, NodeImplementation,
+        implementations::{
+            CdnMetricsValue, CdnTopic, CombinedNetworks, Libp2pMetricsValue, Libp2pNetwork,
+            PushCdnNetwork, WrappedSignatureKey, derive_libp2p_multiaddr, derive_libp2p_peer_id,
+        },
     },
     types::SystemContextHandle,
-    SystemContext,
 };
 use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestTransaction},
@@ -40,17 +39,18 @@ use hotshot_example_types::{
     storage_types::TestStorage,
 };
 use hotshot_libp2p_networking::network::{
-    behaviours::dht::store::persistent::DhtNoPersistence, GossipConfig, RequestResponseConfig,
+    GossipConfig, RequestResponseConfig, behaviours::dht::store::persistent::DhtNoPersistence,
 };
 use hotshot_orchestrator::{
     self,
-    client::{get_complete_config, BenchResults, OrchestratorClient, ValidatorArgs},
+    client::{BenchResults, OrchestratorClient, ValidatorArgs, get_complete_config},
 };
 use hotshot_testing::block_builder::{
     BuilderTask, RandomBuilderImplementation, SimpleBuilderImplementation,
     TestBuilderImplementation,
 };
 use hotshot_types::{
+    HotShotConfig, PeerConfig, ValidatorConfig,
     consensus::ConsensusMetricsValue,
     data::{Leaf, TestableLeaf},
     epoch_membership::EpochMembershipCoordinator,
@@ -65,9 +65,8 @@ use hotshot_types::{
         states::TestableState,
     },
     utils::genesis_epoch_from_version,
-    HotShotConfig, PeerConfig, ValidatorConfig,
 };
-use rand::{rngs::StdRng, SeedableRng};
+use rand::{SeedableRng, rngs::StdRng};
 use surf_disco::Url;
 use tracing::{debug, error, info, warn};
 
@@ -621,18 +620,18 @@ pub struct PushCdnDaRun<TYPES: NodeType> {
 
 #[async_trait]
 impl<
-        TYPES: NodeType<
+    TYPES: NodeType<
             Transaction = TestTransaction,
             BlockPayload = TestBlockPayload,
             BlockHeader = TestBlockHeader,
             InstanceState = TestInstanceState,
         >,
-        NODE: NodeImplementation<
+    NODE: NodeImplementation<
             TYPES,
             Network = PushCdnNetwork<TYPES::SignatureKey>,
             Storage = TestStorage<TYPES>,
         >,
-    > RunDa<TYPES, PushCdnNetwork<TYPES::SignatureKey>, NODE> for PushCdnDaRun<TYPES>
+> RunDa<TYPES, PushCdnNetwork<TYPES::SignatureKey>, NODE> for PushCdnDaRun<TYPES>
 where
     <TYPES as NodeType>::ValidatedState: TestableState<TYPES>,
     <TYPES as NodeType>::BlockPayload: TestableBlock<TYPES>,
@@ -706,14 +705,14 @@ pub struct Libp2pDaRun<TYPES: NodeType> {
 
 #[async_trait]
 impl<
-        TYPES: NodeType<
+    TYPES: NodeType<
             Transaction = TestTransaction,
             BlockPayload = TestBlockPayload,
             BlockHeader = TestBlockHeader,
             InstanceState = TestInstanceState,
         >,
-        NODE: NodeImplementation<TYPES, Network = Libp2pNetwork<TYPES>, Storage = TestStorage<TYPES>>,
-    > RunDa<TYPES, Libp2pNetwork<TYPES>, NODE> for Libp2pDaRun<TYPES>
+    NODE: NodeImplementation<TYPES, Network = Libp2pNetwork<TYPES>, Storage = TestStorage<TYPES>>,
+> RunDa<TYPES, Libp2pNetwork<TYPES>, NODE> for Libp2pDaRun<TYPES>
 where
     <TYPES as NodeType>::ValidatedState: TestableState<TYPES>,
     <TYPES as NodeType>::BlockPayload: TestableBlock<TYPES>,
@@ -808,14 +807,14 @@ pub struct CombinedDaRun<TYPES: NodeType> {
 
 #[async_trait]
 impl<
-        TYPES: NodeType<
+    TYPES: NodeType<
             Transaction = TestTransaction,
             BlockPayload = TestBlockPayload,
             BlockHeader = TestBlockHeader,
             InstanceState = TestInstanceState,
         >,
-        NODE: NodeImplementation<TYPES, Network = CombinedNetworks<TYPES>, Storage = TestStorage<TYPES>>,
-    > RunDa<TYPES, CombinedNetworks<TYPES>, NODE> for CombinedDaRun<TYPES>
+    NODE: NodeImplementation<TYPES, Network = CombinedNetworks<TYPES>, Storage = TestStorage<TYPES>>,
+> RunDa<TYPES, CombinedNetworks<TYPES>, NODE> for CombinedDaRun<TYPES>
 where
     <TYPES as NodeType>::ValidatedState: TestableState<TYPES>,
     <TYPES as NodeType>::BlockPayload: TestableBlock<TYPES>,
@@ -889,10 +888,10 @@ where
 /// if unable to get the local ip address
 pub async fn main_entry_point<
     TYPES: NodeType<
-        Transaction = TestTransaction,
-        BlockHeader = TestBlockHeader,
-        InstanceState = TestInstanceState,
-    >,
+            Transaction = TestTransaction,
+            BlockHeader = TestBlockHeader,
+            InstanceState = TestInstanceState,
+        >,
     NETWORK: ConnectedNetwork<TYPES::SignatureKey>,
     NODE: NodeImplementation<TYPES, Network = NETWORK, Storage = TestStorage<TYPES>>,
     RUNDA: RunDa<TYPES, NETWORK, NODE>,
@@ -1033,10 +1032,10 @@ pub async fn main_entry_point<
 /// Returns a `BuilderTask` if this node is going to be running a builder.
 async fn initialize_builder<
     TYPES: NodeType<
-        Transaction = TestTransaction,
-        BlockHeader = TestBlockHeader,
-        InstanceState = TestInstanceState,
-    >,
+            Transaction = TestTransaction,
+            BlockHeader = TestBlockHeader,
+            InstanceState = TestInstanceState,
+        >,
 >(
     run_config: &mut NetworkConfig<TYPES>,
     validator_config: &ValidatorConfig<TYPES>,

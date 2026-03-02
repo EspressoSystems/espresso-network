@@ -1,7 +1,7 @@
 use alloy::{
     network::Ethereum, providers::PendingTransactionBuilder, rpc::types::TransactionReceipt,
 };
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
 pub(crate) trait ReceiptExt {
     async fn assert_success(self) -> Result<TransactionReceipt>;

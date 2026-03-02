@@ -23,7 +23,7 @@ use hotshot_types::{
         node_implementation::{ConsensusTime, NodeType},
         signature_key::SignatureKey,
     },
-    utils::{epoch_from_block_number, EpochTransitionIndicator},
+    utils::{EpochTransitionIndicator, epoch_from_block_number},
     vote::HasViewNumber,
 };
 use hotshot_utils::anytrace::*;
@@ -33,7 +33,7 @@ use versions::EPOCH_VERSION;
 use crate::{
     events::HotShotEvent,
     helpers::broadcast_event,
-    vote_collection::{handle_vote, VoteCollectorsMap},
+    vote_collection::{VoteCollectorsMap, handle_vote},
 };
 
 /// Tracks state of an upgrade task
@@ -279,7 +279,7 @@ impl<TYPES: NodeType> UpgradeTaskState<TYPES> {
                 tracing::debug!("Sending upgrade vote {:?}", vote.view_number());
                 broadcast_event(Arc::new(HotShotEvent::UpgradeVoteSend(vote)), &tx).await;
             },
-            HotShotEvent::UpgradeVoteRecv(ref vote) => {
+            HotShotEvent::UpgradeVoteRecv(vote) => {
                 tracing::debug!("Upgrade vote recv, Main Task {:?}", vote.view_number());
 
                 // Check if we are the leader.
