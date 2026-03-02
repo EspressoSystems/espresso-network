@@ -455,7 +455,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> QuorumProposalTaskState<TYPE
                 let maybe_cancel_sender =
                     self.proposal_dependencies.remove(&TYPES::View::new(view));
                 if maybe_cancel_sender.as_ref().is_some_and(|s| !s.is_closed()) {
-                    tracing::error!("Aborting proposal dependency task for view {view}");
+                    tracing::debug!("Aborting proposal dependency task for view {view}");
                     let _ = maybe_cancel_sender.unwrap().try_broadcast(());
                 }
             }
@@ -744,7 +744,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> QuorumProposalTaskState<TYPE
         let keep = self.proposal_dependencies.split_off(&view);
         while let Some((view, cancel_sender)) = self.proposal_dependencies.pop_first() {
             if !cancel_sender.is_closed() {
-                tracing::error!("Aborting proposal dependency task for view {view}");
+                tracing::debug!("Aborting proposal dependency task for view {view}");
                 let _ = cancel_sender.try_broadcast(());
             }
         }
@@ -770,7 +770,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TaskState
     fn cancel_subtasks(&mut self) {
         while let Some((view, cancel_sender)) = self.proposal_dependencies.pop_first() {
             if !cancel_sender.is_closed() {
-                tracing::error!("Aborting proposal dependency task for view {view}");
+                tracing::debug!("Aborting proposal dependency task for view {view}");
                 let _ = cancel_sender.try_broadcast(());
             }
         }

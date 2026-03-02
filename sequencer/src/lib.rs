@@ -57,6 +57,7 @@ use hotshot_types::{
     ValidatorConfig,
 };
 use libp2p::Multiaddr;
+use moka::future::Cache;
 use network::libp2p::split_off_peer_id;
 use options::Identity;
 pub use options::Options;
@@ -212,43 +213,33 @@ where
     Arc<P>: Storage<SeqTypes>,
 {
     // Expose git information via status API.
+    let info = sequencer_utils::build_info!();
     metrics
         .text_family(
             "version".into(),
             vec!["rev".into(), "desc".into(), "timestamp".into()],
         )
         .create(vec![
-            env!("VERGEN_GIT_SHA").into(),
-            env!("VERGEN_GIT_DESCRIBE").into(),
-            env!("VERGEN_GIT_COMMIT_TIMESTAMP").into(),
+            info.git_sha.into(),
+            info.git_describe.into(),
+            info.git_commit_timestamp.into(),
         ]);
 
     metrics
         .text_family(
             "build_info".into(),
             vec![
-                "build_timestamp".into(),
-                "dirty".into(),
+                "modified".into(),
                 "branch".into(),
                 "debug".into(),
                 "features".into(),
-                "target".into(),
-                "testing".into(),
             ],
         )
         .create(vec![
-            env!("VERGEN_BUILD_TIMESTAMP").into(),
-            env!("VERGEN_GIT_DIRTY").into(),
-            env!("VERGEN_GIT_BRANCH").into(),
-            env!("VERGEN_CARGO_DEBUG").into(),
+            info.git_dirty.into(),
+            info.git_branch.into(),
+            info.is_debug.to_string(),
             env!("VERGEN_CARGO_FEATURES").into(),
-            env!("VERGEN_CARGO_TARGET_TRIPLE").into(),
-            if cfg!(feature = "testing") {
-                "yes"
-            } else {
-                "no"
-            }
-            .into(),
         ]);
 
     // Expose Node Entity Information via the status/metrics API
@@ -664,6 +655,12 @@ where
         coordinator: coordinator.clone(),
         genesis_version: genesis.genesis_version,
         epoch_start_block: genesis.epoch_start_block.unwrap_or_default(),
+        light_client_contract_address: Cache::builder().max_capacity(1).build(),
+        token_contract_address: Cache::builder().max_capacity(1).build(),
+        finalized_hotshot_height: Cache::builder()
+            .max_capacity(1)
+            .time_to_live(Duration::from_secs(30))
+            .build(),
     };
 
     // Initialize the Libp2p network

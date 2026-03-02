@@ -231,7 +231,9 @@ impl<TYPES: NodeType> CombinedNetworks<TYPES> {
                 }
             }
             // Send the message
-            secondary_future.await
+            tokio::time::timeout(Duration::from_secs(2), secondary_future)
+                .await
+                .map_err(|e| NetworkError::Timeout(e.to_string()))?
         }
     }
 }

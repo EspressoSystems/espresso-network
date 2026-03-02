@@ -16,10 +16,13 @@ use espresso_types::{
     traits::SequencerPersistence,
     v0::traits::StateCatchup,
     v0_3::{
-        ChainConfig, RewardAccountProofV1, RewardAccountV1, RewardAmount, RewardMerkleCommitmentV1,
+        ChainConfig, RewardAccountProofV1, RewardAccountV1, RewardMerkleCommitmentV1,
         RewardMerkleTreeV1,
     },
-    v0_4::{RewardAccountProofV2, RewardAccountV2, RewardMerkleCommitmentV2, RewardMerkleTreeV2},
+    v0_4::{
+        forgotten_accounts_include, PermittedRewardMerkleTreeV2, RewardAccountProofV2,
+        RewardAccountV2, RewardMerkleCommitmentV2, RewardMerkleTreeV2,
+    },
     BackoffParams, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
     FeeMerkleTree, Leaf2, NodeState, PubKey, SeqTypes, ValidatedState,
 };
@@ -57,7 +60,7 @@ use url::Url;
 use vbs::version::StaticVersionType;
 use versions::EPOCH_VERSION;
 
-use crate::api::BlocksFrontier;
+use crate::api::{BlocksFrontier, RewardMerkleTreeDataSource, RewardMerkleTreeV2Data};
 
 // This newtype is probably not worth having. It's only used to be able to log
 // URLs before doing requests.
@@ -392,43 +395,40 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
         .with_context(|| format!("failed to verify leaf chain at height {height}"))
     }
 
-    #[tracing::instrument(skip(self, _instance))]
-    async fn try_fetch_reward_accounts_v2(
+    async fn try_fetch_reward_merkle_tree_v2(
         &self,
         retry: usize,
-        _instance: &NodeState,
         height: u64,
-        view: ViewNumber,
+        _view: ViewNumber,
         reward_merkle_tree_root: RewardMerkleCommitmentV2,
-        accounts: &[RewardAccountV2],
-    ) -> anyhow::Result<Vec<RewardAccountProofV2>> {
-        self.fetch(retry, |client| async move {
-            let tree = client
-                .inner
-                .post::<RewardMerkleTreeV2>(&format!(
-                    "catchup/{height}/{}/reward-accounts-v2",
-                    view.u64()
-                ))
-                .body_binary(&accounts.to_vec())?
-                .send()
-                .await?;
+        accounts: Arc<Vec<RewardAccountV2>>,
+    ) -> anyhow::Result<PermittedRewardMerkleTreeV2> {
+        let result = self
+            .fetch(retry, |client| async move {
+                let tree_bytes = client
+                    .inner
+                    .get::<Vec<u8>>(&format!("reward-state-v2/reward-merkle-tree-v2/{height}",))
+                    .send()
+                    .await?;
 
-            // Verify proofs.
-            // Verify proofs.
-            let mut proofs = Vec::new();
-            for account in accounts {
-                let (proof, _) = RewardAccountProofV2::prove(&tree, (*account).into())
-                    .context(format!("response missing reward account {account}"))?;
-                proof.verify(&reward_merkle_tree_root).context(format!(
-                    "invalid proof for v2 reward account {account}, root: \
-                     {reward_merkle_tree_root} height {height} view {view}"
-                ))?;
-                proofs.push(proof);
-            }
+                Ok::<Vec<u8>, anyhow::Error>(tree_bytes)
+            })
+            .await
+            .context("Fetching from peer failed")?;
 
-            anyhow::Ok(proofs)
-        })
-        .await
+        let tree_data = bincode::deserialize::<RewardMerkleTreeV2Data>(&result)
+            .context("Failed to deserialize merkle tree from catchup")?;
+
+        let tree: PermittedRewardMerkleTreeV2 =
+            PermittedRewardMerkleTreeV2::try_from_kv_set(tree_data.balances).await?;
+
+        ensure!(
+            tree.tree.commitment() == reward_merkle_tree_root,
+            "RewardMerkleTreeV2 from peer failed commitment check."
+        );
+        ensure!(!forgotten_accounts_include(&tree, &accounts));
+
+        Ok(tree)
     }
 
     #[tracing::instrument(skip(self, _instance))]
@@ -555,15 +555,6 @@ pub(crate) trait CatchupStorage: Sync {
         }
     }
 
-    fn get_all_reward_accounts(
-        &self,
-        _height: u64,
-        _offset: u64,
-        _limit: u64,
-    ) -> impl Send + Future<Output = anyhow::Result<Vec<(RewardAccountV2, RewardAmount)>>> {
-        async { bail!("merklized state catchup is not supported for this data source") }
-    }
-
     /// Get the blocks Merkle tree frontier.
     ///
     /// The state is fetched from a snapshot at the given height and view, which _must_ correspond!
@@ -635,17 +626,6 @@ where
             .await
     }
 
-    async fn get_all_reward_accounts(
-        &self,
-        height: u64,
-        offset: u64,
-        limit: u64,
-    ) -> anyhow::Result<Vec<(RewardAccountV2, RewardAmount)>> {
-        self.inner()
-            .get_all_reward_accounts(height, offset, limit)
-            .await
-    }
-
     async fn get_reward_accounts_v1(
         &self,
         instance: &NodeState,
@@ -693,7 +673,7 @@ impl<T> SqlStateCatchup<T> {
 #[async_trait]
 impl<T> StateCatchup for SqlStateCatchup<T>
 where
-    T: CatchupStorage + Send + Sync,
+    T: CatchupStorage + RewardMerkleTreeDataSource + Send + Sync,
 {
     async fn try_fetch_leaf(
         &self,
@@ -801,35 +781,20 @@ where
         Ok(cf)
     }
 
-    #[tracing::instrument(skip(self, _retry, instance))]
-    async fn try_fetch_reward_accounts_v2(
+    async fn try_fetch_reward_merkle_tree_v2(
         &self,
         _retry: usize,
-        instance: &NodeState,
-        block_height: u64,
-        view: ViewNumber,
+        height: u64,
+        _view: ViewNumber,
         reward_merkle_tree_root: RewardMerkleCommitmentV2,
-        accounts: &[RewardAccountV2],
-    ) -> anyhow::Result<Vec<RewardAccountProofV2>> {
-        // Get the accounts
-        let (reward_merkle_tree_from_db, _) = self
-            .db
-            .get_reward_accounts_v2(instance, block_height, view, accounts)
-            .await
-            .with_context(|| "failed to get reward accounts from DB")?;
-        // Verify the accounts
-        let mut proofs = Vec::new();
-        for account in accounts {
-            let (proof, _) =
-                RewardAccountProofV2::prove(&reward_merkle_tree_from_db, (*account).into())
-                    .context(format!("response missing account {account}"))?;
-            proof.verify(&reward_merkle_tree_root).context(format!(
-                "invalid proof for v2 reward account {account}, root: {reward_merkle_tree_root}"
-            ))?;
-            proofs.push(proof);
-        }
+        accounts: Arc<Vec<RewardAccountV2>>,
+    ) -> anyhow::Result<PermittedRewardMerkleTreeV2> {
+        let tree: PermittedRewardMerkleTreeV2 = self.db.load_reward_merkle_tree_v2(height).await?;
 
-        Ok(proofs)
+        ensure!(tree.tree.commitment() == reward_merkle_tree_root);
+        ensure!(!forgotten_accounts_include(&tree, &accounts));
+
+        Ok(tree)
     }
 
     #[tracing::instrument(skip(self, _retry, instance))]
@@ -939,18 +904,6 @@ impl StateCatchup for NullStateCatchup {
         bail!("state catchup is disabled");
     }
 
-    async fn try_fetch_reward_accounts_v2(
-        &self,
-        _retry: usize,
-        _instance: &NodeState,
-        _height: u64,
-        _view: ViewNumber,
-        _fee_merkle_tree_root: RewardMerkleCommitmentV2,
-        _account: &[RewardAccountV2],
-    ) -> anyhow::Result<Vec<RewardAccountProofV2>> {
-        bail!("state catchup is disabled");
-    }
-
     async fn try_remember_blocks_merkle_tree(
         &self,
         _retry: usize,
@@ -971,6 +924,17 @@ impl StateCatchup for NullStateCatchup {
             .get(&commitment)
             .copied()
             .context(format!("chain config {commitment} not available"))
+    }
+
+    async fn try_fetch_reward_merkle_tree_v2(
+        &self,
+        _retry: usize,
+        _height: u64,
+        _view: ViewNumber,
+        _reward_merkle_tree_root: RewardMerkleCommitmentV2,
+        _accounts: Arc<Vec<RewardAccountV2>>,
+    ) -> anyhow::Result<PermittedRewardMerkleTreeV2> {
+        bail!("state catchup is disabled");
     }
 
     async fn try_fetch_reward_accounts_v1(
@@ -1294,28 +1258,24 @@ impl StateCatchup for ParallelStateCatchup {
         .await
     }
 
-    async fn try_fetch_reward_accounts_v2(
+    async fn try_fetch_reward_merkle_tree_v2(
         &self,
         retry: usize,
-        instance: &NodeState,
         height: u64,
         view: ViewNumber,
         reward_merkle_tree_root: RewardMerkleCommitmentV2,
-        accounts: &[RewardAccountV2],
-    ) -> anyhow::Result<Vec<RewardAccountProofV2>> {
-        // Try to get the accounts on local providers first
-        let accounts_vec = accounts.to_vec();
+        accounts: Arc<Vec<RewardAccountV2>>,
+    ) -> anyhow::Result<PermittedRewardMerkleTreeV2> {
         let local_result = self
-            .on_local_providers(clone! {(instance, accounts_vec) move |provider| {
-                clone! {(instance, accounts_vec) async move {
+            .on_local_providers(clone! {(accounts) move |provider| {
+                clone! {(accounts) async move {
                     provider
-                        .try_fetch_reward_accounts_v2(
+                        .try_fetch_reward_merkle_tree_v2(
                             retry,
-                            &instance,
                             height,
                             view,
                             reward_merkle_tree_root,
-                            &accounts_vec,
+                            accounts,
                         )
                         .await
                 }}
@@ -1328,16 +1288,15 @@ impl StateCatchup for ParallelStateCatchup {
         }
 
         // If that fails, try the remote ones
-        self.on_remote_providers(clone! {(instance, accounts_vec) move |provider| {
-            clone!{(instance, accounts_vec) async move {
+        self.on_remote_providers(clone! {(accounts) move |provider| {
+            clone!{(accounts) async move {
                 provider
-                .try_fetch_reward_accounts_v2(
+                .try_fetch_reward_merkle_tree_v2(
                     retry,
-                    &instance,
                     height,
                     view,
                     reward_merkle_tree_root,
-                    &accounts_vec,
+                    accounts
                 ).await
             }}
         }})
@@ -1535,54 +1494,6 @@ impl StateCatchup for ParallelStateCatchup {
         self.on_remote_providers(move |provider| async move {
             provider.fetch_chain_config(commitment).await
         })
-        .await
-    }
-
-    async fn fetch_reward_accounts_v2(
-        &self,
-        instance: &NodeState,
-        height: u64,
-        view: ViewNumber,
-        reward_merkle_tree_root: RewardMerkleCommitmentV2,
-        accounts: Vec<RewardAccountV2>,
-    ) -> anyhow::Result<Vec<RewardAccountProofV2>> {
-        // Try to get the accounts on local providers first
-        let accounts_vec = accounts.to_vec();
-        let local_result = self
-            .on_local_providers(clone! {(instance, accounts_vec) move |provider| {
-                clone! {(instance, accounts_vec) async move {
-                    provider
-                        .try_fetch_reward_accounts_v2(
-                            0,
-                            &instance,
-                            height,
-                            view,
-                            reward_merkle_tree_root,
-                            &accounts_vec,
-                        )
-                        .await
-                }}
-            }})
-            .await;
-
-        // Check if we were successful locally
-        if local_result.is_ok() {
-            return local_result;
-        }
-
-        // If that fails, try the remote ones (with retry)
-        self.on_remote_providers(clone! {(instance, accounts_vec) move |provider| {
-            clone!{(instance, accounts_vec) async move {
-                provider
-                .fetch_reward_accounts_v2(
-                    &instance,
-                    height,
-                    view,
-                    reward_merkle_tree_root,
-                    accounts_vec,
-                ).await
-            }}
-        }})
         .await
     }
 

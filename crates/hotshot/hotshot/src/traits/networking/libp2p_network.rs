@@ -907,7 +907,7 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
         let pid = match self
             .inner
             .handle
-            .lookup_node(&recipient, self.inner.dht_timeout)
+            .lookup_node(&recipient, Duration::from_secs(2))
             .await
         {
             Ok(pid) => pid,

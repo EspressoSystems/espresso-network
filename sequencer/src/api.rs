@@ -1,6 +1,6 @@
 use std::{collections::HashMap, pin::Pin, sync::Arc, time::Duration};
 
-use alloy::primitives::{Address, U256};
+use alloy::primitives::U256;
 use anyhow::{bail, ensure, Context};
 use async_lock::RwLock;
 use async_once_cell::Lazy;
@@ -20,7 +20,10 @@ use espresso_types::{
         ChainConfig, RegisteredValidator, RewardAccountQueryDataV1, RewardAccountV1, RewardAmount,
         RewardMerkleTreeV1, StakeTableEvent,
     },
-    v0_4::{RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleTreeV2},
+    v0_4::{
+        PermittedRewardMerkleTreeV2, RewardAccountProofV2, RewardAccountQueryDataV2,
+        RewardAccountV2, RewardMerkleTreeV2,
+    },
     AccountQueryData, AuthenticatedValidatorMap, BlockMerkleTree, FeeAccount, FeeMerkleTree, Leaf2,
     NodeState, PubKey, Transaction,
 };
@@ -28,7 +31,7 @@ use futures::{
     future::{BoxFuture, Future, FutureExt},
     stream::BoxStream,
 };
-use hotshot_contract_adapter::sol_types::{EspToken, StakeTableV2};
+use hotshot_contract_adapter::sol_types::EspToken;
 use hotshot_events_service::events_source::{
     EventFilterSet, EventsSource, EventsStreamer, StartupInfo,
 };
@@ -53,6 +56,7 @@ use jf_merkle_tree_compat::MerkleTreeScheme;
 use moka::future::Cache;
 use rand::Rng;
 use request_response::RequestType;
+use serde::{Deserialize, Serialize};
 use tokio::time::timeout;
 
 use self::data_source::{HotShotConfigDataSource, NodeStateDataSource, StateSignatureDataSource};
@@ -96,9 +100,6 @@ struct ApiState<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> {
     #[derivative(Debug = "ignore")]
     sequencer_context: BoxLazy<SequencerContext<N, P>>,
 
-    // we cache `token_contract_address` for the lifetime of the program, since we do not expect this to ever change
-    token_contract_address: Cache<(), Address>,
-
     // we cache `token_supply` for up to an hour, to avoid repeatedly querying the contract for information that rarely changes
     token_supply: Cache<(), U256>,
 }
@@ -107,7 +108,6 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> ApiState<N, P> {
     fn new(context_init: impl Future<Output = SequencerContext<N, P>> + Send + 'static) -> Self {
         Self {
             sequencer_context: Arc::pin(Lazy::from_future(context_init.boxed())),
-            token_contract_address: Cache::builder().max_capacity(1).build(),
             token_supply: Cache::builder()
                 .max_capacity(1)
                 .time_to_live(Duration::from_secs(3600))
@@ -299,51 +299,23 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> TokenDataSource<SeqTy
     async fn get_total_supply_l1(&self) -> anyhow::Result<U256> {
         match self.token_supply.get(&()).await {
             Some(supply) => Ok(supply),
-            None => match self.token_contract_address.get(&()).await {
-                Some(token_contract_address) => {
-                    let node_state = self.sequencer_context.as_ref().get().await.node_state();
-                    let provider = node_state.l1_client.provider;
+            None => {
+                let node_state = self.sequencer_context.as_ref().get().await.node_state();
+                let token_contract_address = node_state.token_contract_address().await?;
 
-                    let token = EspToken::new(token_contract_address, provider.clone());
+                let provider = node_state.l1_client.provider;
 
-                    let supply = token
-                        .totalSupply()
-                        .call()
-                        .await
-                        .context("Failed to retrieve totalSupply from the contract")?;
+                let token = EspToken::new(token_contract_address, provider.clone());
 
-                    self.token_supply.insert((), supply).await;
+                let supply = token
+                    .totalSupply()
+                    .call()
+                    .await
+                    .context("Failed to retrieve totalSupply from the contract")?;
 
-                    Ok(supply)
-                },
-                None => {
-                    let node_state = self.sequencer_context.as_ref().get().await.node_state();
-                    let stake_table_address = node_state
-                        .chain_config
-                        .stake_table_contract
-                        .context("No stake table contract in chain config")?;
+                self.token_supply.insert((), supply).await;
 
-                    let provider = node_state.l1_client.provider;
-
-                    let stake_table = StakeTableV2::new(stake_table_address, provider.clone());
-                    let token_contract_address = stake_table.token().call().await?;
-
-                    self.token_contract_address
-                        .insert((), token_contract_address)
-                        .await;
-
-                    let token = EspToken::new(token_contract_address, provider.clone());
-
-                    let supply = token
-                        .totalSupply()
-                        .call()
-                        .await
-                        .context("Failed to retrieve totalSupply from the contract")?;
-
-                    self.token_supply.insert((), supply).await;
-
-                    Ok(supply)
-                },
+                Ok(supply)
             },
         }
     }
@@ -1008,17 +980,6 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, D: CatchupStorage + S
         Ok(tree)
     }
 
-    async fn get_all_reward_accounts(
-        &self,
-        height: u64,
-        offset: u64,
-        limit: u64,
-    ) -> anyhow::Result<Vec<(RewardAccountV2, RewardAmount)>> {
-        self.inner()
-            .get_all_reward_accounts(height, offset, limit)
-            .await
-    }
-
     #[tracing::instrument(skip(self, instance))]
     async fn get_reward_accounts_v1(
         &self,
@@ -1214,21 +1175,6 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> CatchupDataSource for
         retain_v2_reward_accounts(&state.reward_merkle_tree_v2, accounts.iter().copied())
     }
 
-    // We can iterate over the in-memory reward merkle tree
-    // however, there is no guarantee that we have all the accounts in
-    // in-memory reward tree
-    // So, we only query the state table in database for the reward accounts
-    // We never hit this because we only query the storage in `StorageState``
-    // trait implementation
-    async fn get_all_reward_accounts(
-        &self,
-        _height: u64,
-        _offset: u64,
-        _limit: u64,
-    ) -> anyhow::Result<Vec<(RewardAccountV2, RewardAmount)>> {
-        bail!("get_all_reward_accounts is not implemented for ApiState")
-    }
-
     #[tracing::instrument(skip(self, _instance))]
     async fn get_reward_accounts_v1(
         &self,
@@ -1300,7 +1246,244 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StateSignatureDataSou
     }
 }
 
-pub(crate) trait RewardAccountProofDataSource: Sync {
+#[derive(Serialize, Deserialize, Debug, Clone)]
+/// Representation of the RewardMerkleTreeV2 as a set of key-value pairs
+pub(crate) struct RewardMerkleTreeV2Data {
+    pub balances: Vec<(RewardAccountV2, RewardAmount)>,
+}
+
+impl TryInto<RewardMerkleTreeV2Data> for &RewardMerkleTreeV2 {
+    type Error = anyhow::Error;
+    // Required method
+    fn try_into(self) -> anyhow::Result<RewardMerkleTreeV2Data> {
+        let num_leaves = self.num_leaves();
+
+        let balances: Vec<_> = self
+            .iter()
+            .map(|(account, balance)| (*account, *balance))
+            .collect();
+
+        if balances.len() as u64 == num_leaves {
+            Ok(RewardMerkleTreeV2Data { balances })
+        } else {
+            tracing::error!(
+                "Attempted to serialize an incomplete RewardMerkleTreeV2. This is not a fatal \
+                 error, but it should never happen and indicates that something may be seriously \
+                 wrong. Balances length: {}, num_leaves: {}.",
+                balances.len(),
+                num_leaves
+            );
+            bail!(
+                "Failed to convert RewardMerkleTreeV2 into key-value pairs. Some accounts are \
+                 missing."
+            );
+        }
+    }
+}
+
+pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
+    fn load_v1_reward_account_proof(
+        &self,
+        _height: u64,
+        _account: RewardAccountV1,
+    ) -> impl Send + Future<Output = anyhow::Result<RewardAccountQueryDataV1>>;
+
+    fn save_reward_merkle_tree_v2(
+        &self,
+        node_state: &NodeState,
+        height: u64,
+        merkle_tree: &RewardMerkleTreeV2,
+    ) -> impl Send + Future<Output = anyhow::Result<()>> {
+        async move {
+            {
+                let serialization =
+                    bincode::serialize(&TryInto::<RewardMerkleTreeV2Data>::try_into(merkle_tree)?)
+                        .context("Merkle tree serialization failed; this should never happen.")?;
+                self.persist_tree(height, serialization).await?;
+            }
+
+            // it's imperative that we do not block the state update loop from this point on.
+            // ultimately, we would retry in the next iteration anyway;
+            // all the information already exists.
+            //
+            // in tests we run this check every block, while in release builds we do not. however,
+            // in either case the actual work should still not occur every block, since the proofs
+            // are not generated unless they were not already stored for the previous light client
+            // finalized height.
+
+            if cfg!(any(test, feature = "testing")) {
+                let finalized_hotshot_height = height;
+
+                // check to see whether we have proofs at that height already stored
+                if !self.proof_exists(finalized_hotshot_height).await {
+                    let Ok(permitted_tree) = self
+                        .load_reward_merkle_tree_v2(finalized_hotshot_height)
+                        .await
+                    else {
+                        return Ok(());
+                    };
+
+                    let tree = permitted_tree.tree;
+
+                    // we try to be careful to avoid allocating for all the proofs immediately,
+                    // but note that there are no guarantees here (if e.g. the database is slow)
+                    let iter =
+                        tree.iter()
+                            .filter_map(|(account, balance): (&RewardAccountV2, _)| {
+                                let proof = RewardAccountProofV2::prove(&tree, (*account).into())?;
+
+                                let proof = RewardAccountQueryDataV2 {
+                                    balance: (*balance).into(),
+                                    proof: proof.0,
+                                };
+
+                                let serialized_account = bincode::serialize(&account).ok()?;
+                                let serialized_proof = bincode::serialize(&proof).ok()?;
+
+                                Some((serialized_account, serialized_proof))
+                            });
+
+                    let Ok(_) = self.persist_proofs(finalized_hotshot_height, iter).await else {
+                        return Ok(());
+                    };
+
+                    // tree is dropped here
+                }
+            // we offset the check by the node id, just to mitigate having the entire network
+            // doing this calculation at the same time.
+            } else if (height + node_state.node_id).is_multiple_of(30) {
+                let Ok(finalized_hotshot_height) = node_state.finalized_hotshot_height().await
+                else {
+                    return Ok(());
+                };
+
+                // check to see whether we have proofs at that height already stored
+                if !self.proof_exists(finalized_hotshot_height).await {
+                    let Ok(permitted_tree) = self
+                        .load_reward_merkle_tree_v2(finalized_hotshot_height)
+                        .await
+                    else {
+                        return Ok(());
+                    };
+
+                    let tree = permitted_tree.tree;
+
+                    // we try to be careful to avoid allocating for all the proofs immediately,
+                    // but note that there are no guarantees here (if e.g. the database is slow)
+                    let iter =
+                        tree.iter()
+                            .filter_map(|(account, balance): (&RewardAccountV2, _)| {
+                                let proof = RewardAccountProofV2::prove(&tree, (*account).into())?;
+
+                                let proof = RewardAccountQueryDataV2 {
+                                    balance: (*balance).into(),
+                                    proof: proof.0,
+                                };
+
+                                let serialized_account = bincode::serialize(&account).ok()?;
+                                let serialized_proof = bincode::serialize(&proof).ok()?;
+
+                                Some((serialized_account, serialized_proof))
+                            });
+
+                    let Ok(_) = self.persist_proofs(finalized_hotshot_height, iter).await else {
+                        return Ok(());
+                    };
+
+                    let _ = self.garbage_collect(finalized_hotshot_height).await;
+
+                    // tree is dropped here
+                }
+            }
+
+            Ok(())
+        }
+    }
+
+    fn load_reward_merkle_tree_v2(
+        &self,
+        height: u64,
+    ) -> impl Send + Future<Output = anyhow::Result<PermittedRewardMerkleTreeV2>> {
+        async move {
+            let tree_bytes = self.load_tree(height).await?;
+
+            let tree_data = bincode::deserialize::<RewardMerkleTreeV2Data>(&tree_bytes).context(
+                "Failed to deserialize RewardMerkleTreeV2 for height {height} from storage; this \
+                 should never happen.",
+            )?;
+
+            PermittedRewardMerkleTreeV2::try_from_kv_set(tree_data.balances)
+                .await
+                .context("Failed to reconstruct reward merkle tree from storage")
+        }
+    }
+
+    fn load_reward_account_proof_v2(
+        &self,
+        height: u64,
+        account: RewardAccountV2,
+    ) -> impl Send + Future<Output = anyhow::Result<RewardAccountQueryDataV2>> {
+        async move {
+            let serialized_account = bincode::serialize(&account).context(
+                "Failed to serialize RewardAccountV2 for lookup; this should never happen.",
+            )?;
+            let proof_bytes = self.load_proof(height, serialized_account).await?;
+
+            bincode::deserialize::<RewardAccountQueryDataV2>(&proof_bytes).context(
+                "Failed to deserialize RewardAccountQueryDataV2 for height {height} from storage; \
+                 this should never happen.",
+            )
+        }
+    }
+
+    fn load_latest_reward_account_proof_v2(
+        &self,
+        account: RewardAccountV2,
+    ) -> impl Send + Future<Output = anyhow::Result<RewardAccountQueryDataV2>> {
+        async move {
+            let serialized_account = bincode::serialize(&account).context(
+                "Failed to serialize RewardAccountV2 for lookup; this should never happen.",
+            )?;
+            let proof_bytes = self.load_latest_proof(serialized_account).await?;
+
+            bincode::deserialize::<RewardAccountQueryDataV2>(&proof_bytes).context(
+                "Failed to deserialize RewardAccountQueryDataV2 for account {account} from \
+                 storage; this should never happen.",
+            )
+        }
+    }
+
+    fn persist_tree(
+        &self,
+        height: u64,
+        merkle_tree: Vec<u8>,
+    ) -> impl Send + Future<Output = anyhow::Result<()>>;
+
+    fn load_tree(&self, height: u64) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>>;
+
+    fn persist_proofs(
+        &self,
+        height: u64,
+        proofs: impl Iterator<Item = (Vec<u8>, Vec<u8>)> + Send,
+    ) -> impl Send + Future<Output = anyhow::Result<()>>;
+
+    fn load_proof(
+        &self,
+        height: u64,
+        account: Vec<u8>,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>>;
+
+    fn load_latest_proof(
+        &self,
+        account: Vec<u8>,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>>;
+
+    fn proof_exists(&self, height: u64) -> impl Send + Future<Output = bool>;
+
+    fn garbage_collect(&self, height: u64) -> impl Send + Future<Output = anyhow::Result<()>>;
+}
+
+impl RewardMerkleTreeDataSource for hotshot_query_service::data_source::MetricsDataSource {
     fn load_v1_reward_account_proof(
         &self,
         _height: u64,
@@ -1311,24 +1494,67 @@ pub(crate) trait RewardAccountProofDataSource: Sync {
         }
     }
 
-    fn load_v2_reward_account_proof(
+    fn persist_tree(
         &self,
         _height: u64,
-        _account: RewardAccountV2,
-    ) -> impl Send + Future<Output = anyhow::Result<RewardAccountQueryDataV2>> {
-        async {
+        _merkle_tree: Vec<u8>,
+    ) -> impl Send + Future<Output = anyhow::Result<()>> {
+        async move {
             bail!("reward merklized state is not supported for this data source");
         }
     }
+
+    fn load_tree(&self, _height: u64) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {
+        async move {
+            bail!("reward merklized state is not supported for this data source");
+        }
+    }
+
+    fn garbage_collect(&self, _height: u64) -> impl Send + Future<Output = anyhow::Result<()>> {
+        async move {
+            bail!("reward merklized state is not supported for this data source");
+        }
+    }
+
+    fn persist_proofs(
+        &self,
+        _height: u64,
+        _proofs: impl Iterator<Item = (Vec<u8>, Vec<u8>)> + Send,
+    ) -> impl Send + Future<Output = anyhow::Result<()>> {
+        async move {
+            bail!("reward merklized state is not supported for this data source");
+        }
+    }
+
+    fn load_proof(
+        &self,
+        _height: u64,
+        _account: Vec<u8>,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {
+        async move {
+            bail!("reward merklized state is not supported for this data source");
+        }
+    }
+
+    fn load_latest_proof(
+        &self,
+        _account: Vec<u8>,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {
+        async move {
+            bail!("reward merklized state is not supported for this data source");
+        }
+    }
+
+    fn proof_exists(&self, _height: u64) -> impl Send + Future<Output = bool> {
+        async move { false }
+    }
 }
 
-impl RewardAccountProofDataSource for hotshot_query_service::data_source::MetricsDataSource {}
-
-impl<T, S> RewardAccountProofDataSource
+impl<T, S> RewardMerkleTreeDataSource
     for hotshot_query_service::data_source::ExtensibleDataSource<T, S>
 where
-    T: RewardAccountProofDataSource,
-    S: Sync,
+    T: RewardMerkleTreeDataSource,
+    S: Send + Sync + Clone + 'static,
 {
     async fn load_v1_reward_account_proof(
         &self,
@@ -1340,14 +1566,47 @@ where
             .await
     }
 
-    async fn load_v2_reward_account_proof(
+    fn persist_tree(
         &self,
         height: u64,
-        account: RewardAccountV2,
-    ) -> anyhow::Result<RewardAccountQueryDataV2> {
-        self.inner()
-            .load_v2_reward_account_proof(height, account)
-            .await
+        merkle_tree: Vec<u8>,
+    ) -> impl Send + Future<Output = anyhow::Result<()>> {
+        async move { self.inner().persist_tree(height, merkle_tree).await }
+    }
+
+    fn load_tree(&self, height: u64) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {
+        async move { self.inner().load_tree(height).await }
+    }
+
+    fn garbage_collect(&self, height: u64) -> impl Send + Future<Output = anyhow::Result<()>> {
+        async move { self.inner().garbage_collect(height).await }
+    }
+
+    fn persist_proofs(
+        &self,
+        height: u64,
+        proofs: impl Iterator<Item = (Vec<u8>, Vec<u8>)> + Send,
+    ) -> impl Send + Future<Output = anyhow::Result<()>> {
+        async move { self.inner().persist_proofs(height, proofs).await }
+    }
+
+    fn load_proof(
+        &self,
+        height: u64,
+        account: Vec<u8>,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {
+        async move { self.inner().load_proof(height, account).await }
+    }
+
+    fn load_latest_proof(
+        &self,
+        account: Vec<u8>,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {
+        async move { self.inner().load_latest_proof(account).await }
+    }
+
+    fn proof_exists(&self, height: u64) -> impl Send + Future<Output = bool> {
+        async move { self.inner().proof_exists(height).await }
     }
 }
 
@@ -2622,7 +2881,6 @@ mod api_tests {
 mod test {
     use std::{
         collections::{HashMap, HashSet},
-        str::FromStr,
         time::Duration,
     };
 
@@ -2650,9 +2908,7 @@ mod test {
         config::PublicHotShotConfig,
         traits::{MembershipPersistence, NullEventConsumer, PersistenceOptions},
         v0_3::{Fetcher, RewardAmount, RewardMerkleProofV1, COMMISSION_BASIS_POINTS},
-        v0_4::{
-            RewardAccountV2, RewardMerkleProofV2, RewardMerkleTreeV2, REWARD_MERKLE_TREE_V2_HEIGHT,
-        },
+        v0_4::{RewardAccountV2, RewardMerkleProofV2},
         validators_from_l1_events, ADVZNamespaceProofQueryData, FeeAmount, Header, L1Client,
         L1ClientOptions, NamespaceId, NamespaceProofQueryData, NsProof, RegisteredValidatorMap,
         RewardDistributor, StakeTableState, StateCertQueryDataV1, StateCertQueryDataV2,
@@ -2676,11 +2932,10 @@ mod test {
         },
         data_source::{
             sql::Config,
-            storage::{sql::query, SqlStorage, StorageConnectionType},
-            Transaction as _, VersionedDataSource,
+            storage::{SqlStorage, StorageConnectionType},
+            VersionedDataSource,
         },
         explorer::TransactionSummariesResponse,
-        merklized_state::UpdateStateData,
         types::HeightIndexed,
     };
     use hotshot_types::{
@@ -2695,7 +2950,7 @@ mod test {
     };
     use jf_merkle_tree_compat::{
         prelude::{MerkleProof, Sha3Node},
-        MerkleTreeScheme, ToTraversalPath, UniversalMerkleTreeScheme,
+        MerkleTreeScheme,
     };
     use pretty_assertions::assert_matches;
     use rand::seq::SliceRandom;
@@ -3766,13 +4021,13 @@ mod test {
             .pos_hook(
                 DelegationConfig::VariableAmounts,
                 Default::default(),
-                POS_V3,
+                POS_V4,
             )
             .await
             .unwrap()
             .build();
 
-        let network = TestNetwork::new(config, POS_V3).await;
+        let network = TestNetwork::new(config, POS_V4).await;
         let client: Client<ServerError, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
@@ -3796,6 +4051,15 @@ mod test {
 
         let block_height = 60;
 
+        let node_state = network.server.node_state();
+        let membership = node_state.coordinator.membership().read().await;
+        let expected_amount = U256::from(20)
+            * (membership
+                .epoch_block_reward(3.into())
+                .expect("block reward is not None"))
+            .0;
+        drop(membership);
+
         // get the validator address balance at block height 60
         let amount = client
             .get::<Option<RewardAmount>>(&format!(
@@ -3807,18 +4071,6 @@ mod test {
             .unwrap();
 
         tracing::info!("amount={amount:?}");
-
-        let epoch_start_block = 40;
-
-        let node_state = network.server.node_state();
-        let membership = node_state.coordinator.membership().read().await;
-        let block_reward = membership
-            .fixed_block_reward()
-            .expect("block reward is not None");
-        drop(membership);
-
-        // The validator gets all the block reward so we can calculate the expected amount
-        let expected_amount = block_reward.0 * (U256::from(block_height - epoch_start_block));
 
         assert_eq!(amount.0, expected_amount, "reward amount don't match");
 
@@ -3868,19 +4120,14 @@ mod test {
             .pos_hook(
                 DelegationConfig::MultipleDelegators,
                 Default::default(),
-                POS_V3,
+                POS_V4,
             )
             .await
             .unwrap()
             .build();
 
-        let network = TestNetwork::new(config, POS_V3).await;
+        let network = TestNetwork::new(config, POS_V4).await;
         let node_state = network.server.node_state();
-        let membership = node_state.coordinator.membership().read().await;
-        let block_reward = membership
-            .fixed_block_reward()
-            .expect("block reward is not None");
-        drop(membership);
         let client: Client<ServerError, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
@@ -3924,9 +4171,14 @@ mod test {
         }
 
         let mut prev_cumulative_amount = U256::ZERO;
-        // Check Cumulative rewards for epoch 3
-        // i.e block height 41 to 59
+        // Check Cumulative rewards for epochs 3 (= block height 41 to 59) & 4 (= block height 60 to 67)
         for block in 41..=67 {
+            let membership = node_state.coordinator.membership().read().await;
+            let block_reward = membership
+                .epoch_block_reward(epoch_from_block_number(block, epoch_height).into())
+                .expect("block reward is not None");
+            drop(membership);
+
             let mut cumulative_amount = U256::ZERO;
             for address in addresses.clone() {
                 let amount = client
@@ -4061,232 +4313,6 @@ mod test {
             }
 
             target_bh = header.height();
-        }
-
-        Ok(())
-    }
-
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_rewards_v3() -> anyhow::Result<()> {
-        // The test registers multiple delegators for each validator
-        // It verifies that no rewards are distributed in the first two epochs
-        // and that rewards are correctly allocated starting from the third epoch.
-        // also checks that the total stake of delegators matches the stake of the validator
-        // and that the calculated rewards match those obtained via the merklized state api
-        const EPOCH_HEIGHT: u64 = 20;
-
-        let network_config = TestConfigBuilder::default()
-            .epoch_height(EPOCH_HEIGHT)
-            .build();
-
-        let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
-
-        const NUM_NODES: usize = 7;
-
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
-
-        let config = TestNetworkConfigBuilder::with_num_nodes()
-            .api_config(SqlDataSource::options(
-                &storage[0],
-                Options::with_port(api_port),
-            ))
-            .network_config(network_config)
-            .persistences(persistence.clone())
-            .catchups(std::array::from_fn(|_| {
-                StatePeers::<StaticVersion<0, 1>>::from_urls(
-                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
-                    Default::default(),
-                    Duration::from_secs(2),
-                    &NoMetrics,
-                )
-            }))
-            .pos_hook(
-                DelegationConfig::MultipleDelegators,
-                Default::default(),
-                POS_V3,
-            )
-            .await
-            .unwrap()
-            .build();
-
-        let network = TestNetwork::new(config, POS_V3).await;
-        let client: Client<ServerError, SequencerApiVersion> =
-            Client::new(format!("http://localhost:{api_port}").parse().unwrap());
-
-        // Wait for 3 epochs to allow rewards distribution to take effect.
-        let mut events = network.peers[0].event_stream().await;
-        while let Some(event) = events.next().await {
-            if let EventType::Decide { leaf_chain, .. } = event.event {
-                let height = leaf_chain[0].leaf.height();
-                tracing::info!("Node 0 decided at height: {height}");
-                if height > EPOCH_HEIGHT * 3 {
-                    break;
-                }
-            }
-        }
-
-        // Verify that there are no validators for epoch # 1 and epoch # 2
-        {
-            client
-                .get::<AuthenticatedValidatorMap>("node/validators/1")
-                .send()
-                .await
-                .unwrap()
-                .is_empty();
-
-            client
-                .get::<AuthenticatedValidatorMap>("node/validators/2")
-                .send()
-                .await
-                .unwrap()
-                .is_empty();
-        }
-
-        // Get the epoch # 3 validators
-        let validators = client
-            .get::<AuthenticatedValidatorMap>("node/validators/3")
-            .send()
-            .await
-            .expect("validators");
-
-        assert!(!validators.is_empty());
-
-        // Collect addresses to track rewards for all participants.
-        let mut addresses = HashSet::new();
-        for v in validators.values() {
-            addresses.insert(v.account);
-            addresses.extend(v.clone().delegators.keys().collect::<Vec<_>>());
-        }
-
-        // Verify no rewards are distributed in the first two epochs.
-        for block in 0..=EPOCH_HEIGHT * 2 {
-            for address in addresses.clone() {
-                let amount = client
-                    .get::<Option<RewardAmount>>(&format!(
-                        "reward-state/reward-balance/{block}/{address}"
-                    ))
-                    .send()
-                    .await
-                    .ok()
-                    .flatten();
-                assert!(amount.is_none(), "amount is not none for block {block}")
-            }
-        }
-
-        // Collect leaves for epoch 3 to 5 to verify reward calculations.
-        let leaves = client
-            .socket("availability/stream/leaves/41")
-            .subscribe::<LeafQueryData<SeqTypes>>()
-            .await
-            .unwrap()
-            .take((EPOCH_HEIGHT * 3).try_into().unwrap())
-            .try_collect::<Vec<_>>()
-            .await
-            .unwrap();
-
-        let node_state = network.server.node_state();
-        let coordinator = node_state.coordinator;
-
-        let membership = coordinator.membership().read().await;
-        let block_reward = membership
-            .fixed_block_reward()
-            .expect("block reward is not None");
-
-        drop(membership);
-
-        let mut rewards_map = HashMap::new();
-
-        for leaf in leaves {
-            let block = leaf.height();
-            tracing::info!("verify rewards for block={block:?}");
-            let membership = coordinator.membership().read().await;
-            let epoch = epoch_from_block_number(block, EPOCH_HEIGHT);
-            let epoch_number = EpochNumber::new(epoch);
-            let leader = membership
-                .leader(leaf.leaf().view_number(), Some(epoch_number))
-                .expect("leader");
-            let leader_eth_address = membership.address(&epoch_number, leader).expect("address");
-
-            drop(membership);
-
-            let validators = client
-                .get::<AuthenticatedValidatorMap>(&format!("node/validators/{epoch}"))
-                .send()
-                .await
-                .expect("validators");
-
-            let leader_validator = validators
-                .get(&leader_eth_address)
-                .expect("leader not found");
-
-            let distributor =
-                RewardDistributor::new(leader_validator.clone(), block_reward, U256::ZERO.into());
-            // Verify that the sum of delegator stakes equals the validator's total stake.
-            for validator in validators.values() {
-                let delegator_stake_sum: U256 = validator.delegators.values().cloned().sum();
-
-                assert_eq!(delegator_stake_sum, validator.stake);
-            }
-
-            let computed_rewards = distributor.compute_rewards().expect("reward computation");
-
-            // Verify that the leader commission amount is within the tolerated range.
-            // Due to potential rounding errors in decimal calculations for delegator rewards,
-            // the actual distributed commission
-            // amount may differ very slightly from the calculated value.
-            // this asserts that it is within 10wei tolerance level.
-            // 10 wei is 10* 10E-18
-            let total_reward = block_reward.0;
-            let leader_commission_basis_points = U256::from(leader_validator.commission);
-            let calculated_leader_commission_reward = leader_commission_basis_points
-                .checked_mul(total_reward)
-                .context("overflow")?
-                .checked_div(U256::from(COMMISSION_BASIS_POINTS))
-                .context("overflow")?;
-
-            assert!(
-                computed_rewards.leader_commission().0 - calculated_leader_commission_reward
-                    <= U256::from(10_u64)
-            );
-
-            // Aggregate reward amounts by address in the map.
-            // This is necessary because there can be two entries for a leader address:
-            // - One entry for commission rewards.
-            // - Another for delegator rewards when the leader is delegating.
-            // Also, rewards are accumulated for the same addresses
-            let leader_commission = *computed_rewards.leader_commission();
-            for (address, amount) in computed_rewards.delegators().clone() {
-                rewards_map
-                    .entry(address)
-                    .and_modify(|entry| *entry += amount)
-                    .or_insert(amount);
-            }
-
-            // add leader commission reward
-            rewards_map
-                .entry(leader_eth_address)
-                .and_modify(|entry| *entry += leader_commission)
-                .or_insert(leader_commission);
-
-            // assert that the reward matches to what is in the reward merkle tree
-            for (address, calculated_amount) in rewards_map.iter() {
-                let amount_from_api = client
-                    .get::<Option<RewardAmount>>(&format!(
-                        "reward-state/reward-balance/{block}/{address}"
-                    ))
-                    .send()
-                    .await
-                    .ok()
-                    .flatten()
-                    .expect("amount");
-                assert_eq!(amount_from_api, *calculated_amount)
-            }
         }
 
         Ok(())
@@ -6909,7 +6935,7 @@ mod test {
 
         let err = client
             .get::<Vec<(RewardAccountV2, RewardAmount)>>(&format!(
-                "catchup/{height}/reward-amounts/10001/0"
+                "reward-state-v2/reward-amounts/{height}/0/10001"
             ))
             .send()
             .await
@@ -6938,249 +6964,13 @@ mod test {
 
         let res = client
             .get::<Vec<(RewardAccountV2, RewardAmount)>>(&format!(
-                "catchup/{height}/reward-amounts/{limit}/{offset}"
+                "reward-state-v2/reward-amounts/{height}/{offset}/{limit}"
             ))
             .send()
             .await
             .unwrap();
 
         assert_eq!(res, expected);
-
-        Ok(())
-    }
-
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_get_all_reward_accounts_multiple_cases() -> anyhow::Result<()> {
-        let storage = SqlDataSource::create_storage().await;
-        let sql_options = tmp_options(&storage);
-        let db = SqlStorage::connect(
-            Config::try_from(&sql_options)?,
-            StorageConnectionType::Sequencer,
-        )
-        .await?;
-
-        let validated_state = ValidatedState::default();
-        let instance_state = NodeState::mock().with_genesis_version(DRB_AND_HEADER_UPGRADE_VERSION);
-        let genesis_leaf = LeafQueryData::<SeqTypes>::genesis(
-            &validated_state,
-            &instance_state,
-            versions::Upgrade::trivial(DRB_AND_HEADER_UPGRADE_VERSION),
-        )
-        .await;
-
-        let mut reward_tree = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
-
-        let account1 = RewardAccountV2::from_str("0x0000000000000000000000000000000000000001")?;
-        let account2 = RewardAccountV2::from_str("0x0000000000000000000000000000000000000002")?;
-        let account3 = RewardAccountV2::from_str("0x0000000000000000000000000000000000000003")?;
-        let account4 = RewardAccountV2::from_str("0x0000000000000000000000000000000000000004")?;
-
-        // Insert account1 with balance 1000, account2 with balance 2000
-        let accounts_height_5 = vec![
-            (account1, RewardAmount::from(1000u64)),
-            (account2, RewardAmount::from(2000u64)),
-        ];
-
-        let accounts_height_10 = vec![
-            (account1, RewardAmount::from(1500u64)),
-            (account3, RewardAmount::from(3000u64)),
-        ];
-
-        let accounts_height_15 = vec![
-            (account2, RewardAmount::from(2500u64)),
-            (account4, RewardAmount::from(4000u64)),
-        ];
-
-        let mut tx = db.write().await?;
-
-        let header_json = serde_json::to_value(genesis_leaf.header())?;
-
-        for height in [5i64, 10, 15, 16] {
-            query(
-                "INSERT INTO header (height, hash, payload_hash, timestamp, data)
-                     VALUES ($1, $2, $3, $4, $5)",
-            )
-            .bind(height)
-            .bind(format!("hash_{height}"))
-            .bind("payload_hash")
-            .bind(0i64)
-            .bind(&header_json)
-            .execute(tx.as_mut())
-            .await?;
-        }
-
-        for (height, accounts) in [
-            (5u64, &accounts_height_5),
-            (10, &accounts_height_10),
-            (15, &accounts_height_15),
-        ] {
-            for (account, balance) in accounts {
-                reward_tree.update(*account, *balance)?;
-
-                let (_, proof) = reward_tree.lookup(*account).expect_ok().unwrap();
-
-                let traversal_path = <RewardAccountV2 as ToTraversalPath<
-                    { RewardMerkleTreeV2::ARITY },
-                >>::to_traversal_path(
-                    account, reward_tree.height()
-                );
-
-                UpdateStateData::<
-                    SeqTypes,
-                    RewardMerkleTreeV2,
-                    { RewardMerkleTreeV2::ARITY },
-                >::insert_merkle_nodes(&mut tx, proof, traversal_path, height)
-                .await?;
-            }
-        }
-
-        UpdateStateData::<
-            SeqTypes,
-            RewardMerkleTreeV2,
-            { RewardMerkleTreeV2::ARITY },
-        >::set_last_state_height(&mut tx, 15)
-        .await?;
-
-        tx.commit().await?;
-
-        let result_height_5 = db.get_all_reward_accounts(5, 0, 100).await?;
-        assert_eq!(result_height_5.len(), 2,);
-        for (account, balance) in &accounts_height_5 {
-            assert!(result_height_5
-                .iter()
-                .any(|(acc, bal)| acc == account && bal == balance),);
-        }
-
-        let result_height_10 = db.get_all_reward_accounts(10, 0, 100).await?;
-        assert_eq!(result_height_10.len(), 3,);
-
-        // Verify account1 has the updated balance from height 10
-        //  not the old balance from height 5
-        let expected_at_height_10 = vec![
-            (account1, RewardAmount::from(1500u64)),
-            (account2, RewardAmount::from(2000u64)),
-            (account3, RewardAmount::from(3000u64)),
-        ];
-        for (account, balance) in &expected_at_height_10 {
-            assert!(result_height_10
-                .iter()
-                .any(|(acc, bal)| acc == account && bal == balance),);
-        }
-
-        let result_height_15 = db.get_all_reward_accounts(15, 0, 100).await?;
-        assert_eq!(result_height_15.len(), 4,);
-
-        // Verify account2 has the updated balance from height 15, and account4 is new
-        let expected_at_height_15 = vec![
-            (account1, RewardAmount::from(1500u64)),
-            (account2, RewardAmount::from(2500u64)),
-            (account3, RewardAmount::from(3000u64)),
-            (account4, RewardAmount::from(4000u64)),
-        ];
-        for (account, balance) in &expected_at_height_15 {
-            assert!(result_height_15
-                .iter()
-                .any(|(acc, bal)| acc == account && bal == balance),);
-        }
-
-        // Test pagination
-        // results are sorted by account address descending
-        let result_limit_2 = db.get_all_reward_accounts(15, 0, 2).await?;
-        assert_eq!(result_limit_2.len(), 2);
-        assert_eq!(result_limit_2[0], (account4, RewardAmount::from(4000u64)));
-        assert_eq!(result_limit_2[1], (account3, RewardAmount::from(3000u64)));
-
-        let result_offset_2 = db.get_all_reward_accounts(15, 2, 2).await?;
-        assert_eq!(result_offset_2.len(), 2);
-        assert_eq!(result_offset_2[0], (account2, RewardAmount::from(2500u64)));
-        assert_eq!(result_offset_2[1], (account1, RewardAmount::from(1500u64)));
-
-        Ok(())
-    }
-
-    ///  ensure get_all_reward_accounts fails when merklized state height
-    /// is behind the requested height
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_get_all_reward_accounts_check_state_height() -> anyhow::Result<()> {
-        let storage = SqlDataSource::create_storage().await;
-        let sql_options = tmp_options(&storage);
-        let db = SqlStorage::connect(
-            Config::try_from(&sql_options)?,
-            StorageConnectionType::Sequencer,
-        )
-        .await?;
-
-        let validated_state = ValidatedState::default();
-        let instance_state = NodeState::mock().with_genesis_version(DRB_AND_HEADER_UPGRADE_VERSION);
-        let genesis_leaf = LeafQueryData::<SeqTypes>::genesis(
-            &validated_state,
-            &instance_state,
-            versions::Upgrade::trivial(DRB_AND_HEADER_UPGRADE_VERSION),
-        )
-        .await;
-
-        let mut reward_tree = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
-        let account1 = RewardAccountV2::from_str("0x0000000000000000000000000000000000000001")?;
-
-        let mut tx = db.write().await?;
-
-        let header_json = serde_json::to_value(genesis_leaf.header())?;
-
-        for height in [5i64, 10, 15, 20] {
-            query(
-                "INSERT INTO header (height, hash, payload_hash, timestamp, data)
-                     VALUES ($1, $2, $3, $4, $5)",
-            )
-            .bind(height)
-            .bind(format!("hash_{height}"))
-            .bind("payload_hash")
-            .bind(0i64)
-            .bind(&header_json)
-            .execute(tx.as_mut())
-            .await?;
-        }
-
-        // Insert merkle data at height 5
-        reward_tree.update(account1, RewardAmount::from(1000u64))?;
-        let (_, proof) = reward_tree.lookup(account1).expect_ok().unwrap();
-        let traversal_path =
-            <RewardAccountV2 as ToTraversalPath<{ RewardMerkleTreeV2::ARITY }>>::to_traversal_path(
-                &account1,
-                reward_tree.height(),
-            );
-        UpdateStateData::<
-            SeqTypes,
-            RewardMerkleTreeV2,
-            { RewardMerkleTreeV2::ARITY },
-        >::insert_merkle_nodes(&mut tx, proof, traversal_path, 5)
-        .await?;
-
-        // Set the merklized state height to 10
-        // less than max block height of 20
-        UpdateStateData::<
-            SeqTypes,
-            RewardMerkleTreeV2,
-            { RewardMerkleTreeV2::ARITY },
-        >::set_last_state_height(&mut tx, 10)
-        .await?;
-
-        tx.commit().await?;
-
-        // Query at height 5 should succeed
-        let result = db.get_all_reward_accounts(5, 0, 100).await;
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap().len(), 1);
-
-        // Query at height 10 should succeed
-        let result = db.get_all_reward_accounts(10, 0, 100).await;
-        assert!(result.is_ok());
-
-        // Query at height 15 should fail
-        // state not yet processed
-        let result = db.get_all_reward_accounts(15, 0, 100).await;
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("not yet available"));
 
         Ok(())
     }
