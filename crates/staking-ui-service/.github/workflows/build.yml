@@ -69,28 +69,28 @@ jobs:
           flavor: latest=true
 
       - name: Create and push staking-ui-service branch tag
-        uses: Noelware/docker-manifest-action@master
+        uses: Noelware/docker-manifest-action@1.0.0
         with:
             tags: ghcr.io/espressosystems/staking-ui-service:${{ steps.meta.outputs.version }}
             inputs: ghcr.io/espressosystems/staking-ui-service@${{ needs.build-amd.outputs.service-digest }},ghcr.io/espressosystems/staking-ui-service@${{needs.build-arm.outputs.service-digest}}
             push: ${{ github.event_name != 'pull_request' }}
 
       - name: Create and push staking-ui-service latest tag
-        uses: Noelware/docker-manifest-action@master
+        uses: Noelware/docker-manifest-action@1.0.0
         with:
             tags: ghcr.io/espressosystems/staking-ui-service:latest
             inputs: ghcr.io/espressosystems/staking-ui-service@${{ needs.build-amd.outputs.service-digest }},ghcr.io/espressosystems/staking-ui-service@${{ needs.build-arm.outputs.service-digest }}
             push: ${{ github.event_name != 'pull_request' }}
 
       - name: Create and push client-swarm branch tag
-        uses: Noelware/docker-manifest-action@master
+        uses: Noelware/docker-manifest-action@1.0.0
         with:
             tags: ghcr.io/espressosystems/staking-client-swarm:${{ steps.meta.outputs.version }}
             inputs: ghcr.io/espressosystems/staking-client-swarm@${{ needs.build-amd.outputs.client-swarm-digest }},ghcr.io/espressosystems/staking-client-swarm@${{needs.build-arm.outputs.client-swarm-digest}}
             push: ${{ github.event_name != 'pull_request' }}
 
       - name: Create and push client-swarm latest tag
-        uses: Noelware/docker-manifest-action@master
+        uses: Noelware/docker-manifest-action@1.0.0
         with:
             tags: ghcr.io/espressosystems/staking-client-swarm:latest
             inputs: ghcr.io/espressosystems/staking-client-swarm@${{ needs.build-amd.outputs.client-swarm-digest }},ghcr.io/espressosystems/staking-client-swarm@${{ needs.build-arm.outputs.client-swarm-digest }}
