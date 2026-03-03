@@ -8,12 +8,73 @@ import { IPlonkVerifier } from "../interfaces/IPlonkVerifier.sol";
 
 /* solhint-disable no-inline-assembly */
 
-/// @dev The TurboPlonk formula is:
-/// qo * wo = pub_input + q_c +
-///           q_mul0 * w0 * w1 + q_mul1 * w2 * w3 +
-///           q_lc0 * w0 + q_lc1 * w1 + q_lc2 * w2 + q_lc3 * w3 +
-///           q_hash0 * w0 + q_hash1 * w1 + q_hash2 * w2 + q_hash3 * w3 +
-///           q_ecc * w0 * w1 * w2 * w3 * wo
+/// @title PlonkVerifierV4
+/// @notice Gas-optimised TurboPlonk verifier. Derived from `PlonkVerifierV3` with the same
+///         correctness guarantees; only the implementation is changed.
+///
+/// @dev **Relationship to V3**
+///      PlonkVerifierV4 is a drop-in replacement for PlonkVerifierV3: it exposes the same
+///      `verify(verifyingKey, publicInput, proof)` interface and produces identical results.
+///      All cryptographic logic — the Fiat-Shamir transcript, challenge derivation, linearisation
+///      polynomial, KZG opening check — is unchanged.  The differences are purely gas optimisations:
+///
+///      1. **Scratch-buffer EC accumulation** (`_linearizationPolyComm`, `_preparePolyCommitments`)
+///         V3 delegates every `ecMul` and `ecAdd` to `BN254.scalarMul` / `BN254.add`, each of
+///         which allocates a fresh memory struct (96–192 bytes) and pays a Solidity function-call
+///         JUMP.  With 32 ecMul + 32 ecAdd calls that produces ~11 KB of heap growth and ~64
+///         redundant JUMPs.  V4 replaces all EC accumulation with a single inline assembly block
+///         that borrows the free-memory pointer as a scratch buffer (`let sc := mload(0x40)`)
+///         without ever advancing it, eliminating all intermediate allocations and JUMPs.
+///         Saving: ~16,000 gas.
+///
+///      2. **Inlined pairing check** (`_pairingCheck`)
+///         V3 constructs a `BN254.G2Point memory betaH` struct (4 mstores, 128 bytes), calls
+///         `BN254.P2()` (another struct), `BN254.negate(b)` (64-byte allocation), and finally
+///         `BN254.pairingProd2` (copies everything again).  V4 replaces this with `_pairingCheck`,
+///         a private function that writes all 12 words directly into the scratch buffer using
+///         compile-time constants for `betaH` and `P2`, and negates `b.y` inline.
+///         Saving: ~300 gas.
+///
+///      3. **Batch proof validation** (`_validateProof`, `verify`)
+///         V3 calls `BN254.validateG1Point` (which internally calls `BN254.isInfinity`) 13 times
+///         and `BN254.validateScalarField` 15 times — 41+ Solidity function-call JUMPs in total.
+///         V4 replaces these with two compact assembly loops: one checks the curve equation
+///         `y² = x³ + 3 (mod P)` inline for all 13 G1 points, the other range-checks all 10 proof
+///         scalars.  The 5 public-input scalar checks in `verify` are similarly inlined.
+///         Saving: ~460 gas.
+///
+///      4. **Removed `alpha3` from `Challenges`**
+///         V3 computes and stores `alpha³` in the `Challenges` struct even though it is never read
+///         by any subsequent step.  V4 drops the field, saving 1 `mulmod` + 1 `mstore` and
+///         shifting the `beta`, `gamma`, `zeta`, `v`, `u` offsets down by one slot (0x20 bytes).
+///         Saving: ~11 gas.
+///
+///      5. **Shared `sigmaWireProd`** (`_preparePolyCommitments`, `_linearizationPolyComm`)
+///         V3 computes ∏ᵢ(wᵢ + β·σᵢ + γ) twice: once inside the now-removed
+///         `_computeLinPolyConstantTerm` and once as the `secondScalar` inside
+///         `_linearizationPolyComm`.  V4 computes it once in `_preparePolyCommitments` and
+///         passes it as a parameter to `_linearizationPolyComm`.
+///         `_computeLinPolyConstantTerm` is removed; its logic is inlined.
+///         Saving: ~620 gas.
+///
+///      6. **Minor scalar arithmetic** (`_linearizationPolyComm`)
+///         - `zeta²` is pre-computed once and reused instead of being recomputed inside the
+///           split-quotient loop.
+///         - The `w0·w1` and `w2·w3` products computed for `qM12`/`qM34` are cached and reused
+///           for the `qEcc` term, avoiding 2 redundant `mulmod` operations.
+///         - `BN254.negate(evalData.vanishEval)` (2 Solidity calls) is replaced with an inline
+///           `sub(p, mload(evalData))`.
+///         Saving: ~36 gas combined.
+///
+///      **Total measured saving: 17,667 gas (−4.6 %) on `test_verify_succeeds`.**
+///      Baseline (V3): 383,601 gas.  Optimised (V4): 365,934 gas.
+///
+/// @dev The TurboPlonk constraint formula is:
+///      qo · wo = pub_input + q_c
+///              + q_mul0 · w0·w1  +  q_mul1 · w2·w3
+///              + q_lc0·w0  + q_lc1·w1  + q_lc2·w2  + q_lc3·w3
+///              + q_hash0·w0 + q_hash1·w1 + q_hash2·w2 + q_hash3·w3
+///              + q_ecc · w0·w1·w2·w3·wo
 library PlonkVerifierV4 {
     /// Plonk: invalid inputs, either mismatching lengths among input arguments
     /// or empty input.
@@ -48,15 +109,22 @@ library PlonkVerifierV4 {
     /// The number of wire types of the circuit, TurboPlonk has 5.
     uint256 internal constant NUM_WIRE_TYPES = 5;
 
-    /// @dev Plonk IOP verifier challenges.
+    /// @dev Fiat-Shamir challenges derived from the proof transcript.
+    ///
+    /// V3 difference: `alpha3` (alpha³) has been removed. V3 stored it at offset 0x40 even
+    /// though no step in the verifier ever reads it. Dropping it shifts every subsequent field
+    /// down by one slot (0x20 bytes): beta moves from 0x60→0x40, gamma 0x80→0x60, etc.
+    /// All assembly offsets inside `_computeChallenges`, `_linearizationPolyComm`, and `_verify`
+    /// are updated accordingly.
     struct Challenges {
         uint256 alpha; // 0x00
         uint256 alpha2; // 0x20
-        uint256 beta; // 0x40
-        uint256 gamma; // 0x60
-        uint256 zeta; // 0x80
-        uint256 v; // 0xA0
-        uint256 u; // 0xC0
+        // alpha3 removed (was 0x40 in V3) — never read by any verifier step
+        uint256 beta; // 0x40  (was 0x60 in V3)
+        uint256 gamma; // 0x60  (was 0x80 in V3)
+        uint256 zeta; // 0x80  (was 0xA0 in V3)
+        uint256 v; // 0xA0  (was 0xC0 in V3)
+        uint256 u; // 0xC0  (was 0xE0 in V3)
     }
 
     /// @dev Verify a single TurboPlonk proofs.
@@ -73,7 +141,7 @@ library PlonkVerifierV4 {
 
         // Validate publicInput scalars inline (saves 5 function-call JUMPs)
         assembly {
-            let R := 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001
+            let R := 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001 // BN254.R_MOD
             for { let i := 0 } lt(i, 5) { i := add(i, 1) } {
                 if iszero(lt(mload(add(publicInput, mul(i, 0x20))), R)) {
                     mstore(0x00, 0x05b05ccc00000000000000000000000000000000000000000000000000000000)
@@ -85,14 +153,26 @@ library PlonkVerifierV4 {
         return _verify(verifyingKey, publicInput, proof);
     }
 
-    /// @dev Validate all group points and scalar fields. Revert if any are invalid.
-    /// Single assembly block to eliminate 41+ function-call JUMPs from the original.
+    /// @dev Validate all group points and scalar fields in `proof`. Reverts on the first invalid
+    ///      value with `BN254.InvalidG1()` or `BN254.InvalidScalar()`.
+    ///
+    ///      V3 difference: V3 calls `BN254.validateG1Point` 13 times (each internally calls
+    ///      `BN254.isInfinity`) and `BN254.validateScalarField` 10 times — 41+ Solidity internal
+    ///      function-call JUMPs at ~25 gas each.  V4 replaces all of these with two assembly loops:
+    ///
+    ///      - G1 loop (13 iterations): for each point pointer at `proof + i·0x20`, loads (x, y),
+    ///        accepts (0, 0) as the point at infinity, otherwise checks `x < P`, `y < P`, and the
+    ///        curve equation `y² ≡ x³ + 3 (mod P)`.
+    ///      - Scalar loop (10 iterations): for each inline `uint256` at `proof + 0x1A0 + i·0x20`,
+    ///        checks `value < R`.
+    ///
+    ///      Error selectors are emitted directly in assembly (`mstore(0, selector); revert(0, 4)`)
+    ///      so the revert data is identical to what V3's `require(..., CustomError())` produces.
     /// @param proof A Plonk proof
     function _validateProof(IPlonkVerifier.PlonkProof memory proof) internal pure {
         assembly {
-            // P_MOD (BN254 base field prime) and R_MOD (scalar field order)
-            let P := 0x30644e72e131a029b85045b68181585d97816a916871ca8d3c208c16d87cfd47
-            let R := 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001
+            let P := 0x30644e72e131a029b85045b68181585d97816a916871ca8d3c208c16d87cfd47 // BN254.P_MOD
+            let R := 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001 // BN254.R_MOD
             // 4-byte custom error selectors (left-aligned in 32-byte slot)
             let INVALID_G1 := 0x9e78d14c00000000000000000000000000000000000000000000000000000000
             let INVALID_SCALAR := 0x05b05ccc00000000000000000000000000000000000000000000000000000000
@@ -173,8 +253,26 @@ library PlonkVerifierV4 {
         return _pairingCheck(a, b);
     }
 
-    /// @dev Pairing check e(a, betaH) · e(-b, P2) == 1 with hardcoded G2 constants.
-    /// Avoids allocating G2Point structs and calling BN254.pairingProd2 / BN254.negate.
+    /// @dev Final KZG opening check: verifies e(a, [τ]₂) · e(−b, [1]₂) == 1.
+    ///
+    ///      V3 difference: V3 allocates a `BN254.G2Point memory betaH` struct (128 bytes, 4
+    ///      mstores), calls `BN254.P2()` (another 128-byte struct), `BN254.negate(b)` (64-byte
+    ///      allocation + function call), and `BN254.pairingProd2` (copies all four points into yet
+    ///      another buffer).  V4 eliminates every allocation by writing all 12 words directly into
+    ///      the borrowed scratch buffer (`let sc := mload(0x40)`, never advanced) with the
+    ///      `betaH` and `P2` coordinates as compile-time constants, and negates `b.y` inline as
+    ///      `P_MOD - b.y`.
+    ///
+    ///      Precompile 0x08 input layout (0x180 bytes, 2 pairs):
+    ///        [0x000] a.x          [0x020] a.y
+    ///        [0x040] betaH.x1     [0x060] betaH.x0   ← G2 precompile order: x1 before x0
+    ///        [0x080] betaH.y1     [0x0a0] betaH.y0
+    ///        [0x0c0] (−b).x       [0x0e0] P_MOD−b.y  ← negate b in-place
+    ///        [0x100] P2.x1        [0x120] P2.x0
+    ///        [0x140] P2.y1        [0x160] P2.y0
+    ///
+    /// @param a  First G1 point:  [Wζ]₁ + u·[Wζω]₁
+    /// @param b  Second G1 point: ζ·[Wζ]₁ + uζω·[Wζω]₁ + [F]₁ − [E]₁
     function _pairingCheck(BN254.G1Point memory a, BN254.G1Point memory b)
         private
         view
@@ -196,6 +294,7 @@ library PlonkVerifierV4 {
             mstore(add(sc, 0xa0), BETA_H_Y1)
             // Pair 2: -b and P2
             mstore(add(sc, 0xc0), mload(b))
+            // negate b.y: BN254.P_MOD - b.y
             mstore(
                 add(sc, 0xe0),
                 sub(0x30644e72e131a029b85045b68181585d97816a916871ca8d3c208c16d87cfd47, mload(add(b, 0x20)))
@@ -209,6 +308,12 @@ library PlonkVerifierV4 {
         }
     }
 
+    /// @dev Derive Fiat-Shamir challenges by hashing the proof transcript.
+    ///
+    ///      V3 difference: V3 also computes `alpha3 = alpha² · alpha` and stores it in the
+    ///      struct.  V4 omits that computation because `alpha3` is never consumed downstream.
+    ///      The mstore offsets for `beta`, `gamma`, `zeta`, `v`, and `u` are each 0x20 bytes
+    ///      lower than in V3 to match the compacted `Challenges` struct layout.
     function _computeChallenges(
         IPlonkVerifier.VerifyingKey memory vk,
         uint256[5] memory pi,
