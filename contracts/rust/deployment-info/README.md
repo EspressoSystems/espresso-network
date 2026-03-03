@@ -56,7 +56,7 @@ For timelocks:
 |----------|---------|---------|-------|--------|
 | StakeTable | [`0xCeF474D372B5b09dEfe2aF187bf17338Dc704451`](https://etherscan.io/address/0xCeF474D372B5b09dEfe2aF187bf17338Dc704451) | 2.0.0 | ops_timelock | serviceco |
 | EspToken | [`0x031De51F3E8016514Bd0963d0B2AB825A591Db9A`](https://etherscan.io/address/0x031De51F3E8016514Bd0963d0B2AB825A591Db9A) | 2.0.0 | safe_exit_timelock | - |
-| LightClient | [`0x95Ca91Cea73239b15E5D2e5A74d02d6b5E0ae458`](https://etherscan.io/address/0x95Ca91Cea73239b15E5D2e5A74d02d6b5E0ae458) | 1.0.0 | espresso_labs | - |
+| LightClient | [`0x95Ca91Cea73239b15E5D2e5A74d02d6b5E0ae458`](https://etherscan.io/address/0x95Ca91Cea73239b15E5D2e5A74d02d6b5E0ae458) | 3.0.0 | espresso_labs | - |
 | FeeContract | [`0x9fcE21c3F7600Aa63392A5F5713986b39bB98884`](https://etherscan.io/address/0x9fcE21c3F7600Aa63392A5F5713986b39bB98884) | 1.0.0 | espresso_labs | - |
 | RewardClaim | [`0x67c966a0ecdd5c33608bE7810414e5b54DA878D8`](https://etherscan.io/address/0x67c966a0ecdd5c33608bE7810414e5b54DA878D8) | 1.0.0 | safe_exit_timelock | serviceco |
 
