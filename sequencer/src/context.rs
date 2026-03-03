@@ -508,7 +508,7 @@ async fn handle_events<N, P, V>(
                     .unwrap_or(0) / (1024 * 1024);
                 tracing::warn!(
                     node_id,
-                    view = event.view_number.u64(),
+                    view = *event.view_number,
                     rss_mb = vm_rss,
                     vm_size_mb = vm_size,
                     cgroup_mb,
