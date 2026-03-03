@@ -454,7 +454,7 @@ impl<TYPES: NodeType> VoteParticipation<TYPES> {
     fn update_participation(&mut self, qc: QuorumCertificate2<TYPES>) -> Result<()> {
         ensure!(
             qc.epoch() == self.epoch,
-            warn!(
+            info!(
                 "Incorrect epoch while updating vote participation, current epoch: {:?}, QC epoch \
                  {:?}",
                 self.epoch,
