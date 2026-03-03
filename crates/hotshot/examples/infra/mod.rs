@@ -912,7 +912,7 @@ pub async fn main_entry_point<
     let orchestrator_client: OrchestratorClient = OrchestratorClient::new(args.url.clone());
 
     // We assume one node will not call this twice to generate two validator_config-s with same identity.
-    let validator_config = NetworkConfig::<TYPES>::generate_init_validator_config(
+    let validator_config = NetworkConfig::<TYPES>::generate_init_test_validator_config(
         orchestrator_client
             .get_node_index_for_init_validator_config()
             .await,

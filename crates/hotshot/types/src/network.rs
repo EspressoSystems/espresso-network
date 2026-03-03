@@ -170,7 +170,7 @@ pub enum NetworkConfigSource {
 
 impl<TYPES: NodeType> NetworkConfig<TYPES> {
     /// Get a temporary node index for generating a validator config
-    pub fn generate_init_validator_config(
+    pub fn generate_init_test_validator_config(
         cur_node_index: u16,
         is_da: bool,
     ) -> ValidatorConfig<TYPES> {

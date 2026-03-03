@@ -62,6 +62,8 @@ impl<K: SignatureKey + 'static> Cliquenet<K> {
             .map(|(k, x, a)| (k, (x, a.into())))
             .collect();
 
+        let others: HashSet<K> = HashSet::from_iter(others);
+
         let cfg = NetConf::builder()
             .name(name)
             .label(key)
@@ -75,12 +77,14 @@ impl<K: SignatureKey + 'static> Cliquenet<K> {
             .await
             .map_err(|e| NetworkError::ListenError(format!("cliquenet creation failed: {e}")))?;
 
+        info!(peers = %parties.len(), non_peers = %others.len(), "cliquenet created");
+
         Ok(Self {
             net,
             inner: Arc::new(Mutex::new(Inner {
                 epoch: EpochNumber::genesis(),
                 peers: parties,
-                non_peers: HashSet::from_iter(others),
+                non_peers: others,
             })),
         })
     }
@@ -95,13 +99,6 @@ impl<K: SignatureKey + 'static> Cliquenet<K> {
         self.inner.lock().await.non_peers.clone()
     }
 
-    /// Handle an epoch change.
-    ///
-    /// We are at epoch e0 and if this method is applied to an epoch e1 (> e0),
-    /// we perform the following steps:
-    ///
-    /// - Add new peers from epoch e2 (= e1 + 1).
-    /// - Remove peers which are in e0 but not e1.
     async fn on_epoch_change<U>(&self, epoch: EpochNumber, coord: &EpochMembershipCoordinator<U>)
     where
         U: NodeType<SignatureKey = K>,
@@ -109,68 +106,59 @@ impl<K: SignatureKey + 'static> Cliquenet<K> {
         let mut inner = self.inner.lock().await;
 
         if epoch <= inner.epoch {
+            info!(%epoch, ours = %inner.epoch, "epoch <= ours");
             return;
         }
+
+        let epoch = <<U as NodeType>::Epoch as ConsensusTime>::new(u64::from(epoch));
 
         let mut non_peers = HashSet::new();
         let mut to_add = Vec::new();
         let mut to_del = Vec::new();
 
-        let epoch_1 = <<U as NodeType>::Epoch as ConsensusTime>::new(u64::from(epoch));
-        let epoch_2 = <<U as NodeType>::Epoch as ConsensusTime>::new(u64::from(epoch) + 1);
+        let Ok(membership) = coord.stake_table_for_epoch(Some(epoch)).await else {
+            error!(%epoch, ours = %inner.epoch, "no stake table available");
+            return;
+        };
 
-        // Collect peers from the epoch + 2 to add to the network:
+        let stake_tbl: HashMap<_, _> = HashMap::from_iter(
+            membership
+                .stake_table()
+                .await
+                .0
+                .into_iter()
+                .map(|m| (m.stake_table_entry.public_key(), (m.x25519_key, m.p2p_addr))),
+        );
 
-        if let Ok(membership) = coord.stake_table_for_epoch(Some(epoch_2)).await {
-            let stake_tbl: HashMap<_, _> = HashMap::from_iter(
-                membership
-                    .stake_table()
-                    .await
-                    .0
-                    .into_iter()
-                    .map(|m| (m.stake_table_entry.public_key(), (m.x25519_key, m.p2p_addr))),
-            );
-            for (k, v) in stake_tbl {
-                let (Some(x25519), Some(addr)) = v else {
-                    info!(%epoch, peer = %k, "ignoring peer without x25519 key or p2p address");
-                    non_peers.insert(k);
+        // Collect peers to add or update, i.e. stake table members which are
+        // not already network peers.
+        for (k, v) in stake_tbl.iter() {
+            info!(%epoch, peer = %k, "checking stake table member");
+            let (Some(x25519), Some(addr)) = v else {
+                info!(%epoch, peer  = %k, "ignoring peer without x25519 key or p2p address");
+                non_peers.insert(k.clone());
+                continue;
+            };
+            if let Some((x, a)) = inner.peers.get(k) {
+                if x == x25519 && a == addr {
+                    debug!(%epoch, peer = %k, "peer unchanged");
                     continue;
-                };
-                if let Some((x, a)) = inner.peers.get(&k) {
-                    if *x == x25519 && *a == addr {
-                        debug!(%epoch, peer = %k, "peer unchanged");
-                        continue;
-                    }
-                }
-                debug!(%epoch, peer = %k, "adding network peer");
-                to_add.push((k, x25519, addr))
-            }
-        } else {
-            error!(epoch = %epoch_2, "no stake table available");
-            return;
-        }
-
-        // Collect current peers which are not in the new epoch to delete from the network:
-
-        if let Ok(membership) = coord.stake_table_for_epoch(Some(epoch_1)).await {
-            let stake_tbl: HashSet<_> = HashSet::from_iter(
-                membership
-                    .stake_table()
-                    .await
-                    .0
-                    .into_iter()
-                    .map(|m| m.stake_table_entry.public_key()),
-            );
-            for p in inner.peers.keys() {
-                if !stake_tbl.contains(p) {
-                    debug!(%epoch, peer = %p, "removing network peer");
-                    to_del.push(p.clone())
                 }
             }
-        } else {
-            error!(%epoch, "no stake table available");
-            return;
+            info!(%epoch, peer = %k, "adding network peer");
+            to_add.push((k.clone(), *x25519, addr.clone()))
         }
+
+        // Collect peers to remove from the network, i.e. peers which are no
+        // longer stake table members.
+        for p in inner.peers.keys() {
+            if !stake_tbl.contains_key(p) {
+                info!(%epoch, peer = %p, "removing network peer");
+                to_del.push(p.clone())
+            }
+        }
+
+        // Perform the updates:
 
         for k in &to_del {
             inner.peers.remove(k);
@@ -181,14 +169,14 @@ impl<K: SignatureKey + 'static> Cliquenet<K> {
         }
 
         if let Err(err) = self.net.add(Role::Active, to_add).await {
-            let err: NetworkDown = err;
-            error!(%epoch, %err, "could not add peers to network");
+            let _: NetworkDown = err;
+            error!(%epoch, "network down; could not add peers to network");
             return;
         }
 
         if let Err(err) = self.net.remove(to_del).await {
-            let err: NetworkDown = err;
-            error!(%epoch, %err, "could not remove peers from network");
+            let _: NetworkDown = err;
+            error!(%epoch, "network down; could not remove peers from network");
             return;
         }
 
@@ -197,7 +185,9 @@ impl<K: SignatureKey + 'static> Cliquenet<K> {
             HashSet::<K>::from_iter(inner.peers.keys().cloned())
         }
 
-        inner.epoch = epoch;
+        info!(%epoch, peers = %inner.peers.len(), non_peers = %non_peers.len());
+
+        inner.epoch = EpochNumber::from(*epoch);
         inner.non_peers = non_peers;
     }
 }
