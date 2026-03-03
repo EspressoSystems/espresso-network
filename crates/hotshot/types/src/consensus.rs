@@ -1255,6 +1255,20 @@ impl<TYPES: NodeType> Consensus<TYPES> {
                 "Something about GC has failed. Older leaf exists than the previous anchor leaf."
             );
         }
+        // Log sizes before GC
+        let vid_shares_entries: usize = self.vid_shares.values().map(|m| m.values().map(|b| b.len()).sum::<usize>()).sum();
+        tracing::warn!(
+            "consensus GC before: gc_view={gc_view} old_anchor={old_anchor_view} new_anchor={new_anchor_view} \
+             validated_state_map={} saved_payloads={} vid_shares_views={} vid_shares_entries={vid_shares_entries} \
+             saved_da_certs={} last_proposals={} saved_leaves={}",
+            self.validated_state_map.len(),
+            self.saved_payloads.len(),
+            self.vid_shares.len(),
+            self.saved_da_certs.len(),
+            self.last_proposals.len(),
+            self.saved_leaves.len(),
+        );
+
         // perform gc
         self.saved_da_certs
             .retain(|view_number, _| *view_number >= old_anchor_view);
@@ -1268,6 +1282,19 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         self.saved_payloads = self.saved_payloads.split_off(&gc_view);
         self.vid_shares = self.vid_shares.split_off(&gc_view);
         self.last_proposals = self.last_proposals.split_off(&gc_view);
+
+        // Log sizes after GC
+        let vid_shares_entries_after: usize = self.vid_shares.values().map(|m| m.values().map(|b| b.len()).sum::<usize>()).sum();
+        tracing::warn!(
+            "consensus GC after: validated_state_map={} saved_payloads={} vid_shares_views={} vid_shares_entries={vid_shares_entries_after} \
+             saved_da_certs={} last_proposals={} saved_leaves={}",
+            self.validated_state_map.len(),
+            self.saved_payloads.len(),
+            self.vid_shares.len(),
+            self.saved_da_certs.len(),
+            self.last_proposals.len(),
+            self.saved_leaves.len(),
+        );
     }
 
     /// Gets the last decided leaf.

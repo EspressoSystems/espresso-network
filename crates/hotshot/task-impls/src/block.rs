@@ -150,6 +150,7 @@ impl<TYPES: NodeType> Mempool<TYPES> {
             removed,
             mempool_len = self.transactions.len(),
             mempool_mb = self.total_bytes / (1024 * 1024),
+            recently_proposed = self.recently_proposed_blocks.len(),
             "Mempool processed block, elapsed={elapsed:?}",
         );
     }

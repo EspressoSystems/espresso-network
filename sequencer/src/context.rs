@@ -489,6 +489,34 @@ async fn handle_events<N, P, V>(
         let event_name = event_type_name(&event);
         tracing::debug!(node_id, ?event, "consensus event");
 
+        // Log process memory on every Decide event
+        if matches!(&event.event, EventType::Decide { .. }) {
+            if let Ok(contents) = std::fs::read_to_string("/proc/self/status") {
+                let vm_rss = contents.lines()
+                    .find(|l| l.starts_with("VmRSS:"))
+                    .and_then(|l| l.split_whitespace().nth(1))
+                    .and_then(|v| v.parse::<u64>().ok())
+                    .unwrap_or(0) / 1024; // Convert kB to MB
+                let vm_size = contents.lines()
+                    .find(|l| l.starts_with("VmSize:"))
+                    .and_then(|l| l.split_whitespace().nth(1))
+                    .and_then(|v| v.parse::<u64>().ok())
+                    .unwrap_or(0) / 1024;
+                let cgroup_mb = std::fs::read_to_string("/sys/fs/cgroup/memory.current")
+                    .ok()
+                    .and_then(|s| s.trim().parse::<u64>().ok())
+                    .unwrap_or(0) / (1024 * 1024);
+                tracing::warn!(
+                    node_id,
+                    view = event.view_number.u64(),
+                    rss_mb = vm_rss,
+                    vm_size_mb = vm_size,
+                    cgroup_mb,
+                    "process memory on decide"
+                );
+            }
+        }
+
         let t_start = Instant::now();
 
         // Store latest consensus state.

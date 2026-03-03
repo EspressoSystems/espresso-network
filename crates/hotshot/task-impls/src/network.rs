@@ -965,6 +965,7 @@ impl<
 
     /// Cancel all tasks for previous views
     pub fn cancel_tasks(&mut self, view: TYPES::View) {
+        let before = self.transmit_tasks.len();
         let keep = self.transmit_tasks.split_off(&view);
 
         while let Some((_, tasks)) = self.transmit_tasks.pop_first() {
@@ -974,6 +975,14 @@ impl<
         }
 
         self.transmit_tasks = keep;
+        if before > 10 {
+            tracing::warn!(
+                id = self.id,
+                before,
+                after = self.transmit_tasks.len(),
+                "network transmit_tasks cleanup"
+            );
+        }
     }
 
     /// Parses a `HotShotEvent` and returns a tuple of: (sender's public key, `MessageKind`, `TransmitType`)

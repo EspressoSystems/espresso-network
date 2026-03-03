@@ -129,6 +129,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
 {
     /// Cancel all tasks the consensus tasks has spawned before the given view
     pub fn cancel_tasks(&mut self, view: TYPES::View) {
+        let before = self.spawned_tasks.len();
         let keep = self.spawned_tasks.split_off(&view);
         while let Some((_, tasks)) = self.spawned_tasks.pop_first() {
             for task in tasks {
@@ -136,6 +137,14 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
             }
         }
         self.spawned_tasks = keep;
+        if before > 10 {
+            tracing::warn!(
+                id = self.id,
+                before,
+                after = self.spawned_tasks.len(),
+                "quorum_proposal_recv spawned_tasks cleanup"
+            );
+        }
     }
 
     /// Handles all consensus events relating to propose and vote-enabling events.

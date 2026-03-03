@@ -211,6 +211,13 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TaskState for NetworkRequest
                     });
                 self.spawned_tasks
                     .retain(|view, handles| view >= &self.view || !handles.is_empty());
+                if self.spawned_tasks.len() > 10 {
+                    tracing::warn!(
+                        id = self.id,
+                        spawned_tasks = self.spawned_tasks.len(),
+                        "request spawned_tasks size"
+                    );
+                }
                 Ok(())
             },
             _ => Ok(()),

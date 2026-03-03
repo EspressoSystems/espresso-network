@@ -158,8 +158,16 @@ where
 
     async fn request(&self, req: Request) {
         self.sender.send(req).await.ok();
-        self.metrics.queue_len.set(self.sender.len());
+        let queue_len = self.sender.len();
+        self.metrics.queue_len.set(queue_len);
         self.metrics.last_seen.set(req.0.u64() as usize);
+        if queue_len > 10 {
+            tracing::warn!(
+                queue_len,
+                view = req.0.u64(),
+                "proposal_fetcher queue backlog"
+            );
+        }
     }
 
     async fn fetch_request(&self, (view, leaf): Request) {
