@@ -2611,3 +2611,46 @@ async fn test_cli_preview_metadata_invalid_both_formats_shows_url() -> Result<()
 
     Ok(())
 }
+
+#[test_log::test]
+fn test_cli_conflicting_signers() {
+    base_cmd()
+        .arg("--stake-table-address")
+        .arg("0x1111111111111111111111111111111111111111")
+        .arg("--mnemonic")
+        .arg("test test test test test test test test test test test junk")
+        .arg("--private-key")
+        .arg("0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80")
+        .arg("account")
+        .assert()
+        .failure()
+        .stderr(str::contains("cannot be used with"));
+}
+
+#[test_log::test]
+fn test_cli_config_file_conflicting_signers() {
+    let tmpdir = tempfile::tempdir().unwrap();
+    let config_path = tmpdir.path().join("config.toml");
+    let config_content = format!(
+        r#"
+rpc_url = "http://localhost:8545"
+stake_table_address = "0x1111111111111111111111111111111111111111"
+
+[signer]
+mnemonic = "{}"
+private_key = "{}"
+ledger = false
+"#,
+        staking_cli::DEV_MNEMONIC,
+        staking_cli::DEV_PRIVATE_KEY,
+    );
+    std::fs::write(&config_path, config_content).unwrap();
+
+    base_cmd()
+        .arg("-c")
+        .arg(&config_path)
+        .arg("account")
+        .assert()
+        .failure()
+        .stderr(str::contains("Multiple signers"));
+}

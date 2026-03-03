@@ -41,7 +41,7 @@ use crate::{
     },
     signature::{NodeSignatureDestination, NodeSignatureInput, NodeSignatures},
     transaction::Transaction,
-    Commands, Config, ValidSignerConfig,
+    Commands, Config, SignerConfigError, ValidSignerConfig,
 };
 
 #[derive(Parser)]
@@ -184,9 +184,7 @@ fn resolve_node_signatures(
         let input = NodeSignatureInput::try_from((signature_args.clone(), sender_address))?;
         NodeSignatures::try_from(input)
     } else {
-        let wallet = wallet.ok_or_else(|| {
-            anyhow::anyhow!("Either --mnemonic, --private-key, or --ledger flag must be provided")
-        })?;
+        let wallet = wallet.ok_or(SignerConfigError::NoSigner)?;
         let address = NetworkWallet::<Ethereum>::default_signer_address(wallet);
         let input = NodeSignatureInput::try_from((signature_args.clone(), Some(address)))?;
         NodeSignatures::try_from((input, wallet))
@@ -396,21 +394,20 @@ pub async fn run() -> Result<()> {
         Address::ZERO
     };
 
-    let (wallet, signer_error) = match TryInto::<ValidSignerConfig>::try_into(config.signer.clone())
-    {
-        Ok(signer_config) => match signer_config.wallet().await {
-            Ok(w) => (Some(w), None),
-            Err(e) => (None, Some(e.to_string())),
-        },
+    let wallet_result = async {
+        let signer_config = ValidSignerConfig::try_from(config.signer.clone())?;
+        signer_config.wallet().await
+    }
+    .await;
+    let (wallet, signer_error) = match wallet_result {
+        Ok(w) => (Some(w), None),
         Err(e) => (None, Some(e.to_string())),
     };
     let require_wallet = || -> anyhow::Error {
-        anyhow::anyhow!(
-            "{}",
-            signer_error
-                .as_deref()
-                .unwrap_or("failed to initialize wallet")
-        )
+        match &signer_error {
+            Some(e) => anyhow::anyhow!("{e}"),
+            None => SignerConfigError::NoSigner.into(),
+        }
     };
 
     // Commands that just read from chain
