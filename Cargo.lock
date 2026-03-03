@@ -3812,6 +3812,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "deployment-info"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "clap 4.5.53",
+ "dotenvy",
+ "espresso-contract-deployer",
+ "hotshot-state-prover",
+ "humantime",
+ "humantime-serde",
+ "serde",
+ "tempfile",
+ "test-log",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-subscriber 0.3.22",
+ "url",
+]
+
+[[package]]
 name = "der"
 version = "0.7.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6235,6 +6257,16 @@ name = "humantime"
 version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "135b12329e5e3ce057a9f972339ea52bc954fe1e9358ef27f95e89716fbc5424"
+
+[[package]]
+name = "humantime-serde"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "57a3db5ea5923d99402c94e9feb261dc5ee9b4efa158b0315f788cf549cc200c"
+dependencies = [
+ "humantime",
+ "serde",
+]
 
 [[package]]
 name = "hyper"
