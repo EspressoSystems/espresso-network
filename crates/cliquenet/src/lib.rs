@@ -12,7 +12,7 @@ mod metrics;
 
 pub mod retry;
 
-use std::sync::Arc;
+use std::{fmt, sync::Arc};
 
 pub use addr::{Address, InvalidAddress};
 use bon::Builder;
@@ -48,6 +48,15 @@ pub enum Role {
 impl Role {
     pub fn is_active(self) -> bool {
         matches!(self, Self::Active)
+    }
+}
+
+impl fmt::Display for Role {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Active => f.write_str("active"),
+            Self::Passive => f.write_str("passive"),
+        }
     }
 }
 
