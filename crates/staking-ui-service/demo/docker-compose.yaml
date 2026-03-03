@@ -19,7 +19,7 @@ services:
       start_interval: 1s
 
   espresso-dev-node:
-    image: ghcr.io/espressosystems/espresso-sequencer/espresso-dev-node:main
+    image: ghcr.io/espressosystems/espresso-sequencer/espresso-dev-node:release-mainnet-1.0.0-rc
     ports:
       - "$ESPRESSO_SEQUENCER_API_PORT:$ESPRESSO_SEQUENCER_API_PORT"
       - "$ESPRESSO_BUILDER_PORT:$ESPRESSO_BUILDER_PORT"
