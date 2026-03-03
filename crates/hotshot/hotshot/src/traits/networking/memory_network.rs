@@ -11,6 +11,7 @@
 
 use core::time::Duration;
 use std::{
+    collections::HashMap,
     fmt::Debug,
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -32,7 +33,7 @@ use hotshot_types::{
         node_implementation::NodeType,
         signature_key::SignatureKey,
     },
-    BoxSyncFuture,
+    BoxSyncFuture, PeerConnectInfo,
 };
 use tokio::{
     spawn,
@@ -186,6 +187,7 @@ impl<TYPES: NodeType> TestableNetworkingImplementation<TYPES>
         da_committee_size: usize,
         reliability_config: Option<Box<dyn NetworkReliability>>,
         _secondary_network_delay: Duration,
+        _connect_infos: &mut HashMap<TYPES::SignatureKey, PeerConnectInfo>,
     ) -> AsyncGenerator<Arc<Self>> {
         let master: Arc<_> = MasterMap::new();
         // We assign known_nodes' public key and stake value rather than read from config file since it's a test

@@ -246,8 +246,7 @@ impl MockLedger {
                         stake_amount: amount,
                     },
                     state_ver_key: schnorr_key.1.clone(),
-                    x25519_key: None,
-                    p2p_addr: None,
+                    connect_info: None,
                 },
             );
             self.key_archive.insert(bls_key, schnorr_key.0.clone());

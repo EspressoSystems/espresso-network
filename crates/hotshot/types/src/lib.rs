@@ -12,6 +12,7 @@ use std::{fmt::Debug, future::Future, num::NonZeroUsize, pin::Pin, time::Duratio
 use alloy::primitives::U256;
 use bincode::Options;
 use displaydoc::Display;
+use serde::{Deserialize, Serialize};
 use stake_table::HSStakeTable;
 use tracing::error;
 use traits::{
@@ -127,8 +128,17 @@ impl<TYPES: NodeType> ValidatorConfig<TYPES> {
         PeerConfig {
             stake_table_entry: self.public_key.stake_table_entry(self.stake_value),
             state_ver_key: self.state_public_key.clone(),
-            x25519_key: self.x25519_keypair.as_ref().map(|k| k.public_key()),
-            p2p_addr: self.p2p_addr.clone(),
+            connect_info: self
+                .x25519_keypair
+                .as_ref()
+                .map(|k| k.public_key())
+                .and_then(|p| {
+                    let a = self.p2p_addr.clone()?;
+                    Some(PeerConnectInfo {
+                        x25519_key: p,
+                        p2p_addr: a,
+                    })
+                }),
         }
     }
 
@@ -138,8 +148,16 @@ impl<TYPES: NodeType> ValidatorConfig<TYPES> {
     }
 }
 
+#[derive(Clone, Debug, Display, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct PeerConnectInfo {
+    /// Public X25519 key for network communication.
+    pub x25519_key: x25519::PublicKey,
+    /// Network address.
+    pub p2p_addr: NetAddr,
+}
+
 /// Structure of peers' config, including public key, stake value, and state key.
-#[derive(serde::Serialize, serde::Deserialize, Clone, Display, PartialEq, Eq, Hash)]
+#[derive(Clone, Display, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(bound(deserialize = ""))]
 pub struct PeerConfig<TYPES: NodeType> {
     /// The peer's public key and stake value. The key is the BLS Public Key used to
@@ -148,10 +166,7 @@ pub struct PeerConfig<TYPES: NodeType> {
     /// The peer's state public key. This is the Schnorr Public Key used to
     /// verify HotShot state in the state-prover.
     pub state_ver_key: TYPES::StateSignatureKey,
-    /// Public X25519 key for network communication.
-    pub x25519_key: Option<x25519::PublicKey>,
-    /// Network address.
-    pub p2p_addr: Option<NetAddr>,
+    pub connect_info: Option<PeerConnectInfo>,
 }
 
 impl<TYPES: NodeType> PeerConfig<TYPES> {
@@ -193,8 +208,7 @@ impl<TYPES: NodeType> Debug for PeerConfig<TYPES> {
         f.debug_struct("PeerConfig")
             .field("stake_table_entry", &self.stake_table_entry)
             .field("state_ver_key", &format_args!("{}", self.state_ver_key))
-            .field("x25519_key", &self.x25519_key)
-            .field("p2p_addr", &self.p2p_addr)
+            .field("connect_info", &self.connect_info)
             .finish()
     }
 }

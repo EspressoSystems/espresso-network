@@ -723,15 +723,13 @@ where
             .await
             .0
             .into_iter()
-            .partition(|cfg| cfg.x25519_key.is_some() && cfg.p2p_addr.is_some());
+            .partition(|cfg| cfg.connect_info.is_some());
 
         let peers = peers.into_iter().map(|cfg| {
             (
                 cfg.stake_table_entry.stake_key,
-                cfg.x25519_key
-                    .expect("LHS of partitioned peers has X25519 key"),
-                cfg.p2p_addr
-                    .expect("LHS of partitioned peers has P2P address"),
+                cfg.connect_info
+                    .expect("LHS of partitioned peers has connect info"),
             )
         });
 
@@ -1186,8 +1184,7 @@ pub mod testing {
                 .map(|(pub_key, state_key_pair)| PeerConfig::<SeqTypes> {
                     stake_table_entry: pub_key.stake_table_entry(U256::from(1)),
                     state_ver_key: state_key_pair.ver_key(),
-                    x25519_key: None,
-                    p2p_addr: None,
+                    connect_info: None,
                 })
                 .collect::<Vec<_>>();
 

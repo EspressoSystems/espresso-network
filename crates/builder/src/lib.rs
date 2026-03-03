@@ -188,8 +188,7 @@ pub mod testing {
             .map(|(pub_key, state_key_pair)| PeerConfig::<SeqTypes> {
                 stake_table_entry: pub_key.stake_table_entry(U256::from(stake_value)),
                 state_ver_key: state_key_pair.ver_key(),
-                x25519_key: None,
-                p2p_addr: None,
+                connect_info: None,
             })
             .collect::<Vec<_>>();
 

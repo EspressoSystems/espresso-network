@@ -1,13 +1,9 @@
 #[cfg(feature = "hotshot-testing")]
-use std::time::Duration;
+use std::{collections::HashMap, time::Duration};
 use std::{collections::HashSet, sync::Arc};
 
 use async_trait::async_trait;
 use futures::future::join_all;
-#[cfg(feature = "hotshot-testing")]
-use hotshot_types::traits::network::{
-    AsyncGenerator, NetworkReliability, TestableNetworkingImplementation,
-};
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
@@ -17,6 +13,11 @@ use hotshot_types::{
         signature_key::SignatureKey,
     },
     BoxSyncFuture,
+};
+#[cfg(feature = "hotshot-testing")]
+use hotshot_types::{
+    traits::network::{AsyncGenerator, NetworkReliability, TestableNetworkingImplementation},
+    PeerConnectInfo,
 };
 use parking_lot::RwLock;
 use tokio::{join, select};
@@ -203,6 +204,7 @@ where
         da_committee_size: usize,
         reliability_config: Option<Box<dyn NetworkReliability>>,
         secondary_network_delay: Duration,
+        connect_infos: &mut HashMap<T::SignatureKey, PeerConnectInfo>,
     ) -> AsyncGenerator<Arc<Self>> {
         let cliquenet =
             <Cliquenet<T::SignatureKey> as TestableNetworkingImplementation<T>>::generator(
@@ -212,6 +214,7 @@ where
                 da_committee_size,
                 reliability_config.clone(),
                 secondary_network_delay,
+                connect_infos,
             );
 
         let fallback = <A as TestableNetworkingImplementation<T>>::generator(
@@ -221,6 +224,7 @@ where
             da_committee_size,
             reliability_config.clone(),
             secondary_network_delay,
+            connect_infos,
         );
 
         Box::pin(move |i: u64| {

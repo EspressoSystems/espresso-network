@@ -34,7 +34,7 @@ use crate::{
     data::{EpochNumber, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::SequencingMessage,
-    BoxSyncFuture,
+    BoxSyncFuture, PeerConnectInfo,
 };
 
 /// Centralized server specific errors
@@ -309,6 +309,7 @@ where
         da_committee_size: usize,
         reliability_config: Option<Box<dyn NetworkReliability>>,
         secondary_network_delay: Duration,
+        connect_infos: &mut HashMap<TYPES::SignatureKey, PeerConnectInfo>,
     ) -> AsyncGenerator<Arc<Self>>;
 
     /// Get the number of messages in-flight.

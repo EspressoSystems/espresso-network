@@ -878,8 +878,7 @@ where
                 .stake_table_key
                 .stake_table_entry(U256::from(keys.stake)),
             state_ver_key: keys.state_ver_key.clone(),
-            x25519_key: keys.x25519_key,
-            p2p_addr: keys.p2p_addr.clone(),
+            connect_info: keys.connect_info.clone(),
         })
         .collect();
 
@@ -892,8 +891,7 @@ where
                 .stake_table_key
                 .stake_table_entry(U256::from(keys.stake)),
             state_ver_key: keys.state_ver_key.clone(),
-            x25519_key: keys.x25519_key,
-            p2p_addr: keys.p2p_addr.clone(),
+            connect_info: keys.connect_info.clone(),
         })
         .collect();
 

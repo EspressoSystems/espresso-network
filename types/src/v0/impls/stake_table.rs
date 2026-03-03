@@ -48,7 +48,7 @@ use hotshot_types::{
     utils::{
         epoch_from_block_number, is_epoch_root, root_block_in_epoch, transition_block_for_epoch,
     },
-    PeerConfig,
+    PeerConfig, PeerConnectInfo,
 };
 use humantime::format_duration;
 use indexmap::IndexMap;
@@ -1806,8 +1806,13 @@ impl EpochCommittees {
                             v.stake,
                         ),
                         state_ver_key: v.state_ver_key.clone(),
-                        x25519_key: v.x25519_key,
-                        p2p_addr: v.p2p_addr.clone(),
+                        connect_info: v.x25519_key.and_then(|p| {
+                            let a = v.p2p_addr.clone()?;
+                            Some(PeerConnectInfo {
+                                x25519_key: p,
+                                p2p_addr: a,
+                            })
+                        }),
                     },
                 )
             })

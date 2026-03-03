@@ -14,13 +14,12 @@ use serde_inline_default::serde_inline_default;
 use thiserror::Error;
 
 use crate::{
-    addr::NetAddr,
     constants::{
         ORCHESTRATOR_DEFAULT_NUM_ROUNDS, ORCHESTRATOR_DEFAULT_TRANSACTIONS_PER_ROUND,
         ORCHESTRATOR_DEFAULT_TRANSACTION_SIZE, REQUEST_DATA_DELAY,
     },
     hotshot_config_file::HotShotConfigFile,
-    x25519, HotShotConfig, NodeType, ValidatorConfig,
+    HotShotConfig, NodeType, PeerConnectInfo, ValidatorConfig,
 };
 
 /// Configuration describing a libp2p node
@@ -82,10 +81,7 @@ pub struct PeerConfigKeys<TYPES: NodeType> {
     pub stake: u64,
     /// whether the node is a DA node
     pub da: bool,
-    /// Public X25519 key for network communication.
-    pub x25519_key: Option<x25519::PublicKey>,
-    /// Network address.
-    pub p2p_addr: Option<NetAddr>,
+    pub connect_info: Option<PeerConnectInfo>,
 }
 
 /// Options controlling how the random builder generates blocks

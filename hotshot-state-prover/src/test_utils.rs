@@ -48,8 +48,7 @@ pub(crate) fn stake_table_for_testing(
                 stake_amount: U256::from((i + 1) as u32),
             },
             state_ver_key: schnorr_key.clone(),
-            x25519_key: None,
-            p2p_addr: None,
+            connect_info: None,
         })
         .collect::<Vec<_>>()
         .into()

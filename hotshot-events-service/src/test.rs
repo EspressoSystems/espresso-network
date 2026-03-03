@@ -102,8 +102,7 @@ mod tests {
         let peer_config = PeerConfig::<TestTypes> {
             stake_table_entry: pub_key.stake_table_entry(U256::from(1)),
             state_ver_key: state_key_pair.ver_key(),
-            x25519_key: None,
-            p2p_addr: None,
+            connect_info: None,
         };
 
         let known_nodes_with_stake = vec![peer_config];

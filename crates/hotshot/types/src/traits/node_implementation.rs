@@ -10,6 +10,7 @@
 //! describing the overall behavior of a node, as a composition of implementations of the node trait.
 
 use std::{
+    collections::HashMap,
     fmt::{Debug, Display},
     hash::Hash,
     ops::{self, Deref, Sub},
@@ -41,6 +42,7 @@ use crate::{
         election::Membership, signature_key::SignatureKey, states::InstanceState, BlockPayload,
     },
     upgrade_config::UpgradeConstants,
+    PeerConnectInfo,
 };
 
 /// Node implementation aggregate trait
@@ -95,6 +97,7 @@ pub trait TestableNodeImplementation<TYPES: NodeType>: NodeImplementation<TYPES>
         da_committee_size: usize,
         reliability_config: Option<Box<dyn NetworkReliability>>,
         secondary_network_delay: Duration,
+        connect_infos: &mut HashMap<TYPES::SignatureKey, PeerConnectInfo>,
     ) -> AsyncGenerator<Arc<Self::Network>>;
 }
 
@@ -137,6 +140,7 @@ where
         da_committee_size: usize,
         reliability_config: Option<Box<dyn NetworkReliability>>,
         secondary_network_delay: Duration,
+        connect_infos: &mut HashMap<TYPES::SignatureKey, PeerConnectInfo>,
     ) -> AsyncGenerator<Arc<Self::Network>> {
         <I::Network as TestableNetworkingImplementation<TYPES>>::generator(
             expected_node_count,
@@ -145,6 +149,7 @@ where
             da_committee_size,
             reliability_config.clone(),
             secondary_network_delay,
+            connect_infos,
         )
     }
 }

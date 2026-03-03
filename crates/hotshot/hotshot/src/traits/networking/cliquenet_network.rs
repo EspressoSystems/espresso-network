@@ -22,11 +22,11 @@ use hotshot_types::{
         node_implementation::{ConsensusTime, NodeType},
         signature_key::{SignatureKey, StakeTableEntryType},
     },
-    x25519::{Keypair, PublicKey},
-    BoxSyncFuture,
+    x25519::Keypair,
+    BoxSyncFuture, PeerConnectInfo,
 };
 use tokio::sync::Mutex;
-use tracing::{debug, error, info};
+use tracing::{error, info};
 
 #[derive(Clone)]
 pub struct Cliquenet<K> {
@@ -37,12 +37,12 @@ pub struct Cliquenet<K> {
 #[derive(Clone)]
 struct Inner<K> {
     epoch: EpochNumber,
-    peers: HashMap<K, (PublicKey, NetAddr)>,
+    peers: HashMap<K, PeerConnectInfo>,
     non_peers: HashSet<K>,
 }
 
 impl<K: SignatureKey + 'static> Cliquenet<K> {
-    pub async fn create<A, B, P, Q>(
+    pub async fn create<A, P, Q>(
         name: &'static str,
         key: K,
         keypair: Keypair,
@@ -53,15 +53,10 @@ impl<K: SignatureKey + 'static> Cliquenet<K> {
     ) -> Result<Self, NetworkError>
     where
         A: Into<NetAddr>,
-        B: Into<NetAddr>,
-        P: IntoIterator<Item = (K, PublicKey, B)>,
+        P: IntoIterator<Item = (K, PeerConnectInfo)>,
         Q: IntoIterator<Item = K>,
     {
-        let parties: HashMap<K, (PublicKey, NetAddr)> = parties
-            .into_iter()
-            .map(|(k, x, a)| (k, (x, a.into())))
-            .collect();
-
+        let parties: HashMap<K, PeerConnectInfo> = parties.into_iter().collect();
         let others: HashSet<K> = HashSet::from_iter(others);
 
         let cfg = NetConf::builder()
@@ -69,7 +64,11 @@ impl<K: SignatureKey + 'static> Cliquenet<K> {
             .label(key)
             .keypair(keypair)
             .bind(addr.into())
-            .parties(parties.iter().map(|(k, (x, a))| (k.clone(), *x, a.clone())))
+            .parties(
+                parties
+                    .iter()
+                    .map(|(k, info)| (k.clone(), info.x25519_key, info.p2p_addr.clone())),
+            )
             .metrics(metrics)
             .build();
 
@@ -106,7 +105,7 @@ impl<K: SignatureKey + 'static> Cliquenet<K> {
         let mut inner = self.inner.lock().await;
 
         if epoch <= inner.epoch {
-            info!(%epoch, ours = %inner.epoch, "epoch <= ours");
+            info!(%epoch, ours = %inner.epoch, "epoch already seen");
             return;
         }
 
@@ -127,26 +126,26 @@ impl<K: SignatureKey + 'static> Cliquenet<K> {
                 .await
                 .0
                 .into_iter()
-                .map(|m| (m.stake_table_entry.public_key(), (m.x25519_key, m.p2p_addr))),
+                .map(|m| (m.stake_table_entry.public_key(), m.connect_info)),
         );
 
         // Collect peers to add or update, i.e. stake table members which are
         // not already network peers.
         for (k, v) in stake_tbl.iter() {
             info!(%epoch, peer = %k, "checking stake table member");
-            let (Some(x25519), Some(addr)) = v else {
-                info!(%epoch, peer  = %k, "ignoring peer without x25519 key or p2p address");
+            let Some(new_info) = v else {
+                info!(%epoch, peer  = %k, "ignoring peer without connection info");
                 non_peers.insert(k.clone());
                 continue;
             };
-            if let Some((x, a)) = inner.peers.get(k) {
-                if x == x25519 && a == addr {
-                    debug!(%epoch, peer = %k, "peer unchanged");
+            if let Some(current_info) = inner.peers.get(k) {
+                if new_info == current_info {
+                    info!(%epoch, peer = %k, "peer unchanged");
                     continue;
                 }
             }
             info!(%epoch, peer = %k, "adding network peer");
-            to_add.push((k.clone(), *x25519, addr.clone()))
+            to_add.push((k.clone(), new_info.x25519_key, new_info.p2p_addr.clone()))
         }
 
         // Collect peers to remove from the network, i.e. peers which are no
@@ -165,7 +164,13 @@ impl<K: SignatureKey + 'static> Cliquenet<K> {
         }
 
         for (k, x, a) in to_add.iter().cloned() {
-            inner.peers.insert(k, (x, a));
+            inner.peers.insert(
+                k,
+                PeerConnectInfo {
+                    x25519_key: x,
+                    p2p_addr: a,
+                },
+            );
         }
 
         if let Err(err) = self.net.add(Role::Active, to_add).await {
@@ -280,6 +285,7 @@ impl<T: NodeType> TestableNetworkingImplementation<T> for Cliquenet<T::Signature
         _da_committee_size: usize,
         _reliability_config: Option<Box<dyn NetworkReliability>>,
         _secondary_network_delay: Duration,
+        connect_infos: &mut HashMap<T::SignatureKey, PeerConnectInfo>,
     ) -> AsyncGenerator<Arc<Self>> {
         let parties = {
             let p = gen_parties::<T::SignatureKey>()
@@ -287,6 +293,15 @@ impl<T: NodeType> TestableNetworkingImplementation<T> for Cliquenet<T::Signature
                 .collect::<Vec<_>>();
             Arc::new(p)
         };
+        for (s, k, a) in &*parties {
+            connect_infos.insert(
+                k.clone(),
+                PeerConnectInfo {
+                    x25519_key: s.public_key(),
+                    p2p_addr: a.clone(),
+                },
+            );
+        }
         Box::pin(move |i| {
             let parties = parties.clone();
             let future = async move {
@@ -295,9 +310,15 @@ impl<T: NodeType> TestableNetworkingImplementation<T> for Cliquenet<T::Signature
                 use hotshot_types::traits::metrics::NoMetrics;
 
                 let (s, k, a) = &parties[i as usize];
-                let it = parties
-                    .iter()
-                    .map(|(s, k, a)| (k.clone(), s.public_key(), a.clone()));
+                let it = parties.iter().map(|(s, k, a)| {
+                    (
+                        k.clone(),
+                        PeerConnectInfo {
+                            x25519_key: s.public_key(),
+                            p2p_addr: a.clone(),
+                        },
+                    )
+                });
                 let met = Box::new(NoMetrics);
                 let net =
                     Cliquenet::create("test", k.clone(), s.clone(), a.clone(), it, empty(), met)

@@ -816,8 +816,7 @@ impl TestNetwork {
             .map(|(bls, state)| PeerConfig {
                 stake_table_entry: BLSPubKey::from_private(bls).stake_table_entry(U256::from(1)),
                 state_ver_key: state.ver_key(),
-                x25519_key: None,
-                p2p_addr: None,
+                connect_info: None,
             })
             .collect();
 

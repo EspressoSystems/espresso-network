@@ -12,7 +12,7 @@ use hotshot_types::{
         network::{ConnectedNetwork, Topic},
         node_implementation::ConsensusTime,
     },
-    x25519, ValidatorConfig,
+    x25519, PeerConnectInfo, ValidatorConfig,
 };
 
 #[test_log::test(tokio::test)]
@@ -59,7 +59,13 @@ async fn make_cliquenet(
     let parties = peers.iter().map(|peer| {
         let p = peer.x25519_keypair.as_ref().unwrap().public_key();
         let a = peer.p2p_addr.clone().unwrap();
-        (peer.public_key, p, a)
+        (
+            peer.public_key,
+            PeerConnectInfo {
+                x25519_key: p,
+                p2p_addr: a,
+            },
+        )
     });
 
     let non_parties = other.iter().map(|val| val.public_key);
