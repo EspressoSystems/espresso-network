@@ -78,7 +78,7 @@ pub const DEMO_VALIDATOR_START_INDEX: u32 = 20;
 
 /// CLI to interact with the Espresso stake table contract.
 #[derive(ClapSerde, Clone, Debug, Deserialize, Serialize)]
-#[command(version, about, long_about = None)]
+#[command(version, long_version = sequencer_utils::build_info!().clap_version(), about, long_about = None)]
 pub(crate) struct Config {
     /// L1 Ethereum RPC.
     #[clap(long, env = "L1_PROVIDER")]
