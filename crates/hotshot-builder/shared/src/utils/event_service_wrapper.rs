@@ -1,4 +1,4 @@
-use std::{future::Future, pin::Pin, time::Duration};
+use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
 
 use anyhow::Context;
 use either::Either::{self, Left, Right};
@@ -79,7 +79,7 @@ impl<Types: NodeType, ApiVer: StaticVersionType + 'static> EventServiceStream<Ty
     }
 
     /// Establish initial connection to the events service at `api_url`
-    pub async fn connect(api_url: Url) -> anyhow::Result<impl Stream<Item = Event<Types>> + Unpin> {
+    pub async fn connect(api_url: Url) -> anyhow::Result<impl Stream<Item = Arc<Event<Types>>> + Unpin> {
         let connection = Self::connect_inner(api_url.clone()).await?;
 
         let this = Self {
@@ -93,7 +93,7 @@ impl<Types: NodeType, ApiVer: StaticVersionType + 'static> EventServiceStream<Ty
                     Left(connection) => {
                         match tokio::time::timeout(Self::MAX_WAIT_PERIOD, connection.next()).await {
                             Ok(Some(Ok(event))) => {
-                                return Some((event, this));
+                                return Some((Arc::new(event), this));
                             },
                             Ok(Some(Err(err))) => {
                                 warn!(?err, "Error in event stream");

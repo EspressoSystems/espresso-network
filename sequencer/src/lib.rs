@@ -701,7 +701,7 @@ pub mod testing {
         fn start(
             self: Box<Self>,
             stream: Box<
-                dyn futures::prelude::Stream<Item = hotshot::types::Event<SeqTypes>>
+                dyn futures::prelude::Stream<Item = Arc<hotshot::types::Event<SeqTypes>>>
                     + std::marker::Unpin
                     + Send
                     + 'static,
@@ -1329,7 +1329,7 @@ pub mod testing {
     // Wait for decide event, make sure it matches submitted transaction. Return the block number
     // containing the transaction and the block payload size
     pub async fn wait_for_decide_on_handle(
-        events: &mut (impl Stream<Item = Event> + Unpin),
+        events: &mut (impl Stream<Item = Arc<Event>> + Unpin),
         submitted_txn: &Transaction,
     ) -> (u64, usize) {
         let commitment = submitted_txn.commit();
@@ -1339,7 +1339,7 @@ pub mod testing {
             let event = events.next().await.unwrap();
             tracing::info!("Received event from handle: {event:?}");
 
-            if let Decide { leaf_chain, .. } = event.event {
+            if let Decide { leaf_chain, .. } = &event.event {
                 if let Some((height, size)) =
                     leaf_chain.iter().find_map(|LeafInfo { leaf, .. }| {
                         if leaf
@@ -1367,13 +1367,13 @@ pub mod testing {
     /// Waits until a node has reached the given target epoch (exclusive).
     /// The function returns once the first event indicates an epoch higher than `target_epoch`.
     pub async fn wait_for_epochs(
-        events: &mut (impl futures::Stream<Item = hotshot_types::event::Event<SeqTypes>>
+        events: &mut (impl futures::Stream<Item = Arc<hotshot_types::event::Event<SeqTypes>>>
                   + std::marker::Unpin),
         epoch_height: u64,
         target_epoch: u64,
     ) {
         while let Some(event) = events.next().await {
-            if let EventType::Decide { leaf_chain, .. } = event.event {
+            if let EventType::Decide { leaf_chain, .. } = &event.event {
                 let leaf = leaf_chain[0].leaf.clone();
                 let epoch = leaf.epoch(epoch_height);
                 println!(
@@ -1485,7 +1485,7 @@ mod test {
         loop {
             let event = events.next().await.unwrap();
             tracing::info!("Received event from handle: {event:?}");
-            let Decide { leaf_chain, .. } = event.event else {
+            let Decide { leaf_chain, .. } = &event.event else {
                 continue;
             };
             tracing::info!("Got decide {leaf_chain:?}");

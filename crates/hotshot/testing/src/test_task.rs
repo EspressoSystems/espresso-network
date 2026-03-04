@@ -69,14 +69,14 @@ pub trait TestTaskState: Send {
 /// Type alias for type-erased [`TestTaskState`] to be used for
 /// dynamic dispatch
 pub type AnyTestTaskState<TYPES> = Box<
-    dyn TestTaskState<Event = hotshot_types::event::Event<TYPES>, Error = anyhow::Error>
+    dyn TestTaskState<Event = Arc<hotshot_types::event::Event<TYPES>>, Error = anyhow::Error>
         + Send
         + Sync,
 >;
 
 #[async_trait]
 impl<TYPES: NodeType> TestTaskState for AnyTestTaskState<TYPES> {
-    type Event = Event<TYPES>;
+    type Event = Arc<Event<TYPES>>;
     type Error = anyhow::Error;
 
     async fn handle_event(
@@ -180,7 +180,7 @@ pub async fn add_network_message_test_task<
     NET: ConnectedNetwork<TYPES::SignatureKey>,
 >(
     internal_event_stream: Sender<Arc<HotShotEvent<TYPES>>>,
-    external_event_stream: Sender<Event<TYPES>>,
+    external_event_stream: Sender<Arc<Event<TYPES>>>,
     upgrade_lock: UpgradeLock<TYPES, V>,
     channel: Arc<NET>,
     public_key: TYPES::SignatureKey,

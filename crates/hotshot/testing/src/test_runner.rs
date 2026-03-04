@@ -589,7 +589,7 @@ where
             Sender<Arc<HotShotEvent<TYPES>>>,
             Receiver<Arc<HotShotEvent<TYPES>>>,
         ),
-        external_channel: (Sender<Event<TYPES>>, Receiver<Event<TYPES>>),
+        external_channel: (Sender<Arc<Event<TYPES>>>, Receiver<Arc<Event<TYPES>>>),
     ) -> Arc<SystemContext<TYPES, I, V>> {
         // Get key pair for certificate aggregation
         let private_key = validator_config.private_key.clone();

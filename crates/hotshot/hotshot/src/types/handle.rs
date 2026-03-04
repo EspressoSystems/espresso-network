@@ -43,7 +43,7 @@ use crate::{traits::NodeImplementation, types::Event, SystemContext, Versions};
 pub struct SystemContextHandle<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> {
     /// The [sender](Sender) and [receiver](Receiver),
     /// to allow the application to communicate with HotShot.
-    pub(crate) output_event_stream: (Sender<Event<TYPES>>, InactiveReceiver<Event<TYPES>>),
+    pub(crate) output_event_stream: (Sender<Arc<Event<TYPES>>>, InactiveReceiver<Arc<Event<TYPES>>>),
 
     /// access to the internal event stream, in case we need to, say, shut something down
     #[allow(clippy::type_complexity)]
@@ -88,7 +88,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
     }
 
     /// obtains a stream to expose to the user
-    pub fn event_stream(&self) -> impl Stream<Item = Event<TYPES>> {
+    pub fn event_stream(&self) -> impl Stream<Item = Arc<Event<TYPES>>> {
         self.output_event_stream.1.activate_cloned()
     }
 
@@ -191,7 +191,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
     /// - make the stream generic and in nodetypes or nodeimpelmentation
     /// - type wrapper
     #[must_use]
-    pub fn event_stream_known_impl(&self) -> Receiver<Event<TYPES>> {
+    pub fn event_stream_known_impl(&self) -> Receiver<Arc<Event<TYPES>>> {
         self.output_event_stream.1.activate_cloned()
     }
 
@@ -328,7 +328,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
     /// Get the sender side of the external event stream for testing purpose
     #[cfg(feature = "hotshot-testing")]
     #[must_use]
-    pub fn external_channel_sender(&self) -> Sender<Event<TYPES>> {
+    pub fn external_channel_sender(&self) -> Sender<Arc<Event<TYPES>>> {
         self.output_event_stream.0.clone()
     }
 

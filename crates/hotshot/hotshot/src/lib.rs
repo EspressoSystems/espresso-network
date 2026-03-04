@@ -131,10 +131,10 @@ pub struct SystemContext<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versi
     start_epoch: Option<TYPES::Epoch>,
 
     /// Access to the output event stream.
-    output_event_stream: (Sender<Event<TYPES>>, InactiveReceiver<Event<TYPES>>),
+    output_event_stream: (Sender<Arc<Event<TYPES>>>, InactiveReceiver<Arc<Event<TYPES>>>),
 
     /// External event stream for communication with the application.
-    pub(crate) external_event_stream: (Sender<Event<TYPES>>, InactiveReceiver<Event<TYPES>>),
+    pub(crate) external_event_stream: (Sender<Arc<Event<TYPES>>>, InactiveReceiver<Arc<Event<TYPES>>>),
 
     /// Anchored leaf provided by the initializer.
     anchored_leaf: Leaf2<TYPES>,
@@ -261,7 +261,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
             Sender<Arc<HotShotEvent<TYPES>>>,
             Receiver<Arc<HotShotEvent<TYPES>>>,
         ),
-        external_channel: (Sender<Event<TYPES>>, Receiver<Event<TYPES>>),
+        external_channel: (Sender<Arc<Event<TYPES>>>, Receiver<Arc<Event<TYPES>>>),
         orchestrator_url: Option<Url>,
     ) -> Arc<Self> {
         debug!("Creating a new hotshot");
@@ -547,7 +547,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
                 .await;
 
                 broadcast_event(
-                    Event {
+                    Arc::new(Event {
                         view_number: self.anchored_leaf.view_number(),
                         event: EventType::Decide {
                             leaf_chain: Arc::new(vec![LeafInfo::new(
@@ -561,7 +561,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
                             deciding_qc: None,
                             block_size: None,
                         },
-                    },
+                    }),
                     &self.external_event_stream.0,
                 )
                 .await;
@@ -1052,7 +1052,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusApi<TY
 
     async fn send_event(&self, event: Event<TYPES>) {
         debug!(?event, "send_event");
-        broadcast_event(event, &self.hotshot.external_event_stream.0).await;
+        broadcast_event(Arc::new(event), &self.hotshot.external_event_stream.0).await;
     }
 
     fn public_key(&self) -> &TYPES::SignatureKey {

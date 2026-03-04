@@ -175,7 +175,7 @@ impl<TYPES: NodeType> Default for Mempool<TYPES> {
 /// Tracks state of a Transaction task
 pub struct BlockTaskState<TYPES: NodeType, V: Versions> {
     /// Output events to application
-    pub output_event_stream: async_broadcast::Sender<Event<TYPES>>,
+    pub output_event_stream: async_broadcast::Sender<Arc<Event<TYPES>>>,
 
     /// View number this view is executing in.
     pub cur_view: TYPES::View,

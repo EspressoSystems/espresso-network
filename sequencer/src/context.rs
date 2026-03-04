@@ -319,7 +319,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
     }
 
     /// Stream consensus events.
-    pub async fn event_stream(&self) -> impl Stream<Item = Event<SeqTypes>> {
+    pub async fn event_stream(&self) -> impl Stream<Item = Arc<Event<SeqTypes>>> {
         self.handle.read().await.event_stream()
     }
 
@@ -460,7 +460,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Drop
 async fn handle_events<N, P, V>(
     consensus: Arc<RwLock<Consensus<N, P, V>>>,
     node_id: u64,
-    mut events: impl Stream<Item = Event<SeqTypes>> + Unpin,
+    mut events: impl Stream<Item = Arc<Event<SeqTypes>>> + Unpin,
     persistence: Arc<P>,
     state_signer: Arc<RwLock<StateSigner<SequencerApiVersion>>>,
     external_event_handler: ExternalEventHandler<V>,

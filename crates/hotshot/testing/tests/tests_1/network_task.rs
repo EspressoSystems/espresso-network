@@ -153,19 +153,18 @@ async fn test_network_external_mnessages() {
         .send_external_message(vec![1, 2], RecipientList::Direct(handles[2].public_key()))
         .await
         .unwrap();
-    let event = tokio::time::timeout(Duration::from_millis(100), event_streams[2].recv())
+    let msg = tokio::time::timeout(Duration::from_millis(100), event_streams[2].recv())
         .await
         .unwrap()
-        .unwrap()
-        .event;
+        .unwrap();
 
     // check that 2 received the message
     assert!(matches!(
-        event,
+        &msg.event,
         EventType::ExternalMessageReceived {
             sender,
             data,
-        } if sender == handles[1].public_key() && data == vec![1, 2]
+        } if *sender == handles[1].public_key() && *data == vec![1, 2]
     ));
 
     // Send a message from 2 -> 1
@@ -173,19 +172,18 @@ async fn test_network_external_mnessages() {
         .send_external_message(vec![2, 1], RecipientList::Direct(handles[1].public_key()))
         .await
         .unwrap();
-    let event = tokio::time::timeout(Duration::from_millis(100), event_streams[1].recv())
+    let msg = tokio::time::timeout(Duration::from_millis(100), event_streams[1].recv())
         .await
         .unwrap()
-        .unwrap()
-        .event;
+        .unwrap();
 
     // check that 1 received the message
     assert!(matches!(
-        event,
+        &msg.event,
         EventType::ExternalMessageReceived {
             sender,
             data,
-        } if sender == handles[2].public_key() && data == vec![2,1]
+        } if *sender == handles[2].public_key() && *data == vec![2,1]
     ));
 
     // Check broadcast works
@@ -195,17 +193,16 @@ async fn test_network_external_mnessages() {
         .unwrap();
     // All other nodes get the broadcast
     for stream in event_streams.iter_mut().skip(1) {
-        let event = tokio::time::timeout(Duration::from_millis(100), stream.recv())
+        let msg = tokio::time::timeout(Duration::from_millis(100), stream.recv())
             .await
             .unwrap()
-            .unwrap()
-            .event;
+            .unwrap();
         assert!(matches!(
-            event,
+            &msg.event,
             EventType::ExternalMessageReceived {
                 sender,
                 data,
-            } if sender == handles[0].public_key() && data == vec![0,0,0]
+            } if *sender == handles[0].public_key() && *data == vec![0,0,0]
         ));
     }
     // No event on 0 even after short sleep

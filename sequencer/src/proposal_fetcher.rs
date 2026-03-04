@@ -137,7 +137,7 @@ where
     async fn scan(self) {
         let mut events = self.consensus.read().await.event_stream();
         while let Some(event) = events.next().await {
-            let EventType::QuorumProposal { proposal, .. } = event.event else {
+            let EventType::QuorumProposal { proposal, .. } = &event.event else {
                 continue;
             };
             // Whenever we see a quorum proposal, ensure we have the chain of proposals stretching back

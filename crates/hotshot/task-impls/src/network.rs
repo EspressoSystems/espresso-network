@@ -51,7 +51,7 @@ pub struct NetworkMessageTaskState<TYPES: NodeType, V: Versions> {
     pub internal_event_stream: Sender<Arc<HotShotEvent<TYPES>>>,
 
     /// Sender to send external events this task generates to the event stream
-    pub external_event_stream: Sender<Event<TYPES>>,
+    pub external_event_stream: Sender<Arc<Event<TYPES>>>,
 
     /// This nodes public key
     pub public_key: TYPES::SignatureKey,
@@ -716,10 +716,10 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                 }
                 // Send the external message to the external event stream so it can be processed
                 broadcast_event(
-                    Event {
+                    Arc::new(Event {
                         view_number: TYPES::View::new(1),
                         event: EventType::ExternalMessageReceived { sender, data },
-                    },
+                    }),
                     &self.external_event_stream,
                 )
                 .await;
