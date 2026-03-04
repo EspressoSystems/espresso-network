@@ -71,6 +71,13 @@ pub struct SystemContextHandle<TYPES: NodeType, I: NodeImplementation<TYPES>, V:
 
     /// Number of blocks in an epoch, zero means there are no epochs
     pub epoch_height: u64,
+
+    /// Dedicated channel for VID share events (VidShareRecv, VidShareValidated)
+    #[allow(clippy::type_complexity)]
+    pub(crate) vid_event_stream: (
+        Sender<Arc<HotShotEvent<TYPES>>>,
+        InactiveReceiver<Arc<HotShotEvent<TYPES>>>,
+    ),
 }
 
 impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
@@ -83,6 +90,21 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
             self.internal_event_stream.0.clone(),
             self.internal_event_stream.1.activate_cloned(),
         );
+
+        self.consensus_registry.run_task(task);
+    }
+
+    /// Adds a task that also receives events from the dedicated VID channel.
+    pub fn add_task_with_vid<S: TaskState<Event = HotShotEvent<TYPES>> + 'static>(
+        &mut self,
+        task_state: S,
+    ) {
+        let task = Task::new(
+            task_state,
+            self.internal_event_stream.0.clone(),
+            self.internal_event_stream.1.activate_cloned(),
+        )
+        .with_aux_receiver(self.vid_event_stream.1.activate_cloned());
 
         self.consensus_registry.run_task(task);
     }
@@ -337,6 +359,13 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
     #[must_use]
     pub fn internal_channel_sender(&self) -> Sender<Arc<HotShotEvent<TYPES>>> {
         self.internal_event_stream.0.clone()
+    }
+
+    /// Get the sender side of the VID event stream for testing purpose
+    #[cfg(feature = "hotshot-testing")]
+    #[must_use]
+    pub fn vid_channel_sender(&self) -> Sender<Arc<HotShotEvent<TYPES>>> {
+        self.vid_event_stream.0.clone()
     }
 
     /// Wrapper to get the view number this node is on.

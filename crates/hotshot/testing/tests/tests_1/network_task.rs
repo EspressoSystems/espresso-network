@@ -96,9 +96,11 @@ async fn test_network_task() {
 
     let (out_tx_internal, mut out_rx_internal) = async_broadcast::broadcast(10);
     let (out_tx_external, _) = async_broadcast::broadcast(10);
+    let (out_tx_vid, _) = async_broadcast::broadcast(10);
     add_network_message_test_task(
         out_tx_internal.clone(),
         out_tx_external.clone(),
+        out_tx_vid,
         upgrade_lock,
         network.clone(),
         public_key,
@@ -274,9 +276,11 @@ async fn test_network_storage_fail() {
     let (out_tx_internal, mut out_rx_internal): (Sender<Arc<HotShotEvent<TestTypes>>>, _) =
         async_broadcast::broadcast(10);
     let (out_tx_external, _) = async_broadcast::broadcast(10);
+    let (out_tx_vid, _) = async_broadcast::broadcast(10);
     add_network_message_test_task(
         out_tx_internal.clone(),
         out_tx_external.clone(),
+        out_tx_vid,
         upgrade_lock,
         network.clone(),
         public_key,

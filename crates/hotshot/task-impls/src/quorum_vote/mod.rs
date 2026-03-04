@@ -531,6 +531,12 @@ pub struct QuorumVoteTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V:
 
     /// DA committees from HotShotConfig, to apply when an upgrade is decided
     pub da_committees: Vec<VersionedDaCommittee<TYPES>>,
+
+    /// Dedicated sender for VID share events (VidShareValidated)
+    pub vid_sender: Sender<Arc<HotShotEvent<TYPES>>>,
+
+    /// Dedicated receiver for VID share events (VidShareRecv, VidShareValidated)
+    pub vid_receiver: InactiveReceiver<Arc<HotShotEvent<TYPES>>>,
 }
 
 impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskState<TYPES, I, V> {
@@ -620,7 +626,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
         let vid_dependency = self.create_event_dependency(
             VoteDependency::Vid,
             view_number,
-            event_receiver.clone(),
+            self.vid_receiver.activate_cloned(),
             cancel_receiver.clone(),
         );
         // If we have an event provided to us
@@ -871,7 +877,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
 
                 broadcast_event(
                     Arc::new(HotShotEvent::VidShareValidated(share.clone())),
-                    &event_sender.clone(),
+                    &self.vid_sender,
                 )
                 .await;
             },

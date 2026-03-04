@@ -181,6 +181,7 @@ pub async fn add_network_message_test_task<
 >(
     internal_event_stream: Sender<Arc<HotShotEvent<TYPES>>>,
     external_event_stream: Sender<Arc<Event<TYPES>>>,
+    vid_event_stream: Sender<Arc<HotShotEvent<TYPES>>>,
     upgrade_lock: UpgradeLock<TYPES, V>,
     channel: Arc<NET>,
     public_key: TYPES::SignatureKey,
@@ -190,6 +191,7 @@ pub async fn add_network_message_test_task<
     let network_state: NetworkMessageTaskState<_, _> = NetworkMessageTaskState {
         internal_event_stream: internal_event_stream.clone(),
         external_event_stream: external_event_stream.clone(),
+        vid_event_stream,
         public_key,
         upgrade_lock: upgrade_lock.clone(),
         id,

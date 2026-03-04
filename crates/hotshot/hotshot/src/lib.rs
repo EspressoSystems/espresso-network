@@ -743,6 +743,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         let output_event_stream = self.external_event_stream.clone();
         let internal_event_stream = self.internal_event_stream.clone();
 
+        let (vid_tx, mut vid_rx) = broadcast(EVENT_CHANNEL_SIZE);
+        vid_rx.set_overflow(true);
+
         let mut handle = SystemContextHandle {
             consensus_registry,
             network_registry,
@@ -753,6 +756,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
             network: Arc::clone(&self.network),
             membership_coordinator: self.membership_coordinator.clone(),
             epoch_height: self.config.epoch_height,
+            vid_event_stream: (vid_tx, vid_rx.deactivate()),
         };
 
         add_network_tasks::<TYPES, I, V>(&mut handle).await;
@@ -929,6 +933,12 @@ where
             right_internal_receiver.clone().deactivate(),
         );
 
+        // create VID channels for both handles
+        let (left_vid_tx, mut left_vid_rx) = broadcast(EVENT_CHANNEL_SIZE);
+        left_vid_rx.set_overflow(true);
+        let (right_vid_tx, mut right_vid_rx) = broadcast(EVENT_CHANNEL_SIZE);
+        right_vid_rx.set_overflow(true);
+
         // create each handle
         let mut left_handle = SystemContextHandle::<_, I, _> {
             consensus_registry: left_consensus_registry,
@@ -940,6 +950,7 @@ where
             network: Arc::clone(&left_system_context.network),
             membership_coordinator: left_system_context.membership_coordinator.clone(),
             epoch_height,
+            vid_event_stream: (left_vid_tx, left_vid_rx.deactivate()),
         };
 
         let mut right_handle = SystemContextHandle::<_, I, _> {
@@ -952,6 +963,7 @@ where
             network: Arc::clone(&right_system_context.network),
             membership_coordinator: right_system_context.membership_coordinator.clone(),
             epoch_height,
+            vid_event_stream: (right_vid_tx, right_vid_rx.deactivate()),
         };
 
         // add consensus tasks to each handle, using their individual internal event streams
