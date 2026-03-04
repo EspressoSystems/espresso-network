@@ -62,11 +62,15 @@ kill_project_processes() {
 	local proc_name=$1
 	local signal=$2
 
-	# Collect PIDs first to avoid subshell issues when killing
+	# Collect PIDs first to avoid subshell issues when killing.
+	# On Linux, pgrep only excludes itself, not ancestors. On macOS, pgrep
+	# excludes itself and all ancestors by default. Exclude our own PID to
+	# prevent the script from killing itself when matching "process-compose".
 	local pids
-	pids=$(pgrep -fA "$proc_name" 2>/dev/null) || true
+	pids=$(pgrep -f "$proc_name" 2>/dev/null) || true
 
 	for pid in $pids; do
+		[[ "$pid" == "$$" ]] && continue
 		local proc_cwd
 		proc_cwd=$(get_proc_cwd "$pid")
 
