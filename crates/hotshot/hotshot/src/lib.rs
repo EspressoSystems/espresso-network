@@ -47,7 +47,6 @@ use std::{
 use async_broadcast::{broadcast, InactiveReceiver, Receiver, Sender};
 use async_lock::RwLock;
 use async_trait::async_trait;
-use futures::join;
 use hotshot_task::task::{ConsensusTaskRegistry, NetworkTaskRegistry};
 use hotshot_task_impls::{events::HotShotEvent, helpers::broadcast_event};
 // Internal
@@ -570,12 +569,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         }
     }
 
-    /// Emit an external event
-    async fn send_external_event(&self, event: Event<TYPES>) {
-        debug!(?event, "send_external_event");
-        broadcast_event(event, &self.external_event_stream.0).await;
-    }
-
     /// Publishes a transaction asynchronously to the network.
     ///
     /// # Errors
@@ -597,7 +590,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
 
         // Wrap up a message
         let message_kind: DataMessage<TYPES> =
-            DataMessage::SubmitTransaction(transaction.clone(), view_number);
+            DataMessage::SubmitTransaction(transaction, view_number);
         let message = Message {
             sender: api.public_key.clone(),
             kind: MessageKind::from(message_kind),
@@ -618,28 +611,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
 
         spawn(async move {
             // send the transaction to the leader of the next view
-            join! {
-                // TODO We should have a function that can return a network error if there is one
-                // but first we'd need to ensure our network implementations can support that
-                // (and not hang instead)
-
-                // version <0, 1> currently fixed; this is the same as VERSION_0_1,
-                // and will be updated to be part of SystemContext. I wanted to use associated
-                // constants in NodeType, but that seems to be unavailable in the current Rust.
-                api
-                    .network.direct_message(
-                        view_number.u64().into(),
-                        serialized_message,
-                        leader,
-                    ),
-                api
-                    .send_external_event(Event {
-                        view_number,
-                        event: EventType::Transactions {
-                            transactions: vec![transaction],
-                        },
-                    }),
-            }
+            let _ = api
+                .network
+                .direct_message(view_number.u64().into(), serialized_message, leader)
+                .await;
         });
         Ok(())
     }
