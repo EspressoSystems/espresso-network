@@ -16,6 +16,7 @@ use hotshot_types::{
     boxed_sync,
     data::{EpochNumber, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
+    stake_table::HSStakeTable,
     traits::{
         metrics::Metrics,
         network::{BroadcastDelay, ConnectedNetwork, NetworkError, Topic},
@@ -98,10 +99,25 @@ impl<K: SignatureKey + 'static> Cliquenet<K> {
         self.inner.lock().await.non_peers.clone()
     }
 
+    /// Update peers on every epoch change.
+    ///
+    /// For any given epoch `e` we collect the validators of `e`, `e-1` and
+    /// `e+1` from the stake tables and merge their connection information.
+    ///
+    /// We keep validator that were in `e-1` but not in `e` for one additional
+    /// epoch and eagerly connect to new validators of `e+1`.
     async fn on_epoch_change<U>(&self, epoch: EpochNumber, coord: &EpochMembershipCoordinator<U>)
     where
         U: NodeType<SignatureKey = K>,
     {
+        // Collect peer connect infos from stake table.
+        let connect_infos = |tbl: HSStakeTable<U>| {
+            tbl.0
+                .into_iter()
+                .map(|m| (m.stake_table_entry.public_key(), m.connect_info))
+                .collect()
+        };
+
         let mut inner = self.inner.lock().await;
 
         if epoch <= inner.epoch {
@@ -109,51 +125,82 @@ impl<K: SignatureKey + 'static> Cliquenet<K> {
             return;
         }
 
-        let epoch = <<U as NodeType>::Epoch as ConsensusTime>::new(u64::from(epoch));
+        // Validators of the new epoch.
+        let curr_infos = {
+            let curr_epoch = <<U as NodeType>::Epoch as ConsensusTime>::new(*epoch);
+            let Ok(membership) = coord.stake_table_for_epoch(Some(curr_epoch)).await else {
+                error!(epoch = %curr_epoch, "no stake table available");
+                return;
+            };
+            connect_infos(membership.stake_table().await)
+        };
+
+        // Validators leaving are retained as peers for one additional epoch.
+        let prev_infos = if *epoch > 0 {
+            let prev_epoch = <<U as NodeType>::Epoch as ConsensusTime>::new(*epoch - 1);
+            if let Ok(membership) = coord.stake_table_for_epoch(Some(prev_epoch)).await {
+                connect_infos(membership.stake_table().await)
+            } else {
+                info!(epoch = %prev_epoch, "previous epoch's stake table unavailable");
+                HashMap::new()
+            }
+        } else {
+            HashMap::new()
+        };
+
+        // Validators joining in the next epoch are connected to early.
+        let next_infos = {
+            let next_epoch = <<U as NodeType>::Epoch as ConsensusTime>::new(*epoch + 1);
+            if let Ok(membership) = coord.stake_table_for_epoch(Some(next_epoch)).await {
+                connect_infos(membership.stake_table().await)
+            } else {
+                info!(epoch = %next_epoch, "next epoch's stake table not available");
+                HashMap::new()
+            }
+        };
+
+        // Since connection information may be updated, we need to merge them,
+        // preferring the newest epoch's data, i.e. `next(curr(prev))`.
+        let mut merged_infos = prev_infos.clone();
+        for (k, v) in curr_infos.iter().chain(&next_infos) {
+            merged_infos.insert(k.clone(), v.clone());
+        }
+
+        let wanted: HashSet<K> = curr_infos
+            .keys()
+            .chain(next_infos.keys())
+            .cloned()
+            .collect();
+
+        let retained: HashSet<K> = curr_infos
+            .keys()
+            .chain(prev_infos.keys())
+            .cloned()
+            .collect();
 
         let mut non_peers = HashSet::new();
         let mut to_add = Vec::new();
         let mut to_del = Vec::new();
 
-        let Ok(membership) = coord.stake_table_for_epoch(Some(epoch)).await else {
-            error!(%epoch, ours = %inner.epoch, "no stake table available");
-            return;
-        };
-
-        let stake_tbl: HashMap<_, _> = HashMap::from_iter(
-            membership
-                .stake_table()
-                .await
-                .0
-                .into_iter()
-                .map(|m| (m.stake_table_entry.public_key(), m.connect_info)),
-        );
-
-        // Collect peers to add or update, i.e. stake table members which are
-        // not already network peers.
-        for (k, v) in stake_tbl.iter() {
-            info!(%epoch, peer = %k, "checking stake table member");
-            let Some(new_info) = v else {
+        for k in &wanted {
+            if let Some(Some(new_info)) = merged_infos.get(k) {
+                if Some(new_info) != inner.peers.get(k) {
+                    info!(%epoch, peer = %k, "adding/updating network peer");
+                    to_add.push((k.clone(), new_info.x25519_key, new_info.p2p_addr.clone()));
+                } else {
+                    info!(%epoch, peer = %k, "peer unchanged");
+                }
+            } else {
                 info!(%epoch, peer  = %k, "ignoring peer without connection info");
                 non_peers.insert(k.clone());
-                continue;
-            };
-            if let Some(current_info) = inner.peers.get(k) {
-                if new_info == current_info {
-                    info!(%epoch, peer = %k, "peer unchanged");
-                    continue;
-                }
             }
-            info!(%epoch, peer = %k, "adding network peer");
-            to_add.push((k.clone(), new_info.x25519_key, new_info.p2p_addr.clone()))
         }
 
-        // Collect peers to remove from the network, i.e. peers which are no
-        // longer stake table members.
+        // Remove peers that have left both the current and previous epoch's stake tables.
         for p in inner.peers.keys() {
-            if !stake_tbl.contains_key(p) {
+            if !retained.contains(p) {
                 info!(%epoch, peer = %p, "removing network peer");
-                to_del.push(p.clone())
+                to_del.push(p.clone());
             }
         }
 
