@@ -418,12 +418,11 @@ mod test {
 
         // In this simple test, the node should be fully synchronized.
         let sync_status = client
-            .get::<SyncStatus>("sync-status")
+            .get::<SyncStatusQueryData>("sync-status")
             .send()
             .await
             .unwrap();
-        assert_eq!(sync_status.missing_blocks, 0);
-        assert_eq!(sync_status.missing_leaves, 0);
+        assert!(sync_status.is_fully_synced(), "{sync_status:#?}");
 
         network.shut_down().await;
     }
@@ -654,7 +653,7 @@ mod test {
         assert_eq!(client.get::<u64>("ext").send().await.unwrap(), 42);
 
         // Ensure we can still access the built-in functionality.
-        let sync_status: SyncStatus = client.get("sync-status").send().await.unwrap();
-        assert!(sync_status.is_fully_synced(), "{sync_status:?}");
+        let sync_status: SyncStatusQueryData = client.get("sync-status").send().await.unwrap();
+        assert!(sync_status.is_fully_synced(), "{sync_status:#?}");
     }
 }

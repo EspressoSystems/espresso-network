@@ -129,7 +129,7 @@ use crate::{
         MerklizedState, MerklizedStateDataSource, MerklizedStateHeightPersistence, Snapshot,
     },
     metrics::PrometheusMetrics,
-    node::{NodeDataSource, SyncStatus, TimeWindowQueryData, WindowStart},
+    node::{NodeDataSource, SyncStatusQueryData, TimeWindowQueryData, WindowStart},
     status::{HasMetrics, StatusDataSource},
     task::BackgroundTask,
     types::HeightIndexed,
@@ -1886,7 +1886,7 @@ where
         tx.vid_share(id).await
     }
 
-    async fn sync_status(&self) -> QueryResult<SyncStatus> {
+    async fn sync_status(&self) -> QueryResult<SyncStatusQueryData> {
         let mut tx = self.read().await.map_err(|err| QueryError::Error {
             message: err.to_string(),
         })?;
