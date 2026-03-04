@@ -5895,6 +5895,8 @@ dependencies = [
  "refinery",
  "refinery-core",
  "reqwest",
+ "rstest",
+ "rstest_reuse",
  "semver 1.0.27",
  "serde",
  "serde_json",
@@ -10735,15 +10737,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "sequencer-sqlite"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "sequencer",
- "tokio",
-]
-
-[[package]]
 name = "sequencer-utils"
 version = "0.1.0"
 dependencies = [
@@ -11149,6 +11142,7 @@ dependencies = [
  "rand 0.8.5",
  "reqwest",
  "rstest",
+ "rstest_reuse",
  "sequencer",
  "serde",
  "serde_json",

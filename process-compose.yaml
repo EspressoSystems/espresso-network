@@ -403,7 +403,7 @@ processes:
     availability: *run-forever
 
   sequencer4:
-    command: sequencer-sqlite -- storage-sql -- http -- query
+    command: sequencer -- storage-sql -- http -- query
     environment:
       - ESPRESSO_SEQUENCER_LIGHTWEIGHT=true
       - ESPRESSO_SEQUENCER_API_PORT=${ESPRESSO_SEQUENCER4_API_PORT}

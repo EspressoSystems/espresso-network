@@ -46,22 +46,13 @@ jobs:
       matrix:
         include:
           - binary: sequencer
-            shared-key: postgres
             save-cache: false
 
           - binary: other
-            shared-key: postgres
-            save-cache: true
-
-          - binary: sequencer-sqlite
-            # uses it's own lock file
-            shared-key: sequencer-embedded
             save-cache: true
 
           - binary: espresso-dev-node
-            # uses different features testing,emdbedded-db
-            shared-key: espresso-dev-node
-            save-cache: true
+            save-cache: false
 
     steps:
       - uses: actions/checkout@v4
@@ -71,7 +62,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           prefix-key: v3-rust
-          shared-key: ${{ matrix.shared-key }}
+          shared-key: release
           save-if: >
             ${{ matrix.save-cache && (
             github.ref == 'refs/heads/main'
@@ -109,22 +100,13 @@ jobs:
       matrix:
         include:
           - binary: sequencer
-            shared-key: postgres
             save-cache: false
 
           - binary: other
-            shared-key: postgres
-            save-cache: true
-
-          - binary: sequencer-sqlite
-            # uses it's own lock file
-            shared-key: sequencer-embedded
             save-cache: true
 
           - binary: espresso-dev-node
-            # uses different features testing,emdbedded-db
-            shared-key: espresso-dev-node
-            save-cache: true
+            save-cache: false
 
     steps:
       - uses: actions/checkout@v4
@@ -134,7 +116,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           prefix-key: v3-rust
-          shared-key: ${{ matrix.shared-key }}
+          shared-key: release
           save-if: >
             ${{ matrix.save-cache && (
             github.ref == 'refs/heads/main'

@@ -27,8 +27,8 @@ env:
   PC_LOG_FILE: /tmp/pc-logs.log
 
 jobs:
-  build-test-artifacts-postgres:
-    name: Build test artifacts (postgres)
+  build-test-artifacts:
+    name: Build test artifacts
     runs-on: ubuntu-24.04-8core
     steps:
       - uses: actions/checkout@v4
@@ -40,7 +40,7 @@ jobs:
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: test-artifacts
+          shared-key: test
           prefix-key: v1-rust
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-provider: github
@@ -54,50 +54,14 @@ jobs:
           comment_on_pr: false
 
       - name: Build and archive tests
-        run: just nextest-archive nextest-archive-postgres.tar.zst
+        run: just nextest-archive nextest-archive.tar.zst
 
       - name: Upload archive to workflow
         uses: actions/upload-artifact@v4
         with:
-          name: nextest-archive-postgres
+          name: nextest-archive
           if-no-files-found: error
-          path: nextest-archive-postgres.tar.zst
-
-  build-test-artifacts-sqlite:
-    name: Build test artifacts (sqlite)
-    runs-on: ubuntu-24.04-8core
-    steps:
-      - uses: actions/checkout@v4
-      - uses: rui314/setup-mold@v1
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: nextest,just
-
-      - name: Enable Rust Caching
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: test-artifacts
-          save-if: false
-          prefix-key: v1-rust
-          cache-provider: github
-
-      - name: Show memory
-        run: free -h
-
-      - name: Collect Workflow Telemetry
-        uses: catchpoint/workflow-telemetry-action@v2
-        with:
-          comment_on_pr: false
-
-      - name: Build and archive tests
-        run: just nextest-archive nextest-archive-sqlite.tar.zst --features "embedded-db,testing"
-
-      - name: Upload archive to workflow
-        uses: actions/upload-artifact@v4
-        with:
-          name: nextest-archive-sqlite
-          if-no-files-found: error
-          path: nextest-archive-sqlite.tar.zst
+          path: nextest-archive.tar.zst
 
   build-test-bins:
     name: Build test binaries
@@ -109,12 +73,12 @@ jobs:
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: build-test-bins
+          shared-key: test
           prefix-key: v1-rust
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: false
           cache-provider: github
 
-      - name: Build all binaries (postgres)
+      - name: Build all binaries
         run: |
           cargo build --locked --profile test --bins
         timeout-minutes: 60
@@ -145,36 +109,6 @@ jobs:
             target/debug/node-metrics
             target/debug/staking-cli
 
-  build-test-bins-sqlite:
-    name: Build sequencer-sqlite test binary
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: ./.github/actions/free-disk-space
-      - uses: rui314/setup-mold@v1
-      - uses: ./.github/actions/free-disk-space
-
-      - name: Enable Rust Caching
-        uses: Swatinem/rust-cache@v2
-        with:
-          save-if: false
-          shared-key: build-test-bins
-          prefix-key: v1-rust
-          cache-provider: github
-
-      - name: Build sequencer-sqlite binary
-        run: |
-          cargo build --locked --profile test -p sequencer-sqlite
-        timeout-minutes: 30
-
-      - name: Upload archive to workflow
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-binaries-sqlite
-          if-no-files-found: error
-          path: |
-            target/debug/sequencer-sqlite
-
   # The go-sdk test job only needs the dev-node binary, compile it separately.
   build-test-bins-dev-node:
     name: Build espresso-dev-node test binary
@@ -189,7 +123,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           save-if: false
-          shared-key: build-test-bins
+          shared-key: test
           prefix-key: v1-rust
           cache-provider: github
 
@@ -206,12 +140,12 @@ jobs:
           path: |
             target/debug/espresso-dev-node
 
-  test-postgres:
-    needs: build-test-artifacts-postgres
+  test:
+    needs: build-test-artifacts
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
       fail-fast: false
     steps:
       - uses: actions/checkout@v4
@@ -231,48 +165,13 @@ jobs:
       - name: Download archive
         uses: actions/download-artifact@v4
         with:
-          name: nextest-archive-postgres
+          name: nextest-archive
 
       - name: Test
         run: |
-          cargo nextest run --archive-file nextest-archive-postgres.tar.zst  --verbose --no-fail-fast \
+          cargo nextest run --archive-file nextest-archive.tar.zst --verbose --no-fail-fast \
           --workspace-remap $PWD \
-          --partition hash:${{ matrix.partition }}/10
-        timeout-minutes: 30
-
-  test-sqlite:
-    needs: build-test-artifacts-sqlite
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-      fail-fast: false
-    steps:
-      - uses: actions/checkout@v4
-      - uses: foundry-rs/foundry-toolchain@v1
-        with:
-          version: nightly
-      - uses: taiki-e/install-action@nextest
-
-      - name: Install node deps
-        uses: nick-fields/retry@v3
-        with:
-          timeout_minutes: 3
-          max_attempts: 10
-          retry_wait_seconds: 60
-          retry_on: error
-          command: yarn
-
-      - name: Download archive
-        uses: actions/download-artifact@v4
-        with:
-          name: nextest-archive-sqlite
-
-      - name: Test
-        run: |
-          cargo nextest run --archive-file nextest-archive-sqlite.tar.zst  --verbose --no-fail-fast \
-          --workspace-remap $PWD \
-          --partition hash:${{ matrix.partition }}/10
+          --partition hash:${{ matrix.partition }}/20
         timeout-minutes: 30
 
   test-go-sdk:
@@ -309,7 +208,7 @@ jobs:
           ESPRESSO_DEV_NODE_BIN: ${{ github.workspace }}/test-binaries-dev-node/espresso-dev-node
 
   test-integration:
-    needs: [build-test-bins, build-test-bins-sqlite, build-test-artifacts-postgres]
+    needs: [build-test-bins, build-test-artifacts]
     strategy:
       matrix:
         include:
@@ -336,10 +235,9 @@ jobs:
 
       - name: Move files
         run: |
-          mv nextest-archive-postgres/* .
+          mv nextest-archive/* .
           mkdir -p target/debug
           mv test-binaries/* target/debug
-          mv test-binaries-sqlite/* target/debug
           chmod -c +x target/debug/*
 
       - name: Configure PATH
@@ -354,7 +252,7 @@ jobs:
         env:
           NEXTEST_PROFILE: integration
         run: |
-          cargo nextest run --archive-file nextest-archive-postgres.tar.zst --verbose --no-fail-fast --nocapture \
+          cargo nextest run --archive-file nextest-archive.tar.zst --verbose --no-fail-fast --nocapture \
           --workspace-remap $PWD ${{ matrix.test-name }}
         timeout-minutes: 60
 
@@ -378,7 +276,7 @@ jobs:
 
 
   demo-native:
-    needs: [build-test-bins, build-test-bins-sqlite]
+    needs: [build-test-bins]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -396,7 +294,6 @@ jobs:
         run: |
           mkdir -p target/debug
           mv test-binaries/* target/debug
-          mv test-binaries-sqlite/* target/debug
           chmod -c +x target/debug/*
 
       - name: Collect Workflow Telemetry
@@ -425,7 +322,7 @@ jobs:
 
   # This job enables having a single required status check in github for all GCL tests.
   aggregate-gcl-tests:
-    needs: [test-postgres, test-sqlite, test-go-sdk, demo-native, test-integration]
+    needs: [test, test-go-sdk, demo-native, test-integration]
     runs-on: ubuntu-latest
     # explicitly run and fail the job if dependencies failed
     if: ${{ always() && !cancelled() }}

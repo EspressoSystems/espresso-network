@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+echo "WARNING: /bin/sequencer-postgres is deprecated. Use /bin/sequencer instead." >&2
+exec /bin/sequencer "$@"

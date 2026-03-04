@@ -67,22 +67,13 @@ lint *args:
     just clippy {{args}} -- -D warnings
 
 clippy *args:
-    # check all targets in default workspace members
     cargo clippy --features testing --all-targets {{args}}
-    # check entire workspace (including sequencer-sqlite crate) with embedded-db feature
-    cargo clippy --workspace --features "embedded-db testing" --all-targets {{args}}
 
 check *args:
-    # postgres
     cargo check {{args}}
-    # embedded-db
-    cargo check -p sequencer-sqlite -p espresso-dev-node {{args}}
 
 build profile="dev" features="":
-    # postgres
     cargo build --profile {{profile}} {{features}}
-    # embedded-db
-    cargo build --profile {{profile}} -p sequencer-sqlite -p espresso-dev-node {{features}}
 
 demo-native-fee *args: (build "test" "--no-default-features")
     ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo.toml scripts/demo-native -f process-compose.yaml {{args}}
@@ -128,10 +119,8 @@ anvil *args:
     docker run -p 127.0.0.1:8545:8545 ghcr.io/foundry-rs/foundry:latest "anvil {{args}}"
 
 # hotshot-testing: tested in hotshot.yml
-# sequencer-sqlite: no tests, enables embedded-db feature
 # slow-tests: slow and serial tests
-# espresso-dev-node: enables embedded-db
-nextest_excludes := "--exclude sequencer-sqlite --exclude hotshot-testing --exclude slow-tests --exclude espresso-dev-node"
+nextest_excludes := "--exclude hotshot-testing --exclude slow-tests"
 
 nextest *args:
     cargo nextest run --locked --workspace {{nextest_excludes}} --verbose {{args}}
@@ -141,8 +130,6 @@ nextest-archive archive-file *args:
 
 test *args:
     @echo 'Omitting slow tests. Use `test-slow` for those. Or `test-all` for all tests.'
-    @echo 'features: "embedded-db"'
-    just nextest --features embedded-db  {{args}}
     just nextest {{args}}
 
 test-slow *args:
@@ -157,8 +144,6 @@ test-dev-node *args:
     cargo nextest run --profile slow --locked -p espresso-dev-node --verbose {{args}}
 
 test-all:
-    @echo 'features: "embedded-db"'
-    just nextest --features embedded-db --profile all
     just nextest --profile all
 
 test-integration: (build "test" "--features fee")

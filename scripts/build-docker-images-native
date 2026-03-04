@@ -164,12 +164,10 @@ else
   case "$image" in
     "")
     # By default compile all binaries
-    cargo_cmd_line="cargo build $cargo_extra_args \
-    && cargo build --bin espresso-dev-node --features 'embedded-db testing' $cargo_extra_args \
-    && cargo build -p sequencer-sqlite $cargo_extra_args"
+    cargo_cmd_line="cargo build $cargo_extra_args"
       ;;
     "espresso-dev-node")
-      cargo_cmd_line="cargo build --bin espresso-dev-node --features 'embedded-db testing' $cargo_extra_args"
+      cargo_cmd_line="cargo build --bin espresso-dev-node --features testing $cargo_extra_args"
       ;;
     "sequencer")
       cargo_cmd_line="cargo build \
@@ -178,8 +176,7 @@ else
         --bin reset-storage \
         --bin keygen \
         --bin pub-key \
-        $cargo_extra_args \
-      && cargo build -p sequencer-sqlite $cargo_extra_args"
+        $cargo_extra_args"
       ;;
     "builder")
       cargo_cmd_line="cargo build --bin permissionless-builder $cargo_extra_args"

@@ -87,19 +87,10 @@ async fn init_db() -> Db {
 }
 
 #[cfg(not(target_os = "windows"))]
-async fn init_data_source(#[allow(unused_variables)] db: &Db) -> DataSource {
-    let mut cfg = data_source::sql::Config::default();
-
-    #[cfg(not(feature = "embedded-db"))]
-    {
-        cfg = cfg.host(db.host()).port(db.port());
-    }
-
-    #[cfg(feature = "embedded-db")]
-    {
-        cfg = cfg.db_path(db.path());
-    }
-
+async fn init_data_source(db: &Db) -> DataSource {
+    let cfg = data_source::sql::Config::default()
+        .host(db.host())
+        .port(db.port());
     cfg.connect(Default::default()).await.unwrap()
 }
 
