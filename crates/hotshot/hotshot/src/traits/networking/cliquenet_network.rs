@@ -111,9 +111,9 @@ impl<K: SignatureKey + 'static> Cliquenet<K> {
         U: NodeType<SignatureKey = K>,
     {
         // Collect peer connect infos from stake table.
-        let connect_infos = |tbl: HSStakeTable<U>| {
-            tbl.0
-                .into_iter()
+        let connect_infos = |a: HSStakeTable<U>, b: HSStakeTable<U>| {
+            a.0.into_iter()
+                .chain(b.0)
                 .map(|m| (m.stake_table_entry.public_key(), m.connect_info))
                 .collect()
         };
@@ -132,14 +132,18 @@ impl<K: SignatureKey + 'static> Cliquenet<K> {
                 error!(epoch = %curr_epoch, "no stake table available");
                 return;
             };
-            connect_infos(membership.stake_table().await)
+            let st = membership.stake_table().await;
+            let da = membership.da_stake_table().await;
+            connect_infos(st, da)
         };
 
         // Validators leaving are retained as peers for one additional epoch.
         let prev_infos = if *epoch > 0 {
             let prev_epoch = <<U as NodeType>::Epoch as ConsensusTime>::new(*epoch - 1);
             if let Ok(membership) = coord.stake_table_for_epoch(Some(prev_epoch)).await {
-                connect_infos(membership.stake_table().await)
+                let st = membership.stake_table().await;
+                let da = membership.da_stake_table().await;
+                connect_infos(st, da)
             } else {
                 info!(epoch = %prev_epoch, "previous epoch's stake table unavailable");
                 HashMap::new()
@@ -152,7 +156,9 @@ impl<K: SignatureKey + 'static> Cliquenet<K> {
         let next_infos = {
             let next_epoch = <<U as NodeType>::Epoch as ConsensusTime>::new(*epoch + 1);
             if let Ok(membership) = coord.stake_table_for_epoch(Some(next_epoch)).await {
-                connect_infos(membership.stake_table().await)
+                let st = membership.stake_table().await;
+                let da = membership.da_stake_table().await;
+                connect_infos(st, da)
             } else {
                 info!(epoch = %next_epoch, "next epoch's stake table not available");
                 HashMap::new()
@@ -198,7 +204,7 @@ impl<K: SignatureKey + 'static> Cliquenet<K> {
 
         // Remove peers that have left both the current and previous epoch's stake tables.
         for p in inner.peers.keys() {
-            if !retained.contains(p) {
+            if !(retained.contains(p) || wanted.contains(p)) {
                 info!(%epoch, peer = %p, "removing network peer");
                 to_del.push(p.clone());
             }
