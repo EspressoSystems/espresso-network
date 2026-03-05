@@ -52,13 +52,14 @@ impl PermittedRewardMerkleTreeV2 {
     pub async fn try_from_kv_set(
         balances: Vec<(RewardAccountV2, RewardAmount)>,
     ) -> anyhow::Result<Self> {
-        let num_permits: usize = std::env::var("ESPRESSO_SEQUENCER_REWARD_MERKLE_TREE_PERMITS")
-            .ok()
-            .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or(1);
-
         let permit = REWARD_MERKLE_TREE_V2_MEMORY_LOCK
             .get_or_init(|| {
+                let num_permits: usize =
+                    std::env::var("ESPRESSO_SEQUENCER_REWARD_MERKLE_TREE_PERMITS")
+                        .ok()
+                        .and_then(|v| v.parse::<usize>().ok())
+                        .unwrap_or(1);
+
                 tracing::warn!(
                     "Initializing RewardMerkleTreeV2 semaphore with {num_permits} permits"
                 );
