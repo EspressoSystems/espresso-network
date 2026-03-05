@@ -16,6 +16,7 @@ use hotshot_types::{
         LCV2StateSignatureRequestBody, LCV3StateSignatureRequestBody, LightClientState,
         StakeTableState, StateSignKey, StateSignature, StateVerKey,
     },
+    stake_table::HSStakeTable,
     traits::{
         block_contents::BlockHeader,
         network::ConnectedNetwork,
@@ -140,10 +141,7 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
                     let stake_table = membership.stake_table().await;
                     match stake_table.commitment(self.stake_table_capacity) {
                         Ok(stake_table_state) => {
-                            self.should_vote = stake_table.0.iter().any(|peer| {
-                                peer.state_ver_key == self.ver_key
-                                    && !peer.stake_table_entry.stake().is_zero()
-                            });
+                            self.should_vote = should_vote(&stake_table, &self.ver_key);
                             self.voting_stake_table_epoch = option_state_epoch;
                             self.voting_stake_table_state = stake_table_state;
                         },
@@ -294,4 +292,11 @@ impl StateSignatureMemStorage {
     pub fn get_signature(&self, height: u64) -> Option<LCV3StateSignatureRequestBody> {
         self.pool.get(&height).cloned()
     }
+}
+
+pub(crate) fn should_vote(stake_table: &HSStakeTable<SeqTypes>, ver_key: &SchnorrPubKey) -> bool {
+    stake_table
+        .0
+        .iter()
+        .any(|peer| &peer.state_ver_key == ver_key && !peer.stake_table_entry.stake().is_zero())
 }
