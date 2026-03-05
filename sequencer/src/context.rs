@@ -28,7 +28,7 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     network::NetworkConfig,
     storage_metrics::StorageMetricsValue,
-    traits::{metrics::Metrics, network::ConnectedNetwork},
+    traits::{metrics::Metrics, network::ConnectedNetwork, signature_key::StakeTableEntryType},
     PeerConfig, ValidatorConfig,
 };
 use parking_lot::Mutex;
@@ -133,6 +133,10 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
         let stake_table = config.hotshot_stake_table();
         let stake_table_commit = stake_table.commitment(stake_table_capacity)?;
         let stake_table_epoch = None;
+        let should_vote = stake_table.0.iter().any(|peer| {
+            peer.state_ver_key == validator_config.state_public_key
+                && !peer.stake_table_entry.stake().is_zero()
+        });
 
         let event_streamer = Arc::new(RwLock::new(EventsStreamer::<SeqTypes>::new(
             stake_table.0,
@@ -161,6 +165,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
             stake_table_commit,
             stake_table_epoch,
             stake_table_capacity,
+            should_vote,
         );
         if let Some(url) = state_relay_server {
             state_signer = state_signer.with_relay_server(url);
