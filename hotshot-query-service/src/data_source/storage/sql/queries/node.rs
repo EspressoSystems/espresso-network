@@ -368,46 +368,96 @@ where
             range_starts.len()
         );
 
-        // We can easily find the end of each range from the start by finding the maximum height
-        // which is still present between the start and the next range's start, thus finding the
-        // full sequence of [`SyncStatus::Present`] ranges. We can then interpolate
-        // [`SyncStatus::Missing`] ranges between each present range.
-        let mut prev = start;
-        for (i, &(start,)) in range_starts.iter().enumerate() {
-            // Find the end.
-            //
-            // Note: finding the end of each range individually in a separate query is inefficient
-            // in the case where there are many distinct small ranges, compared to finding all the
-            // ends in a single query using the mirror image of the outer join query that we used to
-            // find all the starts. However, this approach is much _more_ efficient in the case
-            // where there are only a few distinct ranges, because the outer join approach needs to
-            // traverse the entire table no matter what, whereas this approach allows us to pick out
-            // each range end using an efficient height-indexed query.
-            //
-            // In the former case, where this approach is less efficient, we have many missing
-            // objects (which is necessary to chop up the space into many distinct present ranges)
-            // and thus a lot of expensive work to do regardless, in fetching all of those missing
-            // objects. The latter case, meanwhile, is much more common, as missing data is the
-            // exception. Thus, it is better to be more efficient in the common case.
+        let range_ends = if range_starts.len() <= 10 {
+            // In the common case, where we are mostly or entirely synced and only missing a few
+            // objects, chopping the space into only a small number of present ranges, it is more
+            // efficient to pick out reach range's end individually with a specific, efficient,
+            // height-indexed query, rather than execute another very expensive query which is the
+            // mirror of the `range_starts` query to load all the range ends in bulk.
+            let mut ends = vec![];
+            for (i, &(start,)) in range_starts.iter().enumerate() {
+                // We can easily find the end of the range from the start by finding the maximum
+                // height which is still present between the start and the next range's start.
+                let query = format!(
+                    "SELECT max(height) from {table}
+                      WHERE height < $1 AND {indicator_column} IS NOT NULL"
+                );
+                let upper_bound = if i + 1 < range_starts.len() {
+                    range_starts[i + 1].0
+                } else {
+                    block_height as i64
+                };
+                let (end,) = query_as::<(i64,)>(&query)
+                    .bind(upper_bound)
+                    // This query is guaranteed to return one result, since `start` satisfies the
+                    // requirements even if nothing else does.
+                    .fetch_one(self.as_mut())
+                    .await?;
+                tracing::debug!(start, end, "found end for present range");
+                ends.push((end,));
+            }
+            ends
+        } else {
+            // When the number of distinct ranges becomes large, making many small queries to fetch
+            // each specific range end becomes inefficient because it is dominated by overhead. In
+            // this case, we fall back to fetching the range ends using a single moderately
+            // expensive query, which is the mirror image of the query we used to fetch the range
+            // starts.
             let query = format!(
-                "SELECT max(height) from {table}
-                  WHERE height < $1 AND {indicator_column} IS NOT NULL"
+                "SELECT predecessor.height FROM {table} AS predecessor
+                   LEFT JOIN {table} AS successor ON successor.height = predecessor.height + 1
+                  WHERE predecessor.height >= $1 AND predecessor.height < $2
+                    AND predecessor.{indicator_column} IS NOT NULL
+                    AND successor.{indicator_column} IS NULL
+                  ORDER BY predecessor.height"
             );
-            let upper_bound = if i + 1 < range_starts.len() {
-                range_starts[i + 1].0
-            } else {
-                block_height as i64
-            };
-            let (end,) = query_as::<(i64,)>(&query)
-                .bind(upper_bound)
-                // This query is guaranteed to return one result, since `start` satisfies the
-                // requirements even if nothing else does.
-                .fetch_one(self.as_mut())
+            let ends = query_as::<(i64,)>(&query)
+                .bind(start as i64)
+                .bind(block_height as i64)
+                .fetch_all(self.as_mut())
                 .await?;
-            tracing::debug!(start, end, "found end for present range");
+            tracing::debug!(
+                ?ends,
+                "found {} ending heights for present ranges",
+                ends.len()
+            );
+            ends
+        };
 
+        // Sanity check: every range has a start and an end.
+        if range_starts.len() != range_ends.len() {
+            return Err(QueryError::Error {
+                message: format!(
+                    "number of present range starts ({}) does not match number of present range \
+                     ends ({})",
+                    range_starts.len(),
+                    range_ends.len(),
+                ),
+            });
+        }
+
+        // Now we can simply zip `range_starts` and `range_ends` to find the full sequence of
+        // [`SyncStatus::Present`] ranges. We can then interpolate [`SyncStatus::Missing`] ranges
+        // between each present range.
+        let mut prev = start;
+        for ((start,), (end,)) in range_starts.into_iter().zip(range_ends) {
             let start = start as usize;
             let end = end as usize;
+
+            // Sanity check range bounds.
+            if start < prev {
+                return Err(QueryError::Error {
+                    message: format!(
+                        "found present ranges out of order: range start {start} is before \
+                         previous range end {prev}"
+                    ),
+                });
+            }
+            if end < start {
+                return Err(QueryError::Error {
+                    message: format!("malformed range: start={start}, end={end}"),
+                });
+            }
 
             if start != prev {
                 // There is a range in between this one and the previous one, which must correspond
@@ -731,4 +781,185 @@ where
         },
     };
     Ok(Some((from, to)))
+}
+
+#[cfg(test)]
+mod test {
+    use hotshot_example_types::node_types::TEST_VERSIONS;
+    use itertools::Itertools;
+
+    use super::*;
+    use crate::{
+        availability::LeafQueryData,
+        data_source::{
+            sql::testing::TmpDb,
+            storage::{SqlStorage, StorageConnectionType, UpdateAvailabilityStorage},
+            Transaction as _, VersionedDataSource,
+        },
+        testing::mocks::MockTypes,
+    };
+
+    async fn test_sync_status_ranges(
+        pruned_height: Option<usize>,
+        block_height: usize,
+        present_ranges: &[(usize, usize)],
+    ) {
+        let storage = TmpDb::init().await;
+        let db = SqlStorage::connect(storage.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+
+        // Generate some mock leaves to insert.
+        let mut leaves: Vec<LeafQueryData<MockTypes>> = vec![
+            LeafQueryData::<MockTypes>::genesis(
+                &Default::default(),
+                &Default::default(),
+                TEST_VERSIONS.test,
+            )
+            .await,
+        ];
+        for i in 1..block_height {
+            let mut leaf = leaves[i - 1].clone();
+            leaf.leaf.block_header_mut().block_number = i as u64;
+            leaves.push(leaf);
+        }
+
+        // Set up.
+        {
+            let mut tx = db.write().await.unwrap();
+
+            for &(start, end) in present_ranges {
+                for leaf in leaves[start..end].iter() {
+                    tx.insert_leaf(leaf.clone()).await.unwrap();
+                }
+            }
+
+            tx.commit().await.unwrap();
+        }
+
+        let sync_status = db
+            .read()
+            .await
+            .unwrap()
+            .sync_status_ranges("leaf2", "height", pruned_height, block_height)
+            .await
+            .unwrap();
+
+        // Verify missing.
+        let present: usize = present_ranges.iter().map(|(start, end)| end - start).sum();
+        let total = block_height - pruned_height.map_or(0, |h| h + 1);
+        assert_eq!(sync_status.missing, total - present);
+
+        // Verify ranges.
+        let mut ranges = sync_status.ranges.into_iter();
+        let mut prev = if let Some(height) = pruned_height {
+            let range = ranges.next().unwrap();
+            assert_eq!(
+                range,
+                SyncStatusRange {
+                    start: 0,
+                    end: height + 1,
+                    status: SyncStatus::Pruned,
+                }
+            );
+            height + 1
+        } else {
+            0
+        };
+        for &(start, end) in present_ranges {
+            if start != prev {
+                let range = ranges.next().unwrap();
+                assert_eq!(
+                    range,
+                    SyncStatusRange {
+                        start: prev,
+                        end: start,
+                        status: SyncStatus::Missing,
+                    }
+                );
+            }
+            let range = ranges.next().unwrap();
+            assert_eq!(
+                range,
+                SyncStatusRange {
+                    start,
+                    end,
+                    status: SyncStatus::Present,
+                }
+            );
+            prev = end;
+        }
+
+        if prev != block_height {
+            let range = ranges.next().unwrap();
+            assert_eq!(
+                range,
+                SyncStatusRange {
+                    start: prev,
+                    end: block_height,
+                    status: SyncStatus::Missing,
+                }
+            );
+        }
+
+        assert_eq!(ranges.next(), None);
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_sync_status_ranges_bookends_present() {
+        test_sync_status_ranges(None, 6, &[(0, 2), (4, 6)]).await;
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_sync_status_ranges_bookends_missing() {
+        test_sync_status_ranges(None, 6, &[(2, 4)]).await;
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_sync_status_ranges_pruned_bookends_present() {
+        test_sync_status_ranges(Some(1), 8, &[(2, 4), (6, 8)]).await;
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_sync_status_ranges_pruned_bookends_missing() {
+        test_sync_status_ranges(Some(1), 8, &[(4, 6)]).await;
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_sync_status_ranges_singleton_ranges() {
+        test_sync_status_ranges(None, 3, &[(0, 1), (2, 3)]).await;
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_sync_status_ranges_many_ranges_bookends_present() {
+        let ranges = (0..=100).map(|i| (2 * i, 2 * i + 1)).collect_vec();
+        test_sync_status_ranges(None, 201, &ranges).await;
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_sync_status_ranges_many_ranges_bookends_missing() {
+        let ranges = (1..=100).map(|i| (2 * i, 2 * i + 1)).collect_vec();
+        test_sync_status_ranges(None, 202, &ranges).await;
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_sync_status_ranges_many_ranges_pruned_bookends_present() {
+        let ranges = (1..=100).map(|i| (2 * i, 2 * i + 1)).collect_vec();
+        test_sync_status_ranges(Some(1), 201, &ranges).await;
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_sync_status_ranges_many_ranges_pruned_bookends_missing() {
+        let ranges = (2..=100).map(|i| (2 * i, 2 * i + 1)).collect_vec();
+        test_sync_status_ranges(Some(1), 202, &ranges).await;
+    }
 }
