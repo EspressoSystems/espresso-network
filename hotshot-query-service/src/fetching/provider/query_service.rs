@@ -1652,8 +1652,7 @@ mod test {
             .builder(provider.clone())
             .await
             .unwrap()
-            .with_minor_scan_interval(Duration::from_secs(1))
-            .with_major_scan_interval(1)
+            .with_proactive_interval(Duration::from_secs(1))
             .build()
             .await
             .unwrap();
