@@ -1036,6 +1036,14 @@ impl<
         Ok(tree)
     }
 
+    async fn get_reward_merkle_tree_v2(
+        &self,
+        height: u64,
+        view: ViewNumber,
+    ) -> anyhow::Result<Vec<u8>> {
+        self.as_ref().get_reward_merkle_tree_v2(height, view).await
+    }
+
     #[tracing::instrument(skip(self))]
     async fn get_state_cert(
         &self,
@@ -1207,6 +1215,30 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> CatchupD
             ))?;
 
         retain_v1_reward_accounts(&state.reward_merkle_tree_v1, accounts.iter().copied())
+    }
+
+    async fn get_reward_merkle_tree_v2(
+        &self,
+        height: u64,
+        view: ViewNumber,
+    ) -> anyhow::Result<Vec<u8>> {
+        let state = self
+            .consensus()
+            .await
+            .read()
+            .await
+            .state(view)
+            .await
+            .context(format!(
+                "state not available for height {height}, view {view}"
+            ))?;
+
+        let merkle_tree_bytes = bincode::serialize(&TryInto::<RewardMerkleTreeV2Data>::try_into(
+            &state.reward_merkle_tree_v2,
+        )?)
+        .context("Merkle tree serialization failed; this should never happen.")?;
+
+        Ok(merkle_tree_bytes)
     }
 
     async fn get_state_cert(

@@ -398,17 +398,35 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
         &self,
         retry: usize,
         height: u64,
-        _view: ViewNumber,
+        view: ViewNumber,
         reward_merkle_tree_root: RewardMerkleCommitmentV2,
         accounts: Arc<Vec<RewardAccountV2>>,
     ) -> anyhow::Result<PermittedRewardMerkleTreeV2> {
         let result = self
             .fetch(retry, |client| async move {
-                let tree_bytes = client
+                // Try the catchup endpoint first which returns tree from consensuss decided state
+                // if not present, then fall back to
+                // the reward-state-v2 endpoint which returns from decided state
+                let tree_bytes = match client
                     .inner
-                    .get::<Vec<u8>>(&format!("reward-state-v2/reward-merkle-tree-v2/{height}",))
+                    .get::<Vec<u8>>(&format!("catchup/{height}/{}/reward-merkle-tree-v2", *view))
                     .send()
-                    .await?;
+                    .await
+                {
+                    Ok(bytes) => bytes,
+                    Err(err) => {
+                        tracing::info!(
+                            "catchup endpoint failed, falling back to reward-state-v2: {err:#}"
+                        );
+                        client
+                            .inner
+                            .get::<Vec<u8>>(&format!(
+                                "reward-state-v2/reward-merkle-tree-v2/{height}"
+                            ))
+                            .send()
+                            .await?
+                    },
+                };
 
                 Ok::<Vec<u8>, anyhow::Error>(tree_bytes)
             })

@@ -329,6 +329,12 @@ pub(crate) trait CatchupDataSource: Sync {
         accounts: &[RewardAccountV1],
     ) -> impl Send + Future<Output = anyhow::Result<RewardMerkleTreeV1>>;
 
+    fn get_reward_merkle_tree_v2(
+        &self,
+        height: u64,
+        view: ViewNumber,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>>;
+
     fn get_state_cert(
         &self,
         epoch: u64,
