@@ -168,29 +168,43 @@ where
             },
         };
 
-        Ok(SyncStatusQueryData {
+        // A block can be missing if its corresponding leaf is missing or if the block's `size`,
+        // `data`, and `num_transactions` fields are `NULL`. We use `size` as the indicator column
+        // to capture this while avoiding touching `data`, which can be quite large.
+        let blocks = self
+            .sync_status_ranges("payload", "size", pruned_height, block_height)
+            .await?;
+
+        let leaves = if blocks.is_fully_synced() {
+            // A common special case is that there are no missing blocks. In this case, we already
+            // know there are no missing leaves either, since a block can only be present if we
+            // already have the corresponding leaf. Just return the fully-synced status for leaves
+            // without doing another expensive query.
+            blocks.clone()
+        } else {
             // A leaf can only be missing if there is no row for it in the database (all its columns
             // are non-nullable). We use `height` as an indicator for `NULL` rows in an inner join,
             // which allows an index-only scan.
-            leaves: self
-                .sync_status_ranges("leaf2", "height", pruned_height, block_height)
-                .await?,
-            // A block can be missing if its corresponding leaf is missing or if the block's `size`,
-            // `data`, and `num_transactions` fields are `NULL`. We use `size` as the indicator
-            // column to capture this while avoiding touching `data`, which can be quite large.
-            blocks: self
-                .sync_status_ranges("payload", "size", pruned_height, block_height)
-                .await?,
-            // For VID, common data can only be missing if the entire row is missing, so we use an
-            // index-only scan over `height`.
-            vid_common: self
-                .sync_status_ranges("vid2", "height", pruned_height, block_height)
-                .await?,
-            // VID shares can be missing in that case _or_ if the row is present but share data is
-            // NULL, so we use the `share` column as an indicator.
-            vid_shares: self
-                .sync_status_ranges("vid2", "share", pruned_height, block_height)
-                .await?,
+            self.sync_status_ranges("leaf2", "height", pruned_height, block_height)
+                .await?
+        };
+
+        // For VID, common data can only be missing if the entire row is missing, so we use an
+        // index-only scan over `height`.
+        let vid_common = self
+            .sync_status_ranges("vid2", "height", pruned_height, block_height)
+            .await?;
+        // VID shares can be missing in that case _or_ if the row is present but share data is NULL,
+        // so we use the `share` column as an indicator.
+        let vid_shares = self
+            .sync_status_ranges("vid2", "share", pruned_height, block_height)
+            .await?;
+
+        Ok(SyncStatusQueryData {
+            leaves,
+            blocks,
+            vid_common,
+            vid_shares,
             pruned_height,
         })
     }
@@ -354,43 +368,44 @@ where
             range_starts.len()
         );
 
-        // In a similar way, but now left joining instead of right joining, we find every object
-        // which is the last in a sequence of present objects.
-        let query = format!(
-            "SELECT predecessor.height FROM {table} AS predecessor
-               LEFT JOIN {table} AS successor ON successor.height = predecessor.height + 1
-              WHERE predecessor.height >= $1 AND predecessor.height < $2
-                AND predecessor.{indicator_column} IS NOT NULL
-                AND successor.{indicator_column} IS NULL ORDER BY predecessor.height"
-        );
-        let range_ends = query_as::<(i64,)>(&query)
-            .bind(start as i64)
-            .bind(block_height as i64)
-            .fetch_all(self.as_mut())
-            .await?;
-        tracing::debug!(
-            ?range_ends,
-            "found {} ending heights for present ranges",
-            range_ends.len()
-        );
-
-        // Sanity check: every range has a start and an end.
-        if range_starts.len() != range_ends.len() {
-            return Err(QueryError::Error {
-                message: format!(
-                    "number of present range starts ({}) does not match number of present range \
-                     ends ({})",
-                    range_starts.len(),
-                    range_ends.len(),
-                ),
-            });
-        }
-
-        // Now we can simply zip `range_starts` and `range_ends` to find the full sequence of
-        // [`SyncStatus::Present`] ranges. We can then interpolate [`SyncStatus::Missing`] ranges
-        // between each present range.
+        // We can easily find the end of each range from the start by finding the maximum height
+        // which is still present between the start and the next range's start, thus finding the
+        // full sequence of [`SyncStatus::Present`] ranges. We can then interpolate
+        // [`SyncStatus::Missing`] ranges between each present range.
         let mut prev = start;
-        for ((start,), (end,)) in range_starts.into_iter().zip(range_ends) {
+        for (i, &(start,)) in range_starts.iter().enumerate() {
+            // Find the end.
+            //
+            // Note: finding the end of each range individually in a separate query is inefficient
+            // in the case where there are many distinct small ranges, compared to finding all the
+            // ends in a single query using the mirror image of the outer join query that we used to
+            // find all the starts. However, this approach is much _more_ efficient in the case
+            // where there are only a few distinct ranges, because the outer join approach needs to
+            // traverse the entire table no matter what, whereas this approach allows us to pick out
+            // each range end using an efficient height-indexed query.
+            //
+            // In the former case, where this approach is less efficient, we have many missing
+            // objects (which is necessary to chop up the space into many distinct present ranges)
+            // and thus a lot of expensive work to do regardless, in fetching all of those missing
+            // objects. The latter case, meanwhile, is much more common, as missing data is the
+            // exception. Thus, it is better to be more efficient in the common case.
+            let query = format!(
+                "SELECT max(height) from {table}
+                  WHERE height < $1 AND {indicator_column} IS NOT NULL"
+            );
+            let upper_bound = if i + 1 < range_starts.len() {
+                range_starts[i + 1].0
+            } else {
+                block_height as i64
+            };
+            let (end,) = query_as::<(i64,)>(&query)
+                .bind(upper_bound)
+                // This query is guaranteed to return one result, since `start` satisfies the
+                // requirements even if nothing else does.
+                .fetch_one(self.as_mut())
+                .await?;
+            tracing::debug!(start, end, "found end for present range");
+
             let start = start as usize;
             let end = end as usize;
 
