@@ -406,7 +406,7 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
             .fetch(retry, |client| async move {
                 // Try the catchup endpoint first which returns tree from consensuss decided state
                 // if not present, then fall back to
-                // the reward-state-v2 endpoint which returns from decided state
+                // the reward-state-v2 endpoint which returns from storage decided state
                 let tree_bytes = match client
                     .inner
                     .get::<Vec<u8>>(&format!("catchup/{height}/{}/reward-merkle-tree-v2", *view))
