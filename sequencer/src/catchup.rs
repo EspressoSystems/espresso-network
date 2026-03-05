@@ -409,7 +409,7 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
                 // the reward-state-v2 endpoint which returns from storage decided state
                 let tree_bytes = match client
                     .inner
-                    .get::<Vec<u8>>(&format!("catchup/{height}/{}/reward-merkle-tree-v2", *view))
+                    .get::<Vec<u8>>(&format!("catchup/reward-merkle-tree-v2/{height}/{}", *view))
                     .send()
                     .await
                 {

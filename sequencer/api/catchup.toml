@@ -143,7 +143,7 @@ Return all RewardMerkleTreeV2 accounts stored for the requested height, paginate
 """
 
 [route.reward_merkle_tree_v2]
-PATH = ["/:height/:view/reward-merkle-tree-v2"]
+PATH = ["/reward-merkle-tree-v2/:height/:view"]
 ":height" = "Integer"
 ":view" = "Integer"
 DOC = """
