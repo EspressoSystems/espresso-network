@@ -33,6 +33,7 @@ use hotshot_contract_adapter::sol_types::{
 };
 use hotshot_types::{
     data::{vid_disperse::VID_TARGET_TOTAL_STAKE, EpochNumber},
+    traits::metrics::Metrics,
     drb::{
         election::{generate_stake_cdf, select_randomized_leader, RandomizedCommittee},
         DrbResult,
@@ -65,7 +66,7 @@ use super::{
     traits::{MembershipPersistence, StateCatchup},
     v0_3::{
         AuthenticatedValidator, ChainConfig, EventKey, Fetcher, RegisteredValidator,
-        StakeTableEvent, StakeTableUpdateTask,
+        StakeTableEvent, StakeTableMetrics, StakeTableUpdateTask,
     },
     Header, L1Client, Leaf2, PubKey, SeqTypes,
 };
@@ -800,6 +801,7 @@ impl Fetcher {
         persistence: Arc<Mutex<dyn MembershipPersistence>>,
         l1_client: L1Client,
         chain_config: ChainConfig,
+        metrics: &dyn Metrics,
     ) -> Self {
         Self {
             peers,
@@ -808,6 +810,7 @@ impl Fetcher {
             chain_config: Arc::new(Mutex::new(chain_config)),
             update_task: StakeTableUpdateTask(Mutex::new(None)).into(),
             initial_supply: Arc::new(RwLock::new(None)),
+            metrics: StakeTableMetrics::new(metrics),
         }
     }
 
@@ -829,6 +832,7 @@ impl Fetcher {
         let l1_retry = self.l1_client.options().l1_retry_delay;
         let update_delay = self.l1_client.options().stake_table_update_interval;
         let chain_config = self.chain_config.clone();
+        let metrics = self.metrics.clone();
 
         async move {
             // Get the stake table contract address from the chain config.
@@ -867,6 +871,7 @@ impl Fetcher {
                         .await
                     {
                         Ok(events) => {
+                            metrics.last_synced_l1_block.set(finalized_block as usize);
                             tracing::info!(
                                 "Successfully fetched and stored stake table events at \
                                  block={finalized_block:?}"
@@ -1407,7 +1412,13 @@ impl Fetcher {
         let peers = Arc::new(mock::MockStateCatchup::default());
         let persistence = NoStorage;
 
-        Self::new(peers, Arc::new(Mutex::new(persistence)), l1, chain_config)
+        Self::new(
+            peers,
+            Arc::new(Mutex::new(persistence)),
+            l1,
+            chain_config,
+            &*hotshot_types::traits::metrics::NoMetrics::boxed(),
+        )
     }
 }
 

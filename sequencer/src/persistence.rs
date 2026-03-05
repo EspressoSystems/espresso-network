@@ -145,7 +145,10 @@ mod tests {
             UpgradeCertificate,
         },
         simple_vote::{NextEpochQuorumData2, QuorumData2, UpgradeProposalData, VersionedVoteData},
-        traits::{block_contents::BlockHeader, node_implementation::ConsensusTime, EncodeBytes},
+        traits::{
+            block_contents::BlockHeader, metrics::NoMetrics, node_implementation::ConsensusTime,
+            EncodeBytes,
+        },
         utils::EpochTransitionIndicator,
         vid::avidm::{init_avidm_param, AvidMScheme},
         vote::HasViewNumber,
@@ -1666,6 +1669,7 @@ mod tests {
                 base_fee: 0.into(),
                 ..Default::default()
             },
+            &NoMetrics,
         );
 
         // sleep so that we have enough events

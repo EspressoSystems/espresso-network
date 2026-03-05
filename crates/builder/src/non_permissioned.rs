@@ -59,6 +59,7 @@ pub fn build_instance_state(
         Arc::new(Mutex::new(NoStorage)),
         l1_client.clone(),
         chain_config,
+        &NoMetrics,
     );
 
     let coordinator = EpochMembershipCoordinator::new(

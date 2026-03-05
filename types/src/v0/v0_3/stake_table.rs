@@ -13,7 +13,11 @@ use hotshot_contract_adapter::sol_types::StakeTableV2::{
     UndelegatedV2, ValidatorExit, ValidatorExitV2, ValidatorRegistered, ValidatorRegisteredV2,
 };
 use hotshot_types::{
-    data::EpochNumber, light_client::StateVerKey, network::PeerConfigKeys, PeerConfig,
+    data::EpochNumber,
+    light_client::StateVerKey,
+    network::PeerConfigKeys,
+    traits::metrics::{Gauge, Metrics, NoMetrics},
+    PeerConfig,
 };
 use itertools::Itertools;
 use jf_utils::to_bytes;
@@ -262,6 +266,31 @@ pub struct Fetcher {
     pub(crate) chain_config: Arc<Mutex<ChainConfig>>,
     pub(crate) update_task: Arc<StakeTableUpdateTask>,
     pub initial_supply: Arc<RwLock<Option<U256>>>,
+    pub(crate) metrics: StakeTableMetrics,
+}
+
+/// Prometheus metrics for the stake table fetcher.
+#[derive(Clone, Debug)]
+pub struct StakeTableMetrics {
+    /// Last finalized L1 block successfully synced.
+    pub last_synced_l1_block: Arc<dyn Gauge>,
+}
+
+impl StakeTableMetrics {
+    pub fn new(metrics: &dyn Metrics) -> Self {
+        let sub = metrics.subgroup("stake_table".into());
+        Self {
+            last_synced_l1_block: sub
+                .create_gauge("last_synced_l1_block".into(), None)
+                .into(),
+        }
+    }
+}
+
+impl Default for StakeTableMetrics {
+    fn default() -> Self {
+        Self::new(&*NoMetrics::boxed())
+    }
 }
 
 #[derive(Debug, Default)]

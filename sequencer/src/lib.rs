@@ -620,6 +620,7 @@ where
         Arc::new(Mutex::new(persistence.clone())),
         l1_client.clone(),
         genesis.chain_config,
+        metrics,
     );
 
     info!("Spawning update loop");
@@ -1397,6 +1398,7 @@ pub mod testing {
                 Arc::new(Mutex::new(persistence.clone())),
                 l1_client.clone(),
                 chain_config,
+                metrics,
             );
             fetcher.spawn_update_loop().await;
 

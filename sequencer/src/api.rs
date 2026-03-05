@@ -5703,6 +5703,7 @@ mod test {
                 base_fee: 0.into(),
                 ..Default::default()
             },
+            &NoMetrics,
         );
 
         let provider = l1_client.provider;
