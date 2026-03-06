@@ -1409,9 +1409,14 @@ where
                     self.clone()
                         // Fetching the payload metadata is enough to trigger an active fetch of the
                         // corresponding leaf and the full block if they are missing.
-                        .get_range_with_chunk_size::<_, PayloadMetadata<Types>>(
+                        //
+                        // We iterate in reverse order because leaves are inherently fetched in
+                        // reverse, since we cannot (actively) fetch a leaf until we have the
+                        // subsequent leaf, which tells us what the hash of its parent should be.
+                        .get_range_with_chunk_size_rev::<PayloadMetadata<Types>>(
                             chunk_size,
-                            range.start..range.end,
+                            Bound::Included(range.start),
+                            range.end - 1,
                         )
                         .then(|fetch| async move {fetch.await;})
                         .collect::<()>()
@@ -1430,9 +1435,10 @@ where
 
                     tracing::info!(?range, "fetching missing VID range");
                     self.clone()
-                        .get_range_with_chunk_size::<_, VidCommonMetadata<Types>>(
+                        .get_range_with_chunk_size_rev::<VidCommonMetadata<Types>>(
                             chunk_size,
-                            range.start..range.end,
+                            Bound::Included(range.start),
+                            range.end - 1,
                         )
                         .then(|fetch| async move {
                             fetch.await;
