@@ -20,7 +20,7 @@ use crate::types::HeightIndexed;
 
 /// A status of a set of resources, regarding its presence in the database.
 ///
-/// A single resource or range of consecutive resoures may be either:
+/// A single resource or range of consecutive resources may be either:
 /// * Present in the database
 /// * Missing from the database, but will eventually be recovered via asynchronous fetching
 /// * Pruned, meaning it is missing, but intentionally so, and will not be fetched
