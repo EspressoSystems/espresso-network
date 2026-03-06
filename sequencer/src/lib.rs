@@ -24,6 +24,7 @@ use async_lock::{Mutex, RwLock};
 use catchup::{ParallelStateCatchup, StatePeers};
 use context::SequencerContext;
 use derivative::Derivative;
+use either::Either;
 use espresso_types::{
     traits::{EventConsumer, MembershipPersistence},
     v0::traits::SequencerPersistence,
@@ -34,15 +35,16 @@ pub use genesis::Genesis;
 use genesis::L1Finalized;
 use hotshot::{
     traits::implementations::{
-        derive_libp2p_multiaddr, derive_libp2p_peer_id, CdnMetricsValue, CdnTopic,
-        CombinedNetworks, GossipConfig, KeyPair, Libp2pNetwork, MemoryNetwork, PushCdnNetwork,
-        RequestResponseConfig, WrappedSignatureKey,
+        derive_libp2p_multiaddr, derive_libp2p_peer_id, CdnMetricsValue, CdnTopic, Cliquenet,
+        CombinedNetworks, CompatNetwork, GossipConfig, KeyPair, Libp2pNetwork, MemoryNetwork,
+        PushCdnNetwork, RequestResponseConfig, WrappedSignatureKey,
     },
     types::SignatureKey,
 };
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtPersistentStorage;
 use hotshot_orchestrator::client::{get_complete_config, OrchestratorClient};
 use hotshot_types::{
+    addr::NetAddr,
     data::ViewNumber,
     epoch_membership::EpochMembershipCoordinator,
     light_client::{StateKeyPair, StateSignKey},
@@ -54,7 +56,7 @@ use hotshot_types::{
         storage::Storage,
     },
     utils::BuilderCommitment,
-    ValidatorConfig,
+    x25519, ValidatorConfig,
 };
 use libp2p::Multiaddr;
 use moka::future::Cache;
@@ -121,7 +123,10 @@ pub struct NetworkParams {
     pub catchup_base_timeout: Duration,
     /// The address to advertise as our public API's URL
     pub public_api_url: Option<Url>,
-
+    /// Network address.
+    pub p2p_address: Option<NetAddr>,
+    /// X25519 secret key.
+    pub x25519_secret_key: Option<x25519::SecretKey>,
     /// The address to send to other Libp2p nodes to contact us
     pub libp2p_advertise_address: String,
     /// The address to bind to for Libp2p
@@ -199,7 +204,7 @@ pub struct L1Params {
 pub async fn init_node<P>(
     genesis: Genesis,
     network_params: NetworkParams,
-    metrics: &dyn Metrics,
+    metrics: Box<dyn Metrics>,
     mut persistence: P,
     l1_params: L1Params,
     storage: Option<RequestResponseStorage>,
@@ -359,6 +364,11 @@ where
         state_public_key: state_key_pair.ver_key(),
         state_private_key: state_key_pair.sign_key(),
         is_da,
+        x25519_keypair: network_params
+            .x25519_secret_key
+            .as_ref()
+            .map(x25519::Keypair::from),
+        p2p_addr: network_params.p2p_address.clone(),
     };
 
     // Derive our Libp2p public key from our private key
@@ -502,7 +512,7 @@ where
             public_key: WrappedSignatureKey(validator_config.public_key),
             private_key: validator_config.private_key.clone(),
         },
-        CdnMetricsValue::new(metrics),
+        CdnMetricsValue::new(&*metrics),
     )
     .with_context(|| format!("Failed to create CDN network {node_index}"))?;
 
@@ -538,7 +548,7 @@ where
 
     let l1_client = l1_params
         .options
-        .with_metrics(metrics)
+        .with_metrics(&*metrics)
         .connect(l1_params.urls)
         .with_context(|| "failed to create L1 client")?;
 
@@ -585,7 +595,7 @@ where
         network_params.state_peers,
         network_params.catchup_backoff,
         network_params.catchup_base_timeout,
-        metrics,
+        &*metrics,
     );
     state_catchup_providers.add_provider(Arc::new(state_peers));
 
@@ -604,7 +614,7 @@ where
         },
     };
 
-    persistence.enable_metrics(metrics);
+    persistence.enable_metrics(&*metrics);
 
     let fetcher = Fetcher::new(
         Arc::new(state_catchup_providers.clone()),
@@ -676,7 +686,7 @@ where
             // We need the private key so we can derive our Libp2p keypair
             // (using https://docs.rs/blake3/latest/blake3/fn.derive_key.html)
             &validator_config.private_key,
-            hotshot::traits::implementations::Libp2pMetricsValue::new(metrics),
+            hotshot::traits::implementations::Libp2pMetricsValue::new(&*metrics),
         )
         .await
         .with_context(|| {
@@ -699,11 +709,48 @@ where
         };
 
         // Combine the CDN and P2P networks
-        Arc::from(CombinedNetworks::new(
-            cdn_network,
-            p2p_network,
-            Some(Duration::from_secs(1)),
-        ))
+        CombinedNetworks::new(cdn_network, p2p_network, Some(Duration::from_secs(1)))
+    };
+
+    let network = if let Some((k, a)) = network_params
+        .x25519_secret_key
+        .zip(network_params.p2p_address.as_ref())
+    {
+        let (peers, non_peers): (Vec<_>, Vec<_>) = coordinator
+            .stake_table_for_epoch(None)
+            .await?
+            .stake_table()
+            .await
+            .0
+            .into_iter()
+            .partition(|cfg| cfg.connect_info.is_some());
+
+        let peers = peers.into_iter().map(|cfg| {
+            (
+                cfg.stake_table_entry.stake_key,
+                cfg.connect_info
+                    .expect("LHS of partitioned peers has connect info"),
+            )
+        });
+
+        let non_peers = non_peers
+            .into_iter()
+            .map(|cfg| cfg.stake_table_entry.stake_key);
+
+        let m = metrics.clone();
+        let c = Cliquenet::<PubKey>::create(
+            "sequencer",
+            pub_key,
+            k.into(),
+            a.clone(),
+            peers,
+            non_peers,
+            m,
+        )
+        .await?;
+        Either::Right(CompatNetwork::new(c, network).await)
+    } else {
+        Either::Left(network)
     };
 
     let mut ctx = SequencerContext::init(
@@ -714,9 +761,9 @@ where
         storage,
         state_catchup_providers,
         persistence,
-        network,
+        Arc::new(network),
         Some(network_params.state_relay_server_url),
-        metrics,
+        &*metrics,
         genesis.stake_table.capacity,
         event_consumer,
         proposal_fetcher_config,
@@ -1137,6 +1184,7 @@ pub mod testing {
                 .map(|(pub_key, state_key_pair)| PeerConfig::<SeqTypes> {
                     stake_table_entry: pub_key.stake_table_entry(U256::from(1)),
                     state_ver_key: state_key_pair.ver_key(),
+                    connect_info: None,
                 })
                 .collect::<Vec<_>>();
 
@@ -1334,6 +1382,8 @@ pub mod testing {
                 state_public_key: self.state_key_pairs[i].ver_key(),
                 state_private_key: self.state_key_pairs[i].sign_key(),
                 is_da,
+                x25519_keypair: None,
+                p2p_addr: None,
             };
 
             let topics = if is_da {

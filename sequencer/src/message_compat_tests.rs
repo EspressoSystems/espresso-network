@@ -62,7 +62,7 @@ async fn test_message_compat<Ver: StaticVersionType>(_ver: Ver) {
 
     let (sender, priv_key) = PubKey::generated_from_seed_indexed(Default::default(), 0);
     let signature = PubKey::sign(&priv_key, &[]).unwrap();
-    let committee = vec![PeerConfig::default()]; /* one committee member, necessary to generate a VID share */
+    let committee = vec![PeerConfig::test_default()]; /* one committee member, necessary to generate a VID share */
     let storage = TestStorage::default();
     let epoch_height = 10;
 

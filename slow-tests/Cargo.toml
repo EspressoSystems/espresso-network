@@ -35,6 +35,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 staking-cli = { workspace = true }
 surf-disco = { workspace = true }
+tagged-base64 = { workspace = true }
 tempfile = { workspace = true }
 test-log = { workspace = true }
 test-utils = { workspace = true }

@@ -19,7 +19,7 @@ use crate::{
         ORCHESTRATOR_DEFAULT_TRANSACTION_SIZE, REQUEST_DATA_DELAY,
     },
     hotshot_config_file::HotShotConfigFile,
-    HotShotConfig, NodeType, ValidatorConfig,
+    HotShotConfig, NodeType, PeerConnectInfo, ValidatorConfig,
 };
 
 /// Configuration describing a libp2p node
@@ -81,6 +81,7 @@ pub struct PeerConfigKeys<TYPES: NodeType> {
     pub stake: u64,
     /// whether the node is a DA node
     pub da: bool,
+    pub connect_info: Option<PeerConnectInfo>,
 }
 
 /// Options controlling how the random builder generates blocks
@@ -165,8 +166,7 @@ pub enum NetworkConfigSource {
 
 impl<TYPES: NodeType> NetworkConfig<TYPES> {
     /// Get a temporary node index for generating a validator config
-    #[must_use]
-    pub fn generate_init_validator_config(
+    pub fn generate_init_test_validator_config(
         cur_node_index: u16,
         is_da: bool,
     ) -> ValidatorConfig<TYPES> {

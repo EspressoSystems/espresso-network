@@ -38,7 +38,7 @@ type EpochSender<TYPES> = (
 
 /// Struct to Coordinate membership catchup
 pub struct EpochMembershipCoordinator<TYPES: NodeType> {
-    /// The underlying membhersip
+    /// The underlying membership
     membership: Arc<RwLock<TYPES::Membership>>,
 
     /// Any in progress attempts at catching up are stored in this map
@@ -198,7 +198,7 @@ where
         ))
     }
 
-    /// Catches the membership up to the epoch passed as an argument.  
+    /// Catches the membership up to the epoch passed as an argument.
     /// To do this, try to get the stake table for the epoch containing this epoch's root and
     /// the stake table for the epoch containing this epoch's drb result.
     /// If they do not exist, then go one by one back until we find a stake table.

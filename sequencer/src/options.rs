@@ -14,7 +14,7 @@ use anyhow::{bail, Context};
 use clap::{error::ErrorKind, Args, FromArgMatches, Parser};
 use derivative::Derivative;
 use espresso_types::{parse_duration, BackoffParams, L1ClientOptions};
-use hotshot_types::{light_client::StateSignKey, signature_key::BLSPrivKey};
+use hotshot_types::{addr::NetAddr, light_client::StateSignKey, signature_key::BLSPrivKey, x25519};
 use jf_signature::{bls_over_bn254, schnorr};
 use libp2p::Multiaddr;
 use sequencer_utils::logging;
@@ -65,6 +65,14 @@ pub struct Options {
         default_value = "127.0.0.1:8081"
     )]
     pub cdn_endpoint: String,
+
+    /// The address to bind to for cliquenet (in `host:port` | `ip:port` form)
+    #[clap(
+        long,
+        env = "ESPRESSO_SEQUENCER_P2P_ADDRESS",
+        default_value = "127.0.0.1:1776"
+    )]
+    pub p2p_address: Option<NetAddr>,
 
     /// The address to bind to for Libp2p (in `host:port` form)
     #[clap(
@@ -294,6 +302,17 @@ pub struct Options {
     #[derivative(Debug = "ignore")]
     pub private_state_key: Option<TaggedBase64>,
 
+    /// Private x25519 key.
+    ///
+    /// This can be used as an alternative to KEY_FILE.
+    #[clap(
+        long,
+        env = "ESPRESSO_SEQUENCER_X25519_KEY",
+        conflicts_with = "KEY_FILE"
+    )]
+    #[derivative(Debug = "ignore")]
+    pub private_x25519_key: Option<TaggedBase64>,
+
     /// Add optional modules to the service.
     ///
     /// Modules are added by specifying the name of the module followed by it's arguments, as in
@@ -369,7 +388,9 @@ impl Options {
         ModuleArgs(self.modules.clone()).parse()
     }
 
-    pub fn private_keys(&self) -> anyhow::Result<(BLSPrivKey, StateSignKey)> {
+    pub fn private_keys(
+        &self,
+    ) -> anyhow::Result<(BLSPrivKey, StateSignKey, Option<x25519::SecretKey>)> {
         if let Some(path) = &self.key_file {
             let vars = dotenvy::from_path_iter(path)?.collect::<Result<HashMap<_, _>, _>>()?;
             let staking = TaggedBase64::parse(
@@ -384,15 +405,26 @@ impl Options {
             )?
             .try_into()?;
 
-            Ok((staking, state))
-        } else if let (Some(staking), Some(state)) = (
+            let x25519 = if let Some(key) = vars.get("ESPRESSO_SEQUENCER_PRIVATE_X25519_KEY") {
+                Some(TaggedBase64::parse(key)?.try_into()?)
+            } else {
+                None
+            };
+
+            Ok((staking, state, x25519))
+        } else if let (Some(staking), Some(state), x25519) = (
             self.private_staking_key.clone(),
             self.private_state_key.clone(),
+            self.private_x25519_key.clone(),
         ) {
             let staking = bls_over_bn254::SignKey::try_from(staking)?;
             let state = schnorr::SignKey::try_from(state)?;
-
-            Ok((staking, state))
+            let x25519 = if let Some(x) = x25519 {
+                Some(x25519::SecretKey::try_from(x)?)
+            } else {
+                None
+            };
+            Ok((staking, state, x25519))
         } else {
             bail!("neither key file nor full set of private keys was provided")
         }
