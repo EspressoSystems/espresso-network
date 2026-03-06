@@ -1451,24 +1451,29 @@ impl SequencerPersistence for Persistence {
         &self,
         proposal: &Proposal<SeqTypes, VidDisperseShare<SeqTypes>>,
     ) -> anyhow::Result<()> {
-        let view = proposal.data.view_number().u64();
-        let payload_hash = proposal.data.payload_commitment();
-        let data_bytes = bincode::serialize(proposal).unwrap();
+        // let view = proposal.data.view_number().u64();
+        // let payload_hash = proposal.data.payload_commitment();
+        // let data_bytes = bincode::serialize(proposal).unwrap();
 
-        let now = Instant::now();
-        let mut tx = self.db.write().await?;
-        tx.upsert(
-            "vid_share2",
-            ["view", "data", "payload_hash"],
-            ["view"],
-            [(view as i64, data_bytes, payload_hash.to_string())],
-        )
-        .await?;
-        let res = tx.commit().await;
-        self.internal_metrics
-            .internal_append_vid_duration
-            .add_point(now.elapsed().as_secs_f64());
-        res
+        // let now = Instant::now();
+        // let mut tx = self.db.write().await?;
+        // tx.upsert(
+        //     "vid_share2",
+        //     ["view", "data", "payload_hash"],
+        //     ["view"],
+        //     [(view as i64, data_bytes, payload_hash.to_string())],
+        // )
+        // .await?;
+        // let res = tx.commit().await;
+        // self.internal_metrics
+        //     .internal_append_vid_duration
+        //     .add_point(now.elapsed().as_secs_f64());
+        // res
+
+        // Disabled for load test: skip VID share persistence.
+        let view = proposal.data.view_number();
+        tracing::warn!(?view, "append_vid disabled for load test");
+        Ok(())
     }
 
     async fn append_da(
