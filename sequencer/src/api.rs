@@ -1929,11 +1929,8 @@ pub mod test_helpers {
         // Wait for a few blocks to be decided.
         let mut events = network.server.event_stream().await;
         loop {
-            if let Event {
-                event: EventType::Decide { leaf_chain, .. },
-                ..
-            } = events.next().await.unwrap()
-            {
+            let event = events.next().await.unwrap();
+            if let EventType::Decide { leaf_chain, .. } = &event.event {
                 if leaf_chain
                     .iter()
                     .any(|LeafInfo { leaf, .. }| leaf.block_header().height() > 2)
@@ -2903,7 +2900,7 @@ mod test {
         let mut events = network.peers[0].event_stream().await;
         loop {
             let event = events.next().await.unwrap();
-            let EventType::Decide { leaf_chain, .. } = event.event else {
+            let EventType::Decide { leaf_chain, .. } = &event.event else {
                 continue;
             };
             if leaf_chain[0].leaf.height() > 0 {
@@ -2955,7 +2952,7 @@ mod test {
         let mut proposers = [false; NUM_NODES];
         loop {
             let event = events.next().await.unwrap();
-            let EventType::Decide { leaf_chain, .. } = event.event else {
+            let EventType::Decide { leaf_chain, .. } = &event.event else {
                 continue;
             };
             for LeafInfo { leaf, .. } in leaf_chain.iter().rev() {
@@ -3007,7 +3004,7 @@ mod test {
         let mut events = network.peers[0].event_stream().await;
         loop {
             let event = events.next().await.unwrap();
-            let EventType::Decide { leaf_chain, .. } = event.event else {
+            let EventType::Decide { leaf_chain, .. } = &event.event else {
                 continue;
             };
             if leaf_chain[0].leaf.height() > 0 {
@@ -3055,7 +3052,7 @@ mod test {
         let mut proposers = [false; NUM_NODES];
         loop {
             let event = events.next().await.unwrap();
-            let EventType::Decide { leaf_chain, .. } = event.event else {
+            let EventType::Decide { leaf_chain, .. } = &event.event else {
                 continue;
             };
             for LeafInfo { leaf, .. } in leaf_chain.iter().rev() {
@@ -3097,7 +3094,7 @@ mod test {
         let mut events = network.peers[0].event_stream().await;
         loop {
             let event = events.next().await.unwrap();
-            let EventType::Decide { leaf_chain, .. } = event.event else {
+            let EventType::Decide { leaf_chain, .. } = &event.event else {
                 continue;
             };
             tracing::error!("got decide height {}", leaf_chain[0].leaf.height());
@@ -3148,7 +3145,7 @@ mod test {
         let mut proposers = [false; NUM_NODES];
         loop {
             let event = events.next().await.unwrap();
-            let EventType::Decide { leaf_chain, .. } = event.event else {
+            let EventType::Decide { leaf_chain, .. } = &event.event else {
                 continue;
             };
             for LeafInfo { leaf, .. } in leaf_chain.iter().rev() {
@@ -3344,10 +3341,10 @@ mod test {
         // voting and finally the actual upgrade.
         let upgrade = loop {
             let event = events.next().await.unwrap();
-            match event.event {
+            match &event.event {
                 EventType::UpgradeProposal { proposal, .. } => {
                     tracing::info!(?proposal, "proposal");
-                    let upgrade = proposal.data.upgrade_proposal;
+                    let upgrade = proposal.data.upgrade_proposal.clone();
                     let new_version = upgrade.new_version;
                     tracing::info!(?new_version, "upgrade proposal new version");
                     assert_eq!(new_version, <V as Versions>::Upgrade::VERSION);
@@ -3669,7 +3666,7 @@ mod test {
             let view_number = event.view_number;
             views.insert(view_number.u64());
 
-            if let hotshot::types::EventType::Decide { committing_qc, .. } = event.event {
+            if let hotshot::types::EventType::Decide { committing_qc, .. } = &event.event {
                 assert!(committing_qc.epoch().is_some(), "epochs are live");
                 assert!(committing_qc.block_number().is_some());
 
@@ -4082,7 +4079,7 @@ mod test {
         // Wait for 3 epochs to allow rewards distribution to take effect.
         let mut events = network.peers[0].event_stream().await;
         while let Some(event) = events.next().await {
-            if let EventType::Decide { leaf_chain, .. } = event.event {
+            if let EventType::Decide { leaf_chain, .. } = &event.event {
                 let height = leaf_chain[0].leaf.height();
                 tracing::info!("Node 0 decided at height: {height}");
                 if height > EPOCH_HEIGHT * 3 {
@@ -4309,7 +4306,7 @@ mod test {
         // Wait for the chain to progress beyond epoch 3 so rewards start being distributed.
         let mut events = network.peers[0].event_stream().await;
         while let Some(event) = events.next().await {
-            if let EventType::Decide { leaf_chain, .. } = event.event {
+            if let EventType::Decide { leaf_chain, .. } = &event.event {
                 let height = leaf_chain[0].leaf.height();
                 tracing::info!("Node 0 decided at height: {height}");
                 if height > EPOCH_HEIGHT * 3 {
@@ -4647,7 +4644,7 @@ mod test {
         // Wait for the peer 0 (node 1) to advance past three epochs
         let mut events = network.peers[0].event_stream().await;
         while let Some(event) = events.next().await {
-            if let EventType::Decide { leaf_chain, .. } = event.event {
+            if let EventType::Decide { leaf_chain, .. } = &event.event {
                 let height = leaf_chain[0].leaf.height();
                 tracing::info!("Node 0 decided at height: {height}");
                 if height > EPOCH_HEIGHT * 3 {
@@ -4663,7 +4660,7 @@ mod test {
         // Wait for epochs to progress with node 1 offline
         let mut events = network.server.event_stream().await;
         while let Some(event) = events.next().await {
-            if let EventType::Decide { leaf_chain, .. } = event.event {
+            if let EventType::Decide { leaf_chain, .. } = &event.event {
                 let height = leaf_chain[0].leaf.height();
                 if height > EPOCH_HEIGHT * 7 {
                     break;
@@ -4779,7 +4776,7 @@ mod test {
         // Wait for the peer 0 (node 1) to advance past three epochs
         let mut events = network.peers[0].event_stream().await;
         while let Some(event) = events.next().await {
-            if let EventType::Decide { leaf_chain, .. } = event.event {
+            if let EventType::Decide { leaf_chain, .. } = &event.event {
                 let height = leaf_chain[0].leaf.height();
                 tracing::info!("Node 0 decided at height: {height}");
                 if height > EPOCH_HEIGHT * 3 {
@@ -4795,7 +4792,7 @@ mod test {
         // Wait for epochs to progress with node 1 offline
         let mut events = network.server.event_stream().await;
         while let Some(event) = events.next().await {
-            if let EventType::Decide { leaf_chain, .. } = event.event {
+            if let EventType::Decide { leaf_chain, .. } = &event.event {
                 let height = leaf_chain[0].leaf.height();
                 tracing::info!("Server decided at height: {height}");
                 //  until 7 epochs
@@ -6191,7 +6188,7 @@ mod test {
             let event = events.next().await.unwrap();
             tracing::info!("Received event from handle: {event:?}");
 
-            if let hotshot::types::EventType::Decide { leaf_chain, .. } = event.event {
+            if let hotshot::types::EventType::Decide { leaf_chain, .. } = &event.event {
                 println!(
                     "Decide event received: {:?}",
                     leaf_chain.first().unwrap().leaf.height()

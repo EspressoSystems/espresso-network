@@ -15,7 +15,7 @@ use hotshot_types::{
     simple_vote::HasEpoch,
     traits::{
         block_contents::BlockHeader,
-        node_implementation::{NodeImplementation, NodeType},
+        node_implementation::{ConsensusTime, NodeImplementation, NodeType},
         signature_key::SignatureKey,
         BlockPayload,
     },
@@ -123,6 +123,9 @@ async fn try_reconstruct_block<TYPES: NodeType>(
                 }),
             )
             .inspect_err(|_| tracing::error!("Failed to update saved payloads for view {view}"));
+        if let Some(epoch) = epoch {
+            vid_shares.write().await.remove(&(view, epoch));
+        }
         calc_lock.write().await.remove(&view);
     }
     Some(())
@@ -170,6 +173,20 @@ impl<TYPES: NodeType> ReconstructTaskState<TYPES> {
                     return None;
                 };
                 let view = share.view_number();
+
+                if self
+                    .consensus
+                    .read()
+                    .await
+                    .saved_payloads()
+                    .contains_key(&view)
+                {
+                    tracing::debug!(
+                        "We already have the payload for view {view}, dropping VID share"
+                    );
+                    return None;
+                }
+
                 self.vid_shares
                     .write()
                     .await
@@ -186,20 +203,6 @@ impl<TYPES: NodeType> ReconstructTaskState<TYPES> {
                         .unwrap()
                         .len()
                 );
-
-                // if we already have the payload, no need to try to reconstruct it
-                if self
-                    .consensus
-                    .read()
-                    .await
-                    .saved_payloads()
-                    .contains_key(&view)
-                {
-                    tracing::debug!(
-                        "We already have the payload for view {view}, skipping reconstruction"
-                    );
-                    return None;
-                }
 
                 let proposal = self.proposals.get(&view).cloned()?;
                 self.spawn_reconstruct_task(
@@ -232,6 +235,30 @@ impl<TYPES: NodeType> ReconstructTaskState<TYPES> {
                     proposal.data.block_header().metadata().clone(),
                 )
                 .await;
+            },
+            HotShotEvent::LeavesDecided(leaves) => {
+                if let Some(max_view) = leaves.iter().map(|l| l.view_number()).max() {
+                    let gc_view = TYPES::View::new(max_view.saturating_sub(1));
+                    let mut shares = self.vid_shares.write().await;
+                    let calc_lock_len = self.calc_lock.read().await.len();
+                    let shares_total: usize = shares.values().map(|v| v.len()).sum();
+                    tracing::warn!(
+                        "reconstruct GC before: id={} gc_view={gc_view} vid_shares_keys={} vid_shares_total={shares_total} \
+                         proposals={} calc_lock={calc_lock_len}",
+                        self.id,
+                        shares.len(),
+                        self.proposals.len(),
+                    );
+                    *shares = shares.split_off(&(gc_view, TYPES::Epoch::genesis()));
+                    self.proposals = self.proposals.split_off(&gc_view);
+                    let shares_total_after: usize = shares.values().map(|v| v.len()).sum();
+                    tracing::warn!(
+                        "reconstruct GC after: id={} vid_shares_keys={} vid_shares_total={shares_total_after} proposals={}",
+                        self.id,
+                        shares.len(),
+                        self.proposals.len(),
+                    );
+                }
             },
             HotShotEvent::Shutdown => {
                 return Some(HotShotTaskCompleted);

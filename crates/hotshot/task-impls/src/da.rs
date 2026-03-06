@@ -41,7 +41,7 @@ use crate::{
 /// Tracks state of a DA task
 pub struct DaTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> {
     /// Output events to application
-    pub output_event_stream: async_broadcast::Sender<Event<TYPES>>,
+    pub output_event_stream: async_broadcast::Sender<Arc<Event<TYPES>>>,
 
     /// View number this view is executing in.
     pub cur_view: TYPES::View,
@@ -171,13 +171,13 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
 
                 // Proposal is fresh and valid, notify the application layer
                 broadcast_event(
-                    Event {
+                    Arc::new(Event {
                         view_number,
                         event: EventType::DaProposal {
                             proposal: proposal.clone(),
                             sender: sender.clone(),
                         },
-                    },
+                    }),
                     &self.output_event_stream,
                 )
                 .await;

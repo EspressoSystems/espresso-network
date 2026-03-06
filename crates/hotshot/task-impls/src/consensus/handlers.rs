@@ -464,12 +464,12 @@ pub(crate) async fn handle_view_change<
     }
 
     broadcast_event(
-        Event {
+        Arc::new(Event {
             view_number: old_view_number,
             event: EventType::ViewFinished {
                 view_number: old_view_number,
             },
-        },
+        }),
         &task_state.output_event_stream,
     )
     .await;
@@ -516,10 +516,10 @@ pub(crate) async fn handle_timeout<TYPES: NodeType, I: NodeImplementation<TYPES>
 
     broadcast_event(Arc::new(HotShotEvent::TimeoutVoteSend(vote)), sender).await;
     broadcast_event(
-        Event {
+        Arc::new(Event {
             view_number,
             event: EventType::ViewTimeout { view_number },
-        },
+        }),
         &task_state.output_event_stream,
     )
     .await;
@@ -530,10 +530,10 @@ pub(crate) async fn handle_timeout<TYPES: NodeType, I: NodeImplementation<TYPES>
     );
 
     broadcast_event(
-        Event {
+        Arc::new(Event {
             view_number,
             event: EventType::ReplicaViewTimeout { view_number },
-        },
+        }),
         &task_state.output_event_stream,
     )
     .await;

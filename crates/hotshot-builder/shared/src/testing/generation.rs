@@ -200,7 +200,7 @@ where
     I: TestableNodeImplementation<Types>,
     V: Versions,
 {
-    type Event = Event<Types>;
+    type Event = Arc<Event<Types>>;
     type Error = Error;
 
     async fn handle_event(&mut self, (event, node_id): (Self::Event, usize)) -> Result<()> {
@@ -209,8 +209,8 @@ where
             return Ok(());
         }
 
-        if let EventType::ViewFinished { view_number } = event.event {
-            self.fill_queue(*view_number);
+        if let EventType::ViewFinished { view_number } = &event.event {
+            self.fill_queue(**view_number);
 
             let url = self.builder_urls.first().clone();
             let private_mempool_client = Client::<

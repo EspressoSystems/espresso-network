@@ -4,7 +4,7 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 use async_broadcast::Receiver;
 use async_trait::async_trait;
@@ -55,7 +55,7 @@ where
 pub trait BuilderTask<TYPES: NodeType>: Send + Sync {
     fn start(
         self: Box<Self>,
-        stream: Box<dyn Stream<Item = Event<TYPES>> + std::marker::Unpin + Send + 'static>,
+        stream: Box<dyn Stream<Item = Arc<Event<TYPES>>> + std::marker::Unpin + Send + 'static>,
     );
 }
 
