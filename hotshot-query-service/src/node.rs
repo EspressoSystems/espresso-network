@@ -323,7 +323,7 @@ mod test {
         // Get VID share for each block.
         tracing::info!(block_height, "checking VID shares");
         'outer: while let Some(event) = events.next().await {
-            let EventType::Decide { leaf_chain, .. } = event.event else {
+            let EventType::Decide { ref leaf_chain, .. } = event.event else {
                 continue;
             };
             for LeafInfo {
@@ -468,7 +468,7 @@ mod test {
             network.submit_transaction(txn).await;
 
             let leaf = 'outer: loop {
-                let EventType::Decide { leaf_chain, .. } = events.next().await.unwrap().event
+                let EventType::Decide { ref leaf_chain, .. } = events.next().await.unwrap().event
                 else {
                     continue;
                 };

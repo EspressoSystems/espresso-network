@@ -912,6 +912,7 @@ pub(crate) async fn reconstruct_state<Mode: TransactionMode>(
     fee_accounts: &[FeeAccount],
     reward_accounts: &[RewardAccountV2],
 ) -> anyhow::Result<(ValidatedState, Leaf2)> {
+    let _reconstruct_start = std::time::Instant::now();
     tracing::info!("attempting to reconstruct fee state");
     let from_leaf = tx
         .get_leaf((from_height as usize).into())
@@ -1037,6 +1038,7 @@ pub(crate) async fn reconstruct_state<Mode: TransactionMode>(
     }
 
     // Apply subsequent headers to compute the later state.
+    let num_leaves = leaves.len();
     for proposal in leaves {
         state = compute_state_update(&state, instance, &catchup, &parent, &proposal)
             .await
@@ -1048,7 +1050,13 @@ pub(crate) async fn reconstruct_state<Mode: TransactionMode>(
         parent = proposal;
     }
 
-    tracing::info!(from_height, ?to_view, "successfully reconstructed state");
+    tracing::info!(
+        from_height,
+        ?to_view,
+        num_leaves,
+        elapsed = ?_reconstruct_start.elapsed(),
+        "successfully reconstructed state",
+    );
     Ok((state, to_leaf))
 }
 

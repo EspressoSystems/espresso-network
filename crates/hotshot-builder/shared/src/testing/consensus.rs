@@ -1,6 +1,6 @@
 //! This module defines types used when simulating consensus in tests
 
-use std::marker::PhantomData;
+use std::{marker::PhantomData, sync::Arc};
 
 use async_broadcast::Sender;
 use committable::Committable;
@@ -37,11 +37,11 @@ pub struct SimulatedChainState {
     epoch: Option<EpochNumber>,
     round: ViewNumber,
     previous_quorum_proposal: Option<QuorumProposalWrapper<TestTypes>>,
-    event_stream_sender: Sender<Event<TestTypes>>,
+    event_stream_sender: Sender<Arc<Event<TestTypes>>>,
 }
 
 impl SimulatedChainState {
-    pub fn new(event_stream_sender: Sender<Event<TestTypes>>) -> Self {
+    pub fn new(event_stream_sender: Sender<Arc<Event<TestTypes>>>) -> Self {
         Self {
             epoch: None,
             round: ViewNumber::genesis(),
@@ -180,10 +180,10 @@ impl SimulatedChainState {
 
         for evt in events {
             self.event_stream_sender
-                .broadcast(Event {
+                .broadcast(Arc::new(Event {
                     view_number: self.round,
                     event: evt,
-                })
+                }))
                 .await
                 .unwrap();
         }

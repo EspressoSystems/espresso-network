@@ -73,7 +73,7 @@ pub struct TransactionTaskState<TYPES: NodeType, V: Versions> {
     pub builder_timeout: Duration,
 
     /// Output events to application
-    pub output_event_stream: async_broadcast::Sender<Event<TYPES>>,
+    pub output_event_stream: async_broadcast::Sender<Arc<Event<TYPES>>>,
 
     /// View number this view is executing in.
     pub cur_view: TYPES::View,
@@ -330,12 +330,12 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
         match event.as_ref() {
             HotShotEvent::TransactionsRecv(transactions) => {
                 broadcast_event(
-                    Event {
+                    Arc::new(Event {
                         view_number: self.cur_view,
                         event: EventType::Transactions {
                             transactions: transactions.clone(),
                         },
-                    },
+                    }),
                     &self.output_event_stream,
                 )
                 .await;

@@ -5,7 +5,7 @@
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
 #![allow(clippy::unwrap_or_default)]
-use std::{collections::BTreeMap, marker::PhantomData};
+use std::{collections::BTreeMap, marker::PhantomData, sync::Arc};
 
 use async_broadcast::Sender;
 use async_trait::async_trait;
@@ -379,21 +379,17 @@ impl<TYPES: NodeType<BlockHeader = TestBlockHeader>, V: Versions> ConsistencyTas
 impl<TYPES: NodeType<BlockHeader = TestBlockHeader>, V: Versions> TestTaskState
     for ConsistencyTask<TYPES, V>
 {
-    type Event = Event<TYPES>;
+    type Event = Arc<Event<TYPES>>;
     type Error = Error;
 
     /// Handles an event from one of multiple receivers.
     async fn handle_event(&mut self, (message, id): (Self::Event, usize)) -> Result<()> {
-        if let Event {
-            event:
-                EventType::Decide {
-                    leaf_chain,
-                    committing_qc,
-                    deciding_qc,
-                    ..
-                },
+        if let EventType::Decide {
+            leaf_chain,
+            committing_qc,
+            deciding_qc,
             ..
-        } = message
+        } = &message.event
         {
             {
                 let mut timeout_task = spawn_timeout_task(

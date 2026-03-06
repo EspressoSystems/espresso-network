@@ -107,13 +107,13 @@ where
     I: NodeImplementation<TYPES, Network = N, Storage = TestStorage<TYPES>>,
     <TYPES as NodeType>::Membership: Membership<TYPES, Storage = TestStorage<TYPES>>,
 {
-    type Event = Event<TYPES>;
+    type Event = Arc<Event<TYPES>>;
     type Error = Error;
 
     async fn handle_event(&mut self, (message, _id): (Self::Event, usize)) -> Result<()> {
-        let Event { view_number, event } = message;
+        let view_number = message.view_number;
 
-        if let EventType::Decide { leaf_chain, .. } = event {
+        if let EventType::Decide { leaf_chain, .. } = &message.event {
             let leaf = leaf_chain.first().unwrap().leaf.clone();
             if leaf.view_number() > self.last_decided_leaf.view_number() {
                 self.last_decided_leaf = leaf;
@@ -121,12 +121,12 @@ where
         } else if let EventType::QuorumProposal {
             proposal,
             sender: _,
-        } = event
+        } = &message.event
         {
             if proposal.data.justify_qc().view_number() > self.high_qc.view_number() {
                 self.high_qc = proposal.data.justify_qc().clone();
             }
-        } else if let EventType::ViewTimeout { view_number } = event {
+        } else if let EventType::ViewTimeout { view_number } = &message.event {
             tracing::error!("View timeout for view {view_number}");
         }
 

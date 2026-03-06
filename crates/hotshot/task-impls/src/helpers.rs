@@ -1089,10 +1089,10 @@ pub(crate) async fn validate_proposal_safety_and_liveness<
         ensure!(safety_check || liveness_check, {
             if let Err(e) = outcome {
                 broadcast_event(
-                    Event {
+                    Arc::new(Event {
                         view_number,
                         event: EventType::Error { error: Arc::new(e) },
-                    },
+                    }),
                     &validation_info.output_event_stream,
                 )
                 .await;
@@ -1110,13 +1110,13 @@ pub(crate) async fn validate_proposal_safety_and_liveness<
 
     // We accept the proposal, notify the application layer
     broadcast_event(
-        Event {
+        Arc::new(Event {
             view_number,
             event: EventType::QuorumProposal {
                 proposal: proposal.clone(),
                 sender,
             },
-        },
+        }),
         &validation_info.output_event_stream,
     )
     .await;

@@ -68,7 +68,7 @@ pub struct QuorumProposalRecvTaskState<TYPES: NodeType, I: NodeImplementation<TY
     pub timeout: u64,
 
     /// Output events to application
-    pub output_event_stream: async_broadcast::Sender<Event<TYPES>>,
+    pub output_event_stream: async_broadcast::Sender<Arc<Event<TYPES>>>,
 
     /// This node's storage ref
     pub storage: I::Storage,
@@ -109,7 +109,7 @@ pub(crate) struct ValidationInfo<TYPES: NodeType, I: NodeImplementation<TYPES>, 
     pub membership: EpochMembership<TYPES>,
 
     /// Output events to application
-    pub output_event_stream: async_broadcast::Sender<Event<TYPES>>,
+    pub output_event_stream: async_broadcast::Sender<Arc<Event<TYPES>>>,
 
     /// This node's storage ref
     pub(crate) storage: I::Storage,
@@ -129,6 +129,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
 {
     /// Cancel all tasks the consensus tasks has spawned before the given view
     pub fn cancel_tasks(&mut self, view: TYPES::View) {
+        let before = self.spawned_tasks.len();
         let keep = self.spawned_tasks.split_off(&view);
         while let Some((_, tasks)) = self.spawned_tasks.pop_first() {
             for task in tasks {
@@ -136,6 +137,14 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
             }
         }
         self.spawned_tasks = keep;
+        if before > 10 {
+            tracing::warn!(
+                id = self.id,
+                before,
+                after = self.spawned_tasks.len(),
+                "quorum_proposal_recv spawned_tasks cleanup"
+            );
+        }
     }
 
     /// Handles all consensus events relating to propose and vote-enabling events.
@@ -149,8 +158,20 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
     ) {
         match event.as_ref() {
             HotShotEvent::QuorumProposalRecv(proposal, sender) => {
-                tracing::debug!(
-                    "Quorum proposal recv for view {}",
+                let sender_bytes = SignatureKey::to_bytes(sender);
+                let sender_hex: String = sender_bytes
+                    .iter()
+                    .take(4)
+                    .map(|b| format!("{b:02x}"))
+                    .collect();
+                let now_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64;
+                let header_ts_ms = proposal.data.block_header().timestamp_millis();
+                let age_ms = now_ms.saturating_sub(header_ts_ms);
+                tracing::info!(
+                    "Quorum proposal recv for view {}, sender={sender_hex}, age_ms={age_ms}",
                     proposal.data.view_number()
                 );
                 if self.consensus.read().await.cur_view() > proposal.data.view_number()

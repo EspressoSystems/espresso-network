@@ -55,7 +55,7 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
 
     fn set_external_channel(
         &mut self,
-        _external_channel: Receiver<Event<TYPES>>,
+        _external_channel: Receiver<Arc<Event<TYPES>>>,
     ) -> impl std::future::Future<Output = ()> + Send {
         async {}
     }
