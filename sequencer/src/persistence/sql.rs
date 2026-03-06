@@ -1211,80 +1211,79 @@ impl SequencerPersistence for Persistence {
         deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
         consumer: &(impl EventConsumer + 'static),
     ) -> anyhow::Result<()> {
-        // let t_start = Instant::now();
+        let t_start = Instant::now();
 
-        // let values = leaf_chain
-        //     .into_iter()
-        //     .map(|(info, cert)| {
-        //         // The leaf may come with a large payload attached. We don't care about this payload
-        //         // because we already store it separately, as part of the DA proposal. Storing it
-        //         // here contributes to load on the DB for no reason, so we remove it before
-        //         // serializing the leaf.
-        //         let mut leaf = info.leaf.clone();
-        //         leaf.unfill_block_payload();
+        let values = leaf_chain
+            .into_iter()
+            .map(|(info, cert)| {
+                // The leaf may come with a large payload attached. We don't care about this payload
+                // because we already store it separately, as part of the DA proposal. Storing it
+                // here contributes to load on the DB for no reason, so we remove it before
+                // serializing the leaf.
+                let mut leaf = info.leaf.clone();
+                leaf.unfill_block_payload();
 
-        //         let view = cert.view_number().u64() as i64;
-        //         let leaf_bytes = bincode::serialize(&leaf)?;
-        //         let qc_bytes = bincode::serialize(cert.qc())?;
-        //         let next_epoch_qc_bytes = match cert.next_epoch_qc() {
-        //             Some(qc) => Some(bincode::serialize(qc)?),
-        //             None => None,
-        //         };
-        //         Ok((view, leaf_bytes, qc_bytes, next_epoch_qc_bytes))
-        //     })
-        //     .collect::<anyhow::Result<Vec<_>>>()?;
+                let view = cert.view_number().u64() as i64;
+                let leaf_bytes = bincode::serialize(&leaf)?;
+                let qc_bytes = bincode::serialize(cert.qc())?;
+                let next_epoch_qc_bytes = match cert.next_epoch_qc() {
+                    Some(qc) => Some(bincode::serialize(qc)?),
+                    None => None,
+                };
+                Ok((view, leaf_bytes, qc_bytes, next_epoch_qc_bytes))
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
 
-        // // First, append the new leaves. We do this in its own transaction because even if GC or the
-        // // event consumer later fails, there is no need to abort the storage of the leaves.
-        // let t_leaf_lock_start = Instant::now();
-        // let mut tx = self.db.write().await?;
-        // let t_leaf_lock_wait = t_leaf_lock_start.elapsed();
+        // First, append the new leaves. We do this in its own transaction because even if GC or the
+        // event consumer later fails, there is no need to abort the storage of the leaves.
+        let t_leaf_lock_start = Instant::now();
+        let mut tx = self.db.write().await?;
+        let t_leaf_lock_wait = t_leaf_lock_start.elapsed();
 
-        // tx.upsert(
-        //     "anchor_leaf2",
-        //     ["view", "leaf", "qc", "next_epoch_qc"],
-        //     ["view"],
-        //     values,
-        // )
-        // .await?;
-        // tx.commit().await?;
-        // let t_leaf_write = t_start.elapsed();
+        tx.upsert(
+            "anchor_leaf2",
+            ["view", "leaf", "qc", "next_epoch_qc"],
+            ["view"],
+            values,
+        )
+        .await?;
+        tx.commit().await?;
+        let t_leaf_write = t_start.elapsed();
 
-        // // Generate an event for the new leaves and, only if it succeeds, clean up data we no longer
-        // // need.
-        // if let Err(err) = self.generate_decide_events(deciding_qc, consumer).await {
-        //     // GC/event processing failure is not an error, since by this point we have at least
-        //     // managed to persist the decided leaves successfully, and GC will just run again at the
-        //     // next decide. Log an error but do not return it.
-        //     tracing::warn!(?view, "event processing failed: {err:#}");
-        //     return Ok(());
-        // }
-        // let t_generate_events = t_start.elapsed() - t_leaf_write;
+        // Generate an event for the new leaves and, only if it succeeds, clean up data we no longer
+        // need.
+        if let Err(err) = self.generate_decide_events(deciding_qc, consumer).await {
+            // GC/event processing failure is not an error, since by this point we have at least
+            // managed to persist the decided leaves successfully, and GC will just run again at the
+            // next decide. Log an error but do not return it.
+            tracing::warn!(?view, "event processing failed: {err:#}");
+            return Ok(());
+        }
+        let t_generate_events = t_start.elapsed() - t_leaf_write;
 
-        // // Garbage collect data which was not included in any decide event, but which at this point
-        // // is old enough to just forget about.
-        // if let Err(err) = self.prune(view).await {
-        //     tracing::warn!(?view, "pruning failed: {err:#}");
-        // }
-        // let t_prune = t_start.elapsed() - t_leaf_write - t_generate_events;
-        // let t_total = t_start.elapsed();
-        // let total_ms = t_total.as_millis() as u64;
-        // let leaf_write_lock_wait_ms = t_leaf_lock_wait.as_millis() as u64;
-        // let leaf_write_ms = t_leaf_write.as_millis() as u64;
-        // let generate_events_ms = t_generate_events.as_millis() as u64;
-        // let prune_ms = t_prune.as_millis() as u64;
+        // Garbage collect data which was not included in any decide event, but which at this point
+        // is old enough to just forget about.
+        if let Err(err) = self.prune(view).await {
+            tracing::warn!(?view, "pruning failed: {err:#}");
+        }
+        let t_prune = t_start.elapsed() - t_leaf_write - t_generate_events;
+        let t_total = t_start.elapsed();
+        let total_ms = t_total.as_millis() as u64;
+        let leaf_write_lock_wait_ms = t_leaf_lock_wait.as_millis() as u64;
+        let leaf_write_ms = t_leaf_write.as_millis() as u64;
+        let generate_events_ms = t_generate_events.as_millis() as u64;
+        let prune_ms = t_prune.as_millis() as u64;
 
-        // tracing::info!(
-        //     ?view,
-        //     total_ms,
-        //     leaf_write_lock_wait_ms,
-        //     leaf_write_ms,
-        //     generate_events_ms,
-        //     prune_ms,
-        //     "append_decided_leaves timing"
-        // );
-        // Disabled for load test: skip decided leaf append/generate/prune persistence path.
-        tracing::warn!(?view, "append_decided_leaves disabled for load test");
+        tracing::info!(
+            ?view,
+            total_ms,
+            leaf_write_lock_wait_ms,
+            leaf_write_ms,
+            generate_events_ms,
+            prune_ms,
+            "append_decided_leaves timing"
+        );
+
         Ok(())
     }
 
@@ -1452,28 +1451,24 @@ impl SequencerPersistence for Persistence {
         &self,
         proposal: &Proposal<SeqTypes, VidDisperseShare<SeqTypes>>,
     ) -> anyhow::Result<()> {
-        // let view = proposal.data.view_number().u64();
-        // let payload_hash = proposal.data.payload_commitment();
-        // let data_bytes = bincode::serialize(proposal).unwrap();
+        let view = proposal.data.view_number().u64();
+        let payload_hash = proposal.data.payload_commitment();
+        let data_bytes = bincode::serialize(proposal).unwrap();
 
-        // let now = Instant::now();
-        // let mut tx = self.db.write().await?;
-        // tx.upsert(
-        //     "vid_share2",
-        //     ["view", "data", "payload_hash"],
-        //     ["view"],
-        //     [(view as i64, data_bytes, payload_hash.to_string())],
-        // )
-        // .await?;
-        // let res = tx.commit().await;
-        // self.internal_metrics
-        //     .internal_append_vid_duration
-        //     .add_point(now.elapsed().as_secs_f64());
-        // res
-        // Disabled for load test: skip VID share persistence.
-        let view = proposal.data.view_number();
-        tracing::warn!(?view, "append_vid disabled for load test");
-        Ok(())
+        let now = Instant::now();
+        let mut tx = self.db.write().await?;
+        tx.upsert(
+            "vid_share2",
+            ["view", "data", "payload_hash"],
+            ["view"],
+            [(view as i64, data_bytes, payload_hash.to_string())],
+        )
+        .await?;
+        let res = tx.commit().await;
+        self.internal_metrics
+            .internal_append_vid_duration
+            .add_point(now.elapsed().as_secs_f64());
+        res
     }
 
     async fn append_da(
@@ -1481,28 +1476,24 @@ impl SequencerPersistence for Persistence {
         proposal: &Proposal<SeqTypes, DaProposal<SeqTypes>>,
         vid_commit: VidCommitment,
     ) -> anyhow::Result<()> {
-        // let data = &proposal.data;
-        // let view = data.view_number().u64();
-        // let data_bytes = bincode::serialize(proposal).unwrap();
+        let data = &proposal.data;
+        let view = data.view_number().u64();
+        let data_bytes = bincode::serialize(proposal).unwrap();
 
-        // let now = Instant::now();
-        // let mut tx = self.db.write().await?;
-        // tx.upsert(
-        //     "da_proposal",
-        //     ["view", "data", "payload_hash"],
-        //     ["view"],
-        //     [(view as i64, data_bytes, vid_commit.to_string())],
-        // )
-        // .await?;
-        // let res = tx.commit().await;
-        // self.internal_metrics
-        //     .internal_append_da_duration
-        //     .add_point(now.elapsed().as_secs_f64());
-        // res
-        // Disabled for load test: skip DA proposal persistence.
-        let view = proposal.data.view_number();
-        tracing::warn!(?view, "append_da disabled for load test");
-        Ok(())
+        let now = Instant::now();
+        let mut tx = self.db.write().await?;
+        tx.upsert(
+            "da_proposal",
+            ["view", "data", "payload_hash"],
+            ["view"],
+            [(view as i64, data_bytes, vid_commit.to_string())],
+        )
+        .await?;
+        let res = tx.commit().await;
+        self.internal_metrics
+            .internal_append_da_duration
+            .add_point(now.elapsed().as_secs_f64());
+        res
     }
 
     async fn record_action(
@@ -1543,45 +1534,38 @@ impl SequencerPersistence for Persistence {
     ) -> anyhow::Result<()> {
         let view_number = proposal.data.view_number().u64();
 
-        // let proposal_bytes = bincode::serialize(&proposal).context("serializing proposal")?;
-        // let leaf_hash = Committable::commit(&Leaf2::from_quorum_proposal(&proposal.data));
+        let proposal_bytes = bincode::serialize(&proposal).context("serializing proposal")?;
+        let leaf_hash = Committable::commit(&Leaf2::from_quorum_proposal(&proposal.data));
 
-        // let now = Instant::now();
-        // let mut tx = self.db.write().await?;
-        // tx.upsert(
-        //     "quorum_proposals2",
-        //     ["view", "leaf_hash", "data"],
-        //     ["view"],
-        //     [(view_number as i64, leaf_hash.to_string(), proposal_bytes)],
-        // )
-        // .await?;
+        let now = Instant::now();
+        let mut tx = self.db.write().await?;
+        tx.upsert(
+            "quorum_proposals2",
+            ["view", "leaf_hash", "data"],
+            ["view"],
+            [(view_number as i64, leaf_hash.to_string(), proposal_bytes)],
+        )
+        .await?;
 
-        // // We also keep track of any QC we see in case we need it to recover our archival storage.
-        // let justify_qc = proposal.data.justify_qc();
-        // let justify_qc_bytes = bincode::serialize(&justify_qc).context("serializing QC")?;
-        // tx.upsert(
-        //     "quorum_certificate2",
-        //     ["view", "leaf_hash", "data"],
-        //     ["view"],
-        //     [(
-        //         justify_qc.view_number.u64() as i64,
-        //         justify_qc.data.leaf_commit.to_string(),
-        //         &justify_qc_bytes,
-        //     )],
-        // )
-        // .await?;
-        // let res = tx.commit().await;
-        // self.internal_metrics
-        //     .internal_append_quorum2_duration
-        //     .add_point(now.elapsed().as_secs_f64());
-        // res
-        // // Disabled for load test: skip quorum proposal/QC persistence.
-        // let view_number = proposal.data.view_number();
-        tracing::warn!(
-            ?view_number,
-            "append_quorum_proposal2 disabled for load test"
-        );
-        Ok(())
+        // We also keep track of any QC we see in case we need it to recover our archival storage.
+        let justify_qc = proposal.data.justify_qc();
+        let justify_qc_bytes = bincode::serialize(&justify_qc).context("serializing QC")?;
+        tx.upsert(
+            "quorum_certificate2",
+            ["view", "leaf_hash", "data"],
+            ["view"],
+            [(
+                justify_qc.view_number.u64() as i64,
+                justify_qc.data.leaf_commit.to_string(),
+                &justify_qc_bytes,
+            )],
+        )
+        .await?;
+        let res = tx.commit().await;
+        self.internal_metrics
+            .internal_append_quorum2_duration
+            .add_point(now.elapsed().as_secs_f64());
+        res
     }
 
     async fn load_upgrade_certificate(
@@ -2204,28 +2188,24 @@ impl SequencerPersistence for Persistence {
         proposal: &Proposal<SeqTypes, DaProposal2<SeqTypes>>,
         vid_commit: VidCommitment,
     ) -> anyhow::Result<()> {
-        // let data = &proposal.data;
-        // let view = data.view_number().u64();
-        // let data_bytes = bincode::serialize(proposal).unwrap();
+        let data = &proposal.data;
+        let view = data.view_number().u64();
+        let data_bytes = bincode::serialize(proposal).unwrap();
 
-        // let now = Instant::now();
-        // let mut tx = self.db.write().await?;
-        // tx.upsert(
-        //     "da_proposal2",
-        //     ["view", "data", "payload_hash"],
-        //     ["view"],
-        //     [(view as i64, data_bytes, vid_commit.to_string())],
-        // )
-        // .await?;
-        // let res = tx.commit().await;
-        // self.internal_metrics
-        //     .internal_append_da2_duration
-        //     .add_point(now.elapsed().as_secs_f64());
-        // res
-        // Disabled for load test: skip DA v2 proposal persistence.
-        let view = proposal.data.view_number();
-        tracing::warn!(?view, "append_da2 disabled for load test");
-        Ok(())
+        let now = Instant::now();
+        let mut tx = self.db.write().await?;
+        tx.upsert(
+            "da_proposal2",
+            ["view", "data", "payload_hash"],
+            ["view"],
+            [(view as i64, data_bytes, vid_commit.to_string())],
+        )
+        .await?;
+        let res = tx.commit().await;
+        self.internal_metrics
+            .internal_append_da2_duration
+            .add_point(now.elapsed().as_secs_f64());
+        res
     }
 
     async fn store_drb_result(
