@@ -1,4 +1,4 @@
-//! This module implements interfaces necessary to run legacy builder
+//! This module implements interfaces necessary to run the builder
 //! in HotShot testing harness.
 
 use std::{collections::HashMap, fmt::Display, marker::PhantomData, sync::Arc};
@@ -18,15 +18,15 @@ use vbs::version::StaticVersion;
 
 use crate::service::{BuilderConfig, GlobalState};
 
-/// Testing configuration for legacy builder
-struct TestLegacyBuilderConfig<Types>
+/// Testing configuration for builder
+pub struct TestBuilderConfig<Types>
 where
     Types: NodeType,
 {
     _marker: PhantomData<Types>,
 }
 
-impl<Types> Default for TestLegacyBuilderConfig<Types>
+impl<Types> Default for TestBuilderConfig<Types>
 where
     Types: NodeType,
 {
@@ -37,13 +37,13 @@ where
     }
 }
 
-/// [`TestBuilderImplementation`] for legacy builder.
-/// Passed as a generic parameter to [`TestRunner::run_test`], it is be used
+/// [`TestBuilderImplementation`] for the builder.
+/// Passed as a generic parameter to [`TestRunner::run_test`], it is used
 /// to instantiate builder API and builder task.
-struct LegacyBuilderImpl {}
+pub struct BuilderImpl {}
 
 #[async_trait]
-impl<Types> TestBuilderImplementation<Types> for LegacyBuilderImpl
+impl<Types> TestBuilderImplementation<Types> for BuilderImpl
 where
     Types: NodeType<View = ViewNumber>,
     Types::InstanceState: Default,
@@ -52,9 +52,9 @@ where
     >>::Error: Display,
     for<'a> <Types::SignatureKey as TryFrom<&'a TaggedBase64>>::Error: Display,
 {
-    type Config = TestLegacyBuilderConfig<Types>;
+    type Config = TestBuilderConfig<Types>;
 
-    /// This is mostly boilerplate to instantiate and start [`ProxyGlobalState`] APIs and initial [`BuilderState`]'s event loop.
+    /// Instantiate and start builder APIs and event loop.
     /// [`BuilderTask`] it returns will be injected into consensus runtime by HotShot testing harness and
     /// will forward transactions from hotshot event stream to the builder.
     async fn start(
@@ -81,19 +81,19 @@ where
 
         // Return the global state as a task that will be later started
         // by the test harness with event stream from one of HS nodes
-        Box::new(LegacyBuilderTask { service })
+        Box::new(RefactoredBuilderTask { service })
     }
 }
 
-/// Legacy builder task. Stores all the necessary information to run builder service
-struct LegacyBuilderTask<Types>
+/// Builder task. Stores all the necessary information to run builder service
+struct RefactoredBuilderTask<Types>
 where
     Types: NodeType,
 {
     service: Arc<GlobalState<Types>>,
 }
 
-impl<Types> BuilderTask<Types> for LegacyBuilderTask<Types>
+impl<Types> BuilderTask<Types> for RefactoredBuilderTask<Types>
 where
     Types: NodeType<View = ViewNumber>,
     for<'a> <<Types::SignatureKey as SignatureKey>::PureAssembledSignatureType as TryFrom<
@@ -129,7 +129,7 @@ mod tests {
         overall_safety_task::OverallSafetyPropertiesDescription, test_builder::TestDescription,
     };
 
-    use crate::testing::integration::LegacyBuilderImpl;
+    use crate::testing::integration::BuilderImpl;
 
     #[tokio::test(flavor = "multi_thread")]
     #[tracing::instrument]
@@ -151,7 +151,7 @@ mod tests {
 
         metadata.test_config.epoch_height = 0;
 
-        run_test::<LegacyBuilderImpl>(
+        run_test::<BuilderImpl>(
             metadata,
             BuilderValidationConfig {
                 expected_txn_num: num_successful_views * min_txns_per_view,
@@ -172,7 +172,7 @@ mod tests {
     cross_tests!(
         TestName: example_cross_test,
         Impls: [MemoryImpl],
-        BuilderImpls: [LegacyBuilderImpl],
+        BuilderImpls: [BuilderImpl],
         Types: [TestTypes],
         Versions: [TEST_VERSIONS.test],
         Ignore: true,

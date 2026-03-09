@@ -1656,7 +1656,7 @@ pub mod test_helpers {
         catchup::NullStateCatchup,
         network,
         persistence::no_storage,
-        testing::{run_legacy_builder, wait_for_decide_on_handle, TestConfig, TestConfigBuilder},
+        testing::{run_builder, wait_for_decide_on_handle, TestConfig, TestConfigBuilder},
     };
 
     pub const STAKE_TABLE_CAPACITY_FOR_TEST: usize = 10;
@@ -1937,7 +1937,7 @@ pub mod test_helpers {
             if chain_config.is_none() {
                 tracing::warn!("Chain config is not set, using default max_block_size");
             }
-            let (task, builder_url) = run_legacy_builder::<{ NUM_NODES }>(
+            let (task, builder_url) = run_builder::<{ NUM_NODES }>(
                 cfg.network_config.builder_port(),
                 chain_config.map(|c| *c.max_block_size),
             )
