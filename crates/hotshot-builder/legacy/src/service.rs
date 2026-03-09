@@ -27,7 +27,7 @@ use hotshot_types::{
     event::EventType,
     message::Proposal,
     traits::{
-        block_contents::{BlockPayload, Transaction},
+        block_contents::{BlockHeader, BlockPayload, Transaction},
         node_implementation::NodeType,
         signature_key::{BuilderSignatureKey, SignatureKey},
     },
@@ -1159,6 +1159,32 @@ pub async fn run_non_permissioned_standalone_builder_service<
             EventType::Decide { leaf_chain, .. } => {
                 let latest_decide_view_num = leaf_chain[0].leaf.view_number();
                 handle_decide_event(&decide_sender, latest_decide_view_num).await;
+
+                // Update transaction statuses for all decided transactions
+                let mut write_guard = global_state.write_arc().await;
+                for leaf_info in leaf_chain.iter() {
+                    if let Some(payload) = leaf_info.leaf.block_payload() {
+                        let block_number = leaf_info.leaf.block_header().block_number();
+                        for commitment in payload
+                            .transaction_commitments(leaf_info.leaf.block_header().metadata())
+                        {
+                            if let Err(e) = write_guard
+                                .set_txn_status(
+                                    commitment,
+                                    TransactionStatus::Sequenced { leaf: block_number },
+                                )
+                                .await
+                            {
+                                tracing::warn!(?e, %commitment, "Failed to update transaction status on decide");
+                            }
+                        }
+                    } else {
+                        tracing::debug!(
+                            view = ?leaf_info.leaf.view_number(),
+                            "Block payload not available in decide event, cannot update transaction statuses"
+                        );
+                    }
+                }
             },
             // DA proposal event
             EventType::DaProposal { proposal, sender } => {
