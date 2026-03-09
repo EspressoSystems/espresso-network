@@ -284,14 +284,16 @@ impl HotShotActionViews {
     }
 }
 
+type ValidatorParticipationMap<TYPES> = HashMap<<TYPES as NodeType>::SignatureKey, (u64, u64)>;
+
 #[derive(Debug, Clone)]
 struct ValidatorParticipation<TYPES: NodeType> {
     epoch: EpochNumber,
     /// Current epoch participation by key maps key -> (num leader, num times proposed)
-    current_epoch_participation: HashMap<TYPES::SignatureKey, (u64, u64)>,
+    current_epoch_participation: ValidatorParticipationMap<TYPES>,
 
     /// Last epoch participation by key maps key -> (num leader, num times proposed)
-    previous_epoch_participation: BTreeMap<TYPES::Epoch, HashMap<TYPES::SignatureKey, (u64, u64)>>,
+    previous_epoch_participation: BTreeMap<TYPES::Epoch, ValidatorParticipationMap<TYPES>>,
 }
 
 impl<TYPES: NodeType> ValidatorParticipation<TYPES> {
@@ -378,6 +380,11 @@ impl<TYPES: NodeType> ValidatorParticipation<TYPES> {
     }
 }
 
+type VoteParticipationMap<TYPES> = (
+    HashMap<<<TYPES as NodeType>::SignatureKey as SignatureKey>::VerificationKeyType, u64>,
+    u64,
+);
+
 #[derive(Clone, Debug)]
 struct VoteParticipation<TYPES: NodeType> {
     /// Current epoch
@@ -400,13 +407,7 @@ struct VoteParticipation<TYPES: NodeType> {
         HashMap<<TYPES::SignatureKey as SignatureKey>::VerificationKeyType, u64>,
 
     /// Last epoch participation by key maps key -> num times voted
-    previous_epoch_participation: BTreeMap<
-        Option<TYPES::Epoch>,
-        (
-            HashMap<<TYPES::SignatureKey as SignatureKey>::VerificationKeyType, u64>,
-            u64,
-        ),
-    >,
+    previous_epoch_participation: BTreeMap<Option<TYPES::Epoch>, VoteParticipationMap<TYPES>>,
 }
 
 impl<TYPES: NodeType> VoteParticipation<TYPES> {
