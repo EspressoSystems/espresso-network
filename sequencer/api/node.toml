@@ -30,33 +30,33 @@ DOC = "Get all the validators including the inactive ones for the given epoch."
 
 
 [route.current_proposal_participation]
-PATH = ["/current-proposal-participation"]
+PATH = ["/participation/proposal/current"]
 DOC = """
 Get the mapping from leader key to participation rate.
 
 Returns a map from BLS key to the fraction of views with key proposed properly as leader, as a floating point number.
 """
 
-[route.previous_proposal_participation]
-PATH = ["/previous-proposal-participation"]
+[route.proposal_participation]
+PATH = ["/participation/proposal/:epoch"]
 DOC = """
-Get the mapping from leader key to participation rate for the previous epoch.
+Get the mapping from leader key to participation rate for the given epoch.
 
 Returns a map from BLS key to the fraction of views with key proposed properly as leader, as a floating point number.
 """
 
 [route.current_vote_participation]
-PATH = ["/current-vote-participation"]
+PATH = ["/participation/vote/current"]
 DOC = """
 Get the mapping from node key to vote rate.
 
 Returns a map from BLS key to the fraction of views properly voted, as a floating point number.
 """
 
-[route.previous_vote_participation]
-PATH = ["/previous-vote-participation"]
+[route.vote_participation]
+PATH = ["/participation/vote/:epoch"]
 DOC = """
-Get the mapping from node key to vote rate for the previous epoch.
+Get the mapping from node key to vote rate for the given epoch.
 
 Returns a map from BLS key to the fraction of views properly voted, as a floating point number.
 """

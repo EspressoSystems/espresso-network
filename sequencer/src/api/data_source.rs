@@ -169,15 +169,19 @@ pub(crate) trait StakeTableDataSource<T: NodeType> {
         &self,
     ) -> impl Send + Future<Output = HashMap<BLSPubKey, f64>>;
 
-    /// Get the previous proposal participation.
-    fn previous_proposal_participation(
+    /// Get the proposal participation for a given epoch.
+    fn proposal_participation(
         &self,
+        epoch: <T as NodeType>::Epoch,
     ) -> impl Send + Future<Output = HashMap<BLSPubKey, f64>>;
     /// Get the current vote participation.
     fn current_vote_participation(&self) -> impl Send + Future<Output = HashMap<BLSPubKey, f64>>;
 
-    /// Get the previous vote participation.
-    fn previous_vote_participation(&self) -> impl Send + Future<Output = HashMap<BLSPubKey, f64>>;
+    /// Get the vote participation for a given epoch.
+    fn vote_participation(
+        &self,
+        epoch: <T as NodeType>::Epoch,
+    ) -> impl Send + Future<Output = HashMap<BLSPubKey, f64>>;
 
     fn get_all_validators(
         &self,
