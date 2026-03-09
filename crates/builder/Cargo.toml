@@ -5,6 +5,8 @@ version = { workspace = true }
 authors = { workspace = true }
 edition = { workspace = true }
 
+[features]
+refactored = []
 [dependencies]
 alloy = { workspace = true }
 anyhow = { workspace = true }
@@ -17,6 +19,7 @@ futures = { workspace = true }
 hotshot = { workspace = true }
 hotshot-builder-api = { workspace = true }
 hotshot-builder-legacy = { workspace = true }
+hotshot-builder-refactored = { workspace = true }
 hotshot-builder-shared = { workspace = true }
 hotshot-events-service = { workspace = true }
 hotshot-example-types = { workspace = true }
