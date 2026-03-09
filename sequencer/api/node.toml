@@ -39,6 +39,7 @@ Returns a map from BLS key to the fraction of views with key proposed properly a
 
 [route.proposal_participation]
 PATH = ["participation/proposal/:epoch"]
+":epoch" = "Integer"
 DOC = """
 Get the mapping from leader key to participation rate for the given epoch.
 
@@ -55,6 +56,7 @@ Returns a map from BLS key to the fraction of views properly voted, as a floatin
 
 [route.vote_participation]
 PATH = ["participation/vote/:epoch"]
+":epoch" = "Integer"
 DOC = """
 Get the mapping from node key to vote rate for the given epoch.
 
