@@ -179,7 +179,7 @@ pub(super) fn fetch_block_with_header<Types, S, P>(
     };
 
     // Now that we have the header, we only need to retrieve the payload.
-    tracing::info!(
+    tracing::debug!(
         "spawned active fetch for payload {:?} (height {})",
         header.payload_commitment(),
         header.block_number()

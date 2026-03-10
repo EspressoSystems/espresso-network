@@ -376,7 +376,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
             .await?;
 
         let duration = now.elapsed();
-        tracing::info!("membership_for_epoch time: {duration:?}");
+        tracing::debug!("membership_for_epoch time: {duration:?}");
 
         let is_vote_leaf_extended = is_last_block(leaf.height(), self.epoch_height);
         let is_vote_epoch_root = is_epoch_root(leaf.height(), self.epoch_height);
@@ -855,7 +855,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                 // If it's the first time receiving our share send it to all nodes
                 if *share.data.recipient_key() == self.public_key {
                     if let VidDisperseShare::V2(ref inner_share) = share.data {
-                        tracing::warn!("Received our own VID share for view {view}");
+                        tracing::debug!("Received our own VID share for view {view}");
                         let proposal = Proposal {
                             signature: share.signature.clone(),
                             data: inner_share.clone(),

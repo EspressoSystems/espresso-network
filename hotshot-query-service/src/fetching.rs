@@ -120,7 +120,7 @@ impl<T, C> Fetcher<T, C> {
                         // If the object is already being fetched, add our callback for the fetching
                         // task to execute upon completion.
                         e.get_mut().extend(callbacks);
-                        tracing::info!(?req, callbacks = ?e.get(), "resource is already being fetched");
+                        tracing::debug!(?req, num_callbacks = e.get().len(), "resource is already being fetched");
                         return;
                     },
                     Entry::Vacant(e) => {
