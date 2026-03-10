@@ -528,10 +528,7 @@ pub mod mock {
     use crate::{
         retain_accounts,
         v0_3::{RewardAccountProofV1, RewardAccountV1, RewardMerkleCommitmentV1},
-        v0_4::{
-            PermittedRewardMerkleTreeV2, RewardAccountV2,
-            RewardMerkleCommitmentV2,
-        },
+        v0_4::{PermittedRewardMerkleTreeV2, RewardAccountV2, RewardMerkleCommitmentV2},
         BackoffParams, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment, Header,
         Leaf2,
     };

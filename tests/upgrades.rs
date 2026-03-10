@@ -5,7 +5,9 @@ use espresso_types::UpgradeMode;
 use futures::{future::join_all, StreamExt};
 use hotshot_types::utils::epoch_from_block_number;
 use sequencer::Genesis;
-use versions::{Upgrade, DA_UPGRADE_VERSION, DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, FEE_VERSION};
+use versions::{
+    Upgrade, DA_UPGRADE_VERSION, DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, FEE_VERSION,
+};
 
 use crate::{
     common::{load_genesis_file, NativeDemo, TestRequirements, TestRuntime},

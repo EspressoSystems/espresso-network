@@ -46,10 +46,7 @@ use crate::{
         ChainConfig, RegisteredValidator, RewardAccountProofV1, RewardAccountV1, RewardAmount,
         RewardMerkleCommitmentV1,
     },
-    v0_4::{
-        PermittedRewardMerkleTreeV2, RewardAccountV2,
-        RewardMerkleCommitmentV2,
-    },
+    v0_4::{PermittedRewardMerkleTreeV2, RewardAccountV2, RewardMerkleCommitmentV2},
     AuthenticatedValidatorMap, BlockMerkleTree, Event, FeeAccount, FeeAccountProof,
     FeeMerkleCommitment, Header, Leaf2, NetworkConfig, PubKey, SeqTypes,
 };

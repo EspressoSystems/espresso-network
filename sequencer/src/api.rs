@@ -1720,8 +1720,6 @@ pub mod test_helpers {
         }
     }
 
-
-
     impl<const NUM_NODES: usize>
         TestNetworkConfigBuilder<{ NUM_NODES }, no_storage::Options, NullStateCatchup>
     {
@@ -2934,10 +2932,7 @@ mod test {
         },
         data_source::{
             sql::Config,
-            storage::{
-                sql::query,
-                SqlStorage, StorageConnectionType,
-            },
+            storage::{sql::query, SqlStorage, StorageConnectionType},
             Transaction as _, VersionedDataSource,
         },
         explorer::TransactionSummariesResponse,
@@ -7463,8 +7458,8 @@ mod test {
         .await?;
 
         let validated_state = ValidatedState::default();
-        let instance_state = NodeState::mock()
-            .with_genesis_version(versions::DRB_AND_HEADER_UPGRADE_VERSION);
+        let instance_state =
+            NodeState::mock().with_genesis_version(versions::DRB_AND_HEADER_UPGRADE_VERSION);
         let genesis_leaf = LeafQueryData::<SeqTypes>::genesis(
             &validated_state,
             &instance_state,
@@ -7476,7 +7471,6 @@ mod test {
         let account2 = RewardAccountV2("0x0000000000000000000000000000000000000002".parse()?);
         let account3 = RewardAccountV2("0x0000000000000000000000000000000000000003".parse()?);
         let account4 = RewardAccountV2("0x0000000000000000000000000000000000000004".parse()?);
-
 
         // Insert account1 with balance 1000, account2 with balance 2000
         let accounts_height_5 = vec![
@@ -7607,8 +7601,8 @@ mod test {
         .await?;
 
         let validated_state = ValidatedState::default();
-        let instance_state = NodeState::mock()
-            .with_genesis_version(versions::DRB_AND_HEADER_UPGRADE_VERSION);
+        let instance_state =
+            NodeState::mock().with_genesis_version(versions::DRB_AND_HEADER_UPGRADE_VERSION);
         let genesis_leaf = LeafQueryData::<SeqTypes>::genesis(
             &validated_state,
             &instance_state,

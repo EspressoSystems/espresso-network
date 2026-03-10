@@ -7,8 +7,8 @@ use espresso_types::{
     get_l1_deposits,
     v0_1::IterableFeeInfo,
     v0_3::{
-        ChainConfig, RewardAccountProofV1, RewardAccountQueryDataV1, RewardAccountV1,
-        RewardAmount, RewardMerkleTreeV1, REWARD_MERKLE_TREE_V1_HEIGHT,
+        ChainConfig, RewardAccountProofV1, RewardAccountQueryDataV1, RewardAccountV1, RewardAmount,
+        RewardMerkleTreeV1, REWARD_MERKLE_TREE_V1_HEIGHT,
     },
     v0_4::{
         PermittedRewardMerkleTreeV2, RewardAccountProofV2, RewardAccountQueryDataV2,
@@ -186,8 +186,8 @@ impl RewardMerkleTreeDataSource for SqlStorage {
                         .tree
                 };
 
-                let (proof, balance) =
-                    RewardAccountProofV2::prove(&tree, account.into()).with_context(|| {
+                let (proof, balance) = RewardAccountProofV2::prove(&tree, account.into())
+                    .with_context(|| {
                         format!("reward account {account:?} not available at height {height}")
                     })?;
 
@@ -640,7 +640,6 @@ impl CatchupStorage for SqlStorage {
 
         Ok(accounts)
     }
-
 
     async fn get_accounts(
         &self,

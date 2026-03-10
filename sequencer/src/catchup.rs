@@ -16,8 +16,8 @@ use espresso_types::{
     traits::SequencerPersistence,
     v0::traits::StateCatchup,
     v0_3::{
-        ChainConfig, RewardAccountProofV1, RewardAccountV1, RewardAmount,
-        RewardMerkleCommitmentV1, RewardMerkleTreeV1,
+        ChainConfig, RewardAccountProofV1, RewardAccountV1, RewardAmount, RewardMerkleCommitmentV1,
+        RewardMerkleTreeV1,
     },
     v0_4::{
         forgotten_accounts_include, PermittedRewardMerkleTreeV2, RewardAccountProofV2,
