@@ -19,19 +19,15 @@ export ESPRESSO_BASE_STORAGE_PATH
 echo "Using sequencer storage path: $ESPRESSO_BASE_STORAGE_PATH"
 
 cleanup(){
-    # Don't run cleanup if running in the CI. We may be running process-compose
-    # with --detach and the cleanup will remove the storage path while the
-    # services are still running.
     CI=${CI:-false}
-    if [ "$CI" = "true" ]; then
-        echo "Running in CI, not cleaning up $ESPRESSO_BASE_STORAGE_PATH"
-    else
+    if [ "$CI" != "true" ]; then
         echo "Cleaning up sequencer storage path: $ESPRESSO_BASE_STORAGE_PATH"
         rm -rv "$ESPRESSO_BASE_STORAGE_PATH"
-
-        SCRIPT_DIR="$(dirname "$(readlink -fm "$0")")"
-        "$SCRIPT_DIR/cleanup-process-compose"
+    else
+        echo "Running in CI, not cleaning up $ESPRESSO_BASE_STORAGE_PATH"
     fi
+    SCRIPT_DIR="$(dirname "$(readlink -fm "$0")")"
+    "$SCRIPT_DIR/cleanup-process-compose"
 }
 
 trap 'kill -TERM "$PC_PID" 2>/dev/null' INT TERM
