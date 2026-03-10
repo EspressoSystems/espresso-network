@@ -191,7 +191,12 @@ impl TestRuntime {
         let builder_url = {
             let url = url_from_port(dotenvy::var("ESPRESSO_BUILDER_SERVER_PORT")?)?;
             let url = Url::from_str(&url)?;
-            wait_for_service(url.clone(), Duration::from_secs(1), Duration::from_secs(90)).await?;
+            wait_for_service(
+                url.clone(),
+                Duration::from_secs(1),
+                Duration::from_secs(120),
+            )
+            .await?;
             url.join("block_info/builderaddress")?
         };
 
