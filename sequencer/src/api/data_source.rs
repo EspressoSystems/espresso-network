@@ -8,8 +8,9 @@ use espresso_types::{
     config::PublicNetworkConfig,
     v0::traits::{PersistenceOptions, SequencerPersistence},
     v0_3::{
-        ChainConfig, RewardAccountProofV1, RewardAccountQueryDataV1, RewardAccountV1, RewardAmount,
-        RewardMerkleTreeV1, StakeTableEvent, Validator,
+        AuthenticatedValidator, ChainConfig, RegisteredValidator, RewardAccountProofV1,
+        RewardAccountQueryDataV1, RewardAccountV1, RewardAmount, RewardMerkleTreeV1,
+        StakeTableEvent,
     },
     v0_4::{RewardAccountProofV2, RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleTreeV2},
     FeeAccount, FeeAccountProof, FeeMerkleTree, Leaf2, NodeState, PubKey, Transaction,
@@ -27,10 +28,7 @@ use hotshot_types::{
     data::{EpochNumber, VidShare, ViewNumber},
     light_client::LCV3StateSignatureRequestBody,
     simple_certificate::LightClientStateUpdateCertificateV2,
-    traits::{
-        network::ConnectedNetwork,
-        node_implementation::{NodeType, Versions},
-    },
+    traits::{network::ConnectedNetwork, node_implementation::NodeType},
     PeerConfig,
 };
 use indexmap::IndexMap;
@@ -89,7 +87,7 @@ pub trait SequencerDataSource:
 pub type Provider = AnyProvider<SeqTypes>;
 
 /// Create a provider for fetching missing data from a list of peer query services.
-pub fn provider<V: Versions>(
+pub fn provider(
     peers: impl IntoIterator<Item = Url>,
     bind_version: SequencerApiVersion,
 ) -> Provider {
@@ -157,7 +155,7 @@ pub(crate) trait StakeTableDataSource<T: NodeType> {
     fn get_validators(
         &self,
         epoch: <T as NodeType>::Epoch,
-    ) -> impl Send + Future<Output = anyhow::Result<IndexMap<Address, Validator<BLSPubKey>>>>;
+    ) -> impl Send + Future<Output = anyhow::Result<IndexMap<Address, AuthenticatedValidator<BLSPubKey>>>>;
 
     fn get_block_reward(
         &self,
@@ -172,13 +170,18 @@ pub(crate) trait StakeTableDataSource<T: NodeType> {
     fn previous_proposal_participation(
         &self,
     ) -> impl Send + Future<Output = HashMap<BLSPubKey, f64>>;
+    /// Get the current vote participation.
+    fn current_vote_participation(&self) -> impl Send + Future<Output = HashMap<BLSPubKey, f64>>;
+
+    /// Get the previous vote participation.
+    fn previous_vote_participation(&self) -> impl Send + Future<Output = HashMap<BLSPubKey, f64>>;
 
     fn get_all_validators(
         &self,
         epoch: <T as NodeType>::Epoch,
         offset: u64,
         limit: u64,
-    ) -> impl Send + Future<Output = anyhow::Result<Vec<Validator<PubKey>>>>;
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<RegisteredValidator<PubKey>>>>;
 
     /// Get stake table events from L1 blocks `from_l1_block..=to_l1_block`.
     fn stake_table_events(
@@ -296,13 +299,6 @@ pub(crate) trait CatchupDataSource: Sync {
         view: ViewNumber,
         accounts: &[RewardAccountV2],
     ) -> impl Send + Future<Output = anyhow::Result<RewardMerkleTreeV2>>;
-
-    fn get_all_reward_accounts(
-        &self,
-        height: u64,
-        offset: u64,
-        limit: u64,
-    ) -> impl Send + Future<Output = anyhow::Result<Vec<(RewardAccountV2, RewardAmount)>>>;
 
     fn get_reward_account_v1(
         &self,

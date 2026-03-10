@@ -5,7 +5,7 @@ use std::{
     env,
 };
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use committable::Committable;
 use espresso_types::{
     v0_3::RewardAccountV1,
@@ -13,7 +13,10 @@ use espresso_types::{
     FeeAccount, FeeMerkleTree, PubKey, Transaction,
 };
 
-use crate::{api::data_source::TokenDataSource, U256};
+use crate::{
+    api::{data_source::TokenDataSource, RewardAmount, RewardMerkleTreeV2Data},
+    U256,
+};
 // re-exported here to avoid breaking changes in consumers
 // "deprecated" does not work with "pub use": https://github.com/rust-lang/rust/issues/30827
 #[deprecated(note = "use espresso_types::ADVZNamespaceProofQueryData")]
@@ -33,10 +36,7 @@ use hotshot_query_service::{
 };
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
-    traits::{
-        network::ConnectedNetwork,
-        node_implementation::{ConsensusTime, Versions},
-    },
+    traits::{network::ConnectedNetwork, node_implementation::ConsensusTime},
 };
 use jf_merkle_tree_compat::MerkleTreeScheme;
 use serde::de::Error as _;
@@ -48,9 +48,7 @@ use super::data_source::{
     CatchupDataSource, HotShotConfigDataSource, NodeStateDataSource, StakeTableDataSource,
     StateSignatureDataSource, SubmitDataSource,
 };
-use crate::{
-    api::RewardAccountProofDataSource, SeqTypes, SequencerApiVersion, SequencerPersistence,
-};
+use crate::{api::RewardMerkleTreeDataSource, SeqTypes, SequencerApiVersion, SequencerPersistence};
 
 mod availability;
 pub(super) use availability::*;
@@ -109,7 +107,7 @@ where
     <MT as MerklizedState<SeqTypes, ARITY>>::Entry: std::marker::Copy,
     <State as ReadState>::State: Send
         + Sync
-        + RewardAccountProofDataSource
+        + RewardMerkleTreeDataSource
         + MerklizedStateDataSource<SeqTypes, MT, ARITY>
         + MerklizedStateHeightPersistence,
 {
@@ -123,44 +121,144 @@ where
     api.get("get_latest_reward_balance", move |req, state| {
         async move {
             let address = req.string_param("address")?;
-            let height = state.get_last_state_height().await?;
-            let snapshot = Snapshot::Index(height as u64);
-            let key = address
+            let account = address
                 .parse()
                 .map_err(|_| merklized_state::Error::Custom {
-                    message: "failed to parse reward address".to_string(),
+                    message: format!("invalid reward address: {address}"),
                     status: StatusCode::BAD_REQUEST,
                 })?;
-            let path = state.get_path(snapshot, key).await?;
-            Ok(path.elem().copied())
+
+            state
+                .load_latest_reward_account_proof_v2(account)
+                .await
+                .map_err(|err| merklized_state::Error::Custom {
+                    message: format!(
+                        "failed to load latest reward account proof from storage for account \
+                         {account}: {err}"
+                    ),
+                    status: StatusCode::NOT_FOUND,
+                })
+                .map(|proof| proof.balance)
+        }
+        .boxed()
+    })?
+    .get("get_latest_reward_account_proof", move |req, state| {
+        async move {
+            let address = req.string_param("address")?;
+            let account = address
+                .parse()
+                .map_err(|_| merklized_state::Error::Custom {
+                    message: format!("invalid reward address: {address}"),
+                    status: StatusCode::BAD_REQUEST,
+                })?;
+
+            state
+                .load_latest_reward_account_proof_v2(account)
+                .await
+                .map_err(|err| merklized_state::Error::Custom {
+                    message: format!(
+                        "failed to load latest reward account proof from storage for account \
+                         {account}: {err}"
+                    ),
+                    status: StatusCode::NOT_FOUND,
+                })
         }
         .boxed()
     })?
     .get("get_reward_balance", move |req, state| {
         async move {
             let address = req.string_param("address")?;
-            let height: usize = req.integer_param("height")?;
-            let snapshot = Snapshot::Index(height as u64);
-            let key = address
+            let height = req.integer_param("height")?;
+            let account = address
                 .parse()
                 .map_err(|_| merklized_state::Error::Custom {
-                    message: "failed to parse reward address".to_string(),
+                    message: format!("invalid reward address: {address}"),
                     status: StatusCode::BAD_REQUEST,
                 })?;
-            let path = state.get_path(snapshot, key).await?;
 
-            let last_height = state.get_last_state_height().await?;
-
-            if height > last_height {
-                return Err(merklized_state::Error::Custom {
+            state
+                .load_reward_account_proof_v2(height, account)
+                .await
+                .map_err(|err| merklized_state::Error::Custom {
                     message: format!(
-                        "requested height {height} is greater than last known height {last_height}"
+                        "failed to load v2 reward account {address} at height {height}: {err}"
                     ),
+                    status: StatusCode::NOT_FOUND,
+                })
+                .map(|proof| Some(RewardAmount(proof.balance)))
+        }
+        .boxed()
+    })?
+    .get("get_reward_amounts", move |req, state| {
+        async move {
+            let height = req.integer_param("height")?;
+            let limit: usize = req.integer_param("limit")?;
+            let offset = req.integer_param("offset")?;
+
+            if limit > 10_000 {
+                return Err(merklized_state::Error::Custom {
+                    message: format!("limit {limit} exceeds maximum allowed 10000"),
                     status: StatusCode::BAD_REQUEST,
                 });
             }
 
-            Ok(path.elem().copied())
+            let tree_bytes =
+                state
+                    .load_tree(height)
+                    .await
+                    .map_err(|err| merklized_state::Error::Custom {
+                        message: format!(
+                            "failed to load RewardMerkleTreeV2Data from storage at height \
+                             {height}: {err}"
+                        ),
+                        status: StatusCode::NOT_FOUND,
+                    })?;
+
+            let tree_data = bincode::deserialize::<RewardMerkleTreeV2Data>(&tree_bytes)
+                .context(
+                    "Failed to deserialize RewardMerkleTreeV2 for height {height} from storage; \
+                     this should never happen.",
+                )
+                .map_err(|err| merklized_state::Error::Custom {
+                    message: format!(
+                        "failed to load RewardMerkleTreeV2Data from storage at height {height}: \
+                         {err}"
+                    ),
+                    status: StatusCode::NOT_FOUND,
+                })?;
+
+            let end = std::cmp::min(offset + limit, tree_data.balances.len());
+
+            let result = tree_data
+                .balances
+                .get(offset..end)
+                .ok_or(merklized_state::Error::Custom {
+                    message: "Range out of bounds for balances".to_string(),
+                    status: StatusCode::NOT_FOUND,
+                })?
+                .iter()
+                .rev()
+                .cloned()
+                .collect::<Vec<_>>();
+
+            Ok(result)
+        }
+        .boxed()
+    })?
+    .get("get_reward_merkle_tree_v2", move |req, state| {
+        async move {
+            let height = req.integer_param("height")?;
+
+            state
+                .load_tree(height)
+                .await
+                .map_err(|err| merklized_state::Error::Custom {
+                    message: format!(
+                        "failed to load RewardMerkleTreeV2Data from storage at height {height}: \
+                         {err}"
+                    ),
+                    status: StatusCode::NOT_FOUND,
+                })
         }
         .boxed()
     })?;
@@ -205,7 +303,7 @@ where
                         })?;
 
                     state
-                        .load_v2_reward_account_proof(height, account)
+                        .load_reward_account_proof_v2(height, account)
                         .await
                         .map_err(|err| merklized_state::Error::Custom {
                             message: format!(
@@ -230,7 +328,7 @@ where
                         })?;
 
                     let proof = state
-                        .load_v2_reward_account_proof(height, account)
+                        .load_reward_account_proof_v2(height, account)
                         .await
                         .map_err(|err| merklized_state::Error::Custom {
                             message: format!(
@@ -278,17 +376,17 @@ where
     Ok(api)
 }
 
-type ExplorerApi<N, P, D, V, ApiVer> = Api<AvailState<N, P, D, V>, explorer::Error, ApiVer>;
+type ExplorerApi<N, P, D, ApiVer> = Api<AvailState<N, P, D>, explorer::Error, ApiVer>;
 
-pub(super) fn explorer<N, P, D, V: Versions>(
+pub(super) fn explorer<N, P, D>(
     api_ver: semver::Version,
-) -> Result<ExplorerApi<N, P, D, V, SequencerApiVersion>>
+) -> Result<ExplorerApi<N, P, D, SequencerApiVersion>>
 where
     N: ConnectedNetwork<PubKey>,
     D: ExplorerDataSource<SeqTypes> + Send + Sync + 'static,
     P: SequencerPersistence,
 {
-    let api = explorer::define_api::<AvailState<N, P, D, V>, SeqTypes, _>(
+    let api = explorer::define_api::<AvailState<N, P, D>, SeqTypes, _>(
         SequencerApiVersion::instance(),
         api_ver,
     )?;
@@ -489,6 +587,22 @@ where
         async move {
             Ok(state
                 .read(|state| state.previous_proposal_participation().boxed())
+                .await)
+        }
+        .boxed()
+    })?
+    .at("current_vote_participation", |_, state| {
+        async move {
+            Ok(state
+                .read(|state| state.current_vote_participation().boxed())
+                .await)
+        }
+        .boxed()
+    })?
+    .at("previous_vote_participation", |_, state| {
+        async move {
+            Ok(state
+                .read(|state| state.previous_vote_participation().boxed())
                 .await)
         }
         .boxed()
@@ -706,57 +820,21 @@ where
         }
         .boxed()
     })?
-    .get("reward_amounts", move |req, state| {
+    .get("reward_amounts", move |_req, _state| {
         async move {
-            let height = req
-                .integer_param::<_, u64>("height")
-                .map_err(Error::from_request_error)?;
-            let offset = req
-                .integer_param::<_, u64>("offset")
-                .map_err(Error::from_request_error)?;
-            let limit = req
-                .integer_param::<_, u64>("limit")
-                .map_err(Error::from_request_error)?;
-
-            if limit > 10_000 {
-                return Err(Error::catch_all(
-                    StatusCode::BAD_REQUEST,
-                    format!("limit {limit} exceeds maximum allowed 10000"),
-                ));
-            }
-
-            state
-                .get_all_reward_accounts(height, offset, limit)
-                .await
-                .map_err(|err| Error::catch_all(StatusCode::NOT_FOUND, format!("{err:#}")))
+            Err::<u64, _>(Error::catch_all(
+                StatusCode::NOT_FOUND,
+                "catchup/reward-amounts is deprecated".to_string(),
+            ))
         }
         .boxed()
     })?
-    .at("reward_accounts_v2", move |req, state| {
+    .at("reward_accounts_v2", move |_req, _state| {
         async move {
-            let (height, view) = parse_height_view(&req)?;
-            let accounts = req
-                .body_auto::<Vec<RewardAccountV2>, ApiVer>(ApiVer::instance())
-                .map_err(Error::from_request_error)?;
-
-            state
-                .read(|state| {
-                    async move {
-                        state
-                            .get_reward_accounts_v2(
-                                &state.node_state().await,
-                                height,
-                                view,
-                                &accounts,
-                            )
-                            .await
-                            .map_err(|err| {
-                                Error::catch_all(StatusCode::NOT_FOUND, format!("{err:#}"))
-                            })
-                    }
-                    .boxed()
-                })
-                .await
+            Err::<u64, _>(Error::catch_all(
+                StatusCode::NOT_FOUND,
+                "catchup/reward-accounts-v2 is deprecated".to_string(),
+            ))
         }
         .boxed()
     })?
@@ -817,11 +895,10 @@ where
     Ok(api)
 }
 
-type MerklizedStateApi<N, P, D, V, ApiVer> =
-    Api<AvailState<N, P, D, V>, merklized_state::Error, ApiVer>;
-pub(super) fn merklized_state<N, P, D, S, V: Versions, const ARITY: usize>(
+type MerklizedStateApi<N, P, D, ApiVer> = Api<AvailState<N, P, D>, merklized_state::Error, ApiVer>;
+pub(super) fn merklized_state<N, P, D, S, const ARITY: usize>(
     api_ver: semver::Version,
-) -> Result<MerklizedStateApi<N, P, D, V, SequencerApiVersion>>
+) -> Result<MerklizedStateApi<N, P, D, SequencerApiVersion>>
 where
     N: ConnectedNetwork<PubKey>,
     D: MerklizedStateDataSource<SeqTypes, S, ARITY>
@@ -834,7 +911,7 @@ where
     for<'a> <S::Commit as TryFrom<&'a TaggedBase64>>::Error: std::fmt::Display,
 {
     let api = merklized_state::define_api::<
-        AvailState<N, P, D, V>,
+        AvailState<N, P, D>,
         SeqTypes,
         S,
         SequencerApiVersion,

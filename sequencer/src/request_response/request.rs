@@ -41,6 +41,8 @@ pub enum Request {
     EpochHeader(u64),
     /// A request for all reward accounts at a given height with pagination
     AllRewardAccounts(Height, u64, u64), // height, offset, limit
+    /// A request for data to reconstruct the reward merkle tree at a given height
+    RewardMerkleTreeV2(u64, ViewNumber),
 }
 
 /// The outermost response type. This an enum that contains all the possible responses that the
@@ -67,6 +69,8 @@ pub enum Response {
     EpochHeader(Box<Header>),
     /// A response for all reward accounts at a given height
     AllRewardAccounts(Vec<(RewardAccountV2, RewardAmount)>),
+    /// A response with data to reconstruct the reward merkle tree at a given height
+    RewardMerkleTreeV2(Vec<u8>),
 }
 
 /// Implement the `RequestTrait` trait for the `Request` type. This tells the request response

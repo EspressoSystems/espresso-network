@@ -40,7 +40,7 @@ use hotshot_types::{
 use itertools::Itertools;
 use jf_merkle_tree_compat::prelude::MerkleProof;
 pub use sqlx::Executor;
-use sqlx::{pool::Pool, query_builder::Separated, Encode, FromRow, QueryBuilder, Type};
+use sqlx::{pool::Pool, query_builder::Separated, Encode, Execute, FromRow, QueryBuilder, Type};
 
 #[cfg(not(feature = "embedded-db"))]
 use super::queries::state::batch_insert_hashes;
@@ -370,7 +370,7 @@ impl Transaction<Write> {
     ) -> anyhow::Result<()>
     where
         R: IntoIterator,
-        R::Item: 'p + FixedLengthParams<'p, N> + Clone,
+        R::Item: 'p + FixedLengthParams<'p, N>,
     {
         let set_columns = columns
             .iter()
@@ -391,21 +391,26 @@ impl Transaction<Write> {
 
         let mut query_builder =
             QueryBuilder::new(format!("INSERT INTO \"{table}\" ({columns_str}) "));
-
         query_builder.push_values(rows, |mut b, row| {
             row.bind(&mut b);
         });
-
         query_builder.push(format!(" ON CONFLICT ({pk}) DO UPDATE SET {set_columns}"));
 
         let query = query_builder.build();
-        let res = self.execute(query).await?;
+        let statement = query.sql();
 
+        let res = self.execute(query).await.inspect_err(|err| {
+            tracing::error!(statement, "error in statement execution: {err:#}");
+        })?;
         let rows_modified = res.rows_affected() as usize;
         if rows_modified != num_rows {
-            bail!("unexpected number of rows modified: expected {num_rows}, got {rows_modified}");
+            let error = format!(
+                "unexpected number of rows modified: expected {num_rows}, got {rows_modified}. \
+                 query: {statement}"
+            );
+            tracing::error!(error);
+            bail!(error);
         }
-
         Ok(())
     }
 }

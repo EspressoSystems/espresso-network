@@ -20,7 +20,7 @@ use hotshot_example_types::{
 use hotshot_types::{
     data::{QuorumProposal, VidCommitment, VidCommon, ViewNumber},
     signature_key::{BLSPubKey, SchnorrPubKey},
-    traits::node_implementation::{NodeType, Versions},
+    traits::node_implementation::NodeType,
 };
 use jf_merkle_tree_compat::{
     prelude::{MerkleProof, Sha3Digest, Sha3Node},
@@ -29,6 +29,7 @@ use jf_merkle_tree_compat::{
 };
 use serde::{Deserialize, Serialize};
 use vbs::version::StaticVersion;
+use versions::{version, Upgrade};
 
 use crate::{
     availability::{
@@ -184,23 +185,9 @@ impl NodeType for MockTypes {
     type StateSignatureKey = SchnorrPubKey;
 }
 
-#[derive(Clone, Debug, Copy)]
-pub struct MockVersions {}
+pub const MOCK_UPGRADE: Upgrade = Upgrade::new(version(0, 1), version(0, 2));
 
-impl Versions for MockVersions {
-    type Base = StaticVersion<0, 1>;
-    type Upgrade = StaticVersion<0, 2>;
-    const UPGRADE_HASH: [u8; 32] = [
-        1, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0,
-        0, 0,
-    ];
-    type Epochs = StaticVersion<0, 4>;
-    type DrbAndHeaderUpgrade = StaticVersion<0, 5>;
-    type Vid2Upgrade = StaticVersion<0, 6>;
-}
-
-/// A type alias for the mock base version
-pub type MockBase = <MockVersions as Versions>::Base;
+pub type MockBase = StaticVersion<0, 1>;
 
 pub type MockMembership = StrictMembership<MockTypes, StaticStakeTable<BLSPubKey, SchnorrPubKey>>;
 pub type MockQuorumProposal = QuorumProposal<MockTypes>;

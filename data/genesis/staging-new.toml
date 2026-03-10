@@ -24,7 +24,6 @@ state_ver_key = "SCHNORR_VER_KEY~Vgs-osonoQBj8GGb4erBqK6G2v0Q3qk21Pb16B1h9RfKm6N
 stake_key = "BLS_VER_KEY~qwEP63srzoRpSf7ahV27nz8JL90W5q3KhyPJhTY75Sir9JiHkF2JQBZ_1iJlTNOfprZ-cXh7GB4irI00hvExFiSQbTPomSRUnFxugn5I5FbOT7vxiXZiZ3pEhFbzFqAHCY57RtaPbqFBNmMzlueUUtxF0Cf-Sy3uVcAaWF7TB6Jy"
 stake_amount = "0x1"
 
-
 [stake_table]
 capacity = 200
 
@@ -34,7 +33,6 @@ base_fee = "1 wei"
 max_block_size = "1mb"
 fee_recipient = "0x0000000000000000000000000000000000000000"
 fee_contract = "0xa15bb66138824a1c7167f5e85b957d04dd34e468"
-stake_table_contract = "0xed1db453c3156ff3155a97ad217b3087d5dc5f6e"
 
 [header]
 timestamp = "1970-01-01T00:00:00Z"
@@ -45,7 +43,6 @@ base_fee = "1 wei"
 max_block_size = "1mb"
 fee_recipient = "0x0000000000000000000000000000000000000000"
 fee_contract = "0xa15bb66138824a1c7167f5e85b957d04dd34e468"
-stake_table_contract = "0xed1db453c3156ff3155a97ad217b3087d5dc5f6e"
 
 [l1_finalized]
 number = 0
@@ -58,11 +55,11 @@ stop_proposing_view = 1
 
 version = "0.6"
 
-[upgrade.da]
-[upgrade.da.chain_config]
+[upgrade.drb_and_header]
+[upgrade.drb_and_header.chain_config]
 chain_id = 888888888
 base_fee = "1 wei"
 max_block_size = "1mb"
 fee_recipient = "0x0000000000000000000000000000000000000000"
 fee_contract = "0xa15bb66138824a1c7167f5e85b957d04dd34e468"
-stake_table_contract = "0xed1db453c3156ff3155a97ad217b3087d5dc5f6e"
+stake_table_contract = "0x05b4cb126885fb10464fdd12666feb25e2563b76"

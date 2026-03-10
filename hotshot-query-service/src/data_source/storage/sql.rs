@@ -98,7 +98,7 @@ pub use crate::include_migrations;
 /// #[cfg(feature = "embedded-db")]
 /// let mut migrations: Vec<Migration> =
 ///     include_migrations!("$CARGO_MANIFEST_DIR/migrations/sqlite").collect();
-///    
+///
 ///     migrations.sort();
 ///     assert_eq!(migrations[0].version(), 10);
 ///     assert_eq!(migrations[0].name(), "init_schema");
@@ -1007,7 +1007,7 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
             let rows = QueryBuilder::default()
                 .query(
                     "SELECT leaf, qc, common as vid_common, share as vid_share
-                    FROM leaf INNER JOIN vid on leaf.height = vid.height 
+                    FROM leaf INNER JOIN vid on leaf.height = vid.height
                     WHERE leaf.height >= $1 AND leaf.height < $2",
                 )
                 .bind(offset)
@@ -1160,8 +1160,8 @@ pub mod testing {
         time::Duration,
     };
 
-    use portpicker::pick_unused_port;
     use refinery::Migration;
+    use test_utils::reserve_tcp_port;
     use tokio::{net::TcpStream, time::timeout};
 
     use super::Config;
@@ -1219,7 +1219,7 @@ pub mod testing {
             // "free" port on that system.
             // We *might* be able to get away with this as any remote docker
             // host should hopefully be pretty open with it's port space.
-            let port = pick_unused_port().unwrap();
+            let port = reserve_tcp_port().unwrap();
             let host = docker_hostname.unwrap_or("localhost".to_string());
 
             let mut cmd = Command::new("docker");
@@ -1429,14 +1429,14 @@ pub mod testing {
                 id {hash_pk},
                 value {binary}  NOT NULL UNIQUE
             );
-    
+
             ALTER TABLE header
             ADD column test_merkle_tree_root text
             GENERATED ALWAYS as {root_stored_column} STORED;
 
             CREATE TABLE {name}
             (
-                path JSONB NOT NULL, 
+                path JSONB NOT NULL,
                 created BIGINT NOT NULL,
                 hash_id INT NOT NULL,
                 children JSONB,
@@ -1459,7 +1459,7 @@ mod test {
     use committable::{Commitment, CommitmentBoundsArkless, Committable};
     use hotshot::traits::BlockPayload;
     use hotshot_example_types::{
-        node_types::TestVersions,
+        node_types::TEST_VERSIONS,
         state_types::{TestInstanceState, TestValidatedState},
     };
     use hotshot_types::{
@@ -1467,7 +1467,7 @@ mod test {
         simple_vote::QuorumData,
         traits::{
             block_contents::{BlockHeader, GENESIS_VID_NUM_STORAGE_NODES},
-            node_implementation::{ConsensusTime, Versions},
+            node_implementation::ConsensusTime,
             EncodeBytes,
         },
         vid::advz::advz_scheme,
@@ -1477,14 +1477,13 @@ mod test {
         prelude::UniversalMerkleTree, MerkleTreeScheme, ToTraversalPath, UniversalMerkleTreeScheme,
     };
     use tokio::time::sleep;
-    use vbs::version::StaticVersionType;
 
     use super::{testing::TmpDb, *};
     use crate::{
         availability::LeafQueryData,
         data_source::storage::{pruning::PrunedHeightStorage, UpdateAvailabilityStorage},
         merklized_state::{MerklizedState, UpdateStateData},
-        testing::mocks::{MockHeader, MockMerkleTree, MockPayload, MockTypes, MockVersions},
+        testing::mocks::{MockHeader, MockMerkleTree, MockPayload, MockTypes, MOCK_UPGRADE},
     };
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -1579,9 +1578,10 @@ mod test {
         let mut storage = SqlStorage::connect(cfg, StorageConnectionType::Query)
             .await
             .unwrap();
-        let mut leaf = LeafQueryData::<MockTypes>::genesis::<TestVersions>(
+        let mut leaf = LeafQueryData::<MockTypes>::genesis(
             &TestValidatedState::default(),
             &TestInstanceState::default(),
+            TEST_VERSIONS.test,
         )
         .await;
         // insert some mock data
@@ -1724,7 +1724,7 @@ mod test {
         // there should be multiple nodes with same index but different created time
         let (count,) = query_as::<(i64,)>(
             " SELECT count(*) FROM (SELECT count(*) as count FROM test_tree GROUP BY path having \
-             count(*) > 1)",
+             count(*) > 1) AS s",
         )
         .fetch_one(tx.as_mut())
         .await
@@ -1743,7 +1743,7 @@ mod test {
         let mut tx = storage.read().await.unwrap();
         let (count,) = query_as::<(i64,)>(
             "SELECT count(*) FROM (SELECT count(*) as count FROM test_tree GROUP BY path having \
-             count(*) > 1)",
+             count(*) > 1) AS s",
         )
         .fetch_one(tx.as_mut())
         .await
@@ -1761,9 +1761,10 @@ mod test {
         let mut storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
             .await
             .unwrap();
-        let mut leaf = LeafQueryData::<MockTypes>::genesis::<TestVersions>(
+        let mut leaf = LeafQueryData::<MockTypes>::genesis(
             &TestValidatedState::default(),
             &TestInstanceState::default(),
+            TEST_VERSIONS.test,
         )
         .await;
         // insert some mock data
@@ -1886,10 +1887,11 @@ mod test {
             .await
             .unwrap();
 
-            let mut block_header = <MockHeader as BlockHeader<MockTypes>>::genesis::<MockVersions>(
+            let mut block_header = <MockHeader as BlockHeader<MockTypes>>::genesis(
                 &instance_state,
                 payload.clone(),
                 &metadata,
+                MOCK_UPGRADE.base,
             );
 
             block_header.block_number = i;
@@ -1915,10 +1917,10 @@ mod test {
             };
 
             let mut leaf = Leaf::from_quorum_proposal(&quorum_proposal);
-            leaf.fill_block_payload::<MockVersions>(
+            leaf.fill_block_payload(
                 payload.clone(),
                 GENESIS_VID_NUM_STORAGE_NODES,
-                <MockVersions as Versions>::Base::VERSION,
+                MOCK_UPGRADE.base,
             )
             .unwrap();
             qc.data.leaf_commit = <Leaf<MockTypes> as Committable>::commit(&leaf);

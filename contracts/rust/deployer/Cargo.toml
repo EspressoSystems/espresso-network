@@ -6,27 +6,27 @@ authors = { workspace = true }
 edition = { workspace = true }
 
 [dependencies]
-alloy = { workspace = true, features = ["signer-ledger"] }
+alloy = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true }
-derive_builder = "0.20.2"
+derive_builder = { workspace = true }
 derive_more = { workspace = true }
 dotenvy = { workspace = true }
-espresso-types = { path = "../../../types" }
+espresso-types = { workspace = true }
 hotshot-contract-adapter = { workspace = true }
 hotshot-types = { workspace = true }
 serde_json = { workspace = true }
 surf-disco = { workspace = true }
 tide-disco = { workspace = true }
 tokio = { workspace = true }
-tracing = "0.1.37"
+tracing = { workspace = true }
 url = { workspace = true }
 vbs = { workspace = true }
- 
+
 [dev-dependencies]
-espresso-types = { path = "../../../types", features = ["testing"] }
+espresso-types = { workspace = true, features = ["testing"] }
 rand = { workspace = true }
-sequencer-utils = { version = "0.1.0", path = "../../../utils" }
+sequencer-utils = { workspace = true }
 test-log = { workspace = true }
 
 [lints]

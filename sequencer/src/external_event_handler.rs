@@ -1,16 +1,13 @@
 //! Should probably rename this to "external" or something
 
-use std::{marker::PhantomData, sync::Arc};
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use espresso_types::{PubKey, SeqTypes};
 use hotshot::types::Message;
 use hotshot_types::{
     message::MessageKind,
-    traits::{
-        network::{BroadcastDelay, ConnectedNetwork, Topic, ViewMessage},
-        node_implementation::Versions,
-    },
+    traits::network::{BroadcastDelay, ConnectedNetwork, Topic, ViewMessage},
 };
 use request_response::network::Bytes;
 use serde::{Deserialize, Serialize};
@@ -27,12 +24,9 @@ pub enum ExternalMessage {
 
 /// The external event handler
 #[derive(Clone)]
-pub struct ExternalEventHandler<V: Versions> {
+pub struct ExternalEventHandler {
     /// The sender to the request-response protocol
     request_response_sender: Sender<Bytes>,
-
-    /// The type phantom
-    phantom: PhantomData<V>,
 }
 
 // The different types of outbound messages (broadcast or direct)
@@ -43,7 +37,7 @@ pub enum OutboundMessage {
     Broadcast(MessageKind<SeqTypes>),
 }
 
-impl<V: Versions> ExternalEventHandler<V> {
+impl ExternalEventHandler {
     /// Creates a new `ExternalEventHandler` with the given network
     pub async fn new<N: ConnectedNetwork<PubKey>>(
         tasks: &mut TaskList,
@@ -60,7 +54,6 @@ impl<V: Versions> ExternalEventHandler<V> {
 
         Ok(Self {
             request_response_sender,
-            phantom: PhantomData,
         })
     }
 
@@ -113,9 +106,14 @@ impl<V: Versions> ExternalEventHandler<V> {
                         };
 
                     // Send the message to the recipient
-                    if let Err(err) = network.direct_message(view, message_bytes, recipient).await {
-                        tracing::warn!("Failed to send message: {:?}", err);
-                    };
+                    let network = Arc::clone(&network);
+                    tokio::spawn(async move {
+                        if let Err(err) =
+                            network.direct_message(view, message_bytes, recipient).await
+                        {
+                            tracing::warn!("Failed to send message: {:?}", err);
+                        }
+                    });
                 },
 
                 OutboundMessage::Broadcast(message) => {

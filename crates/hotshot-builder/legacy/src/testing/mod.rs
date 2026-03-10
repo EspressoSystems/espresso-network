@@ -15,7 +15,7 @@ use hotshot_builder_shared::{
 };
 use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
-    node_types::{TestTypes, TestVersions},
+    node_types::{TestTypes, TEST_VERSIONS},
     state_types::{TestInstanceState, TestValidatedState},
 };
 use hotshot_types::{
@@ -25,14 +25,11 @@ use hotshot_types::{
     message::Proposal,
     simple_certificate::{QuorumCertificate2, SimpleCertificate, SuccessThreshold},
     simple_vote::QuorumData2,
-    traits::{
-        node_implementation::{ConsensusTime, Versions},
-        EncodeBytes,
-    },
+    traits::{node_implementation::ConsensusTime, EncodeBytes},
     utils::{BuilderCommitment, EpochTransitionIndicator},
 };
 use sha2::{Digest, Sha256};
-use vbs::version::StaticVersionType;
+use vbs::version::Version;
 
 use crate::{
     builder_state::{
@@ -44,13 +41,14 @@ use crate::{
 mod basic_test;
 pub mod finalization_test;
 
-pub async fn create_builder_state<V: Versions>(
+pub async fn create_builder_state(
     channel_capacity: usize,
     num_storage_nodes: usize,
+    base: Version,
 ) -> (
     BroadcastSender<MessageType<TestTypes>>,
     Arc<RwLock<GlobalState<TestTypes>>>,
-    BuilderState<TestTypes, V>,
+    BuilderState<TestTypes>,
 ) {
     // set up the broadcast channels
     let (bootstrap_sender, bootstrap_receiver) =
@@ -63,8 +61,7 @@ pub async fn create_builder_state<V: Versions>(
     let (tx_sender, tx_receiver) =
         broadcast::<Arc<ReceivedTransaction<TestTypes>>>(channel_capacity);
 
-    let genesis_vid_commitment =
-        vid_commitment::<V>(&[], &[], num_storage_nodes, <V as Versions>::Base::VERSION);
+    let genesis_vid_commitment = vid_commitment(&[], &[], num_storage_nodes, base);
     let genesis_builder_commitment = BuilderCommitment::from_bytes([]);
 
     // instantiate the global state
@@ -110,11 +107,12 @@ pub async fn create_builder_state<V: Versions>(
 
 /// get transactions submitted in previous rounds, [] for genesis
 /// and simulate the block built from those
-pub async fn calc_proposal_msg<V: Versions>(
+pub async fn calc_proposal_msg(
     num_storage_nodes: usize,
     round: usize,
     prev_quorum_proposal: Option<QuorumProposalWrapper<TestTypes>>,
     transactions: Vec<TestTransaction>,
+    base: Version,
 ) -> (
     QuorumProposalWrapper<TestTypes>,
     QuorumProposalMessage<TestTypes>,
@@ -127,11 +125,11 @@ pub async fn calc_proposal_msg<V: Versions>(
     let encoded_transactions = TestTransaction::encode(&transactions);
     let block_payload = TestBlockPayload { transactions };
     let metadata = TestMetadata { num_transactions };
-    let block_vid_commitment = vid_commitment::<V>(
+    let block_vid_commitment = vid_commitment(
         &encoded_transactions,
         &metadata.encode(),
         num_storage_nodes,
-        <V as Versions>::Base::VERSION,
+        base,
     );
     let block_builder_commitment =
         <TestBlockPayload as BlockPayload<TestTypes>>::builder_commitment(
@@ -180,14 +178,15 @@ pub async fn calc_proposal_msg<V: Versions>(
         timestamp_millis: round as u64 * 1_000,
         metadata,
         random: 1, // arbitrary
-        version: <TestVersions as Versions>::Base::VERSION,
+        version: TEST_VERSIONS.test.base,
     };
 
     let justify_qc = match prev_quorum_proposal.as_ref() {
         None => {
-            QuorumCertificate2::<TestTypes>::genesis::<TestVersions>(
+            QuorumCertificate2::<TestTypes>::genesis(
                 &TestValidatedState::default(),
                 &TestInstanceState::default(),
+                TEST_VERSIONS.test,
             )
             .await
         },

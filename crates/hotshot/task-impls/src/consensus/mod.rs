@@ -6,6 +6,7 @@
 
 use std::{sync::Arc, time::Instant};
 
+use alloy::primitives::U256;
 use async_broadcast::{Receiver, Sender};
 use async_trait::async_trait;
 use handlers::handle_epoch_root_quorum_vote_recv;
@@ -17,8 +18,9 @@ use hotshot_types::{
     message::UpgradeLock,
     simple_certificate::{NextEpochQuorumCertificate2, QuorumCertificate2, TimeoutCertificate2},
     simple_vote::{HasEpoch, NextEpochQuorumVote2, QuorumVote2, TimeoutVote2},
+    stake_table::HSStakeTable,
     traits::{
-        node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
+        node_implementation::{ConsensusTime, NodeImplementation, NodeType},
         signature_key::SignatureKey,
         storage::Storage,
     },
@@ -42,7 +44,7 @@ use crate::{
 mod handlers;
 
 /// Task state for the Consensus task.
-pub struct ConsensusTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> {
+pub struct ConsensusTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>> {
     /// Our public key
     pub public_key: TYPES::SignatureKey,
 
@@ -59,22 +61,18 @@ pub struct ConsensusTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V: 
     pub membership_coordinator: EpochMembershipCoordinator<TYPES>,
 
     /// A map of `QuorumVote` collector tasks.
-    pub vote_collectors: VoteCollectorsMap<TYPES, QuorumVote2<TYPES>, QuorumCertificate2<TYPES>, V>,
+    pub vote_collectors: VoteCollectorsMap<TYPES, QuorumVote2<TYPES>, QuorumCertificate2<TYPES>>,
 
     /// A map of `EpochRootQuorumVote` collector tasks.
-    pub epoch_root_vote_collectors: EpochRootVoteCollectorsMap<TYPES, V>,
+    pub epoch_root_vote_collectors: EpochRootVoteCollectorsMap<TYPES>,
 
     /// A map of `QuorumVote` collector tasks. They collect votes from the nodes in the next epoch.
-    pub next_epoch_vote_collectors: VoteCollectorsMap<
-        TYPES,
-        NextEpochQuorumVote2<TYPES>,
-        NextEpochQuorumCertificate2<TYPES>,
-        V,
-    >,
+    pub next_epoch_vote_collectors:
+        VoteCollectorsMap<TYPES, NextEpochQuorumVote2<TYPES>, NextEpochQuorumCertificate2<TYPES>>,
 
     /// A map of `TimeoutVote` collector tasks.
     pub timeout_vote_collectors:
-        VoteCollectorsMap<TYPES, TimeoutVote2<TYPES>, TimeoutCertificate2<TYPES>, V>,
+        VoteCollectorsMap<TYPES, TimeoutVote2<TYPES>, TimeoutCertificate2<TYPES>>,
 
     /// The view number that this node is currently executing in.
     pub cur_view: TYPES::View,
@@ -104,7 +102,7 @@ pub struct ConsensusTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V: 
     pub id: u64,
 
     /// Lock for a decided upgrade
-    pub upgrade_lock: UpgradeLock<TYPES, V>,
+    pub upgrade_lock: UpgradeLock<TYPES>,
 
     /// Number of blocks in an epoch, zero means there are no epochs
     pub epoch_height: u64,
@@ -116,7 +114,7 @@ pub struct ConsensusTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V: 
     pub first_epoch: Option<(TYPES::View, TYPES::Epoch)>,
 }
 
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskState<TYPES, I, V> {
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> ConsensusTaskState<TYPES, I> {
     /// Handles a consensus event received on the event stream
     #[instrument(skip_all, fields(id = self.id, cur_view = *self.cur_view, cur_epoch = self.cur_epoch.map(|x| *x)), name = "Consensus replica task", level = "error", target = "ConsensusTaskState")]
     pub async fn handle(
@@ -231,6 +229,30 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
                     .is_ok();
                 if let Some(next_epoch) = next_epoch {
                     consensus_writer.update_validator_participation_epoch(next_epoch);
+                    let (stake_table, success_threshold) = if let Ok(epoch_membership) = self
+                        .membership_coordinator
+                        .stake_table_for_epoch(Some(next_epoch))
+                        .await
+                    {
+                        (
+                            epoch_membership.stake_table().await,
+                            epoch_membership.success_threshold().await,
+                        )
+                    } else {
+                        tracing::warn!(
+                            "Failed to get stake table for epoch {} while updating vote \
+                             participation",
+                            next_epoch
+                        );
+                        (HSStakeTable::default(), U256::MAX)
+                    };
+                    consensus_writer
+                        .update_vote_participation_epoch(
+                            stake_table,
+                            success_threshold,
+                            Some(next_epoch),
+                        )
+                        .context(warn!("Updating vote participation"))?;
                 }
                 drop(consensus_writer);
 
@@ -273,9 +295,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
 }
 
 #[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TaskState
-    for ConsensusTaskState<TYPES, I, V>
-{
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TaskState for ConsensusTaskState<TYPES, I> {
     type Event = HotShotEvent<TYPES>;
 
     async fn handle_event(

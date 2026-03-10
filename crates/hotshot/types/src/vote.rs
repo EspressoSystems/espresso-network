@@ -26,7 +26,7 @@ use crate::{
     simple_vote::{LightClientStateUpdateVote2, VersionedVoteData, Voteable},
     stake_table::{HSStakeTable, StakeTableEntries},
     traits::{
-        node_implementation::{ConsensusTime, NodeType, Versions},
+        node_implementation::{ConsensusTime, NodeType},
         signature_key::{
             LCV2StateSignatureKey, LCV3StateSignatureKey, SignatureKey, StakeTableEntryType,
             StateSignatureKey,
@@ -70,20 +70,26 @@ pub trait Certificate<TYPES: NodeType, T>: HasViewNumber<TYPES> {
     type Threshold: Threshold<TYPES>;
 
     /// Build a certificate from the data commitment and the quorum of signers
-    fn create_signed_certificate<V: Versions>(
-        vote_commitment: Commitment<VersionedVoteData<TYPES, Self::Voteable, V>>,
+    fn create_signed_certificate(
+        vote_commitment: Commitment<VersionedVoteData<TYPES, Self::Voteable>>,
         data: Self::Voteable,
         sig: <TYPES::SignatureKey as SignatureKey>::QcType,
         view: TYPES::View,
     ) -> Self;
 
     /// Checks if the cert is valid in the given epoch
-    fn is_valid_cert<V: Versions>(
+    fn is_valid_cert(
         &self,
         stake_table: &[<TYPES::SignatureKey as SignatureKey>::StakeTableEntry],
         threshold: U256,
-        upgrade_lock: &UpgradeLock<TYPES, V>,
+        upgrade_lock: &UpgradeLock<TYPES>,
     ) -> impl std::future::Future<Output = Result<()>>;
+    /// Get the list of signers given a certificate.
+    fn signers(
+        &self,
+        stake_table: &[<TYPES::SignatureKey as SignatureKey>::StakeTableEntry],
+        threshold: U256,
+    ) -> Result<Vec<<TYPES::SignatureKey as SignatureKey>::VerificationKeyType>>;
     /// Returns the amount of stake needed to create this certificate
     // TODO: Make this a static ratio of the total stake of `Membership`
     fn threshold(membership: &EpochMembership<TYPES>) -> impl Future<Output = U256> + Send;
@@ -106,10 +112,10 @@ pub trait Certificate<TYPES: NodeType, T>: HasViewNumber<TYPES> {
     fn data(&self) -> &Self::Voteable;
 
     /// Get the vote commitment which the votes commit to
-    fn data_commitment<V: Versions>(
+    fn data_commitment(
         &self,
-        upgrade_lock: &UpgradeLock<TYPES, V>,
-    ) -> impl std::future::Future<Output = Result<Commitment<VersionedVoteData<TYPES, Self::Voteable, V>>>>;
+        upgrade_lock: &UpgradeLock<TYPES>,
+    ) -> impl std::future::Future<Output = Result<Commitment<VersionedVoteData<TYPES, Self::Voteable>>>>;
 }
 /// Mapping of vote commitment to signatures and bitvec
 type SignersMap<COMMITMENT, KEY> = HashMap<
@@ -126,32 +132,30 @@ pub struct VoteAccumulator<
     TYPES: NodeType,
     VOTE: Vote<TYPES>,
     CERT: Certificate<TYPES, VOTE::Commitment, Voteable = VOTE::Commitment>,
-    V: Versions,
 > {
     /// Map of all signatures accumulated so far
     pub vote_outcomes: VoteMap2<
-        Commitment<VersionedVoteData<TYPES, <VOTE as Vote<TYPES>>::Commitment, V>>,
+        Commitment<VersionedVoteData<TYPES, <VOTE as Vote<TYPES>>::Commitment>>,
         TYPES::SignatureKey,
         <TYPES::SignatureKey as SignatureKey>::PureAssembledSignatureType,
     >,
     /// A bitvec to indicate which node is active and send out a valid signature for certificate aggregation, this automatically do uniqueness check
     /// And a list of valid signatures for certificate aggregation
     pub signers: SignersMap<
-        Commitment<VersionedVoteData<TYPES, <VOTE as Vote<TYPES>>::Commitment, V>>,
+        Commitment<VersionedVoteData<TYPES, <VOTE as Vote<TYPES>>::Commitment>>,
         TYPES::SignatureKey,
     >,
     /// Phantom data to specify the types this accumulator is for
     pub phantom: PhantomData<(TYPES, VOTE, CERT)>,
     /// version information
-    pub upgrade_lock: UpgradeLock<TYPES, V>,
+    pub upgrade_lock: UpgradeLock<TYPES>,
 }
 
 impl<
         TYPES: NodeType,
         VOTE: Vote<TYPES>,
         CERT: Certificate<TYPES, VOTE::Commitment, Voteable = VOTE::Commitment>,
-        V: Versions,
-    > VoteAccumulator<TYPES, VOTE, CERT, V>
+    > VoteAccumulator<TYPES, VOTE, CERT>
 {
     /// Add a vote to the total accumulated votes for the given epoch.
     /// Returns the accumulator or the certificate if we
@@ -232,7 +236,7 @@ impl<
                 &sig_list[..],
             );
 
-            let cert = CERT::create_signed_certificate::<V>(
+            let cert = CERT::create_signed_certificate(
                 vote_commitment,
                 vote.date().clone(),
                 real_qc_sig,
@@ -249,7 +253,7 @@ type VoteMap2<COMMITMENT, PK, SIG> = HashMap<COMMITMENT, (U256, BTreeMap<PK, (SI
 
 /// Accumulator for light client state update vote
 #[allow(clippy::type_complexity)]
-pub struct LightClientStateUpdateVoteAccumulator<TYPES: NodeType, V: Versions> {
+pub struct LightClientStateUpdateVoteAccumulator<TYPES: NodeType> {
     pub vote_outcomes: HashMap<
         (LightClientState, StakeTableState, FixedBytes<32>),
         (
@@ -264,10 +268,10 @@ pub struct LightClientStateUpdateVoteAccumulator<TYPES: NodeType, V: Versions> {
         ),
     >,
 
-    pub upgrade_lock: UpgradeLock<TYPES, V>,
+    pub upgrade_lock: UpgradeLock<TYPES>,
 }
 
-impl<TYPES: NodeType, V: Versions> LightClientStateUpdateVoteAccumulator<TYPES, V> {
+impl<TYPES: NodeType> LightClientStateUpdateVoteAccumulator<TYPES> {
     /// Add a vote to the total accumulated votes for the given epoch.
     /// Returns the accumulator or the certificate if we
     /// have accumulated enough votes to exceed the threshold for creating a certificate.
