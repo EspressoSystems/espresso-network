@@ -785,7 +785,7 @@ where
 
 #[cfg(test)]
 mod test {
-    use hotshot_example_types::node_types::TEST_VERSIONS;
+    use hotshot_example_types::node_types::TestVersions;
     use itertools::Itertools;
 
     use super::*;
@@ -811,10 +811,9 @@ mod test {
 
         // Generate some mock leaves to insert.
         let mut leaves: Vec<LeafQueryData<MockTypes>> = vec![
-            LeafQueryData::<MockTypes>::genesis(
+            LeafQueryData::<MockTypes>::genesis::<TestVersions>(
                 &Default::default(),
                 &Default::default(),
-                TEST_VERSIONS.test,
             )
             .await,
         ];
