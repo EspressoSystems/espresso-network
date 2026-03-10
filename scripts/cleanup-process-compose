@@ -136,4 +136,7 @@ for proc in "${NATIVE_PROCESSES[@]}"; do
 	kill_project_processes "$proc" KILL
 done
 
+# 4. Remove stale hotshot config that sequencer2 writes via default fs persistence.
+rm -fv "$PROJECT_DIR/data/hotshot.cfg"
+
 echo "Cleanup complete!"
