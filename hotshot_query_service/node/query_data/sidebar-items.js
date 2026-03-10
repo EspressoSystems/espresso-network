@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"struct":["Limits","SyncStatus","TimeWindowQueryData"]};
+window.SIDEBAR_ITEMS = {"enum":["SyncStatus"],"struct":["Limits","ResourceSyncStatus","SyncStatusQueryData","SyncStatusRange","TimeWindowQueryData"]};

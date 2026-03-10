@@ -38,7 +38,7 @@
 <a href=#38 id=38 data-nosnippet>38</a>        UpdateStateData,
 <a href=#39 id=39 data-nosnippet>39</a>    },
 <a href=#40 id=40 data-nosnippet>40</a>    metrics::PrometheusMetrics,
-<a href=#41 id=41 data-nosnippet>41</a>    node::{NodeDataSource, SyncStatus, TimeWindowQueryData, WindowStart},
+<a href=#41 id=41 data-nosnippet>41</a>    node::{NodeDataSource, SyncStatusQueryData, TimeWindowQueryData, WindowStart},
 <a href=#42 id=42 data-nosnippet>42</a>    status::{HasMetrics, StatusDataSource},
 <a href=#43 id=43 data-nosnippet>43</a>    Header, Payload, QueryResult, Transaction,
 <a href=#44 id=44 data-nosnippet>44</a>};
@@ -358,7 +358,7 @@
 <a href=#358 id=358 data-nosnippet>358</a>    {
 <a href=#359 id=359 data-nosnippet>359</a>        <span class="self">self</span>.data_source.vid_share(id).<span class="kw">await
 <a href=#360 id=360 data-nosnippet>360</a>    </span>}
-<a href=#361 id=361 data-nosnippet>361</a>    <span class="kw">async fn </span>sync_status(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; QueryResult&lt;SyncStatus&gt; {
+<a href=#361 id=361 data-nosnippet>361</a>    <span class="kw">async fn </span>sync_status(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; QueryResult&lt;SyncStatusQueryData&gt; {
 <a href=#362 id=362 data-nosnippet>362</a>        <span class="self">self</span>.data_source.sync_status().<span class="kw">await
 <a href=#363 id=363 data-nosnippet>363</a>    </span>}
 <a href=#364 id=364 data-nosnippet>364</a>    <span class="kw">async fn </span>get_header_window(
