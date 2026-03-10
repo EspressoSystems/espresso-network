@@ -614,7 +614,7 @@ mod test {
             VidCommonQueryData,
         },
         metrics::PrometheusMetrics,
-        node::{NodeDataSource, SyncStatus, TimeWindowQueryData, WindowStart},
+        node::{NodeDataSource, SyncStatusQueryData, TimeWindowQueryData, WindowStart},
         status::{HasMetrics, StatusDataSource},
         testing::{
             consensus::MockDataSource,
@@ -809,7 +809,7 @@ mod test {
         {
             self.hotshot_qs.vid_share(id).await
         }
-        async fn sync_status(&self) -> QueryResult<SyncStatus> {
+        async fn sync_status(&self) -> QueryResult<SyncStatusQueryData> {
             self.hotshot_qs.sync_status().await
         }
         async fn get_header_window(
@@ -958,17 +958,12 @@ mod test {
                 .unwrap(),
             1
         );
-        let sync_status: SyncStatus = client.get("node/sync-status").send().await.unwrap();
-        assert_eq!(
-            sync_status,
-            SyncStatus {
-                missing_blocks: 0,
-                missing_leaves: 0,
-                missing_vid_common: 1,
-                missing_vid_shares: 1,
-                pruned_height: None
-            }
-        );
+        let sync_status: SyncStatusQueryData = client.get("node/sync-status").send().await.unwrap();
+        assert_eq!(sync_status.blocks.missing, 0);
+        assert_eq!(sync_status.leaves.missing, 0);
+        assert_eq!(sync_status.vid_common.missing, 1);
+        assert_eq!(sync_status.vid_shares.missing, 1);
+
         assert_eq!(
             client
                 .get::<MockHeader>("availability/header/0")

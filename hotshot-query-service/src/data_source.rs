@@ -797,6 +797,7 @@ pub mod node_tests {
         vid::advz::{advz_scheme, ADVZScheme},
     };
     use jf_advz::VidScheme;
+    use pretty_assertions::assert_eq;
     use vbs::version::StaticVersionType;
 
     use crate::{
@@ -805,7 +806,10 @@ pub mod node_tests {
             storage::{NodeStorage, UpdateAvailabilityStorage},
             update::Transaction,
         },
-        node::{BlockId, NodeDataSource, SyncStatus, TimeWindowQueryData, WindowStart},
+        node::{
+            BlockId, NodeDataSource, ResourceSyncStatus, SyncStatus, SyncStatusQueryData,
+            SyncStatusRange, TimeWindowQueryData, WindowStart,
+        },
         testing::{
             consensus::{MockNetwork, TestableDataSource},
             mocks::{mock_transaction, MockPayload, MockTypes, MockVersions},
@@ -880,11 +884,39 @@ pub mod node_tests {
         ds.append(leaves[0].clone().into()).await.unwrap();
         assert_eq!(
             ds.sync_status().await.unwrap(),
-            SyncStatus {
-                missing_blocks: 1,
-                missing_vid_common: 1,
-                missing_vid_shares: 1,
-                missing_leaves: 0,
+            SyncStatusQueryData {
+                blocks: ResourceSyncStatus {
+                    missing: 1,
+                    ranges: vec![SyncStatusRange {
+                        start: 0,
+                        end: 1,
+                        status: SyncStatus::Missing,
+                    }]
+                },
+                vid_common: ResourceSyncStatus {
+                    missing: 1,
+                    ranges: vec![SyncStatusRange {
+                        start: 0,
+                        end: 1,
+                        status: SyncStatus::Missing,
+                    }]
+                },
+                vid_shares: ResourceSyncStatus {
+                    missing: 1,
+                    ranges: vec![SyncStatusRange {
+                        start: 0,
+                        end: 1,
+                        status: SyncStatus::Missing,
+                    }]
+                },
+                leaves: ResourceSyncStatus {
+                    missing: 0,
+                    ranges: vec![SyncStatusRange {
+                        start: 0,
+                        end: 1,
+                        status: SyncStatus::Present,
+                    }]
+                },
                 pruned_height: None,
             }
         );
@@ -894,11 +926,51 @@ pub mod node_tests {
         ds.append(leaves[2].clone().into()).await.unwrap();
         assert_eq!(
             ds.sync_status().await.unwrap(),
-            SyncStatus {
-                missing_blocks: 3,
-                missing_vid_common: 3,
-                missing_vid_shares: 3,
-                missing_leaves: 1,
+            SyncStatusQueryData {
+                blocks: ResourceSyncStatus {
+                    missing: 3,
+                    ranges: vec![SyncStatusRange {
+                        start: 0,
+                        end: 3,
+                        status: SyncStatus::Missing,
+                    }]
+                },
+                vid_common: ResourceSyncStatus {
+                    missing: 3,
+                    ranges: vec![SyncStatusRange {
+                        start: 0,
+                        end: 3,
+                        status: SyncStatus::Missing,
+                    }]
+                },
+                vid_shares: ResourceSyncStatus {
+                    missing: 3,
+                    ranges: vec![SyncStatusRange {
+                        start: 0,
+                        end: 3,
+                        status: SyncStatus::Missing,
+                    }]
+                },
+                leaves: ResourceSyncStatus {
+                    missing: 1,
+                    ranges: vec![
+                        SyncStatusRange {
+                            start: 0,
+                            end: 1,
+                            status: SyncStatus::Present,
+                        },
+                        SyncStatusRange {
+                            start: 1,
+                            end: 2,
+                            status: SyncStatus::Missing,
+                        },
+                        SyncStatusRange {
+                            start: 2,
+                            end: 3,
+                            status: SyncStatus::Present,
+                        }
+                    ]
+                },
                 pruned_height: None,
             }
         );
@@ -911,11 +983,58 @@ pub mod node_tests {
         }
         assert_eq!(
             ds.sync_status().await.unwrap(),
-            SyncStatus {
-                missing_blocks: 3,
-                missing_vid_common: 2,
-                missing_vid_shares: 3,
-                missing_leaves: 1,
+            SyncStatusQueryData {
+                blocks: ResourceSyncStatus {
+                    missing: 3,
+                    ranges: vec![SyncStatusRange {
+                        start: 0,
+                        end: 3,
+                        status: SyncStatus::Missing,
+                    }]
+                },
+                vid_common: ResourceSyncStatus {
+                    missing: 2,
+                    ranges: vec![
+                        SyncStatusRange {
+                            start: 0,
+                            end: 1,
+                            status: SyncStatus::Present,
+                        },
+                        SyncStatusRange {
+                            start: 1,
+                            end: 3,
+                            status: SyncStatus::Missing,
+                        },
+                    ]
+                },
+                vid_shares: ResourceSyncStatus {
+                    missing: 3,
+                    ranges: vec![SyncStatusRange {
+                        start: 0,
+                        end: 3,
+                        status: SyncStatus::Missing,
+                    }]
+                },
+                leaves: ResourceSyncStatus {
+                    missing: 1,
+                    ranges: vec![
+                        SyncStatusRange {
+                            start: 0,
+                            end: 1,
+                            status: SyncStatus::Present,
+                        },
+                        SyncStatusRange {
+                            start: 1,
+                            end: 2,
+                            status: SyncStatus::Missing,
+                        },
+                        SyncStatusRange {
+                            start: 2,
+                            end: 3,
+                            status: SyncStatus::Present,
+                        }
+                    ]
+                },
                 pruned_height: None,
             }
         );
@@ -943,20 +1062,87 @@ pub mod node_tests {
         // data. These would have just ignored the insertion of `vid[0]` (the share) and
         // `leaves[1]`. Detect if this is the case; then we allow 1 missing leaf and 1 missing VID
         // share.
-        let expected_missing = if ds.get_leaf(1).await.try_resolve().is_err() {
+        let (leaves, vid_shares) = if ds.get_leaf(1).await.try_resolve().is_err() {
             tracing::warn!(
                 "data source does not support out-of-order filling, allowing one missing leaf and \
                  VID share"
             );
-            1
+            (
+                ResourceSyncStatus {
+                    missing: 1,
+                    ranges: vec![
+                        SyncStatusRange {
+                            start: 0,
+                            end: 1,
+                            status: SyncStatus::Present,
+                        },
+                        SyncStatusRange {
+                            start: 1,
+                            end: 2,
+                            status: SyncStatus::Missing,
+                        },
+                        SyncStatusRange {
+                            start: 2,
+                            end: 3,
+                            status: SyncStatus::Present,
+                        },
+                    ],
+                },
+                ResourceSyncStatus {
+                    missing: 1,
+                    ranges: vec![
+                        SyncStatusRange {
+                            start: 0,
+                            end: 1,
+                            status: SyncStatus::Missing,
+                        },
+                        SyncStatusRange {
+                            start: 1,
+                            end: 3,
+                            status: SyncStatus::Present,
+                        },
+                    ],
+                },
+            )
         } else {
-            0
+            (
+                ResourceSyncStatus {
+                    missing: 0,
+                    ranges: vec![SyncStatusRange {
+                        start: 0,
+                        end: 3,
+                        status: SyncStatus::Present,
+                    }],
+                },
+                ResourceSyncStatus {
+                    missing: 0,
+                    ranges: vec![SyncStatusRange {
+                        start: 0,
+                        end: 3,
+                        status: SyncStatus::Present,
+                    }],
+                },
+            )
         };
-        let expected_sync_status = SyncStatus {
-            missing_blocks: 0,
-            missing_leaves: expected_missing,
-            missing_vid_common: 0,
-            missing_vid_shares: expected_missing,
+        let expected_sync_status = SyncStatusQueryData {
+            leaves,
+            vid_shares,
+            blocks: ResourceSyncStatus {
+                missing: 0,
+                ranges: vec![SyncStatusRange {
+                    start: 0,
+                    end: 3,
+                    status: SyncStatus::Present,
+                }],
+            },
+            vid_common: ResourceSyncStatus {
+                missing: 0,
+                ranges: vec![SyncStatusRange {
+                    start: 0,
+                    end: 3,
+                    status: SyncStatus::Present,
+                }],
+            },
             pruned_height: None,
         };
         assert_eq!(ds.sync_status().await.unwrap(), expected_sync_status);
