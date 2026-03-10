@@ -29,7 +29,7 @@ use hotshot_types::{
             BroadcastDelay, ConnectedNetwork, RequestKind, ResponseMessage, Topic, TransmitType,
             ViewMessage,
         },
-        node_implementation::{NodeType, Versions},
+        node_implementation::NodeType,
         storage::Storage,
     },
     vote::{HasViewNumber, Vote},
@@ -45,7 +45,7 @@ use crate::{
 
 /// the network message task state
 #[derive(Clone)]
-pub struct NetworkMessageTaskState<TYPES: NodeType, V: Versions> {
+pub struct NetworkMessageTaskState<TYPES: NodeType> {
     /// Sender to send internal events this task generates to other tasks
     pub internal_event_stream: Sender<Arc<HotShotEvent<TYPES>>>,
 
@@ -56,13 +56,13 @@ pub struct NetworkMessageTaskState<TYPES: NodeType, V: Versions> {
     pub public_key: TYPES::SignatureKey,
 
     /// Lock for a decided upgrade
-    pub upgrade_lock: UpgradeLock<TYPES, V>,
+    pub upgrade_lock: UpgradeLock<TYPES>,
 
     /// Node's id
     pub id: u64,
 }
 
-impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
+impl<TYPES: NodeType> NetworkMessageTaskState<TYPES> {
     #[instrument(skip_all, name = "Network message task", fields(id = self.id), level = "trace")]
     /// Handles a (deserialized) message from the network
     pub async fn handle_message(&mut self, message: Message<TYPES>) {
@@ -690,7 +690,6 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
 /// network event task state
 pub struct NetworkEventTaskState<
     TYPES: NodeType,
-    V: Versions,
     NET: ConnectedNetwork<TYPES::SignatureKey>,
     S: Storage<TYPES>,
 > {
@@ -716,7 +715,7 @@ pub struct NetworkEventTaskState<
     pub consensus: OuterConsensus<TYPES>,
 
     /// Lock for a decided upgrade
-    pub upgrade_lock: UpgradeLock<TYPES, V>,
+    pub upgrade_lock: UpgradeLock<TYPES>,
 
     /// map view number to transmit tasks
     pub transmit_tasks: BTreeMap<ViewNumber, Vec<JoinHandle<()>>>,
@@ -729,12 +728,8 @@ pub struct NetworkEventTaskState<
 }
 
 #[async_trait]
-impl<
-        TYPES: NodeType,
-        V: Versions,
-        NET: ConnectedNetwork<TYPES::SignatureKey>,
-        S: Storage<TYPES> + 'static,
-    > TaskState for NetworkEventTaskState<TYPES, V, NET, S>
+impl<TYPES: NodeType, NET: ConnectedNetwork<TYPES::SignatureKey>, S: Storage<TYPES> + 'static>
+    TaskState for NetworkEventTaskState<TYPES, NET, S>
 {
     type Event = HotShotEvent<TYPES>;
 
@@ -752,12 +747,8 @@ impl<
     fn cancel_subtasks(&mut self) {}
 }
 
-impl<
-        TYPES: NodeType,
-        V: Versions,
-        NET: ConnectedNetwork<TYPES::SignatureKey>,
-        S: Storage<TYPES> + 'static,
-    > NetworkEventTaskState<TYPES, V, NET, S>
+impl<TYPES: NodeType, NET: ConnectedNetwork<TYPES::SignatureKey>, S: Storage<TYPES> + 'static>
+    NetworkEventTaskState<TYPES, NET, S>
 {
     /// Handle the given event.
     ///
@@ -872,7 +863,7 @@ impl<
         let storage = self.storage.clone();
         let consensus = OuterConsensus::new(Arc::clone(&self.consensus.inner_consensus));
         spawn(async move {
-            if NetworkEventTaskState::<TYPES, V, NET, S>::maybe_record_action(
+            if NetworkEventTaskState::<TYPES, NET, S>::maybe_record_action(
                 Some(HotShotAction::VidDisperse),
                 storage,
                 consensus,
@@ -1565,7 +1556,7 @@ impl<
         let consensus = OuterConsensus::new(Arc::clone(&self.consensus.inner_consensus));
         let upgrade_lock = self.upgrade_lock.clone();
         let handle = spawn(async move {
-            if NetworkEventTaskState::<TYPES, V, NET, S>::maybe_record_action(
+            if NetworkEventTaskState::<TYPES, NET, S>::maybe_record_action(
                 maybe_action,
                 storage.clone(),
                 consensus,
@@ -1650,7 +1641,7 @@ pub mod test {
 
     use super::{
         Arc, ConnectedNetwork, HotShotEvent, MessageKind, NetworkEventTaskState, NodeType,
-        Receiver, Result, Sender, Storage, TaskState, TransmitType, Versions,
+        Receiver, Result, Sender, Storage, TaskState, TransmitType,
     };
 
     /// A dynamic type alias for a function that takes the result of `NetworkEventTaskState::parse_event`
@@ -1666,12 +1657,11 @@ pub mod test {
     /// A helper wrapper around `NetworkEventTaskState` that can modify its behaviour for tests
     pub struct NetworkEventTaskStateModifier<
         TYPES: NodeType,
-        V: Versions,
         NET: ConnectedNetwork<TYPES::SignatureKey>,
         S: Storage<TYPES>,
     > {
         /// The real `NetworkEventTaskState`
-        pub network_event_task_state: NetworkEventTaskState<TYPES, V, NET, S>,
+        pub network_event_task_state: NetworkEventTaskState<TYPES, NET, S>,
         /// A function that takes the result of `NetworkEventTaskState::parse_event` and
         /// changes it before transmitting on the network.
         pub modifier: Arc<ModifierClosure<TYPES>>,
@@ -1679,10 +1669,9 @@ pub mod test {
 
     impl<
             TYPES: NodeType,
-            V: Versions,
             NET: ConnectedNetwork<TYPES::SignatureKey>,
             S: Storage<TYPES> + 'static,
-        > NetworkEventTaskStateModifier<TYPES, V, NET, S>
+        > NetworkEventTaskStateModifier<TYPES, NET, S>
     {
         /// Handles the received event modifying it before sending on the network.
         pub async fn handle(&mut self, event: Arc<HotShotEvent<TYPES>>) {
@@ -1707,10 +1696,9 @@ pub mod test {
     #[async_trait]
     impl<
             TYPES: NodeType,
-            V: Versions,
             NET: ConnectedNetwork<TYPES::SignatureKey>,
             S: Storage<TYPES> + 'static,
-        > TaskState for NetworkEventTaskStateModifier<TYPES, V, NET, S>
+        > TaskState for NetworkEventTaskStateModifier<TYPES, NET, S>
     {
         type Event = HotShotEvent<TYPES>;
 
@@ -1728,26 +1716,18 @@ pub mod test {
         fn cancel_subtasks(&mut self) {}
     }
 
-    impl<
-            TYPES: NodeType,
-            V: Versions,
-            NET: ConnectedNetwork<TYPES::SignatureKey>,
-            S: Storage<TYPES>,
-        > Deref for NetworkEventTaskStateModifier<TYPES, V, NET, S>
+    impl<TYPES: NodeType, NET: ConnectedNetwork<TYPES::SignatureKey>, S: Storage<TYPES>> Deref
+        for NetworkEventTaskStateModifier<TYPES, NET, S>
     {
-        type Target = NetworkEventTaskState<TYPES, V, NET, S>;
+        type Target = NetworkEventTaskState<TYPES, NET, S>;
 
         fn deref(&self) -> &Self::Target {
             &self.network_event_task_state
         }
     }
 
-    impl<
-            TYPES: NodeType,
-            V: Versions,
-            NET: ConnectedNetwork<TYPES::SignatureKey>,
-            S: Storage<TYPES>,
-        > DerefMut for NetworkEventTaskStateModifier<TYPES, V, NET, S>
+    impl<TYPES: NodeType, NET: ConnectedNetwork<TYPES::SignatureKey>, S: Storage<TYPES>> DerefMut
+        for NetworkEventTaskStateModifier<TYPES, NET, S>
     {
         fn deref_mut(&mut self) -> &mut Self::Target {
             &mut self.network_event_task_state

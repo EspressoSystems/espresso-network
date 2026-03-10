@@ -23,9 +23,7 @@ use hotshot_types::{
     },
     stake_table::HSStakeTable,
     traits::{
-        metrics::Metrics,
-        node_implementation::{NodeType, Versions},
-        storage::Storage,
+        metrics::Metrics, node_implementation::NodeType, storage::Storage,
         ValidatedState as HotShotState,
     },
     utils::genesis_epoch_from_version,
@@ -33,6 +31,7 @@ use hotshot_types::{
 };
 use indexmap::IndexMap;
 use serde::{de::DeserializeOwned, Serialize};
+use versions::Upgrade;
 
 use super::{
     impls::NodeState,
@@ -42,12 +41,12 @@ use super::{
 use crate::{
     v0::impls::{StakeTableHash, ValidatedState},
     v0_3::{
-        ChainConfig, RewardAccountProofV1, RewardAccountV1, RewardAmount, RewardMerkleCommitmentV1,
-        Validator,
+        ChainConfig, RegisteredValidator, RewardAccountProofV1, RewardAccountV1, RewardAmount,
+        RewardMerkleCommitmentV1,
     },
-    v0_4::{RewardAccountProofV2, RewardAccountV2, RewardMerkleCommitmentV2},
-    BlockMerkleTree, Event, FeeAccount, FeeAccountProof, FeeMerkleCommitment, Leaf2, NetworkConfig,
-    PubKey, SeqTypes, ValidatorMap,
+    v0_4::{PermittedRewardMerkleTreeV2, RewardAccountV2, RewardMerkleCommitmentV2},
+    AuthenticatedValidatorMap, BlockMerkleTree, Event, FeeAccount, FeeAccountProof,
+    FeeMerkleCommitment, Leaf2, NetworkConfig, PubKey, SeqTypes,
 };
 
 #[async_trait]
@@ -175,34 +174,30 @@ pub trait StateCatchup: Send + Sync {
             .await
     }
 
-    /// Fetch the given list of reward accounts without retrying on transient errors.
-    async fn try_fetch_reward_accounts_v2(
+    /// Fetch the given reward merkle tree without retrying on transient errors.
+    async fn try_fetch_reward_merkle_tree_v2(
         &self,
         retry: usize,
-        instance: &NodeState,
         height: u64,
         view: ViewNumber,
         reward_merkle_tree_root: RewardMerkleCommitmentV2,
-        accounts: &[RewardAccountV2],
-    ) -> anyhow::Result<Vec<RewardAccountProofV2>>;
+        accounts: Arc<Vec<RewardAccountV2>>,
+    ) -> anyhow::Result<PermittedRewardMerkleTreeV2>;
 
-    /// Fetch the given list of reward accounts, retrying on transient errors.
-    async fn fetch_reward_accounts_v2(
+    async fn fetch_reward_merkle_tree_v2(
         &self,
-        instance: &NodeState,
         height: u64,
         view: ViewNumber,
         reward_merkle_tree_root: RewardMerkleCommitmentV2,
-        accounts: Vec<RewardAccountV2>,
-    ) -> anyhow::Result<Vec<RewardAccountProofV2>> {
+        accounts: Arc<Vec<RewardAccountV2>>,
+    ) -> anyhow::Result<PermittedRewardMerkleTreeV2> {
         self.backoff()
             .retry(self, |provider, retry| {
-                let accounts = &accounts;
+                let accounts = accounts.clone();
                 async move {
                     provider
-                        .try_fetch_reward_accounts_v2(
+                        .try_fetch_reward_merkle_tree_v2(
                             retry,
-                            instance,
                             height,
                             view,
                             reward_merkle_tree_root,
@@ -210,10 +205,7 @@ pub trait StateCatchup: Send + Sync {
                         )
                         .await
                         .map_err(|err| {
-                            err.context(format!(
-                                "fetching reward accounts {accounts:?}, height {height}, view \
-                                 {view}"
-                            ))
+                            err.context(format!("fetching reward merkle tree for height {height}"))
                         })
                 }
                 .boxed()
@@ -397,37 +389,28 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
         (**self).fetch_chain_config(commitment).await
     }
 
-    async fn try_fetch_reward_accounts_v2(
+    async fn try_fetch_reward_merkle_tree_v2(
         &self,
         retry: usize,
-        instance: &NodeState,
         height: u64,
         view: ViewNumber,
         reward_merkle_tree_root: RewardMerkleCommitmentV2,
-        accounts: &[RewardAccountV2],
-    ) -> anyhow::Result<Vec<RewardAccountProofV2>> {
+        accounts: Arc<Vec<RewardAccountV2>>,
+    ) -> anyhow::Result<PermittedRewardMerkleTreeV2> {
         (**self)
-            .try_fetch_reward_accounts_v2(
-                retry,
-                instance,
-                height,
-                view,
-                reward_merkle_tree_root,
-                accounts,
-            )
+            .try_fetch_reward_merkle_tree_v2(retry, height, view, reward_merkle_tree_root, accounts)
             .await
     }
 
-    async fn fetch_reward_accounts_v2(
+    async fn fetch_reward_merkle_tree_v2(
         &self,
-        instance: &NodeState,
         height: u64,
         view: ViewNumber,
         reward_merkle_tree_root: RewardMerkleCommitmentV2,
-        accounts: Vec<RewardAccountV2>,
-    ) -> anyhow::Result<Vec<RewardAccountProofV2>> {
+        accounts: Arc<Vec<RewardAccountV2>>,
+    ) -> anyhow::Result<PermittedRewardMerkleTreeV2> {
         (**self)
-            .fetch_reward_accounts_v2(instance, height, view, reward_merkle_tree_root, accounts)
+            .fetch_reward_merkle_tree_v2(height, view, reward_merkle_tree_root, accounts)
             .await
     }
 
@@ -511,14 +494,18 @@ pub enum EventsPersistenceRead {
     UntilL1Block(u64),
 }
 
+/// Tuple type for stake table data: (validators, block_reward, stake_table_hash)
+pub type StakeTuple = (
+    AuthenticatedValidatorMap,
+    Option<RewardAmount>,
+    Option<StakeTableHash>,
+);
+
 #[async_trait]
 /// Trait used by `Memberships` implementations to interact with persistence layer.
 pub trait MembershipPersistence: Send + Sync + 'static {
     /// Load stake table for epoch from storage
-    async fn load_stake(
-        &self,
-        epoch: EpochNumber,
-    ) -> anyhow::Result<Option<(ValidatorMap, Option<RewardAmount>, Option<StakeTableHash>)>>;
+    async fn load_stake(&self, epoch: EpochNumber) -> anyhow::Result<Option<StakeTuple>>;
 
     /// Load stake tables for storage for latest `n` known epochs
     async fn load_latest_stake(&self, limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>>;
@@ -527,7 +514,7 @@ pub trait MembershipPersistence: Send + Sync + 'static {
     async fn store_stake(
         &self,
         epoch: EpochNumber,
-        stake: ValidatorMap,
+        stake: AuthenticatedValidatorMap,
         block_reward: Option<RewardAmount>,
         stake_table_hash: Option<StakeTableHash>,
     ) -> anyhow::Result<()>;
@@ -546,10 +533,13 @@ pub trait MembershipPersistence: Send + Sync + 'static {
         Vec<(EventKey, StakeTableEvent)>,
     )>;
 
+    /// Delete all stake table events, the L1 block tracker, and the epoch DRB and root data.
+    async fn delete_stake_tables(&self) -> anyhow::Result<()>;
+
     async fn store_all_validators(
         &self,
         epoch: EpochNumber,
-        all_validators: IndexMap<Address, Validator<PubKey>>,
+        all_validators: IndexMap<Address, RegisteredValidator<PubKey>>,
     ) -> anyhow::Result<()>;
 
     async fn load_all_validators(
@@ -557,13 +547,15 @@ pub trait MembershipPersistence: Send + Sync + 'static {
         epoch: EpochNumber,
         offset: u64,
         limit: u64,
-    ) -> anyhow::Result<Vec<Validator<PubKey>>>;
+    ) -> anyhow::Result<Vec<RegisteredValidator<PubKey>>>;
 }
 
 #[async_trait]
 pub trait SequencerPersistence:
     Sized + Send + Sync + Clone + 'static + DhtPersistentStorage + MembershipPersistence
 {
+    async fn migrate_reward_merkle_tree_v2(&self) -> anyhow::Result<()>;
+
     /// Use this storage as a state catchup backend, if supported.
     fn into_catchup_provider(
         self,
@@ -632,9 +624,10 @@ pub trait SequencerPersistence:
     /// if there is no saved state). Also returns the anchor view number, which can be used as a
     /// reference point to process any events which were not processed before a previous shutdown,
     /// if applicable,.
-    async fn load_consensus_state<V: Versions>(
+    async fn load_consensus_state(
         &self,
         state: NodeState,
+        upgrade: Upgrade,
     ) -> anyhow::Result<(HotShotInitializer<SeqTypes>, Option<ViewNumber>)> {
         let genesis_validated_state = ValidatedState::genesis(&state).0;
         let highest_voted_view = match self
@@ -692,9 +685,13 @@ pub trait SequencerPersistence:
             None => {
                 tracing::info!("no saved leaf, starting from genesis leaf");
                 (
-                    hotshot_types::data::Leaf2::genesis::<V>(&genesis_validated_state, &state)
-                        .await,
-                    QuorumCertificate2::genesis::<V>(&genesis_validated_state, &state).await,
+                    hotshot_types::data::Leaf2::genesis(
+                        &genesis_validated_state,
+                        &state,
+                        upgrade.base,
+                    )
+                    .await,
+                    QuorumCertificate2::genesis(&genesis_validated_state, &state, upgrade).await,
                     None,
                 )
             },
@@ -721,7 +718,7 @@ pub trait SequencerPersistence:
         // unnecessary catchup from starting in a view earlier than the anchor leaf.
         let restart_view = max(restart_view, leaf.view_number());
         // TODO:
-        let epoch = genesis_epoch_from_version::<V, SeqTypes>();
+        let epoch = genesis_epoch_from_version(upgrade.base);
 
         let config = self.load_config().await.context("loading config")?;
         let epoch_height = config
@@ -908,11 +905,17 @@ pub trait SequencerPersistence:
         self.migrate_vid_shares().await?;
         self.migrate_quorum_proposals().await?;
         self.migrate_quorum_certificates().await?;
+        self.migrate_reward_merkle_tree_v2()
+            .await
+            .context("failed to migrate reward merkle tree v2")?;
+        self.migrate_validator_authenticated().await?;
 
         tracing::warn!("consensus storage has been migrated to new types");
 
         Ok(())
     }
+
+    async fn migrate_validator_authenticated(&self) -> anyhow::Result<()>;
 
     async fn migrate_anchor_leaf(&self) -> anyhow::Result<()>;
     async fn migrate_da_proposals(&self) -> anyhow::Result<()>;

@@ -224,8 +224,12 @@ impl<T: NodeType> TestableNetworkingImplementation<T> for Libp2pNetwork<T> {
                     node_id < num_bootstrap as u64
                 );
 
-                // pick a free, unused UDP port for testing
-                let port = portpicker::pick_unused_port().expect("Could not find an open port");
+                // UDP has no TIME_WAIT, so there's a tiny race before libp2p binds.
+                let port = std::net::UdpSocket::bind("127.0.0.1:0")
+                    .expect("UDP socket should bind")
+                    .local_addr()
+                    .expect("UDP socket should have local addr")
+                    .port();
 
                 let addr =
                     Multiaddr::from_str(&format!("/ip4/127.0.0.1/udp/{port}/quic-v1")).unwrap();
@@ -904,7 +908,7 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
         let pid = match self
             .inner
             .handle
-            .lookup_node(&recipient, self.inner.dht_timeout)
+            .lookup_node(&recipient, Duration::from_secs(2))
             .await
         {
             Ok(pid) => pid,

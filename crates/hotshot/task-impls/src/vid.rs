@@ -17,7 +17,7 @@ use hotshot_types::{
     simple_vote::HasEpoch,
     traits::{
         block_contents::BlockHeader,
-        node_implementation::{NodeImplementation, NodeType, Versions},
+        node_implementation::{NodeImplementation, NodeType},
         signature_key::SignatureKey,
         BlockPayload,
     },
@@ -32,7 +32,7 @@ use crate::{
 };
 
 /// Tracks state of a VID task
-pub struct VidTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> {
+pub struct VidTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>> {
     /// View number this view is executing in.
     pub cur_view: ViewNumber,
 
@@ -58,13 +58,13 @@ pub struct VidTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versio
     pub id: u64,
 
     /// Lock for a decided upgrade
-    pub upgrade_lock: UpgradeLock<TYPES, V>,
+    pub upgrade_lock: UpgradeLock<TYPES>,
 
     /// Number of blocks in an epoch, zero means there are no epochs
     pub epoch_height: u64,
 }
 
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TYPES, I, V> {
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> VidTaskState<TYPES, I> {
     /// main task event handler
     #[instrument(skip_all, fields(id = self.id, view = *self.cur_view, epoch = self.cur_epoch.map(|x| *x)), name = "VID Main Task", level = "error", target = "VidTaskState")]
     pub async fn handle(
@@ -104,7 +104,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TY
                 let VidDisperseAndDuration {
                     disperse: vid_disperse,
                     duration: disperse_duration,
-                } = VidDisperse::calculate_vid_disperse::<V>(
+                } = VidDisperse::calculate_vid_disperse(
                     &payload,
                     &self.membership_coordinator,
                     *view_number,
@@ -223,7 +223,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TY
                 let VidDisperseAndDuration {
                     disperse: next_epoch_vid_disperse,
                     duration: _,
-                } = VidDisperse::calculate_vid_disperse::<V>(
+                } = VidDisperse::calculate_vid_disperse(
                     &payload.payload,
                     &self.membership_coordinator,
                     proposal_view_number,
@@ -267,11 +267,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TY
     }
 }
 
-#[async_trait]
 /// task state implementation for VID Task
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TaskState
-    for VidTaskState<TYPES, I, V>
-{
+#[async_trait]
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TaskState for VidTaskState<TYPES, I> {
     type Event = HotShotEvent<TYPES>;
 
     async fn handle_event(

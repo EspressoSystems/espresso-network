@@ -4,22 +4,19 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use espresso_types::{PubKey, SeqTypes};
 use hotshot::{traits::NodeImplementation, SystemContext};
-use hotshot_types::{
-    data::EpochNumber, epoch_membership::EpochMembershipCoordinator,
-    traits::node_implementation::Versions,
-};
+use hotshot_types::{data::EpochNumber, epoch_membership::EpochMembershipCoordinator};
 use request_response::recipient_source::RecipientSource as RecipientSourceTrait;
 use tracing::warn;
 
 use super::request::Request;
 
 /// A type alias for the consensus context
-type Consensus<I, V> = Arc<SystemContext<SeqTypes, I, V>>;
+type Consensus<I> = Arc<SystemContext<SeqTypes, I>>;
 
 #[derive(Clone)]
-pub struct RecipientSource<I: NodeImplementation<SeqTypes>, V: Versions> {
+pub struct RecipientSource<I: NodeImplementation<SeqTypes>> {
     /// A copy of the consensus context
-    pub consensus: Consensus<I, V>,
+    pub consensus: Consensus<I>,
     /// A copy of the membership coordinator
     pub memberships: EpochMembershipCoordinator<SeqTypes>,
     /// The public key of the node
@@ -29,9 +26,7 @@ pub struct RecipientSource<I: NodeImplementation<SeqTypes>, V: Versions> {
 /// Implement the RecipientSourceTrait, which allows the request-response protocol to derive the
 /// intended recipients for a given request
 #[async_trait]
-impl<I: NodeImplementation<SeqTypes>, V: Versions> RecipientSourceTrait<Request, PubKey>
-    for RecipientSource<I, V>
-{
+impl<I: NodeImplementation<SeqTypes>> RecipientSourceTrait<Request, PubKey> for RecipientSource<I> {
     async fn get_expected_responders(&self, _request: &Request) -> Result<Vec<PubKey>> {
         // Get the current epoch number
         let epoch_number = self

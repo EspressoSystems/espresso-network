@@ -6,7 +6,7 @@
 
 use std::time::Duration;
 
-use hotshot_example_types::node_types::{Libp2pImpl, TestTypes, TestVersions};
+use hotshot_example_types::node_types::{Libp2pImpl, TestTypes};
 use hotshot_testing::{
     block_builder::SimpleBuilderImplementation,
     completion_task::{CompletionTaskDescription, TimeBasedCompletionTaskDescription},
@@ -22,7 +22,7 @@ use tracing::instrument;
 #[instrument]
 async fn libp2p_network() {
 
-    let mut metadata: TestDescription<TestTypes, Libp2pImpl, TestVersions> = TestDescription {
+    let mut metadata: TestDescription<TestTypes, Libp2pImpl> = TestDescription {
         overall_safety_properties: OverallSafetyPropertiesDescription {
             check_leaf: true,
             ..Default::default()
@@ -53,7 +53,7 @@ async fn libp2p_network() {
 #[instrument]
 async fn libp2p_network_failures_2() {
 
-    let mut metadata: TestDescription<TestTypes, Libp2pImpl, TestVersions> = TestDescription {
+    let mut metadata: TestDescription<TestTypes, Libp2pImpl> = TestDescription {
         overall_safety_properties: OverallSafetyPropertiesDescription {
             check_leaf: true,
             ..Default::default()
@@ -99,7 +99,7 @@ async fn libp2p_network_failures_2() {
 #[ignore]
 async fn test_stress_libp2p_network() {
 
-    let metadata: TestDescription<TestTypes, Libp2pImpl, TestVersions> =
+    let metadata: TestDescription<TestTypes, Libp2pImpl> =
         TestDescription::default_stress();
     metadata
         .gen_launcher()

@@ -31,7 +31,7 @@ use crate::{
     },
     stake_table::{HSStakeTable, StakeTableEntries},
     traits::{
-        node_implementation::{NodeType, Versions},
+        node_implementation::NodeType,
         signature_key::{SignatureKey, StateSignatureKey},
     },
     utils::is_epoch_transition,
@@ -113,6 +113,26 @@ impl<TYPES: NodeType, VOTEABLE: Voteable<TYPES>, THRESHOLD: Threshold<TYPES>>
             _pd: pd,
         }
     }
+
+    fn signers(
+        &self,
+        stake_table: &[<TYPES::SignatureKey as SignatureKey>::StakeTableEntry],
+        threshold: U256,
+    ) -> Result<Vec<<TYPES::SignatureKey as SignatureKey>::VerificationKeyType>> {
+        if self.view_number == ViewNumber::genesis() {
+            return Ok(vec![]);
+        }
+        let real_qc_pp =
+            <TYPES::SignatureKey as SignatureKey>::public_parameter(stake_table, threshold);
+
+        let Some(ref signatures) = self.signatures else {
+            bail!("No signatures found while retrieving signers");
+        };
+
+        <TYPES::SignatureKey as SignatureKey>::signers(&real_qc_pp, signatures)
+            .wrap()
+            .context(|e| warn!("Tracing signers: {e}"))
+    }
 }
 
 impl<TYPES: NodeType, VOTEABLE: Voteable<TYPES> + Committable, THRESHOLD: Threshold<TYPES>>
@@ -138,8 +158,8 @@ impl<TYPES: NodeType, THRESHOLD: Threshold<TYPES>> Certificate<TYPES, DaData>
     type Voteable = DaData;
     type Threshold = THRESHOLD;
 
-    fn create_signed_certificate<V: Versions>(
-        vote_commitment: Commitment<VersionedVoteData<TYPES, DaData, V>>,
+    fn create_signed_certificate(
+        vote_commitment: Commitment<VersionedVoteData<TYPES, DaData>>,
         data: Self::Voteable,
         sig: <TYPES::SignatureKey as SignatureKey>::QcType,
         view: ViewNumber,
@@ -154,11 +174,11 @@ impl<TYPES: NodeType, THRESHOLD: Threshold<TYPES>> Certificate<TYPES, DaData>
             _pd: PhantomData,
         }
     }
-    async fn is_valid_cert<V: Versions>(
+    async fn is_valid_cert(
         &self,
         stake_table: &[<TYPES::SignatureKey as SignatureKey>::StakeTableEntry],
         threshold: U256,
-        upgrade_lock: &UpgradeLock<TYPES, V>,
+        upgrade_lock: &UpgradeLock<TYPES>,
     ) -> Result<()> {
         if self.view_number == ViewNumber::genesis() {
             return Ok(());
@@ -167,13 +187,20 @@ impl<TYPES: NodeType, THRESHOLD: Threshold<TYPES>> Certificate<TYPES, DaData>
             <TYPES::SignatureKey as SignatureKey>::public_parameter(stake_table, threshold);
         let commit = self.data_commitment(upgrade_lock).await?;
 
-        <TYPES::SignatureKey as SignatureKey>::check(
-            &real_qc_pp,
-            commit.as_ref(),
-            self.signatures.as_ref().unwrap(),
-        )
-        .wrap()
-        .context(|e| warn!("Signature check failed: {e}"))
+        let Some(ref signatures) = self.signatures else {
+            bail!("No signatures found while validating certificate");
+        };
+
+        <TYPES::SignatureKey as SignatureKey>::check(&real_qc_pp, commit.as_ref(), signatures)
+            .wrap()
+            .context(|e| warn!("Signature check failed: {e}"))
+    }
+    fn signers(
+        &self,
+        stake_table: &[<TYPES::SignatureKey as SignatureKey>::StakeTableEntry],
+        threshold: U256,
+    ) -> Result<Vec<<TYPES::SignatureKey as SignatureKey>::VerificationKeyType>> {
+        self.signers(stake_table, threshold)
     }
     /// Proxy's to `Membership.stake`
     async fn stake_table_entry(
@@ -197,10 +224,10 @@ impl<TYPES: NodeType, THRESHOLD: Threshold<TYPES>> Certificate<TYPES, DaData>
     fn data(&self) -> &Self::Voteable {
         &self.data
     }
-    async fn data_commitment<V: Versions>(
+    async fn data_commitment(
         &self,
-        upgrade_lock: &UpgradeLock<TYPES, V>,
-    ) -> Result<Commitment<VersionedVoteData<TYPES, DaData, V>>> {
+        upgrade_lock: &UpgradeLock<TYPES>,
+    ) -> Result<Commitment<VersionedVoteData<TYPES, DaData>>> {
         Ok(
             VersionedVoteData::new(self.data.clone(), self.view_number, upgrade_lock)
                 .await?
@@ -215,8 +242,8 @@ impl<TYPES: NodeType, THRESHOLD: Threshold<TYPES>> Certificate<TYPES, DaData2>
     type Voteable = DaData2;
     type Threshold = THRESHOLD;
 
-    fn create_signed_certificate<V: Versions>(
-        vote_commitment: Commitment<VersionedVoteData<TYPES, DaData2, V>>,
+    fn create_signed_certificate(
+        vote_commitment: Commitment<VersionedVoteData<TYPES, DaData2>>,
         data: Self::Voteable,
         sig: <TYPES::SignatureKey as SignatureKey>::QcType,
         view: ViewNumber,
@@ -231,11 +258,11 @@ impl<TYPES: NodeType, THRESHOLD: Threshold<TYPES>> Certificate<TYPES, DaData2>
             _pd: PhantomData,
         }
     }
-    async fn is_valid_cert<V: Versions>(
+    async fn is_valid_cert(
         &self,
         stake_table: &[<TYPES::SignatureKey as SignatureKey>::StakeTableEntry],
         threshold: U256,
-        upgrade_lock: &UpgradeLock<TYPES, V>,
+        upgrade_lock: &UpgradeLock<TYPES>,
     ) -> Result<()> {
         if self.view_number == ViewNumber::genesis() {
             return Ok(());
@@ -251,6 +278,13 @@ impl<TYPES: NodeType, THRESHOLD: Threshold<TYPES>> Certificate<TYPES, DaData2>
         )
         .wrap()
         .context(|e| warn!("Signature check failed: {e}"))
+    }
+    fn signers(
+        &self,
+        stake_table: &[<TYPES::SignatureKey as SignatureKey>::StakeTableEntry],
+        threshold: U256,
+    ) -> Result<Vec<<TYPES::SignatureKey as SignatureKey>::VerificationKeyType>> {
+        self.signers(stake_table, threshold)
     }
     /// Proxy's to `Membership.stake`
     async fn stake_table_entry(
@@ -274,10 +308,10 @@ impl<TYPES: NodeType, THRESHOLD: Threshold<TYPES>> Certificate<TYPES, DaData2>
     fn data(&self) -> &Self::Voteable {
         &self.data
     }
-    async fn data_commitment<V: Versions>(
+    async fn data_commitment(
         &self,
-        upgrade_lock: &UpgradeLock<TYPES, V>,
-    ) -> Result<Commitment<VersionedVoteData<TYPES, DaData2, V>>> {
+        upgrade_lock: &UpgradeLock<TYPES>,
+    ) -> Result<Commitment<VersionedVoteData<TYPES, DaData2>>> {
         Ok(
             VersionedVoteData::new(self.data.clone(), self.view_number, upgrade_lock)
                 .await?
@@ -295,8 +329,8 @@ impl<
     type Voteable = VOTEABLE;
     type Threshold = THRESHOLD;
 
-    fn create_signed_certificate<V: Versions>(
-        vote_commitment: Commitment<VersionedVoteData<TYPES, VOTEABLE, V>>,
+    fn create_signed_certificate(
+        vote_commitment: Commitment<VersionedVoteData<TYPES, VOTEABLE>>,
         data: Self::Voteable,
         sig: <TYPES::SignatureKey as SignatureKey>::QcType,
         view: ViewNumber,
@@ -311,11 +345,11 @@ impl<
             _pd: PhantomData,
         }
     }
-    async fn is_valid_cert<V: Versions>(
+    async fn is_valid_cert(
         &self,
         stake_table: &[<TYPES::SignatureKey as SignatureKey>::StakeTableEntry],
         threshold: U256,
-        upgrade_lock: &UpgradeLock<TYPES, V>,
+        upgrade_lock: &UpgradeLock<TYPES>,
     ) -> Result<()> {
         if self.view_number == ViewNumber::genesis() {
             return Ok(());
@@ -331,6 +365,13 @@ impl<
         )
         .wrap()
         .context(|e| warn!("Signature check failed: {e}"))
+    }
+    fn signers(
+        &self,
+        stake_table: &[<TYPES::SignatureKey as SignatureKey>::StakeTableEntry],
+        threshold: U256,
+    ) -> Result<Vec<<TYPES::SignatureKey as SignatureKey>::VerificationKeyType>> {
+        self.signers(stake_table, threshold)
     }
     async fn threshold(membership: &EpochMembership<TYPES>) -> U256 {
         THRESHOLD::threshold(membership).await
@@ -355,10 +396,10 @@ impl<
     fn data(&self) -> &Self::Voteable {
         &self.data
     }
-    async fn data_commitment<V: Versions>(
+    async fn data_commitment(
         &self,
-        upgrade_lock: &UpgradeLock<TYPES, V>,
-    ) -> Result<Commitment<VersionedVoteData<TYPES, VOTEABLE, V>>> {
+        upgrade_lock: &UpgradeLock<TYPES>,
+    ) -> Result<Commitment<VersionedVoteData<TYPES, VOTEABLE>>> {
         Ok(
             VersionedVoteData::new(self.data.clone(), self.view_number, upgrade_lock)
                 .await?
@@ -410,11 +451,11 @@ impl<TYPES: NodeType> UpgradeCertificate<TYPES> {
     /// Validate an upgrade certificate.
     /// # Errors
     /// Returns an error when the upgrade certificate is invalid.
-    pub async fn validate<V: Versions>(
+    pub async fn validate(
         upgrade_certificate: &Option<Self>,
         membership: &EpochMembership<TYPES>,
         epoch: Option<EpochNumber>,
-        upgrade_lock: &UpgradeLock<TYPES, V>,
+        upgrade_lock: &UpgradeLock<TYPES>,
     ) -> Result<()> {
         ensure!(epoch == membership.epoch(), "Epochs don't match!");
         if let Some(ref cert) = upgrade_certificate {

@@ -35,7 +35,7 @@ use hotshot_query_service::{
     status::UpdateStatusData,
     testing::{
         consensus::DataSourceLifeCycle,
-        mocks::{MockBase, MockMembership, MockNodeImpl, MockTypes, MockVersions},
+        mocks::{MockBase, MockMembership, MockNodeImpl, MockTypes, MOCK_UPGRADE},
     },
     Error,
 };
@@ -49,6 +49,7 @@ use hotshot_types::{
     traits::{election::Membership, network::Topic},
     HotShotConfig, PeerConfig,
 };
+use test_utils::reserve_tcp_port;
 use tracing_subscriber::EnvFilter;
 use url::Url;
 use vbs::version::StaticVersionType;
@@ -151,7 +152,7 @@ async fn main() -> Result<(), Error> {
 
 async fn init_consensus(
     data_sources: &[DataSource],
-) -> Vec<SystemContextHandle<MockTypes, MockNodeImpl, MockVersions>> {
+) -> Vec<SystemContextHandle<MockTypes, MockNodeImpl>> {
     let (pub_keys, priv_keys): (Vec<_>, Vec<_>) = (0..data_sources.len())
         .map(|i| BLSPubKey::generated_from_seed_indexed([0; 32], i as u64))
         .unzip();
@@ -172,7 +173,7 @@ async fn init_consensus(
     let num_nodes_with_stake = NonZeroUsize::new(pub_keys.len()).unwrap();
 
     // Pick a random, unused port for the builder server
-    let builder_port = portpicker::pick_unused_port().expect("No ports available");
+    let builder_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
     let builder_url =
         Url::parse(&format!("http://0.0.0.0:{builder_port}")).expect("Failed to parse URL");
@@ -218,6 +219,7 @@ async fn init_consensus(
         stake_table_capacity: hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY,
         drb_difficulty: 0,
         drb_upgrade_difficulty: 0,
+        upgrade: MOCK_UPGRADE,
     };
 
     let nodes = join_all(priv_keys.into_iter().zip(data_sources).enumerate().map(
@@ -264,11 +266,12 @@ async fn init_consensus(
                     config,
                     coordinator,
                     network,
-                    HotShotInitializer::from_genesis::<MockVersions>(
+                    HotShotInitializer::from_genesis(
                         TestInstanceState::default(),
                         0,
                         0,
                         vec![],
+                        MOCK_UPGRADE,
                     )
                     .await
                     .unwrap(),

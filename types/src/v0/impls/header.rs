@@ -11,7 +11,7 @@ use hotshot_types::{
     light_client::LightClientState,
     traits::{
         block_contents::{BlockHeader, BuilderFee, GENESIS_VID_NUM_STORAGE_NODES},
-        node_implementation::{NodeType, Versions},
+        node_implementation::NodeType,
         signature_key::BuilderSignatureKey,
         BlockPayload, EncodeBytes, ValidatedState as _,
     },
@@ -25,7 +25,8 @@ use serde::{
 use serde_json::{Map, Value};
 use thiserror::Error;
 use time::OffsetDateTime;
-use vbs::version::{StaticVersionType, Version};
+use vbs::version::Version;
+use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION};
 
 use super::{
     instance_state::NodeState, state::ValidatedState, v0_1::IterableFeeInfo, v0_3::ChainConfig,
@@ -43,9 +44,9 @@ use crate::{
         REWARD_MERKLE_TREE_V1_HEIGHT,
     },
     v0_4::{self, RewardMerkleCommitmentV2},
-    v0_5, BlockMerkleCommitment, DrbAndHeaderUpgradeVersion, EpochVersion, FeeAccount, FeeAmount,
-    FeeInfo, FeeMerkleCommitment, Header, L1BlockInfo, L1Snapshot, Leaf2, NamespaceId, NsIndex,
-    NsTable, PayloadByteLen, SeqTypes, TimestampMillis, UpgradeType,
+    v0_5, BlockMerkleCommitment, FeeAccount, FeeAmount, FeeInfo, FeeMerkleCommitment, Header,
+    L1BlockInfo, L1Snapshot, Leaf2, NamespaceId, NsIndex, NsTable, PayloadByteLen, SeqTypes,
+    TimestampMillis, UpgradeType,
 };
 
 impl v0_1::Header {
@@ -1059,7 +1060,7 @@ impl BlockHeader<SeqTypes> for Header {
         }
 
         let mut rewards = None;
-        if version >= EpochVersion::version() {
+        if version >= EPOCH_VERSION {
             rewards = distribute_block_reward(
                 instance_state,
                 &mut validated_state,
@@ -1072,7 +1073,7 @@ impl BlockHeader<SeqTypes> for Header {
 
         let mut next_stake_table_hash = None;
 
-        if version >= DrbAndHeaderUpgradeVersion::version() {
+        if version >= DRB_AND_HEADER_UPGRADE_VERSION {
             let epoch_height = instance_state
                 .epoch_height
                 .context("epoch height not in instance state")?;
@@ -1128,17 +1129,18 @@ impl BlockHeader<SeqTypes> for Header {
         )?)
     }
 
-    fn genesis<V: Versions>(
+    fn genesis(
         instance_state: &NodeState,
         payload: <SeqTypes as NodeType>::BlockPayload,
         metadata: &<<SeqTypes as NodeType>::BlockPayload as BlockPayload<SeqTypes>>::Metadata,
+        _: Version,
     ) -> Self {
         let payload_bytes = payload.encode();
         let builder_commitment = payload.builder_commitment(metadata);
 
         let vid_commitment_version = instance_state.genesis_version;
 
-        let payload_commitment = vid_commitment::<V>(
+        let payload_commitment = vid_commitment(
             &payload_bytes,
             &metadata.encode(),
             GENESIS_VID_NUM_STORAGE_NODES,
@@ -1325,10 +1327,11 @@ mod test_headers {
         node_bindings::Anvil,
         primitives::{Address, U256},
     };
-    use hotshot_query_service::testing::mocks::MockVersions;
+    use hotshot_query_service::testing::mocks::MOCK_UPGRADE;
     use hotshot_types::traits::signature_key::BuilderSignatureKey;
     use v0_1::{BlockMerkleTree, FeeMerkleTree, L1Client};
     use vbs::{bincode_serializer::BincodeSerializer, version::StaticVersion, BinarySerializer};
+    use versions::version;
 
     use super::*;
     use crate::{
@@ -1434,7 +1437,7 @@ mod test_headers {
                 self.timestamp_millis,
                 validated_state.clone(),
                 genesis.instance_state.chain_config,
-                Version { major: 0, minor: 1 },
+                version(0, 1),
                 None,
                 None,
             )
@@ -1634,7 +1637,7 @@ mod test_headers {
         async fn default() -> Self {
             let instance_state = NodeState::mock();
             let validated_state = ValidatedState::genesis(&instance_state).0;
-            let leaf: Leaf2 = Leaf::genesis::<MockVersions>(&validated_state, &instance_state)
+            let leaf: Leaf2 = Leaf::genesis(&validated_state, &instance_state, MOCK_UPGRADE.base)
                 .await
                 .into();
             let header = leaf.block_header().clone();
@@ -1654,7 +1657,7 @@ mod test_headers {
         let anvil = Anvil::new().block_time(1u64).spawn();
         let mut genesis_state = NodeState::mock()
             .with_l1(L1Client::new(vec![anvil.endpoint_url()]).expect("Failed to create L1 client"))
-            .with_current_version(StaticVersion::<0, 1>::version());
+            .with_current_version(version(0, 1));
 
         let genesis = GenesisForTest::default().await;
 
@@ -1706,7 +1709,7 @@ mod test_headers {
             builder_commitment.clone(),
             ns_table,
             builder_fee,
-            StaticVersion::<0, 1>::version(),
+            version(0, 1),
             *parent_leaf.view_number() + 1,
         )
         .await
@@ -1730,7 +1733,7 @@ mod test_headers {
                 &genesis_state.state_catchup,
                 &parent_leaf,
                 &proposal,
-                StaticVersion::<0, 1>::version(),
+                version(0, 1),
                 parent_leaf.view_number() + 1,
             )
             .await
@@ -1797,7 +1800,7 @@ mod test_headers {
             }],
             Default::default(),
             None,
-            Version { major: 0, minor: 1 },
+            version(0, 1),
             None,
         );
 
@@ -1829,7 +1832,7 @@ mod test_headers {
             }],
             Default::default(),
             None,
-            Version { major: 0, minor: 2 },
+            version(0, 2),
             None,
         );
 
@@ -1861,7 +1864,7 @@ mod test_headers {
             }],
             Default::default(),
             None,
-            Version { major: 0, minor: 3 },
+            version(0, 3),
             None,
         );
 

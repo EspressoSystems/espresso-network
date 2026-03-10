@@ -5,7 +5,7 @@
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
 use hotshot::tasks::task_state::CreateTaskState;
-use hotshot_example_types::node_types::{MemoryImpl, TestTypes, TestVersions};
+use hotshot_example_types::node_types::{MemoryImpl, TestTypes};
 use hotshot_task_impls::{
     events::HotShotEvent, harness::run_harness, view_sync::ViewSyncTaskState,
 };
@@ -19,7 +19,7 @@ use hotshot_types::{
 async fn test_view_sync_task() {
 
     // Build the API for node 5.
-    let handle = build_system_handle::<TestTypes, MemoryImpl, TestVersions>(5)
+    let handle = build_system_handle::<TestTypes, MemoryImpl>(5)
         .await
         .0;
 
@@ -51,6 +51,6 @@ async fn test_view_sync_task() {
     output.push(HotShotEvent::ViewChange(ViewNumber::new(3), None));
     output.push(HotShotEvent::ViewSyncPreCommitVoteSend(vote.clone()));
 
-    let view_sync_state = ViewSyncTaskState::<TestTypes, TestVersions>::create_from(&handle).await;
+    let view_sync_state = ViewSyncTaskState::<TestTypes>::create_from(&handle).await;
     run_harness(input, output, view_sync_state, false).await;
 }

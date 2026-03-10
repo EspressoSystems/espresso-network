@@ -44,6 +44,7 @@ use crate::{api, persistence, proposal_fetcher::ProposalFetcherConfig};
 // default value, even if it is a bit arbitrary.
 #[derive(Parser, Clone, Derivative)]
 #[derivative(Debug(bound = ""))]
+#[command(version = build_version())]
 pub struct Options {
     /// URL of the HotShot orchestrator.
     #[clap(
@@ -347,6 +348,12 @@ pub struct Options {
     #[clap(flatten)]
     pub catchup_backoff: BackoffParams,
 
+    /// Base timeout for catchup requests to peers.
+    ///
+    /// This is the initial per peer timeout for HTTP requests during state catchup
+    #[clap(long, env = "ESPRESSO_SEQUENCER_CATCHUP_BASE_TIMEOUT", default_value = "2s", value_parser = parse_duration)]
+    pub catchup_base_timeout: Duration,
+
     #[clap(flatten)]
     pub logging: logging::Config,
 
@@ -440,6 +447,15 @@ pub struct Identity {
 /// version of this program.
 fn get_default_node_type() -> String {
     format!("espresso-sequencer {}", env!("CARGO_PKG_VERSION"))
+}
+
+fn build_version() -> String {
+    let info = sequencer_utils::build_info!();
+    format!(
+        "{}\nfeatures: {}",
+        info.clap_version(),
+        env!("VERGEN_CARGO_FEATURES"),
+    )
 }
 
 // The Debug implementation for Url is noisy, we just want to see the URL
@@ -683,4 +699,35 @@ pub struct Modules {
     pub hotshot_events: Option<api::options::HotshotEvents>,
     pub explorer: Option<api::options::Explorer>,
     pub light_client: Option<api::options::LightClient>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_build_version() {
+        let version = build_version();
+        for field in [
+            "describe:",
+            "rev:",
+            "modified:",
+            "branch:",
+            "commit-timestamp:",
+            "debug:",
+            "os:",
+            "arch:",
+            "features:",
+        ] {
+            assert!(version.contains(field), "missing {field}: {version}");
+        }
+        assert!(
+            version.contains("debug: true"),
+            "expected debug build in test: {version}"
+        );
+        assert!(
+            version.contains("testing"),
+            "expected testing in features: {version}"
+        );
+    }
 }

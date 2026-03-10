@@ -22,10 +22,7 @@ use hotshot_types::{
         ViewSyncFinalizeVote2, ViewSyncPreCommitData2, ViewSyncPreCommitVote2,
     },
     stake_table::StakeTableEntries,
-    traits::{
-        node_implementation::{NodeType, Versions},
-        signature_key::SignatureKey,
-    },
+    traits::{node_implementation::NodeType, signature_key::SignatureKey},
     utils::EpochTransitionIndicator,
     vote::{Certificate, HasViewNumber, Vote},
 };
@@ -57,13 +54,13 @@ pub enum ViewSyncPhase {
 type TaskMap<VAL> = BTreeMap<Option<EpochNumber>, BTreeMap<ViewNumber, VAL>>;
 
 /// Type alias for a map from View Number to Relay to Vote Task
-type RelayMap<TYPES, VOTE, CERT, V> =
-    TaskMap<BTreeMap<u64, VoteCollectionTaskState<TYPES, VOTE, CERT, V>>>;
+type RelayMap<TYPES, VOTE, CERT> =
+    TaskMap<BTreeMap<u64, VoteCollectionTaskState<TYPES, VOTE, CERT>>>;
 
-type ReplicaTaskMap<TYPES, V> = TaskMap<ViewSyncReplicaTaskState<TYPES, V>>;
+type ReplicaTaskMap<TYPES> = TaskMap<ViewSyncReplicaTaskState<TYPES>>;
 
 /// Main view sync task state
-pub struct ViewSyncTaskState<TYPES: NodeType, V: Versions> {
+pub struct ViewSyncTaskState<TYPES: NodeType> {
     /// View HotShot is currently in
     pub cur_view: ViewNumber,
 
@@ -89,21 +86,20 @@ pub struct ViewSyncTaskState<TYPES: NodeType, V: Versions> {
     pub num_timeouts_tracked: u64,
 
     /// Map of running replica tasks
-    pub replica_task_map: RwLock<ReplicaTaskMap<TYPES, V>>,
+    pub replica_task_map: RwLock<ReplicaTaskMap<TYPES>>,
 
     /// Map of pre-commit vote accumulates for the relay
     pub pre_commit_relay_map: RwLock<
-        RelayMap<TYPES, ViewSyncPreCommitVote2<TYPES>, ViewSyncPreCommitCertificate2<TYPES>, V>,
+        RelayMap<TYPES, ViewSyncPreCommitVote2<TYPES>, ViewSyncPreCommitCertificate2<TYPES>>,
     >,
 
     /// Map of commit vote accumulates for the relay
     pub commit_relay_map:
-        RwLock<RelayMap<TYPES, ViewSyncCommitVote2<TYPES>, ViewSyncCommitCertificate2<TYPES>, V>>,
+        RwLock<RelayMap<TYPES, ViewSyncCommitVote2<TYPES>, ViewSyncCommitCertificate2<TYPES>>>,
 
     /// Map of finalize vote accumulates for the relay
-    pub finalize_relay_map: RwLock<
-        RelayMap<TYPES, ViewSyncFinalizeVote2<TYPES>, ViewSyncFinalizeCertificate2<TYPES>, V>,
-    >,
+    pub finalize_relay_map:
+        RwLock<RelayMap<TYPES, ViewSyncFinalizeVote2<TYPES>, ViewSyncFinalizeCertificate2<TYPES>>>,
 
     /// Timeout duration for view sync rounds
     pub view_sync_timeout: Duration,
@@ -112,7 +108,7 @@ pub struct ViewSyncTaskState<TYPES: NodeType, V: Versions> {
     pub last_garbage_collected_view: ViewNumber,
 
     /// Lock for a decided upgrade
-    pub upgrade_lock: UpgradeLock<TYPES, V>,
+    pub upgrade_lock: UpgradeLock<TYPES>,
 
     /// First view in which epoch version takes effect
     pub first_epoch: Option<(ViewNumber, EpochNumber)>,
@@ -124,7 +120,7 @@ pub struct ViewSyncTaskState<TYPES: NodeType, V: Versions> {
 }
 
 #[async_trait]
-impl<TYPES: NodeType, V: Versions> TaskState for ViewSyncTaskState<TYPES, V> {
+impl<TYPES: NodeType> TaskState for ViewSyncTaskState<TYPES> {
     type Event = HotShotEvent<TYPES>;
 
     async fn handle_event(
@@ -140,7 +136,7 @@ impl<TYPES: NodeType, V: Versions> TaskState for ViewSyncTaskState<TYPES, V> {
 }
 
 /// State of a view sync replica task
-pub struct ViewSyncReplicaTaskState<TYPES: NodeType, V: Versions> {
+pub struct ViewSyncReplicaTaskState<TYPES: NodeType> {
     /// Timeout for view sync rounds
     pub view_sync_timeout: Duration,
 
@@ -175,7 +171,7 @@ pub struct ViewSyncReplicaTaskState<TYPES: NodeType, V: Versions> {
     pub private_key: <TYPES::SignatureKey as SignatureKey>::PrivateKey,
 
     /// Lock for a decided upgrade
-    pub upgrade_lock: UpgradeLock<TYPES, V>,
+    pub upgrade_lock: UpgradeLock<TYPES>,
 
     /// Epoch HotShot was in when this task was created
     pub cur_epoch: Option<EpochNumber>,
@@ -185,7 +181,7 @@ pub struct ViewSyncReplicaTaskState<TYPES: NodeType, V: Versions> {
 }
 
 #[async_trait]
-impl<TYPES: NodeType, V: Versions> TaskState for ViewSyncReplicaTaskState<TYPES, V> {
+impl<TYPES: NodeType> TaskState for ViewSyncReplicaTaskState<TYPES> {
     type Event = HotShotEvent<TYPES>;
 
     async fn handle_event(
@@ -202,7 +198,7 @@ impl<TYPES: NodeType, V: Versions> TaskState for ViewSyncReplicaTaskState<TYPES,
     fn cancel_subtasks(&mut self) {}
 }
 
-impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
+impl<TYPES: NodeType> ViewSyncTaskState<TYPES> {
     #[instrument(skip_all, fields(id = self.id, view = *self.cur_view), name = "View Sync Main Task", level = "error")]
     #[allow(clippy::type_complexity)]
     /// Handles incoming events for the main view sync task
@@ -250,7 +246,7 @@ impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
         }
 
         // We do not have a replica task already running, so start one
-        let mut replica_state: ViewSyncReplicaTaskState<TYPES, V> = ViewSyncReplicaTaskState {
+        let mut replica_state: ViewSyncReplicaTaskState<TYPES> = ViewSyncReplicaTaskState {
             cur_view: view,
             next_view: view,
             relay: 0,
@@ -644,7 +640,7 @@ impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
     }
 }
 
-impl<TYPES: NodeType, V: Versions> ViewSyncReplicaTaskState<TYPES, V> {
+impl<TYPES: NodeType> ViewSyncReplicaTaskState<TYPES> {
     #[instrument(skip_all, fields(id = self.id, view = *self.cur_view, epoch = self.cur_epoch.map(|x| *x)), name = "View Sync Replica Task", level = "error")]
     /// Handle incoming events for the view sync replica task
     pub async fn handle(

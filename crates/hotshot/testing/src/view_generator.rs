@@ -17,7 +17,7 @@ use futures::{future::BoxFuture, FutureExt, Stream};
 use hotshot::types::{BLSPubKey, SignatureKey, SystemContextHandle};
 use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestTransaction},
-    node_types::{MemoryImpl, TestTypes, TestVersions},
+    node_types::{MemoryImpl, TestTypes},
     state_types::{TestInstanceState, TestValidatedState},
 };
 use hotshot_types::{
@@ -35,15 +35,12 @@ use hotshot_types::{
         DaData2, DaVote2, QuorumData2, QuorumVote2, TimeoutData2, TimeoutVote2,
         UpgradeProposalData, UpgradeVote, ViewSyncFinalizeData2, ViewSyncFinalizeVote2,
     },
-    traits::{
-        consensus_api::ConsensusApi,
-        node_implementation::{NodeType, Versions},
-        BlockPayload,
-    },
+    traits::{consensus_api::ConsensusApi, node_implementation::NodeType, BlockPayload},
     utils::{genesis_epoch_from_version, EpochTransitionIndicator},
 };
 use rand::{thread_rng, Rng};
 use sha2::{Digest, Sha256};
+use versions::Upgrade;
 
 use crate::helpers::{
     build_cert, build_da_certificate, build_vid_proposal, da_payload_commitment, TestNodeKeyMap,
@@ -70,7 +67,7 @@ pub struct TestView {
     formed_upgrade_certificate: Option<UpgradeCertificate<TestTypes>>,
     view_sync_finalize_data: Option<ViewSyncFinalizeData2>,
     timeout_cert_data: Option<TimeoutData2>,
-    upgrade_lock: UpgradeLock<TestTypes, TestVersions>,
+    upgrade_lock: UpgradeLock<TestTypes>,
 }
 
 impl TestView {
@@ -94,13 +91,14 @@ impl TestView {
         (sk.clone(), leader)
     }
 
-    pub async fn genesis<V: Versions>(
+    pub async fn genesis(
         membership: &EpochMembershipCoordinator<TestTypes>,
         node_key_map: Arc<TestNodeKeyMap>,
+        upgrade: Upgrade,
     ) -> Self {
         let genesis_view = ViewNumber::new(1);
-        let genesis_epoch = genesis_epoch_from_version::<V, TestTypes>();
-        let upgrade_lock = UpgradeLock::new();
+        let genesis_epoch = genesis_epoch_from_version(upgrade.base);
+        let upgrade_lock = UpgradeLock::new(upgrade);
 
         let transactions = Vec::new();
 
@@ -129,7 +127,7 @@ impl TestView {
 
         let genesis_version = upgrade_lock.version_infallible(genesis_view).await;
 
-        let payload_commitment = da_payload_commitment::<TestTypes, TestVersions>(
+        let payload_commitment = da_payload_commitment::<TestTypes>(
             &epoch_membership,
             transactions.clone(),
             &metadata,
@@ -137,7 +135,7 @@ impl TestView {
         )
         .await;
 
-        let (vid_disperse, vid_proposal) = build_vid_proposal::<TestTypes, TestVersions>(
+        let (vid_disperse, vid_proposal) = build_vid_proposal::<TestTypes>(
             &epoch_membership,
             genesis_view,
             genesis_epoch,
@@ -162,9 +160,10 @@ impl TestView {
         .unwrap();
 
         let block_header = TestBlockHeader::new(
-            &Leaf2::<TestTypes>::genesis::<V>(
+            &Leaf2::<TestTypes>::genesis(
                 &TestValidatedState::default(),
                 &TestInstanceState::default(),
+                upgrade.base,
             )
             .await,
             payload_commitment,
@@ -178,9 +177,10 @@ impl TestView {
                 block_header: block_header.clone(),
                 view_number: genesis_view,
                 epoch: genesis_epoch,
-                justify_qc: QuorumCertificate2::genesis::<TestVersions>(
+                justify_qc: QuorumCertificate2::genesis(
                     &TestValidatedState::default(),
                     &TestInstanceState::default(),
+                    upgrade,
                 )
                 .await,
                 next_epoch_justify_qc: None,
@@ -313,7 +313,7 @@ impl TestView {
             .membership_for_epoch(self.epoch_number)
             .await
             .unwrap();
-        let payload_commitment = da_payload_commitment::<TestTypes, TestVersions>(
+        let payload_commitment = da_payload_commitment::<TestTypes>(
             &membership,
             transactions.clone(),
             &metadata,
@@ -321,7 +321,7 @@ impl TestView {
         )
         .await;
 
-        let (vid_disperse, vid_proposal) = build_vid_proposal::<TestTypes, TestVersions>(
+        let (vid_disperse, vid_proposal) = build_vid_proposal::<TestTypes>(
             &membership,
             next_view,
             self.epoch_number,
@@ -332,7 +332,7 @@ impl TestView {
         )
         .await;
 
-        let da_certificate = build_da_certificate::<TestTypes, TestVersions>(
+        let da_certificate = build_da_certificate::<TestTypes>(
             &membership,
             next_view,
             self.epoch_number,
@@ -347,7 +347,6 @@ impl TestView {
 
         let quorum_certificate = build_cert::<
             TestTypes,
-            TestVersions,
             QuorumData2<TestTypes>,
             QuorumVote2<TestTypes>,
             QuorumCertificate2<TestTypes>,
@@ -364,7 +363,6 @@ impl TestView {
         let upgrade_certificate = if let Some(ref data) = self.upgrade_data {
             let cert = build_cert::<
                 TestTypes,
-                TestVersions,
                 UpgradeProposalData,
                 UpgradeVote<TestTypes>,
                 UpgradeCertificate<TestTypes>,
@@ -386,7 +384,6 @@ impl TestView {
         let view_sync_certificate = if let Some(ref data) = self.view_sync_finalize_data {
             let cert = build_cert::<
                 TestTypes,
-                TestVersions,
                 ViewSyncFinalizeData2,
                 ViewSyncFinalizeVote2<TestTypes>,
                 ViewSyncFinalizeCertificate2<TestTypes>,
@@ -408,7 +405,6 @@ impl TestView {
         let timeout_certificate = if let Some(ref data) = self.timeout_cert_data {
             let cert = build_cert::<
                 TestTypes,
-                TestVersions,
                 TimeoutData2,
                 TimeoutVote2<TestTypes>,
                 TimeoutCertificate2<TestTypes>,
@@ -494,7 +490,7 @@ impl TestView {
             _pd: PhantomData,
         };
 
-        let upgrade_lock = UpgradeLock::new();
+        let upgrade_lock = UpgradeLock::new(self.upgrade_lock.upgrade);
 
         TestView {
             quorum_proposal,
@@ -527,7 +523,7 @@ impl TestView {
 
     pub async fn create_quorum_vote(
         &self,
-        handle: &SystemContextHandle<TestTypes, MemoryImpl, TestVersions>,
+        handle: &SystemContextHandle<TestTypes, MemoryImpl>,
     ) -> QuorumVote2<TestTypes> {
         QuorumVote2::<TestTypes>::create_signed_vote(
             QuorumData2 {
@@ -547,7 +543,7 @@ impl TestView {
     pub async fn create_upgrade_vote(
         &self,
         data: UpgradeProposalData,
-        handle: &SystemContextHandle<TestTypes, MemoryImpl, TestVersions>,
+        handle: &SystemContextHandle<TestTypes, MemoryImpl>,
     ) -> UpgradeVote<TestTypes> {
         UpgradeVote::<TestTypes>::create_signed_vote(
             data,
@@ -563,7 +559,7 @@ impl TestView {
     pub async fn create_da_vote(
         &self,
         data: DaData2,
-        handle: &SystemContextHandle<TestTypes, MemoryImpl, TestVersions>,
+        handle: &SystemContextHandle<TestTypes, MemoryImpl>,
     ) -> DaVote2<TestTypes> {
         DaVote2::create_signed_vote(
             data,
@@ -577,25 +573,26 @@ impl TestView {
     }
 }
 
-pub struct TestViewGenerator<V: Versions> {
+pub struct TestViewGenerator {
     pub current_view: Option<TestView>,
     pub membership: EpochMembershipCoordinator<TestTypes>,
     pub node_key_map: Arc<TestNodeKeyMap>,
-    pub _pd: PhantomData<fn(V)>,
     pub task: Option<BoxFuture<'static, TestView>>,
+    pub upgrade: Upgrade,
 }
 
-impl<V: Versions> TestViewGenerator<V> {
+impl TestViewGenerator {
     pub fn generate(
         membership: EpochMembershipCoordinator<TestTypes>,
         node_key_map: Arc<TestNodeKeyMap>,
+        upgrade: Upgrade,
     ) -> Self {
         TestViewGenerator {
             current_view: None,
             membership,
             node_key_map,
-            _pd: PhantomData,
             task: None,
+            upgrade,
         }
     }
 
@@ -665,18 +662,19 @@ impl<V: Versions> TestViewGenerator<V> {
     }
 }
 
-impl<V: Versions> Stream for TestViewGenerator<V> {
+impl Stream for TestViewGenerator {
     type Item = TestView;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         if self.task.is_none() {
             let cur_view = self.current_view.clone();
+            let upgrade = self.upgrade;
             self.task = Some(if let Some(view) = cur_view {
                 async move { TestView::next_view(&view).await }.boxed()
             } else {
                 let epoch_membership = self.membership.clone();
                 let nkm = Arc::clone(&self.node_key_map);
-                async move { TestView::genesis::<V>(&epoch_membership, nkm).await }.boxed()
+                async move { TestView::genesis(&epoch_membership, nkm, upgrade).await }.boxed()
             });
         }
 

@@ -20,7 +20,6 @@ use hotshot_types::{
     traits::{
         block_contents::BlockHeader,
         network::ConnectedNetwork,
-        node_implementation::Versions,
         signature_key::{LCV1StateSignatureKey, LCV2StateSignatureKey, LCV3StateSignatureKey},
     },
     utils::{is_ge_epoch_root, option_epoch_from_block_number},
@@ -87,14 +86,13 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
         self
     }
 
-    pub(super) async fn handle_event<N, P, V>(
+    pub(super) async fn handle_event<N, P>(
         &mut self,
         event: &Event<SeqTypes>,
-        consensus_state: Arc<RwLock<Consensus<N, P, V>>>,
+        consensus_state: Arc<RwLock<Consensus<N, P>>>,
     ) where
         N: ConnectedNetwork<PubKey>,
         P: SequencerPersistence,
-        V: Versions,
     {
         let EventType::Decide { leaf_chain, .. } = &event.event else {
             return;

@@ -24,7 +24,6 @@ use jf_merkle_tree_compat::{
     prelude::{MerkleProof, Sha3Node},
     LookupResult, MerkleTreeScheme, ToTraversalPath, UniversalMerkleTreeScheme,
 };
-use portpicker::pick_unused_port;
 use sequencer::{
     api::{
         data_source::testing::TestableSequencerDataSource,
@@ -36,15 +35,14 @@ use sequencer::{
     SequencerApiVersion,
 };
 use surf_disco::Client;
+use test_utils::reserve_tcp_port;
 use tide_disco::error::ServerError;
 use tokio::time::sleep;
-
-type MockSequencerVersions =
-    espresso_types::SequencerVersions<espresso_types::EpochVersion, espresso_types::V0_0>;
+use versions::{Upgrade, EPOCH_VERSION};
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_merklized_state_api() {
-    let port = pick_unused_port().expect("No ports free");
+    let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
     let storage = SqlDataSource::create_storage().await;
 
@@ -55,7 +53,7 @@ async fn slow_test_merklized_state_api() {
         .api_config(options)
         .network_config(network_config)
         .build();
-    let mut network = TestNetwork::new(config, MockSequencerVersions::new()).await;
+    let mut network = TestNetwork::new(config, Upgrade::trivial(EPOCH_VERSION)).await;
     let url = format!("http://localhost:{port}").parse().unwrap();
     let client: Client<ServerError, SequencerApiVersion> = Client::new(url);
 

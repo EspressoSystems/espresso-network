@@ -26,8 +26,9 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 use tagged_base64::{TaggedBase64, Tb64Error};
 use thiserror::Error;
-use vbs::version::{StaticVersionType, Version};
+use vbs::version::Version;
 use vec1::Vec1;
+use versions::{Upgrade, EPOCH_VERSION, VID2_UPGRADE_VERSION};
 
 use crate::{
     drb::DrbResult,
@@ -42,7 +43,7 @@ use crate::{
     simple_vote::{HasEpoch, QuorumData, QuorumData2, UpgradeProposalData, VersionedVoteData},
     traits::{
         block_contents::{BlockHeader, BuilderFee, EncodeBytes, TestableBlock},
-        node_implementation::{NodeType, Versions},
+        node_implementation::NodeType,
         signature_key::SignatureKey,
         states::TestableState,
         BlockPayload,
@@ -350,13 +351,13 @@ impl AsRef<[u8; 32]> for VidCommitment {
 /// If the VID computation fails.
 #[must_use]
 #[allow(clippy::panic)]
-pub fn vid_commitment<V: Versions>(
+pub fn vid_commitment(
     encoded_transactions: &[u8],
     metadata: &[u8],
     total_weight: usize,
     version: Version,
 ) -> VidCommitment {
-    if version < V::Epochs::VERSION {
+    if version < EPOCH_VERSION {
         let encoded_tx_len = encoded_transactions.len();
         advz_scheme(total_weight)
             .commit_only(encoded_transactions)
@@ -368,7 +369,7 @@ pub fn vid_commitment<V: Versions>(
                      error: {err}"
                 )
             })
-    } else if version < V::Vid2Upgrade::VERSION {
+    } else if version < VID2_UPGRADE_VERSION {
         let param = init_avidm_param(total_weight).unwrap();
         let encoded_tx_len = encoded_transactions.len();
         AvidMScheme::commit(
@@ -540,14 +541,14 @@ impl<TYPES: NodeType> VidDisperse<TYPES> {
     /// # Errors
     /// Returns an error if the disperse or commitment calculation fails
     #[allow(clippy::panic)]
-    pub async fn calculate_vid_disperse<V: Versions>(
+    pub async fn calculate_vid_disperse(
         payload: &TYPES::BlockPayload,
         membership: &EpochMembershipCoordinator<TYPES>,
         view: ViewNumber,
         target_epoch: Option<EpochNumber>,
         data_epoch: Option<EpochNumber>,
         metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
-        upgrade_lock: &UpgradeLock<TYPES, V>,
+        upgrade_lock: &UpgradeLock<TYPES>,
     ) -> Result<VidDisperseAndDuration<TYPES>> {
         let epochs_enabled = upgrade_lock.epochs_enabled(view).await;
         let upgraded_vid2 = upgrade_lock.upgraded_vid2(view).await;
@@ -1042,9 +1043,9 @@ impl<TYPES: NodeType> QuorumProposal2<TYPES> {
     /// Validates whether the epoch is consistent with the version and the block number
     /// # Errors
     /// Returns an error if the epoch is inconsistent with the version or the block number
-    pub async fn validate_epoch<V: Versions>(
+    pub async fn validate_epoch(
         &self,
-        upgrade_lock: &UpgradeLock<TYPES, V>,
+        upgrade_lock: &UpgradeLock<TYPES>,
         epoch_height: u64,
     ) -> Result<()> {
         let calculated_epoch = option_epoch_from_block_number(
@@ -1099,9 +1100,9 @@ impl<TYPES: NodeType> QuorumProposalWrapper<TYPES> {
     /// Validates whether the epoch is consistent with the version and the block number
     /// # Errors
     /// Returns an error if the epoch is inconsistent with the version or the block number
-    pub async fn validate_epoch<V: Versions>(
+    pub async fn validate_epoch(
         &self,
-        upgrade_lock: &UpgradeLock<TYPES, V>,
+        upgrade_lock: &UpgradeLock<TYPES>,
         epoch_height: u64,
     ) -> Result<()> {
         self.proposal
@@ -1416,11 +1417,12 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
     /// Panics if the genesis payload (`TYPES::BlockPayload::genesis()`) is malformed (unable to be
     /// interpreted as bytes).
     #[must_use]
-    pub async fn genesis<V: Versions>(
+    pub async fn genesis(
         validated_state: &TYPES::ValidatedState,
         instance_state: &TYPES::InstanceState,
+        version: Version,
     ) -> Self {
-        let epoch = genesis_epoch_from_version::<V, TYPES>();
+        let epoch = genesis_epoch_from_version(version);
 
         let (payload, metadata) =
             TYPES::BlockPayload::from_transactions([], validated_state, instance_state)
@@ -1430,9 +1432,9 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
         let genesis_view = ViewNumber::genesis();
 
         let block_header =
-            TYPES::BlockHeader::genesis::<V>(instance_state, payload.clone(), &metadata);
+            TYPES::BlockHeader::genesis(instance_state, payload.clone(), &metadata, version);
 
-        let block_number = if V::Base::VERSION < V::Epochs::VERSION {
+        let block_number = if version < EPOCH_VERSION {
             None
         } else {
             Some(0u64)
@@ -1516,14 +1518,14 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
     ///
     /// Fails if the payload commitment doesn't match `self.block_header.payload_commitment()`
     /// or if the transactions are of invalid length
-    pub fn fill_block_payload<V: Versions>(
+    pub fn fill_block_payload(
         &mut self,
         block_payload: TYPES::BlockPayload,
         num_storage_nodes: usize,
         version: Version,
     ) -> std::result::Result<(), BlockError> {
         let encoded_txns = block_payload.encode();
-        let commitment = vid_commitment::<V>(
+        let commitment = vid_commitment(
             &encoded_txns,
             &self.block_header.metadata().encode(),
             num_storage_nodes,
@@ -1672,10 +1674,7 @@ impl<TYPES: NodeType> Leaf<TYPES> {
     #[allow(clippy::unused_async)]
     /// Calculate the leaf commitment,
     /// which is gated on the version to include the block header.
-    pub async fn commit<V: Versions>(
-        &self,
-        _upgrade_lock: &UpgradeLock<TYPES, V>,
-    ) -> Commitment<Self> {
+    pub async fn commit(&self, _upgrade_lock: &UpgradeLock<TYPES>) -> Commitment<Self> {
         <Self as Committable>::commit(self)
     }
 }
@@ -1748,26 +1747,27 @@ impl<TYPES: NodeType> Display for Leaf<TYPES> {
 }
 
 impl<TYPES: NodeType> QuorumCertificate<TYPES> {
-    #[must_use]
     /// Creat the Genesis certificate
-    pub async fn genesis<V: Versions>(
+    #[must_use]
+    pub async fn genesis(
         validated_state: &TYPES::ValidatedState,
         instance_state: &TYPES::InstanceState,
+        upgrade: Upgrade,
     ) -> Self {
         // since this is genesis, we should never have a decided upgrade certificate.
-        let upgrade_lock = UpgradeLock::<TYPES, V>::new();
+        let upgrade_lock = UpgradeLock::<TYPES>::new(upgrade);
 
         let genesis_view = ViewNumber::genesis();
 
         let data = QuorumData {
-            leaf_commit: Leaf::genesis::<V>(validated_state, instance_state)
+            leaf_commit: Leaf::genesis(validated_state, instance_state, upgrade.base)
                 .await
                 .commit(&upgrade_lock)
                 .await,
         };
 
         let versioned_data =
-            VersionedVoteData::<_, _, V>::new_infallible(data.clone(), genesis_view, &upgrade_lock)
+            VersionedVoteData::<_, _>::new_infallible(data.clone(), genesis_view, &upgrade_lock)
                 .await;
 
         let bytes: [u8; 32] = versioned_data.commit().into();
@@ -1783,18 +1783,19 @@ impl<TYPES: NodeType> QuorumCertificate<TYPES> {
 }
 
 impl<TYPES: NodeType> QuorumCertificate2<TYPES> {
-    #[must_use]
     /// Create the Genesis certificate
-    pub async fn genesis<V: Versions>(
+    #[must_use]
+    pub async fn genesis(
         validated_state: &TYPES::ValidatedState,
         instance_state: &TYPES::InstanceState,
+        upgrade: Upgrade,
     ) -> Self {
         // since this is genesis, we should never have a decided upgrade certificate.
-        let upgrade_lock = UpgradeLock::<TYPES, V>::new();
+        let upgrade_lock = UpgradeLock::<TYPES>::new(upgrade);
 
         let genesis_view = ViewNumber::genesis();
 
-        let genesis_leaf = Leaf2::genesis::<V>(validated_state, instance_state).await;
+        let genesis_leaf = Leaf2::genesis(validated_state, instance_state, upgrade.base).await;
         let block_number = if upgrade_lock.epochs_enabled(genesis_view).await {
             Some(genesis_leaf.height())
         } else {
@@ -1802,12 +1803,12 @@ impl<TYPES: NodeType> QuorumCertificate2<TYPES> {
         };
         let data = QuorumData2 {
             leaf_commit: genesis_leaf.commit(),
-            epoch: genesis_epoch_from_version::<V, TYPES>(), // #3967 make sure this is enough of a gate for epochs
+            epoch: genesis_epoch_from_version(upgrade.base), // #3967 make sure this is enough of a gate for epochs
             block_number,
         };
 
         let versioned_data =
-            VersionedVoteData::<_, _, V>::new_infallible(data.clone(), genesis_view, &upgrade_lock)
+            VersionedVoteData::<_, _>::new_infallible(data.clone(), genesis_view, &upgrade_lock)
                 .await;
 
         let bytes: [u8; 32] = versioned_data.commit().into();
@@ -1830,9 +1831,10 @@ impl<TYPES: NodeType> Leaf<TYPES> {
     /// Panics if the genesis payload (`TYPES::BlockPayload::genesis()`) is malformed (unable to be
     /// interpreted as bytes).
     #[must_use]
-    pub async fn genesis<V: Versions>(
+    pub async fn genesis(
         validated_state: &TYPES::ValidatedState,
         instance_state: &TYPES::InstanceState,
+        version: Version,
     ) -> Self {
         let (payload, metadata) =
             TYPES::BlockPayload::from_transactions([], validated_state, instance_state)
@@ -1842,7 +1844,7 @@ impl<TYPES: NodeType> Leaf<TYPES> {
         let genesis_view = ViewNumber::genesis();
 
         let block_header =
-            TYPES::BlockHeader::genesis::<V>(instance_state, payload.clone(), &metadata);
+            TYPES::BlockHeader::genesis(instance_state, payload.clone(), &metadata, version);
 
         let null_quorum_data = QuorumData {
             leaf_commit: Commitment::<Leaf<TYPES>>::default_commitment_no_preimage(),
@@ -1903,14 +1905,14 @@ impl<TYPES: NodeType> Leaf<TYPES> {
     ///
     /// Fails if the payload commitment doesn't match `self.block_header.payload_commitment()`
     /// or if the transactions are of invalid length
-    pub fn fill_block_payload<V: Versions>(
+    pub fn fill_block_payload(
         &mut self,
         block_payload: TYPES::BlockPayload,
         num_storage_nodes: usize,
         version: Version,
     ) -> std::result::Result<(), BlockError> {
         let encoded_txns = block_payload.encode();
-        let commitment = vid_commitment::<V>(
+        let commitment = vid_commitment(
             &encoded_txns,
             &self.block_header.metadata().encode(),
             num_storage_nodes,
@@ -2139,15 +2141,14 @@ pub mod null_block {
     #![allow(missing_docs)]
 
     use jf_advz::VidScheme;
-    use vbs::version::StaticVersionType;
+    use vbs::version::Version;
+    use versions::EPOCH_VERSION;
 
     use crate::{
         data::VidCommitment,
         traits::{
-            block_contents::BuilderFee,
-            node_implementation::{NodeType, Versions},
-            signature_key::BuilderSignatureKey,
-            BlockPayload,
+            block_contents::BuilderFee, node_implementation::NodeType,
+            signature_key::BuilderSignatureKey, BlockPayload,
         },
         vid::advz::advz_scheme,
     };
@@ -2161,7 +2162,7 @@ pub mod null_block {
     // TODO(Chengyu): fix it. Empty commitment must be computed at every upgrade.
     // #[memoize(SharedCache, Capacity: 10)]
     #[must_use]
-    pub fn commitment<V: Versions>(num_storage_nodes: usize) -> Option<VidCommitment> {
+    pub fn commitment(num_storage_nodes: usize) -> Option<VidCommitment> {
         let vid_result = advz_scheme(num_storage_nodes).commit_only(Vec::new());
 
         match vid_result {
@@ -2172,9 +2173,9 @@ pub mod null_block {
 
     /// Builder fee data for a null block payload
     #[must_use]
-    pub fn builder_fee<TYPES: NodeType, V: Versions>(
+    pub fn builder_fee<TYPES: NodeType>(
         num_storage_nodes: usize,
-        version: vbs::version::Version,
+        version: Version,
     ) -> Option<BuilderFee<TYPES>> {
         /// Arbitrary fee amount, this block doesn't actually come from a builder
         const FEE_AMOUNT: u64 = 0;
@@ -2184,7 +2185,7 @@ pub mod null_block {
                 [0_u8; 32], 0,
             );
 
-        if version >= V::Epochs::VERSION {
+        if version >= EPOCH_VERSION {
             let (_null_block, null_block_metadata) =
                 <TYPES::BlockPayload as BlockPayload<TYPES>>::empty();
 
@@ -2205,7 +2206,7 @@ pub mod null_block {
                 &priv_key,
                 FEE_AMOUNT,
                 &null_block_metadata,
-                &commitment::<V>(num_storage_nodes)?,
+                &commitment(num_storage_nodes)?,
             ) {
                 Ok(sig) => Some(BuilderFee {
                     fee_amount: FEE_AMOUNT,

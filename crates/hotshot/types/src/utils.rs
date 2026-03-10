@@ -28,15 +28,13 @@ use serde::{Deserialize, Serialize};
 use sha2::Digest;
 use tagged_base64::tagged;
 use typenum::Unsigned;
-use vbs::version::StaticVersionType;
+use vbs::version::Version;
+use versions::EPOCH_VERSION;
 
 use crate::{
     data::{EpochNumber, Leaf2, VidCommitment, ViewNumber},
     stake_table::StakeTableEntries,
-    traits::{
-        node_implementation::{NodeType, Versions},
-        ValidatedState,
-    },
+    traits::{node_implementation::NodeType, ValidatedState},
     vote::{Certificate, HasViewNumber},
     PeerConfig,
 };
@@ -104,12 +102,12 @@ pub type StateAndDelta<TYPES> = (
     Option<Arc<<<TYPES as NodeType>::ValidatedState as ValidatedState<TYPES>>::Delta>>,
 );
 
-pub async fn verify_leaf_chain<T: NodeType, V: Versions>(
+pub async fn verify_leaf_chain<T: NodeType>(
     mut leaf_chain: Vec<Leaf2<T>>,
     stake_table: &[PeerConfig<T>],
     success_threshold: U256,
     expected_height: u64,
-    upgrade_lock: &crate::message::UpgradeLock<T, V>,
+    upgrade_lock: &crate::message::UpgradeLock<T>,
 ) -> anyhow::Result<Leaf2<T>> {
     // Sort the leaf chain by view number
     leaf_chain.sort_by_key(|l| l.view_number());
@@ -383,10 +381,10 @@ pub fn option_epoch_from_block_number(
     }
 }
 
-/// Returns Some(1) if epochs are enabled by V::Base, otherwise returns None
+/// Returns Some(1) if epochs are enabled by `base`, otherwise returns None
 #[must_use]
-pub fn genesis_epoch_from_version<V: Versions, TYPES: NodeType>() -> Option<EpochNumber> {
-    (V::Base::VERSION >= V::Epochs::VERSION).then(|| EpochNumber::new(1))
+pub fn genesis_epoch_from_version(base: Version) -> Option<EpochNumber> {
+    (base >= EPOCH_VERSION).then(|| EpochNumber::new(1))
 }
 
 /// A function for generating a cute little user mnemonic from a hash
@@ -425,7 +423,7 @@ pub fn is_first_transition_block(block_number: u64, epoch_height: u64) -> bool {
         block_number % epoch_height == epoch_height - 2
     }
 }
-/// Returns true if the block is part of the epoch transition (including the last non null block)  
+/// Returns true if the block is part of the epoch transition (including the last non null block)
 #[must_use]
 pub fn is_epoch_transition(block_number: u64, epoch_height: u64) -> bool {
     if block_number == 0 || epoch_height == 0 {
@@ -446,7 +444,7 @@ pub fn is_last_block(block_number: u64, epoch_height: u64) -> bool {
 }
 
 /// Returns true if the block number is in trasntion but not the transition block
-/// or the last block in the epoch.  
+/// or the last block in the epoch.
 ///
 /// This function is useful for determining if a proposal extending this QC must follow
 /// the special rules for transition blocks.

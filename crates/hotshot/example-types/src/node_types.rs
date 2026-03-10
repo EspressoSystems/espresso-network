@@ -15,11 +15,12 @@ use hotshot::traits::{
 use hotshot_types::{
     constants::TEST_UPGRADE_CONSTANTS,
     signature_key::{BLSPubKey, BuilderKey, SchnorrPubKey},
-    traits::node_implementation::{NodeType, Versions},
+    traits::node_implementation::NodeType,
     upgrade_config::UpgradeConstants,
 };
 use serde::{Deserialize, Serialize};
 use vbs::version::StaticVersion;
+use versions::{version, Upgrade};
 
 pub use crate::membership::helpers::{RandomOverlapQuorumFilterConfig, StableQuorumFilterConfig};
 use crate::{
@@ -314,102 +315,28 @@ impl<TYPES: NodeType> NodeImplementation<TYPES> for CliquenetImpl {
     type Storage = TestStorage<TYPES>;
 }
 
-#[derive(Clone, Debug, Copy)]
-pub struct TestVersions {}
-
-impl Versions for TestVersions {
-    type Base = StaticVersion<0, 1>;
-    type Upgrade = StaticVersion<0, 2>;
-    const UPGRADE_HASH: [u8; 32] = [
-        1, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0,
-        0, 0,
-    ];
-
-    type Epochs = StaticVersion<0, 4>;
-    type DrbAndHeaderUpgrade = StaticVersion<0, 5>;
-    type Vid2Upgrade = StaticVersion<0, 6>;
+#[non_exhaustive]
+pub struct TestVersions {
+    pub test: Upgrade,
+    pub epoch: Upgrade,
+    pub da_committee: Upgrade,
+    pub vid2: Upgrade,
+    pub epoch_upgrade: Upgrade,
+    pub vid2_upgrade: Upgrade,
 }
 
-#[derive(Clone, Debug, Copy, Default, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub struct EpochsTestVersions {}
+pub const TEST_VERSIONS: TestVersions = TestVersions {
+    epoch: Upgrade::trivial(version(0, 3)),
+    da_committee: Upgrade::trivial(version(0, 4)),
+    vid2: Upgrade::trivial(version(0, 6)),
+    test: Upgrade::new(version(0, 1), version(0, 2)),
+    epoch_upgrade: Upgrade::new(version(0, 3), version(0, 4)),
+    vid2_upgrade: Upgrade::new(version(0, 5), version(0, 6)),
+};
 
-impl Versions for EpochsTestVersions {
-    type Base = StaticVersion<0, 3>;
-    type Upgrade = StaticVersion<0, 3>;
-    const UPGRADE_HASH: [u8; 32] = [
-        1, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0,
-        0, 0,
-    ];
-
-    type Epochs = StaticVersion<0, 3>;
-    type DrbAndHeaderUpgrade = StaticVersion<0, 5>;
-    type Vid2Upgrade = StaticVersion<0, 6>;
-}
-
-#[derive(Clone, Debug, Copy)]
-pub struct EpochUpgradeTestVersions {}
-
-impl Versions for EpochUpgradeTestVersions {
-    type Base = StaticVersion<0, 3>;
-    type Upgrade = StaticVersion<0, 4>;
-    const UPGRADE_HASH: [u8; 32] = [
-        1, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0,
-        0, 0,
-    ];
-
-    type Epochs = StaticVersion<0, 4>;
-    type DrbAndHeaderUpgrade = StaticVersion<0, 5>;
-    type Vid2Upgrade = StaticVersion<0, 6>;
-}
-
-#[derive(Clone, Debug, Copy)]
-pub struct DaCommitteeTestVersions {}
-
-impl Versions for DaCommitteeTestVersions {
-    type Base = StaticVersion<0, 4>;
-    type Upgrade = StaticVersion<0, 4>;
-    const UPGRADE_HASH: [u8; 32] = [
-        1, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0,
-        0, 0,
-    ];
-
-    type Epochs = StaticVersion<0, 1>;
-    type DrbAndHeaderUpgrade = StaticVersion<0, 1>;
-    // TODO(Chengyu): tweak this version
-    type Vid2Upgrade = StaticVersion<0, 6>;
-}
-
-#[derive(Clone, Debug, Copy, Default, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Vid2TestVersions {}
-
-impl Versions for Vid2TestVersions {
-    type Base = StaticVersion<0, 6>;
-    type Upgrade = StaticVersion<0, 6>;
-    const UPGRADE_HASH: [u8; 32] = [
-        1, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0,
-        0, 0,
-    ];
-
-    type Epochs = StaticVersion<0, 3>;
-    type DrbAndHeaderUpgrade = StaticVersion<0, 5>;
-    type Vid2Upgrade = StaticVersion<0, 6>;
-}
-
-#[derive(Clone, Debug, Copy, Default, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Vid2UpgradeTestVersions {}
-
-impl Versions for Vid2UpgradeTestVersions {
-    type Base = StaticVersion<0, 5>;
-    type Upgrade = StaticVersion<0, 6>;
-    const UPGRADE_HASH: [u8; 32] = [
-        1, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0,
-        0, 0,
-    ];
-
-    type Epochs = StaticVersion<0, 3>;
-    type DrbAndHeaderUpgrade = StaticVersion<0, 5>;
-    type Vid2Upgrade = StaticVersion<0, 6>;
-}
+pub type EpochVersion = StaticVersion<0, 3>;
+//pub type DrbAndHeaderUpgrade = StaticVersion<0, 5>;
+//pub type Vid2Upgrade = StaticVersion<0, 6>;
 
 #[cfg(test)]
 mod tests {
@@ -422,8 +349,9 @@ mod tests {
         utils::{genesis_epoch_from_version, option_epoch_from_block_number},
     };
     use serde::{Deserialize, Serialize};
+    use versions::{version, Upgrade};
 
-    use crate::node_types::{EpochsTestVersions, TestTypes, TestVersions};
+    use crate::node_types::TestTypes;
     #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Hash, Eq)]
     /// Dummy data used for test
     struct TestData {
@@ -441,10 +369,10 @@ mod tests {
 
     impl_has_epoch!(TestData);
 
-    #[tokio::test(flavor = "multi_thread")]
     /// Test that the view number affects the commitment post-marketplace
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_versioned_commitment_includes_view() {
-        let upgrade_lock = UpgradeLock::new();
+        let upgrade_lock = UpgradeLock::new(Upgrade::new(version(0, 1), version(0, 2)));
 
         let data = TestData {
             data: 10,
@@ -454,20 +382,14 @@ mod tests {
         let view_0 = ViewNumber::new(0);
         let view_1 = ViewNumber::new(1);
 
-        let versioned_data_0 = VersionedVoteData::<TestTypes, TestData, TestVersions>::new(
-            data,
-            view_0,
-            &upgrade_lock,
-        )
-        .await
-        .unwrap();
-        let versioned_data_1 = VersionedVoteData::<TestTypes, TestData, TestVersions>::new(
-            data,
-            view_1,
-            &upgrade_lock,
-        )
-        .await
-        .unwrap();
+        let versioned_data_0 =
+            VersionedVoteData::<TestTypes, TestData>::new(data, view_0, &upgrade_lock)
+                .await
+                .unwrap();
+        let versioned_data_1 =
+            VersionedVoteData::<TestTypes, TestData>::new(data, view_1, &upgrade_lock)
+                .await
+                .unwrap();
 
         let versioned_data_commitment_0: [u8; 32] = versioned_data_0.commit().into();
         let versioned_data_commitment_1: [u8; 32] = versioned_data_1.commit().into();
@@ -511,10 +433,10 @@ mod tests {
 
     #[test]
     fn test_genesis_epoch_from_version() {
-        let epoch = genesis_epoch_from_version::<TestVersions, TestTypes>();
+        let epoch = genesis_epoch_from_version(version(0, 1));
         assert_eq!(None, epoch);
 
-        let epoch = genesis_epoch_from_version::<EpochsTestVersions, TestTypes>();
+        let epoch = genesis_epoch_from_version(version(0, 1));
         assert_eq!(Some(EpochNumber::new(1)), epoch);
     }
 }

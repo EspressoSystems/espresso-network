@@ -33,14 +33,14 @@ use hotshot_types::{
 };
 use tracing::instrument;
 
-use crate::{traits::NodeImplementation, types::Event, SystemContext, Versions};
+use crate::{traits::NodeImplementation, types::Event, SystemContext};
 
 /// Event streaming handle for a [`SystemContext`] instance running in the background
 ///
 /// This type provides the means to message and interact with a background [`SystemContext`] instance,
 /// allowing the ability to receive [`Event`]s from it, send transactions to it, and interact with
 /// the underlying storage.
-pub struct SystemContextHandle<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> {
+pub struct SystemContextHandle<TYPES: NodeType, I: NodeImplementation<TYPES>> {
     /// The [sender](Sender) and [receiver](Receiver),
     /// to allow the application to communicate with HotShot.
     pub(crate) output_event_stream: (Sender<Event<TYPES>>, InactiveReceiver<Event<TYPES>>),
@@ -58,7 +58,7 @@ pub struct SystemContextHandle<TYPES: NodeType, I: NodeImplementation<TYPES>, V:
     pub(crate) network_registry: NetworkTaskRegistry,
 
     /// Internal reference to the underlying [`SystemContext`]
-    pub hotshot: Arc<SystemContext<TYPES, I, V>>,
+    pub hotshot: Arc<SystemContext<TYPES, I>>,
 
     /// Reference to the internal storage for consensus datum.
     pub(crate) storage: I::Storage,
@@ -73,9 +73,7 @@ pub struct SystemContextHandle<TYPES: NodeType, I: NodeImplementation<TYPES>, V:
     pub epoch_height: u64,
 }
 
-impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
-    SystemContextHandle<TYPES, I, V>
-{
+impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static> SystemContextHandle<TYPES, I> {
     /// Adds a hotshot consensus-related task to the `SystemContextHandle`.
     pub fn add_task<S: TaskState<Event = HotShotEvent<TYPES>> + 'static>(&mut self, task_state: S) {
         let task = Task::new(

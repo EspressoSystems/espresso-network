@@ -13,7 +13,6 @@ use std::{fmt::Debug, hash::Hash, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use vbs::version::StaticVersionType;
 
 use super::{
     block_contents::{BlockHeader, TestableBlock, Transaction},
@@ -195,25 +194,4 @@ pub trait NodeType:
         + LCV1StateSignatureKey
         + LCV2StateSignatureKey
         + LCV3StateSignatureKey;
-}
-
-/// Version information for HotShot
-pub trait Versions: Clone + Copy + Debug + Send + Sync + 'static {
-    /// The base version of HotShot this node is instantiated with.
-    type Base: StaticVersionType;
-
-    /// The version of HotShot this node may be upgraded to. Set equal to `Base` to disable upgrades.
-    type Upgrade: StaticVersionType;
-
-    /// The hash for the upgrade.
-    const UPGRADE_HASH: [u8; 32];
-
-    /// The version at which to switch over to epochs logic
-    type Epochs: StaticVersionType;
-
-    /// The version at which to use the upgraded DRB difficulty
-    type DrbAndHeaderUpgrade: StaticVersionType;
-
-    /// The version at which to use VID v3
-    type Vid2Upgrade: StaticVersionType;
 }

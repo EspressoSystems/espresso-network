@@ -9,12 +9,13 @@ use std::{collections::BTreeMap, sync::Arc, time::Instant};
 use futures::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use vbs::version::{StaticVersionType, Version};
+use vbs::version::Version;
+use versions::DRB_AND_HEADER_UPGRADE_VERSION;
 
 use crate::{
     data::EpochNumber,
     traits::{
-        node_implementation::{NodeType, Versions},
+        node_implementation::NodeType,
         storage::{LoadDrbProgressFn, StoreDrbProgressFn},
     },
     HotShotConfig,
@@ -35,14 +36,14 @@ pub struct DrbInput {
 pub type DrbDifficultySelectorFn =
     Arc<dyn Fn(Version) -> BoxFuture<'static, u64> + Send + Sync + 'static>;
 
-pub fn drb_difficulty_selector<TYPES: NodeType, V: Versions>(
+pub fn drb_difficulty_selector<TYPES: NodeType>(
     config: &HotShotConfig<TYPES>,
 ) -> DrbDifficultySelectorFn {
     let base_difficulty = config.drb_difficulty;
     let upgrade_difficulty = config.drb_upgrade_difficulty;
     Arc::new(move |version| {
         Box::pin(async move {
-            if version >= V::DrbAndHeaderUpgrade::VERSION {
+            if version >= DRB_AND_HEADER_UPGRADE_VERSION {
                 upgrade_difficulty
             } else {
                 base_difficulty

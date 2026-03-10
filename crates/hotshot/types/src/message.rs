@@ -19,10 +19,8 @@ use async_lock::RwLock;
 use committable::Committable;
 use hotshot_utils::anytrace::*;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use vbs::{
-    version::{StaticVersion, StaticVersionType, Version},
-    BinarySerializer, Serializer,
-};
+use vbs::version::Version;
+use versions::{Upgrade, DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, VID2_UPGRADE_VERSION};
 
 /// The version we should expect for external messages
 pub const EXTERNAL_MESSAGE_VERSION: Version = Version { major: 0, minor: 0 };
@@ -50,7 +48,7 @@ use crate::{
     traits::{
         election::Membership,
         network::{DataRequest, ResponseMessage, ViewMessage},
-        node_implementation::{NodeType, Versions},
+        node_implementation::NodeType,
         signature_key::SignatureKey,
     },
     utils::mnemonic,
@@ -577,11 +575,11 @@ where
     /// Checks that the signature of the quorum proposal is valid.
     /// # Errors
     /// Returns an error when the proposal signature is invalid.
-    pub async fn validate_signature<V: Versions>(
+    pub async fn validate_signature(
         &self,
         membership: &TYPES::Membership,
         _epoch_height: u64,
-        upgrade_lock: &UpgradeLock<TYPES, V>,
+        upgrade_lock: &UpgradeLock<TYPES>,
     ) -> Result<()> {
         let view_number = self.data.view_number();
         let view_leader_key = membership.leader(view_number, None)?;
@@ -620,32 +618,31 @@ where
     }
 }
 
+/// A lock for an upgrade certificate decided by HotShot.
 #[derive(Clone, Debug)]
-/// A lock for an upgrade certificate decided by HotShot, which doubles as `PhantomData` for an instance of the `Versions` trait.
-pub struct UpgradeLock<TYPES: NodeType, V: Versions> {
-    /// a shared lock to an upgrade certificate decided by consensus
+#[non_exhaustive]
+pub struct UpgradeLock<TYPES: NodeType> {
     pub decided_upgrade_certificate: Arc<RwLock<Option<UpgradeCertificate<TYPES>>>>,
-
-    /// phantom data for the `Versions` trait
-    pub _pd: PhantomData<V>,
+    pub upgrade: Upgrade,
 }
 
-impl<TYPES: NodeType, V: Versions> UpgradeLock<TYPES, V> {
-    #[allow(clippy::new_without_default)]
+impl<TYPES: NodeType> UpgradeLock<TYPES> {
     /// Create a new `UpgradeLock` for a fresh instance of HotShot
-    pub fn new() -> Self {
+    pub fn new(upgrade: Upgrade) -> Self {
         Self {
             decided_upgrade_certificate: Arc::new(RwLock::new(None)),
-            _pd: PhantomData::<V>,
+            upgrade,
         }
     }
 
-    #[allow(clippy::new_without_default)]
     /// Create a new `UpgradeLock` from an optional upgrade certificate
-    pub fn from_certificate(certificate: &Option<UpgradeCertificate<TYPES>>) -> Self {
+    pub fn from_certificate(
+        upgrade: Upgrade,
+        certificate: &Option<UpgradeCertificate<TYPES>>,
+    ) -> Self {
         Self {
             decided_upgrade_certificate: Arc::new(RwLock::new(certificate.clone())),
-            _pd: PhantomData::<V>,
+            upgrade,
         }
     }
 
@@ -666,16 +663,16 @@ impl<TYPES: NodeType, V: Versions> UpgradeLock<TYPES, V> {
         let version = match *upgrade_certificate {
             Some(ref cert) => {
                 if view >= cert.data.new_version_first_view {
-                    if cert.data.new_version == V::Upgrade::VERSION {
-                        V::Upgrade::VERSION
+                    if cert.data.new_version == self.upgrade.target {
+                        self.upgrade.target
                     } else {
                         bail!("The network has upgraded to a new version that we do not support!");
                     }
                 } else {
-                    V::Base::VERSION
+                    self.upgrade.base
                 }
             },
-            None => V::Base::VERSION,
+            None => self.upgrade.base,
         };
 
         Ok(version)
@@ -695,13 +692,13 @@ impl<TYPES: NodeType, V: Versions> UpgradeLock<TYPES, V> {
                     cert.data.old_version
                 }
             },
-            None => V::Base::VERSION,
+            None => self.upgrade.base,
         }
     }
 
     /// Return whether epochs are enabled in the given view
     pub async fn epochs_enabled(&self, view: ViewNumber) -> bool {
-        self.version_infallible(view).await >= V::Epochs::VERSION
+        self.version_infallible(view).await >= EPOCH_VERSION
     }
 
     /// Return whether `QuorumProposal2Legacy` is the correct message type for the given view
@@ -716,11 +713,11 @@ impl<TYPES: NodeType, V: Versions> UpgradeLock<TYPES, V> {
 
     /// Return whether epochs are enabled in the given view
     pub async fn upgraded_drb_and_header(&self, view: ViewNumber) -> bool {
-        self.version_infallible(view).await >= V::DrbAndHeaderUpgrade::VERSION
+        self.version_infallible(view).await >= DRB_AND_HEADER_UPGRADE_VERSION
     }
 
     pub async fn upgraded_vid2(&self, view: ViewNumber) -> bool {
-        self.version_infallible(view).await >= V::Vid2Upgrade::VERSION
+        self.version_infallible(view).await >= VID2_UPGRADE_VERSION
     }
 
     /// Serialize a message with a version number, using `message.view_number()` and an optional decided upgrade certificate to determine the message's version.
@@ -733,16 +730,13 @@ impl<TYPES: NodeType, V: Versions> UpgradeLock<TYPES, V> {
 
         let version = self.version(view).await?;
 
-        let serialized_message = match version {
-            // Associated constants cannot be used in pattern matches, so we do this trick instead.
-            v if v == V::Base::VERSION => Serializer::<V::Base>::serialize(&message),
-            v if v == V::Upgrade::VERSION => Serializer::<V::Upgrade>::serialize(&message),
-            v => {
-                bail!(
-                    "Attempted to serialize with version {v}, which is incompatible. This should \
-                     be impossible."
-                );
-            },
+        let serialized_message = if version == self.upgrade.base || version == self.upgrade.target {
+            versions::encode(version, message)
+        } else {
+            bail!(
+                "Attempted to serialize with version {version}, which is incompatible. This \
+                 should be impossible."
+            );
         };
 
         serialized_message
@@ -756,44 +750,29 @@ impl<TYPES: NodeType, V: Versions> UpgradeLock<TYPES, V> {
     /// # Errors
     ///
     /// Errors if deserialization fails.
-    pub async fn deserialize<M: Debug + HasViewNumber + for<'a> Deserialize<'a>>(
+    pub async fn deserialize<M: Debug + HasViewNumber + DeserializeOwned>(
         &self,
         message: &[u8],
     ) -> Result<(M, Version)> {
-        // Get the actual version from the message itself
-        let (actual_version, rest) = Version::deserialize(message)
+        let (version, deserialized_message) = versions::decode::<M>(message)
             .wrap()
-            .context(info!("Failed to read message version!"))?;
+            .context(info!("Failed to read version and message!"))?;
 
-        // Deserialize the message using the stated version
-        let deserialized_message: M = match actual_version {
-            // Special case: external messages (version 0.0)
-            v if v == EXTERNAL_MESSAGE_VERSION => {
-                Serializer::<StaticVersion<0, 0>>::deserialize(message)
-            },
-            v if v == V::Base::VERSION => Serializer::<V::Base>::deserialize(message),
-            v if v == V::Upgrade::VERSION => Serializer::<V::Upgrade>::deserialize(message),
-            v => {
-                let attempted_deserialization: M = match bincode::deserialize(rest) {
-                    Ok(m) => m,
-                    Err(e) => {
-                        bail!("Cannot deserialize message with stated version: {v}. Error: {e}");
-                    },
-                };
-
-                bail!(warn!(
-                    "Received a message with state version {v} which is invalid for its view: {:?}",
-                    attempted_deserialization
-                ));
-            },
+        if EXTERNAL_MESSAGE_VERSION != version
+            && self.upgrade.base != version
+            && self.upgrade.target != version
+        {
+            bail!(warn!(
+                "Received a message with state version {version} which is invalid for its view: \
+                 {:?}",
+                deserialized_message
+            ));
         }
-        .wrap()
-        .context(info!("Failed to deserialize message!"))?;
 
         // If the message is version 0.0, just return the deserialized message and the version.
         // We don't care about it matching the expected version for the view number.
-        if actual_version == EXTERNAL_MESSAGE_VERSION {
-            return Ok((deserialized_message, actual_version));
+        if version == EXTERNAL_MESSAGE_VERSION {
+            return Ok((deserialized_message, version));
         }
 
         // Get the view number associated with the message
@@ -803,13 +782,13 @@ impl<TYPES: NodeType, V: Versions> UpgradeLock<TYPES, V> {
         let expected_version = self.version(view).await?;
 
         // Check that the actual version matches the expected version
-        if actual_version != expected_version {
+        if version != expected_version {
             return Err(error!(format!(
                 "Message has invalid version number for its view. Expected: {expected_version}, \
-                 Actual: {actual_version}, View: {view:?}\n\n{deserialized_message:?}"
+                 Actual: {version}, View: {view:?}\n\n{deserialized_message:?}"
             )));
         };
 
-        Ok((deserialized_message, actual_version))
+        Ok((deserialized_message, version))
     }
 }

@@ -25,7 +25,7 @@ use hotshot_types::{
     },
     stake_table::StakeTableEntries,
     traits::{
-        node_implementation::{NodeImplementation, NodeType, Versions},
+        node_implementation::{NodeImplementation, NodeType},
         signature_key::SignatureKey,
         storage::Storage,
     },
@@ -44,7 +44,7 @@ use crate::{
 mod handlers;
 
 /// The state for the quorum proposal task.
-pub struct QuorumProposalTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> {
+pub struct QuorumProposalTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>> {
     /// Latest view number that has been proposed for.
     pub latest_proposed_view: ViewNumber,
 
@@ -94,7 +94,7 @@ pub struct QuorumProposalTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>
     pub formed_upgrade_certificate: Option<UpgradeCertificate<TYPES>>,
 
     /// Lock for a decided upgrade
-    pub upgrade_lock: UpgradeLock<TYPES, V>,
+    pub upgrade_lock: UpgradeLock<TYPES>,
 
     /// Number of blocks in an epoch, zero means there are no epochs
     pub epoch_height: u64,
@@ -106,9 +106,7 @@ pub struct QuorumProposalTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>
     pub first_epoch: Option<(ViewNumber, EpochNumber)>,
 }
 
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
-    QuorumProposalTaskState<TYPES, I, V>
-{
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> QuorumProposalTaskState<TYPES, I> {
     /// Create an event dependency
     #[instrument(skip_all, fields(id = self.id, latest_proposed_view = *self.latest_proposed_view), name = "Create event dependency", level = "info")]
     fn create_event_dependency(
@@ -457,7 +455,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
             for view in (*self.latest_proposed_view + 1)..=(*new_view) {
                 let maybe_cancel_sender = self.proposal_dependencies.remove(&ViewNumber::new(view));
                 if maybe_cancel_sender.as_ref().is_some_and(|s| !s.is_closed()) {
-                    tracing::error!("Aborting proposal dependency task for view {view}");
+                    tracing::debug!("Aborting proposal dependency task for view {view}");
                     let _ = maybe_cancel_sender.unwrap().try_broadcast(());
                 }
             }
@@ -746,7 +744,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
         let keep = self.proposal_dependencies.split_off(&view);
         while let Some((view, cancel_sender)) = self.proposal_dependencies.pop_first() {
             if !cancel_sender.is_closed() {
-                tracing::error!("Aborting proposal dependency task for view {view}");
+                tracing::debug!("Aborting proposal dependency task for view {view}");
                 let _ = cancel_sender.try_broadcast(());
             }
         }
@@ -755,8 +753,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
 }
 
 #[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TaskState
-    for QuorumProposalTaskState<TYPES, I, V>
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TaskState
+    for QuorumProposalTaskState<TYPES, I>
 {
     type Event = HotShotEvent<TYPES>;
 
@@ -772,7 +770,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TaskState
     fn cancel_subtasks(&mut self) {
         while let Some((view, cancel_sender)) = self.proposal_dependencies.pop_first() {
             if !cancel_sender.is_closed() {
-                tracing::error!("Aborting proposal dependency task for view {view}");
+                tracing::debug!("Aborting proposal dependency task for view {view}");
                 let _ = cancel_sender.try_broadcast(());
             }
         }

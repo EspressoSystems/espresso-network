@@ -22,7 +22,7 @@ use hotshot_types::{
     message::UpgradeLock,
     traits::{
         block_contents::{BlockHeader, BuilderFee, EncodeBytes},
-        node_implementation::{NodeType, Versions},
+        node_implementation::NodeType,
         signature_key::{BuilderSignatureKey, SignatureKey},
         BlockPayload,
     },
@@ -31,7 +31,8 @@ use hotshot_types::{
 use hotshot_utils::anytrace::*;
 use tokio::time::{sleep, timeout};
 use tracing::instrument;
-use vbs::version::{StaticVersionType, Version};
+use vbs::version::Version;
+use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION};
 
 use crate::{
     builder::v0_1::BuilderClient as BuilderClientBase,
@@ -68,7 +69,7 @@ pub struct BuilderResponse<TYPES: NodeType> {
 }
 
 /// Tracks state of a Transaction task
-pub struct TransactionTaskState<TYPES: NodeType, V: Versions> {
+pub struct TransactionTaskState<TYPES: NodeType> {
     /// The state's api
     pub builder_timeout: Duration,
 
@@ -103,13 +104,13 @@ pub struct TransactionTaskState<TYPES: NodeType, V: Versions> {
     pub id: u64,
 
     /// Lock for a decided upgrade
-    pub upgrade_lock: UpgradeLock<TYPES, V>,
+    pub upgrade_lock: UpgradeLock<TYPES>,
 
     /// Number of blocks in an epoch, zero means there are no epochs
     pub epoch_height: u64,
 }
 
-impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
+impl<TYPES: NodeType> TransactionTaskState<TYPES> {
     /// handle view change decide legacy or not
     pub async fn handle_view_change(
         &mut self,
@@ -144,7 +145,7 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
 
         // Short circuit if we are in epochs and we are likely proposing a transition block
         // If it's the first view of the upgrade, we don't need to check for transition blocks
-        if version >= V::Epochs::VERSION {
+        if version >= EPOCH_VERSION {
             let Some(epoch) = block_epoch else {
                 tracing::error!("Epoch is required for epoch-based view change");
                 return None;
@@ -273,7 +274,7 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
             },
         };
 
-        let Some(null_fee) = null_block::builder_fee::<TYPES, V>(num_storage_nodes, version) else {
+        let Some(null_fee) = null_block::builder_fee::<TYPES>(num_storage_nodes, version) else {
             tracing::error!("Failed to get null fee");
             return;
         };
@@ -303,7 +304,7 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
         version: Version,
         num_storage_nodes: usize,
     ) -> Option<PackedBundle<TYPES>> {
-        let Some(null_fee) = null_block::builder_fee::<TYPES, V>(num_storage_nodes, version) else {
+        let Some(null_fee) = null_block::builder_fee::<TYPES>(num_storage_nodes, version) else {
             tracing::error!("Failed to calculate null block fee.");
             return None;
         };
@@ -377,7 +378,7 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
                     },
                 };
 
-                if version < V::DrbAndHeaderUpgrade::VERSION {
+                if version < DRB_AND_HEADER_UPGRADE_VERSION {
                     return Ok(());
                 }
 
@@ -722,7 +723,7 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
 
 #[async_trait]
 /// task state implementation for Transactions Task
-impl<TYPES: NodeType, V: Versions> TaskState for TransactionTaskState<TYPES, V> {
+impl<TYPES: NodeType> TaskState for TransactionTaskState<TYPES> {
     type Event = HotShotEvent<TYPES>;
 
     async fn handle_event(

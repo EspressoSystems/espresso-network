@@ -7,7 +7,6 @@ use alloy::{
 use anyhow::{bail, Result};
 use clap::{ArgAction, Parser, Subcommand};
 use clap_serde_derive::ClapSerde;
-use demo::DelegationConfig;
 use espresso_contract_deployer::provider::connect_ledger;
 pub(crate) use hotshot_types::{
     light_client::StateSignKey,
@@ -15,7 +14,6 @@ pub(crate) use hotshot_types::{
 };
 pub(crate) use jf_signature::bls_over_bn254::KeyPair as BLSKeyPair;
 use metadata::MetadataUriArgs;
-use parse::Commission;
 use sequencer_utils::logging;
 use serde::{Deserialize, Serialize};
 use signature::OutputArgs;
@@ -23,15 +21,13 @@ use url::Url;
 
 pub(crate) mod claim;
 mod cli;
+pub(crate) mod concurrent;
 pub(crate) mod delegation;
 /// Used by sequencer, espresso-dev-node, staking-ui-service tests.
 pub mod demo;
 pub(crate) mod info;
 pub(crate) mod l1;
 pub(crate) mod metadata;
-
-// Re-exported for integration tests (test_real_mainnet_node_metadata)
-pub use metadata::fetch_metadata;
 // TODO: Replace with imports from staking-ui-service once version compatibility is resolved
 pub(crate) mod metadata_types;
 // TODO: Replace with imports from staking-ui-service once version compatibility is resolved
@@ -39,20 +35,31 @@ pub(crate) mod openmetrics;
 pub(crate) mod output;
 pub(crate) mod parse;
 pub(crate) mod receipt;
-/// Used by sequencer tests (fetch_commission, update_commission).
-pub mod registration;
-/// Used by staking-cli integration tests (NodeSignatures).
-pub mod signature;
+pub(crate) mod registration;
+pub(crate) mod signature;
 pub(crate) mod transaction;
+pub(crate) mod tx_log;
 
 /// Used by staking-cli integration tests.
 #[cfg(feature = "testing")]
 pub mod deploy;
 
 pub use cli::run;
+// Used by staking-cli integration tests.
+pub use metadata::fetch_metadata;
+// Used by staking-cli integration tests.
+pub use parse::Commission;
+// Used by sequencer tests.
+pub use registration::{fetch_commission, update_commission};
+// Used by staking-cli integration tests.
+pub use signature::NodeSignatures;
+// Used by staking-cli integration tests.
+pub use transaction::Transaction;
+// Used by staking-cli integration tests.
+pub use tx_log::TxLog;
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
-pub enum Network {
+pub(crate) enum Network {
     Mainnet,
     Decaf,
     Local,
@@ -66,12 +73,13 @@ pub const DEV_MNEMONIC: &str = "test test test test test test test test test tes
 pub const DEV_PRIVATE_KEY: &str =
     "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
 
+/// Mnemonic account index where demo validators start (indices 0-19 reserved for other uses).
+pub const DEMO_VALIDATOR_START_INDEX: u32 = 20;
+
 /// CLI to interact with the Espresso stake table contract.
-///
-/// Used by staking-cli integration tests.
 #[derive(ClapSerde, Clone, Debug, Deserialize, Serialize)]
-#[command(version, about, long_about = None)]
-pub struct Config {
+#[command(version, long_version = sequencer_utils::build_info!().clap_version(), about, long_about = None)]
+pub(crate) struct Config {
     /// L1 Ethereum RPC.
     #[clap(long, env = "L1_PROVIDER")]
     #[default(Url::parse("http://localhost:8545").unwrap())]
@@ -93,6 +101,7 @@ pub struct Config {
 
     #[clap(flatten)]
     #[serde(default)]
+    #[clap_serde]
     pub signer: SignerConfig,
 
     /// Export calldata for multisig wallets instead of sending transaction.
@@ -129,7 +138,7 @@ pub struct Config {
 }
 
 #[derive(ClapSerde, Parser, Clone, Debug, Deserialize, Serialize)]
-pub struct SignerConfig {
+pub(crate) struct SignerConfig {
     /// The mnemonic to use when deriving the key.
     #[clap(long, env = "MNEMONIC")]
     pub mnemonic: Option<String>,
@@ -152,7 +161,7 @@ pub struct SignerConfig {
 }
 
 #[derive(Clone, Debug)]
-pub enum ValidSignerConfig {
+pub(crate) enum ValidSignerConfig {
     Mnemonic {
         mnemonic: String,
         account_index: u32,
@@ -253,7 +262,7 @@ impl Config {
 }
 
 #[derive(Subcommand, Debug, Clone)]
-pub enum Commands {
+pub(crate) enum Commands {
     /// Display version information of the staking-cli.
     Version,
     /// Display the current configuration
@@ -397,23 +406,25 @@ pub enum Commands {
         #[clap(long, value_parser = parse_ether)]
         amount: U256,
     },
-    /// Register the validators and delegates for the local demo.
+    /// Demo commands for testing and development
+    Demo(demo::Demo),
+    /// [DEPRECATED] Use `demo stake` instead. Register validators and create delegators for demo.
+    #[clap(hide = true)]
     StakeForDemo {
         /// The number of validators to register.
-        ///
-        /// The default (5) works for the local native and docker demos.
         #[clap(long, default_value_t = 5)]
         num_validators: u16,
 
         /// The number of delegators to create per validator.
-        ///
-        /// If not specified, a random number (2-5) of delegators is created per validator.
-        /// Must be <= 100,000.
         #[clap(long, env = "NUM_DELEGATORS_PER_VALIDATOR", value_parser = clap::value_parser!(u64).range(..=100000))]
         num_delegators_per_validator: Option<u64>,
 
-        #[arg(long, value_enum, env = "DELEGATION_CONFIG", default_value_t = DelegationConfig::default())]
-        delegation_config: DelegationConfig,
+        #[clap(long, value_enum, env = "DELEGATION_CONFIG", default_value_t = demo::DelegationConfig::default())]
+        delegation_config: demo::DelegationConfig,
+
+        /// Number of concurrent transaction submissions
+        #[clap(long, default_value_t = tx_log::DEFAULT_CONCURRENCY)]
+        concurrency: usize,
     },
     /// Export validator node signatures for address validation.
     ExportNodeSignatures {

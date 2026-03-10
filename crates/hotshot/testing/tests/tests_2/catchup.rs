@@ -7,7 +7,7 @@
 use std::time::Duration;
 
 use hotshot_example_types::node_types::{
-    CombinedImpl, PushCdnImpl, TestTypes, TestTypesRandomizedLeader, TestVersions,
+    CombinedImpl, PushCdnImpl, TEST_VERSIONS, TestTypes, TestTypesRandomizedLeader
 };
 use hotshot_macros::cross_tests;
 use hotshot_testing::{
@@ -21,7 +21,7 @@ use hotshot_testing::{
 #[cfg(test)]
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_catchup() {
-    use hotshot_example_types::node_types::{MemoryImpl, TestTypes, TestVersions};
+    use hotshot_example_types::node_types::{MemoryImpl, TestTypes};
     use hotshot_testing::{
         block_builder::SimpleBuilderImplementation,
         overall_safety_task::OverallSafetyPropertiesDescription,
@@ -33,7 +33,7 @@ async fn test_catchup() {
         next_view_timeout: 2000,
         ..Default::default()
     };
-    let mut metadata: TestDescription<TestTypes, MemoryImpl, TestVersions> =
+    let mut metadata: TestDescription<TestTypes, MemoryImpl> =
         TestDescription::default().set_num_nodes(14, 7);
     let catchup_node = vec![ChangeNode {
         idx: 13,
@@ -68,7 +68,7 @@ async fn test_catchup() {
 #[cfg(test)]
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_catchup_cdn() {
-    use hotshot_example_types::node_types::{PushCdnImpl, TestTypes, TestVersions};
+    use hotshot_example_types::node_types::{PushCdnImpl, TestTypes};
     use hotshot_testing::{
         block_builder::SimpleBuilderImplementation,
         overall_safety_task::OverallSafetyPropertiesDescription,
@@ -80,7 +80,7 @@ async fn test_catchup_cdn() {
         next_view_timeout: 2000,
         ..Default::default()
     };
-    let mut metadata: TestDescription<TestTypes, PushCdnImpl, TestVersions> =
+    let mut metadata: TestDescription<TestTypes, PushCdnImpl> =
         TestDescription::default().set_num_nodes(14, 7);
     let catchup_nodes = vec![ChangeNode {
         idx: 18,
@@ -109,7 +109,7 @@ async fn test_catchup_cdn() {
 #[cfg(test)]
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_catchup_one_node() {
-    use hotshot_example_types::node_types::{MemoryImpl, TestTypes, TestVersions};
+    use hotshot_example_types::node_types::{MemoryImpl, TestTypes};
     use hotshot_testing::{
         block_builder::SimpleBuilderImplementation,
         overall_safety_task::OverallSafetyPropertiesDescription,
@@ -121,7 +121,7 @@ async fn test_catchup_one_node() {
         next_view_timeout: 2000,
         ..Default::default()
     };
-    let mut metadata: TestDescription<TestTypes, MemoryImpl, TestVersions> =
+    let mut metadata: TestDescription<TestTypes, MemoryImpl> =
         TestDescription::default().set_num_nodes(14, 7);
     let catchup_nodes = vec![ChangeNode {
         idx: 13,
@@ -152,7 +152,7 @@ async fn test_catchup_one_node() {
 #[cfg(test)]
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_catchup_in_view_sync() {
-    use hotshot_example_types::node_types::{MemoryImpl, TestTypes, TestVersions};
+    use hotshot_example_types::node_types::{MemoryImpl, TestTypes};
     use hotshot_testing::{
         block_builder::SimpleBuilderImplementation,
         overall_safety_task::OverallSafetyPropertiesDescription,
@@ -164,7 +164,7 @@ async fn test_catchup_in_view_sync() {
         next_view_timeout: 2000,
         ..Default::default()
     };
-    let mut metadata: TestDescription<TestTypes, MemoryImpl, TestVersions> =
+    let mut metadata: TestDescription<TestTypes, MemoryImpl> =
         TestDescription::default().set_num_nodes(14, 7);
     let catchup_nodes = vec![
         ChangeNode {
@@ -202,7 +202,7 @@ async fn test_catchup_in_view_sync() {
 #[cfg(test)]
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_catchup_reload() {
-    use hotshot_example_types::node_types::{MemoryImpl, TestTypes, TestVersions};
+    use hotshot_example_types::node_types::{MemoryImpl, TestTypes};
     use hotshot_testing::{
         block_builder::SimpleBuilderImplementation,
         overall_safety_task::OverallSafetyPropertiesDescription,
@@ -214,7 +214,7 @@ async fn test_catchup_reload() {
         next_view_timeout: 2000,
         ..Default::default()
     };
-    let mut metadata: TestDescription<TestTypes, MemoryImpl, TestVersions> =
+    let mut metadata: TestDescription<TestTypes, MemoryImpl> =
         TestDescription::default().set_num_nodes(14, 7);
     let catchup_node = vec![ChangeNode {
         idx: 13,
@@ -251,7 +251,7 @@ cross_tests!(
     TestName: test_all_restart,
     Impls: [CombinedImpl, PushCdnImpl],
     Types: [TestTypes, TestTypesRandomizedLeader],
-    Versions: [TestVersions],
+    Versions: [TEST_VERSIONS.test],
     Ignore: false,
     Metadata: {
       let timing_data = TimingData {
@@ -299,14 +299,14 @@ cross_tests!(
     TestName: test_all_restart_one_da,
     Impls: [CombinedImpl],
     Types: [TestTypes],
-    Versions: [TestVersions],
+    Versions: [TEST_VERSIONS.test],
     Ignore: false,
     Metadata: {
       let timing_data = TimingData {
           next_view_timeout: 2000,
           ..Default::default()
       };
-      let mut metadata: TestDescription<TestTypes, CombinedImpl, TestVersions> =
+      let mut metadata: TestDescription<TestTypes, CombinedImpl> =
           TestDescription::default().set_num_nodes(14,1);
 
       let mut catchup_nodes = vec![];
@@ -345,7 +345,7 @@ cross_tests!(
     TestName: test_staggered_restart,
     Impls: [CombinedImpl],
     Types: [TestTypes],
-    Versions: [TestVersions],
+    Versions: [TEST_VERSIONS.test],
     Ignore: false,
     Metadata: {
       let mut metadata = TestDescription::default().set_num_nodes(10,4);
