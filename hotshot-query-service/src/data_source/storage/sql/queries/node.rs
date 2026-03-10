@@ -29,21 +29,20 @@ use tracing::instrument;
 
 use super::{
     super::transaction::{Transaction, TransactionMode, Write},
-    DecodeError, HEADER_COLUMNS, QueryBuilder,
+    DecodeError, QueryBuilder, HEADER_COLUMNS,
 };
 use crate::{
-    Header, MissingSnafu, QueryError, QueryResult,
     availability::{NamespaceId, QueryableHeader},
     data_source::storage::{
-        Aggregate, AggregatesStorage, NodeStorage, PayloadMetadata, UpdateAggregatesStorage,
-        pruning::PrunedHeightStorage,
+        pruning::PrunedHeightStorage, Aggregate, AggregatesStorage, NodeStorage, PayloadMetadata,
+        UpdateAggregatesStorage,
     },
     node::{
         BlockId, ResourceSyncStatus, SyncStatus, SyncStatusQueryData, SyncStatusRange,
         TimeWindowQueryData, WindowStart,
     },
     types::HeightIndexed,
-    with_backend,
+    with_backend, Header, MissingSnafu, QueryError, QueryResult,
 };
 
 #[async_trait]
@@ -834,9 +833,9 @@ mod test {
     use crate::{
         availability::LeafQueryData,
         data_source::{
-            Transaction as _, VersionedDataSource,
             sql::testing::TmpDb,
             storage::{SqlStorage, StorageConnectionType, UpdateAvailabilityStorage},
+            Transaction as _, VersionedDataSource,
         },
         testing::mocks::MockTypes,
     };
