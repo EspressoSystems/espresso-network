@@ -22,6 +22,7 @@ use vec1::Vec1;
 
 pub use crate::utils::{View, ViewInner};
 use crate::{
+    constants::EPOCH_PARTICIPATION_HISTORY,
     data::{
         EpochNumber, Leaf2, QuorumProposalWrapper, VidCommitment, VidDisperse,
         VidDisperseAndDuration, VidDisperseShare, ViewNumber,
@@ -331,6 +332,12 @@ impl<TYPES: NodeType> ValidatorParticipation<TYPES> {
         self.previous_epoch_participation
             .insert(self.epoch, self.current_epoch_participation.clone());
 
+        self.previous_epoch_participation =
+            self.previous_epoch_participation
+                .split_off(&TYPES::Epoch::new(
+                    *self.epoch - EPOCH_PARTICIPATION_HISTORY,
+                ));
+
         self.epoch = epoch;
         self.current_epoch_participation = HashMap::new();
     }
@@ -503,6 +510,12 @@ impl<TYPES: NodeType> VoteParticipation<TYPES> {
                 self.current_epoch_participation.clone(),
                 self.current_epoch_num_views,
             ),
+        );
+
+        self.previous_epoch_participation = self.previous_epoch_participation.split_off(
+            &self
+                .epoch
+                .map(|e| TYPES::Epoch::new(*e - EPOCH_PARTICIPATION_HISTORY)),
         );
 
         self.epoch = epoch;
