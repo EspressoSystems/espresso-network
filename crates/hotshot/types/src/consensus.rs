@@ -335,7 +335,7 @@ impl<TYPES: NodeType> ValidatorParticipation<TYPES> {
         self.previous_epoch_participation =
             self.previous_epoch_participation
                 .split_off(&TYPES::Epoch::new(
-                    *self.epoch - EPOCH_PARTICIPATION_HISTORY,
+                    self.epoch.saturating_sub(EPOCH_PARTICIPATION_HISTORY),
                 ));
 
         self.epoch = epoch;
@@ -507,7 +507,7 @@ impl<TYPES: NodeType> VoteParticipation<TYPES> {
         self.previous_epoch_participation = self.previous_epoch_participation.split_off(
             &self
                 .epoch
-                .map(|e| TYPES::Epoch::new(*e - EPOCH_PARTICIPATION_HISTORY)),
+                .map(|e| TYPES::Epoch::new(e.saturating_sub(EPOCH_PARTICIPATION_HISTORY))),
         );
 
         self.epoch = epoch;
