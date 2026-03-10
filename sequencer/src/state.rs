@@ -41,6 +41,12 @@ pub(crate) async fn compute_state_update(
 ) -> anyhow::Result<(ValidatedState, Delta)> {
     let header = proposed_leaf.block_header();
 
+    let mut parent_state = parent_state.clone();
+
+    if proposed_leaf.block_header().version() > parent_leaf.block_header().version() {
+        parent_state.chain_config = proposed_leaf.block_header().chain_config()
+    }
+
     let (state, delta, total_rewards_distributed) = parent_state
         .apply_header(
             instance,
