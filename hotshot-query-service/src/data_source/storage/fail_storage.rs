@@ -37,7 +37,7 @@ use crate::{
         update, VersionedDataSource,
     },
     metrics::PrometheusMetrics,
-    node::{SyncStatus, TimeWindowQueryData, WindowStart},
+    node::{SyncStatusQueryData, TimeWindowQueryData, WindowStart},
     status::HasMetrics,
     Header, Payload, QueryError, QueryResult,
 };
@@ -548,7 +548,7 @@ where
         self.inner.vid_share(id).await
     }
 
-    async fn sync_status(&mut self) -> QueryResult<SyncStatus> {
+    async fn sync_status(&mut self) -> QueryResult<SyncStatusQueryData> {
         self.maybe_fail_read(FailableAction::Any).await?;
         self.inner.sync_status().await
     }
