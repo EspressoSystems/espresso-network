@@ -80,10 +80,7 @@ pub struct Options {
 
 impl Default for Options {
     fn default() -> Self {
-        Self {
-            path: PathBuf::from("data"),
-            consensus_view_retention: 130000,
-        }
+        Self::parse_from(std::iter::empty::<String>())
     }
 }
 
