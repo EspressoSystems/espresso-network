@@ -23,10 +23,7 @@ use sqlx::{FromRow, Row};
 use tagged_base64::{Tagged, TaggedBase64};
 
 use super::{
-    super::{
-        db::with_backend,
-        transaction::{Transaction, TransactionMode},
-    },
+    super::transaction::{Transaction, TransactionMode},
     DecodeError, BLOCK_COLUMNS,
 };
 use crate::{
@@ -45,7 +42,7 @@ use crate::{
         TransactionSummaryFilter,
     },
     types::HeightIndexed,
-    Header, Payload, QueryError, QueryResult, Transaction as HotshotTransaction,
+    with_backend, Header, Payload, QueryError, QueryResult, Transaction as HotshotTransaction,
 };
 
 impl From<sqlx::Error> for GetExplorerSummaryError {

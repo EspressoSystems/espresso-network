@@ -30,7 +30,7 @@ use sqlx::types::{BitVec, JsonValue};
 
 use super::{
     super::{
-        db::{with_backend, DbBackend},
+        db::DbBackend,
         transaction::{Transaction, TransactionMode, Write},
     },
     DecodeError, QueryBuilder,
@@ -42,7 +42,7 @@ use crate::{
         MerklizedStateHeightStorage, MerklizedStateStorage,
     },
     merklized_state::{MerklizedState, Snapshot},
-    QueryError, QueryResult,
+    with_backend, QueryError, QueryResult,
 };
 
 #[async_trait]

@@ -158,6 +158,20 @@ impl BackendTransaction {
         }
     }
 
+    pub(crate) fn as_postgres_mut(&mut self) -> &mut sqlx::PgConnection {
+        let Self::Postgres(tx) = self else {
+            unreachable!("expected Postgres backend, got Sqlite")
+        };
+        tx.as_mut()
+    }
+
+    pub(crate) fn as_sqlite_mut(&mut self) -> &mut sqlx::SqliteConnection {
+        let Self::Sqlite(tx) = self else {
+            unreachable!("expected Sqlite backend, got Postgres")
+        };
+        tx.as_mut()
+    }
+
     pub async fn commit(self) -> anyhow::Result<()> {
         match self {
             Self::Postgres(tx) => tx.commit().await?,
@@ -179,13 +193,12 @@ impl BackendTransaction {
 ///
 /// Provides a binding to the inner `sqlx::Transaction` regardless of which backend is active,
 /// allowing callers to write backend-agnostic code that still operates on concrete types.
+#[macro_export]
 macro_rules! with_backend {
     ($self:expr, |$tx:ident| $body:expr) => {
         match &mut $self.inner {
-            $crate::data_source::storage::sql::db::BackendTransaction::Postgres($tx) => $body,
-            $crate::data_source::storage::sql::db::BackendTransaction::Sqlite($tx) => $body,
+            $crate::data_source::storage::sql::BackendTransaction::Postgres($tx) => $body,
+            $crate::data_source::storage::sql::BackendTransaction::Sqlite($tx) => $body,
         }
     };
 }
-
-pub(crate) use with_backend;

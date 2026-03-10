@@ -21,10 +21,7 @@ use snafu::OptionExt;
 use sqlx::Row;
 
 use super::{
-    super::{
-        db::with_backend,
-        transaction::{Transaction, TransactionMode},
-    },
+    super::transaction::{Transaction, TransactionMode},
     QueryBuilder, BLOCK_COLUMNS, LEAF_COLUMNS, PAYLOAD_COLUMNS, PAYLOAD_METADATA_COLUMNS,
     VID_COMMON_COLUMNS, VID_COMMON_METADATA_COLUMNS,
 };
@@ -35,7 +32,7 @@ use crate::{
     },
     data_source::storage::{AvailabilityStorage, PayloadMetadata, VidCommonMetadata},
     types::HeightIndexed,
-    Header, MissingSnafu, Payload, QueryResult,
+    with_backend, Header, MissingSnafu, Payload, QueryResult,
 };
 
 #[async_trait]

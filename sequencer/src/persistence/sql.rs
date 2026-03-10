@@ -37,8 +37,8 @@ use hotshot_query_service::{
         storage::{
             pruning::PrunerCfg,
             sql::{
-                include_migrations, query, query_as, BackendTransaction, Config, DbBackend, Read,
-                SqlPool, SqlStorage, StorageConnectionType, Transaction, TransactionMode, Write,
+                include_migrations, query, query_as, Config, DbBackend, Read, SqlPool, SqlStorage,
+                StorageConnectionType, Transaction, TransactionMode, Write,
             },
             AvailabilityStorage,
         },
@@ -49,6 +49,7 @@ use hotshot_query_service::{
         Provider,
     },
     merklized_state::MerklizedState,
+    with_backend,
 };
 use hotshot_types::{
     data::{
@@ -79,15 +80,6 @@ use crate::{
     persistence::{migrate_network_config, persistence_metrics::PersistenceMetricsValue},
     NodeType, SeqTypes, ViewNumber, RECENT_STAKE_TABLES_LIMIT,
 };
-
-macro_rules! with_backend {
-    ($tx:expr, |$inner:ident| $body:expr) => {
-        match &mut $tx.inner {
-            BackendTransaction::Postgres($inner) => $body,
-            BackendTransaction::Sqlite($inner) => $body,
-        }
-    };
-}
 
 /// Options for Postgres-backed persistence.
 #[derive(Parser, Clone, Derivative)]

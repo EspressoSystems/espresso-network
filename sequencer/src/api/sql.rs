@@ -20,13 +20,13 @@ use hotshot_query_service::{
     data_source::{
         sql::{Config, SqlDataSource, Transaction},
         storage::{
-            sql::{BackendTransaction, TransactionMode, Write},
+            sql::{TransactionMode, Write},
             AvailabilityStorage, MerklizedStateStorage, NodeStorage, SqlStorage,
         },
         VersionedDataSource,
     },
     merklized_state::Snapshot,
-    Resolvable,
+    with_backend, Resolvable,
 };
 use hotshot_types::{
     data::{EpochNumber, QuorumProposalWrapper, ViewNumber},
@@ -41,15 +41,6 @@ use jf_merkle_tree_compat::{
 };
 use sqlx::{Encode, Row, Type};
 use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION};
-
-macro_rules! with_backend {
-    ($tx:expr, |$inner:ident| $body:expr) => {
-        match &mut $tx.inner {
-            BackendTransaction::Postgres($inner) => $body,
-            BackendTransaction::Sqlite($inner) => $body,
-        }
-    };
-}
 
 use super::{
     data_source::{Provider, SequencerDataSource},

@@ -39,7 +39,7 @@ use jf_merkle_tree_compat::prelude::MerkleProof;
 use sqlx::{query_builder::Separated, Database, Encode, Execute, Executor, QueryBuilder, Type};
 
 use super::{
-    db::{with_backend, BackendTransaction, DbBackend, SqlPool},
+    db::{BackendTransaction, DbBackend, SqlPool},
     queries::{
         self,
         state::{batch_insert_hashes, build_hash_batch_insert, collect_nodes_from_proofs, Node},
@@ -55,7 +55,7 @@ use crate::{
     },
     merklized_state::{MerklizedState, UpdateStateData},
     types::HeightIndexed,
-    Header, Payload, QueryError, QueryResult,
+    with_backend, Header, Payload, QueryError, QueryResult,
 };
 
 /// Marker type indicating a transaction with read-write access to the database.

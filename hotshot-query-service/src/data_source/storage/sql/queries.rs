@@ -27,10 +27,7 @@ use hotshot_types::{
 };
 use sqlx::{Arguments, FromRow, Row};
 
-use super::{
-    db::{BackendTransaction, DbBackend},
-    Transaction,
-};
+use super::{db::DbBackend, Transaction};
 use crate::{
     availability::{
         BlockId, BlockQueryData, LeafQueryData, PayloadQueryData, QueryableHeader,
@@ -68,6 +65,75 @@ pub enum BackendQuery<'q> {
     Sqlite(sqlx::query::Query<'q, sqlx::Sqlite, <sqlx::Sqlite as sqlx::Database>::Arguments<'q>>),
 }
 
+/// Generate `fetch_one`, `fetch_optional`, `fetch_all`, and `fetch` methods for a
+/// backend-dispatched query type. `$wrap_pg` and `$wrap_sq` are applied to each row returned
+/// by the Postgres and Sqlite variants respectively. `fetch_where` bounds are only added to
+/// the `fetch` method (which introduces its own `'e` lifetime).
+macro_rules! impl_backend_fetch {
+    ($Output:ty, $wrap_pg:expr, $wrap_sq:expr $(, fetch_where $($fetch_extra:tt)+)?) => {
+        pub async fn fetch_one<Mode>(
+            self,
+            tx: &mut Transaction<Mode>,
+        ) -> Result<$Output, sqlx::Error> {
+            match self {
+                Self::Postgres(q) => Ok($wrap_pg(q.fetch_one(tx.inner.as_postgres_mut()).await?)),
+                Self::Sqlite(q) => Ok($wrap_sq(q.fetch_one(tx.inner.as_sqlite_mut()).await?)),
+            }
+        }
+
+        pub async fn fetch_optional<Mode>(
+            self,
+            tx: &mut Transaction<Mode>,
+        ) -> Result<Option<$Output>, sqlx::Error> {
+            match self {
+                Self::Postgres(q) => Ok(q.fetch_optional(tx.inner.as_postgres_mut()).await?.map($wrap_pg)),
+                Self::Sqlite(q) => Ok(q.fetch_optional(tx.inner.as_sqlite_mut()).await?.map($wrap_sq)),
+            }
+        }
+
+        pub async fn fetch_all<Mode>(
+            self,
+            tx: &mut Transaction<Mode>,
+        ) -> Result<Vec<$Output>, sqlx::Error> {
+            match self {
+                Self::Postgres(q) => Ok(q
+                    .fetch_all(tx.inner.as_postgres_mut())
+                    .await?
+                    .into_iter()
+                    .map($wrap_pg)
+                    .collect()),
+                Self::Sqlite(q) => Ok(q
+                    .fetch_all(tx.inner.as_sqlite_mut())
+                    .await?
+                    .into_iter()
+                    .map($wrap_sq)
+                    .collect()),
+            }
+        }
+
+        pub fn fetch<'e, Mode>(
+            self,
+            tx: &'e mut Transaction<Mode>,
+        ) -> BoxStream<'e, Result<$Output, sqlx::Error>>
+        where
+            'q: 'e,
+            $($($fetch_extra)+)?
+        {
+            use futures::StreamExt;
+            match self {
+                Self::Postgres(q) => q
+                    .fetch(tx.inner.as_postgres_mut())
+                    .map(|r| r.map($wrap_pg))
+                    .boxed(),
+                Self::Sqlite(q) => q
+                    .fetch(tx.inner.as_sqlite_mut())
+                    .map(|r| r.map($wrap_sq))
+                    .boxed(),
+            }
+        }
+    };
+}
+
 impl<'q> BackendQuery<'q> {
     pub fn bind<T>(self, value: T) -> Self
     where
@@ -85,90 +151,13 @@ impl<'q> BackendQuery<'q> {
     }
 
     pub async fn execute<Mode>(self, tx: &mut Transaction<Mode>) -> Result<u64, sqlx::Error> {
-        match (self, &mut tx.inner) {
-            (Self::Postgres(q), BackendTransaction::Postgres(inner)) => {
-                Ok(q.execute(inner.as_mut()).await?.rows_affected())
-            },
-            (Self::Sqlite(q), BackendTransaction::Sqlite(inner)) => {
-                Ok(q.execute(inner.as_mut()).await?.rows_affected())
-            },
-            _ => unreachable!("query backend must match transaction backend"),
+        match self {
+            Self::Postgres(q) => Ok(q.execute(tx.inner.as_postgres_mut()).await?.rows_affected()),
+            Self::Sqlite(q) => Ok(q.execute(tx.inner.as_sqlite_mut()).await?.rows_affected()),
         }
     }
 
-    pub async fn fetch_one<Mode>(
-        self,
-        tx: &mut Transaction<Mode>,
-    ) -> Result<BackendRow, sqlx::Error> {
-        match (self, &mut tx.inner) {
-            (Self::Postgres(q), BackendTransaction::Postgres(inner)) => {
-                Ok(BackendRow::Postgres(q.fetch_one(inner.as_mut()).await?))
-            },
-            (Self::Sqlite(q), BackendTransaction::Sqlite(inner)) => {
-                Ok(BackendRow::Sqlite(q.fetch_one(inner.as_mut()).await?))
-            },
-            _ => unreachable!("query backend must match transaction backend"),
-        }
-    }
-
-    pub async fn fetch_optional<Mode>(
-        self,
-        tx: &mut Transaction<Mode>,
-    ) -> Result<Option<BackendRow>, sqlx::Error> {
-        match (self, &mut tx.inner) {
-            (Self::Postgres(q), BackendTransaction::Postgres(inner)) => Ok(q
-                .fetch_optional(inner.as_mut())
-                .await?
-                .map(BackendRow::Postgres)),
-            (Self::Sqlite(q), BackendTransaction::Sqlite(inner)) => Ok(q
-                .fetch_optional(inner.as_mut())
-                .await?
-                .map(BackendRow::Sqlite)),
-            _ => unreachable!("query backend must match transaction backend"),
-        }
-    }
-
-    pub async fn fetch_all<Mode>(
-        self,
-        tx: &mut Transaction<Mode>,
-    ) -> Result<Vec<BackendRow>, sqlx::Error> {
-        match (self, &mut tx.inner) {
-            (Self::Postgres(q), BackendTransaction::Postgres(inner)) => Ok(q
-                .fetch_all(inner.as_mut())
-                .await?
-                .into_iter()
-                .map(BackendRow::Postgres)
-                .collect()),
-            (Self::Sqlite(q), BackendTransaction::Sqlite(inner)) => Ok(q
-                .fetch_all(inner.as_mut())
-                .await?
-                .into_iter()
-                .map(BackendRow::Sqlite)
-                .collect()),
-            _ => unreachable!("query backend must match transaction backend"),
-        }
-    }
-
-    pub fn fetch<'e, Mode>(
-        self,
-        tx: &'e mut Transaction<Mode>,
-    ) -> BoxStream<'e, Result<BackendRow, sqlx::Error>>
-    where
-        'q: 'e,
-    {
-        use futures::StreamExt;
-        match (self, &mut tx.inner) {
-            (Self::Postgres(q), BackendTransaction::Postgres(inner)) => q
-                .fetch(inner.as_mut())
-                .map(|r| r.map(BackendRow::Postgres))
-                .boxed(),
-            (Self::Sqlite(q), BackendTransaction::Sqlite(inner)) => q
-                .fetch(inner.as_mut())
-                .map(|r| r.map(BackendRow::Sqlite))
-                .boxed(),
-            _ => unreachable!("query backend must match transaction backend"),
-        }
-    }
+    impl_backend_fetch!(BackendRow, BackendRow::Postgres, BackendRow::Sqlite);
 }
 
 /// A SQL query-as with backend-dispatched arguments. Returned by [`QueryBuilder::query_as`].
@@ -206,62 +195,7 @@ where
         }
     }
 
-    pub async fn fetch_one<Mode>(self, tx: &mut Transaction<Mode>) -> Result<T, sqlx::Error> {
-        match (self, &mut tx.inner) {
-            (Self::Postgres(q), BackendTransaction::Postgres(inner)) => {
-                q.fetch_one(inner.as_mut()).await
-            },
-            (Self::Sqlite(q), BackendTransaction::Sqlite(inner)) => {
-                q.fetch_one(inner.as_mut()).await
-            },
-            _ => unreachable!("query backend must match transaction backend"),
-        }
-    }
-
-    pub async fn fetch_optional<Mode>(
-        self,
-        tx: &mut Transaction<Mode>,
-    ) -> Result<Option<T>, sqlx::Error> {
-        match (self, &mut tx.inner) {
-            (Self::Postgres(q), BackendTransaction::Postgres(inner)) => {
-                q.fetch_optional(inner.as_mut()).await
-            },
-            (Self::Sqlite(q), BackendTransaction::Sqlite(inner)) => {
-                q.fetch_optional(inner.as_mut()).await
-            },
-            _ => unreachable!("query backend must match transaction backend"),
-        }
-    }
-
-    pub async fn fetch_all<Mode>(self, tx: &mut Transaction<Mode>) -> Result<Vec<T>, sqlx::Error> {
-        match (self, &mut tx.inner) {
-            (Self::Postgres(q), BackendTransaction::Postgres(inner)) => {
-                q.fetch_all(inner.as_mut()).await
-            },
-            (Self::Sqlite(q), BackendTransaction::Sqlite(inner)) => {
-                q.fetch_all(inner.as_mut()).await
-            },
-            _ => unreachable!("query backend must match transaction backend"),
-        }
-    }
-
-    pub fn fetch<'e, Mode>(
-        self,
-        tx: &'e mut Transaction<Mode>,
-    ) -> BoxStream<'e, Result<T, sqlx::Error>>
-    where
-        'q: 'e,
-        T: 'e,
-    {
-        use futures::StreamExt;
-        match (self, &mut tx.inner) {
-            (Self::Postgres(q), BackendTransaction::Postgres(inner)) => {
-                q.fetch(inner.as_mut()).boxed()
-            },
-            (Self::Sqlite(q), BackendTransaction::Sqlite(inner)) => q.fetch(inner.as_mut()).boxed(),
-            _ => unreachable!("query backend must match transaction backend"),
-        }
-    }
+    impl_backend_fetch!(T, std::convert::identity, std::convert::identity, fetch_where T: 'e);
 }
 
 /// A row returned from a backend-dispatched query.
@@ -545,27 +479,12 @@ impl_from_row_for_both!(BlockQueryData<Types>, |row| {
 
 const PAYLOAD_COLUMNS: &str = BLOCK_COLUMNS;
 
-impl<'r, Types> FromRow<'r, sqlx::postgres::PgRow> for PayloadQueryData<Types>
-where
-    Types: NodeType,
+impl_from_row_for_both!(PayloadQueryData<Types>, |row| {
+    BlockQueryData::<Types>::from_row(row).map(Self::from)
+}, where
     Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
-{
-    fn from_row(row: &'r sqlx::postgres::PgRow) -> sqlx::Result<Self> {
-        <BlockQueryData<Types> as FromRow<sqlx::postgres::PgRow>>::from_row(row).map(Self::from)
-    }
-}
-
-impl<'r, Types> FromRow<'r, sqlx::sqlite::SqliteRow> for PayloadQueryData<Types>
-where
-    Types: NodeType,
-    Header<Types>: QueryableHeader<Types>,
-    Payload<Types>: QueryablePayload<Types>,
-{
-    fn from_row(row: &'r sqlx::sqlite::SqliteRow) -> sqlx::Result<Self> {
-        <BlockQueryData<Types> as FromRow<sqlx::sqlite::SqliteRow>>::from_row(row).map(Self::from)
-    }
-}
+);
 
 const PAYLOAD_METADATA_COLUMNS: &str = "h.height AS height, h.hash AS hash, h.payload_hash AS \
                                         payload_hash, p.size AS payload_size, p.num_transactions \

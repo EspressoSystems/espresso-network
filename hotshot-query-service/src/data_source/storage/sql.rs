@@ -61,12 +61,13 @@ pub use queries::{query, query_as, QueryBuilder};
 pub use refinery::Migration;
 pub use transaction::*;
 
-use self::{db::with_backend, migrate::Migrator, queries::BackendRow, transaction::PoolMetrics};
+use self::{migrate::Migrator, queries::BackendRow, transaction::PoolMetrics};
 use super::{AvailabilityStorage, NodeStorage};
 // This needs to be reexported so that we can reference it by absolute path relative to this crate
 // in the expansion of `include_migrations`, even when `include_migrations` is invoked from another
 // crate which doesn't have `include_dir` as a dependency.
 pub use crate::include_migrations;
+use crate::with_backend;
 
 /// Embed migrations from the given directory into the current binary for PostgreSQL or SQLite.
 ///

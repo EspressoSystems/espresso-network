@@ -27,10 +27,7 @@ use snafu::OptionExt;
 use sqlx::Row;
 
 use super::{
-    super::{
-        db::with_backend,
-        transaction::{Transaction, TransactionMode, Write},
-    },
+    super::transaction::{Transaction, TransactionMode, Write},
     DecodeError, QueryBuilder, HEADER_COLUMNS,
 };
 use crate::{
@@ -40,7 +37,7 @@ use crate::{
     },
     node::{BlockId, SyncStatus, TimeWindowQueryData, WindowStart},
     types::HeightIndexed,
-    Header, MissingSnafu, NotFoundSnafu, QueryError, QueryResult,
+    with_backend, Header, MissingSnafu, NotFoundSnafu, QueryError, QueryResult,
 };
 
 #[async_trait]
