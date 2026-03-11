@@ -43,7 +43,10 @@ use crate::{traits::NodeImplementation, types::Event, SystemContext, Versions};
 pub struct SystemContextHandle<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> {
     /// The [sender](Sender) and [receiver](Receiver),
     /// to allow the application to communicate with HotShot.
-    pub(crate) output_event_stream: (Sender<Arc<Event<TYPES>>>, InactiveReceiver<Arc<Event<TYPES>>>),
+    pub(crate) output_event_stream: (
+        Sender<Arc<Event<TYPES>>>,
+        InactiveReceiver<Arc<Event<TYPES>>>,
+    ),
 
     /// access to the internal event stream, in case we need to, say, shut something down
     #[allow(clippy::type_complexity)]

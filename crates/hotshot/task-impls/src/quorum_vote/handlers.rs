@@ -371,6 +371,7 @@ pub(crate) async fn update_shared_state<TYPES: NodeType, V: Versions>(
         .await
         .wrap()
         .context(warn!("Block header doesn't extend the proposal!"))?;
+    broadcast_event(Arc::new(HotShotEvent::StateValidated(view_number)), &sender).await;
     let validation_duration = now.elapsed();
     // tracing::error!("Validation time: {validation_duration:?}");
 

@@ -49,7 +49,7 @@ use hotshot_types::{
     data::EpochNumber,
     event::{Event, EventType},
     light_client::StateKeyPair,
-    network::{NetworkConfig},
+    network::NetworkConfig,
     signature_key::{BLSPrivKey, BLSPubKey},
     traits::{node_implementation::ConsensusTime, signature_key::SignatureKey},
     PeerConfig,

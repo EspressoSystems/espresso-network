@@ -492,20 +492,25 @@ async fn handle_events<N, P, V>(
         // Log process memory on every Decide event
         if matches!(&event.event, EventType::Decide { .. }) {
             if let Ok(contents) = std::fs::read_to_string("/proc/self/status") {
-                let vm_rss = contents.lines()
+                let vm_rss = contents
+                    .lines()
                     .find(|l| l.starts_with("VmRSS:"))
                     .and_then(|l| l.split_whitespace().nth(1))
                     .and_then(|v| v.parse::<u64>().ok())
-                    .unwrap_or(0) / 1024; // Convert kB to MB
-                let vm_size = contents.lines()
+                    .unwrap_or(0)
+                    / 1024; // Convert kB to MB
+                let vm_size = contents
+                    .lines()
                     .find(|l| l.starts_with("VmSize:"))
                     .and_then(|l| l.split_whitespace().nth(1))
                     .and_then(|v| v.parse::<u64>().ok())
-                    .unwrap_or(0) / 1024;
+                    .unwrap_or(0)
+                    / 1024;
                 let cgroup_mb = std::fs::read_to_string("/sys/fs/cgroup/memory.current")
                     .ok()
                     .and_then(|s| s.trim().parse::<u64>().ok())
-                    .unwrap_or(0) / (1024 * 1024);
+                    .unwrap_or(0)
+                    / (1024 * 1024);
                 tracing::warn!(
                     node_id,
                     view = *event.view_number,

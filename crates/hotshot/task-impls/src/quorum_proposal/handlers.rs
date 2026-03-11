@@ -953,13 +953,11 @@ fn leader_resource_stats() -> String {
     let rss_kb = std::fs::read_to_string("/proc/self/status")
         .ok()
         .and_then(|s| {
-            s.lines()
-                .find(|l| l.starts_with("VmRSS:"))
-                .and_then(|l| {
-                    l.split_whitespace()
-                        .nth(1)
-                        .and_then(|v| v.parse::<u64>().ok())
-                })
+            s.lines().find(|l| l.starts_with("VmRSS:")).and_then(|l| {
+                l.split_whitespace()
+                    .nth(1)
+                    .and_then(|v| v.parse::<u64>().ok())
+            })
         });
 
     // Memory PSI avg10 from /proc/pressure/memory
@@ -967,13 +965,11 @@ fn leader_resource_stats() -> String {
     let mem_psi_some = std::fs::read_to_string("/proc/pressure/memory")
         .ok()
         .and_then(|s| {
-            s.lines()
-                .find(|l| l.starts_with("some"))
-                .and_then(|l| {
-                    l.split_whitespace()
-                        .find(|t| t.starts_with("avg10="))
-                        .map(|t| t[6..].to_string())
-                })
+            s.lines().find(|l| l.starts_with("some")).and_then(|l| {
+                l.split_whitespace()
+                    .find(|t| t.starts_with("avg10="))
+                    .map(|t| t[6..].to_string())
+            })
         });
 
     // cgroup v2 memory usage and limit

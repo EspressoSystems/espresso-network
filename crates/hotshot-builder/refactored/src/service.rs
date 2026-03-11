@@ -242,9 +242,11 @@ where
                 EventType::QuorumProposal { proposal, .. } => {
                     let coordinator = Arc::clone(&self.coordinator);
                     let quorum_proposal_data = proposal.data.clone();
-                    spawn(
-                        async move { coordinator.handle_quorum_proposal(quorum_proposal_data).await },
-                    );
+                    spawn(async move {
+                        coordinator
+                            .handle_quorum_proposal(quorum_proposal_data)
+                            .await
+                    });
                 },
                 _ => {},
             }
