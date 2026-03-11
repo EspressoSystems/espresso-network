@@ -42,11 +42,28 @@ fn avidm_benchmark(c: &mut Criterion) {
 
             avidm_group.bench_function(
                 format!(
-                    "Recovery_({recovery_threshold}, {num_storage_nodes})_{payload_bytes_len}MB"
+                    "Recovery_fft_({recovery_threshold}, \
+                     {num_storage_nodes})_{payload_bytes_len}MB"
                 ),
                 |b| {
                     b.iter(|| {
                         AvidMScheme::recover(
+                            &param,
+                            &commit,
+                            &shares[recovery_threshold..2 * recovery_threshold],
+                        )
+                    })
+                },
+            );
+
+            avidm_group.bench_function(
+                format!(
+                    "Recovery_lagrange_({recovery_threshold}, \
+                     {num_storage_nodes})_{payload_bytes_len}MB"
+                ),
+                |b| {
+                    b.iter(|| {
+                        AvidMScheme::recover_lagrange(
                             &param,
                             &commit,
                             &shares[recovery_threshold..2 * recovery_threshold],
