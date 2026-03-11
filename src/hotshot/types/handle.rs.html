@@ -17,7 +17,7 @@
 <a href=#17 id=17 data-nosnippet>17</a><span class="kw">use </span>hotshot_task_impls::{events::HotShotEvent, helpers::broadcast_event};
 <a href=#18 id=18 data-nosnippet>18</a><span class="kw">use </span>hotshot_types::{
 <a href=#19 id=19 data-nosnippet>19</a>    consensus::Consensus,
-<a href=#20 id=20 data-nosnippet>20</a>    data::{Leaf2, QuorumProposalWrapper},
+<a href=#20 id=20 data-nosnippet>20</a>    data::{EpochNumber, Leaf2, QuorumProposalWrapper, ViewNumber},
 <a href=#21 id=21 data-nosnippet>21</a>    epoch_membership::EpochMembershipCoordinator,
 <a href=#22 id=22 data-nosnippet>22</a>    error::HotShotError,
 <a href=#23 id=23 data-nosnippet>23</a>    message::{Message, MessageKind, Proposal, RecipientList},
@@ -26,7 +26,7 @@
 <a href=#26 id=26 data-nosnippet>26</a>    traits::{
 <a href=#27 id=27 data-nosnippet>27</a>        consensus_api::ConsensusApi,
 <a href=#28 id=28 data-nosnippet>28</a>        network::{BroadcastDelay, ConnectedNetwork, Topic},
-<a href=#29 id=29 data-nosnippet>29</a>        node_implementation::{ConsensusTime, NodeType},
+<a href=#29 id=29 data-nosnippet>29</a>        node_implementation::NodeType,
 <a href=#30 id=30 data-nosnippet>30</a>        signature_key::SignatureKey,
 <a href=#31 id=31 data-nosnippet>31</a>    },
 <a href=#32 id=32 data-nosnippet>32</a>    vote::HasViewNumber,
@@ -103,9 +103,9 @@
 <a href=#103 id=103 data-nosnippet>103</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
 <a href=#104 id=104 data-nosnippet>104</a>        <span class="kw">let </span>message = Message {
 <a href=#105 id=105 data-nosnippet>105</a>            sender: <span class="self">self</span>.public_key().clone(),
-<a href=#106 id=106 data-nosnippet>106</a>            kind: MessageKind::External(msg),
+<a href=#106 id=106 data-nosnippet>106</a>            kind: MessageKind::&lt;TYPES&gt;::External(msg),
 <a href=#107 id=107 data-nosnippet>107</a>        };
-<a href=#108 id=108 data-nosnippet>108</a>        <span class="kw">let </span>view: TYPES::View = message.view_number();
+<a href=#108 id=108 data-nosnippet>108</a>        <span class="kw">let </span>view: ViewNumber = message.view_number();
 <a href=#109 id=109 data-nosnippet>109</a>        <span class="kw">let </span>serialized_message = <span class="self">self</span>.hotshot.upgrade_lock.serialize(<span class="kw-2">&amp;</span>message).<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#110 id=110 data-nosnippet>110</a>
 <a href=#111 id=111 data-nosnippet>111</a>        <span class="kw">match </span>recipients {
@@ -146,7 +146,7 @@
 <a href=#146 id=146 data-nosnippet>146</a>    /// Errors if signing the request for proposal fails
 <a href=#147 id=147 data-nosnippet>147</a>    </span><span class="kw">pub fn </span>request_proposal(
 <a href=#148 id=148 data-nosnippet>148</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#149 id=149 data-nosnippet>149</a>        view: TYPES::View,
+<a href=#149 id=149 data-nosnippet>149</a>        view: ViewNumber,
 <a href=#150 id=150 data-nosnippet>150</a>        leaf_commitment: Commitment&lt;Leaf2&lt;TYPES&gt;&gt;,
 <a href=#151 id=151 data-nosnippet>151</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="kw">impl </span>futures::Future&lt;Output = <span class="prelude-ty">Result</span>&lt;Proposal&lt;TYPES, QuorumProposalWrapper&lt;TYPES&gt;&gt;&gt;&gt;&gt;
 <a href=#152 id=152 data-nosnippet>152</a>    {
@@ -225,7 +225,7 @@
 <a href=#225 id=225 data-nosnippet>225</a>    /// return [`None`] if the requested view has already been decided (but see
 <a href=#226 id=226 data-nosnippet>226</a>    /// [`decided_state`](Self::decided_state)) or if there is no path for the requested
 <a href=#227 id=227 data-nosnippet>227</a>    /// view to ever be decided.
-<a href=#228 id=228 data-nosnippet>228</a>    </span><span class="kw">pub async fn </span>state(<span class="kw-2">&amp;</span><span class="self">self</span>, view: TYPES::View) -&gt; <span class="prelude-ty">Option</span>&lt;Arc&lt;TYPES::ValidatedState&gt;&gt; {
+<a href=#228 id=228 data-nosnippet>228</a>    </span><span class="kw">pub async fn </span>state(<span class="kw-2">&amp;</span><span class="self">self</span>, view: ViewNumber) -&gt; <span class="prelude-ty">Option</span>&lt;Arc&lt;TYPES::ValidatedState&gt;&gt; {
 <a href=#229 id=229 data-nosnippet>229</a>        <span class="self">self</span>.hotshot.state(view).<span class="kw">await
 <a href=#230 id=230 data-nosnippet>230</a>    </span>}
 <a href=#231 id=231 data-nosnippet>231</a>
@@ -303,8 +303,8 @@
 <a href=#303 id=303 data-nosnippet>303</a>    </span><span class="attr">#[allow(clippy::unused_async)] </span><span class="comment">// async for API compatibility reasons
 <a href=#304 id=304 data-nosnippet>304</a>    </span><span class="kw">pub async fn </span>leader(
 <a href=#305 id=305 data-nosnippet>305</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#306 id=306 data-nosnippet>306</a>        view_number: TYPES::View,
-<a href=#307 id=307 data-nosnippet>307</a>        epoch_number: <span class="prelude-ty">Option</span>&lt;TYPES::Epoch&gt;,
+<a href=#306 id=306 data-nosnippet>306</a>        view_number: ViewNumber,
+<a href=#307 id=307 data-nosnippet>307</a>        epoch_number: <span class="prelude-ty">Option</span>&lt;EpochNumber&gt;,
 <a href=#308 id=308 data-nosnippet>308</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;TYPES::SignatureKey&gt; {
 <a href=#309 id=309 data-nosnippet>309</a>        <span class="self">self</span>.hotshot
 <a href=#310 id=310 data-nosnippet>310</a>            .membership_coordinator
@@ -339,13 +339,13 @@
 <a href=#339 id=339 data-nosnippet>339</a>
 <a href=#340 id=340 data-nosnippet>340</a>    <span class="doccomment">/// Wrapper to get the view number this node is on.
 <a href=#341 id=341 data-nosnippet>341</a>    </span><span class="attr">#[instrument(skip_all, target = <span class="string">"SystemContextHandle"</span>, fields(id = <span class="self">self</span>.hotshot.id))]
-<a href=#342 id=342 data-nosnippet>342</a>    </span><span class="kw">pub async fn </span>cur_view(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; TYPES::View {
+<a href=#342 id=342 data-nosnippet>342</a>    </span><span class="kw">pub async fn </span>cur_view(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; ViewNumber {
 <a href=#343 id=343 data-nosnippet>343</a>        <span class="self">self</span>.hotshot.consensus.read().<span class="kw">await</span>.cur_view()
 <a href=#344 id=344 data-nosnippet>344</a>    }
 <a href=#345 id=345 data-nosnippet>345</a>
 <a href=#346 id=346 data-nosnippet>346</a>    <span class="doccomment">/// Wrapper to get the epoch number this node is on.
 <a href=#347 id=347 data-nosnippet>347</a>    </span><span class="attr">#[instrument(skip_all, target = <span class="string">"SystemContextHandle"</span>, fields(id = <span class="self">self</span>.hotshot.id))]
-<a href=#348 id=348 data-nosnippet>348</a>    </span><span class="kw">pub async fn </span>cur_epoch(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;TYPES::Epoch&gt; {
+<a href=#348 id=348 data-nosnippet>348</a>    </span><span class="kw">pub async fn </span>cur_epoch(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;EpochNumber&gt; {
 <a href=#349 id=349 data-nosnippet>349</a>        <span class="self">self</span>.hotshot.consensus.read().<span class="kw">await</span>.cur_epoch()
 <a href=#350 id=350 data-nosnippet>350</a>    }
 <a href=#351 id=351 data-nosnippet>351</a>

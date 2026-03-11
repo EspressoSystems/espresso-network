@@ -14,7 +14,7 @@
 <a href=#14 id=14 data-nosnippet>14</a><span class="kw">use </span>crate::{
 <a href=#15 id=15 data-nosnippet>15</a>    data::{
 <a href=#16 id=16 data-nosnippet>16</a>        DaProposal, DaProposal2, Leaf, Leaf2, QuorumProposal, QuorumProposalWrapper,
-<a href=#17 id=17 data-nosnippet>17</a>        UpgradeProposal, VidDisperseShare, VidDisperseShare0,
+<a href=#17 id=17 data-nosnippet>17</a>        UpgradeProposal, VidDisperseShare, VidDisperseShare0, ViewNumber,
 <a href=#18 id=18 data-nosnippet>18</a>    },
 <a href=#19 id=19 data-nosnippet>19</a>    error::HotShotError,
 <a href=#20 id=20 data-nosnippet>20</a>    message::{convert_proposal, Proposal},
@@ -30,7 +30,7 @@
 <a href=#30 id=30 data-nosnippet>30</a>#[serde(bound(deserialize = <span class="string">"TYPES: NodeType"</span>))]
 <a href=#31 id=31 data-nosnippet>31</a></span><span class="kw">pub struct </span>Event&lt;TYPES: NodeType&gt; {
 <a href=#32 id=32 data-nosnippet>32</a>    <span class="doccomment">/// The view number that this event originates from
-<a href=#33 id=33 data-nosnippet>33</a>    </span><span class="kw">pub </span>view_number: TYPES::View,
+<a href=#33 id=33 data-nosnippet>33</a>    </span><span class="kw">pub </span>view_number: ViewNumber,
 <a href=#34 id=34 data-nosnippet>34</a>    <span class="doccomment">/// The underlying event
 <a href=#35 id=35 data-nosnippet>35</a>    </span><span class="kw">pub </span>event: EventType&lt;TYPES&gt;,
 <a href=#36 id=36 data-nosnippet>36</a>}
@@ -49,7 +49,7 @@
 <a href=#49 id=49 data-nosnippet>49</a>#[serde(bound(deserialize = <span class="string">"TYPES: NodeType"</span>))]
 <a href=#50 id=50 data-nosnippet>50</a></span><span class="kw">pub struct </span>LegacyEvent&lt;TYPES: NodeType&gt; {
 <a href=#51 id=51 data-nosnippet>51</a>    <span class="doccomment">/// The view number that this event originates from
-<a href=#52 id=52 data-nosnippet>52</a>    </span><span class="kw">pub </span>view_number: TYPES::View,
+<a href=#52 id=52 data-nosnippet>52</a>    </span><span class="kw">pub </span>view_number: ViewNumber,
 <a href=#53 id=53 data-nosnippet>53</a>    <span class="doccomment">/// The underlying event
 <a href=#54 id=54 data-nosnippet>54</a>    </span><span class="kw">pub </span>event: LegacyEventType&lt;TYPES&gt;,
 <a href=#55 id=55 data-nosnippet>55</a>}
@@ -211,17 +211,17 @@
 <a href=#211 id=211 data-nosnippet>211</a>    <span class="doccomment">/// A replica task was canceled by a timeout interrupt
 <a href=#212 id=212 data-nosnippet>212</a>    </span>ReplicaViewTimeout {
 <a href=#213 id=213 data-nosnippet>213</a>        <span class="doccomment">/// The view that timed out
-<a href=#214 id=214 data-nosnippet>214</a>        </span>view_number: TYPES::View,
+<a href=#214 id=214 data-nosnippet>214</a>        </span>view_number: ViewNumber,
 <a href=#215 id=215 data-nosnippet>215</a>    },
 <a href=#216 id=216 data-nosnippet>216</a>    <span class="doccomment">/// The view has finished.  If values were decided on, a `Decide` event will also be emitted.
 <a href=#217 id=217 data-nosnippet>217</a>    </span>ViewFinished {
 <a href=#218 id=218 data-nosnippet>218</a>        <span class="doccomment">/// The view number that has just finished
-<a href=#219 id=219 data-nosnippet>219</a>        </span>view_number: TYPES::View,
+<a href=#219 id=219 data-nosnippet>219</a>        </span>view_number: ViewNumber,
 <a href=#220 id=220 data-nosnippet>220</a>    },
 <a href=#221 id=221 data-nosnippet>221</a>    <span class="doccomment">/// The view timed out
 <a href=#222 id=222 data-nosnippet>222</a>    </span>ViewTimeout {
 <a href=#223 id=223 data-nosnippet>223</a>        <span class="doccomment">/// The view that timed out
-<a href=#224 id=224 data-nosnippet>224</a>        </span>view_number: TYPES::View,
+<a href=#224 id=224 data-nosnippet>224</a>        </span>view_number: ViewNumber,
 <a href=#225 id=225 data-nosnippet>225</a>    },
 <a href=#226 id=226 data-nosnippet>226</a>    <span class="doccomment">/// New transactions were received from the network
 <a href=#227 id=227 data-nosnippet>227</a>    /// or submitted to the network by us
@@ -249,7 +249,7 @@
 <a href=#249 id=249 data-nosnippet>249</a>    /// or submitted to the network by us
 <a href=#250 id=250 data-nosnippet>250</a>    </span>UpgradeProposal {
 <a href=#251 id=251 data-nosnippet>251</a>        <span class="doccomment">/// Contents of the proposal
-<a href=#252 id=252 data-nosnippet>252</a>        </span>proposal: Proposal&lt;TYPES, UpgradeProposal&lt;TYPES&gt;&gt;,
+<a href=#252 id=252 data-nosnippet>252</a>        </span>proposal: Proposal&lt;TYPES, UpgradeProposal&gt;,
 <a href=#253 id=253 data-nosnippet>253</a>        <span class="doccomment">/// Public key of the leader submitting the proposal
 <a href=#254 id=254 data-nosnippet>254</a>        </span>sender: TYPES::SignatureKey,
 <a href=#255 id=255 data-nosnippet>255</a>    },
@@ -344,17 +344,17 @@
 <a href=#344 id=344 data-nosnippet>344</a>    <span class="doccomment">/// A replica task was canceled by a timeout interrupt
 <a href=#345 id=345 data-nosnippet>345</a>    </span>ReplicaViewTimeout {
 <a href=#346 id=346 data-nosnippet>346</a>        <span class="doccomment">/// The view that timed out
-<a href=#347 id=347 data-nosnippet>347</a>        </span>view_number: TYPES::View,
+<a href=#347 id=347 data-nosnippet>347</a>        </span>view_number: ViewNumber,
 <a href=#348 id=348 data-nosnippet>348</a>    },
 <a href=#349 id=349 data-nosnippet>349</a>    <span class="doccomment">/// The view has finished.  If values were decided on, a `Decide` event will also be emitted.
 <a href=#350 id=350 data-nosnippet>350</a>    </span>ViewFinished {
 <a href=#351 id=351 data-nosnippet>351</a>        <span class="doccomment">/// The view number that has just finished
-<a href=#352 id=352 data-nosnippet>352</a>        </span>view_number: TYPES::View,
+<a href=#352 id=352 data-nosnippet>352</a>        </span>view_number: ViewNumber,
 <a href=#353 id=353 data-nosnippet>353</a>    },
 <a href=#354 id=354 data-nosnippet>354</a>    <span class="doccomment">/// The view timed out
 <a href=#355 id=355 data-nosnippet>355</a>    </span>ViewTimeout {
 <a href=#356 id=356 data-nosnippet>356</a>        <span class="doccomment">/// The view that timed out
-<a href=#357 id=357 data-nosnippet>357</a>        </span>view_number: TYPES::View,
+<a href=#357 id=357 data-nosnippet>357</a>        </span>view_number: ViewNumber,
 <a href=#358 id=358 data-nosnippet>358</a>    },
 <a href=#359 id=359 data-nosnippet>359</a>    <span class="doccomment">/// New transactions were received from the network
 <a href=#360 id=360 data-nosnippet>360</a>    /// or submitted to the network by us
@@ -382,7 +382,7 @@
 <a href=#382 id=382 data-nosnippet>382</a>    /// or submitted to the network by us
 <a href=#383 id=383 data-nosnippet>383</a>    </span>UpgradeProposal {
 <a href=#384 id=384 data-nosnippet>384</a>        <span class="doccomment">/// Contents of the proposal
-<a href=#385 id=385 data-nosnippet>385</a>        </span>proposal: Proposal&lt;TYPES, UpgradeProposal&lt;TYPES&gt;&gt;,
+<a href=#385 id=385 data-nosnippet>385</a>        </span>proposal: Proposal&lt;TYPES, UpgradeProposal&gt;,
 <a href=#386 id=386 data-nosnippet>386</a>        <span class="doccomment">/// Public key of the leader submitting the proposal
 <a href=#387 id=387 data-nosnippet>387</a>        </span>sender: TYPES::SignatureKey,
 <a href=#388 id=388 data-nosnippet>388</a>    },

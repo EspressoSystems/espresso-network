@@ -11,7 +11,7 @@
 <a href=#11 id=11 data-nosnippet>11</a><span class="kw">use </span>committable::Committable;
 <a href=#12 id=12 data-nosnippet>12</a><span class="kw">use </span>hotshot_types::{
 <a href=#13 id=13 data-nosnippet>13</a>    consensus::OuterConsensus,
-<a href=#14 id=14 data-nosnippet>14</a>    data::{Leaf2, QuorumProposalWrapper, VidDisperseShare},
+<a href=#14 id=14 data-nosnippet>14</a>    data::{EpochNumber, Leaf2, QuorumProposalWrapper, VidDisperseShare, ViewNumber},
 <a href=#15 id=15 data-nosnippet>15</a>    drb::INITIAL_DRB_RESULT,
 <a href=#16 id=16 data-nosnippet>16</a>    epoch_membership::{EpochMembership, EpochMembershipCoordinator},
 <a href=#17 id=17 data-nosnippet>17</a>    event::{Event, EventType},
@@ -21,7 +21,7 @@
 <a href=#21 id=21 data-nosnippet>21</a>    traits::{
 <a href=#22 id=22 data-nosnippet>22</a>        block_contents::BlockHeader,
 <a href=#23 id=23 data-nosnippet>23</a>        election::Membership,
-<a href=#24 id=24 data-nosnippet>24</a>        node_implementation::{ConsensusTime, NodeImplementation, NodeType},
+<a href=#24 id=24 data-nosnippet>24</a>        node_implementation::{NodeImplementation, NodeType},
 <a href=#25 id=25 data-nosnippet>25</a>        signature_key::{
 <a href=#26 id=26 data-nosnippet>26</a>            LCV2StateSignatureKey, LCV3StateSignatureKey, SignatureKey, StateSignatureKey,
 <a href=#27 id=27 data-nosnippet>27</a>        },
@@ -55,7 +55,7 @@
 <a href=#55 id=55 data-nosnippet>55</a>    }
 <a href=#56 id=56 data-nosnippet>56</a>
 <a href=#57 id=57 data-nosnippet>57</a>    <span class="kw">let </span>decided_block_number = decided_leaf.block_header().block_number();
-<a href=#58 id=58 data-nosnippet>58</a>    <span class="kw">let </span>current_epoch_number = TYPES::Epoch::new(epoch_from_block_number(
+<a href=#58 id=58 data-nosnippet>58</a>    <span class="kw">let </span>current_epoch_number = EpochNumber::new(epoch_from_block_number(
 <a href=#59 id=59 data-nosnippet>59</a>        decided_block_number,
 <a href=#60 id=60 data-nosnippet>60</a>        task_state.epoch_height,
 <a href=#61 id=61 data-nosnippet>61</a>    ));
@@ -147,7 +147,7 @@
 <a href=#147 id=147 data-nosnippet>147</a>            &amp;&amp; task_state.upgrade_lock.upgrade.base &lt; EPOCH_VERSION
 <a href=#148 id=148 data-nosnippet>148</a>        {
 <a href=#149 id=149 data-nosnippet>149</a>            <span class="kw">let </span>epoch_height = task_state.consensus.read().<span class="kw">await</span>.epoch_height;
-<a href=#150 id=150 data-nosnippet>150</a>            <span class="kw">let </span>first_epoch_number = TYPES::Epoch::new(epoch_from_block_number(
+<a href=#150 id=150 data-nosnippet>150</a>            <span class="kw">let </span>first_epoch_number = EpochNumber::new(epoch_from_block_number(
 <a href=#151 id=151 data-nosnippet>151</a>                proposal.block_header().block_number(),
 <a href=#152 id=152 data-nosnippet>152</a>                epoch_height,
 <a href=#153 id=153 data-nosnippet>153</a>            ));
@@ -294,11 +294,11 @@
 <a href=#294 id=294 data-nosnippet>294</a>    public_key: TYPES::SignatureKey,
 <a href=#295 id=295 data-nosnippet>295</a>    private_key: &lt;TYPES::SignatureKey <span class="kw">as </span>SignatureKey&gt;::PrivateKey,
 <a href=#296 id=296 data-nosnippet>296</a>    upgrade_lock: UpgradeLock&lt;TYPES&gt;,
-<a href=#297 id=297 data-nosnippet>297</a>    view_number: TYPES::View,
+<a href=#297 id=297 data-nosnippet>297</a>    view_number: ViewNumber,
 <a href=#298 id=298 data-nosnippet>298</a>    instance_state: Arc&lt;TYPES::InstanceState&gt;,
 <a href=#299 id=299 data-nosnippet>299</a>    proposed_leaf: <span class="kw-2">&amp;</span>Leaf2&lt;TYPES&gt;,
 <a href=#300 id=300 data-nosnippet>300</a>    vid_share: <span class="kw-2">&amp;</span>Proposal&lt;TYPES, VidDisperseShare&lt;TYPES&gt;&gt;,
-<a href=#301 id=301 data-nosnippet>301</a>    parent_view_number: <span class="prelude-ty">Option</span>&lt;TYPES::View&gt;,
+<a href=#301 id=301 data-nosnippet>301</a>    parent_view_number: <span class="prelude-ty">Option</span>&lt;ViewNumber&gt;,
 <a href=#302 id=302 data-nosnippet>302</a>    epoch_height: u64,
 <a href=#303 id=303 data-nosnippet>303</a>) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
 <a href=#304 id=304 data-nosnippet>304</a>    <span class="kw">let </span>justify_qc = <span class="kw-2">&amp;</span>proposed_leaf.justify_qc();
@@ -415,7 +415,7 @@
 <a href=#415 id=415 data-nosnippet>415</a>    public_key: TYPES::SignatureKey,
 <a href=#416 id=416 data-nosnippet>416</a>    private_key: &lt;TYPES::SignatureKey <span class="kw">as </span>SignatureKey&gt;::PrivateKey,
 <a href=#417 id=417 data-nosnippet>417</a>    upgrade_lock: UpgradeLock&lt;TYPES&gt;,
-<a href=#418 id=418 data-nosnippet>418</a>    view_number: TYPES::View,
+<a href=#418 id=418 data-nosnippet>418</a>    view_number: ViewNumber,
 <a href=#419 id=419 data-nosnippet>419</a>    storage: I::Storage,
 <a href=#420 id=420 data-nosnippet>420</a>    storage_metrics: Arc&lt;StorageMetricsValue&gt;,
 <a href=#421 id=421 data-nosnippet>421</a>    leaf: Leaf2&lt;TYPES&gt;,
@@ -529,7 +529,7 @@
 <a href=#529 id=529 data-nosnippet>529</a>        .wrap()
 <a href=#530 id=530 data-nosnippet>530</a>        .context(<span class="macro">error!</span>(<span class="string">"Failed to sign the light client state"</span>))<span class="question-mark">?</span>;
 <a href=#531 id=531 data-nosnippet>531</a>        <span class="kw">let </span>state_vote = LightClientStateUpdateVote2 {
-<a href=#532 id=532 data-nosnippet>532</a>            epoch: TYPES::Epoch::new(epoch_from_block_number(leaf.height(), epoch_height)),
+<a href=#532 id=532 data-nosnippet>532</a>            epoch: EpochNumber::new(epoch_from_block_number(leaf.height(), epoch_height)),
 <a href=#533 id=533 data-nosnippet>533</a>            light_client_state,
 <a href=#534 id=534 data-nosnippet>534</a>            next_stake_table_state,
 <a href=#535 id=535 data-nosnippet>535</a>            signature,

@@ -35,11 +35,11 @@
 <a href=#35 id=35 data-nosnippet>35</a>    utils::BuilderKeys,
 <a href=#36 id=36 data-nosnippet>36</a>};
 <a href=#37 id=37 data-nosnippet>37</a><span class="kw">use </span>hotshot_types::{
-<a href=#38 id=38 data-nosnippet>38</a>    data::VidCommitment,
+<a href=#38 id=38 data-nosnippet>38</a>    data::{VidCommitment, ViewNumber},
 <a href=#39 id=39 data-nosnippet>39</a>    event::EventType,
 <a href=#40 id=40 data-nosnippet>40</a>    traits::{
 <a href=#41 id=41 data-nosnippet>41</a>        block_contents::{BlockPayload, Transaction},
-<a href=#42 id=42 data-nosnippet>42</a>        node_implementation::{ConsensusTime, NodeType},
+<a href=#42 id=42 data-nosnippet>42</a>        node_implementation::NodeType,
 <a href=#43 id=43 data-nosnippet>43</a>        signature_key::{BuilderSignatureKey, SignatureKey},
 <a href=#44 id=44 data-nosnippet>44</a>        EncodeBytes,
 <a href=#45 id=45 data-nosnippet>45</a>    },
@@ -284,7 +284,7 @@
 <a href=#284 id=284 data-nosnippet>284</a>
 <a href=#285 id=285 data-nosnippet>285</a>    <span class="kw">async fn </span>wait_for_builder_state(
 <a href=#286 id=286 data-nosnippet>286</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#287 id=287 data-nosnippet>287</a>        state_id: <span class="kw-2">&amp;</span>BuilderStateId&lt;Types&gt;,
+<a href=#287 id=287 data-nosnippet>287</a>        state_id: <span class="kw-2">&amp;</span>BuilderStateId,
 <a href=#288 id=288 data-nosnippet>288</a>        check_period: Duration,
 <a href=#289 id=289 data-nosnippet>289</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;BuilderState&lt;Types&gt;&gt;, Error&lt;Types&gt;&gt; {
 <a href=#290 id=290 data-nosnippet>290</a>        <span class="kw">loop </span>{
@@ -428,7 +428,7 @@
 <a href=#428 id=428 data-nosnippet>428</a>    )]
 <a href=#429 id=429 data-nosnippet>429</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">async fn </span>available_blocks_implementation(
 <a href=#430 id=430 data-nosnippet>430</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#431 id=431 data-nosnippet>431</a>        state_id: BuilderStateId&lt;Types&gt;,
+<a href=#431 id=431 data-nosnippet>431</a>        state_id: BuilderStateId,
 <a href=#432 id=432 data-nosnippet>432</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;AvailableBlockInfo&lt;Types&gt;&gt;, Error&lt;Types&gt;&gt; {
 <a href=#433 id=433 data-nosnippet>433</a>        <span class="kw">let </span>start = Instant::now();
 <a href=#434 id=434 data-nosnippet>434</a>
@@ -509,7 +509,7 @@
 <a href=#509 id=509 data-nosnippet>509</a>    )]
 <a href=#510 id=510 data-nosnippet>510</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">async fn </span>claim_block_implementation(
 <a href=#511 id=511 data-nosnippet>511</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#512 id=512 data-nosnippet>512</a>        block_id: BlockId&lt;Types&gt;,
+<a href=#512 id=512 data-nosnippet>512</a>        block_id: BlockId,
 <a href=#513 id=513 data-nosnippet>513</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;AvailableBlockData&lt;Types&gt;, Error&lt;Types&gt;&gt; {
 <a href=#514 id=514 data-nosnippet>514</a>        <span class="kw">let </span>(block_payload, metadata) = {
 <a href=#515 id=515 data-nosnippet>515</a>            <span class="comment">// We store this read lock guard separately to make it explicit
@@ -559,7 +559,7 @@
 <a href=#559 id=559 data-nosnippet>559</a>    )]
 <a href=#560 id=560 data-nosnippet>560</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">async fn </span>claim_block_header_input_implementation(
 <a href=#561 id=561 data-nosnippet>561</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#562 id=562 data-nosnippet>562</a>        block_id: BlockId&lt;Types&gt;,
+<a href=#562 id=562 data-nosnippet>562</a>        block_id: BlockId,
 <a href=#563 id=563 data-nosnippet>563</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;(bool, AvailableBlockHeaderInputV1&lt;Types&gt;), Error&lt;Types&gt;&gt; {
 <a href=#564 id=564 data-nosnippet>564</a>        <span class="kw">let </span>metadata;
 <a href=#565 id=565 data-nosnippet>565</a>        <span class="kw">let </span>offered_fee;
@@ -630,7 +630,7 @@
 <a href=#630 id=630 data-nosnippet>630</a>
 <a href=#631 id=631 data-nosnippet>631</a>        <span class="kw">let </span>state_id = BuilderStateId {
 <a href=#632 id=632 data-nosnippet>632</a>            parent_commitment: <span class="kw-2">*</span>parent_block,
-<a href=#633 id=633 data-nosnippet>633</a>            parent_view: Types::View::new(parent_view),
+<a href=#633 id=633 data-nosnippet>633</a>            parent_view: ViewNumber::new(parent_view),
 <a href=#634 id=634 data-nosnippet>634</a>        };
 <a href=#635 id=635 data-nosnippet>635</a>
 <a href=#636 id=636 data-nosnippet>636</a>        <span class="macro">trace!</span>(<span class="string">"Requesting available blocks"</span>);
@@ -661,7 +661,7 @@
 <a href=#661 id=661 data-nosnippet>661</a>
 <a href=#662 id=662 data-nosnippet>662</a>        <span class="kw">let </span>block_id = BlockId {
 <a href=#663 id=663 data-nosnippet>663</a>            hash: block_hash.clone(),
-<a href=#664 id=664 data-nosnippet>664</a>            view: Types::View::new(view_number),
+<a href=#664 id=664 data-nosnippet>664</a>            view: ViewNumber::new(view_number),
 <a href=#665 id=665 data-nosnippet>665</a>        };
 <a href=#666 id=666 data-nosnippet>666</a>
 <a href=#667 id=667 data-nosnippet>667</a>        <span class="macro">trace!</span>(<span class="string">"Processing claim block request"</span>);
@@ -715,7 +715,7 @@
 <a href=#715 id=715 data-nosnippet>715</a>
 <a href=#716 id=716 data-nosnippet>716</a>        <span class="kw">let </span>block_id = BlockId {
 <a href=#717 id=717 data-nosnippet>717</a>            hash: block_hash.clone(),
-<a href=#718 id=718 data-nosnippet>718</a>            view: Types::View::new(view_number),
+<a href=#718 id=718 data-nosnippet>718</a>            view: ViewNumber::new(view_number),
 <a href=#719 id=719 data-nosnippet>719</a>        };
 <a href=#720 id=720 data-nosnippet>720</a>
 <a href=#721 id=721 data-nosnippet>721</a>        <span class="macro">trace!</span>(<span class="string">"Processing claim_block_header_input request"</span>);

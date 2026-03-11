@@ -14,14 +14,14 @@
 <a href=#14 id=14 data-nosnippet>14</a><span class="kw">use </span>async_trait::async_trait;
 <a href=#15 id=15 data-nosnippet>15</a><span class="kw">use </span>committable::{Commitment, Committable, RawCommitmentBuilder};
 <a href=#16 id=16 data-nosnippet>16</a><span class="kw">use </span>hotshot_types::{
-<a href=#17 id=17 data-nosnippet>17</a>    data::{vid_commitment, BlockError, Leaf2, VidCommitment},
+<a href=#17 id=17 data-nosnippet>17</a>    data::{vid_commitment, BlockError, Leaf2, VidCommitment, ViewNumber},
 <a href=#18 id=18 data-nosnippet>18</a>    light_client::LightClientState,
 <a href=#19 id=19 data-nosnippet>19</a>    traits::{
 <a href=#20 id=20 data-nosnippet>20</a>        block_contents::{
 <a href=#21 id=21 data-nosnippet>21</a>            BlockHeader, BuilderFee, EncodeBytes, TestableBlock, Transaction,
 <a href=#22 id=22 data-nosnippet>22</a>            GENESIS_VID_NUM_STORAGE_NODES,
 <a href=#23 id=23 data-nosnippet>23</a>        },
-<a href=#24 id=24 data-nosnippet>24</a>        node_implementation::{ConsensusTime, NodeType},
+<a href=#24 id=24 data-nosnippet>24</a>        node_implementation::NodeType,
 <a href=#25 id=25 data-nosnippet>25</a>        BlockPayload, ValidatedState,
 <a href=#26 id=26 data-nosnippet>26</a>    },
 <a href=#27 id=27 data-nosnippet>27</a>    utils::BuilderCommitment,
@@ -401,7 +401,7 @@
 <a href=#401 id=401 data-nosnippet>401</a>        <span class="self">self</span>.version
 <a href=#402 id=402 data-nosnippet>402</a>    }
 <a href=#403 id=403 data-nosnippet>403</a>
-<a href=#404 id=404 data-nosnippet>404</a>    <span class="kw">fn </span>get_light_client_state(<span class="kw-2">&amp;</span><span class="self">self</span>, view: TYPES::View) -&gt; anyhow::Result&lt;LightClientState&gt; {
+<a href=#404 id=404 data-nosnippet>404</a>    <span class="kw">fn </span>get_light_client_state(<span class="kw-2">&amp;</span><span class="self">self</span>, view: ViewNumber) -&gt; anyhow::Result&lt;LightClientState&gt; {
 <a href=#405 id=405 data-nosnippet>405</a>        LightClientState::new(
 <a href=#406 id=406 data-nosnippet>406</a>            view.u64(),
 <a href=#407 id=407 data-nosnippet>407</a>            <span class="self">self</span>.block_number,

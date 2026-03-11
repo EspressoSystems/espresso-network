@@ -16,7 +16,7 @@
 <a href=#16 id=16 data-nosnippet>16</a><span class="kw">use </span>hotshot_task::task::{Task, TaskState};
 <a href=#17 id=17 data-nosnippet>17</a><span class="kw">use </span>hotshot_types::{
 <a href=#18 id=18 data-nosnippet>18</a>    consensus::{Consensus, OuterConsensus},
-<a href=#19 id=19 data-nosnippet>19</a>    data::{EpochNumber, Leaf, ViewChangeEvidence2},
+<a href=#19 id=19 data-nosnippet>19</a>    data::{EpochNumber, Leaf, ViewChangeEvidence2, ViewNumber},
 <a href=#20 id=20 data-nosnippet>20</a>    epoch_membership::{<span class="self">self</span>, EpochMembership, EpochMembershipCoordinator},
 <a href=#21 id=21 data-nosnippet>21</a>    event::Event,
 <a href=#22 id=22 data-nosnippet>22</a>    message::UpgradeLock,
@@ -24,7 +24,7 @@
 <a href=#24 id=24 data-nosnippet>24</a>    simple_vote::HasEpoch,
 <a href=#25 id=25 data-nosnippet>25</a>    traits::{
 <a href=#26 id=26 data-nosnippet>26</a>        block_contents::BlockHeader,
-<a href=#27 id=27 data-nosnippet>27</a>        node_implementation::{ConsensusTime, NodeImplementation, NodeType},
+<a href=#27 id=27 data-nosnippet>27</a>        node_implementation::{NodeImplementation, NodeType},
 <a href=#28 id=28 data-nosnippet>28</a>        signature_key::SignatureKey,
 <a href=#29 id=29 data-nosnippet>29</a>    },
 <a href=#30 id=30 data-nosnippet>30</a>    utils::option_epoch_from_block_number,
@@ -56,10 +56,10 @@
 <a href=#56 id=56 data-nosnippet>56</a>    </span><span class="kw">pub </span>consensus: OuterConsensus&lt;TYPES&gt;,
 <a href=#57 id=57 data-nosnippet>57</a>
 <a href=#58 id=58 data-nosnippet>58</a>    <span class="doccomment">/// View number this view is executing in.
-<a href=#59 id=59 data-nosnippet>59</a>    </span><span class="kw">pub </span>cur_view: TYPES::View,
+<a href=#59 id=59 data-nosnippet>59</a>    </span><span class="kw">pub </span>cur_view: ViewNumber,
 <a href=#60 id=60 data-nosnippet>60</a>
 <a href=#61 id=61 data-nosnippet>61</a>    <span class="doccomment">/// Epoch number this node is executing in.
-<a href=#62 id=62 data-nosnippet>62</a>    </span><span class="kw">pub </span>cur_epoch: <span class="prelude-ty">Option</span>&lt;TYPES::Epoch&gt;,
+<a href=#62 id=62 data-nosnippet>62</a>    </span><span class="kw">pub </span>cur_epoch: <span class="prelude-ty">Option</span>&lt;EpochNumber&gt;,
 <a href=#63 id=63 data-nosnippet>63</a>
 <a href=#64 id=64 data-nosnippet>64</a>    <span class="doccomment">/// Membership for Quorum Certs/votes
 <a href=#65 id=65 data-nosnippet>65</a>    </span><span class="kw">pub </span>membership: EpochMembershipCoordinator&lt;TYPES&gt;,
@@ -75,7 +75,7 @@
 <a href=#75 id=75 data-nosnippet>75</a>
 <a href=#76 id=76 data-nosnippet>76</a>    <span class="doccomment">/// Spawned tasks related to a specific view, so we can cancel them when
 <a href=#77 id=77 data-nosnippet>77</a>    /// they are stale
-<a href=#78 id=78 data-nosnippet>78</a>    </span><span class="kw">pub </span>spawned_tasks: BTreeMap&lt;TYPES::View, Vec&lt;JoinHandle&lt;()&gt;&gt;&gt;,
+<a href=#78 id=78 data-nosnippet>78</a>    </span><span class="kw">pub </span>spawned_tasks: BTreeMap&lt;ViewNumber, Vec&lt;JoinHandle&lt;()&gt;&gt;&gt;,
 <a href=#79 id=79 data-nosnippet>79</a>
 <a href=#80 id=80 data-nosnippet>80</a>    <span class="doccomment">/// The node's id
 <a href=#81 id=81 data-nosnippet>81</a>    </span><span class="kw">pub </span>id: u64,
@@ -87,7 +87,7 @@
 <a href=#87 id=87 data-nosnippet>87</a>    </span><span class="kw">pub </span>epoch_height: u64,
 <a href=#88 id=88 data-nosnippet>88</a>
 <a href=#89 id=89 data-nosnippet>89</a>    <span class="doccomment">/// First view in which epoch version takes effect
-<a href=#90 id=90 data-nosnippet>90</a>    </span><span class="kw">pub </span>first_epoch: <span class="prelude-ty">Option</span>&lt;(TYPES::View, TYPES::Epoch)&gt;,
+<a href=#90 id=90 data-nosnippet>90</a>    </span><span class="kw">pub </span>first_epoch: <span class="prelude-ty">Option</span>&lt;(ViewNumber, EpochNumber)&gt;,
 <a href=#91 id=91 data-nosnippet>91</a>}
 <a href=#92 id=92 data-nosnippet>92</a>
 <a href=#93 id=93 data-nosnippet>93</a><span class="doccomment">/// all the info we need to validate a proposal.  This makes it easy to spawn an effemeral task to
@@ -121,12 +121,12 @@
 <a href=#121 id=121 data-nosnippet>121</a>    </span><span class="kw">pub </span>epoch_height: u64,
 <a href=#122 id=122 data-nosnippet>122</a>
 <a href=#123 id=123 data-nosnippet>123</a>    <span class="doccomment">/// First view in which epoch version takes effect
-<a href=#124 id=124 data-nosnippet>124</a>    </span><span class="kw">pub </span>first_epoch: <span class="prelude-ty">Option</span>&lt;(TYPES::View, TYPES::Epoch)&gt;,
+<a href=#124 id=124 data-nosnippet>124</a>    </span><span class="kw">pub </span>first_epoch: <span class="prelude-ty">Option</span>&lt;(ViewNumber, EpochNumber)&gt;,
 <a href=#125 id=125 data-nosnippet>125</a>}
 <a href=#126 id=126 data-nosnippet>126</a>
 <a href=#127 id=127 data-nosnippet>127</a><span class="kw">impl</span>&lt;TYPES: NodeType, I: NodeImplementation&lt;TYPES&gt;&gt; QuorumProposalRecvTaskState&lt;TYPES, I&gt; {
 <a href=#128 id=128 data-nosnippet>128</a>    <span class="doccomment">/// Cancel all tasks the consensus tasks has spawned before the given view
-<a href=#129 id=129 data-nosnippet>129</a>    </span><span class="kw">pub fn </span>cancel_tasks(<span class="kw-2">&amp;mut </span><span class="self">self</span>, view: TYPES::View) {
+<a href=#129 id=129 data-nosnippet>129</a>    </span><span class="kw">pub fn </span>cancel_tasks(<span class="kw-2">&amp;mut </span><span class="self">self</span>, view: ViewNumber) {
 <a href=#130 id=130 data-nosnippet>130</a>        <span class="kw">let </span>keep = <span class="self">self</span>.spawned_tasks.split_off(<span class="kw-2">&amp;</span>view);
 <a href=#131 id=131 data-nosnippet>131</a>        <span class="kw">while let </span><span class="prelude-val">Some</span>((<span class="kw">_</span>, tasks)) = <span class="self">self</span>.spawned_tasks.pop_first() {
 <a href=#132 id=132 data-nosnippet>132</a>            <span class="kw">for </span>task <span class="kw">in </span>tasks {
@@ -160,7 +160,7 @@
 <a href=#160 id=160 data-nosnippet>160</a>                    );
 <a href=#161 id=161 data-nosnippet>161</a>                    <span class="kw">return</span>;
 <a href=#162 id=162 data-nosnippet>162</a>                }
-<a href=#163 id=163 data-nosnippet>163</a>                <span class="kw">let </span>proposal_epoch = option_epoch_from_block_number::&lt;TYPES&gt;(
+<a href=#163 id=163 data-nosnippet>163</a>                <span class="kw">let </span>proposal_epoch = option_epoch_from_block_number(
 <a href=#164 id=164 data-nosnippet>164</a>                    proposal.data.proposal.epoch().is_some(),
 <a href=#165 id=165 data-nosnippet>165</a>                    proposal.data.block_header().block_number(),
 <a href=#166 id=166 data-nosnippet>166</a>                    <span class="self">self</span>.epoch_height,
@@ -208,7 +208,7 @@
 <a href=#208 id=208 data-nosnippet>208</a>                // view we want to KEEP tasks for.  We keep the view prior to this because
 <a href=#209 id=209 data-nosnippet>209</a>                // we might still be processing the proposal from view V which caused us
 <a href=#210 id=210 data-nosnippet>210</a>                // to enter view V + 1.
-<a href=#211 id=211 data-nosnippet>211</a>                </span><span class="kw">let </span>oldest_view_to_keep = TYPES::View::new(view.saturating_sub(<span class="number">1</span>));
+<a href=#211 id=211 data-nosnippet>211</a>                </span><span class="kw">let </span>oldest_view_to_keep = ViewNumber::new(view.saturating_sub(<span class="number">1</span>));
 <a href=#212 id=212 data-nosnippet>212</a>                <span class="self">self</span>.cancel_tasks(oldest_view_to_keep);
 <a href=#213 id=213 data-nosnippet>213</a>            },
 <a href=#214 id=214 data-nosnippet>214</a>            HotShotEvent::SetFirstEpoch(view, epoch) =&gt; {

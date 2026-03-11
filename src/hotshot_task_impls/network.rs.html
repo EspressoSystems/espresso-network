@@ -15,7 +15,7 @@
 <a href=#15 id=15 data-nosnippet>15</a><span class="kw">use </span>hotshot_task::task::TaskState;
 <a href=#16 id=16 data-nosnippet>16</a><span class="kw">use </span>hotshot_types::{
 <a href=#17 id=17 data-nosnippet>17</a>    consensus::OuterConsensus,
-<a href=#18 id=18 data-nosnippet>18</a>    data::{VidDisperse, VidDisperseShare},
+<a href=#18 id=18 data-nosnippet>18</a>    data::{EpochNumber, VidDisperse, VidDisperseShare, ViewNumber},
 <a href=#19 id=19 data-nosnippet>19</a>    epoch_membership::EpochMembershipCoordinator,
 <a href=#20 id=20 data-nosnippet>20</a>    event::{Event, EventType, HotShotAction},
 <a href=#21 id=21 data-nosnippet>21</a>    message::{
@@ -29,7 +29,7 @@
 <a href=#29 id=29 data-nosnippet>29</a>            BroadcastDelay, ConnectedNetwork, RequestKind, ResponseMessage, Topic, TransmitType,
 <a href=#30 id=30 data-nosnippet>30</a>            ViewMessage,
 <a href=#31 id=31 data-nosnippet>31</a>        },
-<a href=#32 id=32 data-nosnippet>32</a>        node_implementation::{ConsensusTime, NodeType},
+<a href=#32 id=32 data-nosnippet>32</a>        node_implementation::NodeType,
 <a href=#33 id=33 data-nosnippet>33</a>        storage::Storage,
 <a href=#34 id=34 data-nosnippet>34</a>    },
 <a href=#35 id=35 data-nosnippet>35</a>    vote::{HasViewNumber, Vote},
@@ -676,7 +676,7 @@
 <a href=#676 id=676 data-nosnippet>676</a>                <span class="comment">// Send the external message to the external event stream so it can be processed
 <a href=#677 id=677 data-nosnippet>677</a>                </span>broadcast_event(
 <a href=#678 id=678 data-nosnippet>678</a>                    Event {
-<a href=#679 id=679 data-nosnippet>679</a>                        view_number: TYPES::View::new(<span class="number">1</span>),
+<a href=#679 id=679 data-nosnippet>679</a>                        view_number: ViewNumber::new(<span class="number">1</span>),
 <a href=#680 id=680 data-nosnippet>680</a>                        event: EventType::ExternalMessageReceived { sender, data },
 <a href=#681 id=681 data-nosnippet>681</a>                    },
 <a href=#682 id=682 data-nosnippet>682</a>                    <span class="kw-2">&amp;</span><span class="self">self</span>.external_event_stream,
@@ -697,10 +697,10 @@
 <a href=#697 id=697 data-nosnippet>697</a>    </span><span class="kw">pub </span>network: Arc&lt;NET&gt;,
 <a href=#698 id=698 data-nosnippet>698</a>
 <a href=#699 id=699 data-nosnippet>699</a>    <span class="doccomment">/// view number
-<a href=#700 id=700 data-nosnippet>700</a>    </span><span class="kw">pub </span>view: TYPES::View,
+<a href=#700 id=700 data-nosnippet>700</a>    </span><span class="kw">pub </span>view: ViewNumber,
 <a href=#701 id=701 data-nosnippet>701</a>
 <a href=#702 id=702 data-nosnippet>702</a>    <span class="doccomment">/// epoch number
-<a href=#703 id=703 data-nosnippet>703</a>    </span><span class="kw">pub </span>epoch: <span class="prelude-ty">Option</span>&lt;TYPES::Epoch&gt;,
+<a href=#703 id=703 data-nosnippet>703</a>    </span><span class="kw">pub </span>epoch: <span class="prelude-ty">Option</span>&lt;EpochNumber&gt;,
 <a href=#704 id=704 data-nosnippet>704</a>
 <a href=#705 id=705 data-nosnippet>705</a>    <span class="doccomment">/// network memberships
 <a href=#706 id=706 data-nosnippet>706</a>    </span><span class="kw">pub </span>membership_coordinator: EpochMembershipCoordinator&lt;TYPES&gt;,
@@ -718,7 +718,7 @@
 <a href=#718 id=718 data-nosnippet>718</a>    </span><span class="kw">pub </span>upgrade_lock: UpgradeLock&lt;TYPES&gt;,
 <a href=#719 id=719 data-nosnippet>719</a>
 <a href=#720 id=720 data-nosnippet>720</a>    <span class="doccomment">/// map view number to transmit tasks
-<a href=#721 id=721 data-nosnippet>721</a>    </span><span class="kw">pub </span>transmit_tasks: BTreeMap&lt;TYPES::View, Vec&lt;JoinHandle&lt;()&gt;&gt;&gt;,
+<a href=#721 id=721 data-nosnippet>721</a>    </span><span class="kw">pub </span>transmit_tasks: BTreeMap&lt;ViewNumber, Vec&lt;JoinHandle&lt;()&gt;&gt;&gt;,
 <a href=#722 id=722 data-nosnippet>722</a>
 <a href=#723 id=723 data-nosnippet>723</a>    <span class="doccomment">/// Number of blocks in an epoch, zero means there are no epochs
 <a href=#724 id=724 data-nosnippet>724</a>    </span><span class="kw">pub </span>epoch_height: u64,
@@ -889,8 +889,8 @@
 <a href=#889 id=889 data-nosnippet>889</a>        maybe_action: <span class="prelude-ty">Option</span>&lt;HotShotAction&gt;,
 <a href=#890 id=890 data-nosnippet>890</a>        storage: S,
 <a href=#891 id=891 data-nosnippet>891</a>        consensus: OuterConsensus&lt;TYPES&gt;,
-<a href=#892 id=892 data-nosnippet>892</a>        view: &lt;TYPES <span class="kw">as </span>NodeType&gt;::View,
-<a href=#893 id=893 data-nosnippet>893</a>        epoch: <span class="prelude-ty">Option</span>&lt;&lt;TYPES <span class="kw">as </span>NodeType&gt;::Epoch&gt;,
+<a href=#892 id=892 data-nosnippet>892</a>        view: ViewNumber,
+<a href=#893 id=893 data-nosnippet>893</a>        epoch: <span class="prelude-ty">Option</span>&lt;EpochNumber&gt;,
 <a href=#894 id=894 data-nosnippet>894</a>    ) -&gt; std::result::Result&lt;(), ()&gt; {
 <a href=#895 id=895 data-nosnippet>895</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">mut </span>action) = maybe_action {
 <a href=#896 id=896 data-nosnippet>896</a>            <span class="kw">if </span>!consensus.write().<span class="kw">await</span>.update_action(action, view) {
@@ -914,7 +914,7 @@
 <a href=#914 id=914 data-nosnippet>914</a>    }
 <a href=#915 id=915 data-nosnippet>915</a>
 <a href=#916 id=916 data-nosnippet>916</a>    <span class="doccomment">/// Cancel all tasks for previous views
-<a href=#917 id=917 data-nosnippet>917</a>    </span><span class="kw">pub fn </span>cancel_tasks(<span class="kw-2">&amp;mut </span><span class="self">self</span>, view: TYPES::View) {
+<a href=#917 id=917 data-nosnippet>917</a>    </span><span class="kw">pub fn </span>cancel_tasks(<span class="kw-2">&amp;mut </span><span class="self">self</span>, view: ViewNumber) {
 <a href=#918 id=918 data-nosnippet>918</a>        <span class="kw">let </span>keep = <span class="self">self</span>.transmit_tasks.split_off(<span class="kw-2">&amp;</span>view);
 <a href=#919 id=919 data-nosnippet>919</a>
 <a href=#920 id=920 data-nosnippet>920</a>        <span class="kw">while let </span><span class="prelude-val">Some</span>((<span class="kw">_</span>, tasks)) = <span class="self">self</span>.transmit_tasks.pop_first() {
@@ -1388,7 +1388,7 @@
 <a href=#1388 id=1388 data-nosnippet>1388</a>                <span class="kw">if </span>epoch &gt; <span class="self">self</span>.epoch {
 <a href=#1389 id=1389 data-nosnippet>1389</a>                    <span class="self">self</span>.epoch = epoch;
 <a href=#1390 id=1390 data-nosnippet>1390</a>                }
-<a href=#1391 id=1391 data-nosnippet>1391</a>                <span class="kw">let </span>keep_view = TYPES::View::new(view.saturating_sub(<span class="number">1</span>));
+<a href=#1391 id=1391 data-nosnippet>1391</a>                <span class="kw">let </span>keep_view = ViewNumber::new(view.saturating_sub(<span class="number">1</span>));
 <a href=#1392 id=1392 data-nosnippet>1392</a>                <span class="self">self</span>.cancel_tasks(keep_view);
 <a href=#1393 id=1393 data-nosnippet>1393</a>                <span class="kw">let </span>net = Arc::clone(<span class="kw-2">&amp;</span><span class="self">self</span>.network);
 <a href=#1394 id=1394 data-nosnippet>1394</a>                <span class="kw">let </span>epoch = <span class="self">self</span>.epoch.map(|x| x.u64().into());

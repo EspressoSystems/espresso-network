@@ -25,7 +25,7 @@
 <a href=#25 id=25 data-nosnippet>25</a>
 <a href=#26 id=26 data-nosnippet>26</a><span class="kw">use </span><span class="kw">super</span>::signature_key::BuilderSignatureKey;
 <a href=#27 id=27 data-nosnippet>27</a><span class="kw">use </span>crate::{
-<a href=#28 id=28 data-nosnippet>28</a>    data::{Leaf2, VidCommitment},
+<a href=#28 id=28 data-nosnippet>28</a>    data::{Leaf2, VidCommitment, ViewNumber},
 <a href=#29 id=29 data-nosnippet>29</a>    light_client::LightClientState,
 <a href=#30 id=30 data-nosnippet>30</a>    traits::{node_implementation::NodeType, states::InstanceState, ValidatedState},
 <a href=#31 id=31 data-nosnippet>31</a>    utils::BuilderCommitment,
@@ -211,7 +211,7 @@
 <a href=#211 id=211 data-nosnippet>211</a>    </span><span class="kw">fn </span>builder_commitment(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; BuilderCommitment;
 <a href=#212 id=212 data-nosnippet>212</a>
 <a href=#213 id=213 data-nosnippet>213</a>    <span class="doccomment">/// Get the light client state
-<a href=#214 id=214 data-nosnippet>214</a>    </span><span class="kw">fn </span>get_light_client_state(<span class="kw-2">&amp;</span><span class="self">self</span>, view: TYPES::View) -&gt; anyhow::Result&lt;LightClientState&gt;;
+<a href=#214 id=214 data-nosnippet>214</a>    </span><span class="kw">fn </span>get_light_client_state(<span class="kw-2">&amp;</span><span class="self">self</span>, view: ViewNumber) -&gt; anyhow::Result&lt;LightClientState&gt;;
 <a href=#215 id=215 data-nosnippet>215</a>
 <a href=#216 id=216 data-nosnippet>216</a>    <span class="doccomment">/// Returns the `auth_root` value for versions &gt;= V4 (`DrbAndHeaderUpgrade`).
 <a href=#217 id=217 data-nosnippet>217</a>    ///

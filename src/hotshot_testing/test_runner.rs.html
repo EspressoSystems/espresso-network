@@ -28,7 +28,7 @@
 <a href=#28 id=28 data-nosnippet>28</a><span class="kw">use </span>hotshot_types::{
 <a href=#29 id=29 data-nosnippet>29</a>    consensus::ConsensusMetricsValue,
 <a href=#30 id=30 data-nosnippet>30</a>    constants::EVENT_CHANNEL_SIZE,
-<a href=#31 id=31 data-nosnippet>31</a>    data::Leaf2,
+<a href=#31 id=31 data-nosnippet>31</a>    data::{EpochNumber, Leaf2, ViewNumber},
 <a href=#32 id=32 data-nosnippet>32</a>    drb::INITIAL_DRB_RESULT,
 <a href=#33 id=33 data-nosnippet>33</a>    epoch_membership::EpochMembershipCoordinator,
 <a href=#34 id=34 data-nosnippet>34</a>    simple_certificate::QuorumCertificate2,
@@ -36,7 +36,7 @@
 <a href=#36 id=36 data-nosnippet>36</a>    traits::{
 <a href=#37 id=37 data-nosnippet>37</a>        election::Membership,
 <a href=#38 id=38 data-nosnippet>38</a>        network::ConnectedNetwork,
-<a href=#39 id=39 data-nosnippet>39</a>        node_implementation::{ConsensusTime, NodeImplementation, NodeType},
+<a href=#39 id=39 data-nosnippet>39</a>        node_implementation::{NodeImplementation, NodeType},
 <a href=#40 id=40 data-nosnippet>40</a>    },
 <a href=#41 id=41 data-nosnippet>41</a>    HotShotConfig, ValidatorConfig,
 <a href=#42 id=42 data-nosnippet>42</a>};
@@ -162,11 +162,11 @@
 <a href=#162 id=162 data-nosnippet>162</a>
 <a href=#163 id=163 data-nosnippet>163</a>        <span class="comment">// add spinning task
 <a href=#164 id=164 data-nosnippet>164</a>        // map spinning to view
-<a href=#165 id=165 data-nosnippet>165</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>changes: BTreeMap&lt;TYPES::View, Vec&lt;ChangeNode&gt;&gt; = BTreeMap::new();
+<a href=#165 id=165 data-nosnippet>165</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>changes: BTreeMap&lt;ViewNumber, Vec&lt;ChangeNode&gt;&gt; = BTreeMap::new();
 <a href=#166 id=166 data-nosnippet>166</a>        <span class="kw">for </span>(view, <span class="kw-2">mut </span>change) <span class="kw">in </span>spinning_changes {
 <a href=#167 id=167 data-nosnippet>167</a>            changes
-<a href=#168 id=168 data-nosnippet>168</a>                .entry(TYPES::View::new(view))
-<a href=#169 id=169 data-nosnippet>169</a>                .or_insert_with(Vec::new)
+<a href=#168 id=168 data-nosnippet>168</a>                .entry(ViewNumber::new(view))
+<a href=#169 id=169 data-nosnippet>169</a>                .or_default()
 <a href=#170 id=170 data-nosnippet>170</a>                .append(<span class="kw-2">&amp;mut </span>change);
 <a href=#171 id=171 data-nosnippet>171</a>        }
 <a href=#172 id=172 data-nosnippet>172</a>
@@ -434,7 +434,7 @@
 <a href=#434 id=434 data-nosnippet>434</a>                        config.epoch_height,
 <a href=#435 id=435 data-nosnippet>435</a>                        config.epoch_start_block,
 <a href=#436 id=436 data-nosnippet>436</a>                        <span class="macro">vec!</span>[InitializerEpochInfo::&lt;TYPES&gt; {
-<a href=#437 id=437 data-nosnippet>437</a>                            epoch: TYPES::Epoch::new(<span class="number">1</span>),
+<a href=#437 id=437 data-nosnippet>437</a>                            epoch: EpochNumber::new(<span class="number">1</span>),
 <a href=#438 id=438 data-nosnippet>438</a>                            drb_result: INITIAL_DRB_RESULT,
 <a href=#439 id=439 data-nosnippet>439</a>                            block_header: <span class="prelude-val">None</span>,
 <a href=#440 id=440 data-nosnippet>440</a>                        }],

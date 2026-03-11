@@ -121,7 +121,7 @@
 <a href=#121 id=121 data-nosnippet>121</a><span class="doccomment">/// a message
 <a href=#122 id=122 data-nosnippet>122</a></span><span class="kw">pub trait </span>ViewMessage&lt;TYPES: NodeType&gt; {
 <a href=#123 id=123 data-nosnippet>123</a>    <span class="doccomment">/// get the view out of the message
-<a href=#124 id=124 data-nosnippet>124</a>    </span><span class="kw">fn </span>view_number(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; TYPES::View;
+<a href=#124 id=124 data-nosnippet>124</a>    </span><span class="kw">fn </span>view_number(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; ViewNumber;
 <a href=#125 id=125 data-nosnippet>125</a>}
 <a href=#126 id=126 data-nosnippet>126</a>
 <a href=#127 id=127 data-nosnippet>127</a><span class="doccomment">/// A request for some data that the consensus layer is asking for.
@@ -131,7 +131,7 @@
 <a href=#131 id=131 data-nosnippet>131</a>    <span class="doccomment">/// Request
 <a href=#132 id=132 data-nosnippet>132</a>    </span><span class="kw">pub </span>request: RequestKind&lt;TYPES&gt;,
 <a href=#133 id=133 data-nosnippet>133</a>    <span class="doccomment">/// View this message is for
-<a href=#134 id=134 data-nosnippet>134</a>    </span><span class="kw">pub </span>view: TYPES::View,
+<a href=#134 id=134 data-nosnippet>134</a>    </span><span class="kw">pub </span>view: ViewNumber,
 <a href=#135 id=135 data-nosnippet>135</a>    <span class="doccomment">/// signature of the Sha256 hash of the data so outsiders can't use know
 <a href=#136 id=136 data-nosnippet>136</a>    /// public keys with stake.
 <a href=#137 id=137 data-nosnippet>137</a>    </span><span class="kw">pub </span>signature: &lt;TYPES::SignatureKey <span class="kw">as </span>SignatureKey&gt;::PureAssembledSignatureType,
@@ -141,11 +141,11 @@
 <a href=#141 id=141 data-nosnippet>141</a></span><span class="attr">#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
 <a href=#142 id=142 data-nosnippet>142</a></span><span class="kw">pub enum </span>RequestKind&lt;TYPES: NodeType&gt; {
 <a href=#143 id=143 data-nosnippet>143</a>    <span class="doccomment">/// Request VID data by our key and the VID commitment
-<a href=#144 id=144 data-nosnippet>144</a>    </span>Vid(TYPES::View, TYPES::SignatureKey),
+<a href=#144 id=144 data-nosnippet>144</a>    </span>Vid(ViewNumber, TYPES::SignatureKey),
 <a href=#145 id=145 data-nosnippet>145</a>    <span class="doccomment">/// Request a DA proposal for a certain view
-<a href=#146 id=146 data-nosnippet>146</a>    </span>DaProposal(TYPES::View),
+<a href=#146 id=146 data-nosnippet>146</a>    </span>DaProposal(ViewNumber),
 <a href=#147 id=147 data-nosnippet>147</a>    <span class="doccomment">/// Request for quorum proposal for a view
-<a href=#148 id=148 data-nosnippet>148</a>    </span>Proposal(TYPES::View),
+<a href=#148 id=148 data-nosnippet>148</a>    </span>Proposal(ViewNumber),
 <a href=#149 id=149 data-nosnippet>149</a>}
 <a href=#150 id=150 data-nosnippet>150</a>
 <a href=#151 id=151 data-nosnippet>151</a><span class="kw">impl</span>&lt;TYPES: NodeType&gt; std::fmt::Debug <span class="kw">for </span>RequestKind&lt;TYPES&gt; {

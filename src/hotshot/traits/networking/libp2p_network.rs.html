@@ -56,7 +56,7 @@
 <a href=#56 id=56 data-nosnippet>56</a>    traits::{
 <a href=#57 id=57 data-nosnippet>57</a>        metrics::{Counter, Gauge, Metrics, NoMetrics},
 <a href=#58 id=58 data-nosnippet>58</a>        network::{ConnectedNetwork, NetworkError, Topic},
-<a href=#59 id=59 data-nosnippet>59</a>        node_implementation::{ConsensusTime, NodeType},
+<a href=#59 id=59 data-nosnippet>59</a>        node_implementation::NodeType,
 <a href=#60 id=60 data-nosnippet>60</a>        signature_key::{PrivateSignatureKey, SignatureKey},
 <a href=#61 id=61 data-nosnippet>61</a>    },
 <a href=#62 id=62 data-nosnippet>62</a>    BoxSyncFuture,
@@ -1003,8 +1003,8 @@
 <a href=#1003 id=1003 data-nosnippet>1003</a>    ) <span class="kw">where
 <a href=#1004 id=1004 data-nosnippet>1004</a>        </span>TYPES: NodeType&lt;SignatureKey = T::SignatureKey&gt;,
 <a href=#1005 id=1005 data-nosnippet>1005</a>    {
-<a href=#1006 id=1006 data-nosnippet>1006</a>        <span class="kw">let </span>future_view = &lt;TYPES <span class="kw">as </span>NodeType&gt;::View::new(<span class="kw-2">*</span>view) + LOOK_AHEAD;
-<a href=#1007 id=1007 data-nosnippet>1007</a>        <span class="kw">let </span>epoch = epoch.map(|e| &lt;TYPES <span class="kw">as </span>NodeType&gt;::Epoch::new(<span class="kw-2">*</span>e));
+<a href=#1006 id=1006 data-nosnippet>1006</a>        <span class="kw">let </span>future_view = ViewNumber::new(<span class="kw-2">*</span>view) + LOOK_AHEAD;
+<a href=#1007 id=1007 data-nosnippet>1007</a>        <span class="kw">let </span>epoch = epoch.map(|e| EpochNumber::new(<span class="kw-2">*</span>e));
 <a href=#1008 id=1008 data-nosnippet>1008</a>
 <a href=#1009 id=1009 data-nosnippet>1009</a>        <span class="kw">let </span>membership = <span class="kw">match </span>membership_coordinator.membership_for_epoch(epoch).<span class="kw">await </span>{
 <a href=#1010 id=1010 data-nosnippet>1010</a>            <span class="prelude-val">Ok</span>(m) =&gt; m,
