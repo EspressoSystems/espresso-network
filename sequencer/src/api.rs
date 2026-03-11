@@ -839,6 +839,18 @@ where
     }
 }
 
+impl<N, P, D, V> data_source::DatabaseMetadataSource for StorageState<N, P, D, V>
+where
+    N: ConnectedNetwork<PubKey>,
+    V: Versions,
+    P: SequencerPersistence,
+    D: data_source::DatabaseMetadataSource + Send + Sync,
+{
+    async fn get_table_sizes(&self) -> anyhow::Result<Vec<data_source::TableSize>> {
+        self.inner().get_table_sizes().await
+    }
+}
+
 impl<
         N: ConnectedNetwork<PubKey>,
         V: Versions,
