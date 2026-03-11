@@ -349,7 +349,7 @@ mod tests {
         utils::{genesis_epoch_from_version, option_epoch_from_block_number},
     };
     use serde::{Deserialize, Serialize};
-    use versions::{version, Upgrade};
+    use versions::{version, Upgrade, EPOCH_VERSION};
 
     use crate::node_types::TestTypes;
     #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Hash, Eq)]
@@ -436,7 +436,7 @@ mod tests {
         let epoch = genesis_epoch_from_version(version(0, 1));
         assert_eq!(None, epoch);
 
-        let epoch = genesis_epoch_from_version(version(0, 1));
+        let epoch = genesis_epoch_from_version(EPOCH_VERSION);
         assert_eq!(Some(EpochNumber::new(1)), epoch);
     }
 }
