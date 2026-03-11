@@ -1,7 +1,7 @@
 use std::{num::NonZeroUsize, path::PathBuf, sync::Arc, time::Duration};
 
 use anyhow::{bail, Context};
-use builder::non_permissioned::build_instance_state;
+use builder::build_instance_state;
 use clap::Parser;
 use espresso_types::{eth_signature_key::EthKeyPair, parse_duration, SeqTypes};
 use hotshot_builder_refactored::service::{BuilderConfig, GlobalState};

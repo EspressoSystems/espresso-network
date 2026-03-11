@@ -780,9 +780,7 @@ pub mod testing {
         },
         types::EventType::{self, Decide},
     };
-    use hotshot_builder_refactored::service::{
-        BuilderConfig as LegacyBuilderConfig, GlobalState as LegacyGlobalState,
-    };
+    use hotshot_builder_refactored::service::{BuilderConfig, GlobalState};
     use hotshot_testing::block_builder::{
         BuilderTask, SimpleBuilderImplementation, TestBuilderImplementation,
     };
@@ -823,11 +821,11 @@ pub mod testing {
             RootProvider,
         >,
     >;
-    struct LegacyBuilderImplementation {
-        global_state: Arc<LegacyGlobalState<SeqTypes>>,
+    struct BuilderImplementation {
+        global_state: Arc<GlobalState<SeqTypes>>,
     }
 
-    impl BuilderTask<SeqTypes> for LegacyBuilderImplementation {
+    impl BuilderTask<SeqTypes> for RefactoredBuilderImplementation {
         fn start(
             self: Box<Self>,
             stream: Box<
@@ -839,12 +837,12 @@ pub mod testing {
         ) {
             spawn(async move {
                 let res = self.global_state.start_event_loop(stream).await;
-                tracing::error!(?res, "testing legacy builder service exited");
+                tracing::error!(?res, "testing builder service exited");
             });
         }
     }
 
-    pub async fn run_legacy_builder<const NUM_NODES: usize>(
+    pub async fn run_builder<const NUM_NODES: usize>(
         port: Option<u16>,
         max_block_size: Option<u64>,
     ) -> (Box<dyn BuilderTask<SeqTypes>>, Url) {
@@ -860,8 +858,8 @@ pub mod testing {
             .expect("Failed to parse builder URL");
 
         // create the global state
-        let global_state = LegacyGlobalState::new(
-            LegacyBuilderConfig {
+        let global_state = GlobalState::new(
+            BuilderConfig {
                 builder_keys: (builder_key_pair.fee_account(), builder_key_pair),
                 max_api_waiting_time: Duration::from_secs(1),
                 max_block_size_increment_period: Duration::from_secs(60),
@@ -892,7 +890,10 @@ pub mod testing {
         });
 
         // Pass on the builder task to be injected in the testing harness
-        (Box::new(LegacyBuilderImplementation { global_state }), url)
+        (
+            Box::new(RefactoredBuilderImplementation { global_state }),
+            url,
+        )
     }
 
     pub async fn run_test_builder<const NUM_NODES: usize>(
