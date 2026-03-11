@@ -7,12 +7,12 @@ fn avidm_benchmark(c: &mut Criterion) {
     let param_list = [(34, 100)];
     let payload_bytes_len_list = [1, 5]; // in MB
     let mut payload = vec![0u8; 5 * 1024 * 1024];
-    let distribution = [1u32; 1000];
     jf_utils::test_rng().fill_bytes(&mut payload);
 
     let mut avidm_group = c.benchmark_group("AvidM");
     for (recovery_threshold, num_storage_nodes) in param_list {
         let param = AvidMScheme::setup(recovery_threshold, num_storage_nodes).unwrap();
+        let distribution = vec![1u32; num_storage_nodes];
         for payload_bytes_len in payload_bytes_len_list {
             avidm_group.bench_function(
                 format!(
@@ -22,7 +22,7 @@ fn avidm_benchmark(c: &mut Criterion) {
                     b.iter(|| {
                         AvidMScheme::disperse(
                             &param,
-                            &distribution[..num_storage_nodes],
+                            &distribution,
                             &payload[..payload_bytes_len * 1024 * 1024],
                         )
                     })
@@ -31,7 +31,7 @@ fn avidm_benchmark(c: &mut Criterion) {
 
             let (commit, shares) = AvidMScheme::disperse(
                 &param,
-                &distribution[..num_storage_nodes],
+                &distribution,
                 &payload[..payload_bytes_len * 1024 * 1024],
             )
             .unwrap();

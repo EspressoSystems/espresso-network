@@ -32,7 +32,7 @@ Result: a vector of field elements whose length is divisible by `k`.
 
 ### Step 2: Reed-Solomon encoding (`raw_encode`)
 
-1. Create an FFT domain of size `n` using radix-2 roots of unity (`ω^0, ω^1, ..., ω^{n-1}`).
+1. Create an FFT domain of size `N` (smallest power of two ≥ `n`) using radix-2 roots of unity. Only the first `n` evaluation points (`ω^0, ..., ω^{n-1}`) are used.
 2. Partition the field elements from Step 1 into chunks of `k` elements each. Call the number of chunks `c`.
 3. For each chunk, treat the `k` elements as coefficients of a degree `k-1` polynomial and FFT-evaluate it at all `n` domain points. Truncate the result to exactly `n` evaluations.
 
@@ -112,7 +112,7 @@ Differentiating: `N·x^{N-1} = E'(x)·R(x) + E(x)·R'(x)`. At received points `�
 4. FFT `P'` → evaluations at all domain points.
 5. Recover erased values using the **product rule identity**: at each `j ∈ Ω`,
    `C_p(ω^j) = P'(ω^j) / E'(ω^j)`.
-   (This follows from the Leibniz rule: since `E(ω^j) = 0`, `(C·E)'(ω^j) = C(ω^j)·E'(ω^j)`.)
+   (Since `P = C_p · E`, the Leibniz rule gives `P' = C_p' · E + C_p · E'`. At erased points where `E(ω^j) = 0`, this simplifies to `P'(ω^j) = C_p(ω^j) · E'(ω^j)`.)
 6. Combine received and recovered evaluations, IFFT → take first `k` coefficients.
 
 **Complexity**:
