@@ -1424,9 +1424,8 @@ dependencies = [
 
 [[package]]
 name = "ark-srs"
-version = "0.3.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "44cb2aa0a0ae529992b9fa60c41be6845a5f537e8a297e5dfa20f1374703e053"
+version = "0.3.4"
+source = "git+https://github.com/EspressoSystems/ark-srs?tag=v0.3.4#2d017352937b8cb0a9b6360acd514f0b5231a2b3"
 dependencies = [
  "anyhow",
  "ark-bn254 0.5.0",
@@ -1436,6 +1435,7 @@ dependencies = [
  "ark-serialize 0.5.0",
  "ark-std 0.5.0",
  "directories 5.0.1",
+ "fs2",
  "hex-literal",
  "rand 0.8.5",
  "sha2 0.10.9",
@@ -4818,6 +4818,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
 dependencies = [
  "percent-encoding",
+]
+
+[[package]]
+name = "fs2"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9564fc758e15025b46aa6643b1b77d047d1a56a1aea6e01002ac0c7026876213"
+dependencies = [
+ "libc",
+ "winapi",
 ]
 
 [[package]]
