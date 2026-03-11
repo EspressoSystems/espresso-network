@@ -378,11 +378,14 @@ impl AvidMScheme {
         Ok(Ok(()))
     }
 
-    pub(crate) fn recover_fields(param: &AvidMParam, shares: &[AvidMShare]) -> VidResult<Vec<F>> {
-        let recovery_threshold: usize = param.recovery_threshold;
+    /// Collect and validate raw shares from AvidM shares, returning the number
+    /// of polynomials and a map from evaluation index to share data.
+    fn collect_raw_shares<'a>(
+        param: &AvidMParam,
+        shares: &'a [AvidMShare],
+    ) -> VidResult<(usize, HashMap<usize, &'a Vec<F>>)> {
+        let recovery_threshold = param.recovery_threshold;
 
-        // Each share's payload contains some evaluations from `num_polys`
-        // polynomials.
         let num_polys = shares
             .iter()
             .find(|s| !s.content.payload.is_empty())
@@ -418,6 +421,13 @@ impl AvidMScheme {
         if raw_shares.len() < recovery_threshold {
             return Err(VidError::InsufficientShares);
         }
+
+        Ok((num_polys, raw_shares))
+    }
+
+    pub(crate) fn recover_fields(param: &AvidMParam, shares: &[AvidMShare]) -> VidResult<Vec<F>> {
+        let recovery_threshold: usize = param.recovery_threshold;
+        let (num_polys, raw_shares) = Self::collect_raw_shares(param, shares)?;
 
         let domain = radix2_domain::<F>(param.total_weights)?;
         let n_fft = domain.size();
@@ -566,42 +576,7 @@ impl AvidMScheme {
     /// against the FFT-based `recover_fields`.
     pub fn recover_fields_lagrange(param: &AvidMParam, shares: &[AvidMShare]) -> VidResult<Vec<F>> {
         let recovery_threshold: usize = param.recovery_threshold;
-
-        let num_polys = shares
-            .iter()
-            .find(|s| !s.content.payload.is_empty())
-            .ok_or(VidError::Argument("All shares are empty".to_string()))?
-            .content
-            .payload[0]
-            .len();
-
-        let mut raw_shares = HashMap::new();
-        for share in shares {
-            if share.content.range.len() != share.content.payload.len()
-                || share.content.range.end > param.total_weights
-            {
-                return Err(VidError::InvalidShare);
-            }
-            for (i, p) in share.content.range.clone().zip(&share.content.payload) {
-                if p.len() != num_polys {
-                    return Err(VidError::InvalidShare);
-                }
-                if raw_shares.contains_key(&i) {
-                    return Err(VidError::InvalidShare);
-                }
-                raw_shares.insert(i, p);
-                if raw_shares.len() >= recovery_threshold {
-                    break;
-                }
-            }
-            if raw_shares.len() >= recovery_threshold {
-                break;
-            }
-        }
-
-        if raw_shares.len() < recovery_threshold {
-            return Err(VidError::InsufficientShares);
-        }
+        let (num_polys, raw_shares) = Self::collect_raw_shares(param, shares)?;
 
         let domain = radix2_domain::<F>(param.total_weights)?;
 

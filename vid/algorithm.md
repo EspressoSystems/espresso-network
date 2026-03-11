@@ -15,7 +15,7 @@ A consensus leader disperses a block payload to validators so that any subset ho
 | `distribution[i]` | Weight of validator `i`; determines how many contiguous codeword indices it receives | `disperse()` arg |
 | Field | BN254 scalar field (`ark_bn254::Fr`), a 254-bit prime field with 31 usable bytes per element | `config.rs` |
 
-Constraint: `0 < k <= n`, and `n` must be a power of two or the next power of two is used for the FFT domain.
+Constraint: `0 < k <= n`. The FFT domain size `N` is the smallest power of two ≥ `n`.
 
 ## 3. Encoding (Dispersal)
 
@@ -72,11 +72,17 @@ Given a set of shares whose cumulative weight is at least `k`:
 
 1. **Collect** evaluation points: iterate through shares, extracting `(index, raw_share)` pairs. Stop once `k` points are gathered (additional shares are ignored).
 2. **Determine** `num_polys` (= `c`, the number of chunks) from the length of any raw share vector.
-3. **Recover** all chunk polynomials using the **erasure locator polynomial** method described below.
+3. **Recover** all chunk polynomials using one of the methods described below.
 4. **Flatten** all recovered coefficients back to bytes via `field_to_bytes` (each field element → `elem_bytes_len` little-endian bytes).
 5. **Strip padding**: scan from the end of the byte vector to find the last `0x01` byte, truncate everything from that byte onward.
 
-### Erasure Locator Polynomial Recovery
+### 5.1 Lagrange Interpolation Recovery (Original)
+
+For each of the `c` chunk polynomials independently, recover the polynomial from `k` evaluation points using Lagrange interpolation. Given evaluation pairs `{(ω^{j_i}, y_i)}` for `i = 1..k`, reconstruct the unique degree `k-1` polynomial whose values match. This costs O(k²) per polynomial.
+
+**Total: O(c · k²)**. Simple but expensive when `c` is large, since the O(k²) work is repeated independently for every polynomial.
+
+### 5.2 Erasure Locator Polynomial Recovery (Current)
 
 Let `N` = `domain.size()` (the FFT domain size, a power of two ≥ `n`), `ω` = primitive `N`-th root of unity. The encoding evaluates each chunk polynomial at `ω^0, ..., ω^{n-1}` (using only the first `n` points of the size-`N` domain).
 
@@ -112,7 +118,7 @@ Differentiating: `N·x^{N-1} = E'(x)·R(x) + E(x)·R'(x)`. At received points `�
 **Complexity**:
 - One-time: O(k²) for computing E's evaluations at received points, O(N log N) for IFFT of E and FFT of E'.
 - Per polynomial: 2 IFFTs + 1 FFT + O(N) pointwise operations = O(N log N).
-- **Total: O(c · N log N) + O(k²)**, vs the previous O((N-k)²) erasure locator approach.
+- **Total: O(c · N log N) + O(k²)**, vs O(c · k²) for per-polynomial Lagrange interpolation.
 
 ## 6. Worked Example
 
