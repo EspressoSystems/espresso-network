@@ -3,9 +3,7 @@ use std::{fs, path::PathBuf, process::ExitCode};
 use anyhow::{Context, Result};
 use clap::Parser;
 use espresso_types::{config::PublicNetworkConfig, DrbAndHeaderUpgradeVersion, Header};
-use hotshot_types::{
-    data::EpochNumber, traits::node_implementation::ConsensusTime, utils::epoch_from_block_number,
-};
+use hotshot_types::{data::EpochNumber, utils::epoch_from_block_number};
 use light_client::state::Genesis;
 use light_client_query_service::{init_logging, LogFormat};
 use sequencer::SequencerApiVersion;

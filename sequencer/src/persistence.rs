@@ -145,7 +145,7 @@ mod tests {
             UpgradeCertificate,
         },
         simple_vote::{NextEpochQuorumData2, QuorumData2, UpgradeProposalData, VersionedVoteData},
-        traits::{block_contents::BlockHeader, node_implementation::ConsensusTime, EncodeBytes},
+        traits::{block_contents::BlockHeader, EncodeBytes},
         utils::EpochTransitionIndicator,
         vid::avidm::{init_avidm_param, AvidMScheme},
         vote::HasViewNumber,
