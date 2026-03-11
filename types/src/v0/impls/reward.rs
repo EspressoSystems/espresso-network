@@ -19,7 +19,7 @@ use hotshot_contract_adapter::reward::RewardProofSiblings;
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
-    traits::{election::Membership, node_implementation::ConsensusTime},
+    traits::election::Membership,
     utils::epoch_from_block_number,
 };
 use itertools::Itertools;

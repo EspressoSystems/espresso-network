@@ -214,30 +214,28 @@ async fn store_state_update(
         )
         .await
         .context("failed to store reward merkle nodes")?;
-    } else {
-        if !rewards_delta.is_empty() {
-            let account_balances: Vec<(RewardAccountV2, RewardAmount)> = rewards_delta
-                .iter()
-                .map(|account| match reward_merkle_tree_v2.lookup(*account) {
-                    LookupResult::Ok(balance, _) => Ok((*account, *balance)),
-                    LookupResult::NotFound(_) => {
-                        bail!("reward account {account} in delta but not found in tree")
-                    },
-                    LookupResult::NotInMemory => {
-                        bail!("reward account {account} in delta but not in memory")
-                    },
-                })
-                .collect::<anyhow::Result<Vec<_>>>()?;
+    } else if !rewards_delta.is_empty() {
+        let account_balances: Vec<(RewardAccountV2, RewardAmount)> = rewards_delta
+            .iter()
+            .map(|account| match reward_merkle_tree_v2.lookup(*account) {
+                LookupResult::Ok(balance, _) => Ok((*account, *balance)),
+                LookupResult::NotFound(_) => {
+                    bail!("reward account {account} in delta but not found in tree")
+                },
+                LookupResult::NotInMemory => {
+                    bail!("reward account {account} in delta but not in memory")
+                },
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
 
-            if !account_balances.is_empty() {
-                tracing::debug!(
-                    count = account_balances.len(),
-                    "storing reward state to reward_state table"
-                );
-                tx.store_reward_state(block_number, account_balances)
-                    .await
-                    .context("failed to store reward state")?;
-            }
+        if !account_balances.is_empty() {
+            tracing::debug!(
+                count = account_balances.len(),
+                "storing reward state to reward_state table"
+            );
+            tx.store_reward_state(block_number, account_balances)
+                .await
+                .context("failed to store reward state")?;
         }
     }
 
