@@ -433,7 +433,7 @@
 <a href=#433 id=433 data-nosnippet>433</a>            LookupResult::Ok(elem, proof) =&gt; {
 <a href=#434 id=434 data-nosnippet>434</a>                <span class="comment">// This remember cannot fail, since we just constructed a valid proof, and are
 <a href=#435 id=435 data-nosnippet>435</a>                // remembering into a tree with the same commitment.
-<a href=#436 id=436 data-nosnippet>436</a>                </span>snapshot.remember(account, <span class="kw-2">*</span>elem, proof).unwrap();
+<a href=#436 id=436 data-nosnippet>436</a>                </span>snapshot.remember(account, elem, proof).unwrap();
 <a href=#437 id=437 data-nosnippet>437</a>            },
 <a href=#438 id=438 data-nosnippet>438</a>            LookupResult::NotFound(proof) =&gt; {
 <a href=#439 id=439 data-nosnippet>439</a>                <span class="comment">// Likewise this cannot fail.

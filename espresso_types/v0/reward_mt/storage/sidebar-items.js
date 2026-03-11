@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["collect_merkle_leaves"],"struct":["CachedInMemoryStorage","InMemoryState","OuterIndex"],"trait":["RewardMerkleTreeStorage"],"type":["InnerRewardMerkleTreeRoot"]};

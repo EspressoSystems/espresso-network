@@ -2,7 +2,7 @@
     consensus: &amp;<a class="struct" href="https://doc.rust-lang.org/1.94.0/alloc/sync/struct.Arc.html" title="struct alloc::sync::Arc">Arc</a>&lt;RwLock&lt;<a class="struct" href="../../hotshot_types/consensus/struct.Consensus.html" title="struct hotshot_types::consensus::Consensus">Consensus</a>&lt;<a class="struct" href="../../espresso_types/v0/struct.SeqTypes.html" title="struct espresso_types::v0::SeqTypes">SeqTypes</a>&gt;&gt;&gt;,
     view: &amp;<a class="struct" href="../../hotshot_types/data/struct.ViewNumber.html" title="struct hotshot_types::data::ViewNumber">ViewNumber</a>,
     accounts: &amp;[<a class="struct" href="../../espresso_types/v0/v0_4/state/struct.RewardAccountV2.html" title="struct espresso_types::v0::v0_4::state::RewardAccountV2">RewardAccountV2</a>],
-    tree: &amp;<a class="type" href="../../espresso_types/v0/v0_4/state/type.RewardMerkleTreeV2.html" title="type espresso_types::v0::v0_4::state::RewardMerkleTreeV2">RewardMerkleTreeV2</a>,
+    tree: &amp;<a class="type" href="../../espresso_types/v0/reward_mt/type.RewardMerkleTreeV2.html" title="type espresso_types::v0::reward_mt::RewardMerkleTreeV2">RewardMerkleTreeV2</a>,
     leaf: <a class="type" href="../../espresso_types/v0/type.Leaf2.html" title="type espresso_types::v0::Leaf2">Leaf2</a>,
 ) -&gt; <a class="type" href="https://docs.rs/anyhow/1.0.100/anyhow/type.Result.html" title="type anyhow::Result">Result</a>&lt;<a class="primitive" href="https://doc.rust-lang.org/1.94.0/std/primitive.unit.html">()</a>&gt;</code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Add accounts to the in-memory consensus state.
 We use this during catchup after receiving verified accounts.</p>

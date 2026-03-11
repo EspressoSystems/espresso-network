@@ -1,0 +1,161 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Storage abstraction for inner Merkle tree roots."><title>RewardMerkleTreeStorage in espresso_types::v0::reward_mt::storage - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../../static.files/rustdoc-77263533.css"><meta name="rustdoc-vars" data-root-path="../../../../" data-static-root-path="../../../../static.files/" data-current-crate="espresso_types" data-themes="" data-resource-suffix="" data-rustdoc-version="1.94.0 (4a4ef493e 2026-03-02)" data-channel="1.94.0" data-search-js="search-9e2438ea.js" data-stringdex-js="stringdex-b897f86f.js" data-settings-js="settings-c38705f0.js" ><script src="../../../../static.files/storage-e2aeef58.js"></script><script defer src="sidebar-items.js"></script><script defer src="../../../../static.files/main-7bab91a1.js"></script><noscript><link rel="stylesheet" href="../../../../static.files/noscript-ffcac47a.css"></noscript><link rel="alternate icon" type="image/png" href="../../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../../static.files/favicon-044be391.svg"></head><body class="rustdoc trait"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">RewardMerkleTreeStorage</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../../../espresso_types/index.html">espresso_<wbr>types</a><span class="version">0.1.0</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Reward<wbr>Merkle<wbr>Tree<wbr>Storage</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#design-pattern" title="Design Pattern">Design Pattern</a></li><li><a href="#implementations-1" title="Implementations">Implementations</a></li><li><a href="#thread-safety" title="Thread Safety">Thread Safety</a></li></ul><h3><a href="#required-associated-types">Required Associated Types</a></h3><ul class="block"><li><a href="#associatedtype.Error" title="Error">Error</a></li></ul><h3><a href="#required-methods">Required Methods</a></h3><ul class="block"><li><a href="#tymethod.exists" title="exists">exists</a></li><li><a href="#tymethod.get_entries" title="get_entries">get_entries</a></li><li><a href="#tymethod.with_tree" title="with_tree">with_tree</a></li><li><a href="#tymethod.with_tree_mut" title="with_tree_mut">with_tree_mut</a></li></ul><h3><a href="#provided-methods">Provided Methods</a></h3><ul class="block"><li><a href="#method.lookup" title="lookup">lookup</a></li><li><a href="#method.update_with" title="update_with">update_with</a></li></ul><h3><a href="#dyn-compatibility">Dyn Compatibility</a></h3><h3><a href="#implementors">Implementors</a></h3></section><div id="rustdoc-modnav"><h2><a href="index.html">In espresso_<wbr>types::<wbr>v0::<wbr>reward_<wbr>mt::<wbr>storage</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../../../index.html">espresso_types</a>::<wbr><a href="../../index.html">v0</a>::<wbr><a href="../index.html">reward_mt</a>::<wbr><a href="index.html">storage</a></div><h1>Trait <span class="trait">Reward<wbr>Merkle<wbr>Tree<wbr>Storage</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../../../src/espresso_types/v0/reward_mt/storage.rs.html#125-311">Source</a> </span></div><pre class="rust item-decl"><code>pub trait RewardMerkleTreeStorage {
+    type <a href="#associatedtype.Error" class="associatedtype">Error</a>: <a class="trait" href="https://doc.rust-lang.org/1.94.0/core/error/trait.Error.html" title="trait core::error::Error">Error</a> + <a class="trait" href="https://doc.rust-lang.org/1.94.0/core/marker/trait.Send.html" title="trait core::marker::Send">Send</a> + <a class="trait" href="https://doc.rust-lang.org/1.94.0/core/marker/trait.Sync.html" title="trait core::marker::Sync">Sync</a> + 'static;
+
+    // Required methods
+    fn <a href="#tymethod.with_tree" class="fn">with_tree</a>&lt;F, R&gt;(
+        &amp;self,
+        index: &amp;<a class="struct" href="struct.OuterIndex.html" title="struct espresso_types::v0::reward_mt::storage::OuterIndex">OuterIndex</a>,
+        f: F,
+    ) -&gt; <a class="enum" href="https://doc.rust-lang.org/1.94.0/core/result/enum.Result.html" title="enum core::result::Result">Result</a>&lt;R, Self::<a class="associatedtype" href="trait.RewardMerkleTreeStorage.html#associatedtype.Error" title="type espresso_types::v0::reward_mt::storage::RewardMerkleTreeStorage::Error">Error</a>&gt;
+       <span class="where">where F: <a class="trait" href="https://doc.rust-lang.org/1.94.0/core/ops/function/trait.FnOnce.html" title="trait core::ops::function::FnOnce">FnOnce</a>(&amp;<a class="type" href="type.InnerRewardMerkleTreeRoot.html" title="type espresso_types::v0::reward_mt::storage::InnerRewardMerkleTreeRoot">InnerRewardMerkleTreeRoot</a>) -&gt; R</span>;
+<span class="item-spacer"></span>    fn <a href="#tymethod.with_tree_mut" class="fn">with_tree_mut</a>&lt;F, R&gt;(
+        &amp;self,
+        index: &amp;<a class="struct" href="struct.OuterIndex.html" title="struct espresso_types::v0::reward_mt::storage::OuterIndex">OuterIndex</a>,
+        f: F,
+    ) -&gt; <a class="enum" href="https://doc.rust-lang.org/1.94.0/core/result/enum.Result.html" title="enum core::result::Result">Result</a>&lt;R, Self::<a class="associatedtype" href="trait.RewardMerkleTreeStorage.html#associatedtype.Error" title="type espresso_types::v0::reward_mt::storage::RewardMerkleTreeStorage::Error">Error</a>&gt;
+       <span class="where">where F: <a class="trait" href="https://doc.rust-lang.org/1.94.0/core/ops/function/trait.FnOnce.html" title="trait core::ops::function::FnOnce">FnOnce</a>(&amp;mut <a class="type" href="type.InnerRewardMerkleTreeRoot.html" title="type espresso_types::v0::reward_mt::storage::InnerRewardMerkleTreeRoot">InnerRewardMerkleTreeRoot</a>) -&gt; R</span>;
+<span class="item-spacer"></span>    fn <a href="#tymethod.exists" class="fn">exists</a>(&amp;self, index: &amp;<a class="struct" href="struct.OuterIndex.html" title="struct espresso_types::v0::reward_mt::storage::OuterIndex">OuterIndex</a>) -&gt; <a class="primitive" href="https://doc.rust-lang.org/1.94.0/std/primitive.bool.html">bool</a>;
+<span class="item-spacer"></span>    fn <a href="#tymethod.get_entries" class="fn">get_entries</a>(
+        &amp;self,
+    ) -&gt; <a class="enum" href="https://doc.rust-lang.org/1.94.0/core/result/enum.Result.html" title="enum core::result::Result">Result</a>&lt;<a class="struct" href="https://doc.rust-lang.org/1.94.0/alloc/vec/struct.Vec.html" title="struct alloc::vec::Vec">Vec</a>&lt;(<a class="struct" href="../../v0_4/struct.RewardAccountV2.html" title="struct espresso_types::v0::v0_4::RewardAccountV2">RewardAccountV2</a>, <a class="struct" href="../../v0_3/struct.RewardAmount.html" title="struct espresso_types::v0::v0_3::RewardAmount">RewardAmount</a>)&gt;, Self::<a class="associatedtype" href="trait.RewardMerkleTreeStorage.html#associatedtype.Error" title="type espresso_types::v0::reward_mt::storage::RewardMerkleTreeStorage::Error">Error</a>&gt;;
+
+    // Provided methods
+    fn <a href="#method.lookup" class="fn">lookup</a>(
+        &amp;self,
+        pos: impl <a class="trait" href="https://doc.rust-lang.org/1.94.0/core/borrow/trait.Borrow.html" title="trait core::borrow::Borrow">Borrow</a>&lt;<a class="struct" href="../../v0_4/struct.RewardAccountV2.html" title="struct espresso_types::v0::v0_4::RewardAccountV2">RewardAccountV2</a>&gt;,
+    ) -&gt; <a class="enum" href="https://doc.rust-lang.org/1.94.0/core/result/enum.Result.html" title="enum core::result::Result">Result</a>&lt;LookupResult&lt;<a class="struct" href="../../v0_3/struct.RewardAmount.html" title="struct espresso_types::v0::v0_3::RewardAmount">RewardAmount</a>, <a class="type" href="../type.RewardMerkleProof.html" title="type espresso_types::v0::reward_mt::RewardMerkleProof">RewardMerkleProof</a>, <a class="type" href="../type.RewardMerkleProof.html" title="type espresso_types::v0::reward_mt::RewardMerkleProof">RewardMerkleProof</a>&gt;, Self::<a class="associatedtype" href="trait.RewardMerkleTreeStorage.html#associatedtype.Error" title="type espresso_types::v0::reward_mt::storage::RewardMerkleTreeStorage::Error">Error</a>&gt; { ... }
+<span class="item-spacer"></span>    fn <a href="#method.update_with" class="fn">update_with</a>&lt;F&gt;(
+        &amp;mut self,
+        pos: impl <a class="trait" href="https://doc.rust-lang.org/1.94.0/core/borrow/trait.Borrow.html" title="trait core::borrow::Borrow">Borrow</a>&lt;<a class="struct" href="../../v0_4/struct.RewardAccountV2.html" title="struct espresso_types::v0::v0_4::RewardAccountV2">RewardAccountV2</a>&gt;,
+        f: F,
+    ) -&gt; <a class="type" href="https://docs.rs/anyhow/1.0.100/anyhow/type.Result.html" title="type anyhow::Result">Result</a>&lt;(LookupResult&lt;<a class="struct" href="../../v0_3/struct.RewardAmount.html" title="struct espresso_types::v0::v0_3::RewardAmount">RewardAmount</a>, <a class="primitive" href="https://doc.rust-lang.org/1.94.0/std/primitive.unit.html">()</a>, <a class="primitive" href="https://doc.rust-lang.org/1.94.0/std/primitive.unit.html">()</a>&gt;, <a class="primitive" href="https://doc.rust-lang.org/1.94.0/std/primitive.i64.html">i64</a>, <a class="struct" href="../../sparse_mt/struct.KeccakNode.html" title="struct espresso_types::v0::sparse_mt::KeccakNode">KeccakNode</a>)&gt;
+       <span class="where">where F: <a class="trait" href="https://doc.rust-lang.org/1.94.0/core/ops/function/trait.FnOnce.html" title="trait core::ops::function::FnOnce">FnOnce</a>(<a class="enum" href="https://doc.rust-lang.org/1.94.0/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;&amp;<a class="struct" href="../../v0_3/struct.RewardAmount.html" title="struct espresso_types::v0::v0_3::RewardAmount">RewardAmount</a>&gt;) -&gt; <a class="enum" href="https://doc.rust-lang.org/1.94.0/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;<a class="struct" href="../../v0_3/struct.RewardAmount.html" title="struct espresso_types::v0::v0_3::RewardAmount">RewardAmount</a>&gt;</span> { ... }
+}</code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Storage abstraction for inner Merkle tree roots.</p>
+<p>Defines how inner tree roots (one per partition) are persisted and accessed.
+Implementations control storage strategy (memory, disk, database) and caching.</p>
+<h2 id="design-pattern"><a class="doc-anchor" href="#design-pattern">§</a>Design Pattern</h2>
+<p>Uses the “loan” pattern with closures to ensure proper cache management:</p>
+<ul>
+<li><code>with_tree</code> / <code>with_tree_mut</code> load trees on-demand and handle flushing</li>
+<li>Callers cannot hold references beyond the closure scope</li>
+<li>Storage backend controls when to load/flush/cache</li>
+</ul>
+<h2 id="implementations-1"><a class="doc-anchor" href="#implementations-1">§</a>Implementations</h2>
+<ul>
+<li><a href="struct.CachedInMemoryStorage.html" title="struct espresso_types::v0::reward_mt::storage::CachedInMemoryStorage"><code>CachedInMemoryStorage</code></a>: Fast, non-persistent, single-entry cache</li>
+<li>[<code>fs_storage::RewardMerkleTreeFSStorage</code>]: File-backed, persistent</li>
+</ul>
+<h2 id="thread-safety"><a class="doc-anchor" href="#thread-safety">§</a>Thread Safety</h2>
+<p>Implementations use <code>RwLock</code> for interior mutability, allowing <code>&amp;self</code> methods
+to perform cache operations while maintaining Sync/Send.</p>
+</div></details><h2 id="required-associated-types" class="section-header">Required Associated Types<a href="#required-associated-types" class="anchor">§</a></h2><div class="methods"><details class="toggle" open><summary><section id="associatedtype.Error" class="method"><a class="src rightside" href="../../../../src/espresso_types/v0/reward_mt/storage.rs.html#131">Source</a><h4 class="code-header">type <a href="#associatedtype.Error" class="associatedtype">Error</a>: <a class="trait" href="https://doc.rust-lang.org/1.94.0/core/error/trait.Error.html" title="trait core::error::Error">Error</a> + <a class="trait" href="https://doc.rust-lang.org/1.94.0/core/marker/trait.Send.html" title="trait core::marker::Send">Send</a> + <a class="trait" href="https://doc.rust-lang.org/1.94.0/core/marker/trait.Sync.html" title="trait core::marker::Sync">Sync</a> + 'static</h4></section></summary><div class="docblock"><p>Error type for storage operations.</p>
+<ul>
+<li>In-memory storage: <code>std::convert::Infallible</code> (never fails)</li>
+<li>File storage: <code>std::io::Error</code> (disk I/O failures)</li>
+<li>Database storage: Custom error type</li>
+</ul>
+</div></details></div><h2 id="required-methods" class="section-header">Required Methods<a href="#required-methods" class="anchor">§</a></h2><div class="methods"><details class="toggle method-toggle" open><summary><section id="tymethod.with_tree" class="method"><a class="src rightside" href="../../../../src/espresso_types/v0/reward_mt/storage.rs.html#150-152">Source</a><h4 class="code-header">fn <a href="#tymethod.with_tree" class="fn">with_tree</a>&lt;F, R&gt;(&amp;self, index: &amp;<a class="struct" href="struct.OuterIndex.html" title="struct espresso_types::v0::reward_mt::storage::OuterIndex">OuterIndex</a>, f: F) -&gt; <a class="enum" href="https://doc.rust-lang.org/1.94.0/core/result/enum.Result.html" title="enum core::result::Result">Result</a>&lt;R, Self::<a class="associatedtype" href="trait.RewardMerkleTreeStorage.html#associatedtype.Error" title="type espresso_types::v0::reward_mt::storage::RewardMerkleTreeStorage::Error">Error</a>&gt;<div class="where">where
+    F: <a class="trait" href="https://doc.rust-lang.org/1.94.0/core/ops/function/trait.FnOnce.html" title="trait core::ops::function::FnOnce">FnOnce</a>(&amp;<a class="type" href="type.InnerRewardMerkleTreeRoot.html" title="type espresso_types::v0::reward_mt::storage::InnerRewardMerkleTreeRoot">InnerRewardMerkleTreeRoot</a>) -&gt; R,</div></h4></section></summary><div class="docblock"><p>Execute a read-only operation on an inner tree.</p>
+<p>Loads the tree from storage (or cache) if needed. Creates an empty tree
+if the partition has never been written to.</p>
+<h5 id="arguments"><a class="doc-anchor" href="#arguments">§</a>Arguments</h5>
+<ul>
+<li><code>index</code> - Partition index (0-15)</li>
+<li><code>f</code> - Closure that receives immutable tree reference</li>
+</ul>
+<h5 id="returns"><a class="doc-anchor" href="#returns">§</a>Returns</h5>
+<p>The closure’s return value, or storage error</p>
+<h5 id="example"><a class="doc-anchor" href="#example">§</a>Example</h5>
+<div class="example-wrap ignore"><a href="#" class="tooltip" title="This example is not tested">ⓘ</a><pre class="rust rust-example-rendered"><code>storage.with_tree(outer_index, |tree| tree.num_leaves())<span class="question-mark">?</span></code></pre></div></div></details><details class="toggle method-toggle" open><summary><section id="tymethod.with_tree_mut" class="method"><a class="src rightside" href="../../../../src/espresso_types/v0/reward_mt/storage.rs.html#174-176">Source</a><h4 class="code-header">fn <a href="#tymethod.with_tree_mut" class="fn">with_tree_mut</a>&lt;F, R&gt;(
+    &amp;self,
+    index: &amp;<a class="struct" href="struct.OuterIndex.html" title="struct espresso_types::v0::reward_mt::storage::OuterIndex">OuterIndex</a>,
+    f: F,
+) -&gt; <a class="enum" href="https://doc.rust-lang.org/1.94.0/core/result/enum.Result.html" title="enum core::result::Result">Result</a>&lt;R, Self::<a class="associatedtype" href="trait.RewardMerkleTreeStorage.html#associatedtype.Error" title="type espresso_types::v0::reward_mt::storage::RewardMerkleTreeStorage::Error">Error</a>&gt;<div class="where">where
+    F: <a class="trait" href="https://doc.rust-lang.org/1.94.0/core/ops/function/trait.FnOnce.html" title="trait core::ops::function::FnOnce">FnOnce</a>(&amp;mut <a class="type" href="type.InnerRewardMerkleTreeRoot.html" title="type espresso_types::v0::reward_mt::storage::InnerRewardMerkleTreeRoot">InnerRewardMerkleTreeRoot</a>) -&gt; R,</div></h4></section></summary><div class="docblock"><p>Execute a mutating operation on an inner tree.</p>
+<p>Loads the tree from storage (or cache) if needed. Creates an empty tree
+if the partition has never been written to. Changes are written back when
+the cache is flushed.</p>
+<h5 id="arguments-1"><a class="doc-anchor" href="#arguments-1">§</a>Arguments</h5>
+<ul>
+<li><code>index</code> - Partition index (0-15)</li>
+<li><code>f</code> - Closure that receives mutable tree reference</li>
+</ul>
+<h5 id="returns-1"><a class="doc-anchor" href="#returns-1">§</a>Returns</h5>
+<p>The closure’s return value, or storage error</p>
+<h5 id="example-1"><a class="doc-anchor" href="#example-1">§</a>Example</h5>
+<div class="example-wrap ignore"><a href="#" class="tooltip" title="This example is not tested">ⓘ</a><pre class="rust rust-example-rendered"><code>storage.with_tree_mut(outer_index, |tree| {
+    tree.update(account, amount)
+})<span class="question-mark">?</span></code></pre></div></div></details><details class="toggle method-toggle" open><summary><section id="tymethod.exists" class="method"><a class="src rightside" href="../../../../src/espresso_types/v0/reward_mt/storage.rs.html#188">Source</a><h4 class="code-header">fn <a href="#tymethod.exists" class="fn">exists</a>(&amp;self, index: &amp;<a class="struct" href="struct.OuterIndex.html" title="struct espresso_types::v0::reward_mt::storage::OuterIndex">OuterIndex</a>) -&gt; <a class="primitive" href="https://doc.rust-lang.org/1.94.0/std/primitive.bool.html">bool</a></h4></section></summary><div class="docblock"><p>Check if an inner tree exists at the given partition.</p>
+<p>Returns <code>true</code> if the partition has any accounts (non-empty tree),
+<code>false</code> if it’s empty or never been used.</p>
+<h5 id="arguments-2"><a class="doc-anchor" href="#arguments-2">§</a>Arguments</h5>
+<ul>
+<li><code>index</code> - Partition index (0-15)</li>
+</ul>
+<h5 id="returns-2"><a class="doc-anchor" href="#returns-2">§</a>Returns</h5>
+<p>Whether the partition contains data</p>
+</div></details><details class="toggle method-toggle" open><summary><section id="tymethod.get_entries" class="method"><a class="src rightside" href="../../../../src/espresso_types/v0/reward_mt/storage.rs.html#198">Source</a><h4 class="code-header">fn <a href="#tymethod.get_entries" class="fn">get_entries</a>(
+    &amp;self,
+) -&gt; <a class="enum" href="https://doc.rust-lang.org/1.94.0/core/result/enum.Result.html" title="enum core::result::Result">Result</a>&lt;<a class="struct" href="https://doc.rust-lang.org/1.94.0/alloc/vec/struct.Vec.html" title="struct alloc::vec::Vec">Vec</a>&lt;(<a class="struct" href="../../v0_4/struct.RewardAccountV2.html" title="struct espresso_types::v0::v0_4::RewardAccountV2">RewardAccountV2</a>, <a class="struct" href="../../v0_3/struct.RewardAmount.html" title="struct espresso_types::v0::v0_3::RewardAmount">RewardAmount</a>)&gt;, Self::<a class="associatedtype" href="trait.RewardMerkleTreeStorage.html#associatedtype.Error" title="type espresso_types::v0::reward_mt::storage::RewardMerkleTreeStorage::Error">Error</a>&gt;</h4></section></summary><div class="docblock"><p>Return all (account, amount) pairs directly, bypassing tree construction.</p>
+<p>Reads entries from each partition’s backing store (or cache tree for the
+currently-cached partition). Unlike <code>with_tree</code>-based iteration, this
+never builds a Merkle tree — it reads the flat entry lists directly.</p>
+<h5 id="returns-3"><a class="doc-anchor" href="#returns-3">§</a>Returns</h5>
+<p>All (account, amount) pairs across all 16 partitions</p>
+</div></details></div><h2 id="provided-methods" class="section-header">Provided Methods<a href="#provided-methods" class="anchor">§</a></h2><div class="methods"><details class="toggle method-toggle" open><summary><section id="method.lookup" class="method"><a class="src rightside" href="../../../../src/espresso_types/v0/reward_mt/storage.rs.html#219-245">Source</a><h4 class="code-header">fn <a href="#method.lookup" class="fn">lookup</a>(
+    &amp;self,
+    pos: impl <a class="trait" href="https://doc.rust-lang.org/1.94.0/core/borrow/trait.Borrow.html" title="trait core::borrow::Borrow">Borrow</a>&lt;<a class="struct" href="../../v0_4/struct.RewardAccountV2.html" title="struct espresso_types::v0::v0_4::RewardAccountV2">RewardAccountV2</a>&gt;,
+) -&gt; <a class="enum" href="https://doc.rust-lang.org/1.94.0/core/result/enum.Result.html" title="enum core::result::Result">Result</a>&lt;LookupResult&lt;<a class="struct" href="../../v0_3/struct.RewardAmount.html" title="struct espresso_types::v0::v0_3::RewardAmount">RewardAmount</a>, <a class="type" href="../type.RewardMerkleProof.html" title="type espresso_types::v0::reward_mt::RewardMerkleProof">RewardMerkleProof</a>, <a class="type" href="../type.RewardMerkleProof.html" title="type espresso_types::v0::reward_mt::RewardMerkleProof">RewardMerkleProof</a>&gt;, Self::<a class="associatedtype" href="trait.RewardMerkleTreeStorage.html#associatedtype.Error" title="type espresso_types::v0::reward_mt::storage::RewardMerkleTreeStorage::Error">Error</a>&gt;</h4></section></summary><div class="docblock"><p>Look up an account’s balance and generate a proof (membership or non-membership).</p>
+<p>This is a provided method that uses <code>with_tree</code> to perform the lookup within
+the appropriate inner tree. Extracts the outer index from the account address,
+loads that partition, and generates an inner proof (156 bits).</p>
+<p>The caller (typically <code>StorageBackedRewardMerkleTreeV2</code>) must patch the inner
+proof with the outer proof to create a full 160-bit proof.</p>
+<h5 id="arguments-3"><a class="doc-anchor" href="#arguments-3">§</a>Arguments</h5>
+<ul>
+<li><code>pos</code> - Account address to look up</li>
+</ul>
+<h5 id="returns-4"><a class="doc-anchor" href="#returns-4">§</a>Returns</h5>
+<ul>
+<li><code>Ok(value, proof)</code> - Account found with balance and inner membership proof</li>
+<li><code>NotInMemory</code> - Account data not available (sparse tree, needs catchup)</li>
+<li><code>NotFound(proof)</code> - Account doesn’t exist, includes inner non-membership proof</li>
+</ul>
+<h5 id="errors"><a class="doc-anchor" href="#errors">§</a>Errors</h5>
+<p>Returns storage error if IO operation fails</p>
+</div></details><details class="toggle method-toggle" open><summary><section id="method.update_with" class="method"><a class="src rightside" href="../../../../src/espresso_types/v0/reward_mt/storage.rs.html#280-310">Source</a><h4 class="code-header">fn <a href="#method.update_with" class="fn">update_with</a>&lt;F&gt;(
+    &amp;mut self,
+    pos: impl <a class="trait" href="https://doc.rust-lang.org/1.94.0/core/borrow/trait.Borrow.html" title="trait core::borrow::Borrow">Borrow</a>&lt;<a class="struct" href="../../v0_4/struct.RewardAccountV2.html" title="struct espresso_types::v0::v0_4::RewardAccountV2">RewardAccountV2</a>&gt;,
+    f: F,
+) -&gt; <a class="type" href="https://docs.rs/anyhow/1.0.100/anyhow/type.Result.html" title="type anyhow::Result">Result</a>&lt;(LookupResult&lt;<a class="struct" href="../../v0_3/struct.RewardAmount.html" title="struct espresso_types::v0::v0_3::RewardAmount">RewardAmount</a>, <a class="primitive" href="https://doc.rust-lang.org/1.94.0/std/primitive.unit.html">()</a>, <a class="primitive" href="https://doc.rust-lang.org/1.94.0/std/primitive.unit.html">()</a>&gt;, <a class="primitive" href="https://doc.rust-lang.org/1.94.0/std/primitive.i64.html">i64</a>, <a class="struct" href="../../sparse_mt/struct.KeccakNode.html" title="struct espresso_types::v0::sparse_mt::KeccakNode">KeccakNode</a>)&gt;<div class="where">where
+    F: <a class="trait" href="https://doc.rust-lang.org/1.94.0/core/ops/function/trait.FnOnce.html" title="trait core::ops::function::FnOnce">FnOnce</a>(<a class="enum" href="https://doc.rust-lang.org/1.94.0/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;&amp;<a class="struct" href="../../v0_3/struct.RewardAmount.html" title="struct espresso_types::v0::v0_3::RewardAmount">RewardAmount</a>&gt;) -&gt; <a class="enum" href="https://doc.rust-lang.org/1.94.0/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;<a class="struct" href="../../v0_3/struct.RewardAmount.html" title="struct espresso_types::v0::v0_3::RewardAmount">RewardAmount</a>&gt;,</div></h4></section></summary><div class="docblock"><p>Update an account’s balance using a custom function.</p>
+<p>Provided method that uses <code>with_tree_mut</code> to modify an inner tree. The function
+receives the current balance (if any) and returns the new balance. Returning
+<code>None</code> removes the account.</p>
+<h5 id="arguments-4"><a class="doc-anchor" href="#arguments-4">§</a>Arguments</h5>
+<ul>
+<li><code>pos</code> - Account address to update</li>
+<li><code>f</code> - Update function: <code>Option&lt;&amp;RewardAmount&gt; -&gt; Option&lt;RewardAmount&gt;</code>
+<ul>
+<li>Input <code>Some(&amp;amount)</code> if account exists, <code>None</code> otherwise</li>
+<li>Output <code>Some(new_amount)</code> to set balance, <code>None</code> to remove</li>
+</ul>
+</li>
+</ul>
+<h5 id="returns-5"><a class="doc-anchor" href="#returns-5">§</a>Returns</h5>
+<p>Tuple of:</p>
+<ul>
+<li><code>LookupResult</code> - Previous value (Ok/NotFound/NotInMemory)</li>
+<li><code>i64</code> - Leaf count delta (+1 for insert, -1 for remove, 0 for update)</li>
+<li><code>KeccakNode</code> - New inner tree root hash (or default if tree becomes empty)</li>
+</ul>
+<h5 id="errors-1"><a class="doc-anchor" href="#errors-1">§</a>Errors</h5>
+<p>Returns error if merkle tree update fails or storage operation fails</p>
+<h5 id="example-2"><a class="doc-anchor" href="#example-2">§</a>Example</h5>
+<div class="example-wrap ignore"><a href="#" class="tooltip" title="This example is not tested">ⓘ</a><pre class="rust rust-example-rendered"><code><span class="comment">// Increment balance by 100
+</span>storage.update_with(account, |existing| {
+    <span class="prelude-val">Some</span>(RewardAmount(existing.map(|a| a.<span class="number">0</span>).unwrap_or(U256::ZERO) + U256::from(<span class="number">100</span>)))
+})<span class="question-mark">?</span>;
+
+<span class="comment">// Remove account
+</span>storage.update_with(account, |<span class="kw">_</span>| <span class="prelude-val">None</span>)<span class="question-mark">?</span>;</code></pre></div></div></details></div><h2 id="dyn-compatibility" class="section-header">Dyn Compatibility<a href="#dyn-compatibility" class="anchor">§</a></h2><div class="dyn-compatibility-info"><p>This trait is <b>not</b> <a href="https://doc.rust-lang.org/1.94.0/reference/items/traits.html#dyn-compatibility">dyn compatible</a>.</p><p><i>In older versions of Rust, dyn compatibility was called "object safety", so this trait is not object safe.</i></p></div><h2 id="implementors" class="section-header">Implementors<a href="#implementors" class="anchor">§</a></h2><div id="implementors-list"><div class="negative-marker"></div><details class="toggle implementors-toggle"><summary><section id="impl-RewardMerkleTreeStorage-for-CachedInMemoryStorage" class="impl"><a class="src rightside" href="../../../../src/espresso_types/v0/reward_mt/storage.rs.html#590-641">Source</a><a href="#impl-RewardMerkleTreeStorage-for-CachedInMemoryStorage" class="anchor">§</a><h3 class="code-header">impl <a class="trait" href="trait.RewardMerkleTreeStorage.html" title="trait espresso_types::v0::reward_mt::storage::RewardMerkleTreeStorage">RewardMerkleTreeStorage</a> for <a class="struct" href="struct.CachedInMemoryStorage.html" title="struct espresso_types::v0::reward_mt::storage::CachedInMemoryStorage">CachedInMemoryStorage</a></h3></section></summary><div class="impl-items"><section id="associatedtype.Error-1" class="associatedtype trait-impl"><a class="src rightside" href="../../../../src/espresso_types/v0/reward_mt/storage.rs.html#591">Source</a><a href="#associatedtype.Error-1" class="anchor">§</a><h4 class="code-header">type <a href="#associatedtype.Error" class="associatedtype">Error</a> = <a class="enum" href="https://doc.rust-lang.org/1.94.0/core/convert/enum.Infallible.html" title="enum core::convert::Infallible">Infallible</a></h4></section></div></details></div><script src="../../../../trait.impl/espresso_types/v0/reward_mt/storage/trait.RewardMerkleTreeStorage.js" async></script></section></div></main></body></html>
