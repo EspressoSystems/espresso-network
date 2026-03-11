@@ -17,7 +17,6 @@ use anyhow::Context;
 use async_trait::async_trait;
 use chrono::Utc;
 use committable::Committable;
-#[cfg(not(feature = "embedded-db"))]
 use futures::future::FutureExt;
 use hotshot_types::{
     data::{Leaf, Leaf2, VidCommon, VidShare},
@@ -27,13 +26,11 @@ use hotshot_types::{
 };
 use itertools::Itertools;
 use log::LevelFilter;
-#[cfg(not(feature = "embedded-db"))]
-use sqlx::postgres::{PgConnectOptions, PgSslMode};
-#[cfg(feature = "embedded-db")]
-use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{
-    pool::{Pool, PoolOptions},
-    ConnectOptions, Row,
+    pool::PoolOptions,
+    postgres::{PgConnectOptions, PgSslMode},
+    sqlite::SqliteConnectOptions,
+    ConnectOptions,
 };
 
 use crate::{
@@ -49,7 +46,6 @@ use crate::{
     Header, QueryError, QueryResult,
 };
 pub extern crate sqlx;
-pub use sqlx::{Database, Sqlite};
 
 mod db;
 mod migrate;
@@ -57,18 +53,21 @@ mod queries;
 mod transaction;
 
 pub use anyhow::Error;
-pub use db::*;
+pub use db::{
+    syntax_helpers, BackendPoolConnection, BackendTransaction, DbBackend, SqlPool, SyntaxHelpers,
+};
 pub use include_dir::include_dir;
-pub use queries::QueryBuilder;
+pub use queries::{query, query_as, QueryBuilder};
 pub use refinery::Migration;
 pub use transaction::*;
 
-use self::{migrate::Migrator, transaction::PoolMetrics};
+use self::{migrate::Migrator, queries::BackendRow, transaction::PoolMetrics};
 use super::{AvailabilityStorage, NodeStorage};
 // This needs to be reexported so that we can reference it by absolute path relative to this crate
 // in the expansion of `include_migrations`, even when `include_migrations` is invoked from another
 // crate which doesn't have `include_dir` as a dependency.
 pub use crate::include_migrations;
+use crate::with_backend;
 
 /// Embed migrations from the given directory into the current binary for PostgreSQL or SQLite.
 ///
@@ -89,19 +88,11 @@ pub use crate::include_migrations;
 /// - SQLite migrations are in `/migrations/sqlite`.
 ///
 /// ```
-/// # use hotshot_query_service::data_source::sql::{include_migrations, Migration};
-/// // For PostgreSQL
-/// #[cfg(not(feature = "embedded-db"))]
-///  let mut migrations: Vec<Migration> =
+/// # use hotshot_query_service::data_source::sql::{include_migrations, Migration, DbBackend};
+/// let pg_migrations: Vec<Migration> =
 ///     include_migrations!("$CARGO_MANIFEST_DIR/migrations/postgres").collect();
-/// // For SQLite
-/// #[cfg(feature = "embedded-db")]
-/// let mut migrations: Vec<Migration> =
+/// let sqlite_migrations: Vec<Migration> =
 ///     include_migrations!("$CARGO_MANIFEST_DIR/migrations/sqlite").collect();
-///
-///     migrations.sort();
-///     assert_eq!(migrations[0].version(), 10);
-///     assert_eq!(migrations[0].name(), "init_schema");
 /// ```
 ///
 /// Note that a similar macro is available from Refinery:
@@ -138,14 +129,17 @@ macro_rules! include_migrations {
 }
 
 /// The migrations required to build the default schema for this version of [`SqlStorage`].
-pub fn default_migrations() -> Vec<Migration> {
-    #[cfg(not(feature = "embedded-db"))]
-    let mut migrations =
-        include_migrations!("$CARGO_MANIFEST_DIR/migrations/postgres").collect::<Vec<_>>();
-
-    #[cfg(feature = "embedded-db")]
-    let mut migrations =
-        include_migrations!("$CARGO_MANIFEST_DIR/migrations/sqlite").collect::<Vec<_>>();
+///
+/// The `backend` parameter selects the appropriate migration set for the given database backend.
+pub fn default_migrations(backend: DbBackend) -> Vec<Migration> {
+    let mut migrations = match backend {
+        DbBackend::Postgres => {
+            include_migrations!("$CARGO_MANIFEST_DIR/migrations/postgres").collect::<Vec<_>>()
+        },
+        DbBackend::Sqlite => {
+            include_migrations!("$CARGO_MANIFEST_DIR/migrations/sqlite").collect::<Vec<_>>()
+        },
+    };
 
     // Check version uniqueness and sort by version.
     validate_migrations(&mut migrations).expect("default migrations are invalid");
@@ -212,33 +206,52 @@ fn add_custom_migrations(
         .map(|pair| pair.reduce(|_, custom| custom))
 }
 
-#[derive(Clone)]
-pub struct Config {
-    #[cfg(feature = "embedded-db")]
-    db_opt: SqliteConnectOptions,
+#[derive(Clone, Debug)]
+pub enum Config {
+    Postgres(PostgresConfig),
+    Sqlite(SqliteConfig),
+}
 
-    #[cfg(not(feature = "embedded-db"))]
+#[derive(Clone, Debug)]
+pub struct PostgresConfig {
     db_opt: PgConnectOptions,
-
-    pool_opt: PoolOptions<Db>,
-
-    /// Extra pool_opt to allow separately configuring the connection pool for query service
-    #[cfg(not(feature = "embedded-db"))]
-    pool_opt_query: PoolOptions<Db>,
-
-    #[cfg(not(feature = "embedded-db"))]
+    pool_opt: PoolOptions<sqlx::Postgres>,
+    /// Extra pool options to allow separately configuring the connection pool for query service.
+    pool_opt_query: PoolOptions<sqlx::Postgres>,
+    /// The name of the schema to use for queries.
+    ///
+    /// The default schema is named `hotshot` and is created via the default migrations.
     schema: String,
     reset: bool,
     migrations: Vec<Migration>,
     no_migrations: bool,
     pruner_cfg: Option<PrunerCfg>,
     archive: bool,
-    pool: Option<Pool<Db>>,
+    pool: Option<SqlPool>,
 }
 
-#[cfg(not(feature = "embedded-db"))]
-impl Default for Config {
-    fn default() -> Self {
+#[derive(Clone, Debug)]
+pub struct SqliteConfig {
+    db_opt: SqliteConnectOptions,
+    pool_opt: PoolOptions<sqlx::Sqlite>,
+    reset: bool,
+    migrations: Vec<Migration>,
+    no_migrations: bool,
+    pruner_cfg: Option<PrunerCfg>,
+    archive: bool,
+    pool: Option<SqlPool>,
+}
+
+impl Config {
+    pub fn backend(&self) -> DbBackend {
+        match self {
+            Self::Postgres(_) => DbBackend::Postgres,
+            Self::Sqlite(_) => DbBackend::Sqlite,
+        }
+    }
+
+    /// Create a default Postgres config.
+    pub fn postgres_default() -> Self {
         PgConnectOptions::default()
             .username("postgres")
             .password("password")
@@ -246,11 +259,9 @@ impl Default for Config {
             .port(5432)
             .into()
     }
-}
 
-#[cfg(feature = "embedded-db")]
-impl Default for Config {
-    fn default() -> Self {
+    /// Create a default SQLite config.
+    pub fn sqlite_default() -> Self {
         SqliteConnectOptions::default()
             .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
             .busy_timeout(Duration::from_secs(30))
@@ -260,26 +271,15 @@ impl Default for Config {
     }
 }
 
-#[cfg(feature = "embedded-db")]
-impl From<SqliteConnectOptions> for Config {
-    fn from(db_opt: SqliteConnectOptions) -> Self {
-        Self {
-            db_opt,
-            pool_opt: PoolOptions::default(),
-            reset: false,
-            migrations: vec![],
-            no_migrations: false,
-            pruner_cfg: None,
-            archive: false,
-            pool: None,
-        }
+impl Default for Config {
+    fn default() -> Self {
+        Self::postgres_default()
     }
 }
 
-#[cfg(not(feature = "embedded-db"))]
 impl From<PgConnectOptions> for Config {
     fn from(db_opt: PgConnectOptions) -> Self {
-        Self {
+        Self::Postgres(PostgresConfig {
             db_opt,
             pool_opt: PoolOptions::default(),
             pool_opt_query: PoolOptions::default(),
@@ -290,74 +290,115 @@ impl From<PgConnectOptions> for Config {
             pruner_cfg: None,
             archive: false,
             pool: None,
+        })
+    }
+}
+
+impl From<SqliteConnectOptions> for Config {
+    fn from(db_opt: SqliteConnectOptions) -> Self {
+        Self::Sqlite(SqliteConfig {
+            db_opt,
+            pool_opt: PoolOptions::default(),
+            reset: false,
+            migrations: vec![],
+            no_migrations: false,
+            pruner_cfg: None,
+            archive: false,
+            pool: None,
+        })
+    }
+}
+
+impl Config {
+    /// Parse a connection string.
+    ///
+    /// If the string starts with `sqlite:`, it is parsed as a SQLite connection string. Otherwise,
+    /// it is parsed as a PostgreSQL connection string.
+    pub fn parse(s: &str) -> Result<Self, Error> {
+        if s.starts_with("sqlite:") {
+            Ok(SqliteConnectOptions::from_str(s)
+                .map_err(|e| Error::msg(format!("invalid SQLite connection string: {e}")))?
+                .into())
+        } else {
+            Ok(PgConnectOptions::from_str(s)
+                .map_err(|e| Error::msg(format!("invalid PostgreSQL connection string: {e}")))?
+                .into())
         }
     }
 }
 
-#[cfg(not(feature = "embedded-db"))]
-impl FromStr for Config {
-    type Err = <PgConnectOptions as FromStr>::Err;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(PgConnectOptions::from_str(s)?.into())
-    }
-}
-
-#[cfg(feature = "embedded-db")]
-impl FromStr for Config {
-    type Err = <SqliteConnectOptions as FromStr>::Err;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(SqliteConnectOptions::from_str(s)?.into())
-    }
-}
-
-#[cfg(feature = "embedded-db")]
 impl Config {
+    /// Set the SQLite busy timeout.
+    ///
+    /// Only applicable to SQLite configs; ignored for Postgres.
     pub fn busy_timeout(mut self, timeout: Duration) -> Self {
-        self.db_opt = self.db_opt.busy_timeout(timeout);
+        if let Self::Sqlite(ref mut cfg) = self {
+            cfg.db_opt = cfg.db_opt.clone().busy_timeout(timeout);
+        }
         self
     }
 
+    /// Set the SQLite database file path.
+    ///
+    /// Only applicable to SQLite configs; ignored for Postgres.
     pub fn db_path(mut self, path: std::path::PathBuf) -> Self {
-        self.db_opt = self.db_opt.filename(path);
+        if let Self::Sqlite(ref mut cfg) = self {
+            cfg.db_opt = cfg.db_opt.clone().filename(path);
+        }
         self
     }
-}
 
-#[cfg(not(feature = "embedded-db"))]
-impl Config {
     /// Set the hostname of the database server.
     ///
     /// The default is `localhost`.
+    ///
+    /// Only applicable to Postgres configs; ignored for SQLite.
     pub fn host(mut self, host: impl Into<String>) -> Self {
-        self.db_opt = self.db_opt.host(&host.into());
+        if let Self::Postgres(ref mut cfg) = self {
+            cfg.db_opt = cfg.db_opt.clone().host(&host.into());
+        }
         self
     }
 
     /// Set the port on which to connect to the database.
     ///
     /// The default is 5432, the default Postgres port.
+    ///
+    /// Only applicable to Postgres configs; ignored for SQLite.
     pub fn port(mut self, port: u16) -> Self {
-        self.db_opt = self.db_opt.port(port);
+        if let Self::Postgres(ref mut cfg) = self {
+            cfg.db_opt = cfg.db_opt.clone().port(port);
+        }
         self
     }
 
     /// Set the DB user to connect as.
+    ///
+    /// Only applicable to Postgres configs; ignored for SQLite.
     pub fn user(mut self, user: &str) -> Self {
-        self.db_opt = self.db_opt.username(user);
+        if let Self::Postgres(ref mut cfg) = self {
+            cfg.db_opt = cfg.db_opt.clone().username(user);
+        }
         self
     }
 
     /// Set a password for connecting to the database.
+    ///
+    /// Only applicable to Postgres configs; ignored for SQLite.
     pub fn password(mut self, password: &str) -> Self {
-        self.db_opt = self.db_opt.password(password);
+        if let Self::Postgres(ref mut cfg) = self {
+            cfg.db_opt = cfg.db_opt.clone().password(password);
+        }
         self
     }
 
     /// Set the name of the database to connect to.
+    ///
+    /// Only applicable to Postgres configs; ignored for SQLite.
     pub fn database(mut self, database: &str) -> Self {
-        self.db_opt = self.db_opt.database(database);
+        if let Self::Postgres(ref mut cfg) = self {
+            cfg.db_opt = cfg.db_opt.clone().database(database);
+        }
         self
     }
 
@@ -366,31 +407,40 @@ impl Config {
     /// Note that an encrypted connection may be established even if this option is not set, as long
     /// as both the client and server support it. This option merely causes connection to fail if an
     /// encrypted stream cannot be established.
+    ///
+    /// Only applicable to Postgres configs; ignored for SQLite.
     pub fn tls(mut self) -> Self {
-        self.db_opt = self.db_opt.ssl_mode(PgSslMode::Require);
+        if let Self::Postgres(ref mut cfg) = self {
+            cfg.db_opt = cfg.db_opt.clone().ssl_mode(PgSslMode::Require);
+        }
         self
     }
 
     /// Set the name of the schema to use for queries.
     ///
     /// The default schema is named `hotshot` and is created via the default migrations.
+    ///
+    /// Only applicable to Postgres configs; ignored for SQLite.
     pub fn schema(mut self, schema: impl Into<String>) -> Self {
-        self.schema = schema.into();
+        if let Self::Postgres(ref mut cfg) = self {
+            cfg.schema = schema.into();
+        }
         self
     }
-}
 
-impl Config {
-    /// Sets the database connection pool
+    /// Sets the database connection pool.
     /// This allows reusing an existing connection pool when building a new `SqlStorage` instance.
-    pub fn pool(mut self, pool: Pool<Db>) -> Self {
-        self.pool = Some(pool);
+    pub fn pool(mut self, pool: SqlPool) -> Self {
+        match &mut self {
+            Self::Postgres(cfg) => cfg.pool = Some(pool),
+            Self::Sqlite(cfg) => cfg.pool = Some(pool),
+        }
         self
     }
 
     /// Reset the schema on connection.
     ///
-    /// When this [`Config`] is used to [`connect`](Self::connect) a
+    /// When this [`Config`] is used to [`connect`](SqlStorage::connect) a
     /// [`SqlDataSource`](crate::data_source::SqlDataSource), if this option is set, the relevant
     /// [`schema`](Self::schema) will first be dropped and then recreated, yielding a completely
     /// fresh instance of the query service.
@@ -399,19 +449,28 @@ impl Config {
     /// must be used with extreme caution, as using this will irrevocably delete any data pertaining
     /// to the query service in the database.
     pub fn reset_schema(mut self) -> Self {
-        self.reset = true;
+        match &mut self {
+            Self::Postgres(cfg) => cfg.reset = true,
+            Self::Sqlite(cfg) => cfg.reset = true,
+        }
         self
     }
 
     /// Add custom migrations to run when connecting to the database.
     pub fn migrations(mut self, migrations: impl IntoIterator<Item = Migration>) -> Self {
-        self.migrations.extend(migrations);
+        match &mut self {
+            Self::Postgres(cfg) => cfg.migrations.extend(migrations),
+            Self::Sqlite(cfg) => cfg.migrations.extend(migrations),
+        }
         self
     }
 
     /// Skip all migrations when connecting to the database.
     pub fn no_migrations(mut self) -> Self {
-        self.no_migrations = true;
+        match &mut self {
+            Self::Postgres(cfg) => cfg.no_migrations = true,
+            Self::Sqlite(cfg) => cfg.no_migrations = true,
+        }
         self
     }
 
@@ -420,8 +479,16 @@ impl Config {
     /// If [`archive`](Self::archive) was previously specified, this will override it.
     pub fn pruner_cfg(mut self, cfg: PrunerCfg) -> Result<Self, Error> {
         cfg.validate()?;
-        self.pruner_cfg = Some(cfg);
-        self.archive = false;
+        match &mut self {
+            Self::Postgres(c) => {
+                c.pruner_cfg = Some(cfg);
+                c.archive = false;
+            },
+            Self::Sqlite(c) => {
+                c.pruner_cfg = Some(cfg);
+                c.archive = false;
+            },
+        }
         Ok(self)
     }
 
@@ -434,8 +501,16 @@ impl Config {
     ///
     /// If [`pruner_cfg`](Self::pruner_cfg) was previously specified, this will override it.
     pub fn archive(mut self) -> Self {
-        self.pruner_cfg = None;
-        self.archive = true;
+        match &mut self {
+            Self::Postgres(cfg) => {
+                cfg.pruner_cfg = None;
+                cfg.archive = true;
+            },
+            Self::Sqlite(cfg) => {
+                cfg.pruner_cfg = None;
+                cfg.archive = true;
+            },
+        }
         self
     }
 
@@ -444,13 +519,15 @@ impl Config {
     /// Any connection which has been open and unused longer than this duration will be
     /// automatically closed to reduce load on the server.
     pub fn idle_connection_timeout(mut self, timeout: Duration) -> Self {
-        self.pool_opt = self.pool_opt.idle_timeout(Some(timeout));
-
-        #[cfg(not(feature = "embedded-db"))]
-        {
-            self.pool_opt_query = self.pool_opt_query.idle_timeout(Some(timeout));
+        match &mut self {
+            Self::Postgres(cfg) => {
+                cfg.pool_opt = cfg.pool_opt.clone().idle_timeout(Some(timeout));
+                cfg.pool_opt_query = cfg.pool_opt_query.clone().idle_timeout(Some(timeout));
+            },
+            Self::Sqlite(cfg) => {
+                cfg.pool_opt = cfg.pool_opt.clone().idle_timeout(Some(timeout));
+            },
         }
-
         self
     }
 
@@ -461,13 +538,15 @@ impl Config {
     /// even healthy connections once in a while (e.g. daily) in case of resource leaks in the
     /// server implementation.
     pub fn connection_timeout(mut self, timeout: Duration) -> Self {
-        self.pool_opt = self.pool_opt.max_lifetime(Some(timeout));
-
-        #[cfg(not(feature = "embedded-db"))]
-        {
-            self.pool_opt = self.pool_opt.max_lifetime(Some(timeout));
+        match &mut self {
+            Self::Postgres(cfg) => {
+                cfg.pool_opt = cfg.pool_opt.clone().max_lifetime(Some(timeout));
+                cfg.pool_opt_query = cfg.pool_opt_query.clone().max_lifetime(Some(timeout));
+            },
+            Self::Sqlite(cfg) => {
+                cfg.pool_opt = cfg.pool_opt.clone().max_lifetime(Some(timeout));
+            },
         }
-
         self
     }
 
@@ -477,13 +556,22 @@ impl Config {
     /// at all times. This can be used to reduce the latency hit of opening new connections when at
     /// least this many simultaneous connections are frequently needed.
     pub fn min_connections(mut self, min: u32) -> Self {
-        self.pool_opt = self.pool_opt.min_connections(min);
+        match &mut self {
+            Self::Postgres(cfg) => {
+                cfg.pool_opt = cfg.pool_opt.clone().min_connections(min);
+            },
+            Self::Sqlite(cfg) => {
+                cfg.pool_opt = cfg.pool_opt.clone().min_connections(min);
+            },
+        }
         self
     }
 
-    #[cfg(not(feature = "embedded-db"))]
+    /// Set the minimum number of connections for the query pool (Postgres only).
     pub fn query_min_connections(mut self, min: u32) -> Self {
-        self.pool_opt_query = self.pool_opt_query.min_connections(min);
+        if let Self::Postgres(ref mut cfg) = self {
+            cfg.pool_opt_query = cfg.pool_opt_query.clone().min_connections(min);
+        }
         self
     }
 
@@ -492,13 +580,22 @@ impl Config {
     /// Once `max` connections are in use simultaneously, further attempts to acquire a connection
     /// (or begin a transaction) will block until one of the existing connections is released.
     pub fn max_connections(mut self, max: u32) -> Self {
-        self.pool_opt = self.pool_opt.max_connections(max);
+        match &mut self {
+            Self::Postgres(cfg) => {
+                cfg.pool_opt = cfg.pool_opt.clone().max_connections(max);
+            },
+            Self::Sqlite(cfg) => {
+                cfg.pool_opt = cfg.pool_opt.clone().max_connections(max);
+            },
+        }
         self
     }
 
-    #[cfg(not(feature = "embedded-db"))]
+    /// Set the maximum number of connections for the query pool (Postgres only).
     pub fn query_max_connections(mut self, max: u32) -> Self {
-        self.pool_opt_query = self.pool_opt_query.max_connections(max);
+        if let Self::Postgres(ref mut cfg) = self {
+            cfg.pool_opt_query = cfg.pool_opt_query.clone().max_connections(max);
+        }
         self
     }
 
@@ -506,37 +603,47 @@ impl Config {
     ///
     /// The default threshold is 1s.
     pub fn slow_statement_threshold(mut self, threshold: Duration) -> Self {
-        self.db_opt = self
-            .db_opt
-            .log_slow_statements(LevelFilter::Warn, threshold);
+        match &mut self {
+            Self::Postgres(cfg) => {
+                cfg.db_opt = cfg
+                    .db_opt
+                    .clone()
+                    .log_slow_statements(LevelFilter::Warn, threshold);
+            },
+            Self::Sqlite(cfg) => {
+                cfg.db_opt = cfg
+                    .db_opt
+                    .clone()
+                    .log_slow_statements(LevelFilter::Warn, threshold);
+            },
+        }
         self
     }
 
     /// Set the maximum time a single SQL statement is allowed to run before being canceled.
     ///
-    /// This helps prevent queries from running indefinitely even when the client is dropped
-    #[cfg(not(feature = "embedded-db"))]
+    /// This helps prevent queries from running indefinitely even when the client is dropped.
+    ///
+    /// For Postgres, this sets the `statement_timeout` connection option.
+    /// For SQLite, this is a no-op (not supported).
     pub fn statement_timeout(mut self, timeout: Duration) -> Self {
-        // Format duration as milliseconds
-        // PostgreSQL interprets values without units as milliseconds
-        let timeout_ms = timeout.as_millis();
-        self.db_opt = self
-            .db_opt
-            .options([("statement_timeout", timeout_ms.to_string())]);
-        self
-    }
-
-    /// not supported for SQLite.
-    #[cfg(feature = "embedded-db")]
-    pub fn statement_timeout(self, _timeout: Duration) -> Self {
+        if let Self::Postgres(ref mut cfg) = self {
+            // Format duration as milliseconds.
+            // PostgreSQL interprets values without units as milliseconds.
+            let timeout_ms = timeout.as_millis();
+            cfg.db_opt = cfg
+                .db_opt
+                .clone()
+                .options([("statement_timeout", timeout_ms.to_string())]);
+        }
         self
     }
 }
 
-/// Storage for the APIs provided in this crate, backed by a remote PostgreSQL database.
+/// Storage for the APIs provided in this crate, backed by a remote PostgreSQL or local SQLite database.
 #[derive(Clone, Debug)]
 pub struct SqlStorage {
-    pool: Pool<Db>,
+    pool: SqlPool,
     metrics: PrometheusMetrics,
     pool_metrics: PoolMetrics,
     pruner_cfg: Option<PrunerCfg>,
@@ -556,12 +663,15 @@ pub enum StorageConnectionType {
 }
 
 impl SqlStorage {
-    pub fn pool(&self) -> Pool<Db> {
+    pub fn pool(&self) -> SqlPool {
         self.pool.clone()
     }
 
+    pub fn backend(&self) -> DbBackend {
+        self.pool.backend()
+    }
+
     /// Connect to a remote database.
-    #[allow(unused_variables)]
     pub async fn connect(
         mut config: Config,
         connection_type: StorageConnectionType,
@@ -569,24 +679,34 @@ impl SqlStorage {
         let metrics = PrometheusMetrics::default();
         let pool_metrics = PoolMetrics::new(&*metrics.subgroup("sql".into()));
 
-        #[cfg(feature = "embedded-db")]
-        let pool = config.pool_opt.clone();
-        #[cfg(not(feature = "embedded-db"))]
-        let pool = match connection_type {
+        match config {
+            Config::Postgres(ref mut pg) => {
+                Self::connect_postgres(pg, connection_type, metrics, pool_metrics).await
+            },
+            Config::Sqlite(ref mut sq) => Self::connect_sqlite(sq, metrics, pool_metrics).await,
+        }
+    }
+
+    async fn connect_postgres(
+        config: &mut PostgresConfig,
+        connection_type: StorageConnectionType,
+        metrics: PrometheusMetrics,
+        pool_metrics: PoolMetrics,
+    ) -> Result<Self, Error> {
+        let pruner_cfg = config.pruner_cfg.clone();
+
+        let pool_opt = match connection_type {
             StorageConnectionType::Sequencer => config.pool_opt.clone(),
             StorageConnectionType::Query => config.pool_opt_query.clone(),
         };
 
-        let pruner_cfg = config.pruner_cfg;
-
-        // Only reuse the same pool if we're using sqlite
-        if cfg!(feature = "embedded-db") || connection_type == StorageConnectionType::Sequencer {
-            // re-use the same pool if present and return early
-            if let Some(pool) = config.pool {
+        // Re-use the same pool if present and return early.
+        if connection_type == StorageConnectionType::Sequencer {
+            if let Some(ref pool) = config.pool {
                 return Ok(Self {
                     metrics,
                     pool_metrics,
-                    pool,
+                    pool: pool.clone(),
                     pruner_cfg,
                 });
             }
@@ -594,13 +714,11 @@ impl SqlStorage {
             tracing::info!("not reusing existing pool for query connection");
         }
 
-        #[cfg(not(feature = "embedded-db"))]
         let schema = config.schema.clone();
-        #[cfg(not(feature = "embedded-db"))]
-        let pool = pool.after_connect(move |conn, _| {
-            let schema = config.schema.clone();
+        let pool_opt = pool_opt.after_connect(move |conn, _| {
+            let schema = schema.clone();
             async move {
-                query(&format!("SET search_path TO {schema}"))
+                sqlx::query(&format!("SET search_path TO {schema}"))
                     .execute(conn)
                     .await?;
                 Ok(())
@@ -608,48 +726,44 @@ impl SqlStorage {
             .boxed()
         });
 
-        #[cfg(feature = "embedded-db")]
-        if config.reset {
-            std::fs::remove_file(config.db_opt.get_filename())?;
-        }
-
-        let pool = pool.connect_with(config.db_opt).await?;
+        let pg_pool = pool_opt.connect_with(config.db_opt.clone()).await?;
 
         // Create or connect to the schema for this query service.
-        let mut conn = pool.acquire().await?;
+        let mut conn = pg_pool.acquire().await?;
 
-        // Disable statement timeout for migrations, as they can take a long time
-        #[cfg(not(feature = "embedded-db"))]
-        query("SET statement_timeout = 0")
+        // Disable statement timeout for migrations, as they can take a long time.
+        sqlx::query("SET statement_timeout = 0")
             .execute(conn.as_mut())
             .await?;
 
-        #[cfg(not(feature = "embedded-db"))]
         if config.reset {
-            query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            sqlx::query(&format!("DROP SCHEMA IF EXISTS {} CASCADE", config.schema))
                 .execute(conn.as_mut())
                 .await?;
         }
 
-        #[cfg(not(feature = "embedded-db"))]
-        query(&format!("CREATE SCHEMA IF NOT EXISTS {schema}"))
+        sqlx::query(&format!("CREATE SCHEMA IF NOT EXISTS {}", config.schema))
             .execute(conn.as_mut())
             .await?;
 
         // Get migrations and interleave with custom migrations, sorting by version number.
         validate_migrations(&mut config.migrations)?;
-        let migrations =
-            add_custom_migrations(default_migrations(), config.migrations).collect::<Vec<_>>();
+        let migrations = add_custom_migrations(
+            default_migrations(DbBackend::Postgres),
+            config.migrations.drain(..),
+        )
+        .collect::<Vec<_>>();
 
         // Get a migration runner. Depending on the config, we can either use this to actually run
         // the migrations or just check if the database is up to date.
         let runner = refinery::Runner::new(&migrations).set_grouped(true);
 
+        let mut backend_conn = BackendPoolConnection::Postgres(conn);
         if config.no_migrations {
             // We've been asked not to run any migrations. Abort if the DB is not already up to
             // date.
             let last_applied = runner
-                .get_last_applied_migration_async(&mut Migrator::from(&mut conn))
+                .get_last_applied_migration_async(&mut Migrator::from(&mut backend_conn))
                 .await?;
             let last_expected = migrations.last();
             if last_applied.as_ref() != last_expected {
@@ -659,8 +773,11 @@ impl SqlStorage {
                 )));
             }
         } else {
-            // Run migrations using `refinery`.
-            match runner.run_async(&mut Migrator::from(&mut conn)).await {
+            // Run migrations using refinery.
+            match runner
+                .run_async(&mut Migrator::from(&mut backend_conn))
+                .await
+            {
                 Ok(report) => {
                     tracing::info!("ran DB migrations: {report:?}");
                 },
@@ -672,17 +789,122 @@ impl SqlStorage {
         }
 
         if config.archive {
-            // If running in archive mode, ensure the pruned height is set to 0, so the fetcher will
-            // reconstruct previously pruned data.
-            query("DELETE FROM pruned_height WHERE id = 1")
-                .execute(conn.as_mut())
-                .await?;
+            // If running in archive mode, ensure the pruned height is set to 0, so the fetcher
+            // will reconstruct previously pruned data.
+            match &mut backend_conn {
+                BackendPoolConnection::Postgres(c) => {
+                    sqlx::query("DELETE FROM pruned_height WHERE id = 1")
+                        .execute(c.as_mut())
+                        .await?;
+                },
+                _ => unreachable!(),
+            }
         }
 
-        conn.close().await?;
+        match backend_conn {
+            BackendPoolConnection::Postgres(c) => c.close().await?,
+            _ => unreachable!(),
+        }
 
         Ok(Self {
-            pool,
+            pool: SqlPool::Postgres(pg_pool),
+            pool_metrics,
+            metrics,
+            pruner_cfg,
+        })
+    }
+
+    async fn connect_sqlite(
+        config: &mut SqliteConfig,
+        metrics: PrometheusMetrics,
+        pool_metrics: PoolMetrics,
+    ) -> Result<Self, Error> {
+        let pruner_cfg = config.pruner_cfg.clone();
+
+        // Re-use the same pool if present and return early.
+        if let Some(ref pool) = config.pool {
+            return Ok(Self {
+                metrics,
+                pool_metrics,
+                pool: pool.clone(),
+                pruner_cfg,
+            });
+        }
+
+        if config.reset {
+            let _ = std::fs::remove_file(config.db_opt.get_filename());
+        }
+
+        let sq_pool = config
+            .pool_opt
+            .clone()
+            .connect_with(config.db_opt.clone())
+            .await?;
+
+        let conn = sq_pool.acquire().await?;
+
+        // Get migrations and interleave with custom migrations, sorting by version number.
+        validate_migrations(&mut config.migrations)?;
+        let migrations = add_custom_migrations(
+            default_migrations(DbBackend::Sqlite),
+            config.migrations.drain(..),
+        )
+        .collect::<Vec<_>>();
+
+        // Get a migration runner. Depending on the config, we can either use this to actually run
+        // the migrations or just check if the database is up to date.
+        let runner = refinery::Runner::new(&migrations).set_grouped(true);
+
+        let mut backend_conn = BackendPoolConnection::Sqlite(conn);
+        if config.no_migrations {
+            // We've been asked not to run any migrations. Abort if the DB is not already up to
+            // date.
+            let last_applied = runner
+                .get_last_applied_migration_async(&mut Migrator::from(&mut backend_conn))
+                .await?;
+            let last_expected = migrations.last();
+            if last_applied.as_ref() != last_expected {
+                return Err(Error::msg(format!(
+                    "DB is out of date: last applied migration is {last_applied:?}, but expected \
+                     {last_expected:?}"
+                )));
+            }
+        } else {
+            // Run migrations using refinery.
+            match runner
+                .run_async(&mut Migrator::from(&mut backend_conn))
+                .await
+            {
+                Ok(report) => {
+                    tracing::info!("ran DB migrations: {report:?}");
+                },
+                Err(err) => {
+                    tracing::error!("DB migrations failed: {:?}", err.report());
+                    Err(err)?;
+                },
+            }
+        }
+
+        if config.archive {
+            // If running in archive mode, ensure the pruned height is set to 0, so the fetcher
+            // will reconstruct previously pruned data.
+            match &mut backend_conn {
+                BackendPoolConnection::Sqlite(c) => {
+                    sqlx::query("DELETE FROM pruned_height WHERE id = 1")
+                        .execute(c.as_mut())
+                        .await?;
+                },
+                _ => unreachable!(),
+            }
+        }
+
+        match backend_conn {
+            BackendPoolConnection::Sqlite(c) => c.close().await?,
+            _ => unreachable!(),
+        }
+
+        Ok(Self {
+            pool: SqlPool::Sqlite(sq_pool),
             pool_metrics,
             metrics,
             pruner_cfg,
@@ -711,11 +933,12 @@ impl SqlStorage {
         let mut tx = self.read().await.map_err(|err| QueryError::Error {
             message: err.to_string(),
         })?;
-        let (Some(height),) =
-            query_as::<(Option<i64>,)>("SELECT MIN(height) as height FROM header")
-                .fetch_one(tx.as_mut())
-                .await?
-        else {
+        let result: Option<(Option<i64>,)> = with_backend!(tx, |inner| {
+            sqlx::query_as("SELECT MIN(height) as height FROM header")
+                .fetch_optional(inner.as_mut())
+                .await
+        })?;
+        let Some((Some(height),)) = result else {
             return Ok(None);
         };
         Ok(Some(height as u64))
@@ -732,16 +955,18 @@ impl SqlStorage {
         // based on the timestamp index. The remaining sort on height, which guarantees a unique
         // block if multiple blocks have the same timestamp, is very efficient, because there are
         // never more than a handful of blocks with the same timestamp.
-        let Some((height,)) = query_as::<(i64,)>(
-            "SELECT height FROM header
-              WHERE timestamp <= $1
-              ORDER BY timestamp DESC, height DESC
-              LIMIT 1",
-        )
-        .bind(timestamp)
-        .fetch_optional(tx.as_mut())
-        .await?
-        else {
+        let result: Option<(i64,)> = with_backend!(tx, |inner| {
+            sqlx::query_as(
+                "SELECT height FROM header
+                  WHERE timestamp <= $1
+                  ORDER BY timestamp DESC, height DESC
+                  LIMIT 1",
+            )
+            .bind(timestamp)
+            .fetch_optional(inner.as_mut())
+            .await
+        })?;
+        let Some((height,)) = result else {
             return Ok(None);
         };
         Ok(Some(height as u64))
@@ -800,37 +1025,42 @@ impl PruneStorage for SqlStorage {
     async fn get_disk_usage(&self) -> anyhow::Result<u64> {
         let mut tx = self.read().await?;
 
-        #[cfg(not(feature = "embedded-db"))]
-        let query = "SELECT pg_database_size(current_database())";
-
-        #[cfg(feature = "embedded-db")]
-        let query = "
-            SELECT( (SELECT page_count FROM pragma_page_count) * (SELECT * FROM pragma_page_size)) \
-                     AS total_bytes";
-
-        let row = tx.fetch_one(query).await?;
-        let size: i64 = row.get(0);
+        let sql = match self.pool.backend() {
+            DbBackend::Postgres => "SELECT pg_database_size(current_database())",
+            DbBackend::Sqlite => {
+                "SELECT( (SELECT page_count FROM pragma_page_count) * (SELECT * FROM \
+                 pragma_page_size)) AS total_bytes"
+            },
+        };
+        let (size,): (i64,) = with_backend!(tx, |inner| {
+            sqlx::query_as(sql).fetch_one(inner.as_mut()).await
+        })?;
 
         Ok(size as u64)
     }
 
     /// Trigger incremental vacuum to free up space in the SQLite database.
-    /// Note: We don't vacuum the Postgres database,
-    /// as there is no manual trigger for incremental vacuum,
-    /// and a full vacuum can take a lot of time.
-    #[cfg(feature = "embedded-db")]
+    /// Note: We don't vacuum the Postgres database, as there is no manual trigger for incremental
+    /// vacuum, and a full vacuum can take a lot of time.
     async fn vacuum(&self) -> anyhow::Result<()> {
+        if self.pool.backend() != DbBackend::Sqlite {
+            return Ok(());
+        }
         let config = self.get_pruning_config().ok_or(QueryError::Error {
             message: "Pruning config not found".to_string(),
         })?;
-        let mut conn = self.pool().acquire().await?;
-        query(&format!(
+        let conn = self.pool.acquire().await?;
+        let sql = format!(
             "PRAGMA incremental_vacuum({})",
             config.incremental_vacuum_pages()
-        ))
-        .execute(conn.as_mut())
-        .await?;
-        conn.close().await?;
+        );
+        match conn {
+            BackendPoolConnection::Sqlite(mut c) => {
+                sqlx::query(&sql).execute(c.as_mut()).await?;
+                c.close().await?;
+            },
+            _ => unreachable!(),
+        }
         Ok(())
     }
 
@@ -972,11 +1202,11 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
         // so fetch_one() would always return a row.
         // After each batch insert, it is updated with the number of rows migrated.
         // This is necessary to resume from the same point in case of a restart.
-        let (is_migration_completed, mut offset) = query_as::<(bool, i64)>(
-            "SELECT completed, migrated_rows from types_migration WHERE id = 1 ",
-        )
-        .fetch_one(tx.as_mut())
-        .await?;
+        let (is_migration_completed, mut offset): (bool, i64) = with_backend!(tx, |inner| {
+            sqlx::query_as("SELECT completed, migrated_rows from types_migration WHERE id = 1 ")
+                .fetch_one(inner.as_mut())
+                .await
+        })?;
 
         if is_migration_completed {
             tracing::info!("types migration already completed");
@@ -992,7 +1222,7 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
                 message: err.to_string(),
             })?;
 
-            let rows = QueryBuilder::default()
+            let rows: Vec<BackendRow> = QueryBuilder::new(self.pool.backend())
                 .query(
                     "SELECT leaf, qc, common as vid_common, share as vid_share
                     FROM leaf INNER JOIN vid on leaf.height = vid.height
@@ -1000,7 +1230,7 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
                 )
                 .bind(offset)
                 .bind(offset + limit as i64)
-                .fetch_all(tx.as_mut())
+                .fetch_all(&mut tx)
                 .await?;
 
             drop(tx);
@@ -1013,8 +1243,8 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
             let mut vid_rows = Vec::new();
 
             for row in rows.iter() {
-                let leaf1 = row.try_get("leaf")?;
-                let qc = row.try_get("qc")?;
+                let leaf1: serde_json::Value = row.try_get("leaf")?;
+                let qc: serde_json::Value = row.try_get("qc")?;
                 let leaf1: Leaf<Types> = serde_json::from_value(leaf1)?;
                 let qc: QuorumCertificate<Types> = serde_json::from_value(qc)?;
 
@@ -1032,8 +1262,8 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
 
                 let mut new_vid_share_bytes = None;
 
-                if let Some(vid_share_bytes) = vid_share_bytes {
-                    let vid_share: ADVZShare = bincode::deserialize(&vid_share_bytes)
+                if let Some(ref vid_share_bytes) = vid_share_bytes {
+                    let vid_share: ADVZShare = bincode::deserialize(vid_share_bytes)
                         .context("failed to deserialize vid_share")?;
                     new_vid_share_bytes = Some(
                         bincode::serialize(&VidShare::V0(vid_share))
@@ -1060,30 +1290,30 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
                 ));
             }
 
-            // migrate leaf2
-            let mut query_builder: sqlx::QueryBuilder<Db> =
-                sqlx::QueryBuilder::new("INSERT INTO leaf2 (height, hash, block_hash, leaf, qc) ");
-
             // Advance the `offset` to the highest `leaf.height` processed in this batch.
             // This ensures the next iteration starts from the next unseen leaf
             offset += limit as i64;
-
-            query_builder.push_values(leaf_rows, |mut b, row| {
-                b.push_bind(row.0)
-                    .push_bind(row.1)
-                    .push_bind(row.2)
-                    .push_bind(row.3)
-                    .push_bind(row.4);
-            });
-
-            query_builder.push(" ON CONFLICT DO NOTHING");
-            let query = query_builder.build();
 
             let mut tx = self.write().await.map_err(|err| QueryError::Error {
                 message: err.to_string(),
             })?;
 
-            query.execute(tx.as_mut()).await?;
+            // migrate leaf2
+            with_backend!(tx, |inner| {
+                let mut query_builder = sqlx::QueryBuilder::new(
+                    "INSERT INTO leaf2 (height, hash, block_hash, leaf, qc) ",
+                );
+                query_builder.push_values(&leaf_rows, |mut b, row| {
+                    b.push_bind(row.0)
+                        .push_bind(row.1.clone())
+                        .push_bind(row.2.clone())
+                        .push_bind(row.3.clone())
+                        .push_bind(row.4.clone());
+                });
+                query_builder.push(" ON CONFLICT DO NOTHING");
+                let query = query_builder.build();
+                query.execute(inner.as_mut()).await.map(|_| ())
+            })?;
 
             // update migrated_rows column with the offset
             tx.upsert(
@@ -1095,16 +1325,18 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
             .await?;
 
             // migrate vid
-            let mut query_builder: sqlx::QueryBuilder<Db> =
-                sqlx::QueryBuilder::new("INSERT INTO vid2 (height, common, share) ");
-
-            query_builder.push_values(vid_rows, |mut b, row| {
-                b.push_bind(row.0).push_bind(row.1).push_bind(row.2);
-            });
-            query_builder.push(" ON CONFLICT DO NOTHING");
-            let query = query_builder.build();
-
-            query.execute(tx.as_mut()).await?;
+            with_backend!(tx, |inner| {
+                let mut query_builder =
+                    sqlx::QueryBuilder::new("INSERT INTO vid2 (height, common, share) ");
+                query_builder.push_values(&vid_rows, |mut b, row| {
+                    b.push_bind(row.0)
+                        .push_bind(row.1.clone())
+                        .push_bind(row.2.clone());
+                });
+                query_builder.push(" ON CONFLICT DO NOTHING");
+                let query = query_builder.build();
+                query.execute(inner.as_mut()).await.map(|_| ())
+            })?;
 
             tx.commit().await?;
 
@@ -1152,24 +1384,25 @@ pub mod testing {
     use test_utils::reserve_tcp_port;
     use tokio::{net::TcpStream, time::timeout};
 
-    use super::Config;
+    use super::{Config, DbBackend};
     use crate::testing::sleep;
+
     #[derive(Debug)]
-    pub struct TmpDb {
-        #[cfg(not(feature = "embedded-db"))]
-        host: String,
-        #[cfg(not(feature = "embedded-db"))]
-        port: u16,
-        #[cfg(not(feature = "embedded-db"))]
-        container_id: String,
-        #[cfg(feature = "embedded-db")]
-        db_path: std::path::PathBuf,
-        #[allow(dead_code)]
-        persistent: bool,
+    pub enum TmpDb {
+        Postgres {
+            host: String,
+            port: u16,
+            container_id: String,
+            persistent: bool,
+        },
+        Sqlite {
+            db_path: std::path::PathBuf,
+            persistent: bool,
+        },
     }
+
     impl TmpDb {
-        #[cfg(feature = "embedded-db")]
-        fn init_sqlite_db(persistent: bool) -> Self {
+        pub fn init_sqlite(persistent: bool) -> Self {
             let file = tempfile::Builder::new()
                 .prefix("sqlite-")
                 .suffix(".db")
@@ -1178,28 +1411,27 @@ pub mod testing {
 
             let (_, db_path) = file.keep().unwrap();
 
-            Self {
+            Self::Sqlite {
                 db_path,
                 persistent,
             }
         }
-        pub async fn init() -> Self {
-            #[cfg(feature = "embedded-db")]
-            return Self::init_sqlite_db(false);
 
-            #[cfg(not(feature = "embedded-db"))]
+        pub async fn init() -> Self {
             Self::init_postgres(false).await
         }
 
-        pub async fn persistent() -> Self {
-            #[cfg(feature = "embedded-db")]
-            return Self::init_sqlite_db(true);
+        pub async fn init_for(backend: DbBackend) -> Self {
+            match backend {
+                DbBackend::Postgres => Self::init_postgres(false).await,
+                DbBackend::Sqlite => Self::init_sqlite(false),
+            }
+        }
 
-            #[cfg(not(feature = "embedded-db"))]
+        pub async fn persistent() -> Self {
             Self::init_postgres(true).await
         }
 
-        #[cfg(not(feature = "embedded-db"))]
         async fn init_postgres(persistent: bool) -> Self {
             let docker_hostname = env::var("DOCKER_HOSTNAME");
             // This picks an unused port on the current system.  If docker is
@@ -1231,7 +1463,7 @@ pub mod testing {
             // anything panics after this `drop` will be called and we will clean up.
             let container_id = stdout.trim().to_owned();
             tracing::info!("launched postgres docker {container_id}");
-            let db = Self {
+            let db = Self::Postgres {
                 host,
                 port,
                 container_id: container_id.clone(),
@@ -1242,75 +1474,95 @@ pub mod testing {
             db
         }
 
-        #[cfg(not(feature = "embedded-db"))]
         pub fn host(&self) -> String {
-            self.host.clone()
+            match self {
+                Self::Postgres { host, .. } => host.clone(),
+                Self::Sqlite { .. } => panic!("host() not applicable to SQLite"),
+            }
         }
 
-        #[cfg(not(feature = "embedded-db"))]
         pub fn port(&self) -> u16 {
-            self.port
+            match self {
+                Self::Postgres { port, .. } => *port,
+                Self::Sqlite { .. } => panic!("port() not applicable to SQLite"),
+            }
         }
 
-        #[cfg(feature = "embedded-db")]
         pub fn path(&self) -> std::path::PathBuf {
-            self.db_path.clone()
+            match self {
+                Self::Sqlite { db_path, .. } => db_path.clone(),
+                Self::Postgres { .. } => panic!("path() not applicable to Postgres"),
+            }
         }
 
         pub fn config(&self) -> Config {
-            #[cfg(feature = "embedded-db")]
-            let mut cfg = Config::default().db_path(self.db_path.clone());
+            let mut cfg = match self {
+                Self::Postgres { host, port, .. } => Config::postgres_default()
+                    .user("postgres")
+                    .password("password")
+                    .host(host.clone())
+                    .port(*port),
+                Self::Sqlite { db_path, .. } => Config::sqlite_default().db_path(db_path.clone()),
+            };
 
-            #[cfg(not(feature = "embedded-db"))]
-            let mut cfg = Config::default()
-                .user("postgres")
-                .password("password")
-                .host(self.host())
-                .port(self.port());
-
+            let migration_sql = TestMerkleTreeMigration::create("test_tree", &cfg);
             cfg = cfg.migrations(vec![Migration::unapplied(
                 "V101__create_test_merkle_tree_table.sql",
-                &TestMerkleTreeMigration::create("test_tree"),
+                &migration_sql,
             )
             .unwrap()]);
 
             cfg
         }
 
-        #[cfg(not(feature = "embedded-db"))]
         pub fn stop_postgres(&mut self) {
-            tracing::info!(container = self.container_id, "stopping postgres");
-            let output = Command::new("docker")
-                .args(["stop", self.container_id.as_str()])
-                .output()
-                .unwrap();
-            assert!(
-                output.status.success(),
-                "error killing postgres docker {}: {}",
-                self.container_id,
-                str::from_utf8(&output.stderr).unwrap()
-            );
+            if let Self::Postgres { container_id, .. } = self {
+                tracing::info!(container = %container_id, "stopping postgres");
+                let output = Command::new("docker")
+                    .args(["stop", container_id.as_str()])
+                    .output()
+                    .unwrap();
+                assert!(
+                    output.status.success(),
+                    "error killing postgres docker {}: {}",
+                    container_id,
+                    str::from_utf8(&output.stderr).unwrap()
+                );
+            }
         }
 
-        #[cfg(not(feature = "embedded-db"))]
         pub async fn start_postgres(&mut self) {
-            tracing::info!(container = self.container_id, "resuming postgres");
-            let output = Command::new("docker")
-                .args(["start", self.container_id.as_str()])
-                .output()
-                .unwrap();
-            assert!(
-                output.status.success(),
-                "error starting postgres docker {}: {}",
-                self.container_id,
-                str::from_utf8(&output.stderr).unwrap()
-            );
+            if let Self::Postgres { container_id, .. } = self {
+                tracing::info!(container = %container_id, "resuming postgres");
+                let output = Command::new("docker")
+                    .args(["start", container_id.as_str()])
+                    .output()
+                    .unwrap();
+                assert!(
+                    output.status.success(),
+                    "error starting postgres docker {}: {}",
+                    container_id,
+                    str::from_utf8(&output.stderr).unwrap()
+                );
 
-            self.wait_for_ready().await;
+                self.wait_for_ready().await;
+            }
         }
 
-        #[cfg(not(feature = "embedded-db"))]
         async fn wait_for_ready(&self) {
+            let Self::Postgres {
+                host,
+                port,
+                container_id,
+                ..
+            } = self
+            else {
+                return;
+            };
+            let host = host.clone();
+            let port = *port;
+            let container_id = container_id.clone();
+
             let timeout_duration = Duration::from_secs(
                 env::var("SQL_TMP_DB_CONNECT_TIMEOUT")
                     .unwrap_or("60".to_string())
@@ -1322,7 +1574,7 @@ pub mod testing {
                 while Command::new("docker")
                     .args([
                         "exec",
-                        &self.container_id,
+                        &container_id,
                         "pg_isready",
                         "-h",
                         "localhost",
@@ -1357,9 +1609,7 @@ pub mod testing {
                 // host networking. We don't need to check again that the database is ready on the
                 // host (and maybe can't, because the host might not have pg_isready installed), but
                 // we can ensure the port is open by just establishing a TCP connection.
-                while let Err(err) =
-                    TcpStream::connect(format!("{}:{}", self.host, self.port)).await
-                {
+                while let Err(err) = TcpStream::connect(format!("{host}:{port}")).await {
                     tracing::warn!("database is ready, but port is not available to host: {err:#}");
                     sleep(Duration::from_millis(100)).await;
                 }
@@ -1375,18 +1625,20 @@ pub mod testing {
         }
     }
 
-    #[cfg(not(feature = "embedded-db"))]
     impl Drop for TmpDb {
         fn drop(&mut self) {
-            self.stop_postgres();
-        }
-    }
-
-    #[cfg(feature = "embedded-db")]
-    impl Drop for TmpDb {
-        fn drop(&mut self) {
-            if !self.persistent {
-                std::fs::remove_file(self.db_path.clone()).unwrap();
+            match self {
+                Self::Postgres { .. } => {
+                    self.stop_postgres();
+                },
+                Self::Sqlite {
+                    db_path,
+                    persistent,
+                } => {
+                    if !*persistent {
+                        let _ = std::fs::remove_file(db_path.clone());
+                    }
+                },
             }
         }
     }
@@ -1394,21 +1646,20 @@ pub mod testing {
     pub struct TestMerkleTreeMigration;
 
     impl TestMerkleTreeMigration {
-        fn create(name: &str) -> String {
-            let (bit_vec, binary, hash_pk, root_stored_column) = if cfg!(feature = "embedded-db") {
-                (
+        fn create(name: &str, cfg: &Config) -> String {
+            let (bit_vec, binary, hash_pk, root_stored_column) = match cfg.backend() {
+                super::DbBackend::Sqlite => (
                     "TEXT",
                     "BLOB",
                     "INTEGER PRIMARY KEY AUTOINCREMENT",
                     " (json_extract(data, '$.test_merkle_tree_root'))",
-                )
-            } else {
-                (
+                ),
+                super::DbBackend::Postgres => (
                     "BIT(8)",
                     "BYTEA",
                     "SERIAL PRIMARY KEY",
                     "(data->>'test_merkle_tree_root')",
-                )
+                ),
             };
 
             format!(
@@ -1463,6 +1714,8 @@ mod test {
     use jf_merkle_tree_compat::{
         prelude::UniversalMerkleTree, MerkleTreeScheme, ToTraversalPath, UniversalMerkleTreeScheme,
     };
+    use rstest::rstest;
+    use rstest_reuse::{self, apply, template};
     use tokio::time::sleep;
 
     use super::{testing::TmpDb, *};
@@ -1473,9 +1726,16 @@ mod test {
         testing::mocks::{MockHeader, MockMerkleTree, MockPayload, MockTypes, MOCK_UPGRADE},
     };
 
+    #[template]
+    #[rstest]
+    #[case::postgres(DbBackend::Postgres)]
+    #[case::sqlite(DbBackend::Sqlite)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_migrations() {
-        let db = TmpDb::init().await;
+    fn sql_backends(#[case] backend: DbBackend) {}
+
+    #[apply(sql_backends)]
+    async fn test_migrations(#[case] backend: DbBackend) {
+        let db = TmpDb::init_for(backend).await;
         let cfg = db.config();
 
         let connect = |migrations: bool, custom_migrations| {
@@ -1527,39 +1787,48 @@ mod test {
     }
 
     #[test]
-    #[cfg(not(feature = "embedded-db"))]
-    fn test_config_from_str() {
-        let cfg = Config::from_str("postgresql://user:password@host:8080").unwrap();
-        assert_eq!(cfg.db_opt.get_username(), "user");
-        assert_eq!(cfg.db_opt.get_host(), "host");
-        assert_eq!(cfg.db_opt.get_port(), 8080);
+    fn test_config_from_str_postgres() {
+        let cfg = Config::parse("postgresql://user:password@host:8080").unwrap();
+        match cfg {
+            Config::Postgres(pg) => {
+                assert_eq!(pg.db_opt.get_username(), "user");
+                assert_eq!(pg.db_opt.get_host(), "host");
+                assert_eq!(pg.db_opt.get_port(), 8080);
+            },
+            _ => panic!("expected Postgres config"),
+        }
     }
 
     #[test]
-    #[cfg(feature = "embedded-db")]
-    fn test_config_from_str() {
-        let cfg = Config::from_str("sqlite://data.db").unwrap();
-        assert_eq!(cfg.db_opt.get_filename().to_string_lossy(), "data.db");
+    fn test_config_from_str_sqlite() {
+        let cfg = Config::parse("sqlite://data.db").unwrap();
+        match cfg {
+            Config::Sqlite(sq) => {
+                assert_eq!(sq.db_opt.get_filename().to_string_lossy(), "data.db");
+            },
+            _ => panic!("expected Sqlite config"),
+        }
     }
 
     async fn vacuum(storage: &SqlStorage) {
-        #[cfg(feature = "embedded-db")]
-        let query = "PRAGMA incremental_vacuum(16000)";
-        #[cfg(not(feature = "embedded-db"))]
-        let query = "VACUUM";
-        storage
-            .pool
-            .acquire()
-            .await
-            .unwrap()
-            .execute(query)
-            .await
-            .unwrap();
+        let sql = match storage.backend() {
+            DbBackend::Sqlite => "PRAGMA incremental_vacuum(16000)",
+            DbBackend::Postgres => "VACUUM",
+        };
+        let mut conn = storage.pool.acquire().await.unwrap();
+        match &mut conn {
+            BackendPoolConnection::Postgres(c) => {
+                sqlx::query(sql).execute(c.as_mut()).await.unwrap();
+            },
+            BackendPoolConnection::Sqlite(c) => {
+                sqlx::query(sql).execute(c.as_mut()).await.unwrap();
+            },
+        }
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_target_period_pruning() {
-        let db = TmpDb::init().await;
+    #[apply(sql_backends)]
+    async fn test_target_period_pruning(#[case] backend: DbBackend) {
+        let db = TmpDb::init_for(backend).await;
         let cfg = db.config();
 
         let mut storage = SqlStorage::connect(cfg, StorageConnectionType::Query)
@@ -1618,28 +1887,26 @@ mod test {
         let usage_after_pruning = storage.get_disk_usage().await.unwrap();
         // All the tables should be empty
         // counting rows in header table
-        let header_rows = storage
-            .read()
-            .await
-            .unwrap()
-            .fetch_one("select count(*) as count from header")
-            .await
-            .unwrap()
-            .get::<i64, _>("count");
+        let mut tx = storage.read().await.unwrap();
+        let (header_rows,): (i64,) = with_backend!(tx, |inner| {
+            sqlx::query_as("select count(*) as count from header")
+                .fetch_one(inner.as_mut())
+                .await
+        })
+        .unwrap();
         // the table should be empty
         assert_eq!(header_rows, 0);
 
         // counting rows in leaf table.
         // Deleting rows from header table would delete rows in all the tables
         // as each of table implement "ON DELETE CASCADE" fk constraint with the header table.
-        let leaf_rows = storage
-            .read()
-            .await
-            .unwrap()
-            .fetch_one("select count(*) as count from leaf")
-            .await
-            .unwrap()
-            .get::<i64, _>("count");
+        let (leaf_rows,): (i64,) = with_backend!(tx, |inner| {
+            sqlx::query_as("select count(*) as count from leaf")
+                .fetch_one(inner.as_mut())
+                .await
+        })
+        .unwrap();
+        drop(tx);
         // the table should be empty
         assert_eq!(leaf_rows, 0);
 
@@ -1649,9 +1916,9 @@ mod test {
         )
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_merklized_state_pruning() {
-        let db = TmpDb::init().await;
+    #[apply(sql_backends)]
+    async fn test_merklized_state_pruning(#[case] backend: DbBackend) {
+        let db = TmpDb::init_for(backend).await;
         let config = db.config();
 
         let storage = SqlStorage::connect(config, StorageConnectionType::Query)
@@ -1709,12 +1976,14 @@ mod test {
 
         // checking if the data is inserted correctly
         // there should be multiple nodes with same index but different created time
-        let (count,) = query_as::<(i64,)>(
-            " SELECT count(*) FROM (SELECT count(*) as count FROM test_tree GROUP BY path having \
-             count(*) > 1) AS s",
-        )
-        .fetch_one(tx.as_mut())
-        .await
+        let (count,): (i64,) = with_backend!(tx, |inner| {
+            sqlx::query_as(
+                " SELECT count(*) FROM (SELECT count(*) as count FROM test_tree GROUP BY path \
+                 having count(*) > 1) AS s",
+            )
+            .fetch_one(inner.as_mut())
+            .await
+        })
         .unwrap();
 
         tracing::info!("Number of nodes with multiple snapshots : {count}");
@@ -1728,12 +1997,14 @@ mod test {
 
         tx.commit().await.unwrap();
         let mut tx = storage.read().await.unwrap();
-        let (count,) = query_as::<(i64,)>(
-            "SELECT count(*) FROM (SELECT count(*) as count FROM test_tree GROUP BY path having \
-             count(*) > 1) AS s",
-        )
-        .fetch_one(tx.as_mut())
-        .await
+        let (count,): (i64,) = with_backend!(tx, |inner| {
+            sqlx::query_as(
+                "SELECT count(*) FROM (SELECT count(*) as count FROM test_tree GROUP BY path \
+                 having count(*) > 1) AS s",
+            )
+            .fetch_one(inner.as_mut())
+            .await
+        })
         .unwrap();
 
         tracing::info!("Number of nodes with multiple snapshots : {count}");
@@ -1741,9 +2012,9 @@ mod test {
         assert!(count == 0);
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_minimum_retention_pruning() {
-        let db = TmpDb::init().await;
+    #[apply(sql_backends)]
+    async fn test_minimum_retention_pruning(#[case] backend: DbBackend) {
+        let db = TmpDb::init_for(backend).await;
 
         let mut storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
             .await
@@ -1807,21 +2078,21 @@ mod test {
         assert!(pruned_height.is_some());
         // All the tables should be empty
         // counting rows in header table
-        let header_rows = storage
-            .read()
-            .await
-            .unwrap()
-            .fetch_one("select count(*) as count from header")
-            .await
-            .unwrap()
-            .get::<i64, _>("count");
+        let mut tx = storage.read().await.unwrap();
+        let (header_rows,): (i64,) = with_backend!(tx, |inner| {
+            sqlx::query_as("select count(*) as count from header")
+                .fetch_one(inner.as_mut())
+                .await
+        })
+        .unwrap();
+        drop(tx);
         // the table should be empty
         assert_eq!(header_rows, 0);
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_pruned_height_storage() {
-        let db = TmpDb::init().await;
+    #[apply(sql_backends)]
+    async fn test_pruned_height_storage(#[case] backend: DbBackend) {
+        let db = TmpDb::init_for(backend).await;
         let cfg = db.config();
 
         let storage = SqlStorage::connect(cfg, StorageConnectionType::Query)
@@ -1852,10 +2123,10 @@ mod test {
         }
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_types_migration() {
+    #[apply(sql_backends)]
+    async fn test_types_migration(#[case] backend: DbBackend) {
         let num_rows = 500;
-        let db = TmpDb::init().await;
+        let db = TmpDb::init_for(backend).await;
 
         let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
             .await
@@ -1989,23 +2260,27 @@ mod test {
             .expect("failed to migrate");
 
         let mut tx = storage.read().await.unwrap();
-        let (leaf_count,) = query_as::<(i64,)>("SELECT COUNT(*) from leaf2")
-            .fetch_one(tx.as_mut())
-            .await
-            .unwrap();
+        let (leaf_count,): (i64,) = with_backend!(tx, |inner| {
+            sqlx::query_as("SELECT COUNT(*) from leaf2")
+                .fetch_one(inner.as_mut())
+                .await
+        })
+        .unwrap();
 
-        let (vid_count,) = query_as::<(i64,)>("SELECT COUNT(*) from vid2")
-            .fetch_one(tx.as_mut())
-            .await
-            .unwrap();
+        let (vid_count,): (i64,) = with_backend!(tx, |inner| {
+            sqlx::query_as("SELECT COUNT(*) from vid2")
+                .fetch_one(inner.as_mut())
+                .await
+        })
+        .unwrap();
 
         assert_eq!(leaf_count as u64, num_rows, "not all leaves migrated");
         assert_eq!(vid_count as u64, num_rows, "not all vid migrated");
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_transaction_upsert_retries() {
-        let db = TmpDb::init().await;
+    #[apply(sql_backends)]
+    async fn test_transaction_upsert_retries(#[case] backend: DbBackend) {
+        let db = TmpDb::init_for(backend).await;
         let config = db.config();
 
         let storage = SqlStorage::connect(config, StorageConnectionType::Query)

@@ -2,11 +2,13 @@ FROM ghcr.io/espressosystems/ubuntu-base:main
 
 ARG TARGETARCH
 
-COPY target/$TARGETARCH/release/sequencer /bin/sequencer-postgres
-RUN chmod +x /bin/sequencer-postgres
+COPY target/$TARGETARCH/release/sequencer /bin/sequencer
+RUN chmod +x /bin/sequencer
 
-COPY target/$TARGETARCH/release/sequencer-sqlite /bin/sequencer-sqlite
-RUN chmod +x /bin/sequencer-sqlite
+# Deprecated wrappers for backward compat with old Docker image paths.
+COPY scripts/sequencer-postgres /bin/sequencer-postgres
+COPY scripts/sequencer-sqlite /bin/sequencer-sqlite
+RUN chmod +x /bin/sequencer-postgres /bin/sequencer-sqlite
 
 COPY target/$TARGETARCH/release/utils /bin/utils
 RUN chmod +x /bin/utils
@@ -27,10 +29,6 @@ COPY data/genesis /genesis
 # Allow injecting a genesis file with aws secretsmanager
 # Set `ESPRESSO_SEQUENCER_GENESIS_SECRET`
 COPY docker/scripts/sequencer-awssecretsmanager.sh /bin/sequencer-awssecretsmanager.sh
-
-# Copy entrypoint script
-COPY scripts/sequencer-entrypoint /bin/sequencer
-RUN chmod +x /bin/sequencer
 
 # Set a path to save the consensus config on startup.
 #

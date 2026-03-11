@@ -191,7 +191,12 @@ impl TestRuntime {
         let builder_url = {
             let url = url_from_port(dotenvy::var("ESPRESSO_BUILDER_SERVER_PORT")?)?;
             let url = Url::from_str(&url)?;
-            wait_for_service(url.clone(), Duration::from_secs(1), Duration::from_secs(90)).await?;
+            wait_for_service(
+                url.clone(),
+                Duration::from_secs(1),
+                Duration::from_secs(120),
+            )
+            .await?;
             url.join("block_info/builderaddress")?
         };
 
@@ -468,7 +473,24 @@ impl Drop for NativeDemo {
             }
         }
 
-        // Force kill if still running after 10 seconds
+        // Run cleanup-process-compose as fallback to kill orphan children
+        println!("Running cleanup-process-compose as fallback...");
+        if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
+            let workspace_dir = PathBuf::from(&manifest_dir)
+                .parent()
+                .map(|p| p.to_path_buf());
+            if let Some(ws) = workspace_dir {
+                let cleanup_script = ws.join("scripts/cleanup-process-compose");
+                let _ = Command::new("timeout")
+                    .arg("15")
+                    .arg("bash")
+                    .arg(&cleanup_script)
+                    .current_dir(&ws)
+                    .status();
+            }
+        }
+
+        // Force kill if still running
         println!("Force killing demo-native process after timeout");
         let _ = self.child.kill();
         let _ = self.child.wait();

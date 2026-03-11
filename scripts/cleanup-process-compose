@@ -6,11 +6,13 @@
 # It's called automatically by scripts/demo-native when the demo exits (via trap).
 #
 # Key features:
+# - Best-effort: continues past individual command failures (set +e)
+# - Kills process trees to catch children of process-compose
 # - Only kills processes running from this project directory (checks /proc/$pid/cwd)
 # - Cleans up Docker containers and networks
 # - Safe to run multiple times
 #
-set -e
+set +e
 
 echo "Cleaning up espresso-network demo..."
 
@@ -40,15 +42,39 @@ get_proc_cwd() {
 	esac
 }
 
+# Track visited PIDs to prevent cycles from PID reuse
+declare -A VISITED_PIDS
+
+# Recursively kill a process tree (children first, then parent)
+kill_tree() {
+	local pid=$1
+	local signal=$2
+
+	# Prevent cycles from PID reuse
+	[[ -n "${VISITED_PIDS[$pid]+x}" ]] && return
+	VISITED_PIDS[$pid]=1
+
+	# Kill children recursively
+	local children
+	children=$(pgrep -P "$pid" 2>/dev/null) || true
+	for child in $children; do
+		kill_tree "$child" "$signal"
+	done
+
+	# Kill the process itself
+	kill -"$signal" "$pid" 2>/dev/null || true
+}
+
 # List of native processes managed by process-compose
 # Update this list when adding/removing processes in process-compose.yaml
 NATIVE_PROCESSES=(
 	sequencer
-	sequencer-sqlite
 	orchestrator
 	state-relay-server
 	cdn-marshal
 	cdn-broker
+	cdn-whitelist
+	deploy
 	permissionless-builder
 	submit-transactions
 	nasty-client
@@ -63,17 +89,22 @@ kill_project_processes() {
 	local proc_name=$1
 	local signal=$2
 
-	# Collect PIDs first to avoid subshell issues when killing
+	# Collect PIDs first to avoid subshell issues when killing.
+	# Exclude our own PID and parent PID to prevent the script from killing
+	# itself when matching "process-compose" (which is in our script name).
 	local pids
-	pids=$(pgrep -fA "$proc_name" 2>/dev/null) || true
+	pids=$(pgrep -f "$proc_name" 2>/dev/null) || true
+	local my_pid=$$
+	local parent_pid=$PPID
 
 	for pid in $pids; do
+		[[ "$pid" == "$my_pid" || "$pid" == "$parent_pid" ]] && continue
 		local proc_cwd
 		proc_cwd=$(get_proc_cwd "$pid")
 
 		if [[ -n "$proc_cwd" && "$proc_cwd" == "$PROJECT_DIR"* ]]; then
 			echo "Killing $proc_name (pid $pid) from $proc_cwd"
-			kill -"$signal" "$pid" || true
+			kill_tree "$pid" "$signal"
 		fi
 	done
 }
@@ -82,11 +113,12 @@ kill_project_processes() {
 echo "Stopping process-compose..."
 kill_project_processes "process-compose" TERM
 sleep 2
+VISITED_PIDS=()
 kill_project_processes "process-compose" KILL
 
 # 2. Stop all docker containers via docker compose
 echo "Stopping docker services..."
-docker compose down --remove-orphans --volumes 2>/dev/null || echo "docker-compose not running or already stopped"
+docker compose -f "$PROJECT_DIR/docker-compose.yaml" down --remove-orphans --volumes 2>/dev/null || echo "docker-compose not running or already stopped"
 
 # 3. Kill lingering native processes (only if running from this project directory)
 echo "Killing native processes from $PROJECT_DIR..."
@@ -95,6 +127,9 @@ for proc in "${NATIVE_PROCESSES[@]}"; do
 done
 
 sleep 2
+
+# Reset visited PIDs for the KILL pass
+VISITED_PIDS=()
 
 # Force kill if still running
 for proc in "${NATIVE_PROCESSES[@]}"; do
