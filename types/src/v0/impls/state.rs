@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use time::OffsetDateTime;
 use vbs::version::Version;
-use versions::{DA_UPGRADE_VERSION, DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION};
+use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, EPOCH_VERSION};
 
 use super::{
     fee_info::FeeError, instance_state::NodeState, v0_1::IterableFeeInfo, BlockMerkleCommitment,
@@ -832,7 +832,7 @@ impl<'a> ValidatedTransition<'a> {
     /// Uses the leader_index passed during construction to calculate expected counts
     /// and validate
     fn validate_leader_counts(&self) -> Result<(), ProposalValidationError> {
-        if self.version < DA_UPGRADE_VERSION {
+        if self.version < EPOCH_REWARD_VERSION {
             return Ok(());
         }
 
@@ -1051,7 +1051,7 @@ impl ValidatedState {
         // total_rewards_distributed is only present in >= V4
         let total_rewards_distributed = if version < EPOCH_VERSION {
             None
-        } else if version >= DA_UPGRADE_VERSION {
+        } else if version >= EPOCH_REWARD_VERSION {
             let parent_header = parent_leaf.block_header();
             let epoch_height = instance
                 .epoch_height

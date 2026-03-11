@@ -16,7 +16,7 @@ use espresso_types::{
     traits::SequencerPersistence,
     v0::traits::StateCatchup,
     v0_3::{
-        ChainConfig, RewardAccountProofV1, RewardAccountV1, RewardAmount, RewardMerkleCommitmentV1,
+        ChainConfig, RewardAccountProofV1, RewardAccountV1, RewardMerkleCommitmentV1,
         RewardMerkleTreeV1,
     },
     v0_4::{
@@ -480,25 +480,6 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
         .await
     }
 
-    #[tracing::instrument(skip(self))]
-    async fn try_fetch_all_reward_accounts(
-        &self,
-        retry: usize,
-        height: u64,
-        offset: u64,
-        limit: u64,
-    ) -> anyhow::Result<Vec<(RewardAccountV2, RewardAmount)>> {
-        self.fetch(retry, |client| async move {
-            client
-                .get::<Vec<(RewardAccountV2, RewardAmount)>>(&format!(
-                    "catchup/{height}/reward-amounts/{limit}/{offset}"
-                ))
-                .send()
-                .await
-        })
-        .await
-    }
-
     async fn try_fetch_state_cert(
         &self,
         retry: usize,
@@ -633,18 +614,6 @@ pub(crate) trait CatchupStorage: Sync {
             bail!("header catchup is not supported for this data source");
         }
     }
-
-    /// Get all reward accounts at a given height with pagination.
-    fn get_all_reward_accounts(
-        &self,
-        _height: u64,
-        _offset: u64,
-        _limit: u64,
-    ) -> impl Send + Future<Output = anyhow::Result<Vec<(RewardAccountV2, RewardAmount)>>> {
-        async {
-            bail!("all reward accounts catchup is not supported for this data source");
-        }
-    }
 }
 
 impl CatchupStorage for hotshot_query_service::data_source::MetricsDataSource {}
@@ -711,17 +680,6 @@ where
 
     async fn get_header(&self, height: u64) -> anyhow::Result<Header> {
         self.inner().get_header(height).await
-    }
-
-    async fn get_all_reward_accounts(
-        &self,
-        height: u64,
-        offset: u64,
-        limit: u64,
-    ) -> anyhow::Result<Vec<(RewardAccountV2, RewardAmount)>> {
-        self.inner()
-            .get_all_reward_accounts(height, offset, limit)
-            .await
     }
 }
 
@@ -903,21 +861,6 @@ where
         Ok(proofs)
     }
 
-    async fn try_fetch_all_reward_accounts(
-        &self,
-        _retry: usize,
-        height: u64,
-        offset: u64,
-        limit: u64,
-    ) -> anyhow::Result<Vec<(RewardAccountV2, RewardAmount)>> {
-        self.db
-            .get_all_reward_accounts(height, offset, limit)
-            .await
-            .with_context(|| {
-                format!("failed to get all reward accounts at height {height} from DB")
-            })
-    }
-
     async fn try_fetch_state_cert(
         &self,
         _retry: usize,
@@ -1040,16 +983,6 @@ impl StateCatchup for NullStateCatchup {
         _fee_merkle_tree_root: RewardMerkleCommitmentV1,
         _account: &[RewardAccountV1],
     ) -> anyhow::Result<Vec<RewardAccountProofV1>> {
-        bail!("state catchup is disabled");
-    }
-
-    async fn try_fetch_all_reward_accounts(
-        &self,
-        _retry: usize,
-        _height: u64,
-        _offset: u64,
-        _limit: u64,
-    ) -> anyhow::Result<Vec<(RewardAccountV2, RewardAmount)>> {
         bail!("state catchup is disabled");
     }
 
@@ -1474,36 +1407,6 @@ impl StateCatchup for ParallelStateCatchup {
                 ).await
             }}
         }})
-        .await
-    }
-
-    async fn try_fetch_all_reward_accounts(
-        &self,
-        retry: usize,
-        height: u64,
-        offset: u64,
-        limit: u64,
-    ) -> anyhow::Result<Vec<(RewardAccountV2, RewardAmount)>> {
-        // Try to get the accounts on local providers first
-        let local_result = self
-            .on_local_providers(move |provider| async move {
-                provider
-                    .try_fetch_all_reward_accounts(retry, height, offset, limit)
-                    .await
-            })
-            .await;
-
-        // Check if we were successful locally
-        if local_result.is_ok() {
-            return local_result;
-        }
-
-        // If that fails, try the remote ones
-        self.on_remote_providers(move |provider| async move {
-            provider
-                .try_fetch_all_reward_accounts(retry, height, offset, limit)
-                .await
-        })
         .await
     }
 

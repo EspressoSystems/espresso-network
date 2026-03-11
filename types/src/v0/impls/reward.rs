@@ -33,7 +33,7 @@ use sequencer_utils::{
 };
 use tokio::task::JoinHandle;
 use vbs::version::Version;
-use versions::{DA_UPGRADE_VERSION, DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION};
+use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, EPOCH_VERSION};
 
 use super::{
     v0_3::{AuthenticatedValidator, RewardAmount, COMMISSION_BASIS_POINTS},
@@ -1171,7 +1171,7 @@ impl EpochRewardsCalculator {
             );
 
             anyhow::ensure!(
-                header.version() >= DA_UPGRADE_VERSION,
+                header.version() >= EPOCH_REWARD_VERSION,
                 "header version {} is pre-V6, cannot calculate rewards",
                 header.version()
             );
@@ -1249,65 +1249,38 @@ impl EpochRewardsCalculator {
             .cloned()
             .collect();
 
-        // If we have missing accounts, fetch all reward accounts from peers and rebuild the tree
+        // If we have missing accounts, fetch the reward merkle tree from peers
+        // with the missing accounts included
         if !missing_accounts.is_empty() {
             tracing::info!(
                 %epoch,
                 num_missing = missing_accounts.len(),
-                "missing accounts detected, fetching all reward accounts from peers"
+                "missing accounts detected, fetching reward merkle tree from peers"
             );
 
-            // Fetch all reward accounts at the height just before this epoch
-            // This fetches from the reward_state table which stores all account balances
-
-            tracing::info!(
-                %epoch,
-                epoch_last_block_height,
-                "fetching all reward accounts from peers to rebuild tree"
-            );
-
-            // Fetch all reward accounts from peers (paginated)
-            let mut all_accounts = Vec::new();
-            let mut offset = 0u64;
-            let limit = 1_000u64;
-
-            loop {
-                let accounts = instance_state
-                    .state_catchup
-                    .as_ref()
-                    .fetch_all_reward_accounts(epoch_last_block_height, offset, limit)
-                    .await
-                    .with_context(|| {
-                        format!(
-                            "failed to fetch reward accounts at height {epoch_last_block_height}, \
-                             offset {offset}"
-                        )
-                    })?;
-
-                let count = accounts.len();
-                all_accounts.extend(accounts);
-
-                if (count as u64) < limit {
-                    break;
-                }
-                offset += limit;
-            }
-
-            tracing::info!(
-                %epoch,
-                num_accounts = all_accounts.len(),
-                "fetched all reward accounts, rebuilding tree"
-            );
-
-            // Rebuild the tree from scratch with all the accounts
-            let kv_pairs: Vec<(RewardAccountV2, RewardAmount)> = all_accounts;
-            reward_tree = RewardMerkleTreeV2::from_kv_set(REWARD_MERKLE_TREE_V2_HEIGHT, kv_pairs)
-                .context("failed to rebuild reward merkle tree from accounts")?;
+            let reward_merkle_tree_root = reward_tree.commitment();
+            reward_tree = instance_state
+                .state_catchup
+                .as_ref()
+                .fetch_reward_merkle_tree_v2(
+                    epoch_last_block_height,
+                    ViewNumber::new(0),
+                    reward_merkle_tree_root,
+                    Arc::new(missing_accounts),
+                )
+                .await
+                .with_context(|| {
+                    format!(
+                        "failed to fetch reward merkle tree at height {epoch_last_block_height} \
+                         for epoch {epoch}"
+                    )
+                })?
+                .tree;
 
             tracing::info!(
                 %epoch,
                 reward_tree_commitment = %reward_tree.commitment(),
-                "reward tree rebuilt successfully"
+                "reward tree fetched successfully"
             );
         }
 

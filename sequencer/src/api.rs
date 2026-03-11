@@ -2902,7 +2902,7 @@ mod test {
         config::PublicHotShotConfig,
         traits::{MembershipPersistence, NullEventConsumer, PersistenceOptions},
         v0_3::{Fetcher, RewardAmount, RewardMerkleProofV1, COMMISSION_BASIS_POINTS},
-        v0_4::{RewardAccountV2, RewardMerkleProofV2, RewardMerkleTreeV2},
+        v0_4::{RewardAccountV2, RewardMerkleProofV2},
         validators_from_l1_events, ADVZNamespaceProofQueryData, FeeAmount, Header, L1Client,
         L1ClientOptions, NamespaceId, NamespaceProofQueryData, NsProof, RegisteredValidatorMap,
         RewardDistributor, StakeTableState, StateCertQueryDataV1, StateCertQueryDataV2,
@@ -2926,11 +2926,10 @@ mod test {
         },
         data_source::{
             sql::Config,
-            storage::{sql::query, SqlStorage, StorageConnectionType},
-            Transaction as _, VersionedDataSource,
+            storage::{SqlStorage, StorageConnectionType},
+            VersionedDataSource,
         },
         explorer::TransactionSummariesResponse,
-        merklized_state::UpdateStateData,
         types::HeightIndexed,
     };
     use hotshot_types::{
@@ -3555,7 +3554,7 @@ mod test {
     async fn test_epoch_reward_upgrade() {
         test_upgrade_helper(Upgrade::new(
             versions::DRB_AND_HEADER_UPGRADE_VERSION,
-            versions::DA_UPGRADE_VERSION,
+            versions::EPOCH_REWARD_VERSION,
         ))
         .await;
     }
@@ -7434,229 +7433,6 @@ mod test {
             .unwrap();
 
         assert_eq!(res, expected);
-
-        Ok(())
-    }
-
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_get_all_reward_accounts_multiple_cases() -> anyhow::Result<()> {
-        let storage = SqlDataSource::create_storage().await;
-        let sql_options = tmp_options(&storage);
-        let db = SqlStorage::connect(
-            Config::try_from(&sql_options)?,
-            StorageConnectionType::Sequencer,
-        )
-        .await?;
-
-        let validated_state = ValidatedState::default();
-        let instance_state =
-            NodeState::mock().with_genesis_version(versions::DRB_AND_HEADER_UPGRADE_VERSION);
-        let genesis_leaf = LeafQueryData::<SeqTypes>::genesis(
-            &validated_state,
-            &instance_state,
-            Upgrade::trivial(versions::DRB_AND_HEADER_UPGRADE_VERSION),
-        )
-        .await;
-
-        let account1 = RewardAccountV2("0x0000000000000000000000000000000000000001".parse()?);
-        let account2 = RewardAccountV2("0x0000000000000000000000000000000000000002".parse()?);
-        let account3 = RewardAccountV2("0x0000000000000000000000000000000000000003".parse()?);
-        let account4 = RewardAccountV2("0x0000000000000000000000000000000000000004".parse()?);
-
-        // Insert account1 with balance 1000, account2 with balance 2000
-        let accounts_height_5 = vec![
-            (account1, RewardAmount::from(1000u64)),
-            (account2, RewardAmount::from(2000u64)),
-        ];
-
-        let accounts_height_10 = vec![
-            (account1, RewardAmount::from(1500u64)),
-            (account3, RewardAmount::from(3000u64)),
-        ];
-
-        let accounts_height_15 = vec![
-            (account2, RewardAmount::from(2500u64)),
-            (account4, RewardAmount::from(4000u64)),
-        ];
-
-        let mut tx = db.write().await?;
-
-        let header_json = serde_json::to_value(genesis_leaf.header())?;
-
-        for height in [5i64, 10, 15, 16] {
-            query(
-                "INSERT INTO header (height, hash, payload_hash, timestamp, data)
-                     VALUES ($1, $2, $3, $4, $5)",
-            )
-            .bind(height)
-            .bind(format!("hash_{height}"))
-            .bind("payload_hash")
-            .bind(0i64)
-            .bind(&header_json)
-            .execute(tx.as_mut())
-            .await?;
-        }
-
-        // Insert into reward_state table
-        for (height, accounts) in [
-            (5i64, &accounts_height_5),
-            (10, &accounts_height_10),
-            (15, &accounts_height_15),
-        ] {
-            for (account, balance) in accounts {
-                let account_json = serde_json::to_value(account)?;
-                let balance_json = serde_json::to_value(balance)?;
-                query("INSERT INTO reward_state (height, account, balance) VALUES ($1, $2, $3)")
-                    .bind(height)
-                    .bind(&account_json)
-                    .bind(&balance_json)
-                    .execute(tx.as_mut())
-                    .await?;
-            }
-        }
-
-        UpdateStateData::<
-            SeqTypes,
-            RewardMerkleTreeV2,
-            { RewardMerkleTreeV2::ARITY },
-        >::set_last_state_height(&mut tx, 15)
-        .await?;
-
-        tx.commit().await?;
-
-        let result_height_5 = db.get_all_reward_accounts(5, 0, 100).await?;
-        assert_eq!(result_height_5.len(), 2,);
-        for (account, balance) in &accounts_height_5 {
-            assert!(result_height_5
-                .iter()
-                .any(|(acc, bal)| acc == account && bal == balance),);
-        }
-
-        let result_height_10 = db.get_all_reward_accounts(10, 0, 100).await?;
-        assert_eq!(result_height_10.len(), 3,);
-
-        // Verify account1 has the updated balance from height 10
-        //  not the old balance from height 5
-        let expected_at_height_10 = vec![
-            (account1, RewardAmount::from(1500u64)),
-            (account2, RewardAmount::from(2000u64)),
-            (account3, RewardAmount::from(3000u64)),
-        ];
-        for (account, balance) in &expected_at_height_10 {
-            assert!(result_height_10
-                .iter()
-                .any(|(acc, bal)| acc == account && bal == balance),);
-        }
-
-        let result_height_15 = db.get_all_reward_accounts(15, 0, 100).await?;
-        assert_eq!(result_height_15.len(), 4,);
-
-        // Verify account2 has the updated balance from height 15, and account4 is new
-        let expected_at_height_15 = vec![
-            (account1, RewardAmount::from(1500u64)),
-            (account2, RewardAmount::from(2500u64)),
-            (account3, RewardAmount::from(3000u64)),
-            (account4, RewardAmount::from(4000u64)),
-        ];
-        for (account, balance) in &expected_at_height_15 {
-            assert!(result_height_15
-                .iter()
-                .any(|(acc, bal)| acc == account && bal == balance),);
-        }
-
-        // Test pagination
-        // results are sorted by account address ascending
-        let result_limit_2 = db.get_all_reward_accounts(15, 0, 2).await?;
-        assert_eq!(result_limit_2.len(), 2);
-        assert_eq!(result_limit_2[0], (account1, RewardAmount::from(1500u64)));
-        assert_eq!(result_limit_2[1], (account2, RewardAmount::from(2500u64)));
-
-        let result_offset_2 = db.get_all_reward_accounts(15, 2, 2).await?;
-        assert_eq!(result_offset_2.len(), 2);
-        assert_eq!(result_offset_2[0], (account3, RewardAmount::from(3000u64)));
-        assert_eq!(result_offset_2[1], (account4, RewardAmount::from(4000u64)));
-
-        Ok(())
-    }
-
-    ///  ensure get_all_reward_accounts fails when merklized state height
-    /// is behind the requested height
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_get_all_reward_accounts_check_state_height() -> anyhow::Result<()> {
-        let storage = SqlDataSource::create_storage().await;
-        let sql_options = tmp_options(&storage);
-        let db = SqlStorage::connect(
-            Config::try_from(&sql_options)?,
-            StorageConnectionType::Sequencer,
-        )
-        .await?;
-
-        let validated_state = ValidatedState::default();
-        let instance_state =
-            NodeState::mock().with_genesis_version(versions::DRB_AND_HEADER_UPGRADE_VERSION);
-        let genesis_leaf = LeafQueryData::<SeqTypes>::genesis(
-            &validated_state,
-            &instance_state,
-            Upgrade::trivial(versions::DRB_AND_HEADER_UPGRADE_VERSION),
-        )
-        .await;
-
-        let account1 = RewardAccountV2("0x0000000000000000000000000000000000000001".parse()?);
-
-        let mut tx = db.write().await?;
-
-        let header_json = serde_json::to_value(genesis_leaf.header())?;
-
-        for height in [5i64, 10, 15, 20] {
-            query(
-                "INSERT INTO header (height, hash, payload_hash, timestamp, data)
-                     VALUES ($1, $2, $3, $4, $5)",
-            )
-            .bind(height)
-            .bind(format!("hash_{height}"))
-            .bind("payload_hash")
-            .bind(0i64)
-            .bind(&header_json)
-            .execute(tx.as_mut())
-            .await?;
-        }
-
-        // Insert reward state at height 5
-        let account_json = serde_json::to_value(account1)?;
-        let balance_json = serde_json::to_value(RewardAmount::from(1000u64))?;
-        query("INSERT INTO reward_state (height, account, balance) VALUES ($1, $2, $3)")
-            .bind(5i64)
-            .bind(&account_json)
-            .bind(&balance_json)
-            .execute(tx.as_mut())
-            .await?;
-
-        // Set the merklized state height to 10
-        // less than max block height of 20
-        UpdateStateData::<
-            SeqTypes,
-            RewardMerkleTreeV2,
-            { RewardMerkleTreeV2::ARITY },
-        >::set_last_state_height(&mut tx, 10)
-        .await?;
-
-        tx.commit().await?;
-
-        // Query at height 5 should succeed
-        let result = db.get_all_reward_accounts(5, 0, 100).await;
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap().len(), 1);
-
-        // Query at height 10 should succeed
-        let result = db.get_all_reward_accounts(10, 0, 100).await;
-        assert!(result.is_ok());
-
-        // Query at height 15 should fail
-        // state not yet processed
-        let result = db.get_all_reward_accounts(15, 0, 100).await;
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("not yet available"));
 
         Ok(())
     }

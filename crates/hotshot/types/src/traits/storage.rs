@@ -169,7 +169,7 @@ pub async fn store_drb_input_impl<TYPES: NodeType>(
     storage: impl Storage<TYPES>,
     drb_input: DrbInput,
 ) -> Result<()> {
-    for attempt in 1..=5 {
+    for attempt in 1..=3 {
         match storage.store_drb_input(drb_input.clone()).await {
             Ok(()) => (),
             Err(e) if attempt < 5 => {
@@ -210,7 +210,7 @@ async fn store_drb_result_impl<TYPES: NodeType>(
     epoch: EpochNumber,
     drb_result: DrbResult,
 ) -> Result<()> {
-    for attempt in 1..=5 {
+    for attempt in 1..=3 {
         match storage.store_drb_result(epoch, drb_result).await {
             Ok(()) => (),
             Err(e) if attempt < 5 => {

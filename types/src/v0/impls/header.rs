@@ -27,7 +27,7 @@ use serde_json::{Map, Value};
 use thiserror::Error;
 use time::OffsetDateTime;
 use vbs::version::Version;
-use versions::{DA_UPGRADE_VERSION, DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION};
+use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, EPOCH_VERSION};
 
 use super::{
     instance_state::NodeState, state::ValidatedState, v0_1::IterableFeeInfo, v0_3::ChainConfig,
@@ -784,7 +784,7 @@ impl Header {
         view_number: u64,
         instance_state: &NodeState,
     ) -> anyhow::Result<Option<usize>> {
-        if version < DA_UPGRADE_VERSION {
+        if version < EPOCH_REWARD_VERSION {
             return Ok(None);
         }
 
@@ -900,7 +900,7 @@ impl Header {
                     )
                 })?;
 
-            if prev_epoch_header.version() >= DA_UPGRADE_VERSION {
+            if prev_epoch_header.version() >= EPOCH_REWARD_VERSION {
                 // V6+ epoch needs rewards - spawn and wait for calculation
                 tracing::warn!(
                     %epoch,
@@ -1392,7 +1392,7 @@ impl BlockHeader<SeqTypes> for Header {
         }
 
         // Handle rewards and calculate leader_counts based on version
-        let (leader_counts, total_reward_distributed) = if version >= DA_UPGRADE_VERSION {
+        let (leader_counts, total_reward_distributed) = if version >= EPOCH_REWARD_VERSION {
             let epoch_height = instance_state
                 .epoch_height
                 .context("epoch_height not configured for V6")?;

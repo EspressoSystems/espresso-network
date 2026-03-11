@@ -372,26 +372,6 @@ impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerP
 
                 Ok(Response::EpochHeader(Box::new(header)))
             },
-            Request::AllRewardAccounts(height, offset, limit) => {
-                // Get all reward accounts from storage
-                let accounts = match &self.storage {
-                    Some(Storage::Sql(storage)) => storage
-                        .get_all_reward_accounts(*height, *offset, *limit)
-                        .await
-                        .with_context(|| {
-                            format!(
-                                "failed to get all reward accounts at height {height} from sql \
-                                 storage"
-                            )
-                        })?,
-                    Some(Storage::Fs(_)) => {
-                        bail!("fs storage not supported for all reward accounts")
-                    },
-                    _ => bail!("storage was not initialized"),
-                };
-
-                Ok(Response::AllRewardAccounts(accounts))
-            },
             Request::RewardMerkleTreeV2(height, view) => {
                 // Try to get the reward merkle tree from memory first, then fall back to storage
                 if let Some(state) = self.consensus.state(ViewNumber::new(*view)).await {

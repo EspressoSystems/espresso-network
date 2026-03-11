@@ -7,12 +7,12 @@ use espresso_types::{
     get_l1_deposits,
     v0_1::IterableFeeInfo,
     v0_3::{
-        ChainConfig, RewardAccountProofV1, RewardAccountQueryDataV1, RewardAccountV1, RewardAmount,
+        ChainConfig, RewardAccountProofV1, RewardAccountQueryDataV1, RewardAccountV1,
         RewardMerkleTreeV1, REWARD_MERKLE_TREE_V1_HEIGHT,
     },
     v0_4::{
         PermittedRewardMerkleTreeV2, RewardAccountProofV2, RewardAccountQueryDataV2,
-        RewardAccountV2, RewardMerkleTreeV2, REWARD_MERKLE_TREE_V2_HEIGHT,
+        RewardAccountV2, RewardMerkleTreeV2,
     },
     BlockMerkleTree, FeeAccount, FeeMerkleTree, Header, Leaf2, NodeState, ValidatedState,
 };
@@ -24,8 +24,7 @@ use hotshot_query_service::{
         sql::{Config, SqlDataSource, Transaction},
         storage::{
             sql::{query_as, Db, TransactionMode, Write},
-            AvailabilityStorage, MerklizedStateHeightStorage, MerklizedStateStorage, NodeStorage,
-            SqlStorage,
+            AvailabilityStorage, MerklizedStateStorage, NodeStorage, SqlStorage,
         },
         VersionedDataSource,
     },
@@ -42,9 +41,8 @@ use jf_merkle_tree_compat::{
     prelude::MerkleNode, ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme,
     LookupResult, MerkleTreeScheme,
 };
-use serde_json::Value;
 use sqlx::{Encode, Row, Type};
-use versions::{DA_UPGRADE_VERSION, DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION};
+use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, EPOCH_VERSION};
 
 use super::{
     data_source::{Provider, SequencerDataSource},
@@ -160,43 +158,26 @@ impl RewardMerkleTreeDataSource for SqlStorage {
                 "cannot get accounts for height {height}: no blocks available"
             );
 
-            // Check if we have the desired state snapshot. If so, we can load the desired accounts
-            // directly.
-            if height < block_height {
-                let header = tx
-                    .get_header(BlockId::<SeqTypes>::from(height as usize))
-                    .await
-                    .context(format!("header {height} not available"))?;
+            ensure!(
+                height < block_height,
+                "requested height {height} is not yet available (latest block height: \
+                 {block_height})"
+            );
 
-                let tree = if header.version() >= DA_UPGRADE_VERSION {
-                    // For V5+, merkle tree nodes are not persisted to the
-                    // reward_merkle_tree_v2 SQL table. Reconstruct the full tree
-                    // from the reward_state table instead.
-                    reconstruct_reward_tree(self, height, &header).await?
-                } else {
-                    load_reward_merkle_tree_v2(self, height)
-                        .await
-                        .with_context(|| {
-                            format!(
-                                "failed to load v2 reward account {account:?} at height {height}"
-                            )
-                        })?
-                        .0
-                        .tree
-                };
+            let tree = load_reward_merkle_tree_v2(self, height)
+                .await
+                .with_context(|| {
+                    format!("failed to load v2 reward account {account:?} at height {height}")
+                })?
+                .0
+                .tree;
 
-                let (proof, balance) = RewardAccountProofV2::prove(&tree, account.into())
-                    .with_context(|| {
-                        format!("reward account {account:?} not available at height {height}")
-                    })?;
+            let (proof, balance) = RewardAccountProofV2::prove(&tree, account.into())
+                .with_context(|| {
+                    format!("reward account {account:?} not available at height {height}")
+                })?;
 
-                Ok(RewardAccountQueryDataV2 { balance, proof })
-            } else {
-                bail!(
-                    "requested height {height} is not yet available (latest block height: \
-                     {block_height})"
-                );
-            }
+            Ok(RewardAccountQueryDataV2 { balance, proof })
         }
     }
 
@@ -431,44 +412,6 @@ impl RewardMerkleTreeDataSource for SqlStorage {
         }
     }
 }
-/// Reconstructs the full reward merkle tree from the `reward_state` table for V5+ headers
-/// where merkle tree nodes are not persisted to the `reward_merkle_tree_v2` SQL table.
-async fn reconstruct_reward_tree(
-    db: &SqlStorage,
-    height: u64,
-    header: &Header,
-) -> anyhow::Result<RewardMerkleTreeV2> {
-    let mut all_accounts = Vec::new();
-    let limit: u64 = 1000;
-    let mut offset: u64 = 0;
-
-    loop {
-        let batch = db.get_all_reward_accounts(height, offset, limit).await?;
-        let count = batch.len() as u64;
-        all_accounts.extend(batch);
-        if count < limit {
-            break;
-        }
-        offset += limit;
-    }
-
-    let tree = RewardMerkleTreeV2::from_kv_set(REWARD_MERKLE_TREE_V2_HEIGHT, all_accounts)
-        .context("failed to rebuild reward merkle tree from accounts")?;
-
-    let expected_root = header
-        .reward_merkle_tree_root()
-        .right()
-        .context("commitment not present")?;
-    let actual_root = tree.commitment();
-    ensure!(
-        actual_root == expected_root,
-        "reconstructed reward tree root does not match header commitment at height {height}: \
-         actual={actual_root}, expected={expected_root}"
-    );
-
-    Ok(tree)
-}
-
 impl CatchupStorage for SqlStorage {
     async fn get_reward_accounts_v1(
         &self,
@@ -554,90 +497,6 @@ impl CatchupStorage for SqlStorage {
             .await?;
             Ok((state.reward_merkle_tree_v2, leaf))
         }
-    }
-
-    async fn get_all_reward_accounts(
-        &self,
-        height: u64,
-        offset: u64,
-        limit: u64,
-    ) -> anyhow::Result<Vec<(RewardAccountV2, RewardAmount)>> {
-        let mut tx = self.read().await.context(format!(
-            "opening transaction to fetch all reward accounts; height {height}"
-        ))?;
-
-        let block_height = NodeStorage::<SeqTypes>::block_height(&mut tx)
-            .await
-            .context("getting block height")? as u64;
-        ensure!(
-            block_height > 0,
-            "cannot get accounts for height {height}: no blocks available"
-        );
-
-        ensure!(
-            height < block_height,
-            "requested height {height} is not yet available (latest block height: {block_height})"
-        );
-
-        let merklized_state_height = tx
-            .get_last_state_height()
-            .await
-            .context("getting merklized state height")? as u64;
-        ensure!(
-            height <= merklized_state_height,
-            "requested height {height} is not yet available. latest merklized state height: \
-             {merklized_state_height}"
-        );
-
-        let header = tx
-            .get_header(BlockId::<SeqTypes>::from(height as usize))
-            .await
-            .context(format!("header {height} not available"))?;
-
-        if header.version() < versions::DRB_AND_HEADER_UPGRADE_VERSION {
-            return Ok(Vec::new());
-        }
-
-        // Query reward_state table for the latest balance for each account up to the given height
-        // Use DISTINCT ON for Postgres, ROW_NUMBER for SQLite
-        #[cfg(not(feature = "embedded-db"))]
-        let query = "SELECT DISTINCT ON (account) account, balance
-               FROM reward_state
-              WHERE height <= $1
-              ORDER BY account, height DESC
-              LIMIT $2 OFFSET $3";
-
-        #[cfg(feature = "embedded-db")]
-        let query = "SELECT account, balance FROM (
-                 SELECT account, balance, ROW_NUMBER() OVER (PARTITION BY account ORDER BY height \
-                     DESC) as rn
-                   FROM reward_state
-                  WHERE height <= $1
-             ) sub
-             WHERE rn = 1
-             ORDER BY account
-             LIMIT $2 OFFSET $3";
-
-        let rows = query_as::<(Value, Value)>(query)
-            .bind(height as i64)
-            .bind(limit as i64)
-            .bind(offset as i64)
-            .fetch_all(tx.as_mut())
-            .await
-            .context("loading reward accounts from reward_state table")?;
-
-        let mut accounts = Vec::new();
-        for (account_json, balance_json) in rows {
-            let account: RewardAccountV2 =
-                serde_json::from_value(account_json).context("deserializing reward account")?;
-            let balance: RewardAmount = serde_json::from_value(balance_json).context(format!(
-                "deserializing reward balance for account {account}"
-            ))?;
-
-            accounts.push((account, balance));
-        }
-
-        Ok(accounts)
     }
 
     async fn get_accounts(
@@ -900,17 +759,6 @@ impl CatchupStorage for DataSource {
         self.as_ref().get_leaf_chain(height).await
     }
 
-    async fn get_all_reward_accounts(
-        &self,
-        height: u64,
-        offset: u64,
-        limit: u64,
-    ) -> anyhow::Result<Vec<(RewardAccountV2, RewardAmount)>> {
-        self.as_ref()
-            .get_all_reward_accounts(height, offset, limit)
-            .await
-    }
-
     async fn get_header(&self, height: u64) -> anyhow::Result<Header> {
         CatchupStorage::get_header(self.as_ref(), height).await
     }
@@ -928,40 +776,6 @@ impl ChainConfigPersistence for Transaction<Write> {
             [(commitment.to_string(), data)],
         )
         .await
-    }
-}
-
-#[async_trait]
-impl crate::state::RewardStatePersistence for Transaction<Write> {
-    async fn store_reward_state(
-        &mut self,
-        height: u64,
-        accounts: Vec<(RewardAccountV2, RewardAmount)>,
-    ) -> anyhow::Result<()> {
-        if accounts.is_empty() {
-            return Ok(());
-        }
-
-        // Build batch of (height, account, balance) tuples for upsert
-        let rows: Vec<_> = accounts
-            .iter()
-            .map(|(account, balance)| {
-                let account_json =
-                    serde_json::to_value(account).expect("failed to serialize account");
-                let balance_json =
-                    serde_json::to_value(balance).expect("failed to serialize balance");
-                (height as i64, account_json, balance_json)
-            })
-            .collect();
-
-        self.upsert(
-            "reward_state",
-            ["height", "account", "balance"],
-            ["height", "account"],
-            rows,
-        )
-        .await
-        .context("failed to upsert reward state")
     }
 }
 
@@ -1418,7 +1232,7 @@ async fn reward_header_dependencies(
 
         let version = header.version();
         // Skip if version is less than epoch version
-        if version < EPOCH_VERSION || version >= DA_UPGRADE_VERSION {
+        if version < EPOCH_VERSION || version >= EPOCH_REWARD_VERSION {
             continue;
         }
 

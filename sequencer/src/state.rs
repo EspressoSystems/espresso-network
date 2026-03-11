@@ -5,8 +5,8 @@ use anyhow::{bail, ensure, Context};
 use either::Either;
 use espresso_types::{
     traits::StateCatchup,
-    v0_3::{ChainConfig, RewardAccountV1, RewardAmount, RewardMerkleTreeV1},
-    v0_4::{Delta, RewardAccountV2, RewardMerkleTreeV2},
+    v0_3::{ChainConfig, RewardAccountV1, RewardMerkleTreeV1},
+    v0_4::Delta,
     BlockMerkleTree, FeeAccount, FeeMerkleTree, Leaf2, ValidatedState,
 };
 use futures::{future::Future, StreamExt};
@@ -122,13 +122,12 @@ async fn store_state_update(
     block_number: u64,
     version: Version,
     state: &ValidatedState,
-    delta: Delta,
+    delta: &Delta,
 ) -> anyhow::Result<()> {
     let ValidatedState {
         fee_merkle_tree,
         block_merkle_tree,
         reward_merkle_tree_v1,
-        reward_merkle_tree_v2,
         ..
     } = state;
     let Delta {
@@ -214,29 +213,6 @@ async fn store_state_update(
         )
         .await
         .context("failed to store reward merkle nodes")?;
-    } else if !rewards_delta.is_empty() {
-        let account_balances: Vec<(RewardAccountV2, RewardAmount)> = rewards_delta
-            .iter()
-            .map(|account| match reward_merkle_tree_v2.lookup(*account) {
-                LookupResult::Ok(balance, _) => Ok((*account, *balance)),
-                LookupResult::NotFound(_) => {
-                    bail!("reward account {account} in delta but not found in tree")
-                },
-                LookupResult::NotInMemory => {
-                    bail!("reward account {account} in delta but not in memory")
-                },
-            })
-            .collect::<anyhow::Result<Vec<_>>>()?;
-
-        if !account_balances.is_empty() {
-            tracing::debug!(
-                count = account_balances.len(),
-                "storing reward state to reward_state table"
-            );
-            tx.store_reward_state(block_number, account_balances)
-                .await
-                .context("failed to store reward state")?;
-        }
     }
 
     Ok(())
@@ -282,11 +258,11 @@ where
         .await
         .context("opening transaction for state update")?;
 
-    store_state_update(&mut tx, block_number, version, &state, delta).await?;
+    store_state_update(&mut tx, block_number, version, &state, &delta).await?;
 
     tx.commit().await?;
 
-    if version > EPOCH_VERSION {
+    if version > EPOCH_VERSION && !delta.rewards_delta.is_empty() {
         storage
             .save_reward_merkle_tree_v2(instance, block_number, &state.reward_merkle_tree_v2)
             .await
@@ -489,24 +465,12 @@ impl<T> SequencerStateDataSource for T where
 {
 }
 
-#[async_trait::async_trait]
-pub(crate) trait RewardStatePersistence {
-    /// Store reward account balances at a specific height.
-    async fn store_reward_state(
-        &mut self,
-        height: u64,
-        accounts: Vec<(RewardAccountV2, RewardAmount)>,
-    ) -> anyhow::Result<()>;
-}
-
 pub(crate) trait SequencerStateUpdate:
     Transaction
     + UpdateStateData<SeqTypes, FeeMerkleTree, { FeeMerkleTree::ARITY }>
     + UpdateStateData<SeqTypes, BlockMerkleTree, { BlockMerkleTree::ARITY }>
-    + UpdateStateData<SeqTypes, RewardMerkleTreeV2, { RewardMerkleTreeV2::ARITY }>
     + UpdateStateData<SeqTypes, RewardMerkleTreeV1, { RewardMerkleTreeV1::ARITY }>
     + ChainConfigPersistence
-    + RewardStatePersistence
 {
 }
 
@@ -514,9 +478,7 @@ impl<T> SequencerStateUpdate for T where
     T: Transaction
         + UpdateStateData<SeqTypes, FeeMerkleTree, { FeeMerkleTree::ARITY }>
         + UpdateStateData<SeqTypes, BlockMerkleTree, { BlockMerkleTree::ARITY }>
-        + UpdateStateData<SeqTypes, RewardMerkleTreeV2, { RewardMerkleTreeV2::ARITY }>
         + UpdateStateData<SeqTypes, RewardMerkleTreeV1, { RewardMerkleTreeV1::ARITY }>
         + ChainConfigPersistence
-        + RewardStatePersistence
 {
 }

@@ -6,7 +6,7 @@ use futures::{future::join_all, StreamExt};
 use hotshot_types::utils::epoch_from_block_number;
 use sequencer::Genesis;
 use versions::{
-    Upgrade, DA_UPGRADE_VERSION, DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, FEE_VERSION,
+    Upgrade, DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, EPOCH_VERSION, FEE_VERSION,
 };
 
 use crate::{
@@ -154,7 +154,7 @@ async fn test_native_demo_fee_to_drb_header_upgrade() -> Result<()> {
 async fn test_native_demo_epoch_reward_upgrade() -> Result<()> {
     run_upgrade_test(
         "data/genesis/demo-epoch-reward-upgrade.toml",
-        Upgrade::new(DRB_AND_HEADER_UPGRADE_VERSION, DA_UPGRADE_VERSION),
+        Upgrade::new(DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION),
     )
     .await
 }

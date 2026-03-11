@@ -105,10 +105,10 @@ demo-native-fee-to-drb-header-upgrade *args: (build "test" "--no-default-feature
 demo-native-da-committees *args: (build "test" "--no-default-features")
     ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo-da-committees.toml scripts/demo-native -f process-compose.yaml {{args}}
 
-demo-native-epoch-reward *args: (build "test" "--no-default-features --features epoch-reward")
+demo-native-epoch-reward *args: (build "test" "--no-default-features")
     ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo-epoch-reward.toml scripts/demo-native -f process-compose.yaml {{args}}
 
-demo-native-epoch-reward-upgrade *args: (build "test" "--no-default-features --features da-upgrade,epoch-reward")
+demo-native-epoch-reward-upgrade *args: (build "test" "--no-default-features")
     ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo-epoch-reward-upgrade.toml scripts/demo-native -f process-compose.yaml {{args}}
 
 demo-native-benchmark:
@@ -205,11 +205,11 @@ test-demo test_name:
 			test="test_native_demo_drb_header_base"
 			;;
 		epoch-reward-base)
-			features="--no-default-features --features epoch-reward"
+			features="--no-default-features"
 			test="test_native_demo_epoch_reward_base"
 			;;
 		epoch-reward-upgrade)
-			features="--no-default-features --features da-upgrade,epoch-reward"
+			features="--no-default-features"
 			test="test_native_demo_epoch_reward_upgrade"
 			;;
 		*)

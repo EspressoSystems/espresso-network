@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use committable::Commitment;
 use espresso_types::{
-    v0_3::{ChainConfig, RewardAccountV1, RewardAmount, RewardMerkleTreeV1},
+    v0_3::{ChainConfig, RewardAccountV1, RewardMerkleTreeV1},
     v0_4::{RewardAccountV2, RewardMerkleTreeV2},
     FeeAccount, FeeMerkleTree, Header, Leaf2,
 };
@@ -39,8 +39,6 @@ pub enum Request {
     StateCert(u64),
     /// A request for the header at the last block of a given epoch
     EpochHeader(u64),
-    /// A request for all reward accounts at a given height with pagination
-    AllRewardAccounts(Height, u64, u64), // height, offset, limit
     /// A request for data to reconstruct the reward merkle tree at a given height
     RewardMerkleTreeV2(u64, ViewNumber),
 }
@@ -67,8 +65,6 @@ pub enum Response {
     StateCert(LightClientStateUpdateCertificateV2<SeqTypes>),
     /// A response for the header at the last block of a given epoch
     EpochHeader(Box<Header>),
-    /// A response for all reward accounts at a given height
-    AllRewardAccounts(Vec<(RewardAccountV2, RewardAmount)>),
     /// A response with data to reconstruct the reward merkle tree at a given height
     RewardMerkleTreeV2(Vec<u8>),
 }

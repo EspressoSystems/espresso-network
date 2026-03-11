@@ -1430,10 +1430,6 @@ impl SequencerPersistence for Persistence {
         Ok(())
     }
 
-    async fn backfill_reward_state(&self) -> anyhow::Result<()> {
-        Ok(())
-    }
-
     async fn migrate_validator_authenticated(&self) -> anyhow::Result<()> {
         #[allow(deprecated)]
         use espresso_types::v0_3::Validator;

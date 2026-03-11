@@ -247,10 +247,6 @@ impl SequencerPersistence for NoStorage {
         Ok(())
     }
 
-    async fn backfill_reward_state(&self) -> anyhow::Result<()> {
-        Ok(())
-    }
-
     async fn migrate_validator_authenticated(&self) -> anyhow::Result<()> {
         Ok(())
     }

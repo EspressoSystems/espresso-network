@@ -683,16 +683,6 @@ pub mod mock {
             anyhow::bail!("unimplemented")
         }
 
-        async fn try_fetch_all_reward_accounts(
-            &self,
-            _retry: usize,
-            _height: u64,
-            _offset: u64,
-            _limit: u64,
-        ) -> anyhow::Result<Vec<(RewardAccountV2, RewardAmount)>> {
-            anyhow::bail!("unimplemented")
-        }
-
         fn backoff(&self) -> &BackoffParams {
             &self.backoff
         }
