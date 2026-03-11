@@ -56,8 +56,27 @@ impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerP
         .with_context(|| "timed out while fetching leaf")?
     }
 
-    async fn try_fetch_header(&self, _retry: usize, _height: u64) -> anyhow::Result<Header> {
-        anyhow::bail!("header fetching not supported via request-response protocol")
+    async fn try_fetch_header(&self, _retry: usize, height: u64) -> anyhow::Result<Header> {
+        let timeout_duration = self.config.request_batch_interval * 3;
+
+        let response_validation_fn = move |_request: &Request, response: Response| async move {
+            let Response::EpochHeader(header) = response else {
+                return Err(anyhow::anyhow!("expected epoch header response"));
+            };
+            Ok(*header)
+        };
+
+        timeout(timeout_duration, async {
+            self.request_indefinitely(
+                Request::EpochHeader(height),
+                RequestType::Batched,
+                response_validation_fn,
+            )
+            .await
+            .with_context(|| "failed to request epoch header")
+        })
+        .await
+        .with_context(|| "timed out while fetching header")?
     }
 
     async fn try_fetch_accounts(
