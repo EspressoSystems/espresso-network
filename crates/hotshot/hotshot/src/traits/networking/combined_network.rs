@@ -21,10 +21,6 @@ use async_broadcast::{broadcast, InactiveReceiver, Sender};
 use async_lock::RwLock;
 use async_trait::async_trait;
 use futures::{join, select, FutureExt};
-#[cfg(feature = "hotshot-testing")]
-use hotshot_types::traits::network::{
-    AsyncGenerator, NetworkReliability, TestableNetworkingImplementation,
-};
 use hotshot_types::{
     boxed_sync,
     constants::{
@@ -38,6 +34,11 @@ use hotshot_types::{
         node_implementation::NodeType,
     },
     BoxSyncFuture,
+};
+#[cfg(feature = "hotshot-testing")]
+use hotshot_types::{
+    traits::network::{AsyncGenerator, NetworkReliability, TestableNetworkingImplementation},
+    PeerConnectInfo,
 };
 use lru::LruCache;
 use parking_lot::RwLock as PlRwLock;
@@ -257,6 +258,7 @@ impl<TYPES: NodeType> TestableNetworkingImplementation<TYPES> for CombinedNetwor
         da_committee_size: usize,
         reliability_config: Option<Box<dyn NetworkReliability>>,
         secondary_network_delay: Duration,
+        connect_infos: &mut HashMap<TYPES::SignatureKey, PeerConnectInfo>,
     ) -> AsyncGenerator<Arc<Self>> {
         let generators = (
             <PushCdnNetwork<TYPES::SignatureKey> as TestableNetworkingImplementation<TYPES>>::generator(
@@ -266,6 +268,7 @@ impl<TYPES: NodeType> TestableNetworkingImplementation<TYPES> for CombinedNetwor
                 da_committee_size,
                 None,
                 Duration::default(),
+                connect_infos
             ),
             <Libp2pNetwork<TYPES> as TestableNetworkingImplementation<TYPES>>::generator(
                 expected_node_count,
@@ -274,6 +277,7 @@ impl<TYPES: NodeType> TestableNetworkingImplementation<TYPES> for CombinedNetwor
                 da_committee_size,
                 reliability_config,
                 Duration::default(),
+                connect_infos
             )
         );
         Box::pin(move |node_id| {

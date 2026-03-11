@@ -1,69 +1,257 @@
 #[cfg(feature = "hotshot-testing")]
-use std::sync::Arc;
-#[cfg(feature = "hotshot-testing")]
 use std::time::Duration;
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use async_trait::async_trait;
-use cliquenet::{Address, Keypair, NetConf, PublicKey, Retry, SecretKey};
-use futures::future::ready;
+use cliquenet::{NetConf, NetworkDown, Retry, Role};
 #[cfg(feature = "hotshot-testing")]
 use hotshot_types::traits::network::{
     AsyncGenerator, NetworkReliability, TestableNetworkingImplementation,
 };
 use hotshot_types::{
+    addr::NetAddr,
     boxed_sync,
     data::{EpochNumber, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
+    stake_table::HSStakeTable,
     traits::{
         metrics::Metrics,
         network::{BroadcastDelay, ConnectedNetwork, NetworkError, Topic},
-        node_implementation::NodeType,
-        signature_key::{PrivateSignatureKey, SignatureKey},
+        node_implementation::{ConsensusTime, NodeType},
+        signature_key::{SignatureKey, StakeTableEntryType},
     },
-    BoxSyncFuture,
+    x25519::Keypair,
+    BoxSyncFuture, PeerConnectInfo,
 };
+use tokio::sync::Mutex;
+use tracing::{error, info};
 
 #[derive(Clone)]
-pub struct Cliquenet<T: NodeType> {
-    net: Retry<T::SignatureKey>,
+pub struct Cliquenet<K> {
+    net: Retry<K>,
+    inner: Arc<Mutex<Inner<K>>>,
 }
 
-impl<T: NodeType> Cliquenet<T> {
-    pub async fn create<A, B, P, M>(
+#[derive(Clone)]
+struct Inner<K> {
+    epoch: EpochNumber,
+    peers: HashMap<K, PeerConnectInfo>,
+    non_peers: HashSet<K>,
+}
+
+impl<K: SignatureKey + 'static> Cliquenet<K> {
+    pub async fn create<A, P, Q>(
         name: &'static str,
-        key: T::SignatureKey,
+        key: K,
         keypair: Keypair,
         addr: A,
         parties: P,
-        metrics: M,
+        others: Q,
+        metrics: Box<dyn Metrics>,
     ) -> Result<Self, NetworkError>
     where
-        A: Into<Address>,
-        B: Into<Address>,
-        P: IntoIterator<Item = (T::SignatureKey, PublicKey, B)>,
-        M: Metrics + 'static,
+        A: Into<NetAddr>,
+        P: IntoIterator<Item = (K, PeerConnectInfo)>,
+        Q: IntoIterator<Item = K>,
     {
+        let parties: HashMap<K, PeerConnectInfo> = parties.into_iter().collect();
+        let others: HashSet<K> = HashSet::from_iter(others);
+
         let cfg = NetConf::builder()
             .name(name)
             .label(key)
             .keypair(keypair)
             .bind(addr.into())
-            .parties(parties.into_iter().map(|(k, x, a)| (k, x, a.into())))
-            .metrics(Box::new(metrics))
+            .parties(
+                parties
+                    .iter()
+                    .map(|(k, info)| (k.clone(), info.x25519_key, info.p2p_addr.clone())),
+            )
+            .metrics(metrics)
             .build();
+
         let net = Retry::create(cfg)
             .await
             .map_err(|e| NetworkError::ListenError(format!("cliquenet creation failed: {e}")))?;
-        Ok(Self { net })
+
+        info!(peers = %parties.len(), non_peers = %others.len(), "cliquenet created");
+
+        Ok(Self {
+            net,
+            inner: Arc::new(Mutex::new(Inner {
+                epoch: EpochNumber::genesis(),
+                peers: parties,
+                non_peers: others,
+            })),
+        })
+    }
+
+    /// Get the current network peers.
+    pub fn peers(&self) -> Vec<K> {
+        self.net.parties(None)
+    }
+
+    /// Get keys of peers not in this network.
+    pub async fn non_peers(&self) -> HashSet<K> {
+        self.inner.lock().await.non_peers.clone()
+    }
+
+    /// Update peers on every epoch change.
+    ///
+    /// For any given epoch `e` we collect the validators of `e`, `e-1` and
+    /// `e+1` from the stake tables and merge their connection information.
+    ///
+    /// We keep validator that were in `e-1` but not in `e` for one additional
+    /// epoch and eagerly connect to new validators of `e+1`.
+    async fn on_epoch_change<U>(&self, epoch: EpochNumber, coord: &EpochMembershipCoordinator<U>)
+    where
+        U: NodeType<SignatureKey = K>,
+    {
+        // Collect peer connect infos from stake table.
+        let connect_infos = |a: HSStakeTable<U>, b: HSStakeTable<U>| {
+            a.0.into_iter()
+                .chain(b.0)
+                .map(|m| (m.stake_table_entry.public_key(), m.connect_info))
+                .collect()
+        };
+
+        let mut inner = self.inner.lock().await;
+
+        if epoch <= inner.epoch {
+            info!(%epoch, ours = %inner.epoch, "epoch already seen");
+            return;
+        }
+
+        // Validators of the new epoch.
+        let curr_infos = {
+            let curr_epoch = <<U as NodeType>::Epoch as ConsensusTime>::new(*epoch);
+            let Ok(membership) = coord.stake_table_for_epoch(Some(curr_epoch)).await else {
+                error!(epoch = %curr_epoch, "no stake table available");
+                return;
+            };
+            let st = membership.stake_table().await;
+            let da = membership.da_stake_table().await;
+            connect_infos(st, da)
+        };
+
+        // Validators leaving are retained as peers for one additional epoch.
+        let prev_infos = if *epoch > 0 {
+            let prev_epoch = <<U as NodeType>::Epoch as ConsensusTime>::new(*epoch - 1);
+            if let Ok(membership) = coord.stake_table_for_epoch(Some(prev_epoch)).await {
+                let st = membership.stake_table().await;
+                let da = membership.da_stake_table().await;
+                connect_infos(st, da)
+            } else {
+                info!(epoch = %prev_epoch, "previous epoch's stake table unavailable");
+                HashMap::new()
+            }
+        } else {
+            HashMap::new()
+        };
+
+        // Validators joining in the next epoch are connected to early.
+        let next_infos = {
+            let next_epoch = <<U as NodeType>::Epoch as ConsensusTime>::new(*epoch + 1);
+            if let Ok(membership) = coord.stake_table_for_epoch(Some(next_epoch)).await {
+                let st = membership.stake_table().await;
+                let da = membership.da_stake_table().await;
+                connect_infos(st, da)
+            } else {
+                info!(epoch = %next_epoch, "next epoch's stake table not available");
+                HashMap::new()
+            }
+        };
+
+        // Since connection information may be updated, we need to merge them,
+        // preferring the newest epoch's data, i.e. `next(curr(prev))`.
+        let mut merged_infos = prev_infos.clone();
+        for (k, v) in curr_infos.iter().chain(&next_infos) {
+            merged_infos.insert(k.clone(), v.clone());
+        }
+
+        let wanted: HashSet<K> = curr_infos
+            .keys()
+            .chain(next_infos.keys())
+            .cloned()
+            .collect();
+
+        let retained: HashSet<K> = curr_infos
+            .keys()
+            .chain(prev_infos.keys())
+            .cloned()
+            .collect();
+
+        let mut non_peers = HashSet::new();
+        let mut to_add = Vec::new();
+        let mut to_del = Vec::new();
+
+        for k in &wanted {
+            if let Some(Some(new_info)) = merged_infos.get(k) {
+                if Some(new_info) != inner.peers.get(k) {
+                    info!(%epoch, peer = %k, "adding/updating network peer");
+                    to_add.push((k.clone(), new_info.x25519_key, new_info.p2p_addr.clone()));
+                } else {
+                    info!(%epoch, peer = %k, "peer unchanged");
+                }
+            } else {
+                info!(%epoch, peer  = %k, "ignoring peer without connection info");
+                non_peers.insert(k.clone());
+            }
+        }
+
+        // Remove peers that have left both the current and previous epoch's stake tables.
+        for p in inner.peers.keys() {
+            if !(retained.contains(p) || wanted.contains(p)) {
+                info!(%epoch, peer = %p, "removing network peer");
+                to_del.push(p.clone());
+            }
+        }
+
+        // Perform the updates:
+
+        for k in &to_del {
+            inner.peers.remove(k);
+        }
+
+        for (k, x, a) in to_add.iter().cloned() {
+            inner.peers.insert(
+                k,
+                PeerConnectInfo {
+                    x25519_key: x,
+                    p2p_addr: a,
+                },
+            );
+        }
+
+        if let Err(err) = self.net.add(Role::Active, to_add).await {
+            let _: NetworkDown = err;
+            error!(%epoch, "network down; could not add peers to network");
+            return;
+        }
+
+        if let Err(err) = self.net.remove(to_del).await {
+            let _: NetworkDown = err;
+            error!(%epoch, "network down; could not remove peers from network");
+            return;
+        }
+
+        debug_assert_eq! {
+            HashSet::<K>::from_iter(self.net.parties(None)),
+            HashSet::<K>::from_iter(inner.peers.keys().cloned())
+        }
+
+        info!(%epoch, peers = %inner.peers.len(), non_peers = %non_peers.len());
+
+        inner.epoch = EpochNumber::from(*epoch);
+        inner.non_peers = non_peers;
     }
 }
 
-pub fn derive_keypair<K: SignatureKey>(k: &K::PrivateKey) -> Keypair {
-    SecretKey::from(blake3::derive_key("cliquenet key", &k.to_bytes())).into()
-}
-
 #[async_trait]
-impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Cliquenet<T> {
+impl<K: SignatureKey + 'static> ConnectedNetwork<K> for Cliquenet<K> {
     async fn broadcast_message(
         &self,
         v: ViewNumber,
@@ -81,7 +269,7 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Cliquenet<T> {
         &self,
         v: ViewNumber,
         m: Vec<u8>,
-        recipients: Vec<T::SignatureKey>,
+        recipients: Vec<K>,
         _: BroadcastDelay,
     ) -> Result<(), NetworkError> {
         self.net.multicast(recipients, *v, m).await.map_err(|e| {
@@ -94,7 +282,7 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Cliquenet<T> {
         &self,
         v: ViewNumber,
         m: Vec<u8>,
-        recipient: T::SignatureKey,
+        recipient: K,
     ) -> Result<(), NetworkError> {
         self.net
             .unicast(recipient, *v, m)
@@ -114,73 +302,81 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Cliquenet<T> {
     async fn update_view<U>(
         &self,
         v: ViewNumber,
-        _: Option<EpochNumber>,
-        _: EpochMembershipCoordinator<U>,
+        e: Option<EpochNumber>,
+        m: EpochMembershipCoordinator<U>,
     ) where
-        U: NodeType<SignatureKey = T::SignatureKey>,
+        U: NodeType<SignatureKey = K>,
     {
-        self.net.gc(*v)
+        self.net.gc(*v);
+
+        if let Some(e) = e {
+            self.on_epoch_change(e, &m).await
+        }
     }
 
     async fn wait_for_ready(&self) {}
 
-    fn pause(&self) {
-        unimplemented!("Pausing not implemented for cliquenet");
-    }
+    fn pause(&self) {}
 
-    fn resume(&self) {
-        unimplemented!("Resuming not implemented for cliquenet");
-    }
+    fn resume(&self) {}
 
     fn shut_down<'a, 'b>(&'a self) -> BoxSyncFuture<'b, ()>
     where
         'a: 'b,
         Self: 'b,
     {
-        boxed_sync(ready(()))
+        boxed_sync(self.net.close())
     }
 }
 
 #[cfg(feature = "hotshot-testing")]
-impl<T: NodeType> TestableNetworkingImplementation<T> for Cliquenet<T> {
+impl<T: NodeType> TestableNetworkingImplementation<T> for Cliquenet<T::SignatureKey> {
     fn generator(
-        expected_node_count: usize,
+        nodes: usize,
         _num_bootstrap: usize,
         _network_id: usize,
         _da_committee_size: usize,
         _reliability_config: Option<Box<dyn NetworkReliability>>,
         _secondary_network_delay: Duration,
+        connect_infos: &mut HashMap<T::SignatureKey, PeerConnectInfo>,
     ) -> AsyncGenerator<Arc<Self>> {
-        use std::net::Ipv4Addr;
-
-        use cliquenet::Address;
-
-        let mut parties: Vec<(Keypair, T::SignatureKey, Address)> = Vec::new();
-        for i in 0..expected_node_count {
-            let secret = T::SignatureKey::generated_from_seed_indexed([0u8; 32], i as u64).1;
-            let public = T::SignatureKey::from_private(&secret);
-            let kpair = derive_keypair::<<T as NodeType>::SignatureKey>(&secret);
-            let port =
-                test_utils::reserve_tcp_port().expect("OS should have ephemeral ports available");
-            let addr = Address::Inet(Ipv4Addr::LOCALHOST.into(), port);
-
-            parties.push((kpair, public, addr));
+        let parties = {
+            let p = gen_parties::<T::SignatureKey>()
+                .take(nodes)
+                .collect::<Vec<_>>();
+            Arc::new(p)
+        };
+        for (s, k, a) in &*parties {
+            connect_infos.insert(
+                k.clone(),
+                PeerConnectInfo {
+                    x25519_key: s.public_key(),
+                    p2p_addr: a.clone(),
+                },
+            );
         }
-
-        let parties = Arc::new(parties);
-
         Box::pin(move |i| {
             let parties = parties.clone();
             let future = async move {
+                use std::iter::empty;
+
                 use hotshot_types::traits::metrics::NoMetrics;
 
                 let (s, k, a) = &parties[i as usize];
-                let it = parties
-                    .iter()
-                    .map(|(s, k, a)| (k.clone(), s.public_key(), a.clone()));
-                let net = Cliquenet::create("test", k.clone(), s.clone(), a.clone(), it, NoMetrics)
-                    .await
-                    .unwrap();
+                let it = parties.iter().map(|(s, k, a)| {
+                    (
+                        k.clone(),
+                        PeerConnectInfo {
+                            x25519_key: s.public_key(),
+                            p2p_addr: a.clone(),
+                        },
+                    )
+                });
+                let met = Box::new(NoMetrics);
+                let net =
+                    Cliquenet::create("test", k.clone(), s.clone(), a.clone(), it, empty(), met)
+                        .await
+                        .unwrap();
                 Arc::new(net)
             };
             Box::pin(future)
@@ -190,4 +386,22 @@ impl<T: NodeType> TestableNetworkingImplementation<T> for Cliquenet<T> {
     fn in_flight_message_count(&self) -> Option<usize> {
         None
     }
+}
+
+/// Generate an arbitrary number or network parties.
+///
+/// A party is defined by its X25519 keypair, public signing key and network address.
+#[cfg(feature = "hotshot-testing")]
+fn gen_parties<K: SignatureKey>() -> impl Iterator<Item = (Keypair, K, NetAddr)> {
+    let mut i = 0u64;
+    std::iter::repeat_with(move || {
+        let secret = K::generated_from_seed_indexed([0u8; 32], i).1;
+        let public = K::from_private(&secret);
+        let kpair = Keypair::derive_from::<K>(&secret);
+        let port =
+            test_utils::reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let addr = NetAddr::Inet(std::net::Ipv4Addr::LOCALHOST.into(), port);
+        i += 1;
+        (kpair, public, addr)
+    })
 }

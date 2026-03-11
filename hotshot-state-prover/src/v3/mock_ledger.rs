@@ -6,7 +6,7 @@ use ark_bn254::Bn254;
 use ark_ed_on_bn254::EdwardsConfig;
 use ark_ff::PrimeField;
 use ark_std::{
-    rand::{rngs::StdRng, CryptoRng, Rng, RngCore},
+    rand::{rngs::StdRng, Rng, RngCore},
     UniformRand,
 };
 use espresso_types::SeqTypes;
@@ -35,6 +35,7 @@ use jf_utils::test_rng;
 use super::{
     circuit::GenericPublicInput, generate_state_update_proof, preprocess, Proof, VerifyingKey,
 };
+use crate::test_utils::{key_pairs_for_testing, stake_table_for_testing};
 
 type F = ark_ed_on_bn254::Fq;
 type SchnorrVerKey = jf_signature::schnorr::VerKey<EdwardsConfig>;
@@ -245,6 +246,7 @@ impl MockLedger {
                         stake_amount: amount,
                     },
                     state_ver_key: schnorr_key.1.clone(),
+                    connect_info: None,
                 },
             );
             self.key_archive.insert(bls_key, schnorr_key.0.clone());
@@ -452,44 +454,6 @@ impl MockLedger {
         self.rng.fill_bytes(&mut bytes);
         bytes.into()
     }
-}
-
-/// Helper function for test
-fn key_pairs_for_testing<R: CryptoRng + RngCore>(
-    num_validators: usize,
-    prng: &mut R,
-) -> (Vec<BLSVerKey>, Vec<(SchnorrSignKey, SchnorrVerKey)>) {
-    let bls_keys = (0..num_validators)
-        .map(|_| {
-            BLSOverBN254CurveSignatureScheme::key_gen(&(), prng)
-                .unwrap()
-                .1
-        })
-        .collect::<Vec<_>>();
-    let schnorr_keys = (0..num_validators)
-        .map(|_| SchnorrSignatureScheme::key_gen(&(), prng).unwrap())
-        .collect::<Vec<_>>();
-    (bls_keys, schnorr_keys)
-}
-
-/// Helper function for test
-fn stake_table_for_testing(
-    bls_keys: &[BLSVerKey],
-    schnorr_keys: &[(SchnorrSignKey, SchnorrVerKey)],
-) -> HSStakeTable<SeqTypes> {
-    bls_keys
-        .iter()
-        .enumerate()
-        .zip(schnorr_keys)
-        .map(|((i, bls_key), (_, schnorr_key))| PeerConfig {
-            stake_table_entry: StakeTableEntry {
-                stake_key: *bls_key,
-                stake_amount: U256::from((i + 1) as u32),
-            },
-            state_ver_key: schnorr_key.clone(),
-        })
-        .collect::<Vec<_>>()
-        .into()
 }
 
 // modify from <https://github.com/EspressoSystems/cape/blob/main/contracts/rust/src/plonk_verifier/helpers.rs>

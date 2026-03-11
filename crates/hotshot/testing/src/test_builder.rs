@@ -18,9 +18,11 @@ use hotshot_example_types::{
     testable_delay::DelayConfig,
 };
 use hotshot_types::{
-    consensus::ConsensusMetricsValue, epoch_membership::EpochMembershipCoordinator,
-    storage_metrics::StorageMetricsValue, traits::node_implementation::NodeType, HotShotConfig,
-    PeerConfig, ValidatorConfig,
+    consensus::ConsensusMetricsValue,
+    epoch_membership::EpochMembershipCoordinator,
+    storage_metrics::StorageMetricsValue,
+    traits::{node_implementation::NodeType, signature_key::StakeTableEntryType},
+    HotShotConfig, PeerConfig, ValidatorConfig,
 };
 use hotshot_utils::anytrace::*;
 use tide_disco::Url;
@@ -589,20 +591,37 @@ where
     /// if some of the configuration values are zero
     #[must_use]
     pub fn gen_launcher_with_tasks(
-        self,
+        mut self,
         additional_test_tasks: Vec<Box<dyn TestTaskStateSeed<TYPES, I>>>,
     ) -> TestLauncher<TYPES, I> {
+        let mut connect_infos = HashMap::new();
+        let networks = <I as TestableNodeImplementation<TYPES>>::gen_networks(
+            self.test_config.num_nodes_with_stake.into(),
+            self.test_config.num_bootstrap,
+            self.test_config.da_staked_committee_size,
+            self.unreliable_network.clone(),
+            self.timing_data.secondary_network_delay,
+            &mut connect_infos,
+        );
+
+        // Update peer configs with address information created by `gen_networks`.
+        for cfg in self.test_config.known_nodes_with_stake.iter_mut() {
+            if let Some(info) = connect_infos.get(&cfg.stake_table_entry.public_key()) {
+                cfg.connect_info = Some(info.clone())
+            }
+        }
+        for cfg in self.test_config.known_da_nodes.iter_mut() {
+            if let Some(info) = connect_infos.get(&cfg.stake_table_entry.public_key()) {
+                cfg.connect_info = Some(info.clone())
+            }
+        }
+
         let TestDescription {
             timing_data,
-            unreliable_network,
             test_config,
             node_stakes,
             ..
         } = self.clone();
-
-        let num_nodes_with_stake = test_config.num_nodes_with_stake.into();
-        let num_bootstrap_nodes = test_config.num_bootstrap;
-        let da_staked_committee_size = test_config.da_staked_committee_size;
 
         let validator_config = Rc::new(move |node_id| {
             ValidatorConfig::<TYPES>::generated_from_seed_indexed(
@@ -615,13 +634,15 @@ where
         });
 
         let hotshot_config = Rc::new(move |_| test_config.clone());
+
         let TimingData {
             next_view_timeout,
             builder_timeout,
             data_request_delay,
-            secondary_network_delay,
             view_sync_timeout,
+            ..
         } = timing_data;
+
         // TODO this should really be using the timing config struct
         let mod_hotshot_config = move |hotshot_config: &mut HotShotConfig<TYPES>| {
             hotshot_config.next_view_timeout = next_view_timeout;
@@ -633,13 +654,7 @@ where
         let metadata = self.clone();
         TestLauncher {
             resource_generators: ResourceGenerators {
-                channel_generator: <I as TestableNodeImplementation<TYPES>>::gen_networks(
-                    num_nodes_with_stake,
-                    num_bootstrap_nodes,
-                    da_staked_committee_size,
-                    unreliable_network,
-                    secondary_network_delay,
-                ),
+                channel_generator: networks,
                 storage: Rc::new(move |node_id| {
                     let storage = TestStorage::<TYPES> {
                         delay_config: metadata

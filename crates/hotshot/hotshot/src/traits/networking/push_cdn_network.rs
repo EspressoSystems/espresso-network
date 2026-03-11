@@ -5,7 +5,10 @@
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
 #[cfg(feature = "hotshot-testing")]
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::{
+    collections::HashMap,
+    sync::atomic::{AtomicBool, Ordering},
+};
 use std::{collections::VecDeque, marker::PhantomData, sync::Arc};
 #[cfg(feature = "hotshot-testing")]
 use std::{path::Path, time::Duration};
@@ -29,10 +32,6 @@ use cdn_client::{
 };
 #[cfg(feature = "hotshot-testing")]
 use cdn_marshal::{Config as MarshalConfig, Marshal};
-#[cfg(feature = "hotshot-testing")]
-use hotshot_types::traits::network::{
-    AsyncGenerator, NetworkReliability, TestableNetworkingImplementation,
-};
 use hotshot_types::{
     boxed_sync,
     data::ViewNumber,
@@ -43,6 +42,11 @@ use hotshot_types::{
     },
     utils::bincode_opts,
     BoxSyncFuture,
+};
+#[cfg(feature = "hotshot-testing")]
+use hotshot_types::{
+    traits::network::{AsyncGenerator, NetworkReliability, TestableNetworkingImplementation},
+    PeerConnectInfo,
 };
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use parking_lot::Mutex;
@@ -322,6 +326,7 @@ impl<TYPES: NodeType> TestableNetworkingImplementation<TYPES>
         da_committee_size: usize,
         _reliability_config: Option<Box<dyn NetworkReliability>>,
         _secondary_network_delay: Duration,
+        _connect_infos: &mut HashMap<TYPES::SignatureKey, PeerConnectInfo>,
     ) -> AsyncGenerator<Arc<Self>> {
         // The configuration we are using for testing is 2 brokers & 1 marshal
 

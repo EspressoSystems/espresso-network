@@ -7,7 +7,7 @@
 use std::time::Duration;
 
 use hotshot_example_types::node_types::{
-    CombinedImpl, TestTwoStakeTablesTypes, TestTypes, TEST_VERSIONS,
+    CliquenetImpl, CombinedImpl, CompatNetImpl, TestTwoStakeTablesTypes, TestTypes, TEST_VERSIONS,
 };
 use hotshot_macros::cross_tests;
 use hotshot_testing::{
@@ -22,7 +22,7 @@ const NUM_NODES: u64 = 14;
 
 cross_tests!(
     TestName: test_staggered_restart_transition_block,
-    Impls: [CombinedImpl],
+    Impls: [CombinedImpl, CliquenetImpl, CompatNetImpl],
     Types: [TestTypes, TestTwoStakeTablesTypes],
     Versions: [TEST_VERSIONS.epoch],
     Ignore: false,
@@ -80,7 +80,7 @@ cross_tests!(
 
 cross_tests!(
     TestName: test_staggered_restart_first_empty_block,
-    Impls: [CombinedImpl],
+    Impls: [CombinedImpl, CliquenetImpl, CompatNetImpl],
     Types: [TestTypes, TestTwoStakeTablesTypes],
     Versions: [TEST_VERSIONS.epoch],
     Ignore: false,
@@ -138,7 +138,7 @@ cross_tests!(
 
 cross_tests!(
     TestName: test_staggered_restart_first_block,
-    Impls: [CombinedImpl],
+    Impls: [CombinedImpl, CliquenetImpl, CompatNetImpl],
     Types: [TestTypes, TestTwoStakeTablesTypes],
     Versions: [TEST_VERSIONS.epoch],
     Ignore: false,

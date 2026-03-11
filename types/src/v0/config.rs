@@ -1,10 +1,11 @@
 use std::{num::NonZeroUsize, time::Duration};
 
 use hotshot_types::{
+    addr::NetAddr,
     network::{
         BuilderType, CombinedNetworkConfig, Libp2pConfig, NetworkConfig, RandomBuilderConfig,
     },
-    HotShotConfig, PeerConfig, ValidatorConfig, VersionedDaCommittee,
+    x25519, HotShotConfig, PeerConfig, ValidatorConfig, VersionedDaCommittee,
 };
 use serde::{Deserialize, Serialize};
 use tide_disco::Url;
@@ -23,6 +24,8 @@ pub struct PublicValidatorConfig {
     private_key: String,
     state_public_key: String,
     state_key_pair: String,
+    x25519_key: Option<x25519::PublicKey>,
+    p2p_addr: Option<NetAddr>,
 }
 
 impl From<ValidatorConfig<SeqTypes>> for PublicValidatorConfig {
@@ -34,6 +37,8 @@ impl From<ValidatorConfig<SeqTypes>> for PublicValidatorConfig {
             state_public_key,
             state_private_key: _,
             is_da,
+            p2p_addr,
+            x25519_keypair,
         } = v;
 
         Self {
@@ -43,6 +48,8 @@ impl From<ValidatorConfig<SeqTypes>> for PublicValidatorConfig {
             state_public_key: state_public_key.to_string(),
             private_key: "*****".into(),
             state_key_pair: "*****".into(),
+            x25519_key: x25519_keypair.map(|x| x.public_key()),
+            p2p_addr,
         }
     }
 }

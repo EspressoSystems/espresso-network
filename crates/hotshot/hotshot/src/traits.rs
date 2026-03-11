@@ -26,6 +26,6 @@ pub mod implementations {
             CdnMetricsValue, KeyPair, ProductionDef, PushCdnNetwork, TestingDef, Topic as CdnTopic,
             WrappedSignatureKey,
         },
-        Cliquenet,
+        Cliquenet, CompatNetwork,
     };
 }

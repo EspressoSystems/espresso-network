@@ -7,7 +7,7 @@
 use std::time::Duration;
 
 use hotshot_example_types::node_types::{
-    CombinedImpl, PushCdnImpl, TEST_VERSIONS, TestTypes, TestTypesRandomizedLeader
+    CliquenetImpl, CombinedImpl, CompatNetImpl, PushCdnImpl, TEST_VERSIONS, TestTypes, TestTypesRandomizedLeader
 };
 use hotshot_macros::cross_tests;
 use hotshot_testing::{
@@ -249,7 +249,7 @@ async fn test_catchup_reload() {
 
 cross_tests!(
     TestName: test_all_restart,
-    Impls: [CombinedImpl, PushCdnImpl],
+    Impls: [CombinedImpl, PushCdnImpl, CliquenetImpl, CompatNetImpl],
     Types: [TestTypes, TestTypesRandomizedLeader],
     Versions: [TEST_VERSIONS.test],
     Ignore: false,
@@ -297,7 +297,7 @@ cross_tests!(
 // move on because the *leader* does have the proposal.
 cross_tests!(
     TestName: test_all_restart_one_da,
-    Impls: [CombinedImpl],
+    Impls: [CombinedImpl, CliquenetImpl, CompatNetImpl],
     Types: [TestTypes],
     Versions: [TEST_VERSIONS.test],
     Ignore: false,
@@ -306,7 +306,7 @@ cross_tests!(
           next_view_timeout: 2000,
           ..Default::default()
       };
-      let mut metadata: TestDescription<TestTypes, CombinedImpl> =
+      let mut metadata: TestDescription<TestTypes, _> =
           TestDescription::default().set_num_nodes(14,1);
 
       let mut catchup_nodes = vec![];
@@ -343,7 +343,7 @@ cross_tests!(
 
 cross_tests!(
     TestName: test_staggered_restart,
-    Impls: [CombinedImpl],
+    Impls: [CombinedImpl, CliquenetImpl, CompatNetImpl],
     Types: [TestTypes],
     Versions: [TEST_VERSIONS.test],
     Ignore: false,

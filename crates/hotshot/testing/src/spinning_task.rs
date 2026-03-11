@@ -153,11 +153,27 @@ where
                                     // Node not initialized. Initialize it
                                     // based on the received leaf.
                                     LateNodeContext::UninitializedContext(late_context_params) => {
-                                        let LateNodeContextParameters {
-                                            storage,
-                                            memberships,
-                                            config,
-                                        } = late_context_params;
+                                        let LateNodeContextParameters { storage, config } =
+                                            late_context_params;
+
+                                        // We assign node's public key and stake value rather than read from config file since it's a test
+                                        let validator_config: ValidatorConfig<TYPES> =
+                                            ValidatorConfig::generated_from_seed_indexed(
+                                                [0u8; 32],
+                                                node_id,
+                                                self.node_stakes.get(node_id),
+                                                // For tests, make the node DA based on its index
+                                                node_id < config.da_staked_committee_size as u64,
+                                            );
+
+                                        let memberships = <TYPES as NodeType>::Membership::new::<I>(
+                                            config.known_nodes_with_stake.clone(),
+                                            config.known_da_nodes.clone(),
+                                            storage.clone(),
+                                            network.clone(),
+                                            validator_config.public_key.clone(),
+                                            config.epoch_height,
+                                        );
 
                                         let initializer = HotShotInitializer::<TYPES>::load(
                                             TestInstanceState::new(
@@ -183,15 +199,6 @@ where
                                             None,
                                             self.state_cert.clone(),
                                         );
-                                        // We assign node's public key and stake value rather than read from config file since it's a test
-                                        let validator_config =
-                                            ValidatorConfig::generated_from_seed_indexed(
-                                                [0u8; 32],
-                                                node_id,
-                                                self.node_stakes.get(node_id),
-                                                // For tests, make the node DA based on its index
-                                                node_id < config.da_staked_committee_size as u64,
-                                            );
 
                                         TestRunner::add_node_with_config(
                                             node_id,
