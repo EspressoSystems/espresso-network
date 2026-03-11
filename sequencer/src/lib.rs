@@ -821,7 +821,7 @@ pub mod testing {
             RootProvider,
         >,
     >;
-    struct RefactoredBuilderImplementation {
+    struct BuilderImplementation {
         global_state: Arc<GlobalState<SeqTypes>>,
     }
 
