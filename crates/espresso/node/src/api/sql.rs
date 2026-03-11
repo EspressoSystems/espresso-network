@@ -778,6 +778,63 @@ impl ChainConfigPersistence for Transaction<Write> {
     }
 }
 
+impl super::data_source::DatabaseMetadataSource for SqlStorage {
+    async fn get_table_sizes(&self) -> anyhow::Result<Vec<super::data_source::TableSize>> {
+        let mut tx = self
+            .read()
+            .await
+            .context("opening transaction to fetch table sizes")?;
+
+        #[cfg(not(feature = "embedded-db"))]
+        let query = r#"
+            SELECT
+                schemaname || '.' || tablename as table_name,
+                n_live_tup as row_count,
+                pg_total_relation_size(schemaname || '.' || tablename) as total_size_bytes
+            FROM pg_stat_user_tables
+            ORDER BY pg_total_relation_size(schemaname || '.' || tablename) DESC
+        "#;
+
+        #[cfg(feature = "embedded-db")]
+        let query = r#"
+            SELECT
+                name as table_name,
+                0 as row_count,
+                NULL as total_size_bytes
+            FROM sqlite_master
+            WHERE type = 'table'
+            AND name NOT LIKE 'sqlite_%'
+            ORDER BY name
+        "#;
+
+        let rows = sqlx::query(query)
+            .fetch_all(tx.as_mut())
+            .await
+            .context("failed to query table sizes")?;
+
+        let mut table_sizes = Vec::new();
+        for row in rows {
+            let table_name: String = row.try_get("table_name")?;
+            let row_count: i64 = row.try_get("row_count").unwrap_or(0);
+            let total_size_bytes: Option<i64> = row.try_get("total_size_bytes").ok();
+
+            table_sizes.push(super::data_source::TableSize {
+                table_name,
+                row_count,
+                total_size_bytes,
+            });
+        }
+
+        Ok(table_sizes)
+    }
+}
+
+impl super::data_source::DatabaseMetadataSource for DataSource {
+    async fn get_table_sizes(&self) -> anyhow::Result<Vec<super::data_source::TableSize>> {
+        self.as_ref().get_table_sizes().await
+    }
+}
+
 async fn load_frontier<Mode: TransactionMode>(
     tx: &mut Transaction<Mode>,
     height: u64,
