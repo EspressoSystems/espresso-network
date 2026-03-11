@@ -16,9 +16,8 @@ use std::{collections::VecDeque, num::NonZeroUsize};
 
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
-use futures::stream::{StreamExt, TryStreamExt};
+use futures::stream::{self, StreamExt, TryStreamExt};
 use hotshot_types::traits::node_implementation::NodeType;
-use itertools::Itertools;
 use sqlx::{FromRow, Row};
 use tagged_base64::{Tagged, TaggedBase64};
 
@@ -42,7 +41,7 @@ use crate::{
         TransactionSummaryFilter,
     },
     types::HeightIndexed,
-    with_backend, Header, Payload, QueryError, QueryResult, Transaction as HotshotTransaction,
+    with_backend, Header, Payload, QueryError, Transaction as HotshotTransaction,
 };
 
 impl From<sqlx::Error> for GetExplorerSummaryError {
@@ -271,7 +270,7 @@ where
     ) -> Result<Vec<BlockSummary<Types>>, GetBlockSummariesError> {
         let request = &request.0;
 
-        let blocks: Vec<BlockQueryData<Types>> = with_backend!(self, |tx| {
+        let blocks: Vec<BlockSummary<Types>> = with_backend!(self, |tx| {
             let query_stmt = match request.target {
                 BlockIdentifier::Latest => sqlx::query(&GET_BLOCK_SUMMARIES_QUERY_FOR_LATEST)
                     .bind(request.num_blocks.get() as i64),
@@ -285,18 +284,18 @@ where
                     .bind(request.num_blocks.get() as i64),
             };
 
+            // Convert each row to BlockSummary inline, avoiding a Vec<BlockQueryData>.
             query_stmt
                 .fetch(tx.as_mut())
-                .map(|row| BlockQueryData::from_row(&row?))
+                .map(|row| {
+                    let block = BlockQueryData::from_row(&row?)?;
+                    block.try_into().decode_error("malformed block summary")
+                })
                 .try_collect()
                 .await
         })?;
 
-        blocks
-            .into_iter()
-            .map(|b| b.try_into().decode_error("malformed block summary"))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(GetBlockSummariesError::from)
+        Ok(blocks)
     }
 
     async fn get_block_detail(
@@ -378,7 +377,7 @@ where
         // transactions from that point.  We then grab only the blocks for those
         // identified transactions, as only those blocks are needed to pull all
         // of the relevant transactions.
-        let blocks: Vec<BlockQueryData<Types>> = with_backend!(self, |tx| {
+        let transaction_summary_vec: Vec<TransactionSummary<Types>> = with_backend!(self, |tx| {
             let query_stmt = match filter {
                 TransactionSummaryFilter::RollUp(ns) => {
                     sqlx::query(&GET_BLOCKS_CONTAINING_TRANSACTIONS_IN_NAMESPACE_QUERY)
@@ -401,44 +400,55 @@ where
                 },
             };
 
+            // Stream-process each block into TransactionSummaries, avoiding
+            // a Vec<BlockQueryData>. Each block is expanded via flat_map into
+            // its matching transactions, then dropped.
+            //
+            // Pipeline per block row:
+            //   1. block.enumerate() -- payload method yielding (TransactionIndex, Txn)
+            //   2. filter_map -- keep only matching namespace, convert to summary
+            //   3. .enumerate() -- Iterator::enumerate for offset within filtered set
+            //   4. collect + rev -- reverse to newest-first (needs collect for rev)
             query_stmt
                 .fetch(tx.as_mut())
-                .map(|row| BlockQueryData::from_row(&row?))
+                .map(|row| BlockQueryData::from_row(&row?).map_err(QueryError::from))
+                .flat_map(|row: Result<BlockQueryData<Types>, QueryError>| match row {
+                    Ok(block) => {
+                        tracing::info!(height = block.height(), "selected block");
+                        stream::iter(
+                            block
+                                .enumerate()
+                                .filter_map(|(ix, txn)| {
+                                    if let TransactionSummaryFilter::RollUp(ns) = filter {
+                                        let tx_ns = QueryableHeader::<Types>::namespace_id(
+                                            block.header(),
+                                            &ix.ns_index,
+                                        );
+                                        if tx_ns.as_ref() != Some(ns) {
+                                            return None;
+                                        }
+                                    }
+                                    Some(txn)
+                                })
+                                .enumerate()
+                                .map(|(index, txn)| {
+                                    TransactionSummary::try_from((&block, index, txn)).map_err(
+                                        |err| QueryError::Error {
+                                            message: err.to_string(),
+                                        },
+                                    )
+                                })
+                                .collect::<Vec<_>>()
+                                .into_iter()
+                                .rev()
+                                .collect::<Vec<_>>(),
+                        )
+                    },
+                    Err(err) => stream::iter(vec![Err(err)]),
+                })
                 .try_collect()
                 .await
         })?;
-
-        let transaction_summary_vec: Vec<TransactionSummary<Types>> = blocks
-            .into_iter()
-            .flat_map(|block| {
-                tracing::info!(height = block.height(), "selected block");
-                block
-                    .enumerate()
-                    .filter(|(ix, _)| {
-                        if let TransactionSummaryFilter::RollUp(ns) = filter {
-                            let tx_ns = QueryableHeader::<Types>::namespace_id(
-                                block.header(),
-                                &ix.ns_index,
-                            );
-                            tx_ns.as_ref() == Some(ns)
-                        } else {
-                            true
-                        }
-                    })
-                    .enumerate()
-                    .map(|(index, (_, txn))| {
-                        TransactionSummary::try_from((&block, index, txn)).map_err(|err| {
-                            QueryError::Error {
-                                message: err.to_string(),
-                            }
-                        })
-                    })
-                    .collect::<Vec<QueryResult<TransactionSummary<Types>>>>()
-                    .into_iter()
-                    .rev()
-                    .collect::<Vec<QueryResult<TransactionSummary<Types>>>>()
-            })
-            .try_collect()?;
 
         Ok(transaction_summary_vec
             .into_iter()
@@ -658,28 +668,45 @@ where
                     ORDER BY h.height DESC
                     LIMIT 5"
             );
-            let blocks: Vec<BlockQueryData<Types>> = with_backend!(self, |tx| {
-                sqlx::query(transactions_query.as_str())
-                    .bind(&search_query_string)
-                    .fetch(tx.as_mut())
-                    .map(|row| BlockQueryData::from_row(&row?))
-                    .try_collect()
-                    .await
-            })?;
-
-            let transactions_query_result: Vec<TransactionSummary<Types>> = blocks
-                .iter()
-                .flat_map(|block| {
-                    block
-                        .enumerate()
-                        .enumerate()
-                        .filter(|(_, (_, txn))| txn.commit().to_string() == search_query_string)
-                        .map(|(offset, (_, txn))| {
-                            Ok(TransactionSummary::try_from((block, offset, txn))?)
+            // Stream-process each block, expanding matching transactions via
+            // flat_map. Each BlockQueryData is dropped after expansion.
+            //
+            // Pipeline per block row:
+            //   1. block.enumerate() -- payload method yielding (TransactionIndex, Txn)
+            //   2. .enumerate() -- Iterator::enumerate for offset in block (before filter)
+            //   3. filter_map -- keep txn matching the search hash, convert to summary
+            //
+            // Note: enumerate before filter so offset reflects position in the
+            // full block, not the filtered subset.
+            let transactions_query_result: Vec<TransactionSummary<Types>> =
+                with_backend!(self, |tx| {
+                    sqlx::query(transactions_query.as_str())
+                        .bind(&search_query_string)
+                        .fetch(tx.as_mut())
+                        .map(|row| BlockQueryData::from_row(&row?).map_err(QueryError::from))
+                        .flat_map(|row: Result<BlockQueryData<Types>, QueryError>| match row {
+                            Ok(block) => stream::iter(
+                                block
+                                    .enumerate()
+                                    .enumerate()
+                                    .filter_map(|(offset, (_, txn))| {
+                                        if txn.commit().to_string() != search_query_string {
+                                            return None;
+                                        }
+                                        Some(
+                                            TransactionSummary::try_from((&block, offset, txn))
+                                                .map_err(|err| QueryError::Error {
+                                                    message: err.to_string(),
+                                                }),
+                                        )
+                                    })
+                                    .collect::<Vec<_>>(),
+                            ),
+                            Err(err) => stream::iter(vec![Err(err)]),
                         })
-                        .collect::<Vec<QueryResult<TransactionSummary<Types>>>>()
-                })
-                .try_collect::<TransactionSummary<Types>, Vec<TransactionSummary<Types>>, QueryError>()?;
+                        .try_collect()
+                        .await
+                })?;
 
             Ok(SearchResult {
                 blocks: Vec::new(),
