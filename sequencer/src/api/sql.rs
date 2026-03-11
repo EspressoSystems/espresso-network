@@ -10,10 +10,7 @@ use espresso_types::{
         ChainConfig, RewardAccountProofV1, RewardAccountQueryDataV1, RewardAccountV1,
         RewardMerkleTreeV1, REWARD_MERKLE_TREE_V1_HEIGHT,
     },
-    v0_4::{
-        PermittedRewardMerkleTreeV2, RewardAccountProofV2, RewardAccountQueryDataV2,
-        RewardAccountV2, RewardMerkleTreeV2,
-    },
+    v0_4::{PermittedRewardMerkleTreeV2, RewardAccountV2, RewardMerkleTreeV2},
     BlockMerkleTree, FeeAccount, FeeMerkleTree, Header, Leaf2, NodeState, ValidatedState,
 };
 use futures::future::Future;
@@ -137,47 +134,6 @@ impl RewardMerkleTreeDataSource for SqlStorage {
                 "requested height {height} is not yet available (latest block height: \
                  {block_height})"
             );
-        }
-    }
-
-    fn load_reward_account_proof_v2(
-        &self,
-        height: u64,
-        account: RewardAccountV2,
-    ) -> impl Send + Future<Output = anyhow::Result<RewardAccountQueryDataV2>> {
-        async move {
-            let mut tx = self.read().await.context(format!(
-                "opening transaction to fetch reward account {account:?}; height {height}"
-            ))?;
-
-            let block_height = NodeStorage::<SeqTypes>::block_height(&mut tx)
-                .await
-                .context("getting block height")? as u64;
-            ensure!(
-                block_height > 0,
-                "cannot get accounts for height {height}: no blocks available"
-            );
-
-            ensure!(
-                height < block_height,
-                "requested height {height} is not yet available (latest block height: \
-                 {block_height})"
-            );
-
-            let tree = load_reward_merkle_tree_v2(self, height)
-                .await
-                .with_context(|| {
-                    format!("failed to load v2 reward account {account:?} at height {height}")
-                })?
-                .0
-                .tree;
-
-            let (proof, balance) = RewardAccountProofV2::prove(&tree, account.into())
-                .with_context(|| {
-                    format!("reward account {account:?} not available at height {height}")
-                })?;
-
-            Ok(RewardAccountQueryDataV2 { balance, proof })
         }
     }
 
