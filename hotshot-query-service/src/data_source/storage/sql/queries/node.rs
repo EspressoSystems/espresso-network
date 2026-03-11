@@ -333,13 +333,13 @@ where
         // since at that point the table will not necessarily be indexed and will contain some rows
         // with `NULL` height.
         let query = format!(
-            "WITH range AS (SELECT height, {indicator_column} FROM {table}
+            "WITH range AS (SELECT height, {indicator_column} AS indicator FROM {table}
                 WHERE height >= $1 AND height < $2)
             SELECT successor.height FROM range AS predecessor
             RIGHT JOIN range AS successor
             ON successor.height = predecessor.height + 1
-            WHERE successor.{indicator_column} IS NOT NULL
-              AND predecessor.{indicator_column} IS NULL
+            WHERE successor.indicator IS NOT NULL
+              AND predecessor.indicator IS NULL
             ORDER BY successor.height"
         );
         let range_starts = query_as::<(i64,)>(&query)
@@ -389,13 +389,13 @@ where
             // expensive query, which is the mirror image of the query we used to fetch the range
             // starts.
             let query = format!(
-                "WITH range AS (SELECT height, {indicator_column} FROM {table}
+                "WITH range AS (SELECT height, {indicator_column} AS indicator FROM {table}
                     WHERE height >= $1 AND height < $2)
                 SELECT predecessor.height FROM range AS predecessor
                 LEFT JOIN range AS successor
                 ON successor.height = predecessor.height + 1
-                WHERE predecessor.{indicator_column} IS NOT NULL
-                  AND successor.{indicator_column} IS NULL
+                WHERE predecessor.indicator IS NOT NULL
+                  AND successor.indicator IS NULL
                 ORDER BY predecessor.height"
             );
             let ends = query_as::<(i64,)>(&query)
