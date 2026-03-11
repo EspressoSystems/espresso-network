@@ -7,9 +7,19 @@ watch_dir nix
 if nix show-config 2>/dev/null | grep -q "experimental-features.*flakes"; then
   echo "using nix flake"
   use flake
+
+  # Optional: Composable devShell components
+  # Uncomment and edit to load additional components
+  # See flake.nix devShells section for available components (e.g., docker, claude)
+  #
+  # COMPONENTS=""  # Add space-separated component names here
+  # for component in $COMPONENTS; do
+  #   use flake ".#$component"
+  # done
 else
   echo "using nix-shell, consider enabling nix flakes: See https://nixos.wiki/wiki/Flakes"
   watch_file flake.nix
   watch_file flake.lock
   use nix
 fi
+
