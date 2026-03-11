@@ -383,7 +383,7 @@ pub fn retain_v2_reward_accounts(
             LookupResult::Ok(elem, proof) => {
                 // This remember cannot fail, since we just constructed a valid proof, and are
                 // remembering into a tree with the same commitment.
-                snapshot.remember(account, *elem, proof).unwrap();
+                snapshot.remember(account, elem, proof).unwrap();
             },
             LookupResult::NotFound(proof) => {
                 // Likewise this cannot fail.
@@ -411,7 +411,7 @@ pub fn retain_v1_reward_accounts(
             LookupResult::Ok(elem, proof) => {
                 // This remember cannot fail, since we just constructed a valid proof, and are
                 // remembering into a tree with the same commitment.
-                snapshot.remember(account, *elem, proof).unwrap();
+                snapshot.remember(account, elem, proof).unwrap();
             },
             LookupResult::NotFound(proof) => {
                 // Likewise this cannot fail.
