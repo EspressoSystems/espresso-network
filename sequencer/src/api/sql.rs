@@ -35,7 +35,6 @@ use hotshot_query_service::{
 use hotshot_types::{
     data::{EpochNumber, QuorumProposalWrapper, ViewNumber},
     message::Proposal,
-    traits::node_implementation::ConsensusTime,
     utils::epoch_from_block_number,
     vote::HasViewNumber,
 };

@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 
-use hotshot_types::traits::node_implementation::NodeType;
+use hotshot_types::data::ViewNumber;
 use thiserror::Error;
 
 /// convenience type alias for state and block
@@ -17,20 +17,20 @@ pub type StateAndBlock<S, B> = (Vec<S>, Vec<B>);
 
 /// the status of a view
 #[derive(Debug, Clone)]
-pub enum ViewStatus<TYPES: NodeType> {
+pub enum ViewStatus {
     /// success
     Ok,
     /// failure
     Failed,
     /// safety violation
-    Err(OverallSafetyTaskErr<TYPES>),
+    Err(OverallSafetyTaskErr),
     /// in progress
     InProgress,
 }
 
 /// possible errors
 #[derive(Error, Debug, Clone)]
-pub enum OverallSafetyTaskErr<TYPES: NodeType> {
+pub enum OverallSafetyTaskErr {
     #[error("Mismatched leaf")]
     MismatchedLeaf,
 
@@ -44,15 +44,15 @@ pub enum OverallSafetyTaskErr<TYPES: NodeType> {
     NotEnoughDecides { got: usize, expected: usize },
 
     #[error("Too many view failures: {0:?}")]
-    TooManyFailures(HashSet<TYPES::View>),
+    TooManyFailures(HashSet<ViewNumber>),
 
     #[error(
         "Inconsistent failed views: expected: {expected_failed_views:?}, actual: \
          {actual_failed_views:?}"
     )]
     InconsistentFailedViews {
-        expected_failed_views: Vec<TYPES::View>,
-        actual_failed_views: HashSet<TYPES::View>,
+        expected_failed_views: Vec<ViewNumber>,
+        actual_failed_views: HashSet<ViewNumber>,
     },
     #[error(
         "Not enough round results: results_count: {results_count}, views_count: {views_count}"

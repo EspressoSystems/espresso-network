@@ -25,7 +25,7 @@ use hotshot_types::{
     message::Proposal,
     simple_certificate::{QuorumCertificate2, SimpleCertificate, SuccessThreshold},
     simple_vote::QuorumData2,
-    traits::{node_implementation::ConsensusTime, EncodeBytes},
+    traits::EncodeBytes,
     utils::{BuilderCommitment, EpochTransitionIndicator},
 };
 use sha2::{Digest, Sha256};
@@ -117,7 +117,7 @@ pub async fn calc_proposal_msg(
     QuorumProposalWrapper<TestTypes>,
     QuorumProposalMessage<TestTypes>,
     DaProposalMessage<TestTypes>,
-    BuilderStateId<TestTypes>,
+    BuilderStateId,
 ) {
     // get transactions submitted in previous rounds, [] for genesis
     // and simulate the block built from those

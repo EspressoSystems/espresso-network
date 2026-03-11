@@ -32,7 +32,7 @@ use hotshot_contract_adapter::sol_types::{
     },
 };
 use hotshot_types::{
-    data::{vid_disperse::VID_TARGET_TOTAL_STAKE, EpochNumber},
+    data::{vid_disperse::VID_TARGET_TOTAL_STAKE, EpochNumber, ViewNumber},
     drb::{
         election::{generate_stake_cdf, select_randomized_leader, RandomizedCommittee},
         DrbResult,
@@ -42,7 +42,7 @@ use hotshot_types::{
     traits::{
         block_contents::BlockHeader,
         election::Membership,
-        node_implementation::{ConsensusTime, NodeImplementation, NodeType},
+        node_implementation::{NodeImplementation, NodeType},
         signature_key::StakeTableEntryType,
     },
     utils::{
@@ -79,7 +79,7 @@ use crate::{
     },
 };
 
-type Epoch = <SeqTypes as NodeType>::Epoch;
+type Epoch = EpochNumber;
 pub type RegisteredValidatorMap = IndexMap<Address, RegisteredValidator<BLSPubKey>>;
 pub type AuthenticatedValidatorMap = IndexMap<Address, AuthenticatedValidator<BLSPubKey>>;
 
@@ -2134,7 +2134,7 @@ impl Membership<SeqTypes> for EpochCommittees {
     /// Get all members of the committee for the current view
     fn committee_members(
         &self,
-        _view_number: <SeqTypes as NodeType>::View,
+        _view_number: ViewNumber,
         epoch: Option<Epoch>,
     ) -> BTreeSet<PubKey> {
         let stake_table = self.stake_table(epoch);
@@ -2147,7 +2147,7 @@ impl Membership<SeqTypes> for EpochCommittees {
     /// Get all members of the committee for the current view
     fn da_committee_members(
         &self,
-        _view_number: <SeqTypes as NodeType>::View,
+        _view_number: ViewNumber,
         epoch: Option<Epoch>,
     ) -> BTreeSet<PubKey> {
         self.da_stake_table(epoch)
@@ -2208,7 +2208,7 @@ impl Membership<SeqTypes> for EpochCommittees {
     /// Returns `LeaderLookupError` if the epoch is before the first epoch or if the committee is missing.
     fn lookup_leader(
         &self,
-        view_number: <SeqTypes as NodeType>::View,
+        view_number: ViewNumber,
         epoch: Option<Epoch>,
     ) -> Result<PubKey, Self::Error> {
         match (self.first_epoch(), epoch) {
@@ -2586,7 +2586,7 @@ impl Membership<SeqTypes> for EpochCommittees {
         self.add_drb_result(epoch + 1, initial_drb_result);
     }
 
-    fn first_epoch(&self) -> Option<<SeqTypes as NodeType>::Epoch> {
+    fn first_epoch(&self) -> Option<EpochNumber> {
         self.first_epoch
     }
 

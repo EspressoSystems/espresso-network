@@ -20,7 +20,7 @@ mod tests {
         simple_vote::QuorumData2,
         stake_table::{supermajority_threshold, HSStakeTable},
         traits::{
-            node_implementation::{ConsensusTime, NodeType},
+            node_implementation::NodeType,
             signature_key::{SignatureKey, StateSignatureKey},
         },
         PeerConfig,

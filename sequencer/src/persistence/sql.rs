@@ -65,7 +65,6 @@ use hotshot_types::{
     traits::{
         block_contents::{BlockHeader, BlockPayload},
         metrics::Metrics,
-        node_implementation::ConsensusTime,
     },
     vote::HasViewNumber,
 };
@@ -2846,7 +2845,7 @@ impl SequencerPersistence for Persistence {
                         .map(|data| bincode::deserialize(&data))
                         .transpose()?;
                     Ok(Some(InitializerEpochInfo::<SeqTypes> {
-                        epoch: <SeqTypes as NodeType>::Epoch::new(epoch as u64),
+                        epoch: EpochNumber::new(epoch as u64),
                         drb_result: drb_result_array,
                         block_header,
                     }))
@@ -4146,7 +4145,7 @@ mod test {
             let proposal = Proposal {
                 data: quorum_proposal.clone(),
                 signature: quorum_proposal_signature,
-                _pd: std::marker::PhantomData,
+                _pd: std::marker::PhantomData::<SeqTypes>,
             };
 
             let proposal_bytes = bincode::serialize(&proposal)

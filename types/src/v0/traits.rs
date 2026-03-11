@@ -23,9 +23,7 @@ use hotshot_types::{
     },
     stake_table::HSStakeTable,
     traits::{
-        metrics::Metrics,
-        node_implementation::{ConsensusTime, NodeType},
-        storage::Storage,
+        metrics::Metrics, node_implementation::NodeType, storage::Storage,
         ValidatedState as HotShotState,
     },
     utils::genesis_epoch_from_version,
@@ -805,7 +803,7 @@ pub trait SequencerPersistence:
         // unnecessary catchup from starting in a view earlier than the anchor leaf.
         let restart_view = max(restart_view, leaf.view_number());
         // TODO:
-        let epoch = genesis_epoch_from_version::<SeqTypes>(upgrade.base);
+        let epoch = genesis_epoch_from_version(upgrade.base);
 
         let config = self.load_config().await.context("loading config")?;
         let epoch_height = config
@@ -1047,14 +1045,14 @@ pub trait SequencerPersistence:
 
     async fn store_drb_result(
         &self,
-        epoch: <SeqTypes as NodeType>::Epoch,
+        epoch: EpochNumber,
         drb_result: DrbResult,
     ) -> anyhow::Result<()>;
     async fn store_drb_input(&self, drb_input: DrbInput) -> anyhow::Result<()>;
     async fn load_drb_input(&self, epoch: u64) -> anyhow::Result<DrbInput>;
     async fn store_epoch_root(
         &self,
-        epoch: <SeqTypes as NodeType>::Epoch,
+        epoch: EpochNumber,
         block_header: <SeqTypes as NodeType>::BlockHeader,
     ) -> anyhow::Result<()>;
     async fn add_state_cert(
@@ -1183,7 +1181,7 @@ impl<P: SequencerPersistence> Storage<SeqTypes> for Arc<P> {
 
     async fn store_drb_result(
         &self,
-        epoch: <SeqTypes as NodeType>::Epoch,
+        epoch: EpochNumber,
         drb_result: DrbResult,
     ) -> anyhow::Result<()> {
         (**self).store_drb_result(epoch, drb_result).await
@@ -1191,7 +1189,7 @@ impl<P: SequencerPersistence> Storage<SeqTypes> for Arc<P> {
 
     async fn store_epoch_root(
         &self,
-        epoch: <SeqTypes as NodeType>::Epoch,
+        epoch: EpochNumber,
         block_header: <SeqTypes as NodeType>::BlockHeader,
     ) -> anyhow::Result<()> {
         (**self).store_epoch_root(epoch, block_header).await
