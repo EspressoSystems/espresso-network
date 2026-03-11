@@ -43,6 +43,13 @@ pub(crate) async fn compute_state_update(
 
     let mut parent_state = parent_state.clone();
 
+    // if the protocol has been upgraded, the new chain_config should be used
+    // as the base chain config for the call to `apply_header`. This mirrors the
+    // `apply_upgrade` step at the start of `apply_header`
+    //
+    // We need to do this here because this loop may need to process historical upgrades
+    // that are no longer recorded in our genesis file. but it's safe, because this loop
+    // only handles decided leaves
     if proposed_leaf.block_header().version() > parent_leaf.block_header().version() {
         parent_state.chain_config = proposed_leaf.block_header().chain_config()
     }
