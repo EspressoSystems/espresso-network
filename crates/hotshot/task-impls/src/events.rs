@@ -70,6 +70,8 @@ pub struct HotShotTaskCompleted;
 #[derive(Eq, PartialEq, Debug, Clone)]
 #[allow(clippy::large_enum_variant)]
 pub enum HotShotEvent<TYPES: NodeType> {
+    /// The state has been validated
+    StateValidated(TYPES::View),
     /// Block sent directly to the network
     BlockSend(PayloadWithMetadata<TYPES>, TYPES::View),
     /// Block received directly from the leader
@@ -325,6 +327,7 @@ impl<TYPES: NodeType> HotShotEvent<TYPES> {
     /// Return the view number for a hotshot event if present
     pub fn view_number(&self) -> Option<TYPES::View> {
         match self {
+            HotShotEvent::StateValidated(view) => Some(*view),
             HotShotEvent::BlockReady(_, _, view) => Some(*view),
             HotShotEvent::QuorumVoteSend(v)
             | HotShotEvent::QuorumVoteRecv(v)
@@ -427,6 +430,9 @@ impl<TYPES: NodeType> Display for HotShotEvent<TYPES> {
     #[allow(clippy::too_many_lines)]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            HotShotEvent::StateValidated(view) => {
+                write!(f, "StateValidated(view_number={:?})", view)
+            },
             HotShotEvent::BlockReady(_, _, view) => write!(f, "BlockReady(view_number={:?})", view),
             HotShotEvent::BlockSend(payload, view) => {
                 write!(f, "BlockSend(view_number={:?})", view)

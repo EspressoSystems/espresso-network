@@ -1256,11 +1256,16 @@ impl<TYPES: NodeType> Consensus<TYPES> {
             );
         }
         // Log sizes before GC
-        let vid_shares_entries: usize = self.vid_shares.values().map(|m| m.values().map(|b| b.len()).sum::<usize>()).sum();
+        let vid_shares_entries: usize = self
+            .vid_shares
+            .values()
+            .map(|m| m.values().map(|b| b.len()).sum::<usize>())
+            .sum();
         tracing::warn!(
-            "consensus GC before: gc_view={gc_view} old_anchor={old_anchor_view} new_anchor={new_anchor_view} \
-             validated_state_map={} saved_payloads={} vid_shares_views={} vid_shares_entries={vid_shares_entries} \
-             saved_da_certs={} last_proposals={} saved_leaves={}",
+            "consensus GC before: gc_view={gc_view} old_anchor={old_anchor_view} \
+             new_anchor={new_anchor_view} validated_state_map={} saved_payloads={} \
+             vid_shares_views={} vid_shares_entries={vid_shares_entries} saved_da_certs={} \
+             last_proposals={} saved_leaves={}",
             self.validated_state_map.len(),
             self.saved_payloads.len(),
             self.vid_shares.len(),
@@ -1284,10 +1289,15 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         self.last_proposals = self.last_proposals.split_off(&gc_view);
 
         // Log sizes after GC
-        let vid_shares_entries_after: usize = self.vid_shares.values().map(|m| m.values().map(|b| b.len()).sum::<usize>()).sum();
+        let vid_shares_entries_after: usize = self
+            .vid_shares
+            .values()
+            .map(|m| m.values().map(|b| b.len()).sum::<usize>())
+            .sum();
         tracing::warn!(
-            "consensus GC after: validated_state_map={} saved_payloads={} vid_shares_views={} vid_shares_entries={vid_shares_entries_after} \
-             saved_da_certs={} last_proposals={} saved_leaves={}",
+            "consensus GC after: validated_state_map={} saved_payloads={} vid_shares_views={} \
+             vid_shares_entries={vid_shares_entries_after} saved_da_certs={} last_proposals={} \
+             saved_leaves={}",
             self.validated_state_map.len(),
             self.saved_payloads.len(),
             self.vid_shares.len(),

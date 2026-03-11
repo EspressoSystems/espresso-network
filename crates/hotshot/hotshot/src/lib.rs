@@ -131,10 +131,16 @@ pub struct SystemContext<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versi
     start_epoch: Option<TYPES::Epoch>,
 
     /// Access to the output event stream.
-    output_event_stream: (Sender<Arc<Event<TYPES>>>, InactiveReceiver<Arc<Event<TYPES>>>),
+    output_event_stream: (
+        Sender<Arc<Event<TYPES>>>,
+        InactiveReceiver<Arc<Event<TYPES>>>,
+    ),
 
     /// External event stream for communication with the application.
-    pub(crate) external_event_stream: (Sender<Arc<Event<TYPES>>>, InactiveReceiver<Arc<Event<TYPES>>>),
+    pub(crate) external_event_stream: (
+        Sender<Arc<Event<TYPES>>>,
+        InactiveReceiver<Arc<Event<TYPES>>>,
+    ),
 
     /// Anchored leaf provided by the initializer.
     anchored_leaf: Leaf2<TYPES>,

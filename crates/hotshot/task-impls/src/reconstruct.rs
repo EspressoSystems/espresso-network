@@ -243,8 +243,8 @@ impl<TYPES: NodeType> ReconstructTaskState<TYPES> {
                     let calc_lock_len = self.calc_lock.read().await.len();
                     let shares_total: usize = shares.values().map(|v| v.len()).sum();
                     tracing::warn!(
-                        "reconstruct GC before: id={} gc_view={gc_view} vid_shares_keys={} vid_shares_total={shares_total} \
-                         proposals={} calc_lock={calc_lock_len}",
+                        "reconstruct GC before: id={} gc_view={gc_view} vid_shares_keys={} \
+                         vid_shares_total={shares_total} proposals={} calc_lock={calc_lock_len}",
                         self.id,
                         shares.len(),
                         self.proposals.len(),
@@ -253,7 +253,8 @@ impl<TYPES: NodeType> ReconstructTaskState<TYPES> {
                     self.proposals = self.proposals.split_off(&gc_view);
                     let shares_total_after: usize = shares.values().map(|v| v.len()).sum();
                     tracing::warn!(
-                        "reconstruct GC after: id={} vid_shares_keys={} vid_shares_total={shares_total_after} proposals={}",
+                        "reconstruct GC after: id={} vid_shares_keys={} \
+                         vid_shares_total={shares_total_after} proposals={}",
                         self.id,
                         shares.len(),
                         self.proposals.len(),

@@ -111,7 +111,10 @@ impl<TYPES: NodeType> Leaf2Fetcher<TYPES> {
             loop {
                 match network_receiver.recv_direct().await {
                     Ok(event) => {
-                        let Event { view_number: view, event } = event.as_ref();
+                        let Event {
+                            view_number: view,
+                            event,
+                        } = event.as_ref();
                         let EventType::ExternalMessageReceived { sender: _, data } = event else {
                             continue;
                         };
@@ -248,7 +251,10 @@ impl<TYPES: NodeType> Leaf2Fetcher<TYPES> {
             loop {
                 match network_receiver.recv_direct().await {
                     Ok(event) => {
-                        let Event { view_number: _, event } = event.as_ref();
+                        let Event {
+                            view_number: _,
+                            event,
+                        } = event.as_ref();
                         let EventType::ExternalMessageReceived { sender: _, data } = event else {
                             continue;
                         };
