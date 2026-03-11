@@ -22,7 +22,7 @@ use tracing::instrument;
 #[instrument]
 async fn libp2p_network_sync() {
 
-    let mut metadata: TestDescription<TestTypes, Libp2pImpl> = TestDescription {
+    let metadata: TestDescription<TestTypes, Libp2pImpl> = TestDescription {
         overall_safety_properties: OverallSafetyPropertiesDescription {
             check_leaf: true,
             ..Default::default()
@@ -38,8 +38,6 @@ async fn libp2p_network_sync() {
         })),
         ..TestDescription::default_multiple_rounds()
     };
-
-    metadata.test_config.epoch_height = 0;
 
     metadata
         .gen_launcher()
@@ -59,7 +57,7 @@ async fn test_memory_network_sync() {
         test_builder::TestDescription,
     };
 
-    let mut metadata: TestDescription<TestTypes, MemoryImpl> = TestDescription {
+    let metadata: TestDescription<TestTypes, MemoryImpl> = TestDescription {
         // allow more time to pass in CI
         completion_task_description: CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
             TimeBasedCompletionTaskDescription {
@@ -73,8 +71,6 @@ async fn test_memory_network_sync() {
         ..TestDescription::default()
     };
 
-    metadata.test_config.epoch_height = 0;
-
     metadata
         .gen_launcher()
         .launch()
@@ -87,7 +83,7 @@ async fn test_memory_network_sync() {
 #[instrument]
 async fn libp2p_network_async() {
 
-    let mut metadata: TestDescription<TestTypes, Libp2pImpl> = TestDescription {
+    let metadata: TestDescription<TestTypes, Libp2pImpl> = TestDescription {
         overall_safety_properties: OverallSafetyPropertiesDescription {
             check_leaf: true,
             ..Default::default()
@@ -111,8 +107,6 @@ async fn libp2p_network_async() {
         ..TestDescription::default_multiple_rounds()
     };
 
-    metadata.test_config.epoch_height = 0;
-
     metadata
         .gen_launcher()
         .launch()
@@ -132,7 +126,7 @@ async fn test_memory_network_async() {
         test_builder::TestDescription,
     };
 
-    let mut metadata: TestDescription<TestTypes, MemoryImpl> = TestDescription {
+    let metadata: TestDescription<TestTypes, MemoryImpl> = TestDescription {
         overall_safety_properties: OverallSafetyPropertiesDescription {
             check_leaf: true,
             ..Default::default()
@@ -157,8 +151,6 @@ async fn test_memory_network_async() {
         ..TestDescription::default()
     };
 
-    metadata.test_config.epoch_height = 0;
-
     metadata
         .gen_launcher()
         .launch()
@@ -177,7 +169,7 @@ async fn test_memory_network_partially_sync() {
         test_builder::TestDescription,
     };
 
-    let mut metadata: TestDescription<TestTypes, MemoryImpl> = TestDescription {
+    let metadata: TestDescription<TestTypes, MemoryImpl> = TestDescription {
         overall_safety_properties: OverallSafetyPropertiesDescription {
             ..Default::default()
         },
@@ -208,8 +200,6 @@ async fn test_memory_network_partially_sync() {
         ..TestDescription::default()
     };
 
-    metadata.test_config.epoch_height = 0;
-
     metadata
         .gen_launcher()
         .launch()
@@ -221,7 +211,7 @@ async fn test_memory_network_partially_sync() {
 #[instrument]
 async fn libp2p_network_partially_sync() {
 
-    let mut metadata: TestDescription<TestTypes, Libp2pImpl> = TestDescription {
+    let metadata: TestDescription<TestTypes, Libp2pImpl> = TestDescription {
         overall_safety_properties: OverallSafetyPropertiesDescription {
             ..Default::default()
         },
@@ -247,8 +237,6 @@ async fn libp2p_network_partially_sync() {
         ..TestDescription::default_multiple_rounds()
     };
 
-    metadata.test_config.epoch_height = 0;
-
     metadata
         .gen_launcher()
         .launch()
@@ -268,7 +256,7 @@ async fn test_memory_network_chaos() {
         test_builder::TestDescription,
     };
 
-    let mut metadata: TestDescription<TestTypes, MemoryImpl> = TestDescription {
+    let metadata: TestDescription<TestTypes, MemoryImpl> = TestDescription {
         // allow more time to pass in CI
         completion_task_description: CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
             TimeBasedCompletionTaskDescription {
@@ -286,8 +274,6 @@ async fn test_memory_network_chaos() {
         ..TestDescription::default()
     };
 
-    metadata.test_config.epoch_height = 0;
-
     metadata
         .gen_launcher()
         .launch()
@@ -300,7 +286,7 @@ async fn test_memory_network_chaos() {
 #[instrument]
 async fn libp2p_network_chaos() {
 
-    let mut metadata: TestDescription<TestTypes, Libp2pImpl> = TestDescription {
+    let metadata: TestDescription<TestTypes, Libp2pImpl> = TestDescription {
         overall_safety_properties: OverallSafetyPropertiesDescription {
             check_leaf: true,
             ..Default::default()
@@ -320,8 +306,6 @@ async fn libp2p_network_chaos() {
         })),
         ..TestDescription::default_multiple_rounds()
     };
-
-    metadata.test_config.epoch_height = 0;
 
     metadata
         .gen_launcher()
