@@ -480,7 +480,7 @@ impl Transaction<Write> {
     }
 
     /// Record the height of the latest pruned header.
-    pub(super) async fn save_pruned_height(&mut self, height: u64) -> anyhow::Result<()> {
+    pub(crate) async fn save_pruned_height(&mut self, height: u64) -> anyhow::Result<()> {
         // id is set to 1 so that there is only one row in the table.
         // height is updated if the row already exists.
         self.upsert(
