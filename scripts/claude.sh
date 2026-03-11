@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 
 if [ -z "$1" ]; then
-    echo "Usage: $0 <claude-binary>"
+    echo "Usage: $0 <claude-binary>
+[project-directory]"
     exit 1
 fi
 
 CLAUDE_BIN="$1"
-PROJECT_DIR="$HOME/espresso/espresso-sequencer"
+PROJECT_DIR="${2:-$PWD}"
 
 bwrap \
     --ro-bind /nix /nix \
