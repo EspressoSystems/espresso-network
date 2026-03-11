@@ -4,7 +4,7 @@ pub use hotshot_types::{
     message::Proposal,
     signature_key::BLSPubKey,
     simple_certificate::{QuorumCertificate2, SimpleCertificate, SuccessThreshold},
-    traits::{block_contents::BlockPayload, node_implementation::ConsensusTime},
+    traits::block_contents::BlockPayload,
 };
 
 pub use crate::builder_state::{BuilderState, MessageType};
@@ -433,7 +433,7 @@ mod tests {
                         },
                     };
 
-                    DecideMessage::<TestTypes> {
+                    DecideMessage {
                         latest_decide_view_number: leaf.view_number(),
                     }
                 };

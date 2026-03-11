@@ -41,7 +41,7 @@ use hotshot_types::{
     traits::{
         block_contents::{BlockHeader, BlockPayload},
         metrics::Metrics,
-        node_implementation::{ConsensusTime, NodeType},
+        node_implementation::NodeType,
     },
     vote::HasViewNumber,
 };
@@ -2549,7 +2549,7 @@ mod test {
             let proposal = Proposal {
                 data: quorum_proposal.clone(),
                 signature: quorum_proposal_signature,
-                _pd: PhantomData,
+                _pd: PhantomData::<SeqTypes>,
             };
 
             let mut leaf = Leaf::from_quorum_proposal(&quorum_proposal);

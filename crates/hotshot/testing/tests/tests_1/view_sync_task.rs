@@ -12,7 +12,6 @@ use hotshot_task_impls::{
 use hotshot_testing::helpers::build_system_handle;
 use hotshot_types::{
     data::ViewNumber, simple_vote::ViewSyncPreCommitData2,
-    traits::node_implementation::ConsensusTime,
 };
 
 #[cfg(test)]
@@ -26,12 +25,12 @@ async fn test_view_sync_task() {
 
     let vote_data = ViewSyncPreCommitData2 {
         relay: 0,
-        round: <TestTypes as hotshot_types::traits::node_implementation::NodeType>::View::new(4),
+        round: ViewNumber::new(4),
         epoch: None,
     };
     let vote = hotshot_types::simple_vote::ViewSyncPreCommitVote2::<TestTypes>::create_signed_vote(
         vote_data,
-        <TestTypes as hotshot_types::traits::node_implementation::NodeType>::View::new(4),
+        ViewNumber::new(4),
         hotshot_types::traits::consensus_api::ConsensusApi::public_key(&handle),
         hotshot_types::traits::consensus_api::ConsensusApi::private_key(&handle),
         &handle.hotshot.upgrade_lock,

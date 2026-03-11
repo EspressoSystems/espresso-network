@@ -793,10 +793,7 @@ pub mod node_tests {
     use hotshot_types::{
         data::{vid_commitment, VidCommitment, VidCommon, VidShare, ViewNumber},
         simple_certificate::{CertificatePair, QuorumCertificate2},
-        traits::{
-            block_contents::{BlockHeader, EncodeBytes},
-            node_implementation::ConsensusTime,
-        },
+        traits::block_contents::{BlockHeader, EncodeBytes},
         vid::advz::{advz_scheme, ADVZScheme},
     };
     use jf_advz::VidScheme;

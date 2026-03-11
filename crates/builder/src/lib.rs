@@ -77,8 +77,7 @@ pub mod testing {
         event::LeafInfo,
         light_client::StateKeyPair,
         traits::{
-            block_contents::BlockHeader,
-            node_implementation::{ConsensusTime, NodeType},
+            block_contents::BlockHeader, node_implementation::NodeType,
             signature_key::BuilderSignatureKey as _,
         },
         HotShotConfig, PeerConfig, ValidatorConfig,

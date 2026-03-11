@@ -61,18 +61,15 @@ use hotshot_types::{
         ViewInner,
     },
     constants::{EVENT_CHANNEL_SIZE, EXTERNAL_EVENT_CHANNEL_SIZE},
-    data::Leaf2,
+    data::{EpochNumber, Leaf2, ViewNumber},
     event::{EventType, LeafInfo},
     message::{DataMessage, Message, MessageKind, Proposal},
     simple_certificate::{NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate},
     stake_table::HSStakeTable,
     storage_metrics::StorageMetricsValue,
     traits::{
-        consensus_api::ConsensusApi,
-        network::ConnectedNetwork,
-        node_implementation::{ConsensusTime, NodeType},
-        signature_key::SignatureKey,
-        states::ValidatedState,
+        consensus_api::ConsensusApi, network::ConnectedNetwork, node_implementation::NodeType,
+        signature_key::SignatureKey, states::ValidatedState,
     },
     utils::{genesis_epoch_from_version, option_epoch_from_block_number},
     HotShotConfig,
@@ -126,10 +123,10 @@ pub struct SystemContext<TYPES: NodeType, I: NodeImplementation<TYPES>> {
     instance_state: Arc<TYPES::InstanceState>,
 
     /// The view to enter when first starting consensus
-    start_view: TYPES::View,
+    start_view: ViewNumber,
 
     /// The epoch to enter when first starting consensus
-    start_epoch: Option<TYPES::Epoch>,
+    start_epoch: Option<EpochNumber>,
 
     /// Access to the output event stream.
     output_event_stream: (Sender<Event<TYPES>>, InactiveReceiver<Event<TYPES>>),
@@ -337,7 +334,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
 
         // #3967 REVIEW NOTE: Should this actually be Some()? How do we know?
         let epoch = initializer.high_qc.data.block_number.map(|block_number| {
-            TYPES::Epoch::new(epoch_from_block_number(
+            EpochNumber::new(epoch_from_block_number(
                 block_number + 1,
                 config.epoch_height,
             ))
@@ -489,7 +486,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
         debug!("Starting Consensus");
         let consensus = self.consensus.read().await;
 
-        let first_epoch = option_epoch_from_block_number::<TYPES>(
+        let first_epoch = option_epoch_from_block_number(
             self.upgrade_lock.upgrade.base >= EPOCH_VERSION,
             self.config.epoch_start_block,
             self.config.epoch_height,
@@ -548,7 +545,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
         {
             // Some applications seem to expect a leaf decide event for the genesis leaf,
             // which contains only that leaf and nothing else.
-            if self.anchored_leaf.view_number() == TYPES::View::genesis() {
+            if self.anchored_leaf.view_number() == ViewNumber::genesis() {
                 let (validated_state, state_delta) =
                     TYPES::ValidatedState::genesis(&self.instance_state);
 
@@ -706,7 +703,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
     /// [`decided_state`](Self::decided_state)) or if there is no path for the requested
     /// view to ever be decided.
     #[instrument(skip_all, target = "SystemContext", fields(id = self.id))]
-    pub async fn state(&self, view: TYPES::View) -> Option<Arc<TYPES::ValidatedState>> {
+    pub async fn state(&self, view: ViewNumber) -> Option<Arc<TYPES::ValidatedState>> {
         self.consensus.read().await.state(view).cloned()
     }
 
@@ -1104,7 +1101,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> ConsensusApi<TYPES, I>
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct InitializerEpochInfo<TYPES: NodeType> {
-    pub epoch: TYPES::Epoch,
+    pub epoch: EpochNumber,
     pub drb_result: DrbResult,
     // pub stake_table: Option<StakeTable>, // TODO: Figure out how to connect this up
     pub block_header: Option<TYPES::BlockHeader>,
@@ -1132,14 +1129,14 @@ pub struct HotShotInitializer<TYPES: NodeType> {
     pub anchor_state_delta: Option<Arc<<TYPES::ValidatedState as ValidatedState<TYPES>>::Delta>>,
 
     /// Starting view number that should be equivalent to the view the node shut down with last.
-    pub start_view: TYPES::View,
+    pub start_view: ViewNumber,
 
     /// The view we last performed an action in.  An action is proposing or voting for
     /// either the quorum or DA.
-    pub last_actioned_view: TYPES::View,
+    pub last_actioned_view: ViewNumber,
 
     /// Starting epoch number that should be equivalent to the epoch the node shut down with last.
-    pub start_epoch: Option<TYPES::Epoch>,
+    pub start_epoch: Option<EpochNumber>,
 
     /// Highest QC that was seen, for genesis it's the genesis QC.  It should be for a view greater
     /// than `inner`s view number for the non genesis case because we must have seen higher QCs
@@ -1150,17 +1147,17 @@ pub struct HotShotInitializer<TYPES: NodeType> {
     pub next_epoch_high_qc: Option<NextEpochQuorumCertificate2<TYPES>>,
 
     /// Proposals we have sent out to provide to others for catchup
-    pub saved_proposals: BTreeMap<TYPES::View, Proposal<TYPES, QuorumProposalWrapper<TYPES>>>,
+    pub saved_proposals: BTreeMap<ViewNumber, Proposal<TYPES, QuorumProposalWrapper<TYPES>>>,
 
     /// Previously decided upgrade certificate; this is necessary if an upgrade has happened and we are not restarting with the new version
     pub decided_upgrade_certificate: Option<UpgradeCertificate<TYPES>>,
 
     /// Undecided leaves that were seen, but not yet decided on.  These allow a restarting node
     /// to vote and propose right away if they didn't miss anything while down.
-    pub undecided_leaves: BTreeMap<TYPES::View, Leaf2<TYPES>>,
+    pub undecided_leaves: BTreeMap<ViewNumber, Leaf2<TYPES>>,
 
     /// Not yet decided state
-    pub undecided_state: BTreeMap<TYPES::View, View<TYPES>>,
+    pub undecided_state: BTreeMap<ViewNumber, View<TYPES>>,
 
     /// Saved VID shares
     pub saved_vid_shares: VidShares<TYPES>,
@@ -1190,9 +1187,9 @@ impl<TYPES: NodeType> HotShotInitializer<TYPES> {
             anchor_leaf: Leaf2::genesis(&validated_state, &instance_state, upgrade.base).await,
             anchor_state: Arc::new(validated_state),
             anchor_state_delta: Some(Arc::new(state_delta)),
-            start_view: TYPES::View::new(0),
-            start_epoch: genesis_epoch_from_version::<TYPES>(upgrade.base),
-            last_actioned_view: TYPES::View::new(0),
+            start_view: ViewNumber::new(0),
+            start_epoch: genesis_epoch_from_version(upgrade.base),
+            last_actioned_view: ViewNumber::new(0),
             saved_proposals: BTreeMap::new(),
             high_qc,
             next_epoch_high_qc: None,
@@ -1259,13 +1256,13 @@ impl<TYPES: NodeType> HotShotInitializer<TYPES> {
         epoch_start_block: u64,
         start_epoch_info: Vec<InitializerEpochInfo<TYPES>>,
         anchor_leaf: Leaf2<TYPES>,
-        (start_view, start_epoch): (TYPES::View, Option<TYPES::Epoch>),
+        (start_view, start_epoch): (ViewNumber, Option<EpochNumber>),
         (high_qc, next_epoch_high_qc): (
             QuorumCertificate2<TYPES>,
             Option<NextEpochQuorumCertificate2<TYPES>>,
         ),
-        last_actioned_view: TYPES::View,
-        saved_proposals: BTreeMap<TYPES::View, Proposal<TYPES, QuorumProposalWrapper<TYPES>>>,
+        last_actioned_view: ViewNumber,
+        saved_proposals: BTreeMap<ViewNumber, Proposal<TYPES, QuorumProposalWrapper<TYPES>>>,
         saved_vid_shares: VidShares<TYPES>,
         decided_upgrade_certificate: Option<UpgradeCertificate<TYPES>>,
         state_cert: Option<LightClientStateUpdateCertificateV2<TYPES>>,
@@ -1307,7 +1304,7 @@ async fn load_start_epoch_info<TYPES: NodeType>(
     epoch_start_block: u64,
 ) {
     let first_epoch_number =
-        TYPES::Epoch::new(epoch_from_block_number(epoch_start_block, epoch_height));
+        EpochNumber::new(epoch_from_block_number(epoch_start_block, epoch_height));
 
     tracing::warn!("Calling set_first_epoch for epoch {first_epoch_number}");
     membership

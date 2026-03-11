@@ -1,5 +1,4 @@
 use hotshot_types::{
-    data::{EpochNumber, ViewNumber},
     signature_key::{BLSPubKey, SchnorrPubKey},
     traits::{node_implementation::NodeType, signature_key::SignatureKey},
 };
@@ -138,8 +137,6 @@ use versions::version;
 pub struct SeqTypes;
 
 impl NodeType for SeqTypes {
-    type View = ViewNumber;
-    type Epoch = EpochNumber;
     type BlockHeader = Header;
     type BlockPayload = Payload;
     type SignatureKey = PubKey;

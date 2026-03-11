@@ -12,11 +12,7 @@ use hotshot_contract_adapter::{
     field_to_u256,
     sol_types::{LightClientStateSol, StakeTableStateSol},
 };
-use hotshot_types::{
-    stake_table::HSStakeTable,
-    traits::node_implementation::{ConsensusTime, NodeType},
-    PeerConfig,
-};
+use hotshot_types::{data::EpochNumber, stake_table::HSStakeTable, PeerConfig};
 use tokio::time::sleep;
 use vbs::version::StaticVersion;
 
@@ -36,7 +32,7 @@ pub async fn light_client_genesis(
 /// Does not error, runs until the stake table is provided.
 pub async fn fetch_stake_table_from_sequencer(
     sequencer_url: &Url,
-    epoch: Option<<SeqTypes as NodeType>::Epoch>,
+    epoch: Option<EpochNumber>,
 ) -> Result<HSStakeTable<SeqTypes>> {
     tracing::info!("Initializing stake table from node for epoch {epoch:?}");
 

@@ -21,11 +21,7 @@ use hotshot_query_service::{
     },
     node::BlockId,
 };
-use hotshot_types::{
-    data::ViewNumber,
-    traits::{network::ConnectedNetwork, node_implementation::ConsensusTime},
-    vote::HasViewNumber,
-};
+use hotshot_types::{data::ViewNumber, traits::network::ConnectedNetwork, vote::HasViewNumber};
 use itertools::Itertools;
 use jf_merkle_tree_compat::{
     ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme, LookupResult,

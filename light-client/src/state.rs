@@ -14,10 +14,7 @@ use hotshot_query_service::{
     node::BlockId,
     types::HeightIndexed,
 };
-use hotshot_types::{
-    data::EpochNumber, stake_table::StakeTableEntry, traits::node_implementation::ConsensusTime,
-    utils::root_block_in_epoch,
-};
+use hotshot_types::{data::EpochNumber, stake_table::StakeTableEntry, utils::root_block_in_epoch};
 use serde::{Deserialize, Serialize};
 
 use crate::{
