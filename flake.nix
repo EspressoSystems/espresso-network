@@ -98,7 +98,10 @@
           '';
         })
       ];
-      pkgs = import nixpkgs { inherit system overlays; };
+      pkgs = import nixpkgs {
+        inherit system overlays;
+        config.allowUnfree = true;
+      };
       myShell = pkgs.mkShellNoCC.override (pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
         # The mold linker is around 50% faster on Linux than the default linker.
         stdenv = pkgs.stdenvAdapters.useMoldLinker pkgs.clangStdenv;
@@ -282,17 +285,26 @@
           RUST_SRC_PATH = "${stableToolchain}/lib/rustlib/src/rust/library";
           FOUNDRY_SOLC = "${solc}/bin/solc";
         });
-        devShells.dockerShell = pkgs.mkShell {
-          inputsFrom = [ self.devShells.${system}.default ];
-          packages = [ pkgs.docker ];
-          shellHook = lib.concatStringsSep "\n" [ 
-            self.devShells.${system}.default
 
-            ''
-            # Required for demo-native to run with docker-rootless
-            export DOCKER_HOST=unix://$XDG_RUNTIME_DIR/docker.sock
-            ''
-          ];
+      # Individual component shells - composed dynamically by .envrc.local
+      devShells.docker = pkgs.mkShell {
+        inputsFrom = [ self.devShells.${system}.default ];
+        packages = [ pkgs.docker ];
+        shellHook = ''
+          # Required for demo-native to run with docker-rootless
+          export DOCKER_HOST=unix://$XDG_RUNTIME_DIR/docker.sock
+        '';
+      };
+
+      devShells.claude =
+        let
+          claude-restricted = pkgs.writeShellScriptBin "claude-restricted" ''
+            exec ${./scripts/claude.sh} ${pkgs.claude-code}/bin/claude
+          '';
+        in
+        pkgs.mkShell {
+          inputsFrom = [ self.devShells.${system}.default ];
+          packages = [ pkgs.claude-code pkgs.bubblewrap claude-restricted ];
         };
       devShells.crossShell =
         crossShell { config = "x86_64-unknown-linux-musl"; };
