@@ -42,7 +42,6 @@ use hotshot_types::{
 };
 use hotshot_utils::anytrace::*;
 use tracing::instrument;
-use versions::EPOCH_VERSION;
 
 use crate::{
     events::HotShotEvent,
@@ -508,13 +507,12 @@ impl<TYPES: NodeType> ProposalDependencyHandle<TYPES> {
         let builder_commitment = commitment_and_metadata.builder_commitment.clone();
         let metadata = commitment_and_metadata.metadata.clone();
 
-        if version >= EPOCH_VERSION
-            && parent_qc.view_number()
-                > self
-                    .upgrade_lock
-                    .upgrade_view()
-                    .await
-                    .unwrap_or(ViewNumber::new(0))
+        if parent_qc.view_number()
+            > self
+                .upgrade_lock
+                .upgrade_view()
+                .await
+                .unwrap_or(ViewNumber::new(0))
         {
             let Some(parent_block_number) = parent_qc.data.block_number else {
                 tracing::error!("Parent QC does not have a block number. Do not propose.");
@@ -562,11 +560,8 @@ impl<TYPES: NodeType> ProposalDependencyHandle<TYPES> {
         .await
         .wrap()
         .context(warn!("Failed to construct block header"))?;
-        let epoch = option_epoch_from_block_number(
-            version >= EPOCH_VERSION,
-            block_header.block_number(),
-            self.epoch_height,
-        );
+        let epoch =
+            option_epoch_from_block_number(true, block_header.block_number(), self.epoch_height);
 
         let epoch_membership = self
             .membership
@@ -724,12 +719,12 @@ impl<TYPES: NodeType> ProposalDependencyHandle<TYPES> {
             }
         }
 
-        let Ok(version) = self.upgrade_lock.version(self.view_number).await else {
+        if self.upgrade_lock.version(self.view_number).await.is_err() {
             bail!(error!(
                 "Failed to get version for view {:?}, not proposing",
                 self.view_number
             ));
-        };
+        }
 
         let mut maybe_epoch = None;
         let proposal_cert = if let Some(view_sync_cert) = view_sync_finalize_cert {
@@ -760,8 +755,6 @@ impl<TYPES: NodeType> ProposalDependencyHandle<TYPES> {
                 ));
             }
             (qc, next_epoch_qc, state_cert)
-        } else if version < EPOCH_VERSION {
-            (self.consensus.read().await.high_qc().clone(), None, None)
         } else if proposal_cert.is_some() {
             // If we have a view change evidence, we need to wait to propose with the transition QC
             if let Ok(Some((qc, next_epoch_qc))) = self.wait_for_transition_qc().await {

@@ -35,7 +35,6 @@ use hotshot_types::{
 use hotshot_utils::anytrace::*;
 use tokio::spawn;
 use tracing::instrument;
-use versions::EPOCH_VERSION;
 
 use super::{QuorumProposalRecvTaskState, ValidationInfo};
 use crate::{
@@ -88,19 +87,12 @@ pub async fn validate_proposal_liveness<TYPES: NodeType, I: NodeImplementation<T
     validation_info: &ValidationInfo<TYPES, I>,
 ) -> Result<()> {
     let mut valid_epoch_transition = false;
-    if validation_info
-        .upgrade_lock
-        .version(proposal.data.view_number())
-        .await
-        .is_ok_and(|v| v >= EPOCH_VERSION)
-    {
-        let Some(block_number) = proposal.data.justify_qc().data.block_number else {
-            bail!("Quorum Proposal has no block number but it's after the epoch upgrade");
-        };
-        if is_epoch_transition(block_number, validation_info.epoch_height) {
-            validate_epoch_transition_qc(proposal, validation_info).await?;
-            valid_epoch_transition = true;
-        }
+    let Some(block_number) = proposal.data.justify_qc().data.block_number else {
+        bail!("Quorum Proposal has no block number but it's after the epoch upgrade");
+    };
+    if is_epoch_transition(block_number, validation_info.epoch_height) {
+        validate_epoch_transition_qc(proposal, validation_info).await?;
+        valid_epoch_transition = true;
     }
     let mut consensus_writer = validation_info.consensus.write().await;
 
@@ -115,14 +107,8 @@ pub async fn validate_proposal_liveness<TYPES: NodeType, I: NodeImplementation<T
     }
 
     let liveness_check = proposal.data.justify_qc().view_number() > consensus_writer.locked_view();
-    // if we are using HS2 we update our locked view for any QC from a leader greater than our current lock
-    if liveness_check
-        && validation_info
-            .upgrade_lock
-            .version(leaf.view_number())
-            .await
-            .is_ok_and(|v| v >= EPOCH_VERSION)
-    {
+    // Update our locked view for any QC from a leader greater than our current lock
+    if liveness_check {
         consensus_writer.update_locked_view(proposal.data.justify_qc().view_number())?;
     }
 
@@ -264,15 +250,8 @@ pub(crate) async fn handle_quorum_proposal_recv<TYPES: NodeType, I: NodeImplemen
 
     validate_block_height(proposal).await?;
 
-    let version = validation_info
-        .upgrade_lock
-        .version(proposal.data.view_number())
-        .await?;
-
-    if version >= EPOCH_VERSION {
-        // Don't vote if the DRB result verification fails.
-        verify_drb_result(&proposal.data, &validation_info).await?;
-    }
+    // Don't vote if the DRB result verification fails.
+    verify_drb_result(&proposal.data, &validation_info).await?;
 
     let view_number = proposal.data.view_number();
 

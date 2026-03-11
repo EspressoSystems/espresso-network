@@ -18,15 +18,12 @@ use hotshot_types::{
     message::{Proposal, UpgradeLock},
     simple_certificate::UpgradeCertificate,
     simple_vote::{UpgradeProposalData, UpgradeVote},
-    traits::{
-        block_contents::BlockHeader, node_implementation::NodeType, signature_key::SignatureKey,
-    },
-    utils::{epoch_from_block_number, EpochTransitionIndicator},
+    traits::{node_implementation::NodeType, signature_key::SignatureKey},
+    utils::EpochTransitionIndicator,
     vote::HasViewNumber,
 };
 use hotshot_utils::anytrace::*;
 use tracing::instrument;
-use versions::EPOCH_VERSION;
 
 use crate::{
     events::HotShotEvent,
@@ -157,52 +154,6 @@ impl<TYPES: NodeType> UpgradeTaskState<TYPES> {
                 tracing::info!(
                     "Upgrade proposal received for view: {:?}",
                     proposal.data.view_number()
-                );
-
-                let epoch_upgrade_checks = if upgrade.target >= EPOCH_VERSION
-                    && upgrade.base < EPOCH_VERSION
-                {
-                    let consensus_reader = self.consensus.read().await;
-
-                    let Some((_, last_proposal)) =
-                        consensus_reader.last_proposals().last_key_value()
-                    else {
-                        tracing::error!(
-                            "No recent quorum proposals in consensus state -- skipping upgrade \
-                             proposal vote."
-                        );
-                        return Err(error!(
-                            "No recent quorum proposals in consensus state -- skipping upgrade \
-                             proposal vote."
-                        ));
-                    };
-
-                    let last_proposal_view: u64 = *last_proposal.data.view_number();
-                    let last_proposal_block: u64 = last_proposal.data.block_header().block_number();
-
-                    drop(consensus_reader);
-
-                    let target_start_epoch =
-                        epoch_from_block_number(self.epoch_start_block, self.epoch_height);
-                    let last_proposal_epoch =
-                        epoch_from_block_number(last_proposal_block, self.epoch_height);
-                    let upgrade_finish_epoch = epoch_from_block_number(
-                        last_proposal_block
-                            + (*proposal.data.upgrade_proposal.new_version_first_view
-                                - last_proposal_view)
-                            + 10,
-                        self.epoch_height,
-                    );
-
-                    target_start_epoch == last_proposal_epoch
-                        && last_proposal_epoch == upgrade_finish_epoch
-                } else {
-                    true
-                };
-
-                ensure!(
-                    epoch_upgrade_checks,
-                    error!("Epoch upgrade safety check failed! Refusing to vote on upgrade.")
                 );
 
                 let view = proposal.data.view_number();
@@ -338,51 +289,12 @@ impl<TYPES: NodeType> UpgradeTaskState<TYPES> {
                 let new_version_first_view = view + TYPES::UPGRADE_CONSTANTS.finish_offset;
                 let decide_by = view + TYPES::UPGRADE_CONSTANTS.decide_by_offset;
 
-                let epoch_upgrade_checks = if upgrade.target >= EPOCH_VERSION
-                    && upgrade.base < EPOCH_VERSION
-                {
-                    let consensus_reader = self.consensus.read().await;
-
-                    let Some((_, last_proposal)) =
-                        consensus_reader.last_proposals().last_key_value()
-                    else {
-                        tracing::error!(
-                            "No recent quorum proposals in consensus state -- skipping upgrade \
-                             proposal."
-                        );
-                        return Err(error!(
-                            "No recent quorum proposals in consensus state -- skipping upgrade \
-                             proposal."
-                        ));
-                    };
-
-                    let last_proposal_view: u64 = *last_proposal.data.view_number();
-                    let last_proposal_block: u64 = last_proposal.data.block_header().block_number();
-
-                    drop(consensus_reader);
-
-                    let target_start_epoch =
-                        epoch_from_block_number(self.epoch_start_block, self.epoch_height);
-                    let last_proposal_epoch =
-                        epoch_from_block_number(last_proposal_block, self.epoch_height);
-                    let upgrade_finish_epoch = epoch_from_block_number(
-                        last_proposal_block + (new_version_first_view - last_proposal_view) + 10,
-                        self.epoch_height,
-                    );
-
-                    target_start_epoch == last_proposal_epoch
-                        && last_proposal_epoch == upgrade_finish_epoch
-                } else {
-                    true
-                };
-
                 // We try to form a certificate 5 views before we're leader.
                 if view >= self.start_proposing_view
                     && view < self.stop_proposing_view
                     && time >= self.start_proposing_time
                     && time < self.stop_proposing_time
                     && !self.upgraded().await
-                    && epoch_upgrade_checks
                     && leader == self.public_key
                 {
                     let upgrade_proposal_data = UpgradeProposalData {

@@ -317,7 +317,6 @@ impl<TYPES: NodeType> NodeImplementation<TYPES> for CliquenetImpl {
 
 #[non_exhaustive]
 pub struct TestVersions {
-    pub test: Upgrade,
     pub epoch: Upgrade,
     pub da_committee: Upgrade,
     pub vid2: Upgrade,
@@ -329,7 +328,6 @@ pub const TEST_VERSIONS: TestVersions = TestVersions {
     epoch: Upgrade::trivial(version(0, 3)),
     da_committee: Upgrade::trivial(version(0, 4)),
     vid2: Upgrade::trivial(version(0, 6)),
-    test: Upgrade::new(version(0, 1), version(0, 2)),
     epoch_upgrade: Upgrade::new(version(0, 3), version(0, 4)),
     vid2_upgrade: Upgrade::new(version(0, 5), version(0, 6)),
 };
@@ -372,7 +370,7 @@ mod tests {
     /// Test that the view number affects the commitment post-marketplace
     #[tokio::test(flavor = "multi_thread")]
     async fn test_versioned_commitment_includes_view() {
-        let upgrade_lock = UpgradeLock::new(Upgrade::new(version(0, 1), version(0, 2)));
+        let upgrade_lock = UpgradeLock::new(Upgrade::new(version(0, 4), version(0, 5)));
 
         let data = TestData {
             data: 10,

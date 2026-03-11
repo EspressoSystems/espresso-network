@@ -58,7 +58,6 @@ use hotshot_utils::anytrace::*;
 use time::OffsetDateTime;
 use tokio::time::timeout;
 use tracing::instrument;
-use versions::EPOCH_VERSION;
 
 use crate::{events::HotShotEvent, quorum_proposal_recv::ValidationInfo, request::REQUEST_TIMEOUT};
 
@@ -521,191 +520,6 @@ pub async fn decide_from_proposal_2<TYPES: NodeType, I: NodeImplementation<TYPES
     res
 }
 
-/// Ascends the leaf chain by traversing through the parent commitments of the proposal. We begin
-/// by obtaining the parent view, and if we are in a chain (i.e. the next view from the parent is
-/// one view newer), then we begin attempting to form the chain. This is a direct impl from
-/// [HotStuff](https://arxiv.org/pdf/1803.05069) section 5:
-///
-/// > When a node b* carries a QC that refers to a direct parent, i.e., b*.justify.node = b*.parent,
-/// > we say that it forms a One-Chain. Denote by b'' = b*.justify.node. Node b* forms a Two-Chain,
-/// > if in addition to forming a One-Chain, b''.justify.node = b''.parent.
-/// > It forms a Three-Chain, if b'' forms a Two-Chain.
-///
-/// We follow this exact logic to determine if we are able to reach a commit and a decide. A commit
-/// is reached when we have a two chain, and a decide is reached when we have a three chain.
-///
-/// # Example
-/// Suppose we have a decide for view 1, and we then move on to get undecided views 2, 3, and 4. Further,
-/// suppose that our *next* proposal is for view 5, but this leader did not see info for view 4, so the
-/// justify qc of the proposal points to view 3. This is fine, and the undecided chain now becomes
-/// 2-3-5.
-///
-/// Assuming we continue with honest leaders, we then eventually could get a chain like: 2-3-5-6-7-8. This
-/// will prompt a decide event to occur (this code), where the `proposal` is for view 8. Now, since the
-/// lowest value in the 3-chain here would be 5 (excluding 8 since we only walk the parents), we begin at
-/// the first link in the chain, and walk back through all undecided views, making our new anchor view 5,
-/// and out new locked view will be 6.
-///
-/// Upon receipt then of a proposal for view 9, assuming it is valid, this entire process will repeat, and
-/// the anchor view will be set to view 6, with the locked view as view 7.
-///
-/// # Panics
-/// If the leaf chain contains no decided leaf while reaching a decided view, which should be
-/// impossible.
-#[allow(clippy::too_many_arguments)]
-pub async fn decide_from_proposal<TYPES: NodeType, I: NodeImplementation<TYPES>>(
-    proposal: &QuorumProposalWrapper<TYPES>,
-    consensus: OuterConsensus<TYPES>,
-    existing_upgrade_cert: Arc<RwLock<Option<UpgradeCertificate<TYPES>>>>,
-    public_key: &TYPES::SignatureKey,
-    with_epochs: bool,
-    membership: &EpochMembershipCoordinator<TYPES>,
-    storage: &I::Storage,
-    epoch_height: u64,
-) -> LeafChainTraversalOutcome<TYPES> {
-    let consensus_reader = consensus.read().await;
-    let existing_upgrade_cert_reader = existing_upgrade_cert.read().await;
-    let view_number = proposal.view_number();
-    let parent_view_number = proposal.justify_qc().view_number();
-    let old_anchor_view = consensus_reader.last_decided_view();
-
-    let mut last_view_number_visited = view_number;
-    let mut current_chain_length = 0usize;
-    let mut res = LeafChainTraversalOutcome::default();
-
-    if let Err(e) = consensus_reader.visit_leaf_ancestors(
-        parent_view_number,
-        Terminator::Exclusive(old_anchor_view),
-        true,
-        |leaf, state, delta| {
-            // This is the core paper logic. We're implementing the chain in chained hotstuff.
-            if res.new_decided_view_number.is_none() {
-                // If the last view number is the child of the leaf we've moved to...
-                if last_view_number_visited == leaf.view_number() + 1 {
-                    last_view_number_visited = leaf.view_number();
-
-                    // The chain grows by one
-                    current_chain_length += 1;
-
-                    // We emit a locked view when the chain length is 2
-                    if current_chain_length == 2 {
-                        res.new_locked_view_number = Some(leaf.view_number());
-                        // The next leaf in the chain, if there is one, is decided, so this
-                        // leaf's justify_qc would become the QC for the decided chain.
-                        res.committing_qc = Some(CertificatePair::for_parent(leaf));
-                    } else if current_chain_length == 3 {
-                        // And we decide when the chain length is 3.
-                        res.new_decided_view_number = Some(leaf.view_number());
-                    }
-                } else {
-                    // There isn't a new chain extension available, so we signal to the callback
-                    // owner that we can exit for now.
-                    return false;
-                }
-            }
-
-            // Now, if we *have* reached a decide, we need to do some state updates.
-            if let Some(new_decided_view) = res.new_decided_view_number {
-                // First, get a mutable reference to the provided leaf.
-                let mut leaf = leaf.clone();
-
-                // Update the metrics
-                if leaf.view_number() == new_decided_view {
-                    consensus_reader
-                        .metrics
-                        .last_synced_block_height
-                        .set(usize::try_from(leaf.height()).unwrap_or(0));
-                }
-
-                // Check if there's a new upgrade certificate available.
-                if let Some(cert) = leaf.upgrade_certificate() {
-                    if leaf.upgrade_certificate() != *existing_upgrade_cert_reader {
-                        if cert.data.decide_by < view_number {
-                            tracing::warn!(
-                                "Failed to decide an upgrade certificate in time. Ignoring."
-                            );
-                        } else {
-                            tracing::info!("Reached decide on upgrade certificate: {cert:?}");
-                            res.decided_upgrade_cert = Some(cert.clone());
-                        }
-                    }
-                }
-                // If the block payload is available for this leaf, include it in
-                // the leaf chain that we send to the client.
-                if let Some(payload) = consensus_reader.saved_payloads().get(&leaf.view_number()) {
-                    leaf.fill_block_payload_unchecked(payload.as_ref().payload.clone());
-                }
-
-                // Get the VID share at the leaf's view number, corresponding to our key
-                // (if one exists)
-                let vid_share = consensus_reader
-                    .vid_shares()
-                    .get(&leaf.view_number())
-                    .and_then(|key_map| key_map.get(public_key))
-                    .and_then(|epoch_map| epoch_map.get(&leaf.epoch(epoch_height)))
-                    .map(|prop| prop.data.clone());
-
-                let state_cert = if leaf.with_epoch
-                    && is_epoch_root(
-                        leaf.block_header().block_number(),
-                        consensus_reader.epoch_height,
-                    ) {
-                    match consensus_reader.state_cert() {
-                        // Sanity check that the state cert is for the same view as the decided leaf
-                        Some(state_cert)
-                            if state_cert.light_client_state.view_number
-                                == leaf.view_number().u64() =>
-                        {
-                            Some(state_cert.clone())
-                        },
-                        _ => None,
-                    }
-                } else {
-                    None
-                };
-
-                // Add our data into a new `LeafInfo`
-                res.leaf_views.push(LeafInfo::new(
-                    leaf.clone(),
-                    Arc::clone(&state),
-                    delta.clone(),
-                    vid_share,
-                    state_cert,
-                ));
-                if let Some(ref payload) = leaf.block_payload() {
-                    res.included_txns = Some(
-                        payload
-                            .transaction_commitments(leaf.block_header().metadata())
-                            .into_iter()
-                            .collect::<HashSet<_>>(),
-                    );
-                }
-            }
-            true
-        },
-    ) {
-        tracing::debug!("Leaf ascension failed; error={e}");
-    }
-
-    let epoch_height = consensus_reader.epoch_height;
-    drop(consensus_reader);
-
-    if with_epochs && res.new_decided_view_number.is_some() {
-        for decided_leaf_info in &res.leaf_views {
-            decide_epoch_root::<TYPES, I>(
-                &decided_leaf_info.leaf,
-                epoch_height,
-                membership,
-                storage,
-                &consensus,
-            )
-            .await;
-        }
-    }
-
-    res
-}
-
 /// Gets the parent leaf and state from the parent of a proposal, returning an [`utils::anytrace::Error`] if not.
 #[instrument(skip_all)]
 #[allow(clippy::too_many_arguments)]
@@ -958,19 +772,12 @@ pub(crate) async fn validate_proposal_safety_and_liveness<
     let view_number = proposal.data.view_number();
 
     let mut valid_epoch_transition = false;
-    if validation_info
-        .upgrade_lock
-        .version(proposal.data.justify_qc().view_number())
-        .await
-        .is_ok_and(|v| v >= EPOCH_VERSION)
-    {
-        let Some(block_number) = proposal.data.justify_qc().data.block_number else {
-            bail!("Quorum Proposal has no block number but it's after the epoch upgrade");
-        };
-        if is_epoch_transition(block_number, validation_info.epoch_height) {
-            validate_epoch_transition_qc(&proposal, validation_info).await?;
-            valid_epoch_transition = true;
-        }
+    let Some(block_number) = proposal.data.justify_qc().data.block_number else {
+        bail!("Quorum Proposal has no block number but it's after the epoch upgrade");
+    };
+    if is_epoch_transition(block_number, validation_info.epoch_height) {
+        validate_epoch_transition_qc(&proposal, validation_info).await?;
+        valid_epoch_transition = true;
     }
 
     let proposed_leaf = Leaf2::from_quorum_proposal(&proposal.data);
