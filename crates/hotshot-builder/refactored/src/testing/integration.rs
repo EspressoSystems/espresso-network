@@ -86,7 +86,7 @@ where
 }
 
 /// Builder task. Stores all the necessary information to run builder service
-struct RefactoredBuilderTask<Types>
+struct BuilderTaskImpl<Types>
 where
     Types: NodeType,
 {
