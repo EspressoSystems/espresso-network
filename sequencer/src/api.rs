@@ -5634,9 +5634,12 @@ mod test {
         let decided_leaf = node_0.decided_leaf().await;
         let state = node_0.decided_state().await;
 
+        let height = decided_leaf.height();
+        let num_leaves = state.block_merkle_tree.num_leaves();
+        tracing::info!(height, num_leaves, "checking block merkle tree state");
         state
             .block_merkle_tree
-            .lookup(decided_leaf.height() - 1)
+            .lookup(height - 1)
             .expect_ok()
             .expect("block state not found");
 
@@ -7416,8 +7419,8 @@ mod test {
             .iter()
             .map(|(addr, amt)| (*addr, *amt))
             .collect();
-        // Results are sorted by account address ascending
-        expected.sort_by_key(|(acct, _)| *acct);
+        // Results are sorted by account address descending
+        expected.sort_by_key(|(acct, _)| std::cmp::Reverse(*acct));
 
         tracing::info!("expected accounts = {expected:?}");
         let limit = expected.len().min(10_000) as u64;
