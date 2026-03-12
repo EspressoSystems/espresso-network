@@ -233,7 +233,9 @@ pub mod tests {
 
     use crate::avidm_gf2::namespaced::NsAvidmGf2Scheme;
 
-    fn setup_test_data() -> (
+    fn disperse_with_payload(
+        payload: &[u8],
+    ) -> (
         crate::avidm_gf2::namespaced::NsAvidmGf2Commit,
         crate::avidm_gf2::namespaced::NsAvidmGf2Common,
         Vec<crate::avidm_gf2::namespaced::NsAvidmGf2Share>,
@@ -249,16 +251,16 @@ pub mod tests {
         let recovery_threshold = total_weights.div_ceil(3) as usize;
         let params = NsAvidmGf2Scheme::setup(recovery_threshold, total_weights as usize).unwrap();
 
-        let payload = {
-            let mut bytes = vec![0u8; 48];
-            rng.fill_bytes(&mut bytes);
-            bytes
-        };
+        NsAvidmGf2Scheme::ns_disperse(&params, &weights, payload, ns_table.iter().cloned()).unwrap()
+    }
 
-        let (commit, common, shares) =
-            NsAvidmGf2Scheme::ns_disperse(&params, &weights, &payload, ns_table.iter().cloned())
-                .unwrap();
-        (commit, common, shares)
+    fn setup_test_data() -> (
+        crate::avidm_gf2::namespaced::NsAvidmGf2Commit,
+        crate::avidm_gf2::namespaced::NsAvidmGf2Common,
+        Vec<crate::avidm_gf2::namespaced::NsAvidmGf2Share>,
+    ) {
+        let payload: Vec<u8> = (0u8..48).collect();
+        disperse_with_payload(&payload)
     }
 
     #[test]
@@ -282,24 +284,7 @@ pub mod tests {
         assert!(NsAvidmGf2Scheme::verify_share_with_verified_common(&common, &tampered).is_err());
 
         // Create a tampered share by dispersing a different payload and swapping
-        let num_storage_nodes = 9;
-        let ns_table = [(0usize..15), (15..48)];
-        let mut rng = jf_utils::test_rng();
-        let weights: Vec<u32> = (0..num_storage_nodes)
-            .map(|_| rng.next_u32() % 5 + 1)
-            .collect();
-        let total_weights: u32 = weights.iter().sum();
-        let recovery_threshold = total_weights.div_ceil(3) as usize;
-        let params = NsAvidmGf2Scheme::setup(recovery_threshold, total_weights as usize).unwrap();
-        // Use a different payload
-        let different_payload = vec![0xAB; 48];
-        let (_commit2, _common2, shares2) = NsAvidmGf2Scheme::ns_disperse(
-            &params,
-            &weights,
-            &different_payload,
-            ns_table.iter().cloned(),
-        )
-        .unwrap();
+        let (_commit2, _common2, shares2) = disperse_with_payload(&vec![0xAB; 48]);
         let mut mixed = shares[0].clone();
         mixed.0[0] = shares2[0].0[0].clone();
         assert!(
@@ -326,24 +311,8 @@ pub mod tests {
     #[test]
     fn is_consistent_rejects_tampered_commit() {
         let (commit, common, _shares) = setup_test_data();
-        // Use common from a different dispersal as a mismatched commit
-        let (different_commit, ..) = {
-            let ns_table = [(0usize..15), (15..48)];
-            let mut rng = jf_utils::test_rng();
-            let weights: Vec<u32> = (0..9).map(|_| rng.next_u32() % 5 + 1).collect();
-            let total_weights: u32 = weights.iter().sum();
-            let recovery_threshold = total_weights.div_ceil(3) as usize;
-            let params =
-                NsAvidmGf2Scheme::setup(recovery_threshold, total_weights as usize).unwrap();
-            let different_payload = vec![0xCD; 48];
-            NsAvidmGf2Scheme::ns_disperse(
-                &params,
-                &weights,
-                &different_payload,
-                ns_table.iter().cloned(),
-            )
-            .unwrap()
-        };
+        // Use commit from a different dispersal
+        let (different_commit, ..) = disperse_with_payload(&vec![0xCD; 48]);
         // Verify original is consistent
         assert!(NsAvidmGf2Scheme::is_consistent(&commit, &common));
         // Verify different commit is inconsistent with original common
@@ -354,23 +323,7 @@ pub mod tests {
     fn is_consistent_rejects_tampered_common() {
         let (commit, common, _shares) = setup_test_data();
         // Swap in ns_commits from a different dispersal
-        let (_, different_common, _) = {
-            let ns_table = [(0usize..15), (15..48)];
-            let mut rng = jf_utils::test_rng();
-            let weights: Vec<u32> = (0..9).map(|_| rng.next_u32() % 5 + 1).collect();
-            let total_weights: u32 = weights.iter().sum();
-            let recovery_threshold = total_weights.div_ceil(3) as usize;
-            let params =
-                NsAvidmGf2Scheme::setup(recovery_threshold, total_weights as usize).unwrap();
-            let different_payload = vec![0xCD; 48];
-            NsAvidmGf2Scheme::ns_disperse(
-                &params,
-                &weights,
-                &different_payload,
-                ns_table.iter().cloned(),
-            )
-            .unwrap()
-        };
+        let (_, different_common, _) = disperse_with_payload(&vec![0xCD; 48]);
         let mut tampered_common = common;
         tampered_common.ns_commits = different_common.ns_commits;
         assert!(!NsAvidmGf2Scheme::is_consistent(&commit, &tampered_common));
