@@ -65,7 +65,6 @@ use hotshot_types::{
     traits::{
         block_contents::{BlockHeader, BlockPayload},
         metrics::Metrics,
-        node_implementation::ConsensusTime,
     },
     vote::HasViewNumber,
 };
@@ -200,6 +199,11 @@ pub struct Options {
     /// The minimum delay between loading chunks in a stream.
     #[clap(long, env = "ESPRESSO_SEQUENCER_CHUNK_FETCH_DELAY", value_parser = parse_duration)]
     pub(crate) chunk_fetch_delay: Option<Duration>,
+
+    /// The number of items to process in a single transaction when scanning the database for
+    /// missing objects.
+    #[clap(long, env = "ESPRESSO_SEQUENCER_SYNC_STATUS_CHUNK_SIZE")]
+    pub(crate) sync_status_chunk_size: Option<usize>,
 
     /// Disable pruning and reconstruct previously pruned data.
     ///
@@ -391,6 +395,7 @@ impl From<SqliteOptions> for Options {
             fetch_rate_limit: None,
             active_fetch_delay: None,
             chunk_fetch_delay: None,
+            sync_status_chunk_size: None,
             archive: false,
             lightweight: false,
             min_connections: 0,
@@ -2717,7 +2722,7 @@ impl SequencerPersistence for Persistence {
                         .map(|data| bincode::deserialize(&data))
                         .transpose()?;
                     Ok(Some(InitializerEpochInfo::<SeqTypes> {
-                        epoch: <SeqTypes as NodeType>::Epoch::new(epoch as u64),
+                        epoch: EpochNumber::new(epoch as u64),
                         drb_result: drb_result_array,
                         block_header,
                     }))
@@ -4017,7 +4022,7 @@ mod test {
             let proposal = Proposal {
                 data: quorum_proposal.clone(),
                 signature: quorum_proposal_signature,
-                _pd: std::marker::PhantomData,
+                _pd: std::marker::PhantomData::<SeqTypes>,
             };
 
             let proposal_bytes = bincode::serialize(&proposal)

@@ -101,6 +101,7 @@ pub(crate) struct Config {
 
     #[clap(flatten)]
     #[serde(default)]
+    #[clap_serde]
     pub signer: SignerConfig,
 
     /// Export calldata for multisig wallets instead of sending transaction.

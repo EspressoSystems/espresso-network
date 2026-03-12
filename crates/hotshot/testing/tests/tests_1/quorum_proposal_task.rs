@@ -27,7 +27,6 @@ use hotshot_testing::{
 use hotshot_types::{
     data::{null_block, EpochNumber, Leaf2, ViewChangeEvidence2, ViewNumber},
     simple_vote::{TimeoutData2, ViewSyncFinalizeData2},
-    traits::node_implementation::ConsensusTime,
     utils::BuilderCommitment,
 };
 use sha2::Digest;

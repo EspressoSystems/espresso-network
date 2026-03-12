@@ -33,7 +33,7 @@ use hotshot_types::{
     traits::{
         consensus_api::ConsensusApi,
         election::Membership,
-        node_implementation::{ConsensusTime, NodeType},
+        node_implementation::{NodeType},
         signature_key::SignatureKey,
         ValidatedState,
     },
