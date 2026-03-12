@@ -1404,9 +1404,12 @@ pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
 
                 // as soon as we know the finalized height,
                 // we can garbage collect anything that we know we won't need
-                let _ = self
+                if let Err(err) = self
                     .garbage_collect(std::cmp::min(height, finalized_hotshot_height))
-                    .await;
+                    .await
+                {
+                    tracing::debug!("Failed to garbage collect reward merkle tree: {err}");
+                }
 
                 // check to see whether we have proofs at that height already stored
                 if !self.proof_exists(finalized_hotshot_height).await {
