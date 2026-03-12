@@ -1353,7 +1353,7 @@ pub mod test_helpers {
         future::{join_all, FutureExt},
         stream::StreamExt,
     };
-    use hotshot::types::{Event, EventType};
+    use hotshot::types::EventType;
     use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
     use hotshot_types::{
         event::LeafInfo,

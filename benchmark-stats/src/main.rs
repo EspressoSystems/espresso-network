@@ -273,7 +273,7 @@ fn generate_replica_stats(
     replica_view_stats: &BTreeMap<ViewNumber, ReplicaViewStats<ViewNumber>>,
 ) -> ReplicaStats {
     let mut vid_deltas_from_vc = Vec::new();
-    let mut dac_deltas_from_vc = Vec::new();
+    let dac_deltas_from_vc = Vec::new();
     let mut proposal_deltas_from_vc = Vec::new();
 
     for record in replica_view_stats.values() {

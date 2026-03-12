@@ -18,8 +18,8 @@ use hotshot_types::{
     message::UpgradeLock,
     simple_certificate::{CertificatePair, LightClientStateUpdateCertificateV2},
     traits::{
-        block_contents::BlockHeader, election::Membership, network::BroadcastDelay,
-        node_implementation::Versions, signature_key::StateSignatureKey, storage::Storage,
+        block_contents::BlockHeader, election::Membership, node_implementation::Versions,
+        signature_key::StateSignatureKey, storage::Storage,
     },
     utils::{epoch_from_block_number, is_ge_epoch_root},
 };
@@ -131,12 +131,14 @@ pub struct SystemContext<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versi
     start_epoch: Option<TYPES::Epoch>,
 
     /// Access to the output event stream.
+    #[allow(clippy::type_complexity)]
     output_event_stream: (
         Sender<Arc<Event<TYPES>>>,
         InactiveReceiver<Arc<Event<TYPES>>>,
     ),
 
     /// External event stream for communication with the application.
+    #[allow(clippy::type_complexity)]
     pub(crate) external_event_stream: (
         Sender<Arc<Event<TYPES>>>,
         InactiveReceiver<Arc<Event<TYPES>>>,
