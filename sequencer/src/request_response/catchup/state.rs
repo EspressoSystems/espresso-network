@@ -11,8 +11,8 @@ use espresso_types::{
         forgotten_accounts_include, PermittedRewardMerkleTreeV2, RewardAccountV2,
         RewardMerkleCommitmentV2,
     },
-    BackoffParams, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment, Header,
-    Leaf2, NodeState, PubKey, SeqTypes,
+    BackoffParams, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment, Leaf2,
+    NodeState, PubKey, SeqTypes,
 };
 use hotshot::traits::NodeImplementation;
 use hotshot_types::{
@@ -54,29 +54,6 @@ impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerP
         )
         .await
         .with_context(|| "timed out while fetching leaf")?
-    }
-
-    async fn try_fetch_header(&self, _retry: usize, height: u64) -> anyhow::Result<Header> {
-        let timeout_duration = self.config.request_batch_interval * 3;
-
-        let response_validation_fn = move |_request: &Request, response: Response| async move {
-            let Response::EpochHeader(header) = response else {
-                return Err(anyhow::anyhow!("expected epoch header response"));
-            };
-            Ok(*header)
-        };
-
-        timeout(timeout_duration, async {
-            self.request_indefinitely(
-                Request::EpochHeader(height),
-                RequestType::Batched,
-                response_validation_fn,
-            )
-            .await
-            .with_context(|| "failed to request epoch header")
-        })
-        .await
-        .with_context(|| "timed out while fetching header")?
     }
 
     async fn try_fetch_accounts(

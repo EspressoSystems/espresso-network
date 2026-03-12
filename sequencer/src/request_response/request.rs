@@ -4,7 +4,7 @@ use committable::Commitment;
 use espresso_types::{
     v0_3::{ChainConfig, RewardAccountV1, RewardMerkleTreeV1},
     v0_4::{RewardAccountV2, RewardMerkleTreeV2},
-    FeeAccount, FeeMerkleTree, Header, Leaf2,
+    FeeAccount, FeeMerkleTree, Leaf2,
 };
 use hotshot_types::{data::VidShare, simple_certificate::LightClientStateUpdateCertificateV2};
 use request_response::{request::Request as RequestTrait, Serializable};
@@ -37,8 +37,6 @@ pub enum Request {
     VidShare(Height, RequestId),
     /// A request for the state certificate at a given epoch
     StateCert(u64),
-    /// A request for the header at the last block of a given epoch
-    EpochHeader(u64),
     /// A request for data to reconstruct the reward merkle tree at a given height
     RewardMerkleTreeV2(u64, ViewNumber),
 }
@@ -63,8 +61,6 @@ pub enum Response {
     VidShare(VidShare),
     /// A response for a state certificate at a given epoch
     StateCert(LightClientStateUpdateCertificateV2<SeqTypes>),
-    /// A response for the header at the last block of a given epoch
-    EpochHeader(Box<Header>),
     /// A response with data to reconstruct the reward merkle tree at a given height
     RewardMerkleTreeV2(Vec<u8>),
 }

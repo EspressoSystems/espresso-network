@@ -888,17 +888,31 @@ impl Header {
         } else {
             // Missing prev_epoch calculation - need to compute it now
             let prev_epoch_last_block = *prev_epoch * epoch_height;
-            let prev_epoch_header = instance_state
+            if let Err(err) = coordinator.membership_for_epoch(Some(prev_epoch)).await {
+                tracing::info!(%prev_epoch, "stake table missing for prev_epoch, triggering catchup: {err:#}");
+                coordinator
+                    .wait_for_catchup(prev_epoch)
+                    .await
+                    .context(format!("failed to catch up for prev_epoch={prev_epoch}"))?;
+            }
+
+            let membership = coordinator.membership().read().await;
+            let stake_table = membership.stake_table(Some(prev_epoch));
+            let success_threshold = membership.success_threshold(Some(prev_epoch));
+            drop(membership);
+
+            let prev_epoch_leaf = instance_state
                 .state_catchup
                 .as_ref()
-                .fetch_header(prev_epoch_last_block)
+                .fetch_leaf(prev_epoch_last_block, stake_table, success_threshold)
                 .await
                 .with_context(|| {
                     format!(
-                        "failed to fetch header at height {prev_epoch_last_block} for prev_epoch \
+                        "failed to fetch leaf at height {prev_epoch_last_block} for prev_epoch \
                          {prev_epoch}"
                     )
                 })?;
+            let prev_epoch_header = prev_epoch_leaf.block_header();
 
             if prev_epoch_header.version() >= EPOCH_REWARD_VERSION {
                 // V6+ epoch needs rewards - spawn and wait for calculation

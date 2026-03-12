@@ -529,8 +529,7 @@ pub mod mock {
         retain_accounts,
         v0_3::{RewardAccountProofV1, RewardAccountV1, RewardMerkleCommitmentV1},
         v0_4::{PermittedRewardMerkleTreeV2, RewardAccountV2, RewardMerkleCommitmentV2},
-        BackoffParams, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment, Header,
-        Leaf2,
+        BackoffParams, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment, Leaf2,
     };
 
     #[derive(Debug, Clone)]
@@ -577,10 +576,6 @@ pub mod mock {
             _success_threshold: U256,
         ) -> anyhow::Result<Leaf2> {
             Err(anyhow::anyhow!("todo"))
-        }
-
-        async fn try_fetch_header(&self, _retry: usize, _height: u64) -> anyhow::Result<Header> {
-            anyhow::bail!("unimplemented")
         }
 
         async fn try_fetch_accounts(

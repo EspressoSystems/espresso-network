@@ -46,7 +46,7 @@ use crate::{
     },
     v0_4::{PermittedRewardMerkleTreeV2, RewardAccountV2, RewardMerkleCommitmentV2},
     AuthenticatedValidatorMap, BlockMerkleTree, Event, FeeAccount, FeeAccountProof,
-    FeeMerkleCommitment, Header, Leaf2, NetworkConfig, PubKey, SeqTypes,
+    FeeMerkleCommitment, Leaf2, NetworkConfig, PubKey, SeqTypes,
 };
 
 #[async_trait]
@@ -76,23 +76,6 @@ pub trait StateCatchup: Send + Sync {
                         .await
                 }
                 .boxed()
-            })
-            .await
-    }
-
-    /// Fetch the header at the given height without retrying on transient errors.
-    ///
-    /// This is used for epoch rewards catchup where we need the header
-    /// of the last block of the previous epoch.
-    async fn try_fetch_header(&self, retry: usize, height: u64) -> anyhow::Result<Header>;
-
-    /// Fetch the header at the given height, retrying on transient errors.
-    async fn fetch_header(&self, height: u64) -> anyhow::Result<Header> {
-        self.backoff()
-            .retry(self, |provider, retry| {
-                async move { provider.try_fetch_header(retry, height).await }
-                    .map_err(|err| err.context(format!("fetching header at height {height}")))
-                    .boxed()
             })
             .await
     }
@@ -331,14 +314,6 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
         (**self)
             .fetch_leaf(height, stake_table, success_threshold)
             .await
-    }
-
-    async fn try_fetch_header(&self, retry: usize, height: u64) -> anyhow::Result<Header> {
-        (**self).try_fetch_header(retry, height).await
-    }
-
-    async fn fetch_header(&self, height: u64) -> anyhow::Result<Header> {
-        (**self).fetch_header(height).await
     }
 
     async fn try_fetch_accounts(

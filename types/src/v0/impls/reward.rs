@@ -1145,29 +1145,45 @@ impl EpochRewardsCalculator {
             "fetch_and_calculate: starting"
         );
 
+        // Ensure stake table is available for this epoch
+        if let Err(err) = coordinator.membership_for_epoch(Some(epoch)).await {
+            tracing::info!(%epoch, "stake table missing for epoch, triggering catchup: {err:#}");
+            coordinator
+                .wait_for_catchup(epoch)
+                .await
+                .context(format!("failed to catch up for epoch={epoch}"))?;
+        }
+
         // Get leader_counts for this epoch if not provided
         let leader_counts = if let Some(lc) = leader_counts {
             lc
         } else {
-            // Fetch the header at the last block of the epoch
-            let header = instance_state
+            // Fetch the leaf at the last block of the epoch so we can verify
+            // the header via QC against the stake table
+            let membership = coordinator.membership().read().await;
+            let stake_table = membership.stake_table(Some(epoch));
+            let success_threshold = membership.success_threshold(Some(epoch));
+            drop(membership);
+
+            let leaf = instance_state
                 .state_catchup
                 .as_ref()
-                .fetch_header(epoch_last_block_height)
+                .fetch_leaf(epoch_last_block_height, stake_table, success_threshold)
                 .await
                 .with_context(|| {
                     format!(
-                        "failed to fetch header at height {epoch_last_block_height} for epoch \
+                        "failed to fetch leaf at height {epoch_last_block_height} for epoch \
                          {epoch}"
                     )
                 })?;
+            let header = leaf.block_header();
 
             tracing::info!(
                 %epoch,
                 header_height = header.height(),
                 header_version = %header.version(),
                 header_reward_merkle_tree_root = %header.reward_merkle_tree_root(),
-                "fetch_and_calculate: fetched header"
+                "fetch_and_calculate: fetched leaf"
             );
 
             anyhow::ensure!(
@@ -1197,15 +1213,6 @@ impl EpochRewardsCalculator {
                 .leader_counts()
                 .expect("V6+ header must have leader_counts")
         };
-
-        // Ensure stake table is available for this epoch
-        if let Err(err) = coordinator.membership_for_epoch(Some(epoch)).await {
-            tracing::info!(%epoch, "stake table missing for epoch, triggering catchup: {err:#}");
-            coordinator
-                .wait_for_catchup(epoch)
-                .await
-                .context(format!("failed to catch up for epoch={epoch}"))?;
-        }
 
         let membership = coordinator.membership().read().await;
         let validators: Vec<_> = membership

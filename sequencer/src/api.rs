@@ -7893,4 +7893,86 @@ mod test {
             .unwrap_err();
         assert_eq!(err.status(), StatusCode::BAD_REQUEST);
     }
+
+    /// Test that `fetch_leaf` returns a leaf with exactly the requested block height.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_fetch_leaf_returns_exact_height() -> anyhow::Result<()> {
+        const EPOCH_HEIGHT: u64 = 10;
+        const NUM_NODES: usize = 5;
+        const TARGET_HEIGHT: u64 = EPOCH_HEIGHT * 3 + 2;
+
+        let network_config = TestConfigBuilder::default()
+            .epoch_height(EPOCH_HEIGHT)
+            .build();
+
+        let port = reserve_tcp_port().expect("No ports free for query service");
+
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let catchup_peers = std::array::from_fn(|_| {
+            StatePeers::<StaticVersion<0, 1>>::from_urls(
+                vec![format!("http://localhost:{port}").parse().unwrap()],
+                Default::default(),
+                Duration::from_secs(2),
+                &NoMetrics,
+            )
+        });
+
+        let config = TestNetworkConfigBuilder::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(port),
+            ))
+            .network_config(network_config)
+            .persistences(persistence)
+            .catchups(catchup_peers)
+            .pos_hook(
+                DelegationConfig::MultipleDelegators,
+                Default::default(),
+                POS_V4,
+            )
+            .await?
+            .build();
+
+        let network = TestNetwork::new(config, POS_V4).await;
+
+        // Wait for chain to advance past our target height
+        let height_client: Client<ServerError, StaticVersion<0, 1>> =
+            Client::new(format!("http://localhost:{port}").parse().unwrap());
+        wait_until_block_height(&height_client, "node/block-height", TARGET_HEIGHT + 5).await;
+
+        // Get the stake table and threshold for the epoch containing TARGET_HEIGHT
+        let coordinator = network.server.node_state().coordinator;
+        let epoch = EpochNumber::new(epoch_from_block_number(TARGET_HEIGHT, EPOCH_HEIGHT));
+        let membership = coordinator.membership().read().await;
+        let stake_table = membership.stake_table(Some(epoch));
+        let success_threshold = membership.success_threshold(Some(epoch));
+        drop(membership);
+
+        // Use StatePeers to fetch the leaf at the exact target height
+        let catchup = StatePeers::<StaticVersion<0, 1>>::from_urls(
+            vec![format!("http://localhost:{port}").parse().unwrap()],
+            Default::default(),
+            Duration::from_secs(5),
+            &NoMetrics,
+        );
+
+        let leaf = catchup
+            .fetch_leaf(TARGET_HEIGHT, stake_table, success_threshold)
+            .await?;
+
+        assert_eq!(
+            leaf.height(),
+            TARGET_HEIGHT,
+            "fetch_leaf must return the leaf at exactly the requested height"
+        );
+
+        Ok(())
+    }
 }

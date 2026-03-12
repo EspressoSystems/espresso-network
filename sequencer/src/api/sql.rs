@@ -11,12 +11,12 @@ use espresso_types::{
         RewardMerkleTreeV1, REWARD_MERKLE_TREE_V1_HEIGHT,
     },
     v0_4::{PermittedRewardMerkleTreeV2, RewardAccountV2, RewardMerkleTreeV2},
-    BlockMerkleTree, FeeAccount, FeeMerkleTree, Header, Leaf2, NodeState, ValidatedState,
+    BlockMerkleTree, FeeAccount, FeeMerkleTree, Leaf2, NodeState, ValidatedState,
 };
 use futures::future::Future;
 use hotshot::traits::ValidatedState as _;
 use hotshot_query_service::{
-    availability::{BlockId, LeafId},
+    availability::LeafId,
     data_source::{
         sql::{Config, SqlDataSource, Transaction},
         storage::{
@@ -595,16 +595,6 @@ impl CatchupStorage for SqlStorage {
 
         Ok(chain)
     }
-
-    async fn get_header(&self, height: u64) -> anyhow::Result<Header> {
-        let mut tx = self
-            .read()
-            .await
-            .context(format!("opening transaction to fetch header at {height}"))?;
-        tx.get_header(BlockId::<SeqTypes>::from(height as usize))
-            .await
-            .context(format!("header {height} not available"))
-    }
 }
 
 impl RewardMerkleTreeDataSource for DataSource {
@@ -716,10 +706,6 @@ impl CatchupStorage for DataSource {
     }
     async fn get_leaf_chain(&self, height: u64) -> anyhow::Result<Vec<Leaf2>> {
         self.as_ref().get_leaf_chain(height).await
-    }
-
-    async fn get_header(&self, height: u64) -> anyhow::Result<Header> {
-        CatchupStorage::get_header(self.as_ref(), height).await
     }
 }
 
