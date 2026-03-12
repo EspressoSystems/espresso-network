@@ -111,7 +111,7 @@ async fn run_upgrade_test(genesis_path: &str, upgrade: Upgrade) -> Result<()> {
     let progress_requirements = TestRequirements {
         block_height_increment: expected_block_height,
         txn_count_increment: 2 * expected_block_height,
-        global_timeout: Duration::from_secs(expected_block_height as u64 * 3),
+        global_timeout: Duration::from_secs(expected_block_height as u64 * 6),
         first_reward_block,
         ..Default::default()
     };

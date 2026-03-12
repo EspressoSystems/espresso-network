@@ -2314,6 +2314,7 @@ pub mod test_helpers {
 mod api_tests {
     use std::{fmt::Debug, marker::PhantomData};
 
+    use ark_serialize::CanonicalDeserialize;
     use committable::Committable;
     use data_source::testing::TestableSequencerDataSource;
     use espresso_types::{
@@ -2818,9 +2819,14 @@ mod api_tests {
             .await
             .unwrap();
 
-        // Create another leaf, with missing data.
+        // Create another leaf, with missing data. We have to use a different payload commitment,
+        // otherwise the database will be able to combine the empty payload from the genesis block
+        // with this header, and the payload will not actually be missing.
         let mut block_header = leaf.block_header().clone();
         *block_header.height_mut() += 1;
+        *block_header.payload_commitment_mut() = VidCommitment::V1(
+            CanonicalDeserialize::deserialize_uncompressed_unchecked([1u8; 32].as_slice()).unwrap(),
+        );
         let qp = QuorumProposalWrapper {
             proposal: QuorumProposal2 {
                 block_header,

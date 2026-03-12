@@ -168,6 +168,7 @@ where
     Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
     S: VersionedDataSource + 'static,
+    for<'a> S::ReadOnly<'a>: AvailabilityStorage<Types>,
     for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
     P: AvailabilityProvider<Types>,
 {
@@ -178,21 +179,52 @@ where
         }
     }
 
-    pub(super) fn run(self, header: Header<Types>) {
+    pub(super) async fn run(
+        self,
+        tx: Option<&mut impl AvailabilityStorage<Types>>,
+        header: Header<Types>,
+    ) {
+        if tx.is_some() {
+            self.run_with_open_transaction(tx, header).await;
+        } else {
+            // If we are not being called in a context where we already have a transaction open, try
+            // to open one now.
+            let fetcher = self.fetcher();
+            let mut tx = fetcher
+                .read()
+                .await
+                // If we failed to open a transaction, we can still continue. We just won't be able
+                // to fetch data from our own database, and will have to fetch from peers.
+                .inspect_err(|err| {
+                    tracing::warn!(
+                        "unable to open transaction to fetch block; will not be able to \
+                        locate a matching payload in our own database: {err:#}"
+                    );
+                })
+                .ok();
+            self.run_with_open_transaction(tx.as_mut(), header).await;
+        }
+    }
+
+    async fn run_with_open_transaction(
+        self,
+        tx: Option<&mut impl AvailabilityStorage<Types>>,
+        header: Header<Types>,
+    ) {
         match self {
             Self::Payload { fetcher } => {
                 tracing::info!(
                     "fetched leaf {}, will now fetch payload",
                     header.block_number()
                 );
-                fetch_block_with_header(fetcher, header);
+                fetch_block_with_header(fetcher, tx, header).await;
             },
             Self::VidCommon { fetcher } => {
                 tracing::info!(
                     "fetched leaf {}, will now fetch VID common",
                     header.block_number()
                 );
-                fetch_vid_common_with_header(fetcher, header);
+                fetch_vid_common_with_header(fetcher, tx, header).await;
             },
         }
     }
@@ -222,7 +254,7 @@ where
     //    the VID common data may be available but the full block may not exist anywhere.
     match tx.get_header(req).await {
         Ok(header) => {
-            callback.run(header);
+            callback.run(Some(tx), header).await;
             return Ok(());
         },
         Err(QueryError::Missing | QueryError::NotFound) => {

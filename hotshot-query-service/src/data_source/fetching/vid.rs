@@ -184,8 +184,9 @@ where
     }
 }
 
-pub(super) fn fetch_vid_common_with_header<Types, S, P>(
+pub(super) async fn fetch_vid_common_with_header<Types, S, P>(
     fetcher: Arc<Fetcher<Types, S, P>>,
+    tx: Option<&mut impl AvailabilityStorage<Types>>,
     header: Header<Types>,
 ) where
     Types: NodeType,
@@ -195,25 +196,45 @@ pub(super) fn fetch_vid_common_with_header<Types, S, P>(
     for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
     P: AvailabilityProvider<Types>,
 {
-    let Some(vid_fetcher) = fetcher.vid_common_fetcher.as_ref() else {
-        tracing::info!("not fetching vid because of leaf only mode");
+    // Now that we have the header, we only need to retrieve the VID data.
+    let hash = header.payload_commitment();
+    let height = header.block_number();
+    let callback = VidCommonCallback {
+        header,
+        fetcher: fetcher.clone(),
+    };
+
+    let Some(vid_common_fetcher) = fetcher.vid_common_fetcher.as_ref() else {
+        // If we're in light-weight mode, we don't need to fetch the VID common data.
         return;
     };
 
-    // Now that we have the header, we only need to retrieve the VID common data.
-    tracing::info!(
-        "spawned active fetch for VID common {:?} (height {})",
-        header.payload_commitment(),
-        header.block_number()
-    );
-    vid_fetcher.spawn_fetch(
-        request::VidCommonRequest(header.payload_commitment()),
+    // Having found the corresponding header, we may already have a VID common in our database which
+    // corresponds, even though if we've gotten here, we were missing the exact block requested.
+    // This is because multiple distinct blocks can have the same payload (especially common with
+    // the empty payload), and thus the same VID. If possible, we can combine a VID common from a
+    // different block having the same hash, with the requested header, to short-circuit fetching
+    // the missing data from peers.
+    if let Some(tx) = tx {
+        match tx.get_vid_common(BlockId::PayloadHash(hash)).await {
+            Ok(common) => {
+                tracing::debug!(%hash, height, "found VID common in local database");
+                callback.run(common.common).await;
+                return;
+            },
+            Err(err) => {
+                // Fall through to fetching from peers.
+                tracing::debug!(%hash, height, "VID common not available locally; trying fetch: {err:#}");
+            },
+        }
+    }
+
+    vid_common_fetcher.spawn_fetch(
+        request::VidCommonRequest(hash),
         fetcher.provider.clone(),
-        once(VidCommonCallback {
-            header,
-            fetcher: fetcher.clone(),
-        }),
+        once(callback),
     );
+    tracing::info!(%hash, height, "spawned active fetch for VID common");
 }
 
 #[derive(Derivative)]
