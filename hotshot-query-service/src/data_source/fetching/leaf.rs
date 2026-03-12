@@ -403,7 +403,14 @@ where
                 trigger_fetch_for_parent(&fetcher, &leaf);
                 fetcher.store_and_notify(leaf).await;
             },
-            Self::Continuation { callback } => callback.run(leaf.leaf.block_header().clone()),
+            Self::Continuation { callback } => {
+                callback
+                    .run(
+                        Option::<&mut S::ReadOnly<'static>>::None,
+                        leaf.leaf.block_header().clone(),
+                    )
+                    .await;
+            },
         }
     }
 }

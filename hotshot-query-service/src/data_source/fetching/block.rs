@@ -162,8 +162,9 @@ where
     }
 }
 
-pub(super) fn fetch_block_with_header<Types, S, P>(
+pub(super) async fn fetch_block_with_header<Types, S, P>(
     fetcher: Arc<Fetcher<Types, S, P>>,
+    tx: Option<&mut impl AvailabilityStorage<Types>>,
     header: Header<Types>,
 ) where
     Types: NodeType,
@@ -173,25 +174,45 @@ pub(super) fn fetch_block_with_header<Types, S, P>(
     for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
     P: AvailabilityProvider<Types>,
 {
+    // Now that we have the header, we only need to retrieve the payload.
+    let hash = header.payload_commitment();
+    let height = header.block_number();
+    let callback = PayloadCallback {
+        header,
+        fetcher: fetcher.clone(),
+    };
+
     let Some(payload_fetcher) = fetcher.payload_fetcher.as_ref() else {
-        // If we're in light-weight mode, we don't need to fetch the VID common data.
+        // If we're in light-weight mode, we don't need to fetch the payload.
         return;
     };
 
-    // Now that we have the header, we only need to retrieve the payload.
-    tracing::info!(
-        "spawned active fetch for payload {:?} (height {})",
-        header.payload_commitment(),
-        header.block_number()
-    );
+    // Having found the corresponding header, we may already have a payload in our database which
+    // corresponds, even though if we've gotten here, we were missing the exact block requested.
+    // This is because multiple distinct blocks can have the same payload (especially common with
+    // the empty payload). If possible, we can combine a payload from a different block having the
+    // same hash, with the requested header, to short-circuit fetching the missing payload from
+    // peers.
+    if let Some(tx) = tx {
+        match tx.get_payload(BlockId::PayloadHash(hash)).await {
+            Ok(payload) => {
+                tracing::debug!(%hash, height, "found payload in local database");
+                callback.run(payload.data).await;
+                return;
+            },
+            Err(err) => {
+                // Fall through to fetching from peers.
+                tracing::debug!(%hash, height, "payload not available locally; trying fetch: {err:#}");
+            },
+        }
+    }
+
     payload_fetcher.spawn_fetch(
-        PayloadRequest(header.payload_commitment()),
+        PayloadRequest(hash),
         fetcher.provider.clone(),
-        once(PayloadCallback {
-            header,
-            fetcher: fetcher.clone(),
-        }),
+        once(callback),
     );
+    tracing::info!(%hash, height, "spawned active fetch for payload");
 }
 
 #[async_trait]
