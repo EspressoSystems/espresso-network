@@ -43,6 +43,7 @@ use hotshot_types::{
     network::NetworkConfig,
     simple_certificate::LightClientStateUpdateCertificateV2,
     traits::{election::Membership, network::ConnectedNetwork},
+    utils::epoch_from_block_number,
     vid::avidm::{init_avidm_param, AvidMScheme},
     vote::HasViewNumber,
     PeerConfig,
@@ -54,6 +55,7 @@ use rand::Rng;
 use request_response::RequestType;
 use serde::{Deserialize, Serialize};
 use tokio::time::timeout;
+use vbs::version::Version;
 
 use self::data_source::{HotShotConfigDataSource, NodeStateDataSource, StateSignatureDataSource};
 use crate::{
@@ -1284,20 +1286,13 @@ pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
         _account: RewardAccountV1,
     ) -> impl Send + Future<Output = anyhow::Result<RewardAccountQueryDataV1>>;
 
-    fn save_reward_merkle_tree_v2(
+    fn persist_proofs_and_garbage_collect(
         &self,
         node_state: &NodeState,
         height: u64,
-        merkle_tree: &RewardMerkleTreeV2,
+        version: Version,
     ) -> impl Send + Future<Output = anyhow::Result<()>> {
         async move {
-            {
-                let serialization =
-                    bincode::serialize(&TryInto::<RewardMerkleTreeV2Data>::try_into(merkle_tree)?)
-                        .context("Merkle tree serialization failed; this should never happen.")?;
-                self.persist_tree(height, serialization).await?;
-            }
-
             // it's imperative that we do not block the state update loop from this point on.
             // ultimately, we would retry in the next iteration anyway;
             // all the information already exists.
@@ -1307,89 +1302,91 @@ pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
             // are not generated unless they were not already stored for the previous light client
             // finalized height.
 
-            if cfg!(any(test, feature = "testing")) {
-                let finalized_hotshot_height = height;
+            if !cfg!(any(test, feature = "testing"))
+                && !(height + node_state.node_id).is_multiple_of(30)
+            {
+                return Ok(());
+            }
 
-                // check to see whether we have proofs at that height already stored
-                if !self.proof_exists(finalized_hotshot_height).await {
-                    let Ok(permitted_tree) = self
-                        .load_reward_merkle_tree_v2(finalized_hotshot_height)
-                        .await
-                    else {
+            let finalized_hotshot_height = if cfg!(any(test, feature = "testing")) {
+                height
+            } else {
+                match node_state.finalized_hotshot_height().await {
+                    Ok(h) => h,
+                    Err(err) => {
+                        tracing::warn!("failed to get finalized hotshot height: {err:#}");
                         return Ok(());
-                    };
-
-                    let tree = permitted_tree.tree;
-
-                    // we try to be careful to avoid allocating for all the proofs immediately,
-                    // but note that there are no guarantees here (if e.g. the database is slow)
-                    let iter =
-                        tree.iter()
-                            .filter_map(|(account, balance): (&RewardAccountV2, _)| {
-                                let proof = RewardAccountProofV2::prove(&tree, (*account).into())?;
-
-                                let proof = RewardAccountQueryDataV2 {
-                                    balance: (*balance).into(),
-                                    proof: proof.0,
-                                };
-
-                                let serialized_account = bincode::serialize(&account).ok()?;
-                                let serialized_proof = bincode::serialize(&proof).ok()?;
-
-                                Some((serialized_account, serialized_proof))
-                            });
-
-                    let Ok(_) = self.persist_proofs(finalized_hotshot_height, iter).await else {
-                        return Ok(());
-                    };
-
-                    // tree is dropped here
+                    },
                 }
-            // we offset the check by the node id, just to mitigate having the entire network
-            // doing this calculation at the same time.
-            } else if (height + node_state.node_id).is_multiple_of(30) {
-                let Ok(finalized_hotshot_height) = node_state.finalized_hotshot_height().await
-                else {
+            };
+
+            if self.proof_exists(finalized_hotshot_height).await {
+                return Ok(());
+            }
+
+            let permitted_tree = match self
+                .load_reward_merkle_tree_v2(finalized_hotshot_height)
+                .await
+            {
+                Ok(tree) => tree,
+                Err(err) => {
+                    tracing::warn!(
+                        finalized_hotshot_height,
+                        "failed to load reward merkle tree: {err:#}"
+                    );
                     return Ok(());
-                };
+                },
+            };
 
-                // check to see whether we have proofs at that height already stored
-                if !self.proof_exists(finalized_hotshot_height).await {
-                    let Ok(permitted_tree) = self
-                        .load_reward_merkle_tree_v2(finalized_hotshot_height)
-                        .await
-                    else {
-                        return Ok(());
+            let tree = permitted_tree.tree;
+            // we try to be careful to avoid allocating for all the proofs immediately,
+            // but note that there are no guarantees here (if e.g. the database is slow)
+
+            let iter = tree
+                .iter()
+                .filter_map(|(account, balance): (&RewardAccountV2, _)| {
+                    let proof = RewardAccountProofV2::prove(&tree, (*account).into())?;
+
+                    let proof = RewardAccountQueryDataV2 {
+                        balance: (*balance).into(),
+                        proof: proof.0,
                     };
 
-                    let tree = permitted_tree.tree;
+                    let serialized_account = bincode::serialize(&account).ok()?;
+                    let serialized_proof = bincode::serialize(&proof).ok()?;
 
-                    // we try to be careful to avoid allocating for all the proofs immediately,
-                    // but note that there are no guarantees here (if e.g. the database is slow)
-                    let iter =
-                        tree.iter()
-                            .filter_map(|(account, balance): (&RewardAccountV2, _)| {
-                                let proof = RewardAccountProofV2::prove(&tree, (*account).into())?;
+                    Some((serialized_account, serialized_proof))
+                });
 
-                                let proof = RewardAccountQueryDataV2 {
-                                    balance: (*balance).into(),
-                                    proof: proof.0,
-                                };
+            if let Err(err) = self.persist_proofs(finalized_hotshot_height, iter).await {
+                tracing::warn!(
+                    finalized_hotshot_height,
+                    "failed to persist proofs: {err:#}"
+                );
+                return Ok(());
+            }
 
-                                let serialized_account = bincode::serialize(&account).ok()?;
-                                let serialized_proof = bincode::serialize(&proof).ok()?;
+            // Skip garbage collection in tests
+            if cfg!(any(test, feature = "testing")) {
+                return Ok(());
+            }
 
-                                Some((serialized_account, serialized_proof))
-                            });
-
-                    let Ok(_) = self.persist_proofs(finalized_hotshot_height, iter).await else {
-                        return Ok(());
-                    };
-
-                    let _ = self.garbage_collect(finalized_hotshot_height).await;
-
-                    // tree is dropped here
+            // For epoch reward version, only garbage collect data older than
+            // (current_epoch - 2) to keep recent epoch data available for catchup.
+            let gc_height = if version >= versions::EPOCH_REWARD_VERSION {
+                if let Some(epoch_height) = node_state.epoch_height {
+                    let current_epoch = epoch_from_block_number(height, epoch_height);
+                    let gc_epoch = current_epoch.saturating_sub(2);
+                    (gc_epoch * epoch_height).min(finalized_hotshot_height)
+                } else {
+                    finalized_hotshot_height
                 }
+            } else {
+                finalized_hotshot_height
+            };
+
+            if let Err(err) = self.garbage_collect(gc_height).await {
+                tracing::info!(gc_height, "failed to garbage collect: {err:#}");
             }
 
             Ok(())
@@ -1449,12 +1446,6 @@ pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
         }
     }
 
-    fn persist_tree(
-        &self,
-        height: u64,
-        merkle_tree: Vec<u8>,
-    ) -> impl Send + Future<Output = anyhow::Result<()>>;
-
     fn load_tree(&self, height: u64) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>>;
 
     fn persist_proofs(
@@ -1486,16 +1477,6 @@ impl RewardMerkleTreeDataSource for hotshot_query_service::data_source::MetricsD
         _account: RewardAccountV1,
     ) -> impl Send + Future<Output = anyhow::Result<RewardAccountQueryDataV1>> {
         async {
-            bail!("reward merklized state is not supported for this data source");
-        }
-    }
-
-    fn persist_tree(
-        &self,
-        _height: u64,
-        _merkle_tree: Vec<u8>,
-    ) -> impl Send + Future<Output = anyhow::Result<()>> {
-        async move {
             bail!("reward merklized state is not supported for this data source");
         }
     }
@@ -1560,14 +1541,6 @@ where
         self.inner()
             .load_v1_reward_account_proof(height, account)
             .await
-    }
-
-    fn persist_tree(
-        &self,
-        height: u64,
-        merkle_tree: Vec<u8>,
-    ) -> impl Send + Future<Output = anyhow::Result<()>> {
-        async move { self.inner().persist_tree(height, merkle_tree).await }
     }
 
     fn load_tree(&self, height: u64) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {

@@ -48,7 +48,7 @@ use super::{
 use crate::{
     api::RewardMerkleTreeDataSource,
     catchup::{CatchupStorage, NullStateCatchup},
-    persistence::{sql::Options, ChainConfigPersistence},
+    persistence::{sql::Options, ChainConfigPersistence, RewardMerkleTreeV2Persistence},
     state::compute_state_update,
     util::BoundedJoinSet,
     SeqTypes,
@@ -137,33 +137,6 @@ impl RewardMerkleTreeDataSource for SqlStorage {
                 "requested height {height} is not yet available (latest block height: \
                  {block_height})"
             );
-        }
-    }
-
-    fn persist_tree(
-        &self,
-        height: u64,
-        merkle_tree: Vec<u8>,
-    ) -> impl Send + Future<Output = anyhow::Result<()>> {
-        async move {
-            let mut tx = self
-                .write()
-                .await
-                .context("opening transaction for state update")?;
-
-            tx.upsert(
-                "reward_merkle_tree_v2_data",
-                ["height", "balances"],
-                ["height"],
-                [(height as i64, merkle_tree)],
-            )
-            .await?;
-
-            hotshot_query_service::data_source::Transaction::commit(tx)
-                .await
-                .context("Transaction to store reward merkle tree failed.")?;
-
-            Ok(())
         }
     }
 
@@ -301,6 +274,10 @@ impl RewardMerkleTreeDataSource for SqlStorage {
 
     fn garbage_collect(&self, height: u64) -> impl Send + Future<Output = anyhow::Result<()>> {
         async move {
+            tracing::debug!(
+                height,
+                "garbage collecting reward merkle tree data and proofs"
+            );
             {
                 let mut tx = self
                     .write()
@@ -608,14 +585,6 @@ impl RewardMerkleTreeDataSource for DataSource {
             .await
     }
 
-    fn persist_tree(
-        &self,
-        height: u64,
-        merkle_tree: Vec<u8>,
-    ) -> impl Send + Future<Output = anyhow::Result<()>> {
-        async move { self.as_ref().persist_tree(height, merkle_tree).await }
-    }
-
     fn load_tree(&self, height: u64) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {
         async move { self.as_ref().load_tree(height).await }
     }
@@ -719,6 +688,23 @@ impl ChainConfigPersistence for Transaction<Write> {
             ["commitment", "data"],
             ["commitment"],
             [(commitment.to_string(), data)],
+        )
+        .await
+    }
+}
+
+#[async_trait]
+impl RewardMerkleTreeV2Persistence for Transaction<Write> {
+    async fn persist_reward_merkle_tree_v2(
+        &mut self,
+        height: u64,
+        data: Vec<u8>,
+    ) -> anyhow::Result<()> {
+        self.upsert(
+            "reward_merkle_tree_v2_data",
+            ["height", "balances"],
+            ["height"],
+            [(height as i64, data)],
         )
         .await
     }

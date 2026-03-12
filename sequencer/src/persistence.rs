@@ -96,6 +96,15 @@ pub trait ChainConfigPersistence: Sized + Send + Sync {
     async fn insert_chain_config(&mut self, chain_config: ChainConfig) -> anyhow::Result<()>;
 }
 
+#[async_trait]
+pub trait RewardMerkleTreeV2Persistence: Sized + Send + Sync {
+    async fn persist_reward_merkle_tree_v2(
+        &mut self,
+        height: u64,
+        data: Vec<u8>,
+    ) -> anyhow::Result<()>;
+}
+
 #[cfg(test)]
 mod tests {
     use std::{cmp::max, collections::BTreeMap, marker::PhantomData, sync::Arc, time::Duration};
