@@ -211,8 +211,7 @@ impl<T: Serialize + DeserializeOwned + Clone> LedgerLog<T> {
     #[instrument(skip(self, is_missing))]
     pub(crate) fn sync_status(
         &self,
-        start: usize,
-        end: usize,
+        block_height: usize,
         is_missing: impl Fn(&T) -> bool,
     ) -> ResourceSyncStatus {
         let mut missing = 0;
@@ -221,7 +220,7 @@ impl<T: Serialize + DeserializeOwned + Clone> LedgerLog<T> {
         // Iterate over all objects, finding ranges of consecutive present objects. In between each
         // present range, we will interpolate a missing range.
         let mut curr: Option<SyncStatusRange> = None;
-        for (i, obj) in self.iter().enumerate().skip(start) {
+        for (i, obj) in self.iter().enumerate() {
             let Some(obj) = obj else {
                 tracing::debug!(i, "skipping placeholder object");
                 continue;
@@ -274,13 +273,13 @@ impl<T: Serialize + DeserializeOwned + Clone> LedgerLog<T> {
             Some(range) => range.end,
             None => 0,
         };
-        if prev < end {
+        if prev < block_height {
             ranges.push(SyncStatusRange {
                 start: prev,
-                end,
+                end: block_height,
                 status: SyncStatus::Missing,
             });
-            missing += end - prev;
+            missing += block_height - prev;
         }
 
         ResourceSyncStatus { missing, ranges }

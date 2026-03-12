@@ -201,11 +201,6 @@ pub struct Options {
     #[clap(long, env = "ESPRESSO_SEQUENCER_CHUNK_FETCH_DELAY", value_parser = parse_duration)]
     pub(crate) chunk_fetch_delay: Option<Duration>,
 
-    /// The number of items to process in a single transaction when scanning the database for
-    /// missing objects.
-    #[clap(long, env = "ESPRESSO_SEQUENCER_SYNC_STATUS_CHUNK_SIZE")]
-    pub(crate) sync_status_chunk_size: Option<usize>,
-
     /// Disable pruning and reconstruct previously pruned data.
     ///
     /// While running without pruning is the default behavior, the default will not try to
@@ -396,7 +391,6 @@ impl From<SqliteOptions> for Options {
             fetch_rate_limit: None,
             active_fetch_delay: None,
             chunk_fetch_delay: None,
-            sync_status_chunk_size: None,
             archive: false,
             lightweight: false,
             min_connections: 0,

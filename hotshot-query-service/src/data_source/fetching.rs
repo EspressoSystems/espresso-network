@@ -107,10 +107,7 @@ use crate::{
         MerklizedState, MerklizedStateDataSource, MerklizedStateHeightPersistence, Snapshot,
     },
     metrics::PrometheusMetrics,
-    node::{
-        NodeDataSource, SyncStatus, SyncStatusQueryData, SyncStatusRange, TimeWindowQueryData,
-        WindowStart,
-    },
+    node::{NodeDataSource, SyncStatus, SyncStatusQueryData, TimeWindowQueryData, WindowStart},
     status::{HasMetrics, StatusDataSource},
     task::BackgroundTask,
     types::HeightIndexed,
@@ -139,7 +136,6 @@ pub struct Builder<Types, S, P> {
     range_chunk_size: usize,
     proactive_interval: Duration,
     proactive_range_chunk_size: Option<usize>,
-    sync_status_chunk_size: usize,
     active_fetch_delay: Duration,
     chunk_fetch_delay: Duration,
     proactive_fetching: bool,
@@ -168,7 +164,6 @@ impl<Types, S, P> Builder<Types, S, P> {
             range_chunk_size: 25,
             proactive_interval: Duration::from_hours(8),
             proactive_range_chunk_size: None,
-            sync_status_chunk_size: 100_000,
             active_fetch_delay: Duration::from_millis(50),
             chunk_fetch_delay: Duration::from_millis(100),
             proactive_fetching: true,
@@ -250,13 +245,6 @@ impl<Types, S, P> Builder<Types, S, P> {
     /// whatever the normal range chunk size is.
     pub fn with_proactive_range_chunk_size(mut self, range_chunk_size: usize) -> Self {
         self.proactive_range_chunk_size = Some(range_chunk_size);
-        self
-    }
-
-    /// Set the number of items to process in a single transaction when scanning the database for
-    /// missing objects.
-    pub fn with_sync_status_chunk_size(mut self, chunk_size: usize) -> Self {
-        self.sync_status_chunk_size = chunk_size;
         self
     }
 
@@ -838,7 +826,6 @@ where
     payload_fetcher: Option<Arc<PayloadFetcher<Types, S, P>>>,
     vid_common_fetcher: Option<Arc<VidCommonFetcher<Types, S, P>>>,
     range_chunk_size: usize,
-    sync_status_chunk_size: usize,
     // Duration to sleep after each active fetch,
     active_fetch_delay: Duration,
     // Duration to sleep after each chunk fetched
@@ -912,7 +899,6 @@ where
             payload_fetcher,
             vid_common_fetcher: vid_fetcher,
             range_chunk_size: builder.range_chunk_size,
-            sync_status_chunk_size: builder.sync_status_chunk_size,
             active_fetch_delay: builder.active_fetch_delay,
             chunk_fetch_delay: builder.chunk_fetch_delay,
             backoff,
@@ -1388,7 +1374,16 @@ where
             metrics.current_scan.set(i);
             async {
                 let sync_status = {
-                    match self.sync_status().await {
+                    let mut tx = match self.read().await {
+                        Ok(tx) => tx,
+                        Err(err) => {
+                            tracing::warn!(
+                                "unable to open transaction, scan will be skipped: {err:#}"
+                            );
+                            return;
+                        },
+                    };
+                    match tx.sync_status().await {
                         Ok(st) => st,
                         Err(err) => {
                             tracing::warn!(
@@ -1459,82 +1454,12 @@ where
 
                 // Reset metrics.
                 metrics.running.set(0);
+
+                sleep(interval).await;
             }
             .instrument(span)
             .await;
-
-            sleep(interval).await;
         }
-    }
-}
-
-impl<Types, S, P> Fetcher<Types, S, P>
-where
-    Types: NodeType,
-    Header<Types>: QueryableHeader<Types>,
-    S: VersionedDataSource + 'static,
-    for<'a> S::ReadOnly<'a>: NodeStorage<Types> + PrunedHeightStorage,
-    P: Send + Sync,
-{
-    async fn sync_status(&self) -> anyhow::Result<SyncStatusQueryData> {
-        let heights = {
-            let mut tx = self
-                .read()
-                .await
-                .context("opening transaction to load heights")?;
-            Heights::load(&mut tx).await.context("loading heights")?
-        };
-
-        let mut res = SyncStatusQueryData {
-            pruned_height: heights.pruned_height.map(|h| h as usize),
-            ..Default::default()
-        };
-        let start = if let Some(height) = res.pruned_height {
-            // Add an initial range for pruned data.
-            let range = SyncStatusRange {
-                status: SyncStatus::Pruned,
-                start: 0,
-                end: height + 1,
-            };
-            res.blocks.ranges.push(range);
-            res.leaves.ranges.push(range);
-            res.vid_common.ranges.push(range);
-            res.vid_shares.ranges.push(range);
-
-            height + 1
-        } else {
-            0
-        };
-
-        // Break the range into manageable chunks, so we don't hold any one database transaction
-        // open for too long.
-        for chunk in range_chunks(
-            start..(heights.height as usize),
-            self.sync_status_chunk_size,
-        ) {
-            tracing::debug!(chunk.start, chunk.end, "checking sync status in sub-range");
-            let mut tx = self
-                .read()
-                .await
-                .context("opening transaction to sync status range")?;
-            let range_status = tx
-                .sync_status_for_range(chunk.start, chunk.end)
-                .await
-                .context(format!("checking sync status in sub-range {chunk:?}"))?;
-            tracing::debug!(
-                chunk.start,
-                chunk.end,
-                ?range_status,
-                "found sync status for range"
-            );
-
-            res.blocks.extend(range_status.blocks);
-            res.leaves.extend(range_status.leaves);
-            res.vid_common.extend(range_status.vid_common);
-            res.vid_shares.extend(range_status.vid_shares);
-        }
-
-        Ok(res)
     }
 }
 
@@ -1798,7 +1723,7 @@ where
     Types: NodeType,
     Header<Types>: QueryableHeader<Types>,
     S: VersionedDataSource + 'static,
-    for<'a> S::ReadOnly<'a>: NodeStorage<Types> + PrunedHeightStorage,
+    for<'a> S::ReadOnly<'a>: NodeStorage<Types>,
     P: Send + Sync,
 {
     async fn block_height(&self) -> QueryResult<usize> {
@@ -1841,12 +1766,10 @@ where
     }
 
     async fn sync_status(&self) -> QueryResult<SyncStatusQueryData> {
-        self.fetcher
-            .sync_status()
-            .await
-            .map_err(|err| QueryError::Error {
-                message: format!("{err:#}"),
-            })
+        let mut tx = self.read().await.map_err(|err| QueryError::Error {
+            message: err.to_string(),
+        })?;
+        tx.sync_status().await
     }
 
     async fn get_header_window(
@@ -2301,17 +2224,7 @@ async fn select_some<T>(
 
 #[cfg(test)]
 mod test {
-    use hotshot_example_types::node_types::TEST_VERSIONS;
-
     use super::*;
-    use crate::{
-        data_source::{
-            sql::testing::TmpDb,
-            storage::{SqlStorage, StorageConnectionType},
-        },
-        fetching::provider::NoFetching,
-        testing::{consensus::MockSqlDataSource, mocks::MockTypes},
-    };
 
     #[test]
     fn test_range_chunks() {
@@ -2371,125 +2284,5 @@ mod test {
             range_chunks_rev(Bound::Excluded(0), 4, 2).collect::<Vec<_>>(),
             [3..5, 1..3]
         );
-    }
-
-    async fn test_sync_status(chunk_size: usize, present_ranges: &[(usize, usize)]) {
-        let block_height = present_ranges.last().unwrap().1;
-        let storage = TmpDb::init().await;
-        let db = SqlStorage::connect(storage.config(), StorageConnectionType::Query)
-            .await
-            .unwrap();
-        let ds = MockSqlDataSource::builder(db, NoFetching)
-            .with_sync_status_chunk_size(chunk_size)
-            .build()
-            .await
-            .unwrap();
-
-        // Generate some mock leaves to insert.
-        let mut leaves: Vec<LeafQueryData<MockTypes>> = vec![
-            LeafQueryData::<MockTypes>::genesis(
-                &Default::default(),
-                &Default::default(),
-                TEST_VERSIONS.test,
-            )
-            .await,
-        ];
-        for i in 1..block_height {
-            let mut leaf = leaves[i - 1].clone();
-            leaf.leaf.block_header_mut().block_number = i as u64;
-            leaves.push(leaf);
-        }
-
-        // Set up.
-        {
-            let mut tx = ds.write().await.unwrap();
-
-            for &(start, end) in present_ranges {
-                for leaf in leaves[start..end].iter() {
-                    tracing::info!(height = leaf.height(), "insert leaf");
-                    tx.insert_leaf(leaf.clone()).await.unwrap();
-                }
-            }
-
-            if present_ranges[0].0 > 0 {
-                tx.save_pruned_height((present_ranges[0].0 - 1) as u64)
-                    .await
-                    .unwrap();
-            }
-
-            tx.commit().await.unwrap();
-        }
-
-        let sync_status = ds.sync_status().await.unwrap().leaves;
-
-        // Verify missing.
-        let present: usize = present_ranges.iter().map(|(start, end)| end - start).sum();
-        assert_eq!(
-            sync_status.missing,
-            block_height - present - present_ranges[0].0
-        );
-
-        // Verify ranges.
-        let mut ranges = sync_status.ranges.into_iter();
-        let mut prev = 0;
-        for &(start, end) in present_ranges {
-            if start != prev {
-                let range = ranges.next().unwrap();
-                assert_eq!(
-                    range,
-                    SyncStatusRange {
-                        start: prev,
-                        end: start,
-                        status: if prev == 0 {
-                            SyncStatus::Pruned
-                        } else {
-                            SyncStatus::Missing
-                        },
-                    }
-                );
-            }
-            let range = ranges.next().unwrap();
-            assert_eq!(
-                range,
-                SyncStatusRange {
-                    start,
-                    end,
-                    status: SyncStatus::Present,
-                }
-            );
-            prev = end;
-        }
-
-        if prev != block_height {
-            let range = ranges.next().unwrap();
-            assert_eq!(
-                range,
-                SyncStatusRange {
-                    start: prev,
-                    end: block_height,
-                    status: SyncStatus::Missing,
-                }
-            );
-        }
-
-        assert_eq!(ranges.next(), None);
-    }
-
-    #[tokio::test]
-    #[test_log::test]
-    async fn test_sync_status_multiple_chunks() {
-        test_sync_status(10, &[(0, 1), (3, 5), (8, 10)]).await;
-    }
-
-    #[tokio::test]
-    #[test_log::test]
-    async fn test_sync_status_multiple_chunks_present_range_overlapping_chunk() {
-        test_sync_status(5, &[(1, 4)]).await;
-    }
-
-    #[tokio::test]
-    #[test_log::test]
-    async fn test_sync_status_multiple_chunks_missing_range_overlapping_chunk() {
-        test_sync_status(5, &[(0, 1), (4, 5)]).await;
     }
 }
