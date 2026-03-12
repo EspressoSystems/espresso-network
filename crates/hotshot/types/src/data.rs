@@ -417,7 +417,15 @@ impl From<VidCommon2> for VidCommon {
     }
 }
 
-impl VidCommon {
+/// Borrowed view of [`VidCommon`] that avoids cloning large common data.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VidCommonRef<'a> {
+    V0(&'a VidCommon0),
+    V1(&'a VidCommon1),
+    V2(&'a VidCommon2),
+}
+
+impl<'a> VidCommonRef<'a> {
     pub fn is_consistent(&self, comm: &VidCommitment) -> bool {
         match (self, comm) {
             (Self::V0(common), VidCommitment::V0(comm)) => {
@@ -429,6 +437,20 @@ impl VidCommon {
             },
             _ => false,
         }
+    }
+}
+
+impl VidCommon {
+    pub fn as_ref(&self) -> VidCommonRef<'_> {
+        match self {
+            Self::V0(c) => VidCommonRef::V0(c),
+            Self::V1(c) => VidCommonRef::V1(c),
+            Self::V2(c) => VidCommonRef::V2(c),
+        }
+    }
+
+    pub fn is_consistent(&self, comm: &VidCommitment) -> bool {
+        self.as_ref().is_consistent(comm)
     }
 }
 
@@ -766,6 +788,34 @@ impl<TYPES: NodeType> VidDisperseShare<TYPES> {
             Self::V0(_) => None,
             Self::V1(share) => share.target_epoch,
             Self::V2(share) => share.target_epoch,
+        }
+    }
+
+    /// Return a borrowed view of the VID common data.
+    pub fn common(&self) -> VidCommonRef<'_> {
+        match self {
+            Self::V0(share) => VidCommonRef::V0(&share.common),
+            Self::V1(share) => VidCommonRef::V1(&share.common),
+            Self::V2(share) => VidCommonRef::V2(&share.common),
+        }
+    }
+
+    /// Check if vid common is consistent with the commitment.
+    pub fn is_consistent(&self) -> bool {
+        match self {
+            Self::V0(share) => share.is_consistent(),
+            Self::V1(share) => share.is_consistent(),
+            Self::V2(share) => share.is_consistent(),
+        }
+    }
+
+    /// Verify share assuming common data is already verified consistent.
+    /// Caller MUST call `is_consistent()` first.
+    pub fn verify_with_verified_common(&self) -> bool {
+        match self {
+            Self::V0(share) => share.verify_with_verified_common(),
+            Self::V1(share) => share.verify_with_verified_common(),
+            Self::V2(share) => share.verify_with_verified_common(),
         }
     }
 
