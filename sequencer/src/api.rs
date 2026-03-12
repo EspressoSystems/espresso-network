@@ -3565,7 +3565,7 @@ mod test {
             .try_into()
             .unwrap();
 
-        let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
+        let mut builder = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
             .api_config(SqlDataSource::options(
                 &storage[0],
                 Options::with_port(port),
@@ -3579,8 +3579,19 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .network_config(test_config)
-            .build();
+            .network_config(test_config);
+
+        // When the base version already has epochs, the base chain config must
+        // include the stake_table_contract
+        if upgrade.base >= versions::EPOCH_VERSION {
+            let state = ValidatedState {
+                chain_config: chain_config_upgrade.into(),
+                ..Default::default()
+            };
+            builder = builder.states(std::array::from_fn(|_| state.clone()));
+        }
+
+        let config = builder.build();
 
         let mut network = TestNetwork::new(config, upgrade).await;
         let mut events = network.server.event_stream().await;
