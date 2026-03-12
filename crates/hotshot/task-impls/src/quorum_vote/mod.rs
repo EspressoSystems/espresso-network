@@ -711,6 +711,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
     ) -> Result<()> {
         match event.as_ref() {
             HotShotEvent::QuorumProposalValidated(proposal, _parent_leaf) => {
+                let handler_start = std::time::Instant::now();
                 tracing::trace!(
                     "Received Proposal for view {}",
                     *proposal.data.view_number()
@@ -735,6 +736,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                     event_receiver,
                     &event_sender,
                     Arc::clone(&event),
+                );
+                tracing::warn!(
+                    "QuorumProposalValidated handler view={} took {:?}",
+                    proposal.data.view_number(), handler_start.elapsed()
                 );
             },
             // HotShotEvent::DaCertificateRecv(cert) => {
@@ -781,7 +786,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
             //     );
             // },
             HotShotEvent::VidShareRecv(sender, share) => {
+                let handler_start = std::time::Instant::now();
                 let view = share.data.view_number();
+                let is_ours = *share.data.recipient_key() == self.public_key;
                 let vid_epoch = share.data.epoch();
                 let target_epoch = share.data.target_epoch();
                 let membership_reader = self.membership.membership_for_epoch(vid_epoch).await?;
@@ -855,7 +862,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                 // If it's the first time receiving our share send it to all nodes
                 if *share.data.recipient_key() == self.public_key {
                     if let VidDisperseShare::V2(ref inner_share) = share.data {
-                        tracing::debug!("Received our own VID share for view {view}");
+                        tracing::warn!("Received our own VID share for view {view}");
                         let proposal = Proposal {
                             signature: share.signature.clone(),
                             data: inner_share.clone(),
@@ -880,6 +887,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                     &self.vid_sender,
                 )
                 .await;
+                tracing::warn!(
+                    "VidShareRecv handler view={} ours={} took {:?}",
+                    view, is_ours, handler_start.elapsed()
+                );
             },
             HotShotEvent::Timeout(view, ..) => {
                 let view = TYPES::View::new(view.saturating_sub(1));
