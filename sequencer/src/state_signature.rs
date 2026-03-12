@@ -11,6 +11,7 @@ use espresso_types::{traits::SequencerPersistence, PubKey};
 use hotshot::types::{Event, EventType, SchnorrPubKey};
 use hotshot_task_impls::helpers::derive_signed_state_digest;
 use hotshot_types::{
+    data::EpochNumber,
     event::LeafInfo,
     light_client::{
         LCV2StateSignatureRequestBody, LCV3StateSignatureRequestBody, LightClientState,
@@ -20,7 +21,6 @@ use hotshot_types::{
     traits::{
         block_contents::BlockHeader,
         network::ConnectedNetwork,
-        node_implementation::NodeType,
         signature_key::{
             LCV1StateSignatureKey, LCV2StateSignatureKey, LCV3StateSignatureKey,
             StakeTableEntryType,
@@ -56,7 +56,7 @@ pub struct StateSigner<ApiVer: StaticVersionType> {
     voting_stake_table_state: StakeTableState,
 
     /// epoch for the current stake table state
-    voting_stake_table_epoch: Option<<SeqTypes as NodeType>::Epoch>,
+    voting_stake_table_epoch: Option<EpochNumber>,
 
     /// Capacity of the stake table
     stake_table_capacity: usize,
@@ -73,7 +73,7 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
         sign_key: StateSignKey,
         ver_key: StateVerKey,
         voting_stake_table_state: StakeTableState,
-        voting_stake_table_epoch: Option<<SeqTypes as NodeType>::Epoch>,
+        voting_stake_table_epoch: Option<EpochNumber>,
         stake_table_capacity: usize,
         should_vote: bool,
     ) -> Self {
@@ -120,7 +120,7 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
                 let cur_block_height = state.block_height;
                 let blocks_per_epoch = consensus.epoch_height;
 
-                let option_state_epoch = option_epoch_from_block_number::<SeqTypes>(
+                let option_state_epoch = option_epoch_from_block_number(
                     leaf.with_epoch,
                     cur_block_height,
                     blocks_per_epoch,

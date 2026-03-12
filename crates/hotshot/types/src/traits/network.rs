@@ -121,7 +121,7 @@ pub trait Id: Eq + PartialEq + Hash {}
 /// a message
 pub trait ViewMessage<TYPES: NodeType> {
     /// get the view out of the message
-    fn view_number(&self) -> TYPES::View;
+    fn view_number(&self) -> ViewNumber;
 }
 
 /// A request for some data that the consensus layer is asking for.
@@ -131,7 +131,7 @@ pub struct DataRequest<TYPES: NodeType> {
     /// Request
     pub request: RequestKind<TYPES>,
     /// View this message is for
-    pub view: TYPES::View,
+    pub view: ViewNumber,
     /// signature of the Sha256 hash of the data so outsiders can't use know
     /// public keys with stake.
     pub signature: <TYPES::SignatureKey as SignatureKey>::PureAssembledSignatureType,
@@ -141,11 +141,11 @@ pub struct DataRequest<TYPES: NodeType> {
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
 pub enum RequestKind<TYPES: NodeType> {
     /// Request VID data by our key and the VID commitment
-    Vid(TYPES::View, TYPES::SignatureKey),
+    Vid(ViewNumber, TYPES::SignatureKey),
     /// Request a DA proposal for a certain view
-    DaProposal(TYPES::View),
+    DaProposal(ViewNumber),
     /// Request for quorum proposal for a view
-    Proposal(TYPES::View),
+    Proposal(ViewNumber),
 }
 
 impl<TYPES: NodeType> std::fmt::Debug for RequestKind<TYPES> {
