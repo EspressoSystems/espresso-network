@@ -8,7 +8,7 @@ use std::{
     collections::{HashMap, HashSet},
     num::NonZero,
     sync::Arc,
-    time::{Duration, Instant},
+    time::Instant,
 };
 
 use async_broadcast::{Receiver, Sender};
@@ -31,7 +31,6 @@ use hotshot_types::{
     vote::HasViewNumber,
 };
 use hotshot_utils::anytrace::*;
-use tokio::time::timeout;
 use tracing::instrument;
 use vbs::version::{StaticVersionType, Version};
 
@@ -133,8 +132,7 @@ impl<TYPES: NodeType> Mempool<TYPES> {
             .map(|tx| tx.commit())
             .collect();
         for txn_commit in &txn_set {
-            self.recently_decided_transactions
-                .put(txn_commit.clone(), true);
+            self.recently_decided_transactions.put(*txn_commit, true);
         }
         let before_len = self.transactions.len();
         self.transactions
@@ -168,7 +166,7 @@ impl<TYPES: NodeType> Mempool<TYPES> {
 
 impl<TYPES: NodeType> Default for Mempool<TYPES> {
     fn default() -> Self {
-        Self::new(1 * 1024 * 1024) // 1MB
+        Self::new(1024 * 1024) // 1MB
     }
 }
 
@@ -362,7 +360,7 @@ impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
     async fn wait_for_block(
         &mut self,
         block_view: TYPES::View,
-        receiver: Receiver<Arc<HotShotEvent<TYPES>>>,
+        _receiver: Receiver<Arc<HotShotEvent<TYPES>>>,
     ) -> Option<BuilderResponse<TYPES>> {
         // let now = Instant::now();
         // let (previous_block, metadata) = timeout(
@@ -469,6 +467,7 @@ impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
         Some(PayloadWithMetadata { payload, metadata })
     }
 
+    #[allow(dead_code)]
     async fn wait_for_previous_block(
         &mut self,
         parent_view: TYPES::View,

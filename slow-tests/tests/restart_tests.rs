@@ -399,7 +399,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         .boxed()
     }
 
-    async fn event_stream(&self) -> Option<BoxStream<'_, Event<SeqTypes>>> {
+    async fn event_stream(&self) -> Option<BoxStream<'_, Arc<Event<SeqTypes>>>> {
         if let Some(ctx) = &self.context {
             Some(ctx.event_stream().await.boxed())
         } else {
@@ -465,7 +465,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         // (getting Decide events) and participating (able to propose).
         let mut events = context.event_stream().await;
         while let Some(event) = events.next().await {
-            let EventType::Decide { leaf_chain, .. } = event.event else {
+            let EventType::Decide { leaf_chain, .. } = event.event.clone() else {
                 continue;
             };
 
@@ -506,7 +506,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         let mut state_write = self.reference_state.write().await;
 
         while let Some(event) = events.next().await {
-            let EventType::Decide { leaf_chain, .. } = event.event else {
+            let EventType::Decide { leaf_chain, .. } = event.event.clone() else {
                 continue;
             };
 
@@ -591,7 +591,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             while let Some(event) = events.next().await {
                 let EventType::Decide {
                     committing_qc: qc, ..
-                } = event.event
+                } = event.event.clone()
                 else {
                     continue;
                 };
@@ -1008,7 +1008,7 @@ impl TestNetwork {
                     .next()
                     .await
                     .expect("event stream terminated unexpectedly");
-                let EventType::Decide { leaf_chain, .. } = event.event else {
+                let EventType::Decide { leaf_chain, .. } = event.event.clone() else {
                     continue;
                 };
                 tracing::info!(?leaf_chain, "got decide, chain is progressing");
@@ -1079,7 +1079,7 @@ impl TestNetwork {
                             .next()
                             .await
                             .expect("event stream terminated unexpectedly");
-                        let EventType::Decide { leaf_chain, .. } = event.event else {
+                        let EventType::Decide { leaf_chain, .. } = event.event.clone() else {
                             continue;
                         };
                         tracing::info!(?leaf_chain, "got decide, chain is progressing");

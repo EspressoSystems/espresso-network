@@ -36,10 +36,12 @@ pub struct ReconstructTaskState<TYPES: NodeType> {
     pub public_key: TYPES::SignatureKey,
     pub calc_lock: Arc<RwLock<HashMap<TYPES::View, mpsc::Sender<()>>>>,
     pub proposals: BTreeMap<TYPES::View, QuorumProposal2<TYPES>>,
+    #[allow(clippy::type_complexity)]
     pub vid_shares:
         Arc<RwLock<BTreeMap<(TYPES::View, TYPES::Epoch), Vec<VidDisperseShare2<TYPES>>>>>,
 }
 
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 async fn try_reconstruct_block<TYPES: NodeType>(
     calc_lock: Arc<RwLock<HashMap<TYPES::View, mpsc::Sender<()>>>>,
     consensus: OuterConsensus<TYPES>,
@@ -72,10 +74,7 @@ async fn try_reconstruct_block<TYPES: NodeType>(
 
         let (common, vid_commitment) = {
             let first_share = shares.first()?;
-            (
-                first_share.common.clone(),
-                first_share.payload_commitment.clone(),
-            )
+            (first_share.common.clone(), first_share.payload_commitment)
         };
 
         let now = Instant::now();

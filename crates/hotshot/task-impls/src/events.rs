@@ -434,10 +434,10 @@ impl<TYPES: NodeType> Display for HotShotEvent<TYPES> {
                 write!(f, "StateValidated(view_number={:?})", view)
             },
             HotShotEvent::BlockReady(_, _, view) => write!(f, "BlockReady(view_number={:?})", view),
-            HotShotEvent::BlockSend(payload, view) => {
+            HotShotEvent::BlockSend(_payload, view) => {
                 write!(f, "BlockSend(view_number={:?})", view)
             },
-            HotShotEvent::BlockDirectlyRecv(payload, view) => {
+            HotShotEvent::BlockDirectlyRecv(_payload, view) => {
                 write!(f, "BlockDirectlyRecv(view_number={:?})", view)
             },
             HotShotEvent::Shutdown => write!(f, "Shutdown"),
