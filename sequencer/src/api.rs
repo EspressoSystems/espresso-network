@@ -1398,8 +1398,18 @@ pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
             } else if (height + node_state.node_id).is_multiple_of(30) {
                 let Ok(finalized_hotshot_height) = node_state.finalized_hotshot_height().await
                 else {
+                    // if we can't get the finalized hotshot height, there's nothing to do
                     return Ok(());
                 };
+
+                // as soon as we know the finalized height,
+                // we can garbage collect anything that we know we won't need
+                if let Err(err) = self
+                    .garbage_collect(std::cmp::min(height, finalized_hotshot_height))
+                    .await
+                {
+                    tracing::debug!("Failed to garbage collect reward merkle tree: {err}");
+                }
 
                 // check to see whether we have proofs at that height already stored
                 if !self.proof_exists(finalized_hotshot_height).await {
@@ -1433,8 +1443,6 @@ pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
                     let Ok(_) = self.persist_proofs(finalized_hotshot_height, iter).await else {
                         return Ok(());
                     };
-
-                    let _ = self.garbage_collect(finalized_hotshot_height).await;
 
                     // tree is dropped here
                 }
@@ -1524,6 +1532,7 @@ pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
 
     fn proof_exists(&self, height: u64) -> impl Send + Future<Output = bool>;
 
+    /// garbage collects merkle tree data for blocks strictly older than `height`
     fn garbage_collect(&self, height: u64) -> impl Send + Future<Output = anyhow::Result<()>>;
 }
 
