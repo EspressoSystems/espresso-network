@@ -69,8 +69,11 @@ pub struct Header {
     pub(crate) reward_merkle_tree_root: RewardMerkleCommitmentV2,
     pub(crate) total_reward_distributed: RewardAmount,
     pub(crate) next_stake_table_hash: Option<StakeTableHash>,
+    /// leader counts for the current epoch, indexed by validator position
+    /// in the stake table. Fixed to [`MAX_VALIDATORS`] as the active validator
+    /// set is capped at 100 validators.
     #[serde(with = "leader_counts_serde")]
-    pub(crate) leader_counts: [u16; 100],
+    pub(crate) leader_counts: LeaderCounts,
 }
 
 impl Committable for Header {
