@@ -548,57 +548,61 @@
 <a href=#548 id=548 data-nosnippet>548</a>        <span class="self">self</span>.inner.vid_share(id).<span class="kw">await
 <a href=#549 id=549 data-nosnippet>549</a>    </span>}
 <a href=#550 id=550 data-nosnippet>550</a>
-<a href=#551 id=551 data-nosnippet>551</a>    <span class="kw">async fn </span>sync_status(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; QueryResult&lt;SyncStatusQueryData&gt; {
-<a href=#552 id=552 data-nosnippet>552</a>        <span class="self">self</span>.maybe_fail_read(FailableAction::Any).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#553 id=553 data-nosnippet>553</a>        <span class="self">self</span>.inner.sync_status().<span class="kw">await
-<a href=#554 id=554 data-nosnippet>554</a>    </span>}
-<a href=#555 id=555 data-nosnippet>555</a>
-<a href=#556 id=556 data-nosnippet>556</a>    <span class="kw">async fn </span>get_header_window(
-<a href=#557 id=557 data-nosnippet>557</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-<a href=#558 id=558 data-nosnippet>558</a>        start: <span class="kw">impl </span>Into&lt;WindowStart&lt;Types&gt;&gt; + Send + Sync,
-<a href=#559 id=559 data-nosnippet>559</a>        end: u64,
-<a href=#560 id=560 data-nosnippet>560</a>        limit: usize,
-<a href=#561 id=561 data-nosnippet>561</a>    ) -&gt; QueryResult&lt;TimeWindowQueryData&lt;Header&lt;Types&gt;&gt;&gt; {
-<a href=#562 id=562 data-nosnippet>562</a>        <span class="self">self</span>.maybe_fail_read(FailableAction::Any).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#563 id=563 data-nosnippet>563</a>        <span class="self">self</span>.inner.get_header_window(start, end, limit).<span class="kw">await
-<a href=#564 id=564 data-nosnippet>564</a>    </span>}
-<a href=#565 id=565 data-nosnippet>565</a>
-<a href=#566 id=566 data-nosnippet>566</a>    <span class="kw">async fn </span>latest_qc_chain(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; QueryResult&lt;<span class="prelude-ty">Option</span>&lt;[CertificatePair&lt;Types&gt;; <span class="number">2</span>]&gt;&gt; {
-<a href=#567 id=567 data-nosnippet>567</a>        <span class="self">self</span>.maybe_fail_read(FailableAction::Any).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#568 id=568 data-nosnippet>568</a>        <span class="self">self</span>.inner.latest_qc_chain().<span class="kw">await
-<a href=#569 id=569 data-nosnippet>569</a>    </span>}
-<a href=#570 id=570 data-nosnippet>570</a>}
-<a href=#571 id=571 data-nosnippet>571</a>
-<a href=#572 id=572 data-nosnippet>572</a><span class="kw">impl</span>&lt;Types, T&gt; AggregatesStorage&lt;Types&gt; <span class="kw">for </span>Transaction&lt;T&gt;
-<a href=#573 id=573 data-nosnippet>573</a><span class="kw">where
-<a href=#574 id=574 data-nosnippet>574</a>    </span>Types: NodeType,
-<a href=#575 id=575 data-nosnippet>575</a>    Header&lt;Types&gt;: QueryableHeader&lt;Types&gt;,
-<a href=#576 id=576 data-nosnippet>576</a>    T: AggregatesStorage&lt;Types&gt; + Send + Sync,
-<a href=#577 id=577 data-nosnippet>577</a>{
-<a href=#578 id=578 data-nosnippet>578</a>    <span class="kw">async fn </span>aggregates_height(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; anyhow::Result&lt;usize&gt; {
-<a href=#579 id=579 data-nosnippet>579</a>        <span class="self">self</span>.maybe_fail_read(FailableAction::Any).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#580 id=580 data-nosnippet>580</a>        <span class="self">self</span>.inner.aggregates_height().<span class="kw">await
-<a href=#581 id=581 data-nosnippet>581</a>    </span>}
-<a href=#582 id=582 data-nosnippet>582</a>
-<a href=#583 id=583 data-nosnippet>583</a>    <span class="kw">async fn </span>load_prev_aggregate(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; anyhow::Result&lt;<span class="prelude-ty">Option</span>&lt;Aggregate&lt;Types&gt;&gt;&gt; {
-<a href=#584 id=584 data-nosnippet>584</a>        <span class="self">self</span>.maybe_fail_read(FailableAction::Any).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#585 id=585 data-nosnippet>585</a>        <span class="self">self</span>.inner.load_prev_aggregate().<span class="kw">await
-<a href=#586 id=586 data-nosnippet>586</a>    </span>}
-<a href=#587 id=587 data-nosnippet>587</a>}
-<a href=#588 id=588 data-nosnippet>588</a>
-<a href=#589 id=589 data-nosnippet>589</a><span class="kw">impl</span>&lt;T, Types&gt; UpdateAggregatesStorage&lt;Types&gt; <span class="kw">for </span>Transaction&lt;T&gt;
-<a href=#590 id=590 data-nosnippet>590</a><span class="kw">where
-<a href=#591 id=591 data-nosnippet>591</a>    </span>Types: NodeType,
-<a href=#592 id=592 data-nosnippet>592</a>    Header&lt;Types&gt;: QueryableHeader&lt;Types&gt;,
-<a href=#593 id=593 data-nosnippet>593</a>    T: UpdateAggregatesStorage&lt;Types&gt; + Send + Sync,
-<a href=#594 id=594 data-nosnippet>594</a>{
-<a href=#595 id=595 data-nosnippet>595</a>    <span class="kw">async fn </span>update_aggregates(
-<a href=#596 id=596 data-nosnippet>596</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-<a href=#597 id=597 data-nosnippet>597</a>        prev: Aggregate&lt;Types&gt;,
-<a href=#598 id=598 data-nosnippet>598</a>        blocks: <span class="kw-2">&amp;</span>[PayloadMetadata&lt;Types&gt;],
-<a href=#599 id=599 data-nosnippet>599</a>    ) -&gt; anyhow::Result&lt;Aggregate&lt;Types&gt;&gt; {
-<a href=#600 id=600 data-nosnippet>600</a>        <span class="self">self</span>.maybe_fail_write(FailableAction::Any).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#601 id=601 data-nosnippet>601</a>        <span class="self">self</span>.inner.update_aggregates(prev, blocks).<span class="kw">await
-<a href=#602 id=602 data-nosnippet>602</a>    </span>}
-<a href=#603 id=603 data-nosnippet>603</a>}
+<a href=#551 id=551 data-nosnippet>551</a>    <span class="kw">async fn </span>sync_status_for_range(
+<a href=#552 id=552 data-nosnippet>552</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+<a href=#553 id=553 data-nosnippet>553</a>        start: usize,
+<a href=#554 id=554 data-nosnippet>554</a>        end: usize,
+<a href=#555 id=555 data-nosnippet>555</a>    ) -&gt; QueryResult&lt;SyncStatusQueryData&gt; {
+<a href=#556 id=556 data-nosnippet>556</a>        <span class="self">self</span>.maybe_fail_read(FailableAction::Any).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#557 id=557 data-nosnippet>557</a>        <span class="self">self</span>.inner.sync_status_for_range(start, end).<span class="kw">await
+<a href=#558 id=558 data-nosnippet>558</a>    </span>}
+<a href=#559 id=559 data-nosnippet>559</a>
+<a href=#560 id=560 data-nosnippet>560</a>    <span class="kw">async fn </span>get_header_window(
+<a href=#561 id=561 data-nosnippet>561</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+<a href=#562 id=562 data-nosnippet>562</a>        start: <span class="kw">impl </span>Into&lt;WindowStart&lt;Types&gt;&gt; + Send + Sync,
+<a href=#563 id=563 data-nosnippet>563</a>        end: u64,
+<a href=#564 id=564 data-nosnippet>564</a>        limit: usize,
+<a href=#565 id=565 data-nosnippet>565</a>    ) -&gt; QueryResult&lt;TimeWindowQueryData&lt;Header&lt;Types&gt;&gt;&gt; {
+<a href=#566 id=566 data-nosnippet>566</a>        <span class="self">self</span>.maybe_fail_read(FailableAction::Any).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#567 id=567 data-nosnippet>567</a>        <span class="self">self</span>.inner.get_header_window(start, end, limit).<span class="kw">await
+<a href=#568 id=568 data-nosnippet>568</a>    </span>}
+<a href=#569 id=569 data-nosnippet>569</a>
+<a href=#570 id=570 data-nosnippet>570</a>    <span class="kw">async fn </span>latest_qc_chain(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; QueryResult&lt;<span class="prelude-ty">Option</span>&lt;[CertificatePair&lt;Types&gt;; <span class="number">2</span>]&gt;&gt; {
+<a href=#571 id=571 data-nosnippet>571</a>        <span class="self">self</span>.maybe_fail_read(FailableAction::Any).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#572 id=572 data-nosnippet>572</a>        <span class="self">self</span>.inner.latest_qc_chain().<span class="kw">await
+<a href=#573 id=573 data-nosnippet>573</a>    </span>}
+<a href=#574 id=574 data-nosnippet>574</a>}
+<a href=#575 id=575 data-nosnippet>575</a>
+<a href=#576 id=576 data-nosnippet>576</a><span class="kw">impl</span>&lt;Types, T&gt; AggregatesStorage&lt;Types&gt; <span class="kw">for </span>Transaction&lt;T&gt;
+<a href=#577 id=577 data-nosnippet>577</a><span class="kw">where
+<a href=#578 id=578 data-nosnippet>578</a>    </span>Types: NodeType,
+<a href=#579 id=579 data-nosnippet>579</a>    Header&lt;Types&gt;: QueryableHeader&lt;Types&gt;,
+<a href=#580 id=580 data-nosnippet>580</a>    T: AggregatesStorage&lt;Types&gt; + Send + Sync,
+<a href=#581 id=581 data-nosnippet>581</a>{
+<a href=#582 id=582 data-nosnippet>582</a>    <span class="kw">async fn </span>aggregates_height(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; anyhow::Result&lt;usize&gt; {
+<a href=#583 id=583 data-nosnippet>583</a>        <span class="self">self</span>.maybe_fail_read(FailableAction::Any).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#584 id=584 data-nosnippet>584</a>        <span class="self">self</span>.inner.aggregates_height().<span class="kw">await
+<a href=#585 id=585 data-nosnippet>585</a>    </span>}
+<a href=#586 id=586 data-nosnippet>586</a>
+<a href=#587 id=587 data-nosnippet>587</a>    <span class="kw">async fn </span>load_prev_aggregate(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; anyhow::Result&lt;<span class="prelude-ty">Option</span>&lt;Aggregate&lt;Types&gt;&gt;&gt; {
+<a href=#588 id=588 data-nosnippet>588</a>        <span class="self">self</span>.maybe_fail_read(FailableAction::Any).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#589 id=589 data-nosnippet>589</a>        <span class="self">self</span>.inner.load_prev_aggregate().<span class="kw">await
+<a href=#590 id=590 data-nosnippet>590</a>    </span>}
+<a href=#591 id=591 data-nosnippet>591</a>}
+<a href=#592 id=592 data-nosnippet>592</a>
+<a href=#593 id=593 data-nosnippet>593</a><span class="kw">impl</span>&lt;T, Types&gt; UpdateAggregatesStorage&lt;Types&gt; <span class="kw">for </span>Transaction&lt;T&gt;
+<a href=#594 id=594 data-nosnippet>594</a><span class="kw">where
+<a href=#595 id=595 data-nosnippet>595</a>    </span>Types: NodeType,
+<a href=#596 id=596 data-nosnippet>596</a>    Header&lt;Types&gt;: QueryableHeader&lt;Types&gt;,
+<a href=#597 id=597 data-nosnippet>597</a>    T: UpdateAggregatesStorage&lt;Types&gt; + Send + Sync,
+<a href=#598 id=598 data-nosnippet>598</a>{
+<a href=#599 id=599 data-nosnippet>599</a>    <span class="kw">async fn </span>update_aggregates(
+<a href=#600 id=600 data-nosnippet>600</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+<a href=#601 id=601 data-nosnippet>601</a>        prev: Aggregate&lt;Types&gt;,
+<a href=#602 id=602 data-nosnippet>602</a>        blocks: <span class="kw-2">&amp;</span>[PayloadMetadata&lt;Types&gt;],
+<a href=#603 id=603 data-nosnippet>603</a>    ) -&gt; anyhow::Result&lt;Aggregate&lt;Types&gt;&gt; {
+<a href=#604 id=604 data-nosnippet>604</a>        <span class="self">self</span>.maybe_fail_write(FailableAction::Any).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#605 id=605 data-nosnippet>605</a>        <span class="self">self</span>.inner.update_aggregates(prev, blocks).<span class="kw">await
+<a href=#606 id=606 data-nosnippet>606</a>    </span>}
+<a href=#607 id=607 data-nosnippet>607</a>}
 </code></pre></div></section></main></body></html>

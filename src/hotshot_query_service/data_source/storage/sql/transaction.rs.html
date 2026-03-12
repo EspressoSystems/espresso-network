@@ -449,7 +449,7 @@
 <a href=#449 id=449 data-nosnippet>449</a>    }
 <a href=#450 id=450 data-nosnippet>450</a>
 <a href=#451 id=451 data-nosnippet>451</a>    <span class="doccomment">/// Record the height of the latest pruned header.
-<a href=#452 id=452 data-nosnippet>452</a>    </span><span class="kw">pub</span>(<span class="kw">super</span>) <span class="kw">async fn </span>save_pruned_height(<span class="kw-2">&amp;mut </span><span class="self">self</span>, height: u64) -&gt; anyhow::Result&lt;()&gt; {
+<a href=#452 id=452 data-nosnippet>452</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">async fn </span>save_pruned_height(<span class="kw-2">&amp;mut </span><span class="self">self</span>, height: u64) -&gt; anyhow::Result&lt;()&gt; {
 <a href=#453 id=453 data-nosnippet>453</a>        <span class="comment">// id is set to 1 so that there is only one row in the table.
 <a href=#454 id=454 data-nosnippet>454</a>        // height is updated if the row already exists.
 <a href=#455 id=455 data-nosnippet>455</a>        </span><span class="self">self</span>.upsert(

@@ -807,116 +807,119 @@
 <a href=#807 id=807 data-nosnippet>807</a>            </span>.context(MissingSnafu)
 <a href=#808 id=808 data-nosnippet>808</a>    }
 <a href=#809 id=809 data-nosnippet>809</a>
-<a href=#810 id=810 data-nosnippet>810</a>    <span class="kw">async fn </span>sync_status(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; QueryResult&lt;SyncStatusQueryData&gt; {
-<a href=#811 id=811 data-nosnippet>811</a>        <span class="kw">let </span>height = <span class="self">self</span>.inner.leaf_storage.iter().len();
-<a href=#812 id=812 data-nosnippet>812</a>        <span class="prelude-val">Ok</span>(SyncStatusQueryData {
-<a href=#813 id=813 data-nosnippet>813</a>            leaves: <span class="self">self</span>.inner.leaf_storage.sync_status(height, |<span class="kw">_</span>| <span class="bool-val">false</span>),
-<a href=#814 id=814 data-nosnippet>814</a>            blocks: <span class="self">self</span>.inner.block_storage.sync_status(height, |<span class="kw">_</span>| <span class="bool-val">false</span>),
-<a href=#815 id=815 data-nosnippet>815</a>            vid_common: <span class="self">self</span>.inner.vid_storage.sync_status(height, |<span class="kw">_</span>| <span class="bool-val">false</span>),
-<a href=#816 id=816 data-nosnippet>816</a>            vid_shares: <span class="self">self
-<a href=#817 id=817 data-nosnippet>817</a>                </span>.inner
-<a href=#818 id=818 data-nosnippet>818</a>                .vid_storage
-<a href=#819 id=819 data-nosnippet>819</a>                <span class="comment">// Missing shares includes the completely missing VID entries, plus any entry which
-<a href=#820 id=820 data-nosnippet>820</a>                // is _not_ missing but which has a null share.
-<a href=#821 id=821 data-nosnippet>821</a>                </span>.sync_status(height, |(<span class="kw">_</span>, share)| share.is_none()),
-<a href=#822 id=822 data-nosnippet>822</a>            pruned_height: <span class="prelude-val">None</span>,
-<a href=#823 id=823 data-nosnippet>823</a>        })
-<a href=#824 id=824 data-nosnippet>824</a>    }
-<a href=#825 id=825 data-nosnippet>825</a>
-<a href=#826 id=826 data-nosnippet>826</a>    <span class="kw">async fn </span>get_header_window(
-<a href=#827 id=827 data-nosnippet>827</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-<a href=#828 id=828 data-nosnippet>828</a>        start: <span class="kw">impl </span>Into&lt;WindowStart&lt;Types&gt;&gt; + Send + Sync,
-<a href=#829 id=829 data-nosnippet>829</a>        end: u64,
-<a href=#830 id=830 data-nosnippet>830</a>        limit: usize,
-<a href=#831 id=831 data-nosnippet>831</a>    ) -&gt; QueryResult&lt;TimeWindowQueryData&lt;Header&lt;Types&gt;&gt;&gt; {
-<a href=#832 id=832 data-nosnippet>832</a>        <span class="kw">let </span>first_block = <span class="kw">match </span>start.into() {
-<a href=#833 id=833 data-nosnippet>833</a>            WindowStart::Height(h) =&gt; h,
-<a href=#834 id=834 data-nosnippet>834</a>            WindowStart::Hash(h) =&gt; <span class="self">self</span>.inner.get_header(h.into())<span class="question-mark">?</span>.block_number(),
-<a href=#835 id=835 data-nosnippet>835</a>            WindowStart::Time(t) =&gt; {
-<a href=#836 id=836 data-nosnippet>836</a>                <span class="comment">// Find the minimum timestamp which is at least `t`, and all the blocks with
-<a href=#837 id=837 data-nosnippet>837</a>                // that timestamp.
-<a href=#838 id=838 data-nosnippet>838</a>                </span><span class="kw">let </span>blocks = <span class="self">self
-<a href=#839 id=839 data-nosnippet>839</a>                    </span>.inner
-<a href=#840 id=840 data-nosnippet>840</a>                    .index_by_time
-<a href=#841 id=841 data-nosnippet>841</a>                    .range(t..)
-<a href=#842 id=842 data-nosnippet>842</a>                    .next()
-<a href=#843 id=843 data-nosnippet>843</a>                    .context(NotFoundSnafu)<span class="question-mark">?
-<a href=#844 id=844 data-nosnippet>844</a>                    </span>.<span class="number">1</span>;
-<a href=#845 id=845 data-nosnippet>845</a>                <span class="comment">// Multiple blocks can have the same timestamp (when truncated to seconds);
-<a href=#846 id=846 data-nosnippet>846</a>                // we want the first one. It is an invariant that any timestamp which has an
-<a href=#847 id=847 data-nosnippet>847</a>                // entry in `index_by_time` has a non-empty list associated with it, so this
-<a href=#848 id=848 data-nosnippet>848</a>                // indexing is safe.
-<a href=#849 id=849 data-nosnippet>849</a>                </span>blocks[<span class="number">0</span>]
-<a href=#850 id=850 data-nosnippet>850</a>            },
-<a href=#851 id=851 data-nosnippet>851</a>        } <span class="kw">as </span>usize;
-<a href=#852 id=852 data-nosnippet>852</a>
-<a href=#853 id=853 data-nosnippet>853</a>        <span class="kw">let </span><span class="kw-2">mut </span>res = TimeWindowQueryData::default();
-<a href=#854 id=854 data-nosnippet>854</a>
-<a href=#855 id=855 data-nosnippet>855</a>        <span class="comment">// Include the block just before the start of the window, if there is one.
-<a href=#856 id=856 data-nosnippet>856</a>        </span><span class="kw">if </span>first_block &gt; <span class="number">0 </span>{
-<a href=#857 id=857 data-nosnippet>857</a>            res.prev = <span class="prelude-val">Some</span>(<span class="self">self</span>.inner.get_header((first_block - <span class="number">1</span>).into())<span class="question-mark">?</span>);
-<a href=#858 id=858 data-nosnippet>858</a>        }
-<a href=#859 id=859 data-nosnippet>859</a>
-<a href=#860 id=860 data-nosnippet>860</a>        <span class="comment">// Add blocks to the window, starting from `first_block`, until we reach the end of
-<a href=#861 id=861 data-nosnippet>861</a>        // the requested time window.
-<a href=#862 id=862 data-nosnippet>862</a>        </span><span class="kw">for </span>block <span class="kw">in </span><span class="self">self</span>.inner.get_block_range(first_block..)<span class="question-mark">? </span>{
-<a href=#863 id=863 data-nosnippet>863</a>            <span class="kw">let </span>header = block<span class="question-mark">?</span>.header().clone();
-<a href=#864 id=864 data-nosnippet>864</a>            <span class="kw">if </span>header.timestamp() &gt;= end {
-<a href=#865 id=865 data-nosnippet>865</a>                res.next = <span class="prelude-val">Some</span>(header);
-<a href=#866 id=866 data-nosnippet>866</a>                <span class="kw">break</span>;
-<a href=#867 id=867 data-nosnippet>867</a>            }
-<a href=#868 id=868 data-nosnippet>868</a>            res.window.push(header);
-<a href=#869 id=869 data-nosnippet>869</a>            <span class="kw">if </span>res.window.len() &gt;= limit {
-<a href=#870 id=870 data-nosnippet>870</a>                <span class="kw">break</span>;
-<a href=#871 id=871 data-nosnippet>871</a>            }
-<a href=#872 id=872 data-nosnippet>872</a>        }
-<a href=#873 id=873 data-nosnippet>873</a>
-<a href=#874 id=874 data-nosnippet>874</a>        <span class="prelude-val">Ok</span>(res)
-<a href=#875 id=875 data-nosnippet>875</a>    }
+<a href=#810 id=810 data-nosnippet>810</a>    <span class="kw">async fn </span>sync_status_for_range(
+<a href=#811 id=811 data-nosnippet>811</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+<a href=#812 id=812 data-nosnippet>812</a>        start: usize,
+<a href=#813 id=813 data-nosnippet>813</a>        end: usize,
+<a href=#814 id=814 data-nosnippet>814</a>    ) -&gt; QueryResult&lt;SyncStatusQueryData&gt; {
+<a href=#815 id=815 data-nosnippet>815</a>        <span class="prelude-val">Ok</span>(SyncStatusQueryData {
+<a href=#816 id=816 data-nosnippet>816</a>            leaves: <span class="self">self</span>.inner.leaf_storage.sync_status(start, end, |<span class="kw">_</span>| <span class="bool-val">false</span>),
+<a href=#817 id=817 data-nosnippet>817</a>            blocks: <span class="self">self</span>.inner.block_storage.sync_status(start, end, |<span class="kw">_</span>| <span class="bool-val">false</span>),
+<a href=#818 id=818 data-nosnippet>818</a>            vid_common: <span class="self">self</span>.inner.vid_storage.sync_status(start, end, |<span class="kw">_</span>| <span class="bool-val">false</span>),
+<a href=#819 id=819 data-nosnippet>819</a>            vid_shares: <span class="self">self
+<a href=#820 id=820 data-nosnippet>820</a>                </span>.inner
+<a href=#821 id=821 data-nosnippet>821</a>                .vid_storage
+<a href=#822 id=822 data-nosnippet>822</a>                <span class="comment">// Missing shares includes the completely missing VID entries, plus any entry which
+<a href=#823 id=823 data-nosnippet>823</a>                // is _not_ missing but which has a null share.
+<a href=#824 id=824 data-nosnippet>824</a>                </span>.sync_status(start, end, |(<span class="kw">_</span>, share)| share.is_none()),
+<a href=#825 id=825 data-nosnippet>825</a>            pruned_height: <span class="prelude-val">None</span>,
+<a href=#826 id=826 data-nosnippet>826</a>        })
+<a href=#827 id=827 data-nosnippet>827</a>    }
+<a href=#828 id=828 data-nosnippet>828</a>
+<a href=#829 id=829 data-nosnippet>829</a>    <span class="kw">async fn </span>get_header_window(
+<a href=#830 id=830 data-nosnippet>830</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+<a href=#831 id=831 data-nosnippet>831</a>        start: <span class="kw">impl </span>Into&lt;WindowStart&lt;Types&gt;&gt; + Send + Sync,
+<a href=#832 id=832 data-nosnippet>832</a>        end: u64,
+<a href=#833 id=833 data-nosnippet>833</a>        limit: usize,
+<a href=#834 id=834 data-nosnippet>834</a>    ) -&gt; QueryResult&lt;TimeWindowQueryData&lt;Header&lt;Types&gt;&gt;&gt; {
+<a href=#835 id=835 data-nosnippet>835</a>        <span class="kw">let </span>first_block = <span class="kw">match </span>start.into() {
+<a href=#836 id=836 data-nosnippet>836</a>            WindowStart::Height(h) =&gt; h,
+<a href=#837 id=837 data-nosnippet>837</a>            WindowStart::Hash(h) =&gt; <span class="self">self</span>.inner.get_header(h.into())<span class="question-mark">?</span>.block_number(),
+<a href=#838 id=838 data-nosnippet>838</a>            WindowStart::Time(t) =&gt; {
+<a href=#839 id=839 data-nosnippet>839</a>                <span class="comment">// Find the minimum timestamp which is at least `t`, and all the blocks with
+<a href=#840 id=840 data-nosnippet>840</a>                // that timestamp.
+<a href=#841 id=841 data-nosnippet>841</a>                </span><span class="kw">let </span>blocks = <span class="self">self
+<a href=#842 id=842 data-nosnippet>842</a>                    </span>.inner
+<a href=#843 id=843 data-nosnippet>843</a>                    .index_by_time
+<a href=#844 id=844 data-nosnippet>844</a>                    .range(t..)
+<a href=#845 id=845 data-nosnippet>845</a>                    .next()
+<a href=#846 id=846 data-nosnippet>846</a>                    .context(NotFoundSnafu)<span class="question-mark">?
+<a href=#847 id=847 data-nosnippet>847</a>                    </span>.<span class="number">1</span>;
+<a href=#848 id=848 data-nosnippet>848</a>                <span class="comment">// Multiple blocks can have the same timestamp (when truncated to seconds);
+<a href=#849 id=849 data-nosnippet>849</a>                // we want the first one. It is an invariant that any timestamp which has an
+<a href=#850 id=850 data-nosnippet>850</a>                // entry in `index_by_time` has a non-empty list associated with it, so this
+<a href=#851 id=851 data-nosnippet>851</a>                // indexing is safe.
+<a href=#852 id=852 data-nosnippet>852</a>                </span>blocks[<span class="number">0</span>]
+<a href=#853 id=853 data-nosnippet>853</a>            },
+<a href=#854 id=854 data-nosnippet>854</a>        } <span class="kw">as </span>usize;
+<a href=#855 id=855 data-nosnippet>855</a>
+<a href=#856 id=856 data-nosnippet>856</a>        <span class="kw">let </span><span class="kw-2">mut </span>res = TimeWindowQueryData::default();
+<a href=#857 id=857 data-nosnippet>857</a>
+<a href=#858 id=858 data-nosnippet>858</a>        <span class="comment">// Include the block just before the start of the window, if there is one.
+<a href=#859 id=859 data-nosnippet>859</a>        </span><span class="kw">if </span>first_block &gt; <span class="number">0 </span>{
+<a href=#860 id=860 data-nosnippet>860</a>            res.prev = <span class="prelude-val">Some</span>(<span class="self">self</span>.inner.get_header((first_block - <span class="number">1</span>).into())<span class="question-mark">?</span>);
+<a href=#861 id=861 data-nosnippet>861</a>        }
+<a href=#862 id=862 data-nosnippet>862</a>
+<a href=#863 id=863 data-nosnippet>863</a>        <span class="comment">// Add blocks to the window, starting from `first_block`, until we reach the end of
+<a href=#864 id=864 data-nosnippet>864</a>        // the requested time window.
+<a href=#865 id=865 data-nosnippet>865</a>        </span><span class="kw">for </span>block <span class="kw">in </span><span class="self">self</span>.inner.get_block_range(first_block..)<span class="question-mark">? </span>{
+<a href=#866 id=866 data-nosnippet>866</a>            <span class="kw">let </span>header = block<span class="question-mark">?</span>.header().clone();
+<a href=#867 id=867 data-nosnippet>867</a>            <span class="kw">if </span>header.timestamp() &gt;= end {
+<a href=#868 id=868 data-nosnippet>868</a>                res.next = <span class="prelude-val">Some</span>(header);
+<a href=#869 id=869 data-nosnippet>869</a>                <span class="kw">break</span>;
+<a href=#870 id=870 data-nosnippet>870</a>            }
+<a href=#871 id=871 data-nosnippet>871</a>            res.window.push(header);
+<a href=#872 id=872 data-nosnippet>872</a>            <span class="kw">if </span>res.window.len() &gt;= limit {
+<a href=#873 id=873 data-nosnippet>873</a>                <span class="kw">break</span>;
+<a href=#874 id=874 data-nosnippet>874</a>            }
+<a href=#875 id=875 data-nosnippet>875</a>        }
 <a href=#876 id=876 data-nosnippet>876</a>
-<a href=#877 id=877 data-nosnippet>877</a>    <span class="kw">async fn </span>latest_qc_chain(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; QueryResult&lt;<span class="prelude-ty">Option</span>&lt;[CertificatePair&lt;Types&gt;; <span class="number">2</span>]&gt;&gt; {
-<a href=#878 id=878 data-nosnippet>878</a>        <span class="prelude-val">Ok</span>(<span class="self">self</span>.inner.latest_qc_chain.clone())
-<a href=#879 id=879 data-nosnippet>879</a>    }
-<a href=#880 id=880 data-nosnippet>880</a>}
-<a href=#881 id=881 data-nosnippet>881</a>
-<a href=#882 id=882 data-nosnippet>882</a><span class="kw">impl</span>&lt;Types, T: Revert + Send&gt; AggregatesStorage&lt;Types&gt; <span class="kw">for </span>Transaction&lt;T&gt;
-<a href=#883 id=883 data-nosnippet>883</a><span class="kw">where
-<a href=#884 id=884 data-nosnippet>884</a>    </span>Types: NodeType,
-<a href=#885 id=885 data-nosnippet>885</a>    Header&lt;Types&gt;: QueryableHeader&lt;Types&gt;,
-<a href=#886 id=886 data-nosnippet>886</a>{
-<a href=#887 id=887 data-nosnippet>887</a>    <span class="kw">async fn </span>aggregates_height(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; anyhow::Result&lt;usize&gt; {
-<a href=#888 id=888 data-nosnippet>888</a>        <span class="prelude-val">Ok</span>(<span class="number">0</span>)
-<a href=#889 id=889 data-nosnippet>889</a>    }
-<a href=#890 id=890 data-nosnippet>890</a>
-<a href=#891 id=891 data-nosnippet>891</a>    <span class="kw">async fn </span>load_prev_aggregate(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; anyhow::Result&lt;<span class="prelude-ty">Option</span>&lt;Aggregate&lt;Types&gt;&gt;&gt; {
-<a href=#892 id=892 data-nosnippet>892</a>        <span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>)
-<a href=#893 id=893 data-nosnippet>893</a>    }
-<a href=#894 id=894 data-nosnippet>894</a>}
-<a href=#895 id=895 data-nosnippet>895</a>
-<a href=#896 id=896 data-nosnippet>896</a><span class="kw">impl</span>&lt;Types, T: Revert + Send&gt; UpdateAggregatesStorage&lt;Types&gt; <span class="kw">for </span>Transaction&lt;T&gt;
-<a href=#897 id=897 data-nosnippet>897</a><span class="kw">where
-<a href=#898 id=898 data-nosnippet>898</a>    </span>Types: NodeType,
-<a href=#899 id=899 data-nosnippet>899</a>    Header&lt;Types&gt;: QueryableHeader&lt;Types&gt;,
-<a href=#900 id=900 data-nosnippet>900</a>{
-<a href=#901 id=901 data-nosnippet>901</a>    <span class="kw">async fn </span>update_aggregates(
-<a href=#902 id=902 data-nosnippet>902</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-<a href=#903 id=903 data-nosnippet>903</a>        _prev: Aggregate&lt;Types&gt;,
-<a href=#904 id=904 data-nosnippet>904</a>        _blocks: <span class="kw-2">&amp;</span>[PayloadMetadata&lt;Types&gt;],
-<a href=#905 id=905 data-nosnippet>905</a>    ) -&gt; anyhow::Result&lt;Aggregate&lt;Types&gt;&gt; {
-<a href=#906 id=906 data-nosnippet>906</a>        <span class="prelude-val">Ok</span>(Aggregate::default())
-<a href=#907 id=907 data-nosnippet>907</a>    }
-<a href=#908 id=908 data-nosnippet>908</a>}
-<a href=#909 id=909 data-nosnippet>909</a>
-<a href=#910 id=910 data-nosnippet>910</a><span class="kw">impl</span>&lt;T: Revert&gt; PrunedHeightStorage <span class="kw">for </span>Transaction&lt;T&gt; {}
-<a href=#911 id=911 data-nosnippet>911</a>
-<a href=#912 id=912 data-nosnippet>912</a><span class="kw">impl</span>&lt;Types&gt; HasMetrics <span class="kw">for </span>FileSystemStorage&lt;Types&gt;
-<a href=#913 id=913 data-nosnippet>913</a><span class="kw">where
-<a href=#914 id=914 data-nosnippet>914</a>    </span>Types: NodeType,
-<a href=#915 id=915 data-nosnippet>915</a>    Header&lt;Types&gt;: QueryableHeader&lt;Types&gt;,
-<a href=#916 id=916 data-nosnippet>916</a>    Payload&lt;Types&gt;: QueryablePayload&lt;Types&gt;,
-<a href=#917 id=917 data-nosnippet>917</a>{
-<a href=#918 id=918 data-nosnippet>918</a>    <span class="kw">fn </span>metrics(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>PrometheusMetrics {
-<a href=#919 id=919 data-nosnippet>919</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.metrics
-<a href=#920 id=920 data-nosnippet>920</a>    }
-<a href=#921 id=921 data-nosnippet>921</a>}
+<a href=#877 id=877 data-nosnippet>877</a>        <span class="prelude-val">Ok</span>(res)
+<a href=#878 id=878 data-nosnippet>878</a>    }
+<a href=#879 id=879 data-nosnippet>879</a>
+<a href=#880 id=880 data-nosnippet>880</a>    <span class="kw">async fn </span>latest_qc_chain(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; QueryResult&lt;<span class="prelude-ty">Option</span>&lt;[CertificatePair&lt;Types&gt;; <span class="number">2</span>]&gt;&gt; {
+<a href=#881 id=881 data-nosnippet>881</a>        <span class="prelude-val">Ok</span>(<span class="self">self</span>.inner.latest_qc_chain.clone())
+<a href=#882 id=882 data-nosnippet>882</a>    }
+<a href=#883 id=883 data-nosnippet>883</a>}
+<a href=#884 id=884 data-nosnippet>884</a>
+<a href=#885 id=885 data-nosnippet>885</a><span class="kw">impl</span>&lt;Types, T: Revert + Send&gt; AggregatesStorage&lt;Types&gt; <span class="kw">for </span>Transaction&lt;T&gt;
+<a href=#886 id=886 data-nosnippet>886</a><span class="kw">where
+<a href=#887 id=887 data-nosnippet>887</a>    </span>Types: NodeType,
+<a href=#888 id=888 data-nosnippet>888</a>    Header&lt;Types&gt;: QueryableHeader&lt;Types&gt;,
+<a href=#889 id=889 data-nosnippet>889</a>{
+<a href=#890 id=890 data-nosnippet>890</a>    <span class="kw">async fn </span>aggregates_height(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; anyhow::Result&lt;usize&gt; {
+<a href=#891 id=891 data-nosnippet>891</a>        <span class="prelude-val">Ok</span>(<span class="number">0</span>)
+<a href=#892 id=892 data-nosnippet>892</a>    }
+<a href=#893 id=893 data-nosnippet>893</a>
+<a href=#894 id=894 data-nosnippet>894</a>    <span class="kw">async fn </span>load_prev_aggregate(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; anyhow::Result&lt;<span class="prelude-ty">Option</span>&lt;Aggregate&lt;Types&gt;&gt;&gt; {
+<a href=#895 id=895 data-nosnippet>895</a>        <span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>)
+<a href=#896 id=896 data-nosnippet>896</a>    }
+<a href=#897 id=897 data-nosnippet>897</a>}
+<a href=#898 id=898 data-nosnippet>898</a>
+<a href=#899 id=899 data-nosnippet>899</a><span class="kw">impl</span>&lt;Types, T: Revert + Send&gt; UpdateAggregatesStorage&lt;Types&gt; <span class="kw">for </span>Transaction&lt;T&gt;
+<a href=#900 id=900 data-nosnippet>900</a><span class="kw">where
+<a href=#901 id=901 data-nosnippet>901</a>    </span>Types: NodeType,
+<a href=#902 id=902 data-nosnippet>902</a>    Header&lt;Types&gt;: QueryableHeader&lt;Types&gt;,
+<a href=#903 id=903 data-nosnippet>903</a>{
+<a href=#904 id=904 data-nosnippet>904</a>    <span class="kw">async fn </span>update_aggregates(
+<a href=#905 id=905 data-nosnippet>905</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+<a href=#906 id=906 data-nosnippet>906</a>        _prev: Aggregate&lt;Types&gt;,
+<a href=#907 id=907 data-nosnippet>907</a>        _blocks: <span class="kw-2">&amp;</span>[PayloadMetadata&lt;Types&gt;],
+<a href=#908 id=908 data-nosnippet>908</a>    ) -&gt; anyhow::Result&lt;Aggregate&lt;Types&gt;&gt; {
+<a href=#909 id=909 data-nosnippet>909</a>        <span class="prelude-val">Ok</span>(Aggregate::default())
+<a href=#910 id=910 data-nosnippet>910</a>    }
+<a href=#911 id=911 data-nosnippet>911</a>}
+<a href=#912 id=912 data-nosnippet>912</a>
+<a href=#913 id=913 data-nosnippet>913</a><span class="kw">impl</span>&lt;T: Revert&gt; PrunedHeightStorage <span class="kw">for </span>Transaction&lt;T&gt; {}
+<a href=#914 id=914 data-nosnippet>914</a>
+<a href=#915 id=915 data-nosnippet>915</a><span class="kw">impl</span>&lt;Types&gt; HasMetrics <span class="kw">for </span>FileSystemStorage&lt;Types&gt;
+<a href=#916 id=916 data-nosnippet>916</a><span class="kw">where
+<a href=#917 id=917 data-nosnippet>917</a>    </span>Types: NodeType,
+<a href=#918 id=918 data-nosnippet>918</a>    Header&lt;Types&gt;: QueryableHeader&lt;Types&gt;,
+<a href=#919 id=919 data-nosnippet>919</a>    Payload&lt;Types&gt;: QueryablePayload&lt;Types&gt;,
+<a href=#920 id=920 data-nosnippet>920</a>{
+<a href=#921 id=921 data-nosnippet>921</a>    <span class="kw">fn </span>metrics(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>PrometheusMetrics {
+<a href=#922 id=922 data-nosnippet>922</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.metrics
+<a href=#923 id=923 data-nosnippet>923</a>    }
+<a href=#924 id=924 data-nosnippet>924</a>}
 </code></pre></div></section></main></body></html>

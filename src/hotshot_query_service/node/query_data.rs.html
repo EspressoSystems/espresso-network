@@ -71,59 +71,79 @@
 <a href=#71 id=71 data-nosnippet>71</a>    <span class="kw">pub fn </span>is_fully_synced(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
 <a href=#72 id=72 data-nosnippet>72</a>        <span class="self">self</span>.missing == <span class="number">0
 <a href=#73 id=73 data-nosnippet>73</a>    </span>}
-<a href=#74 id=74 data-nosnippet>74</a>}
-<a href=#75 id=75 data-nosnippet>75</a>
-<a href=#76 id=76 data-nosnippet>76</a><span class="doccomment">/// [`SyncStatus`] for the entire database.
-<a href=#77 id=77 data-nosnippet>77</a></span><span class="attr">#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
-<a href=#78 id=78 data-nosnippet>78</a></span><span class="kw">pub struct </span>SyncStatusQueryData {
-<a href=#79 id=79 data-nosnippet>79</a>    <span class="doccomment">/// Summary of the [`SyncStatus`] of all blocks.
-<a href=#80 id=80 data-nosnippet>80</a>    </span><span class="kw">pub </span>blocks: ResourceSyncStatus,
-<a href=#81 id=81 data-nosnippet>81</a>    <span class="doccomment">/// Summary of the [`SyncStatus`] of all leaves.
-<a href=#82 id=82 data-nosnippet>82</a>    </span><span class="kw">pub </span>leaves: ResourceSyncStatus,
-<a href=#83 id=83 data-nosnippet>83</a>    <span class="doccomment">/// Summary of the [`SyncStatus`] of all VID common objects.
-<a href=#84 id=84 data-nosnippet>84</a>    </span><span class="kw">pub </span>vid_common: ResourceSyncStatus,
-<a href=#85 id=85 data-nosnippet>85</a>    <span class="doccomment">/// Summary of the [`SyncStatus`] of all VID shares.
-<a href=#86 id=86 data-nosnippet>86</a>    </span><span class="kw">pub </span>vid_shares: ResourceSyncStatus,
-<a href=#87 id=87 data-nosnippet>87</a>
-<a href=#88 id=88 data-nosnippet>88</a>    <span class="doccomment">/// The height of the last pruned object.
-<a href=#89 id=89 data-nosnippet>89</a>    ///
-<a href=#90 id=90 data-nosnippet>90</a>    /// Objects below this height are intentionally missing and will never be recovered (unless
-<a href=#91 id=91 data-nosnippet>91</a>    /// pruning settings are changed.)
-<a href=#92 id=92 data-nosnippet>92</a>    </span><span class="kw">pub </span>pruned_height: <span class="prelude-ty">Option</span>&lt;usize&gt;,
-<a href=#93 id=93 data-nosnippet>93</a>}
-<a href=#94 id=94 data-nosnippet>94</a>
-<a href=#95 id=95 data-nosnippet>95</a><span class="kw">impl </span>SyncStatusQueryData {
-<a href=#96 id=96 data-nosnippet>96</a>    <span class="kw">pub fn </span>is_fully_synced(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
-<a href=#97 id=97 data-nosnippet>97</a>        <span class="self">self</span>.blocks.is_fully_synced()
-<a href=#98 id=98 data-nosnippet>98</a>            &amp;&amp; <span class="self">self</span>.leaves.is_fully_synced()
-<a href=#99 id=99 data-nosnippet>99</a>            &amp;&amp; <span class="self">self</span>.vid_common.is_fully_synced()
-<a href=#100 id=100 data-nosnippet>100</a>            &amp;&amp; <span class="self">self</span>.vid_shares.is_fully_synced()
-<a href=#101 id=101 data-nosnippet>101</a>    }
-<a href=#102 id=102 data-nosnippet>102</a>}
-<a href=#103 id=103 data-nosnippet>103</a>
-<a href=#104 id=104 data-nosnippet>104</a><span class="doccomment">/// Response to a `/:resource/window` query.
-<a href=#105 id=105 data-nosnippet>105</a></span><span class="attr">#[derive(Clone, Debug, Derivative, PartialEq, Eq, Serialize, Deserialize)]
-<a href=#106 id=106 data-nosnippet>106</a>#[derivative(Default(bound = <span class="string">""</span>))]
-<a href=#107 id=107 data-nosnippet>107</a></span><span class="kw">pub struct </span>TimeWindowQueryData&lt;T&gt; {
-<a href=#108 id=108 data-nosnippet>108</a>    <span class="kw">pub </span>window: Vec&lt;T&gt;,
-<a href=#109 id=109 data-nosnippet>109</a>    <span class="kw">pub </span>prev: <span class="prelude-ty">Option</span>&lt;T&gt;,
-<a href=#110 id=110 data-nosnippet>110</a>    <span class="kw">pub </span>next: <span class="prelude-ty">Option</span>&lt;T&gt;,
-<a href=#111 id=111 data-nosnippet>111</a>}
-<a href=#112 id=112 data-nosnippet>112</a>
-<a href=#113 id=113 data-nosnippet>113</a><span class="kw">impl</span>&lt;T: HeightIndexed&gt; TimeWindowQueryData&lt;T&gt; {
-<a href=#114 id=114 data-nosnippet>114</a>    <span class="doccomment">/// The block height of the block that starts the window.
-<a href=#115 id=115 data-nosnippet>115</a>    ///
-<a href=#116 id=116 data-nosnippet>116</a>    /// If the window is empty, this is the height of the block that ends the window.
-<a href=#117 id=117 data-nosnippet>117</a>    </span><span class="kw">pub fn </span>from(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;u64&gt; {
-<a href=#118 id=118 data-nosnippet>118</a>        <span class="self">self</span>.window
-<a href=#119 id=119 data-nosnippet>119</a>            .first()
-<a href=#120 id=120 data-nosnippet>120</a>            .or(<span class="self">self</span>.next.as_ref())
-<a href=#121 id=121 data-nosnippet>121</a>            .map(|t| t.height())
-<a href=#122 id=122 data-nosnippet>122</a>    }
-<a href=#123 id=123 data-nosnippet>123</a>}
-<a href=#124 id=124 data-nosnippet>124</a>
-<a href=#125 id=125 data-nosnippet>125</a><span class="attr">#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
-<a href=#126 id=126 data-nosnippet>126</a></span><span class="kw">pub struct </span>Limits {
-<a href=#127 id=127 data-nosnippet>127</a>    <span class="kw">pub </span>window_limit: usize,
-<a href=#128 id=128 data-nosnippet>128</a>}
+<a href=#74 id=74 data-nosnippet>74</a>
+<a href=#75 id=75 data-nosnippet>75</a>    <span class="doccomment">/// Extend this [`ResourceSyncStatus`] to additionally cover the range covered by `other`.
+<a href=#76 id=76 data-nosnippet>76</a>    </span><span class="kw">pub fn </span>extend(<span class="kw-2">&amp;mut </span><span class="self">self</span>, other: <span class="self">Self</span>) {
+<a href=#77 id=77 data-nosnippet>77</a>        <span class="self">self</span>.missing += other.missing;
+<a href=#78 id=78 data-nosnippet>78</a>
+<a href=#79 id=79 data-nosnippet>79</a>        <span class="kw">let </span><span class="kw-2">mut </span>ranges = other.ranges.into_iter();
+<a href=#80 id=80 data-nosnippet>80</a>
+<a href=#81 id=81 data-nosnippet>81</a>        <span class="comment">// Check if the last range of `self` and the first range of `other` can be combined.
+<a href=#82 id=82 data-nosnippet>82</a>        </span><span class="kw">if let </span><span class="prelude-val">Some</span>(last) = <span class="self">self</span>.ranges.last_mut() {
+<a href=#83 id=83 data-nosnippet>83</a>            <span class="kw">if let </span><span class="prelude-val">Some</span>(next) = ranges.next() {
+<a href=#84 id=84 data-nosnippet>84</a>                <span class="kw">if </span>last.status == next.status &amp;&amp; last.end == next.start {
+<a href=#85 id=85 data-nosnippet>85</a>                    last.end = next.end;
+<a href=#86 id=86 data-nosnippet>86</a>                } <span class="kw">else </span>{
+<a href=#87 id=87 data-nosnippet>87</a>                    <span class="self">self</span>.ranges.push(next);
+<a href=#88 id=88 data-nosnippet>88</a>                }
+<a href=#89 id=89 data-nosnippet>89</a>            }
+<a href=#90 id=90 data-nosnippet>90</a>        }
+<a href=#91 id=91 data-nosnippet>91</a>
+<a href=#92 id=92 data-nosnippet>92</a>        <span class="self">self</span>.ranges.extend(ranges);
+<a href=#93 id=93 data-nosnippet>93</a>    }
+<a href=#94 id=94 data-nosnippet>94</a>}
+<a href=#95 id=95 data-nosnippet>95</a>
+<a href=#96 id=96 data-nosnippet>96</a><span class="doccomment">/// [`SyncStatus`] for the entire database.
+<a href=#97 id=97 data-nosnippet>97</a></span><span class="attr">#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
+<a href=#98 id=98 data-nosnippet>98</a></span><span class="kw">pub struct </span>SyncStatusQueryData {
+<a href=#99 id=99 data-nosnippet>99</a>    <span class="doccomment">/// Summary of the [`SyncStatus`] of all blocks.
+<a href=#100 id=100 data-nosnippet>100</a>    </span><span class="kw">pub </span>blocks: ResourceSyncStatus,
+<a href=#101 id=101 data-nosnippet>101</a>    <span class="doccomment">/// Summary of the [`SyncStatus`] of all leaves.
+<a href=#102 id=102 data-nosnippet>102</a>    </span><span class="kw">pub </span>leaves: ResourceSyncStatus,
+<a href=#103 id=103 data-nosnippet>103</a>    <span class="doccomment">/// Summary of the [`SyncStatus`] of all VID common objects.
+<a href=#104 id=104 data-nosnippet>104</a>    </span><span class="kw">pub </span>vid_common: ResourceSyncStatus,
+<a href=#105 id=105 data-nosnippet>105</a>    <span class="doccomment">/// Summary of the [`SyncStatus`] of all VID shares.
+<a href=#106 id=106 data-nosnippet>106</a>    </span><span class="kw">pub </span>vid_shares: ResourceSyncStatus,
+<a href=#107 id=107 data-nosnippet>107</a>
+<a href=#108 id=108 data-nosnippet>108</a>    <span class="doccomment">/// The height of the last pruned object.
+<a href=#109 id=109 data-nosnippet>109</a>    ///
+<a href=#110 id=110 data-nosnippet>110</a>    /// Objects below this height are intentionally missing and will never be recovered (unless
+<a href=#111 id=111 data-nosnippet>111</a>    /// pruning settings are changed.)
+<a href=#112 id=112 data-nosnippet>112</a>    </span><span class="kw">pub </span>pruned_height: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+<a href=#113 id=113 data-nosnippet>113</a>}
+<a href=#114 id=114 data-nosnippet>114</a>
+<a href=#115 id=115 data-nosnippet>115</a><span class="kw">impl </span>SyncStatusQueryData {
+<a href=#116 id=116 data-nosnippet>116</a>    <span class="kw">pub fn </span>is_fully_synced(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+<a href=#117 id=117 data-nosnippet>117</a>        <span class="self">self</span>.blocks.is_fully_synced()
+<a href=#118 id=118 data-nosnippet>118</a>            &amp;&amp; <span class="self">self</span>.leaves.is_fully_synced()
+<a href=#119 id=119 data-nosnippet>119</a>            &amp;&amp; <span class="self">self</span>.vid_common.is_fully_synced()
+<a href=#120 id=120 data-nosnippet>120</a>            &amp;&amp; <span class="self">self</span>.vid_shares.is_fully_synced()
+<a href=#121 id=121 data-nosnippet>121</a>    }
+<a href=#122 id=122 data-nosnippet>122</a>}
+<a href=#123 id=123 data-nosnippet>123</a>
+<a href=#124 id=124 data-nosnippet>124</a><span class="doccomment">/// Response to a `/:resource/window` query.
+<a href=#125 id=125 data-nosnippet>125</a></span><span class="attr">#[derive(Clone, Debug, Derivative, PartialEq, Eq, Serialize, Deserialize)]
+<a href=#126 id=126 data-nosnippet>126</a>#[derivative(Default(bound = <span class="string">""</span>))]
+<a href=#127 id=127 data-nosnippet>127</a></span><span class="kw">pub struct </span>TimeWindowQueryData&lt;T&gt; {
+<a href=#128 id=128 data-nosnippet>128</a>    <span class="kw">pub </span>window: Vec&lt;T&gt;,
+<a href=#129 id=129 data-nosnippet>129</a>    <span class="kw">pub </span>prev: <span class="prelude-ty">Option</span>&lt;T&gt;,
+<a href=#130 id=130 data-nosnippet>130</a>    <span class="kw">pub </span>next: <span class="prelude-ty">Option</span>&lt;T&gt;,
+<a href=#131 id=131 data-nosnippet>131</a>}
+<a href=#132 id=132 data-nosnippet>132</a>
+<a href=#133 id=133 data-nosnippet>133</a><span class="kw">impl</span>&lt;T: HeightIndexed&gt; TimeWindowQueryData&lt;T&gt; {
+<a href=#134 id=134 data-nosnippet>134</a>    <span class="doccomment">/// The block height of the block that starts the window.
+<a href=#135 id=135 data-nosnippet>135</a>    ///
+<a href=#136 id=136 data-nosnippet>136</a>    /// If the window is empty, this is the height of the block that ends the window.
+<a href=#137 id=137 data-nosnippet>137</a>    </span><span class="kw">pub fn </span>from(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;u64&gt; {
+<a href=#138 id=138 data-nosnippet>138</a>        <span class="self">self</span>.window
+<a href=#139 id=139 data-nosnippet>139</a>            .first()
+<a href=#140 id=140 data-nosnippet>140</a>            .or(<span class="self">self</span>.next.as_ref())
+<a href=#141 id=141 data-nosnippet>141</a>            .map(|t| t.height())
+<a href=#142 id=142 data-nosnippet>142</a>    }
+<a href=#143 id=143 data-nosnippet>143</a>}
+<a href=#144 id=144 data-nosnippet>144</a>
+<a href=#145 id=145 data-nosnippet>145</a><span class="attr">#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+<a href=#146 id=146 data-nosnippet>146</a></span><span class="kw">pub struct </span>Limits {
+<a href=#147 id=147 data-nosnippet>147</a>    <span class="kw">pub </span>window_limit: usize,
+<a href=#148 id=148 data-nosnippet>148</a>}
 </code></pre></div></section></main></body></html>
