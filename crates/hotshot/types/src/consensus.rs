@@ -495,13 +495,17 @@ impl<TYPES: NodeType> VoteParticipation<TYPES> {
         epoch: Option<TYPES::Epoch>,
     ) -> Result<()> {
         ensure!(
-            epoch > self.epoch,
-            info!(
-                "New epoch not greater than current epoch while updating vote participation \
-                 epoch, current epoch: {:?}, new epoch {:?}",
+            epoch >= self.epoch,
+            warn!(
+                "New epoch less than current epoch while updating vote participation epoch, \
+                 current epoch: {:?}, new epoch {:?}",
                 self.epoch, epoch
             )
         );
+        // Same epoch, do nothing
+        if epoch == self.epoch {
+            return Ok(());
+        }
 
         self.epoch = epoch;
         self.last_epoch_participation = self.current_epoch_participation.clone();
@@ -579,6 +583,10 @@ impl<TYPES: NodeType> VoteParticipation<TYPES> {
         } else {
             *num_votes as f64 / total_views as f64
         }
+    }
+
+    fn current_epoch(&self) -> Option<TYPES::Epoch> {
+        self.epoch
     }
 }
 
@@ -1037,6 +1045,11 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         &self,
     ) -> HashMap<<TYPES::SignatureKey as SignatureKey>::VerificationKeyType, f64> {
         self.vote_participation.previous_vote_participation()
+    }
+
+    /// Get the current vote participation epoch
+    pub fn current_vote_participation_epoch(&self) -> Option<TYPES::Epoch> {
+        self.vote_participation.current_epoch()
     }
 
     /// Get the parent Leaf Info from a given leaf and our public key.
