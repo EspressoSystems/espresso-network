@@ -11,9 +11,13 @@
 //! vectors. And for dispersal, each storage node gets some vectors and their
 //! Merkle proofs according to its weight.
 
-use std::{collections::HashMap, iter, ops::Range};
+use std::{
+    collections::{BTreeMap, HashMap},
+    iter,
+    ops::Range,
+};
 
-use ark_ff::PrimeField;
+use ark_ff::{batch_inversion, AdditiveGroup, Field, PrimeField};
 use ark_poly::{EvaluationDomain, Radix2EvaluationDomain};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::{end_timer, start_timer};
@@ -141,6 +145,56 @@ fn radix2_domain<F: PrimeField>(domain_size: usize) -> VidResult<Radix2Evaluatio
     Radix2EvaluationDomain::<F>::new(domain_size).ok_or_else(|| VidError::InvalidParam)
 }
 
+/// Compute E(ω^j) for each j ∈ received, where E is the erasure locator.
+/// Uses E(ω^j) = N·ω^{-j} / R'(ω^j) with R'(ω^j) = ∏_{i∈R,i≠j}(ω^j - ω^i).
+/// O(k²) where k = |received|.
+fn compute_e_evals_at_received<F: PrimeField>(
+    domain: &Radix2EvaluationDomain<F>,
+    received: &[usize],
+) -> Vec<F> {
+    let n_fft = domain.size();
+    let n_field = domain.size_as_field_element();
+
+    // For each j ∈ R, compute R'(ω^j) = ∏_{i∈R, i≠j}(ω^j - ω^i)
+    let mut r_prime_at_received: Vec<F> = received
+        .iter()
+        .map(|&j| {
+            let omega_j = domain.element(j);
+            received
+                .iter()
+                .filter(|&&i| i != j)
+                .map(|&i| omega_j - domain.element(i))
+                .product()
+        })
+        .collect();
+
+    // batch invert R'(ω^j)
+    batch_inversion(&mut r_prime_at_received);
+
+    // E(ω^j) = N · ω^{-j} / R'(ω^j)
+    received
+        .iter()
+        .zip(r_prime_at_received)
+        .map(|(&j, inv_r_prime)| {
+            let omega_neg_j = domain.element(if j == 0 { 0 } else { n_fft - j });
+            n_field * omega_neg_j * inv_r_prime
+        })
+        .collect()
+}
+
+/// Compute the formal derivative of a polynomial in coefficient form.
+/// `D(∑ aᵢxⁱ) = ∑ i·aᵢx^{i-1}`
+fn formal_derivative<F: Field>(coeffs: &[F]) -> Vec<F> {
+    if coeffs.len() <= 1 {
+        return vec![F::ZERO];
+    }
+    coeffs[1..]
+        .iter()
+        .enumerate()
+        .map(|(i, &c)| c * F::from((i + 1) as u64))
+        .collect()
+}
+
 /// Dummy struct for AVID-M scheme.
 pub struct AvidMScheme;
 
@@ -152,6 +206,25 @@ impl AvidMScheme {
 }
 
 impl AvidMScheme {
+    /// Helper function.
+    /// Transform the payload bytes into a list of fields elements.
+    /// This function also pads the bytes with a 1 in the end, following by many 0's
+    /// until the length of the output is a multiple of `param.recovery_threshold`.
+    /// Strip the `0x01` padding marker and trailing zeros from recovered field bytes.
+    /// Inverse of `pad_to_fields`.
+    fn unpad_recovered_bytes(fields: Vec<F>) -> VidResult<Vec<u8>> {
+        let mut bytes: Vec<u8> = field_to_bytes(fields).collect();
+        if let Some(pad_index) = bytes.iter().rposition(|&b| b != 0) {
+            if bytes[pad_index] == 1u8 {
+                bytes.truncate(pad_index);
+                return Ok(bytes);
+            }
+        }
+        Err(VidError::Argument(
+            "Malformed payload, cannot find the padding position".to_string(),
+        ))
+    }
+
     /// Helper function.
     /// Transform the payload bytes into a list of fields elements.
     /// This function also pads the bytes with a 1 in the end, following by many 0's
@@ -328,11 +401,14 @@ impl AvidMScheme {
         Ok(Ok(()))
     }
 
-    pub(crate) fn recover_fields(param: &AvidMParam, shares: &[AvidMShare]) -> VidResult<Vec<F>> {
-        let recovery_threshold: usize = param.recovery_threshold;
+    /// Collect and validate raw shares from AvidM shares, returning the number
+    /// of polynomials and a map from evaluation index to share data.
+    fn collect_raw_shares<'a>(
+        param: &AvidMParam,
+        shares: &'a [AvidMShare],
+    ) -> VidResult<(usize, BTreeMap<usize, &'a Vec<F>>)> {
+        let recovery_threshold = param.recovery_threshold;
 
-        // Each share's payload contains some evaluations from `num_polys`
-        // polynomials.
         let num_polys = shares
             .iter()
             .find(|s| !s.content.payload.is_empty())
@@ -341,7 +417,7 @@ impl AvidMScheme {
             .payload[0]
             .len();
 
-        let mut raw_shares = HashMap::new();
+        let mut raw_shares = BTreeMap::new();
         for share in shares {
             if share.content.range.len() != share.content.payload.len()
                 || share.content.range.end > param.total_weights
@@ -369,28 +445,95 @@ impl AvidMScheme {
             return Err(VidError::InsufficientShares);
         }
 
-        let domain = radix2_domain::<F>(param.total_weights)?;
+        Ok((num_polys, raw_shares))
+    }
 
-        // Lagrange interpolation
-        // step 1: find all evaluation points and their raw shares
-        let (x, raw_shares): (Vec<_>, Vec<_>) = raw_shares
-            .into_iter()
-            .map(|(i, p)| (domain.element(i), p))
-            .unzip();
-        // step 2: interpolate each polynomial
-        Ok((0..num_polys)
+    pub(crate) fn recover_fields(param: &AvidMParam, shares: &[AvidMShare]) -> VidResult<Vec<F>> {
+        let recovery_threshold: usize = param.recovery_threshold;
+        let (num_polys, raw_shares) = Self::collect_raw_shares(param, shares)?;
+
+        let domain = radix2_domain::<F>(param.total_weights)?;
+        let n_fft = domain.size();
+
+        // Determine received (R) and erased (Ω) index sets.
+        // Ω includes both missing shares within 0..total_weights and unused
+        // domain points total_weights..n_fft.
+        let received: Vec<usize> = raw_shares.keys().copied().collect();
+        let received_set: std::collections::HashSet<usize> = received.iter().copied().collect();
+        let erased: Vec<usize> = (0..n_fft).filter(|i| !received_set.contains(i)).collect();
+
+        // === One-time setup (shared across all polynomials) ===
+        // Directly compute E's evaluations at received points via the product
+        // formula, then IFFT to get E in coefficient form. This avoids building
+        // the received locator R(x) in coefficient form entirely.
+        let setup_timer = start_timer!(|| "Erasure locator setup");
+
+        // 1. Compute E's evaluations at all N domain points — O(k²)
+        //    E(ω^j) = 0 for j ∈ Ω (by definition)
+        //    E(ω^j) = N·ω^{-j}/R'(ω^j) for j ∈ R (from x^N-1 = E·R identity)
+        let e_at_received = compute_e_evals_at_received(&domain, &received);
+        let mut e_evals = vec![F::ZERO; n_fft];
+        for (idx, &j) in received.iter().enumerate() {
+            e_evals[j] = e_at_received[idx];
+        }
+
+        // 2. IFFT E_evals → E_coeffs — O(N log N)
+        let e_coeffs = domain.ifft(&e_evals);
+
+        // 3. E'(x) via formal derivative, then FFT — O(N log N)
+        // formal_derivative may return a short vec (e.g. [F::ZERO] for constant input),
+        // but ark_poly's FFT/IFFT zero-pads short inputs to domain size automatically.
+        let e_prime_coeffs = formal_derivative(&e_coeffs);
+        let e_prime_evals = domain.fft(&e_prime_coeffs);
+
+        // 4. Precompute 1/E'(ω^j) for j ∈ Ω via batch inversion
+        let mut inv_e_prime_vals: Vec<F> = erased.iter().map(|&j| e_prime_evals[j]).collect();
+        batch_inversion(&mut inv_e_prime_vals);
+        let inv_e_prime_map: HashMap<usize, F> =
+            erased.iter().copied().zip(inv_e_prime_vals).collect();
+
+        end_timer!(setup_timer);
+
+        // === Per-polynomial recovery (parallelized) ===
+        let recover_timer = start_timer!(|| "Per-polynomial FFT recovery");
+        let result: Vec<F> = (0..num_polys)
             .into_par_iter()
             .map(|poly_index| {
-                jf_utils::reed_solomon_code::reed_solomon_erasure_decode(
-                    x.iter().zip(raw_shares.iter().map(|p| p[poly_index])),
-                    recovery_threshold,
-                )
-                .map_err(|err| VidError::Internal(err.into()))
+                // 1. Build P(ω^j) = C(ω^j)·E(ω^j) for j∈R, 0 for j∈Ω
+                let mut p_evals = vec![F::ZERO; n_fft];
+                for (&j, &raw_share) in &raw_shares {
+                    p_evals[j] = raw_share[poly_index] * e_evals[j];
+                }
+
+                // 2. IFFT P → coefficient form
+                let p_coeffs = domain.ifft(&p_evals);
+
+                // 3. Formal derivative P'(x)
+                // See note above: formal_derivative output may be shorter than domain size;
+                // ark_poly's FFT handles this via zero-padding.
+                let p_prime_coeffs = formal_derivative(&p_coeffs);
+
+                // 4. FFT P' → evaluations
+                let p_prime_evals = domain.fft(&p_prime_coeffs);
+
+                // 5. Recover erased values: C(ω^j) = P'(ω^j) / E'(ω^j)
+                let mut c_evals = vec![F::ZERO; n_fft];
+                for (&j, raw_share) in &raw_shares {
+                    c_evals[j] = raw_share[poly_index];
+                }
+                for &j in &erased {
+                    c_evals[j] = p_prime_evals[j] * inv_e_prime_map[&j];
+                }
+
+                // 6. IFFT → take first k coefficients
+                let coeffs = domain.ifft(&c_evals);
+                coeffs[..recovery_threshold].to_vec()
             })
-            .collect::<Result<Vec<_>, _>>()?
-            .into_iter()
             .flatten()
-            .collect())
+            .collect();
+        end_timer!(recover_timer);
+
+        Ok(result)
     }
 }
 
@@ -438,18 +581,58 @@ impl VidScheme for AvidMScheme {
         _commit: &Self::Commit,
         shares: &[Self::Share],
     ) -> VidResult<Vec<u8>> {
-        let mut bytes: Vec<u8> = field_to_bytes(Self::recover_fields(param, shares)?).collect();
-        // Remove the trimming zeros and the last 1 to get the actual payload bytes.
-        // See `pad_to_fields`.
-        if let Some(pad_index) = bytes.iter().rposition(|&b| b != 0) {
-            if bytes[pad_index] == 1u8 {
-                bytes.truncate(pad_index);
-                return Ok(bytes);
-            }
-        }
-        Err(VidError::Argument(
-            "Malformed payload, cannot find the padding position".to_string(),
-        ))
+        Self::unpad_recovered_bytes(Self::recover_fields(param, shares)?)
+    }
+}
+
+impl AvidMScheme {
+    /// Recover payload fields using per-polynomial Lagrange interpolation (O(k²) per polynomial).
+    ///
+    /// This is the original recovery approach, kept for benchmarking comparison
+    /// against the FFT-based `recover_fields`.
+    #[doc(hidden)]
+    pub fn recover_fields_lagrange(param: &AvidMParam, shares: &[AvidMShare]) -> VidResult<Vec<F>> {
+        let recovery_threshold: usize = param.recovery_threshold;
+        let (num_polys, raw_shares) = Self::collect_raw_shares(param, shares)?;
+
+        let domain = radix2_domain::<F>(param.total_weights)?;
+
+        // Collect indices and share data
+        let (indices, share_data): (Vec<usize>, Vec<&Vec<F>>) = raw_shares.into_iter().unzip();
+
+        // Per-polynomial Lagrange interpolation
+        Ok((0..num_polys)
+            .into_par_iter()
+            .map(|poly_index| {
+                let evals: Vec<_> = indices
+                    .iter()
+                    .zip(share_data.iter())
+                    .map(|(&idx, &p)| (idx, p[poly_index]))
+                    .collect();
+                jf_utils::reed_solomon_code::reed_solomon_erasure_decode_rou(
+                    evals.iter().map(|(idx, val)| (*idx, *val)),
+                    recovery_threshold,
+                    &domain,
+                )
+                .map_err(|err| VidError::Internal(err.into()))
+            })
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .flatten()
+            .collect())
+    }
+
+    /// Recover payload using per-polynomial Lagrange interpolation.
+    ///
+    /// This is the original recovery approach, kept for benchmarking comparison
+    /// against the FFT-based `recover`.
+    #[doc(hidden)]
+    pub fn recover_lagrange(
+        param: &AvidMParam,
+        _commit: &AvidMCommit,
+        shares: &[AvidMShare],
+    ) -> VidResult<Vec<u8>> {
+        Self::unpad_recovered_bytes(Self::recover_fields_lagrange(param, shares)?)
     }
 }
 
@@ -528,6 +711,48 @@ pub mod tests {
                 let payload_recovered =
                     AvidMScheme::recover(&params, &commit, &shares[..cut_index]).unwrap();
                 assert_eq!(payload_recovered, payload);
+            }
+        }
+    }
+
+    #[test]
+    fn round_trip_lagrange() {
+        let params_list = [(2, 4), (3, 9), (5, 6), (15, 16)];
+        let payload_byte_lens = [1, 31, 32, 500];
+        let mut rng = jf_utils::test_rng();
+
+        for (recovery_threshold, num_storage_nodes) in params_list {
+            let weights: Vec<u32> = (0..num_storage_nodes)
+                .map(|_| rng.next_u32() % 5 + 1)
+                .collect();
+            let total_weights: u32 = weights.iter().sum();
+            let params = AvidMScheme::setup(recovery_threshold, total_weights as usize).unwrap();
+
+            for payload_byte_len in payload_byte_lens {
+                let payload = {
+                    let mut bytes_random = vec![0u8; payload_byte_len];
+                    rng.fill_bytes(&mut bytes_random);
+                    bytes_random
+                };
+
+                let (commit, mut shares) =
+                    AvidMScheme::disperse(&params, &weights, &payload).unwrap();
+
+                shares.shuffle(&mut rng);
+                let mut cumulated_weights = 0;
+                let mut cut_index = 0;
+                while cumulated_weights <= recovery_threshold {
+                    cumulated_weights += shares[cut_index].content.range.len();
+                    cut_index += 1;
+                }
+
+                // Both recovery paths should produce identical output
+                let fft_recovered =
+                    AvidMScheme::recover(&params, &commit, &shares[..cut_index]).unwrap();
+                let lagrange_recovered =
+                    AvidMScheme::recover_lagrange(&params, &commit, &shares[..cut_index]).unwrap();
+                assert_eq!(fft_recovered, payload);
+                assert_eq!(lagrange_recovered, payload);
             }
         }
     }
