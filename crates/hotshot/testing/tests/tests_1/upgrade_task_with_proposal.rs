@@ -34,7 +34,6 @@ use hotshot_types::{
     simple_vote::UpgradeProposalData,
     traits::{
         election::Membership,
-        node_implementation::ConsensusTime,
         ValidatedState,
     },
     utils::BuilderCommitment,
@@ -61,7 +60,7 @@ async fn test_upgrade_task_with_proposal() {
     let old_version = version(0,1);
     let new_version = version(0,2);
 
-    let upgrade_data: UpgradeProposalData<TestTypes> = UpgradeProposalData {
+    let upgrade_data: UpgradeProposalData = UpgradeProposalData {
         old_version,
         new_version,
         decide_by: ViewNumber::new(4),

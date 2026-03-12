@@ -31,7 +31,6 @@ use hotshot_query_service::{
 use hotshot_types::{
     data::{EpochNumber, QuorumProposalWrapper, ViewNumber},
     message::Proposal,
-    traits::node_implementation::ConsensusTime,
     utils::epoch_from_block_number,
     vote::HasViewNumber,
 };
@@ -87,6 +86,9 @@ impl SequencerDataSource for DataSource {
         }
         if let Some(delay) = chunk_fetch_delay {
             builder = builder.with_chunk_fetch_delay(delay);
+        }
+        if let Some(chunk_size) = opt.sync_status_chunk_size {
+            builder = builder.with_sync_status_chunk_size(chunk_size);
         }
 
         if let Some(batch_size) = opt.types_migration_batch_size {
