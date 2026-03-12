@@ -3584,11 +3584,20 @@ mod test {
         assert_ne!(chain_config_genesis, chain_config_upgrade);
         tracing::debug!(?chain_config_genesis, ?chain_config_upgrade);
 
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
-            .api_config(Options::from(options::Http {
-                port,
-                max_connections: None,
-            }))
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(port),
+            ))
+            .persistences(persistence)
             .catchups(std::array::from_fn(|_| {
                 StatePeers::<SequencerApiVersion>::from_urls(
                     vec![format!("http://localhost:{port}").parse().unwrap()],
