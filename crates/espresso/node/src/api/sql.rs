@@ -786,46 +786,78 @@ impl super::data_source::DatabaseMetadataSource for SqlStorage {
             .context("opening transaction to fetch table sizes")?;
 
         #[cfg(not(feature = "embedded-db"))]
-        let query = r#"
-            SELECT
-                schemaname || '.' || tablename as table_name,
-                n_live_tup as row_count,
-                pg_total_relation_size(schemaname || '.' || tablename) as total_size_bytes
-            FROM pg_stat_user_tables
-            ORDER BY pg_total_relation_size(schemaname || '.' || tablename) DESC
-        "#;
+        {
+            let query = r#"
+                SELECT
+                    schemaname || '.' || tablename as table_name,
+                    n_live_tup as row_count,
+                    pg_total_relation_size(schemaname || '.' || tablename) as total_size_bytes
+                FROM pg_stat_user_tables
+                ORDER BY pg_total_relation_size(schemaname || '.' || tablename) DESC
+            "#;
 
-        #[cfg(feature = "embedded-db")]
-        let query = r#"
-            SELECT
-                name as table_name,
-                0 as row_count,
-                NULL as total_size_bytes
-            FROM sqlite_master
-            WHERE type = 'table'
-            AND name NOT LIKE 'sqlite_%'
-            ORDER BY name
-        "#;
+            let rows = sqlx::query(query)
+                .fetch_all(tx.as_mut())
+                .await
+                .context("failed to query table sizes")?;
 
-        let rows = sqlx::query(query)
-            .fetch_all(tx.as_mut())
-            .await
-            .context("failed to query table sizes")?;
+            let mut table_sizes = Vec::new();
+            for row in rows {
+                let table_name: String = row.try_get("table_name")?;
+                let row_count: i64 = row.try_get("row_count").unwrap_or(0);
+                let total_size_bytes: Option<i64> = row.try_get("total_size_bytes").ok();
 
-        let mut table_sizes = Vec::new();
-        for row in rows {
-            let table_name: String = row.try_get("table_name")?;
-            let row_count: i64 = row.try_get("row_count").unwrap_or(0);
-            let total_size_bytes: Option<i64> = row.try_get("total_size_bytes").ok();
+                table_sizes.push(super::data_source::TableSize {
+                    table_name,
+                    row_count,
+                    total_size_bytes,
+                });
+            }
 
-            table_sizes.push(super::data_source::TableSize {
-                table_name,
-                row_count,
-                total_size_bytes,
-            });
+            Ok(table_sizes)
         }
 
-        Ok(table_sizes)
+        #[cfg(feature = "embedded-db")]
+        {
+            // First, get all table names from sqlite_master
+            let table_names_query = r#"
+                SELECT name
+                FROM sqlite_master
+                WHERE type = 'table'
+                AND name NOT LIKE 'sqlite_%'
+                ORDER BY name
+            "#;
+
+            let table_rows = sqlx::query(table_names_query)
+                .fetch_all(tx.as_mut())
+                .await
+                .context("failed to query table names")?;
+
+            let mut table_sizes = Vec::new();
+
+            // For each table, get the row count
+            for row in table_rows {
+                let table_name: String = row.try_get("name")?;
+
+                // Run SELECT COUNT(*) for this specific table
+                // Use format! here since we need to dynamically insert the table name
+                let count_query = format!("SELECT COUNT(*) as count FROM \"{}\"", table_name);
+                let count_row = sqlx::query(&count_query)
+                    .fetch_one(tx.as_mut())
+                    .await
+                    .context(format!("failed to query row count for table {}", table_name))?;
+
+                let row_count: i64 = count_row.try_get("count").unwrap_or(0);
+
+                table_sizes.push(super::data_source::TableSize {
+                    table_name,
+                    row_count,
+                    total_size_bytes: None,
+                });
+            }
+
+            Ok(table_sizes)
+        }
     }
 }
 
@@ -1908,5 +1940,70 @@ mod tests {
         storage.garbage_collect(3).await.unwrap();
         let err = storage.load_proof(2, account).await.unwrap_err();
         assert!(err.to_string().contains("Missing proof"), "{err:#}");
+
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_get_table_sizes() {
+        use super::super::data_source::DatabaseMetadataSource;
+
+        // Insert some test data to ensure tables have rows
+        let mut tx = storage.write().await.unwrap();
+
+        // Insert a test header
+        let reward_tree = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
+        insert_test_header(&mut tx, 1, &reward_tree).await;
+
+        tx.commit().await.unwrap();
+
+        // Call get_table_sizes and verify it doesn't error
+        let table_sizes = storage
+            .get_table_sizes()
+            .await
+            .expect("get_table_sizes should succeed");
+
+        // Verify we got some tables back
+        assert!(
+            !table_sizes.is_empty(),
+            "should have at least one table in the database"
+        );
+
+        // Verify the structure is correct
+        for table_size in &table_sizes {
+            assert!(
+                !table_size.table_name.is_empty(),
+                "table name should not be empty"
+            );
+            // Row count should be non-negative
+            assert!(
+                table_size.row_count >= 0,
+                "row count should be non-negative"
+            );
+        }
+
+        // Verify that the header table has at least one row (we inserted one)
+        let header_table = table_sizes
+            .iter()
+            .find(|t| t.table_name.contains("header"));
+
+        if let Some(header_table) = header_table {
+            assert!(
+                header_table.row_count >= 1,
+                "header table should have at least one row after insertion"
+            );
+        }
+
+        tracing::info!(
+            "get_table_sizes returned {} tables",
+            table_sizes.len()
+        );
+        for table_size in table_sizes {
+            tracing::info!(
+                "Table: {}, Rows: {}, Size: {:?}",
+                table_size.table_name,
+                table_size.row_count,
+                table_size.total_size_bytes
+            );
+        }
     }
 }
