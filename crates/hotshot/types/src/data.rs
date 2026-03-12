@@ -769,6 +769,25 @@ impl<TYPES: NodeType> VidDisperseShare<TYPES> {
         }
     }
 
+    /// Check if vid common is consistent with the commitment.
+    pub fn is_consistent(&self) -> bool {
+        match self {
+            Self::V0(share) => share.is_consistent(),
+            Self::V1(share) => share.is_consistent(),
+            Self::V2(share) => share.is_consistent(),
+        }
+    }
+
+    /// Verify share assuming common data is already verified consistent.
+    /// Caller MUST call `is_consistent()` first.
+    pub fn verify_with_verified_common(&self) -> bool {
+        match self {
+            Self::V0(share) => share.verify_with_verified_common(),
+            Self::V1(share) => share.verify_with_verified_common(),
+            Self::V2(share) => share.verify_with_verified_common(),
+        }
+    }
+
     /// Internally verify the share given necessary information
     pub fn verify(&self, total_nodes: usize) -> bool {
         match self {
