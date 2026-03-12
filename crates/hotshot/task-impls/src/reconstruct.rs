@@ -15,8 +15,7 @@ use hotshot_types::{
     simple_vote::HasEpoch,
     traits::{
         block_contents::BlockHeader,
-        node_implementation::{ConsensusTime, NodeImplementation, NodeType},
-        signature_key::SignatureKey,
+        node_implementation::{ConsensusTime, NodeType},
         BlockPayload,
     },
     vid::avidm_gf2::AvidmGf2Scheme,
@@ -26,13 +25,15 @@ use tokio::{spawn, sync::mpsc};
 
 use crate::{
     events::{HotShotEvent, HotShotTaskCompleted},
-    helpers::broadcast_event,
+    helpers::{broadcast_event, validate_vid_share},
 };
 
 pub struct ReconstructTaskState<TYPES: NodeType> {
     pub id: u64,
     pub event_stream: Sender<Arc<HotShotEvent<TYPES>>>,
     pub consensus: OuterConsensus<TYPES>,
+    pub membership: EpochMembershipCoordinator<TYPES>,
+    pub public_key: TYPES::SignatureKey,
     pub calc_lock: Arc<RwLock<HashMap<TYPES::View, mpsc::Sender<()>>>>,
     pub proposals: BTreeMap<TYPES::View, QuorumProposal2<TYPES>>,
     pub vid_shares:
@@ -40,7 +41,6 @@ pub struct ReconstructTaskState<TYPES: NodeType> {
 }
 
 async fn try_reconstruct_block<TYPES: NodeType>(
-    id: u64,
     calc_lock: Arc<RwLock<HashMap<TYPES::View, mpsc::Sender<()>>>>,
     consensus: OuterConsensus<TYPES>,
     view: TYPES::View,
@@ -148,7 +148,6 @@ impl<TYPES: NodeType> ReconstructTaskState<TYPES> {
                 let (tx, rx) = mpsc::channel(100);
                 self.calc_lock.write().await.insert(view, tx.clone());
                 spawn(try_reconstruct_block(
-                    self.id,
                     self.calc_lock.clone(),
                     self.consensus.clone(),
                     view,
@@ -163,16 +162,98 @@ impl<TYPES: NodeType> ReconstructTaskState<TYPES> {
         };
         let _ = tx.send(()).await;
     }
+
+    async fn handle_validated_share(
+        &mut self,
+        share: &VidDisperseShare2<TYPES>,
+        view: TYPES::View,
+    ) {
+        self.vid_shares
+            .write()
+            .await
+            .entry((view, share.epoch().unwrap()))
+            .or_default()
+            .push(share.clone());
+        tracing::info!(
+            "Received vid share for view {} we now have {} shares",
+            view,
+            self.vid_shares
+                .read()
+                .await
+                .get(&(view, share.epoch().unwrap()))
+                .unwrap()
+                .len()
+        );
+
+        let Some(proposal) = self.proposals.get(&view).cloned() else {
+            return;
+        };
+        self.spawn_reconstruct_task(
+            view,
+            proposal.epoch(),
+            proposal.block_header.metadata().clone(),
+        )
+        .await;
+    }
+    async fn is_old_view(&self, view: TYPES::View) -> bool {
+        let locked_view = self.consensus.read().await.locked_view();
+        view < locked_view
+    }
     pub async fn handle(
         &mut self,
         event: Arc<HotShotEvent<TYPES>>,
     ) -> Option<HotShotTaskCompleted> {
         match event.as_ref() {
+            HotShotEvent::VidShareRecv(sender, share) => {
+                let view = share.data.view_number();
+                if self.is_old_view(view).await {
+                    return None;
+                }
+                if self
+                    .consensus
+                    .read()
+                    .await
+                    .saved_payloads()
+                    .contains_key(&view)
+                {
+                    return None;
+                }
+                // Only handle non-self shares; self-shares are handled by the quorum vote task
+                if *share.data.recipient_key() == self.public_key {
+                    return None;
+                }
+
+                if let Err(e) = validate_vid_share::<TYPES>(
+                    sender,
+                    share,
+                    &self.membership,
+                    self.consensus.clone(),
+                )
+                .await
+                {
+                    tracing::warn!("VID share validation failed for view {view}: {e}");
+                    return None;
+                }
+
+                self.consensus
+                    .write()
+                    .await
+                    .update_vid_shares(view, share.clone());
+
+                let VidDisperseShare::V2(ref inner_share) = share.data else {
+                    return None;
+                };
+                self.handle_validated_share(inner_share, view).await;
+            },
             HotShotEvent::VidShareValidated(share) => {
                 let VidDisperseShare::V2(ref share) = share.data else {
                     return None;
                 };
                 let view = share.view_number();
+
+                if self.is_old_view(view).await {
+                    return None;
+                }
 
                 if self
                     .consensus
@@ -187,30 +268,7 @@ impl<TYPES: NodeType> ReconstructTaskState<TYPES> {
                     return None;
                 }
 
-                self.vid_shares
-                    .write()
-                    .await
-                    .entry((view, share.epoch().unwrap()))
-                    .or_default()
-                    .push(share.clone());
-                tracing::info!(
-                    "Received vid share for view {} we now have {} shares",
-                    view,
-                    self.vid_shares
-                        .read()
-                        .await
-                        .get(&(view, share.epoch().unwrap()))
-                        .unwrap()
-                        .len()
-                );
-
-                let proposal = self.proposals.get(&view).cloned()?;
-                self.spawn_reconstruct_task(
-                    view,
-                    proposal.epoch(),
-                    proposal.block_header.metadata().clone(),
-                )
-                .await;
+                self.handle_validated_share(share, view).await;
             },
             HotShotEvent::QuorumProposalValidated(proposal, _) => {
                 let view = proposal.data.view_number();

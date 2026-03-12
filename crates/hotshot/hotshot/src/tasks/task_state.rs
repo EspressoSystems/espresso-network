@@ -174,6 +174,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             id: handle.hotshot.id,
             event_stream: handle.internal_event_stream.0.clone(),
             consensus: OuterConsensus::new(handle.hotshot.consensus()),
+            membership: handle.hotshot.membership_coordinator.clone(),
+            public_key: handle.public_key().clone(),
             calc_lock: Arc::new(RwLock::new(HashMap::new())),
             proposals: BTreeMap::new(),
             vid_shares: Arc::new(RwLock::new(BTreeMap::new())),

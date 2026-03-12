@@ -16,7 +16,7 @@ use hotshot_task::{
 };
 use hotshot_types::{
     consensus::{ConsensusMetricsValue, OuterConsensus},
-    data::{vid_disperse::vid_total_weight, Leaf2, VidDisperseShare},
+    data::{Leaf2, VidDisperseShare},
     epoch_membership::EpochMembershipCoordinator,
     event::Event,
     message::{Proposal, UpgradeLock},
@@ -37,7 +37,7 @@ use tracing::instrument;
 
 use crate::{
     events::HotShotEvent,
-    helpers::{broadcast_event, broadcast_view_change},
+    helpers::{broadcast_event, broadcast_view_change, validate_vid_share},
     quorum_vote::handlers::{handle_quorum_proposal_validated, submit_vote, update_shared_state},
 };
 
@@ -739,7 +739,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                 );
                 tracing::warn!(
                     "QuorumProposalValidated handler view={} took {:?}",
-                    proposal.data.view_number(), handler_start.elapsed()
+                    proposal.data.view_number(),
+                    handler_start.elapsed()
                 );
             },
             // HotShotEvent::DaCertificateRecv(cert) => {
@@ -788,98 +789,49 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
             HotShotEvent::VidShareRecv(sender, share) => {
                 let handler_start = std::time::Instant::now();
                 let view = share.data.view_number();
-                let is_ours = *share.data.recipient_key() == self.public_key;
-                let vid_epoch = share.data.epoch();
-                let target_epoch = share.data.target_epoch();
-                let membership_reader = self.membership.membership_for_epoch(vid_epoch).await?;
 
-                let leader = membership_reader.leader(view).await?;
-                // Do nothing if the VID share is old
+                // Only handle self-shares; non-self shares are handled by the reconstruct task
+                if *share.data.recipient_key() != self.public_key {
+                    return Ok(());
+                }
+
                 tracing::trace!("Received VID share for view {view}");
                 ensure!(
                     *view > self.latest_voted_view.saturating_sub(10),
                     "Received VID share for an older view."
                 );
 
-                // Validate the VID share.
-                let payload_commitment = share.data.payload_commitment_ref();
-
-                // Check that the signature is valid
-                ensure!(
-                    sender.validate(&share.signature, payload_commitment.as_ref())
-                        || leader.validate(&share.signature, payload_commitment.as_ref()),
-                    error!(
-                        "VID share signature is invalid, sender: {}, signature: {:?}, \
-                         payload_commitment: {:?}",
-                        sender, share.signature, payload_commitment
-                    )
-                );
-                ensure!(
-                    membership_reader
-                        .committee_members(view)
-                        .await
-                        .contains(sender)
-                        || *sender == membership_reader.leader(view).await?,
-                    "VID share was not sent by a DA member or the view leader."
-                );
-
-                let total_weight = vid_total_weight::<TYPES>(
-                    &self
-                        .membership
-                        .membership_for_epoch(target_epoch)
-                        .await?
-                        .stake_table()
-                        .await,
-                    target_epoch,
-                );
-
-                if !share.data.verify(total_weight) {
-                    bail!("Failed to verify VID share");
-                }
-
-                // if we have the share already we are done
-                if self
-                    .consensus
-                    .read()
-                    .await
-                    .vid_shares()
-                    .get(&view)
-                    .is_some_and(|key_map| key_map.get(share.data.recipient_key()).is_some())
-                {
-                    return Ok(());
-                }
+                validate_vid_share::<TYPES>(
+                    sender,
+                    share,
+                    &self.membership,
+                    self.consensus.clone(),
+                )
+                .await?;
 
                 self.consensus
                     .write()
                     .await
                     .update_vid_shares(view, share.clone());
 
-                // ensure!(
-                //     *share.data.recipient_key() == self.public_key,
-                //     "Got a Valid VID share but it's not for our key"
-                // );
-
-                // If it's the first time receiving our share send it to all nodes
-                if *share.data.recipient_key() == self.public_key {
-                    if let VidDisperseShare::V2(ref inner_share) = share.data {
-                        tracing::warn!("Received our own VID share for view {view}");
-                        let proposal = Proposal {
-                            signature: share.signature.clone(),
-                            data: inner_share.clone(),
-                            _pd: PhantomData,
-                        };
-                        broadcast_event(
-                            Arc::new(HotShotEvent::VidShareSend(proposal)),
-                            &event_sender.clone(),
-                        )
-                        .await;
-                        self.create_dependency_task_if_new(
-                            view,
-                            event_receiver,
-                            &event_sender,
-                            Arc::clone(&event),
-                        );
-                    }
+                if let VidDisperseShare::V2(ref inner_share) = share.data {
+                    tracing::warn!("Received our own VID share for view {view}");
+                    let proposal = Proposal {
+                        signature: share.signature.clone(),
+                        data: inner_share.clone(),
+                        _pd: PhantomData,
+                    };
+                    broadcast_event(
+                        Arc::new(HotShotEvent::VidShareSend(proposal)),
+                        &event_sender.clone(),
+                    )
+                    .await;
+                    self.create_dependency_task_if_new(
+                        view,
+                        event_receiver,
+                        &event_sender,
+                        Arc::clone(&event),
+                    );
                 }
 
                 broadcast_event(
@@ -888,8 +840,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                 )
                 .await;
                 tracing::warn!(
-                    "VidShareRecv handler view={} ours={} took {:?}",
-                    view, is_ours, handler_start.elapsed()
+                    "VidShareRecv handler view={} took {:?}",
+                    view,
+                    handler_start.elapsed()
                 );
             },
             HotShotEvent::Timeout(view, ..) => {
