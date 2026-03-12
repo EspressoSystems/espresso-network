@@ -47,7 +47,7 @@ use crate::{
         recipient_source::RecipientSource,
         RequestResponseProtocol,
     },
-    state_signature::StateSigner,
+    state_signature::{self, StateSigner},
     Node, SeqTypes, SequencerApiVersion,
 };
 
@@ -133,6 +133,8 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
         let stake_table = config.hotshot_stake_table();
         let stake_table_commit = stake_table.commitment(stake_table_capacity)?;
         let stake_table_epoch = None;
+        let should_vote =
+            state_signature::should_vote(&stake_table, &validator_config.state_public_key);
 
         let event_streamer = Arc::new(RwLock::new(EventsStreamer::<SeqTypes>::new(
             stake_table.0,
@@ -161,6 +163,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
             stake_table_commit,
             stake_table_epoch,
             stake_table_capacity,
+            should_vote,
         );
         if let Some(url) = state_relay_server {
             state_signer = state_signer.with_relay_server(url);
