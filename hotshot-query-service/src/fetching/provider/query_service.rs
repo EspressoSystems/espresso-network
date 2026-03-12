@@ -571,7 +571,7 @@ mod test {
             AvailabilityProvider, FetchingDataSource, Transaction, VersionedDataSource,
         },
         fetching::provider::{NoFetching, Provider as ProviderTrait, TestProvider},
-        node::{data_source::NodeDataSource, SyncStatusQueryData},
+        node::{data_source::NodeDataSource, SyncStatus},
         task::BackgroundTask,
         testing::{
             consensus::{MockDataSource, MockNetwork},
@@ -1654,7 +1654,8 @@ mod test {
             .builder(provider.clone())
             .await
             .unwrap()
-            .with_proactive_interval(Duration::from_secs(1))
+            .with_minor_scan_interval(Duration::from_secs(1))
+            .with_major_scan_interval(1)
             .build()
             .await
             .unwrap();
@@ -1681,9 +1682,9 @@ mod test {
             // VID shares are unique to a node and will never be fetched from a peer; this is
             // acceptable since there is redundancy built into the VID scheme. Ignore missing VID
             // shares in the `is_fully_synced` check.
-            if (SyncStatusQueryData {
-                vid_shares: Default::default(),
-                ..sync_status.clone()
+            if (SyncStatus {
+                missing_vid_shares: 0,
+                ..sync_status
             })
             .is_fully_synced()
             {
@@ -1697,12 +1698,12 @@ mod test {
         sleep(Duration::from_secs(3)).await;
         let sync_status = data_source.sync_status().await.unwrap();
         assert!(
-            (SyncStatusQueryData {
-                vid_shares: Default::default(),
-                ..sync_status.clone()
+            (SyncStatus {
+                missing_vid_shares: 0,
+                ..sync_status
             })
             .is_fully_synced(),
-            "{sync_status:#?}"
+            "{sync_status:?}"
         );
     }
 

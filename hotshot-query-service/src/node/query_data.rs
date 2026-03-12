@@ -10,114 +10,34 @@
 // You should have received a copy of the GNU General Public License along with this program. If not,
 // see <https://www.gnu.org/licenses/>.
 
-use std::ops::{Bound, RangeBounds};
-
 use derivative::Derivative;
 use serde::{Deserialize, Serialize};
 
 pub use crate::availability::{BlockHash, BlockId};
 use crate::types::HeightIndexed;
 
-/// A status of a set of resources, regarding its presence in the database.
-///
-/// A single resource or range of consecutive resources may be either:
-/// * Present in the database
-/// * Missing from the database, but will eventually be recovered via asynchronous fetching
-/// * Pruned, meaning it is missing, but intentionally so, and will not be fetched
-#[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize,
-)]
-pub enum SyncStatus {
-    #[default]
-    Present,
-    Missing,
-    Pruned,
-}
-
-/// The [`SyncStatus`] describing a range of consecutive objects of a single type.
-#[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize,
-)]
-pub struct SyncStatusRange {
-    /// The inclusive starting height for the range.
-    pub start: usize,
-    /// The exclusive ending height for the range.
-    pub end: usize,
-    /// The sync status for objects in this range.
-    pub status: SyncStatus,
-}
-
-impl RangeBounds<usize> for SyncStatusRange {
-    fn start_bound(&self) -> Bound<&usize> {
-        Bound::Included(&self.start)
-    }
-
-    fn end_bound(&self) -> Bound<&usize> {
-        Bound::Excluded(&self.end)
-    }
-}
-
-/// A summary of the [`SyncStatus`] for a single resource (e.g. blocks, or leaves).
-#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
-pub struct ResourceSyncStatus {
-    /// The number of missing (not including pruned) objects for this resource.
-    pub missing: usize,
-
-    /// An ordered list of contiguous ranges of objects of this type with the same sync status.
-    pub ranges: Vec<SyncStatusRange>,
-}
-
-impl ResourceSyncStatus {
-    pub fn is_fully_synced(&self) -> bool {
-        self.missing == 0
-    }
-
-    /// Extend this [`ResourceSyncStatus`] to additionally cover the range covered by `other`.
-    pub fn extend(&mut self, other: Self) {
-        self.missing += other.missing;
-
-        let mut ranges = other.ranges.into_iter();
-
-        // Check if the last range of `self` and the first range of `other` can be combined.
-        if let Some(last) = self.ranges.last_mut() {
-            if let Some(next) = ranges.next() {
-                if last.status == next.status && last.end == next.start {
-                    last.end = next.end;
-                } else {
-                    self.ranges.push(next);
-                }
-            }
-        }
-
-        self.ranges.extend(ranges);
-    }
-}
-
-/// [`SyncStatus`] for the entire database.
-#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
-pub struct SyncStatusQueryData {
-    /// Summary of the [`SyncStatus`] of all blocks.
-    pub blocks: ResourceSyncStatus,
-    /// Summary of the [`SyncStatus`] of all leaves.
-    pub leaves: ResourceSyncStatus,
-    /// Summary of the [`SyncStatus`] of all VID common objects.
-    pub vid_common: ResourceSyncStatus,
-    /// Summary of the [`SyncStatus`] of all VID shares.
-    pub vid_shares: ResourceSyncStatus,
-
-    /// The height of the last pruned object.
-    ///
-    /// Objects below this height are intentionally missing and will never be recovered (unless
-    /// pruning settings are changed.)
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
+pub struct SyncStatus {
+    pub missing_blocks: usize,
+    pub missing_leaves: usize,
+    pub missing_vid_common: usize,
+    pub missing_vid_shares: usize,
     pub pruned_height: Option<usize>,
 }
 
-impl SyncStatusQueryData {
+impl SyncStatus {
+    pub fn fully_synced() -> Self {
+        Self {
+            missing_blocks: 0,
+            missing_leaves: 0,
+            missing_vid_common: 0,
+            missing_vid_shares: 0,
+            pruned_height: None,
+        }
+    }
+
     pub fn is_fully_synced(&self) -> bool {
-        self.blocks.is_fully_synced()
-            && self.leaves.is_fully_synced()
-            && self.vid_common.is_fully_synced()
-            && self.vid_shares.is_fully_synced()
+        *self == Self::fully_synced()
     }
 }
 

@@ -84,7 +84,7 @@ use crate::{
         traits::{ExplorerHeader, ExplorerTransaction},
     },
     merklized_state::{MerklizedState, Snapshot},
-    node::{SyncStatusQueryData, TimeWindowQueryData, WindowStart},
+    node::{SyncStatus, TimeWindowQueryData, WindowStart},
     Header, Payload, QueryResult, Transaction,
 };
 
@@ -255,12 +255,8 @@ where
 
     async fn latest_qc_chain(&mut self) -> QueryResult<Option<[CertificatePair<Types>; 2]>>;
 
-    /// Search the given range of the database for missing objects.
-    async fn sync_status_for_range(
-        &mut self,
-        from: usize,
-        to: usize,
-    ) -> QueryResult<SyncStatusQueryData>;
+    /// Search the database for missing objects and generate a report.
+    async fn sync_status(&mut self) -> QueryResult<SyncStatus>;
 }
 
 #[derive(Clone, Debug, Default)]
