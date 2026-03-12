@@ -6,7 +6,7 @@ use either::Either;
 use espresso_types::{
     traits::StateCatchup,
     v0_3::{ChainConfig, RewardAccountV1, RewardMerkleTreeV1},
-    v0_4::{Delta, RewardMerkleTreeV2},
+    v0_4::Delta,
     BlockMerkleTree, FeeAccount, FeeMerkleTree, Leaf2, ValidatedState,
 };
 use futures::{future::Future, StreamExt};
@@ -26,9 +26,9 @@ use vbs::version::Version;
 use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION};
 
 use crate::{
-    api::RewardMerkleTreeDataSource,
+    api::{RewardMerkleTreeDataSource, RewardMerkleTreeV2Data},
     catchup::{CatchupStorage, SqlStateCatchup},
-    persistence::ChainConfigPersistence,
+    persistence::{ChainConfigPersistence, RewardMerkleTreeV2Persistence},
     NodeState, SeqTypes,
 };
 
@@ -135,7 +135,7 @@ async fn store_state_update(
     block_number: u64,
     version: Version,
     state: &ValidatedState,
-    delta: Delta,
+    delta: &Delta,
 ) -> anyhow::Result<()> {
     let ValidatedState {
         fee_merkle_tree,
@@ -228,6 +228,16 @@ async fn store_state_update(
         .context("failed to store reward merkle nodes")?;
     }
 
+    if version > EPOCH_VERSION && !rewards_delta.is_empty() {
+        let serialization = bincode::serialize(&TryInto::<RewardMerkleTreeV2Data>::try_into(
+            &state.reward_merkle_tree_v2,
+        )?)
+        .context("Merkle tree serialization failed")?;
+        tx.persist_reward_merkle_tree_v2(block_number, serialization)
+            .await
+            .context("failed to store reward merkle tree v2")?;
+    }
+
     Ok(())
 }
 
@@ -271,15 +281,15 @@ where
         .await
         .context("opening transaction for state update")?;
 
-    store_state_update(&mut tx, block_number, version, &state, delta).await?;
+    store_state_update(&mut tx, block_number, version, &state, &delta).await?;
 
     tx.commit().await?;
 
-    if version > EPOCH_VERSION {
+    if version > EPOCH_VERSION && !delta.rewards_delta.is_empty() {
         storage
-            .save_reward_merkle_tree_v2(instance, block_number, &state.reward_merkle_tree_v2)
+            .persist_proofs_and_garbage_collect(instance, block_number, version)
             .await
-            .context("failed to store reward merkle nodes")?;
+            .context("failed to persist proofs and garbage collect")?;
     }
 
     let mut tx = storage
@@ -392,18 +402,6 @@ where
     let mut parent_leaf = parent_leaf.await;
     let mut parent_state = ValidatedState::from_header(parent_leaf.header());
 
-    if parent_leaf.header().version() > EPOCH_VERSION && parent_leaf.height() > 0 {
-        let reward_merkle_tree_v2 = storage
-            .load_reward_merkle_tree_v2(parent_leaf.height())
-            .await
-            .context(
-                "Error starting the state storage update loop: failed to load RewardMerkleTreeV2 \
-                 for the previous height",
-            )?;
-
-        parent_state.reward_merkle_tree_v2 = reward_merkle_tree_v2.tree;
-    }
-
     if last_height == 0 {
         // If the last height is 0, we need to insert the genesis state, since this state is
         // never the result of a state update and thus is not inserted in the loop below.
@@ -482,9 +480,9 @@ pub(crate) trait SequencerStateUpdate:
     Transaction
     + UpdateStateData<SeqTypes, FeeMerkleTree, { FeeMerkleTree::ARITY }>
     + UpdateStateData<SeqTypes, BlockMerkleTree, { BlockMerkleTree::ARITY }>
-    + UpdateStateData<SeqTypes, RewardMerkleTreeV2, { RewardMerkleTreeV2::ARITY }>
     + UpdateStateData<SeqTypes, RewardMerkleTreeV1, { RewardMerkleTreeV1::ARITY }>
     + ChainConfigPersistence
+    + RewardMerkleTreeV2Persistence
 {
 }
 
@@ -492,8 +490,8 @@ impl<T> SequencerStateUpdate for T where
     T: Transaction
         + UpdateStateData<SeqTypes, FeeMerkleTree, { FeeMerkleTree::ARITY }>
         + UpdateStateData<SeqTypes, BlockMerkleTree, { BlockMerkleTree::ARITY }>
-        + UpdateStateData<SeqTypes, RewardMerkleTreeV2, { RewardMerkleTreeV2::ARITY }>
         + UpdateStateData<SeqTypes, RewardMerkleTreeV1, { RewardMerkleTreeV1::ARITY }>
         + ChainConfigPersistence
+        + RewardMerkleTreeV2Persistence
 {
 }

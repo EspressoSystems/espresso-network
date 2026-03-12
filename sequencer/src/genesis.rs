@@ -1327,7 +1327,7 @@ mod test {
             stake_table_contract = "0x0000000000000000000000000000000000000000"
 
             [[da_committees]]
-            start_version = "0.5"
+            start_version = "0.6"
             start_epoch = 10
             committee = [
                 { stake_table_entry = { stake_key = "BLS_VER_KEY~bQszS-QKYvUij2g20VqS8asttGSb95NrTu2PUj0uMh1CBUxNy1FqyPDjZqB29M7ZbjWqj79QkEOWkpga84AmDYUeTuWmy-0P1AdKHD3ehc-dKvei78BDj5USwXPJiDUlCxvYs_9rWYhagaq-5_LXENr78xel17spftNd5MA1Mw5U", stake_amount = "0x1"}, state_ver_key = "SCHNORR_VER_KEY~lJqDaVZyM0hWP2Br52IX5FeE-dCAIC-dPX7bL5-qUx-vjbunwe-ENOeZxj6FuOyvDCFzoGeP7yZ0fM995qF-CRE"},
@@ -1345,7 +1345,7 @@ mod test {
 
         let da_committee = &da_committees[0];
 
-        assert_eq!(da_committee.start_version, Version { major: 0, minor: 5 });
+        assert_eq!(da_committee.start_version, Version { major: 0, minor: 6 });
         assert_eq!(da_committee.start_epoch, 10);
         assert_eq!(da_committee.committee.len(), 2);
         assert_eq!(

@@ -701,6 +701,7 @@ where
 
         Ok(leaf)
     }
+
     // TODO: add a test for the account proof validation
     // issue # 2102 (https://github.com/EspressoSystems/espresso-sequencer/issues/2102)
     #[tracing::instrument(skip(self, _retry, instance))]

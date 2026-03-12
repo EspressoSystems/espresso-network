@@ -2,6 +2,7 @@ use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use alloy::primitives::Address;
 use anyhow::{bail, Context};
+use async_lock::Mutex;
 #[cfg(any(test, feature = "testing"))]
 use async_lock::RwLock;
 use async_trait::async_trait;
@@ -22,8 +23,10 @@ use super::{
 };
 use crate::{
     v0::{
-        impls::StakeTableHash, traits::StateCatchup, v0_3::ChainConfig, GenesisHeader, L1BlockInfo,
-        L1Client, Timestamp, Upgrade, UpgradeMode,
+        impls::{reward::EpochRewardsCalculator, StakeTableHash},
+        traits::StateCatchup,
+        v0_3::ChainConfig,
+        GenesisHeader, L1BlockInfo, L1Client, Timestamp, Upgrade, UpgradeMode,
     },
     v0_3::{RegisteredValidator, RewardAmount},
     AuthenticatedValidatorMap, EpochCommittees, PubKey, RegisteredValidatorMap,
@@ -71,6 +74,8 @@ pub struct NodeState {
     /// to use in functions such as genesis.
     /// (example: genesis returns V2 Header if version is 0.2)
     pub current_version: Version,
+    #[debug(skip)]
+    pub epoch_rewards_calculator: Arc<Mutex<EpochRewardsCalculator>>,
 }
 
 impl NodeState {
@@ -249,6 +254,7 @@ impl NodeState {
             coordinator,
             genesis_version,
             epoch_start_block: 0,
+            epoch_rewards_calculator: Arc::new(Mutex::new(EpochRewardsCalculator::default())),
             light_client_contract_address: Cache::builder().max_capacity(1).build(),
             token_contract_address: Cache::builder().max_capacity(1).build(),
             finalized_hotshot_height: if cfg!(any(test, feature = "testing")) {
