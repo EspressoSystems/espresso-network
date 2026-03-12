@@ -2301,7 +2301,7 @@ async fn select_some<T>(
 
 #[cfg(test)]
 mod test {
-    use hotshot_example_types::node_types::TestVersions;
+    use hotshot_example_types::node_types::TEST_VERSIONS;
 
     use super::*;
     use crate::{
@@ -2387,9 +2387,10 @@ mod test {
 
         // Generate some mock leaves to insert.
         let mut leaves: Vec<LeafQueryData<MockTypes>> = vec![
-            LeafQueryData::<MockTypes>::genesis::<TestVersions>(
+            LeafQueryData::<MockTypes>::genesis(
                 &Default::default(),
                 &Default::default(),
+                TEST_VERSIONS.test,
             )
             .await,
         ];
