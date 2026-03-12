@@ -284,7 +284,7 @@ pub mod tests {
         assert!(NsAvidmGf2Scheme::verify_share_with_verified_common(&common, &tampered).is_err());
 
         // Create a tampered share by dispersing a different payload and swapping
-        let (_commit2, _common2, shares2) = disperse_with_payload(&vec![0xAB; 48]);
+        let (_commit2, _common2, shares2) = disperse_with_payload(&[0xAB; 48]);
         let mut mixed = shares[0].clone();
         mixed.0[0] = shares2[0].0[0].clone();
         assert!(
@@ -312,7 +312,7 @@ pub mod tests {
     fn is_consistent_rejects_tampered_commit() {
         let (commit, common, _shares) = setup_test_data();
         // Use commit from a different dispersal
-        let (different_commit, ..) = disperse_with_payload(&vec![0xCD; 48]);
+        let (different_commit, ..) = disperse_with_payload(&[0xCD; 48]);
         // Verify original is consistent
         assert!(NsAvidmGf2Scheme::is_consistent(&commit, &common));
         // Verify different commit is inconsistent with original common
@@ -323,7 +323,7 @@ pub mod tests {
     fn is_consistent_rejects_tampered_common() {
         let (commit, common, _shares) = setup_test_data();
         // Swap in ns_commits from a different dispersal
-        let (_, different_common, _) = disperse_with_payload(&vec![0xCD; 48]);
+        let (_, different_common, _) = disperse_with_payload(&[0xCD; 48]);
         let mut tampered_common = common;
         tampered_common.ns_commits = different_common.ns_commits;
         assert!(!NsAvidmGf2Scheme::is_consistent(&commit, &tampered_common));
