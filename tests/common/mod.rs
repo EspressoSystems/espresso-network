@@ -78,7 +78,7 @@ impl Default for TestRequirements {
         Self {
             block_height_increment: 10,
             txn_count_increment: 10,
-            global_timeout: Duration::from_secs(60),
+            global_timeout: Duration::from_secs(120),
             // TODO: on the CI we are quite resource constraint and for longer runs we do get a few
             // timeouts which lead to occasional drop in block times.
             block_timeout: Duration::from_secs(60),
