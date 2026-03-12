@@ -38,7 +38,7 @@ use crate::{
         UpdateStateData,
     },
     metrics::PrometheusMetrics,
-    node::{NodeDataSource, SyncStatusQueryData, TimeWindowQueryData, WindowStart},
+    node::{NodeDataSource, SyncStatus, TimeWindowQueryData, WindowStart},
     status::{HasMetrics, StatusDataSource},
     Header, Payload, QueryResult, Transaction,
 };
@@ -358,7 +358,7 @@ where
     {
         self.data_source.vid_share(id).await
     }
-    async fn sync_status(&self) -> QueryResult<SyncStatusQueryData> {
+    async fn sync_status(&self) -> QueryResult<SyncStatus> {
         self.data_source.sync_status().await
     }
     async fn get_header_window(

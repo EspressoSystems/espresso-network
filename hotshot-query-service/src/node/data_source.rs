@@ -31,10 +31,9 @@ use derivative::Derivative;
 use derive_more::From;
 use hotshot_types::{data::VidShare, traits::node_implementation::NodeType};
 
-use super::query_data::{BlockHash, BlockId, TimeWindowQueryData};
+use super::query_data::{BlockHash, BlockId, SyncStatus, TimeWindowQueryData};
 use crate::{
     availability::{NamespaceId, QueryableHeader},
-    node::SyncStatusQueryData,
     Header, QueryResult,
 };
 
@@ -82,7 +81,7 @@ where
     ) -> QueryResult<TimeWindowQueryData<Header<Types>>>;
 
     /// Search the database for missing objects and generate a report.
-    async fn sync_status(&self) -> QueryResult<SyncStatusQueryData>;
+    async fn sync_status(&self) -> QueryResult<SyncStatus>;
 
     async fn count_transactions(&self) -> QueryResult<usize> {
         self.count_transactions_in_range(0.., None).await
