@@ -586,10 +586,17 @@ where
         }
         .boxed()
     })?
-    .at("previous_proposal_participation", |_, state| {
+    .at("proposal_participation", |req, state| {
         async move {
+            let epoch = req.integer_param::<_, u64>("epoch").map_err(|_| {
+                hotshot_query_service::node::Error::Custom {
+                    message: "Epoch number is required".to_string(),
+                    status: StatusCode::BAD_REQUEST,
+                }
+            })?;
+
             Ok(state
-                .read(|state| state.previous_proposal_participation().boxed())
+                .read(|state| state.proposal_participation(epoch.into()).boxed())
                 .await)
         }
         .boxed()
@@ -602,10 +609,17 @@ where
         }
         .boxed()
     })?
-    .at("previous_vote_participation", |_, state| {
+    .at("vote_participation", |req, state| {
         async move {
+            let epoch = req.integer_param::<_, u64>("epoch").map_err(|_| {
+                hotshot_query_service::node::Error::Custom {
+                    message: "Epoch number is required".to_string(),
+                    status: StatusCode::BAD_REQUEST,
+                }
+            })?;
+
             Ok(state
-                .read(|state| state.previous_vote_participation().boxed())
+                .read(|state| state.vote_participation(epoch.into()).boxed())
                 .await)
         }
         .boxed()
