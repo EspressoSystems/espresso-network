@@ -548,13 +548,9 @@ where
         self.inner.vid_share(id).await
     }
 
-    async fn sync_status_for_range(
-        &mut self,
-        start: usize,
-        end: usize,
-    ) -> QueryResult<SyncStatusQueryData> {
+    async fn sync_status(&mut self) -> QueryResult<SyncStatusQueryData> {
         self.maybe_fail_read(FailableAction::Any).await?;
-        self.inner.sync_status_for_range(start, end).await
+        self.inner.sync_status().await
     }
 
     async fn get_header_window(

@@ -255,12 +255,8 @@ where
 
     async fn latest_qc_chain(&mut self) -> QueryResult<Option<[CertificatePair<Types>; 2]>>;
 
-    /// Search the given range of the database for missing objects.
-    async fn sync_status_for_range(
-        &mut self,
-        from: usize,
-        to: usize,
-    ) -> QueryResult<SyncStatusQueryData>;
+    /// Search the database for missing objects and generate a report.
+    async fn sync_status(&mut self) -> QueryResult<SyncStatusQueryData>;
 }
 
 #[derive(Clone, Debug, Default)]

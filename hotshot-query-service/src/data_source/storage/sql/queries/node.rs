@@ -33,7 +33,8 @@ use super::{
 use crate::{
     availability::{NamespaceId, QueryableHeader},
     data_source::storage::{
-        Aggregate, AggregatesStorage, NodeStorage, PayloadMetadata, UpdateAggregatesStorage,
+        pruning::PrunedHeightStorage, Aggregate, AggregatesStorage, NodeStorage, PayloadMetadata,
+        UpdateAggregatesStorage,
     },
     node::{
         BlockId, ResourceSyncStatus, SyncStatus, SyncStatusQueryData, SyncStatusRange,
@@ -155,15 +156,24 @@ where
         Ok(share)
     }
 
-    async fn sync_status_for_range(
-        &mut self,
-        from: usize,
-        to: usize,
-    ) -> QueryResult<SyncStatusQueryData> {
+    async fn sync_status(&mut self) -> QueryResult<SyncStatusQueryData> {
+        let block_height = NodeStorage::<Types>::block_height(self).await?;
+        let pruned_height = match self.load_pruned_height().await {
+            Ok(Some(height)) => Some(height as usize),
+            Ok(None) => None,
+            Err(err) => {
+                return Err(QueryError::Error {
+                    message: format!("{err:#}"),
+                })
+            },
+        };
+
         // A block can be missing if its corresponding leaf is missing or if the block's `size`,
         // `data`, and `num_transactions` fields are `NULL`. We use `size` as the indicator column
         // to capture this while avoiding touching `data`, which can be quite large.
-        let blocks = self.sync_status_ranges("payload", "size", from, to).await?;
+        let blocks = self
+            .sync_status_ranges("payload", "size", pruned_height, block_height)
+            .await?;
 
         let leaves = if blocks.is_fully_synced() {
             // A common special case is that there are no missing blocks. In this case, we already
@@ -175,22 +185,27 @@ where
             // A leaf can only be missing if there is no row for it in the database (all its columns
             // are non-nullable). We use `height` as an indicator for `NULL` rows in an inner join,
             // which allows an index-only scan.
-            self.sync_status_ranges("leaf2", "height", from, to).await?
+            self.sync_status_ranges("leaf2", "height", pruned_height, block_height)
+                .await?
         };
 
         // For VID, common data can only be missing if the entire row is missing, so we use an
         // index-only scan over `height`.
-        let vid_common = self.sync_status_ranges("vid2", "height", from, to).await?;
+        let vid_common = self
+            .sync_status_ranges("vid2", "height", pruned_height, block_height)
+            .await?;
         // VID shares can be missing in that case _or_ if the row is present but share data is NULL,
         // so we use the `share` column as an indicator.
-        let vid_shares = self.sync_status_ranges("vid2", "share", from, to).await?;
+        let vid_shares = self
+            .sync_status_ranges("vid2", "share", pruned_height, block_height)
+            .await?;
 
         Ok(SyncStatusQueryData {
             leaves,
             blocks,
             vid_common,
             vid_shares,
-            pruned_height: None,
+            pruned_height,
         })
     }
 
@@ -311,40 +326,40 @@ where
         &mut self,
         table: &str,
         indicator_column: &str,
-        start: usize,
-        end: usize,
+        pruned_height: Option<usize>,
+        block_height: usize,
     ) -> QueryResult<ResourceSyncStatus> {
         let mut ranges = vec![];
-        tracing::debug!("searching for missing ranges");
+        let start = if let Some(pruned_height) = pruned_height {
+            ranges.push(SyncStatusRange {
+                start: 0,
+                end: pruned_height + 1,
+                status: SyncStatus::Pruned,
+            });
+            pruned_height + 1
+        } else {
+            0
+        };
+        tracing::debug!(start, "searching for missing ranges");
 
-        // Find every height in the range `[start, end)` which is the first height in a sequence of
-        // present objects (i.e. the object just before it is missing).
+        // Find every height in the range `[start, block_height)` which is the first height in a
+        // sequence of present objects (i.e. the object just before it is missing).
         //
         // We do this by outer joining the table with itself, with height shifted by one, to get a
         // combined table where each row contains a successor object and its immediate predecessor,
         // if present. If the predecessor is missing, its height will be `NULL` (which is impossible
         // otherwise, because `height` is a `NOT NULL` column).
-        //
-        // For each table in the self-join, we _first_ sub-select just the range of interest (i.e.
-        // [start, end) for the successor table and [start - 1, end - 1) for the predecessor table).
-        // It is more efficient to do this first to reduce the number of rows involved in the join,
-        // which is the expensive part of the operation. In fact, due to the nature of the outer
-        // join, it is impossible to do this filtering after the join for the predecessor table,
-        // since at that point the table will not necessarily be indexed and will contain some rows
-        // with `NULL` height.
         let query = format!(
-            "WITH range AS (SELECT height, {indicator_column} FROM {table}
-                WHERE height >= $1 AND height < $2)
-            SELECT successor.height FROM range AS predecessor
-            RIGHT JOIN range AS successor
-            ON successor.height = predecessor.height + 1
-            WHERE successor.{indicator_column} IS NOT NULL
-              AND predecessor.{indicator_column} IS NULL
-            ORDER BY successor.height"
+            "SELECT successor.height FROM {table} AS predecessor
+              RIGHT JOIN {table} AS successor ON successor.height = predecessor.height + 1
+              WHERE successor.height >= $1 AND successor.height < $2
+                AND successor.{indicator_column} IS NOT NULL
+                AND predecessor.{indicator_column} IS NULL
+              ORDER BY successor.height"
         );
         let range_starts = query_as::<(i64,)>(&query)
             .bind(start as i64)
-            .bind(end as i64)
+            .bind(block_height as i64)
             .fetch_all(self.as_mut())
             .await?;
         tracing::debug!(
@@ -370,7 +385,7 @@ where
                 let upper_bound = if i + 1 < range_starts.len() {
                     range_starts[i + 1].0
                 } else {
-                    end as i64
+                    block_height as i64
                 };
                 let (end,) = query_as::<(i64,)>(&query)
                     .bind(upper_bound)
@@ -389,18 +404,16 @@ where
             // expensive query, which is the mirror image of the query we used to fetch the range
             // starts.
             let query = format!(
-                "WITH range AS (SELECT height, {indicator_column} FROM {table}
-                    WHERE height >= $1 AND height < $2)
-                SELECT predecessor.height FROM range AS predecessor
-                LEFT JOIN range AS successor
-                ON successor.height = predecessor.height + 1
-                WHERE predecessor.{indicator_column} IS NOT NULL
-                  AND successor.{indicator_column} IS NULL
-                ORDER BY predecessor.height"
+                "SELECT predecessor.height FROM {table} AS predecessor
+                   LEFT JOIN {table} AS successor ON successor.height = predecessor.height + 1
+                  WHERE predecessor.height >= $1 AND predecessor.height < $2
+                    AND predecessor.{indicator_column} IS NOT NULL
+                    AND successor.{indicator_column} IS NULL
+                  ORDER BY predecessor.height"
             );
             let ends = query_as::<(i64,)>(&query)
                 .bind(start as i64)
-                .bind(end as i64)
+                .bind(block_height as i64)
                 .fetch_all(self.as_mut())
                 .await?;
             tracing::debug!(
@@ -467,11 +480,11 @@ where
 
         // There is possibly one more missing range, between the final present range and the overall
         // block height.
-        if prev != end {
-            tracing::debug!(start = prev, end, "found missing range");
+        if prev != block_height {
+            tracing::debug!(start = prev, end = block_height, "found missing range");
             ranges.push(SyncStatusRange {
                 start: prev,
-                end,
+                end: block_height,
                 status: SyncStatus::Missing,
             });
         }
@@ -786,7 +799,11 @@ mod test {
         testing::mocks::MockTypes,
     };
 
-    async fn test_sync_status_ranges(start: usize, end: usize, present_ranges: &[(usize, usize)]) {
+    async fn test_sync_status_ranges(
+        pruned_height: Option<usize>,
+        block_height: usize,
+        present_ranges: &[(usize, usize)],
+    ) {
         let storage = TmpDb::init().await;
         let db = SqlStorage::connect(storage.config(), StorageConnectionType::Query)
             .await
@@ -800,7 +817,7 @@ mod test {
             )
             .await,
         ];
-        for i in 1..end {
+        for i in 1..block_height {
             let mut leaf = leaves[i - 1].clone();
             leaf.leaf.block_header_mut().block_number = i as u64;
             leaves.push(leaf);
@@ -823,18 +840,31 @@ mod test {
             .read()
             .await
             .unwrap()
-            .sync_status_ranges("leaf2", "height", start, end)
+            .sync_status_ranges("leaf2", "height", pruned_height, block_height)
             .await
             .unwrap();
 
         // Verify missing.
         let present: usize = present_ranges.iter().map(|(start, end)| end - start).sum();
-        let total = end - start;
+        let total = block_height - pruned_height.map_or(0, |h| h + 1);
         assert_eq!(sync_status.missing, total - present);
 
         // Verify ranges.
         let mut ranges = sync_status.ranges.into_iter();
-        let mut prev = start;
+        let mut prev = if let Some(height) = pruned_height {
+            let range = ranges.next().unwrap();
+            assert_eq!(
+                range,
+                SyncStatusRange {
+                    start: 0,
+                    end: height + 1,
+                    status: SyncStatus::Pruned,
+                }
+            );
+            height + 1
+        } else {
+            0
+        };
         for &(start, end) in present_ranges {
             if start != prev {
                 let range = ranges.next().unwrap();
@@ -859,13 +889,13 @@ mod test {
             prev = end;
         }
 
-        if prev != end {
+        if prev != block_height {
             let range = ranges.next().unwrap();
             assert_eq!(
                 range,
                 SyncStatusRange {
                     start: prev,
-                    end,
+                    end: block_height,
                     status: SyncStatus::Missing,
                 }
             );
@@ -877,58 +907,58 @@ mod test {
     #[tokio::test]
     #[test_log::test]
     async fn test_sync_status_ranges_bookends_present() {
-        test_sync_status_ranges(0, 6, &[(0, 2), (4, 6)]).await;
+        test_sync_status_ranges(None, 6, &[(0, 2), (4, 6)]).await;
     }
 
     #[tokio::test]
     #[test_log::test]
     async fn test_sync_status_ranges_bookends_missing() {
-        test_sync_status_ranges(0, 6, &[(2, 4)]).await;
+        test_sync_status_ranges(None, 6, &[(2, 4)]).await;
     }
 
     #[tokio::test]
     #[test_log::test]
-    async fn test_sync_status_ranges_start_offset_bookends_present() {
-        test_sync_status_ranges(1, 8, &[(2, 4), (6, 8)]).await;
+    async fn test_sync_status_ranges_pruned_bookends_present() {
+        test_sync_status_ranges(Some(1), 8, &[(2, 4), (6, 8)]).await;
     }
 
     #[tokio::test]
     #[test_log::test]
-    async fn test_sync_status_ranges_start_offset_bookends_missing() {
-        test_sync_status_ranges(1, 8, &[(4, 6)]).await;
+    async fn test_sync_status_ranges_pruned_bookends_missing() {
+        test_sync_status_ranges(Some(1), 8, &[(4, 6)]).await;
     }
 
     #[tokio::test]
     #[test_log::test]
     async fn test_sync_status_ranges_singleton_ranges() {
-        test_sync_status_ranges(0, 3, &[(0, 1), (2, 3)]).await;
+        test_sync_status_ranges(None, 3, &[(0, 1), (2, 3)]).await;
     }
 
     #[tokio::test]
     #[test_log::test]
     async fn test_sync_status_ranges_many_ranges_bookends_present() {
         let ranges = (0..=100).map(|i| (2 * i, 2 * i + 1)).collect_vec();
-        test_sync_status_ranges(0, 201, &ranges).await;
+        test_sync_status_ranges(None, 201, &ranges).await;
     }
 
     #[tokio::test]
     #[test_log::test]
     async fn test_sync_status_ranges_many_ranges_bookends_missing() {
         let ranges = (1..=100).map(|i| (2 * i, 2 * i + 1)).collect_vec();
-        test_sync_status_ranges(0, 202, &ranges).await;
+        test_sync_status_ranges(None, 202, &ranges).await;
     }
 
     #[tokio::test]
     #[test_log::test]
-    async fn test_sync_status_ranges_many_ranges_start_offset_bookends_present() {
+    async fn test_sync_status_ranges_many_ranges_pruned_bookends_present() {
         let ranges = (1..=100).map(|i| (2 * i, 2 * i + 1)).collect_vec();
-        test_sync_status_ranges(1, 201, &ranges).await;
+        test_sync_status_ranges(Some(1), 201, &ranges).await;
     }
 
     #[tokio::test]
     #[test_log::test]
-    async fn test_sync_status_ranges_many_ranges_start_offset_bookends_missing() {
+    async fn test_sync_status_ranges_many_ranges_pruned_bookends_missing() {
         let ranges = (2..=100).map(|i| (2 * i, 2 * i + 1)).collect_vec();
-        test_sync_status_ranges(1, 202, &ranges).await;
+        test_sync_status_ranges(Some(1), 202, &ranges).await;
     }
 }
