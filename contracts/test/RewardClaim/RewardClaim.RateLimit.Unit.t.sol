@@ -127,6 +127,13 @@ contract RewardClaimRateLimitTest is RewardClaimMockTest {
         rewardClaim.claimRewards(amount, "");
     }
 
+    function test_Claim_DayTrackingPersistsWithinDay() public {
+        vm.warp(100 * 1 days);
+
+        claim(DAILY_LIMIT);
+        checkLimitEnforced(claimer, DAILY_LIMIT + 1);
+    }
+
     function test_BpsDenominator() public view {
         assertEq(rewardClaim.BPS_DENOMINATOR(), 10000);
     }
@@ -137,5 +144,22 @@ contract RewardClaimRateLimitTest is RewardClaimMockTest {
             (espToken.totalSupply() * expectedBps) / rewardClaim.BPS_DENOMINATOR();
         assertEq(rewardClaim.lastSetDailyLimitBasisPoints(), expectedBps);
         assertEq(rewardClaim.dailyLimitWei(), expectedLimit);
+    }
+}
+
+/// @dev Deploys at day 100 so _currentDay initialization produces a non-zero, non-default value.
+/// Kills mutants that delete or zero-out _currentDay in initialize (e.g. _currentDay = 0).
+contract RewardClaimRateLimitWarpedTest is RewardClaimMockTest {
+    function setUp() public override {
+        vm.warp(100 days);
+        super.setUp();
+    }
+
+    function test_Claim_InitialDayEnforcesLimit() public {
+        claim(DAILY_LIMIT);
+
+        vm.prank(claimer);
+        vm.expectRevert(IRewardClaim.DailyLimitExceeded.selector);
+        rewardClaim.claimRewards(DAILY_LIMIT + 1, "");
     }
 }

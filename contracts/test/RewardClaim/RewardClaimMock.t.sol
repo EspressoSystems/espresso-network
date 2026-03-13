@@ -17,7 +17,7 @@ contract RewardClaimMockTest is Test {
 
     uint256 constant DAILY_LIMIT = 1000 ether;
 
-    function setUp() public {
+    function setUp() public virtual {
         owner = makeAddr("owner");
         pauser = makeAddr("pauser");
         claimer = makeAddr("claimer");
