@@ -5,7 +5,7 @@
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
 use hotshot_example_types::node_types::{
-    EpochUpgradeTestVersions, MemoryImpl, TestTypes, TestTypesRandomizedLeader,
+    MemoryImpl, TestTypes, TestTypesRandomizedLeader, TEST_VERSIONS,
 };
 use hotshot_macros::cross_tests;
 use hotshot_testing::{block_builder::SimpleBuilderImplementation, test_builder::TestDescription};
@@ -16,7 +16,7 @@ cross_tests!(
     Types: [TestTypes, TestTypesRandomizedLeader],
     // TODO: we need some test infrastructure + Membership trait fixes to get this to work with:
     // Types: [TestTypes, TestTypesRandomizedLeader, TestTwoStakeTablesTypes],
-    Versions: [EpochUpgradeTestVersions],
+    Versions: [TEST_VERSIONS.epoch_upgrade],
     Ignore: false,
     Metadata: {
         let mut metadata = TestDescription {

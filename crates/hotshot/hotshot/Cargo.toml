@@ -24,7 +24,7 @@ anyhow = { workspace = true }
 async-broadcast = { workspace = true }
 async-lock = { workspace = true }
 async-trait = { workspace = true }
-bimap = "0.6"
+bimap = { workspace = true }
 bincode = { workspace = true }
 blake3 = { workspace = true }
 bytes = { workspace = true }
@@ -46,20 +46,21 @@ hotshot-types = { workspace = true }
 hotshot-utils = { workspace = true }
 libp2p-identity = { workspace = true }
 lru = { workspace = true }
-num_enum = "0.7"
+num_enum = { workspace = true }
 parking_lot = { workspace = true }
-portpicker = "0.1"
 rand = { workspace = true }
-serde = { workspace = true, features = ["rc"] }
+serde = { workspace = true }
 sha2 = { workspace = true }
-time = { workspace = true }
 tagged-base64 = { workspace = true }
+test-utils = { workspace = true }
+time = { workspace = true }
 
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 url = { workspace = true }
 vbs = { workspace = true }
+versions = { workspace = true }
 
 [dev-dependencies]
 blake3 = { workspace = true }

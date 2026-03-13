@@ -9,36 +9,32 @@ use std::{sync::Arc, time::Duration};
 use async_broadcast::Sender;
 use chrono::Utc;
 use hotshot_types::{
+    data::{EpochNumber, ViewNumber},
     event::{Event, EventType},
     simple_certificate::EpochRootQuorumCertificateV2,
     simple_vote::{EpochRootQuorumVote2, HasEpoch, QuorumVote2, TimeoutData2, TimeoutVote2},
-    traits::node_implementation::{ConsensusTime, NodeImplementation, NodeType},
+    traits::node_implementation::{NodeImplementation, NodeType},
     utils::{is_epoch_root, is_epoch_transition, is_last_block, EpochTransitionIndicator},
     vote::{HasViewNumber, Vote},
 };
 use hotshot_utils::anytrace::*;
 use tokio::{spawn, time::sleep};
 use tracing::instrument;
-use vbs::version::StaticVersionType;
+use versions::EPOCH_VERSION;
 
 use super::ConsensusTaskState;
 use crate::{
-    consensus::Versions,
     events::HotShotEvent,
     helpers::{broadcast_event, check_qc_state_cert_correspondence},
     vote_collection::{handle_epoch_root_vote, handle_vote},
 };
 
 /// Handle a `QuorumVoteRecv` event.
-pub(crate) async fn handle_quorum_vote_recv<
-    TYPES: NodeType,
-    I: NodeImplementation<TYPES>,
-    V: Versions,
->(
+pub(crate) async fn handle_quorum_vote_recv<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     vote: &QuorumVote2<TYPES>,
     event: Arc<HotShotEvent<TYPES>>,
     sender: &Sender<Arc<HotShotEvent<TYPES>>>,
-    task_state: &mut ConsensusTaskState<TYPES, I, V>,
+    task_state: &mut ConsensusTaskState<TYPES, I>,
 ) -> Result<()> {
     tracing::debug!("Handling QuorumVoteRecv for view {}", vote.view_number());
     let in_transition = task_state
@@ -119,12 +115,11 @@ pub(crate) async fn handle_quorum_vote_recv<
 pub(crate) async fn handle_epoch_root_quorum_vote_recv<
     TYPES: NodeType,
     I: NodeImplementation<TYPES>,
-    V: Versions,
 >(
     vote: &EpochRootQuorumVote2<TYPES>,
     event: Arc<HotShotEvent<TYPES>>,
     sender: &Sender<Arc<HotShotEvent<TYPES>>>,
-    task_state: &mut ConsensusTaskState<TYPES, I, V>,
+    task_state: &mut ConsensusTaskState<TYPES, I>,
 ) -> Result<()> {
     ensure!(
         vote.vote
@@ -163,15 +158,11 @@ pub(crate) async fn handle_epoch_root_quorum_vote_recv<
 }
 
 /// Handle a `TimeoutVoteRecv` event.
-pub(crate) async fn handle_timeout_vote_recv<
-    TYPES: NodeType,
-    I: NodeImplementation<TYPES>,
-    V: Versions,
->(
+pub(crate) async fn handle_timeout_vote_recv<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     vote: &TimeoutVote2<TYPES>,
     event: Arc<HotShotEvent<TYPES>>,
     sender: &Sender<Arc<HotShotEvent<TYPES>>>,
-    task_state: &mut ConsensusTaskState<TYPES, I, V>,
+    task_state: &mut ConsensusTaskState<TYPES, I>,
 ) -> Result<()> {
     let epoch_membership = task_state
         .membership_coordinator
@@ -209,14 +200,14 @@ pub(crate) async fn handle_timeout_vote_recv<
 /// #Errors
 /// Returns and error if we can't get the version or the version doesn't
 /// yet support HS 2
-pub async fn send_high_qc<TYPES: NodeType, V: Versions, I: NodeImplementation<TYPES>>(
-    new_view_number: TYPES::View,
+pub async fn send_high_qc<TYPES: NodeType, I: NodeImplementation<TYPES>>(
+    new_view_number: ViewNumber,
     sender: &Sender<Arc<HotShotEvent<TYPES>>>,
-    task_state: &mut ConsensusTaskState<TYPES, I, V>,
+    task_state: &mut ConsensusTaskState<TYPES, I>,
 ) -> Result<()> {
     let version = task_state.upgrade_lock.version(new_view_number).await?;
     ensure!(
-        version >= V::Epochs::VERSION,
+        version >= EPOCH_VERSION,
         debug!("HotStuff 2 upgrade not yet in effect")
     );
 
@@ -346,15 +337,11 @@ pub async fn send_high_qc<TYPES: NodeType, V: Versions, I: NodeImplementation<TY
 
 /// Handle a `ViewChange` event.
 #[instrument(skip_all)]
-pub(crate) async fn handle_view_change<
-    TYPES: NodeType,
-    I: NodeImplementation<TYPES>,
-    V: Versions,
->(
-    new_view_number: TYPES::View,
-    epoch_number: Option<TYPES::Epoch>,
+pub(crate) async fn handle_view_change<TYPES: NodeType, I: NodeImplementation<TYPES>>(
+    new_view_number: ViewNumber,
+    epoch_number: Option<EpochNumber>,
     sender: &Sender<Arc<HotShotEvent<TYPES>>>,
-    task_state: &mut ConsensusTaskState<TYPES, I, V>,
+    task_state: &mut ConsensusTaskState<TYPES, I>,
 ) -> Result<()> {
     if epoch_number > task_state.cur_epoch {
         task_state.cur_epoch = epoch_number;
@@ -414,7 +401,7 @@ pub(crate) async fn handle_view_change<
             sleep(Duration::from_millis(timeout)).await;
             broadcast_event(
                 Arc::new(HotShotEvent::Timeout(
-                    TYPES::View::new(*view_number),
+                    ViewNumber::new(*view_number),
                     epoch_number,
                 )),
                 &stream,
@@ -478,11 +465,11 @@ pub(crate) async fn handle_view_change<
 
 /// Handle a `Timeout` event.
 #[instrument(skip_all)]
-pub(crate) async fn handle_timeout<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>(
-    view_number: TYPES::View,
-    epoch: Option<TYPES::Epoch>,
+pub(crate) async fn handle_timeout<TYPES: NodeType, I: NodeImplementation<TYPES>>(
+    view_number: ViewNumber,
+    epoch: Option<EpochNumber>,
     sender: &Sender<Arc<HotShotEvent<TYPES>>>,
-    task_state: &mut ConsensusTaskState<TYPES, I, V>,
+    task_state: &mut ConsensusTaskState<TYPES, I>,
 ) -> Result<()> {
     ensure!(
         task_state.cur_view <= view_number,
@@ -501,7 +488,7 @@ pub(crate) async fn handle_timeout<TYPES: NodeType, I: NodeImplementation<TYPES>
     );
 
     let vote = TimeoutVote2::create_signed_vote(
-        TimeoutData2::<TYPES> {
+        TimeoutData2 {
             view: view_number,
             epoch,
         },

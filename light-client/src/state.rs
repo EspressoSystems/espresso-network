@@ -14,10 +14,7 @@ use hotshot_query_service::{
     node::BlockId,
     types::HeightIndexed,
 };
-use hotshot_types::{
-    data::EpochNumber, stake_table::StakeTableEntry, traits::node_implementation::ConsensusTime,
-    utils::root_block_in_epoch,
-};
+use hotshot_types::{data::EpochNumber, stake_table::StakeTableEntry, utils::root_block_in_epoch};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -713,9 +710,10 @@ fn header_matches_id(header: &Header, id: BlockId<SeqTypes>) -> bool {
 
 #[cfg(test)]
 mod test {
-    use espresso_types::{DrbAndHeaderUpgradeVersion, NsIndex};
+    use espresso_types::NsIndex;
     use hotshot_query_service::availability::TransactionIndex;
     use pretty_assertions::assert_eq;
+    use versions::DRB_AND_HEADER_UPGRADE_VERSION;
 
     use super::*;
     use crate::{
@@ -735,7 +733,7 @@ mod test {
         assert_eq!(lc.block_height().await.unwrap(), 0);
 
         // Local block height greater than server.
-        let leaf = leaf_chain::<DrbAndHeaderUpgradeVersion>(1..2)
+        let leaf = leaf_chain(1..2, DRB_AND_HEADER_UPGRADE_VERSION)
             .await
             .remove(0);
         db.insert_leaf(leaf).await.unwrap();

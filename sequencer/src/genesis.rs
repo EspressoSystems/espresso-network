@@ -137,7 +137,6 @@ impl Genesis {
 }
 
 mod upgrade_ser {
-
     use std::{collections::BTreeMap, fmt};
 
     use espresso_types::{
@@ -642,7 +641,7 @@ mod test {
             fee_recipient = "0x0000000000000000000000000000000000000000"
             fee_contract = "{proxy_addr:?}"
 
-           
+
         "#,
         )
         .to_string();

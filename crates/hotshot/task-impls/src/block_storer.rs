@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use hotshot_task::task::TaskState;
 use hotshot_types::{
     consensus::OuterConsensus,
-    data::DaProposal2,
+    data::{DaProposal2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::Proposal,
     traits::{
@@ -33,7 +33,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> BlockStorerTaskState<TYPES, 
         &self,
         payload: TYPES::BlockPayload,
         metadata: <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
-        view: TYPES::View,
+        view: ViewNumber,
     ) -> Proposal<TYPES, DaProposal2<TYPES>> {
         let encoded_transactions = payload.encode();
         let da_proposal = DaProposal2 {

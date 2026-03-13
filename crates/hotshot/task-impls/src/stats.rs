@@ -11,13 +11,10 @@ use hotshot_task::task::TaskState;
 use hotshot_types::{
     benchmarking::{LeaderViewStats, ReplicaViewStats},
     consensus::OuterConsensus,
+    data::{EpochNumber, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     simple_vote::HasEpoch,
-    traits::{
-        block_contents::BlockHeader,
-        node_implementation::{ConsensusTime, NodeType},
-        BlockPayload,
-    },
+    traits::{block_contents::BlockHeader, node_implementation::NodeType, BlockPayload},
     vote::HasViewNumber,
 };
 use hotshot_utils::{
@@ -31,25 +28,25 @@ use crate::events::HotShotEvent;
 
 pub struct StatsTaskState<TYPES: NodeType> {
     node_index: u64,
-    view: TYPES::View,
-    epoch: Option<TYPES::Epoch>,
+    view: ViewNumber,
+    epoch: Option<EpochNumber>,
     public_key: TYPES::SignatureKey,
     consensus: OuterConsensus<TYPES>,
     membership_coordinator: EpochMembershipCoordinator<TYPES>,
-    leader_stats: BTreeMap<TYPES::View, LeaderViewStats<TYPES::View>>,
-    replica_stats: BTreeMap<TYPES::View, ReplicaViewStats<TYPES::View>>,
-    latencies_by_view: BTreeMap<TYPES::View, i128>,
-    sizes_by_view: BTreeMap<TYPES::View, i128>,
-    epoch_start_times: BTreeMap<TYPES::Epoch, i128>,
-    timeouts: BTreeSet<TYPES::View>,
+    leader_stats: BTreeMap<ViewNumber, LeaderViewStats>,
+    replica_stats: BTreeMap<ViewNumber, ReplicaViewStats>,
+    latencies_by_view: BTreeMap<ViewNumber, i128>,
+    sizes_by_view: BTreeMap<ViewNumber, i128>,
+    epoch_start_times: BTreeMap<EpochNumber, i128>,
+    timeouts: BTreeSet<ViewNumber>,
     orchestrator_client: Option<OrchestratorClient>,
 }
 
 impl<TYPES: NodeType> StatsTaskState<TYPES> {
     pub fn new(
         node_index: u64,
-        view: TYPES::View,
-        epoch: Option<TYPES::Epoch>,
+        view: ViewNumber,
+        epoch: Option<EpochNumber>,
         public_key: TYPES::SignatureKey,
         consensus: OuterConsensus<TYPES>,
         membership_coordinator: EpochMembershipCoordinator<TYPES>,
@@ -71,17 +68,17 @@ impl<TYPES: NodeType> StatsTaskState<TYPES> {
             orchestrator_client: orchestrator_url.map(OrchestratorClient::new),
         }
     }
-    fn leader_entry(&mut self, view: TYPES::View) -> &mut LeaderViewStats<TYPES::View> {
+    fn leader_entry(&mut self, view: ViewNumber) -> &mut LeaderViewStats {
         self.leader_stats
             .entry(view)
             .or_insert_with(|| LeaderViewStats::new(view))
     }
-    fn replica_entry(&mut self, view: TYPES::View) -> &mut ReplicaViewStats<TYPES::View> {
+    fn replica_entry(&mut self, view: ViewNumber) -> &mut ReplicaViewStats {
         self.replica_stats
             .entry(view)
             .or_insert_with(|| ReplicaViewStats::new(view))
     }
-    fn garbage_collect(&mut self, view: TYPES::View) {
+    fn garbage_collect(&mut self, view: ViewNumber) {
         self.leader_stats = self.leader_stats.split_off(&view);
         self.replica_stats = self.replica_stats.split_off(&view);
         self.latencies_by_view = self.latencies_by_view.split_off(&view);
@@ -121,7 +118,7 @@ impl<TYPES: NodeType> StatsTaskState<TYPES> {
         Ok(())
     }
 
-    fn log_basic_stats(&self, now: i128, epoch: &TYPES::Epoch) -> i128 {
+    fn log_basic_stats(&self, now: i128, epoch: &EpochNumber) -> i128 {
         let num_views = self.latencies_by_view.len();
         let total_size = self.sizes_by_view.values().sum::<i128>();
 
@@ -322,7 +319,7 @@ impl<TYPES: NodeType> TaskState for StatsTaskState<TYPES> {
                     self.epoch = *epoch;
                     new_epoch = true;
                 }
-                if *view == TYPES::View::new(0) {
+                if *view == ViewNumber::new(0) {
                     return Ok(());
                 }
 
@@ -335,7 +332,7 @@ impl<TYPES: NodeType> TaskState for StatsTaskState<TYPES> {
                     let _ = self.dump_stats();
                     if let Some(orchestrator_client) = self.orchestrator_client.as_ref() {
                         orchestrator_client
-                            .post_bench_results::<TYPES>(BenchResults::<TYPES::View> {
+                            .post_bench_results::<TYPES>(BenchResults {
                                 node_index: self.node_index,
                                 leader_view_stats: self.leader_stats.clone(),
                                 replica_view_stats: self.replica_stats.clone(),
@@ -392,7 +389,7 @@ impl<TYPES: NodeType> TaskState for StatsTaskState<TYPES> {
             },
             HotShotEvent::LeavesDecided(leaves) => {
                 for leaf in leaves {
-                    if leaf.view_number() == TYPES::View::genesis() {
+                    if leaf.view_number() == ViewNumber::genesis() {
                         continue;
                     }
                     let view = leaf.view_number();

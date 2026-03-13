@@ -1,21 +1,21 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use alloy::primitives::Address;
 use anyhow::{bail, Context};
 #[cfg(any(test, feature = "testing"))]
 use async_lock::RwLock;
 use async_trait::async_trait;
+use hotshot_contract_adapter::sol_types::{LightClientV3, StakeTableV2};
 use hotshot_types::{
     data::EpochNumber, epoch_membership::EpochMembershipCoordinator, traits::states::InstanceState,
     HotShotConfig,
 };
-#[cfg(any(test, feature = "testing"))]
-use vbs::version::StaticVersionType;
+use moka::future::Cache;
 use vbs::version::Version;
 
 use super::{
     state::ValidatedState,
-    traits::{EventsPersistenceRead, MembershipPersistence},
+    traits::{EventsPersistenceRead, MembershipPersistence, StakeTuple},
     v0_1::NoStorage,
     v0_3::{EventKey, IndexedStake, StakeTableEvent},
     SeqTypes, UpgradeType, ViewBasedUpgrade,
@@ -25,8 +25,8 @@ use crate::{
         impls::StakeTableHash, traits::StateCatchup, v0_3::ChainConfig, GenesisHeader, L1BlockInfo,
         L1Client, Timestamp, Upgrade, UpgradeMode,
     },
-    v0_3::{RewardAmount, Validator},
-    EpochCommittees, PubKey, ValidatorMap,
+    v0_3::{RegisteredValidator, RewardAmount},
+    AuthenticatedValidatorMap, EpochCommittees, PubKey, RegisteredValidatorMap,
 };
 
 /// Represents the immutable state of a node.
@@ -49,6 +49,12 @@ pub struct NodeState {
     pub genesis_version: Version,
     pub epoch_start_block: u64,
 
+    // some address are fetched from the stake table contract,
+    // but we can cache them for the duration of the program since we do not expect this to ever change
+    pub light_client_contract_address: Cache<(), Address>,
+    pub token_contract_address: Cache<(), Address>,
+    pub finalized_hotshot_height: Cache<(), u64>,
+
     /// Map containing all planned and executed upgrades.
     ///
     /// Currently, only one upgrade can be executed at a time.
@@ -61,7 +67,7 @@ pub struct NodeState {
     /// Current version of the sequencer.
     ///
     /// This version is checked to determine if an upgrade is planned,
-    /// and which version variant for versioned types  
+    /// and which version variant for versioned types
     /// to use in functions such as genesis.
     /// (example: genesis returns V2 Header if version is 0.2)
     pub current_version: Version,
@@ -79,14 +85,81 @@ impl NodeState {
             .fixed_block_reward()
             .context("fixed block reward not found")
     }
+
+    pub async fn light_client_contract_address(&self) -> anyhow::Result<Address> {
+        match self.light_client_contract_address.get(&()).await {
+            Some(address) => Ok(address),
+            None => {
+                let stake_table_address = self
+                    .chain_config
+                    .stake_table_contract
+                    .context("No stake table contract in chain config")?;
+
+                let stake_table =
+                    StakeTableV2::new(stake_table_address, self.l1_client.provider.clone());
+                let light_client_contract_address = stake_table.lightClient().call().await?;
+
+                self.light_client_contract_address
+                    .insert((), light_client_contract_address)
+                    .await;
+
+                Ok(light_client_contract_address)
+            },
+        }
+    }
+
+    pub async fn token_contract_address(&self) -> anyhow::Result<Address> {
+        match self.token_contract_address.get(&()).await {
+            Some(address) => Ok(address),
+            None => {
+                let stake_table_address = self
+                    .chain_config
+                    .stake_table_contract
+                    .context("No stake table contract in chain config")?;
+
+                let stake_table =
+                    StakeTableV2::new(stake_table_address, self.l1_client.provider.clone());
+                let token_contract_address = stake_table.token().call().await?;
+
+                self.token_contract_address
+                    .insert((), token_contract_address)
+                    .await;
+
+                Ok(token_contract_address)
+            },
+        }
+    }
+
+    pub async fn finalized_hotshot_height(&self) -> anyhow::Result<u64> {
+        match self.finalized_hotshot_height.get(&()).await {
+            Some(block) => Ok(block),
+            None => {
+                let light_client_contract_address = self.light_client_contract_address().await?;
+
+                let light_client_contract = LightClientV3::new(
+                    light_client_contract_address,
+                    self.l1_client.provider.clone(),
+                );
+
+                let finalized_hotshot_height = light_client_contract
+                    .finalizedState()
+                    .call()
+                    .await?
+                    .blockHeight;
+
+                self.finalized_hotshot_height
+                    .insert((), finalized_hotshot_height)
+                    .await;
+
+                Ok(finalized_hotshot_height)
+            },
+        }
+    }
 }
 
 #[async_trait]
 impl MembershipPersistence for NoStorage {
-    async fn load_stake(
-        &self,
-        _epoch: EpochNumber,
-    ) -> anyhow::Result<Option<(ValidatorMap, Option<RewardAmount>, Option<StakeTableHash>)>> {
+    async fn load_stake(&self, _epoch: EpochNumber) -> anyhow::Result<Option<StakeTuple>> {
         Ok(None)
     }
 
@@ -97,7 +170,7 @@ impl MembershipPersistence for NoStorage {
     async fn store_stake(
         &self,
         _epoch: EpochNumber,
-        _stake: ValidatorMap,
+        _stake: AuthenticatedValidatorMap,
         _block_reward: Option<RewardAmount>,
         _stake_table_hash: Option<StakeTableHash>,
     ) -> anyhow::Result<()> {
@@ -123,10 +196,14 @@ impl MembershipPersistence for NoStorage {
         bail!("unimplemented")
     }
 
+    async fn delete_stake_tables(&self) -> anyhow::Result<()> {
+        Ok(())
+    }
+
     async fn store_all_validators(
         &self,
         _epoch: EpochNumber,
-        _all_validators: ValidatorMap,
+        _all_validators: RegisteredValidatorMap,
     ) -> anyhow::Result<()> {
         Ok(())
     }
@@ -136,7 +213,7 @@ impl MembershipPersistence for NoStorage {
         _epoch: EpochNumber,
         _offset: u64,
         _limit: u64,
-    ) -> anyhow::Result<Vec<Validator<PubKey>>> {
+    ) -> anyhow::Result<Vec<RegisteredValidator<PubKey>>> {
         bail!("unimplemented")
     }
 }
@@ -172,13 +249,26 @@ impl NodeState {
             coordinator,
             genesis_version,
             epoch_start_block: 0,
+            light_client_contract_address: Cache::builder().max_capacity(1).build(),
+            token_contract_address: Cache::builder().max_capacity(1).build(),
+            finalized_hotshot_height: if cfg!(any(test, feature = "testing")) {
+                Cache::builder()
+                    .max_capacity(1)
+                    .time_to_live(Duration::from_secs(1))
+                    .build()
+            } else {
+                Cache::builder()
+                    .max_capacity(1)
+                    .time_to_live(Duration::from_secs(30))
+                    .build()
+            },
         }
     }
 
     #[cfg(any(test, feature = "testing"))]
     pub fn mock() -> Self {
         use hotshot_example_types::storage_types::TestStorage;
-        use vbs::version::StaticVersion;
+        use versions::version;
 
         use crate::v0_3::Fetcher;
 
@@ -201,16 +291,16 @@ impl NodeState {
             chain_config,
             l1,
             Arc::new(mock::MockStateCatchup::default()),
-            StaticVersion::<0, 1>::version(),
+            version(0, 1),
             coordinator,
-            Version { major: 0, minor: 1 },
+            version(0, 1),
         )
     }
 
     #[cfg(any(test, feature = "testing"))]
     pub fn mock_v2() -> Self {
         use hotshot_example_types::storage_types::TestStorage;
-        use vbs::version::StaticVersion;
+        use versions::version;
 
         use crate::v0_3::Fetcher;
 
@@ -233,16 +323,16 @@ impl NodeState {
             chain_config,
             l1,
             Arc::new(mock::MockStateCatchup::default()),
-            StaticVersion::<0, 2>::version(),
+            version(0, 2),
             coordinator,
-            Version { major: 0, minor: 2 },
+            version(0, 2),
         )
     }
 
     #[cfg(any(test, feature = "testing"))]
     pub fn mock_v3() -> Self {
         use hotshot_example_types::storage_types::TestStorage;
-        use vbs::version::StaticVersion;
+        use versions::version;
 
         use crate::v0_3::Fetcher;
         let l1 = L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
@@ -263,9 +353,9 @@ impl NodeState {
             ChainConfig::default(),
             l1,
             mock::MockStateCatchup::default(),
-            StaticVersion::<0, 3>::version(),
+            version(0, 3),
             coordinator,
-            Version { major: 0, minor: 3 },
+            version(0, 3),
         )
     }
 
@@ -335,7 +425,7 @@ impl From<BTreeMap<Version, Upgrade>> for UpgradeMap {
 impl Default for NodeState {
     fn default() -> Self {
         use hotshot_example_types::storage_types::TestStorage;
-        use vbs::version::StaticVersion;
+        use versions::version;
 
         use crate::v0_3::Fetcher;
 
@@ -358,9 +448,9 @@ impl Default for NodeState {
             chain_config,
             l1,
             Arc::new(mock::MockStateCatchup::default()),
-            StaticVersion::<0, 1>::version(),
+            version(0, 1),
             coordinator,
-            Version { major: 0, minor: 1 },
+            version(0, 1),
         )
     }
 }
@@ -436,7 +526,7 @@ pub mod mock {
     use crate::{
         retain_accounts,
         v0_3::{RewardAccountProofV1, RewardAccountV1, RewardMerkleCommitmentV1},
-        v0_4::{RewardAccountProofV2, RewardAccountV2, RewardMerkleCommitmentV2},
+        v0_4::{PermittedRewardMerkleTreeV2, RewardAccountV2, RewardMerkleCommitmentV2},
         BackoffParams, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment, Leaf2,
     };
 
@@ -555,15 +645,14 @@ pub mod mock {
             Ok(ChainConfig::default())
         }
 
-        async fn try_fetch_reward_accounts_v2(
+        async fn try_fetch_reward_merkle_tree_v2(
             &self,
             _retry: usize,
-            _instance: &NodeState,
             _height: u64,
             _view: ViewNumber,
             _reward_merkle_tree_root: RewardMerkleCommitmentV2,
-            _accounts: &[RewardAccountV2],
-        ) -> anyhow::Result<Vec<RewardAccountProofV2>> {
+            _accounts: Arc<Vec<RewardAccountV2>>,
+        ) -> anyhow::Result<PermittedRewardMerkleTreeV2> {
             anyhow::bail!("unimplemented")
         }
 

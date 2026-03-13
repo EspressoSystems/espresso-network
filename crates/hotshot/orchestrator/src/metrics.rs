@@ -1,10 +1,7 @@
 use std::collections::BTreeMap;
 
-use hotshot_types::{
-    benchmarking::{
-        LeaderViewStats as OtherLeaderViewStats, ReplicaViewStats as OtherReplicaViewStats,
-    },
-    traits::node_implementation::ConsensusTime,
+use hotshot_types::benchmarking::{
+    LeaderViewStats as OtherLeaderViewStats, ReplicaViewStats as OtherReplicaViewStats,
 };
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
@@ -26,8 +23,8 @@ pub struct ReplicaViewStats {
     pub vid_share_recv: Option<i128>,
 }
 
-impl<V: ConsensusTime> From<OtherReplicaViewStats<V>> for ReplicaViewStats {
-    fn from(stats: OtherReplicaViewStats<V>) -> Self {
+impl From<OtherReplicaViewStats> for ReplicaViewStats {
+    fn from(stats: OtherReplicaViewStats) -> Self {
         Self {
             view: stats.view.u64(),
             ..stats.into()
@@ -35,8 +32,8 @@ impl<V: ConsensusTime> From<OtherReplicaViewStats<V>> for ReplicaViewStats {
     }
 }
 
-impl<V: ConsensusTime> From<OtherLeaderViewStats<V>> for LeaderViewStats {
-    fn from(stats: OtherLeaderViewStats<V>) -> Self {
+impl From<OtherLeaderViewStats> for LeaderViewStats {
+    fn from(stats: OtherLeaderViewStats) -> Self {
         Self {
             view: stats.view.u64(),
             ..stats.into()

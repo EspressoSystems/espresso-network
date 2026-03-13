@@ -9,7 +9,7 @@ use std::{marker::PhantomData, sync::Arc};
 use hotshot::{tasks::task_state::CreateTaskState, types::SignatureKey};
 use hotshot_example_types::{
     block_types::{TestBlockPayload, TestMetadata, TestTransaction},
-    node_types::{MemoryImpl, TestTypes, TestVersions},
+    node_types::{MemoryImpl, TEST_VERSIONS, TestTypes},
     state_types::{TestInstanceState, TestValidatedState},
 };
 use hotshot_macros::{run_test, test_scripts};
@@ -25,11 +25,10 @@ use hotshot_types::{
     message::UpgradeLock,
     traits::{
         consensus_api::ConsensusApi,
-        node_implementation::{ConsensusTime, NodeType, Versions},
+        node_implementation::NodeType,
         BlockPayload,
     },
 };
-use vbs::version::StaticVersionType;
 use vec1::vec1;
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -37,7 +36,7 @@ async fn test_vid_task() {
     use hotshot_types::message::Proposal;
 
     // Build the API for node 2.
-    let handle = build_system_handle::<TestTypes, MemoryImpl, TestVersions>(2)
+    let handle = build_system_handle::<TestTypes, MemoryImpl>(2)
         .await
         .0;
     let pub_key = handle.public_key();
@@ -50,7 +49,7 @@ async fn test_vid_task() {
         .total_nodes()
         .await;
 
-    let upgrade_lock = UpgradeLock::<TestTypes, TestVersions>::new();
+    let upgrade_lock = UpgradeLock::<TestTypes>::new(TEST_VERSIONS.test);
     let transactions = vec![TestTransaction::new(vec![0])];
 
     let (payload, metadata) = <TestBlockPayload as BlockPayload<TestTypes>>::from_transactions(
@@ -90,13 +89,13 @@ async fn test_vid_task() {
         },
         view_number: ViewNumber::new(2),
     };
-    let message = Proposal {
+    let message = Proposal::<TestTypes, DaProposal<TestTypes>> {
         data: proposal.clone(),
         signature,
         _pd: PhantomData,
     };
 
-    let vid_proposal = Proposal {
+    let vid_proposal = Proposal::<TestTypes, VidDisperse<TestTypes>> {
         data: vid_disperse.disperse.clone(),
         signature: message.signature.clone(),
         _pd: PhantomData,
@@ -112,13 +111,12 @@ async fn test_vid_task() {
                 },
                 ViewNumber::new(2),
                 None,
-                vec1::vec1![null_block::builder_fee::<TestTypes, TestVersions>(
+                vec1::vec1![null_block::builder_fee::<TestTypes>(
                     num_storage_nodes,
-                    <TestVersions as Versions>::Base::VERSION,
-                   
+                    TEST_VERSIONS.test.base
                 )
                 .unwrap()],
-                
+
             )),
         ],
     ];
@@ -133,19 +131,18 @@ async fn test_vid_task() {
                     num_transactions: transactions.len() as u64,
                 },
                 ViewNumber::new(2),
-                vec1![null_block::builder_fee::<TestTypes, TestVersions>(
+                vec1![null_block::builder_fee::<TestTypes>(
                     num_storage_nodes,
-                    <TestVersions as Versions>::Base::VERSION,
-                    
+                    TEST_VERSIONS.test.base
                 )
                 .unwrap()],
-                 
+
             )),
             exact(VidDisperseSend(vid_proposal.clone(), pub_key)),
         ]),
     ];
 
-    let vid_state = VidTaskState::<TestTypes, MemoryImpl, TestVersions>::create_from(&handle).await;
+    let vid_state = VidTaskState::<TestTypes, MemoryImpl>::create_from(&handle).await;
     let mut script = TaskScript {
         timeout: std::time::Duration::from_millis(35),
         state: vid_state,

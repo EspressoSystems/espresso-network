@@ -1,47 +1,44 @@
+mod external_event_handler;
+mod message_compat_tests;
+mod proposal_fetcher;
+mod request_response;
+
 pub mod api;
 pub mod catchup;
 pub mod context;
 pub mod genesis;
-mod proposal_fetcher;
-mod request_response;
+pub mod network;
+pub mod options;
+pub mod persistence;
+pub mod run;
+pub mod state;
 pub mod state_cert;
+pub mod state_signature;
 pub mod util;
 
-mod external_event_handler;
-pub mod options;
-pub mod state_signature;
-
-mod message_compat_tests;
-
-use std::{net::SocketAddr, str::FromStr, sync::Arc};
+use std::{
+    fmt::Debug, marker::PhantomData, net::SocketAddr, str::FromStr, sync::Arc, time::Duration,
+};
 
 use alloy::primitives::U256;
 use anyhow::Context;
 use async_lock::{Mutex, RwLock};
 use catchup::{ParallelStateCatchup, StatePeers};
 use context::SequencerContext;
+use derivative::Derivative;
 use espresso_types::{
     traits::{EventConsumer, MembershipPersistence},
+    v0::traits::SequencerPersistence,
     v0_3::Fetcher,
     BackoffParams, EpochCommittees, L1ClientOptions, NodeState, PubKey, SeqTypes, ValidatedState,
 };
-use genesis::L1Finalized;
-use hotshot::traits::implementations::{derive_cliquenet_keypair, Cliquenet};
-use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtPersistentStorage;
-use options::Identity;
-use proposal_fetcher::ProposalFetcherConfig;
-use tracing::info;
-use url::Url;
-
-use crate::{request_response::data_source::Storage as RequestResponseStorage, util::NodeAddress};
-pub mod persistence;
-pub mod state;
-use std::{fmt::Debug, marker::PhantomData, time::Duration};
-
-use derivative::Derivative;
-use espresso_types::v0::traits::SequencerPersistence;
 pub use genesis::Genesis;
-use hotshot::{traits::implementations::MemoryNetwork, types::SignatureKey};
+use genesis::L1Finalized;
+use hotshot::{
+    traits::implementations::{derive_cliquenet_keypair, Cliquenet, MemoryNetwork},
+    types::SignatureKey,
+};
+use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtPersistentStorage;
 use hotshot_orchestrator::client::{get_complete_config, OrchestratorClient};
 use hotshot_types::{
     data::ViewNumber,
@@ -51,21 +48,26 @@ use hotshot_types::{
     traits::{
         metrics::{Metrics, NoMetrics},
         network::ConnectedNetwork,
-        node_implementation::{NodeImplementation, NodeType, Versions},
+        node_implementation::{NodeImplementation, NodeType},
         storage::Storage,
     },
     utils::BuilderCommitment,
     ValidatorConfig,
 };
+use moka::future::Cache;
+use options::Identity;
 pub use options::Options;
-use serde::{Deserialize, Serialize};
-use vbs::version::{StaticVersion, StaticVersionType};
-pub mod network;
-
-pub mod run;
+use proposal_fetcher::ProposalFetcherConfig;
 pub use run::main;
+use serde::{Deserialize, Serialize};
+use tracing::info;
+use url::Url;
+use vbs::version::StaticVersion;
+
+use crate::{request_response::data_source::Storage as RequestResponseStorage, util::NodeAddress};
 
 pub const RECENT_STAKE_TABLES_LIMIT: u64 = 20;
+
 /// The Sequencer node is generic over the hotshot CommChannel.
 #[derive(Derivative, Serialize, Deserialize)]
 #[derivative(
@@ -110,6 +112,8 @@ pub struct NetworkParams {
     pub state_peers: Vec<Url>,
     pub config_peers: Option<Vec<Url>>,
     pub catchup_backoff: BackoffParams,
+    /// Base timeout for catchup requests to peers.
+    pub catchup_base_timeout: Duration,
     /// The address to advertise as our public API's URL
     pub public_api_url: Option<Url>,
 
@@ -187,35 +191,50 @@ pub struct L1Params {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub async fn init_node<
-    P: SequencerPersistence + MembershipPersistence + DhtPersistentStorage,
-    V: Versions,
->(
+pub async fn init_node<P>(
     genesis: Genesis,
     network_params: NetworkParams,
     metrics: &dyn Metrics,
     mut persistence: P,
     l1_params: L1Params,
     storage: Option<RequestResponseStorage>,
-    seq_versions: V,
     event_consumer: impl EventConsumer + 'static,
     is_da: bool,
     identity: Identity,
     proposal_fetcher_config: ProposalFetcherConfig,
-) -> anyhow::Result<SequencerContext<network::Production, P, V>>
+) -> anyhow::Result<SequencerContext<network::Production, P>>
 where
+    P: SequencerPersistence + MembershipPersistence + DhtPersistentStorage,
     Arc<P>: Storage<SeqTypes>,
 {
     // Expose git information via status API.
+    let info = sequencer_utils::build_info!();
     metrics
         .text_family(
             "version".into(),
             vec!["rev".into(), "desc".into(), "timestamp".into()],
         )
         .create(vec![
-            env!("VERGEN_GIT_SHA").into(),
-            env!("VERGEN_GIT_DESCRIBE").into(),
-            env!("VERGEN_GIT_COMMIT_TIMESTAMP").into(),
+            info.git_sha.into(),
+            info.git_describe.into(),
+            info.git_commit_timestamp.into(),
+        ]);
+
+    metrics
+        .text_family(
+            "build_info".into(),
+            vec![
+                "modified".into(),
+                "branch".into(),
+                "debug".into(),
+                "features".into(),
+            ],
+        )
+        .create(vec![
+            info.git_dirty.into(),
+            info.git_branch.into(),
+            info.is_debug.to_string(),
+            env!("VERGEN_CARGO_FEATURES").into(),
         ]);
 
     // Expose Node Entity Information via the status/metrics API
@@ -350,6 +369,7 @@ where
             let peers = StatePeers::<SequencerApiVersion>::from_urls(
                 peers,
                 network_params.catchup_backoff,
+                network_params.catchup_base_timeout,
                 &NoMetrics,
             );
             let config = peers.fetch_config(validator_config.clone()).await?;
@@ -387,7 +407,7 @@ where
         },
     };
 
-    if let Some(upgrade) = genesis.upgrades.get(&V::Upgrade::VERSION) {
+    if let Some(upgrade) = genesis.upgrades.get(&genesis.upgrade_version) {
         upgrade.set_hotshot_config_parameters(&mut network_config.config);
     }
 
@@ -405,16 +425,20 @@ where
         .stake_table_capacity
         .unwrap_or(hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY);
 
+    let version_upgrade = versions::Upgrade::new(genesis.base_version, genesis.upgrade_version);
+
     tracing::warn!("setting epoch_height={epoch_height:?}");
     tracing::warn!("setting drb_difficulty={drb_difficulty:?}");
     tracing::warn!("setting drb_upgrade_difficulty={drb_upgrade_difficulty:?}");
     tracing::warn!("setting epoch_start_block={epoch_start_block:?}");
     tracing::warn!("setting stake_table_capacity={stake_table_capacity:?}");
+    tracing::warn!("setting version_upgrade={version_upgrade}");
     network_config.config.epoch_height = epoch_height;
     network_config.config.drb_difficulty = drb_difficulty;
     network_config.config.drb_upgrade_difficulty = drb_upgrade_difficulty;
     network_config.config.epoch_start_block = epoch_start_block;
     network_config.config.stake_table_capacity = stake_table_capacity;
+    network_config.config.upgrade = version_upgrade;
 
     if let Some(da_committees) = &genesis.da_committees {
         tracing::warn!("setting da_committees from genesis: {da_committees:?}");
@@ -471,6 +495,7 @@ where
     let state_peers = StatePeers::<SequencerApiVersion>::from_urls(
         network_params.state_peers,
         network_params.catchup_backoff,
+        network_params.catchup_base_timeout,
         metrics,
     );
     state_catchup_providers.add_provider(Arc::new(state_peers));
@@ -535,12 +560,18 @@ where
         l1_genesis: Some(l1_genesis),
         node_id: node_index,
         upgrades: genesis.upgrades,
-        current_version: V::Base::VERSION,
+        current_version: genesis.base_version,
         epoch_height: Some(epoch_height),
         state_catchup: Arc::new(state_catchup_providers.clone()),
         coordinator: coordinator.clone(),
         genesis_version: genesis.genesis_version,
         epoch_start_block: genesis.epoch_start_block.unwrap_or_default(),
+        light_client_contract_address: Cache::builder().max_capacity(1).build(),
+        token_contract_address: Cache::builder().max_capacity(1).build(),
+        finalized_hotshot_height: Cache::builder()
+            .max_capacity(1)
+            .time_to_live(Duration::from_secs(30))
+            .build(),
     };
 
     // Derive our Cliquenet keypair
@@ -588,7 +619,6 @@ where
         metrics,
         genesis.stake_table.capacity,
         event_consumer,
-        seq_versions,
         proposal_fetcher_config,
         Some(network_params.orchestrator_url),
     )
@@ -664,17 +694,17 @@ pub mod testing {
         signature_key::BLSKeyPair,
         traits::{
             block_contents::BlockHeader, metrics::NoMetrics, network::Topic,
-            node_implementation::ConsensusTime as _, signature_key::BuilderSignatureKey,
-            EncodeBytes,
+            signature_key::BuilderSignatureKey, EncodeBytes,
         },
         HotShotConfig, PeerConfig,
     };
-    use portpicker::pick_unused_port;
     use rand::SeedableRng as _;
     use rand_chacha::ChaCha20Rng;
     use staking_cli::demo::{DelegationConfig, StakingTransactions};
+    use test_utils::reserve_tcp_port;
     use tokio::spawn;
-    use vbs::version::Version;
+    use vbs::version::{StaticVersionType, Version};
+    use versions::{EPOCH_VERSION, VERSION_0_1};
 
     use super::*;
     use crate::{
@@ -719,7 +749,10 @@ pub mod testing {
         max_block_size: Option<u64>,
     ) -> (Box<dyn BuilderTask<SeqTypes>>, Url) {
         let builder_key_pair = TestConfig::<0>::builder_key();
-        let port = port.unwrap_or_else(|| pick_unused_port().expect("No ports available"));
+        let port = match port {
+            Some(p) => p,
+            None => reserve_tcp_port().expect("OS should have ephemeral ports available"),
+        };
 
         // This should never fail.
         let url: Url = format!("http://localhost:{port}")
@@ -748,14 +781,15 @@ pub mod testing {
             .into_app()
             .expect("Failed to create builder tide-disco app");
 
-        spawn(
+        spawn(async move {
             app.serve(
                 format!("http://0.0.0.0:{port}")
                     .parse::<Url>()
                     .expect("Failed to parse builder listener"),
                 EpochVersion::instance(),
-            ),
-        );
+            )
+            .await
+        });
 
         // Pass on the builder task to be injected in the testing harness
         (Box::new(LegacyBuilderImplementation { global_state }), url)
@@ -764,7 +798,10 @@ pub mod testing {
     pub async fn run_test_builder<const NUM_NODES: usize>(
         port: Option<u16>,
     ) -> (Box<dyn BuilderTask<SeqTypes>>, Url) {
-        let port = port.unwrap_or_else(|| pick_unused_port().expect("No ports available"));
+        let port = match port {
+            Some(p) => p,
+            None => reserve_tcp_port().expect("OS should have ephemeral ports available"),
+        };
 
         // This should never fail.
         let url: Url = format!("http://localhost:{port}")
@@ -772,18 +809,17 @@ pub mod testing {
             .expect("Failed to parse builder URL");
         tracing::info!("Starting test builder on {url}");
 
-        (
-            <SimpleBuilderImplementation as TestBuilderImplementation<SeqTypes>>::start(
-                NUM_NODES,
-                format!("http://0.0.0.0:{port}")
-                    .parse()
-                    .expect("Failed to parse builder listener"),
-                (),
-                HashMap::new(),
-            )
-            .await,
-            url,
+        let task = <SimpleBuilderImplementation as TestBuilderImplementation<SeqTypes>>::start(
+            NUM_NODES,
+            format!("http://0.0.0.0:{port}")
+                .parse()
+                .expect("Failed to parse builder listener"),
+            (),
+            HashMap::new(),
         )
+        .await;
+
+        (task, url)
     }
 
     pub struct TestConfigBuilder<const NUM_NODES: usize> {
@@ -856,10 +892,15 @@ pub mod testing {
             self
         }
 
-        pub fn upgrades<V: Versions>(mut self, upgrades: BTreeMap<Version, Upgrade>) -> Self {
-            let upgrade = upgrades.get(&<V as Versions>::Upgrade::VERSION).unwrap();
+        pub fn upgrades(mut self, v: Version, upgrades: BTreeMap<Version, Upgrade>) -> Self {
+            let upgrade = upgrades.get(&v).unwrap();
             upgrade.set_hotshot_config_parameters(&mut self.config);
             self.upgrades = upgrades;
+            self
+        }
+
+        pub fn version_upgrade(mut self, u: versions::Upgrade) -> Self {
+            self.config.upgrade = u;
             self
         }
 
@@ -867,7 +908,7 @@ pub mod testing {
         /// by adding a branch to the `match` statement.
         pub async fn set_upgrades(mut self, version: Version) -> Self {
             let upgrade = match version {
-                version if version >= EpochVersion::VERSION => {
+                version if version >= EPOCH_VERSION => {
                     tracing::debug!(?version, "upgrade version");
                     let blocks_per_epoch = self.config.epoch_height;
                     let epoch_start_block = self.config.epoch_start_block;
@@ -1001,6 +1042,8 @@ pub mod testing {
 
             let master_map = MasterMap::new();
 
+            let builder_port = reserve_tcp_port().unwrap();
+
             let config: HotShotConfig<SeqTypes> = HotShotConfig {
                 fixed_leader_for_gpuvid: 0,
                 num_nodes_with_stake: num_nodes.try_into().unwrap(),
@@ -1012,11 +1055,9 @@ pub mod testing {
                 da_staked_committee_size: num_nodes,
                 view_sync_timeout: Duration::from_secs(1),
                 data_request_delay: Duration::from_secs(1),
-                builder_urls: vec1::vec1![Url::parse(&format!(
-                    "http://127.0.0.1:{}",
-                    pick_unused_port().unwrap()
-                ))
-                .unwrap()],
+                builder_urls: vec1::vec1![
+                    Url::parse(&format!("http://127.0.0.1:{builder_port}")).unwrap()
+                ],
                 builder_timeout: Duration::from_secs(1),
                 start_threshold: (
                     known_nodes_with_stake.clone().len() as u64,
@@ -1035,6 +1076,7 @@ pub mod testing {
                 stake_table_capacity: hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY,
                 drb_difficulty: 10,
                 drb_upgrade_difficulty: 20,
+                upgrade: versions::Upgrade::trivial(VERSION_0_1),
             };
 
             let anvil = Anvil::new()
@@ -1139,10 +1181,10 @@ pub mod testing {
                 .collect()
         }
 
-        pub async fn init_nodes<V: Versions>(
+        pub async fn init_nodes(
             &self,
-            bind_version: V,
-        ) -> Vec<SequencerContext<network::Memory, NoStorage, V>> {
+            upgrade: versions::Upgrade,
+        ) -> Vec<SequencerContext<network::Memory, NoStorage>> {
             join_all((0..self.num_nodes()).map(|i| async move {
                 self.init_node(
                     i,
@@ -1153,7 +1195,7 @@ pub mod testing {
                     &NoMetrics,
                     STAKE_TABLE_CAPACITY_FOR_TEST,
                     NullEventConsumer,
-                    bind_version,
+                    upgrade,
                     Default::default(),
                 )
                 .await
@@ -1166,7 +1208,7 @@ pub mod testing {
         }
 
         #[allow(clippy::too_many_arguments)]
-        pub async fn init_node<V: Versions, P: PersistenceOptions>(
+        pub async fn init_node<P: PersistenceOptions>(
             &self,
             i: usize,
             mut state: ValidatedState,
@@ -1176,10 +1218,11 @@ pub mod testing {
             metrics: &dyn Metrics,
             stake_table_capacity: usize,
             event_consumer: impl EventConsumer + 'static,
-            bind_version: V,
+            upgrade: versions::Upgrade,
             upgrades: BTreeMap<Version, Upgrade>,
-        ) -> SequencerContext<network::Memory, P::Persistence, V> {
-            let config = self.config.clone();
+        ) -> SequencerContext<network::Memory, P::Persistence> {
+            let mut config = self.config.clone();
+            config.upgrade = upgrade;
             let my_peer_config = &config.known_nodes_with_stake[i];
             let is_da = config.known_da_nodes.contains(my_peer_config);
 
@@ -1278,11 +1321,11 @@ pub mod testing {
                 chain_config,
                 l1_client,
                 Arc::new(catchup_providers.clone()),
-                V::Base::VERSION,
+                config.upgrade.base,
                 coordinator.clone(),
-                V::Base::VERSION,
+                config.upgrade.base,
             )
-            .with_current_version(V::Base::version())
+            .with_current_version(config.upgrade.base)
             .with_genesis(state)
             .with_epoch_height(config.epoch_height)
             .with_upgrades(upgrades)
@@ -1313,7 +1356,6 @@ pub mod testing {
                 metrics,
                 stake_table_capacity,
                 event_consumer,
-                bind_version,
                 Default::default(),
                 None,
             )
@@ -1391,12 +1433,11 @@ pub mod testing {
 
 #[cfg(test)]
 mod test {
-
     use alloy::node_bindings::Anvil;
-    use espresso_types::{Header, MockSequencerVersions, NamespaceId, Payload, Transaction};
+    use espresso_types::{Header, NamespaceId, Payload, Transaction, MOCK_SEQUENCER_VERSIONS};
     use futures::StreamExt;
     use hotshot::types::EventType::Decide;
-    use hotshot_example_types::node_types::TestVersions;
+    use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_types::{
         event::LeafInfo,
         traits::block_contents::{BlockHeader, BlockPayload},
@@ -1420,7 +1461,7 @@ mod test {
 
         config.set_builder_urls(vec1::vec1![builder_url]);
 
-        let handles = config.init_nodes(MockSequencerVersions::new()).await;
+        let handles = config.init_nodes(MOCK_SEQUENCER_VERSIONS).await;
 
         let handle_0 = &handles[0];
 
@@ -1458,7 +1499,7 @@ mod test {
         let (builder_task, builder_url) = run_test_builder::<NUM_NODES>(None).await;
 
         config.set_builder_urls(vec1::vec1![builder_url]);
-        let handles = config.init_nodes(MockSequencerVersions::new()).await;
+        let handles = config.init_nodes(MOCK_SEQUENCER_VERSIONS).await;
 
         let handle_0 = &handles[0];
 
@@ -1479,7 +1520,12 @@ mod test {
                     .unwrap();
 
             let genesis_state = NodeState::mock();
-            Header::genesis::<TestVersions>(&genesis_state, genesis_payload, &genesis_ns_table)
+            Header::genesis(
+                &genesis_state,
+                genesis_payload,
+                &genesis_ns_table,
+                TEST_VERSIONS.test.base,
+            )
         };
 
         loop {

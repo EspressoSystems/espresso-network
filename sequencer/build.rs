@@ -1,11 +1,7 @@
-use vergen::EmitBuilder;
+use vergen::{CargoBuilder, Emitter};
 
 pub fn main() -> anyhow::Result<()> {
-    // Set an environment variable with git information
-    EmitBuilder::builder()
-        .git_sha(false)
-        .git_describe(true, true, None)
-        .git_commit_timestamp()
-        .emit()?;
+    let cargo = CargoBuilder::default().features(true).build()?;
+    Emitter::default().add_instructions(&cargo)?.emit()?;
     Ok(())
 }

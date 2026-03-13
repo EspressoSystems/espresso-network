@@ -230,9 +230,9 @@ mod test {
             EncodeBytes,
         },
     };
-    use portpicker::pick_unused_port;
     use surf_disco::Client;
     use tempfile::TempDir;
+    use test_utils::reserve_tcp_port;
     use tide_disco::{App, Error as _};
     use tokio::time::sleep;
     use toml::toml;
@@ -243,7 +243,7 @@ mod test {
         task::BackgroundTask,
         testing::{
             consensus::{MockDataSource, MockNetwork, MockSqlDataSource},
-            mocks::{mock_transaction, MockBase, MockTypes, MockVersions},
+            mocks::{mock_transaction, MockBase, MockTypes},
         },
         ApiState, Error, Header,
     };
@@ -253,12 +253,12 @@ mod test {
         let window_limit = 78;
 
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
+        let mut network = MockNetwork::<MockDataSource>::init().await;
         let mut events = network.handle().event_stream();
         network.start().await;
 
         // Start the web server.
-        let port = pick_unused_port().unwrap();
+        let port = reserve_tcp_port().unwrap();
         let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
         app.register_module(
             "node",
@@ -418,12 +418,11 @@ mod test {
 
         // In this simple test, the node should be fully synchronized.
         let sync_status = client
-            .get::<SyncStatus>("sync-status")
+            .get::<SyncStatusQueryData>("sync-status")
             .send()
             .await
             .unwrap();
-        assert_eq!(sync_status.missing_blocks, 0);
-        assert_eq!(sync_status.missing_leaves, 0);
+        assert!(sync_status.is_fully_synced(), "{sync_status:#?}");
 
         network.shut_down().await;
     }
@@ -431,12 +430,12 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_aggregate_ranges() {
         // Create the consensus network.
-        let mut network = MockNetwork::<MockSqlDataSource, MockVersions>::init().await;
+        let mut network = MockNetwork::<MockSqlDataSource>::init().await;
         let mut events = network.handle().event_stream();
         network.start().await;
 
         // Start the web server.
-        let port = pick_unused_port().unwrap();
+        let port = reserve_tcp_port().unwrap();
         let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
         app.register_module(
             "node",
@@ -638,7 +637,7 @@ mod test {
         let mut app = App::<_, Error>::with_state(RwLock::new(data_source));
         app.register_module("node", api).unwrap();
 
-        let port = pick_unused_port().unwrap();
+        let port = reserve_tcp_port().unwrap();
         let _server = BackgroundTask::spawn(
             "server",
             app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
@@ -654,7 +653,7 @@ mod test {
         assert_eq!(client.get::<u64>("ext").send().await.unwrap(), 42);
 
         // Ensure we can still access the built-in functionality.
-        let sync_status: SyncStatus = client.get("sync-status").send().await.unwrap();
-        assert!(sync_status.is_fully_synced(), "{sync_status:?}");
+        let sync_status: SyncStatusQueryData = client.get("sync-status").send().await.unwrap();
+        assert!(sync_status.is_fully_synced(), "{sync_status:#?}");
     }
 }

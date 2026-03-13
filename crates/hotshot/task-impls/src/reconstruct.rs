@@ -10,14 +10,13 @@ use async_trait::async_trait;
 use hotshot_task::task::TaskState;
 use hotshot_types::{
     consensus::{OuterConsensus, PayloadWithMetadata},
-    data::{QuorumProposal2, VidCommitment, VidDisperseShare, VidDisperseShare2},
+    data::{
+        EpochNumber, QuorumProposal2, VidCommitment, VidDisperseShare, VidDisperseShare2,
+        ViewNumber,
+    },
     epoch_membership::EpochMembershipCoordinator,
     simple_vote::HasEpoch,
-    traits::{
-        block_contents::BlockHeader,
-        node_implementation::{ConsensusTime, NodeType},
-        BlockPayload,
-    },
+    traits::{block_contents::BlockHeader, node_implementation::NodeType, BlockPayload},
     vid::avidm_gf2::AvidmGf2Scheme,
     vote::HasViewNumber,
 };
@@ -34,20 +33,19 @@ pub struct ReconstructTaskState<TYPES: NodeType> {
     pub consensus: OuterConsensus<TYPES>,
     pub membership: EpochMembershipCoordinator<TYPES>,
     pub public_key: TYPES::SignatureKey,
-    pub calc_lock: Arc<RwLock<HashMap<TYPES::View, mpsc::Sender<()>>>>,
-    pub proposals: BTreeMap<TYPES::View, QuorumProposal2<TYPES>>,
+    pub calc_lock: Arc<RwLock<HashMap<ViewNumber, mpsc::Sender<()>>>>,
+    pub proposals: BTreeMap<ViewNumber, QuorumProposal2<TYPES>>,
     #[allow(clippy::type_complexity)]
-    pub vid_shares:
-        Arc<RwLock<BTreeMap<(TYPES::View, TYPES::Epoch), Vec<VidDisperseShare2<TYPES>>>>>,
+    pub vid_shares: Arc<RwLock<BTreeMap<(ViewNumber, EpochNumber), Vec<VidDisperseShare2<TYPES>>>>>,
 }
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 async fn try_reconstruct_block<TYPES: NodeType>(
-    calc_lock: Arc<RwLock<HashMap<TYPES::View, mpsc::Sender<()>>>>,
+    calc_lock: Arc<RwLock<HashMap<ViewNumber, mpsc::Sender<()>>>>,
     consensus: OuterConsensus<TYPES>,
-    view: TYPES::View,
-    epoch: Option<TYPES::Epoch>,
-    vid_shares: Arc<RwLock<BTreeMap<(TYPES::View, TYPES::Epoch), Vec<VidDisperseShare2<TYPES>>>>>,
+    view: ViewNumber,
+    epoch: Option<EpochNumber>,
+    vid_shares: Arc<RwLock<BTreeMap<(ViewNumber, EpochNumber), Vec<VidDisperseShare2<TYPES>>>>>,
     event_stream: Sender<Arc<HotShotEvent<TYPES>>>,
     metadata: <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
     mut signal_rx: mpsc::Receiver<()>,
@@ -133,8 +131,8 @@ async fn try_reconstruct_block<TYPES: NodeType>(
 impl<TYPES: NodeType> ReconstructTaskState<TYPES> {
     async fn spawn_reconstruct_task(
         &mut self,
-        view: TYPES::View,
-        epoch: Option<TYPES::Epoch>,
+        view: ViewNumber,
+        epoch: Option<EpochNumber>,
         metadata: <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
     ) {
         // if self.id == 2 {
@@ -162,11 +160,7 @@ impl<TYPES: NodeType> ReconstructTaskState<TYPES> {
         let _ = tx.send(()).await;
     }
 
-    async fn handle_validated_share(
-        &mut self,
-        share: &VidDisperseShare2<TYPES>,
-        view: TYPES::View,
-    ) {
+    async fn handle_validated_share(&mut self, share: &VidDisperseShare2<TYPES>, view: ViewNumber) {
         self.vid_shares
             .write()
             .await
@@ -194,7 +188,7 @@ impl<TYPES: NodeType> ReconstructTaskState<TYPES> {
         )
         .await;
     }
-    async fn is_old_view(&self, view: TYPES::View) -> bool {
+    async fn is_old_view(&self, view: ViewNumber) -> bool {
         let locked_view = self.consensus.read().await.locked_view();
         view < locked_view
     }
@@ -295,7 +289,7 @@ impl<TYPES: NodeType> ReconstructTaskState<TYPES> {
             },
             HotShotEvent::LeavesDecided(leaves) => {
                 if let Some(max_view) = leaves.iter().map(|l| l.view_number()).max() {
-                    let gc_view = TYPES::View::new(max_view.saturating_sub(1));
+                    let gc_view = ViewNumber::new(max_view.saturating_sub(1));
                     let mut shares = self.vid_shares.write().await;
                     let calc_lock_len = self.calc_lock.read().await.len();
                     let shares_total: usize = shares.values().map(|v| v.len()).sum();
@@ -306,7 +300,7 @@ impl<TYPES: NodeType> ReconstructTaskState<TYPES> {
                         shares.len(),
                         self.proposals.len(),
                     );
-                    *shares = shares.split_off(&(gc_view, TYPES::Epoch::genesis()));
+                    *shares = shares.split_off(&(gc_view, EpochNumber::genesis()));
                     self.proposals = self.proposals.split_off(&gc_view);
                     let shares_total_after: usize = shares.values().map(|v| v.len()).sum();
                     tracing::warn!(

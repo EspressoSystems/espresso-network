@@ -6,9 +6,8 @@ use either::Either;
 use espresso_types::{
     traits::StateCatchup,
     v0_3::{ChainConfig, RewardAccountV1, RewardMerkleTreeV1},
-    v0_4::{Delta, RewardAccountV2, RewardMerkleTreeV2},
-    BlockMerkleTree, DrbAndHeaderUpgradeVersion, EpochVersion, FeeAccount, FeeMerkleTree, Leaf2,
-    ValidatedState,
+    v0_4::{Delta, RewardMerkleTreeV2},
+    BlockMerkleTree, FeeAccount, FeeMerkleTree, Leaf2, ValidatedState,
 };
 use futures::{future::Future, StreamExt};
 use hotshot::traits::ValidatedState as HotShotState;
@@ -23,10 +22,11 @@ use jf_merkle_tree_compat::{
     LookupResult, MerkleTreeScheme, ToTraversalPath, UniversalMerkleTreeScheme,
 };
 use tokio::time::sleep;
-use vbs::version::StaticVersionType;
+use vbs::version::Version;
+use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION};
 
 use crate::{
-    api::RewardAccountProofDataSource,
+    api::RewardMerkleTreeDataSource,
     catchup::{CatchupStorage, SqlStateCatchup},
     persistence::ChainConfigPersistence,
     NodeState, SeqTypes,
@@ -40,6 +40,19 @@ pub(crate) async fn compute_state_update(
     proposed_leaf: &Leaf2,
 ) -> anyhow::Result<(ValidatedState, Delta)> {
     let header = proposed_leaf.block_header();
+
+    let mut parent_state = parent_state.clone();
+
+    // if the protocol has been upgraded, the new chain_config should be used
+    // as the base chain config for the call to `apply_header`. This mirrors the
+    // `apply_upgrade` step at the start of `apply_header`
+    //
+    // We need to do this here because this loop may need to process historical upgrades
+    // that are no longer recorded in our genesis file. but it's safe, because this loop
+    // only handles decided leaves
+    if proposed_leaf.block_header().version() > parent_leaf.block_header().version() {
+        parent_state.chain_config = proposed_leaf.block_header().chain_config()
+    }
 
     let (state, delta, total_rewards_distributed) = parent_state
         .apply_header(
@@ -91,7 +104,7 @@ pub(crate) async fn compute_state_update(
         },
     }
 
-    if header.version() >= DrbAndHeaderUpgradeVersion::version() {
+    if header.version() >= DRB_AND_HEADER_UPGRADE_VERSION {
         let Some(actual_total) = total_rewards_distributed else {
             bail!(
                 "internal error! total_rewards_distributed is None for version {:?}",
@@ -120,14 +133,13 @@ pub(crate) async fn compute_state_update(
 async fn store_state_update(
     tx: &mut impl SequencerStateUpdate,
     block_number: u64,
-    version: vbs::version::Version,
+    version: Version,
     state: &ValidatedState,
     delta: Delta,
 ) -> anyhow::Result<()> {
     let ValidatedState {
         fee_merkle_tree,
         block_merkle_tree,
-        reward_merkle_tree_v2,
         reward_merkle_tree_v1,
         ..
     } = state;
@@ -181,7 +193,7 @@ async fn store_state_update(
         .context("failed to store block merkle nodes")?;
     }
 
-    if version <= EpochVersion::version() {
+    if version <= EPOCH_VERSION {
         // Collect reward merkle tree v1 proofs for batch insertion
         let reward_proofs: Vec<_> = rewards_delta
             .iter()
@@ -214,47 +226,7 @@ async fn store_state_update(
         )
         .await
         .context("failed to store reward merkle nodes")?;
-    } else {
-        // Collect reward merkle tree v2 proofs for batch insertion
-        let reward_proofs: Vec<_> = rewards_delta
-            .iter()
-            .map(|delta| {
-                let proof = match reward_merkle_tree_v2.universal_lookup(*delta) {
-                    LookupResult::Ok(_, proof) => proof,
-                    LookupResult::NotFound(proof) => proof,
-                    LookupResult::NotInMemory => {
-                        bail!("missing merkle path for reward account {delta}")
-                    },
-                };
-                let path = <RewardAccountV2 as ToTraversalPath<
-                        { RewardMerkleTreeV2::ARITY },
-                    >>::to_traversal_path(
-                        delta, reward_merkle_tree_v2.height()
-                    );
-                Ok((proof, path))
-            })
-            .collect::<anyhow::Result<Vec<_>>>()?;
-
-        tracing::debug!(
-            count = reward_proofs.len(),
-            "inserting v2 reward accounts in batch"
-        );
-        UpdateStateData::<SeqTypes, RewardMerkleTreeV2, { RewardMerkleTreeV2::ARITY }>::insert_merkle_nodes_batch(
-            tx,
-            reward_proofs,
-            block_number,
-        )
-        .await
-        .context("failed to store reward merkle nodes")?;
     }
-
-    tracing::debug!(block_number, "updating state height");
-    UpdateStateData::<SeqTypes, _, { BlockMerkleTree::ARITY }>::set_last_state_height(
-        tx,
-        block_number as usize,
-    )
-    .await
-    .context("setting state height")?;
 
     Ok(())
 }
@@ -280,6 +252,8 @@ where
     for<'a> T::Transaction<'a>: SequencerStateUpdate,
 {
     let parent_chain_config = parent_state.chain_config;
+    let block_number = proposed_leaf.height();
+    let version = proposed_leaf.header().version();
 
     let (state, delta) = compute_state_update(
         parent_state,
@@ -297,14 +271,21 @@ where
         .await
         .context("opening transaction for state update")?;
 
-    store_state_update(
-        &mut tx,
-        proposed_leaf.height(),
-        proposed_leaf.header().version(),
-        &state,
-        delta,
-    )
-    .await?;
+    store_state_update(&mut tx, block_number, version, &state, delta).await?;
+
+    tx.commit().await?;
+
+    if version > EPOCH_VERSION {
+        storage
+            .save_reward_merkle_tree_v2(instance, block_number, &state.reward_merkle_tree_v2)
+            .await
+            .context("failed to store reward merkle nodes")?;
+    }
+
+    let mut tx = storage
+        .write()
+        .await
+        .context("opening transaction for state update")?;
 
     if parent_chain_config != state.chain_config {
         let cf = state
@@ -315,7 +296,16 @@ where
         tx.insert_chain_config(cf).await?;
     }
 
+    tracing::debug!(block_number, "updating state height");
+    UpdateStateData::<SeqTypes, _, { BlockMerkleTree::ARITY }>::set_last_state_height(
+        &mut tx,
+        block_number as usize,
+    )
+    .await
+    .context("setting state height")?;
+
     tx.commit().await?;
+
     Ok(state)
 }
 
@@ -402,6 +392,18 @@ where
     let mut parent_leaf = parent_leaf.await;
     let mut parent_state = ValidatedState::from_header(parent_leaf.header());
 
+    if parent_leaf.header().version() > EPOCH_VERSION && parent_leaf.height() > 0 {
+        let reward_merkle_tree_v2 = storage
+            .load_reward_merkle_tree_v2(parent_leaf.height())
+            .await
+            .context(
+                "Error starting the state storage update loop: failed to load RewardMerkleTreeV2 \
+                 for the previous height",
+            )?;
+
+        parent_state.reward_merkle_tree_v2 = reward_merkle_tree_v2.tree;
+    }
+
     if last_height == 0 {
         // If the last height is 0, we need to insert the genesis state, since this state is
         // never the result of a state update and thus is not inserted in the loop below.
@@ -457,7 +459,7 @@ pub(crate) trait SequencerStateDataSource:
     + StatusDataSource
     + VersionedDataSource
     + CatchupStorage
-    + RewardAccountProofDataSource
+    + RewardMerkleTreeDataSource
     + PrunedHeightDataSource
     + MerklizedStateHeightPersistence
 {
@@ -470,7 +472,7 @@ impl<T> SequencerStateDataSource for T where
         + StatusDataSource
         + VersionedDataSource
         + CatchupStorage
-        + RewardAccountProofDataSource
+        + RewardMerkleTreeDataSource
         + PrunedHeightDataSource
         + MerklizedStateHeightPersistence
 {

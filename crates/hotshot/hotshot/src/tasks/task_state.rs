@@ -32,34 +32,34 @@ use hotshot_task_impls::{
 };
 use hotshot_types::{
     consensus::OuterConsensus,
+    data::ViewNumber,
     traits::{
         consensus_api::ConsensusApi,
-        node_implementation::{ConsensusTime, NodeImplementation, NodeType},
+        node_implementation::{NodeImplementation, NodeType},
         signature_key::BuilderSignatureKey,
         states::InstanceState,
     },
 };
 use tokio::spawn;
 
-use crate::{types::SystemContextHandle, Versions};
+use crate::types::SystemContextHandle;
 
 /// Trait for creating task states.
 #[async_trait]
-pub trait CreateTaskState<TYPES, I, V>
+pub trait CreateTaskState<TYPES, I>
 where
     TYPES: NodeType,
     I: NodeImplementation<TYPES>,
-    V: Versions,
 {
     /// Function to create the task state from a given `SystemContextHandle`.
-    async fn create_from(handle: &SystemContextHandle<TYPES, I, V>) -> Self;
+    async fn create_from(handle: &SystemContextHandle<TYPES, I>) -> Self;
 }
 
 #[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState<TYPES, I, V>
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> CreateTaskState<TYPES, I>
     for NetworkRequestState<TYPES, I>
 {
-    async fn create_from(handle: &SystemContextHandle<TYPES, I, V>) -> Self {
+    async fn create_from(handle: &SystemContextHandle<TYPES, I>) -> Self {
         Self {
             network: Arc::clone(&handle.hotshot.network),
             consensus: OuterConsensus::new(handle.hotshot.consensus()),
@@ -78,10 +78,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
 }
 
 #[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState<TYPES, I, V>
-    for UpgradeTaskState<TYPES, V>
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> CreateTaskState<TYPES, I>
+    for UpgradeTaskState<TYPES>
 {
-    async fn create_from(handle: &SystemContextHandle<TYPES, I, V>) -> Self {
+    async fn create_from(handle: &SystemContextHandle<TYPES, I>) -> Self {
         #[cfg(not(feature = "example-upgrade"))]
         return Self {
             output_event_stream: handle.hotshot.external_event_stream.0.clone(),
@@ -131,10 +131,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
 }
 
 #[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState<TYPES, I, V>
-    for VidTaskState<TYPES, I, V>
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> CreateTaskState<TYPES, I>
+    for VidTaskState<TYPES, I>
 {
-    async fn create_from(handle: &SystemContextHandle<TYPES, I, V>) -> Self {
+    async fn create_from(handle: &SystemContextHandle<TYPES, I>) -> Self {
         Self {
             consensus: OuterConsensus::new(handle.hotshot.consensus()),
             cur_view: handle.cur_view().await,
@@ -151,10 +151,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
 }
 
 #[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState<TYPES, I, V>
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> CreateTaskState<TYPES, I>
     for BlockStorerTaskState<TYPES, I>
 {
-    async fn create_from(handle: &SystemContextHandle<TYPES, I, V>) -> Self {
+    async fn create_from(handle: &SystemContextHandle<TYPES, I>) -> Self {
         Self {
             storage: handle.storage.clone(),
             private_key: handle.private_key().clone(),
@@ -166,10 +166,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
 }
 
 #[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState<TYPES, I, V>
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> CreateTaskState<TYPES, I>
     for ReconstructTaskState<TYPES>
 {
-    async fn create_from(handle: &SystemContextHandle<TYPES, I, V>) -> Self {
+    async fn create_from(handle: &SystemContextHandle<TYPES, I>) -> Self {
         Self {
             id: handle.hotshot.id,
             event_stream: handle.internal_event_stream.0.clone(),
@@ -207,10 +207,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
 // }
 
 #[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState<TYPES, I, V>
-    for ViewSyncTaskState<TYPES, V>
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> CreateTaskState<TYPES, I>
+    for ViewSyncTaskState<TYPES>
 {
-    async fn create_from(handle: &SystemContextHandle<TYPES, I, V>) -> Self {
+    async fn create_from(handle: &SystemContextHandle<TYPES, I>) -> Self {
         let cur_view = handle.cur_view().await;
 
         Self {
@@ -227,20 +227,20 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             finalize_relay_map: BTreeMap::default().into(),
             view_sync_timeout: handle.hotshot.config.view_sync_timeout,
             id: handle.hotshot.id,
-            last_garbage_collected_view: TYPES::View::new(0),
+            last_garbage_collected_view: ViewNumber::new(0),
             upgrade_lock: handle.hotshot.upgrade_lock.clone(),
             first_epoch: None,
-            highest_finalized_epoch_view: (None, TYPES::View::new(0)),
+            highest_finalized_epoch_view: (None, ViewNumber::new(0)),
             epoch_height: handle.epoch_height,
         }
     }
 }
 
 #[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState<TYPES, I, V>
-    for TransactionTaskState<TYPES, V>
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> CreateTaskState<TYPES, I>
+    for TransactionTaskState<TYPES>
 {
-    async fn create_from(handle: &SystemContextHandle<TYPES, I, V>) -> Self {
+    async fn create_from(handle: &SystemContextHandle<TYPES, I>) -> Self {
         Self {
             builder_timeout: handle.builder_timeout(),
             output_event_stream: handle.hotshot.external_event_stream.0.clone(),
@@ -267,10 +267,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
 }
 
 #[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState<TYPES, I, V>
-    for BlockTaskState<TYPES, V>
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> CreateTaskState<TYPES, I>
+    for BlockTaskState<TYPES>
 {
-    async fn create_from(handle: &SystemContextHandle<TYPES, I, V>) -> Self {
+    async fn create_from(handle: &SystemContextHandle<TYPES, I>) -> Self {
         let (builder_key, builder_private_key) =
             TYPES::BuilderSignatureKey::generated_from_seed_indexed([0; 32], 0);
         let max_block_size = handle.hotshot.instance_state.max_block_size();
@@ -296,10 +296,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
 }
 
 #[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState<TYPES, I, V>
-    for QuorumVoteTaskState<TYPES, I, V>
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> CreateTaskState<TYPES, I>
+    for QuorumVoteTaskState<TYPES, I>
 {
-    async fn create_from(handle: &SystemContextHandle<TYPES, I, V>) -> Self {
+    async fn create_from(handle: &SystemContextHandle<TYPES, I>) -> Self {
         let consensus = handle.hotshot.consensus();
 
         // Clone the consensus metrics
@@ -332,10 +332,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
 }
 
 #[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState<TYPES, I, V>
-    for QuorumProposalTaskState<TYPES, I, V>
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> CreateTaskState<TYPES, I>
+    for QuorumProposalTaskState<TYPES, I>
 {
-    async fn create_from(handle: &SystemContextHandle<TYPES, I, V>) -> Self {
+    async fn create_from(handle: &SystemContextHandle<TYPES, I>) -> Self {
         let consensus = handle.hotshot.consensus();
 
         Self {
@@ -362,10 +362,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
 }
 
 #[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState<TYPES, I, V>
-    for QuorumProposalRecvTaskState<TYPES, I, V>
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> CreateTaskState<TYPES, I>
+    for QuorumProposalRecvTaskState<TYPES, I>
 {
-    async fn create_from(handle: &SystemContextHandle<TYPES, I, V>) -> Self {
+    async fn create_from(handle: &SystemContextHandle<TYPES, I>) -> Self {
         let consensus = handle.hotshot.consensus();
 
         Self {
@@ -388,10 +388,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
 }
 
 #[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState<TYPES, I, V>
-    for ConsensusTaskState<TYPES, I, V>
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> CreateTaskState<TYPES, I>
+    for ConsensusTaskState<TYPES, I>
 {
-    async fn create_from(handle: &SystemContextHandle<TYPES, I, V>) -> Self {
+    async fn create_from(handle: &SystemContextHandle<TYPES, I>) -> Self {
         let consensus = handle.hotshot.consensus();
 
         Self {
@@ -422,10 +422,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
 }
 
 #[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState<TYPES, I, V>
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> CreateTaskState<TYPES, I>
     for StatsTaskState<TYPES>
 {
-    async fn create_from(handle: &SystemContextHandle<TYPES, I, V>) -> Self {
+    async fn create_from(handle: &SystemContextHandle<TYPES, I>) -> Self {
         StatsTaskState::<TYPES>::new(
             handle.hotshot.id,
             handle.cur_view().await,
@@ -439,10 +439,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
 }
 
 #[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState<TYPES, I, V>
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> CreateTaskState<TYPES, I>
     for RewindTaskState<TYPES>
 {
-    async fn create_from(handle: &SystemContextHandle<TYPES, I, V>) -> Self {
+    async fn create_from(handle: &SystemContextHandle<TYPES, I>) -> Self {
         Self {
             events: Vec::new(),
             id: handle.hotshot.id,

@@ -10,7 +10,7 @@ use futures::StreamExt;
 use hotshot::tasks::task_state::CreateTaskState;
 use hotshot_example_types::{
     block_types::TestMetadata,
-    node_types::{MemoryImpl, TestTypes, TestVersions},
+    node_types::{MemoryImpl, TEST_VERSIONS, TestTypes},
     state_types::TestValidatedState,
 };
 use hotshot_macros::{run_test, test_scripts};
@@ -27,7 +27,6 @@ use hotshot_testing::{
 use hotshot_types::{
     data::{null_block, EpochNumber, Leaf2, ViewChangeEvidence2, ViewNumber},
     simple_vote::{TimeoutData2, ViewSyncFinalizeData2},
-    traits::node_implementation::{ConsensusTime, Versions},
     utils::BuilderCommitment,
 };
 use sha2::Digest;
@@ -39,12 +38,12 @@ const TIMEOUT: Duration = Duration::from_millis(35);
 #[cfg(test)]
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_quorum_proposal_task_quorum_proposal_view_1() {
+    use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_testing::script::{Expectations, TaskScript};
-    use vbs::version::StaticVersionType;
 
     let node_id = 1;
     let (handle, _, _, node_key_map) =
-        build_system_handle::<TestTypes, MemoryImpl, TestVersions>(node_id).await;
+        build_system_handle::<TestTypes, MemoryImpl>(node_id).await;
 
     let membership = handle.hotshot.membership_coordinator.clone();
     let epoch_1_mem = membership
@@ -57,7 +56,7 @@ async fn test_quorum_proposal_task_quorum_proposal_view_1() {
         .version_infallible(ViewNumber::new(node_id))
         .await;
 
-    let payload_commitment = build_payload_commitment::<TestTypes, TestVersions>(
+    let payload_commitment = build_payload_commitment::<TestTypes>(
         &epoch_1_mem,
         ViewNumber::new(node_id),
         version,
@@ -65,7 +64,7 @@ async fn test_quorum_proposal_task_quorum_proposal_view_1() {
     .await;
 
     let mut generator =
-        TestViewGenerator::<TestVersions>::generate(membership.clone(), node_key_map);
+        TestViewGenerator::generate(membership.clone(), node_key_map, TEST_VERSIONS.test);
 
     let mut proposals = Vec::new();
     let mut leaders = Vec::new();
@@ -96,9 +95,9 @@ async fn test_quorum_proposal_task_quorum_proposal_view_1() {
     let num_storage_node = epoch_1_mem.total_nodes().await;
     let genesis_cert = proposals[0].data.justify_qc().clone();
     let builder_commitment = BuilderCommitment::from_raw_digest(sha2::Sha256::new().finalize());
-    let builder_fee = null_block::builder_fee::<TestTypes, TestVersions>(
+    let builder_fee = null_block::builder_fee::<TestTypes>(
         num_storage_node,
-        <TestVersions as Versions>::Base::VERSION, 
+        TEST_VERSIONS.test.base
     )
     .unwrap();
     drop(consensus_writer);
@@ -118,7 +117,7 @@ async fn test_quorum_proposal_task_quorum_proposal_view_1() {
                 },
                 ViewNumber::new(1),
                 vec1![builder_fee.clone()],
-                
+
             ),
         ],
     ];
@@ -129,7 +128,7 @@ async fn test_quorum_proposal_task_quorum_proposal_view_1() {
     ];
 
     let quorum_proposal_task_state =
-        QuorumProposalTaskState::<TestTypes, MemoryImpl, TestVersions>::create_from(&handle).await;
+        QuorumProposalTaskState::<TestTypes, MemoryImpl>::create_from(&handle).await;
 
     let mut script = TaskScript {
         timeout: TIMEOUT,
@@ -142,11 +141,10 @@ async fn test_quorum_proposal_task_quorum_proposal_view_1() {
 #[cfg(test)]
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_quorum_proposal_task_quorum_proposal_view_gt_1() {
-    use vbs::version::StaticVersionType;
 
     let node_id = 3;
     let (handle, _, _, node_key_map) =
-        build_system_handle::<TestTypes, MemoryImpl, TestVersions>(node_id).await;
+        build_system_handle::<TestTypes, MemoryImpl>(node_id).await;
 
     let membership = handle.hotshot.membership_coordinator.clone();
     let epoch_1_mem = membership
@@ -156,7 +154,7 @@ async fn test_quorum_proposal_task_quorum_proposal_view_gt_1() {
     let num_storage_node = epoch_1_mem.total_nodes().await;
 
     let mut generator =
-        TestViewGenerator::<TestVersions>::generate(membership.clone(), node_key_map);
+        TestViewGenerator::generate(membership.clone(), node_key_map, TEST_VERSIONS.test);
 
     let mut proposals = Vec::new();
     let mut leaders = Vec::new();
@@ -190,9 +188,9 @@ async fn test_quorum_proposal_task_quorum_proposal_view_gt_1() {
     drop(consensus_writer);
 
     let builder_commitment = BuilderCommitment::from_raw_digest(sha2::Sha256::new().finalize());
-    let builder_fee = null_block::builder_fee::<TestTypes, TestVersions>(
+    let builder_fee = null_block::builder_fee::<TestTypes>(
         num_storage_node,
-        <TestVersions as Versions>::Base::VERSION, 
+        TEST_VERSIONS.test.base
     )
     .unwrap();
 
@@ -207,7 +205,7 @@ async fn test_quorum_proposal_task_quorum_proposal_view_gt_1() {
         random![
             Qc2Formed(either::Left(genesis_cert.clone())),
             SendPayloadCommitmentAndMetadata(
-                build_payload_commitment::<TestTypes, TestVersions>(
+                build_payload_commitment::<TestTypes>(
                     &epoch_1_mem,
                     ViewNumber::new(1),
                     version_1,
@@ -219,7 +217,7 @@ async fn test_quorum_proposal_task_quorum_proposal_view_gt_1() {
                 },
                 ViewNumber::new(1),
                 vec1![builder_fee.clone()],
-                 
+
             ),
             VidDisperseSend(vid_dispersals[0].clone(), handle.public_key()),
         ],
@@ -227,7 +225,7 @@ async fn test_quorum_proposal_task_quorum_proposal_view_gt_1() {
             QuorumProposalPreliminarilyValidated(proposals[0].clone()),
             Qc2Formed(either::Left(proposals[1].data.justify_qc().clone())),
             SendPayloadCommitmentAndMetadata(
-                build_payload_commitment::<TestTypes, TestVersions>(
+                build_payload_commitment::<TestTypes>(
                     &epoch_1_mem,
                     ViewNumber::new(2),
                     version_2,
@@ -237,7 +235,7 @@ async fn test_quorum_proposal_task_quorum_proposal_view_gt_1() {
                 proposals[0].data.block_header().metadata,
                 ViewNumber::new(2),
                 vec1![builder_fee.clone()],
-                 
+
             ),
             VidDisperseSend(vid_dispersals[1].clone(), handle.public_key()),
         ],
@@ -245,7 +243,7 @@ async fn test_quorum_proposal_task_quorum_proposal_view_gt_1() {
             QuorumProposalPreliminarilyValidated(proposals[1].clone()),
             Qc2Formed(either::Left(proposals[2].data.justify_qc().clone())),
             SendPayloadCommitmentAndMetadata(
-                build_payload_commitment::<TestTypes, TestVersions>(
+                build_payload_commitment::<TestTypes>(
                     &epoch_1_mem,
                     ViewNumber::new(3),
                     version_3,
@@ -255,7 +253,7 @@ async fn test_quorum_proposal_task_quorum_proposal_view_gt_1() {
                 proposals[1].data.block_header().metadata,
                 ViewNumber::new(3),
                 vec1![builder_fee.clone()],
-                 
+
             ),
             VidDisperseSend(vid_dispersals[2].clone(), handle.public_key()),
         ],
@@ -263,7 +261,7 @@ async fn test_quorum_proposal_task_quorum_proposal_view_gt_1() {
             QuorumProposalPreliminarilyValidated(proposals[2].clone()),
             Qc2Formed(either::Left(proposals[3].data.justify_qc().clone())),
             SendPayloadCommitmentAndMetadata(
-                build_payload_commitment::<TestTypes, TestVersions>(
+                build_payload_commitment::<TestTypes>(
                     &epoch_1_mem,
                     ViewNumber::new(4),
                     version_4,
@@ -273,7 +271,7 @@ async fn test_quorum_proposal_task_quorum_proposal_view_gt_1() {
                 proposals[2].data.block_header().metadata,
                 ViewNumber::new(4),
                 vec1![builder_fee.clone()],
-                
+
             ),
             VidDisperseSend(vid_dispersals[3].clone(), handle.public_key()),
         ],
@@ -281,7 +279,7 @@ async fn test_quorum_proposal_task_quorum_proposal_view_gt_1() {
             QuorumProposalPreliminarilyValidated(proposals[3].clone()),
             Qc2Formed(either::Left(proposals[4].data.justify_qc().clone())),
             SendPayloadCommitmentAndMetadata(
-                build_payload_commitment::<TestTypes, TestVersions>(
+                build_payload_commitment::<TestTypes>(
                     &epoch_1_mem,
                     ViewNumber::new(5),
                     version_5,
@@ -291,7 +289,7 @@ async fn test_quorum_proposal_task_quorum_proposal_view_gt_1() {
                 proposals[3].data.block_header().metadata,
                 ViewNumber::new(5),
                 vec1![builder_fee.clone()],
-                 
+
             ),
             VidDisperseSend(vid_dispersals[4].clone(), handle.public_key()),
         ],
@@ -306,7 +304,7 @@ async fn test_quorum_proposal_task_quorum_proposal_view_gt_1() {
     ];
 
     let quorum_proposal_task_state =
-        QuorumProposalTaskState::<TestTypes, MemoryImpl, TestVersions>::create_from(&handle).await;
+        QuorumProposalTaskState::<TestTypes, MemoryImpl>::create_from(&handle).await;
 
     let mut script = TaskScript {
         timeout: TIMEOUT,
@@ -320,12 +318,11 @@ async fn test_quorum_proposal_task_quorum_proposal_view_gt_1() {
 #[cfg(test)]
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_quorum_proposal_task_qc_timeout() {
-    use vbs::version::StaticVersionType;
 
     let node_id = 3;
 
     let (handle, _, _, node_key_map) =
-        build_system_handle::<TestTypes, MemoryImpl, TestVersions>(node_id).await;
+        build_system_handle::<TestTypes, MemoryImpl>(node_id).await;
     let membership = handle.hotshot.membership_coordinator.clone();
     let epoch_1_mem = membership
         .membership_for_epoch(Some(EpochNumber::new(1)))
@@ -337,7 +334,7 @@ async fn test_quorum_proposal_task_qc_timeout() {
         .version_infallible(ViewNumber::new(node_id))
         .await;
 
-    let payload_commitment = build_payload_commitment::<TestTypes, TestVersions>(
+    let payload_commitment = build_payload_commitment::<TestTypes>(
         &epoch_1_mem,
         ViewNumber::new(node_id),
         version,
@@ -346,7 +343,7 @@ async fn test_quorum_proposal_task_qc_timeout() {
     let builder_commitment = BuilderCommitment::from_raw_digest(sha2::Sha256::new().finalize());
 
     let mut generator =
-        TestViewGenerator::<TestVersions>::generate(membership.clone(), node_key_map);
+        TestViewGenerator::generate(membership.clone(), node_key_map, TEST_VERSIONS.test);
 
     let mut proposals = Vec::new();
     let mut leaders = Vec::new();
@@ -389,13 +386,13 @@ async fn test_quorum_proposal_task_qc_timeout() {
                 num_transactions: 0
             },
             ViewNumber::new(3),
-            vec1![null_block::builder_fee::<TestTypes, TestVersions>(
+            vec1![null_block::builder_fee::<TestTypes>(
                 num_storage_nodes,
-                <TestVersions as Versions>::Base::VERSION,
-               
+                TEST_VERSIONS.test.base
+
             )
             .unwrap()],
-             
+
         ),
         VidDisperseSend(vid_dispersals[2].clone(), handle.public_key()),
     ]];
@@ -403,7 +400,7 @@ async fn test_quorum_proposal_task_qc_timeout() {
     let expectations = vec![Expectations::from_outputs(vec![quorum_proposal_send()])];
 
     let quorum_proposal_task_state =
-        QuorumProposalTaskState::<TestTypes, MemoryImpl, TestVersions>::create_from(&handle).await;
+        QuorumProposalTaskState::<TestTypes, MemoryImpl>::create_from(&handle).await;
 
     let mut script = TaskScript {
         timeout: TIMEOUT,
@@ -418,11 +415,10 @@ async fn test_quorum_proposal_task_qc_timeout() {
 async fn test_quorum_proposal_task_view_sync() {
     use hotshot_example_types::block_types::TestMetadata;
     use hotshot_types::data::null_block;
-    use vbs::version::StaticVersionType;
 
     let node_id = 2;
     let (handle, _, _, node_key_map) =
-        build_system_handle::<TestTypes, MemoryImpl, TestVersions>(node_id).await;
+        build_system_handle::<TestTypes, MemoryImpl>(node_id).await;
 
     let membership = handle.hotshot.membership_coordinator.clone();
     let epoch_1_mem = membership
@@ -435,7 +431,7 @@ async fn test_quorum_proposal_task_view_sync() {
         .version_infallible(ViewNumber::new(node_id))
         .await;
 
-    let payload_commitment = build_payload_commitment::<TestTypes, TestVersions>(
+    let payload_commitment = build_payload_commitment::<TestTypes>(
         &epoch_1_mem,
         ViewNumber::new(node_id),
         version,
@@ -444,7 +440,7 @@ async fn test_quorum_proposal_task_view_sync() {
     let builder_commitment = BuilderCommitment::from_raw_digest(sha2::Sha256::new().finalize());
 
     let mut generator =
-        TestViewGenerator::<TestVersions>::generate(membership.clone(), node_key_map);
+        TestViewGenerator::generate(membership.clone(), node_key_map, TEST_VERSIONS.test);
 
     let mut proposals = Vec::new();
     let mut leaders = Vec::new();
@@ -489,13 +485,13 @@ async fn test_quorum_proposal_task_view_sync() {
                 num_transactions: 0
             },
             ViewNumber::new(2),
-            vec1![null_block::builder_fee::<TestTypes, TestVersions>(
+            vec1![null_block::builder_fee::<TestTypes>(
                 num_storage_nodes,
-                <TestVersions as Versions>::Base::VERSION,
-             
+                TEST_VERSIONS.test.base
+
             )
             .unwrap()],
-            
+
         ),
         VidDisperseSend(vid_dispersals[1].clone(), handle.public_key()),
     ]];
@@ -503,7 +499,7 @@ async fn test_quorum_proposal_task_view_sync() {
     let expectations = vec![Expectations::from_outputs(vec![quorum_proposal_send()])];
 
     let quorum_proposal_task_state =
-        QuorumProposalTaskState::<TestTypes, MemoryImpl, TestVersions>::create_from(&handle).await;
+        QuorumProposalTaskState::<TestTypes, MemoryImpl>::create_from(&handle).await;
 
     let mut script = TaskScript {
         timeout: TIMEOUT,
@@ -516,11 +512,9 @@ async fn test_quorum_proposal_task_view_sync() {
 #[cfg(test)]
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_quorum_proposal_task_liveness_check() {
-    use vbs::version::StaticVersionType;
-
     let node_id = 3;
     let (handle, _, _, node_key_map) =
-        build_system_handle::<TestTypes, MemoryImpl, TestVersions>(node_id).await;
+        build_system_handle::<TestTypes, MemoryImpl>(node_id).await;
 
     let membership = handle.hotshot.membership_coordinator.clone();
     let epoch_1_mem = membership
@@ -529,7 +523,7 @@ async fn test_quorum_proposal_task_liveness_check() {
         .unwrap();
 
     let mut generator =
-        TestViewGenerator::<TestVersions>::generate(membership.clone(), node_key_map);
+        TestViewGenerator::generate(membership.clone(), node_key_map, TEST_VERSIONS.test);
 
     let mut proposals = Vec::new();
     let mut leaders = Vec::new();
@@ -559,10 +553,9 @@ async fn test_quorum_proposal_task_liveness_check() {
 
     let num_storage_nodes = epoch_1_mem.total_nodes().await;
     let builder_commitment = BuilderCommitment::from_raw_digest(sha2::Sha256::new().finalize());
-    let builder_fee = null_block::builder_fee::<TestTypes, TestVersions>(
+    let builder_fee = null_block::builder_fee::<TestTypes>(
         num_storage_nodes,
-        <TestVersions as Versions>::Base::VERSION,
- 
+        TEST_VERSIONS.test.base
     )
     .unwrap();
 
@@ -581,7 +574,7 @@ async fn test_quorum_proposal_task_liveness_check() {
         random![
             Qc2Formed(either::Left(genesis_cert.clone())),
             SendPayloadCommitmentAndMetadata(
-                build_payload_commitment::<TestTypes, TestVersions>(
+                build_payload_commitment::<TestTypes>(
                     &epoch_1_mem,
                     ViewNumber::new(1),
                     version_1,
@@ -593,7 +586,7 @@ async fn test_quorum_proposal_task_liveness_check() {
                 },
                 ViewNumber::new(1),
                 vec1![builder_fee.clone()],
-                
+
             ),
             VidDisperseSend(vid_dispersals[0].clone(), handle.public_key()),
         ],
@@ -601,7 +594,7 @@ async fn test_quorum_proposal_task_liveness_check() {
             QuorumProposalPreliminarilyValidated(proposals[0].clone()),
             Qc2Formed(either::Left(proposals[1].data.justify_qc().clone())),
             SendPayloadCommitmentAndMetadata(
-                build_payload_commitment::<TestTypes, TestVersions>(
+                build_payload_commitment::<TestTypes>(
                     &epoch_1_mem,
                     ViewNumber::new(2),
                     version_2,
@@ -611,7 +604,7 @@ async fn test_quorum_proposal_task_liveness_check() {
                 proposals[0].data.block_header().metadata,
                 ViewNumber::new(2),
                 vec1![builder_fee.clone()],
-                
+
             ),
             VidDisperseSend(vid_dispersals[1].clone(), handle.public_key()),
         ],
@@ -619,7 +612,7 @@ async fn test_quorum_proposal_task_liveness_check() {
             QuorumProposalPreliminarilyValidated(proposals[1].clone()),
             Qc2Formed(either::Left(proposals[2].data.justify_qc().clone())),
             SendPayloadCommitmentAndMetadata(
-                build_payload_commitment::<TestTypes, TestVersions>(
+                build_payload_commitment::<TestTypes>(
                     &epoch_1_mem,
                     ViewNumber::new(3),
                     version_3,
@@ -629,7 +622,7 @@ async fn test_quorum_proposal_task_liveness_check() {
                 proposals[1].data.block_header().metadata,
                 ViewNumber::new(3),
                 vec1![builder_fee.clone()],
-                
+
             ),
             VidDisperseSend(vid_dispersals[2].clone(), handle.public_key()),
         ],
@@ -637,7 +630,7 @@ async fn test_quorum_proposal_task_liveness_check() {
             QuorumProposalPreliminarilyValidated(proposals[2].clone()),
             Qc2Formed(either::Left(proposals[3].data.justify_qc().clone())),
             SendPayloadCommitmentAndMetadata(
-                build_payload_commitment::<TestTypes, TestVersions>(
+                build_payload_commitment::<TestTypes>(
                     &epoch_1_mem,
                     ViewNumber::new(4),
                     version_4,
@@ -647,7 +640,7 @@ async fn test_quorum_proposal_task_liveness_check() {
                 proposals[2].data.block_header().metadata,
                 ViewNumber::new(4),
                 vec1![builder_fee.clone()],
-                
+
             ),
             VidDisperseSend(vid_dispersals[3].clone(), handle.public_key()),
         ],
@@ -655,7 +648,7 @@ async fn test_quorum_proposal_task_liveness_check() {
             QuorumProposalPreliminarilyValidated(proposals[3].clone()),
             Qc2Formed(either::Left(proposals[4].data.justify_qc().clone())),
             SendPayloadCommitmentAndMetadata(
-                build_payload_commitment::<TestTypes, TestVersions>(
+                build_payload_commitment::<TestTypes>(
                     &epoch_1_mem,
                     ViewNumber::new(5),
                     version_5,
@@ -665,7 +658,7 @@ async fn test_quorum_proposal_task_liveness_check() {
                 proposals[3].data.block_header().metadata,
                 ViewNumber::new(5),
                 vec1![builder_fee.clone()],
-                
+
             ),
             VidDisperseSend(vid_dispersals[4].clone(), handle.public_key()),
         ],
@@ -680,7 +673,7 @@ async fn test_quorum_proposal_task_liveness_check() {
     ];
 
     let quorum_proposal_task_state =
-        QuorumProposalTaskState::<TestTypes, MemoryImpl, TestVersions>::create_from(&handle).await;
+        QuorumProposalTaskState::<TestTypes, MemoryImpl>::create_from(&handle).await;
 
     let mut script = TaskScript {
         timeout: TIMEOUT,
@@ -695,9 +688,9 @@ async fn test_quorum_proposal_task_liveness_check() {
 async fn test_quorum_proposal_task_with_incomplete_events() {
 
     let (handle, _, _, node_key_map) =
-        build_system_handle::<TestTypes, MemoryImpl, TestVersions>(2).await;
+        build_system_handle::<TestTypes, MemoryImpl>(2).await;
     let membership = handle.hotshot.membership_coordinator.clone();
-    let mut generator = TestViewGenerator::<TestVersions>::generate(membership, node_key_map);
+    let mut generator = TestViewGenerator::generate(membership, node_key_map, TEST_VERSIONS.test);
 
     let mut proposals = Vec::new();
     let mut leaders = Vec::new();
@@ -719,7 +712,7 @@ async fn test_quorum_proposal_task_with_incomplete_events() {
     let expectations = vec![Expectations::from_outputs(vec![])];
 
     let quorum_proposal_task_state =
-        QuorumProposalTaskState::<TestTypes, MemoryImpl, TestVersions>::create_from(&handle).await;
+        QuorumProposalTaskState::<TestTypes, MemoryImpl>::create_from(&handle).await;
 
     let mut script = TaskScript {
         timeout: TIMEOUT,

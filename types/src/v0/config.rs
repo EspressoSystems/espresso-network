@@ -7,6 +7,7 @@ use hotshot_types::{
 use serde::{Deserialize, Serialize};
 use tide_disco::Url;
 use vec1::Vec1;
+use versions::{Upgrade, VERSION_0_1};
 
 use crate::{PubKey, SeqTypes};
 
@@ -79,6 +80,8 @@ pub struct PublicHotShotConfig {
     drb_difficulty: u64,
     #[serde(default = "default_drb_upgrade_difficulty")]
     drb_upgrade_difficulty: u64,
+    #[serde(default = "default_version_upgrade")]
+    upgrade: Upgrade,
 }
 
 fn default_stake_table_capacity() -> usize {
@@ -93,6 +96,11 @@ fn default_drb_difficulty() -> u64 {
 /// Default DRB upgrade difficulty, set to 0 (intended to be overwritten)
 fn default_drb_upgrade_difficulty() -> u64 {
     0
+}
+
+/// Default version upgrade (intended to be overwritten)
+fn default_version_upgrade() -> Upgrade {
+    Upgrade::trivial(VERSION_0_1)
 }
 
 impl From<HotShotConfig<SeqTypes>> for PublicHotShotConfig {
@@ -127,6 +135,7 @@ impl From<HotShotConfig<SeqTypes>> for PublicHotShotConfig {
             stake_table_capacity,
             drb_difficulty,
             drb_upgrade_difficulty,
+            upgrade,
         } = v;
 
         Self {
@@ -156,6 +165,7 @@ impl From<HotShotConfig<SeqTypes>> for PublicHotShotConfig {
             stake_table_capacity,
             drb_difficulty,
             drb_upgrade_difficulty,
+            upgrade,
         }
     }
 }
@@ -189,6 +199,7 @@ impl PublicHotShotConfig {
             stake_table_capacity: self.stake_table_capacity,
             drb_difficulty: self.drb_difficulty,
             drb_upgrade_difficulty: self.drb_upgrade_difficulty,
+            upgrade: self.upgrade,
         }
     }
 
@@ -215,7 +226,7 @@ pub struct PublicNetworkConfig {
     indexed_da: bool,
     transactions_per_round: usize,
     manual_start_password: Option<String>,
-    num_bootrap: usize,
+    num_bootstrap: usize,
     next_view_timeout: u64,
     view_sync_timeout: Duration,
     builder_timeout: Duration,
@@ -240,7 +251,7 @@ impl From<NetworkConfig<SeqTypes>> for PublicNetworkConfig {
             indexed_da: cfg.indexed_da,
             transactions_per_round: cfg.transactions_per_round,
             manual_start_password: Some("*****".into()),
-            num_bootrap: cfg.num_bootrap,
+            num_bootstrap: cfg.num_bootstrap,
             next_view_timeout: cfg.next_view_timeout,
             view_sync_timeout: cfg.view_sync_timeout,
             builder_timeout: cfg.builder_timeout,
@@ -277,7 +288,7 @@ impl PublicNetworkConfig {
             indexed_da: self.indexed_da,
             transactions_per_round: self.transactions_per_round,
             manual_start_password: self.manual_start_password,
-            num_bootrap: self.num_bootrap,
+            num_bootstrap: self.num_bootstrap,
             next_view_timeout: self.next_view_timeout,
             view_sync_timeout: self.view_sync_timeout,
             builder_timeout: self.builder_timeout,
@@ -315,7 +326,7 @@ mod tests {
   "indexed_da": false,
   "transactions_per_round": 10,
   "manual_start_password": "*****",
-  "num_bootrap": 5,
+  "num_bootstrap": 5,
   "next_view_timeout": 10,
   "view_sync_timeout": {
     "secs": 2,

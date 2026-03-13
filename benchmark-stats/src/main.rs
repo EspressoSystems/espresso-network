@@ -82,14 +82,14 @@ struct ReplicaStats {
 /// Read replica stats from CSV into a BTreeMap
 fn read_replica_view_stats(
     path: &Path,
-) -> Result<BTreeMap<ViewNumber, ReplicaViewStats<ViewNumber>>, Box<dyn std::error::Error>> {
+) -> Result<BTreeMap<ViewNumber, ReplicaViewStats>, Box<dyn std::error::Error>> {
     println!("\n**--- Replica Stats ---**");
     let mut reader = csv::Reader::from_path(path)
         .map_err(|e| format!("Failed to open replica stats CSV at {path:?}: {e}"))?;
     let mut replica_view_stats = BTreeMap::new();
 
     for result in reader.deserialize() {
-        let record: ReplicaViewStats<ViewNumber> = result?;
+        let record: ReplicaViewStats = result?;
         replica_view_stats.insert(record.view, record);
     }
 
@@ -98,7 +98,7 @@ fn read_replica_view_stats(
 
 /// Generate plots of replica stats
 fn plot_replica_stats(
-    replica_view_stats: &BTreeMap<ViewNumber, ReplicaViewStats<ViewNumber>>,
+    replica_view_stats: &BTreeMap<ViewNumber, ReplicaViewStats>,
     output_file: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut x_views = Vec::new();
@@ -270,7 +270,7 @@ fn plot_replica_stats(
 /// it generates the time difference for VID/DAC/Proposal
 /// from the view change event
 fn generate_replica_stats(
-    replica_view_stats: &BTreeMap<ViewNumber, ReplicaViewStats<ViewNumber>>,
+    replica_view_stats: &BTreeMap<ViewNumber, ReplicaViewStats>,
 ) -> ReplicaStats {
     let mut vid_deltas_from_vc = Vec::new();
     let dac_deltas_from_vc = Vec::new();
@@ -307,21 +307,21 @@ fn print_replica_stats(stats: &ReplicaStats) {
 /// Read leader stats from CSV into a BTreeMap
 fn read_leader_view_stats(
     path: &Path,
-) -> Result<BTreeMap<ViewNumber, LeaderViewStats<ViewNumber>>, Box<dyn std::error::Error>> {
+) -> Result<BTreeMap<ViewNumber, LeaderViewStats>, Box<dyn std::error::Error>> {
     println!("\n**--- Leader Stats ---**");
     let mut reader = csv::Reader::from_path(path)
         .map_err(|e| format!("Failed to open leader stats CSV at {path:?}: {e}"))?;
-    let mut leader_view_stats = BTreeMap::<ViewNumber, LeaderViewStats<ViewNumber>>::new();
+    let mut leader_view_stats = BTreeMap::<ViewNumber, LeaderViewStats>::new();
 
     for result in reader.deserialize() {
-        let record: LeaderViewStats<ViewNumber> = result?;
+        let record: LeaderViewStats = result?;
         leader_view_stats.insert(record.view, record);
     }
     Ok(leader_view_stats)
 }
 
 fn plot_and_print_leader_stats(
-    leader_view_stats: &BTreeMap<ViewNumber, LeaderViewStats<ViewNumber>>,
+    leader_view_stats: &BTreeMap<ViewNumber, LeaderViewStats>,
     output_file: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut views = Vec::new();

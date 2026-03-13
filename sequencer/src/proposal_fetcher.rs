@@ -14,7 +14,6 @@ use hotshot_types::{
     traits::{
         metrics::{Counter, Gauge, Metrics},
         network::ConnectedNetwork,
-        node_implementation::{ConsensusTime, Versions},
         ValidatedState as _,
     },
     utils::{View, ViewInner},
@@ -52,16 +51,15 @@ impl Default for ProposalFetcherConfig {
 }
 
 impl ProposalFetcherConfig {
-    pub(crate) fn spawn<N, P, V>(
+    pub(crate) fn spawn<N, P>(
         self,
         tasks: &mut TaskList,
-        consensus: Arc<RwLock<Consensus<N, P, V>>>,
+        consensus: Arc<RwLock<Consensus<N, P>>>,
         persistence: Arc<P>,
         metrics: &(impl Metrics + ?Sized),
     ) where
         N: ConnectedNetwork<PubKey>,
         P: SequencerPersistence,
-        V: Versions,
     {
         let (sender, receiver) = async_channel::unbounded();
         let fetcher = ProposalFetcher {
@@ -112,26 +110,24 @@ type Request = (ViewNumber, Commitment<Leaf2<SeqTypes>>);
 
 #[derive(Derivative)]
 #[derivative(Clone(bound = ""), Debug(bound = ""))]
-struct ProposalFetcher<N, P, V>
+struct ProposalFetcher<N, P>
 where
     N: ConnectedNetwork<PubKey>,
     P: SequencerPersistence,
-    V: Versions,
 {
     sender: Sender<Request>,
     #[derivative(Debug = "ignore")]
-    consensus: Arc<RwLock<Consensus<N, P, V>>>,
+    consensus: Arc<RwLock<Consensus<N, P>>>,
     #[derivative(Debug = "ignore")]
     persistence: Arc<P>,
     cfg: ProposalFetcherConfig,
     metrics: ProposalFetcherMetrics,
 }
 
-impl<N, P, V> ProposalFetcher<N, P, V>
+impl<N, P> ProposalFetcher<N, P>
 where
     N: ConnectedNetwork<PubKey>,
     P: SequencerPersistence,
-    V: Versions,
 {
     #[tracing::instrument(skip_all)]
     async fn scan(self) {

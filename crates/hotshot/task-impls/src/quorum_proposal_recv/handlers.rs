@@ -13,7 +13,7 @@ use async_lock::{RwLock, RwLockUpgradableReadGuard};
 use committable::Committable;
 use hotshot_types::{
     consensus::OuterConsensus,
-    data::{Leaf2, QuorumProposal, QuorumProposalWrapper},
+    data::{Leaf2, QuorumProposal, QuorumProposalWrapper, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::Proposal,
     simple_certificate::{QuorumCertificate, QuorumCertificate2},
@@ -21,7 +21,7 @@ use hotshot_types::{
     traits::{
         block_contents::{BlockHeader, BlockPayload},
         election::Membership,
-        node_implementation::{ConsensusTime, NodeImplementation, NodeType},
+        node_implementation::{NodeImplementation, NodeType},
         signature_key::SignatureKey,
         storage::Storage,
         ValidatedState,
@@ -35,7 +35,7 @@ use hotshot_types::{
 use hotshot_utils::anytrace::*;
 use tokio::spawn;
 use tracing::instrument;
-use vbs::version::StaticVersionType;
+use versions::EPOCH_VERSION;
 
 use super::{QuorumProposalRecvTaskState, ValidationInfo};
 use crate::{
@@ -46,12 +46,12 @@ use crate::{
         validate_light_client_state_update_certificate, validate_proposal_safety_and_liveness,
         validate_proposal_view_and_certs, validate_qc_and_next_epoch_qc, verify_drb_result,
     },
-    quorum_proposal_recv::{UpgradeLock, Versions},
+    quorum_proposal_recv::UpgradeLock,
 };
 
 /// Spawn a task which will fire a request to get a proposal, and store it.
 #[allow(clippy::too_many_arguments)]
-fn spawn_fetch_proposal<TYPES: NodeType, V: Versions>(
+fn spawn_fetch_proposal<TYPES: NodeType>(
     qc: &QuorumCertificate2<TYPES>,
     event_sender: Sender<Arc<HotShotEvent<TYPES>>>,
     event_receiver: Receiver<Arc<HotShotEvent<TYPES>>>,
@@ -59,7 +59,7 @@ fn spawn_fetch_proposal<TYPES: NodeType, V: Versions>(
     consensus: OuterConsensus<TYPES>,
     sender_public_key: TYPES::SignatureKey,
     sender_private_key: <TYPES::SignatureKey as SignatureKey>::PrivateKey,
-    upgrade_lock: UpgradeLock<TYPES, V>,
+    upgrade_lock: UpgradeLock<TYPES>,
     epoch_height: u64,
 ) {
     let qc = qc.clone();
@@ -83,20 +83,16 @@ fn spawn_fetch_proposal<TYPES: NodeType, V: Versions>(
 
 /// Update states in the event that the parent state is not found for a given `proposal`.
 #[instrument(skip_all)]
-pub async fn validate_proposal_liveness<
-    TYPES: NodeType,
-    I: NodeImplementation<TYPES>,
-    V: Versions,
->(
+pub async fn validate_proposal_liveness<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     proposal: &Proposal<TYPES, QuorumProposalWrapper<TYPES>>,
-    validation_info: &ValidationInfo<TYPES, I, V>,
+    validation_info: &ValidationInfo<TYPES, I>,
 ) -> Result<()> {
     let mut valid_epoch_transition = false;
     if validation_info
         .upgrade_lock
         .version(proposal.data.view_number())
         .await
-        .is_ok_and(|v| v >= V::Epochs::VERSION)
+        .is_ok_and(|v| v >= EPOCH_VERSION)
     {
         let Some(block_number) = proposal.data.justify_qc().data.block_number else {
             bail!("Quorum Proposal has no block number but it's after the epoch upgrade");
@@ -125,7 +121,7 @@ pub async fn validate_proposal_liveness<
             .upgrade_lock
             .version(leaf.view_number())
             .await
-            .is_ok_and(|v| v >= V::Epochs::VERSION)
+            .is_ok_and(|v| v >= EPOCH_VERSION)
     {
         consensus_writer.update_locked_view(proposal.data.justify_qc().view_number())?;
     }
@@ -139,13 +135,9 @@ pub async fn validate_proposal_liveness<
     Ok(())
 }
 
-async fn validate_epoch_transition_block<
-    TYPES: NodeType,
-    I: NodeImplementation<TYPES>,
-    V: Versions,
->(
+async fn validate_epoch_transition_block<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     proposal: &Proposal<TYPES, QuorumProposalWrapper<TYPES>>,
-    validation_info: &ValidationInfo<TYPES, I, V>,
+    validation_info: &ValidationInfo<TYPES, I>,
 ) -> Result<()> {
     if !validation_info
         .upgrade_lock
@@ -178,15 +170,15 @@ async fn validate_epoch_transition_block<
     Ok(())
 }
 
-async fn validate_current_epoch<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>(
+async fn validate_current_epoch<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     proposal: &Proposal<TYPES, QuorumProposalWrapper<TYPES>>,
-    validation_info: &ValidationInfo<TYPES, I, V>,
+    validation_info: &ValidationInfo<TYPES, I>,
 ) -> Result<()> {
     let upgrade_view = validation_info
         .upgrade_lock
         .upgrade_view()
         .await
-        .unwrap_or(TYPES::View::new(0));
+        .unwrap_or(ViewNumber::new(0));
     if !validation_info
         .upgrade_lock
         .epochs_enabled(proposal.data.view_number())
@@ -251,16 +243,12 @@ async fn validate_block_height<TYPES: NodeType>(
 /// - The sequencer storage update fails.
 #[allow(clippy::too_many_lines)]
 #[instrument(skip_all)]
-pub(crate) async fn handle_quorum_proposal_recv<
-    TYPES: NodeType,
-    I: NodeImplementation<TYPES>,
-    V: Versions,
->(
+pub(crate) async fn handle_quorum_proposal_recv<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     proposal: &Proposal<TYPES, QuorumProposalWrapper<TYPES>>,
     quorum_proposal_sender_key: &TYPES::SignatureKey,
     event_sender: &Sender<Arc<HotShotEvent<TYPES>>>,
     event_receiver: &Receiver<Arc<HotShotEvent<TYPES>>>,
-    validation_info: ValidationInfo<TYPES, I, V>,
+    validation_info: ValidationInfo<TYPES, I>,
 ) -> Result<()> {
     proposal
         .data
@@ -281,7 +269,7 @@ pub(crate) async fn handle_quorum_proposal_recv<
         .version(proposal.data.view_number())
         .await?;
 
-    if version >= V::Epochs::VERSION {
+    if version >= EPOCH_VERSION {
         // Don't vote if the DRB result verification fails.
         verify_drb_result(&proposal.data, &validation_info).await?;
     }
@@ -292,7 +280,7 @@ pub(crate) async fn handle_quorum_proposal_recv<
     let maybe_next_epoch_justify_qc = proposal.data.next_epoch_justify_qc().clone();
 
     let proposal_block_number = proposal.data.block_header().block_number();
-    let proposal_epoch = option_epoch_from_block_number::<TYPES>(
+    let proposal_epoch = option_epoch_from_block_number(
         proposal.data.epoch().is_some(),
         proposal_block_number,
         validation_info.epoch_height,
@@ -413,7 +401,7 @@ pub(crate) async fn handle_quorum_proposal_recv<
     };
 
     // Validate the proposal
-    validate_proposal_safety_and_liveness::<TYPES, I, V>(
+    validate_proposal_safety_and_liveness::<TYPES, I>(
         proposal.clone(),
         parent_leaf,
         &validation_info,

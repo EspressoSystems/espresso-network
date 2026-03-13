@@ -12,7 +12,7 @@ use futures::StreamExt;
 use hotshot::{tasks::task_state::CreateTaskState, types::SystemContextHandle};
 use hotshot_example_types::{
     block_types::{TestMetadata, TestTransaction},
-    node_types::{MemoryImpl, TestTypes, TestVersions},
+    node_types::{MemoryImpl, TEST_VERSIONS, TestTypes},
     state_types::{TestInstanceState, TestValidatedState},
 };
 use hotshot_macros::{run_test, test_scripts};
@@ -31,25 +31,26 @@ use hotshot_testing::{
 use hotshot_types::{
     data::{null_block, EpochNumber, Leaf2, ViewNumber},
     simple_vote::UpgradeProposalData,
-    traits::{election::Membership, node_implementation::ConsensusTime},
+    traits::{election::Membership},
     vote::HasViewNumber,
 };
-use vbs::version::Version;
+use versions::version;
+
 const TIMEOUT: Duration = Duration::from_millis(65);
 
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
 /// Tests that we correctly update our internal quorum vote state when reaching a decided upgrade
 /// certificate.
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_upgrade_task_with_vote() {
     use hotshot_testing::helpers::build_system_handle;
 
     let (handle, _, _, node_key_map) =
-        build_system_handle::<TestTypes, MemoryImpl, TestVersions>(2).await;
+        build_system_handle::<TestTypes, MemoryImpl>(2).await;
 
-    let old_version = Version { major: 0, minor: 1 };
-    let new_version = Version { major: 0, minor: 2 };
+    let old_version = version(0, 1);
+    let new_version = version(0, 2);
 
-    let upgrade_data: UpgradeProposalData<TestTypes> = UpgradeProposalData {
+    let upgrade_data: UpgradeProposalData = UpgradeProposalData {
         old_version,
         new_version,
         decide_by: ViewNumber::new(6),
@@ -68,7 +69,7 @@ async fn test_upgrade_task_with_vote() {
     let mut consensus_writer = consensus.write().await;
 
     let membership = handle.hotshot.membership_coordinator.clone();
-    let mut generator = TestViewGenerator::<TestVersions>::generate(membership, node_key_map);
+    let mut generator = TestViewGenerator::generate(membership, node_key_map, TEST_VERSIONS.test);
 
     for view in (&mut generator).take(2).collect::<Vec<_>>().await {
         proposals.push(view.quorum_proposal.clone());
@@ -168,7 +169,7 @@ async fn test_upgrade_task_with_vote() {
     ];
 
     let vote_state =
-        QuorumVoteTaskState::<TestTypes, MemoryImpl, TestVersions>::create_from(&handle).await;
+        QuorumVoteTaskState::<TestTypes, MemoryImpl>::create_from(&handle).await;
     let mut vote_script = TaskScript {
         timeout: TIMEOUT,
         state: vote_state,

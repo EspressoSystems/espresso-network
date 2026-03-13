@@ -5,8 +5,8 @@
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
 use hotshot_example_types::node_types::{
-    CliquenetImpl, CombinedImpl, EpochsTestVersions, PushCdnImpl, TestTwoStakeTablesTypes,
-    TestTypes, TestTypesRandomizedLeader,
+    CliquenetImpl, CombinedImpl, PushCdnImpl, TestTwoStakeTablesTypes, TestTypes,
+    TestTypesRandomizedLeader, TEST_VERSIONS,
 };
 use hotshot_macros::cross_tests;
 use hotshot_testing::{block_builder::SimpleBuilderImplementation, test_builder::TestDescription};
@@ -15,7 +15,7 @@ cross_tests!(
     TestName: test_success_with_epochs,
     Impls: [PushCdnImpl, CombinedImpl, CliquenetImpl],
     Types: [TestTypes, TestTypesRandomizedLeader, TestTwoStakeTablesTypes],
-    Versions: [EpochsTestVersions],
+    Versions: [TEST_VERSIONS.epoch],
     Ignore: false,
     Metadata: {
         let mut metadata = TestDescription::default();

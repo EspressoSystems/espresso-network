@@ -5,7 +5,6 @@ use hotshot_example_types::{
     node_types::{MemoryImpl, TestTypes},
 };
 use hotshot_testing::{block_builder::TestBuilderImplementation, test_builder::TestDescription};
-use hotshot_types::traits::node_implementation::Versions;
 use rand::{thread_rng, Rng};
 use serde::{Deserialize, Serialize};
 use validation::BuilderValidationConfig;
@@ -54,15 +53,14 @@ impl TryFrom<&TransactionPayload> for TestTransaction {
 
 /// Run a builder test. Thin wrapper around `TestRunner::run_test`, injecting transaction generation
 /// and validation tasks based on `validation_config` and `transaction_generation_config` respectively.
-pub async fn run_test<V: Versions, BuilderImpl: TestBuilderImplementation<TestTypes>>(
-    description: TestDescription<TestTypes, MemoryImpl, V>,
+pub async fn run_test<BuilderImpl: TestBuilderImplementation<TestTypes>>(
+    description: TestDescription<TestTypes, MemoryImpl>,
     validation_config: BuilderValidationConfig,
     transaction_generation_config: TransactionGenerationConfig,
 ) {
     let test_runner = hotshot_testing::test_builder::TestDescription::<
         TestTypes,
         MemoryImpl,
-        V,
     >::gen_launcher_with_tasks(
         description,
         vec![

@@ -1,8 +1,10 @@
 use serde::{Deserialize, Serialize};
 
+use crate::data::ViewNumber;
+
 #[derive(Serialize, Deserialize, Clone)]
-pub struct LeaderViewStats<V> {
-    pub view: V,
+pub struct LeaderViewStats {
+    pub view: ViewNumber,
     pub prev_proposal_send: Option<i128>,
     pub proposal_send: Option<i128>,
     pub state_validated: Option<i128>,
@@ -15,8 +17,8 @@ pub struct LeaderViewStats<V> {
 }
 
 #[derive(Serialize, Deserialize, Clone)]
-pub struct ReplicaViewStats<V> {
-    pub view: V,
+pub struct ReplicaViewStats {
+    pub view: ViewNumber,
     pub view_change: Option<i128>,
     pub proposal_timestamp: Option<i128>,
     pub proposal_recv: Option<i128>,
@@ -30,8 +32,8 @@ pub struct ReplicaViewStats<V> {
     pub block_reconstructed: Option<i128>,
 }
 
-impl<V> LeaderViewStats<V> {
-    pub fn new(view: V) -> Self {
+impl LeaderViewStats {
+    pub fn new(view: ViewNumber) -> Self {
         Self {
             view,
             prev_proposal_send: None,
@@ -47,8 +49,8 @@ impl<V> LeaderViewStats<V> {
     }
 }
 
-impl<V> ReplicaViewStats<V> {
-    pub fn new(view: V) -> Self {
+impl ReplicaViewStats {
+    pub fn new(view: ViewNumber) -> Self {
         Self {
             view,
             view_change: None,

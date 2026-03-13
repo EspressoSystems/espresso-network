@@ -236,10 +236,6 @@ HotShot supports protocol upgrades via an `UpgradeProposal` mechanism. See `doc/
 
 | Feature          | Default | Purpose                  |
 | ---------------- | ------- | ------------------------ |
-| `fee`            | Yes     | Fee contract integration |
-| `pos`            | Yes     | Proof of stake           |
-| `drb-and-header` | Yes     | DRB and header upgrades  |
-| `da-upgrade`     | Yes     | DA committee upgrades    |
 | `embedded-db`    | No      | SQLite backend           |
 
 **IMPORTANT:** `embedded-db` requires sqlx with different features than PostgreSQL. Since Rust features are additive and

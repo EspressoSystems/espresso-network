@@ -10,7 +10,7 @@ use hotshot_testing::{
     block_builder::{BuilderTask, TestBuilderImplementation},
     test_builder::BuilderChange,
 };
-use hotshot_types::{data::ViewNumber, traits::node_implementation::NodeType};
+use hotshot_types::traits::node_implementation::NodeType;
 use tagged_base64::TaggedBase64;
 use tokio::spawn;
 use url::Url;
@@ -45,7 +45,7 @@ struct LegacyBuilderImpl {}
 #[async_trait]
 impl<Types> TestBuilderImplementation<Types> for LegacyBuilderImpl
 where
-    Types: NodeType<View = ViewNumber>,
+    Types: NodeType,
     Types::InstanceState: Default,
     for<'a> <<Types::SignatureKey as SignatureKey>::PureAssembledSignatureType as TryFrom<
         &'a TaggedBase64,
@@ -95,7 +95,7 @@ where
 
 impl<Types> BuilderTask<Types> for LegacyBuilderTask<Types>
 where
-    Types: NodeType<View = ViewNumber>,
+    Types: NodeType,
     for<'a> <<Types::SignatureKey as SignatureKey>::PureAssembledSignatureType as TryFrom<
         &'a TaggedBase64,
     >>::Error: Display,
@@ -123,7 +123,7 @@ mod tests {
         run_test,
         validation::BuilderValidationConfig,
     };
-    use hotshot_example_types::node_types::{MemoryImpl, TestTypes, TestVersions};
+    use hotshot_example_types::node_types::{MemoryImpl, TestTypes, TEST_VERSIONS};
     use hotshot_macros::cross_tests;
     use hotshot_testing::{
         overall_safety_task::OverallSafetyPropertiesDescription, test_builder::TestDescription,
@@ -151,7 +151,7 @@ mod tests {
 
         metadata.test_config.epoch_height = 0;
 
-        run_test::<TestVersions, LegacyBuilderImpl>(
+        run_test::<LegacyBuilderImpl>(
             metadata,
             BuilderValidationConfig {
                 expected_txn_num: num_successful_views * min_txns_per_view,
@@ -174,7 +174,7 @@ mod tests {
         Impls: [MemoryImpl],
         BuilderImpls: [LegacyBuilderImpl],
         Types: [TestTypes],
-        Versions: [TestVersions],
+        Versions: [TEST_VERSIONS.test],
         Ignore: true,
         Metadata: {
             let mut metadata = TestDescription {

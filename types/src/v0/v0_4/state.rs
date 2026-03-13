@@ -1,31 +1,72 @@
-use std::collections::HashSet;
+use std::{
+    collections::HashSet,
+    sync::{Arc, OnceLock},
+};
 
 use alloy::primitives::{Address, U256};
+use anyhow::Context;
 use derive_more::{Display, From, Into};
 use hotshot_contract_adapter::reward::{RewardAuthData, RewardClaimInput};
-use jf_merkle_tree_compat::{
-    universal_merkle_tree::UniversalMerkleTree, MerkleTreeScheme, UniversalMerkleTreeScheme,
-};
+use jf_merkle_tree_compat::{MerkleTreeScheme, UniversalMerkleTreeScheme};
 use serde::{Deserialize, Serialize};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use super::FeeAccount;
-use crate::{
-    v0::sparse_mt::{Keccak256Hasher, KeccakNode},
-    v0_3::{RewardAccountV1, RewardAmount},
+use crate::v0_3::{RewardAccountV1, RewardAmount};
+
+static REWARD_MERKLE_TREE_V2_MEMORY_LOCK: OnceLock<Arc<Semaphore>> = OnceLock::new();
+
+pub use crate::v0::reward_mt::{
+    RewardMerkleCommitmentV2, RewardMerkleTreeV2, REWARD_MERKLE_TREE_V2_ARITY,
+    REWARD_MERKLE_TREE_V2_HEIGHT,
 };
 
-pub const REWARD_MERKLE_TREE_V2_HEIGHT: usize = 160;
-pub const REWARD_MERKLE_TREE_V2_ARITY: usize = 2;
+#[derive(Clone)]
+pub struct PermittedRewardMerkleTreeV2 {
+    pub tree: RewardMerkleTreeV2,
+    _permit: Arc<OwnedSemaphorePermit>,
+}
 
-pub type RewardMerkleCommitmentV2 = <RewardMerkleTreeV2 as MerkleTreeScheme>::Commitment;
+impl std::ops::Deref for PermittedRewardMerkleTreeV2 {
+    type Target = RewardMerkleTreeV2;
 
-pub type RewardMerkleTreeV2 = UniversalMerkleTree<
-    RewardAmount,
-    Keccak256Hasher,
-    RewardAccountV2,
-    REWARD_MERKLE_TREE_V2_ARITY,
-    KeccakNode,
->;
+    fn deref(&self) -> &Self::Target {
+        &self.tree
+    }
+}
+
+impl PermittedRewardMerkleTreeV2 {
+    pub async fn try_from_kv_set(
+        balances: Vec<(RewardAccountV2, RewardAmount)>,
+    ) -> anyhow::Result<Self> {
+        let permit = REWARD_MERKLE_TREE_V2_MEMORY_LOCK
+            .get_or_init(|| Arc::new(Semaphore::new(1)))
+            .clone()
+            .acquire_owned()
+            .await
+            .context("Failed to acquire permit for RewardMerkleTreeV2")?;
+
+        let tree = RewardMerkleTreeV2::from_kv_set(REWARD_MERKLE_TREE_V2_HEIGHT, balances)
+            .context("Failed to rebuild reward merkle tree from balances")?;
+
+        Ok(PermittedRewardMerkleTreeV2 {
+            tree,
+            _permit: Arc::new(permit),
+        })
+    }
+}
+
+/// Return `true` if any of the given accounts have been forgotten in the `ValidatedState` reward_merkle_tree_v2
+pub fn forgotten_accounts_include(tree: &RewardMerkleTreeV2, accounts: &[RewardAccountV2]) -> bool {
+    for account in accounts {
+        if tree.lookup(*account).expect_not_in_memory().is_ok() {
+            return true;
+        }
+    }
+
+    false
+}
+
 // New Type for `Address` in order to implement `CanonicalSerialize` and
 // `CanonicalDeserialize`
 // This is the same as `RewardAccountV1` but the `ToTraversal` trait implementation
