@@ -12,13 +12,12 @@ use hotshot::types::BLSPubKey;
 use hotshot_contract_adapter::reward::RewardProofSiblings;
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
-    traits::{election::Membership, node_implementation::ConsensusTime},
+    traits::election::Membership,
     utils::epoch_from_block_number,
 };
 use jf_merkle_tree_compat::{
     prelude::MerkleNode, ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme,
-    LookupResult, MerkleTreeScheme, PersistentUniversalMerkleTreeScheme, ToTraversalPath,
-    UniversalMerkleTreeScheme,
+    LookupResult, MerkleTreeScheme, ToTraversalPath, UniversalMerkleTreeScheme,
 };
 use num_traits::CheckedSub;
 use sequencer_utils::{
@@ -428,7 +427,7 @@ impl TryInto<RewardProofSiblings> for RewardAccountProofV2 {
             bail!("only presence proofs supported")
         };
 
-        let path = ToTraversalPath::<REWARD_MERKLE_TREE_V2_ARITY>::to_traversal_path(
+        let path = ToTraversalPath::<{ REWARD_MERKLE_TREE_V2_ARITY }>::to_traversal_path(
             &RewardAccountV2(self.account),
             REWARD_MERKLE_TREE_V2_HEIGHT,
         );
@@ -669,12 +668,11 @@ impl RewardDistributor {
         amount: P::Element,
     ) -> anyhow::Result<()>
     where
-        P: PersistentUniversalMerkleTreeScheme,
-        P: MerkleTreeScheme<Element = RewardAmount>,
+        P: UniversalMerkleTreeScheme<Element = RewardAmount>,
         P::Index: Borrow<<P as MerkleTreeScheme>::Index> + std::fmt::Display,
     {
         let mut err = None;
-        *tree = tree.persistent_update_with(account.clone(), |balance| {
+        tree.update_with(account.clone(), |balance| {
             let balance = balance.copied();
             match balance.unwrap_or_default().0.checked_add(amount.0) {
                 Some(updated) => Some(updated.into()),

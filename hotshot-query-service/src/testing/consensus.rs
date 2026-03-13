@@ -28,16 +28,13 @@ use hotshot_example_types::{state_types::TestInstanceState, storage_types::TestS
 use hotshot_testing::block_builder::{SimpleBuilderImplementation, TestBuilderImplementation};
 use hotshot_types::{
     consensus::ConsensusMetricsValue,
-    data::ViewNumber,
+    data::EpochNumber,
     drb::INITIAL_DRB_RESULT,
     epoch_membership::EpochMembershipCoordinator,
     light_client::StateKeyPair,
     signature_key::BLSPubKey,
     storage_metrics::StorageMetricsValue,
-    traits::{
-        election::Membership, network::Topic, node_implementation::ConsensusTime,
-        signature_key::SignatureKey as _,
-    },
+    traits::{election::Membership, network::Topic, signature_key::SignatureKey as _},
     HotShotConfig, PeerConfig,
 };
 use test_utils::reserve_tcp_port;
@@ -206,7 +203,7 @@ impl<D: DataSourceLifeCycle + UpdateStatusData> MockNetwork<D> {
                         membership
                             .write()
                             .await
-                            .set_first_epoch(ViewNumber::new(0), INITIAL_DRB_RESULT);
+                            .set_first_epoch(EpochNumber::new(0), INITIAL_DRB_RESULT);
                         let memberships = EpochMembershipCoordinator::new(
                             membership,
                             config.epoch_height,

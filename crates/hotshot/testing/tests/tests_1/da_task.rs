@@ -24,7 +24,6 @@ use hotshot_testing::{
 use hotshot_types::{
     data::{null_block, PackedBundle, ViewNumber},
     simple_vote::DaData2,
-    traits::node_implementation::{ConsensusTime},
 };
 use versions::VERSION_0_0;
 

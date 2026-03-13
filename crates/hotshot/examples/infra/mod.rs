@@ -52,7 +52,7 @@ use hotshot_testing::block_builder::{
 };
 use hotshot_types::{
     consensus::ConsensusMetricsValue,
-    data::{Leaf, TestableLeaf},
+    data::{Leaf, TestableLeaf, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     event::{Event, EventType},
     network::{BuilderType, NetworkConfig, NetworkConfigFile, NetworkConfigSource},
@@ -61,7 +61,7 @@ use hotshot_types::{
         block_contents::{BlockHeader, TestableBlock},
         election::Membership,
         network::ConnectedNetwork,
-        node_implementation::{ConsensusTime, NodeType},
+        node_implementation::NodeType,
         states::TestableState,
     },
     utils::genesis_epoch_from_version,
@@ -437,7 +437,7 @@ pub trait RunDa<
         let start = Instant::now();
 
         let mut event_stream = context.event_stream();
-        let mut anchor_view: TYPES::View = <TYPES::View as ConsensusTime>::genesis();
+        let mut anchor_view = ViewNumber::genesis();
         let mut num_successful_commits = 0;
 
         context.hotshot.start_consensus().await;
@@ -535,7 +535,7 @@ pub trait RunDa<
         let num_eligible_leaders = context
             .hotshot
             .membership_coordinator
-            .membership_for_epoch(genesis_epoch_from_version::<TYPES>(
+            .membership_for_epoch(genesis_epoch_from_version(
                 context.hotshot.upgrade_lock.upgrade.base,
             ))
             .await
