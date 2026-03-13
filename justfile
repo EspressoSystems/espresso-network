@@ -357,6 +357,9 @@ contracts-test-fuzz *args='-vv':
 contracts-test-invariant *args='-vv':
     forge test --match-test invariant_ {{args}}
 
+contracts-mutation-test *args:
+    dregs run --project . {{args}}
+
 contracts-test-network *args='-vv':
     #!/usr/bin/env bash
     set -euo pipefail

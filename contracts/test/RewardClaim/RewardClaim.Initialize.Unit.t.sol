@@ -94,6 +94,16 @@ contract RewardClaimInitializeTest is Test {
         assertEq(rewardClaim.currentAdmin(), owner);
     }
 
+    function test_SetDailyLimit_RevertsZeroComputedLimit() public {
+        bytes memory initData = prepare(supply, owner, lc, pauser);
+        ERC1967Proxy proxy = new ERC1967Proxy(impl, initData);
+        RewardClaim rewardClaim = RewardClaim(payable(address(proxy)));
+
+        vm.prank(owner);
+        vm.expectRevert(RewardClaim.ZeroDailyLimit.selector);
+        rewardClaim.setDailyLimit(1);
+    }
+
     function test_Initialize_TotalClaimedIsZero() public {
         (bytes memory initData) = prepare(supply, owner, lc, pauser);
 

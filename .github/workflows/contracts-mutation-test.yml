@@ -1,0 +1,229 @@
+name: Contracts Mutation Test
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    paths:
+      - "contracts/src/**"
+      - "contracts/test/**"
+      - "dregs.toml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      has_mutants: ${{ steps.check.outputs.has_mutants }}
+      total_shards: ${{ steps.shards.outputs.total_shards }}
+      shard_matrix: ${{ steps.shards.outputs.shard_matrix }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+          fetch-depth: 0
+          filter: blob:none
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+
+      - name: Enable Cachix
+        uses: cachix/cachix-action@v16
+        continue-on-error: true
+        with:
+          name: espresso-systems-private
+          authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
+          extraPullNames: nix-community
+          skipPush: ${{ github.actor == 'dependabot[bot]' }}
+
+      - name: Install dregs
+        run: nix profile install github:EspressoSystems/dregs
+
+      - name: Configure shard count
+        id: shards
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            total_shards=5
+          else
+            total_shards=20
+          fi
+          echo "total_shards=${total_shards}" >> "$GITHUB_OUTPUT"
+
+          # Build JSON array [1,2,...,N]
+          shard_matrix=$(seq 1 "${total_shards}" | jq -sc '.')
+          echo "shard_matrix=${shard_matrix}" >> "$GITHUB_OUTPUT"
+
+      - name: Generate mutants
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            nix develop --accept-flake-config -c \
+              dregs generate --project . --diff-base "origin/${{ github.base_ref }}" --output ./mutants
+          else
+            nix develop --accept-flake-config -c \
+              dregs generate --project . --output ./mutants
+          fi
+
+      - name: Check for mutants
+        id: check
+        run: |
+          if [[ -f mutants/manifest.json ]] && \
+             [[ "$(jq '.mutants | length' mutants/manifest.json)" -gt 0 ]]; then
+            echo "has_mutants=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_mutants=false" >> "$GITHUB_OUTPUT"
+            echo "No mutants generated, skipping test shards." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload mutants
+        if: steps.check.outputs.has_mutants == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: mutants
+          path: mutants/
+          if-no-files-found: error
+
+  build-diff-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+
+      # Borrow the hotshot-tests cache (read-only) since it's the only one saved
+      # from ubuntu-latest runners. We can't add a dedicated cache due to the
+      # 10 GB GitHub Actions cache limit.
+      - name: Enable Rust Caching
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: hotshot-tests
+          prefix-key: v1-hotshot
+          save-if: false
+          cache-provider: github
+
+      - name: Build diff-test
+        run: cargo build --locked --bin diff-test --profile test
+
+      - name: Upload diff-test binary
+        uses: actions/upload-artifact@v7
+        with:
+          name: diff-test
+          path: target/debug/diff-test
+          if-no-files-found: error
+
+  test-shard:
+    needs: [generate, build-diff-test]
+    if: needs.generate.outputs.has_mutants == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJson(needs.generate.outputs.shard_matrix) }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+
+      - name: Enable Cachix
+        uses: cachix/cachix-action@v16
+        continue-on-error: true
+        with:
+          name: espresso-systems-private
+          authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
+          extraPullNames: nix-community
+          skipPush: ${{ github.actor == 'dependabot[bot]' }}
+
+      - name: Install dregs
+        run: nix profile install github:EspressoSystems/dregs
+
+      - name: Download mutants
+        uses: actions/download-artifact@v8
+        with:
+          name: mutants
+          path: mutants/
+
+      - name: Download diff-test binary
+        uses: actions/download-artifact@v8
+        with:
+          name: diff-test
+          path: ./bin
+
+      - name: Make diff-test executable
+        run: chmod +x ./bin/diff-test
+
+      - name: Run mutation tests (shard ${{ matrix.shard }}/${{ needs.generate.outputs.total_shards }})
+        run: |
+          nix develop --accept-flake-config -c \
+            env PATH="${PWD}/bin:${PATH}" \
+            dregs test \
+              --manifest ./mutants/manifest.json \
+              --project . \
+              --partition "slice:${{ matrix.shard }}/${{ needs.generate.outputs.total_shards }}" \
+              --output "results-${{ matrix.shard }}.json"
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: results-${{ matrix.shard }}
+          path: results-${{ matrix.shard }}.json
+          if-no-files-found: error
+
+  report:
+    needs: [generate, test-shard]
+    if: "!cancelled() && needs.generate.outputs.has_mutants == 'true'"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+
+      - name: Enable Cachix
+        uses: cachix/cachix-action@v16
+        continue-on-error: true
+        with:
+          name: espresso-systems-private
+          authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
+          extraPullNames: nix-community
+          skipPush: ${{ github.actor == 'dependabot[bot]' }}
+
+      - name: Install dregs
+        run: nix profile install github:EspressoSystems/dregs
+
+      - name: Download mutants
+        uses: actions/download-artifact@v8
+        with:
+          name: mutants
+          path: mutants/
+
+      - name: Download all results
+        uses: actions/download-artifact@v8
+        with:
+          pattern: results-*
+          path: results/
+
+      - name: Generate report
+        run: |
+          dregs report ./mutants/manifest.json results/results-*/results-*.json \
+            --format markdown | tee "$GITHUB_STEP_SUMMARY" > mutation-report.md
+
+      - name: Upload report
+        uses: actions/upload-artifact@v7
+        with:
+          name: mutation-report
+          path: mutation-report.md
+          if-no-files-found: error
