@@ -175,7 +175,7 @@ impl<TYPES: NodeType> HotShotConfigFile<TYPES> {
             data_request_delay: Some(Duration::from_millis(REQUEST_DATA_DELAY)),
             builder_urls: default_builder_urls(),
             upgrade: UpgradeConfig::default(),
-            epoch_height: 0,
+            epoch_height: 100,
             epoch_start_block: 0,
             stake_table_capacity: crate::light_client::DEFAULT_STAKE_TABLE_CAPACITY,
             drb_difficulty: 10,

@@ -11,7 +11,7 @@ use hotshot_task_impls::{
 };
 use hotshot_testing::helpers::build_system_handle;
 use hotshot_types::{
-    data::ViewNumber, simple_vote::ViewSyncPreCommitData2,
+    data::{EpochNumber, ViewNumber}, simple_vote::ViewSyncPreCommitData2,
 };
 
 #[cfg(test)]
@@ -26,7 +26,7 @@ async fn test_view_sync_task() {
     let vote_data = ViewSyncPreCommitData2 {
         relay: 0,
         round: ViewNumber::new(4),
-        epoch: None,
+        epoch: Some(EpochNumber::new(1)),
     };
     let vote = hotshot_types::simple_vote::ViewSyncPreCommitVote2::<TestTypes>::create_signed_vote(
         vote_data,
@@ -43,12 +43,12 @@ async fn test_view_sync_task() {
     let mut input = Vec::new();
     let mut output = Vec::new();
 
-    input.push(HotShotEvent::Timeout(ViewNumber::new(2), None));
-    input.push(HotShotEvent::Timeout(ViewNumber::new(3), None));
+    input.push(HotShotEvent::Timeout(ViewNumber::new(2), Some(EpochNumber::new(0))));
+    input.push(HotShotEvent::Timeout(ViewNumber::new(3), Some(EpochNumber::new(0))));
 
     input.push(HotShotEvent::Shutdown);
 
-    output.push(HotShotEvent::ViewChange(ViewNumber::new(3), None));
+    output.push(HotShotEvent::ViewChange(ViewNumber::new(3), Some(EpochNumber::new(1))));
     output.push(HotShotEvent::ViewSyncPreCommitVoteSend(vote.clone()));
 
     let view_sync_state = ViewSyncTaskState::<TestTypes>::create_from(&handle).await;
