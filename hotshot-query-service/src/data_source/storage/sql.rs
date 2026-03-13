@@ -1455,7 +1455,6 @@ mod test {
         simple_vote::QuorumData,
         traits::{
             block_contents::{BlockHeader, GENESIS_VID_NUM_STORAGE_NODES},
-            node_implementation::ConsensusTime,
             EncodeBytes,
         },
         vid::advz::advz_scheme,
