@@ -205,4 +205,11 @@ jobs:
       - name: Generate report
         run: |
           dregs report ./mutants/manifest.json results/results-*/results-*.json \
-            --format markdown | tee "$GITHUB_STEP_SUMMARY"
+            --format markdown | tee "$GITHUB_STEP_SUMMARY" > mutation-report.md
+
+      - name: Upload report
+        uses: actions/upload-artifact@v7
+        with:
+          name: mutation-report
+          path: mutation-report.md
+          if-no-files-found: error
