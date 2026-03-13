@@ -803,7 +803,7 @@ pub mod testing {
     use test_utils::reserve_tcp_port;
     use tokio::spawn;
     use vbs::version::{StaticVersionType, Version};
-    use versions::{EPOCH_VERSION, VERSION_0_1};
+    use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION};
 
     use super::*;
     use crate::{
@@ -1175,7 +1175,7 @@ pub mod testing {
                 stake_table_capacity: hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY,
                 drb_difficulty: 10,
                 drb_upgrade_difficulty: 20,
-                upgrade: versions::Upgrade::trivial(VERSION_0_1),
+                upgrade: versions::Upgrade::trivial(DRB_AND_HEADER_UPGRADE_VERSION),
             };
 
             let anvil = Anvil::new()

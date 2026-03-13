@@ -9,7 +9,7 @@ use hotshot_types::{
 use serde::{Deserialize, Serialize};
 use tide_disco::Url;
 use vec1::Vec1;
-use versions::{Upgrade, VERSION_0_1};
+use versions::{Upgrade, DRB_AND_HEADER_UPGRADE_VERSION};
 
 use crate::{PubKey, SeqTypes};
 
@@ -102,7 +102,7 @@ fn default_drb_upgrade_difficulty() -> u64 {
 
 /// Default version upgrade (intended to be overwritten)
 fn default_version_upgrade() -> Upgrade {
-    Upgrade::trivial(VERSION_0_1)
+    Upgrade::trivial(DRB_AND_HEADER_UPGRADE_VERSION)
 }
 
 impl From<HotShotConfig<SeqTypes>> for PublicHotShotConfig {

@@ -9,7 +9,7 @@ use std::{num::NonZeroUsize, time::Duration};
 use alloy::primitives::U256;
 use url::Url;
 use vec1::Vec1;
-use versions::{Upgrade, VERSION_0_1};
+use versions::{Upgrade, DRB_AND_HEADER_UPGRADE_VERSION};
 
 use crate::{
     constants::REQUEST_DATA_DELAY, upgrade_config::UpgradeConfig, HotShotConfig, NodeType,
@@ -90,7 +90,7 @@ fn default_stake_table_capacity() -> usize {
 }
 
 fn default_version_upgrade() -> Upgrade {
-    Upgrade::trivial(VERSION_0_1)
+    Upgrade::trivial(DRB_AND_HEADER_UPGRADE_VERSION)
 }
 
 impl<TYPES: NodeType> From<HotShotConfigFile<TYPES>> for HotShotConfig<TYPES> {

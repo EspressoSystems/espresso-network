@@ -9,7 +9,6 @@ use vbs::version::Version;
 // Known versions:
 
 pub const VERSION_0_0: Version = version(0, 0);
-pub const VERSION_0_1: Version = version(0, 1);
 pub const FEE_VERSION: Version = version(0, 2);
 pub const EPOCH_VERSION: Version = version(0, 3);
 pub const DRB_AND_HEADER_UPGRADE_VERSION: Version = version(0, 4);

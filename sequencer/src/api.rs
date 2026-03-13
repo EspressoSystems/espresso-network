@@ -3000,7 +3000,6 @@ mod test {
         testing::{wait_for_decide_on_handle, wait_for_epochs, TestConfig, TestConfigBuilder},
     };
 
-    const POS_V3: Upgrade = Upgrade::trivial(version(0, 3));
     const POS_V4: Upgrade = Upgrade::trivial(version(0, 4));
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -3549,11 +3548,7 @@ mod test {
         drop(network);
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_pos_upgrade_view_based() {
-        test_upgrade_helper(Upgrade::new(FEE_VERSION, EPOCH_VERSION)).await;
-    }
-
+    #[allow(dead_code)]
     async fn test_upgrade_helper(upgrade: Upgrade) {
         // wait this number of views beyond the configured first view
         // before asserting anything.
@@ -3911,13 +3906,13 @@ mod test {
             .pos_hook(
                 DelegationConfig::VariableAmounts,
                 Default::default(),
-                POS_V3,
+                POS_V4,
             )
             .await
             .expect("Pos Deployment")
             .build();
 
-        let _network = TestNetwork::new(config, POS_V3).await;
+        let _network = TestNetwork::new(config, POS_V4).await;
 
         let mut subscribed_events = client
             .socket("hotshot-events/events")
@@ -4238,13 +4233,13 @@ mod test {
             .pos_hook(
                 DelegationConfig::MultipleDelegators,
                 Default::default(),
-                POS_V3,
+                POS_V4,
             )
             .await
             .unwrap()
             .build();
 
-        let network = TestNetwork::new(config, POS_V3).await;
+        let network = TestNetwork::new(config, POS_V4).await;
 
         let mut prev_st = None;
         let state = network.server.decided_state().await;
@@ -4582,7 +4577,6 @@ mod test {
     }
 
     #[rstest]
-    #[case(POS_V3)]
     #[case(POS_V4)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_node_stake_table_api(#[case] upgrade: Upgrade) {
@@ -4660,7 +4654,6 @@ mod test {
     }
 
     #[rstest]
-    #[case(POS_V3)]
     #[case(POS_V4)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_epoch_stake_table_catchup(#[case] upgrade: Upgrade) {
@@ -4797,7 +4790,6 @@ mod test {
     }
 
     #[rstest]
-    #[case(POS_V3)]
     #[case(POS_V4)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_epoch_stake_table_catchup_stress(#[case] upgrade: Upgrade) {
@@ -4947,7 +4939,6 @@ mod test {
     }
 
     #[rstest]
-    #[case(POS_V3)]
     #[case(POS_V4)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_merklized_state_catchup_on_restart(
@@ -5173,7 +5164,6 @@ mod test {
     }
 
     #[rstest]
-    #[case(POS_V3)]
     #[case(POS_V4)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_state_reconstruction(#[case] upgrade: Upgrade) -> anyhow::Result<()> {
@@ -5500,7 +5490,6 @@ mod test {
     }
 
     #[rstest]
-    #[case(POS_V3)]
     #[case(POS_V4)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_block_reward_api(#[case] upgrade: Upgrade) -> anyhow::Result<()> {
@@ -6139,7 +6128,6 @@ mod test {
     }
 
     #[rstest]
-    #[case(POS_V3)]
     #[case(POS_V4)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_v3_and_v4_reward_tree_updates(#[case] upgrade: Upgrade) -> anyhow::Result<()> {
@@ -6224,7 +6212,6 @@ mod test {
     }
 
     #[rstest]
-    #[case(POS_V3)]
     #[case(POS_V4)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     pub(crate) async fn test_state_cert_query(#[case] upgrade: Upgrade) {
@@ -6355,7 +6342,6 @@ mod test {
     /// restarted node catches up for the missing state certificates.
 
     #[rstest]
-    #[case(POS_V3)]
     #[case(POS_V4)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     pub(crate) async fn test_state_cert_catchup(#[case] upgrade: Upgrade) {
@@ -6632,7 +6618,6 @@ mod test {
     }
 
     #[rstest]
-    #[case(POS_V3)]
     #[case(POS_V4)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_reward_proof_endpoint(#[case] upgrade: Upgrade) -> anyhow::Result<()> {

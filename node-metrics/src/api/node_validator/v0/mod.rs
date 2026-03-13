@@ -33,15 +33,15 @@ use crate::service::{
 pub const VERSION_MAJ: u16 = 0;
 
 /// CONSTANT for protocol minor version
-pub const VERSION_MIN: u16 = 1;
+pub const VERSION_MIN: u16 = 4;
 
-pub const VERSION_0_1: Version = Version {
+pub const VERSION_0_4: Version = Version {
     major: VERSION_MAJ,
     minor: VERSION_MIN,
 };
 
 /// Constant for the version of this API.
-pub const BASE_VERSION: Version = VERSION_0_1;
+pub const BASE_VERSION: Version = VERSION_0_4;
 
 /// Specific type for version 0.1
 pub type Version01 = StaticVersion<VERSION_MAJ, VERSION_MIN>;
