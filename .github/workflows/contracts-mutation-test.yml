@@ -1,0 +1,192 @@
+name: Contracts Mutation Test
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    paths:
+      - "contracts/src/**"
+      - "contracts/test/**"
+      - "dregs.toml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      has_mutants: ${{ steps.check.outputs.has_mutants }}
+      total_shards: ${{ steps.shards.outputs.total_shards }}
+      shard_matrix: ${{ steps.shards.outputs.shard_matrix }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Fetch base branch
+        if: github.event_name == 'pull_request'
+        run: git fetch origin ${{ github.base_ref }} --depth=1
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+
+      - name: Enable Cachix
+        uses: cachix/cachix-action@v16
+        continue-on-error: true
+        with:
+          name: espresso-systems-private
+          authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
+          extraPullNames: nix-community
+          skipPush: ${{ github.actor == 'dependabot[bot]' }}
+
+      - name: Install dregs
+        run: nix profile install github:EspressoSystems/dregs
+
+      - name: Configure shard count
+        id: shards
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            total_shards=5
+          else
+            total_shards=20
+          fi
+          echo "total_shards=${total_shards}" >> "$GITHUB_OUTPUT"
+
+          # Build JSON array [1,2,...,N]
+          shard_matrix=$(seq 1 "${total_shards}" | jq -sc '.')
+          echo "shard_matrix=${shard_matrix}" >> "$GITHUB_OUTPUT"
+
+      - name: Generate mutants
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            nix develop --accept-flake-config -c \
+              dregs generate --project . --diff-base "origin/${{ github.base_ref }}" --output ./mutants
+          else
+            nix develop --accept-flake-config -c \
+              dregs generate --project . --output ./mutants
+          fi
+
+      - name: Check for mutants
+        id: check
+        run: |
+          if [[ -f mutants/manifest.json ]] && \
+             [[ "$(jq '.mutants | length' mutants/manifest.json)" -gt 0 ]]; then
+            echo "has_mutants=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_mutants=false" >> "$GITHUB_OUTPUT"
+            echo "No mutants generated, skipping test shards." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload mutants
+        if: steps.check.outputs.has_mutants == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutants
+          path: mutants/
+
+  test-shard:
+    needs: generate
+    if: needs.generate.outputs.has_mutants == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJson(needs.generate.outputs.shard_matrix) }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+
+      - name: Enable Cachix
+        uses: cachix/cachix-action@v16
+        continue-on-error: true
+        with:
+          name: espresso-systems-private
+          authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
+          extraPullNames: nix-community
+          skipPush: ${{ github.actor == 'dependabot[bot]' }}
+
+      - name: Install dregs
+        run: nix profile install github:EspressoSystems/dregs
+
+      - name: Download mutants
+        uses: actions/download-artifact@v4
+        with:
+          name: mutants
+          path: mutants/
+
+      - name: Build diff-test
+        run: |
+          nix develop --accept-flake-config -c \
+            cargo build --locked --bin diff-test --profile test
+
+      - name: Run mutation tests (shard ${{ matrix.shard }}/${{ needs.generate.outputs.total_shards }})
+        run: |
+          # --profile test inherits from dev, so binary is in target/debug/
+          export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-target}"
+          nix develop --accept-flake-config -c \
+            env PATH="${CARGO_TARGET_DIR}/debug:${PATH}" \
+            dregs test \
+              --manifest ./mutants/manifest.json \
+              --project . \
+              --partition "slice:${{ matrix.shard }}/${{ needs.generate.outputs.total_shards }}" \
+              --output "results-${{ matrix.shard }}.json"
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-${{ matrix.shard }}
+          path: results-${{ matrix.shard }}.json
+
+  report:
+    needs: [generate, test-shard]
+    if: "!cancelled() && needs.generate.outputs.has_mutants == 'true'"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+
+      - name: Enable Cachix
+        uses: cachix/cachix-action@v16
+        continue-on-error: true
+        with:
+          name: espresso-systems-private
+          authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
+          extraPullNames: nix-community
+          skipPush: ${{ github.actor == 'dependabot[bot]' }}
+
+      - name: Install dregs
+        run: nix profile install github:EspressoSystems/dregs
+
+      - name: Download mutants
+        uses: actions/download-artifact@v4
+        with:
+          name: mutants
+          path: mutants/
+
+      - name: Download all results
+        uses: actions/download-artifact@v4
+        with:
+          pattern: results-*
+          path: results/
+
+      - name: Generate report
+        run: |
+          dregs report ./mutants/manifest.json results/results-*/results-*.json \
+            --format markdown | tee "$GITHUB_STEP_SUMMARY"

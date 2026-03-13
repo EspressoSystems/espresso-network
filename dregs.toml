@@ -1,0 +1,4 @@
+[[target]]
+files = ["contracts/src/RewardClaim.sol"]
+contracts = ["RewardClaim"]
+forge_args = ["--match-contract", "RewardClaim.*Test", "--no-match-test", "testFuzz_|invariant_|test_Network_"]
