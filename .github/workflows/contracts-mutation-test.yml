@@ -99,11 +99,14 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v6
 
+      # Borrow the hotshot-tests cache (read-only) since it's the only one saved
+      # from ubuntu-latest runners. We can't add a dedicated cache due to the
+      # 10 GB GitHub Actions cache limit.
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: build-test-bins
-          prefix-key: v1-rust
+          shared-key: hotshot-tests
+          prefix-key: v1-hotshot
           save-if: false
           cache-provider: github
 
