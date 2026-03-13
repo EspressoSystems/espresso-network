@@ -28,7 +28,7 @@ jobs:
       shard_matrix: ${{ steps.shards.outputs.shard_matrix }}
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           submodules: recursive
           fetch-depth: 0
@@ -85,7 +85,7 @@ jobs:
 
       - name: Upload mutants
         if: steps.check.outputs.has_mutants == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mutants
           path: mutants/
@@ -101,7 +101,7 @@ jobs:
         shard: ${{ fromJson(needs.generate.outputs.shard_matrix) }}
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           submodules: recursive
 
@@ -121,7 +121,7 @@ jobs:
         run: nix profile install github:EspressoSystems/dregs
 
       - name: Download mutants
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: mutants
           path: mutants/
@@ -145,7 +145,7 @@ jobs:
 
       - name: Upload results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: results-${{ matrix.shard }}
           path: results-${{ matrix.shard }}.json
@@ -172,13 +172,13 @@ jobs:
         run: nix profile install github:EspressoSystems/dregs
 
       - name: Download mutants
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: mutants
           path: mutants/
 
       - name: Download all results
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: results-*
           path: results/
