@@ -57,6 +57,8 @@ async fn try_reconstruct_block<TYPES: NodeType>(
             tracing::error!("Signal received, stopping reconstruction task for view {view}");
             break;
         };
+        while signal_rx.try_recv().is_ok() {}
+
         if consensus.read().await.saved_payloads().contains_key(&view) {
             tracing::debug!("We already have the payload for view {view}, skipping reconstruction");
 
@@ -76,6 +78,12 @@ async fn try_reconstruct_block<TYPES: NodeType>(
             let first_share = shares.first()?;
             (first_share.common.clone(), first_share.payload_commitment)
         };
+
+        let total_share_weight: usize = shares.iter().map(|s| s.share.weight()).sum();
+        if total_share_weight < common.param.recovery_threshold {
+            tracing::debug!("Not enough shares for view {view}");
+            continue;
+        }
 
         let now = Instant::now();
         let reconstruct_result = tokio::task::spawn_blocking(move || {
