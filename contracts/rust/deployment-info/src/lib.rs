@@ -1,63 +1,20 @@
-use std::{
-    collections::{BTreeMap, HashMap},
-    fmt,
-    path::{Path, PathBuf},
-    time::{Duration, UNIX_EPOCH},
-};
+mod addresses;
+mod contracts;
+mod output;
 
-use alloy::{
-    eips::BlockId,
-    primitives::{Address, FixedBytes},
-    providers::{Provider, ProviderBuilder},
-    sol,
-};
+use std::{fmt, path::PathBuf};
+
+use addresses::DeploymentAddresses;
 use anyhow::{bail, Context, Result};
 use clap::{Parser, ValueEnum};
+use contracts::CollectedDeployment;
+use output::update_readme_from_deployment_files;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-const STAKE_TABLE_PROXY_ADDRESS: &str = "ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS";
-const ESP_TOKEN_PROXY_ADDRESS: &str = "ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS";
-const LIGHT_CLIENT_PROXY_ADDRESS: &str = "ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS";
-const FEE_CONTRACT_PROXY_ADDRESS: &str = "ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS";
-const REWARD_CLAIM_PROXY_ADDRESS: &str = "ESPRESSO_SEQUENCER_REWARD_CLAIM_PROXY_ADDRESS";
-const MULTISIG_PREFIX: &str = "ESPRESSO_SEQUENCER_MULTISIG_";
-const MULTISIG_SUFFIX: &str = "_ADDRESS";
-const OPS_TIMELOCK_ADDRESS: &str = "ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS";
-const SAFE_EXIT_TIMELOCK_ADDRESS: &str = "ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS";
-
-sol! {
-    #[sol(rpc)]
-    interface IOwnable {
-        function owner() external view returns (address);
-    }
-
-    #[sol(rpc)]
-    interface IAccessControl {
-        function hasRole(bytes32 role, address account) external view returns (bool);
-    }
-
-    #[sol(rpc)]
-    interface ITimelock {
-        function getMinDelay() external view returns (uint256);
-    }
-
-    #[sol(rpc)]
-    interface ISafe {
-        function VERSION() external view returns (string memory);
-        function getOwners() external view returns (address[] memory);
-        function getThreshold() external view returns (uint256);
-    }
-
-    #[sol(rpc)]
-    interface IVersioned {
-        function getVersion() external view returns (uint8, uint8, uint8);
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, ValueEnum, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-enum Network {
+pub(crate) enum Network {
     Decaf,
     Hoodi,
     Mainnet,
@@ -74,7 +31,7 @@ impl Network {
         .expect("hardcoded URL is valid")
     }
 
-    fn etherscan_base_url(&self) -> &'static str {
+    pub(crate) fn etherscan_base_url(&self) -> &'static str {
         match self {
             Network::Decaf => "https://sepolia.etherscan.io",
             Network::Hoodi => "https://hoodi.etherscan.io",
@@ -82,7 +39,7 @@ impl Network {
         }
     }
 
-    fn display_order(&self) -> u8 {
+    pub(crate) fn display_order(&self) -> u8 {
         match self {
             Network::Mainnet => 0,
             Network::Decaf => 1,
@@ -137,771 +94,8 @@ struct Args {
     force: bool,
 }
 
-/// Contract and governance addresses read from a per-network .env file.
-#[derive(Debug, Default, Clone, PartialEq)]
-struct DeploymentAddresses {
-    stake_table: Option<Address>,
-    esp_token: Option<Address>,
-    light_client: Option<Address>,
-    fee_contract: Option<Address>,
-    reward_claim: Option<Address>,
-    multisigs: HashMap<String, Address>,
-    ops_timelock: Option<Address>,
-    safe_exit_timelock: Option<Address>,
-}
-
-/// Reverse map from address to human-readable name (multisigs + timelocks).
-/// Used to validate that all contract role holders are tracked in the .env config.
-#[derive(Debug, Clone)]
-struct KnownAddresses(HashMap<Address, String>);
-
-impl KnownAddresses {
-    fn from_deployment(addresses: &DeploymentAddresses) -> Self {
-        let mut known = HashMap::new();
-        for (name, addr) in &addresses.multisigs {
-            known.insert(*addr, name.clone());
-        }
-        if let Some(addr) = addresses.ops_timelock {
-            known.insert(addr, "ops_timelock".to_string());
-        }
-        if let Some(addr) = addresses.safe_exit_timelock {
-            known.insert(addr, "safe_exit_timelock".to_string());
-        }
-        Self(known)
-    }
-
-    fn resolve(&self, addr: Address) -> Result<String> {
-        self.0.get(&addr).cloned().ok_or_else(|| {
-            anyhow::anyhow!(
-                "Address {addr} is not a known address. The .env config may be missing a multisig \
-                 or other contract."
-            )
-        })
-    }
-
-    fn keys(&self) -> impl Iterator<Item = &Address> {
-        self.0.keys()
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-enum ContractType {
-    LightClient,
-    FeeContract,
-    EspToken,
-    StakeTable,
-    RewardClaim,
-}
-
-impl fmt::Display for ContractType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ContractType::LightClient => f.write_str("LightClient"),
-            ContractType::FeeContract => f.write_str("FeeContract"),
-            ContractType::EspToken => f.write_str("EspToken"),
-            ContractType::StakeTable => f.write_str("StakeTable"),
-            ContractType::RewardClaim => f.write_str("RewardClaim"),
-        }
-    }
-}
-
-enum AccessControlRole {
-    DefaultAdmin,
-    Pauser,
-}
-
-impl AccessControlRole {
-    fn hash(&self) -> FixedBytes<32> {
-        match self {
-            AccessControlRole::DefaultAdmin => FixedBytes::ZERO,
-            AccessControlRole::Pauser => alloy::primitives::keccak256("PAUSER_ROLE"),
-        }
-    }
-}
-
-impl fmt::Display for AccessControlRole {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            AccessControlRole::DefaultAdmin => f.write_str("DEFAULT_ADMIN_ROLE"),
-            AccessControlRole::Pauser => f.write_str("PAUSER_ROLE"),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-struct RoleHolder {
-    address: Address,
-    name: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "status", rename_all = "kebab-case")]
-enum OwnableDeployment {
-    Deployed {
-        address: Address,
-        owner_address: Address,
-        owner_name: String,
-        version: String,
-    },
-    NotYetDeployed,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "status", rename_all = "kebab-case")]
-enum AccessControlDeployment {
-    Deployed {
-        address: Address,
-        default_admin_address: Address,
-        default_admin_name: String,
-        version: String,
-        pauser_address: Address,
-        pauser_name: String,
-    },
-    NotYetDeployed,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-struct MultisigDeployment {
-    address: Address,
-    version: String,
-    owners: Vec<Address>,
-    threshold: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "status", rename_all = "kebab-case")]
-enum TimelockDeployment {
-    Deployed {
-        address: Address,
-        #[serde(with = "humantime_serde")]
-        min_delay: Duration,
-    },
-    NotYetDeployed,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-struct DeploymentInfo {
-    network: Network,
-    multisigs: BTreeMap<String, MultisigDeployment>,
-    ops_timelock: TimelockDeployment,
-    safe_exit_timelock: TimelockDeployment,
-    esp_token: OwnableDeployment,
-    fee_contract: OwnableDeployment,
-    light_client: OwnableDeployment,
-    reward_claim: AccessControlDeployment,
-    stake_table: AccessControlDeployment,
-}
-
-fn get_crate_dir() -> PathBuf {
+pub(crate) fn get_crate_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-}
-
-fn load_addresses_from_env_file(path: &Path) -> Result<DeploymentAddresses> {
-    let env_map: HashMap<String, String> = dotenvy::from_path_iter(path)
-        .with_context(|| format!("Failed to read env file: {:?}", path))?
-        .filter_map(|item| {
-            item.map_err(|e| tracing::warn!("Invalid line in env file {:?}: {}", path, e))
-                .ok()
-        })
-        .collect();
-
-    fn parse_address(env_map: &HashMap<String, String>, key: &str) -> Result<Option<Address>> {
-        match env_map.get(key) {
-            None => Ok(None),
-            Some(val) if val.is_empty() => {
-                bail!("{key} is set but empty")
-            },
-            Some(val) => {
-                let addr = val
-                    .parse()
-                    .with_context(|| format!("Failed to parse {key} with value '{val}'"))?;
-                Ok(Some(addr))
-            },
-        }
-    }
-
-    let mut multisigs = HashMap::new();
-    for key in env_map.keys() {
-        if let Some(name) = key
-            .strip_prefix(MULTISIG_PREFIX)
-            .and_then(|s| s.strip_suffix(MULTISIG_SUFFIX))
-        {
-            let name = name.to_lowercase();
-            if let Some(addr) = parse_address(&env_map, key)? {
-                multisigs.insert(name, addr);
-            }
-        }
-    }
-
-    Ok(DeploymentAddresses {
-        stake_table: parse_address(&env_map, STAKE_TABLE_PROXY_ADDRESS)?,
-        esp_token: parse_address(&env_map, ESP_TOKEN_PROXY_ADDRESS)?,
-        light_client: parse_address(&env_map, LIGHT_CLIENT_PROXY_ADDRESS)?,
-        fee_contract: parse_address(&env_map, FEE_CONTRACT_PROXY_ADDRESS)?,
-        reward_claim: parse_address(&env_map, REWARD_CLAIM_PROXY_ADDRESS)?,
-        multisigs,
-        ops_timelock: parse_address(&env_map, OPS_TIMELOCK_ADDRESS)?,
-        safe_exit_timelock: parse_address(&env_map, SAFE_EXIT_TIMELOCK_ADDRESS)?,
-    })
-}
-
-struct DeploymentQuerier<'a, P: Provider> {
-    provider: &'a P,
-    known: KnownAddresses,
-    block_id: BlockId,
-}
-
-impl<'a, P: Provider> DeploymentQuerier<'a, P> {
-    fn new(provider: &'a P, known: KnownAddresses, block_number: u64) -> Self {
-        Self {
-            provider,
-            known,
-            block_id: BlockId::number(block_number),
-        }
-    }
-
-    /// Finds which known address holds the given role. Errors if the holder is not
-    /// in `self.known` -- this validates that all role holders are tracked in the .env config.
-    async fn find_role_holder(
-        &self,
-        contract_addr: Address,
-        role: AccessControlRole,
-    ) -> Result<Address> {
-        let contract = IAccessControl::new(contract_addr, self.provider);
-        let role_hash = role.hash();
-        let mut holders = Vec::new();
-        for addr in self.known.keys() {
-            let has_role = contract
-                .hasRole(role_hash, *addr)
-                .block(self.block_id)
-                .call()
-                .await?;
-            if has_role {
-                holders.push(*addr);
-            }
-        }
-        match holders.len() {
-            0 => bail!(
-                "No known address holds {role} at {contract_addr}. The .env config may be missing \
-                 a multisig or other contract."
-            ),
-            1 => Ok(holders[0]),
-            _ => bail!(
-                "Multiple known addresses hold {role} at {contract_addr}: {holders:?}. This is \
-                 unexpected."
-            ),
-        }
-    }
-
-    async fn get_version(&self, addr: Address) -> Result<String> {
-        let v = IVersioned::new(addr, self.provider)
-            .getVersion()
-            .block(self.block_id)
-            .call()
-            .await?;
-        Ok(format!("{}.{}.{}", v._0, v._1, v._2))
-    }
-
-    fn resolve_role_holder(&self, addr: Address) -> Result<RoleHolder> {
-        let name = self.known.resolve(addr)?;
-        Ok(RoleHolder {
-            address: addr,
-            name,
-        })
-    }
-
-    async fn query_ownable(
-        &self,
-        addr: Address,
-        contract_type: ContractType,
-    ) -> Result<OwnableDeployment> {
-        tracing::info!("querying {contract_type} at {addr}");
-
-        let owner_addr = IOwnable::new(addr, self.provider)
-            .owner()
-            .block(self.block_id)
-            .call()
-            .await?;
-        let version = self.get_version(addr).await?;
-
-        let owner = self
-            .resolve_role_holder(owner_addr)
-            .context(format!("owner of {contract_type}"))?;
-
-        tracing::info!("  owner={} version={version}", owner.name);
-
-        Ok(OwnableDeployment::Deployed {
-            address: addr,
-            owner_address: owner.address,
-            owner_name: owner.name,
-            version,
-        })
-    }
-
-    async fn query_access_control(
-        &self,
-        addr: Address,
-        contract_type: ContractType,
-    ) -> Result<AccessControlDeployment> {
-        tracing::info!("querying {contract_type} at {addr}");
-
-        let admin_addr = self
-            .find_role_holder(addr, AccessControlRole::DefaultAdmin)
-            .await
-            .context(format!("default admin of {contract_type}"))?;
-        let version = self.get_version(addr).await?;
-
-        let admin = self
-            .resolve_role_holder(admin_addr)
-            .context(format!("default admin of {contract_type}"))?;
-
-        let pauser_addr = match contract_type {
-            ContractType::StakeTable | ContractType::RewardClaim => self
-                .find_role_holder(addr, AccessControlRole::Pauser)
-                .await
-                .context(format!("pauser of {contract_type}"))?,
-            other => bail!("{other} is not an AccessControl contract"),
-        };
-        let pauser = self
-            .resolve_role_holder(pauser_addr)
-            .context(format!("pauser of {contract_type}"))?;
-
-        tracing::info!(
-            "  default_admin={} version={version} pauser={}",
-            admin.name,
-            pauser.name
-        );
-
-        Ok(AccessControlDeployment::Deployed {
-            address: addr,
-            default_admin_address: admin.address,
-            default_admin_name: admin.name,
-            version,
-            pauser_address: pauser.address,
-            pauser_name: pauser.name,
-        })
-    }
-
-    async fn query_multisig(&self, name: &str, addr: Address) -> Result<MultisigDeployment> {
-        let contract = ISafe::new(addr, self.provider);
-        let version = contract
-            .VERSION()
-            .block(self.block_id)
-            .call()
-            .await
-            .with_context(|| format!("Failed to get VERSION for multisig '{name}' at {addr}"))?;
-        let owners = contract
-            .getOwners()
-            .block(self.block_id)
-            .call()
-            .await
-            .with_context(|| format!("Failed to get owners for multisig '{name}' at {addr}"))?;
-        let threshold: u64 = contract
-            .getThreshold()
-            .block(self.block_id)
-            .call()
-            .await
-            .with_context(|| format!("Failed to get threshold for multisig '{name}' at {addr}"))?
-            .try_into()
-            .context("threshold exceeds u64")?;
-        Ok(MultisigDeployment {
-            address: addr,
-            version,
-            owners,
-            threshold,
-        })
-    }
-
-    async fn query_timelock(&self, addr: Address) -> Result<TimelockDeployment> {
-        let min_delay_secs: u64 = ITimelock::new(addr, self.provider)
-            .getMinDelay()
-            .block(self.block_id)
-            .call()
-            .await?
-            .try_into()
-            .context("min_delay exceeds u64")?;
-        let min_delay = Duration::from_secs(min_delay_secs);
-
-        Ok(TimelockDeployment::Deployed {
-            address: addr,
-            min_delay,
-        })
-    }
-}
-
-struct CollectedDeployment {
-    info: DeploymentInfo,
-    block_number: u64,
-    block_timestamp: u64,
-}
-
-async fn collect_deployment_info(
-    rpc_url: Url,
-    network: Network,
-    addresses: DeploymentAddresses,
-) -> Result<CollectedDeployment> {
-    let provider = ProviderBuilder::new().connect_http(rpc_url);
-
-    let block_number = provider
-        .get_block_number()
-        .await
-        .context("Failed to get block number")?;
-    let block = provider
-        .get_block_by_number(block_number.into())
-        .await
-        .context("Failed to get block")?
-        .context("Block not found")?;
-    let block_timestamp = block.header.timestamp;
-
-    let known = KnownAddresses::from_deployment(&addresses);
-    let querier = DeploymentQuerier::new(&provider, known, block_number);
-
-    let mut multisigs = BTreeMap::new();
-    for (name, addr) in &addresses.multisigs {
-        let deployment = querier.query_multisig(name, *addr).await?;
-        multisigs.insert(name.clone(), deployment);
-    }
-
-    let ops_timelock = match addresses.ops_timelock {
-        Some(addr) => querier
-            .query_timelock(addr)
-            .await
-            .with_context(|| format!("Failed to query OpsTimelock at {addr}"))?,
-        None => TimelockDeployment::NotYetDeployed,
-    };
-
-    let safe_exit_timelock = match addresses.safe_exit_timelock {
-        Some(addr) => querier
-            .query_timelock(addr)
-            .await
-            .with_context(|| format!("Failed to query SafeExitTimelock at {addr}"))?,
-        None => TimelockDeployment::NotYetDeployed,
-    };
-
-    let esp_token = match addresses.esp_token {
-        Some(addr) => querier.query_ownable(addr, ContractType::EspToken).await?,
-        None => OwnableDeployment::NotYetDeployed,
-    };
-    let fee_contract = match addresses.fee_contract {
-        Some(addr) => {
-            querier
-                .query_ownable(addr, ContractType::FeeContract)
-                .await?
-        },
-        None => OwnableDeployment::NotYetDeployed,
-    };
-    let light_client = match addresses.light_client {
-        Some(addr) => {
-            querier
-                .query_ownable(addr, ContractType::LightClient)
-                .await?
-        },
-        None => OwnableDeployment::NotYetDeployed,
-    };
-    let reward_claim = match addresses.reward_claim {
-        Some(addr) => {
-            querier
-                .query_access_control(addr, ContractType::RewardClaim)
-                .await?
-        },
-        None => AccessControlDeployment::NotYetDeployed,
-    };
-    let stake_table = match addresses.stake_table {
-        Some(addr) => {
-            querier
-                .query_access_control(addr, ContractType::StakeTable)
-                .await?
-        },
-        None => AccessControlDeployment::NotYetDeployed,
-    };
-
-    Ok(CollectedDeployment {
-        info: DeploymentInfo {
-            network,
-            multisigs,
-            ops_timelock,
-            safe_exit_timelock,
-            stake_table,
-            esp_token,
-            light_client,
-            fee_contract,
-            reward_claim,
-        },
-        block_number,
-        block_timestamp,
-    })
-}
-
-fn format_header_comment(block_number: u64, block_timestamp: u64) -> String {
-    let system_time = UNIX_EPOCH + Duration::from_secs(block_timestamp);
-    let formatted = humantime::format_rfc3339_seconds(system_time);
-    format!("# fetched at block {block_number} ({formatted})\n")
-}
-
-fn write_deployment_info(
-    info: &DeploymentInfo,
-    block_number: u64,
-    block_timestamp: u64,
-    output_path: &Path,
-    force: bool,
-) -> Result<()> {
-    if let Some(parent) = output_path.parent() {
-        std::fs::create_dir_all(parent).context("Failed to create output directory")?;
-    }
-
-    if !force && output_path.exists() {
-        let existing =
-            std::fs::read_to_string(output_path).context("Failed to read existing file")?;
-        let existing_info: DeploymentInfo =
-            toml::from_str(&existing).context("Failed to parse existing deployment file")?;
-        if existing_info == *info {
-            tracing::info!(
-                "{:?}: deployment info unchanged, skipping write",
-                output_path.file_name().unwrap_or_default()
-            );
-            return Ok(());
-        }
-    }
-
-    let header = format_header_comment(block_number, block_timestamp);
-    let toml_data = toml::to_string_pretty(info)?;
-    let output = format!("{header}{toml_data}");
-    std::fs::write(output_path, output).context("Failed to write deployment info")?;
-    tracing::info!("Wrote: {:?}", output_path);
-
-    Ok(())
-}
-
-async fn process_network(
-    network: Network,
-    rpc_url: Option<&Url>,
-    env_file: Option<&Path>,
-    output: Option<&Path>,
-    stdout: bool,
-    force: bool,
-) -> Result<()> {
-    let crate_dir = get_crate_dir();
-
-    let env_file = match env_file {
-        Some(path) => path.to_path_buf(),
-        None => crate_dir.join(format!("addresses/{}.env", network)),
-    };
-
-    let addresses = load_addresses_from_env_file(&env_file)
-        .context("Failed to load addresses from env file")?;
-
-    let rpc_url = match rpc_url {
-        Some(url) => url.clone(),
-        None => network.default_rpc_url(),
-    };
-
-    tracing::info!("Collecting deployment info for network: {network}");
-
-    let collected = collect_deployment_info(rpc_url, network, addresses)
-        .await
-        .context("Failed to collect deployment info")?;
-
-    if stdout {
-        let header = format_header_comment(collected.block_number, collected.block_timestamp);
-        let toml_output = toml::to_string_pretty(&collected.info)?;
-        print!("{header}{toml_output}");
-    } else {
-        let output_path = match output {
-            Some(path) => path.to_path_buf(),
-            None => crate_dir.join(format!("deployments/{}.toml", network)),
-        };
-
-        write_deployment_info(
-            &collected.info,
-            collected.block_number,
-            collected.block_timestamp,
-            &output_path,
-            force,
-        )
-        .context("Failed to write deployment info to file")?;
-    }
-
-    Ok(())
-}
-
-fn address_link(addr: Address, etherscan_url: &str) -> String {
-    format!("[`{addr}`]({etherscan_url}/address/{addr})")
-}
-
-fn contract_row(
-    name: &str,
-    address: Address,
-    version: &str,
-    owner: &str,
-    pauser: &str,
-    etherscan: &str,
-) -> String {
-    format!(
-        "| {name} | {} | {version} | {owner} | {pauser} |\n",
-        address_link(address, etherscan),
-    )
-}
-
-fn generate_deployment_table(info: &DeploymentInfo) -> String {
-    let etherscan = info.network.etherscan_base_url();
-    let mut out = format!("### {}\n\n", info.network);
-
-    out.push_str("| Contract | Address | Version | Owner | Pauser |\n");
-    out.push_str("|----------|---------|---------|-------|--------|\n");
-
-    // Alphabetical order
-    for (name, deployment) in [
-        ("EspToken", &info.esp_token),
-        ("FeeContract", &info.fee_contract),
-        ("LightClient", &info.light_client),
-    ] {
-        match deployment {
-            OwnableDeployment::Deployed {
-                address,
-                owner_name,
-                version,
-                ..
-            } => out.push_str(&contract_row(
-                name, *address, version, owner_name, "-", etherscan,
-            )),
-            OwnableDeployment::NotYetDeployed => {
-                out.push_str(&format!("| {name} | Not deployed | | | |\n"))
-            },
-        }
-    }
-    for (name, deployment) in [
-        ("RewardClaim", &info.reward_claim),
-        ("StakeTable", &info.stake_table),
-    ] {
-        match deployment {
-            AccessControlDeployment::Deployed {
-                address,
-                default_admin_name,
-                version,
-                pauser_name,
-                ..
-            } => out.push_str(&contract_row(
-                name,
-                *address,
-                version,
-                default_admin_name,
-                pauser_name,
-                etherscan,
-            )),
-            AccessControlDeployment::NotYetDeployed => {
-                out.push_str(&format!("| {name} | Not deployed | | | |\n"))
-            },
-        }
-    }
-
-    if !info.multisigs.is_empty() {
-        out.push('\n');
-        out.push_str("| Multisig | Address | Version | Threshold |\n");
-        out.push_str("|----------|---------|---------|----------|\n");
-        for (name, ms) in &info.multisigs {
-            out.push_str(&format!(
-                "| {name} | {} | {} | {} |\n",
-                address_link(ms.address, etherscan),
-                ms.version,
-                ms.threshold,
-            ));
-        }
-    }
-
-    let timelocks: &[(&str, &TimelockDeployment)] = &[
-        ("ops_timelock", &info.ops_timelock),
-        ("safe_exit_timelock", &info.safe_exit_timelock),
-    ];
-
-    let has_timelocks = timelocks
-        .iter()
-        .any(|(_, tl)| matches!(tl, TimelockDeployment::Deployed { .. }));
-
-    if has_timelocks {
-        out.push('\n');
-        out.push_str("| Timelock | Address | Min Delay |\n");
-        out.push_str("|---------|---------|----------|\n");
-        for (name, tl) in timelocks {
-            match tl {
-                TimelockDeployment::Deployed {
-                    address, min_delay, ..
-                } => {
-                    out.push_str(&format!(
-                        "| {name} | {} | {} |\n",
-                        address_link(*address, etherscan),
-                        humantime::format_duration(*min_delay),
-                    ));
-                },
-                TimelockDeployment::NotYetDeployed => {
-                    out.push_str(&format!("| {name} | Not deployed | |\n"));
-                },
-            }
-        }
-    }
-
-    out
-}
-
-fn replace_between_markers(
-    content: &str,
-    start_marker: &str,
-    end_marker: &str,
-    replacement: &str,
-) -> Result<String> {
-    let start = content.find(start_marker).context("Missing start marker")?;
-    let end = content.find(end_marker).context("Missing end marker")?;
-    if end < start + start_marker.len() {
-        bail!("End marker appears before start marker");
-    }
-    Ok(format!(
-        "{}{start_marker}\n<!-- prettier-ignore-start -->\n{replacement}<!-- prettier-ignore-end \
-         -->\n{end_marker}{}",
-        &content[..start],
-        &content[end + end_marker.len()..],
-    ))
-}
-
-fn update_readme_from_deployment_files() -> Result<()> {
-    let crate_dir = get_crate_dir();
-    let deployments_dir = crate_dir.join("deployments");
-    let readme_path = crate_dir.join("README.md");
-
-    let mut deployments = Vec::new();
-    for entry in std::fs::read_dir(&deployments_dir)
-        .context("Failed to read deployments directory")?
-        .filter_map(|entry| entry.ok())
-        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "toml"))
-    {
-        let path = entry.path();
-        let content =
-            std::fs::read_to_string(&path).with_context(|| format!("Failed to read {:?}", path))?;
-        let info: DeploymentInfo =
-            toml::from_str(&content).with_context(|| format!("Failed to parse {:?}", path))?;
-        deployments.push(info);
-    }
-    deployments.sort_by_key(|info| info.network.display_order());
-
-    let sections: Vec<_> = deployments.iter().map(generate_deployment_table).collect();
-    let combined = sections.join("\n");
-
-    let readme = std::fs::read_to_string(&readme_path).context("Failed to read README.md")?;
-    let new_readme = replace_between_markers(
-        &readme,
-        "<!-- DEPLOYMENT_TABLE_START -->",
-        "<!-- DEPLOYMENT_TABLE_END -->",
-        &combined,
-    )
-    .context("README.md marker error")?;
-
-    if readme == new_readme {
-        tracing::info!("README.md unchanged, skipping write");
-        return Ok(());
-    }
-
-    std::fs::write(&readme_path, new_readme).context("Failed to write README.md")?;
-    tracing::info!("Updated README.md with deployment tables");
-
-    Ok(())
 }
 
 pub async fn run() -> Result<()> {
@@ -913,32 +107,70 @@ pub async fn run() -> Result<()> {
         .init();
 
     let args = Args::parse();
+    let crate_dir = get_crate_dir();
+
     let update_readme = if let Some(network) = args.network {
-        process_network(
-            network,
-            args.rpc_url.as_ref(),
-            args.env_file.as_deref(),
-            args.output.as_deref(),
-            args.stdout,
-            args.force,
-        )
-        .await?;
-        !args.stdout && args.output.is_none()
+        let env_file = match args.env_file {
+            Some(path) => path,
+            None => crate_dir.join(format!("addresses/{}.env", network)),
+        };
+
+        let addresses = DeploymentAddresses::from_env_file(&env_file)
+            .context("Failed to load addresses from env file")?;
+
+        let rpc_url = match args.rpc_url {
+            Some(url) => url,
+            None => network.default_rpc_url(),
+        };
+
+        tracing::info!("Collecting deployment info for network: {network}");
+
+        let collected = CollectedDeployment::collect(rpc_url, network, addresses)
+            .await
+            .context("Failed to collect deployment info")?;
+
+        let has_custom_output = args.output.is_some();
+
+        if args.stdout {
+            print!("{}", collected.to_toml_string()?);
+        } else {
+            let output_path = match args.output {
+                Some(path) => path,
+                None => crate_dir.join(format!("deployments/{}.toml", network)),
+            };
+
+            collected
+                .write_toml(&output_path, args.force)
+                .context("Failed to write deployment info to file")?;
+        }
+
+        !args.stdout && !has_custom_output
     } else {
         if args.env_file.is_some() || args.output.is_some() || args.stdout {
             bail!("--env-file, --output, and --stdout are only valid with --network");
         }
 
         for network in Network::value_variants() {
-            process_network(
-                *network,
-                args.rpc_url.as_ref(),
-                None,
-                None,
-                false,
-                args.force,
-            )
-            .await?;
+            let env_file = crate_dir.join(format!("addresses/{}.env", network));
+
+            let addresses = DeploymentAddresses::from_env_file(&env_file)
+                .context("Failed to load addresses from env file")?;
+
+            let rpc_url = match &args.rpc_url {
+                Some(url) => url.clone(),
+                None => network.default_rpc_url(),
+            };
+
+            tracing::info!("Collecting deployment info for network: {network}");
+
+            let collected = CollectedDeployment::collect(rpc_url, *network, addresses)
+                .await
+                .context("Failed to collect deployment info")?;
+
+            let output_path = crate_dir.join(format!("deployments/{}.toml", network));
+            collected
+                .write_toml(&output_path, args.force)
+                .context("Failed to write deployment info to file")?;
         }
         true
     };
@@ -954,10 +186,12 @@ pub async fn run() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::{collections::HashMap, time::Duration};
+
     use alloy::{
         node_bindings::Anvil,
-        primitives::U256,
-        providers::{ProviderBuilder, WalletProvider},
+        primitives::{Address, U256},
+        providers::{Provider, ProviderBuilder, WalletProvider},
     };
     use espresso_contract_deployer::{
         builder::DeployerArgsBuilder, network_config::light_client_genesis_from_stake_table,
@@ -965,7 +199,14 @@ mod tests {
     };
     use hotshot_state_prover::v3::mock_ledger::STAKE_TABLE_CAPACITY_FOR_TEST;
 
-    use super::*;
+    use crate::{
+        addresses::{DeploymentAddresses, KnownAddresses},
+        contracts::{
+            AccessControlDeployment, CollectedDeployment, ContractType, DeploymentInfo,
+            DeploymentQuerier, OwnableDeployment, TimelockDeployment,
+        },
+        Network,
+    };
 
     #[test]
     fn test_resolve_name_unknown_address() {
@@ -1021,7 +262,7 @@ mod tests {
     }
 
     #[test_log::test(tokio::test)]
-    async fn test_collect_deployment_info_with_deployed_contracts() -> Result<()> {
+    async fn test_collect_deployment_info_with_deployed_contracts() -> anyhow::Result<()> {
         let anvil = Anvil::new().spawn();
         let provider = ProviderBuilder::new()
             .wallet(anvil.wallet().unwrap())
@@ -1188,104 +429,9 @@ mod tests {
     }
 
     #[test]
-    fn test_format_header_comment() {
-        let comment = format_header_comment(12345678, 1705312235);
-        assert!(comment.starts_with("# fetched at block 12345678 ("));
-        assert!(comment.ends_with(")\n"));
-        assert!(comment.contains("2024-01-15"));
-    }
-
-    #[test]
-    fn test_address_link() {
-        let addr: Address = "0x1111111111111111111111111111111111111111"
-            .parse()
-            .unwrap();
-        let link = address_link(addr, "https://etherscan.io");
-        assert_eq!(
-            link,
-            "[`0x1111111111111111111111111111111111111111`](https://etherscan.io/address/0x1111111111111111111111111111111111111111)"
-        );
-    }
-
-    #[test]
-    fn test_replace_between_markers() {
-        let content = "before\n<!-- START -->\nold content\n<!-- END -->\nafter\n";
-        let result =
-            replace_between_markers(content, "<!-- START -->", "<!-- END -->", "new\n").unwrap();
-        assert_eq!(
-            result,
-            "before\n<!-- START -->\n<!-- prettier-ignore-start -->\nnew\n<!-- \
-             prettier-ignore-end -->\n<!-- END -->\nafter\n"
-        );
-    }
-
-    #[test]
-    fn test_replace_between_markers_missing_start() {
-        let content = "no markers here";
-        let result = replace_between_markers(content, "<!-- START -->", "<!-- END -->", "x");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_replace_between_markers_reversed() {
-        let content = "<!-- END -->\n<!-- START -->";
-        let result = replace_between_markers(content, "<!-- START -->", "<!-- END -->", "x");
-        assert!(result.is_err());
-    }
-
-    impl DeploymentInfo {
-        fn for_test() -> Self {
-            let addr1: Address = "0x1111111111111111111111111111111111111111"
-                .parse()
-                .unwrap();
-            let addr2: Address = "0x2222222222222222222222222222222222222222"
-                .parse()
-                .unwrap();
-            let addr3: Address = "0x3333333333333333333333333333333333333333"
-                .parse()
-                .unwrap();
-
-            DeploymentInfo {
-                network: Network::Mainnet,
-                multisigs: BTreeMap::from([(
-                    "espresso_labs".to_string(),
-                    MultisigDeployment {
-                        address: addr2,
-                        version: "1.4.1".to_string(),
-                        owners: vec![addr1],
-                        threshold: 3,
-                    },
-                )]),
-                ops_timelock: TimelockDeployment::Deployed {
-                    address: addr3,
-                    min_delay: Duration::from_secs(172800),
-                },
-                safe_exit_timelock: TimelockDeployment::NotYetDeployed,
-                esp_token: OwnableDeployment::NotYetDeployed,
-                fee_contract: OwnableDeployment::NotYetDeployed,
-                light_client: OwnableDeployment::Deployed {
-                    address: addr2,
-                    owner_address: addr1,
-                    owner_name: "espresso_labs".to_string(),
-                    version: "1.0.0".to_string(),
-                },
-                reward_claim: AccessControlDeployment::NotYetDeployed,
-                stake_table: AccessControlDeployment::Deployed {
-                    address: addr1,
-                    default_admin_address: addr3,
-                    default_admin_name: "ops_timelock".to_string(),
-                    version: "2.0.0".to_string(),
-                    pauser_address: addr2,
-                    pauser_name: "espresso_labs".to_string(),
-                },
-            }
-        }
-    }
-
-    #[test]
     fn test_generate_deployment_table_contracts() {
         let info = DeploymentInfo::for_test();
-        let table = generate_deployment_table(&info);
+        let table = info.to_markdown_table();
 
         assert!(table.starts_with("### mainnet\n"));
         assert!(table.contains("| Contract | Address | Version | Owner | Pauser |"));
@@ -1300,7 +446,7 @@ mod tests {
     #[test]
     fn test_generate_deployment_table_multisigs() {
         let info = DeploymentInfo::for_test();
-        let table = generate_deployment_table(&info);
+        let table = info.to_markdown_table();
 
         assert!(table.contains("| Multisig | Address | Version | Threshold |"));
         assert!(table.contains("| espresso_labs |"));
@@ -1310,7 +456,7 @@ mod tests {
     #[test]
     fn test_generate_deployment_table_timelocks() {
         let info = DeploymentInfo::for_test();
-        let table = generate_deployment_table(&info);
+        let table = info.to_markdown_table();
 
         assert!(table.contains("| Timelock | Address | Min Delay |"));
         assert!(table.contains("| ops_timelock |"));
@@ -1320,7 +466,7 @@ mod tests {
     #[test]
     fn test_generate_deployment_table_full_addresses() {
         let info = DeploymentInfo::for_test();
-        let table = generate_deployment_table(&info);
+        let table = info.to_markdown_table();
 
         assert!(table.contains("0x1111111111111111111111111111111111111111"));
         assert!(!table.contains("..."));
@@ -1332,11 +478,21 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("test-unchanged.toml");
 
-        write_deployment_info(&info, 100, 1000, &path, false).unwrap();
+        let collected = CollectedDeployment {
+            info: info.clone(),
+            block_number: 100,
+            block_timestamp: 1000,
+        };
+        collected.write_toml(&path, false).unwrap();
         let first_content = std::fs::read_to_string(&path).unwrap();
         assert!(first_content.starts_with("# fetched at block 100"));
 
-        write_deployment_info(&info, 200, 2000, &path, false).unwrap();
+        let collected2 = CollectedDeployment {
+            info,
+            block_number: 200,
+            block_timestamp: 2000,
+        };
+        collected2.write_toml(&path, false).unwrap();
         let second_content = std::fs::read_to_string(&path).unwrap();
         assert_eq!(first_content, second_content);
     }
@@ -1347,10 +503,20 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("test-force.toml");
 
-        write_deployment_info(&info, 100, 1000, &path, false).unwrap();
+        let collected = CollectedDeployment {
+            info: info.clone(),
+            block_number: 100,
+            block_timestamp: 1000,
+        };
+        collected.write_toml(&path, false).unwrap();
         let first_content = std::fs::read_to_string(&path).unwrap();
 
-        write_deployment_info(&info, 200, 2000, &path, true).unwrap();
+        let collected2 = CollectedDeployment {
+            info,
+            block_number: 200,
+            block_timestamp: 2000,
+        };
+        collected2.write_toml(&path, true).unwrap();
         let second_content = std::fs::read_to_string(&path).unwrap();
         assert_ne!(first_content, second_content);
         assert!(second_content.starts_with("# fetched at block 200"));
@@ -1362,7 +528,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("test-changed.toml");
 
-        write_deployment_info(&info, 100, 1000, &path, false).unwrap();
+        let collected = CollectedDeployment {
+            info: info.clone(),
+            block_number: 100,
+            block_timestamp: 1000,
+        };
+        collected.write_toml(&path, false).unwrap();
         let first_content = std::fs::read_to_string(&path).unwrap();
 
         info.esp_token = OwnableDeployment::Deployed {
@@ -1372,7 +543,12 @@ mod tests {
             version: "1.0.0".to_string(),
         };
 
-        write_deployment_info(&info, 200, 2000, &path, false).unwrap();
+        let collected2 = CollectedDeployment {
+            info,
+            block_number: 200,
+            block_timestamp: 2000,
+        };
+        collected2.write_toml(&path, false).unwrap();
         let second_content = std::fs::read_to_string(&path).unwrap();
         assert_ne!(first_content, second_content);
         assert!(second_content.starts_with("# fetched at block 200"));
@@ -1383,7 +559,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let env_path = dir.path().join("test.env");
         std::fs::write(&env_path, "ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS=\n").unwrap();
-        let result = load_addresses_from_env_file(&env_path);
+        let result = DeploymentAddresses::from_env_file(&env_path);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("empty"));
     }
