@@ -21,7 +21,7 @@ env:
 jobs:
   generate:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 30
     outputs:
       has_mutants: ${{ steps.check.outputs.has_mutants }}
       total_shards: ${{ steps.shards.outputs.total_shards }}
@@ -84,12 +84,27 @@ jobs:
             echo "No mutants generated, skipping test shards." >> "$GITHUB_STEP_SUMMARY"
           fi
 
+      - name: Build diff-test
+        if: steps.check.outputs.has_mutants == 'true'
+        run: |
+          nix develop --accept-flake-config -c \
+            cargo build --locked --bin diff-test --profile test
+
       - name: Upload mutants
         if: steps.check.outputs.has_mutants == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: mutants
           path: mutants/
+          if-no-files-found: error
+
+      - name: Upload diff-test binary
+        if: steps.check.outputs.has_mutants == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: diff-test
+          path: target/nix/debug/diff-test
+          if-no-files-found: error
 
   test-shard:
     needs: generate
@@ -127,17 +142,19 @@ jobs:
           name: mutants
           path: mutants/
 
-      - name: Build diff-test
-        run: |
-          nix develop --accept-flake-config -c \
-            cargo build --locked --bin diff-test --profile test
+      - name: Download diff-test binary
+        uses: actions/download-artifact@v8
+        with:
+          name: diff-test
+          path: ./bin
+
+      - name: Make diff-test executable
+        run: chmod +x ./bin/diff-test
 
       - name: Run mutation tests (shard ${{ matrix.shard }}/${{ needs.generate.outputs.total_shards }})
         run: |
-          # --profile test inherits from dev, so binary is in target/debug/
-          export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-target}"
           nix develop --accept-flake-config -c \
-            env PATH="${CARGO_TARGET_DIR}/debug:${PATH}" \
+            env PATH="${PWD}/bin:${PATH}" \
             dregs test \
               --manifest ./mutants/manifest.json \
               --project . \
@@ -150,6 +167,7 @@ jobs:
         with:
           name: results-${{ matrix.shard }}
           path: results-${{ matrix.shard }}.json
+          if-no-files-found: error
 
   report:
     needs: [generate, test-shard]
