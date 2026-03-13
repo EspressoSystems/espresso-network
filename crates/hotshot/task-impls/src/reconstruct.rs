@@ -316,6 +316,7 @@ impl<TYPES: NodeType> ReconstructTaskState<TYPES> {
                     );
                     *shares = shares.split_off(&(gc_view, TYPES::Epoch::genesis()));
                     self.proposals = self.proposals.split_off(&gc_view);
+                    self.calc_lock.write().await.retain(|v, _| *v >= gc_view);
                     let shares_total_after: usize = shares.values().map(|v| v.len()).sum();
                     tracing::warn!(
                         "reconstruct GC after: id={} vid_shares_keys={} \
