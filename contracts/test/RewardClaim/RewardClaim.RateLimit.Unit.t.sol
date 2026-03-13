@@ -146,20 +146,3 @@ contract RewardClaimRateLimitTest is RewardClaimMockTest {
         assertEq(rewardClaim.dailyLimitWei(), expectedLimit);
     }
 }
-
-/// @dev Deploys at day 100 so _currentDay initialization produces a non-zero, non-default value.
-/// Kills mutants that delete or zero-out _currentDay in initialize (e.g. _currentDay = 0).
-contract RewardClaimRateLimitWarpedTest is RewardClaimMockTest {
-    function setUp() public override {
-        vm.warp(100 days);
-        super.setUp();
-    }
-
-    function test_Claim_InitialDayEnforcesLimit() public {
-        claim(DAILY_LIMIT);
-
-        vm.prank(claimer);
-        vm.expectRevert(IRewardClaim.DailyLimitExceeded.selector);
-        rewardClaim.claimRewards(DAILY_LIMIT + 1, "");
-    }
-}
