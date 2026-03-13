@@ -76,21 +76,25 @@ impl TestSystemExt for TestSystem {
         cmd.arg("--rpc-url")
             .arg(self.rpc_url.to_string())
             .arg("--stake-table-address")
-            .arg(self.stake_table.to_string())
-            .arg("--account-index")
-            .arg("0");
+            .arg(self.stake_table.to_string());
 
         match signer {
             Signer::Ledger => {
-                cmd.arg("--ledger");
+                cmd.arg("--ledger").arg("--account-index").arg("0");
             },
             Signer::Mnemonic => {
-                cmd.arg("--mnemonic").arg(DEV_MNEMONIC);
+                cmd.arg("--mnemonic")
+                    .arg(DEV_MNEMONIC)
+                    .arg("--account-index")
+                    .arg("0");
             },
             Signer::BrokeMnemonic => {
-                cmd.arg("--mnemonic").arg(
-                    "roast term reopen pave choose high rally trouble upon govern hollow stand",
-                );
+                cmd.arg("--mnemonic")
+                    .arg(
+                        "roast term reopen pave choose high rally trouble upon govern hollow stand",
+                    )
+                    .arg("--account-index")
+                    .arg("0");
             },
             Signer::PrivateKey => {
                 cmd.arg("--private-key").arg(DEV_PRIVATE_KEY);
