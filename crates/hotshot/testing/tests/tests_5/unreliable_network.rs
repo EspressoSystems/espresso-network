@@ -20,13 +20,13 @@ use hotshot_types::traits::network::{
 async fn test_memory_network_sync() {
     use std::time::Duration;
 
-    use hotshot_example_types::node_types::{MemoryImpl, TestTypes, TestVersions};
+    use hotshot_example_types::node_types::{MemoryImpl, TestTypes};
     use hotshot_testing::{
         completion_task::{CompletionTaskDescription, TimeBasedCompletionTaskDescription},
         test_builder::TestDescription,
     };
 
-    let mut metadata: TestDescription<TestTypes, MemoryImpl, TestVersions> = TestDescription {
+    let mut metadata: TestDescription<TestTypes, MemoryImpl> = TestDescription {
         // allow more time to pass in CI
         completion_task_description: CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
             TimeBasedCompletionTaskDescription {
@@ -56,13 +56,13 @@ async fn test_memory_network_sync() {
 async fn test_memory_network_async() {
     use std::time::Duration;
 
-    use hotshot_example_types::node_types::{MemoryImpl, TestTypes, TestVersions};
+    use hotshot_example_types::node_types::{MemoryImpl, TestTypes};
     use hotshot_testing::{
         completion_task::{CompletionTaskDescription, TimeBasedCompletionTaskDescription},
         test_builder::TestDescription,
     };
 
-    let mut metadata: TestDescription<TestTypes, MemoryImpl, TestVersions> = TestDescription {
+    let mut metadata: TestDescription<TestTypes, MemoryImpl> = TestDescription {
         overall_safety_properties: OverallSafetyPropertiesDescription {
             check_leaf: true,
             ..Default::default()
@@ -75,7 +75,7 @@ async fn test_memory_network_async() {
         ),
         timing_data: TimingData {
             next_view_timeout: 1000,
-            ..TestDescription::<TestTypes, MemoryImpl, TestVersions>::default_multiple_rounds()
+            ..TestDescription::<TestTypes, MemoryImpl>::default_multiple_rounds()
                 .timing_data
         },
         unreliable_network: Some(Box::new(AsynchronousNetwork {
@@ -101,13 +101,13 @@ async fn test_memory_network_async() {
 async fn test_memory_network_partially_sync() {
     use std::time::Duration;
 
-    use hotshot_example_types::node_types::{MemoryImpl, TestTypes, TestVersions};
+    use hotshot_example_types::node_types::{MemoryImpl, TestTypes};
     use hotshot_testing::{
         completion_task::{CompletionTaskDescription, TimeBasedCompletionTaskDescription},
         test_builder::TestDescription,
     };
 
-    let mut metadata: TestDescription<TestTypes, MemoryImpl, TestVersions> = TestDescription {
+    let mut metadata: TestDescription<TestTypes, MemoryImpl> = TestDescription {
         overall_safety_properties: OverallSafetyPropertiesDescription {
             ..Default::default()
         },
@@ -154,13 +154,13 @@ async fn test_memory_network_partially_sync() {
 async fn test_memory_network_chaos() {
     use std::time::Duration;
 
-    use hotshot_example_types::node_types::{MemoryImpl, TestTypes, TestVersions};
+    use hotshot_example_types::node_types::{MemoryImpl, TestTypes};
     use hotshot_testing::{
         completion_task::{CompletionTaskDescription, TimeBasedCompletionTaskDescription},
         test_builder::TestDescription,
     };
 
-    let mut metadata: TestDescription<TestTypes, MemoryImpl, TestVersions> = TestDescription {
+    let mut metadata: TestDescription<TestTypes, MemoryImpl> = TestDescription {
         // allow more time to pass in CI
         completion_task_description: CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
             TimeBasedCompletionTaskDescription {

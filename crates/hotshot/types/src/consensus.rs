@@ -7,12 +7,13 @@
 //! Provides the core consensus types
 
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, HashSet},
     mem::ManuallyDrop,
     ops::{Deref, DerefMut},
     sync::Arc,
 };
 
+use alloy::primitives::U256;
 use async_lock::{RwLock, RwLockReadGuard, RwLockUpgradableReadGuard, RwLockWriteGuard};
 use committable::{Commitment, Committable};
 use hotshot_utils::anytrace::*;
@@ -22,8 +23,8 @@ use vec1::Vec1;
 pub use crate::utils::{View, ViewInner};
 use crate::{
     data::{
-        Leaf2, QuorumProposalWrapper, VidCommitment, VidDisperse, VidDisperseAndDuration,
-        VidDisperseShare,
+        EpochNumber, Leaf2, QuorumProposalWrapper, VidCommitment, VidDisperse,
+        VidDisperseAndDuration, VidDisperseShare, ViewNumber,
     },
     epoch_membership::EpochMembershipCoordinator,
     error::HotShotError,
@@ -34,11 +35,12 @@ use crate::{
         QuorumCertificate2,
     },
     simple_vote::HasEpoch,
+    stake_table::{HSStakeTable, StakeTableEntries},
     traits::{
         block_contents::{BlockHeader, BuilderFee},
         metrics::{Counter, Gauge, Histogram, Metrics, NoMetrics},
-        node_implementation::{ConsensusTime, NodeType, Versions},
-        signature_key::SignatureKey,
+        node_implementation::NodeType,
+        signature_key::{SignatureKey, StakeTableEntryType},
         BlockPayload, ValidatedState,
     },
     utils::{
@@ -54,10 +56,10 @@ pub type CommitmentMap<T> = HashMap<Commitment<T>, T>;
 
 /// A type alias for `BTreeMap<T::Time, HashMap<T::SignatureKey, BTreeMap<T::Epoch, Proposal<T, VidDisperseShare<T>>>>>`
 pub type VidShares<TYPES> = BTreeMap<
-    <TYPES as NodeType>::View,
+    ViewNumber,
     HashMap<
         <TYPES as NodeType>::SignatureKey,
-        BTreeMap<Option<<TYPES as NodeType>::Epoch>, Proposal<TYPES, VidDisperseShare<TYPES>>>,
+        BTreeMap<Option<EpochNumber>, Proposal<TYPES, VidDisperseShare<TYPES>>>,
     >,
 >;
 
@@ -248,20 +250,20 @@ impl<TYPES: NodeType> Drop for ConsensusUpgradableReadLockGuard<'_, TYPES> {
 
 /// A bundle of views that we have most recently performed some action
 #[derive(Debug, Clone, Copy)]
-struct HotShotActionViews<T: ConsensusTime> {
+struct HotShotActionViews {
     /// View we last proposed in to the Quorum
-    proposed: T,
+    proposed: ViewNumber,
     /// View we last voted in for a QuorumProposal
-    voted: T,
+    voted: ViewNumber,
     /// View we last proposed to the DA committee
-    da_proposed: T,
+    da_proposed: ViewNumber,
     /// View we lasted voted for DA proposal
-    da_vote: T,
+    da_vote: ViewNumber,
 }
 
-impl<T: ConsensusTime> Default for HotShotActionViews<T> {
+impl Default for HotShotActionViews {
     fn default() -> Self {
-        let genesis = T::genesis();
+        let genesis = ViewNumber::genesis();
         Self {
             proposed: genesis,
             voted: genesis,
@@ -270,9 +272,9 @@ impl<T: ConsensusTime> Default for HotShotActionViews<T> {
         }
     }
 }
-impl<T: ConsensusTime> HotShotActionViews<T> {
+impl HotShotActionViews {
     /// Create HotShotActionViews from a view number
-    fn from_view(view: T) -> Self {
+    fn from_view(view: ViewNumber) -> Self {
         Self {
             proposed: view,
             voted: view,
@@ -284,7 +286,7 @@ impl<T: ConsensusTime> HotShotActionViews<T> {
 
 #[derive(Debug, Clone)]
 struct ValidatorParticipation<TYPES: NodeType> {
-    epoch: TYPES::Epoch,
+    epoch: EpochNumber,
     /// Current epoch participation by key maps key -> (num leader, num times proposed)
     current_epoch_participation: HashMap<TYPES::SignatureKey, (u64, u64)>,
 
@@ -295,7 +297,7 @@ struct ValidatorParticipation<TYPES: NodeType> {
 impl<TYPES: NodeType> ValidatorParticipation<TYPES> {
     fn new() -> Self {
         Self {
-            epoch: TYPES::Epoch::genesis(),
+            epoch: EpochNumber::genesis(),
             current_epoch_participation: HashMap::new(),
             last_epoch_participation: HashMap::new(),
         }
@@ -304,7 +306,7 @@ impl<TYPES: NodeType> ValidatorParticipation<TYPES> {
     fn update_participation(
         &mut self,
         key: TYPES::SignatureKey,
-        epoch: TYPES::Epoch,
+        epoch: EpochNumber,
         proposed: bool,
     ) {
         if epoch != self.epoch {
@@ -320,7 +322,7 @@ impl<TYPES: NodeType> ValidatorParticipation<TYPES> {
         entry.0 += 1;
     }
 
-    fn update_participation_epoch(&mut self, epoch: TYPES::Epoch) {
+    fn update_participation_epoch(&mut self, epoch: EpochNumber) {
         if epoch <= self.epoch {
             return;
         }
@@ -388,36 +390,228 @@ impl<TYPES: NodeType> ValidatorParticipation<TYPES> {
     }
 }
 
+#[derive(Clone, Debug)]
+struct VoteParticipation<TYPES: NodeType> {
+    /// Current epoch
+    epoch: Option<EpochNumber>,
+
+    /// Current stake_table
+    stake_table: HSStakeTable<TYPES>,
+
+    /// Success threshold
+    success_threshold: U256,
+
+    /// Set of views in the current epoch
+    view_set: HashSet<ViewNumber>,
+
+    /// Number of views in the current epoch
+    current_epoch_num_views: u64,
+
+    /// Current epoch participation by key maps key -> num times voted
+    current_epoch_participation:
+        HashMap<<TYPES::SignatureKey as SignatureKey>::VerificationKeyType, u64>,
+
+    /// Number of views in the last epoch
+    last_epoch_num_views: u64,
+
+    /// Last epoch participation by key maps key -> num times voted
+    last_epoch_participation:
+        HashMap<<TYPES::SignatureKey as SignatureKey>::VerificationKeyType, u64>,
+}
+
+impl<TYPES: NodeType> VoteParticipation<TYPES> {
+    fn new(
+        stake_table: HSStakeTable<TYPES>,
+        success_threshold: U256,
+        epoch: Option<EpochNumber>,
+    ) -> Self {
+        let current_epoch_participation: HashMap<_, _> = stake_table
+            .iter()
+            .map({
+                |peer_config| {
+                    (
+                        peer_config
+                            .stake_table_entry
+                            .public_key()
+                            .to_verification_key(),
+                        0u64,
+                    )
+                }
+            })
+            .collect();
+        Self {
+            epoch,
+            stake_table,
+            success_threshold,
+            view_set: HashSet::new(),
+            current_epoch_num_views: 0u64,
+            current_epoch_participation,
+            last_epoch_num_views: 0u64,
+            last_epoch_participation: HashMap::new(),
+        }
+    }
+
+    fn update_participation(&mut self, qc: QuorumCertificate2<TYPES>) -> Result<()> {
+        ensure!(
+            qc.epoch() == self.epoch,
+            warn!(
+                "Incorrect epoch while updating vote participation, current epoch: {:?}, QC epoch \
+                 {:?}",
+                self.epoch,
+                qc.epoch()
+            )
+        );
+        ensure!(
+            !self.view_set.contains(&qc.view_number()),
+            info!(
+                "Participation for view {} already updated",
+                qc.view_number()
+            )
+        );
+        let signers = qc
+            .signers(
+                &StakeTableEntries::<TYPES>::from(self.stake_table.clone()).0,
+                self.success_threshold,
+            )
+            .context(|e| warn!("Tracing signers: {e}"))?;
+        for vk in signers {
+            let Some(votes) = self.current_epoch_participation.get_mut(&vk) else {
+                bail!(warn!(
+                    "Trying to update vote participation for unknown key: {:?}",
+                    vk
+                ));
+            };
+            *votes += 1;
+        }
+        self.view_set.insert(qc.view_number());
+        self.current_epoch_num_views += 1;
+        Ok(())
+    }
+
+    fn update_participation_epoch(
+        &mut self,
+        stake_table: HSStakeTable<TYPES>,
+        success_threshold: U256,
+        epoch: Option<EpochNumber>,
+    ) -> Result<()> {
+        ensure!(
+            epoch > self.epoch,
+            info!(
+                "New epoch not greater than current epoch while updating vote participation \
+                 epoch, current epoch: {:?}, new epoch {:?}",
+                self.epoch, epoch
+            )
+        );
+
+        self.epoch = epoch;
+        self.last_epoch_participation = self.current_epoch_participation.clone();
+        self.last_epoch_num_views = self.current_epoch_num_views;
+        self.current_epoch_num_views = 0;
+        self.view_set = HashSet::new();
+        let current_epoch_participation: HashMap<_, _> = stake_table
+            .iter()
+            .map({
+                |peer_config| {
+                    (
+                        peer_config
+                            .stake_table_entry
+                            .public_key()
+                            .to_verification_key(),
+                        0u64,
+                    )
+                }
+            })
+            .collect();
+        self.current_epoch_participation = current_epoch_participation;
+        self.stake_table = stake_table;
+        self.success_threshold = success_threshold;
+        Ok(())
+    }
+
+    fn get_participation(&self, key: TYPES::SignatureKey) -> (Option<f64>, Option<f64>) {
+        let maybe_current_num_votes = self
+            .current_epoch_participation
+            .get(&key.to_verification_key());
+
+        let current_epoch_vote_ratio = maybe_current_num_votes
+            .map(|num_votes| Self::calculate_ratio(num_votes, self.current_epoch_num_views));
+
+        let maybe_last_num_votes = self
+            .last_epoch_participation
+            .get(&key.to_verification_key());
+
+        let last_epoch_vote_ratio = maybe_last_num_votes
+            .map(|num_votes| Self::calculate_ratio(num_votes, self.last_epoch_num_views));
+
+        (current_epoch_vote_ratio, last_epoch_vote_ratio)
+    }
+
+    fn current_vote_participation(
+        &self,
+    ) -> HashMap<<TYPES::SignatureKey as SignatureKey>::VerificationKeyType, f64> {
+        self.current_epoch_participation
+            .iter()
+            .map(|(key, votes)| {
+                (
+                    key.clone(),
+                    Self::calculate_ratio(votes, self.current_epoch_num_views),
+                )
+            })
+            .collect()
+    }
+    fn previous_vote_participation(
+        &self,
+    ) -> HashMap<<TYPES::SignatureKey as SignatureKey>::VerificationKeyType, f64> {
+        self.last_epoch_participation
+            .iter()
+            .map(|(key, votes)| {
+                (
+                    key.clone(),
+                    Self::calculate_ratio(votes, self.last_epoch_num_views),
+                )
+            })
+            .collect()
+    }
+
+    fn calculate_ratio(num_votes: &u64, total_views: u64) -> f64 {
+        if total_views == 0 {
+            0.0
+        } else {
+            *num_votes as f64 / total_views as f64
+        }
+    }
+}
+
 /// A reference to the consensus algorithm
 ///
 /// This will contain the state of all rounds.
 #[derive(derive_more::Debug, Clone)]
 pub struct Consensus<TYPES: NodeType> {
     /// The validated states that are currently loaded in memory.
-    validated_state_map: BTreeMap<TYPES::View, View<TYPES>>,
+    validated_state_map: BTreeMap<ViewNumber, View<TYPES>>,
 
     /// All the VID shares we've received for current and future views.
     vid_shares: VidShares<TYPES>,
 
     /// All the DA certs we've received for current and future views.
     /// view -> DA cert
-    saved_da_certs: HashMap<TYPES::View, DaCertificate2<TYPES>>,
+    saved_da_certs: HashMap<ViewNumber, DaCertificate2<TYPES>>,
 
     /// View number that is currently on.
-    cur_view: TYPES::View,
+    cur_view: ViewNumber,
 
     /// Epoch number that is currently on.
-    cur_epoch: Option<TYPES::Epoch>,
+    cur_epoch: Option<EpochNumber>,
 
     /// Last proposals we sent out, None if we haven't proposed yet.
     /// Prevents duplicate proposals, and can be served to those trying to catchup
-    last_proposals: BTreeMap<TYPES::View, Proposal<TYPES, QuorumProposalWrapper<TYPES>>>,
+    last_proposals: BTreeMap<ViewNumber, Proposal<TYPES, QuorumProposalWrapper<TYPES>>>,
 
     /// last view had a successful decide event
-    last_decided_view: TYPES::View,
+    last_decided_view: ViewNumber,
 
     /// The `locked_qc` view number
-    locked_view: TYPES::View,
+    locked_view: ViewNumber,
 
     /// Map of leaf hash -> leaf
     /// - contains undecided leaves
@@ -427,12 +621,12 @@ pub struct Consensus<TYPES: NodeType> {
     /// Bundle of views which we performed the most recent action
     /// visibible to the network.  Actions are votes and proposals
     /// for DA and Quorum
-    last_actions: HotShotActionViews<TYPES::View>,
+    last_actions: HotShotActionViews,
 
     /// Saved payloads.
     ///
     /// Encoded transactions for every view if we got a payload for that view.
-    saved_payloads: BTreeMap<TYPES::View, Arc<PayloadWithMetadata<TYPES>>>,
+    saved_payloads: BTreeMap<ViewNumber, Arc<PayloadWithMetadata<TYPES>>>,
 
     /// the highqc per spec
     high_qc: QuorumCertificate2<TYPES>,
@@ -442,6 +636,9 @@ pub struct Consensus<TYPES: NodeType> {
 
     /// Track the participation of each validator in the current epoch and previous epoch
     validator_participation: ValidatorParticipation<TYPES>,
+
+    /// Track the vote participation of each node in the current epoch and previous epoch
+    vote_participation: VoteParticipation<TYPES>,
 
     /// A reference to the metrics trait
     pub metrics: Arc<ConsensusMetricsValue>,
@@ -581,16 +778,16 @@ impl<TYPES: NodeType> Consensus<TYPES> {
     /// Constructor.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        validated_state_map: BTreeMap<TYPES::View, View<TYPES>>,
+        validated_state_map: BTreeMap<ViewNumber, View<TYPES>>,
         vid_shares: Option<VidShares<TYPES>>,
-        cur_view: TYPES::View,
-        cur_epoch: Option<TYPES::Epoch>,
-        locked_view: TYPES::View,
-        last_decided_view: TYPES::View,
-        last_actioned_view: TYPES::View,
-        last_proposals: BTreeMap<TYPES::View, Proposal<TYPES, QuorumProposalWrapper<TYPES>>>,
+        cur_view: ViewNumber,
+        cur_epoch: Option<EpochNumber>,
+        locked_view: ViewNumber,
+        last_decided_view: ViewNumber,
+        last_actioned_view: ViewNumber,
+        last_proposals: BTreeMap<ViewNumber, Proposal<TYPES, QuorumProposalWrapper<TYPES>>>,
         saved_leaves: CommitmentMap<Leaf2<TYPES>>,
-        saved_payloads: BTreeMap<TYPES::View, Arc<PayloadWithMetadata<TYPES>>>,
+        saved_payloads: BTreeMap<ViewNumber, Arc<PayloadWithMetadata<TYPES>>>,
         high_qc: QuorumCertificate2<TYPES>,
         next_epoch_high_qc: Option<NextEpochQuorumCertificate2<TYPES>>,
         metrics: Arc<ConsensusMetricsValue>,
@@ -598,6 +795,8 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         state_cert: Option<LightClientStateUpdateCertificateV2<TYPES>>,
         drb_difficulty: u64,
         drb_upgrade_difficulty: u64,
+        stake_table: HSStakeTable<TYPES>,
+        success_threshold: U256,
     ) -> Self {
         let transition_qc = if let Some(ref next_epoch_high_qc) = next_epoch_high_qc {
             if high_qc
@@ -638,27 +837,28 @@ impl<TYPES: NodeType> Consensus<TYPES> {
             state_cert,
             drb_difficulty,
             validator_participation: ValidatorParticipation::new(),
+            vote_participation: VoteParticipation::new(stake_table, success_threshold, cur_epoch),
             drb_upgrade_difficulty,
         }
     }
 
     /// Get the current view.
-    pub fn cur_view(&self) -> TYPES::View {
+    pub fn cur_view(&self) -> ViewNumber {
         self.cur_view
     }
 
     /// Get the current epoch.
-    pub fn cur_epoch(&self) -> Option<TYPES::Epoch> {
+    pub fn cur_epoch(&self) -> Option<EpochNumber> {
         self.cur_epoch
     }
 
     /// Get the last decided view.
-    pub fn last_decided_view(&self) -> TYPES::View {
+    pub fn last_decided_view(&self) -> ViewNumber {
         self.last_decided_view
     }
 
     /// Get the locked view.
-    pub fn locked_view(&self) -> TYPES::View {
+    pub fn locked_view(&self) -> ViewNumber {
         self.locked_view
     }
 
@@ -727,7 +927,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
     }
 
     /// Get the validated state map.
-    pub fn validated_state_map(&self) -> &BTreeMap<TYPES::View, View<TYPES>> {
+    pub fn validated_state_map(&self) -> &BTreeMap<ViewNumber, View<TYPES>> {
         &self.validated_state_map
     }
 
@@ -737,7 +937,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
     }
 
     /// Get the saved payloads.
-    pub fn saved_payloads(&self) -> &BTreeMap<TYPES::View, Arc<PayloadWithMetadata<TYPES>>> {
+    pub fn saved_payloads(&self) -> &BTreeMap<ViewNumber, Arc<PayloadWithMetadata<TYPES>>> {
         &self.saved_payloads
     }
 
@@ -747,21 +947,21 @@ impl<TYPES: NodeType> Consensus<TYPES> {
     }
 
     /// Get the saved DA certs.
-    pub fn saved_da_certs(&self) -> &HashMap<TYPES::View, DaCertificate2<TYPES>> {
+    pub fn saved_da_certs(&self) -> &HashMap<ViewNumber, DaCertificate2<TYPES>> {
         &self.saved_da_certs
     }
 
     /// Get the map of our recent proposals
     pub fn last_proposals(
         &self,
-    ) -> &BTreeMap<TYPES::View, Proposal<TYPES, QuorumProposalWrapper<TYPES>>> {
+    ) -> &BTreeMap<ViewNumber, Proposal<TYPES, QuorumProposalWrapper<TYPES>>> {
         &self.last_proposals
     }
 
     /// Update the current view.
     /// # Errors
     /// Can return an error when the new view_number is not higher than the existing view number.
-    pub fn update_view(&mut self, view_number: TYPES::View) -> Result<()> {
+    pub fn update_view(&mut self, view_number: ViewNumber) -> Result<()> {
         ensure!(
             view_number > self.cur_view,
             debug!("New view isn't newer than the current view.")
@@ -774,7 +974,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
     pub fn update_validator_participation(
         &mut self,
         key: TYPES::SignatureKey,
-        epoch: TYPES::Epoch,
+        epoch: EpochNumber,
         proposed: bool,
     ) {
         self.validator_participation
@@ -782,7 +982,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
     }
 
     /// Update the validator participation epoch
-    pub fn update_validator_participation_epoch(&mut self, epoch: TYPES::Epoch) {
+    pub fn update_validator_participation_epoch(&mut self, epoch: EpochNumber) {
         self.validator_participation
             .update_participation_epoch(epoch);
     }
@@ -802,6 +1002,41 @@ impl<TYPES: NodeType> Consensus<TYPES> {
     pub fn previous_proposal_participation(&self) -> HashMap<TYPES::SignatureKey, f64> {
         self.validator_participation
             .previous_proposal_participation()
+    }
+
+    /// Update the vote participation
+    pub fn update_vote_participation(&mut self, qc: QuorumCertificate2<TYPES>) -> Result<()> {
+        self.vote_participation.update_participation(qc)
+    }
+
+    /// Update the vote participation epoch
+    pub fn update_vote_participation_epoch(
+        &mut self,
+        stake_table: HSStakeTable<TYPES>,
+        success_threshold: U256,
+        epoch: Option<EpochNumber>,
+    ) -> Result<()> {
+        self.vote_participation
+            .update_participation_epoch(stake_table, success_threshold, epoch)
+    }
+
+    /// Get the vote participation
+    pub fn get_participation(&self, key: TYPES::SignatureKey) -> (Option<f64>, Option<f64>) {
+        self.vote_participation.get_participation(key)
+    }
+
+    /// Get the current vote participation
+    pub fn current_vote_participation(
+        &self,
+    ) -> HashMap<<TYPES::SignatureKey as SignatureKey>::VerificationKeyType, f64> {
+        self.vote_participation.current_vote_participation()
+    }
+
+    /// Get the previous vote participation
+    pub fn previous_vote_participation(
+        &self,
+    ) -> HashMap<<TYPES::SignatureKey as SignatureKey>::VerificationKeyType, f64> {
+        self.vote_participation.previous_vote_participation()
     }
 
     /// Get the parent Leaf Info from a given leaf and our public key.
@@ -856,7 +1091,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
     /// Update the current epoch.
     /// # Errors
     /// Can return an error when the new epoch_number is not higher than the existing epoch number.
-    pub fn update_epoch(&mut self, epoch_number: TYPES::Epoch) -> Result<()> {
+    pub fn update_epoch(&mut self, epoch_number: EpochNumber) -> Result<()> {
         ensure!(
             self.cur_epoch.is_none() || Some(epoch_number) > self.cur_epoch,
             debug!("New epoch isn't newer than the current epoch.")
@@ -873,7 +1108,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
     /// Update the last actioned view internally for votes and proposals
     ///
     /// Returns true if the action is for a newer view than the last action of that type
-    pub fn update_action(&mut self, action: HotShotAction, view: TYPES::View) -> bool {
+    pub fn update_action(&mut self, action: HotShotAction, view: ViewNumber) -> bool {
         let old_view = match action {
             HotShotAction::Vote => &mut self.last_actions.voted,
             HotShotAction::Propose => &mut self.last_actions.proposed,
@@ -919,7 +1154,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
     ///
     /// # Errors
     /// Can return an error when the new view_number is not higher than the existing decided view number.
-    pub fn update_last_decided_view(&mut self, view_number: TYPES::View) -> Result<()> {
+    pub fn update_last_decided_view(&mut self, view_number: ViewNumber) -> Result<()> {
         ensure!(
             view_number > self.last_decided_view,
             debug!("New view isn't newer than the previously decided view.")
@@ -932,7 +1167,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
     ///
     /// # Errors
     /// Can return an error when the new view_number is not higher than the existing locked view number.
-    pub fn update_locked_view(&mut self, view_number: TYPES::View) -> Result<()> {
+    pub fn update_locked_view(&mut self, view_number: ViewNumber) -> Result<()> {
         ensure!(
             view_number > self.locked_view,
             debug!("New view isn't newer than the previously locked view.")
@@ -948,8 +1183,8 @@ impl<TYPES: NodeType> Consensus<TYPES> {
     /// with the same view number.
     pub fn update_da_view(
         &mut self,
-        view_number: TYPES::View,
-        epoch: Option<TYPES::Epoch>,
+        view_number: ViewNumber,
+        epoch: Option<EpochNumber>,
         payload_commitment: VidCommitment,
     ) -> Result<()> {
         let view = View {
@@ -973,11 +1208,8 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         delta: Option<Arc<<TYPES::ValidatedState as ValidatedState<TYPES>>::Delta>>,
     ) -> Result<()> {
         let view_number = leaf.view_number();
-        let epoch = option_epoch_from_block_number::<TYPES>(
-            leaf.with_epoch,
-            leaf.height(),
-            self.epoch_height,
-        );
+        let epoch =
+            option_epoch_from_block_number(leaf.with_epoch, leaf.height(), self.epoch_height);
         let view = View {
             view_inner: ViewInner::Leaf {
                 leaf: leaf.commit(),
@@ -998,7 +1230,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
     /// with the same view number.
     fn update_validated_state_map(
         &mut self,
-        view_number: TYPES::View,
+        view_number: ViewNumber,
         new_view: View<TYPES>,
     ) -> Result<()> {
         if let Some(existing_view) = self.validated_state_map().get(&view_number) {
@@ -1042,7 +1274,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
     /// Can return an error when there's an existing payload corresponding to the same view number.
     pub fn update_saved_payloads(
         &mut self,
-        view_number: TYPES::View,
+        view_number: ViewNumber,
         payload: Arc<PayloadWithMetadata<TYPES>>,
     ) -> Result<()> {
         ensure!(
@@ -1157,7 +1389,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
     /// Add a new entry to the vid_shares map.
     pub fn update_vid_shares(
         &mut self,
-        view_number: TYPES::View,
+        view_number: ViewNumber,
         disperse: Proposal<TYPES, VidDisperseShare<TYPES>>,
     ) {
         self.vid_shares
@@ -1169,7 +1401,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
     }
 
     /// Add a new entry to the da_certs map.
-    pub fn update_saved_da_certs(&mut self, view_number: TYPES::View, cert: DaCertificate2<TYPES>) {
+    pub fn update_saved_da_certs(&mut self, view_number: ViewNumber, cert: DaCertificate2<TYPES>) {
         self.saved_da_certs.insert(view_number, cert);
     }
 
@@ -1178,8 +1410,8 @@ impl<TYPES: NodeType> Consensus<TYPES> {
     /// If the leaf or its ancestors are not found in storage
     pub fn visit_leaf_ancestors<F>(
         &self,
-        start_from: TYPES::View,
-        terminator: Terminator<TYPES::View>,
+        start_from: ViewNumber,
+        terminator: Terminator<ViewNumber>,
         ok_when_finished: bool,
         mut f: F,
     ) -> std::result::Result<(), HotShotError<TYPES>>
@@ -1238,12 +1470,12 @@ impl<TYPES: NodeType> Consensus<TYPES> {
     /// `saved_payloads` and `validated_state_map` fields of `Consensus`.
     /// # Panics
     /// On inconsistent stored entries
-    pub fn collect_garbage(&mut self, old_anchor_view: TYPES::View, new_anchor_view: TYPES::View) {
+    pub fn collect_garbage(&mut self, old_anchor_view: ViewNumber, new_anchor_view: ViewNumber) {
         // Nothing to collect
         if new_anchor_view <= old_anchor_view {
             return;
         }
-        let gc_view = TYPES::View::new(new_anchor_view.saturating_sub(1));
+        let gc_view = ViewNumber::new(new_anchor_view.saturating_sub(1));
         // state check
         let anchor_entry = self
             .validated_state_map
@@ -1328,7 +1560,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
 
     /// Gets the validated state with the given view number, if in the state map.
     #[must_use]
-    pub fn state(&self, view_number: TYPES::View) -> Option<&Arc<TYPES::ValidatedState>> {
+    pub fn state(&self, view_number: ViewNumber) -> Option<&Arc<TYPES::ValidatedState>> {
         match self.validated_state_map.get(&view_number) {
             Some(view) => view.state(),
             None => None,
@@ -1337,7 +1569,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
 
     /// Gets the validated state and state delta with the given view number, if in the state map.
     #[must_use]
-    pub fn state_and_delta(&self, view_number: TYPES::View) -> StateAndDelta<TYPES> {
+    pub fn state_and_delta(&self, view_number: ViewNumber) -> StateAndDelta<TYPES> {
         match self.validated_state_map.get(&view_number) {
             Some(view) => view.state_and_delta(),
             None => (None, None),
@@ -1363,13 +1595,13 @@ impl<TYPES: NodeType> Consensus<TYPES> {
     /// and updates `vid_shares` map with the signed `VidDisperseShare` proposals.
     /// Returned `Option` indicates whether the update has actually happened or not.
     #[instrument(skip_all, target = "Consensus", fields(view = *view))]
-    pub async fn calculate_and_update_vid<V: Versions>(
+    pub async fn calculate_and_update_vid(
         consensus: OuterConsensus<TYPES>,
-        view: <TYPES as NodeType>::View,
-        target_epoch: Option<<TYPES as NodeType>::Epoch>,
+        view: ViewNumber,
+        target_epoch: Option<EpochNumber>,
         membership_coordinator: EpochMembershipCoordinator<TYPES>,
         private_key: &<TYPES::SignatureKey as SignatureKey>::PrivateKey,
-        upgrade_lock: &UpgradeLock<TYPES, V>,
+        upgrade_lock: &UpgradeLock<TYPES>,
     ) -> Option<()> {
         let payload_with_metadata = Arc::clone(consensus.read().await.saved_payloads().get(&view)?);
         let epoch = consensus
@@ -1383,7 +1615,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         let VidDisperseAndDuration {
             disperse: vid,
             duration: disperse_duration,
-        } = VidDisperse::calculate_vid_disperse::<V>(
+        } = VidDisperse::calculate_vid_disperse(
             &payload_with_metadata.payload,
             &membership_coordinator,
             view,
@@ -1428,7 +1660,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
 
     /// Returns true if the `parent_leaf` formed an eQC for the previous epoch to the `proposed_leaf`
     pub fn check_eqc(&self, proposed_leaf: &Leaf2<TYPES>, parent_leaf: &Leaf2<TYPES>) -> bool {
-        if parent_leaf.view_number() == TYPES::View::genesis() {
+        if parent_leaf.view_number() == ViewNumber::genesis() {
             return true;
         }
         let new_epoch = epoch_from_block_number(proposed_leaf.height(), self.epoch_height);
@@ -1451,5 +1683,5 @@ pub struct CommitmentAndMetadata<TYPES: NodeType> {
     /// Builder fee data
     pub fees: Vec1<BuilderFee<TYPES>>,
     /// View number this block is for
-    pub block_view: TYPES::View,
+    pub block_view: ViewNumber,
 }

@@ -16,10 +16,8 @@ use hotshot_query_service::{
     ApiState,
 };
 use hotshot_types::{
-    data::VidShare,
-    simple_certificate::LightClientStateUpdateCertificateV2,
-    traits::{network::ConnectedNetwork, node_implementation::Versions},
-    vid::avidm::AvidMShare,
+    data::VidShare, simple_certificate::LightClientStateUpdateCertificateV2,
+    traits::network::ConnectedNetwork, vid::avidm::AvidMShare,
 };
 use snafu::OptionExt;
 use tide_disco::{method::ReadState, Api, RequestParams, StatusCode};
@@ -37,9 +35,9 @@ use crate::{
     SeqTypes, SequencerApiVersion, SequencerPersistence,
 };
 
-pub(in crate::api) type AvailState<N, P, D, ApiVer> = ApiState<StorageState<N, P, D, ApiVer>>;
+pub(in crate::api) type AvailState<N, P, D> = ApiState<StorageState<N, P, D>>;
 
-type AvailabilityApi<N, P, D, V, ApiVer> = Api<AvailState<N, P, D, V>, Error, ApiVer>;
+type AvailabilityApi<N, P, D, ApiVer> = Api<AvailState<N, P, D>, Error, ApiVer>;
 
 /// Get a namespace proof for the given block, if possible.
 ///
@@ -329,9 +327,9 @@ where
 // TODO (abdul): replace snafu with `this_error` in  hotshot query service
 // Snafu has been replaced by `this_error` everywhere.
 // However, the query service still uses snafu
-pub(in crate::api) fn availability<N, P, D, V: Versions>(
+pub(in crate::api) fn availability<N, P, D>(
     api_ver: semver::Version,
-) -> anyhow::Result<AvailabilityApi<N, P, D, V, SequencerApiVersion>>
+) -> anyhow::Result<AvailabilityApi<N, P, D, SequencerApiVersion>>
 where
     N: ConnectedNetwork<PubKey>,
     D: SequencerDataSource + Send + Sync + 'static,
@@ -343,7 +341,7 @@ where
     let timeout = options.fetch_timeout;
     let limit = options.large_object_range_limit;
 
-    let mut api = availability::define_api::<AvailState<N, P, D, _>, SeqTypes, _>(
+    let mut api = availability::define_api::<AvailState<N, P, D>, SeqTypes, _>(
         &options,
         SequencerApiVersion::instance(),
         api_ver.clone(),

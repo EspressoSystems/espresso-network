@@ -25,7 +25,7 @@ use hotshot_example_types::{
 };
 use hotshot_types::{
     constants::EVENT_CHANNEL_SIZE,
-    data::Leaf2,
+    data::{Leaf2, ViewNumber},
     event::Event,
     message::convert_proposal,
     simple_certificate::{
@@ -34,7 +34,7 @@ use hotshot_types::{
     traits::{
         election::Membership,
         network::{AsyncGenerator, ConnectedNetwork},
-        node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
+        node_implementation::{NodeImplementation, NodeType},
     },
     utils::genesis_epoch_from_version,
     vote::HasViewNumber,
@@ -57,7 +57,6 @@ pub struct SpinningTask<
     TYPES: NodeType,
     N: ConnectedNetwork<TYPES::SignatureKey>,
     I: TestableNodeImplementation<TYPES>,
-    V: Versions,
 > {
     /// epoch height
     pub epoch_height: u64,
@@ -66,13 +65,13 @@ pub struct SpinningTask<
     /// Saved epoch information. This must be sorted ascending by epoch.
     pub start_epoch_info: Vec<InitializerEpochInfo<TYPES>>,
     /// handle to the nodes
-    pub(crate) handles: Arc<RwLock<Vec<Node<TYPES, I, V>>>>,
+    pub(crate) handles: Arc<RwLock<Vec<Node<TYPES, I>>>>,
     /// late start nodes
-    pub(crate) late_start: HashMap<u64, LateStartNode<TYPES, I, V>>,
+    pub(crate) late_start: HashMap<u64, LateStartNode<TYPES, I>>,
     /// time based changes
-    pub(crate) changes: BTreeMap<TYPES::View, Vec<ChangeNode>>,
+    pub(crate) changes: BTreeMap<ViewNumber, Vec<ChangeNode>>,
     /// most recent view seen by spinning task
-    pub(crate) latest_view: Option<TYPES::View>,
+    pub(crate) latest_view: Option<ViewNumber>,
     /// Last decided leaf that can be used as the anchor leaf to initialize the node.
     pub(crate) last_decided_leaf: Leaf2<TYPES>,
     /// Highest qc seen in the test for restarting nodes
@@ -82,7 +81,7 @@ pub struct SpinningTask<
     /// Add specified delay to async calls
     pub(crate) async_delay_config: HashMap<u64, DelayConfig>,
     /// Context stored for nodes to be restarted with
-    pub(crate) restart_contexts: HashMap<usize, RestartContext<TYPES, N, I, V>>,
+    pub(crate) restart_contexts: HashMap<usize, RestartContext<TYPES, N, I>>,
     /// Generate network channel for restart nodes
     pub(crate) channel_generator: AsyncGenerator<Network<TYPES, I>>,
     /// The light client state update certificate
@@ -100,8 +99,7 @@ impl<
         >,
         I: TestableNodeImplementation<TYPES>,
         N: ConnectedNetwork<TYPES::SignatureKey>,
-        V: Versions,
-    > TestTaskState for SpinningTask<TYPES, N, I, V>
+    > TestTaskState for SpinningTask<TYPES, N, I>
 where
     I: TestableNodeImplementation<TYPES>,
     I: NodeImplementation<TYPES, Network = N, Storage = TestStorage<TYPES>>,
@@ -173,11 +171,11 @@ where
                                             self.start_epoch_info.clone(),
                                             self.last_decided_leaf.clone(),
                                             (
-                                                TYPES::View::genesis(),
-                                                genesis_epoch_from_version::<V, TYPES>(),
+                                                ViewNumber::genesis(),
+                                                genesis_epoch_from_version(config.upgrade.base),
                                             ),
                                             (self.high_qc.clone(), self.next_epoch_high_qc.clone()),
-                                            TYPES::View::genesis(),
+                                            ViewNumber::genesis(),
                                             BTreeMap::new(),
                                             BTreeMap::new(),
                                             None,
@@ -266,9 +264,10 @@ where
                                 let last_actioned_view = storage.last_actioned_view().await;
                                 let start_epoch = storage.last_actioned_epoch().await;
                                 let high_qc = storage.high_qc_cloned().await.unwrap_or(
-                                    QuorumCertificate2::genesis::<V>(
+                                    QuorumCertificate2::genesis(
                                         &TestValidatedState::default(),
                                         &TestInstanceState::default(),
+                                        config.upgrade,
                                     )
                                     .await,
                                 );
@@ -320,7 +319,7 @@ where
                                 );
                                 let internal_chan = broadcast(EVENT_CHANNEL_SIZE);
                                 let context =
-                                    TestRunner::<TYPES, I, V, N>::add_node_with_config_and_channels(
+                                    TestRunner::<TYPES, I, N>::add_node_with_config_and_channels(
                                         node_id,
                                         generated_network.clone(),
                                         Arc::clone(&membership),
@@ -433,9 +432,8 @@ pub(crate) struct RestartContext<
     TYPES: NodeType,
     N: ConnectedNetwork<TYPES::SignatureKey>,
     I: TestableNodeImplementation<TYPES>,
-    V: Versions,
 > {
-    context: Arc<SystemContext<TYPES, I, V>>,
+    context: Arc<SystemContext<TYPES, I>>,
     network: Arc<N>,
 }
 

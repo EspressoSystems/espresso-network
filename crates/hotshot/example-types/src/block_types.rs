@@ -14,14 +14,14 @@ use alloy::primitives::FixedBytes;
 use async_trait::async_trait;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
 use hotshot_types::{
-    data::{vid_commitment, BlockError, Leaf2, VidCommitment},
+    data::{vid_commitment, BlockError, Leaf2, VidCommitment, ViewNumber},
     light_client::LightClientState,
     traits::{
         block_contents::{
             BlockHeader, BuilderFee, EncodeBytes, TestableBlock, Transaction,
             GENESIS_VID_NUM_STORAGE_NODES,
         },
-        node_implementation::{ConsensusTime, NodeType, Versions},
+        node_implementation::NodeType,
         BlockPayload, ValidatedState,
     },
     utils::BuilderCommitment,
@@ -31,7 +31,7 @@ use serde::{Deserialize, Serialize};
 use sha3::{Digest, Keccak256};
 use thiserror::Error;
 use time::OffsetDateTime;
-use vbs::version::{StaticVersionType, Version};
+use vbs::version::Version;
 
 use crate::{
     node_types::TestTypes,
@@ -352,21 +352,21 @@ impl<
         ))
     }
 
-    fn genesis<V: Versions>(
+    fn genesis(
         _instance_state: &<TYPES::ValidatedState as ValidatedState<TYPES>>::Instance,
         payload: TYPES::BlockPayload,
         metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
+        version: Version,
     ) -> Self {
         let builder_commitment =
             <TestBlockPayload as BlockPayload<TYPES>>::builder_commitment(&payload, metadata);
 
         let payload_bytes = payload.encode();
-        let genesis_version = V::Base::version();
-        let payload_commitment = vid_commitment::<V>(
+        let payload_commitment = vid_commitment(
             &payload_bytes,
             &metadata.encode(),
             GENESIS_VID_NUM_STORAGE_NODES,
-            genesis_version,
+            version,
         );
 
         Self {
@@ -377,7 +377,7 @@ impl<
             timestamp: 0,
             timestamp_millis: 0,
             random: 0,
-            version: genesis_version,
+            version,
         }
     }
 
@@ -401,7 +401,7 @@ impl<
         self.version
     }
 
-    fn get_light_client_state(&self, view: TYPES::View) -> anyhow::Result<LightClientState> {
+    fn get_light_client_state(&self, view: ViewNumber) -> anyhow::Result<LightClientState> {
         LightClientState::new(
             view.u64(),
             self.block_number,

@@ -9,7 +9,7 @@
 async fn test_timeout() {
     use std::time::Duration;
 
-    use hotshot_example_types::node_types::{MemoryImpl, TestTypes, TestVersions};
+    use hotshot_example_types::node_types::{MemoryImpl, TestTypes};
     use hotshot_testing::{
         block_builder::SimpleBuilderImplementation,
         completion_task::{CompletionTaskDescription, TimeBasedCompletionTaskDescription},
@@ -23,7 +23,7 @@ async fn test_timeout() {
         ..Default::default()
     };
 
-    let mut metadata: TestDescription<TestTypes, MemoryImpl, TestVersions> = TestDescription {
+    let mut metadata: TestDescription<TestTypes, MemoryImpl> = TestDescription {
         ..Default::default()
     }
     .set_num_nodes(10, 10);

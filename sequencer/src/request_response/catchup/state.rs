@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use alloy::primitives::U256;
 use anyhow::Context;
 use async_trait::async_trait;
@@ -5,35 +7,35 @@ use committable::{Commitment, Committable};
 use espresso_types::{
     traits::{SequencerPersistence, StateCatchup},
     v0_3::{ChainConfig, RewardAccountProofV1, RewardAccountV1, RewardMerkleCommitmentV1},
-    v0_4::{RewardAccountProofV2, RewardAccountV2, RewardMerkleCommitmentV2},
-    BackoffParams, BlockMerkleTree, EpochVersion, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
-    Leaf2, NodeState, PubKey, SeqTypes, SequencerVersions,
+    v0_4::{
+        forgotten_accounts_include, PermittedRewardMerkleTreeV2, RewardAccountV2,
+        RewardMerkleCommitmentV2,
+    },
+    BackoffParams, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment, Leaf2,
+    NodeState, PubKey, SeqTypes,
 };
 use hotshot::traits::NodeImplementation;
 use hotshot_types::{
-    data::ViewNumber,
-    message::UpgradeLock,
-    simple_certificate::LightClientStateUpdateCertificateV2,
-    stake_table::HSStakeTable,
-    traits::{network::ConnectedNetwork, node_implementation::Versions},
-    utils::verify_leaf_chain,
+    data::ViewNumber, message::UpgradeLock,
+    simple_certificate::LightClientStateUpdateCertificateV2, stake_table::HSStakeTable,
+    traits::network::ConnectedNetwork, utils::verify_leaf_chain,
 };
 use jf_merkle_tree_compat::{ForgetableMerkleTreeScheme, MerkleTreeScheme};
 use request_response::RequestType;
 use tokio::time::timeout;
+use versions::EPOCH_VERSION;
 
-use crate::request_response::{
-    request::{Request, Response},
-    RequestResponseProtocol,
+use crate::{
+    api::RewardMerkleTreeV2Data,
+    request_response::{
+        request::{Request, Response},
+        RequestResponseProtocol,
+    },
 };
 
 #[async_trait]
-impl<
-        I: NodeImplementation<SeqTypes>,
-        V: Versions,
-        N: ConnectedNetwork<PubKey>,
-        P: SequencerPersistence,
-    > StateCatchup for RequestResponseProtocol<I, V, N, P>
+impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerPersistence>
+    StateCatchup for RequestResponseProtocol<I, N, P>
 {
     async fn try_fetch_leaf(
         &self,
@@ -115,31 +117,24 @@ impl<
             .with_context(|| "timed out while fetching chain config")?
     }
 
-    async fn try_fetch_reward_accounts_v2(
+    async fn try_fetch_reward_merkle_tree_v2(
         &self,
         _retry: usize,
-        instance: &NodeState,
         height: u64,
         view: ViewNumber,
         reward_merkle_tree_root: RewardMerkleCommitmentV2,
-        accounts: &[RewardAccountV2],
-    ) -> anyhow::Result<Vec<RewardAccountProofV2>> {
+        accounts: Arc<Vec<RewardAccountV2>>,
+    ) -> anyhow::Result<PermittedRewardMerkleTreeV2> {
         // Timeout after a few batches
         let timeout_duration = self.config.request_batch_interval * 3;
 
         // Fetch the reward accounts
         timeout(
             timeout_duration,
-            self.fetch_reward_accounts_v2(
-                instance,
-                height,
-                view,
-                reward_merkle_tree_root,
-                accounts.to_vec(),
-            ),
+            self.fetch_reward_merkle_tree_v2(height, view, reward_merkle_tree_root, accounts),
         )
         .await
-        .with_context(|| "timed out while fetching reward accounts")?
+        .with_context(|| "timed out while fetching reward merkle tree v2")?
     }
 
     async fn try_fetch_reward_accounts_v1(
@@ -269,7 +264,7 @@ impl<
                     &stake_table_clone,
                     success_threshold,
                     height,
-                    &UpgradeLock::<SeqTypes, SequencerVersions<EpochVersion, EpochVersion>>::new(),
+                    &UpgradeLock::<SeqTypes>::new(versions::Upgrade::trivial(EPOCH_VERSION)),
                 )
                 .await
                 .with_context(|| "leaf chain verification failed")?;
@@ -391,60 +386,51 @@ impl<
         Ok(())
     }
 
-    async fn fetch_reward_accounts_v2(
+    async fn fetch_reward_merkle_tree_v2(
         &self,
-        _instance: &NodeState,
         height: u64,
         view: ViewNumber,
         reward_merkle_tree_root: RewardMerkleCommitmentV2,
-        accounts: Vec<RewardAccountV2>,
-    ) -> anyhow::Result<Vec<RewardAccountProofV2>> {
-        tracing::info!("Fetching reward accounts for height: {height}, view: {view}");
-
-        // Clone things we need in the first closure
-        let accounts_clone = accounts.clone();
+        accounts: Arc<Vec<RewardAccountV2>>,
+    ) -> anyhow::Result<PermittedRewardMerkleTreeV2> {
+        tracing::info!("Fetching RewardMerkleTreeV2 for height: {height}");
 
         // Create the response validation function
         let response_validation_fn = move |_request: &Request, response: Response| {
-            // Clone again
-            let accounts_clone = accounts_clone.clone();
-
+            let accounts = accounts.clone();
             async move {
                 // Make sure the response is a reward accounts response
-                let Response::RewardAccountsV2(reward_merkle_tree) = response else {
+                let Response::RewardMerkleTreeV2(tree_bytes) = response else {
                     return Err(anyhow::anyhow!("expected reward accounts response"));
                 };
 
-                // Verify the merkle proofs
-                let mut proofs = Vec::new();
-                for account in accounts_clone {
-                    let (proof, _) =
-                        RewardAccountProofV2::prove(&reward_merkle_tree, account.into())
-                            .with_context(|| format!("response was missing account {account}"))?;
-                    proof.verify(&reward_merkle_tree_root).with_context(|| {
-                        format!(
-                            "invalid proof for v2 reward account {account}, root: \
-                             {reward_merkle_tree_root}"
-                        )
-                    })?;
-                    proofs.push(proof);
-                }
+                let tree_data = bincode::deserialize::<RewardMerkleTreeV2Data>(&tree_bytes)
+                    .context(
+                        "Failed to deserialize RewardMerkleTreeV2 for height {height} from remote",
+                    )?;
 
-                Ok(proofs)
+                // Verify the tree's commitment
+                let reward_merkle_tree: PermittedRewardMerkleTreeV2 =
+                    PermittedRewardMerkleTreeV2::try_from_kv_set(tree_data.balances).await?;
+
+                anyhow::ensure!(reward_merkle_tree.tree.commitment() == reward_merkle_tree_root);
+                anyhow::ensure!(!forgotten_accounts_include(&reward_merkle_tree, &accounts));
+
+                Ok(reward_merkle_tree)
             }
         };
 
         // Wait for the protocol to send us the reward accounts
         let response = self
             .request_indefinitely(
-                Request::RewardAccountsV2(height, *view, accounts),
+                Request::RewardMerkleTreeV2(height, *view),
                 RequestType::Batched,
                 response_validation_fn,
             )
             .await
             .with_context(|| "failed to request reward accounts")?;
 
-        tracing::info!("Fetched reward accounts for height: {height}, view: {view}");
+        tracing::info!("Fetched RewardMerkleTreeV2 for height: {height}");
 
         Ok(response)
     }

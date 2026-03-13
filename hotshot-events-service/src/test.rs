@@ -11,13 +11,11 @@ mod tests {
         event::{Event, EventType},
         light_client::StateKeyPair,
         signature_key::BLSPubKey,
-        traits::{
-            node_implementation::{ConsensusTime, NodeType},
-            signature_key::SignatureKey,
-        },
+        traits::{node_implementation::NodeType, signature_key::SignatureKey},
         PeerConfig,
     };
     use surf_disco::Client;
+    use test_utils::reserve_tcp_port;
     use tide_disco::{App, Url};
     use tokio::spawn;
     use tracing_test::traced_test;
@@ -28,7 +26,7 @@ mod tests {
     use crate::events_source::{EventConsumer, EventsStreamer, StartupInfo}; // EventsUpdater};
 
     // return a empty transaction event
-    fn generate_event<Types: NodeType<View = ViewNumber>>(view_number: u64) -> Event<Types> {
+    fn generate_event<Types: NodeType>(view_number: u64) -> Event<Types> {
         Event {
             view_number: ViewNumber::new(view_number),
             event: EventType::Transactions {
@@ -41,7 +39,7 @@ mod tests {
     #[traced_test]
     async fn test_no_active_receiver() {
         tracing::info!("Starting test_no_active_receiver");
-        let port = portpicker::pick_unused_port().expect("Could not find an open port");
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         let api_url = Url::parse(format!("http://localhost:{port}").as_str()).unwrap();
 
         let known_nodes_with_stake = vec![];
@@ -90,7 +88,7 @@ mod tests {
     #[tokio::test]
     #[traced_test]
     async fn test_startup_info_endpoint() {
-        let port = portpicker::pick_unused_port().expect("Could not find an open port");
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         let api_url = Url::parse(format!("http://localhost:{port}").as_str()).unwrap();
 
         let private_key =
@@ -146,7 +144,7 @@ mod tests {
     async fn test_event_stream() {
         tracing::info!("Starting test_event_stream");
 
-        let port = portpicker::pick_unused_port().expect("Could not find an open port");
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         let api_url = Url::parse(format!("http://localhost:{port}").as_str()).unwrap();
 
         let known_nodes_with_stake = vec![];

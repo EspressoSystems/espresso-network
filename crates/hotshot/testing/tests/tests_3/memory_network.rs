@@ -13,7 +13,7 @@ use hotshot::{
 };
 use hotshot_example_types::{
     block_types::TestTransaction,
-    node_types::{TestTypes, TestVersions},
+    node_types::{TEST_VERSIONS, TestTypes},
 };
 use hotshot_types::{
     data::ViewNumber,
@@ -21,7 +21,7 @@ use hotshot_types::{
     signature_key::BLSPubKey,
     traits::{
         network::{BroadcastDelay, ConnectedNetwork, TestableNetworkingImplementation, Topic},
-        node_implementation::{ConsensusTime, NodeType},
+        node_implementation::{NodeType},
     }, vote::HasViewNumber,
 };
 use rand::{rngs::StdRng, RngCore, SeedableRng};
@@ -65,7 +65,7 @@ fn gen_messages(num_messages: u64, seed: u64, pk: BLSPubKey) -> Vec<Message<Test
             sender: pk,
             kind: MessageKind::Data(DataMessage::SubmitTransaction(
                 TestTransaction::new(bytes.to_vec()),
-                <ViewNumber as ConsensusTime>::new(0),
+                ViewNumber::new(0),
             )),
         };
         messages.push(message);
@@ -113,7 +113,7 @@ async fn memory_network_direct_queue() {
 
     let first_messages: Vec<Message<TestTypes>> = gen_messages(5, 100, pub_key_1);
 
-    let upgrade_lock = UpgradeLock::<TestTypes, TestVersions>::new();
+    let upgrade_lock = UpgradeLock::<TestTypes>::new(TEST_VERSIONS.test);
 
     // Test 1 -> 2
     // Send messages
@@ -174,7 +174,7 @@ async fn memory_network_broadcast_queue() {
 
     let first_messages: Vec<Message<TestTypes>> = gen_messages(5, 100, pub_key_1);
 
-    let upgrade_lock = UpgradeLock::<TestTypes, TestVersions>::new();
+    let upgrade_lock = UpgradeLock::<TestTypes>::new(TEST_VERSIONS.test);
 
     // Test 1 -> 2
     // Send messages
@@ -249,7 +249,7 @@ async fn memory_network_test_in_flight_message_count() {
         Some(0)
     );
 
-    let upgrade_lock = UpgradeLock::<TestTypes, TestVersions>::new();
+    let upgrade_lock = UpgradeLock::<TestTypes>::new(TEST_VERSIONS.test);
 
     for (count, message) in messages.iter().enumerate() {
         let view = message.view_number();

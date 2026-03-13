@@ -9,8 +9,7 @@ use std::{
 };
 
 use hotshot_types::{
-    data::VidCommitment,
-    traits::node_implementation::{ConsensusTime, NodeType},
+    data::{VidCommitment, ViewNumber},
     utils::BuilderCommitment,
 };
 use nonempty_collections::{nem, NEMap};
@@ -27,26 +26,24 @@ use crate::block::{BlockId, BuilderStateId};
 /// Second tier being non-empty by construction [`NEMap`] ensures that we can't accidentally
 /// create phantom entries with empty maps in the first tier.
 #[derive(Debug)]
-pub struct TieredViewMap<K, V>(BTreeMap<K::View, NEMap<K::Subkey, V>>)
+pub struct TieredViewMap<K, V>(BTreeMap<ViewNumber, NEMap<K::Subkey, V>>)
 where
     K: ViewCompositeKey;
 
-/// A two-component key, of which one component is [`ConsensusTime`]
+/// A two-component key, of which one component is [`ViewNumber`]
 ///
 /// See [`TieredViewMap`] documentation for more information
 pub trait ViewCompositeKey {
     type Subkey: Hash + Eq;
-    type View: ConsensusTime;
-    fn view(&self) -> &Self::View;
+    fn view(&self) -> &ViewNumber;
     fn subkey(&self) -> &Self::Subkey;
     fn into_subkey(self) -> Self::Subkey;
 }
 
-impl<Types: NodeType> ViewCompositeKey for BlockId<Types> {
+impl ViewCompositeKey for BlockId {
     type Subkey = BuilderCommitment;
-    type View = Types::View;
 
-    fn view(&self) -> &<Types as NodeType>::View {
+    fn view(&self) -> &ViewNumber {
         &self.view
     }
 
@@ -59,11 +56,10 @@ impl<Types: NodeType> ViewCompositeKey for BlockId<Types> {
     }
 }
 
-impl<Types: NodeType> ViewCompositeKey for BuilderStateId<Types> {
+impl ViewCompositeKey for BuilderStateId {
     type Subkey = VidCommitment;
-    type View = Types::View;
 
-    fn view(&self) -> &<Types as NodeType>::View {
+    fn view(&self) -> &ViewNumber {
         &self.parent_view
     }
 
@@ -95,7 +91,7 @@ where
     /// Returns a nested iterator visiting all values for view numbers in given range
     pub fn range<R>(&self, range: R) -> impl Iterator<Item = impl Iterator<Item = &V>>
     where
-        R: RangeBounds<K::View>,
+        R: RangeBounds<ViewNumber>,
     {
         self.0
             .range(range)
@@ -103,7 +99,7 @@ where
     }
 
     /// Returns an iterator visiting all values for given view number
-    pub fn bucket(&self, view_number: &K::View) -> impl Iterator<Item = &V> {
+    pub fn bucket(&self, view_number: &ViewNumber) -> impl Iterator<Item = &V> {
         self.0
             .get(view_number)
             .into_iter()
@@ -151,17 +147,17 @@ where
     }
 
     /// Returns highest view number for which we have a value
-    pub fn highest_view(&self) -> Option<K::View> {
+    pub fn highest_view(&self) -> Option<ViewNumber> {
         Some(*self.0.last_key_value()?.0)
     }
 
     /// Returns lowest view number for which we have a value
-    pub fn lowest_view(&self) -> Option<K::View> {
+    pub fn lowest_view(&self) -> Option<ViewNumber> {
         Some(*self.0.first_key_value()?.0)
     }
 
     /// Removes every view lower than the `cutoff_view` (exclusive) from self and returns all removed views.
-    pub fn prune(&mut self, cutoff_view: K::View) -> Self {
+    pub fn prune(&mut self, cutoff_view: ViewNumber) -> Self {
         let high = self.0.split_off(&cutoff_view);
         let low = std::mem::replace(&mut self.0, high);
         Self(low)
@@ -182,16 +178,14 @@ mod tests {
     use std::{cmp::Ordering, ops::Bound, sync::Arc};
 
     use hotshot_example_types::node_types::TestTypes;
-    use hotshot_types::{data::ViewNumber, traits::node_implementation::ConsensusTime};
+    use hotshot_types::data::ViewNumber;
     use rand::{distributions::Standard, thread_rng, Rng};
     use tracing_test::traced_test;
 
     use super::*;
     use crate::{state::BuilderState, testing::mock};
 
-    type View = ViewNumber;
-    type BuilderStateMap =
-        super::TieredViewMap<BuilderStateId<TestTypes>, Arc<BuilderState<TestTypes>>>;
+    type BuilderStateMap = super::TieredViewMap<BuilderStateId, Arc<BuilderState<TestTypes>>>;
 
     #[test]
     #[traced_test]
@@ -230,8 +224,8 @@ mod tests {
             map.insert(builder_state.id(), builder_state);
         }
 
-        let start = View::new(1);
-        let end = View::new(3);
+        let start = ViewNumber::new(1);
+        let end = ViewNumber::new(3);
 
         let collected: Vec<_> = map
             .range((Bound::Included(start), Bound::Excluded(end)))
@@ -259,15 +253,18 @@ mod tests {
             }
         }
 
-        let pruned_map = map.prune(View::new(cutoff));
+        let pruned_map = map.prune(ViewNumber::new(cutoff));
         assert_eq!(pruned_map.len() as u64, cutoff * states_per_view);
         assert_eq!(map.len() as u64, (view_count - cutoff) * states_per_view);
 
-        assert!(pruned_map.bucket(&View::new(cutoff - 1)).next().is_some());
-        assert!(map.bucket(&View::new(cutoff)).next().is_some());
+        assert!(pruned_map
+            .bucket(&ViewNumber::new(cutoff - 1))
+            .next()
+            .is_some());
+        assert!(map.bucket(&ViewNumber::new(cutoff)).next().is_some());
 
-        assert!(pruned_map.bucket(&View::new(cutoff)).next().is_none());
-        assert!(map.bucket(&View::new(cutoff - 1)).next().is_none());
+        assert!(pruned_map.bucket(&ViewNumber::new(cutoff)).next().is_none());
+        assert!(map.bucket(&ViewNumber::new(cutoff - 1)).next().is_none());
     }
 
     #[test]

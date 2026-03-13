@@ -1,4 +1,5 @@
 use espresso_types::PubKey;
+use hotshot::traits::implementations::Cliquenet;
 
 use super::*;
 

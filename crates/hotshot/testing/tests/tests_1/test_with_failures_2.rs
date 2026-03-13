@@ -10,8 +10,8 @@ use std::{collections::HashMap, time::Duration};
 
 use hotshot_example_types::{
     node_types::{
-        CombinedImpl, EpochsTestVersions, MemoryImpl, PushCdnImpl, CliquenetImpl,
-        TestConsecutiveLeaderTypes, TestTwoStakeTablesTypes, TestVersions,
+        CombinedImpl, MemoryImpl, PushCdnImpl, CliquenetImpl,
+        TestConsecutiveLeaderTypes, TestTwoStakeTablesTypes, TEST_VERSIONS,
     },
     state_types::TestTypes,
 };
@@ -28,7 +28,7 @@ use hotshot_types::{
     traits::{
         election::Membership,
         network::TransmitType,
-        node_implementation::{ConsensusTime, NodeType},
+        node_implementation::{NodeType},
     },
     vote::HasViewNumber,
 };
@@ -38,7 +38,7 @@ cross_tests!(
     TestName: test_with_failures_2,
     Impls: [MemoryImpl, PushCdnImpl, CliquenetImpl],
     Types: [TestTypes],
-    Versions: [TestVersions],
+    Versions: [TEST_VERSIONS.test],
     Ignore: false,
     Metadata: {
         let mut metadata = TestDescription::default_more_nodes().set_num_nodes(12,12);
@@ -75,7 +75,7 @@ cross_tests!(
     TestName: test_with_double_leader_failures,
     Impls: [MemoryImpl, PushCdnImpl, CliquenetImpl],
     Types: [TestConsecutiveLeaderTypes],
-    Versions: [TestVersions],
+    Versions: [TEST_VERSIONS.test],
     Ignore: false,
     Metadata: {
         let mut metadata = TestDescription::default_more_nodes().set_num_nodes(12, 12);

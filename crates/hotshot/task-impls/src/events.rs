@@ -12,8 +12,9 @@ use hotshot_task::task::TaskEvent;
 use hotshot_types::{
     consensus::PayloadWithMetadata,
     data::{
-        DaProposal2, Leaf2, PackedBundle, QuorumProposal2, QuorumProposalWrapper, UpgradeProposal,
-        VidCommitment, VidDisperse, VidDisperseShare, VidDisperseShare2,
+        DaProposal2, EpochNumber, Leaf2, PackedBundle, QuorumProposal2, QuorumProposalWrapper,
+        UpgradeProposal, VidCommitment, VidDisperse, VidDisperseShare, VidDisperseShare2,
+        ViewNumber,
     },
     message::Proposal,
     request_response::ProposalRequestPayload,
@@ -49,7 +50,7 @@ impl<TYPES: NodeType> TaskEvent for HotShotEvent<TYPES> {
 #[derive(Debug, Clone)]
 pub struct ProposalMissing<TYPES: NodeType> {
     /// View of missing proposal
-    pub view: TYPES::View,
+    pub view: ViewNumber,
     /// Channel to send the response back to
     pub response_chan: Sender<Option<Proposal<TYPES, QuorumProposal2<TYPES>>>>,
 }
@@ -71,13 +72,13 @@ pub struct HotShotTaskCompleted;
 #[allow(clippy::large_enum_variant)]
 pub enum HotShotEvent<TYPES: NodeType> {
     /// The state has been validated
-    StateValidated(TYPES::View),
+    StateValidated(ViewNumber),
     /// Block sent directly to the network
-    BlockSend(PayloadWithMetadata<TYPES>, TYPES::View),
+    BlockSend(PayloadWithMetadata<TYPES>, ViewNumber),
     /// Block received directly from the leader
-    BlockDirectlyRecv(PayloadWithMetadata<TYPES>, TYPES::View),
+    BlockDirectlyRecv(PayloadWithMetadata<TYPES>, ViewNumber),
     /// A block has been reconstructed and is ready to be stored
-    BlockReady(Arc<PayloadWithMetadata<TYPES>>, VidCommitment, TYPES::View),
+    BlockReady(Arc<PayloadWithMetadata<TYPES>>, VidCommitment, ViewNumber),
     /// Shutdown the task
     Shutdown,
     /// A quorum proposal has been received from the network; handled by the consensus task
@@ -156,11 +157,11 @@ pub enum HotShotEvent<TYPES: NodeType> {
     /// The DA leader has collected enough votes to form a DAC; emitted by the DA leader in the DA task; sent to the entire network via the networking task
     DacSend(DaCertificate2<TYPES>, TYPES::SignatureKey),
     /// The current view has changed; emitted by the replica in the consensus task or replica in the view sync task; received by almost all other tasks
-    ViewChange(TYPES::View, Option<TYPES::Epoch>),
+    ViewChange(ViewNumber, Option<EpochNumber>),
     /// The view and epoch number of the first epoch
-    SetFirstEpoch(TYPES::View, TYPES::Epoch),
+    SetFirstEpoch(ViewNumber, EpochNumber),
     /// Timeout for the view sync protocol; emitted by a replica in the view sync task
-    ViewSyncTimeout(TYPES::View, u64, ViewSyncPhase),
+    ViewSyncTimeout(ViewNumber, u64, ViewSyncPhase),
 
     /// Receive a `ViewSyncPreCommitVote` from the network; received by a relay in the view sync task
     ViewSyncPreCommitVoteRecv(ViewSyncPreCommitVote2<TYPES>),
@@ -191,9 +192,9 @@ pub enum HotShotEvent<TYPES: NodeType> {
     ViewSyncFinalizeCertificateSend(ViewSyncFinalizeCertificate2<TYPES>, TYPES::SignatureKey),
 
     /// Trigger the start of the view sync protocol; emitted by view sync task; internal trigger only
-    ViewSyncTrigger(TYPES::View),
+    ViewSyncTrigger(ViewNumber),
     /// A consensus view has timed out; emitted by a replica in the consensus task; received by the view sync task; internal event only
-    Timeout(TYPES::View, Option<TYPES::Epoch>),
+    Timeout(ViewNumber, Option<EpochNumber>),
     /// Receive transactions from the network
     TransactionsRecv(Vec<TYPES::Transaction>),
     /// Send transactions to the network
@@ -203,7 +204,7 @@ pub enum HotShotEvent<TYPES: NodeType> {
         VidCommitment,
         BuilderCommitment,
         <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
-        TYPES::View,
+        ViewNumber,
         Vec1<BuilderFee<TYPES>>,
     ),
     /// Event when the transactions task has sequenced transactions. Contains the encoded transactions, the metadata, and the view number
@@ -214,7 +215,7 @@ pub enum HotShotEvent<TYPES: NodeType> {
         TYPES::BlockPayload,
         <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
         VidCommitment,
-        TYPES::View,
+        ViewNumber,
     ),
 
     /// Send VID shares to VID storage nodes; emitted by the DA leader
@@ -235,9 +236,9 @@ pub enum HotShotEvent<TYPES: NodeType> {
     /// VID share data is validated.
     VidShareValidated(Proposal<TYPES, VidDisperseShare<TYPES>>),
     /// Upgrade proposal has been received from the network
-    UpgradeProposalRecv(Proposal<TYPES, UpgradeProposal<TYPES>>, TYPES::SignatureKey),
+    UpgradeProposalRecv(Proposal<TYPES, UpgradeProposal>, TYPES::SignatureKey),
     /// Upgrade proposal has been sent to the network
-    UpgradeProposalSend(Proposal<TYPES, UpgradeProposal<TYPES>>, TYPES::SignatureKey),
+    UpgradeProposalSend(Proposal<TYPES, UpgradeProposal>, TYPES::SignatureKey),
     /// Upgrade vote has been received from the network
     UpgradeVoteRecv(UpgradeVote<TYPES>),
     /// Upgrade vote has been sent to the network
@@ -325,7 +326,7 @@ pub enum HotShotEvent<TYPES: NodeType> {
 impl<TYPES: NodeType> HotShotEvent<TYPES> {
     #[allow(clippy::too_many_lines)]
     /// Return the view number for a hotshot event if present
-    pub fn view_number(&self) -> Option<TYPES::View> {
+    pub fn view_number(&self) -> Option<ViewNumber> {
         match self {
             HotShotEvent::StateValidated(view) => Some(*view),
             HotShotEvent::BlockReady(_, _, view) => Some(*view),

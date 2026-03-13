@@ -35,11 +35,11 @@ use hotshot_builder_shared::{
     utils::BuilderKeys,
 };
 use hotshot_types::{
-    data::VidCommitment,
+    data::{VidCommitment, ViewNumber},
     event::EventType,
     traits::{
         block_contents::{BlockPayload, Transaction},
-        node_implementation::{ConsensusTime, NodeType},
+        node_implementation::NodeType,
         signature_key::{BuilderSignatureKey, SignatureKey},
         EncodeBytes,
     },
@@ -292,7 +292,7 @@ where
 
     async fn wait_for_builder_state(
         &self,
-        state_id: &BuilderStateId<Types>,
+        state_id: &BuilderStateId,
         check_period: Duration,
     ) -> Result<Arc<BuilderState<Types>>, Error<Types>> {
         loop {
@@ -436,7 +436,7 @@ where
     )]
     pub(crate) async fn available_blocks_implementation(
         &self,
-        state_id: BuilderStateId<Types>,
+        state_id: BuilderStateId,
     ) -> Result<Vec<AvailableBlockInfo<Types>>, Error<Types>> {
         let start = Instant::now();
 
@@ -517,7 +517,7 @@ where
     )]
     pub(crate) async fn claim_block_implementation(
         &self,
-        block_id: BlockId<Types>,
+        block_id: BlockId,
     ) -> Result<AvailableBlockData<Types>, Error<Types>> {
         let (block_payload, metadata) = {
             // We store this read lock guard separately to make it explicit
@@ -567,7 +567,7 @@ where
     )]
     pub(crate) async fn claim_block_header_input_implementation(
         &self,
-        block_id: BlockId<Types>,
+        block_id: BlockId,
     ) -> Result<(bool, AvailableBlockHeaderInputV1<Types>), Error<Types>> {
         let metadata;
         let offered_fee;
@@ -638,7 +638,7 @@ where
 
         let state_id = BuilderStateId {
             parent_commitment: *parent_block,
-            parent_view: Types::View::new(parent_view),
+            parent_view: ViewNumber::new(parent_view),
         };
 
         trace!("Requesting available blocks");
@@ -669,7 +669,7 @@ where
 
         let block_id = BlockId {
             hash: block_hash.clone(),
-            view: Types::View::new(view_number),
+            view: ViewNumber::new(view_number),
         };
 
         trace!("Processing claim block request");
@@ -723,7 +723,7 @@ where
 
         let block_id = BlockId {
             hash: block_hash.clone(),
-            view: Types::View::new(view_number),
+            view: ViewNumber::new(view_number),
         };
 
         trace!("Processing claim_block_header_input request");

@@ -26,7 +26,8 @@ use hotshot_task_impls::events::HotShotEvent;
 use hotshot_types::{
     consensus::ConsensusMetricsValue,
     data::{
-        vid_commitment, Leaf2, VidCommitment, VidDisperse, VidDisperseAndDuration, VidDisperseShare,
+        vid_commitment, EpochNumber, Leaf2, VidCommitment, VidDisperse, VidDisperseAndDuration,
+        VidDisperseShare, ViewNumber,
     },
     epoch_membership::{EpochMembership, EpochMembershipCoordinator},
     message::{Proposal, UpgradeLock},
@@ -34,11 +35,7 @@ use hotshot_types::{
     simple_vote::{DaData2, DaVote2, SimpleVote, VersionedVoteData},
     stake_table::StakeTableEntries,
     storage_metrics::StorageMetricsValue,
-    traits::{
-        election::Membership,
-        node_implementation::{NodeType, Versions},
-        EncodeBytes,
-    },
+    traits::{election::Membership, node_implementation::NodeType, EncodeBytes},
     utils::{option_epoch_from_block_number, View, ViewInner},
     vote::{Certificate, HasViewNumber, Vote},
     ValidatorConfig,
@@ -59,11 +56,10 @@ pub type TestNodeKeyMap = BTreeMap<
 pub async fn build_system_handle<
     TYPES: NodeType<InstanceState = TestInstanceState>,
     I: NodeImplementation<TYPES, Storage = TestStorage<TYPES>> + TestableNodeImplementation<TYPES>,
-    V: Versions,
 >(
     node_id: u64,
 ) -> (
-    SystemContextHandle<TYPES, I, V>,
+    SystemContextHandle<TYPES, I>,
     Sender<Arc<HotShotEvent<TYPES>>>,
     Receiver<Arc<HotShotEvent<TYPES>>>,
     Arc<TestNodeKeyMap>,
@@ -71,7 +67,7 @@ pub async fn build_system_handle<
 where
     <TYPES as NodeType>::Membership: Membership<TYPES, Storage = TestStorage<TYPES>>,
 {
-    let builder: TestDescription<TYPES, I, V> = TestDescription::default_multiple_rounds();
+    let builder: TestDescription<TYPES, I> = TestDescription::default_multiple_rounds();
 
     let launcher = builder.gen_launcher().map_hotshot_config(|hotshot_config| {
         hotshot_config.epoch_height = 0;
@@ -85,12 +81,11 @@ where
 pub async fn build_system_handle_from_launcher<
     TYPES: NodeType<InstanceState = TestInstanceState>,
     I: NodeImplementation<TYPES, Storage = TestStorage<TYPES>> + TestableNodeImplementation<TYPES>,
-    V: Versions,
 >(
     node_id: u64,
-    launcher: &TestLauncher<TYPES, I, V>,
+    launcher: &TestLauncher<TYPES, I>,
 ) -> (
-    SystemContextHandle<TYPES, I, V>,
+    SystemContextHandle<TYPES, I>,
     Sender<Arc<HotShotEvent<TYPES>>>,
     Receiver<Arc<HotShotEvent<TYPES>>>,
     Arc<TestNodeKeyMap>,
@@ -102,7 +97,7 @@ where
     let storage = (launcher.resource_generators.storage)(node_id);
     let hotshot_config = (launcher.resource_generators.hotshot_config)(node_id);
 
-    let initializer = HotShotInitializer::<TYPES>::from_genesis::<V>(
+    let initializer = HotShotInitializer::<TYPES>::from_genesis(
         TestInstanceState::new(
             launcher
                 .metadata
@@ -114,6 +109,7 @@ where
         launcher.metadata.test_config.epoch_height,
         launcher.metadata.test_config.epoch_start_block,
         vec![],
+        hotshot_config.upgrade,
     )
     .await
     .unwrap();
@@ -170,19 +166,18 @@ where
 /// if we fail to sign the data
 pub async fn build_cert<
     TYPES: NodeType,
-    V: Versions,
     DATAType: Committable + Clone + Eq + Hash + Serialize + Debug + 'static,
     VOTE: Vote<TYPES, Commitment = DATAType>,
     CERT: Certificate<TYPES, VOTE::Commitment, Voteable = VOTE::Commitment>,
 >(
     data: DATAType,
     epoch_membership: &EpochMembership<TYPES>,
-    view: TYPES::View,
+    view: ViewNumber,
     public_key: &TYPES::SignatureKey,
     private_key: &<TYPES::SignatureKey as SignatureKey>::PrivateKey,
-    upgrade_lock: &UpgradeLock<TYPES, V>,
+    upgrade_lock: &UpgradeLock<TYPES>,
 ) -> CERT {
-    let real_qc_sig = build_assembled_sig::<TYPES, V, VOTE, CERT, DATAType>(
+    let real_qc_sig = build_assembled_sig::<TYPES, VOTE, CERT, DATAType>(
         &data,
         epoch_membership,
         view,
@@ -234,15 +229,14 @@ pub fn vid_share<TYPES: NodeType>(
 /// if fails to convert node id into keypair
 pub async fn build_assembled_sig<
     TYPES: NodeType,
-    V: Versions,
     VOTE: Vote<TYPES>,
     CERT: Certificate<TYPES, VOTE::Commitment, Voteable = VOTE::Commitment>,
     DATAType: Committable + Clone + Eq + Hash + Serialize + Debug + 'static,
 >(
     data: &DATAType,
     epoch_membership: &EpochMembership<TYPES>,
-    view: TYPES::View,
-    upgrade_lock: &UpgradeLock<TYPES, V>,
+    view: ViewNumber,
+    upgrade_lock: &UpgradeLock<TYPES>,
 ) -> <TYPES::SignatureKey as SignatureKey>::QcType {
     let stake_table = CERT::stake_table(epoch_membership).await;
     let stake_table_entries = StakeTableEntries::<TYPES>::from(stake_table.clone()).0;
@@ -295,7 +289,7 @@ pub fn key_pair_for_id<TYPES: NodeType>(
     (private_key, public_key)
 }
 
-pub async fn da_payload_commitment<TYPES: NodeType, V: Versions>(
+pub async fn da_payload_commitment<TYPES: NodeType>(
     membership: &EpochMembership<TYPES>,
     transactions: Vec<TestTransaction>,
     metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
@@ -303,7 +297,7 @@ pub async fn da_payload_commitment<TYPES: NodeType, V: Versions>(
 ) -> VidCommitment {
     let encoded_transactions = TestTransaction::encode(&transactions);
 
-    vid_commitment::<V>(
+    vid_commitment(
         &encoded_transactions,
         &metadata.encode(),
         membership.total_nodes().await,
@@ -311,26 +305,26 @@ pub async fn da_payload_commitment<TYPES: NodeType, V: Versions>(
     )
 }
 
-pub async fn build_payload_commitment<TYPES: NodeType, V: Versions>(
+pub async fn build_payload_commitment<TYPES: NodeType>(
     membership: &EpochMembership<TYPES>,
-    view: TYPES::View,
+    view: ViewNumber,
     version: Version,
 ) -> VidCommitment {
     // Make some empty encoded transactions, we just care about having a commitment handy for the
     // later calls. We need the VID commitment to be able to propose later.
     let encoded_transactions = Vec::new();
     let num_storage_nodes = membership.committee_members(view).await.len();
-    vid_commitment::<V>(&encoded_transactions, &[], num_storage_nodes, version)
+    vid_commitment(&encoded_transactions, &[], num_storage_nodes, version)
 }
 
-pub async fn build_vid_proposal<TYPES: NodeType, V: Versions>(
+pub async fn build_vid_proposal<TYPES: NodeType>(
     membership: &EpochMembership<TYPES>,
-    view_number: TYPES::View,
-    epoch_number: Option<TYPES::Epoch>,
+    view_number: ViewNumber,
+    epoch_number: Option<EpochNumber>,
     payload: &TYPES::BlockPayload,
     metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
     private_key: &<TYPES::SignatureKey as SignatureKey>::PrivateKey,
-    upgrade_lock: &UpgradeLock<TYPES, V>,
+    upgrade_lock: &UpgradeLock<TYPES>,
 ) -> (
     Proposal<TYPES, VidDisperse<TYPES>>,
     Vec<Proposal<TYPES, VidDisperseShare<TYPES>>>,
@@ -338,7 +332,7 @@ pub async fn build_vid_proposal<TYPES: NodeType, V: Versions>(
     let VidDisperseAndDuration {
         disperse: vid_disperse,
         duration: _,
-    } = VidDisperse::calculate_vid_disperse::<V>(
+    } = VidDisperse::calculate_vid_disperse(
         payload,
         &membership.coordinator,
         view_number,
@@ -374,19 +368,19 @@ pub async fn build_vid_proposal<TYPES: NodeType, V: Versions>(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub async fn build_da_certificate<TYPES: NodeType, V: Versions>(
+pub async fn build_da_certificate<TYPES: NodeType>(
     membership: &EpochMembership<TYPES>,
-    view_number: TYPES::View,
-    epoch_number: Option<TYPES::Epoch>,
+    view_number: ViewNumber,
+    epoch_number: Option<EpochNumber>,
     transactions: Vec<TestTransaction>,
     metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
     public_key: &TYPES::SignatureKey,
     private_key: &<TYPES::SignatureKey as SignatureKey>::PrivateKey,
-    upgrade_lock: &UpgradeLock<TYPES, V>,
+    upgrade_lock: &UpgradeLock<TYPES>,
 ) -> anyhow::Result<DaCertificate2<TYPES>> {
     let encoded_transactions = TestTransaction::encode(&transactions);
 
-    let da_payload_commitment = vid_commitment::<V>(
+    let da_payload_commitment = vid_commitment(
         &encoded_transactions,
         &metadata.encode(),
         membership.total_nodes().await,
@@ -395,7 +389,7 @@ pub async fn build_da_certificate<TYPES: NodeType, V: Versions>(
 
     let next_epoch_da_payload_commitment =
         if upgrade_lock.epochs_enabled(view_number).await && membership.epoch().is_some() {
-            Some(vid_commitment::<V>(
+            Some(vid_commitment(
                 &encoded_transactions,
                 &metadata.encode(),
                 membership
@@ -416,7 +410,7 @@ pub async fn build_da_certificate<TYPES: NodeType, V: Versions>(
     };
 
     anyhow::Ok(
-        build_cert::<TYPES, V, DaData2<TYPES>, DaVote2<TYPES>, DaCertificate2<TYPES>>(
+        build_cert::<TYPES, DaData2, DaVote2<TYPES>, DaCertificate2<TYPES>>(
             da_data,
             membership,
             view_number,
@@ -446,9 +440,9 @@ where
 }
 
 /// This function will create a fake [`View`] from a provided [`Leaf`].
-pub async fn build_fake_view_with_leaf<V: Versions>(
+pub async fn build_fake_view_with_leaf(
     leaf: Leaf2<TestTypes>,
-    upgrade_lock: &UpgradeLock<TestTypes, V>,
+    upgrade_lock: &UpgradeLock<TestTypes>,
     epoch_height: u64,
 ) -> View<TestTypes> {
     build_fake_view_with_leaf_and_state(
@@ -461,14 +455,13 @@ pub async fn build_fake_view_with_leaf<V: Versions>(
 }
 
 /// This function will create a fake [`View`] from a provided [`Leaf`] and `state`.
-pub async fn build_fake_view_with_leaf_and_state<V: Versions>(
+pub async fn build_fake_view_with_leaf_and_state(
     leaf: Leaf2<TestTypes>,
     state: TestValidatedState,
-    _upgrade_lock: &UpgradeLock<TestTypes, V>,
+    _upgrade_lock: &UpgradeLock<TestTypes>,
     epoch_height: u64,
 ) -> View<TestTypes> {
-    let epoch =
-        option_epoch_from_block_number::<TestTypes>(leaf.with_epoch, leaf.height(), epoch_height);
+    let epoch = option_epoch_from_block_number(leaf.with_epoch, leaf.height(), epoch_height);
     View {
         view_inner: ViewInner::Leaf {
             leaf: leaf.commit(),

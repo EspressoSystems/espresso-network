@@ -14,9 +14,7 @@ use espresso_contract_deployer::{
     is_proxy_contract, network_config::fetch_stake_table_from_sequencer,
 };
 use espresso_types::SeqTypes;
-use hotshot_types::{
-    light_client::StakeTableState, stake_table::HSStakeTable, traits::node_implementation::NodeType,
-};
+use hotshot_types::{data::EpochNumber, light_client::StakeTableState, stake_table::HSStakeTable};
 use jf_plonk::PlonkError;
 use tide_disco::error::ServerError;
 use url::Url;
@@ -72,7 +70,7 @@ pub struct ProverServiceState {
     /// The configuration of the prover service
     pub config: StateProverConfig,
     /// The current epoch number of the stake table
-    pub epoch: Option<<SeqTypes as NodeType>::Epoch>,
+    pub epoch: Option<EpochNumber>,
     /// The stake table
     pub stake_table: HSStakeTable<SeqTypes>,
     /// The current stake table state
@@ -95,10 +93,7 @@ impl ProverServiceState {
         })
     }
 
-    pub async fn sync_with_epoch(
-        &mut self,
-        epoch: Option<<SeqTypes as NodeType>::Epoch>,
-    ) -> Result<()> {
+    pub async fn sync_with_epoch(&mut self, epoch: Option<EpochNumber>) -> Result<()> {
         if epoch != self.epoch {
             self.stake_table = fetch_stake_table_from_sequencer(&self.config.sequencer_url, epoch)
                 .await

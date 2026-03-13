@@ -238,7 +238,7 @@ jobs:
           cargo nextest run --archive-file nextest-archive-postgres.tar.zst  --verbose --no-fail-fast \
           --workspace-remap $PWD \
           --partition hash:${{ matrix.partition }}/10
-        timeout-minutes: 20
+        timeout-minutes: 30
 
   test-sqlite:
     needs: build-test-artifacts-sqlite
@@ -273,9 +273,10 @@ jobs:
           cargo nextest run --archive-file nextest-archive-sqlite.tar.zst  --verbose --no-fail-fast \
           --workspace-remap $PWD \
           --partition hash:${{ matrix.partition }}/10
-        timeout-minutes: 20
+        timeout-minutes: 30
 
   test-go-sdk:
+    needs: build-test-bins-dev-node
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -289,9 +290,13 @@ jobs:
           extraPullNames: nix-community
           skipPush: ${{ github.actor == 'dependabot[bot]' }}
 
-      - name: Build espresso-dev-node
-        run: |
-          nix develop --accept-flake-config -c cargo build -p espresso-dev-node
+        # TODO: this downloads all (available) artifacts, which is a bit wasteful but artifact
+        # downloads always fail if I try to select a subset.
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Make binary executable
+        run: chmod +x test-binaries-dev-node/espresso-dev-node
 
       - name: Build verification module
         run: |
@@ -300,6 +305,8 @@ jobs:
       - name: Test
         run: |
           nix develop --accept-flake-config -c just test-go
+        env:
+          ESPRESSO_DEV_NODE_BIN: ${{ github.workspace }}/test-binaries-dev-node/espresso-dev-node
 
   test-integration:
     needs: [build-test-bins, build-test-bins-sqlite, build-test-artifacts-postgres]

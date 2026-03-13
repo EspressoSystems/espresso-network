@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use alloy::primitives::U256;
 use hotshot_example_types::node_types::{
-    CliquenetImpl, EpochsTestVersions, MemoryImpl, PushCdnImpl, TestTypes,
+    CliquenetImpl, MemoryImpl, PushCdnImpl, TestTypes, TEST_VERSIONS,
 };
 use hotshot_macros::cross_tests;
 use hotshot_testing::{
@@ -25,7 +25,7 @@ cross_tests!(
     TestName: test_unequal_stake_success_with_failing_majority_count,
     Impls: [MemoryImpl, PushCdnImpl, CliquenetImpl],
     Types: [TestTypes],
-    Versions: [EpochsTestVersions],
+    Versions: [TEST_VERSIONS.epoch],
     Ignore: false,
     Metadata: {
         let mut metadata = TestDescription {

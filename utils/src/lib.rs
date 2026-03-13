@@ -14,6 +14,7 @@ use committable::{Commitment, Committable};
 use tokio::time::sleep;
 use url::Url;
 
+pub mod build_info;
 pub mod logging;
 pub mod ser;
 pub mod test_utils;

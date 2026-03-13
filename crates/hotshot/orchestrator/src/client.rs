@@ -14,8 +14,9 @@ use clap::Parser;
 use futures::{Future, FutureExt};
 use hotshot_types::{
     benchmarking::{LeaderViewStats, ReplicaViewStats},
+    data::ViewNumber,
     network::{NetworkConfig, NetworkConfigSource},
-    traits::node_implementation::{ConsensusTime, NodeType},
+    traits::node_implementation::NodeType,
     PeerConfig, ValidatorConfig,
 };
 use serde::{Deserialize, Serialize};
@@ -34,35 +35,17 @@ pub struct OrchestratorClient {
 }
 
 /// Struct describing a benchmark result
-#[derive(Serialize, Deserialize, Clone)]
-pub struct BenchResults<V: ConsensusTime> {
+#[derive(Serialize, Deserialize, Clone, Default)]
+pub struct BenchResults {
     pub node_index: u64,
-    #[serde(bound(deserialize = "V: ConsensusTime"))]
-    pub leader_view_stats: BTreeMap<V, LeaderViewStats<V>>,
-    #[serde(bound(deserialize = "V: ConsensusTime"))]
-    pub replica_view_stats: BTreeMap<V, ReplicaViewStats<V>>,
-    #[serde(bound(deserialize = "V: ConsensusTime"))]
-    pub latencies_by_view: BTreeMap<V, i128>,
-    #[serde(bound(deserialize = "V: ConsensusTime"))]
-    pub sizes_by_view: BTreeMap<V, i128>,
-    #[serde(bound(deserialize = "V: ConsensusTime"))]
-    pub timeouts: BTreeSet<V>,
+    pub leader_view_stats: BTreeMap<ViewNumber, LeaderViewStats>,
+    pub replica_view_stats: BTreeMap<ViewNumber, ReplicaViewStats>,
+    pub latencies_by_view: BTreeMap<ViewNumber, i128>,
+    pub sizes_by_view: BTreeMap<ViewNumber, i128>,
+    pub timeouts: BTreeSet<ViewNumber>,
     pub total_time_millis: i128,
 }
 
-impl<V: ConsensusTime> Default for BenchResults<V> {
-    fn default() -> Self {
-        Self {
-            node_index: 0,
-            leader_view_stats: BTreeMap::new(),
-            replica_view_stats: BTreeMap::new(),
-            latencies_by_view: BTreeMap::new(),
-            sizes_by_view: BTreeMap::new(),
-            timeouts: BTreeSet::new(),
-            total_time_millis: 0,
-        }
-    }
-}
 // VALIDATOR
 
 #[derive(Parser, Debug, Clone)]
@@ -416,10 +399,7 @@ impl OrchestratorClient {
     /// # Panics
     /// Panics if unable to post
     #[instrument(skip_all, name = "orchestrator metrics")]
-    pub async fn post_bench_results<TYPES: NodeType>(
-        &self,
-        bench_results: BenchResults<TYPES::View>,
-    ) {
+    pub async fn post_bench_results<TYPES: NodeType>(&self, bench_results: BenchResults) {
         let _send_metrics_f: Result<(), ClientError> = self
             .client
             .post("api/results")

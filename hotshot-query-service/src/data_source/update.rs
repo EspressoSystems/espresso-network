@@ -22,7 +22,7 @@ use hotshot_types::{
     event::LeafInfo,
     traits::{
         block_contents::{BlockHeader, BlockPayload, EncodeBytes, GENESIS_VID_NUM_STORAGE_NODES},
-        node_implementation::{ConsensusTime, NodeType},
+        node_implementation::NodeType,
     },
     vid::{
         advz::advz_scheme,

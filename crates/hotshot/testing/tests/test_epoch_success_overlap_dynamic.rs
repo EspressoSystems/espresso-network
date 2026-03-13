@@ -5,8 +5,8 @@
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
 use hotshot_example_types::node_types::{
-    CliquenetImpl, EpochsTestVersions, MemoryImpl, PushCdnImpl, RandomOverlapQuorumFilterConfig,
-    TestTypesRandomizedCommitteeMembers,
+    CliquenetImpl, MemoryImpl, PushCdnImpl, RandomOverlapQuorumFilterConfig,
+    TestTypesRandomizedCommitteeMembers, TEST_VERSIONS,
 };
 use hotshot_macros::cross_tests;
 use hotshot_testing::{block_builder::SimpleBuilderImplementation, test_builder::TestDescription};
@@ -17,7 +17,7 @@ cross_tests!(
     Types: [
         TestTypesRandomizedCommitteeMembers<RandomOverlapQuorumFilterConfig<123, 4, 7, 0, 2>, RandomOverlapQuorumFilterConfig<123, 4, 7, 0, 2>>, // Overlap = Dynamic
     ],
-    Versions: [EpochsTestVersions],
+    Versions: [TEST_VERSIONS.epoch],
     Ignore: false,
     Metadata: {
         TestDescription::default().set_num_nodes(14, 14)

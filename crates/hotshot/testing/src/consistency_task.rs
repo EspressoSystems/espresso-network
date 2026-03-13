@@ -5,21 +5,22 @@
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
 #![allow(clippy::unwrap_or_default)]
-use std::{collections::BTreeMap, marker::PhantomData, sync::Arc};
+use std::{collections::BTreeMap, sync::Arc};
 
 use async_broadcast::Sender;
 use async_trait::async_trait;
 use committable::Committable;
 use hotshot_example_types::block_types::TestBlockHeader;
 use hotshot_types::{
-    data::Leaf2,
+    data::{Leaf2, ViewNumber},
     event::{Event, EventType},
     message::UpgradeLock,
-    traits::node_implementation::{ConsensusTime, NodeType, Versions},
+    traits::node_implementation::NodeType,
     vote::HasViewNumber,
 };
 use hotshot_utils::anytrace::*;
 use tokio::task::JoinHandle;
+use versions::{Upgrade, VERSION_0_0};
 
 use crate::{
     overall_safety_task::OverallSafetyPropertiesDescription,
@@ -28,10 +29,10 @@ use crate::{
 };
 
 /// Map from views to leaves for a single node, allowing multiple leaves for each view (because the node may a priori send us multiple leaves for a given view).
-pub type NodeMap<TYPES> = BTreeMap<<TYPES as NodeType>::View, Vec<Leaf2<TYPES>>>;
+pub type NodeMap<TYPES> = BTreeMap<ViewNumber, Vec<Leaf2<TYPES>>>;
 
 /// A sanitized map from views to leaves for a single node, with only a single leaf per view.
-pub type NodeMapSanitized<TYPES> = BTreeMap<<TYPES as NodeType>::View, Leaf2<TYPES>>;
+pub type NodeMapSanitized<TYPES> = BTreeMap<ViewNumber, Leaf2<TYPES>>;
 
 /// Validate that the `NodeMap` only has a single leaf per view.
 fn sanitize_node_map<TYPES: NodeType>(
@@ -61,9 +62,7 @@ fn sanitize_node_map<TYPES: NodeType>(
 }
 
 /// For a NodeMapSanitized, we validate that each leaf extends the preceding leaf.
-async fn validate_node_map<TYPES: NodeType, V: Versions>(
-    node_map: &NodeMapSanitized<TYPES>,
-) -> Result<()> {
+async fn validate_node_map<TYPES: NodeType>(node_map: &NodeMapSanitized<TYPES>) -> Result<()> {
     // We first scan 3-chains to find an upgrade certificate that has reached a decide.
     let leaf_triples = node_map
         .values()
@@ -72,7 +71,7 @@ async fn validate_node_map<TYPES: NodeType, V: Versions>(
         .map(|((a, b), c)| (a, b, c));
 
     let mut decided_upgrade_certificate = None;
-    let mut view_decided = TYPES::View::new(0);
+    let mut view_decided = ViewNumber::new(0);
 
     for (grandparent, _parent, child) in leaf_triples {
         if let Some(cert) = grandparent.upgrade_certificate() {
@@ -89,7 +88,7 @@ async fn validate_node_map<TYPES: NodeType, V: Versions>(
     // we cannot immediately put the upgrade certificate in the lock.
     //
     // Instead, we initialize an empty lock and add the certificate in the appropriate view.
-    let upgrade_lock = UpgradeLock::<TYPES, V>::new();
+    let upgrade_lock = UpgradeLock::<TYPES>::new(Upgrade::trivial(VERSION_0_0));
 
     let leaf_pairs = node_map.values().zip(node_map.values().skip(1));
 
@@ -158,19 +157,19 @@ fn sanitize_network_map<TYPES: NodeType>(
     Ok(result)
 }
 
-pub type ViewMap<TYPES> = BTreeMap<<TYPES as NodeType>::View, BTreeMap<usize, Leaf2<TYPES>>>;
+pub type ViewMap<TYPES> = BTreeMap<ViewNumber, BTreeMap<usize, Leaf2<TYPES>>>;
 
 // Invert the network map by interchanging the roles of the node_id and view number.
 //
 // # Errors
 //
 // Returns an error if any node map is invalid.
-async fn invert_network_map<TYPES: NodeType, V: Versions>(
+async fn invert_network_map<TYPES: NodeType>(
     network_map: &NetworkMapSanitized<TYPES>,
 ) -> Result<ViewMap<TYPES>> {
     let mut inverted_map = BTreeMap::new();
     for (node_id, node_map) in network_map.iter() {
-        validate_node_map::<TYPES, V>(node_map)
+        validate_node_map::<TYPES>(node_map)
             .await
             .context(|e| error!("Node {node_id} has an invalid leaf history: {e}"))?;
 
@@ -185,7 +184,7 @@ async fn invert_network_map<TYPES: NodeType, V: Versions>(
 }
 
 /// A view map, sanitized to have exactly one leaf per view.
-pub type ViewMapSanitized<TYPES> = BTreeMap<<TYPES as NodeType>::View, Leaf2<TYPES>>;
+pub type ViewMapSanitized<TYPES> = BTreeMap<ViewNumber, Leaf2<TYPES>>;
 
 fn sanitize_view_map<TYPES: NodeType>(
     view_map: &ViewMap<TYPES>,
@@ -233,7 +232,7 @@ enum TestProgress {
 }
 
 /// Data availability task state
-pub struct ConsistencyTask<TYPES: NodeType, V: Versions> {
+pub struct ConsistencyTask<TYPES: NodeType> {
     /// A map from node ids to (leaves keyed on view number)
     pub consensus_leaves: NetworkMap<TYPES>,
     /// safety task requirements
@@ -244,19 +243,17 @@ pub struct ConsistencyTask<TYPES: NodeType, V: Versions> {
     pub errors: Vec<Error>,
     /// channel used to shutdown the test
     pub test_sender: Sender<TestEvent>,
-    /// phantom marker
-    pub _pd: PhantomData<V>,
     /// function used to validate the number of transactions committed in each block
     pub validate_transactions: TransactionValidator,
     /// running timeout task
     pub timeout_task: JoinHandle<()>,
 }
 
-impl<TYPES: NodeType<BlockHeader = TestBlockHeader>, V: Versions> ConsistencyTask<TYPES, V> {
+impl<TYPES: NodeType<BlockHeader = TestBlockHeader>> ConsistencyTask<TYPES> {
     pub async fn validate(&self) -> Result<()> {
         let sanitized_network_map = sanitize_network_map(&self.consensus_leaves)?;
 
-        let inverted_map = invert_network_map::<TYPES, V>(&sanitized_network_map).await?;
+        let inverted_map = invert_network_map::<TYPES>(&sanitized_network_map).await?;
 
         let sanitized_view_map = sanitize_view_map(&inverted_map)?;
         let num_successful_views = sanitized_view_map.iter().len();
@@ -322,7 +319,7 @@ impl<TYPES: NodeType<BlockHeader = TestBlockHeader>, V: Versions> ConsistencyTas
     async fn check_total_successes(&self) -> Result<TestProgress> {
         let sanitized_network_map = sanitize_network_map(&self.consensus_leaves)?;
 
-        let inverted_map = invert_network_map::<TYPES, V>(&sanitized_network_map).await?;
+        let inverted_map = invert_network_map::<TYPES>(&sanitized_network_map).await?;
 
         if inverted_map.len() >= self.safety_properties.num_successful_views {
             Ok(TestProgress::Finished)
@@ -347,7 +344,7 @@ impl<TYPES: NodeType<BlockHeader = TestBlockHeader>, V: Versions> ConsistencyTas
     pub async fn check_view_failure(&self) -> Result<()> {
         let sanitized_network_map = sanitize_network_map(&self.consensus_leaves)?;
 
-        let mut inverted_map = invert_network_map::<TYPES, V>(&sanitized_network_map).await?;
+        let mut inverted_map = invert_network_map::<TYPES>(&sanitized_network_map).await?;
 
         let (current_view, _) = inverted_map
             .pop_last()
@@ -376,9 +373,7 @@ impl<TYPES: NodeType<BlockHeader = TestBlockHeader>, V: Versions> ConsistencyTas
 }
 
 #[async_trait]
-impl<TYPES: NodeType<BlockHeader = TestBlockHeader>, V: Versions> TestTaskState
-    for ConsistencyTask<TYPES, V>
-{
+impl<TYPES: NodeType<BlockHeader = TestBlockHeader>> TestTaskState for ConsistencyTask<TYPES> {
     type Event = Arc<Event<TYPES>>;
     type Error = Error;
 

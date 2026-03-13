@@ -77,7 +77,7 @@ struct OrchestratorState<TYPES: NodeType> {
     /// The total nodes that have posted they are ready to start
     nodes_connected: HashSet<PeerConfig<TYPES>>,
     /// The results of the benchmarks
-    bench_results: BTreeMap<u64, BenchResults<TYPES::View>>,
+    bench_results: BTreeMap<u64, BenchResults>,
     /// The number of nodes that have posted their results
     nodes_post_results: u64,
     /// Whether the orchestrator can be started manually
@@ -131,7 +131,7 @@ impl<TYPES: NodeType> OrchestratorState<TYPES> {
     }
 
     /// Output the results to a csv file according to orchestrator state
-    pub fn output_to_csv(result: BenchResults<TYPES::View>) {
+    pub fn output_to_csv(result: BenchResults) {
         // Open the CSV file in append mode
         let leader_results_csv_file = OpenOptions::new()
             .write(true)
@@ -240,7 +240,7 @@ pub trait OrchestratorApi<TYPES: NodeType> {
     /// post endpoint for the results of the run
     /// # Errors
     /// if unable to serve
-    fn post_run_results(&mut self, metrics: BenchResults<TYPES::View>) -> Result<(), ServerError>;
+    fn post_run_results(&mut self, metrics: BenchResults) -> Result<(), ServerError>;
     /// get endpoint for the normalized metrics for the most recent epoch
     /// # Errors
     /// if unable to serve
@@ -571,7 +571,7 @@ where
     }
 
     // Aggregates results of the run from all nodes
-    fn post_run_results(&mut self, metrics: BenchResults<TYPES::View>) -> Result<(), ServerError> {
+    fn post_run_results(&mut self, metrics: BenchResults) -> Result<(), ServerError> {
         self.nodes_post_results += 1;
         self.bench_results
             .insert(metrics.node_index, metrics.clone());
@@ -723,7 +723,7 @@ where
     })?
     .post("post_results", |req, state| {
         async move {
-            let metrics: Result<BenchResults<TYPES::View>, RequestError> = req.body_json();
+            let metrics: Result<BenchResults, RequestError> = req.body_json();
             state.post_run_results(metrics.unwrap())
         }
         .boxed()

@@ -37,6 +37,7 @@ use hotshot_task_impls::{
 use hotshot_types::{
     consensus::OuterConsensus,
     constants::EVENT_CHANNEL_SIZE,
+    data::ViewNumber,
     message::{
         GeneralConsensusMessage, Message, MessageKind, SequencingMessage, UpgradeLock,
         EXTERNAL_MESSAGE_VERSION,
@@ -44,18 +45,18 @@ use hotshot_types::{
     storage_metrics::StorageMetricsValue,
     traits::{
         network::ConnectedNetwork,
-        node_implementation::{ConsensusTime, NodeImplementation, NodeType},
+        node_implementation::{NodeImplementation, NodeType},
     },
     vote::HasViewNumber,
 };
 use tokio::{spawn, time::sleep};
-use vbs::version::{StaticVersionType, Version};
+use vbs::version::Version;
 
 use crate::{
     genesis_epoch_from_version, tasks::task_state::CreateTaskState, types::SystemContextHandle,
     ConsensusApi, ConsensusMetricsValue, ConsensusTaskRegistry, EpochMembershipCoordinator,
     HotShotConfig, HotShotInitializer, NetworkTaskRegistry, SignatureKey, StateSignatureKey,
-    SystemContext, Versions,
+    SystemContext,
 };
 
 /// event for global event stream
@@ -68,12 +69,8 @@ pub enum GlobalEvent {
 }
 
 /// Add tasks for network requests and responses
-pub async fn add_request_network_task<
-    TYPES: NodeType,
-    I: NodeImplementation<TYPES>,
-    V: Versions,
->(
-    handle: &mut SystemContextHandle<TYPES, I, V>,
+pub async fn add_request_network_task<TYPES: NodeType, I: NodeImplementation<TYPES>>(
+    handle: &mut SystemContextHandle<TYPES, I>,
 ) {
     let mut state = NetworkRequestState::<TYPES, I>::create_from(handle).await;
     state.vid_event_stream = handle.vid_event_stream.0.clone();
@@ -87,10 +84,10 @@ pub async fn add_request_network_task<
 }
 
 /// Add a task which responds to requests on the network.
-pub fn add_response_task<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>(
-    handle: &mut SystemContextHandle<TYPES, I, V>,
+pub fn add_response_task<TYPES: NodeType, I: NodeImplementation<TYPES>>(
+    handle: &mut SystemContextHandle<TYPES, I>,
 ) {
-    let state = NetworkResponseState::<TYPES, V>::new(
+    let state = NetworkResponseState::<TYPES>::new(
         handle.hotshot.consensus(),
         handle.membership_coordinator.clone(),
         handle.public_key().clone(),
@@ -98,18 +95,16 @@ pub fn add_response_task<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versi
         handle.hotshot.id,
         handle.hotshot.upgrade_lock.clone(),
     );
-    handle
-        .network_registry
-        .register(run_response_task::<TYPES, V>(
-            state,
-            handle.internal_event_stream.1.activate_cloned(),
-            handle.internal_event_stream.0.clone(),
-        ));
+    handle.network_registry.register(run_response_task::<TYPES>(
+        state,
+        handle.internal_event_stream.1.activate_cloned(),
+        handle.internal_event_stream.0.clone(),
+    ));
 }
 
 /// Add a task which updates our queue length metric at a set interval
-pub fn add_queue_len_task<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>(
-    handle: &mut SystemContextHandle<TYPES, I, V>,
+pub fn add_queue_len_task<TYPES: NodeType, I: NodeImplementation<TYPES>>(
+    handle: &mut SystemContextHandle<TYPES, I>,
 ) {
     let consensus = handle.hotshot.consensus();
     let rx = handle.internal_event_stream.1.clone();
@@ -136,14 +131,13 @@ pub fn add_network_message_task<
     TYPES: NodeType,
     I: NodeImplementation<TYPES>,
     NET: ConnectedNetwork<TYPES::SignatureKey>,
-    V: Versions,
 >(
-    handle: &mut SystemContextHandle<TYPES, I, V>,
+    handle: &mut SystemContextHandle<TYPES, I>,
     channel: &Arc<NET>,
 ) {
     let upgrade_lock = handle.hotshot.upgrade_lock.clone();
 
-    let network_state: NetworkMessageTaskState<TYPES, V> = NetworkMessageTaskState {
+    let network_state: NetworkMessageTaskState<TYPES> = NetworkMessageTaskState {
         internal_event_stream: handle.internal_event_stream.0.clone(),
         external_event_stream: handle.output_event_stream.0.clone(),
         vid_event_stream: handle.vid_event_stream.0.clone(),
@@ -226,16 +220,15 @@ pub fn add_network_message_task<
 pub fn add_network_event_task<
     TYPES: NodeType,
     I: NodeImplementation<TYPES>,
-    V: Versions,
     NET: ConnectedNetwork<TYPES::SignatureKey>,
 >(
-    handle: &mut SystemContextHandle<TYPES, I, V>,
+    handle: &mut SystemContextHandle<TYPES, I>,
     network: Arc<NET>,
 ) {
-    let network_state: NetworkEventTaskState<_, V, _, _> = NetworkEventTaskState {
+    let network_state: NetworkEventTaskState<_, _, _> = NetworkEventTaskState {
         network,
-        view: TYPES::View::genesis(),
-        epoch: genesis_epoch_from_version::<V, TYPES>(),
+        view: ViewNumber::genesis(),
+        epoch: genesis_epoch_from_version(handle.hotshot.upgrade_lock.upgrade.base),
         membership_coordinator: handle.membership_coordinator.clone(),
         storage: handle.storage(),
         storage_metrics: handle.storage_metrics(),
@@ -254,16 +247,16 @@ pub fn add_network_event_task<
 }
 
 /// Adds consensus-related tasks to a `SystemContextHandle`.
-pub async fn add_consensus_tasks<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>(
-    handle: &mut SystemContextHandle<TYPES, I, V>,
+pub async fn add_consensus_tasks<TYPES: NodeType, I: NodeImplementation<TYPES>>(
+    handle: &mut SystemContextHandle<TYPES, I>,
 ) {
-    handle.add_task(ViewSyncTaskState::<TYPES, V>::create_from(handle).await);
-    handle.add_task(VidTaskState::<TYPES, I, V>::create_from(handle).await);
+    handle.add_task(ViewSyncTaskState::<TYPES>::create_from(handle).await);
+    handle.add_task(VidTaskState::<TYPES, I>::create_from(handle).await);
     handle.add_task(BlockStorerTaskState::<TYPES, I>::create_from(handle).await);
     handle.add_task_with_vid(ReconstructTaskState::<TYPES>::create_from(handle).await);
-    handle.add_task(BlockTaskState::<TYPES, V>::create_from(handle).await);
+    handle.add_task(BlockTaskState::<TYPES>::create_from(handle).await);
     // handle.add_task(TransactionTaskState::<TYPES, V>::create_from(handle).await);
-
+    let upgrade = handle.hotshot.upgrade_lock.upgrade;
     {
         let mut upgrade_certificate_lock = handle
             .hotshot
@@ -275,7 +268,7 @@ pub async fn add_consensus_tasks<TYPES: NodeType, I: NodeImplementation<TYPES>, 
         // clear the loaded certificate if it's now outdated
         if upgrade_certificate_lock
             .as_ref()
-            .is_some_and(|cert| V::Base::VERSION >= cert.data.new_version)
+            .is_some_and(|cert| upgrade.base >= cert.data.new_version)
         {
             tracing::warn!("Discarding loaded upgrade certificate due to version configuration.");
             *upgrade_certificate_lock = None;
@@ -283,9 +276,9 @@ pub async fn add_consensus_tasks<TYPES: NodeType, I: NodeImplementation<TYPES>, 
     }
 
     // only spawn the upgrade task if we are actually configured to perform an upgrade.
-    if V::Base::VERSION < V::Upgrade::VERSION {
+    if upgrade.base < upgrade.target {
         tracing::warn!("Consensus was started with an upgrade configured. Spawning upgrade task.");
-        handle.add_task(UpgradeTaskState::<TYPES, V>::create_from(handle).await);
+        handle.add_task(UpgradeTaskState::<TYPES>::create_from(handle).await);
     }
 
     {
@@ -294,10 +287,10 @@ pub async fn add_consensus_tasks<TYPES: NodeType, I: NodeImplementation<TYPES>, 
             quorum_proposal_recv::QuorumProposalRecvTaskState, quorum_vote::QuorumVoteTaskState,
         };
 
-        handle.add_task(QuorumProposalTaskState::<TYPES, I, V>::create_from(handle).await);
-        handle.add_task_with_vid(QuorumVoteTaskState::<TYPES, I, V>::create_from(handle).await);
-        handle.add_task(QuorumProposalRecvTaskState::<TYPES, I, V>::create_from(handle).await);
-        handle.add_task(ConsensusTaskState::<TYPES, I, V>::create_from(handle).await);
+        handle.add_task(QuorumProposalTaskState::<TYPES, I>::create_from(handle).await);
+        handle.add_task_with_vid(QuorumVoteTaskState::<TYPES, I>::create_from(handle).await);
+        handle.add_task(QuorumProposalRecvTaskState::<TYPES, I>::create_from(handle).await);
+        handle.add_task(ConsensusTaskState::<TYPES, I>::create_from(handle).await);
         handle.add_task_with_vid(StatsTaskState::<TYPES>::create_from(handle).await);
     }
     add_queue_len_task(handle);
@@ -313,8 +306,8 @@ pub async fn add_consensus_tasks<TYPES: NodeType, I: NodeImplementation<TYPES>, 
 /// # Usage
 /// Use in `select!` macros or similar constructs for graceful shutdowns:
 #[must_use]
-pub fn create_shutdown_event_monitor<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>(
-    handle: &SystemContextHandle<TYPES, I, V>,
+pub fn create_shutdown_event_monitor<TYPES: NodeType, I: NodeImplementation<TYPES>>(
+    handle: &SystemContextHandle<TYPES, I>,
 ) -> BoxFuture<'static, ()> {
     // Activate the cloned internal event stream
     let mut event_stream = handle.internal_event_stream.1.activate_cloned();
@@ -340,12 +333,12 @@ pub fn create_shutdown_event_monitor<TYPES: NodeType, I: NodeImplementation<TYPE
     .boxed()
 }
 
-#[allow(clippy::too_many_arguments)]
-#[async_trait]
 /// Trait for intercepting and modifying messages between the network and consensus layers.
 ///
 /// Consensus <-> [Byzantine logic layer] <-> Network
-pub trait EventTransformerState<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
+#[allow(clippy::too_many_arguments)]
+#[async_trait]
+pub trait EventTransformerState<TYPES: NodeType, I: NodeImplementation<TYPES>>
 where
     Self: std::fmt::Debug + Send + Sync + 'static,
 {
@@ -358,14 +351,14 @@ where
         event: &HotShotEvent<TYPES>,
         public_key: &TYPES::SignatureKey,
         private_key: &<TYPES::SignatureKey as SignatureKey>::PrivateKey,
-        upgrade_lock: &UpgradeLock<TYPES, V>,
+        upgrade_lock: &UpgradeLock<TYPES>,
         consensus: OuterConsensus<TYPES>,
         membership_coordinator: EpochMembershipCoordinator<TYPES>,
         network: Arc<I::Network>,
     ) -> Vec<HotShotEvent<TYPES>>;
 
-    #[allow(clippy::too_many_arguments)]
     /// Creates a `SystemContextHandle` with the given even transformer
+    #[allow(clippy::too_many_arguments)]
     async fn spawn_handle(
         &'static mut self,
         public_key: TYPES::SignatureKey,
@@ -379,7 +372,7 @@ where
         consensus_metrics: ConsensusMetricsValue,
         storage: I::Storage,
         storage_metrics: StorageMetricsValue,
-    ) -> SystemContextHandle<TYPES, I, V> {
+    ) -> SystemContextHandle<TYPES, I> {
         let epoch_height = config.epoch_height;
 
         let hotshot = SystemContext::new(
@@ -419,7 +412,7 @@ where
             vid_event_stream: (vid_tx, vid_rx.deactivate()),
         };
 
-        add_consensus_tasks::<TYPES, I, V>(&mut handle).await;
+        add_consensus_tasks::<TYPES, I>(&mut handle).await;
         self.add_network_tasks(&mut handle).await;
 
         handle
@@ -427,7 +420,7 @@ where
 
     /// Add byzantine network tasks with the trait
     #[allow(clippy::too_many_lines)]
-    async fn add_network_tasks(&'static mut self, handle: &mut SystemContextHandle<TYPES, I, V>) {
+    async fn add_network_tasks(&'static mut self, handle: &mut SystemContextHandle<TYPES, I>) {
         // channels between the task spawned in this function and the network tasks.
         // with this, we can control exactly what events the network tasks see.
 
@@ -577,7 +570,7 @@ where
     }
 
     /// Adds the `NetworkEventTaskState` tasks possibly modifying them as well.
-    fn add_network_event_tasks(&self, handle: &mut SystemContextHandle<TYPES, I, V>) {
+    fn add_network_event_tasks(&self, handle: &mut SystemContextHandle<TYPES, I>) {
         let network = Arc::clone(&handle.network);
 
         self.add_network_event_task(handle, network);
@@ -586,7 +579,7 @@ where
     /// Adds a `NetworkEventTaskState` task. Can be reimplemented to modify its behaviour.
     fn add_network_event_task(
         &self,
-        handle: &mut SystemContextHandle<TYPES, I, V>,
+        handle: &mut SystemContextHandle<TYPES, I>,
         channel: Arc<<I as NodeImplementation<TYPES>>::Network>,
     ) {
         add_network_event_task(handle, channel);
@@ -594,8 +587,8 @@ where
 }
 
 /// adds tasks for sending/receiving messages to/from the network.
-pub async fn add_network_tasks<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>(
-    handle: &mut SystemContextHandle<TYPES, I, V>,
+pub async fn add_network_tasks<TYPES: NodeType, I: NodeImplementation<TYPES>>(
+    handle: &mut SystemContextHandle<TYPES, I>,
 ) {
     add_network_message_and_request_receiver_tasks(handle).await;
 
@@ -606,9 +599,8 @@ pub async fn add_network_tasks<TYPES: NodeType, I: NodeImplementation<TYPES>, V:
 pub async fn add_network_message_and_request_receiver_tasks<
     TYPES: NodeType,
     I: NodeImplementation<TYPES>,
-    V: Versions,
 >(
-    handle: &mut SystemContextHandle<TYPES, I, V>,
+    handle: &mut SystemContextHandle<TYPES, I>,
 ) {
     let network = Arc::clone(&handle.network);
 
@@ -619,8 +611,8 @@ pub async fn add_network_message_and_request_receiver_tasks<
 }
 
 /// Adds the `NetworkEventTaskState` tasks.
-pub fn add_network_event_tasks<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>(
-    handle: &mut SystemContextHandle<TYPES, I, V>,
+pub fn add_network_event_tasks<TYPES: NodeType, I: NodeImplementation<TYPES>>(
+    handle: &mut SystemContextHandle<TYPES, I>,
 ) {
     add_network_event_task(handle, Arc::clone(&handle.network));
 }

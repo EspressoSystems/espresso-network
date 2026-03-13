@@ -19,13 +19,13 @@ anyhow = { workspace = true }
 async-broadcast = { workspace = true }
 async-lock = { workspace = true }
 async-trait = { workspace = true }
-automod = "1.0.14"
+automod = { workspace = true }
 bincode = { workspace = true }
 bitvec = { workspace = true }
 committable = { workspace = true }
 either = { workspace = true }
 futures = { workspace = true }
-hotshot = { path = "../hotshot", features = ["hotshot-testing"] }
+hotshot = { workspace = true, features = ["hotshot-testing"] }
 hotshot-builder-api = { workspace = true }
 hotshot-example-types = { workspace = true }
 hotshot-macros = { workspace = true }
@@ -33,15 +33,15 @@ hotshot-task = { workspace = true }
 hotshot-task-impls = { workspace = true }
 hotshot-types = { workspace = true }
 hotshot-utils = { workspace = true }
-itertools = "0.14.0"
+itertools = { workspace = true }
 jf-advz = { workspace = true }
 lru = { workspace = true }
-portpicker = { workspace = true }
-rand = { workspace = true, features = ["small_rng"] }
+rand = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
 sha2 = { workspace = true }
 tagged-base64 = { workspace = true }
+test-utils = { workspace = true }
 thiserror = { workspace = true }
 tide-disco = { workspace = true }
 tokio = { workspace = true }
@@ -49,6 +49,7 @@ tracing = { workspace = true }
 url = { workspace = true }
 vbs = { workspace = true }
 vec1 = { workspace = true }
+versions = { workspace = true }
 
 [dev-dependencies]
 test-log = { workspace = true }
