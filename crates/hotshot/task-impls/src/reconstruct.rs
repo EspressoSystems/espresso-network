@@ -52,11 +52,14 @@ async fn try_reconstruct_block<TYPES: NodeType>(
     metadata: <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
     mut signal_rx: mpsc::Receiver<()>,
 ) -> Option<()> {
+    let mut failed_attempts: u64 = 0;
     loop {
         let Some(()) = signal_rx.recv().await else {
             tracing::error!("Signal received, stopping reconstruction task for view {view}");
             break;
         };
+        let iteration_start = Instant::now();
+
         if consensus.read().await.saved_payloads().contains_key(&view) {
             tracing::debug!("We already have the payload for view {view}, skipping reconstruction");
 
@@ -67,6 +70,7 @@ async fn try_reconstruct_block<TYPES: NodeType>(
             tracing::error!("No shares found for view {view}, skipping reconstruction");
             continue;
         };
+        let num_shares = shares.len();
         if shares.is_empty() {
             tracing::error!("No shares found for view {view}, skipping reconstruction");
             continue;
@@ -77,7 +81,10 @@ async fn try_reconstruct_block<TYPES: NodeType>(
             (first_share.common.clone(), first_share.payload_commitment)
         };
 
-        let now = Instant::now();
+        let pre_recover_elapsed = iteration_start.elapsed();
+
+        let recover_start = Instant::now();
+
         let reconstruct_result = tokio::task::spawn_blocking(move || {
             AvidmGf2Scheme::recover(
                 &common,
@@ -89,18 +96,20 @@ async fn try_reconstruct_block<TYPES: NodeType>(
             tracing::error!(error=?e, "spawn blocking failed for view {view}");
         })
         .ok()?;
+        let recover_elapsed = recover_start.elapsed();
 
         let payload_bytes = match reconstruct_result {
             Ok(payload_bytes) => payload_bytes,
             Err(e) => {
                 tracing::debug!(error=?e, "Failed to reconstruct block for view {view}");
+                failed_attempts += 1;
                 continue;
             },
         };
 
         let payload = TYPES::BlockPayload::from_bytes(&payload_bytes, &metadata);
-        let elapsed = now.elapsed();
-        tracing::error!("Reconstructed block for view {view} in {elapsed:?}");
+
+        let post_start = Instant::now();
         broadcast_event(
             Arc::new(HotShotEvent::BlockReconstructed(
                 payload.clone(),
@@ -126,6 +135,14 @@ async fn try_reconstruct_block<TYPES: NodeType>(
             vid_shares.write().await.remove(&(view, epoch));
         }
         calc_lock.write().await.remove(&view);
+        let post_elapsed = post_start.elapsed();
+
+        let total_elapsed = iteration_start.elapsed();
+        tracing::warn!(
+            "reconstruct_block view={view} shares={num_shares} failed_attempts={failed_attempts} \
+             pre_recover={pre_recover_elapsed:?} recover={recover_elapsed:?} \
+             post={post_elapsed:?} total={total_elapsed:?}"
+        );
     }
     Some(())
 }
@@ -204,6 +221,7 @@ impl<TYPES: NodeType> ReconstructTaskState<TYPES> {
     ) -> Option<HotShotTaskCompleted> {
         match event.as_ref() {
             HotShotEvent::VidShareRecv(sender, share) => {
+                let handler_start = Instant::now();
                 let view = share.data.view_number();
                 if self.is_old_view(view).await {
                     return None;
@@ -222,6 +240,7 @@ impl<TYPES: NodeType> ReconstructTaskState<TYPES> {
                     return None;
                 }
 
+                let validate_start = Instant::now();
                 if let Err(e) = validate_vid_share::<TYPES>(
                     sender,
                     share,
@@ -233,16 +252,28 @@ impl<TYPES: NodeType> ReconstructTaskState<TYPES> {
                     tracing::warn!("VID share validation failed for view {view}: {e}");
                     return None;
                 }
+                let validate_elapsed = validate_start.elapsed();
 
+                let store_start = Instant::now();
                 self.consensus
                     .write()
                     .await
                     .update_vid_shares(view, share.clone());
+                let store_elapsed = store_start.elapsed();
 
                 let VidDisperseShare::V2(ref inner_share) = share.data else {
                     return None;
                 };
+                let signal_start = Instant::now();
                 self.handle_validated_share(inner_share, view).await;
+                let signal_elapsed = signal_start.elapsed();
+
+                let total_elapsed = handler_start.elapsed();
+                tracing::warn!(
+                    "VidShareRecv handler view={view} total={total_elapsed:?} \
+                     validate={validate_elapsed:?} store={store_elapsed:?} \
+                     signal={signal_elapsed:?}"
+                );
             },
             HotShotEvent::VidShareValidated(share) => {
                 let VidDisperseShare::V2(ref share) = share.data else {

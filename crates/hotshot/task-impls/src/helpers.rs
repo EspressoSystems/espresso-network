@@ -1514,8 +1514,10 @@ pub async fn validate_vid_share<TYPES: NodeType>(
     consensus: OuterConsensus<TYPES>,
 ) -> Result<()> {
     let view = share.data.view_number();
+    let validate_start = std::time::Instant::now();
 
     // if we have the share already we are done
+    let dedup_start = std::time::Instant::now();
     if consensus
         .read()
         .await
@@ -1525,13 +1527,17 @@ pub async fn validate_vid_share<TYPES: NodeType>(
     {
         bail!("Duplicate VID share recv");
     }
+    let dedup_elapsed = dedup_start.elapsed();
 
     let vid_epoch = share.data.epoch();
     let target_epoch = share.data.target_epoch();
+    let membership_start = std::time::Instant::now();
     let membership_reader = membership.membership_for_epoch(vid_epoch).await?;
     let leader = membership_reader.leader(view).await?;
+    let membership_elapsed = membership_start.elapsed();
 
     // Check that the signature is valid
+    let sig_start = std::time::Instant::now();
     let payload_commitment = share.data.payload_commitment_ref();
     ensure!(
         sender.validate(&share.signature, payload_commitment.as_ref())
@@ -1541,8 +1547,11 @@ pub async fn validate_vid_share<TYPES: NodeType>(
         share.signature,
         payload_commitment
     );
+    let sig_elapsed = sig_start.elapsed();
 
     // Cryptographic share verification
+    let crypto_start = std::time::Instant::now();
+    let membership2_start = std::time::Instant::now();
     let total_weight = vid_total_weight::<TYPES>(
         &membership
             .membership_for_epoch(target_epoch)
@@ -1551,10 +1560,21 @@ pub async fn validate_vid_share<TYPES: NodeType>(
             .await,
         target_epoch,
     );
+    let membership_elapsed2 = membership2_start.elapsed();
 
+    let verify_start = std::time::Instant::now();
     if !share.data.verify(total_weight) {
         bail!("Failed to verify VID share");
     }
+    let verify_elapsed = verify_start.elapsed();
+    let crypto_elapsed = crypto_start.elapsed();
+
+    let total_elapsed = validate_start.elapsed();
+    tracing::warn!(
+        "validate_vid_share view={view} total={total_elapsed:?} dedup={dedup_elapsed:?} \
+         membership={membership_elapsed:?} signature={sig_elapsed:?} \
+         crypto_verify={crypto_elapsed:?} (membership={membership_elapsed2:?} verify={verify_elapsed:?})"
+    );
 
     Ok(())
 }
