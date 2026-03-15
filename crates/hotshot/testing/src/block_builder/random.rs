@@ -164,7 +164,7 @@ where
 {
     fn start(
         mut self: Box<Self>,
-        mut stream: Box<dyn Stream<Item = Event<TYPES>> + std::marker::Unpin + Send + 'static>,
+        mut stream: Box<dyn Stream<Item = Arc<Event<TYPES>>> + std::marker::Unpin + Send + 'static>,
     ) {
         let mut task = Some(spawn(Self::build_blocks(
             self.config.clone(),
@@ -180,8 +180,8 @@ where
                         break;
                     },
                     Some(evt) => {
-                        if let EventType::ViewFinished { view_number } = evt.event {
-                            if let Some(change) = self.changes.remove(&view_number) {
+                        if let EventType::ViewFinished { view_number } = &evt.event {
+                            if let Some(change) = self.changes.remove(view_number) {
                                 match change {
                                     BuilderChange::Up => {
                                         if task.is_none() {

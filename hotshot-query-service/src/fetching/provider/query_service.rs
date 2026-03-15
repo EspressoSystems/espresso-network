@@ -236,7 +236,7 @@ where
             .bytes()
             .await
             .inspect_err(|err| {
-                tracing::info!(%err, %req_hash, %client_url, "failed to fetch VID common bytes");
+                tracing::debug!(%err, %req_hash, %client_url, "failed to fetch VID common bytes");
             })
             .ok()?;
 
@@ -500,7 +500,7 @@ where
         let bytes = match bytes {
             Ok(bytes) => bytes,
             Err(err) => {
-                tracing::info!(
+                tracing::debug!(
                     %client_url, ?req, %err,
                     "failed to fetch VID common bytes"
                 );

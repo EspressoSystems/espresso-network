@@ -320,7 +320,9 @@ where
             .insert(pubkey.clone(), (node_index, added_to_da));
 
         // Push to our bootstrap nodes
-        self.config.cliquenet_peers.push(cliquenet_advertise_address);
+        self.config
+            .cliquenet_peers
+            .push(cliquenet_advertise_address);
 
         tracing::error!("Posted public key for node_index {node_index}");
 
@@ -378,7 +380,9 @@ where
             .insert(pubkey.clone(), (node_index as u64, added_to_da));
 
         // Push to our bootstrap nodes
-        self.config.cliquenet_peers.push(cliquenet_advertise_address);
+        self.config
+            .cliquenet_peers
+            .push(cliquenet_advertise_address);
 
         tracing::error!("Node {node_index} has registered.");
 
@@ -405,7 +409,9 @@ where
             });
         }
 
-        self.config.cliquenet_peers.push(cliquenet_advertise_address);
+        self.config
+            .cliquenet_peers
+            .push(cliquenet_advertise_address);
 
         Ok(node_index)
     }

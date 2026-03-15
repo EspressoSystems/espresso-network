@@ -39,7 +39,7 @@ use crate::{
 /// Tracks state of an upgrade task
 pub struct UpgradeTaskState<TYPES: NodeType, V: Versions> {
     /// Output events to application
-    pub output_event_stream: async_broadcast::Sender<Event<TYPES>>,
+    pub output_event_stream: async_broadcast::Sender<Arc<Event<TYPES>>>,
 
     /// View number this view is executing in.
     pub cur_view: TYPES::View,
@@ -254,13 +254,13 @@ impl<TYPES: NodeType, V: Versions> UpgradeTaskState<TYPES, V> {
                 //   * the proposal is valid, and
                 // so we notify the application layer
                 broadcast_event(
-                    Event {
+                    Arc::new(Event {
                         view_number: self.cur_view,
                         event: EventType::UpgradeProposal {
                             proposal: proposal.clone(),
                             sender: sender.clone(),
                         },
-                    },
+                    }),
                     &self.output_event_stream,
                 )
                 .await;

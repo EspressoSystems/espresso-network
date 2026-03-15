@@ -51,7 +51,10 @@ pub struct NetworkMessageTaskState<TYPES: NodeType, V: Versions> {
     pub internal_event_stream: Sender<Arc<HotShotEvent<TYPES>>>,
 
     /// Sender to send external events this task generates to the event stream
-    pub external_event_stream: Sender<Event<TYPES>>,
+    pub external_event_stream: Sender<Arc<Event<TYPES>>>,
+
+    /// Dedicated sender for VID share events (VidShareRecv)
+    pub vid_event_stream: Sender<Arc<HotShotEvent<TYPES>>>,
 
     /// This nodes public key
     pub public_key: TYPES::SignatureKey,
@@ -654,7 +657,12 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                         },
                     },
                 };
-                broadcast_event(Arc::new(event), &self.internal_event_stream).await;
+                let event = Arc::new(event);
+                if matches!(event.as_ref(), HotShotEvent::VidShareRecv(..)) {
+                    broadcast_event(event, &self.vid_event_stream).await;
+                } else {
+                    broadcast_event(event, &self.internal_event_stream).await;
+                }
             },
 
             // Handle data messages
@@ -716,10 +724,10 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                 }
                 // Send the external message to the external event stream so it can be processed
                 broadcast_event(
-                    Event {
+                    Arc::new(Event {
                         view_number: TYPES::View::new(1),
                         event: EventType::ExternalMessageReceived { sender, data },
-                    },
+                    }),
                     &self.external_event_stream,
                 )
                 .await;
@@ -965,6 +973,7 @@ impl<
 
     /// Cancel all tasks for previous views
     pub fn cancel_tasks(&mut self, view: TYPES::View) {
+        let before = self.transmit_tasks.len();
         let keep = self.transmit_tasks.split_off(&view);
 
         while let Some((_, tasks)) = self.transmit_tasks.pop_first() {
@@ -974,6 +983,14 @@ impl<
         }
 
         self.transmit_tasks = keep;
+        if before > 10 {
+            tracing::warn!(
+                id = self.id,
+                before,
+                after = self.transmit_tasks.len(),
+                "network transmit_tasks cleanup"
+            );
+        }
     }
 
     /// Parses a `HotShotEvent` and returns a tuple of: (sender's public key, `MessageKind`, `TransmitType`)

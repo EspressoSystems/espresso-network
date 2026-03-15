@@ -4,14 +4,14 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::{marker::PhantomData, sync::Arc, time::Instant};
+use std::{marker::PhantomData, sync::Arc};
 
 use async_broadcast::{Receiver, Sender};
 use async_trait::async_trait;
 use hotshot_task::task::TaskState;
 use hotshot_types::{
     consensus::{OuterConsensus, PayloadWithMetadata},
-    data::{PackedBundle, VidCommitment, VidDisperse, VidDisperseAndDuration, VidDisperseShare},
+    data::{PackedBundle, VidDisperse, VidDisperseAndDuration},
     epoch_membership::EpochMembershipCoordinator,
     message::{Proposal, UpgradeLock},
     simple_vote::HasEpoch,
@@ -22,8 +22,6 @@ use hotshot_types::{
         BlockPayload,
     },
     utils::{is_epoch_transition, option_epoch_from_block_number},
-    vid::avidm_gf2::AvidmGf2Scheme,
-    vote::HasViewNumber,
 };
 use hotshot_utils::anytrace::Result;
 use tracing::{debug, error, info, instrument};

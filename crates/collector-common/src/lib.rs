@@ -25,6 +25,7 @@ pub enum Trace {
 }
 
 /// The UDP socket for sending traces
+#[allow(clippy::declare_interior_mutable_const)]
 const UDP_SOCKET: OnceLock<Arc<(UdpSocket, SocketAddr)>> = OnceLock::new();
 
 /// Send a trace with a specific timestamp (as seconds since the UNIX epoch)
@@ -40,6 +41,7 @@ pub fn send_trace_with_timestamp(trace: &Trace, timestamp: f64) -> Result<()> {
         .map_err(|e: rkyv::rancor::Error| anyhow::anyhow!("failed to serialize trace: {}", e))?;
 
     // Create or get the UDP socket
+    #[allow(clippy::borrow_interior_mutable_const)]
     let udp_socket = UDP_SOCKET.get().cloned();
     let udp_socket = match udp_socket {
         Some(udp_socket) => udp_socket,
@@ -64,6 +66,7 @@ pub fn send_trace_with_timestamp(trace: &Trace, timestamp: f64) -> Result<()> {
             let udp_socket = Arc::new((udp_socket, collector_endpoint));
 
             // Set it in the once lock
+            #[allow(clippy::borrow_interior_mutable_const)]
             let _ = UDP_SOCKET.set(udp_socket.clone());
             udp_socket
         },

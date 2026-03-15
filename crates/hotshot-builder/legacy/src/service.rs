@@ -1298,7 +1298,7 @@ Running Non-Permissioned Builder Service
 pub async fn run_non_permissioned_standalone_builder_service<
     Types: NodeType,
     Ver: StaticVersionType,
-    S: Stream<Item = Event<Types>> + Unpin,
+    S: Stream<Item = Arc<Event<Types>>> + Unpin,
 >(
     // sending a DA proposal from the hotshot to the builder states
     da_sender: BroadcastSender<MessageType<Types>>,
@@ -1333,7 +1333,7 @@ pub async fn run_non_permissioned_standalone_builder_service<
             .await
             .add_event_timestamp(now, &event.event);
 
-        match event.event {
+        match &event.event {
             EventType::Error { error } => {
                 tracing::error!("Error event in HotShot: {error:?}");
             },
@@ -1384,7 +1384,7 @@ pub async fn run_non_permissioned_standalone_builder_service<
             },
             // DA proposal event
             EventType::DaProposal { proposal, sender } => {
-                handle_da_event(&da_sender, Arc::new(proposal), sender).await;
+                handle_da_event(&da_sender, Arc::new(proposal.clone()), sender.clone()).await;
             },
             // QC proposal event
             EventType::QuorumProposal { proposal, sender } => {
@@ -1392,7 +1392,8 @@ pub async fn run_non_permissioned_standalone_builder_service<
                     global_state.read_arc().await.log_timestamps();
                 }
                 // get the leader for current view
-                handle_quorum_event(&quorum_sender, Arc::new(proposal), sender).await;
+                handle_quorum_event(&quorum_sender, Arc::new(proposal.clone()), sender.clone())
+                    .await;
             },
             _ => {
                 tracing::debug!("Unhandled event from Builder");

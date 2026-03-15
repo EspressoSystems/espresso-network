@@ -719,6 +719,8 @@ impl Persistence {
             .await?
             .map(|row| row.get("last_processed_view"));
         loop {
+            let t_loop_start = Instant::now();
+
             // In SQLite, overlapping read and write transactions can lead to database errors. To
             // avoid this:
             // - start a read transaction to query and collect all the necessary data.
@@ -846,6 +848,7 @@ impl Persistence {
                     );
                 })?;
             drop(tx);
+            let t_read = t_loop_start.elapsed();
 
             // Collate all the information by view number and construct a chain of leaves.
             let leaf_chain = leaves
@@ -919,6 +922,7 @@ impl Persistence {
                     })
                     .await?;
             }
+            let t_consumer = t_loop_start.elapsed() - t_read;
 
             let mut tx = self.db.write().await?;
 
@@ -990,6 +994,19 @@ impl Persistence {
             .await?;
 
             tx.commit().await?;
+            let t_write = t_loop_start.elapsed() - t_read - t_consumer;
+            let t_total = t_loop_start.elapsed();
+
+            tracing::info!(
+                ?from_view,
+                ?to_view,
+                total_ms = t_total.as_millis() as u64,
+                read_ms = t_read.as_millis() as u64,
+                consumer_ms = t_consumer.as_millis() as u64,
+                write_commit_ms = t_write.as_millis() as u64,
+                "generate_decide_events iteration timing"
+            );
+
             last_processed_view = Some(to_view.u64() as i64);
         }
     }
@@ -1030,14 +1047,18 @@ impl Persistence {
 
     #[tracing::instrument(skip(self))]
     async fn prune(&self, cur_view: ViewNumber) -> anyhow::Result<()> {
+        let t_start = Instant::now();
+        let t_lock_start = Instant::now();
         let mut tx = self.db.write().await?;
+        let t_lock_wait = t_lock_start.elapsed();
+
+        let target_view = cur_view.u64().saturating_sub(self.gc_opt.target_retention);
+        let minimum_view = cur_view.u64().saturating_sub(self.gc_opt.minimum_retention);
 
         // Prune everything older than the target retention period.
-        prune_to_view(
-            &mut tx,
-            cur_view.u64().saturating_sub(self.gc_opt.target_retention),
-        )
-        .await?;
+        let t_target_prune_start = Instant::now();
+        prune_to_view(&mut tx, target_view).await?;
+        let t_target_prune = t_target_prune_start.elapsed();
 
         // Check our storage usage; if necessary we will prune more aggressively (up to the minimum
         // retention) to get below the target usage.
@@ -1059,23 +1080,54 @@ impl Persistence {
             format!("SELECT {table_sizes}")
         };
 
+        let t_usage_query_start = Instant::now();
         let (usage,): (i64,) = query_as(&usage_query).fetch_one(tx.as_mut()).await?;
+        let t_usage_query = t_usage_query_start.elapsed();
         tracing::debug!(usage, "consensus storage usage after pruning");
 
+        let mut aggressive_prune = false;
+        let mut t_aggressive_prune = Duration::ZERO;
         if (usage as u64) > self.gc_opt.target_usage {
+            aggressive_prune = true;
             tracing::warn!(
                 usage,
                 gc_opt = ?self.gc_opt,
                 "consensus storage is running out of space, pruning to minimum retention"
             );
-            prune_to_view(
-                &mut tx,
-                cur_view.u64().saturating_sub(self.gc_opt.minimum_retention),
-            )
-            .await?;
+            let t_aggressive_prune_start = Instant::now();
+            prune_to_view(&mut tx, minimum_view).await?;
+            t_aggressive_prune = t_aggressive_prune_start.elapsed();
         }
 
-        tx.commit().await
+        let t_commit_start = Instant::now();
+        tx.commit().await?;
+        let t_commit = t_commit_start.elapsed();
+
+        let t_total = t_start.elapsed();
+        let total_ms = t_total.as_millis() as u64;
+        let lock_wait_ms = t_lock_wait.as_millis() as u64;
+        let target_prune_ms = t_target_prune.as_millis() as u64;
+        let usage_query_ms = t_usage_query.as_millis() as u64;
+        let aggressive_prune_ms = t_aggressive_prune.as_millis() as u64;
+        let commit_ms = t_commit.as_millis() as u64;
+
+        tracing::info!(
+            ?cur_view,
+            target_view,
+            minimum_view,
+            usage,
+            aggressive_prune,
+            gc_opt = ?self.gc_opt,
+            total_ms,
+            lock_wait_ms,
+            target_prune_ms,
+            usage_query_ms,
+            aggressive_prune_ms,
+            commit_ms,
+            "prune timing"
+        );
+
+        Ok(())
     }
 }
 
@@ -1159,6 +1211,8 @@ impl SequencerPersistence for Persistence {
         deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
         consumer: &(impl EventConsumer + 'static),
     ) -> anyhow::Result<()> {
+        let t_start = Instant::now();
+
         let values = leaf_chain
             .into_iter()
             .map(|(info, cert)| {
@@ -1182,7 +1236,9 @@ impl SequencerPersistence for Persistence {
 
         // First, append the new leaves. We do this in its own transaction because even if GC or the
         // event consumer later fails, there is no need to abort the storage of the leaves.
+        let t_leaf_lock_start = Instant::now();
         let mut tx = self.db.write().await?;
+        let t_leaf_lock_wait = t_leaf_lock_start.elapsed();
 
         tx.upsert(
             "anchor_leaf2",
@@ -1192,6 +1248,7 @@ impl SequencerPersistence for Persistence {
         )
         .await?;
         tx.commit().await?;
+        let t_leaf_write = t_start.elapsed();
 
         // Generate an event for the new leaves and, only if it succeeds, clean up data we no longer
         // need.
@@ -1202,12 +1259,30 @@ impl SequencerPersistence for Persistence {
             tracing::warn!(?view, "event processing failed: {err:#}");
             return Ok(());
         }
+        let t_generate_events = t_start.elapsed() - t_leaf_write;
 
         // Garbage collect data which was not included in any decide event, but which at this point
         // is old enough to just forget about.
         if let Err(err) = self.prune(view).await {
             tracing::warn!(?view, "pruning failed: {err:#}");
         }
+        let t_prune = t_start.elapsed() - t_leaf_write - t_generate_events;
+        let t_total = t_start.elapsed();
+        let total_ms = t_total.as_millis() as u64;
+        let leaf_write_lock_wait_ms = t_leaf_lock_wait.as_millis() as u64;
+        let leaf_write_ms = t_leaf_write.as_millis() as u64;
+        let generate_events_ms = t_generate_events.as_millis() as u64;
+        let prune_ms = t_prune.as_millis() as u64;
+
+        tracing::info!(
+            ?view,
+            total_ms,
+            leaf_write_lock_wait_ms,
+            leaf_write_ms,
+            generate_events_ms,
+            prune_ms,
+            "append_decided_leaves timing"
+        );
 
         Ok(())
     }
@@ -1376,24 +1451,29 @@ impl SequencerPersistence for Persistence {
         &self,
         proposal: &Proposal<SeqTypes, VidDisperseShare<SeqTypes>>,
     ) -> anyhow::Result<()> {
-        let view = proposal.data.view_number().u64();
-        let payload_hash = proposal.data.payload_commitment();
-        let data_bytes = bincode::serialize(proposal).unwrap();
+        // let view = proposal.data.view_number().u64();
+        // let payload_hash = proposal.data.payload_commitment();
+        // let data_bytes = bincode::serialize(proposal).unwrap();
 
-        let now = Instant::now();
-        let mut tx = self.db.write().await?;
-        tx.upsert(
-            "vid_share2",
-            ["view", "data", "payload_hash"],
-            ["view"],
-            [(view as i64, data_bytes, payload_hash.to_string())],
-        )
-        .await?;
-        let res = tx.commit().await;
-        self.internal_metrics
-            .internal_append_vid_duration
-            .add_point(now.elapsed().as_secs_f64());
-        res
+        // let now = Instant::now();
+        // let mut tx = self.db.write().await?;
+        // tx.upsert(
+        //     "vid_share2",
+        //     ["view", "data", "payload_hash"],
+        //     ["view"],
+        //     [(view as i64, data_bytes, payload_hash.to_string())],
+        // )
+        // .await?;
+        // let res = tx.commit().await;
+        // self.internal_metrics
+        //     .internal_append_vid_duration
+        //     .add_point(now.elapsed().as_secs_f64());
+        // res
+
+        // Disabled for load test: skip VID share persistence.
+        let view = proposal.data.view_number();
+        tracing::warn!(?view, "append_vid disabled for load test");
+        Ok(())
     }
 
     async fn append_da(

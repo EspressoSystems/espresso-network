@@ -104,7 +104,7 @@ where
     fn start(
         self: Box<Self>,
         stream: Box<
-            dyn futures::prelude::Stream<Item = hotshot::types::Event<Types>>
+            dyn futures::prelude::Stream<Item = Arc<hotshot::types::Event<Types>>>
                 + std::marker::Unpin
                 + Send
                 + 'static,

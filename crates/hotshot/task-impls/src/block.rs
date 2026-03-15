@@ -8,7 +8,7 @@ use std::{
     collections::{HashMap, HashSet},
     num::NonZero,
     sync::Arc,
-    time::{Duration, Instant},
+    time::Instant,
 };
 
 use async_broadcast::{Receiver, Sender};
@@ -31,7 +31,6 @@ use hotshot_types::{
     vote::HasViewNumber,
 };
 use hotshot_utils::anytrace::*;
-use tokio::time::timeout;
 use tracing::instrument;
 use vbs::version::{StaticVersionType, Version};
 
@@ -60,8 +59,12 @@ struct ReceivedTransaction<TYPES: NodeType> {
     view: TYPES::View,
 }
 
+/// Maximum total size of transactions held in the mempool.
+const MAX_MEMPOOL_SIZE: u64 = 500 * 1024 * 1024; // 500 MB
+
 pub struct Mempool<TYPES: NodeType> {
     max_block_size: u64,
+    total_bytes: u64,
     transactions: Vec<ReceivedTransaction<TYPES>>,
     recently_decided_transactions: lru::LruCache<Commitment<TYPES::Transaction>, bool>,
     recently_proposed_blocks: HashMap<TYPES::View, Vec<TYPES::Transaction>>,
@@ -71,6 +74,7 @@ impl<TYPES: NodeType> Mempool<TYPES> {
     pub fn new(max_block_size: u64) -> Self {
         Self {
             max_block_size,
+            total_bytes: 0,
             transactions: Vec::new(),
             recently_decided_transactions: lru::LruCache::new(NonZero::new(1000).unwrap()),
             recently_proposed_blocks: HashMap::new(),
@@ -90,6 +94,18 @@ impl<TYPES: NodeType> Mempool<TYPES> {
             return;
         }
 
+        if self.total_bytes + len > MAX_MEMPOOL_SIZE {
+            tracing::warn!(
+                mempool_len = self.transactions.len(),
+                mempool_mb = self.total_bytes / (1024 * 1024),
+                max_mempool_mb = MAX_MEMPOOL_SIZE / (1024 * 1024),
+                tx_len = len,
+                "Rejecting transaction: mempool size cap reached",
+            );
+            return;
+        }
+
+        self.total_bytes += len;
         self.transactions.push(ReceivedTransaction {
             tx: transaction,
             len,
@@ -97,7 +113,11 @@ impl<TYPES: NodeType> Mempool<TYPES> {
             view,
         });
         let elapsed = now.elapsed();
-        tracing::info!("Received transactions in {elapsed:?}");
+        tracing::info!(
+            mempool_len = self.transactions.len(),
+            mempool_mb = self.total_bytes / (1024 * 1024),
+            "Received transaction, elapsed={elapsed:?}",
+        );
     }
 
     fn decide_block(
@@ -112,14 +132,25 @@ impl<TYPES: NodeType> Mempool<TYPES> {
             .map(|tx| tx.commit())
             .collect();
         for txn_commit in &txn_set {
-            self.recently_decided_transactions
-                .put(txn_commit.clone(), true);
+            self.recently_decided_transactions.put(*txn_commit, true);
         }
+        let before_len = self.transactions.len();
         self.transactions
             .retain(|tx| !txn_set.contains(&tx.commit) && tx.view >= view);
         self.recently_proposed_blocks.remove(&view);
+        let removed = before_len - self.transactions.len();
+
+        self.total_bytes = self.transactions.iter().map(|t| t.len).sum();
+
         let elapsed = now.elapsed();
-        tracing::info!("Mempool processed block in {elapsed:?}");
+        tracing::info!(
+            decided_txns = txn_set.len(),
+            removed,
+            mempool_len = self.transactions.len(),
+            mempool_mb = self.total_bytes / (1024 * 1024),
+            recently_proposed = self.recently_proposed_blocks.len(),
+            "Mempool processed block, elapsed={elapsed:?}",
+        );
     }
 
     fn receive_block(
@@ -135,14 +166,14 @@ impl<TYPES: NodeType> Mempool<TYPES> {
 
 impl<TYPES: NodeType> Default for Mempool<TYPES> {
     fn default() -> Self {
-        Self::new(1 * 1024 * 1024) // 1MB
+        Self::new(1024 * 1024) // 1MB
     }
 }
 
 /// Tracks state of a Transaction task
 pub struct BlockTaskState<TYPES: NodeType, V: Versions> {
     /// Output events to application
-    pub output_event_stream: async_broadcast::Sender<Event<TYPES>>,
+    pub output_event_stream: async_broadcast::Sender<Arc<Event<TYPES>>>,
 
     /// View number this view is executing in.
     pub cur_view: TYPES::View,
@@ -329,7 +360,7 @@ impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
     async fn wait_for_block(
         &mut self,
         block_view: TYPES::View,
-        receiver: Receiver<Arc<HotShotEvent<TYPES>>>,
+        _receiver: Receiver<Arc<HotShotEvent<TYPES>>>,
     ) -> Option<BuilderResponse<TYPES>> {
         // let now = Instant::now();
         // let (previous_block, metadata) = timeout(
@@ -380,6 +411,12 @@ impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
     }
 
     async fn build_block(&mut self, block_view: TYPES::View) -> Option<PayloadWithMetadata<TYPES>> {
+        tracing::info!(
+            ?block_view,
+            mempool_len = self.mempool.transactions.len(),
+            mempool_mb = self.mempool.total_bytes / (1024 * 1024),
+            "Building block from mempool",
+        );
         let mut transactions = self.mempool.transactions.clone();
         let mut view = block_view - 1;
         let mut in_flight_txns = HashSet::new();
@@ -430,6 +467,7 @@ impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
         Some(PayloadWithMetadata { payload, metadata })
     }
 
+    #[allow(dead_code)]
     async fn wait_for_previous_block(
         &mut self,
         parent_view: TYPES::View,

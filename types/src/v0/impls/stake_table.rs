@@ -600,7 +600,7 @@ impl StakeTableState {
             }) => {
                 // Parse the metadata URI
                 let metadata_uri =
-                    Url::parse(&metadataUri).map_err(|e| StakeTableError::InvalidMetadataUri(e))?;
+                    Url::parse(&metadataUri).map_err(StakeTableError::InvalidMetadataUri)?;
 
                 // The contract enforces that the validator must already exist
                 let val = self

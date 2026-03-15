@@ -187,7 +187,7 @@ where
     /// Returns a handle for the spawned task.
     pub fn start_event_loop(
         self: Arc<Self>,
-        event_stream: impl Stream<Item = Event<Types>> + Unpin + Send + 'static,
+        event_stream: impl Stream<Item = Arc<Event<Types>>> + Unpin + Send + 'static,
     ) -> JoinHandle<anyhow::Result<()>> {
         spawn(self.event_loop(event_stream))
     }
@@ -196,19 +196,20 @@ where
     /// and runs hooks
     async fn event_loop(
         self: Arc<Self>,
-        mut event_stream: impl Stream<Item = Event<Types>> + Unpin + Send + 'static,
+        mut event_stream: impl Stream<Item = Arc<Event<Types>>> + Unpin + Send + 'static,
     ) -> anyhow::Result<()> {
         loop {
             let Some(event) = event_stream.next().await else {
                 anyhow::bail!("Event stream ended");
             };
 
-            match event.event {
+            match &event.event {
                 EventType::Error { error } => {
                     error!("Error event in HotShot: {error:?}");
                 },
                 EventType::Transactions { transactions } => {
                     let this = Arc::clone(&self);
+                    let transactions = transactions.clone();
                     spawn(async move {
                         transactions
                             .into_iter()
@@ -227,6 +228,7 @@ where
                     let prune_cutoff = leaf_chain[0].leaf.view_number();
 
                     let coordinator = Arc::clone(&self.coordinator);
+                    let leaf_chain = Arc::clone(leaf_chain);
                     spawn(async move { coordinator.handle_decide(leaf_chain).await });
 
                     let this = Arc::clone(&self);
@@ -234,11 +236,17 @@ where
                 },
                 EventType::DaProposal { proposal, .. } => {
                     let coordinator = Arc::clone(&self.coordinator);
-                    spawn(async move { coordinator.handle_da_proposal(proposal.data).await });
+                    let da_proposal_data = proposal.data.clone();
+                    spawn(async move { coordinator.handle_da_proposal(da_proposal_data).await });
                 },
                 EventType::QuorumProposal { proposal, .. } => {
                     let coordinator = Arc::clone(&self.coordinator);
-                    spawn(async move { coordinator.handle_quorum_proposal(proposal.data).await });
+                    let quorum_proposal_data = proposal.data.clone();
+                    spawn(async move {
+                        coordinator
+                            .handle_quorum_proposal(quorum_proposal_data)
+                            .await
+                    });
                 },
                 _ => {},
             }
