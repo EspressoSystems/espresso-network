@@ -23,12 +23,12 @@ fn default_builder_urls() -> Vec1<Url> {
 
 /// Default DRB difficulty, set to 0 (intended to be overwritten)
 fn default_drb_difficulty() -> u64 {
-    0
+    10
 }
 
 /// Default DRB upgrade difficulty, set to 0 (intended to be overwritten)
 fn default_drb_upgrade_difficulty() -> u64 {
-    0
+    10
 }
 
 /// Holds configuration for a `HotShot`
@@ -176,7 +176,7 @@ impl<TYPES: NodeType> HotShotConfigFile<TYPES> {
             builder_urls: default_builder_urls(),
             upgrade: UpgradeConfig::default(),
             epoch_height: 100,
-            epoch_start_block: 0,
+            epoch_start_block: 1,
             stake_table_capacity: crate::light_client::DEFAULT_STAKE_TABLE_CAPACITY,
             drb_difficulty: 10,
             drb_upgrade_difficulty: 20,
