@@ -152,23 +152,10 @@ impl<TYPES: NodeType> TransactionTaskState<TYPES> {
         let mut high_qc_block_number = if let Some(bn) = high_qc.data.block_number {
             bn
         } else {
-            // If it's the first view after the upgrade the high QC won't have a block number
-            // So just use the highest_block number we've stored
-            if block_view
-                > self
-                    .upgrade_lock
-                    .upgrade_view()
-                    .await
-                    .unwrap_or(ViewNumber::new(0))
-                    + 1
-            {
-                tracing::warn!("High QC in epoch version and not the first QC after upgrade");
-                self.send_empty_block(event_stream, block_view, block_epoch, version)
-                    .await;
-                return None;
-            }
-            // 0 here so we use the highest block number in the calculation below
-            0
+            tracing::warn!("High QC in epoch version and not the first QC after upgrade");
+            self.send_empty_block(event_stream, block_view, block_epoch, version)
+                .await;
+            return None;
         };
         high_qc_block_number = std::cmp::max(
             high_qc_block_number,
