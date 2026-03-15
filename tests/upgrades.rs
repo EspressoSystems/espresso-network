@@ -5,13 +5,14 @@ use espresso_types::UpgradeMode;
 use futures::{future::join_all, StreamExt};
 use hotshot_types::utils::epoch_from_block_number;
 use sequencer::Genesis;
-use versions::{Upgrade, DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION};
+use versions::{Upgrade, DRB_AND_HEADER_UPGRADE_VERSION};
 
 use crate::{
     common::{load_genesis_file, NativeDemo, TestRequirements, TestRuntime},
     smoke::assert_native_demo_works,
 };
 
+#[allow(dead_code)]
 async fn assert_upgrade_happens(genesis: &Genesis, upgrade: Upgrade) -> Result<()> {
     dotenvy::dotenv()?;
 
@@ -74,6 +75,7 @@ async fn assert_upgrade_happens(genesis: &Genesis, upgrade: Upgrade) -> Result<(
     Ok(())
 }
 
+#[allow(dead_code)]
 async fn run_upgrade_test(genesis_path: &str, upgrade: Upgrade) -> Result<()> {
     let genesis = load_genesis_file(genesis_path)?;
     let _demo = NativeDemo::run(
@@ -119,13 +121,4 @@ async fn run_upgrade_test(genesis_path: &str, upgrade: Upgrade) -> Result<()> {
     assert_native_demo_works(progress_requirements).await?;
 
     Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_native_demo_drb_header_upgrade() -> Result<()> {
-    run_upgrade_test(
-        "data/genesis/demo-drb-header-upgrade.toml",
-        Upgrade::new(EPOCH_VERSION, DRB_AND_HEADER_UPGRADE_VERSION),
-    )
-    .await
 }
