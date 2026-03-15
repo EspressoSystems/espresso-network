@@ -12,7 +12,6 @@ use committable::Committable;
 use hotshot_types::{
     consensus::OuterConsensus,
     data::{EpochNumber, Leaf2, QuorumProposalWrapper, VidDisperseShare, ViewNumber},
-    drb::INITIAL_DRB_RESULT,
     epoch_membership::{EpochMembership, EpochMembershipCoordinator},
     event::{Event, EventType},
     message::{Proposal, UpgradeLock},
@@ -33,14 +32,13 @@ use hotshot_types::{
 };
 use hotshot_utils::anytrace::*;
 use tracing::instrument;
-use versions::EPOCH_VERSION;
 
 use super::QuorumVoteTaskState;
 use crate::{
     events::HotShotEvent,
     helpers::{
-        broadcast_event, decide_from_proposal, decide_from_proposal_2, derive_signed_state_digest,
-        fetch_proposal, handle_drb_result, LeafChainTraversalOutcome,
+        broadcast_event, decide_from_proposal_2, derive_signed_state_digest, fetch_proposal,
+        handle_drb_result, LeafChainTraversalOutcome,
     },
 };
 
@@ -88,11 +86,6 @@ pub(crate) async fn handle_quorum_proposal_validated<
     task_state: &mut QuorumVoteTaskState<TYPES, I>,
     event_sender: &Sender<Arc<HotShotEvent<TYPES>>>,
 ) -> Result<()> {
-    let version = task_state
-        .upgrade_lock
-        .version(proposal.view_number())
-        .await?;
-
     let LeafChainTraversalOutcome {
         new_locked_view_number,
         new_decided_view_number,
@@ -101,38 +94,25 @@ pub(crate) async fn handle_quorum_proposal_validated<
         leaf_views,
         included_txns,
         decided_upgrade_cert,
-    } = if version >= EPOCH_VERSION {
-        // Skip the decide rule for the last block of the epoch.  This is so
-        // that we do not decide the block with epoch_height -2 before we enter the new epoch
-        if !is_last_block(
-            proposal.block_header().block_number(),
-            task_state.epoch_height,
-        ) {
-            decide_from_proposal_2::<TYPES, I>(
-                proposal,
-                OuterConsensus::new(Arc::clone(&task_state.consensus.inner_consensus)),
-                Arc::clone(&task_state.upgrade_lock.decided_upgrade_certificate),
-                &task_state.public_key,
-                version >= EPOCH_VERSION,
-                &task_state.membership,
-                &task_state.storage,
-            )
-            .await
-        } else {
-            LeafChainTraversalOutcome::default()
-        }
-    } else {
-        decide_from_proposal::<TYPES, I>(
+    } =
+    // Skip the decide rule for the last block of the epoch.  This is so
+    // that we do not decide the block with epoch_height -2 before we enter the new epoch
+    if !is_last_block(
+        proposal.block_header().block_number(),
+        task_state.epoch_height,
+    ) {
+        decide_from_proposal_2::<TYPES, I>(
             proposal,
             OuterConsensus::new(Arc::clone(&task_state.consensus.inner_consensus)),
             Arc::clone(&task_state.upgrade_lock.decided_upgrade_certificate),
             &task_state.public_key,
-            version >= EPOCH_VERSION,
+            true,
             &task_state.membership,
             &task_state.storage,
-            task_state.epoch_height,
         )
         .await
+    } else {
+        LeafChainTraversalOutcome::default()
     };
 
     if let (Some(cert), Some(_)) = (decided_upgrade_cert.clone(), new_decided_view_number) {
@@ -143,32 +123,6 @@ pub(crate) async fn handle_quorum_proposal_validated<
             .await;
         *decided_certificate_lock = Some(cert.clone());
         drop(decided_certificate_lock);
-        if cert.data.new_version >= EPOCH_VERSION
-            && task_state.upgrade_lock.upgrade.base < EPOCH_VERSION
-        {
-            let epoch_height = task_state.consensus.read().await.epoch_height;
-            let first_epoch_number = EpochNumber::new(epoch_from_block_number(
-                proposal.block_header().block_number(),
-                epoch_height,
-            ));
-
-            tracing::debug!("Calling set_first_epoch for epoch {first_epoch_number:?}");
-            task_state
-                .membership
-                .membership()
-                .write()
-                .await
-                .set_first_epoch(first_epoch_number, INITIAL_DRB_RESULT);
-
-            broadcast_event(
-                Arc::new(HotShotEvent::SetFirstEpoch(
-                    cert.data.new_version_first_view,
-                    first_epoch_number,
-                )),
-                event_sender,
-            )
-            .await;
-        }
 
         for da_committee in &task_state.da_committees {
             if cert.data.new_version >= da_committee.start_version {
@@ -273,10 +227,8 @@ pub(crate) async fn handle_quorum_proposal_validated<
             committing_qc.view_number()
         );
 
-        if version >= EPOCH_VERSION {
-            for leaf_view in leaf_views {
-                store_drb_result(task_state, &leaf_view.leaf).await?;
-            }
+        for leaf_view in leaf_views {
+            store_drb_result(task_state, &leaf_view.leaf).await?;
         }
     }
 

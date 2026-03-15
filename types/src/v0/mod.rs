@@ -149,8 +149,7 @@ impl NodeType for SeqTypes {
     type StateSignatureKey = SchnorrPubKey;
 }
 
-pub const MOCK_SEQUENCER_VERSIONS: versions::Upgrade =
-    versions::Upgrade::new(version(0, 1), version(0, 2));
+pub const MOCK_SEQUENCER_VERSIONS: versions::Upgrade = versions::Upgrade::trivial(version(0, 4));
 
 pub type FeeVersion = StaticVersion<0, 2>;
 pub type EpochVersion = StaticVersion<0, 3>;

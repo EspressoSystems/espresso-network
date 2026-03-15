@@ -9,7 +9,7 @@ use std::{num::NonZeroUsize, time::Duration};
 use alloy::primitives::U256;
 use url::Url;
 use vec1::Vec1;
-use versions::{Upgrade, VERSION_0_1};
+use versions::{Upgrade, DRB_AND_HEADER_UPGRADE_VERSION};
 
 use crate::{
     constants::REQUEST_DATA_DELAY, upgrade_config::UpgradeConfig, HotShotConfig, NodeType,
@@ -23,12 +23,12 @@ fn default_builder_urls() -> Vec1<Url> {
 
 /// Default DRB difficulty, set to 0 (intended to be overwritten)
 fn default_drb_difficulty() -> u64 {
-    0
+    10
 }
 
 /// Default DRB upgrade difficulty, set to 0 (intended to be overwritten)
 fn default_drb_upgrade_difficulty() -> u64 {
-    0
+    10
 }
 
 /// Holds configuration for a `HotShot`
@@ -90,7 +90,7 @@ fn default_stake_table_capacity() -> usize {
 }
 
 fn default_version_upgrade() -> Upgrade {
-    Upgrade::trivial(VERSION_0_1)
+    Upgrade::trivial(DRB_AND_HEADER_UPGRADE_VERSION)
 }
 
 impl<TYPES: NodeType> From<HotShotConfigFile<TYPES>> for HotShotConfig<TYPES> {
@@ -175,8 +175,8 @@ impl<TYPES: NodeType> HotShotConfigFile<TYPES> {
             data_request_delay: Some(Duration::from_millis(REQUEST_DATA_DELAY)),
             builder_urls: default_builder_urls(),
             upgrade: UpgradeConfig::default(),
-            epoch_height: 0,
-            epoch_start_block: 0,
+            epoch_height: 100,
+            epoch_start_block: 1,
             stake_table_capacity: crate::light_client::DEFAULT_STAKE_TABLE_CAPACITY,
             drb_difficulty: 10,
             drb_upgrade_difficulty: 20,

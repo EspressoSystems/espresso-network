@@ -794,7 +794,10 @@ pub mod node_tests {
         data::{vid_commitment, VidCommitment, VidCommon, VidShare, ViewNumber},
         simple_certificate::{CertificatePair, QuorumCertificate2},
         traits::block_contents::{BlockHeader, EncodeBytes},
-        vid::advz::{advz_scheme, ADVZScheme},
+        vid::{
+            advz::advz_scheme,
+            avidm::{init_avidm_param, AvidMScheme},
+        },
     };
     use jf_advz::VidScheme;
     use pretty_assertions::assert_eq;
@@ -1349,28 +1352,18 @@ pub mod node_tests {
             tracing::info!(height = block.height(), "empty block");
         };
         let height = block.height() as usize;
-        let commit = if let VidCommitment::V0(commit) = block.payload_hash() {
+        let commit = if let VidCommitment::V1(commit) = block.payload_hash() {
             commit
         } else {
-            panic!("expect ADVZ commitment")
+            panic!("expect AvidM commitment")
         };
-
-        // Set up a test VID scheme.
-        let vid = advz_scheme(network.num_nodes());
-
-        // Get VID common data and verify it.
-        tracing::info!("fetching common data");
-        let common = ds.get_vid_common(height).await.await;
-        let VidCommon::V0(common) = &common.common() else {
-            panic!("expect ADVZ common");
-        };
-        ADVZScheme::is_consistent(&commit, common).unwrap();
 
         // Collect shares from each node.
         tracing::info!("fetching shares");
         let network = &network;
-        let vid = &vid;
+        let avidm_param = init_avidm_param(network.num_nodes()).unwrap();
         let shares: Vec<_> = join_all((0..network.num_nodes()).map(|i| async move {
+            let param = init_avidm_param(network.num_nodes()).unwrap();
             let ds = network.data_source_index(i);
 
             // Wait until the node has processed up to the desired block; since we have thus far
@@ -1378,21 +1371,23 @@ pub mod node_tests {
             let mut leaves = ds.subscribe_leaves(height).await;
             let leaf = leaves.next().await.unwrap();
             assert_eq!(leaf.height(), height as u64);
-            assert_eq!(leaf.payload_hash(), VidCommitment::V0(commit));
+            assert_eq!(leaf.payload_hash(), VidCommitment::V1(commit));
 
-            let share = if let VidShare::V0(share) = ds.vid_share(height).await.unwrap() {
+            let share = if let VidShare::V1(share) = ds.vid_share(height).await.unwrap() {
                 share
             } else {
-                panic!("expect ADVZ share")
+                panic!("expect AvidM share")
             };
-            vid.verify_share(&share, common, &commit).unwrap().unwrap();
+            AvidMScheme::verify_share(&param, &commit, &share)
+                .unwrap()
+                .unwrap();
             share
         }))
         .await;
 
         // Recover payload.
         tracing::info!("recovering payload");
-        let bytes = vid.recover_payload(&shares, common).unwrap();
+        let bytes = AvidMScheme::recover(&avidm_param, &shares).unwrap();
         let recovered = <MockPayload as BlockPayload<TestTypes>>::from_bytes(
             &bytes,
             &TestMetadata {

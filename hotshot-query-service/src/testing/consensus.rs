@@ -44,7 +44,7 @@ use tokio::{
 };
 use tracing::{info_span, Instrument};
 use url::Url;
-use versions::{Upgrade, VERSION_0_1};
+use versions::{Upgrade, DRB_AND_HEADER_UPGRADE_VERSION};
 
 use super::mocks::{MockMembership, MockNodeImpl, MockTransaction, MockTypes};
 use crate::{
@@ -154,7 +154,7 @@ impl<D: DataSourceLifeCycle + UpdateStatusData> MockNetwork<D> {
             stake_table_capacity: hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY,
             drb_difficulty: DIFFICULTY_LEVEL,
             drb_upgrade_difficulty: DIFFICULTY_LEVEL,
-            upgrade: Upgrade::trivial(VERSION_0_1),
+            upgrade: Upgrade::trivial(DRB_AND_HEADER_UPGRADE_VERSION),
         };
         update_config(&mut config);
 

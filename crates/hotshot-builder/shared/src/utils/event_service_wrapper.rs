@@ -170,7 +170,7 @@ mod tests {
 
     use crate::utils::EventServiceStream;
 
-    type MockVersion = StaticVersion<0, 1>;
+    type MockVersion = StaticVersion<0, 4>;
 
     struct MockEventsSource {
         counter: AtomicU64,

@@ -32,7 +32,6 @@ use hotshot_utils::anytrace::*;
 use tokio::time::{sleep, timeout};
 use tracing::instrument;
 use vbs::version::Version;
-use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION};
 
 use crate::{
     builder::v0_1::BuilderClient as BuilderClientBase,
@@ -143,62 +142,47 @@ impl<TYPES: NodeType> TransactionTaskState<TYPES> {
             },
         };
 
-        // Short circuit if we are in epochs and we are likely proposing a transition block
+        // Short circuit if we are likely proposing a transition block
         // If it's the first view of the upgrade, we don't need to check for transition blocks
-        if version >= EPOCH_VERSION {
-            let Some(epoch) = block_epoch else {
-                tracing::error!("Epoch is required for epoch-based view change");
+        let Some(epoch) = block_epoch else {
+            tracing::error!("Epoch is required for epoch-based view change");
+            return None;
+        };
+        let high_qc = self.consensus.read().await.high_qc().clone();
+        let mut high_qc_block_number = if let Some(bn) = high_qc.data.block_number {
+            bn
+        } else {
+            tracing::warn!("High QC in epoch version and not the first QC after upgrade");
+            self.send_empty_block(event_stream, block_view, block_epoch, version)
+                .await;
+            return None;
+        };
+        high_qc_block_number = std::cmp::max(
+            high_qc_block_number,
+            self.consensus.read().await.highest_block,
+        );
+        if self
+            .consensus
+            .read()
+            .await
+            .transition_qc()
+            .is_some_and(|qc| {
+                let Some(e) = qc.0.data.epoch else {
+                    return false;
+                };
+                e == epoch
+            })
+            || is_epoch_transition(high_qc_block_number, self.epoch_height)
+        {
+            // We are proposing a transition block it should be empty
+            if !is_last_block(high_qc_block_number, self.epoch_height) {
+                tracing::info!(
+                    "Sending empty block event. View number: {block_view}. Parent Block number: \
+                     {high_qc_block_number}"
+                );
+                self.send_empty_block(event_stream, block_view, block_epoch, version)
+                    .await;
                 return None;
-            };
-            let high_qc = self.consensus.read().await.high_qc().clone();
-            let mut high_qc_block_number = if let Some(bn) = high_qc.data.block_number {
-                bn
-            } else {
-                // If it's the first view after the upgrade the high QC won't have a block number
-                // So just use the highest_block number we've stored
-                if block_view
-                    > self
-                        .upgrade_lock
-                        .upgrade_view()
-                        .await
-                        .unwrap_or(ViewNumber::new(0))
-                        + 1
-                {
-                    tracing::warn!("High QC in epoch version and not the first QC after upgrade");
-                    self.send_empty_block(event_stream, block_view, block_epoch, version)
-                        .await;
-                    return None;
-                }
-                // 0 here so we use the highest block number in the calculation below
-                0
-            };
-            high_qc_block_number = std::cmp::max(
-                high_qc_block_number,
-                self.consensus.read().await.highest_block,
-            );
-            if self
-                .consensus
-                .read()
-                .await
-                .transition_qc()
-                .is_some_and(|qc| {
-                    let Some(e) = qc.0.data.epoch else {
-                        return false;
-                    };
-                    e == epoch
-                })
-                || is_epoch_transition(high_qc_block_number, self.epoch_height)
-            {
-                // We are proposing a transition block it should be empty
-                if !is_last_block(high_qc_block_number, self.epoch_height) {
-                    tracing::info!(
-                        "Sending empty block event. View number: {block_view}. Parent Block \
-                         number: {high_qc_block_number}"
-                    );
-                    self.send_empty_block(event_stream, block_view, block_epoch, version)
-                        .await;
-                    return None;
-                }
             }
         }
 
@@ -370,18 +354,6 @@ impl<TYPES: NodeType> TransactionTaskState<TYPES> {
                 let view_number = proposal.data.view_number();
                 let next_view = view_number + 1;
 
-                let version = match self.upgrade_lock.version(next_view).await {
-                    Ok(v) => v,
-                    Err(e) => {
-                        tracing::error!("Failed to calculate version: {e:?}");
-                        return Ok(());
-                    },
-                };
-
-                if version < DRB_AND_HEADER_UPGRADE_VERSION {
-                    return Ok(());
-                }
-
                 let vid = proposal.data.block_header().payload_commitment();
                 let block_height = proposal.data.block_header().block_number();
                 if is_epoch_transition(block_height, self.epoch_height) {
@@ -390,8 +362,6 @@ impl<TYPES: NodeType> TransactionTaskState<TYPES> {
                 if next_view <= self.cur_view {
                     return Ok(());
                 }
-                // move to next view for this task only
-                self.cur_view = next_view;
 
                 let leader = self
                     .membership_coordinator
@@ -400,8 +370,11 @@ impl<TYPES: NodeType> TransactionTaskState<TYPES> {
                     .leader(next_view)
                     .await?;
                 if leader == self.public_key {
+                    // move to next view for this task only
+                    self.cur_view = next_view;
                     self.handle_view_change(&event_stream, next_view, self.cur_epoch, Some(vid))
                         .await;
+
                     return Ok(());
                 }
             },

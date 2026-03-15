@@ -183,9 +183,9 @@ impl NodeType for MockTypes {
     type StateSignatureKey = SchnorrPubKey;
 }
 
-pub const MOCK_UPGRADE: Upgrade = Upgrade::new(version(0, 1), version(0, 2));
+pub const MOCK_UPGRADE: Upgrade = Upgrade::trivial(version(0, 4));
 
-pub type MockBase = StaticVersion<0, 1>;
+pub type MockBase = StaticVersion<0, 4>;
 
 pub type MockMembership = StrictMembership<MockTypes, StaticStakeTable<BLSPubKey, SchnorrPubKey>>;
 pub type MockQuorumProposal = QuorumProposal<MockTypes>;

@@ -138,7 +138,7 @@ mod tests {
         let num_successful_views = 45;
         let min_txns_per_view = 5;
 
-        let mut metadata = TestDescription {
+        let metadata = TestDescription {
             txn_description: hotshot_testing::txn_task::TxnTaskDescription::RoundRobinTimeBased(
                 Duration::MAX,
             ),
@@ -148,8 +148,6 @@ mod tests {
             },
             ..TestDescription::default()
         };
-
-        metadata.test_config.epoch_height = 0;
 
         run_test::<LegacyBuilderImpl>(
             metadata,
@@ -177,7 +175,7 @@ mod tests {
         Versions: [TEST_VERSIONS.test],
         Ignore: true,
         Metadata: {
-            let mut metadata = TestDescription {
+            TestDescription {
                 validate_transactions : hotshot_testing::test_builder::nonempty_block_threshold((90,100)),
                 txn_description : hotshot_testing::txn_task::TxnTaskDescription::RoundRobinTimeBased(Duration::from_millis(10)),
                 overall_safety_properties: OverallSafetyPropertiesDescription {
@@ -185,11 +183,7 @@ mod tests {
                     ..Default::default()
                 },
                 ..Default::default()
-            };
-
-            metadata.test_config.epoch_height = 0;
-
-            metadata
+            }
         },
     );
 }

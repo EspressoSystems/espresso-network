@@ -70,7 +70,7 @@ where
     let builder: TestDescription<TYPES, I> = TestDescription::default_multiple_rounds();
 
     let launcher = builder.gen_launcher().map_hotshot_config(|hotshot_config| {
-        hotshot_config.epoch_height = 0;
+        hotshot_config.epoch_height = 100;
     });
     build_system_handle_from_launcher(node_id, &launcher).await
 }

@@ -258,7 +258,7 @@ pub struct Options {
         long,
         name = "GENESIS_FILE",
         env = "ESPRESSO_SEQUENCER_GENESIS_FILE",
-        default_value = "/genesis/demo.toml"
+        default_value = "/genesis/demo-drb-header.toml"
     )]
     pub genesis_file: PathBuf,
 

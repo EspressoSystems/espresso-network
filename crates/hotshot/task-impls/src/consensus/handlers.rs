@@ -20,7 +20,6 @@ use hotshot_types::{
 use hotshot_utils::anytrace::*;
 use tokio::{spawn, time::sleep};
 use tracing::instrument;
-use versions::EPOCH_VERSION;
 
 use super::ConsensusTaskState;
 use crate::{
@@ -204,12 +203,6 @@ pub async fn send_high_qc<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     sender: &Sender<Arc<HotShotEvent<TYPES>>>,
     task_state: &mut ConsensusTaskState<TYPES, I>,
 ) -> Result<()> {
-    let version = task_state.upgrade_lock.version(new_view_number).await?;
-    ensure!(
-        version >= EPOCH_VERSION,
-        debug!("HotStuff 2 upgrade not yet in effect")
-    );
-
     let consensus_reader = task_state.consensus.read().await;
     let high_qc = consensus_reader.high_qc().clone();
     let is_eqc = high_qc
