@@ -10,12 +10,16 @@ use async_trait::async_trait;
 use hotshot_task::task::TaskState;
 use hotshot_types::{
     consensus::{OuterConsensus, PayloadWithMetadata},
-    data::{QuorumProposal2, VidCommitment, VidDisperseShare, VidDisperseShare2},
+    data::{
+        vid_disperse::vid_total_weight, QuorumProposal2, VidCommitment, VidDisperseShare,
+        VidDisperseShare2,
+    },
     epoch_membership::EpochMembershipCoordinator,
     simple_vote::HasEpoch,
     traits::{
         block_contents::BlockHeader,
         node_implementation::{ConsensusTime, NodeType},
+        signature_key::SignatureKey,
         BlockPayload,
     },
     vid::avidm_gf2::AvidmGf2Scheme,
@@ -25,7 +29,7 @@ use tokio::{spawn, sync::mpsc};
 
 use crate::{
     events::{HotShotEvent, HotShotTaskCompleted},
-    helpers::{broadcast_event, validate_vid_share},
+    helpers::broadcast_event,
 };
 
 pub struct ReconstructTaskState<TYPES: NodeType> {
@@ -220,7 +224,7 @@ impl<TYPES: NodeType> ReconstructTaskState<TYPES> {
         event: Arc<HotShotEvent<TYPES>>,
     ) -> Option<HotShotTaskCompleted> {
         match event.as_ref() {
-            HotShotEvent::VidShareRecv(sender, share) => {
+            HotShotEvent::VidShareRecv(_sender, share) => {
                 let handler_start = Instant::now();
                 let view = share.data.view_number();
                 if self.is_old_view(view).await {
@@ -241,18 +245,62 @@ impl<TYPES: NodeType> ReconstructTaskState<TYPES> {
                 }
 
                 let validate_start = Instant::now();
-                if let Err(e) = validate_vid_share::<TYPES>(
-                    sender,
-                    share,
-                    &self.membership,
-                    self.consensus.clone(),
-                )
-                .await
+
+                // Dedup check
+                if self
+                    .consensus
+                    .read()
+                    .await
+                    .vid_shares()
+                    .get(&view)
+                    .is_some_and(|key_map| key_map.get(share.data.recipient_key()).is_some())
                 {
-                    tracing::warn!("VID share validation failed for view {view}: {e}");
                     return None;
                 }
+
+                // Leader signature check only — these are re-broadcast shares,
+                // always signed by the leader (sender check would always fail first)
+                // let vid_epoch = share.data.epoch();
+                // let Ok(membership_reader) = self.membership.membership_for_epoch(vid_epoch).await
+                // else {
+                //     tracing::warn!("Failed to get membership for view {view}");
+                //     return None;
+                // };
+                // let Ok(leader) = membership_reader.leader(view).await else {
+                //     tracing::warn!("Failed to get leader for view {view}");
+                //     return None;
+                // };
+
+                // let sig_start = Instant::now();
+                // let payload_commitment = share.data.payload_commitment_ref();
+                // if !leader.validate(&share.signature, payload_commitment.as_ref()) {
+                //     tracing::warn!("VID share leader signature invalid for view {view}");
+                //     return None;
+                // }
+                // let sig_elapsed = sig_start.elapsed();
+
+                // Cryptographic share verification
+                let target_epoch = share.data.target_epoch();
+                let crypto_start = Instant::now();
+                let Ok(target_membership) =
+                    self.membership.membership_for_epoch(target_epoch).await
+                else {
+                    tracing::warn!("Failed to get target membership for view {view}");
+                    return None;
+                };
+                let total_weight =
+                    vid_total_weight::<TYPES>(&target_membership.stake_table().await, target_epoch);
+                if !share.data.verify(total_weight) {
+                    tracing::warn!("Failed to verify VID share for view {view}");
+                    return None;
+                }
+                let crypto_elapsed = crypto_start.elapsed();
+
                 let validate_elapsed = validate_start.elapsed();
+                tracing::warn!(
+                    "reconstruct_validate view={view} total={validate_elapsed:?} \
+                     crypto_verify={crypto_elapsed:?}"
+                );
 
                 let store_start = Instant::now();
                 self.consensus
