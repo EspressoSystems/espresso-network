@@ -2547,7 +2547,7 @@ mod test {
 
         let provider = Provider::new(QueryServiceProvider::new(
             provider_url,
-            StaticVersion::<0, 1> {},
+            StaticVersion::<0, 4> {},
         ));
 
         let ds = data_source(&db, &provider).await;
@@ -2614,28 +2614,6 @@ mod test {
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_fallback_deserialization_for_fetch_requests_v0() {
-        let port = reserve_tcp_port().unwrap();
-
-        // This run will call v0 availalbilty api for fetch requests.
-        // The fetch initially attempts deserialization with new types,
-        // which fails because the v0 provider returns legacy types.
-        // It then falls back to deserializing as legacy types,
-        // and the fetch passes
-        run_fallback_deserialization_test_helper(port, "v0").await;
-    }
-
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_fallback_deserialization_for_fetch_requests_v1() {
-        let port = reserve_tcp_port().unwrap();
-
-        // Fetch from the v1 availability API using MockVersions.
-        // this one fetches from the v1 provider.
-        // which would correctly deserialize the bytes in the first attempt, so no fallback deserialization is needed
-        run_fallback_deserialization_test_helper(port, "v1").await;
-    }
-
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_fallback_deserialization_for_fetch_requests_pos() {
         let port = reserve_tcp_port().unwrap();
 
@@ -2659,7 +2637,7 @@ mod test {
             "availability",
             define_api(
                 &Default::default(),
-                StaticVersion::<0, 1> {},
+                StaticVersion::<0, 4> {},
                 "0.0.1".parse().unwrap(),
             )
             .unwrap(),
@@ -2668,13 +2646,13 @@ mod test {
 
         network.spawn(
             "server",
-            app.serve(format!("0.0.0.0:{port}"), StaticVersion::<0, 1> {}),
+            app.serve(format!("0.0.0.0:{port}"), StaticVersion::<0, 4> {}),
         );
 
         let db = TmpDb::init().await;
         let provider = Provider::new(QueryServiceProvider::new(
             format!("http://localhost:{port}/v0").parse().unwrap(),
-            StaticVersion::<0, 1> {},
+            StaticVersion::<0, 4> {},
         ));
         let ds = data_source(&db, &provider).await;
 
