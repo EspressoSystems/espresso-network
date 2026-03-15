@@ -74,7 +74,7 @@ mod tests {
                 events_streamer
                     .write()
                     .await
-                    .handle_event(tx_event.clone())
+                    .handle_event(Arc::new(tx_event.clone()))
                     .await;
                 send_count += 1;
                 tracing::debug!("After writing to events_source");
@@ -258,7 +258,7 @@ mod tests {
                 events_streamer
                     .write()
                     .await
-                    .handle_event(tx_event.clone())
+                    .handle_event(Arc::new(tx_event.clone()))
                     .await;
                 send_count += 1;
                 tracing::debug!("After writing to events_source");

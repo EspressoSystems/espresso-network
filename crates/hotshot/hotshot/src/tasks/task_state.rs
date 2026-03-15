@@ -72,6 +72,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             shutdown_flag: Arc::new(AtomicBool::new(false)),
             spawned_tasks: BTreeMap::new(),
             epoch_height: handle.epoch_height,
+            vid_event_stream: handle.vid_event_stream.0.clone(),
         }
     }
 }
@@ -173,6 +174,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             id: handle.hotshot.id,
             event_stream: handle.internal_event_stream.0.clone(),
             consensus: OuterConsensus::new(handle.hotshot.consensus()),
+            membership: handle.hotshot.membership_coordinator.clone(),
+            public_key: handle.public_key().clone(),
             calc_lock: Arc::new(RwLock::new(HashMap::new())),
             proposals: BTreeMap::new(),
             vid_shares: Arc::new(RwLock::new(BTreeMap::new())),
@@ -322,6 +325,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             first_epoch: None,
             stake_table_capacity: handle.hotshot.config.stake_table_capacity,
             da_committees: handle.hotshot.config.da_committees.clone(),
+            vid_sender: handle.vid_event_stream.0.clone(),
+            vid_receiver: handle.vid_event_stream.1.clone(),
         }
     }
 }

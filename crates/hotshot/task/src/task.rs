@@ -52,6 +52,8 @@ pub struct Task<S: TaskState> {
     sender: Sender<Arc<S::Event>>,
     /// Receives events that are broadcast from any task, including itself
     receiver: Receiver<Arc<S::Event>>,
+    /// Optional auxiliary receiver for a secondary channel (e.g. dedicated VID channel)
+    aux_receiver: Option<Receiver<Arc<S::Event>>>,
 }
 
 impl<S: TaskState + Send + 'static> Task<S> {
@@ -61,7 +63,14 @@ impl<S: TaskState + Send + 'static> Task<S> {
             state,
             sender,
             receiver,
+            aux_receiver: None,
         }
+    }
+
+    /// Add an auxiliary receiver (e.g. for a dedicated VID event channel)
+    pub fn with_aux_receiver(mut self, rx: Receiver<Arc<S::Event>>) -> Self {
+        self.aux_receiver = Some(rx);
+        self
     }
 
     /// The state of the task, as a boxed dynamic trait object.
@@ -74,7 +83,14 @@ impl<S: TaskState + Send + 'static> Task<S> {
     pub fn run(mut self) -> JoinHandle<Box<dyn TaskState<Event = S::Event>>> {
         spawn(async move {
             loop {
-                match self.receiver.recv_direct().await {
+                let result = match &mut self.aux_receiver {
+                    Some(aux_rx) => tokio::select! {
+                        r = self.receiver.recv_direct() => r,
+                        r = aux_rx.recv_direct() => r,
+                    },
+                    None => self.receiver.recv_direct().await,
+                };
+                match result {
                     Ok(input) => {
                         if *input == S::Event::shutdown_event() {
                             self.state.cancel_subtasks();

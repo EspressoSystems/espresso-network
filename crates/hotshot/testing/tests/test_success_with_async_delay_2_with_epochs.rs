@@ -8,8 +8,8 @@ use std::{collections::HashMap, time::Duration};
 
 use hotshot_example_types::{
     node_types::{
-        CliquenetImpl, CombinedImpl, EpochsTestVersions, PushCdnImpl,
-        TestTwoStakeTablesTypes, TestTypes,
+        CliquenetImpl, CombinedImpl, EpochsTestVersions, PushCdnImpl, TestTwoStakeTablesTypes,
+        TestTypes,
     },
     testable_delay::{DelayConfig, DelayOptions, DelaySettings, SupportedTraitTypesForAsyncDelay},
 };

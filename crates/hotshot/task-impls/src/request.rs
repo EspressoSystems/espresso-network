@@ -79,6 +79,9 @@ pub struct NetworkRequestState<TYPES: NodeType, I: NodeImplementation<TYPES>> {
 
     /// Number of blocks in an epoch, zero means there are no epochs
     pub epoch_height: u64,
+
+    /// Dedicated sender for VID share events
+    pub vid_event_stream: Sender<Arc<HotShotEvent<TYPES>>>,
 }
 
 impl<TYPES: NodeType, I: NodeImplementation<TYPES>> Drop for NetworkRequestState<TYPES, I> {
@@ -193,7 +196,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TaskState for NetworkRequest
                         sender_key.clone(),
                         vid_proposal.clone(),
                     )),
-                    sender,
+                    &self.vid_event_stream,
                 )
                 .await;
                 Ok(())
@@ -211,6 +214,13 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TaskState for NetworkRequest
                     });
                 self.spawned_tasks
                     .retain(|view, handles| view >= &self.view || !handles.is_empty());
+                if self.spawned_tasks.len() > 10 {
+                    tracing::warn!(
+                        id = self.id,
+                        spawned_tasks = self.spawned_tasks.len(),
+                        "request spawned_tasks size"
+                    );
+                }
                 Ok(())
             },
             _ => Ok(()),

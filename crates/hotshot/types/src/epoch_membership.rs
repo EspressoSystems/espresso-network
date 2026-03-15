@@ -100,7 +100,7 @@ where
         }
     }
 
-    pub async fn set_external_channel(&mut self, external_channel: Receiver<Event<TYPES>>) {
+    pub async fn set_external_channel(&mut self, external_channel: Receiver<Arc<Event<TYPES>>>) {
         self.membership
             .write()
             .await

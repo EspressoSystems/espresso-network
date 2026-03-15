@@ -215,7 +215,7 @@ async fn test_pruning() {
         },
     });
     event_stream_sender
-        .broadcast(hotshot::types::Event {
+        .broadcast(Arc::new(hotshot::types::Event {
             view_number: ViewNumber::new(NUM_ROUNDS as u64),
             event: EventType::Decide {
                 leaf_chain: Arc::new(vec![LeafInfo {
@@ -229,7 +229,7 @@ async fn test_pruning() {
                 deciding_qc: None,
                 block_size: None,
             },
-        })
+        }))
         .await
         .unwrap();
 

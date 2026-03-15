@@ -71,7 +71,7 @@ where
     I: TestableNodeImplementation<Types>,
     V: Versions,
 {
-    type Event = Event<Types>;
+    type Event = Arc<Event<Types>>;
     type Error = Error;
 
     async fn handle_event(&mut self, (event, node_id): (Self::Event, usize)) -> anyhow::Result<()> {
@@ -80,7 +80,7 @@ where
             return Ok(());
         }
 
-        if let EventType::Decide { leaf_chain, .. } = event.event {
+        if let EventType::Decide { leaf_chain, .. } = &event.event {
             for leaf in leaf_chain.iter().rev() {
                 let payload = leaf
                     .leaf

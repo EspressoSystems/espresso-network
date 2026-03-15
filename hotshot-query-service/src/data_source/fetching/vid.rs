@@ -201,7 +201,7 @@ pub(super) fn fetch_vid_common_with_header<Types, S, P>(
     };
 
     // Now that we have the header, we only need to retrieve the VID common data.
-    tracing::info!(
+    tracing::debug!(
         "spawned active fetch for VID common {:?} (height {})",
         header.payload_commitment(),
         header.block_number()

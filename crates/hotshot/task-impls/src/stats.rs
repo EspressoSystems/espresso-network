@@ -277,6 +277,9 @@ impl<TYPES: NodeType> TaskState for StatsTaskState<TYPES> {
                     .proposal_timestamp =
                     Some(proposal.data.block_header().timestamp_millis() as i128);
             },
+            HotShotEvent::StateValidated(view) => {
+                self.leader_entry(*view).state_validated.get_or_insert(now);
+            },
             HotShotEvent::QcFormed(either) => {
                 match either {
                     Either::Left(qc) => self
@@ -364,10 +367,9 @@ impl<TYPES: NodeType> TaskState for StatsTaskState<TYPES> {
                 // TODO: Track transactions by time
                 // #3526 https://github.com/EspressoSystems/espresso-network/issues/3526
             },
-            HotShotEvent::SendPayloadCommitmentAndMetadata(_, _, _, view, _) => {
-                self.leader_entry(*view)
-                    .vid_disperse_send
-                    .get_or_insert(now);
+            HotShotEvent::VidDisperseSend(proposal, _) => {
+                let view = proposal.data.view_number();
+                self.leader_entry(view).vid_disperse_send.get_or_insert(now);
             },
             HotShotEvent::VidShareRecv(_, proposal) => {
                 if self.public_key == *proposal.data.recipient_key() {

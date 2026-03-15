@@ -177,9 +177,16 @@ impl<T: NodeType> TestableNetworkingImplementation<T> for Cliquenet<T> {
                 let it = parties
                     .iter()
                     .map(|(s, k, a)| (k.clone(), s.public_key(), a.clone()));
-                let net = Cliquenet::create("test", k.clone(), s.clone(), a.clone(), it, NoMetrics::boxed())
-                    .await
-                    .unwrap();
+                let net = Cliquenet::create(
+                    "test",
+                    k.clone(),
+                    s.clone(),
+                    a.clone(),
+                    it,
+                    NoMetrics::boxed(),
+                )
+                .await
+                .unwrap();
                 Arc::new(net)
             };
             Box::pin(future)

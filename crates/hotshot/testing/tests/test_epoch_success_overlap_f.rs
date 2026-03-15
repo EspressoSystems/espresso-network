@@ -5,8 +5,8 @@
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
 use hotshot_example_types::node_types::{
-    CliquenetImpl, EpochsTestVersions, MemoryImpl, PushCdnImpl,
-    StableQuorumFilterConfig, TestTypesRandomizedCommitteeMembers,
+    CliquenetImpl, EpochsTestVersions, MemoryImpl, PushCdnImpl, StableQuorumFilterConfig,
+    TestTypesRandomizedCommitteeMembers,
 };
 use hotshot_macros::cross_tests;
 use hotshot_testing::{block_builder::SimpleBuilderImplementation, test_builder::TestDescription};
