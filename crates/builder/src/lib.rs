@@ -142,11 +142,11 @@ pub mod testing {
                 start_voting_time: 0,
                 stop_proposing_time: 0,
                 stop_voting_time: 0,
-                epoch_height: 0,
-                epoch_start_block: 0,
+                epoch_height: 100,
+                epoch_start_block: 1,
                 stake_table_capacity: hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY,
-                drb_difficulty: 0,
-                drb_upgrade_difficulty: 0,
+                drb_difficulty: 10,
+                drb_upgrade_difficulty: 10,
                 upgrade: Upgrade::trivial(DRB_AND_HEADER_UPGRADE_VERSION),
             };
 
