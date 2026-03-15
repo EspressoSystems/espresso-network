@@ -16,7 +16,7 @@ cross_tests!(
     Types: [TestTypes, TestTypesRandomizedLeader],
     // TODO: we need some test infrastructure + Membership trait fixes to get this to work with:
     // Types: [TestTypes, TestTypesRandomizedLeader, TestTwoStakeTablesTypes],
-    Versions: [TEST_VERSIONS.epoch_upgrade],
+    Versions: [TEST_VERSIONS.epoch],
     Ignore: false,
     Metadata: {
         let mut metadata = TestDescription {

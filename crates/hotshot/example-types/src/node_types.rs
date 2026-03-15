@@ -326,7 +326,7 @@ pub struct TestVersions {
 }
 
 pub const TEST_VERSIONS: TestVersions = TestVersions {
-    epoch: Upgrade::trivial(version(0, 3)),
+    epoch: Upgrade::trivial(version(0, 4)),
     da_committee: Upgrade::trivial(version(0, 4)),
     vid2: Upgrade::trivial(version(0, 6)),
     test: Upgrade::new(version(0, 1), version(0, 2)),

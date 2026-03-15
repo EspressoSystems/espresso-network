@@ -800,7 +800,6 @@ mod test {
     use async_lock::RwLock;
     use committable::Committable;
     use futures::future::FutureExt;
-    use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_types::{data::Leaf2, simple_certificate::QuorumCertificate2};
     use serde::de::DeserializeOwned;
     use surf_disco::{Client, Error as _};
@@ -1273,12 +1272,9 @@ mod test {
             MOCK_UPGRADE.base,
         )
         .await;
-        let qc = QuorumCertificate2::genesis(
-            &Default::default(),
-            &Default::default(),
-            TEST_VERSIONS.da_committee,
-        )
-        .await;
+        let qc =
+            QuorumCertificate2::genesis(&Default::default(), &Default::default(), MOCK_UPGRADE)
+                .await;
         let leaf = LeafQueryData::new(leaf, qc).unwrap();
         let block = BlockQueryData::new(leaf.header().clone(), MockPayload::genesis());
         data_source

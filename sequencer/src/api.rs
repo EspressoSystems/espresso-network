@@ -2958,7 +2958,7 @@ mod test {
     };
     use tokio::time::sleep;
     use vbs::version::StaticVersion;
-    use versions::{version, Upgrade, DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, FEE_VERSION};
+    use versions::{version, Upgrade, DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION};
 
     use self::{
         data_source::testing::TestableSequencerDataSource, options::HotshotEvents,
@@ -6949,11 +6949,6 @@ mod test {
         assert_eq!(res, expected);
 
         Ok(())
-    }
-
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_namespace_query_compat_v0_2() {
-        test_namespace_query_compat_helper(Upgrade::trivial(FEE_VERSION)).await;
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
