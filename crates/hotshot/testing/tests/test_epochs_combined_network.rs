@@ -59,6 +59,8 @@ cross_tests!(
             node_changes: vec![(5, all_nodes)],
         };
 
+        metadata.overall_safety_properties.possible_view_failures = vec![5,6,7,8,9,10];
+
         metadata
     },
 );
