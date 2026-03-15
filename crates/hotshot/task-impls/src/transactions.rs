@@ -362,8 +362,6 @@ impl<TYPES: NodeType> TransactionTaskState<TYPES> {
                 if next_view <= self.cur_view {
                     return Ok(());
                 }
-                // move to next view for this task only
-                self.cur_view = next_view;
 
                 let leader = self
                     .membership_coordinator
@@ -372,8 +370,11 @@ impl<TYPES: NodeType> TransactionTaskState<TYPES> {
                     .leader(next_view)
                     .await?;
                 if leader == self.public_key {
+                    // move to next view for this task only
+                    self.cur_view = next_view;
                     self.handle_view_change(&event_stream, next_view, self.cur_epoch, Some(vid))
                         .await;
+
                     return Ok(());
                 }
             },
