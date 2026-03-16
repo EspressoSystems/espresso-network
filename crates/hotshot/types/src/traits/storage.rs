@@ -14,6 +14,7 @@ use std::{sync::Arc, time::Duration};
 use anyhow::{anyhow, ensure, Result};
 use async_trait::async_trait;
 use futures::future::BoxFuture;
+use tokio::time::sleep;
 
 use super::node_implementation::NodeType;
 use crate::{
@@ -171,10 +172,10 @@ pub async fn store_drb_input_impl<TYPES: NodeType>(
 ) -> Result<()> {
     for attempt in 1..=3 {
         match storage.store_drb_input(drb_input.clone()).await {
-            Ok(()) => (),
+            Ok(()) => return Ok(()),
             Err(e) if attempt < 5 => {
                 tracing::warn!("Failed to store DRB input (attempt {attempt}/5): {e}");
-                tokio::time::sleep(Duration::from_millis(300)).await;
+                sleep(Duration::from_millis(300)).await;
             },
             Err(e) => {
                 tracing::warn!("Failed to store DRB input (attempt {attempt}/5): {e}");
@@ -182,6 +183,7 @@ pub async fn store_drb_input_impl<TYPES: NodeType>(
             },
         }
     }
+
     Ok(())
 }
 
@@ -212,12 +214,12 @@ async fn store_drb_result_impl<TYPES: NodeType>(
 ) -> Result<()> {
     for attempt in 1..=3 {
         match storage.store_drb_result(epoch, drb_result).await {
-            Ok(()) => (),
+            Ok(()) => return Ok(()),
             Err(e) if attempt < 5 => {
                 tracing::warn!(
                     "Failed to store DRB result for epoch {epoch} (attempt {attempt}/5): {e}"
                 );
-                tokio::time::sleep(Duration::from_millis(300)).await;
+                sleep(Duration::from_millis(300)).await;
             },
             Err(e) => {
                 tracing::warn!(

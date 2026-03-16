@@ -26,9 +26,9 @@ use vbs::version::Version;
 use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION};
 
 use crate::{
-    api::{RewardMerkleTreeDataSource, RewardMerkleTreeV2Data},
+    api::RewardMerkleTreeDataSource,
     catchup::{CatchupStorage, SqlStateCatchup},
-    persistence::{ChainConfigPersistence, RewardMerkleTreeV2Persistence},
+    persistence::ChainConfigPersistence,
     NodeState, SeqTypes,
 };
 
@@ -228,16 +228,6 @@ async fn store_state_update(
         .context("failed to store reward merkle nodes")?;
     }
 
-    if version > EPOCH_VERSION && !rewards_delta.is_empty() {
-        let serialization = bincode::serialize(&TryInto::<RewardMerkleTreeV2Data>::try_into(
-            &state.reward_merkle_tree_v2,
-        )?)
-        .context("Merkle tree serialization failed")?;
-        tx.persist_reward_merkle_tree_v2(block_number, serialization)
-            .await
-            .context("failed to store reward merkle tree v2")?;
-    }
-
     Ok(())
 }
 
@@ -275,6 +265,18 @@ where
     .await
     .context("computing state update")?;
 
+    if version > EPOCH_VERSION && !delta.rewards_delta.is_empty() {
+        storage
+            .save_and_gc_reward_tree_v2(instance, block_number, &state.reward_merkle_tree_v2)
+            .await
+            .context("failed to save and gc reward merkle tree v2")?;
+
+        storage
+            .persist_reward_proofs(instance, block_number)
+            .await
+            .context("failed to persist reward proofs")?;
+    }
+
     tracing::debug!("storing state update");
     let mut tx = storage
         .write()
@@ -284,13 +286,6 @@ where
     store_state_update(&mut tx, block_number, version, &state, &delta).await?;
 
     tx.commit().await?;
-
-    if version > EPOCH_VERSION && !delta.rewards_delta.is_empty() {
-        storage
-            .persist_proofs_and_garbage_collect(instance, block_number, version)
-            .await
-            .context("failed to persist proofs and garbage collect")?;
-    }
 
     let mut tx = storage
         .write()
@@ -482,7 +477,6 @@ pub(crate) trait SequencerStateUpdate:
     + UpdateStateData<SeqTypes, BlockMerkleTree, { BlockMerkleTree::ARITY }>
     + UpdateStateData<SeqTypes, RewardMerkleTreeV1, { RewardMerkleTreeV1::ARITY }>
     + ChainConfigPersistence
-    + RewardMerkleTreeV2Persistence
 {
 }
 
@@ -492,6 +486,5 @@ impl<T> SequencerStateUpdate for T where
         + UpdateStateData<SeqTypes, BlockMerkleTree, { BlockMerkleTree::ARITY }>
         + UpdateStateData<SeqTypes, RewardMerkleTreeV1, { RewardMerkleTreeV1::ARITY }>
         + ChainConfigPersistence
-        + RewardMerkleTreeV2Persistence
 {
 }
