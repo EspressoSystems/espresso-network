@@ -11,7 +11,7 @@ The diagram below shows how the Espresso Confirmation Layer fits into the rollup
 3. L2 forwards L2 block to the confirmation layer.
 4. Espresso produces Espresso blocks containing rollup namespaces with confirmed rollup blocks. L2 validators receive
    blocks and execute the state transition functions for their rollups.
-5. Espresso posts succinct commitment to block to L1. Contract verifies proof of Espresso state transition then stores
+5. Espresso posts succinct commitment to the block to L1. Contract verifies proof of Espresso state transition then stores
    the block commitment.
 6. Rollups post updated state to L1. ZK-rollups include a proof.
 7. Rollup contracts read certified sequence of block commitments from sequencer contract. Verify state transition proofs

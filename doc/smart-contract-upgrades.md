@@ -125,7 +125,7 @@ parameter types) in the most derived contract in the inheritance hierarchy.
   cumbersome in large projects with many inherited contracts
 - **Multiple inheritance:** Solidity’s C3 linearization predicts the order in which base contracts are inherited, and
   their functions are called. So the order inherited is the order they will be in the storage layout and this needs to
-  be taken under consideration. When multiple base contracts define state variables, the order of inheritance can affect
+  be taken into consideration. When multiple base contracts define state variables, the order of inheritance can affect
   the storage layout. Mismanaging this can lead to overlapping storage slots, causing data corruption.
 
 ### Upgrades supported
