@@ -849,10 +849,7 @@ impl Header {
 
         let mut reward_calculator = instance_state.epoch_rewards_calculator.lock().await;
 
-        if epoch > first_epoch + 2
-            && !reward_calculator.has_result(prev_epoch)
-            && !reward_calculator.is_calculating(prev_epoch)
-        {
+        if epoch > first_epoch + 2 && !reward_calculator.is_calculating(prev_epoch) {
             tracing::info!(%epoch, %prev_epoch, "triggering catchup reward calculation");
             reward_calculator.spawn_background_task(
                 prev_epoch,
@@ -992,20 +989,6 @@ impl Header {
             coordinator,
             Some(*leader_counts),
         );
-
-        // Keep only the 2 most recently inserted entries
-        // one for consensus
-        // one for state loop
-        while reward_calculator.results.len() > 2 {
-            if let Some(oldest) = reward_calculator
-                .results
-                .iter()
-                .min_by_key(|(_, r)| r.inserted_at)
-                .map(|(e, _)| *e)
-            {
-                reward_calculator.results.remove(&oldest);
-            }
-        }
 
         Ok((epoch_rewards_applied, changed_accounts))
     }

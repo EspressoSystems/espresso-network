@@ -1030,15 +1030,11 @@ pub struct EpochRewardsResult {
     pub total_distributed: RewardAmount,
     /// Set of all reward accounts that were modified.
     pub changed_accounts: HashSet<RewardAccountV2>,
-    /// Timestamp when this result was inserted into the cache.
-    pub inserted_at: std::time::Instant,
 }
 
 /// Manages epoch-based reward calculations in the background.
 #[derive(Debug, Default)]
 pub struct EpochRewardsCalculator {
-    /// Cached results by epoch
-    pub results: HashMap<EpochNumber, EpochRewardsResult>,
     /// Pending calculations by epoch
     pending: HashMap<EpochNumber, JoinHandle<anyhow::Result<EpochRewardsResult>>>,
 }
@@ -1046,14 +1042,8 @@ pub struct EpochRewardsCalculator {
 impl EpochRewardsCalculator {
     pub fn new() -> Self {
         Self {
-            results: HashMap::new(),
             pending: HashMap::new(),
         }
-    }
-
-    /// Check if we have a cached result for epoch.
-    pub fn has_result(&self, epoch: EpochNumber) -> bool {
-        self.results.contains_key(&epoch)
     }
 
     /// Check if calculation is in progress for epoch.
@@ -1063,16 +1053,11 @@ impl EpochRewardsCalculator {
 
     /// Get result for epoch, awaiting pending calculation if needed.
     pub async fn get_result(&mut self, epoch: EpochNumber) -> Option<EpochRewardsResult> {
-        if let Some(result) = self.results.get(&epoch) {
-            return Some(result.clone());
-        }
-
         // Await pending calculation if exists
         if let Some(handle) = self.pending.remove(&epoch) {
             match handle.await {
                 Ok(Ok(result)) => {
                     tracing::info!(%epoch, total = %result.total_distributed.0, "epoch rewards calculation completed");
-                    self.results.insert(epoch, result.clone());
                     return Some(result);
                 },
                 Ok(Err(e)) => {
@@ -1099,10 +1084,6 @@ impl EpochRewardsCalculator {
         coordinator: EpochMembershipCoordinator<SeqTypes>,
         leader_counts: Option<LeaderCounts>,
     ) {
-        if self.results.contains_key(&epoch) {
-            tracing::debug!(%epoch, "calculation already completed, skipping");
-            return;
-        }
         if self.pending.contains_key(&epoch) {
             tracing::debug!(%epoch, "calculation already in progress, skipping");
             return;
@@ -1366,7 +1347,6 @@ impl EpochRewardsCalculator {
             reward_tree,
             total_distributed: RewardAmount(total_distributed),
             changed_accounts,
-            inserted_at: std::time::Instant::now(),
         })
     }
 }
