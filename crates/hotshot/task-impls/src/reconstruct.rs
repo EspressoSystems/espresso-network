@@ -19,7 +19,6 @@ use hotshot_types::{
     traits::{
         block_contents::BlockHeader,
         node_implementation::{ConsensusTime, NodeType},
-        signature_key::SignatureKey,
         BlockPayload,
     },
     vid::avidm_gf2::AvidmGf2Scheme,
@@ -161,6 +160,18 @@ impl<TYPES: NodeType> ReconstructTaskState<TYPES> {
         // if self.id == 2 {
         //     tracing::error!("Spawning reconstruct task for view {} with epoch {}", view, epoch.unwrap());
         // }
+
+        // Prevents orphaned tasks when shares arrive after reconstruction succeeds
+        if self
+            .consensus
+            .read()
+            .await
+            .saved_payloads()
+            .contains_key(&view)
+        {
+            return;
+        }
+
         let tx = self.calc_lock.read().await.get(&view).cloned();
         let tx = match tx {
             Some(tx) => tx,
