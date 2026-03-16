@@ -205,6 +205,10 @@ pub struct Options {
     #[clap(long, env = "ESPRESSO_SEQUENCER_SYNC_STATUS_CHUNK_SIZE")]
     pub(crate) sync_status_chunk_size: Option<usize>,
 
+    /// Disable the proactive scanner task.
+    #[clap(long, env = "ESPRESSO_SEQUENCER_DISABLE_PROACTIVE_FETCHING")]
+    pub(crate) disable_proactive_fetching: bool,
+
     /// Disable pruning and reconstruct previously pruned data.
     ///
     /// While running without pruning is the default behavior, the default will not try to
@@ -396,6 +400,7 @@ impl From<SqliteOptions> for Options {
             active_fetch_delay: None,
             chunk_fetch_delay: None,
             sync_status_chunk_size: None,
+            disable_proactive_fetching: false,
             archive: false,
             lightweight: false,
             min_connections: 0,
