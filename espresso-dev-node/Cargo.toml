@@ -2,7 +2,7 @@
 name = "espresso-dev-node"
 version = "0.1.0"
 authors = ["Espresso Systems <hello@espressosys.com>"]
-edition = "2021"
+edition.workspace = true
 
 [[bin]]
 name = "espresso-dev-node"
