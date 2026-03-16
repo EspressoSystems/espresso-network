@@ -331,6 +331,7 @@ opt-level = 3
 opt-level = 3
 
 [profile.test-docker]
+incremental = false
 inherits = "test"
 strip = true
 debug = "none"
