@@ -40,6 +40,7 @@ impl Address {
     }
 
     pub fn with_offset(mut self, o: u16) -> Self {
+        debug_assert!(self.port().checked_add(o).is_some());
         match self {
             Self::Inet(ip, p) => self = Self::Inet(ip, p + o),
             Self::Name(hn, p) => self = Self::Name(hn, p + o),

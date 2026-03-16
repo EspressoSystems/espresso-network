@@ -1134,11 +1134,11 @@ where
                                 Ok(Type::Data) => {
                                     let n = state.lock().read_message(&f, &mut buf)?;
                                     msg.extend_from_slice(&buf[..n]);
-                                    if !h.is_partial() {
-                                        break;
-                                    }
                                     if msg.len() > max_message_size {
                                         return Err(NetworkError::MessageTooLarge);
+                                    }
+                                    if !h.is_partial() {
+                                        break;
                                     }
                                 }
                                 Err(t) => return Err(NetworkError::UnknownFrameType(t)),
