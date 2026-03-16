@@ -2,12 +2,13 @@ use core::fmt::Debug;
 use std::{cmp::max, sync::Arc, time::Duration};
 
 use anyhow::{bail, ensure, Context};
+use async_lock::Mutex;
 use either::Either;
 use espresso_types::{
     traits::StateCatchup,
     v0_3::{ChainConfig, RewardAccountV1, RewardMerkleTreeV1},
     v0_4::Delta,
-    BlockMerkleTree, FeeAccount, FeeMerkleTree, Leaf2, ValidatedState,
+    BlockMerkleTree, EpochRewardsCalculator, FeeAccount, FeeMerkleTree, Leaf2, ValidatedState,
 };
 use futures::{future::Future, StreamExt};
 use hotshot::traits::ValidatedState as HotShotState;
@@ -367,7 +368,10 @@ where
     T: SequencerStateDataSource,
     for<'a> T::Transaction<'a>: SequencerStateUpdate,
 {
-    let instance = instance.await;
+    let mut instance = instance.await;
+    // Use a separate rewards calculator for the state loop so it doesn't
+    // interfere with consensus, which may be on a very different epoch.
+    instance.epoch_rewards_calculator = Arc::new(Mutex::new(EpochRewardsCalculator::new()));
     let peers = SqlStateCatchup::new(storage.clone(), Default::default());
 
     // get last saved merklized state

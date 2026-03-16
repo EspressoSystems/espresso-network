@@ -1,10 +1,4 @@
-use std::{
-    borrow::Borrow,
-    collections::{HashMap, HashSet},
-    iter::once,
-    str::FromStr,
-    sync::Arc,
-};
+use std::{borrow::Borrow, collections::HashSet, iter::once, str::FromStr, sync::Arc};
 
 use alloy::primitives::{
     utils::{parse_units, ParseUnits},
@@ -1032,49 +1026,51 @@ pub struct EpochRewardsResult {
     pub changed_accounts: HashSet<RewardAccountV2>,
 }
 
-/// Manages epoch-based reward calculations in the background.
+/// Manages a single background epoch reward calculation.
+/// Each consumer (consensus and state loop) should have its own instance.
 #[derive(Debug, Default)]
 pub struct EpochRewardsCalculator {
-    /// Pending calculations by epoch
-    pending: HashMap<EpochNumber, JoinHandle<anyhow::Result<EpochRewardsResult>>>,
+    /// The currently pending calculation, if any.
+    pending: Option<(EpochNumber, JoinHandle<anyhow::Result<EpochRewardsResult>>)>,
 }
 
 impl EpochRewardsCalculator {
     pub fn new() -> Self {
-        Self {
-            pending: HashMap::new(),
-        }
+        Self { pending: None }
     }
 
     /// Check if calculation is in progress for epoch.
     pub fn is_calculating(&self, epoch: EpochNumber) -> bool {
-        self.pending.contains_key(&epoch)
+        self.pending.as_ref().is_some_and(|(e, _)| *e == epoch)
     }
 
     /// Get result for epoch, awaiting pending calculation if needed.
     pub async fn get_result(&mut self, epoch: EpochNumber) -> Option<EpochRewardsResult> {
-        // Await pending calculation if exists
-        if let Some(handle) = self.pending.remove(&epoch) {
-            match handle.await {
-                Ok(Ok(result)) => {
-                    tracing::info!(%epoch, total = %result.total_distributed.0, "epoch rewards calculation completed");
-                    return Some(result);
-                },
-                Ok(Err(e)) => {
-                    tracing::error!(%epoch, error = %e, "epoch rewards calculation failed");
-                },
-                Err(e) => {
-                    tracing::error!(%epoch, error = %e, "epoch rewards task panicked");
-                },
-            }
+        let (pending_epoch, handle) = self.pending.take()?;
+        if pending_epoch != epoch {
+            self.pending = Some((pending_epoch, handle));
+            return None;
         }
 
-        None
+        match handle.await {
+            Ok(Ok(result)) => {
+                tracing::info!(%epoch, total = %result.total_distributed.0, "epoch rewards calculation completed");
+                Some(result)
+            },
+            Ok(Err(e)) => {
+                tracing::error!(%epoch, error = %e, "epoch rewards calculation failed");
+                None
+            },
+            Err(e) => {
+                tracing::error!(%epoch, error = %e, "epoch rewards task panicked");
+                None
+            },
+        }
     }
 
     /// Start a background task that calculates epoch rewards.
-    /// Does nothing if calculation is already done or in progress for this epoch.
-    ///
+    /// Does nothing if calculation is already in progress for this epoch.
+    /// Aborts any stale pending task since only one epoch matters at a time.
     pub fn spawn_background_task(
         &mut self,
         epoch: EpochNumber,
@@ -1084,9 +1080,15 @@ impl EpochRewardsCalculator {
         coordinator: EpochMembershipCoordinator<SeqTypes>,
         leader_counts: Option<LeaderCounts>,
     ) {
-        if self.pending.contains_key(&epoch) {
+        if self.is_calculating(epoch) {
             tracing::debug!(%epoch, "calculation already in progress, skipping");
             return;
+        }
+
+        // Abort any stale pending task.
+        if let Some((stale_epoch, handle)) = self.pending.take() {
+            tracing::info!(%stale_epoch, %epoch, "aborting stale epoch rewards task");
+            handle.abort();
         }
 
         tracing::info!(
@@ -1106,7 +1108,7 @@ impl EpochRewardsCalculator {
             )
             .await
         });
-        self.pending.insert(epoch, handle);
+        self.pending = Some((epoch, handle));
     }
 
     async fn fetch_and_calculate(
