@@ -383,15 +383,15 @@ impl InMemoryState {
     /// `collect_merkle_leaves` traversal for partitions that were only read.
     /// Empty partitions are stored as `None` rather than `Some(vec![])`.
     fn flush_cache(&mut self) {
-        if let Some((index, tree, dirty)) = self.cache.take() {
-            if dirty {
-                let mut entries = Vec::new();
-                collect_merkle_leaves(&tree, &mut entries);
-                if entries.is_empty() {
-                    self.storage[index.0 as usize] = None;
-                } else {
-                    self.storage[index.0 as usize] = Some(entries);
-                }
+        if let Some((index, tree, dirty)) = self.cache.take()
+            && dirty
+        {
+            let mut entries = Vec::new();
+            collect_merkle_leaves(&tree, &mut entries);
+            if entries.is_empty() {
+                self.storage[index.0 as usize] = None;
+            } else {
+                self.storage[index.0 as usize] = Some(entries);
             }
         }
     }
@@ -402,16 +402,16 @@ impl InMemoryState {
     /// This is the read-only counterpart to `flush_cache` + storage access:
     /// it produces the same entries without mutating state.
     fn slot_entries(&self, index: &OuterIndex) -> Option<Vec<(RewardAccountV2, RewardAmount)>> {
-        if let Some((cached_idx, tree, _)) = &self.cache {
-            if cached_idx == index {
-                let mut entries = Vec::new();
-                collect_merkle_leaves(tree, &mut entries);
-                return if entries.is_empty() {
-                    None
-                } else {
-                    Some(entries)
-                };
-            }
+        if let Some((cached_idx, tree, _)) = &self.cache
+            && cached_idx == index
+        {
+            let mut entries = Vec::new();
+            collect_merkle_leaves(tree, &mut entries);
+            return if entries.is_empty() {
+                None
+            } else {
+                Some(entries)
+            };
         }
         self.storage[index.0 as usize].clone()
     }
@@ -427,10 +427,10 @@ impl InMemoryState {
     /// 3. Stores the live tree in cache
     fn ensure_loaded(&mut self, index: &OuterIndex) {
         // Already cached — nothing to do
-        if let Some((cached_index, ..)) = &self.cache {
-            if cached_index == index {
-                return;
-            }
+        if let Some((cached_index, ..)) = &self.cache
+            && cached_index == index
+        {
+            return;
         }
 
         // Flush current cache entry (writes back if dirty, clears cache)
@@ -620,10 +620,10 @@ impl RewardMerkleTreeStorage for CachedInMemoryStorage {
 
     fn exists(&self, index: &OuterIndex) -> bool {
         let state = self.inner.read().unwrap();
-        if let Some((cached_index, ..)) = &state.cache {
-            if cached_index == index {
-                return true;
-            }
+        if let Some((cached_index, ..)) = &state.cache
+            && cached_index == index
+        {
+            return true;
         }
         state.storage[index.0 as usize].is_some()
     }

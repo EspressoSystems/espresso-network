@@ -830,15 +830,15 @@ impl Persistence {
                 // Ensure we are only dealing with a consecutive chain of leaves. We don't want to
                 // garbage collect any views for which we missed a leaf or decide event; at least
                 // not right away, in case we need to recover that data later.
-                if let Some(parent) = parent {
-                    if height != parent + 1 {
-                        tracing::debug!(
-                            height,
-                            parent,
-                            "ending decide event at non-consecutive leaf"
-                        );
-                        break;
-                    }
+                if let Some(parent) = parent
+                    && height != parent + 1
+                {
+                    tracing::debug!(
+                        height,
+                        parent,
+                        "ending decide event at non-consecutive leaf"
+                    );
+                    break;
                 }
                 parent = Some(height);
                 leaves.push(leaf);

@@ -697,10 +697,10 @@ pub trait SequencerPersistence:
             },
         };
 
-        if let Some((extended_high_qc, _)) = self.load_eqc().await {
-            if extended_high_qc.view_number() > high_qc.view_number() {
-                high_qc = extended_high_qc
-            }
+        if let Some((extended_high_qc, _)) = self.load_eqc().await
+            && extended_high_qc.view_number() > high_qc.view_number()
+        {
+            high_qc = extended_high_qc
         }
 
         let validated_state = if leaf.block_header().height() == 0 {
@@ -1063,10 +1063,10 @@ impl<P: SequencerPersistence> Storage<SeqTypes> for Arc<P> {
         high_qc: QuorumCertificate2<SeqTypes>,
         next_epoch_high_qc: NextEpochQuorumCertificate2<SeqTypes>,
     ) -> anyhow::Result<()> {
-        if let Some((existing_high_qc, _)) = (**self).load_eqc().await {
-            if high_qc.view_number() < existing_high_qc.view_number() {
-                return Ok(());
-            }
+        if let Some((existing_high_qc, _)) = (**self).load_eqc().await
+            && high_qc.view_number() < existing_high_qc.view_number()
+        {
+            return Ok(());
         }
 
         (**self).store_eqc(high_qc, next_epoch_high_qc).await

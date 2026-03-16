@@ -908,10 +908,10 @@ impl<TYPES: NodeType> Consensus<TYPES> {
             );
             return;
         }
-        if let Some((transition_qc, _)) = &self.transition_qc {
-            if transition_qc.view_number() >= qc.view_number() {
-                return;
-            }
+        if let Some((transition_qc, _)) = &self.transition_qc
+            && transition_qc.view_number() >= qc.view_number()
+        {
+            return;
         }
         self.transition_qc = Some((qc, next_epoch_qc));
     }
@@ -1241,30 +1241,29 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         view_number: ViewNumber,
         new_view: View<TYPES>,
     ) -> Result<()> {
-        if let Some(existing_view) = self.validated_state_map().get(&view_number) {
-            if let ViewInner::Leaf {
+        if let Some(existing_view) = self.validated_state_map().get(&view_number)
+            && let ViewInner::Leaf {
                 delta: ref existing_delta,
                 ..
             } = existing_view.view_inner
+        {
+            if let ViewInner::Leaf {
+                delta: ref new_delta,
+                ..
+            } = new_view.view_inner
             {
-                if let ViewInner::Leaf {
-                    delta: ref new_delta,
-                    ..
-                } = new_view.view_inner
-                {
-                    ensure!(
-                        new_delta.is_some() || existing_delta.is_none(),
-                        debug!(
-                            "Skipping the state update to not override a `Leaf` view with `Some` \
-                             state delta."
-                        )
-                    );
-                } else {
-                    bail!(
-                        "Skipping the state update to not override a `Leaf` view with a \
-                         non-`Leaf` view."
-                    );
-                }
+                ensure!(
+                    new_delta.is_some() || existing_delta.is_none(),
+                    debug!(
+                        "Skipping the state update to not override a `Leaf` view with `Some` \
+                         state delta."
+                    )
+                );
+            } else {
+                bail!(
+                    "Skipping the state update to not override a `Leaf` view with a non-`Leaf` \
+                     view."
+                );
             }
         }
         self.validated_state_map.insert(view_number, new_view);
@@ -1445,25 +1444,25 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         while let Some(leaf) = self.saved_leaves.get(&next_leaf) {
             let view = leaf.view_number();
             if let (Some(state), delta) = self.state_and_delta(view) {
-                if let Terminator::Exclusive(stop_before) = terminator {
-                    if stop_before == view {
-                        if ok_when_finished {
-                            return Ok(());
-                        }
-                        break;
+                if let Terminator::Exclusive(stop_before) = terminator
+                    && stop_before == view
+                {
+                    if ok_when_finished {
+                        return Ok(());
                     }
+                    break;
                 }
                 next_leaf = leaf.parent_commitment();
                 if !f(leaf, state, delta) {
                     return Ok(());
                 }
-                if let Terminator::Inclusive(stop_after) = terminator {
-                    if stop_after == view {
-                        if ok_when_finished {
-                            return Ok(());
-                        }
-                        break;
+                if let Terminator::Inclusive(stop_after) = terminator
+                    && stop_after == view
+                {
+                    if ok_when_finished {
+                        return Ok(());
                     }
+                    break;
                 }
             } else {
                 return Err(HotShotError::InvalidState(format!(

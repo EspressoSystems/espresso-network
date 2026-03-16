@@ -2181,13 +2181,11 @@ pub mod test_helpers {
                 event: EventType::Decide { leaf_chain, .. },
                 ..
             } = events.next().await.unwrap()
-            {
-                if leaf_chain
+                && leaf_chain
                     .iter()
                     .any(|LeafInfo { leaf, .. }| leaf.block_header().height() > 2)
-                {
-                    break;
-                }
+            {
+                break;
             }
         }
 

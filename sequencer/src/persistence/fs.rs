@@ -351,10 +351,10 @@ impl Inner {
 
         for (file_view, path) in view_files(dir_path)? {
             // If the view is the anchor view, keep it no matter what.
-            if let Some(decided_view) = keep_decided_view {
-                if decided_view == file_view {
-                    continue;
-                }
+            if let Some(decided_view) = keep_decided_view
+                && decided_view == file_view
+            {
+                continue;
             }
             // Otherwise, delete it if it is time to prune this view _or_ if the given intervals,
             // which we've already successfully processed, contain the view; in this case we simply

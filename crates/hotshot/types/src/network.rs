@@ -250,10 +250,10 @@ impl<TYPES: NodeType> NetworkConfig<TYPES> {
     /// ```
     pub fn to_file(&self, file: String) -> Result<(), NetworkConfigError> {
         // ensure the directory containing the config file exists
-        if let Some(dir) = Path::new(&file).parent() {
-            if let Err(e) = fs::create_dir_all(dir) {
-                return Err(NetworkConfigError::FailedToCreatePath(e));
-            }
+        if let Some(dir) = Path::new(&file).parent()
+            && let Err(e) = fs::create_dir_all(dir)
+        {
+            return Err(NetworkConfigError::FailedToCreatePath(e));
         }
 
         // serialize

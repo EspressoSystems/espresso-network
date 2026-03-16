@@ -1636,15 +1636,15 @@ impl EpochCommittees {
 
         // If the previous epoch is not in the first two epochs,
         // there should be a stake table for it
-        if *prev_epoch > first_epoch + 1 {
-            if let Err(err) = coordinator.stake_table_for_epoch(Some(prev_epoch)).await {
-                tracing::info!("failed to get membership for epoch={prev_epoch:?}: {err:#}");
+        if *prev_epoch > first_epoch + 1
+            && let Err(err) = coordinator.stake_table_for_epoch(Some(prev_epoch)).await
+        {
+            tracing::info!("failed to get membership for epoch={prev_epoch:?}: {err:#}");
 
-                coordinator
-                    .wait_for_catchup(prev_epoch)
-                    .await
-                    .context(format!("failed to catch up for epoch={prev_epoch}"))?;
-            }
+            coordinator
+                .wait_for_catchup(prev_epoch)
+                .await
+                .context(format!("failed to catch up for epoch={prev_epoch}"))?;
         }
 
         let membership_read = coordinator.membership().read().await;
@@ -2392,17 +2392,12 @@ impl Membership<SeqTypes> for EpochCommittees {
                     );
                 }
 
-                if let Some(previous_validators) = previous_validators {
-                    if let Err(e) = persistence_lock
+                if let Some(previous_validators) = previous_validators
+                    && let Err(e) = persistence_lock
                         .store_all_validators(previous_epoch, previous_validators)
                         .await
-                    {
-                        tracing::error!(
-                            ?e,
-                            ?epoch,
-                            "`add_epoch_root`, error storing all validators"
-                        );
-                    }
+                {
+                    tracing::error!(?e, ?epoch, "`add_epoch_root`, error storing all validators");
                 }
             } else {
                 panic!(

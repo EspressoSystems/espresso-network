@@ -492,11 +492,11 @@ async fn handle_events<N, P>(
             .await;
 
         // Handle external messages
-        if let EventType::ExternalMessageReceived { data, .. } = &event.event {
-            if let Err(err) = external_event_handler.handle_event(data).await {
-                tracing::warn!("Failed to handle external message: {:?}", err);
-            };
-        }
+        if let EventType::ExternalMessageReceived { data, .. } = &event.event
+            && let Err(err) = external_event_handler.handle_event(data).await
+        {
+            tracing::warn!("Failed to handle external message: {:?}", err);
+        };
 
         // Send the event via the event streaming service
         if let Some(events_streamer) = events_streamer.as_ref() {

@@ -477,15 +477,15 @@ where
 
         // Ignore the leaf if it is below the pruned height. This can happen if, for instance, the
         // fetcher is racing with the pruner.
-        if let Some(pruned_height) = self.load_pruned_height().await? {
-            if height <= pruned_height {
-                tracing::info!(
-                    height,
-                    pruned_height,
-                    "ignoring leaf which is already pruned"
-                );
-                return Ok(());
-            }
+        if let Some(pruned_height) = self.load_pruned_height().await?
+            && height <= pruned_height
+        {
+            tracing::info!(
+                height,
+                pruned_height,
+                "ignoring leaf which is already pruned"
+            );
+            return Ok(());
         }
 
         // While we don't necessarily have the full block for this leaf yet, we can initialize the
@@ -554,15 +554,15 @@ where
 
         // Ignore the block if it is below the pruned height. This can happen if, for instance, the
         // fetcher is racing with the pruner.
-        if let Some(pruned_height) = self.load_pruned_height().await? {
-            if height <= pruned_height {
-                tracing::info!(
-                    height,
-                    pruned_height,
-                    "ignoring block which is already pruned"
-                );
-                return Ok(());
-            }
+        if let Some(pruned_height) = self.load_pruned_height().await?
+            && height <= pruned_height
+        {
+            tracing::info!(
+                height,
+                pruned_height,
+                "ignoring block which is already pruned"
+            );
+            return Ok(());
         }
 
         // The header and payload tables should already have been initialized when we inserted the
@@ -616,15 +616,15 @@ where
 
         // Ignore the object if it is below the pruned height. This can happen if, for instance, the
         // fetcher is racing with the pruner.
-        if let Some(pruned_height) = self.load_pruned_height().await? {
-            if height <= pruned_height {
-                tracing::info!(
-                    height,
-                    pruned_height,
-                    "ignoring VID common which is already pruned"
-                );
-                return Ok(());
-            }
+        if let Some(pruned_height) = self.load_pruned_height().await?
+            && height <= pruned_height
+        {
+            tracing::info!(
+                height,
+                pruned_height,
+                "ignoring VID common which is already pruned"
+            );
+            return Ok(());
         }
 
         let common_data =

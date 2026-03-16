@@ -175,12 +175,11 @@ where
                 }
 
                 let mut info = BlockInfo::new(leaf_data, block_data, vid_common, vid_share);
-                if let Some(deciding_qc) = deciding_qc {
-                    if committing_qc.view_number() == info.leaf.leaf().view_number() {
-                        let qc_chain =
-                            [committing_qc.as_ref().clone(), deciding_qc.as_ref().clone()];
-                        info = info.with_qc_chain(qc_chain);
-                    }
+                if let Some(deciding_qc) = deciding_qc
+                    && committing_qc.view_number() == info.leaf.leaf().view_number()
+                {
+                    let qc_chain = [committing_qc.as_ref().clone(), deciding_qc.as_ref().clone()];
+                    info = info.with_qc_chain(qc_chain);
                 }
                 if let Err(err) = self.append(info).await {
                     tracing::error!(height, "failed to append leaf information: {err:#}");

@@ -609,10 +609,10 @@ async fn main() -> anyhow::Result<()> {
         args_builder.epoch_start_block(epoch_start_block);
     }
 
-    if opt.deploy_stake_table {
-        if let Some(escrow_period) = opt.exit_escrow_period {
-            args_builder.exit_escrow_period(U256::from(escrow_period.as_secs()));
-        }
+    if opt.deploy_stake_table
+        && let Some(escrow_period) = opt.exit_escrow_period
+    {
+        args_builder.exit_escrow_period(U256::from(escrow_period.as_secs()));
     }
     if opt.deploy_ops_timelock {
         let ops_timelock_admin = opt.ops_timelock_admin.ok_or_else(|| {

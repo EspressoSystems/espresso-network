@@ -241,11 +241,11 @@ impl SingleTransportStatus {
 
         // If we've failed recently, switch to the next URL
         let now = Instant::now();
-        if let Some(prev) = self.last_failure {
-            if now.saturating_duration_since(prev) < opt.l1_frequent_failure_tolerance {
-                self.shutting_down = true;
-                return true;
-            }
+        if let Some(prev) = self.last_failure
+            && now.saturating_duration_since(prev) < opt.l1_frequent_failure_tolerance
+        {
+            self.shutting_down = true;
+            return true;
         }
 
         false
@@ -610,8 +610,8 @@ impl L1Client {
                                     .await
                                     .ok();
                             }
-                            if let Some(finalized) = finalized {
-                                if Some(finalized.info) > state.snapshot.finalized {
+                            if let Some(finalized) = finalized
+                                && Some(finalized.info) > state.snapshot.finalized {
                                     tracing::info!(
                                         ?finalized,
                                         old_finalized = ?state.snapshot.finalized,
@@ -625,7 +625,6 @@ impl L1Client {
                                         .await
                                         .ok();
                                 }
-                            }
                             tracing::debug!("Updated L1 snapshot to {:?}", state.snapshot);
                         }
                         // The stream ended
@@ -746,10 +745,10 @@ impl L1Client {
             // Check if the block we are waiting for already exists.
             {
                 let state = self.state.lock().await;
-                if let Some(finalized) = state.snapshot.finalized {
-                    if finalized.timestamp >= timestamp {
-                        break 'outer (state, finalized);
-                    }
+                if let Some(finalized) = state.snapshot.finalized
+                    && finalized.timestamp >= timestamp
+                {
+                    break 'outer (state, finalized);
                 }
                 tracing::info!(
                     %timestamp,
@@ -827,23 +826,23 @@ impl L1Client {
             state.snapshot,
         );
 
-        if let Some(safety_margin) = self.options().l1_finalized_safety_margin {
-            if number < latest_finalized.number.saturating_sub(safety_margin) {
-                // If the requested block height is so old that we can assume all L1 providers have
-                // finalized it, we don't need to worry about failing over to a lagging L1 provider
-                // which has yet to finalize the block, so we don't need to bother with the
-                // expensive hash chaining logic below. Just look up the block by number and assume
-                // the response is finalized.
-                tracing::debug!(
-                    number,
-                    ?latest_finalized,
-                    "skipping hash check for old finalized block"
-                );
-                let (state, block) = self
-                    .load_and_cache_finalized_block(state, number.into())
-                    .await;
-                return (state, block.info);
-            }
+        if let Some(safety_margin) = self.options().l1_finalized_safety_margin
+            && number < latest_finalized.number.saturating_sub(safety_margin)
+        {
+            // If the requested block height is so old that we can assume all L1 providers have
+            // finalized it, we don't need to worry about failing over to a lagging L1 provider
+            // which has yet to finalize the block, so we don't need to bother with the
+            // expensive hash chaining logic below. Just look up the block by number and assume
+            // the response is finalized.
+            tracing::debug!(
+                number,
+                ?latest_finalized,
+                "skipping hash check for old finalized block"
+            );
+            let (state, block) = self
+                .load_and_cache_finalized_block(state, number.into())
+                .await;
+            return (state, block.info);
         }
 
         // To get this block and be sure we are getting the correct finalized block, we first need
@@ -1079,15 +1078,16 @@ impl L1State {
             self.last_finalized = Some(block.info.number());
         }
 
-        if let Some((old_number, old_block)) = self.finalized.push(block.info.number, block) {
-            if old_number == block.info.number && block != old_block {
-                tracing::error!(
-                    ?old_block,
-                    ?block,
-                    "got different info for the same finalized height; something has gone very \
-                     wrong with the L1",
-                );
-            }
+        if let Some((old_number, old_block)) = self.finalized.push(block.info.number, block)
+            && old_number == block.info.number
+            && block != old_block
+        {
+            tracing::error!(
+                ?old_block,
+                ?block,
+                "got different info for the same finalized height; something has gone very wrong \
+                 with the L1",
+            );
         }
     }
 }
