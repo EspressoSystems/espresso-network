@@ -1345,7 +1345,14 @@ mod tests {
         });
         tx.upsert(
             "header",
-            ["height", "hash", "payload_hash", "timestamp", "data"],
+            [
+                "height",
+                "hash",
+                "payload_hash",
+                "timestamp",
+                "data",
+                "ns_table",
+            ],
             ["height"],
             [(
                 block_height as i64,
@@ -1353,6 +1360,7 @@ mod tests {
                 format!("payload_{}", block_height),
                 block_height as i64,
                 test_data,
+                "ns_table".to_string(),
             )],
         )
         .await
