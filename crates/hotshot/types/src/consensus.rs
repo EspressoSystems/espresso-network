@@ -388,6 +388,10 @@ impl<TYPES: NodeType> ValidatorParticipation<TYPES> {
             })
             .collect()
     }
+
+    fn current_epoch(&self) -> TYPES::Epoch {
+        self.epoch
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1010,6 +1014,11 @@ impl<TYPES: NodeType> Consensus<TYPES> {
     pub fn previous_proposal_participation(&self) -> HashMap<TYPES::SignatureKey, f64> {
         self.validator_participation
             .previous_proposal_participation()
+    }
+
+    /// Get the current proposal participation epoch
+    pub fn current_proposal_participation_epoch(&self) -> TYPES::Epoch {
+        self.validator_participation.current_epoch()
     }
 
     /// Update the vote participation
