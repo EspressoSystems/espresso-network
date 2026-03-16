@@ -2,3 +2,8 @@
 files = ["contracts/src/RewardClaim.sol"]
 contracts = ["RewardClaim"]
 forge_args = ["--match-contract", "RewardClaim.*Test", "--no-match-test", "testFuzz_|invariant_|test_Network_"]
+
+[[target]]
+files = ["contracts/src/StakeTableV2.sol"]
+contracts = ["StakeTableV2"]
+forge_args = ["--match-contract", "StakeTable.*Test", "--no-match-test", "testFuzz_|invariant_|test_Network_"]
