@@ -1224,7 +1224,7 @@ impl EpochRewardsCalculator {
         let accounts_to_update: Vec<_> = leader_counts
             .iter()
             .enumerate()
-            .filter(|(_, &count)| count > 0)
+            .filter(|&(_, &count)| count > 0)
             .flat_map(|(index, _)| {
                 validators.get(index).into_iter().flat_map(|v| {
                     std::iter::once(RewardAccountV2(v.account))

@@ -8,7 +8,7 @@ use espresso_types::{
     BlockMerkleTree, EpochRewardsCalculator, FeeAccount, FeeMerkleTree, Leaf2, ValidatedState,
     traits::StateCatchup,
     v0_3::{ChainConfig, RewardAccountV1, RewardMerkleTreeV1},
-    v0_4::{Delta, RewardMerkleTreeV2},
+    v0_4::Delta,
 };
 use futures::{StreamExt, future::Future};
 use hotshot::traits::ValidatedState as HotShotState;

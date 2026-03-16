@@ -1316,12 +1316,12 @@ pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
             let mut gc_height = height.min(finalized_hotshot_height);
 
             // For epoch reward versions, also retain the last 4 epochs
-            if version >= versions::EPOCH_REWARD_VERSION {
-                if let Some(epoch_height) = node_state.epoch_height {
-                    let current_epoch = epoch_from_block_number(height, epoch_height);
-                    let gc_epoch = current_epoch.saturating_sub(4);
-                    gc_height = gc_height.min(gc_epoch * epoch_height);
-                }
+            if version >= versions::EPOCH_REWARD_VERSION
+                && let Some(epoch_height) = node_state.epoch_height
+            {
+                let current_epoch = epoch_from_block_number(height, epoch_height);
+                let gc_epoch = current_epoch.saturating_sub(4);
+                gc_height = gc_height.min(gc_epoch * epoch_height);
             }
             if let Err(err) = self.garbage_collect(gc_height).await {
                 tracing::info!(gc_height, "failed to garbage collect: {err:#}");

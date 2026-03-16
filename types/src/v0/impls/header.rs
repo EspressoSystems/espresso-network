@@ -39,7 +39,7 @@ use crate::{
     eth_signature_key::BuilderSignature,
     v0::{
         header::{EitherOrVersion, VersionedHeader},
-        impls::{StakeTableHash, distribute_block_reward, reward::RewardDistributor},
+        impls::{StakeTableHash, distribute_block_reward},
     },
     v0_1::{self},
     v0_2,
@@ -971,13 +971,13 @@ impl Header {
 
         let calculated_root = validated_state.reward_merkle_tree_v2.commitment();
 
-        if let Some(header_root) = header_root {
-            if calculated_root != header_root {
-                bail!(
-                    "reward merkle tree root mismatch, using new merkle tree. Header root: \
-                     {header_root}, Calculated root: {calculated_root}"
-                );
-            }
+        if let Some(header_root) = header_root
+            && calculated_root != header_root
+        {
+            bail!(
+                "reward merkle tree root mismatch, using new merkle tree. Header root: \
+                 {header_root}, Calculated root: {calculated_root}"
+            );
         }
 
         // Start calculation for current epoch
