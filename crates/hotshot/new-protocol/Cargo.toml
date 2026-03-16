@@ -1,0 +1,52 @@
+[package]
+authors = { workspace = true }
+description = "Implementation of Fast Finality Protocol"
+edition = { workspace = true }
+name = "hotshot-new-protocol"
+version = { workspace = true }
+license = "MIT"
+
+[features]
+example-upgrade = []
+rewind = []
+stats = []
+
+[dependencies]
+alloy = { workspace = true }
+anyhow = { workspace = true }
+ark-ff = { workspace = true }
+async-broadcast = { workspace = true }
+async-lock = { workspace = true }
+async-trait = { workspace = true }
+bincode = { workspace = true }
+chrono = { workspace = true }
+committable = { workspace = true }
+csv = { workspace = true }
+either = { workspace = true }
+futures = { workspace = true }
+hotshot-builder-api = { workspace = true }
+hotshot-contract-adapter = { workspace = true }
+hotshot-task = { workspace = true }
+hotshot-types = { workspace = true }
+hotshot-utils = { workspace = true }
+jf-advz = { workspace = true }
+lru = { workspace = true }
+rand = { workspace = true }
+serde = { workspace = true }
+serde-inline-default = { workspace = true }
+serde_bytes = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+surf-disco = { workspace = true }
+tagged-base64 = { workspace = true }
+thiserror = { workspace = true }
+time = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+url = { workspace = true }
+vbs = { workspace = true }
+vec1 = { workspace = true }
+versions = { workspace = true }
+
+[lints]
+workspace = true

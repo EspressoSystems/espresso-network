@@ -5874,6 +5874,47 @@ dependencies = [
 ]
 
 [[package]]
+name = "hotshot-new-protocol"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "ark-ff 0.5.0",
+ "async-broadcast",
+ "async-lock 3.4.1",
+ "async-trait",
+ "bincode",
+ "chrono",
+ "committable",
+ "csv",
+ "either",
+ "futures",
+ "hotshot-builder-api",
+ "hotshot-contract-adapter",
+ "hotshot-task",
+ "hotshot-types",
+ "hotshot-utils",
+ "jf-advz",
+ "lru 0.12.5",
+ "rand 0.8.5",
+ "serde",
+ "serde-inline-default",
+ "serde_bytes",
+ "serde_json",
+ "sha2 0.10.9",
+ "surf-disco",
+ "tagged-base64",
+ "thiserror 2.0.17",
+ "time 0.3.47",
+ "tokio",
+ "tracing",
+ "url",
+ "vbs",
+ "vec1",
+ "versions",
+]
+
+[[package]]
 name = "hotshot-orchestrator"
 version = "0.1.0"
 dependencies = [

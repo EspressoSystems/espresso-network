@@ -32,7 +32,7 @@ use crate::{
 };
 
 /// Marker that data should use the quorum cert type
-pub(crate) trait QuorumMarker {}
+pub trait QuorumMarker {}
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 /// Data used for a yes vote.
