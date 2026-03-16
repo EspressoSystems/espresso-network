@@ -19,21 +19,21 @@
 <a href=#19 id=19 data-nosnippet>19</a><span class="kw">use </span>tracing::error;
 <a href=#20 id=20 data-nosnippet>20</a>
 <a href=#21 id=21 data-nosnippet>21</a><span class="kw">use </span>crate::{
-<a href=#22 id=22 data-nosnippet>22</a>    data::ViewNumber,
-<a href=#23 id=23 data-nosnippet>23</a>    epoch_membership::EpochMembership,
-<a href=#24 id=24 data-nosnippet>24</a>    light_client::{LightClientState, StakeTableState},
-<a href=#25 id=25 data-nosnippet>25</a>    message::UpgradeLock,
-<a href=#26 id=26 data-nosnippet>26</a>    simple_certificate::{LightClientStateUpdateCertificateV2, Threshold},
-<a href=#27 id=27 data-nosnippet>27</a>    simple_vote::{LightClientStateUpdateVote2, VersionedVoteData, Voteable},
-<a href=#28 id=28 data-nosnippet>28</a>    stake_table::{HSStakeTable, StakeTableEntries},
-<a href=#29 id=29 data-nosnippet>29</a>    traits::{
-<a href=#30 id=30 data-nosnippet>30</a>        node_implementation::NodeType,
-<a href=#31 id=31 data-nosnippet>31</a>        signature_key::{
-<a href=#32 id=32 data-nosnippet>32</a>            LCV2StateSignatureKey, LCV3StateSignatureKey, SignatureKey, StakeTableEntryType,
-<a href=#33 id=33 data-nosnippet>33</a>            StateSignatureKey,
-<a href=#34 id=34 data-nosnippet>34</a>        },
-<a href=#35 id=35 data-nosnippet>35</a>    },
-<a href=#36 id=36 data-nosnippet>36</a>    PeerConfig,
+<a href=#22 id=22 data-nosnippet>22</a>    PeerConfig,
+<a href=#23 id=23 data-nosnippet>23</a>    data::ViewNumber,
+<a href=#24 id=24 data-nosnippet>24</a>    epoch_membership::EpochMembership,
+<a href=#25 id=25 data-nosnippet>25</a>    light_client::{LightClientState, StakeTableState},
+<a href=#26 id=26 data-nosnippet>26</a>    message::UpgradeLock,
+<a href=#27 id=27 data-nosnippet>27</a>    simple_certificate::{LightClientStateUpdateCertificateV2, Threshold},
+<a href=#28 id=28 data-nosnippet>28</a>    simple_vote::{LightClientStateUpdateVote2, VersionedVoteData, Voteable},
+<a href=#29 id=29 data-nosnippet>29</a>    stake_table::{HSStakeTable, StakeTableEntries},
+<a href=#30 id=30 data-nosnippet>30</a>    traits::{
+<a href=#31 id=31 data-nosnippet>31</a>        node_implementation::NodeType,
+<a href=#32 id=32 data-nosnippet>32</a>        signature_key::{
+<a href=#33 id=33 data-nosnippet>33</a>            LCV2StateSignatureKey, LCV3StateSignatureKey, SignatureKey, StakeTableEntryType,
+<a href=#34 id=34 data-nosnippet>34</a>            StateSignatureKey,
+<a href=#35 id=35 data-nosnippet>35</a>        },
+<a href=#36 id=36 data-nosnippet>36</a>    },
 <a href=#37 id=37 data-nosnippet>37</a>};
 <a href=#38 id=38 data-nosnippet>38</a>
 <a href=#39 id=39 data-nosnippet>39</a><span class="doccomment">/// A simple vote that has a signer and commitment to the data voted on.
@@ -153,10 +153,10 @@
 <a href=#153 id=153 data-nosnippet>153</a>}
 <a href=#154 id=154 data-nosnippet>154</a>
 <a href=#155 id=155 data-nosnippet>155</a><span class="kw">impl</span>&lt;
-<a href=#156 id=156 data-nosnippet>156</a>        TYPES: NodeType,
-<a href=#157 id=157 data-nosnippet>157</a>        VOTE: Vote&lt;TYPES&gt;,
-<a href=#158 id=158 data-nosnippet>158</a>        CERT: Certificate&lt;TYPES, VOTE::Commitment, Voteable = VOTE::Commitment&gt;,
-<a href=#159 id=159 data-nosnippet>159</a>    &gt; VoteAccumulator&lt;TYPES, VOTE, CERT&gt;
+<a href=#156 id=156 data-nosnippet>156</a>    TYPES: NodeType,
+<a href=#157 id=157 data-nosnippet>157</a>    VOTE: Vote&lt;TYPES&gt;,
+<a href=#158 id=158 data-nosnippet>158</a>    CERT: Certificate&lt;TYPES, VOTE::Commitment, Voteable = VOTE::Commitment&gt;,
+<a href=#159 id=159 data-nosnippet>159</a>&gt; VoteAccumulator&lt;TYPES, VOTE, CERT&gt;
 <a href=#160 id=160 data-nosnippet>160</a>{
 <a href=#161 id=161 data-nosnippet>161</a>    <span class="doccomment">/// Add a vote to the total accumulated votes for the given epoch.
 <a href=#162 id=162 data-nosnippet>162</a>    /// Returns the accumulator or the certificate if we

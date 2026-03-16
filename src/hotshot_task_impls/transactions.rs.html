@@ -11,22 +11,22 @@
 <a href=#11 id=11 data-nosnippet>11</a>
 <a href=#12 id=12 data-nosnippet>12</a><span class="kw">use </span>async_broadcast::{Receiver, Sender};
 <a href=#13 id=13 data-nosnippet>13</a><span class="kw">use </span>async_trait::async_trait;
-<a href=#14 id=14 data-nosnippet>14</a><span class="kw">use </span>futures::{stream::FuturesUnordered, StreamExt};
+<a href=#14 id=14 data-nosnippet>14</a><span class="kw">use </span>futures::{StreamExt, stream::FuturesUnordered};
 <a href=#15 id=15 data-nosnippet>15</a><span class="kw">use </span>hotshot_builder_api::v0_1::block_info::AvailableBlockInfo;
 <a href=#16 id=16 data-nosnippet>16</a><span class="kw">use </span>hotshot_task::task::TaskState;
 <a href=#17 id=17 data-nosnippet>17</a><span class="kw">use </span>hotshot_types::{
 <a href=#18 id=18 data-nosnippet>18</a>    consensus::OuterConsensus,
-<a href=#19 id=19 data-nosnippet>19</a>    data::{null_block, EpochNumber, PackedBundle, VidCommitment, ViewNumber},
+<a href=#19 id=19 data-nosnippet>19</a>    data::{EpochNumber, PackedBundle, VidCommitment, ViewNumber, null_block},
 <a href=#20 id=20 data-nosnippet>20</a>    epoch_membership::EpochMembershipCoordinator,
 <a href=#21 id=21 data-nosnippet>21</a>    event::{Event, EventType},
 <a href=#22 id=22 data-nosnippet>22</a>    message::UpgradeLock,
 <a href=#23 id=23 data-nosnippet>23</a>    traits::{
-<a href=#24 id=24 data-nosnippet>24</a>        block_contents::{BlockHeader, BuilderFee, EncodeBytes},
-<a href=#25 id=25 data-nosnippet>25</a>        node_implementation::NodeType,
-<a href=#26 id=26 data-nosnippet>26</a>        signature_key::{BuilderSignatureKey, SignatureKey},
-<a href=#27 id=27 data-nosnippet>27</a>        BlockPayload,
+<a href=#24 id=24 data-nosnippet>24</a>        BlockPayload,
+<a href=#25 id=25 data-nosnippet>25</a>        block_contents::{BlockHeader, BuilderFee, EncodeBytes},
+<a href=#26 id=26 data-nosnippet>26</a>        node_implementation::NodeType,
+<a href=#27 id=27 data-nosnippet>27</a>        signature_key::{BuilderSignatureKey, SignatureKey},
 <a href=#28 id=28 data-nosnippet>28</a>    },
-<a href=#29 id=29 data-nosnippet>29</a>    utils::{is_epoch_transition, is_last_block, ViewInner},
+<a href=#29 id=29 data-nosnippet>29</a>    utils::{ViewInner, is_epoch_transition, is_last_block},
 <a href=#30 id=30 data-nosnippet>30</a>};
 <a href=#31 id=31 data-nosnippet>31</a><span class="kw">use </span>hotshot_utils::anytrace::<span class="kw-2">*</span>;
 <a href=#32 id=32 data-nosnippet>32</a><span class="kw">use </span>tokio::time::{sleep, timeout};

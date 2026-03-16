@@ -14,12 +14,12 @@
 <a href=#14 id=14 data-nosnippet>14</a><span class="kw">use </span>thiserror::Error;
 <a href=#15 id=15 data-nosnippet>15</a>
 <a href=#16 id=16 data-nosnippet>16</a><span class="kw">use </span>crate::{
-<a href=#17 id=17 data-nosnippet>17</a>    constants::{
-<a href=#18 id=18 data-nosnippet>18</a>        ORCHESTRATOR_DEFAULT_NUM_ROUNDS, ORCHESTRATOR_DEFAULT_TRANSACTIONS_PER_ROUND,
-<a href=#19 id=19 data-nosnippet>19</a>        ORCHESTRATOR_DEFAULT_TRANSACTION_SIZE, REQUEST_DATA_DELAY,
-<a href=#20 id=20 data-nosnippet>20</a>    },
-<a href=#21 id=21 data-nosnippet>21</a>    hotshot_config_file::HotShotConfigFile,
-<a href=#22 id=22 data-nosnippet>22</a>    HotShotConfig, NodeType, ValidatorConfig,
+<a href=#17 id=17 data-nosnippet>17</a>    HotShotConfig, NodeType, ValidatorConfig,
+<a href=#18 id=18 data-nosnippet>18</a>    constants::{
+<a href=#19 id=19 data-nosnippet>19</a>        ORCHESTRATOR_DEFAULT_NUM_ROUNDS, ORCHESTRATOR_DEFAULT_TRANSACTION_SIZE,
+<a href=#20 id=20 data-nosnippet>20</a>        ORCHESTRATOR_DEFAULT_TRANSACTIONS_PER_ROUND, REQUEST_DATA_DELAY,
+<a href=#21 id=21 data-nosnippet>21</a>    },
+<a href=#22 id=22 data-nosnippet>22</a>    hotshot_config_file::HotShotConfigFile,
 <a href=#23 id=23 data-nosnippet>23</a>};
 <a href=#24 id=24 data-nosnippet>24</a>
 <a href=#25 id=25 data-nosnippet>25</a><span class="doccomment">/// Configuration describing a libp2p node
@@ -250,10 +250,10 @@
 <a href=#250 id=250 data-nosnippet>250</a>    /// ```
 <a href=#251 id=251 data-nosnippet>251</a>    </span><span class="kw">pub fn </span>to_file(<span class="kw-2">&amp;</span><span class="self">self</span>, file: String) -&gt; <span class="prelude-ty">Result</span>&lt;(), NetworkConfigError&gt; {
 <a href=#252 id=252 data-nosnippet>252</a>        <span class="comment">// ensure the directory containing the config file exists
-<a href=#253 id=253 data-nosnippet>253</a>        </span><span class="kw">if let </span><span class="prelude-val">Some</span>(dir) = Path::new(<span class="kw-2">&amp;</span>file).parent() {
-<a href=#254 id=254 data-nosnippet>254</a>            <span class="kw">if let </span><span class="prelude-val">Err</span>(e) = fs::create_dir_all(dir) {
-<a href=#255 id=255 data-nosnippet>255</a>                <span class="kw">return </span><span class="prelude-val">Err</span>(NetworkConfigError::FailedToCreatePath(e));
-<a href=#256 id=256 data-nosnippet>256</a>            }
+<a href=#253 id=253 data-nosnippet>253</a>        </span><span class="kw">if let </span><span class="prelude-val">Some</span>(dir) = Path::new(<span class="kw-2">&amp;</span>file).parent()
+<a href=#254 id=254 data-nosnippet>254</a>            &amp;&amp; <span class="kw">let </span><span class="prelude-val">Err</span>(e) = fs::create_dir_all(dir)
+<a href=#255 id=255 data-nosnippet>255</a>        {
+<a href=#256 id=256 data-nosnippet>256</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(NetworkConfigError::FailedToCreatePath(e));
 <a href=#257 id=257 data-nosnippet>257</a>        }
 <a href=#258 id=258 data-nosnippet>258</a>
 <a href=#259 id=259 data-nosnippet>259</a>        <span class="comment">// serialize

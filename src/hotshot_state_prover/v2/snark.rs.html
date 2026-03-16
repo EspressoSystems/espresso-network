@@ -109,11 +109,11 @@
 <a href=#109 id=109 data-nosnippet>109</a><span class="attr">#[cfg(test)]
 <a href=#110 id=110 data-nosnippet>110</a></span><span class="kw">mod </span>tests {
 <a href=#111 id=111 data-nosnippet>111</a>    <span class="kw">use </span>ark_bn254::Bn254;
-<a href=#112 id=112 data-nosnippet>112</a>    <span class="kw">use </span>ark_ec::{pairing::Pairing, AffineRepr, ScalarMul};
+<a href=#112 id=112 data-nosnippet>112</a>    <span class="kw">use </span>ark_ec::{AffineRepr, ScalarMul, pairing::Pairing};
 <a href=#113 id=113 data-nosnippet>113</a>    <span class="kw">use </span>ark_ed_on_bn254::EdwardsConfig <span class="kw">as </span>Config;
 <a href=#114 id=114 data-nosnippet>114</a>    <span class="kw">use </span>ark_std::{
-<a href=#115 id=115 data-nosnippet>115</a>        rand::{CryptoRng, RngCore},
-<a href=#116 id=116 data-nosnippet>116</a>        One, UniformRand,
+<a href=#115 id=115 data-nosnippet>115</a>        One, UniformRand,
+<a href=#116 id=116 data-nosnippet>116</a>        rand::{CryptoRng, RngCore},
 <a href=#117 id=117 data-nosnippet>117</a>    };
 <a href=#118 id=118 data-nosnippet>118</a>    <span class="kw">use </span>hotshot_types::{
 <a href=#119 id=119 data-nosnippet>119</a>        light_client::LightClientState, signature_key::SchnorrPubKey,
@@ -127,7 +127,7 @@
 <a href=#127 id=127 data-nosnippet>127</a>    <span class="kw">use </span>jf_signature::schnorr::Signature;
 <a href=#128 id=128 data-nosnippet>128</a>    <span class="kw">use </span>jf_utils::test_rng;
 <a href=#129 id=129 data-nosnippet>129</a>
-<a href=#130 id=130 data-nosnippet>130</a>    <span class="kw">use </span>super::{generate_state_update_proof, preprocess, CircuitField, UniversalSrs};
+<a href=#130 id=130 data-nosnippet>130</a>    <span class="kw">use </span>super::{CircuitField, UniversalSrs, generate_state_update_proof, preprocess};
 <a href=#131 id=131 data-nosnippet>131</a>    <span class="kw">use </span>crate::{
 <a href=#132 id=132 data-nosnippet>132</a>        test_utils::{key_pairs_for_testing, stake_table_for_testing},
 <a href=#133 id=133 data-nosnippet>133</a>        v2::circuit::build_for_preprocessing,
@@ -145,7 +145,7 @@
 <a href=#145 id=145 data-nosnippet>145</a>        </span>R: RngCore + CryptoRng,
 <a href=#146 id=146 data-nosnippet>146</a>    {
 <a href=#147 id=147 data-nosnippet>147</a>        <span class="kw">use </span>ark_ec::CurveGroup;
-<a href=#148 id=148 data-nosnippet>148</a>        <span class="kw">use </span>ark_std::{end_timer, start_timer, UniformRand};
+<a href=#148 id=148 data-nosnippet>148</a>        <span class="kw">use </span>ark_std::{UniformRand, end_timer, start_timer};
 <a href=#149 id=149 data-nosnippet>149</a>
 <a href=#150 id=150 data-nosnippet>150</a>        <span class="kw">let </span>setup_time = <span class="macro">start_timer!</span>(|| <span class="macro">format!</span>(<span class="string">"KZG10::Setup with degree {max_degree}"</span>));
 <a href=#151 id=151 data-nosnippet>151</a>        <span class="kw">let </span>beta = &lt;Bn254 <span class="kw">as </span>Pairing&gt;::ScalarField::rand(rng);
@@ -266,29 +266,31 @@
 <a href=#266 id=266 data-nosnippet>266</a>        <span class="macro">assert!</span>(result.is_ok());
 <a href=#267 id=267 data-nosnippet>267</a>
 <a href=#268 id=268 data-nosnippet>268</a>        <span class="kw">let </span>(proof, public_inputs) = result.unwrap();
-<a href=#269 id=269 data-nosnippet>269</a>        <span class="macro">assert!</span>(PlonkKzgSnark::&lt;Bn254&gt;::verify::&lt;SolidityTranscript&gt;(
-<a href=#270 id=270 data-nosnippet>270</a>            <span class="kw-2">&amp;</span>vk,
-<a href=#271 id=271 data-nosnippet>271</a>            <span class="kw-2">&amp;</span>public_inputs.to_vec(),
-<a href=#272 id=272 data-nosnippet>272</a>            <span class="kw-2">&amp;</span>proof,
-<a href=#273 id=273 data-nosnippet>273</a>            <span class="prelude-val">None
-<a href=#274 id=274 data-nosnippet>274</a>        </span>)
-<a href=#275 id=275 data-nosnippet>275</a>        .is_ok());
-<a href=#276 id=276 data-nosnippet>276</a>
-<a href=#277 id=277 data-nosnippet>277</a>        <span class="comment">// minimum bad path, other bad cases are checked inside `circuit.rs`
-<a href=#278 id=278 data-nosnippet>278</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>bad_st_state = st_state;
-<a href=#279 id=279 data-nosnippet>279</a>        bad_st_state.threshold = CircuitField::from(<span class="number">100u32</span>);
-<a href=#280 id=280 data-nosnippet>280</a>        <span class="kw">let </span>result = generate_state_update_proof::&lt;<span class="kw">_</span>, <span class="kw">_</span>, <span class="kw">_</span>, <span class="kw">_</span>&gt;(
-<a href=#281 id=281 data-nosnippet>281</a>            <span class="kw-2">&amp;mut </span>prng,
-<a href=#282 id=282 data-nosnippet>282</a>            <span class="kw-2">&amp;</span>pk,
-<a href=#283 id=283 data-nosnippet>283</a>            <span class="kw-2">&amp;</span>stake_table_entries,
-<a href=#284 id=284 data-nosnippet>284</a>            <span class="kw-2">&amp;</span>bit_vec,
-<a href=#285 id=285 data-nosnippet>285</a>            <span class="kw-2">&amp;</span>bit_masked_sigs,
-<a href=#286 id=286 data-nosnippet>286</a>            <span class="kw-2">&amp;</span>lightclient_state,
-<a href=#287 id=287 data-nosnippet>287</a>            <span class="kw-2">&amp;</span>bad_st_state,
-<a href=#288 id=288 data-nosnippet>288</a>            ST_CAPACITY,
-<a href=#289 id=289 data-nosnippet>289</a>            <span class="kw-2">&amp;</span>next_st_state,
-<a href=#290 id=290 data-nosnippet>290</a>        );
-<a href=#291 id=291 data-nosnippet>291</a>        <span class="macro">assert!</span>(result.is_err());
-<a href=#292 id=292 data-nosnippet>292</a>    }
-<a href=#293 id=293 data-nosnippet>293</a>}
+<a href=#269 id=269 data-nosnippet>269</a>        <span class="macro">assert!</span>(
+<a href=#270 id=270 data-nosnippet>270</a>            PlonkKzgSnark::&lt;Bn254&gt;::verify::&lt;SolidityTranscript&gt;(
+<a href=#271 id=271 data-nosnippet>271</a>                <span class="kw-2">&amp;</span>vk,
+<a href=#272 id=272 data-nosnippet>272</a>                <span class="kw-2">&amp;</span>public_inputs.to_vec(),
+<a href=#273 id=273 data-nosnippet>273</a>                <span class="kw-2">&amp;</span>proof,
+<a href=#274 id=274 data-nosnippet>274</a>                <span class="prelude-val">None
+<a href=#275 id=275 data-nosnippet>275</a>            </span>)
+<a href=#276 id=276 data-nosnippet>276</a>            .is_ok()
+<a href=#277 id=277 data-nosnippet>277</a>        );
+<a href=#278 id=278 data-nosnippet>278</a>
+<a href=#279 id=279 data-nosnippet>279</a>        <span class="comment">// minimum bad path, other bad cases are checked inside `circuit.rs`
+<a href=#280 id=280 data-nosnippet>280</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>bad_st_state = st_state;
+<a href=#281 id=281 data-nosnippet>281</a>        bad_st_state.threshold = CircuitField::from(<span class="number">100u32</span>);
+<a href=#282 id=282 data-nosnippet>282</a>        <span class="kw">let </span>result = generate_state_update_proof::&lt;<span class="kw">_</span>, <span class="kw">_</span>, <span class="kw">_</span>, <span class="kw">_</span>&gt;(
+<a href=#283 id=283 data-nosnippet>283</a>            <span class="kw-2">&amp;mut </span>prng,
+<a href=#284 id=284 data-nosnippet>284</a>            <span class="kw-2">&amp;</span>pk,
+<a href=#285 id=285 data-nosnippet>285</a>            <span class="kw-2">&amp;</span>stake_table_entries,
+<a href=#286 id=286 data-nosnippet>286</a>            <span class="kw-2">&amp;</span>bit_vec,
+<a href=#287 id=287 data-nosnippet>287</a>            <span class="kw-2">&amp;</span>bit_masked_sigs,
+<a href=#288 id=288 data-nosnippet>288</a>            <span class="kw-2">&amp;</span>lightclient_state,
+<a href=#289 id=289 data-nosnippet>289</a>            <span class="kw-2">&amp;</span>bad_st_state,
+<a href=#290 id=290 data-nosnippet>290</a>            ST_CAPACITY,
+<a href=#291 id=291 data-nosnippet>291</a>            <span class="kw-2">&amp;</span>next_st_state,
+<a href=#292 id=292 data-nosnippet>292</a>        );
+<a href=#293 id=293 data-nosnippet>293</a>        <span class="macro">assert!</span>(result.is_err());
+<a href=#294 id=294 data-nosnippet>294</a>    }
+<a href=#295 id=295 data-nosnippet>295</a>}
 </code></pre></div></section></main></body></html>

@@ -7,7 +7,7 @@
 <a href=#7 id=7 data-nosnippet>7</a><span class="kw">use </span>ark_ed_on_bn254::EdwardsConfig;
 <a href=#8 id=8 data-nosnippet>8</a><span class="kw">use </span>ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 <a href=#9 id=9 data-nosnippet>9</a><span class="kw">use </span>hotshot_types::{
-<a href=#10 id=10 data-nosnippet>10</a>    light_client::{hash_bytes_to_field, StateKeyPair, StateSignature, StateVerKey},
+<a href=#10 id=10 data-nosnippet>10</a>    light_client::{StateKeyPair, StateSignature, StateVerKey, hash_bytes_to_field},
 <a href=#11 id=11 data-nosnippet>11</a>    signature_key::{BLSKeyPair, BLSPubKey, BLSSignature},
 <a href=#12 id=12 data-nosnippet>12</a>    traits::signature_key::SignatureKey,
 <a href=#13 id=13 data-nosnippet>13</a>};
@@ -18,7 +18,7 @@
 <a href=#18 id=18 data-nosnippet>18</a>};
 <a href=#19 id=19 data-nosnippet>19</a>
 <a href=#20 id=20 data-nosnippet>20</a><span class="kw">use </span><span class="kw">crate</span>::sol_types::{
-<a href=#21 id=21 data-nosnippet>21</a>    StakeTableV2::{getVersionReturn, ConsensusKeysUpdatedV2, ValidatorRegisteredV2},
+<a href=#21 id=21 data-nosnippet>21</a>    StakeTableV2::{ConsensusKeysUpdatedV2, ValidatorRegisteredV2, getVersionReturn},
 <a href=#22 id=22 data-nosnippet>22</a>    <span class="kw-2">*</span>,
 <a href=#23 id=23 data-nosnippet>23</a>};
 <a href=#24 id=24 data-nosnippet>24</a>
@@ -217,7 +217,7 @@
 <a href=#217 id=217 data-nosnippet>217</a>        signature_key::{BLSKeyPair, BLSPrivKey, BLSPubKey},
 <a href=#218 id=218 data-nosnippet>218</a>    };
 <a href=#219 id=219 data-nosnippet>219</a>
-<a href=#220 id=220 data-nosnippet>220</a>    <span class="kw">use </span>super::{sign_address_bls, sign_address_schnorr, StateSignatureSol};
+<a href=#220 id=220 data-nosnippet>220</a>    <span class="kw">use </span>super::{StateSignatureSol, sign_address_bls, sign_address_schnorr};
 <a href=#221 id=221 data-nosnippet>221</a>    <span class="kw">use </span><span class="kw">crate</span>::sol_types::{
 <a href=#222 id=222 data-nosnippet>222</a>        G1PointSol, G2PointSol,
 <a href=#223 id=223 data-nosnippet>223</a>        StakeTableV2::{ConsensusKeysUpdatedV2, ValidatorRegisteredV2},

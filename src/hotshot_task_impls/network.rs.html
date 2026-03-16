@@ -19,8 +19,8 @@
 <a href=#19 id=19 data-nosnippet>19</a>    epoch_membership::EpochMembershipCoordinator,
 <a href=#20 id=20 data-nosnippet>20</a>    event::{Event, EventType, HotShotAction},
 <a href=#21 id=21 data-nosnippet>21</a>    message::{
-<a href=#22 id=22 data-nosnippet>22</a>        convert_proposal, DaConsensusMessage, DataMessage, GeneralConsensusMessage, Message,
-<a href=#23 id=23 data-nosnippet>23</a>        MessageKind, Proposal, SequencingMessage, UpgradeLock,
+<a href=#22 id=22 data-nosnippet>22</a>        DaConsensusMessage, DataMessage, GeneralConsensusMessage, Message, MessageKind, Proposal,
+<a href=#23 id=23 data-nosnippet>23</a>        SequencingMessage, UpgradeLock, convert_proposal,
 <a href=#24 id=24 data-nosnippet>24</a>    },
 <a href=#25 id=25 data-nosnippet>25</a>    simple_vote::HasEpoch,
 <a href=#26 id=26 data-nosnippet>26</a>    storage_metrics::StorageMetricsValue,
@@ -1667,71 +1667,65 @@
 <a href=#1667 id=1667 data-nosnippet>1667</a>        </span><span class="kw">pub </span>modifier: Arc&lt;ModifierClosure&lt;TYPES&gt;&gt;,
 <a href=#1668 id=1668 data-nosnippet>1668</a>    }
 <a href=#1669 id=1669 data-nosnippet>1669</a>
-<a href=#1670 id=1670 data-nosnippet>1670</a>    <span class="kw">impl</span>&lt;
-<a href=#1671 id=1671 data-nosnippet>1671</a>            TYPES: NodeType,
-<a href=#1672 id=1672 data-nosnippet>1672</a>            NET: ConnectedNetwork&lt;TYPES::SignatureKey&gt;,
-<a href=#1673 id=1673 data-nosnippet>1673</a>            S: Storage&lt;TYPES&gt; + <span class="lifetime">'static</span>,
-<a href=#1674 id=1674 data-nosnippet>1674</a>        &gt; NetworkEventTaskStateModifier&lt;TYPES, NET, S&gt;
-<a href=#1675 id=1675 data-nosnippet>1675</a>    {
-<a href=#1676 id=1676 data-nosnippet>1676</a>        <span class="doccomment">/// Handles the received event modifying it before sending on the network.
-<a href=#1677 id=1677 data-nosnippet>1677</a>        </span><span class="kw">pub async fn </span>handle(<span class="kw-2">&amp;mut </span><span class="self">self</span>, event: Arc&lt;HotShotEvent&lt;TYPES&gt;&gt;) {
-<a href=#1678 id=1678 data-nosnippet>1678</a>            <span class="kw">let </span><span class="kw-2">mut </span>maybe_action = <span class="prelude-val">None</span>;
-<a href=#1679 id=1679 data-nosnippet>1679</a>            <span class="kw">if let </span><span class="prelude-val">Some</span>((<span class="kw-2">mut </span>sender, <span class="kw-2">mut </span>message_kind, <span class="kw-2">mut </span>transmit)) =
-<a href=#1680 id=1680 data-nosnippet>1680</a>                <span class="self">self</span>.parse_event(event, <span class="kw-2">&amp;mut </span>maybe_action).<span class="kw">await
-<a href=#1681 id=1681 data-nosnippet>1681</a>            </span>{
-<a href=#1682 id=1682 data-nosnippet>1682</a>                <span class="comment">// Modify the values acquired by parsing the event.
-<a href=#1683 id=1683 data-nosnippet>1683</a>                </span>(<span class="self">self</span>.modifier)(
-<a href=#1684 id=1684 data-nosnippet>1684</a>                    <span class="kw-2">&amp;mut </span>sender,
-<a href=#1685 id=1685 data-nosnippet>1685</a>                    <span class="kw-2">&amp;mut </span>message_kind,
-<a href=#1686 id=1686 data-nosnippet>1686</a>                    <span class="kw-2">&amp;mut </span>transmit,
-<a href=#1687 id=1687 data-nosnippet>1687</a>                    <span class="kw-2">&amp;*</span><span class="self">self</span>.membership_coordinator.membership().read().<span class="kw">await</span>,
-<a href=#1688 id=1688 data-nosnippet>1688</a>                );
-<a href=#1689 id=1689 data-nosnippet>1689</a>
-<a href=#1690 id=1690 data-nosnippet>1690</a>                <span class="self">self</span>.spawn_transmit_task(message_kind, maybe_action, transmit, sender)
-<a href=#1691 id=1691 data-nosnippet>1691</a>                    .<span class="kw">await</span>;
-<a href=#1692 id=1692 data-nosnippet>1692</a>            }
-<a href=#1693 id=1693 data-nosnippet>1693</a>        }
-<a href=#1694 id=1694 data-nosnippet>1694</a>    }
-<a href=#1695 id=1695 data-nosnippet>1695</a>
-<a href=#1696 id=1696 data-nosnippet>1696</a>    <span class="attr">#[async_trait]
-<a href=#1697 id=1697 data-nosnippet>1697</a>    </span><span class="kw">impl</span>&lt;
-<a href=#1698 id=1698 data-nosnippet>1698</a>            TYPES: NodeType,
-<a href=#1699 id=1699 data-nosnippet>1699</a>            NET: ConnectedNetwork&lt;TYPES::SignatureKey&gt;,
-<a href=#1700 id=1700 data-nosnippet>1700</a>            S: Storage&lt;TYPES&gt; + <span class="lifetime">'static</span>,
-<a href=#1701 id=1701 data-nosnippet>1701</a>        &gt; TaskState <span class="kw">for </span>NetworkEventTaskStateModifier&lt;TYPES, NET, S&gt;
-<a href=#1702 id=1702 data-nosnippet>1702</a>    {
-<a href=#1703 id=1703 data-nosnippet>1703</a>        <span class="kw">type </span>Event = HotShotEvent&lt;TYPES&gt;;
-<a href=#1704 id=1704 data-nosnippet>1704</a>
-<a href=#1705 id=1705 data-nosnippet>1705</a>        <span class="kw">async fn </span>handle_event(
-<a href=#1706 id=1706 data-nosnippet>1706</a>            <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-<a href=#1707 id=1707 data-nosnippet>1707</a>            event: Arc&lt;<span class="self">Self</span>::Event&gt;,
-<a href=#1708 id=1708 data-nosnippet>1708</a>            _sender: <span class="kw-2">&amp;</span>Sender&lt;Arc&lt;<span class="self">Self</span>::Event&gt;&gt;,
-<a href=#1709 id=1709 data-nosnippet>1709</a>            _receiver: <span class="kw-2">&amp;</span>Receiver&lt;Arc&lt;<span class="self">Self</span>::Event&gt;&gt;,
-<a href=#1710 id=1710 data-nosnippet>1710</a>        ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#1711 id=1711 data-nosnippet>1711</a>            <span class="self">self</span>.handle(event).<span class="kw">await</span>;
+<a href=#1670 id=1670 data-nosnippet>1670</a>    <span class="kw">impl</span>&lt;TYPES: NodeType, NET: ConnectedNetwork&lt;TYPES::SignatureKey&gt;, S: Storage&lt;TYPES&gt; + <span class="lifetime">'static</span>&gt;
+<a href=#1671 id=1671 data-nosnippet>1671</a>        NetworkEventTaskStateModifier&lt;TYPES, NET, S&gt;
+<a href=#1672 id=1672 data-nosnippet>1672</a>    {
+<a href=#1673 id=1673 data-nosnippet>1673</a>        <span class="doccomment">/// Handles the received event modifying it before sending on the network.
+<a href=#1674 id=1674 data-nosnippet>1674</a>        </span><span class="kw">pub async fn </span>handle(<span class="kw-2">&amp;mut </span><span class="self">self</span>, event: Arc&lt;HotShotEvent&lt;TYPES&gt;&gt;) {
+<a href=#1675 id=1675 data-nosnippet>1675</a>            <span class="kw">let </span><span class="kw-2">mut </span>maybe_action = <span class="prelude-val">None</span>;
+<a href=#1676 id=1676 data-nosnippet>1676</a>            <span class="kw">if let </span><span class="prelude-val">Some</span>((<span class="kw-2">mut </span>sender, <span class="kw-2">mut </span>message_kind, <span class="kw-2">mut </span>transmit)) =
+<a href=#1677 id=1677 data-nosnippet>1677</a>                <span class="self">self</span>.parse_event(event, <span class="kw-2">&amp;mut </span>maybe_action).<span class="kw">await
+<a href=#1678 id=1678 data-nosnippet>1678</a>            </span>{
+<a href=#1679 id=1679 data-nosnippet>1679</a>                <span class="comment">// Modify the values acquired by parsing the event.
+<a href=#1680 id=1680 data-nosnippet>1680</a>                </span>(<span class="self">self</span>.modifier)(
+<a href=#1681 id=1681 data-nosnippet>1681</a>                    <span class="kw-2">&amp;mut </span>sender,
+<a href=#1682 id=1682 data-nosnippet>1682</a>                    <span class="kw-2">&amp;mut </span>message_kind,
+<a href=#1683 id=1683 data-nosnippet>1683</a>                    <span class="kw-2">&amp;mut </span>transmit,
+<a href=#1684 id=1684 data-nosnippet>1684</a>                    <span class="kw-2">&amp;*</span><span class="self">self</span>.membership_coordinator.membership().read().<span class="kw">await</span>,
+<a href=#1685 id=1685 data-nosnippet>1685</a>                );
+<a href=#1686 id=1686 data-nosnippet>1686</a>
+<a href=#1687 id=1687 data-nosnippet>1687</a>                <span class="self">self</span>.spawn_transmit_task(message_kind, maybe_action, transmit, sender)
+<a href=#1688 id=1688 data-nosnippet>1688</a>                    .<span class="kw">await</span>;
+<a href=#1689 id=1689 data-nosnippet>1689</a>            }
+<a href=#1690 id=1690 data-nosnippet>1690</a>        }
+<a href=#1691 id=1691 data-nosnippet>1691</a>    }
+<a href=#1692 id=1692 data-nosnippet>1692</a>
+<a href=#1693 id=1693 data-nosnippet>1693</a>    <span class="attr">#[async_trait]
+<a href=#1694 id=1694 data-nosnippet>1694</a>    </span><span class="kw">impl</span>&lt;TYPES: NodeType, NET: ConnectedNetwork&lt;TYPES::SignatureKey&gt;, S: Storage&lt;TYPES&gt; + <span class="lifetime">'static</span>&gt;
+<a href=#1695 id=1695 data-nosnippet>1695</a>        TaskState <span class="kw">for </span>NetworkEventTaskStateModifier&lt;TYPES, NET, S&gt;
+<a href=#1696 id=1696 data-nosnippet>1696</a>    {
+<a href=#1697 id=1697 data-nosnippet>1697</a>        <span class="kw">type </span>Event = HotShotEvent&lt;TYPES&gt;;
+<a href=#1698 id=1698 data-nosnippet>1698</a>
+<a href=#1699 id=1699 data-nosnippet>1699</a>        <span class="kw">async fn </span>handle_event(
+<a href=#1700 id=1700 data-nosnippet>1700</a>            <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+<a href=#1701 id=1701 data-nosnippet>1701</a>            event: Arc&lt;<span class="self">Self</span>::Event&gt;,
+<a href=#1702 id=1702 data-nosnippet>1702</a>            _sender: <span class="kw-2">&amp;</span>Sender&lt;Arc&lt;<span class="self">Self</span>::Event&gt;&gt;,
+<a href=#1703 id=1703 data-nosnippet>1703</a>            _receiver: <span class="kw-2">&amp;</span>Receiver&lt;Arc&lt;<span class="self">Self</span>::Event&gt;&gt;,
+<a href=#1704 id=1704 data-nosnippet>1704</a>        ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#1705 id=1705 data-nosnippet>1705</a>            <span class="self">self</span>.handle(event).<span class="kw">await</span>;
+<a href=#1706 id=1706 data-nosnippet>1706</a>
+<a href=#1707 id=1707 data-nosnippet>1707</a>            <span class="prelude-val">Ok</span>(())
+<a href=#1708 id=1708 data-nosnippet>1708</a>        }
+<a href=#1709 id=1709 data-nosnippet>1709</a>
+<a href=#1710 id=1710 data-nosnippet>1710</a>        <span class="kw">fn </span>cancel_subtasks(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {}
+<a href=#1711 id=1711 data-nosnippet>1711</a>    }
 <a href=#1712 id=1712 data-nosnippet>1712</a>
-<a href=#1713 id=1713 data-nosnippet>1713</a>            <span class="prelude-val">Ok</span>(())
-<a href=#1714 id=1714 data-nosnippet>1714</a>        }
-<a href=#1715 id=1715 data-nosnippet>1715</a>
-<a href=#1716 id=1716 data-nosnippet>1716</a>        <span class="kw">fn </span>cancel_subtasks(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {}
-<a href=#1717 id=1717 data-nosnippet>1717</a>    }
-<a href=#1718 id=1718 data-nosnippet>1718</a>
-<a href=#1719 id=1719 data-nosnippet>1719</a>    <span class="kw">impl</span>&lt;TYPES: NodeType, NET: ConnectedNetwork&lt;TYPES::SignatureKey&gt;, S: Storage&lt;TYPES&gt;&gt; Deref
-<a href=#1720 id=1720 data-nosnippet>1720</a>        <span class="kw">for </span>NetworkEventTaskStateModifier&lt;TYPES, NET, S&gt;
-<a href=#1721 id=1721 data-nosnippet>1721</a>    {
-<a href=#1722 id=1722 data-nosnippet>1722</a>        <span class="kw">type </span>Target = NetworkEventTaskState&lt;TYPES, NET, S&gt;;
-<a href=#1723 id=1723 data-nosnippet>1723</a>
-<a href=#1724 id=1724 data-nosnippet>1724</a>        <span class="kw">fn </span>deref(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="self">Self</span>::Target {
-<a href=#1725 id=1725 data-nosnippet>1725</a>            <span class="kw-2">&amp;</span><span class="self">self</span>.network_event_task_state
-<a href=#1726 id=1726 data-nosnippet>1726</a>        }
-<a href=#1727 id=1727 data-nosnippet>1727</a>    }
-<a href=#1728 id=1728 data-nosnippet>1728</a>
-<a href=#1729 id=1729 data-nosnippet>1729</a>    <span class="kw">impl</span>&lt;TYPES: NodeType, NET: ConnectedNetwork&lt;TYPES::SignatureKey&gt;, S: Storage&lt;TYPES&gt;&gt; DerefMut
-<a href=#1730 id=1730 data-nosnippet>1730</a>        <span class="kw">for </span>NetworkEventTaskStateModifier&lt;TYPES, NET, S&gt;
-<a href=#1731 id=1731 data-nosnippet>1731</a>    {
-<a href=#1732 id=1732 data-nosnippet>1732</a>        <span class="kw">fn </span>deref_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;mut </span><span class="self">Self</span>::Target {
-<a href=#1733 id=1733 data-nosnippet>1733</a>            <span class="kw-2">&amp;mut </span><span class="self">self</span>.network_event_task_state
-<a href=#1734 id=1734 data-nosnippet>1734</a>        }
-<a href=#1735 id=1735 data-nosnippet>1735</a>    }
-<a href=#1736 id=1736 data-nosnippet>1736</a>}
+<a href=#1713 id=1713 data-nosnippet>1713</a>    <span class="kw">impl</span>&lt;TYPES: NodeType, NET: ConnectedNetwork&lt;TYPES::SignatureKey&gt;, S: Storage&lt;TYPES&gt;&gt; Deref
+<a href=#1714 id=1714 data-nosnippet>1714</a>        <span class="kw">for </span>NetworkEventTaskStateModifier&lt;TYPES, NET, S&gt;
+<a href=#1715 id=1715 data-nosnippet>1715</a>    {
+<a href=#1716 id=1716 data-nosnippet>1716</a>        <span class="kw">type </span>Target = NetworkEventTaskState&lt;TYPES, NET, S&gt;;
+<a href=#1717 id=1717 data-nosnippet>1717</a>
+<a href=#1718 id=1718 data-nosnippet>1718</a>        <span class="kw">fn </span>deref(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="self">Self</span>::Target {
+<a href=#1719 id=1719 data-nosnippet>1719</a>            <span class="kw-2">&amp;</span><span class="self">self</span>.network_event_task_state
+<a href=#1720 id=1720 data-nosnippet>1720</a>        }
+<a href=#1721 id=1721 data-nosnippet>1721</a>    }
+<a href=#1722 id=1722 data-nosnippet>1722</a>
+<a href=#1723 id=1723 data-nosnippet>1723</a>    <span class="kw">impl</span>&lt;TYPES: NodeType, NET: ConnectedNetwork&lt;TYPES::SignatureKey&gt;, S: Storage&lt;TYPES&gt;&gt; DerefMut
+<a href=#1724 id=1724 data-nosnippet>1724</a>        <span class="kw">for </span>NetworkEventTaskStateModifier&lt;TYPES, NET, S&gt;
+<a href=#1725 id=1725 data-nosnippet>1725</a>    {
+<a href=#1726 id=1726 data-nosnippet>1726</a>        <span class="kw">fn </span>deref_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;mut </span><span class="self">Self</span>::Target {
+<a href=#1727 id=1727 data-nosnippet>1727</a>            <span class="kw-2">&amp;mut </span><span class="self">self</span>.network_event_task_state
+<a href=#1728 id=1728 data-nosnippet>1728</a>        }
+<a href=#1729 id=1729 data-nosnippet>1729</a>    }
+<a href=#1730 id=1730 data-nosnippet>1730</a>}
 </code></pre></div></section></main></body></html>

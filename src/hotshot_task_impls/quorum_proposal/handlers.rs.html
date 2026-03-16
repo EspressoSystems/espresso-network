@@ -28,11 +28,11 @@
 <a href=#28 id=28 data-nosnippet>28</a>        UpgradeCertificate,
 <a href=#29 id=29 data-nosnippet>29</a>    },
 <a href=#30 id=30 data-nosnippet>30</a>    traits::{
-<a href=#31 id=31 data-nosnippet>31</a>        block_contents::BlockHeader,
-<a href=#32 id=32 data-nosnippet>32</a>        node_implementation::{NodeImplementation, NodeType},
-<a href=#33 id=33 data-nosnippet>33</a>        signature_key::SignatureKey,
-<a href=#34 id=34 data-nosnippet>34</a>        storage::Storage,
-<a href=#35 id=35 data-nosnippet>35</a>        BlockPayload,
+<a href=#31 id=31 data-nosnippet>31</a>        BlockPayload,
+<a href=#32 id=32 data-nosnippet>32</a>        block_contents::BlockHeader,
+<a href=#33 id=33 data-nosnippet>33</a>        node_implementation::{NodeImplementation, NodeType},
+<a href=#34 id=34 data-nosnippet>34</a>        signature_key::SignatureKey,
+<a href=#35 id=35 data-nosnippet>35</a>        storage::Storage,
 <a href=#36 id=36 data-nosnippet>36</a>    },
 <a href=#37 id=37 data-nosnippet>37</a>    utils::{
 <a href=#38 id=38 data-nosnippet>38</a>        epoch_from_block_number, is_epoch_root, is_epoch_transition, is_last_block,
@@ -487,10 +487,10 @@
 <a href=#487 id=487 data-nosnippet>487</a>            .upgrade_certificate()
 <a href=#488 id=488 data-nosnippet>488</a>            .or(formed_upgrade_certificate);
 <a href=#489 id=489 data-nosnippet>489</a>
-<a href=#490 id=490 data-nosnippet>490</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(cert) = upgrade_certificate.clone() {
-<a href=#491 id=491 data-nosnippet>491</a>            <span class="kw">if </span>cert.is_relevant(<span class="self">self</span>.view_number).<span class="kw">await</span>.is_err() {
-<a href=#492 id=492 data-nosnippet>492</a>                upgrade_certificate = <span class="prelude-val">None</span>;
-<a href=#493 id=493 data-nosnippet>493</a>            }
+<a href=#490 id=490 data-nosnippet>490</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(cert) = upgrade_certificate.clone()
+<a href=#491 id=491 data-nosnippet>491</a>            &amp;&amp; cert.is_relevant(<span class="self">self</span>.view_number).<span class="kw">await</span>.is_err()
+<a href=#492 id=492 data-nosnippet>492</a>        {
+<a href=#493 id=493 data-nosnippet>493</a>            upgrade_certificate = <span class="prelude-val">None</span>;
 <a href=#494 id=494 data-nosnippet>494</a>        }
 <a href=#495 id=495 data-nosnippet>495</a>
 <a href=#496 id=496 data-nosnippet>496</a>        <span class="kw">let </span>proposal_certificate = view_change_evidence

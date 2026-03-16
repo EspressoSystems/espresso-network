@@ -73,8 +73,8 @@
 <a href=#73 id=73 data-nosnippet>73</a></span><span class="kw">use </span>std::{
 <a href=#74 id=74 data-nosnippet>74</a>    future::IntoFuture,
 <a href=#75 id=75 data-nosnippet>75</a>    sync::{
-<a href=#76 id=76 data-nosnippet>76</a>        atomic::{AtomicBool, Ordering},
-<a href=#77 id=77 data-nosnippet>77</a>        Arc,
+<a href=#76 id=76 data-nosnippet>76</a>        Arc,
+<a href=#77 id=77 data-nosnippet>77</a>        atomic::{AtomicBool, Ordering},
 <a href=#78 id=78 data-nosnippet>78</a>    },
 <a href=#79 id=79 data-nosnippet>79</a>};
 <a href=#80 id=80 data-nosnippet>80</a>
@@ -82,7 +82,7 @@
 <a href=#82 id=82 data-nosnippet>82</a><span class="kw">use </span>derivative::Derivative;
 <a href=#83 id=83 data-nosnippet>83</a><span class="kw">use </span>futures::future::{BoxFuture, FutureExt};
 <a href=#84 id=84 data-nosnippet>84</a><span class="kw">use </span>tokio::sync::{
-<a href=#85 id=85 data-nosnippet>85</a>    mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
+<a href=#85 id=85 data-nosnippet>85</a>    mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel},
 <a href=#86 id=86 data-nosnippet>86</a>    oneshot,
 <a href=#87 id=87 data-nosnippet>87</a>};
 <a href=#88 id=88 data-nosnippet>88</a><span class="kw">use </span>tracing::warn;
@@ -131,11 +131,11 @@
 <a href=#131 id=131 data-nosnippet>131</a>        <span class="comment">// Now we are committed to sending the message to this subscriber if possible. We can take
 <a href=#132 id=132 data-nosnippet>132</a>        // the sender. We need to check for closed again in case the subscriber was closed since the
 <a href=#133 id=133 data-nosnippet>133</a>        // previous check.
-<a href=#134 id=134 data-nosnippet>134</a>        </span><span class="kw">if let </span><span class="prelude-val">Some</span>(sender) = <span class="self">self</span>.sender.take() {
-<a href=#135 id=135 data-nosnippet>135</a>            <span class="kw">if </span>sender.send(msg.clone()).is_err() {
-<a href=#136 id=136 data-nosnippet>136</a>                <span class="comment">// This is equivalent to the previous behavior in `async-compatibility-layer`
-<a href=#137 id=137 data-nosnippet>137</a>                </span><span class="macro">warn!</span>(<span class="string">"Failed to send notification: channel closed"</span>);
-<a href=#138 id=138 data-nosnippet>138</a>            }
+<a href=#134 id=134 data-nosnippet>134</a>        </span><span class="kw">if let </span><span class="prelude-val">Some</span>(sender) = <span class="self">self</span>.sender.take()
+<a href=#135 id=135 data-nosnippet>135</a>            &amp;&amp; sender.send(msg.clone()).is_err()
+<a href=#136 id=136 data-nosnippet>136</a>        {
+<a href=#137 id=137 data-nosnippet>137</a>            <span class="comment">// This is equivalent to the previous behavior in `async-compatibility-layer`
+<a href=#138 id=138 data-nosnippet>138</a>            </span><span class="macro">warn!</span>(<span class="string">"Failed to send notification: channel closed"</span>);
 <a href=#139 id=139 data-nosnippet>139</a>        }
 <a href=#140 id=140 data-nosnippet>140</a>    }
 <a href=#141 id=141 data-nosnippet>141</a>}

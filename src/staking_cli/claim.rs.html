@@ -2,7 +2,7 @@
 <a href=#2 id=2 data-nosnippet>2</a>    primitives::{Address, U256},
 <a href=#3 id=3 data-nosnippet>3</a>    providers::Provider,
 <a href=#4 id=4 data-nosnippet>4</a>};
-<a href=#5 id=5 data-nosnippet>5</a><span class="kw">use </span>anyhow::{bail, Context <span class="kw">as _</span>, <span class="prelude-ty">Result</span>};
+<a href=#5 id=5 data-nosnippet>5</a><span class="kw">use </span>anyhow::{Context <span class="kw">as _</span>, <span class="prelude-ty">Result</span>, bail};
 <a href=#6 id=6 data-nosnippet>6</a><span class="kw">use </span>hotshot_contract_adapter::{
 <a href=#7 id=7 data-nosnippet>7</a>    reward::RewardClaimInput,
 <a href=#8 id=8 data-nosnippet>8</a>    sol_types::{EspTokenV2, LightClientV3, RewardClaim, StakeTableV2},
@@ -152,7 +152,7 @@
 <a href=#152 id=152 data-nosnippet>152</a>
 <a href=#153 id=153 data-nosnippet>153</a><span class="attr">#[cfg(test)]
 <a href=#154 id=154 data-nosnippet>154</a></span><span class="kw">mod </span>test {
-<a href=#155 id=155 data-nosnippet>155</a>    <span class="kw">use </span>alloy::primitives::{utils::parse_ether, U256};
+<a href=#155 id=155 data-nosnippet>155</a>    <span class="kw">use </span>alloy::primitives::{U256, utils::parse_ether};
 <a href=#156 id=156 data-nosnippet>156</a>    <span class="kw">use </span>hotshot_contract_adapter::sol_types::{RewardClaim, StakeTableV2};
 <a href=#157 id=157 data-nosnippet>157</a>
 <a href=#158 id=158 data-nosnippet>158</a>    <span class="kw">use </span>super::<span class="kw-2">*</span>;

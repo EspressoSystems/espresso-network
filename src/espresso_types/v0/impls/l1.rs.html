@@ -1,5 +1,5 @@
 <!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `types/src/v0/impls/l1.rs`."><title>l1.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../../static.files/rustdoc-77263533.css"><meta name="rustdoc-vars" data-root-path="../../../../" data-static-root-path="../../../../static.files/" data-current-crate="espresso_types" data-themes="" data-resource-suffix="" data-rustdoc-version="1.94.0 (4a4ef493e 2026-03-02)" data-channel="1.94.0" data-search-js="search-9e2438ea.js" data-stringdex-js="stringdex-b897f86f.js" data-settings-js="settings-c38705f0.js" ><script src="../../../../static.files/storage-e2aeef58.js"></script><script defer src="../../../../static.files/src-script-813739b1.js"></script><script defer src="../../../../src-files.js"></script><script defer src="../../../../static.files/main-7bab91a1.js"></script><noscript><link rel="stylesheet" href="../../../../static.files/noscript-ffcac47a.css"></noscript><link rel="alternate icon" type="image/png" href="../../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">espresso_types/v0/impls/</div>l1.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-4"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="kw">use </span>std::{
-<a href=#2 id=2 data-nosnippet>2</a>    cmp::{min, Ordering},
+<a href=#2 id=2 data-nosnippet>2</a>    cmp::{Ordering, min},
 <a href=#3 id=3 data-nosnippet>3</a>    num::NonZeroUsize,
 <a href=#4 id=4 data-nosnippet>4</a>    pin::Pin,
 <a href=#5 id=5 data-nosnippet>5</a>    result::Result <span class="kw">as </span>StdResult,
@@ -17,7 +17,7 @@
 <a href=#17 id=17 data-nosnippet>17</a>        json_rpc::{RequestPacket, ResponsePacket},
 <a href=#18 id=18 data-nosnippet>18</a>        types::Block,
 <a href=#19 id=19 data-nosnippet>19</a>    },
-<a href=#20 id=20 data-nosnippet>20</a>    transports::{http::Http, RpcError, TransportErrorKind},
+<a href=#20 id=20 data-nosnippet>20</a>    transports::{RpcError, TransportErrorKind, http::Http},
 <a href=#21 id=21 data-nosnippet>21</a>};
 <a href=#22 id=22 data-nosnippet>22</a><span class="kw">use </span>anyhow::Context;
 <a href=#23 id=23 data-nosnippet>23</a><span class="kw">use </span>async_trait::async_trait;
@@ -34,15 +34,15 @@
 <a href=#34 id=34 data-nosnippet>34</a><span class="kw">use </span>tokio::{
 <a href=#35 id=35 data-nosnippet>35</a>    spawn,
 <a href=#36 id=36 data-nosnippet>36</a>    sync::{Mutex, MutexGuard, Notify},
-<a href=#37 id=37 data-nosnippet>37</a>    time::{sleep, Duration},
+<a href=#37 id=37 data-nosnippet>37</a>    time::{Duration, sleep},
 <a href=#38 id=38 data-nosnippet>38</a>};
 <a href=#39 id=39 data-nosnippet>39</a><span class="kw">use </span>tower_service::Service;
 <a href=#40 id=40 data-nosnippet>40</a><span class="kw">use </span>tracing::Instrument;
 <a href=#41 id=41 data-nosnippet>41</a><span class="kw">use </span>url::Url;
 <a href=#42 id=42 data-nosnippet>42</a>
 <a href=#43 id=43 data-nosnippet>43</a><span class="kw">use </span>super::{
-<a href=#44 id=44 data-nosnippet>44</a>    v0_1::{L1BlockInfoWithParent, SingleTransport, SingleTransportStatus, SwitchingTransport},
-<a href=#45 id=45 data-nosnippet>45</a>    L1BlockInfo, L1ClientMetrics, L1State, L1UpdateTask,
+<a href=#44 id=44 data-nosnippet>44</a>    L1BlockInfo, L1ClientMetrics, L1State, L1UpdateTask,
+<a href=#45 id=45 data-nosnippet>45</a>    v0_1::{L1BlockInfoWithParent, SingleTransport, SingleTransportStatus, SwitchingTransport},
 <a href=#46 id=46 data-nosnippet>46</a>};
 <a href=#47 id=47 data-nosnippet>47</a><span class="kw">use </span>crate::{FeeInfo, L1Client, L1ClientOptions, L1Event, L1Snapshot};
 <a href=#48 id=48 data-nosnippet>48</a>
@@ -241,11 +241,11 @@
 <a href=#241 id=241 data-nosnippet>241</a>
 <a href=#242 id=242 data-nosnippet>242</a>        <span class="comment">// If we've failed recently, switch to the next URL
 <a href=#243 id=243 data-nosnippet>243</a>        </span><span class="kw">let </span>now = Instant::now();
-<a href=#244 id=244 data-nosnippet>244</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(prev) = <span class="self">self</span>.last_failure {
-<a href=#245 id=245 data-nosnippet>245</a>            <span class="kw">if </span>now.saturating_duration_since(prev) &lt; opt.l1_frequent_failure_tolerance {
-<a href=#246 id=246 data-nosnippet>246</a>                <span class="self">self</span>.shutting_down = <span class="bool-val">true</span>;
-<a href=#247 id=247 data-nosnippet>247</a>                <span class="kw">return </span><span class="bool-val">true</span>;
-<a href=#248 id=248 data-nosnippet>248</a>            }
+<a href=#244 id=244 data-nosnippet>244</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(prev) = <span class="self">self</span>.last_failure
+<a href=#245 id=245 data-nosnippet>245</a>            &amp;&amp; now.saturating_duration_since(prev) &lt; opt.l1_frequent_failure_tolerance
+<a href=#246 id=246 data-nosnippet>246</a>        {
+<a href=#247 id=247 data-nosnippet>247</a>            <span class="self">self</span>.shutting_down = <span class="bool-val">true</span>;
+<a href=#248 id=248 data-nosnippet>248</a>            <span class="kw">return </span><span class="bool-val">true</span>;
 <a href=#249 id=249 data-nosnippet>249</a>        }
 <a href=#250 id=250 data-nosnippet>250</a>
 <a href=#251 id=251 data-nosnippet>251</a>        <span class="bool-val">false
@@ -475,7 +475,7 @@
 <a href=#475 id=475 data-nosnippet>475</a>        }
 <a href=#476 id=476 data-nosnippet>476</a>    }
 <a href=#477 id=477 data-nosnippet>477</a>
-<a href=#478 id=478 data-nosnippet>478</a>    <span class="kw">fn </span>update_loop(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw">impl </span>Future&lt;Output = ()&gt; {
+<a href=#478 id=478 data-nosnippet>478</a>    <span class="kw">fn </span>update_loop(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw">impl </span>Future&lt;Output = ()&gt; + <span class="kw">use</span>&lt;&gt; {
 <a href=#479 id=479 data-nosnippet>479</a>        <span class="kw">let </span>opt = <span class="self">self</span>.options().clone();
 <a href=#480 id=480 data-nosnippet>480</a>        <span class="kw">let </span>rpc = <span class="self">self</span>.provider.clone();
 <a href=#481 id=481 data-nosnippet>481</a>        <span class="kw">let </span>ws_urls = opt.l1_ws_provider.clone();
@@ -610,8 +610,8 @@
 <a href=#610 id=610 data-nosnippet>610</a>                                    .<span class="kw">await
 <a href=#611 id=611 data-nosnippet>611</a>                                    </span>.ok();
 <a href=#612 id=612 data-nosnippet>612</a>                            }
-<a href=#613 id=613 data-nosnippet>613</a>                            <span class="kw">if let </span><span class="prelude-val">Some</span>(finalized) = finalized {
-<a href=#614 id=614 data-nosnippet>614</a>                                <span class="kw">if </span><span class="prelude-val">Some</span>(finalized.info) &gt; state.snapshot.finalized {
+<a href=#613 id=613 data-nosnippet>613</a>                            <span class="kw">if let </span><span class="prelude-val">Some</span>(finalized) = finalized
+<a href=#614 id=614 data-nosnippet>614</a>                                &amp;&amp; <span class="prelude-val">Some</span>(finalized.info) &gt; state.snapshot.finalized {
 <a href=#615 id=615 data-nosnippet>615</a>                                    <span class="macro">tracing::info!</span>(
 <a href=#616 id=616 data-nosnippet>616</a>                                        <span class="question-mark">?</span>finalized,
 <a href=#617 id=617 data-nosnippet>617</a>                                        old_finalized = <span class="question-mark">?</span>state.snapshot.finalized,
@@ -625,469 +625,469 @@
 <a href=#625 id=625 data-nosnippet>625</a>                                        .<span class="kw">await
 <a href=#626 id=626 data-nosnippet>626</a>                                        </span>.ok();
 <a href=#627 id=627 data-nosnippet>627</a>                                }
-<a href=#628 id=628 data-nosnippet>628</a>                            }
-<a href=#629 id=629 data-nosnippet>629</a>                            <span class="macro">tracing::debug!</span>(<span class="string">"Updated L1 snapshot to {:?}"</span>, state.snapshot);
-<a href=#630 id=630 data-nosnippet>630</a>                        }
-<a href=#631 id=631 data-nosnippet>631</a>                        <span class="comment">// The stream ended
-<a href=#632 id=632 data-nosnippet>632</a>                        </span><span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>) =&gt; {
-<a href=#633 id=633 data-nosnippet>633</a>                            <span class="macro">tracing::error!</span>(<span class="string">"L1 block stream ended unexpectedly, trying to re-establish block stream"</span>);
-<a href=#634 id=634 data-nosnippet>634</a>                            <span class="kw">break</span>;
-<a href=#635 id=635 data-nosnippet>635</a>                        }
-<a href=#636 id=636 data-nosnippet>636</a>                        <span class="comment">// We timed out waiting for a block
-<a href=#637 id=637 data-nosnippet>637</a>                        </span><span class="prelude-val">Err</span>(<span class="kw">_</span>) =&gt; {
-<a href=#638 id=638 data-nosnippet>638</a>                            <span class="macro">tracing::error!</span>(<span class="string">"No block received for {} seconds, trying to re-establish block stream"</span>, subscription_timeout.as_secs());
-<a href=#639 id=639 data-nosnippet>639</a>                            <span class="kw">break</span>;
-<a href=#640 id=640 data-nosnippet>640</a>                        }
-<a href=#641 id=641 data-nosnippet>641</a>                    }
-<a href=#642 id=642 data-nosnippet>642</a>                }
-<a href=#643 id=643 data-nosnippet>643</a>
-<a href=#644 id=644 data-nosnippet>644</a>                metrics.reconnects.add(<span class="number">1</span>);
-<a href=#645 id=645 data-nosnippet>645</a>            }
-<a href=#646 id=646 data-nosnippet>646</a>        }.instrument(span)
-<a href=#647 id=647 data-nosnippet>647</a>    }
-<a href=#648 id=648 data-nosnippet>648</a>
-<a href=#649 id=649 data-nosnippet>649</a>    <span class="doccomment">/// Get a snapshot from the l1.
-<a href=#650 id=650 data-nosnippet>650</a>    </span><span class="kw">pub async fn </span>snapshot(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; L1Snapshot {
-<a href=#651 id=651 data-nosnippet>651</a>        <span class="self">self</span>.state.lock().<span class="kw">await</span>.snapshot
-<a href=#652 id=652 data-nosnippet>652</a>    }
-<a href=#653 id=653 data-nosnippet>653</a>
-<a href=#654 id=654 data-nosnippet>654</a>    <span class="doccomment">/// Wait until the highest L1 block number reaches at least `number`.
-<a href=#655 id=655 data-nosnippet>655</a>    ///
-<a href=#656 id=656 data-nosnippet>656</a>    /// This function does not return any information about the block, since the block is not
-<a href=#657 id=657 data-nosnippet>657</a>    /// necessarily finalized when it returns. It is only used to guarantee that some block at
-<a href=#658 id=658 data-nosnippet>658</a>    /// height `number` exists, possibly in the unsafe part of the L1 chain.
-<a href=#659 id=659 data-nosnippet>659</a>    </span><span class="kw">pub async fn </span>wait_for_block(<span class="kw-2">&amp;</span><span class="self">self</span>, number: u64) {
-<a href=#660 id=660 data-nosnippet>660</a>        <span class="kw">loop </span>{
-<a href=#661 id=661 data-nosnippet>661</a>            <span class="comment">// Subscribe to events before checking the current state, to ensure we don't miss a
-<a href=#662 id=662 data-nosnippet>662</a>            // relevant event.
-<a href=#663 id=663 data-nosnippet>663</a>            </span><span class="kw">let </span><span class="kw-2">mut </span>events = <span class="self">self</span>.receiver.activate_cloned();
-<a href=#664 id=664 data-nosnippet>664</a>
-<a href=#665 id=665 data-nosnippet>665</a>            <span class="comment">// Check if the block we are waiting for already exists.
-<a href=#666 id=666 data-nosnippet>666</a>            </span>{
-<a href=#667 id=667 data-nosnippet>667</a>                <span class="kw">let </span>state = <span class="self">self</span>.state.lock().<span class="kw">await</span>;
-<a href=#668 id=668 data-nosnippet>668</a>                <span class="kw">if </span>state.snapshot.head &gt;= number {
-<a href=#669 id=669 data-nosnippet>669</a>                    <span class="kw">return</span>;
-<a href=#670 id=670 data-nosnippet>670</a>                }
-<a href=#671 id=671 data-nosnippet>671</a>                <span class="macro">tracing::info!</span>(number, head = state.snapshot.head, <span class="string">"Waiting for l1 block"</span>);
-<a href=#672 id=672 data-nosnippet>672</a>            }
-<a href=#673 id=673 data-nosnippet>673</a>
-<a href=#674 id=674 data-nosnippet>674</a>            <span class="comment">// Wait for the block.
-<a href=#675 id=675 data-nosnippet>675</a>            </span><span class="kw">while let </span><span class="prelude-val">Some</span>(event) = events.next().<span class="kw">await </span>{
-<a href=#676 id=676 data-nosnippet>676</a>                <span class="kw">let </span>L1Event::NewHead { head } = event <span class="kw">else </span>{
-<a href=#677 id=677 data-nosnippet>677</a>                    <span class="kw">continue</span>;
-<a href=#678 id=678 data-nosnippet>678</a>                };
-<a href=#679 id=679 data-nosnippet>679</a>                <span class="kw">if </span>head &gt;= number {
-<a href=#680 id=680 data-nosnippet>680</a>                    <span class="macro">tracing::info!</span>(number, head, <span class="string">"Got L1 block"</span>);
-<a href=#681 id=681 data-nosnippet>681</a>                    <span class="kw">return</span>;
-<a href=#682 id=682 data-nosnippet>682</a>                }
-<a href=#683 id=683 data-nosnippet>683</a>                <span class="macro">tracing::debug!</span>(number, head, <span class="string">"Waiting for L1 block"</span>);
-<a href=#684 id=684 data-nosnippet>684</a>            }
-<a href=#685 id=685 data-nosnippet>685</a>
-<a href=#686 id=686 data-nosnippet>686</a>            <span class="comment">// This should not happen: the event stream ended. All we can do is try again.
-<a href=#687 id=687 data-nosnippet>687</a>            </span><span class="macro">tracing::warn!</span>(number, <span class="string">"L1 event stream ended unexpectedly; retry"</span>);
-<a href=#688 id=688 data-nosnippet>688</a>            <span class="self">self</span>.retry_delay().<span class="kw">await</span>;
-<a href=#689 id=689 data-nosnippet>689</a>        }
-<a href=#690 id=690 data-nosnippet>690</a>    }
-<a href=#691 id=691 data-nosnippet>691</a>
-<a href=#692 id=692 data-nosnippet>692</a>    <span class="doccomment">/// Get information about the given block.
-<a href=#693 id=693 data-nosnippet>693</a>    ///
-<a href=#694 id=694 data-nosnippet>694</a>    /// If the desired block number is not finalized yet, this function will block until it becomes
-<a href=#695 id=695 data-nosnippet>695</a>    /// finalized.
-<a href=#696 id=696 data-nosnippet>696</a>    </span><span class="kw">pub async fn </span>wait_for_finalized_block(<span class="kw-2">&amp;</span><span class="self">self</span>, number: u64) -&gt; L1BlockInfo {
-<a href=#697 id=697 data-nosnippet>697</a>        <span class="kw">loop </span>{
-<a href=#698 id=698 data-nosnippet>698</a>            <span class="comment">// Subscribe to events before checking the current state, to ensure we don't miss a relevant
-<a href=#699 id=699 data-nosnippet>699</a>            // event.
-<a href=#700 id=700 data-nosnippet>700</a>            </span><span class="kw">let </span><span class="kw-2">mut </span>events = <span class="self">self</span>.receiver.activate_cloned();
-<a href=#701 id=701 data-nosnippet>701</a>
-<a href=#702 id=702 data-nosnippet>702</a>            <span class="comment">// Check if the block we are waiting for already exists.
-<a href=#703 id=703 data-nosnippet>703</a>            </span>{
-<a href=#704 id=704 data-nosnippet>704</a>                <span class="kw">let </span>state = <span class="self">self</span>.state.lock().<span class="kw">await</span>;
-<a href=#705 id=705 data-nosnippet>705</a>                <span class="kw">if let </span><span class="prelude-val">Some</span>(finalized) = state.snapshot.finalized {
-<a href=#706 id=706 data-nosnippet>706</a>                    <span class="kw">if </span>finalized.number &gt;= number {
-<a href=#707 id=707 data-nosnippet>707</a>                        <span class="kw">return </span><span class="self">self</span>.fetch_finalized_block_by_number(state, number).<span class="kw">await</span>.<span class="number">1</span>;
-<a href=#708 id=708 data-nosnippet>708</a>                    }
-<a href=#709 id=709 data-nosnippet>709</a>                    <span class="macro">tracing::info!</span>(
-<a href=#710 id=710 data-nosnippet>710</a>                        number,
-<a href=#711 id=711 data-nosnippet>711</a>                        finalized = <span class="question-mark">?</span>state.snapshot.finalized,
-<a href=#712 id=712 data-nosnippet>712</a>                        <span class="string">"waiting for l1 finalized block"</span>,
-<a href=#713 id=713 data-nosnippet>713</a>                    );
-<a href=#714 id=714 data-nosnippet>714</a>                };
-<a href=#715 id=715 data-nosnippet>715</a>            }
-<a href=#716 id=716 data-nosnippet>716</a>
-<a href=#717 id=717 data-nosnippet>717</a>            <span class="comment">// Wait for the block.
-<a href=#718 id=718 data-nosnippet>718</a>            </span><span class="kw">while let </span><span class="prelude-val">Some</span>(event) = events.next().<span class="kw">await </span>{
-<a href=#719 id=719 data-nosnippet>719</a>                <span class="kw">let </span>L1Event::NewFinalized { finalized } = event <span class="kw">else </span>{
-<a href=#720 id=720 data-nosnippet>720</a>                    <span class="kw">continue</span>;
-<a href=#721 id=721 data-nosnippet>721</a>                };
-<a href=#722 id=722 data-nosnippet>722</a>                <span class="kw">let </span><span class="kw-2">mut </span>state = <span class="self">self</span>.state.lock().<span class="kw">await</span>;
-<a href=#723 id=723 data-nosnippet>723</a>                state.put_finalized(finalized);
-<a href=#724 id=724 data-nosnippet>724</a>                <span class="kw">if </span>finalized.info.number &gt;= number {
-<a href=#725 id=725 data-nosnippet>725</a>                    <span class="macro">tracing::info!</span>(number, <span class="question-mark">?</span>finalized, <span class="string">"got finalized L1 block"</span>);
-<a href=#726 id=726 data-nosnippet>726</a>                    <span class="kw">return </span><span class="self">self</span>.fetch_finalized_block_by_number(state, number).<span class="kw">await</span>.<span class="number">1</span>;
-<a href=#727 id=727 data-nosnippet>727</a>                }
-<a href=#728 id=728 data-nosnippet>728</a>                <span class="macro">tracing::debug!</span>(number, <span class="question-mark">?</span>finalized, <span class="string">"waiting for finalized L1 block"</span>);
-<a href=#729 id=729 data-nosnippet>729</a>            }
-<a href=#730 id=730 data-nosnippet>730</a>
-<a href=#731 id=731 data-nosnippet>731</a>            <span class="comment">// This should not happen: the event stream ended. All we can do is try again.
-<a href=#732 id=732 data-nosnippet>732</a>            </span><span class="macro">tracing::warn!</span>(number, <span class="string">"L1 event stream ended unexpectedly; retry"</span>,);
-<a href=#733 id=733 data-nosnippet>733</a>            <span class="self">self</span>.retry_delay().<span class="kw">await</span>;
-<a href=#734 id=734 data-nosnippet>734</a>        }
-<a href=#735 id=735 data-nosnippet>735</a>    }
-<a href=#736 id=736 data-nosnippet>736</a>
-<a href=#737 id=737 data-nosnippet>737</a>    <span class="doccomment">/// Get information about the first finalized block with timestamp greater than or equal
-<a href=#738 id=738 data-nosnippet>738</a>    /// `timestamp`.
-<a href=#739 id=739 data-nosnippet>739</a>    </span><span class="kw">pub async fn </span>wait_for_finalized_block_with_timestamp(<span class="kw-2">&amp;</span><span class="self">self</span>, timestamp: U256) -&gt; L1BlockInfo {
-<a href=#740 id=740 data-nosnippet>740</a>        <span class="comment">// Wait until the finalized block has timestamp &gt;= `timestamp`.
-<a href=#741 id=741 data-nosnippet>741</a>        </span><span class="kw">let </span>(<span class="kw-2">mut </span>state, <span class="kw-2">mut </span>block) = <span class="lifetime">'outer</span>: <span class="kw">loop </span>{
-<a href=#742 id=742 data-nosnippet>742</a>            <span class="comment">// Subscribe to events before checking the current state, to ensure we don't miss a
-<a href=#743 id=743 data-nosnippet>743</a>            // relevant event.
-<a href=#744 id=744 data-nosnippet>744</a>            </span><span class="kw">let </span><span class="kw-2">mut </span>events = <span class="self">self</span>.receiver.activate_cloned();
-<a href=#745 id=745 data-nosnippet>745</a>
-<a href=#746 id=746 data-nosnippet>746</a>            <span class="comment">// Check if the block we are waiting for already exists.
-<a href=#747 id=747 data-nosnippet>747</a>            </span>{
-<a href=#748 id=748 data-nosnippet>748</a>                <span class="kw">let </span>state = <span class="self">self</span>.state.lock().<span class="kw">await</span>;
-<a href=#749 id=749 data-nosnippet>749</a>                <span class="kw">if let </span><span class="prelude-val">Some</span>(finalized) = state.snapshot.finalized {
-<a href=#750 id=750 data-nosnippet>750</a>                    <span class="kw">if </span>finalized.timestamp &gt;= timestamp {
-<a href=#751 id=751 data-nosnippet>751</a>                        <span class="kw">break </span><span class="lifetime">'outer </span>(state, finalized);
-<a href=#752 id=752 data-nosnippet>752</a>                    }
-<a href=#753 id=753 data-nosnippet>753</a>                }
-<a href=#754 id=754 data-nosnippet>754</a>                <span class="macro">tracing::info!</span>(
-<a href=#755 id=755 data-nosnippet>755</a>                    %timestamp,
-<a href=#756 id=756 data-nosnippet>756</a>                    finalized = <span class="question-mark">?</span>state.snapshot.finalized,
-<a href=#757 id=757 data-nosnippet>757</a>                    <span class="string">"waiting for L1 finalized block"</span>,
-<a href=#758 id=758 data-nosnippet>758</a>                );
-<a href=#759 id=759 data-nosnippet>759</a>            }
-<a href=#760 id=760 data-nosnippet>760</a>
-<a href=#761 id=761 data-nosnippet>761</a>            <span class="comment">// Wait for the block.
-<a href=#762 id=762 data-nosnippet>762</a>            </span><span class="kw">while let </span><span class="prelude-val">Some</span>(event) = events.next().<span class="kw">await </span>{
-<a href=#763 id=763 data-nosnippet>763</a>                <span class="kw">let </span>L1Event::NewFinalized { finalized } = event <span class="kw">else </span>{
-<a href=#764 id=764 data-nosnippet>764</a>                    <span class="kw">continue</span>;
-<a href=#765 id=765 data-nosnippet>765</a>                };
-<a href=#766 id=766 data-nosnippet>766</a>                <span class="kw">if </span>finalized.info.timestamp &gt;= timestamp {
-<a href=#767 id=767 data-nosnippet>767</a>                    <span class="macro">tracing::info!</span>(%timestamp, <span class="question-mark">?</span>finalized, <span class="string">"got finalized block"</span>);
-<a href=#768 id=768 data-nosnippet>768</a>                    <span class="kw">break </span><span class="lifetime">'outer </span>(<span class="self">self</span>.state.lock().<span class="kw">await</span>, finalized.info);
-<a href=#769 id=769 data-nosnippet>769</a>                }
-<a href=#770 id=770 data-nosnippet>770</a>                <span class="macro">tracing::debug!</span>(%timestamp, <span class="question-mark">?</span>finalized, <span class="string">"waiting for L1 finalized block"</span>);
-<a href=#771 id=771 data-nosnippet>771</a>            }
-<a href=#772 id=772 data-nosnippet>772</a>
-<a href=#773 id=773 data-nosnippet>773</a>            <span class="comment">// This should not happen: the event stream ended. All we can do is try again.
-<a href=#774 id=774 data-nosnippet>774</a>            </span><span class="macro">tracing::warn!</span>(%timestamp, <span class="string">"L1 event stream ended unexpectedly; retry"</span>,);
-<a href=#775 id=775 data-nosnippet>775</a>            <span class="self">self</span>.retry_delay().<span class="kw">await</span>;
-<a href=#776 id=776 data-nosnippet>776</a>        };
-<a href=#777 id=777 data-nosnippet>777</a>
-<a href=#778 id=778 data-nosnippet>778</a>        <span class="comment">// It is possible there is some earlier block that also has the proper timestamp. Binary
-<a href=#779 id=779 data-nosnippet>779</a>        // search until we find the true earliest block with timestamp &gt;= `timestamp`.
-<a href=#780 id=780 data-nosnippet>780</a>        //
-<a href=#781 id=781 data-nosnippet>781</a>        // Invariants:
-<a href=#782 id=782 data-nosnippet>782</a>        // * `upper_bound &lt;= lower_bound`
-<a href=#783 id=783 data-nosnippet>783</a>        // * `upper_bound = block.number`
-<a href=#784 id=784 data-nosnippet>784</a>        // * Block number `lower_bound - 1` has timestamp &lt; `timestamp` (strictly)
-<a href=#785 id=785 data-nosnippet>785</a>        // * `block` has timestamp &gt;= `timestamp`
-<a href=#786 id=786 data-nosnippet>786</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>upper_bound = block.number;
-<a href=#787 id=787 data-nosnippet>787</a>        <span class="kw">let </span><span class="kw-2">mut </span>lower_bound = <span class="number">0</span>;
-<a href=#788 id=788 data-nosnippet>788</a>        <span class="kw">while </span>lower_bound &lt; upper_bound {
-<a href=#789 id=789 data-nosnippet>789</a>            <span class="kw">let </span>midpoint = (upper_bound + lower_bound) / <span class="number">2</span>;
-<a href=#790 id=790 data-nosnippet>790</a>            <span class="macro">tracing::debug!</span>(
-<a href=#791 id=791 data-nosnippet>791</a>                lower_bound,
-<a href=#792 id=792 data-nosnippet>792</a>                midpoint,
-<a href=#793 id=793 data-nosnippet>793</a>                upper_bound,
-<a href=#794 id=794 data-nosnippet>794</a>                %timestamp,
-<a href=#795 id=795 data-nosnippet>795</a>                <span class="question-mark">?</span>block,
-<a href=#796 id=796 data-nosnippet>796</a>                <span class="string">"searching for earliest block with sufficient timestamp"
-<a href=#797 id=797 data-nosnippet>797</a>            </span>);
-<a href=#798 id=798 data-nosnippet>798</a>
-<a href=#799 id=799 data-nosnippet>799</a>            <span class="kw">let </span>(state_lock, midpoint_block) =
-<a href=#800 id=800 data-nosnippet>800</a>                <span class="self">self</span>.fetch_finalized_block_by_number(state, midpoint).<span class="kw">await</span>;
-<a href=#801 id=801 data-nosnippet>801</a>            state = state_lock;
-<a href=#802 id=802 data-nosnippet>802</a>
-<a href=#803 id=803 data-nosnippet>803</a>            <span class="macro">tracing::debug!</span>(<span class="question-mark">?</span>midpoint_block, %timestamp, <span class="string">"pivot on midpoint block"</span>);
-<a href=#804 id=804 data-nosnippet>804</a>            <span class="kw">if </span>midpoint_block.timestamp &lt; timestamp {
-<a href=#805 id=805 data-nosnippet>805</a>                lower_bound = midpoint + <span class="number">1</span>;
-<a href=#806 id=806 data-nosnippet>806</a>            } <span class="kw">else </span>{
-<a href=#807 id=807 data-nosnippet>807</a>                upper_bound = midpoint;
-<a href=#808 id=808 data-nosnippet>808</a>                block = midpoint_block;
-<a href=#809 id=809 data-nosnippet>809</a>            }
-<a href=#810 id=810 data-nosnippet>810</a>        }
-<a href=#811 id=811 data-nosnippet>811</a>
-<a href=#812 id=812 data-nosnippet>812</a>        block
-<a href=#813 id=813 data-nosnippet>813</a>    }
-<a href=#814 id=814 data-nosnippet>814</a>
-<a href=#815 id=815 data-nosnippet>815</a>    <span class="kw">async fn </span>fetch_finalized_block_by_number&lt;<span class="lifetime">'a</span>&gt;(
-<a href=#816 id=816 data-nosnippet>816</a>        <span class="kw-2">&amp;</span><span class="lifetime">'a </span><span class="self">self</span>,
-<a href=#817 id=817 data-nosnippet>817</a>        <span class="kw-2">mut </span>state: MutexGuard&lt;<span class="lifetime">'a</span>, L1State&gt;,
-<a href=#818 id=818 data-nosnippet>818</a>        number: u64,
-<a href=#819 id=819 data-nosnippet>819</a>    ) -&gt; (MutexGuard&lt;<span class="lifetime">'a</span>, L1State&gt;, L1BlockInfo) {
-<a href=#820 id=820 data-nosnippet>820</a>        <span class="kw">let </span>latest_finalized = state
-<a href=#821 id=821 data-nosnippet>821</a>            .snapshot
-<a href=#822 id=822 data-nosnippet>822</a>            .finalized
-<a href=#823 id=823 data-nosnippet>823</a>            .expect(<span class="string">"get_finalized_block called before any blocks are finalized"</span>);
-<a href=#824 id=824 data-nosnippet>824</a>        <span class="macro">assert!</span>(
-<a href=#825 id=825 data-nosnippet>825</a>            number &lt;= latest_finalized.number,
-<a href=#826 id=826 data-nosnippet>826</a>            <span class="string">"requesting a finalized block {number} that isn't finalized; snapshot: {:?}"</span>,
-<a href=#827 id=827 data-nosnippet>827</a>            state.snapshot,
-<a href=#828 id=828 data-nosnippet>828</a>        );
-<a href=#829 id=829 data-nosnippet>829</a>
-<a href=#830 id=830 data-nosnippet>830</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(safety_margin) = <span class="self">self</span>.options().l1_finalized_safety_margin {
-<a href=#831 id=831 data-nosnippet>831</a>            <span class="kw">if </span>number &lt; latest_finalized.number.saturating_sub(safety_margin) {
-<a href=#832 id=832 data-nosnippet>832</a>                <span class="comment">// If the requested block height is so old that we can assume all L1 providers have
-<a href=#833 id=833 data-nosnippet>833</a>                // finalized it, we don't need to worry about failing over to a lagging L1 provider
-<a href=#834 id=834 data-nosnippet>834</a>                // which has yet to finalize the block, so we don't need to bother with the
-<a href=#835 id=835 data-nosnippet>835</a>                // expensive hash chaining logic below. Just look up the block by number and assume
-<a href=#836 id=836 data-nosnippet>836</a>                // the response is finalized.
-<a href=#837 id=837 data-nosnippet>837</a>                </span><span class="macro">tracing::debug!</span>(
-<a href=#838 id=838 data-nosnippet>838</a>                    number,
-<a href=#839 id=839 data-nosnippet>839</a>                    <span class="question-mark">?</span>latest_finalized,
-<a href=#840 id=840 data-nosnippet>840</a>                    <span class="string">"skipping hash check for old finalized block"
-<a href=#841 id=841 data-nosnippet>841</a>                </span>);
-<a href=#842 id=842 data-nosnippet>842</a>                <span class="kw">let </span>(state, block) = <span class="self">self
-<a href=#843 id=843 data-nosnippet>843</a>                    </span>.load_and_cache_finalized_block(state, number.into())
-<a href=#844 id=844 data-nosnippet>844</a>                    .<span class="kw">await</span>;
-<a href=#845 id=845 data-nosnippet>845</a>                <span class="kw">return </span>(state, block.info);
-<a href=#846 id=846 data-nosnippet>846</a>            }
-<a href=#847 id=847 data-nosnippet>847</a>        }
-<a href=#848 id=848 data-nosnippet>848</a>
-<a href=#849 id=849 data-nosnippet>849</a>        <span class="comment">// To get this block and be sure we are getting the correct finalized block, we first need
-<a href=#850 id=850 data-nosnippet>850</a>        // to find an equal or later block so we can find the expected hash of this block. If we
-<a href=#851 id=851 data-nosnippet>851</a>        // were to just look up the block by number, there could be problems if we failed over to a
-<a href=#852 id=852 data-nosnippet>852</a>        // different (lagging) L1 provider, which has yet to finalize this block and reports a
-<a href=#853 id=853 data-nosnippet>853</a>        // different block with the same number.
-<a href=#854 id=854 data-nosnippet>854</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>successor_number = number;
-<a href=#855 id=855 data-nosnippet>855</a>        <span class="kw">let </span><span class="kw-2">mut </span>successor = <span class="kw">loop </span>{
-<a href=#856 id=856 data-nosnippet>856</a>            <span class="kw">if let </span><span class="prelude-val">Some</span>(block) = state.finalized.get(<span class="kw-2">&amp;</span>successor_number) {
-<a href=#857 id=857 data-nosnippet>857</a>                <span class="kw">break </span><span class="kw-2">*</span>block;
-<a href=#858 id=858 data-nosnippet>858</a>            }
-<a href=#859 id=859 data-nosnippet>859</a>            successor_number += <span class="number">1</span>;
-<a href=#860 id=860 data-nosnippet>860</a>            <span class="kw">if </span>successor_number &gt; latest_finalized.number {
-<a href=#861 id=861 data-nosnippet>861</a>                <span class="comment">// We don't have any cached finalized block after the requested one; fetch the
-<a href=#862 id=862 data-nosnippet>862</a>                // current finalized block from the network.
-<a href=#863 id=863 data-nosnippet>863</a>                // Don't hold state lock while fetching from network.
-<a href=#864 id=864 data-nosnippet>864</a>                </span>drop(state);
-<a href=#865 id=865 data-nosnippet>865</a>                <span class="kw">let </span>block = <span class="kw">loop </span>{
-<a href=#866 id=866 data-nosnippet>866</a>                    <span class="kw">match </span>fetch_finalized_block_from_rpc(<span class="kw-2">&amp;</span><span class="self">self</span>.provider).<span class="kw">await </span>{
-<a href=#867 id=867 data-nosnippet>867</a>                        <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(block)) =&gt; {
-<a href=#868 id=868 data-nosnippet>868</a>                            <span class="kw">break </span>block;
-<a href=#869 id=869 data-nosnippet>869</a>                        },
-<a href=#870 id=870 data-nosnippet>870</a>                        <span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>) =&gt; {
-<a href=#871 id=871 data-nosnippet>871</a>                            <span class="macro">tracing::warn!</span>(
-<a href=#872 id=872 data-nosnippet>872</a>                                <span class="string">"no finalized block even though finalized snapshot is Some; this \
-<a href=#873 id=873 data-nosnippet>873</a>                                 can be caused by an L1 client failover"
-<a href=#874 id=874 data-nosnippet>874</a>                            </span>);
-<a href=#875 id=875 data-nosnippet>875</a>                            <span class="self">self</span>.retry_delay().<span class="kw">await</span>;
-<a href=#876 id=876 data-nosnippet>876</a>                        },
-<a href=#877 id=877 data-nosnippet>877</a>                        <span class="prelude-val">Err</span>(err) =&gt; {
-<a href=#878 id=878 data-nosnippet>878</a>                            <span class="macro">tracing::warn!</span>(<span class="string">"Error getting finalized block: {err:#}"</span>);
-<a href=#879 id=879 data-nosnippet>879</a>                            <span class="self">self</span>.retry_delay().<span class="kw">await</span>;
-<a href=#880 id=880 data-nosnippet>880</a>                        },
-<a href=#881 id=881 data-nosnippet>881</a>                    }
-<a href=#882 id=882 data-nosnippet>882</a>                };
-<a href=#883 id=883 data-nosnippet>883</a>                state = <span class="self">self</span>.state.lock().<span class="kw">await</span>;
-<a href=#884 id=884 data-nosnippet>884</a>                state.put_finalized(block);
-<a href=#885 id=885 data-nosnippet>885</a>                <span class="kw">break </span>block;
-<a href=#886 id=886 data-nosnippet>886</a>            }
-<a href=#887 id=887 data-nosnippet>887</a>        };
-<a href=#888 id=888 data-nosnippet>888</a>
-<a href=#889 id=889 data-nosnippet>889</a>        <span class="comment">// Work backwards from the known finalized successor, fetching blocks by parent hash so we
-<a href=#890 id=890 data-nosnippet>890</a>        // know we are getting the correct block.
-<a href=#891 id=891 data-nosnippet>891</a>        </span><span class="kw">while </span>successor.info.number &gt; number {
-<a href=#892 id=892 data-nosnippet>892</a>            <span class="macro">tracing::debug!</span>(
-<a href=#893 id=893 data-nosnippet>893</a>                number,
-<a href=#894 id=894 data-nosnippet>894</a>                <span class="question-mark">?</span>successor,
-<a href=#895 id=895 data-nosnippet>895</a>                <span class="string">"checking hash chaining for finalized block"
-<a href=#896 id=896 data-nosnippet>896</a>            </span>);
-<a href=#897 id=897 data-nosnippet>897</a>            (state, successor) = <span class="self">self
-<a href=#898 id=898 data-nosnippet>898</a>                </span>.load_and_cache_finalized_block(state, successor.parent_hash.into())
-<a href=#899 id=899 data-nosnippet>899</a>                .<span class="kw">await</span>;
-<a href=#900 id=900 data-nosnippet>900</a>        }
-<a href=#901 id=901 data-nosnippet>901</a>
-<a href=#902 id=902 data-nosnippet>902</a>        (state, successor.info)
-<a href=#903 id=903 data-nosnippet>903</a>    }
-<a href=#904 id=904 data-nosnippet>904</a>
-<a href=#905 id=905 data-nosnippet>905</a>    <span class="kw">async fn </span>load_and_cache_finalized_block&lt;<span class="lifetime">'a</span>&gt;(
-<a href=#906 id=906 data-nosnippet>906</a>        <span class="kw-2">&amp;</span><span class="lifetime">'a </span><span class="self">self</span>,
-<a href=#907 id=907 data-nosnippet>907</a>        <span class="kw-2">mut </span>state: MutexGuard&lt;<span class="lifetime">'a</span>, L1State&gt;,
-<a href=#908 id=908 data-nosnippet>908</a>        id: BlockId,
-<a href=#909 id=909 data-nosnippet>909</a>    ) -&gt; (MutexGuard&lt;<span class="lifetime">'a</span>, L1State&gt;, L1BlockInfoWithParent) {
-<a href=#910 id=910 data-nosnippet>910</a>        <span class="comment">// Don't hold state lock while fetching from network.
-<a href=#911 id=911 data-nosnippet>911</a>        </span>drop(state);
-<a href=#912 id=912 data-nosnippet>912</a>        <span class="kw">let </span>block = <span class="kw">loop </span>{
-<a href=#913 id=913 data-nosnippet>913</a>            <span class="kw">let </span>block = <span class="kw">match </span><span class="self">self</span>.provider.get_block(id).<span class="kw">await </span>{
-<a href=#914 id=914 data-nosnippet>914</a>                <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(block)) =&gt; block,
-<a href=#915 id=915 data-nosnippet>915</a>                <span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>) =&gt; {
-<a href=#916 id=916 data-nosnippet>916</a>                    <span class="macro">tracing::warn!</span>(
-<a href=#917 id=917 data-nosnippet>917</a>                        %id,
-<a href=#918 id=918 data-nosnippet>918</a>                        <span class="string">"provider error: finalized L1 block should always be available"
-<a href=#919 id=919 data-nosnippet>919</a>                    </span>);
-<a href=#920 id=920 data-nosnippet>920</a>                    <span class="self">self</span>.retry_delay().<span class="kw">await</span>;
-<a href=#921 id=921 data-nosnippet>921</a>                    <span class="kw">continue</span>;
-<a href=#922 id=922 data-nosnippet>922</a>                },
-<a href=#923 id=923 data-nosnippet>923</a>                <span class="prelude-val">Err</span>(err) =&gt; {
-<a href=#924 id=924 data-nosnippet>924</a>                    <span class="macro">tracing::warn!</span>(%id, <span class="string">"failed to get finalized L1 block: {err:#}"</span>);
-<a href=#925 id=925 data-nosnippet>925</a>                    <span class="self">self</span>.retry_delay().<span class="kw">await</span>;
-<a href=#926 id=926 data-nosnippet>926</a>                    <span class="kw">continue</span>;
-<a href=#927 id=927 data-nosnippet>927</a>                },
-<a href=#928 id=928 data-nosnippet>928</a>            };
-<a href=#929 id=929 data-nosnippet>929</a>            <span class="kw">break </span>(<span class="kw-2">&amp;</span>block).into();
-<a href=#930 id=930 data-nosnippet>930</a>        };
-<a href=#931 id=931 data-nosnippet>931</a>        state = <span class="self">self</span>.state.lock().<span class="kw">await</span>;
-<a href=#932 id=932 data-nosnippet>932</a>        state.put_finalized(block);
-<a href=#933 id=933 data-nosnippet>933</a>        (state, block)
-<a href=#934 id=934 data-nosnippet>934</a>    }
-<a href=#935 id=935 data-nosnippet>935</a>
-<a href=#936 id=936 data-nosnippet>936</a>    <span class="doccomment">/// Get fee info for each `Deposit` occurring between `prev`
-<a href=#937 id=937 data-nosnippet>937</a>    /// and `new`. Returns `Vec&lt;FeeInfo&gt;`
-<a href=#938 id=938 data-nosnippet>938</a>    </span><span class="kw">pub async fn </span>get_finalized_deposits(
-<a href=#939 id=939 data-nosnippet>939</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#940 id=940 data-nosnippet>940</a>        fee_contract_address: Address,
-<a href=#941 id=941 data-nosnippet>941</a>        prev_finalized: <span class="prelude-ty">Option</span>&lt;u64&gt;,
-<a href=#942 id=942 data-nosnippet>942</a>        new_finalized: u64,
-<a href=#943 id=943 data-nosnippet>943</a>    ) -&gt; Vec&lt;FeeInfo&gt; {
-<a href=#944 id=944 data-nosnippet>944</a>        <span class="comment">// No new blocks have been finalized, therefore there are no
-<a href=#945 id=945 data-nosnippet>945</a>        // new deposits.
-<a href=#946 id=946 data-nosnippet>946</a>        </span><span class="kw">if </span>prev_finalized &gt;= <span class="prelude-val">Some</span>(new_finalized) {
-<a href=#947 id=947 data-nosnippet>947</a>            <span class="kw">return </span><span class="macro">vec!</span>[];
-<a href=#948 id=948 data-nosnippet>948</a>        }
-<a href=#949 id=949 data-nosnippet>949</a>
-<a href=#950 id=950 data-nosnippet>950</a>        <span class="kw">let </span>opt = <span class="self">self</span>.options();
-<a href=#951 id=951 data-nosnippet>951</a>
-<a href=#952 id=952 data-nosnippet>952</a>        <span class="comment">// `prev` should have already been processed unless we
-<a href=#953 id=953 data-nosnippet>953</a>        // haven't processed *any* blocks yet.
-<a href=#954 id=954 data-nosnippet>954</a>        </span><span class="kw">let </span>prev = prev_finalized.map(|prev| prev + <span class="number">1</span>).unwrap_or(<span class="number">0</span>);
-<a href=#955 id=955 data-nosnippet>955</a>
-<a href=#956 id=956 data-nosnippet>956</a>        <span class="comment">// Divide the range `prev_finalized..=new_finalized` into chunks of size
-<a href=#957 id=957 data-nosnippet>957</a>        // `events_max_block_range`.
-<a href=#958 id=958 data-nosnippet>958</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>start = prev;
-<a href=#959 id=959 data-nosnippet>959</a>        <span class="kw">let </span>end = new_finalized;
-<a href=#960 id=960 data-nosnippet>960</a>        <span class="kw">let </span>chunk_size = opt.l1_events_max_block_range;
-<a href=#961 id=961 data-nosnippet>961</a>        <span class="kw">let </span>chunks = std::iter::from_fn(<span class="kw">move </span>|| {
-<a href=#962 id=962 data-nosnippet>962</a>            <span class="kw">let </span>chunk_end = min(start + chunk_size - <span class="number">1</span>, end);
-<a href=#963 id=963 data-nosnippet>963</a>            <span class="kw">if </span>chunk_end &lt; start {
-<a href=#964 id=964 data-nosnippet>964</a>                <span class="kw">return </span><span class="prelude-val">None</span>;
-<a href=#965 id=965 data-nosnippet>965</a>            }
-<a href=#966 id=966 data-nosnippet>966</a>
-<a href=#967 id=967 data-nosnippet>967</a>            <span class="kw">let </span>chunk = (start, chunk_end);
-<a href=#968 id=968 data-nosnippet>968</a>            start = chunk_end + <span class="number">1</span>;
-<a href=#969 id=969 data-nosnippet>969</a>            <span class="prelude-val">Some</span>(chunk)
-<a href=#970 id=970 data-nosnippet>970</a>        });
-<a href=#971 id=971 data-nosnippet>971</a>
-<a href=#972 id=972 data-nosnippet>972</a>        <span class="comment">// Fetch events for each chunk.
-<a href=#973 id=973 data-nosnippet>973</a>        </span><span class="kw">let </span>events = stream::iter(chunks).then(|(from, to)| {
-<a href=#974 id=974 data-nosnippet>974</a>            <span class="kw">let </span>retry_delay = opt.l1_retry_delay;
-<a href=#975 id=975 data-nosnippet>975</a>            <span class="kw">let </span>fee_contract = FeeContract::new(fee_contract_address, <span class="self">self</span>.provider.clone());
-<a href=#976 id=976 data-nosnippet>976</a>            <span class="kw">async move </span>{
-<a href=#977 id=977 data-nosnippet>977</a>                <span class="macro">tracing::debug!</span>(from, to, <span class="string">"fetch events in range"</span>);
-<a href=#978 id=978 data-nosnippet>978</a>
-<a href=#979 id=979 data-nosnippet>979</a>                <span class="comment">// query for deposit events, loop until successful.
-<a href=#980 id=980 data-nosnippet>980</a>                </span><span class="kw">loop </span>{
-<a href=#981 id=981 data-nosnippet>981</a>                    <span class="kw">match </span>fee_contract
-<a href=#982 id=982 data-nosnippet>982</a>                        .Deposit_filter()
-<a href=#983 id=983 data-nosnippet>983</a>                        .address(<span class="kw-2">*</span>fee_contract.address())
-<a href=#984 id=984 data-nosnippet>984</a>                        .from_block(from)
-<a href=#985 id=985 data-nosnippet>985</a>                        .to_block(to)
-<a href=#986 id=986 data-nosnippet>986</a>                        .query()
-<a href=#987 id=987 data-nosnippet>987</a>                        .<span class="kw">await
-<a href=#988 id=988 data-nosnippet>988</a>                    </span>{
-<a href=#989 id=989 data-nosnippet>989</a>                        <span class="prelude-val">Ok</span>(events) =&gt; <span class="kw">break </span>stream::iter(events),
-<a href=#990 id=990 data-nosnippet>990</a>                        <span class="prelude-val">Err</span>(err) =&gt; {
-<a href=#991 id=991 data-nosnippet>991</a>                            <span class="macro">tracing::warn!</span>(from, to, %err, <span class="string">"Fee L1Event Error"</span>);
-<a href=#992 id=992 data-nosnippet>992</a>                            sleep(retry_delay).<span class="kw">await</span>;
-<a href=#993 id=993 data-nosnippet>993</a>                        },
-<a href=#994 id=994 data-nosnippet>994</a>                    }
-<a href=#995 id=995 data-nosnippet>995</a>                }
-<a href=#996 id=996 data-nosnippet>996</a>            }
-<a href=#997 id=997 data-nosnippet>997</a>        });
-<a href=#998 id=998 data-nosnippet>998</a>        events
-<a href=#999 id=999 data-nosnippet>999</a>            .flatten()
-<a href=#1000 id=1000 data-nosnippet>1000</a>            .map(|(deposit, <span class="kw">_</span>)| FeeInfo::from(deposit))
-<a href=#1001 id=1001 data-nosnippet>1001</a>            .collect()
-<a href=#1002 id=1002 data-nosnippet>1002</a>            .<span class="kw">await
-<a href=#1003 id=1003 data-nosnippet>1003</a>    </span>}
-<a href=#1004 id=1004 data-nosnippet>1004</a>
-<a href=#1005 id=1005 data-nosnippet>1005</a>    <span class="doccomment">/// Check if the given address is a proxy contract.
-<a href=#1006 id=1006 data-nosnippet>1006</a>    </span><span class="kw">pub async fn </span>is_proxy_contract(<span class="kw-2">&amp;</span><span class="self">self</span>, proxy_address: Address) -&gt; anyhow::Result&lt;bool&gt; {
-<a href=#1007 id=1007 data-nosnippet>1007</a>        <span class="comment">// confirm that the proxy_address is a proxy
-<a href=#1008 id=1008 data-nosnippet>1008</a>        // using the implementation slot, 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc, which is the keccak-256 hash of "eip1967.proxy.implementation" subtracted by 1
-<a href=#1009 id=1009 data-nosnippet>1009</a>        </span><span class="kw">let </span>hex_bytes =
-<a href=#1010 id=1010 data-nosnippet>1010</a>            hex::decode(<span class="string">"360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc"</span>)
-<a href=#1011 id=1011 data-nosnippet>1011</a>                .expect(<span class="string">"Failed to decode hex string"</span>);
-<a href=#1012 id=1012 data-nosnippet>1012</a>        <span class="kw">let </span>implementation_slot = B256::from_slice(<span class="kw-2">&amp;</span>hex_bytes);
-<a href=#1013 id=1013 data-nosnippet>1013</a>        <span class="kw">let </span>storage = <span class="self">self
-<a href=#1014 id=1014 data-nosnippet>1014</a>            </span>.provider
-<a href=#1015 id=1015 data-nosnippet>1015</a>            .get_storage_at(proxy_address, implementation_slot.into())
-<a href=#1016 id=1016 data-nosnippet>1016</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#1017 id=1017 data-nosnippet>1017</a>
-<a href=#1018 id=1018 data-nosnippet>1018</a>        <span class="kw">let </span>implementation_address = Address::from_slice(<span class="kw-2">&amp;</span>storage.to_be_bytes::&lt;<span class="number">32</span>&gt;()[<span class="number">12</span>..]);
-<a href=#1019 id=1019 data-nosnippet>1019</a>
-<a href=#1020 id=1020 data-nosnippet>1020</a>        <span class="comment">// when the implementation address is not equal to zero, it's a proxy
-<a href=#1021 id=1021 data-nosnippet>1021</a>        </span><span class="prelude-val">Ok</span>(<span class="macro">implementation_address !</span>= Address::ZERO)
-<a href=#1022 id=1022 data-nosnippet>1022</a>    }
-<a href=#1023 id=1023 data-nosnippet>1023</a>
-<a href=#1024 id=1024 data-nosnippet>1024</a>    <span class="kw">pub async fn </span>retry_on_all_providers&lt;Fut&gt;(
-<a href=#1025 id=1025 data-nosnippet>1025</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#1026 id=1026 data-nosnippet>1026</a>        op: <span class="kw">impl </span>Fn() -&gt; Fut,
-<a href=#1027 id=1027 data-nosnippet>1027</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Fut::Ok, Fut::Error&gt;
-<a href=#1028 id=1028 data-nosnippet>1028</a>    <span class="kw">where
-<a href=#1029 id=1029 data-nosnippet>1029</a>        </span>Fut: TryFuture,
-<a href=#1030 id=1030 data-nosnippet>1030</a>    {
-<a href=#1031 id=1031 data-nosnippet>1031</a>        <span class="kw">let </span>transport = <span class="kw-2">&amp;</span><span class="self">self</span>.transport;
-<a href=#1032 id=1032 data-nosnippet>1032</a>        <span class="kw">let </span>start = transport.current_transport.read().generation % transport.urls.len();
-<a href=#1033 id=1033 data-nosnippet>1033</a>        <span class="kw">let </span>end = start + transport.urls.len();
-<a href=#1034 id=1034 data-nosnippet>1034</a>        <span class="kw">loop </span>{
-<a href=#1035 id=1035 data-nosnippet>1035</a>            <span class="kw">match </span>op().into_future().<span class="kw">await </span>{
-<a href=#1036 id=1036 data-nosnippet>1036</a>                <span class="prelude-val">Ok</span>(res) =&gt; <span class="kw">return </span><span class="prelude-val">Ok</span>(res),
-<a href=#1037 id=1037 data-nosnippet>1037</a>                <span class="prelude-val">Err</span>(err) =&gt; {
-<a href=#1038 id=1038 data-nosnippet>1038</a>                    <span class="kw">if </span>transport.current_transport.read().generation &gt;= end {
-<a href=#1039 id=1039 data-nosnippet>1039</a>                        <span class="kw">return </span><span class="prelude-val">Err</span>(err);
-<a href=#1040 id=1040 data-nosnippet>1040</a>                    } <span class="kw">else </span>{
-<a href=#1041 id=1041 data-nosnippet>1041</a>                        <span class="self">self</span>.retry_delay().<span class="kw">await</span>;
-<a href=#1042 id=1042 data-nosnippet>1042</a>                    }
-<a href=#1043 id=1043 data-nosnippet>1043</a>                },
-<a href=#1044 id=1044 data-nosnippet>1044</a>            }
-<a href=#1045 id=1045 data-nosnippet>1045</a>        }
-<a href=#1046 id=1046 data-nosnippet>1046</a>    }
-<a href=#1047 id=1047 data-nosnippet>1047</a>
-<a href=#1048 id=1048 data-nosnippet>1048</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>options(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>L1ClientOptions {
-<a href=#1049 id=1049 data-nosnippet>1049</a>        <span class="self">self</span>.transport.options()
-<a href=#1050 id=1050 data-nosnippet>1050</a>    }
-<a href=#1051 id=1051 data-nosnippet>1051</a>
-<a href=#1052 id=1052 data-nosnippet>1052</a>    <span class="kw">fn </span>metrics(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>L1ClientMetrics {
-<a href=#1053 id=1053 data-nosnippet>1053</a>        <span class="self">self</span>.transport.metrics()
-<a href=#1054 id=1054 data-nosnippet>1054</a>    }
-<a href=#1055 id=1055 data-nosnippet>1055</a>
-<a href=#1056 id=1056 data-nosnippet>1056</a>    <span class="kw">async fn </span>retry_delay(<span class="kw-2">&amp;</span><span class="self">self</span>) {
-<a href=#1057 id=1057 data-nosnippet>1057</a>        sleep(<span class="self">self</span>.options().l1_retry_delay).<span class="kw">await</span>;
-<a href=#1058 id=1058 data-nosnippet>1058</a>    }
-<a href=#1059 id=1059 data-nosnippet>1059</a>}
-<a href=#1060 id=1060 data-nosnippet>1060</a>
-<a href=#1061 id=1061 data-nosnippet>1061</a><span class="kw">impl </span>L1State {
-<a href=#1062 id=1062 data-nosnippet>1062</a>    <span class="kw">fn </span>new(cache_size: NonZeroUsize) -&gt; <span class="self">Self </span>{
-<a href=#1063 id=1063 data-nosnippet>1063</a>        <span class="self">Self </span>{
-<a href=#1064 id=1064 data-nosnippet>1064</a>            snapshot: Default::default(),
-<a href=#1065 id=1065 data-nosnippet>1065</a>            finalized: LruCache::new(cache_size),
-<a href=#1066 id=1066 data-nosnippet>1066</a>            last_finalized: <span class="prelude-val">None</span>,
-<a href=#1067 id=1067 data-nosnippet>1067</a>        }
-<a href=#1068 id=1068 data-nosnippet>1068</a>    }
-<a href=#1069 id=1069 data-nosnippet>1069</a>
-<a href=#1070 id=1070 data-nosnippet>1070</a>    <span class="kw">fn </span>put_finalized(<span class="kw-2">&amp;mut </span><span class="self">self</span>, block: L1BlockInfoWithParent) {
-<a href=#1071 id=1071 data-nosnippet>1071</a>        <span class="macro">assert!</span>(
-<a href=#1072 id=1072 data-nosnippet>1072</a>            <span class="self">self</span>.snapshot.finalized.is_some()
-<a href=#1073 id=1073 data-nosnippet>1073</a>                &amp;&amp; block.info.number &lt;= <span class="self">self</span>.snapshot.finalized.unwrap().number,
-<a href=#1074 id=1074 data-nosnippet>1074</a>            <span class="string">"inserting a finalized block {block:?} that isn't finalized; snapshot: {:?}"</span>,
-<a href=#1075 id=1075 data-nosnippet>1075</a>            <span class="self">self</span>.snapshot,
-<a href=#1076 id=1076 data-nosnippet>1076</a>        );
-<a href=#1077 id=1077 data-nosnippet>1077</a>
-<a href=#1078 id=1078 data-nosnippet>1078</a>        <span class="kw">if </span><span class="prelude-val">Some</span>(block.info.number()) &gt; <span class="self">self</span>.last_finalized {
-<a href=#1079 id=1079 data-nosnippet>1079</a>            <span class="self">self</span>.last_finalized = <span class="prelude-val">Some</span>(block.info.number());
-<a href=#1080 id=1080 data-nosnippet>1080</a>        }
-<a href=#1081 id=1081 data-nosnippet>1081</a>
-<a href=#1082 id=1082 data-nosnippet>1082</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>((old_number, old_block)) = <span class="self">self</span>.finalized.push(block.info.number, block) {
-<a href=#1083 id=1083 data-nosnippet>1083</a>            <span class="kw">if </span>old_number == block.info.number &amp;&amp; <span class="macro">block !</span>= old_block {
-<a href=#1084 id=1084 data-nosnippet>1084</a>                <span class="macro">tracing::error!</span>(
-<a href=#1085 id=1085 data-nosnippet>1085</a>                    <span class="question-mark">?</span>old_block,
-<a href=#1086 id=1086 data-nosnippet>1086</a>                    <span class="question-mark">?</span>block,
-<a href=#1087 id=1087 data-nosnippet>1087</a>                    <span class="string">"got different info for the same finalized height; something has gone very \
-<a href=#1088 id=1088 data-nosnippet>1088</a>                     wrong with the L1"</span>,
-<a href=#1089 id=1089 data-nosnippet>1089</a>                );
-<a href=#1090 id=1090 data-nosnippet>1090</a>            }
+<a href=#628 id=628 data-nosnippet>628</a>                            <span class="macro">tracing::debug!</span>(<span class="string">"Updated L1 snapshot to {:?}"</span>, state.snapshot);
+<a href=#629 id=629 data-nosnippet>629</a>                        }
+<a href=#630 id=630 data-nosnippet>630</a>                        <span class="comment">// The stream ended
+<a href=#631 id=631 data-nosnippet>631</a>                        </span><span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>) =&gt; {
+<a href=#632 id=632 data-nosnippet>632</a>                            <span class="macro">tracing::error!</span>(<span class="string">"L1 block stream ended unexpectedly, trying to re-establish block stream"</span>);
+<a href=#633 id=633 data-nosnippet>633</a>                            <span class="kw">break</span>;
+<a href=#634 id=634 data-nosnippet>634</a>                        }
+<a href=#635 id=635 data-nosnippet>635</a>                        <span class="comment">// We timed out waiting for a block
+<a href=#636 id=636 data-nosnippet>636</a>                        </span><span class="prelude-val">Err</span>(<span class="kw">_</span>) =&gt; {
+<a href=#637 id=637 data-nosnippet>637</a>                            <span class="macro">tracing::error!</span>(<span class="string">"No block received for {} seconds, trying to re-establish block stream"</span>, subscription_timeout.as_secs());
+<a href=#638 id=638 data-nosnippet>638</a>                            <span class="kw">break</span>;
+<a href=#639 id=639 data-nosnippet>639</a>                        }
+<a href=#640 id=640 data-nosnippet>640</a>                    }
+<a href=#641 id=641 data-nosnippet>641</a>                }
+<a href=#642 id=642 data-nosnippet>642</a>
+<a href=#643 id=643 data-nosnippet>643</a>                metrics.reconnects.add(<span class="number">1</span>);
+<a href=#644 id=644 data-nosnippet>644</a>            }
+<a href=#645 id=645 data-nosnippet>645</a>        }.instrument(span)
+<a href=#646 id=646 data-nosnippet>646</a>    }
+<a href=#647 id=647 data-nosnippet>647</a>
+<a href=#648 id=648 data-nosnippet>648</a>    <span class="doccomment">/// Get a snapshot from the l1.
+<a href=#649 id=649 data-nosnippet>649</a>    </span><span class="kw">pub async fn </span>snapshot(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; L1Snapshot {
+<a href=#650 id=650 data-nosnippet>650</a>        <span class="self">self</span>.state.lock().<span class="kw">await</span>.snapshot
+<a href=#651 id=651 data-nosnippet>651</a>    }
+<a href=#652 id=652 data-nosnippet>652</a>
+<a href=#653 id=653 data-nosnippet>653</a>    <span class="doccomment">/// Wait until the highest L1 block number reaches at least `number`.
+<a href=#654 id=654 data-nosnippet>654</a>    ///
+<a href=#655 id=655 data-nosnippet>655</a>    /// This function does not return any information about the block, since the block is not
+<a href=#656 id=656 data-nosnippet>656</a>    /// necessarily finalized when it returns. It is only used to guarantee that some block at
+<a href=#657 id=657 data-nosnippet>657</a>    /// height `number` exists, possibly in the unsafe part of the L1 chain.
+<a href=#658 id=658 data-nosnippet>658</a>    </span><span class="kw">pub async fn </span>wait_for_block(<span class="kw-2">&amp;</span><span class="self">self</span>, number: u64) {
+<a href=#659 id=659 data-nosnippet>659</a>        <span class="kw">loop </span>{
+<a href=#660 id=660 data-nosnippet>660</a>            <span class="comment">// Subscribe to events before checking the current state, to ensure we don't miss a
+<a href=#661 id=661 data-nosnippet>661</a>            // relevant event.
+<a href=#662 id=662 data-nosnippet>662</a>            </span><span class="kw">let </span><span class="kw-2">mut </span>events = <span class="self">self</span>.receiver.activate_cloned();
+<a href=#663 id=663 data-nosnippet>663</a>
+<a href=#664 id=664 data-nosnippet>664</a>            <span class="comment">// Check if the block we are waiting for already exists.
+<a href=#665 id=665 data-nosnippet>665</a>            </span>{
+<a href=#666 id=666 data-nosnippet>666</a>                <span class="kw">let </span>state = <span class="self">self</span>.state.lock().<span class="kw">await</span>;
+<a href=#667 id=667 data-nosnippet>667</a>                <span class="kw">if </span>state.snapshot.head &gt;= number {
+<a href=#668 id=668 data-nosnippet>668</a>                    <span class="kw">return</span>;
+<a href=#669 id=669 data-nosnippet>669</a>                }
+<a href=#670 id=670 data-nosnippet>670</a>                <span class="macro">tracing::info!</span>(number, head = state.snapshot.head, <span class="string">"Waiting for l1 block"</span>);
+<a href=#671 id=671 data-nosnippet>671</a>            }
+<a href=#672 id=672 data-nosnippet>672</a>
+<a href=#673 id=673 data-nosnippet>673</a>            <span class="comment">// Wait for the block.
+<a href=#674 id=674 data-nosnippet>674</a>            </span><span class="kw">while let </span><span class="prelude-val">Some</span>(event) = events.next().<span class="kw">await </span>{
+<a href=#675 id=675 data-nosnippet>675</a>                <span class="kw">let </span>L1Event::NewHead { head } = event <span class="kw">else </span>{
+<a href=#676 id=676 data-nosnippet>676</a>                    <span class="kw">continue</span>;
+<a href=#677 id=677 data-nosnippet>677</a>                };
+<a href=#678 id=678 data-nosnippet>678</a>                <span class="kw">if </span>head &gt;= number {
+<a href=#679 id=679 data-nosnippet>679</a>                    <span class="macro">tracing::info!</span>(number, head, <span class="string">"Got L1 block"</span>);
+<a href=#680 id=680 data-nosnippet>680</a>                    <span class="kw">return</span>;
+<a href=#681 id=681 data-nosnippet>681</a>                }
+<a href=#682 id=682 data-nosnippet>682</a>                <span class="macro">tracing::debug!</span>(number, head, <span class="string">"Waiting for L1 block"</span>);
+<a href=#683 id=683 data-nosnippet>683</a>            }
+<a href=#684 id=684 data-nosnippet>684</a>
+<a href=#685 id=685 data-nosnippet>685</a>            <span class="comment">// This should not happen: the event stream ended. All we can do is try again.
+<a href=#686 id=686 data-nosnippet>686</a>            </span><span class="macro">tracing::warn!</span>(number, <span class="string">"L1 event stream ended unexpectedly; retry"</span>);
+<a href=#687 id=687 data-nosnippet>687</a>            <span class="self">self</span>.retry_delay().<span class="kw">await</span>;
+<a href=#688 id=688 data-nosnippet>688</a>        }
+<a href=#689 id=689 data-nosnippet>689</a>    }
+<a href=#690 id=690 data-nosnippet>690</a>
+<a href=#691 id=691 data-nosnippet>691</a>    <span class="doccomment">/// Get information about the given block.
+<a href=#692 id=692 data-nosnippet>692</a>    ///
+<a href=#693 id=693 data-nosnippet>693</a>    /// If the desired block number is not finalized yet, this function will block until it becomes
+<a href=#694 id=694 data-nosnippet>694</a>    /// finalized.
+<a href=#695 id=695 data-nosnippet>695</a>    </span><span class="kw">pub async fn </span>wait_for_finalized_block(<span class="kw-2">&amp;</span><span class="self">self</span>, number: u64) -&gt; L1BlockInfo {
+<a href=#696 id=696 data-nosnippet>696</a>        <span class="kw">loop </span>{
+<a href=#697 id=697 data-nosnippet>697</a>            <span class="comment">// Subscribe to events before checking the current state, to ensure we don't miss a relevant
+<a href=#698 id=698 data-nosnippet>698</a>            // event.
+<a href=#699 id=699 data-nosnippet>699</a>            </span><span class="kw">let </span><span class="kw-2">mut </span>events = <span class="self">self</span>.receiver.activate_cloned();
+<a href=#700 id=700 data-nosnippet>700</a>
+<a href=#701 id=701 data-nosnippet>701</a>            <span class="comment">// Check if the block we are waiting for already exists.
+<a href=#702 id=702 data-nosnippet>702</a>            </span>{
+<a href=#703 id=703 data-nosnippet>703</a>                <span class="kw">let </span>state = <span class="self">self</span>.state.lock().<span class="kw">await</span>;
+<a href=#704 id=704 data-nosnippet>704</a>                <span class="kw">if let </span><span class="prelude-val">Some</span>(finalized) = state.snapshot.finalized {
+<a href=#705 id=705 data-nosnippet>705</a>                    <span class="kw">if </span>finalized.number &gt;= number {
+<a href=#706 id=706 data-nosnippet>706</a>                        <span class="kw">return </span><span class="self">self</span>.fetch_finalized_block_by_number(state, number).<span class="kw">await</span>.<span class="number">1</span>;
+<a href=#707 id=707 data-nosnippet>707</a>                    }
+<a href=#708 id=708 data-nosnippet>708</a>                    <span class="macro">tracing::info!</span>(
+<a href=#709 id=709 data-nosnippet>709</a>                        number,
+<a href=#710 id=710 data-nosnippet>710</a>                        finalized = <span class="question-mark">?</span>state.snapshot.finalized,
+<a href=#711 id=711 data-nosnippet>711</a>                        <span class="string">"waiting for l1 finalized block"</span>,
+<a href=#712 id=712 data-nosnippet>712</a>                    );
+<a href=#713 id=713 data-nosnippet>713</a>                };
+<a href=#714 id=714 data-nosnippet>714</a>            }
+<a href=#715 id=715 data-nosnippet>715</a>
+<a href=#716 id=716 data-nosnippet>716</a>            <span class="comment">// Wait for the block.
+<a href=#717 id=717 data-nosnippet>717</a>            </span><span class="kw">while let </span><span class="prelude-val">Some</span>(event) = events.next().<span class="kw">await </span>{
+<a href=#718 id=718 data-nosnippet>718</a>                <span class="kw">let </span>L1Event::NewFinalized { finalized } = event <span class="kw">else </span>{
+<a href=#719 id=719 data-nosnippet>719</a>                    <span class="kw">continue</span>;
+<a href=#720 id=720 data-nosnippet>720</a>                };
+<a href=#721 id=721 data-nosnippet>721</a>                <span class="kw">let </span><span class="kw-2">mut </span>state = <span class="self">self</span>.state.lock().<span class="kw">await</span>;
+<a href=#722 id=722 data-nosnippet>722</a>                state.put_finalized(finalized);
+<a href=#723 id=723 data-nosnippet>723</a>                <span class="kw">if </span>finalized.info.number &gt;= number {
+<a href=#724 id=724 data-nosnippet>724</a>                    <span class="macro">tracing::info!</span>(number, <span class="question-mark">?</span>finalized, <span class="string">"got finalized L1 block"</span>);
+<a href=#725 id=725 data-nosnippet>725</a>                    <span class="kw">return </span><span class="self">self</span>.fetch_finalized_block_by_number(state, number).<span class="kw">await</span>.<span class="number">1</span>;
+<a href=#726 id=726 data-nosnippet>726</a>                }
+<a href=#727 id=727 data-nosnippet>727</a>                <span class="macro">tracing::debug!</span>(number, <span class="question-mark">?</span>finalized, <span class="string">"waiting for finalized L1 block"</span>);
+<a href=#728 id=728 data-nosnippet>728</a>            }
+<a href=#729 id=729 data-nosnippet>729</a>
+<a href=#730 id=730 data-nosnippet>730</a>            <span class="comment">// This should not happen: the event stream ended. All we can do is try again.
+<a href=#731 id=731 data-nosnippet>731</a>            </span><span class="macro">tracing::warn!</span>(number, <span class="string">"L1 event stream ended unexpectedly; retry"</span>,);
+<a href=#732 id=732 data-nosnippet>732</a>            <span class="self">self</span>.retry_delay().<span class="kw">await</span>;
+<a href=#733 id=733 data-nosnippet>733</a>        }
+<a href=#734 id=734 data-nosnippet>734</a>    }
+<a href=#735 id=735 data-nosnippet>735</a>
+<a href=#736 id=736 data-nosnippet>736</a>    <span class="doccomment">/// Get information about the first finalized block with timestamp greater than or equal
+<a href=#737 id=737 data-nosnippet>737</a>    /// `timestamp`.
+<a href=#738 id=738 data-nosnippet>738</a>    </span><span class="kw">pub async fn </span>wait_for_finalized_block_with_timestamp(<span class="kw-2">&amp;</span><span class="self">self</span>, timestamp: U256) -&gt; L1BlockInfo {
+<a href=#739 id=739 data-nosnippet>739</a>        <span class="comment">// Wait until the finalized block has timestamp &gt;= `timestamp`.
+<a href=#740 id=740 data-nosnippet>740</a>        </span><span class="kw">let </span>(<span class="kw-2">mut </span>state, <span class="kw-2">mut </span>block) = <span class="lifetime">'outer</span>: <span class="kw">loop </span>{
+<a href=#741 id=741 data-nosnippet>741</a>            <span class="comment">// Subscribe to events before checking the current state, to ensure we don't miss a
+<a href=#742 id=742 data-nosnippet>742</a>            // relevant event.
+<a href=#743 id=743 data-nosnippet>743</a>            </span><span class="kw">let </span><span class="kw-2">mut </span>events = <span class="self">self</span>.receiver.activate_cloned();
+<a href=#744 id=744 data-nosnippet>744</a>
+<a href=#745 id=745 data-nosnippet>745</a>            <span class="comment">// Check if the block we are waiting for already exists.
+<a href=#746 id=746 data-nosnippet>746</a>            </span>{
+<a href=#747 id=747 data-nosnippet>747</a>                <span class="kw">let </span>state = <span class="self">self</span>.state.lock().<span class="kw">await</span>;
+<a href=#748 id=748 data-nosnippet>748</a>                <span class="kw">if let </span><span class="prelude-val">Some</span>(finalized) = state.snapshot.finalized
+<a href=#749 id=749 data-nosnippet>749</a>                    &amp;&amp; finalized.timestamp &gt;= timestamp
+<a href=#750 id=750 data-nosnippet>750</a>                {
+<a href=#751 id=751 data-nosnippet>751</a>                    <span class="kw">break </span><span class="lifetime">'outer </span>(state, finalized);
+<a href=#752 id=752 data-nosnippet>752</a>                }
+<a href=#753 id=753 data-nosnippet>753</a>                <span class="macro">tracing::info!</span>(
+<a href=#754 id=754 data-nosnippet>754</a>                    %timestamp,
+<a href=#755 id=755 data-nosnippet>755</a>                    finalized = <span class="question-mark">?</span>state.snapshot.finalized,
+<a href=#756 id=756 data-nosnippet>756</a>                    <span class="string">"waiting for L1 finalized block"</span>,
+<a href=#757 id=757 data-nosnippet>757</a>                );
+<a href=#758 id=758 data-nosnippet>758</a>            }
+<a href=#759 id=759 data-nosnippet>759</a>
+<a href=#760 id=760 data-nosnippet>760</a>            <span class="comment">// Wait for the block.
+<a href=#761 id=761 data-nosnippet>761</a>            </span><span class="kw">while let </span><span class="prelude-val">Some</span>(event) = events.next().<span class="kw">await </span>{
+<a href=#762 id=762 data-nosnippet>762</a>                <span class="kw">let </span>L1Event::NewFinalized { finalized } = event <span class="kw">else </span>{
+<a href=#763 id=763 data-nosnippet>763</a>                    <span class="kw">continue</span>;
+<a href=#764 id=764 data-nosnippet>764</a>                };
+<a href=#765 id=765 data-nosnippet>765</a>                <span class="kw">if </span>finalized.info.timestamp &gt;= timestamp {
+<a href=#766 id=766 data-nosnippet>766</a>                    <span class="macro">tracing::info!</span>(%timestamp, <span class="question-mark">?</span>finalized, <span class="string">"got finalized block"</span>);
+<a href=#767 id=767 data-nosnippet>767</a>                    <span class="kw">break </span><span class="lifetime">'outer </span>(<span class="self">self</span>.state.lock().<span class="kw">await</span>, finalized.info);
+<a href=#768 id=768 data-nosnippet>768</a>                }
+<a href=#769 id=769 data-nosnippet>769</a>                <span class="macro">tracing::debug!</span>(%timestamp, <span class="question-mark">?</span>finalized, <span class="string">"waiting for L1 finalized block"</span>);
+<a href=#770 id=770 data-nosnippet>770</a>            }
+<a href=#771 id=771 data-nosnippet>771</a>
+<a href=#772 id=772 data-nosnippet>772</a>            <span class="comment">// This should not happen: the event stream ended. All we can do is try again.
+<a href=#773 id=773 data-nosnippet>773</a>            </span><span class="macro">tracing::warn!</span>(%timestamp, <span class="string">"L1 event stream ended unexpectedly; retry"</span>,);
+<a href=#774 id=774 data-nosnippet>774</a>            <span class="self">self</span>.retry_delay().<span class="kw">await</span>;
+<a href=#775 id=775 data-nosnippet>775</a>        };
+<a href=#776 id=776 data-nosnippet>776</a>
+<a href=#777 id=777 data-nosnippet>777</a>        <span class="comment">// It is possible there is some earlier block that also has the proper timestamp. Binary
+<a href=#778 id=778 data-nosnippet>778</a>        // search until we find the true earliest block with timestamp &gt;= `timestamp`.
+<a href=#779 id=779 data-nosnippet>779</a>        //
+<a href=#780 id=780 data-nosnippet>780</a>        // Invariants:
+<a href=#781 id=781 data-nosnippet>781</a>        // * `upper_bound &lt;= lower_bound`
+<a href=#782 id=782 data-nosnippet>782</a>        // * `upper_bound = block.number`
+<a href=#783 id=783 data-nosnippet>783</a>        // * Block number `lower_bound - 1` has timestamp &lt; `timestamp` (strictly)
+<a href=#784 id=784 data-nosnippet>784</a>        // * `block` has timestamp &gt;= `timestamp`
+<a href=#785 id=785 data-nosnippet>785</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>upper_bound = block.number;
+<a href=#786 id=786 data-nosnippet>786</a>        <span class="kw">let </span><span class="kw-2">mut </span>lower_bound = <span class="number">0</span>;
+<a href=#787 id=787 data-nosnippet>787</a>        <span class="kw">while </span>lower_bound &lt; upper_bound {
+<a href=#788 id=788 data-nosnippet>788</a>            <span class="kw">let </span>midpoint = (upper_bound + lower_bound) / <span class="number">2</span>;
+<a href=#789 id=789 data-nosnippet>789</a>            <span class="macro">tracing::debug!</span>(
+<a href=#790 id=790 data-nosnippet>790</a>                lower_bound,
+<a href=#791 id=791 data-nosnippet>791</a>                midpoint,
+<a href=#792 id=792 data-nosnippet>792</a>                upper_bound,
+<a href=#793 id=793 data-nosnippet>793</a>                %timestamp,
+<a href=#794 id=794 data-nosnippet>794</a>                <span class="question-mark">?</span>block,
+<a href=#795 id=795 data-nosnippet>795</a>                <span class="string">"searching for earliest block with sufficient timestamp"
+<a href=#796 id=796 data-nosnippet>796</a>            </span>);
+<a href=#797 id=797 data-nosnippet>797</a>
+<a href=#798 id=798 data-nosnippet>798</a>            <span class="kw">let </span>(state_lock, midpoint_block) =
+<a href=#799 id=799 data-nosnippet>799</a>                <span class="self">self</span>.fetch_finalized_block_by_number(state, midpoint).<span class="kw">await</span>;
+<a href=#800 id=800 data-nosnippet>800</a>            state = state_lock;
+<a href=#801 id=801 data-nosnippet>801</a>
+<a href=#802 id=802 data-nosnippet>802</a>            <span class="macro">tracing::debug!</span>(<span class="question-mark">?</span>midpoint_block, %timestamp, <span class="string">"pivot on midpoint block"</span>);
+<a href=#803 id=803 data-nosnippet>803</a>            <span class="kw">if </span>midpoint_block.timestamp &lt; timestamp {
+<a href=#804 id=804 data-nosnippet>804</a>                lower_bound = midpoint + <span class="number">1</span>;
+<a href=#805 id=805 data-nosnippet>805</a>            } <span class="kw">else </span>{
+<a href=#806 id=806 data-nosnippet>806</a>                upper_bound = midpoint;
+<a href=#807 id=807 data-nosnippet>807</a>                block = midpoint_block;
+<a href=#808 id=808 data-nosnippet>808</a>            }
+<a href=#809 id=809 data-nosnippet>809</a>        }
+<a href=#810 id=810 data-nosnippet>810</a>
+<a href=#811 id=811 data-nosnippet>811</a>        block
+<a href=#812 id=812 data-nosnippet>812</a>    }
+<a href=#813 id=813 data-nosnippet>813</a>
+<a href=#814 id=814 data-nosnippet>814</a>    <span class="kw">async fn </span>fetch_finalized_block_by_number&lt;<span class="lifetime">'a</span>&gt;(
+<a href=#815 id=815 data-nosnippet>815</a>        <span class="kw-2">&amp;</span><span class="lifetime">'a </span><span class="self">self</span>,
+<a href=#816 id=816 data-nosnippet>816</a>        <span class="kw-2">mut </span>state: MutexGuard&lt;<span class="lifetime">'a</span>, L1State&gt;,
+<a href=#817 id=817 data-nosnippet>817</a>        number: u64,
+<a href=#818 id=818 data-nosnippet>818</a>    ) -&gt; (MutexGuard&lt;<span class="lifetime">'a</span>, L1State&gt;, L1BlockInfo) {
+<a href=#819 id=819 data-nosnippet>819</a>        <span class="kw">let </span>latest_finalized = state
+<a href=#820 id=820 data-nosnippet>820</a>            .snapshot
+<a href=#821 id=821 data-nosnippet>821</a>            .finalized
+<a href=#822 id=822 data-nosnippet>822</a>            .expect(<span class="string">"get_finalized_block called before any blocks are finalized"</span>);
+<a href=#823 id=823 data-nosnippet>823</a>        <span class="macro">assert!</span>(
+<a href=#824 id=824 data-nosnippet>824</a>            number &lt;= latest_finalized.number,
+<a href=#825 id=825 data-nosnippet>825</a>            <span class="string">"requesting a finalized block {number} that isn't finalized; snapshot: {:?}"</span>,
+<a href=#826 id=826 data-nosnippet>826</a>            state.snapshot,
+<a href=#827 id=827 data-nosnippet>827</a>        );
+<a href=#828 id=828 data-nosnippet>828</a>
+<a href=#829 id=829 data-nosnippet>829</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(safety_margin) = <span class="self">self</span>.options().l1_finalized_safety_margin
+<a href=#830 id=830 data-nosnippet>830</a>            &amp;&amp; number &lt; latest_finalized.number.saturating_sub(safety_margin)
+<a href=#831 id=831 data-nosnippet>831</a>        {
+<a href=#832 id=832 data-nosnippet>832</a>            <span class="comment">// If the requested block height is so old that we can assume all L1 providers have
+<a href=#833 id=833 data-nosnippet>833</a>            // finalized it, we don't need to worry about failing over to a lagging L1 provider
+<a href=#834 id=834 data-nosnippet>834</a>            // which has yet to finalize the block, so we don't need to bother with the
+<a href=#835 id=835 data-nosnippet>835</a>            // expensive hash chaining logic below. Just look up the block by number and assume
+<a href=#836 id=836 data-nosnippet>836</a>            // the response is finalized.
+<a href=#837 id=837 data-nosnippet>837</a>            </span><span class="macro">tracing::debug!</span>(
+<a href=#838 id=838 data-nosnippet>838</a>                number,
+<a href=#839 id=839 data-nosnippet>839</a>                <span class="question-mark">?</span>latest_finalized,
+<a href=#840 id=840 data-nosnippet>840</a>                <span class="string">"skipping hash check for old finalized block"
+<a href=#841 id=841 data-nosnippet>841</a>            </span>);
+<a href=#842 id=842 data-nosnippet>842</a>            <span class="kw">let </span>(state, block) = <span class="self">self
+<a href=#843 id=843 data-nosnippet>843</a>                </span>.load_and_cache_finalized_block(state, number.into())
+<a href=#844 id=844 data-nosnippet>844</a>                .<span class="kw">await</span>;
+<a href=#845 id=845 data-nosnippet>845</a>            <span class="kw">return </span>(state, block.info);
+<a href=#846 id=846 data-nosnippet>846</a>        }
+<a href=#847 id=847 data-nosnippet>847</a>
+<a href=#848 id=848 data-nosnippet>848</a>        <span class="comment">// To get this block and be sure we are getting the correct finalized block, we first need
+<a href=#849 id=849 data-nosnippet>849</a>        // to find an equal or later block so we can find the expected hash of this block. If we
+<a href=#850 id=850 data-nosnippet>850</a>        // were to just look up the block by number, there could be problems if we failed over to a
+<a href=#851 id=851 data-nosnippet>851</a>        // different (lagging) L1 provider, which has yet to finalize this block and reports a
+<a href=#852 id=852 data-nosnippet>852</a>        // different block with the same number.
+<a href=#853 id=853 data-nosnippet>853</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>successor_number = number;
+<a href=#854 id=854 data-nosnippet>854</a>        <span class="kw">let </span><span class="kw-2">mut </span>successor = <span class="kw">loop </span>{
+<a href=#855 id=855 data-nosnippet>855</a>            <span class="kw">if let </span><span class="prelude-val">Some</span>(block) = state.finalized.get(<span class="kw-2">&amp;</span>successor_number) {
+<a href=#856 id=856 data-nosnippet>856</a>                <span class="kw">break </span><span class="kw-2">*</span>block;
+<a href=#857 id=857 data-nosnippet>857</a>            }
+<a href=#858 id=858 data-nosnippet>858</a>            successor_number += <span class="number">1</span>;
+<a href=#859 id=859 data-nosnippet>859</a>            <span class="kw">if </span>successor_number &gt; latest_finalized.number {
+<a href=#860 id=860 data-nosnippet>860</a>                <span class="comment">// We don't have any cached finalized block after the requested one; fetch the
+<a href=#861 id=861 data-nosnippet>861</a>                // current finalized block from the network.
+<a href=#862 id=862 data-nosnippet>862</a>                // Don't hold state lock while fetching from network.
+<a href=#863 id=863 data-nosnippet>863</a>                </span>drop(state);
+<a href=#864 id=864 data-nosnippet>864</a>                <span class="kw">let </span>block = <span class="kw">loop </span>{
+<a href=#865 id=865 data-nosnippet>865</a>                    <span class="kw">match </span>fetch_finalized_block_from_rpc(<span class="kw-2">&amp;</span><span class="self">self</span>.provider).<span class="kw">await </span>{
+<a href=#866 id=866 data-nosnippet>866</a>                        <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(block)) =&gt; {
+<a href=#867 id=867 data-nosnippet>867</a>                            <span class="kw">break </span>block;
+<a href=#868 id=868 data-nosnippet>868</a>                        },
+<a href=#869 id=869 data-nosnippet>869</a>                        <span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>) =&gt; {
+<a href=#870 id=870 data-nosnippet>870</a>                            <span class="macro">tracing::warn!</span>(
+<a href=#871 id=871 data-nosnippet>871</a>                                <span class="string">"no finalized block even though finalized snapshot is Some; this \
+<a href=#872 id=872 data-nosnippet>872</a>                                 can be caused by an L1 client failover"
+<a href=#873 id=873 data-nosnippet>873</a>                            </span>);
+<a href=#874 id=874 data-nosnippet>874</a>                            <span class="self">self</span>.retry_delay().<span class="kw">await</span>;
+<a href=#875 id=875 data-nosnippet>875</a>                        },
+<a href=#876 id=876 data-nosnippet>876</a>                        <span class="prelude-val">Err</span>(err) =&gt; {
+<a href=#877 id=877 data-nosnippet>877</a>                            <span class="macro">tracing::warn!</span>(<span class="string">"Error getting finalized block: {err:#}"</span>);
+<a href=#878 id=878 data-nosnippet>878</a>                            <span class="self">self</span>.retry_delay().<span class="kw">await</span>;
+<a href=#879 id=879 data-nosnippet>879</a>                        },
+<a href=#880 id=880 data-nosnippet>880</a>                    }
+<a href=#881 id=881 data-nosnippet>881</a>                };
+<a href=#882 id=882 data-nosnippet>882</a>                state = <span class="self">self</span>.state.lock().<span class="kw">await</span>;
+<a href=#883 id=883 data-nosnippet>883</a>                state.put_finalized(block);
+<a href=#884 id=884 data-nosnippet>884</a>                <span class="kw">break </span>block;
+<a href=#885 id=885 data-nosnippet>885</a>            }
+<a href=#886 id=886 data-nosnippet>886</a>        };
+<a href=#887 id=887 data-nosnippet>887</a>
+<a href=#888 id=888 data-nosnippet>888</a>        <span class="comment">// Work backwards from the known finalized successor, fetching blocks by parent hash so we
+<a href=#889 id=889 data-nosnippet>889</a>        // know we are getting the correct block.
+<a href=#890 id=890 data-nosnippet>890</a>        </span><span class="kw">while </span>successor.info.number &gt; number {
+<a href=#891 id=891 data-nosnippet>891</a>            <span class="macro">tracing::debug!</span>(
+<a href=#892 id=892 data-nosnippet>892</a>                number,
+<a href=#893 id=893 data-nosnippet>893</a>                <span class="question-mark">?</span>successor,
+<a href=#894 id=894 data-nosnippet>894</a>                <span class="string">"checking hash chaining for finalized block"
+<a href=#895 id=895 data-nosnippet>895</a>            </span>);
+<a href=#896 id=896 data-nosnippet>896</a>            (state, successor) = <span class="self">self
+<a href=#897 id=897 data-nosnippet>897</a>                </span>.load_and_cache_finalized_block(state, successor.parent_hash.into())
+<a href=#898 id=898 data-nosnippet>898</a>                .<span class="kw">await</span>;
+<a href=#899 id=899 data-nosnippet>899</a>        }
+<a href=#900 id=900 data-nosnippet>900</a>
+<a href=#901 id=901 data-nosnippet>901</a>        (state, successor.info)
+<a href=#902 id=902 data-nosnippet>902</a>    }
+<a href=#903 id=903 data-nosnippet>903</a>
+<a href=#904 id=904 data-nosnippet>904</a>    <span class="kw">async fn </span>load_and_cache_finalized_block&lt;<span class="lifetime">'a</span>&gt;(
+<a href=#905 id=905 data-nosnippet>905</a>        <span class="kw-2">&amp;</span><span class="lifetime">'a </span><span class="self">self</span>,
+<a href=#906 id=906 data-nosnippet>906</a>        <span class="kw-2">mut </span>state: MutexGuard&lt;<span class="lifetime">'a</span>, L1State&gt;,
+<a href=#907 id=907 data-nosnippet>907</a>        id: BlockId,
+<a href=#908 id=908 data-nosnippet>908</a>    ) -&gt; (MutexGuard&lt;<span class="lifetime">'a</span>, L1State&gt;, L1BlockInfoWithParent) {
+<a href=#909 id=909 data-nosnippet>909</a>        <span class="comment">// Don't hold state lock while fetching from network.
+<a href=#910 id=910 data-nosnippet>910</a>        </span>drop(state);
+<a href=#911 id=911 data-nosnippet>911</a>        <span class="kw">let </span>block = <span class="kw">loop </span>{
+<a href=#912 id=912 data-nosnippet>912</a>            <span class="kw">let </span>block = <span class="kw">match </span><span class="self">self</span>.provider.get_block(id).<span class="kw">await </span>{
+<a href=#913 id=913 data-nosnippet>913</a>                <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(block)) =&gt; block,
+<a href=#914 id=914 data-nosnippet>914</a>                <span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>) =&gt; {
+<a href=#915 id=915 data-nosnippet>915</a>                    <span class="macro">tracing::warn!</span>(
+<a href=#916 id=916 data-nosnippet>916</a>                        %id,
+<a href=#917 id=917 data-nosnippet>917</a>                        <span class="string">"provider error: finalized L1 block should always be available"
+<a href=#918 id=918 data-nosnippet>918</a>                    </span>);
+<a href=#919 id=919 data-nosnippet>919</a>                    <span class="self">self</span>.retry_delay().<span class="kw">await</span>;
+<a href=#920 id=920 data-nosnippet>920</a>                    <span class="kw">continue</span>;
+<a href=#921 id=921 data-nosnippet>921</a>                },
+<a href=#922 id=922 data-nosnippet>922</a>                <span class="prelude-val">Err</span>(err) =&gt; {
+<a href=#923 id=923 data-nosnippet>923</a>                    <span class="macro">tracing::warn!</span>(%id, <span class="string">"failed to get finalized L1 block: {err:#}"</span>);
+<a href=#924 id=924 data-nosnippet>924</a>                    <span class="self">self</span>.retry_delay().<span class="kw">await</span>;
+<a href=#925 id=925 data-nosnippet>925</a>                    <span class="kw">continue</span>;
+<a href=#926 id=926 data-nosnippet>926</a>                },
+<a href=#927 id=927 data-nosnippet>927</a>            };
+<a href=#928 id=928 data-nosnippet>928</a>            <span class="kw">break </span>(<span class="kw-2">&amp;</span>block).into();
+<a href=#929 id=929 data-nosnippet>929</a>        };
+<a href=#930 id=930 data-nosnippet>930</a>        state = <span class="self">self</span>.state.lock().<span class="kw">await</span>;
+<a href=#931 id=931 data-nosnippet>931</a>        state.put_finalized(block);
+<a href=#932 id=932 data-nosnippet>932</a>        (state, block)
+<a href=#933 id=933 data-nosnippet>933</a>    }
+<a href=#934 id=934 data-nosnippet>934</a>
+<a href=#935 id=935 data-nosnippet>935</a>    <span class="doccomment">/// Get fee info for each `Deposit` occurring between `prev`
+<a href=#936 id=936 data-nosnippet>936</a>    /// and `new`. Returns `Vec&lt;FeeInfo&gt;`
+<a href=#937 id=937 data-nosnippet>937</a>    </span><span class="kw">pub async fn </span>get_finalized_deposits(
+<a href=#938 id=938 data-nosnippet>938</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#939 id=939 data-nosnippet>939</a>        fee_contract_address: Address,
+<a href=#940 id=940 data-nosnippet>940</a>        prev_finalized: <span class="prelude-ty">Option</span>&lt;u64&gt;,
+<a href=#941 id=941 data-nosnippet>941</a>        new_finalized: u64,
+<a href=#942 id=942 data-nosnippet>942</a>    ) -&gt; Vec&lt;FeeInfo&gt; {
+<a href=#943 id=943 data-nosnippet>943</a>        <span class="comment">// No new blocks have been finalized, therefore there are no
+<a href=#944 id=944 data-nosnippet>944</a>        // new deposits.
+<a href=#945 id=945 data-nosnippet>945</a>        </span><span class="kw">if </span>prev_finalized &gt;= <span class="prelude-val">Some</span>(new_finalized) {
+<a href=#946 id=946 data-nosnippet>946</a>            <span class="kw">return </span><span class="macro">vec!</span>[];
+<a href=#947 id=947 data-nosnippet>947</a>        }
+<a href=#948 id=948 data-nosnippet>948</a>
+<a href=#949 id=949 data-nosnippet>949</a>        <span class="kw">let </span>opt = <span class="self">self</span>.options();
+<a href=#950 id=950 data-nosnippet>950</a>
+<a href=#951 id=951 data-nosnippet>951</a>        <span class="comment">// `prev` should have already been processed unless we
+<a href=#952 id=952 data-nosnippet>952</a>        // haven't processed *any* blocks yet.
+<a href=#953 id=953 data-nosnippet>953</a>        </span><span class="kw">let </span>prev = prev_finalized.map(|prev| prev + <span class="number">1</span>).unwrap_or(<span class="number">0</span>);
+<a href=#954 id=954 data-nosnippet>954</a>
+<a href=#955 id=955 data-nosnippet>955</a>        <span class="comment">// Divide the range `prev_finalized..=new_finalized` into chunks of size
+<a href=#956 id=956 data-nosnippet>956</a>        // `events_max_block_range`.
+<a href=#957 id=957 data-nosnippet>957</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>start = prev;
+<a href=#958 id=958 data-nosnippet>958</a>        <span class="kw">let </span>end = new_finalized;
+<a href=#959 id=959 data-nosnippet>959</a>        <span class="kw">let </span>chunk_size = opt.l1_events_max_block_range;
+<a href=#960 id=960 data-nosnippet>960</a>        <span class="kw">let </span>chunks = std::iter::from_fn(<span class="kw">move </span>|| {
+<a href=#961 id=961 data-nosnippet>961</a>            <span class="kw">let </span>chunk_end = min(start + chunk_size - <span class="number">1</span>, end);
+<a href=#962 id=962 data-nosnippet>962</a>            <span class="kw">if </span>chunk_end &lt; start {
+<a href=#963 id=963 data-nosnippet>963</a>                <span class="kw">return </span><span class="prelude-val">None</span>;
+<a href=#964 id=964 data-nosnippet>964</a>            }
+<a href=#965 id=965 data-nosnippet>965</a>
+<a href=#966 id=966 data-nosnippet>966</a>            <span class="kw">let </span>chunk = (start, chunk_end);
+<a href=#967 id=967 data-nosnippet>967</a>            start = chunk_end + <span class="number">1</span>;
+<a href=#968 id=968 data-nosnippet>968</a>            <span class="prelude-val">Some</span>(chunk)
+<a href=#969 id=969 data-nosnippet>969</a>        });
+<a href=#970 id=970 data-nosnippet>970</a>
+<a href=#971 id=971 data-nosnippet>971</a>        <span class="comment">// Fetch events for each chunk.
+<a href=#972 id=972 data-nosnippet>972</a>        </span><span class="kw">let </span>events = stream::iter(chunks).then(|(from, to)| {
+<a href=#973 id=973 data-nosnippet>973</a>            <span class="kw">let </span>retry_delay = opt.l1_retry_delay;
+<a href=#974 id=974 data-nosnippet>974</a>            <span class="kw">let </span>fee_contract = FeeContract::new(fee_contract_address, <span class="self">self</span>.provider.clone());
+<a href=#975 id=975 data-nosnippet>975</a>            <span class="kw">async move </span>{
+<a href=#976 id=976 data-nosnippet>976</a>                <span class="macro">tracing::debug!</span>(from, to, <span class="string">"fetch events in range"</span>);
+<a href=#977 id=977 data-nosnippet>977</a>
+<a href=#978 id=978 data-nosnippet>978</a>                <span class="comment">// query for deposit events, loop until successful.
+<a href=#979 id=979 data-nosnippet>979</a>                </span><span class="kw">loop </span>{
+<a href=#980 id=980 data-nosnippet>980</a>                    <span class="kw">match </span>fee_contract
+<a href=#981 id=981 data-nosnippet>981</a>                        .Deposit_filter()
+<a href=#982 id=982 data-nosnippet>982</a>                        .address(<span class="kw-2">*</span>fee_contract.address())
+<a href=#983 id=983 data-nosnippet>983</a>                        .from_block(from)
+<a href=#984 id=984 data-nosnippet>984</a>                        .to_block(to)
+<a href=#985 id=985 data-nosnippet>985</a>                        .query()
+<a href=#986 id=986 data-nosnippet>986</a>                        .<span class="kw">await
+<a href=#987 id=987 data-nosnippet>987</a>                    </span>{
+<a href=#988 id=988 data-nosnippet>988</a>                        <span class="prelude-val">Ok</span>(events) =&gt; <span class="kw">break </span>stream::iter(events),
+<a href=#989 id=989 data-nosnippet>989</a>                        <span class="prelude-val">Err</span>(err) =&gt; {
+<a href=#990 id=990 data-nosnippet>990</a>                            <span class="macro">tracing::warn!</span>(from, to, %err, <span class="string">"Fee L1Event Error"</span>);
+<a href=#991 id=991 data-nosnippet>991</a>                            sleep(retry_delay).<span class="kw">await</span>;
+<a href=#992 id=992 data-nosnippet>992</a>                        },
+<a href=#993 id=993 data-nosnippet>993</a>                    }
+<a href=#994 id=994 data-nosnippet>994</a>                }
+<a href=#995 id=995 data-nosnippet>995</a>            }
+<a href=#996 id=996 data-nosnippet>996</a>        });
+<a href=#997 id=997 data-nosnippet>997</a>        events
+<a href=#998 id=998 data-nosnippet>998</a>            .flatten()
+<a href=#999 id=999 data-nosnippet>999</a>            .map(|(deposit, <span class="kw">_</span>)| FeeInfo::from(deposit))
+<a href=#1000 id=1000 data-nosnippet>1000</a>            .collect()
+<a href=#1001 id=1001 data-nosnippet>1001</a>            .<span class="kw">await
+<a href=#1002 id=1002 data-nosnippet>1002</a>    </span>}
+<a href=#1003 id=1003 data-nosnippet>1003</a>
+<a href=#1004 id=1004 data-nosnippet>1004</a>    <span class="doccomment">/// Check if the given address is a proxy contract.
+<a href=#1005 id=1005 data-nosnippet>1005</a>    </span><span class="kw">pub async fn </span>is_proxy_contract(<span class="kw-2">&amp;</span><span class="self">self</span>, proxy_address: Address) -&gt; anyhow::Result&lt;bool&gt; {
+<a href=#1006 id=1006 data-nosnippet>1006</a>        <span class="comment">// confirm that the proxy_address is a proxy
+<a href=#1007 id=1007 data-nosnippet>1007</a>        // using the implementation slot, 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc, which is the keccak-256 hash of "eip1967.proxy.implementation" subtracted by 1
+<a href=#1008 id=1008 data-nosnippet>1008</a>        </span><span class="kw">let </span>hex_bytes =
+<a href=#1009 id=1009 data-nosnippet>1009</a>            hex::decode(<span class="string">"360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc"</span>)
+<a href=#1010 id=1010 data-nosnippet>1010</a>                .expect(<span class="string">"Failed to decode hex string"</span>);
+<a href=#1011 id=1011 data-nosnippet>1011</a>        <span class="kw">let </span>implementation_slot = B256::from_slice(<span class="kw-2">&amp;</span>hex_bytes);
+<a href=#1012 id=1012 data-nosnippet>1012</a>        <span class="kw">let </span>storage = <span class="self">self
+<a href=#1013 id=1013 data-nosnippet>1013</a>            </span>.provider
+<a href=#1014 id=1014 data-nosnippet>1014</a>            .get_storage_at(proxy_address, implementation_slot.into())
+<a href=#1015 id=1015 data-nosnippet>1015</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#1016 id=1016 data-nosnippet>1016</a>
+<a href=#1017 id=1017 data-nosnippet>1017</a>        <span class="kw">let </span>implementation_address = Address::from_slice(<span class="kw-2">&amp;</span>storage.to_be_bytes::&lt;<span class="number">32</span>&gt;()[<span class="number">12</span>..]);
+<a href=#1018 id=1018 data-nosnippet>1018</a>
+<a href=#1019 id=1019 data-nosnippet>1019</a>        <span class="comment">// when the implementation address is not equal to zero, it's a proxy
+<a href=#1020 id=1020 data-nosnippet>1020</a>        </span><span class="prelude-val">Ok</span>(<span class="macro">implementation_address !</span>= Address::ZERO)
+<a href=#1021 id=1021 data-nosnippet>1021</a>    }
+<a href=#1022 id=1022 data-nosnippet>1022</a>
+<a href=#1023 id=1023 data-nosnippet>1023</a>    <span class="kw">pub async fn </span>retry_on_all_providers&lt;Fut&gt;(
+<a href=#1024 id=1024 data-nosnippet>1024</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#1025 id=1025 data-nosnippet>1025</a>        op: <span class="kw">impl </span>Fn() -&gt; Fut,
+<a href=#1026 id=1026 data-nosnippet>1026</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Fut::Ok, Fut::Error&gt;
+<a href=#1027 id=1027 data-nosnippet>1027</a>    <span class="kw">where
+<a href=#1028 id=1028 data-nosnippet>1028</a>        </span>Fut: TryFuture,
+<a href=#1029 id=1029 data-nosnippet>1029</a>    {
+<a href=#1030 id=1030 data-nosnippet>1030</a>        <span class="kw">let </span>transport = <span class="kw-2">&amp;</span><span class="self">self</span>.transport;
+<a href=#1031 id=1031 data-nosnippet>1031</a>        <span class="kw">let </span>start = transport.current_transport.read().generation % transport.urls.len();
+<a href=#1032 id=1032 data-nosnippet>1032</a>        <span class="kw">let </span>end = start + transport.urls.len();
+<a href=#1033 id=1033 data-nosnippet>1033</a>        <span class="kw">loop </span>{
+<a href=#1034 id=1034 data-nosnippet>1034</a>            <span class="kw">match </span>TryFutureExt::into_future(op()).<span class="kw">await </span>{
+<a href=#1035 id=1035 data-nosnippet>1035</a>                <span class="prelude-val">Ok</span>(res) =&gt; <span class="kw">return </span><span class="prelude-val">Ok</span>(res),
+<a href=#1036 id=1036 data-nosnippet>1036</a>                <span class="prelude-val">Err</span>(err) =&gt; {
+<a href=#1037 id=1037 data-nosnippet>1037</a>                    <span class="kw">if </span>transport.current_transport.read().generation &gt;= end {
+<a href=#1038 id=1038 data-nosnippet>1038</a>                        <span class="kw">return </span><span class="prelude-val">Err</span>(err);
+<a href=#1039 id=1039 data-nosnippet>1039</a>                    } <span class="kw">else </span>{
+<a href=#1040 id=1040 data-nosnippet>1040</a>                        <span class="self">self</span>.retry_delay().<span class="kw">await</span>;
+<a href=#1041 id=1041 data-nosnippet>1041</a>                    }
+<a href=#1042 id=1042 data-nosnippet>1042</a>                },
+<a href=#1043 id=1043 data-nosnippet>1043</a>            }
+<a href=#1044 id=1044 data-nosnippet>1044</a>        }
+<a href=#1045 id=1045 data-nosnippet>1045</a>    }
+<a href=#1046 id=1046 data-nosnippet>1046</a>
+<a href=#1047 id=1047 data-nosnippet>1047</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>options(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>L1ClientOptions {
+<a href=#1048 id=1048 data-nosnippet>1048</a>        <span class="self">self</span>.transport.options()
+<a href=#1049 id=1049 data-nosnippet>1049</a>    }
+<a href=#1050 id=1050 data-nosnippet>1050</a>
+<a href=#1051 id=1051 data-nosnippet>1051</a>    <span class="kw">fn </span>metrics(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>L1ClientMetrics {
+<a href=#1052 id=1052 data-nosnippet>1052</a>        <span class="self">self</span>.transport.metrics()
+<a href=#1053 id=1053 data-nosnippet>1053</a>    }
+<a href=#1054 id=1054 data-nosnippet>1054</a>
+<a href=#1055 id=1055 data-nosnippet>1055</a>    <span class="kw">async fn </span>retry_delay(<span class="kw-2">&amp;</span><span class="self">self</span>) {
+<a href=#1056 id=1056 data-nosnippet>1056</a>        sleep(<span class="self">self</span>.options().l1_retry_delay).<span class="kw">await</span>;
+<a href=#1057 id=1057 data-nosnippet>1057</a>    }
+<a href=#1058 id=1058 data-nosnippet>1058</a>}
+<a href=#1059 id=1059 data-nosnippet>1059</a>
+<a href=#1060 id=1060 data-nosnippet>1060</a><span class="kw">impl </span>L1State {
+<a href=#1061 id=1061 data-nosnippet>1061</a>    <span class="kw">fn </span>new(cache_size: NonZeroUsize) -&gt; <span class="self">Self </span>{
+<a href=#1062 id=1062 data-nosnippet>1062</a>        <span class="self">Self </span>{
+<a href=#1063 id=1063 data-nosnippet>1063</a>            snapshot: Default::default(),
+<a href=#1064 id=1064 data-nosnippet>1064</a>            finalized: LruCache::new(cache_size),
+<a href=#1065 id=1065 data-nosnippet>1065</a>            last_finalized: <span class="prelude-val">None</span>,
+<a href=#1066 id=1066 data-nosnippet>1066</a>        }
+<a href=#1067 id=1067 data-nosnippet>1067</a>    }
+<a href=#1068 id=1068 data-nosnippet>1068</a>
+<a href=#1069 id=1069 data-nosnippet>1069</a>    <span class="kw">fn </span>put_finalized(<span class="kw-2">&amp;mut </span><span class="self">self</span>, block: L1BlockInfoWithParent) {
+<a href=#1070 id=1070 data-nosnippet>1070</a>        <span class="macro">assert!</span>(
+<a href=#1071 id=1071 data-nosnippet>1071</a>            <span class="self">self</span>.snapshot.finalized.is_some()
+<a href=#1072 id=1072 data-nosnippet>1072</a>                &amp;&amp; block.info.number &lt;= <span class="self">self</span>.snapshot.finalized.unwrap().number,
+<a href=#1073 id=1073 data-nosnippet>1073</a>            <span class="string">"inserting a finalized block {block:?} that isn't finalized; snapshot: {:?}"</span>,
+<a href=#1074 id=1074 data-nosnippet>1074</a>            <span class="self">self</span>.snapshot,
+<a href=#1075 id=1075 data-nosnippet>1075</a>        );
+<a href=#1076 id=1076 data-nosnippet>1076</a>
+<a href=#1077 id=1077 data-nosnippet>1077</a>        <span class="kw">if </span><span class="prelude-val">Some</span>(block.info.number()) &gt; <span class="self">self</span>.last_finalized {
+<a href=#1078 id=1078 data-nosnippet>1078</a>            <span class="self">self</span>.last_finalized = <span class="prelude-val">Some</span>(block.info.number());
+<a href=#1079 id=1079 data-nosnippet>1079</a>        }
+<a href=#1080 id=1080 data-nosnippet>1080</a>
+<a href=#1081 id=1081 data-nosnippet>1081</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>((old_number, old_block)) = <span class="self">self</span>.finalized.push(block.info.number, block)
+<a href=#1082 id=1082 data-nosnippet>1082</a>            &amp;&amp; old_number == block.info.number
+<a href=#1083 id=1083 data-nosnippet>1083</a>            &amp;&amp; <span class="macro">block !</span>= old_block
+<a href=#1084 id=1084 data-nosnippet>1084</a>        {
+<a href=#1085 id=1085 data-nosnippet>1085</a>            <span class="macro">tracing::error!</span>(
+<a href=#1086 id=1086 data-nosnippet>1086</a>                <span class="question-mark">?</span>old_block,
+<a href=#1087 id=1087 data-nosnippet>1087</a>                <span class="question-mark">?</span>block,
+<a href=#1088 id=1088 data-nosnippet>1088</a>                <span class="string">"got different info for the same finalized height; something has gone very wrong \
+<a href=#1089 id=1089 data-nosnippet>1089</a>                 with the L1"</span>,
+<a href=#1090 id=1090 data-nosnippet>1090</a>            );
 <a href=#1091 id=1091 data-nosnippet>1091</a>        }
 <a href=#1092 id=1092 data-nosnippet>1092</a>    }
 <a href=#1093 id=1093 data-nosnippet>1093</a>}
@@ -1117,7 +1117,7 @@
 <a href=#1117 id=1117 data-nosnippet>1117</a>        primitives::utils::parse_ether,
 <a href=#1118 id=1118 data-nosnippet>1118</a>        providers::layers::AnvilProvider,
 <a href=#1119 id=1119 data-nosnippet>1119</a>    };
-<a href=#1120 id=1120 data-nosnippet>1120</a>    <span class="kw">use </span>espresso_contract_deployer::{deploy_fee_contract_proxy, Contracts};
+<a href=#1120 id=1120 data-nosnippet>1120</a>    <span class="kw">use </span>espresso_contract_deployer::{Contracts, deploy_fee_contract_proxy};
 <a href=#1121 id=1121 data-nosnippet>1121</a>    <span class="kw">use </span>time::OffsetDateTime;
 <a href=#1122 id=1122 data-nosnippet>1122</a>
 <a href=#1123 id=1123 data-nosnippet>1123</a>    <span class="kw">use </span>super::<span class="kw-2">*</span>;

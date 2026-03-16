@@ -14,8 +14,8 @@
 <a href=#14 id=14 data-nosnippet>14</a><span class="kw">use </span>async_trait::async_trait;
 <a href=#15 id=15 data-nosnippet>15</a><span class="kw">use </span>futures::future::join_all;
 <a href=#16 id=16 data-nosnippet>16</a><span class="kw">use </span>hotshot::{
-<a href=#17 id=17 data-nosnippet>17</a>    traits::TestableNodeImplementation, types::EventType, HotShotInitializer, InitializerEpochInfo,
-<a href=#18 id=18 data-nosnippet>18</a>    SystemContext,
+<a href=#17 id=17 data-nosnippet>17</a>    HotShotInitializer, InitializerEpochInfo, SystemContext, traits::TestableNodeImplementation,
+<a href=#18 id=18 data-nosnippet>18</a>    types::EventType,
 <a href=#19 id=19 data-nosnippet>19</a>};
 <a href=#20 id=20 data-nosnippet>20</a><span class="kw">use </span>hotshot_example_types::{
 <a href=#21 id=21 data-nosnippet>21</a>    block_types::TestBlockHeader,
@@ -24,21 +24,21 @@
 <a href=#24 id=24 data-nosnippet>24</a>    testable_delay::DelayConfig,
 <a href=#25 id=25 data-nosnippet>25</a>};
 <a href=#26 id=26 data-nosnippet>26</a><span class="kw">use </span>hotshot_types::{
-<a href=#27 id=27 data-nosnippet>27</a>    constants::EVENT_CHANNEL_SIZE,
-<a href=#28 id=28 data-nosnippet>28</a>    data::{Leaf2, ViewNumber},
-<a href=#29 id=29 data-nosnippet>29</a>    event::Event,
-<a href=#30 id=30 data-nosnippet>30</a>    message::convert_proposal,
-<a href=#31 id=31 data-nosnippet>31</a>    simple_certificate::{
-<a href=#32 id=32 data-nosnippet>32</a>        LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2, QuorumCertificate2,
-<a href=#33 id=33 data-nosnippet>33</a>    },
-<a href=#34 id=34 data-nosnippet>34</a>    traits::{
-<a href=#35 id=35 data-nosnippet>35</a>        election::Membership,
-<a href=#36 id=36 data-nosnippet>36</a>        network::{AsyncGenerator, ConnectedNetwork},
-<a href=#37 id=37 data-nosnippet>37</a>        node_implementation::{NodeImplementation, NodeType},
-<a href=#38 id=38 data-nosnippet>38</a>    },
-<a href=#39 id=39 data-nosnippet>39</a>    utils::genesis_epoch_from_version,
-<a href=#40 id=40 data-nosnippet>40</a>    vote::HasViewNumber,
-<a href=#41 id=41 data-nosnippet>41</a>    ValidatorConfig,
+<a href=#27 id=27 data-nosnippet>27</a>    ValidatorConfig,
+<a href=#28 id=28 data-nosnippet>28</a>    constants::EVENT_CHANNEL_SIZE,
+<a href=#29 id=29 data-nosnippet>29</a>    data::{Leaf2, ViewNumber},
+<a href=#30 id=30 data-nosnippet>30</a>    event::Event,
+<a href=#31 id=31 data-nosnippet>31</a>    message::convert_proposal,
+<a href=#32 id=32 data-nosnippet>32</a>    simple_certificate::{
+<a href=#33 id=33 data-nosnippet>33</a>        LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2, QuorumCertificate2,
+<a href=#34 id=34 data-nosnippet>34</a>    },
+<a href=#35 id=35 data-nosnippet>35</a>    traits::{
+<a href=#36 id=36 data-nosnippet>36</a>        election::Membership,
+<a href=#37 id=37 data-nosnippet>37</a>        network::{AsyncGenerator, ConnectedNetwork},
+<a href=#38 id=38 data-nosnippet>38</a>        node_implementation::{NodeImplementation, NodeType},
+<a href=#39 id=39 data-nosnippet>39</a>    },
+<a href=#40 id=40 data-nosnippet>40</a>    utils::genesis_epoch_from_version,
+<a href=#41 id=41 data-nosnippet>41</a>    vote::HasViewNumber,
 <a href=#42 id=42 data-nosnippet>42</a>};
 <a href=#43 id=43 data-nosnippet>43</a><span class="kw">use </span>hotshot_utils::anytrace::<span class="kw-2">*</span>;
 <a href=#44 id=44 data-nosnippet>44</a>
@@ -92,14 +92,14 @@
 <a href=#92 id=92 data-nosnippet>92</a>
 <a href=#93 id=93 data-nosnippet>93</a><span class="attr">#[async_trait]
 <a href=#94 id=94 data-nosnippet>94</a></span><span class="kw">impl</span>&lt;
-<a href=#95 id=95 data-nosnippet>95</a>        TYPES: NodeType&lt;
+<a href=#95 id=95 data-nosnippet>95</a>    TYPES: NodeType&lt;
 <a href=#96 id=96 data-nosnippet>96</a>            InstanceState = TestInstanceState,
 <a href=#97 id=97 data-nosnippet>97</a>            ValidatedState = TestValidatedState,
 <a href=#98 id=98 data-nosnippet>98</a>            BlockHeader = TestBlockHeader,
 <a href=#99 id=99 data-nosnippet>99</a>        &gt;,
-<a href=#100 id=100 data-nosnippet>100</a>        I: TestableNodeImplementation&lt;TYPES&gt;,
-<a href=#101 id=101 data-nosnippet>101</a>        N: ConnectedNetwork&lt;TYPES::SignatureKey&gt;,
-<a href=#102 id=102 data-nosnippet>102</a>    &gt; TestTaskState <span class="kw">for </span>SpinningTask&lt;TYPES, N, I&gt;
+<a href=#100 id=100 data-nosnippet>100</a>    I: TestableNodeImplementation&lt;TYPES&gt;,
+<a href=#101 id=101 data-nosnippet>101</a>    N: ConnectedNetwork&lt;TYPES::SignatureKey&gt;,
+<a href=#102 id=102 data-nosnippet>102</a>&gt; TestTaskState <span class="kw">for </span>SpinningTask&lt;TYPES, N, I&gt;
 <a href=#103 id=103 data-nosnippet>103</a><span class="kw">where
 <a href=#104 id=104 data-nosnippet>104</a>    </span>I: TestableNodeImplementation&lt;TYPES&gt;,
 <a href=#105 id=105 data-nosnippet>105</a>    I: NodeImplementation&lt;TYPES, Network = N, Storage = TestStorage&lt;TYPES&gt;&gt;,

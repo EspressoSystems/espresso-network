@@ -14,19 +14,19 @@
 <a href=#14 id=14 data-nosnippet>14</a><span class="kw">use </span>async_trait::async_trait;
 <a href=#15 id=15 data-nosnippet>15</a><span class="kw">use </span>committable::{Commitment, Committable, RawCommitmentBuilder};
 <a href=#16 id=16 data-nosnippet>16</a><span class="kw">use </span>hotshot_types::{
-<a href=#17 id=17 data-nosnippet>17</a>    data::{vid_commitment, BlockError, Leaf2, VidCommitment, ViewNumber},
+<a href=#17 id=17 data-nosnippet>17</a>    data::{BlockError, Leaf2, VidCommitment, ViewNumber, vid_commitment},
 <a href=#18 id=18 data-nosnippet>18</a>    light_client::LightClientState,
 <a href=#19 id=19 data-nosnippet>19</a>    traits::{
-<a href=#20 id=20 data-nosnippet>20</a>        block_contents::{
-<a href=#21 id=21 data-nosnippet>21</a>            BlockHeader, BuilderFee, EncodeBytes, TestableBlock, Transaction,
-<a href=#22 id=22 data-nosnippet>22</a>            GENESIS_VID_NUM_STORAGE_NODES,
-<a href=#23 id=23 data-nosnippet>23</a>        },
-<a href=#24 id=24 data-nosnippet>24</a>        node_implementation::NodeType,
-<a href=#25 id=25 data-nosnippet>25</a>        BlockPayload, ValidatedState,
+<a href=#20 id=20 data-nosnippet>20</a>        BlockPayload, ValidatedState,
+<a href=#21 id=21 data-nosnippet>21</a>        block_contents::{
+<a href=#22 id=22 data-nosnippet>22</a>            BlockHeader, BuilderFee, EncodeBytes, GENESIS_VID_NUM_STORAGE_NODES, TestableBlock,
+<a href=#23 id=23 data-nosnippet>23</a>            Transaction,
+<a href=#24 id=24 data-nosnippet>24</a>        },
+<a href=#25 id=25 data-nosnippet>25</a>        node_implementation::NodeType,
 <a href=#26 id=26 data-nosnippet>26</a>    },
 <a href=#27 id=27 data-nosnippet>27</a>    utils::BuilderCommitment,
 <a href=#28 id=28 data-nosnippet>28</a>};
-<a href=#29 id=29 data-nosnippet>29</a><span class="kw">use </span>rand::{thread_rng, Rng};
+<a href=#29 id=29 data-nosnippet>29</a><span class="kw">use </span>rand::{Rng, thread_rng};
 <a href=#30 id=30 data-nosnippet>30</a><span class="kw">use </span>serde::{Deserialize, Serialize};
 <a href=#31 id=31 data-nosnippet>31</a><span class="kw">use </span>sha3::{Digest, Keccak256};
 <a href=#32 id=32 data-nosnippet>32</a><span class="kw">use </span>thiserror::Error;
@@ -322,12 +322,12 @@
 <a href=#322 id=322 data-nosnippet>322</a>}
 <a href=#323 id=323 data-nosnippet>323</a>
 <a href=#324 id=324 data-nosnippet>324</a><span class="kw">impl</span>&lt;
-<a href=#325 id=325 data-nosnippet>325</a>        TYPES: NodeType&lt;
+<a href=#325 id=325 data-nosnippet>325</a>    TYPES: NodeType&lt;
 <a href=#326 id=326 data-nosnippet>326</a>            BlockHeader = <span class="self">Self</span>,
 <a href=#327 id=327 data-nosnippet>327</a>            BlockPayload = TestBlockPayload,
 <a href=#328 id=328 data-nosnippet>328</a>            InstanceState = TestInstanceState,
 <a href=#329 id=329 data-nosnippet>329</a>        &gt;,
-<a href=#330 id=330 data-nosnippet>330</a>    &gt; BlockHeader&lt;TYPES&gt; <span class="kw">for </span>TestBlockHeader
+<a href=#330 id=330 data-nosnippet>330</a>&gt; BlockHeader&lt;TYPES&gt; <span class="kw">for </span>TestBlockHeader
 <a href=#331 id=331 data-nosnippet>331</a>{
 <a href=#332 id=332 data-nosnippet>332</a>    <span class="kw">type </span>Error = std::convert::Infallible;
 <a href=#333 id=333 data-nosnippet>333</a>

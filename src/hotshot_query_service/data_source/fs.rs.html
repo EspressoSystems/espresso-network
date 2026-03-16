@@ -18,10 +18,10 @@
 <a href=#18 id=18 data-nosnippet>18</a><span class="kw">use </span>hotshot_types::traits::node_implementation::NodeType;
 <a href=#19 id=19 data-nosnippet>19</a>
 <a href=#20 id=20 data-nosnippet>20</a><span class="kw">pub use </span><span class="kw">super</span>::storage::fs::Transaction;
-<a href=#21 id=21 data-nosnippet>21</a><span class="kw">use </span>super::{storage::FileSystemStorage, AvailabilityProvider, FetchingDataSource};
+<a href=#21 id=21 data-nosnippet>21</a><span class="kw">use </span>super::{AvailabilityProvider, FetchingDataSource, storage::FileSystemStorage};
 <a href=#22 id=22 data-nosnippet>22</a><span class="kw">use </span>crate::{
-<a href=#23 id=23 data-nosnippet>23</a>    availability::{query_data::QueryablePayload, QueryableHeader},
-<a href=#24 id=24 data-nosnippet>24</a>    Header, Payload,
+<a href=#23 id=23 data-nosnippet>23</a>    Header, Payload,
+<a href=#24 id=24 data-nosnippet>24</a>    availability::{QueryableHeader, query_data::QueryablePayload},
 <a href=#25 id=25 data-nosnippet>25</a>};
 <a href=#26 id=26 data-nosnippet>26</a>
 <a href=#27 id=27 data-nosnippet>27</a><span class="doccomment">/// A data source for the APIs provided in this crate, backed by the local file system.

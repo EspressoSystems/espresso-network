@@ -7,7 +7,7 @@
 <a href=#7 id=7 data-nosnippet>7</a>
 <a href=#8 id=8 data-nosnippet>8</a><span class="kw">use </span>alloy::primitives::FixedBytes;
 <a href=#9 id=9 data-nosnippet>9</a><span class="kw">use </span>async_lock::RwLock;
-<a href=#10 id=10 data-nosnippet>10</a><span class="kw">use </span>espresso_types::{traits::SequencerPersistence, PubKey};
+<a href=#10 id=10 data-nosnippet>10</a><span class="kw">use </span>espresso_types::{PubKey, traits::SequencerPersistence};
 <a href=#11 id=11 data-nosnippet>11</a><span class="kw">use </span>hotshot::types::{Event, EventType, SchnorrPubKey};
 <a href=#12 id=12 data-nosnippet>12</a><span class="kw">use </span>hotshot_task_impls::helpers::derive_signed_state_digest;
 <a href=#13 id=13 data-nosnippet>13</a><span class="kw">use </span>hotshot_types::{
@@ -29,7 +29,7 @@
 <a href=#29 id=29 data-nosnippet>29</a><span class="kw">use </span>tide_disco::error::ServerError;
 <a href=#30 id=30 data-nosnippet>30</a><span class="kw">use </span>vbs::version::StaticVersionType;
 <a href=#31 id=31 data-nosnippet>31</a>
-<a href=#32 id=32 data-nosnippet>32</a><span class="kw">use </span>crate::{context::Consensus, SeqTypes};
+<a href=#32 id=32 data-nosnippet>32</a><span class="kw">use </span>crate::{SeqTypes, context::Consensus};
 <a href=#33 id=33 data-nosnippet>33</a>
 <a href=#34 id=34 data-nosnippet>34</a><span class="doccomment">/// A relay server that's collecting and serving the light client state signatures
 <a href=#35 id=35 data-nosnippet>35</a></span><span class="kw">pub mod </span>relay_server;

@@ -79,10 +79,10 @@
 <a href=#79 id=79 data-nosnippet>79</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>total_num_permits_guard = <span class="self">self</span>.total_num_permits_held.lock();
 <a href=#80 id=80 data-nosnippet>80</a>
 <a href=#81 id=81 data-nosnippet>81</a>        <span class="comment">// If the total number of permits is greater than the maximum number of permits, return None
-<a href=#82 id=82 data-nosnippet>82</a>        </span><span class="kw">if let </span><span class="prelude-val">Some</span>(max_total_permits) = <span class="self">self</span>.max_total_permits {
-<a href=#83 id=83 data-nosnippet>83</a>            <span class="kw">if </span><span class="kw-2">*</span>total_num_permits_guard &gt;= max_total_permits {
-<a href=#84 id=84 data-nosnippet>84</a>                <span class="kw">return </span><span class="prelude-val">Err</span>(NamedSemaphoreError::GlobalLimitReached);
-<a href=#85 id=85 data-nosnippet>85</a>            }
+<a href=#82 id=82 data-nosnippet>82</a>        </span><span class="kw">if let </span><span class="prelude-val">Some</span>(max_total_permits) = <span class="self">self</span>.max_total_permits
+<a href=#83 id=83 data-nosnippet>83</a>            &amp;&amp; <span class="kw-2">*</span>total_num_permits_guard &gt;= max_total_permits
+<a href=#84 id=84 data-nosnippet>84</a>        {
+<a href=#85 id=85 data-nosnippet>85</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(NamedSemaphoreError::GlobalLimitReached);
 <a href=#86 id=86 data-nosnippet>86</a>        }
 <a href=#87 id=87 data-nosnippet>87</a>
 <a href=#88 id=88 data-nosnippet>88</a>        <span class="comment">// If the number of permits is greater than or equal to the maximum number of permits, return an error

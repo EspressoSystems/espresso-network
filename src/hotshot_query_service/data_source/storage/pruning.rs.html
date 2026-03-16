@@ -71,10 +71,10 @@
 <a href=#71 id=71 data-nosnippet>71</a>    }
 <a href=#72 id=72 data-nosnippet>72</a>
 <a href=#73 id=73 data-nosnippet>73</a>    <span class="kw">pub fn </span>validate(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; anyhow::Result&lt;()&gt; {
-<a href=#74 id=74 data-nosnippet>74</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(pruning_threshold) = <span class="self">self</span>.pruning_threshold {
-<a href=#75 id=75 data-nosnippet>75</a>            <span class="kw">if </span>pruning_threshold == <span class="number">0 </span>{
-<a href=#76 id=76 data-nosnippet>76</a>                <span class="macro">bail!</span>(<span class="string">"pruning_threshold must be greater than 0 or set to None"</span>)
-<a href=#77 id=77 data-nosnippet>77</a>            }
+<a href=#74 id=74 data-nosnippet>74</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(pruning_threshold) = <span class="self">self</span>.pruning_threshold
+<a href=#75 id=75 data-nosnippet>75</a>            &amp;&amp; pruning_threshold == <span class="number">0
+<a href=#76 id=76 data-nosnippet>76</a>        </span>{
+<a href=#77 id=77 data-nosnippet>77</a>            <span class="macro">bail!</span>(<span class="string">"pruning_threshold must be greater than 0 or set to None"</span>)
 <a href=#78 id=78 data-nosnippet>78</a>        }
 <a href=#79 id=79 data-nosnippet>79</a>
 <a href=#80 id=80 data-nosnippet>80</a>        <span class="kw">if </span><span class="self">self</span>.max_usage &gt; <span class="number">10000 </span>{

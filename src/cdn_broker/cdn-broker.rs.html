@@ -2,11 +2,11 @@
 <a href=#2 id=2 data-nosnippet>2</a>//! a `Broker` object.
 <a href=#3 id=3 data-nosnippet>3</a></span><span class="kw">use </span>anyhow::{Context, <span class="prelude-ty">Result</span>};
 <a href=#4 id=4 data-nosnippet>4</a><span class="kw">use </span>cdn_broker::{
-<a href=#5 id=5 data-nosnippet>5</a>    reexports::{crypto::signature::KeyPair, def::hook::NoMessageHook},
-<a href=#6 id=6 data-nosnippet>6</a>    Broker, Config,
+<a href=#5 id=5 data-nosnippet>5</a>    Broker, Config,
+<a href=#6 id=6 data-nosnippet>6</a>    reexports::{crypto::signature::KeyPair, def::hook::NoMessageHook},
 <a href=#7 id=7 data-nosnippet>7</a>};
 <a href=#8 id=8 data-nosnippet>8</a><span class="kw">use </span>clap::Parser;
-<a href=#9 id=9 data-nosnippet>9</a><span class="kw">use </span>espresso_types::{parse_size, SeqTypes};
+<a href=#9 id=9 data-nosnippet>9</a><span class="kw">use </span>espresso_types::{SeqTypes, parse_size};
 <a href=#10 id=10 data-nosnippet>10</a><span class="kw">use </span>hotshot_types::traits::{node_implementation::NodeType, signature_key::SignatureKey};
 <a href=#11 id=11 data-nosnippet>11</a><span class="kw">use </span>sequencer::network::cdn::{ProductionDef, WrappedSignatureKey};
 <a href=#12 id=12 data-nosnippet>12</a><span class="kw">use </span>sha2::Digest;

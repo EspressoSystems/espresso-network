@@ -640,18 +640,18 @@
 <a href=#640 id=640 data-nosnippet>640</a><span class="comment">// impl votable for all the data types in this file sealed marker should ensure nothing is accidentally
 <a href=#641 id=641 data-nosnippet>641</a>// implemented for structs that aren't "voteable"
 <a href=#642 id=642 data-nosnippet>642</a></span><span class="kw">impl</span>&lt;
-<a href=#643 id=643 data-nosnippet>643</a>        TYPES: NodeType,
-<a href=#644 id=644 data-nosnippet>644</a>        V: sealed::Sealed + Committable + Clone + Serialize + Debug + PartialEq + Hash + Eq,
-<a href=#645 id=645 data-nosnippet>645</a>    &gt; Voteable&lt;TYPES&gt; <span class="kw">for </span>V
+<a href=#643 id=643 data-nosnippet>643</a>    TYPES: NodeType,
+<a href=#644 id=644 data-nosnippet>644</a>    V: sealed::Sealed + Committable + Clone + Serialize + Debug + PartialEq + Hash + Eq,
+<a href=#645 id=645 data-nosnippet>645</a>&gt; Voteable&lt;TYPES&gt; <span class="kw">for </span>V
 <a href=#646 id=646 data-nosnippet>646</a>{
 <a href=#647 id=647 data-nosnippet>647</a>}
 <a href=#648 id=648 data-nosnippet>648</a>
 <a href=#649 id=649 data-nosnippet>649</a><span class="comment">// impl votable for all the data types in this file sealed marker should ensure nothing is accidentally
 <a href=#650 id=650 data-nosnippet>650</a>// implemented for structs that aren't "voteable"
 <a href=#651 id=651 data-nosnippet>651</a></span><span class="kw">impl</span>&lt;
-<a href=#652 id=652 data-nosnippet>652</a>        TYPES: NodeType,
-<a href=#653 id=653 data-nosnippet>653</a>        V: sealed::Sealed + HasEpoch + Committable + Clone + Serialize + Debug + PartialEq + Hash + Eq,
-<a href=#654 id=654 data-nosnippet>654</a>    &gt; Voteable2&lt;TYPES&gt; <span class="kw">for </span>V
+<a href=#652 id=652 data-nosnippet>652</a>    TYPES: NodeType,
+<a href=#653 id=653 data-nosnippet>653</a>    V: sealed::Sealed + HasEpoch + Committable + Clone + Serialize + Debug + PartialEq + Hash + Eq,
+<a href=#654 id=654 data-nosnippet>654</a>&gt; Voteable2&lt;TYPES&gt; <span class="kw">for </span>V
 <a href=#655 id=655 data-nosnippet>655</a>{
 <a href=#656 id=656 data-nosnippet>656</a>}
 <a href=#657 id=657 data-nosnippet>657</a>

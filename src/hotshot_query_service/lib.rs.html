@@ -436,15 +436,15 @@
 <a href=#436 id=436 data-nosnippet>436</a><span class="kw">use </span>futures::{future::BoxFuture, stream::StreamExt};
 <a href=#437 id=437 data-nosnippet>437</a><span class="kw">use </span>hotshot::types::SystemContextHandle;
 <a href=#438 id=438 data-nosnippet>438</a><span class="kw">use </span>hotshot_types::traits::{
-<a href=#439 id=439 data-nosnippet>439</a>    node_implementation::{NodeImplementation, NodeType},
-<a href=#440 id=440 data-nosnippet>440</a>    BlockPayload,
+<a href=#439 id=439 data-nosnippet>439</a>    BlockPayload,
+<a href=#440 id=440 data-nosnippet>440</a>    node_implementation::{NodeImplementation, NodeType},
 <a href=#441 id=441 data-nosnippet>441</a>};
 <a href=#442 id=442 data-nosnippet>442</a><span class="kw">pub use </span>hotshot_types::{data::Leaf2, simple_certificate::QuorumCertificate};
 <a href=#443 id=443 data-nosnippet>443</a><span class="kw">pub use </span>resolvable::Resolvable;
 <a href=#444 id=444 data-nosnippet>444</a><span class="kw">use </span>serde::{Deserialize, Serialize};
 <a href=#445 id=445 data-nosnippet>445</a><span class="kw">use </span>snafu::Snafu;
 <a href=#446 id=446 data-nosnippet>446</a><span class="kw">use </span>task::BackgroundTask;
-<a href=#447 id=447 data-nosnippet>447</a><span class="kw">use </span>tide_disco::{method::ReadState, App, StatusCode};
+<a href=#447 id=447 data-nosnippet>447</a><span class="kw">use </span>tide_disco::{App, StatusCode, method::ReadState};
 <a href=#448 id=448 data-nosnippet>448</a><span class="kw">use </span>vbs::version::StaticVersionType;
 <a href=#449 id=449 data-nosnippet>449</a>
 <a href=#450 id=450 data-nosnippet>450</a><span class="kw">pub type </span>Payload&lt;Types&gt; = &lt;Types <span class="kw">as </span>NodeType&gt;::BlockPayload;
@@ -589,7 +589,7 @@
 <a href=#589 id=589 data-nosnippet>589</a>
 <a href=#590 id=590 data-nosnippet>590</a>    <span class="kw">use </span>async_lock::RwLock;
 <a href=#591 id=591 data-nosnippet>591</a>    <span class="kw">use </span>async_trait::async_trait;
-<a href=#592 id=592 data-nosnippet>592</a>    <span class="kw">use </span>atomic_store::{load_store::BincodeLoadStore, AtomicStore, AtomicStoreLoader, RollingLog};
+<a href=#592 id=592 data-nosnippet>592</a>    <span class="kw">use </span>atomic_store::{AtomicStore, AtomicStoreLoader, RollingLog, load_store::BincodeLoadStore};
 <a href=#593 id=593 data-nosnippet>593</a>    <span class="kw">use </span>futures::future::FutureExt;
 <a href=#594 id=594 data-nosnippet>594</a>    <span class="kw">use </span>hotshot_example_types::node_types::TEST_VERSIONS;
 <a href=#595 id=595 data-nosnippet>595</a>    <span class="kw">use </span>hotshot_types::{data::VidShare, simple_certificate::QuorumCertificate2};

@@ -53,8 +53,8 @@
 <a href=#53 id=53 data-nosnippet>53</a>    <span class="kw">use </span>async_lock::RwLock;
 <a href=#54 id=54 data-nosnippet>54</a>    <span class="kw">use </span>committable::Committable;
 <a href=#55 id=55 data-nosnippet>55</a>    <span class="kw">use </span>espresso_types::{
-<a href=#56 id=56 data-nosnippet>56</a>        traits::SequencerPersistence, v0_3::ChainConfig, Event, FeeAccount, NamespaceId, NodeState,
-<a href=#57 id=57 data-nosnippet>57</a>        PrivKey, PubKey, Transaction, ValidatedState,
+<a href=#56 id=56 data-nosnippet>56</a>        Event, FeeAccount, NamespaceId, NodeState, PrivKey, PubKey, Transaction, ValidatedState,
+<a href=#57 id=57 data-nosnippet>57</a>        traits::SequencerPersistence, v0_3::ChainConfig,
 <a href=#58 id=58 data-nosnippet>58</a>    };
 <a href=#59 id=59 data-nosnippet>59</a>    <span class="kw">use </span>futures::stream::{Stream, StreamExt};
 <a href=#60 id=60 data-nosnippet>60</a>    <span class="kw">use </span>hotshot::{
@@ -73,16 +73,16 @@
 <a href=#73 id=73 data-nosnippet>73</a>        events_source::{EventConsumer, EventsStreamer},
 <a href=#74 id=74 data-nosnippet>74</a>    };
 <a href=#75 id=75 data-nosnippet>75</a>    <span class="kw">use </span>hotshot_types::{
-<a href=#76 id=76 data-nosnippet>76</a>        data::{Leaf2, ViewNumber},
-<a href=#77 id=77 data-nosnippet>77</a>        event::LeafInfo,
-<a href=#78 id=78 data-nosnippet>78</a>        light_client::StateKeyPair,
-<a href=#79 id=79 data-nosnippet>79</a>        traits::{
-<a href=#80 id=80 data-nosnippet>80</a>            block_contents::BlockHeader, node_implementation::NodeType,
-<a href=#81 id=81 data-nosnippet>81</a>            signature_key::BuilderSignatureKey <span class="kw">as _</span>,
-<a href=#82 id=82 data-nosnippet>82</a>        },
-<a href=#83 id=83 data-nosnippet>83</a>        HotShotConfig, PeerConfig, ValidatorConfig,
+<a href=#76 id=76 data-nosnippet>76</a>        HotShotConfig, PeerConfig, ValidatorConfig,
+<a href=#77 id=77 data-nosnippet>77</a>        data::{Leaf2, ViewNumber},
+<a href=#78 id=78 data-nosnippet>78</a>        event::LeafInfo,
+<a href=#79 id=79 data-nosnippet>79</a>        light_client::StateKeyPair,
+<a href=#80 id=80 data-nosnippet>80</a>        traits::{
+<a href=#81 id=81 data-nosnippet>81</a>            block_contents::BlockHeader, node_implementation::NodeType,
+<a href=#82 id=82 data-nosnippet>82</a>            signature_key::BuilderSignatureKey <span class="kw">as _</span>,
+<a href=#83 id=83 data-nosnippet>83</a>        },
 <a href=#84 id=84 data-nosnippet>84</a>    };
-<a href=#85 id=85 data-nosnippet>85</a>    <span class="kw">use </span>sequencer::{context::Consensus, network, SequencerApiVersion};
+<a href=#85 id=85 data-nosnippet>85</a>    <span class="kw">use </span>sequencer::{SequencerApiVersion, context::Consensus, network};
 <a href=#86 id=86 data-nosnippet>86</a>    <span class="kw">use </span>surf_disco::Client;
 <a href=#87 id=87 data-nosnippet>87</a>    <span class="kw">use </span>vbs::version::{StaticVersion, Version};
 <a href=#88 id=88 data-nosnippet>88</a>    <span class="kw">use </span>versions::{Upgrade, VERSION_0_1};

@@ -15,23 +15,23 @@
 <a href=#15 id=15 data-nosnippet>15</a><span class="kw">use </span>serde::{Deserialize, Serialize};
 <a href=#16 id=16 data-nosnippet>16</a>
 <a href=#17 id=17 data-nosnippet>17</a><span class="kw">use </span>super::{
-<a href=#18 id=18 data-nosnippet>18</a>    block_contents::{BlockHeader, TestableBlock, Transaction},
-<a href=#19 id=19 data-nosnippet>19</a>    network::{
-<a href=#20 id=20 data-nosnippet>20</a>        AsyncGenerator, ConnectedNetwork, NetworkReliability, TestableNetworkingImplementation,
-<a href=#21 id=21 data-nosnippet>21</a>    },
-<a href=#22 id=22 data-nosnippet>22</a>    signature_key::{
-<a href=#23 id=23 data-nosnippet>23</a>        BuilderSignatureKey, LCV1StateSignatureKey, LCV2StateSignatureKey, LCV3StateSignatureKey,
-<a href=#24 id=24 data-nosnippet>24</a>        StateSignatureKey,
-<a href=#25 id=25 data-nosnippet>25</a>    },
-<a href=#26 id=26 data-nosnippet>26</a>    states::TestableState,
-<a href=#27 id=27 data-nosnippet>27</a>    storage::Storage,
-<a href=#28 id=28 data-nosnippet>28</a>    ValidatedState,
+<a href=#18 id=18 data-nosnippet>18</a>    ValidatedState,
+<a href=#19 id=19 data-nosnippet>19</a>    block_contents::{BlockHeader, TestableBlock, Transaction},
+<a href=#20 id=20 data-nosnippet>20</a>    network::{
+<a href=#21 id=21 data-nosnippet>21</a>        AsyncGenerator, ConnectedNetwork, NetworkReliability, TestableNetworkingImplementation,
+<a href=#22 id=22 data-nosnippet>22</a>    },
+<a href=#23 id=23 data-nosnippet>23</a>    signature_key::{
+<a href=#24 id=24 data-nosnippet>24</a>        BuilderSignatureKey, LCV1StateSignatureKey, LCV2StateSignatureKey, LCV3StateSignatureKey,
+<a href=#25 id=25 data-nosnippet>25</a>        StateSignatureKey,
+<a href=#26 id=26 data-nosnippet>26</a>    },
+<a href=#27 id=27 data-nosnippet>27</a>    states::TestableState,
+<a href=#28 id=28 data-nosnippet>28</a>    storage::Storage,
 <a href=#29 id=29 data-nosnippet>29</a>};
 <a href=#30 id=30 data-nosnippet>30</a><span class="kw">use </span>crate::{
 <a href=#31 id=31 data-nosnippet>31</a>    constants::DEFAULT_UPGRADE_CONSTANTS,
 <a href=#32 id=32 data-nosnippet>32</a>    data::{Leaf2, TestableLeaf},
 <a href=#33 id=33 data-nosnippet>33</a>    traits::{
-<a href=#34 id=34 data-nosnippet>34</a>        election::Membership, signature_key::SignatureKey, states::InstanceState, BlockPayload,
+<a href=#34 id=34 data-nosnippet>34</a>        BlockPayload, election::Membership, signature_key::SignatureKey, states::InstanceState,
 <a href=#35 id=35 data-nosnippet>35</a>    },
 <a href=#36 id=36 data-nosnippet>36</a>    upgrade_config::UpgradeConstants,
 <a href=#37 id=37 data-nosnippet>37</a>};
@@ -165,11 +165,11 @@
 <a href=#165 id=165 data-nosnippet>165</a>    ///
 <a href=#166 id=166 data-nosnippet>166</a>    /// This should be the same block that `ValidatedState::BlockPayload` is using.
 <a href=#167 id=167 data-nosnippet>167</a>    </span><span class="kw">type </span>BlockPayload: BlockPayload&lt;
-<a href=#168 id=168 data-nosnippet>168</a>        <span class="self">Self</span>,
-<a href=#169 id=169 data-nosnippet>169</a>        Instance = <span class="self">Self</span>::InstanceState,
-<a href=#170 id=170 data-nosnippet>170</a>        Transaction = <span class="self">Self</span>::Transaction,
-<a href=#171 id=171 data-nosnippet>171</a>        ValidatedState = <span class="self">Self</span>::ValidatedState,
-<a href=#172 id=172 data-nosnippet>172</a>    &gt;;
+<a href=#168 id=168 data-nosnippet>168</a>            <span class="self">Self</span>,
+<a href=#169 id=169 data-nosnippet>169</a>            Instance = <span class="self">Self</span>::InstanceState,
+<a href=#170 id=170 data-nosnippet>170</a>            Transaction = <span class="self">Self</span>::Transaction,
+<a href=#171 id=171 data-nosnippet>171</a>            ValidatedState = <span class="self">Self</span>::ValidatedState,
+<a href=#172 id=172 data-nosnippet>172</a>        &gt;;
 <a href=#173 id=173 data-nosnippet>173</a>    <span class="doccomment">/// The signature key that this hotshot setup is using.
 <a href=#174 id=174 data-nosnippet>174</a>    </span><span class="kw">type </span>SignatureKey: SignatureKey;
 <a href=#175 id=175 data-nosnippet>175</a>    <span class="doccomment">/// The transaction type that this hotshot setup is using.

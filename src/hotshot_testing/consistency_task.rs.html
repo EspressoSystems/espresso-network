@@ -25,7 +25,7 @@
 <a href=#25 id=25 data-nosnippet>25</a><span class="kw">use </span>crate::{
 <a href=#26 id=26 data-nosnippet>26</a>    overall_safety_task::OverallSafetyPropertiesDescription,
 <a href=#27 id=27 data-nosnippet>27</a>    test_builder::TransactionValidator,
-<a href=#28 id=28 data-nosnippet>28</a>    test_task::{spawn_timeout_task, TestEvent, TestResult, TestTaskState},
+<a href=#28 id=28 data-nosnippet>28</a>    test_task::{TestEvent, TestResult, TestTaskState, spawn_timeout_task},
 <a href=#29 id=29 data-nosnippet>29</a>};
 <a href=#30 id=30 data-nosnippet>30</a>
 <a href=#31 id=31 data-nosnippet>31</a><span class="doccomment">/// Map from views to leaves for a single node, allowing multiple leaves for each view (because the node may a priori send us multiple leaves for a given view).
@@ -74,13 +74,13 @@
 <a href=#74 id=74 data-nosnippet>74</a>    <span class="kw">let </span><span class="kw-2">mut </span>view_decided = ViewNumber::new(<span class="number">0</span>);
 <a href=#75 id=75 data-nosnippet>75</a>
 <a href=#76 id=76 data-nosnippet>76</a>    <span class="kw">for </span>(grandparent, _parent, child) <span class="kw">in </span>leaf_triples {
-<a href=#77 id=77 data-nosnippet>77</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(cert) = grandparent.upgrade_certificate() {
-<a href=#78 id=78 data-nosnippet>78</a>            <span class="kw">if </span>cert.data.decide_by &lt;= child.view_number() {
-<a href=#79 id=79 data-nosnippet>79</a>                decided_upgrade_certificate = <span class="prelude-val">Some</span>(cert);
-<a href=#80 id=80 data-nosnippet>80</a>                view_decided = child.view_number();
-<a href=#81 id=81 data-nosnippet>81</a>
-<a href=#82 id=82 data-nosnippet>82</a>                <span class="kw">break</span>;
-<a href=#83 id=83 data-nosnippet>83</a>            }
+<a href=#77 id=77 data-nosnippet>77</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(cert) = grandparent.upgrade_certificate()
+<a href=#78 id=78 data-nosnippet>78</a>            &amp;&amp; cert.data.decide_by &lt;= child.view_number()
+<a href=#79 id=79 data-nosnippet>79</a>        {
+<a href=#80 id=80 data-nosnippet>80</a>            decided_upgrade_certificate = <span class="prelude-val">Some</span>(cert);
+<a href=#81 id=81 data-nosnippet>81</a>            view_decided = child.view_number();
+<a href=#82 id=82 data-nosnippet>82</a>
+<a href=#83 id=83 data-nosnippet>83</a>            <span class="kw">break</span>;
 <a href=#84 id=84 data-nosnippet>84</a>        }
 <a href=#85 id=85 data-nosnippet>85</a>    }
 <a href=#86 id=86 data-nosnippet>86</a>

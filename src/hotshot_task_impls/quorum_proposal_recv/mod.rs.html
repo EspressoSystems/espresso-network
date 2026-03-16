@@ -8,7 +8,7 @@
 <a href=#8 id=8 data-nosnippet>8</a>
 <a href=#9 id=9 data-nosnippet>9</a></span><span class="kw">use </span>std::{collections::BTreeMap, sync::Arc};
 <a href=#10 id=10 data-nosnippet>10</a>
-<a href=#11 id=11 data-nosnippet>11</a><span class="kw">use </span>async_broadcast::{broadcast, Receiver, Sender};
+<a href=#11 id=11 data-nosnippet>11</a><span class="kw">use </span>async_broadcast::{Receiver, Sender, broadcast};
 <a href=#12 id=12 data-nosnippet>12</a><span class="kw">use </span>async_lock::RwLock;
 <a href=#13 id=13 data-nosnippet>13</a><span class="kw">use </span>async_trait::async_trait;
 <a href=#14 id=14 data-nosnippet>14</a><span class="kw">use </span>either::Either;
@@ -30,7 +30,7 @@
 <a href=#30 id=30 data-nosnippet>30</a>    utils::option_epoch_from_block_number,
 <a href=#31 id=31 data-nosnippet>31</a>    vote::{Certificate, HasViewNumber},
 <a href=#32 id=32 data-nosnippet>32</a>};
-<a href=#33 id=33 data-nosnippet>33</a><span class="kw">use </span>hotshot_utils::anytrace::{bail, <span class="prelude-ty">Result</span>};
+<a href=#33 id=33 data-nosnippet>33</a><span class="kw">use </span>hotshot_utils::anytrace::{<span class="prelude-ty">Result</span>, bail};
 <a href=#34 id=34 data-nosnippet>34</a><span class="kw">use </span>tokio::task::JoinHandle;
 <a href=#35 id=35 data-nosnippet>35</a><span class="kw">use </span>tracing::{debug, error, info, instrument, warn};
 <a href=#36 id=36 data-nosnippet>36</a><span class="kw">use </span>vbs::version::Version;

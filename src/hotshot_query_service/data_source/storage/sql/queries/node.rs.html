@@ -27,20 +27,20 @@
 <a href=#27 id=27 data-nosnippet>27</a><span class="kw">use </span>tracing::instrument;
 <a href=#28 id=28 data-nosnippet>28</a>
 <a href=#29 id=29 data-nosnippet>29</a><span class="kw">use </span>super::{
-<a href=#30 id=30 data-nosnippet>30</a>    <span class="kw">super</span>::transaction::{query, query_as, Transaction, TransactionMode, Write},
-<a href=#31 id=31 data-nosnippet>31</a>    parse_header, DecodeError, QueryBuilder, HEADER_COLUMNS,
+<a href=#30 id=30 data-nosnippet>30</a>    <span class="kw">super</span>::transaction::{Transaction, TransactionMode, Write, query, query_as},
+<a href=#31 id=31 data-nosnippet>31</a>    DecodeError, HEADER_COLUMNS, QueryBuilder, parse_header,
 <a href=#32 id=32 data-nosnippet>32</a>};
 <a href=#33 id=33 data-nosnippet>33</a><span class="kw">use </span>crate::{
-<a href=#34 id=34 data-nosnippet>34</a>    availability::{NamespaceId, QueryableHeader},
-<a href=#35 id=35 data-nosnippet>35</a>    data_source::storage::{
-<a href=#36 id=36 data-nosnippet>36</a>        Aggregate, AggregatesStorage, NodeStorage, PayloadMetadata, UpdateAggregatesStorage,
-<a href=#37 id=37 data-nosnippet>37</a>    },
-<a href=#38 id=38 data-nosnippet>38</a>    node::{
-<a href=#39 id=39 data-nosnippet>39</a>        BlockId, ResourceSyncStatus, SyncStatus, SyncStatusQueryData, SyncStatusRange,
-<a href=#40 id=40 data-nosnippet>40</a>        TimeWindowQueryData, WindowStart,
-<a href=#41 id=41 data-nosnippet>41</a>    },
-<a href=#42 id=42 data-nosnippet>42</a>    types::HeightIndexed,
-<a href=#43 id=43 data-nosnippet>43</a>    Header, MissingSnafu, QueryError, QueryResult,
+<a href=#34 id=34 data-nosnippet>34</a>    Header, MissingSnafu, QueryError, QueryResult,
+<a href=#35 id=35 data-nosnippet>35</a>    availability::{NamespaceId, QueryableHeader},
+<a href=#36 id=36 data-nosnippet>36</a>    data_source::storage::{
+<a href=#37 id=37 data-nosnippet>37</a>        Aggregate, AggregatesStorage, NodeStorage, PayloadMetadata, UpdateAggregatesStorage,
+<a href=#38 id=38 data-nosnippet>38</a>    },
+<a href=#39 id=39 data-nosnippet>39</a>    node::{
+<a href=#40 id=40 data-nosnippet>40</a>        BlockId, ResourceSyncStatus, SyncStatus, SyncStatusQueryData, SyncStatusRange,
+<a href=#41 id=41 data-nosnippet>41</a>        TimeWindowQueryData, WindowStart,
+<a href=#42 id=42 data-nosnippet>42</a>    },
+<a href=#43 id=43 data-nosnippet>43</a>    types::HeightIndexed,
 <a href=#44 id=44 data-nosnippet>44</a>};
 <a href=#45 id=45 data-nosnippet>45</a>
 <a href=#46 id=46 data-nosnippet>46</a><span class="attr">#[async_trait]
@@ -779,9 +779,9 @@
 <a href=#779 id=779 data-nosnippet>779</a>    <span class="kw">use </span>crate::{
 <a href=#780 id=780 data-nosnippet>780</a>        availability::LeafQueryData,
 <a href=#781 id=781 data-nosnippet>781</a>        data_source::{
-<a href=#782 id=782 data-nosnippet>782</a>            sql::testing::TmpDb,
-<a href=#783 id=783 data-nosnippet>783</a>            storage::{SqlStorage, StorageConnectionType, UpdateAvailabilityStorage},
-<a href=#784 id=784 data-nosnippet>784</a>            Transaction <span class="kw">as _</span>, VersionedDataSource,
+<a href=#782 id=782 data-nosnippet>782</a>            Transaction <span class="kw">as _</span>, VersionedDataSource,
+<a href=#783 id=783 data-nosnippet>783</a>            sql::testing::TmpDb,
+<a href=#784 id=784 data-nosnippet>784</a>            storage::{SqlStorage, StorageConnectionType, UpdateAvailabilityStorage},
 <a href=#785 id=785 data-nosnippet>785</a>        },
 <a href=#786 id=786 data-nosnippet>786</a>        testing::mocks::MockTypes,
 <a href=#787 id=787 data-nosnippet>787</a>    };

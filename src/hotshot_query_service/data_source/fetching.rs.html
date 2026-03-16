@@ -61,14 +61,14 @@
 <a href=#61 id=61 data-nosnippet>61</a>    time::Duration,
 <a href=#62 id=62 data-nosnippet>62</a>};
 <a href=#63 id=63 data-nosnippet>63</a>
-<a href=#64 id=64 data-nosnippet>64</a><span class="kw">use </span>anyhow::{bail, Context};
+<a href=#64 id=64 data-nosnippet>64</a><span class="kw">use </span>anyhow::{Context, bail};
 <a href=#65 id=65 data-nosnippet>65</a><span class="kw">use </span>async_lock::Semaphore;
 <a href=#66 id=66 data-nosnippet>66</a><span class="kw">use </span>async_trait::async_trait;
-<a href=#67 id=67 data-nosnippet>67</a><span class="kw">use </span>backoff::{backoff::Backoff, ExponentialBackoff, ExponentialBackoffBuilder};
+<a href=#67 id=67 data-nosnippet>67</a><span class="kw">use </span>backoff::{ExponentialBackoff, ExponentialBackoffBuilder, backoff::Backoff};
 <a href=#68 id=68 data-nosnippet>68</a><span class="kw">use </span>derivative::Derivative;
 <a href=#69 id=69 data-nosnippet>69</a><span class="kw">use </span>futures::{
 <a href=#70 id=70 data-nosnippet>70</a>    channel::oneshot,
-<a href=#71 id=71 data-nosnippet>71</a>    future::{<span class="self">self</span>, join_all, BoxFuture, Either, Future, FutureExt},
+<a href=#71 id=71 data-nosnippet>71</a>    future::{<span class="self">self</span>, BoxFuture, Either, Future, FutureExt, join_all},
 <a href=#72 id=72 data-nosnippet>72</a>    stream::{<span class="self">self</span>, BoxStream, StreamExt},
 <a href=#73 id=73 data-nosnippet>73</a>};
 <a href=#74 id=74 data-nosnippet>74</a><span class="kw">use </span>hotshot_types::{
@@ -78,43 +78,43 @@
 <a href=#78 id=78 data-nosnippet>78</a>        node_implementation::NodeType,
 <a href=#79 id=79 data-nosnippet>79</a>    },
 <a href=#80 id=80 data-nosnippet>80</a>};
-<a href=#81 id=81 data-nosnippet>81</a><span class="kw">use </span>jf_merkle_tree_compat::{prelude::MerkleProof, MerkleTreeScheme};
+<a href=#81 id=81 data-nosnippet>81</a><span class="kw">use </span>jf_merkle_tree_compat::{MerkleTreeScheme, prelude::MerkleProof};
 <a href=#82 id=82 data-nosnippet>82</a><span class="kw">use </span>tagged_base64::TaggedBase64;
 <a href=#83 id=83 data-nosnippet>83</a><span class="kw">use </span>tokio::{spawn, time::sleep};
 <a href=#84 id=84 data-nosnippet>84</a><span class="kw">use </span>tracing::Instrument;
 <a href=#85 id=85 data-nosnippet>85</a>
 <a href=#86 id=86 data-nosnippet>86</a><span class="kw">use </span>super::{
-<a href=#87 id=87 data-nosnippet>87</a>    notifier::Notifier,
-<a href=#88 id=88 data-nosnippet>88</a>    storage::{
-<a href=#89 id=89 data-nosnippet>89</a>        pruning::{PruneStorage, PrunedHeightDataSource, PrunedHeightStorage},
-<a href=#90 id=90 data-nosnippet>90</a>        sql::MigrateTypes,
-<a href=#91 id=91 data-nosnippet>91</a>        Aggregate, AggregatesStorage, AvailabilityStorage, ExplorerStorage,
-<a href=#92 id=92 data-nosnippet>92</a>        MerklizedStateHeightStorage, MerklizedStateStorage, NodeStorage, UpdateAggregatesStorage,
-<a href=#93 id=93 data-nosnippet>93</a>        UpdateAvailabilityStorage,
-<a href=#94 id=94 data-nosnippet>94</a>    },
-<a href=#95 id=95 data-nosnippet>95</a>    Transaction, VersionedDataSource,
+<a href=#87 id=87 data-nosnippet>87</a>    Transaction, VersionedDataSource,
+<a href=#88 id=88 data-nosnippet>88</a>    notifier::Notifier,
+<a href=#89 id=89 data-nosnippet>89</a>    storage::{
+<a href=#90 id=90 data-nosnippet>90</a>        Aggregate, AggregatesStorage, AvailabilityStorage, ExplorerStorage,
+<a href=#91 id=91 data-nosnippet>91</a>        MerklizedStateHeightStorage, MerklizedStateStorage, NodeStorage, UpdateAggregatesStorage,
+<a href=#92 id=92 data-nosnippet>92</a>        UpdateAvailabilityStorage,
+<a href=#93 id=93 data-nosnippet>93</a>        pruning::{PruneStorage, PrunedHeightDataSource, PrunedHeightStorage},
+<a href=#94 id=94 data-nosnippet>94</a>        sql::MigrateTypes,
+<a href=#95 id=95 data-nosnippet>95</a>    },
 <a href=#96 id=96 data-nosnippet>96</a>};
 <a href=#97 id=97 data-nosnippet>97</a><span class="kw">use </span>crate::{
-<a href=#98 id=98 data-nosnippet>98</a>    availability::{
-<a href=#99 id=99 data-nosnippet>99</a>        AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, BlockWithTransaction, Fetch,
-<a href=#100 id=100 data-nosnippet>100</a>        FetchStream, HeaderQueryData, LeafId, LeafQueryData, NamespaceId, PayloadMetadata,
-<a href=#101 id=101 data-nosnippet>101</a>        PayloadQueryData, QueryableHeader, QueryablePayload, TransactionHash,
-<a href=#102 id=102 data-nosnippet>102</a>        UpdateAvailabilityData, VidCommonMetadata, VidCommonQueryData,
-<a href=#103 id=103 data-nosnippet>103</a>    },
-<a href=#104 id=104 data-nosnippet>104</a>    explorer::{<span class="self">self</span>, ExplorerDataSource},
-<a href=#105 id=105 data-nosnippet>105</a>    fetching::{<span class="self">self</span>, request, Provider},
-<a href=#106 id=106 data-nosnippet>106</a>    merklized_state::{
-<a href=#107 id=107 data-nosnippet>107</a>        MerklizedState, MerklizedStateDataSource, MerklizedStateHeightPersistence, Snapshot,
-<a href=#108 id=108 data-nosnippet>108</a>    },
-<a href=#109 id=109 data-nosnippet>109</a>    metrics::PrometheusMetrics,
-<a href=#110 id=110 data-nosnippet>110</a>    node::{
-<a href=#111 id=111 data-nosnippet>111</a>        NodeDataSource, SyncStatus, SyncStatusQueryData, SyncStatusRange, TimeWindowQueryData,
-<a href=#112 id=112 data-nosnippet>112</a>        WindowStart,
-<a href=#113 id=113 data-nosnippet>113</a>    },
-<a href=#114 id=114 data-nosnippet>114</a>    status::{HasMetrics, StatusDataSource},
-<a href=#115 id=115 data-nosnippet>115</a>    task::BackgroundTask,
-<a href=#116 id=116 data-nosnippet>116</a>    types::HeightIndexed,
-<a href=#117 id=117 data-nosnippet>117</a>    Header, Payload, QueryError, QueryResult,
+<a href=#98 id=98 data-nosnippet>98</a>    Header, Payload, QueryError, QueryResult,
+<a href=#99 id=99 data-nosnippet>99</a>    availability::{
+<a href=#100 id=100 data-nosnippet>100</a>        AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, BlockWithTransaction, Fetch,
+<a href=#101 id=101 data-nosnippet>101</a>        FetchStream, HeaderQueryData, LeafId, LeafQueryData, NamespaceId, PayloadMetadata,
+<a href=#102 id=102 data-nosnippet>102</a>        PayloadQueryData, QueryableHeader, QueryablePayload, TransactionHash,
+<a href=#103 id=103 data-nosnippet>103</a>        UpdateAvailabilityData, VidCommonMetadata, VidCommonQueryData,
+<a href=#104 id=104 data-nosnippet>104</a>    },
+<a href=#105 id=105 data-nosnippet>105</a>    explorer::{<span class="self">self</span>, ExplorerDataSource},
+<a href=#106 id=106 data-nosnippet>106</a>    fetching::{<span class="self">self</span>, Provider, request},
+<a href=#107 id=107 data-nosnippet>107</a>    merklized_state::{
+<a href=#108 id=108 data-nosnippet>108</a>        MerklizedState, MerklizedStateDataSource, MerklizedStateHeightPersistence, Snapshot,
+<a href=#109 id=109 data-nosnippet>109</a>    },
+<a href=#110 id=110 data-nosnippet>110</a>    metrics::PrometheusMetrics,
+<a href=#111 id=111 data-nosnippet>111</a>    node::{
+<a href=#112 id=112 data-nosnippet>112</a>        NodeDataSource, SyncStatus, SyncStatusQueryData, SyncStatusRange, TimeWindowQueryData,
+<a href=#113 id=113 data-nosnippet>113</a>        WindowStart,
+<a href=#114 id=114 data-nosnippet>114</a>    },
+<a href=#115 id=115 data-nosnippet>115</a>    status::{HasMetrics, StatusDataSource},
+<a href=#116 id=116 data-nosnippet>116</a>    task::BackgroundTask,
+<a href=#117 id=117 data-nosnippet>117</a>    types::HeightIndexed,
 <a href=#118 id=118 data-nosnippet>118</a>};
 <a href=#119 id=119 data-nosnippet>119</a>
 <a href=#120 id=120 data-nosnippet>120</a><span class="kw">mod </span>block;

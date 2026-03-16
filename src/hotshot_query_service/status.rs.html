@@ -29,7 +29,7 @@
 <a href=#29 id=29 data-nosnippet>29</a><span class="kw">use </span>futures::FutureExt;
 <a href=#30 id=30 data-nosnippet>30</a><span class="kw">use </span>serde::{Deserialize, Serialize};
 <a href=#31 id=31 data-nosnippet>31</a><span class="kw">use </span>snafu::Snafu;
-<a href=#32 id=32 data-nosnippet>32</a><span class="kw">use </span>tide_disco::{api::ApiError, method::ReadState, Api, RequestError, StatusCode};
+<a href=#32 id=32 data-nosnippet>32</a><span class="kw">use </span>tide_disco::{Api, RequestError, StatusCode, api::ApiError, method::ReadState};
 <a href=#33 id=33 data-nosnippet>33</a><span class="kw">use </span>vbs::version::StaticVersionType;
 <a href=#34 id=34 data-nosnippet>34</a>
 <a href=#35 id=35 data-nosnippet>35</a><span class="kw">use </span><span class="kw">crate</span>::api::load_api;
@@ -121,14 +121,14 @@
 <a href=#121 id=121 data-nosnippet>121</a>
 <a href=#122 id=122 data-nosnippet>122</a>    <span class="kw">use </span>super::<span class="kw-2">*</span>;
 <a href=#123 id=123 data-nosnippet>123</a>    <span class="kw">use </span>crate::{
-<a href=#124 id=124 data-nosnippet>124</a>        data_source::ExtensibleDataSource,
-<a href=#125 id=125 data-nosnippet>125</a>        task::BackgroundTask,
-<a href=#126 id=126 data-nosnippet>126</a>        testing::{
-<a href=#127 id=127 data-nosnippet>127</a>            consensus::{MockDataSource, MockNetwork},
-<a href=#128 id=128 data-nosnippet>128</a>            mocks::MockBase,
-<a href=#129 id=129 data-nosnippet>129</a>            sleep,
-<a href=#130 id=130 data-nosnippet>130</a>        },
-<a href=#131 id=131 data-nosnippet>131</a>        ApiState, Error,
+<a href=#124 id=124 data-nosnippet>124</a>        ApiState, Error,
+<a href=#125 id=125 data-nosnippet>125</a>        data_source::ExtensibleDataSource,
+<a href=#126 id=126 data-nosnippet>126</a>        task::BackgroundTask,
+<a href=#127 id=127 data-nosnippet>127</a>        testing::{
+<a href=#128 id=128 data-nosnippet>128</a>            consensus::{MockDataSource, MockNetwork},
+<a href=#129 id=129 data-nosnippet>129</a>            mocks::MockBase,
+<a href=#130 id=130 data-nosnippet>130</a>            sleep,
+<a href=#131 id=131 data-nosnippet>131</a>        },
 <a href=#132 id=132 data-nosnippet>132</a>    };
 <a href=#133 id=133 data-nosnippet>133</a>
 <a href=#134 id=134 data-nosnippet>134</a>    <span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]

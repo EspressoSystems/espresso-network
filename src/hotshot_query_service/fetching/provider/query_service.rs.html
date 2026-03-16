@@ -13,27 +13,27 @@
 <a href=#13 id=13 data-nosnippet>13</a></span><span class="kw">use </span>async_trait::async_trait;
 <a href=#14 id=14 data-nosnippet>14</a><span class="kw">use </span>committable::Committable;
 <a href=#15 id=15 data-nosnippet>15</a><span class="kw">use </span>hotshot_types::{
-<a href=#16 id=16 data-nosnippet>16</a>    data::{ns_table, VidCommitment, VidCommon},
-<a href=#17 id=17 data-nosnippet>17</a>    traits::{block_contents::BlockHeader, node_implementation::NodeType, EncodeBytes},
+<a href=#16 id=16 data-nosnippet>16</a>    data::{VidCommitment, VidCommon, ns_table},
+<a href=#17 id=17 data-nosnippet>17</a>    traits::{EncodeBytes, block_contents::BlockHeader, node_implementation::NodeType},
 <a href=#18 id=18 data-nosnippet>18</a>    vid::{
-<a href=#19 id=19 data-nosnippet>19</a>        advz::{advz_scheme, ADVZScheme},
-<a href=#20 id=20 data-nosnippet>20</a>        avidm::{init_avidm_param, AvidMScheme},
+<a href=#19 id=19 data-nosnippet>19</a>        advz::{ADVZScheme, advz_scheme},
+<a href=#20 id=20 data-nosnippet>20</a>        avidm::{AvidMScheme, init_avidm_param},
 <a href=#21 id=21 data-nosnippet>21</a>        avidm_gf2::AvidmGf2Scheme,
 <a href=#22 id=22 data-nosnippet>22</a>    },
 <a href=#23 id=23 data-nosnippet>23</a>};
 <a href=#24 id=24 data-nosnippet>24</a><span class="kw">use </span>jf_advz::VidScheme;
 <a href=#25 id=25 data-nosnippet>25</a><span class="kw">use </span>surf_disco::{Client, Url};
-<a href=#26 id=26 data-nosnippet>26</a><span class="kw">use </span>vbs::{version::StaticVersionType, BinarySerializer};
+<a href=#26 id=26 data-nosnippet>26</a><span class="kw">use </span>vbs::{BinarySerializer, version::StaticVersionType};
 <a href=#27 id=27 data-nosnippet>27</a>
 <a href=#28 id=28 data-nosnippet>28</a><span class="kw">use </span><span class="kw">super</span>::Provider;
 <a href=#29 id=29 data-nosnippet>29</a><span class="kw">use </span>crate::{
-<a href=#30 id=30 data-nosnippet>30</a>    availability::{
-<a href=#31 id=31 data-nosnippet>31</a>        ADVZCommonQueryData, ADVZPayloadQueryData, LeafQueryData, LeafQueryDataLegacy,
-<a href=#32 id=32 data-nosnippet>32</a>        PayloadQueryData, VidCommonQueryData,
-<a href=#33 id=33 data-nosnippet>33</a>    },
-<a href=#34 id=34 data-nosnippet>34</a>    fetching::request::{LeafRequest, PayloadRequest, VidCommonRequest},
-<a href=#35 id=35 data-nosnippet>35</a>    types::HeightIndexed,
-<a href=#36 id=36 data-nosnippet>36</a>    Error, Header, Payload,
+<a href=#30 id=30 data-nosnippet>30</a>    Error, Header, Payload,
+<a href=#31 id=31 data-nosnippet>31</a>    availability::{
+<a href=#32 id=32 data-nosnippet>32</a>        ADVZCommonQueryData, ADVZPayloadQueryData, LeafQueryData, LeafQueryDataLegacy,
+<a href=#33 id=33 data-nosnippet>33</a>        PayloadQueryData, VidCommonQueryData,
+<a href=#34 id=34 data-nosnippet>34</a>    },
+<a href=#35 id=35 data-nosnippet>35</a>    fetching::request::{LeafRequest, PayloadRequest, VidCommonRequest},
+<a href=#36 id=36 data-nosnippet>36</a>    types::HeightIndexed,
 <a href=#37 id=37 data-nosnippet>37</a>};
 <a href=#38 id=38 data-nosnippet>38</a>
 <a href=#39 id=39 data-nosnippet>39</a><span class="doccomment">/// Data availability provider backed by another instance of this query service.
@@ -539,7 +539,7 @@
 <a href=#539 id=539 data-nosnippet>539</a>
 <a href=#540 id=540 data-nosnippet>540</a>    <span class="kw">use </span>committable::Committable;
 <a href=#541 id=541 data-nosnippet>541</a>    <span class="kw">use </span>futures::{
-<a href=#542 id=542 data-nosnippet>542</a>        future::{join, FutureExt},
+<a href=#542 id=542 data-nosnippet>542</a>        future::{FutureExt, join},
 <a href=#543 id=543 data-nosnippet>543</a>        stream::StreamExt,
 <a href=#544 id=544 data-nosnippet>544</a>    };
 <a href=#545 id=545 data-nosnippet>545</a>    <span class="comment">// generic-array 0.14.x is deprecated, but VidCommitment requires this version
@@ -549,36 +549,36 @@
 <a href=#549 id=549 data-nosnippet>549</a>    <span class="kw">use </span>hotshot_example_types::node_types::{EpochVersion, TEST_VERSIONS};
 <a href=#550 id=550 data-nosnippet>550</a>    <span class="kw">use </span>rand::RngCore;
 <a href=#551 id=551 data-nosnippet>551</a>    <span class="kw">use </span>test_utils::reserve_tcp_port;
-<a href=#552 id=552 data-nosnippet>552</a>    <span class="kw">use </span>tide_disco::{error::ServerError, App};
+<a href=#552 id=552 data-nosnippet>552</a>    <span class="kw">use </span>tide_disco::{App, error::ServerError};
 <a href=#553 id=553 data-nosnippet>553</a>    <span class="kw">use </span>vbs::version::StaticVersion;
 <a href=#554 id=554 data-nosnippet>554</a>
 <a href=#555 id=555 data-nosnippet>555</a>    <span class="kw">use </span>super::<span class="kw-2">*</span>;
 <a href=#556 id=556 data-nosnippet>556</a>    <span class="kw">use </span>crate::{
-<a href=#557 id=557 data-nosnippet>557</a>        api::load_api,
-<a href=#558 id=558 data-nosnippet>558</a>        availability::{
-<a href=#559 id=559 data-nosnippet>559</a>            define_api, AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData,
-<a href=#560 id=560 data-nosnippet>560</a>            BlockWithTransaction, Fetch, UpdateAvailabilityData,
-<a href=#561 id=561 data-nosnippet>561</a>        },
-<a href=#562 id=562 data-nosnippet>562</a>        data_source::{
-<a href=#563 id=563 data-nosnippet>563</a>            sql::{<span class="self">self</span>, SqlDataSource},
-<a href=#564 id=564 data-nosnippet>564</a>            storage::{
-<a href=#565 id=565 data-nosnippet>565</a>                fail_storage::{FailStorage, FailableAction},
-<a href=#566 id=566 data-nosnippet>566</a>                pruning::{PrunedHeightStorage, PrunerCfg},
-<a href=#567 id=567 data-nosnippet>567</a>                sql::testing::TmpDb,
-<a href=#568 id=568 data-nosnippet>568</a>                AvailabilityStorage, SqlStorage, StorageConnectionType, UpdateAvailabilityStorage,
-<a href=#569 id=569 data-nosnippet>569</a>            },
-<a href=#570 id=570 data-nosnippet>570</a>            AvailabilityProvider, FetchingDataSource, Transaction, VersionedDataSource,
-<a href=#571 id=571 data-nosnippet>571</a>        },
-<a href=#572 id=572 data-nosnippet>572</a>        fetching::provider::{NoFetching, Provider <span class="kw">as </span>ProviderTrait, TestProvider},
-<a href=#573 id=573 data-nosnippet>573</a>        node::{data_source::NodeDataSource, SyncStatusQueryData},
-<a href=#574 id=574 data-nosnippet>574</a>        task::BackgroundTask,
-<a href=#575 id=575 data-nosnippet>575</a>        testing::{
-<a href=#576 id=576 data-nosnippet>576</a>            consensus::{MockDataSource, MockNetwork},
-<a href=#577 id=577 data-nosnippet>577</a>            mocks::{mock_transaction, MockBase, MockTypes},
-<a href=#578 id=578 data-nosnippet>578</a>            sleep,
-<a href=#579 id=579 data-nosnippet>579</a>        },
-<a href=#580 id=580 data-nosnippet>580</a>        types::HeightIndexed,
-<a href=#581 id=581 data-nosnippet>581</a>        ApiState,
+<a href=#557 id=557 data-nosnippet>557</a>        ApiState,
+<a href=#558 id=558 data-nosnippet>558</a>        api::load_api,
+<a href=#559 id=559 data-nosnippet>559</a>        availability::{
+<a href=#560 id=560 data-nosnippet>560</a>            AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, BlockWithTransaction,
+<a href=#561 id=561 data-nosnippet>561</a>            Fetch, UpdateAvailabilityData, define_api,
+<a href=#562 id=562 data-nosnippet>562</a>        },
+<a href=#563 id=563 data-nosnippet>563</a>        data_source::{
+<a href=#564 id=564 data-nosnippet>564</a>            AvailabilityProvider, FetchingDataSource, Transaction, VersionedDataSource,
+<a href=#565 id=565 data-nosnippet>565</a>            sql::{<span class="self">self</span>, SqlDataSource},
+<a href=#566 id=566 data-nosnippet>566</a>            storage::{
+<a href=#567 id=567 data-nosnippet>567</a>                AvailabilityStorage, SqlStorage, StorageConnectionType, UpdateAvailabilityStorage,
+<a href=#568 id=568 data-nosnippet>568</a>                fail_storage::{FailStorage, FailableAction},
+<a href=#569 id=569 data-nosnippet>569</a>                pruning::{PrunedHeightStorage, PrunerCfg},
+<a href=#570 id=570 data-nosnippet>570</a>                sql::testing::TmpDb,
+<a href=#571 id=571 data-nosnippet>571</a>            },
+<a href=#572 id=572 data-nosnippet>572</a>        },
+<a href=#573 id=573 data-nosnippet>573</a>        fetching::provider::{NoFetching, Provider <span class="kw">as </span>ProviderTrait, TestProvider},
+<a href=#574 id=574 data-nosnippet>574</a>        node::{SyncStatusQueryData, data_source::NodeDataSource},
+<a href=#575 id=575 data-nosnippet>575</a>        task::BackgroundTask,
+<a href=#576 id=576 data-nosnippet>576</a>        testing::{
+<a href=#577 id=577 data-nosnippet>577</a>            consensus::{MockDataSource, MockNetwork},
+<a href=#578 id=578 data-nosnippet>578</a>            mocks::{MockBase, MockTypes, mock_transaction},
+<a href=#579 id=579 data-nosnippet>579</a>            sleep,
+<a href=#580 id=580 data-nosnippet>580</a>        },
+<a href=#581 id=581 data-nosnippet>581</a>        types::HeightIndexed,
 <a href=#582 id=582 data-nosnippet>582</a>    };
 <a href=#583 id=583 data-nosnippet>583</a>
 <a href=#584 id=584 data-nosnippet>584</a>    <span class="kw">type </span>Provider = TestProvider&lt;QueryServiceProvider&lt;MockBase&gt;&gt;;

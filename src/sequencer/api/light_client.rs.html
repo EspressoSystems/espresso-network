@@ -3,17 +3,17 @@
 <a href=#3 id=3 data-nosnippet>3</a><span class="kw">use </span>anyhow::Result;
 <a href=#4 id=4 data-nosnippet>4</a><span class="kw">use </span>espresso_types::{BlockMerkleTree, NsProof, SeqTypes};
 <a href=#5 id=5 data-nosnippet>5</a><span class="kw">use </span>futures::{
-<a href=#6 id=6 data-nosnippet>6</a>    future::{try_join, FutureExt},
-<a href=#7 id=7 data-nosnippet>7</a>    stream::StreamExt,
-<a href=#8 id=8 data-nosnippet>8</a>    TryStreamExt,
+<a href=#6 id=6 data-nosnippet>6</a>    TryStreamExt,
+<a href=#7 id=7 data-nosnippet>7</a>    future::{FutureExt, try_join},
+<a href=#8 id=8 data-nosnippet>8</a>    stream::StreamExt,
 <a href=#9 id=9 data-nosnippet>9</a>};
 <a href=#10 id=10 data-nosnippet>10</a><span class="kw">use </span>hotshot_query_service::{
-<a href=#11 id=11 data-nosnippet>11</a>    availability::{<span class="self">self</span>, AvailabilityDataSource, LeafId},
-<a href=#12 id=12 data-nosnippet>12</a>    data_source::{storage::NodeStorage, VersionedDataSource},
-<a href=#13 id=13 data-nosnippet>13</a>    merklized_state::{MerklizedStateDataSource, Snapshot},
-<a href=#14 id=14 data-nosnippet>14</a>    node::BlockId,
-<a href=#15 id=15 data-nosnippet>15</a>    types::HeightIndexed,
-<a href=#16 id=16 data-nosnippet>16</a>    Error,
+<a href=#11 id=11 data-nosnippet>11</a>    Error,
+<a href=#12 id=12 data-nosnippet>12</a>    availability::{<span class="self">self</span>, AvailabilityDataSource, LeafId},
+<a href=#13 id=13 data-nosnippet>13</a>    data_source::{VersionedDataSource, storage::NodeStorage},
+<a href=#14 id=14 data-nosnippet>14</a>    merklized_state::{MerklizedStateDataSource, Snapshot},
+<a href=#15 id=15 data-nosnippet>15</a>    node::BlockId,
+<a href=#16 id=16 data-nosnippet>16</a>    types::HeightIndexed,
 <a href=#17 id=17 data-nosnippet>17</a>};
 <a href=#18 id=18 data-nosnippet>18</a><span class="kw">use </span>hotshot_types::utils::{epoch_from_block_number, root_block_in_epoch};
 <a href=#19 id=19 data-nosnippet>19</a><span class="kw">use </span>itertools::izip;
@@ -21,7 +21,7 @@
 <a href=#21 id=21 data-nosnippet>21</a><span class="kw">use </span>light_client::consensus::{
 <a href=#22 id=22 data-nosnippet>22</a>    header::HeaderProof, leaf::LeafProof, namespace::NamespaceProof, payload::PayloadProof,
 <a href=#23 id=23 data-nosnippet>23</a>};
-<a href=#24 id=24 data-nosnippet>24</a><span class="kw">use </span>tide_disco::{method::ReadState, Api, RequestParams, StatusCode};
+<a href=#24 id=24 data-nosnippet>24</a><span class="kw">use </span>tide_disco::{Api, RequestParams, StatusCode, method::ReadState};
 <a href=#25 id=25 data-nosnippet>25</a><span class="kw">use </span>vbs::version::StaticVersionType;
 <a href=#26 id=26 data-nosnippet>26</a>
 <a href=#27 id=27 data-nosnippet>27</a><span class="kw">use </span><span class="kw">crate</span>::api::data_source::{NodeStateDataSource, StakeTableDataSource};
@@ -556,7 +556,7 @@
 <a href=#556 id=556 data-nosnippet>556</a>    <span class="kw">use </span>futures::future::join_all;
 <a href=#557 id=557 data-nosnippet>557</a>    <span class="kw">use </span>hotshot_query_service::{
 <a href=#558 id=558 data-nosnippet>558</a>        availability::{BlockQueryData, TransactionIndex, VidCommonQueryData},
-<a href=#559 id=559 data-nosnippet>559</a>        data_source::{storage::UpdateAvailabilityStorage, Transaction},
+<a href=#559 id=559 data-nosnippet>559</a>        data_source::{Transaction, storage::UpdateAvailabilityStorage},
 <a href=#560 id=560 data-nosnippet>560</a>        merklized_state::UpdateStateData,
 <a href=#561 id=561 data-nosnippet>561</a>    };
 <a href=#562 id=562 data-nosnippet>562</a>    <span class="kw">use </span>hotshot_types::simple_certificate::CertificatePair;
@@ -564,8 +564,8 @@
 <a href=#564 id=564 data-nosnippet>564</a>    <span class="kw">use </span>light_client::{
 <a href=#565 id=565 data-nosnippet>565</a>        consensus::leaf::{FinalityProof, LeafProofHint},
 <a href=#566 id=566 data-nosnippet>566</a>        testing::{
-<a href=#567 id=567 data-nosnippet>567</a>            leaf_chain, leaf_chain_with_upgrade, AlwaysTrueQuorum, TestClient, VersionCheckQuorum,
-<a href=#568 id=568 data-nosnippet>568</a>            ENABLE_EPOCHS, LEGACY_VERSION,
+<a href=#567 id=567 data-nosnippet>567</a>            AlwaysTrueQuorum, ENABLE_EPOCHS, LEGACY_VERSION, TestClient, VersionCheckQuorum,
+<a href=#568 id=568 data-nosnippet>568</a>            leaf_chain, leaf_chain_with_upgrade,
 <a href=#569 id=569 data-nosnippet>569</a>        },
 <a href=#570 id=570 data-nosnippet>570</a>    };
 <a href=#571 id=571 data-nosnippet>571</a>    <span class="kw">use </span>tide_disco::Error;
@@ -573,7 +573,7 @@
 <a href=#573 id=573 data-nosnippet>573</a>
 <a href=#574 id=574 data-nosnippet>574</a>    <span class="kw">use </span>super::<span class="kw-2">*</span>;
 <a href=#575 id=575 data-nosnippet>575</a>    <span class="kw">use </span><span class="kw">crate</span>::api::{
-<a href=#576 id=576 data-nosnippet>576</a>        data_source::{testing::TestableSequencerDataSource, SequencerDataSource},
+<a href=#576 id=576 data-nosnippet>576</a>        data_source::{SequencerDataSource, testing::TestableSequencerDataSource},
 <a href=#577 id=577 data-nosnippet>577</a>        sql::DataSource,
 <a href=#578 id=578 data-nosnippet>578</a>    };
 <a href=#579 id=579 data-nosnippet>579</a>

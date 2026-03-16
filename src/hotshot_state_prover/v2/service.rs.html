@@ -4,11 +4,11 @@
 <a href=#4 id=4 data-nosnippet>4</a>
 <a href=#5 id=5 data-nosnippet>5</a><span class="kw">use </span>alloy::{
 <a href=#6 id=6 data-nosnippet>6</a>    network::EthereumWallet,
-<a href=#7 id=7 data-nosnippet>7</a>    primitives::{utils::format_units, Address, U256},
+<a href=#7 id=7 data-nosnippet>7</a>    primitives::{Address, U256, utils::format_units},
 <a href=#8 id=8 data-nosnippet>8</a>    providers::{Provider, ProviderBuilder},
 <a href=#9 id=9 data-nosnippet>9</a>    rpc::types::TransactionReceipt,
 <a href=#10 id=10 data-nosnippet>10</a>};
-<a href=#11 id=11 data-nosnippet>11</a><span class="kw">use </span>anyhow::{anyhow, Context, <span class="prelude-ty">Result</span>};
+<a href=#11 id=11 data-nosnippet>11</a><span class="kw">use </span>anyhow::{Context, <span class="prelude-ty">Result</span>, anyhow};
 <a href=#12 id=12 data-nosnippet>12</a><span class="kw">use </span>espresso_types::{SeqTypes, StateCertQueryDataV1};
 <a href=#13 id=13 data-nosnippet>13</a><span class="kw">use </span>futures::FutureExt;
 <a href=#14 id=14 data-nosnippet>14</a><span class="kw">use </span>hotshot_contract_adapter::{
@@ -30,15 +30,15 @@
 <a href=#30 id=30 data-nosnippet>30</a><span class="kw">use </span>jf_pcs::prelude::UnivariateUniversalParams;
 <a href=#31 id=31 data-nosnippet>31</a><span class="kw">use </span>jf_relation_compat::Circuit <span class="kw">as _</span>;
 <a href=#32 id=32 data-nosnippet>32</a><span class="kw">use </span>surf_disco::Client;
-<a href=#33 id=33 data-nosnippet>33</a><span class="kw">use </span>tide_disco::{error::ServerError, Api};
+<a href=#33 id=33 data-nosnippet>33</a><span class="kw">use </span>tide_disco::{Api, error::ServerError};
 <a href=#34 id=34 data-nosnippet>34</a><span class="kw">use </span>time::ext::InstantExt;
 <a href=#35 id=35 data-nosnippet>35</a><span class="kw">use </span>tokio::{io, spawn, task::spawn_blocking, time::sleep};
 <a href=#36 id=36 data-nosnippet>36</a><span class="kw">use </span>url::Url;
 <a href=#37 id=37 data-nosnippet>37</a><span class="kw">use </span>vbs::version::{StaticVersion, StaticVersionType};
 <a href=#38 id=38 data-nosnippet>38</a>
 <a href=#39 id=39 data-nosnippet>39</a><span class="kw">use </span>crate::{
-<a href=#40 id=40 data-nosnippet>40</a>    v2::snark::{Proof, ProvingKey, PublicInput},
-<a href=#41 id=41 data-nosnippet>41</a>    ProverError, ProverServiceState, StateProverConfig,
+<a href=#40 id=40 data-nosnippet>40</a>    ProverError, ProverServiceState, StateProverConfig,
+<a href=#41 id=41 data-nosnippet>41</a>    v2::snark::{Proof, ProvingKey, PublicInput},
 <a href=#42 id=42 data-nosnippet>42</a>};
 <a href=#43 id=43 data-nosnippet>43</a>
 <a href=#44 id=44 data-nosnippet>44</a><span class="kw">pub fn </span>load_proving_key(stake_table_capacity: usize) -&gt; ProvingKey {
@@ -522,10 +522,10 @@
 <a href=#522 id=522 data-nosnippet>522</a>    ));
 <a href=#523 id=523 data-nosnippet>523</a>
 <a href=#524 id=524 data-nosnippet>524</a>    <span class="comment">// Start the HTTP server to get a functioning healthcheck before any heavy computations.
-<a href=#525 id=525 data-nosnippet>525</a>    </span><span class="kw">if let </span><span class="prelude-val">Some</span>(port) = state.config.port {
-<a href=#526 id=526 data-nosnippet>526</a>        <span class="kw">if let </span><span class="prelude-val">Err</span>(err) = start_http_server(port, state.config.light_client_address, bind_version) {
-<a href=#527 id=527 data-nosnippet>527</a>            <span class="macro">tracing::error!</span>(<span class="string">"Error starting http server: {}"</span>, err);
-<a href=#528 id=528 data-nosnippet>528</a>        }
+<a href=#525 id=525 data-nosnippet>525</a>    </span><span class="kw">if let </span><span class="prelude-val">Some</span>(port) = state.config.port
+<a href=#526 id=526 data-nosnippet>526</a>        &amp;&amp; <span class="kw">let </span><span class="prelude-val">Err</span>(err) = start_http_server(port, state.config.light_client_address, bind_version)
+<a href=#527 id=527 data-nosnippet>527</a>    {
+<a href=#528 id=528 data-nosnippet>528</a>        <span class="macro">tracing::error!</span>(<span class="string">"Error starting http server: {}"</span>, err);
 <a href=#529 id=529 data-nosnippet>529</a>    }
 <a href=#530 id=530 data-nosnippet>530</a>
 <a href=#531 id=531 data-nosnippet>531</a>    <span class="kw">let </span>proving_key =
@@ -582,19 +582,19 @@
 <a href=#582 id=582 data-nosnippet>582</a>
 <a href=#583 id=583 data-nosnippet>583</a>    <span class="kw">use </span>alloy::{
 <a href=#584 id=584 data-nosnippet>584</a>        node_bindings::Anvil,
-<a href=#585 id=585 data-nosnippet>585</a>        providers::{layers::AnvilProvider, ProviderBuilder},
+<a href=#585 id=585 data-nosnippet>585</a>        providers::{ProviderBuilder, layers::AnvilProvider},
 <a href=#586 id=586 data-nosnippet>586</a>        sol_types::SolValue,
 <a href=#587 id=587 data-nosnippet>587</a>    };
 <a href=#588 id=588 data-nosnippet>588</a>    <span class="kw">use </span>anyhow::Result;
 <a href=#589 id=589 data-nosnippet>589</a>    <span class="kw">use </span>espresso_contract_deployer::{
-<a href=#590 id=590 data-nosnippet>590</a>        deploy_light_client_proxy, upgrade_light_client_v2, Contracts,
+<a href=#590 id=590 data-nosnippet>590</a>        Contracts, deploy_light_client_proxy, upgrade_light_client_v2,
 <a href=#591 id=591 data-nosnippet>591</a>    };
 <a href=#592 id=592 data-nosnippet>592</a>    <span class="kw">use </span>hotshot_contract_adapter::sol_types::LightClientV2Mock;
 <a href=#593 id=593 data-nosnippet>593</a>    <span class="kw">use </span>jf_utils::test_rng;
 <a href=#594 id=594 data-nosnippet>594</a>
 <a href=#595 id=595 data-nosnippet>595</a>    <span class="kw">use </span>super::<span class="kw-2">*</span>;
 <a href=#596 id=596 data-nosnippet>596</a>    <span class="kw">use </span><span class="kw">crate</span>::v2::mock_ledger::{
-<a href=#597 id=597 data-nosnippet>597</a>        MockLedger, MockSystemParam, EPOCH_HEIGHT_FOR_TEST, EPOCH_START_BLOCK_FOR_TEST,
+<a href=#597 id=597 data-nosnippet>597</a>        EPOCH_HEIGHT_FOR_TEST, EPOCH_START_BLOCK_FOR_TEST, MockLedger, MockSystemParam,
 <a href=#598 id=598 data-nosnippet>598</a>        STAKE_TABLE_CAPACITY_FOR_TEST,
 <a href=#599 id=599 data-nosnippet>599</a>    };
 <a href=#600 id=600 data-nosnippet>600</a>

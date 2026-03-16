@@ -5,7 +5,7 @@
 <a href=#5 id=5 data-nosnippet>5</a>// along with the HotShot repository. If not, see &lt;https://mit-license.org/&gt;.
 <a href=#6 id=6 data-nosnippet>6</a>
 <a href=#7 id=7 data-nosnippet>7</a></span><span class="kw">use </span>futures::Future;
-<a href=#8 id=8 data-nosnippet>8</a><span class="kw">use </span>tokio::task::{spawn, JoinHandle};
+<a href=#8 id=8 data-nosnippet>8</a><span class="kw">use </span>tokio::task::{JoinHandle, spawn};
 <a href=#9 id=9 data-nosnippet>9</a>
 <a href=#10 id=10 data-nosnippet>10</a><span class="kw">use </span><span class="kw">crate</span>::dependency::Dependency;
 <a href=#11 id=11 data-nosnippet>11</a>
@@ -53,8 +53,8 @@
 <a href=#53 id=53 data-nosnippet>53</a>
 <a href=#54 id=54 data-nosnippet>54</a>    <span class="kw">use </span>std::time::Duration;
 <a href=#55 id=55 data-nosnippet>55</a>
-<a href=#56 id=56 data-nosnippet>56</a>    <span class="kw">use </span>async_broadcast::{broadcast, Receiver, Sender};
-<a href=#57 id=57 data-nosnippet>57</a>    <span class="kw">use </span>futures::{stream::FuturesOrdered, StreamExt};
+<a href=#56 id=56 data-nosnippet>56</a>    <span class="kw">use </span>async_broadcast::{Receiver, Sender, broadcast};
+<a href=#57 id=57 data-nosnippet>57</a>    <span class="kw">use </span>futures::{StreamExt, stream::FuturesOrdered};
 <a href=#58 id=58 data-nosnippet>58</a>    <span class="kw">use </span>tokio::time::sleep;
 <a href=#59 id=59 data-nosnippet>59</a>
 <a href=#60 id=60 data-nosnippet>60</a>    <span class="kw">use </span>super::<span class="kw-2">*</span>;

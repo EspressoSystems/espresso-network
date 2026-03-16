@@ -102,8 +102,8 @@
 <a href=#102 id=102 data-nosnippet>102</a><span class="kw">use </span>api::node_validator::v0::SurfDiscoAvailabilityAPIStream;
 <a href=#103 id=103 data-nosnippet>103</a><span class="kw">use </span>clap::Parser;
 <a href=#104 id=104 data-nosnippet>104</a><span class="kw">use </span>futures::{
-<a href=#105 id=105 data-nosnippet>105</a>    channel::mpsc::{<span class="self">self</span>, Sender},
-<a href=#106 id=106 data-nosnippet>106</a>    StreamExt,
+<a href=#105 id=105 data-nosnippet>105</a>    StreamExt,
+<a href=#106 id=106 data-nosnippet>106</a>    channel::mpsc::{<span class="self">self</span>, Sender},
 <a href=#107 id=107 data-nosnippet>107</a>};
 <a href=#108 id=108 data-nosnippet>108</a><span class="kw">use </span>service::data_state::MAX_VOTERS_HISTORY;
 <a href=#109 id=109 data-nosnippet>109</a><span class="kw">use </span>tide_disco::App;
@@ -112,8 +112,8 @@
 <a href=#112 id=112 data-nosnippet>112</a>
 <a href=#113 id=113 data-nosnippet>113</a><span class="kw">use </span>crate::{
 <a href=#114 id=114 data-nosnippet>114</a>    api::node_validator::v0::{
-<a href=#115 id=115 data-nosnippet>115</a>        create_node_validator_api::{create_node_validator_processing, NodeValidatorConfig},
-<a href=#116 id=116 data-nosnippet>116</a>        BridgeLeafAndBlockStreamToSenderTask, StateClientMessageSender, STATIC_VER_0_1,
+<a href=#115 id=115 data-nosnippet>115</a>        BridgeLeafAndBlockStreamToSenderTask, STATIC_VER_0_1, StateClientMessageSender,
+<a href=#116 id=116 data-nosnippet>116</a>        create_node_validator_api::{NodeValidatorConfig, create_node_validator_processing},
 <a href=#117 id=117 data-nosnippet>117</a>    },
 <a href=#118 id=118 data-nosnippet>118</a>    service::{client_message::InternalClientMessage, server_message::ServerMessage},
 <a href=#119 id=119 data-nosnippet>119</a>};

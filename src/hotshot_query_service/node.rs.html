@@ -27,10 +27,10 @@
 <a href=#27 id=27 data-nosnippet>27</a><span class="kw">use </span>hotshot_types::traits::node_implementation::NodeType;
 <a href=#28 id=28 data-nosnippet>28</a><span class="kw">use </span>serde::{Deserialize, Serialize};
 <a href=#29 id=29 data-nosnippet>29</a><span class="kw">use </span>snafu::{ResultExt, Snafu};
-<a href=#30 id=30 data-nosnippet>30</a><span class="kw">use </span>tide_disco::{api::ApiError, method::ReadState, Api, RequestError, StatusCode};
+<a href=#30 id=30 data-nosnippet>30</a><span class="kw">use </span>tide_disco::{Api, RequestError, StatusCode, api::ApiError, method::ReadState};
 <a href=#31 id=31 data-nosnippet>31</a><span class="kw">use </span>vbs::version::StaticVersionType;
 <a href=#32 id=32 data-nosnippet>32</a>
-<a href=#33 id=33 data-nosnippet>33</a><span class="kw">use </span>crate::{api::load_api, availability::QueryableHeader, Header, QueryError};
+<a href=#33 id=33 data-nosnippet>33</a><span class="kw">use </span>crate::{Header, QueryError, api::load_api, availability::QueryableHeader};
 <a href=#34 id=34 data-nosnippet>34</a>
 <a href=#35 id=35 data-nosnippet>35</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>data_source;
 <a href=#36 id=36 data-nosnippet>36</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>query_data;
@@ -226,8 +226,8 @@
 <a href=#226 id=226 data-nosnippet>226</a>        data::{VidDisperseShare, VidShare},
 <a href=#227 id=227 data-nosnippet>227</a>        event::{EventType, LeafInfo},
 <a href=#228 id=228 data-nosnippet>228</a>        traits::{
-<a href=#229 id=229 data-nosnippet>229</a>            block_contents::{BlockHeader, BlockPayload},
-<a href=#230 id=230 data-nosnippet>230</a>            EncodeBytes,
+<a href=#229 id=229 data-nosnippet>229</a>            EncodeBytes,
+<a href=#230 id=230 data-nosnippet>230</a>            block_contents::{BlockHeader, BlockPayload},
 <a href=#231 id=231 data-nosnippet>231</a>        },
 <a href=#232 id=232 data-nosnippet>232</a>    };
 <a href=#233 id=233 data-nosnippet>233</a>    <span class="kw">use </span>surf_disco::Client;
@@ -239,13 +239,13 @@
 <a href=#239 id=239 data-nosnippet>239</a>
 <a href=#240 id=240 data-nosnippet>240</a>    <span class="kw">use </span>super::<span class="kw-2">*</span>;
 <a href=#241 id=241 data-nosnippet>241</a>    <span class="kw">use </span>crate::{
-<a href=#242 id=242 data-nosnippet>242</a>        data_source::ExtensibleDataSource,
-<a href=#243 id=243 data-nosnippet>243</a>        task::BackgroundTask,
-<a href=#244 id=244 data-nosnippet>244</a>        testing::{
-<a href=#245 id=245 data-nosnippet>245</a>            consensus::{MockDataSource, MockNetwork, MockSqlDataSource},
-<a href=#246 id=246 data-nosnippet>246</a>            mocks::{mock_transaction, MockBase, MockTypes},
-<a href=#247 id=247 data-nosnippet>247</a>        },
-<a href=#248 id=248 data-nosnippet>248</a>        ApiState, Error, Header,
+<a href=#242 id=242 data-nosnippet>242</a>        ApiState, Error, Header,
+<a href=#243 id=243 data-nosnippet>243</a>        data_source::ExtensibleDataSource,
+<a href=#244 id=244 data-nosnippet>244</a>        task::BackgroundTask,
+<a href=#245 id=245 data-nosnippet>245</a>        testing::{
+<a href=#246 id=246 data-nosnippet>246</a>            consensus::{MockDataSource, MockNetwork, MockSqlDataSource},
+<a href=#247 id=247 data-nosnippet>247</a>            mocks::{MockBase, MockTypes, mock_transaction},
+<a href=#248 id=248 data-nosnippet>248</a>        },
 <a href=#249 id=249 data-nosnippet>249</a>    };
 <a href=#250 id=250 data-nosnippet>250</a>
 <a href=#251 id=251 data-nosnippet>251</a>    <span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]

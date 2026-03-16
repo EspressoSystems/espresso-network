@@ -21,7 +21,7 @@
 <a href=#21 id=21 data-nosnippet>21</a>    traits::{
 <a href=#22 id=22 data-nosnippet>22</a>        block_contents::BlockHeader, node_implementation::NodeType, signature_key::SignatureKey,
 <a href=#23 id=23 data-nosnippet>23</a>    },
-<a href=#24 id=24 data-nosnippet>24</a>    utils::{epoch_from_block_number, EpochTransitionIndicator},
+<a href=#24 id=24 data-nosnippet>24</a>    utils::{EpochTransitionIndicator, epoch_from_block_number},
 <a href=#25 id=25 data-nosnippet>25</a>    vote::HasViewNumber,
 <a href=#26 id=26 data-nosnippet>26</a>};
 <a href=#27 id=27 data-nosnippet>27</a><span class="kw">use </span>hotshot_utils::anytrace::<span class="kw-2">*</span>;
@@ -31,7 +31,7 @@
 <a href=#31 id=31 data-nosnippet>31</a><span class="kw">use </span>crate::{
 <a href=#32 id=32 data-nosnippet>32</a>    events::HotShotEvent,
 <a href=#33 id=33 data-nosnippet>33</a>    helpers::broadcast_event,
-<a href=#34 id=34 data-nosnippet>34</a>    vote_collection::{handle_vote, VoteCollectorsMap},
+<a href=#34 id=34 data-nosnippet>34</a>    vote_collection::{VoteCollectorsMap, handle_vote},
 <a href=#35 id=35 data-nosnippet>35</a>};
 <a href=#36 id=36 data-nosnippet>36</a>
 <a href=#37 id=37 data-nosnippet>37</a><span class="doccomment">/// Tracks state of an upgrade task
@@ -277,7 +277,7 @@
 <a href=#277 id=277 data-nosnippet>277</a>                <span class="macro">tracing::debug!</span>(<span class="string">"Sending upgrade vote {:?}"</span>, vote.view_number());
 <a href=#278 id=278 data-nosnippet>278</a>                broadcast_event(Arc::new(HotShotEvent::UpgradeVoteSend(vote)), <span class="kw-2">&amp;</span>tx).<span class="kw">await</span>;
 <a href=#279 id=279 data-nosnippet>279</a>            },
-<a href=#280 id=280 data-nosnippet>280</a>            HotShotEvent::UpgradeVoteRecv(<span class="kw-2">ref </span>vote) =&gt; {
+<a href=#280 id=280 data-nosnippet>280</a>            HotShotEvent::UpgradeVoteRecv(vote) =&gt; {
 <a href=#281 id=281 data-nosnippet>281</a>                <span class="macro">tracing::debug!</span>(<span class="string">"Upgrade vote recv, Main Task {:?}"</span>, vote.view_number());
 <a href=#282 id=282 data-nosnippet>282</a>
 <a href=#283 id=283 data-nosnippet>283</a>                <span class="comment">// Check if we are the leader.

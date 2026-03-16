@@ -6,12 +6,12 @@
 <a href=#6 id=6 data-nosnippet>6</a>    time::{Duration, Instant},
 <a href=#7 id=7 data-nosnippet>7</a>};
 <a href=#8 id=8 data-nosnippet>8</a>
-<a href=#9 id=9 data-nosnippet>9</a><span class="kw">pub use </span>async_broadcast::{broadcast, RecvError, TryRecvError};
+<a href=#9 id=9 data-nosnippet>9</a><span class="kw">pub use </span>async_broadcast::{RecvError, TryRecvError, broadcast};
 <a href=#10 id=10 data-nosnippet>10</a><span class="kw">use </span>async_broadcast::{Sender <span class="kw">as </span>BroadcastSender, TrySendError};
 <a href=#11 id=11 data-nosnippet>11</a><span class="kw">use </span>async_lock::RwLock;
 <a href=#12 id=12 data-nosnippet>12</a><span class="kw">use </span>async_trait::async_trait;
 <a href=#13 id=13 data-nosnippet>13</a><span class="kw">use </span>committable::{Commitment, Committable};
-<a href=#14 id=14 data-nosnippet>14</a><span class="kw">use </span>futures::{future::BoxFuture, stream::StreamExt, Stream};
+<a href=#14 id=14 data-nosnippet>14</a><span class="kw">use </span>futures::{Stream, future::BoxFuture, stream::StreamExt};
 <a href=#15 id=15 data-nosnippet>15</a><span class="kw">use </span>hotshot::types::Event;
 <a href=#16 id=16 data-nosnippet>16</a><span class="kw">use </span>hotshot_builder_api::{
 <a href=#17 id=17 data-nosnippet>17</a>    v0_1::{
@@ -1544,13 +1544,13 @@
 <a href=#1544 id=1544 data-nosnippet>1544</a>    };
 <a href=#1545 id=1545 data-nosnippet>1545</a>    <span class="kw">use </span>hotshot_example_types::{
 <a href=#1546 id=1546 data-nosnippet>1546</a>        block_types::{TestBlockPayload, TestMetadata, TestTransaction},
-<a href=#1547 id=1547 data-nosnippet>1547</a>        node_types::{TestTypes, TEST_VERSIONS},
+<a href=#1547 id=1547 data-nosnippet>1547</a>        node_types::{TEST_VERSIONS, TestTypes},
 <a href=#1548 id=1548 data-nosnippet>1548</a>        state_types::{TestInstanceState, TestValidatedState},
 <a href=#1549 id=1549 data-nosnippet>1549</a>    };
 <a href=#1550 id=1550 data-nosnippet>1550</a>    <span class="kw">use </span>hotshot_types::{
 <a href=#1551 id=1551 data-nosnippet>1551</a>        data::{
-<a href=#1552 id=1552 data-nosnippet>1552</a>            vid_commitment, DaProposal2, EpochNumber, Leaf, Leaf2, QuorumProposal2,
-<a href=#1553 id=1553 data-nosnippet>1553</a>            QuorumProposalWrapper, VidCommitment, ViewNumber,
+<a href=#1552 id=1552 data-nosnippet>1552</a>            DaProposal2, EpochNumber, Leaf, Leaf2, QuorumProposal2, QuorumProposalWrapper,
+<a href=#1553 id=1553 data-nosnippet>1553</a>            VidCommitment, ViewNumber, vid_commitment,
 <a href=#1554 id=1554 data-nosnippet>1554</a>        },
 <a href=#1555 id=1555 data-nosnippet>1555</a>        message::Proposal,
 <a href=#1556 id=1556 data-nosnippet>1556</a>        simple_certificate::QuorumCertificate2,
@@ -1564,9 +1564,9 @@
 <a href=#1564 id=1564 data-nosnippet>1564</a>    };
 <a href=#1565 id=1565 data-nosnippet>1565</a>
 <a href=#1566 id=1566 data-nosnippet>1566</a>    <span class="kw">use </span>super::{
-<a href=#1567 id=1567 data-nosnippet>1567</a>        handle_da_event_implementation, handle_quorum_event_implementation, AvailableBlocksError,
-<a href=#1568 id=1568 data-nosnippet>1568</a>        BlockInfo, ClaimBlockError, ClaimBlockHeaderInputError, GlobalState, HandleDaEventError,
-<a href=#1569 id=1569 data-nosnippet>1569</a>        HandleQuorumEventError, HandleReceivedTxns, ProxyGlobalState,
+<a href=#1567 id=1567 data-nosnippet>1567</a>        AvailableBlocksError, BlockInfo, ClaimBlockError, ClaimBlockHeaderInputError, GlobalState,
+<a href=#1568 id=1568 data-nosnippet>1568</a>        HandleDaEventError, HandleQuorumEventError, HandleReceivedTxns, ProxyGlobalState,
+<a href=#1569 id=1569 data-nosnippet>1569</a>        handle_da_event_implementation, handle_quorum_event_implementation,
 <a href=#1570 id=1570 data-nosnippet>1570</a>    };
 <a href=#1571 id=1571 data-nosnippet>1571</a>    <span class="kw">use </span>crate::{
 <a href=#1572 id=1572 data-nosnippet>1572</a>        builder_state::{

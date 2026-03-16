@@ -11,19 +11,19 @@
 <a href=#11 id=11 data-nosnippet>11</a>    rpc::types::{TransactionInput, TransactionRequest},
 <a href=#12 id=12 data-nosnippet>12</a>    sol_types::SolCall,
 <a href=#13 id=13 data-nosnippet>13</a>};
-<a href=#14 id=14 data-nosnippet>14</a><span class="kw">use </span>anyhow::{bail, Context, <span class="prelude-ty">Result</span>};
+<a href=#14 id=14 data-nosnippet>14</a><span class="kw">use </span>anyhow::{Context, <span class="prelude-ty">Result</span>, bail};
 <a href=#15 id=15 data-nosnippet>15</a><span class="kw">use </span>hotshot_contract_adapter::{
 <a href=#16 id=16 data-nosnippet>16</a>    evm::DecodeRevert,
 <a href=#17 id=17 data-nosnippet>17</a>    sol_types::{
 <a href=#18 id=18 data-nosnippet>18</a>        EdOnBN254PointSol,
-<a href=#19 id=19 data-nosnippet>19</a>        EspToken::{approveCall, transferCall, EspTokenErrors},
+<a href=#19 id=19 data-nosnippet>19</a>        EspToken::{EspTokenErrors, approveCall, transferCall},
 <a href=#20 id=20 data-nosnippet>20</a>        G1PointSol, G2PointSol,
-<a href=#21 id=21 data-nosnippet>21</a>        RewardClaim::{claimRewardsCall, RewardClaimErrors},
+<a href=#21 id=21 data-nosnippet>21</a>        RewardClaim::{RewardClaimErrors, claimRewardsCall},
 <a href=#22 id=22 data-nosnippet>22</a>        StakeTableV2::{
-<a href=#23 id=23 data-nosnippet>23</a>            claimValidatorExitCall, claimWithdrawalCall, delegateCall, deregisterValidatorCall,
-<a href=#24 id=24 data-nosnippet>24</a>            registerValidatorCall, registerValidatorV2Call, undelegateCall, updateCommissionCall,
-<a href=#25 id=25 data-nosnippet>25</a>            updateConsensusKeysCall, updateConsensusKeysV2Call, updateMetadataUriCall,
-<a href=#26 id=26 data-nosnippet>26</a>            StakeTableV2Errors,
+<a href=#23 id=23 data-nosnippet>23</a>            StakeTableV2Errors, claimValidatorExitCall, claimWithdrawalCall, delegateCall,
+<a href=#24 id=24 data-nosnippet>24</a>            deregisterValidatorCall, registerValidatorCall, registerValidatorV2Call,
+<a href=#25 id=25 data-nosnippet>25</a>            undelegateCall, updateCommissionCall, updateConsensusKeysCall,
+<a href=#26 id=26 data-nosnippet>26</a>            updateConsensusKeysV2Call, updateMetadataUriCall,
 <a href=#27 id=27 data-nosnippet>27</a>        },
 <a href=#28 id=28 data-nosnippet>28</a>    },
 <a href=#29 id=29 data-nosnippet>29</a>    stake_table::{StakeTableContractVersion, StateSignatureSol},

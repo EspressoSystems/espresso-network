@@ -11,7 +11,7 @@
 <a href=#11 id=11 data-nosnippet>11</a>    time::{Duration, Instant},
 <a href=#12 id=12 data-nosnippet>12</a>};
 <a href=#13 id=13 data-nosnippet>13</a>
-<a href=#14 id=14 data-nosnippet>14</a><span class="kw">use </span>anyhow::{anyhow, Context, <span class="prelude-ty">Result</span>};
+<a href=#14 id=14 data-nosnippet>14</a><span class="kw">use </span>anyhow::{Context, <span class="prelude-ty">Result</span>, anyhow};
 <a href=#15 id=15 data-nosnippet>15</a><span class="kw">use </span>data_source::DataSource;
 <a href=#16 id=16 data-nosnippet>16</a><span class="kw">use </span>derive_more::derive::Deref;
 <a href=#17 id=17 data-nosnippet>17</a><span class="kw">use </span>hotshot_types::traits::signature_key::SignatureKey;
@@ -150,13 +150,13 @@
 <a href=#150 id=150 data-nosnippet>150</a><span class="doccomment">/// We need to manually implement the `Clone` trait for this type because deriving
 <a href=#151 id=151 data-nosnippet>151</a>/// `Deref` will cause an issue where it tries to clone the inner field instead
 <a href=#152 id=152 data-nosnippet>152</a></span><span class="kw">impl</span>&lt;
-<a href=#153 id=153 data-nosnippet>153</a>        S: Sender&lt;K&gt;,
-<a href=#154 id=154 data-nosnippet>154</a>        R: Receiver,
-<a href=#155 id=155 data-nosnippet>155</a>        Req: Request,
-<a href=#156 id=156 data-nosnippet>156</a>        RS: RecipientSource&lt;Req, K&gt;,
-<a href=#157 id=157 data-nosnippet>157</a>        DS: DataSource&lt;Req&gt;,
-<a href=#158 id=158 data-nosnippet>158</a>        K: SignatureKey + <span class="lifetime">'static</span>,
-<a href=#159 id=159 data-nosnippet>159</a>    &gt; Clone <span class="kw">for </span>RequestResponse&lt;S, R, Req, RS, DS, K&gt;
+<a href=#153 id=153 data-nosnippet>153</a>    S: Sender&lt;K&gt;,
+<a href=#154 id=154 data-nosnippet>154</a>    R: Receiver,
+<a href=#155 id=155 data-nosnippet>155</a>    Req: Request,
+<a href=#156 id=156 data-nosnippet>156</a>    RS: RecipientSource&lt;Req, K&gt;,
+<a href=#157 id=157 data-nosnippet>157</a>    DS: DataSource&lt;Req&gt;,
+<a href=#158 id=158 data-nosnippet>158</a>    K: SignatureKey + <span class="lifetime">'static</span>,
+<a href=#159 id=159 data-nosnippet>159</a>&gt; Clone <span class="kw">for </span>RequestResponse&lt;S, R, Req, RS, DS, K&gt;
 <a href=#160 id=160 data-nosnippet>160</a>{
 <a href=#161 id=161 data-nosnippet>161</a>    <span class="kw">fn </span>clone(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="self">Self </span>{
 <a href=#162 id=162 data-nosnippet>162</a>        <span class="self">Self </span>{
@@ -167,13 +167,13 @@
 <a href=#167 id=167 data-nosnippet>167</a>}
 <a href=#168 id=168 data-nosnippet>168</a>
 <a href=#169 id=169 data-nosnippet>169</a><span class="kw">impl</span>&lt;
-<a href=#170 id=170 data-nosnippet>170</a>        S: Sender&lt;K&gt;,
-<a href=#171 id=171 data-nosnippet>171</a>        R: Receiver,
-<a href=#172 id=172 data-nosnippet>172</a>        Req: Request,
-<a href=#173 id=173 data-nosnippet>173</a>        RS: RecipientSource&lt;Req, K&gt;,
-<a href=#174 id=174 data-nosnippet>174</a>        DS: DataSource&lt;Req&gt;,
-<a href=#175 id=175 data-nosnippet>175</a>        K: SignatureKey + <span class="lifetime">'static</span>,
-<a href=#176 id=176 data-nosnippet>176</a>    &gt; RequestResponse&lt;S, R, Req, RS, DS, K&gt;
+<a href=#170 id=170 data-nosnippet>170</a>    S: Sender&lt;K&gt;,
+<a href=#171 id=171 data-nosnippet>171</a>    R: Receiver,
+<a href=#172 id=172 data-nosnippet>172</a>    Req: Request,
+<a href=#173 id=173 data-nosnippet>173</a>    RS: RecipientSource&lt;Req, K&gt;,
+<a href=#174 id=174 data-nosnippet>174</a>    DS: DataSource&lt;Req&gt;,
+<a href=#175 id=175 data-nosnippet>175</a>    K: SignatureKey + <span class="lifetime">'static</span>,
+<a href=#176 id=176 data-nosnippet>176</a>&gt; RequestResponse&lt;S, R, Req, RS, DS, K&gt;
 <a href=#177 id=177 data-nosnippet>177</a>{
 <a href=#178 id=178 data-nosnippet>178</a>    <span class="doccomment">/// Create a new [`RequestResponseProtocol`]
 <a href=#179 id=179 data-nosnippet>179</a>    </span><span class="kw">pub fn </span>new(
@@ -251,13 +251,13 @@
 <a href=#251 id=251 data-nosnippet>251</a>    </span>phantom_data: PhantomData&lt;(K, R, Req, DS)&gt;,
 <a href=#252 id=252 data-nosnippet>252</a>}
 <a href=#253 id=253 data-nosnippet>253</a><span class="kw">impl</span>&lt;
-<a href=#254 id=254 data-nosnippet>254</a>        S: Sender&lt;K&gt;,
-<a href=#255 id=255 data-nosnippet>255</a>        R: Receiver,
-<a href=#256 id=256 data-nosnippet>256</a>        Req: Request,
-<a href=#257 id=257 data-nosnippet>257</a>        RS: RecipientSource&lt;Req, K&gt;,
-<a href=#258 id=258 data-nosnippet>258</a>        DS: DataSource&lt;Req&gt;,
-<a href=#259 id=259 data-nosnippet>259</a>        K: SignatureKey + <span class="lifetime">'static</span>,
-<a href=#260 id=260 data-nosnippet>260</a>    &gt; RequestResponseInner&lt;S, R, Req, RS, DS, K&gt;
+<a href=#254 id=254 data-nosnippet>254</a>    S: Sender&lt;K&gt;,
+<a href=#255 id=255 data-nosnippet>255</a>    R: Receiver,
+<a href=#256 id=256 data-nosnippet>256</a>    Req: Request,
+<a href=#257 id=257 data-nosnippet>257</a>    RS: RecipientSource&lt;Req, K&gt;,
+<a href=#258 id=258 data-nosnippet>258</a>    DS: DataSource&lt;Req&gt;,
+<a href=#259 id=259 data-nosnippet>259</a>    K: SignatureKey + <span class="lifetime">'static</span>,
+<a href=#260 id=260 data-nosnippet>260</a>&gt; RequestResponseInner&lt;S, R, Req, RS, DS, K&gt;
 <a href=#261 id=261 data-nosnippet>261</a>{
 <a href=#262 id=262 data-nosnippet>262</a>    <span class="doccomment">/// Request something from the protocol indefinitely until we get a response
 <a href=#263 id=263 data-nosnippet>263</a>    /// or there was a critical error (e.g. the request could not be signed)
@@ -727,7 +727,7 @@
 <a href=#727 id=727 data-nosnippet>727</a></span><span class="kw">mod </span>tests {
 <a href=#728 id=728 data-nosnippet>728</a>    <span class="kw">use </span>std::{
 <a href=#729 id=729 data-nosnippet>729</a>        collections::HashMap,
-<a href=#730 id=730 data-nosnippet>730</a>        sync::{atomic::AtomicBool, Mutex},
+<a href=#730 id=730 data-nosnippet>730</a>        sync::{Mutex, atomic::AtomicBool},
 <a href=#731 id=731 data-nosnippet>731</a>    };
 <a href=#732 id=732 data-nosnippet>732</a>
 <a href=#733 id=733 data-nosnippet>733</a>    <span class="kw">use </span>async_trait::async_trait;
@@ -993,7 +993,7 @@
 <a href=#993 id=993 data-nosnippet>993</a>                    .push(Arc::clone(<span class="kw-2">&amp;</span>protocol._receiving_task_handle));
 <a href=#994 id=994 data-nosnippet>994</a>
 <a href=#995 id=995 data-nosnippet>995</a>                <span class="comment">// Create a random request
-<a href=#996 id=996 data-nosnippet>996</a>                </span><span class="kw">let </span>request = TestRequest(<span class="macro">vec!</span>[rand::thread_rng().<span class="kw">gen</span>(); <span class="number">100</span>]);
+<a href=#996 id=996 data-nosnippet>996</a>                </span><span class="kw">let </span>request = TestRequest(<span class="macro">vec!</span>[rand::thread_rng().r#gen(); <span class="number">100</span>]);
 <a href=#997 id=997 data-nosnippet>997</a>
 <a href=#998 id=998 data-nosnippet>998</a>                <span class="comment">// Get the hash of the request
 <a href=#999 id=999 data-nosnippet>999</a>                </span><span class="kw">let </span>request_hash = blake3::hash(<span class="kw-2">&amp;</span>request.<span class="number">0</span>).as_bytes().to_vec();
@@ -1119,7 +1119,7 @@
 <a href=#1119 id=1119 data-nosnippet>1119</a>        </span><span class="kw">let </span>one = Arc::new(participants.remove(<span class="number">0</span>));
 <a href=#1120 id=1120 data-nosnippet>1120</a>
 <a href=#1121 id=1121 data-nosnippet>1121</a>        <span class="comment">// Create the request that they should all be able to join on
-<a href=#1122 id=1122 data-nosnippet>1122</a>        </span><span class="kw">let </span>request = TestRequest(<span class="macro">vec!</span>[rand::thread_rng().<span class="kw">gen</span>(); <span class="number">100</span>]);
+<a href=#1122 id=1122 data-nosnippet>1122</a>        </span><span class="kw">let </span>request = TestRequest(<span class="macro">vec!</span>[rand::thread_rng().r#gen(); <span class="number">100</span>]);
 <a href=#1123 id=1123 data-nosnippet>1123</a>
 <a href=#1124 id=1124 data-nosnippet>1124</a>        <span class="comment">// Create a join set to wait for all the tasks to finish
 <a href=#1125 id=1125 data-nosnippet>1125</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>join_set = JoinSet::new();

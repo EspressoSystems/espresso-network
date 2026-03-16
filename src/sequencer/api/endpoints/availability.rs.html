@@ -2,37 +2,37 @@
 <a href=#2 id=2 data-nosnippet>2</a>
 <a href=#3 id=3 data-nosnippet>3</a><span class="kw">use </span>espresso_types::{NamespaceId, NsProof, PubKey, StateCertQueryDataV1, StateCertQueryDataV2};
 <a href=#4 id=4 data-nosnippet>4</a><span class="kw">use </span>futures::{
-<a href=#5 id=5 data-nosnippet>5</a>    future::{try_join_all, FutureExt, TryFutureExt},
+<a href=#5 id=5 data-nosnippet>5</a>    future::{FutureExt, TryFutureExt, try_join_all},
 <a href=#6 id=6 data-nosnippet>6</a>    join,
 <a href=#7 id=7 data-nosnippet>7</a>    stream::{Stream, StreamExt, TryStreamExt},
 <a href=#8 id=8 data-nosnippet>8</a>    try_join,
 <a href=#9 id=9 data-nosnippet>9</a>};
 <a href=#10 id=10 data-nosnippet>10</a><span class="kw">use </span>hotshot_query_service::{
-<a href=#11 id=11 data-nosnippet>11</a>    availability::{
-<a href=#12 id=12 data-nosnippet>12</a>        <span class="self">self</span>, AvailabilityDataSource, BlockQueryData, Error, FetchBlockSnafu, VidCommonQueryData,
-<a href=#13 id=13 data-nosnippet>13</a>    },
-<a href=#14 id=14 data-nosnippet>14</a>    node::{BlockId, NodeDataSource},
-<a href=#15 id=15 data-nosnippet>15</a>    types::HeightIndexed,
-<a href=#16 id=16 data-nosnippet>16</a>    ApiState,
+<a href=#11 id=11 data-nosnippet>11</a>    ApiState,
+<a href=#12 id=12 data-nosnippet>12</a>    availability::{
+<a href=#13 id=13 data-nosnippet>13</a>        <span class="self">self</span>, AvailabilityDataSource, BlockQueryData, Error, FetchBlockSnafu, VidCommonQueryData,
+<a href=#14 id=14 data-nosnippet>14</a>    },
+<a href=#15 id=15 data-nosnippet>15</a>    node::{BlockId, NodeDataSource},
+<a href=#16 id=16 data-nosnippet>16</a>    types::HeightIndexed,
 <a href=#17 id=17 data-nosnippet>17</a>};
 <a href=#18 id=18 data-nosnippet>18</a><span class="kw">use </span>hotshot_types::{
 <a href=#19 id=19 data-nosnippet>19</a>    data::VidShare, simple_certificate::LightClientStateUpdateCertificateV2,
 <a href=#20 id=20 data-nosnippet>20</a>    traits::network::ConnectedNetwork, vid::avidm::AvidMShare,
 <a href=#21 id=21 data-nosnippet>21</a>};
 <a href=#22 id=22 data-nosnippet>22</a><span class="kw">use </span>snafu::OptionExt;
-<a href=#23 id=23 data-nosnippet>23</a><span class="kw">use </span>tide_disco::{method::ReadState, Api, RequestParams, StatusCode};
+<a href=#23 id=23 data-nosnippet>23</a><span class="kw">use </span>tide_disco::{Api, RequestParams, StatusCode, method::ReadState};
 <a href=#24 id=24 data-nosnippet>24</a><span class="kw">use </span>tracing::warn;
 <a href=#25 id=25 data-nosnippet>25</a><span class="kw">use </span>vbs::version::StaticVersionType;
 <a href=#26 id=26 data-nosnippet>26</a>
 <a href=#27 id=27 data-nosnippet>27</a><span class="kw">use </span>crate::{
-<a href=#28 id=28 data-nosnippet>28</a>    api::{
-<a href=#29 id=29 data-nosnippet>29</a>        data_source::{
-<a href=#30 id=30 data-nosnippet>30</a>            RequestResponseDataSource, SequencerDataSource, StateCertDataSource,
-<a href=#31 id=31 data-nosnippet>31</a>            StateCertFetchingDataSource,
-<a href=#32 id=32 data-nosnippet>32</a>        },
-<a href=#33 id=33 data-nosnippet>33</a>        StorageState,
-<a href=#34 id=34 data-nosnippet>34</a>    },
-<a href=#35 id=35 data-nosnippet>35</a>    SeqTypes, SequencerApiVersion, SequencerPersistence,
+<a href=#28 id=28 data-nosnippet>28</a>    SeqTypes, SequencerApiVersion, SequencerPersistence,
+<a href=#29 id=29 data-nosnippet>29</a>    api::{
+<a href=#30 id=30 data-nosnippet>30</a>        StorageState,
+<a href=#31 id=31 data-nosnippet>31</a>        data_source::{
+<a href=#32 id=32 data-nosnippet>32</a>            RequestResponseDataSource, SequencerDataSource, StateCertDataSource,
+<a href=#33 id=33 data-nosnippet>33</a>            StateCertFetchingDataSource,
+<a href=#34 id=34 data-nosnippet>34</a>        },
+<a href=#35 id=35 data-nosnippet>35</a>    },
 <a href=#36 id=36 data-nosnippet>36</a>};
 <a href=#37 id=37 data-nosnippet>37</a>
 <a href=#38 id=38 data-nosnippet>38</a><span class="kw">pub</span>(<span class="kw">in </span><span class="kw">crate</span>::api) <span class="kw">type </span>AvailState&lt;N, P, D&gt; = ApiState&lt;StorageState&lt;N, P, D&gt;&gt;;
@@ -149,7 +149,7 @@
 <a href=#149 id=149 data-nosnippet>149</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(Error::Custom {
 <a href=#150 id=150 data-nosnippet>150</a>                message: <span class="string">"Unsupported VID version, use new API version instead."</span>.to_string(),
 <a href=#151 id=151 data-nosnippet>151</a>                status: StatusCode::NOT_FOUND,
-<a href=#152 id=152 data-nosnippet>152</a>            })
+<a href=#152 id=152 data-nosnippet>152</a>            });
 <a href=#153 id=153 data-nosnippet>153</a>        },
 <a href=#154 id=154 data-nosnippet>154</a>        <span class="prelude-val">None </span>=&gt; <span class="prelude-val">None</span>,
 <a href=#155 id=155 data-nosnippet>155</a>    };
@@ -250,7 +250,7 @@
 <a href=#250 id=250 data-nosnippet>250</a>    req: RequestParams,
 <a href=#251 id=251 data-nosnippet>251</a>    state: <span class="kw-2">&amp;</span><span class="lifetime">'a </span>S,
 <a href=#252 id=252 data-nosnippet>252</a>) -&gt; <span class="kw">impl </span><span class="lifetime">'a
-<a href=#253 id=253 data-nosnippet>253</a>       </span>+ Stream&lt;
+<a href=#253 id=253 data-nosnippet>253</a></span>+ Stream&lt;
 <a href=#254 id=254 data-nosnippet>254</a>    Item = <span class="prelude-ty">Result</span>&lt;
 <a href=#255 id=255 data-nosnippet>255</a>        (
 <a href=#256 id=256 data-nosnippet>256</a>            NamespaceId,

@@ -7,12 +7,12 @@
 <a href=#7 id=7 data-nosnippet>7</a><span class="kw">use </span>serde::{Deserialize, Serialize};
 <a href=#8 id=8 data-nosnippet>8</a>
 <a href=#9 id=9 data-nosnippet>9</a><span class="kw">use </span>crate::{
-<a href=#10 id=10 data-nosnippet>10</a>    avidm::{
-<a href=#11 id=11 data-nosnippet>11</a>        config::AvidMConfig,
-<a href=#12 id=12 data-nosnippet>12</a>        namespaced::{NsAvidMCommit, NsAvidMScheme, NsAvidMShare},
-<a href=#13 id=13 data-nosnippet>13</a>        AvidMCommit, AvidMParam, AvidMScheme, AvidMShare, Config, MerkleProof, MerkleTree, F,
-<a href=#14 id=14 data-nosnippet>14</a>    },
-<a href=#15 id=15 data-nosnippet>15</a>    VerificationResult, VidError, VidResult, VidScheme,
+<a href=#10 id=10 data-nosnippet>10</a>    VerificationResult, VidError, VidResult, VidScheme,
+<a href=#11 id=11 data-nosnippet>11</a>    avidm::{
+<a href=#12 id=12 data-nosnippet>12</a>        AvidMCommit, AvidMParam, AvidMScheme, AvidMShare, Config, F, MerkleProof, MerkleTree,
+<a href=#13 id=13 data-nosnippet>13</a>        config::AvidMConfig,
+<a href=#14 id=14 data-nosnippet>14</a>        namespaced::{NsAvidMCommit, NsAvidMScheme, NsAvidMShare},
+<a href=#15 id=15 data-nosnippet>15</a>    },
 <a href=#16 id=16 data-nosnippet>16</a>};
 <a href=#17 id=17 data-nosnippet>17</a>
 <a href=#18 id=18 data-nosnippet>18</a><span class="doccomment">/// A proof of incorrect encoding.
@@ -297,18 +297,18 @@
 <a href=#297 id=297 data-nosnippet>297</a></span><span class="kw">mod </span>tests {
 <a href=#298 id=298 data-nosnippet>298</a>    <span class="kw">use </span>ark_poly::EvaluationDomain;
 <a href=#299 id=299 data-nosnippet>299</a>    <span class="kw">use </span>jf_merkle_tree::MerkleTreeScheme;
-<a href=#300 id=300 data-nosnippet>300</a>    <span class="kw">use </span>rand::{seq::SliceRandom, Rng};
+<a href=#300 id=300 data-nosnippet>300</a>    <span class="kw">use </span>rand::{Rng, seq::SliceRandom};
 <a href=#301 id=301 data-nosnippet>301</a>
 <a href=#302 id=302 data-nosnippet>302</a>    <span class="kw">use </span>crate::{
-<a href=#303 id=303 data-nosnippet>303</a>        avidm::{
-<a href=#304 id=304 data-nosnippet>304</a>            config::AvidMConfig,
-<a href=#305 id=305 data-nosnippet>305</a>            namespaced::{NsAvidMCommit, NsAvidMScheme, NsAvidMShare},
-<a href=#306 id=306 data-nosnippet>306</a>            proofs::AvidMBadEncodingProof,
-<a href=#307 id=307 data-nosnippet>307</a>            radix2_domain, AvidMCommit, AvidMScheme, AvidMShare, Config, MerkleTree, RawAvidMShare,
-<a href=#308 id=308 data-nosnippet>308</a>            F,
-<a href=#309 id=309 data-nosnippet>309</a>        },
-<a href=#310 id=310 data-nosnippet>310</a>        utils::bytes_to_field,
-<a href=#311 id=311 data-nosnippet>311</a>        VidScheme,
+<a href=#303 id=303 data-nosnippet>303</a>        VidScheme,
+<a href=#304 id=304 data-nosnippet>304</a>        avidm::{
+<a href=#305 id=305 data-nosnippet>305</a>            AvidMCommit, AvidMScheme, AvidMShare, Config, F, MerkleTree, RawAvidMShare,
+<a href=#306 id=306 data-nosnippet>306</a>            config::AvidMConfig,
+<a href=#307 id=307 data-nosnippet>307</a>            namespaced::{NsAvidMCommit, NsAvidMScheme, NsAvidMShare},
+<a href=#308 id=308 data-nosnippet>308</a>            proofs::AvidMBadEncodingProof,
+<a href=#309 id=309 data-nosnippet>309</a>            radix2_domain,
+<a href=#310 id=310 data-nosnippet>310</a>        },
+<a href=#311 id=311 data-nosnippet>311</a>        utils::bytes_to_field,
 <a href=#312 id=312 data-nosnippet>312</a>    };
 <a href=#313 id=313 data-nosnippet>313</a>
 <a href=#314 id=314 data-nosnippet>314</a>    <span class="attr">#[test]
@@ -499,15 +499,17 @@
 <a href=#499 id=499 data-nosnippet>499</a>
 <a href=#500 id=500 data-nosnippet>500</a>        <span class="comment">// Good namespaces
 <a href=#501 id=501 data-nosnippet>501</a>        </span><span class="kw">for </span>ns_index <span class="kw">in </span>[<span class="number">0</span>, <span class="number">2</span>, <span class="number">3</span>, <span class="number">4</span>] {
-<a href=#502 id=502 data-nosnippet>502</a>            <span class="macro">assert!</span>(NsAvidMScheme::proof_of_incorrect_encoding_for_namespace(
-<a href=#503 id=503 data-nosnippet>503</a>                <span class="kw-2">&amp;</span>param, ns_index, <span class="kw-2">&amp;</span>commit, <span class="kw-2">&amp;</span>shares
-<a href=#504 id=504 data-nosnippet>504</a>            )
-<a href=#505 id=505 data-nosnippet>505</a>            .is_err());
-<a href=#506 id=506 data-nosnippet>506</a>        }
-<a href=#507 id=507 data-nosnippet>507</a>
-<a href=#508 id=508 data-nosnippet>508</a>        <span class="kw">let </span>proof = NsAvidMScheme::proof_of_incorrect_encoding(<span class="kw-2">&amp;</span>param, <span class="kw-2">&amp;</span>commit, <span class="kw-2">&amp;</span>shares).unwrap();
-<a href=#509 id=509 data-nosnippet>509</a>        <span class="macro">assert_eq!</span>(proof.ns_index, <span class="number">1</span>);
-<a href=#510 id=510 data-nosnippet>510</a>        <span class="macro">assert!</span>(proof.verify(<span class="kw-2">&amp;</span>param, <span class="kw-2">&amp;</span>commit).unwrap().is_ok());
-<a href=#511 id=511 data-nosnippet>511</a>    }
-<a href=#512 id=512 data-nosnippet>512</a>}
+<a href=#502 id=502 data-nosnippet>502</a>            <span class="macro">assert!</span>(
+<a href=#503 id=503 data-nosnippet>503</a>                NsAvidMScheme::proof_of_incorrect_encoding_for_namespace(
+<a href=#504 id=504 data-nosnippet>504</a>                    <span class="kw-2">&amp;</span>param, ns_index, <span class="kw-2">&amp;</span>commit, <span class="kw-2">&amp;</span>shares
+<a href=#505 id=505 data-nosnippet>505</a>                )
+<a href=#506 id=506 data-nosnippet>506</a>                .is_err()
+<a href=#507 id=507 data-nosnippet>507</a>            );
+<a href=#508 id=508 data-nosnippet>508</a>        }
+<a href=#509 id=509 data-nosnippet>509</a>
+<a href=#510 id=510 data-nosnippet>510</a>        <span class="kw">let </span>proof = NsAvidMScheme::proof_of_incorrect_encoding(<span class="kw-2">&amp;</span>param, <span class="kw-2">&amp;</span>commit, <span class="kw-2">&amp;</span>shares).unwrap();
+<a href=#511 id=511 data-nosnippet>511</a>        <span class="macro">assert_eq!</span>(proof.ns_index, <span class="number">1</span>);
+<a href=#512 id=512 data-nosnippet>512</a>        <span class="macro">assert!</span>(proof.verify(<span class="kw-2">&amp;</span>param, <span class="kw-2">&amp;</span>commit).unwrap().is_ok());
+<a href=#513 id=513 data-nosnippet>513</a>    }
+<a href=#514 id=514 data-nosnippet>514</a>}
 </code></pre></div></section></main></body></html>

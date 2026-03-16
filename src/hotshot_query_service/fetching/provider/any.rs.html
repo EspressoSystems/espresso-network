@@ -18,10 +18,10 @@
 <a href=#18 id=18 data-nosnippet>18</a>
 <a href=#19 id=19 data-nosnippet>19</a><span class="kw">use </span>super::{Provider, Request};
 <a href=#20 id=20 data-nosnippet>20</a><span class="kw">use </span>crate::{
-<a href=#21 id=21 data-nosnippet>21</a>    availability::LeafQueryData,
-<a href=#22 id=22 data-nosnippet>22</a>    data_source::AvailabilityProvider,
-<a href=#23 id=23 data-nosnippet>23</a>    fetching::request::{LeafRequest, PayloadRequest, VidCommonRequest},
-<a href=#24 id=24 data-nosnippet>24</a>    Payload,
+<a href=#21 id=21 data-nosnippet>21</a>    Payload,
+<a href=#22 id=22 data-nosnippet>22</a>    availability::LeafQueryData,
+<a href=#23 id=23 data-nosnippet>23</a>    data_source::AvailabilityProvider,
+<a href=#24 id=24 data-nosnippet>24</a>    fetching::request::{LeafRequest, PayloadRequest, VidCommonRequest},
 <a href=#25 id=25 data-nosnippet>25</a>};
 <a href=#26 id=26 data-nosnippet>26</a>
 <a href=#27 id=27 data-nosnippet>27</a><span class="doccomment">/// Blanket trait combining [`Debug`] and [`Provider`].
@@ -214,16 +214,16 @@
 <a href=#214 id=214 data-nosnippet>214</a>
 <a href=#215 id=215 data-nosnippet>215</a>    <span class="kw">use </span>super::<span class="kw-2">*</span>;
 <a href=#216 id=216 data-nosnippet>216</a>    <span class="kw">use </span>crate::{
-<a href=#217 id=217 data-nosnippet>217</a>        availability::{define_api, AvailabilityDataSource, UpdateAvailabilityData},
-<a href=#218 id=218 data-nosnippet>218</a>        data_source::storage::sql::testing::TmpDb,
-<a href=#219 id=219 data-nosnippet>219</a>        fetching::provider::{NoFetching, QueryServiceProvider},
-<a href=#220 id=220 data-nosnippet>220</a>        task::BackgroundTask,
-<a href=#221 id=221 data-nosnippet>221</a>        testing::{
-<a href=#222 id=222 data-nosnippet>222</a>            consensus::{MockDataSource, MockNetwork},
-<a href=#223 id=223 data-nosnippet>223</a>            mocks::{MockBase, MockTypes},
-<a href=#224 id=224 data-nosnippet>224</a>        },
-<a href=#225 id=225 data-nosnippet>225</a>        types::HeightIndexed,
-<a href=#226 id=226 data-nosnippet>226</a>        ApiState, Error,
+<a href=#217 id=217 data-nosnippet>217</a>        ApiState, Error,
+<a href=#218 id=218 data-nosnippet>218</a>        availability::{AvailabilityDataSource, UpdateAvailabilityData, define_api},
+<a href=#219 id=219 data-nosnippet>219</a>        data_source::storage::sql::testing::TmpDb,
+<a href=#220 id=220 data-nosnippet>220</a>        fetching::provider::{NoFetching, QueryServiceProvider},
+<a href=#221 id=221 data-nosnippet>221</a>        task::BackgroundTask,
+<a href=#222 id=222 data-nosnippet>222</a>        testing::{
+<a href=#223 id=223 data-nosnippet>223</a>            consensus::{MockDataSource, MockNetwork},
+<a href=#224 id=224 data-nosnippet>224</a>            mocks::{MockBase, MockTypes},
+<a href=#225 id=225 data-nosnippet>225</a>        },
+<a href=#226 id=226 data-nosnippet>226</a>        types::HeightIndexed,
 <a href=#227 id=227 data-nosnippet>227</a>    };
 <a href=#228 id=228 data-nosnippet>228</a>
 <a href=#229 id=229 data-nosnippet>229</a>    <span class="kw">type </span>Provider = AnyProvider&lt;MockTypes&gt;;

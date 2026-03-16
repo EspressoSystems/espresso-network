@@ -7,8 +7,8 @@
 <a href=#7 id=7 data-nosnippet>7</a>
 <a href=#8 id=8 data-nosnippet>8</a><span class="kw">use </span>super::{AvidMCommit, AvidMShare, RawAvidMShare};
 <a href=#9 id=9 data-nosnippet>9</a><span class="kw">use </span>crate::{
-<a href=#10 id=10 data-nosnippet>10</a>    avidm::{AvidMScheme, MerkleTree},
-<a href=#11 id=11 data-nosnippet>11</a>    VidError, VidResult, VidScheme,
+<a href=#10 id=10 data-nosnippet>10</a>    VidError, VidResult, VidScheme,
+<a href=#11 id=11 data-nosnippet>11</a>    avidm::{AvidMScheme, MerkleTree},
 <a href=#12 id=12 data-nosnippet>12</a>};
 <a href=#13 id=13 data-nosnippet>13</a>
 <a href=#14 id=14 data-nosnippet>14</a><span class="doccomment">/// Dummy struct for namespaced AvidM scheme
@@ -230,7 +230,7 @@
 <a href=#230 id=230 data-nosnippet>230</a><span class="doccomment">/// Unit tests
 <a href=#231 id=231 data-nosnippet>231</a></span><span class="attr">#[cfg(test)]
 <a href=#232 id=232 data-nosnippet>232</a></span><span class="kw">pub mod </span>tests {
-<a href=#233 id=233 data-nosnippet>233</a>    <span class="kw">use </span>rand::{seq::SliceRandom, RngCore};
+<a href=#233 id=233 data-nosnippet>233</a>    <span class="kw">use </span>rand::{RngCore, seq::SliceRandom};
 <a href=#234 id=234 data-nosnippet>234</a>
 <a href=#235 id=235 data-nosnippet>235</a>    <span class="kw">use </span><span class="kw">crate</span>::avidm::namespaced::NsAvidMScheme;
 <a href=#236 id=236 data-nosnippet>236</a>

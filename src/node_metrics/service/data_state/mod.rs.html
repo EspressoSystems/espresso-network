@@ -7,18 +7,18 @@
 <a href=#7 id=7 data-nosnippet>7</a><span class="kw">use </span>async_lock::RwLock;
 <a href=#8 id=8 data-nosnippet>8</a><span class="kw">use </span>bitvec::vec::BitVec;
 <a href=#9 id=9 data-nosnippet>9</a><span class="kw">use </span>circular_buffer::CircularBuffer;
-<a href=#10 id=10 data-nosnippet>10</a><span class="kw">use </span>espresso_types::{v0_3::AuthenticatedValidator, Header, Payload, SeqTypes};
-<a href=#11 id=11 data-nosnippet>11</a><span class="kw">use </span>futures::{channel::mpsc::SendError, Sink, SinkExt, Stream, StreamExt};
+<a href=#10 id=10 data-nosnippet>10</a><span class="kw">use </span>espresso_types::{Header, Payload, SeqTypes, v0_3::AuthenticatedValidator};
+<a href=#11 id=11 data-nosnippet>11</a><span class="kw">use </span>futures::{Sink, SinkExt, Stream, StreamExt, channel::mpsc::SendError};
 <a href=#12 id=12 data-nosnippet>12</a><span class="kw">use </span>hotshot_query_service::{
-<a href=#13 id=13 data-nosnippet>13</a>    availability::{BlockQueryData, Leaf1QueryData},
-<a href=#14 id=14 data-nosnippet>14</a>    explorer::{BlockDetail, ExplorerHeader, Timestamp},
-<a href=#15 id=15 data-nosnippet>15</a>    Resolvable,
+<a href=#13 id=13 data-nosnippet>13</a>    Resolvable,
+<a href=#14 id=14 data-nosnippet>14</a>    availability::{BlockQueryData, Leaf1QueryData},
+<a href=#15 id=15 data-nosnippet>15</a>    explorer::{BlockDetail, ExplorerHeader, Timestamp},
 <a href=#16 id=16 data-nosnippet>16</a>};
 <a href=#17 id=17 data-nosnippet>17</a><span class="kw">use </span>hotshot_types::{
-<a href=#18 id=18 data-nosnippet>18</a>    signature_key::BLSPubKey,
-<a href=#19 id=19 data-nosnippet>19</a>    traits::{block_contents::BlockHeader, BlockPayload, EncodeBytes},
-<a href=#20 id=20 data-nosnippet>20</a>    utils::epoch_from_block_number,
-<a href=#21 id=21 data-nosnippet>21</a>    PeerConfig,
+<a href=#18 id=18 data-nosnippet>18</a>    PeerConfig,
+<a href=#19 id=19 data-nosnippet>19</a>    signature_key::BLSPubKey,
+<a href=#20 id=20 data-nosnippet>20</a>    traits::{BlockPayload, EncodeBytes, block_contents::BlockHeader},
+<a href=#21 id=21 data-nosnippet>21</a>    utils::epoch_from_block_number,
 <a href=#22 id=22 data-nosnippet>22</a>};
 <a href=#23 id=23 data-nosnippet>23</a><span class="kw">use </span>indexmap::IndexMap;
 <a href=#24 id=24 data-nosnippet>24</a><span class="kw">pub use </span>location_details::LocationDetails;
@@ -27,8 +27,8 @@
 <a href=#27 id=27 data-nosnippet>27</a><span class="kw">use </span>tokio::{spawn, task::JoinHandle};
 <a href=#28 id=28 data-nosnippet>28</a>
 <a href=#29 id=29 data-nosnippet>29</a><span class="kw">use </span><span class="kw">crate</span>::api::node_validator::v0::{
-<a href=#30 id=30 data-nosnippet>30</a>    get_node_stake_table_from_sequencer, get_node_validators_from_sequencer, LeafAndBlock,
-<a href=#31 id=31 data-nosnippet>31</a>    PublicHotShotConfig, Version01,
+<a href=#30 id=30 data-nosnippet>30</a>    LeafAndBlock, PublicHotShotConfig, Version01, get_node_stake_table_from_sequencer,
+<a href=#31 id=31 data-nosnippet>31</a>    get_node_validators_from_sequencer,
 <a href=#32 id=32 data-nosnippet>32</a>};
 <a href=#33 id=33 data-nosnippet>33</a>
 <a href=#34 id=34 data-nosnippet>34</a><span class="doccomment">/// MAX_HISTORY represents the last N records that are stored within the
@@ -824,11 +824,11 @@
 <a href=#824 id=824 data-nosnippet>824</a>
 <a href=#825 id=825 data-nosnippet>825</a>    <span class="kw">use </span>async_lock::RwLock;
 <a href=#826 id=826 data-nosnippet>826</a>    <span class="kw">use </span>espresso_types::{
-<a href=#827 id=827 data-nosnippet>827</a>        v0_3::{ChainConfig, RewardMerkleTreeV1},
-<a href=#828 id=828 data-nosnippet>828</a>        v0_4::RewardMerkleTreeV2,
-<a href=#829 id=829 data-nosnippet>829</a>        BlockMerkleTree, FeeMerkleTree, NodeState, ValidatedState,
+<a href=#827 id=827 data-nosnippet>827</a>        BlockMerkleTree, FeeMerkleTree, NodeState, ValidatedState,
+<a href=#828 id=828 data-nosnippet>828</a>        v0_3::{ChainConfig, RewardMerkleTreeV1},
+<a href=#829 id=829 data-nosnippet>829</a>        v0_4::RewardMerkleTreeV2,
 <a href=#830 id=830 data-nosnippet>830</a>    };
-<a href=#831 id=831 data-nosnippet>831</a>    <span class="kw">use </span>futures::{channel::mpsc, SinkExt, StreamExt};
+<a href=#831 id=831 data-nosnippet>831</a>    <span class="kw">use </span>futures::{SinkExt, StreamExt, channel::mpsc};
 <a href=#832 id=832 data-nosnippet>832</a>    <span class="kw">use </span>hotshot_example_types::node_types::TEST_VERSIONS;
 <a href=#833 id=833 data-nosnippet>833</a>    <span class="kw">use </span>hotshot_query_service::{
 <a href=#834 id=834 data-nosnippet>834</a>        availability::{BlockQueryData, Leaf1QueryData},
@@ -954,137 +954,139 @@
 <a href=#954 id=954 data-nosnippet>954</a>        </span>drop(block_receiver);
 <a href=#955 id=955 data-nosnippet>955</a>        drop(leaf_sender);
 <a href=#956 id=956 data-nosnippet>956</a>
-<a href=#957 id=957 data-nosnippet>957</a>        <span class="macro">assert!</span>(timeout(
-<a href=#958 id=958 data-nosnippet>958</a>            Duration::from_millis(<span class="number">200</span>),
-<a href=#959 id=959 data-nosnippet>959</a>            process_leaf_stream_task_handle.task_handle.take().unwrap()
-<a href=#960 id=960 data-nosnippet>960</a>        )
-<a href=#961 id=961 data-nosnippet>961</a>        .<span class="kw">await
-<a href=#962 id=962 data-nosnippet>962</a>        </span>.is_ok());
-<a href=#963 id=963 data-nosnippet>963</a>    }
-<a href=#964 id=964 data-nosnippet>964</a>
-<a href=#965 id=965 data-nosnippet>965</a>    <span class="attr">#[tokio::test(flavor = <span class="string">"multi_thread"</span>)]
-<a href=#966 id=966 data-nosnippet>966</a>    </span><span class="kw">async fn </span>test_process_node_identity_stream() {
-<a href=#967 id=967 data-nosnippet>967</a>        <span class="kw">let </span>data_state: DataState = Default::default();
-<a href=#968 id=968 data-nosnippet>968</a>        <span class="kw">let </span>data_state = Arc::new(RwLock::new(data_state));
-<a href=#969 id=969 data-nosnippet>969</a>        <span class="kw">let </span>(node_identity_sender_1, node_identity_receiver_1) = futures::channel::mpsc::channel(<span class="number">1</span>);
-<a href=#970 id=970 data-nosnippet>970</a>        <span class="kw">let </span>(node_identity_sender_2, node_identity_receiver_2) = futures::channel::mpsc::channel(<span class="number">1</span>);
-<a href=#971 id=971 data-nosnippet>971</a>
-<a href=#972 id=972 data-nosnippet>972</a>        <span class="kw">let </span><span class="kw-2">mut </span>process_node_identity_task_handle = ProcessNodeIdentityStreamTask::new(
-<a href=#973 id=973 data-nosnippet>973</a>            node_identity_receiver_1,
-<a href=#974 id=974 data-nosnippet>974</a>            data_state.clone(),
-<a href=#975 id=975 data-nosnippet>975</a>            node_identity_sender_2,
-<a href=#976 id=976 data-nosnippet>976</a>        );
-<a href=#977 id=977 data-nosnippet>977</a>
-<a href=#978 id=978 data-nosnippet>978</a>        {
-<a href=#979 id=979 data-nosnippet>979</a>            <span class="kw">let </span>data_state = data_state.read().<span class="kw">await</span>;
-<a href=#980 id=980 data-nosnippet>980</a>            <span class="comment">// Latest blocks should be empty
-<a href=#981 id=981 data-nosnippet>981</a>            </span><span class="macro">assert_eq!</span>(data_state.node_identity().count(), <span class="number">0</span>);
-<a href=#982 id=982 data-nosnippet>982</a>        }
-<a href=#983 id=983 data-nosnippet>983</a>
-<a href=#984 id=984 data-nosnippet>984</a>        <span class="comment">// Send a node update to the Stream
-<a href=#985 id=985 data-nosnippet>985</a>        </span><span class="kw">let </span>public_key_1 = BLSPubKey::generated_from_seed_indexed([<span class="number">0</span>; <span class="number">32</span>], <span class="number">0</span>).<span class="number">0</span>;
-<a href=#986 id=986 data-nosnippet>986</a>        <span class="kw">let </span>node_identity_1 = NodeIdentity::from_public_key(public_key_1);
-<a href=#987 id=987 data-nosnippet>987</a>
-<a href=#988 id=988 data-nosnippet>988</a>        <span class="kw">let </span><span class="kw-2">mut </span>node_identity_sender_1 = node_identity_sender_1;
-<a href=#989 id=989 data-nosnippet>989</a>        <span class="kw">let </span><span class="kw-2">mut </span>node_identity_receiver_2 = node_identity_receiver_2;
-<a href=#990 id=990 data-nosnippet>990</a>
-<a href=#991 id=991 data-nosnippet>991</a>        <span class="macro">assert_eq!</span>(
-<a href=#992 id=992 data-nosnippet>992</a>            node_identity_sender_1.send(node_identity_1.clone()).<span class="kw">await</span>,
-<a href=#993 id=993 data-nosnippet>993</a>            <span class="prelude-val">Ok</span>(())
-<a href=#994 id=994 data-nosnippet>994</a>        );
-<a href=#995 id=995 data-nosnippet>995</a>
-<a href=#996 id=996 data-nosnippet>996</a>        <span class="macro">assert_eq!</span>(
-<a href=#997 id=997 data-nosnippet>997</a>            node_identity_receiver_2.next().<span class="kw">await</span>,
-<a href=#998 id=998 data-nosnippet>998</a>            <span class="prelude-val">Some</span>(node_identity_1.clone())
-<a href=#999 id=999 data-nosnippet>999</a>        );
-<a href=#1000 id=1000 data-nosnippet>1000</a>
-<a href=#1001 id=1001 data-nosnippet>1001</a>        {
-<a href=#1002 id=1002 data-nosnippet>1002</a>            <span class="kw">let </span>data_state = data_state.read().<span class="kw">await</span>;
-<a href=#1003 id=1003 data-nosnippet>1003</a>            <span class="comment">// Latest blocks should now have a single entry
-<a href=#1004 id=1004 data-nosnippet>1004</a>            </span><span class="macro">assert_eq!</span>(data_state.node_identity().count(), <span class="number">1</span>);
-<a href=#1005 id=1005 data-nosnippet>1005</a>            <span class="macro">assert_eq!</span>(data_state.node_identity().next(), <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>node_identity_1));
-<a href=#1006 id=1006 data-nosnippet>1006</a>        }
-<a href=#1007 id=1007 data-nosnippet>1007</a>
-<a href=#1008 id=1008 data-nosnippet>1008</a>        <span class="comment">// If we send the same node identity again, we should not have a new entry.
-<a href=#1009 id=1009 data-nosnippet>1009</a>        </span><span class="macro">assert_eq!</span>(
-<a href=#1010 id=1010 data-nosnippet>1010</a>            node_identity_sender_1.send(node_identity_1.clone()).<span class="kw">await</span>,
-<a href=#1011 id=1011 data-nosnippet>1011</a>            <span class="prelude-val">Ok</span>(())
-<a href=#1012 id=1012 data-nosnippet>1012</a>        );
-<a href=#1013 id=1013 data-nosnippet>1013</a>
-<a href=#1014 id=1014 data-nosnippet>1014</a>        <span class="macro">assert_eq!</span>(
-<a href=#1015 id=1015 data-nosnippet>1015</a>            node_identity_receiver_2.next().<span class="kw">await</span>,
-<a href=#1016 id=1016 data-nosnippet>1016</a>            <span class="prelude-val">Some</span>(node_identity_1.clone())
-<a href=#1017 id=1017 data-nosnippet>1017</a>        );
-<a href=#1018 id=1018 data-nosnippet>1018</a>
-<a href=#1019 id=1019 data-nosnippet>1019</a>        {
-<a href=#1020 id=1020 data-nosnippet>1020</a>            <span class="kw">let </span>data_state = data_state.read().<span class="kw">await</span>;
-<a href=#1021 id=1021 data-nosnippet>1021</a>            <span class="comment">// Latest blocks should now have a single entry
-<a href=#1022 id=1022 data-nosnippet>1022</a>            </span><span class="macro">assert_eq!</span>(data_state.node_identity().count(), <span class="number">1</span>);
-<a href=#1023 id=1023 data-nosnippet>1023</a>            <span class="macro">assert_eq!</span>(data_state.node_identity().next(), <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>node_identity_1));
-<a href=#1024 id=1024 data-nosnippet>1024</a>        }
-<a href=#1025 id=1025 data-nosnippet>1025</a>
-<a href=#1026 id=1026 data-nosnippet>1026</a>        <span class="comment">// If we send an update for that node instead, it should update the
-<a href=#1027 id=1027 data-nosnippet>1027</a>        // entry.
-<a href=#1028 id=1028 data-nosnippet>1028</a>        </span><span class="kw">let </span>node_identity_1 = NodeIdentity::new(
-<a href=#1029 id=1029 data-nosnippet>1029</a>            public_key_1,
-<a href=#1030 id=1030 data-nosnippet>1030</a>            <span class="prelude-val">Some</span>(<span class="string">"name"</span>.to_string()),
-<a href=#1031 id=1031 data-nosnippet>1031</a>            <span class="prelude-val">Some</span>(Url::parse(<span class="string">"https://example.com/"</span>).unwrap()),
-<a href=#1032 id=1032 data-nosnippet>1032</a>            <span class="prelude-val">Some</span>(<span class="string">"company"</span>.to_string()),
+<a href=#957 id=957 data-nosnippet>957</a>        <span class="macro">assert!</span>(
+<a href=#958 id=958 data-nosnippet>958</a>            timeout(
+<a href=#959 id=959 data-nosnippet>959</a>                Duration::from_millis(<span class="number">200</span>),
+<a href=#960 id=960 data-nosnippet>960</a>                process_leaf_stream_task_handle.task_handle.take().unwrap()
+<a href=#961 id=961 data-nosnippet>961</a>            )
+<a href=#962 id=962 data-nosnippet>962</a>            .<span class="kw">await
+<a href=#963 id=963 data-nosnippet>963</a>            </span>.is_ok()
+<a href=#964 id=964 data-nosnippet>964</a>        );
+<a href=#965 id=965 data-nosnippet>965</a>    }
+<a href=#966 id=966 data-nosnippet>966</a>
+<a href=#967 id=967 data-nosnippet>967</a>    <span class="attr">#[tokio::test(flavor = <span class="string">"multi_thread"</span>)]
+<a href=#968 id=968 data-nosnippet>968</a>    </span><span class="kw">async fn </span>test_process_node_identity_stream() {
+<a href=#969 id=969 data-nosnippet>969</a>        <span class="kw">let </span>data_state: DataState = Default::default();
+<a href=#970 id=970 data-nosnippet>970</a>        <span class="kw">let </span>data_state = Arc::new(RwLock::new(data_state));
+<a href=#971 id=971 data-nosnippet>971</a>        <span class="kw">let </span>(node_identity_sender_1, node_identity_receiver_1) = futures::channel::mpsc::channel(<span class="number">1</span>);
+<a href=#972 id=972 data-nosnippet>972</a>        <span class="kw">let </span>(node_identity_sender_2, node_identity_receiver_2) = futures::channel::mpsc::channel(<span class="number">1</span>);
+<a href=#973 id=973 data-nosnippet>973</a>
+<a href=#974 id=974 data-nosnippet>974</a>        <span class="kw">let </span><span class="kw-2">mut </span>process_node_identity_task_handle = ProcessNodeIdentityStreamTask::new(
+<a href=#975 id=975 data-nosnippet>975</a>            node_identity_receiver_1,
+<a href=#976 id=976 data-nosnippet>976</a>            data_state.clone(),
+<a href=#977 id=977 data-nosnippet>977</a>            node_identity_sender_2,
+<a href=#978 id=978 data-nosnippet>978</a>        );
+<a href=#979 id=979 data-nosnippet>979</a>
+<a href=#980 id=980 data-nosnippet>980</a>        {
+<a href=#981 id=981 data-nosnippet>981</a>            <span class="kw">let </span>data_state = data_state.read().<span class="kw">await</span>;
+<a href=#982 id=982 data-nosnippet>982</a>            <span class="comment">// Latest blocks should be empty
+<a href=#983 id=983 data-nosnippet>983</a>            </span><span class="macro">assert_eq!</span>(data_state.node_identity().count(), <span class="number">0</span>);
+<a href=#984 id=984 data-nosnippet>984</a>        }
+<a href=#985 id=985 data-nosnippet>985</a>
+<a href=#986 id=986 data-nosnippet>986</a>        <span class="comment">// Send a node update to the Stream
+<a href=#987 id=987 data-nosnippet>987</a>        </span><span class="kw">let </span>public_key_1 = BLSPubKey::generated_from_seed_indexed([<span class="number">0</span>; <span class="number">32</span>], <span class="number">0</span>).<span class="number">0</span>;
+<a href=#988 id=988 data-nosnippet>988</a>        <span class="kw">let </span>node_identity_1 = NodeIdentity::from_public_key(public_key_1);
+<a href=#989 id=989 data-nosnippet>989</a>
+<a href=#990 id=990 data-nosnippet>990</a>        <span class="kw">let </span><span class="kw-2">mut </span>node_identity_sender_1 = node_identity_sender_1;
+<a href=#991 id=991 data-nosnippet>991</a>        <span class="kw">let </span><span class="kw-2">mut </span>node_identity_receiver_2 = node_identity_receiver_2;
+<a href=#992 id=992 data-nosnippet>992</a>
+<a href=#993 id=993 data-nosnippet>993</a>        <span class="macro">assert_eq!</span>(
+<a href=#994 id=994 data-nosnippet>994</a>            node_identity_sender_1.send(node_identity_1.clone()).<span class="kw">await</span>,
+<a href=#995 id=995 data-nosnippet>995</a>            <span class="prelude-val">Ok</span>(())
+<a href=#996 id=996 data-nosnippet>996</a>        );
+<a href=#997 id=997 data-nosnippet>997</a>
+<a href=#998 id=998 data-nosnippet>998</a>        <span class="macro">assert_eq!</span>(
+<a href=#999 id=999 data-nosnippet>999</a>            node_identity_receiver_2.next().<span class="kw">await</span>,
+<a href=#1000 id=1000 data-nosnippet>1000</a>            <span class="prelude-val">Some</span>(node_identity_1.clone())
+<a href=#1001 id=1001 data-nosnippet>1001</a>        );
+<a href=#1002 id=1002 data-nosnippet>1002</a>
+<a href=#1003 id=1003 data-nosnippet>1003</a>        {
+<a href=#1004 id=1004 data-nosnippet>1004</a>            <span class="kw">let </span>data_state = data_state.read().<span class="kw">await</span>;
+<a href=#1005 id=1005 data-nosnippet>1005</a>            <span class="comment">// Latest blocks should now have a single entry
+<a href=#1006 id=1006 data-nosnippet>1006</a>            </span><span class="macro">assert_eq!</span>(data_state.node_identity().count(), <span class="number">1</span>);
+<a href=#1007 id=1007 data-nosnippet>1007</a>            <span class="macro">assert_eq!</span>(data_state.node_identity().next(), <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>node_identity_1));
+<a href=#1008 id=1008 data-nosnippet>1008</a>        }
+<a href=#1009 id=1009 data-nosnippet>1009</a>
+<a href=#1010 id=1010 data-nosnippet>1010</a>        <span class="comment">// If we send the same node identity again, we should not have a new entry.
+<a href=#1011 id=1011 data-nosnippet>1011</a>        </span><span class="macro">assert_eq!</span>(
+<a href=#1012 id=1012 data-nosnippet>1012</a>            node_identity_sender_1.send(node_identity_1.clone()).<span class="kw">await</span>,
+<a href=#1013 id=1013 data-nosnippet>1013</a>            <span class="prelude-val">Ok</span>(())
+<a href=#1014 id=1014 data-nosnippet>1014</a>        );
+<a href=#1015 id=1015 data-nosnippet>1015</a>
+<a href=#1016 id=1016 data-nosnippet>1016</a>        <span class="macro">assert_eq!</span>(
+<a href=#1017 id=1017 data-nosnippet>1017</a>            node_identity_receiver_2.next().<span class="kw">await</span>,
+<a href=#1018 id=1018 data-nosnippet>1018</a>            <span class="prelude-val">Some</span>(node_identity_1.clone())
+<a href=#1019 id=1019 data-nosnippet>1019</a>        );
+<a href=#1020 id=1020 data-nosnippet>1020</a>
+<a href=#1021 id=1021 data-nosnippet>1021</a>        {
+<a href=#1022 id=1022 data-nosnippet>1022</a>            <span class="kw">let </span>data_state = data_state.read().<span class="kw">await</span>;
+<a href=#1023 id=1023 data-nosnippet>1023</a>            <span class="comment">// Latest blocks should now have a single entry
+<a href=#1024 id=1024 data-nosnippet>1024</a>            </span><span class="macro">assert_eq!</span>(data_state.node_identity().count(), <span class="number">1</span>);
+<a href=#1025 id=1025 data-nosnippet>1025</a>            <span class="macro">assert_eq!</span>(data_state.node_identity().next(), <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>node_identity_1));
+<a href=#1026 id=1026 data-nosnippet>1026</a>        }
+<a href=#1027 id=1027 data-nosnippet>1027</a>
+<a href=#1028 id=1028 data-nosnippet>1028</a>        <span class="comment">// If we send an update for that node instead, it should update the
+<a href=#1029 id=1029 data-nosnippet>1029</a>        // entry.
+<a href=#1030 id=1030 data-nosnippet>1030</a>        </span><span class="kw">let </span>node_identity_1 = NodeIdentity::new(
+<a href=#1031 id=1031 data-nosnippet>1031</a>            public_key_1,
+<a href=#1032 id=1032 data-nosnippet>1032</a>            <span class="prelude-val">Some</span>(<span class="string">"name"</span>.to_string()),
 <a href=#1033 id=1033 data-nosnippet>1033</a>            <span class="prelude-val">Some</span>(Url::parse(<span class="string">"https://example.com/"</span>).unwrap()),
-<a href=#1034 id=1034 data-nosnippet>1034</a>            <span class="prelude-val">Some</span>(LocationDetails::new(
-<a href=#1035 id=1035 data-nosnippet>1035</a>                <span class="prelude-val">Some</span>((<span class="number">40.7128</span>, -<span class="number">74.0060</span>)),
-<a href=#1036 id=1036 data-nosnippet>1036</a>                <span class="prelude-val">Some</span>(<span class="string">"US"</span>.to_string()),
-<a href=#1037 id=1037 data-nosnippet>1037</a>            )),
-<a href=#1038 id=1038 data-nosnippet>1038</a>            <span class="prelude-val">Some</span>(<span class="string">"operating_system"</span>.to_string()),
-<a href=#1039 id=1039 data-nosnippet>1039</a>            <span class="prelude-val">Some</span>(<span class="string">"node_type"</span>.to_string()),
-<a href=#1040 id=1040 data-nosnippet>1040</a>            <span class="prelude-val">Some</span>(<span class="string">"network_type"</span>.to_string()),
-<a href=#1041 id=1041 data-nosnippet>1041</a>        );
-<a href=#1042 id=1042 data-nosnippet>1042</a>        <span class="macro">assert_eq!</span>(
-<a href=#1043 id=1043 data-nosnippet>1043</a>            node_identity_sender_1.send(node_identity_1.clone()).<span class="kw">await</span>,
-<a href=#1044 id=1044 data-nosnippet>1044</a>            <span class="prelude-val">Ok</span>(())
-<a href=#1045 id=1045 data-nosnippet>1045</a>        );
-<a href=#1046 id=1046 data-nosnippet>1046</a>
-<a href=#1047 id=1047 data-nosnippet>1047</a>        <span class="macro">assert_eq!</span>(
-<a href=#1048 id=1048 data-nosnippet>1048</a>            node_identity_receiver_2.next().<span class="kw">await</span>,
-<a href=#1049 id=1049 data-nosnippet>1049</a>            <span class="prelude-val">Some</span>(node_identity_1.clone())
-<a href=#1050 id=1050 data-nosnippet>1050</a>        );
-<a href=#1051 id=1051 data-nosnippet>1051</a>
-<a href=#1052 id=1052 data-nosnippet>1052</a>        {
-<a href=#1053 id=1053 data-nosnippet>1053</a>            <span class="kw">let </span>data_state = data_state.read().<span class="kw">await</span>;
-<a href=#1054 id=1054 data-nosnippet>1054</a>            <span class="comment">// Latest blocks should now have a single entry
-<a href=#1055 id=1055 data-nosnippet>1055</a>            </span><span class="macro">assert_eq!</span>(data_state.node_identity().count(), <span class="number">1</span>);
-<a href=#1056 id=1056 data-nosnippet>1056</a>            <span class="macro">assert_eq!</span>(data_state.node_identity().next(), <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>node_identity_1));
-<a href=#1057 id=1057 data-nosnippet>1057</a>        }
-<a href=#1058 id=1058 data-nosnippet>1058</a>
-<a href=#1059 id=1059 data-nosnippet>1059</a>        <span class="comment">// If we send a new node identity, it should result in a new node
-<a href=#1060 id=1060 data-nosnippet>1060</a>        // identity
-<a href=#1061 id=1061 data-nosnippet>1061</a>
-<a href=#1062 id=1062 data-nosnippet>1062</a>        </span><span class="kw">let </span>public_key_2 = BLSPubKey::generated_from_seed_indexed([<span class="number">0</span>; <span class="number">32</span>], <span class="number">1</span>).<span class="number">0</span>;
-<a href=#1063 id=1063 data-nosnippet>1063</a>        <span class="kw">let </span>node_identity_2 = NodeIdentity::from_public_key(public_key_2);
-<a href=#1064 id=1064 data-nosnippet>1064</a>
-<a href=#1065 id=1065 data-nosnippet>1065</a>        <span class="macro">assert_eq!</span>(
-<a href=#1066 id=1066 data-nosnippet>1066</a>            node_identity_sender_1.send(node_identity_2.clone()).<span class="kw">await</span>,
-<a href=#1067 id=1067 data-nosnippet>1067</a>            <span class="prelude-val">Ok</span>(())
-<a href=#1068 id=1068 data-nosnippet>1068</a>        );
-<a href=#1069 id=1069 data-nosnippet>1069</a>
-<a href=#1070 id=1070 data-nosnippet>1070</a>        <span class="macro">assert_eq!</span>(
-<a href=#1071 id=1071 data-nosnippet>1071</a>            node_identity_receiver_2.next().<span class="kw">await</span>,
-<a href=#1072 id=1072 data-nosnippet>1072</a>            <span class="prelude-val">Some</span>(node_identity_2.clone())
-<a href=#1073 id=1073 data-nosnippet>1073</a>        );
-<a href=#1074 id=1074 data-nosnippet>1074</a>
-<a href=#1075 id=1075 data-nosnippet>1075</a>        {
-<a href=#1076 id=1076 data-nosnippet>1076</a>            <span class="kw">let </span>data_state = data_state.read().<span class="kw">await</span>;
-<a href=#1077 id=1077 data-nosnippet>1077</a>            <span class="comment">// Latest blocks should now have a single entry
-<a href=#1078 id=1078 data-nosnippet>1078</a>            </span><span class="macro">assert_eq!</span>(data_state.node_identity().count(), <span class="number">2</span>);
-<a href=#1079 id=1079 data-nosnippet>1079</a>            <span class="macro">assert_eq!</span>(data_state.node_identity().next(), <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>node_identity_1));
-<a href=#1080 id=1080 data-nosnippet>1080</a>            <span class="macro">assert_eq!</span>(data_state.node_identity().last(), <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>node_identity_2));
-<a href=#1081 id=1081 data-nosnippet>1081</a>        }
-<a href=#1082 id=1082 data-nosnippet>1082</a>
-<a href=#1083 id=1083 data-nosnippet>1083</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(process_node_identity_task_handle) =
-<a href=#1084 id=1084 data-nosnippet>1084</a>            process_node_identity_task_handle.task_handle.take()
-<a href=#1085 id=1085 data-nosnippet>1085</a>        {
-<a href=#1086 id=1086 data-nosnippet>1086</a>            process_node_identity_task_handle.abort();
-<a href=#1087 id=1087 data-nosnippet>1087</a>        }
-<a href=#1088 id=1088 data-nosnippet>1088</a>    }
-<a href=#1089 id=1089 data-nosnippet>1089</a>}
+<a href=#1034 id=1034 data-nosnippet>1034</a>            <span class="prelude-val">Some</span>(<span class="string">"company"</span>.to_string()),
+<a href=#1035 id=1035 data-nosnippet>1035</a>            <span class="prelude-val">Some</span>(Url::parse(<span class="string">"https://example.com/"</span>).unwrap()),
+<a href=#1036 id=1036 data-nosnippet>1036</a>            <span class="prelude-val">Some</span>(LocationDetails::new(
+<a href=#1037 id=1037 data-nosnippet>1037</a>                <span class="prelude-val">Some</span>((<span class="number">40.7128</span>, -<span class="number">74.0060</span>)),
+<a href=#1038 id=1038 data-nosnippet>1038</a>                <span class="prelude-val">Some</span>(<span class="string">"US"</span>.to_string()),
+<a href=#1039 id=1039 data-nosnippet>1039</a>            )),
+<a href=#1040 id=1040 data-nosnippet>1040</a>            <span class="prelude-val">Some</span>(<span class="string">"operating_system"</span>.to_string()),
+<a href=#1041 id=1041 data-nosnippet>1041</a>            <span class="prelude-val">Some</span>(<span class="string">"node_type"</span>.to_string()),
+<a href=#1042 id=1042 data-nosnippet>1042</a>            <span class="prelude-val">Some</span>(<span class="string">"network_type"</span>.to_string()),
+<a href=#1043 id=1043 data-nosnippet>1043</a>        );
+<a href=#1044 id=1044 data-nosnippet>1044</a>        <span class="macro">assert_eq!</span>(
+<a href=#1045 id=1045 data-nosnippet>1045</a>            node_identity_sender_1.send(node_identity_1.clone()).<span class="kw">await</span>,
+<a href=#1046 id=1046 data-nosnippet>1046</a>            <span class="prelude-val">Ok</span>(())
+<a href=#1047 id=1047 data-nosnippet>1047</a>        );
+<a href=#1048 id=1048 data-nosnippet>1048</a>
+<a href=#1049 id=1049 data-nosnippet>1049</a>        <span class="macro">assert_eq!</span>(
+<a href=#1050 id=1050 data-nosnippet>1050</a>            node_identity_receiver_2.next().<span class="kw">await</span>,
+<a href=#1051 id=1051 data-nosnippet>1051</a>            <span class="prelude-val">Some</span>(node_identity_1.clone())
+<a href=#1052 id=1052 data-nosnippet>1052</a>        );
+<a href=#1053 id=1053 data-nosnippet>1053</a>
+<a href=#1054 id=1054 data-nosnippet>1054</a>        {
+<a href=#1055 id=1055 data-nosnippet>1055</a>            <span class="kw">let </span>data_state = data_state.read().<span class="kw">await</span>;
+<a href=#1056 id=1056 data-nosnippet>1056</a>            <span class="comment">// Latest blocks should now have a single entry
+<a href=#1057 id=1057 data-nosnippet>1057</a>            </span><span class="macro">assert_eq!</span>(data_state.node_identity().count(), <span class="number">1</span>);
+<a href=#1058 id=1058 data-nosnippet>1058</a>            <span class="macro">assert_eq!</span>(data_state.node_identity().next(), <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>node_identity_1));
+<a href=#1059 id=1059 data-nosnippet>1059</a>        }
+<a href=#1060 id=1060 data-nosnippet>1060</a>
+<a href=#1061 id=1061 data-nosnippet>1061</a>        <span class="comment">// If we send a new node identity, it should result in a new node
+<a href=#1062 id=1062 data-nosnippet>1062</a>        // identity
+<a href=#1063 id=1063 data-nosnippet>1063</a>
+<a href=#1064 id=1064 data-nosnippet>1064</a>        </span><span class="kw">let </span>public_key_2 = BLSPubKey::generated_from_seed_indexed([<span class="number">0</span>; <span class="number">32</span>], <span class="number">1</span>).<span class="number">0</span>;
+<a href=#1065 id=1065 data-nosnippet>1065</a>        <span class="kw">let </span>node_identity_2 = NodeIdentity::from_public_key(public_key_2);
+<a href=#1066 id=1066 data-nosnippet>1066</a>
+<a href=#1067 id=1067 data-nosnippet>1067</a>        <span class="macro">assert_eq!</span>(
+<a href=#1068 id=1068 data-nosnippet>1068</a>            node_identity_sender_1.send(node_identity_2.clone()).<span class="kw">await</span>,
+<a href=#1069 id=1069 data-nosnippet>1069</a>            <span class="prelude-val">Ok</span>(())
+<a href=#1070 id=1070 data-nosnippet>1070</a>        );
+<a href=#1071 id=1071 data-nosnippet>1071</a>
+<a href=#1072 id=1072 data-nosnippet>1072</a>        <span class="macro">assert_eq!</span>(
+<a href=#1073 id=1073 data-nosnippet>1073</a>            node_identity_receiver_2.next().<span class="kw">await</span>,
+<a href=#1074 id=1074 data-nosnippet>1074</a>            <span class="prelude-val">Some</span>(node_identity_2.clone())
+<a href=#1075 id=1075 data-nosnippet>1075</a>        );
+<a href=#1076 id=1076 data-nosnippet>1076</a>
+<a href=#1077 id=1077 data-nosnippet>1077</a>        {
+<a href=#1078 id=1078 data-nosnippet>1078</a>            <span class="kw">let </span>data_state = data_state.read().<span class="kw">await</span>;
+<a href=#1079 id=1079 data-nosnippet>1079</a>            <span class="comment">// Latest blocks should now have a single entry
+<a href=#1080 id=1080 data-nosnippet>1080</a>            </span><span class="macro">assert_eq!</span>(data_state.node_identity().count(), <span class="number">2</span>);
+<a href=#1081 id=1081 data-nosnippet>1081</a>            <span class="macro">assert_eq!</span>(data_state.node_identity().next(), <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>node_identity_1));
+<a href=#1082 id=1082 data-nosnippet>1082</a>            <span class="macro">assert_eq!</span>(data_state.node_identity().last(), <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>node_identity_2));
+<a href=#1083 id=1083 data-nosnippet>1083</a>        }
+<a href=#1084 id=1084 data-nosnippet>1084</a>
+<a href=#1085 id=1085 data-nosnippet>1085</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(process_node_identity_task_handle) =
+<a href=#1086 id=1086 data-nosnippet>1086</a>            process_node_identity_task_handle.task_handle.take()
+<a href=#1087 id=1087 data-nosnippet>1087</a>        {
+<a href=#1088 id=1088 data-nosnippet>1088</a>            process_node_identity_task_handle.abort();
+<a href=#1089 id=1089 data-nosnippet>1089</a>        }
+<a href=#1090 id=1090 data-nosnippet>1090</a>    }
+<a href=#1091 id=1091 data-nosnippet>1091</a>}
 </code></pre></div></section></main></body></html>

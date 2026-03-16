@@ -6,23 +6,23 @@
 <a href=#6 id=6 data-nosnippet>6</a>
 <a href=#7 id=7 data-nosnippet>7</a></span><span class="kw">use </span>hotshot_types::traits::signature_key::SignatureKey;
 <a href=#8 id=8 data-nosnippet>8</a><span class="kw">use </span>libp2p::{
-<a href=#9 id=9 data-nosnippet>9</a>    autonat,
+<a href=#9 id=9 data-nosnippet>9</a>    Multiaddr, autonat,
 <a href=#10 id=10 data-nosnippet>10</a>    gossipsub::{Behaviour <span class="kw">as </span>GossipBehaviour, Event <span class="kw">as </span>GossipEvent, IdentTopic},
 <a href=#11 id=11 data-nosnippet>11</a>    identify::{Behaviour <span class="kw">as </span>IdentifyBehaviour, Event <span class="kw">as </span>IdentifyEvent},
 <a href=#12 id=12 data-nosnippet>12</a>    kad::store::MemoryStore,
 <a href=#13 id=13 data-nosnippet>13</a>    request_response::{OutboundRequestId, ResponseChannel},
-<a href=#14 id=14 data-nosnippet>14</a>    Multiaddr,
-<a href=#15 id=15 data-nosnippet>15</a>};
-<a href=#16 id=16 data-nosnippet>16</a><span class="kw">use </span>libp2p_identity::PeerId;
-<a href=#17 id=17 data-nosnippet>17</a><span class="kw">use </span>libp2p_swarm_derive::NetworkBehaviour;
-<a href=#18 id=18 data-nosnippet>18</a><span class="kw">use </span>tracing::{error, info};
-<a href=#19 id=19 data-nosnippet>19</a>
-<a href=#20 id=20 data-nosnippet>20</a><span class="kw">use </span>super::{
+<a href=#14 id=14 data-nosnippet>14</a>};
+<a href=#15 id=15 data-nosnippet>15</a><span class="kw">use </span>libp2p_identity::PeerId;
+<a href=#16 id=16 data-nosnippet>16</a><span class="kw">use </span>libp2p_swarm_derive::NetworkBehaviour;
+<a href=#17 id=17 data-nosnippet>17</a><span class="kw">use </span>tracing::{error, info};
+<a href=#18 id=18 data-nosnippet>18</a>
+<a href=#19 id=19 data-nosnippet>19</a><span class="kw">use </span>super::{
+<a href=#20 id=20 data-nosnippet>20</a>    NetworkEventInternal,
 <a href=#21 id=21 data-nosnippet>21</a>    behaviours::dht::store::{
 <a href=#22 id=22 data-nosnippet>22</a>        persistent::{DhtPersistentStorage, PersistentStore},
 <a href=#23 id=23 data-nosnippet>23</a>        validated::ValidatedStore,
 <a href=#24 id=24 data-nosnippet>24</a>    },
-<a href=#25 id=25 data-nosnippet>25</a>    cbor, NetworkEventInternal,
+<a href=#25 id=25 data-nosnippet>25</a>    cbor,
 <a href=#26 id=26 data-nosnippet>26</a>};
 <a href=#27 id=27 data-nosnippet>27</a>
 <a href=#28 id=28 data-nosnippet>28</a><span class="doccomment">/// Overarching network behaviour performing:

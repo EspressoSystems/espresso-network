@@ -27,11 +27,11 @@
 <a href=#27 id=27 data-nosnippet>27</a>}
 <a href=#28 id=28 data-nosnippet>28</a>
 <a href=#29 id=29 data-nosnippet>29</a><span class="kw">impl </span>Scheme {
-<a href=#30 id=30 data-nosnippet>30</a>    <span class="kw">fn gen</span>(<span class="self">self</span>, seed: [u8; <span class="number">32</span>], index: u64, env_file: <span class="kw-2">&amp;mut </span><span class="kw">impl </span>Write) -&gt; anyhow::Result&lt;()&gt; {
+<a href=#30 id=30 data-nosnippet>30</a>    <span class="kw">fn </span>r#gen(<span class="self">self</span>, seed: [u8; <span class="number">32</span>], index: u64, env_file: <span class="kw-2">&amp;mut </span><span class="kw">impl </span>Write) -&gt; anyhow::Result&lt;()&gt; {
 <a href=#31 id=31 data-nosnippet>31</a>        <span class="kw">match </span><span class="self">self </span>{
 <a href=#32 id=32 data-nosnippet>32</a>            <span class="self">Self</span>::All =&gt; {
-<a href=#33 id=33 data-nosnippet>33</a>                <span class="self">Self</span>::Bls.<span class="kw">gen</span>(seed, index, env_file)<span class="question-mark">?</span>;
-<a href=#34 id=34 data-nosnippet>34</a>                <span class="self">Self</span>::Schnorr.<span class="kw">gen</span>(seed, index, env_file)<span class="question-mark">?</span>;
+<a href=#33 id=33 data-nosnippet>33</a>                <span class="self">Self</span>::Bls.r#gen(seed, index, env_file)<span class="question-mark">?</span>;
+<a href=#34 id=34 data-nosnippet>34</a>                <span class="self">Self</span>::Schnorr.r#gen(seed, index, env_file)<span class="question-mark">?</span>;
 <a href=#35 id=35 data-nosnippet>35</a>            },
 <a href=#36 id=36 data-nosnippet>36</a>            <span class="self">Self</span>::Bls =&gt; {
 <a href=#37 id=37 data-nosnippet>37</a>                <span class="kw">let </span>(pub_key, priv_key) = BLSPubKey::generated_from_seed_indexed(seed, index);
@@ -141,7 +141,7 @@
 <a href=#141 id=141 data-nosnippet>141</a>            .create(<span class="bool-val">true</span>)
 <a href=#142 id=142 data-nosnippet>142</a>            .truncate(<span class="bool-val">true</span>)
 <a href=#143 id=143 data-nosnippet>143</a>            .open(<span class="kw-2">&amp;</span>path)<span class="question-mark">?</span>;
-<a href=#144 id=144 data-nosnippet>144</a>        opts.scheme.<span class="kw">gen</span>(seed, index <span class="kw">as </span>u64, <span class="kw-2">&amp;mut </span>file)<span class="question-mark">?</span>;
+<a href=#144 id=144 data-nosnippet>144</a>        opts.scheme.r#gen(seed, index <span class="kw">as </span>u64, <span class="kw-2">&amp;mut </span>file)<span class="question-mark">?</span>;
 <a href=#145 id=145 data-nosnippet>145</a>
 <a href=#146 id=146 data-nosnippet>146</a>        <span class="macro">tracing::info!</span>(<span class="string">"private keys written to {}"</span>, path.display());
 <a href=#147 id=147 data-nosnippet>147</a>    }

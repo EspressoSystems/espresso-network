@@ -6,12 +6,12 @@
 <a href=#6 id=6 data-nosnippet>6</a><span class="kw">use </span>async_trait::async_trait;
 <a href=#7 id=7 data-nosnippet>7</a><span class="kw">use </span>derivative::Derivative;
 <a href=#8 id=8 data-nosnippet>8</a><span class="kw">use </span>derive_more::From;
-<a href=#9 id=9 data-nosnippet>9</a><span class="kw">use </span>espresso_types::{v0::traits::SequencerPersistence, PubKey};
+<a href=#9 id=9 data-nosnippet>9</a><span class="kw">use </span>espresso_types::{PubKey, v0::traits::SequencerPersistence};
 <a href=#10 id=10 data-nosnippet>10</a><span class="kw">use </span>hotshot::types::Event;
 <a href=#11 id=11 data-nosnippet>11</a><span class="kw">use </span>hotshot_query_service::data_source::UpdateDataSource;
 <a href=#12 id=12 data-nosnippet>12</a><span class="kw">use </span>hotshot_types::traits::network::ConnectedNetwork;
 <a href=#13 id=13 data-nosnippet>13</a>
-<a href=#14 id=14 data-nosnippet>14</a><span class="kw">use </span>super::{data_source::SequencerDataSource, StorageState};
+<a href=#14 id=14 data-nosnippet>14</a><span class="kw">use </span>super::{StorageState, data_source::SequencerDataSource};
 <a href=#15 id=15 data-nosnippet>15</a><span class="kw">use </span>crate::{EventConsumer, SeqTypes};
 <a href=#16 id=16 data-nosnippet>16</a>
 <a href=#17 id=17 data-nosnippet>17</a><span class="attr">#[derive(Derivative, From)]

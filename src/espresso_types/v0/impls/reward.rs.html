@@ -1,10 +1,10 @@
 <!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `types/src/v0/impls/reward.rs`."><title>reward.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../../static.files/rustdoc-77263533.css"><meta name="rustdoc-vars" data-root-path="../../../../" data-static-root-path="../../../../static.files/" data-current-crate="espresso_types" data-themes="" data-resource-suffix="" data-rustdoc-version="1.94.0 (4a4ef493e 2026-03-02)" data-channel="1.94.0" data-search-js="search-9e2438ea.js" data-stringdex-js="stringdex-b897f86f.js" data-settings-js="settings-c38705f0.js" ><script src="../../../../static.files/storage-e2aeef58.js"></script><script defer src="../../../../static.files/src-script-813739b1.js"></script><script defer src="../../../../src-files.js"></script><script defer src="../../../../static.files/main-7bab91a1.js"></script><noscript><link rel="stylesheet" href="../../../../static.files/noscript-ffcac47a.css"></noscript><link rel="alternate icon" type="image/png" href="../../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">espresso_types/v0/impls/</div>reward.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-4"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="kw">use </span>std::{borrow::Borrow, collections::HashSet, iter::once, str::FromStr, sync::Arc};
 <a href=#2 id=2 data-nosnippet>2</a>
 <a href=#3 id=3 data-nosnippet>3</a><span class="kw">use </span>alloy::primitives::{
-<a href=#4 id=4 data-nosnippet>4</a>    utils::{parse_units, ParseUnits},
-<a href=#5 id=5 data-nosnippet>5</a>    Address, B256, U256,
+<a href=#4 id=4 data-nosnippet>4</a>    Address, B256, U256,
+<a href=#5 id=5 data-nosnippet>5</a>    utils::{ParseUnits, parse_units},
 <a href=#6 id=6 data-nosnippet>6</a>};
-<a href=#7 id=7 data-nosnippet>7</a><span class="kw">use </span>anyhow::{bail, ensure, Context};
+<a href=#7 id=7 data-nosnippet>7</a><span class="kw">use </span>anyhow::{Context, bail, ensure};
 <a href=#8 id=8 data-nosnippet>8</a><span class="kw">use </span>ark_serialize::{
 <a href=#9 id=9 data-nosnippet>9</a>    CanonicalDeserialize, CanonicalSerialize, Compress, Read, SerializationError, Valid, Validate,
 <a href=#10 id=10 data-nosnippet>10</a>};
@@ -16,8 +16,8 @@
 <a href=#16 id=16 data-nosnippet>16</a>    utils::epoch_from_block_number,
 <a href=#17 id=17 data-nosnippet>17</a>};
 <a href=#18 id=18 data-nosnippet>18</a><span class="kw">use </span>jf_merkle_tree_compat::{
-<a href=#19 id=19 data-nosnippet>19</a>    prelude::MerkleNode, ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme,
-<a href=#20 id=20 data-nosnippet>20</a>    LookupResult, MerkleTreeScheme, ToTraversalPath, UniversalMerkleTreeScheme,
+<a href=#19 id=19 data-nosnippet>19</a>    ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme, LookupResult,
+<a href=#20 id=20 data-nosnippet>20</a>    MerkleTreeScheme, ToTraversalPath, UniversalMerkleTreeScheme, prelude::MerkleNode,
 <a href=#21 id=21 data-nosnippet>21</a>};
 <a href=#22 id=22 data-nosnippet>22</a><span class="kw">use </span>num_traits::CheckedSub;
 <a href=#23 id=23 data-nosnippet>23</a><span class="kw">use </span>sequencer_utils::{
@@ -27,21 +27,21 @@
 <a href=#27 id=27 data-nosnippet>27</a><span class="kw">use </span>versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION};
 <a href=#28 id=28 data-nosnippet>28</a>
 <a href=#29 id=29 data-nosnippet>29</a><span class="kw">use </span>super::{
-<a href=#30 id=30 data-nosnippet>30</a>    v0_3::{AuthenticatedValidator, RewardAmount, COMMISSION_BASIS_POINTS},
-<a href=#31 id=31 data-nosnippet>31</a>    v0_4::{
-<a href=#32 id=32 data-nosnippet>32</a>        forgotten_accounts_include, RewardAccountProofV2, RewardAccountQueryDataV2,
-<a href=#33 id=33 data-nosnippet>33</a>        RewardAccountV2, RewardMerkleCommitmentV2, RewardMerkleProofV2, RewardMerkleTreeV2,
-<a href=#34 id=34 data-nosnippet>34</a>    },
-<a href=#35 id=35 data-nosnippet>35</a>    Leaf2, NodeState, ValidatedState,
+<a href=#30 id=30 data-nosnippet>30</a>    Leaf2, NodeState, ValidatedState,
+<a href=#31 id=31 data-nosnippet>31</a>    v0_3::{AuthenticatedValidator, COMMISSION_BASIS_POINTS, RewardAmount},
+<a href=#32 id=32 data-nosnippet>32</a>    v0_4::{
+<a href=#33 id=33 data-nosnippet>33</a>        RewardAccountProofV2, RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleCommitmentV2,
+<a href=#34 id=34 data-nosnippet>34</a>        RewardMerkleProofV2, RewardMerkleTreeV2, forgotten_accounts_include,
+<a href=#35 id=35 data-nosnippet>35</a>    },
 <a href=#36 id=36 data-nosnippet>36</a>};
 <a href=#37 id=37 data-nosnippet>37</a><span class="kw">use </span>crate::{
-<a href=#38 id=38 data-nosnippet>38</a>    eth_signature_key::EthKeyPair,
-<a href=#39 id=39 data-nosnippet>39</a>    v0_3::{
-<a href=#40 id=40 data-nosnippet>40</a>        RewardAccountProofV1, RewardAccountV1, RewardMerkleCommitmentV1, RewardMerkleProofV1,
-<a href=#41 id=41 data-nosnippet>41</a>        RewardMerkleTreeV1,
-<a href=#42 id=42 data-nosnippet>42</a>    },
-<a href=#43 id=43 data-nosnippet>43</a>    v0_4::{Delta, REWARD_MERKLE_TREE_V2_ARITY, REWARD_MERKLE_TREE_V2_HEIGHT},
-<a href=#44 id=44 data-nosnippet>44</a>    FeeAccount,
+<a href=#38 id=38 data-nosnippet>38</a>    FeeAccount,
+<a href=#39 id=39 data-nosnippet>39</a>    eth_signature_key::EthKeyPair,
+<a href=#40 id=40 data-nosnippet>40</a>    v0_3::{
+<a href=#41 id=41 data-nosnippet>41</a>        RewardAccountProofV1, RewardAccountV1, RewardMerkleCommitmentV1, RewardMerkleProofV1,
+<a href=#42 id=42 data-nosnippet>42</a>        RewardMerkleTreeV1,
+<a href=#43 id=43 data-nosnippet>43</a>    },
+<a href=#44 id=44 data-nosnippet>44</a>    v0_4::{Delta, REWARD_MERKLE_TREE_V2_ARITY, REWARD_MERKLE_TREE_V2_HEIGHT},
 <a href=#45 id=45 data-nosnippet>45</a>};
 <a href=#46 id=46 data-nosnippet>46</a>
 <a href=#47 id=47 data-nosnippet>47</a><span class="macro">impl_serde_from_string_or_integer!</span>(RewardAmount);
@@ -1052,37 +1052,39 @@
 <a href=#1052 id=1052 data-nosnippet>1052</a>        <span class="macro">assert_eq!</span>(<span class="kw-2">*</span>leader_commission, distributor.block_reward);
 <a href=#1053 id=1053 data-nosnippet>1053</a>
 <a href=#1054 id=1054 data-nosnippet>1054</a>        <span class="kw">let </span>distributor = make_distributor(<span class="number">10001</span>);
-<a href=#1055 id=1055 data-nosnippet>1055</a>        <span class="macro">assert!</span>(distributor
-<a href=#1056 id=1056 data-nosnippet>1056</a>            .compute_rewards()
-<a href=#1057 id=1057 data-nosnippet>1057</a>            .err()
-<a href=#1058 id=1058 data-nosnippet>1058</a>            .unwrap()
-<a href=#1059 id=1059 data-nosnippet>1059</a>            .to_string()
-<a href=#1060 id=1060 data-nosnippet>1060</a>            .contains(<span class="string">"must not exceed"</span>));
-<a href=#1061 id=1061 data-nosnippet>1061</a>    }
-<a href=#1062 id=1062 data-nosnippet>1062</a>
-<a href=#1063 id=1063 data-nosnippet>1063</a>    <span class="attr">#[test]
-<a href=#1064 id=1064 data-nosnippet>1064</a>    </span><span class="kw">fn </span>test_compute_rewards_validator_commission() {
-<a href=#1065 id=1065 data-nosnippet>1065</a>        <span class="kw">let </span>distributor = make_distributor(<span class="number">0</span>);
-<a href=#1066 id=1066 data-nosnippet>1066</a>        <span class="kw">let </span>rewards = distributor.compute_rewards().unwrap();
-<a href=#1067 id=1067 data-nosnippet>1067</a>        <span class="kw">let </span>leader_commission = rewards.leader_commission();
-<a href=#1068 id=1068 data-nosnippet>1068</a>        <span class="kw">let </span>percentage =
-<a href=#1069 id=1069 data-nosnippet>1069</a>            leader_commission.<span class="number">0 </span>* U256::from(COMMISSION_BASIS_POINTS) / distributor.block_reward.<span class="number">0</span>;
-<a href=#1070 id=1070 data-nosnippet>1070</a>        <span class="macro">assert_eq!</span>(percentage, U256::ZERO);
-<a href=#1071 id=1071 data-nosnippet>1071</a>
-<a href=#1072 id=1072 data-nosnippet>1072</a>        <span class="comment">// 3%
-<a href=#1073 id=1073 data-nosnippet>1073</a>        </span><span class="kw">let </span>distributor = make_distributor(<span class="number">300</span>);
-<a href=#1074 id=1074 data-nosnippet>1074</a>        <span class="kw">let </span>rewards = distributor.compute_rewards().unwrap();
-<a href=#1075 id=1075 data-nosnippet>1075</a>        <span class="kw">let </span>leader_commission = rewards.leader_commission();
-<a href=#1076 id=1076 data-nosnippet>1076</a>        <span class="kw">let </span>percentage =
-<a href=#1077 id=1077 data-nosnippet>1077</a>            leader_commission.<span class="number">0 </span>* U256::from(COMMISSION_BASIS_POINTS) / distributor.block_reward.<span class="number">0</span>;
-<a href=#1078 id=1078 data-nosnippet>1078</a>        <span class="macro">println!</span>(<span class="string">"percentage: {percentage:?}"</span>);
-<a href=#1079 id=1079 data-nosnippet>1079</a>        <span class="macro">assert_eq!</span>(percentage, U256::from(<span class="number">300</span>));
-<a href=#1080 id=1080 data-nosnippet>1080</a>
-<a href=#1081 id=1081 data-nosnippet>1081</a>        <span class="comment">//100%
-<a href=#1082 id=1082 data-nosnippet>1082</a>        </span><span class="kw">let </span>distributor = make_distributor(<span class="number">10000</span>);
-<a href=#1083 id=1083 data-nosnippet>1083</a>        <span class="kw">let </span>rewards = distributor.compute_rewards().unwrap();
-<a href=#1084 id=1084 data-nosnippet>1084</a>        <span class="kw">let </span>leader_commission = rewards.leader_commission();
-<a href=#1085 id=1085 data-nosnippet>1085</a>        <span class="macro">assert_eq!</span>(<span class="kw-2">*</span>leader_commission, distributor.block_reward);
-<a href=#1086 id=1086 data-nosnippet>1086</a>    }
-<a href=#1087 id=1087 data-nosnippet>1087</a>}
+<a href=#1055 id=1055 data-nosnippet>1055</a>        <span class="macro">assert!</span>(
+<a href=#1056 id=1056 data-nosnippet>1056</a>            distributor
+<a href=#1057 id=1057 data-nosnippet>1057</a>                .compute_rewards()
+<a href=#1058 id=1058 data-nosnippet>1058</a>                .err()
+<a href=#1059 id=1059 data-nosnippet>1059</a>                .unwrap()
+<a href=#1060 id=1060 data-nosnippet>1060</a>                .to_string()
+<a href=#1061 id=1061 data-nosnippet>1061</a>                .contains(<span class="string">"must not exceed"</span>)
+<a href=#1062 id=1062 data-nosnippet>1062</a>        );
+<a href=#1063 id=1063 data-nosnippet>1063</a>    }
+<a href=#1064 id=1064 data-nosnippet>1064</a>
+<a href=#1065 id=1065 data-nosnippet>1065</a>    <span class="attr">#[test]
+<a href=#1066 id=1066 data-nosnippet>1066</a>    </span><span class="kw">fn </span>test_compute_rewards_validator_commission() {
+<a href=#1067 id=1067 data-nosnippet>1067</a>        <span class="kw">let </span>distributor = make_distributor(<span class="number">0</span>);
+<a href=#1068 id=1068 data-nosnippet>1068</a>        <span class="kw">let </span>rewards = distributor.compute_rewards().unwrap();
+<a href=#1069 id=1069 data-nosnippet>1069</a>        <span class="kw">let </span>leader_commission = rewards.leader_commission();
+<a href=#1070 id=1070 data-nosnippet>1070</a>        <span class="kw">let </span>percentage =
+<a href=#1071 id=1071 data-nosnippet>1071</a>            leader_commission.<span class="number">0 </span>* U256::from(COMMISSION_BASIS_POINTS) / distributor.block_reward.<span class="number">0</span>;
+<a href=#1072 id=1072 data-nosnippet>1072</a>        <span class="macro">assert_eq!</span>(percentage, U256::ZERO);
+<a href=#1073 id=1073 data-nosnippet>1073</a>
+<a href=#1074 id=1074 data-nosnippet>1074</a>        <span class="comment">// 3%
+<a href=#1075 id=1075 data-nosnippet>1075</a>        </span><span class="kw">let </span>distributor = make_distributor(<span class="number">300</span>);
+<a href=#1076 id=1076 data-nosnippet>1076</a>        <span class="kw">let </span>rewards = distributor.compute_rewards().unwrap();
+<a href=#1077 id=1077 data-nosnippet>1077</a>        <span class="kw">let </span>leader_commission = rewards.leader_commission();
+<a href=#1078 id=1078 data-nosnippet>1078</a>        <span class="kw">let </span>percentage =
+<a href=#1079 id=1079 data-nosnippet>1079</a>            leader_commission.<span class="number">0 </span>* U256::from(COMMISSION_BASIS_POINTS) / distributor.block_reward.<span class="number">0</span>;
+<a href=#1080 id=1080 data-nosnippet>1080</a>        <span class="macro">println!</span>(<span class="string">"percentage: {percentage:?}"</span>);
+<a href=#1081 id=1081 data-nosnippet>1081</a>        <span class="macro">assert_eq!</span>(percentage, U256::from(<span class="number">300</span>));
+<a href=#1082 id=1082 data-nosnippet>1082</a>
+<a href=#1083 id=1083 data-nosnippet>1083</a>        <span class="comment">//100%
+<a href=#1084 id=1084 data-nosnippet>1084</a>        </span><span class="kw">let </span>distributor = make_distributor(<span class="number">10000</span>);
+<a href=#1085 id=1085 data-nosnippet>1085</a>        <span class="kw">let </span>rewards = distributor.compute_rewards().unwrap();
+<a href=#1086 id=1086 data-nosnippet>1086</a>        <span class="kw">let </span>leader_commission = rewards.leader_commission();
+<a href=#1087 id=1087 data-nosnippet>1087</a>        <span class="macro">assert_eq!</span>(<span class="kw-2">*</span>leader_commission, distributor.block_reward);
+<a href=#1088 id=1088 data-nosnippet>1088</a>    }
+<a href=#1089 id=1089 data-nosnippet>1089</a>}
 </code></pre></div></section></main></body></html>

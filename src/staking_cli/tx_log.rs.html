@@ -14,7 +14,7 @@
 <a href=#14 id=14 data-nosnippet>14</a>    providers::Provider,
 <a href=#15 id=15 data-nosnippet>15</a>    rpc::types::{TransactionReceipt, TransactionRequest},
 <a href=#16 id=16 data-nosnippet>16</a>};
-<a href=#17 id=17 data-nosnippet>17</a><span class="kw">use </span>anyhow::{bail, <span class="prelude-ty">Result</span>};
+<a href=#17 id=17 data-nosnippet>17</a><span class="kw">use </span>anyhow::{<span class="prelude-ty">Result</span>, bail};
 <a href=#18 id=18 data-nosnippet>18</a><span class="kw">use </span>serde::{Deserialize, Serialize};
 <a href=#19 id=19 data-nosnippet>19</a><span class="kw">use </span>tokio::{
 <a href=#20 id=20 data-nosnippet>20</a>    sync::{OwnedSemaphorePermit, Semaphore},
@@ -304,11 +304,11 @@
 <a href=#304 id=304 data-nosnippet>304</a>                }
 <a href=#305 id=305 data-nosnippet>305</a>
 <a href=#306 id=306 data-nosnippet>306</a>                <span class="comment">// On timeout, tx might have been accepted - check if already confirmed
-<a href=#307 id=307 data-nosnippet>307</a>                </span><span class="kw">if </span>is_timeout_error(<span class="kw-2">&amp;</span>err_str) {
-<a href=#308 id=308 data-nosnippet>308</a>                    <span class="kw">if let </span><span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(_receipt)) = provider.get_transaction_receipt(tx_hash).<span class="kw">await </span>{
-<a href=#309 id=309 data-nosnippet>309</a>                        <span class="macro">tracing::info!</span>(<span class="string">"tx {} already confirmed despite timeout"</span>, tx_hash);
-<a href=#310 id=310 data-nosnippet>310</a>                        <span class="kw">return </span><span class="prelude-val">Ok</span>(tx_hash);
-<a href=#311 id=311 data-nosnippet>311</a>                    }
+<a href=#307 id=307 data-nosnippet>307</a>                </span><span class="kw">if </span>is_timeout_error(<span class="kw-2">&amp;</span>err_str)
+<a href=#308 id=308 data-nosnippet>308</a>                    &amp;&amp; <span class="kw">let </span><span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(_receipt)) = provider.get_transaction_receipt(tx_hash).<span class="kw">await
+<a href=#309 id=309 data-nosnippet>309</a>                </span>{
+<a href=#310 id=310 data-nosnippet>310</a>                    <span class="macro">tracing::info!</span>(<span class="string">"tx {} already confirmed despite timeout"</span>, tx_hash);
+<a href=#311 id=311 data-nosnippet>311</a>                    <span class="kw">return </span><span class="prelude-val">Ok</span>(tx_hash);
 <a href=#312 id=312 data-nosnippet>312</a>                }
 <a href=#313 id=313 data-nosnippet>313</a>
 <a href=#314 id=314 data-nosnippet>314</a>                attempts += <span class="number">1</span>;
@@ -519,10 +519,10 @@
 <a href=#519 id=519 data-nosnippet>519</a>                    <span class="kw">let </span>provider = provider.clone();
 <a href=#520 id=520 data-nosnippet>520</a>                    <span class="kw">async move </span>{
 <a href=#521 id=521 data-nosnippet>521</a>                        <span class="kw">let </span>receipt = get_receipt_with_retry(<span class="kw-2">&amp;</span>provider, tx.tx_hash).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#522 id=522 data-nosnippet>522</a>                        <span class="kw">if let </span><span class="prelude-val">Some</span>(r) = <span class="kw-2">&amp;</span>receipt {
-<a href=#523 id=523 data-nosnippet>523</a>                            <span class="kw">if </span>!r.status() {
-<a href=#524 id=524 data-nosnippet>524</a>                                <span class="macro">bail!</span>(<span class="string">"tx {} failed (reverted)"</span>, tx.tx_hash);
-<a href=#525 id=525 data-nosnippet>525</a>                            }
+<a href=#522 id=522 data-nosnippet>522</a>                        <span class="kw">if let </span><span class="prelude-val">Some</span>(r) = <span class="kw-2">&amp;</span>receipt
+<a href=#523 id=523 data-nosnippet>523</a>                            &amp;&amp; !r.status()
+<a href=#524 id=524 data-nosnippet>524</a>                        {
+<a href=#525 id=525 data-nosnippet>525</a>                            <span class="macro">bail!</span>(<span class="string">"tx {} failed (reverted)"</span>, tx.tx_hash);
 <a href=#526 id=526 data-nosnippet>526</a>                        }
 <a href=#527 id=527 data-nosnippet>527</a>                        <span class="prelude-val">Ok</span>((tx, receipt.is_some()))
 <a href=#528 id=528 data-nosnippet>528</a>                    }
@@ -658,44 +658,46 @@
 <a href=#658 id=658 data-nosnippet>658</a>        <span class="kw">let </span>archived = log.archive(<span class="kw-2">&amp;</span>path).unwrap();
 <a href=#659 id=659 data-nosnippet>659</a>        <span class="macro">assert!</span>(!path.exists());
 <a href=#660 id=660 data-nosnippet>660</a>        <span class="macro">assert!</span>(archived.exists());
-<a href=#661 id=661 data-nosnippet>661</a>        <span class="macro">assert!</span>(archived
-<a href=#662 id=662 data-nosnippet>662</a>            .file_name()
-<a href=#663 id=663 data-nosnippet>663</a>            .unwrap()
-<a href=#664 id=664 data-nosnippet>664</a>            .to_string_lossy()
-<a href=#665 id=665 data-nosnippet>665</a>            .contains(<span class="string">".completed."</span>));
-<a href=#666 id=666 data-nosnippet>666</a>    }
-<a href=#667 id=667 data-nosnippet>667</a>
-<a href=#668 id=668 data-nosnippet>668</a>    <span class="attr">#[test]
-<a href=#669 id=669 data-nosnippet>669</a>    </span><span class="kw">fn </span>test_is_already_known() {
-<a href=#670 id=670 data-nosnippet>670</a>        <span class="macro">assert!</span>(is_already_known(<span class="string">"transaction already known"</span>));
-<a href=#671 id=671 data-nosnippet>671</a>        <span class="macro">assert!</span>(is_already_known(<span class="string">"Transaction Already Known"</span>));
-<a href=#672 id=672 data-nosnippet>672</a>        <span class="macro">assert!</span>(is_already_known(<span class="string">"already imported"</span>));
-<a href=#673 id=673 data-nosnippet>673</a>        <span class="macro">assert!</span>(is_already_known(<span class="string">"transaction already imported"</span>));
-<a href=#674 id=674 data-nosnippet>674</a>        <span class="macro">assert!</span>(!is_already_known(<span class="string">"nonce too low"</span>));
-<a href=#675 id=675 data-nosnippet>675</a>        <span class="macro">assert!</span>(!is_already_known(<span class="string">"insufficient funds"</span>));
-<a href=#676 id=676 data-nosnippet>676</a>    }
-<a href=#677 id=677 data-nosnippet>677</a>
-<a href=#678 id=678 data-nosnippet>678</a>    <span class="attr">#[test]
-<a href=#679 id=679 data-nosnippet>679</a>    </span><span class="kw">fn </span>test_is_retriable_error() {
-<a href=#680 id=680 data-nosnippet>680</a>        <span class="macro">assert!</span>(!is_retriable_error(<span class="string">"nonce too low"</span>));
-<a href=#681 id=681 data-nosnippet>681</a>        <span class="macro">assert!</span>(!is_retriable_error(<span class="string">"nonce too high"</span>));
-<a href=#682 id=682 data-nosnippet>682</a>        <span class="macro">assert!</span>(!is_retriable_error(<span class="string">"insufficient funds"</span>));
-<a href=#683 id=683 data-nosnippet>683</a>        <span class="macro">assert!</span>(!is_retriable_error(<span class="string">"invalid signature"</span>));
-<a href=#684 id=684 data-nosnippet>684</a>        <span class="macro">assert!</span>(is_retriable_error(<span class="string">"connection reset"</span>));
-<a href=#685 id=685 data-nosnippet>685</a>        <span class="macro">assert!</span>(is_retriable_error(<span class="string">"timeout"</span>));
-<a href=#686 id=686 data-nosnippet>686</a>        <span class="macro">assert!</span>(is_retriable_error(<span class="string">"rate limited"</span>));
-<a href=#687 id=687 data-nosnippet>687</a>    }
-<a href=#688 id=688 data-nosnippet>688</a>
-<a href=#689 id=689 data-nosnippet>689</a>    <span class="attr">#[test]
-<a href=#690 id=690 data-nosnippet>690</a>    </span><span class="kw">fn </span>test_is_timeout_error() {
-<a href=#691 id=691 data-nosnippet>691</a>        <span class="macro">assert!</span>(is_timeout_error(<span class="string">"request timed out"</span>));
-<a href=#692 id=692 data-nosnippet>692</a>        <span class="macro">assert!</span>(is_timeout_error(<span class="string">"-32002: request timed out"</span>));
-<a href=#693 id=693 data-nosnippet>693</a>        <span class="macro">assert!</span>(is_timeout_error(<span class="string">"Request Timed Out"</span>));
-<a href=#694 id=694 data-nosnippet>694</a>        <span class="macro">assert!</span>(is_timeout_error(<span class="string">"connection timeout"</span>));
-<a href=#695 id=695 data-nosnippet>695</a>        <span class="macro">assert!</span>(is_timeout_error(<span class="string">"Timeout waiting for response"</span>));
-<a href=#696 id=696 data-nosnippet>696</a>        <span class="macro">assert!</span>(!is_timeout_error(<span class="string">"nonce too low"</span>));
-<a href=#697 id=697 data-nosnippet>697</a>        <span class="macro">assert!</span>(!is_timeout_error(<span class="string">"connection reset"</span>));
-<a href=#698 id=698 data-nosnippet>698</a>        <span class="macro">assert!</span>(!is_timeout_error(<span class="string">"rate limited"</span>));
-<a href=#699 id=699 data-nosnippet>699</a>    }
-<a href=#700 id=700 data-nosnippet>700</a>}
+<a href=#661 id=661 data-nosnippet>661</a>        <span class="macro">assert!</span>(
+<a href=#662 id=662 data-nosnippet>662</a>            archived
+<a href=#663 id=663 data-nosnippet>663</a>                .file_name()
+<a href=#664 id=664 data-nosnippet>664</a>                .unwrap()
+<a href=#665 id=665 data-nosnippet>665</a>                .to_string_lossy()
+<a href=#666 id=666 data-nosnippet>666</a>                .contains(<span class="string">".completed."</span>)
+<a href=#667 id=667 data-nosnippet>667</a>        );
+<a href=#668 id=668 data-nosnippet>668</a>    }
+<a href=#669 id=669 data-nosnippet>669</a>
+<a href=#670 id=670 data-nosnippet>670</a>    <span class="attr">#[test]
+<a href=#671 id=671 data-nosnippet>671</a>    </span><span class="kw">fn </span>test_is_already_known() {
+<a href=#672 id=672 data-nosnippet>672</a>        <span class="macro">assert!</span>(is_already_known(<span class="string">"transaction already known"</span>));
+<a href=#673 id=673 data-nosnippet>673</a>        <span class="macro">assert!</span>(is_already_known(<span class="string">"Transaction Already Known"</span>));
+<a href=#674 id=674 data-nosnippet>674</a>        <span class="macro">assert!</span>(is_already_known(<span class="string">"already imported"</span>));
+<a href=#675 id=675 data-nosnippet>675</a>        <span class="macro">assert!</span>(is_already_known(<span class="string">"transaction already imported"</span>));
+<a href=#676 id=676 data-nosnippet>676</a>        <span class="macro">assert!</span>(!is_already_known(<span class="string">"nonce too low"</span>));
+<a href=#677 id=677 data-nosnippet>677</a>        <span class="macro">assert!</span>(!is_already_known(<span class="string">"insufficient funds"</span>));
+<a href=#678 id=678 data-nosnippet>678</a>    }
+<a href=#679 id=679 data-nosnippet>679</a>
+<a href=#680 id=680 data-nosnippet>680</a>    <span class="attr">#[test]
+<a href=#681 id=681 data-nosnippet>681</a>    </span><span class="kw">fn </span>test_is_retriable_error() {
+<a href=#682 id=682 data-nosnippet>682</a>        <span class="macro">assert!</span>(!is_retriable_error(<span class="string">"nonce too low"</span>));
+<a href=#683 id=683 data-nosnippet>683</a>        <span class="macro">assert!</span>(!is_retriable_error(<span class="string">"nonce too high"</span>));
+<a href=#684 id=684 data-nosnippet>684</a>        <span class="macro">assert!</span>(!is_retriable_error(<span class="string">"insufficient funds"</span>));
+<a href=#685 id=685 data-nosnippet>685</a>        <span class="macro">assert!</span>(!is_retriable_error(<span class="string">"invalid signature"</span>));
+<a href=#686 id=686 data-nosnippet>686</a>        <span class="macro">assert!</span>(is_retriable_error(<span class="string">"connection reset"</span>));
+<a href=#687 id=687 data-nosnippet>687</a>        <span class="macro">assert!</span>(is_retriable_error(<span class="string">"timeout"</span>));
+<a href=#688 id=688 data-nosnippet>688</a>        <span class="macro">assert!</span>(is_retriable_error(<span class="string">"rate limited"</span>));
+<a href=#689 id=689 data-nosnippet>689</a>    }
+<a href=#690 id=690 data-nosnippet>690</a>
+<a href=#691 id=691 data-nosnippet>691</a>    <span class="attr">#[test]
+<a href=#692 id=692 data-nosnippet>692</a>    </span><span class="kw">fn </span>test_is_timeout_error() {
+<a href=#693 id=693 data-nosnippet>693</a>        <span class="macro">assert!</span>(is_timeout_error(<span class="string">"request timed out"</span>));
+<a href=#694 id=694 data-nosnippet>694</a>        <span class="macro">assert!</span>(is_timeout_error(<span class="string">"-32002: request timed out"</span>));
+<a href=#695 id=695 data-nosnippet>695</a>        <span class="macro">assert!</span>(is_timeout_error(<span class="string">"Request Timed Out"</span>));
+<a href=#696 id=696 data-nosnippet>696</a>        <span class="macro">assert!</span>(is_timeout_error(<span class="string">"connection timeout"</span>));
+<a href=#697 id=697 data-nosnippet>697</a>        <span class="macro">assert!</span>(is_timeout_error(<span class="string">"Timeout waiting for response"</span>));
+<a href=#698 id=698 data-nosnippet>698</a>        <span class="macro">assert!</span>(!is_timeout_error(<span class="string">"nonce too low"</span>));
+<a href=#699 id=699 data-nosnippet>699</a>        <span class="macro">assert!</span>(!is_timeout_error(<span class="string">"connection reset"</span>));
+<a href=#700 id=700 data-nosnippet>700</a>        <span class="macro">assert!</span>(!is_timeout_error(<span class="string">"rate limited"</span>));
+<a href=#701 id=701 data-nosnippet>701</a>    }
+<a href=#702 id=702 data-nosnippet>702</a>}
 </code></pre></div></section></main></body></html>

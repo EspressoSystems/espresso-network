@@ -8,24 +8,24 @@
 <a href=#8 id=8 data-nosnippet>8</a>
 <a href=#9 id=9 data-nosnippet>9</a><span class="kw">use </span>async_lock::RwLock;
 <a href=#10 id=10 data-nosnippet>10</a><span class="kw">use </span>hotshot::{
-<a href=#11 id=11 data-nosnippet>11</a>    tasks::EventTransformerState,
-<a href=#12 id=12 data-nosnippet>12</a>    traits::{NetworkReliability, NodeImplementation, TestableNodeImplementation},
-<a href=#13 id=13 data-nosnippet>13</a>    types::SystemContextHandle,
-<a href=#14 id=14 data-nosnippet>14</a>    HotShotInitializer, SystemContext, TwinsHandlerState,
+<a href=#11 id=11 data-nosnippet>11</a>    HotShotInitializer, SystemContext, TwinsHandlerState,
+<a href=#12 id=12 data-nosnippet>12</a>    tasks::EventTransformerState,
+<a href=#13 id=13 data-nosnippet>13</a>    traits::{NetworkReliability, NodeImplementation, TestableNodeImplementation},
+<a href=#14 id=14 data-nosnippet>14</a>    types::SystemContextHandle,
 <a href=#15 id=15 data-nosnippet>15</a>};
 <a href=#16 id=16 data-nosnippet>16</a><span class="kw">use </span>hotshot_example_types::{
 <a href=#17 id=17 data-nosnippet>17</a>    node_types::TestTypes, state_types::TestInstanceState, storage_types::TestStorage,
 <a href=#18 id=18 data-nosnippet>18</a>    testable_delay::DelayConfig,
 <a href=#19 id=19 data-nosnippet>19</a>};
 <a href=#20 id=20 data-nosnippet>20</a><span class="kw">use </span>hotshot_types::{
-<a href=#21 id=21 data-nosnippet>21</a>    consensus::ConsensusMetricsValue, epoch_membership::EpochMembershipCoordinator,
-<a href=#22 id=22 data-nosnippet>22</a>    storage_metrics::StorageMetricsValue, traits::node_implementation::NodeType, HotShotConfig,
-<a href=#23 id=23 data-nosnippet>23</a>    PeerConfig, ValidatorConfig,
+<a href=#21 id=21 data-nosnippet>21</a>    HotShotConfig, PeerConfig, ValidatorConfig, consensus::ConsensusMetricsValue,
+<a href=#22 id=22 data-nosnippet>22</a>    epoch_membership::EpochMembershipCoordinator, storage_metrics::StorageMetricsValue,
+<a href=#23 id=23 data-nosnippet>23</a>    traits::node_implementation::NodeType,
 <a href=#24 id=24 data-nosnippet>24</a>};
 <a href=#25 id=25 data-nosnippet>25</a><span class="kw">use </span>hotshot_utils::anytrace::<span class="kw-2">*</span>;
 <a href=#26 id=26 data-nosnippet>26</a><span class="kw">use </span>tide_disco::Url;
 <a href=#27 id=27 data-nosnippet>27</a><span class="kw">use </span>vec1::Vec1;
-<a href=#28 id=28 data-nosnippet>28</a><span class="kw">use </span>versions::{version, Upgrade};
+<a href=#28 id=28 data-nosnippet>28</a><span class="kw">use </span>versions::{Upgrade, version};
 <a href=#29 id=29 data-nosnippet>29</a>
 <a href=#30 id=30 data-nosnippet>30</a><span class="kw">use </span>super::{
 <a href=#31 id=31 data-nosnippet>31</a>    completion_task::{CompletionTaskDescription, TimeBasedCompletionTaskDescription},
@@ -33,7 +33,7 @@
 <a href=#33 id=33 data-nosnippet>33</a>    txn_task::TxnTaskDescription,
 <a href=#34 id=34 data-nosnippet>34</a>};
 <a href=#35 id=35 data-nosnippet>35</a><span class="kw">use </span>crate::{
-<a href=#36 id=36 data-nosnippet>36</a>    helpers::{key_pair_for_id, TestNodeKeyMap},
+<a href=#36 id=36 data-nosnippet>36</a>    helpers::{TestNodeKeyMap, key_pair_for_id},
 <a href=#37 id=37 data-nosnippet>37</a>    node_stake::TestNodeStakes,
 <a href=#38 id=38 data-nosnippet>38</a>    spinning_task::SpinningTaskDescription,
 <a href=#39 id=39 data-nosnippet>39</a>    test_launcher::{Network, ResourceGenerators, TestLauncher},
@@ -640,24 +640,21 @@
 <a href=#640 id=640 data-nosnippet>640</a>                    unreliable_network,
 <a href=#641 id=641 data-nosnippet>641</a>                    secondary_network_delay,
 <a href=#642 id=642 data-nosnippet>642</a>                ),
-<a href=#643 id=643 data-nosnippet>643</a>                storage: Rc::new(<span class="kw">move </span>|node_id| {
-<a href=#644 id=644 data-nosnippet>644</a>                    <span class="kw">let </span>storage = TestStorage::&lt;TYPES&gt; {
-<a href=#645 id=645 data-nosnippet>645</a>                        delay_config: metadata
-<a href=#646 id=646 data-nosnippet>646</a>                            .async_delay_config
-<a href=#647 id=647 data-nosnippet>647</a>                            .get(<span class="kw-2">&amp;</span>node_id)
-<a href=#648 id=648 data-nosnippet>648</a>                            .cloned()
-<a href=#649 id=649 data-nosnippet>649</a>                            .unwrap_or_default(),
-<a href=#650 id=650 data-nosnippet>650</a>                        ..Default::default()
-<a href=#651 id=651 data-nosnippet>651</a>                    };
-<a href=#652 id=652 data-nosnippet>652</a>                    storage
-<a href=#653 id=653 data-nosnippet>653</a>                }),
-<a href=#654 id=654 data-nosnippet>654</a>                hotshot_config,
-<a href=#655 id=655 data-nosnippet>655</a>                validator_config,
-<a href=#656 id=656 data-nosnippet>656</a>            },
-<a href=#657 id=657 data-nosnippet>657</a>            metadata: <span class="self">self</span>,
-<a href=#658 id=658 data-nosnippet>658</a>            additional_test_tasks,
-<a href=#659 id=659 data-nosnippet>659</a>        }
-<a href=#660 id=660 data-nosnippet>660</a>        .map_hotshot_config(mod_hotshot_config)
-<a href=#661 id=661 data-nosnippet>661</a>    }
-<a href=#662 id=662 data-nosnippet>662</a>}
+<a href=#643 id=643 data-nosnippet>643</a>                storage: Rc::new(<span class="kw">move </span>|node_id| TestStorage::&lt;TYPES&gt; {
+<a href=#644 id=644 data-nosnippet>644</a>                    delay_config: metadata
+<a href=#645 id=645 data-nosnippet>645</a>                        .async_delay_config
+<a href=#646 id=646 data-nosnippet>646</a>                        .get(<span class="kw-2">&amp;</span>node_id)
+<a href=#647 id=647 data-nosnippet>647</a>                        .cloned()
+<a href=#648 id=648 data-nosnippet>648</a>                        .unwrap_or_default(),
+<a href=#649 id=649 data-nosnippet>649</a>                    ..Default::default()
+<a href=#650 id=650 data-nosnippet>650</a>                }),
+<a href=#651 id=651 data-nosnippet>651</a>                hotshot_config,
+<a href=#652 id=652 data-nosnippet>652</a>                validator_config,
+<a href=#653 id=653 data-nosnippet>653</a>            },
+<a href=#654 id=654 data-nosnippet>654</a>            metadata: <span class="self">self</span>,
+<a href=#655 id=655 data-nosnippet>655</a>            additional_test_tasks,
+<a href=#656 id=656 data-nosnippet>656</a>        }
+<a href=#657 id=657 data-nosnippet>657</a>        .map_hotshot_config(mod_hotshot_config)
+<a href=#658 id=658 data-nosnippet>658</a>    }
+<a href=#659 id=659 data-nosnippet>659</a>}
 </code></pre></div></section></main></body></html>

@@ -20,8 +20,8 @@
 <a href=#20 id=20 data-nosnippet>20</a><span class="kw">use </span>hotshot_types::traits::metrics;
 <a href=#21 id=21 data-nosnippet>21</a><span class="kw">use </span>itertools::Itertools;
 <a href=#22 id=22 data-nosnippet>22</a><span class="kw">use </span>prometheus::{
-<a href=#23 id=23 data-nosnippet>23</a>    core::{AtomicU64, GenericCounter, GenericCounterVec, GenericGauge, GenericGaugeVec},
-<a href=#24 id=24 data-nosnippet>24</a>    Encoder, HistogramVec, Opts, Registry, TextEncoder,
+<a href=#23 id=23 data-nosnippet>23</a>    Encoder, HistogramVec, Opts, Registry, TextEncoder,
+<a href=#24 id=24 data-nosnippet>24</a>    core::{AtomicU64, GenericCounter, GenericCounterVec, GenericGauge, GenericGaugeVec},
 <a href=#25 id=25 data-nosnippet>25</a>};
 <a href=#26 id=26 data-nosnippet>26</a><span class="kw">use </span>snafu::Snafu;
 <a href=#27 id=27 data-nosnippet>27</a>
@@ -556,61 +556,65 @@
 <a href=#556 id=556 data-nosnippet>556</a>        </span>);
 <a href=#557 id=557 data-nosnippet>557</a>
 <a href=#558 id=558 data-nosnippet>558</a>        <span class="comment">// Check fully-qualified counter name in export.
-<a href=#559 id=559 data-nosnippet>559</a>        </span><span class="macro">assert!</span>(metrics
-<a href=#560 id=560 data-nosnippet>560</a>            .export()
-<a href=#561 id=561 data-nosnippet>561</a>            .unwrap()
-<a href=#562 id=562 data-nosnippet>562</a>            .lines()
-<a href=#563 id=563 data-nosnippet>563</a>            .contains(<span class="kw-2">&amp;</span><span class="string">"subgroup1_subgroup2_counter 42"</span>));
-<a href=#564 id=564 data-nosnippet>564</a>
-<a href=#565 id=565 data-nosnippet>565</a>        <span class="comment">// Check fully-qualified text name in export.
-<a href=#566 id=566 data-nosnippet>566</a>        </span><span class="macro">assert!</span>(metrics
-<a href=#567 id=567 data-nosnippet>567</a>            .export()
-<a href=#568 id=568 data-nosnippet>568</a>            .unwrap()
-<a href=#569 id=569 data-nosnippet>569</a>            .lines()
-<a href=#570 id=570 data-nosnippet>570</a>            .contains(<span class="kw-2">&amp;</span><span class="string">"subgroup1_subgroup2_text 1"</span>));
-<a href=#571 id=571 data-nosnippet>571</a>    }
-<a href=#572 id=572 data-nosnippet>572</a>
-<a href=#573 id=573 data-nosnippet>573</a>    <span class="attr">#[test_log::test]
-<a href=#574 id=574 data-nosnippet>574</a>    </span><span class="kw">fn </span>test_labels() {
-<a href=#575 id=575 data-nosnippet>575</a>        <span class="kw">let </span>metrics = PrometheusMetrics::default();
+<a href=#559 id=559 data-nosnippet>559</a>        </span><span class="macro">assert!</span>(
+<a href=#560 id=560 data-nosnippet>560</a>            metrics
+<a href=#561 id=561 data-nosnippet>561</a>                .export()
+<a href=#562 id=562 data-nosnippet>562</a>                .unwrap()
+<a href=#563 id=563 data-nosnippet>563</a>                .lines()
+<a href=#564 id=564 data-nosnippet>564</a>                .contains(<span class="kw-2">&amp;</span><span class="string">"subgroup1_subgroup2_counter 42"</span>)
+<a href=#565 id=565 data-nosnippet>565</a>        );
+<a href=#566 id=566 data-nosnippet>566</a>
+<a href=#567 id=567 data-nosnippet>567</a>        <span class="comment">// Check fully-qualified text name in export.
+<a href=#568 id=568 data-nosnippet>568</a>        </span><span class="macro">assert!</span>(
+<a href=#569 id=569 data-nosnippet>569</a>            metrics
+<a href=#570 id=570 data-nosnippet>570</a>                .export()
+<a href=#571 id=571 data-nosnippet>571</a>                .unwrap()
+<a href=#572 id=572 data-nosnippet>572</a>                .lines()
+<a href=#573 id=573 data-nosnippet>573</a>                .contains(<span class="kw-2">&amp;</span><span class="string">"subgroup1_subgroup2_text 1"</span>)
+<a href=#574 id=574 data-nosnippet>574</a>        );
+<a href=#575 id=575 data-nosnippet>575</a>    }
 <a href=#576 id=576 data-nosnippet>576</a>
-<a href=#577 id=577 data-nosnippet>577</a>        <span class="kw">let </span>http_count = metrics.counter_family(<span class="string">"http"</span>.into(), <span class="macro">vec!</span>[<span class="string">"method"</span>.into()]);
-<a href=#578 id=578 data-nosnippet>578</a>        <span class="kw">let </span>get_count = http_count.create(<span class="macro">vec!</span>[<span class="string">"GET"</span>.into()]);
-<a href=#579 id=579 data-nosnippet>579</a>        <span class="kw">let </span>post_count = http_count.create(<span class="macro">vec!</span>[<span class="string">"POST"</span>.into()]);
-<a href=#580 id=580 data-nosnippet>580</a>        get_count.add(<span class="number">1</span>);
-<a href=#581 id=581 data-nosnippet>581</a>        post_count.add(<span class="number">2</span>);
-<a href=#582 id=582 data-nosnippet>582</a>
-<a href=#583 id=583 data-nosnippet>583</a>        metrics
-<a href=#584 id=584 data-nosnippet>584</a>            .text_family(<span class="string">"version"</span>.into(), <span class="macro">vec!</span>[<span class="string">"semver"</span>.into(), <span class="string">"rev"</span>.into()])
-<a href=#585 id=585 data-nosnippet>585</a>            .create(<span class="macro">vec!</span>[<span class="string">"0.1.0"</span>.into(), <span class="string">"d1b650a7"</span>.into()]);
+<a href=#577 id=577 data-nosnippet>577</a>    <span class="attr">#[test_log::test]
+<a href=#578 id=578 data-nosnippet>578</a>    </span><span class="kw">fn </span>test_labels() {
+<a href=#579 id=579 data-nosnippet>579</a>        <span class="kw">let </span>metrics = PrometheusMetrics::default();
+<a href=#580 id=580 data-nosnippet>580</a>
+<a href=#581 id=581 data-nosnippet>581</a>        <span class="kw">let </span>http_count = metrics.counter_family(<span class="string">"http"</span>.into(), <span class="macro">vec!</span>[<span class="string">"method"</span>.into()]);
+<a href=#582 id=582 data-nosnippet>582</a>        <span class="kw">let </span>get_count = http_count.create(<span class="macro">vec!</span>[<span class="string">"GET"</span>.into()]);
+<a href=#583 id=583 data-nosnippet>583</a>        <span class="kw">let </span>post_count = http_count.create(<span class="macro">vec!</span>[<span class="string">"POST"</span>.into()]);
+<a href=#584 id=584 data-nosnippet>584</a>        get_count.add(<span class="number">1</span>);
+<a href=#585 id=585 data-nosnippet>585</a>        post_count.add(<span class="number">2</span>);
 <a href=#586 id=586 data-nosnippet>586</a>
-<a href=#587 id=587 data-nosnippet>587</a>        <span class="macro">assert_eq!</span>(
-<a href=#588 id=588 data-nosnippet>588</a>            metrics
-<a href=#589 id=589 data-nosnippet>589</a>                .get_counter_family(<span class="string">"http"</span>)
-<a href=#590 id=590 data-nosnippet>590</a>                .unwrap()
-<a href=#591 id=591 data-nosnippet>591</a>                .get(<span class="kw-2">&amp;</span>[<span class="string">"GET"</span>])
-<a href=#592 id=592 data-nosnippet>592</a>                .get(),
-<a href=#593 id=593 data-nosnippet>593</a>            <span class="number">1
-<a href=#594 id=594 data-nosnippet>594</a>        </span>);
-<a href=#595 id=595 data-nosnippet>595</a>        <span class="macro">assert_eq!</span>(
-<a href=#596 id=596 data-nosnippet>596</a>            metrics
-<a href=#597 id=597 data-nosnippet>597</a>                .get_counter_family(<span class="string">"http"</span>)
-<a href=#598 id=598 data-nosnippet>598</a>                .unwrap()
-<a href=#599 id=599 data-nosnippet>599</a>                .get(<span class="kw-2">&amp;</span>[<span class="string">"POST"</span>])
-<a href=#600 id=600 data-nosnippet>600</a>                .get(),
-<a href=#601 id=601 data-nosnippet>601</a>            <span class="number">2
-<a href=#602 id=602 data-nosnippet>602</a>        </span>);
-<a href=#603 id=603 data-nosnippet>603</a>
-<a href=#604 id=604 data-nosnippet>604</a>        <span class="comment">// Export to a Prometheus string.
-<a href=#605 id=605 data-nosnippet>605</a>        </span><span class="kw">let </span>string = metrics.export().unwrap();
-<a href=#606 id=606 data-nosnippet>606</a>        <span class="comment">// Make sure the output makes sense.
-<a href=#607 id=607 data-nosnippet>607</a>        </span><span class="kw">let </span>lines = string.lines().collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
-<a href=#608 id=608 data-nosnippet>608</a>        <span class="macro">assert!</span>(lines.contains(<span class="kw-2">&amp;</span><span class="string">"http{method=\"GET\"} 1"</span>), <span class="string">"{lines:?}"</span>);
-<a href=#609 id=609 data-nosnippet>609</a>        <span class="macro">assert!</span>(lines.contains(<span class="kw-2">&amp;</span><span class="string">"http{method=\"POST\"} 2"</span>), <span class="string">"{lines:?}"</span>);
-<a href=#610 id=610 data-nosnippet>610</a>        <span class="macro">assert!</span>(
-<a href=#611 id=611 data-nosnippet>611</a>            lines.contains(<span class="kw-2">&amp;</span><span class="string">"version{rev=\"d1b650a7\",semver=\"0.1.0\"} 1"</span>),
-<a href=#612 id=612 data-nosnippet>612</a>            <span class="string">"{lines:?}"
-<a href=#613 id=613 data-nosnippet>613</a>        </span>);
-<a href=#614 id=614 data-nosnippet>614</a>    }
-<a href=#615 id=615 data-nosnippet>615</a>}
+<a href=#587 id=587 data-nosnippet>587</a>        metrics
+<a href=#588 id=588 data-nosnippet>588</a>            .text_family(<span class="string">"version"</span>.into(), <span class="macro">vec!</span>[<span class="string">"semver"</span>.into(), <span class="string">"rev"</span>.into()])
+<a href=#589 id=589 data-nosnippet>589</a>            .create(<span class="macro">vec!</span>[<span class="string">"0.1.0"</span>.into(), <span class="string">"d1b650a7"</span>.into()]);
+<a href=#590 id=590 data-nosnippet>590</a>
+<a href=#591 id=591 data-nosnippet>591</a>        <span class="macro">assert_eq!</span>(
+<a href=#592 id=592 data-nosnippet>592</a>            metrics
+<a href=#593 id=593 data-nosnippet>593</a>                .get_counter_family(<span class="string">"http"</span>)
+<a href=#594 id=594 data-nosnippet>594</a>                .unwrap()
+<a href=#595 id=595 data-nosnippet>595</a>                .get(<span class="kw-2">&amp;</span>[<span class="string">"GET"</span>])
+<a href=#596 id=596 data-nosnippet>596</a>                .get(),
+<a href=#597 id=597 data-nosnippet>597</a>            <span class="number">1
+<a href=#598 id=598 data-nosnippet>598</a>        </span>);
+<a href=#599 id=599 data-nosnippet>599</a>        <span class="macro">assert_eq!</span>(
+<a href=#600 id=600 data-nosnippet>600</a>            metrics
+<a href=#601 id=601 data-nosnippet>601</a>                .get_counter_family(<span class="string">"http"</span>)
+<a href=#602 id=602 data-nosnippet>602</a>                .unwrap()
+<a href=#603 id=603 data-nosnippet>603</a>                .get(<span class="kw-2">&amp;</span>[<span class="string">"POST"</span>])
+<a href=#604 id=604 data-nosnippet>604</a>                .get(),
+<a href=#605 id=605 data-nosnippet>605</a>            <span class="number">2
+<a href=#606 id=606 data-nosnippet>606</a>        </span>);
+<a href=#607 id=607 data-nosnippet>607</a>
+<a href=#608 id=608 data-nosnippet>608</a>        <span class="comment">// Export to a Prometheus string.
+<a href=#609 id=609 data-nosnippet>609</a>        </span><span class="kw">let </span>string = metrics.export().unwrap();
+<a href=#610 id=610 data-nosnippet>610</a>        <span class="comment">// Make sure the output makes sense.
+<a href=#611 id=611 data-nosnippet>611</a>        </span><span class="kw">let </span>lines = string.lines().collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
+<a href=#612 id=612 data-nosnippet>612</a>        <span class="macro">assert!</span>(lines.contains(<span class="kw-2">&amp;</span><span class="string">"http{method=\"GET\"} 1"</span>), <span class="string">"{lines:?}"</span>);
+<a href=#613 id=613 data-nosnippet>613</a>        <span class="macro">assert!</span>(lines.contains(<span class="kw-2">&amp;</span><span class="string">"http{method=\"POST\"} 2"</span>), <span class="string">"{lines:?}"</span>);
+<a href=#614 id=614 data-nosnippet>614</a>        <span class="macro">assert!</span>(
+<a href=#615 id=615 data-nosnippet>615</a>            lines.contains(<span class="kw-2">&amp;</span><span class="string">"version{rev=\"d1b650a7\",semver=\"0.1.0\"} 1"</span>),
+<a href=#616 id=616 data-nosnippet>616</a>            <span class="string">"{lines:?}"
+<a href=#617 id=617 data-nosnippet>617</a>        </span>);
+<a href=#618 id=618 data-nosnippet>618</a>    }
+<a href=#619 id=619 data-nosnippet>619</a>}
 </code></pre></div></section></main></body></html>

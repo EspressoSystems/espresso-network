@@ -55,15 +55,15 @@
 <a href=#55 id=55 data-nosnippet>55</a>    <span class="kw">use </span>anyhow::Result;
 <a href=#56 id=56 data-nosnippet>56</a>    <span class="kw">use </span>espresso_contract_deployer::build_provider;
 <a href=#57 id=57 data-nosnippet>57</a>    <span class="kw">use </span>espresso_types::{
-<a href=#58 id=58 data-nosnippet>58</a>        v0_3::{Fetcher, StakeTableEvent},
-<a href=#59 id=59 data-nosnippet>59</a>        L1Client,
+<a href=#58 id=58 data-nosnippet>58</a>        L1Client,
+<a href=#59 id=59 data-nosnippet>59</a>        v0_3::{Fetcher, StakeTableEvent},
 <a href=#60 id=60 data-nosnippet>60</a>    };
 <a href=#61 id=61 data-nosnippet>61</a>    <span class="kw">use </span>hotshot_contract_adapter::{
 <a href=#62 id=62 data-nosnippet>62</a>        evm::DecodeRevert <span class="kw">as _</span>,
 <a href=#63 id=63 data-nosnippet>63</a>        sol_types::{EdOnBN254PointSol, G1PointSol, G2PointSol, StakeTableV2::StakeTableV2Errors},
-<a href=#64 id=64 data-nosnippet>64</a>        stake_table::{sign_address_bls, sign_address_schnorr, StateSignatureSol},
+<a href=#64 id=64 data-nosnippet>64</a>        stake_table::{StateSignatureSol, sign_address_bls, sign_address_schnorr},
 <a href=#65 id=65 data-nosnippet>65</a>    };
-<a href=#66 id=66 data-nosnippet>66</a>    <span class="kw">use </span>rand::{rngs::StdRng, SeedableRng <span class="kw">as _</span>};
+<a href=#66 id=66 data-nosnippet>66</a>    <span class="kw">use </span>rand::{SeedableRng <span class="kw">as _</span>, rngs::StdRng};
 <a href=#67 id=67 data-nosnippet>67</a>    <span class="kw">use </span>rstest::rstest;
 <a href=#68 id=68 data-nosnippet>68</a>
 <a href=#69 id=69 data-nosnippet>69</a>    <span class="kw">use </span>super::<span class="kw-2">*</span>;

@@ -9,8 +9,8 @@
 <a href=#9 id=9 data-nosnippet>9</a>};
 <a href=#10 id=10 data-nosnippet>10</a>
 <a href=#11 id=11 data-nosnippet>11</a><span class="kw">use </span>hotshot::traits::{
-<a href=#12 id=12 data-nosnippet>12</a>    implementations::{Cliquenet, CombinedNetworks, Libp2pNetwork, MemoryNetwork, PushCdnNetwork},
-<a href=#13 id=13 data-nosnippet>13</a>    NodeImplementation,
+<a href=#12 id=12 data-nosnippet>12</a>    NodeImplementation,
+<a href=#13 id=13 data-nosnippet>13</a>    implementations::{Cliquenet, CombinedNetworks, Libp2pNetwork, MemoryNetwork, PushCdnNetwork},
 <a href=#14 id=14 data-nosnippet>14</a>};
 <a href=#15 id=15 data-nosnippet>15</a><span class="kw">use </span>hotshot_types::{
 <a href=#16 id=16 data-nosnippet>16</a>    constants::TEST_UPGRADE_CONSTANTS,
@@ -20,7 +20,7 @@
 <a href=#20 id=20 data-nosnippet>20</a>};
 <a href=#21 id=21 data-nosnippet>21</a><span class="kw">use </span>serde::{Deserialize, Serialize};
 <a href=#22 id=22 data-nosnippet>22</a><span class="kw">use </span>vbs::version::StaticVersion;
-<a href=#23 id=23 data-nosnippet>23</a><span class="kw">use </span>versions::{version, Upgrade};
+<a href=#23 id=23 data-nosnippet>23</a><span class="kw">use </span>versions::{Upgrade, version};
 <a href=#24 id=24 data-nosnippet>24</a>
 <a href=#25 id=25 data-nosnippet>25</a><span class="kw">pub use </span><span class="kw">crate</span>::membership::helpers::{RandomOverlapQuorumFilterConfig, StableQuorumFilterConfig};
 <a href=#26 id=26 data-nosnippet>26</a><span class="kw">use </span>crate::{
@@ -349,7 +349,7 @@
 <a href=#349 id=349 data-nosnippet>349</a>        utils::{genesis_epoch_from_version, option_epoch_from_block_number},
 <a href=#350 id=350 data-nosnippet>350</a>    };
 <a href=#351 id=351 data-nosnippet>351</a>    <span class="kw">use </span>serde::{Deserialize, Serialize};
-<a href=#352 id=352 data-nosnippet>352</a>    <span class="kw">use </span>versions::{version, Upgrade, EPOCH_VERSION};
+<a href=#352 id=352 data-nosnippet>352</a>    <span class="kw">use </span>versions::{EPOCH_VERSION, Upgrade, version};
 <a href=#353 id=353 data-nosnippet>353</a>
 <a href=#354 id=354 data-nosnippet>354</a>    <span class="kw">use </span><span class="kw">crate</span>::node_types::TestTypes;
 <a href=#355 id=355 data-nosnippet>355</a>    <span class="attr">#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Hash, Eq)]

@@ -4,11 +4,11 @@
 <a href=#4 id=4 data-nosnippet>4</a>
 <a href=#5 id=5 data-nosnippet>5</a><span class="kw">use </span>alloy::{
 <a href=#6 id=6 data-nosnippet>6</a>    network::EthereumWallet,
-<a href=#7 id=7 data-nosnippet>7</a>    primitives::{utils::format_units, Address, U256},
+<a href=#7 id=7 data-nosnippet>7</a>    primitives::{Address, U256, utils::format_units},
 <a href=#8 id=8 data-nosnippet>8</a>    providers::{Provider, ProviderBuilder},
 <a href=#9 id=9 data-nosnippet>9</a>    rpc::types::TransactionReceipt,
 <a href=#10 id=10 data-nosnippet>10</a>};
-<a href=#11 id=11 data-nosnippet>11</a><span class="kw">use </span>anyhow::{anyhow, Context, <span class="prelude-ty">Result</span>};
+<a href=#11 id=11 data-nosnippet>11</a><span class="kw">use </span>anyhow::{Context, <span class="prelude-ty">Result</span>, anyhow};
 <a href=#12 id=12 data-nosnippet>12</a><span class="kw">use </span>futures::FutureExt;
 <a href=#13 id=13 data-nosnippet>13</a><span class="kw">use </span>hotshot_contract_adapter::{
 <a href=#14 id=14 data-nosnippet>14</a>    field_to_u256,
@@ -24,14 +24,14 @@
 <a href=#24 id=24 data-nosnippet>24</a><span class="kw">use </span>jf_pcs::prelude::UnivariateUniversalParams;
 <a href=#25 id=25 data-nosnippet>25</a><span class="kw">use </span>jf_relation_compat::Circuit <span class="kw">as _</span>;
 <a href=#26 id=26 data-nosnippet>26</a><span class="kw">use </span>surf_disco::Client;
-<a href=#27 id=27 data-nosnippet>27</a><span class="kw">use </span>tide_disco::{error::ServerError, Api};
+<a href=#27 id=27 data-nosnippet>27</a><span class="kw">use </span>tide_disco::{Api, error::ServerError};
 <a href=#28 id=28 data-nosnippet>28</a><span class="kw">use </span>time::ext::InstantExt;
 <a href=#29 id=29 data-nosnippet>29</a><span class="kw">use </span>tokio::{io, spawn, task::spawn_blocking, time::sleep};
 <a href=#30 id=30 data-nosnippet>30</a><span class="kw">use </span>vbs::version::StaticVersionType;
 <a href=#31 id=31 data-nosnippet>31</a>
 <a href=#32 id=32 data-nosnippet>32</a><span class="kw">use </span>crate::{
-<a href=#33 id=33 data-nosnippet>33</a>    v1::snark::{Proof, ProvingKey, PublicInput},
-<a href=#34 id=34 data-nosnippet>34</a>    ProverError, ProverServiceState, StateProverConfig,
+<a href=#33 id=33 data-nosnippet>33</a>    ProverError, ProverServiceState, StateProverConfig,
+<a href=#34 id=34 data-nosnippet>34</a>    v1::snark::{Proof, ProvingKey, PublicInput},
 <a href=#35 id=35 data-nosnippet>35</a>};
 <a href=#36 id=36 data-nosnippet>36</a>
 <a href=#37 id=37 data-nosnippet>37</a><span class="kw">pub fn </span>load_proving_key(stake_table_capacity: usize) -&gt; ProvingKey {
@@ -346,10 +346,10 @@
 <a href=#346 id=346 data-nosnippet>346</a>    ));
 <a href=#347 id=347 data-nosnippet>347</a>
 <a href=#348 id=348 data-nosnippet>348</a>    <span class="comment">// Start the HTTP server to get a functioning healthcheck before any heavy computations.
-<a href=#349 id=349 data-nosnippet>349</a>    </span><span class="kw">if let </span><span class="prelude-val">Some</span>(port) = state.config.port {
-<a href=#350 id=350 data-nosnippet>350</a>        <span class="kw">if let </span><span class="prelude-val">Err</span>(err) = start_http_server(port, state.config.light_client_address, bind_version) {
-<a href=#351 id=351 data-nosnippet>351</a>            <span class="macro">tracing::error!</span>(<span class="string">"Error starting http server: {}"</span>, err);
-<a href=#352 id=352 data-nosnippet>352</a>        }
+<a href=#349 id=349 data-nosnippet>349</a>    </span><span class="kw">if let </span><span class="prelude-val">Some</span>(port) = state.config.port
+<a href=#350 id=350 data-nosnippet>350</a>        &amp;&amp; <span class="kw">let </span><span class="prelude-val">Err</span>(err) = start_http_server(port, state.config.light_client_address, bind_version)
+<a href=#351 id=351 data-nosnippet>351</a>    {
+<a href=#352 id=352 data-nosnippet>352</a>        <span class="macro">tracing::error!</span>(<span class="string">"Error starting http server: {}"</span>, err);
 <a href=#353 id=353 data-nosnippet>353</a>    }
 <a href=#354 id=354 data-nosnippet>354</a>
 <a href=#355 id=355 data-nosnippet>355</a>    <span class="kw">let </span>proving_key =
@@ -417,11 +417,11 @@
 <a href=#417 id=417 data-nosnippet>417</a>
 <a href=#418 id=418 data-nosnippet>418</a>    <span class="kw">use </span>alloy::{
 <a href=#419 id=419 data-nosnippet>419</a>        node_bindings::Anvil,
-<a href=#420 id=420 data-nosnippet>420</a>        providers::{layers::AnvilProvider, ProviderBuilder},
+<a href=#420 id=420 data-nosnippet>420</a>        providers::{ProviderBuilder, layers::AnvilProvider},
 <a href=#421 id=421 data-nosnippet>421</a>        sol_types::SolValue,
 <a href=#422 id=422 data-nosnippet>422</a>    };
 <a href=#423 id=423 data-nosnippet>423</a>    <span class="kw">use </span>anyhow::Result;
-<a href=#424 id=424 data-nosnippet>424</a>    <span class="kw">use </span>espresso_contract_deployer::{deploy_light_client_proxy, Contracts};
+<a href=#424 id=424 data-nosnippet>424</a>    <span class="kw">use </span>espresso_contract_deployer::{Contracts, deploy_light_client_proxy};
 <a href=#425 id=425 data-nosnippet>425</a>    <span class="kw">use </span>hotshot_contract_adapter::sol_types::LightClientMock;
 <a href=#426 id=426 data-nosnippet>426</a>    <span class="kw">use </span>jf_utils::test_rng;
 <a href=#427 id=427 data-nosnippet>427</a>

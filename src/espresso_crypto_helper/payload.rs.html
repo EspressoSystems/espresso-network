@@ -57,13 +57,13 @@
 <a href=#57 id=57 data-nosnippet>57</a>    }
 <a href=#58 id=58 data-nosnippet>58</a>}
 <a href=#59 id=59 data-nosnippet>59</a>
-<a href=#60 id=60 data-nosnippet>60</a><span class="attr">#[no_mangle]
-<a href=#61 id=61 data-nosnippet>61</a></span><span class="doccomment">/// Decode a payload from payload bytes and namespace table bytes.
-<a href=#62 id=62 data-nosnippet>62</a>///
-<a href=#63 id=63 data-nosnippet>63</a>/// # Safety
-<a href=#64 id=64 data-nosnippet>64</a>///
-<a href=#65 id=65 data-nosnippet>65</a>/// payload_ptr and ns_table_ptr must be valid pointers to initialized slices,
-<a href=#66 id=66 data-nosnippet>66</a>/// valid for the duration of the call. It is okay to pass null pointers if the length is zero.
+<a href=#60 id=60 data-nosnippet>60</a><span class="doccomment">/// Decode a payload from payload bytes and namespace table bytes.
+<a href=#61 id=61 data-nosnippet>61</a>///
+<a href=#62 id=62 data-nosnippet>62</a>/// # Safety
+<a href=#63 id=63 data-nosnippet>63</a>///
+<a href=#64 id=64 data-nosnippet>64</a>/// payload_ptr and ns_table_ptr must be valid pointers to initialized slices,
+<a href=#65 id=65 data-nosnippet>65</a>/// valid for the duration of the call. It is okay to pass null pointers if the length is zero.
+<a href=#66 id=66 data-nosnippet>66</a></span><span class="attr">#[<span class="kw">unsafe</span>(no_mangle)]
 <a href=#67 id=67 data-nosnippet>67</a></span><span class="kw">pub unsafe extern </span><span class="string">"C" </span><span class="kw">fn </span>decode_payload(
 <a href=#68 id=68 data-nosnippet>68</a>    <span class="kw-2">mut </span>payload_ptr: <span class="kw-2">*const </span>u8,
 <a href=#69 id=69 data-nosnippet>69</a>    payload_len: usize,
@@ -137,33 +137,35 @@
 <a href=#137 id=137 data-nosnippet>137</a>///
 <a href=#138 id=138 data-nosnippet>138</a>/// # Safety
 <a href=#139 id=139 data-nosnippet>139</a>/// Caller promised this was allocated by us,
-<a href=#140 id=140 data-nosnippet>140</a></span><span class="attr">#[no_mangle]
+<a href=#140 id=140 data-nosnippet>140</a></span><span class="attr">#[<span class="kw">unsafe</span>(no_mangle)]
 <a href=#141 id=141 data-nosnippet>141</a></span><span class="kw">pub unsafe extern </span><span class="string">"C" </span><span class="kw">fn </span>free_transaction_vec_result(result: DecodingResult) {
-<a href=#142 id=142 data-nosnippet>142</a>    <span class="comment">// Free the error string if present
-<a href=#143 id=143 data-nosnippet>143</a>    </span><span class="kw">if </span>!result.error.is_null() {
-<a href=#144 id=144 data-nosnippet>144</a>        <span class="kw">let _ </span>= CString::from_raw(result.error);
-<a href=#145 id=145 data-nosnippet>145</a>    }
-<a href=#146 id=146 data-nosnippet>146</a>
-<a href=#147 id=147 data-nosnippet>147</a>    <span class="comment">// Free the transactions array and payloads if present
-<a href=#148 id=148 data-nosnippet>148</a>    </span><span class="kw">if </span>!result.transactions.is_null() {
-<a href=#149 id=149 data-nosnippet>149</a>        <span class="comment">// First free each transaction's payload
-<a href=#150 id=150 data-nosnippet>150</a>        </span><span class="kw">let </span>transactions = Vec::from_raw_parts(
-<a href=#151 id=151 data-nosnippet>151</a>            result.transactions,
-<a href=#152 id=152 data-nosnippet>152</a>            result.transactions_len,
-<a href=#153 id=153 data-nosnippet>153</a>            result.transactions_cap,
-<a href=#154 id=154 data-nosnippet>154</a>        );
-<a href=#155 id=155 data-nosnippet>155</a>
-<a href=#156 id=156 data-nosnippet>156</a>        <span class="kw">for </span>transaction <span class="kw">in </span>transactions.iter() {
-<a href=#157 id=157 data-nosnippet>157</a>            <span class="kw">if </span>!transaction.payload_ptr.is_null() {
-<a href=#158 id=158 data-nosnippet>158</a>                <span class="kw">let _ </span>= Vec::from_raw_parts(
-<a href=#159 id=159 data-nosnippet>159</a>                    transaction.payload_ptr <span class="kw">as </span><span class="kw-2">*mut </span>u8,
-<a href=#160 id=160 data-nosnippet>160</a>                    transaction.payload_len,
-<a href=#161 id=161 data-nosnippet>161</a>                    transaction.payload_cap,
-<a href=#162 id=162 data-nosnippet>162</a>                );
-<a href=#163 id=163 data-nosnippet>163</a>            }
-<a href=#164 id=164 data-nosnippet>164</a>        }
-<a href=#165 id=165 data-nosnippet>165</a>
-<a href=#166 id=166 data-nosnippet>166</a>        <span class="comment">// The transactions vector itself is dropped when it goes out of scope
-<a href=#167 id=167 data-nosnippet>167</a>    </span>}
-<a href=#168 id=168 data-nosnippet>168</a>}
+<a href=#142 id=142 data-nosnippet>142</a>    <span class="kw">unsafe </span>{
+<a href=#143 id=143 data-nosnippet>143</a>        <span class="comment">// Free the error string if present
+<a href=#144 id=144 data-nosnippet>144</a>        </span><span class="kw">if </span>!result.error.is_null() {
+<a href=#145 id=145 data-nosnippet>145</a>            <span class="kw">let _ </span>= CString::from_raw(result.error);
+<a href=#146 id=146 data-nosnippet>146</a>        }
+<a href=#147 id=147 data-nosnippet>147</a>
+<a href=#148 id=148 data-nosnippet>148</a>        <span class="comment">// Free the transactions array and payloads if present
+<a href=#149 id=149 data-nosnippet>149</a>        </span><span class="kw">if </span>!result.transactions.is_null() {
+<a href=#150 id=150 data-nosnippet>150</a>            <span class="comment">// First free each transaction's payload
+<a href=#151 id=151 data-nosnippet>151</a>            </span><span class="kw">let </span>transactions = Vec::from_raw_parts(
+<a href=#152 id=152 data-nosnippet>152</a>                result.transactions,
+<a href=#153 id=153 data-nosnippet>153</a>                result.transactions_len,
+<a href=#154 id=154 data-nosnippet>154</a>                result.transactions_cap,
+<a href=#155 id=155 data-nosnippet>155</a>            );
+<a href=#156 id=156 data-nosnippet>156</a>
+<a href=#157 id=157 data-nosnippet>157</a>            <span class="kw">for </span>transaction <span class="kw">in </span>transactions.iter() {
+<a href=#158 id=158 data-nosnippet>158</a>                <span class="kw">if </span>!transaction.payload_ptr.is_null() {
+<a href=#159 id=159 data-nosnippet>159</a>                    <span class="kw">let _ </span>= Vec::from_raw_parts(
+<a href=#160 id=160 data-nosnippet>160</a>                        transaction.payload_ptr <span class="kw">as </span><span class="kw-2">*mut </span>u8,
+<a href=#161 id=161 data-nosnippet>161</a>                        transaction.payload_len,
+<a href=#162 id=162 data-nosnippet>162</a>                        transaction.payload_cap,
+<a href=#163 id=163 data-nosnippet>163</a>                    );
+<a href=#164 id=164 data-nosnippet>164</a>                }
+<a href=#165 id=165 data-nosnippet>165</a>            }
+<a href=#166 id=166 data-nosnippet>166</a>
+<a href=#167 id=167 data-nosnippet>167</a>            <span class="comment">// The transactions vector itself is dropped when it goes out of scope
+<a href=#168 id=168 data-nosnippet>168</a>        </span>}
+<a href=#169 id=169 data-nosnippet>169</a>    }
+<a href=#170 id=170 data-nosnippet>170</a>}
 </code></pre></div></section></main></body></html>

@@ -4,11 +4,11 @@
 <a href=#4 id=4 data-nosnippet>4</a><span class="kw">use </span>serde::{Deserialize, Serialize};
 <a href=#5 id=5 data-nosnippet>5</a>
 <a href=#6 id=6 data-nosnippet>6</a><span class="kw">use </span>crate::{
-<a href=#7 id=7 data-nosnippet>7</a>    avidm_gf2::{
-<a href=#8 id=8 data-nosnippet>8</a>        namespaced::{NsAvidmGf2Commit, NsAvidmGf2Common, NsAvidmGf2Scheme},
+<a href=#7 id=7 data-nosnippet>7</a>    VerificationResult, VidError, VidResult, VidScheme,
+<a href=#8 id=8 data-nosnippet>8</a>    avidm_gf2::{
 <a href=#9 id=9 data-nosnippet>9</a>        AvidmGf2Scheme, MerkleProof, MerkleTree,
-<a href=#10 id=10 data-nosnippet>10</a>    },
-<a href=#11 id=11 data-nosnippet>11</a>    VerificationResult, VidError, VidResult, VidScheme,
+<a href=#10 id=10 data-nosnippet>10</a>        namespaced::{NsAvidmGf2Commit, NsAvidmGf2Common, NsAvidmGf2Scheme},
+<a href=#11 id=11 data-nosnippet>11</a>    },
 <a href=#12 id=12 data-nosnippet>12</a>};
 <a href=#13 id=13 data-nosnippet>13</a>
 <a href=#14 id=14 data-nosnippet>14</a><span class="doccomment">/// A proof of a namespace payload.
@@ -78,7 +78,7 @@
 <a href=#78 id=78 data-nosnippet>78</a>
 <a href=#79 id=79 data-nosnippet>79</a><span class="attr">#[cfg(test)]
 <a href=#80 id=80 data-nosnippet>80</a></span><span class="kw">mod </span>tests {
-<a href=#81 id=81 data-nosnippet>81</a>    <span class="kw">use </span><span class="kw">crate</span>::avidm_gf2::{namespaced::NsAvidmGf2Scheme, AvidmGf2Scheme};
+<a href=#81 id=81 data-nosnippet>81</a>    <span class="kw">use </span><span class="kw">crate</span>::avidm_gf2::{AvidmGf2Scheme, namespaced::NsAvidmGf2Scheme};
 <a href=#82 id=82 data-nosnippet>82</a>
 <a href=#83 id=83 data-nosnippet>83</a>    <span class="attr">#[test]
 <a href=#84 id=84 data-nosnippet>84</a>    </span><span class="kw">fn </span>test_ns_proof() {

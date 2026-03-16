@@ -3,15 +3,15 @@
 <a href=#3 id=3 data-nosnippet>3</a><span class="kw">use </span>alloy::primitives::Address;
 <a href=#4 id=4 data-nosnippet>4</a><span class="kw">use </span>anyhow::Context;
 <a href=#5 id=5 data-nosnippet>5</a><span class="kw">use </span>espresso_types::{FeeAccount, FeeAmount, FeeMerkleTree, Header};
-<a href=#6 id=6 data-nosnippet>6</a><span class="kw">use </span>futures::{stream::BoxStream, StreamExt};
+<a href=#6 id=6 data-nosnippet>6</a><span class="kw">use </span>futures::{StreamExt, stream::BoxStream};
 <a href=#7 id=7 data-nosnippet>7</a><span class="kw">use </span>jf_merkle_tree_compat::{
-<a href=#8 id=8 data-nosnippet>8</a>    prelude::{MerkleProof, Sha3Node},
-<a href=#9 id=9 data-nosnippet>9</a>    MerkleTreeScheme,
+<a href=#8 id=8 data-nosnippet>8</a>    MerkleTreeScheme,
+<a href=#9 id=9 data-nosnippet>9</a>    prelude::{MerkleProof, Sha3Node},
 <a href=#10 id=10 data-nosnippet>10</a>};
 <a href=#11 id=11 data-nosnippet>11</a><span class="kw">use </span>surf_disco::{
-<a href=#12 id=12 data-nosnippet>12</a>    error::ClientError,
-<a href=#13 id=13 data-nosnippet>13</a>    socket::{Connection, Unsupported},
-<a href=#14 id=14 data-nosnippet>14</a>    Url,
+<a href=#12 id=12 data-nosnippet>12</a>    Url,
+<a href=#13 id=13 data-nosnippet>13</a>    error::ClientError,
+<a href=#14 id=14 data-nosnippet>14</a>    socket::{Connection, Unsupported},
 <a href=#15 id=15 data-nosnippet>15</a>};
 <a href=#16 id=16 data-nosnippet>16</a><span class="kw">use </span>tokio::time::sleep;
 <a href=#17 id=17 data-nosnippet>17</a><span class="kw">use </span>vbs::version::StaticVersion;

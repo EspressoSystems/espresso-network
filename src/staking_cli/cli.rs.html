@@ -26,22 +26,22 @@
 <a href=#26 id=26 data-nosnippet>26</a><span class="attr">#[cfg(feature = <span class="string">"testing"</span>)]
 <a href=#27 id=27 data-nosnippet>27</a></span><span class="kw">use </span><span class="kw">crate</span>::deploy::deploy_contracts_for_testing;
 <a href=#28 id=28 data-nosnippet>28</a><span class="kw">use </span>crate::{
-<a href=#29 id=29 data-nosnippet>29</a>    claim::fetch_claim_rewards_inputs,
-<a href=#30 id=30 data-nosnippet>30</a>    demo::{
-<a href=#31 id=31 data-nosnippet>31</a>        churn_for_demo, delegate_for_demo, stake_for_demo, undelegate_for_demo, ChurnParams,
-<a href=#32 id=32 data-nosnippet>32</a>        DemoCommands,
-<a href=#33 id=33 data-nosnippet>33</a>    },
-<a href=#34 id=34 data-nosnippet>34</a>    info::{
-<a href=#35 id=35 data-nosnippet>35</a>        display_stake_table, fetch_stake_table_version, fetch_token_address, stake_table_info,
-<a href=#36 id=36 data-nosnippet>36</a>        StakeTableContractVersion,
-<a href=#37 id=37 data-nosnippet>37</a>    },
-<a href=#38 id=38 data-nosnippet>38</a>    metadata::{fetch_metadata, validate_metadata_uri, MetadataUri},
-<a href=#39 id=39 data-nosnippet>39</a>    output::{
-<a href=#40 id=40 data-nosnippet>40</a>        format_esp, output_calldata, output_error, output_success, output_warn, CalldataInfo,
-<a href=#41 id=41 data-nosnippet>41</a>    },
-<a href=#42 id=42 data-nosnippet>42</a>    signature::{NodeSignatureDestination, NodeSignatureInput, NodeSignatures},
-<a href=#43 id=43 data-nosnippet>43</a>    transaction::Transaction,
-<a href=#44 id=44 data-nosnippet>44</a>    Commands, Config, ValidSignerConfig,
+<a href=#29 id=29 data-nosnippet>29</a>    Commands, Config, ValidSignerConfig,
+<a href=#30 id=30 data-nosnippet>30</a>    claim::fetch_claim_rewards_inputs,
+<a href=#31 id=31 data-nosnippet>31</a>    demo::{
+<a href=#32 id=32 data-nosnippet>32</a>        ChurnParams, DemoCommands, churn_for_demo, delegate_for_demo, stake_for_demo,
+<a href=#33 id=33 data-nosnippet>33</a>        undelegate_for_demo,
+<a href=#34 id=34 data-nosnippet>34</a>    },
+<a href=#35 id=35 data-nosnippet>35</a>    info::{
+<a href=#36 id=36 data-nosnippet>36</a>        StakeTableContractVersion, display_stake_table, fetch_stake_table_version,
+<a href=#37 id=37 data-nosnippet>37</a>        fetch_token_address, stake_table_info,
+<a href=#38 id=38 data-nosnippet>38</a>    },
+<a href=#39 id=39 data-nosnippet>39</a>    metadata::{MetadataUri, fetch_metadata, validate_metadata_uri},
+<a href=#40 id=40 data-nosnippet>40</a>    output::{
+<a href=#41 id=41 data-nosnippet>41</a>        CalldataInfo, format_esp, output_calldata, output_error, output_success, output_warn,
+<a href=#42 id=42 data-nosnippet>42</a>    },
+<a href=#43 id=43 data-nosnippet>43</a>    signature::{NodeSignatureDestination, NodeSignatureInput, NodeSignatures},
+<a href=#44 id=44 data-nosnippet>44</a>    transaction::Transaction,
 <a href=#45 id=45 data-nosnippet>45</a>};
 <a href=#46 id=46 data-nosnippet>46</a>
 <a href=#47 id=47 data-nosnippet>47</a><span class="attr">#[derive(Parser)]
@@ -166,10 +166,10 @@
 <a href=#166 id=166 data-nosnippet>166</a>                EspTokenEvents::Approval(e) =&gt; output_success(<span class="macro">format!</span>(<span class="string">"event: {e:?}"</span>)),
 <a href=#167 id=167 data-nosnippet>167</a>                <span class="kw">_ </span>=&gt; {},
 <a href=#168 id=168 data-nosnippet>168</a>            }
-<a href=#169 id=169 data-nosnippet>169</a>        } <span class="kw">else if let </span><span class="prelude-val">Ok</span>(decoded) = RewardClaimEvents::decode_log(log.as_ref()) {
-<a href=#170 id=170 data-nosnippet>170</a>            <span class="kw">if let </span>RewardClaimEvents::RewardsClaimed(e) = <span class="kw-2">&amp;</span>decoded.data {
-<a href=#171 id=171 data-nosnippet>171</a>                output_success(<span class="macro">format!</span>(<span class="string">"event: {e:?}"</span>));
-<a href=#172 id=172 data-nosnippet>172</a>            }
+<a href=#169 id=169 data-nosnippet>169</a>        } <span class="kw">else if let </span><span class="prelude-val">Ok</span>(decoded) = RewardClaimEvents::decode_log(log.as_ref())
+<a href=#170 id=170 data-nosnippet>170</a>            &amp;&amp; <span class="kw">let </span>RewardClaimEvents::RewardsClaimed(e) = <span class="kw-2">&amp;</span>decoded.data
+<a href=#171 id=171 data-nosnippet>171</a>        {
+<a href=#172 id=172 data-nosnippet>172</a>            output_success(<span class="macro">format!</span>(<span class="string">"event: {e:?}"</span>));
 <a href=#173 id=173 data-nosnippet>173</a>        }
 <a href=#174 id=174 data-nosnippet>174</a>    }
 <a href=#175 id=175 data-nosnippet>175</a>}
@@ -355,23 +355,23 @@
 <a href=#355 id=355 data-nosnippet>355</a>
 <a href=#356 id=356 data-nosnippet>356</a>    <span class="comment">// Handle deploy-contracts early since it doesn't require stake table address
 <a href=#357 id=357 data-nosnippet>357</a>    </span><span class="attr">#[cfg(feature = <span class="string">"testing"</span>)]
-<a href=#358 id=358 data-nosnippet>358</a>    </span><span class="kw">if let </span>Commands::Demo(<span class="kw-2">ref </span>demo) = config.commands {
-<a href=#359 id=359 data-nosnippet>359</a>        <span class="kw">if let </span>DemoCommands::DeployContracts { <span class="kw-2">ref </span>output } = demo.command {
-<a href=#360 id=360 data-nosnippet>360</a>            <span class="macro">tracing::info!</span>(<span class="string">"Deploying staking contracts for testing"</span>);
-<a href=#361 id=361 data-nosnippet>361</a>            deploy_contracts_for_testing(
-<a href=#362 id=362 data-nosnippet>362</a>                config.rpc_url.clone(),
-<a href=#363 id=363 data-nosnippet>363</a>                config
-<a href=#364 id=364 data-nosnippet>364</a>                    .signer
-<a href=#365 id=365 data-nosnippet>365</a>                    .mnemonic
-<a href=#366 id=366 data-nosnippet>366</a>                    .clone()
-<a href=#367 id=367 data-nosnippet>367</a>                    .expect(<span class="string">"mnemonic required for deployment"</span>),
-<a href=#368 id=368 data-nosnippet>368</a>                config.signer.account_index.unwrap_or(<span class="number">0</span>),
-<a href=#369 id=369 data-nosnippet>369</a>                output.clone(),
-<a href=#370 id=370 data-nosnippet>370</a>            )
-<a href=#371 id=371 data-nosnippet>371</a>            .<span class="kw">await
-<a href=#372 id=372 data-nosnippet>372</a>            </span>.context(<span class="string">"failed to deploy contracts"</span>)<span class="question-mark">?</span>;
-<a href=#373 id=373 data-nosnippet>373</a>            <span class="kw">return </span><span class="prelude-val">Ok</span>(());
-<a href=#374 id=374 data-nosnippet>374</a>        }
+<a href=#358 id=358 data-nosnippet>358</a>    </span><span class="kw">if let </span>Commands::Demo(<span class="kw-2">ref </span>demo) = config.commands
+<a href=#359 id=359 data-nosnippet>359</a>        &amp;&amp; <span class="kw">let </span>DemoCommands::DeployContracts { <span class="kw-2">ref </span>output } = demo.command
+<a href=#360 id=360 data-nosnippet>360</a>    {
+<a href=#361 id=361 data-nosnippet>361</a>        <span class="macro">tracing::info!</span>(<span class="string">"Deploying staking contracts for testing"</span>);
+<a href=#362 id=362 data-nosnippet>362</a>        deploy_contracts_for_testing(
+<a href=#363 id=363 data-nosnippet>363</a>            config.rpc_url.clone(),
+<a href=#364 id=364 data-nosnippet>364</a>            config
+<a href=#365 id=365 data-nosnippet>365</a>                .signer
+<a href=#366 id=366 data-nosnippet>366</a>                .mnemonic
+<a href=#367 id=367 data-nosnippet>367</a>                .clone()
+<a href=#368 id=368 data-nosnippet>368</a>                .expect(<span class="string">"mnemonic required for deployment"</span>),
+<a href=#369 id=369 data-nosnippet>369</a>            config.signer.account_index.unwrap_or(<span class="number">0</span>),
+<a href=#370 id=370 data-nosnippet>370</a>            output.clone(),
+<a href=#371 id=371 data-nosnippet>371</a>        )
+<a href=#372 id=372 data-nosnippet>372</a>        .<span class="kw">await
+<a href=#373 id=373 data-nosnippet>373</a>        </span>.context(<span class="string">"failed to deploy contracts"</span>)<span class="question-mark">?</span>;
+<a href=#374 id=374 data-nosnippet>374</a>        <span class="kw">return </span><span class="prelude-val">Ok</span>(());
 <a href=#375 id=375 data-nosnippet>375</a>    }
 <a href=#376 id=376 data-nosnippet>376</a>
 <a href=#377 id=377 data-nosnippet>377</a>    <span class="comment">// Clap serde will put default value if they aren't set. We check some
@@ -616,12 +616,12 @@
 <a href=#616 id=616 data-nosnippet>616</a>            <span class="kw">let </span>metadata_uri: MetadataUri = metadata_uri_args.clone().try_into()<span class="question-mark">?</span>;
 <a href=#617 id=617 data-nosnippet>617</a>
 <a href=#618 id=618 data-nosnippet>618</a>            <span class="comment">// Validate metadata URI if present and validation not skipped
-<a href=#619 id=619 data-nosnippet>619</a>            </span><span class="kw">if let </span><span class="prelude-val">Some</span>(url) = metadata_uri.url() {
-<a href=#620 id=620 data-nosnippet>620</a>                <span class="kw">if </span>!metadata_uri_args.skip_metadata_validation {
-<a href=#621 id=621 data-nosnippet>621</a>                    validate_metadata_uri(url, <span class="kw-2">&amp;</span>payload.bls_vk)
-<a href=#622 id=622 data-nosnippet>622</a>                        .<span class="kw">await
-<a href=#623 id=623 data-nosnippet>623</a>                        </span>.context(<span class="string">"use --skip-metadata-validation to skip"</span>)<span class="question-mark">?</span>;
-<a href=#624 id=624 data-nosnippet>624</a>                }
+<a href=#619 id=619 data-nosnippet>619</a>            </span><span class="kw">if let </span><span class="prelude-val">Some</span>(url) = metadata_uri.url()
+<a href=#620 id=620 data-nosnippet>620</a>                &amp;&amp; !metadata_uri_args.skip_metadata_validation
+<a href=#621 id=621 data-nosnippet>621</a>            {
+<a href=#622 id=622 data-nosnippet>622</a>                validate_metadata_uri(url, <span class="kw-2">&amp;</span>payload.bls_vk)
+<a href=#623 id=623 data-nosnippet>623</a>                    .<span class="kw">await
+<a href=#624 id=624 data-nosnippet>624</a>                    </span>.context(<span class="string">"use --skip-metadata-validation to skip"</span>)<span class="question-mark">?</span>;
 <a href=#625 id=625 data-nosnippet>625</a>            }
 <a href=#626 id=626 data-nosnippet>626</a>
 <a href=#627 id=627 data-nosnippet>627</a>            Transaction::RegisterValidator {
@@ -670,18 +670,18 @@
 <a href=#670 id=670 data-nosnippet>670</a>            <span class="kw">let </span>metadata_uri: MetadataUri = metadata_uri_args.clone().try_into()<span class="question-mark">?</span>;
 <a href=#671 id=671 data-nosnippet>671</a>
 <a href=#672 id=672 data-nosnippet>672</a>            <span class="comment">// Validate metadata URI if present and validation not skipped
-<a href=#673 id=673 data-nosnippet>673</a>            </span><span class="kw">if let </span><span class="prelude-val">Some</span>(url) = metadata_uri.url() {
-<a href=#674 id=674 data-nosnippet>674</a>                <span class="kw">if </span>!metadata_uri_args.skip_metadata_validation {
-<a href=#675 id=675 data-nosnippet>675</a>                    <span class="kw">let </span>bls_vk = consensus_public_key.ok_or_else(|| {
-<a href=#676 id=676 data-nosnippet>676</a>                        <span class="macro">anyhow::anyhow!</span>(
-<a href=#677 id=677 data-nosnippet>677</a>                            <span class="string">"--consensus-public-key is required for metadata validation (use \
-<a href=#678 id=678 data-nosnippet>678</a>                             --skip-metadata-validation to skip)"
-<a href=#679 id=679 data-nosnippet>679</a>                        </span>)
-<a href=#680 id=680 data-nosnippet>680</a>                    })<span class="question-mark">?</span>;
-<a href=#681 id=681 data-nosnippet>681</a>                    validate_metadata_uri(url, <span class="kw-2">&amp;</span>bls_vk)
-<a href=#682 id=682 data-nosnippet>682</a>                        .<span class="kw">await
-<a href=#683 id=683 data-nosnippet>683</a>                        </span>.context(<span class="string">"use --skip-metadata-validation to skip"</span>)<span class="question-mark">?</span>;
-<a href=#684 id=684 data-nosnippet>684</a>                }
+<a href=#673 id=673 data-nosnippet>673</a>            </span><span class="kw">if let </span><span class="prelude-val">Some</span>(url) = metadata_uri.url()
+<a href=#674 id=674 data-nosnippet>674</a>                &amp;&amp; !metadata_uri_args.skip_metadata_validation
+<a href=#675 id=675 data-nosnippet>675</a>            {
+<a href=#676 id=676 data-nosnippet>676</a>                <span class="kw">let </span>bls_vk = consensus_public_key.ok_or_else(|| {
+<a href=#677 id=677 data-nosnippet>677</a>                    <span class="macro">anyhow::anyhow!</span>(
+<a href=#678 id=678 data-nosnippet>678</a>                        <span class="string">"--consensus-public-key is required for metadata validation (use \
+<a href=#679 id=679 data-nosnippet>679</a>                         --skip-metadata-validation to skip)"
+<a href=#680 id=680 data-nosnippet>680</a>                    </span>)
+<a href=#681 id=681 data-nosnippet>681</a>                })<span class="question-mark">?</span>;
+<a href=#682 id=682 data-nosnippet>682</a>                validate_metadata_uri(url, <span class="kw-2">&amp;</span>bls_vk)
+<a href=#683 id=683 data-nosnippet>683</a>                    .<span class="kw">await
+<a href=#684 id=684 data-nosnippet>684</a>                    </span>.context(<span class="string">"use --skip-metadata-validation to skip"</span>)<span class="question-mark">?</span>;
 <a href=#685 id=685 data-nosnippet>685</a>            }
 <a href=#686 id=686 data-nosnippet>686</a>
 <a href=#687 id=687 data-nosnippet>687</a>            Transaction::UpdateMetadataUri {

@@ -14,7 +14,7 @@
 <a href=#14 id=14 data-nosnippet>14</a>    simple_certificate::EpochRootQuorumCertificateV2,
 <a href=#15 id=15 data-nosnippet>15</a>    simple_vote::{EpochRootQuorumVote2, HasEpoch, QuorumVote2, TimeoutData2, TimeoutVote2},
 <a href=#16 id=16 data-nosnippet>16</a>    traits::node_implementation::{NodeImplementation, NodeType},
-<a href=#17 id=17 data-nosnippet>17</a>    utils::{is_epoch_root, is_epoch_transition, is_last_block, EpochTransitionIndicator},
+<a href=#17 id=17 data-nosnippet>17</a>    utils::{EpochTransitionIndicator, is_epoch_root, is_epoch_transition, is_last_block},
 <a href=#18 id=18 data-nosnippet>18</a>    vote::{HasViewNumber, Vote},
 <a href=#19 id=19 data-nosnippet>19</a>};
 <a href=#20 id=20 data-nosnippet>20</a><span class="kw">use </span>hotshot_utils::anytrace::<span class="kw-2">*</span>;
@@ -385,10 +385,10 @@
 <a href=#385 id=385 data-nosnippet>385</a>        .read()
 <a href=#386 id=386 data-nosnippet>386</a>        .<span class="kw">await
 <a href=#387 id=387 data-nosnippet>387</a>        </span>.clone();
-<a href=#388 id=388 data-nosnippet>388</a>    <span class="kw">if let </span><span class="prelude-val">Some</span>(cert) = decided_upgrade_certificate_read {
-<a href=#389 id=389 data-nosnippet>389</a>        <span class="kw">if </span>new_view_number == cert.data.new_version_first_view {
-<a href=#390 id=390 data-nosnippet>390</a>            <span class="macro">tracing::error!</span>(<span class="string">"Version upgraded based on a decided upgrade cert: {cert:?}"</span>);
-<a href=#391 id=391 data-nosnippet>391</a>        }
+<a href=#388 id=388 data-nosnippet>388</a>    <span class="kw">if let </span><span class="prelude-val">Some</span>(cert) = decided_upgrade_certificate_read
+<a href=#389 id=389 data-nosnippet>389</a>        &amp;&amp; new_view_number == cert.data.new_version_first_view
+<a href=#390 id=390 data-nosnippet>390</a>    {
+<a href=#391 id=391 data-nosnippet>391</a>        <span class="macro">tracing::error!</span>(<span class="string">"Version upgraded based on a decided upgrade cert: {cert:?}"</span>);
 <a href=#392 id=392 data-nosnippet>392</a>    }
 <a href=#393 id=393 data-nosnippet>393</a>
 <a href=#394 id=394 data-nosnippet>394</a>    <span class="comment">// Spawn a timeout task if we did actually update view

@@ -28,9 +28,9 @@
 <a href=#28 id=28 data-nosnippet>28</a>    <span class="doccomment">/// Return a random value
 <a href=#29 id=29 data-nosnippet>29</a>    </span><span class="kw">pub fn </span>rand&lt;R: Rng&gt;(rng: <span class="kw-2">&amp;mut </span>R) -&gt; <span class="self">Self </span>{
 <a href=#30 id=30 data-nosnippet>30</a>        <span class="self">Self </span>{
-<a href=#31 id=31 data-nosnippet>31</a>            viewNum: rng.<span class="kw">gen</span>::&lt;u64&gt;(),
-<a href=#32 id=32 data-nosnippet>32</a>            blockHeight: rng.<span class="kw">gen</span>::&lt;u64&gt;(),
-<a href=#33 id=33 data-nosnippet>33</a>            blockCommRoot: U256::from_limbs(rng.<span class="kw">gen</span>::&lt;[u64; <span class="number">4</span>]&gt;()),
+<a href=#31 id=31 data-nosnippet>31</a>            viewNum: rng.r#gen::&lt;u64&gt;(),
+<a href=#32 id=32 data-nosnippet>32</a>            blockHeight: rng.r#gen::&lt;u64&gt;(),
+<a href=#33 id=33 data-nosnippet>33</a>            blockCommRoot: U256::from_limbs(rng.r#gen::&lt;[u64; <span class="number">4</span>]&gt;()),
 <a href=#34 id=34 data-nosnippet>34</a>        }
 <a href=#35 id=35 data-nosnippet>35</a>    }
 <a href=#36 id=36 data-nosnippet>36</a>}
@@ -80,10 +80,10 @@
 <a href=#80 id=80 data-nosnippet>80</a>    <span class="doccomment">/// Returns a random value
 <a href=#81 id=81 data-nosnippet>81</a>    </span><span class="kw">pub fn </span>rand&lt;R: Rng&gt;(rng: <span class="kw-2">&amp;mut </span>R) -&gt; <span class="self">Self </span>{
 <a href=#82 id=82 data-nosnippet>82</a>        <span class="self">Self </span>{
-<a href=#83 id=83 data-nosnippet>83</a>            threshold: U256::from_limbs(rng.<span class="kw">gen</span>::&lt;[u64; <span class="number">4</span>]&gt;()),
-<a href=#84 id=84 data-nosnippet>84</a>            blsKeyComm: U256::from_limbs(rng.<span class="kw">gen</span>::&lt;[u64; <span class="number">4</span>]&gt;()),
-<a href=#85 id=85 data-nosnippet>85</a>            schnorrKeyComm: U256::from_limbs(rng.<span class="kw">gen</span>::&lt;[u64; <span class="number">4</span>]&gt;()),
-<a href=#86 id=86 data-nosnippet>86</a>            amountComm: U256::from_limbs(rng.<span class="kw">gen</span>::&lt;[u64; <span class="number">4</span>]&gt;()),
+<a href=#83 id=83 data-nosnippet>83</a>            threshold: U256::from_limbs(rng.r#gen::&lt;[u64; <span class="number">4</span>]&gt;()),
+<a href=#84 id=84 data-nosnippet>84</a>            blsKeyComm: U256::from_limbs(rng.r#gen::&lt;[u64; <span class="number">4</span>]&gt;()),
+<a href=#85 id=85 data-nosnippet>85</a>            schnorrKeyComm: U256::from_limbs(rng.r#gen::&lt;[u64; <span class="number">4</span>]&gt;()),
+<a href=#86 id=86 data-nosnippet>86</a>            amountComm: U256::from_limbs(rng.r#gen::&lt;[u64; <span class="number">4</span>]&gt;()),
 <a href=#87 id=87 data-nosnippet>87</a>        }
 <a href=#88 id=88 data-nosnippet>88</a>    }
 <a href=#89 id=89 data-nosnippet>89</a>}

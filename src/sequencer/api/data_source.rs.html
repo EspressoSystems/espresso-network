@@ -5,15 +5,15 @@
 <a href=#5 id=5 data-nosnippet>5</a><span class="kw">use </span>async_trait::async_trait;
 <a href=#6 id=6 data-nosnippet>6</a><span class="kw">use </span>committable::Commitment;
 <a href=#7 id=7 data-nosnippet>7</a><span class="kw">use </span>espresso_types::{
-<a href=#8 id=8 data-nosnippet>8</a>    config::PublicNetworkConfig,
-<a href=#9 id=9 data-nosnippet>9</a>    v0::traits::{PersistenceOptions, SequencerPersistence},
-<a href=#10 id=10 data-nosnippet>10</a>    v0_3::{
-<a href=#11 id=11 data-nosnippet>11</a>        AuthenticatedValidator, ChainConfig, RegisteredValidator, RewardAccountProofV1,
-<a href=#12 id=12 data-nosnippet>12</a>        RewardAccountQueryDataV1, RewardAccountV1, RewardAmount, RewardMerkleTreeV1,
-<a href=#13 id=13 data-nosnippet>13</a>        StakeTableEvent,
-<a href=#14 id=14 data-nosnippet>14</a>    },
-<a href=#15 id=15 data-nosnippet>15</a>    v0_4::{RewardAccountProofV2, RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleTreeV2},
-<a href=#16 id=16 data-nosnippet>16</a>    FeeAccount, FeeAccountProof, FeeMerkleTree, Leaf2, NodeState, PubKey, Transaction,
+<a href=#8 id=8 data-nosnippet>8</a>    FeeAccount, FeeAccountProof, FeeMerkleTree, Leaf2, NodeState, PubKey, Transaction,
+<a href=#9 id=9 data-nosnippet>9</a>    config::PublicNetworkConfig,
+<a href=#10 id=10 data-nosnippet>10</a>    v0::traits::{PersistenceOptions, SequencerPersistence},
+<a href=#11 id=11 data-nosnippet>11</a>    v0_3::{
+<a href=#12 id=12 data-nosnippet>12</a>        AuthenticatedValidator, ChainConfig, RegisteredValidator, RewardAccountProofV1,
+<a href=#13 id=13 data-nosnippet>13</a>        RewardAccountQueryDataV1, RewardAccountV1, RewardAmount, RewardMerkleTreeV1,
+<a href=#14 id=14 data-nosnippet>14</a>        StakeTableEvent,
+<a href=#15 id=15 data-nosnippet>15</a>    },
+<a href=#16 id=16 data-nosnippet>16</a>    v0_4::{RewardAccountProofV2, RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleTreeV2},
 <a href=#17 id=17 data-nosnippet>17</a>};
 <a href=#18 id=18 data-nosnippet>18</a><span class="kw">use </span>futures::future::{BoxFuture, Future};
 <a href=#19 id=19 data-nosnippet>19</a><span class="kw">use </span>hotshot::types::BLSPubKey;
@@ -25,22 +25,22 @@
 <a href=#25 id=25 data-nosnippet>25</a>    status::StatusDataSource,
 <a href=#26 id=26 data-nosnippet>26</a>};
 <a href=#27 id=27 data-nosnippet>27</a><span class="kw">use </span>hotshot_types::{
-<a href=#28 id=28 data-nosnippet>28</a>    data::{EpochNumber, VidShare, ViewNumber},
-<a href=#29 id=29 data-nosnippet>29</a>    light_client::LCV3StateSignatureRequestBody,
-<a href=#30 id=30 data-nosnippet>30</a>    simple_certificate::LightClientStateUpdateCertificateV2,
-<a href=#31 id=31 data-nosnippet>31</a>    traits::{network::ConnectedNetwork, node_implementation::NodeType},
-<a href=#32 id=32 data-nosnippet>32</a>    PeerConfig,
+<a href=#28 id=28 data-nosnippet>28</a>    PeerConfig,
+<a href=#29 id=29 data-nosnippet>29</a>    data::{EpochNumber, VidShare, ViewNumber},
+<a href=#30 id=30 data-nosnippet>30</a>    light_client::LCV3StateSignatureRequestBody,
+<a href=#31 id=31 data-nosnippet>31</a>    simple_certificate::LightClientStateUpdateCertificateV2,
+<a href=#32 id=32 data-nosnippet>32</a>    traits::{network::ConnectedNetwork, node_implementation::NodeType},
 <a href=#33 id=33 data-nosnippet>33</a>};
 <a href=#34 id=34 data-nosnippet>34</a><span class="kw">use </span>indexmap::IndexMap;
 <a href=#35 id=35 data-nosnippet>35</a><span class="kw">use </span>serde::{Deserialize, Serialize};
 <a href=#36 id=36 data-nosnippet>36</a><span class="kw">use </span>tide_disco::Url;
 <a href=#37 id=37 data-nosnippet>37</a>
 <a href=#38 id=38 data-nosnippet>38</a><span class="kw">use </span>super::{
-<a href=#39 id=39 data-nosnippet>39</a>    fs,
+<a href=#39 id=39 data-nosnippet>39</a>    AccountQueryData, BlocksFrontier, fs,
 <a href=#40 id=40 data-nosnippet>40</a>    options::{Options, Query},
-<a href=#41 id=41 data-nosnippet>41</a>    sql, AccountQueryData, BlocksFrontier,
+<a href=#41 id=41 data-nosnippet>41</a>    sql,
 <a href=#42 id=42 data-nosnippet>42</a>};
-<a href=#43 id=43 data-nosnippet>43</a><span class="kw">use </span>crate::{persistence, state_cert::StateCertFetchError, SeqTypes, SequencerApiVersion, U256};
+<a href=#43 id=43 data-nosnippet>43</a><span class="kw">use </span>crate::{SeqTypes, SequencerApiVersion, U256, persistence, state_cert::StateCertFetchError};
 <a href=#44 id=44 data-nosnippet>44</a>
 <a href=#45 id=45 data-nosnippet>45</a><span class="kw">pub trait </span>DataSourceOptions: PersistenceOptions {
 <a href=#46 id=46 data-nosnippet>46</a>    <span class="kw">type </span>DataSource: SequencerDataSource&lt;Options = <span class="self">Self</span>&gt;;

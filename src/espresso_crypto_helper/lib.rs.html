@@ -61,7 +61,7 @@
 <a href=#61 id=61 data-nosnippet>61</a>/// need to provide a way to our FFI consumer to free the memory we allocated in this way.
 <a href=#62 id=62 data-nosnippet>62</a>///
 <a href=#63 id=63 data-nosnippet>63</a>/// This function needs to be called for every ValidationResult created via FFI.
-<a href=#64 id=64 data-nosnippet>64</a></span><span class="attr">#[no_mangle]
+<a href=#64 id=64 data-nosnippet>64</a></span><span class="attr">#[<span class="kw">unsafe</span>(no_mangle)]
 <a href=#65 id=65 data-nosnippet>65</a></span><span class="kw">pub unsafe extern </span><span class="string">"C" </span><span class="kw">fn </span>free_error_string(s: <span class="kw-2">*mut </span>c_char) {
 <a href=#66 id=66 data-nosnippet>66</a>    <span class="kw">if </span>!s.is_null() {
 <a href=#67 id=67 data-nosnippet>67</a>        <span class="kw">unsafe </span>{
@@ -75,7 +75,7 @@
 <a href=#75 id=75 data-nosnippet>75</a>// root_bytes: Byte representation of a Sha3Node merkle root.
 <a href=#76 id=76 data-nosnippet>76</a>// header_bytes: Byte representation of the HotShot header being validated as a Merkle leaf.
 <a href=#77 id=77 data-nosnippet>77</a>// circuit_block_bytes: Circuit representation of the HotShot header commitment returned by the light client contract.
-<a href=#78 id=78 data-nosnippet>78</a></span><span class="attr">#[no_mangle]
+<a href=#78 id=78 data-nosnippet>78</a></span><span class="attr">#[<span class="kw">unsafe</span>(no_mangle)]
 <a href=#79 id=79 data-nosnippet>79</a></span><span class="kw">pub extern </span><span class="string">"C" </span><span class="kw">fn </span>verify_merkle_proof_helper(
 <a href=#80 id=80 data-nosnippet>80</a>    proof_ptr: <span class="kw-2">*const </span>u8,
 <a href=#81 id=81 data-nosnippet>81</a>    proof_len: usize,
@@ -140,7 +140,7 @@
 <a href=#140 id=140 data-nosnippet>140</a>// commit_bytes: Byte representation of a TaggedBase64 payload commitment string.
 <a href=#141 id=141 data-nosnippet>141</a>// ns_table_bytes: Raw bytes of the namespace table.
 <a href=#142 id=142 data-nosnippet>142</a>// tx_comm_bytes: Byte representation of a hex encoded Sha256 digest that the transaction set commits to.
-<a href=#143 id=143 data-nosnippet>143</a></span><span class="attr">#[no_mangle]
+<a href=#143 id=143 data-nosnippet>143</a></span><span class="attr">#[<span class="kw">unsafe</span>(no_mangle)]
 <a href=#144 id=144 data-nosnippet>144</a></span><span class="kw">pub extern </span><span class="string">"C" </span><span class="kw">fn </span>verify_namespace_helper(
 <a href=#145 id=145 data-nosnippet>145</a>    namespace: u64,
 <a href=#146 id=146 data-nosnippet>146</a>    proof_ptr: <span class="kw-2">*const </span>u8,

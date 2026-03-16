@@ -24,23 +24,23 @@
 <a href=#24 id=24 data-nosnippet>24</a><span class="kw">use </span>futures::stream::TryStreamExt;
 <a href=#25 id=25 data-nosnippet>25</a><span class="kw">use </span>hotshot_types::traits::node_implementation::NodeType;
 <a href=#26 id=26 data-nosnippet>26</a><span class="kw">use </span>jf_merkle_tree_compat::{
-<a href=#27 id=27 data-nosnippet>27</a>    prelude::{MerkleNode, MerkleProof},
-<a href=#28 id=28 data-nosnippet>28</a>    DigestAlgorithm, MerkleCommitment, ToTraversalPath,
+<a href=#27 id=27 data-nosnippet>27</a>    DigestAlgorithm, MerkleCommitment, ToTraversalPath,
+<a href=#28 id=28 data-nosnippet>28</a>    prelude::{MerkleNode, MerkleProof},
 <a href=#29 id=29 data-nosnippet>29</a>};
 <a href=#30 id=30 data-nosnippet>30</a><span class="kw">use </span>sqlx::types::{BitVec, JsonValue};
 <a href=#31 id=31 data-nosnippet>31</a>
 <a href=#32 id=32 data-nosnippet>32</a><span class="kw">use </span>super::{
-<a href=#33 id=33 data-nosnippet>33</a>    <span class="kw">super</span>::transaction::{query_as, Transaction, TransactionMode, Write},
+<a href=#33 id=33 data-nosnippet>33</a>    <span class="kw">super</span>::transaction::{Transaction, TransactionMode, Write, query_as},
 <a href=#34 id=34 data-nosnippet>34</a>    DecodeError, QueryBuilder,
 <a href=#35 id=35 data-nosnippet>35</a>};
 <a href=#36 id=36 data-nosnippet>36</a><span class="kw">use </span>crate::{
-<a href=#37 id=37 data-nosnippet>37</a>    data_source::storage::{
-<a href=#38 id=38 data-nosnippet>38</a>        pruning::PrunedHeightStorage,
-<a href=#39 id=39 data-nosnippet>39</a>        sql::{build_where_in, sqlx::Row},
-<a href=#40 id=40 data-nosnippet>40</a>        MerklizedStateHeightStorage, MerklizedStateStorage,
-<a href=#41 id=41 data-nosnippet>41</a>    },
-<a href=#42 id=42 data-nosnippet>42</a>    merklized_state::{MerklizedState, Snapshot},
-<a href=#43 id=43 data-nosnippet>43</a>    QueryError, QueryResult,
+<a href=#37 id=37 data-nosnippet>37</a>    QueryError, QueryResult,
+<a href=#38 id=38 data-nosnippet>38</a>    data_source::storage::{
+<a href=#39 id=39 data-nosnippet>39</a>        MerklizedStateHeightStorage, MerklizedStateStorage,
+<a href=#40 id=40 data-nosnippet>40</a>        pruning::PrunedHeightStorage,
+<a href=#41 id=41 data-nosnippet>41</a>        sql::{build_where_in, sqlx::Row},
+<a href=#42 id=42 data-nosnippet>42</a>    },
+<a href=#43 id=43 data-nosnippet>43</a>    merklized_state::{MerklizedState, Snapshot},
 <a href=#44 id=44 data-nosnippet>44</a>};
 <a href=#45 id=45 data-nosnippet>45</a>
 <a href=#46 id=46 data-nosnippet>46</a><span class="attr">#[async_trait]
@@ -735,16 +735,16 @@
 <a href=#735 id=735 data-nosnippet>735</a></span><span class="kw">mod </span>test {
 <a href=#736 id=736 data-nosnippet>736</a>    <span class="kw">use </span>futures::stream::StreamExt;
 <a href=#737 id=737 data-nosnippet>737</a>    <span class="kw">use </span>jf_merkle_tree_compat::{
-<a href=#738 id=738 data-nosnippet>738</a>        universal_merkle_tree::UniversalMerkleTree, LookupResult, MerkleTreeScheme,
-<a href=#739 id=739 data-nosnippet>739</a>        UniversalMerkleTreeScheme,
+<a href=#738 id=738 data-nosnippet>738</a>        LookupResult, MerkleTreeScheme, UniversalMerkleTreeScheme,
+<a href=#739 id=739 data-nosnippet>739</a>        universal_merkle_tree::UniversalMerkleTree,
 <a href=#740 id=740 data-nosnippet>740</a>    };
-<a href=#741 id=741 data-nosnippet>741</a>    <span class="kw">use </span>rand::{seq::IteratorRandom, RngCore};
+<a href=#741 id=741 data-nosnippet>741</a>    <span class="kw">use </span>rand::{RngCore, seq::IteratorRandom};
 <a href=#742 id=742 data-nosnippet>742</a>
 <a href=#743 id=743 data-nosnippet>743</a>    <span class="kw">use </span>super::<span class="kw-2">*</span>;
 <a href=#744 id=744 data-nosnippet>744</a>    <span class="kw">use </span>crate::{
 <a href=#745 id=745 data-nosnippet>745</a>        data_source::{
-<a href=#746 id=746 data-nosnippet>746</a>            storage::sql::{testing::TmpDb, <span class="kw-2">*</span>},
-<a href=#747 id=747 data-nosnippet>747</a>            VersionedDataSource,
+<a href=#746 id=746 data-nosnippet>746</a>            VersionedDataSource,
+<a href=#747 id=747 data-nosnippet>747</a>            storage::sql::{testing::TmpDb, <span class="kw-2">*</span>},
 <a href=#748 id=748 data-nosnippet>748</a>        },
 <a href=#749 id=749 data-nosnippet>749</a>        merklized_state::UpdateStateData,
 <a href=#750 id=750 data-nosnippet>750</a>        testing::mocks::{MockMerkleTree, MockTypes},

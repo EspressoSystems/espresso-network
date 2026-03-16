@@ -183,7 +183,7 @@
 <a href=#183 id=183 data-nosnippet>183</a>    <span class="kw">use </span>ark_bn254::Fr <span class="kw">as </span>Fr254;
 <a href=#184 id=184 data-nosnippet>184</a>    <span class="kw">use </span>rand::RngCore;
 <a href=#185 id=185 data-nosnippet>185</a>
-<a href=#186 id=186 data-nosnippet>186</a>    <span class="kw">use </span>super::{bytes_to_field, field_to_bytes, PrimeField, Vec};
+<a href=#186 id=186 data-nosnippet>186</a>    <span class="kw">use </span>super::{PrimeField, Vec, bytes_to_field, field_to_bytes};
 <a href=#187 id=187 data-nosnippet>187</a>
 <a href=#188 id=188 data-nosnippet>188</a>    <span class="kw">fn </span>bytes_to_field_iter&lt;F: PrimeField&gt;() {
 <a href=#189 id=189 data-nosnippet>189</a>        <span class="kw">let </span>byte_lens = [<span class="number">0</span>, <span class="number">1</span>, <span class="number">2</span>, <span class="number">16</span>, <span class="number">31</span>, <span class="number">32</span>, <span class="number">33</span>, <span class="number">48</span>, <span class="number">65</span>, <span class="number">100</span>, <span class="number">200</span>, <span class="number">5000</span>];

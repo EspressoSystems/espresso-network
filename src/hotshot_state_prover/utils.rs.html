@@ -57,7 +57,7 @@
 <a href=#57 id=57 data-nosnippet>57</a><span class="attr">#[cfg(test)]
 <a href=#58 id=58 data-nosnippet>58</a></span><span class="kw">mod </span>tests {
 <a href=#59 id=59 data-nosnippet>59</a>    <span class="kw">use </span>alloy::{node_bindings::Anvil, providers::ProviderBuilder, rpc::client::RpcClient};
-<a href=#60 id=60 data-nosnippet>60</a>    <span class="kw">use </span>espresso_types::{v0_1::SwitchingTransport, L1ClientOptions};
+<a href=#60 id=60 data-nosnippet>60</a>    <span class="kw">use </span>espresso_types::{L1ClientOptions, v0_1::SwitchingTransport};
 <a href=#61 id=61 data-nosnippet>61</a>    <span class="kw">use </span>rstest::rstest;
 <a href=#62 id=62 data-nosnippet>62</a>
 <a href=#63 id=63 data-nosnippet>63</a>    <span class="kw">use </span>super::<span class="kw-2">*</span>;
@@ -100,10 +100,12 @@
 <a href=#100 id=100 data-nosnippet>100</a>        .get_chain_id(<span class="kw-2">&amp;</span>provider)
 <a href=#101 id=101 data-nosnippet>101</a>        .<span class="kw">await</span>;
 <a href=#102 id=102 data-nosnippet>102</a>
-<a href=#103 id=103 data-nosnippet>103</a>        <span class="macro">assert!</span>(result
-<a href=#104 id=104 data-nosnippet>104</a>            .unwrap_err()
-<a href=#105 id=105 data-nosnippet>105</a>            .to_string()
-<a href=#106 id=106 data-nosnippet>106</a>            .contains(<span class="string">"Failed to get chain ID"</span>));
-<a href=#107 id=107 data-nosnippet>107</a>    }
-<a href=#108 id=108 data-nosnippet>108</a>}
+<a href=#103 id=103 data-nosnippet>103</a>        <span class="macro">assert!</span>(
+<a href=#104 id=104 data-nosnippet>104</a>            result
+<a href=#105 id=105 data-nosnippet>105</a>                .unwrap_err()
+<a href=#106 id=106 data-nosnippet>106</a>                .to_string()
+<a href=#107 id=107 data-nosnippet>107</a>                .contains(<span class="string">"Failed to get chain ID"</span>)
+<a href=#108 id=108 data-nosnippet>108</a>        );
+<a href=#109 id=109 data-nosnippet>109</a>    }
+<a href=#110 id=110 data-nosnippet>110</a>}
 </code></pre></div></section></main></body></html>
