@@ -1,7 +1,7 @@
 use std::future::Future;
 
 use anyhow::Result;
-use espresso_types::{v0_3::StakeTableEvent, NamespaceId, SeqTypes};
+use espresso_types::{NamespaceId, SeqTypes, v0_3::StakeTableEvent};
 use hotshot_query_service::{
     availability::{LeafId, LeafQueryData},
     node::BlockId,
@@ -48,7 +48,7 @@ pub trait Client: Send + Sync + 'static {
         start: usize,
         end: usize,
     ) -> impl Send
-           + Future<
+    + Future<
         Output = Result<Vec<hotshot_query_service::availability::LeafQueryData<SeqTypes>>>,
     >;
 
@@ -198,25 +198,25 @@ mod test {
 
     use committable::Committable;
     use espresso_types::{Header, Transaction};
-    use futures::{stream::StreamExt, TryStreamExt};
+    use futures::{TryStreamExt, stream::StreamExt};
     use hotshot_query_service::{
-        availability::{BlockQueryData, LeafQueryData},
         Resolvable,
+        availability::{BlockQueryData, LeafQueryData},
     };
     use pretty_assertions::assert_eq;
     use rand::RngCore;
     use sequencer::{
         api::{
+            Options,
             data_source::testing::TestableSequencerDataSource,
             sql::DataSource,
             test_helpers::{TestNetwork, TestNetworkConfigBuilder},
-            Options,
         },
-        testing::{wait_for_decide_on_handle, TestConfigBuilder},
+        testing::{TestConfigBuilder, wait_for_decide_on_handle},
     };
     use test_utils;
     use tokio::time::sleep;
-    use versions::{Upgrade, EPOCH_VERSION};
+    use versions::{EPOCH_VERSION, Upgrade};
 
     use super::*;
     use crate::{

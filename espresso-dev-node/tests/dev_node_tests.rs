@@ -5,7 +5,7 @@ use alloy::{
     node_bindings::{Anvil, AnvilInstance},
     primitives::U256,
     providers::{Provider, ProviderBuilder},
-    signers::local::{coins_bip39::English, MnemonicBuilder},
+    signers::local::{MnemonicBuilder, coins_bip39::English},
 };
 use committable::{Commitment, Committable};
 use escargot::CargoBuild;

@@ -28,12 +28,12 @@ use tagged_base64::{TaggedBase64, Tb64Error};
 use thiserror::Error;
 use vbs::version::Version;
 use vec1::Vec1;
-use versions::{Upgrade, EPOCH_VERSION, VID2_UPGRADE_VERSION};
+use versions::{EPOCH_VERSION, Upgrade, VID2_UPGRADE_VERSION};
 
 use crate::{
     drb::DrbResult,
     epoch_membership::EpochMembershipCoordinator,
-    message::{convert_proposal, Proposal, UpgradeLock},
+    message::{Proposal, UpgradeLock, convert_proposal},
     simple_certificate::{
         LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
         NextEpochQuorumCertificate2, QuorumCertificate, QuorumCertificate2, TimeoutCertificate,
@@ -42,20 +42,20 @@ use crate::{
     },
     simple_vote::{HasEpoch, QuorumData, QuorumData2, UpgradeProposalData, VersionedVoteData},
     traits::{
+        BlockPayload,
         block_contents::{BlockHeader, BuilderFee, EncodeBytes, TestableBlock},
         node_implementation::NodeType,
         signature_key::SignatureKey,
         states::TestableState,
-        BlockPayload,
     },
     utils::{
-        bincode_opts, genesis_epoch_from_version, option_epoch_from_block_number,
-        EpochTransitionIndicator,
+        EpochTransitionIndicator, bincode_opts, genesis_epoch_from_version,
+        option_epoch_from_block_number,
     },
     vid::{
-        advz::{advz_scheme, ADVZScheme},
-        avidm::{init_avidm_param, AvidMScheme},
-        avidm_gf2::{init_avidm_gf2_param, AvidmGf2Scheme},
+        advz::{ADVZScheme, advz_scheme},
+        avidm::{AvidMScheme, init_avidm_param},
+        avidm_gf2::{AvidmGf2Scheme, init_avidm_gf2_param},
     },
     vote::{Certificate, HasViewNumber},
 };
@@ -417,7 +417,15 @@ impl From<VidCommon2> for VidCommon {
     }
 }
 
-impl VidCommon {
+/// Borrowed view of [`VidCommon`] that avoids cloning large common data.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VidCommonRef<'a> {
+    V0(&'a VidCommon0),
+    V1(&'a VidCommon1),
+    V2(&'a VidCommon2),
+}
+
+impl<'a> VidCommonRef<'a> {
     pub fn is_consistent(&self, comm: &VidCommitment) -> bool {
         match (self, comm) {
             (Self::V0(common), VidCommitment::V0(comm)) => {
@@ -429,6 +437,20 @@ impl VidCommon {
             },
             _ => false,
         }
+    }
+}
+
+impl VidCommon {
+    pub fn as_ref(&self) -> VidCommonRef<'_> {
+        match self {
+            Self::V0(c) => VidCommonRef::V0(c),
+            Self::V1(c) => VidCommonRef::V1(c),
+            Self::V2(c) => VidCommonRef::V2(c),
+        }
+    }
+
+    pub fn is_consistent(&self, comm: &VidCommitment) -> bool {
+        self.as_ref().is_consistent(comm)
     }
 }
 
@@ -766,6 +788,34 @@ impl<TYPES: NodeType> VidDisperseShare<TYPES> {
             Self::V0(_) => None,
             Self::V1(share) => share.target_epoch,
             Self::V2(share) => share.target_epoch,
+        }
+    }
+
+    /// Return a borrowed view of the VID common data.
+    pub fn common(&self) -> VidCommonRef<'_> {
+        match self {
+            Self::V0(share) => VidCommonRef::V0(&share.common),
+            Self::V1(share) => VidCommonRef::V1(&share.common),
+            Self::V2(share) => VidCommonRef::V2(&share.common),
+        }
+    }
+
+    /// Check if vid common is consistent with the commitment.
+    pub fn is_consistent(&self) -> bool {
+        match self {
+            Self::V0(share) => share.is_consistent(),
+            Self::V1(share) => share.is_consistent(),
+            Self::V2(share) => share.is_consistent(),
+        }
+    }
+
+    /// Verify share assuming common data is already verified consistent.
+    /// Caller MUST call `is_consistent()` first.
+    pub fn verify_with_verified_common(&self) -> bool {
+        match self {
+            Self::V0(share) => share.verify_with_verified_common(),
+            Self::V1(share) => share.verify_with_verified_common(),
+            Self::V2(share) => share.verify_with_verified_common(),
         }
     }
 
@@ -2147,8 +2197,8 @@ pub mod null_block {
     use crate::{
         data::VidCommitment,
         traits::{
-            block_contents::BuilderFee, node_implementation::NodeType,
-            signature_key::BuilderSignatureKey, BlockPayload,
+            BlockPayload, block_contents::BuilderFee, node_implementation::NodeType,
+            signature_key::BuilderSignatureKey,
         },
         vid::advz::advz_scheme,
     };

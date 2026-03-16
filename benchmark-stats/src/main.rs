@@ -7,9 +7,9 @@ use clap::{Parser, Subcommand};
 use hotshot_task_impls::stats::{LeaderViewStats, ReplicaViewStats};
 use hotshot_types::data::ViewNumber;
 use plotly::{
+    Bar, Layout, Plot, Scatter,
     common::{HoverInfo, Line, Marker, MarkerSymbol, Mode},
     layout::{self, Axis, GridPattern, LayoutGrid},
-    Bar, Layout, Plot, Scatter,
 };
 
 #[derive(Parser)]

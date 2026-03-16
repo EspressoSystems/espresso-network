@@ -8,24 +8,24 @@ use std::{collections::HashMap, num::NonZeroUsize, rc::Rc, sync::Arc, time::Dura
 
 use async_lock::RwLock;
 use hotshot::{
+    HotShotInitializer, SystemContext, TwinsHandlerState,
     tasks::EventTransformerState,
     traits::{NetworkReliability, NodeImplementation, TestableNodeImplementation},
     types::SystemContextHandle,
-    HotShotInitializer, SystemContext, TwinsHandlerState,
 };
 use hotshot_example_types::{
     node_types::TestTypes, state_types::TestInstanceState, storage_types::TestStorage,
     testable_delay::DelayConfig,
 };
 use hotshot_types::{
-    consensus::ConsensusMetricsValue, epoch_membership::EpochMembershipCoordinator,
-    storage_metrics::StorageMetricsValue, traits::node_implementation::NodeType, HotShotConfig,
-    PeerConfig, ValidatorConfig,
+    HotShotConfig, PeerConfig, ValidatorConfig, consensus::ConsensusMetricsValue,
+    epoch_membership::EpochMembershipCoordinator, storage_metrics::StorageMetricsValue,
+    traits::node_implementation::NodeType,
 };
 use hotshot_utils::anytrace::*;
 use tide_disco::Url;
 use vec1::Vec1;
-use versions::{version, Upgrade};
+use versions::{Upgrade, version};
 
 use super::{
     completion_task::{CompletionTaskDescription, TimeBasedCompletionTaskDescription},
@@ -33,7 +33,7 @@ use super::{
     txn_task::TxnTaskDescription,
 };
 use crate::{
-    helpers::{key_pair_for_id, TestNodeKeyMap},
+    helpers::{TestNodeKeyMap, key_pair_for_id},
     node_stake::TestNodeStakes,
     spinning_task::SpinningTaskDescription,
     test_launcher::{Network, ResourceGenerators, TestLauncher},
@@ -640,16 +640,13 @@ where
                     unreliable_network,
                     secondary_network_delay,
                 ),
-                storage: Rc::new(move |node_id| {
-                    let storage = TestStorage::<TYPES> {
-                        delay_config: metadata
-                            .async_delay_config
-                            .get(&node_id)
-                            .cloned()
-                            .unwrap_or_default(),
-                        ..Default::default()
-                    };
-                    storage
+                storage: Rc::new(move |node_id| TestStorage::<TYPES> {
+                    delay_config: metadata
+                        .async_delay_config
+                        .get(&node_id)
+                        .cloned()
+                        .unwrap_or_default(),
+                    ..Default::default()
                 }),
                 hotshot_config,
                 validator_config,

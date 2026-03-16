@@ -13,27 +13,27 @@
 use async_trait::async_trait;
 use committable::Committable;
 use hotshot_types::{
-    data::{ns_table, VidCommitment, VidCommon},
-    traits::{block_contents::BlockHeader, node_implementation::NodeType, EncodeBytes},
+    data::{VidCommitment, VidCommon, ns_table},
+    traits::{EncodeBytes, block_contents::BlockHeader, node_implementation::NodeType},
     vid::{
-        advz::{advz_scheme, ADVZScheme},
-        avidm::{init_avidm_param, AvidMScheme},
+        advz::{ADVZScheme, advz_scheme},
+        avidm::{AvidMScheme, init_avidm_param},
         avidm_gf2::AvidmGf2Scheme,
     },
 };
 use jf_advz::VidScheme;
 use surf_disco::{Client, Url};
-use vbs::{version::StaticVersionType, BinarySerializer};
+use vbs::{BinarySerializer, version::StaticVersionType};
 
 use super::Provider;
 use crate::{
+    Error, Header, Payload,
     availability::{
         ADVZCommonQueryData, ADVZPayloadQueryData, LeafQueryData, LeafQueryDataLegacy,
         PayloadQueryData, VidCommonQueryData,
     },
     fetching::request::{LeafRequest, PayloadRequest, VidCommonRequest},
     types::HeightIndexed,
-    Error, Header, Payload,
 };
 
 /// Data availability provider backed by another instance of this query service.
@@ -539,7 +539,7 @@ mod test {
 
     use committable::Committable;
     use futures::{
-        future::{join, FutureExt},
+        future::{FutureExt, join},
         stream::StreamExt,
     };
     // generic-array 0.14.x is deprecated, but VidCommitment requires this version
@@ -549,36 +549,36 @@ mod test {
     use hotshot_example_types::node_types::{EpochVersion, TEST_VERSIONS};
     use rand::RngCore;
     use test_utils::reserve_tcp_port;
-    use tide_disco::{error::ServerError, App};
+    use tide_disco::{App, error::ServerError};
     use vbs::version::StaticVersion;
 
     use super::*;
     use crate::{
+        ApiState,
         api::load_api,
         availability::{
-            define_api, AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData,
-            BlockWithTransaction, Fetch, UpdateAvailabilityData,
+            AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, BlockWithTransaction,
+            Fetch, UpdateAvailabilityData, define_api,
         },
         data_source::{
+            AvailabilityProvider, FetchingDataSource, Transaction, VersionedDataSource,
             sql::{self, SqlDataSource},
             storage::{
+                AvailabilityStorage, SqlStorage, StorageConnectionType, UpdateAvailabilityStorage,
                 fail_storage::{FailStorage, FailableAction},
                 pruning::{PrunedHeightStorage, PrunerCfg},
                 sql::testing::TmpDb,
-                AvailabilityStorage, SqlStorage, StorageConnectionType, UpdateAvailabilityStorage,
             },
-            AvailabilityProvider, FetchingDataSource, Transaction, VersionedDataSource,
         },
         fetching::provider::{NoFetching, Provider as ProviderTrait, TestProvider},
-        node::{data_source::NodeDataSource, SyncStatusQueryData},
+        node::{SyncStatusQueryData, data_source::NodeDataSource},
         task::BackgroundTask,
         testing::{
             consensus::{MockDataSource, MockNetwork},
-            mocks::{mock_transaction, MockBase, MockTypes},
+            mocks::{MockBase, MockTypes, mock_transaction},
             sleep,
         },
         types::HeightIndexed,
-        ApiState,
     };
 
     type Provider = TestProvider<QueryServiceProvider<MockBase>>;

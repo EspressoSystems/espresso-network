@@ -32,15 +32,15 @@ use hotshot_query_service::availability::{
     TransactionWithProofQueryData, VidCommonQueryData,
 };
 use hotshot_types::{
-    data::{vid_commitment, VidCommon},
+    data::{VidCommon, vid_commitment},
     simple_certificate::{
         LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
     },
-    traits::{signature_key::BuilderSignatureKey, BlockPayload, EncodeBytes},
+    traits::{BlockPayload, EncodeBytes, signature_key::BuilderSignatureKey},
     vid::{
         advz::advz_scheme,
         avidm::init_avidm_param,
-        avidm_gf2::{init_avidm_gf2_param, AvidmGf2Scheme},
+        avidm_gf2::{AvidmGf2Scheme, init_avidm_gf2_param},
     },
 };
 use jf_advz::VidScheme;
@@ -48,26 +48,27 @@ use jf_merkle_tree_compat::{MerkleTreeScheme, UniversalMerkleTreeScheme};
 use pretty_assertions::assert_eq;
 use rand::{Rng, RngCore};
 use sequencer_utils::commitment_to_u256;
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 use tagged_base64::TaggedBase64;
 use vbs::{
-    version::{StaticVersion, Version},
     BinarySerializer,
+    version::{StaticVersion, Version},
 };
 use versions::version;
 
 use crate::{
+    ADVZNamespaceProofQueryData, FeeAccount, FeeInfo, Header, L1BlockInfo, NamespaceId,
+    NamespaceProofQueryData, NodeState, NsProof, NsTable, Payload, SeqTypes, StakeTableHash,
+    Transaction, ValidatedState,
     v0_1::{self, ADVZNsProof},
     v0_2,
     v0_3::{EventKey, RewardAmount, StakeTableEvent},
     v0_4::{
-        RewardAccountProofV2, RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleTreeV2,
-        REWARD_MERKLE_TREE_V2_HEIGHT,
+        REWARD_MERKLE_TREE_V2_HEIGHT, RewardAccountProofV2, RewardAccountQueryDataV2,
+        RewardAccountV2, RewardMerkleTreeV2,
     },
-    validator_set_from_l1_events, ADVZNamespaceProofQueryData, FeeAccount, FeeInfo, Header,
-    L1BlockInfo, NamespaceId, NamespaceProofQueryData, NodeState, NsProof, NsTable, Payload,
-    SeqTypes, StakeTableHash, Transaction, ValidatedState,
+    validator_set_from_l1_events,
 };
 
 type V1Serializer = vbs::Serializer<StaticVersion<0, 1>>;

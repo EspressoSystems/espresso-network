@@ -93,7 +93,7 @@ exclude = ["sequencer-sqlite"]
 [workspace.package]
 version = "0.1.0"
 authors = ["Espresso Systems <hello@espressosys.com>"]
-edition = "2021"
+edition = "2024"
 
 [workspace.dependencies]
 alloy = { version = "1.0", features = ["eips", "provider-ws", "json-rpc", "signer-mnemonic", "node-bindings", "getrandom", "signer-ledger" ] }

@@ -25,25 +25,26 @@ use catchup::{ParallelStateCatchup, StatePeers};
 use context::SequencerContext;
 use derivative::Derivative;
 use espresso_types::{
+    BackoffParams, EpochCommittees, EpochRewardsCalculator, L1ClientOptions, NodeState, PubKey,
+    SeqTypes, ValidatedState,
     traits::{EventConsumer, MembershipPersistence},
     v0::traits::SequencerPersistence,
     v0_3::Fetcher,
-    BackoffParams, EpochCommittees, EpochRewardsCalculator, L1ClientOptions, NodeState, PubKey,
-    SeqTypes, ValidatedState,
 };
 pub use genesis::Genesis;
 use genesis::L1Finalized;
 use hotshot::{
     traits::implementations::{
-        derive_libp2p_multiaddr, derive_libp2p_peer_id, CdnMetricsValue, CdnTopic,
-        CombinedNetworks, GossipConfig, KeyPair, Libp2pNetwork, MemoryNetwork, PushCdnNetwork,
-        RequestResponseConfig, WrappedSignatureKey,
+        CdnMetricsValue, CdnTopic, CombinedNetworks, GossipConfig, KeyPair, Libp2pNetwork,
+        MemoryNetwork, PushCdnNetwork, RequestResponseConfig, WrappedSignatureKey,
+        derive_libp2p_multiaddr, derive_libp2p_peer_id,
     },
     types::SignatureKey,
 };
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtPersistentStorage;
-use hotshot_orchestrator::client::{get_complete_config, OrchestratorClient};
+use hotshot_orchestrator::client::{OrchestratorClient, get_complete_config};
 use hotshot_types::{
+    ValidatorConfig,
     data::ViewNumber,
     epoch_membership::EpochMembershipCoordinator,
     light_client::{StateKeyPair, StateSignKey},
@@ -55,7 +56,6 @@ use hotshot_types::{
         storage::Storage,
     },
     utils::BuilderCommitment,
-    ValidatorConfig,
 };
 use libp2p::Multiaddr;
 use moka::future::Cache;
@@ -749,11 +749,11 @@ pub mod testing {
         node_bindings::{Anvil, AnvilInstance},
         primitives::{Address, U256},
         providers::{
+            Provider, ProviderBuilder, RootProvider,
             fillers::{
                 BlobGasFiller, ChainIdFiller, FillProvider, GasFiller, JoinFill, NonceFiller,
             },
             layers::AnvilProvider,
-            Provider, ProviderBuilder, RootProvider,
         },
         signers::{
             k256::ecdsa::SigningKey,
@@ -764,14 +764,14 @@ pub mod testing {
     use catchup::NullStateCatchup;
     use committable::Committable;
     use espresso_contract_deployer::{
-        builder::DeployerArgsBuilder, network_config::light_client_genesis_from_stake_table,
-        Contract, Contracts, DEFAULT_EXIT_ESCROW_PERIOD_SECONDS,
+        Contract, Contracts, DEFAULT_EXIT_ESCROW_PERIOD_SECONDS, builder::DeployerArgsBuilder,
+        network_config::light_client_genesis_from_stake_table,
     };
     use espresso_types::{
-        eth_signature_key::EthKeyPair,
-        v0::traits::{EventConsumer, NullEventConsumer, PersistenceOptions, StateCatchup},
         EpochVersion, Event, FeeAccount, L1Client, NetworkConfig, PubKey, SeqTypes, Transaction,
         Upgrade, UpgradeMap,
+        eth_signature_key::EthKeyPair,
+        v0::traits::{EventConsumer, NullEventConsumer, PersistenceOptions, StateCatchup},
     };
     use futures::{
         future::join_all,
@@ -779,8 +779,8 @@ pub mod testing {
     };
     use hotshot::{
         traits::{
-            implementations::{MasterMap, MemoryNetwork},
             BlockPayload,
+            implementations::{MasterMap, MemoryNetwork},
         },
         types::EventType::{self, Decide},
     };
@@ -791,15 +791,15 @@ pub mod testing {
         BuilderTask, SimpleBuilderImplementation, TestBuilderImplementation,
     };
     use hotshot_types::{
+        HotShotConfig, PeerConfig,
         data::EpochNumber,
         event::LeafInfo,
         light_client::StateKeyPair,
         signature_key::BLSKeyPair,
         traits::{
-            block_contents::BlockHeader, metrics::NoMetrics, network::Topic,
-            signature_key::BuilderSignatureKey, EncodeBytes,
+            EncodeBytes, block_contents::BlockHeader, metrics::NoMetrics, network::Topic,
+            signature_key::BuilderSignatureKey,
         },
-        HotShotConfig, PeerConfig,
     };
     use rand::SeedableRng as _;
     use rand_chacha::ChaCha20Rng;
@@ -1270,7 +1270,9 @@ pub mod testing {
             staking_priv_keys(&self.priv_keys, &self.state_key_pairs, self.num_nodes())
         }
 
-        pub fn validator_providers(&self) -> Vec<(Address, impl Provider + Clone)> {
+        pub fn validator_providers(
+            &self,
+        ) -> Vec<(Address, impl Provider + Clone + use<NUM_NODES>)> {
             self.staking_priv_keys()
                 .into_iter()
                 .map(|(signer, ..)| {
@@ -1511,8 +1513,9 @@ pub mod testing {
     /// Waits until a node has reached the given target epoch (exclusive).
     /// The function returns once the first event indicates an epoch higher than `target_epoch`.
     pub async fn wait_for_epochs(
-        events: &mut (impl futures::Stream<Item = hotshot_types::event::Event<SeqTypes>>
-                  + std::marker::Unpin),
+        events: &mut (
+                 impl futures::Stream<Item = hotshot_types::event::Event<SeqTypes>> + std::marker::Unpin
+             ),
         epoch_height: u64,
         target_epoch: u64,
     ) {
@@ -1536,7 +1539,7 @@ pub mod testing {
 #[cfg(test)]
 mod test {
     use alloy::node_bindings::Anvil;
-    use espresso_types::{Header, NamespaceId, Payload, Transaction, MOCK_SEQUENCER_VERSIONS};
+    use espresso_types::{Header, MOCK_SEQUENCER_VERSIONS, NamespaceId, Payload, Transaction};
     use futures::StreamExt;
     use hotshot::types::EventType::Decide;
     use hotshot_example_types::node_types::TEST_VERSIONS;
@@ -1544,7 +1547,7 @@ mod test {
         event::LeafInfo,
         traits::block_contents::{BlockHeader, BlockPayload},
     };
-    use testing::{wait_for_decide_on_handle, TestConfigBuilder};
+    use testing::{TestConfigBuilder, wait_for_decide_on_handle};
 
     use self::testing::run_test_builder;
     use super::*;

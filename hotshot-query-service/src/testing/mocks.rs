@@ -10,7 +10,7 @@
 // You should have received a copy of the GNU General Public License along with this program. If not,
 // see <https://www.gnu.org/licenses/>.
 
-use hotshot::traits::{implementations::MemoryNetwork, NodeImplementation};
+use hotshot::traits::{NodeImplementation, implementations::MemoryNetwork};
 use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
     membership::{static_committee::StaticStakeTable, strict_membership::StrictMembership},
@@ -23,13 +23,13 @@ use hotshot_types::{
     traits::node_implementation::NodeType,
 };
 use jf_merkle_tree_compat::{
+    ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme,
     prelude::{MerkleProof, Sha3Digest, Sha3Node},
     universal_merkle_tree::UniversalMerkleTree,
-    ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme,
 };
 use serde::{Deserialize, Serialize};
 use vbs::version::StaticVersion;
-use versions::{version, Upgrade};
+use versions::{Upgrade, version};
 
 use crate::{
     availability::{
@@ -55,20 +55,12 @@ impl QueryableHeader<MockTypes> for MockHeader {
 
     fn namespace_id(&self, i: &i64) -> Option<i64> {
         // Test types only support a single namespace.
-        if *i == 0 {
-            Some(0)
-        } else {
-            None
-        }
+        if *i == 0 { Some(0) } else { None }
     }
 
     fn namespace_size(&self, i: &i64, payload_size: usize) -> u64 {
         // Test types only support a single namespace.
-        if *i == 0 {
-            payload_size as u64
-        } else {
-            0
-        }
+        if *i == 0 { payload_size as u64 } else { 0 }
     }
 }
 

@@ -5,8 +5,8 @@ use std::{
 
 use async_lock::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use bitvec::vec::BitVec;
-use espresso_types::{v0_3::AuthenticatedValidator, SeqTypes};
-use futures::{channel::mpsc::SendError, Sink, SinkExt, Stream, StreamExt};
+use espresso_types::{SeqTypes, v0_3::AuthenticatedValidator};
+use futures::{Sink, SinkExt, Stream, StreamExt, channel::mpsc::SendError};
 use hotshot::types::BLSPubKey;
 use hotshot_query_service::explorer::{BlockDetail, ExplorerHistograms};
 use hotshot_types::PeerConfig;
@@ -1613,8 +1613,8 @@ pub mod tests {
     use bitvec::vec::BitVec;
     use espresso_types::{NodeState, ValidatedState};
     use futures::{
-        channel::mpsc::{self, Sender},
         SinkExt, StreamExt,
+        channel::mpsc::{self, Sender},
     };
     use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_query_service::{
@@ -1641,8 +1641,8 @@ pub mod tests {
                 ProcessDistributeValidatorHandlingTask, ProcessDistributeVotersHandlingTask,
             },
             data_state::{
-                create_block_detail_from_block, DataState, LocationDetails, NodeIdentity,
-                ProcessLeafAndBlockPairStreamTask,
+                DataState, LocationDetails, NodeIdentity, ProcessLeafAndBlockPairStreamTask,
+                create_block_detail_from_block,
             },
             server_message::ServerMessage,
         },

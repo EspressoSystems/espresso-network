@@ -5,14 +5,14 @@ use anyhow::Context;
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
 use espresso_types::{
+    BackoffParams, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment, Leaf2,
+    NodeState, PubKey, SeqTypes,
     traits::{SequencerPersistence, StateCatchup},
     v0_3::{ChainConfig, RewardAccountProofV1, RewardAccountV1, RewardMerkleCommitmentV1},
     v0_4::{
-        forgotten_accounts_include, PermittedRewardMerkleTreeV2, RewardAccountV2,
-        RewardMerkleCommitmentV2,
+        PermittedRewardMerkleTreeV2, RewardAccountV2, RewardMerkleCommitmentV2,
+        forgotten_accounts_include,
     },
-    BackoffParams, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment, Leaf2,
-    NodeState, PubKey, SeqTypes,
 };
 use hotshot::traits::NodeImplementation;
 use hotshot_types::{
@@ -28,8 +28,8 @@ use versions::EPOCH_VERSION;
 use crate::{
     api::RewardMerkleTreeV2Data,
     request_response::{
-        request::{Request, Response},
         RequestResponseProtocol,
+        request::{Request, Response},
     },
 };
 

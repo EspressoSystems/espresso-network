@@ -7,12 +7,12 @@ mod tests {
     use futures::stream::StreamExt;
     use hotshot_example_types::node_types::TestTypes;
     use hotshot_types::{
+        PeerConfig,
         data::ViewNumber,
         event::{Event, EventType},
         light_client::StateKeyPair,
         signature_key::BLSPubKey,
         traits::{node_implementation::NodeType, signature_key::SignatureKey},
-        PeerConfig,
     };
     use surf_disco::Client;
     use test_utils::reserve_tcp_port;
@@ -22,7 +22,7 @@ mod tests {
     use vbs::version::{StaticVersion, StaticVersionType};
 
     //use crate::fetch::Fetch;
-    use crate::events::{define_api, Error, Options};
+    use crate::events::{Error, Options, define_api};
     use crate::events_source::{EventConsumer, EventsStreamer, StartupInfo}; // EventsUpdater};
 
     // return a empty transaction event

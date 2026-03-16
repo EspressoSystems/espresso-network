@@ -16,10 +16,10 @@ use hotshot_types::{
     message::{Proposal, UpgradeLock},
     simple_vote::HasEpoch,
     traits::{
+        BlockPayload,
         block_contents::BlockHeader,
         node_implementation::{NodeImplementation, NodeType},
         signature_key::SignatureKey,
-        BlockPayload,
     },
     utils::{is_epoch_transition, option_epoch_from_block_number},
 };

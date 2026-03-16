@@ -1,35 +1,35 @@
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use alloy::primitives::Address;
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use async_lock::Mutex;
 #[cfg(any(test, feature = "testing"))]
 use async_lock::RwLock;
 use async_trait::async_trait;
 use hotshot_contract_adapter::sol_types::{LightClientV3, StakeTableV2};
 use hotshot_types::{
-    data::EpochNumber, epoch_membership::EpochMembershipCoordinator, traits::states::InstanceState,
-    HotShotConfig,
+    HotShotConfig, data::EpochNumber, epoch_membership::EpochMembershipCoordinator,
+    traits::states::InstanceState,
 };
 use moka::future::Cache;
 use vbs::version::Version;
 
 use super::{
+    SeqTypes, UpgradeType, ViewBasedUpgrade,
     state::ValidatedState,
     traits::{EventsPersistenceRead, MembershipPersistence, StakeTuple},
     v0_1::NoStorage,
     v0_3::{EventKey, IndexedStake, StakeTableEvent},
-    SeqTypes, UpgradeType, ViewBasedUpgrade,
 };
 use crate::{
+    AuthenticatedValidatorMap, EpochCommittees, PubKey, RegisteredValidatorMap,
     v0::{
-        impls::{reward::EpochRewardsCalculator, StakeTableHash},
+        GenesisHeader, L1BlockInfo, L1Client, Timestamp, Upgrade, UpgradeMode,
+        impls::{StakeTableHash, reward::EpochRewardsCalculator},
         traits::StateCatchup,
         v0_3::ChainConfig,
-        GenesisHeader, L1BlockInfo, L1Client, Timestamp, Upgrade, UpgradeMode,
     },
     v0_3::{RegisteredValidator, RewardAmount},
-    AuthenticatedValidatorMap, EpochCommittees, PubKey, RegisteredValidatorMap,
 };
 
 /// Represents the immutable state of a node.
@@ -526,10 +526,10 @@ pub mod mock {
 
     use super::*;
     use crate::{
+        BackoffParams, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment, Leaf2,
         retain_accounts,
         v0_3::{RewardAccountProofV1, RewardAccountV1, RewardMerkleCommitmentV1},
         v0_4::{PermittedRewardMerkleTreeV2, RewardAccountV2, RewardMerkleCommitmentV2},
-        BackoffParams, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment, Leaf2,
     };
 
     #[derive(Debug, Clone)]

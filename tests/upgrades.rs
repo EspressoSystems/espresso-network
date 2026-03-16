@@ -2,15 +2,15 @@ use std::time::Duration;
 
 use anyhow::Result;
 use espresso_types::UpgradeMode;
-use futures::{future::join_all, StreamExt};
+use futures::{StreamExt, future::join_all};
 use hotshot_types::utils::epoch_from_block_number;
 use sequencer::Genesis;
 use versions::{
-    Upgrade, DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, EPOCH_VERSION, FEE_VERSION,
+    DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, EPOCH_VERSION, FEE_VERSION, Upgrade,
 };
 
 use crate::{
-    common::{load_genesis_file, NativeDemo, TestRequirements, TestRuntime},
+    common::{NativeDemo, TestRequirements, TestRuntime, load_genesis_file},
     smoke::assert_native_demo_works,
 };
 

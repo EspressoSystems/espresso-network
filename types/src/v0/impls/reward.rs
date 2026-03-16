@@ -1,10 +1,10 @@
 use std::{borrow::Borrow, collections::HashSet, iter::once, str::FromStr, sync::Arc};
 
 use alloy::primitives::{
-    utils::{parse_units, ParseUnits},
     Address, B256, U256,
+    utils::{ParseUnits, parse_units},
 };
-use anyhow::{bail, ensure, Context};
+use anyhow::{Context, bail, ensure};
 use ark_serialize::{
     CanonicalDeserialize, CanonicalSerialize, Compress, Read, SerializationError, Valid, Validate,
 };
@@ -18,8 +18,8 @@ use hotshot_types::{
 };
 use itertools::Itertools;
 use jf_merkle_tree_compat::{
-    prelude::MerkleNode, ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme,
-    LookupResult, MerkleTreeScheme, ToTraversalPath, UniversalMerkleTreeScheme,
+    ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme, LookupResult,
+    MerkleTreeScheme, ToTraversalPath, UniversalMerkleTreeScheme, prelude::MerkleNode,
 };
 use num_traits::CheckedSub;
 use sequencer_utils::{
@@ -30,14 +30,15 @@ use vbs::version::Version;
 use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, EPOCH_VERSION};
 
 use super::{
-    v0_3::{AuthenticatedValidator, RewardAmount, COMMISSION_BASIS_POINTS},
-    v0_4::{
-        forgotten_accounts_include, RewardAccountProofV2, RewardAccountQueryDataV2,
-        RewardAccountV2, RewardMerkleCommitmentV2, RewardMerkleProofV2, RewardMerkleTreeV2,
-    },
     Leaf2, NodeState, ValidatedState,
+    v0_3::{AuthenticatedValidator, COMMISSION_BASIS_POINTS, RewardAmount},
+    v0_4::{
+        RewardAccountProofV2, RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleCommitmentV2,
+        RewardMerkleProofV2, RewardMerkleTreeV2, forgotten_accounts_include,
+    },
 };
 use crate::{
+    FeeAccount, SeqTypes,
     eth_signature_key::EthKeyPair,
     v0_3::{
         RewardAccountProofV1, RewardAccountV1, RewardMerkleCommitmentV1, RewardMerkleProofV1,
@@ -45,7 +46,6 @@ use crate::{
     },
     v0_4::{Delta, REWARD_MERKLE_TREE_V2_ARITY, REWARD_MERKLE_TREE_V2_HEIGHT},
     v0_5::LeaderCounts,
-    FeeAccount, SeqTypes,
 };
 
 impl_serde_from_string_or_integer!(RewardAmount);
@@ -1396,12 +1396,14 @@ pub mod tests {
         assert_eq!(*leader_commission, distributor.block_reward);
 
         let distributor = make_distributor(10001);
-        assert!(distributor
-            .compute_rewards()
-            .err()
-            .unwrap()
-            .to_string()
-            .contains("must not exceed"));
+        assert!(
+            distributor
+                .compute_rewards()
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("must not exceed")
+        );
     }
 
     #[test]

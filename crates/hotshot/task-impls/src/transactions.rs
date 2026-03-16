@@ -11,22 +11,22 @@ use std::{
 
 use async_broadcast::{Receiver, Sender};
 use async_trait::async_trait;
-use futures::{stream::FuturesUnordered, StreamExt};
+use futures::{StreamExt, stream::FuturesUnordered};
 use hotshot_builder_api::v0_1::block_info::AvailableBlockInfo;
 use hotshot_task::task::TaskState;
 use hotshot_types::{
     consensus::OuterConsensus,
-    data::{null_block, EpochNumber, PackedBundle, VidCommitment, ViewNumber},
+    data::{EpochNumber, PackedBundle, VidCommitment, ViewNumber, null_block},
     epoch_membership::EpochMembershipCoordinator,
     event::{Event, EventType},
     message::UpgradeLock,
     traits::{
+        BlockPayload,
         block_contents::{BlockHeader, BuilderFee, EncodeBytes},
         node_implementation::NodeType,
         signature_key::{BuilderSignatureKey, SignatureKey},
-        BlockPayload,
     },
-    utils::{is_epoch_transition, is_last_block, ViewInner},
+    utils::{ViewInner, is_epoch_transition, is_last_block},
 };
 use hotshot_utils::anytrace::*;
 use tokio::time::{sleep, timeout};

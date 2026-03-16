@@ -91,8 +91,8 @@ where
 mod test {
     use hotshot_types::signature_key::BLSPubKey;
     use libp2p::{
-        kad::{store::MemoryStore, Record},
         PeerId,
+        kad::{Record, store::MemoryStore},
     };
 
     use super::*;

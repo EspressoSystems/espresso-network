@@ -11,7 +11,7 @@
 
 use std::{sync::Arc, time::Duration};
 
-use anyhow::{anyhow, ensure, Result};
+use anyhow::{Result, anyhow, ensure};
 use async_trait::async_trait;
 use futures::future::BoxFuture;
 use tokio::time::sleep;
@@ -24,7 +24,7 @@ use crate::{
     },
     drb::{DrbInput, DrbResult},
     event::HotShotAction,
-    message::{convert_proposal, Proposal},
+    message::{Proposal, convert_proposal},
     simple_certificate::{
         LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2, QuorumCertificate,
         QuorumCertificate2, UpgradeCertificate,

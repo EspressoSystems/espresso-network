@@ -4,6 +4,7 @@ use alloy::primitives::U256;
 use async_broadcast::Receiver;
 use async_lock::RwLock;
 use hotshot_types::{
+    PeerConfig,
     data::{EpochNumber, Leaf2, ViewNumber},
     drb::DrbResult,
     event::Event,
@@ -15,7 +16,6 @@ use hotshot_types::{
         signature_key::StakeTableEntryType,
     },
     utils::{epoch_from_block_number, root_block_in_epoch, transition_block_for_epoch},
-    PeerConfig,
 };
 
 use crate::{
@@ -49,10 +49,8 @@ where
     }
 }
 
-impl<
-        TYPES: NodeType,
-        StakeTable: TestStakeTable<TYPES::SignatureKey, TYPES::StateSignatureKey>,
-    > StrictMembership<TYPES, StakeTable>
+impl<TYPES: NodeType, StakeTable: TestStakeTable<TYPES::SignatureKey, TYPES::StateSignatureKey>>
+    StrictMembership<TYPES, StakeTable>
 {
     fn assert_has_stake_table(&self, epoch: Option<EpochNumber>) {
         let Some(epoch) = epoch else {
@@ -74,10 +72,8 @@ impl<
     }
 }
 
-impl<
-        TYPES: NodeType,
-        StakeTable: TestStakeTable<TYPES::SignatureKey, TYPES::StateSignatureKey>,
-    > Membership<TYPES> for StrictMembership<TYPES, StakeTable>
+impl<TYPES: NodeType, StakeTable: TestStakeTable<TYPES::SignatureKey, TYPES::StateSignatureKey>>
+    Membership<TYPES> for StrictMembership<TYPES, StakeTable>
 {
     type Error = anyhow::Error;
     type StakeTableHash = NoStakeTableHash;

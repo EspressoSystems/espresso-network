@@ -1,13 +1,13 @@
 use core::panic;
 use std::{
     cmp::PartialEq,
-    collections::{hash_map::Entry, HashMap, HashSet, VecDeque},
+    collections::{HashMap, HashSet, VecDeque, hash_map::Entry},
     fmt::Debug,
     sync::Arc,
     time::{Duration, Instant},
 };
 
-use async_broadcast::{broadcast, Receiver as BroadcastReceiver, Sender as BroadcastSender};
+use async_broadcast::{Receiver as BroadcastReceiver, Sender as BroadcastSender, broadcast};
 use async_lock::RwLock;
 use committable::{Commitment, Committable};
 use futures::StreamExt;
@@ -16,9 +16,9 @@ use hotshot_types::{
     data::{DaProposal2, Leaf2, QuorumProposalWrapper, ViewNumber},
     message::Proposal,
     traits::{
+        EncodeBytes,
         block_contents::{BlockHeader, BlockPayload},
         node_implementation::NodeType,
-        EncodeBytes,
     },
     utils::BuilderCommitment,
 };
@@ -1143,7 +1143,7 @@ mod test {
     use hotshot_builder_shared::testing::constants::TEST_NUM_NODES_IN_VID_COMPUTATION;
     use hotshot_example_types::{
         block_types::TestTransaction,
-        node_types::{TestTypes, TEST_VERSIONS},
+        node_types::{TEST_VERSIONS, TestTypes},
     };
     use hotshot_types::{
         data::{Leaf2, QuorumProposalWrapper, ViewNumber},

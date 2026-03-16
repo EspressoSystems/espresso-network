@@ -3,13 +3,13 @@ use ark_ed_on_bn254::EdwardsConfig;
 use ark_std::rand::{CryptoRng, RngCore};
 use espresso_types::SeqTypes;
 use hotshot_types::{
-    stake_table::{HSStakeTable, StakeTableEntry},
     PeerConfig,
+    stake_table::{HSStakeTable, StakeTableEntry},
 };
 use jf_signature::{
+    SignatureScheme,
     bls_over_bn254::{BLSOverBN254CurveSignatureScheme, VerKey as BLSVerKey},
     schnorr::SchnorrSignatureScheme,
-    SignatureScheme,
 };
 
 type SchnorrVerKey = jf_signature::schnorr::VerKey<EdwardsConfig>;
