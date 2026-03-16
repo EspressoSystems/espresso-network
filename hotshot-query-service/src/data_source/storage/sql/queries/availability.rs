@@ -439,9 +439,9 @@ mod test {
     use super::*;
     use crate::{
         data_source::{
+            Transaction, VersionedDataSource,
             sql::testing::TmpDb,
             storage::{SqlStorage, StorageConnectionType, UpdateAvailabilityStorage},
-            Transaction, VersionedDataSource,
         },
         testing::mocks::MockTypes,
     };

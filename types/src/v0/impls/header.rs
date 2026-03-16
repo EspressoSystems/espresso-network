@@ -3,7 +3,7 @@ use std::fmt;
 use alloy::primitives::{B256, Keccak256};
 use anyhow::{Context, ensure};
 use ark_serialize::CanonicalSerialize;
-use base64::{prelude::BASE64_STANDARD, Engine};
+use base64::{Engine, prelude::BASE64_STANDARD};
 use committable::{Commitment, Committable, RawCommitmentBuilder};
 use either::Either;
 use hotshot_query_service::{availability::QueryableHeader, explorer::ExplorerHeader};
