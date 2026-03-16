@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"constant":["SIGNATURE_STORAGE_CAPACITY"],"mod":["relay_server"],"struct":["StateSignatureMemStorage","StateSigner"]};
+window.SIDEBAR_ITEMS = {"constant":["SIGNATURE_STORAGE_CAPACITY"],"fn":["should_vote"],"mod":["relay_server"],"struct":["StateSignatureMemStorage","StateSigner"]};
