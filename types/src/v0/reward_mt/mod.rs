@@ -18,10 +18,10 @@
 use std::{borrow::Borrow, sync::Arc};
 
 use jf_merkle_tree_compat::{
-    prelude::{MerkleNode, MerkleProof},
-    universal_merkle_tree::UniversalMerkleTree,
     DigestAlgorithm, ForgetableMerkleTreeScheme, LookupResult, MerkleCommitment,
     MerkleTreeCommitment, MerkleTreeError, MerkleTreeScheme, UniversalMerkleTreeScheme,
+    prelude::{MerkleNode, MerkleProof},
+    universal_merkle_tree::UniversalMerkleTree,
 };
 use serde::{Deserialize, Serialize};
 use sha3::{Digest as _, Keccak256};

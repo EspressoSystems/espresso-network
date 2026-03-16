@@ -3,8 +3,8 @@ use hotshot_types::data::{VidCommitment, VidCommon};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    v0_1::ADVZTxProof, v0_3::AvidMTxProof, v0_6::AvidmGf2TxProof, Index, NsTable, Payload,
-    Transaction,
+    Index, NsTable, Payload, Transaction, v0_1::ADVZTxProof, v0_3::AvidMTxProof,
+    v0_6::AvidmGf2TxProof,
 };
 use crate::SeqTypes;
 

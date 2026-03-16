@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 
 use super::{AvidmGf2Commit, AvidmGf2Share};
 use crate::{
-    avidm_gf2::{AvidmGf2Scheme, MerkleTree},
     VidError, VidResult, VidScheme,
+    avidm_gf2::{AvidmGf2Scheme, MerkleTree},
 };
 
 /// Dummy struct for namespaced AvidmGf2 scheme
@@ -229,7 +229,7 @@ impl NsAvidmGf2Scheme {
 /// Unit tests
 #[cfg(test)]
 pub mod tests {
-    use rand::{seq::SliceRandom, RngCore};
+    use rand::{RngCore, seq::SliceRandom};
 
     use crate::avidm_gf2::namespaced::NsAvidmGf2Scheme;
 
@@ -374,7 +374,9 @@ pub mod tests {
 
         // verify shares
         shares.iter().for_each(|share| {
-            assert!(NsAvidmGf2Scheme::verify_share(&commit, &common, share).is_ok_and(|r| r.is_ok()))
+            assert!(
+                NsAvidmGf2Scheme::verify_share(&commit, &common, share).is_ok_and(|r| r.is_ok())
+            )
         });
 
         // test payload recovery on a random subset of shares

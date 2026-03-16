@@ -12,7 +12,7 @@ use hotshot_contract_adapter::{
     field_to_u256,
     sol_types::{LightClientStateSol, StakeTableStateSol},
 };
-use hotshot_types::{data::EpochNumber, stake_table::HSStakeTable, PeerConfig};
+use hotshot_types::{PeerConfig, data::EpochNumber, stake_table::HSStakeTable};
 use tokio::time::sleep;
 use vbs::version::StaticVersion;
 

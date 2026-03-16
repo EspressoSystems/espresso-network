@@ -11,13 +11,13 @@ use alloy::{
     primitives::{Address, U256},
     providers::ProviderBuilder,
 };
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use client::SequencerClient;
 use espresso_contract_deployer::build_signer;
 use espresso_types::FeeAmount;
 use futures::{
-    future::{join_all, BoxFuture},
     FutureExt,
+    future::{BoxFuture, join_all},
 };
 use hotshot_contract_adapter::sol_types::{EspTokenV2, LightClientV3, RewardClaim, StakeTableV2};
 use sequencer::Genesis;
@@ -231,12 +231,14 @@ impl TestRuntime {
         }
         .await;
 
-        let mut futures: Vec<BoxFuture<Result<String>>> = vec![wait_for_service(
-            Url::from_str(&config.load_generator_url)?,
-            Duration::from_secs(1),
-            Duration::from_secs(90),
-        )
-        .boxed()];
+        let mut futures: Vec<BoxFuture<Result<String>>> = vec![
+            wait_for_service(
+                Url::from_str(&config.load_generator_url)?,
+                Duration::from_secs(1),
+                Duration::from_secs(90),
+            )
+            .boxed(),
+        ];
 
         for client in &config.sequencer_clients {
             futures.push(

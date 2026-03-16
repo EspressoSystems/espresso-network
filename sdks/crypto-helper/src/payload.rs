@@ -57,13 +57,13 @@ impl DecodingResult {
     }
 }
 
-#[no_mangle]
 /// Decode a payload from payload bytes and namespace table bytes.
 ///
 /// # Safety
 ///
 /// payload_ptr and ns_table_ptr must be valid pointers to initialized slices,
 /// valid for the duration of the call. It is okay to pass null pointers if the length is zero.
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn decode_payload(
     mut payload_ptr: *const u8,
     payload_len: usize,
@@ -137,32 +137,34 @@ pub unsafe extern "C" fn decode_payload(
 ///
 /// # Safety
 /// Caller promised this was allocated by us,
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn free_transaction_vec_result(result: DecodingResult) {
-    // Free the error string if present
-    if !result.error.is_null() {
-        let _ = CString::from_raw(result.error);
-    }
-
-    // Free the transactions array and payloads if present
-    if !result.transactions.is_null() {
-        // First free each transaction's payload
-        let transactions = Vec::from_raw_parts(
-            result.transactions,
-            result.transactions_len,
-            result.transactions_cap,
-        );
-
-        for transaction in transactions.iter() {
-            if !transaction.payload_ptr.is_null() {
-                let _ = Vec::from_raw_parts(
-                    transaction.payload_ptr as *mut u8,
-                    transaction.payload_len,
-                    transaction.payload_cap,
-                );
-            }
+    unsafe {
+        // Free the error string if present
+        if !result.error.is_null() {
+            let _ = CString::from_raw(result.error);
         }
 
-        // The transactions vector itself is dropped when it goes out of scope
+        // Free the transactions array and payloads if present
+        if !result.transactions.is_null() {
+            // First free each transaction's payload
+            let transactions = Vec::from_raw_parts(
+                result.transactions,
+                result.transactions_len,
+                result.transactions_cap,
+            );
+
+            for transaction in transactions.iter() {
+                if !transaction.payload_ptr.is_null() {
+                    let _ = Vec::from_raw_parts(
+                        transaction.payload_ptr as *mut u8,
+                        transaction.payload_len,
+                        transaction.payload_cap,
+                    );
+                }
+            }
+
+            // The transactions vector itself is dropped when it goes out of scope
+        }
     }
 }

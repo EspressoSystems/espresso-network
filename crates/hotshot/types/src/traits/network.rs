@@ -19,7 +19,7 @@ use std::{
 
 use async_trait::async_trait;
 use dyn_clone::DynClone;
-use futures::{future::join_all, Future};
+use futures::{Future, future::join_all};
 use rand::{
     distributions::{Bernoulli, Uniform},
     prelude::Distribution,
@@ -30,10 +30,10 @@ use tokio::{sync::mpsc::error::TrySendError, time::sleep};
 
 use super::{node_implementation::NodeType, signature_key::SignatureKey};
 use crate::{
+    BoxSyncFuture,
     data::{EpochNumber, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::SequencingMessage,
-    BoxSyncFuture,
 };
 
 /// Centralized server specific errors

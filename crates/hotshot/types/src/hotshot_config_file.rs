@@ -12,8 +12,8 @@ use vec1::Vec1;
 use versions::{Upgrade, VERSION_0_1};
 
 use crate::{
-    constants::REQUEST_DATA_DELAY, upgrade_config::UpgradeConfig, HotShotConfig, NodeType,
-    PeerConfig, ValidatorConfig, VersionedDaCommittee,
+    HotShotConfig, NodeType, PeerConfig, ValidatorConfig, VersionedDaCommittee,
+    constants::REQUEST_DATA_DELAY, upgrade_config::UpgradeConfig,
 };
 
 /// Default builder URL, used as placeholder

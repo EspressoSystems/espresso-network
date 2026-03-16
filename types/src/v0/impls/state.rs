@@ -1,24 +1,24 @@
 use std::ops::Add;
 
 use alloy::primitives::{Address, U256};
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use committable::{Commitment, Committable};
 use either::Either;
 use hotshot_query_service::merklized_state::MerklizedState;
 use hotshot_types::{
     data::{BlockError, EpochNumber, ViewNumber},
     traits::{
-        block_contents::BlockHeader, signature_key::BuilderSignatureKey, states::StateDelta,
-        ValidatedState as HotShotState,
+        ValidatedState as HotShotState, block_contents::BlockHeader,
+        signature_key::BuilderSignatureKey, states::StateDelta,
     },
     utils::{epoch_from_block_number, is_ge_epoch_root},
 };
 use itertools::Itertools;
 use jf_merkle_tree_compat::{
-    prelude::{MerkleProof, Sha3Digest, Sha3Node},
     AppendableMerkleTreeScheme, ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme,
     LookupResult, MerkleCommitment, MerkleTreeError, MerkleTreeScheme,
     PersistentUniversalMerkleTreeScheme, UniversalMerkleTreeScheme,
+    prelude::{MerkleProof, Sha3Digest, Sha3Node},
 };
 use num_traits::CheckedSub;
 use serde::{Deserialize, Serialize};
@@ -28,26 +28,26 @@ use vbs::version::Version;
 use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION};
 
 use super::{
-    fee_info::FeeError, instance_state::NodeState, v0_1::IterableFeeInfo, BlockMerkleCommitment,
-    BlockSize, FeeMerkleCommitment, L1Client,
+    BlockMerkleCommitment, BlockSize, FeeMerkleCommitment, L1Client, fee_info::FeeError,
+    instance_state::NodeState, v0_1::IterableFeeInfo,
 };
 use crate::{
+    BLOCK_MERKLE_TREE_HEIGHT, BlockMerkleTree, FEE_MERKLE_TREE_HEIGHT, FeeAccount, FeeAmount,
+    FeeInfo, FeeMerkleTree, Header, Leaf2, NsTableValidationError, PayloadByteLen, SeqTypes,
+    UpgradeType,
     traits::StateCatchup,
     v0::{
-        impls::{distribute_block_reward, StakeTableHash},
+        impls::{StakeTableHash, distribute_block_reward},
         sparse_mt::{Keccak256Hasher, KeccakNode},
     },
     v0_3::{
-        ChainConfig, ResolvableChainConfig, RewardAccountV1, RewardAmount,
-        RewardMerkleCommitmentV1, RewardMerkleTreeV1, REWARD_MERKLE_TREE_V1_HEIGHT,
+        ChainConfig, REWARD_MERKLE_TREE_V1_HEIGHT, ResolvableChainConfig, RewardAccountV1,
+        RewardAmount, RewardMerkleCommitmentV1, RewardMerkleTreeV1,
     },
     v0_4::{
-        Delta, RewardAccountV2, RewardMerkleCommitmentV2, RewardMerkleTreeV2,
-        REWARD_MERKLE_TREE_V2_HEIGHT,
+        Delta, REWARD_MERKLE_TREE_V2_HEIGHT, RewardAccountV2, RewardMerkleCommitmentV2,
+        RewardMerkleTreeV2,
     },
-    BlockMerkleTree, FeeAccount, FeeAmount, FeeInfo, FeeMerkleTree, Header, Leaf2,
-    NsTableValidationError, PayloadByteLen, SeqTypes, UpgradeType, BLOCK_MERKLE_TREE_HEIGHT,
-    FEE_MERKLE_TREE_HEIGHT,
 };
 
 /// This enum is not used in code but functions as an index of
@@ -114,16 +114,12 @@ pub enum ProposalValidationError {
         expected_root: FeeMerkleCommitment,
         proposal_root: FeeMerkleCommitment,
     },
-    #[error(
-        "Invalid v1 Reward Root Error: expected={expected_root:?}, proposal={proposal_root:?}"
-    )]
+    #[error("Invalid v1 Reward Root Error: expected={expected_root:?}, proposal={proposal_root:?}")]
     InvalidV1RewardRoot {
         expected_root: RewardMerkleCommitmentV1,
         proposal_root: RewardMerkleCommitmentV1,
     },
-    #[error(
-        "Invalid v2 Reward Root Error: expected={expected_root:?}, proposal={proposal_root:?}"
-    )]
+    #[error("Invalid v2 Reward Root Error: expected={expected_root:?}, proposal={proposal_root:?}")]
     InvalidV2RewardRoot {
         expected_root: RewardMerkleCommitmentV2,
         proposal_root: RewardMerkleCommitmentV2,
@@ -1407,16 +1403,16 @@ mod test {
 
     use hotshot::traits::BlockPayload;
     use hotshot_example_types::node_types::TEST_VERSIONS;
-    use hotshot_query_service::{testing::mocks::MOCK_UPGRADE, Resolvable};
+    use hotshot_query_service::{Resolvable, testing::mocks::MOCK_UPGRADE};
     use hotshot_types::{data::ViewNumber, traits::signature_key::BuilderSignatureKey};
     use sequencer_utils::ser::FromStringOrInteger;
     use tracing::debug;
-    use versions::{version, FEE_VERSION, MAX_SUPPORTED_VERSION};
+    use versions::{FEE_VERSION, MAX_SUPPORTED_VERSION, version};
 
     use super::*;
     use crate::{
-        eth_signature_key::EthKeyPair, mock::MockStateCatchup, v0_1, v0_2, v0_3, v0_4, v0_5,
         BlockSize, FeeAccountProof, FeeMerkleProof, Leaf, Payload, TimestampMillis, Transaction,
+        eth_signature_key::EthKeyPair, mock::MockStateCatchup, v0_1, v0_2, v0_3, v0_4, v0_5,
     };
 
     impl Transaction {

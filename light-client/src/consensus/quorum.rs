@@ -1,19 +1,19 @@
 use std::{future::Future, sync::Arc};
 
 use alloy::primitives::U256;
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{Context, Result, bail, ensure};
 use committable::Committable;
 use espresso_types::{Leaf2, PubKey, SeqTypes};
 use hotshot_types::{
     epoch_membership::EpochMembership,
     message::UpgradeLock,
     simple_certificate::CertificatePair,
-    stake_table::{supermajority_threshold, HSStakeTable, StakeTableEntries, StakeTableEntry},
+    stake_table::{HSStakeTable, StakeTableEntries, StakeTableEntry, supermajority_threshold},
     vote::{self, HasViewNumber},
 };
 use tracing::Instrument;
 use vbs::version::{StaticVersion, StaticVersionType, Version};
-use versions::{version, Upgrade, EPOCH_VERSION, MAX_SUPPORTED_VERSION};
+use versions::{EPOCH_VERSION, MAX_SUPPORTED_VERSION, Upgrade, version};
 
 pub type Certificate = CertificatePair<SeqTypes>;
 
@@ -274,9 +274,9 @@ mod test {
 
     use super::*;
     use crate::testing::{
-        custom_epoch_change_leaf_chain, custom_leaf_chain_with_upgrade, epoch_change_leaf_chain,
-        leaf_chain, leaf_chain_with_upgrade, qc_chain_from_leaf_chain, AlwaysFalseQuorum,
-        AlwaysTrueQuorum, EpochChangeQuorum, VersionCheckQuorum, ENABLE_EPOCHS, LEGACY_VERSION,
+        AlwaysFalseQuorum, AlwaysTrueQuorum, ENABLE_EPOCHS, EpochChangeQuorum, LEGACY_VERSION,
+        VersionCheckQuorum, custom_epoch_change_leaf_chain, custom_leaf_chain_with_upgrade,
+        epoch_change_leaf_chain, leaf_chain, leaf_chain_with_upgrade, qc_chain_from_leaf_chain,
     };
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]

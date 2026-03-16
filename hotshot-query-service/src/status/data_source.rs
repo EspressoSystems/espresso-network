@@ -15,8 +15,8 @@ use chrono::Utc;
 use hotshot_types::traits::metrics::Metrics;
 
 use crate::{
-    metrics::{MetricsError, PrometheusMetrics},
     QueryError, QueryResult,
+    metrics::{MetricsError, PrometheusMetrics},
 };
 
 pub trait HasMetrics {

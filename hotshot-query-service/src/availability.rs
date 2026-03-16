@@ -37,10 +37,10 @@ use hotshot_types::{
 };
 use serde::{Deserialize, Serialize};
 use snafu::{OptionExt, Snafu};
-use tide_disco::{api::ApiError, method::ReadState, Api, RequestError, RequestParams, StatusCode};
+use tide_disco::{Api, RequestError, RequestParams, StatusCode, api::ApiError, method::ReadState};
 use vbs::version::StaticVersionType;
 
-use crate::{api::load_api, types::HeightIndexed, Header, Payload, QueryError};
+use crate::{Header, Payload, QueryError, api::load_api, types::HeightIndexed};
 
 pub(crate) mod data_source;
 mod fetch;
@@ -811,15 +811,15 @@ mod test {
 
     use super::*;
     use crate::{
-        data_source::{storage::AvailabilityStorage, ExtensibleDataSource, VersionedDataSource},
+        ApiState, Error, Header,
+        data_source::{ExtensibleDataSource, VersionedDataSource, storage::AvailabilityStorage},
         status::StatusDataSource,
         task::BackgroundTask,
         testing::{
             consensus::{MockDataSource, MockNetwork, MockSqlDataSource},
-            mocks::{mock_transaction, MockBase, MockHeader, MockPayload, MockTypes, MOCK_UPGRADE},
+            mocks::{MOCK_UPGRADE, MockBase, MockHeader, MockPayload, MockTypes, mock_transaction},
         },
         types::HeightIndexed,
-        ApiState, Error, Header,
     };
 
     /// Get the current ledger height and a list of non-empty leaf/block pairs.

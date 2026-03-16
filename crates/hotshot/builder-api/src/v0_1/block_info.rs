@@ -7,7 +7,7 @@
 use std::{hash::Hash, marker::PhantomData};
 
 use hotshot_types::{
-    traits::{node_implementation::NodeType, signature_key::BuilderSignatureKey, BlockPayload},
+    traits::{BlockPayload, node_implementation::NodeType, signature_key::BuilderSignatureKey},
     utils::BuilderCommitment,
     vid::advz::ADVZCommitment,
 };

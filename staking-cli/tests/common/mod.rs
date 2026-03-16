@@ -1,7 +1,7 @@
 use anyhow::Result;
 use assert_cmd::Command;
 use hotshot_types::signature_key::BLSPubKey;
-use staking_cli::{deploy::TestSystem, DEV_MNEMONIC, DEV_PRIVATE_KEY};
+use staking_cli::{DEV_MNEMONIC, DEV_PRIVATE_KEY, deploy::TestSystem};
 
 // Signer variants are selectively used across different test binaries
 #[allow(dead_code)]
@@ -67,7 +67,7 @@ pub trait TestSystemExt {
     ///
     /// Callers must add metadata-related args (`--metadata-uri`, `--skip-metadata-validation`, etc.)
     async fn setup_metadata_cmd(&self, command: MetadataCommand, signer: Signer)
-        -> Result<Command>;
+    -> Result<Command>;
 }
 
 impl TestSystemExt for TestSystem {

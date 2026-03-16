@@ -55,10 +55,10 @@ pub async fn run_harness<TYPES, S: TaskState<Event = HotShotEvent<TYPES>> + Send
     let handle = task.run();
     let test_future = async move {
         loop {
-            if let Ok(event) = from_task.recv_direct().await {
-                if let Some(HotShotTaskCompleted) = check_event(event, &mut test_state) {
-                    break;
-                }
+            if let Ok(event) = from_task.recv_direct().await
+                && let Some(HotShotTaskCompleted) = check_event(event, &mut test_state)
+            {
+                break;
             }
         }
     };

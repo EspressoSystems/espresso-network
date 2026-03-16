@@ -22,24 +22,25 @@ use hotshot_types::{
 };
 
 use super::{
-    pruning::{PruneStorage, PrunedHeightStorage, PrunerCfg, PrunerConfig},
-    sql::MigrateTypes,
     Aggregate, AggregatesStorage, AvailabilityStorage, NodeStorage, UpdateAggregatesStorage,
     UpdateAvailabilityStorage,
+    pruning::{PruneStorage, PrunedHeightStorage, PrunerCfg, PrunerConfig},
+    sql::MigrateTypes,
 };
 use crate::{
+    Header, Payload, QueryError, QueryResult,
     availability::{
         BlockId, BlockQueryData, LeafId, LeafQueryData, NamespaceId, PayloadQueryData,
         QueryableHeader, QueryablePayload, TransactionHash, VidCommonQueryData,
     },
     data_source::{
+        VersionedDataSource,
         storage::{PayloadMetadata, VidCommonMetadata},
-        update, VersionedDataSource,
+        update,
     },
     metrics::PrometheusMetrics,
     node::{SyncStatusQueryData, TimeWindowQueryData, WindowStart},
     status::HasMetrics,
-    Header, Payload, QueryError, QueryResult,
 };
 
 /// A specific action that can be targeted to inject an error.
