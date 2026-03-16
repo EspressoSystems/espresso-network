@@ -55,6 +55,7 @@ use rand::Rng;
 use request_response::RequestType;
 use serde::{Deserialize, Serialize};
 use tokio::time::timeout;
+use vbs::version::Version;
 
 use self::data_source::{HotShotConfigDataSource, NodeStateDataSource, StateSignatureDataSource};
 use crate::{
@@ -1289,6 +1290,7 @@ pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
         &self,
         node_state: &NodeState,
         height: u64,
+        version: Version,
         merkle_tree: &RewardMerkleTreeV2,
     ) -> impl Send + Future<Output = anyhow::Result<()>> {
         async move {
@@ -1310,13 +1312,17 @@ pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
                 },
             };
 
-            let gc_height = if let Some(epoch_height) = node_state.epoch_height {
-                let current_epoch = epoch_from_block_number(height, epoch_height);
-                let gc_epoch = current_epoch.saturating_sub(2);
-                (gc_epoch * epoch_height).min(finalized_hotshot_height)
-            } else {
-                finalized_hotshot_height
-            };
+            // Never garbage collect beyond the current block or the finalized L1 height.
+            let mut gc_height = height.min(finalized_hotshot_height);
+
+            // For epoch reward versions, also retain the last 4 epochs
+            if version >= versions::EPOCH_REWARD_VERSION {
+                if let Some(epoch_height) = node_state.epoch_height {
+                    let current_epoch = epoch_from_block_number(height, epoch_height);
+                    let gc_epoch = current_epoch.saturating_sub(4);
+                    gc_height = gc_height.min(gc_epoch * epoch_height);
+                }
+            }
             if let Err(err) = self.garbage_collect(gc_height).await {
                 tracing::info!(gc_height, "failed to garbage collect: {err:#}");
             }

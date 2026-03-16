@@ -267,7 +267,12 @@ where
 
     if version > EPOCH_VERSION && !delta.rewards_delta.is_empty() {
         storage
-            .save_and_gc_reward_tree_v2(instance, block_number, &state.reward_merkle_tree_v2)
+            .save_and_gc_reward_tree_v2(
+                instance,
+                block_number,
+                version,
+                &state.reward_merkle_tree_v2,
+            )
             .await
             .context("failed to save and gc reward merkle tree v2")?;
 
