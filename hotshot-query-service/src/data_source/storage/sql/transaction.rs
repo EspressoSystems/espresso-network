@@ -494,31 +494,28 @@ where
             .context("failed to serialize header")?;
         self.upsert(
             "header",
-            ["height", "hash", "payload_hash", "data", "timestamp"],
+            [
+                "height",
+                "hash",
+                "payload_hash",
+                "ns_table",
+                "data",
+                "timestamp",
+            ],
             ["height"],
             [(
                 height as i64,
                 leaf.block_hash().to_string(),
                 leaf.leaf().block_header().payload_commitment().to_string(),
+                leaf.leaf().block_header().ns_table(),
                 header_json,
                 leaf.leaf().block_header().timestamp() as i64,
             )],
         )
         .await?;
 
-        // Similarly, we can initialize the payload table with a null payload, which can help us
-        // distinguish between blocks that haven't been produced yet and blocks we haven't received
-        // yet when answering queries.
-        // We don't overwrite the payload if it already exists.
-        // During epoch transition in PoS, the same height block is sent multiple times.
-        // The first block may have the payload, but subsequent blocks might be missing it.
-        // Overwriting would cause the payload to be lost since the block height is the same
-        let query = query("INSERT INTO payload (height) VALUES ($1) ON CONFLICT DO NOTHING")
-            .bind(height as i64);
-        query.execute(self.as_mut()).await?;
-
-        // Finally, we insert the leaf itself, which references the header row we created.
-        // Serialize the full leaf and QC to JSON for easy storage.
+        // Insert the leaf itself, which references the header row we created. Serialize the full
+        // leaf and QC to JSON for easy storage.
         let leaf_json = serde_json::to_value(leaf.leaf()).context("failed to serialize leaf")?;
         let qc_json = serde_json::to_value(leaf.qc()).context("failed to serialize QC")?;
         self.upsert(
@@ -565,19 +562,16 @@ where
             return Ok(());
         }
 
-        // The header and payload tables should already have been initialized when we inserted the
-        // corresponding leaf. All we have to do is add the payload itself and its size.
-        let payload = block.payload.encode();
-
         self.upsert(
             "payload",
-            ["height", "data", "size", "num_transactions"],
-            ["height"],
+            ["hash", "ns_table", "size", "num_transactions", "data"],
+            ["hash", "ns_table"],
             [(
-                height as i64,
-                payload.as_ref().to_vec(),
+                block.payload_hash().to_string(),
+                block.header().ns_table(),
                 block.size() as i32,
                 block.num_transactions() as i32,
+                block.payload.encode().as_ref().to_vec(),
             )],
         )
         .await?;
@@ -629,27 +623,24 @@ where
 
         let common_data =
             bincode::serialize(common.common()).context("failed to serialize VID common data")?;
+        self.upsert(
+            "vid_common",
+            ["hash", "data"],
+            ["hash"],
+            [(common.payload_hash().to_string(), common_data)],
+        )
+        .await?;
+
         if let Some(share) = share {
             let share_data = bincode::serialize(&share).context("failed to serialize VID share")?;
-            self.upsert(
-                "vid2",
-                ["height", "common", "share"],
-                ["height"],
-                [(height as i64, common_data, share_data)],
-            )
-            .await
-        } else {
-            // Don't touch the `share` column at all if we don't have a share to insert. It's
-            // possible that this column already exists, and we are just upserting the common data,
-            // in which case we don't want to overwrite the share with NULL.
-            self.upsert(
-                "vid2",
-                ["height", "common"],
-                ["height"],
-                [(height as i64, common_data)],
-            )
-            .await
+            query("UPDATE header SET vid_share = $1 WHERE height = $2")
+                .bind(share_data)
+                .bind(height as i64)
+                .execute(self.as_mut())
+                .await?;
         }
+
+        Ok(())
     }
 }
 

@@ -3,6 +3,7 @@ use std::fmt;
 use alloy::primitives::{B256, Keccak256};
 use anyhow::{Context, ensure};
 use ark_serialize::CanonicalSerialize;
+use base64::{prelude::BASE64_STANDARD, Engine};
 use committable::{Commitment, Committable, RawCommitmentBuilder};
 use either::Either;
 use hotshot_query_service::{availability::QueryableHeader, explorer::ExplorerHeader};
@@ -1281,6 +1282,10 @@ impl QueryableHeader<SeqTypes> for Header {
             .ns_range(i, &PayloadByteLen(payload_size))
             .byte_len()
             .0 as u64
+    }
+
+    fn ns_table(&self) -> String {
+        BASE64_STANDARD.encode(&self.ns_table().bytes)
     }
 }
 

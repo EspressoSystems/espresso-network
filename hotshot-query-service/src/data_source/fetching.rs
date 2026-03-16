@@ -91,7 +91,6 @@ use super::{
         MerklizedStateHeightStorage, MerklizedStateStorage, NodeStorage, UpdateAggregatesStorage,
         UpdateAvailabilityStorage,
         pruning::{PruneStorage, PrunedHeightDataSource, PrunedHeightStorage},
-        sql::MigrateTypes,
     },
 };
 use crate::{
@@ -145,7 +144,6 @@ pub struct Builder<Types, S, P> {
     proactive_fetching: bool,
     aggregator: bool,
     aggregator_chunk_size: Option<usize>,
-    types_migration_batch_size: u64,
     leaf_only: bool,
     _types: PhantomData<Types>,
 }
@@ -174,7 +172,6 @@ impl<Types, S, P> Builder<Types, S, P> {
             proactive_fetching: true,
             aggregator: true,
             aggregator_chunk_size: None,
-            types_migration_batch_size: 10000,
             leaf_only: false,
             _types: Default::default(),
         }
@@ -321,14 +318,6 @@ impl<Types, S, P> Builder<Types, S, P> {
         self
     }
 
-    /// Sets the batch size for the types migration.
-    /// Determines how many `(leaf, vid)` rows are selected from the old types table
-    /// and migrated at once.
-    pub fn with_types_migration_batch_size(mut self, batch: u64) -> Self {
-        self.types_migration_batch_size = batch;
-        self
-    }
-
     pub fn is_leaf_only(&self) -> bool {
         self.leaf_only
     }
@@ -339,7 +328,7 @@ where
     Types: NodeType,
     Payload<Types>: QueryablePayload<Types>,
     Header<Types>: QueryableHeader<Types>,
-    S: PruneStorage + VersionedDataSource + HasMetrics + MigrateTypes<Types> + 'static,
+    S: PruneStorage + VersionedDataSource + HasMetrics + 'static,
     for<'a> S::ReadOnly<'a>: AvailabilityStorage<Types>
         + PrunedHeightStorage
         + NodeStorage<Types>
@@ -455,7 +444,7 @@ where
     Types: NodeType,
     Payload<Types>: QueryablePayload<Types>,
     Header<Types>: QueryableHeader<Types>,
-    S: VersionedDataSource + PruneStorage + HasMetrics + MigrateTypes<Types> + 'static,
+    S: VersionedDataSource + PruneStorage + HasMetrics + 'static,
     for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types> + UpdateAggregatesStorage<Types>,
     for<'a> S::ReadOnly<'a>: AvailabilityStorage<Types>
         + NodeStorage<Types>
@@ -479,18 +468,10 @@ where
         let proactive_range_chunk_size = builder
             .proactive_range_chunk_size
             .unwrap_or(builder.range_chunk_size);
-        let migration_batch_size = builder.types_migration_batch_size;
         let scanner_metrics = ScannerMetrics::new(builder.storage.metrics());
         let aggregator_metrics = AggregatorMetrics::new(builder.storage.metrics());
 
         let fetcher = Arc::new(Fetcher::new(builder).await?);
-
-        // Migrate the old types to new PoS types
-        // This is a one-time operation that should be done before starting the data source
-        // It migrates leaf1 storage to leaf2
-        // and vid to vid2
-        fetcher.storage.migrate_types(migration_batch_size).await?;
-
         let scanner = if proactive_fetching && !leaf_only {
             Some(BackgroundTask::spawn(
                 "proactive scanner",
@@ -2316,34 +2297,41 @@ mod test {
     #[test]
     fn test_range_chunks() {
         // Inclusive bounds, partial last chunk.
-        assert_eq!(
-            range_chunks(0..=4, 2).collect::<Vec<_>>(),
-            [0..2, 2..4, 4..5]
-        );
+        assert_eq!(range_chunks(0..=4, 2).collect::<Vec<_>>(), [
+            0..2,
+            2..4,
+            4..5
+        ]);
 
         // Inclusive bounds, complete last chunk.
-        assert_eq!(
-            range_chunks(0..=5, 2).collect::<Vec<_>>(),
-            [0..2, 2..4, 4..6]
-        );
+        assert_eq!(range_chunks(0..=5, 2).collect::<Vec<_>>(), [
+            0..2,
+            2..4,
+            4..6
+        ]);
 
         // Exclusive bounds, partial last chunk.
-        assert_eq!(
-            range_chunks(0..5, 2).collect::<Vec<_>>(),
-            [0..2, 2..4, 4..5]
-        );
+        assert_eq!(range_chunks(0..5, 2).collect::<Vec<_>>(), [
+            0..2,
+            2..4,
+            4..5
+        ]);
 
         // Exclusive bounds, complete last chunk.
-        assert_eq!(
-            range_chunks(0..6, 2).collect::<Vec<_>>(),
-            [0..2, 2..4, 4..6]
-        );
+        assert_eq!(range_chunks(0..6, 2).collect::<Vec<_>>(), [
+            0..2,
+            2..4,
+            4..6
+        ]);
 
         // Unbounded.
-        assert_eq!(
-            range_chunks(0.., 2).take(5).collect::<Vec<_>>(),
-            [0..2, 2..4, 4..6, 6..8, 8..10]
-        );
+        assert_eq!(range_chunks(0.., 2).take(5).collect::<Vec<_>>(), [
+            0..2,
+            2..4,
+            4..6,
+            6..8,
+            8..10
+        ]);
     }
 
     #[test]
@@ -2435,41 +2423,32 @@ mod test {
         for &(start, end) in present_ranges {
             if start != prev {
                 let range = ranges.next().unwrap();
-                assert_eq!(
-                    range,
-                    SyncStatusRange {
-                        start: prev,
-                        end: start,
-                        status: if prev == 0 {
-                            SyncStatus::Pruned
-                        } else {
-                            SyncStatus::Missing
-                        },
-                    }
-                );
+                assert_eq!(range, SyncStatusRange {
+                    start: prev,
+                    end: start,
+                    status: if prev == 0 {
+                        SyncStatus::Pruned
+                    } else {
+                        SyncStatus::Missing
+                    },
+                });
             }
             let range = ranges.next().unwrap();
-            assert_eq!(
-                range,
-                SyncStatusRange {
-                    start,
-                    end,
-                    status: SyncStatus::Present,
-                }
-            );
+            assert_eq!(range, SyncStatusRange {
+                start,
+                end,
+                status: SyncStatus::Present,
+            });
             prev = end;
         }
 
         if prev != block_height {
             let range = ranges.next().unwrap();
-            assert_eq!(
-                range,
-                SyncStatusRange {
-                    start: prev,
-                    end: block_height,
-                    status: SyncStatus::Missing,
-                }
-            );
+            assert_eq!(range, SyncStatusRange {
+                start: prev,
+                end: block_height,
+                status: SyncStatus::Missing,
+            });
         }
 
         assert_eq!(ranges.next(), None);

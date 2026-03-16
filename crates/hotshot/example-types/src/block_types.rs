@@ -13,6 +13,7 @@ use std::{
 use alloy::primitives::FixedBytes;
 use async_trait::async_trait;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
+use derive_more::Display;
 use hotshot_types::{
     data::{BlockError, Leaf2, VidCommitment, ViewNumber, vid_commitment},
     light_client::LightClientState,
@@ -168,7 +169,10 @@ impl<TYPES: NodeType> TestableBlock<TYPES> for TestBlockPayload {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(
+    Debug, Display, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash,
+)]
+#[display("{{num_transactions:{num_transactions}}}")]
 pub struct TestMetadata {
     pub num_transactions: u64,
 }

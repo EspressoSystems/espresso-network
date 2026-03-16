@@ -93,10 +93,6 @@ impl SequencerDataSource for DataSource {
             builder = builder.disable_proactive_fetching();
         }
 
-        if let Some(batch_size) = opt.types_migration_batch_size {
-            builder = builder.with_types_migration_batch_size(batch_size);
-        }
-
         builder.build().await
     }
 }
