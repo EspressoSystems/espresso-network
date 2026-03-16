@@ -24,8 +24,8 @@ pub use impls::testing;
 #[allow(unused_imports)]
 pub(crate) use impls::validator_set_from_l1_events;
 pub use impls::{
-    get_l1_deposits, retain_accounts, validators_from_l1_events, BuilderValidationError,
-    EpochCommittees, FeeError, ProposalValidationError, StateValidationError,
+    BuilderValidationError, EpochCommittees, FeeError, ProposalValidationError,
+    StateValidationError, get_l1_deposits, retain_accounts, validators_from_l1_events,
 };
 pub use nsproof::*;
 pub use txproof::*;
@@ -173,8 +173,8 @@ pub use self::impls::{
 };
 pub use crate::{
     v0::impls::{
-        calculate_proportion_staked_and_reward_rate, select_active_validator_set,
-        to_registered_validator_map, StakeTableHash, StakeTableState,
+        StakeTableHash, StakeTableState, calculate_proportion_staked_and_reward_rate,
+        select_active_validator_set, to_registered_validator_map,
     },
     v0_1::{
         BLOCK_MERKLE_TREE_HEIGHT, FEE_MERKLE_TREE_HEIGHT, NS_ID_BYTE_LEN, NS_OFFSET_BYTE_LEN,

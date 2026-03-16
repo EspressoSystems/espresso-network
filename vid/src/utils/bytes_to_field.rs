@@ -183,7 +183,7 @@ mod tests {
     use ark_bn254::Fr as Fr254;
     use rand::RngCore;
 
-    use super::{bytes_to_field, field_to_bytes, PrimeField, Vec};
+    use super::{PrimeField, Vec, bytes_to_field, field_to_bytes};
 
     fn bytes_to_field_iter<F: PrimeField>() {
         let byte_lens = [0, 1, 2, 16, 31, 32, 33, 48, 65, 100, 200, 5000];

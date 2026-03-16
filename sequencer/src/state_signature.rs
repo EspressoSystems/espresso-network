@@ -7,7 +7,7 @@ use std::{
 
 use alloy::primitives::FixedBytes;
 use async_lock::RwLock;
-use espresso_types::{traits::SequencerPersistence, PubKey};
+use espresso_types::{PubKey, traits::SequencerPersistence};
 use hotshot::types::{Event, EventType, SchnorrPubKey};
 use hotshot_task_impls::helpers::derive_signed_state_digest;
 use hotshot_types::{
@@ -33,7 +33,7 @@ use surf_disco::{Client, Url};
 use tide_disco::error::ServerError;
 use vbs::version::StaticVersionType;
 
-use crate::{context::Consensus, SeqTypes};
+use crate::{SeqTypes, context::Consensus};
 
 /// A relay server that's collecting and serving the light client state signatures
 pub mod relay_server;

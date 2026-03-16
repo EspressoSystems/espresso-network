@@ -61,14 +61,14 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use async_lock::Semaphore;
 use async_trait::async_trait;
-use backoff::{backoff::Backoff, ExponentialBackoff, ExponentialBackoffBuilder};
+use backoff::{ExponentialBackoff, ExponentialBackoffBuilder, backoff::Backoff};
 use derivative::Derivative;
 use futures::{
     channel::oneshot,
-    future::{self, join_all, BoxFuture, Either, Future, FutureExt},
+    future::{self, BoxFuture, Either, Future, FutureExt, join_all},
     stream::{self, BoxStream, StreamExt},
 };
 use hotshot_types::{
@@ -78,23 +78,24 @@ use hotshot_types::{
         node_implementation::NodeType,
     },
 };
-use jf_merkle_tree_compat::{prelude::MerkleProof, MerkleTreeScheme};
+use jf_merkle_tree_compat::{MerkleTreeScheme, prelude::MerkleProof};
 use tagged_base64::TaggedBase64;
 use tokio::{spawn, time::sleep};
 use tracing::Instrument;
 
 use super::{
+    Transaction, VersionedDataSource,
     notifier::Notifier,
     storage::{
-        pruning::{PruneStorage, PrunedHeightDataSource, PrunedHeightStorage},
-        sql::MigrateTypes,
         Aggregate, AggregatesStorage, AvailabilityStorage, ExplorerStorage,
         MerklizedStateHeightStorage, MerklizedStateStorage, NodeStorage, UpdateAggregatesStorage,
         UpdateAvailabilityStorage,
+        pruning::{PruneStorage, PrunedHeightDataSource, PrunedHeightStorage},
+        sql::MigrateTypes,
     },
-    Transaction, VersionedDataSource,
 };
 use crate::{
+    Header, Payload, QueryError, QueryResult,
     availability::{
         AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, BlockWithTransaction, Fetch,
         FetchStream, HeaderQueryData, LeafId, LeafQueryData, NamespaceId, PayloadMetadata,
@@ -102,7 +103,7 @@ use crate::{
         UpdateAvailabilityData, VidCommonMetadata, VidCommonQueryData,
     },
     explorer::{self, ExplorerDataSource},
-    fetching::{self, request, Provider},
+    fetching::{self, Provider, request},
     merklized_state::{
         MerklizedState, MerklizedStateDataSource, MerklizedStateHeightPersistence, Snapshot,
     },
@@ -114,7 +115,6 @@ use crate::{
     status::{HasMetrics, StatusDataSource},
     task::BackgroundTask,
     types::HeightIndexed,
-    Header, Payload, QueryError, QueryResult,
 };
 
 mod block;

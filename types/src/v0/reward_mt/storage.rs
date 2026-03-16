@@ -12,16 +12,16 @@ use std::{
 
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use jf_merkle_tree_compat::{
-    prelude::{MerkleNode, MerkleProof},
     LookupResult, ToTraversalPath,
+    prelude::{MerkleNode, MerkleProof},
 };
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    reward_mt::{RewardMerkleProof, REWARD_MERKLE_TREE_V2_INNER_HEIGHT},
+    reward_mt::{REWARD_MERKLE_TREE_V2_INNER_HEIGHT, RewardMerkleProof},
     sparse_mt::{Keccak256Hasher, KeccakNode},
     v0_3::RewardAmount,
-    v0_4::{RewardAccountV2, REWARD_MERKLE_TREE_V2_ARITY, REWARD_MERKLE_TREE_V2_HEIGHT},
+    v0_4::{REWARD_MERKLE_TREE_V2_ARITY, REWARD_MERKLE_TREE_V2_HEIGHT, RewardAccountV2},
 };
 
 /// Root node of a 156-bit inner Merkle tree, wrapped in `Arc` to avoid deep
@@ -383,15 +383,15 @@ impl InMemoryState {
     /// `collect_merkle_leaves` traversal for partitions that were only read.
     /// Empty partitions are stored as `None` rather than `Some(vec![])`.
     fn flush_cache(&mut self) {
-        if let Some((index, tree, dirty)) = self.cache.take() {
-            if dirty {
-                let mut entries = Vec::new();
-                collect_merkle_leaves(&tree, &mut entries);
-                if entries.is_empty() {
-                    self.storage[index.0 as usize] = None;
-                } else {
-                    self.storage[index.0 as usize] = Some(entries);
-                }
+        if let Some((index, tree, dirty)) = self.cache.take()
+            && dirty
+        {
+            let mut entries = Vec::new();
+            collect_merkle_leaves(&tree, &mut entries);
+            if entries.is_empty() {
+                self.storage[index.0 as usize] = None;
+            } else {
+                self.storage[index.0 as usize] = Some(entries);
             }
         }
     }
@@ -402,16 +402,16 @@ impl InMemoryState {
     /// This is the read-only counterpart to `flush_cache` + storage access:
     /// it produces the same entries without mutating state.
     fn slot_entries(&self, index: &OuterIndex) -> Option<Vec<(RewardAccountV2, RewardAmount)>> {
-        if let Some((cached_idx, tree, _)) = &self.cache {
-            if cached_idx == index {
-                let mut entries = Vec::new();
-                collect_merkle_leaves(tree, &mut entries);
-                return if entries.is_empty() {
-                    None
-                } else {
-                    Some(entries)
-                };
-            }
+        if let Some((cached_idx, tree, _)) = &self.cache
+            && cached_idx == index
+        {
+            let mut entries = Vec::new();
+            collect_merkle_leaves(tree, &mut entries);
+            return if entries.is_empty() {
+                None
+            } else {
+                Some(entries)
+            };
         }
         self.storage[index.0 as usize].clone()
     }
@@ -427,10 +427,10 @@ impl InMemoryState {
     /// 3. Stores the live tree in cache
     fn ensure_loaded(&mut self, index: &OuterIndex) {
         // Already cached — nothing to do
-        if let Some((cached_index, ..)) = &self.cache {
-            if cached_index == index {
-                return;
-            }
+        if let Some((cached_index, ..)) = &self.cache
+            && cached_index == index
+        {
+            return;
         }
 
         // Flush current cache entry (writes back if dirty, clears cache)
@@ -620,10 +620,10 @@ impl RewardMerkleTreeStorage for CachedInMemoryStorage {
 
     fn exists(&self, index: &OuterIndex) -> bool {
         let state = self.inner.read().unwrap();
-        if let Some((cached_index, ..)) = &state.cache {
-            if cached_index == index {
-                return true;
-            }
+        if let Some((cached_index, ..)) = &state.cache
+            && cached_index == index
+        {
+            return true;
         }
         state.storage[index.0 as usize].is_some()
     }
@@ -665,7 +665,7 @@ mod tests {
 
     /// Generate a random reward amount
     fn random_amount(rng: &mut impl Rng) -> RewardAmount {
-        RewardAmount(U256::from(rng.gen::<u64>()))
+        RewardAmount(U256::from(rng.r#gen::<u64>()))
     }
 
     #[test]

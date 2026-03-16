@@ -8,14 +8,14 @@ use std::{
 use anyhow::{Context, Result};
 use committable::Committable;
 use espresso_types::{
+    FeeAccount, FeeMerkleTree, PubKey, Transaction,
     v0_3::RewardAccountV1,
     v0_4::{RewardAccountV2, RewardClaimError},
-    FeeAccount, FeeMerkleTree, PubKey, Transaction,
 };
 
 use crate::{
-    api::{data_source::TokenDataSource, RewardAmount, RewardMerkleTreeV2Data},
     U256,
+    api::{RewardAmount, RewardMerkleTreeV2Data, data_source::TokenDataSource},
 };
 // re-exported here to avoid breaking changes in consumers
 // "deprecated" does not work with "pub use": https://github.com/rust-lang/rust/issues/30827
@@ -26,13 +26,13 @@ pub type NamespaceProofQueryData = espresso_types::NamespaceProofQueryData;
 
 use futures::FutureExt;
 use hotshot_query_service::{
+    Error,
     availability::AvailabilityDataSource,
     explorer::{self, ExplorerDataSource},
     merklized_state::{
         self, MerklizedState, MerklizedStateDataSource, MerklizedStateHeightPersistence, Snapshot,
     },
     node::{self, NodeDataSource},
-    Error,
 };
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
@@ -41,14 +41,14 @@ use hotshot_types::{
 use jf_merkle_tree_compat::MerkleTreeScheme;
 use serde::de::Error as _;
 use tagged_base64::TaggedBase64;
-use tide_disco::{method::ReadState, Api, Error as _, RequestParams, StatusCode};
+use tide_disco::{Api, Error as _, RequestParams, StatusCode, method::ReadState};
 use vbs::version::{StaticVersion, StaticVersionType};
 
 use super::data_source::{
     CatchupDataSource, HotShotConfigDataSource, NodeStateDataSource, StakeTableDataSource,
     StateSignatureDataSource, SubmitDataSource,
 };
-use crate::{api::RewardMerkleTreeDataSource, SeqTypes, SequencerApiVersion, SequencerPersistence};
+use crate::{SeqTypes, SequencerApiVersion, SequencerPersistence, api::RewardMerkleTreeDataSource};
 
 mod availability;
 pub(super) use availability::*;
@@ -348,7 +348,7 @@ where
                                     "zero reward balance for {address} at height {height}"
                                 ),
                                 status: StatusCode::NOT_FOUND,
-                            })
+                            });
                         },
                         Err(RewardClaimError::ProofConversionError(err)) => {
                             let message = format!(

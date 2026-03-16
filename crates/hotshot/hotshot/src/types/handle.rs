@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use async_broadcast::{InactiveReceiver, Receiver, Sender};
 use async_lock::RwLock;
 use committable::{Commitment, Committable};
@@ -33,7 +33,7 @@ use hotshot_types::{
 };
 use tracing::instrument;
 
-use crate::{traits::NodeImplementation, types::Event, SystemContext};
+use crate::{SystemContext, traits::NodeImplementation, types::Event};
 
 /// Event streaming handle for a [`SystemContext`] instance running in the background
 ///
@@ -86,7 +86,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static> SystemContextHandl
     }
 
     /// obtains a stream to expose to the user
-    pub fn event_stream(&self) -> impl Stream<Item = Event<TYPES>> {
+    pub fn event_stream(&self) -> impl Stream<Item = Event<TYPES>> + use<TYPES, I> {
         self.output_event_stream.1.activate_cloned()
     }
 
@@ -148,8 +148,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static> SystemContextHandl
         &self,
         view: ViewNumber,
         leaf_commitment: Commitment<Leaf2<TYPES>>,
-    ) -> Result<impl futures::Future<Output = Result<Proposal<TYPES, QuorumProposalWrapper<TYPES>>>>>
-    {
+    ) -> Result<
+        impl futures::Future<Output = Result<Proposal<TYPES, QuorumProposalWrapper<TYPES>>>>
+        + use<TYPES, I>,
+    > {
         // We need to be able to sign this request before submitting it to the network. Compute the
         // payload first.
         let signed_proposal_request = ProposalRequestPayload {

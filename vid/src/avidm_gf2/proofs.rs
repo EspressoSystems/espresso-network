@@ -4,11 +4,11 @@ use jf_merkle_tree::MerkleTreeScheme;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    avidm_gf2::{
-        namespaced::{NsAvidmGf2Commit, NsAvidmGf2Common, NsAvidmGf2Scheme},
-        AvidmGf2Scheme, MerkleProof, MerkleTree,
-    },
     VerificationResult, VidError, VidResult, VidScheme,
+    avidm_gf2::{
+        AvidmGf2Scheme, MerkleProof, MerkleTree,
+        namespaced::{NsAvidmGf2Commit, NsAvidmGf2Common, NsAvidmGf2Scheme},
+    },
 };
 
 /// A proof of a namespace payload.
@@ -78,7 +78,7 @@ impl NsAvidmGf2Scheme {
 
 #[cfg(test)]
 mod tests {
-    use crate::avidm_gf2::{namespaced::NsAvidmGf2Scheme, AvidmGf2Scheme};
+    use crate::avidm_gf2::{AvidmGf2Scheme, namespaced::NsAvidmGf2Scheme};
 
     #[test]
     fn test_ns_proof() {

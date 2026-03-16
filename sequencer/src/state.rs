@@ -1,19 +1,19 @@
 use core::fmt::Debug;
 use std::{cmp::max, sync::Arc, time::Duration};
 
-use anyhow::{bail, ensure, Context};
+use anyhow::{Context, bail, ensure};
 use either::Either;
 use espresso_types::{
+    BlockMerkleTree, FeeAccount, FeeMerkleTree, Leaf2, ValidatedState,
     traits::StateCatchup,
     v0_3::{ChainConfig, RewardAccountV1, RewardMerkleTreeV1},
     v0_4::{Delta, RewardMerkleTreeV2},
-    BlockMerkleTree, FeeAccount, FeeMerkleTree, Leaf2, ValidatedState,
 };
-use futures::{future::Future, StreamExt};
+use futures::{StreamExt, future::Future};
 use hotshot::traits::ValidatedState as HotShotState;
 use hotshot_query_service::{
     availability::{AvailabilityDataSource, LeafQueryData},
-    data_source::{storage::pruning::PrunedHeightDataSource, Transaction, VersionedDataSource},
+    data_source::{Transaction, VersionedDataSource, storage::pruning::PrunedHeightDataSource},
     merklized_state::{MerklizedStateHeightPersistence, UpdateStateData},
     status::StatusDataSource,
     types::HeightIndexed,
@@ -26,10 +26,10 @@ use vbs::version::Version;
 use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION};
 
 use crate::{
+    NodeState, SeqTypes,
     api::RewardMerkleTreeDataSource,
     catchup::{CatchupStorage, SqlStateCatchup},
     persistence::ChainConfigPersistence,
-    NodeState, SeqTypes,
 };
 
 pub(crate) async fn compute_state_update(

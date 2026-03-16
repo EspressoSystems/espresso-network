@@ -287,7 +287,7 @@ impl<TYPES: NodeType> HotShotConfig<TYPES> {
 
 pub mod version_ser {
 
-    use serde::{de, Deserialize, Deserializer, Serializer};
+    use serde::{Deserialize, Deserializer, Serializer, de};
     use vbs::version::Version;
 
     pub fn serialize<S>(ver: &Version, serializer: S) -> Result<S::Ok, S::Error>
