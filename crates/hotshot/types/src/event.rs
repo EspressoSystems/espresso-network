@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     data::{
         DaProposal, DaProposal2, Leaf, Leaf2, QuorumProposal, QuorumProposalWrapper,
-        UpgradeProposal, VidDisperseShare, VidDisperseShare0,
+        UpgradeProposal, VidDisperseShare, VidDisperseShare0, ViewNumber,
     },
     error::HotShotError,
     message::{convert_proposal, Proposal},
@@ -30,7 +30,7 @@ use crate::{
 #[serde(bound(deserialize = "TYPES: NodeType"))]
 pub struct Event<TYPES: NodeType> {
     /// The view number that this event originates from
-    pub view_number: TYPES::View,
+    pub view_number: ViewNumber,
     /// The underlying event
     pub event: EventType<TYPES>,
 }
@@ -49,7 +49,7 @@ impl<TYPES: NodeType> Event<TYPES> {
 #[serde(bound(deserialize = "TYPES: NodeType"))]
 pub struct LegacyEvent<TYPES: NodeType> {
     /// The view number that this event originates from
-    pub view_number: TYPES::View,
+    pub view_number: ViewNumber,
     /// The underlying event
     pub event: LegacyEventType<TYPES>,
 }
@@ -211,17 +211,17 @@ pub enum EventType<TYPES: NodeType> {
     /// A replica task was canceled by a timeout interrupt
     ReplicaViewTimeout {
         /// The view that timed out
-        view_number: TYPES::View,
+        view_number: ViewNumber,
     },
     /// The view has finished.  If values were decided on, a `Decide` event will also be emitted.
     ViewFinished {
         /// The view number that has just finished
-        view_number: TYPES::View,
+        view_number: ViewNumber,
     },
     /// The view timed out
     ViewTimeout {
         /// The view that timed out
-        view_number: TYPES::View,
+        view_number: ViewNumber,
     },
     /// New transactions were received from the network
     /// or submitted to the network by us
@@ -249,7 +249,7 @@ pub enum EventType<TYPES: NodeType> {
     /// or submitted to the network by us
     UpgradeProposal {
         /// Contents of the proposal
-        proposal: Proposal<TYPES, UpgradeProposal<TYPES>>,
+        proposal: Proposal<TYPES, UpgradeProposal>,
         /// Public key of the leader submitting the proposal
         sender: TYPES::SignatureKey,
     },
@@ -344,17 +344,17 @@ pub enum LegacyEventType<TYPES: NodeType> {
     /// A replica task was canceled by a timeout interrupt
     ReplicaViewTimeout {
         /// The view that timed out
-        view_number: TYPES::View,
+        view_number: ViewNumber,
     },
     /// The view has finished.  If values were decided on, a `Decide` event will also be emitted.
     ViewFinished {
         /// The view number that has just finished
-        view_number: TYPES::View,
+        view_number: ViewNumber,
     },
     /// The view timed out
     ViewTimeout {
         /// The view that timed out
-        view_number: TYPES::View,
+        view_number: ViewNumber,
     },
     /// New transactions were received from the network
     /// or submitted to the network by us
@@ -382,7 +382,7 @@ pub enum LegacyEventType<TYPES: NodeType> {
     /// or submitted to the network by us
     UpgradeProposal {
         /// Contents of the proposal
-        proposal: Proposal<TYPES, UpgradeProposal<TYPES>>,
+        proposal: Proposal<TYPES, UpgradeProposal>,
         /// Public key of the leader submitting the proposal
         sender: TYPES::SignatureKey,
     },

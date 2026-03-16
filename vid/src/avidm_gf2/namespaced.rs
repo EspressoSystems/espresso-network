@@ -153,9 +153,13 @@ impl NsAvidmGf2Scheme {
         Ok((commit, common, shares))
     }
 
-    /// Verify a namespaced share
-    pub fn verify_share(
-        commit: &NsAvidmGf2Commit,
+    /// Verify a namespaced share given already-verified common data.
+    ///
+    /// # Safety Contract
+    /// Caller MUST ensure `is_consistent(commit, common)` returned `true`
+    /// before calling this. Without that check, a malicious common could
+    /// make an invalid share appear valid.
+    pub fn verify_share_with_verified_common(
         common: &NsAvidmGf2Common,
         share: &NsAvidmGf2Share,
     ) -> VidResult<crate::VerificationResult> {
@@ -165,26 +169,24 @@ impl NsAvidmGf2Scheme {
         {
             return Err(VidError::InvalidShare);
         }
-        // Verify the share for each namespace
         for (commit, content) in common.ns_commits.iter().zip(share.0.iter()) {
             if AvidmGf2Scheme::verify_share(&common.param, commit, content)?.is_err() {
                 return Ok(Err(()));
             }
         }
-        // Verify the namespace MT commitment
-        let expected_commit = NsAvidmGf2Commit {
-            commit: MerkleTree::from_elems(
-                None,
-                common.ns_commits.iter().map(|commit| commit.commit),
-            )
-            .map_err(|err| VidError::Internal(err.into()))?
-            .commitment(),
-        };
-        Ok(if &expected_commit == commit {
-            Ok(())
-        } else {
-            Err(())
-        })
+        Ok(Ok(()))
+    }
+
+    /// Verify a namespaced share
+    pub fn verify_share(
+        commit: &NsAvidmGf2Commit,
+        common: &NsAvidmGf2Common,
+        share: &NsAvidmGf2Share,
+    ) -> VidResult<crate::VerificationResult> {
+        if !Self::is_consistent(commit, common) {
+            return Ok(Err(()));
+        }
+        Self::verify_share_with_verified_common(common, share)
     }
 
     /// Recover the entire payload from enough share
@@ -230,6 +232,102 @@ pub mod tests {
     use rand::{RngCore, seq::SliceRandom};
 
     use crate::avidm_gf2::namespaced::NsAvidmGf2Scheme;
+
+    fn disperse_with_payload(
+        payload: &[u8],
+    ) -> (
+        crate::avidm_gf2::namespaced::NsAvidmGf2Commit,
+        crate::avidm_gf2::namespaced::NsAvidmGf2Common,
+        Vec<crate::avidm_gf2::namespaced::NsAvidmGf2Share>,
+    ) {
+        let num_storage_nodes = 9;
+        let ns_table = [(0usize..15), (15..48)];
+
+        let mut rng = jf_utils::test_rng();
+        let weights: Vec<u32> = (0..num_storage_nodes)
+            .map(|_| rng.next_u32() % 5 + 1)
+            .collect();
+        let total_weights: u32 = weights.iter().sum();
+        let recovery_threshold = total_weights.div_ceil(3) as usize;
+        let params = NsAvidmGf2Scheme::setup(recovery_threshold, total_weights as usize).unwrap();
+
+        NsAvidmGf2Scheme::ns_disperse(&params, &weights, payload, ns_table.iter().cloned()).unwrap()
+    }
+
+    fn setup_test_data() -> (
+        crate::avidm_gf2::namespaced::NsAvidmGf2Commit,
+        crate::avidm_gf2::namespaced::NsAvidmGf2Common,
+        Vec<crate::avidm_gf2::namespaced::NsAvidmGf2Share>,
+    ) {
+        let payload: Vec<u8> = (0u8..48).collect();
+        disperse_with_payload(&payload)
+    }
+
+    #[test]
+    fn verify_share_with_verified_common_accepts_valid() {
+        let (commit, common, shares) = setup_test_data();
+        assert!(NsAvidmGf2Scheme::is_consistent(&commit, &common));
+        for share in &shares {
+            assert!(
+                NsAvidmGf2Scheme::verify_share_with_verified_common(&common, share)
+                    .is_ok_and(|r| r.is_ok())
+            );
+        }
+    }
+
+    #[test]
+    fn verify_share_with_verified_common_rejects_tampered_share() {
+        let (_commit, common, shares) = setup_test_data();
+        // Create a tampered share by removing one namespace entry
+        let mut tampered = shares[0].clone();
+        tampered.0.pop();
+        assert!(NsAvidmGf2Scheme::verify_share_with_verified_common(&common, &tampered).is_err());
+
+        // Create a tampered share by dispersing a different payload and swapping
+        let (_commit2, _common2, shares2) = disperse_with_payload(&[0xAB; 48]);
+        let mut mixed = shares[0].clone();
+        mixed.0[0] = shares2[0].0[0].clone();
+        assert!(
+            NsAvidmGf2Scheme::verify_share_with_verified_common(&common, &mixed)
+                .is_ok_and(|r| r.is_err())
+        );
+    }
+
+    #[test]
+    fn composition_equivalence() {
+        let (commit, common, shares) = setup_test_data();
+        for share in &shares {
+            let full_result = NsAvidmGf2Scheme::verify_share(&commit, &common, share)
+                .unwrap()
+                .is_ok();
+            let composed_result = NsAvidmGf2Scheme::is_consistent(&commit, &common)
+                && NsAvidmGf2Scheme::verify_share_with_verified_common(&common, share)
+                    .unwrap()
+                    .is_ok();
+            assert_eq!(full_result, composed_result);
+        }
+    }
+
+    #[test]
+    fn is_consistent_rejects_tampered_commit() {
+        let (commit, common, _shares) = setup_test_data();
+        // Use commit from a different dispersal
+        let (different_commit, ..) = disperse_with_payload(&[0xCD; 48]);
+        // Verify original is consistent
+        assert!(NsAvidmGf2Scheme::is_consistent(&commit, &common));
+        // Verify different commit is inconsistent with original common
+        assert!(!NsAvidmGf2Scheme::is_consistent(&different_commit, &common));
+    }
+
+    #[test]
+    fn is_consistent_rejects_tampered_common() {
+        let (commit, common, _shares) = setup_test_data();
+        // Swap in ns_commits from a different dispersal
+        let (_, different_common, _) = disperse_with_payload(&[0xCD; 48]);
+        let mut tampered_common = common;
+        tampered_common.ns_commits = different_common.ns_commits;
+        assert!(!NsAvidmGf2Scheme::is_consistent(&commit, &tampered_common));
+    }
 
     #[test]
     fn round_trip() {

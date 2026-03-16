@@ -12,12 +12,9 @@ use either::Either;
 use hotshot::traits::BlockPayload;
 use hotshot_builder_api::v0_1::builder::TransactionStatus;
 use hotshot_types::{
-    data::{DaProposal2, QuorumProposalWrapper},
+    data::{DaProposal2, QuorumProposalWrapper, ViewNumber},
     event::LeafInfo,
-    traits::{
-        block_contents::BlockHeader,
-        node_implementation::{ConsensusTime, NodeType},
-    },
+    traits::{block_contents::BlockHeader, node_implementation::NodeType},
 };
 use quick_cache::sync::Cache;
 use tiered_view_map::TieredViewMap;
@@ -33,9 +30,9 @@ use crate::{
 pub mod tiered_view_map;
 
 type ProposalMap<Types> =
-    HashMap<ProposalId<Types>, Either<QuorumProposalWrapper<Types>, DaProposal2<Types>>>;
+    HashMap<ProposalId, Either<QuorumProposalWrapper<Types>, DaProposal2<Types>>>;
 
-type BuilderStateMap<Types> = TieredViewMap<BuilderStateId<Types>, Arc<BuilderState<Types>>>;
+type BuilderStateMap<Types> = TieredViewMap<BuilderStateId, Arc<BuilderState<Types>>>;
 
 /// Result of looking up a builder state by ID.
 ///
@@ -151,8 +148,8 @@ where
             let mut builder_states_write_guard = self.builder_states.write().await;
             let highest_active_view_num = builder_states_write_guard
                 .highest_view()
-                .unwrap_or(Types::View::genesis());
-            let cutoff = Types::View::new(*latest_decide_view_num.min(highest_active_view_num));
+                .unwrap_or(ViewNumber::genesis());
+            let cutoff = ViewNumber::new(*latest_decide_view_num.min(highest_active_view_num));
             tracing::info!(
                 lowest_view = ?builder_states_write_guard.lowest_view(),
                 ?cutoff,
@@ -236,7 +233,7 @@ where
     #[tracing::instrument(skip_all)]
     async fn handle_proposal(
         &self,
-        proposal_id: ProposalId<Types>,
+        proposal_id: ProposalId,
         proposal: Either<QuorumProposalWrapper<Types>, DaProposal2<Types>>,
     ) {
         match self.proposals.lock().await.entry(proposal_id) {
@@ -263,12 +260,12 @@ where
     }
 
     /// Get the lowest view we have stored
-    pub async fn lowest_view(&self) -> Types::View {
+    pub async fn lowest_view(&self) -> ViewNumber {
         self.builder_states
             .read()
             .await
             .lowest_view()
-            .unwrap_or(Types::View::genesis())
+            .unwrap_or(ViewNumber::genesis())
     }
 
     /// Looks up a [`BuilderState`] by id.
@@ -276,10 +273,7 @@ where
     /// Refer to [`BuilderStateLookup`] for more information on return value
     #[tracing::instrument(skip_all)]
     #[must_use]
-    pub async fn lookup_builder_state(
-        &self,
-        id: &BuilderStateId<Types>,
-    ) -> BuilderStateLookup<Types> {
+    pub async fn lookup_builder_state(&self, id: &BuilderStateId) -> BuilderStateLookup<Types> {
         if let Some(entry) = self.builder_states.read().await.get(id).cloned() {
             return BuilderStateLookup::Found(entry);
         }

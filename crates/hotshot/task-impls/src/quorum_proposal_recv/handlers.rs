@@ -13,7 +13,7 @@ use async_lock::{RwLock, RwLockUpgradableReadGuard};
 use committable::Committable;
 use hotshot_types::{
     consensus::OuterConsensus,
-    data::{Leaf2, QuorumProposal, QuorumProposalWrapper},
+    data::{Leaf2, QuorumProposal, QuorumProposalWrapper, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::Proposal,
     simple_certificate::{QuorumCertificate, QuorumCertificate2},
@@ -22,7 +22,7 @@ use hotshot_types::{
         ValidatedState,
         block_contents::{BlockHeader, BlockPayload},
         election::Membership,
-        node_implementation::{ConsensusTime, NodeImplementation, NodeType},
+        node_implementation::{NodeImplementation, NodeType},
         signature_key::SignatureKey,
         storage::Storage,
     },
@@ -178,7 +178,7 @@ async fn validate_current_epoch<TYPES: NodeType, I: NodeImplementation<TYPES>>(
         .upgrade_lock
         .upgrade_view()
         .await
-        .unwrap_or(TYPES::View::new(0));
+        .unwrap_or(ViewNumber::new(0));
     if !validation_info
         .upgrade_lock
         .epochs_enabled(proposal.data.view_number())
@@ -280,7 +280,7 @@ pub(crate) async fn handle_quorum_proposal_recv<TYPES: NodeType, I: NodeImplemen
     let maybe_next_epoch_justify_qc = proposal.data.next_epoch_justify_qc().clone();
 
     let proposal_block_number = proposal.data.block_header().block_number();
-    let proposal_epoch = option_epoch_from_block_number::<TYPES>(
+    let proposal_epoch = option_epoch_from_block_number(
         proposal.data.epoch().is_some(),
         proposal_block_number,
         validation_info.epoch_height,

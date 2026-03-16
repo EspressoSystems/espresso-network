@@ -36,7 +36,7 @@ use hotshot_query_service::{
 };
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
-    traits::{network::ConnectedNetwork, node_implementation::ConsensusTime},
+    traits::network::ConnectedNetwork,
 };
 use jf_merkle_tree_compat::MerkleTreeScheme;
 use serde::de::Error as _;

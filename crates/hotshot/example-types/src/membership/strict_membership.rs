@@ -5,14 +5,14 @@ use async_broadcast::Receiver;
 use async_lock::RwLock;
 use hotshot_types::{
     PeerConfig,
-    data::Leaf2,
+    data::{EpochNumber, Leaf2, ViewNumber},
     drb::DrbResult,
     event::Event,
     stake_table::HSStakeTable,
     traits::{
         block_contents::BlockHeader,
         election::{Membership, NoStakeTableHash},
-        node_implementation::{ConsensusTime, NodeImplementation, NodeType},
+        node_implementation::{NodeImplementation, NodeType},
         signature_key::StakeTableEntryType,
     },
     utils::{epoch_from_block_number, root_block_in_epoch, transition_block_for_epoch},
@@ -29,8 +29,8 @@ pub struct StrictMembership<
     StakeTable: TestStakeTable<TYPES::SignatureKey, TYPES::StateSignatureKey>,
 > {
     inner: StakeTable,
-    epochs: HashSet<TYPES::Epoch>,
-    drbs: HashSet<TYPES::Epoch>,
+    epochs: HashSet<EpochNumber>,
+    drbs: HashSet<EpochNumber>,
     fetcher: Arc<RwLock<Leaf2Fetcher<TYPES>>>,
     epoch_height: u64,
 }
@@ -52,7 +52,7 @@ where
 impl<TYPES: NodeType, StakeTable: TestStakeTable<TYPES::SignatureKey, TYPES::StateSignatureKey>>
     StrictMembership<TYPES, StakeTable>
 {
-    fn assert_has_stake_table(&self, epoch: Option<TYPES::Epoch>) {
+    fn assert_has_stake_table(&self, epoch: Option<EpochNumber>) {
         let Some(epoch) = epoch else {
             return;
         };
@@ -61,7 +61,7 @@ impl<TYPES: NodeType, StakeTable: TestStakeTable<TYPES::SignatureKey, TYPES::Sta
             "Failed stake table check for epoch {epoch}"
         );
     }
-    fn assert_has_randomized_stake_table(&self, epoch: Option<TYPES::Epoch>) {
+    fn assert_has_randomized_stake_table(&self, epoch: Option<EpochNumber>) {
         let Some(epoch) = epoch else {
             return;
         };
@@ -108,7 +108,7 @@ impl<TYPES: NodeType, StakeTable: TestStakeTable<TYPES::SignatureKey, TYPES::Sta
             .set_external_channel(external_channel)
     }
 
-    fn stake_table(&self, epoch: Option<TYPES::Epoch>) -> HSStakeTable<TYPES> {
+    fn stake_table(&self, epoch: Option<EpochNumber>) -> HSStakeTable<TYPES> {
         self.assert_has_stake_table(epoch);
         let peer_configs = self
             .inner
@@ -119,7 +119,7 @@ impl<TYPES: NodeType, StakeTable: TestStakeTable<TYPES::SignatureKey, TYPES::Sta
         HSStakeTable(peer_configs)
     }
 
-    fn da_stake_table(&self, epoch: Option<TYPES::Epoch>) -> HSStakeTable<TYPES> {
+    fn da_stake_table(&self, epoch: Option<EpochNumber>) -> HSStakeTable<TYPES> {
         self.assert_has_stake_table(epoch);
         let peer_configs = self
             .inner
@@ -132,8 +132,8 @@ impl<TYPES: NodeType, StakeTable: TestStakeTable<TYPES::SignatureKey, TYPES::Sta
 
     fn committee_members(
         &self,
-        _view_number: TYPES::View,
-        epoch: Option<TYPES::Epoch>,
+        _view_number: ViewNumber,
+        epoch: Option<EpochNumber>,
     ) -> std::collections::BTreeSet<TYPES::SignatureKey> {
         self.assert_has_stake_table(epoch);
         self.inner
@@ -145,8 +145,8 @@ impl<TYPES: NodeType, StakeTable: TestStakeTable<TYPES::SignatureKey, TYPES::Sta
 
     fn da_committee_members(
         &self,
-        _view_number: TYPES::View,
-        epoch: Option<TYPES::Epoch>,
+        _view_number: ViewNumber,
+        epoch: Option<EpochNumber>,
     ) -> std::collections::BTreeSet<TYPES::SignatureKey> {
         self.assert_has_stake_table(epoch);
         self.inner
@@ -159,7 +159,7 @@ impl<TYPES: NodeType, StakeTable: TestStakeTable<TYPES::SignatureKey, TYPES::Sta
     fn stake(
         &self,
         pub_key: &TYPES::SignatureKey,
-        epoch: Option<TYPES::Epoch>,
+        epoch: Option<EpochNumber>,
     ) -> Option<hotshot_types::PeerConfig<TYPES>> {
         self.assert_has_stake_table(epoch);
         self.inner
@@ -170,7 +170,7 @@ impl<TYPES: NodeType, StakeTable: TestStakeTable<TYPES::SignatureKey, TYPES::Sta
     fn da_stake(
         &self,
         pub_key: &TYPES::SignatureKey,
-        epoch: Option<TYPES::Epoch>,
+        epoch: Option<EpochNumber>,
     ) -> Option<hotshot_types::PeerConfig<TYPES>> {
         self.assert_has_stake_table(epoch);
         self.inner
@@ -182,7 +182,7 @@ impl<TYPES: NodeType, StakeTable: TestStakeTable<TYPES::SignatureKey, TYPES::Sta
     fn has_stake(
         &self,
         pub_key: &<TYPES as NodeType>::SignatureKey,
-        epoch: Option<<TYPES as NodeType>::Epoch>,
+        epoch: Option<EpochNumber>,
     ) -> bool {
         self.assert_has_stake_table(epoch);
 
@@ -194,7 +194,7 @@ impl<TYPES: NodeType, StakeTable: TestStakeTable<TYPES::SignatureKey, TYPES::Sta
     fn has_da_stake(
         &self,
         pub_key: &<TYPES as NodeType>::SignatureKey,
-        epoch: Option<<TYPES as NodeType>::Epoch>,
+        epoch: Option<EpochNumber>,
     ) -> bool {
         self.assert_has_stake_table(epoch);
 
@@ -204,24 +204,24 @@ impl<TYPES: NodeType, StakeTable: TestStakeTable<TYPES::SignatureKey, TYPES::Sta
 
     fn lookup_leader(
         &self,
-        view: TYPES::View,
-        epoch: Option<TYPES::Epoch>,
+        view: ViewNumber,
+        epoch: Option<EpochNumber>,
     ) -> anyhow::Result<TYPES::SignatureKey> {
         self.assert_has_randomized_stake_table(epoch);
         self.inner.lookup_leader(*view, epoch.map(|e| *e))
     }
 
-    fn total_nodes(&self, epoch: Option<TYPES::Epoch>) -> usize {
+    fn total_nodes(&self, epoch: Option<EpochNumber>) -> usize {
         self.assert_has_stake_table(epoch);
         self.inner.stake_table(epoch.map(|e| *e)).len()
     }
 
-    fn da_total_nodes(&self, epoch: Option<TYPES::Epoch>) -> usize {
+    fn da_total_nodes(&self, epoch: Option<EpochNumber>) -> usize {
         self.assert_has_stake_table(epoch);
         self.inner.da_stake_table(epoch.map(|e| *e)).len()
     }
 
-    fn has_stake_table(&self, epoch: TYPES::Epoch) -> bool {
+    fn has_stake_table(&self, epoch: EpochNumber) -> bool {
         let has_stake_table = self.inner.has_stake_table(*epoch);
 
         assert_eq!(has_stake_table, self.epochs.contains(&epoch));
@@ -229,7 +229,7 @@ impl<TYPES: NodeType, StakeTable: TestStakeTable<TYPES::SignatureKey, TYPES::Sta
         has_stake_table
     }
 
-    fn has_randomized_stake_table(&self, epoch: TYPES::Epoch) -> anyhow::Result<bool> {
+    fn has_randomized_stake_table(&self, epoch: EpochNumber) -> anyhow::Result<bool> {
         if !self.has_stake_table(epoch) {
             return Ok(false);
         }
@@ -244,18 +244,18 @@ impl<TYPES: NodeType, StakeTable: TestStakeTable<TYPES::SignatureKey, TYPES::Sta
         has_randomized_stake_table
     }
 
-    fn add_drb_result(&mut self, epoch: TYPES::Epoch, drb_result: hotshot_types::drb::DrbResult) {
+    fn add_drb_result(&mut self, epoch: EpochNumber, drb_result: hotshot_types::drb::DrbResult) {
         self.assert_has_stake_table(Some(epoch));
 
         self.drbs.insert(epoch);
         self.inner.add_drb_result(*epoch, drb_result);
     }
 
-    fn first_epoch(&self) -> Option<TYPES::Epoch> {
-        self.inner.first_epoch().map(TYPES::Epoch::new)
+    fn first_epoch(&self) -> Option<EpochNumber> {
+        self.inner.first_epoch().map(EpochNumber::new)
     }
 
-    fn set_first_epoch(&mut self, epoch: TYPES::Epoch, initial_drb_result: DrbResult) {
+    fn set_first_epoch(&mut self, epoch: EpochNumber, initial_drb_result: DrbResult) {
         self.epochs.insert(epoch);
         self.epochs.insert(epoch + 1);
 
@@ -275,7 +275,7 @@ impl<TYPES: NodeType, StakeTable: TestStakeTable<TYPES::SignatureKey, TYPES::Sta
             epoch_from_block_number(block_header.block_number(), membership_writer.epoch_height)
                 + 2;
 
-        membership_writer.epochs.insert(TYPES::Epoch::new(epoch));
+        membership_writer.epochs.insert(EpochNumber::new(epoch));
 
         membership_writer.inner.add_epoch_root(epoch);
 
@@ -284,7 +284,7 @@ impl<TYPES: NodeType, StakeTable: TestStakeTable<TYPES::SignatureKey, TYPES::Sta
 
     async fn get_epoch_root(
         membership: Arc<RwLock<Self>>,
-        epoch: TYPES::Epoch,
+        epoch: EpochNumber,
     ) -> anyhow::Result<Leaf2<TYPES>> {
         let membership_reader = membership.read().await;
 
@@ -311,7 +311,7 @@ impl<TYPES: NodeType, StakeTable: TestStakeTable<TYPES::SignatureKey, TYPES::Sta
 
     async fn get_epoch_drb(
         membership: Arc<RwLock<Self>>,
-        epoch: TYPES::Epoch,
+        epoch: EpochNumber,
     ) -> anyhow::Result<DrbResult> {
         let membership_reader = membership.read().await;
 

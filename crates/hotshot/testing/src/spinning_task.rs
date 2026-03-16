@@ -26,7 +26,7 @@ use hotshot_example_types::{
 use hotshot_types::{
     ValidatorConfig,
     constants::EVENT_CHANNEL_SIZE,
-    data::Leaf2,
+    data::{Leaf2, ViewNumber},
     event::Event,
     message::convert_proposal,
     simple_certificate::{
@@ -35,7 +35,7 @@ use hotshot_types::{
     traits::{
         election::Membership,
         network::{AsyncGenerator, ConnectedNetwork},
-        node_implementation::{ConsensusTime, NodeImplementation, NodeType},
+        node_implementation::{NodeImplementation, NodeType},
     },
     utils::genesis_epoch_from_version,
     vote::HasViewNumber,
@@ -69,9 +69,9 @@ pub struct SpinningTask<
     /// late start nodes
     pub(crate) late_start: HashMap<u64, LateStartNode<TYPES, I>>,
     /// time based changes
-    pub(crate) changes: BTreeMap<TYPES::View, Vec<ChangeNode>>,
+    pub(crate) changes: BTreeMap<ViewNumber, Vec<ChangeNode>>,
     /// most recent view seen by spinning task
-    pub(crate) latest_view: Option<TYPES::View>,
+    pub(crate) latest_view: Option<ViewNumber>,
     /// Last decided leaf that can be used as the anchor leaf to initialize the node.
     pub(crate) last_decided_leaf: Leaf2<TYPES>,
     /// Highest qc seen in the test for restarting nodes
@@ -171,13 +171,11 @@ where
                                             self.start_epoch_info.clone(),
                                             self.last_decided_leaf.clone(),
                                             (
-                                                TYPES::View::genesis(),
-                                                genesis_epoch_from_version::<TYPES>(
-                                                    config.upgrade.base,
-                                                ),
+                                                ViewNumber::genesis(),
+                                                genesis_epoch_from_version(config.upgrade.base),
                                             ),
                                             (self.high_qc.clone(), self.next_epoch_high_qc.clone()),
-                                            TYPES::View::genesis(),
+                                            ViewNumber::genesis(),
                                             BTreeMap::new(),
                                             BTreeMap::new(),
                                             None,

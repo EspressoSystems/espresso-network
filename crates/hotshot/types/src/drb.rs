@@ -13,8 +13,9 @@ use vbs::version::Version;
 use versions::DRB_AND_HEADER_UPGRADE_VERSION;
 
 use crate::{
+    data::EpochNumber,
     traits::{
-        node_implementation::{ConsensusTime, NodeType},
+        node_implementation::NodeType,
         storage::{LoadDrbProgressFn, StoreDrbProgressFn},
     },
     HotShotConfig,
@@ -225,29 +226,29 @@ pub async fn compute_drb_result(
 
 /// Seeds for DRB computation and computed results.
 #[derive(Clone, Debug)]
-pub struct DrbResults<TYPES: NodeType> {
+pub struct DrbResults {
     /// Stored results from computations
-    pub results: BTreeMap<TYPES::Epoch, DrbResult>,
+    pub results: BTreeMap<EpochNumber, DrbResult>,
 }
 
-impl<TYPES: NodeType> DrbResults<TYPES> {
+impl DrbResults {
     #[must_use]
     /// Constructor with initial values for epochs 1 and 2.
     pub fn new() -> Self {
         Self {
             results: BTreeMap::from([
-                (TYPES::Epoch::new(1), INITIAL_DRB_RESULT),
-                (TYPES::Epoch::new(2), INITIAL_DRB_RESULT),
+                (EpochNumber::new(1), INITIAL_DRB_RESULT),
+                (EpochNumber::new(2), INITIAL_DRB_RESULT),
             ]),
         }
     }
 
-    pub fn store_result(&mut self, epoch: TYPES::Epoch, result: DrbResult) {
+    pub fn store_result(&mut self, epoch: EpochNumber, result: DrbResult) {
         self.results.insert(epoch, result);
     }
 
     /// Garbage collects internal data structures
-    pub fn garbage_collect(&mut self, epoch: TYPES::Epoch) {
+    pub fn garbage_collect(&mut self, epoch: EpochNumber) {
         if epoch.u64() < KEEP_PREVIOUS_RESULT_COUNT {
             return;
         }
@@ -260,7 +261,7 @@ impl<TYPES: NodeType> DrbResults<TYPES> {
     }
 }
 
-impl<TYPES: NodeType> Default for DrbResults<TYPES> {
+impl Default for DrbResults {
     fn default() -> Self {
         Self::new()
     }

@@ -22,10 +22,7 @@ use hotshot_builder_shared::{
 };
 use hotshot_example_types::{block_types::TestTransaction, node_types::TestTypes};
 use hotshot_task_impls::builder::v0_1::BuilderClient;
-use hotshot_types::{
-    data::ViewNumber,
-    traits::node_implementation::{ConsensusTime, NodeType},
-};
+use hotshot_types::{data::ViewNumber, traits::node_implementation::NodeType};
 use tokio::spawn;
 use url::Url;
 use vbs::version::StaticVersion;
@@ -92,7 +89,7 @@ impl TestServiceWrapper {
     /// taking care of signing
     pub(crate) async fn get_available_blocks(
         &self,
-        state_id: &BuilderStateId<TestTypes>,
+        state_id: &BuilderStateId,
     ) -> Result<Vec<AvailableBlockInfo<TestTypes>>, BuildError> {
         self.proxy_global_state
             .available_blocks(
@@ -108,7 +105,7 @@ impl TestServiceWrapper {
     /// taking care of signing
     pub(crate) async fn claim_block_header_input(
         &self,
-        block_id: &BlockId<TestTypes>,
+        block_id: &BlockId,
     ) -> Result<AvailableBlockHeaderInputV1<TestTypes>, BuildError> {
         self.proxy_global_state
             .claim_block_header_input(
@@ -127,10 +124,7 @@ impl TestServiceWrapper {
     ///
     /// Requests are routed through HotShot's HTTP API client to check
     /// compatibility
-    pub(crate) async fn get_transactions(
-        &self,
-        state_id: &BuilderStateId<TestTypes>,
-    ) -> Vec<TestTransaction> {
+    pub(crate) async fn get_transactions(&self, state_id: &BuilderStateId) -> Vec<TestTransaction> {
         let mut available_states = self
             .client
             .available_blocks(

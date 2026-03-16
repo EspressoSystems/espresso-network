@@ -27,7 +27,8 @@ use hotshot_types::{
     ValidatorConfig,
     consensus::ConsensusMetricsValue,
     data::{
-        Leaf2, VidCommitment, VidDisperse, VidDisperseAndDuration, VidDisperseShare, vid_commitment,
+        EpochNumber, Leaf2, VidCommitment, VidDisperse, VidDisperseAndDuration, VidDisperseShare,
+        ViewNumber, vid_commitment,
     },
     epoch_membership::{EpochMembership, EpochMembershipCoordinator},
     message::{Proposal, UpgradeLock},
@@ -170,7 +171,7 @@ pub async fn build_cert<
 >(
     data: DATAType,
     epoch_membership: &EpochMembership<TYPES>,
-    view: TYPES::View,
+    view: ViewNumber,
     public_key: &TYPES::SignatureKey,
     private_key: &<TYPES::SignatureKey as SignatureKey>::PrivateKey,
     upgrade_lock: &UpgradeLock<TYPES>,
@@ -232,7 +233,7 @@ pub async fn build_assembled_sig<
 >(
     data: &DATAType,
     epoch_membership: &EpochMembership<TYPES>,
-    view: TYPES::View,
+    view: ViewNumber,
     upgrade_lock: &UpgradeLock<TYPES>,
 ) -> <TYPES::SignatureKey as SignatureKey>::QcType {
     let stake_table = CERT::stake_table(epoch_membership).await;
@@ -302,7 +303,7 @@ pub async fn da_payload_commitment<TYPES: NodeType>(
 
 pub async fn build_payload_commitment<TYPES: NodeType>(
     membership: &EpochMembership<TYPES>,
-    view: TYPES::View,
+    view: ViewNumber,
     version: Version,
 ) -> VidCommitment {
     // Make some empty encoded transactions, we just care about having a commitment handy for the
@@ -314,8 +315,8 @@ pub async fn build_payload_commitment<TYPES: NodeType>(
 
 pub async fn build_vid_proposal<TYPES: NodeType>(
     membership: &EpochMembership<TYPES>,
-    view_number: TYPES::View,
-    epoch_number: Option<TYPES::Epoch>,
+    view_number: ViewNumber,
+    epoch_number: Option<EpochNumber>,
     payload: &TYPES::BlockPayload,
     metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
     private_key: &<TYPES::SignatureKey as SignatureKey>::PrivateKey,
@@ -365,8 +366,8 @@ pub async fn build_vid_proposal<TYPES: NodeType>(
 #[allow(clippy::too_many_arguments)]
 pub async fn build_da_certificate<TYPES: NodeType>(
     membership: &EpochMembership<TYPES>,
-    view_number: TYPES::View,
-    epoch_number: Option<TYPES::Epoch>,
+    view_number: ViewNumber,
+    epoch_number: Option<EpochNumber>,
     transactions: Vec<TestTransaction>,
     metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
     public_key: &TYPES::SignatureKey,
@@ -405,7 +406,7 @@ pub async fn build_da_certificate<TYPES: NodeType>(
     };
 
     anyhow::Ok(
-        build_cert::<TYPES, DaData2<TYPES>, DaVote2<TYPES>, DaCertificate2<TYPES>>(
+        build_cert::<TYPES, DaData2, DaVote2<TYPES>, DaCertificate2<TYPES>>(
             da_data,
             membership,
             view_number,
@@ -456,8 +457,7 @@ pub async fn build_fake_view_with_leaf_and_state(
     _upgrade_lock: &UpgradeLock<TestTypes>,
     epoch_height: u64,
 ) -> View<TestTypes> {
-    let epoch =
-        option_epoch_from_block_number::<TestTypes>(leaf.with_epoch, leaf.height(), epoch_height);
+    let epoch = option_epoch_from_block_number(leaf.with_epoch, leaf.height(), epoch_height);
     View {
         view_inner: ViewInner::Leaf {
             leaf: leaf.commit(),

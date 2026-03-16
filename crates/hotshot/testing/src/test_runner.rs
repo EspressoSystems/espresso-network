@@ -29,7 +29,7 @@ use hotshot_types::{
     HotShotConfig, ValidatorConfig,
     consensus::ConsensusMetricsValue,
     constants::EVENT_CHANNEL_SIZE,
-    data::Leaf2,
+    data::{EpochNumber, Leaf2, ViewNumber},
     drb::INITIAL_DRB_RESULT,
     epoch_membership::EpochMembershipCoordinator,
     simple_certificate::QuorumCertificate2,
@@ -37,7 +37,7 @@ use hotshot_types::{
     traits::{
         election::Membership,
         network::ConnectedNetwork,
-        node_implementation::{ConsensusTime, NodeImplementation, NodeType},
+        node_implementation::{NodeImplementation, NodeType},
     },
 };
 use tide_disco::Url;
@@ -162,11 +162,11 @@ where
 
         // add spinning task
         // map spinning to view
-        let mut changes: BTreeMap<TYPES::View, Vec<ChangeNode>> = BTreeMap::new();
+        let mut changes: BTreeMap<ViewNumber, Vec<ChangeNode>> = BTreeMap::new();
         for (view, mut change) in spinning_changes {
             changes
-                .entry(TYPES::View::new(view))
-                .or_insert_with(Vec::new)
+                .entry(ViewNumber::new(view))
+                .or_default()
                 .append(&mut change);
         }
 
@@ -434,7 +434,7 @@ where
                         config.epoch_height,
                         config.epoch_start_block,
                         vec![InitializerEpochInfo::<TYPES> {
-                            epoch: TYPES::Epoch::new(1),
+                            epoch: EpochNumber::new(1),
                             drb_result: INITIAL_DRB_RESULT,
                             block_header: None,
                         }],

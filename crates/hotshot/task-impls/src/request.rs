@@ -18,6 +18,7 @@ use async_trait::async_trait;
 use hotshot_task::task::TaskState;
 use hotshot_types::{
     consensus::OuterConsensus,
+    data::{EpochNumber, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     simple_vote::HasEpoch,
     traits::{
@@ -54,7 +55,7 @@ pub struct NetworkRequestState<TYPES: NodeType, I: NodeImplementation<TYPES>> {
     pub consensus: OuterConsensus<TYPES>,
 
     /// Last seen view, we won't request for proposals before older than this view
-    pub view: TYPES::View,
+    pub view: ViewNumber,
 
     /// Delay before requesting peers
     pub delay: Duration,
@@ -75,7 +76,7 @@ pub struct NetworkRequestState<TYPES: NodeType, I: NodeImplementation<TYPES>> {
     pub shutdown_flag: Arc<AtomicBool>,
 
     /// A flag indicating that `HotShotEvent::Shutdown` has been received
-    pub spawned_tasks: BTreeMap<TYPES::View, Vec<JoinHandle<()>>>,
+    pub spawned_tasks: BTreeMap<ViewNumber, Vec<JoinHandle<()>>>,
 
     /// Number of blocks in an epoch, zero means there are no epochs
     pub epoch_height: u64,
@@ -236,10 +237,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> NetworkRequestState<TYPES, I
     /// Creates and signs the payload, then will create a request task
     async fn spawn_requests(
         &mut self,
-        view: TYPES::View,
-        prop_epoch: Option<TYPES::Epoch>,
+        view: ViewNumber,
+        prop_epoch: Option<EpochNumber>,
         sender: &Sender<Arc<HotShotEvent<TYPES>>>,
-        target_epochs: BTreeSet<Option<TYPES::Epoch>>,
+        target_epochs: BTreeSet<Option<EpochNumber>>,
     ) {
         let request = RequestKind::Vid(view, self.public_key.clone());
 
@@ -264,9 +265,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> NetworkRequestState<TYPES, I
         request: RequestKind<TYPES>,
         signature: Signature<TYPES>,
         sender: Sender<Arc<HotShotEvent<TYPES>>>,
-        view: TYPES::View,
-        prop_epoch: Option<TYPES::Epoch>,
-        mut target_epochs: BTreeSet<Option<TYPES::Epoch>>,
+        view: ViewNumber,
+        prop_epoch: Option<EpochNumber>,
+        mut target_epochs: BTreeSet<Option<EpochNumber>>,
     ) {
         let consensus = OuterConsensus::new(Arc::clone(&self.consensus.inner_consensus));
         let network = Arc::clone(&self.network);
@@ -360,10 +361,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> NetworkRequestState<TYPES, I
     async fn cancel_vid_request_task(
         consensus: &OuterConsensus<TYPES>,
         public_key: &<TYPES as NodeType>::SignatureKey,
-        view: &TYPES::View,
+        view: &ViewNumber,
         shutdown_flag: &Arc<AtomicBool>,
         id: u64,
-        target_epochs: &mut BTreeSet<Option<TYPES::Epoch>>,
+        target_epochs: &mut BTreeSet<Option<EpochNumber>>,
     ) -> bool {
         let consensus_reader = consensus.read().await;
 

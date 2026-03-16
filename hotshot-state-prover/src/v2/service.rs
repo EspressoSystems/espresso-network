@@ -22,10 +22,7 @@ use hotshot_types::{
         StateVerKey,
     },
     simple_certificate::LightClientStateUpdateCertificateV1,
-    traits::{
-        node_implementation::{ConsensusTime, NodeType},
-        signature_key::LCV2StateSignatureKey,
-    },
+    traits::signature_key::LCV2StateSignatureKey,
     utils::{
         epoch_from_block_number, is_epoch_root, is_ge_epoch_root, option_epoch_from_block_number,
     },
@@ -274,8 +271,8 @@ async fn advance_epoch(
     light_client_address: Address,
     mut cur_st_state: StakeTableState,
     proving_key: &ProvingKey,
-    contract_epoch: Option<<SeqTypes as NodeType>::Epoch>,
-    target_epoch: Option<<SeqTypes as NodeType>::Epoch>,
+    contract_epoch: Option<EpochNumber>,
+    target_epoch: Option<EpochNumber>,
 ) -> Result<StakeTableState, ProverError> {
     let Some(target_epoch) = target_epoch else {
         return Err(ProverError::Internal(anyhow!(
@@ -402,7 +399,7 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
         tracing::info!("Successfully synced light client state.");
     } else {
         // After the epoch is enabled
-        let contract_epoch = option_epoch_from_block_number::<SeqTypes>(
+        let contract_epoch = option_epoch_from_block_number(
             contract_state_epoch_enabled,
             contract_state.block_height,
             blocks_per_epoch,
@@ -416,7 +413,7 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
             contract_epoch
         };
 
-        let bundle_epoch = option_epoch_from_block_number::<SeqTypes>(
+        let bundle_epoch = option_epoch_from_block_number(
             epoch_enabled,
             bundle.state.block_height,
             blocks_per_epoch,

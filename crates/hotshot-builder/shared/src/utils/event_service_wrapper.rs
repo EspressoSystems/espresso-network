@@ -161,7 +161,6 @@ mod tests {
     use hotshot_types::{
         data::ViewNumber,
         event::{LegacyEvent, LegacyEventType},
-        traits::node_implementation::ConsensusTime,
     };
     use tide_disco::{App, method::ReadState};
     use tokio::{spawn, task::JoinHandle, time::timeout};
