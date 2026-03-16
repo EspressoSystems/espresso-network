@@ -133,12 +133,12 @@ pub mod availability_tests {
 
     use super::test_helpers::*;
     use crate::{
-        availability::{payload_size, BlockId},
+        availability::{BlockId, payload_size},
         data_source::storage::{AvailabilityStorage, NodeStorage},
         node::NodeDataSource,
         testing::{
             consensus::{MockNetwork, TestableDataSource},
-            mocks::{mock_transaction, MockTypes},
+            mocks::{MockTypes, mock_transaction},
         },
         types::HeightIndexed,
     };
@@ -572,10 +572,11 @@ pub mod persistence_tests {
     use hotshot_types::simple_certificate::QuorumCertificate2;
 
     use crate::{
+        Leaf2,
         availability::{BlockQueryData, LeafQueryData},
         data_source::{
-            storage::{AvailabilityStorage, NodeStorage, UpdateAvailabilityStorage},
             Transaction,
+            storage::{AvailabilityStorage, NodeStorage, UpdateAvailabilityStorage},
         },
         node::NodeDataSource,
         testing::{
@@ -583,7 +584,6 @@ pub mod persistence_tests {
             mocks::{MockPayload, MockTypes},
         },
         types::HeightIndexed,
-        Leaf2,
     };
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -787,19 +787,20 @@ pub mod node_tests {
     use hotshot::traits::BlockPayload;
     use hotshot_example_types::{
         block_types::{TestBlockHeader, TestBlockPayload, TestMetadata},
-        node_types::{TestTypes, TEST_VERSIONS},
+        node_types::{TEST_VERSIONS, TestTypes},
         state_types::{TestInstanceState, TestValidatedState},
     };
     use hotshot_types::{
-        data::{vid_commitment, VidCommitment, VidCommon, VidShare, ViewNumber},
+        data::{VidCommitment, VidCommon, VidShare, ViewNumber, vid_commitment},
         simple_certificate::{CertificatePair, QuorumCertificate2},
         traits::block_contents::{BlockHeader, EncodeBytes},
-        vid::advz::{advz_scheme, ADVZScheme},
+        vid::advz::{ADVZScheme, advz_scheme},
     };
     use jf_advz::VidScheme;
     use pretty_assertions::assert_eq;
 
     use crate::{
+        Header, Leaf2,
         availability::{BlockInfo, BlockQueryData, LeafQueryData, VidCommonQueryData},
         data_source::{
             storage::{NodeStorage, UpdateAvailabilityStorage},
@@ -811,11 +812,10 @@ pub mod node_tests {
         },
         testing::{
             consensus::{MockNetwork, TestableDataSource},
-            mocks::{mock_transaction, MockPayload, MockTypes},
+            mocks::{MockPayload, MockTypes, mock_transaction},
             sleep,
         },
         types::HeightIndexed,
-        Header, Leaf2,
     };
 
     fn block_header_timestamp(header: &Header<MockTypes>) -> u64 {

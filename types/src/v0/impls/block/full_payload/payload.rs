@@ -14,10 +14,10 @@ use sha2::Digest;
 use thiserror::Error;
 
 use crate::{
-    v0::impls::{NodeState, ValidatedState},
-    v0_3::ChainConfig,
     Index, Iter, NamespaceId, NsIndex, NsPayload, NsPayloadBuilder, NsPayloadRange, NsTable,
     NsTableBuilder, Payload, PayloadByteLen, SeqTypes, Transaction, TxIndex, TxProof,
+    v0::impls::{NodeState, ValidatedState},
+    v0_3::ChainConfig,
 };
 
 #[derive(serde::Deserialize, serde::Serialize, Error, Debug, Eq, PartialEq)]

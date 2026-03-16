@@ -2,14 +2,14 @@ use std::future::Future;
 
 use data_source::DataSource;
 use derive_more::derive::Deref;
-use espresso_types::{traits::SequencerPersistence, PubKey, SeqTypes};
+use espresso_types::{PubKey, SeqTypes, traits::SequencerPersistence};
 use hotshot::{traits::NodeImplementation, types::BLSPrivKey};
 use hotshot_types::traits::network::ConnectedNetwork;
 use network::Sender;
 use recipient_source::RecipientSource;
 use request::{Request, Response};
 use request_response::{
-    network::Bytes, RequestError, RequestResponse, RequestResponseConfig, RequestType,
+    RequestError, RequestResponse, RequestResponseConfig, RequestType, network::Bytes,
 };
 use tokio::sync::mpsc::Receiver;
 

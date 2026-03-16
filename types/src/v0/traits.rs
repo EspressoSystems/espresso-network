@@ -3,11 +3,11 @@
 use std::{cmp::max, collections::BTreeMap, fmt::Debug, ops::Range, sync::Arc};
 
 use alloy::primitives::{Address, U256};
-use anyhow::{bail, ensure, Context};
+use anyhow::{Context, bail, ensure};
 use async_trait::async_trait;
 use committable::Commitment;
 use futures::{FutureExt, TryFutureExt};
-use hotshot::{types::EventType, HotShotInitializer, InitializerEpochInfo};
+use hotshot::{HotShotInitializer, InitializerEpochInfo, types::EventType};
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtPersistentStorage;
 use hotshot_types::{
     data::{
@@ -16,21 +16,21 @@ use hotshot_types::{
     },
     drb::{DrbInput, DrbResult},
     event::{HotShotAction, LeafInfo},
-    message::{convert_proposal, Proposal},
+    message::{Proposal, convert_proposal},
     simple_certificate::{
         CertificatePair, LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2,
         QuorumCertificate, QuorumCertificate2, UpgradeCertificate,
     },
     stake_table::HSStakeTable,
     traits::{
-        metrics::Metrics, node_implementation::NodeType, storage::Storage,
-        ValidatedState as HotShotState,
+        ValidatedState as HotShotState, metrics::Metrics, node_implementation::NodeType,
+        storage::Storage,
     },
     utils::genesis_epoch_from_version,
     vote::HasViewNumber,
 };
 use indexmap::IndexMap;
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 use versions::Upgrade;
 
 use super::{
@@ -39,14 +39,14 @@ use super::{
     v0_3::{EventKey, IndexedStake, StakeTableEvent},
 };
 use crate::{
+    AuthenticatedValidatorMap, BlockMerkleTree, Event, FeeAccount, FeeAccountProof,
+    FeeMerkleCommitment, Leaf2, NetworkConfig, PubKey, SeqTypes,
     v0::impls::{StakeTableHash, ValidatedState},
     v0_3::{
         ChainConfig, RegisteredValidator, RewardAccountProofV1, RewardAccountV1, RewardAmount,
         RewardMerkleCommitmentV1,
     },
     v0_4::{PermittedRewardMerkleTreeV2, RewardAccountV2, RewardMerkleCommitmentV2},
-    AuthenticatedValidatorMap, BlockMerkleTree, Event, FeeAccount, FeeAccountProof,
-    FeeMerkleCommitment, Leaf2, NetworkConfig, PubKey, SeqTypes,
 };
 
 #[async_trait]

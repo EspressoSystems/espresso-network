@@ -20,7 +20,7 @@
 
 use std::{collections::HashMap, marker::PhantomData, time::Instant};
 
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use async_trait::async_trait;
 use committable::Committable;
 use derive_more::{Deref, DerefMut};
@@ -31,39 +31,39 @@ use hotshot_types::{
     data::VidShare,
     simple_certificate::CertificatePair,
     traits::{
+        EncodeBytes,
         block_contents::BlockHeader,
         metrics::{Counter, Gauge, Histogram, Metrics},
         node_implementation::NodeType,
-        EncodeBytes,
     },
 };
 use itertools::Itertools;
 use jf_merkle_tree_compat::prelude::MerkleProof;
 pub use sqlx::Executor;
-use sqlx::{pool::Pool, query_builder::Separated, Encode, Execute, FromRow, QueryBuilder, Type};
+use sqlx::{Encode, Execute, FromRow, QueryBuilder, Type, pool::Pool, query_builder::Separated};
 
 #[cfg(not(feature = "embedded-db"))]
 use super::queries::state::batch_insert_hashes;
 #[cfg(feature = "embedded-db")]
 use super::queries::state::build_hash_batch_insert;
 use super::{
+    Database, Db,
     queries::{
         self,
-        state::{collect_nodes_from_proofs, Node},
+        state::{Node, collect_nodes_from_proofs},
     },
-    Database, Db,
 };
 use crate::{
+    Header, Payload, QueryError, QueryResult,
     availability::{
         BlockQueryData, LeafQueryData, QueryableHeader, QueryablePayload, VidCommonQueryData,
     },
     data_source::{
-        storage::{pruning::PrunedHeightStorage, NodeStorage, UpdateAvailabilityStorage},
+        storage::{NodeStorage, UpdateAvailabilityStorage, pruning::PrunedHeightStorage},
         update,
     },
     merklized_state::{MerklizedState, UpdateStateData},
     types::HeightIndexed,
-    Header, Payload, QueryError, QueryResult,
 };
 
 pub type Query<'q> = sqlx::query::Query<'q, Db, <Db as Database>::Arguments<'q>>;

@@ -17,9 +17,9 @@ use crate::{
         UpgradeProposal, VidDisperseShare, VidDisperseShare0, ViewNumber,
     },
     error::HotShotError,
-    message::{convert_proposal, Proposal},
+    message::{Proposal, convert_proposal},
     simple_certificate::{CertificatePair, LightClientStateUpdateCertificateV2, QuorumCertificate},
-    traits::{node_implementation::NodeType, ValidatedState},
+    traits::{ValidatedState, node_implementation::NodeType},
 };
 
 /// A status event emitted by a `HotShot` instance

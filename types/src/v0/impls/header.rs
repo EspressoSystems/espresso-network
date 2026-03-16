@@ -1,26 +1,26 @@
 use std::fmt;
 
-use alloy::primitives::{Keccak256, B256};
-use anyhow::{ensure, Context};
+use alloy::primitives::{B256, Keccak256};
+use anyhow::{Context, ensure};
 use ark_serialize::CanonicalSerialize;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
 use either::Either;
 use hotshot_query_service::{availability::QueryableHeader, explorer::ExplorerHeader};
 use hotshot_types::{
-    data::{vid_commitment, EpochNumber, VidCommitment, ViewNumber},
+    data::{EpochNumber, VidCommitment, ViewNumber, vid_commitment},
     light_client::LightClientState,
     traits::{
+        BlockPayload, EncodeBytes, ValidatedState as _,
         block_contents::{BlockHeader, BuilderFee, GENESIS_VID_NUM_STORAGE_NODES},
         node_implementation::NodeType,
         signature_key::BuilderSignatureKey,
-        BlockPayload, EncodeBytes, ValidatedState as _,
     },
-    utils::{epoch_from_block_number, is_ge_epoch_root, BuilderCommitment},
+    utils::{BuilderCommitment, epoch_from_block_number, is_ge_epoch_root},
 };
 use jf_merkle_tree_compat::{AppendableMerkleTreeScheme, MerkleCommitment, MerkleTreeScheme};
 use serde::{
-    de::{self, MapAccess, SeqAccess, Visitor},
     Deserialize, Deserializer, Serialize, Serializer,
+    de::{self, MapAccess, SeqAccess, Visitor},
 };
 use serde_json::{Map, Value};
 use thiserror::Error;
@@ -32,21 +32,22 @@ use super::{
     instance_state::NodeState, state::ValidatedState, v0_1::IterableFeeInfo, v0_3::ChainConfig,
 };
 use crate::{
+    BlockMerkleCommitment, FeeAccount, FeeAmount, FeeInfo, FeeMerkleCommitment, Header,
+    L1BlockInfo, L1Snapshot, Leaf2, NamespaceId, NsIndex, NsTable, PayloadByteLen, SeqTypes,
+    TimestampMillis, UpgradeType,
     eth_signature_key::BuilderSignature,
     v0::{
         header::{EitherOrVersion, VersionedHeader},
-        impls::{distribute_block_reward, reward::RewardDistributor, StakeTableHash},
+        impls::{StakeTableHash, distribute_block_reward, reward::RewardDistributor},
     },
     v0_1::{self},
     v0_2,
     v0_3::{
-        self, RewardAmount, RewardMerkleCommitmentV1, RewardMerkleTreeV1,
-        REWARD_MERKLE_TREE_V1_HEIGHT,
+        self, REWARD_MERKLE_TREE_V1_HEIGHT, RewardAmount, RewardMerkleCommitmentV1,
+        RewardMerkleTreeV1,
     },
     v0_4::{self, RewardMerkleCommitmentV2},
-    v0_5, BlockMerkleCommitment, FeeAccount, FeeAmount, FeeInfo, FeeMerkleCommitment, Header,
-    L1BlockInfo, L1Snapshot, Leaf2, NamespaceId, NsIndex, NsTable, PayloadByteLen, SeqTypes,
-    TimestampMillis, UpgradeType,
+    v0_5,
 };
 
 impl v0_1::Header {
@@ -1330,16 +1331,16 @@ mod test_headers {
     use hotshot_query_service::testing::mocks::MOCK_UPGRADE;
     use hotshot_types::traits::signature_key::BuilderSignatureKey;
     use v0_1::{BlockMerkleTree, FeeMerkleTree, L1Client};
-    use vbs::{bincode_serializer::BincodeSerializer, version::StaticVersion, BinarySerializer};
+    use vbs::{BinarySerializer, bincode_serializer::BincodeSerializer, version::StaticVersion};
     use versions::version;
 
     use super::*;
     use crate::{
+        Leaf,
         eth_signature_key::EthKeyPair,
         mock::MockStateCatchup,
-        v0_3::{RewardAccountV1, RewardAmount, REWARD_MERKLE_TREE_V1_HEIGHT},
-        v0_4::{RewardAccountV2, RewardMerkleTreeV2, REWARD_MERKLE_TREE_V2_HEIGHT},
-        Leaf,
+        v0_3::{REWARD_MERKLE_TREE_V1_HEIGHT, RewardAccountV1, RewardAmount},
+        v0_4::{REWARD_MERKLE_TREE_V2_HEIGHT, RewardAccountV2, RewardMerkleTreeV2},
     };
 
     #[derive(Debug, Default)]
@@ -1763,9 +1764,10 @@ mod test_headers {
 
         let key = FeeAccount::generated_from_seed_indexed([0; 32], 0).1;
         let signature = FeeAccount::sign_builder_message(&key, &commitment).unwrap();
-        assert!(key
-            .fee_account()
-            .validate_builder_signature(&signature, &commitment));
+        assert!(
+            key.fee_account()
+                .validate_builder_signature(&signature, &commitment)
+        );
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]

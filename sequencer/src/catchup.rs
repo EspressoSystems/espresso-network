@@ -7,11 +7,13 @@ use std::{
 };
 
 use alloy::primitives::U256;
-use anyhow::{anyhow, bail, ensure, Context};
+use anyhow::{Context, anyhow, bail, ensure};
 use async_lock::RwLock;
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
 use espresso_types::{
+    BackoffParams, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
+    FeeMerkleTree, Leaf2, NodeState, PubKey, SeqTypes, ValidatedState,
     config::PublicNetworkConfig,
     traits::SequencerPersistence,
     v0::traits::StateCatchup,
@@ -20,18 +22,17 @@ use espresso_types::{
         RewardMerkleTreeV1,
     },
     v0_4::{
-        forgotten_accounts_include, PermittedRewardMerkleTreeV2, RewardAccountProofV2,
-        RewardAccountV2, RewardMerkleCommitmentV2, RewardMerkleTreeV2,
+        PermittedRewardMerkleTreeV2, RewardAccountProofV2, RewardAccountV2,
+        RewardMerkleCommitmentV2, RewardMerkleTreeV2, forgotten_accounts_include,
     },
-    BackoffParams, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
-    FeeMerkleTree, Leaf2, NodeState, PubKey, SeqTypes, ValidatedState,
 };
 use futures::{
+    StreamExt,
     future::{Future, FutureExt, TryFuture, TryFutureExt},
     stream::FuturesUnordered,
-    StreamExt,
 };
 use hotshot_types::{
+    ValidatorConfig,
     consensus::Consensus,
     data::ViewNumber,
     message::UpgradeLock,
@@ -39,15 +40,14 @@ use hotshot_types::{
     simple_certificate::LightClientStateUpdateCertificateV2,
     stake_table::HSStakeTable,
     traits::{
+        ValidatedState as ValidatedStateTrait,
         metrics::{Counter, CounterFamily, Metrics},
         network::ConnectedNetwork,
-        ValidatedState as ValidatedStateTrait,
     },
-    utils::{verify_leaf_chain, View, ViewInner},
-    ValidatorConfig,
+    utils::{View, ViewInner, verify_leaf_chain},
 };
 use itertools::Itertools;
-use jf_merkle_tree_compat::{prelude::MerkleNode, ForgetableMerkleTreeScheme, MerkleTreeScheme};
+use jf_merkle_tree_compat::{ForgetableMerkleTreeScheme, MerkleTreeScheme, prelude::MerkleNode};
 use parking_lot::Mutex;
 use priority_queue::PriorityQueue;
 use serde::de::DeserializeOwned;

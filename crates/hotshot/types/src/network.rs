@@ -14,12 +14,12 @@ use serde_inline_default::serde_inline_default;
 use thiserror::Error;
 
 use crate::{
+    HotShotConfig, NodeType, ValidatorConfig,
     constants::{
-        ORCHESTRATOR_DEFAULT_NUM_ROUNDS, ORCHESTRATOR_DEFAULT_TRANSACTIONS_PER_ROUND,
-        ORCHESTRATOR_DEFAULT_TRANSACTION_SIZE, REQUEST_DATA_DELAY,
+        ORCHESTRATOR_DEFAULT_NUM_ROUNDS, ORCHESTRATOR_DEFAULT_TRANSACTION_SIZE,
+        ORCHESTRATOR_DEFAULT_TRANSACTIONS_PER_ROUND, REQUEST_DATA_DELAY,
     },
     hotshot_config_file::HotShotConfigFile,
-    HotShotConfig, NodeType, ValidatorConfig,
 };
 
 /// Configuration describing a libp2p node

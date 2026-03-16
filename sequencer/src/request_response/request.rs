@@ -2,15 +2,15 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use committable::Commitment;
 use espresso_types::{
+    FeeAccount, FeeMerkleTree, Leaf2,
     v0_3::{ChainConfig, RewardAccountV1, RewardMerkleTreeV1},
     v0_4::{RewardAccountV2, RewardMerkleTreeV2},
-    FeeAccount, FeeMerkleTree, Leaf2,
 };
 use hotshot_types::{data::VidShare, simple_certificate::LightClientStateUpdateCertificateV2};
-use request_response::{request::Request as RequestTrait, Serializable};
+use request_response::{Serializable, request::Request as RequestTrait};
 use serde::{Deserialize, Serialize};
 
-use crate::{api::BlocksFrontier, SeqTypes};
+use crate::{SeqTypes, api::BlocksFrontier};
 
 // Some type aliases for readability
 type Height = u64;

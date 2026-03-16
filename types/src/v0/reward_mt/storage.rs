@@ -12,16 +12,16 @@ use std::{
 
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use jf_merkle_tree_compat::{
-    prelude::{MerkleNode, MerkleProof},
     LookupResult, ToTraversalPath,
+    prelude::{MerkleNode, MerkleProof},
 };
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    reward_mt::{RewardMerkleProof, REWARD_MERKLE_TREE_V2_INNER_HEIGHT},
+    reward_mt::{REWARD_MERKLE_TREE_V2_INNER_HEIGHT, RewardMerkleProof},
     sparse_mt::{Keccak256Hasher, KeccakNode},
     v0_3::RewardAmount,
-    v0_4::{RewardAccountV2, REWARD_MERKLE_TREE_V2_ARITY, REWARD_MERKLE_TREE_V2_HEIGHT},
+    v0_4::{REWARD_MERKLE_TREE_V2_ARITY, REWARD_MERKLE_TREE_V2_HEIGHT, RewardAccountV2},
 };
 
 /// Root node of a 156-bit inner Merkle tree, wrapped in `Arc` to avoid deep
@@ -665,7 +665,7 @@ mod tests {
 
     /// Generate a random reward amount
     fn random_amount(rng: &mut impl Rng) -> RewardAmount {
-        RewardAmount(U256::from(rng.gen::<u64>()))
+        RewardAmount(U256::from(rng.r#gen::<u64>()))
     }
 
     #[test]

@@ -1,5 +1,5 @@
 use std::{
-    cmp::{min, Ordering},
+    cmp::{Ordering, min},
     num::NonZeroUsize,
     pin::Pin,
     result::Result as StdResult,
@@ -17,7 +17,7 @@ use alloy::{
         json_rpc::{RequestPacket, ResponsePacket},
         types::Block,
     },
-    transports::{http::Http, RpcError, TransportErrorKind},
+    transports::{RpcError, TransportErrorKind, http::Http},
 };
 use anyhow::Context;
 use async_trait::async_trait;
@@ -34,15 +34,15 @@ use parking_lot::RwLock;
 use tokio::{
     spawn,
     sync::{Mutex, MutexGuard, Notify},
-    time::{sleep, Duration},
+    time::{Duration, sleep},
 };
 use tower_service::Service;
 use tracing::Instrument;
 use url::Url;
 
 use super::{
-    v0_1::{L1BlockInfoWithParent, SingleTransport, SingleTransportStatus, SwitchingTransport},
     L1BlockInfo, L1ClientMetrics, L1State, L1UpdateTask,
+    v0_1::{L1BlockInfoWithParent, SingleTransport, SingleTransportStatus, SwitchingTransport},
 };
 use crate::{FeeInfo, L1Client, L1ClientOptions, L1Event, L1Snapshot};
 
@@ -1117,7 +1117,7 @@ mod test {
         primitives::utils::parse_ether,
         providers::layers::AnvilProvider,
     };
-    use espresso_contract_deployer::{deploy_fee_contract_proxy, Contracts};
+    use espresso_contract_deployer::{Contracts, deploy_fee_contract_proxy};
     use time::OffsetDateTime;
 
     use super::*;

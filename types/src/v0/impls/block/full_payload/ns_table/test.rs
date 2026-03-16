@@ -2,16 +2,15 @@ use hotshot::traits::BlockPayload;
 use rand::{Rng, RngCore};
 
 use crate::{
+    NamespaceId, NsTable, Payload,
     v0::impls::block::{
         test::ValidTest,
         uint_bytes::{u32_max_from_byte_len, usize_max_from_byte_len, usize_to_bytes},
     },
     v0_1::{
-        NsTableBuilder,
+        NS_ID_BYTE_LEN, NS_OFFSET_BYTE_LEN, NUM_NSS_BYTE_LEN, NsTableBuilder,
         NsTableValidationError::{self, *},
-        NS_ID_BYTE_LEN, NS_OFFSET_BYTE_LEN, NUM_NSS_BYTE_LEN,
     },
-    NamespaceId, NsTable, Payload,
 };
 
 #[test_log::test]

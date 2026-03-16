@@ -5,11 +5,12 @@ use futures::future::FutureExt;
 use hotshot_types::traits::metrics::NoMetrics;
 
 use super::{
+    Genesis, L1Params, NetworkParams,
     api::{self, data_source::DataSourceOptions},
     context::SequencerContext,
     init_node, network,
     options::{Modules, Options},
-    persistence, Genesis, L1Params, NetworkParams,
+    persistence,
 };
 
 pub async fn main() -> anyhow::Result<()> {
@@ -191,7 +192,7 @@ mod test {
 
     use espresso_types::PubKey;
     use hotshot_types::{light_client::StateKeyPair, traits::signature_key::SignatureKey};
-    use surf_disco::{error::ClientError, Client, Url};
+    use surf_disco::{Client, Url, error::ClientError};
     use tempfile::TempDir;
     use test_utils::reserve_tcp_port;
     use tokio::spawn;
@@ -199,10 +200,10 @@ mod test {
 
     use super::*;
     use crate::{
+        SequencerApiVersion,
         api::options::Http,
         genesis::{L1Finalized, StakeTableConfig},
         persistence::fs,
-        SequencerApiVersion,
     };
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]

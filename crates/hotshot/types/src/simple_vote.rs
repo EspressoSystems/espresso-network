@@ -640,18 +640,18 @@ impl<TYPES: NodeType, DATA: Voteable<TYPES> + HasEpoch> HasEpoch for SimpleVote<
 // impl votable for all the data types in this file sealed marker should ensure nothing is accidentally
 // implemented for structs that aren't "voteable"
 impl<
-        TYPES: NodeType,
-        V: sealed::Sealed + Committable + Clone + Serialize + Debug + PartialEq + Hash + Eq,
-    > Voteable<TYPES> for V
+    TYPES: NodeType,
+    V: sealed::Sealed + Committable + Clone + Serialize + Debug + PartialEq + Hash + Eq,
+> Voteable<TYPES> for V
 {
 }
 
 // impl votable for all the data types in this file sealed marker should ensure nothing is accidentally
 // implemented for structs that aren't "voteable"
 impl<
-        TYPES: NodeType,
-        V: sealed::Sealed + HasEpoch + Committable + Clone + Serialize + Debug + PartialEq + Hash + Eq,
-    > Voteable2<TYPES> for V
+    TYPES: NodeType,
+    V: sealed::Sealed + HasEpoch + Committable + Clone + Serialize + Debug + PartialEq + Hash + Eq,
+> Voteable2<TYPES> for V
 {
 }
 

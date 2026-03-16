@@ -12,7 +12,7 @@ use hotshot_types::{
 use request_response::network::Bytes;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::{Receiver, Sender};
-use vbs::{bincode_serializer::BincodeSerializer, version::StaticVersion, BinarySerializer};
+use vbs::{BinarySerializer, bincode_serializer::BincodeSerializer, version::StaticVersion};
 
 use crate::context::TaskList;
 

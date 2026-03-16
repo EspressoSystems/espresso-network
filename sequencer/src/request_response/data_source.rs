@@ -4,20 +4,19 @@
 
 use std::{marker::PhantomData, sync::Arc};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 use espresso_types::{
-    retain_accounts,
+    NodeState, PubKey, SeqTypes, retain_accounts,
     traits::SequencerPersistence,
     v0_3::{RewardAccountV1, RewardMerkleTreeV1},
     v0_4::{RewardAccountV2, RewardMerkleTreeV2},
-    NodeState, PubKey, SeqTypes,
 };
-use hotshot::{traits::NodeImplementation, SystemContext};
+use hotshot::{SystemContext, traits::NodeImplementation};
 use hotshot_query_service::{
     data_source::{
-        storage::{FileSystemStorage, NodeStorage, SqlStorage},
         VersionedDataSource,
+        storage::{FileSystemStorage, NodeStorage, SqlStorage},
     },
     node::BlockId,
 };
@@ -33,8 +32,8 @@ use super::request::{Request, Response};
 use crate::{
     api::{BlocksFrontier, RewardMerkleTreeDataSource, RewardMerkleTreeV2Data},
     catchup::{
-        add_fee_accounts_to_state, add_v1_reward_accounts_to_state,
-        add_v2_reward_accounts_to_state, CatchupStorage,
+        CatchupStorage, add_fee_accounts_to_state, add_v1_reward_accounts_to_state,
+        add_v2_reward_accounts_to_state,
     },
 };
 

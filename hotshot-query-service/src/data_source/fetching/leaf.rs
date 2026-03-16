@@ -25,21 +25,21 @@ use tokio::spawn;
 use tracing::Instrument;
 
 use super::{
-    header::HeaderCallback, AvailabilityProvider, FetchRequest, Fetchable, Fetcher, Heights,
-    Notifiers, RangedFetchable, Storable,
+    AvailabilityProvider, FetchRequest, Fetchable, Fetcher, Heights, Notifiers, RangedFetchable,
+    Storable, header::HeaderCallback,
 };
 use crate::{
+    Header, Payload, QueryError, QueryResult,
     availability::{LeafId, LeafQueryData, QueryableHeader, QueryablePayload},
     data_source::{
-        storage::{
-            pruning::PrunedHeightStorage, AvailabilityStorage, NodeStorage,
-            UpdateAvailabilityStorage,
-        },
         VersionedDataSource,
+        storage::{
+            AvailabilityStorage, NodeStorage, UpdateAvailabilityStorage,
+            pruning::PrunedHeightStorage,
+        },
     },
-    fetching::{self, request, Callback},
+    fetching::{self, Callback, request},
     types::HeightIndexed,
-    Header, Payload, QueryError, QueryResult,
 };
 
 pub(super) type LeafFetcher<Types, S, P> =

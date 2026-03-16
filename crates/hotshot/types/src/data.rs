@@ -28,12 +28,12 @@ use tagged_base64::{TaggedBase64, Tb64Error};
 use thiserror::Error;
 use vbs::version::Version;
 use vec1::Vec1;
-use versions::{Upgrade, EPOCH_VERSION, VID2_UPGRADE_VERSION};
+use versions::{EPOCH_VERSION, Upgrade, VID2_UPGRADE_VERSION};
 
 use crate::{
     drb::DrbResult,
     epoch_membership::EpochMembershipCoordinator,
-    message::{convert_proposal, Proposal, UpgradeLock},
+    message::{Proposal, UpgradeLock, convert_proposal},
     simple_certificate::{
         LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
         NextEpochQuorumCertificate2, QuorumCertificate, QuorumCertificate2, TimeoutCertificate,
@@ -42,20 +42,20 @@ use crate::{
     },
     simple_vote::{HasEpoch, QuorumData, QuorumData2, UpgradeProposalData, VersionedVoteData},
     traits::{
+        BlockPayload,
         block_contents::{BlockHeader, BuilderFee, EncodeBytes, TestableBlock},
         node_implementation::NodeType,
         signature_key::SignatureKey,
         states::TestableState,
-        BlockPayload,
     },
     utils::{
-        bincode_opts, genesis_epoch_from_version, option_epoch_from_block_number,
-        EpochTransitionIndicator,
+        EpochTransitionIndicator, bincode_opts, genesis_epoch_from_version,
+        option_epoch_from_block_number,
     },
     vid::{
-        advz::{advz_scheme, ADVZScheme},
-        avidm::{init_avidm_param, AvidMScheme},
-        avidm_gf2::{init_avidm_gf2_param, AvidmGf2Scheme},
+        advz::{ADVZScheme, advz_scheme},
+        avidm::{AvidMScheme, init_avidm_param},
+        avidm_gf2::{AvidmGf2Scheme, init_avidm_gf2_param},
     },
     vote::{Certificate, HasViewNumber},
 };
@@ -2197,8 +2197,8 @@ pub mod null_block {
     use crate::{
         data::VidCommitment,
         traits::{
-            block_contents::BuilderFee, node_implementation::NodeType,
-            signature_key::BuilderSignatureKey, BlockPayload,
+            BlockPayload, block_contents::BuilderFee, node_implementation::NodeType,
+            signature_key::BuilderSignatureKey,
         },
         vid::advz::advz_scheme,
     };

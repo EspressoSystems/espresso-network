@@ -37,16 +37,16 @@ use crate::{
     simple_vote::HasEpoch,
     stake_table::{HSStakeTable, StakeTableEntries},
     traits::{
+        BlockPayload, ValidatedState,
         block_contents::{BlockHeader, BuilderFee},
         metrics::{Counter, Gauge, Histogram, Metrics, NoMetrics},
         node_implementation::NodeType,
         signature_key::{SignatureKey, StakeTableEntryType},
-        BlockPayload, ValidatedState,
     },
     utils::{
-        epoch_from_block_number, is_epoch_root, is_epoch_transition, is_last_block,
-        is_transition_block, option_epoch_from_block_number, BuilderCommitment, LeafCommitment,
-        StateAndDelta, Terminator,
+        BuilderCommitment, LeafCommitment, StateAndDelta, Terminator, epoch_from_block_number,
+        is_epoch_root, is_epoch_transition, is_last_block, is_transition_block,
+        option_epoch_from_block_number,
     },
     vote::{Certificate, HasViewNumber},
 };

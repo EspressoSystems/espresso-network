@@ -22,14 +22,14 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{bail, ensure, Context};
+use anyhow::{Context, bail, ensure};
 use async_lock::RwLock;
 use clap::Parser;
 use committable::Committable;
 use derivative::Derivative;
 use espresso_types::{
-    parse_duration, v0_1::IterableFeeInfo, ADVZNamespaceProofQueryData, BlockMerkleTree,
-    FeeMerkleTree, Header, SeqTypes,
+    ADVZNamespaceProofQueryData, BlockMerkleTree, FeeMerkleTree, Header, SeqTypes, parse_duration,
+    v0_1::IterableFeeInfo,
 };
 use futures::{
     future::{FutureExt, TryFuture, TryFutureExt},
@@ -48,13 +48,13 @@ use hotshot_types::traits::{
 use jf_merkle_tree_compat::{
     ForgetableMerkleTreeScheme, MerkleTreeScheme, UniversalMerkleTreeScheme,
 };
-use rand::{seq::SliceRandom, RngCore};
+use rand::{RngCore, seq::SliceRandom};
 use sequencer::SequencerApiVersion;
 use sequencer_utils::logging;
 use serde::de::DeserializeOwned;
 use strum::{EnumDiscriminants, VariantArray};
-use surf_disco::{error::ClientError, socket, Error, StatusCode, Url};
-use tide_disco::{error::ServerError, App};
+use surf_disco::{Error, StatusCode, Url, error::ClientError, socket};
+use tide_disco::{App, error::ServerError};
 use time::OffsetDateTime;
 use tokio::{task::spawn, time::sleep};
 use toml::toml;

@@ -10,12 +10,12 @@ use std::{
 
 use alloy::{
     eips::{BlockId, BlockNumberOrTag},
-    primitives::{utils::format_ether, Address, U256},
+    primitives::{Address, U256, utils::format_ether},
     providers::Provider,
     rpc::types::{Filter, Log},
     sol_types::{SolEvent, SolEventInterface},
 };
-use anyhow::{bail, ensure, Context};
+use anyhow::{Context, bail, ensure};
 use ark_ec::AffineRepr;
 use ark_serialize::CanonicalSerialize;
 use async_lock::{Mutex, RwLock, RwLockUpgradableReadGuard};
@@ -32,10 +32,11 @@ use hotshot_contract_adapter::sol_types::{
     },
 };
 use hotshot_types::{
-    data::{vid_disperse::VID_TARGET_TOTAL_STAKE, EpochNumber, ViewNumber},
+    PeerConfig,
+    data::{EpochNumber, ViewNumber, vid_disperse::VID_TARGET_TOTAL_STAKE},
     drb::{
-        election::{generate_stake_cdf, select_randomized_leader, RandomizedCommittee},
         DrbResult,
+        election::{RandomizedCommittee, generate_stake_cdf, select_randomized_leader},
     },
     epoch_membership::EpochMembershipCoordinator,
     stake_table::{HSStakeTable, StakeTableEntry},
@@ -48,7 +49,6 @@ use hotshot_types::{
     utils::{
         epoch_from_block_number, is_epoch_root, root_block_in_epoch, transition_block_for_epoch,
     },
-    PeerConfig,
 };
 use humantime::format_duration;
 use indexmap::IndexMap;
@@ -62,20 +62,20 @@ use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION};
 #[cfg(any(test, feature = "testing"))]
 use super::v0_3::DAMembers;
 use super::{
+    Header, L1Client, Leaf2, PubKey, SeqTypes,
     traits::{MembershipPersistence, StateCatchup},
     v0_3::{
         AuthenticatedValidator, ChainConfig, EventKey, Fetcher, RegisteredValidator,
         StakeTableEvent, StakeTableUpdateTask,
     },
-    Header, L1Client, Leaf2, PubKey, SeqTypes,
 };
 use crate::{
     traits::EventsPersistenceRead,
     v0_1::L1Provider,
     v0_3::{
-        EventSortingError, ExpectedStakeTableError, FetchRewardError, RewardAmount,
-        StakeTableError, ASSUMED_BLOCK_TIME_SECONDS, BLOCKS_PER_YEAR, COMMISSION_BASIS_POINTS,
-        INFLATION_RATE, MILLISECONDS_PER_YEAR,
+        ASSUMED_BLOCK_TIME_SECONDS, BLOCKS_PER_YEAR, COMMISSION_BASIS_POINTS, EventSortingError,
+        ExpectedStakeTableError, FetchRewardError, INFLATION_RATE, MILLISECONDS_PER_YEAR,
+        RewardAmount, StakeTableError,
     },
 };
 
@@ -2484,7 +2484,7 @@ impl Membership<SeqTypes> for EpochCommittees {
                     .randomized_committees
                     .get(&epoch)
                     .map(|committee| committee.drb_result())
-                    .context(format!("Missing randomized committee for epoch {epoch}"))
+                    .context(format!("Missing randomized committee for epoch {epoch}"));
             },
         };
 
@@ -2609,7 +2609,7 @@ pub mod testing {
     use alloy::primitives::Bytes;
     use hotshot_contract_adapter::{
         sol_types::{EdOnBN254PointSol, G1PointSol, G2PointSol},
-        stake_table::{sign_address_bls, sign_address_schnorr, StateSignatureSol},
+        stake_table::{StateSignatureSol, sign_address_bls, sign_address_schnorr},
     };
     use hotshot_types::{light_client::StateKeyPair, signature_key::BLSKeyPair};
     use rand::{Rng as _, RngCore as _};
@@ -2763,13 +2763,13 @@ pub mod testing {
 mod tests {
 
     use alloy::{primitives::Address, rpc::types::Log};
-    use hotshot_contract_adapter::stake_table::{sign_address_bls, StakeTableContractVersion};
+    use hotshot_contract_adapter::stake_table::{StakeTableContractVersion, sign_address_bls};
     use hotshot_types::signature_key::BLSKeyPair;
     use pretty_assertions::assert_matches;
     use rstest::rstest;
 
     use super::*;
-    use crate::{v0::impls::testing::*, L1ClientOptions};
+    use crate::{L1ClientOptions, v0::impls::testing::*};
 
     #[test_log::test]
     fn test_from_l1_events() -> anyhow::Result<()> {
@@ -3616,9 +3616,9 @@ mod tests {
             l1_retry_delay: Duration::from_secs(1),
             ..Default::default()
         }
-        .connect(vec!["https://ethereum-sepolia.publicnode.com"
-            .parse()
-            .unwrap()])
+        .connect(vec![
+            "https://ethereum-sepolia.publicnode.com".parse().unwrap(),
+        ])
         .expect("unable to construct l1 client");
 
         let latest_block = l1.provider.get_block_number().await.unwrap();

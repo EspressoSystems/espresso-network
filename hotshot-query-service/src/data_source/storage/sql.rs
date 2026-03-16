@@ -32,21 +32,21 @@ use sqlx::postgres::{PgConnectOptions, PgSslMode};
 #[cfg(feature = "embedded-db")]
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{
-    pool::{Pool, PoolOptions},
     ConnectOptions, Row,
+    pool::{Pool, PoolOptions},
 };
 
 use crate::{
+    Header, QueryError, QueryResult,
     availability::{QueryableHeader, QueryablePayload, VidCommonMetadata, VidCommonQueryData},
     data_source::{
+        VersionedDataSource,
         storage::pruning::{PruneStorage, PrunerCfg, PrunerConfig},
         update::Transaction as _,
-        VersionedDataSource,
     },
     metrics::PrometheusMetrics,
     node::BlockId,
     status::HasMetrics,
-    Header, QueryError, QueryResult,
 };
 pub extern crate sqlx;
 pub use sqlx::{Database, Sqlite};
@@ -1268,11 +1268,13 @@ pub mod testing {
                 .host(self.host())
                 .port(self.port());
 
-            cfg = cfg.migrations(vec![Migration::unapplied(
-                "V101__create_test_merkle_tree_table.sql",
-                &TestMerkleTreeMigration::create("test_tree"),
-            )
-            .unwrap()]);
+            cfg = cfg.migrations(vec![
+                Migration::unapplied(
+                    "V101__create_test_merkle_tree_table.sql",
+                    &TestMerkleTreeMigration::create("test_tree"),
+                )
+                .unwrap(),
+            ]);
 
             cfg
         }
@@ -1454,23 +1456,23 @@ mod test {
         data::{QuorumProposal, ViewNumber},
         simple_vote::QuorumData,
         traits::{
-            block_contents::{BlockHeader, GENESIS_VID_NUM_STORAGE_NODES},
             EncodeBytes,
+            block_contents::{BlockHeader, GENESIS_VID_NUM_STORAGE_NODES},
         },
         vid::advz::advz_scheme,
     };
     use jf_advz::VidScheme;
     use jf_merkle_tree_compat::{
-        prelude::UniversalMerkleTree, MerkleTreeScheme, ToTraversalPath, UniversalMerkleTreeScheme,
+        MerkleTreeScheme, ToTraversalPath, UniversalMerkleTreeScheme, prelude::UniversalMerkleTree,
     };
     use tokio::time::sleep;
 
     use super::{testing::TmpDb, *};
     use crate::{
         availability::LeafQueryData,
-        data_source::storage::{pruning::PrunedHeightStorage, UpdateAvailabilityStorage},
+        data_source::storage::{UpdateAvailabilityStorage, pruning::PrunedHeightStorage},
         merklized_state::{MerklizedState, UpdateStateData},
-        testing::mocks::{MockHeader, MockMerkleTree, MockPayload, MockTypes, MOCK_UPGRADE},
+        testing::mocks::{MOCK_UPGRADE, MockHeader, MockMerkleTree, MockPayload, MockTypes},
     };
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -1827,14 +1829,16 @@ mod test {
         let storage = SqlStorage::connect(cfg, StorageConnectionType::Query)
             .await
             .unwrap();
-        assert!(storage
-            .read()
-            .await
-            .unwrap()
-            .load_pruned_height()
-            .await
-            .unwrap()
-            .is_none());
+        assert!(
+            storage
+                .read()
+                .await
+                .unwrap()
+                .load_pruned_height()
+                .await
+                .unwrap()
+                .is_none()
+        );
         for height in [10, 20, 30] {
             let mut tx = storage.write().await.unwrap();
             tx.save_pruned_height(height).await.unwrap();

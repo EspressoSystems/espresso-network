@@ -15,12 +15,12 @@ use hotshot_utils::anytrace::Result;
 
 use super::node_implementation::NodeType;
 use crate::{
+    PeerConfig,
     data::{EpochNumber, Leaf2, ViewNumber},
     drb::DrbResult,
     event::Event,
-    stake_table::{supermajority_threshold, HSStakeTable},
+    stake_table::{HSStakeTable, supermajority_threshold},
     traits::{node_implementation::NodeImplementation, signature_key::StakeTableEntryType},
-    PeerConfig,
 };
 
 pub struct NoStakeTableHash;

@@ -73,8 +73,8 @@
 use std::{
     future::IntoFuture,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
 };
 
@@ -82,7 +82,7 @@ use async_lock::Mutex;
 use derivative::Derivative;
 use futures::future::{BoxFuture, FutureExt};
 use tokio::sync::{
-    mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
+    mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel},
     oneshot,
 };
 use tracing::warn;
