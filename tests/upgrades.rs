@@ -93,15 +93,20 @@ async fn run_upgrade_test(genesis_path: &str, upgrade: Upgrade) -> Result<()> {
     let epoch_start_block = genesis.epoch_start_block.unwrap_or(1);
 
     let first_epoch = epoch_from_block_number(epoch_start_block, epoch_length);
-    let first_reward_block = (first_epoch + 1) * epoch_length + 1;
 
-    let first_reward_block = if upgrade.target >= DRB_AND_HEADER_UPGRADE_VERSION {
-        Some(first_reward_block)
+    let first_reward_block = if upgrade.target >= EPOCH_REWARD_VERSION {
+        Some((first_epoch + 3) * epoch_length)
+    } else if upgrade.target >= DRB_AND_HEADER_UPGRADE_VERSION {
+        Some((first_epoch + 1) * epoch_length + 1)
     } else {
         None
     };
 
-    let expected_block_height = (first_epoch + 2) * epoch_length + 10;
+    let expected_block_height = if upgrade.target >= EPOCH_REWARD_VERSION {
+        (first_epoch + 3) * epoch_length + 10
+    } else {
+        (first_epoch + 2) * epoch_length + 10
+    };
 
     println!("Upgrade test config:");
     println!("  epoch_start_block: {epoch_start_block}");
