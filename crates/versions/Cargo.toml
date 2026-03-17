@@ -2,7 +2,7 @@
 name = "versions"
 version.workspace = true
 authors.workspace = true
-edition = "2024"
+edition.workspace = true
 
 [dependencies]
 bincode = { workspace = true }

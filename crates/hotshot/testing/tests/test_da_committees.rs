@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use alloy::primitives::U256;
 use hotshot_example_types::node_types::{
-    MemoryImpl, TestTypes, TestTypesRandomizedLeader, TEST_VERSIONS,
+    MemoryImpl, TEST_VERSIONS, TestTypes, TestTypesRandomizedLeader,
 };
 use hotshot_macros::cross_tests;
 use hotshot_testing::{

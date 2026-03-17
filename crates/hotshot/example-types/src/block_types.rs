@@ -14,19 +14,19 @@ use alloy::primitives::FixedBytes;
 use async_trait::async_trait;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
 use hotshot_types::{
-    data::{vid_commitment, BlockError, Leaf2, VidCommitment, ViewNumber},
+    data::{BlockError, Leaf2, VidCommitment, ViewNumber, vid_commitment},
     light_client::LightClientState,
     traits::{
+        BlockPayload, ValidatedState,
         block_contents::{
-            BlockHeader, BuilderFee, EncodeBytes, TestableBlock, Transaction,
-            GENESIS_VID_NUM_STORAGE_NODES,
+            BlockHeader, BuilderFee, EncodeBytes, GENESIS_VID_NUM_STORAGE_NODES, TestableBlock,
+            Transaction,
         },
         node_implementation::NodeType,
-        BlockPayload, ValidatedState,
     },
     utils::BuilderCommitment,
 };
-use rand::{thread_rng, Rng};
+use rand::{Rng, thread_rng};
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Keccak256};
 use thiserror::Error;
@@ -322,12 +322,12 @@ impl TestBlockHeader {
 }
 
 impl<
-        TYPES: NodeType<
+    TYPES: NodeType<
             BlockHeader = Self,
             BlockPayload = TestBlockPayload,
             InstanceState = TestInstanceState,
         >,
-    > BlockHeader<TYPES> for TestBlockHeader
+> BlockHeader<TYPES> for TestBlockHeader
 {
     type Error = std::convert::Infallible;
 

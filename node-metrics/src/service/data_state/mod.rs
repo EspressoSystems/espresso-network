@@ -7,18 +7,18 @@ use alloy::primitives::Address;
 use async_lock::RwLock;
 use bitvec::vec::BitVec;
 use circular_buffer::CircularBuffer;
-use espresso_types::{v0_3::AuthenticatedValidator, Header, Payload, SeqTypes};
-use futures::{channel::mpsc::SendError, Sink, SinkExt, Stream, StreamExt};
+use espresso_types::{Header, Payload, SeqTypes, v0_3::AuthenticatedValidator};
+use futures::{Sink, SinkExt, Stream, StreamExt, channel::mpsc::SendError};
 use hotshot_query_service::{
+    Resolvable,
     availability::{BlockQueryData, Leaf1QueryData},
     explorer::{BlockDetail, ExplorerHeader, Timestamp},
-    Resolvable,
 };
 use hotshot_types::{
-    signature_key::BLSPubKey,
-    traits::{block_contents::BlockHeader, BlockPayload, EncodeBytes},
-    utils::epoch_from_block_number,
     PeerConfig,
+    signature_key::BLSPubKey,
+    traits::{BlockPayload, EncodeBytes, block_contents::BlockHeader},
+    utils::epoch_from_block_number,
 };
 use indexmap::IndexMap;
 pub use location_details::LocationDetails;
@@ -27,8 +27,8 @@ use time::OffsetDateTime;
 use tokio::{spawn, task::JoinHandle};
 
 use crate::api::node_validator::v0::{
-    get_node_stake_table_from_sequencer, get_node_validators_from_sequencer, LeafAndBlock,
-    PublicHotShotConfig, Version01,
+    LeafAndBlock, PublicHotShotConfig, Version01, get_node_stake_table_from_sequencer,
+    get_node_validators_from_sequencer,
 };
 
 /// MAX_HISTORY represents the last N records that are stored within the
@@ -824,11 +824,11 @@ mod tests {
 
     use async_lock::RwLock;
     use espresso_types::{
+        BlockMerkleTree, FeeMerkleTree, NodeState, ValidatedState,
         v0_3::{ChainConfig, RewardMerkleTreeV1},
         v0_4::RewardMerkleTreeV2,
-        BlockMerkleTree, FeeMerkleTree, NodeState, ValidatedState,
     };
-    use futures::{channel::mpsc, SinkExt, StreamExt};
+    use futures::{SinkExt, StreamExt, channel::mpsc};
     use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_query_service::{
         availability::{BlockQueryData, Leaf1QueryData},
@@ -954,12 +954,14 @@ mod tests {
         drop(block_receiver);
         drop(leaf_sender);
 
-        assert!(timeout(
-            Duration::from_millis(200),
-            process_leaf_stream_task_handle.task_handle.take().unwrap()
-        )
-        .await
-        .is_ok());
+        assert!(
+            timeout(
+                Duration::from_millis(200),
+                process_leaf_stream_task_handle.task_handle.take().unwrap()
+            )
+            .await
+            .is_ok()
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]

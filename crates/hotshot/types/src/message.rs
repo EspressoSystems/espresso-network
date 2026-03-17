@@ -18,9 +18,9 @@ use std::{
 use async_lock::RwLock;
 use committable::Committable;
 use hotshot_utils::anytrace::*;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use vbs::version::Version;
-use versions::{Upgrade, DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, VID2_UPGRADE_VERSION};
+use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, Upgrade, VID2_UPGRADE_VERSION};
 
 /// The version we should expect for external messages
 pub const EXTERNAL_MESSAGE_VERSION: Version = Version { major: 0, minor: 0 };

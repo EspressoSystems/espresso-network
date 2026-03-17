@@ -1,6 +1,6 @@
 use crate::{
-    v0::impls::block::{usize_max_from_byte_len, usize_to_bytes},
     NamespaceId, NsPayloadBuilder, NsPayloadOwned,
+    v0::impls::block::{usize_max_from_byte_len, usize_to_bytes},
 };
 
 #[test_log::test]
@@ -103,7 +103,9 @@ fn negative_len_txs() {
         assert_eq!(txs[0].payload(), [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
         assert_eq!(
             txs[1].payload(),
-            [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29]
+            [
+                10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29
+            ]
         );
         assert!(txs[2].payload().is_empty());
     }
@@ -115,12 +117,16 @@ fn negative_len_txs() {
         assert_eq!(txs.len(), 3);
         assert_eq!(
             txs[0].payload(),
-            [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+            [
+                0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19
+            ]
         );
         assert!(txs[1].payload().is_empty());
         assert_eq!(
             txs[2].payload(),
-            [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29]
+            [
+                10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29
+            ]
         );
     }
 
@@ -169,7 +175,9 @@ fn negative_len_txs_and_abnormal_payload_len() {
         assert_eq!(txs.len(), 3);
         assert_eq!(
             txs[0].payload(),
-            [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+            [
+                0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19
+            ]
         );
         assert!(txs[1].payload().is_empty());
         assert_eq!(
@@ -186,12 +194,16 @@ fn negative_len_txs_and_abnormal_payload_len() {
         assert_eq!(txs.len(), 3);
         assert_eq!(
             txs[0].payload(),
-            [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+            [
+                0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19
+            ]
         );
         assert!(txs[1].payload().is_empty());
         assert_eq!(
             txs[2].payload(),
-            [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29]
+            [
+                10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29
+            ]
         );
     }
 

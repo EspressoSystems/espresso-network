@@ -9,27 +9,27 @@ use anyhow::Context;
 use async_lock::RwLock;
 use derivative::Derivative;
 use espresso_types::{
-    v0::traits::{EventConsumer as PersistenceEventConsumer, SequencerPersistence},
     NodeState, PubKey, Transaction, ValidatedState,
+    v0::traits::{EventConsumer as PersistenceEventConsumer, SequencerPersistence},
 };
 use futures::{
-    future::{join_all, Future},
+    future::{Future, join_all},
     stream::{Stream, StreamExt},
 };
 use hotshot::{
-    types::{Event, EventType, SystemContextHandle},
     SystemContext,
+    types::{Event, EventType, SystemContextHandle},
 };
 use hotshot_events_service::events_source::{EventConsumer, EventsStreamer};
 use hotshot_orchestrator::client::OrchestratorClient;
 use hotshot_types::{
+    PeerConfig, ValidatorConfig,
     consensus::ConsensusMetricsValue,
     data::{Leaf2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     network::NetworkConfig,
     storage_metrics::StorageMetricsValue,
     traits::{metrics::Metrics, network::ConnectedNetwork},
-    PeerConfig, ValidatorConfig,
 };
 use parking_lot::Mutex;
 use request_response::RequestResponseConfig;
@@ -38,17 +38,17 @@ use tracing::{Instrument, Level};
 use url::Url;
 
 use crate::{
+    Node, SeqTypes, SequencerApiVersion,
     catchup::ParallelStateCatchup,
     external_event_handler::ExternalEventHandler,
     proposal_fetcher::ProposalFetcherConfig,
     request_response::{
+        RequestResponseProtocol,
         data_source::{DataSource, Storage as RequestResponseStorage},
         network::Sender as RequestResponseSender,
         recipient_source::RecipientSource,
-        RequestResponseProtocol,
     },
-    state_signature::StateSigner,
-    Node, SeqTypes, SequencerApiVersion,
+    state_signature::{self, StateSigner},
 };
 
 /// The consensus handle
@@ -133,6 +133,8 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
         let stake_table = config.hotshot_stake_table();
         let stake_table_commit = stake_table.commitment(stake_table_capacity)?;
         let stake_table_epoch = None;
+        let should_vote =
+            state_signature::should_vote(&stake_table, &validator_config.state_public_key);
 
         let event_streamer = Arc::new(RwLock::new(EventsStreamer::<SeqTypes>::new(
             stake_table.0,
@@ -161,6 +163,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
             stake_table_commit,
             stake_table_epoch,
             stake_table_capacity,
+            should_vote,
         );
         if let Some(url) = state_relay_server {
             state_signer = state_signer.with_relay_server(url);
@@ -316,7 +319,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
     }
 
     /// Stream consensus events.
-    pub async fn event_stream(&self) -> impl Stream<Item = Event<SeqTypes>> {
+    pub async fn event_stream(&self) -> impl Stream<Item = Event<SeqTypes>> + use<N, P> {
         self.handle.read().await.event_stream()
     }
 
@@ -492,11 +495,11 @@ async fn handle_events<N, P>(
             .await;
 
         // Handle external messages
-        if let EventType::ExternalMessageReceived { data, .. } = &event.event {
-            if let Err(err) = external_event_handler.handle_event(data).await {
-                tracing::warn!("Failed to handle external message: {:?}", err);
-            };
-        }
+        if let EventType::ExternalMessageReceived { data, .. } = &event.event
+            && let Err(err) = external_event_handler.handle_event(data).await
+        {
+            tracing::warn!("Failed to handle external message: {:?}", err);
+        };
 
         // Send the event via the event streaming service
         if let Some(events_streamer) = events_streamer.as_ref() {

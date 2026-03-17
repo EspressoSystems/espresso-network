@@ -4,9 +4,9 @@ use hotshot_types::{
 };
 
 use crate::{
-    v0_3::{AvidMNsProof, AvidMTxProof},
     Index, NsTable, NumTxs, NumTxsRange, Payload, Transaction, TxIndex, TxPayloadRange,
     TxTableEntriesRange,
+    v0_3::{AvidMNsProof, AvidMTxProof},
 };
 
 impl AvidMTxProof {

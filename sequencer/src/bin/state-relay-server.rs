@@ -1,6 +1,6 @@
 use clap::Parser;
 use hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY;
-use sequencer::{state_signature::relay_server::run_relay_server, SequencerApiVersion};
+use sequencer::{SequencerApiVersion, state_signature::relay_server::run_relay_server};
 use sequencer_utils::logging;
 use url::Url;
 use vbs::version::StaticVersionType;

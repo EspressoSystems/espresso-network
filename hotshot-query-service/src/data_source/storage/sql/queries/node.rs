@@ -27,10 +27,11 @@ use snafu::OptionExt;
 use tracing::instrument;
 
 use super::{
-    super::transaction::{query, query_as, Transaction, TransactionMode, Write},
-    parse_header, DecodeError, QueryBuilder, HEADER_COLUMNS,
+    super::transaction::{Transaction, TransactionMode, Write, query, query_as},
+    DecodeError, HEADER_COLUMNS, QueryBuilder, parse_header,
 };
 use crate::{
+    Header, MissingSnafu, QueryError, QueryResult,
     availability::{NamespaceId, QueryableHeader},
     data_source::storage::{
         Aggregate, AggregatesStorage, NodeStorage, PayloadMetadata, UpdateAggregatesStorage,
@@ -40,7 +41,6 @@ use crate::{
         TimeWindowQueryData, WindowStart,
     },
     types::HeightIndexed,
-    Header, MissingSnafu, QueryError, QueryResult,
 };
 
 #[async_trait]
@@ -779,9 +779,9 @@ mod test {
     use crate::{
         availability::LeafQueryData,
         data_source::{
+            Transaction as _, VersionedDataSource,
             sql::testing::TmpDb,
             storage::{SqlStorage, StorageConnectionType, UpdateAvailabilityStorage},
-            Transaction as _, VersionedDataSource,
         },
         testing::mocks::MockTypes,
     };

@@ -24,23 +24,23 @@ use async_trait::async_trait;
 use futures::stream::TryStreamExt;
 use hotshot_types::traits::node_implementation::NodeType;
 use jf_merkle_tree_compat::{
-    prelude::{MerkleNode, MerkleProof},
     DigestAlgorithm, MerkleCommitment, ToTraversalPath,
+    prelude::{MerkleNode, MerkleProof},
 };
 use sqlx::types::{BitVec, JsonValue};
 
 use super::{
-    super::transaction::{query_as, Transaction, TransactionMode, Write},
+    super::transaction::{Transaction, TransactionMode, Write, query_as},
     DecodeError, QueryBuilder,
 };
 use crate::{
+    QueryError, QueryResult,
     data_source::storage::{
+        MerklizedStateHeightStorage, MerklizedStateStorage,
         pruning::PrunedHeightStorage,
         sql::{build_where_in, sqlx::Row},
-        MerklizedStateHeightStorage, MerklizedStateStorage,
     },
     merklized_state::{MerklizedState, Snapshot},
-    QueryError, QueryResult,
 };
 
 #[async_trait]
@@ -735,16 +735,16 @@ fn build_get_path_query<'q>(
 mod test {
     use futures::stream::StreamExt;
     use jf_merkle_tree_compat::{
-        universal_merkle_tree::UniversalMerkleTree, LookupResult, MerkleTreeScheme,
-        UniversalMerkleTreeScheme,
+        LookupResult, MerkleTreeScheme, UniversalMerkleTreeScheme,
+        universal_merkle_tree::UniversalMerkleTree,
     };
-    use rand::{seq::IteratorRandom, RngCore};
+    use rand::{RngCore, seq::IteratorRandom};
 
     use super::*;
     use crate::{
         data_source::{
-            storage::sql::{testing::TmpDb, *},
             VersionedDataSource,
+            storage::sql::{testing::TmpDb, *},
         },
         merklized_state::UpdateStateData,
         testing::mocks::{MockMerkleTree, MockTypes},

@@ -29,14 +29,14 @@ use hotshot_types::{
 };
 
 use super::{
+    BlockWithTransaction,
     fetch::Fetch,
     query_data::{
         BlockHash, BlockQueryData, LeafHash, LeafQueryData, PayloadMetadata, PayloadQueryData,
         QueryableHeader, QueryablePayload, TransactionHash, VidCommonMetadata, VidCommonQueryData,
     },
-    BlockWithTransaction,
 };
-use crate::{types::HeightIndexed, Header, Payload};
+use crate::{Header, Payload, types::HeightIndexed};
 
 #[derive(Derivative, From, Display)]
 #[derivative(Ord = "feature_allow_slow_enum")]

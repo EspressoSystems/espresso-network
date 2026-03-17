@@ -19,7 +19,7 @@ use hotshot_types::{
     vote::HasViewNumber,
 };
 use tokio::task::JoinHandle;
-use vbs::{bincode_serializer::BincodeSerializer, version::StaticVersion, BinarySerializer};
+use vbs::{BinarySerializer, bincode_serializer::BincodeSerializer, version::StaticVersion};
 
 use crate::storage_types::TestStorage;
 
