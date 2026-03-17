@@ -202,6 +202,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
         state_private_key: <TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
         nonce: u64,
         config: HotShotConfig<TYPES>,
+        upgrade: versions::Upgrade,
         memberships: EpochMembershipCoordinator<TYPES>,
         network: Arc<I::Network>,
         initializer: HotShotInitializer<TYPES>,
@@ -218,6 +219,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
             state_private_key,
             nonce,
             config,
+            upgrade,
             memberships,
             network,
             initializer,
@@ -244,6 +246,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
         state_private_key: <TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
         nonce: u64,
         config: HotShotConfig<TYPES>,
+        upgrade: versions::Upgrade,
         mut membership_coordinator: EpochMembershipCoordinator<TYPES>,
         network: Arc<I::Network>,
         initializer: HotShotInitializer<TYPES>,
@@ -284,8 +287,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
 
         tracing::warn!(
             "Starting consensus with versions:\n\n Base: {:?}\nUpgrade: {:?}.",
-            config.upgrade.base,
-            config.upgrade.target
+            upgrade.base,
+            upgrade.target
         );
         tracing::warn!(
             "Loading previously decided upgrade certificate from storage: {:?}",
@@ -293,14 +296,14 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
         );
 
         let upgrade_lock = UpgradeLock::<TYPES>::from_certificate(
-            config.upgrade,
+            upgrade,
             &initializer.decided_upgrade_certificate,
         );
 
         let current_version = if let Some(cert) = initializer.decided_upgrade_certificate {
             cert.data.new_version
         } else {
-            config.upgrade.base
+            upgrade.base
         };
 
         debug!("Setting DRB difficulty selector in membership");
@@ -727,6 +730,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
         state_private_key: <TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
         node_id: u64,
         config: HotShotConfig<TYPES>,
+        upgrade: versions::Upgrade,
         memberships: EpochMembershipCoordinator<TYPES>,
         network: Arc<I::Network>,
         initializer: HotShotInitializer<TYPES>,
@@ -747,6 +751,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
             state_private_key,
             node_id,
             config,
+            upgrade,
             memberships,
             network,
             initializer,
@@ -891,6 +896,7 @@ where
         state_private_key: <TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
         nonce: u64,
         config: HotShotConfig<TYPES>,
+        upgrade: versions::Upgrade,
         memberships: EpochMembershipCoordinator<TYPES>,
         network: Arc<I::Network>,
         initializer: HotShotInitializer<TYPES>,
@@ -905,6 +911,7 @@ where
             state_private_key.clone(),
             nonce,
             config.clone(),
+            upgrade,
             memberships.clone(),
             Arc::clone(&network),
             initializer.clone(),
@@ -919,6 +926,7 @@ where
             state_private_key,
             nonce,
             config,
+            upgrade,
             memberships,
             network,
             initializer,

@@ -124,7 +124,6 @@ impl<TYPES: NodeType> From<HotShotConfigFile<TYPES>> for HotShotConfig<TYPES> {
             stake_table_capacity: val.stake_table_capacity,
             drb_difficulty: val.drb_difficulty,
             drb_upgrade_difficulty: val.drb_upgrade_difficulty,
-            upgrade: val.version_upgrade,
         }
     }
 }

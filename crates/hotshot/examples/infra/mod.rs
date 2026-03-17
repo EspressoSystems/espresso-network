@@ -69,6 +69,7 @@ use hotshot_types::{
 use rand::{SeedableRng, rngs::StdRng};
 use surf_disco::Url;
 use tracing::{debug, error, info, warn};
+use versions::{Upgrade, VERSION_0_1};
 
 #[derive(Debug, Clone)]
 /// Arguments passed to the orchestrator
@@ -362,12 +363,14 @@ pub trait RunDa<
     /// get the anchored view
     /// Note: sequencing leaf does not have state, so does not return state
     async fn initialize_state_and_hotshot(&self) -> SystemContextHandle<TYPES, NODE> {
+        let upgrade = Upgrade::trivial(VERSION_0_1);
+
         let initializer = hotshot::HotShotInitializer::<TYPES>::from_genesis(
             TestInstanceState::default(),
             self.config().config.epoch_height,
             self.config().config.epoch_start_block,
             vec![],
-            self.config().config.upgrade,
+            upgrade,
         )
         .await
         .expect("Couldn't generate genesis block");
@@ -400,6 +403,7 @@ pub trait RunDa<
             state_sk,
             config.node_index,
             config.config,
+            upgrade,
             EpochMembershipCoordinator::new(membership, epoch_height, &storage.clone()),
             network,
             initializer,
