@@ -9,8 +9,8 @@ use alloy::{
     contract::Error as ContractError,
     network::{Ethereum, EthereumWallet, TransactionBuilder as _},
     primitives::{
-        utils::{format_ether, parse_ether},
         Address, U256,
+        utils::{format_ether, parse_ether},
     },
     providers::{PendingTransactionBuilder, Provider, ProviderBuilder, WalletProvider},
     rpc::{
@@ -18,13 +18,13 @@ use alloy::{
         types::{TransactionReceipt, TransactionRequest},
     },
     signers::local::PrivateKeySigner,
-    transports::{http::Http, TransportError},
+    transports::{TransportError, http::Http},
 };
 use anyhow::Result;
 use clap::{Args, Subcommand, ValueEnum};
-use espresso_contract_deployer::{build_provider, build_signer, HttpProviderWithWallet};
+use espresso_contract_deployer::{HttpProviderWithWallet, build_provider, build_signer};
 use espresso_types::parse_duration;
-use futures_util::{stream, StreamExt as _, TryStreamExt as _};
+use futures_util::{StreamExt as _, TryStreamExt as _, stream};
 use hotshot_contract_adapter::{
     sol_types::{EspToken, StakeTableV2},
     stake_table::StakeTableContractVersion,
@@ -36,13 +36,13 @@ use thiserror::Error;
 use url::Url;
 
 use crate::{
+    Config, DEMO_VALIDATOR_START_INDEX,
     info::fetch_token_address,
-    parse::{parse_bls_priv_key, parse_state_priv_key, Commission, ParseCommissionError},
+    parse::{Commission, ParseCommissionError, parse_bls_priv_key, parse_state_priv_key},
     receipt::ReceiptExt as _,
     signature::NodeSignatures,
     transaction::Transaction,
-    tx_log::{execute_signed_tx_log, sign_all_transactions, TxInput, TxLog, TxPhase},
-    Config, DEMO_VALIDATOR_START_INDEX,
+    tx_log::{TxInput, TxLog, TxPhase, execute_signed_tx_log, sign_all_transactions},
 };
 
 #[derive(Debug, Error)]

@@ -4,14 +4,15 @@ use std::{
 };
 
 use alloy::primitives::U256;
-use async_broadcast::{broadcast, InactiveReceiver, Receiver, Sender};
+use async_broadcast::{InactiveReceiver, Receiver, Sender, broadcast};
 use async_lock::{Mutex, RwLock};
 use committable::Commitment;
 use hotshot_utils::{anytrace::*, *};
 
 use crate::{
+    PeerConfig,
     data::{EpochNumber, Leaf2, ViewNumber},
-    drb::{compute_drb_result, DrbDifficultySelectorFn, DrbInput, DrbResult},
+    drb::{DrbDifficultySelectorFn, DrbInput, DrbResult, compute_drb_result},
     event::Event,
     stake_table::HSStakeTable,
     traits::{
@@ -19,11 +20,10 @@ use crate::{
         election::Membership,
         node_implementation::NodeType,
         storage::{
-            load_drb_progress_fn, store_drb_progress_fn, store_drb_result_fn, LoadDrbProgressFn,
-            Storage, StoreDrbProgressFn, StoreDrbResultFn,
+            LoadDrbProgressFn, Storage, StoreDrbProgressFn, StoreDrbResultFn, load_drb_progress_fn,
+            store_drb_progress_fn, store_drb_result_fn,
         },
     },
-    PeerConfig,
 };
 
 type EpochMap<TYPES> = HashMap<EpochNumber, InactiveReceiver<Result<EpochMembership<TYPES>>>>;
@@ -194,7 +194,7 @@ where
         ))
     }
 
-    /// Catches the membership up to the epoch passed as an argument.  
+    /// Catches the membership up to the epoch passed as an argument.
     /// To do this, try to get the stake table for the epoch containing this epoch's root and
     /// the stake table for the epoch containing this epoch's drb result.
     /// If they do not exist, then go one by one back until we find a stake table.
@@ -243,24 +243,27 @@ where
                 }
                 // Lock the catchup map
                 let mut map_lock = self.catchup_map.lock().await;
-                if let Some(mut rx) = map_lock
+                match map_lock
                     .get(&try_epoch)
                     .map(InactiveReceiver::activate_cloned)
                 {
-                    // Somebody else is already fetching this epoch, drop the lock and wait for them to finish
-                    drop(map_lock);
-                    if let Ok(Ok(_)) = rx.recv_direct().await {
-                        break;
-                    };
-                    // If we didn't receive the epoch then we need to try again
-                } else {
-                    // Nobody else is fetching this epoch. We need to do it. Put it in the map and move on to the next epoch
-                    let (mut tx, rx) = broadcast(1);
-                    tx.set_overflow(true);
-                    map_lock.insert(try_epoch, rx.deactivate());
-                    drop(map_lock);
-                    fetch_epochs.push((try_epoch, tx));
-                    try_epoch = EpochNumber::new(try_epoch.saturating_sub(1));
+                    Some(mut rx) => {
+                        // Somebody else is already fetching this epoch, drop the lock and wait for them to finish
+                        drop(map_lock);
+                        if let Ok(Ok(_)) = rx.recv_direct().await {
+                            break;
+                        };
+                        // If we didn't receive the epoch then we need to try again
+                    },
+                    _ => {
+                        // Nobody else is fetching this epoch. We need to do it. Put it in the map and move on to the next epoch
+                        let (mut tx, rx) = broadcast(1);
+                        tx.set_overflow(true);
+                        map_lock.insert(try_epoch, rx.deactivate());
+                        drop(map_lock);
+                        fetch_epochs.push((try_epoch, tx));
+                        try_epoch = EpochNumber::new(try_epoch.saturating_sub(1));
+                    },
                 }
             };
         }

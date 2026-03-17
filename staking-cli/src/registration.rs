@@ -55,15 +55,15 @@ mod test {
     use anyhow::Result;
     use espresso_contract_deployer::build_provider;
     use espresso_types::{
-        v0_3::{Fetcher, StakeTableEvent},
         L1Client,
+        v0_3::{Fetcher, StakeTableEvent},
     };
     use hotshot_contract_adapter::{
         evm::DecodeRevert as _,
         sol_types::{EdOnBN254PointSol, G1PointSol, G2PointSol, StakeTableV2::StakeTableV2Errors},
-        stake_table::{sign_address_bls, sign_address_schnorr, StateSignatureSol},
+        stake_table::{StateSignatureSol, sign_address_bls, sign_address_schnorr},
     };
-    use rand::{rngs::StdRng, SeedableRng as _};
+    use rand::{SeedableRng as _, rngs::StdRng};
     use rstest::rstest;
 
     use super::*;

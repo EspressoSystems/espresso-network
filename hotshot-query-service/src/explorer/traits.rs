@@ -13,11 +13,11 @@
 use std::fmt::Debug;
 
 use hotshot_types::traits::node_implementation::NodeType;
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 
 use crate::{
-    availability::{NamespaceId, QueryableHeader},
     Header,
+    availability::{NamespaceId, QueryableHeader},
 };
 
 /// [ExplorerHeader] is a trait that represents certain extensions to the

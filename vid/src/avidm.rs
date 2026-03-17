@@ -27,8 +27,8 @@ use serde::{Deserialize, Serialize};
 use tagged_base64::tagged;
 
 use crate::{
-    utils::bytes_to_field::{self, bytes_to_field, field_to_bytes},
     VidError, VidResult, VidScheme,
+    utils::bytes_to_field::{self, bytes_to_field, field_to_bytes},
 };
 
 mod config;
@@ -441,11 +441,11 @@ impl VidScheme for AvidMScheme {
         let mut bytes: Vec<u8> = field_to_bytes(Self::recover_fields(param, shares)?).collect();
         // Remove the trimming zeros and the last 1 to get the actual payload bytes.
         // See `pad_to_fields`.
-        if let Some(pad_index) = bytes.iter().rposition(|&b| b != 0) {
-            if bytes[pad_index] == 1u8 {
-                bytes.truncate(pad_index);
-                return Ok(bytes);
-            }
+        if let Some(pad_index) = bytes.iter().rposition(|&b| b != 0)
+            && bytes[pad_index] == 1u8
+        {
+            bytes.truncate(pad_index);
+            return Ok(bytes);
         }
         Err(VidError::Argument(
             "Malformed payload, cannot find the padding position".to_string(),
@@ -456,10 +456,10 @@ impl VidScheme for AvidMScheme {
 /// Unit tests
 #[cfg(test)]
 pub mod tests {
-    use rand::{seq::SliceRandom, RngCore};
+    use rand::{RngCore, seq::SliceRandom};
 
     use super::F;
-    use crate::{avidm::AvidMScheme, utils::bytes_to_field, VidScheme};
+    use crate::{VidScheme, avidm::AvidMScheme, utils::bytes_to_field};
 
     #[test]
     fn test_padding() {

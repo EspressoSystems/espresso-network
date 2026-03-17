@@ -1,5 +1,5 @@
 use alloy::{
-    primitives::{Address, Bytes, B256, U256},
+    primitives::{Address, B256, Bytes, U256},
     providers::Provider,
     rpc::types::TransactionReceipt,
 };
@@ -10,8 +10,8 @@ use hotshot_contract_adapter::sol_types::{
 };
 
 use crate::{
-    proposals::multisig::call_propose_transaction_generic_script, retry_until_true, Contract,
-    Contracts, OwnableContract,
+    Contract, Contracts, OwnableContract,
+    proposals::multisig::call_propose_transaction_generic_script, retry_until_true,
 };
 
 /// Data structure for timelock operations payload

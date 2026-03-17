@@ -20,14 +20,14 @@ use std::{
 use alloy::primitives::FixedBytes;
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use vbs::version::Version;
 
 use super::signature_key::BuilderSignatureKey;
 use crate::{
     data::{Leaf2, VidCommitment, ViewNumber},
     light_client::LightClientState,
-    traits::{node_implementation::NodeType, states::InstanceState, ValidatedState},
+    traits::{ValidatedState, node_implementation::NodeType, states::InstanceState},
     utils::BuilderCommitment,
 };
 

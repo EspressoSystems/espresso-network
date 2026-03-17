@@ -6,7 +6,7 @@
 
 use std::{collections::BTreeMap, sync::Arc, time::Instant};
 
-use async_broadcast::{broadcast, InactiveReceiver, Receiver, Sender};
+use async_broadcast::{InactiveReceiver, Receiver, Sender, broadcast};
 use async_trait::async_trait;
 use committable::Committable;
 use hotshot_task::{
@@ -15,8 +15,9 @@ use hotshot_task::{
     task::TaskState,
 };
 use hotshot_types::{
+    VersionedDaCommittee,
     consensus::{ConsensusMetricsValue, OuterConsensus},
-    data::{vid_disperse::vid_total_weight, EpochNumber, Leaf2, ViewNumber},
+    data::{EpochNumber, Leaf2, ViewNumber, vid_disperse::vid_total_weight},
     epoch_membership::EpochMembershipCoordinator,
     event::Event,
     message::UpgradeLock,
@@ -31,7 +32,6 @@ use hotshot_types::{
     },
     utils::{is_epoch_root, is_epoch_transition, is_last_block, option_epoch_from_block_number},
     vote::{Certificate, HasViewNumber},
-    VersionedDaCommittee,
 };
 use hotshot_utils::anytrace::*;
 use tracing::instrument;
@@ -819,7 +819,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> QuorumVoteTaskState<TYPES, I
                 }
                 self.vote_dependencies = current_tasks;
             },
-            HotShotEvent::ViewChange(mut view, _) => {
+            &HotShotEvent::ViewChange(mut view, _) => {
                 view = ViewNumber::new(view.saturating_sub(1));
                 if !self.update_latest_voted_view(view).await {
                     tracing::debug!("view not updated");

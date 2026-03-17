@@ -26,22 +26,22 @@ use hotshot_types::{
 #[cfg(feature = "testing")]
 use crate::deploy::deploy_contracts_for_testing;
 use crate::{
+    Commands, Config, ValidSignerConfig,
     claim::fetch_claim_rewards_inputs,
     demo::{
-        churn_for_demo, delegate_for_demo, stake_for_demo, undelegate_for_demo, ChurnParams,
-        DemoCommands,
+        ChurnParams, DemoCommands, churn_for_demo, delegate_for_demo, stake_for_demo,
+        undelegate_for_demo,
     },
     info::{
-        display_stake_table, fetch_stake_table_version, fetch_token_address, stake_table_info,
-        StakeTableContractVersion,
+        StakeTableContractVersion, display_stake_table, fetch_stake_table_version,
+        fetch_token_address, stake_table_info,
     },
-    metadata::{fetch_metadata, validate_metadata_uri, MetadataUri},
+    metadata::{MetadataUri, fetch_metadata, validate_metadata_uri},
     output::{
-        format_esp, output_calldata, output_error, output_success, output_warn, CalldataInfo,
+        CalldataInfo, format_esp, output_calldata, output_error, output_success, output_warn,
     },
     signature::{NodeSignatureDestination, NodeSignatureInput, NodeSignatures},
     transaction::Transaction,
-    Commands, Config, ValidSignerConfig,
 };
 
 #[derive(Parser)]
@@ -166,10 +166,10 @@ fn decode_and_display_logs(logs: &[Log]) {
                 EspTokenEvents::Approval(e) => output_success(format!("event: {e:?}")),
                 _ => {},
             }
-        } else if let Ok(decoded) = RewardClaimEvents::decode_log(log.as_ref()) {
-            if let RewardClaimEvents::RewardsClaimed(e) = &decoded.data {
-                output_success(format!("event: {e:?}"));
-            }
+        } else if let Ok(decoded) = RewardClaimEvents::decode_log(log.as_ref())
+            && let RewardClaimEvents::RewardsClaimed(e) = &decoded.data
+        {
+            output_success(format!("event: {e:?}"));
         }
     }
 }
@@ -355,23 +355,23 @@ pub async fn run() -> Result<()> {
 
     // Handle deploy-contracts early since it doesn't require stake table address
     #[cfg(feature = "testing")]
-    if let Commands::Demo(ref demo) = config.commands {
-        if let DemoCommands::DeployContracts { ref output } = demo.command {
-            tracing::info!("Deploying staking contracts for testing");
-            deploy_contracts_for_testing(
-                config.rpc_url.clone(),
-                config
-                    .signer
-                    .mnemonic
-                    .clone()
-                    .expect("mnemonic required for deployment"),
-                config.signer.account_index.unwrap_or(0),
-                output.clone(),
-            )
-            .await
-            .context("failed to deploy contracts")?;
-            return Ok(());
-        }
+    if let Commands::Demo(ref demo) = config.commands
+        && let DemoCommands::DeployContracts { ref output } = demo.command
+    {
+        tracing::info!("Deploying staking contracts for testing");
+        deploy_contracts_for_testing(
+            config.rpc_url.clone(),
+            config
+                .signer
+                .mnemonic
+                .clone()
+                .expect("mnemonic required for deployment"),
+            config.signer.account_index.unwrap_or(0),
+            output.clone(),
+        )
+        .await
+        .context("failed to deploy contracts")?;
+        return Ok(());
     }
 
     // Clap serde will put default value if they aren't set. We check some
@@ -616,12 +616,12 @@ pub async fn run() -> Result<()> {
             let metadata_uri: MetadataUri = metadata_uri_args.clone().try_into()?;
 
             // Validate metadata URI if present and validation not skipped
-            if let Some(url) = metadata_uri.url() {
-                if !metadata_uri_args.skip_metadata_validation {
-                    validate_metadata_uri(url, &payload.bls_vk)
-                        .await
-                        .context("use --skip-metadata-validation to skip")?;
-                }
+            if let Some(url) = metadata_uri.url()
+                && !metadata_uri_args.skip_metadata_validation
+            {
+                validate_metadata_uri(url, &payload.bls_vk)
+                    .await
+                    .context("use --skip-metadata-validation to skip")?;
             }
 
             Transaction::RegisterValidator {
@@ -670,18 +670,18 @@ pub async fn run() -> Result<()> {
             let metadata_uri: MetadataUri = metadata_uri_args.clone().try_into()?;
 
             // Validate metadata URI if present and validation not skipped
-            if let Some(url) = metadata_uri.url() {
-                if !metadata_uri_args.skip_metadata_validation {
-                    let bls_vk = consensus_public_key.ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "--consensus-public-key is required for metadata validation (use \
-                             --skip-metadata-validation to skip)"
-                        )
-                    })?;
-                    validate_metadata_uri(url, &bls_vk)
-                        .await
-                        .context("use --skip-metadata-validation to skip")?;
-                }
+            if let Some(url) = metadata_uri.url()
+                && !metadata_uri_args.skip_metadata_validation
+            {
+                let bls_vk = consensus_public_key.ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "--consensus-public-key is required for metadata validation (use \
+                         --skip-metadata-validation to skip)"
+                    )
+                })?;
+                validate_metadata_uri(url, &bls_vk)
+                    .await
+                    .context("use --skip-metadata-validation to skip")?;
             }
 
             Transaction::UpdateMetadataUri {

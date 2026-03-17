@@ -1,16 +1,16 @@
 use std::{
-    collections::{hash_map::Entry, BTreeSet},
+    collections::{BTreeSet, hash_map::Entry},
     sync::Arc,
 };
 
-use alloy::primitives::{map::HashMap, U256};
+use alloy::primitives::{U256, map::HashMap};
 use hotshot_types::{
     light_client::{
         LCV1StateSignatureRequestBody, LCV1StateSignaturesBundle, LightClientState, StateVerKey,
     },
     traits::signature_key::LCV1StateSignatureKey,
 };
-use tide_disco::{error::ServerError, Error, StatusCode};
+use tide_disco::{Error, StatusCode, error::ServerError};
 
 use super::stake_table_tracker::StakeTableTracker;
 

@@ -12,8 +12,8 @@ use hotshot_task::task::TaskState;
 use hotshot_types::{
     consensus::{Consensus, OuterConsensus, PayloadWithMetadata},
     data::{
-        vid_commitment, vid_disperse::vid_total_weight, DaProposal2, EpochNumber, PackedBundle,
-        ViewNumber,
+        DaProposal2, EpochNumber, PackedBundle, ViewNumber, vid_commitment,
+        vid_disperse::vid_total_weight,
     },
     epoch_membership::EpochMembershipCoordinator,
     event::{Event, EventType},
@@ -22,13 +22,13 @@ use hotshot_types::{
     simple_vote::{DaData2, DaVote2},
     storage_metrics::StorageMetricsValue,
     traits::{
+        BlockPayload, EncodeBytes,
         network::ConnectedNetwork,
         node_implementation::{NodeImplementation, NodeType},
         signature_key::SignatureKey,
         storage::Storage,
-        BlockPayload, EncodeBytes,
     },
-    utils::{epoch_from_block_number, is_ge_epoch_root, is_last_block, EpochTransitionIndicator},
+    utils::{EpochTransitionIndicator, epoch_from_block_number, is_ge_epoch_root, is_last_block},
     vote::HasViewNumber,
 };
 use hotshot_utils::anytrace::*;
@@ -39,7 +39,7 @@ use tracing::instrument;
 use crate::{
     events::HotShotEvent,
     helpers::broadcast_event,
-    vote_collection::{handle_vote, VoteCollectorsMap},
+    vote_collection::{VoteCollectorsMap, handle_vote},
 };
 
 /// Tracks state of a DA task
@@ -361,7 +361,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> DaTaskState<TYPES, I> {
                     });
                 }
             },
-            HotShotEvent::DaVoteRecv(ref vote) => {
+            HotShotEvent::DaVoteRecv(vote) => {
                 tracing::debug!("DA vote recv, Main Task {}", vote.view_number());
                 // Check if we are the leader and the vote is from the sender.
                 let view = vote.view_number();

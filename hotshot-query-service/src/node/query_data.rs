@@ -79,13 +79,13 @@ impl ResourceSyncStatus {
         let mut ranges = other.ranges.into_iter();
 
         // Check if the last range of `self` and the first range of `other` can be combined.
-        if let Some(last) = self.ranges.last_mut() {
-            if let Some(next) = ranges.next() {
-                if last.status == next.status && last.end == next.start {
-                    last.end = next.end;
-                } else {
-                    self.ranges.push(next);
-                }
+        if let Some(last) = self.ranges.last_mut()
+            && let Some(next) = ranges.next()
+        {
+            if last.status == next.status && last.end == next.start {
+                last.end = next.end;
+            } else {
+                self.ranges.push(next);
             }
         }
 

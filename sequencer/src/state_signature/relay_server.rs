@@ -14,10 +14,10 @@ use lcv1_relay::{LCV1StateRelayServerDataSource, LCV1StateRelayServerState};
 use lcv2_relay::{LCV2StateRelayServerDataSource, LCV2StateRelayServerState};
 use lcv3_relay::{LCV3StateRelayServerDataSource, LCV3StateRelayServerState};
 use tide_disco::{
+    Api, App, Error as _, StatusCode,
     api::ApiError,
     error::ServerError,
     method::{ReadState, WriteState},
-    Api, App, Error as _, StatusCode,
 };
 use tokio::sync::oneshot;
 use url::Url;
@@ -160,7 +160,7 @@ where
                             return Err(ServerError::catch_all(
                                 StatusCode::BAD_REQUEST,
                                 "Invalid request body".to_string(),
-                            ))
+                            ));
                         },
                     }
                 },

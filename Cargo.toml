@@ -6,6 +6,7 @@ members = [
     "client",
     "contracts/rust/adapter",
     "contracts/rust/deployer",
+    "contracts/rust/deployment-info",
     "contracts/rust/diff-test",
     "contracts/rust/gen-vk-contract",
     "crates/builder",
@@ -53,6 +54,7 @@ default-members = [
     "client",
     "contracts/rust/adapter",
     "contracts/rust/deployer",
+    "contracts/rust/deployment-info",
     "contracts/rust/diff-test",
     "contracts/rust/gen-vk-contract",
     "crates/builder",
@@ -93,7 +95,7 @@ exclude = ["sequencer-sqlite"]
 [workspace.package]
 version = "0.1.0"
 authors = ["Espresso Systems <hello@espressosys.com>"]
-edition = "2021"
+edition = "2024"
 
 [workspace.dependencies]
 alloy = { version = "1.0", features = ["eips", "provider-ws", "json-rpc", "signer-mnemonic", "node-bindings", "getrandom", "signer-ledger" ] }

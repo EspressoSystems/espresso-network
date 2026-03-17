@@ -3,7 +3,7 @@
 //! number
 
 use std::{
-    collections::{btree_map::Entry, BTreeMap},
+    collections::{BTreeMap, btree_map::Entry},
     hash::Hash,
     ops::RangeBounds,
 };
@@ -12,7 +12,7 @@ use hotshot_types::{
     data::{VidCommitment, ViewNumber},
     utils::BuilderCommitment,
 };
-use nonempty_collections::{nem, NEMap};
+use nonempty_collections::{NEMap, nem};
 
 use crate::block::{BlockId, BuilderStateId};
 
@@ -179,7 +179,7 @@ mod tests {
 
     use hotshot_example_types::node_types::TestTypes;
     use hotshot_types::data::ViewNumber;
-    use rand::{distributions::Standard, thread_rng, Rng};
+    use rand::{Rng, distributions::Standard, thread_rng};
     use tracing_test::traced_test;
 
     use super::*;
@@ -257,10 +257,12 @@ mod tests {
         assert_eq!(pruned_map.len() as u64, cutoff * states_per_view);
         assert_eq!(map.len() as u64, (view_count - cutoff) * states_per_view);
 
-        assert!(pruned_map
-            .bucket(&ViewNumber::new(cutoff - 1))
-            .next()
-            .is_some());
+        assert!(
+            pruned_map
+                .bucket(&ViewNumber::new(cutoff - 1))
+                .next()
+                .is_some()
+        );
         assert!(map.bucket(&ViewNumber::new(cutoff)).next().is_some());
 
         assert!(pruned_map.bucket(&ViewNumber::new(cutoff)).next().is_none());

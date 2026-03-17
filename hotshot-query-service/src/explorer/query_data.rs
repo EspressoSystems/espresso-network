@@ -27,12 +27,12 @@ use super::{
     traits::{ExplorerHeader, ExplorerTransaction},
 };
 use crate::{
+    Header, Payload, Resolvable, Transaction,
     availability::{
         BlockQueryData, NamespaceId, QueryableHeader, QueryablePayload, TransactionHash,
     },
     node::BlockHash,
     types::HeightIndexed,
-    Header, Payload, Resolvable, Transaction,
 };
 
 /// BlockIdentifier is an enum that represents multiple ways of referring to

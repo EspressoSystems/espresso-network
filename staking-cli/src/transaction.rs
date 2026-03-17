@@ -11,19 +11,19 @@ use alloy::{
     rpc::types::{TransactionInput, TransactionRequest},
     sol_types::SolCall,
 };
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use hotshot_contract_adapter::{
     evm::DecodeRevert,
     sol_types::{
         EdOnBN254PointSol,
-        EspToken::{approveCall, transferCall, EspTokenErrors},
+        EspToken::{EspTokenErrors, approveCall, transferCall},
         G1PointSol, G2PointSol,
-        RewardClaim::{claimRewardsCall, RewardClaimErrors},
+        RewardClaim::{RewardClaimErrors, claimRewardsCall},
         StakeTableV2::{
-            claimValidatorExitCall, claimWithdrawalCall, delegateCall, deregisterValidatorCall,
-            registerValidatorCall, registerValidatorV2Call, undelegateCall, updateCommissionCall,
-            updateConsensusKeysCall, updateConsensusKeysV2Call, updateMetadataUriCall,
-            StakeTableV2Errors,
+            StakeTableV2Errors, claimValidatorExitCall, claimWithdrawalCall, delegateCall,
+            deregisterValidatorCall, registerValidatorCall, registerValidatorV2Call,
+            undelegateCall, updateCommissionCall, updateConsensusKeysCall,
+            updateConsensusKeysV2Call, updateMetadataUriCall,
         },
     },
     stake_table::{StakeTableContractVersion, StateSignatureSol},

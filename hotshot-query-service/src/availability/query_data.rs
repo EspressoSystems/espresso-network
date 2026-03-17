@@ -17,20 +17,19 @@ use hotshot_types::{
     data::{Leaf, Leaf2, VidCommitment, VidCommon, VidShare},
     simple_certificate::QuorumCertificate2,
     traits::{
-        self,
+        self, EncodeBytes,
         block_contents::{BlockHeader, GENESIS_VID_NUM_STORAGE_NODES},
         node_implementation::NodeType,
-        EncodeBytes,
     },
-    vid::advz::{advz_scheme, ADVZCommitment, ADVZCommon},
+    vid::advz::{ADVZCommitment, ADVZCommon, advz_scheme},
 };
 use jf_advz::VidScheme;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use snafu::{ensure, Snafu};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use snafu::{Snafu, ensure};
 use vbs::version::Version;
 use versions::Upgrade;
 
-use crate::{types::HeightIndexed, Header, Metadata, Payload, QuorumCertificate, Transaction};
+use crate::{Header, Metadata, Payload, QuorumCertificate, Transaction, types::HeightIndexed};
 
 pub type LeafHash<Types> = Commitment<Leaf2<Types>>;
 pub type LeafHashLegacy<Types> = Commitment<Leaf<Types>>;

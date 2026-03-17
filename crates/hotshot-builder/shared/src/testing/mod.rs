@@ -5,7 +5,7 @@ use hotshot_example_types::{
     node_types::{MemoryImpl, TestTypes},
 };
 use hotshot_testing::{block_builder::TestBuilderImplementation, test_builder::TestDescription};
-use rand::{thread_rng, Rng};
+use rand::{Rng, thread_rng};
 use serde::{Deserialize, Serialize};
 use validation::BuilderValidationConfig;
 
