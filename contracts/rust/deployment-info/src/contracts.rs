@@ -6,13 +6,13 @@ use alloy::{
     providers::Provider,
     sol,
 };
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::{
-    addresses::{DeploymentAddresses, KnownAddresses},
     Network,
+    addresses::{DeploymentAddresses, KnownAddresses},
 };
 
 sol! {

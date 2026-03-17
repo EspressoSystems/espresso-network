@@ -4,7 +4,7 @@ use std::{
 };
 
 use alloy::primitives::Address;
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 
 use crate::{
     contracts::{
