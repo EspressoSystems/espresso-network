@@ -294,7 +294,7 @@ struct ValidatorParticipation<TYPES: NodeType> {
     current_epoch_participation: ValidatorParticipationMap<TYPES>,
 
     /// Last epoch participation by key maps key -> (num leader, num times proposed)
-    previous_epoch_participation: BTreeMap<TYPES::Epoch, ValidatorParticipationMap<TYPES>>,
+    previous_epoch_participation: BTreeMap<EpochNumber, ValidatorParticipationMap<TYPES>>,
 }
 
 impl<TYPES: NodeType> ValidatorParticipation<TYPES> {
@@ -334,7 +334,7 @@ impl<TYPES: NodeType> ValidatorParticipation<TYPES> {
 
         self.previous_epoch_participation =
             self.previous_epoch_participation
-                .split_off(&TYPES::Epoch::new(
+                .split_off(&EpochNumber::new(
                     self.epoch.saturating_sub(EPOCH_PARTICIPATION_HISTORY),
                 ));
 
@@ -357,7 +357,7 @@ impl<TYPES: NodeType> ValidatorParticipation<TYPES> {
             })
             .collect()
     }
-    fn proposal_participation(&self, epoch: TYPES::Epoch) -> HashMap<TYPES::SignatureKey, f64> {
+    fn proposal_participation(&self, epoch: EpochNumber) -> HashMap<TYPES::SignatureKey, f64> {
         let tracked_participation = if epoch == self.epoch {
             self.current_epoch_participation.clone()
         } else {
@@ -382,7 +382,7 @@ impl<TYPES: NodeType> ValidatorParticipation<TYPES> {
             .collect()
     }
 
-    fn current_epoch(&self) -> TYPES::Epoch {
+    fn current_epoch(&self) -> EpochNumber {
         self.epoch
     }
 }
@@ -414,7 +414,7 @@ struct VoteParticipation<TYPES: NodeType> {
         HashMap<<TYPES::SignatureKey as SignatureKey>::VerificationKeyType, u64>,
 
     /// Last epoch participation by key maps key -> num times voted
-    previous_epoch_participation: BTreeMap<Option<TYPES::Epoch>, VoteParticipationMap<TYPES>>,
+    previous_epoch_participation: BTreeMap<Option<EpochNumber>, VoteParticipationMap<TYPES>>,
 }
 
 impl<TYPES: NodeType> VoteParticipation<TYPES> {
@@ -515,7 +515,7 @@ impl<TYPES: NodeType> VoteParticipation<TYPES> {
         self.previous_epoch_participation = self.previous_epoch_participation.split_off(
             &self
                 .epoch
-                .map(|e| TYPES::Epoch::new(e.saturating_sub(EPOCH_PARTICIPATION_HISTORY))),
+                .map(|e| EpochNumber::new(e.saturating_sub(EPOCH_PARTICIPATION_HISTORY))),
         );
 
         self.epoch = epoch;
@@ -556,7 +556,7 @@ impl<TYPES: NodeType> VoteParticipation<TYPES> {
     }
     fn vote_participation(
         &self,
-        epoch: Option<TYPES::Epoch>,
+        epoch: Option<EpochNumber>,
     ) -> HashMap<<TYPES::SignatureKey as SignatureKey>::VerificationKeyType, f64> {
         let tracked_participation = if epoch == self.epoch {
             (
@@ -590,7 +590,7 @@ impl<TYPES: NodeType> VoteParticipation<TYPES> {
         }
     }
 
-    fn current_epoch(&self) -> Option<TYPES::Epoch> {
+    fn current_epoch(&self) -> Option<EpochNumber> {
         self.epoch
     }
 }
@@ -1007,12 +1007,12 @@ impl<TYPES: NodeType> Consensus<TYPES> {
     }
 
     /// Get the proposal participation for a given epoch
-    pub fn proposal_participation(&self, epoch: TYPES::Epoch) -> HashMap<TYPES::SignatureKey, f64> {
+    pub fn proposal_participation(&self, epoch: EpochNumber) -> HashMap<TYPES::SignatureKey, f64> {
         self.validator_participation.proposal_participation(epoch)
     }
 
     /// Get the current proposal participation epoch
-    pub fn current_proposal_participation_epoch(&self) -> TYPES::Epoch {
+    pub fn current_proposal_participation_epoch(&self) -> EpochNumber {
         self.validator_participation.current_epoch()
     }
 
@@ -1042,13 +1042,13 @@ impl<TYPES: NodeType> Consensus<TYPES> {
     /// Get the previous vote participation
     pub fn vote_participation(
         &self,
-        epoch: Option<TYPES::Epoch>,
+        epoch: Option<EpochNumber>,
     ) -> HashMap<<TYPES::SignatureKey as SignatureKey>::VerificationKeyType, f64> {
         self.vote_participation.vote_participation(epoch)
     }
 
     /// Get the current vote participation epoch
-    pub fn current_vote_participation_epoch(&self) -> Option<TYPES::Epoch> {
+    pub fn current_vote_participation_epoch(&self) -> Option<EpochNumber> {
         self.vote_participation.current_epoch()
     }
 
