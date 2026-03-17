@@ -452,7 +452,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TestDescription<TYPES, I> {
                 num_nodes_with_stake.try_into().unwrap(),
                 epoch_height,
                 epoch_start_block,
-                upgrade,
             ),
             upgrade,
             // The first 14 (i.e., 20 - f) nodes are in the DA committee and we may shutdown the
@@ -498,7 +497,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TestDescription<TYPES, I> {
                 self.test_config.num_bootstrap,
                 self.test_config.epoch_height,
                 self.test_config.epoch_start_block,
-                upgrade,
             ),
             upgrade,
             ..self
@@ -533,7 +531,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TestDescription<TYPES, I> {
                 num_nodes_with_stake.try_into().unwrap(),
                 epoch_height,
                 epoch_start_block,
-                upgrade,
             ),
             upgrade,
             timing_data: TimingData::default(),
