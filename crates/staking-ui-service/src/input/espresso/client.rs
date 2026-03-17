@@ -1,4 +1,4 @@
-use std::{str::FromStr, time::Duration};
+use std::{cmp::min, str::FromStr, time::Duration};
 
 use bigdecimal::{BigDecimal, ToPrimitive};
 use bitvec::vec::BitVec;
@@ -13,9 +13,7 @@ use futures::{
 };
 use hotshot_query_service::{availability::LeafQueryData, types::HeightIndexed};
 use hotshot_types::utils::{epoch_from_block_number, root_block_in_epoch};
-use reqwest::StatusCode;
 use surf_disco::{Client, Url};
-use tide_disco::Error as _;
 use tokio::time::{sleep, timeout};
 use tracing::instrument;
 use vbs::version::StaticVersion;
@@ -62,6 +60,25 @@ pub struct QueryServiceOptions {
     )]
     pub polling_interval: Option<Duration>,
 
+    /// Interval between polling Espresso for old blocks when trying to catch up.
+    ///
+    /// If not set, defaults to `polling-interval`.
+    #[clap(
+        long = "espresso-catchup-polling-interval",
+        env = "ESPRESSO_STAKING_SERVICE_ESPRESSO_CATCHUP_POLLING_INTERVAL",
+        value_parser = parse_duration,
+        requires = "polling_interval",
+    )]
+    pub catchup_polling_interval: Option<Duration>,
+
+    /// Maximum number of leaves to fetch in a single request when polling and catching up.
+    #[clap(
+        long = "espresso-catchup-polling-batch-size",
+        env = "ESPRESSO_STAKING_SERVICE_ESPRESSO_CATCHUP_POLLING_BATCH_SIZE",
+        default_value = "30"
+    )]
+    pub catchup_polling_batch_size: usize,
+
     /// URL for an Espresso query service.
     #[clap(long = "espresso-url", env = "ESPRESSO_STAKING_SERVICE_ESPRESSO_URL")]
     pub url: Option<Url>,
@@ -87,6 +104,8 @@ pub struct QueryServiceClient {
     epoch_start_block: u64,
     epoch_height: u64,
     polling_interval: Option<Duration>,
+    catchup_polling_interval: Option<Duration>,
+    catchup_polling_batch_size: usize,
     stream_timeout: Duration,
     initial_token_supply: ESPTokenAmount,
 }
@@ -113,47 +132,84 @@ impl QueryServiceClient {
             epoch_height: config.hotshot_config().blocks_per_epoch(),
             epoch_start_block: config.hotshot_config().epoch_start_block(),
             polling_interval: opt.polling_interval,
+            catchup_polling_interval: opt.catchup_polling_interval,
+            catchup_polling_batch_size: opt.catchup_polling_batch_size,
             stream_timeout: opt.stream_timeout,
             initial_token_supply,
         })
     }
 
     /// An HTTP polling-based leaf stream.
-    fn poll_leaves(&self, from: u64, interval: Duration) -> BoxStream<'_, (Leaf2, BitVec)> {
+    fn poll_leaves(
+        &self,
+        from: u64,
+        batch_size: usize,
+        interval: Duration,
+        catchup_interval: Duration,
+    ) -> BoxStream<'_, (Leaf2, BitVec)> {
         stream::unfold((self.clone(), from), move |(client, from)| async move {
-            // Try to get the next leaf until we succeed.
-            let leaf = loop {
-                let leaf = match client
+            // Try to get the next available leaves until we succeed.
+            let (leaves, to) = loop {
+                // Get the block height to see if the next leaf is available, or even if there are
+                // multiple leaves available.
+                let block_height: u64 = match client.inner.get("node/block-height").send().await {
+                    Err(err) => {
+                        tracing::error!("error getting block height: {err:#}");
+
+                        // Something is wrong; sleep the shorter interval and then retry.
+                        sleep(catchup_interval).await;
+                        continue;
+                    }
+                    Ok(block_height) => block_height,
+                };
+                if from >= block_height {
+                    tracing::debug!(from, block_height, "leaf is not yet available");
+                    sleep(interval).await;
+                    continue;
+                }
+                let to = min(from + (batch_size as u64), block_height);
+                tracing::debug!(from, to, "fetching leaves");
+                let leaves: Vec<LeafQueryData<SeqTypes>> = match client
                     .inner
-                    .get(&format!("availability/leaf/{from}"))
+                    .get(&format!("availability/leaf/{from}/{to}"))
                     .send()
                     .await
                 {
-                    Err(err) if err.status() == StatusCode::NOT_FOUND => {
-                        tracing::debug!(from, "leaf is not yet available: {err:#}");
-                        None
-                    }
                     Err(err) => {
                         tracing::error!(from, "unexpected error from query service: {err:#}");
-                        None
+                        // Something is wrong; sleep the shorter interval and then retry.
+                        sleep(catchup_interval).await;
+                        continue;
                     }
-                    Ok(leaf) => Self::extract_leaf_data(leaf).ok(),
+                    Ok(leaves) => leaves,
                 };
 
-                // After making a request, regardless of whether we actually got the leaf or not,
-                // wait for the polling interval to pass before retrying or trying for the next
-                // leaf.
-                sleep(interval).await;
+                let leaves: Vec<_> = match leaves.into_iter().map(Self::extract_leaf_data).collect()
+                {
+                    Ok(leaves) => leaves,
+                    Err(err) => {
+                        tracing::error!("failed to parse leaves, will retry: {err:#}");
+                        sleep(catchup_interval).await;
+                        continue;
+                    }
+                };
 
-                if let Some(leaf) = leaf {
-                    // If we successfully got the leaf, yield it via the output stream.
-                    break leaf;
-                }
+                // Sleep a shorter duration if we expect that there are already more leaves
+                // available.
+                sleep(if to < block_height {
+                    catchup_interval
+                } else {
+                    interval
+                })
+                .await;
+
+                break (leaves, to);
             };
 
-            // Yield the leaf and then move on to the next one.
-            Some((leaf, (client, from + 1)))
+            // Yield the leaves and then move on to the next batch.
+            Some((stream::iter(leaves), (client, to)))
         })
+        .flatten()
         .boxed()
     }
 
@@ -422,7 +478,12 @@ impl EspressoClient for QueryServiceClient {
 
     fn leaves(&self, from: u64) -> impl Send + Unpin + Stream<Item = (Leaf2, BitVec)> {
         if let Some(interval) = self.polling_interval {
-            self.poll_leaves(from, interval)
+            self.poll_leaves(
+                from,
+                self.catchup_polling_batch_size,
+                interval,
+                self.catchup_polling_interval.unwrap_or(interval),
+            )
         } else {
             self.stream_leaves(from)
         }
