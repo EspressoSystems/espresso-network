@@ -13,8 +13,13 @@ ALTER TABLE header ADD COLUMN ns_table VARCHAR;
 UPDATE header SET ns_table = data->'fields'->'ns_table'->>'bytes';
 ALTER TABLE header ALTER COLUMN ns_table SET NOT NULL;
 
--- Index the column pair which will be used to reference the new payload table.
-CREATE INDEX header_payload_hash_ns_table ON header (payload_hash, ns_table);
+-- Index the column pair which will be used to reference the new payload table. This is important
+-- when joining the header table with the payload and vid_common tables.
+CREATE INDEX header_payload_hash_ns_table_idx ON header (payload_hash, ns_table);
+-- Allow queries indexed by height to read the payload index columns from the height index. This
+-- allows us to quickly find all pairs of (payload_hash, ns_table) that are present within a given
+-- height range, which is important when pruning.
+CREATE INDEX header_height_include_payload_idx ON header (height) INCLUDE (payload_hash, ns_table);
 
 -- Re-index payload data by (hash, ns_table).
 CREATE TABLE payload_temp (
