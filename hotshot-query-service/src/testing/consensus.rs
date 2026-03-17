@@ -44,7 +44,7 @@ use tokio::{
 };
 use tracing::{Instrument, info_span};
 use url::Url;
-use versions::{Upgrade, MIN_SUPPORTED_VERSION};
+use versions::{MIN_SUPPORTED_VERSION, Upgrade};
 
 use super::mocks::{MockMembership, MockNodeImpl, MockTransaction, MockTypes};
 use crate::{

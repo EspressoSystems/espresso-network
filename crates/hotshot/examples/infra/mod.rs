@@ -69,7 +69,7 @@ use hotshot_types::{
 use rand::{SeedableRng, rngs::StdRng};
 use surf_disco::Url;
 use tracing::{debug, error, info, warn};
-use versions::{Upgrade, MIN_SUPPORTED_VERSION};
+use versions::{MIN_SUPPORTED_VERSION, Upgrade};
 
 #[derive(Debug, Clone)]
 /// Arguments passed to the orchestrator

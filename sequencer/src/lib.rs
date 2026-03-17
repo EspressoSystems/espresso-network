@@ -803,7 +803,7 @@ pub mod testing {
     use test_utils::reserve_tcp_port;
     use tokio::spawn;
     use vbs::version::{StaticVersionType, Version};
-    use versions::{EPOCH_VERSION, VERSION_0_1};
+    use versions::EPOCH_VERSION;
 
     use super::*;
     use crate::{
