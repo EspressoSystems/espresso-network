@@ -5,7 +5,7 @@ mod output;
 use std::{fmt, path::PathBuf};
 
 use addresses::DeploymentAddresses;
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::{Parser, ValueEnum};
 use contracts::CollectedDeployment;
 use output::update_readme_from_deployment_files;
@@ -194,18 +194,18 @@ mod tests {
         providers::{Provider, ProviderBuilder, WalletProvider},
     };
     use espresso_contract_deployer::{
-        builder::DeployerArgsBuilder, network_config::light_client_genesis_from_stake_table,
-        Contract, Contracts,
+        Contract, Contracts, builder::DeployerArgsBuilder,
+        network_config::light_client_genesis_from_stake_table,
     };
     use hotshot_state_prover::v3::mock_ledger::STAKE_TABLE_CAPACITY_FOR_TEST;
 
     use crate::{
+        Network,
         addresses::{DeploymentAddresses, KnownAddresses},
         contracts::{
             AccessControlDeployment, CollectedDeployment, ContractType, DeploymentInfo,
             DeploymentQuerier, OwnableDeployment, TimelockDeployment,
         },
-        Network,
     };
 
     #[test]
@@ -214,10 +214,12 @@ mod tests {
         let addr = Address::repeat_byte(0x42);
         let result = known.resolve(addr);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("not a known address"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("not a known address")
+        );
     }
 
     #[test]
