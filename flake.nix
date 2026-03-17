@@ -185,7 +185,7 @@
               enable = true;
               description = "Enforce markdown formatting";
               entry = "prettier -w";
-              types_or = [ "markdown" "ts" ];
+              types_or = [ "markdown" ];
               pass_filenames = true;
             };
             spell-checking = {
@@ -253,7 +253,6 @@
             solhint
             (python3.withPackages (ps: with ps; [ black ]))
             libusb1
-            yarn
             mdbook
             bc
 
@@ -270,9 +269,6 @@
             # Add the local scripts to the PATH
             export PATH="$my_pwd/scripts:$PATH"
 
-            # Add node binaries to PATH for development
-            export PATH="$my_pwd/node_modules/.bin:$PATH"
-
             # Prevent cargo aliases from using programs in `~/.cargo` to avoid conflicts
             # with rustup installations.
             export CARGO_HOME=$HOME/.cargo-nix
@@ -282,18 +278,18 @@
           RUST_SRC_PATH = "${stableToolchain}/lib/rustlib/src/rust/library";
           FOUNDRY_SOLC = "${solc}/bin/solc";
         });
-        devShells.dockerShell = pkgs.mkShell {
-          inputsFrom = [ self.devShells.${system}.default ];
-          packages = [ pkgs.docker ];
-          shellHook = lib.concatStringsSep "\n" [ 
-            self.devShells.${system}.default
+      devShells.dockerShell = pkgs.mkShell {
+        inputsFrom = [ self.devShells.${system}.default ];
+        packages = [ pkgs.docker ];
+        shellHook = lib.concatStringsSep "\n" [
+          self.devShells.${system}.default
 
-            ''
+          ''
             # Required for demo-native to run with docker-rootless
             export DOCKER_HOST=unix://$XDG_RUNTIME_DIR/docker.sock
-            ''
-          ];
-        };
+          ''
+        ];
+      };
       devShells.crossShell =
         crossShell { config = "x86_64-unknown-linux-musl"; };
       devShells.armCrossShell =

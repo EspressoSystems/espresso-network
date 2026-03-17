@@ -4430,6 +4430,7 @@ dependencies = [
  "hotshot-types",
  "rand 0.8.5",
  "sequencer-utils",
+ "serde",
  "serde_json",
  "surf-disco",
  "test-log",

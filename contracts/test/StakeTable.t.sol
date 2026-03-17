@@ -1177,8 +1177,8 @@ contract StakeTableUpgradeV2Test is Test {
 
     function test_StorageLayout_IsCompatible() public {
         string[] memory cmds = new string[](4);
-        cmds[0] = "node";
-        cmds[1] = "contracts/test/script/compare-storage-layout.js";
+        cmds[0] = "python3";
+        cmds[1] = "contracts/test/script/compare-storage-layout.py";
         cmds[2] = "StakeTable";
         cmds[3] = "StakeTableV2Test";
 
@@ -1190,8 +1190,8 @@ contract StakeTableUpgradeV2Test is Test {
 
     function test_StorageLayoutIsCompatibleWithStakeTableV2() public {
         string[] memory cmds = new string[](4);
-        cmds[0] = "node";
-        cmds[1] = "contracts/test/script/compare-storage-layout.js";
+        cmds[0] = "python3";
+        cmds[1] = "contracts/test/script/compare-storage-layout.py";
         cmds[2] = "StakeTable";
         cmds[3] = "StakeTableV2";
 
@@ -1203,8 +1203,8 @@ contract StakeTableUpgradeV2Test is Test {
 
     function test_StorageLayout_IsIncompatibleIfFieldIsMissing() public {
         string[] memory cmds = new string[](4);
-        cmds[0] = "node";
-        cmds[1] = "contracts/test/script/compare-storage-layout.js";
+        cmds[0] = "python3";
+        cmds[1] = "contracts/test/script/compare-storage-layout.py";
         cmds[2] = "StakeTable";
         cmds[3] = "StakeTableMissingFieldTest";
 
@@ -1216,8 +1216,8 @@ contract StakeTableUpgradeV2Test is Test {
 
     function test_StorageLayout_IsIncompatibleIfFieldsAreReordered() public {
         string[] memory cmds = new string[](4);
-        cmds[0] = "node";
-        cmds[1] = "contracts/test/script/compare-storage-layout.js";
+        cmds[0] = "python3";
+        cmds[1] = "contracts/test/script/compare-storage-layout.py";
         cmds[2] = "StakeTable";
         cmds[3] = "StakeTableFieldsReorderedTest";
 
@@ -1229,8 +1229,8 @@ contract StakeTableUpgradeV2Test is Test {
 
     function test_StorageLayout_IsIncompatibleBetweenDiffContracts() public {
         string[] memory cmds = new string[](4);
-        cmds[0] = "node";
-        cmds[1] = "contracts/test/script/compare-storage-layout.js";
+        cmds[0] = "python3";
+        cmds[1] = "contracts/test/script/compare-storage-layout.py";
         cmds[2] = "StakeTable";
         cmds[3] = "LightClient";
 
@@ -2692,8 +2692,8 @@ contract StakeTableV2PausableTest is StakeTableUpgradeV2Test {
 
     function test_StorageLayout_IsCompatible_V1V2() public {
         string[] memory cmds = new string[](4);
-        cmds[0] = "node";
-        cmds[1] = "contracts/test/script/compare-storage-layout.js";
+        cmds[0] = "python3";
+        cmds[1] = "contracts/test/script/compare-storage-layout.py";
         cmds[2] = "StakeTable";
         cmds[3] = "StakeTableV2";
 
@@ -2705,8 +2705,8 @@ contract StakeTableV2PausableTest is StakeTableUpgradeV2Test {
 
     function test_StorageLayout_IsIncompatibleIfFieldIsMissingV2() public {
         string[] memory cmds = new string[](4);
-        cmds[0] = "node";
-        cmds[1] = "contracts/test/script/compare-storage-layout.js";
+        cmds[0] = "python3";
+        cmds[1] = "contracts/test/script/compare-storage-layout.py";
         cmds[2] = "StakeTableV2";
         cmds[3] = "StakeTableMissingFieldTest";
 
@@ -2718,8 +2718,8 @@ contract StakeTableV2PausableTest is StakeTableUpgradeV2Test {
 
     function test_StorageLayout_IsIncompatibleIfFieldsAreReorderedV2() public {
         string[] memory cmds = new string[](4);
-        cmds[0] = "node";
-        cmds[1] = "contracts/test/script/compare-storage-layout.js";
+        cmds[0] = "python3";
+        cmds[1] = "contracts/test/script/compare-storage-layout.py";
         cmds[2] = "StakeTableV2";
         cmds[3] = "StakeTableFieldsReorderedTest";
 
@@ -2731,8 +2731,8 @@ contract StakeTableV2PausableTest is StakeTableUpgradeV2Test {
 
     function test_StorageLayout_IsIncompatibleBetweenDiffContractsV2() public {
         string[] memory cmds = new string[](4);
-        cmds[0] = "node";
-        cmds[1] = "contracts/test/script/compare-storage-layout.js";
+        cmds[0] = "python3";
+        cmds[1] = "contracts/test/script/compare-storage-layout.py";
         cmds[2] = "StakeTableV2";
         cmds[3] = "LightClient";
 
