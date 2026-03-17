@@ -69,7 +69,7 @@ use hotshot_types::{
 use rand::{SeedableRng, rngs::StdRng};
 use surf_disco::Url;
 use tracing::{debug, error, info, warn};
-use versions::{Upgrade, VERSION_0_1};
+use versions::{Upgrade, MIN_SUPPORTED_VERSION};
 
 #[derive(Debug, Clone)]
 /// Arguments passed to the orchestrator
@@ -363,7 +363,7 @@ pub trait RunDa<
     /// get the anchored view
     /// Note: sequencing leaf does not have state, so does not return state
     async fn initialize_state_and_hotshot(&self) -> SystemContextHandle<TYPES, NODE> {
-        let upgrade = Upgrade::trivial(VERSION_0_1);
+        let upgrade = Upgrade::trivial(MIN_SUPPORTED_VERSION);
 
         let initializer = hotshot::HotShotInitializer::<TYPES>::from_genesis(
             TestInstanceState::default(),

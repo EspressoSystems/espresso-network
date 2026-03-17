@@ -15,6 +15,7 @@ pub const EPOCH_VERSION: Version = version(0, 3);
 pub const DRB_AND_HEADER_UPGRADE_VERSION: Version = version(0, 4);
 pub const DA_UPGRADE_VERSION: Version = version(0, 5);
 pub const VID2_UPGRADE_VERSION: Version = version(0, 6);
+pub const MIN_SUPPORTED_VERSION: Version = DRB_AND_HEADER_UPGRADE_VERSION;
 pub const MAX_SUPPORTED_VERSION: Version = DA_UPGRADE_VERSION;
 
 // Known upgrade hashes:
