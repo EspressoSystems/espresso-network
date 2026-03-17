@@ -7,16 +7,16 @@ use std::{
 };
 
 use alloy::primitives::{Address, U256};
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{Context, Result, bail, ensure};
 use async_lock::Mutex;
 use bitvec::vec::BitVec;
 use committable::{Commitment, Committable};
 use derivative::Derivative;
 use espresso_types::{
+    BLOCK_MERKLE_TREE_HEIGHT, BlockMerkleTree, EpochVersion, Leaf2, NamespaceId, NodeState,
+    NsProof, Payload, PrivKey, PubKey, RegisteredValidatorMap, SeqTypes, StakeTableHash,
+    StakeTableState, Transaction,
     v0_3::{AuthenticatedValidator, RegisteredValidator, StakeTableEvent},
-    BlockMerkleTree, EpochVersion, Leaf2, NamespaceId, NodeState, NsProof, Payload, PrivKey,
-    PubKey, RegisteredValidatorMap, SeqTypes, StakeTableHash, StakeTableState, Transaction,
-    BLOCK_MERKLE_TREE_HEIGHT,
 };
 use hotshot_contract_adapter::sol_types::StakeTableV2::{Delegated, ValidatorRegistered};
 use hotshot_query_service::{
@@ -25,14 +25,14 @@ use hotshot_query_service::{
 };
 use hotshot_types::{
     data::{
-        vid_commitment, EpochNumber, QuorumProposal2, QuorumProposalWrapper, VidCommitment,
-        VidCommon, ViewNumber,
+        EpochNumber, QuorumProposal2, QuorumProposalWrapper, VidCommitment, VidCommon, ViewNumber,
+        vid_commitment,
     },
     message::UpgradeLock,
     signature_key::SchnorrPubKey,
     simple_certificate::{NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate},
     simple_vote::{NextEpochQuorumData2, QuorumData2, UpgradeProposalData, VersionedVoteData},
-    stake_table::{supermajority_threshold, StakeTableEntry},
+    stake_table::{StakeTableEntry, supermajority_threshold},
     traits::{
         block_contents::EncodeBytes,
         signature_key::{SignatureKey, StateSignatureKey},
@@ -42,11 +42,11 @@ use hotshot_types::{
     vote::Certificate as _,
 };
 use jf_merkle_tree_compat::{
-    prelude::SHA3MerkleTree, AppendableMerkleTreeScheme, MerkleTreeScheme,
+    AppendableMerkleTreeScheme, MerkleTreeScheme, prelude::SHA3MerkleTree,
 };
 use rand::RngCore;
 use vbs::version::{StaticVersionType, Version};
-use versions::{version, Upgrade, DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, FEE_VERSION};
+use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, FEE_VERSION, Upgrade, version};
 
 use crate::{
     client::Client,

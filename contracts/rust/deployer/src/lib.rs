@@ -6,21 +6,21 @@ use alloy::{
     hex::{FromHex, ToHexExt},
     json_abi::Function,
     network::{Ethereum, EthereumWallet, TransactionBuilder},
-    primitives::{Address, Bytes, B256, U256},
+    primitives::{Address, B256, Bytes, U256},
     providers::{
+        Provider, ProviderBuilder, RootProvider,
         fillers::{FillProvider, JoinFill, WalletFiller},
         utils::JoinedRecommendedFillers,
-        Provider, ProviderBuilder, RootProvider,
     },
     rpc::{client::RpcClient, types::TransactionReceipt},
     signers::{
         ledger::LedgerSigner,
-        local::{coins_bip39::English, MnemonicBuilder, PrivateKeySigner},
+        local::{MnemonicBuilder, PrivateKeySigner, coins_bip39::English},
     },
     transports::http::reqwest::Url,
 };
-use anyhow::{anyhow, Context, Result};
-use clap::{builder::OsStr, Parser, ValueEnum};
+use anyhow::{Context, Result, anyhow};
+use clap::{Parser, ValueEnum, builder::OsStr};
 use derive_more::Display;
 use espresso_types::{v0_1::L1Client, v0_3::Fetcher};
 use hotshot_contract_adapter::sol_types::*;
@@ -480,7 +480,7 @@ pub(crate) async fn deploy_light_client_contract(
             _ => {
                 return Err(anyhow!(
                     "more than one lib placeholder found, consider using a different value"
-                ))
+                ));
             },
         }
     };
@@ -643,7 +643,7 @@ pub async fn upgrade_light_client_v2(
                     _ => {
                         return Err(anyhow!(
                             "more than one lib placeholder found, consider using a different value"
-                        ))
+                        ));
                     },
                 }
             };
@@ -812,7 +812,7 @@ pub async fn upgrade_light_client_v3(
                     _ => {
                         return Err(anyhow!(
                             "more than one lib placeholder found, consider using a different value"
-                        ))
+                        ));
                     },
                 }
             };
@@ -1815,7 +1815,7 @@ mod tests {
     use alloy::{
         node_bindings::{Anvil, AnvilInstance},
         primitives::utils::parse_ether,
-        providers::{ext::AnvilApi, layers::AnvilProvider, ProviderBuilder},
+        providers::{ProviderBuilder, ext::AnvilApi, layers::AnvilProvider},
         sol_types::SolValue,
     };
     use espresso_types::testing::TestValidator;
@@ -1823,20 +1823,20 @@ mod tests {
 
     use super::*;
     use crate::{
+        Contracts,
         impersonate_filler::ImpersonateFiller,
         proposals::{
             multisig::{
+                LightClientV2UpgradeParams, StakeTableV2UpgradeParams, TransferOwnershipParams,
                 transfer_ownership_from_multisig_to_timelock, upgrade_esp_token_v2_multisig_owner,
                 upgrade_fee_contract_multisig_owner, upgrade_light_client_v2_multisig_owner,
-                upgrade_stake_table_v2_multisig_owner, LightClientV2UpgradeParams,
-                StakeTableV2UpgradeParams, TransferOwnershipParams,
+                upgrade_stake_table_v2_multisig_owner,
             },
             timelock::{
-                derive_timelock_address_from_contract_type, perform_timelock_operation,
                 TimelockOperationParams, TimelockOperationPayload, TimelockOperationType,
+                derive_timelock_address_from_contract_type, perform_timelock_operation,
             },
         },
-        Contracts,
     };
 
     trait ProviderBuilderExt: Sized {
@@ -4093,7 +4093,7 @@ mod tests {
     #[test_log::test(tokio::test)]
     async fn test_derive_timelock_address_from_contracts() -> Result<()> {
         use builder::DeployerArgsBuilder;
-        use proposals::timelock::{get_timelock_for_contract, TimelockContract};
+        use proposals::timelock::{TimelockContract, get_timelock_for_contract};
 
         let (anvil, provider, _l1_client) =
             ProviderBuilder::new().connect_anvil_with_l1_client()?;
@@ -4483,8 +4483,8 @@ mod tests {
     #[test_log::test(tokio::test)]
     async fn test_perform_timelock_operation_unified() -> Result<()> {
         use crate::proposals::timelock::{
-            perform_timelock_operation, TimelockOperationParams, TimelockOperationPayload,
-            TimelockOperationType,
+            TimelockOperationParams, TimelockOperationPayload, TimelockOperationType,
+            perform_timelock_operation,
         };
 
         let provider = ProviderBuilder::new().connect_anvil_with_wallet();

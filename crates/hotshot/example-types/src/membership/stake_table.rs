@@ -1,6 +1,7 @@
 use std::{collections::BTreeMap, fmt::Debug, ops::Bound};
 
 use hotshot_types::{
+    PeerConfig,
     drb::DrbResult,
     traits::{
         node_implementation::NodeType,
@@ -9,7 +10,6 @@ use hotshot_types::{
             StateSignatureKey,
         },
     },
-    PeerConfig,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
@@ -55,9 +55,9 @@ pub struct TestDaCommittees<
 >(BTreeMap<u64, Vec<TestStakeTableEntry<PubKey, StatePubKey>>>);
 
 impl<
-        PubKey: SignatureKey,
-        StatePubKey: StateSignatureKey + LCV1StateSignatureKey + LCV2StateSignatureKey + LCV3StateSignatureKey,
-    > TestDaCommittees<PubKey, StatePubKey>
+    PubKey: SignatureKey,
+    StatePubKey: StateSignatureKey + LCV1StateSignatureKey + LCV2StateSignatureKey + LCV3StateSignatureKey,
+> TestDaCommittees<PubKey, StatePubKey>
 {
     pub fn new() -> Self {
         Self(BTreeMap::new())
@@ -86,9 +86,9 @@ impl<
 }
 
 impl<
-        PubKey: SignatureKey,
-        StatePubKey: StateSignatureKey + LCV1StateSignatureKey + LCV2StateSignatureKey + LCV3StateSignatureKey,
-    > Default for TestDaCommittees<PubKey, StatePubKey>
+    PubKey: SignatureKey,
+    StatePubKey: StateSignatureKey + LCV1StateSignatureKey + LCV2StateSignatureKey + LCV3StateSignatureKey,
+> Default for TestDaCommittees<PubKey, StatePubKey>
 {
     fn default() -> Self {
         Self::new()

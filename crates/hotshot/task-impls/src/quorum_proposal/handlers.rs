@@ -28,11 +28,11 @@ use hotshot_types::{
         UpgradeCertificate,
     },
     traits::{
+        BlockPayload,
         block_contents::BlockHeader,
         node_implementation::{NodeImplementation, NodeType},
         signature_key::SignatureKey,
         storage::Storage,
-        BlockPayload,
     },
     utils::{
         epoch_from_block_number, is_epoch_root, is_epoch_transition, is_last_block,
@@ -487,10 +487,10 @@ impl<TYPES: NodeType> ProposalDependencyHandle<TYPES> {
             .upgrade_certificate()
             .or(formed_upgrade_certificate);
 
-        if let Some(cert) = upgrade_certificate.clone() {
-            if cert.is_relevant(self.view_number).await.is_err() {
-                upgrade_certificate = None;
-            }
+        if let Some(cert) = upgrade_certificate.clone()
+            && cert.is_relevant(self.view_number).await.is_err()
+        {
+            upgrade_certificate = None;
         }
 
         let proposal_certificate = view_change_evidence

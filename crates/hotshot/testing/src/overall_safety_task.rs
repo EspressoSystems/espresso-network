@@ -54,9 +54,7 @@ pub enum OverallSafetyTaskErr {
         expected_failed_views: Vec<ViewNumber>,
         actual_failed_views: HashSet<ViewNumber>,
     },
-    #[error(
-        "Not enough round results: results_count: {results_count}, views_count: {views_count}"
-    )]
+    #[error("Not enough round results: results_count: {results_count}, views_count: {views_count}")]
     NotEnoughRoundResults {
         results_count: usize,
         views_count: usize,

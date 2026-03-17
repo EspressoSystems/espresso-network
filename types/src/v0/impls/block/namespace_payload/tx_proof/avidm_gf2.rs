@@ -4,9 +4,9 @@ use hotshot_types::{
 };
 
 use crate::{
-    v0_6::{AvidmGf2NsProof, AvidmGf2TxProof},
     Index, NsTable, NumTxs, NumTxsRange, Payload, Transaction, TxIndex, TxPayloadRange,
     TxTableEntriesRange,
+    v0_6::{AvidmGf2NsProof, AvidmGf2TxProof},
 };
 
 impl AvidmGf2TxProof {

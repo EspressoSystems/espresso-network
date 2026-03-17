@@ -4,7 +4,7 @@ use std::{ops::Range, vec};
 
 use anyhow::anyhow;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
-use jf_merkle_tree::{hasher::HasherNode, MerkleTreeScheme};
+use jf_merkle_tree::{MerkleTreeScheme, hasher::HasherNode};
 use jf_utils::canonical;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
@@ -311,7 +311,7 @@ impl VidScheme for AvidmGf2Scheme {
 /// Unit tests
 #[cfg(test)]
 pub mod tests {
-    use rand::{seq::SliceRandom, RngCore};
+    use rand::{RngCore, seq::SliceRandom};
 
     use super::AvidmGf2Scheme;
     use crate::VidScheme;
@@ -348,8 +348,10 @@ pub mod tests {
 
                 // verify shares
                 shares.iter().for_each(|share| {
-                    assert!(AvidmGf2Scheme::verify_share(&params, &commit, share)
-                        .is_ok_and(|r| r.is_ok()))
+                    assert!(
+                        AvidmGf2Scheme::verify_share(&params, &commit, share)
+                            .is_ok_and(|r| r.is_ok())
+                    )
                 });
 
                 // test payload recovery on a random subset of shares
@@ -399,8 +401,10 @@ pub mod tests {
 
                 // verify shares
                 shares.iter().for_each(|share| {
-                    assert!(AvidmGf2Scheme::verify_share(&params, &commit, share)
-                        .is_ok_and(|r| r.is_ok()))
+                    assert!(
+                        AvidmGf2Scheme::verify_share(&params, &commit, share)
+                            .is_ok_and(|r| r.is_ok())
+                    )
                 });
 
                 // test payload recovery on a random subset of shares

@@ -14,9 +14,9 @@ use jf_rescue::crhf::VariableLengthRescueCRHF;
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    NodeType, PeerConfig,
     light_client::{CircuitField, StakeTableState, ToFieldsLightClientCompat},
     traits::signature_key::{SignatureKey, StakeTableEntryType},
-    NodeType, PeerConfig,
 };
 
 /// Stake table entry

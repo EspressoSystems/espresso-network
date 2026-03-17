@@ -5,6 +5,7 @@ use anyhow::Context;
 use async_trait::async_trait;
 use committable::Commitment;
 use espresso_types::{
+    FeeAccount, FeeAccountProof, FeeMerkleTree, Leaf2, NodeState, PubKey, Transaction,
     config::PublicNetworkConfig,
     v0::traits::{PersistenceOptions, SequencerPersistence},
     v0_3::{
@@ -13,7 +14,6 @@ use espresso_types::{
         StakeTableEvent,
     },
     v0_4::{RewardAccountProofV2, RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleTreeV2},
-    FeeAccount, FeeAccountProof, FeeMerkleTree, Leaf2, NodeState, PubKey, Transaction,
 };
 use futures::future::{BoxFuture, Future};
 use hotshot::types::BLSPubKey;
@@ -25,22 +25,22 @@ use hotshot_query_service::{
     status::StatusDataSource,
 };
 use hotshot_types::{
+    PeerConfig,
     data::{EpochNumber, VidShare, ViewNumber},
     light_client::LCV3StateSignatureRequestBody,
     simple_certificate::LightClientStateUpdateCertificateV2,
     traits::{network::ConnectedNetwork, node_implementation::NodeType},
-    PeerConfig,
 };
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use tide_disco::Url;
 
 use super::{
-    fs,
+    AccountQueryData, BlocksFrontier, fs,
     options::{Options, Query},
-    sql, AccountQueryData, BlocksFrontier,
+    sql,
 };
-use crate::{persistence, state_cert::StateCertFetchError, SeqTypes, SequencerApiVersion, U256};
+use crate::{SeqTypes, SequencerApiVersion, U256, persistence, state_cert::StateCertFetchError};
 
 pub trait DataSourceOptions: PersistenceOptions {
     type DataSource: SequencerDataSource<Options = Self>;

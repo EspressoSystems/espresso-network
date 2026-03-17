@@ -8,7 +8,7 @@
 
 use std::{collections::BTreeMap, sync::Arc};
 
-use async_broadcast::{broadcast, Receiver, Sender};
+use async_broadcast::{Receiver, Sender, broadcast};
 use async_lock::RwLock;
 use async_trait::async_trait;
 use either::Either;
@@ -30,7 +30,7 @@ use hotshot_types::{
     utils::option_epoch_from_block_number,
     vote::{Certificate, HasViewNumber},
 };
-use hotshot_utils::anytrace::{bail, Result};
+use hotshot_utils::anytrace::{Result, bail};
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, instrument, warn};
 use vbs::version::Version;

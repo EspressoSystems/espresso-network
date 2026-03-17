@@ -6,7 +6,7 @@
 
 use hotshot_example_types::node_types::{
     CliquenetImpl, Libp2pImpl, MemoryImpl, PushCdnImpl, RandomOverlapQuorumFilterConfig,
-    TestTypesRandomizedCommitteeMembers, TEST_VERSIONS,
+    TEST_VERSIONS, TestTypesRandomizedCommitteeMembers,
 };
 use hotshot_macros::cross_tests;
 use hotshot_testing::{block_builder::SimpleBuilderImplementation, test_builder::TestDescription};

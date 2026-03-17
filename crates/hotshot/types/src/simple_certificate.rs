@@ -19,7 +19,8 @@ use hotshot_utils::anytrace::*;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    data::{serialize_signature2, EpochNumber, Leaf2, ViewNumber},
+    PeerConfig,
+    data::{EpochNumber, Leaf2, ViewNumber, serialize_signature2},
     epoch_membership::EpochMembership,
     light_client::{LightClientState, StakeTableState},
     message::UpgradeLock,
@@ -36,7 +37,6 @@ use crate::{
     },
     utils::is_epoch_transition,
     vote::{Certificate, HasViewNumber},
-    PeerConfig,
 };
 
 /// Trait which allows use to inject different threshold calculations into a Certificate type
@@ -321,10 +321,10 @@ impl<TYPES: NodeType, THRESHOLD: Threshold<TYPES>> Certificate<TYPES, DaData2>
 }
 
 impl<
-        TYPES: NodeType,
-        VOTEABLE: Voteable<TYPES> + 'static + QuorumMarker,
-        THRESHOLD: Threshold<TYPES>,
-    > Certificate<TYPES, VOTEABLE> for SimpleCertificate<TYPES, VOTEABLE, THRESHOLD>
+    TYPES: NodeType,
+    VOTEABLE: Voteable<TYPES> + 'static + QuorumMarker,
+    THRESHOLD: Threshold<TYPES>,
+> Certificate<TYPES, VOTEABLE> for SimpleCertificate<TYPES, VOTEABLE, THRESHOLD>
 {
     type Voteable = VOTEABLE;
     type Threshold = THRESHOLD;
@@ -416,11 +416,8 @@ impl<TYPES: NodeType, VOTEABLE: Voteable<TYPES> + 'static, THRESHOLD: Threshold<
     }
 }
 
-impl<
-        TYPES: NodeType,
-        VOTEABLE: Voteable<TYPES> + HasEpoch + 'static,
-        THRESHOLD: Threshold<TYPES>,
-    > HasEpoch for SimpleCertificate<TYPES, VOTEABLE, THRESHOLD>
+impl<TYPES: NodeType, VOTEABLE: Voteable<TYPES> + HasEpoch + 'static, THRESHOLD: Threshold<TYPES>>
+    HasEpoch for SimpleCertificate<TYPES, VOTEABLE, THRESHOLD>
 {
     fn epoch(&self) -> Option<EpochNumber> {
         self.data.epoch()
@@ -458,7 +455,7 @@ impl<TYPES: NodeType> UpgradeCertificate<TYPES> {
         upgrade_lock: &UpgradeLock<TYPES>,
     ) -> Result<()> {
         ensure!(epoch == membership.epoch(), "Epochs don't match!");
-        if let Some(ref cert) = upgrade_certificate {
+        if let Some(cert) = upgrade_certificate {
             let membership_stake_table = membership.stake_table().await;
             let membership_upgrade_threshold = membership.upgrade_threshold().await;
 

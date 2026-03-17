@@ -4,20 +4,19 @@
 
 use std::{marker::PhantomData, sync::Arc};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 use espresso_types::{
-    retain_accounts,
+    NodeState, PubKey, SeqTypes, retain_accounts,
     traits::SequencerPersistence,
     v0_3::{RewardAccountV1, RewardMerkleTreeV1},
     v0_4::{RewardAccountV2, RewardMerkleTreeV2},
-    NodeState, PubKey, SeqTypes,
 };
-use hotshot::{traits::NodeImplementation, SystemContext};
+use hotshot::{SystemContext, traits::NodeImplementation};
 use hotshot_query_service::{
     data_source::{
-        storage::{FileSystemStorage, NodeStorage, SqlStorage},
         VersionedDataSource,
+        storage::{FileSystemStorage, NodeStorage, SqlStorage},
     },
     node::BlockId,
 };
@@ -33,8 +32,8 @@ use super::request::{Request, Response};
 use crate::{
     api::{BlocksFrontier, RewardMerkleTreeDataSource, RewardMerkleTreeV2Data},
     catchup::{
-        add_fee_accounts_to_state, add_v1_reward_accounts_to_state,
-        add_v2_reward_accounts_to_state, CatchupStorage,
+        CatchupStorage, add_fee_accounts_to_state, add_v1_reward_accounts_to_state,
+        add_v2_reward_accounts_to_state,
     },
 };
 
@@ -75,12 +74,11 @@ impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerP
         match request {
             Request::Accounts(height, view, accounts) => {
                 // Try to get accounts from memory first, then fall back to storage
-                if let Some(state) = self.consensus.state(ViewNumber::new(*view)).await {
-                    if let Ok(accounts) =
+                if let Some(state) = self.consensus.state(ViewNumber::new(*view)).await
+                    && let Ok(accounts) =
                         retain_accounts(&state.fee_merkle_tree, accounts.iter().copied())
-                    {
-                        return Ok(Response::Accounts(accounts));
-                    }
+                {
+                    return Ok(Response::Accounts(accounts));
                 }
 
                 // Fall back to storage
@@ -161,10 +159,10 @@ impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerP
             Request::ChainConfig(commitment) => {
                 // Try to get the chain config from memory first, then fall back to storage
                 let chain_config_from_memory = self.consensus.decided_state().await.chain_config;
-                if chain_config_from_memory.commit() == *commitment {
-                    if let Some(chain_config) = chain_config_from_memory.resolve() {
-                        return Ok(Response::ChainConfig(chain_config));
-                    }
+                if chain_config_from_memory.commit() == *commitment
+                    && let Some(chain_config) = chain_config_from_memory.resolve()
+                {
+                    return Ok(Response::ChainConfig(chain_config));
                 }
 
                 // Fall back to storage
@@ -211,13 +209,13 @@ impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerP
             },
             Request::RewardAccountsV2(height, view, accounts) => {
                 // Try to get the reward accounts from memory first, then fall back to storage
-                if let Some(state) = self.consensus.state(ViewNumber::new(*view)).await {
-                    if let Ok(reward_accounts) = retain_v2_reward_accounts(
+                if let Some(state) = self.consensus.state(ViewNumber::new(*view)).await
+                    && let Ok(reward_accounts) = retain_v2_reward_accounts(
                         &state.reward_merkle_tree_v2,
                         accounts.iter().copied(),
-                    ) {
-                        return Ok(Response::RewardAccountsV2(reward_accounts));
-                    }
+                    )
+                {
+                    return Ok(Response::RewardAccountsV2(reward_accounts));
                 }
 
                 // Fall back to storage
@@ -256,13 +254,13 @@ impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerP
 
             Request::RewardAccountsV1(height, view, accounts) => {
                 // Try to get the reward accounts from memory first, then fall back to storage
-                if let Some(state) = self.consensus.state(ViewNumber::new(*view)).await {
-                    if let Ok(reward_accounts) = retain_v1_reward_accounts(
+                if let Some(state) = self.consensus.state(ViewNumber::new(*view)).await
+                    && let Ok(reward_accounts) = retain_v1_reward_accounts(
                         &state.reward_merkle_tree_v1,
                         accounts.iter().copied(),
-                    ) {
-                        return Ok(Response::RewardAccountsV1(reward_accounts));
-                    }
+                    )
+                {
+                    return Ok(Response::RewardAccountsV1(reward_accounts));
                 }
 
                 // Fall back to storage

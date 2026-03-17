@@ -5,7 +5,7 @@
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
 use futures::Future;
-use tokio::task::{spawn, JoinHandle};
+use tokio::task::{JoinHandle, spawn};
 
 use crate::dependency::Dependency;
 
@@ -53,8 +53,8 @@ mod test {
 
     use std::time::Duration;
 
-    use async_broadcast::{broadcast, Receiver, Sender};
-    use futures::{stream::FuturesOrdered, StreamExt};
+    use async_broadcast::{Receiver, Sender, broadcast};
+    use futures::{StreamExt, stream::FuturesOrdered};
     use tokio::time::sleep;
 
     use super::*;

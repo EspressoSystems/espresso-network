@@ -23,6 +23,7 @@ use hotshot_types::{
     stake_table::HSStakeTable,
     storage_metrics::StorageMetricsValue,
     traits::{
+        ValidatedState,
         block_contents::BlockHeader,
         election::Membership,
         node_implementation::{NodeImplementation, NodeType},
@@ -30,7 +31,6 @@ use hotshot_types::{
             LCV2StateSignatureKey, LCV3StateSignatureKey, SignatureKey, StateSignatureKey,
         },
         storage::Storage,
-        ValidatedState,
     },
     utils::{epoch_from_block_number, is_epoch_transition, is_last_block, is_transition_block},
     vote::HasViewNumber,
@@ -43,8 +43,8 @@ use super::QuorumVoteTaskState;
 use crate::{
     events::HotShotEvent,
     helpers::{
-        broadcast_event, decide_from_proposal, decide_from_proposal_2, derive_signed_state_digest,
-        fetch_proposal, handle_drb_result, LeafChainTraversalOutcome,
+        LeafChainTraversalOutcome, broadcast_event, decide_from_proposal, decide_from_proposal_2,
+        derive_signed_state_digest, fetch_proposal, handle_drb_result,
     },
 };
 

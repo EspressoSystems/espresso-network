@@ -14,8 +14,8 @@
 
 use std::{
     collections::{
-        hash_map::{Entry, HashMap},
         BTreeMap,
+        hash_map::{Entry, HashMap},
     },
     hash::Hash,
     iter,
@@ -33,31 +33,31 @@ use hotshot_types::{
     simple_certificate::CertificatePair,
     traits::{block_contents::BlockHeader, node_implementation::NodeType},
 };
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 use snafu::OptionExt;
 
 use super::{
+    Aggregate, AggregatesStorage, AvailabilityStorage, NodeStorage, PayloadMetadata,
+    UpdateAggregatesStorage, UpdateAvailabilityStorage, VidCommonMetadata,
     ledger_log::{Iter, LedgerLog},
     pruning::{PruneStorage, PrunedHeightStorage, PrunerConfig},
     sql::MigrateTypes,
-    Aggregate, AggregatesStorage, AvailabilityStorage, NodeStorage, PayloadMetadata,
-    UpdateAggregatesStorage, UpdateAvailabilityStorage, VidCommonMetadata,
 };
 use crate::{
+    Header, MissingSnafu, NotFoundSnafu, Payload, QueryError, QueryResult,
     availability::{
+        NamespaceId,
         data_source::{BlockId, LeafId},
         query_data::{
             BlockHash, BlockQueryData, LeafHash, LeafQueryData, PayloadQueryData, QueryableHeader,
             QueryablePayload, TransactionHash, VidCommonQueryData,
         },
-        NamespaceId,
     },
-    data_source::{update, VersionedDataSource},
+    data_source::{VersionedDataSource, update},
     metrics::PrometheusMetrics,
     node::{SyncStatusQueryData, TimeWindowQueryData, WindowStart},
     status::HasMetrics,
     types::HeightIndexed,
-    Header, MissingSnafu, NotFoundSnafu, Payload, QueryError, QueryResult,
 };
 
 const CACHED_LEAVES_COUNT: usize = 100;

@@ -71,10 +71,10 @@ impl PrunerCfg {
     }
 
     pub fn validate(&self) -> anyhow::Result<()> {
-        if let Some(pruning_threshold) = self.pruning_threshold {
-            if pruning_threshold == 0 {
-                bail!("pruning_threshold must be greater than 0 or set to None")
-            }
+        if let Some(pruning_threshold) = self.pruning_threshold
+            && pruning_threshold == 0
+        {
+            bail!("pruning_threshold must be greater than 0 or set to None")
         }
 
         if self.max_usage > 10000 {

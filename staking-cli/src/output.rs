@@ -1,4 +1,4 @@
-use alloy::primitives::{utils::format_ether, Address, Bytes, U256};
+use alloy::primitives::{Address, Bytes, U256, utils::format_ether};
 use anyhow::Result;
 use serde::Serialize;
 

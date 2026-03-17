@@ -5,7 +5,7 @@ use hotshot_types::{
     light_client::StateSignKey,
     signature_key::{BLSPrivKey, BLSPubKey},
 };
-use rust_decimal::{prelude::ToPrimitive as _, Decimal};
+use rust_decimal::{Decimal, prelude::ToPrimitive as _};
 use tagged_base64::{TaggedBase64, Tb64Error};
 use thiserror::Error;
 

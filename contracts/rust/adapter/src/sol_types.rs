@@ -29,12 +29,12 @@ pub use crate::bindings::{
     esp_token_v2::EspTokenV2,
     fee_contract::FeeContract::{self, Deposit},
     light_client::{
+        BN254::G1Point as G1PointSol,
         IPlonkVerifier::{PlonkProof as PlonkProofSol, VerifyingKey as VerifyingKeySol},
         LightClient::{
             self, LightClientErrors, LightClientInstance, LightClientState as LightClientStateSol,
             StakeTableState as StakeTableStateSol,
         },
-        BN254::G1Point as G1PointSol,
     },
     light_client_mock::{self, LightClientMock},
     light_client_v2::{self, LightClientV2},
@@ -50,8 +50,8 @@ pub use crate::bindings::{
     safe_exit_timelock::SafeExitTimelock,
     stake_table::StakeTable,
     stake_table_v2::{
-        self, EdOnBN254::EdOnBN254Point as EdOnBN254PointSol, StakeTableV2,
-        BN254::G2Point as G2PointSol,
+        self, BN254::G2Point as G2PointSol, EdOnBN254::EdOnBN254Point as EdOnBN254PointSol,
+        StakeTableV2,
     },
 };
 

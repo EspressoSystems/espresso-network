@@ -33,9 +33,9 @@ use hotshot_types::{data::VidShare, traits::node_implementation::NodeType};
 
 use super::query_data::{BlockHash, BlockId, TimeWindowQueryData};
 use crate::{
+    Header, QueryResult,
     availability::{NamespaceId, QueryableHeader},
     node::SyncStatusQueryData,
-    Header, QueryResult,
 };
 
 #[derive(Derivative, From)]
