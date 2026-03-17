@@ -102,7 +102,6 @@ async fn validate_node_map<TYPES: NodeType>(node_map: &NodeMapSanitized<TYPES>) 
 
         child
             .extends_upgrade(parent, &upgrade_lock)
-            .await
             .context(|e| error!("Leaf {child:?} does not extend its parent {parent:?}: {e}"))?;
 
         ensure!(

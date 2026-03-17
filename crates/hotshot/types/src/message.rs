@@ -12,7 +12,6 @@
 use std::{
     fmt::{self, Debug},
     marker::PhantomData,
-    ops::DerefMut,
     sync::Arc,
 };
 
@@ -658,17 +657,19 @@ impl<TYPES: NodeType> UpgradeLock<TYPES> {
         self.decided_upgrade_certificate.read().clone()
     }
 
-    pub fn decided_upgrade_cert_mut(
-        &self,
-    ) -> impl DerefMut<Target = Option<UpgradeCertificate<TYPES>>> {
-        self.decided_upgrade_certificate.write()
-    }
-
     pub fn set_decided_upgrade_cert<C>(&self, cert: C)
     where
         C: Into<Option<UpgradeCertificate<TYPES>>>,
     {
         *self.decided_upgrade_certificate.write() = cert.into()
+    }
+
+    pub fn apply<F>(&self, f: F)
+    where
+        F: FnOnce(&mut Option<UpgradeCertificate<TYPES>>),
+    {
+        let mut guard = self.decided_upgrade_certificate.write();
+        f(&mut *guard)
     }
 
     /// Calculate the version applied in a view, based on the provided upgrade lock.

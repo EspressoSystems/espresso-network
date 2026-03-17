@@ -1007,9 +1007,7 @@ pub(crate) async fn validate_proposal_safety_and_liveness<
     .await?;
 
     // Validate that the upgrade certificate is re-attached, if we saw one on the parent
-    proposed_leaf
-        .extends_upgrade(&parent_leaf, &validation_info.upgrade_lock)
-        .await?;
+    proposed_leaf.extends_upgrade(&parent_leaf, &validation_info.upgrade_lock)?;
 
     let justify_qc = proposal.data.justify_qc().clone();
     // Create a positive vote if either liveness or safety check

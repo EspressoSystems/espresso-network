@@ -229,9 +229,8 @@ pub async fn add_consensus_tasks<TYPES: NodeType, I: NodeImplementation<TYPES>>(
 
     let upgrade = handle.hotshot.upgrade_lock.upgrade;
 
-    {
-        // clear the loaded certificate if it's now outdated
-        let mut cert = handle.hotshot.upgrade_lock.decided_upgrade_cert_mut();
+    // clear the loaded certificate if it's now outdated
+    handle.hotshot.upgrade_lock.apply(|cert| {
         if cert
             .as_ref()
             .is_some_and(|c| upgrade.base >= c.data.new_version)
@@ -239,7 +238,7 @@ pub async fn add_consensus_tasks<TYPES: NodeType, I: NodeImplementation<TYPES>>(
             tracing::warn!("Discarding loaded upgrade certificate due to version configuration.");
             *cert = None
         }
-    }
+    });
 
     // only spawn the upgrade task if we are actually configured to perform an upgrade.
     if upgrade.base < upgrade.target {

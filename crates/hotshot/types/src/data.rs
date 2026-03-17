@@ -1616,7 +1616,7 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
     /// # Errors
     /// Returns an error if the certificates are not identical, or that when we no longer see a
     /// cert, it's for the right reason.
-    pub async fn extends_upgrade(&self, parent: &Self, upgrade: &UpgradeLock<TYPES>) -> Result<()> {
+    pub fn extends_upgrade(&self, parent: &Self, upgrade: &UpgradeLock<TYPES>) -> Result<()> {
         match (self.upgrade_certificate(), parent.upgrade_certificate()) {
             // Easiest cases are:
             //   - no upgrade certificate on either: this is the most common case, and is always fine.
