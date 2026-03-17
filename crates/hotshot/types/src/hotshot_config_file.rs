@@ -9,7 +9,6 @@ use std::{num::NonZeroUsize, time::Duration};
 use alloy::primitives::U256;
 use url::Url;
 use vec1::Vec1;
-use versions::{Upgrade, VERSION_0_1};
 
 use crate::{
     HotShotConfig, NodeType, PeerConfig, ValidatorConfig, VersionedDaCommittee,
@@ -81,16 +80,10 @@ pub struct HotShotConfigFile<TYPES: NodeType> {
     #[serde(default = "default_drb_upgrade_difficulty")]
     /// number of iterations for DRB calculation
     pub drb_upgrade_difficulty: u64,
-    #[serde(default = "default_version_upgrade")]
-    pub version_upgrade: Upgrade,
 }
 
 fn default_stake_table_capacity() -> usize {
     crate::light_client::DEFAULT_STAKE_TABLE_CAPACITY
-}
-
-fn default_version_upgrade() -> Upgrade {
-    Upgrade::trivial(VERSION_0_1)
 }
 
 impl<TYPES: NodeType> From<HotShotConfigFile<TYPES>> for HotShotConfig<TYPES> {
@@ -179,7 +172,6 @@ impl<TYPES: NodeType> HotShotConfigFile<TYPES> {
             stake_table_capacity: crate::light_client::DEFAULT_STAKE_TABLE_CAPACITY,
             drb_difficulty: 10,
             drb_upgrade_difficulty: 20,
-            version_upgrade: default_version_upgrade(),
         }
     }
 }
