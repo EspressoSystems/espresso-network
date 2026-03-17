@@ -116,9 +116,17 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
             Ok(state) => {
                 tracing::debug!("New leaves decided. Latest block height: {}", leaf.height(),);
 
-                let consensus = consensus_state.read().await;
+                // Extract needed data from the consensus lock and drop it immediately.
+                // This avoids holding the lock across HTTP I/O to the relay server.
+                let (blocks_per_epoch, membership_coordinator) = {
+                    let consensus = consensus_state.read().await;
+                    (
+                        consensus.epoch_height,
+                        consensus.membership_coordinator.clone(),
+                    )
+                };
+
                 let cur_block_height = state.block_height;
-                let blocks_per_epoch = consensus.epoch_height;
 
                 let option_state_epoch = option_epoch_from_block_number(
                     leaf.with_epoch,
@@ -127,8 +135,7 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
                 );
 
                 if self.voting_stake_table_epoch != option_state_epoch {
-                    let Ok(membership) = consensus
-                        .membership_coordinator
+                    let Ok(membership) = membership_coordinator
                         .stake_table_for_epoch(option_state_epoch)
                         .await
                     else {

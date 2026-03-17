@@ -485,9 +485,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StakeTableDataSource<
         offset: u64,
         limit: u64,
     ) -> anyhow::Result<Vec<RegisteredValidator<PubKey>>> {
-        let handle = self.consensus().await;
-        let handle_read = handle.read().await;
-        let storage = handle_read.storage();
+        let storage = self.consensus().await.read().await.storage();
         storage.load_all_validators(epoch, offset, limit).await
     }
 
@@ -496,9 +494,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StakeTableDataSource<
         from_l1_block: u64,
         to_l1_block: u64,
     ) -> anyhow::Result<Vec<StakeTableEvent>> {
-        let handle = self.consensus().await;
-        let handle_read = handle.read().await;
-        let storage = handle_read.storage();
+        let storage = self.consensus().await.read().await.storage();
         let (status, events) = storage.load_events(from_l1_block, to_l1_block).await?;
         ensure!(
             status == Some(EventsPersistenceRead::Complete),
@@ -651,10 +647,16 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StateCertFetchingData
         timeout: Duration,
     ) -> Result<LightClientStateUpdateCertificateV2<SeqTypes>, StateCertFetchError> {
         tracing::info!("fetching state certificate for epoch={epoch}");
-        let consensus = self.consensus().await;
-        let consensus_read = consensus.read().await;
 
-        let current_epoch = consensus_read.cur_epoch().await;
+        // Extract needed data from the consensus lock and drop it immediately.
+        // This avoids holding the lock across wait_for_catchup which can block indefinitely.
+        let (current_epoch, coordinator) = {
+            let consensus = self.consensus().await;
+            let consensus_read = consensus.read().await;
+            let current_epoch = consensus_read.cur_epoch().await;
+            let coordinator = consensus_read.membership_coordinator.clone();
+            (current_epoch, coordinator)
+        };
 
         // // The highest epoch we can have a state certificate for is current_epoch + 1
         // // Check if requested epoch is beyond the highest possible epoch
@@ -668,7 +670,6 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StateCertFetchingData
         }
 
         // Get the stake table for validation
-        let coordinator = consensus_read.membership_coordinator.clone();
         if let Err(err) = coordinator
             .stake_table_for_epoch(Some(EpochNumber::new(epoch)))
             .await
@@ -699,9 +700,6 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StateCertFetchingData
             })?;
 
         let stake_table = membership.stake_table().await;
-
-        drop(consensus_read);
-        drop(consensus);
 
         let state_catchup = self
             .sequencer_context
@@ -763,10 +761,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StateCertDataSource f
         &self,
         epoch: u64,
     ) -> anyhow::Result<Option<LightClientStateUpdateCertificateV2<SeqTypes>>> {
-        let consensus = self.consensus().await;
-        let consensus_lock = consensus.read().await;
-        let persistence = consensus_lock.storage();
-
+        let persistence = self.consensus().await.read().await.storage();
         persistence.get_state_cert_by_epoch(epoch).await
     }
 
@@ -775,10 +770,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StateCertDataSource f
         epoch: u64,
         cert: LightClientStateUpdateCertificateV2<SeqTypes>,
     ) -> anyhow::Result<()> {
-        let consensus = self.consensus().await;
-        let consensus_lock = consensus.read().await;
-        let persistence = consensus_lock.storage();
-
+        let persistence = self.consensus().await.read().await.storage();
         persistence.insert_state_cert(epoch, cert).await
     }
 }
@@ -1028,10 +1020,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, D: CatchupStorage + S
         &self,
         epoch: u64,
     ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
-        let consensus = self.as_ref().consensus().await;
-        let consensus_lock = consensus.read().await;
-        let persistence = consensus_lock.storage();
-
+        let persistence = self.as_ref().consensus().await.read().await.storage();
         persistence
             .get_state_cert_by_epoch(epoch)
             .await?
