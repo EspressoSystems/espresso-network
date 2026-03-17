@@ -923,7 +923,6 @@ pub mod testing {
 
     pub struct TestConfigBuilder<const NUM_NODES: usize> {
         config: HotShotConfig<SeqTypes>,
-        upgrade: versions::Upgrade,
         priv_keys: Vec<BLSPrivKey>,
         state_key_pairs: Vec<StateKeyPair>,
         master_map: Arc<MasterMap<PubKey>>,
@@ -996,11 +995,6 @@ pub mod testing {
             let upgrade = upgrades.get(&v).unwrap();
             upgrade.set_hotshot_config_parameters(&mut self.config);
             self.upgrades = upgrades;
-            self
-        }
-
-        pub fn version_upgrade(mut self, u: versions::Upgrade) -> Self {
-            self.upgrade = u;
             self
         }
 
@@ -1100,7 +1094,6 @@ pub mod testing {
         pub fn build(self) -> TestConfig<NUM_NODES> {
             TestConfig {
                 config: self.config,
-                upgrade: self.upgrade,
                 priv_keys: self.priv_keys,
                 state_key_pairs: self.state_key_pairs,
                 master_map: self.master_map,
@@ -1191,7 +1184,6 @@ pub mod testing {
 
             Self {
                 config,
-                upgrade: versions::Upgrade::trivial(VERSION_0_1),
                 priv_keys,
                 state_key_pairs,
                 master_map,
@@ -1215,7 +1207,6 @@ pub mod testing {
     #[derive(Clone)]
     pub struct TestConfig<const NUM_NODES: usize> {
         config: HotShotConfig<SeqTypes>,
-        upgrade: versions::Upgrade,
         priv_keys: Vec<BLSPrivKey>,
         state_key_pairs: Vec<StateKeyPair>,
         master_map: Arc<MasterMap<PubKey>>,

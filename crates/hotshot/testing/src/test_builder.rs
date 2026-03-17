@@ -25,7 +25,7 @@ use hotshot_types::{
 use hotshot_utils::anytrace::*;
 use tide_disco::Url;
 use vec1::Vec1;
-use versions::{Upgrade, version};
+use versions::{Upgrade, MIN_SUPPORTED_VERSION, version};
 
 use super::{
     completion_task::{CompletionTaskDescription, TimeBasedCompletionTaskDescription},
@@ -444,7 +444,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TestDescription<TYPES, I> {
         let (staked_nodes, da_nodes) =
             gen_node_lists::<TYPES>(num_nodes_with_stake, num_da_nodes, &node_stakes);
 
-        let upgrade = Upgrade::trivial(version(0, 1));
+        let upgrade = Upgrade::trivial(MIN_SUPPORTED_VERSION);
         Self {
             test_config: default_hotshot_config::<TYPES>(
                 staked_nodes,
@@ -489,7 +489,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TestDescription<TYPES, I> {
         let (staked_nodes, da_nodes) =
             gen_node_lists::<TYPES>(num_nodes, num_da_nodes, &self.node_stakes);
 
-        let upgrade = Upgrade::trivial(version(0, 1));
+        let upgrade = Upgrade::trivial(MIN_SUPPORTED_VERSION);
         Self {
             test_config: default_hotshot_config::<TYPES>(
                 staked_nodes,
@@ -523,7 +523,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TestDescription<TYPES, I> {
         let (staked_nodes, da_nodes) =
             gen_node_lists::<TYPES>(num_nodes_with_stake, num_da_nodes, &node_stakes);
 
-        let upgrade = Upgrade::trivial(version(0, 1));
+        let upgrade = Upgrade::trivial(MIN_SUPPORTED_VERSION);
         Self {
             test_config: default_hotshot_config::<TYPES>(
                 staked_nodes,

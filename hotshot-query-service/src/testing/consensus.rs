@@ -44,7 +44,7 @@ use tokio::{
 };
 use tracing::{Instrument, info_span};
 use url::Url;
-use versions::{Upgrade, VERSION_0_1};
+use versions::{Upgrade, MIN_SUPPORTED_VERSION};
 
 use super::mocks::{MockMembership, MockNodeImpl, MockTransaction, MockTypes};
 use crate::{
@@ -156,7 +156,7 @@ impl<D: DataSourceLifeCycle + UpdateStatusData> MockNetwork<D> {
             drb_upgrade_difficulty: DIFFICULTY_LEVEL,
         };
         update_config(&mut config);
-        let upgrade = Upgrade::trivial(VERSION_0_1);
+        let upgrade = Upgrade::trivial(MIN_SUPPORTED_VERSION);
 
         let nodes = join_all(
             priv_keys
