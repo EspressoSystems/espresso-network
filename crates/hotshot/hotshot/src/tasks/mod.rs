@@ -162,7 +162,7 @@ pub fn add_network_message_task<
                     };
 
                     // Deserialize the message and get the version
-                    let (deserialized_message, version): (Message<TYPES>, Version) = match upgrade_lock.deserialize(&message).await {
+                    let (deserialized_message, version): (Message<TYPES>, Version) = match upgrade_lock.deserialize(&message) {
                         Ok(message) => message,
                         Err(e) => {
                             tracing::error!("Failed to deserialize message: {:?}", e);
@@ -230,20 +230,14 @@ pub async fn add_consensus_tasks<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     let upgrade = handle.hotshot.upgrade_lock.upgrade;
 
     {
-        let mut upgrade_certificate_lock = handle
-            .hotshot
-            .upgrade_lock
-            .decided_upgrade_certificate
-            .write()
-            .await;
-
         // clear the loaded certificate if it's now outdated
-        if upgrade_certificate_lock
+        let mut cert = handle.hotshot.upgrade_lock.decided_upgrade_cert_mut();
+        if cert
             .as_ref()
-            .is_some_and(|cert| upgrade.base >= cert.data.new_version)
+            .is_some_and(|c| upgrade.base >= c.data.new_version)
         {
             tracing::warn!("Discarding loaded upgrade certificate due to version configuration.");
-            *upgrade_certificate_lock = None;
+            *cert = None
         }
     }
 

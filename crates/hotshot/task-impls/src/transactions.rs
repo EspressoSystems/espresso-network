@@ -132,7 +132,7 @@ impl<TYPES: NodeType> TransactionTaskState<TYPES> {
         block_epoch: Option<EpochNumber>,
         vid: Option<VidCommitment>,
     ) -> Option<HotShotTaskCompleted> {
-        let version = match self.upgrade_lock.version(block_view).await {
+        let version = match self.upgrade_lock.version(block_view) {
             Ok(v) => v,
             Err(err) => {
                 tracing::error!(
@@ -160,7 +160,6 @@ impl<TYPES: NodeType> TransactionTaskState<TYPES> {
                     > self
                         .upgrade_lock
                         .upgrade_view()
-                        .await
                         .unwrap_or(ViewNumber::new(0))
                         + 1
                 {
@@ -206,9 +205,7 @@ impl<TYPES: NodeType> TransactionTaskState<TYPES> {
         let block = {
             if self
                 .upgrade_lock
-                .decided_upgrade_certificate
-                .read()
-                .await
+                .decided_upgrade_cert()
                 .as_ref()
                 .is_some_and(|cert| cert.upgrading_in(block_view))
             {
@@ -370,7 +367,7 @@ impl<TYPES: NodeType> TransactionTaskState<TYPES> {
                 let view_number = proposal.data.view_number();
                 let next_view = view_number + 1;
 
-                let version = match self.upgrade_lock.version(next_view).await {
+                let version = match self.upgrade_lock.version(next_view) {
                     Ok(v) => v,
                     Err(e) => {
                         tracing::error!("Failed to calculate version: {e:?}");

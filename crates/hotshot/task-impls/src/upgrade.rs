@@ -100,11 +100,7 @@ pub struct UpgradeTaskState<TYPES: NodeType> {
 impl<TYPES: NodeType> UpgradeTaskState<TYPES> {
     /// Check if we have decided on an upgrade certificate
     async fn upgraded(&self) -> bool {
-        self.upgrade_lock
-            .decided_upgrade_certificate
-            .read()
-            .await
-            .is_some()
+        self.upgrade_lock.decided_upgrade_cert().is_some()
     }
 
     /// main task event handler
