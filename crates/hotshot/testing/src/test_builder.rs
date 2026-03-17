@@ -64,7 +64,6 @@ pub fn default_hotshot_config<TYPES: NodeType>(
     num_bootstrap_nodes: usize,
     epoch_height: u64,
     epoch_start_block: u64,
-    _upgrade: Upgrade,
 ) -> HotShotConfig<TYPES> {
     HotShotConfig {
         start_threshold: (1, 1),
