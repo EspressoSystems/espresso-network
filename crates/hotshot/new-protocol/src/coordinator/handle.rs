@@ -1,21 +1,12 @@
-use std::sync::mpsc::Receiver;
-
 use hotshot_types::{
-    data::{EpochNumber, QuorumProposal2, ViewNumber},
+    data::{EpochNumber, Leaf2, QuorumProposal2, ViewNumber},
     simple_vote::HasEpoch,
     traits::{block_contents::BlockHeader, node_implementation::NodeType},
     vote::HasViewNumber,
 };
+use tokio::sync::mpsc::error::SendError;
 
 use crate::{events::*, message::ConsensusMessage};
-
-pub struct Coordinator<TYPES: NodeType> {
-    event_rx: Receiver<Event<TYPES>>,
-    cpu_tx: std::sync::mpsc::Sender<CpuEvent<TYPES>>,
-    state_tx: tokio::sync::mpsc::Sender<StateEvent<TYPES>>,
-    io_tx: tokio::sync::mpsc::Sender<IOEvent<TYPES>>,
-    consensus_tx: tokio::sync::mpsc::Sender<ConsensusEvent<TYPES>>,
-}
 
 #[derive(Clone)]
 pub(crate) struct CoordinatorHandle<TYPES: NodeType> {
@@ -27,12 +18,19 @@ impl<TYPES: NodeType> CoordinatorHandle<TYPES> {
         Self { event_tx }
     }
 
-    pub fn send_message(&self, message: ConsensusMessage<TYPES>) {
+    pub async fn send_message(
+        &self,
+        message: ConsensusMessage<TYPES>,
+    ) -> Result<(), SendError<Event<TYPES>>> {
         self.event_tx
-            .send(Event::Action(Action::SendMessage(message)));
+            .send(Event::Action(Action::SendMessage(message)))
+            .await
     }
 
-    pub fn request_state(&self, proposal: QuorumProposal2<TYPES>) {
+    pub async fn request_state(
+        &self,
+        proposal: QuorumProposal2<TYPES>,
+    ) -> Result<(), SendError<Event<TYPES>>> {
         self.event_tx
             .send(Event::Action(Action::RequestState(StateRequest {
                 view: proposal.view_number(),
@@ -40,20 +38,30 @@ impl<TYPES: NodeType> CoordinatorHandle<TYPES> {
                 epoch: proposal.epoch().unwrap(),
                 block_number: proposal.block_header.block_number(),
                 proposal,
-            })));
+            })))
+            .await
     }
-    pub fn request_header(
+    pub async fn request_header(
         &self,
         parent: QuorumProposal2<TYPES>,
         view: ViewNumber,
         epoch: EpochNumber,
-    ) {
+    ) -> Result<(), SendError<Event<TYPES>>> {
         self.event_tx
             .send(Event::Action(Action::RequestHeader(HeaderRequest {
                 view,
                 parent_view: parent.view_number(),
                 epoch,
                 block_number: parent.block_header.block_number() + 1,
-            })));
+            })))
+            .await
+    }
+    pub async fn send_decided(
+        &self,
+        decided: Vec<Leaf2<TYPES>>,
+    ) -> Result<(), SendError<Event<TYPES>>> {
+        self.event_tx
+            .send(Event::Update(Update::LeafDecided(decided)))
+            .await
     }
 }

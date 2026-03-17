@@ -24,6 +24,7 @@ committable = { workspace = true }
 csv = { workspace = true }
 either = { workspace = true }
 futures = { workspace = true }
+hotshot = { workspace = true }
 hotshot-builder-api = { workspace = true }
 hotshot-contract-adapter = { workspace = true }
 hotshot-task = { workspace = true }

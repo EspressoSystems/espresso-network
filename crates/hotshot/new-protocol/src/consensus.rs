@@ -1,11 +1,15 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    cmp::max,
+    collections::{BTreeMap, BTreeSet},
+};
 
 use committable::{Commitment, Committable};
 use hotshot_types::{
     data::{
-        EpochNumber, Leaf2, QuorumProposal2, VidCommitment, VidCommitment2, VidDisperseShare2,
-        ViewNumber, vid_disperse::vid_total_weight,
+        EpochNumber, Leaf2, QuorumProposal2, QuorumProposalWrapper, VidCommitment, VidCommitment2,
+        VidDisperseShare2, ViewNumber, vid_disperse::vid_total_weight,
     },
+    epoch_membership::EpochMembershipCoordinator,
     simple_certificate::{TimeoutCertificate2, ViewSyncCommitCertificate2},
     simple_vote::{HasEpoch, QuorumData2, SimpleVote},
     traits::{
@@ -17,7 +21,7 @@ use hotshot_types::{
 use tokio::sync::mpsc::{Receiver, Sender};
 
 use crate::{
-    coordinator::CoordinatorHandle,
+    coordinator::handle::CoordinatorHandle,
     events::{ConsensusEvent, StateRequest, StateResponse},
     helpers::{proposal_commitment, upgrade_lock},
     message::{Certificate1, Certificate2, ConsensusMessage, ProposalMessage, Vote1, Vote2Data},
@@ -46,7 +50,7 @@ pub(crate) struct Consensus<TYPES: NodeType> {
 
     // TODO: We need a next epoch stake table to handle the transition
     // And a way to set these stake tables, probably an event from coordinator
-    stake_table: TYPES::Membership,
+    stake_table_coordinator: EpochMembershipCoordinator<TYPES>,
 
     public_key: TYPES::SignatureKey,
     private_key: <TYPES::SignatureKey as SignatureKey>::PrivateKey,
@@ -56,7 +60,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
     pub fn new(
         event_rx: Receiver<ConsensusEvent<TYPES>>,
         coordinator_handle: CoordinatorHandle<TYPES>,
-        initial_stake_table: TYPES::Membership,
+        membership_coordinator: EpochMembershipCoordinator<TYPES>,
         public_key: TYPES::SignatureKey,
         private_key: <TYPES::SignatureKey as SignatureKey>::PrivateKey,
     ) -> Self {
@@ -75,7 +79,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
             headers: BTreeMap::new(),
             public_key,
             timeout_view: ViewNumber::genesis(),
-            stake_table: initial_stake_table,
+            stake_table_coordinator: membership_coordinator,
             voted_1_views: BTreeSet::new(),
             voted_2_views: BTreeSet::new(),
             private_key,
@@ -83,8 +87,15 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         }
     }
 
-    fn is_leader(&self, view: ViewNumber, epoch: EpochNumber) -> bool {
-        let Ok(leader) = self.stake_table.leader(view, Some(epoch)) else {
+    async fn is_leader(&self, view: ViewNumber, epoch: EpochNumber) -> bool {
+        let Ok(stake_table) = self
+            .stake_table_coordinator
+            .membership_for_epoch(Some(epoch))
+            .await
+        else {
+            return false;
+        };
+        let Ok(leader) = stake_table.leader(view).await else {
             return false;
         };
         leader == self.public_key
@@ -100,10 +111,10 @@ impl<TYPES: NodeType> Consensus<TYPES> {
             ConsensusEvent::Certificate1(certificate) => self.handle_certificate1(certificate),
             ConsensusEvent::Certificate2(certificate) => self.handle_certificate2(certificate),
             ConsensusEvent::TimeoutCertificate(certificate) => {
-                self.handle_timeout_certificate(certificate)?;
+                self.handle_timeout_certificate(certificate).await?;
             },
             ConsensusEvent::ViewSyncCertificate(certificate) => {
-                self.handle_view_sync_certificate(certificate)?;
+                self.handle_view_sync_certificate(certificate).await?;
             },
             ConsensusEvent::BlockReconstructed(view, vid_commitment) => {
                 self.handle_block_reconstructed(view, vid_commitment)
@@ -148,7 +159,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         }
         let proposal = self.proposals.get(&view)?;
         let next_view = view + 1;
-        if !self.is_leader(next_view, proposal.epoch?) {
+        if !self.is_leader(next_view, proposal.epoch?).await {
             return None;
         }
 
@@ -161,6 +172,30 @@ impl<TYPES: NodeType> Consensus<TYPES> {
             return None;
         }
         let cert2 = self.certs2.get(&view)?;
+        let proposal = self.proposals.get(&view)?;
+        let proposal_commit = proposal_commitment(&proposal);
+        if cert2.data.leaf_commit != proposal_commit {
+            return None;
+        }
+        // we have a second certificate, and matching proposal, it is decided.
+        let leaf = Leaf2::from_quorum_proposal(&QuorumProposalWrapper::from(proposal.clone()));
+        self.last_decided_view = max(self.last_decided_view, leaf.view_number());
+        let mut decided = vec![leaf];
+
+        let mut parent_view = proposal.justify_qc.view_number();
+        let mut parent_commit = proposal.justify_qc.data.leaf_commit;
+
+        while let Some(proposal) = self.proposals.get(&parent_view) {
+            let proposal_commit = proposal_commitment(&proposal);
+            if proposal_commit != parent_commit {
+                break;
+            }
+            let leaf = Leaf2::from_quorum_proposal(&QuorumProposalWrapper::from(proposal.clone()));
+            decided.push(leaf);
+            parent_view = proposal.justify_qc.view_number();
+            parent_commit = proposal.justify_qc.data.leaf_commit;
+        }
+        self.coordinator_handle.send_decided(decided).await.ok()?;
         Some(())
     }
 
@@ -229,7 +264,9 @@ impl<TYPES: NodeType> Consensus<TYPES> {
             vid_share: vid_share.clone(),
         };
         self.coordinator_handle
-            .send_message(ConsensusMessage::Vote1(vote));
+            .send_message(ConsensusMessage::Vote1(vote))
+            .await
+            .ok()?;
         self.voted_1_views.insert(view);
         Some(())
     }
@@ -284,7 +321,9 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         .await
         .unwrap();
         self.coordinator_handle
-            .send_message(ConsensusMessage::Vote2(vote));
+            .send_message(ConsensusMessage::Vote2(vote))
+            .await
+            .ok()?;
         self.voted_2_views.insert(view);
         Some(())
     }
@@ -305,8 +344,12 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         if !proposal.vid_share.is_consistent() {
             return None;
         }
-        let total_weight =
-            vid_total_weight(&self.stake_table.stake_table(Some(epoch)), Some(epoch));
+        let stake_table = self
+            .stake_table_coordinator
+            .membership_for_epoch(Some(epoch))
+            .await
+            .ok()?;
+        let total_weight = vid_total_weight(&stake_table.stake_table().await, Some(epoch));
         if !proposal.vid_share.verify(total_weight) {
             return None;
         }
@@ -317,11 +360,15 @@ impl<TYPES: NodeType> Consensus<TYPES> {
 
         // Now ask for the state
         self.coordinator_handle
-            .request_state(proposal.proposal.data.clone());
+            .request_state(proposal.proposal.data.clone())
+            .await
+            .ok()?;
         // And if we are leader next, ask for a header
-        if self.is_leader(view + 1, epoch) {
+        if self.is_leader(view + 1, epoch).await {
             self.coordinator_handle
-                .request_header(proposal.proposal.data.clone(), view + 1, epoch);
+                .request_header(proposal.proposal.data.clone(), view + 1, epoch)
+                .await
+                .ok()?;
         }
         Some(())
     }
@@ -355,7 +402,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         self.certs2.insert(certificate.view_number(), certificate);
     }
 
-    fn handle_timeout_certificate(
+    async fn handle_timeout_certificate(
         &mut self,
         certificate: TimeoutCertificate2<TYPES>,
     ) -> Option<()> {
@@ -363,18 +410,20 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         let epoch = certificate.epoch()?;
         self.timeout_certs
             .insert(certificate.view_number(), certificate);
-        if self.is_leader(view + 1, epoch) {
+        if self.is_leader(view + 1, epoch).await {
             let locked_view = self.locked_qc.as_ref().map(|qc| qc.view_number())?;
             let proposal = self.proposals.get(&locked_view)?;
             self.coordinator_handle
-                .request_header(proposal.clone(), view, epoch);
+                .request_header(proposal.clone(), view, epoch)
+                .await
+                .ok()?;
             Some(())
         } else {
             None
         }
     }
 
-    fn handle_view_sync_certificate(
+    async fn handle_view_sync_certificate(
         &mut self,
         certificate: ViewSyncCommitCertificate2<TYPES>,
     ) -> Option<()> {
@@ -382,11 +431,13 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         let epoch = certificate.epoch()?;
         self.view_sync_certs
             .insert(certificate.view_number(), certificate);
-        if self.is_leader(view, epoch) {
+        if self.is_leader(view, epoch).await {
             let locked_view = self.locked_qc.as_ref().map(|qc| qc.view_number())?;
             let proposal = self.proposals.get(&locked_view)?;
             self.coordinator_handle
-                .request_header(proposal.clone(), view, epoch);
+                .request_header(proposal.clone(), view, epoch)
+                .await
+                .ok()?;
             Some(())
         } else {
             None

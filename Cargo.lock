@@ -5889,6 +5889,7 @@ dependencies = [
  "csv",
  "either",
  "futures",
+ "hotshot",
  "hotshot-builder-api",
  "hotshot-contract-adapter",
  "hotshot-task",
