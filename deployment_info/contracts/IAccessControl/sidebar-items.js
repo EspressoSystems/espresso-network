@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["IAccessControlCalls"],"fn":["new"],"struct":["IAccessControlInstance","hasRoleCall","hasRoleReturn"]};

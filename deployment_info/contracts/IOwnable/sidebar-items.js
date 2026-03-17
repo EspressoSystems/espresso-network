@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["IOwnableCalls"],"fn":["new"],"struct":["IOwnableInstance","ownerCall","ownerReturn"]};

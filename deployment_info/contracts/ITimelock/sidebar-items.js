@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["ITimelockCalls"],"fn":["new"],"struct":["ITimelockInstance","getMinDelayCall","getMinDelayReturn"]};

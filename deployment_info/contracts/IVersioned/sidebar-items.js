@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["IVersionedCalls"],"fn":["new"],"struct":["IVersionedInstance","getVersionCall","getVersionReturn"]};
