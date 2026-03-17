@@ -1,27 +1,25 @@
 use committable::Commitment;
 use hotshot_types::{
-    data::{EpochNumber, Leaf2, VidCommitment2, VidDisperse2, ViewNumber},
+    data::{EpochNumber, Leaf2, QuorumProposal2, VidCommitment2, VidDisperse2, ViewNumber},
     drb::{DrbInput, DrbResult},
     simple_certificate::{TimeoutCertificate2, ViewSyncCommitCertificate2},
     traits::node_implementation::NodeType,
     vote::HasViewNumber,
 };
 
-use crate::message::{
-    Certificate1, Certificate2, ConsensusMessage, Proposal, ProposalMessage, Vote1, Vote2,
-};
+use crate::message::{Certificate1, Certificate2, ConsensusMessage, ProposalMessage, Vote1, Vote2};
 
 pub(crate) struct StateRequest<TYPES: NodeType> {
     pub view: ViewNumber,
     pub parent_view: ViewNumber,
     pub epoch: EpochNumber,
     pub block_number: u64,
-    pub proposal: Proposal<TYPES>,
+    pub proposal: QuorumProposal2<TYPES>,
 }
 
 pub(crate) struct StateResponse<TYPES: NodeType> {
     pub view: ViewNumber,
-    pub commitment: Commitment<Proposal<TYPES>>,
+    pub commitment: Commitment<Leaf2<TYPES>>,
 }
 
 pub(crate) struct HeaderRequest {
@@ -31,25 +29,37 @@ pub(crate) struct HeaderRequest {
     pub block_number: u64,
 }
 
-pub enum Event<TYPES: NodeType> {
+#[allow(clippy::large_enum_variant)]
+pub enum Action<TYPES: NodeType> {
     SendMessage(ConsensusMessage<TYPES>),
     RequestState(StateRequest<TYPES>),
     RequestHeader(HeaderRequest),
+    RequestVidDisperse(TYPES::BlockPayload),
+    RequestProposal(ViewNumber, Commitment<Leaf2<TYPES>>),
+    RequestDRB(DrbInput),
+}
+
+#[allow(clippy::large_enum_variant)]
+pub enum Update<TYPES: NodeType> {
     StateVerified(StateRequest<TYPES>),
     HeaderCreated(TYPES::BlockHeader),
     StateVerificationFailed(StateRequest<TYPES>),
     HeaderCreationFailed(HeaderRequest),
-    RequestVidDisperse(TYPES::BlockPayload),
     VidDisperseCreated(VidCommitment2, VidDisperse2<TYPES>),
     LeafDecided(Vec<Leaf2<TYPES>>),
-    RequestProposal(ViewNumber, Commitment<Leaf2<TYPES>>),
-    RequestDRB(DrbInput),
     DrbCalculated(DrbResult),
     LockUpdated(Certificate2<TYPES>),
     ViewChanged(ViewNumber, EpochNumber),
     BlockReconstructed(ViewNumber, TYPES::BlockPayload, VidCommitment2),
 }
 
+#[allow(clippy::large_enum_variant)]
+pub enum Event<TYPES: NodeType> {
+    Action(Action<TYPES>),
+    Update(Update<TYPES>),
+}
+
+#[allow(clippy::large_enum_variant)]
 pub enum ConsensusEvent<TYPES: NodeType> {
     Proposal(ProposalMessage<TYPES>),
     Certificate1(Certificate1<TYPES>),
@@ -86,30 +96,35 @@ impl<TYPES: NodeType> ConsensusEvent<TYPES> {
     }
 }
 
+#[allow(clippy::large_enum_variant)]
 pub enum NetworkEvent<TYPES: NodeType> {
     SendMessage(ConsensusMessage<TYPES>),
     ViewChanged(ViewNumber, EpochNumber),
 }
 
+#[allow(clippy::large_enum_variant)]
 pub enum IOEvent<TYPES: NodeType> {
     StorageEvent(StorageEvent<TYPES>),
     NetworkEvent(NetworkEvent<TYPES>),
 }
 
+#[allow(clippy::large_enum_variant)]
 pub enum StorageEvent<TYPES: NodeType> {
-    StoreProposal(Proposal<TYPES>),
+    StoreProposal(QuorumProposal2<TYPES>),
     StoreCertificate1(Certificate1<TYPES>),
     StoreCertificate2(Certificate2<TYPES>),
     StoreBlock(TYPES::BlockPayload),
     StoreShares(VidDisperse2<TYPES>),
 }
 
+#[allow(clippy::large_enum_variant)]
 pub enum StateEvent<TYPES: NodeType> {
     RequestState(StateRequest<TYPES>),
     RequestHeader(HeaderRequest),
     UpdateState(TYPES::ValidatedState, ViewNumber, Commitment<Leaf2<TYPES>>),
 }
 
+#[allow(clippy::large_enum_variant)]
 pub enum CpuEvent<TYPES: NodeType> {
     DrbRequest(DrbInput),
     VidShare(VidDisperse2<TYPES>),

@@ -1,3 +1,4 @@
+#[allow(dead_code)]
 pub mod message;
 
 pub mod consensus;
@@ -10,4 +11,7 @@ pub mod cpu_tasks;
 
 pub mod coordinator;
 
+#[allow(dead_code)]
 mod events;
+
+mod helpers;
