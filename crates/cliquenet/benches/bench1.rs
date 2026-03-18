@@ -4,7 +4,8 @@ use cliquenet::{Address, Keypair, MAX_MESSAGE_SIZE, NetConf, NetworkError, Publi
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 #[cfg(feature = "metrics")]
 use hotshot_types::traits::metrics::NoMetrics;
-use rand::RngCore;
+use rand::Rng;
+use test_utils::reserve_tcp_port;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -47,22 +48,19 @@ async fn setup_cliquenet() -> (Retry<u8>, Retry<u8>) {
     let a = Keypair::generate().unwrap();
     let b = Keypair::generate().unwrap();
 
+    let port_a = reserve_tcp_port().expect("OS should have ephemeral ports available");
+    let port_b = reserve_tcp_port().expect("OS should have ephemeral ports available");
+
     let all: [(u8, PublicKey, Address); 2] = [
         (
             A,
             a.public_key(),
-            Address::from((
-                Ipv4Addr::from([127, 0, 0, 1]),
-                portpicker::pick_unused_port().unwrap(),
-            )),
+            Address::from((Ipv4Addr::from([127, 0, 0, 1]), port_a)),
         ),
         (
             B,
             b.public_key(),
-            Address::from((
-                Ipv4Addr::from([127, 0, 0, 1]),
-                portpicker::pick_unused_port().unwrap(),
-            )),
+            Address::from((Ipv4Addr::from([127, 0, 0, 1]), port_b)),
         ),
     ];
 

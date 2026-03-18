@@ -1,34 +1,32 @@
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use alloy::primitives::Address;
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 #[cfg(any(test, feature = "testing"))]
 use async_lock::RwLock;
 use async_trait::async_trait;
 use hotshot_contract_adapter::sol_types::{LightClientV3, StakeTableV2};
 use hotshot_types::{
-    data::EpochNumber, epoch_membership::EpochMembershipCoordinator, traits::states::InstanceState,
-    HotShotConfig,
+    HotShotConfig, data::EpochNumber, epoch_membership::EpochMembershipCoordinator,
+    traits::states::InstanceState,
 };
 use moka::future::Cache;
-#[cfg(any(test, feature = "testing"))]
-use vbs::version::StaticVersionType;
 use vbs::version::Version;
 
 use super::{
+    SeqTypes, UpgradeType, ViewBasedUpgrade,
     state::ValidatedState,
     traits::{EventsPersistenceRead, MembershipPersistence, StakeTuple},
     v0_1::NoStorage,
     v0_3::{EventKey, IndexedStake, StakeTableEvent},
-    SeqTypes, UpgradeType, ViewBasedUpgrade,
 };
 use crate::{
+    AuthenticatedValidatorMap, EpochCommittees, PubKey, RegisteredValidatorMap,
     v0::{
-        impls::StakeTableHash, traits::StateCatchup, v0_3::ChainConfig, GenesisHeader, L1BlockInfo,
-        L1Client, Timestamp, Upgrade, UpgradeMode,
+        GenesisHeader, L1BlockInfo, L1Client, Timestamp, Upgrade, UpgradeMode,
+        impls::StakeTableHash, traits::StateCatchup, v0_3::ChainConfig,
     },
     v0_3::{RegisteredValidator, RewardAmount},
-    AuthenticatedValidatorMap, EpochCommittees, PubKey, RegisteredValidatorMap,
 };
 
 /// Represents the immutable state of a node.
@@ -69,7 +67,7 @@ pub struct NodeState {
     /// Current version of the sequencer.
     ///
     /// This version is checked to determine if an upgrade is planned,
-    /// and which version variant for versioned types  
+    /// and which version variant for versioned types
     /// to use in functions such as genesis.
     /// (example: genesis returns V2 Header if version is 0.2)
     pub current_version: Version,
@@ -198,6 +196,10 @@ impl MembershipPersistence for NoStorage {
         bail!("unimplemented")
     }
 
+    async fn delete_stake_tables(&self) -> anyhow::Result<()> {
+        Ok(())
+    }
+
     async fn store_all_validators(
         &self,
         _epoch: EpochNumber,
@@ -266,7 +268,7 @@ impl NodeState {
     #[cfg(any(test, feature = "testing"))]
     pub fn mock() -> Self {
         use hotshot_example_types::storage_types::TestStorage;
-        use vbs::version::StaticVersion;
+        use versions::version;
 
         use crate::v0_3::Fetcher;
 
@@ -289,16 +291,16 @@ impl NodeState {
             chain_config,
             l1,
             Arc::new(mock::MockStateCatchup::default()),
-            StaticVersion::<0, 1>::version(),
+            version(0, 1),
             coordinator,
-            Version { major: 0, minor: 1 },
+            version(0, 1),
         )
     }
 
     #[cfg(any(test, feature = "testing"))]
     pub fn mock_v2() -> Self {
         use hotshot_example_types::storage_types::TestStorage;
-        use vbs::version::StaticVersion;
+        use versions::version;
 
         use crate::v0_3::Fetcher;
 
@@ -321,16 +323,16 @@ impl NodeState {
             chain_config,
             l1,
             Arc::new(mock::MockStateCatchup::default()),
-            StaticVersion::<0, 2>::version(),
+            version(0, 2),
             coordinator,
-            Version { major: 0, minor: 2 },
+            version(0, 2),
         )
     }
 
     #[cfg(any(test, feature = "testing"))]
     pub fn mock_v3() -> Self {
         use hotshot_example_types::storage_types::TestStorage;
-        use vbs::version::StaticVersion;
+        use versions::version;
 
         use crate::v0_3::Fetcher;
         let l1 = L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
@@ -351,9 +353,9 @@ impl NodeState {
             ChainConfig::default(),
             l1,
             mock::MockStateCatchup::default(),
-            StaticVersion::<0, 3>::version(),
+            version(0, 3),
             coordinator,
-            Version { major: 0, minor: 3 },
+            version(0, 3),
         )
     }
 
@@ -423,7 +425,7 @@ impl From<BTreeMap<Version, Upgrade>> for UpgradeMap {
 impl Default for NodeState {
     fn default() -> Self {
         use hotshot_example_types::storage_types::TestStorage;
-        use vbs::version::StaticVersion;
+        use versions::version;
 
         use crate::v0_3::Fetcher;
 
@@ -446,9 +448,9 @@ impl Default for NodeState {
             chain_config,
             l1,
             Arc::new(mock::MockStateCatchup::default()),
-            StaticVersion::<0, 1>::version(),
+            version(0, 1),
             coordinator,
-            Version { major: 0, minor: 1 },
+            version(0, 1),
         )
     }
 }
@@ -518,10 +520,10 @@ pub mod mock {
 
     use super::*;
     use crate::{
+        BackoffParams, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment, Leaf2,
         retain_accounts,
         v0_3::{RewardAccountProofV1, RewardAccountV1, RewardMerkleCommitmentV1},
         v0_4::{PermittedRewardMerkleTreeV2, RewardAccountV2, RewardMerkleCommitmentV2},
-        BackoffParams, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment, Leaf2,
     };
 
     #[derive(Debug, Clone)]

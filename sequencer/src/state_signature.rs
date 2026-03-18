@@ -7,20 +7,24 @@ use std::{
 
 use alloy::primitives::FixedBytes;
 use async_lock::RwLock;
-use espresso_types::{traits::SequencerPersistence, PubKey};
+use espresso_types::{PubKey, traits::SequencerPersistence};
 use hotshot::types::{Event, EventType, SchnorrPubKey};
 use hotshot_task_impls::helpers::derive_signed_state_digest;
 use hotshot_types::{
+    data::EpochNumber,
     event::LeafInfo,
     light_client::{
         LCV2StateSignatureRequestBody, LCV3StateSignatureRequestBody, LightClientState,
         StakeTableState, StateSignKey, StateSignature, StateVerKey,
     },
+    stake_table::HSStakeTable,
     traits::{
         block_contents::BlockHeader,
         network::ConnectedNetwork,
-        node_implementation::{NodeType, Versions},
-        signature_key::{LCV1StateSignatureKey, LCV2StateSignatureKey, LCV3StateSignatureKey},
+        signature_key::{
+            LCV1StateSignatureKey, LCV2StateSignatureKey, LCV3StateSignatureKey,
+            StakeTableEntryType,
+        },
     },
     utils::{is_ge_epoch_root, option_epoch_from_block_number},
 };
@@ -29,7 +33,7 @@ use surf_disco::{Client, Url};
 use tide_disco::error::ServerError;
 use vbs::version::StaticVersionType;
 
-use crate::{context::Consensus, SeqTypes};
+use crate::{SeqTypes, context::Consensus};
 
 /// A relay server that's collecting and serving the light client state signatures
 pub mod relay_server;
@@ -49,13 +53,16 @@ pub struct StateSigner<ApiVer: StaticVersionType> {
     signatures: RwLock<StateSignatureMemStorage>,
 
     /// Commitment for current fixed stake table
-    voting_stake_table: StakeTableState,
+    voting_stake_table_state: StakeTableState,
 
     /// epoch for the current stake table state
-    voting_stake_table_epoch: Option<<SeqTypes as NodeType>::Epoch>,
+    voting_stake_table_epoch: Option<EpochNumber>,
 
     /// Capacity of the stake table
     stake_table_capacity: usize,
+
+    /// Indicate whether the signer is in the voting stake table and should sign the state
+    should_vote: bool,
 
     /// The state relay server url
     relay_server_client: Option<Client<ServerError, ApiVer>>,
@@ -65,17 +72,19 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
     pub fn new(
         sign_key: StateSignKey,
         ver_key: StateVerKey,
-        voting_stake_table: StakeTableState,
-        voting_stake_table_epoch: Option<<SeqTypes as NodeType>::Epoch>,
+        voting_stake_table_state: StakeTableState,
+        voting_stake_table_epoch: Option<EpochNumber>,
         stake_table_capacity: usize,
+        should_vote: bool,
     ) -> Self {
         Self {
             sign_key,
             ver_key,
-            voting_stake_table,
+            voting_stake_table_state,
             voting_stake_table_epoch,
             stake_table_capacity,
             signatures: Default::default(),
+            should_vote,
             relay_server_client: Default::default(),
         }
     }
@@ -86,14 +95,13 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
         self
     }
 
-    pub(super) async fn handle_event<N, P, V>(
+    pub(super) async fn handle_event<N, P>(
         &mut self,
         event: &Event<SeqTypes>,
-        consensus_state: Arc<RwLock<Consensus<N, P, V>>>,
+        consensus_state: Arc<RwLock<Consensus<N, P>>>,
     ) where
         N: ConnectedNetwork<PubKey>,
         P: SequencerPersistence,
-        V: Versions,
     {
         let EventType::Decide { leaf_chain, .. } = &event.event else {
             return;
@@ -112,18 +120,7 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
                 let cur_block_height = state.block_height;
                 let blocks_per_epoch = consensus.epoch_height;
 
-                // The last few state updates are handled in the consensus, we do not sign them.
-                if leaf.with_epoch & is_ge_epoch_root(cur_block_height, blocks_per_epoch) {
-                    tracing::debug!("Skipping epoch transition block {cur_block_height}");
-                    return;
-                }
-
-                let Ok(auth_root) = leaf.block_header().auth_root() else {
-                    tracing::error!("Failed to get auth root for light client state");
-                    return;
-                };
-
-                let option_state_epoch = option_epoch_from_block_number::<SeqTypes>(
+                let option_state_epoch = option_epoch_from_block_number(
                     leaf.with_epoch,
                     cur_block_height,
                     blocks_per_epoch,
@@ -141,14 +138,12 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
                         );
                         return;
                     };
-                    match membership
-                        .stake_table()
-                        .await
-                        .commitment(self.stake_table_capacity)
-                    {
+                    let stake_table = membership.stake_table().await;
+                    match stake_table.commitment(self.stake_table_capacity) {
                         Ok(stake_table_state) => {
+                            self.should_vote = should_vote(&stake_table, &self.ver_key);
                             self.voting_stake_table_epoch = option_state_epoch;
-                            self.voting_stake_table = stake_table_state;
+                            self.voting_stake_table_state = stake_table_state;
                         },
                         Err(err) => {
                             tracing::error!("Failed to compute stake table commitment: {:?}", err);
@@ -157,8 +152,28 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
                     }
                 }
 
+                if !self.should_vote {
+                    tracing::debug!(
+                        "Not signing the state at block height {} since not in the voting stake \
+                         table",
+                        state.block_height
+                    );
+                    return;
+                }
+
+                // The last few state updates are handled in the consensus, we do not sign them.
+                if leaf.with_epoch & is_ge_epoch_root(cur_block_height, blocks_per_epoch) {
+                    tracing::debug!("Skipping epoch transition block {cur_block_height}");
+                    return;
+                }
+
+                let Ok(auth_root) = leaf.block_header().auth_root() else {
+                    tracing::error!("Failed to get auth root for light client state");
+                    return;
+                };
+
                 let Ok(request_body) = self
-                    .get_request_body(&state, &self.voting_stake_table, auth_root)
+                    .get_request_body(&state, &self.voting_stake_table_state, auth_root)
                     .await
                 else {
                     tracing::error!("Failed to sign new state");
@@ -277,4 +292,11 @@ impl StateSignatureMemStorage {
     pub fn get_signature(&self, height: u64) -> Option<LCV3StateSignatureRequestBody> {
         self.pool.get(&height).cloned()
     }
+}
+
+pub(crate) fn should_vote(stake_table: &HSStakeTable<SeqTypes>, ver_key: &SchnorrPubKey) -> bool {
+    stake_table
+        .0
+        .iter()
+        .any(|peer| &peer.state_ver_key == ver_key && !peer.stake_table_entry.stake().is_zero())
 }

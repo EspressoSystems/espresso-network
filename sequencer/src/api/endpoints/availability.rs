@@ -2,44 +2,42 @@ use std::time::Duration;
 
 use espresso_types::{NamespaceId, NsProof, PubKey, StateCertQueryDataV1, StateCertQueryDataV2};
 use futures::{
-    future::{try_join_all, FutureExt, TryFutureExt},
+    future::{FutureExt, TryFutureExt, try_join_all},
     join,
     stream::{Stream, StreamExt, TryStreamExt},
     try_join,
 };
 use hotshot_query_service::{
+    ApiState,
     availability::{
         self, AvailabilityDataSource, BlockQueryData, Error, FetchBlockSnafu, VidCommonQueryData,
     },
     node::{BlockId, NodeDataSource},
     types::HeightIndexed,
-    ApiState,
 };
 use hotshot_types::{
-    data::VidShare,
-    simple_certificate::LightClientStateUpdateCertificateV2,
-    traits::{network::ConnectedNetwork, node_implementation::Versions},
-    vid::avidm::AvidMShare,
+    data::VidShare, simple_certificate::LightClientStateUpdateCertificateV2,
+    traits::network::ConnectedNetwork, vid::avidm::AvidMShare,
 };
 use snafu::OptionExt;
-use tide_disco::{method::ReadState, Api, RequestParams, StatusCode};
+use tide_disco::{Api, RequestParams, StatusCode, method::ReadState};
 use tracing::warn;
 use vbs::version::StaticVersionType;
 
 use crate::{
+    SeqTypes, SequencerApiVersion, SequencerPersistence,
     api::{
+        StorageState,
         data_source::{
             RequestResponseDataSource, SequencerDataSource, StateCertDataSource,
             StateCertFetchingDataSource,
         },
-        StorageState,
     },
-    SeqTypes, SequencerApiVersion, SequencerPersistence,
 };
 
-pub(in crate::api) type AvailState<N, P, D, ApiVer> = ApiState<StorageState<N, P, D, ApiVer>>;
+pub(in crate::api) type AvailState<N, P, D> = ApiState<StorageState<N, P, D>>;
 
-type AvailabilityApi<N, P, D, V, ApiVer> = Api<AvailState<N, P, D, V>, Error, ApiVer>;
+type AvailabilityApi<N, P, D, ApiVer> = Api<AvailState<N, P, D>, Error, ApiVer>;
 
 /// Get a namespace proof for the given block, if possible.
 ///
@@ -151,7 +149,7 @@ fn extract_ns_proof_v0(
             return Err(Error::Custom {
                 message: "Unsupported VID version, use new API version instead.".to_string(),
                 status: StatusCode::NOT_FOUND,
-            })
+            });
         },
         None => None,
     };
@@ -252,7 +250,7 @@ fn get_block_stream_for_ns_proof<'a, S>(
     req: RequestParams,
     state: &'a S,
 ) -> impl 'a
-       + Stream<
++ Stream<
     Item = Result<
         (
             NamespaceId,
@@ -329,9 +327,9 @@ where
 // TODO (abdul): replace snafu with `this_error` in  hotshot query service
 // Snafu has been replaced by `this_error` everywhere.
 // However, the query service still uses snafu
-pub(in crate::api) fn availability<N, P, D, V: Versions>(
+pub(in crate::api) fn availability<N, P, D>(
     api_ver: semver::Version,
-) -> anyhow::Result<AvailabilityApi<N, P, D, V, SequencerApiVersion>>
+) -> anyhow::Result<AvailabilityApi<N, P, D, SequencerApiVersion>>
 where
     N: ConnectedNetwork<PubKey>,
     D: SequencerDataSource + Send + Sync + 'static,
@@ -343,7 +341,7 @@ where
     let timeout = options.fetch_timeout;
     let limit = options.large_object_range_limit;
 
-    let mut api = availability::define_api::<AvailState<N, P, D, _>, SeqTypes, _>(
+    let mut api = availability::define_api::<AvailState<N, P, D>, SeqTypes, _>(
         &options,
         SequencerApiVersion::instance(),
         api_ver.clone(),

@@ -7,12 +7,17 @@ use std::{
 };
 
 use alloy::primitives::U256;
-use anyhow::{anyhow, bail, ensure, Context};
+use anyhow::{Context, anyhow, bail, ensure};
 use async_lock::RwLock;
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
 use espresso_types::{
+    BackoffParams, BlockMerkleTree, EpochVersion, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
+    FeeMerkleTree, Leaf2, NodeState, PermittedRewardMerkleTreeV2, PubKey, RewardAccountProofV2,
+    RewardAccountV2, RewardMerkleCommitmentV2, RewardMerkleTreeV2, SeqTypes, SequencerVersions,
+    ValidatedState,
     config::PublicNetworkConfig,
+    forgotten_accounts_include,
     traits::SequencerPersistence,
     v0::traits::StateCatchup,
     v0_3::{
@@ -20,18 +25,17 @@ use espresso_types::{
         RewardMerkleTreeV1,
     },
     v0_4::{
-        forgotten_accounts_include, PermittedRewardMerkleTreeV2, RewardAccountProofV2,
-        RewardAccountV2, RewardMerkleCommitmentV2, RewardMerkleTreeV2,
+        PermittedRewardMerkleTreeV2, RewardAccountProofV2, RewardAccountV2,
+        RewardMerkleCommitmentV2, RewardMerkleTreeV2, forgotten_accounts_include,
     },
-    BackoffParams, BlockMerkleTree, EpochVersion, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
-    FeeMerkleTree, Leaf2, NodeState, PubKey, SeqTypes, SequencerVersions, ValidatedState,
 };
 use futures::{
+    StreamExt,
     future::{Future, FutureExt, TryFuture, TryFutureExt},
     stream::FuturesUnordered,
-    StreamExt,
 };
 use hotshot_types::{
+    ValidatorConfig,
     consensus::Consensus,
     data::ViewNumber,
     message::UpgradeLock,
@@ -39,16 +43,14 @@ use hotshot_types::{
     simple_certificate::LightClientStateUpdateCertificateV2,
     stake_table::HSStakeTable,
     traits::{
+        ValidatedState as ValidatedStateTrait,
         metrics::{Counter, CounterFamily, Metrics},
         network::ConnectedNetwork,
-        node_implementation::{ConsensusTime as _, NodeType, Versions},
-        ValidatedState as ValidatedStateTrait,
     },
-    utils::{verify_leaf_chain, View, ViewInner},
-    ValidatorConfig,
+    utils::{View, ViewInner, verify_leaf_chain},
 };
 use itertools::Itertools;
-use jf_merkle_tree_compat::{prelude::MerkleNode, ForgetableMerkleTreeScheme, MerkleTreeScheme};
+use jf_merkle_tree_compat::{ForgetableMerkleTreeScheme, MerkleTreeScheme, prelude::MerkleNode};
 use parking_lot::Mutex;
 use priority_queue::PriorityQueue;
 use serde::de::DeserializeOwned;
@@ -58,6 +60,7 @@ use tokio::time::timeout;
 use tokio_util::task::AbortOnDropHandle;
 use url::Url;
 use vbs::version::StaticVersionType;
+use versions::EPOCH_VERSION;
 
 use crate::api::{BlocksFrontier, RewardMerkleTreeDataSource, RewardMerkleTreeV2Data};
 
@@ -173,7 +176,7 @@ impl<ApiVer: StaticVersionType> StatePeers<ApiVer> {
         while let Some((id, score)) = scores.pop() {
             let client = &self.clients[id];
             tracing::info!("fetching from {}", client.url);
-            match timeout(timeout_dur, f(client.clone()).into_future()).await {
+            match timeout(timeout_dur, TryFutureExt::into_future(f(client.clone()))).await {
                 Ok(Ok(t)) => {
                     requests.insert(id, true);
                     res = Ok(t);
@@ -388,7 +391,7 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
             &stake_table,
             success_threshold,
             height,
-            &UpgradeLock::<SeqTypes, SequencerVersions<EpochVersion, EpochVersion>>::new(),
+            &UpgradeLock::<SeqTypes>::new(versions::Upgrade::trivial(EPOCH_VERSION)),
         )
         .await
         .with_context(|| format!("failed to verify leaf chain at height {height}"))
@@ -398,7 +401,7 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
         &self,
         retry: usize,
         height: u64,
-        view: ViewNumber,
+        _view: ViewNumber,
         reward_merkle_tree_root: RewardMerkleCommitmentV2,
         accounts: Arc<Vec<RewardAccountV2>>,
     ) -> anyhow::Result<PermittedRewardMerkleTreeV2> {
@@ -712,7 +715,7 @@ where
             &stake_table,
             success_threshold,
             height,
-            &UpgradeLock::<SeqTypes, SequencerVersions<EpochVersion, EpochVersion>>::new(),
+            &UpgradeLock::<SeqTypes>::new(versions::Upgrade::trivial(EPOCH_VERSION)),
         )
         .await
         .with_context(|| "failed to verify leaf chain")?;
@@ -1657,13 +1660,9 @@ impl StateCatchup for ParallelStateCatchup {
 /// Add accounts to the in-memory consensus state.
 /// We use this during catchup after receiving verified accounts.
 #[allow(clippy::type_complexity)]
-pub async fn add_fee_accounts_to_state<
-    N: ConnectedNetwork<PubKey>,
-    V: Versions,
-    P: SequencerPersistence,
->(
+pub async fn add_fee_accounts_to_state<N: ConnectedNetwork<PubKey>, P: SequencerPersistence>(
     consensus: &Arc<RwLock<Consensus<SeqTypes>>>,
-    view: &<SeqTypes as NodeType>::View,
+    view: &ViewNumber,
     accounts: &[FeeAccount],
     tree: &FeeMerkleTree,
     leaf: Leaf2,
@@ -1717,11 +1716,10 @@ pub async fn add_fee_accounts_to_state<
 #[allow(clippy::type_complexity)]
 pub async fn add_v2_reward_accounts_to_state<
     N: ConnectedNetwork<PubKey>,
-    V: Versions,
     P: SequencerPersistence,
 >(
     consensus: &Arc<RwLock<Consensus<SeqTypes>>>,
-    view: &<SeqTypes as NodeType>::View,
+    view: &ViewNumber,
     accounts: &[RewardAccountV2],
     tree: &RewardMerkleTreeV2,
     leaf: Leaf2,
@@ -1775,11 +1773,10 @@ pub async fn add_v2_reward_accounts_to_state<
 #[allow(clippy::type_complexity)]
 pub async fn add_v1_reward_accounts_to_state<
     N: ConnectedNetwork<PubKey>,
-    V: Versions,
     P: SequencerPersistence,
 >(
     consensus: &Arc<RwLock<Consensus<SeqTypes>>>,
-    view: &<SeqTypes as NodeType>::View,
+    view: &ViewNumber,
     accounts: &[RewardAccountV1],
     tree: &RewardMerkleTreeV1,
     leaf: Leaf2,

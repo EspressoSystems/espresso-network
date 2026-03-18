@@ -2,7 +2,7 @@
 name = "sequencer"
 version = "0.1.0"
 authors = ["Espresso Systems <hello@espressosys.com>"]
-edition = "2021"
+edition.workspace = true
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["hotshot-testing"]
@@ -10,10 +10,7 @@ normal = ["hotshot-testing"]
 [package.metadata.cargo-machete]
 ignored = ["vergen", "vergen-gitcl", "include_dir", "hotshot_builder_api"]
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [features]
-default = ["fee", "pos", "drb-and-header", "da-upgrade"]
 testing = [
     "hotshot-testing",
     "espresso-types/testing",
@@ -23,42 +20,34 @@ testing = [
 ]
 benchmarking = []
 embedded-db = ["hotshot-query-service/embedded-db", "sqlx/sqlite"]
-fee = []
-pos = []
-drb-and-header = []
-da-upgrade = []
 
 [dependencies]
-
 alloy = { workspace = true }
 anyhow = { workspace = true }
 ark-ff = { workspace = true }
-ark-serialize = { workspace = true, features = ["derive"] }
+ark-serialize = { workspace = true }
 async-channel = { workspace = true }
 async-lock = { workspace = true }
 async-once-cell = { workspace = true }
 async-trait = { workspace = true }
 bincode = { workspace = true }
-byteorder = "1"
-hotshot-builder-refactored = { path = "../crates/hotshot-builder/refactored" }
-
-# CDN imports
+byteorder = { workspace = true }
 cdn-broker = { workspace = true }
 cdn-marshal = { workspace = true }
 clap = { workspace = true }
-client = { path = "../client" }
+client = { workspace = true }
 committable = { workspace = true }
-csv = "1"
-derivative = "2.2"
+csv = { workspace = true }
+derivative = { workspace = true }
 derive_more = { workspace = true }
 dotenvy = { workspace = true }
 either = { workspace = true }
-espresso-contract-deployer = { path = "../contracts/rust/deployer" }
-espresso-types = { path = "../types" }
+espresso-contract-deployer = { workspace = true }
+espresso-types = { workspace = true }
 futures = { workspace = true }
-generic-tests = "0.1.3"
-
+generic-tests = { workspace = true }
 hotshot = { workspace = true }
+hotshot-builder-refactored = { workspace = true }
 hotshot-contract-adapter = { workspace = true }
 hotshot-events-service = { workspace = true }
 hotshot-libp2p-networking = { workspace = true }
@@ -66,52 +55,43 @@ hotshot-orchestrator = { workspace = true }
 hotshot-query-service = { workspace = true }
 hotshot-state-prover = { workspace = true }
 hotshot-task-impls = { workspace = true }
-# Dependencies for feature `testing`
 hotshot-testing = { workspace = true, optional = true }
 hotshot-types = { workspace = true }
-
-light-client = { workspace = true }
-
-include_dir = "0.7"
+include_dir = { workspace = true }
 indexmap = { workspace = true }
 itertools = { workspace = true }
+jf-advz = { workspace = true }
 jf-crhf = { workspace = true }
 jf-merkle-tree-compat = { workspace = true }
 jf-rescue = { workspace = true }
-
-jf-advz = { workspace = true }
-jf-signature = { workspace = true, features = ["bls", "schnorr"] }
+jf-signature = { workspace = true }
 libp2p = { workspace = true }
+light-client = { workspace = true }
 moka = { workspace = true }
-num_enum = "0.7"
-parking_lot = "0.12"
-portpicker = { workspace = true }
+num_enum = { workspace = true }
+parking_lot = { workspace = true }
 priority-queue = { workspace = true }
 rand = { workspace = true }
 rand_chacha = { workspace = true }
 rand_distr = { workspace = true }
-request-response = { path = "../request-response" }
+request-response = { workspace = true }
 reqwest = { workspace = true }
 rstest = { workspace = true }
 rstest_reuse = { workspace = true }
 semver = { workspace = true }
-sequencer-utils = { path = "../utils" }
+sequencer-utils = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
-snafu = "0.8"
-sqlx = { workspace = true, features = [
-    "bit-vec",
-    "postgres",
-    "runtime-tokio",
-    "tls-native-tls",
-] }
+snafu = { workspace = true }
+sqlx = { workspace = true }
 staking-cli = { workspace = true }
-static_assertions = "1"
+static_assertions = { workspace = true }
 strum = { workspace = true }
 surf-disco = { workspace = true }
 tagged-base64 = { workspace = true }
 tempfile = { workspace = true }
+test-utils = { workspace = true }
 thiserror = { workspace = true }
 tide-disco = { workspace = true }
 time = { workspace = true }
@@ -123,7 +103,8 @@ tracing-subscriber = { workspace = true }
 url = { workspace = true }
 vbs = { workspace = true }
 vec1 = { workspace = true }
-vid = { path = "../vid" }
+versions = { workspace = true }
+vid = { workspace = true }
 
 [build-dependencies]
 anyhow = { workspace = true }
@@ -131,13 +112,13 @@ vergen = { workspace = true }
 vergen-gitcl = { workspace = true }
 
 [dev-dependencies]
-escargot = "0.5.10"
-espresso-macros = { git = "https://github.com/EspressoSystems/espresso-macros.git", tag = "0.1.0" }
+escargot = { workspace = true }
+espresso-macros = { workspace = true }
 hotshot-example-types = { workspace = true }
 hotshot-query-service = { workspace = true }
 hotshot-testing = { workspace = true }
 pretty_assertions = { workspace = true }
-rand = "0.8.5"
+rand = { workspace = true }
 reqwest = { workspace = true }
 test-log = { workspace = true }
 

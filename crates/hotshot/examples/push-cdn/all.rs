@@ -11,8 +11,8 @@ pub mod types;
 use std::path::Path;
 
 use cdn_broker::{
-    reexports::{crypto::signature::KeyPair, def::hook::NoMessageHook},
     Broker,
+    reexports::{crypto::signature::KeyPair, def::hook::NoMessageHook},
 };
 use cdn_marshal::Marshal;
 use hotshot::{
@@ -20,15 +20,15 @@ use hotshot::{
     traits::implementations::{TestingDef, WrappedSignatureKey},
     types::SignatureKey,
 };
-use hotshot_example_types::{node_types::TestVersions, state_types::TestTypes};
+use hotshot_example_types::state_types::TestTypes;
 use hotshot_orchestrator::client::ValidatorArgs;
 use hotshot_types::traits::node_implementation::NodeType;
-use infra::{gen_local_address, BUILDER_BASE_PORT};
-use rand::{rngs::StdRng, RngCore, SeedableRng};
+use infra::{BUILDER_BASE_PORT, gen_local_address};
+use rand::{RngCore, SeedableRng, rngs::StdRng};
 use tokio::spawn;
 
 use crate::{
-    infra::{read_orchestrator_init_config, run_orchestrator, OrchestratorArgs},
+    infra::{OrchestratorArgs, read_orchestrator_init_config, run_orchestrator},
     types::{Network, NodeImpl, ThisRun},
 };
 
@@ -72,9 +72,11 @@ async fn main() {
 
     // 2 brokers
     for _ in 0..2 {
-        // Get the ports to bind to
-        let private_port = portpicker::pick_unused_port().expect("could not find an open port");
-        let public_port = portpicker::pick_unused_port().expect("could not find an open port");
+        // Atomically bind to available ports
+        let private_port =
+            test_utils::reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let public_port =
+            test_utils::reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         // Extrapolate addresses
         let private_address = format!("127.0.0.1:{private_port}");
@@ -149,14 +151,12 @@ async fn main() {
         let orchestrator_url = orchestrator_url.clone();
         let builder_address = gen_local_address::<BUILDER_BASE_PORT>(i);
         let node = spawn(async move {
-            infra::main_entry_point::<TestTypes, Network, NodeImpl, TestVersions, ThisRun>(
-                ValidatorArgs {
-                    url: orchestrator_url,
-                    advertise_address: None,
-                    builder_address: Some(builder_address),
-                    network_config_file: None,
-                },
-            )
+            infra::main_entry_point::<TestTypes, Network, NodeImpl, ThisRun>(ValidatorArgs {
+                url: orchestrator_url,
+                advertise_address: None,
+                builder_address: Some(builder_address),
+                network_config_file: None,
+            })
             .await;
         });
         nodes.push(node);

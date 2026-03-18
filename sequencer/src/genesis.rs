@@ -6,10 +6,10 @@ use std::{
 use alloy::primitives::Address;
 use anyhow::{Context, Ok};
 use espresso_types::{
-    v0_3::ChainConfig, FeeAccount, FeeAmount, GenesisHeader, L1BlockInfo, L1Client, SeqTypes,
-    Timestamp, Upgrade,
+    FeeAccount, FeeAmount, GenesisHeader, L1BlockInfo, L1Client, SeqTypes, Timestamp, Upgrade,
+    v0_3::ChainConfig,
 };
-use hotshot_types::{version_ser, VersionedDaCommittee};
+use hotshot_types::{VersionedDaCommittee, version_ser};
 use serde::{Deserialize, Serialize};
 use vbs::version::Version;
 
@@ -137,17 +137,16 @@ impl Genesis {
 }
 
 mod upgrade_ser {
-
     use std::{collections::BTreeMap, fmt};
 
     use espresso_types::{
-        v0_1::{TimeBasedUpgrade, UpgradeMode, ViewBasedUpgrade},
         Upgrade, UpgradeType,
+        v0_1::{TimeBasedUpgrade, UpgradeMode, ViewBasedUpgrade},
     };
     use serde::{
+        Deserialize, Deserializer, Serialize, Serializer,
         de::{self, SeqAccess, Visitor},
         ser::SerializeSeq,
-        Deserialize, Deserializer, Serialize, Serializer,
     };
     use vbs::version::Version;
 
@@ -225,12 +224,12 @@ mod upgrade_ser {
                         (Some(_), Some(_)) => {
                             return Err(de::Error::custom(
                                 "both view and time mode parameters are set",
-                            ))
+                            ));
                         },
                         (None, None) => {
                             return Err(de::Error::custom(
                                 "no view or time mode parameters provided",
-                            ))
+                            ));
                         },
                         (None, Some(v)) => {
                             if v.start_proposing_view > v.stop_proposing_view {
@@ -298,7 +297,7 @@ mod test {
     use alloy::{
         node_bindings::Anvil,
         primitives::{B256, U256},
-        providers::{layers::AnvilProvider, ProviderBuilder},
+        providers::{ProviderBuilder, layers::AnvilProvider},
     };
     use espresso_contract_deployer::{self as deployer, Contracts};
     use espresso_types::{
@@ -642,7 +641,7 @@ mod test {
             fee_recipient = "0x0000000000000000000000000000000000000000"
             fee_contract = "{proxy_addr:?}"
 
-           
+
         "#,
         )
         .to_string();
@@ -729,9 +728,10 @@ mod test {
         // check if the result from the validation is an error
         if let Err(e) = result {
             // assert that the error message contains "Fee contract's address is not a proxy"
-            assert!(e
-                .to_string()
-                .contains("Fee contract's address for the upgrade is missing"));
+            assert!(
+                e.to_string()
+                    .contains("Fee contract's address for the upgrade is missing")
+            );
         } else {
             panic!("Expected the fee contract to be missing, but the validation succeeded");
         }
@@ -791,9 +791,10 @@ mod test {
         // check if the result from the validation is an error
         if let Err(e) = result {
             // assert that the error message contains "Fee contract's address is not a proxy"
-            assert!(e
-                .to_string()
-                .contains("Fee contract cannot use the zero address"));
+            assert!(
+                e.to_string()
+                    .contains("Fee contract cannot use the zero address")
+            );
         } else {
             panic!(
                 "Expected the fee contract to complain about the zero address but the validation \

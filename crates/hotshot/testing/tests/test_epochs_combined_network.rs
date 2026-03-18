@@ -7,7 +7,7 @@
 use std::time::Duration;
 
 use hotshot_example_types::node_types::{
-    CombinedImpl, EpochsTestVersions, TestTwoStakeTablesTypes, TestTypes,
+    CombinedImpl, TEST_VERSIONS, TestTwoStakeTablesTypes, TestTypes,
 };
 use hotshot_macros::cross_tests;
 use hotshot_testing::{
@@ -23,7 +23,7 @@ cross_tests!(
     TestName: test_combined_network_cdn_crash_with_epochs,
     Impls: [CombinedImpl],
     Types: [TestTypes, TestTwoStakeTablesTypes],
-    Versions: [EpochsTestVersions],
+    Versions: [TEST_VERSIONS.epoch],
     Ignore: false,
     Metadata: {
         let timing_data = TimingData {
@@ -69,7 +69,7 @@ cross_tests!(
     TestName: test_combined_network_reup_with_epochs,
     Impls: [CombinedImpl],
     Types: [TestTypes, TestTwoStakeTablesTypes],
-    Versions: [EpochsTestVersions],
+    Versions: [TEST_VERSIONS.epoch],
     Ignore: false,
     Metadata: {
         let timing_data = TimingData {
@@ -120,7 +120,7 @@ cross_tests!(
     TestName: test_combined_network_half_dc_with_epochs,
     Impls: [CombinedImpl],
     Types: [TestTypes, TestTwoStakeTablesTypes],
-    Versions: [EpochsTestVersions],
+    Versions: [TEST_VERSIONS.epoch],
     Ignore: false,
     Metadata: {
         let timing_data = TimingData {

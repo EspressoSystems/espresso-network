@@ -9,7 +9,7 @@ use alloy::{
     primitives::{Address, Bytes},
     providers::Provider,
 };
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use espresso_types::v0_1::L1Client;
 use hotshot_contract_adapter::sol_types::{
     EspToken, EspTokenV2, FeeContract, LightClient, LightClientV2, LightClientV2Mock,
@@ -293,7 +293,7 @@ pub async fn upgrade_light_client_v2_multisig_owner(
                 _ => {
                     return Err(anyhow!(
                         "more than one lib placeholder found, consider using a different value"
-                    ))
+                    ));
                 },
             }
         };
@@ -435,7 +435,7 @@ pub async fn upgrade_light_client_v3_multisig_owner(
                 _ => {
                     return Err(anyhow!(
                         "more than one lib placeholder found, consider using a different value"
-                    ))
+                    ));
                 },
             }
         };
@@ -771,14 +771,12 @@ pub async fn upgrade_fee_contract_multisig_owner(
             );
         }
 
-        let new_fee_contract_addr = contracts
+        contracts
             .deploy(
                 Contract::FeeContract,
                 FeeContract::deploy_builder(&provider),
             )
-            .await?;
-
-        new_fee_contract_addr
+            .await?
     } else {
         // Use dummy address for dry run
         Address::random()

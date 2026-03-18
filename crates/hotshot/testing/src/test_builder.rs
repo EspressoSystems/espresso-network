@@ -8,25 +8,24 @@ use std::{collections::HashMap, num::NonZeroUsize, rc::Rc, sync::Arc, time::Dura
 
 use async_lock::RwLock;
 use hotshot::{
+    HotShotInitializer, SystemContext, TwinsHandlerState,
     tasks::EventTransformerState,
     traits::{NetworkReliability, NodeImplementation, TestableNodeImplementation},
     types::SystemContextHandle,
-    HotShotInitializer, SystemContext, TwinsHandlerState,
 };
 use hotshot_example_types::{
     node_types::TestTypes, state_types::TestInstanceState, storage_types::TestStorage,
     testable_delay::DelayConfig,
 };
 use hotshot_types::{
-    consensus::ConsensusMetricsValue,
-    epoch_membership::EpochMembershipCoordinator,
-    storage_metrics::StorageMetricsValue,
-    traits::node_implementation::{NodeType, Versions},
-    HotShotConfig, PeerConfig, ValidatorConfig,
+    HotShotConfig, PeerConfig, ValidatorConfig, consensus::ConsensusMetricsValue,
+    epoch_membership::EpochMembershipCoordinator, storage_metrics::StorageMetricsValue,
+    traits::node_implementation::NodeType,
 };
 use hotshot_utils::anytrace::*;
 use tide_disco::Url;
 use vec1::Vec1;
+use versions::{MIN_SUPPORTED_VERSION, Upgrade};
 
 use super::{
     completion_task::{CompletionTaskDescription, TimeBasedCompletionTaskDescription},
@@ -34,7 +33,7 @@ use super::{
     txn_task::TxnTaskDescription,
 };
 use crate::{
-    helpers::{key_pair_for_id, TestNodeKeyMap},
+    helpers::{TestNodeKeyMap, key_pair_for_id},
     node_stake::TestNodeStakes,
     spinning_task::SpinningTaskDescription,
     test_launcher::{Network, ResourceGenerators, TestLauncher},
@@ -127,7 +126,7 @@ pub fn gen_node_lists<TYPES: NodeType>(
 
 /// metadata describing a test
 #[derive(Clone)]
-pub struct TestDescription<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> {
+pub struct TestDescription<TYPES: NodeType, I: NodeImplementation<TYPES>> {
     /// `HotShotConfig` used for setting up the test infrastructure.
     ///
     /// Note: this is not the same as the `HotShotConfig` passed to test nodes for `SystemContext::init`;
@@ -157,9 +156,11 @@ pub struct TestDescription<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Ver
     /// description of the solver to run
     pub solver: FakeSolverApiDescription,
     /// nodes with byzantine behaviour
-    pub behaviour: Rc<dyn Fn(u64) -> Behaviour<TYPES, I, V>>,
+    pub behaviour: Rc<dyn Fn(u64) -> Behaviour<TYPES, I>>,
     /// Delay config if any to add delays to asynchronous calls
     pub async_delay_config: HashMap<u64, DelayConfig>,
+    /// Configured version upgrade
+    pub upgrade: versions::Upgrade,
     /// view in which to propose an upgrade
     pub upgrade_view: Option<u64>,
     /// whether to initialize the solver on startup
@@ -235,25 +236,24 @@ pub fn nonempty_block_limit(limit: (u64, u64)) -> TransactionValidator {
 }
 
 #[derive(Debug)]
-pub enum Behaviour<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> {
-    ByzantineTwins(Box<dyn TwinsHandlerState<TYPES, I, V>>),
-    Byzantine(Box<dyn EventTransformerState<TYPES, I, V>>),
+pub enum Behaviour<TYPES: NodeType, I: NodeImplementation<TYPES>> {
+    ByzantineTwins(Box<dyn TwinsHandlerState<TYPES, I>>),
+    Byzantine(Box<dyn EventTransformerState<TYPES, I>>),
     Standard,
 }
 
 pub async fn create_test_handle<
     TYPES: NodeType<InstanceState = TestInstanceState>,
     I: NodeImplementation<TYPES>,
-    V: Versions,
 >(
-    metadata: TestDescription<TYPES, I, V>,
+    metadata: TestDescription<TYPES, I>,
     node_id: u64,
     network: Network<TYPES, I>,
     memberships: Arc<RwLock<TYPES::Membership>>,
     config: HotShotConfig<TYPES>,
     storage: I::Storage,
-) -> SystemContextHandle<TYPES, I, V> {
-    let initializer = HotShotInitializer::<TYPES>::from_genesis::<V>(
+) -> SystemContextHandle<TYPES, I> {
+    let initializer = HotShotInitializer::<TYPES>::from_genesis(
         TestInstanceState::new(
             metadata
                 .async_delay_config
@@ -264,6 +264,7 @@ pub async fn create_test_handle<
         metadata.test_config.epoch_height,
         metadata.test_config.epoch_start_block,
         vec![],
+        metadata.upgrade,
     )
     .await
     .unwrap();
@@ -296,6 +297,7 @@ pub async fn create_test_handle<
                     state_private_key,
                     node_id,
                     config,
+                    metadata.upgrade,
                     membership_coordinator,
                     network,
                     initializer,
@@ -316,6 +318,7 @@ pub async fn create_test_handle<
                     state_private_key,
                     node_id,
                     config,
+                    metadata.upgrade,
                     membership_coordinator,
                     network,
                     initializer,
@@ -326,12 +329,13 @@ pub async fn create_test_handle<
                 .await
         },
         Behaviour::Standard => {
-            let hotshot = SystemContext::<TYPES, I, V>::new(
+            let hotshot = SystemContext::<TYPES, I>::new(
                 public_key,
                 private_key,
                 state_private_key,
                 node_id,
                 config,
+                metadata.upgrade,
                 membership_coordinator,
                 network,
                 initializer,
@@ -383,7 +387,7 @@ impl Default for TimingData {
     }
 }
 
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TestDescription<TYPES, I, V> {
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TestDescription<TYPES, I> {
     /// the default metadata for a stress test
     #[must_use]
     #[allow(clippy::redundant_field_names)]
@@ -409,7 +413,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TestDescription
     #[allow(clippy::redundant_field_names)]
     pub fn default_multiple_rounds() -> Self {
         let num_nodes_with_stake = 10;
-        TestDescription::<TYPES, I, V> {
+        TestDescription::<TYPES, I> {
             overall_safety_properties: OverallSafetyPropertiesDescription {
                 num_successful_views: 20,
                 ..OverallSafetyPropertiesDescription::default()
@@ -418,7 +422,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TestDescription
                 ..TimingData::default()
             },
             view_sync_properties: ViewSyncTaskDescription::Threshold(0, num_nodes_with_stake),
-            ..TestDescription::<TYPES, I, V>::default()
+            ..TestDescription::<TYPES, I>::default()
         }
     }
 
@@ -440,6 +444,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TestDescription
         let (staked_nodes, da_nodes) =
             gen_node_lists::<TYPES>(num_nodes_with_stake, num_da_nodes, &node_stakes);
 
+        let upgrade = Upgrade::trivial(MIN_SUPPORTED_VERSION);
         Self {
             test_config: default_hotshot_config::<TYPES>(
                 staked_nodes,
@@ -448,6 +453,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TestDescription
                 epoch_height,
                 epoch_start_block,
             ),
+            upgrade,
             // The first 14 (i.e., 20 - f) nodes are in the DA committee and we may shutdown the
             // remaining 6 (i.e., f) nodes. We could remove this restriction after fixing the
             // following issue.
@@ -483,6 +489,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TestDescription
         let (staked_nodes, da_nodes) =
             gen_node_lists::<TYPES>(num_nodes, num_da_nodes, &self.node_stakes);
 
+        let upgrade = Upgrade::trivial(MIN_SUPPORTED_VERSION);
         Self {
             test_config: default_hotshot_config::<TYPES>(
                 staked_nodes,
@@ -491,6 +498,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TestDescription
                 self.test_config.epoch_height,
                 self.test_config.epoch_start_block,
             ),
+            upgrade,
             ..self
         }
     }
@@ -515,6 +523,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TestDescription
         let (staked_nodes, da_nodes) =
             gen_node_lists::<TYPES>(num_nodes_with_stake, num_da_nodes, &node_stakes);
 
+        let upgrade = Upgrade::trivial(MIN_SUPPORTED_VERSION);
         Self {
             test_config: default_hotshot_config::<TYPES>(
                 staked_nodes,
@@ -523,6 +532,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TestDescription
                 epoch_height,
                 epoch_start_block,
             ),
+            upgrade,
             timing_data: TimingData::default(),
             skip_late: false,
             spinning_properties: SpinningTaskDescription {
@@ -557,9 +567,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TestDescription
     }
 }
 
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> Default
-    for TestDescription<TYPES, I, V>
-{
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> Default for TestDescription<TYPES, I> {
     /// by default, just a single round
     #[allow(clippy::redundant_field_names)]
     fn default() -> Self {
@@ -567,11 +575,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> Default
     }
 }
 
-impl<
-        TYPES: NodeType<InstanceState = TestInstanceState>,
-        I: TestableNodeImplementation<TYPES>,
-        V: Versions,
-    > TestDescription<TYPES, I, V>
+impl<TYPES: NodeType<InstanceState = TestInstanceState>, I: TestableNodeImplementation<TYPES>>
+    TestDescription<TYPES, I>
 where
     I: NodeImplementation<TYPES>,
 {
@@ -579,7 +584,7 @@ where
     /// a [`TestLauncher`] that can be used to launch the test.
     /// # Panics
     /// if some of the configuration values are zero
-    pub fn gen_launcher(self) -> TestLauncher<TYPES, I, V> {
+    pub fn gen_launcher(self) -> TestLauncher<TYPES, I> {
         self.gen_launcher_with_tasks(vec![])
     }
 
@@ -591,8 +596,8 @@ where
     #[must_use]
     pub fn gen_launcher_with_tasks(
         self,
-        additional_test_tasks: Vec<Box<dyn TestTaskStateSeed<TYPES, I, V>>>,
-    ) -> TestLauncher<TYPES, I, V> {
+        additional_test_tasks: Vec<Box<dyn TestTaskStateSeed<TYPES, I>>>,
+    ) -> TestLauncher<TYPES, I> {
         let TestDescription {
             timing_data,
             unreliable_network,
@@ -641,16 +646,13 @@ where
                     unreliable_network,
                     secondary_network_delay,
                 ),
-                storage: Rc::new(move |node_id| {
-                    let storage = TestStorage::<TYPES> {
-                        delay_config: metadata
-                            .async_delay_config
-                            .get(&node_id)
-                            .cloned()
-                            .unwrap_or_default(),
-                        ..Default::default()
-                    };
-                    storage
+                storage: Rc::new(move |node_id| TestStorage::<TYPES> {
+                    delay_config: metadata
+                        .async_delay_config
+                        .get(&node_id)
+                        .cloned()
+                        .unwrap_or_default(),
+                    ..Default::default()
                 }),
                 hotshot_config,
                 validator_config,

@@ -3,11 +3,11 @@
 use std::{cmp::max, collections::BTreeMap, fmt::Debug, ops::Range, sync::Arc};
 
 use alloy::primitives::{Address, U256};
-use anyhow::{bail, ensure, Context};
+use anyhow::{Context, bail, ensure};
 use async_trait::async_trait;
 use committable::Commitment;
 use futures::{FutureExt, TryFutureExt};
-use hotshot::{types::EventType, HotShotInitializer, InitializerEpochInfo};
+use hotshot::{HotShotInitializer, InitializerEpochInfo, types::EventType};
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtPersistentStorage;
 use hotshot_types::{
     data::{
@@ -16,23 +16,22 @@ use hotshot_types::{
     },
     drb::{DrbInput, DrbResult},
     event::{HotShotAction, LeafInfo},
-    message::{convert_proposal, Proposal},
+    message::{Proposal, convert_proposal},
     simple_certificate::{
         CertificatePair, LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2,
         QuorumCertificate, QuorumCertificate2, UpgradeCertificate,
     },
     stake_table::HSStakeTable,
     traits::{
-        metrics::Metrics,
-        node_implementation::{ConsensusTime, NodeType, Versions},
+        ValidatedState as HotShotState, metrics::Metrics, node_implementation::NodeType,
         storage::Storage,
-        ValidatedState as HotShotState,
     },
     utils::genesis_epoch_from_version,
     vote::HasViewNumber,
 };
 use indexmap::IndexMap;
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
+use versions::Upgrade;
 
 use super::{
     impls::NodeState,
@@ -40,14 +39,14 @@ use super::{
     v0_3::{EventKey, IndexedStake, StakeTableEvent},
 };
 use crate::{
+    AuthenticatedValidatorMap, BlockMerkleTree, Event, FeeAccount, FeeAccountProof,
+    FeeMerkleCommitment, Leaf2, NetworkConfig, PubKey, SeqTypes,
     v0::impls::{StakeTableHash, ValidatedState},
     v0_3::{
         ChainConfig, RegisteredValidator, RewardAccountProofV1, RewardAccountV1, RewardAmount,
         RewardMerkleCommitmentV1,
     },
     v0_4::{PermittedRewardMerkleTreeV2, RewardAccountV2, RewardMerkleCommitmentV2},
-    AuthenticatedValidatorMap, BlockMerkleTree, Event, FeeAccount, FeeAccountProof,
-    FeeMerkleCommitment, Leaf2, NetworkConfig, PubKey, SeqTypes,
 };
 
 #[async_trait]
@@ -534,6 +533,9 @@ pub trait MembershipPersistence: Send + Sync + 'static {
         Vec<(EventKey, StakeTableEvent)>,
     )>;
 
+    /// Delete all stake table events, the L1 block tracker, and the epoch DRB and root data.
+    async fn delete_stake_tables(&self) -> anyhow::Result<()>;
+
     async fn store_all_validators(
         &self,
         epoch: EpochNumber,
@@ -622,9 +624,10 @@ pub trait SequencerPersistence:
     /// if there is no saved state). Also returns the anchor view number, which can be used as a
     /// reference point to process any events which were not processed before a previous shutdown,
     /// if applicable,.
-    async fn load_consensus_state<V: Versions>(
+    async fn load_consensus_state(
         &self,
         state: NodeState,
+        upgrade: Upgrade,
     ) -> anyhow::Result<(HotShotInitializer<SeqTypes>, Option<ViewNumber>)> {
         let genesis_validated_state = ValidatedState::genesis(&state).0;
         let highest_voted_view = match self
@@ -682,18 +685,22 @@ pub trait SequencerPersistence:
             None => {
                 tracing::info!("no saved leaf, starting from genesis leaf");
                 (
-                    hotshot_types::data::Leaf2::genesis::<V>(&genesis_validated_state, &state)
-                        .await,
-                    QuorumCertificate2::genesis::<V>(&genesis_validated_state, &state).await,
+                    hotshot_types::data::Leaf2::genesis(
+                        &genesis_validated_state,
+                        &state,
+                        upgrade.base,
+                    )
+                    .await,
+                    QuorumCertificate2::genesis(&genesis_validated_state, &state, upgrade).await,
                     None,
                 )
             },
         };
 
-        if let Some((extended_high_qc, _)) = self.load_eqc().await {
-            if extended_high_qc.view_number() > high_qc.view_number() {
-                high_qc = extended_high_qc
-            }
+        if let Some((extended_high_qc, _)) = self.load_eqc().await
+            && extended_high_qc.view_number() > high_qc.view_number()
+        {
+            high_qc = extended_high_qc
         }
 
         let validated_state = if leaf.block_header().height() == 0 {
@@ -711,7 +718,7 @@ pub trait SequencerPersistence:
         // unnecessary catchup from starting in a view earlier than the anchor leaf.
         let restart_view = max(restart_view, leaf.view_number());
         // TODO:
-        let epoch = genesis_epoch_from_version::<V, SeqTypes>();
+        let epoch = genesis_epoch_from_version(upgrade.base);
 
         let config = self.load_config().await.context("loading config")?;
         let epoch_height = config
@@ -947,14 +954,14 @@ pub trait SequencerPersistence:
 
     async fn store_drb_result(
         &self,
-        epoch: <SeqTypes as NodeType>::Epoch,
+        epoch: EpochNumber,
         drb_result: DrbResult,
     ) -> anyhow::Result<()>;
     async fn store_drb_input(&self, drb_input: DrbInput) -> anyhow::Result<()>;
     async fn load_drb_input(&self, epoch: u64) -> anyhow::Result<DrbInput>;
     async fn store_epoch_root(
         &self,
-        epoch: <SeqTypes as NodeType>::Epoch,
+        epoch: EpochNumber,
         block_header: <SeqTypes as NodeType>::BlockHeader,
     ) -> anyhow::Result<()>;
     async fn add_state_cert(
@@ -1056,10 +1063,10 @@ impl<P: SequencerPersistence> Storage<SeqTypes> for Arc<P> {
         high_qc: QuorumCertificate2<SeqTypes>,
         next_epoch_high_qc: NextEpochQuorumCertificate2<SeqTypes>,
     ) -> anyhow::Result<()> {
-        if let Some((existing_high_qc, _)) = (**self).load_eqc().await {
-            if high_qc.view_number() < existing_high_qc.view_number() {
-                return Ok(());
-            }
+        if let Some((existing_high_qc, _)) = (**self).load_eqc().await
+            && high_qc.view_number() < existing_high_qc.view_number()
+        {
+            return Ok(());
         }
 
         (**self).store_eqc(high_qc, next_epoch_high_qc).await
@@ -1083,7 +1090,7 @@ impl<P: SequencerPersistence> Storage<SeqTypes> for Arc<P> {
 
     async fn store_drb_result(
         &self,
-        epoch: <SeqTypes as NodeType>::Epoch,
+        epoch: EpochNumber,
         drb_result: DrbResult,
     ) -> anyhow::Result<()> {
         (**self).store_drb_result(epoch, drb_result).await
@@ -1091,7 +1098,7 @@ impl<P: SequencerPersistence> Storage<SeqTypes> for Arc<P> {
 
     async fn store_epoch_root(
         &self,
-        epoch: <SeqTypes as NodeType>::Epoch,
+        epoch: EpochNumber,
         block_header: <SeqTypes as NodeType>::BlockHeader,
     ) -> anyhow::Result<()> {
         (**self).store_epoch_root(epoch, block_header).await

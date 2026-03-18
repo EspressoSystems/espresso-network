@@ -5,13 +5,12 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use cliquenet::{Address, Keypair, NetConf, PublicKey, Retry, SecretKey};
-use futures::future::ready;
 #[cfg(feature = "hotshot-testing")]
 use hotshot_types::traits::network::{
     AsyncGenerator, NetworkReliability, TestableNetworkingImplementation,
 };
 use hotshot_types::{
-    boxed_sync,
+    BoxSyncFuture, boxed_sync,
     data::{EpochNumber, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     traits::{
@@ -20,7 +19,6 @@ use hotshot_types::{
         node_implementation::NodeType,
         signature_key::{PrivateSignatureKey, SignatureKey},
     },
-    BoxSyncFuture,
 };
 
 #[derive(Clone)]
@@ -124,20 +122,16 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Cliquenet<T> {
 
     async fn wait_for_ready(&self) {}
 
-    fn pause(&self) {
-        unimplemented!("Pausing not implemented for cliquenet");
-    }
+    fn pause(&self) {}
 
-    fn resume(&self) {
-        unimplemented!("Resuming not implemented for cliquenet");
-    }
+    fn resume(&self) {}
 
     fn shut_down<'a, 'b>(&'a self) -> BoxSyncFuture<'b, ()>
     where
         'a: 'b,
         Self: 'b,
     {
-        boxed_sync(ready(()))
+        boxed_sync(self.net.close())
     }
 }
 
@@ -151,16 +145,17 @@ impl<T: NodeType> TestableNetworkingImplementation<T> for Cliquenet<T> {
         _reliability_config: Option<Box<dyn NetworkReliability>>,
         _secondary_network_delay: Duration,
     ) -> AsyncGenerator<Arc<Self>> {
-        let mut parties = Vec::new();
+        use std::net::Ipv4Addr;
+
+        use cliquenet::Address;
+
+        let mut parties: Vec<(Keypair, T::SignatureKey, Address)> = Vec::new();
         for i in 0..expected_node_count {
-            use std::net::Ipv4Addr;
-
-            use cliquenet::Address;
-
             let secret = T::SignatureKey::generated_from_seed_indexed([0u8; 32], i as u64).1;
             let public = T::SignatureKey::from_private(&secret);
             let kpair = derive_keypair::<<T as NodeType>::SignatureKey>(&secret);
-            let port = portpicker::pick_unused_port().expect("an unused port is available");
+            let port =
+                test_utils::reserve_tcp_port().expect("OS should have ephemeral ports available");
             let addr = Address::Inet(Ipv4Addr::LOCALHOST.into(), port);
 
             parties.push((kpair, public, addr));

@@ -243,7 +243,7 @@ pub struct HotShotConfig<TYPES: NodeType> {
     pub stop_voting_time: u64,
     /// Number of blocks in an epoch, zero means there are no epochs
     pub epoch_height: u64,
-    /// Epoch start block   
+    /// Epoch start block
     #[serde(default = "default_epoch_start_block")]
     pub epoch_start_block: u64,
     /// Stake table capacity for light client use
@@ -284,7 +284,7 @@ impl<TYPES: NodeType> HotShotConfig<TYPES> {
 
 pub mod version_ser {
 
-    use serde::{de, Deserialize, Deserializer, Serializer};
+    use serde::{Deserialize, Deserializer, Serializer, de};
     use vbs::version::Version;
 
     pub fn serialize<S>(ver: &Version, serializer: S) -> Result<S::Ok, S::Error>

@@ -9,14 +9,16 @@ use std::{collections::BTreeMap, sync::Arc, time::Instant};
 use futures::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use vbs::version::{StaticVersionType, Version};
+use vbs::version::Version;
+use versions::DRB_AND_HEADER_UPGRADE_VERSION;
 
 use crate::{
+    HotShotConfig,
+    data::EpochNumber,
     traits::{
-        node_implementation::{ConsensusTime, NodeType, Versions},
+        node_implementation::NodeType,
         storage::{LoadDrbProgressFn, StoreDrbProgressFn},
     },
-    HotShotConfig,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -34,14 +36,14 @@ pub struct DrbInput {
 pub type DrbDifficultySelectorFn =
     Arc<dyn Fn(Version) -> BoxFuture<'static, u64> + Send + Sync + 'static>;
 
-pub fn drb_difficulty_selector<TYPES: NodeType, V: Versions>(
+pub fn drb_difficulty_selector<TYPES: NodeType>(
     config: &HotShotConfig<TYPES>,
 ) -> DrbDifficultySelectorFn {
     let base_difficulty = config.drb_difficulty;
     let upgrade_difficulty = config.drb_upgrade_difficulty;
     Arc::new(move |version| {
         Box::pin(async move {
-            if version >= V::DrbAndHeaderUpgrade::VERSION {
+            if version >= DRB_AND_HEADER_UPGRADE_VERSION {
                 upgrade_difficulty
             } else {
                 base_difficulty
@@ -224,29 +226,29 @@ pub async fn compute_drb_result(
 
 /// Seeds for DRB computation and computed results.
 #[derive(Clone, Debug)]
-pub struct DrbResults<TYPES: NodeType> {
+pub struct DrbResults {
     /// Stored results from computations
-    pub results: BTreeMap<TYPES::Epoch, DrbResult>,
+    pub results: BTreeMap<EpochNumber, DrbResult>,
 }
 
-impl<TYPES: NodeType> DrbResults<TYPES> {
+impl DrbResults {
     #[must_use]
     /// Constructor with initial values for epochs 1 and 2.
     pub fn new() -> Self {
         Self {
             results: BTreeMap::from([
-                (TYPES::Epoch::new(1), INITIAL_DRB_RESULT),
-                (TYPES::Epoch::new(2), INITIAL_DRB_RESULT),
+                (EpochNumber::new(1), INITIAL_DRB_RESULT),
+                (EpochNumber::new(2), INITIAL_DRB_RESULT),
             ]),
         }
     }
 
-    pub fn store_result(&mut self, epoch: TYPES::Epoch, result: DrbResult) {
+    pub fn store_result(&mut self, epoch: EpochNumber, result: DrbResult) {
         self.results.insert(epoch, result);
     }
 
     /// Garbage collects internal data structures
-    pub fn garbage_collect(&mut self, epoch: TYPES::Epoch) {
+    pub fn garbage_collect(&mut self, epoch: EpochNumber) {
         if epoch.u64() < KEEP_PREVIOUS_RESULT_COUNT {
             return;
         }
@@ -259,7 +261,7 @@ impl<TYPES: NodeType> DrbResults<TYPES> {
     }
 }
 
-impl<TYPES: NodeType> Default for DrbResults<TYPES> {
+impl Default for DrbResults {
     fn default() -> Self {
         Self::new()
     }

@@ -18,13 +18,9 @@
 //! database connection, so that the updated state of the database can be queried midway through a
 //! transaction.
 
-use std::{
-    collections::HashMap,
-    marker::PhantomData,
-    time::{Duration, Instant},
-};
+use std::{collections::HashMap, marker::PhantomData, time::Instant};
 
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use async_trait::async_trait;
 use committable::Committable;
 use derive_more::{Deref, DerefMut};
@@ -35,40 +31,39 @@ use hotshot_types::{
     data::VidShare,
     simple_certificate::CertificatePair,
     traits::{
+        EncodeBytes,
         block_contents::BlockHeader,
         metrics::{Counter, Gauge, Histogram, Metrics},
         node_implementation::NodeType,
-        EncodeBytes,
     },
 };
 use itertools::Itertools;
 use jf_merkle_tree_compat::prelude::MerkleProof;
 pub use sqlx::Executor;
-use sqlx::{pool::Pool, query_builder::Separated, Encode, Execute, FromRow, QueryBuilder, Type};
-use tokio::time::sleep;
+use sqlx::{Encode, Execute, FromRow, QueryBuilder, Type, pool::Pool, query_builder::Separated};
 
 #[cfg(not(feature = "embedded-db"))]
 use super::queries::state::batch_insert_hashes;
 #[cfg(feature = "embedded-db")]
 use super::queries::state::build_hash_batch_insert;
 use super::{
+    Database, Db,
     queries::{
         self,
-        state::{collect_nodes_from_proofs, Node},
+        state::{Node, collect_nodes_from_proofs},
     },
-    Database, Db,
 };
 use crate::{
+    Header, Payload, QueryError, QueryResult,
     availability::{
         BlockQueryData, LeafQueryData, QueryableHeader, QueryablePayload, VidCommonQueryData,
     },
     data_source::{
-        storage::{pruning::PrunedHeightStorage, NodeStorage, UpdateAvailabilityStorage},
+        storage::{NodeStorage, UpdateAvailabilityStorage, pruning::PrunedHeightStorage},
         update,
     },
     merklized_state::{MerklizedState, UpdateStateData},
     types::HeightIndexed,
-    Header, Payload, QueryError, QueryResult,
 };
 
 pub type Query<'q> = sqlx::query::Query<'q, Db, <Db as Database>::Arguments<'q>>;
@@ -375,7 +370,7 @@ impl Transaction<Write> {
     ) -> anyhow::Result<()>
     where
         R: IntoIterator,
-        R::Item: 'p + FixedLengthParams<'p, N> + Clone,
+        R::Item: 'p + FixedLengthParams<'p, N>,
     {
         let set_columns = columns
             .iter()
@@ -394,55 +389,29 @@ impl Transaction<Write> {
             return Ok(());
         }
 
-        let interval = Duration::from_secs(1);
-        let mut retries = 5;
-
         let mut query_builder =
             QueryBuilder::new(format!("INSERT INTO \"{table}\" ({columns_str}) "));
+        query_builder.push_values(rows, |mut b, row| {
+            row.bind(&mut b);
+        });
+        query_builder.push(format!(" ON CONFLICT ({pk}) DO UPDATE SET {set_columns}"));
 
-        loop {
-            // Reset back to the state immediately after `new()`.
-            // - This clears all SQL values we pushed in this loop iteration,
-            // - Required because once `.build()` has been called, any other method
-            //   on `QueryBuilder` will panic unless you call `.reset()` first
-            let query_builder = query_builder.reset();
+        let query = query_builder.build();
+        let statement = query.sql();
 
-            query_builder.push_values(rows.clone(), |mut b, row| {
-                row.bind(&mut b);
-            });
-
-            query_builder.push(format!(" ON CONFLICT ({pk}) DO UPDATE SET {set_columns}"));
-
-            let query = query_builder.build();
-            let statement = query.sql();
-
-            match self.execute(query).await {
-                Ok(res) => {
-                    let rows_modified = res.rows_affected() as usize;
-                    if rows_modified != num_rows {
-                        let error = format!(
-                            "unexpected number of rows modified: expected {num_rows}, got \
-                             {rows_modified}. query: {statement}"
-                        );
-                        tracing::error!(error);
-                        bail!(error);
-                    }
-                    return Ok(());
-                },
-                Err(err) => {
-                    tracing::error!(
-                        statement,
-                        "error in statement execution ({} tries remaining): {err}",
-                        retries
-                    );
-                    if retries == 0 {
-                        bail!(err);
-                    }
-                    retries -= 1;
-                    sleep(interval).await;
-                },
-            }
+        let res = self.execute(query).await.inspect_err(|err| {
+            tracing::error!(statement, "error in statement execution: {err:#}");
+        })?;
+        let rows_modified = res.rows_affected() as usize;
+        if rows_modified != num_rows {
+            let error = format!(
+                "unexpected number of rows modified: expected {num_rows}, got {rows_modified}. \
+                 query: {statement}"
+            );
+            tracing::error!(error);
+            bail!(error);
         }
+        Ok(())
     }
 }
 
@@ -480,7 +449,7 @@ impl Transaction<Write> {
     }
 
     /// Record the height of the latest pruned header.
-    pub(super) async fn save_pruned_height(&mut self, height: u64) -> anyhow::Result<()> {
+    pub(crate) async fn save_pruned_height(&mut self, height: u64) -> anyhow::Result<()> {
         // id is set to 1 so that there is only one row in the table.
         // height is updated if the row already exists.
         self.upsert(
@@ -508,15 +477,15 @@ where
 
         // Ignore the leaf if it is below the pruned height. This can happen if, for instance, the
         // fetcher is racing with the pruner.
-        if let Some(pruned_height) = self.load_pruned_height().await? {
-            if height <= pruned_height {
-                tracing::info!(
-                    height,
-                    pruned_height,
-                    "ignoring leaf which is already pruned"
-                );
-                return Ok(());
-            }
+        if let Some(pruned_height) = self.load_pruned_height().await?
+            && height <= pruned_height
+        {
+            tracing::info!(
+                height,
+                pruned_height,
+                "ignoring leaf which is already pruned"
+            );
+            return Ok(());
         }
 
         // While we don't necessarily have the full block for this leaf yet, we can initialize the
@@ -585,15 +554,15 @@ where
 
         // Ignore the block if it is below the pruned height. This can happen if, for instance, the
         // fetcher is racing with the pruner.
-        if let Some(pruned_height) = self.load_pruned_height().await? {
-            if height <= pruned_height {
-                tracing::info!(
-                    height,
-                    pruned_height,
-                    "ignoring block which is already pruned"
-                );
-                return Ok(());
-            }
+        if let Some(pruned_height) = self.load_pruned_height().await?
+            && height <= pruned_height
+        {
+            tracing::info!(
+                height,
+                pruned_height,
+                "ignoring block which is already pruned"
+            );
+            return Ok(());
         }
 
         // The header and payload tables should already have been initialized when we inserted the
@@ -647,15 +616,15 @@ where
 
         // Ignore the object if it is below the pruned height. This can happen if, for instance, the
         // fetcher is racing with the pruner.
-        if let Some(pruned_height) = self.load_pruned_height().await? {
-            if height <= pruned_height {
-                tracing::info!(
-                    height,
-                    pruned_height,
-                    "ignoring VID common which is already pruned"
-                );
-                return Ok(());
-            }
+        if let Some(pruned_height) = self.load_pruned_height().await?
+            && height <= pruned_height
+        {
+            tracing::info!(
+                height,
+                pruned_height,
+                "ignoring VID common which is already pruned"
+            );
+            return Ok(());
         }
 
         let common_data =

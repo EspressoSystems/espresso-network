@@ -13,6 +13,7 @@ use handlers::handle_epoch_root_quorum_vote_recv;
 use hotshot_task::task::TaskState;
 use hotshot_types::{
     consensus::OuterConsensus,
+    data::{EpochNumber, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     event::Event,
     message::UpgradeLock,
@@ -20,7 +21,7 @@ use hotshot_types::{
     simple_vote::{HasEpoch, NextEpochQuorumVote2, QuorumVote2, TimeoutVote2},
     stake_table::HSStakeTable,
     traits::{
-        node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
+        node_implementation::{NodeImplementation, NodeType},
         signature_key::SignatureKey,
         storage::Storage,
     },
@@ -44,7 +45,7 @@ use crate::{
 mod handlers;
 
 /// Task state for the Consensus task.
-pub struct ConsensusTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> {
+pub struct ConsensusTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>> {
     /// Our public key
     pub public_key: TYPES::SignatureKey,
 
@@ -61,31 +62,27 @@ pub struct ConsensusTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V: 
     pub membership_coordinator: EpochMembershipCoordinator<TYPES>,
 
     /// A map of `QuorumVote` collector tasks.
-    pub vote_collectors: VoteCollectorsMap<TYPES, QuorumVote2<TYPES>, QuorumCertificate2<TYPES>, V>,
+    pub vote_collectors: VoteCollectorsMap<TYPES, QuorumVote2<TYPES>, QuorumCertificate2<TYPES>>,
 
     /// A map of `EpochRootQuorumVote` collector tasks.
-    pub epoch_root_vote_collectors: EpochRootVoteCollectorsMap<TYPES, V>,
+    pub epoch_root_vote_collectors: EpochRootVoteCollectorsMap<TYPES>,
 
     /// A map of `QuorumVote` collector tasks. They collect votes from the nodes in the next epoch.
-    pub next_epoch_vote_collectors: VoteCollectorsMap<
-        TYPES,
-        NextEpochQuorumVote2<TYPES>,
-        NextEpochQuorumCertificate2<TYPES>,
-        V,
-    >,
+    pub next_epoch_vote_collectors:
+        VoteCollectorsMap<TYPES, NextEpochQuorumVote2<TYPES>, NextEpochQuorumCertificate2<TYPES>>,
 
     /// A map of `TimeoutVote` collector tasks.
     pub timeout_vote_collectors:
-        VoteCollectorsMap<TYPES, TimeoutVote2<TYPES>, TimeoutCertificate2<TYPES>, V>,
+        VoteCollectorsMap<TYPES, TimeoutVote2<TYPES>, TimeoutCertificate2<TYPES>>,
 
     /// The view number that this node is currently executing in.
-    pub cur_view: TYPES::View,
+    pub cur_view: ViewNumber,
 
     /// Timestamp this view starts at.
     pub cur_view_time: i64,
 
     /// The epoch number that this node is currently executing in.
-    pub cur_epoch: Option<TYPES::Epoch>,
+    pub cur_epoch: Option<EpochNumber>,
 
     /// Output events to application
     pub output_event_stream: async_broadcast::Sender<Event<TYPES>>,
@@ -106,7 +103,7 @@ pub struct ConsensusTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V: 
     pub id: u64,
 
     /// Lock for a decided upgrade
-    pub upgrade_lock: UpgradeLock<TYPES, V>,
+    pub upgrade_lock: UpgradeLock<TYPES>,
 
     /// Number of blocks in an epoch, zero means there are no epochs
     pub epoch_height: u64,
@@ -115,10 +112,10 @@ pub struct ConsensusTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V: 
     pub view_start_time: Instant,
 
     /// First view in which epoch version takes effect
-    pub first_epoch: Option<(TYPES::View, TYPES::Epoch)>,
+    pub first_epoch: Option<(ViewNumber, EpochNumber)>,
 }
 
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskState<TYPES, I, V> {
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> ConsensusTaskState<TYPES, I> {
     /// Handles a consensus event received on the event stream
     #[instrument(skip_all, fields(id = self.id, cur_view = *self.cur_view, cur_epoch = self.cur_epoch.map(|x| *x)), name = "Consensus replica task", level = "error", target = "ConsensusTaskState")]
     pub async fn handle(
@@ -127,14 +124,14 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
         sender: Sender<Arc<HotShotEvent<TYPES>>>,
     ) -> Result<()> {
         match event.as_ref() {
-            HotShotEvent::QuorumVoteRecv(ref vote) => {
+            HotShotEvent::QuorumVoteRecv(vote) => {
                 if let Err(e) =
                     handle_quorum_vote_recv(vote, Arc::clone(&event), &sender, self).await
                 {
                     tracing::debug!("Failed to handle QuorumVoteRecv event; error = {e}");
                 }
             },
-            HotShotEvent::EpochRootQuorumVoteRecv(ref vote) => {
+            HotShotEvent::EpochRootQuorumVoteRecv(vote) => {
                 if let Err(e) =
                     handle_epoch_root_quorum_vote_recv(vote, Arc::clone(&event), &sender, self)
                         .await
@@ -142,7 +139,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
                     tracing::debug!("Failed to handle EpochRootQuorumVoteRecv event; error = {e}");
                 }
             },
-            HotShotEvent::TimeoutVoteRecv(ref vote) => {
+            HotShotEvent::TimeoutVoteRecv(vote) => {
                 if let Err(e) =
                     handle_timeout_vote_recv(vote, Arc::clone(&event), &sender, self).await
                 {
@@ -187,7 +184,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
                 let cert_epoch = epoch_from_block_number(cert_block_number, self.epoch_height);
                 tracing::error!("Formed Extended QC for view {cert_view} and epoch {cert_epoch}.");
                 // Transition to the new epoch by sending ViewChange
-                let next_epoch = TYPES::Epoch::new(cert_epoch + 1);
+                let next_epoch = EpochNumber::new(cert_epoch + 1);
                 broadcast_view_change(&sender, cert_view + 1, Some(next_epoch), self.first_epoch)
                     .await;
                 tracing::info!("Entering new epoch: {next_epoch}");
@@ -299,9 +296,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
 }
 
 #[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TaskState
-    for ConsensusTaskState<TYPES, I, V>
-{
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TaskState for ConsensusTaskState<TYPES, I> {
     type Event = HotShotEvent<TYPES>;
 
     async fn handle_event(

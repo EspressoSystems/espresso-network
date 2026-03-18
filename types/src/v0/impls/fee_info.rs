@@ -1,10 +1,10 @@
 use std::str::FromStr;
 
 use alloy::primitives::{
-    utils::{parse_units, ParseUnits},
     Address, U256,
+    utils::{ParseUnits, parse_units},
 };
-use anyhow::{bail, ensure, Context};
+use anyhow::{Context, bail, ensure};
 use ark_serialize::{
     CanonicalDeserialize, CanonicalSerialize, Compress, Read, SerializationError, Valid, Validate,
 };
@@ -25,8 +25,8 @@ use thiserror::Error;
 
 use super::v0_1::IterableFeeInfo;
 use crate::{
-    eth_signature_key::EthKeyPair, AccountQueryData, FeeAccount, FeeAccountProof, FeeAmount,
-    FeeInfo, FeeMerkleCommitment, FeeMerkleProof, FeeMerkleTree, SeqTypes,
+    AccountQueryData, FeeAccount, FeeAccountProof, FeeAmount, FeeInfo, FeeMerkleCommitment,
+    FeeMerkleProof, FeeMerkleTree, SeqTypes, eth_signature_key::EthKeyPair,
 };
 
 /// Possible charge fee failures
@@ -433,7 +433,7 @@ pub fn retain_accounts(
             LookupResult::Ok(elem, proof) => {
                 // This remember cannot fail, since we just constructed a valid proof, and are
                 // remembering into a tree with the same commitment.
-                snapshot.remember(account, *elem, proof).unwrap();
+                snapshot.remember(account, elem, proof).unwrap();
             },
             LookupResult::NotFound(proof) => {
                 // Likewise this cannot fail.

@@ -16,11 +16,11 @@ use alloy::primitives::U256;
 use anyhow::{anyhow, ensure};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use bincode::{
+    DefaultOptions, Options,
     config::{
         FixintEncoding, LittleEndian, RejectTrailing, WithOtherEndian, WithOtherIntEncoding,
         WithOtherLimit, WithOtherTrailing,
     },
-    DefaultOptions, Options,
 };
 use committable::{Commitment, Committable};
 use digest::OutputSizeUser;
@@ -28,17 +28,15 @@ use serde::{Deserialize, Serialize};
 use sha2::Digest;
 use tagged_base64::tagged;
 use typenum::Unsigned;
-use vbs::version::StaticVersionType;
+use vbs::version::Version;
+use versions::EPOCH_VERSION;
 
 use crate::{
-    data::{Leaf2, VidCommitment},
-    stake_table::StakeTableEntries,
-    traits::{
-        node_implementation::{ConsensusTime, NodeType, Versions},
-        ValidatedState,
-    },
-    vote::{Certificate, HasViewNumber},
     PeerConfig,
+    data::{EpochNumber, Leaf2, VidCommitment, ViewNumber},
+    stake_table::StakeTableEntries,
+    traits::{ValidatedState, node_implementation::NodeType},
+    vote::{Certificate, HasViewNumber},
 };
 
 /// A view's state
@@ -54,7 +52,7 @@ pub enum ViewInner<TYPES: NodeType> {
         /// Payload commitment to the available block.
         payload_commitment: VidCommitment,
         /// An epoch to which the data belongs to. Relevant for validating against the correct stake table
-        epoch: Option<TYPES::Epoch>,
+        epoch: Option<EpochNumber>,
     },
     /// Undecided view
     Leaf {
@@ -65,7 +63,7 @@ pub enum ViewInner<TYPES: NodeType> {
         /// Optional state delta.
         delta: Option<Arc<<TYPES::ValidatedState as ValidatedState<TYPES>>::Delta>>,
         /// An epoch to which the data belongs to. Relevant for validating against the correct stake table
-        epoch: Option<TYPES::Epoch>,
+        epoch: Option<EpochNumber>,
     },
     /// Leaf has failed
     Failed,
@@ -104,12 +102,12 @@ pub type StateAndDelta<TYPES> = (
     Option<Arc<<<TYPES as NodeType>::ValidatedState as ValidatedState<TYPES>>::Delta>>,
 );
 
-pub async fn verify_leaf_chain<T: NodeType, V: Versions>(
+pub async fn verify_leaf_chain<T: NodeType>(
     mut leaf_chain: Vec<Leaf2<T>>,
     stake_table: &[PeerConfig<T>],
     success_threshold: U256,
     expected_height: u64,
-    upgrade_lock: &crate::message::UpgradeLock<T, V>,
+    upgrade_lock: &crate::message::UpgradeLock<T>,
 ) -> anyhow::Result<Leaf2<T>> {
     // Sort the leaf chain by view number
     leaf_chain.sort_by_key(|l| l.view_number());
@@ -231,7 +229,7 @@ impl<TYPES: NodeType> ViewInner<TYPES> {
 
     /// Returns `Epoch` if possible
     // #3967 REVIEW NOTE: This type is kinda ugly, should we Result<Option<Epoch>> instead?
-    pub fn epoch(&self) -> Option<Option<TYPES::Epoch>> {
+    pub fn epoch(&self) -> Option<Option<EpochNumber>> {
         match self {
             Self::Da { epoch, .. } | Self::Leaf { epoch, .. } => Some(*epoch),
             Self::Failed => None,
@@ -257,9 +255,9 @@ pub struct View<TYPES: NodeType> {
 
 /// A struct containing information about a finished round.
 #[derive(Debug, Clone)]
-pub struct RoundFinishedEvent<TYPES: NodeType> {
+pub struct RoundFinishedEvent {
     /// The round that finished
-    pub view_number: TYPES::View,
+    pub view_number: ViewNumber,
 }
 
 /// Whether or not to stop inclusively or exclusively when walking
@@ -362,11 +360,11 @@ pub fn transition_block_for_epoch(epoch: u64, epoch_height: u64) -> u64 {
 /// Returns an `Option<Epoch>` based on a boolean condition of whether or not epochs are enabled, a block number,
 /// and the epoch height. If epochs are disabled or the epoch height is zero, returns None.
 #[must_use]
-pub fn option_epoch_from_block_number<TYPES: NodeType>(
+pub fn option_epoch_from_block_number(
     with_epoch: bool,
     block_number: u64,
     epoch_height: u64,
-) -> Option<TYPES::Epoch> {
+) -> Option<EpochNumber> {
     if with_epoch {
         if epoch_height == 0 {
             None
@@ -377,16 +375,16 @@ pub fn option_epoch_from_block_number<TYPES: NodeType>(
         } else {
             Some(block_number / epoch_height + 1)
         }
-        .map(TYPES::Epoch::new)
+        .map(EpochNumber::new)
     } else {
         None
     }
 }
 
-/// Returns Some(1) if epochs are enabled by V::Base, otherwise returns None
+/// Returns Some(1) if epochs are enabled by `base`, otherwise returns None
 #[must_use]
-pub fn genesis_epoch_from_version<V: Versions, TYPES: NodeType>() -> Option<TYPES::Epoch> {
-    (V::Base::VERSION >= V::Epochs::VERSION).then(|| TYPES::Epoch::new(1))
+pub fn genesis_epoch_from_version(base: Version) -> Option<EpochNumber> {
+    (base >= EPOCH_VERSION).then(|| EpochNumber::new(1))
 }
 
 /// A function for generating a cute little user mnemonic from a hash
@@ -425,7 +423,7 @@ pub fn is_first_transition_block(block_number: u64, epoch_height: u64) -> bool {
         block_number % epoch_height == epoch_height - 2
     }
 }
-/// Returns true if the block is part of the epoch transition (including the last non null block)  
+/// Returns true if the block is part of the epoch transition (including the last non null block)
 #[must_use]
 pub fn is_epoch_transition(block_number: u64, epoch_height: u64) -> bool {
     if block_number == 0 || epoch_height == 0 {
@@ -446,7 +444,7 @@ pub fn is_last_block(block_number: u64, epoch_height: u64) -> bool {
 }
 
 /// Returns true if the block number is in trasntion but not the transition block
-/// or the last block in the epoch.  
+/// or the last block in the epoch.
 ///
 /// This function is useful for determining if a proposal extending this QC must follow
 /// the special rules for transition blocks.

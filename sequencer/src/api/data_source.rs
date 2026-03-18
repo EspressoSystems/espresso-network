@@ -5,6 +5,7 @@ use anyhow::Context;
 use async_trait::async_trait;
 use committable::Commitment;
 use espresso_types::{
+    FeeAccount, FeeAccountProof, FeeMerkleTree, Leaf2, NodeState, PubKey, Transaction,
     config::PublicNetworkConfig,
     v0::traits::{PersistenceOptions, SequencerPersistence},
     v0_3::{
@@ -13,7 +14,6 @@ use espresso_types::{
         StakeTableEvent,
     },
     v0_4::{RewardAccountProofV2, RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleTreeV2},
-    FeeAccount, FeeAccountProof, FeeMerkleTree, Leaf2, NodeState, PubKey, Transaction,
 };
 use futures::future::{BoxFuture, Future};
 use hotshot::types::BLSPubKey;
@@ -25,25 +25,22 @@ use hotshot_query_service::{
     status::StatusDataSource,
 };
 use hotshot_types::{
+    PeerConfig,
     data::{EpochNumber, VidShare, ViewNumber},
     light_client::LCV3StateSignatureRequestBody,
     simple_certificate::LightClientStateUpdateCertificateV2,
-    traits::{
-        network::ConnectedNetwork,
-        node_implementation::{NodeType, Versions},
-    },
-    PeerConfig,
+    traits::{network::ConnectedNetwork, node_implementation::NodeType},
 };
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use tide_disco::Url;
 
 use super::{
-    fs,
+    AccountQueryData, BlocksFrontier, fs,
     options::{Options, Query},
-    sql, AccountQueryData, BlocksFrontier,
+    sql,
 };
-use crate::{persistence, state_cert::StateCertFetchError, SeqTypes, SequencerApiVersion, U256};
+use crate::{SeqTypes, SequencerApiVersion, U256, persistence, state_cert::StateCertFetchError};
 
 pub trait DataSourceOptions: PersistenceOptions {
     type DataSource: SequencerDataSource<Options = Self>;
@@ -90,7 +87,7 @@ pub trait SequencerDataSource:
 pub type Provider = AnyProvider<SeqTypes>;
 
 /// Create a provider for fetching missing data from a list of peer query services.
-pub fn provider<V: Versions>(
+pub fn provider(
     peers: impl IntoIterator<Item = Url>,
     bind_version: SequencerApiVersion,
 ) -> Provider {
@@ -135,7 +132,7 @@ pub(crate) trait StakeTableDataSource<T: NodeType> {
     /// Get the stake table for a given epoch
     fn get_stake_table(
         &self,
-        epoch: Option<<T as NodeType>::Epoch>,
+        epoch: Option<EpochNumber>,
     ) -> impl Send + Future<Output = anyhow::Result<Vec<PeerConfig<T>>>>;
 
     /// Get the stake table for the current epoch if not provided
@@ -146,7 +143,7 @@ pub(crate) trait StakeTableDataSource<T: NodeType> {
     /// Get the DA stake table for a given epoch
     fn get_da_stake_table(
         &self,
-        epoch: Option<<T as NodeType>::Epoch>,
+        epoch: Option<EpochNumber>,
     ) -> impl Send + Future<Output = anyhow::Result<Vec<PeerConfig<T>>>>;
 
     /// Get the DA stake table for the current epoch if not provided
@@ -157,7 +154,7 @@ pub(crate) trait StakeTableDataSource<T: NodeType> {
     /// Get all the validators
     fn get_validators(
         &self,
-        epoch: <T as NodeType>::Epoch,
+        epoch: EpochNumber,
     ) -> impl Send + Future<Output = anyhow::Result<IndexMap<Address, AuthenticatedValidator<BLSPubKey>>>>;
 
     fn get_block_reward(
@@ -181,7 +178,7 @@ pub(crate) trait StakeTableDataSource<T: NodeType> {
 
     fn get_all_validators(
         &self,
-        epoch: <T as NodeType>::Epoch,
+        epoch: EpochNumber,
         offset: u64,
         limit: u64,
     ) -> impl Send + Future<Output = anyhow::Result<Vec<RegisteredValidator<PubKey>>>>;

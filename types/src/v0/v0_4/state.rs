@@ -7,38 +7,24 @@ use alloy::primitives::{Address, U256};
 use anyhow::Context;
 use derive_more::{Display, From, Into};
 use hotshot_contract_adapter::reward::{RewardAuthData, RewardClaimInput};
-use jf_merkle_tree_compat::{
-    universal_merkle_tree::UniversalMerkleTree, MerkleTreeScheme, UniversalMerkleTreeScheme,
-};
+use jf_merkle_tree_compat::{MerkleTreeScheme, UniversalMerkleTreeScheme};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use super::FeeAccount;
-use crate::{
-    v0::sparse_mt::{Keccak256Hasher, KeccakNode},
-    v0_3::{RewardAccountV1, RewardAmount},
+use crate::v0_3::{RewardAccountV1, RewardAmount};
+
+static REWARD_MERKLE_TREE_V2_MEMORY_LOCK: OnceLock<Arc<Semaphore>> = OnceLock::new();
+
+pub use crate::v0::reward_mt::{
+    REWARD_MERKLE_TREE_V2_ARITY, REWARD_MERKLE_TREE_V2_HEIGHT, RewardMerkleCommitmentV2,
+    RewardMerkleTreeV2,
 };
 
 static REWARD_MERKLE_TREE_V2_MEMORY_LOCK: OnceLock<Arc<Semaphore>> = OnceLock::new();
 
 pub const REWARD_MERKLE_TREE_V2_HEIGHT: usize = 160;
 pub const REWARD_MERKLE_TREE_V2_ARITY: usize = 2;
-
-pub type RewardMerkleCommitmentV2 = <RewardMerkleTreeV2 as MerkleTreeScheme>::Commitment;
-
-pub type RewardMerkleTreeV2 = UniversalMerkleTree<
-    RewardAmount,
-    Keccak256Hasher,
-    RewardAccountV2,
-    REWARD_MERKLE_TREE_V2_ARITY,
-    KeccakNode,
->;
-
-#[derive(Clone)]
-pub struct PermittedRewardMerkleTreeV2 {
-    pub tree: RewardMerkleTreeV2,
-    _permit: Arc<OwnedSemaphorePermit>,
-}
 
 impl std::ops::Deref for PermittedRewardMerkleTreeV2 {
     type Target = RewardMerkleTreeV2;
@@ -53,18 +39,7 @@ impl PermittedRewardMerkleTreeV2 {
         balances: Vec<(RewardAccountV2, RewardAmount)>,
     ) -> anyhow::Result<Self> {
         let permit = REWARD_MERKLE_TREE_V2_MEMORY_LOCK
-            .get_or_init(|| {
-                let num_permits: usize =
-                    std::env::var("ESPRESSO_SEQUENCER_REWARD_MERKLE_TREE_PERMITS")
-                        .ok()
-                        .and_then(|v| v.parse::<usize>().ok())
-                        .unwrap_or(1);
-
-                tracing::warn!(
-                    "Initializing RewardMerkleTreeV2 semaphore with {num_permits} permits"
-                );
-                Arc::new(Semaphore::new(num_permits))
-            })
+            .get_or_init(|| Arc::new(Semaphore::new(1)))
             .clone()
             .acquire_owned()
             .await

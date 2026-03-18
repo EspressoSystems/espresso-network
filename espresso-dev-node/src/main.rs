@@ -13,52 +13,50 @@ use alloy::{
     rpc::client::RpcClient,
     signers::{
         k256::ecdsa::SigningKey,
-        local::{coins_bip39::English, LocalSigner, MnemonicBuilder},
+        local::{LocalSigner, MnemonicBuilder, coins_bip39::English},
     },
 };
 use anyhow::Context;
 use async_trait::async_trait;
 use clap::{Parser, ValueEnum};
 use espresso_contract_deployer::{
-    self as deployer, network_config::light_client_genesis_from_stake_table, Contract, Contracts,
-    DeployedContracts, HttpProviderWithWallet, DEFAULT_EXIT_ESCROW_PERIOD_SECONDS,
+    self as deployer, Contract, Contracts, DEFAULT_EXIT_ESCROW_PERIOD_SECONDS, DeployedContracts,
+    HttpProviderWithWallet, network_config::light_client_genesis_from_stake_table,
 };
 use espresso_dev_node::{
     AltChainInfo, DevInfo, DevNodeVersion, SetHotshotDownReqBody, SetHotshotUpReqBody,
 };
 use espresso_types::{
-    parse_duration, v0_3::ChainConfig, DrbAndHeaderUpgradeVersion, EpochVersion, L1ClientOptions,
-    SeqTypes, SequencerVersions, ValidatedState,
+    L1ClientOptions, SeqTypes, ValidatedState, parse_duration, v0_3::ChainConfig,
 };
-use futures::{future::BoxFuture, stream::FuturesUnordered, FutureExt, StreamExt};
+use futures::{FutureExt, StreamExt, future::BoxFuture, stream::FuturesUnordered};
 use hotshot_contract_adapter::sol_types::LightClientV2Mock::{self, LightClientV2MockInstance};
-use hotshot_state_prover::{v2::service::run_prover_service, StateProverConfig};
+use hotshot_state_prover::{StateProverConfig, v2::service::run_prover_service};
 use hotshot_types::{
-    stake_table::{one_honest_threshold, HSStakeTable},
+    stake_table::{HSStakeTable, one_honest_threshold},
     utils::epoch_from_block_number,
 };
 use itertools::izip;
-use portpicker::pick_unused_port;
 use sequencer::{
+    SequencerApiVersion,
     api::{
         options,
-        test_helpers::{
-            AnyTestNetwork, TestNetwork, TestNetworkConfigBuilder, STAKE_TABLE_CAPACITY_FOR_TEST,
-        },
+        test_helpers::{STAKE_TABLE_CAPACITY_FOR_TEST, TestNetwork, TestNetworkConfigBuilder},
     },
     persistence,
-    state_signature::relay_server::{run_relay_server_with_state, StateRelayServerState},
+    state_signature::relay_server::{StateRelayServerState, run_relay_server_with_state},
     testing::TestConfigBuilder,
-    SequencerApiVersion,
 };
 use sequencer_utils::logging;
 use serde::{Deserialize, Serialize};
 use staking_cli::demo::{DelegationConfig, StakingTransactions};
 use tempfile::NamedTempFile;
-use tide_disco::{error::ServerError, method::ReadState, Api, Error, StatusCode};
+use test_utils::reserve_tcp_port;
+use tide_disco::{Api, Error, StatusCode, error::ServerError, method::ReadState};
 use tokio::spawn;
 use url::Url;
 use vbs::version::StaticVersionType;
+use versions::Upgrade;
 
 #[derive(Default, Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 enum L1Deployment {
@@ -307,7 +305,7 @@ async fn main() -> anyhow::Result<()> {
         (url, Some(instance))
     };
 
-    let relay_server_port = pick_unused_port().unwrap();
+    let relay_server_port = reserve_tcp_port().unwrap();
     let relay_server_url: Url = format!("http://localhost:{relay_server_port}")
         .parse()
         .unwrap();
@@ -549,8 +547,8 @@ async fn main() -> anyhow::Result<()> {
         client_states.provider_urls.insert(chain_id, url.clone());
         let lc_proxy_addr = client_states.lc_proxy_addr.get(&chain_id).unwrap();
 
-        // init the prover config
-        let prover_port = prover_port.unwrap_or_else(|| pick_unused_port().unwrap());
+        // init the prover config - use port 0 to let the OS assign an available port
+        let prover_port = prover_port.unwrap_or(0);
         prover_ports.push(prover_port);
         let l1_rpc_client = RpcClient::new_http(url);
         let prover_config = StateProverConfig {
@@ -652,21 +650,12 @@ async fn main() -> anyhow::Result<()> {
         .build();
 
     // Start the nodes
-    let network = match version {
-        DevNodeVersion::V0_3 => AnyTestNetwork::V0_3(
-            TestNetwork::new(
-                config,
-                SequencerVersions::<EpochVersion, EpochVersion>::new(),
-            )
-            .await,
-        ),
-        DevNodeVersion::V0_4 => AnyTestNetwork::V0_4(
-            TestNetwork::new(
-                config,
-                SequencerVersions::<DrbAndHeaderUpgradeVersion, DrbAndHeaderUpgradeVersion>::new(),
-            )
-            .await,
-        ),
+    let network = {
+        let u = match version {
+            DevNodeVersion::V0_3 => Upgrade::trivial(versions::version(0, 3)),
+            DevNodeVersion::V0_4 => Upgrade::trivial(versions::version(0, 4)),
+        };
+        TestNetwork::new(config, u).await
     };
 
     let relay_server_handle = spawn(async move {
@@ -712,7 +701,7 @@ async fn main() -> anyhow::Result<()> {
     let l1_prover_port = prover_ports.remove(0);
 
     let dev_info = DevInfo {
-        builder_url: network.hotshot_config().builder_urls[0].clone(),
+        builder_url: network.cfg.hotshot_config().builder_urls[0].clone(),
         sequencer_api_port,
         l1_prover_port,
         l1_url,

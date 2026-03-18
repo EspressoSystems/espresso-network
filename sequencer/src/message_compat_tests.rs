@@ -28,15 +28,13 @@ use hotshot_types::{
     },
     simple_certificate::{DaCertificate, QuorumCertificate, UpgradeCertificate},
     simple_vote::{DaData, DaVote, QuorumData, QuorumVote, UpgradeProposalData, UpgradeVote},
-    traits::{
-        node_implementation::ConsensusTime, signature_key::SignatureKey, BlockPayload, EncodeBytes,
-    },
+    traits::{BlockPayload, EncodeBytes, signature_key::SignatureKey},
 };
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use vbs::{
-    version::{StaticVersion, StaticVersionType, Version},
     BinarySerializer,
+    version::{StaticVersion, StaticVersionType, Version},
 };
 
 #[cfg(feature = "testing")]
@@ -44,9 +42,10 @@ async fn test_message_compat<Ver: StaticVersionType>(_ver: Ver) {
     use std::sync::Arc;
 
     use async_lock::RwLock;
-    use espresso_types::{v0_3::Fetcher, EpochCommittees, Leaf, Payload, SeqTypes, Transaction};
-    use hotshot_example_types::{node_types::TestVersions, storage_types::TestStorage};
+    use espresso_types::{EpochCommittees, Leaf, Payload, SeqTypes, Transaction, v0_3::Fetcher};
+    use hotshot_example_types::{node_types::TEST_VERSIONS, storage_types::TestStorage};
     use hotshot_types::{
+        PeerConfig,
         data::vid_disperse::ADVZDisperse,
         epoch_membership::EpochMembershipCoordinator,
         simple_certificate::{
@@ -57,7 +56,6 @@ async fn test_message_compat<Ver: StaticVersionType>(_ver: Ver) {
             TimeoutData, TimeoutVote, ViewSyncCommitData, ViewSyncCommitVote, ViewSyncFinalizeData,
             ViewSyncFinalizeVote, ViewSyncPreCommitData, ViewSyncPreCommitVote,
         },
-        PeerConfig,
     };
 
     let (sender, priv_key) = PubKey::generated_from_seed_indexed(Default::default(), 0);
@@ -89,7 +87,12 @@ async fn test_message_compat<Ver: StaticVersionType>(_ver: Ver) {
     let node_state = NodeState::mock()
         .with_current_version(Ver::VERSION)
         .with_genesis_version(Ver::VERSION);
-    let leaf = Leaf::genesis::<TestVersions>(&ValidatedState::default(), &node_state).await;
+    let leaf = Leaf::genesis(
+        &ValidatedState::default(),
+        &node_state,
+        TEST_VERSIONS.test.base,
+    )
+    .await;
     let block_header = leaf.block_header().clone();
     let transaction = Transaction::new(1_u32.into(), vec![1, 2, 3]);
     let (payload, metadata) = Payload::from_transactions(
@@ -123,9 +126,10 @@ async fn test_message_compat<Ver: StaticVersionType>(_ver: Ver) {
             data: QuorumProposal {
                 block_header: block_header.clone(),
                 view_number: ViewNumber::genesis(),
-                justify_qc: QuorumCertificate::genesis::<TestVersions>(
+                justify_qc: QuorumCertificate::genesis(
                     &ValidatedState::default(),
                     &node_state,
+                    TEST_VERSIONS.test,
                 )
                 .await,
                 upgrade_certificate: Some(UpgradeCertificate::new(

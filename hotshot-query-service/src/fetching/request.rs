@@ -21,8 +21,8 @@ use hotshot_types::{
 };
 
 use crate::{
-    availability::{LeafHash, LeafQueryData, QcHash},
     Payload,
+    availability::{LeafHash, LeafQueryData, QcHash},
 };
 
 /// A request for a resource.

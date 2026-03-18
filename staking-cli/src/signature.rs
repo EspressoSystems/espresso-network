@@ -17,7 +17,7 @@ use hotshot_types::{
 use jf_signature::bls_over_bn254;
 use serde::{Deserialize, Serialize};
 
-use crate::{parse, BLSKeyPair, BLSPrivKey, StateSignKey};
+use crate::{BLSKeyPair, BLSPrivKey, StateSignKey, parse};
 
 /// Node signatures containing pre-signed address signatures for validator operations
 ///
@@ -342,7 +342,7 @@ mod tests {
     use std::path::PathBuf;
 
     use alloy::primitives::Address;
-    use rand::{rngs::StdRng, Rng, SeedableRng};
+    use rand::{Rng, SeedableRng, rngs::StdRng};
     use rstest::*;
     use tempfile::NamedTempFile;
 
@@ -360,7 +360,7 @@ mod tests {
     fn sample_node_signatures(sample_address: Address) -> NodeSignatures {
         let mut rng = StdRng::from_seed([42u8; 32]);
         let bls_key = BLSKeyPair::generate(&mut rng);
-        let state_key = StateKeyPair::generate_from_seed(rng.gen());
+        let state_key = StateKeyPair::generate_from_seed(rng.r#gen());
 
         NodeSignatures::create(sample_address, &bls_key, &state_key)
     }
@@ -410,10 +410,12 @@ mod tests {
             matches!(source, NodeSignatureSource::File { path: p, .. } if p == path);
         } else {
             assert!(result.is_err());
-            assert!(result
-                .unwrap_err()
-                .to_string()
-                .contains("Unsupported extension"));
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Unsupported extension")
+            );
         }
     }
 
@@ -505,10 +507,12 @@ mod tests {
         let result = NodeSignatures::try_from(source);
 
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Failed to parse JSON file"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Failed to parse JSON file")
+        );
         Ok(())
     }
 
@@ -524,10 +528,12 @@ mod tests {
         let result = NodeSignatures::try_from(source);
 
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Failed to parse TOML file"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Failed to parse TOML file")
+        );
         Ok(())
     }
 
@@ -584,10 +590,12 @@ mod tests {
         };
         let result = NodeSignatureDestination::try_from(args);
 
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Unsupported extension"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Unsupported extension")
+        );
     }
 
     #[rstest]
@@ -597,10 +605,12 @@ mod tests {
 
         let result = NodeSignatureSource::parse(temp_file.path().to_path_buf(), None);
 
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Unsupported extension"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Unsupported extension")
+        );
         Ok(())
     }
 
@@ -623,9 +633,11 @@ mod tests {
     fn test_serialization_format_from_path_invalid(#[case] filename: &str) {
         let path = PathBuf::from(filename);
         let result = SerializationFormat::try_from(path.as_path());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Unsupported extension"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Unsupported extension")
+        );
     }
 }

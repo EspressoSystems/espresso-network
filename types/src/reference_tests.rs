@@ -26,24 +26,21 @@ use std::{fmt::Debug, path::Path, str::FromStr};
 use alloy::primitives::{Address, U160, U256};
 use committable::Committable;
 use espresso_types::{StateCertQueryDataV1, StateCertQueryDataV2};
-use hotshot_example_types::node_types::TestVersions;
-use hotshot_query_service::{
-    availability::{
-        BlockQueryData, LeafQueryData, LeafQueryDataLegacy, PayloadQueryData, TransactionQueryData,
-        TransactionWithProofQueryData, VidCommonQueryData,
-    },
-    testing::mocks::MockVersions,
+use hotshot_example_types::node_types::TEST_VERSIONS;
+use hotshot_query_service::availability::{
+    BlockQueryData, LeafQueryData, LeafQueryDataLegacy, PayloadQueryData, TransactionQueryData,
+    TransactionWithProofQueryData, VidCommonQueryData,
 };
 use hotshot_types::{
-    data::{vid_commitment, VidCommon},
+    data::{VidCommon, vid_commitment},
     simple_certificate::{
         LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
     },
-    traits::{signature_key::BuilderSignatureKey, BlockPayload, EncodeBytes},
+    traits::{BlockPayload, EncodeBytes, signature_key::BuilderSignatureKey},
     vid::{
         advz::advz_scheme,
         avidm::init_avidm_param,
-        avidm_gf2::{init_avidm_gf2_param, AvidmGf2Scheme},
+        avidm_gf2::{AvidmGf2Scheme, init_avidm_gf2_param},
     },
 };
 use jf_advz::VidScheme;
@@ -51,25 +48,27 @@ use jf_merkle_tree_compat::{MerkleTreeScheme, UniversalMerkleTreeScheme};
 use pretty_assertions::assert_eq;
 use rand::{Rng, RngCore};
 use sequencer_utils::commitment_to_u256;
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 use tagged_base64::TaggedBase64;
 use vbs::{
-    version::{StaticVersion, StaticVersionType, Version},
     BinarySerializer,
+    version::{StaticVersion, Version},
 };
+use versions::version;
 
 use crate::{
+    ADVZNamespaceProofQueryData, FeeAccount, FeeInfo, Header, L1BlockInfo, NamespaceId,
+    NamespaceProofQueryData, NodeState, NsProof, NsTable, Payload, SeqTypes, StakeTableHash,
+    Transaction, ValidatedState,
     v0_1::{self, ADVZNsProof},
     v0_2,
     v0_3::{EventKey, RewardAmount, StakeTableEvent},
     v0_4::{
-        RewardAccountProofV2, RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleTreeV2,
-        REWARD_MERKLE_TREE_V2_HEIGHT,
+        REWARD_MERKLE_TREE_V2_HEIGHT, RewardAccountProofV2, RewardAccountQueryDataV2,
+        RewardAccountV2, RewardMerkleTreeV2,
     },
-    validator_set_from_l1_events, ADVZNamespaceProofQueryData, FeeAccount, FeeInfo, Header,
-    L1BlockInfo, NamespaceId, NamespaceProofQueryData, NodeState, NsProof, NsTable, Payload,
-    SeqTypes, StakeTableHash, Transaction, ValidatedState,
+    validator_set_from_l1_events,
 };
 
 type V1Serializer = vbs::Serializer<StaticVersion<0, 1>>;
@@ -105,7 +104,7 @@ async fn reference_payload() -> Payload {
 }
 
 async fn reference_block() -> BlockQueryData<SeqTypes> {
-    let header = reference_header(Version { major: 0, minor: 1 }).await;
+    let header = reference_header(version(0, 1)).await;
     let payload = reference_payload().await;
     BlockQueryData::new(header, payload)
 }
@@ -234,8 +233,7 @@ async fn reference_header(version: Version) -> Header {
     let fee_info = reference_fee_info();
     let payload = reference_payload().await;
     let ns_table = payload.ns_table().clone();
-    let payload_commitment =
-        vid_commitment::<MockVersions>(&payload.encode(), &ns_table.encode(), 1, version);
+    let payload_commitment = vid_commitment(&payload.encode(), &ns_table.encode(), 1, version);
     let builder_commitment = payload.builder_commitment(&ns_table);
     let builder_signature =
         FeeAccount::sign_fee(&builder_key, fee_info.amount().as_u64().unwrap(), &ns_table).unwrap();
@@ -268,7 +266,7 @@ async fn reference_header(version: Version) -> Header {
 
 const REFERENCE_V1_HEADER_COMMITMENT: &str = "BLOCK~dh1KpdvvxSvnnPpOi2yI3DOg8h6ltr2Kv13iRzbQvtN2";
 const REFERENCE_V2_HEADER_COMMITMENT: &str = "BLOCK~V0GJjL19nCrlm9n1zZ6gaOKEekSMCT6uR5P-h7Gi6UJR";
-const REFERENCE_V3_HEADER_COMMITMENT: &str = "BLOCK~jcrvSlMuQnR2bK6QtraQ4RhlP_F3-v_vae5Zml0rtPbl";
+const REFERENCE_V3_HEADER_COMMITMENT: &str = "BLOCK~qKb0axY9NwpusJn5ZFhjJAyG8IYpJpHN2-BDIsIkhrEd";
 const REFERENCE_V4_HEADER_COMMITMENT: &str = "BLOCK~hPVq9NasWW1vVYGGGr0PSRv1TV3nUV_8ARw5fWHlQLx3";
 
 fn reference_transaction<R>(ns_id: NamespaceId, rng: &mut R) -> Transaction
@@ -487,7 +485,7 @@ async fn test_reference_header_v1() {
     reference_test(
         "v1",
         "header",
-        reference_header(StaticVersion::<0, 1>::version()).await,
+        reference_header(version(0, 1)).await,
         REFERENCE_V1_HEADER_COMMITMENT,
     );
 }
@@ -497,7 +495,7 @@ async fn test_reference_header_v2() {
     reference_test(
         "v2",
         "header",
-        reference_header(StaticVersion::<0, 2>::version()).await,
+        reference_header(version(0, 2)).await,
         REFERENCE_V2_HEADER_COMMITMENT,
     );
 }
@@ -507,7 +505,7 @@ async fn test_reference_header_v3() {
     reference_test(
         "v3",
         "header",
-        reference_header(StaticVersion::<0, 3>::version()).await,
+        reference_header(version(0, 3)).await,
         REFERENCE_V3_HEADER_COMMITMENT,
     );
 }
@@ -517,7 +515,7 @@ async fn test_reference_header_v4() {
     reference_test(
         "v4",
         "header",
-        reference_header(StaticVersion::<0, 4>::version()).await,
+        reference_header(version(0, 4)).await,
         REFERENCE_V4_HEADER_COMMITMENT,
     );
 }
@@ -555,9 +553,12 @@ async fn test_reference_ns_proof_enum_avidm() {
 async fn test_leaf_query_data_legacy_v1() {
     let validated_state = ValidatedState::default();
     let instance_state = NodeState::default();
-    let leaf =
-        LeafQueryDataLegacy::<SeqTypes>::genesis::<TestVersions>(&validated_state, &instance_state)
-            .await;
+    let leaf = LeafQueryDataLegacy::<SeqTypes>::genesis(
+        &validated_state,
+        &instance_state,
+        TEST_VERSIONS.test,
+    )
+    .await;
     reference_test_without_committable("v1", "leaf_query_data_legacy", &leaf);
 }
 
@@ -565,9 +566,12 @@ async fn test_leaf_query_data_legacy_v1() {
 async fn test_leaf_query_data_legacy_v2() {
     let validated_state = ValidatedState::default();
     let instance_state = NodeState::default();
-    let leaf =
-        LeafQueryDataLegacy::<SeqTypes>::genesis::<TestVersions>(&validated_state, &instance_state)
-            .await;
+    let leaf = LeafQueryDataLegacy::<SeqTypes>::genesis(
+        &validated_state,
+        &instance_state,
+        TEST_VERSIONS.test,
+    )
+    .await;
     reference_test_without_committable("v2", "leaf_query_data_legacy", &leaf);
 }
 
@@ -577,7 +581,8 @@ async fn test_leaf_query_data_v3() {
     let validated_state = ValidatedState::default();
     let instance_state = NodeState::default();
     let leaf =
-        LeafQueryData::<SeqTypes>::genesis::<TestVersions>(&validated_state, &instance_state).await;
+        LeafQueryData::<SeqTypes>::genesis(&validated_state, &instance_state, TEST_VERSIONS.test)
+            .await;
     reference_test_without_committable("v3", "leaf_query_data", &leaf);
 }
 
@@ -597,7 +602,7 @@ async fn test_payload_query_data() {
 // v0 is the `VidCommon`` v0 variant
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_vid_common_v0_query_data() {
-    let header = reference_header(Version { major: 0, minor: 1 }).await;
+    let header = reference_header(version(0, 1)).await;
     let payload = reference_payload().await;
     let encoded = payload.encode();
 
@@ -611,7 +616,7 @@ async fn test_vid_common_v0_query_data() {
 // v1 is the `VidCommon`` v1 variant
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_vid_common_v1_query_data() {
-    let header = reference_header(Version { major: 0, minor: 1 }).await;
+    let header = reference_header(version(0, 1)).await;
     let avidm_param = init_avidm_param(10).unwrap();
     let vid = VidCommonQueryData::<SeqTypes>::new(header, VidCommon::V1(avidm_param));
 
@@ -621,7 +626,7 @@ async fn test_vid_common_v1_query_data() {
 // v2 is the `VidCommon`` v2 variant
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_vid_common_v2_query_data() {
-    let header = reference_header(Version { major: 0, minor: 1 }).await;
+    let header = reference_header(version(0, 1)).await;
     let payload = reference_payload().await;
     let encoded = payload.encode();
     let payload_byte_len = payload.byte_len();

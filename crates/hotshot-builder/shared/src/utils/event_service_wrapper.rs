@@ -2,11 +2,11 @@ use std::{future::Future, pin::Pin, time::Duration};
 
 use anyhow::Context;
 use either::Either::{self, Left, Right};
-use futures::{stream::unfold, Stream, StreamExt};
+use futures::{Stream, StreamExt, stream::unfold};
 use hotshot::types::Event;
 use hotshot_events_service::events::Error as EventStreamError;
 use hotshot_types::traits::node_implementation::NodeType;
-use surf_disco::{client::HealthStatus, reexports::WebSocketConfig, Client};
+use surf_disco::{Client, client::HealthStatus, reexports::WebSocketConfig};
 use tokio::time::{sleep, timeout};
 use tracing::{error, warn};
 use url::Url;
@@ -31,7 +31,7 @@ pub struct EventServiceStream<Types: NodeType, V: StaticVersionType> {
 
 impl<Types: NodeType, ApiVer: StaticVersionType + 'static> EventServiceStream<Types, ApiVer> {
     /// Maximum period between events, once it elapsed we assume
-    /// udnerlying connection silently went down and attempt to reconnect
+    /// underlying connection silently went down and attempt to reconnect
     const MAX_WAIT_PERIOD: Duration = Duration::from_secs(10);
     const RETRY_PERIOD: Duration = Duration::from_secs(1);
     const CONNECTION_TIMEOUT: Duration = Duration::from_secs(60);
@@ -144,14 +144,14 @@ impl<Types: NodeType, ApiVer: StaticVersionType + 'static> EventServiceStream<Ty
 mod tests {
     use std::{
         sync::{
-            atomic::{AtomicU64, Ordering},
             Arc,
+            atomic::{AtomicU64, Ordering},
         },
         time::Duration,
     };
 
     use async_trait::async_trait;
-    use futures::{future::BoxFuture, stream, StreamExt};
+    use futures::{StreamExt, future::BoxFuture, stream};
     use hotshot::types::{Event, EventType};
     use hotshot_events_service::{
         events::define_api,
@@ -161,9 +161,8 @@ mod tests {
     use hotshot_types::{
         data::ViewNumber,
         event::{LegacyEvent, LegacyEventType},
-        traits::node_implementation::ConsensusTime,
     };
-    use tide_disco::{method::ReadState, App};
+    use tide_disco::{App, method::ReadState};
     use tokio::{spawn, task::JoinHandle, time::timeout};
     use tracing::debug;
     use url::Url;
@@ -251,12 +250,8 @@ mod tests {
     async fn test_event_stream_wrapper() {
         const TIMEOUT: Duration = Duration::from_secs(3);
 
-        let url: Url = format!(
-            "http://localhost:{}",
-            portpicker::pick_unused_port().unwrap()
-        )
-        .parse()
-        .unwrap();
+        let port = test_utils::reserve_tcp_port().unwrap();
+        let url: Url = format!("http://localhost:{port}").parse().unwrap();
 
         let app_handle = run_app("hotshot-events", url.clone());
 
@@ -296,12 +291,8 @@ mod tests {
     async fn test_event_stream_wrapper_with_idle_timeout() {
         const TIMEOUT: Duration = Duration::from_secs(3);
 
-        let url: Url = format!(
-            "http://localhost:{}",
-            portpicker::pick_unused_port().unwrap()
-        )
-        .parse()
-        .unwrap();
+        let port = test_utils::reserve_tcp_port().unwrap();
+        let url: Url = format!("http://localhost:{port}").parse().unwrap();
 
         let app_handle = run_app("hotshot-events", url.clone());
 
@@ -321,7 +312,7 @@ mod tests {
             EventServiceStream::<TestTypes, MockVersion>::RETRY_PERIOD + Duration::from_millis(500),
         )
         .await; // Wait longer than idle timeout
-                // Check whether stream returns Err(_) after idle timeout
+        // Check whether stream returns Err(_) after idle timeout
         match timeout(
             EventServiceStream::<TestTypes, MockVersion>::RETRY_PERIOD,
             stream.next(),

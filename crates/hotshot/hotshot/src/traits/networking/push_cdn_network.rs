@@ -14,18 +14,18 @@ use async_trait::async_trait;
 use bincode::config::Options;
 use cdn_broker::reexports::{
     connection::protocols::{Quic, Tcp},
-    def::{hook::NoMessageHook, ConnectionDef, RunDef, Topic as TopicTrait},
+    def::{ConnectionDef, RunDef, Topic as TopicTrait, hook::NoMessageHook},
     discovery::{Embedded, Redis},
 };
 #[cfg(feature = "hotshot-testing")]
 use cdn_broker::{Broker, Config as BrokerConfig};
 pub use cdn_client::reexports::crypto::signature::KeyPair;
 use cdn_client::{
+    Client, Config as ClientConfig,
     reexports::{
         crypto::signature::{Serializable, SignatureScheme},
         message::{Broadcast, Direct, Message as PushCdnMessage},
     },
-    Client, Config as ClientConfig,
 };
 #[cfg(feature = "hotshot-testing")]
 use cdn_marshal::{Config as MarshalConfig, Marshal};
@@ -34,7 +34,7 @@ use hotshot_types::traits::network::{
     AsyncGenerator, NetworkReliability, TestableNetworkingImplementation,
 };
 use hotshot_types::{
-    boxed_sync,
+    BoxSyncFuture, boxed_sync,
     data::ViewNumber,
     traits::{
         metrics::{Counter, Metrics, NoMetrics},
@@ -42,12 +42,12 @@ use hotshot_types::{
         signature_key::SignatureKey,
     },
     utils::bincode_opts,
-    BoxSyncFuture,
 };
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use parking_lot::Mutex;
 #[cfg(feature = "hotshot-testing")]
-use rand::{rngs::StdRng, RngCore, SeedableRng};
+use rand::{RngCore, SeedableRng, rngs::StdRng};
+use test_utils::reserve_tcp_port;
 use tokio::sync::mpsc::error::TrySendError;
 #[cfg(feature = "hotshot-testing")]
 use tokio::{spawn, time::sleep};
@@ -339,20 +339,17 @@ impl<TYPES: NodeType> TestableNetworkingImplementation<TYPES>
             .to_string_lossy()
             .into_owned();
 
-        // Pick some unused public ports
-        let public_address_1 = format!(
-            "127.0.0.1:{}",
-            portpicker::pick_unused_port().expect("could not find an open port")
-        );
-        let public_address_2 = format!(
-            "127.0.0.1:{}",
-            portpicker::pick_unused_port().expect("could not find an open port")
-        );
+        // Atomically bind to unused public ports
+        let public_port_1 = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let public_port_2 = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let public_address_1 = format!("127.0.0.1:{public_port_1}");
+        let public_address_2 = format!("127.0.0.1:{public_port_2}");
 
         // 2 brokers
         for i in 0..2 {
-            // Get the ports to bind to
-            let private_port = portpicker::pick_unused_port().expect("could not find an open port");
+            // Atomically bind to a private port
+            let private_port =
+                reserve_tcp_port().expect("OS should have ephemeral ports available");
 
             // Extrapolate addresses
             let private_address = format!("127.0.0.1:{private_port}");
@@ -406,8 +403,8 @@ impl<TYPES: NodeType> TestableNetworkingImplementation<TYPES>
             });
         }
 
-        // Get the port to use for the marshal
-        let marshal_port = portpicker::pick_unused_port().expect("could not find an open port");
+        // Atomically bind to an available port for the marshal
+        let marshal_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         // Configure the marshal
         let marshal_endpoint = format!("127.0.0.1:{marshal_port}");

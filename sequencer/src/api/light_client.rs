@@ -3,17 +3,17 @@ use std::{fmt::Display, sync::Arc, time::Duration};
 use anyhow::Result;
 use espresso_types::{BlockMerkleTree, NsProof, SeqTypes};
 use futures::{
-    future::{try_join, FutureExt},
-    stream::StreamExt,
     TryStreamExt,
+    future::{FutureExt, try_join},
+    stream::StreamExt,
 };
 use hotshot_query_service::{
+    Error,
     availability::{self, AvailabilityDataSource, LeafId},
-    data_source::{storage::NodeStorage, VersionedDataSource},
+    data_source::{VersionedDataSource, storage::NodeStorage},
     merklized_state::{MerklizedStateDataSource, Snapshot},
     node::BlockId,
     types::HeightIndexed,
-    Error,
 };
 use hotshot_types::utils::{epoch_from_block_number, root_block_in_epoch};
 use itertools::izip;
@@ -21,7 +21,7 @@ use jf_merkle_tree_compat::MerkleTreeScheme;
 use light_client::consensus::{
     header::HeaderProof, leaf::LeafProof, namespace::NamespaceProof, payload::PayloadProof,
 };
-use tide_disco::{method::ReadState, Api, RequestParams, StatusCode};
+use tide_disco::{Api, RequestParams, StatusCode, method::ReadState};
 use vbs::version::StaticVersionType;
 
 use crate::api::data_source::{NodeStateDataSource, StakeTableDataSource};
@@ -552,11 +552,11 @@ fn not_found(msg: impl Into<String>) -> Error {
 
 #[cfg(test)]
 mod test {
-    use espresso_types::{DrbAndHeaderUpgradeVersion, EpochVersion, BLOCK_MERKLE_TREE_HEIGHT};
+    use espresso_types::BLOCK_MERKLE_TREE_HEIGHT;
     use futures::future::join_all;
     use hotshot_query_service::{
         availability::{BlockQueryData, TransactionIndex, VidCommonQueryData},
-        data_source::{storage::UpdateAvailabilityStorage, Transaction},
+        data_source::{Transaction, storage::UpdateAvailabilityStorage},
         merklized_state::UpdateStateData,
     };
     use hotshot_types::simple_certificate::CertificatePair;
@@ -564,15 +564,16 @@ mod test {
     use light_client::{
         consensus::leaf::{FinalityProof, LeafProofHint},
         testing::{
-            leaf_chain, leaf_chain_with_upgrade, AlwaysTrueQuorum, EnableEpochs, LegacyVersion,
-            TestClient, VersionCheckQuorum,
+            AlwaysTrueQuorum, ENABLE_EPOCHS, LEGACY_VERSION, TestClient, VersionCheckQuorum,
+            leaf_chain, leaf_chain_with_upgrade,
         },
     };
     use tide_disco::Error;
+    use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION};
 
     use super::*;
     use crate::api::{
-        data_source::{testing::TestableSequencerDataSource, SequencerDataSource},
+        data_source::{SequencerDataSource, testing::TestableSequencerDataSource},
         sql::DataSource,
     };
 
@@ -588,7 +589,7 @@ mod test {
         .unwrap();
 
         // Insert some leaves, forming a chain.
-        let leaves = leaf_chain::<EpochVersion>(1..=3).await;
+        let leaves = leaf_chain(1..=3, EPOCH_VERSION).await;
         {
             let mut tx = ds.write().await.unwrap();
             tx.insert_leaf(leaves[0].clone()).await.unwrap();
@@ -621,7 +622,7 @@ mod test {
 
         // Insert a single leaf. We will not be able to provide proofs ending in a leaf chain, but
         // we can return a leaf if the leaf after it is already known to be finalized.
-        let leaves = leaf_chain::<EpochVersion>(1..=2).await;
+        let leaves = leaf_chain(1..=2, EPOCH_VERSION).await;
         {
             let mut tx = ds.write().await.unwrap();
             tx.insert_leaf(leaves[0].clone()).await.unwrap();
@@ -653,7 +654,7 @@ mod test {
 
         // Insert a single leaf. If we request this leaf but provide a finalized leaf which is
         // earlier, we should fail.
-        let leaves = leaf_chain::<EpochVersion>(1..2).await;
+        let leaves = leaf_chain(1..2, EPOCH_VERSION).await;
         {
             let mut tx = ds.write().await.unwrap();
             tx.insert_leaf(leaves[0].clone()).await.unwrap();
@@ -679,7 +680,7 @@ mod test {
 
         // Insert multiple leaves that don't chain. We will not be able to prove these are
         // finalized.
-        let leaves = leaf_chain::<EpochVersion>(1..=4).await;
+        let leaves = leaf_chain(1..=4, EPOCH_VERSION).await;
         {
             let mut tx = ds.write().await.unwrap();
             tx.insert_leaf(leaves[0].clone()).await.unwrap();
@@ -714,7 +715,7 @@ mod test {
         .unwrap();
 
         // Insert a single leaf, plus an extra QC chain proving it finalized.
-        let leaves = leaf_chain::<EpochVersion>(1..=3).await;
+        let leaves = leaf_chain(1..=3, EPOCH_VERSION).await;
         let qcs = [
             CertificatePair::for_parent(leaves[1].leaf()),
             CertificatePair::for_parent(leaves[2].leaf()),
@@ -751,12 +752,9 @@ mod test {
         // Upgrade to epochs (and enabling HotStuff2) in the middle of a leaf chain, so that the
         // last leaf in the chain only requires 2 QCs to verify, even though at the start of the
         // chain we would have required 3.
-        let leaves = leaf_chain_with_upgrade::<EnableEpochs>(1..=4, 2).await;
-        assert_eq!(leaves[0].header().version(), LegacyVersion::version());
-        assert_eq!(
-            leaves[1].header().version(),
-            DrbAndHeaderUpgradeVersion::version()
-        );
+        let leaves = leaf_chain_with_upgrade(1..=4, 2, ENABLE_EPOCHS).await;
+        assert_eq!(leaves[0].header().version(), LEGACY_VERSION);
+        assert_eq!(leaves[1].header().version(), DRB_AND_HEADER_UPGRADE_VERSION);
         let qcs = [
             CertificatePair::for_parent(leaves[2].leaf()),
             CertificatePair::for_parent(leaves[3].leaf()),
@@ -796,7 +794,7 @@ mod test {
         .unwrap();
 
         // Construct a chain of leaves, plus the corresponding block Merkle tree at each leaf.
-        let leaves = leaf_chain::<EpochVersion>(0..=2).await;
+        let leaves = leaf_chain(0..=2, EPOCH_VERSION).await;
         let mts = leaves
             .iter()
             .scan(

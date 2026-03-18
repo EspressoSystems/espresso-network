@@ -1,0 +1,17 @@
+[package]
+name = "versions"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+
+[dependencies]
+bincode = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+vbs = { workspace = true }
+
+[dev-dependencies]
+quickcheck = { workspace = true }
+
+[lints]
+workspace = true

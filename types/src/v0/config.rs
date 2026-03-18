@@ -1,10 +1,10 @@
 use std::{num::NonZeroUsize, time::Duration};
 
 use hotshot_types::{
+    HotShotConfig, PeerConfig, ValidatorConfig, VersionedDaCommittee,
     network::{
         BuilderType, CombinedNetworkConfig, Libp2pConfig, NetworkConfig, RandomBuilderConfig,
     },
-    HotShotConfig, PeerConfig, ValidatorConfig, VersionedDaCommittee,
 };
 use serde::{Deserialize, Serialize};
 use tide_disco::Url;

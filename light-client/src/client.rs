@@ -1,7 +1,7 @@
 use std::future::Future;
 
 use anyhow::Result;
-use espresso_types::{v0_3::StakeTableEvent, NamespaceId, SeqTypes};
+use espresso_types::{NamespaceId, SeqTypes, v0_3::StakeTableEvent};
 use hotshot_query_service::{
     availability::{LeafId, LeafQueryData},
     node::BlockId,
@@ -48,7 +48,7 @@ pub trait Client: Send + Sync + 'static {
         start: usize,
         end: usize,
     ) -> impl Send
-           + Future<
+    + Future<
         Output = Result<Vec<hotshot_query_service::availability::LeafQueryData<SeqTypes>>>,
     >;
 
@@ -197,25 +197,26 @@ mod test {
     use std::time::Duration;
 
     use committable::Committable;
-    use espresso_types::{EpochVersion, Header, SequencerVersions, Transaction};
-    use futures::{stream::StreamExt, TryStreamExt};
+    use espresso_types::{Header, Transaction};
+    use futures::{TryStreamExt, stream::StreamExt};
     use hotshot_query_service::{
-        availability::{BlockQueryData, LeafQueryData},
         Resolvable,
+        availability::{BlockQueryData, LeafQueryData},
     };
-    use portpicker::pick_unused_port;
     use pretty_assertions::assert_eq;
     use rand::RngCore;
     use sequencer::{
         api::{
+            Options,
             data_source::testing::TestableSequencerDataSource,
             sql::DataSource,
             test_helpers::{TestNetwork, TestNetworkConfigBuilder},
-            Options,
         },
-        testing::{wait_for_decide_on_handle, TestConfigBuilder},
+        testing::{TestConfigBuilder, wait_for_decide_on_handle},
     };
+    use test_utils;
     use tokio::time::sleep;
+    use versions::{EPOCH_VERSION, Upgrade};
 
     use super::*;
     use crate::{
@@ -226,7 +227,8 @@ mod test {
     #[tokio::test]
     #[test_log::test]
     async fn test_block_height() {
-        let port = pick_unused_port().expect("No ports free");
+        let port =
+            test_utils::reserve_tcp_port().expect("OS should have ephemeral ports available");
         let url: Url = format!("http://localhost:{port}").parse().unwrap();
 
         let test_config = TestConfigBuilder::default().build();
@@ -243,11 +245,7 @@ mod test {
             .network_config(test_config)
             .build();
 
-        let _network = TestNetwork::new(
-            config,
-            SequencerVersions::<EpochVersion, EpochVersion>::new(),
-        )
-        .await;
+        let _network = TestNetwork::new(config, Upgrade::trivial(EPOCH_VERSION)).await;
         let client = QueryServiceClient::new(url);
 
         // Check that the block height increases over time.
@@ -268,7 +266,8 @@ mod test {
     #[tokio::test]
     #[test_log::test]
     async fn test_leaf_proof() {
-        let port = pick_unused_port().expect("No ports free");
+        let port =
+            test_utils::reserve_tcp_port().expect("OS should have ephemeral ports available");
         let url: Url = format!("http://localhost:{port}").parse().unwrap();
 
         let test_config = TestConfigBuilder::default().build();
@@ -285,11 +284,7 @@ mod test {
             .network_config(test_config)
             .build();
 
-        let _network = TestNetwork::new(
-            config,
-            SequencerVersions::<EpochVersion, EpochVersion>::new(),
-        )
-        .await;
+        let _network = TestNetwork::new(config, Upgrade::trivial(EPOCH_VERSION)).await;
         let client = QueryServiceClient::new(url);
 
         // Wait for a chain of leaves to be produced.
@@ -352,7 +347,8 @@ mod test {
     #[tokio::test]
     #[test_log::test]
     async fn test_header_proof() {
-        let port = pick_unused_port().expect("No ports free");
+        let port =
+            test_utils::reserve_tcp_port().expect("OS should have ephemeral ports available");
         let url: Url = format!("http://localhost:{port}").parse().unwrap();
 
         let test_config = TestConfigBuilder::default().build();
@@ -369,11 +365,7 @@ mod test {
             .network_config(test_config)
             .build();
 
-        let _network = TestNetwork::new(
-            config,
-            SequencerVersions::<EpochVersion, EpochVersion>::new(),
-        )
-        .await;
+        let _network = TestNetwork::new(config, Upgrade::trivial(EPOCH_VERSION)).await;
         let client = QueryServiceClient::new(url);
 
         // Wait for a chain of blocks to be produced.
@@ -437,7 +429,8 @@ mod test {
     #[tokio::test]
     #[test_log::test]
     async fn test_payload_proof() {
-        let port = pick_unused_port().expect("No ports free");
+        let port =
+            test_utils::reserve_tcp_port().expect("OS should have ephemeral ports available");
         let url: Url = format!("http://localhost:{port}").parse().unwrap();
 
         let test_config = TestConfigBuilder::default().build();
@@ -454,11 +447,7 @@ mod test {
             .network_config(test_config)
             .build();
 
-        let _network = TestNetwork::new(
-            config,
-            SequencerVersions::<EpochVersion, EpochVersion>::new(),
-        )
-        .await;
+        let _network = TestNetwork::new(config, Upgrade::trivial(EPOCH_VERSION)).await;
         let client = QueryServiceClient::new(url);
 
         // Wait for a block to be produced.
@@ -486,7 +475,8 @@ mod test {
     #[tokio::test]
     #[test_log::test]
     async fn test_namespace_proof() {
-        let port = pick_unused_port().expect("No ports free");
+        let port =
+            test_utils::reserve_tcp_port().expect("OS should have ephemeral ports available");
         let url: Url = format!("http://localhost:{port}").parse().unwrap();
 
         let test_config = TestConfigBuilder::default().build();
@@ -503,11 +493,7 @@ mod test {
             .network_config(test_config)
             .build();
 
-        let network = TestNetwork::new(
-            config,
-            SequencerVersions::<EpochVersion, EpochVersion>::new(),
-        )
-        .await;
+        let network = TestNetwork::new(config, Upgrade::trivial(EPOCH_VERSION)).await;
         let client = QueryServiceClient::new(url);
 
         // Submit a couple of transactions to form non-empty blocks.

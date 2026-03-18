@@ -1,7 +1,7 @@
 use std::{collections::HashMap, pin::Pin, sync::Arc, time::Duration};
 
 use alloy::primitives::U256;
-use anyhow::{bail, ensure, Context};
+use anyhow::{Context, bail, ensure};
 use async_lock::RwLock;
 use async_once_cell::Lazy;
 use async_trait::async_trait;
@@ -12,6 +12,8 @@ use data_source::{
 };
 use derivative::Derivative;
 use espresso_types::{
+    AccountQueryData, AuthenticatedValidatorMap, BlockMerkleTree, FeeAccount, FeeMerkleTree, Leaf2,
+    NodeState, PubKey, Transaction,
     config::PublicNetworkConfig,
     retain_accounts,
     traits::EventsPersistenceRead,
@@ -24,8 +26,6 @@ use espresso_types::{
         PermittedRewardMerkleTreeV2, RewardAccountProofV2, RewardAccountQueryDataV2,
         RewardAccountV2, RewardMerkleTreeV2,
     },
-    AccountQueryData, AuthenticatedValidatorMap, BlockMerkleTree, FeeAccount, FeeMerkleTree, Leaf2,
-    NodeState, PubKey, Transaction,
 };
 use futures::{
     future::{BoxFuture, Future, FutureExt},
@@ -37,19 +37,15 @@ use hotshot_events_service::events_source::{
 };
 use hotshot_query_service::{availability::VidCommonQueryData, data_source::ExtensibleDataSource};
 use hotshot_types::{
+    PeerConfig,
     data::{EpochNumber, VidCommitment, VidCommon, VidShare, ViewNumber},
     event::{Event, LegacyEvent},
     light_client::LCV3StateSignatureRequestBody,
     network::NetworkConfig,
     simple_certificate::LightClientStateUpdateCertificateV2,
-    traits::{
-        election::Membership,
-        network::ConnectedNetwork,
-        node_implementation::{ConsensusTime, NodeType, Versions},
-    },
-    vid::avidm::{init_avidm_param, AvidMScheme},
+    traits::{election::Membership, network::ConnectedNetwork},
+    vid::avidm::{AvidMScheme, init_avidm_param},
     vote::HasViewNumber,
-    PeerConfig,
 };
 use itertools::Itertools;
 use jf_merkle_tree_compat::MerkleTreeScheme;
@@ -61,19 +57,19 @@ use tokio::time::timeout;
 
 use self::data_source::{HotShotConfigDataSource, NodeStateDataSource, StateSignatureDataSource};
 use crate::{
+    SeqTypes, SequencerApiVersion, SequencerContext,
     api::data_source::TokenDataSource,
     catchup::{
-        add_fee_accounts_to_state, add_v1_reward_accounts_to_state,
-        add_v2_reward_accounts_to_state, CatchupStorage,
+        CatchupStorage, add_fee_accounts_to_state, add_v1_reward_accounts_to_state,
+        add_v2_reward_accounts_to_state,
     },
     context::Consensus,
     request_response::{
         data_source::{retain_v1_reward_accounts, retain_v2_reward_accounts},
         request::{Request, Response},
     },
-    state_cert::{validate_state_cert, StateCertFetchError},
+    state_cert::{StateCertFetchError, validate_state_cert},
     state_signature::StateSigner,
-    SeqTypes, SequencerApiVersion, SequencerContext,
 };
 
 pub mod data_source;
@@ -92,20 +88,20 @@ type BoxLazy<T> = Pin<Arc<Lazy<T, BoxFuture<'static, T>>>>;
 
 #[derive(Derivative)]
 #[derivative(Clone(bound = ""), Debug(bound = ""))]
-struct ApiState<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> {
+struct ApiState<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> {
     // The consensus state is initialized lazily so we can start the API (and healthcheck endpoints)
     // before consensus has started. Any endpoint that uses consensus state will wait for
     // initialization to finish, but endpoints that do not require a consensus handle can proceed
     // without waiting.
     #[derivative(Debug = "ignore")]
-    sequencer_context: BoxLazy<SequencerContext<N, P, V>>,
+    sequencer_context: BoxLazy<SequencerContext<N, P>>,
 
     // we cache `token_supply` for up to an hour, to avoid repeatedly querying the contract for information that rarely changes
     token_supply: Cache<(), U256>,
 }
 
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> ApiState<N, P, V> {
-    fn new(context_init: impl Future<Output = SequencerContext<N, P, V>> + Send + 'static) -> Self {
+impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> ApiState<N, P> {
+    fn new(context_init: impl Future<Output = SequencerContext<N, P>> + Send + 'static) -> Self {
         Self {
             sequencer_context: Arc::pin(Lazy::from_future(context_init.boxed())),
             token_supply: Cache::builder()
@@ -133,7 +129,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> ApiState
             .event_streamer()
     }
 
-    async fn consensus(&self) -> Arc<RwLock<Consensus<N, P, V>>> {
+    async fn consensus(&self) -> Arc<RwLock<Consensus<N, P>>> {
         self.sequencer_context
             .as_ref()
             .get()
@@ -152,11 +148,11 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> ApiState
     }
 }
 
-type StorageState<N, P, D, V> = ExtensibleDataSource<D, ApiState<N, P, V>>;
+type StorageState<N, P, D> = ExtensibleDataSource<D, ApiState<N, P>>;
 
 #[async_trait]
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> EventsSource<SeqTypes>
-    for ApiState<N, P, V>
+impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> EventsSource<SeqTypes>
+    for ApiState<N, P>
 {
     type EventStream = BoxStream<'static, Arc<Event<SeqTypes>>>;
     type LegacyEventStream = BoxStream<'static, Arc<LegacyEvent<SeqTypes>>>;
@@ -195,29 +191,29 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> EventsSo
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, D: Send + Sync, V: Versions, P: SequencerPersistence>
-    TokenDataSource<SeqTypes> for StorageState<N, P, D, V>
+impl<N: ConnectedNetwork<PubKey>, D: Send + Sync, P: SequencerPersistence> TokenDataSource<SeqTypes>
+    for StorageState<N, P, D>
 {
     async fn get_total_supply_l1(&self) -> anyhow::Result<U256> {
         self.as_ref().get_total_supply_l1().await
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, D: Send + Sync, V: Versions, P: SequencerPersistence>
-    SubmitDataSource<N, P> for StorageState<N, P, D, V>
+impl<N: ConnectedNetwork<PubKey>, D: Send + Sync, P: SequencerPersistence> SubmitDataSource<N, P>
+    for StorageState<N, P, D>
 {
     async fn submit(&self, tx: Transaction) -> anyhow::Result<()> {
         self.as_ref().submit(tx).await
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
-    StakeTableDataSource<SeqTypes> for StorageState<N, P, D, V>
+impl<N: ConnectedNetwork<PubKey>, D: Sync, P: SequencerPersistence> StakeTableDataSource<SeqTypes>
+    for StorageState<N, P, D>
 {
     /// Get the stake table for a given epoch
     async fn get_stake_table(
         &self,
-        epoch: Option<<SeqTypes as NodeType>::Epoch>,
+        epoch: Option<EpochNumber>,
     ) -> anyhow::Result<Vec<PeerConfig<SeqTypes>>> {
         self.as_ref().get_stake_table(epoch).await
     }
@@ -230,7 +226,7 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
     /// Get the DA stake table for a given epoch
     async fn get_da_stake_table(
         &self,
-        epoch: Option<<SeqTypes as NodeType>::Epoch>,
+        epoch: Option<EpochNumber>,
     ) -> anyhow::Result<Vec<PeerConfig<SeqTypes>>> {
         self.as_ref().get_da_stake_table(epoch).await
     }
@@ -245,7 +241,7 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
     /// Get all the validators
     async fn get_validators(
         &self,
-        epoch: <SeqTypes as NodeType>::Epoch,
+        epoch: EpochNumber,
     ) -> anyhow::Result<AuthenticatedValidatorMap> {
         self.as_ref().get_validators(epoch).await
     }
@@ -275,7 +271,7 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
 
     async fn get_all_validators(
         &self,
-        epoch: <SeqTypes as NodeType>::Epoch,
+        epoch: EpochNumber,
         offset: u64,
         limit: u64,
     ) -> anyhow::Result<Vec<RegisteredValidator<PubKey>>> {
@@ -293,8 +289,8 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> TokenDataSource<SeqTypes>
-    for ApiState<N, P, V>
+impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> TokenDataSource<SeqTypes>
+    for ApiState<N, P>
 {
     async fn get_total_supply_l1(&self) -> anyhow::Result<U256> {
         match self.token_supply.get(&()).await {
@@ -321,13 +317,13 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> TokenDat
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
-    StakeTableDataSource<SeqTypes> for ApiState<N, P, V>
+impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StakeTableDataSource<SeqTypes>
+    for ApiState<N, P>
 {
     /// Get the stake table for a given epoch
     async fn get_stake_table(
         &self,
-        epoch: Option<<SeqTypes as NodeType>::Epoch>,
+        epoch: Option<EpochNumber>,
     ) -> anyhow::Result<Vec<PeerConfig<SeqTypes>>> {
         let highest_epoch = self
             .consensus()
@@ -368,7 +364,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
     /// Get the DA stake table for a given epoch
     async fn get_da_stake_table(
         &self,
-        epoch: Option<<SeqTypes as NodeType>::Epoch>,
+        epoch: Option<EpochNumber>,
     ) -> anyhow::Result<Vec<PeerConfig<SeqTypes>>> {
         Ok(self
             .consensus()
@@ -419,7 +415,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
     /// Get the whole validators map
     async fn get_validators(
         &self,
-        epoch: <SeqTypes as NodeType>::Epoch,
+        epoch: EpochNumber,
     ) -> anyhow::Result<AuthenticatedValidatorMap> {
         let mem = self
             .consensus()
@@ -485,7 +481,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
 
     async fn get_all_validators(
         &self,
-        epoch: <SeqTypes as NodeType>::Epoch,
+        epoch: EpochNumber,
         offset: u64,
         limit: u64,
     ) -> anyhow::Result<Vec<RegisteredValidator<PubKey>>> {
@@ -512,8 +508,8 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
-    RequestResponseDataSource<SeqTypes> for StorageState<N, P, D, V>
+impl<N: ConnectedNetwork<PubKey>, D: Sync, P: SequencerPersistence>
+    RequestResponseDataSource<SeqTypes> for StorageState<N, P, D>
 {
     async fn request_vid_shares(
         &self,
@@ -528,8 +524,8 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
 }
 
 #[async_trait]
-impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
-    StateCertFetchingDataSource<SeqTypes> for StorageState<N, P, D, V>
+impl<N: ConnectedNetwork<PubKey>, D: Sync, P: SequencerPersistence>
+    StateCertFetchingDataSource<SeqTypes> for StorageState<N, P, D>
 {
     async fn request_state_cert(
         &self,
@@ -540,8 +536,8 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
-    RequestResponseDataSource<SeqTypes> for ApiState<N, P, V>
+impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> RequestResponseDataSource<SeqTypes>
+    for ApiState<N, P>
 {
     async fn request_vid_shares(
         &self,
@@ -581,7 +577,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
             };
 
             // Create a random request id
-            let request_id = rand::thread_rng().gen();
+            let request_id = rand::thread_rng().r#gen();
 
             // Request and verify the shares from all other nodes, timing out after `duration` seconds
             let received_shares = Arc::new(parking_lot::Mutex::new(Vec::new()));
@@ -646,8 +642,8 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
 }
 
 #[async_trait]
-impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
-    StateCertFetchingDataSource<SeqTypes> for ApiState<N, P, V>
+impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StateCertFetchingDataSource<SeqTypes>
+    for ApiState<N, P>
 {
     async fn request_state_cert(
         &self,
@@ -742,8 +738,8 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
 
 // Thin wrapper implementations that delegate to persistence
 #[async_trait]
-impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence> StateCertDataSource
-    for StorageState<N, P, D, V>
+impl<N: ConnectedNetwork<PubKey>, D: Sync, P: SequencerPersistence> StateCertDataSource
+    for StorageState<N, P, D>
 {
     async fn get_state_cert_by_epoch(
         &self,
@@ -762,9 +758,7 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
 }
 
 #[async_trait]
-impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> StateCertDataSource
-    for ApiState<N, P, V>
-{
+impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StateCertDataSource for ApiState<N, P> {
     async fn get_state_cert_by_epoch(
         &self,
         epoch: u64,
@@ -789,8 +783,8 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> StateCer
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> SubmitDataSource<N, P>
-    for ApiState<N, P, V>
+impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SubmitDataSource<N, P>
+    for ApiState<N, P>
 {
     async fn submit(&self, tx: Transaction) -> anyhow::Result<()> {
         let handle = self.consensus().await;
@@ -827,10 +821,9 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> SubmitDa
     }
 }
 
-impl<N, P, D, V> NodeStateDataSource for StorageState<N, P, D, V>
+impl<N, P, D> NodeStateDataSource for StorageState<N, P, D>
 where
     N: ConnectedNetwork<PubKey>,
-    V: Versions,
     P: SequencerPersistence,
     D: Sync,
 {
@@ -839,12 +832,8 @@ where
     }
 }
 
-impl<
-        N: ConnectedNetwork<PubKey>,
-        V: Versions,
-        P: SequencerPersistence,
-        D: CatchupStorage + Send + Sync,
-    > CatchupDataSource for StorageState<N, P, D, V>
+impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, D: CatchupStorage + Send + Sync>
+    CatchupDataSource for StorageState<N, P, D>
 {
     #[tracing::instrument(skip(self, instance))]
     async fn get_accounts(
@@ -884,7 +873,7 @@ impl<
             .consensus()
             .clone();
         if let Err(err) =
-            add_fee_accounts_to_state::<N, V, P>(&consensus, &view, accounts, &tree, leaf).await
+            add_fee_accounts_to_state::<N, P>(&consensus, &view, accounts, &tree, leaf).await
         {
             tracing::warn!(?view, "cannot update fetched account state: {err:#}");
         }
@@ -978,8 +967,7 @@ impl<
             .consensus()
             .clone();
         if let Err(err) =
-            add_v2_reward_accounts_to_state::<N, V, P>(&consensus, &view, accounts, &tree, leaf)
-                .await
+            add_v2_reward_accounts_to_state::<N, P>(&consensus, &view, accounts, &tree, leaf).await
         {
             tracing::warn!(?view, "cannot update fetched account state: {err:#}");
         }
@@ -1026,8 +1014,7 @@ impl<
             .consensus()
             .clone();
         if let Err(err) =
-            add_v1_reward_accounts_to_state::<N, V, P>(&consensus, &view, accounts, &tree, leaf)
-                .await
+            add_v1_reward_accounts_to_state::<N, P>(&consensus, &view, accounts, &tree, leaf).await
         {
             tracing::warn!(?view, "cannot update fetched account state: {err:#}");
         }
@@ -1060,10 +1047,9 @@ impl<
     }
 }
 
-impl<N, V, P> NodeStateDataSource for ApiState<N, P, V>
+impl<N, P> NodeStateDataSource for ApiState<N, P>
 where
     N: ConnectedNetwork<PubKey>,
-    V: Versions,
     P: SequencerPersistence,
 {
     async fn node_state(&self) -> NodeState {
@@ -1071,9 +1057,7 @@ where
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> CatchupDataSource
-    for ApiState<N, P, V>
-{
+impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> CatchupDataSource for ApiState<N, P> {
     #[tracing::instrument(skip(self, _instance))]
     async fn get_accounts(
         &self,
@@ -1251,16 +1235,16 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> CatchupD
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
-    HotShotConfigDataSource for StorageState<N, P, D, V>
+impl<N: ConnectedNetwork<PubKey>, D: Sync, P: SequencerPersistence> HotShotConfigDataSource
+    for StorageState<N, P, D>
 {
     async fn get_config(&self) -> PublicNetworkConfig {
         self.as_ref().network_config().await.into()
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> HotShotConfigDataSource
-    for ApiState<N, P, V>
+impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> HotShotConfigDataSource
+    for ApiState<N, P>
 {
     async fn get_config(&self) -> PublicNetworkConfig {
         self.network_config().await.into()
@@ -1268,8 +1252,8 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> HotShotC
 }
 
 #[async_trait]
-impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
-    StateSignatureDataSource<N> for StorageState<N, P, D, V>
+impl<N: ConnectedNetwork<PubKey>, D: Sync, P: SequencerPersistence> StateSignatureDataSource<N>
+    for StorageState<N, P, D>
 {
     async fn get_state_signature(&self, height: u64) -> Option<LCV3StateSignatureRequestBody> {
         self.as_ref().get_state_signature(height).await
@@ -1277,8 +1261,8 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
 }
 
 #[async_trait]
-impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> StateSignatureDataSource<N>
-    for ApiState<N, P, V>
+impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StateSignatureDataSource<N>
+    for ApiState<N, P>
 {
     async fn get_state_signature(&self, height: u64) -> Option<LCV3StateSignatureRequestBody> {
         self.state_signer()
@@ -1443,6 +1427,8 @@ pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
                     let Ok(_) = self.persist_proofs(finalized_hotshot_height, iter).await else {
                         return Ok(());
                     };
+
+                    let _ = self.garbage_collect(finalized_hotshot_height).await;
 
                     // tree is dropped here
                 }
@@ -1670,54 +1656,51 @@ pub mod test_helpers {
     use alloy::{
         network::EthereumWallet,
         primitives::{Address, U256},
-        providers::{ext::AnvilApi, ProviderBuilder},
+        providers::{ProviderBuilder, ext::AnvilApi},
     };
     use committable::Committable;
     use espresso_contract_deployer::{
-        builder::DeployerArgsBuilder, network_config::light_client_genesis_from_stake_table,
-        Contract, Contracts, DEFAULT_EXIT_ESCROW_PERIOD_SECONDS,
+        Contract, Contracts, DEFAULT_EXIT_ESCROW_PERIOD_SECONDS, builder::DeployerArgsBuilder,
+        network_config::light_client_genesis_from_stake_table,
     };
     use espresso_types::{
+        MOCK_SEQUENCER_VERSIONS, NamespaceId, ValidatedState,
         v0::traits::{NullEventConsumer, PersistenceOptions, StateCatchup},
-        DrbAndHeaderUpgradeVersion, EpochVersion, FeeVersion, MockSequencerVersions, NamespaceId,
-        SequencerVersions, ValidatedState, V0_1,
     };
     use futures::{
-        future::{join_all, FutureExt},
+        future::{FutureExt, join_all},
         stream::StreamExt,
     };
     use hotshot::types::{Event, EventType};
     use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
     use hotshot_types::{
-        event::LeafInfo,
-        light_client::LCV3StateSignatureRequestBody,
-        traits::{metrics::NoMetrics, node_implementation::ConsensusTime},
-        HotShotConfig,
+        event::LeafInfo, light_client::LCV3StateSignatureRequestBody, traits::metrics::NoMetrics,
     };
     use itertools::izip;
     use jf_merkle_tree_compat::{MerkleCommitment, MerkleTreeScheme};
-    use portpicker::pick_unused_port;
     use staking_cli::demo::{DelegationConfig, StakingTransactions};
     use surf_disco::Client;
     use tempfile::TempDir;
-    use tide_disco::{error::ServerError, Api, App, Error, StatusCode};
+    use test_utils::reserve_tcp_port;
+    use tide_disco::{Api, App, Error, StatusCode, error::ServerError};
     use tokio::{spawn, task::JoinHandle, time::sleep};
     use url::Url;
     use vbs::version::{StaticVersion, StaticVersionType};
+    use versions::{EPOCH_VERSION, Upgrade};
 
     use super::*;
     use crate::{
         catchup::NullStateCatchup,
         network,
         persistence::no_storage,
-        testing::{run_legacy_builder, wait_for_decide_on_handle, TestConfig, TestConfigBuilder},
+        testing::{TestConfig, TestConfigBuilder, run_legacy_builder, wait_for_decide_on_handle},
     };
 
     pub const STAKE_TABLE_CAPACITY_FOR_TEST: usize = 10;
 
-    pub struct TestNetwork<P: PersistenceOptions, const NUM_NODES: usize, V: Versions> {
-        pub server: SequencerContext<network::Memory, P::Persistence, V>,
-        pub peers: Vec<SequencerContext<network::Memory, P::Persistence, V>>,
+    pub struct TestNetwork<P: PersistenceOptions, const NUM_NODES: usize> {
+        pub server: SequencerContext<network::Memory, P::Persistence>,
+        pub peers: Vec<SequencerContext<network::Memory, P::Persistence>>,
         pub cfg: TestConfig<{ NUM_NODES }>,
         // todo (abdul): remove this when fs storage is removed
         pub temp_dir: Option<TempDir>,
@@ -1746,6 +1729,7 @@ pub mod test_helpers {
             self.state.clone()
         }
     }
+
     #[derive(Clone)]
     pub struct TestNetworkConfigBuilder<const NUM_NODES: usize, P, C>
     where
@@ -1773,36 +1757,11 @@ pub mod test_helpers {
         }
     }
 
-    pub enum AnyTestNetwork<P: PersistenceOptions, const NUM_NODES: usize> {
-        V0_1(TestNetwork<P, NUM_NODES, SequencerVersions<V0_1, V0_1>>),
-        V0_2(TestNetwork<P, NUM_NODES, SequencerVersions<FeeVersion, FeeVersion>>),
-        V0_3(TestNetwork<P, NUM_NODES, SequencerVersions<EpochVersion, EpochVersion>>),
-        V0_4(
-            TestNetwork<
-                P,
-                NUM_NODES,
-                SequencerVersions<DrbAndHeaderUpgradeVersion, DrbAndHeaderUpgradeVersion>,
-            >,
-        ),
-    }
-
-    impl<P: PersistenceOptions, const NUM_NODES: usize> AnyTestNetwork<P, NUM_NODES> {
-        pub fn hotshot_config(&self) -> &HotShotConfig<SeqTypes> {
-            match self {
-                AnyTestNetwork::V0_1(network) => network.cfg.hotshot_config(),
-                AnyTestNetwork::V0_2(network) => network.cfg.hotshot_config(),
-                AnyTestNetwork::V0_3(network) => network.cfg.hotshot_config(),
-                AnyTestNetwork::V0_4(network) => network.cfg.hotshot_config(),
-            }
-        }
-    }
-
     impl<const NUM_NODES: usize>
         TestNetworkConfigBuilder<{ NUM_NODES }, no_storage::Options, NullStateCatchup>
     {
-        pub fn with_num_nodes(
-        ) -> TestNetworkConfigBuilder<{ NUM_NODES }, no_storage::Options, NullStateCatchup>
-        {
+        pub fn with_num_nodes()
+        -> TestNetworkConfigBuilder<{ NUM_NODES }, no_storage::Options, NullStateCatchup> {
             TestNetworkConfigBuilder {
                 state: std::array::from_fn(|_| ValidatedState::default()),
                 persistence: Some([no_storage::Options; { NUM_NODES }]),
@@ -1869,14 +1828,13 @@ pub mod test_helpers {
 
         /// Setup for POS testing. Deploys contracts and adds the
         /// stake table address to state. Must be called before `build()`.
-        pub async fn pos_hook<V: Versions>(
+        pub async fn pos_hook(
             self,
             delegation_config: DelegationConfig,
             stake_table_version: StakeTableContractVersion,
+            upgrade: Upgrade,
         ) -> anyhow::Result<Self> {
-            if <V as Versions>::Upgrade::VERSION < EpochVersion::VERSION
-                && <V as Versions>::Base::VERSION < EpochVersion::VERSION
-            {
+            if upgrade.base < EPOCH_VERSION && upgrade.target < EPOCH_VERSION {
                 panic!("given version does not require pos deployment");
             };
 
@@ -2003,10 +1961,10 @@ pub mod test_helpers {
         }
     }
 
-    impl<P: PersistenceOptions, const NUM_NODES: usize, V: Versions> TestNetwork<P, { NUM_NODES }, V> {
+    impl<P: PersistenceOptions, const NUM_NODES: usize> TestNetwork<P, { NUM_NODES }> {
         pub async fn new<C: StateCatchup + 'static>(
             cfg: TestNetworkConfig<{ NUM_NODES }, P, C>,
-            bind_version: V,
+            upgrade: versions::Upgrade,
         ) -> Self {
             let mut cfg = cfg;
             let mut builder_tasks = Vec::new();
@@ -2059,7 +2017,7 @@ pub mod test_helpers {
                                                 &*metrics,
                                                 STAKE_TABLE_CAPACITY_FOR_TEST,
                                                 consumer,
-                                                bind_version,
+                                                upgrade,
                                                 upgrades_map,
                                             )
                                             .await)
@@ -2078,7 +2036,7 @@ pub mod test_helpers {
                                     &NoMetrics,
                                     STAKE_TABLE_CAPACITY_FOR_TEST,
                                     NullEventConsumer,
-                                    bind_version,
+                                    upgrade,
                                     upgrades_map,
                                 )
                                 .await
@@ -2128,7 +2086,7 @@ pub mod test_helpers {
     /// to test a different initialization path) but should not remove or modify the existing
     /// functionality (e.g. removing the status module or changing the port).
     pub async fn status_test_helper(opt: impl FnOnce(Options) -> Options) {
-        let port = pick_unused_port().expect("No ports free");
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         let url = format!("http://localhost:{port}").parse().unwrap();
         let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
 
@@ -2138,7 +2096,7 @@ pub mod test_helpers {
             .api_config(options)
             .network_config(network_config)
             .build();
-        let _network = TestNetwork::new(config, MockSequencerVersions::new()).await;
+        let _network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
         client.connect(None).await;
 
         // The status API is well tested in the query service repo. Here we are just smoke testing
@@ -2175,7 +2133,7 @@ pub mod test_helpers {
     pub async fn submit_test_helper(opt: impl FnOnce(Options) -> Options) {
         let txn = Transaction::new(NamespaceId::from(1_u32), vec![1, 2, 3, 4]);
 
-        let port = pick_unused_port().expect("No ports free");
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         let url = format!("http://localhost:{port}").parse().unwrap();
         let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
@@ -2186,7 +2144,7 @@ pub mod test_helpers {
             .api_config(options)
             .network_config(network_config)
             .build();
-        let network = TestNetwork::new(config, MockSequencerVersions::new()).await;
+        let network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
         let mut events = network.server.event_stream().await;
 
         client.connect(None).await;
@@ -2206,7 +2164,7 @@ pub mod test_helpers {
 
     /// Test the state signature API.
     pub async fn state_signature_test_helper(opt: impl FnOnce(Options) -> Options) {
-        let port = pick_unused_port().expect("No ports free");
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         let url = format!("http://localhost:{port}").parse().unwrap();
 
@@ -2218,7 +2176,7 @@ pub mod test_helpers {
             .api_config(options)
             .network_config(network_config)
             .build();
-        let network = TestNetwork::new(config, MockSequencerVersions::new()).await;
+        let network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
 
         let mut height: u64;
         // Wait for block >=2 appears
@@ -2246,7 +2204,7 @@ pub mod test_helpers {
     /// to test a different initialization path) but should not remove or modify the existing
     /// functionality (e.g. removing the catchup module or changing the port).
     pub async fn catchup_test_helper(opt: impl FnOnce(Options) -> Options) {
-        let port = pick_unused_port().expect("No ports free");
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         let url = format!("http://localhost:{port}").parse().unwrap();
         let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
 
@@ -2256,7 +2214,7 @@ pub mod test_helpers {
             .api_config(options)
             .network_config(network_config)
             .build();
-        let network = TestNetwork::new(config, MockSequencerVersions::new()).await;
+        let network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
         client.connect(None).await;
 
         // Wait for a few blocks to be decided.
@@ -2266,13 +2224,11 @@ pub mod test_helpers {
                 event: EventType::Decide { leaf_chain, .. },
                 ..
             } = events.next().await.unwrap()
-            {
-                if leaf_chain
+                && leaf_chain
                     .iter()
                     .any(|LeafInfo { leaf, .. }| leaf.block_header().height() > 2)
-                {
-                    break;
-                }
+            {
+                break;
             }
         }
 
@@ -2380,7 +2336,7 @@ pub mod test_helpers {
 
         app.register_module::<_, _>("catchup", api).unwrap();
 
-        let port = pick_unused_port().expect("no free port");
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         let url: Url = Url::parse(&format!("http://localhost:{port}")).unwrap();
 
         let handle = spawn({
@@ -2401,32 +2357,33 @@ mod api_tests {
     use committable::Committable;
     use data_source::testing::TestableSequencerDataSource;
     use espresso_types::{
+        Header, Leaf2, MOCK_SEQUENCER_VERSIONS, NamespaceId, NamespaceProofQueryData,
+        ValidatedState,
         traits::{EventConsumer, PersistenceOptions},
-        Header, Leaf2, MockSequencerVersions, NamespaceId, NamespaceProofQueryData, ValidatedState,
     };
     use futures::{future, stream::StreamExt};
-    use hotshot_example_types::node_types::TestVersions;
+    use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_query_service::availability::{
         AvailabilityDataSource, BlockQueryData, VidCommonQueryData,
     };
     use hotshot_types::{
         data::{
-            ns_table::parse_ns_table, vid_disperse::AvidMDisperseShare, DaProposal2, EpochNumber,
-            QuorumProposal2, QuorumProposalWrapper, VidCommitment, VidDisperseShare,
+            DaProposal2, EpochNumber, QuorumProposal2, QuorumProposalWrapper, VidCommitment,
+            VidDisperseShare, ns_table::parse_ns_table, vid_disperse::AvidMDisperseShare,
         },
         event::LeafInfo,
         message::Proposal,
         simple_certificate::{CertificatePair, QuorumCertificate2},
-        traits::{node_implementation::ConsensusTime, signature_key::SignatureKey, EncodeBytes},
+        traits::{EncodeBytes, signature_key::SignatureKey},
         utils::EpochTransitionIndicator,
-        vid::avidm::{init_avidm_param, AvidMScheme},
+        vid::avidm::{AvidMScheme, init_avidm_param},
     };
-    use portpicker::pick_unused_port;
     use surf_disco::Client;
     use test_helpers::{
-        catchup_test_helper, state_signature_test_helper, status_test_helper, submit_test_helper,
-        TestNetwork, TestNetworkConfigBuilder,
+        TestNetwork, TestNetworkConfigBuilder, catchup_test_helper, state_signature_test_helper,
+        status_test_helper, submit_test_helper,
     };
+    use test_utils::reserve_tcp_port;
     use tide_disco::error::ServerError;
     use vbs::version::StaticVersion;
 
@@ -2434,7 +2391,7 @@ mod api_tests {
     use crate::{
         network,
         persistence::no_storage::NoStorage,
-        testing::{wait_for_decide_on_handle, TestConfigBuilder},
+        testing::{TestConfigBuilder, wait_for_decide_on_handle},
     };
 
     #[rstest_reuse::template]
@@ -2478,14 +2435,14 @@ mod api_tests {
         let txn = Transaction::new(ns_id, vec![1, 2, 3, 4]);
 
         // Start query service.
-        let port = pick_unused_port().expect("No ports free");
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         let storage = D::create_storage().await;
         let network_config = TestConfigBuilder::default().build();
         let config = TestNetworkConfigBuilder::default()
             .api_config(D::options(&storage, Options::with_port(port)).submit(Default::default()))
             .network_config(network_config)
             .build();
-        let network = TestNetwork::new(config, MockSequencerVersions::new()).await;
+        let network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
         let mut events = network.server.event_stream().await;
 
         // Connect client.
@@ -2646,7 +2603,7 @@ mod api_tests {
 
         let storage = D::create_storage().await;
         let persistence = D::persistence_options(&storage).create().await.unwrap();
-        let data_source: Arc<StorageState<network::Memory, NoStorage, _, MockSequencerVersions>> =
+        let data_source: Arc<StorageState<network::Memory, NoStorage, _>> =
             Arc::new(StorageState::new(
                 D::create(D::persistence_options(&storage), Default::default(), false)
                     .await
@@ -2657,7 +2614,12 @@ mod api_tests {
         // Create two non-consecutive leaf chains.
         let mut chain1 = vec![];
 
-        let genesis = Leaf2::genesis::<TestVersions>(&Default::default(), &NodeState::mock()).await;
+        let genesis = Leaf2::genesis(
+            &Default::default(),
+            &NodeState::mock(),
+            TEST_VERSIONS.test.base,
+        )
+        .await;
         let payload = genesis.block_payload().unwrap();
         let payload_bytes_arc = payload.encode();
 
@@ -2672,9 +2634,10 @@ mod api_tests {
             proposal: QuorumProposal2::<SeqTypes> {
                 block_header: genesis.block_header().clone(),
                 view_number: ViewNumber::genesis(),
-                justify_qc: QuorumCertificate2::genesis::<MockSequencerVersions>(
+                justify_qc: QuorumCertificate2::genesis(
                     &ValidatedState::default(),
                     &NodeState::mock(),
+                    MOCK_SEQUENCER_VERSIONS,
                 )
                 .await,
                 upgrade_certificate: None,
@@ -2685,9 +2648,10 @@ mod api_tests {
                 state_cert: None,
             },
         };
-        let mut qc = QuorumCertificate2::genesis::<MockSequencerVersions>(
+        let mut qc = QuorumCertificate2::genesis(
             &ValidatedState::default(),
             &NodeState::mock(),
+            MOCK_SEQUENCER_VERSIONS,
         )
         .await;
 
@@ -2815,33 +2779,43 @@ mod api_tests {
                 .unwrap();
 
             // Check that all data has been garbage collected for the decided views.
-            assert!(persistence
-                .load_da_proposal(leaf.view_number())
-                .await
-                .unwrap()
-                .is_none());
-            assert!(persistence
-                .load_vid_share(leaf.view_number())
-                .await
-                .unwrap()
-                .is_none());
-            assert!(persistence
-                .load_quorum_proposal(leaf.view_number())
-                .await
-                .is_err());
+            assert!(
+                persistence
+                    .load_da_proposal(leaf.view_number())
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(
+                persistence
+                    .load_vid_share(leaf.view_number())
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(
+                persistence
+                    .load_quorum_proposal(leaf.view_number())
+                    .await
+                    .is_err()
+            );
         }
 
         // Check that data has _not_ been garbage collected for the missing view.
-        assert!(persistence
-            .load_da_proposal(ViewNumber::new(2))
-            .await
-            .unwrap()
-            .is_some());
-        assert!(persistence
-            .load_vid_share(ViewNumber::new(2))
-            .await
-            .unwrap()
-            .is_some());
+        assert!(
+            persistence
+                .load_da_proposal(ViewNumber::new(2))
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            persistence
+                .load_vid_share(ViewNumber::new(2))
+                .await
+                .unwrap()
+                .is_some()
+        );
         persistence
             .load_quorum_proposal(ViewNumber::new(2))
             .await
@@ -2855,7 +2829,7 @@ mod api_tests {
     {
         let storage = D::create_storage().await;
         let persistence = D::persistence_options(&storage).create().await.unwrap();
-        let data_source: Arc<StorageState<network::Memory, NoStorage, _, MockSequencerVersions>> =
+        let data_source: Arc<StorageState<network::Memory, NoStorage, _>> =
             Arc::new(StorageState::new(
                 D::create(D::persistence_options(&storage), Default::default(), false)
                     .await
@@ -2864,13 +2838,18 @@ mod api_tests {
             ));
         let consumer = ApiEventConsumer::from(data_source.clone());
 
-        let mut qc = QuorumCertificate2::genesis::<MockSequencerVersions>(
+        let mut qc = QuorumCertificate2::genesis(
             &ValidatedState::default(),
             &NodeState::mock(),
+            MOCK_SEQUENCER_VERSIONS,
         )
         .await;
-        let leaf =
-            Leaf2::genesis::<TestVersions>(&ValidatedState::default(), &NodeState::mock()).await;
+        let leaf = Leaf2::genesis(
+            &ValidatedState::default(),
+            &NodeState::mock(),
+            TEST_VERSIONS.test.base,
+        )
+        .await;
 
         // Append the genesis leaf. We don't use this for the test, because the update function will
         // automatically fill in the missing data for genesis. We just append this to get into a
@@ -2955,7 +2934,7 @@ mod test {
             leaf::{LeafProof, LeafProofHint},
             payload::PayloadProof,
         },
-        testing::{EpochChangeQuorum, LegacyVersion},
+        testing::{EpochChangeQuorum, LEGACY_VERSION},
     };
     use alloy::{
         eips::BlockId,
@@ -2966,19 +2945,20 @@ mod test {
     use async_lock::Mutex;
     use committable::{Commitment, Committable};
     use espresso_contract_deployer::{
-        builder::DeployerArgsBuilder, network_config::light_client_genesis_from_stake_table,
-        upgrade_stake_table_v2, Contract, Contracts,
+        Contract, Contracts, builder::DeployerArgsBuilder,
+        network_config::light_client_genesis_from_stake_table, upgrade_stake_table_v2,
     };
     use espresso_types::{
-        config::PublicHotShotConfig,
-        traits::{MembershipPersistence, NullEventConsumer, PersistenceOptions},
-        v0_3::{Fetcher, RewardAmount, RewardMerkleProofV1, COMMISSION_BASIS_POINTS},
-        v0_4::{RewardAccountV2, RewardMerkleProofV2},
-        validators_from_l1_events, ADVZNamespaceProofQueryData, DrbAndHeaderUpgradeVersion,
-        EpochVersion, FeeAmount, FeeVersion, Header, L1Client, L1ClientOptions,
+        ADVZNamespaceProofQueryData, DrbAndHeaderUpgradeVersion, EpochVersion, FeeAmount,
+        FeeVersion, Header, L1Client, L1ClientOptions, MOCK_SEQUENCER_VERSIONS,
         MockSequencerVersions, NamespaceId, NamespaceProofQueryData, NsProof,
         RegisteredValidatorMap, RewardDistributor, SequencerVersions, StakeTableState,
         StateCertQueryDataV1, StateCertQueryDataV2, ValidatedState,
+        config::PublicHotShotConfig,
+        traits::{MembershipPersistence, NullEventConsumer, PersistenceOptions},
+        v0_3::{COMMISSION_BASIS_POINTS, Fetcher, RewardAmount, RewardMerkleProofV1},
+        v0_4::{RewardAccountV2, RewardMerkleProofV2},
+        validators_from_l1_events,
     };
     use futures::{
         future::{self, join_all, try_join_all},
@@ -2991,52 +2971,46 @@ mod test {
         sol_types::{EspToken, StakeTableV2},
         stake_table::StakeTableContractVersion,
     };
-    use hotshot_example_types::node_types::EpochsTestVersions;
     use hotshot_query_service::{
         availability::{
             BlockQueryData, BlockSummaryQueryData, LeafQueryData, TransactionQueryData,
             VidCommonQueryData,
         },
         data_source::{
+            VersionedDataSource,
             sql::Config,
             storage::{SqlStorage, StorageConnectionType},
-            VersionedDataSource,
         },
         explorer::TransactionSummariesResponse,
         types::HeightIndexed,
     };
     use hotshot_types::{
+        ValidatorConfig,
         data::EpochNumber,
         event::LeafInfo,
-        traits::{
-            block_contents::BlockHeader, election::Membership, metrics::NoMetrics,
-            node_implementation::ConsensusTime,
-        },
+        traits::{block_contents::BlockHeader, election::Membership, metrics::NoMetrics},
         utils::epoch_from_block_number,
-        ValidatorConfig,
     };
     use jf_merkle_tree_compat::{
-        prelude::{MerkleProof, Sha3Node},
         MerkleTreeScheme,
+        prelude::{MerkleProof, Sha3Node},
     };
-    use portpicker::pick_unused_port;
     use pretty_assertions::assert_matches;
     use rand::seq::SliceRandom;
     use rstest::rstest;
-    use staking_cli::{
-        demo::DelegationConfig,
-        registration::{fetch_commission, update_commission},
-    };
+    use staking_cli::{demo::DelegationConfig, fetch_commission, update_commission};
     use surf_disco::Client;
     use test_helpers::{
-        catchup_test_helper, state_signature_test_helper, status_test_helper, submit_test_helper,
-        TestNetwork, TestNetworkConfigBuilder,
+        TestNetwork, TestNetworkConfigBuilder, catchup_test_helper, state_signature_test_helper,
+        status_test_helper, submit_test_helper,
     };
+    use test_utils::reserve_tcp_port;
     use tide_disco::{
-        app::AppHealth, error::ServerError, healthcheck::HealthStatus, Error, StatusCode, Url,
+        Error, StatusCode, Url, app::AppHealth, error::ServerError, healthcheck::HealthStatus,
     };
     use tokio::time::sleep;
-    use vbs::version::{StaticVersion, StaticVersionType};
+    use vbs::version::StaticVersion;
+    use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, FEE_VERSION, Upgrade, version};
 
     use self::{
         data_source::testing::TestableSequencerDataSource, options::HotshotEvents,
@@ -3075,15 +3049,15 @@ mod test {
         catchup::{NullStateCatchup, StatePeers},
         persistence,
         persistence::no_storage,
-        testing::{wait_for_decide_on_handle, wait_for_epochs, TestConfig, TestConfigBuilder},
+        testing::{TestConfig, TestConfigBuilder, wait_for_decide_on_handle, wait_for_epochs},
     };
 
-    type PosVersionV3 = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
-    type PosVersionV4 = SequencerVersions<StaticVersion<0, 4>, StaticVersion<0, 0>>;
+    const POS_V3: Upgrade = Upgrade::trivial(version(0, 3));
+    const POS_V4: Upgrade = Upgrade::trivial(version(0, 4));
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_healthcheck() {
-        let port = pick_unused_port().expect("No ports free");
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         let url = format!("http://localhost:{port}").parse().unwrap();
         let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
         let options = Options::with_port(port);
@@ -3092,7 +3066,7 @@ mod test {
             .api_config(options)
             .network_config(network_config)
             .build();
-        let _network = TestNetwork::new(config, MockSequencerVersions::new()).await;
+        let _network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
 
         client.connect(None).await;
         let health = client.get::<AppHealth>("healthcheck").send().await.unwrap();
@@ -3121,7 +3095,7 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_leaf_only_data_source() {
-        let port = pick_unused_port().expect("No ports free");
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         let storage = SqlDataSource::create_storage().await;
         let options =
@@ -3132,7 +3106,7 @@ mod test {
             .api_config(options)
             .network_config(network_config)
             .build();
-        let _network = TestNetwork::new(config, MockSequencerVersions::new()).await;
+        let _network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
         let url = format!("http://localhost:{port}").parse().unwrap();
         let client: Client<ServerError, SequencerApiVersion> = Client::new(url);
 
@@ -3208,7 +3182,7 @@ mod test {
 
     async fn run_catchup_test(url_suffix: &str) {
         // Start a sequencer network, using the query service for catchup.
-        let port = pick_unused_port().expect("No ports free");
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         const NUM_NODES: usize = 5;
 
         let url: url::Url = format!("http://localhost:{port}{url_suffix}")
@@ -3227,7 +3201,7 @@ mod test {
                 )
             }))
             .build();
-        let mut network = TestNetwork::new(config, MockSequencerVersions::new()).await;
+        let mut network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
 
         // Wait for replica 0 to reach a (non-genesis) decide, before disconnecting it.
         let mut events = network.peers[0].event_stream().await;
@@ -3275,7 +3249,7 @@ mod test {
                 &NoMetrics,
                 test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
                 NullEventConsumer,
-                MockSequencerVersions::new(),
+                MOCK_SEQUENCER_VERSIONS,
                 Default::default(),
             )
             .await;
@@ -3326,13 +3300,13 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_catchup_no_state_peers() {
         // Start a sequencer network, using the query service for catchup.
-        let port = pick_unused_port().expect("No ports free");
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         const NUM_NODES: usize = 5;
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
             .api_config(Options::with_port(port))
             .network_config(TestConfigBuilder::default().build())
             .build();
-        let mut network = TestNetwork::new(config, MockSequencerVersions::new()).await;
+        let mut network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
 
         // Wait for replica 0 to reach a (non-genesis) decide, before disconnecting it.
         let mut events = network.peers[0].event_stream().await;
@@ -3375,7 +3349,7 @@ mod test {
                 &NoMetrics,
                 test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
                 NullEventConsumer,
-                MockSequencerVersions::new(),
+                MOCK_SEQUENCER_VERSIONS,
                 Default::default(),
             )
             .await;
@@ -3412,7 +3386,7 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_catchup_epochs_no_state_peers() {
         // Start a sequencer network, using the query service for catchup.
-        let port = pick_unused_port().expect("No ports free");
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         const EPOCH_HEIGHT: u64 = 5;
         let network_config = TestConfigBuilder::default()
             .epoch_height(EPOCH_HEIGHT)
@@ -3422,7 +3396,7 @@ mod test {
             .api_config(Options::with_port(port))
             .network_config(network_config)
             .build();
-        let mut network = TestNetwork::new(config, EpochsTestVersions {}).await;
+        let mut network = TestNetwork::new(config, Upgrade::trivial(EPOCH_VERSION)).await;
 
         // Wait for replica 0 to decide in the third epoch.
         let mut events = network.peers[0].event_stream().await;
@@ -3468,7 +3442,7 @@ mod test {
                 &NoMetrics,
                 test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
                 NullEventConsumer,
-                MockSequencerVersions::new(),
+                MOCK_SEQUENCER_VERSIONS,
                 Default::default(),
             )
             .await;
@@ -3508,7 +3482,7 @@ mod test {
         // Both chain config commitments will match, so the ValidatedState should have the
         // full chain config after a non-genesis block is decided.
 
-        let port = pick_unused_port().expect("No ports free");
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         let chain_config: ChainConfig = ChainConfig::default();
 
@@ -3533,7 +3507,7 @@ mod test {
             .network_config(TestConfigBuilder::default().build())
             .build();
 
-        let mut network = TestNetwork::new(config, MockSequencerVersions::new()).await;
+        let mut network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
 
         // Wait for few blocks to be decided.
         network
@@ -3562,7 +3536,7 @@ mod test {
         // However, for this test to work, at least one node should have a full chain config
         // to allow other nodes to catch up.
 
-        let port = pick_unused_port().expect("No ports free");
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         let cf = ChainConfig {
             max_block_size: 300.into(),
@@ -3605,7 +3579,7 @@ mod test {
             .network_config(TestConfigBuilder::default().build())
             .build();
 
-        let mut network = TestNetwork::new(config, MockSequencerVersions::new()).await;
+        let mut network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
 
         // Wait for a few blocks to be decided.
         network
@@ -3629,28 +3603,26 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_pos_upgrade_view_based() {
-        type PosUpgrade = SequencerVersions<FeeVersion, EpochVersion>;
-        test_upgrade_helper::<PosUpgrade>(PosUpgrade::new()).await;
+        test_upgrade_helper(Upgrade::new(FEE_VERSION, EPOCH_VERSION)).await;
     }
 
-    async fn test_upgrade_helper<V: Versions>(version: V) {
+    async fn test_upgrade_helper(upgrade: Upgrade) {
         // wait this number of views beyond the configured first view
         // before asserting anything.
         let wait_extra_views = 10;
         // Number of nodes running in the test network.
         const NUM_NODES: usize = 5;
-        let upgrade_version = <V as Versions>::Upgrade::VERSION;
-        let port = pick_unused_port().expect("No ports free");
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         let test_config = TestConfigBuilder::default()
             .epoch_height(200)
             .epoch_start_block(321)
-            .set_upgrades(upgrade_version)
+            .set_upgrades(upgrade.target)
             .await
             .build();
 
         let chain_config_genesis = ValidatedState::default().chain_config.resolve().unwrap();
-        let chain_config_upgrade = test_config.get_upgrade_map().chain_config(upgrade_version);
+        let chain_config_upgrade = test_config.get_upgrade_map().chain_config(upgrade.target);
         assert_ne!(chain_config_genesis, chain_config_upgrade);
         tracing::debug!(?chain_config_genesis, ?chain_config_upgrade);
 
@@ -3670,8 +3642,10 @@ mod test {
             .network_config(test_config)
             .build();
 
-        let mut network = TestNetwork::new(config, version).await;
+        let mut network = TestNetwork::new(config, upgrade).await;
         let mut events = network.server.event_stream().await;
+
+        let target = upgrade.target;
 
         // First loop to get an `UpgradeProposal`. Note that the
         // actual upgrade will take several to many subsequent views for
@@ -3684,7 +3658,7 @@ mod test {
                     let upgrade = proposal.data.upgrade_proposal;
                     let new_version = upgrade.new_version;
                     tracing::info!(?new_version, "upgrade proposal new version");
-                    assert_eq!(new_version, <V as Versions>::Upgrade::VERSION);
+                    assert_eq!(new_version, target);
                     break upgrade;
                 },
                 _ => continue,
@@ -3724,7 +3698,7 @@ mod test {
                     assert_eq!(config, chain_config_upgrade);
                 }
                 for leaf in leaves {
-                    assert_eq!(leaf.block_header().version(), upgrade_version);
+                    assert_eq!(leaf.block_header().version(), target);
                 }
                 break;
             }
@@ -3745,7 +3719,7 @@ mod test {
             .collect::<Vec<_>>()
             .try_into()
             .unwrap();
-        let port = pick_unused_port().unwrap();
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         let config = TestNetworkConfigBuilder::default()
             .api_config(SqlDataSource::options(
                 &storage[0],
@@ -3754,7 +3728,7 @@ mod test {
             .persistences(persistence.clone())
             .network_config(TestConfigBuilder::default().build())
             .build();
-        let mut network = TestNetwork::new(config, MockSequencerVersions::new()).await;
+        let mut network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
 
         // Connect client.
         let client: Client<ServerError, SequencerApiVersion> =
@@ -3805,7 +3779,7 @@ mod test {
         drop(network);
 
         // Start up again, resuming from the last decided leaf.
-        let port = pick_unused_port().expect("No ports free");
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         let config = TestNetworkConfigBuilder::default()
             .api_config(SqlDataSource::options(
@@ -3826,7 +3800,7 @@ mod test {
             }))
             .network_config(TestConfigBuilder::default().build())
             .build();
-        let _network = TestNetwork::new(config, MockSequencerVersions::new()).await;
+        let _network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
         let client: Client<ServerError, StaticVersion<0, 1>> =
             Client::new(format!("http://localhost:{port}").parse().unwrap());
         client.connect(None).await;
@@ -3864,7 +3838,7 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_fetch_config() {
-        let port = pick_unused_port().expect("No ports free");
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         let url: surf_disco::Url = format!("http://localhost:{port}").parse().unwrap();
         let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url.clone());
 
@@ -3874,7 +3848,7 @@ mod test {
             .api_config(options)
             .network_config(network_config)
             .build();
-        let network = TestNetwork::new(config, MockSequencerVersions::new()).await;
+        let network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
         client.connect(None).await;
 
         // Fetch a network config from the API server. The first peer URL is bogus, to test the
@@ -3906,7 +3880,8 @@ mod test {
     }
 
     async fn run_hotshot_event_streaming_test(url_suffix: &str) {
-        let query_service_port = pick_unused_port().expect("No ports free for query service");
+        let query_service_port =
+            reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         let url = format!("http://localhost:{query_service_port}{url_suffix}")
             .parse()
@@ -3921,7 +3896,7 @@ mod test {
             .api_config(options)
             .network_config(network_config)
             .build();
-        let _network = TestNetwork::new(config, MockSequencerVersions::new()).await;
+        let _network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
 
         let mut subscribed_events = client
             .socket("hotshot-events/events")
@@ -3959,7 +3934,7 @@ mod test {
         run_hotshot_event_streaming_test("").await;
     }
 
-    // TODO when `EpochVersion` becomes base version we can merge this
+    // TODO when `EPOCH_VERSION` becomes base version we can merge this
     // w/ above test.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_hotshot_event_streaming_epoch_progression() {
@@ -3970,7 +3945,8 @@ mod test {
             .epoch_height(epoch_height)
             .build();
 
-        let query_service_port = pick_unused_port().expect("No ports free for query service");
+        let query_service_port =
+            reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         let hotshot_url = format!("http://localhost:{query_service_port}")
             .parse()
@@ -3982,12 +3958,16 @@ mod test {
         let config = TestNetworkConfigBuilder::default()
             .api_config(options)
             .network_config(network_config.clone())
-            .pos_hook::<PosVersionV3>(DelegationConfig::VariableAmounts, Default::default())
+            .pos_hook(
+                DelegationConfig::VariableAmounts,
+                Default::default(),
+                POS_V3,
+            )
             .await
             .expect("Pos Deployment")
             .build();
 
-        let _network = TestNetwork::new(config, PosVersionV3::new()).await;
+        let _network = TestNetwork::new(config, POS_V3).await;
 
         let mut subscribed_events = client
             .socket("hotshot-events/events")
@@ -4052,7 +4032,7 @@ mod test {
             .epoch_height(epoch_height)
             .build();
 
-        let api_port = pick_unused_port().expect("No ports free for query service");
+        let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         const NUM_NODES: usize = 1;
         // Initialize nodes.
@@ -4079,12 +4059,16 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook::<PosVersionV4>(DelegationConfig::VariableAmounts, Default::default())
+            .pos_hook(
+                DelegationConfig::VariableAmounts,
+                Default::default(),
+                POS_V4,
+            )
             .await
             .unwrap()
             .build();
 
-        let network = TestNetwork::new(config, PosVersionV4::new()).await;
+        let network = TestNetwork::new(config, POS_V4).await;
         let client: Client<ServerError, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
@@ -4147,7 +4131,7 @@ mod test {
             .epoch_height(epoch_height)
             .build();
 
-        let api_port = pick_unused_port().expect("No ports free for query service");
+        let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         const NUM_NODES: usize = 5;
         // Initialize nodes.
@@ -4174,12 +4158,16 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook::<PosVersionV4>(DelegationConfig::MultipleDelegators, Default::default())
+            .pos_hook(
+                DelegationConfig::MultipleDelegators,
+                Default::default(),
+                POS_V4,
+            )
             .await
             .unwrap()
             .build();
 
-        let network = TestNetwork::new(config, PosVersionV4::new()).await;
+        let network = TestNetwork::new(config, POS_V4).await;
         let node_state = network.server.node_state();
         let client: Client<ServerError, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
@@ -4269,7 +4257,7 @@ mod test {
             .epoch_height(epoch_height)
             .build();
 
-        let api_port = pick_unused_port().expect("No ports free for query service");
+        let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         const NUM_NODES: usize = 5;
         // Initialize nodes.
@@ -4297,12 +4285,16 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook::<PosVersionV3>(DelegationConfig::MultipleDelegators, Default::default())
+            .pos_hook(
+                DelegationConfig::MultipleDelegators,
+                Default::default(),
+                POS_V3,
+            )
             .await
             .unwrap()
             .build();
 
-        let network = TestNetwork::new(config, PosVersionV3::new()).await;
+        let network = TestNetwork::new(config, POS_V3).await;
 
         let mut prev_st = None;
         let state = network.server.decided_state().await;
@@ -4380,13 +4372,11 @@ mod test {
         // - Ensure that the `total_reward_distributed` field in the block header matches the total block reward distributed
         const EPOCH_HEIGHT: u64 = 20;
 
-        type V4 = SequencerVersions<StaticVersion<0, 4>, StaticVersion<0, 0>>;
-
         let network_config = TestConfigBuilder::default()
             .epoch_height(EPOCH_HEIGHT)
             .build();
 
-        let api_port = pick_unused_port().expect("No ports free for query service");
+        let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         const NUM_NODES: usize = 5;
 
@@ -4413,12 +4403,16 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook::<V4>(DelegationConfig::MultipleDelegators, Default::default())
+            .pos_hook(
+                DelegationConfig::MultipleDelegators,
+                Default::default(),
+                POS_V4,
+            )
             .await
             .unwrap()
             .build();
 
-        let network = TestNetwork::new(config, V4::new()).await;
+        let network = TestNetwork::new(config, POS_V4).await;
         let client: Client<ServerError, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
@@ -4638,18 +4632,17 @@ mod test {
     }
 
     #[rstest]
-    #[case(PosVersionV3::new())]
-    #[case(PosVersionV4::new())]
+    #[case(POS_V3)]
+    #[case(POS_V4)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-
-    async fn test_node_stake_table_api<Ver: Versions>(#[case] ver: Ver) {
+    async fn test_node_stake_table_api(#[case] upgrade: Upgrade) {
         let epoch_height = 20;
 
         let network_config = TestConfigBuilder::default()
             .epoch_height(epoch_height)
             .build();
 
-        let api_port = pick_unused_port().expect("No ports free for query service");
+        let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         const NUM_NODES: usize = 2;
         // Initialize nodes.
@@ -4676,12 +4669,16 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook::<Ver>(DelegationConfig::MultipleDelegators, Default::default())
+            .pos_hook(
+                DelegationConfig::MultipleDelegators,
+                Default::default(),
+                upgrade,
+            )
             .await
             .unwrap()
             .build();
 
-        let _network = TestNetwork::new(config, ver).await;
+        let _network = TestNetwork::new(config, upgrade).await;
 
         let client: Client<ServerError, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
@@ -4713,15 +4710,14 @@ mod test {
     }
 
     #[rstest]
-    #[case(PosVersionV3::new())]
-    #[case(PosVersionV4::new())]
+    #[case(POS_V3)]
+    #[case(POS_V4)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-
-    async fn test_epoch_stake_table_catchup<Ver: Versions>(#[case] ver: Ver) {
+    async fn test_epoch_stake_table_catchup(#[case] upgrade: Upgrade) {
         const EPOCH_HEIGHT: u64 = 10;
         const NUM_NODES: usize = 6;
 
-        let port = pick_unused_port().expect("No ports free");
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         let network_config = TestConfigBuilder::default()
             .epoch_height(EPOCH_HEIGHT)
@@ -4754,13 +4750,17 @@ mod test {
             .network_config(network_config)
             .persistences(persistence_options.clone())
             .catchups(catchup_peers)
-            .pos_hook::<Ver>(DelegationConfig::MultipleDelegators, Default::default())
+            .pos_hook(
+                DelegationConfig::MultipleDelegators,
+                Default::default(),
+                upgrade,
+            )
             .await
             .unwrap()
             .build();
 
         let state = config.states()[0].clone();
-        let mut network = TestNetwork::new(config, ver).await;
+        let mut network = TestNetwork::new(config, upgrade).await;
 
         // Wait for the peer 0 (node 1) to advance past three epochs
         let mut events = network.peers[0].event_stream().await;
@@ -4809,7 +4809,7 @@ mod test {
                 &NoMetrics,
                 test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
                 NullEventConsumer,
-                ver,
+                upgrade,
                 Default::default(),
             )
             .await;
@@ -4847,15 +4847,14 @@ mod test {
     }
 
     #[rstest]
-    #[case(PosVersionV3::new())]
-    #[case(PosVersionV4::new())]
+    #[case(POS_V3)]
+    #[case(POS_V4)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-
-    async fn test_epoch_stake_table_catchup_stress<Ver: Versions>(#[case] versions: Ver) {
+    async fn test_epoch_stake_table_catchup_stress(#[case] upgrade: Upgrade) {
         const EPOCH_HEIGHT: u64 = 10;
         const NUM_NODES: usize = 6;
 
-        let port = pick_unused_port().expect("No ports free");
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         let network_config = TestConfigBuilder::default()
             .epoch_height(EPOCH_HEIGHT)
@@ -4888,13 +4887,17 @@ mod test {
             .network_config(network_config)
             .persistences(persistence_options.clone())
             .catchups(catchup_peers)
-            .pos_hook::<Ver>(DelegationConfig::MultipleDelegators, Default::default())
+            .pos_hook(
+                DelegationConfig::MultipleDelegators,
+                Default::default(),
+                upgrade,
+            )
             .await
             .unwrap()
             .build();
 
         let state = config.states()[0].clone();
-        let mut network = TestNetwork::new(config, versions).await;
+        let mut network = TestNetwork::new(config, upgrade).await;
 
         // Wait for the peer 0 (node 1) to advance past three epochs
         let mut events = network.peers[0].event_stream().await;
@@ -4946,7 +4949,7 @@ mod test {
                 &NoMetrics,
                 test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
                 NullEventConsumer,
-                versions,
+                upgrade,
                 Default::default(),
             )
             .await;
@@ -4994,11 +4997,11 @@ mod test {
     }
 
     #[rstest]
-    #[case(PosVersionV3::new())]
-    #[case(PosVersionV4::new())]
+    #[case(POS_V3)]
+    #[case(POS_V4)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_merklized_state_catchup_on_restart<Ver: Versions>(
-        #[case] versions: Ver,
+    async fn test_merklized_state_catchup_on_restart(
+        #[case] upgrade: Upgrade,
     ) -> anyhow::Result<()> {
         // This test verifies that a query node can catch up on
         // merklized state after being offline for multiple epochs.
@@ -5017,7 +5020,7 @@ mod test {
             .epoch_height(EPOCH_HEIGHT)
             .build();
 
-        let api_port = pick_unused_port().expect("No ports free for query service");
+        let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         tracing::info!("API PORT = {api_port}");
         const NUM_NODES: usize = 5;
@@ -5045,15 +5048,16 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook::<Ver>(
+            .pos_hook(
                 DelegationConfig::MultipleDelegators,
                 hotshot_contract_adapter::stake_table::StakeTableContractVersion::V2,
+                upgrade,
             )
             .await
             .unwrap()
             .build();
         let state = config.states()[0].clone();
-        let mut network = TestNetwork::new(config, versions).await;
+        let mut network = TestNetwork::new(config, upgrade).await;
 
         // Remove peer 0 and restart it with the query module enabled.
         // Adding an additional node to the test network is not straight forward,
@@ -5063,7 +5067,7 @@ mod test {
         network.peers.remove(0);
         let node_0_storage = &storage[1];
         let node_0_persistence = persistence[1].clone();
-        let node_0_port = pick_unused_port().expect("No ports free for query service");
+        let node_0_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         tracing::info!("node_0_port {node_0_port}");
         // enable query module with api peers
         let opt = Options::with_port(node_0_port).query_sql(
@@ -5096,7 +5100,7 @@ mod test {
                             &*metrics,
                             test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
                             consumer,
-                            versions,
+                            upgrade,
                             Default::default(),
                         )
                         .await)
@@ -5136,7 +5140,7 @@ mod test {
                             &*metrics,
                             test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
                             consumer,
-                            versions,
+                            upgrade,
                             Default::default(),
                         )
                         .await)
@@ -5160,7 +5164,7 @@ mod test {
             sleep(Duration::from_secs(1)).await;
             let state = node_0.decided_state().await;
 
-            let leaves = if Ver::Base::VERSION == EpochVersion::VERSION {
+            let leaves = if upgrade.base == EPOCH_VERSION {
                 // Use legacy tree for V3
                 state.reward_merkle_tree_v1.num_leaves()
             } else {
@@ -5219,12 +5223,10 @@ mod test {
     }
 
     #[rstest]
-    #[case(PosVersionV3::new())]
-    #[case(PosVersionV4::new())]
+    #[case(POS_V3)]
+    #[case(POS_V4)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_state_reconstruction<Ver: Versions>(
-        #[case] pos_version: Ver,
-    ) -> anyhow::Result<()> {
+    async fn test_state_reconstruction(#[case] upgrade: Upgrade) -> anyhow::Result<()> {
         // This test verifies that a query node can successfully reconstruct its state
         // after being shut down from the database
         //
@@ -5246,7 +5248,7 @@ mod test {
             .epoch_height(EPOCH_HEIGHT)
             .build();
 
-        let api_port = pick_unused_port().expect("No ports free for query service");
+        let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         tracing::info!("API PORT = {api_port}");
         const NUM_NODES: usize = 5;
@@ -5274,15 +5276,16 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook::<Ver>(
+            .pos_hook(
                 DelegationConfig::MultipleDelegators,
                 hotshot_contract_adapter::stake_table::StakeTableContractVersion::V2,
+                upgrade,
             )
             .await
             .unwrap()
             .build();
         let state = config.states()[0].clone();
-        let mut network = TestNetwork::new(config, pos_version).await;
+        let mut network = TestNetwork::new(config, upgrade).await;
         // Remove peer 0 and restart it with the query module enabled.
         // Adding an additional node to the test network is not straight forward,
         // as the keys have already been initialized in the config above.
@@ -5291,7 +5294,7 @@ mod test {
 
         let node_0_storage = &storage[1];
         let node_0_persistence = persistence[1].clone();
-        let node_0_port = pick_unused_port().expect("No ports free for query service");
+        let node_0_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         tracing::info!("node_0_port {node_0_port}");
         let opt = Options::with_port(node_0_port).query_sql(
             Query {
@@ -5321,7 +5324,7 @@ mod test {
                             &*metrics,
                             test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
                             consumer,
-                            pos_version,
+                            upgrade,
                             Default::default(),
                         )
                         .await)
@@ -5347,14 +5350,14 @@ mod test {
             .into_iter()
             .map(|(acct, _)| acct)
             .collect::<Vec<_>>();
-        let reward_accounts = match Ver::Base::VERSION {
-            EpochVersion::VERSION => state
+        let reward_accounts = match upgrade.base {
+            EPOCH_VERSION => state
                 .reward_merkle_tree_v1
                 .clone()
                 .into_iter()
                 .map(|(acct, _)| RewardAccountV2::from(acct))
                 .collect::<Vec<_>>(),
-            DrbAndHeaderUpgradeVersion::VERSION => state
+            DRB_AND_HEADER_UPGRADE_VERSION => state
                 .reward_merkle_tree_v2
                 .clone()
                 .into_iter()
@@ -5462,8 +5465,8 @@ mod test {
         .await
         .unwrap();
 
-        match Ver::Base::VERSION {
-            EpochVersion::VERSION => {
+        match upgrade.base {
+            EPOCH_VERSION => {
                 for account in reward_accounts.clone() {
                     state
                         .reward_merkle_tree_v1
@@ -5472,7 +5475,7 @@ mod test {
                         .unwrap();
                 }
             },
-            DrbAndHeaderUpgradeVersion::VERSION => {
+            DRB_AND_HEADER_UPGRADE_VERSION => {
                 for account in &reward_accounts {
                     state
                         .reward_merkle_tree_v2
@@ -5517,8 +5520,8 @@ mod test {
         );
         assert_eq!(leaf.view_number(), to_view);
 
-        match Ver::Base::VERSION {
-            EpochVersion::VERSION => {
+        match upgrade.base {
+            EPOCH_VERSION => {
                 for account in reward_accounts.clone() {
                     state
                         .reward_merkle_tree_v1
@@ -5527,7 +5530,7 @@ mod test {
                         .unwrap();
                 }
             },
-            DrbAndHeaderUpgradeVersion::VERSION => {
+            DRB_AND_HEADER_UPGRADE_VERSION => {
                 for account in &reward_accounts {
                     state
                         .reward_merkle_tree_v2
@@ -5547,17 +5550,17 @@ mod test {
     }
 
     #[rstest]
-    #[case(PosVersionV3::new())]
-    #[case(PosVersionV4::new())]
+    #[case(POS_V3)]
+    #[case(POS_V4)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_block_reward_api<Ver: Versions>(#[case] versions: Ver) -> anyhow::Result<()> {
+    async fn test_block_reward_api(#[case] upgrade: Upgrade) -> anyhow::Result<()> {
         let epoch_height = 10;
 
         let network_config = TestConfigBuilder::default()
             .epoch_height(epoch_height)
             .build();
 
-        let api_port = pick_unused_port().expect("No ports free for query service");
+        let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         const NUM_NODES: usize = 1;
         // Initialize nodes.
@@ -5584,12 +5587,16 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook::<Ver>(DelegationConfig::VariableAmounts, Default::default())
+            .pos_hook(
+                DelegationConfig::VariableAmounts,
+                Default::default(),
+                upgrade,
+            )
             .await
             .unwrap()
             .build();
 
-        let _network = TestNetwork::new(config, versions).await;
+        let _network = TestNetwork::new(config, upgrade).await;
         let client: Client<ServerError, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
@@ -5617,16 +5624,16 @@ mod test {
     }
 
     #[rstest]
-    #[case(PosVersionV4::new())]
+    #[case(POS_V4)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_token_supply_api<Ver: Versions>(#[case] versions: Ver) -> anyhow::Result<()> {
+    async fn test_token_supply_api(#[case] upgrade: Upgrade) -> anyhow::Result<()> {
         let epoch_height = 10;
 
         let network_config = TestConfigBuilder::default()
             .epoch_height(epoch_height)
             .build();
 
-        let api_port = pick_unused_port().expect("No ports free for query service");
+        let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         const NUM_NODES: usize = 1;
         // Initialize nodes.
@@ -5653,12 +5660,16 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook::<Ver>(DelegationConfig::VariableAmounts, Default::default())
+            .pos_hook(
+                DelegationConfig::VariableAmounts,
+                Default::default(),
+                upgrade,
+            )
             .await
             .unwrap()
             .build();
 
-        let _network = TestNetwork::new(config, versions).await;
+        let _network = TestNetwork::new(config, upgrade).await;
         let client: Client<ServerError, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
@@ -5806,7 +5817,7 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_tx_metadata() {
-        let port = pick_unused_port().expect("No ports free");
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         let url = format!("http://localhost:{port}").parse().unwrap();
         let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
@@ -5821,7 +5832,7 @@ mod test {
             )
             .network_config(network_config)
             .build();
-        let network = TestNetwork::new(config, MockSequencerVersions::new()).await;
+        let network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
         let mut events = network.server.event_stream().await;
 
         client.connect(None).await;
@@ -5888,7 +5899,7 @@ mod test {
     async fn test_aggregator_namespace_endpoints() {
         let mut rng = thread_rng();
 
-        let port = pick_unused_port().expect("No ports free");
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         let url = format!("http://localhost:{port}").parse().unwrap();
         tracing::info!("Sequencer URL = {url}");
@@ -5913,7 +5924,7 @@ mod test {
             .network_config(network_config)
             .persistences(persistence_options.clone())
             .build();
-        let network = TestNetwork::new(config, MockSequencerVersions::new()).await;
+        let network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
         let mut events = network.server.event_stream().await;
         let start = Instant::now();
         let mut total_transactions = 0;
@@ -5925,7 +5936,7 @@ mod test {
             for _count in 0..namespace {
                 // Generate a random payload length between 4 and 10 bytes
                 let payload_len = rng.gen_range(4..=10);
-                let payload: Vec<u8> = (0..payload_len).map(|_| rng.gen()).collect();
+                let payload: Vec<u8> = (0..payload_len).map(|_| rng.r#gen()).collect();
 
                 let txn = Transaction::new(NamespaceId::from(namespace as u32), payload);
 
@@ -6067,7 +6078,7 @@ mod test {
 
         let mut rng = thread_rng();
 
-        let port = pick_unused_port().expect("No ports free");
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         let url = format!("http://localhost:{port}").parse().unwrap();
         tracing::info!("Sequencer URL = {url}");
@@ -6092,7 +6103,7 @@ mod test {
             .network_config(network_config)
             .persistences(persistence_options.clone())
             .build();
-        let network = TestNetwork::new(config, MockSequencerVersions::new()).await;
+        let network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
         let mut events = network.server.event_stream().await;
         let mut all_transactions = HashMap::new();
         let mut namespace_tx: HashMap<_, HashSet<_>> = HashMap::new();
@@ -6102,7 +6113,7 @@ mod test {
         for namespace in 1..=4 {
             for _count in 0..namespace {
                 let payload_len = rng.gen_range(4..=10);
-                let payload: Vec<u8> = (0..payload_len).map(|_| rng.gen()).collect();
+                let payload: Vec<u8> = (0..payload_len).map(|_| rng.r#gen()).collect();
 
                 let txn = Transaction::new(NamespaceId::from(namespace as u32), payload);
 
@@ -6178,12 +6189,10 @@ mod test {
     }
 
     #[rstest]
-    #[case(PosVersionV3::new())]
-    #[case(PosVersionV4::new())]
+    #[case(POS_V3)]
+    #[case(POS_V4)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_v3_and_v4_reward_tree_updates<Ver: Versions>(
-        #[case] versions: Ver,
-    ) -> anyhow::Result<()> {
+    async fn test_v3_and_v4_reward_tree_updates(#[case] upgrade: Upgrade) -> anyhow::Result<()> {
         // This test checks that the correct merkle tree is updated based on version
         //
         // When the protocol version is v3:
@@ -6199,7 +6208,7 @@ mod test {
             .epoch_height(EPOCH_HEIGHT)
             .build();
 
-        let api_port = pick_unused_port().expect("No ports free for query service");
+        let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         tracing::info!("API PORT = {api_port}");
         const NUM_NODES: usize = 5;
@@ -6227,22 +6236,22 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook::<Ver>(
+            .pos_hook(
                 DelegationConfig::MultipleDelegators,
                 hotshot_contract_adapter::stake_table::StakeTableContractVersion::V2,
+                upgrade,
             )
             .await
             .unwrap()
             .build();
-        let mut network = TestNetwork::new(config, versions).await;
+        let mut network = TestNetwork::new(config, upgrade).await;
 
         let mut events = network.peers[2].event_stream().await;
         // wait for 4 epochs
         wait_for_epochs(&mut events, EPOCH_HEIGHT, 4).await;
 
         let validated_state = network.server.decided_state().await;
-        let version = Ver::Base::VERSION;
-        if version == EpochVersion::VERSION {
+        if upgrade.base == EPOCH_VERSION {
             let v1_tree = &validated_state.reward_merkle_tree_v1;
             assert!(v1_tree.num_leaves() > 0, "v1 reward tree tree is empty");
             let v2_tree = &validated_state.reward_merkle_tree_v2;
@@ -6265,11 +6274,10 @@ mod test {
     }
 
     #[rstest]
-    #[case(PosVersionV3::new())]
-    #[case(PosVersionV4::new())]
+    #[case(POS_V3)]
+    #[case(POS_V4)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-
-    pub(crate) async fn test_state_cert_query<Ver: Versions>(#[case] versions: Ver) {
+    pub(crate) async fn test_state_cert_query(#[case] upgrade: Upgrade) {
         const TEST_EPOCH_HEIGHT: u64 = 10;
         const TEST_EPOCHS: u64 = 5;
 
@@ -6277,7 +6285,7 @@ mod test {
             .epoch_height(TEST_EPOCH_HEIGHT)
             .build();
 
-        let api_port = pick_unused_port().expect("No ports free for query service");
+        let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         tracing::info!("API PORT = {api_port}");
         const NUM_NODES: usize = 2;
@@ -6305,15 +6313,16 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook::<Ver>(
+            .pos_hook(
                 DelegationConfig::MultipleDelegators,
                 hotshot_contract_adapter::stake_table::StakeTableContractVersion::V2,
+                upgrade,
             )
             .await
             .unwrap()
             .build();
 
-        let network = TestNetwork::new(config, versions).await;
+        let network = TestNetwork::new(config, upgrade).await;
         let mut events = network.server.event_stream().await;
 
         // Wait until 5 epochs have passed.
@@ -6367,7 +6376,7 @@ mod test {
                 .unwrap();
 
             // verify auth root if the consensus version is v4
-            if header.version() == DrbAndHeaderUpgradeVersion::VERSION {
+            if header.version() == DRB_AND_HEADER_UPGRADE_VERSION {
                 let auth_root = state_cert_v2.auth_root;
                 let header_auth_root = header.auth_root().unwrap();
                 if auth_root.is_zero() || header_auth_root.is_zero() {
@@ -6396,17 +6405,17 @@ mod test {
     /// restarted node catches up for the missing state certificates.
 
     #[rstest]
-    #[case(PosVersionV3::new())]
-    #[case(PosVersionV4::new())]
+    #[case(POS_V3)]
+    #[case(POS_V4)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    pub(crate) async fn test_state_cert_catchup<Ver: Versions>(#[case] versions: Ver) {
+    pub(crate) async fn test_state_cert_catchup(#[case] upgrade: Upgrade) {
         const EPOCH_HEIGHT: u64 = 10;
 
         let network_config = TestConfigBuilder::default()
             .epoch_height(EPOCH_HEIGHT)
             .build();
 
-        let api_port = pick_unused_port().expect("No ports free for query service");
+        let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         tracing::info!("API PORT = {api_port}");
         const NUM_NODES: usize = 5;
@@ -6434,15 +6443,16 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook::<Ver>(
+            .pos_hook(
                 DelegationConfig::MultipleDelegators,
                 hotshot_contract_adapter::stake_table::StakeTableContractVersion::V2,
+                upgrade,
             )
             .await
             .unwrap()
             .build();
         let state = config.states()[0].clone();
-        let mut network = TestNetwork::new(config, versions).await;
+        let mut network = TestNetwork::new(config, upgrade).await;
 
         let mut events = network.peers[2].event_stream().await;
         // Wait until at least 5 epochs have passed
@@ -6459,7 +6469,7 @@ mod test {
         let new_persistence: persistence::sql::Options =
             <SqlDataSource as TestableSequencerDataSource>::persistence_options(&new_storage);
 
-        let node_0_port = pick_unused_port().expect("No ports free for query service");
+        let node_0_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         tracing::info!("node_0_port {node_0_port}");
         let opt = Options::with_port(node_0_port).query_sql(
             Query {
@@ -6489,7 +6499,7 @@ mod test {
                             &*metrics,
                             test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
                             consumer,
-                            versions,
+                            upgrade,
                             Default::default(),
                         )
                         .await)
@@ -6525,9 +6535,9 @@ mod test {
         const EPOCH_HEIGHT: u64 = 10;
 
         // Use version that supports epochs (V3 or V4)
-        let versions = PosVersionV4::new();
+        let versions = POS_V4;
 
-        let api_port = pick_unused_port().expect("No ports free for query service");
+        let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         // Initialize storage for nodes
         let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
@@ -6559,10 +6569,11 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook::<PosVersionV4>(
+            .pos_hook(
                 // We want no new rewards after setting the commission to zero.
                 DelegationConfig::NoSelfDelegation,
                 StakeTableContractVersion::V1, // upgraded later
+                POS_V4,
             )
             .await
             .unwrap()
@@ -6671,12 +6682,10 @@ mod test {
     }
 
     #[rstest]
-    #[case(PosVersionV3::new())]
-    #[case(PosVersionV4::new())]
+    #[case(POS_V3)]
+    #[case(POS_V4)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_reward_proof_endpoint<Ver: Versions>(
-        #[case] versions: Ver,
-    ) -> anyhow::Result<()> {
+    async fn test_reward_proof_endpoint(#[case] upgrade: Upgrade) -> anyhow::Result<()> {
         const EPOCH_HEIGHT: u64 = 10;
         const NUM_NODES: usize = 5;
 
@@ -6684,7 +6693,7 @@ mod test {
             .epoch_height(EPOCH_HEIGHT)
             .build();
 
-        let api_port = pick_unused_port().expect("No ports free for query service");
+        let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         println!("API PORT = {api_port}");
 
         let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
@@ -6710,15 +6719,16 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook::<Ver>(
+            .pos_hook(
                 DelegationConfig::MultipleDelegators,
                 hotshot_contract_adapter::stake_table::StakeTableContractVersion::V2,
+                upgrade,
             )
             .await
             .unwrap()
             .build();
 
-        let mut network = TestNetwork::new(config, versions).await;
+        let mut network = TestNetwork::new(config, upgrade).await;
 
         // wait for 4 epochs
         let mut events = network.server.event_stream().await;
@@ -6732,7 +6742,7 @@ mod test {
         let height = decided_leaf.height();
 
         // validate proof returned from the api
-        if Ver::Base::VERSION == EpochVersion::VERSION {
+        if upgrade.base == EPOCH_VERSION {
             // V1 case
             wait_until_block_height(&client, "reward-state/block-height", height).await;
 
@@ -6817,13 +6827,11 @@ mod test {
     async fn test_all_validators_endpoint() -> anyhow::Result<()> {
         const EPOCH_HEIGHT: u64 = 20;
 
-        type V4 = SequencerVersions<StaticVersion<0, 4>, StaticVersion<0, 0>>;
-
         let network_config = TestConfigBuilder::default()
             .epoch_height(EPOCH_HEIGHT)
             .build();
 
-        let api_port = pick_unused_port().expect("No ports free for query service");
+        let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         const NUM_NODES: usize = 5;
 
@@ -6850,12 +6858,16 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook::<V4>(DelegationConfig::MultipleDelegators, Default::default())
+            .pos_hook(
+                DelegationConfig::MultipleDelegators,
+                Default::default(),
+                POS_V4,
+            )
             .await
             .unwrap()
             .build();
 
-        let network = TestNetwork::new(config, V4::new()).await;
+        let network = TestNetwork::new(config, POS_V4).await;
         let client: Client<ServerError, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
@@ -6913,7 +6925,7 @@ mod test {
             .epoch_height(EPOCH_HEIGHT)
             .build();
 
-        let api_port = pick_unused_port().expect("No ports free for query service");
+        let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         println!("API PORT = {api_port}");
 
         let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
@@ -6939,15 +6951,16 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook::<PosVersionV4>(
+            .pos_hook(
                 DelegationConfig::MultipleDelegators,
                 hotshot_contract_adapter::stake_table::StakeTableContractVersion::V2,
+                POS_V4,
             )
             .await
             .unwrap()
             .build();
 
-        let mut network = TestNetwork::new(config, PosVersionV4::new()).await;
+        let mut network = TestNetwork::new(config, POS_V4).await;
 
         let client: Client<ServerError, StaticVersion<0, 1>> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
@@ -7005,21 +7018,19 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_namespace_query_compat_v0_2() {
-        test_namespace_query_compat_helper(SequencerVersions::<FeeVersion, FeeVersion>::new())
-            .await;
+        test_namespace_query_compat_helper(Upgrade::trivial(FEE_VERSION)).await;
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_namespace_query_compat_v0_3() {
-        test_namespace_query_compat_helper(SequencerVersions::<EpochVersion, EpochVersion>::new())
-            .await;
+        test_namespace_query_compat_helper(Upgrade::trivial(EPOCH_VERSION)).await;
     }
 
-    async fn test_namespace_query_compat_helper<V: Versions>(v: V) {
+    async fn test_namespace_query_compat_helper(upgrade: Upgrade) {
         // Number of nodes running in the test network.
         const NUM_NODES: usize = 5;
 
-        let port = pick_unused_port().expect("No ports free");
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         let url: Url = format!("http://localhost:{port}").parse().unwrap();
 
         let test_config = TestConfigBuilder::default().build();
@@ -7039,7 +7050,7 @@ mod test {
             .network_config(test_config)
             .build();
 
-        let mut network = TestNetwork::new(config, v).await;
+        let mut network = TestNetwork::new(config, upgrade).await;
         let mut events = network.server.event_stream().await;
 
         // Submit a transaction.
@@ -7074,7 +7085,7 @@ mod test {
                 .await
                 .unwrap();
             let proof = ns_proof.proof.as_ref().unwrap();
-            if version < EpochVersion::version() {
+            if version < EPOCH_VERSION {
                 assert!(matches!(proof, NsProof::V0(..)));
             } else {
                 assert!(matches!(proof, NsProof::V1(..)));
@@ -7136,7 +7147,7 @@ mod test {
 
         // The legacy version of the API only works for old VID.
         tracing::info!("test namespace API version: v0");
-        if version < EpochVersion::version() {
+        if version < EPOCH_VERSION {
             let ns_proof: ADVZNamespaceProofQueryData = client
                 .get(&format!("v0/availability/block/{block}/namespace/{ns}"))
                 .send()
@@ -7201,7 +7212,7 @@ mod test {
                 None => {
                     // Steam not expected to end on legacy consensus version.
                     assert!(
-                        version >= EpochVersion::version(),
+                        version >= EPOCH_VERSION,
                         "legacy steam ended while still on legacy consensus"
                     );
                     break;
@@ -7226,14 +7237,14 @@ mod test {
         const NUM_NODES: usize = 1;
         const EPOCH_HEIGHT: u64 = 200;
 
-        let upgrade_version = EpochVersion::version();
-        let port = pick_unused_port().expect("No ports free");
+        let upgrade = Upgrade::new(LEGACY_VERSION, EPOCH_VERSION);
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         let url: Url = format!("http://localhost:{port}").parse().unwrap();
 
         let test_config = TestConfigBuilder::default()
             .epoch_height(EPOCH_HEIGHT)
             .epoch_start_block(321)
-            .set_upgrades(upgrade_version)
+            .set_upgrades(upgrade.target)
             .await
             .build();
 
@@ -7262,11 +7273,7 @@ mod test {
             .network_config(test_config)
             .build();
 
-        let mut network = TestNetwork::new(
-            config,
-            SequencerVersions::<LegacyVersion, EpochVersion>::new(),
-        )
-        .await;
+        let mut network = TestNetwork::new(config, upgrade).await;
         let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
         client.connect(None).await;
 
@@ -7297,7 +7304,7 @@ mod test {
         // Wait for the upgrade to take effect.
         let (upgrade_height, first_epoch) = loop {
             let leaf: LeafQueryData<SeqTypes> = leaves.next().await.unwrap();
-            if leaf.header().version() < EpochVersion::version() {
+            if leaf.header().version() < EPOCH_VERSION {
                 tracing::info!(version = %leaf.header().version(), height = leaf.header().height(), view = ?leaf.leaf().view_number(), "waiting for epoch upgrade");
                 continue;
             }

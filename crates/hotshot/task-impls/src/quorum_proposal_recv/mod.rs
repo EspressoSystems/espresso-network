@@ -8,7 +8,7 @@
 
 use std::{collections::BTreeMap, sync::Arc};
 
-use async_broadcast::{broadcast, Receiver, Sender};
+use async_broadcast::{Receiver, Sender, broadcast};
 use async_lock::RwLock;
 use async_trait::async_trait;
 use either::Either;
@@ -16,7 +16,7 @@ use futures::future::{err, join_all};
 use hotshot_task::task::{Task, TaskState};
 use hotshot_types::{
     consensus::{Consensus, OuterConsensus},
-    data::{EpochNumber, Leaf, ViewChangeEvidence2},
+    data::{EpochNumber, Leaf, ViewChangeEvidence2, ViewNumber},
     epoch_membership::{self, EpochMembership, EpochMembershipCoordinator},
     event::Event,
     message::UpgradeLock,
@@ -24,13 +24,13 @@ use hotshot_types::{
     simple_vote::HasEpoch,
     traits::{
         block_contents::BlockHeader,
-        node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
+        node_implementation::{NodeImplementation, NodeType},
         signature_key::SignatureKey,
     },
     utils::option_epoch_from_block_number,
     vote::{Certificate, HasViewNumber},
 };
-use hotshot_utils::anytrace::{bail, Result};
+use hotshot_utils::anytrace::{Result, bail};
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, instrument, warn};
 use vbs::version::Version;
@@ -45,7 +45,7 @@ mod handlers;
 
 /// The state for the quorum proposal task. Contains all of the information for
 /// handling [`HotShotEvent::QuorumProposalRecv`] events.
-pub struct QuorumProposalRecvTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> {
+pub struct QuorumProposalRecvTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>> {
     /// Our public key
     pub public_key: TYPES::SignatureKey,
 
@@ -56,10 +56,10 @@ pub struct QuorumProposalRecvTaskState<TYPES: NodeType, I: NodeImplementation<TY
     pub consensus: OuterConsensus<TYPES>,
 
     /// View number this view is executing in.
-    pub cur_view: TYPES::View,
+    pub cur_view: ViewNumber,
 
     /// Epoch number this node is executing in.
-    pub cur_epoch: Option<TYPES::Epoch>,
+    pub cur_epoch: Option<EpochNumber>,
 
     /// Membership for Quorum Certs/votes
     pub membership: EpochMembershipCoordinator<TYPES>,
@@ -75,24 +75,24 @@ pub struct QuorumProposalRecvTaskState<TYPES: NodeType, I: NodeImplementation<TY
 
     /// Spawned tasks related to a specific view, so we can cancel them when
     /// they are stale
-    pub spawned_tasks: BTreeMap<TYPES::View, Vec<JoinHandle<()>>>,
+    pub spawned_tasks: BTreeMap<ViewNumber, Vec<JoinHandle<()>>>,
 
     /// The node's id
     pub id: u64,
 
     /// Lock for a decided upgrade
-    pub upgrade_lock: UpgradeLock<TYPES, V>,
+    pub upgrade_lock: UpgradeLock<TYPES>,
 
     /// Number of blocks in an epoch, zero means there are no epochs
     pub epoch_height: u64,
 
     /// First view in which epoch version takes effect
-    pub first_epoch: Option<(TYPES::View, TYPES::Epoch)>,
+    pub first_epoch: Option<(ViewNumber, EpochNumber)>,
 }
 
 /// all the info we need to validate a proposal.  This makes it easy to spawn an effemeral task to
 /// do all the proposal validation without blocking the long running one
-pub(crate) struct ValidationInfo<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> {
+pub(crate) struct ValidationInfo<TYPES: NodeType, I: NodeImplementation<TYPES>> {
     /// The node's id
     pub id: u64,
 
@@ -115,20 +115,18 @@ pub(crate) struct ValidationInfo<TYPES: NodeType, I: NodeImplementation<TYPES>, 
     pub(crate) storage: I::Storage,
 
     /// Lock for a decided upgrade
-    pub(crate) upgrade_lock: UpgradeLock<TYPES, V>,
+    pub(crate) upgrade_lock: UpgradeLock<TYPES>,
 
     /// Number of blocks in an epoch, zero means there are no epochs
     pub epoch_height: u64,
 
     /// First view in which epoch version takes effect
-    pub first_epoch: Option<(TYPES::View, TYPES::Epoch)>,
+    pub first_epoch: Option<(ViewNumber, EpochNumber)>,
 }
 
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
-    QuorumProposalRecvTaskState<TYPES, I, V>
-{
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> QuorumProposalRecvTaskState<TYPES, I> {
     /// Cancel all tasks the consensus tasks has spawned before the given view
-    pub fn cancel_tasks(&mut self, view: TYPES::View) {
+    pub fn cancel_tasks(&mut self, view: ViewNumber) {
         let keep = self.spawned_tasks.split_off(&view);
         while let Some((_, tasks)) = self.spawned_tasks.pop_first() {
             for task in tasks {
@@ -162,7 +160,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                     );
                     return;
                 }
-                let proposal_epoch = option_epoch_from_block_number::<TYPES>(
+                let proposal_epoch = option_epoch_from_block_number(
                     proposal.data.proposal.epoch().is_some(),
                     proposal.data.block_header().block_number(),
                     self.epoch_height,
@@ -173,7 +171,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                     tracing::warn!("No Stake table for epoch = {proposal_epoch:?}");
                     return;
                 };
-                let validation_info = ValidationInfo::<TYPES, I, V> {
+                let validation_info = ValidationInfo::<TYPES, I> {
                     id: self.id,
                     public_key: self.public_key.clone(),
                     private_key: self.private_key.clone(),
@@ -210,7 +208,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                 // view we want to KEEP tasks for.  We keep the view prior to this because
                 // we might still be processing the proposal from view V which caused us
                 // to enter view V + 1.
-                let oldest_view_to_keep = TYPES::View::new(view.saturating_sub(1));
+                let oldest_view_to_keep = ViewNumber::new(view.saturating_sub(1));
                 self.cancel_tasks(oldest_view_to_keep);
             },
             HotShotEvent::SetFirstEpoch(view, epoch) => {
@@ -222,8 +220,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
 }
 
 #[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TaskState
-    for QuorumProposalRecvTaskState<TYPES, I, V>
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TaskState
+    for QuorumProposalRecvTaskState<TYPES, I>
 {
     type Event = HotShotEvent<TYPES>;
 

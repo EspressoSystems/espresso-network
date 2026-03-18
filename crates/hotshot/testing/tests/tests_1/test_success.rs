@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use hotshot_example_types::{
     node_types::{
-        CliquenetImpl, Libp2pImpl, MemoryImpl, PushCdnImpl, TestConsecutiveLeaderTypes, TestTypes, TestTypesRandomizedLeader, TestVersions
+        CliquenetImpl, Libp2pImpl, MemoryImpl, PushCdnImpl, TestConsecutiveLeaderTypes, TestTypes, TestTypesRandomizedLeader, TEST_VERSIONS
     },
     testable_delay::{DelayConfig, DelayOptions, DelaySettings, SupportedTraitTypesForAsyncDelay},
 };
@@ -23,7 +23,7 @@ cross_tests!(
     TestName: test_success,
     Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl, CliquenetImpl],
     Types: [TestTypes, TestTypesRandomizedLeader],
-    Versions: [TestVersions],
+    Versions: [TEST_VERSIONS.test],
     Ignore: false,
     Metadata: {
         let mut metadata = TestDescription::default();
@@ -38,7 +38,7 @@ cross_tests!(
     TestName: test_success_with_async_delay,
     Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl, CliquenetImpl],
     Types: [TestTypes],
-    Versions: [TestVersions],
+    Versions: [TEST_VERSIONS.test],
     Ignore: false,
     Metadata: {
         let mut metadata = TestDescription::default();
@@ -66,7 +66,7 @@ cross_tests!(
     TestName: test_success_with_async_delay_2,
     Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl, CliquenetImpl],
     Types: [TestTypes],
-    Versions: [TestVersions],
+    Versions: [TEST_VERSIONS.test],
     Ignore: false,
     Metadata: {
         let mut metadata = TestDescription::default();
@@ -102,7 +102,7 @@ cross_tests!(
     TestName: test_with_double_leader_no_failures,
     Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl, CliquenetImpl],
     Types: [TestConsecutiveLeaderTypes],
-    Versions: [TestVersions],
+    Versions: [TEST_VERSIONS.test],
     Ignore: false,
     Metadata: {
         let mut metadata = TestDescription::default_more_nodes().set_num_nodes(12,12);

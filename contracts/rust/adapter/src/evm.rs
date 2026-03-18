@@ -45,7 +45,7 @@ mod test {
     };
 
     use super::*;
-    use crate::sol_types::EspToken::{self, transferCall, EspTokenErrors};
+    use crate::sol_types::EspToken::{self, EspTokenErrors, transferCall};
 
     #[tokio::test]
     async fn test_decode_revert_contract_error() -> anyhow::Result<()> {

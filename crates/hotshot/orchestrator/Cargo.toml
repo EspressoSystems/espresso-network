@@ -10,7 +10,7 @@ anyhow = { workspace = true }
 async-lock = { workspace = true }
 blake3 = { workspace = true }
 clap = { workspace = true }
-csv = "1"
+csv = { workspace = true }
 futures = { workspace = true }
 hotshot-types = { workspace = true }
 libp2p-identity = { workspace = true }

@@ -14,14 +14,12 @@ use hotshot_types::{
     event::{Event, EventType},
     message::{Message, MessageKind},
     traits::{
-        block_contents::BlockHeader,
-        network::ConnectedNetwork,
-        node_implementation::{ConsensusTime, NodeType},
+        block_contents::BlockHeader, network::ConnectedNetwork, node_implementation::NodeType,
     },
     vote::HasViewNumber,
 };
 use tokio::task::JoinHandle;
-use vbs::{bincode_serializer::BincodeSerializer, version::StaticVersion, BinarySerializer};
+use vbs::{BinarySerializer, bincode_serializer::BincodeSerializer, version::StaticVersion};
 
 use crate::storage_types::TestStorage;
 

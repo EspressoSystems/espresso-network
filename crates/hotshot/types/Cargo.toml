@@ -1,7 +1,7 @@
 [package]
 authors = ["Espresso Systems <hello@espressosys.com>"]
 description = "Types and traits for the HotShot consesus module"
-edition = "2021"
+edition.workspace = true
 name = "hotshot-types"
 version = "0.1.11"
 license = "MIT"
@@ -31,25 +31,26 @@ bitvec = { workspace = true }
 blake3 = { workspace = true }
 clap = { workspace = true }
 committable = { workspace = true }
-derive_more = { workspace = true, features = ["debug"] }
-digest = { workspace = true, features = ["rand_core"] }
-displaydoc = { version = "0.2.5", default-features = false }
-dyn-clone = "1.0.17"
+derive_more = { workspace = true }
+digest = { workspace = true }
+displaydoc = { workspace = true }
+dyn-clone = { workspace = true }
 either = { workspace = true }
-futures = { workspace = true, features = ["alloc"] }
-generic-array = "1"
+futures = { workspace = true }
+generic-array = { workspace = true }
 hotshot-utils = { workspace = true }
 jf-advz = { workspace = true }
 jf-crhf = { workspace = true }
 jf-pcs = { workspace = true }
 jf-rescue = { workspace = true }
-jf-signature = { workspace = true, features = ["bls", "schnorr"] }
+jf-signature = { workspace = true }
 jf-utils = { workspace = true }
 lazy_static = { workspace = true }
 libp2p-identity = { workspace = true }
 memoize = { workspace = true }
-mnemonic = "1"
+mnemonic = { workspace = true }
 multiaddr = { workspace = true }
+parking_lot = { workspace = true }
 rand = { workspace = true }
 rand_chacha = { workspace = true }
 serde = { workspace = true }
@@ -67,6 +68,7 @@ typenum = { workspace = true }
 url = { workspace = true }
 vbs = { workspace = true }
 vec1 = { workspace = true }
+versions = { workspace = true }
 vid = { workspace = true }
 
 [lints]

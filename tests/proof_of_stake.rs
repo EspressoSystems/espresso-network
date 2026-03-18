@@ -2,12 +2,12 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use espresso_types::SeqTypes;
-use hotshot_types::PeerConfig;
+use hotshot_types::{PeerConfig, utils::epoch_from_block_number};
 use sequencer::api::data_source::StakeTableWithEpochNumber;
 use url::Url;
 
 use crate::{
-    common::{load_genesis_file, NativeDemo, TestRequirements},
+    common::{NativeDemo, TestRequirements, load_genesis_file},
     smoke::assert_native_demo_works,
 };
 
@@ -64,26 +64,18 @@ async fn test_native_demo_drb_header_base() -> Result<()> {
     assert_native_demo_works(Default::default()).await?;
 
     let epoch_length = genesis.epoch_height.expect("epoch_height set in genesis");
+    let epoch_start_block = genesis.epoch_start_block.unwrap_or(1);
 
-    // Version 0.4 supports rewards - currently don't have a good way to know how long we expect it
-    // to take until the prover has finalized the state on L1. These limits are somewhat arbitrary.
-    //
-    // The prover needs to at least have enough time to send a proof for a block in epoch 3 because
-    // no rewards are distributed until the end of epoch 2.
-    //
-    // TODO: monitor the prover making progress on L1 and adjust the test accordingly.
-    let reward_claim_deadline_block_height = (epoch_length * 3 + 10).max(500);
+    let first_epoch = epoch_from_block_number(epoch_start_block, epoch_length);
+    let first_reward_block = (first_epoch + 1) * epoch_length + 1;
 
-    // Run for a least 3 epochs plus a few blocks to confirm we can make progress once
-    // we are using the stake table from the contract.
-    // Ensure we run long enough to check rewards
-    let expected_block_height = (epoch_length * 3 + 10).max(reward_claim_deadline_block_height);
+    let expected_block_height = epoch_length * 3 + 10;
 
     let progress_requirements = TestRequirements {
         block_height_increment: expected_block_height,
         txn_count_increment: 2 * expected_block_height,
         global_timeout: Duration::from_secs(expected_block_height as u64 * 3),
-        reward_claim_deadline_block_height: Some(reward_claim_deadline_block_height),
+        first_reward_block: Some(first_reward_block),
         ..Default::default()
     };
 

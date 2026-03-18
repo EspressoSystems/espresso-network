@@ -6,12 +6,12 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub use async_broadcast::{broadcast, RecvError, TryRecvError};
+pub use async_broadcast::{RecvError, TryRecvError, broadcast};
 use async_broadcast::{Sender as BroadcastSender, TrySendError};
 use async_lock::RwLock;
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
-use futures::{future::BoxFuture, stream::StreamExt, Stream};
+use futures::{Stream, future::BoxFuture, stream::StreamExt};
 use hotshot::types::Event;
 use hotshot_builder_api::{
     v0_1::{
@@ -23,12 +23,12 @@ use hotshot_builder_api::{
 };
 use hotshot_builder_shared::block::{BlockId, BuilderStateId, ParentBlockReferences};
 use hotshot_types::{
-    data::{DaProposal2, Leaf2, QuorumProposalWrapper, VidCommitment},
+    data::{DaProposal2, Leaf2, QuorumProposalWrapper, VidCommitment, ViewNumber},
     event::EventType,
     message::Proposal,
     traits::{
         block_contents::{BlockPayload, Transaction},
-        node_implementation::{ConsensusTime, NodeType},
+        node_implementation::NodeType,
         signature_key::{BuilderSignatureKey, SignatureKey},
     },
     utils::BuilderCommitment,
@@ -139,11 +139,11 @@ impl BlockSizeLimits {
 #[derive(Debug)]
 pub struct GlobalState<Types: NodeType> {
     // data store for the blocks
-    pub blocks: lru::LruCache<BlockId<Types>, BlockInfo<Types>>,
+    pub blocks: lru::LruCache<BlockId, BlockInfo<Types>>,
 
     // registered builder states
     pub spawned_builder_states: HashMap<
-        BuilderStateId<Types>,
+        BuilderStateId,
         (
             // This is provided as an Option for convenience with initialization.
             // When we build the initial state, we don't necessarily want to
@@ -159,17 +159,17 @@ pub struct GlobalState<Types: NodeType> {
 
     // builder state -> last built block , it is used to respond the client
     // if the req channel times out during get_available_blocks
-    pub builder_state_to_last_built_block: HashMap<BuilderStateId<Types>, ResponseMessage>,
+    pub builder_state_to_last_built_block: HashMap<BuilderStateId, ResponseMessage>,
 
     // sending a transaction from the hotshot/private mempool to the builder states
     // NOTE: Currently, we don't differentiate between the transactions from the hotshot and the private mempool
     pub tx_sender: BroadcastSender<Arc<ReceivedTransaction<Types>>>,
 
     // last garbage collected view number
-    pub last_garbage_collected_view_num: Types::View,
+    pub last_garbage_collected_view_num: ViewNumber,
 
     // highest view running builder task
-    pub highest_view_num_builder_id: BuilderStateId<Types>,
+    pub highest_view_num_builder_id: BuilderStateId,
 
     pub block_size_limits: BlockSizeLimits,
 
@@ -217,8 +217,8 @@ impl<Types: NodeType> GlobalState<Types> {
         bootstrap_sender: BroadcastSender<MessageType<Types>>,
         tx_sender: BroadcastSender<Arc<ReceivedTransaction<Types>>>,
         bootstrapped_builder_state_id: VidCommitment,
-        bootstrapped_view_num: Types::View,
-        last_garbage_collected_view_num: Types::View,
+        bootstrapped_view_num: ViewNumber,
+        last_garbage_collected_view_num: ViewNumber,
         max_block_size_increment_period: Duration,
         protocol_max_block_size: u64,
         num_nodes: usize,
@@ -262,7 +262,7 @@ impl<Types: NodeType> GlobalState<Types> {
     /// result in unexpected behavior.
     pub fn register_builder_state(
         &mut self,
-        parent_id: BuilderStateId<Types>,
+        parent_id: BuilderStateId,
         built_from_proposed_block: ParentBlockReferences<Types>,
         request_sender: BroadcastSender<MessageType<Types>>,
     ) {
@@ -304,7 +304,7 @@ impl<Types: NodeType> GlobalState<Types> {
     /// stored with the same key in the [`Self::builder_state_to_last_built_block`].
     pub fn update_global_state(
         &mut self,
-        state_id: BuilderStateId<Types>,
+        state_id: BuilderStateId,
         build_block_info: BuildBlockInfo<Types>,
         response_msg: ResponseMessage,
     ) {
@@ -354,7 +354,7 @@ impl<Types: NodeType> GlobalState<Types> {
     /// target cutoff view number for tracking purposes.  The value returned
     /// is the cutoff view number such that the returned value indicates the
     /// point before which everything was cleaned up.
-    pub fn remove_handles(&mut self, on_decide_view: Types::View) -> Types::View {
+    pub fn remove_handles(&mut self, on_decide_view: ViewNumber) -> ViewNumber {
         // remove everything from the spawned builder states when view_num <= on_decide_view;
         // if we don't have a highest view > decide, use highest view as cutoff.
         let cutoff = std::cmp::min(self.highest_view_num_builder_id.parent_view, on_decide_view);
@@ -364,7 +364,7 @@ impl<Types: NodeType> GlobalState<Types> {
         let cutoff_u64 = cutoff.u64();
         let gc_view = if cutoff_u64 > 0 { cutoff_u64 - 1 } else { 0 };
 
-        self.last_garbage_collected_view_num = Types::View::new(gc_view);
+        self.last_garbage_collected_view_num = ViewNumber::new(gc_view);
 
         cutoff
     }
@@ -440,7 +440,7 @@ impl<Types: NodeType> GlobalState<Types> {
     /// instead.
     pub(crate) fn get_channel_for_matching_builder_or_highest_view_builder(
         &self,
-        key: &BuilderStateId<Types>,
+        key: &BuilderStateId,
     ) -> Result<&BroadcastSender<MessageType<Types>>, GetChannelForMatchingBuilderError> {
         if let Some(id_and_sender) = self.spawned_builder_states.get(key) {
             tracing::info!("Got matching builder for parent {key}");
@@ -460,7 +460,7 @@ impl<Types: NodeType> GlobalState<Types> {
     }
 
     // check for the existence of the builder state for a view
-    pub fn check_builder_state_existence_for_a_view(&self, key: &Types::View) -> bool {
+    pub fn check_builder_state_existence_for_a_view(&self, key: &ViewNumber) -> bool {
         // iterate over the spawned builder states and check if the view number exists
         self.spawned_builder_states
             .iter()
@@ -469,8 +469,8 @@ impl<Types: NodeType> GlobalState<Types> {
 
     pub fn should_view_handle_other_proposals(
         &self,
-        builder_view: &Types::View,
-        proposal_view: &Types::View,
+        builder_view: &ViewNumber,
+        proposal_view: &ViewNumber,
     ) -> bool {
         *builder_view == self.highest_view_num_builder_id.parent_view
             && !self.check_builder_state_existence_for_a_view(proposal_view)
@@ -629,7 +629,7 @@ impl<Types: NodeType> ProxyGlobalState<Types> {
 
         let state_id = BuilderStateId {
             parent_commitment: *for_parent,
-            parent_view: Types::View::new(view_number),
+            parent_view: ViewNumber::new(view_number),
         };
 
         // verify the signature
@@ -805,7 +805,7 @@ impl<Types: NodeType> ProxyGlobalState<Types> {
     ) -> Result<AvailableBlockData<Types>, ClaimBlockError<Types>> {
         let block_id = BlockId {
             hash: block_hash.clone(),
-            view: Types::View::new(view_number),
+            view: ViewNumber::new(view_number),
         };
 
         tracing::info!("Received request for claiming block {block_id}",);
@@ -881,7 +881,7 @@ impl<Types: NodeType> ProxyGlobalState<Types> {
     ) -> Result<AvailableBlockHeaderInputV1<Types>, ClaimBlockHeaderInputError<Types>> {
         let id = BlockId {
             hash: block_hash.clone(),
-            view: Types::View::new(view_number),
+            view: ViewNumber::new(view_number),
         };
 
         tracing::info!("Received request for claiming block header input for block {id}");
@@ -1335,9 +1335,9 @@ async fn handle_quorum_event_implementation<Types: NodeType>(
 
 async fn handle_decide_event<Types: NodeType>(
     decide_channel_sender: &BroadcastSender<MessageType<Types>>,
-    latest_decide_view_number: Types::View,
+    latest_decide_view_number: ViewNumber,
 ) {
-    let decide_msg: DecideMessage<Types> = DecideMessage::<Types> {
+    let decide_msg: DecideMessage = DecideMessage {
         latest_decide_view_number,
     };
     tracing::debug!("Sending Decide event to builder states for view {latest_decide_view_number}");
@@ -1544,21 +1544,17 @@ mod test {
     };
     use hotshot_example_types::{
         block_types::{TestBlockPayload, TestMetadata, TestTransaction},
-        node_types::{TestTypes, TestVersions},
+        node_types::{TEST_VERSIONS, TestTypes},
         state_types::{TestInstanceState, TestValidatedState},
     };
     use hotshot_types::{
         data::{
-            vid_commitment, DaProposal2, EpochNumber, Leaf, Leaf2, QuorumProposal2,
-            QuorumProposalWrapper, ViewNumber,
+            DaProposal2, EpochNumber, Leaf, Leaf2, QuorumProposal2, QuorumProposalWrapper,
+            VidCommitment, ViewNumber, vid_commitment,
         },
         message::Proposal,
         simple_certificate::QuorumCertificate2,
-        traits::{
-            block_contents::Transaction,
-            node_implementation::{ConsensusTime, Versions},
-            signature_key::BuilderSignatureKey,
-        },
+        traits::{block_contents::Transaction, signature_key::BuilderSignatureKey},
         utils::{BuilderCommitment, EpochTransitionIndicator},
     };
     use sha2::{Digest, Sha256};
@@ -1566,12 +1562,11 @@ mod test {
         spawn,
         sync::{mpsc::unbounded_channel, oneshot},
     };
-    use vbs::version::StaticVersionType;
 
     use super::{
-        handle_da_event_implementation, handle_quorum_event_implementation, AvailableBlocksError,
-        BlockInfo, ClaimBlockError, ClaimBlockHeaderInputError, GlobalState, HandleDaEventError,
-        HandleQuorumEventError, HandleReceivedTxns, ProxyGlobalState,
+        AvailableBlocksError, BlockInfo, ClaimBlockError, ClaimBlockHeaderInputError, GlobalState,
+        HandleDaEventError, HandleQuorumEventError, HandleReceivedTxns, ProxyGlobalState,
+        handle_da_event_implementation, handle_quorum_event_implementation,
     };
     use crate::{
         builder_state::{
@@ -1599,12 +1594,7 @@ mod test {
     async fn test_global_state_new() {
         let (bootstrap_sender, _) = async_broadcast::broadcast(10);
         let (tx_sender, _) = async_broadcast::broadcast(10);
-        let parent_commit = vid_commitment::<TestVersions>(
-            &[],
-            &[],
-            TEST_NUM_NODES_IN_VID_COMPUTATION,
-            <TestVersions as Versions>::Base::VERSION,
-        );
+        let parent_commit = parent_commitment(TEST_NUM_NODES_IN_VID_COMPUTATION);
         let state = GlobalState::<TestTypes>::new(
             bootstrap_sender,
             tx_sender,
@@ -1688,12 +1678,7 @@ mod test {
     async fn test_global_state_register_builder_state_different_states() {
         let (bootstrap_sender, _) = async_broadcast::broadcast(10);
         let (tx_sender, _) = async_broadcast::broadcast(10);
-        let parent_commit = vid_commitment::<TestVersions>(
-            &[],
-            &[],
-            TEST_NUM_NODES_IN_VID_COMPUTATION,
-            <TestVersions as Versions>::Base::VERSION,
-        );
+        let parent_commit = parent_commitment(TEST_NUM_NODES_IN_VID_COMPUTATION);
         let mut state = GlobalState::<TestTypes>::new(
             bootstrap_sender,
             tx_sender,
@@ -1789,12 +1774,7 @@ mod test {
     async fn test_global_state_register_builder_state_same_builder_state_id() {
         let (bootstrap_sender, _) = async_broadcast::broadcast(10);
         let (tx_sender, _) = async_broadcast::broadcast(10);
-        let parent_commit = vid_commitment::<TestVersions>(
-            &[],
-            &[],
-            TEST_NUM_NODES_IN_VID_COMPUTATION,
-            <TestVersions as Versions>::Base::VERSION,
-        );
+        let parent_commit = parent_commitment(TEST_NUM_NODES_IN_VID_COMPUTATION);
         let mut state = GlobalState::<TestTypes>::new(
             bootstrap_sender,
             tx_sender,
@@ -1921,12 +1901,7 @@ mod test {
     async fn test_global_state_register_builder_state_decrementing_builder_state_ids() {
         let (bootstrap_sender, _) = async_broadcast::broadcast(10);
         let (tx_sender, _) = async_broadcast::broadcast(10);
-        let parent_commit = vid_commitment::<TestVersions>(
-            &[],
-            &[],
-            TEST_NUM_NODES_IN_VID_COMPUTATION,
-            <TestVersions as Versions>::Base::VERSION,
-        );
+        let parent_commit = parent_commitment(TEST_NUM_NODES_IN_VID_COMPUTATION);
         let mut state = GlobalState::<TestTypes>::new(
             bootstrap_sender,
             tx_sender,
@@ -2028,12 +2003,7 @@ mod test {
     async fn test_global_state_update_global_state_success() {
         let (bootstrap_sender, _) = async_broadcast::broadcast(10);
         let (tx_sender, _) = async_broadcast::broadcast(10);
-        let parent_commit = vid_commitment::<TestVersions>(
-            &[],
-            &[],
-            TEST_NUM_NODES_IN_VID_COMPUTATION,
-            <TestVersions as Versions>::Base::VERSION,
-        );
+        let parent_commit = parent_commitment(TEST_NUM_NODES_IN_VID_COMPUTATION);
         let mut state = GlobalState::<TestTypes>::new(
             bootstrap_sender,
             tx_sender,
@@ -2046,8 +2016,7 @@ mod test {
             TEST_MAX_TX_NUM,
         );
 
-        let new_parent_commit =
-            vid_commitment::<TestVersions>(&[], &[], 9, <TestVersions as Versions>::Base::VERSION);
+        let new_parent_commit = parent_commitment(9);
         let new_view_num = ViewNumber::new(1);
         let builder_state_id = BuilderStateId {
             parent_commitment: new_parent_commit,
@@ -2206,12 +2175,7 @@ mod test {
     async fn test_global_state_update_global_state_replacement() {
         let (bootstrap_sender, _) = async_broadcast::broadcast(10);
         let (tx_sender, _) = async_broadcast::broadcast(10);
-        let parent_commit = vid_commitment::<TestVersions>(
-            &[],
-            &[],
-            TEST_NUM_NODES_IN_VID_COMPUTATION,
-            <TestVersions as Versions>::Base::VERSION,
-        );
+        let parent_commit = parent_commitment(TEST_NUM_NODES_IN_VID_COMPUTATION);
         let mut state = GlobalState::<TestTypes>::new(
             bootstrap_sender,
             tx_sender,
@@ -2224,8 +2188,7 @@ mod test {
             TEST_MAX_TX_NUM,
         );
 
-        let new_parent_commit =
-            vid_commitment::<TestVersions>(&[], &[], 9, <TestVersions as Versions>::Base::VERSION);
+        let new_parent_commit = parent_commitment(9);
         let new_view_num = ViewNumber::new(1);
         let builder_state_id = BuilderStateId {
             parent_commitment: new_parent_commit,
@@ -2446,11 +2409,11 @@ mod test {
     async fn test_global_state_remove_handles_prune_up_to_latest() {
         let (bootstrap_sender, _) = async_broadcast::broadcast(10);
         let (tx_sender, _) = async_broadcast::broadcast(10);
-        let parent_commit = vid_commitment::<TestVersions>(
+        let parent_commit = vid_commitment(
             &[0],
             &[],
             TEST_NUM_NODES_IN_VID_COMPUTATION,
-            <TestVersions as Versions>::Base::VERSION,
+            TEST_VERSIONS.test.base,
         );
         let mut state = GlobalState::<TestTypes>::new(
             bootstrap_sender,
@@ -2466,11 +2429,11 @@ mod test {
 
         // We register a few builder states.
         for i in 1..=10 {
-            let vid_commit = vid_commitment::<TestVersions>(
+            let vid_commit = vid_commitment(
                 &[i],
                 &[],
                 TEST_NUM_NODES_IN_VID_COMPUTATION,
-                <TestVersions as Versions>::Base::VERSION,
+                TEST_VERSIONS.test.base,
             );
             let view = ViewNumber::new(i as u64);
 
@@ -2511,11 +2474,11 @@ mod test {
         );
 
         let builder_state_id = BuilderStateId {
-            parent_commitment: vid_commitment::<TestVersions>(
+            parent_commitment: vid_commitment(
                 &[10],
                 &[],
                 TEST_NUM_NODES_IN_VID_COMPUTATION,
-                <TestVersions as Versions>::Base::VERSION,
+                TEST_VERSIONS.test.base,
             ),
             parent_view: ViewNumber::new(10),
         };
@@ -2532,11 +2495,11 @@ mod test {
 
         assert!(
             state.spawned_builder_states.contains_key(&BuilderStateId {
-                parent_commitment: vid_commitment::<TestVersions>(
+                parent_commitment: vid_commitment(
                     &[10],
                     &[],
                     TEST_NUM_NODES_IN_VID_COMPUTATION,
-                    <TestVersions as Versions>::Base::VERSION,
+                    TEST_VERSIONS.test.base
                 ),
                 parent_view: ViewNumber::new(10),
             }),
@@ -2564,11 +2527,11 @@ mod test {
     async fn test_global_state_remove_handles_can_reduce_last_garbage_collected_view_num_simple() {
         let (bootstrap_sender, _) = async_broadcast::broadcast(10);
         let (tx_sender, _) = async_broadcast::broadcast(10);
-        let parent_commit = vid_commitment::<TestVersions>(
+        let parent_commit = vid_commitment(
             &[0],
             &[],
             TEST_NUM_NODES_IN_VID_COMPUTATION,
-            <TestVersions as Versions>::Base::VERSION,
+            TEST_VERSIONS.test.base,
         );
         let mut state = GlobalState::<TestTypes>::new(
             bootstrap_sender,
@@ -2584,11 +2547,11 @@ mod test {
 
         // We register a few builder states.
         for i in 1..=10 {
-            let vid_commit = vid_commitment::<TestVersions>(
+            let vid_commit = vid_commitment(
                 &[i],
                 &[],
                 TEST_NUM_NODES_IN_VID_COMPUTATION,
-                <TestVersions as Versions>::Base::VERSION,
+                TEST_VERSIONS.test.base,
             );
             let view = ViewNumber::new(i as u64);
 
@@ -2613,11 +2576,11 @@ mod test {
         assert_eq!(
             state.highest_view_num_builder_id,
             BuilderStateId {
-                parent_commitment: vid_commitment::<TestVersions>(
+                parent_commitment: vid_commitment(
                     &[10],
                     &[],
                     TEST_NUM_NODES_IN_VID_COMPUTATION,
-                    <TestVersions as Versions>::Base::VERSION,
+                    TEST_VERSIONS.test.base
                 ),
                 parent_view: ViewNumber::new(10),
             },
@@ -2662,11 +2625,11 @@ mod test {
     async fn test_global_state_remove_handles_can_reduce_last_garbage_collected_view_num_strict() {
         let (bootstrap_sender, _) = async_broadcast::broadcast(10);
         let (tx_sender, _) = async_broadcast::broadcast(10);
-        let parent_commit = vid_commitment::<TestVersions>(
+        let parent_commit = vid_commitment(
             &[0],
             &[],
             TEST_NUM_NODES_IN_VID_COMPUTATION,
-            <TestVersions as Versions>::Base::VERSION,
+            TEST_VERSIONS.test.base,
         );
         let mut state = GlobalState::<TestTypes>::new(
             bootstrap_sender,
@@ -2682,11 +2645,11 @@ mod test {
 
         // We register a few builder states.
         for i in 1..=10 {
-            let vid_commit = vid_commitment::<TestVersions>(
+            let vid_commit = vid_commitment(
                 &[i],
                 &[],
                 TEST_NUM_NODES_IN_VID_COMPUTATION,
-                <TestVersions as Versions>::Base::VERSION,
+                TEST_VERSIONS.test.base,
             );
             let view = ViewNumber::new(i as u64);
 
@@ -2711,11 +2674,11 @@ mod test {
         assert_eq!(
             state.highest_view_num_builder_id,
             BuilderStateId {
-                parent_commitment: vid_commitment::<TestVersions>(
+                parent_commitment: vid_commitment(
                     &[10],
                     &[],
                     TEST_NUM_NODES_IN_VID_COMPUTATION,
-                    <TestVersions as Versions>::Base::VERSION,
+                    TEST_VERSIONS.test.base
                 ),
                 parent_view: ViewNumber::new(10),
             },
@@ -2736,11 +2699,11 @@ mod test {
 
         // We re-add these removed builder_state_ids
         for i in 1..10 {
-            let vid_commit = vid_commitment::<TestVersions>(
+            let vid_commit = vid_commitment(
                 &[i],
                 &[],
                 TEST_NUM_NODES_IN_VID_COMPUTATION,
-                <TestVersions as Versions>::Base::VERSION,
+                TEST_VERSIONS.test.base,
             );
             let view = ViewNumber::new(i as u64);
 
@@ -2788,11 +2751,11 @@ mod test {
     async fn test_global_state_remove_handles_expected() {
         let (bootstrap_sender, _) = async_broadcast::broadcast(10);
         let (tx_sender, _) = async_broadcast::broadcast(10);
-        let parent_commit = vid_commitment::<TestVersions>(
+        let parent_commit = vid_commitment(
             &[0],
             &[],
             TEST_NUM_NODES_IN_VID_COMPUTATION,
-            <TestVersions as Versions>::Base::VERSION,
+            TEST_VERSIONS.test.base,
         );
         let mut state = GlobalState::<TestTypes>::new(
             bootstrap_sender,
@@ -2808,11 +2771,11 @@ mod test {
 
         // We register a few builder states.
         for i in 1..=10 {
-            let vid_commit = vid_commitment::<TestVersions>(
+            let vid_commit = vid_commitment(
                 &[i],
                 &[],
                 TEST_NUM_NODES_IN_VID_COMPUTATION,
-                <TestVersions as Versions>::Base::VERSION,
+                TEST_VERSIONS.test.base,
             );
             let view = ViewNumber::new(i as u64);
 
@@ -2843,11 +2806,11 @@ mod test {
         assert_eq!(
             state.highest_view_num_builder_id,
             BuilderStateId {
-                parent_commitment: vid_commitment::<TestVersions>(
+                parent_commitment: vid_commitment(
                     &[10],
                     &[],
                     TEST_NUM_NODES_IN_VID_COMPUTATION,
-                    <TestVersions as Versions>::Base::VERSION,
+                    TEST_VERSIONS.test.base
                 ),
                 parent_view: ViewNumber::new(10),
             },
@@ -2879,11 +2842,11 @@ mod test {
 
         for i in 0..5 {
             let builder_state_id = BuilderStateId {
-                parent_commitment: vid_commitment::<TestVersions>(
+                parent_commitment: vid_commitment(
                     &[i],
                     &[],
                     TEST_NUM_NODES_IN_VID_COMPUTATION,
-                    <TestVersions as Versions>::Base::VERSION,
+                    TEST_VERSIONS.test.base,
                 ),
                 parent_view: ViewNumber::new(i as u64),
             };
@@ -2896,11 +2859,11 @@ mod test {
 
         for i in 5..=10 {
             let builder_state_id = BuilderStateId {
-                parent_commitment: vid_commitment::<TestVersions>(
+                parent_commitment: vid_commitment(
                     &[i],
                     &[],
                     TEST_NUM_NODES_IN_VID_COMPUTATION,
-                    <TestVersions as Versions>::Base::VERSION,
+                    TEST_VERSIONS.test.base,
                 ),
                 parent_view: ViewNumber::new(i as u64),
             };
@@ -2930,12 +2893,7 @@ mod test {
             <BLSPubKey as BuilderSignatureKey>::generated_from_seed_indexed([0; 32], 0);
         let (leader_public_key, leader_private_key) =
             <BLSPubKey as SignatureKey>::generated_from_seed_indexed([0; 32], 1);
-        let parent_commit = vid_commitment::<TestVersions>(
-            &[],
-            &[],
-            TEST_NUM_NODES_IN_VID_COMPUTATION,
-            <TestVersions as Versions>::Base::VERSION,
-        );
+        let parent_commit = parent_commitment(TEST_NUM_NODES_IN_VID_COMPUTATION);
 
         let state = ProxyGlobalState::<TestTypes>::new(
             Arc::new(RwLock::new(GlobalState::<TestTypes>::new(
@@ -2959,12 +2917,7 @@ mod test {
         // This *should* just time out
         let result = state
             .available_blocks_implementation(
-                &vid_commitment::<TestVersions>(
-                    &[],
-                    &[],
-                    TEST_NUM_NODES_IN_VID_COMPUTATION,
-                    <TestVersions as Versions>::Base::VERSION,
-                ),
+                &parent_commitment(TEST_NUM_NODES_IN_VID_COMPUTATION),
                 1,
                 leader_public_key,
                 &signature,
@@ -3001,12 +2954,7 @@ mod test {
             <BLSPubKey as BuilderSignatureKey>::generated_from_seed_indexed([0; 32], 0);
         let (leader_public_key, _leader_private_key) =
             <BLSPubKey as SignatureKey>::generated_from_seed_indexed([0; 32], 1);
-        let parent_commit = vid_commitment::<TestVersions>(
-            &[],
-            &[],
-            TEST_NUM_NODES_IN_VID_COMPUTATION,
-            <TestVersions as Versions>::Base::VERSION,
-        );
+        let parent_commit = parent_commitment(TEST_NUM_NODES_IN_VID_COMPUTATION);
 
         let state = ProxyGlobalState::<TestTypes>::new(
             Arc::new(RwLock::new(GlobalState::<TestTypes>::new(
@@ -3030,12 +2978,7 @@ mod test {
         // This *should* just time out
         let result = state
             .available_blocks_implementation(
-                &vid_commitment::<TestVersions>(
-                    &[],
-                    &[],
-                    TEST_NUM_NODES_IN_VID_COMPUTATION,
-                    <TestVersions as Versions>::Base::VERSION,
-                ),
+                &parent_commitment(TEST_NUM_NODES_IN_VID_COMPUTATION),
                 1,
                 leader_public_key,
                 &signature,
@@ -3072,12 +3015,7 @@ mod test {
             <BLSPubKey as BuilderSignatureKey>::generated_from_seed_indexed([0; 32], 0);
         let (leader_public_key, leader_private_key) =
             <BLSPubKey as SignatureKey>::generated_from_seed_indexed([0; 32], 1);
-        let parent_commit = vid_commitment::<TestVersions>(
-            &[],
-            &[],
-            TEST_NUM_NODES_IN_VID_COMPUTATION,
-            <TestVersions as Versions>::Base::VERSION,
-        );
+        let parent_commit = parent_commitment(TEST_NUM_NODES_IN_VID_COMPUTATION);
 
         let state = ProxyGlobalState::<TestTypes>::new(
             Arc::new(RwLock::new(GlobalState::<TestTypes>::new(
@@ -3101,12 +3039,7 @@ mod test {
         // This *should* just time out
         let result = state
             .available_blocks_implementation(
-                &vid_commitment::<TestVersions>(
-                    &[],
-                    &[],
-                    TEST_NUM_NODES_IN_VID_COMPUTATION,
-                    <TestVersions as Versions>::Base::VERSION,
-                ),
+                &parent_commitment(TEST_NUM_NODES_IN_VID_COMPUTATION),
                 1,
                 leader_public_key,
                 &signature,
@@ -3144,12 +3077,7 @@ mod test {
             <BLSPubKey as BuilderSignatureKey>::generated_from_seed_indexed([0; 32], 0);
         let (leader_public_key, leader_private_key) =
             <BLSPubKey as SignatureKey>::generated_from_seed_indexed([0; 32], 1);
-        let parent_commit = vid_commitment::<TestVersions>(
-            &[],
-            &[],
-            TEST_NUM_NODES_IN_VID_COMPUTATION,
-            <TestVersions as Versions>::Base::VERSION,
-        );
+        let parent_commit = parent_commitment(TEST_NUM_NODES_IN_VID_COMPUTATION);
 
         let state = Arc::new(ProxyGlobalState::<TestTypes>::new(
             Arc::new(RwLock::new(GlobalState::<TestTypes>::new(
@@ -3220,12 +3148,7 @@ mod test {
             <BLSPubKey as BuilderSignatureKey>::generated_from_seed_indexed([0; 32], 0);
         let (leader_public_key, leader_private_key) =
             <BLSPubKey as SignatureKey>::generated_from_seed_indexed([0; 32], 1);
-        let parent_commit = vid_commitment::<TestVersions>(
-            &[],
-            &[],
-            TEST_NUM_NODES_IN_VID_COMPUTATION,
-            <TestVersions as Versions>::Base::VERSION,
-        );
+        let parent_commit = parent_commitment(TEST_NUM_NODES_IN_VID_COMPUTATION);
 
         let state = Arc::new(ProxyGlobalState::<TestTypes>::new(
             Arc::new(RwLock::new(GlobalState::<TestTypes>::new(
@@ -3366,12 +3289,7 @@ mod test {
             <BLSPubKey as BuilderSignatureKey>::generated_from_seed_indexed([0; 32], 0);
         let (leader_public_key, leader_private_key) =
             <BLSPubKey as SignatureKey>::generated_from_seed_indexed([0; 32], 1);
-        let parent_commit = vid_commitment::<TestVersions>(
-            &[],
-            &[],
-            TEST_NUM_NODES_IN_VID_COMPUTATION,
-            <TestVersions as Versions>::Base::VERSION,
-        );
+        let parent_commit = parent_commitment(TEST_NUM_NODES_IN_VID_COMPUTATION);
 
         let state = Arc::new(ProxyGlobalState::<TestTypes>::new(
             Arc::new(RwLock::new(GlobalState::<TestTypes>::new(
@@ -3519,12 +3437,7 @@ mod test {
             <BLSPubKey as BuilderSignatureKey>::generated_from_seed_indexed([0; 32], 0);
         let (leader_public_key, _leader_private_key) =
             <BLSPubKey as SignatureKey>::generated_from_seed_indexed([0; 32], 1);
-        let parent_commit = vid_commitment::<TestVersions>(
-            &[],
-            &[],
-            TEST_NUM_NODES_IN_VID_COMPUTATION,
-            <TestVersions as Versions>::Base::VERSION,
-        );
+        let parent_commit = parent_commitment(TEST_NUM_NODES_IN_VID_COMPUTATION);
 
         let state = Arc::new(ProxyGlobalState::<TestTypes>::new(
             Arc::new(RwLock::new(GlobalState::<TestTypes>::new(
@@ -3580,12 +3493,7 @@ mod test {
             <BLSPubKey as BuilderSignatureKey>::generated_from_seed_indexed([0; 32], 0);
         let (leader_public_key, leader_private_key) =
             <BLSPubKey as SignatureKey>::generated_from_seed_indexed([0; 32], 1);
-        let parent_commit = vid_commitment::<TestVersions>(
-            &[],
-            &[],
-            TEST_NUM_NODES_IN_VID_COMPUTATION,
-            <TestVersions as Versions>::Base::VERSION,
-        );
+        let parent_commit = parent_commitment(TEST_NUM_NODES_IN_VID_COMPUTATION);
 
         let state = Arc::new(ProxyGlobalState::<TestTypes>::new(
             Arc::new(RwLock::new(GlobalState::<TestTypes>::new(
@@ -3634,12 +3542,7 @@ mod test {
             <BLSPubKey as BuilderSignatureKey>::generated_from_seed_indexed([0; 32], 0);
         let (leader_public_key, leader_private_key) =
             <BLSPubKey as SignatureKey>::generated_from_seed_indexed([0; 32], 1);
-        let parent_commit = vid_commitment::<TestVersions>(
-            &[],
-            &[],
-            TEST_NUM_NODES_IN_VID_COMPUTATION,
-            <TestVersions as Versions>::Base::VERSION,
-        );
+        let parent_commit = parent_commitment(TEST_NUM_NODES_IN_VID_COMPUTATION);
 
         let state = Arc::new(ProxyGlobalState::<TestTypes>::new(
             Arc::new(RwLock::new(GlobalState::<TestTypes>::new(
@@ -3738,12 +3641,7 @@ mod test {
             <BLSPubKey as BuilderSignatureKey>::generated_from_seed_indexed([0; 32], 0);
         let (leader_public_key, _leader_private_key) =
             <BLSPubKey as SignatureKey>::generated_from_seed_indexed([0; 32], 1);
-        let parent_commit = vid_commitment::<TestVersions>(
-            &[],
-            &[],
-            TEST_NUM_NODES_IN_VID_COMPUTATION,
-            <TestVersions as Versions>::Base::VERSION,
-        );
+        let parent_commit = parent_commitment(TEST_NUM_NODES_IN_VID_COMPUTATION);
 
         let state = Arc::new(ProxyGlobalState::<TestTypes>::new(
             Arc::new(RwLock::new(GlobalState::<TestTypes>::new(
@@ -3800,12 +3698,7 @@ mod test {
             <BLSPubKey as BuilderSignatureKey>::generated_from_seed_indexed([0; 32], 0);
         let (leader_public_key, leader_private_key) =
             <BLSPubKey as SignatureKey>::generated_from_seed_indexed([0; 32], 1);
-        let parent_commit = vid_commitment::<TestVersions>(
-            &[],
-            &[],
-            TEST_NUM_NODES_IN_VID_COMPUTATION,
-            <TestVersions as Versions>::Base::VERSION,
-        );
+        let parent_commit = parent_commitment(TEST_NUM_NODES_IN_VID_COMPUTATION);
 
         let state = Arc::new(ProxyGlobalState::<TestTypes>::new(
             Arc::new(RwLock::new(GlobalState::<TestTypes>::new(
@@ -3855,12 +3748,7 @@ mod test {
             <BLSPubKey as BuilderSignatureKey>::generated_from_seed_indexed([0; 32], 0);
         let (leader_public_key, leader_private_key) =
             <BLSPubKey as SignatureKey>::generated_from_seed_indexed([0; 32], 1);
-        let parent_commit = vid_commitment::<TestVersions>(
-            &[],
-            &[],
-            TEST_NUM_NODES_IN_VID_COMPUTATION,
-            <TestVersions as Versions>::Base::VERSION,
-        );
+        let parent_commit = parent_commitment(TEST_NUM_NODES_IN_VID_COMPUTATION);
 
         let state = Arc::new(ProxyGlobalState::<TestTypes>::new(
             Arc::new(RwLock::new(GlobalState::<TestTypes>::new(
@@ -4106,9 +3994,10 @@ mod test {
         let view_number = ViewNumber::new(10);
 
         let quorum_proposal = {
-            let leaf: Leaf2<_> = Leaf::<TestTypes>::genesis::<TestVersions>(
+            let leaf: Leaf2<_> = Leaf::<TestTypes>::genesis(
                 &TestValidatedState::default(),
                 &TestInstanceState::default(),
+                TEST_VERSIONS.test.base,
             )
             .await
             .into();
@@ -4117,9 +4006,10 @@ mod test {
                 proposal: QuorumProposal2::<TestTypes> {
                     block_header: leaf.block_header().clone(),
                     view_number,
-                    justify_qc: QuorumCertificate2::genesis::<TestVersions>(
+                    justify_qc: QuorumCertificate2::genesis(
                         &TestValidatedState::default(),
                         &TestInstanceState::default(),
+                        TEST_VERSIONS.test,
                     )
                     .await,
                     upgrade_certificate: None,
@@ -4182,9 +4072,10 @@ mod test {
         let view_number = ViewNumber::new(10);
 
         let quorum_proposal = {
-            let leaf: Leaf2<_> = Leaf::<TestTypes>::genesis::<TestVersions>(
+            let leaf: Leaf2<_> = Leaf::<TestTypes>::genesis(
                 &TestValidatedState::default(),
                 &TestInstanceState::default(),
+                TEST_VERSIONS.test.base,
             )
             .await
             .into();
@@ -4193,9 +4084,10 @@ mod test {
                 proposal: QuorumProposal2::<TestTypes> {
                     block_header: leaf.block_header().clone(),
                     view_number,
-                    justify_qc: QuorumCertificate2::genesis::<TestVersions>(
+                    justify_qc: QuorumCertificate2::genesis(
                         &TestValidatedState::default(),
                         &TestInstanceState::default(),
+                        TEST_VERSIONS.test,
                     )
                     .await,
                     upgrade_certificate: None,
@@ -4249,9 +4141,10 @@ mod test {
         let view_number = ViewNumber::new(10);
 
         let quorum_proposal = {
-            let leaf: Leaf2<_> = Leaf::<TestTypes>::genesis::<TestVersions>(
+            let leaf: Leaf2<_> = Leaf::<TestTypes>::genesis(
                 &TestValidatedState::default(),
                 &TestInstanceState::default(),
+                TEST_VERSIONS.test.base,
             )
             .await
             .into();
@@ -4260,9 +4153,10 @@ mod test {
                 proposal: QuorumProposal2::<TestTypes> {
                     block_header: leaf.block_header().clone(),
                     view_number,
-                    justify_qc: QuorumCertificate2::genesis::<TestVersions>(
+                    justify_qc: QuorumCertificate2::genesis(
                         &TestValidatedState::default(),
                         &TestInstanceState::default(),
+                        TEST_VERSIONS.test,
                     )
                     .await,
                     upgrade_certificate: None,
@@ -4522,13 +4416,8 @@ mod test {
         tracing::debug!("start tests on correctly setting transaction status.");
 
         let mut round = 0;
-        let mut current_builder_state_id = BuilderStateId::<TestTypes> {
-            parent_commitment: vid_commitment::<TestVersions>(
-                &[],
-                &[],
-                8,
-                <TestVersions as Versions>::Base::VERSION,
-            ),
+        let mut current_builder_state_id = BuilderStateId {
+            parent_commitment: parent_commitment(8),
             parent_view: ViewNumber::genesis(),
         };
         current_builder_state_id = progress_round_without_available_block_info(
@@ -4761,5 +4650,9 @@ mod test {
             block_size_limits.max_block_size,
             BlockSizeLimits::MAX_BLOCK_SIZE_FLOOR
         );
+    }
+
+    fn parent_commitment(nodes: usize) -> VidCommitment {
+        vid_commitment(&[], &[], nodes, TEST_VERSIONS.test.base)
     }
 }

@@ -12,46 +12,44 @@ use committable::Committable;
 use hotshot_task::task::TaskState;
 use hotshot_types::{
     consensus::OuterConsensus,
-    data::UpgradeProposal,
+    data::{EpochNumber, UpgradeProposal, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     event::{Event, EventType},
     message::{Proposal, UpgradeLock},
     simple_certificate::UpgradeCertificate,
     simple_vote::{UpgradeProposalData, UpgradeVote},
     traits::{
-        block_contents::BlockHeader,
-        node_implementation::{ConsensusTime, NodeType, Versions},
-        signature_key::SignatureKey,
+        block_contents::BlockHeader, node_implementation::NodeType, signature_key::SignatureKey,
     },
-    utils::{epoch_from_block_number, EpochTransitionIndicator},
+    utils::{EpochTransitionIndicator, epoch_from_block_number},
     vote::HasViewNumber,
 };
 use hotshot_utils::anytrace::*;
 use tracing::instrument;
-use vbs::version::StaticVersionType;
+use versions::EPOCH_VERSION;
 
 use crate::{
     events::HotShotEvent,
     helpers::broadcast_event,
-    vote_collection::{handle_vote, VoteCollectorsMap},
+    vote_collection::{VoteCollectorsMap, handle_vote},
 };
 
 /// Tracks state of an upgrade task
-pub struct UpgradeTaskState<TYPES: NodeType, V: Versions> {
+pub struct UpgradeTaskState<TYPES: NodeType> {
     /// Output events to application
     pub output_event_stream: async_broadcast::Sender<Event<TYPES>>,
 
     /// View number this view is executing in.
-    pub cur_view: TYPES::View,
+    pub cur_view: ViewNumber,
 
     /// Epoch number this node is executing in.
-    pub cur_epoch: Option<TYPES::Epoch>,
+    pub cur_epoch: Option<EpochNumber>,
 
     /// Membership for Quorum Certs/votes
     pub membership_coordinator: EpochMembershipCoordinator<TYPES>,
 
     /// A map of `UpgradeVote` collector tasks
-    pub vote_collectors: VoteCollectorsMap<TYPES, UpgradeVote<TYPES>, UpgradeCertificate<TYPES>, V>,
+    pub vote_collectors: VoteCollectorsMap<TYPES, UpgradeVote<TYPES>, UpgradeCertificate<TYPES>>,
 
     /// This Nodes public key
     pub public_key: TYPES::SignatureKey,
@@ -90,7 +88,7 @@ pub struct UpgradeTaskState<TYPES: NodeType, V: Versions> {
     pub stop_voting_time: u64,
 
     /// Lock for a decided upgrade
-    pub upgrade_lock: UpgradeLock<TYPES, V>,
+    pub upgrade_lock: UpgradeLock<TYPES>,
 
     /// Reference to consensus. The replica will require a write lock on this.
     pub consensus: OuterConsensus<TYPES>,
@@ -99,14 +97,10 @@ pub struct UpgradeTaskState<TYPES: NodeType, V: Versions> {
     pub epoch_height: u64,
 }
 
-impl<TYPES: NodeType, V: Versions> UpgradeTaskState<TYPES, V> {
+impl<TYPES: NodeType> UpgradeTaskState<TYPES> {
     /// Check if we have decided on an upgrade certificate
     async fn upgraded(&self) -> bool {
-        self.upgrade_lock
-            .decided_upgrade_certificate
-            .read()
-            .await
-            .is_some()
+        self.upgrade_lock.decided_upgrade_cert().is_some()
     }
 
     /// main task event handler
@@ -116,6 +110,7 @@ impl<TYPES: NodeType, V: Versions> UpgradeTaskState<TYPES, V> {
         event: Arc<HotShotEvent<TYPES>>,
         tx: Sender<Arc<HotShotEvent<TYPES>>>,
     ) -> Result<()> {
+        let upgrade = self.upgrade_lock.upgrade();
         match event.as_ref() {
             HotShotEvent::UpgradeProposalRecv(proposal, sender) => {
                 tracing::info!("Received upgrade proposal: {proposal:?}");
@@ -125,7 +120,7 @@ impl<TYPES: NodeType, V: Versions> UpgradeTaskState<TYPES, V> {
                 // Skip voting if the version has already been upgraded.
                 ensure!(
                     !self.upgraded().await,
-                    info!("Already upgraded to {:?}; not voting.", V::Upgrade::VERSION)
+                    info!("Already upgraded to {upgrade:?}; not voting.")
                 );
 
                 let time = SystemTime::now()
@@ -148,9 +143,9 @@ impl<TYPES: NodeType, V: Versions> UpgradeTaskState<TYPES, V> {
 
                 // If the proposal does not match our upgrade target, we immediately exit.
                 ensure!(
-                    proposal.data.upgrade_proposal.new_version_hash == V::UPGRADE_HASH
-                        && proposal.data.upgrade_proposal.old_version == V::Base::VERSION
-                        && proposal.data.upgrade_proposal.new_version == V::Upgrade::VERSION,
+                    proposal.data.upgrade_proposal.new_version_hash == *upgrade.hash()
+                        && proposal.data.upgrade_proposal.old_version == upgrade.base
+                        && proposal.data.upgrade_proposal.new_version == upgrade.target,
                     "Proposal does not match our upgrade target"
                 );
 
@@ -160,8 +155,8 @@ impl<TYPES: NodeType, V: Versions> UpgradeTaskState<TYPES, V> {
                     proposal.data.view_number()
                 );
 
-                let epoch_upgrade_checks = if V::Upgrade::VERSION >= V::Epochs::VERSION
-                    && V::Base::VERSION < V::Epochs::VERSION
+                let epoch_upgrade_checks = if upgrade.target >= EPOCH_VERSION
+                    && upgrade.base < EPOCH_VERSION
                 {
                     let consensus_reader = self.consensus.read().await;
 
@@ -224,7 +219,7 @@ impl<TYPES: NodeType, V: Versions> UpgradeTaskState<TYPES, V> {
                 // cause an overflow error.
                 // TODO Come back to this - we probably don't need this, but we should also never receive a UpgradeCertificate where this fails, investigate block ready so it doesn't make one for the genesis block
                 ensure!(
-                    self.cur_view != TYPES::View::genesis()
+                    self.cur_view != ViewNumber::genesis()
                         && *view >= self.cur_view.saturating_sub(1),
                     warn!(
                         "Discarding old upgrade proposal; the proposal is for view {view}, but \
@@ -278,7 +273,7 @@ impl<TYPES: NodeType, V: Versions> UpgradeTaskState<TYPES, V> {
                 tracing::debug!("Sending upgrade vote {:?}", vote.view_number());
                 broadcast_event(Arc::new(HotShotEvent::UpgradeVoteSend(vote)), &tx).await;
             },
-            HotShotEvent::UpgradeVoteRecv(ref vote) => {
+            HotShotEvent::UpgradeVoteRecv(vote) => {
                 tracing::debug!("Upgrade vote recv, Main Task {:?}", vote.view_number());
 
                 // Check if we are the leader.
@@ -330,7 +325,7 @@ impl<TYPES: NodeType, V: Versions> UpgradeTaskState<TYPES, V> {
                     .membership_coordinator
                     .membership_for_epoch(self.cur_epoch)
                     .await?
-                    .leader(TYPES::View::new(
+                    .leader(ViewNumber::new(
                         view + TYPES::UPGRADE_CONSTANTS.propose_offset,
                     ))
                     .await?;
@@ -339,8 +334,8 @@ impl<TYPES: NodeType, V: Versions> UpgradeTaskState<TYPES, V> {
                 let new_version_first_view = view + TYPES::UPGRADE_CONSTANTS.finish_offset;
                 let decide_by = view + TYPES::UPGRADE_CONSTANTS.decide_by_offset;
 
-                let epoch_upgrade_checks = if V::Upgrade::VERSION >= V::Epochs::VERSION
-                    && V::Base::VERSION < V::Epochs::VERSION
+                let epoch_upgrade_checks = if upgrade.target >= EPOCH_VERSION
+                    && upgrade.base < EPOCH_VERSION
                 {
                     let consensus_reader = self.consensus.read().await;
 
@@ -387,17 +382,17 @@ impl<TYPES: NodeType, V: Versions> UpgradeTaskState<TYPES, V> {
                     && leader == self.public_key
                 {
                     let upgrade_proposal_data = UpgradeProposalData {
-                        old_version: V::Base::VERSION,
-                        new_version: V::Upgrade::VERSION,
-                        new_version_hash: V::UPGRADE_HASH.to_vec(),
-                        old_version_last_view: TYPES::View::new(old_version_last_view),
-                        new_version_first_view: TYPES::View::new(new_version_first_view),
-                        decide_by: TYPES::View::new(decide_by),
+                        old_version: upgrade.base,
+                        new_version: upgrade.target,
+                        new_version_hash: upgrade.hash().into(),
+                        old_version_last_view: ViewNumber::new(old_version_last_view),
+                        new_version_first_view: ViewNumber::new(new_version_first_view),
+                        decide_by: ViewNumber::new(decide_by),
                     };
 
                     let upgrade_proposal = UpgradeProposal {
                         upgrade_proposal: upgrade_proposal_data.clone(),
-                        view_number: TYPES::View::new(
+                        view_number: ViewNumber::new(
                             view + TYPES::UPGRADE_CONSTANTS.propose_offset,
                         ),
                     };
@@ -432,9 +427,9 @@ impl<TYPES: NodeType, V: Versions> UpgradeTaskState<TYPES, V> {
     }
 }
 
-#[async_trait]
 /// task state implementation for the upgrade task
-impl<TYPES: NodeType, V: Versions> TaskState for UpgradeTaskState<TYPES, V> {
+#[async_trait]
+impl<TYPES: NodeType> TaskState for UpgradeTaskState<TYPES> {
     type Event = HotShotEvent<TYPES>;
 
     async fn handle_event(

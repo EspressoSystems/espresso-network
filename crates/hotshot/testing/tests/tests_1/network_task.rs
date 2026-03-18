@@ -12,7 +12,7 @@ use std::{
 use async_broadcast::Sender;
 use async_lock::RwLock;
 use hotshot::traits::implementations::MemoryNetwork;
-use hotshot_example_types::node_types::{MemoryImpl, TestTypes, TestVersions};
+use hotshot_example_types::node_types::{MemoryImpl, TEST_VERSIONS, TestTypes};
 use hotshot_task::task::{ConsensusTaskRegistry, Task};
 use hotshot_task_impls::{events::HotShotEvent, network::NetworkEventTaskState};
 use hotshot_testing::{
@@ -25,7 +25,7 @@ use hotshot_types::{
     message::UpgradeLock,
     traits::{
         election::Membership,
-        node_implementation::{ConsensusTime, NodeType},
+        node_implementation::{NodeType},
     },
 };
 use tokio::time::timeout;
@@ -41,12 +41,12 @@ async fn test_network_task() {
     use futures::StreamExt;
     use hotshot_types::epoch_membership::EpochMembershipCoordinator;
 
-    let builder: TestDescription<TestTypes, MemoryImpl, TestVersions> =
+    let builder: TestDescription<TestTypes, MemoryImpl> =
         TestDescription::default_multiple_rounds();
-    let upgrade_lock = UpgradeLock::<TestTypes, TestVersions>::new();
+    let upgrade_lock = UpgradeLock::<TestTypes>::new(TEST_VERSIONS.test);
     let node_id = 1;
     let (handle, _, _, node_key_map) =
-        build_system_handle::<TestTypes, MemoryImpl, TestVersions>(node_id).await;
+        build_system_handle::<TestTypes, MemoryImpl>(node_id).await;
     let launcher = builder.gen_launcher();
 
     let network = (launcher.resource_generators.channel_generator)(node_id).await;
@@ -71,7 +71,7 @@ async fn test_network_task() {
     )));
     let coordinator =
         EpochMembershipCoordinator::new(membership, config.epoch_height, &storage.clone());
-    let network_state: NetworkEventTaskState<TestTypes, TestVersions, MemoryNetwork<_>, _> =
+    let network_state: NetworkEventTaskState<TestTypes, MemoryNetwork<_>, _> =
         NetworkEventTaskState {
             id: node_id,
             network: network.clone(),
@@ -91,7 +91,7 @@ async fn test_network_task() {
     let task = Task::new(network_state, tx.clone(), rx);
     task_reg.run_task(task);
 
-    let mut generator = TestViewGenerator::<TestVersions>::generate(coordinator, node_key_map);
+    let mut generator = TestViewGenerator::generate(coordinator, node_key_map, TEST_VERSIONS.test);
     let view = generator.next().await.unwrap();
 
     let (out_tx_internal, mut out_rx_internal) = async_broadcast::broadcast(10);
@@ -130,7 +130,7 @@ async fn test_network_external_mnessages() {
     use hotshot_testing::helpers::build_system_handle_from_launcher;
     use hotshot_types::message::RecipientList;
 
-    let builder: TestDescription<TestTypes, MemoryImpl, TestVersions> =
+    let builder: TestDescription<TestTypes, MemoryImpl> =
         TestDescription::default_multiple_rounds();
 
     let launcher = builder.gen_launcher();
@@ -138,7 +138,7 @@ async fn test_network_external_mnessages() {
     let mut handles = vec![];
     let mut event_streams = vec![];
     for i in 0..launcher.metadata.test_config.num_nodes_with_stake.into() {
-        let handle = build_system_handle_from_launcher::<TestTypes, MemoryImpl, TestVersions>(
+        let handle = build_system_handle_from_launcher::<TestTypes, MemoryImpl>(
             i.try_into().unwrap(),
             &launcher,
         )
@@ -221,11 +221,11 @@ async fn test_network_storage_fail() {
     use futures::StreamExt;
     use hotshot_types::epoch_membership::EpochMembershipCoordinator;
 
-    let builder: TestDescription<TestTypes, MemoryImpl, TestVersions> =
+    let builder: TestDescription<TestTypes, MemoryImpl> =
         TestDescription::default_multiple_rounds();
     let node_id = 1;
     let (handle, _, _, node_key_map) =
-        build_system_handle::<TestTypes, MemoryImpl, TestVersions>(node_id).await;
+        build_system_handle::<TestTypes, MemoryImpl>(node_id).await;
     let launcher = builder.gen_launcher();
 
     let network = (launcher.resource_generators.channel_generator)(node_id).await;
@@ -237,7 +237,7 @@ async fn test_network_storage_fail() {
     let validator_config = (launcher.resource_generators.validator_config)(node_id);
     let public_key = validator_config.public_key;
     let all_nodes = config.known_nodes_with_stake.clone();
-    let upgrade_lock = UpgradeLock::<TestTypes, TestVersions>::new();
+    let upgrade_lock = UpgradeLock::<TestTypes>::new(TEST_VERSIONS.test);
 
     let membership = Arc::new(RwLock::new(<TestTypes as NodeType>::Membership::new::<
         MemoryImpl,
@@ -251,7 +251,7 @@ async fn test_network_storage_fail() {
     )));
     let coordinator =
         EpochMembershipCoordinator::new(membership, config.epoch_height, &storage.clone());
-    let network_state: NetworkEventTaskState<TestTypes, TestVersions, MemoryNetwork<_>, _> =
+    let network_state: NetworkEventTaskState<TestTypes, MemoryNetwork<_>, _> =
         NetworkEventTaskState {
             id: node_id,
             network: network.clone(),
@@ -271,7 +271,7 @@ async fn test_network_storage_fail() {
     let task = Task::new(network_state, tx.clone(), rx);
     task_reg.run_task(task);
 
-    let mut generator = TestViewGenerator::<TestVersions>::generate(coordinator, node_key_map);
+    let mut generator = TestViewGenerator::generate(coordinator, node_key_map, TEST_VERSIONS.test);
     let view = generator.next().await.unwrap();
 
     let (out_tx_internal, mut out_rx_internal): (Sender<Arc<HotShotEvent<TestTypes>>>, _) =

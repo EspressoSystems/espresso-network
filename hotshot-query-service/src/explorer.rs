@@ -26,15 +26,15 @@ use hotshot_types::traits::node_implementation::NodeType;
 pub use monetary_value::*;
 pub use query_data::*;
 use serde::{Deserialize, Serialize};
-use tide_disco::{api::ApiError, method::ReadState, Api, StatusCode};
+use tide_disco::{Api, StatusCode, api::ApiError, method::ReadState};
 pub use traits::*;
 use vbs::version::StaticVersionType;
 
 use self::errors::InvalidLimit;
 use crate::{
+    Header, Payload, Transaction,
     api::load_api,
     availability::{QueryableHeader, QueryablePayload},
-    Header, Payload, Transaction,
 };
 
 /// [Error] is an enum that represents the various errors that can be returned
@@ -398,18 +398,17 @@ mod test {
     use std::{cmp::min, time::Duration};
 
     use futures::StreamExt;
-    use portpicker::pick_unused_port;
     use surf_disco::Client;
+    use test_utils::reserve_tcp_port;
     use tide_disco::App;
 
     use super::*;
     use crate::{
-        availability,
+        ApiState, Error, availability,
         testing::{
             consensus::{MockNetwork, MockSqlDataSource},
-            mocks::{mock_transaction, MockBase, MockTypes, MockVersions},
+            mocks::{MockBase, MockTypes, mock_transaction},
         },
-        ApiState, Error,
     };
 
     async fn validate(client: &Client<Error, MockBase>) {
@@ -863,11 +862,11 @@ mod test {
 
     async fn test_api_helper() {
         // Create the consensus network.
-        let mut network = MockNetwork::<MockSqlDataSource, MockVersions>::init().await;
+        let mut network = MockNetwork::<MockSqlDataSource>::init().await;
         network.start().await;
 
         // Start the web server.
-        let port = pick_unused_port().unwrap();
+        let port = reserve_tcp_port().unwrap();
         let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
         app.register_module(
             "explorer",

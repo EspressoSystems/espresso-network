@@ -34,7 +34,7 @@
     "ns_table": {
       "bytes": "AwAAAO7/wAAcBgAAobC5EkAOAABksAWiXBQAAA=="
     },
-    "payload_commitment": "HASH~u-mEo1mwByROUhnvO7pBFitcD0UEvruK-b8WONkKoCLQ",
+    "payload_commitment": "AvidMCommit~GVev7Msgzxsj2Kfx6HfqnNoK4USAnZ602eXda3Ic0zrY",
     "reward_merkle_tree_root": "MERKLE_COMM~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAUAAAAAAAAAAAAAAAAAAAAKA",
     "timestamp": 789
   },

@@ -3,17 +3,10 @@
 [package]
 name = "sequencer-sqlite"
 version = "0.1.0"
-edition = "2021"
-
-[features]
-fee = ["sequencer/fee"]
-pos = ["sequencer/pos"]
-drb-and-header = ["sequencer/drb-and-header"]
-da-upgrade = ["sequencer/da-upgrade"]
-default = ["fee", "pos", "drb-and-header", "da-upgrade"]
+edition.workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
 # disable default features to allow including versions on demand
-sequencer = { path = "../sequencer", default-features = false, features = ["embedded-db"] }
+sequencer = { workspace = true, default-features = false, features = ["embedded-db"] }
 tokio = { workspace = true }

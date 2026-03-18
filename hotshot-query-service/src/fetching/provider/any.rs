@@ -18,10 +18,10 @@ use hotshot_types::{data::VidCommon, traits::node_implementation::NodeType};
 
 use super::{Provider, Request};
 use crate::{
+    Payload,
     availability::LeafQueryData,
     data_source::AvailabilityProvider,
     fetching::request::{LeafRequest, PayloadRequest, VidCommonRequest},
-    Payload,
 };
 
 /// Blanket trait combining [`Debug`] and [`Provider`].
@@ -208,22 +208,22 @@ where
 #[cfg(all(test, not(target_os = "windows")))]
 mod test {
     use futures::stream::StreamExt;
-    use portpicker::pick_unused_port;
+    use test_utils::reserve_tcp_port;
     use tide_disco::App;
     use vbs::version::StaticVersionType;
 
     use super::*;
     use crate::{
-        availability::{define_api, AvailabilityDataSource, UpdateAvailabilityData},
+        ApiState, Error,
+        availability::{AvailabilityDataSource, UpdateAvailabilityData, define_api},
         data_source::storage::sql::testing::TmpDb,
         fetching::provider::{NoFetching, QueryServiceProvider},
         task::BackgroundTask,
         testing::{
             consensus::{MockDataSource, MockNetwork},
-            mocks::{MockBase, MockTypes, MockVersions},
+            mocks::{MockBase, MockTypes},
         },
         types::HeightIndexed,
-        ApiState, Error,
     };
 
     type Provider = AnyProvider<MockTypes>;
@@ -231,10 +231,10 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_fetch_first_provider_fails() {
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
+        let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
-        let port = pick_unused_port().unwrap();
+        let port = reserve_tcp_port().unwrap();
         let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
         app.register_module(
             "availability",

@@ -1,4 +1,4 @@
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{Context, Result, bail, ensure};
 use espresso_types::{Header, NamespaceId, NsProof, Transaction};
 use hotshot_types::data::VidCommon;
 use serde::{Deserialize, Serialize};
@@ -69,9 +69,10 @@ impl NamespaceProof {
 mod test {
     use espresso_types::{Leaf2, NodeState};
     use hotshot_query_service::availability::TransactionIndex;
+    use versions::FEE_VERSION;
 
     use super::*;
-    use crate::testing::{EnableEpochs, TestClient};
+    use crate::testing::TestClient;
 
     #[tokio::test]
     #[test_log::test]
@@ -108,7 +109,7 @@ mod test {
     #[tokio::test]
     #[test_log::test]
     async fn test_namespace_proof_empty() {
-        let leaf = Leaf2::genesis::<EnableEpochs>(&Default::default(), &NodeState::mock()).await;
+        let leaf = Leaf2::genesis(&Default::default(), &NodeState::mock(), FEE_VERSION).await;
         let proof = NamespaceProof::not_present();
 
         assert_eq!(

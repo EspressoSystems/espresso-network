@@ -18,24 +18,24 @@ use anyhow::bail;
 use async_trait::async_trait;
 use committable::Committable;
 use derivative::Derivative;
-use futures::{future::BoxFuture, FutureExt};
+use futures::{FutureExt, future::BoxFuture};
 use hotshot_types::traits::{block_contents::BlockHeader, node_implementation::NodeType};
 
 use super::{
-    block::fetch_block_with_header, leaf::fetch_leaf_with_callbacks,
-    vid::fetch_vid_common_with_header, AvailabilityProvider, Fetcher,
+    AvailabilityProvider, Fetcher, block::fetch_block_with_header, leaf::fetch_leaf_with_callbacks,
+    vid::fetch_vid_common_with_header,
 };
 use crate::{
+    Header, Payload, QueryError, QueryResult,
     availability::{BlockId, QueryableHeader, QueryablePayload},
     data_source::{
         fetching::{Fetchable, HeaderQueryData, LeafQueryData, Notifiers},
         storage::{
-            pruning::PrunedHeightStorage, AvailabilityStorage, NodeStorage,
-            UpdateAvailabilityStorage,
+            AvailabilityStorage, NodeStorage, UpdateAvailabilityStorage,
+            pruning::PrunedHeightStorage,
         },
         update::VersionedDataSource,
     },
-    Header, Payload, QueryError, QueryResult,
 };
 
 impl<Types: NodeType> From<LeafQueryData<Types>> for HeaderQueryData<Types> {

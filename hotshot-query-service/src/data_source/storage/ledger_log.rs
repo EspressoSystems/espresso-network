@@ -15,10 +15,12 @@
 use std::{collections::VecDeque, fmt::Debug};
 
 use atomic_store::{
-    append_log, load_store::BincodeLoadStore, AppendLog, AtomicStoreLoader, PersistenceError,
+    AppendLog, AtomicStoreLoader, PersistenceError, append_log, load_store::BincodeLoadStore,
 };
-use serde::{de::DeserializeOwned, Serialize};
-use tracing::{debug, warn};
+use serde::{Serialize, de::DeserializeOwned};
+use tracing::{debug, instrument, warn};
+
+use crate::node::{ResourceSyncStatus, SyncStatus, SyncStatusRange};
 
 /// A caching append log for ledger objects.
 #[derive(Debug)]
@@ -200,10 +202,88 @@ impl<T: Serialize + DeserializeOwned + Clone> LedgerLog<T> {
         Ok(())
     }
 
-    pub(crate) fn missing(&self, to_height: usize) -> usize {
-        // The number of missing objects is the number missing from the sequence we currently have,
-        // plus any extra objects at the end if this sequence is shorter than `to_height`.
-        self.missing + to_height.saturating_sub(self.iter().len())
+    /// Find the sync status of this resource.
+    ///
+    /// This function will find all consecutive ranges of a given [`SyncStatus`] in
+    /// `[0, block_height)`. The predicate `is_missing` can be used to consider an object missing
+    /// even if there is actually an object present in the database (for example if some field is
+    /// [`None`]).
+    #[instrument(skip(self, is_missing))]
+    pub(crate) fn sync_status(
+        &self,
+        start: usize,
+        end: usize,
+        is_missing: impl Fn(&T) -> bool,
+    ) -> ResourceSyncStatus {
+        let mut missing = 0;
+        let mut ranges = vec![];
+
+        // Iterate over all objects, finding ranges of consecutive present objects. In between each
+        // present range, we will interpolate a missing range.
+        let mut curr: Option<SyncStatusRange> = None;
+        for (i, obj) in self.iter().enumerate().skip(start) {
+            let Some(obj) = obj else {
+                tracing::debug!(i, "skipping placeholder object");
+                continue;
+            };
+            if is_missing(&obj) {
+                tracing::debug!(i, "skipping object which is considered missing");
+                continue;
+            }
+
+            let prev = if let Some(range) = &mut curr {
+                if i == range.end {
+                    // This object extends the current range of present objects.
+                    range.end += 1;
+                    continue;
+                }
+
+                // This object starts a new range of present objects. Save the previous range.
+                ranges.push(*range);
+                range.end
+            } else {
+                0
+            };
+
+            if i > prev {
+                // Insert a missing range between the previous present range and the newfound
+                // present object.
+                ranges.push(SyncStatusRange {
+                    start: prev,
+                    end: i,
+                    status: SyncStatus::Missing,
+                });
+                missing += i - prev;
+            }
+
+            // Start a new range of present objects.
+            curr = Some(SyncStatusRange {
+                start: i,
+                end: i + 1,
+                status: SyncStatus::Present,
+            });
+        }
+
+        // Save the last present range.
+        if let Some(range) = curr {
+            ranges.push(range);
+        }
+
+        // Insert a potential missing range at the end of the chain.
+        let prev = match ranges.last() {
+            Some(range) => range.end,
+            None => 0,
+        };
+        if prev < end {
+            ranges.push(SyncStatusRange {
+                start: prev,
+                end,
+                status: SyncStatus::Missing,
+            });
+            missing += end - prev;
+        }
+
+        ResourceSyncStatus { missing, ranges }
     }
 }
 

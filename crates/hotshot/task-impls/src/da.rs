@@ -11,7 +11,10 @@ use async_trait::async_trait;
 use hotshot_task::task::TaskState;
 use hotshot_types::{
     consensus::{Consensus, OuterConsensus, PayloadWithMetadata},
-    data::{vid_commitment, vid_disperse::vid_total_weight, DaProposal2, PackedBundle},
+    data::{
+        DaProposal2, EpochNumber, PackedBundle, ViewNumber, vid_commitment,
+        vid_disperse::vid_total_weight,
+    },
     epoch_membership::EpochMembershipCoordinator,
     event::{Event, EventType},
     message::{Proposal, UpgradeLock},
@@ -19,13 +22,13 @@ use hotshot_types::{
     simple_vote::{DaData2, DaVote2},
     storage_metrics::StorageMetricsValue,
     traits::{
+        BlockPayload, EncodeBytes,
         network::ConnectedNetwork,
-        node_implementation::{NodeImplementation, NodeType, Versions},
+        node_implementation::{NodeImplementation, NodeType},
         signature_key::SignatureKey,
         storage::Storage,
-        BlockPayload, EncodeBytes,
     },
-    utils::{epoch_from_block_number, is_ge_epoch_root, is_last_block, EpochTransitionIndicator},
+    utils::{EpochTransitionIndicator, epoch_from_block_number, is_ge_epoch_root, is_last_block},
     vote::HasViewNumber,
 };
 use hotshot_utils::anytrace::*;
@@ -36,19 +39,19 @@ use tracing::instrument;
 use crate::{
     events::HotShotEvent,
     helpers::broadcast_event,
-    vote_collection::{handle_vote, VoteCollectorsMap},
+    vote_collection::{VoteCollectorsMap, handle_vote},
 };
 
 /// Tracks state of a DA task
-pub struct DaTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> {
+pub struct DaTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>> {
     /// Output events to application
     pub output_event_stream: async_broadcast::Sender<Event<TYPES>>,
 
     /// View number this view is executing in.
-    pub cur_view: TYPES::View,
+    pub cur_view: ViewNumber,
 
     /// Epoch number this node is executing in.
-    pub cur_epoch: Option<TYPES::Epoch>,
+    pub cur_epoch: Option<EpochNumber>,
 
     /// Reference to consensus. Leader will require a read lock on this.
     pub consensus: OuterConsensus<TYPES>,
@@ -62,7 +65,7 @@ pub struct DaTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Version
     pub network: Arc<I::Network>,
 
     /// A map of `DaVote` collector tasks.
-    pub vote_collectors: VoteCollectorsMap<TYPES, DaVote2<TYPES>, DaCertificate2<TYPES>, V>,
+    pub vote_collectors: VoteCollectorsMap<TYPES, DaVote2<TYPES>, DaCertificate2<TYPES>>,
 
     /// This Nodes public key
     pub public_key: TYPES::SignatureKey,
@@ -80,10 +83,10 @@ pub struct DaTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Version
     pub storage_metrics: Arc<StorageMetricsValue>,
 
     /// Lock for a decided upgrade
-    pub upgrade_lock: UpgradeLock<TYPES, V>,
+    pub upgrade_lock: UpgradeLock<TYPES>,
 }
 
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYPES, I, V> {
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> DaTaskState<TYPES, I> {
     /// main task event handler
     #[instrument(skip_all, fields(id = self.id, view = *self.cur_view, epoch = self.cur_epoch.map(|x| *x)), name = "DA Main Task", level = "error", target = "DaTaskState")]
     pub async fn handle(
@@ -193,16 +196,15 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                 let total_weight =
                     vid_total_weight::<TYPES>(&membership.stake_table().await, epoch_number);
 
-                let version = self.upgrade_lock.version_infallible(view_number).await;
+                let version = self.upgrade_lock.version_infallible(view_number);
 
                 let txns = Arc::clone(&proposal.data.encoded_transactions);
                 let txns_clone = Arc::clone(&txns);
                 let metadata = proposal.data.metadata.encode();
                 let metadata_clone = metadata.clone();
-                let payload_commitment = spawn_blocking(move || {
-                    vid_commitment::<V>(&txns, &metadata, total_weight, version)
-                })
-                .await;
+                let payload_commitment =
+                    spawn_blocking(move || vid_commitment(&txns, &metadata, total_weight, version))
+                        .await;
                 let payload_commitment = payload_commitment.unwrap();
                 let next_epoch_payload_commitment = if matches!(
                     proposal.data.epoch_transition_indicator,
@@ -210,7 +212,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                 ) && self
                     .upgrade_lock
                     .epochs_enabled(proposal.data.view_number())
-                    .await
                     && epoch_number.is_some()
                 {
                     let next_epoch_total_weight = vid_total_weight::<TYPES>(
@@ -223,7 +224,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                     );
 
                     let commit_result = spawn_blocking(move || {
-                        vid_commitment::<V>(
+                        vid_commitment(
                             &txns_clone,
                             &metadata_clone,
                             next_epoch_total_weight,
@@ -325,7 +326,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                     let membership = membership.clone();
                     spawn(async move {
                         for target_epoch in target_epochs {
-                            Consensus::calculate_and_update_vid::<V>(
+                            Consensus::calculate_and_update_vid(
                                 OuterConsensus::new(Arc::clone(&consensus.inner_consensus)),
                                 view_number,
                                 target_epoch,
@@ -359,7 +360,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                     });
                 }
             },
-            HotShotEvent::DaVoteRecv(ref vote) => {
+            HotShotEvent::DaVoteRecv(vote) => {
                 tracing::debug!("DA vote recv, Main Task {}", vote.view_number());
                 // Check if we are the leader and the vote is from the sender.
                 let view = vote.view_number();
@@ -446,34 +447,33 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                 // And we aren't in an epoch greater than the high qc's epoch.  In other words
                 // we expect to propose to both epochs if the next block after our current high QC is
                 // going to be a transition block.  We most likely will propose the high QC's block height + 1.
-                let epoch_transition_indicator =
-                    if self.upgrade_lock.epochs_enabled(view_number).await {
-                        match (high_qc_block_number, self.cur_epoch) {
-                            (Some(block_number), Some(cur_epoch)) => {
-                                let epoch = epoch_from_block_number(
-                                    block_number,
-                                    self.membership_coordinator.epoch_height,
-                                );
-                                if epoch < *cur_epoch {
-                                    // We are in a new epoch, we can't be in transition
-                                    EpochTransitionIndicator::NotInTransition
-                                } else if !is_last_block(
-                                    block_number,
-                                    self.membership_coordinator.epoch_height,
-                                ) && is_ge_epoch_root(
-                                    block_number,
-                                    self.membership_coordinator.epoch_height,
-                                ) {
-                                    EpochTransitionIndicator::InTransition
-                                } else {
-                                    EpochTransitionIndicator::NotInTransition
-                                }
-                            },
-                            _ => EpochTransitionIndicator::NotInTransition,
-                        }
-                    } else {
-                        EpochTransitionIndicator::NotInTransition
-                    };
+                let epoch_transition_indicator = if self.upgrade_lock.epochs_enabled(view_number) {
+                    match (high_qc_block_number, self.cur_epoch) {
+                        (Some(block_number), Some(cur_epoch)) => {
+                            let epoch = epoch_from_block_number(
+                                block_number,
+                                self.membership_coordinator.epoch_height,
+                            );
+                            if epoch < *cur_epoch {
+                                // We are in a new epoch, we can't be in transition
+                                EpochTransitionIndicator::NotInTransition
+                            } else if !is_last_block(
+                                block_number,
+                                self.membership_coordinator.epoch_height,
+                            ) && is_ge_epoch_root(
+                                block_number,
+                                self.membership_coordinator.epoch_height,
+                            ) {
+                                EpochTransitionIndicator::InTransition
+                            } else {
+                                EpochTransitionIndicator::NotInTransition
+                            }
+                        },
+                        _ => EpochTransitionIndicator::NotInTransition,
+                    }
+                } else {
+                    EpochTransitionIndicator::NotInTransition
+                };
 
                 drop(consensus_reader);
 
@@ -523,11 +523,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
     }
 }
 
-#[async_trait]
 /// task state implementation for DA Task
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TaskState
-    for DaTaskState<TYPES, I, V>
-{
+#[async_trait]
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TaskState for DaTaskState<TYPES, I> {
     type Event = HotShotEvent<TYPES>;
 
     async fn handle_event(

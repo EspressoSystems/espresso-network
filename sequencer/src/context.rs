@@ -9,27 +9,27 @@ use anyhow::Context;
 use async_lock::RwLock;
 use derivative::Derivative;
 use espresso_types::{
-    v0::traits::{EventConsumer as PersistenceEventConsumer, SequencerPersistence},
     NodeState, PubKey, Transaction, ValidatedState,
+    v0::traits::{EventConsumer as PersistenceEventConsumer, SequencerPersistence},
 };
 use futures::{
-    future::{join_all, Future},
+    future::{Future, join_all},
     stream::{Stream, StreamExt},
 };
 use hotshot::{
-    types::{Event, EventType, SystemContextHandle},
     SystemContext,
+    types::{Event, EventType, SystemContextHandle},
 };
 use hotshot_events_service::events_source::{EventConsumer, EventsStreamer};
 use hotshot_orchestrator::client::OrchestratorClient;
 use hotshot_types::{
+    PeerConfig, ValidatorConfig,
     consensus::ConsensusMetricsValue,
     data::{Leaf2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     network::NetworkConfig,
     storage_metrics::StorageMetricsValue,
-    traits::{metrics::Metrics, network::ConnectedNetwork, node_implementation::Versions},
-    PeerConfig, ValidatorConfig,
+    traits::{metrics::Metrics, network::ConnectedNetwork},
 };
 use parking_lot::Mutex;
 use request_response::RequestResponseConfig;
@@ -38,34 +38,34 @@ use tracing::{Instrument, Level};
 use url::Url;
 
 use crate::{
+    Node, SeqTypes, SequencerApiVersion,
     catchup::ParallelStateCatchup,
     external_event_handler::ExternalEventHandler,
     proposal_fetcher::ProposalFetcherConfig,
     request_response::{
+        RequestResponseProtocol,
         data_source::{DataSource, Storage as RequestResponseStorage},
         network::Sender as RequestResponseSender,
         recipient_source::RecipientSource,
-        RequestResponseProtocol,
     },
-    state_signature::StateSigner,
-    Node, SeqTypes, SequencerApiVersion,
+    state_signature::{self, StateSigner},
 };
 
 /// The consensus handle
-pub type Consensus<N, P, V> = SystemContextHandle<SeqTypes, Node<N, P>, V>;
+pub type Consensus<N, P> = SystemContextHandle<SeqTypes, Node<N, P>>;
 
 /// The sequencer context contains a consensus handle and other sequencer specific information.
 #[derive(Derivative, Clone)]
 #[derivative(Debug(bound = ""))]
-pub struct SequencerContext<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> {
+pub struct SequencerContext<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> {
     /// The consensus handle
     #[derivative(Debug = "ignore")]
-    handle: Arc<RwLock<Consensus<N, P, V>>>,
+    handle: Arc<RwLock<Consensus<N, P>>>,
 
     /// The request-response protocol
     #[derivative(Debug = "ignore")]
     #[allow(dead_code)]
-    pub request_response_protocol: RequestResponseProtocol<Node<N, P>, V, N, P>,
+    pub request_response_protocol: RequestResponseProtocol<Node<N, P>, N, P>,
 
     /// Context for generating state signatures.
     state_signer: Arc<RwLock<StateSigner<SequencerApiVersion>>>,
@@ -90,11 +90,12 @@ pub struct SequencerContext<N: ConnectedNetwork<PubKey>, P: SequencerPersistence
     validator_config: ValidatorConfig<SeqTypes>,
 }
 
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> SequencerContext<N, P, V> {
+impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P> {
     #[tracing::instrument(skip_all, fields(node_id = instance_state.node_id))]
     #[allow(clippy::too_many_arguments)]
     pub async fn init(
         network_config: NetworkConfig<SeqTypes>,
+        upgrade: versions::Upgrade,
         validator_config: ValidatorConfig<SeqTypes>,
         coordinator: EpochMembershipCoordinator<SeqTypes>,
         instance_state: NodeState,
@@ -106,7 +107,6 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
         metrics: &dyn Metrics,
         stake_table_capacity: usize,
         event_consumer: impl PersistenceEventConsumer + 'static,
-        _: V,
         proposal_fetcher_cfg: ProposalFetcherConfig,
     ) -> anyhow::Result<Self> {
         let config = &network_config.config;
@@ -123,7 +123,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
 
         // Load saved consensus state from storage.
         let (initializer, anchor_view) = persistence
-            .load_consensus_state::<V>(instance_state.clone())
+            .load_consensus_state(instance_state.clone(), upgrade)
             .await?;
 
         tracing::warn!(
@@ -134,6 +134,8 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
         let stake_table = config.hotshot_stake_table();
         let stake_table_commit = stake_table.commitment(stake_table_capacity)?;
         let stake_table_epoch = None;
+        let should_vote =
+            state_signature::should_vote(&stake_table, &validator_config.state_public_key);
 
         let event_streamer = Arc::new(RwLock::new(EventsStreamer::<SeqTypes>::new(
             stake_table.0,
@@ -146,6 +148,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
             validator_config.state_private_key.clone(),
             instance_state.node_id,
             config.clone(),
+            upgrade,
             coordinator.clone(),
             network.clone(),
             initializer,
@@ -162,6 +165,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
             stake_table_commit,
             stake_table_epoch,
             stake_table_capacity,
+            should_vote,
         );
         if let Some(url) = state_relay_server {
             state_signer = state_signer.with_relay_server(url);
@@ -211,7 +215,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
 
         // Create the external event handler
         let mut tasks = TaskList::default();
-        let external_event_handler = ExternalEventHandler::<V>::new(
+        let external_event_handler = ExternalEventHandler::new(
             &mut tasks,
             request_response_sender,
             outbound_message_receiver,
@@ -242,11 +246,11 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
     /// Constructor
     #[allow(clippy::too_many_arguments)]
     fn new(
-        handle: Consensus<N, P, V>,
+        handle: Consensus<N, P>,
         persistence: Arc<P>,
         state_signer: StateSigner<SequencerApiVersion>,
-        external_event_handler: ExternalEventHandler<V>,
-        request_response_protocol: RequestResponseProtocol<Node<N, P>, V, N, P>,
+        external_event_handler: ExternalEventHandler,
+        request_response_protocol: RequestResponseProtocol<Node<N, P>, N, P>,
         event_streamer: Arc<RwLock<EventsStreamer<SeqTypes>>>,
         node_state: NodeState,
         network_config: NetworkConfig<SeqTypes>,
@@ -317,7 +321,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
     }
 
     /// Stream consensus events.
-    pub async fn event_stream(&self) -> impl Stream<Item = Event<SeqTypes>> {
+    pub async fn event_stream(&self) -> impl Stream<Item = Event<SeqTypes>> + use<N, P> {
         self.handle.read().await.event_stream()
     }
 
@@ -332,7 +336,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
     }
 
     /// Return a reference to the underlying consensus handle.
-    pub fn consensus(&self) -> Arc<RwLock<Consensus<N, P, V>>> {
+    pub fn consensus(&self) -> Arc<RwLock<Consensus<N, P>>> {
         Arc::clone(&self.handle)
     }
 
@@ -430,9 +434,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Drop
-    for SequencerContext<N, P, V>
-{
+impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> Drop for SequencerContext<N, P> {
     fn drop(&mut self) {
         if !self.detached {
             // Spawn a task to shut down the context
@@ -455,20 +457,19 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Drop
 
 #[tracing::instrument(skip_all, fields(node_id))]
 #[allow(clippy::too_many_arguments)]
-async fn handle_events<N, P, V>(
-    consensus: Arc<RwLock<Consensus<N, P, V>>>,
+async fn handle_events<N, P>(
+    consensus: Arc<RwLock<Consensus<N, P>>>,
     node_id: u64,
     mut events: impl Stream<Item = Event<SeqTypes>> + Unpin,
     persistence: Arc<P>,
     state_signer: Arc<RwLock<StateSigner<SequencerApiVersion>>>,
-    external_event_handler: ExternalEventHandler<V>,
+    external_event_handler: ExternalEventHandler,
     events_streamer: Option<Arc<RwLock<EventsStreamer<SeqTypes>>>>,
     event_consumer: impl PersistenceEventConsumer + 'static,
     anchor_view: Option<ViewNumber>,
 ) where
     N: ConnectedNetwork<PubKey>,
     P: SequencerPersistence,
-    V: Versions,
 {
     if let Some(view) = anchor_view {
         // Process and clean up any leaves that we may have persisted last time we were running but
@@ -496,11 +497,11 @@ async fn handle_events<N, P, V>(
             .await;
 
         // Handle external messages
-        if let EventType::ExternalMessageReceived { data, .. } = &event.event {
-            if let Err(err) = external_event_handler.handle_event(data).await {
-                tracing::warn!("Failed to handle external message: {:?}", err);
-            };
-        }
+        if let EventType::ExternalMessageReceived { data, .. } = &event.event
+            && let Err(err) = external_event_handler.handle_event(data).await
+        {
+            tracing::warn!("Failed to handle external message: {:?}", err);
+        };
 
         // Send the event via the event streaming service
         if let Some(events_streamer) = events_streamer.as_ref() {

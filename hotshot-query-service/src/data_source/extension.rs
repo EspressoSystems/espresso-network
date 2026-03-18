@@ -25,6 +25,7 @@ use tagged_base64::TaggedBase64;
 
 use super::VersionedDataSource;
 use crate::{
+    Header, Payload, QueryResult, Transaction,
     availability::{
         AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, BlockWithTransaction, Fetch,
         FetchStream, LeafId, LeafQueryData, NamespaceId, PayloadMetadata, PayloadQueryData,
@@ -38,9 +39,8 @@ use crate::{
         UpdateStateData,
     },
     metrics::PrometheusMetrics,
-    node::{NodeDataSource, SyncStatus, TimeWindowQueryData, WindowStart},
+    node::{NodeDataSource, SyncStatusQueryData, TimeWindowQueryData, WindowStart},
     status::{HasMetrics, StatusDataSource},
-    Header, Payload, QueryResult, Transaction,
 };
 /// Wrapper to add extensibility to an existing data source.
 ///
@@ -358,7 +358,7 @@ where
     {
         self.data_source.vid_share(id).await
     }
-    async fn sync_status(&self) -> QueryResult<SyncStatus> {
+    async fn sync_status(&self) -> QueryResult<SyncStatusQueryData> {
         self.data_source.sync_status().await
     }
     async fn get_header_window(

@@ -11,8 +11,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{anyhow, Context, Result};
-use async_lock::RwLock;
+use anyhow::{Context, Result, anyhow};
 use data_source::DataSource;
 use derive_more::derive::Deref;
 use hotshot_types::traits::signature_key::SignatureKey;
@@ -152,13 +151,13 @@ pub struct RequestResponse<
 /// We need to manually implement the `Clone` trait for this type because deriving
 /// `Deref` will cause an issue where it tries to clone the inner field instead
 impl<
-        S: Sender<K>,
-        R: Receiver,
-        Req: Request,
-        RS: RecipientSource<Req, K>,
-        DS: DataSource<Req>,
-        K: SignatureKey + 'static,
-    > Clone for RequestResponse<S, R, Req, RS, DS, K>
+    S: Sender<K>,
+    R: Receiver,
+    Req: Request,
+    RS: RecipientSource<Req, K>,
+    DS: DataSource<Req>,
+    K: SignatureKey + 'static,
+> Clone for RequestResponse<S, R, Req, RS, DS, K>
 {
     fn clone(&self) -> Self {
         Self {
@@ -169,13 +168,13 @@ impl<
 }
 
 impl<
-        S: Sender<K>,
-        R: Receiver,
-        Req: Request,
-        RS: RecipientSource<Req, K>,
-        DS: DataSource<Req>,
-        K: SignatureKey + 'static,
-    > RequestResponse<S, R, Req, RS, DS, K>
+    S: Sender<K>,
+    R: Receiver,
+    Req: Request,
+    RS: RecipientSource<Req, K>,
+    DS: DataSource<Req>,
+    K: SignatureKey + 'static,
+> RequestResponse<S, R, Req, RS, DS, K>
 {
     /// Create a new [`RequestResponseProtocol`]
     pub fn new(
@@ -253,13 +252,13 @@ pub struct RequestResponseInner<
     phantom_data: PhantomData<(K, R, Req, DS)>,
 }
 impl<
-        S: Sender<K>,
-        R: Receiver,
-        Req: Request,
-        RS: RecipientSource<Req, K>,
-        DS: DataSource<Req>,
-        K: SignatureKey + 'static,
-    > RequestResponseInner<S, R, Req, RS, DS, K>
+    S: Sender<K>,
+    R: Receiver,
+    Req: Request,
+    RS: RecipientSource<Req, K>,
+    DS: DataSource<Req>,
+    K: SignatureKey + 'static,
+> RequestResponseInner<S, R, Req, RS, DS, K>
 {
     /// Request something from the protocol indefinitely until we get a response
     /// or there was a critical error (e.g. the request could not be signed)
@@ -759,7 +758,7 @@ pub struct OutgoingRequestInner<R: Request> {
 mod tests {
     use std::{
         collections::HashMap,
-        sync::{atomic::AtomicBool, Mutex},
+        sync::{Mutex, atomic::AtomicBool},
     };
 
     use async_trait::async_trait;
@@ -982,7 +981,7 @@ mod tests {
                     .push(Arc::clone(&protocol._receiving_task_handle));
 
                 // Create a random request
-                let request = TestRequest(vec![rand::thread_rng().gen(); 100]);
+                let request = TestRequest(vec![rand::thread_rng().r#gen(); 100]);
 
                 // Get the hash of the request
                 let request_hash = blake3::hash(&request.0).as_bytes().to_vec();
@@ -1108,7 +1107,7 @@ mod tests {
         let one = Arc::new(participants.remove(0));
 
         // Create the request that they should all be able to join on
-        let request = TestRequest(vec![rand::thread_rng().gen(); 100]);
+        let request = TestRequest(vec![rand::thread_rng().r#gen(); 100]);
 
         // Create a join set to wait for all the tasks to finish
         let mut join_set = JoinSet::new();

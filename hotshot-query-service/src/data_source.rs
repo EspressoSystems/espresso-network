@@ -61,7 +61,7 @@ mod test_helpers {
     };
 
     /// Apply an upper bound to a range based on the currently available block height.
-    async fn bound_range<R, D>(ds: &D, range: R) -> impl RangeBounds<usize>
+    async fn bound_range<R, D>(ds: &D, range: R) -> impl RangeBounds<usize> + use<R, D>
     where
         D: TestableDataSource,
         R: RangeBounds<usize>,
@@ -133,12 +133,12 @@ pub mod availability_tests {
 
     use super::test_helpers::*;
     use crate::{
-        availability::{payload_size, BlockId},
+        availability::{BlockId, payload_size},
         data_source::storage::{AvailabilityStorage, NodeStorage},
         node::NodeDataSource,
         testing::{
             consensus::{MockNetwork, TestableDataSource},
-            mocks::{mock_transaction, MockTypes, MockVersions},
+            mocks::{MockTypes, mock_transaction},
         },
         types::HeightIndexed,
     };
@@ -314,7 +314,7 @@ pub mod availability_tests {
     where
         for<'a> D::ReadOnly<'a>: AvailabilityStorage<MockTypes> + NodeStorage<MockTypes>,
     {
-        let mut network = MockNetwork::<D, MockVersions>::init().await;
+        let mut network = MockNetwork::<D>::init().await;
         let ds = network.data_source();
 
         network.start().await;
@@ -387,7 +387,7 @@ pub mod availability_tests {
     where
         for<'a> D::ReadOnly<'a>: NodeStorage<MockTypes>,
     {
-        let mut network = MockNetwork::<D, MockVersions>::init().await;
+        let mut network = MockNetwork::<D>::init().await;
         let ds = network.data_source();
         network.start().await;
 
@@ -483,7 +483,7 @@ pub mod availability_tests {
     where
         for<'a> D::ReadOnly<'a>: NodeStorage<MockTypes>,
     {
-        let mut network = MockNetwork::<D, MockVersions>::init().await;
+        let mut network = MockNetwork::<D>::init().await;
         let ds = network.data_source();
         network.start().await;
 
@@ -565,14 +565,18 @@ pub mod availability_tests {
 #[espresso_macros::generic_tests]
 pub mod persistence_tests {
     use committable::Committable;
-    use hotshot_example_types::state_types::{TestInstanceState, TestValidatedState};
+    use hotshot_example_types::{
+        node_types::TEST_VERSIONS,
+        state_types::{TestInstanceState, TestValidatedState},
+    };
     use hotshot_types::simple_certificate::QuorumCertificate2;
 
     use crate::{
+        Leaf2,
         availability::{BlockQueryData, LeafQueryData},
         data_source::{
-            storage::{AvailabilityStorage, NodeStorage, UpdateAvailabilityStorage},
             Transaction,
+            storage::{AvailabilityStorage, NodeStorage, UpdateAvailabilityStorage},
         },
         node::NodeDataSource,
         testing::{
@@ -580,7 +584,6 @@ pub mod persistence_tests {
             mocks::{MockPayload, MockTypes},
         },
         types::HeightIndexed,
-        Leaf2,
     };
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -590,20 +593,20 @@ pub mod persistence_tests {
             + AvailabilityStorage<MockTypes>
             + NodeStorage<MockTypes>,
     {
-        use hotshot_example_types::node_types::TestVersions;
-
         let storage = D::create(0).await;
         let ds = D::connect(&storage).await;
 
         // Mock up some consensus data.
-        let mut qc = QuorumCertificate2::<MockTypes>::genesis::<TestVersions>(
+        let mut qc = QuorumCertificate2::<MockTypes>::genesis(
             &TestValidatedState::default(),
             &TestInstanceState::default(),
+            TEST_VERSIONS.test,
         )
         .await;
-        let mut leaf = Leaf2::<MockTypes>::genesis::<TestVersions>(
+        let mut leaf = Leaf2::<MockTypes>::genesis(
             &TestValidatedState::default(),
             &TestInstanceState::default(),
+            TEST_VERSIONS.test.base,
         )
         .await;
         // Increment the block number, to distinguish this block from the genesis block, which
@@ -640,20 +643,20 @@ pub mod persistence_tests {
     where
         for<'a> D::Transaction<'a>: UpdateAvailabilityStorage<MockTypes>,
     {
-        use hotshot_example_types::node_types::TestVersions;
-
         let storage = D::create(0).await;
         let ds = D::connect(&storage).await;
 
         // Mock up some consensus data.
-        let mut qc = QuorumCertificate2::<MockTypes>::genesis::<TestVersions>(
+        let mut qc = QuorumCertificate2::<MockTypes>::genesis(
             &TestValidatedState::default(),
             &TestInstanceState::default(),
+            TEST_VERSIONS.test,
         )
         .await;
-        let mut leaf = Leaf2::<MockTypes>::genesis::<TestVersions>(
+        let mut leaf = Leaf2::<MockTypes>::genesis(
             &TestValidatedState::default(),
             &TestInstanceState::default(),
+            TEST_VERSIONS.test.base,
         )
         .await;
         // Increment the block number, to distinguish this block from the genesis block, which
@@ -701,20 +704,20 @@ pub mod persistence_tests {
             + NodeStorage<MockTypes>,
         for<'a> D::ReadOnly<'a>: NodeStorage<MockTypes>,
     {
-        use hotshot_example_types::node_types::TestVersions;
-
         let storage = D::create(0).await;
         let ds = D::connect(&storage).await;
 
         // Mock up some consensus data.
-        let mut mock_qc = QuorumCertificate2::<MockTypes>::genesis::<TestVersions>(
+        let mut mock_qc = QuorumCertificate2::<MockTypes>::genesis(
             &TestValidatedState::default(),
             &TestInstanceState::default(),
+            TEST_VERSIONS.test,
         )
         .await;
-        let mut mock_leaf = Leaf2::<MockTypes>::genesis::<TestVersions>(
+        let mut mock_leaf = Leaf2::<MockTypes>::genesis(
             &TestValidatedState::default(),
             &TestInstanceState::default(),
+            TEST_VERSIONS.test.base,
         )
         .await;
         // Increment the block number, to distinguish this block from the genesis block, which
@@ -784,35 +787,35 @@ pub mod node_tests {
     use hotshot::traits::BlockPayload;
     use hotshot_example_types::{
         block_types::{TestBlockHeader, TestBlockPayload, TestMetadata},
-        node_types::{TestTypes, TestVersions},
+        node_types::{TEST_VERSIONS, TestTypes},
         state_types::{TestInstanceState, TestValidatedState},
     };
     use hotshot_types::{
-        data::{vid_commitment, VidCommitment, VidCommon, VidShare, ViewNumber},
+        data::{VidCommitment, VidCommon, VidShare, ViewNumber, vid_commitment},
         simple_certificate::{CertificatePair, QuorumCertificate2},
-        traits::{
-            block_contents::{BlockHeader, EncodeBytes},
-            node_implementation::{ConsensusTime, Versions},
-        },
-        vid::advz::{advz_scheme, ADVZScheme},
+        traits::block_contents::{BlockHeader, EncodeBytes},
+        vid::advz::{ADVZScheme, advz_scheme},
     };
     use jf_advz::VidScheme;
-    use vbs::version::StaticVersionType;
+    use pretty_assertions::assert_eq;
 
     use crate::{
+        Header, Leaf2,
         availability::{BlockInfo, BlockQueryData, LeafQueryData, VidCommonQueryData},
         data_source::{
             storage::{NodeStorage, UpdateAvailabilityStorage},
             update::Transaction,
         },
-        node::{BlockId, NodeDataSource, SyncStatus, TimeWindowQueryData, WindowStart},
+        node::{
+            BlockId, NodeDataSource, ResourceSyncStatus, SyncStatus, SyncStatusQueryData,
+            SyncStatusRange, TimeWindowQueryData, WindowStart,
+        },
         testing::{
             consensus::{MockNetwork, TestableDataSource},
-            mocks::{mock_transaction, MockPayload, MockTypes, MockVersions},
+            mocks::{MockPayload, MockTypes, mock_transaction},
             sleep,
         },
         types::HeightIndexed,
-        Header, Leaf2,
     };
 
     fn block_header_timestamp(header: &Header<MockTypes>) -> u64 {
@@ -824,8 +827,6 @@ pub mod node_tests {
     where
         for<'a> D::Transaction<'a>: UpdateAvailabilityStorage<MockTypes>,
     {
-        use hotshot_example_types::node_types::TestVersions;
-
         let storage = D::create(0).await;
         let ds = D::connect(&storage).await;
 
@@ -834,16 +835,18 @@ pub mod node_tests {
 
         // Generate some mock leaves and blocks to insert.
         let mut leaves = vec![
-            LeafQueryData::<MockTypes>::genesis::<TestVersions>(
+            LeafQueryData::<MockTypes>::genesis(
                 &TestValidatedState::default(),
                 &TestInstanceState::default(),
+                TEST_VERSIONS.test,
             )
             .await,
         ];
         let mut blocks = vec![
-            BlockQueryData::<MockTypes>::genesis::<TestVersions>(
+            BlockQueryData::<MockTypes>::genesis(
                 &TestValidatedState::default(),
                 &TestInstanceState::default(),
+                TEST_VERSIONS.test.base,
             )
             .await,
         ];
@@ -880,11 +883,39 @@ pub mod node_tests {
         ds.append(leaves[0].clone().into()).await.unwrap();
         assert_eq!(
             ds.sync_status().await.unwrap(),
-            SyncStatus {
-                missing_blocks: 1,
-                missing_vid_common: 1,
-                missing_vid_shares: 1,
-                missing_leaves: 0,
+            SyncStatusQueryData {
+                blocks: ResourceSyncStatus {
+                    missing: 1,
+                    ranges: vec![SyncStatusRange {
+                        start: 0,
+                        end: 1,
+                        status: SyncStatus::Missing,
+                    }]
+                },
+                vid_common: ResourceSyncStatus {
+                    missing: 1,
+                    ranges: vec![SyncStatusRange {
+                        start: 0,
+                        end: 1,
+                        status: SyncStatus::Missing,
+                    }]
+                },
+                vid_shares: ResourceSyncStatus {
+                    missing: 1,
+                    ranges: vec![SyncStatusRange {
+                        start: 0,
+                        end: 1,
+                        status: SyncStatus::Missing,
+                    }]
+                },
+                leaves: ResourceSyncStatus {
+                    missing: 0,
+                    ranges: vec![SyncStatusRange {
+                        start: 0,
+                        end: 1,
+                        status: SyncStatus::Present,
+                    }]
+                },
                 pruned_height: None,
             }
         );
@@ -894,11 +925,51 @@ pub mod node_tests {
         ds.append(leaves[2].clone().into()).await.unwrap();
         assert_eq!(
             ds.sync_status().await.unwrap(),
-            SyncStatus {
-                missing_blocks: 3,
-                missing_vid_common: 3,
-                missing_vid_shares: 3,
-                missing_leaves: 1,
+            SyncStatusQueryData {
+                blocks: ResourceSyncStatus {
+                    missing: 3,
+                    ranges: vec![SyncStatusRange {
+                        start: 0,
+                        end: 3,
+                        status: SyncStatus::Missing,
+                    }]
+                },
+                vid_common: ResourceSyncStatus {
+                    missing: 3,
+                    ranges: vec![SyncStatusRange {
+                        start: 0,
+                        end: 3,
+                        status: SyncStatus::Missing,
+                    }]
+                },
+                vid_shares: ResourceSyncStatus {
+                    missing: 3,
+                    ranges: vec![SyncStatusRange {
+                        start: 0,
+                        end: 3,
+                        status: SyncStatus::Missing,
+                    }]
+                },
+                leaves: ResourceSyncStatus {
+                    missing: 1,
+                    ranges: vec![
+                        SyncStatusRange {
+                            start: 0,
+                            end: 1,
+                            status: SyncStatus::Present,
+                        },
+                        SyncStatusRange {
+                            start: 1,
+                            end: 2,
+                            status: SyncStatus::Missing,
+                        },
+                        SyncStatusRange {
+                            start: 2,
+                            end: 3,
+                            status: SyncStatus::Present,
+                        }
+                    ]
+                },
                 pruned_height: None,
             }
         );
@@ -911,11 +982,58 @@ pub mod node_tests {
         }
         assert_eq!(
             ds.sync_status().await.unwrap(),
-            SyncStatus {
-                missing_blocks: 3,
-                missing_vid_common: 2,
-                missing_vid_shares: 3,
-                missing_leaves: 1,
+            SyncStatusQueryData {
+                blocks: ResourceSyncStatus {
+                    missing: 3,
+                    ranges: vec![SyncStatusRange {
+                        start: 0,
+                        end: 3,
+                        status: SyncStatus::Missing,
+                    }]
+                },
+                vid_common: ResourceSyncStatus {
+                    missing: 2,
+                    ranges: vec![
+                        SyncStatusRange {
+                            start: 0,
+                            end: 1,
+                            status: SyncStatus::Present,
+                        },
+                        SyncStatusRange {
+                            start: 1,
+                            end: 3,
+                            status: SyncStatus::Missing,
+                        },
+                    ]
+                },
+                vid_shares: ResourceSyncStatus {
+                    missing: 3,
+                    ranges: vec![SyncStatusRange {
+                        start: 0,
+                        end: 3,
+                        status: SyncStatus::Missing,
+                    }]
+                },
+                leaves: ResourceSyncStatus {
+                    missing: 1,
+                    ranges: vec![
+                        SyncStatusRange {
+                            start: 0,
+                            end: 1,
+                            status: SyncStatus::Present,
+                        },
+                        SyncStatusRange {
+                            start: 1,
+                            end: 2,
+                            status: SyncStatus::Missing,
+                        },
+                        SyncStatusRange {
+                            start: 2,
+                            end: 3,
+                            status: SyncStatus::Present,
+                        }
+                    ]
+                },
                 pruned_height: None,
             }
         );
@@ -943,20 +1061,87 @@ pub mod node_tests {
         // data. These would have just ignored the insertion of `vid[0]` (the share) and
         // `leaves[1]`. Detect if this is the case; then we allow 1 missing leaf and 1 missing VID
         // share.
-        let expected_missing = if ds.get_leaf(1).await.try_resolve().is_err() {
+        let (leaves, vid_shares) = if ds.get_leaf(1).await.try_resolve().is_err() {
             tracing::warn!(
                 "data source does not support out-of-order filling, allowing one missing leaf and \
                  VID share"
             );
-            1
+            (
+                ResourceSyncStatus {
+                    missing: 1,
+                    ranges: vec![
+                        SyncStatusRange {
+                            start: 0,
+                            end: 1,
+                            status: SyncStatus::Present,
+                        },
+                        SyncStatusRange {
+                            start: 1,
+                            end: 2,
+                            status: SyncStatus::Missing,
+                        },
+                        SyncStatusRange {
+                            start: 2,
+                            end: 3,
+                            status: SyncStatus::Present,
+                        },
+                    ],
+                },
+                ResourceSyncStatus {
+                    missing: 1,
+                    ranges: vec![
+                        SyncStatusRange {
+                            start: 0,
+                            end: 1,
+                            status: SyncStatus::Missing,
+                        },
+                        SyncStatusRange {
+                            start: 1,
+                            end: 3,
+                            status: SyncStatus::Present,
+                        },
+                    ],
+                },
+            )
         } else {
-            0
+            (
+                ResourceSyncStatus {
+                    missing: 0,
+                    ranges: vec![SyncStatusRange {
+                        start: 0,
+                        end: 3,
+                        status: SyncStatus::Present,
+                    }],
+                },
+                ResourceSyncStatus {
+                    missing: 0,
+                    ranges: vec![SyncStatusRange {
+                        start: 0,
+                        end: 3,
+                        status: SyncStatus::Present,
+                    }],
+                },
+            )
         };
-        let expected_sync_status = SyncStatus {
-            missing_blocks: 0,
-            missing_leaves: expected_missing,
-            missing_vid_common: 0,
-            missing_vid_shares: expected_missing,
+        let expected_sync_status = SyncStatusQueryData {
+            leaves,
+            vid_shares,
+            blocks: ResourceSyncStatus {
+                missing: 0,
+                ranges: vec![SyncStatusRange {
+                    start: 0,
+                    end: 3,
+                    status: SyncStatus::Present,
+                }],
+            },
+            vid_common: ResourceSyncStatus {
+                missing: 0,
+                ranges: vec![SyncStatusRange {
+                    start: 0,
+                    end: 3,
+                    status: SyncStatus::Present,
+                }],
+            },
             pruned_height: None,
         };
         assert_eq!(ds.sync_status().await.unwrap(), expected_sync_status);
@@ -973,8 +1158,6 @@ pub mod node_tests {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     pub async fn test_counters<D: TestableDataSource>() {
-        use hotshot_example_types::node_types::TestVersions;
-
         let storage = D::create(0).await;
         let ds = D::connect(&storage).await;
 
@@ -998,12 +1181,8 @@ pub mod node_tests {
                 .await
                 .unwrap();
             let encoded = payload.encode();
-            let payload_commitment = vid_commitment::<TestVersions>(
-                &encoded,
-                &metadata.encode(),
-                1,
-                <TestVersions as Versions>::Base::VERSION,
-            );
+            let payload_commitment =
+                vid_commitment(&encoded, &metadata.encode(), 1, TEST_VERSIONS.test.base);
             let header = TestBlockHeader {
                 block_number: i,
                 payload_commitment,
@@ -1017,12 +1196,13 @@ pub mod node_tests {
                     num_transactions: 7, // arbitrary
                 },
                 random: 1, // arbitrary
-                version: <TestVersions as Versions>::Base::VERSION,
+                version: TEST_VERSIONS.test.base,
             };
 
-            let mut leaf = LeafQueryData::<MockTypes>::genesis::<TestVersions>(
+            let mut leaf = LeafQueryData::<MockTypes>::genesis(
                 &TestValidatedState::default(),
                 &TestInstanceState::default(),
+                TEST_VERSIONS.test,
             )
             .await;
             *leaf.leaf.block_header_mut() = header.clone();
@@ -1068,7 +1248,7 @@ pub mod node_tests {
     where
         for<'a> D::ReadOnly<'a>: NodeStorage<MockTypes>,
     {
-        let mut network = MockNetwork::<D, MockVersions>::init().await;
+        let mut network = MockNetwork::<D>::init().await;
         let ds = network.data_source();
 
         network.start().await;
@@ -1095,8 +1275,6 @@ pub mod node_tests {
         for<'a> D::Transaction<'a>: UpdateAvailabilityStorage<MockTypes>,
         for<'a> D::ReadOnly<'a>: NodeStorage<MockTypes>,
     {
-        use hotshot_example_types::node_types::TestVersions;
-
         let storage = D::create(0).await;
         let ds = D::connect(&storage).await;
 
@@ -1105,9 +1283,10 @@ pub mod node_tests {
         let disperse = vid.disperse([]).unwrap();
 
         // Insert test data with VID common and a share.
-        let leaf = LeafQueryData::<MockTypes>::genesis::<TestVersions>(
+        let leaf = LeafQueryData::<MockTypes>::genesis(
             &TestValidatedState::default(),
             &TestInstanceState::default(),
+            TEST_VERSIONS.test,
         )
         .await;
         let common = VidCommonQueryData::new(leaf.header().clone(), VidCommon::V0(disperse.common));
@@ -1149,7 +1328,7 @@ pub mod node_tests {
     where
         for<'a> D::ReadOnly<'a>: NodeStorage<MockTypes>,
     {
-        let mut network = MockNetwork::<D, MockVersions>::init().await;
+        let mut network = MockNetwork::<D>::init().await;
         let ds = network.data_source();
 
         network.start().await;
@@ -1226,7 +1405,7 @@ pub mod node_tests {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     pub async fn test_timestamp_window<D: TestableDataSource>() {
-        let mut network = MockNetwork::<D, MockVersions>::init().await;
+        let mut network = MockNetwork::<D>::init().await;
         let ds = network.data_source();
 
         network.start().await;
@@ -1427,16 +1606,18 @@ pub mod node_tests {
         async fn leaf_with_qc_chain(
             number: u64,
         ) -> (LeafQueryData<MockTypes>, [CertificatePair<MockTypes>; 2]) {
-            let mut leaf = Leaf2::<MockTypes>::genesis::<TestVersions>(
+            let mut leaf = Leaf2::<MockTypes>::genesis(
                 &Default::default(),
                 &Default::default(),
+                TEST_VERSIONS.test.base,
             )
             .await;
             leaf.block_header_mut().block_number = number;
 
-            let mut qc1 = QuorumCertificate2::<MockTypes>::genesis::<TestVersions>(
+            let mut qc1 = QuorumCertificate2::<MockTypes>::genesis(
                 &Default::default(),
                 &Default::default(),
+                TEST_VERSIONS.test,
             )
             .await;
             qc1.view_number = ViewNumber::new(1);
@@ -1510,14 +1691,14 @@ pub mod status_tests {
         status::StatusDataSource,
         testing::{
             consensus::{DataSourceLifeCycle, MockNetwork},
-            mocks::{mock_transaction, MockVersions},
+            mocks::mock_transaction,
             sleep,
         },
     };
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     pub async fn test_metrics<D: DataSourceLifeCycle + StatusDataSource>() {
-        let mut network = MockNetwork::<D, MockVersions>::init().await;
+        let mut network = MockNetwork::<D>::init().await;
         let ds = network.data_source();
 
         {

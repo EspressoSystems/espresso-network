@@ -7,7 +7,7 @@
 use std::time::Duration;
 
 use hotshot_example_types::node_types::{
-    CombinedImpl, EpochsTestVersions, TestTwoStakeTablesTypes, TestTypes,
+    CombinedImpl, TEST_VERSIONS, TestTwoStakeTablesTypes, TestTypes,
 };
 use hotshot_macros::cross_tests;
 use hotshot_testing::{
@@ -24,7 +24,7 @@ cross_tests!(
     TestName: test_staggered_restart_transition_block,
     Impls: [CombinedImpl],
     Types: [TestTypes, TestTwoStakeTablesTypes],
-    Versions: [EpochsTestVersions],
+    Versions: [TEST_VERSIONS.epoch],
     Ignore: false,
     Metadata: {
       let mut metadata = TestDescription::default().set_num_nodes(NUM_NODES,4);
@@ -82,7 +82,7 @@ cross_tests!(
     TestName: test_staggered_restart_first_empty_block,
     Impls: [CombinedImpl],
     Types: [TestTypes, TestTwoStakeTablesTypes],
-    Versions: [EpochsTestVersions],
+    Versions: [TEST_VERSIONS.epoch],
     Ignore: false,
     Metadata: {
       let mut metadata = TestDescription::default().set_num_nodes(NUM_NODES,4);
@@ -140,7 +140,7 @@ cross_tests!(
     TestName: test_staggered_restart_first_block,
     Impls: [CombinedImpl],
     Types: [TestTypes, TestTwoStakeTablesTypes],
-    Versions: [EpochsTestVersions],
+    Versions: [TEST_VERSIONS.epoch],
     Ignore: false,
     Metadata: {
       let mut metadata = TestDescription::default().set_num_nodes(NUM_NODES,4);

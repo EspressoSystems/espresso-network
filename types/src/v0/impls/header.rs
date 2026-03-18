@@ -1,51 +1,53 @@
 use std::fmt;
 
-use alloy::primitives::{Keccak256, B256};
-use anyhow::{ensure, Context};
+use alloy::primitives::{B256, Keccak256};
+use anyhow::{Context, ensure};
 use ark_serialize::CanonicalSerialize;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
 use either::Either;
 use hotshot_query_service::{availability::QueryableHeader, explorer::ExplorerHeader};
 use hotshot_types::{
-    data::{vid_commitment, EpochNumber, VidCommitment, ViewNumber},
+    data::{EpochNumber, VidCommitment, ViewNumber, vid_commitment},
     light_client::LightClientState,
     traits::{
-        block_contents::{BlockHeader, BuilderFee, GENESIS_VID_NUM_STORAGE_NODES},
-        node_implementation::{ConsensusTime, NodeType, Versions},
-        signature_key::BuilderSignatureKey,
         BlockPayload, EncodeBytes, ValidatedState as _,
+        block_contents::{BlockHeader, BuilderFee, GENESIS_VID_NUM_STORAGE_NODES},
+        node_implementation::NodeType,
+        signature_key::BuilderSignatureKey,
     },
-    utils::{epoch_from_block_number, is_ge_epoch_root, BuilderCommitment},
+    utils::{BuilderCommitment, epoch_from_block_number, is_ge_epoch_root},
 };
 use jf_merkle_tree_compat::{AppendableMerkleTreeScheme, MerkleCommitment, MerkleTreeScheme};
 use serde::{
-    de::{self, MapAccess, SeqAccess, Visitor},
     Deserialize, Deserializer, Serialize, Serializer,
+    de::{self, MapAccess, SeqAccess, Visitor},
 };
 use serde_json::{Map, Value};
 use thiserror::Error;
 use time::OffsetDateTime;
-use vbs::version::{StaticVersionType, Version};
+use vbs::version::Version;
+use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION};
 
 use super::{
     instance_state::NodeState, state::ValidatedState, v0_1::IterableFeeInfo, v0_3::ChainConfig,
 };
 use crate::{
+    BlockMerkleCommitment, FeeAccount, FeeAmount, FeeInfo, FeeMerkleCommitment, Header,
+    L1BlockInfo, L1Snapshot, Leaf2, NamespaceId, NsIndex, NsTable, PayloadByteLen, SeqTypes,
+    TimestampMillis, UpgradeType,
     eth_signature_key::BuilderSignature,
     v0::{
         header::{EitherOrVersion, VersionedHeader},
-        impls::{distribute_block_reward, reward::RewardDistributor, StakeTableHash},
+        impls::{StakeTableHash, distribute_block_reward, reward::RewardDistributor},
     },
     v0_1::{self},
     v0_2,
     v0_3::{
-        self, RewardAmount, RewardMerkleCommitmentV1, RewardMerkleTreeV1,
-        REWARD_MERKLE_TREE_V1_HEIGHT,
+        self, REWARD_MERKLE_TREE_V1_HEIGHT, RewardAmount, RewardMerkleCommitmentV1,
+        RewardMerkleTreeV1,
     },
     v0_4::{self, RewardMerkleCommitmentV2},
-    v0_5, BlockMerkleCommitment, DrbAndHeaderUpgradeVersion, EpochVersion, FeeAccount, FeeAmount,
-    FeeInfo, FeeMerkleCommitment, Header, L1BlockInfo, L1Snapshot, Leaf2, NamespaceId, NsIndex,
-    NsTable, PayloadByteLen, SeqTypes, TimestampMillis, UpgradeType,
+    v0_5,
 };
 
 impl v0_1::Header {
@@ -1059,7 +1061,7 @@ impl BlockHeader<SeqTypes> for Header {
         }
 
         let mut rewards = None;
-        if version >= EpochVersion::version() {
+        if version >= EPOCH_VERSION {
             rewards = distribute_block_reward(
                 instance_state,
                 &mut validated_state,
@@ -1072,7 +1074,7 @@ impl BlockHeader<SeqTypes> for Header {
 
         let mut next_stake_table_hash = None;
 
-        if version >= DrbAndHeaderUpgradeVersion::version() {
+        if version >= DRB_AND_HEADER_UPGRADE_VERSION {
             let epoch_height = instance_state
                 .epoch_height
                 .context("epoch height not in instance state")?;
@@ -1128,17 +1130,18 @@ impl BlockHeader<SeqTypes> for Header {
         )?)
     }
 
-    fn genesis<V: Versions>(
+    fn genesis(
         instance_state: &NodeState,
         payload: <SeqTypes as NodeType>::BlockPayload,
         metadata: &<<SeqTypes as NodeType>::BlockPayload as BlockPayload<SeqTypes>>::Metadata,
+        _: Version,
     ) -> Self {
         let payload_bytes = payload.encode();
         let builder_commitment = payload.builder_commitment(metadata);
 
         let vid_commitment_version = instance_state.genesis_version;
 
-        let payload_commitment = vid_commitment::<V>(
+        let payload_commitment = vid_commitment(
             &payload_bytes,
             &metadata.encode(),
             GENESIS_VID_NUM_STORAGE_NODES,
@@ -1219,10 +1222,7 @@ impl BlockHeader<SeqTypes> for Header {
         self.builder_commitment().clone()
     }
 
-    fn get_light_client_state(
-        &self,
-        view: <SeqTypes as NodeType>::View,
-    ) -> anyhow::Result<LightClientState> {
+    fn get_light_client_state(&self, view: ViewNumber) -> anyhow::Result<LightClientState> {
         let mut block_comm_root_bytes = vec![];
         self.block_merkle_tree_root()
             .serialize_compressed(&mut block_comm_root_bytes)?;
@@ -1328,18 +1328,19 @@ mod test_headers {
         node_bindings::Anvil,
         primitives::{Address, U256},
     };
-    use hotshot_query_service::testing::mocks::MockVersions;
+    use hotshot_query_service::testing::mocks::MOCK_UPGRADE;
     use hotshot_types::traits::signature_key::BuilderSignatureKey;
     use v0_1::{BlockMerkleTree, FeeMerkleTree, L1Client};
-    use vbs::{bincode_serializer::BincodeSerializer, version::StaticVersion, BinarySerializer};
+    use vbs::{BinarySerializer, bincode_serializer::BincodeSerializer, version::StaticVersion};
+    use versions::version;
 
     use super::*;
     use crate::{
+        Leaf,
         eth_signature_key::EthKeyPair,
         mock::MockStateCatchup,
-        v0_3::{RewardAccountV1, RewardAmount, REWARD_MERKLE_TREE_V1_HEIGHT},
-        v0_4::{RewardAccountV2, RewardMerkleTreeV2, REWARD_MERKLE_TREE_V2_HEIGHT},
-        Leaf,
+        v0_3::{REWARD_MERKLE_TREE_V1_HEIGHT, RewardAccountV1, RewardAmount},
+        v0_4::{REWARD_MERKLE_TREE_V2_HEIGHT, RewardAccountV2, RewardMerkleTreeV2},
     };
 
     #[derive(Debug, Default)]
@@ -1437,7 +1438,7 @@ mod test_headers {
                 self.timestamp_millis,
                 validated_state.clone(),
                 genesis.instance_state.chain_config,
-                Version { major: 0, minor: 1 },
+                version(0, 1),
                 None,
                 None,
             )
@@ -1637,7 +1638,7 @@ mod test_headers {
         async fn default() -> Self {
             let instance_state = NodeState::mock();
             let validated_state = ValidatedState::genesis(&instance_state).0;
-            let leaf: Leaf2 = Leaf::genesis::<MockVersions>(&validated_state, &instance_state)
+            let leaf: Leaf2 = Leaf::genesis(&validated_state, &instance_state, MOCK_UPGRADE.base)
                 .await
                 .into();
             let header = leaf.block_header().clone();
@@ -1657,7 +1658,7 @@ mod test_headers {
         let anvil = Anvil::new().block_time(1u64).spawn();
         let mut genesis_state = NodeState::mock()
             .with_l1(L1Client::new(vec![anvil.endpoint_url()]).expect("Failed to create L1 client"))
-            .with_current_version(StaticVersion::<0, 1>::version());
+            .with_current_version(version(0, 1));
 
         let genesis = GenesisForTest::default().await;
 
@@ -1709,7 +1710,7 @@ mod test_headers {
             builder_commitment.clone(),
             ns_table,
             builder_fee,
-            StaticVersion::<0, 1>::version(),
+            version(0, 1),
             *parent_leaf.view_number() + 1,
         )
         .await
@@ -1733,7 +1734,7 @@ mod test_headers {
                 &genesis_state.state_catchup,
                 &parent_leaf,
                 &proposal,
-                StaticVersion::<0, 1>::version(),
+                version(0, 1),
                 parent_leaf.view_number() + 1,
             )
             .await
@@ -1763,9 +1764,10 @@ mod test_headers {
 
         let key = FeeAccount::generated_from_seed_indexed([0; 32], 0).1;
         let signature = FeeAccount::sign_builder_message(&key, &commitment).unwrap();
-        assert!(key
-            .fee_account()
-            .validate_builder_signature(&signature, &commitment));
+        assert!(
+            key.fee_account()
+                .validate_builder_signature(&signature, &commitment)
+        );
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -1800,7 +1802,7 @@ mod test_headers {
             }],
             Default::default(),
             None,
-            Version { major: 0, minor: 1 },
+            version(0, 1),
             None,
         );
 
@@ -1832,7 +1834,7 @@ mod test_headers {
             }],
             Default::default(),
             None,
-            Version { major: 0, minor: 2 },
+            version(0, 2),
             None,
         );
 
@@ -1864,7 +1866,7 @@ mod test_headers {
             }],
             Default::default(),
             None,
-            Version { major: 0, minor: 3 },
+            version(0, 3),
             None,
         );
 

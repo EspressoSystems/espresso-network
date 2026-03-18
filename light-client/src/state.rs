@@ -2,22 +2,19 @@
 
 use std::{collections::BTreeMap, future::Future, sync::Arc};
 
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use async_lock::RwLock;
 use committable::Committable;
 use espresso_types::{
-    select_active_validator_set, Header, Leaf2, NamespaceId, PubKey, SeqTypes, StakeTableState,
-    Transaction,
+    Header, Leaf2, NamespaceId, PubKey, SeqTypes, StakeTableState, Transaction,
+    select_active_validator_set,
 };
 use hotshot_query_service::{
     availability::{BlockQueryData, LeafId, LeafQueryData, PayloadQueryData, VidCommonQueryData},
     node::BlockId,
     types::HeightIndexed,
 };
-use hotshot_types::{
-    data::EpochNumber, stake_table::StakeTableEntry, traits::node_implementation::ConsensusTime,
-    utils::root_block_in_epoch,
-};
+use hotshot_types::{data::EpochNumber, stake_table::StakeTableEntry, utils::root_block_in_epoch};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -513,30 +510,28 @@ where
         // hashes (since these were only added in version 0.4). We will effectively check all this
         // work at once when we check the stake table hash after the first epoch of version 0.4
         #[cfg(feature = "decaf")]
-        if lower_bound < self.first_epoch_with_dynamic_stake_table {
-            if let Some(first_pos_epoch) = self.decaf_first_pos_epoch {
-                tracing::info!(
-                    %first_pos_epoch,
-                    to = %lower_bound,
-                    "performing Decaf catchup through version 0.3",
-                );
-                for epoch in *first_pos_epoch..=*lower_bound {
-                    let events = self
-                        .server
-                        .stake_table_events(EpochNumber::new(epoch))
-                        .await?;
-                    tracing::debug!(epoch, num_events = events.len(), "reconstruct stake table");
-                    for event in events {
-                        tracing::debug!(epoch, ?event, "replay event");
-                        if let Err(err) =
-                            stake_table.apply_event(event).context("applying event")?
-                        {
-                            tracing::warn!("allowed error in event: {err:#}");
-                        }
+        if lower_bound < self.first_epoch_with_dynamic_stake_table
+            && let Some(first_pos_epoch) = self.decaf_first_pos_epoch
+        {
+            tracing::info!(
+                %first_pos_epoch,
+                to = %lower_bound,
+                "performing Decaf catchup through version 0.3",
+            );
+            for epoch in *first_pos_epoch..=*lower_bound {
+                let events = self
+                    .server
+                    .stake_table_events(EpochNumber::new(epoch))
+                    .await?;
+                tracing::debug!(epoch, num_events = events.len(), "reconstruct stake table");
+                for event in events {
+                    tracing::debug!(epoch, ?event, "replay event");
+                    if let Err(err) = stake_table.apply_event(event).context("applying event")? {
+                        tracing::warn!("allowed error in event: {err:#}");
                     }
                 }
-                prev_quorum = Arc::new(stake_table_state_to_quorum(stake_table.clone())?);
             }
+            prev_quorum = Arc::new(stake_table_state_to_quorum(stake_table.clone())?);
         }
 
         // Replay one epoch at a time from the lower bound stake table to the requested epoch.
@@ -713,14 +708,15 @@ fn header_matches_id(header: &Header, id: BlockId<SeqTypes>) -> bool {
 
 #[cfg(test)]
 mod test {
-    use espresso_types::{DrbAndHeaderUpgradeVersion, NsIndex};
+    use espresso_types::NsIndex;
     use hotshot_query_service::availability::TransactionIndex;
     use pretty_assertions::assert_eq;
+    use versions::DRB_AND_HEADER_UPGRADE_VERSION;
 
     use super::*;
     use crate::{
         storage::SqliteStorage,
-        testing::{leaf_chain, TestClient},
+        testing::{TestClient, leaf_chain},
     };
 
     #[tokio::test]
@@ -735,7 +731,7 @@ mod test {
         assert_eq!(lc.block_height().await.unwrap(), 0);
 
         // Local block height greater than server.
-        let leaf = leaf_chain::<DrbAndHeaderUpgradeVersion>(1..2)
+        let leaf = leaf_chain(1..2, DRB_AND_HEADER_UPGRADE_VERSION)
             .await
             .remove(0);
         db.insert_leaf(leaf).await.unwrap();

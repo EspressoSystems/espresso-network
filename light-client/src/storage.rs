@@ -3,20 +3,17 @@ use std::{future::Future, path::PathBuf, str::FromStr};
 use alloy::primitives::Address;
 use anyhow::{Context, Result};
 use derive_more::{Display, From};
-use espresso_types::{v0_3::RegisteredValidator, PubKey, SeqTypes, StakeTableState};
+use espresso_types::{PubKey, SeqTypes, StakeTableState, v0_3::RegisteredValidator};
 use futures::TryStreamExt;
 use hotshot_query_service::{
     availability::{BlockId, LeafId, LeafQueryData},
     types::HeightIndexed,
 };
-use hotshot_types::{
-    data::EpochNumber, light_client::StateVerKey, traits::node_implementation::ConsensusTime,
-};
+use hotshot_types::{data::EpochNumber, light_client::StateVerKey};
 use serde_json::Value;
 use sqlx::{
-    query, query_as,
+    QueryBuilder, SqlitePool, query, query_as,
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
-    QueryBuilder, SqlitePool,
 };
 
 /// Different ways to ask the database for a leaf.
@@ -70,7 +67,7 @@ pub trait Storage: Sized + Send + Sync + 'static {
     ///
     /// This may result in an older leaf being removed.
     fn insert_leaf(&self, leaf: LeafQueryData<SeqTypes>)
-        -> impl Send + Future<Output = Result<()>>;
+    -> impl Send + Future<Output = Result<()>>;
 
     /// Get the stake table for the latest epoch which is not later than `epoch`.
     ///
@@ -503,8 +500,8 @@ impl Storage for SqliteStorage {
 
 #[cfg(test)]
 mod test {
-    use espresso_types::EpochVersion;
     use pretty_assertions::assert_eq;
+    use versions::EPOCH_VERSION;
 
     use super::*;
     use crate::testing::{leaf_chain, random_validator};
@@ -518,7 +515,7 @@ mod test {
         assert_eq!(db.block_height().await.unwrap(), 0);
 
         // Test with nonconsecutive leaves.
-        let leaf = leaf_chain::<EpochVersion>(100..101).await.remove(0);
+        let leaf = leaf_chain(100..101, EPOCH_VERSION).await.remove(0);
         db.insert_leaf(leaf).await.unwrap();
         assert_eq!(db.block_height().await.unwrap(), 101);
     }
@@ -528,7 +525,7 @@ mod test {
     async fn test_leaf_upper_bound_exact() {
         let db = SqliteStorage::default().await.unwrap();
 
-        let leaf = leaf_chain::<EpochVersion>(0..1).await.remove(0);
+        let leaf = leaf_chain(0..1, EPOCH_VERSION).await.remove(0);
         db.insert_leaf(leaf.clone()).await.unwrap();
         assert_eq!(
             db.leaf_upper_bound(LeafId::Number(0))
@@ -573,7 +570,7 @@ mod test {
     async fn test_leaf_upper_bound_loose() {
         let db = SqliteStorage::default().await.unwrap();
 
-        let leaves = leaf_chain::<EpochVersion>(0..=1).await;
+        let leaves = leaf_chain(0..=1, EPOCH_VERSION).await;
         db.insert_leaf(leaves[1].clone()).await.unwrap();
         assert_eq!(
             db.leaf_upper_bound(LeafId::Number(0))
@@ -603,7 +600,7 @@ mod test {
     async fn test_leaf_upper_bound_least_upper_bound() {
         let db = SqliteStorage::default().await.unwrap();
 
-        let leaves = leaf_chain::<EpochVersion>(0..=2).await;
+        let leaves = leaf_chain(0..=2, EPOCH_VERSION).await;
         db.insert_leaf(leaves[2].clone()).await.unwrap();
         db.insert_leaf(leaves[1].clone()).await.unwrap();
         assert_eq!(
@@ -620,7 +617,7 @@ mod test {
     async fn test_leaf_upper_bound_not_found() {
         let db = SqliteStorage::default().await.unwrap();
 
-        let leaves = leaf_chain::<EpochVersion>(0..=1).await;
+        let leaves = leaf_chain(0..=1, EPOCH_VERSION).await;
         db.insert_leaf(leaves[0].clone()).await.unwrap();
         assert_eq!(db.leaf_upper_bound(LeafId::Number(1)).await.unwrap(), None);
         assert_eq!(
@@ -642,7 +639,7 @@ mod test {
         .await
         .unwrap();
 
-        let leaves = leaf_chain::<EpochVersion>(0..=1).await;
+        let leaves = leaf_chain(0..=1, EPOCH_VERSION).await;
         db.insert_leaf(leaves[1].clone()).await.unwrap();
         db.insert_leaf(leaves[0].clone()).await.unwrap();
 
@@ -667,7 +664,7 @@ mod test {
         .await
         .unwrap();
 
-        let leaves = leaf_chain::<EpochVersion>(0..=2).await;
+        let leaves = leaf_chain(0..=2, EPOCH_VERSION).await;
         db.insert_leaf(leaves[0].clone()).await.unwrap();
         db.insert_leaf(leaves[1].clone()).await.unwrap();
 
@@ -711,7 +708,7 @@ mod test {
     async fn test_get_leaves_in_range() {
         let db = SqliteStorage::default().await.unwrap();
 
-        let leaves = leaf_chain::<EpochVersion>(0..5).await;
+        let leaves = leaf_chain(0..5, EPOCH_VERSION).await;
         for leaf in &leaves {
             db.insert_leaf(leaf.clone()).await.unwrap();
         }
@@ -725,7 +722,7 @@ mod test {
     async fn test_get_leaves_in_range_not_found() {
         let db = SqliteStorage::default().await.unwrap();
 
-        let leaves = leaf_chain::<EpochVersion>(0..3).await;
+        let leaves = leaf_chain(0..3, EPOCH_VERSION).await;
         for leaf in &leaves {
             db.insert_leaf(leaf.clone()).await.unwrap();
         }

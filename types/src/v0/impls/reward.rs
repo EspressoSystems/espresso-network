@@ -1,10 +1,10 @@
 use std::{borrow::Borrow, collections::HashSet, iter::once, str::FromStr, sync::Arc};
 
 use alloy::primitives::{
-    utils::{parse_units, ParseUnits},
     Address, B256, U256,
+    utils::{ParseUnits, parse_units},
 };
-use anyhow::{bail, ensure, Context};
+use anyhow::{Context, bail, ensure};
 use ark_serialize::{
     CanonicalDeserialize, CanonicalSerialize, Compress, Read, SerializationError, Valid, Validate,
 };
@@ -12,36 +12,36 @@ use hotshot::types::BLSPubKey;
 use hotshot_contract_adapter::reward::RewardProofSiblings;
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
-    traits::{election::Membership, node_implementation::ConsensusTime},
+    traits::election::Membership,
     utils::epoch_from_block_number,
 };
 use jf_merkle_tree_compat::{
-    prelude::MerkleNode, ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme,
-    LookupResult, MerkleTreeScheme, PersistentUniversalMerkleTreeScheme, ToTraversalPath,
-    UniversalMerkleTreeScheme,
+    ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme, LookupResult,
+    MerkleTreeScheme, ToTraversalPath, UniversalMerkleTreeScheme, prelude::MerkleNode,
 };
 use num_traits::CheckedSub;
 use sequencer_utils::{
     impl_serde_from_string_or_integer, impl_to_fixed_bytes, ser::FromStringOrInteger,
 };
-use vbs::version::StaticVersionType;
+use vbs::version::Version;
+use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION};
 
 use super::{
-    v0_3::{AuthenticatedValidator, RewardAmount, COMMISSION_BASIS_POINTS},
-    v0_4::{
-        forgotten_accounts_include, RewardAccountProofV2, RewardAccountQueryDataV2,
-        RewardAccountV2, RewardMerkleCommitmentV2, RewardMerkleProofV2, RewardMerkleTreeV2,
-    },
     Leaf2, NodeState, ValidatedState,
+    v0_3::{AuthenticatedValidator, COMMISSION_BASIS_POINTS, RewardAmount},
+    v0_4::{
+        RewardAccountProofV2, RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleCommitmentV2,
+        RewardMerkleProofV2, RewardMerkleTreeV2, forgotten_accounts_include,
+    },
 };
 use crate::{
+    FeeAccount,
     eth_signature_key::EthKeyPair,
     v0_3::{
         RewardAccountProofV1, RewardAccountV1, RewardMerkleCommitmentV1, RewardMerkleProofV1,
         RewardMerkleTreeV1,
     },
     v0_4::{Delta, REWARD_MERKLE_TREE_V2_ARITY, REWARD_MERKLE_TREE_V2_HEIGHT},
-    DrbAndHeaderUpgradeVersion, EpochVersion, FeeAccount,
 };
 
 impl_serde_from_string_or_integer!(RewardAmount);
@@ -427,7 +427,7 @@ impl TryInto<RewardProofSiblings> for RewardAccountProofV2 {
             bail!("only presence proofs supported")
         };
 
-        let path = ToTraversalPath::<REWARD_MERKLE_TREE_V2_ARITY>::to_traversal_path(
+        let path = ToTraversalPath::<{ REWARD_MERKLE_TREE_V2_ARITY }>::to_traversal_path(
             &RewardAccountV2(self.account),
             REWARD_MERKLE_TREE_V2_HEIGHT,
         );
@@ -668,12 +668,11 @@ impl RewardDistributor {
         amount: P::Element,
     ) -> anyhow::Result<()>
     where
-        P: PersistentUniversalMerkleTreeScheme,
-        P: MerkleTreeScheme<Element = RewardAmount>,
+        P: UniversalMerkleTreeScheme<Element = RewardAmount>,
         P::Index: Borrow<<P as MerkleTreeScheme>::Index> + std::fmt::Display,
     {
         let mut err = None;
-        *tree = tree.persistent_update_with(account.clone(), |balance| {
+        tree.update_with(account.clone(), |balance| {
             let balance = balance.copied();
             match balance.unwrap_or_default().0.checked_add(amount.0) {
                 Some(updated) => Some(updated.into()),
@@ -694,12 +693,12 @@ impl RewardDistributor {
 
     pub fn apply_rewards(
         &mut self,
-        version: vbs::version::Version,
+        version: Version,
         state: &mut ValidatedState,
     ) -> anyhow::Result<()> {
         let computed_rewards = self.compute_rewards()?;
 
-        if version <= EpochVersion::version() {
+        if version <= EPOCH_VERSION {
             for (address, reward) in computed_rewards.all_rewards() {
                 Self::update_reward_balance(
                     &mut state.reward_merkle_tree_v1,
@@ -789,7 +788,7 @@ pub async fn distribute_block_reward(
     validated_state: &mut ValidatedState,
     parent_leaf: &Leaf2,
     view_number: ViewNumber,
-    version: vbs::version::Version,
+    version: Version,
 ) -> anyhow::Result<Option<RewardDistributor>> {
     let height = parent_leaf.height() + 1;
 
@@ -830,7 +829,7 @@ pub async fn distribute_block_reward(
     let mut previously_distributed = parent_header.total_reward_distributed().unwrap_or_default();
 
     // Decide whether to use a fixed or dynamic block reward.
-    let block_reward = if version >= DrbAndHeaderUpgradeVersion::version() {
+    let block_reward = if version >= DRB_AND_HEADER_UPGRADE_VERSION {
         instance_state
             .block_reward(EpochNumber::new(*epoch))
             .await
@@ -843,9 +842,7 @@ pub async fn distribute_block_reward(
     // and the parent block is from V3 (which does not have a previously distributed reward field),
     // we need to recompute the previously distributed rewards
     // using the fixed block reward and the number of blocks in which fixed reward was distributed
-    if version >= DrbAndHeaderUpgradeVersion::version()
-        && parent_header.version() == EpochVersion::version()
-    {
+    if version >= DRB_AND_HEADER_UPGRADE_VERSION && parent_header.version() == EPOCH_VERSION {
         ensure!(
             instance_state.epoch_start_block != 0,
             "epoch_start_block is zero"
@@ -930,7 +927,7 @@ pub async fn get_leader_and_fetch_missing_rewards(
 
     let parent_header = parent_leaf.block_header();
 
-    if parent_header.version() <= EpochVersion::version() {
+    if parent_header.version() <= EPOCH_VERSION {
         let mut reward_accounts = HashSet::new();
         reward_accounts.insert(validator.account.into());
         let delegators = validator
@@ -1055,12 +1052,14 @@ pub mod tests {
         assert_eq!(*leader_commission, distributor.block_reward);
 
         let distributor = make_distributor(10001);
-        assert!(distributor
-            .compute_rewards()
-            .err()
-            .unwrap()
-            .to_string()
-            .contains("must not exceed"));
+        assert!(
+            distributor
+                .compute_rewards()
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("must not exceed")
+        );
     }
 
     #[test]

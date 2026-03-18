@@ -27,32 +27,10 @@
 //! service joining a network late, or having been offline for some time, is able to catch up with
 //! the events on the network that it missed.
 //!
-//! The current implementation of proactive fetching is meant to be the simplest effective algorithm
-//! which still gives us a reasonable range of configuration options for experimentation. It is
-//! subject to change as we learn about the behavior of proactive fetching in a realistic system.
-//!
-//! Proactive fetching is currently implemented by a background task which performs periodic scans
-//! of the database, identifying and retrieving missing objects. This task is generally low
-//! priority, since missing objects are rare, and it will take care not to monopolize resources that
-//! could be used to serve requests. To reduce load and to optimize for the common case where blocks
-//! are usually not missing once they have already been retrieved, we distinguish between _major_
-//! and _minor_ scans.
-//!
-//! Minor scans are lightweight and can run very frequently. They will only look for missing
-//! blocks among blocks that are new since the previous scan. Thus, the more frequently minor
-//! scans run, the less work they have to do. This allows them to run frequently, giving low
-//! latency for retrieval of newly produced blocks that we failed to receive initially. Between
-//! each minor scan, the task will sleep for [a configurable
-//! duration](Builder::with_minor_scan_interval) to wait for new blocks to be produced and give
-//! other tasks full access to all shared resources.
-//!
-//! Every `n`th scan (`n` is [configurable](Builder::with_major_scan_interval)) is a major scan.
-//! These scan all blocks from 0, which guarantees that we will eventually retrieve all blocks, even
-//! if for some reason we have lost a block that we previously had (due to storage failures and
-//! corruptions, or simple bugs in this software). These scans are rather expensive (although they
-//! will release control of shared resources many times during the duration of the scan), but
-//! because it is rather unlikely that a major scan will discover any missing blocks that the next
-//! minor scan would have missed, it is ok if major scans run very infrequently.
+//! Proactive fetching is implemented by a background task which performs periodic scans of the
+//! database, identifying and retrieving missing objects. This task is generally low priority, since
+//! missing objects are rare, and it will take care not to monopolize resources that could be used
+//! to serve requests.
 //!
 //! # Active Fetching
 //!
@@ -83,14 +61,14 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use async_lock::Semaphore;
 use async_trait::async_trait;
-use backoff::{backoff::Backoff, ExponentialBackoff, ExponentialBackoffBuilder};
+use backoff::{ExponentialBackoff, ExponentialBackoffBuilder, backoff::Backoff};
 use derivative::Derivative;
 use futures::{
     channel::oneshot,
-    future::{self, join_all, BoxFuture, Either, Future, FutureExt},
+    future::{self, BoxFuture, Either, Future, FutureExt, join_all},
     stream::{self, BoxStream, StreamExt},
 };
 use hotshot_types::{
@@ -100,23 +78,24 @@ use hotshot_types::{
         node_implementation::NodeType,
     },
 };
-use jf_merkle_tree_compat::{prelude::MerkleProof, MerkleTreeScheme};
+use jf_merkle_tree_compat::{MerkleTreeScheme, prelude::MerkleProof};
 use tagged_base64::TaggedBase64;
 use tokio::{spawn, time::sleep};
 use tracing::Instrument;
 
 use super::{
+    Transaction, VersionedDataSource,
     notifier::Notifier,
     storage::{
-        pruning::{PruneStorage, PrunedHeightDataSource, PrunedHeightStorage},
-        sql::MigrateTypes,
         Aggregate, AggregatesStorage, AvailabilityStorage, ExplorerStorage,
         MerklizedStateHeightStorage, MerklizedStateStorage, NodeStorage, UpdateAggregatesStorage,
         UpdateAvailabilityStorage,
+        pruning::{PruneStorage, PrunedHeightDataSource, PrunedHeightStorage},
+        sql::MigrateTypes,
     },
-    Transaction, VersionedDataSource,
 };
 use crate::{
+    Header, Payload, QueryError, QueryResult,
     availability::{
         AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, BlockWithTransaction, Fetch,
         FetchStream, HeaderQueryData, LeafId, LeafQueryData, NamespaceId, PayloadMetadata,
@@ -124,16 +103,18 @@ use crate::{
         UpdateAvailabilityData, VidCommonMetadata, VidCommonQueryData,
     },
     explorer::{self, ExplorerDataSource},
-    fetching::{self, request, Provider},
+    fetching::{self, Provider, request},
     merklized_state::{
         MerklizedState, MerklizedStateDataSource, MerklizedStateHeightPersistence, Snapshot,
     },
     metrics::PrometheusMetrics,
-    node::{NodeDataSource, SyncStatus, TimeWindowQueryData, WindowStart},
+    node::{
+        NodeDataSource, SyncStatus, SyncStatusQueryData, SyncStatusRange, TimeWindowQueryData,
+        WindowStart,
+    },
     status::{HasMetrics, StatusDataSource},
     task::BackgroundTask,
     types::HeightIndexed,
-    Header, Payload, QueryError, QueryResult,
 };
 
 mod block;
@@ -156,10 +137,9 @@ pub struct Builder<Types, S, P> {
     backoff: ExponentialBackoffBuilder,
     rate_limit: usize,
     range_chunk_size: usize,
-    minor_scan_interval: Duration,
-    major_scan_interval: usize,
-    major_scan_offset: usize,
+    proactive_interval: Duration,
     proactive_range_chunk_size: Option<usize>,
+    sync_status_chunk_size: usize,
     active_fetch_delay: Duration,
     chunk_fetch_delay: Duration,
     proactive_fetching: bool,
@@ -186,18 +166,9 @@ impl<Types, S, P> Builder<Types, S, P> {
             backoff: default_backoff,
             rate_limit: 32,
             range_chunk_size: 25,
-            // By default, we run minor proactive scans fairly frequently: once every minute. These
-            // scans are cheap (more the more frequently they run) and can help us keep up with
-            // the head of the chain even if our attached consensus instance is behind.
-            minor_scan_interval: Duration::from_secs(60),
-            // Major scans, on the other hand, are rather expensive and not especially important for
-            // usability. We run them rarely, once every 60 minor scans, or once every hour by
-            // default.
-            major_scan_interval: 60,
-            // Major scan offset can be used when starting multiple nodes at the same time, so they
-            // don't all pause for a major scan together.
-            major_scan_offset: 0,
+            proactive_interval: Duration::from_hours(8),
             proactive_range_chunk_size: None,
+            sync_status_chunk_size: 100_000,
             active_fetch_delay: Duration::from_millis(50),
             chunk_fetch_delay: Duration::from_millis(100),
             proactive_fetching: true,
@@ -261,34 +232,11 @@ impl<Types, S, P> Builder<Types, S, P> {
         self
     }
 
-    /// Set the time interval between minor proactive fetching scans.
+    /// Set the time interval between proactive fetching scans.
     ///
     /// See [proactive fetching](self#proactive-fetching).
-    pub fn with_minor_scan_interval(mut self, interval: Duration) -> Self {
-        self.minor_scan_interval = interval;
-        self
-    }
-
-    /// Set the interval (denominated in [minor scans](Self::with_minor_scan_interval)) between
-    /// major proactive fetching scans.
-    ///
-    /// See [proactive fetching](self#proactive-fetching).
-    pub fn with_major_scan_interval(mut self, interval: usize) -> Self {
-        self.major_scan_interval = interval;
-        self
-    }
-
-    /// Set the offset (denominated in [minor scans](Self::with_minor_scan_interval)) before the
-    /// first major proactive fetching scan.
-    ///
-    /// This is useful when starting multiple nodes at the same time: major proactive scans can have
-    /// a measurable impact on the performance of the node for a brief time while the scan is
-    /// running, so it may be desirable to prevent a group of nodes from all doing major scans at
-    /// the same time. This can be achieved by giving each node a different `major_scan_offset`.
-    ///
-    /// See also [proactive fetching](self#proactive-fetching).
-    pub fn with_major_scan_offset(mut self, offset: usize) -> Self {
-        self.major_scan_offset = offset;
+    pub fn with_proactive_interval(mut self, interval: Duration) -> Self {
+        self.proactive_interval = interval;
         self
     }
 
@@ -302,6 +250,13 @@ impl<Types, S, P> Builder<Types, S, P> {
     /// whatever the normal range chunk size is.
     pub fn with_proactive_range_chunk_size(mut self, range_chunk_size: usize) -> Self {
         self.proactive_range_chunk_size = Some(range_chunk_size);
+        self
+    }
+
+    /// Set the number of items to process in a single transaction when scanning the database for
+    /// missing objects.
+    pub fn with_sync_status_chunk_size(mut self, chunk_size: usize) -> Self {
+        self.sync_status_chunk_size = chunk_size;
         self
     }
 
@@ -520,9 +475,7 @@ where
             .aggregator_chunk_size
             .unwrap_or(builder.range_chunk_size);
         let proactive_fetching = builder.proactive_fetching;
-        let minor_interval = builder.minor_scan_interval;
-        let major_interval = builder.major_scan_interval;
-        let major_offset = builder.major_scan_offset;
+        let proactive_interval = builder.proactive_interval;
         let proactive_range_chunk_size = builder
             .proactive_range_chunk_size
             .unwrap_or(builder.range_chunk_size);
@@ -542,9 +495,7 @@ where
             Some(BackgroundTask::spawn(
                 "proactive scanner",
                 fetcher.clone().proactive_scan(
-                    minor_interval,
-                    major_interval,
-                    major_offset,
+                    proactive_interval,
                     proactive_range_chunk_size,
                     scanner_metrics,
                 ),
@@ -887,6 +838,7 @@ where
     payload_fetcher: Option<Arc<PayloadFetcher<Types, S, P>>>,
     vid_common_fetcher: Option<Arc<VidCommonFetcher<Types, S, P>>>,
     range_chunk_size: usize,
+    sync_status_chunk_size: usize,
     // Duration to sleep after each active fetch,
     active_fetch_delay: Duration,
     // Duration to sleep after each chunk fetched
@@ -960,6 +912,7 @@ where
             payload_fetcher,
             vid_common_fetcher: vid_fetcher,
             range_chunk_size: builder.range_chunk_size,
+            sync_status_chunk_size: builder.sync_status_chunk_size,
             active_fetch_delay: builder.active_fetch_delay,
             chunk_fetch_delay: builder.chunk_fetch_delay,
             backoff,
@@ -1425,162 +1378,163 @@ where
     /// task rather than called synchronously.
     async fn proactive_scan(
         self: Arc<Self>,
-        minor_interval: Duration,
-        major_interval: usize,
-        major_offset: usize,
+        interval: Duration,
         chunk_size: usize,
         metrics: ScannerMetrics,
     ) {
-        let mut prev_height = 0;
-
         for i in 0.. {
-            let major = i % major_interval == major_offset % major_interval;
-            let span = tracing::warn_span!("proactive scan", i, major, prev_height);
+            let span = tracing::warn_span!("proactive scan", i);
             metrics.running.set(1);
             metrics.current_scan.set(i);
-            metrics.current_is_major.set(major as usize);
             async {
-                let mut backoff = minor_interval;
-                let max_backoff = Duration::from_secs(60);
-                metrics.backoff.set(backoff.as_secs() as usize);
-
-                // We can't start the scan until we know the current block height and pruned height,
-                // so we know which blocks to scan. Thus we retry until this succeeds.
-                let heights = loop {
-                    let mut tx = match self.read().await {
-                        Ok(tx) => tx,
+                let sync_status = {
+                    match self.sync_status().await {
+                        Ok(st) => st,
                         Err(err) => {
-                            tracing::error!(
-                                ?backoff,
-                                "unable to start transaction for scan: {err:#}"
+                            tracing::warn!(
+                                "unable to load sync status, scan will be skipped: {err:#}"
                             );
-                            metrics.retries.update(1);
-                            sleep(backoff).await;
-                            backoff = min(2 * backoff, max_backoff);
-                            metrics.backoff.set(backoff.as_secs() as usize);
-                            continue;
+                            return;
                         },
-                    };
-                    let heights = match Heights::load(&mut tx).await {
-                        Ok(heights) => heights,
-                        Err(err) => {
-                            tracing::error!(?backoff, "unable to load heights: {err:#}");
-                            metrics.retries.update(1);
-                            sleep(backoff).await;
-                            backoff = min(2 * backoff, max_backoff);
-                            metrics.backoff.set(backoff.as_secs() as usize);
-                            continue;
-                        },
-                    };
-                    metrics.retries.set(0);
-                    break heights;
-                };
-
-                // Get the pruned height or default to 0 if it is not set. We will not look for
-                // blocks older than the pruned height.
-                let minimum_block_height = heights.pruned_height.unwrap_or(0) as usize;
-                // Get the block height; we will look for any missing blocks up to `block_height`.
-                let block_height = heights.height as usize;
-
-                // In a major scan, we fetch all blocks between 0 and `block_height`. In minor scans
-                // (much more frequent) we fetch blocks that are missing since the last scan.
-                let start = if major {
-                    // We log major scans at WARN level, since they happen infrequently and can have
-                    // a measurable impact on performance while running. This also serves as a
-                    // useful progress heartbeat.
-                    tracing::warn!(
-                        start = minimum_block_height,
-                        block_height,
-                        "starting major scan"
-                    );
-
-                    // If we're starting a major scan, reset the major scan counts of missing data
-                    // as we're about to recompute them.
-                    metrics.major_missing_blocks.set(0);
-                    metrics.major_missing_vid.set(0);
-
-                    minimum_block_height
-                } else {
-                    tracing::info!(start = prev_height, block_height, "starting minor scan");
-                    prev_height
-                };
-                prev_height = block_height;
-                metrics.current_start.set(start);
-                metrics.current_end.set(block_height);
-                metrics.scanned_blocks.set(0);
-                metrics.scanned_vid.set(0);
-
-                // Iterate over all blocks that we should have. Fetching the payload metadata is
-                // enough to trigger an active fetch of the corresponding leaf and the full block if
-                // they are missing, without loading the full payload from storage if we already
-                // have it.
-                //
-                // We iterate in reverse order for two reasons:
-                // 1. More recent blocks are more likely to be requested sooner.
-                // 2. Leaves are inherently fetched in reverse order, because we cannot (actively)
-                //    fetch a leaf until we have the subsequent leaf, which tells us what the hash
-                //    of its parent should be. Thus, if we iterated forwards, we could get stuck any
-                //    time we came upon two consecutive missing leaves.
-                let mut blocks = self
-                    .clone()
-                    .get_range_with_chunk_size_rev::<PayloadMetadata<Types>>(
-                        chunk_size,
-                        Bound::Included(start),
-                        block_height.saturating_sub(1),
-                    );
-                let mut missing_blocks = 0;
-                while let Some(fetch) = blocks.next().await {
-                    if fetch.is_pending() {
-                        missing_blocks += 1;
-                        // Wait for the block to be fetched. This slows down the scanner so that we
-                        // don't waste memory generating more active fetch tasks then we can handle
-                        // at a given time. Note that even with this await, all blocks within a
-                        // chunk are fetched in parallel, so this does not block the next block in
-                        // the chunk, only the next chunk until the current chunk completes.
-                        fetch.await;
                     }
-                    metrics.scanned_blocks.update(1);
-                }
-                metrics.add_missing_blocks(major, missing_blocks);
+                };
+                tracing::info!(?sync_status, "starting scan");
+                metrics.missing_blocks.set(sync_status.blocks.missing);
+                metrics.missing_vid.set(sync_status.vid_common.missing);
 
-                // We have to trigger a separate fetch of the VID data, since this is fetched
-                // independently of the block payload.
-                let mut vid = self
-                    .clone()
-                    .get_range_with_chunk_size_rev::<VidCommonMetadata<Types>>(
-                        chunk_size,
-                        Bound::Included(start),
-                        block_height.saturating_sub(1),
-                    );
-                let mut missing_vid = 0;
-                while let Some(fetch) = vid.next().await {
-                    if fetch.is_pending() {
-                        missing_vid += 1;
-                        // As above, limit the speed at which we spawn new fetches to the speed at
-                        // which we can process them.
-                        fetch.await;
+                // Fetch missing blocks. This will also trigger a fetch for the corresponding
+                // missing leaves.
+                for range in sync_status.blocks.ranges {
+                    metrics.scanned_blocks.set(range.start);
+                    if range.status != SyncStatus::Missing {
+                        continue;
                     }
-                    metrics.scanned_vid.update(1);
-                }
-                metrics.add_missing_vid(major, missing_vid);
 
-                tracing::info!("completed proactive scan, will scan again in {minor_interval:?}");
+                    tracing::info!(?range, "fetching missing block range");
+                    self.clone()
+                        // Fetching the payload metadata is enough to trigger an active fetch of the
+                        // corresponding leaf and the full block if they are missing.
+                        //
+                        // We iterate in reverse order because leaves are inherently fetched in
+                        // reverse, since we cannot (actively) fetch a leaf until we have the
+                        // subsequent leaf, which tells us what the hash of its parent should be.
+                        .get_range_with_chunk_size_rev::<PayloadMetadata<Types>>(
+                            chunk_size,
+                            Bound::Included(range.start),
+                            range.end - 1,
+                        )
+                        .then(|fetch| async move {fetch.await;})
+                        .collect::<()>()
+                        .await;
+                    metrics
+                        .missing_blocks
+                        .update((range.start as i64) - (range.end as i64));
+                }
+
+                // Do the same for VID.
+                for range in sync_status.vid_common.ranges {
+                    metrics.scanned_vid.set(range.start);
+                    if range.status != SyncStatus::Missing {
+                        continue;
+                    }
+
+                    tracing::info!(?range, "fetching missing VID range");
+                    self.clone()
+                        .get_range_with_chunk_size_rev::<VidCommonMetadata<Types>>(
+                            chunk_size,
+                            Bound::Included(range.start),
+                            range.end - 1,
+                        )
+                        .then(|fetch| async move {
+                            fetch.await;
+                        })
+                        .collect::<()>()
+                        .await;
+                    metrics
+                        .missing_vid
+                        .update((range.start as i64) - (range.end as i64));
+                }
+
+                tracing::info!("completed proactive scan, will scan again in {interval:?}");
 
                 // Reset metrics.
                 metrics.running.set(0);
-                if major {
-                    // If we just completed a major scan, reset the incremental counts of missing
-                    // data from minor scans, so the next round of minor scans can recompute/update
-                    // them.
-                    metrics.minor_missing_blocks.set(0);
-                    metrics.minor_missing_vid.set(0);
-                }
-
-                sleep(minor_interval).await;
             }
             .instrument(span)
             .await;
+
+            sleep(interval).await;
         }
+    }
+}
+
+impl<Types, S, P> Fetcher<Types, S, P>
+where
+    Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
+    S: VersionedDataSource + 'static,
+    for<'a> S::ReadOnly<'a>: NodeStorage<Types> + PrunedHeightStorage,
+    P: Send + Sync,
+{
+    async fn sync_status(&self) -> anyhow::Result<SyncStatusQueryData> {
+        let heights = {
+            let mut tx = self
+                .read()
+                .await
+                .context("opening transaction to load heights")?;
+            Heights::load(&mut tx).await.context("loading heights")?
+        };
+
+        let mut res = SyncStatusQueryData {
+            pruned_height: heights.pruned_height.map(|h| h as usize),
+            ..Default::default()
+        };
+        let start = if let Some(height) = res.pruned_height {
+            // Add an initial range for pruned data.
+            let range = SyncStatusRange {
+                status: SyncStatus::Pruned,
+                start: 0,
+                end: height + 1,
+            };
+            res.blocks.ranges.push(range);
+            res.leaves.ranges.push(range);
+            res.vid_common.ranges.push(range);
+            res.vid_shares.ranges.push(range);
+
+            height + 1
+        } else {
+            0
+        };
+
+        // Break the range into manageable chunks, so we don't hold any one database transaction
+        // open for too long.
+        for chunk in range_chunks(
+            start..(heights.height as usize),
+            self.sync_status_chunk_size,
+        ) {
+            tracing::debug!(chunk.start, chunk.end, "checking sync status in sub-range");
+            let mut tx = self
+                .read()
+                .await
+                .context("opening transaction to sync status range")?;
+            let range_status = tx
+                .sync_status_for_range(chunk.start, chunk.end)
+                .await
+                .context(format!("checking sync status in sub-range {chunk:?}"))?;
+            tracing::debug!(
+                chunk.start,
+                chunk.end,
+                ?range_status,
+                "found sync status for range"
+            );
+
+            res.blocks.extend(range_status.blocks);
+            res.leaves.extend(range_status.leaves);
+            res.vid_common.extend(range_status.vid_common);
+            res.vid_shares.extend(range_status.vid_shares);
+        }
+
+        Ok(res)
     }
 }
 
@@ -1844,7 +1798,7 @@ where
     Types: NodeType,
     Header<Types>: QueryableHeader<Types>,
     S: VersionedDataSource + 'static,
-    for<'a> S::ReadOnly<'a>: NodeStorage<Types>,
+    for<'a> S::ReadOnly<'a>: NodeStorage<Types> + PrunedHeightStorage,
     P: Send + Sync,
 {
     async fn block_height(&self) -> QueryResult<usize> {
@@ -1886,11 +1840,13 @@ where
         tx.vid_share(id).await
     }
 
-    async fn sync_status(&self) -> QueryResult<SyncStatus> {
-        let mut tx = self.read().await.map_err(|err| QueryError::Error {
-            message: err.to_string(),
-        })?;
-        tx.sync_status().await
+    async fn sync_status(&self) -> QueryResult<SyncStatusQueryData> {
+        self.fetcher
+            .sync_status()
+            .await
+            .map_err(|err| QueryError::Error {
+                message: format!("{err:#}"),
+            })
     }
 
     async fn get_header_window(
@@ -2251,30 +2207,14 @@ struct ScannerMetrics {
     running: Box<dyn Gauge>,
     /// The current number that is running.
     current_scan: Box<dyn Gauge>,
-    /// Whether the currently running scan is a major scan (1) or not (0).
-    current_is_major: Box<dyn Gauge>,
-    /// Current backoff delay for retries (s).
-    backoff: Box<dyn Gauge>,
-    /// Number of retries since last success.
-    retries: Box<dyn Gauge>,
-    /// Block height where the current scan started.
-    current_start: Box<dyn Gauge>,
-    /// Block height where the current scan will end.
-    current_end: Box<dyn Gauge>,
     /// Number of blocks processed in the current scan.
     scanned_blocks: Box<dyn Gauge>,
     /// Number of VID entries processed in the current scan.
     scanned_vid: Box<dyn Gauge>,
-    /// The number of missing blocks encountered in the last major scan.
-    major_missing_blocks: Box<dyn Gauge>,
-    /// The number of missing VID entries encountered in the last major scan.
-    major_missing_vid: Box<dyn Gauge>,
-    /// The number of missing blocks encountered _cumulatively_ in minor scans since the last major
-    /// scan.
-    minor_missing_blocks: Box<dyn Gauge>,
-    /// The number of missing VID entries encountered _cumulatively_ in minor scans since the last
-    /// major scan.
-    minor_missing_vid: Box<dyn Gauge>,
+    /// The number of missing blocks discovered and not yet resolved in the current scan.
+    missing_blocks: Box<dyn Gauge>,
+    /// The number of missing VID entries discovered and not yet resolved in the current scan.
+    missing_vid: Box<dyn Gauge>,
 }
 
 impl ScannerMetrics {
@@ -2283,33 +2223,10 @@ impl ScannerMetrics {
         Self {
             running: group.create_gauge("running".into(), None),
             current_scan: group.create_gauge("current".into(), None),
-            current_is_major: group.create_gauge("is_major".into(), None),
-            backoff: group.create_gauge("backoff".into(), Some("s".into())),
-            retries: group.create_gauge("retries".into(), None),
-            current_start: group.create_gauge("start".into(), None),
-            current_end: group.create_gauge("end".into(), None),
             scanned_blocks: group.create_gauge("scanned_blocks".into(), None),
             scanned_vid: group.create_gauge("scanned_vid".into(), None),
-            major_missing_blocks: group.create_gauge("major_missing_blocks".into(), None),
-            major_missing_vid: group.create_gauge("major_missing_vid".into(), None),
-            minor_missing_blocks: group.create_gauge("minor_missing_blocks".into(), None),
-            minor_missing_vid: group.create_gauge("minor_missing_vid".into(), None),
-        }
-    }
-
-    fn add_missing_blocks(&self, major: bool, missing: usize) {
-        if major {
-            self.major_missing_blocks.set(missing);
-        } else {
-            self.minor_missing_blocks.update(missing as i64);
-        }
-    }
-
-    fn add_missing_vid(&self, major: bool, missing: usize) {
-        if major {
-            self.major_missing_vid.set(missing);
-        } else {
-            self.minor_missing_vid.update(missing as i64);
+            missing_blocks: group.create_gauge("missing_blocks".into(), None),
+            missing_vid: group.create_gauge("missing_vid".into(), None),
         }
     }
 }
@@ -2384,7 +2301,17 @@ async fn select_some<T>(
 
 #[cfg(test)]
 mod test {
+    use hotshot_example_types::node_types::TEST_VERSIONS;
+
     use super::*;
+    use crate::{
+        data_source::{
+            sql::testing::TmpDb,
+            storage::{SqlStorage, StorageConnectionType},
+        },
+        fetching::provider::NoFetching,
+        testing::{consensus::MockSqlDataSource, mocks::MockTypes},
+    };
 
     #[test]
     fn test_range_chunks() {
@@ -2444,5 +2371,125 @@ mod test {
             range_chunks_rev(Bound::Excluded(0), 4, 2).collect::<Vec<_>>(),
             [3..5, 1..3]
         );
+    }
+
+    async fn test_sync_status(chunk_size: usize, present_ranges: &[(usize, usize)]) {
+        let block_height = present_ranges.last().unwrap().1;
+        let storage = TmpDb::init().await;
+        let db = SqlStorage::connect(storage.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+        let ds = MockSqlDataSource::builder(db, NoFetching)
+            .with_sync_status_chunk_size(chunk_size)
+            .build()
+            .await
+            .unwrap();
+
+        // Generate some mock leaves to insert.
+        let mut leaves: Vec<LeafQueryData<MockTypes>> = vec![
+            LeafQueryData::<MockTypes>::genesis(
+                &Default::default(),
+                &Default::default(),
+                TEST_VERSIONS.test,
+            )
+            .await,
+        ];
+        for i in 1..block_height {
+            let mut leaf = leaves[i - 1].clone();
+            leaf.leaf.block_header_mut().block_number = i as u64;
+            leaves.push(leaf);
+        }
+
+        // Set up.
+        {
+            let mut tx = ds.write().await.unwrap();
+
+            for &(start, end) in present_ranges {
+                for leaf in leaves[start..end].iter() {
+                    tracing::info!(height = leaf.height(), "insert leaf");
+                    tx.insert_leaf(leaf.clone()).await.unwrap();
+                }
+            }
+
+            if present_ranges[0].0 > 0 {
+                tx.save_pruned_height((present_ranges[0].0 - 1) as u64)
+                    .await
+                    .unwrap();
+            }
+
+            tx.commit().await.unwrap();
+        }
+
+        let sync_status = ds.sync_status().await.unwrap().leaves;
+
+        // Verify missing.
+        let present: usize = present_ranges.iter().map(|(start, end)| end - start).sum();
+        assert_eq!(
+            sync_status.missing,
+            block_height - present - present_ranges[0].0
+        );
+
+        // Verify ranges.
+        let mut ranges = sync_status.ranges.into_iter();
+        let mut prev = 0;
+        for &(start, end) in present_ranges {
+            if start != prev {
+                let range = ranges.next().unwrap();
+                assert_eq!(
+                    range,
+                    SyncStatusRange {
+                        start: prev,
+                        end: start,
+                        status: if prev == 0 {
+                            SyncStatus::Pruned
+                        } else {
+                            SyncStatus::Missing
+                        },
+                    }
+                );
+            }
+            let range = ranges.next().unwrap();
+            assert_eq!(
+                range,
+                SyncStatusRange {
+                    start,
+                    end,
+                    status: SyncStatus::Present,
+                }
+            );
+            prev = end;
+        }
+
+        if prev != block_height {
+            let range = ranges.next().unwrap();
+            assert_eq!(
+                range,
+                SyncStatusRange {
+                    start: prev,
+                    end: block_height,
+                    status: SyncStatus::Missing,
+                }
+            );
+        }
+
+        assert_eq!(ranges.next(), None);
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_sync_status_multiple_chunks() {
+        test_sync_status(10, &[(0, 1), (3, 5), (8, 10)]).await;
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_sync_status_multiple_chunks_present_range_overlapping_chunk() {
+        test_sync_status(5, &[(1, 4)]).await;
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_sync_status_multiple_chunks_missing_range_overlapping_chunk() {
+        test_sync_status(5, &[(0, 1), (4, 5)]).await;
     }
 }

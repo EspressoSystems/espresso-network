@@ -1,5 +1,5 @@
 use std::{
-    cmp::{min, Ordering},
+    cmp::{Ordering, min},
     fmt::{self, Debug, Display, Formatter},
     num::ParseIntError,
     str::FromStr,
@@ -22,7 +22,7 @@ use sequencer_utils::{impl_serde_from_string_or_integer, ser::FromStringOrIntege
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use time::{
-    format_description::well_known::Rfc3339 as TimestampFormat, macros::time, Date, OffsetDateTime,
+    Date, OffsetDateTime, format_description::well_known::Rfc3339 as TimestampFormat, macros::time,
 };
 use tokio::time::sleep;
 

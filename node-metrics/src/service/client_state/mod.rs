@@ -5,8 +5,8 @@ use std::{
 
 use async_lock::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use bitvec::vec::BitVec;
-use espresso_types::{v0_3::AuthenticatedValidator, SeqTypes};
-use futures::{channel::mpsc::SendError, Sink, SinkExt, Stream, StreamExt};
+use espresso_types::{SeqTypes, v0_3::AuthenticatedValidator};
+use futures::{Sink, SinkExt, Stream, StreamExt, channel::mpsc::SendError};
 use hotshot::types::BLSPubKey;
 use hotshot_query_service::explorer::{BlockDetail, ExplorerHistograms};
 use hotshot_types::PeerConfig;
@@ -1613,13 +1613,13 @@ pub mod tests {
     use bitvec::vec::BitVec;
     use espresso_types::{NodeState, ValidatedState};
     use futures::{
-        channel::mpsc::{self, Sender},
         SinkExt, StreamExt,
+        channel::mpsc::{self, Sender},
     };
-    use hotshot_example_types::node_types::TestVersions;
+    use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_query_service::{
         availability::{BlockQueryData, Leaf1QueryData},
-        testing::mocks::MockVersions,
+        testing::mocks::MOCK_UPGRADE,
     };
     use hotshot_types::{
         data::Leaf2, signature_key::BLSPubKey, traits::signature_key::SignatureKey,
@@ -1641,8 +1641,8 @@ pub mod tests {
                 ProcessDistributeValidatorHandlingTask, ProcessDistributeVotersHandlingTask,
             },
             data_state::{
-                create_block_detail_from_block, DataState, LocationDetails, NodeIdentity,
-                ProcessLeafAndBlockPairStreamTask,
+                DataState, LocationDetails, NodeIdentity, ProcessLeafAndBlockPairStreamTask,
+                create_block_detail_from_block,
             },
             server_message::ServerMessage,
         },
@@ -1803,6 +1803,8 @@ pub mod tests {
     #[tokio::test(flavor = "multi_thread")]
     #[cfg(feature = "testing")]
     async fn test_process_client_handling_stream_request_latest_blocks_snapshot() {
+        use hotshot_query_service::testing::mocks::MOCK_UPGRADE;
+
         use crate::service::data_state::create_block_detail_from_block;
 
         let (_, _, _, mut data_state) = create_test_data_state();
@@ -1810,7 +1812,7 @@ pub mod tests {
         let validated_state = ValidatedState::default();
         let instance_state = NodeState::mock();
         let block_1 =
-            BlockQueryData::genesis::<MockVersions>(&validated_state, &instance_state).await;
+            BlockQueryData::genesis(&validated_state, &instance_state, MOCK_UPGRADE.base).await;
         data_state.add_latest_block(create_block_detail_from_block(&block_1));
 
         let data_state = Arc::new(RwLock::new(data_state));
@@ -2074,10 +2076,14 @@ pub mod tests {
         let validated_state = ValidatedState::default();
         let instance_state = NodeState::mock();
 
-        let leaf =
-            Leaf2::genesis::<TestVersions>(&ValidatedState::default(), &NodeState::mock()).await;
+        let leaf = Leaf2::genesis(
+            &ValidatedState::default(),
+            &NodeState::mock(),
+            TEST_VERSIONS.test.base,
+        )
+        .await;
         let block_query_data =
-            BlockQueryData::genesis::<MockVersions>(&validated_state, &instance_state).await;
+            BlockQueryData::genesis(&validated_state, &instance_state, MOCK_UPGRADE.base).await;
         let expected_block = create_block_detail_from_block(&block_query_data);
         let arc_expected_block = Arc::new(expected_block);
 

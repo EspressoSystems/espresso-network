@@ -14,12 +14,12 @@ use serde_inline_default::serde_inline_default;
 use thiserror::Error;
 
 use crate::{
+    HotShotConfig, NodeType, ValidatorConfig,
     constants::{
-        ORCHESTRATOR_DEFAULT_NUM_ROUNDS, ORCHESTRATOR_DEFAULT_TRANSACTIONS_PER_ROUND,
-        ORCHESTRATOR_DEFAULT_TRANSACTION_SIZE, REQUEST_DATA_DELAY,
+        ORCHESTRATOR_DEFAULT_NUM_ROUNDS, ORCHESTRATOR_DEFAULT_TRANSACTION_SIZE,
+        ORCHESTRATOR_DEFAULT_TRANSACTIONS_PER_ROUND, REQUEST_DATA_DELAY,
     },
     hotshot_config_file::HotShotConfigFile,
-    HotShotConfig, NodeType, ValidatorConfig,
 };
 
 /// Configuration describing a libp2p node
@@ -250,10 +250,10 @@ impl<TYPES: NodeType> NetworkConfig<TYPES> {
     /// ```
     pub fn to_file(&self, file: String) -> Result<(), NetworkConfigError> {
         // ensure the directory containing the config file exists
-        if let Some(dir) = Path::new(&file).parent() {
-            if let Err(e) = fs::create_dir_all(dir) {
-                return Err(NetworkConfigError::FailedToCreatePath(e));
-            }
+        if let Some(dir) = Path::new(&file).parent()
+            && let Err(e) = fs::create_dir_all(dir)
+        {
+            return Err(NetworkConfigError::FailedToCreatePath(e));
         }
 
         // serialize

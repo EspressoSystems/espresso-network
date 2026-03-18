@@ -88,11 +88,7 @@ where
                 .fold(
                     U256::ZERO,
                     |acc, (entry, b)| {
-                        if *b {
-                            acc + entry.stake_amount
-                        } else {
-                            acc
-                        }
+                        if *b { acc + entry.stake_amount } else { acc }
                     },
                 );
         if total_weight < qc_pp.threshold {
@@ -140,11 +136,7 @@ where
                 .fold(
                     U256::ZERO,
                     |acc, (entry, b)| {
-                        if *b {
-                            acc + entry.stake_amount
-                        } else {
-                            acc
-                        }
+                        if *b { acc + entry.stake_amount } else { acc }
                     },
                 );
         if total_weight < qc_vp.threshold {
@@ -200,10 +192,10 @@ where
 #[cfg(test)]
 mod tests {
     use jf_signature::{
-        bls_over_bn254::{BLSOverBN254CurveSignatureScheme, KeyPair},
         SignatureScheme,
+        bls_over_bn254::{BLSOverBN254CurveSignatureScheme, KeyPair},
     };
-    use vbs::{version::StaticVersion, BinarySerializer, Serializer};
+    use vbs::{BinarySerializer, Serializer, version::StaticVersion};
 
     use super::*;
     type Version = StaticVersion<0, 1>;
@@ -314,5 +306,205 @@ mod tests {
     #[test]
     fn test_quorum_certificate() {
         test_quorum_certificate!(BLSOverBN254CurveSignatureScheme);
+    }
+
+    /// State returned by the [`three_node_setup`] helper.
+    struct ThreeNodeSetup {
+        key_pair1: KeyPair,
+        key_pair2: KeyPair,
+        key_pair3: KeyPair,
+        entries: Vec<
+            StakeTableEntry<<BLSOverBN254CurveSignatureScheme as SignatureScheme>::VerificationKey>,
+        >,
+        sig1: <BLSOverBN254CurveSignatureScheme as SignatureScheme>::Signature,
+        sig2: <BLSOverBN254CurveSignatureScheme as SignatureScheme>::Signature,
+        sig3: <BLSOverBN254CurveSignatureScheme as SignatureScheme>::Signature,
+    }
+
+    /// Helper that assembles a 3-node QC setup reused across signers tests.
+    ///
+    /// Callers build `QcParams { stake_entries: &setup.entries, threshold, agg_sig_pp: () }`
+    /// locally so that the borrow of `entries` stays within the caller's stack frame.
+    fn three_node_setup() -> ThreeNodeSetup {
+        let mut rng = jf_utils::test_rng();
+        let key_pair1 = KeyPair::generate(&mut rng);
+        let key_pair2 = KeyPair::generate(&mut rng);
+        let key_pair3 = KeyPair::generate(&mut rng);
+        let entries = vec![
+            StakeTableEntry {
+                stake_key: key_pair1.ver_key(),
+                stake_amount: U256::from(1u8),
+            },
+            StakeTableEntry {
+                stake_key: key_pair2.ver_key(),
+                stake_amount: U256::from(1u8),
+            },
+            StakeTableEntry {
+                stake_key: key_pair3.ver_key(),
+                stake_amount: U256::from(1u8),
+            },
+        ];
+        let msg = [42u8; 32];
+        let sig1 = BitVectorQc::<BLSOverBN254CurveSignatureScheme>::sign(
+            &(),
+            key_pair1.sign_key_ref(),
+            msg,
+            &mut rng,
+        )
+        .unwrap();
+        let sig2 = BitVectorQc::<BLSOverBN254CurveSignatureScheme>::sign(
+            &(),
+            key_pair2.sign_key_ref(),
+            msg,
+            &mut rng,
+        )
+        .unwrap();
+        let sig3 = BitVectorQc::<BLSOverBN254CurveSignatureScheme>::sign(
+            &(),
+            key_pair3.sign_key_ref(),
+            msg,
+            &mut rng,
+        )
+        .unwrap();
+        ThreeNodeSetup {
+            key_pair1,
+            key_pair2,
+            key_pair3,
+            entries,
+            sig1,
+            sig2,
+            sig3,
+        }
+    }
+
+    #[test]
+    fn test_signers_extracts_correct_keys() {
+        let setup = three_node_setup();
+        let qc_pp = QcParams {
+            stake_entries: &setup.entries,
+            threshold: U256::from(2u8),
+            agg_sig_pp: (),
+        };
+        // Nodes 2 and 3 sign (bitvec [0, 1, 1])
+        let signers_bv = bitvec![0, 1, 1];
+        let qc = BitVectorQc::<BLSOverBN254CurveSignatureScheme>::assemble(
+            &qc_pp,
+            signers_bv.as_bitslice(),
+            &[setup.sig2, setup.sig3],
+        )
+        .unwrap();
+        let result = BitVectorQc::<BLSOverBN254CurveSignatureScheme>::signers(&qc_pp, &qc).unwrap();
+        assert_eq!(
+            result,
+            vec![setup.key_pair2.ver_key(), setup.key_pair3.ver_key()]
+        );
+    }
+
+    #[test]
+    fn test_signers_different_subset() {
+        let setup = three_node_setup();
+        let qc_pp = QcParams {
+            stake_entries: &setup.entries,
+            threshold: U256::from(2u8),
+            agg_sig_pp: (),
+        };
+        // Nodes 1 and 3 sign (bitvec [1, 0, 1])
+        let signers_bv = bitvec![1, 0, 1];
+        let qc = BitVectorQc::<BLSOverBN254CurveSignatureScheme>::assemble(
+            &qc_pp,
+            signers_bv.as_bitslice(),
+            &[setup.sig1, setup.sig3],
+        )
+        .unwrap();
+        let result = BitVectorQc::<BLSOverBN254CurveSignatureScheme>::signers(&qc_pp, &qc).unwrap();
+        assert_eq!(
+            result,
+            vec![setup.key_pair1.ver_key(), setup.key_pair3.ver_key()]
+        );
+    }
+
+    #[test]
+    fn test_signers_all_participants() {
+        let setup = three_node_setup();
+        let qc_pp = QcParams {
+            stake_entries: &setup.entries,
+            threshold: U256::from(2u8),
+            agg_sig_pp: (),
+        };
+        let signers_bv = bitvec![1, 1, 1];
+        let qc = BitVectorQc::<BLSOverBN254CurveSignatureScheme>::assemble(
+            &qc_pp,
+            signers_bv.as_bitslice(),
+            &[setup.sig1, setup.sig2, setup.sig3],
+        )
+        .unwrap();
+        let result = BitVectorQc::<BLSOverBN254CurveSignatureScheme>::signers(&qc_pp, &qc).unwrap();
+        assert_eq!(
+            result,
+            vec![
+                setup.key_pair1.ver_key(),
+                setup.key_pair2.ver_key(),
+                setup.key_pair3.ver_key()
+            ]
+        );
+    }
+
+    #[test]
+    fn test_signers_no_participants() {
+        // signers() does NOT check the threshold - it just reads the bitvec.
+        // We build the (sig, bitvec) tuple directly to avoid the threshold check in assemble().
+        let setup = three_node_setup();
+        let qc_pp = QcParams {
+            stake_entries: &setup.entries,
+            threshold: U256::from(2u8),
+            agg_sig_pp: (),
+        };
+        // Use sig1 as the dummy aggregated signature; signers() only reads the bitvec.
+        let empty_bv = bitvec![0, 0, 0];
+        let qc = (setup.sig1, empty_bv);
+        let result = BitVectorQc::<BLSOverBN254CurveSignatureScheme>::signers(&qc_pp, &qc).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_signers_does_not_check_message() {
+        // signers() only reads the bitvec, it does NOT verify the message.
+        // So calling it with a QC assembled over message A but passing a different message is fine.
+        let setup = three_node_setup();
+        let qc_pp = QcParams {
+            stake_entries: &setup.entries,
+            threshold: U256::from(2u8),
+            agg_sig_pp: (),
+        };
+        let signers_bv = bitvec![0, 1, 1];
+        // Assemble QC over the "real" message (msg = [42u8; 32] from three_node_setup)
+        let qc = BitVectorQc::<BLSOverBN254CurveSignatureScheme>::assemble(
+            &qc_pp,
+            signers_bv.as_bitslice(),
+            &[setup.sig2, setup.sig3],
+        )
+        .unwrap();
+        // signers() succeeds regardless of any message - it only reads the bitvec.
+        let result = BitVectorQc::<BLSOverBN254CurveSignatureScheme>::signers(&qc_pp, &qc).unwrap();
+        assert_eq!(
+            result,
+            vec![setup.key_pair2.ver_key(), setup.key_pair3.ver_key()]
+        );
+    }
+
+    #[test]
+    fn test_signers_bitvec_length_mismatch() {
+        let setup = three_node_setup();
+        let qc_pp = QcParams {
+            stake_entries: &setup.entries,
+            threshold: U256::from(2u8),
+            agg_sig_pp: (),
+        };
+        // qc_pp has 3 stake entries but we create a QC with a bitvec of length 4.
+        let wrong_bv = bitvec![0, 1, 1, 0];
+        // Use sig1 as a plausible Signature value; signers() won't verify it.
+        let qc_bad = (setup.sig1, wrong_bv);
+        let result = BitVectorQc::<BLSOverBN254CurveSignatureScheme>::signers(&qc_pp, &qc_bad);
+        assert!(result.is_err());
     }
 }

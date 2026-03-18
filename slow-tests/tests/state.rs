@@ -3,48 +3,46 @@ use std::time::{Duration, Instant};
 use alloy::primitives::{Address, U256};
 use committable::Commitment;
 use espresso_types::{
-    v0_3::RewardAmount,
-    v0_4::{RewardAccountV2, RewardMerkleTreeV2, REWARD_MERKLE_TREE_V2_HEIGHT},
     FeeAccount, FeeAmount, Header, SeqTypes,
+    v0_3::RewardAmount,
+    v0_4::{REWARD_MERKLE_TREE_V2_HEIGHT, RewardAccountV2, RewardMerkleTreeV2},
 };
 use futures::{StreamExt, TryStreamExt};
 use hotshot_query_service::{
     availability::BlockQueryData,
     data_source::{
+        Transaction, VersionedDataSource,
         sql::Config,
         storage::sql::{
-            testing::TmpDb, SqlStorage, StorageConnectionType, Transaction as SqlTransaction, Write,
+            SqlStorage, StorageConnectionType, Transaction as SqlTransaction, Write, testing::TmpDb,
         },
-        Transaction, VersionedDataSource,
     },
     merklized_state::{MerklizedState, UpdateStateData},
     types::HeightIndexed,
 };
 use jf_merkle_tree_compat::{
-    prelude::{MerkleProof, Sha3Node},
     LookupResult, MerkleTreeScheme, ToTraversalPath, UniversalMerkleTreeScheme,
+    prelude::{MerkleProof, Sha3Node},
 };
-use portpicker::pick_unused_port;
 use sequencer::{
+    SequencerApiVersion,
     api::{
+        Options,
         data_source::testing::TestableSequencerDataSource,
         sql::DataSource as SqlDataSource,
         test_helpers::{TestNetwork, TestNetworkConfigBuilder},
-        Options,
     },
     testing::{TestConfig, TestConfigBuilder},
-    SequencerApiVersion,
 };
 use surf_disco::Client;
+use test_utils::reserve_tcp_port;
 use tide_disco::error::ServerError;
 use tokio::time::sleep;
-
-type MockSequencerVersions =
-    espresso_types::SequencerVersions<espresso_types::EpochVersion, espresso_types::V0_0>;
+use versions::{EPOCH_VERSION, Upgrade};
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_merklized_state_api() {
-    let port = pick_unused_port().expect("No ports free");
+    let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
     let storage = SqlDataSource::create_storage().await;
 
@@ -55,7 +53,7 @@ async fn slow_test_merklized_state_api() {
         .api_config(options)
         .network_config(network_config)
         .build();
-    let mut network = TestNetwork::new(config, MockSequencerVersions::new()).await;
+    let mut network = TestNetwork::new(config, Upgrade::trivial(EPOCH_VERSION)).await;
     let url = format!("http://localhost:{port}").parse().unwrap();
     let client: Client<ServerError, SequencerApiVersion> = Client::new(url);
 

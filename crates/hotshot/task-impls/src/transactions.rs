@@ -11,27 +11,28 @@ use std::{
 
 use async_broadcast::{Receiver, Sender};
 use async_trait::async_trait;
-use futures::{stream::FuturesUnordered, StreamExt};
+use futures::{StreamExt, stream::FuturesUnordered};
 use hotshot_builder_api::v0_1::block_info::AvailableBlockInfo;
 use hotshot_task::task::TaskState;
 use hotshot_types::{
     consensus::OuterConsensus,
-    data::{null_block, PackedBundle, VidCommitment},
+    data::{EpochNumber, PackedBundle, VidCommitment, ViewNumber, null_block},
     epoch_membership::EpochMembershipCoordinator,
     event::{Event, EventType},
     message::UpgradeLock,
     traits::{
-        block_contents::{BlockHeader, BuilderFee, EncodeBytes},
-        node_implementation::{ConsensusTime, NodeType, Versions},
-        signature_key::{BuilderSignatureKey, SignatureKey},
         BlockPayload,
+        block_contents::{BlockHeader, BuilderFee, EncodeBytes},
+        node_implementation::NodeType,
+        signature_key::{BuilderSignatureKey, SignatureKey},
     },
-    utils::{is_epoch_transition, is_last_block, ViewInner},
+    utils::{ViewInner, is_epoch_transition, is_last_block},
 };
 use hotshot_utils::anytrace::*;
 use tokio::time::{sleep, timeout};
 use tracing::instrument;
-use vbs::version::{StaticVersionType, Version};
+use vbs::version::Version;
+use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION};
 
 use crate::{
     builder::v0_1::BuilderClient as BuilderClientBase,
@@ -68,7 +69,7 @@ pub struct BuilderResponse<TYPES: NodeType> {
 }
 
 /// Tracks state of a Transaction task
-pub struct TransactionTaskState<TYPES: NodeType, V: Versions> {
+pub struct TransactionTaskState<TYPES: NodeType> {
     /// The state's api
     pub builder_timeout: Duration,
 
@@ -76,10 +77,10 @@ pub struct TransactionTaskState<TYPES: NodeType, V: Versions> {
     pub output_event_stream: async_broadcast::Sender<Event<TYPES>>,
 
     /// View number this view is executing in.
-    pub cur_view: TYPES::View,
+    pub cur_view: ViewNumber,
 
     /// Epoch number this node is executing in.
-    pub cur_epoch: Option<TYPES::Epoch>,
+    pub cur_epoch: Option<EpochNumber>,
 
     /// Reference to consensus. Leader will require a read lock on this.
     pub consensus: OuterConsensus<TYPES>,
@@ -103,19 +104,19 @@ pub struct TransactionTaskState<TYPES: NodeType, V: Versions> {
     pub id: u64,
 
     /// Lock for a decided upgrade
-    pub upgrade_lock: UpgradeLock<TYPES, V>,
+    pub upgrade_lock: UpgradeLock<TYPES>,
 
     /// Number of blocks in an epoch, zero means there are no epochs
     pub epoch_height: u64,
 }
 
-impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
+impl<TYPES: NodeType> TransactionTaskState<TYPES> {
     /// handle view change decide legacy or not
     pub async fn handle_view_change(
         &mut self,
         event_stream: &Sender<Arc<HotShotEvent<TYPES>>>,
-        block_view: TYPES::View,
-        block_epoch: Option<TYPES::Epoch>,
+        block_view: ViewNumber,
+        block_epoch: Option<EpochNumber>,
         vid: Option<VidCommitment>,
     ) -> Option<HotShotTaskCompleted> {
         self.handle_view_change_legacy(event_stream, block_view, block_epoch, vid)
@@ -127,11 +128,11 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
     pub async fn handle_view_change_legacy(
         &mut self,
         event_stream: &Sender<Arc<HotShotEvent<TYPES>>>,
-        block_view: TYPES::View,
-        block_epoch: Option<TYPES::Epoch>,
+        block_view: ViewNumber,
+        block_epoch: Option<EpochNumber>,
         vid: Option<VidCommitment>,
     ) -> Option<HotShotTaskCompleted> {
-        let version = match self.upgrade_lock.version(block_view).await {
+        let version = match self.upgrade_lock.version(block_view) {
             Ok(v) => v,
             Err(err) => {
                 tracing::error!(
@@ -144,7 +145,7 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
 
         // Short circuit if we are in epochs and we are likely proposing a transition block
         // If it's the first view of the upgrade, we don't need to check for transition blocks
-        if version >= V::Epochs::VERSION {
+        if version >= EPOCH_VERSION {
             let Some(epoch) = block_epoch else {
                 tracing::error!("Epoch is required for epoch-based view change");
                 return None;
@@ -159,8 +160,7 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
                     > self
                         .upgrade_lock
                         .upgrade_view()
-                        .await
-                        .unwrap_or(TYPES::View::new(0))
+                        .unwrap_or(ViewNumber::new(0))
                         + 1
                 {
                     tracing::warn!("High QC in epoch version and not the first QC after upgrade");
@@ -205,9 +205,7 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
         let block = {
             if self
                 .upgrade_lock
-                .decided_upgrade_certificate
-                .read()
-                .await
+                .decided_upgrade_cert()
                 .as_ref()
                 .is_some_and(|cert| cert.upgrading_in(block_view))
             {
@@ -246,8 +244,8 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
     async fn send_empty_block(
         &self,
         event_stream: &Sender<Arc<HotShotEvent<TYPES>>>,
-        block_view: TYPES::View,
-        block_epoch: Option<TYPES::Epoch>,
+        block_view: ViewNumber,
+        block_epoch: Option<EpochNumber>,
         version: Version,
     ) {
         // If we couldn't get a block, send an empty block
@@ -273,7 +271,7 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
             },
         };
 
-        let Some(null_fee) = null_block::builder_fee::<TYPES, V>(num_storage_nodes, version) else {
+        let Some(null_fee) = null_block::builder_fee::<TYPES>(num_storage_nodes, version) else {
             tracing::error!("Failed to get null fee");
             return;
         };
@@ -298,12 +296,12 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
     /// Produce a null block
     pub async fn null_block(
         &self,
-        block_view: TYPES::View,
-        block_epoch: Option<TYPES::Epoch>,
+        block_view: ViewNumber,
+        block_epoch: Option<EpochNumber>,
         version: Version,
         num_storage_nodes: usize,
     ) -> Option<PackedBundle<TYPES>> {
-        let Some(null_fee) = null_block::builder_fee::<TYPES, V>(num_storage_nodes, version) else {
+        let Some(null_fee) = null_block::builder_fee::<TYPES>(num_storage_nodes, version) else {
             tracing::error!("Failed to calculate null block fee.");
             return None;
         };
@@ -341,7 +339,7 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
                 .await;
             },
             HotShotEvent::ViewChange(view, epoch) => {
-                let view = TYPES::View::new(std::cmp::max(1, **view));
+                let view = ViewNumber::new(std::cmp::max(1, **view));
                 ensure!(
                     *view > *self.cur_view && *epoch >= self.cur_epoch,
                     debug!(
@@ -369,7 +367,7 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
                 let view_number = proposal.data.view_number();
                 let next_view = view_number + 1;
 
-                let version = match self.upgrade_lock.version(next_view).await {
+                let version = match self.upgrade_lock.version(next_view) {
                     Ok(v) => v,
                     Err(e) => {
                         tracing::error!("Failed to calculate version: {e:?}");
@@ -377,7 +375,7 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
                     },
                 };
 
-                if version < V::DrbAndHeaderUpgrade::VERSION {
+                if version < DRB_AND_HEADER_UPGRADE_VERSION {
                     return Ok(());
                 }
 
@@ -414,9 +412,9 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
     #[instrument(skip_all, target = "TransactionTaskState", fields(id = self.id, cur_view = *self.cur_view, block_view = *block_view))]
     async fn last_vid_commitment_retry(
         &self,
-        block_view: TYPES::View,
+        block_view: ViewNumber,
         task_start_time: Instant,
-    ) -> Result<(TYPES::View, VidCommitment)> {
+    ) -> Result<(ViewNumber, VidCommitment)> {
         loop {
             match self.last_vid_commitment(block_view).await {
                 Ok((view, comm)) => break Ok((view, comm)),
@@ -435,10 +433,10 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
     #[instrument(skip_all, target = "TransactionTaskState", fields(id = self.id, cur_view = *self.cur_view, block_view = *block_view))]
     async fn last_vid_commitment(
         &self,
-        block_view: TYPES::View,
-    ) -> Result<(TYPES::View, VidCommitment)> {
+        block_view: ViewNumber,
+    ) -> Result<(ViewNumber, VidCommitment)> {
         let consensus_reader = self.consensus.read().await;
-        let mut target_view = TYPES::View::new(block_view.saturating_sub(1));
+        let mut target_view = ViewNumber::new(block_view.saturating_sub(1));
 
         loop {
             let view_data = consensus_reader
@@ -467,7 +465,7 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
                 },
                 ViewInner::Failed => {
                     // For failed views, backtrack
-                    target_view = TYPES::View::new(target_view.checked_sub(1).context(warn!(
+                    target_view = ViewNumber::new(target_view.checked_sub(1).context(warn!(
                         "Reached genesis. Something is wrong -- have we not decided any blocks \
                          since genesis?"
                     ))?);
@@ -480,7 +478,7 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
     #[instrument(skip_all, fields(id = self.id, cur_view = *self.cur_view, block_view = *block_view), name = "wait_for_block", level = "error")]
     async fn wait_for_block(
         &self,
-        block_view: TYPES::View,
+        block_view: ViewNumber,
         vid: Option<VidCommitment>,
     ) -> Option<BuilderResponse<TYPES>> {
         let task_start_time = Instant::now();
@@ -550,7 +548,7 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
     async fn get_available_blocks(
         &self,
         parent_comm: VidCommitment,
-        view_number: TYPES::View,
+        view_number: ViewNumber,
         parent_comm_sig: &<<TYPES as NodeType>::SignatureKey as SignatureKey>::PureAssembledSignatureType,
     ) -> Vec<(AvailableBlockInfo<TYPES>, usize)> {
         let tasks = self
@@ -613,7 +611,7 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
     async fn block_from_builder(
         &self,
         parent_comm: VidCommitment,
-        view_number: TYPES::View,
+        view_number: ViewNumber,
         parent_comm_sig: &<<TYPES as NodeType>::SignatureKey as SignatureKey>::PureAssembledSignatureType,
     ) -> Result<BuilderResponse<TYPES>> {
         let mut available_blocks = self
@@ -722,7 +720,7 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
 
 #[async_trait]
 /// task state implementation for Transactions Task
-impl<TYPES: NodeType, V: Versions> TaskState for TransactionTaskState<TYPES, V> {
+impl<TYPES: NodeType> TaskState for TransactionTaskState<TYPES> {
     type Event = HotShotEvent<TYPES>;
 
     async fn handle_event(

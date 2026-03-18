@@ -436,15 +436,15 @@ pub use error::Error;
 use futures::{future::BoxFuture, stream::StreamExt};
 use hotshot::types::SystemContextHandle;
 use hotshot_types::traits::{
-    node_implementation::{NodeImplementation, NodeType, Versions},
     BlockPayload,
+    node_implementation::{NodeImplementation, NodeType},
 };
 pub use hotshot_types::{data::Leaf2, simple_certificate::QuorumCertificate};
 pub use resolvable::Resolvable;
 use serde::{Deserialize, Serialize};
 use snafu::Snafu;
 use task::BackgroundTask;
-use tide_disco::{method::ReadState, App, StatusCode};
+use tide_disco::{App, StatusCode, method::ReadState};
 use vbs::version::StaticVersionType;
 
 pub type Payload<Types> = <Types as NodeType>::BlockPayload;
@@ -510,16 +510,10 @@ impl<D> From<D> for ApiState<D> {
 }
 
 /// Run an instance of the HotShot Query service with no customization.
-pub async fn run_standalone_service<
-    Types: NodeType,
-    I: NodeImplementation<Types>,
-    D,
-    ApiVer,
-    HsVer: Versions,
->(
+pub async fn run_standalone_service<Types: NodeType, I: NodeImplementation<Types>, D, ApiVer>(
     options: Options,
     data_source: D,
-    hotshot: SystemContextHandle<Types, I, HsVer>,
+    hotshot: SystemContextHandle<Types, I>,
     bind_version: ApiVer,
 ) -> Result<(), Error>
 where
@@ -595,12 +589,13 @@ mod test {
 
     use async_lock::RwLock;
     use async_trait::async_trait;
-    use atomic_store::{load_store::BincodeLoadStore, AtomicStore, AtomicStoreLoader, RollingLog};
+    use atomic_store::{AtomicStore, AtomicStoreLoader, RollingLog, load_store::BincodeLoadStore};
     use futures::future::FutureExt;
+    use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_types::{data::VidShare, simple_certificate::QuorumCertificate2};
-    use portpicker::pick_unused_port;
     use surf_disco::Client;
     use tempfile::TempDir;
+    use test_utils::reserve_tcp_port;
     use testing::mocks::MockBase;
     use tide_disco::App;
     use toml::toml;
@@ -614,7 +609,7 @@ mod test {
             VidCommonQueryData,
         },
         metrics::PrometheusMetrics,
-        node::{NodeDataSource, SyncStatus, TimeWindowQueryData, WindowStart},
+        node::{NodeDataSource, SyncStatusQueryData, TimeWindowQueryData, WindowStart},
         status::{HasMetrics, StatusDataSource},
         testing::{
             consensus::MockDataSource,
@@ -809,7 +804,7 @@ mod test {
         {
             self.hotshot_qs.vid_share(id).await
         }
-        async fn sync_status(&self) -> QueryResult<SyncStatus> {
+        async fn sync_status(&self) -> QueryResult<SyncStatusQueryData> {
             self.hotshot_qs.sync_status().await
         }
         async fn get_header_window(
@@ -837,8 +832,6 @@ mod test {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_composition() {
-        use hotshot_example_types::node_types::TestVersions;
-
         let dir = TempDir::with_prefix("test_composition").unwrap();
         let mut loader = AtomicStoreLoader::create(dir.path(), "test_composition").unwrap();
         let hotshot_qs = MockDataSource::create_with_store(&mut loader, Default::default())
@@ -846,12 +839,18 @@ mod test {
             .unwrap();
 
         // Mock up some data and add a block to the store.
-        let leaf =
-            Leaf2::<MockTypes>::genesis::<TestVersions>(&Default::default(), &Default::default())
-                .await;
-        let qc =
-            QuorumCertificate2::genesis::<TestVersions>(&Default::default(), &Default::default())
-                .await;
+        let leaf = Leaf2::<MockTypes>::genesis(
+            &Default::default(),
+            &Default::default(),
+            TEST_VERSIONS.test.base,
+        )
+        .await;
+        let qc = QuorumCertificate2::genesis(
+            &Default::default(),
+            &Default::default(),
+            TEST_VERSIONS.test,
+        )
+        .await;
         let leaf = LeafQueryData::new(leaf, qc).unwrap();
         let block = BlockQueryData::new(leaf.header().clone(), MockPayload::genesis());
         hotshot_qs
@@ -936,7 +935,7 @@ mod test {
         })
         .unwrap();
 
-        let port = pick_unused_port().unwrap();
+        let port = reserve_tcp_port().unwrap();
         let _server = BackgroundTask::spawn(
             "server",
             app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
@@ -958,17 +957,12 @@ mod test {
                 .unwrap(),
             1
         );
-        let sync_status: SyncStatus = client.get("node/sync-status").send().await.unwrap();
-        assert_eq!(
-            sync_status,
-            SyncStatus {
-                missing_blocks: 0,
-                missing_leaves: 0,
-                missing_vid_common: 1,
-                missing_vid_shares: 1,
-                pruned_height: None
-            }
-        );
+        let sync_status: SyncStatusQueryData = client.get("node/sync-status").send().await.unwrap();
+        assert_eq!(sync_status.blocks.missing, 0);
+        assert_eq!(sync_status.leaves.missing, 0);
+        assert_eq!(sync_status.vid_common.missing, 1);
+        assert_eq!(sync_status.vid_shares.missing, 1);
+
         assert_eq!(
             client
                 .get::<MockHeader>("availability/header/0")

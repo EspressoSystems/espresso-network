@@ -22,7 +22,10 @@ use hotshot_contract_adapter::sol_types::{LightClientStateSol, StakeTableStateSo
 use hotshot_task::dependency::{Dependency, EventDependency};
 use hotshot_types::{
     consensus::OuterConsensus,
-    data::{Leaf2, QuorumProposalWrapper, VidDisperseShare, ViewChangeEvidence2},
+    data::{
+        EpochNumber, Leaf2, QuorumProposalWrapper, VidDisperseShare, ViewChangeEvidence2,
+        ViewNumber,
+    },
     drb::DrbResult,
     epoch_membership::EpochMembershipCoordinator,
     event::{Event, EventType, LeafInfo},
@@ -36,18 +39,18 @@ use hotshot_types::{
     simple_vote::HasEpoch,
     stake_table::StakeTableEntries,
     traits::{
+        BlockPayload, ValidatedState,
         block_contents::BlockHeader,
         election::Membership,
-        node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
+        node_implementation::{NodeImplementation, NodeType},
         signature_key::{
             LCV2StateSignatureKey, LCV3StateSignatureKey, SignatureKey, StakeTableEntryType,
         },
         storage::Storage,
-        BlockPayload, ValidatedState,
     },
     utils::{
-        epoch_from_block_number, is_epoch_root, is_epoch_transition, is_transition_block,
-        option_epoch_from_block_number, Terminator, View, ViewInner,
+        Terminator, View, ViewInner, epoch_from_block_number, is_epoch_root, is_epoch_transition,
+        is_transition_block, option_epoch_from_block_number,
     },
     vote::{Certificate, HasViewNumber},
 };
@@ -55,14 +58,14 @@ use hotshot_utils::anytrace::*;
 use time::OffsetDateTime;
 use tokio::time::timeout;
 use tracing::instrument;
-use vbs::version::StaticVersionType;
+use versions::EPOCH_VERSION;
 
 use crate::{events::HotShotEvent, quorum_proposal_recv::ValidationInfo, request::REQUEST_TIMEOUT};
 
 /// Trigger a request to the network for a proposal for a view and wait for the response or timeout.
 #[instrument(skip_all)]
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn fetch_proposal<TYPES: NodeType, V: Versions>(
+pub(crate) async fn fetch_proposal<TYPES: NodeType>(
     qc: &QuorumCertificate2<TYPES>,
     event_sender: Sender<Arc<HotShotEvent<TYPES>>>,
     event_receiver: Receiver<Arc<HotShotEvent<TYPES>>>,
@@ -70,7 +73,7 @@ pub(crate) async fn fetch_proposal<TYPES: NodeType, V: Versions>(
     consensus: OuterConsensus<TYPES>,
     sender_public_key: TYPES::SignatureKey,
     sender_private_key: <TYPES::SignatureKey as SignatureKey>::PrivateKey,
-    upgrade_lock: &UpgradeLock<TYPES, V>,
+    upgrade_lock: &UpgradeLock<TYPES>,
     epoch_height: u64,
 ) -> Result<(Leaf2<TYPES>, View<TYPES>)> {
     let view_number = qc.view_number();
@@ -161,7 +164,7 @@ pub(crate) async fn fetch_proposal<TYPES: NodeType, V: Versions>(
 }
 pub async fn handle_drb_result<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     membership: &Arc<RwLock<TYPES::Membership>>,
-    epoch: TYPES::Epoch,
+    epoch: EpochNumber,
     storage: &I::Storage,
     drb_result: DrbResult,
 ) {
@@ -179,13 +182,9 @@ pub async fn handle_drb_result<TYPES: NodeType, I: NodeImplementation<TYPES>>(
 /// Uses the result from `start_drb_task`.
 ///
 /// Returns an error if we should not vote.
-pub(crate) async fn verify_drb_result<
-    TYPES: NodeType,
-    I: NodeImplementation<TYPES>,
-    V: Versions,
->(
+pub(crate) async fn verify_drb_result<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     proposal: &QuorumProposalWrapper<TYPES>,
-    validation_info: &ValidationInfo<TYPES, I, V>,
+    validation_info: &ValidationInfo<TYPES, I>,
 ) -> Result<()> {
     // Skip if this is not the expected block.
     if validation_info.epoch_height == 0
@@ -201,11 +200,10 @@ pub(crate) async fn verify_drb_result<
     // #3967 REVIEW NOTE: Check if this is the right way to decide if we're doing epochs
     // Alternatively, should we just return Err() if epochs aren't happening here? Or can we assume
     // that epochs are definitely happening by virtue of getting here?
-    let epoch = option_epoch_from_block_number::<TYPES>(
+    let epoch = option_epoch_from_block_number(
         validation_info
             .upgrade_lock
-            .epochs_enabled(proposal.view_number())
-            .await,
+            .epochs_enabled(proposal.view_number()),
         proposal.block_header().block_number(),
         validation_info.epoch_height,
     );
@@ -265,7 +263,7 @@ async fn decide_epoch_root<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     // Skip if this is not the expected block.
     if epoch_height != 0 && is_epoch_root(decided_block_number, epoch_height) {
         let next_epoch_number =
-            TYPES::Epoch::new(epoch_from_block_number(decided_block_number, epoch_height) + 2);
+            EpochNumber::new(epoch_from_block_number(decided_block_number, epoch_height) + 2);
 
         let start = Instant::now();
         if let Err(e) = storage
@@ -333,10 +331,10 @@ async fn decide_epoch_root<TYPES: NodeType, I: NodeImplementation<TYPES>>(
 #[derive(Debug)]
 pub struct LeafChainTraversalOutcome<TYPES: NodeType> {
     /// The new locked view obtained from a 2 chain starting from the proposal's parent.
-    pub new_locked_view_number: Option<TYPES::View>,
+    pub new_locked_view_number: Option<ViewNumber>,
 
     /// The new decided view obtained from a 3 chain starting from the proposal's parent.
-    pub new_decided_view_number: Option<TYPES::View>,
+    pub new_decided_view_number: Option<ViewNumber>,
 
     /// The QC signing the latest new leaf, causing it to become committed.
     ///
@@ -413,7 +411,7 @@ async fn update_metrics<TYPES: NodeType>(
 pub async fn decide_from_proposal_2<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     proposal: &QuorumProposalWrapper<TYPES>,
     consensus: OuterConsensus<TYPES>,
-    existing_upgrade_cert: Arc<RwLock<Option<UpgradeCertificate<TYPES>>>>,
+    upgrade_lock: &UpgradeLock<TYPES>,
     public_key: &TYPES::SignatureKey,
     with_epochs: bool,
     membership: &EpochMembershipCoordinator<TYPES>,
@@ -449,7 +447,7 @@ pub async fn decide_from_proposal_2<TYPES: NodeType, I: NodeImplementation<TYPES
     // We've reached decide, now get the leaf chain all the way back to the last decided view, not including it.
     let old_anchor_view = consensus_reader.last_decided_view();
     let mut current_leaf_info = Some(grand_parent_info);
-    let existing_upgrade_cert_reader = existing_upgrade_cert.read().await;
+    let existing_upgrade_cert_reader = upgrade_lock.decided_upgrade_cert();
     let mut txns = HashSet::new();
     while current_leaf_info
         .as_ref()
@@ -458,14 +456,14 @@ pub async fn decide_from_proposal_2<TYPES: NodeType, I: NodeImplementation<TYPES
         // unwrap is safe, we just checked that he option is some
         let info = &mut current_leaf_info.unwrap();
         // Check if there's a new upgrade certificate available.
-        if let Some(cert) = info.leaf.upgrade_certificate() {
-            if info.leaf.upgrade_certificate() != *existing_upgrade_cert_reader {
-                if cert.data.decide_by < decided_view_number {
-                    tracing::warn!("Failed to decide an upgrade certificate in time. Ignoring.");
-                } else {
-                    tracing::info!("Reached decide on upgrade certificate: {cert:?}");
-                    res.decided_upgrade_cert = Some(cert.clone());
-                }
+        if let Some(cert) = info.leaf.upgrade_certificate()
+            && info.leaf.upgrade_certificate() != existing_upgrade_cert_reader
+        {
+            if cert.data.decide_by < decided_view_number {
+                tracing::warn!("Failed to decide an upgrade certificate in time. Ignoring.");
+            } else {
+                tracing::info!("Reached decide on upgrade certificate: {cert:?}");
+                res.decided_upgrade_cert = Some(cert.clone());
             }
         }
 
@@ -557,7 +555,7 @@ pub async fn decide_from_proposal_2<TYPES: NodeType, I: NodeImplementation<TYPES
 pub async fn decide_from_proposal<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     proposal: &QuorumProposalWrapper<TYPES>,
     consensus: OuterConsensus<TYPES>,
-    existing_upgrade_cert: Arc<RwLock<Option<UpgradeCertificate<TYPES>>>>,
+    upgrade_lock: &UpgradeLock<TYPES>,
     public_key: &TYPES::SignatureKey,
     with_epochs: bool,
     membership: &EpochMembershipCoordinator<TYPES>,
@@ -565,7 +563,7 @@ pub async fn decide_from_proposal<TYPES: NodeType, I: NodeImplementation<TYPES>>
     epoch_height: u64,
 ) -> LeafChainTraversalOutcome<TYPES> {
     let consensus_reader = consensus.read().await;
-    let existing_upgrade_cert_reader = existing_upgrade_cert.read().await;
+    let existing_upgrade_cert_reader = upgrade_lock.decided_upgrade_cert();
     let view_number = proposal.view_number();
     let parent_view_number = proposal.justify_qc().view_number();
     let old_anchor_view = consensus_reader.last_decided_view();
@@ -619,16 +617,16 @@ pub async fn decide_from_proposal<TYPES: NodeType, I: NodeImplementation<TYPES>>
                 }
 
                 // Check if there's a new upgrade certificate available.
-                if let Some(cert) = leaf.upgrade_certificate() {
-                    if leaf.upgrade_certificate() != *existing_upgrade_cert_reader {
-                        if cert.data.decide_by < view_number {
-                            tracing::warn!(
-                                "Failed to decide an upgrade certificate in time. Ignoring."
-                            );
-                        } else {
-                            tracing::info!("Reached decide on upgrade certificate: {cert:?}");
-                            res.decided_upgrade_cert = Some(cert.clone());
-                        }
+                if let Some(cert) = leaf.upgrade_certificate()
+                    && leaf.upgrade_certificate() != existing_upgrade_cert_reader
+                {
+                    if cert.data.decide_by < view_number {
+                        tracing::warn!(
+                            "Failed to decide an upgrade certificate in time. Ignoring."
+                        );
+                    } else {
+                        tracing::info!("Reached decide on upgrade certificate: {cert:?}");
+                        res.decided_upgrade_cert = Some(cert.clone());
                     }
                 }
                 // If the block payload is available for this leaf, include it in
@@ -710,14 +708,14 @@ pub async fn decide_from_proposal<TYPES: NodeType, I: NodeImplementation<TYPES>>
 /// Gets the parent leaf and state from the parent of a proposal, returning an [`utils::anytrace::Error`] if not.
 #[instrument(skip_all)]
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn parent_leaf_and_state<TYPES: NodeType, V: Versions>(
+pub(crate) async fn parent_leaf_and_state<TYPES: NodeType>(
     event_sender: &Sender<Arc<HotShotEvent<TYPES>>>,
     event_receiver: &Receiver<Arc<HotShotEvent<TYPES>>>,
     membership: EpochMembershipCoordinator<TYPES>,
     public_key: TYPES::SignatureKey,
     private_key: <TYPES::SignatureKey as SignatureKey>::PrivateKey,
     consensus: OuterConsensus<TYPES>,
-    upgrade_lock: &UpgradeLock<TYPES, V>,
+    upgrade_lock: &UpgradeLock<TYPES>,
     parent_qc: &QuorumCertificate2<TYPES>,
     epoch_height: u64,
 ) -> Result<(Leaf2<TYPES>, Arc<<TYPES as NodeType>::ValidatedState>)> {
@@ -777,9 +775,9 @@ pub(crate) async fn parent_leaf_and_state<TYPES: NodeType, V: Versions>(
     Ok((leaf.clone(), Arc::clone(state)))
 }
 
-pub(crate) async fn update_high_qc<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>(
+pub(crate) async fn update_high_qc<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     proposal: &Proposal<TYPES, QuorumProposalWrapper<TYPES>>,
-    validation_info: &ValidationInfo<TYPES, I, V>,
+    validation_info: &ValidationInfo<TYPES, I>,
 ) -> Result<()> {
     let in_transition_epoch = proposal
         .data
@@ -831,18 +829,17 @@ pub(crate) async fn update_high_qc<TYPES: NodeType, I: NodeImplementation<TYPES>
                 .await
                 .update_state_cert(state_cert.clone())?;
         }
-        if let Some(ref next_epoch_justify_qc) = maybe_next_epoch_justify_qc {
-            if let Err(e) = validation_info
+        if let Some(next_epoch_justify_qc) = maybe_next_epoch_justify_qc
+            && let Err(e) = validation_info
                 .storage
                 .update_next_epoch_high_qc2(next_epoch_justify_qc.clone())
                 .await
-            {
-                bail!("Failed to store next epoch High QC, not voting; error = {e:?}");
-            }
+        {
+            bail!("Failed to store next epoch High QC, not voting; error = {e:?}");
         }
     }
     let mut consensus_writer = validation_info.consensus.write().await;
-    if let Some(ref next_epoch_justify_qc) = maybe_next_epoch_justify_qc {
+    if let Some(next_epoch_justify_qc) = maybe_next_epoch_justify_qc {
         if justify_qc
             .data
             .block_number
@@ -860,8 +857,8 @@ pub(crate) async fn update_high_qc<TYPES: NodeType, I: NodeImplementation<TYPES>
     Ok(())
 }
 
-async fn transition_qc<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>(
-    validation_info: &ValidationInfo<TYPES, I, V>,
+async fn transition_qc<TYPES: NodeType, I: NodeImplementation<TYPES>>(
+    validation_info: &ValidationInfo<TYPES, I>,
 ) -> Option<(
     QuorumCertificate2<TYPES>,
     NextEpochQuorumCertificate2<TYPES>,
@@ -874,13 +871,9 @@ async fn transition_qc<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Version
         .cloned()
 }
 
-pub(crate) async fn validate_epoch_transition_qc<
-    TYPES: NodeType,
-    I: NodeImplementation<TYPES>,
-    V: Versions,
->(
+pub(crate) async fn validate_epoch_transition_qc<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     proposal: &Proposal<TYPES, QuorumProposalWrapper<TYPES>>,
-    validation_info: &ValidationInfo<TYPES, I, V>,
+    validation_info: &ValidationInfo<TYPES, I>,
 ) -> Result<()> {
     let proposed_qc = proposal.data.justify_qc();
     let Some(qc_block_number) = proposed_qc.data().block_number else {
@@ -953,11 +946,10 @@ pub(crate) async fn validate_epoch_transition_qc<
 pub(crate) async fn validate_proposal_safety_and_liveness<
     TYPES: NodeType,
     I: NodeImplementation<TYPES>,
-    V: Versions,
 >(
     proposal: Proposal<TYPES, QuorumProposalWrapper<TYPES>>,
     parent_leaf: Leaf2<TYPES>,
-    validation_info: &ValidationInfo<TYPES, I, V>,
+    validation_info: &ValidationInfo<TYPES, I>,
     event_stream: Sender<Arc<HotShotEvent<TYPES>>>,
     sender: TYPES::SignatureKey,
 ) -> Result<()> {
@@ -967,8 +959,7 @@ pub(crate) async fn validate_proposal_safety_and_liveness<
     if validation_info
         .upgrade_lock
         .version(proposal.data.justify_qc().view_number())
-        .await
-        .is_ok_and(|v| v >= V::Epochs::VERSION)
+        .is_ok_and(|v| v >= EPOCH_VERSION)
     {
         let Some(block_number) = proposal.data.justify_qc().data.block_number else {
             bail!("Quorum Proposal has no block number but it's after the epoch upgrade");
@@ -984,11 +975,8 @@ pub(crate) async fn validate_proposal_safety_and_liveness<
         proposed_leaf.parent_commitment() == parent_leaf.commit(),
         "Proposed leaf does not extend the parent leaf."
     );
-    let proposal_epoch = option_epoch_from_block_number::<TYPES>(
-        validation_info
-            .upgrade_lock
-            .epochs_enabled(view_number)
-            .await,
+    let proposal_epoch = option_epoch_from_block_number(
+        validation_info.upgrade_lock.epochs_enabled(view_number),
         proposed_leaf.height(),
         validation_info.epoch_height,
     );
@@ -1019,12 +1007,7 @@ pub(crate) async fn validate_proposal_safety_and_liveness<
     .await?;
 
     // Validate that the upgrade certificate is re-attached, if we saw one on the parent
-    proposed_leaf
-        .extends_upgrade(
-            &parent_leaf,
-            &validation_info.upgrade_lock.decided_upgrade_certificate,
-        )
-        .await?;
+    proposed_leaf.extends_upgrade(&parent_leaf, &validation_info.upgrade_lock)?;
 
     let justify_qc = proposal.data.justify_qc().clone();
     // Create a positive vote if either liveness or safety check
@@ -1036,11 +1019,8 @@ pub(crate) async fn validate_proposal_safety_and_liveness<
         // The proposal is safe if
         // 1. the proposed block and the justify QC block belong to the same epoch or
         // 2. the justify QC is the eQC for the previous block
-        let justify_qc_epoch = option_epoch_from_block_number::<TYPES>(
-            validation_info
-                .upgrade_lock
-                .epochs_enabled(view_number)
-                .await,
+        let justify_qc_epoch = option_epoch_from_block_number(
+            validation_info.upgrade_lock.epochs_enabled(view_number),
             parent_leaf.height(),
             validation_info.epoch_height,
         );
@@ -1057,10 +1037,7 @@ pub(crate) async fn validate_proposal_safety_and_liveness<
 
         // Make sure that the epoch transition proposal includes the next epoch QC
         if is_epoch_transition(parent_leaf.height(), validation_info.epoch_height)
-            && validation_info
-                .upgrade_lock
-                .epochs_enabled(view_number)
-                .await
+            && validation_info.upgrade_lock.epochs_enabled(view_number)
         {
             ensure!(
                 proposal.data.next_epoch_justify_qc().is_some(),
@@ -1144,10 +1121,9 @@ pub(crate) async fn validate_proposal_safety_and_liveness<
 pub(crate) async fn validate_proposal_view_and_certs<
     TYPES: NodeType,
     I: NodeImplementation<TYPES>,
-    V: Versions,
 >(
     proposal: &Proposal<TYPES, QuorumProposalWrapper<TYPES>>,
-    validation_info: &ValidationInfo<TYPES, I, V>,
+    validation_info: &ValidationInfo<TYPES, I>,
 ) -> Result<()> {
     let view_number = proposal.data.view_number();
     ensure!(
@@ -1226,7 +1202,7 @@ pub(crate) async fn validate_proposal_view_and_certs<
     // Validate the upgrade certificate -- this is just a signature validation.
     // Note that we don't do anything with the certificate directly if this passes; it eventually gets stored as part of the leaf if nothing goes wrong.
     {
-        let epoch = option_epoch_from_block_number::<TYPES>(
+        let epoch = option_epoch_from_block_number(
             proposal.data.epoch().is_some(),
             proposal.data.block_header().block_number(),
             validation_info.epoch_height,
@@ -1260,12 +1236,12 @@ pub async fn broadcast_event<E: Clone + std::fmt::Debug>(event: E, sender: &Send
 
 /// Validates qc's signatures and, if provided, validates next_epoch_qc's signatures and whether it
 /// corresponds to the provided high_qc.
-pub async fn validate_qc_and_next_epoch_qc<TYPES: NodeType, V: Versions>(
+pub async fn validate_qc_and_next_epoch_qc<TYPES: NodeType>(
     qc: &QuorumCertificate2<TYPES>,
     maybe_next_epoch_qc: Option<&NextEpochQuorumCertificate2<TYPES>>,
     consensus: &OuterConsensus<TYPES>,
     membership_coordinator: &EpochMembershipCoordinator<TYPES>,
-    upgrade_lock: &UpgradeLock<TYPES, V>,
+    upgrade_lock: &UpgradeLock<TYPES>,
     epoch_height: u64,
 ) -> Result<()> {
     let cert = CertificatePair::new(qc.clone(), maybe_next_epoch_qc.cloned());
@@ -1291,30 +1267,30 @@ pub async fn validate_qc_and_next_epoch_qc<TYPES: NodeType, V: Versions>(
     }
 
     // Check the next epoch QC if required.
-    if upgrade_lock.epochs_enabled(cert.view_number()).await {
-        if let Some(next_epoch_qc) = cert.verify_next_epoch_qc(epoch_height)? {
-            epoch_membership = epoch_membership.next_epoch_stake_table().await?;
-            let membership_next_stake_table = epoch_membership.stake_table().await;
-            let membership_next_success_threshold = epoch_membership.success_threshold().await;
-            next_epoch_qc
-                .is_valid_cert(
-                    &StakeTableEntries::<TYPES>::from(membership_next_stake_table).0,
-                    membership_next_success_threshold,
-                    upgrade_lock,
-                )
-                .await
-                .context(|e| warn!("Invalid next epoch certificate: {e}"))?;
-        }
+    if upgrade_lock.epochs_enabled(cert.view_number())
+        && let Some(next_epoch_qc) = cert.verify_next_epoch_qc(epoch_height)?
+    {
+        epoch_membership = epoch_membership.next_epoch_stake_table().await?;
+        let membership_next_stake_table = epoch_membership.stake_table().await;
+        let membership_next_success_threshold = epoch_membership.success_threshold().await;
+        next_epoch_qc
+            .is_valid_cert(
+                &StakeTableEntries::<TYPES>::from(membership_next_stake_table).0,
+                membership_next_success_threshold,
+                upgrade_lock,
+            )
+            .await
+            .context(|e| warn!("Invalid next epoch certificate: {e}"))?;
     }
 
     Ok(())
 }
 
 /// Validates the light client state update certificate
-pub async fn validate_light_client_state_update_certificate<TYPES: NodeType, V: Versions>(
+pub async fn validate_light_client_state_update_certificate<TYPES: NodeType>(
     state_cert: &LightClientStateUpdateCertificateV2<TYPES>,
     membership_coordinator: &EpochMembershipCoordinator<TYPES>,
-    upgrade_lock: &UpgradeLock<TYPES, V>,
+    upgrade_lock: &UpgradeLock<TYPES>,
 ) -> Result<()> {
     tracing::debug!("Validating light client state update certificate");
 
@@ -1345,8 +1321,7 @@ pub async fn validate_light_client_state_update_certificate<TYPES: NodeType, V: 
             #[allow(clippy::collapsible_else_if)]
             // We only perform the second signature check prior to the DrbAndHeaderUpgrade
             if !upgrade_lock
-                .proposal2_version(TYPES::View::new(state_cert.light_client_state.view_number))
-                .await
+                .proposal2_version(ViewNumber::new(state_cert.light_client_state.view_number))
             {
                 if !<TYPES::StateSignatureKey as LCV2StateSignatureKey>::verify_state_sig(
                     key,
@@ -1397,7 +1372,7 @@ pub(crate) fn check_qc_state_cert_correspondence<TYPES: NodeType>(
 /// makes sure it corresponds to the given DA certificate;
 /// if it's not yet available, waits for it with the given timeout.
 pub async fn wait_for_second_vid_share<TYPES: NodeType>(
-    target_epoch: Option<TYPES::Epoch>,
+    target_epoch: Option<EpochNumber>,
     vid_share: &Proposal<TYPES, VidDisperseShare<TYPES>>,
     da_cert: &DaCertificate2<TYPES>,
     consensus: &OuterConsensus<TYPES>,
@@ -1414,15 +1389,14 @@ pub async fn wait_for_second_vid_share<TYPES: NodeType>(
         .and_then(|key_map| key_map.get(vid_share.data.recipient_key()))
         .and_then(|epoch_map| epoch_map.get(&target_epoch))
         .cloned();
-    if let Some(second_vid_share) = maybe_second_vid_share {
-        if (target_epoch == da_cert.epoch()
+    if let Some(second_vid_share) = maybe_second_vid_share
+        && ((target_epoch == da_cert.epoch()
             && second_vid_share.data.payload_commitment() == da_cert.data().payload_commit)
             || (target_epoch != da_cert.epoch()
                 && Some(second_vid_share.data.payload_commitment())
-                    == da_cert.data().next_epoch_payload_commit)
-        {
-            return Ok(second_vid_share);
-        }
+                    == da_cert.data().next_epoch_payload_commit))
+    {
+        return Ok(second_vid_share);
     }
 
     let receiver = receiver.clone();
@@ -1467,15 +1441,16 @@ pub async fn wait_for_second_vid_share<TYPES: NodeType>(
 
 pub async fn broadcast_view_change<TYPES: NodeType>(
     sender: &Sender<Arc<HotShotEvent<TYPES>>>,
-    new_view_number: TYPES::View,
-    epoch: Option<TYPES::Epoch>,
-    first_epoch: Option<(TYPES::View, TYPES::Epoch)>,
+    new_view_number: ViewNumber,
+    epoch: Option<EpochNumber>,
+    first_epoch: Option<(ViewNumber, EpochNumber)>,
 ) {
     let mut broadcast_epoch = epoch;
-    if let Some((first_epoch_view, first_epoch)) = first_epoch {
-        if new_view_number == first_epoch_view && broadcast_epoch != Some(first_epoch) {
-            broadcast_epoch = Some(first_epoch);
-        }
+    if let Some((first_epoch_view, first_epoch)) = first_epoch
+        && new_view_number == first_epoch_view
+        && broadcast_epoch != Some(first_epoch)
+    {
+        broadcast_epoch = Some(first_epoch);
     }
     tracing::trace!("Sending ViewChange for view {new_view_number} and epoch {broadcast_epoch:?}");
     broadcast_event(

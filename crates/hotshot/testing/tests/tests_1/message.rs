@@ -8,13 +8,9 @@
 use std::marker::PhantomData;
 
 use committable::Committable;
-use hotshot_example_types::node_types::TestTypes;
+use hotshot_example_types::node_types::{TEST_VERSIONS, TestTypes};
 use hotshot_types::{
-    message::{GeneralConsensusMessage, Message, MessageKind, SequencingMessage},
-    signature_key::BLSPubKey,
-    simple_certificate::SimpleCertificate,
-    simple_vote::ViewSyncCommitData2,
-    traits::{node_implementation::ConsensusTime, signature_key::SignatureKey},
+    data::ViewNumber, message::{GeneralConsensusMessage, Message, MessageKind, SequencingMessage}, signature_key::BLSPubKey, simple_certificate::{SimpleCertificate, ViewSyncCommitCertificate2}, simple_vote::ViewSyncCommitData2, traits::signature_key::SignatureKey
 };
 use vbs::{
     version::{StaticVersion, Version},
@@ -26,7 +22,7 @@ use vbs::{
 // correctly appears at the start of a serialized messaged.
 fn version_number_at_start_of_serialization() {
     let sender = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0).0;
-    let view_number = ConsensusTime::new(17);
+    let view_number = ViewNumber::new(17);
     let epoch = None;
     // The version we set for the message
     const MAJOR: u16 = 37;
@@ -38,12 +34,12 @@ fn version_number_at_start_of_serialization() {
     type TestVersion = StaticVersion<MAJOR, MINOR>;
     // The specific data we attach to our message shouldn't affect the serialization,
     // we're using ViewSyncCommitData for simplicity.
-    let data: ViewSyncCommitData2<TestTypes> = ViewSyncCommitData2 {
+    let data: ViewSyncCommitData2 = ViewSyncCommitData2 {
         relay: 37,
         round: view_number,
         epoch,
     };
-    let simple_certificate =
+    let simple_certificate: ViewSyncCommitCertificate2<TestTypes> =
         SimpleCertificate::new(data.clone(), data.commit(), view_number, None, PhantomData);
     let message = Message {
         sender,
@@ -64,7 +60,7 @@ fn version_number_at_start_of_serialization() {
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_certificate2_validity() {
     use futures::StreamExt;
-    use hotshot_example_types::node_types::{MemoryImpl, TestTypes, TestVersions};
+    use hotshot_example_types::node_types::{MemoryImpl, TestTypes};
     use hotshot_testing::{helpers::build_system_handle, view_generator::TestViewGenerator};
     use hotshot_types::{
         data::{Leaf, Leaf2},
@@ -75,11 +71,11 @@ async fn test_certificate2_validity() {
     let node_id = 1;
 
     let (handle, _, _, node_key_map) =
-        build_system_handle::<TestTypes, MemoryImpl, TestVersions>(node_id).await;
+        build_system_handle::<TestTypes, MemoryImpl>(node_id).await;
     let membership = handle.hotshot.membership_coordinator.clone();
 
     let mut generator =
-        TestViewGenerator::<TestVersions>::generate(membership.clone(), node_key_map);
+        TestViewGenerator::generate(membership.clone(), node_key_map, TEST_VERSIONS.test);
 
     let mut proposals = Vec::new();
     let mut leaders = Vec::new();

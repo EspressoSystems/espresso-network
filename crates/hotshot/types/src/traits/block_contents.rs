@@ -20,14 +20,14 @@ use std::{
 use alloy::primitives::FixedBytes;
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use vbs::version::Version;
 
-use super::{node_implementation::Versions, signature_key::BuilderSignatureKey};
+use super::signature_key::BuilderSignatureKey;
 use crate::{
-    data::{Leaf2, VidCommitment},
+    data::{Leaf2, VidCommitment, ViewNumber},
     light_client::LightClientState,
-    traits::{node_implementation::NodeType, states::InstanceState, ValidatedState},
+    traits::{ValidatedState, node_implementation::NodeType, states::InstanceState},
     utils::BuilderCommitment,
 };
 
@@ -182,10 +182,11 @@ pub trait BlockHeader<TYPES: NodeType>:
     ) -> impl Future<Output = Result<Self, Self::Error>> + Send;
 
     /// Build the genesis header, payload, and metadata.
-    fn genesis<V: Versions>(
+    fn genesis(
         instance_state: &<TYPES::ValidatedState as ValidatedState<TYPES>>::Instance,
         payload: TYPES::BlockPayload,
         metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
+        version: Version,
     ) -> Self;
 
     /// Get the block number.
@@ -210,14 +211,14 @@ pub trait BlockHeader<TYPES: NodeType>:
     fn builder_commitment(&self) -> BuilderCommitment;
 
     /// Get the light client state
-    fn get_light_client_state(&self, view: TYPES::View) -> anyhow::Result<LightClientState>;
+    fn get_light_client_state(&self, view: ViewNumber) -> anyhow::Result<LightClientState>;
 
     /// Returns the `auth_root` value for versions >= V4 (`DrbAndHeaderUpgrade`).
     ///
     /// For versions < V4, this will return `None`.
     ///
     /// The `auth_root` is a 32-byte hash calculated using the reward Merkle tree
-    /// digest and other values.  
+    /// digest and other values.
     /// It is used by the reward claim contract to verify the reward claim
     fn auth_root(&self) -> anyhow::Result<FixedBytes<32>>;
 }

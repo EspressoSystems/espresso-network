@@ -11,8 +11,8 @@ use ark_serialize::SerializationError;
 use bitvec::{slice::BitSlice, vec::BitVec};
 use generic_array::GenericArray;
 use jf_signature::{
-    bls_over_bn254::{BLSOverBN254CurveSignatureScheme, KeyPair, SignKey, VerKey},
     SignatureError, SignatureScheme,
+    bls_over_bn254::{BLSOverBN254CurveSignatureScheme, KeyPair, SignKey, VerKey},
 };
 use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
@@ -309,5 +309,113 @@ impl LCV3StateSignatureKey for SchnorrPubKey {
     /// next stake table state, and the auth root.
     fn verify_state_sig(&self, signature: &Self::StateSignature, msg: CircuitField) -> bool {
         SchnorrSignatureScheme::verify(&(), self, [msg], signature).is_ok()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloy::primitives::U256;
+    use bitvec::prelude::*;
+    use jf_signature::bls_over_bn254::{BLSOverBN254CurveSignatureScheme, KeyPair};
+
+    use super::BLSPubKey;
+    use crate::{
+        qc::BitVectorQc,
+        stake_table::StakeTableEntry,
+        traits::{qc::QuorumCertificateScheme, signature_key::SignatureKey},
+    };
+
+    #[test]
+    fn test_to_verification_key_is_identity() {
+        let mut rng = jf_utils::test_rng();
+        let kp = KeyPair::generate(&mut rng);
+        let pub_key: BLSPubKey = kp.ver_key();
+        // For BLSPubKey, VerificationKeyType = Self, so this should be a copy.
+        assert_eq!(pub_key.to_verification_key(), pub_key);
+    }
+
+    #[test]
+    fn test_bls_signers_correct_keys() {
+        let mut rng = jf_utils::test_rng();
+        let kp1 = KeyPair::generate(&mut rng);
+        let kp2 = KeyPair::generate(&mut rng);
+        let kp3 = KeyPair::generate(&mut rng);
+        let entries: Vec<StakeTableEntry<BLSPubKey>> = vec![
+            StakeTableEntry {
+                stake_key: kp1.ver_key(),
+                stake_amount: U256::from(1u8),
+            },
+            StakeTableEntry {
+                stake_key: kp2.ver_key(),
+                stake_amount: U256::from(1u8),
+            },
+            StakeTableEntry {
+                stake_key: kp3.ver_key(),
+                stake_amount: U256::from(1u8),
+            },
+        ];
+        // Use BLSPubKey::public_parameter to create QcParams (threshold = 2, 1 stake each).
+        let qc_pp = BLSPubKey::public_parameter(&entries, U256::from(2u8));
+        let msg = [55u8; 32];
+        let sig1 = BitVectorQc::<BLSOverBN254CurveSignatureScheme>::sign(
+            &(),
+            kp1.sign_key_ref(),
+            msg,
+            &mut rng,
+        )
+        .unwrap();
+        let sig2 = BitVectorQc::<BLSOverBN254CurveSignatureScheme>::sign(
+            &(),
+            kp2.sign_key_ref(),
+            msg,
+            &mut rng,
+        )
+        .unwrap();
+        // nodes 0 and 1 sign (bitvec [1, 1, 0])
+        let signers_bv = bitvec![1, 1, 0];
+        let qc = BitVectorQc::<BLSOverBN254CurveSignatureScheme>::assemble(
+            &qc_pp,
+            signers_bv.as_bitslice(),
+            &[sig1, sig2],
+        )
+        .unwrap();
+        let result = BLSPubKey::signers(&qc_pp, &qc).unwrap();
+        assert_eq!(result, vec![kp1.ver_key(), kp2.ver_key()]);
+    }
+
+    #[test]
+    fn test_bls_signers_bitvec_mismatch() {
+        let mut rng = jf_utils::test_rng();
+        let kp1 = KeyPair::generate(&mut rng);
+        let kp2 = KeyPair::generate(&mut rng);
+        let kp3 = KeyPair::generate(&mut rng);
+        let entries: Vec<StakeTableEntry<BLSPubKey>> = vec![
+            StakeTableEntry {
+                stake_key: kp1.ver_key(),
+                stake_amount: U256::from(1u8),
+            },
+            StakeTableEntry {
+                stake_key: kp2.ver_key(),
+                stake_amount: U256::from(1u8),
+            },
+            StakeTableEntry {
+                stake_key: kp3.ver_key(),
+                stake_amount: U256::from(1u8),
+            },
+        ];
+        let qc_pp = BLSPubKey::public_parameter(&entries, U256::from(2u8));
+
+        // Build a QC with a bitvec of length 2 (should be 3).
+        let wrong_bv = bitvec![1, 1];
+        let sig = BitVectorQc::<BLSOverBN254CurveSignatureScheme>::sign(
+            &(),
+            kp1.sign_key_ref(),
+            [0u8; 32],
+            &mut rng,
+        )
+        .unwrap();
+        let qc_bad = (sig, wrong_bv);
+        let result = BLSPubKey::signers(&qc_pp, &qc_bad);
+        assert!(result.is_err());
     }
 }

@@ -4,31 +4,23 @@
 
 use std::{marker::PhantomData, sync::Arc};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 use espresso_types::{
-    retain_accounts,
+    NodeState, PubKey, SeqTypes, retain_accounts,
     traits::SequencerPersistence,
     v0_3::{RewardAccountV1, RewardMerkleTreeV1},
     v0_4::{RewardAccountV2, RewardMerkleTreeV2},
-    NodeState, PubKey, SeqTypes,
 };
-use hotshot::{traits::NodeImplementation, SystemContext};
+use hotshot::{SystemContext, traits::NodeImplementation};
 use hotshot_query_service::{
     data_source::{
-        storage::{FileSystemStorage, NodeStorage, SqlStorage},
         VersionedDataSource,
+        storage::{FileSystemStorage, NodeStorage, SqlStorage},
     },
     node::BlockId,
 };
-use hotshot_types::{
-    data::ViewNumber,
-    traits::{
-        network::ConnectedNetwork,
-        node_implementation::{ConsensusTime, Versions},
-    },
-    vote::HasViewNumber,
-};
+use hotshot_types::{data::ViewNumber, traits::network::ConnectedNetwork, vote::HasViewNumber};
 use itertools::Itertools;
 use jf_merkle_tree_compat::{
     ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme, LookupResult,
@@ -40,8 +32,8 @@ use super::request::{Request, Response};
 use crate::{
     api::{BlocksFrontier, RewardMerkleTreeDataSource, RewardMerkleTreeV2Data},
     catchup::{
-        add_fee_accounts_to_state, add_v1_reward_accounts_to_state,
-        add_v2_reward_accounts_to_state, CatchupStorage,
+        CatchupStorage, add_fee_accounts_to_state, add_v1_reward_accounts_to_state,
+        add_v2_reward_accounts_to_state,
     },
 };
 
@@ -53,17 +45,16 @@ pub enum Storage {
 }
 
 /// A type alias for the consensus handle
-type Consensus<I, V> = Arc<SystemContext<SeqTypes, I, V>>;
+type Consensus<I> = Arc<SystemContext<SeqTypes, I>>;
 
 #[derive(Clone)]
 pub struct DataSource<
     I: NodeImplementation<SeqTypes>,
-    V: Versions,
     N: ConnectedNetwork<PubKey>,
     P: SequencerPersistence,
 > {
     /// The consensus handle
-    pub consensus: Consensus<I, V>,
+    pub consensus: Consensus<I>,
     /// The node's state
     pub node_state: NodeState,
     /// The storage
@@ -76,23 +67,18 @@ pub struct DataSource<
 
 /// Implement the trait that allows the [`RequestResponseProtocol`] to calculate/derive a response for a specific request
 #[async_trait]
-impl<
-        I: NodeImplementation<SeqTypes>,
-        V: Versions,
-        N: ConnectedNetwork<PubKey>,
-        P: SequencerPersistence,
-    > DataSourceTrait<Request> for DataSource<I, V, N, P>
+impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerPersistence>
+    DataSourceTrait<Request> for DataSource<I, N, P>
 {
     async fn derive_response_for(&self, request: &Request) -> Result<Response> {
         match request {
             Request::Accounts(height, view, accounts) => {
                 // Try to get accounts from memory first, then fall back to storage
-                if let Some(state) = self.consensus.state(ViewNumber::new(*view)).await {
-                    if let Ok(accounts) =
+                if let Some(state) = self.consensus.state(ViewNumber::new(*view)).await
+                    && let Ok(accounts) =
                         retain_accounts(&state.fee_merkle_tree, accounts.iter().copied())
-                    {
-                        return Ok(Response::Accounts(accounts));
-                    }
+                {
+                    return Ok(Response::Accounts(accounts));
                 }
 
                 // Fall back to storage
@@ -107,7 +93,7 @@ impl<
 
                 // If we successfully fetched accounts from storage, try to add them back into the in-memory
                 // state.
-                if let Err(err) = add_fee_accounts_to_state::<N, V, P>(
+                if let Err(err) = add_fee_accounts_to_state::<N, P>(
                     &self.consensus.consensus(),
                     &ViewNumber::new(*view),
                     accounts,
@@ -173,10 +159,10 @@ impl<
             Request::ChainConfig(commitment) => {
                 // Try to get the chain config from memory first, then fall back to storage
                 let chain_config_from_memory = self.consensus.decided_state().await.chain_config;
-                if chain_config_from_memory.commit() == *commitment {
-                    if let Some(chain_config) = chain_config_from_memory.resolve() {
-                        return Ok(Response::ChainConfig(chain_config));
-                    }
+                if chain_config_from_memory.commit() == *commitment
+                    && let Some(chain_config) = chain_config_from_memory.resolve()
+                {
+                    return Ok(Response::ChainConfig(chain_config));
                 }
 
                 // Fall back to storage
@@ -223,13 +209,13 @@ impl<
             },
             Request::RewardAccountsV2(height, view, accounts) => {
                 // Try to get the reward accounts from memory first, then fall back to storage
-                if let Some(state) = self.consensus.state(ViewNumber::new(*view)).await {
-                    if let Ok(reward_accounts) = retain_v2_reward_accounts(
+                if let Some(state) = self.consensus.state(ViewNumber::new(*view)).await
+                    && let Ok(reward_accounts) = retain_v2_reward_accounts(
                         &state.reward_merkle_tree_v2,
                         accounts.iter().copied(),
-                    ) {
-                        return Ok(Response::RewardAccountsV2(reward_accounts));
-                    }
+                    )
+                {
+                    return Ok(Response::RewardAccountsV2(reward_accounts));
                 }
 
                 // Fall back to storage
@@ -251,7 +237,7 @@ impl<
 
                 // If we successfully fetched accounts from storage, try to add them back into the in-memory
                 // state.
-                if let Err(err) = add_v2_reward_accounts_to_state::<N, V, P>(
+                if let Err(err) = add_v2_reward_accounts_to_state::<N, P>(
                     &self.consensus.consensus(),
                     &ViewNumber::new(*view),
                     accounts,
@@ -268,13 +254,13 @@ impl<
 
             Request::RewardAccountsV1(height, view, accounts) => {
                 // Try to get the reward accounts from memory first, then fall back to storage
-                if let Some(state) = self.consensus.state(ViewNumber::new(*view)).await {
-                    if let Ok(reward_accounts) = retain_v1_reward_accounts(
+                if let Some(state) = self.consensus.state(ViewNumber::new(*view)).await
+                    && let Ok(reward_accounts) = retain_v1_reward_accounts(
                         &state.reward_merkle_tree_v1,
                         accounts.iter().copied(),
-                    ) {
-                        return Ok(Response::RewardAccountsV1(reward_accounts));
-                    }
+                    )
+                {
+                    return Ok(Response::RewardAccountsV1(reward_accounts));
                 }
 
                 // Fall back to storage
@@ -296,7 +282,7 @@ impl<
 
                 // If we successfully fetched accounts from storage, try to add them back into the in-memory
                 // state.
-                if let Err(err) = add_v1_reward_accounts_to_state::<N, V, P>(
+                if let Err(err) = add_v1_reward_accounts_to_state::<N, P>(
                     &self.consensus.consensus(),
                     &ViewNumber::new(*view),
                     accounts,
@@ -395,7 +381,7 @@ pub fn retain_v2_reward_accounts(
             LookupResult::Ok(elem, proof) => {
                 // This remember cannot fail, since we just constructed a valid proof, and are
                 // remembering into a tree with the same commitment.
-                snapshot.remember(account, *elem, proof).unwrap();
+                snapshot.remember(account, elem, proof).unwrap();
             },
             LookupResult::NotFound(proof) => {
                 // Likewise this cannot fail.
@@ -423,7 +409,7 @@ pub fn retain_v1_reward_accounts(
             LookupResult::Ok(elem, proof) => {
                 // This remember cannot fail, since we just constructed a valid proof, and are
                 // remembering into a tree with the same commitment.
-                snapshot.remember(account, *elem, proof).unwrap();
+                snapshot.remember(account, elem, proof).unwrap();
             },
             LookupResult::NotFound(proof) => {
                 // Likewise this cannot fail.

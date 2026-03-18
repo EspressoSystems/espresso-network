@@ -1,193 +1,48 @@
 use anyhow::Context;
 use clap::Parser;
-use espresso_types::traits::SequencerPersistence;
-#[allow(unused_imports)]
-use espresso_types::{traits::NullEventConsumer, FeeVersion, SequencerVersions, V0_0};
+use espresso_types::traits::{NullEventConsumer, SequencerPersistence};
 use futures::future::FutureExt;
-use hotshot_types::traits::{metrics::NoMetrics, node_implementation::Versions};
-use vbs::version::StaticVersionType;
+use hotshot_types::traits::metrics::NoMetrics;
 
 use super::{
+    Genesis, L1Params, NetworkParams,
     api::{self, data_source::DataSourceOptions},
     context::SequencerContext,
     init_node, network,
     options::{Modules, Options},
-    persistence, Genesis, L1Params, NetworkParams,
+    persistence,
 };
 
 pub async fn main() -> anyhow::Result<()> {
     let opt = Options::parse();
     opt.logging.init();
 
-    let modules = opt.modules();
+    let mut modules = opt.modules();
     tracing::warn!(?modules, "sequencer starting up");
 
     let genesis = Genesis::from_file(&opt.genesis_file)?;
     tracing::warn!(?genesis, "genesis");
 
-    let base = genesis.base_version;
-    let upgrade = genesis.upgrade_version;
-
-    match (base, upgrade) {
-        #[cfg(all(feature = "fee", feature = "da-upgrade"))]
-        (espresso_types::FeeVersion::VERSION, espresso_types::DaUpgradeVersion::VERSION) => run(
-            genesis,
-            modules,
-            opt,
-            SequencerVersions::<espresso_types::FeeVersion, espresso_types::DaUpgradeVersion>::new(
-            ),
-        )
-        .await,
-        #[cfg(all(feature = "drb-and-header", feature = "da-upgrade"))]
-        (
-            espresso_types::DrbAndHeaderUpgradeVersion::VERSION,
-            espresso_types::DaUpgradeVersion::VERSION,
-        ) => {
-            run(
-                genesis,
-                modules,
-                opt,
-                SequencerVersions::<
-                    espresso_types::DrbAndHeaderUpgradeVersion,
-                    espresso_types::DaUpgradeVersion,
-                >::new(),
-            )
-            .await
-        },
-        #[cfg(feature = "da-upgrade")]
-        (espresso_types::DaUpgradeVersion::VERSION, espresso_types::DaUpgradeVersion::VERSION) => {
-            run(
-                genesis,
-                modules,
-                opt,
-                SequencerVersions::<
-                    espresso_types::DaUpgradeVersion,
-                    espresso_types::DaUpgradeVersion,
-                >::new(),
-            )
-            .await
-        },
-        #[cfg(all(feature = "pos", feature = "drb-and-header"))]
-        (
-            espresso_types::EpochVersion::VERSION,
-            espresso_types::DrbAndHeaderUpgradeVersion::VERSION,
-        ) => {
-            run(
-                genesis,
-                modules,
-                opt,
-                SequencerVersions::<
-                    espresso_types::EpochVersion,
-                    espresso_types::DrbAndHeaderUpgradeVersion,
-                >::new(),
-            )
-            .await
-        },
-        #[cfg(all(feature = "fee", feature = "drb-and-header"))]
-        (
-            espresso_types::FeeVersion::VERSION,
-            espresso_types::DrbAndHeaderUpgradeVersion::VERSION,
-        ) => {
-            run(
-                genesis,
-                modules,
-                opt,
-                SequencerVersions::<
-                    espresso_types::FeeVersion,
-                    espresso_types::DrbAndHeaderUpgradeVersion,
-                >::new(),
-            )
-            .await
-        },
-        #[cfg(feature = "drb-and-header")]
-        (espresso_types::DrbAndHeaderUpgradeVersion::VERSION, _) => {
-            run(
-                genesis,
-                modules,
-                opt,
-                SequencerVersions::<
-                    espresso_types::DrbAndHeaderUpgradeVersion,
-                    espresso_types::DrbAndHeaderUpgradeVersion,
-                >::new(),
-            )
-            .await
-        },
-        #[cfg(all(feature = "fee", feature = "pos"))]
-        (FeeVersion::VERSION, espresso_types::EpochVersion::VERSION) => {
-            run(
-                genesis,
-                modules,
-                opt,
-                SequencerVersions::<espresso_types::FeeVersion, espresso_types::EpochVersion>::new(
-                ),
-            )
-            .await
-        },
-        #[cfg(feature = "pos")]
-        (espresso_types::EpochVersion::VERSION, espresso_types::EpochVersion::VERSION) => {
-            run(
-                genesis,
-                modules,
-                opt,
-                // Specifying V0_0 disables upgrades
-                SequencerVersions::<espresso_types::EpochVersion, espresso_types::EpochVersion>::new(),
-            )
-            .await
-        },
-        #[cfg(feature = "fee")]
-        (FeeVersion::VERSION, espresso_types::FeeVersion::VERSION) => {
-            run(
-                genesis,
-                modules,
-                opt,
-                SequencerVersions::<FeeVersion, espresso_types::FeeVersion>::new(),
-            )
-            .await
-        },
-        _ => panic!(
-            "Invalid base ({base}) and upgrade ({upgrade}) versions specified in the toml file."
-        ),
-    }
-}
-
-async fn run<V>(
-    genesis: Genesis,
-    mut modules: Modules,
-    opt: Options,
-    versions: V,
-) -> anyhow::Result<()>
-where
-    V: Versions,
-{
     if let Some(storage) = modules.storage_fs.take() {
-        run_with_storage(genesis, modules, opt, storage, versions).await
+        run_with_storage(genesis, modules, opt, storage).await
     } else if let Some(storage) = modules.storage_sql.take() {
-        run_with_storage(genesis, modules, opt, storage, versions).await
+        run_with_storage(genesis, modules, opt, storage).await
     } else {
         // Persistence is required. If none is provided, just use the local file system.
-        run_with_storage(
-            genesis,
-            modules,
-            opt,
-            persistence::fs::Options::default(),
-            versions,
-        )
-        .await
+        run_with_storage(genesis, modules, opt, persistence::fs::Options::default()).await
     }
 }
 
-async fn run_with_storage<S, V>(
+async fn run_with_storage<S>(
     genesis: Genesis,
     modules: Modules,
     opt: Options,
     storage_opt: S,
-    versions: V,
 ) -> anyhow::Result<()>
 where
     S: DataSourceOptions,
-    V: Versions,
 {
-    let ctx = init_with_storage(genesis, modules, opt, storage_opt, versions).await?;
+    let ctx = init_with_storage(genesis, modules, opt, storage_opt).await?;
 
     // Start doing consensus.
     ctx.start_consensus().await;
@@ -196,16 +51,14 @@ where
     Ok(())
 }
 
-pub async fn init_with_storage<S, V>(
+pub async fn init_with_storage<S>(
     genesis: Genesis,
     modules: Modules,
     opt: Options,
     mut storage_opt: S,
-    versions: V,
-) -> anyhow::Result<SequencerContext<network::Production, S::Persistence, V>>
+) -> anyhow::Result<SequencerContext<network::Production, S::Persistence>>
 where
     S: DataSourceOptions,
-    V: Versions,
 {
     let (private_staking_key, private_state_key) = opt.private_keys()?;
     let l1_params = L1Params {
@@ -302,7 +155,6 @@ where
                             persistence,
                             l1_params,
                             storage,
-                            versions,
                             consumer,
                             opt.is_da,
                             opt.identity,
@@ -322,7 +174,6 @@ where
                 persistence,
                 l1_params,
                 None,
-                versions,
                 NullEventConsumer,
                 opt.is_da,
                 opt.identity,
@@ -339,20 +190,20 @@ where
 mod test {
     use std::time::Duration;
 
-    use espresso_types::{MockSequencerVersions, PubKey};
+    use espresso_types::PubKey;
     use hotshot_types::{light_client::StateKeyPair, traits::signature_key::SignatureKey};
-    use portpicker::pick_unused_port;
-    use surf_disco::{error::ClientError, Client, Url};
+    use surf_disco::{Client, Url, error::ClientError};
     use tempfile::TempDir;
+    use test_utils::reserve_tcp_port;
     use tokio::spawn;
     use vbs::version::Version;
 
     use super::*;
     use crate::{
+        SequencerApiVersion,
         api::options::Http,
         genesis::{L1Finalized, StakeTableConfig},
         persistence::fs,
-        SequencerApiVersion,
     };
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -360,7 +211,7 @@ mod test {
         let (pub_key, priv_key) = PubKey::generated_from_seed_indexed([0; 32], 0);
         let state_key = StateKeyPair::generate_from_seed_indexed([0; 32], 0);
 
-        let port = pick_unused_port().unwrap();
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         let tmp = TempDir::new().unwrap();
 
         let genesis_file = tmp.path().join("genesis.toml");
@@ -408,14 +259,8 @@ mod test {
         // populate some metrics.
         tracing::info!(port, "starting sequencer");
         let task = spawn(async move {
-            if let Err(err) = init_with_storage(
-                genesis,
-                modules,
-                opt,
-                fs::Options::new(tmp.path().into()),
-                MockSequencerVersions::new(),
-            )
-            .await
+            if let Err(err) =
+                init_with_storage(genesis, modules, opt, fs::Options::new(tmp.path().into())).await
             {
                 tracing::error!("failed to start sequencer: {err:#}");
             }
@@ -445,9 +290,9 @@ mod test {
             lines.contains(
                 &format!(
                     "consensus_version{{desc=\"{}\",rev=\"{}\",timestamp=\"{}\"}} 1",
-                    env!("VERGEN_GIT_DESCRIBE"),
-                    env!("VERGEN_GIT_SHA"),
-                    env!("VERGEN_GIT_COMMIT_TIMESTAMP"),
+                    sequencer_utils::build_info::GIT_DESCRIBE,
+                    sequencer_utils::build_info::GIT_SHA,
+                    sequencer_utils::build_info::GIT_COMMIT_TIMESTAMP,
                 )
                 .as_str()
             ),
@@ -460,9 +305,18 @@ mod test {
             build_info_line.is_some(),
             "missing consensus_build_info metric: {lines:#?}"
         );
+        let build_info_line = build_info_line.unwrap();
         assert!(
-            build_info_line.unwrap().contains("testing=\"yes\""),
-            "expected testing=yes in test builds: {lines:#?}"
+            build_info_line.contains("modified="),
+            "expected modified= in build_info: {lines:#?}"
+        );
+        assert!(
+            build_info_line.contains("features="),
+            "expected features= in build_info: {lines:#?}"
+        );
+        assert!(
+            build_info_line.contains("testing"),
+            "expected testing in features: {lines:#?}"
         );
 
         task.abort();

@@ -1,7 +1,7 @@
 use anyhow::Result;
 use assert_cmd::Command;
 use hotshot_types::signature_key::BLSPubKey;
-use staking_cli::{deploy::TestSystem, DEV_MNEMONIC, DEV_PRIVATE_KEY};
+use staking_cli::{DEV_MNEMONIC, DEV_PRIVATE_KEY, deploy::TestSystem};
 
 // Signer variants are selectively used across different test binaries
 #[allow(dead_code)]
@@ -40,17 +40,19 @@ pub trait TestSystemExt {
     /// Create an export-calldata command with sender-address for validation
     fn export_calldata_cmd(&self) -> Command;
 
-    // Used in node_signatures.rs but not all test binaries
+    // Used in cli.rs but not all test binaries
     #[allow(dead_code)]
     /// Create an export-node-signatures command with system keys and address
     fn export_node_signatures_cmd(&self) -> Result<Command>;
 
+    #[allow(dead_code)]
     fn bls_private_key_str(&self) -> Result<String>;
 
     // Used in cli.rs but not all test binaries
     #[allow(dead_code)]
     fn bls_public_key_str(&self) -> String;
 
+    #[allow(dead_code)]
     fn state_private_key_str(&self) -> Result<String>;
 
     // Used in cli.rs parametrized tests, not all test binaries
@@ -65,7 +67,7 @@ pub trait TestSystemExt {
     ///
     /// Callers must add metadata-related args (`--metadata-uri`, `--skip-metadata-validation`, etc.)
     async fn setup_metadata_cmd(&self, command: MetadataCommand, signer: Signer)
-        -> Result<Command>;
+    -> Result<Command>;
 }
 
 impl TestSystemExt for TestSystem {

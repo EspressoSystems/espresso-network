@@ -18,14 +18,13 @@ pub use refinery::Migration;
 pub use sql::Transaction;
 
 use super::{
-    fetching,
+    AvailabilityProvider, FetchingDataSource, fetching,
     storage::sql::{self, SqlStorage, StorageConnectionType},
-    AvailabilityProvider, FetchingDataSource,
 };
 pub use crate::include_migrations;
 use crate::{
-    availability::{QueryableHeader, QueryablePayload},
     Header, Payload,
+    availability::{QueryableHeader, QueryablePayload},
 };
 
 pub type Builder<Types, Provider> = fetching::Builder<Types, SqlStorage, Provider>;
@@ -385,7 +384,10 @@ mod generic_test {
 
 #[cfg(all(test, not(target_os = "windows")))]
 mod test {
-    use hotshot_example_types::state_types::{TestInstanceState, TestValidatedState};
+    use hotshot_example_types::{
+        node_types::TEST_VERSIONS,
+        state_types::{TestInstanceState, TestValidatedState},
+    };
     use hotshot_types::{
         data::{VidCommon, VidShare},
         vid::advz::advz_scheme,
@@ -399,8 +401,8 @@ mod test {
             VidCommonQueryData,
         },
         data_source::{
-            storage::{NodeStorage, UpdateAvailabilityStorage},
             Transaction, VersionedDataSource,
+            storage::{NodeStorage, UpdateAvailabilityStorage},
         },
         fetching::provider::NoFetching,
         testing::{consensus::DataSourceLifeCycle, mocks::MockTypes},
@@ -412,8 +414,6 @@ mod test {
     // storing VID common and later the corresponding share.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_vid_monotonicity() {
-        use hotshot_example_types::node_types::TestVersions;
-
         let storage = D::create(0).await;
         let ds = <D as DataSourceLifeCycle>::connect(&storage).await;
 
@@ -421,9 +421,10 @@ mod test {
         let disperse = advz_scheme(2).disperse([]).unwrap();
 
         // Insert test data with VID common but no share.
-        let leaf = LeafQueryData::<MockTypes>::genesis::<TestVersions>(
+        let leaf = LeafQueryData::<MockTypes>::genesis(
             &TestValidatedState::default(),
             &TestInstanceState::default(),
+            TEST_VERSIONS.test,
         )
         .await;
         let common = VidCommonQueryData::new(leaf.header().clone(), VidCommon::V0(disperse.common));

@@ -1,59 +1,58 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use anyhow::{bail, ensure, Context};
+use anyhow::{Context, bail, ensure};
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
 use espresso_types::{
-    get_l1_deposits,
+    BlockMerkleTree, ChainConfig, DrbAndHeaderUpgradeVersion, EpochVersion, FeeAccount,
+    FeeMerkleTree, Leaf2, NodeState, REWARD_MERKLE_TREE_V1_HEIGHT, RewardAccountProofV1,
+    RewardAccountQueryDataV1, RewardAccountV1, RewardMerkleTreeV1, ValidatedState, get_l1_deposits,
     v0_1::IterableFeeInfo,
     v0_3::{
-        ChainConfig, RewardAccountProofV1, RewardAccountQueryDataV1, RewardAccountV1,
-        RewardMerkleTreeV1, REWARD_MERKLE_TREE_V1_HEIGHT,
+        ChainConfig, REWARD_MERKLE_TREE_V1_HEIGHT, RewardAccountProofV1, RewardAccountQueryDataV1,
+        RewardAccountV1, RewardMerkleTreeV1,
     },
     v0_4::{PermittedRewardMerkleTreeV2, RewardAccountV2, RewardMerkleTreeV2},
-    BlockMerkleTree, DrbAndHeaderUpgradeVersion, EpochVersion, FeeAccount, FeeMerkleTree, Leaf2,
-    NodeState, ValidatedState,
 };
 use futures::future::Future;
 use hotshot::traits::ValidatedState as _;
 use hotshot_query_service::{
+    Resolvable,
     availability::LeafId,
     data_source::{
+        VersionedDataSource,
         sql::{Config, SqlDataSource, Transaction},
         storage::{
-            sql::{query_as, Db, TransactionMode, Write},
             AvailabilityStorage, MerklizedStateStorage, NodeStorage, SqlStorage,
+            sql::{Db, TransactionMode, Write, query_as},
         },
-        VersionedDataSource,
     },
     merklized_state::Snapshot,
-    Resolvable,
 };
 use hotshot_types::{
     data::{EpochNumber, QuorumProposalWrapper, ViewNumber},
     message::Proposal,
-    traits::node_implementation::ConsensusTime,
     utils::epoch_from_block_number,
     vote::HasViewNumber,
 };
 use jf_merkle_tree_compat::{
-    prelude::MerkleNode, ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme,
-    LookupResult, MerkleTreeScheme,
+    ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme, LookupResult,
+    MerkleTreeScheme, prelude::MerkleNode,
 };
 use sqlx::{Encode, Row, Type};
-use vbs::version::StaticVersionType;
+use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION};
 
 use super::{
-    data_source::{Provider, SequencerDataSource},
     BlocksFrontier,
+    data_source::{Provider, SequencerDataSource},
 };
 use crate::{
+    SeqTypes,
     api::RewardMerkleTreeDataSource,
     catchup::{CatchupStorage, NullStateCatchup},
-    persistence::{sql::Options, ChainConfigPersistence},
+    persistence::{ChainConfigPersistence, sql::Options},
     state::compute_state_update,
     util::BoundedJoinSet,
-    SeqTypes,
 };
 
 pub type DataSource = SqlDataSource<SeqTypes, Provider>;
@@ -88,6 +87,9 @@ impl SequencerDataSource for DataSource {
         }
         if let Some(delay) = chunk_fetch_delay {
             builder = builder.with_chunk_fetch_delay(delay);
+        }
+        if let Some(chunk_size) = opt.sync_status_chunk_size {
+            builder = builder.with_sync_status_chunk_size(chunk_size);
         }
         if opt.disable_proactive_fetching {
             builder = builder.disable_proactive_fetching();
@@ -759,9 +761,7 @@ async fn load_v1_reward_accounts(
         .context(format!("leaf {height} not available"))?;
     let header = leaf.header();
 
-    if header.version() < EpochVersion::version()
-        || header.version() >= DrbAndHeaderUpgradeVersion::version()
-    {
+    if header.version() < EPOCH_VERSION || header.version() >= DRB_AND_HEADER_UPGRADE_VERSION {
         return Ok((
             RewardMerkleTreeV1::new(REWARD_MERKLE_TREE_V1_HEIGHT),
             leaf.leaf().clone(),
@@ -1182,7 +1182,7 @@ async fn reward_header_dependencies(
 
         let version = header.version();
         // Skip if version is less than epoch version
-        if version < EpochVersion::version() {
+        if version < EPOCH_VERSION {
             continue;
         }
 
@@ -1307,19 +1307,19 @@ mod tests {
     use alloy::primitives::Address;
     use espresso_types::{
         v0_3::RewardAmount,
-        v0_4::{RewardAccountV2, RewardMerkleTreeV2, REWARD_MERKLE_TREE_V2_HEIGHT},
+        v0_4::{REWARD_MERKLE_TREE_V2_HEIGHT, RewardAccountV2, RewardMerkleTreeV2},
     };
     use hotshot_query_service::{
         data_source::{
+            Transaction, VersionedDataSource,
             sql::Config,
             storage::{
-                sql::{
-                    testing::TmpDb, SqlStorage, StorageConnectionType,
-                    Transaction as SqlTransaction, Write,
-                },
                 MerklizedStateStorage,
+                sql::{
+                    SqlStorage, StorageConnectionType, Transaction as SqlTransaction, Write,
+                    testing::TmpDb,
+                },
             },
-            Transaction, VersionedDataSource,
         },
         merklized_state::{MerklizedState, Snapshot, UpdateStateData},
     };
@@ -1530,12 +1530,14 @@ mod tests {
             assert!(proof.elem().is_none(),);
 
             // Verify non-membership proof
-            assert!(RewardMerkleTreeV2::non_membership_verify(
-                reward_tree_h1.commitment(),
-                account,
-                proof
-            )
-            .unwrap(),);
+            assert!(
+                RewardMerkleTreeV2::non_membership_verify(
+                    reward_tree_h1.commitment(),
+                    account,
+                    proof
+                )
+                .unwrap(),
+            );
         }
         tracing::info!("Height 1: Verified 100 non-membership proofs");
 
@@ -1741,12 +1743,14 @@ mod tests {
                 "Account {i} should not exist at height 3"
             );
 
-            assert!(RewardMerkleTreeV2::non_membership_verify(
-                reward_tree_h3.commitment(),
-                account,
-                proof
-            )
-            .unwrap(),);
+            assert!(
+                RewardMerkleTreeV2::non_membership_verify(
+                    reward_tree_h3.commitment(),
+                    account,
+                    proof
+                )
+                .unwrap(),
+            );
         }
         tracing::info!("Height 3: Verified 10 non-membership proofs");
     }

@@ -1,5 +1,5 @@
 use std::{
-    cmp::{min, Ordering},
+    cmp::{Ordering, min},
     num::NonZeroUsize,
     pin::Pin,
     result::Result as StdResult,
@@ -17,7 +17,7 @@ use alloy::{
         json_rpc::{RequestPacket, ResponsePacket},
         types::Block,
     },
-    transports::{http::Http, RpcError, TransportErrorKind},
+    transports::{RpcError, TransportErrorKind, http::Http},
 };
 use anyhow::Context;
 use async_trait::async_trait;
@@ -34,15 +34,15 @@ use parking_lot::RwLock;
 use tokio::{
     spawn,
     sync::{Mutex, MutexGuard, Notify},
-    time::{sleep, Duration},
+    time::{Duration, sleep},
 };
 use tower_service::Service;
 use tracing::Instrument;
 use url::Url;
 
 use super::{
-    v0_1::{L1BlockInfoWithParent, SingleTransport, SingleTransportStatus, SwitchingTransport},
     L1BlockInfo, L1ClientMetrics, L1State, L1UpdateTask,
+    v0_1::{L1BlockInfoWithParent, SingleTransport, SingleTransportStatus, SwitchingTransport},
 };
 use crate::{FeeInfo, L1Client, L1ClientOptions, L1Event, L1Snapshot};
 
@@ -241,11 +241,11 @@ impl SingleTransportStatus {
 
         // If we've failed recently, switch to the next URL
         let now = Instant::now();
-        if let Some(prev) = self.last_failure {
-            if now.saturating_duration_since(prev) < opt.l1_frequent_failure_tolerance {
-                self.shutting_down = true;
-                return true;
-            }
+        if let Some(prev) = self.last_failure
+            && now.saturating_duration_since(prev) < opt.l1_frequent_failure_tolerance
+        {
+            self.shutting_down = true;
+            return true;
         }
 
         false
@@ -475,7 +475,7 @@ impl L1Client {
         }
     }
 
-    fn update_loop(&self) -> impl Future<Output = ()> {
+    fn update_loop(&self) -> impl Future<Output = ()> + use<> {
         let opt = self.options().clone();
         let rpc = self.provider.clone();
         let ws_urls = opt.l1_ws_provider.clone();
@@ -610,8 +610,8 @@ impl L1Client {
                                     .await
                                     .ok();
                             }
-                            if let Some(finalized) = finalized {
-                                if Some(finalized.info) > state.snapshot.finalized {
+                            if let Some(finalized) = finalized
+                                && Some(finalized.info) > state.snapshot.finalized {
                                     tracing::info!(
                                         ?finalized,
                                         old_finalized = ?state.snapshot.finalized,
@@ -625,7 +625,6 @@ impl L1Client {
                                         .await
                                         .ok();
                                 }
-                            }
                             tracing::debug!("Updated L1 snapshot to {:?}", state.snapshot);
                         }
                         // The stream ended
@@ -746,10 +745,10 @@ impl L1Client {
             // Check if the block we are waiting for already exists.
             {
                 let state = self.state.lock().await;
-                if let Some(finalized) = state.snapshot.finalized {
-                    if finalized.timestamp >= timestamp {
-                        break 'outer (state, finalized);
-                    }
+                if let Some(finalized) = state.snapshot.finalized
+                    && finalized.timestamp >= timestamp
+                {
+                    break 'outer (state, finalized);
                 }
                 tracing::info!(
                     %timestamp,
@@ -827,23 +826,23 @@ impl L1Client {
             state.snapshot,
         );
 
-        if let Some(safety_margin) = self.options().l1_finalized_safety_margin {
-            if number < latest_finalized.number.saturating_sub(safety_margin) {
-                // If the requested block height is so old that we can assume all L1 providers have
-                // finalized it, we don't need to worry about failing over to a lagging L1 provider
-                // which has yet to finalize the block, so we don't need to bother with the
-                // expensive hash chaining logic below. Just look up the block by number and assume
-                // the response is finalized.
-                tracing::debug!(
-                    number,
-                    ?latest_finalized,
-                    "skipping hash check for old finalized block"
-                );
-                let (state, block) = self
-                    .load_and_cache_finalized_block(state, number.into())
-                    .await;
-                return (state, block.info);
-            }
+        if let Some(safety_margin) = self.options().l1_finalized_safety_margin
+            && number < latest_finalized.number.saturating_sub(safety_margin)
+        {
+            // If the requested block height is so old that we can assume all L1 providers have
+            // finalized it, we don't need to worry about failing over to a lagging L1 provider
+            // which has yet to finalize the block, so we don't need to bother with the
+            // expensive hash chaining logic below. Just look up the block by number and assume
+            // the response is finalized.
+            tracing::debug!(
+                number,
+                ?latest_finalized,
+                "skipping hash check for old finalized block"
+            );
+            let (state, block) = self
+                .load_and_cache_finalized_block(state, number.into())
+                .await;
+            return (state, block.info);
         }
 
         // To get this block and be sure we are getting the correct finalized block, we first need
@@ -1032,7 +1031,7 @@ impl L1Client {
         let start = transport.current_transport.read().generation % transport.urls.len();
         let end = start + transport.urls.len();
         loop {
-            match op().into_future().await {
+            match TryFutureExt::into_future(op()).await {
                 Ok(res) => return Ok(res),
                 Err(err) => {
                     if transport.current_transport.read().generation >= end {
@@ -1079,15 +1078,16 @@ impl L1State {
             self.last_finalized = Some(block.info.number());
         }
 
-        if let Some((old_number, old_block)) = self.finalized.push(block.info.number, block) {
-            if old_number == block.info.number && block != old_block {
-                tracing::error!(
-                    ?old_block,
-                    ?block,
-                    "got different info for the same finalized height; something has gone very \
-                     wrong with the L1",
-                );
-            }
+        if let Some((old_number, old_block)) = self.finalized.push(block.info.number, block)
+            && old_number == block.info.number
+            && block != old_block
+        {
+            tracing::error!(
+                ?old_block,
+                ?block,
+                "got different info for the same finalized height; something has gone very wrong \
+                 with the L1",
+            );
         }
     }
 }
@@ -1117,8 +1117,7 @@ mod test {
         primitives::utils::parse_ether,
         providers::layers::AnvilProvider,
     };
-    use espresso_contract_deployer::{deploy_fee_contract_proxy, Contracts};
-    use portpicker::pick_unused_port;
+    use espresso_contract_deployer::{Contracts, deploy_fee_contract_proxy};
     use time::OffsetDateTime;
 
     use super::*;
@@ -1421,8 +1420,9 @@ mod test {
     }
 
     async fn test_reconnect_update_task_helper(ws: bool) {
-        let port = pick_unused_port().unwrap();
-        let anvil = Arc::new(Anvil::new().block_time(1).port(port).spawn());
+        // Use port 0 to let OS assign a port, avoiding race conditions
+        let anvil = Arc::new(Anvil::new().block_time(1).port(0u16).spawn());
+        let port = anvil.port();
         let client = new_l1_client(&anvil, ws).await;
 
         let initial_state = client.snapshot().await;
@@ -1681,7 +1681,8 @@ mod test {
     // don't require an L1 that is continuously mining blocks.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_update_loop_initializes_l1_state() {
-        let anvil = Arc::new(Anvil::new().port(9988u16).spawn());
+        // Use port 0 to let OS assign a port, avoiding race conditions
+        let anvil = Arc::new(Anvil::new().port(0u16).spawn());
         let l1_client = new_l1_client(&anvil, true).await;
 
         for _try in 0..10 {

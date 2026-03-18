@@ -11,15 +11,15 @@ use async_trait::async_trait;
 use hotshot_task::task::TaskState;
 use hotshot_types::{
     consensus::{OuterConsensus, PayloadWithMetadata},
-    data::{PackedBundle, VidDisperse, VidDisperseAndDuration},
+    data::{EpochNumber, PackedBundle, VidDisperse, VidDisperseAndDuration, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::{Proposal, UpgradeLock},
     simple_vote::HasEpoch,
     traits::{
-        block_contents::BlockHeader,
-        node_implementation::{NodeImplementation, NodeType, Versions},
-        signature_key::SignatureKey,
         BlockPayload,
+        block_contents::BlockHeader,
+        node_implementation::{NodeImplementation, NodeType},
+        signature_key::SignatureKey,
     },
     utils::{is_epoch_transition, option_epoch_from_block_number},
 };
@@ -32,12 +32,12 @@ use crate::{
 };
 
 /// Tracks state of a VID task
-pub struct VidTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> {
+pub struct VidTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>> {
     /// View number this view is executing in.
-    pub cur_view: TYPES::View,
+    pub cur_view: ViewNumber,
 
     /// Epoch number this node is executing in.
-    pub cur_epoch: Option<TYPES::Epoch>,
+    pub cur_epoch: Option<EpochNumber>,
 
     /// Reference to consensus. Leader will require a read lock on this.
     pub consensus: OuterConsensus<TYPES>,
@@ -58,13 +58,13 @@ pub struct VidTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versio
     pub id: u64,
 
     /// Lock for a decided upgrade
-    pub upgrade_lock: UpgradeLock<TYPES, V>,
+    pub upgrade_lock: UpgradeLock<TYPES>,
 
     /// Number of blocks in an epoch, zero means there are no epochs
     pub epoch_height: u64,
 }
 
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TYPES, I, V> {
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> VidTaskState<TYPES, I> {
     /// main task event handler
     #[instrument(skip_all, fields(id = self.id, view = *self.cur_view, epoch = self.cur_epoch.map(|x| *x)), name = "VID Main Task", level = "error", target = "VidTaskState")]
     pub async fn handle(
@@ -104,7 +104,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TY
                 let VidDisperseAndDuration {
                     disperse: vid_disperse,
                     duration: disperse_duration,
-                } = VidDisperse::calculate_vid_disperse::<V>(
+                } = VidDisperse::calculate_vid_disperse(
                     &payload,
                     &self.membership_coordinator,
                     *view_number,
@@ -204,11 +204,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TY
                 // We just sent a proposal for the last block in the epoch. We need to calculate
                 // and send VID for the nodes in the next epoch so that they can vote.
                 let proposal_view_number = proposal.data.view_number();
-                let sender_epoch = option_epoch_from_block_number::<TYPES>(
-                    true,
-                    proposed_block_number,
-                    self.epoch_height,
-                );
+                let sender_epoch =
+                    option_epoch_from_block_number(true, proposed_block_number, self.epoch_height);
                 let target_epoch = sender_epoch.map(|x| x + 1);
 
                 let consensus_reader = self.consensus.read().await;
@@ -226,7 +223,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TY
                 let VidDisperseAndDuration {
                     disperse: next_epoch_vid_disperse,
                     duration: _,
-                } = VidDisperse::calculate_vid_disperse::<V>(
+                } = VidDisperse::calculate_vid_disperse(
                     &payload.payload,
                     &self.membership_coordinator,
                     proposal_view_number,
@@ -270,11 +267,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TY
     }
 }
 
-#[async_trait]
 /// task state implementation for VID Task
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TaskState
-    for VidTaskState<TYPES, I, V>
-{
+#[async_trait]
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TaskState for VidTaskState<TYPES, I> {
     type Event = HotShotEvent<TYPES>;
 
     async fn handle_event(
