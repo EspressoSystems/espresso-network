@@ -25,7 +25,7 @@ use hotshot_types::{
 use hotshot_utils::anytrace::*;
 use tide_disco::Url;
 use vec1::Vec1;
-use versions::{Upgrade, version};
+use versions::{MIN_SUPPORTED_VERSION, Upgrade};
 
 use super::{
     completion_task::{CompletionTaskDescription, TimeBasedCompletionTaskDescription},
@@ -64,7 +64,6 @@ pub fn default_hotshot_config<TYPES: NodeType>(
     num_bootstrap_nodes: usize,
     epoch_height: u64,
     epoch_start_block: u64,
-    upgrade: Upgrade,
 ) -> HotShotConfig<TYPES> {
     HotShotConfig {
         start_threshold: (1, 1),
@@ -94,7 +93,6 @@ pub fn default_hotshot_config<TYPES: NodeType>(
         stake_table_capacity: hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY,
         drb_difficulty: 10,
         drb_upgrade_difficulty: 20,
-        upgrade,
     }
 }
 
@@ -161,6 +159,8 @@ pub struct TestDescription<TYPES: NodeType, I: NodeImplementation<TYPES>> {
     pub behaviour: Rc<dyn Fn(u64) -> Behaviour<TYPES, I>>,
     /// Delay config if any to add delays to asynchronous calls
     pub async_delay_config: HashMap<u64, DelayConfig>,
+    /// Configured version upgrade
+    pub upgrade: versions::Upgrade,
     /// view in which to propose an upgrade
     pub upgrade_view: Option<u64>,
     /// whether to initialize the solver on startup
@@ -264,7 +264,7 @@ pub async fn create_test_handle<
         metadata.test_config.epoch_height,
         metadata.test_config.epoch_start_block,
         vec![],
-        config.upgrade,
+        metadata.upgrade,
     )
     .await
     .unwrap();
@@ -297,6 +297,7 @@ pub async fn create_test_handle<
                     state_private_key,
                     node_id,
                     config,
+                    metadata.upgrade,
                     membership_coordinator,
                     network,
                     initializer,
@@ -317,6 +318,7 @@ pub async fn create_test_handle<
                     state_private_key,
                     node_id,
                     config,
+                    metadata.upgrade,
                     membership_coordinator,
                     network,
                     initializer,
@@ -333,6 +335,7 @@ pub async fn create_test_handle<
                 state_private_key,
                 node_id,
                 config,
+                metadata.upgrade,
                 membership_coordinator,
                 network,
                 initializer,
@@ -441,6 +444,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TestDescription<TYPES, I> {
         let (staked_nodes, da_nodes) =
             gen_node_lists::<TYPES>(num_nodes_with_stake, num_da_nodes, &node_stakes);
 
+        let upgrade = Upgrade::trivial(MIN_SUPPORTED_VERSION);
         Self {
             test_config: default_hotshot_config::<TYPES>(
                 staked_nodes,
@@ -448,8 +452,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TestDescription<TYPES, I> {
                 num_nodes_with_stake.try_into().unwrap(),
                 epoch_height,
                 epoch_start_block,
-                Upgrade::trivial(version(0, 1)),
             ),
+            upgrade,
             // The first 14 (i.e., 20 - f) nodes are in the DA committee and we may shutdown the
             // remaining 6 (i.e., f) nodes. We could remove this restriction after fixing the
             // following issue.
@@ -485,6 +489,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TestDescription<TYPES, I> {
         let (staked_nodes, da_nodes) =
             gen_node_lists::<TYPES>(num_nodes, num_da_nodes, &self.node_stakes);
 
+        let upgrade = Upgrade::trivial(MIN_SUPPORTED_VERSION);
         Self {
             test_config: default_hotshot_config::<TYPES>(
                 staked_nodes,
@@ -492,8 +497,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TestDescription<TYPES, I> {
                 self.test_config.num_bootstrap,
                 self.test_config.epoch_height,
                 self.test_config.epoch_start_block,
-                Upgrade::trivial(version(0, 1)),
             ),
+            upgrade,
             ..self
         }
     }
@@ -518,6 +523,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TestDescription<TYPES, I> {
         let (staked_nodes, da_nodes) =
             gen_node_lists::<TYPES>(num_nodes_with_stake, num_da_nodes, &node_stakes);
 
+        let upgrade = Upgrade::trivial(MIN_SUPPORTED_VERSION);
         Self {
             test_config: default_hotshot_config::<TYPES>(
                 staked_nodes,
@@ -525,8 +531,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TestDescription<TYPES, I> {
                 num_nodes_with_stake.try_into().unwrap(),
                 epoch_height,
                 epoch_start_block,
-                Upgrade::trivial(version(0, 1)),
             ),
+            upgrade,
             timing_data: TimingData::default(),
             skip_late: false,
             spinning_properties: SpinningTaskDescription {

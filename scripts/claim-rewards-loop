@@ -1,12 +1,26 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Load .env if present (process-compose may not propagate all vars)
+if [ -f .env ]; then
+  set -a; source .env; set +a
+fi
+
 SLEEP_INTERVAL="${1:-10}"
+export RUST_LOG="${RUST_LOG_CLAIM_REWARDS:-debug}"
+
+# Initialize staking-cli config so the signer is persisted for subsequent calls.
+staking-cli init \
+  --mnemonic "${MNEMONIC}" \
+  --account-index "${ACCOUNT_INDEX:-20}" \
+  --network local
 
 echo "Starting reward claiming loop (checking every ${SLEEP_INTERVAL}s)..."
 
 while true; do
-  unclaimed=$(staking-cli unclaimed-rewards)
+  output=$(staking-cli unclaimed-rewards 2>&1)
+  echo "$output" >&2
+  unclaimed=$(echo "$output" | tail -1)
   if [ "$unclaimed" != "0 ESP" ]; then
     echo "Claiming $unclaimed..."
     staking-cli claim-rewards

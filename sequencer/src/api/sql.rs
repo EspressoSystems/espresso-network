@@ -91,6 +91,9 @@ impl SequencerDataSource for DataSource {
         if let Some(chunk_size) = opt.sync_status_chunk_size {
             builder = builder.with_sync_status_chunk_size(chunk_size);
         }
+        if opt.disable_proactive_fetching {
+            builder = builder.disable_proactive_fetching();
+        }
 
         if let Some(batch_size) = opt.types_migration_batch_size {
             builder = builder.with_types_migration_batch_size(batch_size);

@@ -1,0 +1,33 @@
+[package]
+name = "deployment-info"
+description = "Tool to collect and output deployment information for Espresso Network contracts"
+version = { workspace = true }
+authors = { workspace = true }
+edition = { workspace = true }
+
+[[bin]]
+name = "deployment-info"
+path = "src/main.rs"
+
+[dependencies]
+alloy = { workspace = true }
+anyhow = { workspace = true }
+clap = { workspace = true }
+dotenvy = { workspace = true }
+humantime = "2"
+humantime-serde = "1.1.1"
+serde = { workspace = true }
+tokio = { workspace = true }
+toml = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+url = { workspace = true }
+
+[dev-dependencies]
+espresso-contract-deployer = { path = "../deployer" }
+hotshot-state-prover = { workspace = true }
+tempfile = { workspace = true }
+test-log = { workspace = true }
+
+[lints]
+workspace = true

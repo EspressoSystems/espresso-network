@@ -3811,9 +3811,7 @@ mod test {
         let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url.clone());
 
         let options = Options::with_port(port).config(Default::default());
-        let network_config = TestConfigBuilder::default()
-            .version_upgrade(MOCK_SEQUENCER_VERSIONS)
-            .build();
+        let network_config = TestConfigBuilder::default().build();
         let config = TestNetworkConfigBuilder::default()
             .api_config(options)
             .network_config(network_config)

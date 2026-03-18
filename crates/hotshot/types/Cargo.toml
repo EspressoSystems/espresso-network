@@ -50,6 +50,7 @@ libp2p-identity = { workspace = true }
 memoize = { workspace = true }
 mnemonic = { workspace = true }
 multiaddr = { workspace = true }
+parking_lot = { workspace = true }
 rand = { workspace = true }
 rand_chacha = { workspace = true }
 serde = { workspace = true }
