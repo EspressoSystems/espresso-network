@@ -109,7 +109,7 @@ where
         launcher.metadata.test_config.epoch_height,
         launcher.metadata.test_config.epoch_start_block,
         vec![],
-        hotshot_config.upgrade,
+        launcher.metadata.upgrade,
     )
     .await
     .unwrap();
@@ -147,6 +147,7 @@ where
         state_private_key,
         node_id,
         hotshot_config,
+        launcher.metadata.upgrade,
         coordinator,
         network,
         initializer,

@@ -464,7 +464,6 @@ where
     network_config.config.drb_upgrade_difficulty = drb_upgrade_difficulty;
     network_config.config.epoch_start_block = epoch_start_block;
     network_config.config.stake_table_capacity = stake_table_capacity;
-    network_config.config.upgrade = version_upgrade;
 
     if let Some(da_committees) = &genesis.da_committees {
         tracing::warn!("setting da_committees from genesis: {da_committees:?}");
@@ -733,6 +732,7 @@ where
 
     let mut ctx = SequencerContext::init(
         network_config,
+        version_upgrade,
         validator_config,
         coordinator,
         instance_state,
@@ -832,7 +832,7 @@ pub mod testing {
     use test_utils::reserve_tcp_port;
     use tokio::spawn;
     use vbs::version::{StaticVersionType, Version};
-    use versions::{EPOCH_VERSION, VERSION_0_1};
+    use versions::EPOCH_VERSION;
 
     use super::*;
     use crate::{
@@ -1027,11 +1027,6 @@ pub mod testing {
             self
         }
 
-        pub fn version_upgrade(mut self, u: versions::Upgrade) -> Self {
-            self.config.upgrade = u;
-            self
-        }
-
         /// Version specific upgrade setup. Extend to future upgrades
         /// by adding a branch to the `match` statement.
         pub async fn set_upgrades(mut self, version: Version) -> Self {
@@ -1205,7 +1200,6 @@ pub mod testing {
                 stake_table_capacity: hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY,
                 drb_difficulty: 10,
                 drb_upgrade_difficulty: 20,
-                upgrade: versions::Upgrade::trivial(VERSION_0_1),
             };
 
             let anvil = Anvil::new()
@@ -1352,8 +1346,7 @@ pub mod testing {
             upgrade: versions::Upgrade,
             upgrades: BTreeMap<Version, Upgrade>,
         ) -> SequencerContext<network::Memory, P::Persistence> {
-            let mut config = self.config.clone();
-            config.upgrade = upgrade;
+            let config = self.config.clone();
             let my_peer_config = &config.known_nodes_with_stake[i];
             let is_da = config.known_da_nodes.contains(my_peer_config);
 
@@ -1454,11 +1447,11 @@ pub mod testing {
                 chain_config,
                 l1_client,
                 Arc::new(catchup_providers.clone()),
-                config.upgrade.base,
+                upgrade.base,
                 coordinator.clone(),
-                config.upgrade.base,
+                upgrade.base,
             )
-            .with_current_version(config.upgrade.base)
+            .with_current_version(upgrade.base)
             .with_genesis(state)
             .with_epoch_height(config.epoch_height)
             .with_upgrades(upgrades)
@@ -1478,6 +1471,7 @@ pub mod testing {
                     // the base consensus config does not matter.
                     ..Default::default()
                 },
+                upgrade,
                 validator_config,
                 coordinator,
                 node_state,

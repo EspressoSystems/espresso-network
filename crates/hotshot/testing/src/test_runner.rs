@@ -181,13 +181,13 @@ where
             last_decided_leaf: Leaf2::genesis(
                 &TestValidatedState::default(),
                 &TestInstanceState::default(),
-                launcher.metadata.test_config.upgrade.base,
+                launcher.metadata.upgrade.base,
             )
             .await,
             high_qc: QuorumCertificate2::genesis(
                 &TestValidatedState::default(),
                 &TestInstanceState::default(),
-                launcher.metadata.test_config.upgrade,
+                launcher.metadata.upgrade,
             )
             .await,
             next_epoch_high_qc: None,
@@ -196,6 +196,7 @@ where
             channel_generator: launcher.resource_generators.channel_generator,
             state_cert: None,
             node_stakes: launcher.metadata.node_stakes.clone(),
+            upgrade: launcher.metadata.upgrade,
         };
         let spinning_task = TestTask::<SpinningTask<TYPES, N, I>>::new(
             spinning_task_state,
@@ -433,7 +434,7 @@ where
                             drb_result: INITIAL_DRB_RESULT,
                             block_header: None,
                         }],
-                        config.upgrade,
+                        self.launcher.metadata.upgrade,
                     )
                     .await
                     .unwrap();
@@ -453,6 +454,7 @@ where
                         ),
                         initializer,
                         config,
+                        self.launcher.metadata.upgrade,
                         validator_config,
                         storage,
                     )
@@ -550,6 +552,7 @@ where
         memberships: TYPES::Membership,
         initializer: HotShotInitializer<TYPES>,
         config: HotShotConfig<TYPES>,
+        upgrade: versions::Upgrade,
         validator_config: ValidatorConfig<TYPES>,
         storage: I::Storage,
     ) -> Arc<SystemContext<TYPES, I>> {
@@ -565,6 +568,7 @@ where
             state_private_key,
             node_id,
             config,
+            upgrade,
             EpochMembershipCoordinator::new(
                 Arc::new(RwLock::new(memberships)),
                 epoch_height,
@@ -589,6 +593,7 @@ where
         memberships: Arc<RwLock<TYPES::Membership>>,
         initializer: HotShotInitializer<TYPES>,
         config: HotShotConfig<TYPES>,
+        upgrade: versions::Upgrade,
         validator_config: ValidatorConfig<TYPES>,
         storage: I::Storage,
         internal_channel: (
@@ -609,6 +614,7 @@ where
             state_private_key,
             node_id,
             config,
+            upgrade,
             EpochMembershipCoordinator::new(memberships, epoch_height, &storage.clone()),
             network,
             initializer,

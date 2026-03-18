@@ -96,6 +96,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
     #[allow(clippy::too_many_arguments)]
     pub async fn init(
         network_config: NetworkConfig<SeqTypes>,
+        upgrade: versions::Upgrade,
         validator_config: ValidatorConfig<SeqTypes>,
         coordinator: EpochMembershipCoordinator<SeqTypes>,
         instance_state: NodeState,
@@ -123,7 +124,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
 
         // Load saved consensus state from storage.
         let (initializer, anchor_view) = persistence
-            .load_consensus_state(instance_state.clone(), config.upgrade)
+            .load_consensus_state(instance_state.clone(), upgrade)
             .await?;
 
         tracing::warn!(
@@ -148,6 +149,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
             validator_config.state_private_key.clone(),
             instance_state.node_id,
             config.clone(),
+            upgrade,
             coordinator.clone(),
             network.clone(),
             initializer,

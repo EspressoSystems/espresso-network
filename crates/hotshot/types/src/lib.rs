@@ -22,7 +22,6 @@ use traits::{
 use url::Url;
 use vbs::version::Version;
 use vec1::Vec1;
-use versions::Upgrade;
 
 use crate::{addr::NetAddr, utils::bincode_opts};
 
@@ -282,8 +281,6 @@ pub struct HotShotConfig<TYPES: NodeType> {
     pub drb_difficulty: u64,
     /// number of iterations in the DRB calculation
     pub drb_upgrade_difficulty: u64,
-    /// Configured version upgrade.
-    pub upgrade: Upgrade,
 }
 
 fn default_epoch_start_block() -> u64 {

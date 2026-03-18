@@ -17,6 +17,7 @@ pub const DA_UPGRADE_VERSION: Version = version(0, 5);
 pub const VID2_UPGRADE_VERSION: Version = version(0, 6);
 pub const CLIQUENET_VERSION: Version = version(0, 7);
 
+pub const MIN_SUPPORTED_VERSION: Version = VERSION_0_1;
 pub const MAX_SUPPORTED_VERSION: Version = DA_UPGRADE_VERSION;
 
 // Known upgrade hashes:
