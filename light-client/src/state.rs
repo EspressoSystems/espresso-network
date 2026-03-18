@@ -656,6 +656,7 @@ where
                 tracing::warn!(epoch, "failed to cache stake table: {err:#}");
             }
 
+            tracing::info!(epoch, "finished stake table catchup for epoch");
             prev_quorum = next_quorum;
         }
 

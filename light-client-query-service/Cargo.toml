@@ -6,7 +6,8 @@ edition.workspace = true
 default-run = "light-client-query-service"
 
 [[bin]]
-name = "genesis"
+name = "light-client-genesis"
+path = "src/bin/genesis.rs"
 required-features = ["decaf", "genesis"]
 
 [features]

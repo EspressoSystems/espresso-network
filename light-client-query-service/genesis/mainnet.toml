@@ -1,0 +1,402 @@
+epoch_height = 40000
+first_epoch_with_dynamic_stake_table = 277
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~wKba-aYHkDAaK3IrvE3azjXWQi80Fr4C0-446Ib46y6R7Iz6Kd4uH9K9q6popw9OGf271A6vGxkQW2q5j2DyI5aLZn3BXsxjqBsRguIMJc-ZW0PTbaerc3bPcXYmcKUpzlPGJT2KYLuaI63CRPxfYvv-JyUMSoJWsHWCV6ZNGheW"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~B9QjzhKPdLpOImXDTz4LIzq7skHY6q8VTH1PIQ9_JgBGufZjkdu3l-MnwWBv4KZbKygHMcsUgdPMbwUbgMFbFR5oS2g58cQjhzxzI0udyJOz4ggtCJqDCxckaJXZ1dERJswgNuu9lC2qsmqGlBdTkb0clHoQRFjQuWksOORnkggT"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~02v-nCMqe09aaDZdgN0VuoSK3MdkT1vzocbz0ZTNUAmrMX6CR8XRc-K9nlYfzFN5q_K8nFn_uTStF2ixxggUL4ooTidg4UEaEm3tyW_r2_-3d2jnvYnnzz0Pn8hmKScuWKRkxoNJHj0rvZ6IUPnWu-GdVfr-7uPWpNQJ70oSA6sr"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~PthOXPERpNzUo_B3dZGBrXIEypvp4Jpwk2z9y92dZQthFQZCYs0i6Ihnyd8qXuzfXqMfgJikf7X15rVHatKkBG1qZr3MQ6bnqsq-wfSEKT1UnLt3UsutXfmg-6jmOvcSA8yJ2lPyhLRvICkMZGYzSJkT7_sQcSf85e3k7Eq0YBQ8"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~iRlHyTCZX2txlPDgJ6rgHmFHVWFCZWQwIe53V_UJWxSmu-m_cn62yzydV9BvxzskzQ_TXjnuUXjMW_f-8BQ5DwnEvucHIbFZCXAakA7h3NXpe4ZHGE1nHQ4AgXmOloko_LfeZvyknvL0LsSXhj9P61lrZ2VjDdWtXKc9VeMo0QC5"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~FBpzKF7bYMr__IytJ05fx7HYV2bQNBe_ShVW3iT4ZRLuIllFZCrbmzD5imo9znXjheEcDmJ8eWy8J-bvmDiRHonSdaffcH0ANUVSXN_dHW7gH3FiWX_0dF0u8HnuMusT-bjgmTm9ZQDsdz686yAtPMABxzx_I_elEi6EnOZZuRJi"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~BQ96tiE0TrPoJaYzAJWx8tJzRFqpT9HvcySSqA6fog_iBNjMMdthrIgZcisfoDH0KAaj496Gc67aUaGZ_Mj3J4tEDNQAVvwFo55m0l2m9ynsdpHbfWU9270i5kSg8CsLpMbPpWdaQy9MKT6eonI2q6drdRyjpOs5CFrA2vYimw_N"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~7GlhED_3eFX9cVNn8rg50atsFZtmF48ZBEEN_1TOCAp-e5qBN-hS5sl_ZqViEVPpBXxW5k8M9lERTIZW7rsmIWVT73fW8rx_nNsYD-85VBv85AKkrDCmkvLE37w5_sEuZrh9lBtE3gfFHTH-Z_IKVAuQWla70ysuEZEdQd9CzQic"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~_QO558YLbf_UmXJ3uWrpKNwn0kvoPws6qAiALTKX6AyiG8S-2s19w15_MvHtNNEKz9vbZrKWY9eAQ5XuVVbRKuK97AHi8UuNtCZOybQrjcmgqXNQ65-MtNwbLGkVjDsEuiHIIcaGKP8j3XUZw7Zj-yhVrJGYeSgYl5gQq1VQOJiP"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~MCkcTrxUsos414SJz_DCuZvhYR9PnR2nfweOiALLxRSYeUfhmVYCwlwhY5ch4MF1-fOc_ToQWoJ5wgi52cQGIKuFvwAn26HojESX6on2TklHpHpIKjrY13U55VDGbDAX7nTEujaONGHZQZIcDnSK34t5Wt0wMijKVp5977NgdK2C"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~BT2d0JdFDt6tszAp-l2XEQmGu_wdDaWP4mslbs915RjV8a6CArtK4XypV05Mr7jU-Z84Bg-c1SzT6OqGFlB_HUoExoS6dWcbif0BEtkZ-B8yoOO6nHQGOq3H0g5sOl8oUZLmnLChwlvlj7xq7vdPfwl1OkmlPgF8VGsXubB3vp9I"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~jMZeHtceKMtmcLjUuVA7FV0bAYNPCNeSRet9GzktgRCpjcwkjm3Q8LmnvMoiKg2brSQXHPIS8c03rPnA_VZDCBDJSvv8dkMJ-nwKHFTyKlME-EtYHwkdQd20WfSk4l0tkLxG8RZ1dc4T6L0YDiWbfxdtxaXI2JLiTCm0Yt8Pbw-t"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~SBNefui8WNe2zM1CjtVdoO4hq-279Bt_M29-6F9lTRALLEQMZlnLN8_xEt6C7lsO4XRfHrE-cTIrzBgkYM4TLYut2Pcm5pp-shkXKLoS6rK8pgxKlQsstZMq7E_dGCcKMoQGx6B7J_JyEBhY7wvDt1KGeNWaJIZIHNGzHfMWAxRi"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~-159hawhbLQhCrcjIu26B5zOSpB8lOxRa6z1g6OlQg-7r1F0VkmiOPYvCP8_BSx73XuUmRmx26NUVnRhfbgqFDsmc6eiTksNTiFTe2xk0UW7BmCBF4VDxlJaUorTwQUbGo0LmyN1U5ASIwQHR3SzepZFZiWv7ykTxEBUsON0lwhZ"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~EpLIuRivng738SFmVvcbCHw5ZIUU5RTdmYDj8GZvowudERCpnYcaWXrbz2nJwaTAm4YB5xc3XHyVHGIzcwmtFV7YusrdcwB3gDCyMC5_Wzo7uUtZNi7TuZ05VbyaQmwsVXMvktn-IbqxAAqElfzEblQOvcxyxkm2Bs8Wf6bqoJlg"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~LhcdufmIvNszU_nspU0S-ZcnTCC-ufQlmiuVqg58NRZ8fHBs0KrZ5l2yG8Bs4b-05iJZglpvIMXW7upTBODDKB8Z32hWSE3oYgn43NAu7RwlvSg3_VxQM3Qcdl1QWO8lgbQUjESIwpQ9thaw1d-i-p3WNlsKKzYQzEOT0T-ckRYo"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~W3Pp_8CDlr_PqMzxR6TGLZeKNcEMfhzsr6Fn-b02ZB4Ld9tkicASwKDtcDzm3hN0B8ls78AZQztVvt4k9nxjBBrvHOxD0FSBeUWK8YzBkAZtSCesrujXA2oAOMXLST0X4Xz30rgxFLLNYGbiikO8xFXBpPF-4Fs7E6f4TzbiiaTy"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~8XwVCd2cOXMINbUkWNzKvHSP6zxqKsOzeyiucXcjjhYj-mBMyaGLGxHe2DVdEmoU371RPXn6fG_pX-gLBaHzGRXwUzrwZiYwhxOxAuLdjtlmEtqi3SnULzB5gljMQQcQCw448KX3FMdo94fNeH19CT4WfSZPXQ8zs-I8QSZt7KKc"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~87CXHZt7U9gWbjL8gLFyxXLTmBnbLpNtkZDR7okmqgKf8fWGhhiOtVvf8GL-WxFqdHIKiPq8tf2x5_hrD-MIDReC6ucfbYPeCw3tIF26elm_r54BOT3V1_crENOje0UIQLke-bRcxrNNWJzmavJ1kqKvPgf6j4e6NTTvnQP6cRbt"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~SJ83WshLGD6CMjJPV2EQ698sxawi0RgjMR74hazFWCuZcVzMRohFTwd6wh0X5-qAAnMOkG2IiiKKCN8KtQV8G_HlFqZeSRFt94ZfBz7de1T7adVoxWMnsRELoMRmC7ENF-US9Ie4nitU3bvoWd3114PEniq0jDIqbiJ6P8n9Wqwj"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~yncvKkgTGCEoKhL2raQ9_8AjEVzeECOyRHSUxzzzABunVuDp8rYCy-53z_dNW7yfprSlVzo_q2GmxUmMOfKnKQUwptZL6TlAHxCV04dUzV3_4mWxdy5JV7Dc877-0N0LIXqgdwD3Auij_ymKP73fA0Lj0AKlgWksGucaxa571KA_"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~_J3xBLJY3sIfLzQMH2grsnIhZgycWiyy179SLCLZCh4tlb-38YR-rFEgR0WSxlRHfiSxrFuot3psG1ow8Iu_Cmfa7Kfsx60k8x5I-FRRlNCtCbtXKmZ3Qg9pDvExNRQenlCfg6bOZN7guVSdkkTBcdL40QDQV1t8udlMPHWHr69s"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~Edc1WcWRLvWA8kYNWdWko4VH4mh9V0paxY6opV6d0x1urQyrQi-CF6W5Drlga40msNBPQLUiGUSp6mo7plk1GEycJc8DzVcTeqNZ3BYAPMbOOsUZ-xx6LHQADVUYry8Kg0ppHOTmmMAKVSacrpaiy6f2VtfjtSEF-_hJokh13gsB"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~Z_6ZP-Q_DkuQG-isi6HAPK8wR4uUWSV7w7uxzAQzrhMnvwLJTNvvFmfDq31iysxJUIRhyYjqBUrVHXqff_B6DqdfYEKB9GdYdT6T5KJP0QiPL7Njz1WQ2AJR4xr4XsUWEq--teIFIOF_5pDvHM8L6gtRAFwHPdE5QothC9fyVZ4i"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~XA2XmesU3gpoa7ggv7ghYj1KS4kpv36YJMmu7EQh9RRPnZESfynFxOzom1Mk6Ke2w8vM9szn3VmTJGc__aEPEkyxaGRn95Vvo06U89bUUFQ2mmjejDnrPoxBU5Q7awgIFFgSYLsAnFmw44jRTWe6ZD21iabNUjZBGlouIx9F_BJv"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~Zyr00qFn9wcg8vQudA4n0RwCDeq4TO-QK21UzosR9B9E1i1nmypa0U7CNitC2NrU4LCraIOBm98GRYBBF5hGBUpdi4poGcPqi9T6eiGgE-VmUuGpY1kevpWS4E3h-HslYxcYJRNnQjLMPajDec_wpzITnjGQDPFqHqZ4XA9H6gqx"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~Eq0pX0wgjKaOZ0JRPNTVpKjL-TJYt5mBwpO6KYsVlg05RibxQiHVTCkhRqPI4fFkR7Ma2tRnNv2BNJ8Ohkp0Hu5p2Wicj4fX1gYREEsAOMgiwNZSEjl3Dqo9yL7Z9MIJxPjDya2wHpAYNHxioe3mH5o26UX8W_rXgnVhbioi0ha6"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~7o-R2ujmkyIohpDZicJhHmFxb9tDNGzuT2AXt40P-gcIIjCWgWYJ639lJhlbnnqE9-qJ8t6RL2nepYGtSQQlFq6X3IH5BWRSJbSwEzhEeJPW8up8fqkf1pQnMckjJlQhtjYooImNK5nvijqP-mHVc4z0TjhBp4RWWoHpAuXQIxc8"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~eKVlTtMCOi1gHRBdeaspLnE-58jVoVUC0zhyoSrqkCSgpw9bpRKFR4HLvlosFBDFZehsM2HhKtUmcqDNMueWDMhJQgIvha2ktaijXWD3GX6ZB-TwpjxEwP0fj4-bz-gFtNskO1XaIKU7lvDBMjU8nKCXNCuLCscwP0IEB06E0Bbs"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~AgwICU7vGvPjFmjWoAPo1rhVwhj3HofvvB5rtqvQ3RJYg9vRRkfyztB8qkq9gVrQkwzqAkUdgS5ihPaNkWeGDdzBFwAVDpWyi5gZFr6bEw4Yg8hdSRRLyx2jcmyNNZUO7d-YJshIKWKaf3raiyIus2jUQ-h8tNdYHYj6Ee9fehRK"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~lAupeXzdWbIhrhH5c26loe9nPB6W5_hCzMOaWtQOagYeUgAbyt9cmK4pfcmgFNeLR_3d-nXmbaMN1icQMkZ0ASiPsmBNEChV4mjKS3vcwiT09EVYnO5ColgFLhiGmTMkjFcIhkGzi_zuj1HHJzQBdyyhlE0SS-6vXW1J_VI5vBSk"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~qwXIlUncY9hAsrNRR8Vv8LGiVJDIh2yCGE9TLLRgLyf1_KPXHsKlItskEyFnVyV0s5xQqxNb1eRXjeU352fbBKiLM5S4b5W-Uhec5XUkOn0qz0eV_rVpWLpXYwO3v2cajs7s9OfRTtim47jBl29TWieeOSPAetyHx4RQ-AiNcRJO"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~KD9Z8NiNlVQvHu0OLBR5eQOlGNjrPvcF9y7XNZ9NMx2I3pLazClapsTiAVVoYPViQ8mpJ5gKX6FX5rolOdrwIs4o_OZl7pL36p_IaoS-BK9VGPbWiEWds2SlmQEm0EIgOPLStodkqLrZd_fip7PEt0eTC3J56LADAsdXXBpwSZ5C"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~EC6HVPlDOLj7tdkyGSee-Z4CZjgcFH8_D05z5Qi-sg0Hsml4rTfNkvNXBSCWSIEuM-m25c7HhO29kuGysKvXJjEVrS_8Z7weMZbDCnTiwN4cmTDPY2dPjkkwfCBdhGgd8pqZ320n0FOQmc9C3UTjYeI_w9WcamFoMBUFDv6tChEr"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~QSxH9ygjo1WkBLpUH8rjw5sd6vLB64IYVwUPggagRxGwednWF_iP4cY-p0jTBoDApIzdl5PtH5D0prFPKIC7JGxUKNzwcNNc8fzICCli-A0dXqPw0R08491aTyL0QJgkfoaouFdgxdaRlVpBdWRgFkU5rCJcI-t1SRBDx2Q0PJjO"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~Iy5aNqXhvX7krLTupe5gAa8OZZjlLA63Elu8BaVk8R1pzpHsey42bU6p8OgzR9mm6gzRvKtFv-rKV0yu3vUAIJg4xV_yZTgB816qv44SoBihQPQ1e5hw1FP-Cd4LKRIW0U9IiFxbAXnxQ4gM7gg-hB49ZIMUDACfICYFTVs-m69e"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~4chIp1grx8UPrwiFYxGatSiuZY5R7-t50Vl4qc2DZxUGRrZHdjv_mzyNpgr5eiREYdN-3_5kGzqnMg4dq6kcDXtra0bsQreLndvecj03me8uh2rD9rY6bJkaQVkYwHAW31pTrpmOwMHUnLXnBXpmD9kRixQN5T1ca2oD9NZRDABB"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~DdS1P7jl1gigJpmfiuqQG_mrJvzkW0g7Uoj5ItxFGAzI7B7G2kxGeIk4bRIM_5Y6f3ZV6Et0ChPDtCOClsBnJdNQV5BNloRDkVIbzCbVZUTifKAUtwE5u8qv1VA85NwQGJEKOB6yPoUWKujS4ut6X3aHd3YimRO6hdjo3kHErqfL"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~mS3bttovIX04as8Mn8obxasyZbQwPuZ8ob9VBiBOphuFhKFY38OdXOFYwlCLx2YbRuITrvHjFH_lS7NJVDbrJmKYgr6TBOi0m7uouM8pnz7c4KJj9_lHBzOkhuWvAA8kNYZaSl68flZkGTdkFz4mgBmQSY3r3NPBEq3Uy4TW_Knw"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~MhuhHQnVvLKSEnMTHXkMXFUH4Ows8vIN_gw1Zc6UqBbHx9w4Qo6wYp2W7GO7_VFaXXY6_F9TlxgA8pkkVAYILjmllP541v07cA1qQg2SwDSfTkcPg0WmFS_ibI6Zt2YZBT6KQPQ7D303I8zchb-5aIToKLlqkc7qpbfb0FCsGJ2f"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~tk7J-A2e9FOjV1-qG81ocios8jOe6tSUyaOeMG84JRXGb_wpDycG3xfZ0ngPCZ7fwI035dTZrrN67kUuGL60GgWfcscphfJeLR80jsuk67B-kxagrf9lxNHv_vHuEzkZNpkViEFWf-UQXleRnfzzzob9KORqIinsZGlppULaoAz3"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~4LRInFQB-L0qr2ux5YEDwO0MZLQL8vxDgp1ujIdZBwxP2DMrPJC6mXd514hgXkDW5EGLj-UMIdOyFqQFu2OsCqSoZkq0jslCwV_ZZ_FeNi4ko95q7O6Zx6sEznTbRQgXAzpEwLJ_WMYsLyCEyyezCCEasRWcKsJoMfB_vyEvQqX-"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~wHfKw0c9eM_mAaMNlCmR3dNNIlzrgqhpkGNl2aum5AeU5tcjJ7Mh3jk00WEpb7kO-5apyKoHMBq2MbICrr1NE28JcymJwIn9KBtWTQCduoYJRs-TohCreSPvp5JzF9YL97gUeFglLb0TIvd3lEnAnYSAUDrWbXCBS-f1pwzM2Kur"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~7ZGVJzBBozBSNyeYAyeKca-q-kQlU6O6CL3Oy_3HDBFsiCxM7al9WZVEaeX6uOv2eBQ8U4M4R9QbNR7e-fsxJkGH6W5a27fIsgr_Hx_lYO3IL_dPGMy2OfK96Pv_8lkL2mL9z-Rv-m5xYnb-3B7eVlfBTfvJGwYWobyPtsVwCqph"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~Dmz0YAEIgH-LD6z4i4W66sx-mpL6M5ZHBsjrKnoxzCMfYxuDPP0qIFfhHZBpkxISDG6zeYTFuE-d4XZ-OtVnHBN3OFMlmd5PYZJNS1FYWZsF2xvsIC-tey8syM0rL60Xg4DqGSsUmPeQw1pc_UxoLN1ilJAakS2RvFt_U8KPT7Af"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~DsVLvQXp7TCaMP0T6xkEVaCMcCYlXXTzvBz7T86KMwkeJ8JM5jo30arW4xACdHK-LSJgnxuPcqnanep6dgLgIUOL8uiSowy0-iKokTGLIOPtuR1WA_4Xov4e9mAchXoTFmq3CfGzEbEScgM5bPGpt4bG43JVmTYhkqLsKnA7CqyT"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~ibLRSTVR58FDHtk7ZooPyo75DxTAWqsw3FmCsHoqDALNx881IoVERalIMvSemC5pDmGi8cJUU-yyH7FBKU1hDS6cQU-vmpc3O-FZu1BUp5895yITQi5K80O-BECN4McYIaeahqb7j3oHNR5xtdbUslVP6SHU2sT9BsTV8T4awhRP"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~JHmhq6JdlV-lH44UVV2qw4E2IA2zoIK4hPCFuFfvOQM6RcEyK-36iTrpQnlI_aqghRh2elRVEhLNulcIRJlyIAPCmO1SWSVPXtaJtDtLGSzoEye_Tke8k5owQ2PF2UcPcsoclKJ1BHy5Hl69rZLewLb4mfwae72D5hyZx71L-AN0"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~08KATcFhMlyzhzTcIHuigUA287nbeEFSyoYdpzeSOR5sWYPe9iPJXemaqctCV8HvNUuf4CpfRN7kFNjnAjEkCAI3NaJsPQ1rHF99gvMd1vhfLm60r6LQW8Nw-4g7eC4td6akZ_E5uwIQCJpghaSAMfbm0PveJW74-m63Jwn0bQJO"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~NaSJT0XdIN7FFlLgid9Ho1kvVYCibJbJNU-OLwLA0iiTGJeFDuboeSfOUswfFTe9RUP-XdzCAZz_iDXylx-dL5W2RD36kWloXiXh9TafjjYC7NKutLoGGEhB3ZB3srslNfjrBpoIhQZEB0VOdDclSzRa8NbKid5emVcF3Uz59QuC"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~rFCcgcTSAWqshif0ycC543RkPoiPSRfsn-M2stx-WgG4sM3C7yOvZYNMBQw6JQkevtVzEmwpCFWweplnqXs2BzRGK7NJRsMVB1ZFrgFcr17JDlsvdMwNPYSA-SFi_jsgKGZrM6aUjRsLzaPk5-9RYRGhLh27Fo-yFc3Js7XXk5hi"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~xr8efewBwekdYcne_EZglFFOKMP7PnelS_mjlkCnowLXLCndBZux_oSJFUl0iwEECjNRd9mEJ1LtVT2U3lW2KisF1PautWJZpDnEewWv3EzbOt2XdpKA-LztWdaKG1cHlJhODqMiCJIjkICaEAiQOtXMUnuctaTPnH-YRZ1CnxZy"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~2c0gR7GBgKulxSOT1avkCWiPYpbSbDWqpbmwISunoghWRh7nBwZXBtznWI30HJaRfvnY7-Db9pHBciUGaZDOE0zEwiq7FxZb0RXI2k29egTb1435EIRAjvjfJdzf6UEvQHp1ynY0x3xQHgHkbuXBIlXkFoeVYdAvmIsaT4Lf9xYf"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~TDSuvQ_DYPqiMAHsieMkLCvg9Ri2259j1sW4bPeWyxyd2-thGN_Wtboya2PdNPU973L3OVNgSNxQoalPlQQ3Lt49-yDGJWclXq-V0cwSSsKV29anFJALf6vYNTAUYy4B3EutzvimMWEG8NuJfVeG211gOjL92svqob6E1UASw6_R"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~HV4vKVbdAIsPoAhN7oKRIa-NdJ-FMTQQJ4Ak5RYP_AHpX3wRmSOr0Tan5EywrMB7Zz2_4e8AJDS5BSS3aMAGJLLUCpRsaYm44saZyYgi8xDDBKuzzTfwGvinQgFNctMjY8F8z1jWS5Kjy5maFtrLG9Zlaj23NluyxHPNGEmGzwz-"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~khzLyAh_s3zaj47xn9Gk4CA15RbKEy8Idx7lPWzwyAyidYxsaYp18PGLMrxtLEvzNTdshTYlldSpc1qnnee7KMWKCvtf9RLvr5eaHWCNlEN0pb8DhN6kKf8q02I6tHcuJLfdq4xH8IvnmnjWQembXV8hRVaPCO7en34MntBujBZS"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~k6lojWrnfdgvKQIMsh-dZXny2BLsbYXFQ4z9FOESqQqImz2vUwwhDOTCFM_dTvpGTroUo1dV7mFuLzffiE7ACkm-V2wSOPbVPKC-FO0q56HyCp-8npDrIHNISU-4rmglpy-8uWcH134xAJnrQKn5EomvIr0eWfCrCEfPdrKV-6if"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~N0wsYoQ92LL1EpWRChDI4rilVcCzcKUjIrG46nK-6i5vniHrHCRlzAmdO_TnXw5O3XnxXyH0PZtvQr6AaVueCi-9TJPKKxQvycIg5ED2udwM1vUnBFuSRq7VFu7La5oRVpk-40z65rqL7jVHhD76dgg0ZHcoZ35i_9ktm4XniqjZ"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~r4HGzsKBWkZTMw0QhNSmYSfXSPpH2BH6qc3UEMuMqxdOoTEiTt5V0akM0EPa1R0uwZwBxxsofv5asp-ZVA53IUeefRZjzkL4kpgAP3xttPnCcc6XJo5EfQUkte1_dpAcPixPoqygy-tPyeUGnOXSfLfR2Q9GAsFa5sCjfmnki50H"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~a8suI2VTMdlE4DWjQKBh1v7nxoROYUKxZsjeQGPtZBLQxKNjfOFpcmkJ37Vou9XqyRCBxEUNvni_ZXT82N5lCU7LVFlRp9qHehHV_4CPA6FyYPTME32QfVvTdsjFyRcq6V2p1GmS9sTiv7sqED1RvBWiyE0vIOosBQ_eXFL2wRIM"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~-QGLbztTyGU3MmVT4GL5UNbON1MBrOZRWGFEtzl7GxLDH72fu45swCXl9jC1AB0E3Xj0PeRNryVykLoVKzMOC7m2XHJxActrAfsZYXzKoBnDb3-lRS6bsROJuujF-2Ue9Yit0PooPRguHbxmR45LAW3Gv1MVUR4T-8kdZ06wWBNo"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~eyjMP77ygE9ZpjXgNg7Whs7lglaanbWIF7vWTrkLigvWhMOlJnqokBm77ZoAB3uYBiZyX8dD6iaX3L56W-WwLCf0sV_jG-t_ctiJa6l_NbWPZuq93QpzncOiUBShEaAZyGjExJp-lHCpdfOnESJ5NNklg63hXu0tYND-EqhxAgbv"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~Gcib0K1mt4deH0FE-_3egFh6SDtjgY3OjnQ6f-DW8h7GNX8BncUFjyXkuzoBo85gJn8-MVeM_pmSWya0PevLFFPrhGkWesv8jJdjX1tjuVdbycR3RwrFZyZC7UhnKq8oLUueiYiw0VGy4n1O-RJCuomwgKWV2mMR-X9nFP53cgAw"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~5IdFPzdcTmqp1WA-F-vDjqufgmfmR5v9fjCKTlszewHMnub4OVUHrEv0p9IUcA_ebrEejZGY1q7aRnbvZ2jkAdKi_LDht7F1nA8hOqz-PlPLrlhgdVk7NWg5MV44QCQvnbFHqbupUCjk2i6aV-tBBRs6mmVg5muy-9xfji2utAku"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~cbIoH6SzDbfQqYla59EytAvrkWzQCX4ovCWGkOoaXgP1i6q-PHEdYXUKewnwXMxe5GGnteOIB8ocwzsCz4eUK_veeJAOVlCHyGLfMlgHj2F9yHguM50tpNDWU3UWA1oku7O-at6D_fSCrP1Hpfb9Z0PnFO4VKHpWo2kF3K4zp50P"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~s404SQEK_u09tDid19wApqraZ0njPfsNPBhOzDzrniBVHhdbxvpRHcvTbr8LNCQs-xYqoRBGYdFCY4B5E10DHhyLx3UG95GLxQbK2zuU08BnZad6H0x0QEyTfWTxuOYs58gUxyP3swClXCIRXNBRUOgvOEaocWgeDINShXLLGwdh"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~RW7p8VqTl9KnUjwpQHPGEdqQqpv4-y0T5kHUE8fIUC5mOrnAPqWe0FQYNoWzacbozx8D7qb-X9b8gWR03EclHdprI8zcC_PMryJlrafmOV5xDGEWhAUl22P802DKreMWT-vU6V3OkjP8Sz6HIViXEKWWxVEY90puIw8kTuHxHQ8r"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~fOkDSwD__Ti1RZNvoS08FH_xMQybk7IxvsV95boB7yg6AtB9dUnjEVx9BSbXVudGcM1mS6XRX6cbGjo0CZyvAij3kE0xxla0HiteZzkoOA4dQM5K3iQ4sZz0NORw9YcN1uLv1xBl8K86tgWX0yMxIfUy7zMbx5k5PF7P-CbIJQBp"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~ku0o2_CMOcJrz9uU6-TUcr6MZmWPYobouTjv6S7m-w-_sH7BlYacNtFhrow-Ti4OlZVq_2AuNAUM0_8mJcK7HrdkncIMKO3SpF3wVGhJuUzSEpSrkNiPQ1Kdd7hCCJcYqJiVPe75SXYQRKnWHj6FhPJQAkWDnPZPRRfZILIDmQDQ"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~rk85SBNIPSYNf9qiqOmZ2xaOO0YykpoZmMahRZ6c0iGI6puRYs_xleg6KrBHPLsDzfTc_-WZtp7Fk0lMnwEvD0LgSeB6RKgi2q4SPg8qXUdQvSQtbXv3oHIr7iUSzpsH3C_ToPU1HG1GlTbkXTTwuyS1qO7G7QLlJOEd7Gtlna7j"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~lcb8q-6cFT90dS4xbCGQu-FqzaVbrOjGktQFqCAKCCXpUW8Tjs-8sLzVxPKsaPlh92z9QE_dqItc8-JsfHimJyiwD3q8U0cxlFPH4fWSQOdH4El6NM0Aj0T_23Zm1_Mku0RyAV3hK8fwo20QgH_vlSroQIob5ELgUB4diJ_ogQFh"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~O99ww3CUEImb9EuOUG5DgcktdqPQG0X5aO_cQteLdQhpi-TYVa36_eTVLRr02afam8UjvnHqtupu4biBWBu2D36pIw7D_R0-OKUaf9zk4bwCnJDQUryK6bZFtNKI5UgrN3Lj2oIla5_Nc7F3YgTPDCu-9QXzK3CaTvDwHj1VwQ-c"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~qauyjCShN-Z5wDJiyPv-4341A7w7uoDG2N5iqAHDhhwWi2ClnZuSKYpTDif9YaR3Nke5H1nXfppuKJunUawMFS7vrgppBhFU1NiuDGhh0kCbnSRu7uJJJ5s5qBSkq7gk-nfRm_6M74fQCA4Sfo6AsqFIwO2h4oeb1bJSx4oorZ74"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~bcJhic3XIihf7pO360NS4CFJcxZ7-oq5PJsfTBm_eCGhO6SuCB9uHzUcobyrhDsUdqlT_Rm1YCxnnApUAqQ1Le_44TJ9xA5GOCHgi5JObJVamM1JIuaf5Mzh5nwzZpkrs372VGGICmqnI4XVU8JAjiTZZzufZAOegBwPNRgaRAve"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~_nBvWqasV_9ZUBzOVz2yypaiZnaDd6WwKGRV0pCH5ievwQzChJii-z-gx5RppTSukKHwfxvmi2gNbaWyH6KEEW023PY7aJI9mRnp3W8awJiZieoWG6b60sHf1u_CFfQFDzz2Hh-WlSod8ONjXR9x8UgvAGfJ5QmC1XiLtWR7b638"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~S232mmQPzFRRIv8ZmRPkt3Vz6HqWAB3aKXPTMlZNixHcO_PEjP6KGho_oNRvdLMWhJHveBK7p9R6rPz1KA6MAylD-dZB_6yJzAF8SzwrqMRRtft65aVNlH2zslrl2akAH0jB6cCwUCUZHs7eQ48GQhJ3Fk16ezJMOrSdQcW7n6SF"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~c7U0Zfka22tMScGevgGnbaEJBoE9fgmEZDmk6jPQhAAi32n-qyW5H5GQqEti-K9UEpHMZkxjPuTmJs6h2HcuBVG9RxV-a2XJYwPCpIjZEEozer2Zz8PJ8dNBAUCk1eQhTUCOuNhi4q89NRHp5FuM7aApyAO3sstl8Z0LfRcVOZr7"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~lgqlmwuO_X0AKDPftLd-AZXN2ds-rPc7AkbibIlTvCQQjVky9BxUW14GOfNyYVEvuQ4rbS13XDmmX3ZAF_MBLUj5tgFMUGg_dqFNM0XoqTOoxdhwBUD8oRcdrKXyd0cWr-MfIOeKWC_TeRfzYzfP27xH9wMLcSUH7gHtuPLlkgSK"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~sVoeDgkNIF0ypXxramEYIq6q4BeUha6mn9blyshGpRPl1iaQcmob1wCNk6XRjXyHqzPlPLktxfbLvp6AUb5AJu3Nf2fbq-JMbnFochyTC5RUtBrfiqzctSVdprzxdRIjb0T58v5j9jM0U6-JnY9yRKmwlSrdbL7s4jzURFIM0hMl"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~S-uzs3hduESyoKWDHGfr5uoKuMk4pVvyX681E_SO5CjR2rHbexbm-XEAhTf5S7um7DBUxenL8tmT71uVBaZ_FOOsBJSvO1WkhhwMRaCZdDZ41KEJ_soS0ztlfJUs9MkrkePZbYFCk5zFQIEPMKVH8RDQ-B0WJgiwXz8bMmswu5sm"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~wzfqGJIBNkIf8MRuj5pju3KyuRDRurELz2Y2GRJP0h0k0O-UQwgQcq8y0yAfU-L7X3JXyDCbib9oY8W8756nGqBrd0IkX3toQwECwVFAUR51T_FOkdrB-2BciRxo3ewEI4v0aIplsIWDhokrkiN8Lg_8JwCY0aCeZBGGxCut1Z64"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~uQ1ewBm9NxrrqOcs6X_C7tJYOsJjgbrLIIZxQszqByrx8qgnJB6YnabJAozDSli0CAIGxyXVoSJ8GUeHBepHBU8Y3q4h4YRif2Mmv6iq7D7ASVPfqgbadXPkwq4qxPgE_ueWSAnL868PS54Tt5SYFrLZCUFJehVeb-QD1mC-7ATk"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~d8Tg-6rA82jDoPFV9e60-RGq5I4SAD9gUkv_-UgGQQjWQtos-QnwJqoLnPIqIzuzNbQz9eQCLSl3bBqh5UOlAgFvXlPBgGU3j9-jGUMt_eOquVbybVOUoJbz3RvcEr0Lq1EgH9pVRbfQRiOfDvjYHXc-BUmML9EKmYFlDU_eM51H"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~3C6o6bn-eEbFytQFcUmeGdQG9rYZDOPOw3qs6xfRyQFwes4Gcn2wUYQJKQ46cYazjbGqPGmnelYopBtTwCGBAL6UzAEKpfosHO4V-gzaCQ-vl6m4dmsNT7m7NMPm4n0WMhz6flzWvt4G29zFB3KporMmDI-q4nWsVuLP5CjtABDo"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~MrRA01NM_YJ7DKvzAJcFhBJU4EGQu2hJJRUZ9qSiki-isJg6-ZQL4hpzlUlZatRHp3sZi-4sfyUitKpT6eU5DIokddPz1k-JQyKda139JG1JK2EnHhSZ8SeTI_Kcu98YQWPiuP2e3Zun0SXY74WVLcIpFooNJrWp1oXwmpOz1wWu"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~qrQaaUNBU7wAV_tNKQ3N1CA-o6PhDIkEXubF9r5KZCk7NzO8_DV_kYGBOAmlyVjw9XZn88OMCO8b_JFfe2HACnMv48L0rp6YLRmNbLznEeGaSVLksBGBUGDwnqHiwSks4mcmmt9jc4NxZPqJLVY5xI5sm3fgNCRTLWI82M7tDAGC"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~s4L1Mjl69gobsrk8W0kZPnrvy7hTo_atdMPK6EL92AdQ5ZoRgiCUqQEzj5TzAT-z2sWC-d4h0mxiD2LfGErrCHyDB4taXqfEW31d1xnZAzyGc_yXFeOHtUCnOGBeySIisIO34nfvpymW61pEcKmqPV_wdK1O49sNl1ePVsMf_KCS"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~6yKTRvWBMLUMQvWpXFwNYOMxF_0J3fppOLtVRs1B-hcCQERLf-5npzJErLrYyhNWSgxAbIA3Bz0IMbCSZFtWIjsScb4h-uOYLYJGzcOBgKluqeceK_Jc_U-vfKJDQ9gLMV0yQpxQu_th8UzfGYoT94uq1oT-QB20dMdqzdTlN66h"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~jM6RCghSKAChx6nyx6uiH3OOdoER4WeZVdXlLSFtwAF6BvOd-K9o_V7vxM5pGusveahxjLz7XjHqKTVsuNQbFEH3RFk1EE1EXhIr4n2UN7r4JhfE6l9XI7BKjLlySaIcBAGnu2NqJAVgmXd7drQn1wpz3f5Gh48IHMy89skOXw5O"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~JVj8yRJC_0OI2JMU87ZzdktjU2LJRE_WXb1UCbuxww2bq6HuTuw1DwCJ7nx1gSlbBiTUdaxNxgO3SZiAcKF5KhUGA1fQWBs-rbpK0t71MJY8-hdzc9fy_93dWzo5NzoAoOaCm9QnVtctzRaoSrCjT-05_dnjlt8p27DfJvDzPaXK"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~DXp7aSxQRY_HdnSYB8H61Kw6ONLOCb_mVapeE09dLyJyd9CjCAObSfDAPsKHSiKDQNmLg7pqXVIgxdGGo7PqCSZHrzZFPinO0ku-xv9GFSWgOlITL4sX64YSSo2s9Pcvlzlm615MxR8FyAkr2yXfwM_jonKUDak2P_hrRmL0iwAd"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~QnEaA-7TxsSlx7TVRTxBiXTlDAnOuCVsiP2_GSUE6y2E5edgZCmZM3wKZELZBGpWkyhk_rEXzpW9KSU9A-TvHitRQBWcDa4IQaJCgjkoIjKpDpKea1DCWO7mBG3BplQS3UiVFI520M4pqnJ29cNCr2i6dwAcKhlEmULkk9THEgIc"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~pj6-pFYUJzwhIO2pa9lDl2wsE9OGG4w8y4R5ScU_xBNE1_ldVNRtQPjQ4_HX2JT1mvKzDYp-Z36i_na2Q9bdLlS0i177o1i2Do8ZN9g1MRnfQUHMRN_pX0HyIPwhjJgQ5HGjZrzPo2fJ9BXgHcDcm3_eMoSx2Fv0JTBuAU5ZMqqc"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~KvBu0NJlpB7Dwl0fTLAHrXCnRUwjRx5bL_gp6a1Tnwhv46j5iAes_YJRiU-LAMmkwDotsN-sKO4KwChpqRIaLplA8g59nzvIqhUPkuK4nX5X6jxu5gGeg9KWVCWLstABQjhWmBzK_KYY2a5UInwi-NvGmWC3lN6T28Uc2HuEoRbo"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~bCuGsNiM54XhXsm7U7uqb1VG03G_rC3znPzfIOAE7gpStU8PgY6ym4KgwyDkU26bzsI1NNUPqpyNjkwB75Z8CzCZCJMvhDhRTO40kuGuvuZ1yEd3Ptq8xx2C-aMZHrsd9XnFuLnh5lJ_QO_xVUsLBm4NwHPmBTrSLb6eZxWrR59p"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~m8r0ffOMATsNMu01NRoV1NCUIrJ8lV_VA_IoP6PIaRVtj4Q4iP6KJWPdlcmqpMHMW3ou1GS5hLODC7R4gGeoAmh4OrOIF4O79zO-bXMLrfLmkuwm-FzCs3EwE-jIPRYPHRly23XsqtyGiY1hCNRFB_bmwFh10fz3KXzDItf0cwqx"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~uuVP1NFs8BgzIBQ9uLUV6xJ5aQqu4P0A-AfxkRjSbwRLy-oKL8eASY5EOb2BqCypMEyVskQisKMhoYc7Z1ZcDGRnwYtrK5pLgwBMhsmyYL3PFU0bT93rQHkc8h_HSAwkugZ2-gowrUooXAZXl7_t6CD6PnY76VrliLql-7GvYRPD"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~gwx1YuX6bexeSaCarfDwMoop0DQ3Wy0jW7tFphhDIAOz6D4uNvT5AZuuukgWAiP-vLhqrzw_LvBveU9bXTYcFzxQ-lAxAV1rGJds1wXdn3KLEH_iGPeyUm_U6Gll7vgVlgonQqU513_9nieOO_XPbiGICgWUq9ukfNVxApDdegWx"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~bnRtsulIuJyUWhkqlbpSG2BizoX8eTejTdJwWKnt8xtEWs3MESflc2prLbqxI72oNYq7Jb_pjH7EOTozQ1OTJOZHB5kuTbqdMXuAmPl4RUsDpTIXDbhki9tLM2XpbqIUpRcRBE2uos46ohFAlrxqAnUXIfx4HaQ14nRgUUaH5Z6j"
+stake_amount = "0x1"
+
+[[stake_table]]
+stake_key = "BLS_VER_KEY~jmUpN8MSGUh2P9EebIxMnPCCxygFTNI1SydvzPJh4SsOaNNHA7P_Yn837gl6UHe6kLIXhEDXwXENQDCE-ufDGHBqSzunFgfnEGNBEVDzAoc3InRwMfPbx-yYSm767s8aYsowWyfKhOzx4jH4o7ngazb7b9nlA4Ufqh8wy0Ir8KtP"
+stake_amount = "0x1"
