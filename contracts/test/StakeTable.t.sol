@@ -3017,4 +3017,260 @@ contract StakeTableV2PausableTest is StakeTableUpgradeV2Test {
         assertFalse(proxyV2.paused());
         vm.stopPrank();
     }
+
+    function _upgradeToV2() internal returns (StakeTableV2) {
+        vm.startPrank(stakeTableRegisterTest.admin());
+        S proxy = S(address(stakeTableRegisterTest.proxy()));
+        address _admin = proxy.owner();
+        StakeTableV2.InitialCommission[] memory emptyCommissions;
+        bytes memory initData = abi.encodeWithSelector(
+            StakeTableV2.initializeV2.selector, pauser, _admin, 0, emptyCommissions
+        );
+        proxy.upgradeToAndCall(address(new StakeTableV2()), initData);
+        vm.stopPrank();
+        return StakeTableV2(address(proxy));
+    }
+
+    // REQ:st-initv2-zero-addr
+    function test_InitializeV2_RevertsZeroAdmin() public {
+        vm.startPrank(stakeTableRegisterTest.admin());
+        S proxy = S(address(stakeTableRegisterTest.proxy()));
+        StakeTableV2.InitialCommission[] memory emptyCommissions;
+        bytes memory initData = abi.encodeWithSelector(
+            StakeTableV2.initializeV2.selector, pauser, address(0), 0, emptyCommissions
+        );
+        StakeTableV2 newImpl = new StakeTableV2();
+        vm.expectRevert(S.ZeroAddress.selector);
+        proxy.upgradeToAndCall(address(newImpl), initData);
+        vm.stopPrank();
+    }
+
+    function test_InitializeV2_RevertsZeroPauser() public {
+        vm.startPrank(stakeTableRegisterTest.admin());
+        S proxy = S(address(stakeTableRegisterTest.proxy()));
+        address _admin = proxy.owner();
+        StakeTableV2.InitialCommission[] memory emptyCommissions;
+        bytes memory initData = abi.encodeWithSelector(
+            StakeTableV2.initializeV2.selector, address(0), _admin, 0, emptyCommissions
+        );
+        StakeTableV2 newImpl = new StakeTableV2();
+        vm.expectRevert(S.ZeroAddress.selector);
+        proxy.upgradeToAndCall(address(newImpl), initData);
+        vm.stopPrank();
+    }
+
+    // REQ:st-initv2-oz-init - AccessControl and Pausable are initialized
+    function test_InitializeV2_AccessControlInitialized() public {
+        StakeTableV2 proxyV2 = _upgradeToV2();
+        address _admin = proxyV2.owner();
+        assertTrue(proxyV2.hasRole(proxyV2.DEFAULT_ADMIN_ROLE(), _admin));
+        assertTrue(proxyV2.hasRole(proxyV2.PAUSER_ROLE(), pauser));
+    }
+
+    function test_InitializeV2_PausableInitialized() public {
+        StakeTableV2 proxyV2 = _upgradeToV2();
+        assertFalse(proxyV2.paused());
+        // Prove pausable is initialized by successfully pausing
+        vm.prank(pauser);
+        proxyV2.pause();
+        assertTrue(proxyV2.paused());
+    }
+
+    // REQ:st-constructor-disable
+    function test_Constructor_DisablesInitializers() public {
+        StakeTableV2 impl = new StakeTableV2();
+        StakeTableV2.InitialCommission[] memory emptyCommissions;
+        // onlyOwner modifier fires before reinitializer since owner() == address(0) on impl
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                OwnableUpgradeable.OwnableUnauthorizedAccount.selector, address(this)
+            )
+        );
+        impl.initializeV2(pauser, address(1), 0, emptyCommissions);
+    }
+
+    // REQ:st-transfer-zero
+    function test_TransferOwnership_RevertsZeroAddress() public {
+        StakeTableV2 proxyV2 = _upgradeToV2();
+        address _admin = proxyV2.owner();
+        vm.prank(_admin);
+        vm.expectRevert(
+            abi.encodeWithSelector(OwnableUpgradeable.OwnableInvalidOwner.selector, address(0))
+        );
+        proxyV2.transferOwnership(address(0));
+    }
+
+    // REQ:st-renounce-admin-blocked
+    function test_RenounceRole_RevertsForAdmin() public {
+        StakeTableV2 proxyV2 = _upgradeToV2();
+        address _admin = proxyV2.owner();
+        bytes32 adminRole = proxyV2.DEFAULT_ADMIN_ROLE();
+        vm.prank(_admin);
+        vm.expectRevert(StakeTableV2.DefaultAdminCannotBeRenounced.selector);
+        proxyV2.renounceRole(adminRole, _admin);
+    }
+
+    // REQ:st-renounce-other-works
+    function test_RenounceRole_WorksForPauser() public {
+        StakeTableV2 proxyV2 = _upgradeToV2();
+        bytes32 pauserRole = proxyV2.PAUSER_ROLE();
+        vm.prank(pauser);
+        proxyV2.renounceRole(pauserRole, pauser);
+        assertFalse(proxyV2.hasRole(pauserRole, pauser));
+    }
+
+    // REQ:st-claim-exit-escrow - premature withdrawal
+    function test_ClaimValidatorExit_RevertsPremature() public {
+        StakeTableV2 proxyV2 = _upgradeToV2();
+        address validator = makeAddr("validator");
+        address delegator = makeAddr("delegator");
+        uint256 amount = 1 ether;
+
+        registerValidatorOnStakeTableV2(validator, "1", 0, proxyV2);
+        deal(address(stakeTableRegisterTest.token()), delegator, amount);
+
+        vm.startPrank(delegator);
+        stakeTableRegisterTest.token().approve(address(proxyV2), amount);
+        proxyV2.delegate(validator, amount);
+        vm.stopPrank();
+
+        vm.prank(validator);
+        proxyV2.deregisterValidator();
+
+        // Try to claim before escrow period
+        vm.prank(delegator);
+        vm.expectRevert(S.PrematureWithdrawal.selector);
+        proxyV2.claimValidatorExit(validator);
+    }
+
+    // REQ:st-claim-exit-nothing - zero-balance delegator
+    function test_ClaimValidatorExit_RevertsNothingToWithdraw() public {
+        StakeTableV2 proxyV2 = _upgradeToV2();
+        address validator = makeAddr("validator");
+        address delegator = makeAddr("delegator");
+        uint256 amount = 1 ether;
+
+        registerValidatorOnStakeTableV2(validator, "1", 0, proxyV2);
+        deal(address(stakeTableRegisterTest.token()), delegator, amount);
+        vm.startPrank(delegator);
+        stakeTableRegisterTest.token().approve(address(proxyV2), amount);
+        proxyV2.delegate(validator, amount);
+        vm.stopPrank();
+
+        vm.prank(validator);
+        proxyV2.deregisterValidator();
+
+        vm.warp(block.timestamp + proxyV2.exitEscrowPeriod());
+
+        // A non-delegator tries to claim
+        address nonDelegator = makeAddr("nonDelegator");
+        vm.prank(nonDelegator);
+        vm.expectRevert(S.NothingToWithdraw.selector);
+        proxyV2.claimValidatorExit(validator);
+    }
+
+    // REQ:st-claim-withdrawal-cleanup - undelegationIds deleted after claim
+    function test_ClaimWithdrawal_CleansUpUndelegationIds() public {
+        StakeTableV2 proxyV2 = _upgradeToV2();
+        address validator = makeAddr("validator");
+        address delegator = makeAddr("delegator");
+        uint256 amount = 1 ether;
+
+        registerValidatorOnStakeTableV2(validator, "1", 0, proxyV2);
+        deal(address(stakeTableRegisterTest.token()), delegator, amount);
+
+        vm.startPrank(delegator);
+        stakeTableRegisterTest.token().approve(address(proxyV2), amount);
+        proxyV2.delegate(validator, amount);
+        proxyV2.undelegate(validator, amount);
+
+        // Verify undelegation exists
+        (uint64 id, uint256 undelegatedAmount,) = proxyV2.getUndelegation(validator, delegator);
+        assertGt(undelegatedAmount, 0);
+        assertGt(id, 0); // V2 IDs start at 1
+
+        vm.warp(block.timestamp + proxyV2.exitEscrowPeriod());
+        proxyV2.claimWithdrawal(validator);
+        vm.stopPrank();
+
+        // After claim, getUndelegation should revert with NoUndelegationFound
+        vm.expectRevert(StakeTableV2.NoUndelegationFound.selector);
+        proxyV2.getUndelegation(validator, delegator);
+    }
+
+    // REQ:st-undelegate-zero
+    function test_Undelegate_RevertsZeroAmount() public {
+        StakeTableV2 proxyV2 = _upgradeToV2();
+        address validator = makeAddr("validator");
+        address delegator = makeAddr("delegator");
+        uint256 amount = 1 ether;
+
+        registerValidatorOnStakeTableV2(validator, "1", 0, proxyV2);
+        deal(address(stakeTableRegisterTest.token()), delegator, amount);
+        vm.startPrank(delegator);
+        stakeTableRegisterTest.token().approve(address(proxyV2), amount);
+        proxyV2.delegate(validator, amount);
+
+        vm.expectRevert(S.ZeroAmount.selector);
+        proxyV2.undelegate(validator, 0);
+        vm.stopPrank();
+    }
+
+    // REQ:st-undelegate-insufficient
+    function test_Undelegate_RevertsInsufficientBalance() public {
+        StakeTableV2 proxyV2 = _upgradeToV2();
+        address validator = makeAddr("validator");
+        address delegator = makeAddr("delegator");
+        uint256 amount = 1 ether;
+
+        registerValidatorOnStakeTableV2(validator, "1", 0, proxyV2);
+        deal(address(stakeTableRegisterTest.token()), delegator, amount);
+        vm.startPrank(delegator);
+        stakeTableRegisterTest.token().approve(address(proxyV2), amount);
+        proxyV2.delegate(validator, amount);
+
+        vm.expectRevert(abi.encodeWithSelector(S.InsufficientBalance.selector, amount));
+        proxyV2.undelegate(validator, amount + 1);
+        vm.stopPrank();
+    }
+
+    // REQ:st-escrow-update-stores
+    function test_UpdateExitEscrowPeriod_StoresNewValue() public {
+        StakeTableV2 proxyV2 = _upgradeToV2();
+        address _admin = proxyV2.owner();
+        vm.prank(_admin);
+        proxyV2.updateExitEscrowPeriod(3 days);
+        assertEq(proxyV2.exitEscrowPeriod(), 3 days);
+    }
+
+    // REQ:st-deregister-stores-exit
+    function test_DeregisterValidator_StoresValidatorExit() public {
+        StakeTableV2 proxyV2 = _upgradeToV2();
+        address validator = makeAddr("validator");
+        registerValidatorOnStakeTableV2(validator, "1", 0, proxyV2);
+
+        uint256 expectedUnlocksAt = block.timestamp + proxyV2.exitEscrowPeriod();
+        vm.prank(validator);
+        proxyV2.deregisterValidator();
+
+        assertEq(proxyV2.validatorExits(validator), expectedUnlocksAt);
+        (, S.ValidatorStatus status) = proxyV2.validators(validator);
+        assertEq(uint256(status), uint256(S.ValidatorStatus.Exited));
+    }
+
+    // REQ:st-register-guards - commission > MAX for V2 registration
+    function test_RegisterValidatorV2_RevertsHighCommission() public {
+        StakeTableV2 proxyV2 = _upgradeToV2();
+        address validator = makeAddr("validator");
+        (
+            BN254.G2Point memory blsVK,
+            EdOnBN254.EdOnBN254Point memory schnorrVK,
+            BN254.G1Point memory blsSig
+        ) = genClientWallet(validator, "1");
+        bytes memory schnorrSig = new bytes(64);
+
+        vm.prank(validator);
+        vm.expectRevert(S.InvalidCommission.selector);
+        proxyV2.registerValidatorV2(blsVK, schnorrVK, blsSig, schnorrSig, 10001, "meta");
+    }
 }
