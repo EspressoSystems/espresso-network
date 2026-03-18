@@ -6,6 +6,7 @@ members = [
     "client",
     "contracts/rust/adapter",
     "contracts/rust/deployer",
+    "contracts/rust/deployment-info",
     "contracts/rust/diff-test",
     "contracts/rust/gen-vk-contract",
     "crates/builder",
@@ -54,6 +55,7 @@ default-members = [
     "client",
     "contracts/rust/adapter",
     "contracts/rust/deployer",
+    "contracts/rust/deployment-info",
     "contracts/rust/diff-test",
     "contracts/rust/gen-vk-contract",
     "crates/builder",
@@ -262,6 +264,7 @@ reqwest = { version = "0.12", features = ["rustls-tls", "json"] }
 rstest = "0.25.0"
 rstest_reuse = "0.7.0"
 rust_decimal = "1.36.0"
+scopeguard = "1.2.0"
 semver = "1"
 sequencer = { path = "sequencer", default-features = false }
 sequencer-utils = { path = "utils" }
