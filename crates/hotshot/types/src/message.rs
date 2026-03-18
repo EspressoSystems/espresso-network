@@ -31,7 +31,7 @@ use crate::{
         QuorumProposal2Legacy, QuorumProposalWrapper, UpgradeProposal, VidDisperseShare0,
         VidDisperseShare1, VidDisperseShare2, ViewNumber,
     },
-    epoch_membership::EpochMembership,
+    epoch_membership::{EpochMembership, EpochMembershipCoordinator},
     request_response::ProposalRequestPayload,
     simple_certificate::{
         DaCertificate, DaCertificate2, EpochRootQuorumCertificateV1, EpochRootQuorumCertificateV2,
@@ -608,6 +608,32 @@ where
         let view_number = self.data.proposal.view_number();
         let view_leader_key = membership.leader(view_number).await?;
         let proposed_leaf = Leaf2::from_quorum_proposal(&self.data);
+
+        ensure!(
+            view_leader_key.validate(&self.signature, proposed_leaf.commit().as_ref()),
+            "Proposal signature is invalid."
+        );
+
+        Ok(())
+    }
+}
+
+impl<TYPES> Proposal<TYPES, QuorumProposal2<TYPES>>
+where
+    TYPES: NodeType,
+{
+    pub async fn validate_signature(
+        &self,
+        membership_coordinator: &EpochMembershipCoordinator<TYPES>,
+    ) -> Result<()> {
+        let view_number = self.data.view_number();
+        let epoch = self.data.epoch().ok_or(error!("Epoch is not set"))?;
+        let membership = membership_coordinator
+            .membership_for_epoch(Some(epoch))
+            .await?;
+        let view_leader_key = membership.leader(view_number).await?;
+        let proposed_leaf =
+            Leaf2::from_quorum_proposal(&QuorumProposalWrapper::from(self.data.clone()));
 
         ensure!(
             view_leader_key.validate(&self.signature, proposed_leaf.commit().as_ref()),

@@ -1,9 +1,11 @@
 use committable::Commitment;
+use hotshot::traits::BlockPayload;
 use hotshot_types::{
     data::{EpochNumber, Leaf2, QuorumProposal2, VidCommitment2, VidDisperse2, ViewNumber},
     drb::{DrbInput, DrbResult},
-    simple_certificate::{TimeoutCertificate2, ViewSyncCommitCertificate2},
-    traits::node_implementation::NodeType,
+    simple_certificate::{TimeoutCertificate2, ViewSyncFinalizeCertificate2},
+    traits::{block_contents::BuilderFee, node_implementation::NodeType},
+    utils::BuilderCommitment,
     vote::HasViewNumber,
 };
 
@@ -22,18 +24,41 @@ pub(crate) struct StateResponse<TYPES: NodeType> {
     pub commitment: Commitment<Leaf2<TYPES>>,
 }
 
-pub(crate) struct HeaderRequest {
+#[derive(Clone)]
+pub(crate) struct BlockAndHeaderRequest<TYPES: NodeType> {
     pub view: ViewNumber,
-    pub parent_view: ViewNumber,
+    pub parent_proposal: QuorumProposal2<TYPES>,
     pub epoch: EpochNumber,
-    pub block_number: u64,
+}
+
+#[derive(Clone)]
+pub(crate) struct BlockRequest<TYPES: NodeType> {
+    pub view: ViewNumber,
+    pub parent_proposal: QuorumProposal2<TYPES>,
+    pub epoch: EpochNumber,
+}
+
+pub(crate) struct HeaderRequest<TYPES: NodeType> {
+    pub view: ViewNumber,
+    pub epoch: EpochNumber,
+    pub parent_proposal: QuorumProposal2<TYPES>,
+    pub builder_commitment: BuilderCommitment,
+    pub metadata: <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
+    pub builder_fee: BuilderFee<TYPES>,
+}
+
+#[allow(clippy::large_enum_variant)]
+pub enum RequestMessageSender<TYPES: NodeType> {
+    Proposal(QuorumProposal2<TYPES>, VidDisperse2<TYPES>),
+    Vote1(Vote1<TYPES>),
+    Vote2(Vote2<TYPES>),
 }
 
 #[allow(clippy::large_enum_variant)]
 pub enum Action<TYPES: NodeType> {
-    SendMessage(ConsensusMessage<TYPES>),
+    SendMessage(RequestMessageSender<TYPES>),
     RequestState(StateRequest<TYPES>),
-    RequestHeader(HeaderRequest),
+    RequestBlockAndHeader(BlockAndHeaderRequest<TYPES>),
     RequestVidDisperse(TYPES::BlockPayload),
     RequestProposal(ViewNumber, Commitment<Leaf2<TYPES>>),
     RequestDRB(DrbInput),
@@ -44,7 +69,7 @@ pub enum Update<TYPES: NodeType> {
     StateVerified(StateRequest<TYPES>),
     HeaderCreated(TYPES::BlockHeader),
     StateVerificationFailed(StateRequest<TYPES>),
-    HeaderCreationFailed(HeaderRequest),
+    HeaderCreationFailed(BlockAndHeaderRequest<TYPES>),
     VidDisperseCreated(VidCommitment2, VidDisperse2<TYPES>),
     LeafDecided(Vec<Leaf2<TYPES>>),
     DrbCalculated(DrbResult),
@@ -65,13 +90,15 @@ pub enum ConsensusEvent<TYPES: NodeType> {
     Certificate1(Certificate1<TYPES>),
     Certificate2(Certificate2<TYPES>),
     TimeoutCertificate(TimeoutCertificate2<TYPES>),
-    ViewSyncCertificate(ViewSyncCommitCertificate2<TYPES>),
+    ViewSyncCertificate(ViewSyncFinalizeCertificate2<TYPES>),
     BlockReconstructed(ViewNumber, VidCommitment2),
+    BlockBuilt(ViewNumber, TYPES::BlockPayload),
+    VidDisperseCreated(ViewNumber, VidDisperse2<TYPES>),
     StateVerified(StateResponse<TYPES>),
     HeaderCreated(ViewNumber, TYPES::BlockHeader),
-    StateVerificationFailed(StateRequest<TYPES>),
-    HeaderCreationFailed(HeaderRequest),
+    StateVerificationFailed(StateResponse<TYPES>),
     Timeout(ViewNumber),
+    // TODO: Add checkpoint events
 }
 
 impl<TYPES: NodeType> ConsensusEvent<TYPES> {
@@ -81,7 +108,9 @@ impl<TYPES: NodeType> ConsensusEvent<TYPES> {
             ConsensusEvent::Certificate1(certificate) => certificate.view_number(),
             ConsensusEvent::Certificate2(certificate) => certificate.view_number(),
             ConsensusEvent::TimeoutCertificate(simple_certificate) => {
-                simple_certificate.view_number()
+                // Add one because we are moving to the next view so all event
+                // processing is for the next view
+                simple_certificate.view_number() + 1
             },
             ConsensusEvent::ViewSyncCertificate(simple_certificate) => {
                 simple_certificate.view_number()
@@ -90,8 +119,9 @@ impl<TYPES: NodeType> ConsensusEvent<TYPES> {
             ConsensusEvent::StateVerified(state_response) => state_response.view,
             ConsensusEvent::HeaderCreated(view_number, _) => *view_number,
             ConsensusEvent::StateVerificationFailed(state_request) => state_request.view,
-            ConsensusEvent::HeaderCreationFailed(header_request) => header_request.view,
             ConsensusEvent::Timeout(view_number) => *view_number,
+            ConsensusEvent::BlockBuilt(view_number, _) => *view_number,
+            ConsensusEvent::VidDisperseCreated(view_number, _) => *view_number,
         }
     }
 }
@@ -120,7 +150,7 @@ pub enum StorageEvent<TYPES: NodeType> {
 #[allow(clippy::large_enum_variant)]
 pub enum StateEvent<TYPES: NodeType> {
     RequestState(StateRequest<TYPES>),
-    RequestHeader(HeaderRequest),
+    RequestHeader(HeaderRequest<TYPES>),
     UpdateState(TYPES::ValidatedState, ViewNumber, Commitment<Leaf2<TYPES>>),
 }
 

@@ -3,27 +3,30 @@ use std::{
     collections::{BTreeMap, BTreeSet},
 };
 
+use anyhow::Context;
 use committable::Commitment;
 use hotshot_types::{
     data::{
         EpochNumber, Leaf2, QuorumProposal2, QuorumProposalWrapper, VidCommitment, VidCommitment2,
-        VidDisperseShare2, ViewNumber, vid_disperse::vid_total_weight,
+        VidDisperse2, VidDisperseShare2, ViewChangeEvidence2, ViewNumber,
+        vid_disperse::vid_total_weight,
     },
     epoch_membership::EpochMembershipCoordinator,
-    simple_certificate::{TimeoutCertificate2, ViewSyncCommitCertificate2},
+    simple_certificate::{TimeoutCertificate2, ViewSyncFinalizeCertificate2},
     simple_vote::{HasEpoch, QuorumData2, SimpleVote},
+    stake_table::StakeTableEntries,
     traits::{
         block_contents::BlockHeader, node_implementation::NodeType, signature_key::SignatureKey,
     },
-    vote::{Certificate, HasViewNumber},
+    vote::{self, Certificate, HasViewNumber},
 };
 use tokio::sync::mpsc::Receiver;
 
 use crate::{
     coordinator::handle::CoordinatorHandle,
-    events::{ConsensusEvent, StateRequest, StateResponse},
+    events::{ConsensusEvent, RequestMessageSender},
     helpers::{proposal_commitment, upgrade_lock},
-    message::{Certificate1, Certificate2, ConsensusMessage, ProposalMessage, Vote1, Vote2Data},
+    message::{Certificate1, Certificate2, ProposalMessage, Vote1, Vote2Data},
 };
 
 pub(crate) struct Consensus<TYPES: NodeType> {
@@ -31,10 +34,12 @@ pub(crate) struct Consensus<TYPES: NodeType> {
     vid_shares: BTreeMap<ViewNumber, VidDisperseShare2<TYPES>>,
     states_verified: BTreeMap<ViewNumber, Commitment<Leaf2<TYPES>>>,
     blocks_reconstructed: BTreeMap<ViewNumber, VidCommitment2>,
+    blocks: BTreeMap<ViewNumber, TYPES::BlockPayload>,
+    vid_disperses: BTreeMap<ViewNumber, VidDisperse2<TYPES>>,
     certs: BTreeMap<ViewNumber, Certificate1<TYPES>>,
     certs2: BTreeMap<ViewNumber, Certificate2<TYPES>>,
     timeout_certs: BTreeMap<ViewNumber, TimeoutCertificate2<TYPES>>,
-    view_sync_certs: BTreeMap<ViewNumber, ViewSyncCommitCertificate2<TYPES>>,
+    view_sync_certs: BTreeMap<ViewNumber, ViewSyncFinalizeCertificate2<TYPES>>,
     locked_qc: Option<Certificate1<TYPES>>,
     headers: BTreeMap<ViewNumber, TYPES::BlockHeader>,
     last_decided_view: ViewNumber,
@@ -65,6 +70,8 @@ impl<TYPES: NodeType> Consensus<TYPES> {
     ) -> Self {
         Self {
             proposals: BTreeMap::new(),
+            vid_disperses: BTreeMap::new(),
+            blocks: BTreeMap::new(),
             states_verified: BTreeMap::new(),
             blocks_reconstructed: BTreeMap::new(),
             certs: BTreeMap::new(),
@@ -107,8 +114,12 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         }
         match event {
             ConsensusEvent::Proposal(proposal) => self.handle_proposal(proposal).await?,
-            ConsensusEvent::Certificate1(certificate) => self.handle_certificate1(certificate),
-            ConsensusEvent::Certificate2(certificate) => self.handle_certificate2(certificate),
+            ConsensusEvent::Certificate1(certificate) => {
+                self.handle_certificate1(certificate).await?
+            },
+            ConsensusEvent::Certificate2(certificate) => {
+                self.handle_certificate2(certificate).await?
+            },
             ConsensusEvent::TimeoutCertificate(certificate) => {
                 self.handle_timeout_certificate(certificate).await?;
             },
@@ -116,27 +127,45 @@ impl<TYPES: NodeType> Consensus<TYPES> {
                 self.handle_view_sync_certificate(certificate).await?;
             },
             ConsensusEvent::BlockReconstructed(view, vid_commitment) => {
-                self.handle_block_reconstructed(view, vid_commitment)
+                self.blocks_reconstructed.insert(view, vid_commitment);
             },
             ConsensusEvent::StateVerified(state_response) => {
-                self.handle_state_verified(state_response)
+                self.states_verified
+                    .insert(state_response.view, state_response.commitment);
+                return None;
             },
-            ConsensusEvent::HeaderCreated(view, header) => self.handle_header_created(view, header),
-            ConsensusEvent::StateVerificationFailed(state_request) => {
-                self.handle_state_verification_failed(state_request)
+            ConsensusEvent::HeaderCreated(view, header) => {
+                self.headers.insert(view, header);
             },
-            ConsensusEvent::HeaderCreationFailed(header_request) => {
-                self.handle_header_creation_failed(header_request.view)
+            ConsensusEvent::StateVerificationFailed(state_response) => {
+                if let Some(proposal) = self.proposals.remove(&state_response.view)
+                    && proposal_commitment(&proposal) != state_response.commitment
+                {
+                    // Proposal we stored didn't match the failed state verification, put it back
+                    self.proposals.insert(state_response.view, proposal);
+                    return None;
+                }
+                self.vid_shares.remove(&state_response.view);
+                return None;
             },
             ConsensusEvent::Timeout(view) => {
                 self.handle_timeout(view);
+                // we are done after timeout, don't try to vote, decide, or propose
                 return None;
+            },
+            ConsensusEvent::BlockBuilt(view, block) => {
+                self.blocks.insert(view, block);
+            },
+            ConsensusEvent::VidDisperseCreated(view, vid_disperse) => {
+                self.vid_disperses.insert(view, vid_disperse);
             },
         }
         self.maybe_vote_1(view).await;
         self.maybe_vote_2_and_update_lock(view).await;
         self.maybe_decide(view).await;
-        self.maybe_propose_next_view(view).await;
+        self.maybe_propose(view).await;
+        // An event from the current view or the previous view can trigger a propose
+        self.maybe_propose(view + 1).await;
         Some(())
     }
 
@@ -146,24 +175,58 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         }
     }
 
-    async fn maybe_propose_after_timeout(&mut self, view: ViewNumber) -> Option<()> {
-        Some(())
-    }
-
-    async fn maybe_propose_next_view(&mut self, view: ViewNumber) -> Option<()> {
+    async fn maybe_propose(&mut self, view: ViewNumber) -> Option<()> {
         let is_after_timeout =
             self.view_sync_certs.contains_key(&view) || self.timeout_certs.contains_key(&view);
-        if is_after_timeout {
-            return self.maybe_propose_after_timeout(view).await;
-        }
-        let proposal = self.proposals.get(&view)?;
-        let next_view = view + 1;
-        if !self.is_leader(next_view, proposal.epoch?).await {
+        let qc = if is_after_timeout {
+            self.locked_qc.as_ref()?
+        } else {
+            self.certs.get(&ViewNumber::from(view.saturating_sub(1)))?
+        };
+        let parent_view = qc.view_number();
+        let proposal = self.proposals.get(&parent_view)?;
+        if !self.is_leader(view, proposal.epoch?).await {
             return None;
         }
 
-        let header = self.headers.get(&view)?;
-        Some(())
+        let header = self.headers.get(&parent_view)?;
+        let block = self.blocks.get(&view)?;
+        let vid_disperse = self.vid_disperses.get(&view)?;
+
+        // TODO: Handle epoch change and properly set next epoch qc drb result and state cert
+        let mut proposal = QuorumProposal2::<TYPES> {
+            block_header: header.clone(),
+            view_number: view,
+            epoch: proposal.epoch,
+            justify_qc: qc.clone(),
+            next_epoch_justify_qc: None,
+            upgrade_certificate: None,
+            view_change_evidence: None,
+            next_drb_result: None,
+            state_cert: None,
+        };
+
+        // add View Change Evidence if we are after timeout
+        if is_after_timeout {
+            if let Some(view_sync_cert) = self.view_sync_certs.get(&view) {
+                proposal.view_change_evidence =
+                    Some(ViewChangeEvidence2::ViewSync(view_sync_cert.clone()));
+            } else {
+                proposal.view_change_evidence = Some(ViewChangeEvidence2::Timeout(
+                    self.timeout_certs.get(&view)?.clone(),
+                ));
+            }
+        }
+
+        // TODO: Handle epoch change here
+
+        self.coordinator_handle
+            .send_message(RequestMessageSender::Proposal(
+                proposal,
+                vid_disperse.clone(),
+            ))
+            .await
+            .ok()
     }
 
     async fn maybe_decide(&mut self, view: ViewNumber) -> Option<()> {
@@ -263,7 +326,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
             vid_share: vid_share.clone(),
         };
         self.coordinator_handle
-            .send_message(ConsensusMessage::Vote1(vote))
+            .send_message(RequestMessageSender::Vote1(vote))
             .await
             .ok()?;
         self.voted_1_views.insert(view);
@@ -320,7 +383,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         .await
         .unwrap();
         self.coordinator_handle
-            .send_message(ConsensusMessage::Vote2(vote))
+            .send_message(RequestMessageSender::Vote2(vote))
             .await
             .ok()?;
         self.voted_2_views.insert(view);
@@ -329,45 +392,72 @@ impl<TYPES: NodeType> Consensus<TYPES> {
 
     async fn handle_proposal(&mut self, proposal: ProposalMessage<TYPES>) -> Option<()> {
         let view = proposal.view_number();
-        let epoch = proposal.proposal.data.epoch?;
-        //Verify the VID share matches the proposal
-        let VidCommitment::V2(vid_comm) = proposal.proposal.data.block_header.payload_commitment()
-        else {
-            return None;
-        };
-        if vid_comm != proposal.vid_share.payload_commitment {
+        // Verify the proposal is signed by the leader
+        proposal
+            .proposal
+            .validate_signature(&self.stake_table_coordinator)
+            .await
+            .ok()?;
+
+        let vid_share = proposal.vid_share;
+        let proposal = proposal.proposal.data;
+        let epoch = proposal.epoch?;
+
+        Self::vid_matches_proposal(&vid_share, &proposal)?;
+
+        //Verify the VID share
+        if !vid_share.is_consistent() {
             return None;
         }
 
-        //Verify the VID share
-        if !proposal.vid_share.is_consistent() {
+        self.verify_vid_share(&vid_share, epoch).await?;
+
+        // Verify the proposal is valid
+        self.validate_safety(&proposal).await?;
+        self.proposals.insert(view, proposal.clone());
+        self.vid_shares.insert(view, vid_share);
+
+        // Now ask for the state to verify the header of the proposal
+        self.coordinator_handle
+            .request_state(proposal.clone())
+            .await
+            .ok()?;
+        // And if we are leader next, ask for a header
+        if self.is_leader(view + 1, epoch).await {
+            self.coordinator_handle
+                .request_block_and_header(proposal.clone(), view + 1, epoch)
+                .await
+                .ok()?;
+        }
+        Some(())
+    }
+
+    fn vid_matches_proposal(
+        vid_share: &VidDisperseShare2<TYPES>,
+        proposal: &QuorumProposal2<TYPES>,
+    ) -> Option<()> {
+        let VidCommitment::V2(vid_comm) = proposal.block_header.payload_commitment() else {
+            return None;
+        };
+        if vid_comm != vid_share.payload_commitment {
             return None;
         }
+        Some(())
+    }
+
+    async fn verify_vid_share(
+        &self,
+        vid_share: &VidDisperseShare2<TYPES>,
+        epoch: EpochNumber,
+    ) -> Option<()> {
         let stake_table = self
             .stake_table_coordinator
             .membership_for_epoch(Some(epoch))
             .await
             .ok()?;
         let total_weight = vid_total_weight(&stake_table.stake_table().await, Some(epoch));
-        if !proposal.vid_share.verify(total_weight) {
+        if !vid_share.verify(total_weight) {
             return None;
-        }
-        // Verify the proposal is valid
-        self.validate_safety(&proposal.proposal.data).await?;
-        self.proposals.insert(view, proposal.proposal.data.clone());
-        self.vid_shares.insert(view, proposal.vid_share);
-
-        // Now ask for the state
-        self.coordinator_handle
-            .request_state(proposal.proposal.data.clone())
-            .await
-            .ok()?;
-        // And if we are leader next, ask for a header
-        if self.is_leader(view + 1, epoch).await {
-            self.coordinator_handle
-                .request_header(proposal.proposal.data.clone(), view + 1, epoch)
-                .await
-                .ok()?;
         }
         Some(())
     }
@@ -393,27 +483,51 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         Some(())
     }
 
-    fn handle_certificate1(&mut self, certificate: Certificate1<TYPES>) {
-        self.certs.insert(certificate.view_number(), certificate);
+    async fn verify_cert<T>(
+        &self,
+        cert: &impl vote::Certificate<TYPES, T>,
+        epoch: EpochNumber,
+    ) -> anyhow::Result<()> {
+        let stake_table = self
+            .stake_table_coordinator
+            .membership_for_epoch(Some(epoch))
+            .await?;
+        let entries = StakeTableEntries::<TYPES>::from(stake_table.stake_table().await).0;
+        let threshold = stake_table.success_threshold().await;
+        cert.is_valid_cert(&entries, threshold, &upgrade_lock::<TYPES>())
+            .await
+            .context("invalid threshold signature")
     }
 
-    fn handle_certificate2(&mut self, certificate: Certificate2<TYPES>) {
+    async fn handle_certificate1(&mut self, certificate: Certificate1<TYPES>) -> Option<()> {
+        self.verify_cert(&certificate, certificate.epoch()?)
+            .await
+            .ok()?;
+        self.certs.insert(certificate.view_number(), certificate);
+        Some(())
+    }
+
+    async fn handle_certificate2(&mut self, certificate: Certificate2<TYPES>) -> Option<()> {
+        self.verify_cert(&certificate, certificate.epoch()?)
+            .await
+            .ok()?;
         self.certs2.insert(certificate.view_number(), certificate);
+        Some(())
     }
 
     async fn handle_timeout_certificate(
         &mut self,
         certificate: TimeoutCertificate2<TYPES>,
     ) -> Option<()> {
-        let view = certificate.view_number();
+        let view = certificate.view_number() + 1;
         let epoch = certificate.epoch()?;
         self.timeout_certs
             .insert(certificate.view_number(), certificate);
-        if self.is_leader(view + 1, epoch).await {
+        if self.is_leader(view, epoch).await {
             let locked_view = self.locked_qc.as_ref().map(|qc| qc.view_number())?;
             let proposal = self.proposals.get(&locked_view)?;
             self.coordinator_handle
-                .request_header(proposal.clone(), view, epoch)
+                .request_block_and_header(proposal.clone(), view, epoch)
                 .await
                 .ok()?;
             Some(())
@@ -424,44 +538,22 @@ impl<TYPES: NodeType> Consensus<TYPES> {
 
     async fn handle_view_sync_certificate(
         &mut self,
-        certificate: ViewSyncCommitCertificate2<TYPES>,
+        certificate: ViewSyncFinalizeCertificate2<TYPES>,
     ) -> Option<()> {
         let view = certificate.view_number();
         let epoch = certificate.epoch()?;
-        self.view_sync_certs
-            .insert(certificate.view_number(), certificate);
+        self.view_sync_certs.insert(view, certificate);
         if self.is_leader(view, epoch).await {
             let locked_view = self.locked_qc.as_ref().map(|qc| qc.view_number())?;
             let proposal = self.proposals.get(&locked_view)?;
             self.coordinator_handle
-                .request_header(proposal.clone(), view, epoch)
+                .request_block_and_header(proposal.clone(), view + 1, epoch)
                 .await
                 .ok()?;
             Some(())
         } else {
             None
         }
-    }
-
-    fn handle_block_reconstructed(&mut self, view: ViewNumber, vid_commitment: VidCommitment2) {
-        self.blocks_reconstructed.insert(view, vid_commitment);
-    }
-
-    fn handle_state_verified(&mut self, state_request: StateResponse<TYPES>) {
-        self.states_verified
-            .insert(state_request.view, state_request.commitment);
-    }
-
-    fn handle_header_created(&mut self, view: ViewNumber, header: TYPES::BlockHeader) {
-        self.headers.insert(view, header);
-    }
-
-    fn handle_state_verification_failed(&mut self, state_request: StateRequest<TYPES>) {
-        self.states_verified.remove(&state_request.view);
-    }
-
-    fn handle_header_creation_failed(&mut self, view: ViewNumber) {
-        self.headers.remove(&view);
     }
 
     fn handle_timeout(&mut self, view: ViewNumber) {

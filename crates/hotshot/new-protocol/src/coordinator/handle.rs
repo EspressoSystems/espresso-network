@@ -6,7 +6,7 @@ use hotshot_types::{
 };
 use tokio::sync::mpsc::error::SendError;
 
-use crate::{events::*, message::ConsensusMessage};
+use crate::events::*;
 
 #[derive(Clone)]
 pub(crate) struct CoordinatorHandle<TYPES: NodeType> {
@@ -20,7 +20,7 @@ impl<TYPES: NodeType> CoordinatorHandle<TYPES> {
 
     pub async fn send_message(
         &self,
-        message: ConsensusMessage<TYPES>,
+        message: RequestMessageSender<TYPES>,
     ) -> Result<(), SendError<Event<TYPES>>> {
         self.event_tx
             .send(Event::Action(Action::SendMessage(message)))
@@ -41,19 +41,20 @@ impl<TYPES: NodeType> CoordinatorHandle<TYPES> {
             })))
             .await
     }
-    pub async fn request_header(
+    pub async fn request_block_and_header(
         &self,
         parent: QuorumProposal2<TYPES>,
         view: ViewNumber,
         epoch: EpochNumber,
     ) -> Result<(), SendError<Event<TYPES>>> {
         self.event_tx
-            .send(Event::Action(Action::RequestHeader(HeaderRequest {
-                view,
-                parent_view: parent.view_number(),
-                epoch,
-                block_number: parent.block_header.block_number() + 1,
-            })))
+            .send(Event::Action(Action::RequestBlockAndHeader(
+                BlockAndHeaderRequest {
+                    view,
+                    parent_proposal: parent,
+                    epoch,
+                },
+            )))
             .await
     }
     pub async fn send_decided(

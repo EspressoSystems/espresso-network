@@ -6,8 +6,8 @@ use hotshot_types::{
         ViewSyncFinalizeCertificate2, ViewSyncPreCommitCertificate2,
     },
     simple_vote::{
-        QuorumData2, QuorumMarker, QuorumVote2, SimpleVote, TimeoutVote2, ViewSyncCommitVote2,
-        ViewSyncFinalizeVote2, ViewSyncPreCommitVote2,
+        HasEpoch, QuorumData2, QuorumMarker, QuorumVote2, SimpleVote, TimeoutVote2,
+        ViewSyncCommitVote2, ViewSyncFinalizeVote2, ViewSyncPreCommitVote2,
     },
     traits::node_implementation::NodeType,
     vote::HasViewNumber,
@@ -34,6 +34,12 @@ pub struct Vote2Data<TYPES: NodeType> {
     pub leaf_commit: Commitment<Leaf2<TYPES>>,
     pub epoch: EpochNumber,
     pub block_number: u64,
+}
+
+impl<TYPES: NodeType> HasEpoch for Vote2Data<TYPES> {
+    fn epoch(&self) -> Option<EpochNumber> {
+        Some(self.epoch)
+    }
 }
 
 impl<TYPES: NodeType> Committable for Vote2Data<TYPES> {
@@ -77,6 +83,7 @@ pub enum ConsensusMessage<TYPES: NodeType> {
     Certificate2(Certificate2<TYPES>, TYPES::SignatureKey),
     TimeoutVote(TimeoutVote2<TYPES>),
     Transactions(Vec<TYPES::Transaction>, ViewNumber),
+    Checkpoint(ViewNumber, EpochNumber),
 }
 
 impl<TYPES: NodeType> HasViewNumber for ConsensusMessage<TYPES> {
@@ -89,6 +96,7 @@ impl<TYPES: NodeType> HasViewNumber for ConsensusMessage<TYPES> {
             ConsensusMessage::Certificate2(certificate, _) => certificate.view_number(),
             ConsensusMessage::TimeoutVote(vote) => vote.view_number(),
             ConsensusMessage::Transactions(_, view_number) => *view_number,
+            ConsensusMessage::Checkpoint(view_number, _) => *view_number,
         }
     }
 }
