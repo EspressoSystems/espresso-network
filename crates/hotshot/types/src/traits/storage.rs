@@ -173,12 +173,12 @@ pub async fn store_drb_input_impl<TYPES: NodeType>(
     for attempt in 1..=3 {
         match storage.store_drb_input(drb_input.clone()).await {
             Ok(()) => return Ok(()),
-            Err(e) if attempt < 5 => {
-                tracing::warn!("Failed to store DRB input (attempt {attempt}/5): {e}");
+            Err(e) if attempt < 3 => {
+                tracing::warn!("Failed to store DRB input (attempt {attempt}/3): {e}");
                 sleep(Duration::from_millis(300)).await;
             },
             Err(e) => {
-                tracing::warn!("Failed to store DRB input (attempt {attempt}/5): {e}");
+                tracing::warn!("Failed to store DRB input (attempt {attempt}/3): {e}");
                 return Err(e);
             },
         }
@@ -215,15 +215,15 @@ async fn store_drb_result_impl<TYPES: NodeType>(
     for attempt in 1..=3 {
         match storage.store_drb_result(epoch, drb_result).await {
             Ok(()) => return Ok(()),
-            Err(e) if attempt < 5 => {
+            Err(e) if attempt < 3 => {
                 tracing::warn!(
-                    "Failed to store DRB result for epoch {epoch} (attempt {attempt}/5): {e}"
+                    "Failed to store DRB result for epoch {epoch} (attempt {attempt}/3): {e}"
                 );
                 sleep(Duration::from_millis(300)).await;
             },
             Err(e) => {
                 tracing::warn!(
-                    "Failed to store DRB result for epoch {epoch} (attempt {attempt}/5): {e}"
+                    "Failed to store DRB result for epoch {epoch} (attempt {attempt}/3): {e}"
                 );
                 return Err(e);
             },
