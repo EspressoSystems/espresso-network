@@ -19,6 +19,7 @@ use std::{
 
 use async_trait::async_trait;
 use dyn_clone::DynClone;
+use either::{Either, for_both};
 use futures::{Future, future::join_all};
 use rand::{
     distributions::{Bernoulli, Uniform},
@@ -612,5 +613,90 @@ impl Display for Topic {
             Topic::Global => write!(f, "global"),
             Topic::Da => write!(f, "DA"),
         }
+    }
+}
+
+#[async_trait]
+impl<A, B, K> ConnectedNetwork<K> for Either<A, B>
+where
+    A: ConnectedNetwork<K>,
+    B: ConnectedNetwork<K>,
+    K: SignatureKey + 'static,
+{
+    fn pause(&self) {
+        for_both!(self, s => s.pause())
+    }
+
+    fn resume(&self) {
+        for_both!(self, s => s.resume())
+    }
+
+    async fn wait_for_ready(&self) {
+        for_both!(self, s => s.wait_for_ready().await)
+    }
+
+    fn shut_down<'a: 'b, 'b>(&'a self) -> BoxSyncFuture<'b, ()>
+    where
+        Self: 'b,
+    {
+        for_both!(self, s => s.shut_down())
+    }
+
+    async fn broadcast_message(
+        &self,
+        v: ViewNumber,
+        m: Vec<u8>,
+        t: Topic,
+        d: BroadcastDelay,
+    ) -> Result<(), NetworkError> {
+        for_both!(self, s => s.broadcast_message(v, m, t, d).await)
+    }
+
+    async fn da_broadcast_message(
+        &self,
+        v: ViewNumber,
+        m: Vec<u8>,
+        r: Vec<K>,
+        d: BroadcastDelay,
+    ) -> Result<(), NetworkError> {
+        for_both!(self, s => s.da_broadcast_message(v, m, r, d).await)
+    }
+
+    async fn vid_broadcast_message(
+        &self,
+        m: HashMap<K, (ViewNumber, Vec<u8>)>,
+    ) -> Result<(), NetworkError> {
+        for_both!(self, s => s.vid_broadcast_message(m).await)
+    }
+
+    async fn direct_message(&self, v: ViewNumber, m: Vec<u8>, r: K) -> Result<(), NetworkError> {
+        for_both!(self, s => s.direct_message(v, m, r).await)
+    }
+
+    async fn recv_message(&self) -> Result<Vec<u8>, NetworkError> {
+        for_both!(self, s => s.recv_message().await)
+    }
+
+    fn queue_node_lookup(
+        &self,
+        v: ViewNumber,
+        r: K,
+    ) -> Result<(), TrySendError<Option<(ViewNumber, K)>>> {
+        for_both!(self, s => s.queue_node_lookup(v, r))
+    }
+
+    async fn update_view<TYPES>(
+        &self,
+        v: ViewNumber,
+        e: Option<EpochNumber>,
+        c: EpochMembershipCoordinator<TYPES>,
+    ) where
+        TYPES: NodeType<SignatureKey = K>,
+    {
+        for_both!(self, s => s.update_view(v, e, c).await)
+    }
+
+    fn is_primary_down(&self) -> bool {
+        for_both!(self, s => s.is_primary_down())
     }
 }
