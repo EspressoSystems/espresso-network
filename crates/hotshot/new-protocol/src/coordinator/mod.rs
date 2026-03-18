@@ -1,26 +1,14 @@
-use std::ops::Deref;
-
 use hotshot::{traits::NodeImplementation, types::SystemContextHandle};
-use hotshot_types::{
-    data::{EpochNumber, Leaf2, QuorumProposal2, ViewNumber},
-    simple_vote::HasEpoch,
-    traits::{
-        block_contents::BlockHeader, consensus_api::ConsensusApi, node_implementation::NodeType,
-    },
-    vote::HasViewNumber,
-};
-use tokio::sync::mpsc::{self, error::SendError};
+use hotshot_types::traits::{consensus_api::ConsensusApi, node_implementation::NodeType};
+use tokio::sync::mpsc::{self};
 
-use crate::{
-    consensus::Consensus, coordinator::handle::CoordinatorHandle, events::*,
-    message::ConsensusMessage,
-};
+use crate::{consensus::Consensus, coordinator::handle::CoordinatorHandle, events::*};
 
 pub mod handle;
 
 const CHANNEL_BUFFER_SIZE: usize = 256;
 
-pub struct Coordinator<TYPES: NodeType> {
+pub(crate) struct Coordinator<TYPES: NodeType> {
     event_rx: tokio::sync::mpsc::Receiver<Event<TYPES>>,
     cpu_tx: std::sync::mpsc::Sender<CpuEvent<TYPES>>,
     state_tx: tokio::sync::mpsc::Sender<StateEvent<TYPES>>,

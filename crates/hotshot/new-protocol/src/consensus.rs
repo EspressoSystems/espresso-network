@@ -3,7 +3,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
 };
 
-use committable::{Commitment, Committable};
+use committable::Commitment;
 use hotshot_types::{
     data::{
         EpochNumber, Leaf2, QuorumProposal2, QuorumProposalWrapper, VidCommitment, VidCommitment2,
@@ -13,12 +13,11 @@ use hotshot_types::{
     simple_certificate::{TimeoutCertificate2, ViewSyncCommitCertificate2},
     simple_vote::{HasEpoch, QuorumData2, SimpleVote},
     traits::{
-        block_contents::BlockHeader, election::Membership, node_implementation::NodeType,
-        signature_key::SignatureKey,
+        block_contents::BlockHeader, node_implementation::NodeType, signature_key::SignatureKey,
     },
     vote::{Certificate, HasViewNumber},
 };
-use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::sync::mpsc::Receiver;
 
 use crate::{
     coordinator::handle::CoordinatorHandle,
@@ -153,7 +152,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
 
     async fn maybe_propose_next_view(&mut self, view: ViewNumber) -> Option<()> {
         let is_after_timeout =
-            self.view_sync_certs.get(&view).is_some() || self.timeout_certs.get(&view).is_some();
+            self.view_sync_certs.contains_key(&view) || self.timeout_certs.contains_key(&view);
         if is_after_timeout {
             return self.maybe_propose_after_timeout(view).await;
         }
@@ -173,7 +172,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         }
         let cert2 = self.certs2.get(&view)?;
         let proposal = self.proposals.get(&view)?;
-        let proposal_commit = proposal_commitment(&proposal);
+        let proposal_commit = proposal_commitment(proposal);
         if cert2.data.leaf_commit != proposal_commit {
             return None;
         }
@@ -186,7 +185,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         let mut parent_commit = proposal.justify_qc.data.leaf_commit;
 
         while let Some(proposal) = self.proposals.get(&parent_view) {
-            let proposal_commit = proposal_commitment(&proposal);
+            let proposal_commit = proposal_commitment(proposal);
             if proposal_commit != parent_commit {
                 break;
             }
@@ -239,7 +238,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
             return None;
         }
 
-        let proposal_commit = proposal_commitment(&proposal);
+        let proposal_commit = proposal_commitment(proposal);
 
         // Verify the state commitment matches the proposal
         if state_commitment != &proposal_commit {
@@ -281,7 +280,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         let cert1 = self.certs.get(&view)?;
         let proposal = self.proposals.get(&view)?;
 
-        let proposal_commit = proposal_commitment(&proposal);
+        let proposal_commit = proposal_commitment(proposal);
 
         // The certificate must match the proposal
         if cert1.data.leaf_commit != proposal_commit {

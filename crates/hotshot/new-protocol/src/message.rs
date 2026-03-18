@@ -1,23 +1,21 @@
 use committable::{Commitment, Committable};
 use hotshot_types::{
-    data::{
-        EpochNumber, Leaf2, QuorumProposal2, VidDisperseShare2, ViewChangeEvidence2, ViewNumber,
-    },
-    drb::DrbResult,
+    data::{EpochNumber, Leaf2, QuorumProposal2, VidDisperseShare2, ViewNumber},
     simple_certificate::{
-        LightClientStateUpdateCertificateV2, SimpleCertificate, SuccessThreshold,
-        UpgradeCertificate, ViewSyncCommitCertificate2, ViewSyncFinalizeCertificate2,
-        ViewSyncPreCommitCertificate2,
+        SimpleCertificate, SuccessThreshold, ViewSyncCommitCertificate2,
+        ViewSyncFinalizeCertificate2, ViewSyncPreCommitCertificate2,
     },
     simple_vote::{
-        HasEpoch, QuorumData2, QuorumMarker, QuorumVote2, SimpleVote, TimeoutVote2,
-        ViewSyncCommitVote2, ViewSyncFinalizeVote2, ViewSyncPreCommitVote2,
+        QuorumData2, QuorumMarker, QuorumVote2, SimpleVote, TimeoutVote2, ViewSyncCommitVote2,
+        ViewSyncFinalizeVote2, ViewSyncPreCommitVote2,
     },
-    traits::{node_implementation::NodeType, signature_key::SignatureKey},
+    traits::node_implementation::NodeType,
     vote::HasViewNumber,
 };
 use serde::{Deserialize, Serialize};
 
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
+#[serde(bound(deserialize = ""))]
 pub struct ProposalMessage<TYPES: NodeType> {
     pub(crate) proposal: hotshot_types::message::Proposal<TYPES, QuorumProposal2<TYPES>>,
     pub(crate) vid_share: hotshot_types::data::VidDisperseShare2<TYPES>,
@@ -49,9 +47,17 @@ impl<TYPES: NodeType> Committable for Vote2Data<TYPES> {
     }
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
+#[serde(bound(deserialize = ""))]
 pub struct Vote1<TYPES: NodeType> {
     pub vote: QuorumVote2<TYPES>,
     pub vid_share: VidDisperseShare2<TYPES>,
+}
+
+impl<TYPES: NodeType> HasViewNumber for Vote1<TYPES> {
+    fn view_number(&self) -> ViewNumber {
+        self.vote.view_number()
+    }
 }
 
 pub type Vote2<TYPES> = SimpleVote<TYPES, Vote2Data<TYPES>>;
@@ -61,6 +67,8 @@ pub type Certificate2<TYPES> = SimpleCertificate<TYPES, Vote2Data<TYPES>, Succes
 
 impl<TYPES: NodeType> QuorumMarker for Vote2Data<TYPES> {}
 
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
+#[serde(bound(deserialize = ""))]
 pub enum ConsensusMessage<TYPES: NodeType> {
     Proposal(ProposalMessage<TYPES>),
     Vote1(Vote1<TYPES>),
@@ -68,9 +76,24 @@ pub enum ConsensusMessage<TYPES: NodeType> {
     Certificate1(Certificate1<TYPES>, TYPES::SignatureKey),
     Certificate2(Certificate2<TYPES>, TYPES::SignatureKey),
     TimeoutVote(TimeoutVote2<TYPES>),
-    Transactions(Vec<TYPES::Transaction>),
+    Transactions(Vec<TYPES::Transaction>, ViewNumber),
 }
 
+impl<TYPES: NodeType> HasViewNumber for ConsensusMessage<TYPES> {
+    fn view_number(&self) -> ViewNumber {
+        match self {
+            ConsensusMessage::Proposal(proposal) => proposal.view_number(),
+            ConsensusMessage::Vote1(vote) => vote.view_number(),
+            ConsensusMessage::Vote2(vote) => vote.view_number(),
+            ConsensusMessage::Certificate1(certificate, _) => certificate.view_number(),
+            ConsensusMessage::Certificate2(certificate, _) => certificate.view_number(),
+            ConsensusMessage::TimeoutVote(vote) => vote.view_number(),
+            ConsensusMessage::Transactions(_, view_number) => *view_number,
+        }
+    }
+}
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
+#[serde(bound(deserialize = ""))]
 pub enum ViewSyncMessage<TYPES: NodeType> {
     ViewSyncPreCommitVote(ViewSyncPreCommitVote2<TYPES>),
     ViewSyncCommitVote(ViewSyncCommitVote2<TYPES>),
@@ -78,4 +101,42 @@ pub enum ViewSyncMessage<TYPES: NodeType> {
     ViewSyncPreCommitCertificate(ViewSyncPreCommitCertificate2<TYPES>),
     ViewSyncCommitCertificate(ViewSyncCommitCertificate2<TYPES>),
     ViewSyncFinalizeCertificate(ViewSyncFinalizeCertificate2<TYPES>),
+}
+
+impl<TYPES: NodeType> HasViewNumber for ViewSyncMessage<TYPES> {
+    fn view_number(&self) -> ViewNumber {
+        match self {
+            ViewSyncMessage::ViewSyncPreCommitVote(vote) => vote.view_number(),
+            ViewSyncMessage::ViewSyncCommitVote(vote) => vote.view_number(),
+            ViewSyncMessage::ViewSyncFinalizeVote(vote) => vote.view_number(),
+            ViewSyncMessage::ViewSyncPreCommitCertificate(certificate) => certificate.view_number(),
+            ViewSyncMessage::ViewSyncCommitCertificate(certificate) => certificate.view_number(),
+            ViewSyncMessage::ViewSyncFinalizeCertificate(certificate) => certificate.view_number(),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
+#[serde(bound(deserialize = ""))]
+pub enum MessageType<TYPES: NodeType> {
+    Consensus(ConsensusMessage<TYPES>),
+    ViewSync(ViewSyncMessage<TYPES>),
+    External(Vec<u8>),
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
+#[serde(bound(deserialize = ""))]
+pub(crate) struct Message<TYPES: NodeType> {
+    pub sender: TYPES::SignatureKey,
+    pub message_type: MessageType<TYPES>,
+}
+
+impl<TYPES: NodeType> HasViewNumber for Message<TYPES> {
+    fn view_number(&self) -> ViewNumber {
+        match &self.message_type {
+            MessageType::Consensus(consensus_message) => consensus_message.view_number(),
+            MessageType::ViewSync(view_sync_message) => view_sync_message.view_number(),
+            MessageType::External(_) => ViewNumber::new(0),
+        }
+    }
 }
