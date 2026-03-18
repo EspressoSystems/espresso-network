@@ -12,12 +12,9 @@ use async_lock::RwLock;
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
 use espresso_types::{
-    BackoffParams, BlockMerkleTree, EpochVersion, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
-    FeeMerkleTree, Leaf2, NodeState, PermittedRewardMerkleTreeV2, PubKey, RewardAccountProofV2,
-    RewardAccountV2, RewardMerkleCommitmentV2, RewardMerkleTreeV2, SeqTypes, SequencerVersions,
-    ValidatedState,
+    BackoffParams, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
+    FeeMerkleTree, Leaf2, NodeState, PubKey, SeqTypes, ValidatedState,
     config::PublicNetworkConfig,
-    forgotten_accounts_include,
     traits::SequencerPersistence,
     v0::traits::StateCatchup,
     v0_3::{
@@ -401,7 +398,7 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
         &self,
         retry: usize,
         height: u64,
-        _view: ViewNumber,
+        view: ViewNumber,
         reward_merkle_tree_root: RewardMerkleCommitmentV2,
         accounts: Arc<Vec<RewardAccountV2>>,
     ) -> anyhow::Result<PermittedRewardMerkleTreeV2> {

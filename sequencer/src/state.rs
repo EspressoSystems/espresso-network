@@ -8,8 +8,6 @@ use espresso_types::{
     traits::StateCatchup,
     v0_3::{ChainConfig, RewardAccountV1, RewardMerkleTreeV1},
     v0_4::{Delta, RewardMerkleTreeV2},
-    BlockMerkleTree, DrbAndHeaderUpgradeVersion, EpochVersion, FeeAccount, FeeMerkleTree, Leaf2,
-    ValidatedState,
 };
 use futures::{StreamExt, future::Future};
 use hotshot::traits::ValidatedState as HotShotState;

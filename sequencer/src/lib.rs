@@ -23,27 +23,6 @@ use anyhow::Context;
 use async_lock::{Mutex, RwLock};
 use catchup::{ParallelStateCatchup, StatePeers};
 use context::SequencerContext;
-use espresso_types::{
-    BackoffParams, EpochCommittees, L1ClientOptions, NodeState, PubKey, SeqTypes, ValidatedState,
-    traits::{EventConsumer, MembershipPersistence},
-    v0_3::Fetcher,
-};
-use genesis::L1Finalized;
-use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtPersistentStorage;
-use libp2p::Multiaddr;
-use moka::future::Cache;
-use network::libp2p::split_off_peer_id;
-use options::Identity;
-use proposal_fetcher::ProposalFetcherConfig;
-use tokio::select;
-use tracing::info;
-use url::Url;
-
-use crate::request_response::data_source::Storage as RequestResponseStorage;
-pub mod persistence;
-pub mod state;
-use std::{fmt::Debug, marker::PhantomData, time::Duration};
-
 use derivative::Derivative;
 use espresso_types::{
     BackoffParams, EpochCommittees, L1ClientOptions, NodeState, PubKey, SeqTypes, ValidatedState,
@@ -261,34 +240,6 @@ where
             info.git_branch.into(),
             info.is_debug.to_string(),
             env!("VERGEN_CARGO_FEATURES").into(),
-        ]);
-
-    metrics
-        .text_family(
-            "build_info".into(),
-            vec![
-                "build_timestamp".into(),
-                "dirty".into(),
-                "branch".into(),
-                "debug".into(),
-                "features".into(),
-                "target".into(),
-                "testing".into(),
-            ],
-        )
-        .create(vec![
-            env!("VERGEN_BUILD_TIMESTAMP").into(),
-            env!("VERGEN_GIT_DIRTY").into(),
-            env!("VERGEN_GIT_BRANCH").into(),
-            env!("VERGEN_CARGO_DEBUG").into(),
-            env!("VERGEN_CARGO_FEATURES").into(),
-            env!("VERGEN_CARGO_TARGET_TRIPLE").into(),
-            if cfg!(feature = "testing") {
-                "yes"
-            } else {
-                "no"
-            }
-            .into(),
         ]);
 
     // Expose Node Entity Information via the status/metrics API

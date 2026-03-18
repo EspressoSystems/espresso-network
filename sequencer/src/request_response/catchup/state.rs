@@ -5,9 +5,8 @@ use anyhow::Context;
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
 use espresso_types::{
-    BackoffParams, BlockMerkleTree, EpochVersion, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
-    Leaf2, NodeState, PermittedRewardMerkleTreeV2, PubKey, RewardAccountV2,
-    RewardMerkleCommitmentV2, SeqTypes, SequencerVersions, forgotten_accounts_include,
+    BackoffParams, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment, Leaf2,
+    NodeState, PubKey, SeqTypes,
     traits::{SequencerPersistence, StateCatchup},
     v0_3::{ChainConfig, RewardAccountProofV1, RewardAccountV1, RewardMerkleCommitmentV1},
     v0_4::{

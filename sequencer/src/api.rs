@@ -2949,11 +2949,10 @@ mod test {
         network_config::light_client_genesis_from_stake_table, upgrade_stake_table_v2,
     };
     use espresso_types::{
-        ADVZNamespaceProofQueryData, DrbAndHeaderUpgradeVersion, EpochVersion, FeeAmount,
-        FeeVersion, Header, L1Client, L1ClientOptions, MOCK_SEQUENCER_VERSIONS,
-        MockSequencerVersions, NamespaceId, NamespaceProofQueryData, NsProof,
-        RegisteredValidatorMap, RewardDistributor, SequencerVersions, StakeTableState,
-        StateCertQueryDataV1, StateCertQueryDataV2, ValidatedState,
+        ADVZNamespaceProofQueryData, FeeAmount, Header, L1Client, L1ClientOptions,
+        MOCK_SEQUENCER_VERSIONS, NamespaceId, NamespaceProofQueryData, NsProof,
+        RegisteredValidatorMap, RewardDistributor, StakeTableState, StateCertQueryDataV1,
+        StateCertQueryDataV2, ValidatedState,
         config::PublicHotShotConfig,
         traits::{MembershipPersistence, NullEventConsumer, PersistenceOptions},
         v0_3::{COMMISSION_BASIS_POINTS, Fetcher, RewardAmount, RewardMerkleProofV1},
