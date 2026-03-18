@@ -11,6 +11,7 @@ use hotshot_types::{
 
 use crate::message::{Certificate1, Certificate2, ConsensusMessage, ProposalMessage, Vote1, Vote2};
 
+#[derive(Eq, PartialEq, Debug)]
 pub(crate) struct StateRequest<TYPES: NodeType> {
     pub view: ViewNumber,
     pub parent_view: ViewNumber,
@@ -19,25 +20,27 @@ pub(crate) struct StateRequest<TYPES: NodeType> {
     pub proposal: QuorumProposal2<TYPES>,
 }
 
+#[derive(Eq, PartialEq, Debug)]
 pub(crate) struct StateResponse<TYPES: NodeType> {
     pub view: ViewNumber,
     pub commitment: Commitment<Leaf2<TYPES>>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Eq, PartialEq, Debug)]
 pub(crate) struct BlockAndHeaderRequest<TYPES: NodeType> {
     pub view: ViewNumber,
     pub parent_proposal: QuorumProposal2<TYPES>,
     pub epoch: EpochNumber,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Eq, PartialEq, Debug)]
 pub(crate) struct BlockRequest<TYPES: NodeType> {
     pub view: ViewNumber,
     pub parent_proposal: QuorumProposal2<TYPES>,
     pub epoch: EpochNumber,
 }
 
+#[derive(Eq, PartialEq, Debug)]
 pub(crate) struct HeaderRequest<TYPES: NodeType> {
     pub view: ViewNumber,
     pub epoch: EpochNumber,
@@ -47,6 +50,7 @@ pub(crate) struct HeaderRequest<TYPES: NodeType> {
     pub builder_fee: BuilderFee<TYPES>,
 }
 
+#[derive(Eq, PartialEq, Debug)]
 #[allow(clippy::large_enum_variant)]
 pub enum RequestMessageSender<TYPES: NodeType> {
     Proposal(QuorumProposal2<TYPES>, VidDisperse2<TYPES>),
@@ -54,16 +58,24 @@ pub enum RequestMessageSender<TYPES: NodeType> {
     Vote2(Vote2<TYPES>),
 }
 
+#[derive(Eq, PartialEq, Debug)]
 #[allow(clippy::large_enum_variant)]
 pub enum Action<TYPES: NodeType> {
     SendMessage(RequestMessageSender<TYPES>),
     RequestState(StateRequest<TYPES>),
     RequestBlockAndHeader(BlockAndHeaderRequest<TYPES>),
-    RequestVidDisperse(TYPES::BlockPayload),
+    RequestVidDisperse(
+        ViewNumber,
+        EpochNumber,
+        TYPES::BlockPayload,
+        <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
+    ),
     RequestProposal(ViewNumber, Commitment<Leaf2<TYPES>>),
     RequestDRB(DrbInput),
+    Shutdown,
 }
 
+#[derive(Eq, PartialEq, Debug)]
 #[allow(clippy::large_enum_variant)]
 pub enum Update<TYPES: NodeType> {
     StateVerified(StateRequest<TYPES>),
@@ -79,6 +91,7 @@ pub enum Update<TYPES: NodeType> {
 }
 
 #[allow(clippy::large_enum_variant)]
+#[derive(Eq, PartialEq, Debug)]
 pub enum Event<TYPES: NodeType> {
     Action(Action<TYPES>),
     Update(Update<TYPES>),
@@ -98,6 +111,7 @@ pub enum ConsensusEvent<TYPES: NodeType> {
     HeaderCreated(ViewNumber, TYPES::BlockHeader),
     StateVerificationFailed(StateResponse<TYPES>),
     Timeout(ViewNumber),
+    Shutdown,
     // TODO: Add checkpoint events
 }
 
@@ -122,6 +136,7 @@ impl<TYPES: NodeType> ConsensusEvent<TYPES> {
             ConsensusEvent::Timeout(view_number) => *view_number,
             ConsensusEvent::BlockBuilt(view_number, _) => *view_number,
             ConsensusEvent::VidDisperseCreated(view_number, _) => *view_number,
+            ConsensusEvent::Shutdown => ViewNumber::genesis(),
         }
     }
 }

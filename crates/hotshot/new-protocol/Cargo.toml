@@ -27,7 +27,9 @@ futures = { workspace = true }
 hotshot = { workspace = true }
 hotshot-builder-api = { workspace = true }
 hotshot-contract-adapter = { workspace = true }
+hotshot-example-types = { workspace = true }
 hotshot-task = { workspace = true }
+hotshot-testing = { workspace = true }
 hotshot-types = { workspace = true }
 hotshot-utils = { workspace = true }
 jf-advz = { workspace = true }

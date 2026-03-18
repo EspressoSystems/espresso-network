@@ -4,7 +4,7 @@ use hotshot_types::{
     message::UpgradeLock,
     traits::node_implementation::NodeType,
 };
-use versions::{DRB_AND_HEADER_UPGRADE_VERSION, Upgrade};
+use versions::{Upgrade, VID2_UPGRADE_VERSION};
 
 pub fn proposal_commitment<TYPES: NodeType>(
     proposal: &QuorumProposal2<TYPES>,
@@ -14,5 +14,5 @@ pub fn proposal_commitment<TYPES: NodeType>(
 }
 
 pub fn upgrade_lock<TYPES: NodeType>() -> UpgradeLock<TYPES> {
-    UpgradeLock::new(Upgrade::trivial(DRB_AND_HEADER_UPGRADE_VERSION))
+    UpgradeLock::new(Upgrade::trivial(VID2_UPGRADE_VERSION))
 }

@@ -154,10 +154,13 @@ impl<TYPES: NodeType> Consensus<TYPES> {
                 return None;
             },
             ConsensusEvent::BlockBuilt(view, block) => {
-                self.blocks.insert(view, block);
+                self.handle_block_built(view, block).await?;
             },
             ConsensusEvent::VidDisperseCreated(view, vid_disperse) => {
                 self.vid_disperses.insert(view, vid_disperse);
+            },
+            ConsensusEvent::Shutdown => {
+                unreachable!();
             },
         }
         self.maybe_vote_1(view).await;
@@ -171,8 +174,31 @@ impl<TYPES: NodeType> Consensus<TYPES> {
 
     pub async fn run(&mut self) {
         while let Some(event) = self.event_rx.recv().await {
+            if matches!(event, ConsensusEvent::Shutdown) {
+                break;
+            }
             self.handle_event(event).await;
         }
+    }
+
+    async fn handle_block_built(
+        &mut self,
+        view: ViewNumber,
+        block: TYPES::BlockPayload,
+    ) -> Option<()> {
+        let proposal = self.proposals.get(&view)?;
+        let epoch = proposal.epoch?;
+
+        // TODO: This implicitly relies on the ordering of events,
+        // We are assuming the header is received before the block is built
+        let header = self.headers.get(&view)?;
+        let metadata = header.metadata();
+        self.coordinator_handle
+            .request_vid_disperse(view, epoch, block.clone(), metadata.clone())
+            .await
+            .ok()?;
+        self.blocks.insert(view, block);
+        Some(())
     }
 
     async fn maybe_propose(&mut self, view: ViewNumber) -> Option<()> {
@@ -559,5 +585,315 @@ impl<TYPES: NodeType> Consensus<TYPES> {
     fn handle_timeout(&mut self, view: ViewNumber) {
         self.timeout_view = view;
         // TODO: clear_view(view);
+    }
+}
+
+mod test {
+    use std::{sync::Arc, time::Duration};
+
+    use async_lock::RwLock;
+    use committable::Committable;
+    use futures::StreamExt;
+    use hotshot::{
+        traits::implementations::MemoryNetwork,
+        types::{BLSPrivKey, BLSPubKey, SchnorrPubKey},
+    };
+    use hotshot_example_types::{
+        membership::{static_committee::StaticStakeTable, strict_membership::StrictMembership},
+        node_types::{MemoryImpl, TEST_VERSIONS, TestTypes},
+        storage_types::TestStorage,
+    };
+    use hotshot_testing::{
+        helpers::build_cert, node_stake::TestNodeStakes, test_builder::gen_node_lists,
+        view_generator::TestViewGenerator,
+    };
+    use hotshot_types::{
+        data::VidDisperseShare2,
+        message::Proposal,
+        simple_vote::{
+            QuorumVote2, TimeoutData2, TimeoutVote2, ViewSyncFinalizeData2, ViewSyncFinalizeVote2,
+        },
+        traits::{
+            block_contents::BlockHeader, election::Membership,
+            network::TestableNetworkingImplementation, signature_key::StakeTableEntryType,
+        },
+    };
+    use tokio::task::JoinHandle;
+
+    use super::*;
+    use crate::{
+        coordinator::mock::testing::MockCoordinator,
+        events::Event,
+        helpers::upgrade_lock,
+        message::{Vote2, Vote2Data},
+    };
+
+    // TODO: Move to helpers for tests
+    async fn mock_membership() -> EpochMembershipCoordinator<TestTypes> {
+        let network =
+            <MemoryNetwork<BLSPubKey> as TestableNetworkingImplementation<TestTypes>>::generator(
+                10,
+                0,
+                1,
+                10,
+                None,
+                Duration::from_secs(1),
+            )(0)
+            .await;
+        let members = gen_node_lists(10, 10, &TestNodeStakes::default()).0;
+        let membership = Arc::new(RwLock::new(StrictMembership::<
+            TestTypes,
+            StaticStakeTable<BLSPubKey, SchnorrPubKey>,
+        >::new::<MemoryImpl>(
+            members.clone(),
+            members.clone(),
+            TestStorage::default(),
+            network,
+            members[0].stake_table_entry.public_key(),
+            10,
+        )));
+        // Initialize epoch data so membership works with epoch-aware versions (VID2 etc.)
+        membership
+            .write()
+            .await
+            .set_first_epoch(EpochNumber::genesis(), [0u8; 32]);
+        EpochMembershipCoordinator::new(membership, 10, &TestStorage::default())
+    }
+
+    async fn mock_consensus_and_coordinator() -> (MockCoordinator, Consensus<TestTypes>) {
+        let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], 0);
+        let membership = mock_membership().await;
+        let (event_tx, event_rx) = tokio::sync::mpsc::channel(10);
+        let (consensus_tx, consensus_rx) = tokio::sync::mpsc::channel(10);
+
+        let mock_coordinator = MockCoordinator {
+            event_rx,
+            consensus_tx,
+            membership_coordinator: membership.clone(),
+            received_events: Vec::new(),
+        };
+        let coordinator_handle = CoordinatorHandle::new(event_tx);
+        let consensus = Consensus::new(
+            consensus_rx,
+            coordinator_handle,
+            membership,
+            public_key,
+            private_key,
+        );
+        (mock_coordinator, consensus)
+    }
+
+    async fn run_consensus() -> (
+        CoordinatorHandle<TestTypes>,
+        JoinHandle<Vec<Event<TestTypes>>>,
+    ) {
+        let (mock_coordinator, mut consensus) = mock_consensus_and_coordinator().await;
+        let handle = consensus.coordinator_handle.clone();
+        tokio::spawn(async move {
+            consensus.run().await;
+        });
+        let join_handle = tokio::spawn(async move { mock_coordinator.run().await });
+        (handle, join_handle)
+    }
+
+    async fn run_test(input_events: Vec<Event<TestTypes>>, output_events: Vec<Event<TestTypes>>) {
+        let (coordinator_handle, join_handle) = run_consensus().await;
+        for event in input_events {
+            coordinator_handle.send_event(event).await.unwrap();
+        }
+        let events = join_handle.await.unwrap();
+        assert_eq!(events, output_events);
+    }
+
+    fn key_map() -> BTreeMap<BLSPubKey, BLSPrivKey> {
+        let mut map = BTreeMap::new();
+        for i in 0..10 {
+            let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], i);
+            map.insert(public_key, private_key);
+        }
+        map
+    }
+
+    #[allow(dead_code)]
+    struct TestView {
+        view_number: ViewNumber,
+        epoch_number: EpochNumber,
+        leader_public_key: BLSPubKey,
+        proposal: Proposal<TestTypes, QuorumProposalWrapper<TestTypes>>,
+        leaf: Leaf2<TestTypes>,
+        vid_disperse: VidDisperse2<TestTypes>,
+        vid_shares: Vec<VidDisperseShare2<TestTypes>>,
+        cert1: Certificate1<TestTypes>,
+        cert2: Certificate2<TestTypes>,
+        timeout_cert: TimeoutCertificate2<TestTypes>,
+        view_sync_cert: ViewSyncFinalizeCertificate2<TestTypes>,
+    }
+
+    fn extract_vid_shares(disperse: &VidDisperse2<TestTypes>) -> Vec<VidDisperseShare2<TestTypes>> {
+        disperse
+            .shares
+            .iter()
+            .map(|(key, share)| VidDisperseShare2 {
+                view_number: disperse.view_number,
+                epoch: disperse.epoch,
+                target_epoch: disperse.target_epoch,
+                payload_commitment: disperse.payload_commitment,
+                share: share.clone(),
+                recipient_key: *key,
+                common: disperse.common.clone(),
+            })
+            .collect()
+    }
+
+    #[allow(dead_code)]
+    struct TestData {
+        views: Vec<TestView>,
+    }
+
+    impl TestData {
+        async fn new(num_views: usize) -> Self {
+            let membership = mock_membership().await;
+            let keys = key_map();
+            let node_key_map = Arc::new(keys.clone());
+            let upgrade = TEST_VERSIONS.vid2;
+
+            let mut generator =
+                TestViewGenerator::generate(membership.clone(), node_key_map.clone(), upgrade);
+
+            let gen_views: Vec<_> = (&mut generator).take(num_views).collect::<Vec<_>>().await;
+
+            let mut views = Vec::new();
+            for gen_view in &gen_views {
+                let view_number = gen_view.view_number;
+                let epoch = gen_view.epoch_number.unwrap_or(EpochNumber::genesis());
+                let epoch_membership = membership.membership_for_epoch(Some(epoch)).await.unwrap();
+
+                let proposal = gen_view.quorum_proposal.clone();
+                let leaf = gen_view.leaf.clone();
+                let leader_public_key = gen_view.leader_public_key;
+
+                // Extract V2 VID disperse
+                let hotshot_types::data::VidDisperse::V2(vid_disperse) =
+                    gen_view.vid_disperse.data.clone()
+                else {
+                    panic!("Expected V2 VID disperse");
+                };
+
+                let vid_shares = extract_vid_shares(&vid_disperse);
+
+                // Get leader's keys for signing certificates
+                let leader_private_key = keys
+                    .get(&leader_public_key)
+                    .expect("Leader key not found in key map");
+
+                // Build Certificate1 (QuorumData2)
+                let leaf_commit = leaf.commit();
+                let cert1_data = hotshot_types::simple_vote::QuorumData2 {
+                    leaf_commit,
+                    epoch: Some(epoch),
+                    block_number: Some(BlockHeader::<TestTypes>::block_number(
+                        &proposal.data.proposal.block_header,
+                    )),
+                };
+                let cert1: Certificate1<TestTypes> = build_cert::<
+                    TestTypes,
+                    hotshot_types::simple_vote::QuorumData2<TestTypes>,
+                    QuorumVote2<TestTypes>,
+                    Certificate1<TestTypes>,
+                >(
+                    cert1_data,
+                    &epoch_membership,
+                    view_number,
+                    &leader_public_key,
+                    leader_private_key,
+                    &upgrade_lock::<TestTypes>(),
+                )
+                .await;
+
+                // Build Certificate2 (Vote2Data)
+                let cert2_data = Vote2Data {
+                    leaf_commit,
+                    epoch,
+                    block_number: BlockHeader::<TestTypes>::block_number(
+                        &proposal.data.proposal.block_header,
+                    ),
+                };
+                let cert2: Certificate2<TestTypes> = build_cert::<
+                    TestTypes,
+                    Vote2Data<TestTypes>,
+                    Vote2<TestTypes>,
+                    Certificate2<TestTypes>,
+                >(
+                    cert2_data,
+                    &epoch_membership,
+                    view_number,
+                    &leader_public_key,
+                    leader_private_key,
+                    &upgrade_lock::<TestTypes>(),
+                )
+                .await;
+
+                // Build TimeoutCertificate
+                let timeout_data = TimeoutData2 {
+                    view: view_number,
+                    epoch: Some(epoch),
+                };
+                let timeout_cert = build_cert::<
+                    TestTypes,
+                    TimeoutData2,
+                    TimeoutVote2<TestTypes>,
+                    TimeoutCertificate2<TestTypes>,
+                >(
+                    timeout_data,
+                    &epoch_membership,
+                    view_number,
+                    &leader_public_key,
+                    leader_private_key,
+                    &upgrade_lock::<TestTypes>(),
+                )
+                .await;
+
+                // Build ViewSyncFinalizeCertificate
+                let view_sync_data = ViewSyncFinalizeData2 {
+                    relay: 0,
+                    round: view_number,
+                    epoch: Some(epoch),
+                };
+                let view_sync_cert = build_cert::<
+                    TestTypes,
+                    ViewSyncFinalizeData2,
+                    ViewSyncFinalizeVote2<TestTypes>,
+                    ViewSyncFinalizeCertificate2<TestTypes>,
+                >(
+                    view_sync_data,
+                    &epoch_membership,
+                    view_number,
+                    &leader_public_key,
+                    leader_private_key,
+                    &upgrade_lock::<TestTypes>(),
+                )
+                .await;
+
+                views.push(TestView {
+                    view_number,
+                    epoch_number: epoch,
+                    leader_public_key,
+                    proposal,
+                    leaf,
+                    vid_disperse,
+                    vid_shares,
+                    cert1,
+                    cert2,
+                    timeout_cert,
+                    view_sync_cert,
+                });
+            }
+            Self { views }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_consensus() {
+        let _test_data = TestData::new(5).await;
     }
 }
