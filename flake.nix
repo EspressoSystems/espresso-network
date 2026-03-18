@@ -30,6 +30,8 @@
   inputs.solc-bin.url = "github:EspressoSystems/nix-solc-bin";
   inputs.solc-bin.inputs.nixpkgs.follows = "nixpkgs";
 
+  inputs.dregs.url = "github:EspressoSystems/dregs";
+
   inputs.flake-compat.url = "github:edolstra/flake-compat";
   inputs.flake-compat.flake = false;
 
@@ -50,6 +52,7 @@
     , git-hooks
     , solc-bin
     , echidna-nixpkgs
+    , dregs
     , ...
     }:
     flake-utils.lib.eachDefaultSystem (system:
@@ -74,6 +77,7 @@
         (import rust-overlay)
         foundry-nix.overlay
         solc-bin.overlays.default
+        dregs.overlays.default
         (final: prev: {
           solhint = prev.callPackage ./nix/solhint { };
         })
@@ -249,6 +253,7 @@
             # Ethereum contracts, solidity, ...
             foundry-bin
             solc
+            dregs-unwrapped
             nodePackages.prettier
             solhint
             (python3.withPackages (ps: with ps; [ black ]))
@@ -282,18 +287,18 @@
           RUST_SRC_PATH = "${stableToolchain}/lib/rustlib/src/rust/library";
           FOUNDRY_SOLC = "${solc}/bin/solc";
         });
-        devShells.dockerShell = pkgs.mkShell {
-          inputsFrom = [ self.devShells.${system}.default ];
-          packages = [ pkgs.docker ];
-          shellHook = lib.concatStringsSep "\n" [ 
-            self.devShells.${system}.default
+      devShells.dockerShell = pkgs.mkShell {
+        inputsFrom = [ self.devShells.${system}.default ];
+        packages = [ pkgs.docker ];
+        shellHook = lib.concatStringsSep "\n" [
+          self.devShells.${system}.default
 
-            ''
+          ''
             # Required for demo-native to run with docker-rootless
             export DOCKER_HOST=unix://$XDG_RUNTIME_DIR/docker.sock
-            ''
-          ];
-        };
+          ''
+        ];
+      };
       devShells.crossShell =
         crossShell { config = "x86_64-unknown-linux-musl"; };
       devShells.armCrossShell =
