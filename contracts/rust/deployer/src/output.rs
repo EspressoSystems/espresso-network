@@ -68,6 +68,7 @@ pub fn output_calldata(
     info: &CalldataInfo,
     format: OutputFormat,
     output_path: Option<&PathBuf>,
+    chain_id: u64,
 ) -> Result<()> {
     let text = match format {
         OutputFormat::Json => serde_json::to_string_pretty(info)?,
@@ -79,7 +80,7 @@ pub fn output_calldata(
 
             let batch = SafeTransactionBuilderBatch {
                 version: "1.0",
-                chain_id: String::new(),
+                chain_id: chain_id.to_string(),
                 created_at,
                 meta: SafeBatchMeta {
                     name: "Espresso Multisig Transactions",
@@ -124,7 +125,7 @@ mod tests {
     #[test]
     fn test_output_json_stdout() {
         let info = CalldataInfo::new(test_addr(), Bytes::from(vec![1, 2, 3]));
-        assert!(output_calldata(&info, OutputFormat::Json, None).is_ok());
+        assert!(output_calldata(&info, OutputFormat::Json, None, 1).is_ok());
     }
 
     #[test]
@@ -135,7 +136,7 @@ mod tests {
 
         let path = PathBuf::from("./tmp/test_output_json.json");
         std::fs::create_dir_all("./tmp").unwrap();
-        output_calldata(&info, OutputFormat::Json, Some(&path)).unwrap();
+        output_calldata(&info, OutputFormat::Json, Some(&path), 1).unwrap();
 
         let contents = std::fs::read_to_string(&path).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&contents).unwrap();
@@ -151,7 +152,7 @@ mod tests {
 
         let path = PathBuf::from("./tmp/test_output_safe_tx.json");
         std::fs::create_dir_all("./tmp").unwrap();
-        output_calldata(&info, OutputFormat::SafeTransactionBuilder, Some(&path)).unwrap();
+        output_calldata(&info, OutputFormat::SafeTransactionBuilder, Some(&path), 1).unwrap();
 
         let contents = std::fs::read_to_string(&path).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&contents).unwrap();
@@ -160,6 +161,24 @@ mod tests {
         assert_eq!(txs.len(), 1);
         assert!(txs[0]["to"].as_str().is_some());
         assert!(txs[0]["data"].as_str().is_some());
+    }
+
+    #[test]
+    fn test_output_safe_tx_builder_chain_id() {
+        let info = CalldataInfo::new(test_addr(), Bytes::from(vec![0x01]));
+        let path = PathBuf::from("./tmp/test_output_chain_id.json");
+        std::fs::create_dir_all("./tmp").unwrap();
+        output_calldata(
+            &info,
+            OutputFormat::SafeTransactionBuilder,
+            Some(&path),
+            11155111,
+        )
+        .unwrap();
+
+        let contents = std::fs::read_to_string(&path).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&contents).unwrap();
+        assert_eq!(parsed["chainId"].as_str().unwrap(), "11155111");
     }
 
     #[test]
@@ -179,7 +198,7 @@ mod tests {
 
         let path = PathBuf::from("./tmp/test_output_empty.json");
         std::fs::create_dir_all("./tmp").unwrap();
-        output_calldata(&info, OutputFormat::Json, Some(&path)).unwrap();
+        output_calldata(&info, OutputFormat::Json, Some(&path), 1).unwrap();
 
         let contents = std::fs::read_to_string(&path).unwrap();
         assert!(contents.contains("data"));

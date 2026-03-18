@@ -542,7 +542,8 @@ async fn main() -> anyhow::Result<()> {
         .mock_light_client(opt.use_mock)
         .use_multisig(opt.use_multisig)
         .rpc_url(opt.rpc_url.clone())
-        .output_format(opt.output_format);
+        .output_format(opt.output_format)
+        .chain_id(chain_id);
     if let Some(path) = opt.calldata_out {
         args_builder.output_path(path);
     }
