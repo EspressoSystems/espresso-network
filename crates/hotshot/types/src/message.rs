@@ -620,10 +620,9 @@ where
 
 /// A lock for an upgrade certificate decided by HotShot.
 #[derive(Clone, Debug)]
-#[non_exhaustive]
 pub struct UpgradeLock<TYPES: NodeType> {
     decided_upgrade_certificate: Arc<RwLock<Option<UpgradeCertificate<TYPES>>>>,
-    pub upgrade: Upgrade,
+    upgrade: Upgrade,
 }
 
 impl<TYPES: NodeType> UpgradeLock<TYPES> {
@@ -646,6 +645,10 @@ impl<TYPES: NodeType> UpgradeLock<TYPES> {
         }
     }
 
+    pub fn upgrade(&self) -> Upgrade {
+        self.upgrade
+    }
+
     pub fn upgrade_view(&self) -> Option<ViewNumber> {
         self.decided_upgrade_certificate
             .read()
@@ -664,6 +667,7 @@ impl<TYPES: NodeType> UpgradeLock<TYPES> {
         *self.decided_upgrade_certificate.write() = cert.into()
     }
 
+    /// Apply a function to the upgrade certificate.
     pub fn apply<F>(&self, f: F)
     where
         F: FnOnce(&mut Option<UpgradeCertificate<TYPES>>),

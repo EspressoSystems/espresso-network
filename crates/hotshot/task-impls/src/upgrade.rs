@@ -110,7 +110,7 @@ impl<TYPES: NodeType> UpgradeTaskState<TYPES> {
         event: Arc<HotShotEvent<TYPES>>,
         tx: Sender<Arc<HotShotEvent<TYPES>>>,
     ) -> Result<()> {
-        let upgrade = self.upgrade_lock.upgrade;
+        let upgrade = self.upgrade_lock.upgrade();
         match event.as_ref() {
             HotShotEvent::UpgradeProposalRecv(proposal, sender) => {
                 tracing::info!("Received upgrade proposal: {proposal:?}");

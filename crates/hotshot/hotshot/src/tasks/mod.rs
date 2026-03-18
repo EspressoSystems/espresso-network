@@ -200,7 +200,7 @@ pub fn add_network_event_task<
     let network_state: NetworkEventTaskState<_, _, _> = NetworkEventTaskState {
         network,
         view: ViewNumber::genesis(),
-        epoch: genesis_epoch_from_version(handle.hotshot.upgrade_lock.upgrade.base),
+        epoch: genesis_epoch_from_version(handle.hotshot.upgrade_lock.upgrade().base),
         membership_coordinator: handle.membership_coordinator.clone(),
         storage: handle.storage(),
         storage_metrics: handle.storage_metrics(),
@@ -227,7 +227,7 @@ pub async fn add_consensus_tasks<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     handle.add_task(DaTaskState::<TYPES, I>::create_from(handle).await);
     handle.add_task(TransactionTaskState::<TYPES>::create_from(handle).await);
 
-    let upgrade = handle.hotshot.upgrade_lock.upgrade;
+    let upgrade = handle.hotshot.upgrade_lock.upgrade();
 
     // clear the loaded certificate if it's now outdated
     handle.hotshot.upgrade_lock.apply(|cert| {

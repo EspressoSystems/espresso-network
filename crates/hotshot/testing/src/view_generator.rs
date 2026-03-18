@@ -490,7 +490,7 @@ impl TestView {
             _pd: PhantomData,
         };
 
-        let upgrade_lock = UpgradeLock::new(self.upgrade_lock.upgrade);
+        let upgrade_lock = UpgradeLock::new(self.upgrade_lock.upgrade());
 
         TestView {
             quorum_proposal,

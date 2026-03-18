@@ -535,7 +535,7 @@ pub trait RunDa<
             .hotshot
             .membership_coordinator
             .membership_for_epoch(genesis_epoch_from_version(
-                context.hotshot.upgrade_lock.upgrade.base,
+                context.hotshot.upgrade_lock.upgrade().base,
             ))
             .await
             .unwrap()

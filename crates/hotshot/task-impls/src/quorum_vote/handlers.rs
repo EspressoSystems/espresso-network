@@ -137,7 +137,7 @@ pub(crate) async fn handle_quorum_proposal_validated<
             .upgrade_lock
             .set_decided_upgrade_cert(cert.clone());
         if cert.data.new_version >= EPOCH_VERSION
-            && task_state.upgrade_lock.upgrade.base < EPOCH_VERSION
+            && task_state.upgrade_lock.upgrade().base < EPOCH_VERSION
         {
             let epoch_height = task_state.consensus.read().await.epoch_height;
             let first_epoch_number = EpochNumber::new(epoch_from_block_number(
