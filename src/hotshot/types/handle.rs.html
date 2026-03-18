@@ -106,7 +106,7 @@
 <a href=#106 id=106 data-nosnippet>106</a>            kind: MessageKind::&lt;TYPES&gt;::External(msg),
 <a href=#107 id=107 data-nosnippet>107</a>        };
 <a href=#108 id=108 data-nosnippet>108</a>        <span class="kw">let </span>view: ViewNumber = message.view_number();
-<a href=#109 id=109 data-nosnippet>109</a>        <span class="kw">let </span>serialized_message = <span class="self">self</span>.hotshot.upgrade_lock.serialize(<span class="kw-2">&amp;</span>message).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#109 id=109 data-nosnippet>109</a>        <span class="kw">let </span>serialized_message = <span class="self">self</span>.hotshot.upgrade_lock.serialize(<span class="kw-2">&amp;</span>message)<span class="question-mark">?</span>;
 <a href=#110 id=110 data-nosnippet>110</a>
 <a href=#111 id=111 data-nosnippet>111</a>        <span class="kw">match </span>recipients {
 <a href=#112 id=112 data-nosnippet>112</a>            RecipientList::Broadcast =&gt; {

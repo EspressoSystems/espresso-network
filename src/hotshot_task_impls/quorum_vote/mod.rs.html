@@ -275,8 +275,8 @@
 <a href=#275 id=275 data-nosnippet>275</a>
 <a href=#276 id=276 data-nosnippet>276</a>        <span class="kw">let </span><span class="kw-2">mut </span>maybe_current_epoch_vid_share = <span class="prelude-val">None</span>;
 <a href=#277 id=277 data-nosnippet>277</a>        <span class="comment">// If this is an epoch transition block, we might need two VID shares.
-<a href=#278 id=278 data-nosnippet>278</a>        </span><span class="kw">if </span><span class="self">self</span>.upgrade_lock.epochs_enabled(leaf.view_number()).<span class="kw">await
-<a href=#279 id=279 data-nosnippet>279</a>            </span>&amp;&amp; is_epoch_transition(leaf.block_header().block_number(), <span class="self">self</span>.epoch_height)
+<a href=#278 id=278 data-nosnippet>278</a>        </span><span class="kw">if </span><span class="self">self</span>.upgrade_lock.epochs_enabled(leaf.view_number())
+<a href=#279 id=279 data-nosnippet>279</a>            &amp;&amp; is_epoch_transition(leaf.block_header().block_number(), <span class="self">self</span>.epoch_height)
 <a href=#280 id=280 data-nosnippet>280</a>        {
 <a href=#281 id=281 data-nosnippet>281</a>            <span class="kw">let </span>current_epoch = option_epoch_from_block_number(
 <a href=#282 id=282 data-nosnippet>282</a>                leaf.with_epoch,

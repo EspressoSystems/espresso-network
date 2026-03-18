@@ -501,7 +501,7 @@
 <a href=#501 id=501 data-nosnippet>501</a>                <span class="kw">if </span>!<span class="self">self</span>.dishonest_proposal_view_numbers.contains(<span class="kw-2">&amp;</span>view_number) {
 <a href=#502 id=502 data-nosnippet>502</a>                    <span class="kw">return </span><span class="macro">vec!</span>[event.clone()];
 <a href=#503 id=503 data-nosnippet>503</a>                }
-<a href=#504 id=504 data-nosnippet>504</a>                <span class="kw">let </span>message_kind = <span class="kw">if </span>upgrade_lock.epochs_enabled(view_number).<span class="kw">await </span>{
+<a href=#504 id=504 data-nosnippet>504</a>                <span class="kw">let </span>message_kind = <span class="kw">if </span>upgrade_lock.epochs_enabled(view_number) {
 <a href=#505 id=505 data-nosnippet>505</a>                    MessageKind::&lt;TYPES&gt;::from_consensus_message(SequencingMessage::General(
 <a href=#506 id=506 data-nosnippet>506</a>                        GeneralConsensusMessage::Proposal2(convert_proposal(proposal.clone())),
 <a href=#507 id=507 data-nosnippet>507</a>                    ))
@@ -514,7 +514,7 @@
 <a href=#514 id=514 data-nosnippet>514</a>                    sender: sender.clone(),
 <a href=#515 id=515 data-nosnippet>515</a>                    kind: message_kind,
 <a href=#516 id=516 data-nosnippet>516</a>                };
-<a href=#517 id=517 data-nosnippet>517</a>                <span class="kw">let </span>serialized_message = <span class="kw">match </span>upgrade_lock.serialize(<span class="kw-2">&amp;</span>message).<span class="kw">await </span>{
+<a href=#517 id=517 data-nosnippet>517</a>                <span class="kw">let </span>serialized_message = <span class="kw">match </span>upgrade_lock.serialize(<span class="kw-2">&amp;</span>message) {
 <a href=#518 id=518 data-nosnippet>518</a>                    <span class="prelude-val">Ok</span>(serialized) =&gt; serialized,
 <a href=#519 id=519 data-nosnippet>519</a>                    <span class="prelude-val">Err</span>(e) =&gt; {
 <a href=#520 id=520 data-nosnippet>520</a>                        <span class="macro">panic!</span>(<span class="string">"Failed to serialize message: {e}"</span>);
@@ -586,7 +586,7 @@
 <a href=#586 id=586 data-nosnippet>586</a>                <span class="kw">if </span>!<span class="self">self</span>.dishonest_proposal_view_numbers.contains(<span class="kw-2">&amp;</span>view_number) {
 <a href=#587 id=587 data-nosnippet>587</a>                    <span class="kw">return </span><span class="macro">vec!</span>[event.clone()];
 <a href=#588 id=588 data-nosnippet>588</a>                }
-<a href=#589 id=589 data-nosnippet>589</a>                <span class="kw">let </span>message_kind = <span class="kw">if </span>upgrade_lock.epochs_enabled(view_number).<span class="kw">await </span>{
+<a href=#589 id=589 data-nosnippet>589</a>                <span class="kw">let </span>message_kind = <span class="kw">if </span>upgrade_lock.epochs_enabled(view_number) {
 <a href=#590 id=590 data-nosnippet>590</a>                    MessageKind::&lt;TYPES&gt;::from_consensus_message(SequencingMessage::General(
 <a href=#591 id=591 data-nosnippet>591</a>                        GeneralConsensusMessage::ViewSyncPreCommitCertificate2(certificate.clone()),
 <a href=#592 id=592 data-nosnippet>592</a>                    ))
@@ -601,7 +601,7 @@
 <a href=#601 id=601 data-nosnippet>601</a>                    sender: sender.clone(),
 <a href=#602 id=602 data-nosnippet>602</a>                    kind: message_kind,
 <a href=#603 id=603 data-nosnippet>603</a>                };
-<a href=#604 id=604 data-nosnippet>604</a>                <span class="kw">let </span>serialized_message = <span class="kw">match </span>upgrade_lock.serialize(<span class="kw-2">&amp;</span>message).<span class="kw">await </span>{
+<a href=#604 id=604 data-nosnippet>604</a>                <span class="kw">let </span>serialized_message = <span class="kw">match </span>upgrade_lock.serialize(<span class="kw-2">&amp;</span>message) {
 <a href=#605 id=605 data-nosnippet>605</a>                    <span class="prelude-val">Ok</span>(serialized) =&gt; serialized,
 <a href=#606 id=606 data-nosnippet>606</a>                    <span class="prelude-val">Err</span>(e) =&gt; {
 <a href=#607 id=607 data-nosnippet>607</a>                        <span class="macro">panic!</span>(<span class="string">"Failed to serialize message: {e}"</span>);
@@ -650,7 +650,7 @@
 <a href=#650 id=650 data-nosnippet>650</a>                <span class="kw">if </span>!<span class="self">self</span>.dishonest_proposal_view_numbers.contains(<span class="kw-2">&amp;</span>view_number) {
 <a href=#651 id=651 data-nosnippet>651</a>                    <span class="kw">return </span><span class="macro">vec!</span>[event.clone()];
 <a href=#652 id=652 data-nosnippet>652</a>                }
-<a href=#653 id=653 data-nosnippet>653</a>                <span class="kw">let </span>message_kind = <span class="kw">if </span>upgrade_lock.epochs_enabled(view_number).<span class="kw">await </span>{
+<a href=#653 id=653 data-nosnippet>653</a>                <span class="kw">let </span>message_kind = <span class="kw">if </span>upgrade_lock.epochs_enabled(view_number) {
 <a href=#654 id=654 data-nosnippet>654</a>                    MessageKind::&lt;TYPES&gt;::from_consensus_message(SequencingMessage::General(
 <a href=#655 id=655 data-nosnippet>655</a>                        GeneralConsensusMessage::ViewSyncCommitCertificate2(certificate.clone()),
 <a href=#656 id=656 data-nosnippet>656</a>                    ))
@@ -665,7 +665,7 @@
 <a href=#665 id=665 data-nosnippet>665</a>                    sender: sender.clone(),
 <a href=#666 id=666 data-nosnippet>666</a>                    kind: message_kind,
 <a href=#667 id=667 data-nosnippet>667</a>                };
-<a href=#668 id=668 data-nosnippet>668</a>                <span class="kw">let </span>serialized_message = <span class="kw">match </span>upgrade_lock.serialize(<span class="kw-2">&amp;</span>message).<span class="kw">await </span>{
+<a href=#668 id=668 data-nosnippet>668</a>                <span class="kw">let </span>serialized_message = <span class="kw">match </span>upgrade_lock.serialize(<span class="kw-2">&amp;</span>message) {
 <a href=#669 id=669 data-nosnippet>669</a>                    <span class="prelude-val">Ok</span>(serialized) =&gt; serialized,
 <a href=#670 id=670 data-nosnippet>670</a>                    <span class="prelude-val">Err</span>(e) =&gt; {
 <a href=#671 id=671 data-nosnippet>671</a>                        <span class="macro">panic!</span>(<span class="string">"Failed to serialize message: {e}"</span>);
@@ -759,7 +759,7 @@
 <a href=#759 id=759 data-nosnippet>759</a>                    <span class="kw">return </span><span class="macro">vec!</span>[event.clone()];
 <a href=#760 id=760 data-nosnippet>760</a>                }
 <a href=#761 id=761 data-nosnippet>761</a>                <span class="kw">let </span>view_number = vote.data.round;
-<a href=#762 id=762 data-nosnippet>762</a>                <span class="kw">let </span>vote = <span class="kw">if </span>upgrade_lock.epochs_enabled(view_number).<span class="kw">await </span>{
+<a href=#762 id=762 data-nosnippet>762</a>                <span class="kw">let </span>vote = <span class="kw">if </span>upgrade_lock.epochs_enabled(view_number) {
 <a href=#763 id=763 data-nosnippet>763</a>                    ViewSyncPreCommitVote2::&lt;TYPES&gt;::create_signed_vote(
 <a href=#764 id=764 data-nosnippet>764</a>                        ViewSyncPreCommitData2 {
 <a href=#765 id=765 data-nosnippet>765</a>                            relay: <span class="number">0</span>,

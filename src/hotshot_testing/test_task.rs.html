@@ -205,18 +205,17 @@
 <a href=#205 id=205 data-nosnippet>205</a>            };
 <a href=#206 id=206 data-nosnippet>206</a>
 <a href=#207 id=207 data-nosnippet>207</a>            <span class="comment">// Deserialize the message
-<a href=#208 id=208 data-nosnippet>208</a>            </span><span class="kw">let </span>deserialized_message: Message&lt;TYPES&gt; =
-<a href=#209 id=209 data-nosnippet>209</a>                <span class="kw">match </span>upgrade_lock.deserialize(<span class="kw-2">&amp;</span>message).<span class="kw">await </span>{
-<a href=#210 id=210 data-nosnippet>210</a>                    <span class="prelude-val">Ok</span>((message, <span class="kw">_</span>)) =&gt; message,
-<a href=#211 id=211 data-nosnippet>211</a>                    <span class="prelude-val">Err</span>(e) =&gt; {
-<a href=#212 id=212 data-nosnippet>212</a>                        <span class="macro">tracing::error!</span>(<span class="string">"Failed to deserialize message: {e:?}"</span>);
-<a href=#213 id=213 data-nosnippet>213</a>                        <span class="kw">continue</span>;
-<a href=#214 id=214 data-nosnippet>214</a>                    },
-<a href=#215 id=215 data-nosnippet>215</a>                };
-<a href=#216 id=216 data-nosnippet>216</a>
-<a href=#217 id=217 data-nosnippet>217</a>            <span class="comment">// Handle the message
-<a href=#218 id=218 data-nosnippet>218</a>            </span>state.handle_message(deserialized_message).<span class="kw">await</span>;
-<a href=#219 id=219 data-nosnippet>219</a>        }
-<a href=#220 id=220 data-nosnippet>220</a>    })
-<a href=#221 id=221 data-nosnippet>221</a>}
+<a href=#208 id=208 data-nosnippet>208</a>            </span><span class="kw">let </span>deserialized_message: Message&lt;TYPES&gt; = <span class="kw">match </span>upgrade_lock.deserialize(<span class="kw-2">&amp;</span>message) {
+<a href=#209 id=209 data-nosnippet>209</a>                <span class="prelude-val">Ok</span>((message, <span class="kw">_</span>)) =&gt; message,
+<a href=#210 id=210 data-nosnippet>210</a>                <span class="prelude-val">Err</span>(e) =&gt; {
+<a href=#211 id=211 data-nosnippet>211</a>                    <span class="macro">tracing::error!</span>(<span class="string">"Failed to deserialize message: {e:?}"</span>);
+<a href=#212 id=212 data-nosnippet>212</a>                    <span class="kw">continue</span>;
+<a href=#213 id=213 data-nosnippet>213</a>                },
+<a href=#214 id=214 data-nosnippet>214</a>            };
+<a href=#215 id=215 data-nosnippet>215</a>
+<a href=#216 id=216 data-nosnippet>216</a>            <span class="comment">// Handle the message
+<a href=#217 id=217 data-nosnippet>217</a>            </span>state.handle_message(deserialized_message).<span class="kw">await</span>;
+<a href=#218 id=218 data-nosnippet>218</a>        }
+<a href=#219 id=219 data-nosnippet>219</a>    })
+<a href=#220 id=220 data-nosnippet>220</a>}
 </code></pre></div></section></main></body></html>

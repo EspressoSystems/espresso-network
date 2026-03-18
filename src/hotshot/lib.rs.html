@@ -487,7 +487,7 @@
 <a href=#487 id=487 data-nosnippet>487</a>        <span class="kw">let </span>consensus = <span class="self">self</span>.consensus.read().<span class="kw">await</span>;
 <a href=#488 id=488 data-nosnippet>488</a>
 <a href=#489 id=489 data-nosnippet>489</a>        <span class="kw">let </span>first_epoch = option_epoch_from_block_number(
-<a href=#490 id=490 data-nosnippet>490</a>            <span class="self">self</span>.upgrade_lock.upgrade.base &gt;= EPOCH_VERSION,
+<a href=#490 id=490 data-nosnippet>490</a>            <span class="self">self</span>.upgrade_lock.upgrade().base &gt;= EPOCH_VERSION,
 <a href=#491 id=491 data-nosnippet>491</a>            <span class="self">self</span>.config.epoch_start_block,
 <a href=#492 id=492 data-nosnippet>492</a>            <span class="self">self</span>.config.epoch_height,
 <a href=#493 id=493 data-nosnippet>493</a>        );
@@ -552,7 +552,7 @@
 <a href=#552 id=552 data-nosnippet>552</a>                <span class="kw">let </span>qc = QuorumCertificate2::genesis(
 <a href=#553 id=553 data-nosnippet>553</a>                    <span class="kw-2">&amp;</span>validated_state,
 <a href=#554 id=554 data-nosnippet>554</a>                    <span class="self">self</span>.instance_state.as_ref(),
-<a href=#555 id=555 data-nosnippet>555</a>                    <span class="self">self</span>.upgrade_lock.upgrade,
+<a href=#555 id=555 data-nosnippet>555</a>                    <span class="self">self</span>.upgrade_lock.upgrade(),
 <a href=#556 id=556 data-nosnippet>556</a>                )
 <a href=#557 id=557 data-nosnippet>557</a>                .<span class="kw">await</span>;
 <a href=#558 id=558 data-nosnippet>558</a>
@@ -612,7 +612,7 @@
 <a href=#612 id=612 data-nosnippet>612</a>            kind: MessageKind::from(message_kind),
 <a href=#613 id=613 data-nosnippet>613</a>        };
 <a href=#614 id=614 data-nosnippet>614</a>
-<a href=#615 id=615 data-nosnippet>615</a>        <span class="kw">let </span>serialized_message = <span class="self">self</span>.upgrade_lock.serialize(<span class="kw-2">&amp;</span>message).<span class="kw">await</span>.map_err(|err| {
+<a href=#615 id=615 data-nosnippet>615</a>        <span class="kw">let </span>serialized_message = <span class="self">self</span>.upgrade_lock.serialize(<span class="kw-2">&amp;</span>message).map_err(|err| {
 <a href=#616 id=616 data-nosnippet>616</a>            HotShotError::FailedToSerialize(<span class="macro">format!</span>(<span class="string">"failed to serialize transaction: {err}"</span>))
 <a href=#617 id=617 data-nosnippet>617</a>        })<span class="question-mark">?</span>;
 <a href=#618 id=618 data-nosnippet>618</a>

@@ -380,11 +380,11 @@
 <a href=#380 id=380 data-nosnippet>380</a>        <span class="kw-2">&amp;</span>encoded_transactions,
 <a href=#381 id=381 data-nosnippet>381</a>        <span class="kw-2">&amp;</span>metadata.encode(),
 <a href=#382 id=382 data-nosnippet>382</a>        membership.total_nodes().<span class="kw">await</span>,
-<a href=#383 id=383 data-nosnippet>383</a>        upgrade_lock.version_infallible(view_number).<span class="kw">await</span>,
+<a href=#383 id=383 data-nosnippet>383</a>        upgrade_lock.version_infallible(view_number),
 <a href=#384 id=384 data-nosnippet>384</a>    );
 <a href=#385 id=385 data-nosnippet>385</a>
 <a href=#386 id=386 data-nosnippet>386</a>    <span class="kw">let </span>next_epoch_da_payload_commitment =
-<a href=#387 id=387 data-nosnippet>387</a>        <span class="kw">if </span>upgrade_lock.epochs_enabled(view_number).<span class="kw">await </span>&amp;&amp; membership.epoch().is_some() {
+<a href=#387 id=387 data-nosnippet>387</a>        <span class="kw">if </span>upgrade_lock.epochs_enabled(view_number) &amp;&amp; membership.epoch().is_some() {
 <a href=#388 id=388 data-nosnippet>388</a>            <span class="prelude-val">Some</span>(vid_commitment(
 <a href=#389 id=389 data-nosnippet>389</a>                <span class="kw-2">&amp;</span>encoded_transactions,
 <a href=#390 id=390 data-nosnippet>390</a>                <span class="kw-2">&amp;</span>metadata.encode(),
@@ -393,7 +393,7 @@
 <a href=#393 id=393 data-nosnippet>393</a>                    .<span class="kw">await</span><span class="question-mark">?
 <a href=#394 id=394 data-nosnippet>394</a>                    </span>.total_nodes()
 <a href=#395 id=395 data-nosnippet>395</a>                    .<span class="kw">await</span>,
-<a href=#396 id=396 data-nosnippet>396</a>                upgrade_lock.version_infallible(view_number).<span class="kw">await</span>,
+<a href=#396 id=396 data-nosnippet>396</a>                upgrade_lock.version_infallible(view_number),
 <a href=#397 id=397 data-nosnippet>397</a>            ))
 <a href=#398 id=398 data-nosnippet>398</a>        } <span class="kw">else </span>{
 <a href=#399 id=399 data-nosnippet>399</a>            <span class="prelude-val">None

@@ -125,7 +125,7 @@
 <a href=#125 id=125 data-nosnippet>125</a>
 <a href=#126 id=126 data-nosnippet>126</a>        <span class="kw">let </span>leader_public_key = public_key;
 <a href=#127 id=127 data-nosnippet>127</a>
-<a href=#128 id=128 data-nosnippet>128</a>        <span class="kw">let </span>genesis_version = upgrade_lock.version_infallible(genesis_view).<span class="kw">await</span>;
+<a href=#128 id=128 data-nosnippet>128</a>        <span class="kw">let </span>genesis_version = upgrade_lock.version_infallible(genesis_view);
 <a href=#129 id=129 data-nosnippet>129</a>
 <a href=#130 id=130 data-nosnippet>130</a>        <span class="kw">let </span>payload_commitment = da_payload_commitment::&lt;TestTypes&gt;(
 <a href=#131 id=131 data-nosnippet>131</a>            <span class="kw-2">&amp;</span>epoch_membership,
@@ -307,7 +307,7 @@
 <a href=#307 id=307 data-nosnippet>307</a>            <span class="kw-2">&amp;</span>metadata,
 <a href=#308 id=308 data-nosnippet>308</a>        );
 <a href=#309 id=309 data-nosnippet>309</a>
-<a href=#310 id=310 data-nosnippet>310</a>        <span class="kw">let </span>version = <span class="self">self</span>.upgrade_lock.version_infallible(next_view).<span class="kw">await</span>;
+<a href=#310 id=310 data-nosnippet>310</a>        <span class="kw">let </span>version = <span class="self">self</span>.upgrade_lock.version_infallible(next_view);
 <a href=#311 id=311 data-nosnippet>311</a>        <span class="kw">let </span>membership = <span class="self">self
 <a href=#312 id=312 data-nosnippet>312</a>            </span>.membership
 <a href=#313 id=313 data-nosnippet>313</a>            .membership_for_epoch(<span class="self">self</span>.epoch_number)
@@ -490,7 +490,7 @@
 <a href=#490 id=490 data-nosnippet>490</a>            _pd: PhantomData,
 <a href=#491 id=491 data-nosnippet>491</a>        };
 <a href=#492 id=492 data-nosnippet>492</a>
-<a href=#493 id=493 data-nosnippet>493</a>        <span class="kw">let </span>upgrade_lock = UpgradeLock::new(<span class="self">self</span>.upgrade_lock.upgrade);
+<a href=#493 id=493 data-nosnippet>493</a>        <span class="kw">let </span>upgrade_lock = UpgradeLock::new(<span class="self">self</span>.upgrade_lock.upgrade());
 <a href=#494 id=494 data-nosnippet>494</a>
 <a href=#495 id=495 data-nosnippet>495</a>        TestView {
 <a href=#496 id=496 data-nosnippet>496</a>            quorum_proposal,

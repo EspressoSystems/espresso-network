@@ -309,7 +309,7 @@
 <a href=#309 id=309 data-nosnippet>309</a>        view: ViewNumber,
 <a href=#310 id=310 data-nosnippet>310</a>        upgrade_lock: <span class="kw-2">&amp;</span>UpgradeLock&lt;TYPES&gt;,
 <a href=#311 id=311 data-nosnippet>311</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-<a href=#312 id=312 data-nosnippet>312</a>        <span class="kw">let </span>version = upgrade_lock.version(view).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#312 id=312 data-nosnippet>312</a>        <span class="kw">let </span>version = upgrade_lock.version(view)<span class="question-mark">?</span>;
 <a href=#313 id=313 data-nosnippet>313</a>
 <a href=#314 id=314 data-nosnippet>314</a>        <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
 <a href=#315 id=315 data-nosnippet>315</a>            data,
@@ -327,7 +327,7 @@
 <a href=#327 id=327 data-nosnippet>327</a>        view: ViewNumber,
 <a href=#328 id=328 data-nosnippet>328</a>        upgrade_lock: <span class="kw-2">&amp;</span>UpgradeLock&lt;TYPES&gt;,
 <a href=#329 id=329 data-nosnippet>329</a>    ) -&gt; <span class="self">Self </span>{
-<a href=#330 id=330 data-nosnippet>330</a>        <span class="kw">let </span>version = upgrade_lock.version_infallible(view).<span class="kw">await</span>;
+<a href=#330 id=330 data-nosnippet>330</a>        <span class="kw">let </span>version = upgrade_lock.version_infallible(view);
 <a href=#331 id=331 data-nosnippet>331</a>
 <a href=#332 id=332 data-nosnippet>332</a>        <span class="self">Self </span>{
 <a href=#333 id=333 data-nosnippet>333</a>            data,
