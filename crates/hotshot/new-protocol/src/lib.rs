@@ -22,3 +22,6 @@ mod events;
 
 #[allow(dead_code, unused_variables)]
 mod helpers;
+
+#[cfg(test)]
+pub(crate) mod test_utils;
