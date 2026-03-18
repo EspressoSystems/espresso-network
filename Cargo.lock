@@ -4454,6 +4454,7 @@ dependencies = [
  "serde",
  "serde_json",
  "surf-disco",
+ "tempfile",
  "test-log",
  "tide-disco",
  "tokio",

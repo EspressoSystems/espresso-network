@@ -13,7 +13,6 @@ use espresso_contract_deployer::{
     Contract, Contracts, DeployedContracts, OwnableContract, build_provider, build_provider_ledger,
     builder::DeployerArgsBuilder,
     network_config::{light_client_genesis, light_client_genesis_from_stake_table},
-    output::OutputFormat,
     proposals::timelock::TimelockOperationType,
     provider::connect_ledger,
 };
@@ -247,10 +246,6 @@ struct Options {
     /// Option to test locally but with a real eth network
     #[clap(long, default_value = "false")]
     pub mock_espresso_live_network: bool,
-
-    /// Output format for multisig calldata (json or safe-transaction-builder)
-    #[clap(long, default_value = "json")]
-    pub output_format: OutputFormat,
 
     /// Path to write calldata output (default: stdout)
     #[clap(long, name = "CALLDATA_OUT")]
@@ -542,7 +537,6 @@ async fn main() -> anyhow::Result<()> {
         .mock_light_client(opt.use_mock)
         .use_multisig(opt.use_multisig)
         .rpc_url(opt.rpc_url.clone())
-        .output_format(opt.output_format)
         .chain_id(chain_id);
     if let Some(path) = opt.calldata_out {
         args_builder.output_path(path);

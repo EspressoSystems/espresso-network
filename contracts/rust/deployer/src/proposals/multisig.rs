@@ -24,12 +24,17 @@ pub fn encode_upgrade_calldata(
     new_impl_addr: Address,
     init_data: Bytes,
 ) -> Result<CalldataInfo> {
-    let data = crate::encode_function_call(
-        "upgradeToAndCall(address,bytes)",
-        vec![new_impl_addr.to_string(), init_data.to_string()],
-    )
-    .context("Failed to encode upgradeToAndCall calldata")?;
-    Ok(CalldataInfo::new(proxy_addr, data))
+    let sig = "upgradeToAndCall(address,bytes)";
+    let args = vec![new_impl_addr.to_string(), init_data.to_string()];
+    let data = crate::encode_function_call(sig, args.clone())
+        .context("Failed to encode upgradeToAndCall calldata")?;
+    Ok(CalldataInfo::with_method(
+        proxy_addr,
+        data,
+        U256::ZERO,
+        sig,
+        args,
+    ))
 }
 
 /// Encode `transferOwnership(address)` calldata.
@@ -37,10 +42,17 @@ pub fn encode_transfer_ownership_calldata(
     proxy_addr: Address,
     new_owner: Address,
 ) -> Result<CalldataInfo> {
-    let data =
-        crate::encode_function_call("transferOwnership(address)", vec![new_owner.to_string()])
-            .context("Failed to encode transferOwnership calldata")?;
-    Ok(CalldataInfo::new(proxy_addr, data))
+    let sig = "transferOwnership(address)";
+    let args = vec![new_owner.to_string()];
+    let data = crate::encode_function_call(sig, args.clone())
+        .context("Failed to encode transferOwnership calldata")?;
+    Ok(CalldataInfo::with_method(
+        proxy_addr,
+        data,
+        U256::ZERO,
+        sig,
+        args,
+    ))
 }
 
 /// Encode calldata for any function call.
@@ -50,9 +62,15 @@ pub fn encode_generic_calldata(
     function_args: Vec<String>,
     value: U256,
 ) -> Result<CalldataInfo> {
-    let data = crate::encode_function_call(function_signature, function_args)
+    let data = crate::encode_function_call(function_signature, function_args.clone())
         .context("Failed to encode generic calldata")?;
-    Ok(CalldataInfo::with_value(target, data, value))
+    Ok(CalldataInfo::with_method(
+        target,
+        data,
+        value,
+        function_signature,
+        function_args,
+    ))
 }
 
 pub fn transfer_ownership_from_multisig_to_timelock(
@@ -389,8 +407,11 @@ mod tests {
         let impl_addr = Address::random();
         let info = encode_upgrade_calldata(proxy, impl_addr, Bytes::new()).unwrap();
         assert_eq!(info.to, proxy);
-        assert!(info.data.len() > 4); // selector + args
+        assert!(info.data.len() > 4);
         assert_eq!(info.value, U256::ZERO);
+        let fi = info.function_info.unwrap();
+        assert_eq!(fi.signature, "upgradeToAndCall(address,bytes)");
+        assert_eq!(fi.args.len(), 2);
     }
 
     #[test]
@@ -411,6 +432,9 @@ mod tests {
         assert_eq!(info.to, proxy);
         assert!(info.data.len() > 4);
         assert_eq!(info.value, U256::ZERO);
+        let fi = info.function_info.unwrap();
+        assert_eq!(fi.signature, "transferOwnership(address)");
+        assert_eq!(fi.args, vec![new_owner.to_string()]);
     }
 
     #[test]
@@ -426,6 +450,9 @@ mod tests {
         .unwrap();
         assert_eq!(info.to, target);
         assert!(info.data.len() > 4);
+        let fi = info.function_info.unwrap();
+        assert_eq!(fi.signature, "transfer(address,uint256)");
+        assert_eq!(fi.args, vec![addr.to_string(), "1000".to_string()]);
     }
 
     #[test]

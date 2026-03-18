@@ -1,9 +1,18 @@
-use std::{path::PathBuf, time::SystemTime};
+use std::{collections::BTreeMap, path::PathBuf, time::SystemTime};
 
-use alloy::primitives::{Address, Bytes, U256};
+use alloy::{
+    json_abi::Function,
+    primitives::{Address, Bytes, U256},
+};
 use anyhow::Result;
-use clap::ValueEnum;
 use serde::Serialize;
+
+/// Optional decoded function call info for Safe Transaction Builder output.
+#[derive(Clone, Debug)]
+pub struct FunctionInfo {
+    pub signature: String,
+    pub args: Vec<String>,
+}
 
 #[derive(Serialize)]
 pub struct CalldataInfo {
@@ -11,6 +20,8 @@ pub struct CalldataInfo {
     pub data: Bytes,
     /// Included because Safe UI requires this field, even when value is 0.
     pub value: U256,
+    #[serde(skip)]
+    pub function_info: Option<FunctionInfo>,
 }
 
 impl CalldataInfo {
@@ -19,19 +30,27 @@ impl CalldataInfo {
             to,
             data,
             value: U256::ZERO,
+            function_info: None,
         }
     }
 
-    pub fn with_value(to: Address, data: Bytes, value: U256) -> Self {
-        Self { to, data, value }
+    pub fn with_method(
+        to: Address,
+        data: Bytes,
+        value: U256,
+        function_signature: &str,
+        function_args: Vec<String>,
+    ) -> Self {
+        Self {
+            to,
+            data,
+            value,
+            function_info: Some(FunctionInfo {
+                signature: function_signature.to_string(),
+                args: function_args,
+            }),
+        }
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
-pub enum OutputFormat {
-    #[default]
-    Json,
-    SafeTransactionBuilder,
 }
 
 /// Safe Transaction Builder batch format
@@ -54,49 +73,133 @@ struct SafeBatchMeta {
 }
 
 #[derive(Serialize)]
+struct SafeContractMethod {
+    inputs: Vec<SafeMethodInput>,
+    name: String,
+    payable: bool,
+}
+
+#[derive(Serialize)]
+struct SafeMethodInput {
+    #[serde(rename = "internalType")]
+    internal_type: String,
+    name: String,
+    #[serde(rename = "type")]
+    solidity_type: String,
+}
+
+#[derive(Serialize)]
 struct SafeTransaction {
     to: String,
     value: String,
-    data: String,
+    /// When `contractMethod` is present, `data` must be `null` — the Safe UI
+    /// ignores `contractMethod` if `data` is truthy and falls back to
+    /// "Custom hex data".
+    data: Option<String>,
     #[serde(rename = "contractMethod")]
-    contract_method: Option<()>,
+    contract_method: Option<SafeContractMethod>,
     #[serde(rename = "contractInputsValues")]
-    contract_inputs_values: Option<()>,
+    contract_inputs_values: Option<BTreeMap<String, String>>,
+}
+
+fn build_safe_method(
+    info: &FunctionInfo,
+) -> Result<(SafeContractMethod, BTreeMap<String, String>)> {
+    let func = Function::parse(&info.signature).map_err(|e| {
+        anyhow::anyhow!(
+            "failed to parse function signature '{}': {e}",
+            info.signature
+        )
+    })?;
+
+    anyhow::ensure!(
+        info.args.len() == func.inputs.len(),
+        "function '{}' expects {} args but got {}",
+        info.signature,
+        func.inputs.len(),
+        info.args.len(),
+    );
+
+    let inputs: Vec<SafeMethodInput> = func
+        .inputs
+        .iter()
+        .enumerate()
+        .map(|(i, param)| {
+            let ty = param.ty.to_string();
+            SafeMethodInput {
+                internal_type: param
+                    .internal_type
+                    .as_ref()
+                    .map(|t| t.to_string())
+                    .unwrap_or_else(|| ty.clone()),
+                name: if param.name.is_empty() {
+                    format!("arg{i}")
+                } else {
+                    param.name.clone()
+                },
+                solidity_type: ty,
+            }
+        })
+        .collect();
+
+    let mut values = BTreeMap::new();
+    for (i, arg) in info.args.iter().enumerate() {
+        let name = func
+            .inputs
+            .get(i)
+            .filter(|p| !p.name.is_empty())
+            .map(|p| p.name.clone())
+            .unwrap_or_else(|| format!("arg{i}"));
+        values.insert(name, arg.clone());
+    }
+
+    let method = SafeContractMethod {
+        inputs,
+        name: func.name.clone(),
+        payable: func.state_mutability == alloy::json_abi::StateMutability::Payable,
+    };
+    Ok((method, values))
 }
 
 pub fn output_calldata(
     info: &CalldataInfo,
-    format: OutputFormat,
     output_path: Option<&PathBuf>,
     chain_id: u64,
 ) -> Result<()> {
-    let text = match format {
-        OutputFormat::Json => serde_json::to_string_pretty(info)?,
-        OutputFormat::SafeTransactionBuilder => {
-            let created_at = SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as u64;
+    let created_at = u64::try_from(
+        SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis(),
+    )
+    .expect("timestamp fits u64");
 
-            let batch = SafeTransactionBuilderBatch {
-                version: "1.0",
-                chain_id: chain_id.to_string(),
-                created_at,
-                meta: SafeBatchMeta {
-                    name: "Espresso Multisig Transactions",
-                    description: "",
-                },
-                transactions: vec![SafeTransaction {
-                    to: format!("{:#x}", info.to),
-                    value: info.value.to_string(),
-                    data: info.data.to_string(),
-                    contract_method: None,
-                    contract_inputs_values: None,
-                }],
-            };
-            serde_json::to_string_pretty(&batch)?
+    let batch = SafeTransactionBuilderBatch {
+        version: "1.0",
+        chain_id: chain_id.to_string(),
+        created_at,
+        meta: SafeBatchMeta {
+            name: "Espresso Multisig Transactions",
+            description: "",
         },
+        transactions: vec![{
+            let (data, contract_method, contract_inputs_values) = match &info.function_info {
+                Some(fi) => {
+                    let (m, v) = build_safe_method(fi)?;
+                    (None, Some(m), Some(v))
+                },
+                None => (Some(info.data.to_string()), None, None),
+            };
+            SafeTransaction {
+                to: info.to.to_checksum(None),
+                value: info.value.to_string(),
+                data,
+                contract_method,
+                contract_inputs_values,
+            }
+        }],
     };
+    let text = serde_json::to_string_pretty(&batch)?;
 
     if let Some(path) = output_path {
         std::fs::write(path, &text)?;
@@ -110,8 +213,6 @@ pub fn output_calldata(
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
     use alloy::primitives::{Address, Bytes, U256};
 
     use super::*;
@@ -123,58 +224,31 @@ mod tests {
     }
 
     #[test]
-    fn test_output_json_stdout() {
-        let info = CalldataInfo::new(test_addr(), Bytes::from(vec![1, 2, 3]));
-        assert!(output_calldata(&info, OutputFormat::Json, None, 1).is_ok());
-    }
-
-    #[test]
-    fn test_output_json_to_file() {
-        let addr = test_addr();
-        let data = Bytes::from(vec![0xde, 0xad, 0xbe, 0xef]);
-        let info = CalldataInfo::new(addr, data);
-
-        let path = PathBuf::from("./tmp/test_output_json.json");
-        std::fs::create_dir_all("./tmp").unwrap();
-        output_calldata(&info, OutputFormat::Json, Some(&path), 1).unwrap();
-
-        let contents = std::fs::read_to_string(&path).unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&contents).unwrap();
-        let to_str = parsed["to"].as_str().unwrap().to_lowercase();
-        assert!(to_str.contains("1234567890abcdef1234567890abcdef12345678"));
-    }
-
-    #[test]
     fn test_output_safe_tx_builder_to_file() {
         let addr = test_addr();
         let data = Bytes::from(vec![0xca, 0xfe]);
         let info = CalldataInfo::new(addr, data);
 
-        let path = PathBuf::from("./tmp/test_output_safe_tx.json");
-        std::fs::create_dir_all("./tmp").unwrap();
-        output_calldata(&info, OutputFormat::SafeTransactionBuilder, Some(&path), 1).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test_output_safe_tx.json");
+        output_calldata(&info, Some(&path), 1).unwrap();
 
         let contents = std::fs::read_to_string(&path).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&contents).unwrap();
         assert_eq!(parsed["version"].as_str().unwrap(), "1.0");
         let txs = parsed["transactions"].as_array().unwrap();
         assert_eq!(txs.len(), 1);
-        assert!(txs[0]["to"].as_str().is_some());
+        let to = txs[0]["to"].as_str().unwrap();
+        assert_eq!(to, addr.to_checksum(None));
         assert!(txs[0]["data"].as_str().is_some());
     }
 
     #[test]
     fn test_output_safe_tx_builder_chain_id() {
         let info = CalldataInfo::new(test_addr(), Bytes::from(vec![0x01]));
-        let path = PathBuf::from("./tmp/test_output_chain_id.json");
-        std::fs::create_dir_all("./tmp").unwrap();
-        output_calldata(
-            &info,
-            OutputFormat::SafeTransactionBuilder,
-            Some(&path),
-            11155111,
-        )
-        .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test_output_chain_id.json");
+        output_calldata(&info, Some(&path), 11155111).unwrap();
 
         let contents = std::fs::read_to_string(&path).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&contents).unwrap();
@@ -182,25 +256,62 @@ mod tests {
     }
 
     #[test]
-    fn test_calldata_info_with_value() {
+    fn test_output_safe_tx_builder_contract_method() {
         let addr = test_addr();
-        let data = Bytes::from(vec![0x01]);
-        let value = U256::from(42u64);
-        let info = CalldataInfo::with_value(addr, data, value);
-        assert_eq!(info.value, value);
-        assert_eq!(info.to, addr);
+        let recipient: Address = "0x000000000000000000000000000000000000dead"
+            .parse()
+            .unwrap();
+        let info = CalldataInfo::with_method(
+            addr,
+            Bytes::from(vec![0xca, 0xfe]),
+            U256::ZERO,
+            "transfer(address,uint256)",
+            vec![format!("{recipient:#x}"), "1000".to_string()],
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test_contract_method.json");
+        output_calldata(&info, Some(&path), 1).unwrap();
+
+        let contents = std::fs::read_to_string(&path).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&contents).unwrap();
+        let tx = &parsed["transactions"][0];
+
+        // contractMethod is populated
+        let method = &tx["contractMethod"];
+        assert_eq!(method["name"].as_str().unwrap(), "transfer");
+        assert!(!method["payable"].as_bool().unwrap());
+        let inputs = method["inputs"].as_array().unwrap();
+        assert_eq!(inputs.len(), 2);
+        assert_eq!(inputs[0]["name"].as_str().unwrap(), "arg0");
+        assert_eq!(inputs[0]["type"].as_str().unwrap(), "address");
+        assert_eq!(inputs[0]["internalType"].as_str().unwrap(), "address");
+        assert_eq!(inputs[1]["name"].as_str().unwrap(), "arg1");
+        assert_eq!(inputs[1]["type"].as_str().unwrap(), "uint256");
+        assert_eq!(inputs[1]["internalType"].as_str().unwrap(), "uint256");
+
+        // data is null when contractMethod is present (Safe UI requirement)
+        assert!(tx["data"].is_null());
+
+        // contractInputsValues is populated
+        let values = &tx["contractInputsValues"];
+        assert_eq!(values["arg0"].as_str().unwrap(), format!("{recipient:#x}"));
+        assert_eq!(values["arg1"].as_str().unwrap(), "1000");
     }
 
     #[test]
-    fn test_output_empty_init_data() {
-        let addr = test_addr();
-        let info = CalldataInfo::new(addr, Bytes::new());
-
-        let path = PathBuf::from("./tmp/test_output_empty.json");
-        std::fs::create_dir_all("./tmp").unwrap();
-        output_calldata(&info, OutputFormat::Json, Some(&path), 1).unwrap();
+    fn test_output_safe_tx_builder_no_method_has_raw_data() {
+        let info = CalldataInfo::new(test_addr(), Bytes::from(vec![0x01]));
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test_no_method.json");
+        output_calldata(&info, Some(&path), 1).unwrap();
 
         let contents = std::fs::read_to_string(&path).unwrap();
-        assert!(contents.contains("data"));
+        let parsed: serde_json::Value = serde_json::from_str(&contents).unwrap();
+        let tx = &parsed["transactions"][0];
+        // Without function info, data is present and method fields are null
+        assert!(tx["data"].is_string());
+        assert!(tx["contractMethod"].is_null());
+        assert!(tx["contractInputsValues"].is_null());
     }
 }

@@ -15,7 +15,7 @@ use url::Url;
 
 use crate::{
     Contract, Contracts, OwnableContract, encode_function_call,
-    output::{OutputFormat, output_calldata},
+    output::output_calldata,
     proposals::{
         multisig::{
             LightClientV2UpgradeParams, StakeTableV2UpgradeParams, TransferOwnershipParams,
@@ -145,8 +145,6 @@ pub struct DeployerArgs<P: Provider + WalletProvider> {
     #[builder(default)]
     multisig_transaction_value: Option<String>,
     #[builder(default)]
-    output_format: OutputFormat,
-    #[builder(default)]
     output_path: Option<PathBuf>,
     #[builder(default)]
     chain_id: u64,
@@ -167,12 +165,7 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                     if use_multisig {
                         let calldata =
                             upgrade_fee_contract_multisig_owner(provider, contracts).await?;
-                        output_calldata(
-                            &calldata,
-                            self.output_format,
-                            self.output_path.as_ref(),
-                            self.chain_id,
-                        )?;
+                        output_calldata(&calldata, self.output_path.as_ref(), self.chain_id)?;
                     } else {
                         crate::upgrade_fee_v1(provider, contracts).await?;
                     }
@@ -246,12 +239,7 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
 
                 if use_multisig {
                     let calldata = upgrade_esp_token_v2_multisig_owner(provider, contracts).await?;
-                    output_calldata(
-                        &calldata,
-                        self.output_format,
-                        self.output_path.as_ref(),
-                        self.chain_id,
-                    )?;
+                    output_calldata(&calldata, self.output_path.as_ref(), self.chain_id)?;
                 } else {
                     crate::upgrade_esp_token_v2(provider, contracts).await?;
                     let addr = contracts
@@ -347,12 +335,7 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                         use_mock,
                     )
                     .await?;
-                    output_calldata(
-                        &calldata,
-                        self.output_format,
-                        self.output_path.as_ref(),
-                        self.chain_id,
-                    )?;
+                    output_calldata(&calldata, self.output_path.as_ref(), self.chain_id)?;
                 } else {
                     crate::upgrade_light_client_v2(
                         provider,
@@ -374,12 +357,7 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                     let calldata =
                         upgrade_light_client_v3_multisig_owner(provider, contracts, use_mock)
                             .await?;
-                    output_calldata(
-                        &calldata,
-                        self.output_format,
-                        self.output_path.as_ref(),
-                        self.chain_id,
-                    )?;
+                    output_calldata(&calldata, self.output_path.as_ref(), self.chain_id)?;
                 } else {
                     crate::upgrade_light_client_v3(provider, contracts, use_mock).await?;
 
@@ -461,12 +439,7 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                         },
                     )
                     .await?;
-                    output_calldata(
-                        &calldata,
-                        self.output_format,
-                        self.output_path.as_ref(),
-                        self.chain_id,
-                    )?;
+                    output_calldata(&calldata, self.output_path.as_ref(), self.chain_id)?;
                 } else {
                     // Pick admin from config. StakeTable uses OpsTimelock for faster
                     // emergency updates since it handles critical staking ops.
@@ -771,12 +744,7 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 new_owner: timelock_address,
             },
         )?;
-        output_calldata(
-            &calldata,
-            self.output_format,
-            self.output_path.as_ref(),
-            self.chain_id,
-        )?;
+        output_calldata(&calldata, self.output_path.as_ref(), self.chain_id)?;
         tracing::info!("Successfully encoded ownership transfer for {}", contract);
         Ok(())
     }
@@ -860,12 +828,7 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
             .context("Failed to parse multisig transaction value as U256")?;
 
         let calldata = encode_generic_calldata(target, function_signature, function_args, value)?;
-        output_calldata(
-            &calldata,
-            self.output_format,
-            self.output_path.as_ref(),
-            self.chain_id,
-        )?;
+        output_calldata(&calldata, self.output_path.as_ref(), self.chain_id)?;
 
         Ok(())
     }

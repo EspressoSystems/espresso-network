@@ -28,6 +28,7 @@ vbs = { workspace = true }
 espresso-types = { workspace = true, features = ["testing"] }
 rand = { workspace = true }
 sequencer-utils = { workspace = true }
+tempfile = { workspace = true }
 test-log = { workspace = true }
 
 [lints]
