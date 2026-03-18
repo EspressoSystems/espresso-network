@@ -12,19 +12,19 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use super::FeeAccount;
-use crate::v0_3::{RewardAccountV1, RewardAmount};
-
-static REWARD_MERKLE_TREE_V2_MEMORY_LOCK: OnceLock<Arc<Semaphore>> = OnceLock::new();
-
 pub use crate::v0::reward_mt::{
     REWARD_MERKLE_TREE_V2_ARITY, REWARD_MERKLE_TREE_V2_HEIGHT, RewardMerkleCommitmentV2,
     RewardMerkleTreeV2,
 };
+use crate::v0_3::{RewardAccountV1, RewardAmount};
+
+#[derive(Clone)]
+pub struct PermittedRewardMerkleTreeV2 {
+    pub tree: RewardMerkleTreeV2,
+    _permit: Arc<OwnedSemaphorePermit>,
+}
 
 static REWARD_MERKLE_TREE_V2_MEMORY_LOCK: OnceLock<Arc<Semaphore>> = OnceLock::new();
-
-pub const REWARD_MERKLE_TREE_V2_HEIGHT: usize = 160;
-pub const REWARD_MERKLE_TREE_V2_ARITY: usize = 2;
 
 impl std::ops::Deref for PermittedRewardMerkleTreeV2 {
     type Target = RewardMerkleTreeV2;

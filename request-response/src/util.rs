@@ -79,10 +79,10 @@ impl<T: Clone + Eq + Hash> NamedSemaphore<T> {
         let mut total_num_permits_guard = self.total_num_permits_held.lock();
 
         // If the total number of permits is greater than the maximum number of permits, return None
-        if let Some(max_total_permits) = self.max_total_permits
-            && *total_num_permits_guard >= max_total_permits
-        {
-            return Err(NamedSemaphoreError::GlobalLimitReached);
+        if let Some(max_total_permits) = self.max_total_permits {
+            if *total_num_permits_guard >= max_total_permits {
+                return Err(NamedSemaphoreError::GlobalLimitReached);
+            }
         }
 
         // If the number of permits is greater than or equal to the maximum number of permits, return an error

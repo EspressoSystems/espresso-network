@@ -10038,6 +10038,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-broadcast",
+ "async-lock 3.4.1",
  "async-trait",
  "bincode",
  "blake3",
@@ -10839,6 +10840,7 @@ dependencies = [
  "vbs",
  "vec1",
  "vergen",
+ "vergen-gitcl",
  "versions",
  "vid",
 ]
