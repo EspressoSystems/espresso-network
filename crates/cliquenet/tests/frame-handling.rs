@@ -4,7 +4,7 @@ use bytes::Bytes;
 use cliquenet::{Address, Keypair, NetConf, Retry};
 #[cfg(feature = "metrics")]
 use hotshot_types::traits::metrics::NoMetrics;
-use rand::RngCore;
+use rand::Rng;
 
 /// Send and receive messages of various sizes between 1 byte and 5 MiB.
 #[tokio::test]

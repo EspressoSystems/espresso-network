@@ -4,7 +4,7 @@ use cliquenet::{Address, Keypair, MAX_MESSAGE_SIZE, NetConf, NetworkError, Publi
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 #[cfg(feature = "metrics")]
 use hotshot_types::traits::metrics::NoMetrics;
-use rand::RngCore;
+use rand::Rng;
 use test_utils::reserve_tcp_port;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
