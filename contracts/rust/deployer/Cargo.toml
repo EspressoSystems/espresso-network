@@ -12,6 +12,7 @@ clap = { workspace = true }
 derive_builder = { workspace = true }
 derive_more = { workspace = true }
 dotenvy = { workspace = true }
+espresso-safe-tx-builder = { workspace = true }
 espresso-types = { workspace = true }
 hotshot-contract-adapter = { workspace = true }
 hotshot-types = { workspace = true }

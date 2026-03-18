@@ -12,6 +12,7 @@ use alloy::{
     sol_types::SolCall,
 };
 use anyhow::{Context, Result, bail};
+use espresso_safe_tx_builder::FunctionInfo;
 use hotshot_contract_adapter::{
     evm::DecodeRevert,
     sol_types::{
@@ -94,8 +95,10 @@ pub enum Transaction {
 }
 
 impl Transaction {
-    /// Returns the contract address and encoded calldata for this state change.
-    pub fn calldata(self) -> (Address, Bytes) {
+    /// Returns the contract address, encoded calldata, and optional function info for this state
+    /// change. Function info is `None` for calls with complex struct arguments that cannot be
+    /// represented as simple string values for Safe TX Builder.
+    pub fn calldata(self) -> (Address, Bytes, Option<FunctionInfo>) {
         match self {
             Self::Approve {
                 token,
@@ -109,6 +112,10 @@ impl Transaction {
                 }
                 .abi_encode()
                 .into(),
+                Some(FunctionInfo {
+                    signature: "approve(address spender, uint256 value)".to_string(),
+                    args: vec![spender.to_string(), amount.to_string()],
+                }),
             ),
             Self::Delegate {
                 stake_table,
@@ -117,6 +124,10 @@ impl Transaction {
             } => (
                 stake_table,
                 delegateCall { validator, amount }.abi_encode().into(),
+                Some(FunctionInfo {
+                    signature: "delegate(address validator, uint256 amount)".to_string(),
+                    args: vec![validator.to_string(), amount.to_string()],
+                }),
             ),
             Self::Undelegate {
                 stake_table,
@@ -125,6 +136,10 @@ impl Transaction {
             } => (
                 stake_table,
                 undelegateCall { validator, amount }.abi_encode().into(),
+                Some(FunctionInfo {
+                    signature: "undelegate(address validator, uint256 amount)".to_string(),
+                    args: vec![validator.to_string(), amount.to_string()],
+                }),
             ),
             Self::ClaimWithdrawal {
                 stake_table,
@@ -132,6 +147,10 @@ impl Transaction {
             } => (
                 stake_table,
                 claimWithdrawalCall { validator }.abi_encode().into(),
+                Some(FunctionInfo {
+                    signature: "claimWithdrawal(address validator)".to_string(),
+                    args: vec![validator.to_string()],
+                }),
             ),
             Self::ClaimValidatorExit {
                 stake_table,
@@ -139,6 +158,10 @@ impl Transaction {
             } => (
                 stake_table,
                 claimValidatorExitCall { validator }.abi_encode().into(),
+                Some(FunctionInfo {
+                    signature: "claimValidatorExit(address validator)".to_string(),
+                    args: vec![validator.to_string()],
+                }),
             ),
             Self::ClaimRewards {
                 reward_claim,
@@ -148,11 +171,17 @@ impl Transaction {
                 reward_claim,
                 claimRewardsCall {
                     lifetimeRewards: lifetime_rewards,
-                    authData: auth_data,
+                    authData: auth_data.clone(),
                 }
                 .abi_encode()
                 .into(),
+                Some(FunctionInfo {
+                    signature: "claimRewards(uint256 lifetimeRewards, bytes authData)".to_string(),
+                    args: vec![lifetime_rewards.to_string(), auth_data.to_string()],
+                }),
             ),
+            // RegisterValidator and UpdateConsensusKeys use complex struct args (BLS/Schnorr keys)
+            // that cannot be represented as simple strings for Safe TX Builder.
             Self::RegisterValidator {
                 stake_table,
                 commission,
@@ -170,6 +199,7 @@ impl Transaction {
                     ))
                     .abi_encode()
                     .into(),
+                    None,
                 ),
                 StakeTableContractVersion::V2 => (
                     stake_table,
@@ -183,6 +213,7 @@ impl Transaction {
                     ))
                     .abi_encode()
                     .into(),
+                    None,
                 ),
             },
             Self::UpdateConsensusKeys {
@@ -199,6 +230,7 @@ impl Transaction {
                     ))
                     .abi_encode()
                     .into(),
+                    None,
                 ),
                 StakeTableContractVersion::V2 => (
                     stake_table,
@@ -210,11 +242,17 @@ impl Transaction {
                     ))
                     .abi_encode()
                     .into(),
+                    None,
                 ),
             },
-            Self::DeregisterValidator { stake_table } => {
-                (stake_table, deregisterValidatorCall {}.abi_encode().into())
-            },
+            Self::DeregisterValidator { stake_table } => (
+                stake_table,
+                deregisterValidatorCall {}.abi_encode().into(),
+                Some(FunctionInfo {
+                    signature: deregisterValidatorCall::SIGNATURE.to_string(),
+                    args: vec![],
+                }),
+            ),
             Self::UpdateCommission {
                 stake_table,
                 new_commission,
@@ -225,6 +263,10 @@ impl Transaction {
                 }
                 .abi_encode()
                 .into(),
+                Some(FunctionInfo {
+                    signature: "updateCommission(uint16 newCommission)".to_string(),
+                    args: vec![new_commission.to_evm().to_string()],
+                }),
             ),
             Self::UpdateMetadataUri {
                 stake_table,
@@ -236,16 +278,24 @@ impl Transaction {
                 }
                 .abi_encode()
                 .into(),
+                Some(FunctionInfo {
+                    signature: "updateMetadataUri(string metadataUri)".to_string(),
+                    args: vec![metadata_uri.to_string()],
+                }),
             ),
             Self::Transfer { token, to, amount } => (
                 token,
                 transferCall { to, value: amount }.abi_encode().into(),
+                Some(FunctionInfo {
+                    signature: "transfer(address to, uint256 value)".to_string(),
+                    args: vec![to.to_string(), amount.to_string()],
+                }),
             ),
         }
     }
 
     fn to_transaction_request(&self) -> TransactionRequest {
-        let (to, data) = self.clone().calldata();
+        let (to, data, _) = self.clone().calldata();
         TransactionRequest::default()
             .to(to)
             .input(TransactionInput::new(data))
@@ -367,5 +417,66 @@ impl Transaction {
         let tx = self.to_transaction_request();
         let pending = provider.send_transaction(tx).await;
         self.decode_revert(pending)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloy::{json_abi::Function, sol_types::SolCall};
+
+    use super::*;
+
+    /// Verify hand-written named signatures produce the same 4-byte selector as alloy's
+    /// `SIGNATURE` const. Catches typos or drift if the Solidity ABI changes.
+    #[test]
+    fn named_signatures_match_selectors() {
+        let cases: &[(&str, [u8; 4])] = &[
+            (
+                "approve(address spender, uint256 value)",
+                approveCall::SELECTOR,
+            ),
+            (
+                "delegate(address validator, uint256 amount)",
+                delegateCall::SELECTOR,
+            ),
+            (
+                "undelegate(address validator, uint256 amount)",
+                undelegateCall::SELECTOR,
+            ),
+            (
+                "claimWithdrawal(address validator)",
+                claimWithdrawalCall::SELECTOR,
+            ),
+            (
+                "claimValidatorExit(address validator)",
+                claimValidatorExitCall::SELECTOR,
+            ),
+            (
+                "claimRewards(uint256 lifetimeRewards, bytes authData)",
+                claimRewardsCall::SELECTOR,
+            ),
+            (
+                "updateCommission(uint16 newCommission)",
+                updateCommissionCall::SELECTOR,
+            ),
+            (
+                "updateMetadataUri(string metadataUri)",
+                updateMetadataUriCall::SELECTOR,
+            ),
+            (
+                "transfer(address to, uint256 value)",
+                transferCall::SELECTOR,
+            ),
+        ];
+
+        for (named_sig, expected_selector) in cases {
+            let func = Function::parse(named_sig)
+                .unwrap_or_else(|e| panic!("failed to parse '{named_sig}': {e}"));
+            assert_eq!(
+                func.selector().as_slice(),
+                expected_selector,
+                "selector mismatch for '{named_sig}'"
+            );
+        }
     }
 }

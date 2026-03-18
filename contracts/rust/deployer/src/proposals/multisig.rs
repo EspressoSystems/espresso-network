@@ -11,7 +11,10 @@ use hotshot_contract_adapter::sol_types::{
     LightClientV3Mock, PlonkVerifierV2, PlonkVerifierV3, StakeTable, StakeTableV2,
 };
 
-use crate::{Contract, Contracts, LIBRARY_PLACEHOLDER_ADDRESS, output::CalldataInfo};
+use crate::{
+    Contract, Contracts, LIBRARY_PLACEHOLDER_ADDRESS,
+    output::{CalldataInfo, FunctionInfo},
+};
 
 #[derive(Clone)]
 pub struct TransferOwnershipParams {
@@ -24,7 +27,7 @@ pub fn encode_upgrade_calldata(
     new_impl_addr: Address,
     init_data: Bytes,
 ) -> Result<CalldataInfo> {
-    let sig = "upgradeToAndCall(address,bytes)";
+    let sig = "upgradeToAndCall(address newImplementation, bytes data)";
     let args = vec![new_impl_addr.to_string(), init_data.to_string()];
     let data = crate::encode_function_call(sig, args.clone())
         .context("Failed to encode upgradeToAndCall calldata")?;
@@ -32,8 +35,10 @@ pub fn encode_upgrade_calldata(
         proxy_addr,
         data,
         U256::ZERO,
-        sig,
-        args,
+        FunctionInfo {
+            signature: sig.to_string(),
+            args,
+        },
     ))
 }
 
@@ -42,7 +47,7 @@ pub fn encode_transfer_ownership_calldata(
     proxy_addr: Address,
     new_owner: Address,
 ) -> Result<CalldataInfo> {
-    let sig = "transferOwnership(address)";
+    let sig = "transferOwnership(address newOwner)";
     let args = vec![new_owner.to_string()];
     let data = crate::encode_function_call(sig, args.clone())
         .context("Failed to encode transferOwnership calldata")?;
@@ -50,8 +55,10 @@ pub fn encode_transfer_ownership_calldata(
         proxy_addr,
         data,
         U256::ZERO,
-        sig,
-        args,
+        FunctionInfo {
+            signature: sig.to_string(),
+            args,
+        },
     ))
 }
 
@@ -68,8 +75,10 @@ pub fn encode_generic_calldata(
         target,
         data,
         value,
-        function_signature,
-        function_args,
+        FunctionInfo {
+            signature: function_signature.to_string(),
+            args: function_args,
+        },
     ))
 }
 
@@ -410,7 +419,10 @@ mod tests {
         assert!(info.data.len() > 4);
         assert_eq!(info.value, U256::ZERO);
         let fi = info.function_info.unwrap();
-        assert_eq!(fi.signature, "upgradeToAndCall(address,bytes)");
+        assert_eq!(
+            fi.signature,
+            "upgradeToAndCall(address newImplementation, bytes data)"
+        );
         assert_eq!(fi.args.len(), 2);
     }
 
@@ -433,7 +445,7 @@ mod tests {
         assert!(info.data.len() > 4);
         assert_eq!(info.value, U256::ZERO);
         let fi = info.function_info.unwrap();
-        assert_eq!(fi.signature, "transferOwnership(address)");
+        assert_eq!(fi.signature, "transferOwnership(address newOwner)");
         assert_eq!(fi.args, vec![new_owner.to_string()]);
     }
 
@@ -443,7 +455,7 @@ mod tests {
         let addr = Address::random();
         let info = encode_generic_calldata(
             target,
-            "transfer(address,uint256)",
+            "transfer(address to, uint256 amount)",
             vec![addr.to_string(), "1000".to_string()],
             U256::ZERO,
         )
@@ -451,7 +463,7 @@ mod tests {
         assert_eq!(info.to, target);
         assert!(info.data.len() > 4);
         let fi = info.function_info.unwrap();
-        assert_eq!(fi.signature, "transfer(address,uint256)");
+        assert_eq!(fi.signature, "transfer(address to, uint256 amount)");
         assert_eq!(fi.args, vec![addr.to_string(), "1000".to_string()]);
     }
 
@@ -460,7 +472,7 @@ mod tests {
         let target = Address::random();
         let result = encode_generic_calldata(
             target,
-            "transfer(address,uint256)",
+            "transfer(address to, uint256 amount)",
             vec!["0x000000000000000000000000000000000000dead".to_string()], // missing arg
             U256::ZERO,
         );

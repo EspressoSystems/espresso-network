@@ -4446,6 +4446,7 @@ dependencies = [
  "derive_builder",
  "derive_more 2.1.0",
  "dotenvy",
+ "espresso-safe-tx-builder",
  "espresso-types",
  "hotshot-contract-adapter",
  "hotshot-types",
@@ -4532,6 +4533,18 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 1.0.109",
+]
+
+[[package]]
+name = "espresso-safe-tx-builder"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tracing",
 ]
 
 [[package]]
@@ -11673,6 +11686,7 @@ dependencies = [
  "directories 6.0.0",
  "dotenvy",
  "espresso-contract-deployer",
+ "espresso-safe-tx-builder",
  "espresso-types",
  "futures-util",
  "hotshot-contract-adapter",
