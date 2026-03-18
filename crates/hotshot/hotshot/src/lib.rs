@@ -487,7 +487,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
         let consensus = self.consensus.read().await;
 
         let first_epoch = option_epoch_from_block_number(
-            self.upgrade_lock.upgrade.base >= EPOCH_VERSION,
+            self.upgrade_lock.upgrade().base >= EPOCH_VERSION,
             self.config.epoch_start_block,
             self.config.epoch_height,
         );
@@ -552,7 +552,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
                 let qc = QuorumCertificate2::genesis(
                     &validated_state,
                     self.instance_state.as_ref(),
-                    self.upgrade_lock.upgrade,
+                    self.upgrade_lock.upgrade(),
                 )
                 .await;
 
@@ -612,7 +612,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
             kind: MessageKind::from(message_kind),
         };
 
-        let serialized_message = self.upgrade_lock.serialize(&message).await.map_err(|err| {
+        let serialized_message = self.upgrade_lock.serialize(&message).map_err(|err| {
             HotShotError::FailedToSerialize(format!("failed to serialize transaction: {err}"))
         })?;
 

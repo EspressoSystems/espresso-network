@@ -380,11 +380,11 @@ pub async fn build_da_certificate<TYPES: NodeType>(
         &encoded_transactions,
         &metadata.encode(),
         membership.total_nodes().await,
-        upgrade_lock.version_infallible(view_number).await,
+        upgrade_lock.version_infallible(view_number),
     );
 
     let next_epoch_da_payload_commitment =
-        if upgrade_lock.epochs_enabled(view_number).await && membership.epoch().is_some() {
+        if upgrade_lock.epochs_enabled(view_number) && membership.epoch().is_some() {
             Some(vid_commitment(
                 &encoded_transactions,
                 &metadata.encode(),
@@ -393,7 +393,7 @@ pub async fn build_da_certificate<TYPES: NodeType>(
                     .await?
                     .total_nodes()
                     .await,
-                upgrade_lock.version_infallible(view_number).await,
+                upgrade_lock.version_infallible(view_number),
             ))
         } else {
             None
