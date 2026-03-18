@@ -1,6 +1,8 @@
 use std::{cmp::Ordering, fmt, ops::Deref};
 
 use ed25519_compact::x25519;
+use rand::{Rng, SeedableRng};
+use rand_chacha::ChaCha20Rng;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use serde_bytes::ByteArray;
 use tagged_base64::{TaggedBase64, Tb64Error};
@@ -39,6 +41,21 @@ impl Keypair {
             return Err(InvalidKeypair(()));
         }
         Ok(Self { pair })
+    }
+
+    pub fn generated_from_seed_indexed(seed: [u8; 32], index: u64) -> Result<Self, InvalidKeypair> {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(&seed);
+        hasher.update(&index.to_be_bytes());
+        let mut rng = ChaCha20Rng::from_seed(*hasher.finalize().as_bytes());
+        let seed: [u8; 32] = rng.r#gen();
+        let sk = x25519::SecretKey::new(seed);
+        let Ok(pk) = sk.recover_public_key() else {
+            return Err(InvalidKeypair(()));
+        };
+        Ok(Self {
+            pair: x25519::KeyPair { sk, pk },
+        })
     }
 
     pub fn derive_from<K: SignatureKey>(k: &K::PrivateKey) -> Self {
