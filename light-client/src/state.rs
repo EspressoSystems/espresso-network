@@ -530,6 +530,7 @@ where
                         tracing::warn!("allowed error in event: {err:#}");
                     }
                 }
+                tracing::info!(epoch, "finished Decaf catchup for epoch");
             }
             prev_quorum = Arc::new(stake_table_state_to_quorum(stake_table.clone())?);
         }
@@ -580,6 +581,7 @@ where
                 tracing::warn!(epoch, "failed to cache stake table: {err:#}");
             }
 
+            tracing::info!(epoch, "finished stake table catchup for epoch");
             prev_quorum = next_quorum;
         }
 

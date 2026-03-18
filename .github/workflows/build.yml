@@ -175,6 +175,7 @@ jobs:
           - cdn-whitelist
           - deploy
           - espresso-dev-node
+          - light-client-query-service
           - nasty-client
           - node-validator
           - orchestrator
@@ -283,6 +284,7 @@ jobs:
           - cdn-whitelist
           - deploy
           - espresso-dev-node
+          - light-client-query-service
           - nasty-client
           - node-validator
           - orchestrator
@@ -367,6 +369,7 @@ jobs:
           - cdn-whitelist
           - deploy
           - espresso-dev-node
+          - light-client-query-service
           - nasty-client
           - node-validator
           - orchestrator
