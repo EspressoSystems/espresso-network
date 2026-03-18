@@ -15,7 +15,8 @@ bytes = { workspace = true }
 ed25519-compact = { workspace = true }
 nohash-hasher = { workspace = true }
 parking_lot = { workspace = true }
-rand = "0.9.2"
+rand = "0.10.0"
+scopeguard = { workspace = true }
 serde = { workspace = true }
 serde_bytes = { workspace = true }
 snow = { workspace = true }

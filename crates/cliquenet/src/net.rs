@@ -71,10 +71,13 @@ const REPLY_TIMEOUT: Duration = Duration::from_secs(30);
 #[derive(Debug)]
 pub struct Network<K> {
     /// Name of this network.
-    name: &'static str,
+    pub(crate) name: &'static str,
 
     /// Log label.
-    label: K,
+    pub(crate) label: K,
+
+    /// Max. number of bytes per message.
+    pub(crate) max_message_size: usize,
 
     /// The network participants.
     parties: Mutex<HashMap<K, Role>>,
@@ -88,15 +91,14 @@ pub struct Network<K> {
     rx: AsyncMutex<Receiver<(K, Bytes, Option<OwnedSemaphorePermit>)>>,
 
     /// Handle of the server task that has been spawned by `Network`.
-    srv: JoinHandle<Result<Empty>>,
-
-    /// Max. number of bytes per message.
-    max_message_size: usize,
+    srv: Mutex<Option<JoinHandle<Result<Empty>>>>,
 }
 
 impl<K> Drop for Network<K> {
     fn drop(&mut self) {
-        self.srv.abort()
+        if let Some(srv) = self.srv.lock().take() {
+            srv.abort();
+        }
     }
 }
 
@@ -104,7 +106,7 @@ impl<K> Drop for Network<K> {
 #[derive(Debug)]
 pub(crate) enum Command<K> {
     /// Add the given peers.
-    Add(Vec<(K, PublicKey, Address)>),
+    Add(Role, Vec<(K, PublicKey, Address)>),
     /// Remove the given peers.
     Remove(Vec<K>),
     /// Assign a `Role` to the given peers.
@@ -218,6 +220,32 @@ enum Message {
     Pong(Timestamp),
 }
 
+impl<K> Network<K> {
+    pub fn public_key(&self) -> &K {
+        &self.label
+    }
+
+    pub fn name(&self) -> &str {
+        self.name
+    }
+
+    /// Get a clone of the MPSC sender.
+    pub(crate) fn sender(&self) -> Sender<Command<K>> {
+        self.tx.clone()
+    }
+}
+
+impl<K: Display> Network<K> {
+    pub async fn close(&self) {
+        let srv = self.srv.lock().take();
+        if let Some(srv) = srv {
+            info!(name = %self.name, node = %self.label, "aborting server task");
+            srv.abort();
+            let _ = srv.await;
+        }
+    }
+}
+
 impl<K> Network<K>
 where
     K: Eq + Ord + Clone + Display + Hash + Send + Sync + 'static,
@@ -294,24 +322,16 @@ where
             parties: Mutex::new(parties),
             rx: AsyncMutex::new(irx),
             tx: otx,
-            srv: spawn(server.run(listener)),
+            srv: Mutex::new(Some(spawn(server.run(listener)))),
             max_message_size: mmsze,
         })
     }
 
-    pub fn public_key(&self) -> &K {
-        &self.label
-    }
-
-    pub fn name(&self) -> &str {
-        self.name
-    }
-
-    pub fn parties(&self, r: Role) -> Vec<K> {
+    pub fn parties(&self, r: Option<Role>) -> Vec<K> {
         self.parties
             .lock()
             .iter()
-            .filter(|&(_, x)| r == *x)
+            .filter(|&(_, x)| r.map(|r| r == *x).unwrap_or(true))
             .map(|(k, _)| k.clone())
             .collect()
     }
@@ -361,15 +381,12 @@ where
     }
 
     /// Add the given peers to the network.
-    ///
-    /// NB that peers added here are passive. See `Network::assign` for
-    /// giving peers a different `Role`.
-    pub async fn add(&self, peers: Vec<(K, PublicKey, Address)>) -> Result<()> {
+    pub async fn add(&self, r: Role, peers: Vec<(K, PublicKey, Address)>) -> Result<()> {
         self.parties
             .lock()
-            .extend(peers.iter().map(|(p, ..)| (p.clone(), Role::Passive)));
+            .extend(peers.iter().map(|(p, ..)| (p.clone(), r)));
         self.tx
-            .send(Command::Add(peers))
+            .send(Command::Add(r, peers))
             .await
             .map_err(|_| NetworkError::ChannelClosed)
     }
@@ -402,11 +419,6 @@ where
             .send(Command::Assign(r, peers))
             .await
             .map_err(|_| NetworkError::ChannelClosed)
-    }
-
-    /// Get a clone of the MPSC sender.
-    pub(crate) fn sender(&self) -> Sender<Command<K>> {
-        self.tx.clone()
     }
 }
 
@@ -607,7 +619,7 @@ where
                     };
                 },
                 cmd = self.obound.recv() => match cmd {
-                    Some(Command::Add(peers)) => {
+                    Some(Command::Add(role, peers)) => {
                         #[cfg(feature = "metrics")]
                         Arc::make_mut(&mut self.metrics).add_parties(peers.iter().map(|(k, ..)| k).cloned());
                         for (k, x, a) in peers {
@@ -623,12 +635,14 @@ where
                             info!(
                                 name = %self.conf.name,
                                 node = %self.conf.label,
+                                role = %role,
                                 peer = %k,
+                                addr = %a,
                                 "adding peer"
                             );
                             let p = Peer {
                                 addr: a,
-                                role: Role::Passive,
+                                role,
                                 budget: self.conf.new_budget()
                             };
                             self.peers.insert(k.clone(), p);
@@ -1120,11 +1134,11 @@ where
                                 Ok(Type::Data) => {
                                     let n = state.lock().read_message(&f, &mut buf)?;
                                     msg.extend_from_slice(&buf[..n]);
-                                    if !h.is_partial() {
-                                        break;
-                                    }
                                     if msg.len() > max_message_size {
                                         return Err(NetworkError::MessageTooLarge);
+                                    }
+                                    if !h.is_partial() {
+                                        break;
                                     }
                                 }
                                 Err(t) => return Err(NetworkError::UnknownFrameType(t)),
