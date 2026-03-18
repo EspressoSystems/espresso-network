@@ -11,6 +11,7 @@ use espresso_types::{
         RewardAccountV1, RewardMerkleTreeV1,
     },
     v0_4::{PermittedRewardMerkleTreeV2, RewardAccountV2, RewardMerkleTreeV2},
+    v0_6::RewardAccountQueryDataV2,
 };
 use futures::future::Future;
 use hotshot::traits::ValidatedState as _;
@@ -38,6 +39,7 @@ use jf_merkle_tree_compat::{
     MerkleTreeScheme, prelude::MerkleNode,
 };
 use sqlx::{Encode, Row, Type};
+use vbs::version::Version;
 use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, EPOCH_VERSION};
 
 use super::{
@@ -242,6 +244,7 @@ impl RewardMerkleTreeDataSource for SqlStorage {
         &self,
         height: u64,
         account: Vec<u8>,
+        epoch_height: u64,
     ) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {
         async move {
             let mut tx = self
@@ -249,18 +252,51 @@ impl RewardMerkleTreeDataSource for SqlStorage {
                 .await
                 .context("opening transaction for state update")?;
 
+            let leaf = tx
+                .get_leaf(LeafId::<SeqTypes>::from(height as usize))
+                .await
+                .context(format!("leaf {height} not available"))?;
+            let header_version = leaf.header().version();
+
+            let proof_height = if header_version >= EPOCH_REWARD_VERSION {
+                if epoch_height > 0 && !height.is_multiple_of(epoch_height) {
+                    let epoch = epoch_from_block_number(height, epoch_height);
+                    let prev_epoch_last_block = epoch.saturating_sub(1) * epoch_height;
+                    // Verify the epoch boundary block is also V5+.
+                    // During V4→V5 upgrades, the previous epoch boundary may still be V4.
+                    let boundary_leaf = tx
+                        .get_leaf(LeafId::<SeqTypes>::from(prev_epoch_last_block as usize))
+                        .await
+                        .context(format!(
+                            "leaf {prev_epoch_last_block} not available at epoch boundary"
+                        ))?;
+                    ensure!(
+                        boundary_leaf.header().version() >= EPOCH_REWARD_VERSION,
+                        "no epoch reward proofs available"
+                    );
+                    prev_epoch_last_block
+                } else {
+                    height
+                }
+            } else {
+                height
+            };
+
             let row = sqlx::query(
                 r#"
-                SELECT proof 
+                SELECT proof
                 FROM reward_merkle_tree_v2_proofs
                 WHERE height = $1 AND account = $2
                 "#,
             )
-            .bind(height as i64)
+            .bind(proof_height as i64)
             .bind(account)
             .fetch_optional(tx.as_mut())
             .await?
-            .context(format!("Missing proofs at height {}", height))?;
+            .context(format!(
+                "Missing proofs at height {} (resolved from {})",
+                proof_height, height
+            ))?;
 
             row.try_get::<Vec<u8>, _>("proof")
                 .context("Missing field proof from row; this should never happen")
@@ -371,7 +407,113 @@ impl RewardMerkleTreeDataSource for SqlStorage {
             .0
         }
     }
+    fn persist_reward_proofs(
+        &self,
+        node_state: &NodeState,
+        height: u64,
+        version: Version,
+    ) -> impl Send + Future<Output = anyhow::Result<()>> {
+        async move {
+            // For V0.4 (per-block rewards), rate-limit since this is called every block.
+            // For V0.5+ (epoch rewards), this is only called at epoch boundaries.
+            if !cfg!(any(test, feature = "testing"))
+                && version < EPOCH_REWARD_VERSION
+                && !(height + node_state.node_id).is_multiple_of(30)
+            {
+                return Ok(());
+            }
+
+            let finalized_hotshot_height = if cfg!(any(test, feature = "testing")) {
+                height
+            } else {
+                match node_state.finalized_hotshot_height().await {
+                    Ok(h) => h,
+                    Err(err) => {
+                        tracing::warn!("failed to get finalized hotshot height: {err:#}");
+                        return Ok(());
+                    },
+                }
+            };
+
+            if self.proof_exists(finalized_hotshot_height).await {
+                return Ok(());
+            }
+
+            // Determine which height to load the reward tree from.
+            // For V0.5+, the tree is only stored at epoch boundary heights.
+            // For V0.4, the tree is stored at every block height.
+            let tree_height = if version >= EPOCH_REWARD_VERSION {
+                let epoch_height = node_state
+                    .epoch_height
+                    .context("epoch_height not set in node state")?;
+                if finalized_hotshot_height.is_multiple_of(epoch_height) {
+                    finalized_hotshot_height
+                } else {
+                    let prev_epoch_last_block =
+                        epoch_from_block_number(finalized_hotshot_height, epoch_height)
+                            .saturating_sub(1)
+                            * epoch_height;
+                    if prev_epoch_last_block == 0 {
+                        return Ok(());
+                    }
+                    // Verify the epoch boundary block is V5+, meaning epoch rewards
+                    // were actually saved there. Handles V4→V5 upgrades mid-epoch.
+                    let mut tx = self.read().await.context("opening read transaction")?;
+                    let leaf = tx
+                        .get_leaf(LeafId::<SeqTypes>::from(prev_epoch_last_block as usize))
+                        .await
+                        .context("leaf not available at epoch boundary")?;
+                    if leaf.header().version() < EPOCH_REWARD_VERSION {
+                        return Ok(());
+                    }
+                    prev_epoch_last_block
+                }
+            } else {
+                finalized_hotshot_height
+            };
+
+            if tree_height == 0 {
+                return Ok(());
+            }
+
+            let permitted_tree = match self.load_reward_merkle_tree_v2(tree_height).await {
+                Ok(tree) => tree,
+                Err(err) => {
+                    tracing::warn!(tree_height, "failed to load reward merkle tree: {err:#}");
+                    return Ok(());
+                },
+            };
+
+            let tree = permitted_tree.tree;
+
+            let iter = tree
+                .iter()
+                .filter_map(|(account, balance): (&RewardAccountV2, _)| {
+                    let proof = espresso_types::v0_6::RewardAccountProofV2::prove(
+                        &tree,
+                        (*account).into(),
+                    )?;
+                    let proof = RewardAccountQueryDataV2 {
+                        balance: (*balance).into(),
+                        proof: proof.0,
+                    };
+                    let serialized_account = bincode::serialize(&account).ok()?;
+                    let serialized_proof = bincode::serialize(&proof).ok()?;
+                    Some((serialized_account, serialized_proof))
+                });
+
+            if let Err(err) = self.persist_proofs(finalized_hotshot_height, iter).await {
+                tracing::warn!(
+                    finalized_hotshot_height,
+                    "failed to persist proofs: {err:#}"
+                );
+            }
+
+            Ok(())
+        }
+    }
 }
+
 impl CatchupStorage for SqlStorage {
     async fn get_reward_accounts_v1(
         &self,
@@ -637,8 +779,13 @@ impl RewardMerkleTreeDataSource for DataSource {
         &self,
         height: u64,
         account: Vec<u8>,
+        epoch_height: u64,
     ) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {
-        async move { self.as_ref().load_proof(height, account).await }
+        async move {
+            self.as_ref()
+                .load_proof(height, account, epoch_height)
+                .await
+        }
     }
 
     fn load_latest_proof(
@@ -650,6 +797,19 @@ impl RewardMerkleTreeDataSource for DataSource {
 
     fn proof_exists(&self, height: u64) -> impl Send + Future<Output = bool> {
         async move { self.as_ref().proof_exists(height).await }
+    }
+
+    fn persist_reward_proofs(
+        &self,
+        node_state: &NodeState,
+        height: u64,
+        version: Version,
+    ) -> impl Send + Future<Output = anyhow::Result<()>> {
+        async move {
+            self.as_ref()
+                .persist_reward_proofs(node_state, height, version)
+                .await
+        }
     }
 }
 

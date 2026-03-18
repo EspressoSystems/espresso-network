@@ -278,7 +278,7 @@ where
             .context("failed to save and gc reward merkle tree v2")?;
 
         storage
-            .persist_reward_proofs(instance, block_number)
+            .persist_reward_proofs(instance, block_number, version)
             .await
             .context("failed to persist reward proofs")?;
     }

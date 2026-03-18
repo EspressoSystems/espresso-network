@@ -23,8 +23,7 @@ use espresso_types::{
         RewardMerkleTreeV1, StakeTableEvent,
     },
     v0_4::{
-        PermittedRewardMerkleTreeV2, RewardAccountProofV2, RewardAccountQueryDataV2,
-        RewardAccountV2, RewardMerkleTreeV2,
+        PermittedRewardMerkleTreeV2, RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleTreeV2,
     },
 };
 use futures::{
@@ -1335,83 +1334,8 @@ pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
         &self,
         node_state: &NodeState,
         height: u64,
-    ) -> impl Send + Future<Output = anyhow::Result<()>> {
-        async move {
-            // it's imperative that we do not block the state update loop from this point on.
-            // ultimately, we would retry in the next iteration anyway;
-            // all the information already exists.
-            //
-            // in tests we run this check every block, while in release builds we do not. however,
-            // in either case the actual work should still not occur every block, since the proofs
-            // are not generated unless they were not already stored for the previous light client
-            // finalized height.
-
-            if !cfg!(any(test, feature = "testing"))
-                && !(height + node_state.node_id).is_multiple_of(30)
-            {
-                return Ok(());
-            }
-
-            let finalized_hotshot_height = if cfg!(any(test, feature = "testing")) {
-                height
-            } else {
-                match node_state.finalized_hotshot_height().await {
-                    Ok(h) => h,
-                    Err(err) => {
-                        tracing::warn!("failed to get finalized hotshot height: {err:#}");
-                        return Ok(());
-                    },
-                }
-            };
-
-            if self.proof_exists(finalized_hotshot_height).await {
-                return Ok(());
-            }
-
-            let permitted_tree = match self
-                .load_reward_merkle_tree_v2(finalized_hotshot_height)
-                .await
-            {
-                Ok(tree) => tree,
-                Err(err) => {
-                    tracing::warn!(
-                        finalized_hotshot_height,
-                        "failed to load reward merkle tree: {err:#}"
-                    );
-                    return Ok(());
-                },
-            };
-
-            let tree = permitted_tree.tree;
-            // we try to be careful to avoid allocating for all the proofs immediately,
-            // but note that there are no guarantees here (if e.g. the database is slow)
-
-            let iter = tree
-                .iter()
-                .filter_map(|(account, balance): (&RewardAccountV2, _)| {
-                    let proof = RewardAccountProofV2::prove(&tree, (*account).into())?;
-
-                    let proof = RewardAccountQueryDataV2 {
-                        balance: (*balance).into(),
-                        proof: proof.0,
-                    };
-
-                    let serialized_account = bincode::serialize(&account).ok()?;
-                    let serialized_proof = bincode::serialize(&proof).ok()?;
-
-                    Some((serialized_account, serialized_proof))
-                });
-
-            if let Err(err) = self.persist_proofs(finalized_hotshot_height, iter).await {
-                tracing::warn!(
-                    finalized_hotshot_height,
-                    "failed to persist proofs: {err:#}"
-                );
-            }
-
-            Ok(())
-        }
-    }
+        version: Version,
+    ) -> impl Send + Future<Output = anyhow::Result<()>>;
 
     fn load_reward_merkle_tree_v2(
         &self,
@@ -1433,19 +1357,11 @@ pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
 
     fn load_reward_account_proof_v2(
         &self,
-        height: u64,
-        account: RewardAccountV2,
+        _height: u64,
+        _account: RewardAccountV2,
     ) -> impl Send + Future<Output = anyhow::Result<RewardAccountQueryDataV2>> {
-        async move {
-            let serialized_account = bincode::serialize(&account).context(
-                "Failed to serialize RewardAccountV2 for lookup; this should never happen.",
-            )?;
-            let proof_bytes = self.load_proof(height, serialized_account).await?;
-
-            bincode::deserialize::<RewardAccountQueryDataV2>(&proof_bytes).context(
-                "Failed to deserialize RewardAccountQueryDataV2 for height {height} from storage; \
-                 this should never happen.",
-            )
+        async {
+            bail!("load_reward_account_proof_v2 is not supported for this data source");
         }
     }
 
@@ -1484,6 +1400,7 @@ pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
         &self,
         height: u64,
         account: Vec<u8>,
+        epoch_height: u64,
     ) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>>;
 
     fn load_latest_proof(
@@ -1502,6 +1419,17 @@ impl RewardMerkleTreeDataSource for hotshot_query_service::data_source::MetricsD
         _height: u64,
         _account: RewardAccountV1,
     ) -> impl Send + Future<Output = anyhow::Result<RewardAccountQueryDataV1>> {
+        async {
+            bail!("reward merklized state is not supported for this data source");
+        }
+    }
+
+    fn persist_reward_proofs(
+        &self,
+        _node_state: &NodeState,
+        _height: u64,
+        _version: Version,
+    ) -> impl Send + Future<Output = anyhow::Result<()>> {
         async {
             bail!("reward merklized state is not supported for this data source");
         }
@@ -1543,6 +1471,7 @@ impl RewardMerkleTreeDataSource for hotshot_query_service::data_source::MetricsD
         &self,
         _height: u64,
         _account: Vec<u8>,
+        _epoch_height: u64,
     ) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {
         async move {
             bail!("reward merklized state is not supported for this data source");
@@ -1567,7 +1496,7 @@ impl<T, S> RewardMerkleTreeDataSource
     for hotshot_query_service::data_source::ExtensibleDataSource<T, S>
 where
     T: RewardMerkleTreeDataSource,
-    S: Send + Sync + Clone + 'static,
+    S: Send + Sync + Clone + NodeStateDataSource + 'static,
 {
     async fn load_v1_reward_account_proof(
         &self,
@@ -1577,6 +1506,28 @@ where
         self.inner()
             .load_v1_reward_account_proof(height, account)
             .await
+    }
+
+    async fn load_reward_account_proof_v2(
+        &self,
+        height: u64,
+        account: RewardAccountV2,
+    ) -> anyhow::Result<RewardAccountQueryDataV2> {
+        let epoch_height = self
+            .as_ref()
+            .node_state()
+            .await
+            .epoch_height
+            .context("epoch height not found")?;
+        let serialized_account = bincode::serialize(&account)
+            .context("Failed to serialize RewardAccountV2 for lookup; this should never happen.")?;
+        let proof_bytes = self
+            .inner()
+            .load_proof(height, serialized_account, epoch_height)
+            .await?;
+
+        bincode::deserialize::<RewardAccountQueryDataV2>(&proof_bytes)
+            .context("Failed to deserialize RewardAccountQueryDataV2 from storage")
     }
 
     fn persist_tree(
@@ -1607,8 +1558,9 @@ where
         &self,
         height: u64,
         account: Vec<u8>,
+        epoch_height: u64,
     ) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {
-        async move { self.inner().load_proof(height, account).await }
+        async move { self.inner().load_proof(height, account, epoch_height).await }
     }
 
     fn load_latest_proof(
@@ -1620,6 +1572,19 @@ where
 
     fn proof_exists(&self, height: u64) -> impl Send + Future<Output = bool> {
         async move { self.inner().proof_exists(height).await }
+    }
+
+    fn persist_reward_proofs(
+        &self,
+        node_state: &NodeState,
+        height: u64,
+        version: Version,
+    ) -> impl Send + Future<Output = anyhow::Result<()>> {
+        async move {
+            self.inner()
+                .persist_reward_proofs(node_state, height, version)
+                .await
+        }
     }
 }
 

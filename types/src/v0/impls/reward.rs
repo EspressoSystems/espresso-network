@@ -833,7 +833,7 @@ pub async fn distribute_block_reward(
     let mut previously_distributed = parent_header.total_reward_distributed().unwrap_or_default();
 
     // Decide whether to use a fixed or dynamic block reward.
-    let block_reward = if version >= DRB_AND_HEADER_UPGRADE_VERSION {
+    let block_reward = if version == DRB_AND_HEADER_UPGRADE_VERSION {
         instance_state
             .block_reward(EpochNumber::new(*epoch))
             .await
@@ -846,7 +846,7 @@ pub async fn distribute_block_reward(
     // and the parent block is from V3 (which does not have a previously distributed reward field),
     // we need to recompute the previously distributed rewards
     // using the fixed block reward and the number of blocks in which fixed reward was distributed
-    if version >= DRB_AND_HEADER_UPGRADE_VERSION && parent_header.version() == EPOCH_VERSION {
+    if version == DRB_AND_HEADER_UPGRADE_VERSION && parent_header.version() == EPOCH_VERSION {
         ensure!(
             instance_state.epoch_start_block != 0,
             "epoch_start_block is zero"
