@@ -109,7 +109,7 @@
 <a href=#109 id=109 data-nosnippet>109</a>        launcher.metadata.test_config.epoch_height,
 <a href=#110 id=110 data-nosnippet>110</a>        launcher.metadata.test_config.epoch_start_block,
 <a href=#111 id=111 data-nosnippet>111</a>        <span class="macro">vec!</span>[],
-<a href=#112 id=112 data-nosnippet>112</a>        hotshot_config.upgrade,
+<a href=#112 id=112 data-nosnippet>112</a>        launcher.metadata.upgrade,
 <a href=#113 id=113 data-nosnippet>113</a>    )
 <a href=#114 id=114 data-nosnippet>114</a>    .<span class="kw">await
 <a href=#115 id=115 data-nosnippet>115</a>    </span>.unwrap();
@@ -147,324 +147,325 @@
 <a href=#147 id=147 data-nosnippet>147</a>        state_private_key,
 <a href=#148 id=148 data-nosnippet>148</a>        node_id,
 <a href=#149 id=149 data-nosnippet>149</a>        hotshot_config,
-<a href=#150 id=150 data-nosnippet>150</a>        coordinator,
-<a href=#151 id=151 data-nosnippet>151</a>        network,
-<a href=#152 id=152 data-nosnippet>152</a>        initializer,
-<a href=#153 id=153 data-nosnippet>153</a>        ConsensusMetricsValue::default(),
-<a href=#154 id=154 data-nosnippet>154</a>        storage,
-<a href=#155 id=155 data-nosnippet>155</a>        StorageMetricsValue::default(),
-<a href=#156 id=156 data-nosnippet>156</a>    )
-<a href=#157 id=157 data-nosnippet>157</a>    .<span class="kw">await
-<a href=#158 id=158 data-nosnippet>158</a>    </span>.expect(<span class="string">"Could not init hotshot"</span>);
-<a href=#159 id=159 data-nosnippet>159</a>
-<a href=#160 id=160 data-nosnippet>160</a>    (c, s, r, node_key_map)
-<a href=#161 id=161 data-nosnippet>161</a>}
-<a href=#162 id=162 data-nosnippet>162</a>
-<a href=#163 id=163 data-nosnippet>163</a><span class="doccomment">/// create certificate
-<a href=#164 id=164 data-nosnippet>164</a>/// # Panics
-<a href=#165 id=165 data-nosnippet>165</a>/// if we fail to sign the data
-<a href=#166 id=166 data-nosnippet>166</a></span><span class="kw">pub async fn </span>build_cert&lt;
-<a href=#167 id=167 data-nosnippet>167</a>    TYPES: NodeType,
-<a href=#168 id=168 data-nosnippet>168</a>    DATAType: Committable + Clone + Eq + Hash + Serialize + Debug + <span class="lifetime">'static</span>,
-<a href=#169 id=169 data-nosnippet>169</a>    VOTE: Vote&lt;TYPES, Commitment = DATAType&gt;,
-<a href=#170 id=170 data-nosnippet>170</a>    CERT: Certificate&lt;TYPES, VOTE::Commitment, Voteable = VOTE::Commitment&gt;,
-<a href=#171 id=171 data-nosnippet>171</a>&gt;(
-<a href=#172 id=172 data-nosnippet>172</a>    data: DATAType,
-<a href=#173 id=173 data-nosnippet>173</a>    epoch_membership: <span class="kw-2">&amp;</span>EpochMembership&lt;TYPES&gt;,
-<a href=#174 id=174 data-nosnippet>174</a>    view: ViewNumber,
-<a href=#175 id=175 data-nosnippet>175</a>    public_key: <span class="kw-2">&amp;</span>TYPES::SignatureKey,
-<a href=#176 id=176 data-nosnippet>176</a>    private_key: <span class="kw-2">&amp;</span>&lt;TYPES::SignatureKey <span class="kw">as </span>SignatureKey&gt;::PrivateKey,
-<a href=#177 id=177 data-nosnippet>177</a>    upgrade_lock: <span class="kw-2">&amp;</span>UpgradeLock&lt;TYPES&gt;,
-<a href=#178 id=178 data-nosnippet>178</a>) -&gt; CERT {
-<a href=#179 id=179 data-nosnippet>179</a>    <span class="kw">let </span>real_qc_sig = build_assembled_sig::&lt;TYPES, VOTE, CERT, DATAType&gt;(
-<a href=#180 id=180 data-nosnippet>180</a>        <span class="kw-2">&amp;</span>data,
-<a href=#181 id=181 data-nosnippet>181</a>        epoch_membership,
-<a href=#182 id=182 data-nosnippet>182</a>        view,
-<a href=#183 id=183 data-nosnippet>183</a>        upgrade_lock,
-<a href=#184 id=184 data-nosnippet>184</a>    )
-<a href=#185 id=185 data-nosnippet>185</a>    .<span class="kw">await</span>;
-<a href=#186 id=186 data-nosnippet>186</a>
-<a href=#187 id=187 data-nosnippet>187</a>    <span class="kw">let </span>vote = SimpleVote::&lt;TYPES, DATAType&gt;::create_signed_vote(
-<a href=#188 id=188 data-nosnippet>188</a>        data,
-<a href=#189 id=189 data-nosnippet>189</a>        view,
-<a href=#190 id=190 data-nosnippet>190</a>        public_key,
-<a href=#191 id=191 data-nosnippet>191</a>        private_key,
-<a href=#192 id=192 data-nosnippet>192</a>        upgrade_lock,
-<a href=#193 id=193 data-nosnippet>193</a>    )
-<a href=#194 id=194 data-nosnippet>194</a>    .<span class="kw">await
-<a href=#195 id=195 data-nosnippet>195</a>    </span>.expect(<span class="string">"Failed to sign data!"</span>);
-<a href=#196 id=196 data-nosnippet>196</a>
-<a href=#197 id=197 data-nosnippet>197</a>    <span class="kw">let </span>vote_commitment =
-<a href=#198 id=198 data-nosnippet>198</a>        VersionedVoteData::new(vote.date().clone(), vote.view_number(), upgrade_lock)
-<a href=#199 id=199 data-nosnippet>199</a>            .<span class="kw">await
-<a href=#200 id=200 data-nosnippet>200</a>            </span>.expect(<span class="string">"Failed to create VersionedVoteData!"</span>)
-<a href=#201 id=201 data-nosnippet>201</a>            .commit();
-<a href=#202 id=202 data-nosnippet>202</a>
-<a href=#203 id=203 data-nosnippet>203</a>    CERT::create_signed_certificate(
-<a href=#204 id=204 data-nosnippet>204</a>        vote_commitment,
-<a href=#205 id=205 data-nosnippet>205</a>        vote.date().clone(),
-<a href=#206 id=206 data-nosnippet>206</a>        real_qc_sig,
-<a href=#207 id=207 data-nosnippet>207</a>        vote.view_number(),
-<a href=#208 id=208 data-nosnippet>208</a>    )
-<a href=#209 id=209 data-nosnippet>209</a>}
-<a href=#210 id=210 data-nosnippet>210</a>
-<a href=#211 id=211 data-nosnippet>211</a><span class="kw">pub fn </span>vid_share&lt;TYPES: NodeType&gt;(
-<a href=#212 id=212 data-nosnippet>212</a>    shares: <span class="kw-2">&amp;</span>[Proposal&lt;TYPES, VidDisperseShare&lt;TYPES&gt;&gt;],
-<a href=#213 id=213 data-nosnippet>213</a>    pub_key: TYPES::SignatureKey,
-<a href=#214 id=214 data-nosnippet>214</a>) -&gt; Proposal&lt;TYPES, VidDisperseShare&lt;TYPES&gt;&gt; {
-<a href=#215 id=215 data-nosnippet>215</a>    shares
-<a href=#216 id=216 data-nosnippet>216</a>        .iter()
-<a href=#217 id=217 data-nosnippet>217</a>        .filter(|s| <span class="kw-2">*</span>s.data.recipient_key() == pub_key)
-<a href=#218 id=218 data-nosnippet>218</a>        .cloned()
-<a href=#219 id=219 data-nosnippet>219</a>        .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
-<a href=#220 id=220 data-nosnippet>220</a>        .first()
-<a href=#221 id=221 data-nosnippet>221</a>        .expect(<span class="string">"No VID for key"</span>)
-<a href=#222 id=222 data-nosnippet>222</a>        .clone()
-<a href=#223 id=223 data-nosnippet>223</a>}
-<a href=#224 id=224 data-nosnippet>224</a>
-<a href=#225 id=225 data-nosnippet>225</a><span class="doccomment">/// create signature
-<a href=#226 id=226 data-nosnippet>226</a>/// # Panics
-<a href=#227 id=227 data-nosnippet>227</a>/// if fails to convert node id into keypair
-<a href=#228 id=228 data-nosnippet>228</a></span><span class="kw">pub async fn </span>build_assembled_sig&lt;
-<a href=#229 id=229 data-nosnippet>229</a>    TYPES: NodeType,
-<a href=#230 id=230 data-nosnippet>230</a>    VOTE: Vote&lt;TYPES&gt;,
-<a href=#231 id=231 data-nosnippet>231</a>    CERT: Certificate&lt;TYPES, VOTE::Commitment, Voteable = VOTE::Commitment&gt;,
-<a href=#232 id=232 data-nosnippet>232</a>    DATAType: Committable + Clone + Eq + Hash + Serialize + Debug + <span class="lifetime">'static</span>,
-<a href=#233 id=233 data-nosnippet>233</a>&gt;(
-<a href=#234 id=234 data-nosnippet>234</a>    data: <span class="kw-2">&amp;</span>DATAType,
-<a href=#235 id=235 data-nosnippet>235</a>    epoch_membership: <span class="kw-2">&amp;</span>EpochMembership&lt;TYPES&gt;,
-<a href=#236 id=236 data-nosnippet>236</a>    view: ViewNumber,
-<a href=#237 id=237 data-nosnippet>237</a>    upgrade_lock: <span class="kw-2">&amp;</span>UpgradeLock&lt;TYPES&gt;,
-<a href=#238 id=238 data-nosnippet>238</a>) -&gt; &lt;TYPES::SignatureKey <span class="kw">as </span>SignatureKey&gt;::QcType {
-<a href=#239 id=239 data-nosnippet>239</a>    <span class="kw">let </span>stake_table = CERT::stake_table(epoch_membership).<span class="kw">await</span>;
-<a href=#240 id=240 data-nosnippet>240</a>    <span class="kw">let </span>stake_table_entries = StakeTableEntries::&lt;TYPES&gt;::from(stake_table.clone()).<span class="number">0</span>;
-<a href=#241 id=241 data-nosnippet>241</a>    <span class="kw">let </span>real_qc_pp: &lt;TYPES::SignatureKey <span class="kw">as </span>SignatureKey&gt;::QcParams&lt;<span class="lifetime">'_</span>&gt; =
-<a href=#242 id=242 data-nosnippet>242</a>        &lt;TYPES::SignatureKey <span class="kw">as </span>SignatureKey&gt;::public_parameter(
-<a href=#243 id=243 data-nosnippet>243</a>            <span class="kw-2">&amp;</span>stake_table_entries,
-<a href=#244 id=244 data-nosnippet>244</a>            CERT::threshold(epoch_membership).<span class="kw">await</span>,
-<a href=#245 id=245 data-nosnippet>245</a>        );
-<a href=#246 id=246 data-nosnippet>246</a>
-<a href=#247 id=247 data-nosnippet>247</a>    <span class="kw">let </span>total_nodes = stake_table.len();
-<a href=#248 id=248 data-nosnippet>248</a>    <span class="kw">let </span>signers = <span class="macro">bitvec!</span>[<span class="number">1</span>; total_nodes];
-<a href=#249 id=249 data-nosnippet>249</a>    <span class="kw">let </span><span class="kw-2">mut </span>sig_lists = Vec::new();
-<a href=#250 id=250 data-nosnippet>250</a>
-<a href=#251 id=251 data-nosnippet>251</a>    <span class="comment">// assemble the vote
-<a href=#252 id=252 data-nosnippet>252</a>    </span><span class="kw">for </span>node_id <span class="kw">in </span><span class="number">0</span>..total_nodes {
-<a href=#253 id=253 data-nosnippet>253</a>        <span class="kw">let </span>(private_key_i, public_key_i) = key_pair_for_id::&lt;TYPES&gt;(node_id.try_into().unwrap());
-<a href=#254 id=254 data-nosnippet>254</a>        <span class="kw">let </span>vote: SimpleVote&lt;TYPES, DATAType&gt; = SimpleVote::&lt;TYPES, DATAType&gt;::create_signed_vote(
-<a href=#255 id=255 data-nosnippet>255</a>            data.clone(),
-<a href=#256 id=256 data-nosnippet>256</a>            view,
-<a href=#257 id=257 data-nosnippet>257</a>            <span class="kw-2">&amp;</span>public_key_i,
-<a href=#258 id=258 data-nosnippet>258</a>            <span class="kw-2">&amp;</span>private_key_i,
-<a href=#259 id=259 data-nosnippet>259</a>            upgrade_lock,
-<a href=#260 id=260 data-nosnippet>260</a>        )
-<a href=#261 id=261 data-nosnippet>261</a>        .<span class="kw">await
-<a href=#262 id=262 data-nosnippet>262</a>        </span>.expect(<span class="string">"Failed to sign data!"</span>);
-<a href=#263 id=263 data-nosnippet>263</a>        <span class="kw">let </span>original_signature: &lt;TYPES::SignatureKey <span class="kw">as </span>SignatureKey&gt;::PureAssembledSignatureType =
-<a href=#264 id=264 data-nosnippet>264</a>            vote.signature();
-<a href=#265 id=265 data-nosnippet>265</a>        sig_lists.push(original_signature);
-<a href=#266 id=266 data-nosnippet>266</a>    }
-<a href=#267 id=267 data-nosnippet>267</a>
-<a href=#268 id=268 data-nosnippet>268</a>    &lt;TYPES::SignatureKey <span class="kw">as </span>SignatureKey&gt;::assemble(
-<a href=#269 id=269 data-nosnippet>269</a>        <span class="kw-2">&amp;</span>real_qc_pp,
-<a href=#270 id=270 data-nosnippet>270</a>        signers.as_bitslice(),
-<a href=#271 id=271 data-nosnippet>271</a>        <span class="kw-2">&amp;</span>sig_lists[..],
-<a href=#272 id=272 data-nosnippet>272</a>    )
-<a href=#273 id=273 data-nosnippet>273</a>}
-<a href=#274 id=274 data-nosnippet>274</a>
-<a href=#275 id=275 data-nosnippet>275</a><span class="doccomment">/// get the keypair for a node id
-<a href=#276 id=276 data-nosnippet>276</a></span><span class="attr">#[must_use]
-<a href=#277 id=277 data-nosnippet>277</a></span><span class="kw">pub fn </span>key_pair_for_id&lt;TYPES: NodeType&gt;(
-<a href=#278 id=278 data-nosnippet>278</a>    node_id: u64,
-<a href=#279 id=279 data-nosnippet>279</a>) -&gt; (
-<a href=#280 id=280 data-nosnippet>280</a>    &lt;TYPES::SignatureKey <span class="kw">as </span>SignatureKey&gt;::PrivateKey,
-<a href=#281 id=281 data-nosnippet>281</a>    TYPES::SignatureKey,
-<a href=#282 id=282 data-nosnippet>282</a>) {
-<a href=#283 id=283 data-nosnippet>283</a>    <span class="kw">let </span>private_key = TYPES::SignatureKey::generated_from_seed_indexed([<span class="number">0u8</span>; <span class="number">32</span>], node_id).<span class="number">1</span>;
-<a href=#284 id=284 data-nosnippet>284</a>    <span class="kw">let </span>public_key = &lt;TYPES <span class="kw">as </span>NodeType&gt;::SignatureKey::from_private(<span class="kw-2">&amp;</span>private_key);
-<a href=#285 id=285 data-nosnippet>285</a>    (private_key, public_key)
-<a href=#286 id=286 data-nosnippet>286</a>}
-<a href=#287 id=287 data-nosnippet>287</a>
-<a href=#288 id=288 data-nosnippet>288</a><span class="kw">pub async fn </span>da_payload_commitment&lt;TYPES: NodeType&gt;(
-<a href=#289 id=289 data-nosnippet>289</a>    membership: <span class="kw-2">&amp;</span>EpochMembership&lt;TYPES&gt;,
-<a href=#290 id=290 data-nosnippet>290</a>    transactions: Vec&lt;TestTransaction&gt;,
-<a href=#291 id=291 data-nosnippet>291</a>    metadata: <span class="kw-2">&amp;</span>&lt;TYPES::BlockPayload <span class="kw">as </span>BlockPayload&lt;TYPES&gt;&gt;::Metadata,
-<a href=#292 id=292 data-nosnippet>292</a>    version: Version,
-<a href=#293 id=293 data-nosnippet>293</a>) -&gt; VidCommitment {
-<a href=#294 id=294 data-nosnippet>294</a>    <span class="kw">let </span>encoded_transactions = TestTransaction::encode(<span class="kw-2">&amp;</span>transactions);
-<a href=#295 id=295 data-nosnippet>295</a>
-<a href=#296 id=296 data-nosnippet>296</a>    vid_commitment(
-<a href=#297 id=297 data-nosnippet>297</a>        <span class="kw-2">&amp;</span>encoded_transactions,
-<a href=#298 id=298 data-nosnippet>298</a>        <span class="kw-2">&amp;</span>metadata.encode(),
-<a href=#299 id=299 data-nosnippet>299</a>        membership.total_nodes().<span class="kw">await</span>,
-<a href=#300 id=300 data-nosnippet>300</a>        version,
-<a href=#301 id=301 data-nosnippet>301</a>    )
-<a href=#302 id=302 data-nosnippet>302</a>}
-<a href=#303 id=303 data-nosnippet>303</a>
-<a href=#304 id=304 data-nosnippet>304</a><span class="kw">pub async fn </span>build_payload_commitment&lt;TYPES: NodeType&gt;(
-<a href=#305 id=305 data-nosnippet>305</a>    membership: <span class="kw-2">&amp;</span>EpochMembership&lt;TYPES&gt;,
-<a href=#306 id=306 data-nosnippet>306</a>    view: ViewNumber,
-<a href=#307 id=307 data-nosnippet>307</a>    version: Version,
-<a href=#308 id=308 data-nosnippet>308</a>) -&gt; VidCommitment {
-<a href=#309 id=309 data-nosnippet>309</a>    <span class="comment">// Make some empty encoded transactions, we just care about having a commitment handy for the
-<a href=#310 id=310 data-nosnippet>310</a>    // later calls. We need the VID commitment to be able to propose later.
-<a href=#311 id=311 data-nosnippet>311</a>    </span><span class="kw">let </span>encoded_transactions = Vec::new();
-<a href=#312 id=312 data-nosnippet>312</a>    <span class="kw">let </span>num_storage_nodes = membership.committee_members(view).<span class="kw">await</span>.len();
-<a href=#313 id=313 data-nosnippet>313</a>    vid_commitment(<span class="kw-2">&amp;</span>encoded_transactions, <span class="kw-2">&amp;</span>[], num_storage_nodes, version)
-<a href=#314 id=314 data-nosnippet>314</a>}
-<a href=#315 id=315 data-nosnippet>315</a>
-<a href=#316 id=316 data-nosnippet>316</a><span class="kw">pub async fn </span>build_vid_proposal&lt;TYPES: NodeType&gt;(
-<a href=#317 id=317 data-nosnippet>317</a>    membership: <span class="kw-2">&amp;</span>EpochMembership&lt;TYPES&gt;,
-<a href=#318 id=318 data-nosnippet>318</a>    view_number: ViewNumber,
-<a href=#319 id=319 data-nosnippet>319</a>    epoch_number: <span class="prelude-ty">Option</span>&lt;EpochNumber&gt;,
-<a href=#320 id=320 data-nosnippet>320</a>    payload: <span class="kw-2">&amp;</span>TYPES::BlockPayload,
-<a href=#321 id=321 data-nosnippet>321</a>    metadata: <span class="kw-2">&amp;</span>&lt;TYPES::BlockPayload <span class="kw">as </span>BlockPayload&lt;TYPES&gt;&gt;::Metadata,
-<a href=#322 id=322 data-nosnippet>322</a>    private_key: <span class="kw-2">&amp;</span>&lt;TYPES::SignatureKey <span class="kw">as </span>SignatureKey&gt;::PrivateKey,
-<a href=#323 id=323 data-nosnippet>323</a>    upgrade_lock: <span class="kw-2">&amp;</span>UpgradeLock&lt;TYPES&gt;,
-<a href=#324 id=324 data-nosnippet>324</a>) -&gt; (
-<a href=#325 id=325 data-nosnippet>325</a>    Proposal&lt;TYPES, VidDisperse&lt;TYPES&gt;&gt;,
-<a href=#326 id=326 data-nosnippet>326</a>    Vec&lt;Proposal&lt;TYPES, VidDisperseShare&lt;TYPES&gt;&gt;&gt;,
-<a href=#327 id=327 data-nosnippet>327</a>) {
-<a href=#328 id=328 data-nosnippet>328</a>    <span class="kw">let </span>VidDisperseAndDuration {
-<a href=#329 id=329 data-nosnippet>329</a>        disperse: vid_disperse,
-<a href=#330 id=330 data-nosnippet>330</a>        duration: <span class="kw">_</span>,
-<a href=#331 id=331 data-nosnippet>331</a>    } = VidDisperse::calculate_vid_disperse(
-<a href=#332 id=332 data-nosnippet>332</a>        payload,
-<a href=#333 id=333 data-nosnippet>333</a>        <span class="kw-2">&amp;</span>membership.coordinator,
-<a href=#334 id=334 data-nosnippet>334</a>        view_number,
-<a href=#335 id=335 data-nosnippet>335</a>        epoch_number,
+<a href=#150 id=150 data-nosnippet>150</a>        launcher.metadata.upgrade,
+<a href=#151 id=151 data-nosnippet>151</a>        coordinator,
+<a href=#152 id=152 data-nosnippet>152</a>        network,
+<a href=#153 id=153 data-nosnippet>153</a>        initializer,
+<a href=#154 id=154 data-nosnippet>154</a>        ConsensusMetricsValue::default(),
+<a href=#155 id=155 data-nosnippet>155</a>        storage,
+<a href=#156 id=156 data-nosnippet>156</a>        StorageMetricsValue::default(),
+<a href=#157 id=157 data-nosnippet>157</a>    )
+<a href=#158 id=158 data-nosnippet>158</a>    .<span class="kw">await
+<a href=#159 id=159 data-nosnippet>159</a>    </span>.expect(<span class="string">"Could not init hotshot"</span>);
+<a href=#160 id=160 data-nosnippet>160</a>
+<a href=#161 id=161 data-nosnippet>161</a>    (c, s, r, node_key_map)
+<a href=#162 id=162 data-nosnippet>162</a>}
+<a href=#163 id=163 data-nosnippet>163</a>
+<a href=#164 id=164 data-nosnippet>164</a><span class="doccomment">/// create certificate
+<a href=#165 id=165 data-nosnippet>165</a>/// # Panics
+<a href=#166 id=166 data-nosnippet>166</a>/// if we fail to sign the data
+<a href=#167 id=167 data-nosnippet>167</a></span><span class="kw">pub async fn </span>build_cert&lt;
+<a href=#168 id=168 data-nosnippet>168</a>    TYPES: NodeType,
+<a href=#169 id=169 data-nosnippet>169</a>    DATAType: Committable + Clone + Eq + Hash + Serialize + Debug + <span class="lifetime">'static</span>,
+<a href=#170 id=170 data-nosnippet>170</a>    VOTE: Vote&lt;TYPES, Commitment = DATAType&gt;,
+<a href=#171 id=171 data-nosnippet>171</a>    CERT: Certificate&lt;TYPES, VOTE::Commitment, Voteable = VOTE::Commitment&gt;,
+<a href=#172 id=172 data-nosnippet>172</a>&gt;(
+<a href=#173 id=173 data-nosnippet>173</a>    data: DATAType,
+<a href=#174 id=174 data-nosnippet>174</a>    epoch_membership: <span class="kw-2">&amp;</span>EpochMembership&lt;TYPES&gt;,
+<a href=#175 id=175 data-nosnippet>175</a>    view: ViewNumber,
+<a href=#176 id=176 data-nosnippet>176</a>    public_key: <span class="kw-2">&amp;</span>TYPES::SignatureKey,
+<a href=#177 id=177 data-nosnippet>177</a>    private_key: <span class="kw-2">&amp;</span>&lt;TYPES::SignatureKey <span class="kw">as </span>SignatureKey&gt;::PrivateKey,
+<a href=#178 id=178 data-nosnippet>178</a>    upgrade_lock: <span class="kw-2">&amp;</span>UpgradeLock&lt;TYPES&gt;,
+<a href=#179 id=179 data-nosnippet>179</a>) -&gt; CERT {
+<a href=#180 id=180 data-nosnippet>180</a>    <span class="kw">let </span>real_qc_sig = build_assembled_sig::&lt;TYPES, VOTE, CERT, DATAType&gt;(
+<a href=#181 id=181 data-nosnippet>181</a>        <span class="kw-2">&amp;</span>data,
+<a href=#182 id=182 data-nosnippet>182</a>        epoch_membership,
+<a href=#183 id=183 data-nosnippet>183</a>        view,
+<a href=#184 id=184 data-nosnippet>184</a>        upgrade_lock,
+<a href=#185 id=185 data-nosnippet>185</a>    )
+<a href=#186 id=186 data-nosnippet>186</a>    .<span class="kw">await</span>;
+<a href=#187 id=187 data-nosnippet>187</a>
+<a href=#188 id=188 data-nosnippet>188</a>    <span class="kw">let </span>vote = SimpleVote::&lt;TYPES, DATAType&gt;::create_signed_vote(
+<a href=#189 id=189 data-nosnippet>189</a>        data,
+<a href=#190 id=190 data-nosnippet>190</a>        view,
+<a href=#191 id=191 data-nosnippet>191</a>        public_key,
+<a href=#192 id=192 data-nosnippet>192</a>        private_key,
+<a href=#193 id=193 data-nosnippet>193</a>        upgrade_lock,
+<a href=#194 id=194 data-nosnippet>194</a>    )
+<a href=#195 id=195 data-nosnippet>195</a>    .<span class="kw">await
+<a href=#196 id=196 data-nosnippet>196</a>    </span>.expect(<span class="string">"Failed to sign data!"</span>);
+<a href=#197 id=197 data-nosnippet>197</a>
+<a href=#198 id=198 data-nosnippet>198</a>    <span class="kw">let </span>vote_commitment =
+<a href=#199 id=199 data-nosnippet>199</a>        VersionedVoteData::new(vote.date().clone(), vote.view_number(), upgrade_lock)
+<a href=#200 id=200 data-nosnippet>200</a>            .<span class="kw">await
+<a href=#201 id=201 data-nosnippet>201</a>            </span>.expect(<span class="string">"Failed to create VersionedVoteData!"</span>)
+<a href=#202 id=202 data-nosnippet>202</a>            .commit();
+<a href=#203 id=203 data-nosnippet>203</a>
+<a href=#204 id=204 data-nosnippet>204</a>    CERT::create_signed_certificate(
+<a href=#205 id=205 data-nosnippet>205</a>        vote_commitment,
+<a href=#206 id=206 data-nosnippet>206</a>        vote.date().clone(),
+<a href=#207 id=207 data-nosnippet>207</a>        real_qc_sig,
+<a href=#208 id=208 data-nosnippet>208</a>        vote.view_number(),
+<a href=#209 id=209 data-nosnippet>209</a>    )
+<a href=#210 id=210 data-nosnippet>210</a>}
+<a href=#211 id=211 data-nosnippet>211</a>
+<a href=#212 id=212 data-nosnippet>212</a><span class="kw">pub fn </span>vid_share&lt;TYPES: NodeType&gt;(
+<a href=#213 id=213 data-nosnippet>213</a>    shares: <span class="kw-2">&amp;</span>[Proposal&lt;TYPES, VidDisperseShare&lt;TYPES&gt;&gt;],
+<a href=#214 id=214 data-nosnippet>214</a>    pub_key: TYPES::SignatureKey,
+<a href=#215 id=215 data-nosnippet>215</a>) -&gt; Proposal&lt;TYPES, VidDisperseShare&lt;TYPES&gt;&gt; {
+<a href=#216 id=216 data-nosnippet>216</a>    shares
+<a href=#217 id=217 data-nosnippet>217</a>        .iter()
+<a href=#218 id=218 data-nosnippet>218</a>        .filter(|s| <span class="kw-2">*</span>s.data.recipient_key() == pub_key)
+<a href=#219 id=219 data-nosnippet>219</a>        .cloned()
+<a href=#220 id=220 data-nosnippet>220</a>        .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
+<a href=#221 id=221 data-nosnippet>221</a>        .first()
+<a href=#222 id=222 data-nosnippet>222</a>        .expect(<span class="string">"No VID for key"</span>)
+<a href=#223 id=223 data-nosnippet>223</a>        .clone()
+<a href=#224 id=224 data-nosnippet>224</a>}
+<a href=#225 id=225 data-nosnippet>225</a>
+<a href=#226 id=226 data-nosnippet>226</a><span class="doccomment">/// create signature
+<a href=#227 id=227 data-nosnippet>227</a>/// # Panics
+<a href=#228 id=228 data-nosnippet>228</a>/// if fails to convert node id into keypair
+<a href=#229 id=229 data-nosnippet>229</a></span><span class="kw">pub async fn </span>build_assembled_sig&lt;
+<a href=#230 id=230 data-nosnippet>230</a>    TYPES: NodeType,
+<a href=#231 id=231 data-nosnippet>231</a>    VOTE: Vote&lt;TYPES&gt;,
+<a href=#232 id=232 data-nosnippet>232</a>    CERT: Certificate&lt;TYPES, VOTE::Commitment, Voteable = VOTE::Commitment&gt;,
+<a href=#233 id=233 data-nosnippet>233</a>    DATAType: Committable + Clone + Eq + Hash + Serialize + Debug + <span class="lifetime">'static</span>,
+<a href=#234 id=234 data-nosnippet>234</a>&gt;(
+<a href=#235 id=235 data-nosnippet>235</a>    data: <span class="kw-2">&amp;</span>DATAType,
+<a href=#236 id=236 data-nosnippet>236</a>    epoch_membership: <span class="kw-2">&amp;</span>EpochMembership&lt;TYPES&gt;,
+<a href=#237 id=237 data-nosnippet>237</a>    view: ViewNumber,
+<a href=#238 id=238 data-nosnippet>238</a>    upgrade_lock: <span class="kw-2">&amp;</span>UpgradeLock&lt;TYPES&gt;,
+<a href=#239 id=239 data-nosnippet>239</a>) -&gt; &lt;TYPES::SignatureKey <span class="kw">as </span>SignatureKey&gt;::QcType {
+<a href=#240 id=240 data-nosnippet>240</a>    <span class="kw">let </span>stake_table = CERT::stake_table(epoch_membership).<span class="kw">await</span>;
+<a href=#241 id=241 data-nosnippet>241</a>    <span class="kw">let </span>stake_table_entries = StakeTableEntries::&lt;TYPES&gt;::from(stake_table.clone()).<span class="number">0</span>;
+<a href=#242 id=242 data-nosnippet>242</a>    <span class="kw">let </span>real_qc_pp: &lt;TYPES::SignatureKey <span class="kw">as </span>SignatureKey&gt;::QcParams&lt;<span class="lifetime">'_</span>&gt; =
+<a href=#243 id=243 data-nosnippet>243</a>        &lt;TYPES::SignatureKey <span class="kw">as </span>SignatureKey&gt;::public_parameter(
+<a href=#244 id=244 data-nosnippet>244</a>            <span class="kw-2">&amp;</span>stake_table_entries,
+<a href=#245 id=245 data-nosnippet>245</a>            CERT::threshold(epoch_membership).<span class="kw">await</span>,
+<a href=#246 id=246 data-nosnippet>246</a>        );
+<a href=#247 id=247 data-nosnippet>247</a>
+<a href=#248 id=248 data-nosnippet>248</a>    <span class="kw">let </span>total_nodes = stake_table.len();
+<a href=#249 id=249 data-nosnippet>249</a>    <span class="kw">let </span>signers = <span class="macro">bitvec!</span>[<span class="number">1</span>; total_nodes];
+<a href=#250 id=250 data-nosnippet>250</a>    <span class="kw">let </span><span class="kw-2">mut </span>sig_lists = Vec::new();
+<a href=#251 id=251 data-nosnippet>251</a>
+<a href=#252 id=252 data-nosnippet>252</a>    <span class="comment">// assemble the vote
+<a href=#253 id=253 data-nosnippet>253</a>    </span><span class="kw">for </span>node_id <span class="kw">in </span><span class="number">0</span>..total_nodes {
+<a href=#254 id=254 data-nosnippet>254</a>        <span class="kw">let </span>(private_key_i, public_key_i) = key_pair_for_id::&lt;TYPES&gt;(node_id.try_into().unwrap());
+<a href=#255 id=255 data-nosnippet>255</a>        <span class="kw">let </span>vote: SimpleVote&lt;TYPES, DATAType&gt; = SimpleVote::&lt;TYPES, DATAType&gt;::create_signed_vote(
+<a href=#256 id=256 data-nosnippet>256</a>            data.clone(),
+<a href=#257 id=257 data-nosnippet>257</a>            view,
+<a href=#258 id=258 data-nosnippet>258</a>            <span class="kw-2">&amp;</span>public_key_i,
+<a href=#259 id=259 data-nosnippet>259</a>            <span class="kw-2">&amp;</span>private_key_i,
+<a href=#260 id=260 data-nosnippet>260</a>            upgrade_lock,
+<a href=#261 id=261 data-nosnippet>261</a>        )
+<a href=#262 id=262 data-nosnippet>262</a>        .<span class="kw">await
+<a href=#263 id=263 data-nosnippet>263</a>        </span>.expect(<span class="string">"Failed to sign data!"</span>);
+<a href=#264 id=264 data-nosnippet>264</a>        <span class="kw">let </span>original_signature: &lt;TYPES::SignatureKey <span class="kw">as </span>SignatureKey&gt;::PureAssembledSignatureType =
+<a href=#265 id=265 data-nosnippet>265</a>            vote.signature();
+<a href=#266 id=266 data-nosnippet>266</a>        sig_lists.push(original_signature);
+<a href=#267 id=267 data-nosnippet>267</a>    }
+<a href=#268 id=268 data-nosnippet>268</a>
+<a href=#269 id=269 data-nosnippet>269</a>    &lt;TYPES::SignatureKey <span class="kw">as </span>SignatureKey&gt;::assemble(
+<a href=#270 id=270 data-nosnippet>270</a>        <span class="kw-2">&amp;</span>real_qc_pp,
+<a href=#271 id=271 data-nosnippet>271</a>        signers.as_bitslice(),
+<a href=#272 id=272 data-nosnippet>272</a>        <span class="kw-2">&amp;</span>sig_lists[..],
+<a href=#273 id=273 data-nosnippet>273</a>    )
+<a href=#274 id=274 data-nosnippet>274</a>}
+<a href=#275 id=275 data-nosnippet>275</a>
+<a href=#276 id=276 data-nosnippet>276</a><span class="doccomment">/// get the keypair for a node id
+<a href=#277 id=277 data-nosnippet>277</a></span><span class="attr">#[must_use]
+<a href=#278 id=278 data-nosnippet>278</a></span><span class="kw">pub fn </span>key_pair_for_id&lt;TYPES: NodeType&gt;(
+<a href=#279 id=279 data-nosnippet>279</a>    node_id: u64,
+<a href=#280 id=280 data-nosnippet>280</a>) -&gt; (
+<a href=#281 id=281 data-nosnippet>281</a>    &lt;TYPES::SignatureKey <span class="kw">as </span>SignatureKey&gt;::PrivateKey,
+<a href=#282 id=282 data-nosnippet>282</a>    TYPES::SignatureKey,
+<a href=#283 id=283 data-nosnippet>283</a>) {
+<a href=#284 id=284 data-nosnippet>284</a>    <span class="kw">let </span>private_key = TYPES::SignatureKey::generated_from_seed_indexed([<span class="number">0u8</span>; <span class="number">32</span>], node_id).<span class="number">1</span>;
+<a href=#285 id=285 data-nosnippet>285</a>    <span class="kw">let </span>public_key = &lt;TYPES <span class="kw">as </span>NodeType&gt;::SignatureKey::from_private(<span class="kw-2">&amp;</span>private_key);
+<a href=#286 id=286 data-nosnippet>286</a>    (private_key, public_key)
+<a href=#287 id=287 data-nosnippet>287</a>}
+<a href=#288 id=288 data-nosnippet>288</a>
+<a href=#289 id=289 data-nosnippet>289</a><span class="kw">pub async fn </span>da_payload_commitment&lt;TYPES: NodeType&gt;(
+<a href=#290 id=290 data-nosnippet>290</a>    membership: <span class="kw-2">&amp;</span>EpochMembership&lt;TYPES&gt;,
+<a href=#291 id=291 data-nosnippet>291</a>    transactions: Vec&lt;TestTransaction&gt;,
+<a href=#292 id=292 data-nosnippet>292</a>    metadata: <span class="kw-2">&amp;</span>&lt;TYPES::BlockPayload <span class="kw">as </span>BlockPayload&lt;TYPES&gt;&gt;::Metadata,
+<a href=#293 id=293 data-nosnippet>293</a>    version: Version,
+<a href=#294 id=294 data-nosnippet>294</a>) -&gt; VidCommitment {
+<a href=#295 id=295 data-nosnippet>295</a>    <span class="kw">let </span>encoded_transactions = TestTransaction::encode(<span class="kw-2">&amp;</span>transactions);
+<a href=#296 id=296 data-nosnippet>296</a>
+<a href=#297 id=297 data-nosnippet>297</a>    vid_commitment(
+<a href=#298 id=298 data-nosnippet>298</a>        <span class="kw-2">&amp;</span>encoded_transactions,
+<a href=#299 id=299 data-nosnippet>299</a>        <span class="kw-2">&amp;</span>metadata.encode(),
+<a href=#300 id=300 data-nosnippet>300</a>        membership.total_nodes().<span class="kw">await</span>,
+<a href=#301 id=301 data-nosnippet>301</a>        version,
+<a href=#302 id=302 data-nosnippet>302</a>    )
+<a href=#303 id=303 data-nosnippet>303</a>}
+<a href=#304 id=304 data-nosnippet>304</a>
+<a href=#305 id=305 data-nosnippet>305</a><span class="kw">pub async fn </span>build_payload_commitment&lt;TYPES: NodeType&gt;(
+<a href=#306 id=306 data-nosnippet>306</a>    membership: <span class="kw-2">&amp;</span>EpochMembership&lt;TYPES&gt;,
+<a href=#307 id=307 data-nosnippet>307</a>    view: ViewNumber,
+<a href=#308 id=308 data-nosnippet>308</a>    version: Version,
+<a href=#309 id=309 data-nosnippet>309</a>) -&gt; VidCommitment {
+<a href=#310 id=310 data-nosnippet>310</a>    <span class="comment">// Make some empty encoded transactions, we just care about having a commitment handy for the
+<a href=#311 id=311 data-nosnippet>311</a>    // later calls. We need the VID commitment to be able to propose later.
+<a href=#312 id=312 data-nosnippet>312</a>    </span><span class="kw">let </span>encoded_transactions = Vec::new();
+<a href=#313 id=313 data-nosnippet>313</a>    <span class="kw">let </span>num_storage_nodes = membership.committee_members(view).<span class="kw">await</span>.len();
+<a href=#314 id=314 data-nosnippet>314</a>    vid_commitment(<span class="kw-2">&amp;</span>encoded_transactions, <span class="kw-2">&amp;</span>[], num_storage_nodes, version)
+<a href=#315 id=315 data-nosnippet>315</a>}
+<a href=#316 id=316 data-nosnippet>316</a>
+<a href=#317 id=317 data-nosnippet>317</a><span class="kw">pub async fn </span>build_vid_proposal&lt;TYPES: NodeType&gt;(
+<a href=#318 id=318 data-nosnippet>318</a>    membership: <span class="kw-2">&amp;</span>EpochMembership&lt;TYPES&gt;,
+<a href=#319 id=319 data-nosnippet>319</a>    view_number: ViewNumber,
+<a href=#320 id=320 data-nosnippet>320</a>    epoch_number: <span class="prelude-ty">Option</span>&lt;EpochNumber&gt;,
+<a href=#321 id=321 data-nosnippet>321</a>    payload: <span class="kw-2">&amp;</span>TYPES::BlockPayload,
+<a href=#322 id=322 data-nosnippet>322</a>    metadata: <span class="kw-2">&amp;</span>&lt;TYPES::BlockPayload <span class="kw">as </span>BlockPayload&lt;TYPES&gt;&gt;::Metadata,
+<a href=#323 id=323 data-nosnippet>323</a>    private_key: <span class="kw-2">&amp;</span>&lt;TYPES::SignatureKey <span class="kw">as </span>SignatureKey&gt;::PrivateKey,
+<a href=#324 id=324 data-nosnippet>324</a>    upgrade_lock: <span class="kw-2">&amp;</span>UpgradeLock&lt;TYPES&gt;,
+<a href=#325 id=325 data-nosnippet>325</a>) -&gt; (
+<a href=#326 id=326 data-nosnippet>326</a>    Proposal&lt;TYPES, VidDisperse&lt;TYPES&gt;&gt;,
+<a href=#327 id=327 data-nosnippet>327</a>    Vec&lt;Proposal&lt;TYPES, VidDisperseShare&lt;TYPES&gt;&gt;&gt;,
+<a href=#328 id=328 data-nosnippet>328</a>) {
+<a href=#329 id=329 data-nosnippet>329</a>    <span class="kw">let </span>VidDisperseAndDuration {
+<a href=#330 id=330 data-nosnippet>330</a>        disperse: vid_disperse,
+<a href=#331 id=331 data-nosnippet>331</a>        duration: <span class="kw">_</span>,
+<a href=#332 id=332 data-nosnippet>332</a>    } = VidDisperse::calculate_vid_disperse(
+<a href=#333 id=333 data-nosnippet>333</a>        payload,
+<a href=#334 id=334 data-nosnippet>334</a>        <span class="kw-2">&amp;</span>membership.coordinator,
+<a href=#335 id=335 data-nosnippet>335</a>        view_number,
 <a href=#336 id=336 data-nosnippet>336</a>        epoch_number,
-<a href=#337 id=337 data-nosnippet>337</a>        metadata,
-<a href=#338 id=338 data-nosnippet>338</a>        upgrade_lock,
-<a href=#339 id=339 data-nosnippet>339</a>    )
-<a href=#340 id=340 data-nosnippet>340</a>    .<span class="kw">await
-<a href=#341 id=341 data-nosnippet>341</a>    </span>.unwrap();
-<a href=#342 id=342 data-nosnippet>342</a>
-<a href=#343 id=343 data-nosnippet>343</a>    <span class="kw">let </span>signature =
-<a href=#344 id=344 data-nosnippet>344</a>        TYPES::SignatureKey::sign(private_key, vid_disperse.payload_commitment().as_ref())
-<a href=#345 id=345 data-nosnippet>345</a>            .expect(<span class="string">"Failed to sign VID commitment"</span>);
-<a href=#346 id=346 data-nosnippet>346</a>    <span class="kw">let </span>vid_disperse_proposal = Proposal {
-<a href=#347 id=347 data-nosnippet>347</a>        data: vid_disperse.clone(),
-<a href=#348 id=348 data-nosnippet>348</a>        signature,
-<a href=#349 id=349 data-nosnippet>349</a>        _pd: PhantomData,
-<a href=#350 id=350 data-nosnippet>350</a>    };
-<a href=#351 id=351 data-nosnippet>351</a>
-<a href=#352 id=352 data-nosnippet>352</a>    (
-<a href=#353 id=353 data-nosnippet>353</a>        vid_disperse_proposal,
-<a href=#354 id=354 data-nosnippet>354</a>        vid_disperse
-<a href=#355 id=355 data-nosnippet>355</a>            .to_shares()
-<a href=#356 id=356 data-nosnippet>356</a>            .into_iter()
-<a href=#357 id=357 data-nosnippet>357</a>            .map(|share| {
-<a href=#358 id=358 data-nosnippet>358</a>                share
-<a href=#359 id=359 data-nosnippet>359</a>                    .to_proposal(private_key)
-<a href=#360 id=360 data-nosnippet>360</a>                    .expect(<span class="string">"Failed to sign payload commitment"</span>)
-<a href=#361 id=361 data-nosnippet>361</a>            })
-<a href=#362 id=362 data-nosnippet>362</a>            .collect(),
-<a href=#363 id=363 data-nosnippet>363</a>    )
-<a href=#364 id=364 data-nosnippet>364</a>}
-<a href=#365 id=365 data-nosnippet>365</a>
-<a href=#366 id=366 data-nosnippet>366</a><span class="attr">#[allow(clippy::too_many_arguments)]
-<a href=#367 id=367 data-nosnippet>367</a></span><span class="kw">pub async fn </span>build_da_certificate&lt;TYPES: NodeType&gt;(
-<a href=#368 id=368 data-nosnippet>368</a>    membership: <span class="kw-2">&amp;</span>EpochMembership&lt;TYPES&gt;,
-<a href=#369 id=369 data-nosnippet>369</a>    view_number: ViewNumber,
-<a href=#370 id=370 data-nosnippet>370</a>    epoch_number: <span class="prelude-ty">Option</span>&lt;EpochNumber&gt;,
-<a href=#371 id=371 data-nosnippet>371</a>    transactions: Vec&lt;TestTransaction&gt;,
-<a href=#372 id=372 data-nosnippet>372</a>    metadata: <span class="kw-2">&amp;</span>&lt;TYPES::BlockPayload <span class="kw">as </span>BlockPayload&lt;TYPES&gt;&gt;::Metadata,
-<a href=#373 id=373 data-nosnippet>373</a>    public_key: <span class="kw-2">&amp;</span>TYPES::SignatureKey,
-<a href=#374 id=374 data-nosnippet>374</a>    private_key: <span class="kw-2">&amp;</span>&lt;TYPES::SignatureKey <span class="kw">as </span>SignatureKey&gt;::PrivateKey,
-<a href=#375 id=375 data-nosnippet>375</a>    upgrade_lock: <span class="kw-2">&amp;</span>UpgradeLock&lt;TYPES&gt;,
-<a href=#376 id=376 data-nosnippet>376</a>) -&gt; anyhow::Result&lt;DaCertificate2&lt;TYPES&gt;&gt; {
-<a href=#377 id=377 data-nosnippet>377</a>    <span class="kw">let </span>encoded_transactions = TestTransaction::encode(<span class="kw-2">&amp;</span>transactions);
-<a href=#378 id=378 data-nosnippet>378</a>
-<a href=#379 id=379 data-nosnippet>379</a>    <span class="kw">let </span>da_payload_commitment = vid_commitment(
-<a href=#380 id=380 data-nosnippet>380</a>        <span class="kw-2">&amp;</span>encoded_transactions,
-<a href=#381 id=381 data-nosnippet>381</a>        <span class="kw-2">&amp;</span>metadata.encode(),
-<a href=#382 id=382 data-nosnippet>382</a>        membership.total_nodes().<span class="kw">await</span>,
-<a href=#383 id=383 data-nosnippet>383</a>        upgrade_lock.version_infallible(view_number),
-<a href=#384 id=384 data-nosnippet>384</a>    );
-<a href=#385 id=385 data-nosnippet>385</a>
-<a href=#386 id=386 data-nosnippet>386</a>    <span class="kw">let </span>next_epoch_da_payload_commitment =
-<a href=#387 id=387 data-nosnippet>387</a>        <span class="kw">if </span>upgrade_lock.epochs_enabled(view_number) &amp;&amp; membership.epoch().is_some() {
-<a href=#388 id=388 data-nosnippet>388</a>            <span class="prelude-val">Some</span>(vid_commitment(
-<a href=#389 id=389 data-nosnippet>389</a>                <span class="kw-2">&amp;</span>encoded_transactions,
-<a href=#390 id=390 data-nosnippet>390</a>                <span class="kw-2">&amp;</span>metadata.encode(),
-<a href=#391 id=391 data-nosnippet>391</a>                membership
-<a href=#392 id=392 data-nosnippet>392</a>                    .next_epoch_stake_table()
-<a href=#393 id=393 data-nosnippet>393</a>                    .<span class="kw">await</span><span class="question-mark">?
-<a href=#394 id=394 data-nosnippet>394</a>                    </span>.total_nodes()
-<a href=#395 id=395 data-nosnippet>395</a>                    .<span class="kw">await</span>,
-<a href=#396 id=396 data-nosnippet>396</a>                upgrade_lock.version_infallible(view_number),
-<a href=#397 id=397 data-nosnippet>397</a>            ))
-<a href=#398 id=398 data-nosnippet>398</a>        } <span class="kw">else </span>{
-<a href=#399 id=399 data-nosnippet>399</a>            <span class="prelude-val">None
-<a href=#400 id=400 data-nosnippet>400</a>        </span>};
-<a href=#401 id=401 data-nosnippet>401</a>
-<a href=#402 id=402 data-nosnippet>402</a>    <span class="kw">let </span>da_data = DaData2 {
-<a href=#403 id=403 data-nosnippet>403</a>        payload_commit: da_payload_commitment,
-<a href=#404 id=404 data-nosnippet>404</a>        next_epoch_payload_commit: next_epoch_da_payload_commitment,
-<a href=#405 id=405 data-nosnippet>405</a>        epoch: epoch_number,
-<a href=#406 id=406 data-nosnippet>406</a>    };
-<a href=#407 id=407 data-nosnippet>407</a>
-<a href=#408 id=408 data-nosnippet>408</a>    anyhow::Ok(
-<a href=#409 id=409 data-nosnippet>409</a>        build_cert::&lt;TYPES, DaData2, DaVote2&lt;TYPES&gt;, DaCertificate2&lt;TYPES&gt;&gt;(
-<a href=#410 id=410 data-nosnippet>410</a>            da_data,
-<a href=#411 id=411 data-nosnippet>411</a>            membership,
-<a href=#412 id=412 data-nosnippet>412</a>            view_number,
-<a href=#413 id=413 data-nosnippet>413</a>            public_key,
-<a href=#414 id=414 data-nosnippet>414</a>            private_key,
-<a href=#415 id=415 data-nosnippet>415</a>            upgrade_lock,
-<a href=#416 id=416 data-nosnippet>416</a>        )
-<a href=#417 id=417 data-nosnippet>417</a>        .<span class="kw">await</span>,
-<a href=#418 id=418 data-nosnippet>418</a>    )
-<a href=#419 id=419 data-nosnippet>419</a>}
-<a href=#420 id=420 data-nosnippet>420</a>
-<a href=#421 id=421 data-nosnippet>421</a><span class="doccomment">/// This function permutes the provided input vector `inputs`, given some order provided within the
-<a href=#422 id=422 data-nosnippet>422</a>/// `order` vector.
-<a href=#423 id=423 data-nosnippet>423</a>///
-<a href=#424 id=424 data-nosnippet>424</a>/// # Examples
-<a href=#425 id=425 data-nosnippet>425</a>/// let output = permute_input_with_index_order(vec![1, 2, 3], vec![2, 1, 0]);
-<a href=#426 id=426 data-nosnippet>426</a>/// // Output is [3, 2, 1] now
-<a href=#427 id=427 data-nosnippet>427</a></span><span class="kw">pub fn </span>permute_input_with_index_order&lt;T&gt;(inputs: Vec&lt;T&gt;, order: Vec&lt;usize&gt;) -&gt; Vec&lt;T&gt;
-<a href=#428 id=428 data-nosnippet>428</a><span class="kw">where
-<a href=#429 id=429 data-nosnippet>429</a>    </span>T: Clone,
-<a href=#430 id=430 data-nosnippet>430</a>{
-<a href=#431 id=431 data-nosnippet>431</a>    <span class="kw">let </span><span class="kw-2">mut </span>ordered_inputs = Vec::with_capacity(inputs.len());
-<a href=#432 id=432 data-nosnippet>432</a>    <span class="kw">for </span><span class="kw-2">&amp;</span>index <span class="kw">in </span><span class="kw-2">&amp;</span>order {
-<a href=#433 id=433 data-nosnippet>433</a>        ordered_inputs.push(inputs[index].clone());
-<a href=#434 id=434 data-nosnippet>434</a>    }
-<a href=#435 id=435 data-nosnippet>435</a>    ordered_inputs
-<a href=#436 id=436 data-nosnippet>436</a>}
-<a href=#437 id=437 data-nosnippet>437</a>
-<a href=#438 id=438 data-nosnippet>438</a><span class="doccomment">/// This function will create a fake [`View`] from a provided [`Leaf`].
-<a href=#439 id=439 data-nosnippet>439</a></span><span class="kw">pub async fn </span>build_fake_view_with_leaf(
-<a href=#440 id=440 data-nosnippet>440</a>    leaf: Leaf2&lt;TestTypes&gt;,
-<a href=#441 id=441 data-nosnippet>441</a>    upgrade_lock: <span class="kw-2">&amp;</span>UpgradeLock&lt;TestTypes&gt;,
-<a href=#442 id=442 data-nosnippet>442</a>    epoch_height: u64,
-<a href=#443 id=443 data-nosnippet>443</a>) -&gt; View&lt;TestTypes&gt; {
-<a href=#444 id=444 data-nosnippet>444</a>    build_fake_view_with_leaf_and_state(
-<a href=#445 id=445 data-nosnippet>445</a>        leaf,
-<a href=#446 id=446 data-nosnippet>446</a>        TestValidatedState::default(),
-<a href=#447 id=447 data-nosnippet>447</a>        upgrade_lock,
-<a href=#448 id=448 data-nosnippet>448</a>        epoch_height,
-<a href=#449 id=449 data-nosnippet>449</a>    )
-<a href=#450 id=450 data-nosnippet>450</a>    .<span class="kw">await
-<a href=#451 id=451 data-nosnippet>451</a></span>}
-<a href=#452 id=452 data-nosnippet>452</a>
-<a href=#453 id=453 data-nosnippet>453</a><span class="doccomment">/// This function will create a fake [`View`] from a provided [`Leaf`] and `state`.
-<a href=#454 id=454 data-nosnippet>454</a></span><span class="kw">pub async fn </span>build_fake_view_with_leaf_and_state(
-<a href=#455 id=455 data-nosnippet>455</a>    leaf: Leaf2&lt;TestTypes&gt;,
-<a href=#456 id=456 data-nosnippet>456</a>    state: TestValidatedState,
-<a href=#457 id=457 data-nosnippet>457</a>    _upgrade_lock: <span class="kw-2">&amp;</span>UpgradeLock&lt;TestTypes&gt;,
-<a href=#458 id=458 data-nosnippet>458</a>    epoch_height: u64,
-<a href=#459 id=459 data-nosnippet>459</a>) -&gt; View&lt;TestTypes&gt; {
-<a href=#460 id=460 data-nosnippet>460</a>    <span class="kw">let </span>epoch = option_epoch_from_block_number(leaf.with_epoch, leaf.height(), epoch_height);
-<a href=#461 id=461 data-nosnippet>461</a>    View {
-<a href=#462 id=462 data-nosnippet>462</a>        view_inner: ViewInner::Leaf {
-<a href=#463 id=463 data-nosnippet>463</a>            leaf: leaf.commit(),
-<a href=#464 id=464 data-nosnippet>464</a>            state: state.into(),
-<a href=#465 id=465 data-nosnippet>465</a>            delta: <span class="prelude-val">None</span>,
-<a href=#466 id=466 data-nosnippet>466</a>            epoch,
-<a href=#467 id=467 data-nosnippet>467</a>        },
-<a href=#468 id=468 data-nosnippet>468</a>    }
-<a href=#469 id=469 data-nosnippet>469</a>}
+<a href=#337 id=337 data-nosnippet>337</a>        epoch_number,
+<a href=#338 id=338 data-nosnippet>338</a>        metadata,
+<a href=#339 id=339 data-nosnippet>339</a>        upgrade_lock,
+<a href=#340 id=340 data-nosnippet>340</a>    )
+<a href=#341 id=341 data-nosnippet>341</a>    .<span class="kw">await
+<a href=#342 id=342 data-nosnippet>342</a>    </span>.unwrap();
+<a href=#343 id=343 data-nosnippet>343</a>
+<a href=#344 id=344 data-nosnippet>344</a>    <span class="kw">let </span>signature =
+<a href=#345 id=345 data-nosnippet>345</a>        TYPES::SignatureKey::sign(private_key, vid_disperse.payload_commitment().as_ref())
+<a href=#346 id=346 data-nosnippet>346</a>            .expect(<span class="string">"Failed to sign VID commitment"</span>);
+<a href=#347 id=347 data-nosnippet>347</a>    <span class="kw">let </span>vid_disperse_proposal = Proposal {
+<a href=#348 id=348 data-nosnippet>348</a>        data: vid_disperse.clone(),
+<a href=#349 id=349 data-nosnippet>349</a>        signature,
+<a href=#350 id=350 data-nosnippet>350</a>        _pd: PhantomData,
+<a href=#351 id=351 data-nosnippet>351</a>    };
+<a href=#352 id=352 data-nosnippet>352</a>
+<a href=#353 id=353 data-nosnippet>353</a>    (
+<a href=#354 id=354 data-nosnippet>354</a>        vid_disperse_proposal,
+<a href=#355 id=355 data-nosnippet>355</a>        vid_disperse
+<a href=#356 id=356 data-nosnippet>356</a>            .to_shares()
+<a href=#357 id=357 data-nosnippet>357</a>            .into_iter()
+<a href=#358 id=358 data-nosnippet>358</a>            .map(|share| {
+<a href=#359 id=359 data-nosnippet>359</a>                share
+<a href=#360 id=360 data-nosnippet>360</a>                    .to_proposal(private_key)
+<a href=#361 id=361 data-nosnippet>361</a>                    .expect(<span class="string">"Failed to sign payload commitment"</span>)
+<a href=#362 id=362 data-nosnippet>362</a>            })
+<a href=#363 id=363 data-nosnippet>363</a>            .collect(),
+<a href=#364 id=364 data-nosnippet>364</a>    )
+<a href=#365 id=365 data-nosnippet>365</a>}
+<a href=#366 id=366 data-nosnippet>366</a>
+<a href=#367 id=367 data-nosnippet>367</a><span class="attr">#[allow(clippy::too_many_arguments)]
+<a href=#368 id=368 data-nosnippet>368</a></span><span class="kw">pub async fn </span>build_da_certificate&lt;TYPES: NodeType&gt;(
+<a href=#369 id=369 data-nosnippet>369</a>    membership: <span class="kw-2">&amp;</span>EpochMembership&lt;TYPES&gt;,
+<a href=#370 id=370 data-nosnippet>370</a>    view_number: ViewNumber,
+<a href=#371 id=371 data-nosnippet>371</a>    epoch_number: <span class="prelude-ty">Option</span>&lt;EpochNumber&gt;,
+<a href=#372 id=372 data-nosnippet>372</a>    transactions: Vec&lt;TestTransaction&gt;,
+<a href=#373 id=373 data-nosnippet>373</a>    metadata: <span class="kw-2">&amp;</span>&lt;TYPES::BlockPayload <span class="kw">as </span>BlockPayload&lt;TYPES&gt;&gt;::Metadata,
+<a href=#374 id=374 data-nosnippet>374</a>    public_key: <span class="kw-2">&amp;</span>TYPES::SignatureKey,
+<a href=#375 id=375 data-nosnippet>375</a>    private_key: <span class="kw-2">&amp;</span>&lt;TYPES::SignatureKey <span class="kw">as </span>SignatureKey&gt;::PrivateKey,
+<a href=#376 id=376 data-nosnippet>376</a>    upgrade_lock: <span class="kw-2">&amp;</span>UpgradeLock&lt;TYPES&gt;,
+<a href=#377 id=377 data-nosnippet>377</a>) -&gt; anyhow::Result&lt;DaCertificate2&lt;TYPES&gt;&gt; {
+<a href=#378 id=378 data-nosnippet>378</a>    <span class="kw">let </span>encoded_transactions = TestTransaction::encode(<span class="kw-2">&amp;</span>transactions);
+<a href=#379 id=379 data-nosnippet>379</a>
+<a href=#380 id=380 data-nosnippet>380</a>    <span class="kw">let </span>da_payload_commitment = vid_commitment(
+<a href=#381 id=381 data-nosnippet>381</a>        <span class="kw-2">&amp;</span>encoded_transactions,
+<a href=#382 id=382 data-nosnippet>382</a>        <span class="kw-2">&amp;</span>metadata.encode(),
+<a href=#383 id=383 data-nosnippet>383</a>        membership.total_nodes().<span class="kw">await</span>,
+<a href=#384 id=384 data-nosnippet>384</a>        upgrade_lock.version_infallible(view_number),
+<a href=#385 id=385 data-nosnippet>385</a>    );
+<a href=#386 id=386 data-nosnippet>386</a>
+<a href=#387 id=387 data-nosnippet>387</a>    <span class="kw">let </span>next_epoch_da_payload_commitment =
+<a href=#388 id=388 data-nosnippet>388</a>        <span class="kw">if </span>upgrade_lock.epochs_enabled(view_number) &amp;&amp; membership.epoch().is_some() {
+<a href=#389 id=389 data-nosnippet>389</a>            <span class="prelude-val">Some</span>(vid_commitment(
+<a href=#390 id=390 data-nosnippet>390</a>                <span class="kw-2">&amp;</span>encoded_transactions,
+<a href=#391 id=391 data-nosnippet>391</a>                <span class="kw-2">&amp;</span>metadata.encode(),
+<a href=#392 id=392 data-nosnippet>392</a>                membership
+<a href=#393 id=393 data-nosnippet>393</a>                    .next_epoch_stake_table()
+<a href=#394 id=394 data-nosnippet>394</a>                    .<span class="kw">await</span><span class="question-mark">?
+<a href=#395 id=395 data-nosnippet>395</a>                    </span>.total_nodes()
+<a href=#396 id=396 data-nosnippet>396</a>                    .<span class="kw">await</span>,
+<a href=#397 id=397 data-nosnippet>397</a>                upgrade_lock.version_infallible(view_number),
+<a href=#398 id=398 data-nosnippet>398</a>            ))
+<a href=#399 id=399 data-nosnippet>399</a>        } <span class="kw">else </span>{
+<a href=#400 id=400 data-nosnippet>400</a>            <span class="prelude-val">None
+<a href=#401 id=401 data-nosnippet>401</a>        </span>};
+<a href=#402 id=402 data-nosnippet>402</a>
+<a href=#403 id=403 data-nosnippet>403</a>    <span class="kw">let </span>da_data = DaData2 {
+<a href=#404 id=404 data-nosnippet>404</a>        payload_commit: da_payload_commitment,
+<a href=#405 id=405 data-nosnippet>405</a>        next_epoch_payload_commit: next_epoch_da_payload_commitment,
+<a href=#406 id=406 data-nosnippet>406</a>        epoch: epoch_number,
+<a href=#407 id=407 data-nosnippet>407</a>    };
+<a href=#408 id=408 data-nosnippet>408</a>
+<a href=#409 id=409 data-nosnippet>409</a>    anyhow::Ok(
+<a href=#410 id=410 data-nosnippet>410</a>        build_cert::&lt;TYPES, DaData2, DaVote2&lt;TYPES&gt;, DaCertificate2&lt;TYPES&gt;&gt;(
+<a href=#411 id=411 data-nosnippet>411</a>            da_data,
+<a href=#412 id=412 data-nosnippet>412</a>            membership,
+<a href=#413 id=413 data-nosnippet>413</a>            view_number,
+<a href=#414 id=414 data-nosnippet>414</a>            public_key,
+<a href=#415 id=415 data-nosnippet>415</a>            private_key,
+<a href=#416 id=416 data-nosnippet>416</a>            upgrade_lock,
+<a href=#417 id=417 data-nosnippet>417</a>        )
+<a href=#418 id=418 data-nosnippet>418</a>        .<span class="kw">await</span>,
+<a href=#419 id=419 data-nosnippet>419</a>    )
+<a href=#420 id=420 data-nosnippet>420</a>}
+<a href=#421 id=421 data-nosnippet>421</a>
+<a href=#422 id=422 data-nosnippet>422</a><span class="doccomment">/// This function permutes the provided input vector `inputs`, given some order provided within the
+<a href=#423 id=423 data-nosnippet>423</a>/// `order` vector.
+<a href=#424 id=424 data-nosnippet>424</a>///
+<a href=#425 id=425 data-nosnippet>425</a>/// # Examples
+<a href=#426 id=426 data-nosnippet>426</a>/// let output = permute_input_with_index_order(vec![1, 2, 3], vec![2, 1, 0]);
+<a href=#427 id=427 data-nosnippet>427</a>/// // Output is [3, 2, 1] now
+<a href=#428 id=428 data-nosnippet>428</a></span><span class="kw">pub fn </span>permute_input_with_index_order&lt;T&gt;(inputs: Vec&lt;T&gt;, order: Vec&lt;usize&gt;) -&gt; Vec&lt;T&gt;
+<a href=#429 id=429 data-nosnippet>429</a><span class="kw">where
+<a href=#430 id=430 data-nosnippet>430</a>    </span>T: Clone,
+<a href=#431 id=431 data-nosnippet>431</a>{
+<a href=#432 id=432 data-nosnippet>432</a>    <span class="kw">let </span><span class="kw-2">mut </span>ordered_inputs = Vec::with_capacity(inputs.len());
+<a href=#433 id=433 data-nosnippet>433</a>    <span class="kw">for </span><span class="kw-2">&amp;</span>index <span class="kw">in </span><span class="kw-2">&amp;</span>order {
+<a href=#434 id=434 data-nosnippet>434</a>        ordered_inputs.push(inputs[index].clone());
+<a href=#435 id=435 data-nosnippet>435</a>    }
+<a href=#436 id=436 data-nosnippet>436</a>    ordered_inputs
+<a href=#437 id=437 data-nosnippet>437</a>}
+<a href=#438 id=438 data-nosnippet>438</a>
+<a href=#439 id=439 data-nosnippet>439</a><span class="doccomment">/// This function will create a fake [`View`] from a provided [`Leaf`].
+<a href=#440 id=440 data-nosnippet>440</a></span><span class="kw">pub async fn </span>build_fake_view_with_leaf(
+<a href=#441 id=441 data-nosnippet>441</a>    leaf: Leaf2&lt;TestTypes&gt;,
+<a href=#442 id=442 data-nosnippet>442</a>    upgrade_lock: <span class="kw-2">&amp;</span>UpgradeLock&lt;TestTypes&gt;,
+<a href=#443 id=443 data-nosnippet>443</a>    epoch_height: u64,
+<a href=#444 id=444 data-nosnippet>444</a>) -&gt; View&lt;TestTypes&gt; {
+<a href=#445 id=445 data-nosnippet>445</a>    build_fake_view_with_leaf_and_state(
+<a href=#446 id=446 data-nosnippet>446</a>        leaf,
+<a href=#447 id=447 data-nosnippet>447</a>        TestValidatedState::default(),
+<a href=#448 id=448 data-nosnippet>448</a>        upgrade_lock,
+<a href=#449 id=449 data-nosnippet>449</a>        epoch_height,
+<a href=#450 id=450 data-nosnippet>450</a>    )
+<a href=#451 id=451 data-nosnippet>451</a>    .<span class="kw">await
+<a href=#452 id=452 data-nosnippet>452</a></span>}
+<a href=#453 id=453 data-nosnippet>453</a>
+<a href=#454 id=454 data-nosnippet>454</a><span class="doccomment">/// This function will create a fake [`View`] from a provided [`Leaf`] and `state`.
+<a href=#455 id=455 data-nosnippet>455</a></span><span class="kw">pub async fn </span>build_fake_view_with_leaf_and_state(
+<a href=#456 id=456 data-nosnippet>456</a>    leaf: Leaf2&lt;TestTypes&gt;,
+<a href=#457 id=457 data-nosnippet>457</a>    state: TestValidatedState,
+<a href=#458 id=458 data-nosnippet>458</a>    _upgrade_lock: <span class="kw-2">&amp;</span>UpgradeLock&lt;TestTypes&gt;,
+<a href=#459 id=459 data-nosnippet>459</a>    epoch_height: u64,
+<a href=#460 id=460 data-nosnippet>460</a>) -&gt; View&lt;TestTypes&gt; {
+<a href=#461 id=461 data-nosnippet>461</a>    <span class="kw">let </span>epoch = option_epoch_from_block_number(leaf.with_epoch, leaf.height(), epoch_height);
+<a href=#462 id=462 data-nosnippet>462</a>    View {
+<a href=#463 id=463 data-nosnippet>463</a>        view_inner: ViewInner::Leaf {
+<a href=#464 id=464 data-nosnippet>464</a>            leaf: leaf.commit(),
+<a href=#465 id=465 data-nosnippet>465</a>            state: state.into(),
+<a href=#466 id=466 data-nosnippet>466</a>            delta: <span class="prelude-val">None</span>,
+<a href=#467 id=467 data-nosnippet>467</a>            epoch,
+<a href=#468 id=468 data-nosnippet>468</a>        },
+<a href=#469 id=469 data-nosnippet>469</a>    }
+<a href=#470 id=470 data-nosnippet>470</a>}
 </code></pre></div></section></main></body></html>
