@@ -16,6 +16,9 @@ pub mod testing {
         helpers::{proposal_commitment, upgrade_lock},
     };
 
+    /// MockCoordinator is for testing the various different modules the coordinator will
+    /// coordinate.  It will send back appropriate responses actions it receives.
+    /// It will also store the events it receives for verification.
     pub struct MockCoordinator {
         pub event_rx: tokio::sync::mpsc::Receiver<Event<TestTypes>>,
         pub consensus_tx: tokio::sync::mpsc::Sender<ConsensusEvent<TestTypes>>,

@@ -132,7 +132,6 @@ impl<TYPES: NodeType> Consensus<TYPES> {
             ConsensusEvent::StateVerified(state_response) => {
                 self.states_verified
                     .insert(state_response.view, state_response.commitment);
-                return None;
             },
             ConsensusEvent::HeaderCreated(view, header) => {
                 self.headers.insert(view, header);
@@ -289,42 +288,33 @@ impl<TYPES: NodeType> Consensus<TYPES> {
 
     async fn maybe_vote_1(&mut self, view: ViewNumber) -> Option<()> {
         if self.voted_1_views.contains(&view) {
-            let is_after_certs = self
-                .certs
-                .get(&view)
-                .is_some_and(|cert| cert.view_number() < view);
-            if is_after_certs {
-                return None;
-            }
-            let is_after_certs2 = self
-                .certs2
-                .get(&view)
-                .is_some_and(|cert| cert.view_number() < view);
-            if is_after_certs2 {
-                return None;
-            }
             return None;
         }
         let state_commitment = self.states_verified.get(&view)?;
         let proposal = self.proposals.get(&view)?;
         let vid_share = self.vid_shares.get(&view)?;
 
-        // Verify we have the block for the QC on this commitment
-        let block_commitment = self
-            .blocks_reconstructed
-            .get(&proposal.justify_qc.view_number())?;
-        let prev_proposal = self.proposals.get(&proposal.justify_qc.view_number())?;
-        let VidCommitment::V2(prev_block_commitment) =
-            prev_proposal.block_header.payload_commitment()
-        else {
-            return None;
-        };
-        if block_commitment != &prev_block_commitment {
-            return None;
-        }
+        // Verify parent chain unless justify_qc is the genesis QC
+        let parent_view = proposal.justify_qc.view_number();
 
-        if proposal.justify_qc.data().leaf_commit != prev_proposal.justify_qc.data().leaf_commit {
-            return None;
+        // We don't need the genesis block to be reconstructed or verified
+        // or the genesis qc to be verified
+        if parent_view != ViewNumber::genesis() {
+            // Verify we have the block for the QC on this commitment
+            let block_commitment = self.blocks_reconstructed.get(&parent_view)?;
+            let prev_proposal = self.proposals.get(&parent_view)?;
+            let VidCommitment::V2(prev_block_commitment) =
+                prev_proposal.block_header.payload_commitment()
+            else {
+                return None;
+            };
+            if block_commitment != &prev_block_commitment {
+                return None;
+            }
+
+            if proposal.justify_qc.data().leaf_commit != proposal_commitment(prev_proposal) {
+                return None;
+            }
         }
 
         let proposal_commit = proposal_commitment(proposal);
@@ -593,62 +583,686 @@ mod test {
     use hotshot::types::BLSPubKey;
     use hotshot_example_types::node_types::TestTypes;
     use hotshot_types::traits::signature_key::SignatureKey;
-    use tokio::task::JoinHandle;
+    use tokio::{sync::mpsc::Sender, task::JoinHandle};
 
     use super::*;
     use crate::{
         coordinator::mock::testing::MockCoordinator,
-        events::Event,
+        events::{Action, ConsensusEvent, Event, RequestMessageSender, Update},
         test_utils::{TestData, mock_membership},
     };
 
-    async fn mock_consensus_and_coordinator() -> (MockCoordinator, Consensus<TestTypes>) {
-        let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], 0);
-        let membership = mock_membership().await;
-        let (event_tx, event_rx) = tokio::sync::mpsc::channel(10);
-        let (consensus_tx, consensus_rx) = tokio::sync::mpsc::channel(10);
-
-        let mock_coordinator = MockCoordinator {
-            event_rx,
-            consensus_tx,
-            membership_coordinator: membership.clone(),
-            received_events: Vec::new(),
-        };
-        let coordinator_handle = CoordinatorHandle::new(event_tx);
-        let consensus = Consensus::new(
-            consensus_rx,
-            coordinator_handle,
-            membership,
-            public_key,
-            private_key,
-        );
-        (mock_coordinator, consensus)
+    /// Test harness that spawns consensus + mock coordinator and provides
+    /// helpers to send events and collect results.
+    struct TestHarness {
+        /// Send ConsensusEvents directly to consensus
+        consensus_tx: Sender<ConsensusEvent<TestTypes>>,
+        /// Send Events to the mock coordinator (for shutdown etc.)
+        coordinator_handle: CoordinatorHandle<TestTypes>,
+        /// Join handle for mock coordinator (collects received events)
+        mock_join: JoinHandle<Vec<Event<TestTypes>>>,
     }
 
-    async fn run_consensus() -> (
-        CoordinatorHandle<TestTypes>,
-        JoinHandle<Vec<Event<TestTypes>>>,
-    ) {
-        let (mock_coordinator, mut consensus) = mock_consensus_and_coordinator().await;
-        let handle = consensus.coordinator_handle.clone();
-        tokio::spawn(async move {
-            consensus.run().await;
-        });
-        let join_handle = tokio::spawn(async move { mock_coordinator.run().await });
-        (handle, join_handle)
-    }
+    impl TestHarness {
+        /// Create a new test harness with the given node index (0-9).
+        async fn new(node_index: u64) -> Self {
+            let (public_key, private_key) =
+                BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
+            let membership = mock_membership().await;
+            let (event_tx, event_rx) = tokio::sync::mpsc::channel(100);
+            let (consensus_tx, consensus_rx) = tokio::sync::mpsc::channel(100);
 
-    async fn run_test(input_events: Vec<Event<TestTypes>>, output_events: Vec<Event<TestTypes>>) {
-        let (coordinator_handle, join_handle) = run_consensus().await;
-        for event in input_events {
-            coordinator_handle.send_event(event).await.unwrap();
+            let mock_coordinator = MockCoordinator {
+                event_rx,
+                consensus_tx: consensus_tx.clone(),
+                membership_coordinator: membership.clone(),
+                received_events: Vec::new(),
+            };
+            let coordinator_handle = CoordinatorHandle::new(event_tx);
+            let mut consensus = Consensus::new(
+                consensus_rx,
+                coordinator_handle.clone(),
+                membership,
+                public_key,
+                private_key,
+            );
+
+            tokio::spawn(async move {
+                consensus.run().await;
+            });
+            let mock_join = tokio::spawn(async move { mock_coordinator.run().await });
+
+            Self {
+                consensus_tx,
+                coordinator_handle,
+                mock_join,
+            }
         }
-        let events = join_handle.await.unwrap();
-        assert_eq!(events, output_events);
+
+        /// Send a ConsensusEvent directly to the consensus state machine.
+        async fn send(&self, event: ConsensusEvent<TestTypes>) {
+            self.consensus_tx.send(event).await.unwrap();
+        }
+
+        /// Send multiple ConsensusEvents in order.
+        async fn send_all(&self, events: Vec<ConsensusEvent<TestTypes>>) {
+            for event in events {
+                self.send(event).await;
+            }
+        }
+
+        /// Shut down consensus and the mock coordinator, returning all
+        /// events the mock coordinator received from consensus.
+        async fn shutdown(self) -> Vec<Event<TestTypes>> {
+            // Send shutdown to consensus
+            self.consensus_tx
+                .send(ConsensusEvent::Shutdown)
+                .await
+                .unwrap();
+            // Small delay to let consensus process shutdown and close its handle
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            // Send shutdown to mock coordinator
+            self.coordinator_handle
+                .send_event(Event::Action(Action::Shutdown))
+                .await
+                .unwrap();
+            self.mock_join.await.unwrap()
+        }
+    }
+
+    /// Check if received events contain a Vote1 action.
+    fn has_vote1(events: &[Event<TestTypes>]) -> bool {
+        events.iter().any(|e| {
+            matches!(
+                e,
+                Event::Action(Action::SendMessage(RequestMessageSender::Vote1(_)))
+            )
+        })
+    }
+
+    /// Check if received events contain a Vote2 action.
+    fn has_vote2(events: &[Event<TestTypes>]) -> bool {
+        events.iter().any(|e| {
+            matches!(
+                e,
+                Event::Action(Action::SendMessage(RequestMessageSender::Vote2(_)))
+            )
+        })
+    }
+
+    /// Check if received events contain a LeafDecided update.
+    fn has_leaf_decided(events: &[Event<TestTypes>]) -> bool {
+        events
+            .iter()
+            .any(|e| matches!(e, Event::Update(Update::LeafDecided(_))))
+    }
+
+    /// Check if received events contain a RequestState action.
+    fn has_request_state(events: &[Event<TestTypes>]) -> bool {
+        events
+            .iter()
+            .any(|e| matches!(e, Event::Action(Action::RequestState(_))))
+    }
+
+    /// Count how many Vote1 actions are in the events.
+    fn count_vote1(events: &[Event<TestTypes>]) -> usize {
+        events
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e,
+                    Event::Action(Action::SendMessage(RequestMessageSender::Vote1(_)))
+                )
+            })
+            .count()
+    }
+
+    /// Count how many Vote2 actions are in the events.
+    fn count_vote2(events: &[Event<TestTypes>]) -> usize {
+        events
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e,
+                    Event::Action(Action::SendMessage(RequestMessageSender::Vote2(_)))
+                )
+            })
+            .count()
     }
 
     #[tokio::test]
-    async fn test_consensus() {
+    async fn test_data_generation() {
         let _test_data = TestData::new(5).await;
+    }
+
+    /// Fresh consensus with no locked_qc accepts any proposal (genesis safety).
+    #[tokio::test]
+    async fn test_safety_genesis_no_lock() {
+        let harness = TestHarness::new(0).await;
+        let test_data = TestData::new(2).await;
+        let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+
+        // Send proposal for view 1 — locked_qc is None, so safety passes
+        harness
+            .send(test_data.views[0].proposal_event(&node_key))
+            .await;
+
+        // Allow async processing
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        let events = harness.shutdown().await;
+
+        // Should have requested state verification (proposal accepted)
+        assert!(
+            has_request_state(&events),
+            "Proposal should be accepted with no locked QC"
+        );
+    }
+
+    /// Events with view <= timeout_view are silently dropped.
+    #[tokio::test]
+    async fn test_timeout_filters_stale_events() {
+        let harness = TestHarness::new(0).await;
+        let test_data = TestData::new(6).await;
+        let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+
+        // Set timeout at view 3
+        harness
+            .send(ConsensusEvent::Timeout(ViewNumber::new(3)))
+            .await;
+
+        // Send stale proposal (view 2, which is <= timeout_view 3)
+        harness
+            .send(test_data.views[1].proposal_event(&node_key))
+            .await;
+
+        // Send fresh proposal (view 4, which is > timeout_view 3)
+        harness
+            .send(test_data.views[3].proposal_event(&node_key))
+            .await;
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let events = harness.shutdown().await;
+
+        // Only the fresh proposal (view 4) should generate a RequestState
+        let request_states: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e, Event::Action(Action::RequestState(_))))
+            .collect();
+        assert_eq!(
+            request_states.len(),
+            1,
+            "Only one RequestState expected (fresh view), got {}",
+            request_states.len()
+        );
+    }
+
+    /// Vote1 fires for sequential views when all preconditions are met.
+    #[tokio::test]
+    async fn test_vote1_for_sequential_views() {
+        let harness = TestHarness::new(0).await;
+        let test_data = TestData::new(3).await;
+        let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+
+        // Send proposal for view 1 (parent data setup)
+        harness
+            .send(test_data.views[0].proposal_event(&node_key))
+            .await;
+        harness
+            .send(test_data.views[0].block_reconstructed_event())
+            .await;
+
+        // Send proposal for view 2 — mock auto-responds with StateVerified
+        harness
+            .send(test_data.views[1].proposal_event(&node_key))
+            .await;
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let events = harness.shutdown().await;
+
+        assert!(
+            count_vote1(&events) == 2,
+            "Vote1 should fire for sequential views"
+        );
+    }
+
+    /// Vote1 fires for view 1 (genesis parent) — parent checks are skipped.
+    #[tokio::test]
+    async fn test_vote1_genesis_parent() {
+        let harness = TestHarness::new(0).await;
+        let test_data = TestData::new(2).await;
+        let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+
+        // Send proposal for view 1 — justify_qc references genesis
+        harness
+            .send(test_data.views[0].proposal_event(&node_key))
+            .await;
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let events = harness.shutdown().await;
+
+        assert!(
+            has_vote1(&events),
+            "Vote1 should fire for view 1 with genesis parent"
+        );
+    }
+
+    /// Vote2 requires Certificate1 + BlockReconstructed + Proposal.
+    /// Without Certificate1, no Vote2 is sent.
+    #[tokio::test]
+    async fn test_vote2_missing_cert1() {
+        let harness = TestHarness::new(0).await;
+        let test_data = TestData::new(3).await;
+        let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+
+        // Set up view 1 as parent
+        harness
+            .send(test_data.views[0].proposal_event(&node_key))
+            .await;
+        harness
+            .send(test_data.views[0].block_reconstructed_event())
+            .await;
+
+        // Send proposal for view 2 + BlockReconstructed but NO cert1
+        harness
+            .send(test_data.views[1].proposal_event(&node_key))
+            .await;
+        harness
+            .send(test_data.views[1].block_reconstructed_event())
+            .await;
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let events = harness.shutdown().await;
+
+        // Vote1 may succeed, but Vote2 should NOT be sent (no cert1)
+        assert!(
+            !has_vote2(&events),
+            "Vote2 should not be sent without Certificate1"
+        );
+    }
+
+    /// Vote2 is sent when Certificate1 arrives after proposal.
+    #[tokio::test]
+    async fn test_vote2_with_cert1() {
+        let harness = TestHarness::new(0).await;
+        let test_data = TestData::new(3).await;
+        let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+
+        // Set up view 1 as parent
+        harness
+            .send(test_data.views[0].proposal_event(&node_key))
+            .await;
+        harness
+            .send(test_data.views[0].block_reconstructed_event())
+            .await;
+
+        // View 2: proposal + block reconstructed + cert1
+        harness
+            .send(test_data.views[1].proposal_event(&node_key))
+            .await;
+        harness
+            .send(test_data.views[1].block_reconstructed_event())
+            .await;
+        harness.send(test_data.views[1].cert1_event()).await;
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let events = harness.shutdown().await;
+
+        assert!(
+            has_vote2(&events),
+            "Vote2 should be sent when cert1 is present"
+        );
+    }
+
+    /// Full single-view decision: proposal → vote1, cert1 → vote2, cert2 → decide.
+    #[tokio::test]
+    async fn test_single_view_decide() {
+        let harness = TestHarness::new(0).await;
+        let test_data = TestData::new(3).await;
+        let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+
+        // Set up view 1 as parent
+        harness
+            .send(test_data.views[0].proposal_event(&node_key))
+            .await;
+        harness
+            .send(test_data.views[0].block_reconstructed_event())
+            .await;
+
+        // View 2: full consensus round
+        harness
+            .send(test_data.views[1].proposal_event(&node_key))
+            .await;
+        harness
+            .send(test_data.views[1].block_reconstructed_event())
+            .await;
+        harness.send(test_data.views[1].cert1_event()).await;
+        harness.send(test_data.views[1].cert2_event()).await;
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let events = harness.shutdown().await;
+
+        assert!(has_vote1(&events), "Vote1 should be sent");
+        assert!(has_vote2(&events), "Vote2 should be sent");
+        assert!(
+            has_leaf_decided(&events),
+            "Leaf should be decided after cert2"
+        );
+    }
+
+    /// Duplicate votes are prevented — only one Vote1 per view.
+    #[tokio::test]
+    async fn test_no_duplicate_vote1() {
+        let harness = TestHarness::new(0).await;
+        let test_data = TestData::new(2).await;
+        let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+
+        // View 1: trigger vote1 via proposal (genesis parent, mock responds with StateVerified)
+        harness
+            .send(test_data.views[0].proposal_event(&node_key))
+            .await;
+
+        // Send block_reconstructed + cert1 which re-trigger maybe_vote_1 for same view
+        harness
+            .send(test_data.views[0].block_reconstructed_event())
+            .await;
+        harness.send(test_data.views[0].cert1_event()).await;
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let events = harness.shutdown().await;
+
+        assert_eq!(
+            count_vote1(&events),
+            1,
+            "Should only send one Vote1 per view"
+        );
+    }
+
+    /// Duplicate votes are prevented — only one Vote2 per view.
+    #[tokio::test]
+    async fn test_no_duplicate_vote2() {
+        let harness = TestHarness::new(0).await;
+        let test_data = TestData::new(3).await;
+        let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+
+        // Set up parent
+        harness
+            .send(test_data.views[0].proposal_event(&node_key))
+            .await;
+        harness
+            .send(test_data.views[0].block_reconstructed_event())
+            .await;
+
+        // View 2: trigger vote2
+        harness
+            .send(test_data.views[1].proposal_event(&node_key))
+            .await;
+        harness
+            .send(test_data.views[1].block_reconstructed_event())
+            .await;
+        harness.send(test_data.views[1].cert1_event()).await;
+        // Sending cert2 triggers maybe_vote_2 again (via handle_event post-calls)
+        harness.send(test_data.views[1].cert2_event()).await;
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let events = harness.shutdown().await;
+
+        assert_eq!(
+            count_vote2(&events),
+            1,
+            "Should only send one Vote2 per view"
+        );
+    }
+
+    /// StateVerificationFailed with matching commitment removes proposal and vid_share.
+    #[tokio::test]
+    async fn test_state_verification_failed_removes_proposal() {
+        let harness = TestHarness::new(0).await;
+        let test_data = TestData::new(3).await;
+        let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+
+        // Set up parent
+        harness
+            .send(test_data.views[0].proposal_event(&node_key))
+            .await;
+        harness
+            .send(test_data.views[0].block_reconstructed_event())
+            .await;
+
+        // Send proposal for view 2 (stores proposal and vid_share)
+        harness
+            .send(test_data.views[1].proposal_event(&node_key))
+            .await;
+
+        // Send StateVerificationFailed with matching commitment — removes proposal
+        let proposal_commit = proposal_commitment(&test_data.views[1].proposal.data.proposal);
+        harness
+            .send(ConsensusEvent::StateVerificationFailed(
+                crate::events::StateResponse {
+                    view: test_data.views[1].view_number,
+                    commitment: proposal_commit,
+                },
+            ))
+            .await;
+
+        // Now send cert1 + block_reconstructed — vote2 should NOT fire
+        // because the proposal was removed
+        harness
+            .send(test_data.views[1].block_reconstructed_event())
+            .await;
+        harness.send(test_data.views[1].cert1_event()).await;
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let events = harness.shutdown().await;
+
+        assert!(
+            !has_vote2(&events),
+            "Vote2 should not fire after proposal removed by StateVerificationFailed"
+        );
+    }
+
+    /// Without Certificate2, no decision is made even with all other data.
+    #[tokio::test]
+    async fn test_decide_requires_cert2() {
+        let harness = TestHarness::new(0).await;
+        let test_data = TestData::new(3).await;
+        let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+
+        // Set up view 1 as parent
+        harness
+            .send(test_data.views[0].proposal_event(&node_key))
+            .await;
+        harness
+            .send(test_data.views[0].block_reconstructed_event())
+            .await;
+
+        // View 2: everything except cert2
+        harness
+            .send(test_data.views[1].proposal_event(&node_key))
+            .await;
+        harness
+            .send(test_data.views[1].block_reconstructed_event())
+            .await;
+        harness.send(test_data.views[1].cert1_event()).await;
+        // No cert2 sent
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let events = harness.shutdown().await;
+
+        assert!(has_vote2(&events), "Vote2 should still fire");
+        assert!(
+            !has_leaf_decided(&events),
+            "No decision without Certificate2"
+        );
+    }
+
+    /// Vote2 requires BlockReconstructed for the current view.
+    #[tokio::test]
+    async fn test_vote2_missing_block_reconstructed() {
+        let harness = TestHarness::new(0).await;
+        let test_data = TestData::new(3).await;
+        let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+
+        // Set up view 1 as parent
+        harness
+            .send(test_data.views[0].proposal_event(&node_key))
+            .await;
+        harness
+            .send(test_data.views[0].block_reconstructed_event())
+            .await;
+
+        // View 2: proposal + cert1, but NO block_reconstructed for view 2
+        harness
+            .send(test_data.views[1].proposal_event(&node_key))
+            .await;
+        harness.send(test_data.views[1].cert1_event()).await;
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let events = harness.shutdown().await;
+
+        assert!(
+            !has_vote2(&events),
+            "Vote2 should not fire without BlockReconstructed"
+        );
+    }
+
+    /// BlockReconstructed arriving after cert1 triggers vote2.
+    #[tokio::test]
+    async fn test_vote2_block_reconstructed_arrives_late() {
+        let harness = TestHarness::new(0).await;
+        let test_data = TestData::new(3).await;
+        let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+
+        // Set up parent
+        harness
+            .send(test_data.views[0].proposal_event(&node_key))
+            .await;
+        harness
+            .send(test_data.views[0].block_reconstructed_event())
+            .await;
+
+        // View 2: proposal + cert1 first (no block_reconstructed yet)
+        harness
+            .send(test_data.views[1].proposal_event(&node_key))
+            .await;
+        harness.send(test_data.views[1].cert1_event()).await;
+
+        // Now send block_reconstructed — should trigger vote2
+        harness
+            .send(test_data.views[1].block_reconstructed_event())
+            .await;
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let events = harness.shutdown().await;
+
+        assert!(
+            has_vote2(&events),
+            "Vote2 should fire when BlockReconstructed arrives late"
+        );
+    }
+
+    /// Multi-view chain: consecutive views each get decided when cert2 arrives.
+    #[tokio::test]
+    async fn test_multi_view_chain_decide() {
+        let harness = TestHarness::new(0).await;
+        let test_data = TestData::new(5).await;
+        let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+
+        // Process each view: proposal + block_reconstructed + cert1 + cert2
+        for view in &test_data.views {
+            harness.send(view.proposal_event(&node_key)).await;
+            harness.send(view.block_reconstructed_event()).await;
+            harness.send(view.cert1_event()).await;
+            harness.send(view.cert2_event()).await;
+        }
+
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        let events = harness.shutdown().await;
+
+        // Each view should produce a LeafDecided
+        let decide_count = events
+            .iter()
+            .filter(|e| matches!(e, Event::Update(Update::LeafDecided(_))))
+            .count();
+        assert!(
+            decide_count >= 2,
+            "Multiple views should produce decisions, got {decide_count}"
+        );
+    }
+
+    /// Timeout event sets timeout_view and prevents processing of that view.
+    #[tokio::test]
+    async fn test_timeout_prevents_voting() {
+        let harness = TestHarness::new(0).await;
+        let test_data = TestData::new(3).await;
+        let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+
+        // Set up view 1 as parent
+        harness
+            .send(test_data.views[0].proposal_event(&node_key))
+            .await;
+        harness
+            .send(test_data.views[0].block_reconstructed_event())
+            .await;
+
+        // Send proposal for view 2 (this gets stored)
+        harness
+            .send(test_data.views[1].proposal_event(&node_key))
+            .await;
+        harness
+            .send(test_data.views[1].block_reconstructed_event())
+            .await;
+
+        // Timeout view 2 — now cert1 for view 2 should be dropped
+        harness
+            .send(ConsensusEvent::Timeout(test_data.views[1].view_number))
+            .await;
+
+        // Send cert1 for view 2 — should be stale
+        harness.send(test_data.views[1].cert1_event()).await;
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let events = harness.shutdown().await;
+
+        assert!(
+            !has_vote2(&events),
+            "Vote2 should not fire after timeout for that view"
+        );
+    }
+
+    /// Cert2 for a view that is already decided is ignored.
+    #[tokio::test]
+    async fn test_decide_not_repeated_for_same_view() {
+        let harness = TestHarness::new(0).await;
+        let test_data = TestData::new(3).await;
+        let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+
+        // Full round for view 2
+        harness
+            .send(test_data.views[0].proposal_event(&node_key))
+            .await;
+        harness
+            .send(test_data.views[0].block_reconstructed_event())
+            .await;
+        harness
+            .send(test_data.views[1].proposal_event(&node_key))
+            .await;
+        harness
+            .send(test_data.views[1].block_reconstructed_event())
+            .await;
+        harness.send(test_data.views[1].cert1_event()).await;
+        harness.send(test_data.views[1].cert2_event()).await;
+
+        // Send cert2 again for same view — should not produce another decide
+        harness.send(test_data.views[1].cert2_event()).await;
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let events = harness.shutdown().await;
+
+        let decide_count = events
+            .iter()
+            .filter(|e| matches!(e, Event::Update(Update::LeafDecided(_))))
+            .count();
+        assert_eq!(decide_count, 1, "Should only decide once per view");
     }
 }

@@ -35,8 +35,9 @@ use hotshot_types::{
 };
 
 use crate::{
+    events::ConsensusEvent,
     helpers::upgrade_lock,
-    message::{Certificate1, Certificate2, Vote2, Vote2Data},
+    message::{Certificate1, Certificate2, ProposalMessage, Vote2, Vote2Data},
 };
 
 #[allow(dead_code)]
@@ -52,6 +53,63 @@ pub struct TestView {
     pub cert2: Certificate2<TestTypes>,
     pub timeout_cert: TimeoutCertificate2<TestTypes>,
     pub view_sync_cert: ViewSyncFinalizeCertificate2<TestTypes>,
+}
+
+impl TestView {
+    /// Build a ProposalMessage suitable for sending as a ConsensusEvent::Proposal.
+    /// `recipient_key` is the public key of the node that will receive the VID share.
+    pub fn proposal_message(&self, recipient_key: &BLSPubKey) -> ProposalMessage<TestTypes> {
+        let inner_proposal = Proposal {
+            data: self.proposal.data.proposal.clone(),
+            signature: self.proposal.signature.clone(),
+            _pd: std::marker::PhantomData,
+        };
+        let vid_share = self
+            .vid_shares
+            .iter()
+            .find(|s| s.recipient_key == *recipient_key)
+            .expect("VID share not found for recipient key")
+            .clone();
+        ProposalMessage {
+            proposal: inner_proposal,
+            vid_share,
+        }
+    }
+
+    /// Get the VidCommitment2 for this view (for BlockReconstructed events).
+    pub fn vid_commitment(&self) -> hotshot_types::data::VidCommitment2 {
+        self.vid_disperse.payload_commitment
+    }
+
+    /// Build a ConsensusEvent::Proposal for a given recipient node.
+    pub fn proposal_event(&self, recipient_key: &BLSPubKey) -> ConsensusEvent<TestTypes> {
+        ConsensusEvent::Proposal(self.proposal_message(recipient_key))
+    }
+
+    /// Build a ConsensusEvent::BlockReconstructed for this view.
+    pub fn block_reconstructed_event(&self) -> ConsensusEvent<TestTypes> {
+        ConsensusEvent::BlockReconstructed(self.view_number, self.vid_commitment())
+    }
+
+    /// Build a ConsensusEvent::Certificate1 for this view.
+    pub fn cert1_event(&self) -> ConsensusEvent<TestTypes> {
+        ConsensusEvent::Certificate1(self.cert1.clone())
+    }
+
+    /// Build a ConsensusEvent::Certificate2 for this view.
+    pub fn cert2_event(&self) -> ConsensusEvent<TestTypes> {
+        ConsensusEvent::Certificate2(self.cert2.clone())
+    }
+
+    /// Build a ConsensusEvent::TimeoutCertificate for this view.
+    pub fn timeout_event(&self) -> ConsensusEvent<TestTypes> {
+        ConsensusEvent::TimeoutCertificate(self.timeout_cert.clone())
+    }
+
+    /// Build a ConsensusEvent::ViewSyncCertificate for this view.
+    pub fn view_sync_event(&self) -> ConsensusEvent<TestTypes> {
+        ConsensusEvent::ViewSyncCertificate(self.view_sync_cert.clone())
+    }
 }
 
 #[allow(dead_code)]
