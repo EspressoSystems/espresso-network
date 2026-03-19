@@ -34,7 +34,6 @@ pub(crate) fn key_pairs_for_testing<R: CryptoRng + RngCore>(
 }
 
 /// Helper function for test
-#[allow(clippy::cast_possible_truncation)]
 pub(crate) fn stake_table_for_testing(
     bls_keys: &[BLSVerKey],
     schnorr_keys: &[(SchnorrSignKey, SchnorrVerKey)],
@@ -49,6 +48,7 @@ pub(crate) fn stake_table_for_testing(
                 stake_amount: U256::from((i + 1) as u32),
             },
             state_ver_key: schnorr_key.clone(),
+            connect_info: None,
         })
         .collect::<Vec<_>>()
         .into()

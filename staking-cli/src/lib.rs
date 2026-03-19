@@ -4,7 +4,7 @@ use alloy::{
     primitives::{Address, U256, utils::parse_ether},
     signers::local::{MnemonicBuilder, PrivateKeySigner, coins_bip39::English},
 };
-use anyhow::{Result, bail};
+use anyhow::Result;
 use clap::{ArgAction, Parser, Subcommand};
 use clap_serde_derive::ClapSerde;
 use espresso_contract_deployer::provider::connect_ledger;
@@ -17,6 +17,7 @@ use metadata::MetadataUriArgs;
 use sequencer_utils::logging;
 use serde::{Deserialize, Serialize};
 use signature::OutputArgs;
+use thiserror::Error;
 use url::Url;
 
 pub(crate) mod claim;
@@ -140,11 +141,11 @@ pub(crate) struct Config {
 #[derive(ClapSerde, Parser, Clone, Debug, Deserialize, Serialize)]
 pub(crate) struct SignerConfig {
     /// The mnemonic to use when deriving the key.
-    #[clap(long, env = "MNEMONIC")]
+    #[clap(long, env = "MNEMONIC", conflicts_with_all = ["private_key", "ledger"])]
     pub mnemonic: Option<String>,
 
     /// Raw private key (hex-encoded with or without 0x prefix).
-    #[clap(long, env = "PRIVATE_KEY")]
+    #[clap(long, env = "PRIVATE_KEY", conflicts_with_all = ["mnemonic", "ledger"])]
     pub private_key: Option<String>,
 
     /// The mnemonic account index to use when deriving the key.
@@ -156,8 +157,23 @@ pub(crate) struct SignerConfig {
     ///
     /// NOTE: ledger must be unlocked, Ethereum app open and blind signing must be enabled in the
     /// Ethereum app settings.
-    #[clap(long, env = "USE_LEDGER")]
+    #[clap(long, env = "USE_LEDGER", conflicts_with_all = ["mnemonic", "private_key"])]
     pub ledger: bool,
+}
+
+#[derive(Debug, Error)]
+pub(crate) enum SignerConfigError {
+    #[error(
+        "Multiple signers provided: {provided}. Only one of --mnemonic, --private-key, or \
+         --ledger can be specified."
+    )]
+    MultipleSigners { provided: String },
+
+    #[error("--account-index is required when using --{signer}")]
+    MissingAccountIndex { signer: &'static str },
+
+    #[error("Either --mnemonic, --private-key, or --ledger flag must be provided")]
+    NoSigner,
 }
 
 #[derive(Clone, Debug)]
@@ -175,25 +191,43 @@ pub(crate) enum ValidSignerConfig {
 }
 
 impl TryFrom<SignerConfig> for ValidSignerConfig {
-    type Error = anyhow::Error;
+    type Error = SignerConfigError;
 
-    fn try_from(config: SignerConfig) -> Result<Self> {
-        let account_index = config
-            .account_index
-            .ok_or_else(|| anyhow::anyhow!("Account index must be provided"))?;
+    fn try_from(config: SignerConfig) -> std::result::Result<Self, SignerConfigError> {
+        let signers: Vec<&str> = [
+            config.ledger.then_some("--ledger"),
+            config.private_key.as_ref().map(|_| "--private-key"),
+            config.mnemonic.as_ref().map(|_| "--mnemonic"),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+
+        if signers.len() > 1 {
+            return Err(SignerConfigError::MultipleSigners {
+                provided: signers.join(", "),
+            });
+        }
+
         if config.ledger {
+            let account_index = config
+                .account_index
+                .ok_or(SignerConfigError::MissingAccountIndex { signer: "ledger" })?;
             Ok(ValidSignerConfig::Ledger {
                 account_index: account_index as usize,
             })
         } else if let Some(private_key) = config.private_key {
             Ok(ValidSignerConfig::PrivateKey { private_key })
         } else if let Some(mnemonic) = config.mnemonic {
+            let account_index = config
+                .account_index
+                .ok_or(SignerConfigError::MissingAccountIndex { signer: "mnemonic" })?;
             Ok(ValidSignerConfig::Mnemonic {
                 mnemonic,
                 account_index,
             })
         } else {
-            bail!("Either --mnemonic, --private-key, or --ledger flag must be provided")
+            Err(SignerConfigError::NoSigner)
         }
     }
 }
@@ -452,4 +486,146 @@ pub(crate) enum Commands {
         #[clap(long, env = "METADATA_URI")]
         metadata_uri: String,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_matches;
+
+    use super::*;
+
+    const EMPTY: SignerConfig = SignerConfig {
+        private_key: None,
+        mnemonic: None,
+        ledger: false,
+        account_index: None,
+    };
+
+    #[test]
+    fn test_private_key_without_account_index() {
+        let config = SignerConfig {
+            private_key: Some(DEV_PRIVATE_KEY.into()),
+            ..EMPTY
+        };
+        let valid = ValidSignerConfig::try_from(config).unwrap();
+        assert_matches!(valid, ValidSignerConfig::PrivateKey { .. });
+    }
+
+    #[test]
+    fn test_private_key_with_account_index() {
+        let config = SignerConfig {
+            private_key: Some(DEV_PRIVATE_KEY.into()),
+            account_index: Some(0),
+            ..EMPTY
+        };
+        let valid = ValidSignerConfig::try_from(config).unwrap();
+        assert_matches!(valid, ValidSignerConfig::PrivateKey { .. });
+    }
+
+    #[test]
+    fn test_mnemonic_without_account_index() {
+        let config = SignerConfig {
+            mnemonic: Some(DEV_MNEMONIC.into()),
+            ..EMPTY
+        };
+        let err = ValidSignerConfig::try_from(config).unwrap_err();
+        assert_matches!(
+            err,
+            SignerConfigError::MissingAccountIndex { signer: "mnemonic" }
+        );
+    }
+
+    #[test]
+    fn test_mnemonic_with_account_index() {
+        let config = SignerConfig {
+            mnemonic: Some(DEV_MNEMONIC.into()),
+            account_index: Some(5),
+            ..EMPTY
+        };
+        let valid = ValidSignerConfig::try_from(config).unwrap();
+        assert_matches!(
+            valid,
+            ValidSignerConfig::Mnemonic {
+                account_index: 5,
+                ..
+            }
+        );
+    }
+
+    #[test]
+    fn test_ledger_without_account_index() {
+        let config = SignerConfig {
+            ledger: true,
+            ..EMPTY
+        };
+        let err = ValidSignerConfig::try_from(config).unwrap_err();
+        assert_matches!(
+            err,
+            SignerConfigError::MissingAccountIndex { signer: "ledger" }
+        );
+    }
+
+    #[test]
+    fn test_ledger_with_account_index() {
+        let config = SignerConfig {
+            ledger: true,
+            account_index: Some(2),
+            ..EMPTY
+        };
+        let valid = ValidSignerConfig::try_from(config).unwrap();
+        assert_matches!(valid, ValidSignerConfig::Ledger { account_index: 2 });
+    }
+
+    #[test]
+    fn test_no_signer_provided() {
+        let err = ValidSignerConfig::try_from(EMPTY).unwrap_err();
+        assert_matches!(err, SignerConfigError::NoSigner);
+    }
+
+    #[test]
+    fn test_multiple_signers_mnemonic_and_private_key() {
+        let config = SignerConfig {
+            mnemonic: Some(DEV_MNEMONIC.into()),
+            private_key: Some(DEV_PRIVATE_KEY.into()),
+            account_index: Some(0),
+            ..EMPTY
+        };
+        let err = ValidSignerConfig::try_from(config).unwrap_err();
+        assert_matches!(err, SignerConfigError::MultipleSigners { .. });
+    }
+
+    #[test]
+    fn test_multiple_signers_ledger_and_private_key() {
+        let config = SignerConfig {
+            private_key: Some(DEV_PRIVATE_KEY.into()),
+            ledger: true,
+            ..EMPTY
+        };
+        let err = ValidSignerConfig::try_from(config).unwrap_err();
+        assert_matches!(err, SignerConfigError::MultipleSigners { .. });
+    }
+
+    #[test]
+    fn test_multiple_signers_ledger_and_mnemonic() {
+        let config = SignerConfig {
+            mnemonic: Some(DEV_MNEMONIC.into()),
+            ledger: true,
+            account_index: Some(0),
+            ..EMPTY
+        };
+        let err = ValidSignerConfig::try_from(config).unwrap_err();
+        assert_matches!(err, SignerConfigError::MultipleSigners { .. });
+    }
+
+    #[test]
+    fn test_multiple_signers_all_three() {
+        let config = SignerConfig {
+            mnemonic: Some(DEV_MNEMONIC.into()),
+            private_key: Some(DEV_PRIVATE_KEY.into()),
+            ledger: true,
+            account_index: Some(0),
+        };
+        let err = ValidSignerConfig::try_from(config).unwrap_err();
+        assert_matches!(err, SignerConfigError::MultipleSigners { .. });
+    }
 }

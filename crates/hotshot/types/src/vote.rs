@@ -285,6 +285,7 @@ impl<TYPES: NodeType> LightClientStateUpdateVoteAccumulator<TYPES> {
         let PeerConfig {
             stake_table_entry,
             state_ver_key,
+            ..
         } = membership.stake(key).await?;
 
         if !<TYPES::StateSignatureKey as LCV2StateSignatureKey>::verify_state_sig(
