@@ -102,6 +102,7 @@ use crate::{
         PayloadQueryData, QueryableHeader, QueryablePayload, TransactionHash,
         UpdateAvailabilityData, VidCommonMetadata, VidCommonQueryData,
     },
+    data_source::fetching::vid::VidCommonRangeFetcher,
     explorer::{self, ExplorerDataSource},
     fetching::{self, Provider, request},
     merklized_state::{
@@ -124,8 +125,8 @@ mod transaction;
 mod vid;
 
 use self::{
-    block::PayloadFetcher,
-    leaf::LeafFetcher,
+    block::{PayloadFetcher, PayloadRangeFetcher},
+    leaf::{LeafFetcher, LeafRangeFetcher},
     transaction::TransactionRequest,
     vid::{VidCommonFetcher, VidCommonRequest},
 };
@@ -867,8 +868,11 @@ where
     notifiers: Notifiers<Types>,
     provider: Arc<P>,
     leaf_fetcher: Arc<LeafFetcher<Types, S, P>>,
+    leaf_range_fetcher: Arc<LeafRangeFetcher<Types, S, P>>,
     payload_fetcher: Option<Arc<PayloadFetcher<Types, S, P>>>,
+    payload_range_fetcher: Option<Arc<PayloadRangeFetcher<Types, S, P>>>,
     vid_common_fetcher: Option<Arc<VidCommonFetcher<Types, S, P>>>,
+    vid_common_range_fetcher: Option<Arc<VidCommonRangeFetcher<Types, S, P>>>,
     range_chunk_size: usize,
     sync_status_chunk_size: usize,
     // Duration to sleep after each active fetch,
@@ -918,21 +922,31 @@ where
         let retry_semaphore = Arc::new(Semaphore::new(builder.rate_limit));
         let backoff = builder.backoff.build();
 
-        let (payload_fetcher, vid_fetcher) = if builder.is_leaf_only() {
-            (None, None)
-        } else {
-            (
-                Some(Arc::new(fetching::Fetcher::new(
-                    retry_semaphore.clone(),
-                    backoff.clone(),
-                ))),
-                Some(Arc::new(fetching::Fetcher::new(
-                    retry_semaphore.clone(),
-                    backoff.clone(),
-                ))),
-            )
-        };
+        let (payload_fetcher, payload_range_fetcher, vid_common_fetcher, vid_common_range_fetcher) =
+            if builder.is_leaf_only() {
+                (None, None, None, None)
+            } else {
+                (
+                    Some(Arc::new(fetching::Fetcher::new(
+                        retry_semaphore.clone(),
+                        backoff.clone(),
+                    ))),
+                    Some(Arc::new(fetching::Fetcher::new(
+                        retry_semaphore.clone(),
+                        backoff.clone(),
+                    ))),
+                    Some(Arc::new(fetching::Fetcher::new(
+                        retry_semaphore.clone(),
+                        backoff.clone(),
+                    ))),
+                    Some(Arc::new(fetching::Fetcher::new(
+                        retry_semaphore.clone(),
+                        backoff.clone(),
+                    ))),
+                )
+            };
         let leaf_fetcher = fetching::Fetcher::new(retry_semaphore.clone(), backoff.clone());
+        let leaf_range_fetcher = fetching::Fetcher::new(retry_semaphore.clone(), backoff.clone());
 
         let leaf_only = builder.leaf_only;
 
@@ -941,8 +955,11 @@ where
             notifiers: Default::default(),
             provider: Arc::new(builder.provider),
             leaf_fetcher: Arc::new(leaf_fetcher),
+            leaf_range_fetcher: Arc::new(leaf_range_fetcher),
             payload_fetcher,
-            vid_common_fetcher: vid_fetcher,
+            payload_range_fetcher,
+            vid_common_fetcher,
+            vid_common_range_fetcher,
             range_chunk_size: builder.range_chunk_size,
             sync_status_chunk_size: builder.sync_status_chunk_size,
             active_fetch_delay: builder.active_fetch_delay,
@@ -1991,16 +2008,22 @@ where
 /// A provider which can be used as a fetcher by the availability service.
 pub trait AvailabilityProvider<Types: NodeType>:
     Provider<Types, request::LeafRequest<Types>>
+    + Provider<Types, request::LeafRangeRequest<Types>>
     + Provider<Types, request::PayloadRequest>
+    + Provider<Types, request::PayloadRangeRequest>
     + Provider<Types, request::VidCommonRequest>
+    + Provider<Types, request::VidCommonRangeRequest>
     + Sync
     + 'static
 {
 }
 impl<Types: NodeType, P> AvailabilityProvider<Types> for P where
     P: Provider<Types, request::LeafRequest<Types>>
+        + Provider<Types, request::LeafRangeRequest<Types>>
         + Provider<Types, request::PayloadRequest>
+        + Provider<Types, request::PayloadRangeRequest>
         + Provider<Types, request::VidCommonRequest>
+        + Provider<Types, request::VidCommonRangeRequest>
         + Sync
         + 'static
 {

@@ -12,14 +12,21 @@
 
 //! [`Fetchable`] implementation for [`LeafQueryData`].
 
-use std::{cmp::Ordering, future::IntoFuture, iter::once, ops::RangeBounds, sync::Arc};
+use std::{
+    cmp::Ordering,
+    fmt::Debug,
+    future::IntoFuture,
+    iter::once,
+    ops::{Range, RangeBounds},
+    sync::Arc,
+};
 
 use anyhow::bail;
 use async_trait::async_trait;
 use committable::Committable;
 use derivative::Derivative;
 use derive_more::From;
-use futures::future::{BoxFuture, FutureExt};
+use futures::future::{BoxFuture, FutureExt, join_all};
 use hotshot_types::traits::node_implementation::NodeType;
 use tokio::spawn;
 use tracing::Instrument;
@@ -38,12 +45,18 @@ use crate::{
             pruning::PrunedHeightStorage,
         },
     },
-    fetching::{self, Callback, request},
+    fetching::{
+        self, Callback,
+        request::{self, LeafRangeRequest},
+    },
     types::HeightIndexed,
 };
 
 pub(super) type LeafFetcher<Types, S, P> =
     fetching::Fetcher<request::LeafRequest<Types>, LeafCallback<Types, S, P>>;
+
+pub(super) type LeafRangeFetcher<Types, S, P> =
+    fetching::Fetcher<LeafRangeRequest<Types>, LeafCallback<Types, S, P>>;
 
 impl<Types> FetchRequest for LeafId<Types>
 where
@@ -402,4 +415,230 @@ where
             Self::Continuation { callback } => callback.run(leaf.leaf.block_header().clone()),
         }
     }
+}
+
+impl<Types: NodeType, S, P> Callback<Vec<LeafQueryData<Types>>> for LeafCallback<Types, S, P>
+where
+    Header<Types>: QueryableHeader<Types>,
+    Payload<Types>: QueryablePayload<Types>,
+    S: VersionedDataSource + 'static,
+    for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
+    for<'a> S::ReadOnly<'a>: AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
+    P: AvailabilityProvider<Types>,
+{
+    async fn run(self, leaves: Vec<LeafQueryData<Types>>) {
+        match self {
+            Self::Leaf { fetcher } => {
+                tracing::info!(
+                    "fetched leaf range {}..{}",
+                    leaves[0].height(),
+                    leaves[leaves.len() - 1].height() + 1
+                );
+
+                for (i, leaf) in leaves.into_iter().enumerate() {
+                    if i == 0 {
+                        // Trigger a fetch of the parent of the first leaf in the chain, if we don't already
+                        // have it.
+                        trigger_fetch_for_parent(&fetcher, &leaf);
+                    }
+                    fetcher.store_and_notify(leaf).await;
+                }
+            },
+            Self::Continuation { callback } => callback.run_range(
+                leaves
+                    .into_iter()
+                    .map(|leaf| leaf.header().clone())
+                    .collect(),
+            ),
+        }
+    }
+}
+
+/// A request for a semi-open range of height-indexed objects.
+#[derive(Clone, Copy, Debug)]
+pub struct RangeRequest {
+    pub start: u64,
+    pub end: u64,
+}
+
+impl IntoIterator for RangeRequest {
+    type Item = u64;
+    type IntoIter = Range<u64>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.start..self.end
+    }
+}
+
+impl FetchRequest for RangeRequest {
+    fn might_exist(self, heights: Heights) -> bool {
+        heights.pruned_height.is_none_or(|h| h < self.start) && self.end < heights.height
+    }
+}
+
+impl RangeRequest {
+    pub fn len(&self) -> usize {
+        (self.end - self.start) as usize
+    }
+
+    pub fn is_satisfied(&self, range: &[impl HeightIndexed]) -> bool {
+        if range.len() != self.len() {
+            return false;
+        }
+        if self.len() == 0 {
+            return true;
+        }
+        range[0].height() == self.start
+    }
+}
+
+#[async_trait]
+impl<Types> Fetchable<Types> for Vec<LeafQueryData<Types>>
+where
+    Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
+    Payload<Types>: QueryablePayload<Types>,
+{
+    type Request = RangeRequest;
+
+    fn satisfies(&self, req: Self::Request) -> bool {
+        req.is_satisfied(self)
+    }
+
+    async fn passive_fetch(
+        notifiers: &Notifiers<Types>,
+        req: Self::Request,
+    ) -> BoxFuture<'static, Option<Self>> {
+        let waits = join_all(req.into_iter().map(|i| {
+            notifiers
+                .leaf
+                .wait_for(move |leaf| leaf.satisfies(LeafId::Number(i as usize)))
+        }))
+        .await;
+
+        join_all(waits.into_iter().map(|wait| wait.into_future()))
+            .map(|options| options.into_iter().collect())
+            .boxed()
+    }
+
+    async fn active_fetch<S, P>(
+        tx: &mut impl AvailabilityStorage<Types>,
+        fetcher: Arc<Fetcher<Types, S, P>>,
+        req: Self::Request,
+    ) -> anyhow::Result<()>
+    where
+        S: VersionedDataSource + 'static,
+        for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
+        for<'a> S::ReadOnly<'a>:
+            AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
+        P: AvailabilityProvider<Types>,
+    {
+        fetch_leaf_range_with_callbacks(tx, fetcher, req, None).await
+    }
+
+    async fn load<S>(storage: &mut S, req: Self::Request) -> QueryResult<Self>
+    where
+        S: AvailabilityStorage<Types>,
+    {
+        storage
+            .get_leaf_range((req.start as usize)..(req.end as usize))
+            .await?
+            .into_iter()
+            .collect()
+    }
+}
+
+pub(super) async fn fetch_leaf_range_with_callbacks<Types, S, P, I>(
+    tx: &mut impl AvailabilityStorage<Types>,
+    fetcher: Arc<Fetcher<Types, S, P>>,
+    req: RangeRequest,
+    callbacks: I,
+) -> anyhow::Result<()>
+where
+    Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
+    Payload<Types>: QueryablePayload<Types>,
+    S: VersionedDataSource + 'static,
+    for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
+    for<'a> S::ReadOnly<'a>: AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
+    P: AvailabilityProvider<Types>,
+    I: IntoIterator<Item = LeafCallback<Types, S, P>> + Send + 'static,
+    I::IntoIter: Send,
+{
+    // We need the next leaf after the chain so we can figure out what hash we expect for the last
+    // leaf in the chain, so we can fetch it securely from an untrusted provider.
+    let next = match tx.first_available_leaf(req.end).await {
+        Ok(leaf) if leaf.height() == req.end => leaf,
+        Ok(leaf) => {
+            // If we don't have the immediate successor leaf, but we have some later leaf,
+            // then we can't trigger this exact fetch, but we can fetch the (apparently)
+            // missing parent of the leaf we do have, which will trigger a chain of fetches
+            // that eventually reaches all the way back to the desired leaf.
+            tracing::debug!(
+                req.end,
+                fetching = leaf.height() - 1,
+                "do not have necessary leaf; trigger fetch of a later leaf"
+            );
+
+            let mut callbacks = vec![LeafCallback::Leaf {
+                fetcher: fetcher.clone(),
+            }];
+
+            if !fetcher.leaf_only {
+                callbacks.push(
+                    HeaderCallback::Payload {
+                        fetcher: fetcher.clone(),
+                    }
+                    .into(),
+                );
+                callbacks.push(
+                    HeaderCallback::VidCommon {
+                        fetcher: fetcher.clone(),
+                    }
+                    .into(),
+                );
+            }
+
+            fetcher.leaf_fetcher.clone().spawn_fetch(
+                request::LeafRequest::new(
+                    leaf.height() - 1,
+                    leaf.leaf().parent_commitment(),
+                    leaf.leaf().justify_qc().commit(),
+                ),
+                fetcher.provider.clone(),
+                // After getting the leaf, grab the other data as well; that will be missing
+                // whenever the leaf was.
+                callbacks,
+            );
+            return Ok(());
+        },
+        Err(QueryError::Missing | QueryError::NotFound) => {
+            // We successfully queried the database, but the next leaf wasn't there. We know for
+            // sure that based on the current state of the DB, we cannot fetch this leaf.
+            tracing::debug!(req.end, "not fetching leaf chain with unknown successor");
+            return Ok(());
+        },
+        Err(QueryError::Error { message }) => {
+            // An error occurred while querying the database. We don't know if we need to fetch the
+            // leaf or not. Return an error so we can try again.
+            bail!(
+                "failed to fetch successor for leaf chain {}: {message}",
+                req.end
+            );
+        },
+    };
+
+    let fetcher = fetcher.clone();
+    fetcher.leaf_range_fetcher.clone().spawn_fetch(
+        LeafRangeRequest {
+            start: req.start,
+            end: req.end,
+            last_leaf: next.leaf().parent_commitment(),
+            last_qc: next.leaf().justify_qc().commit(),
+        },
+        fetcher.provider.clone(),
+        once(LeafCallback::Leaf { fetcher }).chain(callbacks),
+    );
+
+    Ok(())
 }

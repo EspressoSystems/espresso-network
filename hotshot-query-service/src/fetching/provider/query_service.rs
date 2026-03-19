@@ -10,11 +10,12 @@
 // You should have received a copy of the GNU General Public License along with this program. If not,
 // see <https://www.gnu.org/licenses/>.
 
+use anyhow::Context;
 use async_trait::async_trait;
 use committable::Committable;
 use hotshot_types::{
     data::{VidCommitment, VidCommon, ns_table},
-    traits::{EncodeBytes, block_contents::BlockHeader, node_implementation::NodeType},
+    traits::{EncodeBytes, node_implementation::NodeType},
     vid::{
         advz::{ADVZScheme, advz_scheme},
         avidm::{AvidMScheme, init_avidm_param},
@@ -23,16 +24,16 @@ use hotshot_types::{
 };
 use jf_advz::VidScheme;
 use surf_disco::{Client, Url};
-use vbs::{BinarySerializer, version::StaticVersionType};
+use vbs::version::StaticVersionType;
 
 use super::Provider;
 use crate::{
-    Error, Header, Payload,
-    availability::{
-        ADVZCommonQueryData, ADVZPayloadQueryData, LeafQueryData, LeafQueryDataLegacy,
-        PayloadQueryData, VidCommonQueryData,
+    Error, Payload,
+    availability::{BlockQueryData, LeafQueryData, VidCommonQueryData},
+    fetching::request::{
+        LeafRangeRequest, LeafRequest, PayloadRangeRequest, PayloadRequest, RangeRequest,
+        VidCommonRangeRequest, VidCommonRequest,
     },
-    fetching::request::{LeafRequest, PayloadRequest, VidCommonRequest},
     types::HeightIndexed,
 };
 
@@ -53,346 +54,185 @@ impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
     }
 }
 
-impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
-    async fn deserialize_legacy_payload<Types: NodeType>(
-        &self,
-        payload_bytes: Vec<u8>,
-        common_bytes: Vec<u8>,
-        req: PayloadRequest,
-    ) -> Option<Payload<Types>> {
-        let client_url = self.client.base_url();
-
-        let PayloadRequest(VidCommitment::V0(advz_commit)) = req else {
-            return None;
-        };
-
-        let payload = match vbs::Serializer::<Ver>::deserialize::<ADVZPayloadQueryData<Types>>(
-            &payload_bytes,
-        ) {
-            Ok(payload) => payload,
-            Err(err) => {
-                tracing::warn!(%err, ?req, "failed to deserialize ADVZPayloadQueryData");
-                return None;
-            },
-        };
-
-        let common = match vbs::Serializer::<Ver>::deserialize::<ADVZCommonQueryData<Types>>(
-            &common_bytes,
-        ) {
-            Ok(common) => common,
-            Err(err) => {
-                tracing::warn!(%err, ?req, "failed to deserialize ADVZPayloadQueryData");
-                return None;
-            },
-        };
-
-        let num_storage_nodes = ADVZScheme::get_num_storage_nodes(common.common()) as usize;
-        let bytes = payload.data.encode();
-
-        let commit = advz_scheme(num_storage_nodes)
-            .commit_only(bytes)
-            .inspect_err(|err| {
-                tracing::error!(%err, ?req, "failed to compute legacy VID commitment");
-            })
-            .ok()?;
-
-        if commit != advz_commit {
-            tracing::error!(
-                ?req,
-                expected_commit=%advz_commit,
-                actual_commit=%commit,
-                %client_url,
-                "received inconsistent legacy payload"
-            );
-            return None;
-        }
-
-        Some(payload.data)
-    }
-
-    async fn deserialize_legacy_vid_common<Types: NodeType>(
-        &self,
-        bytes: Vec<u8>,
-        req: VidCommonRequest,
-    ) -> Option<VidCommon> {
-        let client_url = self.client.base_url();
-        let VidCommonRequest(VidCommitment::V0(advz_commit)) = req else {
-            return None;
-        };
-
-        match vbs::Serializer::<Ver>::deserialize::<ADVZCommonQueryData<Types>>(&bytes) {
-            Ok(res) => {
-                if ADVZScheme::is_consistent(&advz_commit, &res.common).is_ok() {
-                    Some(VidCommon::V0(res.common))
-                } else {
-                    tracing::error!(%client_url, ?req, ?res.common, "fetched inconsistent VID common data");
-                    None
-                }
-            },
-            Err(err) => {
-                tracing::warn!(
-                    %client_url,
-                    ?req,
-                    %err,
-                    "failed to deserialize ADVZCommonQueryData"
-                );
-                None
-            },
-        }
-    }
-    async fn deserialize_legacy_leaf<Types: NodeType>(
-        &self,
-        bytes: Vec<u8>,
-        req: LeafRequest<Types>,
-    ) -> Option<LeafQueryData<Types>> {
-        let client_url = self.client.base_url();
-
-        match vbs::Serializer::<Ver>::deserialize::<LeafQueryDataLegacy<Types>>(&bytes) {
-            Ok(mut leaf) => {
-                if leaf.height() != req.height {
-                    tracing::error!(
-                        %client_url, ?req,
-                        expected_height = req.height,
-                        actual_height = leaf.height(),
-                        "received leaf with the wrong height"
-                    );
-                    return None;
-                }
-
-                let expected_leaf_commit: [u8; 32] = req.expected_leaf.into();
-                let actual_leaf_commit: [u8; 32] = leaf.hash().into();
-                if actual_leaf_commit != expected_leaf_commit {
-                    tracing::error!(
-                        %client_url, ?req,
-                        expected_leaf = %req.expected_leaf,
-                        actual_leaf = %leaf.hash(),
-                        "received leaf with the wrong hash"
-                    );
-                    return None;
-                }
-
-                let expected_qc_commit: [u8; 32] = req.expected_qc.into();
-                let actual_qc_commit: [u8; 32] = leaf.qc().commit().into();
-                if actual_qc_commit != expected_qc_commit {
-                    tracing::error!(
-                        %client_url, ?req,
-                        expected_qc = %req.expected_qc,
-                        actual_qc = %leaf.qc().commit(),
-                        "received leaf with the wrong QC"
-                    );
-                    return None;
-                }
-
-                // There is a potential DOS attack where the peer sends us a leaf with the full
-                // payload in it, which uses redundant resources in the database, since we fetch and
-                // store payloads separately. We can defend ourselves by simply dropping the payload
-                // if present.
-                leaf.leaf.unfill_block_payload();
-
-                Some(leaf.into())
-            },
-            Err(err) => {
-                tracing::warn!(
-                    %client_url, ?req, %err,
-                    "failed to deserialize legacy LeafQueryData"
-                );
-                None
-            },
-        }
-    }
-}
-
 #[async_trait]
 impl<Types, Ver: StaticVersionType> Provider<Types, PayloadRequest> for QueryServiceProvider<Ver>
 where
     Types: NodeType,
 {
-    /// Fetches the `Payload` for a given request.
-    ///
-    /// Attempts to fetch and deserialize the requested data using the new type first.
-    /// If deserialization into the new type fails (e.g., because the provider is still returning
-    /// legacy data), it falls back to attempt deserialization using an older, legacy type instead.
-    /// This fallback ensures compatibility with older nodes or providers that have not yet upgraded.
-    ///
     async fn fetch(&self, req: PayloadRequest) -> Option<Payload<Types>> {
         let client_url = self.client.base_url();
         let req_hash = req.0;
+
         // Fetch the payload and the VID common data. We need the common data to recompute the VID
         // commitment, to ensure the payload we received is consistent with the commitment we
         // requested.
-        let payload_bytes = self
+        let block = self
             .client
-            .get::<()>(&format!("availability/payload/hash/{}", req.0))
-            .bytes()
+            .get::<BlockQueryData<Types>>(&format!("availability/block/payload-hash/{req_hash}"))
+            .send()
             .await
             .inspect_err(|err| {
-                tracing::info!(%err, %req_hash, %client_url, "failed to fetch payload bytes");
+                tracing::info!(%req_hash, %client_url, "failed to fetch block: {err:#}");
+            })
+            .ok()?;
+        let common = self
+            .client
+            .get::<VidCommonQueryData<Types>>(&format!(
+                "availability/vid/common/payload-hash/{req_hash}",
+            ))
+            .send()
+            .await
+            .inspect_err(|err| {
+                tracing::info!(%req_hash, %client_url, "failed to fetch VID common bytes: {err:#}");
             })
             .ok()?;
 
-        let common_bytes = self
-            .client
-            .get::<()>(&format!("availability/vid/common/payload-hash/{}", req.0))
-            .bytes()
-            .await
+        let comm = recompute_payload_commitment(&block, &common)
             .inspect_err(|err| {
-                tracing::info!(%err, %req_hash, %client_url, "failed to fetch VID common bytes");
+                tracing::error!(?req, "failed to compute VID commitment: {err:#}");
             })
             .ok()?;
+        if comm != req_hash {
+            tracing::error!(
+                expected = %req_hash,
+                actual = %comm,
+                %client_url,
+                "VID commitment mismatch"
+            );
 
-        let payload =
-            vbs::Serializer::<Ver>::deserialize::<PayloadQueryData<Types>>(&payload_bytes)
-                .inspect_err(|err| {
-                    tracing::info!(%err, %req_hash, "failed to deserialize PayloadQueryData");
-                })
-                .ok();
-
-        let common =
-            vbs::Serializer::<Ver>::deserialize::<VidCommonQueryData<Types>>(&common_bytes)
-                .inspect_err(|err| {
-                    tracing::info!(%err, %req_hash,
-                        "error deserializing VidCommonQueryData",
-                    );
-                })
-                .ok();
-
-        let (payload, common) = match (payload, common) {
-            (Some(payload), Some(common)) => (payload, common),
-            _ => {
-                tracing::info!(%req_hash, "falling back to legacy payload deserialization");
-
-                // fallback deserialization
-                return self
-                    .deserialize_legacy_payload::<Types>(payload_bytes, common_bytes, req)
-                    .await;
-            },
-        };
-
-        match common.common() {
-            VidCommon::V0(common) => {
-                let num_storage_nodes = ADVZScheme::get_num_storage_nodes(common) as usize;
-                let bytes = payload.data().encode();
-
-                let commit = advz_scheme(num_storage_nodes)
-                    .commit_only(bytes)
-                    .map(VidCommitment::V0)
-                    .inspect_err(|err| {
-                        tracing::error!(%err, %req_hash,  %num_storage_nodes, "failed to compute VID commitment (V0)");
-                    })
-                    .ok()?;
-
-                if commit != req.0 {
-                    tracing::error!(
-                        expected = %req_hash,
-                        actual = ?commit,
-                        %client_url,
-                        "VID commitment mismatch (V0)"
-                    );
-
-                    return None;
-                }
-            },
-            VidCommon::V1(common) => {
-                let bytes = payload.data().encode();
-
-                let avidm_param = init_avidm_param(common.total_weights)
-                    .inspect_err(|err| {
-                        tracing::error!(%err, %req_hash, "failed to initialize AVIDM params. total_weight={}", common.total_weights);
-                    })
-                    .ok()?;
-
-                let header = self
-                    .client
-                    .get::<Header<Types>>(&format!("availability/header/{}", payload.height()))
-                    .send()
-                    .await
-                    .inspect_err(|err| {
-                        tracing::warn!(%client_url, %err, "failed to fetch header for payload. height={}", payload.height());
-                    })
-                    .ok()?;
-
-                if header.payload_commitment() != req.0 {
-                    tracing::error!(
-                        expected = %req_hash,
-                        actual = %header.payload_commitment(),
-                        %client_url,
-                        "header payload commitment mismatch (V1, AvidM)"
-                    );
-                    return None;
-                }
-
-                let metadata = header.metadata().encode();
-                let commit = AvidMScheme::commit(
-                    &avidm_param,
-                    &bytes,
-                    ns_table::parse_ns_table(bytes.len(), &metadata),
-                )
-                .map(VidCommitment::V1)
-                .inspect_err(|err| {
-                    tracing::error!(%err, %req_hash, "failed to compute AVIDM commitment");
-                })
-                .ok()?;
-
-                // Compare calculated commitment with requested commitment
-                if commit != req.0 {
-                    tracing::warn!(
-                        expected = %req_hash,
-                        actual = %commit,
-                        %client_url,
-                        "commitment type mismatch for AVIDM check"
-                    );
-                    return None;
-                }
-            },
-            VidCommon::V2(common) => {
-                let bytes = payload.data().encode();
-
-                let header = self
-                    .client
-                    .get::<Header<Types>>(&format!("availability/header/{}", payload.height()))
-                    .send()
-                    .await
-                    .inspect_err(|err| {
-                        tracing::warn!(%client_url, %err, "failed to fetch header for payload. height={}", payload.height());
-                    })
-                    .ok()?;
-
-                if header.payload_commitment() != req.0 {
-                    tracing::error!(
-                        expected = %req_hash,
-                        actual = %header.payload_commitment(),
-                        %client_url,
-                        "header payload commitment mismatch (V2, AvidmGf2)"
-                    );
-                    return None;
-                }
-
-                let metadata = header.metadata().encode();
-                let commit = AvidmGf2Scheme::commit(
-                    &common.param,
-                    &bytes,
-                    ns_table::parse_ns_table(bytes.len(), &metadata),
-                )
-                .map(|(commit, _)| VidCommitment::V2(commit))
-                .inspect_err(|err| {
-                    tracing::error!(%err, %req_hash, "failed to compute AvidmGf2 commitment");
-                })
-                .ok()?;
-
-                // Compare calculated commitment with requested commitment
-                if commit != req.0 {
-                    tracing::warn!(
-                        expected = %req_hash,
-                        actual = %commit,
-                        %client_url,
-                        "commitment type mismatch for AvidmGf2 check"
-                    );
-                    return None;
-                }
-            },
+            return None;
         }
 
-        Some(payload.data)
+        Some(block.payload)
+    }
+}
+
+#[async_trait]
+impl<Types, Ver: StaticVersionType> Provider<Types, PayloadRangeRequest>
+    for QueryServiceProvider<Ver>
+where
+    Types: NodeType,
+{
+    async fn fetch(&self, req: PayloadRangeRequest) -> Option<Vec<Payload<Types>>> {
+        let client_url = self.client.base_url();
+        let req = RangeRequest::from(req);
+
+        // Fetch the payload and the VID common data. We need the common data to recompute the VID
+        // commitment, to ensure the payloads we received are consistent with the expected
+        // commitments.
+        let blocks = self
+            .client
+            .get::<Vec<BlockQueryData<Types>>>(&format!(
+                "availability/block/{}/{}",
+                req.start, req.end
+            ))
+            .send()
+            .await
+            .inspect_err(|err| {
+                tracing::info!(?req, %client_url, "failed to fetch blocks: {err:#}");
+            })
+            .ok()?;
+        let common = self
+            .client
+            .get::<Vec<VidCommonQueryData<Types>>>(&format!(
+                "availability/vid/common/{}/{}",
+                req.start, req.end
+            ))
+            .send()
+            .await
+            .inspect_err(|err| {
+                tracing::info!(?req, %client_url, "failed to fetch VID common: {err:#}");
+            })
+            .ok()?;
+
+        if blocks.len() != (req.end - req.start) as usize {
+            tracing::warn!(
+                %client_url,
+                expected = req.end - req.start,
+                actual = blocks.len(),
+                "server returned wrong number of blocks",
+            );
+            return None;
+        }
+        if common.len() != (req.end - req.start) as usize {
+            tracing::warn!(
+                %client_url,
+                expected = req.end - req.start,
+                actual = common.len(),
+                "server returned wrong number of VID common",
+            );
+            return None;
+        }
+
+        let commits = blocks
+            .iter()
+            .zip(&common)
+            .map(|(block, common)| recompute_payload_commitment(block, common))
+            .collect::<Result<Vec<VidCommitment>, _>>()
+            .inspect_err(|err| {
+                tracing::error!(?req, "failed to compute VID commitments: {err:#}");
+            })
+            .ok()?;
+        let hash = RangeRequest::hash_payloads(commits);
+        if hash != req.expected_hash {
+            tracing::error!(
+                %client_url,
+                ?req,
+                %hash,
+                %req.expected_hash,
+                "server returned blocks with wrong payload hash",
+            );
+            return None;
+        }
+
+        Some(blocks.into_iter().map(|block| block.payload).collect())
+    }
+}
+
+fn recompute_payload_commitment<Types>(
+    block: &BlockQueryData<Types>,
+    common: &VidCommonQueryData<Types>,
+) -> anyhow::Result<VidCommitment>
+where
+    Types: NodeType,
+{
+    match common.common() {
+        VidCommon::V0(common) => {
+            let num_storage_nodes = ADVZScheme::get_num_storage_nodes(common) as usize;
+            let bytes = block.payload().encode();
+            advz_scheme(num_storage_nodes)
+                .commit_only(bytes)
+                .map(VidCommitment::V0)
+                .context("failed to compute VID commitment (V0)")
+        },
+        VidCommon::V1(common) => {
+            let bytes = block.payload().encode();
+            let avidm_param = init_avidm_param(common.total_weights).context(format!(
+                "failed to initialize AVIDM params. total_weight={}",
+                common.total_weights
+            ))?;
+            let metadata = block.metadata().encode();
+            AvidMScheme::commit(
+                &avidm_param,
+                &bytes,
+                ns_table::parse_ns_table(bytes.len(), &metadata),
+            )
+            .map(VidCommitment::V1)
+            .map_err(anyhow::Error::msg)
+            .context("failed to compute AVIDM commitment")
+        },
+        VidCommon::V2(common) => {
+            let bytes = block.payload().encode();
+            let metadata = block.metadata().encode();
+            AvidmGf2Scheme::commit(
+                &common.param,
+                &bytes,
+                ns_table::parse_ns_table(bytes.len(), &metadata),
+            )
+            .map(|(commit, _)| VidCommitment::V2(commit))
+            .map_err(anyhow::Error::msg)
+            .context("failed to compute AvidmGf2 commitment")
+        },
     }
 }
 
@@ -402,79 +242,136 @@ impl<Types, Ver: StaticVersionType> Provider<Types, LeafRequest<Types>>
 where
     Types: NodeType,
 {
-    /// Fetches the `Leaf` for a given request.
-    ///
-    /// Attempts to fetch and deserialize the requested data using the new type first.
-    /// If deserialization into the new type fails (e.g., because the provider is still returning
-    /// legacy data), it falls back to attempt deserialization using an older, legacy type instead.
-    /// This fallback ensures compatibility with older nodes or providers that have not yet upgraded.
-    ///
     async fn fetch(&self, req: LeafRequest<Types>) -> Option<LeafQueryData<Types>> {
         let client_url = self.client.base_url();
 
-        let bytes = self
+        let leaf = self
             .client
-            .get::<()>(&format!("availability/leaf/{}", req.height))
-            .bytes()
+            .get::<LeafQueryData<Types>>(&format!("availability/leaf/{}", req.height))
+            .send()
             .await;
-        let bytes = match bytes {
-            Ok(bytes) => bytes,
+        let mut leaf = match leaf {
+            Ok(leaf) => leaf,
             Err(err) => {
-                tracing::info!(%client_url, ?req, %err, "failed to fetch bytes for leaf");
-
+                tracing::info!(%client_url, ?req, %err, "failed to fetch leaf");
                 return None;
             },
         };
 
-        // Attempt to deserialize using the new type
-
-        match vbs::Serializer::<Ver>::deserialize::<LeafQueryData<Types>>(&bytes) {
-            Ok(mut leaf) => {
-                if leaf.height() != req.height {
-                    tracing::error!(
-                        %client_url, ?req, ?leaf,
-                        expected_height = req.height,
-                        actual_height = leaf.height(),
-                        "received leaf with the wrong height"
-                    );
-                    return None;
-                }
-                if leaf.hash() != req.expected_leaf {
-                    tracing::error!(
-                        %client_url, ?req, ?leaf,
-                        expected_hash = %req.expected_leaf,
-                        actual_hash = %leaf.hash(),
-                        "received leaf with the wrong hash"
-                    );
-                    return None;
-                }
-                if leaf.qc().commit() != req.expected_qc {
-                    tracing::error!(
-                        %client_url, ?req, ?leaf,
-                        expected_qc = %req.expected_qc,
-                        actual_qc = %leaf.qc().commit(),
-                        "received leaf with the wrong QC"
-                    );
-                    return None;
-                }
-
-                // There is a potential DOS attack where the peer sends us a leaf with the full
-                // payload in it, which uses redundant resources in the database, since we fetch and
-                // store payloads separately. We can defend ourselves by simply dropping the payload
-                // if present.
-                leaf.leaf.unfill_block_payload();
-
-                Some(leaf)
-            },
-            Err(err) => {
-                tracing::info!(
-                    ?req, %err,
-                    "failed to deserialize LeafQueryData, falling back to legacy deserialization"
-                );
-                // Fallback deserialization
-                self.deserialize_legacy_leaf(bytes, req).await
-            },
+        if leaf.height() != req.height {
+            tracing::error!(
+                %client_url, ?req, ?leaf,
+                expected_height = req.height,
+                actual_height = leaf.height(),
+                "received leaf with the wrong height"
+            );
+            return None;
         }
+        if leaf.hash() != req.expected_leaf {
+            tracing::error!(
+                %client_url, ?req, ?leaf,
+                expected_hash = %req.expected_leaf,
+                actual_hash = %leaf.hash(),
+                "received leaf with the wrong hash"
+            );
+            return None;
+        }
+        if leaf.qc().commit() != req.expected_qc {
+            tracing::error!(
+                %client_url, ?req, ?leaf,
+                expected_qc = %req.expected_qc,
+                actual_qc = %leaf.qc().commit(),
+                "received leaf with the wrong QC"
+            );
+            return None;
+        }
+
+        // There is a potential DOS attack where the peer sends us a leaf with the full
+        // payload in it, which uses redundant resources in the database, since we fetch and
+        // store payloads separately. We can defend ourselves by simply dropping the payload
+        // if present.
+        leaf.leaf.unfill_block_payload();
+
+        Some(leaf)
+    }
+}
+
+#[async_trait]
+impl<Types, Ver: StaticVersionType> Provider<Types, LeafRangeRequest<Types>>
+    for QueryServiceProvider<Ver>
+where
+    Types: NodeType,
+{
+    async fn fetch(&self, req: LeafRangeRequest<Types>) -> Option<Vec<LeafQueryData<Types>>> {
+        let client_url = self.client.base_url();
+
+        let mut leaves = match self
+            .client
+            .get::<Vec<LeafQueryData<Types>>>(&format!(
+                "availability/leaf/{}/{}",
+                req.start, req.end
+            ))
+            .send()
+            .await
+        {
+            Ok(leaves) => leaves,
+            Err(err) => {
+                tracing::warn!(%client_url, ?req, "failed to fetch leaf chain: {err:#}");
+                return None;
+            },
+        };
+
+        if leaves.len() != (req.end - req.start) as usize {
+            tracing::warn!(
+                %client_url,
+                expected = req.end - req.start,
+                actual = leaves.len(),
+                "server returned wrong number of leaves",
+            );
+            return None;
+        }
+
+        // Verify hash chaining.
+        let mut expected_leaf = req.last_leaf;
+        let mut expected_qc = req.last_qc;
+        for leaf in leaves.iter_mut().rev() {
+            // There is a potential DOS attack where the peer sends us a leaf with the full payload
+            // in it, which uses redundant resources in the database, since we fetch and store
+            // payloads separately. We can defend ourselves by simply dropping the payload if
+            // present.
+            leaf.leaf.unfill_block_payload();
+
+            let leaf_hash = leaf.hash();
+            let qc_hash = leaf.qc().commit();
+            if leaf_hash != expected_leaf {
+                tracing::error!(
+                    %client_url,
+                    ?req,
+                    ?leaf,
+                    %expected_leaf,
+                    %leaf_hash,
+                    leaf_height = leaf.height(),
+                    "received leaf with wrong hash",
+                );
+                return None;
+            }
+            if qc_hash != expected_qc {
+                tracing::error!(
+                    %client_url,
+                    ?req,
+                    ?leaf,
+                    %expected_qc,
+                    %qc_hash,
+                    leaf_height = leaf.height(),
+                    "received leaf with wrong QC",
+                );
+                return None;
+            }
+            expected_leaf = leaf.leaf().parent_commitment();
+            expected_qc = leaf.leaf().justify_qc().commit();
+        }
+
+        Some(leaves)
     }
 }
 
@@ -483,52 +380,96 @@ impl<Types, Ver: StaticVersionType> Provider<Types, VidCommonRequest> for QueryS
 where
     Types: NodeType,
 {
-    /// Fetches the `VidCommon` for a given request.
-    ///
-    /// Attempts to fetch and deserialize the requested data using the new type first.
-    /// If deserialization into the new type fails (e.g., because the provider is still returning
-    /// legacy data), it falls back to attempt deserialization using an older, legacy type instead.
-    /// This fallback ensures compatibility with older nodes or providers that have not yet upgraded.
-    ///
     async fn fetch(&self, req: VidCommonRequest) -> Option<VidCommon> {
         let client_url = self.client.base_url();
-        let bytes = self
+        let res = self
             .client
-            .get::<()>(&format!("availability/vid/common/payload-hash/{}", req.0))
-            .bytes()
+            .get::<VidCommonQueryData<Types>>(&format!(
+                "availability/vid/common/payload-hash/{}",
+                req.0
+            ))
+            .send()
             .await;
-        let bytes = match bytes {
-            Ok(bytes) => bytes,
+        let res = match res {
+            Ok(res) => res,
             Err(err) => {
                 tracing::info!(
                     %client_url, ?req, %err,
-                    "failed to fetch VID common bytes"
+                    "failed to fetch VID common"
                 );
                 return None;
             },
         };
 
-        match vbs::Serializer::<Ver>::deserialize::<VidCommonQueryData<Types>>(&bytes) {
-            Ok(res) => {
-                if !res.common().is_consistent(&req.0) {
+        if !res.common().is_consistent(&req.0) {
+            tracing::error!(
+                %client_url, ?req, ?res.common,
+                "fetched inconsistent VID common data"
+            );
+            return None;
+        }
+        Some(res.common)
+    }
+}
+
+#[async_trait]
+impl<Types, Ver: StaticVersionType> Provider<Types, VidCommonRangeRequest>
+    for QueryServiceProvider<Ver>
+where
+    Types: NodeType,
+{
+    async fn fetch(&self, req: VidCommonRangeRequest) -> Option<Vec<VidCommon>> {
+        let req = RangeRequest::from(req);
+        let client_url = self.client.base_url();
+        let common = self
+            .client
+            .get::<Vec<VidCommonQueryData<Types>>>(&format!(
+                "availability/vid/common/{}/{}",
+                req.start, req.end
+            ))
+            .send()
+            .await
+            .inspect_err(|err| {
+                tracing::warn!(%client_url, ?req, "failed to fetch VID common: {err:#}");
+            })
+            .ok()?;
+
+        if common.len() != (req.end - req.start) as usize {
+            tracing::error!(
+                %client_url,
+                ?req,
+                len = common.len(),
+                "server returned wrong number of VID common",
+            );
+            return None;
+        }
+
+        let commits = common
+            .iter()
+            .map(|common| {
+                // Check that the given `VidCommon` matches the claimed payload commitment.
+                if !common.common().is_consistent(&common.payload_hash()) {
                     tracing::error!(
-                        %client_url, ?req, ?res.common,
-                        "fetched inconsistent VID common data"
+                        %client_url,
+                        ?req,
+                        commit = %common.payload_hash(),
+                        "server returned VID common with inconsistent commitment",
                     );
                     return None;
                 }
-                Some(res.common)
-            },
-            Err(err) => {
-                tracing::info!(
-                    %client_url, ?req, %err,
-                    "failed to deserialize as V1 VID common data, trying legacy fallback"
-                );
-                // Fallback deserialization
-                self.deserialize_legacy_vid_common::<Types>(bytes, req)
-                    .await
-            },
+
+                // Yield the payload commitment for hashing, to check that the full sequence of payloads
+                // is consistent with the request.
+                Some(common.payload_hash())
+            })
+            .collect::<Option<Vec<_>>>()?;
+        let hash = RangeRequest::hash_payloads(commits);
+        if hash != req.expected_hash {
+            tracing::error!(%client_url, ?req, %hash, "server returned wrong VID common");
+            return None;
         }
+
+        Some(common.into_iter().map(|common| common.common).collect())
     }
 }
 
@@ -550,7 +491,6 @@ mod test {
     use rand::RngCore;
     use test_utils::reserve_tcp_port;
     use tide_disco::{App, error::ServerError};
-    use vbs::version::StaticVersion;
 
     use super::*;
     use crate::{
@@ -558,7 +498,7 @@ mod test {
         api::load_api,
         availability::{
             AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, BlockWithTransaction,
-            Fetch, UpdateAvailabilityData, define_api,
+            Fetch, PayloadQueryData, UpdateAvailabilityData, define_api,
         },
         data_source::{
             AvailabilityProvider, FetchingDataSource, Transaction, VersionedDataSource,
@@ -1964,10 +1904,12 @@ mod test {
             .unwrap();
 
         // Give the node a decide containing the leaf but no additional information.
+        tracing::info!("send decide event");
         data_source.append(leaf.clone().into()).await.unwrap();
 
         // We will eventually retrieve the corresponding block and VID common, triggered by seeing
         // the leaf.
+        tracing::info!("wait");
         sleep(Duration::from_secs(5)).await;
 
         // Read the missing data directly from storage (via a database transaction), rather than
@@ -2500,201 +2442,5 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_metadata_stream_begin_failure_vid() {
         test_metadata_stream_begin_failure_helper(MetadataType::Vid).await
-    }
-
-    // This helper function starts up a mock network
-    // with v0 and v1 availability query modules,
-    // trigger fetches for a datasource from the provider,
-    // and asserts that the fetched data is correct
-    async fn run_fallback_deserialization_test_helper(port: u16, version: &str) {
-        let mut network = MockNetwork::<MockDataSource>::init().await;
-
-        let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
-
-        // Register availability APIs for two versions: v0 and v1
-        app.register_module(
-            "availability",
-            define_api(
-                &Default::default(),
-                StaticVersion::<0, 1> {},
-                "0.0.1".parse().unwrap(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-
-        app.register_module(
-            "availability",
-            define_api(
-                &Default::default(),
-                StaticVersion::<0, 1> {},
-                "1.0.0".parse().unwrap(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-
-        network.spawn(
-            "server",
-            app.serve(format!("0.0.0.0:{port}"), StaticVersion::<0, 1> {}),
-        );
-
-        let db = TmpDb::init().await;
-
-        let provider_url = format!("http://localhost:{port}/{version}")
-            .parse()
-            .expect("Invalid URL");
-
-        let provider = Provider::new(QueryServiceProvider::new(
-            provider_url,
-            StaticVersion::<0, 1> {},
-        ));
-
-        let ds = data_source(&db, &provider).await;
-        network.start().await;
-
-        let leaves = network.data_source().subscribe_leaves(1).await;
-        let leaves = leaves.take(5).collect::<Vec<_>>().await;
-        let test_leaf = &leaves[0];
-        let test_payload = &leaves[2];
-        let test_common = &leaves[3];
-
-        let mut fetches = vec![];
-        // Issue requests for missing data (these should initially remain unresolved):
-        fetches.push(ds.get_leaf(test_leaf.height() as usize).await.map(ignore));
-        fetches.push(ds.get_payload(test_payload.block_hash()).await.map(ignore));
-        fetches.push(
-            ds.get_vid_common(test_common.block_hash())
-                .await
-                .map(ignore),
-        );
-
-        // Even if we give data extra time to propagate, these requests will not resolve, since we
-        // didn't trigger any active fetches.
-        sleep(Duration::from_secs(1)).await;
-        for (i, fetch) in fetches.into_iter().enumerate() {
-            tracing::info!("checking fetch {i} is unresolved");
-            fetch.try_resolve().unwrap_err();
-        }
-
-        // Append the latest known leaf to the local store
-        // This would trigger fetches for the corresponding missing data
-        // such as header, vid and payload
-        // This would also trigger fetches for the parent data
-        ds.append(leaves.last().cloned().unwrap().into())
-            .await
-            .unwrap();
-
-        // check that the data has been fetches and matches the network data source
-        {
-            let leaf = ds.get_leaf(test_leaf.height() as usize).await;
-            let payload = ds.get_payload(test_payload.height() as usize).await;
-            let common = ds.get_vid_common(test_common.height() as usize).await;
-
-            let truth = network.data_source();
-            assert_eq!(
-                leaf.await,
-                truth.get_leaf(test_leaf.height() as usize).await.await
-            );
-            assert_eq!(
-                payload.await,
-                truth
-                    .get_payload(test_payload.height() as usize)
-                    .await
-                    .await
-            );
-            assert_eq!(
-                common.await,
-                truth
-                    .get_vid_common(test_common.height() as usize)
-                    .await
-                    .await
-            );
-        }
-    }
-
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_fallback_deserialization_for_fetch_requests_v0() {
-        let port = reserve_tcp_port().unwrap();
-
-        // This run will call v0 availalbilty api for fetch requests.
-        // The fetch initially attempts deserialization with new types,
-        // which fails because the v0 provider returns legacy types.
-        // It then falls back to deserializing as legacy types,
-        // and the fetch passes
-        run_fallback_deserialization_test_helper(port, "v0").await;
-    }
-
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_fallback_deserialization_for_fetch_requests_v1() {
-        let port = reserve_tcp_port().unwrap();
-
-        // Fetch from the v1 availability API using MockVersions.
-        // this one fetches from the v1 provider.
-        // which would correctly deserialize the bytes in the first attempt, so no fallback deserialization is needed
-        run_fallback_deserialization_test_helper(port, "v1").await;
-    }
-
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_fallback_deserialization_for_fetch_requests_pos() {
-        let port = reserve_tcp_port().unwrap();
-
-        // Fetch Proof of Stake (PoS) data using the v1 availability API
-        // with proof of stake version
-        run_fallback_deserialization_test_helper(port, "v1").await;
-    }
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_fallback_deserialization_for_fetch_requests_v0_pos() {
-        // Run with the PoS version against a v0 provider.
-        // Fetch requests are expected to fail because PoS commitments differ from the legacy commitments
-        // returned by the v0 provider.
-        // For example: a PoS Leaf2 commitment will not match the downgraded commitment from a legacy Leaf1.
-
-        let mut network = MockNetwork::<MockDataSource>::init().await;
-
-        let port = reserve_tcp_port().unwrap();
-        let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
-
-        app.register_module(
-            "availability",
-            define_api(
-                &Default::default(),
-                StaticVersion::<0, 1> {},
-                "0.0.1".parse().unwrap(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-
-        network.spawn(
-            "server",
-            app.serve(format!("0.0.0.0:{port}"), StaticVersion::<0, 1> {}),
-        );
-
-        let db = TmpDb::init().await;
-        let provider = Provider::new(QueryServiceProvider::new(
-            format!("http://localhost:{port}/v0").parse().unwrap(),
-            StaticVersion::<0, 1> {},
-        ));
-        let ds = data_source(&db, &provider).await;
-
-        network.start().await;
-
-        let leaves = network.data_source().subscribe_leaves(1).await;
-        let leaves = leaves.take(5).collect::<Vec<_>>().await;
-        let test_leaf = &leaves[0];
-        let test_payload = &leaves[2];
-        let test_common = &leaves[3];
-
-        let leaf = ds.get_leaf(test_leaf.height() as usize).await;
-        let payload = ds.get_payload(test_payload.height() as usize).await;
-        let common = ds.get_vid_common(test_common.height() as usize).await;
-
-        sleep(Duration::from_secs(3)).await;
-
-        // fetches fail because of different commitments
-        leaf.try_resolve().unwrap_err();
-        payload.try_resolve().unwrap_err();
-        common.try_resolve().unwrap_err();
     }
 }

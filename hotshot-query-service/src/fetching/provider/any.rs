@@ -21,7 +21,10 @@ use crate::{
     Payload,
     availability::LeafQueryData,
     data_source::AvailabilityProvider,
-    fetching::request::{LeafRequest, PayloadRequest, VidCommonRequest},
+    fetching::request::{
+        LeafRangeRequest, LeafRequest, PayloadRangeRequest, PayloadRequest, VidCommonRangeRequest,
+        VidCommonRequest,
+    },
 };
 
 /// Blanket trait combining [`Debug`] and [`Provider`].
@@ -45,8 +48,11 @@ where
 }
 
 type PayloadProvider<Types> = Arc<dyn DebugProvider<Types, PayloadRequest>>;
+type PayloadRangeProvider<Types> = Arc<dyn DebugProvider<Types, PayloadRangeRequest>>;
 type LeafProvider<Types> = Arc<dyn DebugProvider<Types, LeafRequest<Types>>>;
+type LeafRangeProvider<Types> = Arc<dyn DebugProvider<Types, LeafRangeRequest<Types>>>;
 type VidCommonProvider<Types> = Arc<dyn DebugProvider<Types, VidCommonRequest>>;
+type VidCommonRangeProvider<Types> = Arc<dyn DebugProvider<Types, VidCommonRangeRequest>>;
 
 /// Adaptor combining multiple data availability providers.
 ///
@@ -93,8 +99,11 @@ where
     Types: NodeType,
 {
     payload_providers: Vec<PayloadProvider<Types>>,
+    payload_range_providers: Vec<PayloadRangeProvider<Types>>,
     leaf_providers: Vec<LeafProvider<Types>>,
+    leaf_range_providers: Vec<LeafRangeProvider<Types>>,
     vid_common_providers: Vec<VidCommonProvider<Types>>,
+    vid_common_range_providers: Vec<VidCommonRangeProvider<Types>>,
 }
 
 #[async_trait]
@@ -104,6 +113,16 @@ where
 {
     async fn fetch(&self, req: PayloadRequest) -> Option<Payload<Types>> {
         any_fetch(&self.payload_providers, req).await
+    }
+}
+
+#[async_trait]
+impl<Types> Provider<Types, PayloadRangeRequest> for AnyProvider<Types>
+where
+    Types: NodeType,
+{
+    async fn fetch(&self, req: PayloadRangeRequest) -> Option<Vec<Payload<Types>>> {
+        any_fetch(&self.payload_range_providers, req).await
     }
 }
 
@@ -118,12 +137,32 @@ where
 }
 
 #[async_trait]
+impl<Types> Provider<Types, LeafRangeRequest<Types>> for AnyProvider<Types>
+where
+    Types: NodeType,
+{
+    async fn fetch(&self, req: LeafRangeRequest<Types>) -> Option<Vec<LeafQueryData<Types>>> {
+        any_fetch(&self.leaf_range_providers, req).await
+    }
+}
+
+#[async_trait]
 impl<Types> Provider<Types, VidCommonRequest> for AnyProvider<Types>
 where
     Types: NodeType,
 {
     async fn fetch(&self, req: VidCommonRequest) -> Option<VidCommon> {
         any_fetch(&self.vid_common_providers, req).await
+    }
+}
+
+#[async_trait]
+impl<Types> Provider<Types, VidCommonRangeRequest> for AnyProvider<Types>
+where
+    Types: NodeType,
+{
+    async fn fetch(&self, req: VidCommonRangeRequest) -> Option<Vec<VidCommon>> {
+        any_fetch(&self.vid_common_range_providers, req).await
     }
 }
 
@@ -138,8 +177,11 @@ where
     {
         let provider = Arc::new(provider);
         self.payload_providers.push(provider.clone());
+        self.payload_range_providers.push(provider.clone());
         self.leaf_providers.push(provider.clone());
-        self.vid_common_providers.push(provider);
+        self.leaf_range_providers.push(provider.clone());
+        self.vid_common_providers.push(provider.clone());
+        self.vid_common_range_providers.push(provider);
         self
     }
 
@@ -152,6 +194,15 @@ where
         self
     }
 
+    /// Add a sub-provider which fetches block ranges.
+    pub fn with_block_range_provider<P>(mut self, provider: P) -> Self
+    where
+        P: Provider<Types, PayloadRangeRequest> + Debug + 'static,
+    {
+        self.payload_range_providers.push(Arc::new(provider));
+        self
+    }
+
     /// Add a sub-provider which fetches leaves.
     pub fn with_leaf_provider<P>(mut self, provider: P) -> Self
     where
@@ -161,12 +212,30 @@ where
         self
     }
 
+    /// Add a sub-provider which fetches leaf ranges.
+    pub fn with_leaf_range_provider<P>(mut self, provider: P) -> Self
+    where
+        P: Provider<Types, LeafRangeRequest<Types>> + Debug + 'static,
+    {
+        self.leaf_range_providers.push(Arc::new(provider));
+        self
+    }
+
     /// Add a sub-provider which fetches VID common data.
     pub fn with_vid_common_provider<P>(mut self, provider: P) -> Self
     where
         P: Provider<Types, VidCommonRequest> + Debug + 'static,
     {
         self.vid_common_providers.push(Arc::new(provider));
+        self
+    }
+
+    /// Add a sub-provider which fetches VID common ranges.
+    pub fn with_vid_common_range_provider<P>(mut self, provider: P) -> Self
+    where
+        P: Provider<Types, VidCommonRangeRequest> + Debug + 'static,
+    {
+        self.vid_common_range_providers.push(Arc::new(provider));
         self
     }
 }

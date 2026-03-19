@@ -29,7 +29,12 @@ use crate::{
     Header, Payload, QueryError, QueryResult,
     availability::{BlockId, QueryableHeader, QueryablePayload},
     data_source::{
-        fetching::{Fetchable, HeaderQueryData, LeafQueryData, Notifiers},
+        fetching::{
+            Fetchable, HeaderQueryData, LeafQueryData, Notifiers,
+            block::fetch_block_range_with_headers,
+            leaf::{RangeRequest, fetch_leaf_range_with_callbacks},
+            vid::fetch_vid_common_range_with_headers,
+        },
         storage::{
             AvailabilityStorage, NodeStorage, UpdateAvailabilityStorage,
             pruning::PrunedHeightStorage,
@@ -196,6 +201,27 @@ where
             },
         }
     }
+
+    pub(super) fn run_range(self, headers: Vec<Header<Types>>) {
+        match self {
+            Self::Payload { fetcher } => {
+                tracing::info!(
+                    "fetched leaves {}..{}, will now fetch payload",
+                    headers[0].block_number(),
+                    headers[headers.len() - 1].block_number() + 1,
+                );
+                fetch_block_range_with_headers(fetcher, headers);
+            },
+            Self::VidCommon { fetcher } => {
+                tracing::info!(
+                    "fetched leaves {}..{}, will now VID common",
+                    headers[0].block_number(),
+                    headers[headers.len() - 1].block_number() + 1,
+                );
+                fetch_vid_common_range_with_headers(fetcher, headers);
+            },
+        }
+    }
 }
 
 pub(super) async fn fetch_header_and_then<Types, S, P>(
@@ -255,6 +281,48 @@ where
             tracing::debug!("not fetching block with unknown payload {h}");
         },
     }
+
+    Ok(())
+}
+
+pub(super) async fn fetch_header_range_and_then<Types, S, P>(
+    tx: &mut impl AvailabilityStorage<Types>,
+    req: RangeRequest,
+    callback: HeaderCallback<Types, S, P>,
+) -> anyhow::Result<()>
+where
+    Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
+    Payload<Types>: QueryablePayload<Types>,
+    S: VersionedDataSource + 'static,
+    for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
+    for<'a> S::ReadOnly<'a>: AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
+    P: AvailabilityProvider<Types>,
+{
+    // Check if at least the headers are available in local storage.
+    match tx
+        .get_header_range((req.start as usize)..(req.end as usize))
+        .await
+        .and_then(|results| results.into_iter().collect())
+    {
+        Ok(headers) => {
+            callback.run_range(headers);
+            return Ok(());
+        },
+        Err(QueryError::Missing | QueryError::NotFound) => {
+            // We successfully queried the database, but at least one header wasn't there. Fall
+            // through to fetching it.
+            tracing::debug!(?req, "headers not available locally; trying fetch");
+        },
+        Err(QueryError::Error { message }) => {
+            // An error occurred while querying the database. We don't know if we need to fetch the
+            // headers or not. Return an error so we can try again.
+            bail!("failed to fetch headers for range {req:?}: {message}");
+        },
+    }
+
+    // Fetch the headers (in fact, the entire leaves) first, then fetch the remaining payload data.
+    fetch_leaf_range_with_callbacks(tx, callback.fetcher(), req, [callback.into()]).await?;
 
     Ok(())
 }

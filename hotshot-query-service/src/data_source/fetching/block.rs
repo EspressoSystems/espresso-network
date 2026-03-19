@@ -16,7 +16,7 @@ use std::{cmp::Ordering, future::IntoFuture, iter::once, ops::RangeBounds, sync:
 
 use async_trait::async_trait;
 use derivative::Derivative;
-use futures::future::{BoxFuture, FutureExt};
+use futures::future::{BoxFuture, FutureExt, join_all};
 use hotshot_types::traits::{block_contents::BlockHeader, node_implementation::NodeType};
 
 use super::{
@@ -32,6 +32,7 @@ use crate::{
     },
     data_source::{
         VersionedDataSource,
+        fetching::{header::fetch_header_range_and_then, leaf::RangeRequest},
         storage::{
             AvailabilityStorage, NodeStorage, UpdateAvailabilityStorage,
             pruning::PrunedHeightStorage,
@@ -39,12 +40,15 @@ use crate::{
     },
     fetching::{
         self, Callback,
-        request::{self, PayloadRequest},
+        request::{self, PayloadRangeRequest, PayloadRequest},
     },
     types::HeightIndexed,
 };
 pub(super) type PayloadFetcher<Types, S, P> =
     fetching::Fetcher<request::PayloadRequest, PayloadCallback<Types, S, P>>;
+
+pub(super) type PayloadRangeFetcher<Types, S, P> =
+    fetching::Fetcher<request::PayloadRangeRequest, PayloadRangeCallback<Types, S, P>>;
 
 impl<Types> FetchRequest for BlockId<Types>
 where
@@ -173,7 +177,7 @@ pub(super) fn fetch_block_with_header<Types, S, P>(
     P: AvailabilityProvider<Types>,
 {
     let Some(payload_fetcher) = fetcher.payload_fetcher.as_ref() else {
-        // If we're in light-weight mode, we don't need to fetch the VID common data.
+        // If we're in light-weight mode, we don't need to fetch the block data.
         return;
     };
 
@@ -380,5 +384,150 @@ where
         R: RangeBounds<usize> + Send + 'static,
     {
         storage.get_payload_metadata_range(range).await
+    }
+}
+
+#[async_trait]
+impl<Types> Fetchable<Types> for Vec<BlockQueryData<Types>>
+where
+    Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
+    Payload<Types>: QueryablePayload<Types>,
+{
+    type Request = RangeRequest;
+
+    fn satisfies(&self, req: Self::Request) -> bool {
+        req.is_satisfied(self)
+    }
+
+    async fn passive_fetch(
+        notifiers: &Notifiers<Types>,
+        req: Self::Request,
+    ) -> BoxFuture<'static, Option<Self>> {
+        let waits = join_all(req.into_iter().map(|i| {
+            notifiers
+                .block
+                .wait_for(move |block| block.satisfies(BlockId::Number(i as usize)))
+        }))
+        .await;
+
+        join_all(waits.into_iter().map(|wait| wait.into_future()))
+            .map(|options| options.into_iter().collect())
+            .boxed()
+    }
+
+    async fn active_fetch<S, P>(
+        tx: &mut impl AvailabilityStorage<Types>,
+        fetcher: Arc<Fetcher<Types, S, P>>,
+        req: Self::Request,
+    ) -> anyhow::Result<()>
+    where
+        S: VersionedDataSource + 'static,
+        for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
+        for<'a> S::ReadOnly<'a>:
+            AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
+        P: AvailabilityProvider<Types>,
+    {
+        fetch_header_range_and_then(tx, req, HeaderCallback::Payload { fetcher }).await
+    }
+
+    async fn load<S>(storage: &mut S, req: Self::Request) -> QueryResult<Self>
+    where
+        S: AvailabilityStorage<Types>,
+    {
+        storage
+            .get_block_range((req.start as usize)..(req.end as usize))
+            .await?
+            .into_iter()
+            .collect()
+    }
+}
+
+pub(super) fn fetch_block_range_with_headers<Types, S, P>(
+    fetcher: Arc<Fetcher<Types, S, P>>,
+    headers: Vec<Header<Types>>,
+) where
+    Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
+    Payload<Types>: QueryablePayload<Types>,
+    S: VersionedDataSource + 'static,
+    for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
+    P: AvailabilityProvider<Types>,
+{
+    let Some(payload_range_fetcher) = fetcher.payload_range_fetcher.as_ref() else {
+        // If we're in light-weight mode, we don't need to fetch the block data.
+        return;
+    };
+
+    // Now that we have the header, we only need to retrieve the payload.
+    tracing::info!(
+        "spawned active fetch for payload range {}..{}",
+        headers[0].block_number(),
+        headers[headers.len() - 1].block_number() + 1,
+    );
+    payload_range_fetcher.spawn_fetch(
+        PayloadRangeRequest::from_headers(&headers),
+        fetcher.provider.clone(),
+        once(PayloadRangeCallback {
+            headers,
+            fetcher: fetcher.clone(),
+        }),
+    );
+}
+
+#[derive(Derivative)]
+#[derivative(Debug(bound = ""))]
+pub(super) struct PayloadRangeCallback<Types: NodeType, S, P> {
+    headers: Vec<Header<Types>>,
+    #[derivative(Debug = "ignore")]
+    fetcher: Arc<Fetcher<Types, S, P>>,
+}
+
+impl<Types: NodeType, S, P> PartialEq for PayloadRangeCallback<Types, S, P> {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other).is_eq()
+    }
+}
+
+impl<Types: NodeType, S, P> Eq for PayloadRangeCallback<Types, S, P> {}
+
+impl<Types: NodeType, S, P> Ord for PayloadRangeCallback<Types, S, P> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        (
+            self.headers[0].block_number(),
+            self.headers[self.headers.len() - 1].block_number(),
+        )
+            .cmp(&(
+                other.headers[0].block_number(),
+                other.headers[other.headers.len() - 1].block_number(),
+            ))
+    }
+}
+
+impl<Types: NodeType, S, P> PartialOrd for PayloadRangeCallback<Types, S, P> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<Types: NodeType, S, P> Callback<Vec<Payload<Types>>> for PayloadRangeCallback<Types, S, P>
+where
+    Header<Types>: QueryableHeader<Types>,
+    Payload<Types>: QueryablePayload<Types>,
+    S: 'static + VersionedDataSource,
+    for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
+    P: AvailabilityProvider<Types>,
+{
+    async fn run(self, payloads: Vec<Payload<Types>>) {
+        tracing::info!(
+            "fetched payloads {}..{}",
+            self.headers[0].block_number(),
+            self.headers[self.headers.len() - 1].block_number() + 1
+        );
+
+        for (header, payload) in self.headers.into_iter().zip(payloads) {
+            let block = BlockQueryData::new(header, payload);
+            self.fetcher.store_and_notify(block).await;
+        }
     }
 }
