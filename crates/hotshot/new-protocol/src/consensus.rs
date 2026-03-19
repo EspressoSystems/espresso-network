@@ -427,13 +427,14 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         self.verify_vid_share(&vid_share, epoch).await?;
 
         // Verify the proposal is valid
-        self.validate_safety(&proposal).await?;
+        self.validate_safety(&proposal)?;
         self.proposals.insert(view, proposal.clone());
+        let payload_size = vid_share.payload_byte_len();
         self.vid_shares.insert(view, vid_share);
 
         // Now ask for the state to verify the header of the proposal
         self.coordinator_handle
-            .request_state(proposal.clone())
+            .request_state(proposal.clone(), payload_size)
             .await
             .ok()?;
         // And if we are leader next, ask for a header
@@ -476,7 +477,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         Some(())
     }
 
-    async fn validate_safety(&mut self, proposal: &QuorumProposal2<TYPES>) -> Option<()> {
+    fn validate_safety(&self, proposal: &QuorumProposal2<TYPES>) -> Option<()> {
         let Some(locked_qc) = self.locked_qc.as_ref() else {
             // Locked QC is not set which means it is at genesis
             return Some(());
@@ -573,8 +574,10 @@ impl<TYPES: NodeType> Consensus<TYPES> {
 
 #[cfg(test)]
 mod test {
-    use hotshot::types::BLSPubKey;
-    use hotshot_example_types::node_types::TestTypes;
+    use std::sync::Arc;
+
+    use hotshot::{traits::ValidatedState, types::BLSPubKey};
+    use hotshot_example_types::{node_types::TestTypes, state_types::TestValidatedState};
     use hotshot_types::traits::signature_key::SignatureKey;
     use tokio::{sync::mpsc::Sender, task::JoinHandle};
 
@@ -721,11 +724,6 @@ mod test {
                 )
             })
             .count()
-    }
-
-    #[tokio::test]
-    async fn test_data_generation() {
-        let _test_data = TestData::new(5).await;
     }
 
     /// Fresh consensus with no locked_qc accepts any proposal (genesis safety).
@@ -1029,11 +1027,15 @@ mod test {
 
         // Send StateVerificationFailed with matching commitment — removes proposal
         let proposal_commit = proposal_commitment(&test_data.views[1].proposal.data.proposal);
+        let state = <TestValidatedState as ValidatedState<TestTypes>>::from_header(
+            &test_data.views[1].proposal.data.proposal.block_header,
+        );
         harness
             .send(ConsensusEvent::StateVerificationFailed(
                 crate::events::StateResponse {
                     view: test_data.views[1].view_number,
                     commitment: proposal_commit,
+                    state: Arc::new(state),
                 },
             ))
             .await;

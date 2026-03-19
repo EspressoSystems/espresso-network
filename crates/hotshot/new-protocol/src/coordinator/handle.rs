@@ -3,7 +3,7 @@ use hotshot_types::{
     data::{EpochNumber, Leaf2, QuorumProposal2, ViewNumber},
     simple_vote::HasEpoch,
     traits::{block_contents::BlockHeader, node_implementation::NodeType},
-    vote::HasViewNumber,
+    vote::{Certificate, HasViewNumber},
 };
 use tokio::sync::mpsc::error::SendError;
 
@@ -31,7 +31,9 @@ impl<TYPES: NodeType> CoordinatorHandle<TYPES> {
     pub async fn request_state(
         &self,
         proposal: QuorumProposal2<TYPES>,
+        payload_size: u32,
     ) -> Result<(), SendError<Event<TYPES>>> {
+        let parent_commitment = proposal.justify_qc.data().leaf_commit;
         self.event_tx
             .send(Event::Action(Action::RequestState(StateRequest {
                 view: proposal.view_number(),
@@ -39,6 +41,8 @@ impl<TYPES: NodeType> CoordinatorHandle<TYPES> {
                 epoch: proposal.epoch().unwrap(),
                 block_number: proposal.block_header.block_number(),
                 proposal,
+                parent_commitment,
+                payload_size,
             })))
             .await
     }
@@ -77,6 +81,23 @@ impl<TYPES: NodeType> CoordinatorHandle<TYPES> {
             .send(Event::Action(Action::RequestVidDisperse(
                 view, epoch, block, metadata,
             )))
+            .await
+    }
+    pub async fn respond_state(
+        &self,
+        request: StateRequest<TYPES>,
+    ) -> Result<(), SendError<Event<TYPES>>> {
+        self.event_tx
+            .send(Event::Update(Update::StateVerified(request)))
+            .await
+    }
+    pub async fn respond_header(
+        &self,
+        view: ViewNumber,
+        header: TYPES::BlockHeader,
+    ) -> Result<(), SendError<Event<TYPES>>> {
+        self.event_tx
+            .send(Event::Update(Update::HeaderCreated(view, header)))
             .await
     }
 }

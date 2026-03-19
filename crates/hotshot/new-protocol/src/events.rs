@@ -1,7 +1,12 @@
+use std::sync::Arc;
+
 use committable::Commitment;
 use hotshot::traits::BlockPayload;
 use hotshot_types::{
-    data::{EpochNumber, Leaf2, QuorumProposal2, VidCommitment2, VidDisperse2, ViewNumber},
+    data::{
+        EpochNumber, Leaf2, QuorumProposal2, VidCommitment, VidCommitment2, VidDisperse2,
+        ViewNumber,
+    },
     drb::{DrbInput, DrbResult},
     simple_certificate::{TimeoutCertificate2, ViewSyncFinalizeCertificate2},
     traits::{block_contents::BuilderFee, node_implementation::NodeType},
@@ -11,19 +16,22 @@ use hotshot_types::{
 
 use crate::message::{Certificate1, Certificate2, ConsensusMessage, ProposalMessage, Vote1, Vote2};
 
-#[derive(Eq, PartialEq, Debug)]
+#[derive(Eq, PartialEq, Debug, Clone)]
 pub(crate) struct StateRequest<TYPES: NodeType> {
     pub view: ViewNumber,
     pub parent_view: ViewNumber,
     pub epoch: EpochNumber,
     pub block_number: u64,
     pub proposal: QuorumProposal2<TYPES>,
+    pub parent_commitment: Commitment<Leaf2<TYPES>>,
+    pub payload_size: u32,
 }
 
 #[derive(Eq, PartialEq, Debug)]
 pub(crate) struct StateResponse<TYPES: NodeType> {
     pub view: ViewNumber,
     pub commitment: Commitment<Leaf2<TYPES>>,
+    pub state: Arc<TYPES::ValidatedState>,
 }
 
 #[derive(Clone, Eq, PartialEq, Debug)]
@@ -45,6 +53,7 @@ pub(crate) struct HeaderRequest<TYPES: NodeType> {
     pub view: ViewNumber,
     pub epoch: EpochNumber,
     pub parent_proposal: QuorumProposal2<TYPES>,
+    pub payload_commitment: VidCommitment,
     pub builder_commitment: BuilderCommitment,
     pub metadata: <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
     pub builder_fee: BuilderFee<TYPES>,
@@ -79,7 +88,7 @@ pub enum Action<TYPES: NodeType> {
 #[allow(clippy::large_enum_variant)]
 pub enum Update<TYPES: NodeType> {
     StateVerified(StateRequest<TYPES>),
-    HeaderCreated(TYPES::BlockHeader),
+    HeaderCreated(ViewNumber, TYPES::BlockHeader),
     StateVerificationFailed(StateRequest<TYPES>),
     HeaderCreationFailed(BlockAndHeaderRequest<TYPES>),
     VidDisperseCreated(VidCommitment2, VidDisperse2<TYPES>),
@@ -166,7 +175,17 @@ pub enum StorageEvent<TYPES: NodeType> {
 pub enum StateEvent<TYPES: NodeType> {
     RequestState(StateRequest<TYPES>),
     RequestHeader(HeaderRequest<TYPES>),
-    UpdateState(TYPES::ValidatedState, ViewNumber, Commitment<Leaf2<TYPES>>),
+    UpdateState(TYPES::ValidatedState, ViewNumber, Leaf2<TYPES>),
+}
+
+impl<TYPES: NodeType> HasViewNumber for StateEvent<TYPES> {
+    fn view_number(&self) -> ViewNumber {
+        match self {
+            StateEvent::RequestState(request) => request.view,
+            StateEvent::RequestHeader(request) => request.view,
+            StateEvent::UpdateState(_, view, _) => *view,
+        }
+    }
 }
 
 #[allow(clippy::large_enum_variant)]

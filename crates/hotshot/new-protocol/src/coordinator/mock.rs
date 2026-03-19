@@ -1,9 +1,11 @@
 pub mod testing {
-    use hotshot::traits::BlockPayload;
+    use std::sync::Arc;
+
+    use hotshot::traits::{BlockPayload, ValidatedState};
     use hotshot_example_types::{
         block_types::{TestBlockHeader, TestBlockPayload, TestMetadata},
         node_types::{TEST_VERSIONS, TestTypes},
-        state_types::TestInstanceState,
+        state_types::{TestInstanceState, TestValidatedState},
     };
     use hotshot_types::{
         data::{Leaf2, QuorumProposalWrapper, VidDisperse, vid_commitment},
@@ -48,10 +50,14 @@ pub mod testing {
                 Action::SendMessage(message) => {},
                 Action::RequestState(state_request) => {
                     let commitment = proposal_commitment(&state_request.proposal);
+                    let state = <TestValidatedState as ValidatedState<TestTypes>>::from_header(
+                        &state_request.proposal.block_header,
+                    );
                     self.consensus_tx
                         .send(ConsensusEvent::StateVerified(StateResponse {
                             view: state_request.view,
                             commitment,
+                            state: Arc::new(state),
                         }))
                         .await
                         .unwrap();
