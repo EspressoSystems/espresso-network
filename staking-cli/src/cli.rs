@@ -26,7 +26,7 @@ use hotshot_types::{
 #[cfg(feature = "testing")]
 use crate::deploy::deploy_contracts_for_testing;
 use crate::{
-    Commands, Config, ValidSignerConfig,
+    Commands, Config, SignerConfigError, ValidSignerConfig,
     claim::fetch_claim_rewards_inputs,
     demo::{
         ChurnParams, DemoCommands, churn_for_demo, delegate_for_demo, stake_for_demo,
@@ -50,6 +50,10 @@ struct Args {
     /// Config file
     #[arg(short, long = "config")]
     config_path: Option<PathBuf>,
+
+    /// Skip loading the config file (takes precedence over -c)
+    #[arg(long)]
+    no_config: bool,
 
     /// Rest of arguments
     #[command(flatten)]
@@ -184,7 +188,7 @@ fn resolve_node_signatures(
         let input = NodeSignatureInput::try_from((signature_args.clone(), sender_address))?;
         NodeSignatures::try_from(input)
     } else {
-        let wallet = wallet.ok_or_else(|| anyhow::anyhow!("Signer configuration required"))?;
+        let wallet = wallet.ok_or(SignerConfigError::NoSigner)?;
         let address = NetworkWallet::<Ethereum>::default_signer_address(wallet);
         let input = NodeSignatureInput::try_from((signature_args.clone(), Some(address)))?;
         NodeSignatures::try_from((input, wallet))
@@ -199,7 +203,9 @@ pub async fn run() -> Result<()> {
 
     let config_path = cli.config_path();
     // Get config file
-    let config = if let Ok(f) = std::fs::read_to_string(&config_path) {
+    let config = if cli.no_config {
+        Config::from(&mut cli.config)
+    } else if let Ok(f) = std::fs::read_to_string(&config_path) {
         // parse toml
         match toml::from_str::<Config>(&f) {
             Ok(config) => config.merge(&mut cli.config),
@@ -394,17 +400,26 @@ pub async fn run() -> Result<()> {
         Address::ZERO
     };
 
-    let wallet =
-        if let Ok(signer_config) = TryInto::<ValidSignerConfig>::try_into(config.signer.clone()) {
-            signer_config.wallet().await.ok()
-        } else {
-            None
-        };
+    let wallet_result = async {
+        let signer_config = ValidSignerConfig::try_from(config.signer.clone())?;
+        signer_config.wallet().await
+    }
+    .await;
+    let (wallet, signer_error) = match wallet_result {
+        Ok(w) => (Some(w), None),
+        Err(e) => (None, Some(e.to_string())),
+    };
+    let require_wallet = || -> anyhow::Error {
+        match &signer_error {
+            Some(e) => anyhow::anyhow!("{e}"),
+            None => SignerConfigError::NoSigner.into(),
+        }
+    };
 
     // Commands that just read from chain
     if let Commands::Account = config.commands {
         let account = NetworkWallet::<Ethereum>::default_signer_address(
-            wallet.as_ref().context("Signer configuration required")?,
+            wallet.as_ref().ok_or_else(&require_wallet)?,
         );
         println!("{account}");
         return Ok(());
@@ -607,6 +622,9 @@ pub async fn run() -> Result<()> {
                      deprecated."
                 );
             }
+            if !config.export_calldata {
+                wallet.as_ref().ok_or_else(&require_wallet)?;
+            }
             let payload = resolve_node_signatures(
                 signature_args,
                 config.export_calldata,
@@ -640,7 +658,8 @@ pub async fn run() -> Result<()> {
                      deprecated."
                 );
             }
-            if let Some(w) = wallet.as_ref() {
+            if !config.export_calldata {
+                let w = wallet.as_ref().ok_or_else(&require_wallet)?;
                 let addr = NetworkWallet::<Ethereum>::default_signer_address(w);
                 tracing::info!("Updating validator {} with new keys", addr);
             }
@@ -730,7 +749,7 @@ pub async fn run() -> Result<()> {
                 })?
             } else {
                 NetworkWallet::<Ethereum>::default_signer_address(
-                    wallet.as_ref().context("Signer configuration required")?,
+                    wallet.as_ref().ok_or_else(&require_wallet)?,
                 )
             };
             fetch_claim_rewards_inputs(
@@ -792,9 +811,7 @@ pub async fn run() -> Result<()> {
     }
 
     // For execution, we need the wallet
-    let wallet = wallet.ok_or_else(|| {
-        anyhow::anyhow!("Signer configuration required for transaction execution")
-    })?;
+    let wallet = wallet.ok_or_else(&require_wallet)?;
     let account = NetworkWallet::<Ethereum>::default_signer_address(&wallet);
 
     // Check that our Ethereum balance isn't zero before proceeding.

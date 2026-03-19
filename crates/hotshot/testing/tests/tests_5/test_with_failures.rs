@@ -7,7 +7,7 @@
 use std::time::Duration;
 
 use hotshot_example_types::{
-    node_types::{Libp2pImpl, MemoryImpl, PushCdnImpl, CliquenetImpl, TEST_VERSIONS},
+    node_types::{CliquenetImpl, CompatNetImpl, Libp2pImpl, MemoryImpl, PushCdnImpl, TEST_VERSIONS},
     state_types::TestTypes,
 };
 use hotshot_macros::cross_tests;
@@ -20,7 +20,7 @@ use hotshot_testing::{
 // Test one node leaving the network.
 cross_tests!(
     TestName: test_with_failures_one,
-    Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl, CliquenetImpl],
+    Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl, CliquenetImpl, CompatNetImpl],
     Types: [TestTypes],
     Versions: [TEST_VERSIONS.test],
     Ignore: false,
