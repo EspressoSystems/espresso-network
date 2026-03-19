@@ -1868,7 +1868,8 @@ async fn test_cli_export_calldata_register_validator_direct_keys() -> Result<()>
         .success()
         .stdout(str::contains("transactions"))
         .stdout(str::contains("\"contractMethod\": null"))
-        .stdout(str::contains("\"data\": \"0x"));
+        .stdout(str::contains("\"data\": \"0x"))
+        .stdout(str::contains("\"description\": \"Register validator"));
 
     Ok(())
 }
@@ -1893,7 +1894,10 @@ async fn test_cli_export_calldata_update_consensus_keys_direct_keys() -> Result<
         .success()
         .stdout(str::contains("transactions"))
         .stdout(str::contains("\"contractMethod\": null"))
-        .stdout(str::contains("\"data\": \"0x"));
+        .stdout(str::contains("\"data\": \"0x"))
+        .stdout(str::contains(
+            "\"description\": \"Update consensus keys for",
+        ));
 
     Ok(())
 }

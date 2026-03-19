@@ -780,12 +780,14 @@ pub async fn run() -> Result<()> {
             })?;
             tx.simulate(&readonly_provider, sender).await?;
         }
+        let description = tx.description();
         let (to, data, fi) = tx.calldata();
         let chain_id = readonly_provider.get_chain_id().await?;
         let info = match fi {
             Some(fi) => CalldataInfo::with_method(to, data, U256::ZERO, fi),
             None => CalldataInfo::new(to, data),
-        };
+        }
+        .with_description(description);
         return output_calldata(&info, &config.output, chain_id);
     }
 

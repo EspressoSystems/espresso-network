@@ -163,8 +163,9 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
 
                     tracing::info!(?use_multisig, "Upgrading FeeContract to V1.0.1");
                     if use_multisig {
-                        let calldata =
-                            upgrade_fee_contract_multisig_owner(provider, contracts).await?;
+                        let calldata = upgrade_fee_contract_multisig_owner(provider, contracts)
+                            .await?
+                            .with_description("Upgrade FeeContract to V1.0.1".to_string());
                         output_safe_tx_builder(
                             &calldata,
                             self.output_path.as_deref(),
@@ -242,7 +243,9 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 let use_multisig = self.use_multisig;
 
                 if use_multisig {
-                    let calldata = upgrade_esp_token_v2_multisig_owner(provider, contracts).await?;
+                    let calldata = upgrade_esp_token_v2_multisig_owner(provider, contracts)
+                        .await?
+                        .with_description("Upgrade EspToken to V2".to_string());
                     output_safe_tx_builder(&calldata, self.output_path.as_deref(), self.chain_id)?;
                 } else {
                     crate::upgrade_esp_token_v2(provider, contracts).await?;
@@ -338,7 +341,8 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                         },
                         use_mock,
                     )
-                    .await?;
+                    .await?
+                    .with_description("Upgrade LightClient to V2".to_string());
                     output_safe_tx_builder(&calldata, self.output_path.as_deref(), self.chain_id)?;
                 } else {
                     crate::upgrade_light_client_v2(
@@ -360,7 +364,8 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 if use_multisig {
                     let calldata =
                         upgrade_light_client_v3_multisig_owner(provider, contracts, use_mock)
-                            .await?;
+                            .await?
+                            .with_description("Upgrade LightClient to V3".to_string());
                     output_safe_tx_builder(&calldata, self.output_path.as_deref(), self.chain_id)?;
                 } else {
                     crate::upgrade_light_client_v3(provider, contracts, use_mock).await?;
@@ -442,7 +447,8 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                             pauser: multisig_pauser,
                         },
                     )
-                    .await?;
+                    .await?
+                    .with_description("Upgrade StakeTable to V2".to_string());
                     output_safe_tx_builder(&calldata, self.output_path.as_deref(), self.chain_id)?;
                 } else {
                     // Pick admin from config. StakeTable uses OpsTimelock for faster
@@ -747,7 +753,11 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
             TransferOwnershipParams {
                 new_owner: timelock_address,
             },
-        )?;
+        )?
+        .with_description(format!(
+            "Transfer {} ownership to timelock {timelock_address}",
+            contract
+        ));
         output_safe_tx_builder(&calldata, self.output_path.as_deref(), self.chain_id)?;
         tracing::info!("Successfully encoded ownership transfer for {}", contract);
         Ok(())
@@ -831,7 +841,8 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
             .parse()
             .context("Failed to parse multisig transaction value as U256")?;
 
-        let calldata = encode_generic_calldata(target, function_signature, function_args, value)?;
+        let calldata = encode_generic_calldata(target, function_signature, function_args, value)?
+            .with_description(format!("Call {} on {target}", function_signature));
         output_safe_tx_builder(&calldata, self.output_path.as_deref(), self.chain_id)?;
 
         Ok(())

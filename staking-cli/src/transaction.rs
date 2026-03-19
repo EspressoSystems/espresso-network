@@ -96,8 +96,8 @@ pub enum Transaction {
 
 impl Transaction {
     /// Returns the contract address, encoded calldata, and optional function info for this state
-    /// change. Function info is `None` for calls with complex struct arguments that cannot be
-    /// represented as simple string values for Safe TX Builder.
+    /// change. Function info is `None` for calls with struct arguments that cannot be represented
+    /// as simple string values for Safe TX Builder.
     pub fn calldata(self) -> (Address, Bytes, Option<FunctionInfo>) {
         match self {
             Self::Approve {
@@ -294,6 +294,56 @@ impl Transaction {
         }
     }
 
+    pub fn description(&self) -> String {
+        match self {
+            Self::Approve {
+                spender, amount, ..
+            } => format!("Approve {} ESP for {}", format_esp(*amount), spender),
+            Self::Delegate {
+                validator, amount, ..
+            } => format!(
+                "Delegate {} ESP to validator {}",
+                format_esp(*amount),
+                validator
+            ),
+            Self::Undelegate {
+                validator, amount, ..
+            } => format!(
+                "Undelegate {} ESP from validator {}",
+                format_esp(*amount),
+                validator
+            ),
+            Self::ClaimWithdrawal { validator, .. } => {
+                format!("Claim withdrawal for validator {}", validator)
+            },
+            Self::ClaimValidatorExit { validator, .. } => {
+                format!("Claim validator exit for {}", validator)
+            },
+            Self::ClaimRewards { reward_claim, .. } => {
+                format!("Claim rewards from {}", reward_claim)
+            },
+            Self::RegisterValidator {
+                payload,
+                commission,
+                ..
+            } => format!(
+                "Register validator {} with {} commission",
+                payload.address, commission
+            ),
+            Self::UpdateConsensusKeys { payload, .. } => {
+                format!("Update consensus keys for {}", payload.address)
+            },
+            Self::DeregisterValidator { .. } => "Deregister validator".to_string(),
+            Self::UpdateCommission { new_commission, .. } => {
+                format!("Update commission to {}", new_commission)
+            },
+            Self::UpdateMetadataUri { .. } => "Update metadata URI".to_string(),
+            Self::Transfer { to, amount, .. } => {
+                format!("Transfer {} ESP to {}", format_esp(*amount), to)
+            },
+        }
+    }
+
     fn to_transaction_request(&self) -> TransactionRequest {
         let (to, data, _) = self.clone().calldata();
         TransactionRequest::default()
@@ -355,58 +405,7 @@ impl Transaction {
     }
 
     fn log_intent(&self) {
-        match self {
-            Self::Approve {
-                spender, amount, ..
-            } => {
-                tracing::info!("approve {} for {}", format_esp(*amount), spender);
-            },
-            Self::Delegate {
-                validator, amount, ..
-            } => {
-                tracing::info!("delegate {} to {}", format_esp(*amount), validator);
-            },
-            Self::Undelegate {
-                validator, amount, ..
-            } => {
-                tracing::info!("undelegate {} from {}", format_esp(*amount), validator);
-            },
-            Self::ClaimWithdrawal { validator, .. } => {
-                tracing::info!("claiming withdrawal for {}", validator);
-            },
-            Self::ClaimValidatorExit { validator, .. } => {
-                tracing::info!("claiming validator exit for {}", validator);
-            },
-            Self::ClaimRewards { reward_claim, .. } => {
-                tracing::info!("claiming rewards from {}", reward_claim);
-            },
-            Self::RegisterValidator {
-                payload,
-                commission,
-                ..
-            } => {
-                tracing::info!(
-                    "register validator {} with commission {}",
-                    payload.address,
-                    commission
-                );
-            },
-            Self::UpdateConsensusKeys { payload, .. } => {
-                tracing::info!("updating consensus keys for {}", payload.address);
-            },
-            Self::DeregisterValidator { .. } => {
-                tracing::info!("deregistering validator");
-            },
-            Self::UpdateCommission { new_commission, .. } => {
-                tracing::info!("updating commission to {}", new_commission);
-            },
-            Self::UpdateMetadataUri { .. } => {
-                tracing::info!("updating metadata URI");
-            },
-            Self::Transfer { to, amount, .. } => {
-                tracing::info!("transferring {} to {}", format_esp(*amount), to);
-            },
-        }
+        tracing::info!("{}", self.description());
     }
 
     pub async fn send(

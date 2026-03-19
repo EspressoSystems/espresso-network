@@ -22,6 +22,8 @@ pub struct CalldataInfo {
     pub value: U256,
     #[serde(skip)]
     pub function_info: Option<FunctionInfo>,
+    #[serde(skip)]
+    pub description: String,
 }
 
 impl CalldataInfo {
@@ -31,6 +33,7 @@ impl CalldataInfo {
             data,
             value: U256::ZERO,
             function_info: None,
+            description: String::new(),
         }
     }
 
@@ -40,7 +43,13 @@ impl CalldataInfo {
             data,
             value,
             function_info: Some(function_info),
+            description: String::new(),
         }
+    }
+
+    pub fn with_description(mut self, description: String) -> Self {
+        self.description = description;
+        self
     }
 }
 
@@ -60,7 +69,7 @@ struct SafeTransactionBuilderBatch {
 #[derive(Serialize)]
 struct SafeBatchMeta {
     name: &'static str,
-    description: &'static str,
+    description: String,
 }
 
 #[derive(Serialize)]
@@ -171,7 +180,7 @@ pub fn output_safe_tx_builder(
         created_at,
         meta: SafeBatchMeta {
             name: "Espresso Multisig Transactions",
-            description: "",
+            description: info.description.clone(),
         },
         transactions: vec![{
             let (data, contract_method, contract_inputs_values) = match &info.function_info {
@@ -331,5 +340,22 @@ mod tests {
         assert!(tx["data"].is_string());
         assert!(tx["contractMethod"].is_null());
         assert!(tx["contractInputsValues"].is_null());
+    }
+
+    #[test]
+    fn test_output_safe_tx_builder_description() {
+        let info = CalldataInfo::new(test_addr(), Bytes::from(vec![0x01]))
+            .with_description("Register validator 0xdead with 5.00% commission".to_string());
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test_description.json");
+        output_safe_tx_builder(&info, Some(&path), 1).unwrap();
+
+        let contents = std::fs::read_to_string(&path).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&contents).unwrap();
+        assert_eq!(
+            parsed["meta"]["description"].as_str().unwrap(),
+            "Register validator 0xdead with 5.00% commission"
+        );
     }
 }
