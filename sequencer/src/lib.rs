@@ -24,7 +24,6 @@ use async_lock::{Mutex, RwLock};
 use catchup::{ParallelStateCatchup, StatePeers};
 use context::SequencerContext;
 use derivative::Derivative;
-use either::Either;
 use espresso_types::{
     BackoffParams, EpochCommittees, L1ClientOptions, NodeState, PubKey, SeqTypes, ValidatedState,
     traits::{EventConsumer, MembershipPersistence},
@@ -125,9 +124,9 @@ pub struct NetworkParams {
     /// The address to advertise as our public API's URL
     pub public_api_url: Option<Url>,
     /// Cliquenet network address.
-    pub cliquenet_bind_addr: Option<NetAddr>,
+    pub cliquenet_bind_addr: NetAddr,
     /// X25519 secret key.
-    pub x25519_secret_key: Option<x25519::SecretKey>,
+    pub x25519_secret_key: x25519::SecretKey,
     /// The address to send to other Libp2p nodes to contact us
     pub libp2p_advertise_address: String,
     /// The address to bind to for Libp2p
@@ -365,11 +364,8 @@ where
         state_public_key: state_key_pair.ver_key(),
         state_private_key: state_key_pair.sign_key(),
         is_da,
-        x25519_keypair: network_params
-            .x25519_secret_key
-            .as_ref()
-            .map(x25519::Keypair::from),
-        p2p_addr: network_params.cliquenet_bind_addr.clone(),
+        x25519_keypair: Some(x25519::Keypair::from(&network_params.x25519_secret_key)),
+        p2p_addr: Some(network_params.cliquenet_bind_addr.clone()),
     };
 
     // Derive our Libp2p public key from our private key
@@ -711,10 +707,7 @@ where
         CombinedNetworks::new(cdn_network, p2p_network, Some(Duration::from_secs(1)))
     };
 
-    let network = if let Some((k, a)) = network_params
-        .x25519_secret_key
-        .zip(network_params.cliquenet_bind_addr)
-    {
+    let network = {
         let peers = coordinator
             .stake_table_for_epoch(None)
             .await?
@@ -724,13 +717,17 @@ where
             .into_iter()
             .filter_map(|cfg| Some((cfg.stake_table_entry.stake_key, cfg.connect_info?)));
 
-        let c =
-            Cliquenet::<PubKey>::create("sequencer", pub_key, k.into(), a, peers, metrics.clone())
-                .await?;
+        let c = Cliquenet::<PubKey>::create(
+            "sequencer",
+            pub_key,
+            network_params.x25519_secret_key.into(),
+            network_params.cliquenet_bind_addr.clone(),
+            peers,
+            metrics.clone(),
+        )
+        .await?;
 
-        Arc::new(Either::Right(CompatNetwork::new(c, combined_network).await))
-    } else {
-        Arc::new(Either::Left(combined_network))
+        Arc::new(CompatNetwork::new(c, combined_network).await)
     };
 
     let mut ctx = SequencerContext::init(
@@ -751,9 +748,7 @@ where
     )
     .await?;
 
-    if let Either::Right(net) = &*network {
-        net.set_upgrade_lock(ctx.upgrade_lock().await);
-    }
+    network.set_upgrade_lock(ctx.upgrade_lock().await);
 
     if wait_for_orchestrator {
         ctx = ctx.wait_for_orchestrator(orchestrator_client);
