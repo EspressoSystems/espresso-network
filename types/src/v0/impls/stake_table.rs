@@ -65,8 +65,8 @@ use super::{
     Header, L1Client, Leaf2, PubKey, SeqTypes,
     traits::{MembershipPersistence, StateCatchup},
     v0_3::{
-        AuthenticatedValidator, ChainConfig, EventKey, Fetcher, RegisteredValidator,
-        StakeTableEvent, StakeTableUpdateTask,
+        AuthenticatedValidator, ChainConfig, EventKey, Fetcher, MAX_VALIDATORS,
+        RegisteredValidator, StakeTableEvent, StakeTableUpdateTask,
     },
 };
 use crate::{
@@ -639,7 +639,7 @@ pub fn validators_from_l1_events<I: Iterator<Item = StakeTableEvent>>(
 /// Select active validators
 ///
 /// Filters out unauthenticated validator candidates, those without stake, and selects
-/// the top 100 staked validators.
+/// the top [`MAX_VALIDATORS`] staked validators.
 /// Returns a new AuthenticatedValidatorMap containing only the selected validators.
 pub fn select_active_validator_set(
     candidates: &RegisteredValidatorMap,
@@ -703,8 +703,8 @@ pub fn select_active_validator_set(
     // Sort by stake (descending order)
     valid_stakers.sort_by_key(|(_, stake)| std::cmp::Reverse(*stake));
 
-    if valid_stakers.len() > 100 {
-        valid_stakers.truncate(100);
+    if valid_stakers.len() > MAX_VALIDATORS {
+        valid_stakers.truncate(MAX_VALIDATORS);
     }
 
     let selected_addresses: HashSet<_> = valid_stakers.iter().map(|(addr, _)| *addr).collect();
@@ -2955,8 +2955,8 @@ mod tests {
         let selected_validators =
             select_active_validator_set(&candidates).expect("Failed to select validators");
         assert!(
-            selected_validators.len() <= 100,
-            "validators len is {}, expected at most 100",
+            selected_validators.len() <= MAX_VALIDATORS,
+            "validators len is {}, expected at most {MAX_VALIDATORS}",
             selected_validators.len()
         );
 

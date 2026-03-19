@@ -1044,10 +1044,16 @@ impl EpochRewardsCalculator {
         self.pending.as_ref().is_some_and(|(e, _)| *e == epoch)
     }
 
-    /// Get result for epoch, awaiting pending calculation if needed.
+    /// Retrieve the completed reward calculation for `epoch`.
+    ///
+    /// If a background task is pending for the requested epoch, this awaits its
+    /// completion and returns the result. If the pending task is for a
+    /// *different* epoch, it is left untouched and `None` is returned. Also
+    /// returns `None` when no pending task exists or the task failed/panicked.
     pub async fn get_result(&mut self, epoch: EpochNumber) -> Option<EpochRewardsResult> {
         let (pending_epoch, handle) = self.pending.take()?;
         if pending_epoch != epoch {
+            // Not the epoch we're looking for — put the task back.
             self.pending = Some((pending_epoch, handle));
             return None;
         }

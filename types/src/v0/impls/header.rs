@@ -752,7 +752,12 @@ impl Header {
         Ok(header)
     }
 
-    /// Calculate leader_counts for V5+ headers.
+    /// Calculate the per-validator leader counts for the current block.
+    ///
+    /// The array is sized to [`MAX_VALIDATORS`] (100) because only the top 100
+    /// validators by stake are selected into the active set via
+    /// `select_active_validator_set()`. `leader_index` is a position within
+    /// that set, so it is always in the range 0..100.
     pub fn calculate_leader_counts(
         parent_header: &Header,
         height: u64,
@@ -777,13 +782,20 @@ impl Header {
         leader_counts
     }
 
-    /// Get the leader index for V6+ headers.
+    /// Look up the proposing leader's index in the active validator set for this view.
+    ///
+    /// Returns `None` for protocol versions before [`EPOCH_REWARD_VERSION`] (V5),
+    /// since per-epoch reward tracking was not yet active.
+    ///
+    /// The returned index is a position in the epoch's stake table (0..MAX_VALIDATORS)
+    /// and is used to increment that leader's count in [`LeaderCounts`].
     pub async fn get_leader_index(
         version: Version,
         height: u64,
         view_number: u64,
         instance_state: &NodeState,
     ) -> anyhow::Result<Option<usize>> {
+        // Leader counts are only tracked from V5 onward.
         if version < EPOCH_REWARD_VERSION {
             return Ok(None);
         }
@@ -792,6 +804,7 @@ impl Header {
             .epoch_height
             .context("epoch height not in instance state for V6")?;
         let epoch = EpochNumber::new(epoch_from_block_number(height, epoch_height));
+
         let coordinator = instance_state.coordinator.clone();
         let epoch_membership = coordinator
             .membership_for_epoch(Some(epoch))
@@ -799,6 +812,7 @@ impl Header {
             .map_err(|e| anyhow::anyhow!("failed to get epoch membership: {e}"))?;
         let membership = epoch_membership.coordinator.membership().read().await;
 
+        // Resolve the leader for this view and find their index in the stake table.
         let leader = membership
             .leader(ViewNumber::new(view_number), Some(epoch))
             .context(format!("leader for epoch {epoch:?} not found"))?;
@@ -812,17 +826,31 @@ impl Header {
         Ok(Some(index))
     }
 
-    /// Handle epoch rewards for V6+ headers.
+    /// Distribute per epoch rewards at epoch boundaries.
     ///
-    /// For V6+, rewards are distributed per epoch instead of per block.
-    /// This function:
-    /// 1. Triggers background catchup calculation if needed
-    /// 2. At epoch boundary: waits for calculation, applies rewards, starts new calculation
-    /// 3. Not at epoch boundary: just triggers catchup if needed and returns 0
+    /// Rewards are calculated in the background during an epoch and applied
+    /// atomically at the epoch boundary (the last block of each epoch).
+    ///
+    /// The flow for a given block at `height` in epoch E:
+    ///
+    /// - E ≤ first_epoch + 1 : no rewards exist yet, return zero.
+    /// - if the previous epoch's calculation hasn't started,
+    ///   kick it off in the background so it's ready by the boundary. Return zero rewards.
+    /// - Epoch boundary (last block of E): apply the previous epoch's
+    ///   (E-1) reward result to `validated_state.reward_merkle_tree_v2`, verify
+    ///   the resulting root against `header_root` if provided, then start the
+    ///   background calculation for the current epoch E. `header_root` is `None`
+    ///   during proposal (the leader is building the header) and `Some` during
+    ///   validation.
+    ///
+    /// If the previous epoch's result is missing at the boundary (e.g. after a
+    /// restart or catchup), the function fetches the epoch's leaf, recovers the
+    /// leader counts and stake table, computes rewards synchronously, and applies
+    /// them before proceeding.
     ///
     /// # Returns
-    /// A tuple of (total_rewards_applied, changed_accounts). The changed_accounts set contains
-    /// all reward accounts that were updated by this epoch's rewards distribution.
+    /// `(total_rewards_applied, changed_accounts)` — the total reward amount
+    /// distributed and the set of accounts whose balances changed.
     pub async fn handle_epoch_rewards(
         height: u64,
         leader_counts: &LeaderCounts,
@@ -843,12 +871,15 @@ impl Header {
             .first_epoch()
             .context("first_epoch not available")?;
 
+        // No rewards data exists for the first two epochs.
         if epoch <= first_epoch + 1 {
             return Ok((RewardAmount::default(), HashSet::new()));
         }
 
         let mut reward_calculator = instance_state.epoch_rewards_calculator.lock().await;
 
+        // Eagerly start the previous epoch's reward calculation if it hasn't
+        // been kicked off yet, so the result is ready by the epoch boundary.
         if epoch > first_epoch + 2 && !reward_calculator.is_calculating(prev_epoch) {
             tracing::info!(%epoch, %prev_epoch, "triggering catchup reward calculation");
             reward_calculator.spawn_background_task(
@@ -861,12 +892,10 @@ impl Header {
             );
         }
 
-        // Not at epoch boundary
         if !is_last_block(height, epoch_height) {
             return Ok((RewardAmount::default(), HashSet::new()));
         }
 
-        // At epoch boundary: apply prev epoch rewards
         tracing::info!(%height, %epoch, %prev_epoch, "epoch boundary: applying rewards");
 
         let (epoch_rewards_applied, changed_accounts) = if let Some(result) =
@@ -881,9 +910,11 @@ impl Header {
             validated_state.reward_merkle_tree_v2 = result.reward_tree.clone();
             (result.total_distributed, result.changed_accounts)
         } else if prev_epoch <= first_epoch + 1 {
+            // Previous epoch is too early to have rewards.
             (RewardAmount::default(), HashSet::new())
         } else {
-            // Missing prev_epoch calculation - need to compute it now
+            // the background result is missing
+            // Fetch the previous epoch's leaf and compute rewards synchronously.
             let prev_epoch_last_block = *prev_epoch * epoch_height;
             if let Err(err) = coordinator.membership_for_epoch(Some(prev_epoch)).await {
                 tracing::info!(%prev_epoch, "stake table missing for prev_epoch, triggering catchup: {err:#}");
@@ -912,14 +943,17 @@ impl Header {
             let prev_epoch_header = prev_epoch_leaf.block_header();
 
             if prev_epoch_header.version() >= EPOCH_REWARD_VERSION {
-                // V6+ epoch needs rewards - spawn and wait for calculation
                 tracing::warn!(
                     %epoch,
                     %prev_epoch,
-                    "missing V6 epoch rewards at boundary, spawning calculation now"
+                    "missing epoch rewards at boundary, spawning calculation now"
                 );
 
                 if !reward_calculator.is_calculating(prev_epoch) {
+                    // Pick the reward tree to build on
+                    // use the local tree if its
+                    // root matches what the previous epoch's header committed to,
+                    // otherwise start from an empty tree because catchup will fill it
                     let expected_root = prev_epoch_header.reward_merkle_tree_root().right();
                     let actual_root = validated_state.reward_merkle_tree_v2.commitment();
                     let reward_tree = if expected_root == Some(actual_root) {
@@ -945,7 +979,6 @@ impl Header {
                     );
                 }
 
-                // Wait for the calculation to complete
                 let result = reward_calculator
                     .get_result(prev_epoch)
                     .await
@@ -963,14 +996,13 @@ impl Header {
                 validated_state.reward_merkle_tree_v2 = result.reward_tree.clone();
                 (result.total_distributed, result.changed_accounts)
             } else {
-                // Pre-V6 epoch has no rewards
-                tracing::info!(%epoch, %prev_epoch, "no rewards for pre-V6 epoch");
+                tracing::info!(%epoch, %prev_epoch, "no rewards for pre-V5 epoch");
                 (RewardAmount::default(), HashSet::new())
             }
         };
 
+        // Verify the reward tree root matches the proposed header, if available.
         let calculated_root = validated_state.reward_merkle_tree_v2.commitment();
-
         if let Some(header_root) = header_root
             && calculated_root != header_root
         {
@@ -980,7 +1012,8 @@ impl Header {
             );
         }
 
-        // Start calculation for current epoch
+        // Kick off the background calculation for the current epoch so it's
+        // ready on the next epoch boundary.
         reward_calculator.spawn_background_task(
             epoch,
             epoch_height,

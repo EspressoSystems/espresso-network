@@ -13,13 +13,13 @@ pub use super::v0_4::{
     RewardMerkleCommitmentV2, RewardMerkleProofV2, RewardMerkleTreeV2, TimeBasedUpgrade,
     Transaction, TxIndex, TxIter, TxPayload, TxPayloadRange, TxTableEntries, TxTableEntriesRange,
     Upgrade, UpgradeMode, UpgradeType, ViewBasedUpgrade, BLOCK_MERKLE_TREE_HEIGHT,
-    FEE_MERKLE_TREE_HEIGHT, NS_ID_BYTE_LEN, NS_OFFSET_BYTE_LEN, NUM_NSS_BYTE_LEN, NUM_TXS_BYTE_LEN,
+    FEE_MERKLE_TREE_HEIGHT, MAX_VALIDATORS, NS_ID_BYTE_LEN, NS_OFFSET_BYTE_LEN, NUM_NSS_BYTE_LEN,
+    NUM_TXS_BYTE_LEN,
     REWARD_MERKLE_TREE_V2_ARITY, REWARD_MERKLE_TREE_V2_HEIGHT, TX_OFFSET_BYTE_LEN,
 };
 
 pub const VERSION: Version = Version { major: 0, minor: 5 };
 
-pub const MAX_VALIDATORS: usize = 100;
 pub type LeaderCounts = [u16; MAX_VALIDATORS];
 
 mod header;

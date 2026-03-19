@@ -269,7 +269,6 @@ impl RewardMerkleTreeDataSource for SqlStorage {
             // For V5+, resolve to the last epoch boundary where proofs were stored.
             // For V4, proofs exist at every height.
             let proof_height = if leaf.header().version() < EPOCH_REWARD_VERSION
-                || epoch_height == 0
                 || is_last_block(height, epoch_height)
             {
                 height
