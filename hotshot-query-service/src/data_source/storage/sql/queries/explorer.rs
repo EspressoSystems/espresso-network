@@ -281,6 +281,10 @@ const EXPLORER_SUMMARY_NUM_BLOCKS: usize = 10;
 /// to return in our explorer summary.
 const EXPLORER_SUMMARY_NUM_TRANSACTIONS: usize = 10;
 
+/// MILLIS_PER_UNIT is helper constant that is utilized to aid in the
+/// conversion from milli prefix SI units to the uniary unit type.
+const MILLIS_PER_UNIT: f64 = 1_000.0;
+
 #[async_trait]
 impl<Mode, Types> ExplorerStorage<Types> for Transaction<Mode>
 where
@@ -520,7 +524,13 @@ where
                 "SELECT
                     h.height AS height,
                     h.timestamp AS timestamp,
-                    h.timestamp - lead(timestamp) OVER (ORDER BY h.height DESC) AS time,
+                    COALESCE(
+                        CAST(h.data -> 'fields' ->> 'timestamp_millis' AS BIGINT),
+                        CAST(h.data -> 'fields' ->> 'timestamp' AS BIGINT) * 1000
+                    ) - LEAD(COALESCE(
+                        CAST(h.data -> 'fields' ->> 'timestamp_millis' AS BIGINT), 
+                        CAST(h.data -> 'fields' ->> 'timestamp' AS BIGINT) * 1000
+                    )) OVER (ORDER BY h.height DESC) as time,
                     p.size AS size,
                     p.num_transactions AS transactions
                 FROM header AS h
@@ -557,7 +567,7 @@ where
                      row: sqlx::Result<(i64, i64, Option<i64>, Option<i32>, i32)>| async {
                         let (height, _timestamp, time, size, num_transactions) = row?;
 
-                        histograms.block_time.push_back(time.map(|i| i as u64));
+                        histograms.block_time.push_back(time.map(|i| i as f64 / MILLIS_PER_UNIT));
                         histograms.block_size.push_back(size.map(|i| i as u64));
                         histograms.block_transactions.push_back(num_transactions as u64);
                         histograms.block_heights.push_back(height as u64);
