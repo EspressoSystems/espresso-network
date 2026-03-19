@@ -606,6 +606,7 @@ mod test {
             let mock_coordinator = MockCoordinator {
                 event_rx,
                 consensus_tx: consensus_tx.clone(),
+                state_tx: None,
                 membership_coordinator: membership.clone(),
                 received_events: Vec::new(),
             };

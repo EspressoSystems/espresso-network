@@ -311,13 +311,18 @@ impl<TYPES: NodeType> ValidatedStateManager<TYPES> {
         self.in_progress_headers.contains_key(&view)
     }
 
-    async fn start_pending(&mut self, finished_commitment: Commitment<Leaf2<TYPES>>) {
-        let Some(pending_requests) = self.pending_requests.remove(&finished_commitment) else {
-            return;
-        };
-        for event in pending_requests {
-            self.handle_event(event).await;
-        }
+    fn start_pending(
+        &mut self,
+        finished_commitment: Commitment<Leaf2<TYPES>>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+        Box::pin(async move {
+            let Some(pending_requests) = self.pending_requests.remove(&finished_commitment) else {
+                return;
+            };
+            for event in pending_requests {
+                self.handle_event(event).await;
+            }
+        })
     }
 
     async fn handle_update_state(
@@ -330,5 +335,414 @@ impl<TYPES: NodeType> ValidatedStateManager<TYPES> {
         self.validated_states.insert(view, (Arc::new(state), leaf));
         self.in_progress_requests.remove(&commitment);
         self.start_pending(commitment).await;
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::sync::Arc;
+
+    use hotshot::traits::BlockPayload;
+    use hotshot_example_types::{
+        block_types::{TestBlockPayload, TestMetadata},
+        node_types::{TEST_VERSIONS, TestTypes},
+        state_types::{TestInstanceState, TestValidatedState},
+    };
+    use hotshot_types::{
+        data::{Leaf2, vid_commitment},
+        traits::{
+            EncodeBytes,
+            block_contents::{BlockHeader, BuilderFee},
+            signature_key::BuilderSignatureKey,
+        },
+        vote::{Certificate, HasViewNumber},
+    };
+    use tokio::sync::mpsc;
+
+    use super::*;
+    use crate::{
+        events::{Event, HeaderRequest, StateRequest, Update},
+        helpers::proposal_commitment,
+        test_utils::TestData,
+    };
+
+    /// Build a StateRequest from a TestView.
+    fn make_state_request(view: &crate::test_utils::TestView) -> StateRequest<TestTypes> {
+        let proposal = &view.proposal.data.proposal;
+        StateRequest {
+            view: view.view_number,
+            parent_view: proposal.justify_qc.view_number(),
+            epoch: view.epoch_number,
+            block_number: BlockHeader::<TestTypes>::block_number(&proposal.block_header),
+            proposal: proposal.clone(),
+            parent_commitment: proposal.justify_qc.data().leaf_commit,
+            payload_size: 0,
+        }
+    }
+
+    /// Build a HeaderRequest from a TestView (as the parent).
+    fn make_header_request(
+        parent_view: &crate::test_utils::TestView,
+        target_view: ViewNumber,
+    ) -> HeaderRequest<TestTypes> {
+        let parent_proposal = &parent_view.proposal.data.proposal;
+        let block = TestBlockPayload::genesis();
+        let metadata = TestMetadata {
+            num_transactions: 0,
+        };
+        let payload_commitment = vid_commitment(
+            &block.encode(),
+            &metadata.encode(),
+            10,
+            TEST_VERSIONS.test.base,
+        );
+        let builder_commitment =
+            <TestBlockPayload as BlockPayload<TestTypes>>::builder_commitment(&block, &metadata);
+        let (builder_key, builder_private_key) =
+            <hotshot_types::signature_key::BuilderKey as BuilderSignatureKey>::generated_from_seed_indexed([0; 32], 0);
+        let builder_signature =
+            <hotshot_types::signature_key::BuilderKey as BuilderSignatureKey>::sign_builder_message(
+                &builder_private_key,
+                &[0u8],
+            )
+            .unwrap();
+        HeaderRequest {
+            view: target_view,
+            epoch: parent_view.epoch_number,
+            parent_proposal: parent_proposal.clone(),
+            payload_commitment,
+            builder_commitment,
+            metadata,
+            builder_fee: BuilderFee {
+                fee_amount: 0,
+                fee_account: builder_key,
+                fee_signature: builder_signature,
+            },
+        }
+    }
+
+    struct StateTestHarness {
+        manager: ValidatedStateManager<TestTypes>,
+        event_rx: mpsc::Receiver<Event<TestTypes>>,
+    }
+
+    impl StateTestHarness {
+        async fn new() -> Self {
+            let (_, state_rx) = mpsc::channel(100);
+            let (event_tx, event_rx) = mpsc::channel(100);
+            let coordinator_handle = CoordinatorHandle::new(event_tx);
+            let manager = ValidatedStateManager::new(
+                state_rx,
+                Arc::new(TestInstanceState::default()),
+                coordinator_handle,
+            );
+            Self { manager, event_rx }
+        }
+
+        /// Seed the manager with the genesis state at view 0.
+        async fn seed_genesis(&mut self) {
+            let genesis_state = TestValidatedState::default();
+            let genesis_leaf = Leaf2::<TestTypes>::genesis(
+                &genesis_state,
+                &TestInstanceState::default(),
+                TEST_VERSIONS.test.base,
+            )
+            .await;
+            self.manager.validated_states.insert(
+                ViewNumber::genesis(),
+                (Arc::new(genesis_state), genesis_leaf),
+            );
+        }
+
+        async fn request_state(&mut self, request: StateRequest<TestTypes>) {
+            self.manager.handle_request_state(request).await;
+        }
+
+        async fn request_header(&mut self, request: HeaderRequest<TestTypes>) {
+            self.manager.handle_request_header(request).await;
+        }
+
+        /// Wait for spawned tasks to complete and process their results.
+        async fn process_completions(&mut self) {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            while let Ok(completed) = self.manager.completed_requests_rx.try_recv() {
+                self.manager.handle_completed_request(completed).await;
+            }
+        }
+
+        fn collect_events(&mut self) -> Vec<Event<TestTypes>> {
+            let mut events = Vec::new();
+            while let Ok(event) = self.event_rx.try_recv() {
+                events.push(event);
+            }
+            events
+        }
+
+        fn count_state_verified(events: &[Event<TestTypes>]) -> usize {
+            events
+                .iter()
+                .filter(|e| matches!(e, Event::Update(Update::StateVerified(_))))
+                .count()
+        }
+
+        fn count_header_created(events: &[Event<TestTypes>]) -> usize {
+            events
+                .iter()
+                .filter(|e| matches!(e, Event::Update(Update::HeaderCreated(_, _))))
+                .count()
+        }
+    }
+
+    /// State request with missing parent inserts empty state (no response sent).
+    #[tokio::test]
+    async fn test_state_request_missing_parent_inserts_empty() {
+        let mut harness = StateTestHarness::new().await;
+        let test_data = TestData::new(2).await;
+
+        // View 1's parent is genesis (view 0), which isn't seeded.
+        harness
+            .request_state(make_state_request(&test_data.views[0]))
+            .await;
+        harness.process_completions().await;
+
+        let events = harness.collect_events();
+        // No StateVerified response because parent was missing — empty state inserted.
+        assert_eq!(
+            StateTestHarness::count_state_verified(&events),
+            0,
+            "No state response when parent is missing"
+        );
+        // But the empty state should be stored for the view.
+        assert!(
+            harness
+                .manager
+                .validated_states
+                .contains_key(&test_data.views[0].view_number),
+            "Empty state should be inserted for the view"
+        );
+    }
+
+    /// State request with seeded genesis parent spawns validation and sends response.
+    #[tokio::test]
+    async fn test_state_request_with_genesis_parent() {
+        let mut harness = StateTestHarness::new().await;
+        let test_data = TestData::new(2).await;
+
+        harness.seed_genesis().await;
+
+        harness
+            .request_state(make_state_request(&test_data.views[0]))
+            .await;
+        harness.process_completions().await;
+
+        let events = harness.collect_events();
+        assert_eq!(
+            StateTestHarness::count_state_verified(&events),
+            1,
+            "Should receive StateVerified after validation completes"
+        );
+    }
+
+    /// Sequential state requests: view 1 completes, then view 2 uses its result.
+    #[tokio::test]
+    async fn test_sequential_state_requests() {
+        let mut harness = StateTestHarness::new().await;
+        let test_data = TestData::new(3).await;
+
+        harness.seed_genesis().await;
+
+        // Request view 1 and let it complete.
+        harness
+            .request_state(make_state_request(&test_data.views[0]))
+            .await;
+        harness.process_completions().await;
+
+        // Request view 2 — parent (view 1) should now exist.
+        harness
+            .request_state(make_state_request(&test_data.views[1]))
+            .await;
+        harness.process_completions().await;
+
+        let events = harness.collect_events();
+        assert_eq!(
+            StateTestHarness::count_state_verified(&events),
+            2,
+            "Both views should produce StateVerified"
+        );
+    }
+
+    /// State request queued behind in-progress parent auto-starts when parent completes.
+    #[tokio::test]
+    async fn test_state_request_queued_behind_parent() {
+        let mut harness = StateTestHarness::new().await;
+        let test_data = TestData::new(3).await;
+
+        harness.seed_genesis().await;
+
+        // Send both requests before either completes.
+        harness
+            .request_state(make_state_request(&test_data.views[0]))
+            .await;
+        harness
+            .request_state(make_state_request(&test_data.views[1]))
+            .await;
+
+        // View 2 should be queued as pending (parent view 1 is in progress).
+        let view_1_commit = proposal_commitment(&test_data.views[0].proposal.data.proposal);
+        assert!(
+            harness
+                .manager
+                .pending_requests
+                .contains_key(&view_1_commit),
+            "View 2 should be pending on view 1's commitment"
+        );
+
+        // Now let completions run — view 1 completes, which should start view 2.
+        harness.process_completions().await;
+        // Process again for view 2's completion.
+        harness.process_completions().await;
+
+        let events = harness.collect_events();
+        assert_eq!(
+            StateTestHarness::count_state_verified(&events),
+            2,
+            "Both views should complete after pending resolution"
+        );
+    }
+
+    /// Header request with existing parent state sends header response.
+    #[tokio::test]
+    async fn test_header_request_with_parent() {
+        let mut harness = StateTestHarness::new().await;
+        let test_data = TestData::new(3).await;
+
+        harness.seed_genesis().await;
+
+        // Complete state for view 1 so it can be used as parent for header.
+        harness
+            .request_state(make_state_request(&test_data.views[0]))
+            .await;
+        harness.process_completions().await;
+        // Drain the state verified event.
+        harness.collect_events();
+
+        // Now request a header with view 1 as parent.
+        let header_req = make_header_request(&test_data.views[0], test_data.views[1].view_number);
+        harness.request_header(header_req).await;
+        harness.process_completions().await;
+
+        let events = harness.collect_events();
+        assert_eq!(
+            StateTestHarness::count_header_created(&events),
+            1,
+            "Should receive HeaderCreated after header creation completes"
+        );
+    }
+
+    /// Header request queued behind in-progress state starts when state completes.
+    #[tokio::test]
+    async fn test_header_request_queued_behind_state() {
+        let mut harness = StateTestHarness::new().await;
+        let test_data = TestData::new(3).await;
+
+        harness.seed_genesis().await;
+
+        // Send state request for view 1 (starts validation).
+        harness
+            .request_state(make_state_request(&test_data.views[0]))
+            .await;
+
+        // Send header request with view 1 as parent BEFORE view 1 completes.
+        let header_req = make_header_request(&test_data.views[0], test_data.views[1].view_number);
+        harness.request_header(header_req).await;
+
+        // Header should be pending on view 1's commitment.
+        let view_1_commit = proposal_commitment(&test_data.views[0].proposal.data.proposal);
+        assert!(
+            harness
+                .manager
+                .pending_requests
+                .contains_key(&view_1_commit),
+            "Header should be pending on view 1's commitment"
+        );
+
+        // Let view 1 complete — should also start the pending header.
+        harness.process_completions().await;
+        // Process again for the header task.
+        harness.process_completions().await;
+
+        let events = harness.collect_events();
+        assert_eq!(
+            StateTestHarness::count_state_verified(&events),
+            1,
+            "State should be verified"
+        );
+        assert_eq!(
+            StateTestHarness::count_header_created(&events),
+            1,
+            "Header should be created after pending state resolves"
+        );
+    }
+
+    /// Duplicate state request for the same view is ignored.
+    #[tokio::test]
+    async fn test_duplicate_state_request_ignored() {
+        let mut harness = StateTestHarness::new().await;
+        let test_data = TestData::new(2).await;
+
+        harness.seed_genesis().await;
+
+        // Send same state request twice.
+        harness
+            .request_state(make_state_request(&test_data.views[0]))
+            .await;
+        harness
+            .request_state(make_state_request(&test_data.views[0]))
+            .await;
+        harness.process_completions().await;
+
+        let events = harness.collect_events();
+        assert_eq!(
+            StateTestHarness::count_state_verified(&events),
+            1,
+            "Duplicate request should be ignored — only one response"
+        );
+    }
+
+    /// State and header requests for different views can be interleaved.
+    #[tokio::test]
+    async fn test_interleaved_state_and_header_requests() {
+        let mut harness = StateTestHarness::new().await;
+        let test_data = TestData::new(4).await;
+
+        harness.seed_genesis().await;
+
+        // Start state validation for views 1 and send header request for view 2
+        // (with view 1 as parent) simultaneously.
+        harness
+            .request_state(make_state_request(&test_data.views[0]))
+            .await;
+        harness
+            .request_state(make_state_request(&test_data.views[1]))
+            .await;
+        let header_req = make_header_request(&test_data.views[0], test_data.views[1].view_number);
+        harness.request_header(header_req).await;
+
+        // Process all completions (may need multiple rounds).
+        for _ in 0..3 {
+            harness.process_completions().await;
+        }
+
+        let events = harness.collect_events();
+        assert_eq!(
+            StateTestHarness::count_state_verified(&events),
+            2,
+            "Both state requests should complete"
+        );
+        assert_eq!(
+            StateTestHarness::count_header_created(&events),
+            1,
+            "Header request should complete"
+        );
     }
 }
