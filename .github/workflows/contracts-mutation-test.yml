@@ -34,6 +34,9 @@ jobs:
           fetch-depth: 0
           filter: blob:none
 
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+
       - name: Install solc
         run: |
           pip install solc-select
