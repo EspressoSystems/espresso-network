@@ -99,7 +99,9 @@ pub mod testing {
                     self.consensus_tx
                         .send(ConsensusEvent::BlockBuilt(
                             block_and_header_request.view,
+                            block_and_header_request.epoch,
                             block,
+                            metadata,
                         ))
                         .await
                         .unwrap();

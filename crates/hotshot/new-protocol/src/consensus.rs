@@ -152,8 +152,9 @@ impl<TYPES: NodeType> Consensus<TYPES> {
                 // we are done after timeout, don't try to vote, decide, or propose
                 return None;
             },
-            ConsensusEvent::BlockBuilt(view, block) => {
-                self.handle_block_built(view, block).await?;
+            ConsensusEvent::BlockBuilt(view, epoch, block, metadata) => {
+                self.handle_block_built(view, epoch, block, metadata)
+                    .await?;
             },
             ConsensusEvent::VidDisperseCreated(view, vid_disperse) => {
                 self.vid_disperses.insert(view, vid_disperse);
@@ -183,17 +184,12 @@ impl<TYPES: NodeType> Consensus<TYPES> {
     async fn handle_block_built(
         &mut self,
         view: ViewNumber,
+        epoch: EpochNumber,
         block: TYPES::BlockPayload,
+        metadata: <TYPES::BlockPayload as hotshot::traits::BlockPayload<TYPES>>::Metadata,
     ) -> Option<()> {
-        let proposal = self.proposals.get(&view)?;
-        let epoch = proposal.epoch?;
-
-        // TODO: This implicitly relies on the ordering of events,
-        // We are assuming the header is received before the block is built
-        let header = self.headers.get(&view)?;
-        let metadata = header.metadata();
         self.coordinator_handle
-            .request_vid_disperse(view, epoch, block.clone(), metadata.clone())
+            .request_vid_disperse(view, epoch, block.clone(), metadata)
             .await
             .ok()?;
         self.blocks.insert(view, block);
@@ -214,7 +210,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
             return None;
         }
 
-        let header = self.headers.get(&parent_view)?;
+        let header = self.headers.get(&view)?;
         let block = self.blocks.get(&view)?;
         let vid_disperse = self.vid_disperses.get(&view)?;
 
@@ -531,8 +527,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
     ) -> Option<()> {
         let view = certificate.view_number() + 1;
         let epoch = certificate.epoch()?;
-        self.timeout_certs
-            .insert(certificate.view_number(), certificate);
+        self.timeout_certs.insert(view, certificate);
         if self.is_leader(view, epoch).await {
             let locked_view = self.locked_qc.as_ref().map(|qc| qc.view_number())?;
             let proposal = self.proposals.get(&locked_view)?;
@@ -1222,6 +1217,140 @@ mod test {
         assert!(
             !has_vote2(&events),
             "Vote2 should not fire after timeout for that view"
+        );
+    }
+
+    /// Helper: find the node index (0..10) for a given public key.
+    fn node_index_for_key(key: &BLSPubKey) -> u64 {
+        for i in 0..10 {
+            let (pk, _) = BLSPubKey::generated_from_seed_indexed([0; 32], i);
+            if pk == *key {
+                return i;
+            }
+        }
+        panic!("Key not found in test keys (indices 0..10)");
+    }
+
+    /// Check if received events contain a Proposal action.
+    fn has_proposal(events: &[Event<TestTypes>]) -> bool {
+        events.iter().any(|e| {
+            matches!(
+                e,
+                Event::Action(Action::SendMessage(RequestMessageSender::Proposal(_, _)))
+            )
+        })
+    }
+
+    /// Check if received events contain a RequestBlockAndHeader action.
+    fn has_request_block_and_header(events: &[Event<TestTypes>]) -> bool {
+        events
+            .iter()
+            .any(|e| matches!(e, Event::Action(Action::RequestBlockAndHeader(_))))
+    }
+
+    /// Leader sends a proposal for view N+1 after receiving proposal for view N
+    /// and cert1 for view N.
+    #[tokio::test]
+    async fn test_leader_sends_proposal() {
+        let test_data = TestData::new(4).await;
+
+        // Find who is leader for view 2 (test_data.views[1])
+        let leader_for_view_2 = test_data.views[1].leader_public_key;
+        let leader_index = node_index_for_key(&leader_for_view_2);
+        let harness = TestHarness::new(leader_index).await;
+
+        // Send proposal for view 1 — since we're leader for view 2,
+        // this triggers request_block_and_header for view 2.
+        // The mock coordinator responds with HeaderCreated(2, ...) and BlockBuilt(2, ...).
+        harness
+            .send(test_data.views[0].proposal_event(&leader_for_view_2))
+            .await;
+
+        // Send cert1 for view 1 — triggers maybe_propose(2)
+        harness.send(test_data.views[0].cert1_event()).await;
+
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        let events = harness.shutdown().await;
+
+        // The leader should have requested a block and header for view 2
+        assert!(
+            has_request_block_and_header(&events),
+            "Leader should request block and header for the next view"
+        );
+
+        // The leader should have sent a proposal for view 2
+        assert!(
+            has_proposal(&events),
+            "Leader should send a proposal when it has cert1, header, block, and vid_disperse"
+        );
+    }
+
+    /// Leader sends a proposal after a timeout using the locked QC and
+    /// view change evidence.
+    #[tokio::test]
+    async fn test_leader_proposes_after_timeout() {
+        let test_data = TestData::new(5).await;
+
+        // We need a leader for view 3 (after timeout at view 2).
+        // The timeout cert is for view 2, so the next view is 3.
+        let leader_for_view_3 = test_data.views[2].leader_public_key;
+        let leader_index = node_index_for_key(&leader_for_view_3);
+        let harness = TestHarness::new(leader_index).await;
+
+        // Build up locked_qc: process view 1 fully so cert1 for view 1 sets locked_qc
+        harness
+            .send(test_data.views[0].proposal_event(&leader_for_view_3))
+            .await;
+        harness
+            .send(test_data.views[0].block_reconstructed_event())
+            .await;
+        harness.send(test_data.views[0].cert1_event()).await;
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        // Now send timeout cert for view 2 — this triggers request_block_and_header
+        // for view 3 if we are leader
+        harness.send(test_data.views[1].timeout_event()).await;
+
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        let events = harness.shutdown().await;
+
+        assert!(
+            has_request_block_and_header(&events),
+            "Leader should request block and header after timeout"
+        );
+        assert!(
+            has_proposal(&events),
+            "Leader should send proposal with timeout view change evidence"
+        );
+    }
+
+    /// Non-leader node does NOT send a proposal.
+    #[tokio::test]
+    async fn test_non_leader_does_not_propose() {
+        let test_data = TestData::new(4).await;
+
+        // Find who is leader for view 2 and pick a DIFFERENT node
+        let leader_for_view_2 = test_data.views[1].leader_public_key;
+        let leader_index = node_index_for_key(&leader_for_view_2);
+        let non_leader_index = if leader_index == 0 { 1 } else { 0 };
+        let non_leader_key = BLSPubKey::generated_from_seed_indexed([0; 32], non_leader_index).0;
+        let harness = TestHarness::new(non_leader_index).await;
+
+        // Send proposal for view 1
+        harness
+            .send(test_data.views[0].proposal_event(&non_leader_key))
+            .await;
+
+        // Send cert1 for view 1
+        harness.send(test_data.views[0].cert1_event()).await;
+
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        let events = harness.shutdown().await;
+
+        assert!(
+            !has_proposal(&events),
+            "Non-leader should NOT send a proposal"
         );
     }
 

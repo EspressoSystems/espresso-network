@@ -114,7 +114,12 @@ pub enum ConsensusEvent<TYPES: NodeType> {
     TimeoutCertificate(TimeoutCertificate2<TYPES>),
     ViewSyncCertificate(ViewSyncFinalizeCertificate2<TYPES>),
     BlockReconstructed(ViewNumber, VidCommitment2),
-    BlockBuilt(ViewNumber, TYPES::BlockPayload),
+    BlockBuilt(
+        ViewNumber,
+        EpochNumber,
+        TYPES::BlockPayload,
+        <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
+    ),
     VidDisperseCreated(ViewNumber, VidDisperse2<TYPES>),
     StateVerified(StateResponse<TYPES>),
     HeaderCreated(ViewNumber, TYPES::BlockHeader),
@@ -143,7 +148,7 @@ impl<TYPES: NodeType> ConsensusEvent<TYPES> {
             ConsensusEvent::HeaderCreated(view_number, _) => *view_number,
             ConsensusEvent::StateVerificationFailed(state_request) => state_request.view,
             ConsensusEvent::Timeout(view_number) => *view_number,
-            ConsensusEvent::BlockBuilt(view_number, _) => *view_number,
+            ConsensusEvent::BlockBuilt(view_number, ..) => *view_number,
             ConsensusEvent::VidDisperseCreated(view_number, _) => *view_number,
             ConsensusEvent::Shutdown => ViewNumber::genesis(),
         }
