@@ -5,7 +5,10 @@ use clap::Parser;
 use derive_more::From;
 use espresso_types::{Ratio, SeqTypes, parse_duration};
 use hotshot_orchestrator::run_orchestrator;
-use hotshot_types::network::{Libp2pConfig, NetworkConfig};
+use hotshot_types::{
+    PeerConfig,
+    network::{Libp2pConfig, NetworkConfig},
+};
 use sequencer_utils::logging;
 use snafu::Snafu;
 use url::Url;
@@ -129,7 +132,7 @@ async fn main() {
     };
 
     config.config.num_nodes_with_stake = args.num_nodes;
-    config.config.known_nodes_with_stake = vec![Default::default(); args.num_nodes.get()];
+    config.config.known_nodes_with_stake = vec![PeerConfig::test_default(); args.num_nodes.get()];
     config.config.known_da_nodes = Vec::new();
     config.config.next_view_timeout = args.next_view_timeout.as_millis() as u64;
     config.libp2p_config = Some(libp2p_config);

@@ -377,15 +377,7 @@ where
                 .try_into()
                 .expect("Non-empty by construction");
 
-            let network = (self.launcher.resource_generators.channel_generator)(node_id).await;
             let storage = (self.launcher.resource_generators.storage)(node_id);
-
-            let network_clone = network.clone();
-            let networks_ready_future = async move {
-                network_clone.wait_for_ready().await;
-            };
-
-            networks_ready.push(networks_ready_future);
 
             // See whether or not we should be DA
             let is_da = node_id < config.da_staked_committee_size as u64;
@@ -400,6 +392,17 @@ where
 
             let public_key = validator_config.public_key.clone();
 
+            let network = if late_start.contains(&node_id) && self.launcher.metadata.skip_late {
+                None
+            } else {
+                let net = (self.launcher.resource_generators.channel_generator)(node_id).await;
+                networks_ready.push({
+                    let net = net.clone();
+                    async move { net.wait_for_ready().await }
+                });
+                Some(net)
+            };
+
             if late_start.contains(&node_id) {
                 if self.launcher.metadata.skip_late {
                     self.late_start.insert(
@@ -409,14 +412,6 @@ where
                             context: LateNodeContext::UninitializedContext(
                                 LateNodeContextParameters {
                                     storage: storage.clone(),
-                                    memberships: <TYPES as NodeType>::Membership::new::<I>(
-                                        config.known_nodes_with_stake.clone(),
-                                        config.known_da_nodes.clone(),
-                                        storage.clone(),
-                                        network.clone(),
-                                        public_key.clone(),
-                                        config.epoch_height,
-                                    ),
                                     config,
                                 },
                             ),
@@ -443,6 +438,8 @@ where
                     )
                     .await
                     .unwrap();
+
+                    let network = network.clone().expect("!skip_late => network created");
 
                     let hotshot = Self::add_node_with_config(
                         node_id,
@@ -471,6 +468,7 @@ where
                     );
                 }
             } else {
+                let network = network.expect("!late_start => network created");
                 uninitialized_nodes.push((
                     node_id,
                     network.clone(),
@@ -645,9 +643,6 @@ pub struct Node<TYPES: NodeType, I: TestableNodeImplementation<TYPES>> {
 pub struct LateNodeContextParameters<TYPES: NodeType, I: TestableNodeImplementation<TYPES>> {
     /// The storage trait for Sequencer persistence.
     pub storage: I::Storage,
-
-    /// The memberships of this particular node.
-    pub memberships: TYPES::Membership,
 
     /// The config associated with this node.
     pub config: HotShotConfig<TYPES>,
