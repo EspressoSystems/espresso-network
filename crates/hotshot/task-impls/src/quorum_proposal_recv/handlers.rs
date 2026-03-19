@@ -91,7 +91,6 @@ pub async fn validate_proposal_liveness<TYPES: NodeType, I: NodeImplementation<T
     if validation_info
         .upgrade_lock
         .version(proposal.data.view_number())
-        .await
         .is_ok_and(|v| v >= EPOCH_VERSION)
     {
         let Some(block_number) = proposal.data.justify_qc().data.block_number else {
@@ -120,7 +119,6 @@ pub async fn validate_proposal_liveness<TYPES: NodeType, I: NodeImplementation<T
         && validation_info
             .upgrade_lock
             .version(leaf.view_number())
-            .await
             .is_ok_and(|v| v >= EPOCH_VERSION)
     {
         consensus_writer.update_locked_view(proposal.data.justify_qc().view_number())?;
@@ -142,7 +140,6 @@ async fn validate_epoch_transition_block<TYPES: NodeType, I: NodeImplementation<
     if !validation_info
         .upgrade_lock
         .epochs_enabled(proposal.data.view_number())
-        .await
     {
         return Ok(());
     }
@@ -177,12 +174,10 @@ async fn validate_current_epoch<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     let upgrade_view = validation_info
         .upgrade_lock
         .upgrade_view()
-        .await
         .unwrap_or(ViewNumber::new(0));
     if !validation_info
         .upgrade_lock
         .epochs_enabled(proposal.data.view_number())
-        .await
         || proposal.data.justify_qc().view_number() <= upgrade_view
     {
         return Ok(());
@@ -266,8 +261,7 @@ pub(crate) async fn handle_quorum_proposal_recv<TYPES: NodeType, I: NodeImplemen
 
     let version = validation_info
         .upgrade_lock
-        .version(proposal.data.view_number())
-        .await?;
+        .version(proposal.data.view_number())?;
 
     if version >= EPOCH_VERSION {
         // Don't vote if the DRB result verification fails.

@@ -203,8 +203,7 @@ pub(crate) async fn verify_drb_result<TYPES: NodeType, I: NodeImplementation<TYP
     let epoch = option_epoch_from_block_number(
         validation_info
             .upgrade_lock
-            .epochs_enabled(proposal.view_number())
-            .await,
+            .epochs_enabled(proposal.view_number()),
         proposal.block_header().block_number(),
         validation_info.epoch_height,
     );
@@ -412,7 +411,7 @@ async fn update_metrics<TYPES: NodeType>(
 pub async fn decide_from_proposal_2<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     proposal: &QuorumProposalWrapper<TYPES>,
     consensus: OuterConsensus<TYPES>,
-    existing_upgrade_cert: Arc<RwLock<Option<UpgradeCertificate<TYPES>>>>,
+    upgrade_lock: &UpgradeLock<TYPES>,
     public_key: &TYPES::SignatureKey,
     with_epochs: bool,
     membership: &EpochMembershipCoordinator<TYPES>,
@@ -448,7 +447,7 @@ pub async fn decide_from_proposal_2<TYPES: NodeType, I: NodeImplementation<TYPES
     // We've reached decide, now get the leaf chain all the way back to the last decided view, not including it.
     let old_anchor_view = consensus_reader.last_decided_view();
     let mut current_leaf_info = Some(grand_parent_info);
-    let existing_upgrade_cert_reader = existing_upgrade_cert.read().await;
+    let existing_upgrade_cert_reader = upgrade_lock.decided_upgrade_cert();
     let mut txns = HashSet::new();
     while current_leaf_info
         .as_ref()
@@ -458,7 +457,7 @@ pub async fn decide_from_proposal_2<TYPES: NodeType, I: NodeImplementation<TYPES
         let info = &mut current_leaf_info.unwrap();
         // Check if there's a new upgrade certificate available.
         if let Some(cert) = info.leaf.upgrade_certificate()
-            && info.leaf.upgrade_certificate() != *existing_upgrade_cert_reader
+            && info.leaf.upgrade_certificate() != existing_upgrade_cert_reader
         {
             if cert.data.decide_by < decided_view_number {
                 tracing::warn!("Failed to decide an upgrade certificate in time. Ignoring.");
@@ -556,7 +555,7 @@ pub async fn decide_from_proposal_2<TYPES: NodeType, I: NodeImplementation<TYPES
 pub async fn decide_from_proposal<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     proposal: &QuorumProposalWrapper<TYPES>,
     consensus: OuterConsensus<TYPES>,
-    existing_upgrade_cert: Arc<RwLock<Option<UpgradeCertificate<TYPES>>>>,
+    upgrade_lock: &UpgradeLock<TYPES>,
     public_key: &TYPES::SignatureKey,
     with_epochs: bool,
     membership: &EpochMembershipCoordinator<TYPES>,
@@ -564,7 +563,7 @@ pub async fn decide_from_proposal<TYPES: NodeType, I: NodeImplementation<TYPES>>
     epoch_height: u64,
 ) -> LeafChainTraversalOutcome<TYPES> {
     let consensus_reader = consensus.read().await;
-    let existing_upgrade_cert_reader = existing_upgrade_cert.read().await;
+    let existing_upgrade_cert_reader = upgrade_lock.decided_upgrade_cert();
     let view_number = proposal.view_number();
     let parent_view_number = proposal.justify_qc().view_number();
     let old_anchor_view = consensus_reader.last_decided_view();
@@ -619,7 +618,7 @@ pub async fn decide_from_proposal<TYPES: NodeType, I: NodeImplementation<TYPES>>
 
                 // Check if there's a new upgrade certificate available.
                 if let Some(cert) = leaf.upgrade_certificate()
-                    && leaf.upgrade_certificate() != *existing_upgrade_cert_reader
+                    && leaf.upgrade_certificate() != existing_upgrade_cert_reader
                 {
                     if cert.data.decide_by < view_number {
                         tracing::warn!(
@@ -960,7 +959,6 @@ pub(crate) async fn validate_proposal_safety_and_liveness<
     if validation_info
         .upgrade_lock
         .version(proposal.data.justify_qc().view_number())
-        .await
         .is_ok_and(|v| v >= EPOCH_VERSION)
     {
         let Some(block_number) = proposal.data.justify_qc().data.block_number else {
@@ -978,10 +976,7 @@ pub(crate) async fn validate_proposal_safety_and_liveness<
         "Proposed leaf does not extend the parent leaf."
     );
     let proposal_epoch = option_epoch_from_block_number(
-        validation_info
-            .upgrade_lock
-            .epochs_enabled(view_number)
-            .await,
+        validation_info.upgrade_lock.epochs_enabled(view_number),
         proposed_leaf.height(),
         validation_info.epoch_height,
     );
@@ -1012,12 +1007,7 @@ pub(crate) async fn validate_proposal_safety_and_liveness<
     .await?;
 
     // Validate that the upgrade certificate is re-attached, if we saw one on the parent
-    proposed_leaf
-        .extends_upgrade(
-            &parent_leaf,
-            &validation_info.upgrade_lock.decided_upgrade_certificate,
-        )
-        .await?;
+    proposed_leaf.extends_upgrade(&parent_leaf, &validation_info.upgrade_lock)?;
 
     let justify_qc = proposal.data.justify_qc().clone();
     // Create a positive vote if either liveness or safety check
@@ -1030,10 +1020,7 @@ pub(crate) async fn validate_proposal_safety_and_liveness<
         // 1. the proposed block and the justify QC block belong to the same epoch or
         // 2. the justify QC is the eQC for the previous block
         let justify_qc_epoch = option_epoch_from_block_number(
-            validation_info
-                .upgrade_lock
-                .epochs_enabled(view_number)
-                .await,
+            validation_info.upgrade_lock.epochs_enabled(view_number),
             parent_leaf.height(),
             validation_info.epoch_height,
         );
@@ -1050,10 +1037,7 @@ pub(crate) async fn validate_proposal_safety_and_liveness<
 
         // Make sure that the epoch transition proposal includes the next epoch QC
         if is_epoch_transition(parent_leaf.height(), validation_info.epoch_height)
-            && validation_info
-                .upgrade_lock
-                .epochs_enabled(view_number)
-                .await
+            && validation_info.upgrade_lock.epochs_enabled(view_number)
         {
             ensure!(
                 proposal.data.next_epoch_justify_qc().is_some(),
@@ -1283,7 +1267,7 @@ pub async fn validate_qc_and_next_epoch_qc<TYPES: NodeType>(
     }
 
     // Check the next epoch QC if required.
-    if upgrade_lock.epochs_enabled(cert.view_number()).await
+    if upgrade_lock.epochs_enabled(cert.view_number())
         && let Some(next_epoch_qc) = cert.verify_next_epoch_qc(epoch_height)?
     {
         epoch_membership = epoch_membership.next_epoch_stake_table().await?;
@@ -1338,7 +1322,6 @@ pub async fn validate_light_client_state_update_certificate<TYPES: NodeType>(
             // We only perform the second signature check prior to the DrbAndHeaderUpgrade
             if !upgrade_lock
                 .proposal2_version(ViewNumber::new(state_cert.light_client_state.view_number))
-                .await
             {
                 if !<TYPES::StateSignatureKey as LCV2StateSignatureKey>::verify_state_sig(
                     key,

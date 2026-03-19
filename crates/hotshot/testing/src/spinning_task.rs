@@ -88,6 +88,8 @@ pub struct SpinningTask<
     pub(crate) state_cert: Option<LightClientStateUpdateCertificateV2<TYPES>>,
     /// Node stakes
     pub(crate) node_stakes: TestNodeStakes,
+    /// Configured version upgrade
+    pub(crate) upgrade: versions::Upgrade,
 }
 
 #[async_trait]
@@ -172,7 +174,7 @@ where
                                             self.last_decided_leaf.clone(),
                                             (
                                                 ViewNumber::genesis(),
-                                                genesis_epoch_from_version(config.upgrade.base),
+                                                genesis_epoch_from_version(self.upgrade.base),
                                             ),
                                             (self.high_qc.clone(), self.next_epoch_high_qc.clone()),
                                             ViewNumber::genesis(),
@@ -197,6 +199,7 @@ where
                                             memberships,
                                             initializer,
                                             config,
+                                            self.upgrade,
                                             validator_config,
                                             storage,
                                         )
@@ -267,7 +270,7 @@ where
                                     QuorumCertificate2::genesis(
                                         &TestValidatedState::default(),
                                         &TestInstanceState::default(),
-                                        config.upgrade,
+                                        self.upgrade,
                                     )
                                     .await,
                                 );
@@ -325,6 +328,7 @@ where
                                         Arc::clone(&membership),
                                         initializer,
                                         config,
+                                        self.upgrade,
                                         validator_config,
                                         storage.clone(),
                                         internal_chan,

@@ -150,9 +150,9 @@ async fn test_upgrade_task_with_proposal() {
     let upgrade_vote_recvs: Vec<_> = upgrade_votes.into_iter().map(UpgradeVoteRecv).collect();
 
     let upgrade_lock = &upgrade_state.upgrade_lock;
-    let version_1 = upgrade_lock.version_infallible(ViewNumber::new(1)).await;
-    let version_2 = upgrade_lock.version_infallible(ViewNumber::new(2)).await;
-    let version_3 = upgrade_lock.version_infallible(ViewNumber::new(3)).await;
+    let version_1 = upgrade_lock.version_infallible(ViewNumber::new(1));
+    let version_2 = upgrade_lock.version_infallible(ViewNumber::new(2));
+    let version_3 = upgrade_lock.version_infallible(ViewNumber::new(3));
 
     let inputs = vec![
         random![
