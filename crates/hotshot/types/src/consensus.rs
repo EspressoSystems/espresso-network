@@ -293,7 +293,7 @@ struct ValidatorParticipation<TYPES: NodeType> {
     /// Current epoch participation by key maps key -> (num leader, num times proposed)
     current_epoch_participation: ValidatorParticipationMap<TYPES>,
 
-    /// Last epoch participation by key maps key -> (num leader, num times proposed)
+    /// Previous epochs participation ordered by epoch number, maps epoch -> key -> (num leader, num times proposed)
     previous_epoch_participation: BTreeMap<EpochNumber, ValidatorParticipationMap<TYPES>>,
 }
 
@@ -413,7 +413,7 @@ struct VoteParticipation<TYPES: NodeType> {
     current_epoch_participation:
         HashMap<<TYPES::SignatureKey as SignatureKey>::VerificationKeyType, u64>,
 
-    /// Last epoch participation by key maps key -> num times voted
+    /// Previous epochs participation ordered by epoch number, maps epoch -> key -> num times voted
     previous_epoch_participation: BTreeMap<Option<EpochNumber>, VoteParticipationMap<TYPES>>,
 }
 
