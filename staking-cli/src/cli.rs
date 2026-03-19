@@ -51,6 +51,10 @@ struct Args {
     #[arg(short, long = "config")]
     config_path: Option<PathBuf>,
 
+    /// Skip loading the config file (takes precedence over -c)
+    #[arg(long)]
+    no_config: bool,
+
     /// Rest of arguments
     #[command(flatten)]
     pub config: <Config as ClapSerde>::Opt,
@@ -199,7 +203,9 @@ pub async fn run() -> Result<()> {
 
     let config_path = cli.config_path();
     // Get config file
-    let config = if let Ok(f) = std::fs::read_to_string(&config_path) {
+    let config = if cli.no_config {
+        Config::from(&mut cli.config)
+    } else if let Ok(f) = std::fs::read_to_string(&config_path) {
         // parse toml
         match toml::from_str::<Config>(&f) {
             Ok(config) => config.merge(&mut cli.config),
