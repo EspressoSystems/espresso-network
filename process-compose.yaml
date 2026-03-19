@@ -137,7 +137,7 @@ processes:
     availability: *exit-ok
 
   stake-for-demo:
-    command: staking-cli stake-for-demo
+    command: staking-cli --no-config stake-for-demo
     namespace: setup
     environment:
       - L1_PROVIDER=http://localhost:${ESPRESSO_SEQUENCER_L1_PORT}
