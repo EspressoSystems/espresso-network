@@ -150,6 +150,51 @@ fn test_cli_create_file_ledger() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// --no-config takes precedence over -c: config file mnemonic is not loaded
+#[test_log::test]
+fn test_no_config_skips_config_file() -> anyhow::Result<()> {
+    let tmpdir = tempfile::tempdir()?;
+    let config_path = tmpdir.path().join("config.toml");
+    std::fs::write(
+        &config_path,
+        format!(
+            r#"
+rpc_url = "http://localhost:8545"
+stake_table_address = "0x0000000000000000000000000000000000000001"
+
+[signer]
+mnemonic = "{}"
+account_index = 0
+ledger = false
+"#,
+            staking_cli::DEV_MNEMONIC,
+        ),
+    )?;
+
+    // With -c, the config is loaded and `account` prints the derived address
+    base_cmd()
+        .arg("-c")
+        .arg(&config_path)
+        .arg("account")
+        .assert()
+        .success()
+        .stdout(str::contains("0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"));
+
+    // With --no-config, the mnemonic from the config file is not loaded
+    base_cmd()
+        .arg("--no-config")
+        .arg("-c")
+        .arg(&config_path)
+        .arg("--stake-table-address")
+        .arg("0x0000000000000000000000000000000000000001")
+        .arg("account")
+        .assert()
+        .failure()
+        .stderr(str::contains("Signer configuration required"));
+
+    Ok(())
+}
+
 #[derive(Clone, Copy, Debug)]
 enum ExecutionMode {
     Simulate,
