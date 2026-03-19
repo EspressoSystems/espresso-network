@@ -1,96 +1,63 @@
-use anyhow::{Context, Result};
+use std::sync::Arc;
+
+use anyhow::{Context, Result, anyhow}; // TODO: replace with proper error type
 use hotshot_types::{
+    data::{EpochNumber, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::{EXTERNAL_MESSAGE_VERSION, UpgradeLock},
-    traits::{network::ConnectedNetwork, node_implementation::NodeType},
+    traits::{
+        network::{BroadcastDelay, ConnectedNetwork, Topic},
+        node_implementation::NodeType,
+    },
 };
-use tokio::sync::mpsc::Receiver;
+use tracing::{error, warn};
 use vbs::version::Version;
 
-use crate::{
-    coordinator::handle::CoordinatorHandle,
-    events::NetworkEvent,
-    message::{ConsensusMessage, Message, MessageType, ViewSyncMessage},
-};
+use crate::message::{Message, MessageType};
 
-struct Network<TYPES: NodeType, N: ConnectedNetwork<TYPES::SignatureKey>> {
-    receiver: Receiver<NetworkEvent<TYPES>>,
-    coordinator_handle: CoordinatorHandle<TYPES>,
-    network: N,
-    membership_coordinator: EpochMembershipCoordinator<TYPES>,
-    upgrade_lock: UpgradeLock<TYPES>,
+pub(crate) struct Network<T: NodeType, N> {
+    network: Arc<N>,
+    upgrade_lock: UpgradeLock<T>,
 }
 
-impl<TYPES: NodeType, N: ConnectedNetwork<TYPES::SignatureKey>> Network<TYPES, N> {
-    pub fn new(
-        receiver: Receiver<NetworkEvent<TYPES>>,
-        coordinator_handle: CoordinatorHandle<TYPES>,
-        network: N,
-        membership_coordinator: EpochMembershipCoordinator<TYPES>,
-        upgrade_lock: UpgradeLock<TYPES>,
-    ) -> Self {
+impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Network<T, N> {
+    pub fn new(network: Arc<N>, upgrade_lock: UpgradeLock<T>) -> Self {
         Self {
-            receiver,
-            coordinator_handle,
             network,
-            membership_coordinator,
             upgrade_lock,
         }
     }
-    pub async fn run(mut self) -> Result<()> {
-        tokio::select! {
-            event = self.receiver.recv() => { self.handle_event(event.context("Failed to receive event")?).await; },
-            message = self.network.recv_message() => { let _ = self.handle_message(message.context("Failed to receive message")?).await; },
-        };
+
+    pub async fn send(&mut self, v: ViewNumber, m: Message<T>) -> Result<()> {
+        let bytes = self.serialize(m)?;
+        self.network
+            .broadcast_message(v, bytes, Topic::Global, BroadcastDelay::None)
+            .await?;
         Ok(())
     }
-    async fn handle_event(&self, event: NetworkEvent<TYPES>) {
-        match event {
-            NetworkEvent::SendMessage(message) => {
-                self.send_message(message).await;
-            },
-            NetworkEvent::ViewChanged(view, epoch) => {
-                self.network
-                    .update_view(view, Some(epoch), self.membership_coordinator.clone())
-                    .await;
-            },
-        }
+
+    pub async fn receive(&mut self) -> Result<Message<T>> {
+        let m = self.network.recv_message().await?;
+        Ok(self.deserialize(m)?)
     }
-    async fn send_message(&self, message: ConsensusMessage<TYPES>) {
-        todo!()
+
+    pub async fn update_view(
+        &mut self,
+        v: ViewNumber,
+        e: EpochNumber,
+        m: EpochMembershipCoordinator<T>,
+    ) {
+        self.network.update_view(v, Some(e), m).await
     }
-    async fn handle_message(&self, message: Vec<u8>) -> Result<()> {
-        let message = self.deserialize(message)?;
-        match message.message_type {
-            MessageType::Consensus(consensus_message) => {
-                self.handle_consensus_message(consensus_message).await;
-            },
-            MessageType::ViewSync(view_sync_message) => {
-                self.handle_view_sync_message(view_sync_message).await;
-            },
-            MessageType::External(external_message) => {
-                self.handle_external_message(external_message).await;
-            },
-        }
-        Ok(())
-    }
-    async fn handle_consensus_message(&self, consensus_message: ConsensusMessage<TYPES>) {
-        todo!()
-    }
-    async fn handle_view_sync_message(&self, view_sync_message: ViewSyncMessage<TYPES>) {
-        todo!()
-    }
-    async fn handle_external_message(&self, external_message: Vec<u8>) {
-        todo!()
-    }
-    fn deserialize(&self, message: Vec<u8>) -> Result<Message<TYPES>> {
+
+    fn deserialize(&mut self, message: Vec<u8>) -> Result<Message<T>> {
         // Deserialize the message and get the version
-        let (deserialized_message, version): (Message<TYPES>, Version) =
+        let (deserialized_message, version): (Message<T>, Version) =
             match self.upgrade_lock.deserialize(&message) {
                 Ok(message) => message,
                 Err(e) => {
-                    tracing::error!("Failed to deserialize message: {:?}", e);
-                    return Err(anyhow::anyhow!("Failed to deserialize message: {:?}", e));
+                    error!("Failed to deserialize message: {:?}", e);
+                    return Err(anyhow!("Failed to deserialize message: {:?}", e));
                 },
             };
 
@@ -99,17 +66,16 @@ impl<TYPES: NodeType, N: ConnectedNetwork<TYPES::SignatureKey>> Network<TYPES, N
         if version == EXTERNAL_MESSAGE_VERSION
             && !matches!(
                 deserialized_message.message_type,
-                MessageType::<TYPES>::External(_)
+                MessageType::<T>::External(_)
             )
         {
-            tracing::warn!("Received a non-external message with version 0.0");
-            return Err(anyhow::anyhow!(
-                "Received a non-external message with version 0.0"
-            ));
+            warn!("Received a non-external message with version 0.0");
+            return Err(anyhow!("Received a non-external message with version 0.0"));
         }
         Ok(deserialized_message)
     }
-    fn serialize(&self, message: Message<TYPES>) -> Result<Vec<u8>> {
+
+    fn serialize(&mut self, message: Message<T>) -> Result<Vec<u8>> {
         self.upgrade_lock
             .serialize(&message)
             .context("Failed to serialize message")

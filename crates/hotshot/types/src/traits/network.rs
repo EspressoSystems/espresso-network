@@ -614,3 +614,95 @@ impl Display for Topic {
         }
     }
 }
+
+#[async_trait]
+impl<N, K> ConnectedNetwork<K> for Arc<N>
+where
+    N: ConnectedNetwork<K>,
+    K: SignatureKey + 'static
+{
+    fn pause(&self) {
+        (**self).pause()
+    }
+
+    fn resume(&self) {
+        (**self).resume()
+    }
+
+    async fn wait_for_ready(&self) {
+        (**self).wait_for_ready().await
+    }
+
+    fn shut_down<'a, 'b>(&'a self) -> BoxSyncFuture<'b, ()>
+    where
+        'a: 'b,
+        Self: 'b
+    {
+        (**self).shut_down()
+    }
+
+    async fn broadcast_message(
+        &self,
+        view: ViewNumber,
+        message: Vec<u8>,
+        topic: Topic,
+        broadcast_delay: BroadcastDelay,
+    ) -> Result<(), NetworkError>
+    {
+        (**self).broadcast_message(view, message, topic, broadcast_delay).await
+    }
+
+    async fn da_broadcast_message(
+        &self,
+        view: ViewNumber,
+        message: Vec<u8>,
+        recipients: Vec<K>,
+        broadcast_delay: BroadcastDelay,
+    ) -> Result<(), NetworkError> {
+        (**self).da_broadcast_message(view, message, recipients, broadcast_delay).await
+    }
+
+    async fn vid_broadcast_message(
+        &self,
+        messages: HashMap<K, (ViewNumber, Vec<u8>)>,
+    ) -> Result<(), NetworkError> {
+        (**self).vid_broadcast_message(messages).await
+    }
+
+    async fn direct_message(
+        &self,
+        view: ViewNumber,
+        message: Vec<u8>,
+        recipient: K,
+    ) -> Result<(), NetworkError> {
+        (**self).direct_message(view, message, recipient).await
+    }
+
+    async fn recv_message(&self) -> Result<Vec<u8>, NetworkError> {
+        (**self).recv_message().await
+    }
+
+    fn queue_node_lookup(
+        &self,
+        v: ViewNumber,
+        r: K,
+    ) -> Result<(), TrySendError<Option<(ViewNumber, K)>>> {
+        (**self).queue_node_lookup(v, r)
+    }
+
+    async fn update_view<TYPES>(
+        &self,
+        v: ViewNumber,
+        e: Option<EpochNumber>,
+        m: EpochMembershipCoordinator<TYPES>,
+    ) where
+        TYPES: NodeType<SignatureKey = K>,
+    {
+        (**self).update_view(v, e, m).await
+    }
+
+    fn is_primary_down(&self) -> bool {
+        (**self).is_primary_down()
+    }
+}
+

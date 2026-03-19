@@ -156,6 +156,21 @@ impl Committable for EpochNumber {
 
 impl_u64_wrapper!(EpochNumber, 1u64);
 
+#[derive(
+    Copy, Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
+#[serde(transparent)]
+pub struct BlockNumber(u64);
+
+impl Committable for BlockNumber {
+    fn commit(&self) -> Commitment<Self> {
+        let builder = RawCommitmentBuilder::new("Block number commitment");
+        builder.u64(self.0).finalize()
+    }
+}
+
+impl_u64_wrapper!(BlockNumber, 1u64);
+
 /// A proposal to start providing data availability for a block.
 #[derive(derive_more::Debug, Serialize, Deserialize, Clone, Eq, PartialEq, Hash)]
 #[serde(bound = "TYPES: NodeType")]
@@ -969,7 +984,10 @@ pub struct QuorumProposal2<TYPES: NodeType> {
     /// Possible upgrade certificate, which the leader may optionally attach.
     pub upgrade_certificate: Option<UpgradeCertificate<TYPES>>,
 
-    /// Possible timeout or view sync certificate. If the `justify_qc` is not for a proposal in the immediately preceding view, then either a timeout or view sync certificate must be attached.
+    /// Possible timeout or view sync certificate.
+    ///
+    /// If the `justify_qc` is not for a proposal in the immediately preceding view, then
+    /// either a timeout or view sync certificate must be attached.
     pub view_change_evidence: Option<ViewChangeEvidence2<TYPES>>,
 
     /// The DRB result for the next epoch.

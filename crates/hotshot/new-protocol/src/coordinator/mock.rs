@@ -20,36 +20,38 @@ pub mod testing {
     /// coordinate.  It will send back appropriate responses actions it receives.
     /// It will also store the events it receives for verification.
     pub struct MockCoordinator {
-        pub event_rx: tokio::sync::mpsc::Receiver<Event<TestTypes>>,
-        pub consensus_tx: tokio::sync::mpsc::Sender<ConsensusEvent<TestTypes>>,
+        pub event_rx: tokio::sync::mpsc::Receiver<ConsensusOutput<TestTypes>>,
+        pub consensus_tx: tokio::sync::mpsc::Sender<ConsensusInput<TestTypes>>,
         pub membership_coordinator: EpochMembershipCoordinator<TestTypes>,
-        pub received_events: Vec<Event<TestTypes>>,
+        pub received_events: Vec<ConsensusOutput<TestTypes>>,
     }
     impl MockCoordinator {
-        pub async fn run(mut self) -> Vec<Event<TestTypes>> {
+        pub async fn run(mut self) -> Vec<ConsensusOutput<TestTypes>> {
             while let Some(event) = self.event_rx.recv().await {
-                if matches!(event, Event::Action(Action::Shutdown)) {
+                if matches!(event, ConsensusOutput::Action(Action::Shutdown)) {
                     break;
                 }
                 self.handle_event(event).await;
             }
             self.received_events
         }
-        async fn handle_event(&mut self, event: Event<TestTypes>) {
+        async fn handle_event(&mut self, event: ConsensusOutput<TestTypes>) {
             match &event {
-                Event::Action(action) => self.handle_action(action).await,
-                Event::Update(update) => self.handle_update(update).await,
+                ConsensusOutput::Action(action) => self.handle_action(action).await,
+                ConsensusOutput::Event(update) => self.handle_update(update).await,
             }
             self.received_events.push(event);
         }
         // TODO: For now I'm only handling consensus related actions
         async fn handle_action(&self, action: &Action<TestTypes>) {
             match action {
-                Action::SendMessage(message) => {},
+                Action::SendProposal(..) => {},
+                Action::SendVote1(..) => {},
+                Action::SendVote2(..) => {},
                 Action::RequestState(state_request) => {
                     let commitment = proposal_commitment(&state_request.proposal);
                     self.consensus_tx
-                        .send(ConsensusEvent::StateVerified(StateResponse {
+                        .send(ConsensusInput::StateVerified(StateResponse {
                             view: state_request.view,
                             commitment,
                         }))
@@ -84,21 +86,26 @@ pub mod testing {
                         TEST_VERSIONS.test.base,
                     );
                     self.consensus_tx
-                        .send(ConsensusEvent::HeaderCreated(
+                        .send(ConsensusInput::HeaderCreated(
                             block_and_header_request.view,
                             header,
                         ))
                         .await
                         .unwrap();
                     self.consensus_tx
-                        .send(ConsensusEvent::BlockBuilt(
+                        .send(ConsensusInput::BlockBuilt(
                             block_and_header_request.view,
                             block,
                         ))
                         .await
                         .unwrap();
                 },
-                Action::RequestVidDisperse(view, epoch, block, metadata) => {
+                Action::RequestVidDisperse {
+                    view,
+                    epoch,
+                    block,
+                    metadata,
+                } => {
                     let vid_disperse = VidDisperse::calculate_vid_disperse(
                         block,
                         &self.membership_coordinator,
@@ -115,18 +122,18 @@ pub mod testing {
                         panic!("VidDisperse is not a V2");
                     };
                     self.consensus_tx
-                        .send(ConsensusEvent::VidDisperseCreated(*view, vid))
+                        .send(ConsensusInput::VidDisperseCreated(*view, vid))
                         .await
                         .unwrap();
                 },
-                Action::RequestProposal(view, commitment) => {},
+                Action::RequestProposal { view, commitment } => {},
                 Action::RequestDRB(drb_input) => {},
                 Action::Shutdown => {
                     unreachable!()
                 },
             }
         }
-        async fn handle_update(&mut self, update: &Update<TestTypes>) {
+        async fn handle_update(&mut self, update: &Event<TestTypes>) {
             // TODO: Implement
         }
     }

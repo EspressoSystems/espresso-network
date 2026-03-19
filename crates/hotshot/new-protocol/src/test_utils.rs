@@ -1,4 +1,8 @@
-use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::Arc,
+    time::Duration,
+};
 
 use async_lock::RwLock;
 use committable::{Commitment, Committable};
@@ -18,7 +22,8 @@ use hotshot_testing::{
 };
 use hotshot_types::{
     data::{
-        EpochNumber, Leaf2, QuorumProposalWrapper, VidDisperse2, VidDisperseShare2, ViewNumber,
+        BlockNumber, EpochNumber, Leaf2, QuorumProposalWrapper, VidDisperse2, VidDisperseShare2,
+        ViewNumber,
     },
     epoch_membership::EpochMembershipCoordinator,
     message::Proposal,
@@ -35,8 +40,8 @@ use hotshot_types::{
 };
 
 use crate::{
-    events::ConsensusEvent,
-    helpers::upgrade_lock,
+    events::{ConsensusInput, StateResponse},
+    helpers::{proposal_commitment, upgrade_lock},
     message::{Certificate1, Certificate2, ProposalMessage, Vote2, Vote2Data},
 };
 
@@ -82,35 +87,44 @@ impl TestView {
     }
 
     /// Build a ConsensusEvent::Proposal for a given recipient node.
-    pub fn proposal_event(&self, recipient_key: &BLSPubKey) -> ConsensusEvent<TestTypes> {
-        ConsensusEvent::Proposal(self.proposal_message(recipient_key))
+    pub fn proposal_event(&self, recipient_key: &BLSPubKey) -> ConsensusInput<TestTypes> {
+        ConsensusInput::Proposal(self.proposal_message(recipient_key))
     }
 
     /// Build a ConsensusEvent::BlockReconstructed for this view.
-    pub fn block_reconstructed_event(&self) -> ConsensusEvent<TestTypes> {
-        ConsensusEvent::BlockReconstructed(self.view_number, self.vid_commitment())
+    pub fn block_reconstructed_event(&self) -> ConsensusInput<TestTypes> {
+        ConsensusInput::BlockReconstructed(self.view_number, self.vid_commitment())
+    }
+
+    /// Build a ConsensusInput::StateVerified for this view.
+    pub fn state_verified_event(&self) -> ConsensusInput<TestTypes> {
+        let commitment = proposal_commitment(&self.proposal.data.proposal);
+        ConsensusInput::StateVerified(StateResponse {
+            view: self.view_number,
+            commitment,
+        })
     }
 
     /// Build a ConsensusEvent::Certificate1 for this view.
-    pub fn cert1_event(&self) -> ConsensusEvent<TestTypes> {
-        ConsensusEvent::Certificate1(self.cert1.clone())
+    pub fn cert1_event(&self) -> ConsensusInput<TestTypes> {
+        ConsensusInput::Certificate1(self.cert1.clone())
     }
 
     /// Build a ConsensusEvent::Certificate2 for this view.
-    pub fn cert2_event(&self) -> ConsensusEvent<TestTypes> {
-        ConsensusEvent::Certificate2(self.cert2.clone())
+    pub fn cert2_event(&self) -> ConsensusInput<TestTypes> {
+        ConsensusInput::Certificate2(self.cert2.clone())
     }
 
     /// Build a ConsensusEvent::TimeoutCertificate for this view.
     #[allow(dead_code)]
-    pub fn timeout_event(&self) -> ConsensusEvent<TestTypes> {
-        ConsensusEvent::TimeoutCertificate(self.timeout_cert.clone())
+    pub fn timeout_event(&self) -> ConsensusInput<TestTypes> {
+        ConsensusInput::TimeoutCertificate(self.timeout_cert.clone())
     }
 
     /// Build a ConsensusEvent::ViewSyncCertificate for this view.
     #[allow(dead_code)]
-    pub fn view_sync_event(&self) -> ConsensusEvent<TestTypes> {
-        ConsensusEvent::ViewSyncCertificate(self.view_sync_cert.clone())
+    pub fn view_sync_event(&self) -> ConsensusInput<TestTypes> {
+        ConsensusInput::ViewSyncCertificate(self.view_sync_cert.clone())
     }
 }
 
@@ -162,7 +176,7 @@ impl TestData {
             let cert2 = build_cert2(
                 leaf_commit,
                 epoch,
-                block_number,
+                block_number.into(),
                 &epoch_membership,
                 view_number,
                 &leader_public_key,
@@ -213,6 +227,7 @@ pub async fn mock_membership() -> EpochMembershipCoordinator<TestTypes> {
             10,
             None,
             Duration::from_secs(1),
+            &mut HashMap::new(),
         )(0)
         .await;
     let members = gen_node_lists(10, 10, &TestNodeStakes::default()).0;
@@ -304,7 +319,7 @@ async fn build_cert1(
 async fn build_cert2(
     leaf_commit: Commitment<Leaf2<TestTypes>>,
     epoch: EpochNumber,
-    block_number: u64,
+    block: BlockNumber,
     epoch_membership: &hotshot_types::epoch_membership::EpochMembership<TestTypes>,
     view_number: ViewNumber,
     public_key: &BLSPubKey,
@@ -313,7 +328,7 @@ async fn build_cert2(
     let data = Vote2Data {
         leaf_commit,
         epoch,
-        block_number,
+        block,
     };
     build_cert::<TestTypes, Vote2Data<TestTypes>, Vote2<TestTypes>, Certificate2<TestTypes>>(
         data,
