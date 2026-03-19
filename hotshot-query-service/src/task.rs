@@ -20,7 +20,7 @@ use tokio::{
     spawn,
     task::{JoinError, JoinHandle},
 };
-use tracing::{info_span, Instrument};
+use tracing::{Instrument, info_span};
 
 /// A background task which is cancelled on [`Drop`]
 ///

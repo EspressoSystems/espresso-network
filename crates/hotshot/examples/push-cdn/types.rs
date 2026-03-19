@@ -4,7 +4,7 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use hotshot::traits::{implementations::PushCdnNetwork, NodeImplementation};
+use hotshot::traits::{NodeImplementation, implementations::PushCdnNetwork};
 use hotshot_example_types::{state_types::TestTypes, storage_types::TestStorage};
 use hotshot_types::traits::node_implementation::NodeType;
 use serde::{Deserialize, Serialize};

@@ -18,10 +18,10 @@ use atomic_store::AtomicStoreLoader;
 use hotshot_types::traits::node_implementation::NodeType;
 
 pub use super::storage::fs::Transaction;
-use super::{storage::FileSystemStorage, AvailabilityProvider, FetchingDataSource};
+use super::{AvailabilityProvider, FetchingDataSource, storage::FileSystemStorage};
 use crate::{
-    availability::{query_data::QueryablePayload, QueryableHeader},
     Header, Payload,
+    availability::{QueryableHeader, query_data::QueryablePayload},
 };
 
 /// A data source for the APIs provided in this crate, backed by the local file system.

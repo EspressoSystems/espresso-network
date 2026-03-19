@@ -5,7 +5,7 @@ use std::{
 };
 
 use alloy::{
-    primitives::{utils::parse_ether, Address, U256},
+    primitives::{Address, U256, utils::parse_ether},
     providers::{Provider, ProviderBuilder, WalletProvider},
     signers::local::PrivateKeySigner,
 };
@@ -13,11 +13,11 @@ use anyhow::Result;
 use common::{Signer, TestSystemExt};
 use espresso_contract_deployer::build_signer;
 use hotshot_contract_adapter::{sol_types::StakeTableV2, stake_table::StakeTableContractVersion};
-use rand::{rngs::StdRng, SeedableRng};
+use rand::{SeedableRng, rngs::StdRng};
 use rstest::rstest;
 use staking_cli::{
-    demo::generate_delegator_signer, deploy::TestSystem, Commission, NodeSignatures, Transaction,
-    DEMO_VALIDATOR_START_INDEX,
+    Commission, DEMO_VALIDATOR_START_INDEX, NodeSignatures, Transaction,
+    demo::generate_delegator_signer, deploy::TestSystem,
 };
 use tokio::time::sleep;
 use url::Url;

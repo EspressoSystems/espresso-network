@@ -10,10 +10,10 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{bail, Context};
-use clap::{error::ErrorKind, Args, FromArgMatches, Parser};
+use anyhow::{Context, bail};
+use clap::{Args, FromArgMatches, Parser, error::ErrorKind};
 use derivative::Derivative;
-use espresso_types::{parse_duration, BackoffParams, L1ClientOptions};
+use espresso_types::{BackoffParams, L1ClientOptions, parse_duration};
 use hotshot_types::{light_client::StateSignKey, signature_key::BLSPrivKey};
 use jf_signature::{bls_over_bn254, schnorr};
 use libp2p::Multiaddr;

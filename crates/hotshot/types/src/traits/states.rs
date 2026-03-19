@@ -12,13 +12,13 @@
 
 use std::{error::Error, fmt::Debug, future::Future};
 
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use vbs::version::Version;
 
 use super::block_contents::TestableBlock;
 use crate::{
     data::Leaf2,
-    traits::{node_implementation::NodeType, BlockPayload},
+    traits::{BlockPayload, node_implementation::NodeType},
 };
 
 /// Instance-level state, which allows us to fetch missing validated state.

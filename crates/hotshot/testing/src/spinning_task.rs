@@ -14,8 +14,8 @@ use async_lock::RwLock;
 use async_trait::async_trait;
 use futures::future::join_all;
 use hotshot::{
-    traits::TestableNodeImplementation, types::EventType, HotShotInitializer, InitializerEpochInfo,
-    SystemContext,
+    HotShotInitializer, InitializerEpochInfo, SystemContext, traits::TestableNodeImplementation,
+    types::EventType,
 };
 use hotshot_example_types::{
     block_types::TestBlockHeader,
@@ -24,6 +24,7 @@ use hotshot_example_types::{
     testable_delay::DelayConfig,
 };
 use hotshot_types::{
+    ValidatorConfig,
     constants::EVENT_CHANNEL_SIZE,
     data::{Leaf2, ViewNumber},
     event::Event,
@@ -38,7 +39,6 @@ use hotshot_types::{
     },
     utils::genesis_epoch_from_version,
     vote::HasViewNumber,
-    ValidatorConfig,
 };
 use hotshot_utils::anytrace::*;
 
@@ -88,18 +88,20 @@ pub struct SpinningTask<
     pub(crate) state_cert: Option<LightClientStateUpdateCertificateV2<TYPES>>,
     /// Node stakes
     pub(crate) node_stakes: TestNodeStakes,
+    /// Configured version upgrade
+    pub(crate) upgrade: versions::Upgrade,
 }
 
 #[async_trait]
 impl<
-        TYPES: NodeType<
+    TYPES: NodeType<
             InstanceState = TestInstanceState,
             ValidatedState = TestValidatedState,
             BlockHeader = TestBlockHeader,
         >,
-        I: TestableNodeImplementation<TYPES>,
-        N: ConnectedNetwork<TYPES::SignatureKey>,
-    > TestTaskState for SpinningTask<TYPES, N, I>
+    I: TestableNodeImplementation<TYPES>,
+    N: ConnectedNetwork<TYPES::SignatureKey>,
+> TestTaskState for SpinningTask<TYPES, N, I>
 where
     I: TestableNodeImplementation<TYPES>,
     I: NodeImplementation<TYPES, Network = N, Storage = TestStorage<TYPES>>,
@@ -172,7 +174,7 @@ where
                                             self.last_decided_leaf.clone(),
                                             (
                                                 ViewNumber::genesis(),
-                                                genesis_epoch_from_version(config.upgrade.base),
+                                                genesis_epoch_from_version(self.upgrade.base),
                                             ),
                                             (self.high_qc.clone(), self.next_epoch_high_qc.clone()),
                                             ViewNumber::genesis(),
@@ -197,6 +199,7 @@ where
                                             memberships,
                                             initializer,
                                             config,
+                                            self.upgrade,
                                             validator_config,
                                             storage,
                                         )
@@ -267,7 +270,7 @@ where
                                     QuorumCertificate2::genesis(
                                         &TestValidatedState::default(),
                                         &TestInstanceState::default(),
-                                        config.upgrade,
+                                        self.upgrade,
                                     )
                                     .await,
                                 );
@@ -325,6 +328,7 @@ where
                                         Arc::clone(&membership),
                                         initializer,
                                         config,
+                                        self.upgrade,
                                         validator_config,
                                         storage.clone(),
                                         internal_chan,

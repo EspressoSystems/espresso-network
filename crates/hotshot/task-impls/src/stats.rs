@@ -11,7 +11,7 @@ use hotshot_types::{
     consensus::OuterConsensus,
     data::{EpochNumber, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
-    traits::{block_contents::BlockHeader, node_implementation::NodeType, BlockPayload},
+    traits::{BlockPayload, block_contents::BlockHeader, node_implementation::NodeType},
     vote::HasViewNumber,
 };
 use hotshot_utils::{
@@ -250,26 +250,25 @@ impl<TYPES: NodeType> TaskState for StatsTaskState<TYPES> {
                 self.leader_entry(proposal.data.view_number()).proposal_send = Some(now);
 
                 // If the last view succeeded, add the metric for time between proposals
-                if proposal.data.view_change_evidence().is_none() {
-                    if let Some(previous_proposal_time) = self
+                if proposal.data.view_change_evidence().is_none()
+                    && let Some(previous_proposal_time) = self
                         .replica_entry(proposal.data.view_number() - 1)
                         .proposal_recv
-                    {
-                        self.leader_entry(proposal.data.view_number())
-                            .prev_proposal_send = Some(previous_proposal_time);
+                {
+                    self.leader_entry(proposal.data.view_number())
+                        .prev_proposal_send = Some(previous_proposal_time);
 
-                        // calculate the elapsed time as milliseconds (from nanoseconds)
-                        let elapsed_time = (now - previous_proposal_time) / 1_000_000;
-                        if elapsed_time > 0 {
-                            self.consensus
-                                .read()
-                                .await
-                                .metrics
-                                .previous_proposal_to_proposal_time
-                                .add_point(elapsed_time as f64);
-                        } else {
-                            tracing::warn!("Previous proposal time is in the future");
-                        }
+                    // calculate the elapsed time as milliseconds (from nanoseconds)
+                    let elapsed_time = (now - previous_proposal_time) / 1_000_000;
+                    if elapsed_time > 0 {
+                        self.consensus
+                            .read()
+                            .await
+                            .metrics
+                            .previous_proposal_to_proposal_time
+                            .add_point(elapsed_time as f64);
+                    } else {
+                        tracing::warn!("Previous proposal time is in the future");
                     }
                 }
             },

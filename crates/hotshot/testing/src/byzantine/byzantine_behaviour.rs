@@ -14,8 +14,8 @@ use hotshot::{
 use hotshot_task_impls::{
     events::HotShotEvent,
     network::{
-        test::{ModifierClosure, NetworkEventTaskStateModifier},
         NetworkEventTaskState,
+        test::{ModifierClosure, NetworkEventTaskStateModifier},
     },
 };
 use hotshot_types::{
@@ -23,8 +23,8 @@ use hotshot_types::{
     data::{EpochNumber, QuorumProposalWrapper, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::{
-        convert_proposal, GeneralConsensusMessage, Message, MessageKind, Proposal,
-        SequencingMessage, UpgradeLock,
+        GeneralConsensusMessage, Message, MessageKind, Proposal, SequencingMessage, UpgradeLock,
+        convert_proposal,
     },
     simple_vote::{
         HasEpoch, QuorumVote2, ViewSyncPreCommitData, ViewSyncPreCommitData2,
@@ -501,7 +501,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> EventTransformerState<TYPES,
                 if !self.dishonest_proposal_view_numbers.contains(&view_number) {
                     return vec![event.clone()];
                 }
-                let message_kind = if upgrade_lock.epochs_enabled(view_number).await {
+                let message_kind = if upgrade_lock.epochs_enabled(view_number) {
                     MessageKind::<TYPES>::from_consensus_message(SequencingMessage::General(
                         GeneralConsensusMessage::Proposal2(convert_proposal(proposal.clone())),
                     ))
@@ -514,7 +514,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> EventTransformerState<TYPES,
                     sender: sender.clone(),
                     kind: message_kind,
                 };
-                let serialized_message = match upgrade_lock.serialize(&message).await {
+                let serialized_message = match upgrade_lock.serialize(&message) {
                     Ok(serialized) => serialized,
                     Err(e) => {
                         panic!("Failed to serialize message: {e}");
@@ -586,7 +586,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> EventTransformerState<TYPES,
                 if !self.dishonest_proposal_view_numbers.contains(&view_number) {
                     return vec![event.clone()];
                 }
-                let message_kind = if upgrade_lock.epochs_enabled(view_number).await {
+                let message_kind = if upgrade_lock.epochs_enabled(view_number) {
                     MessageKind::<TYPES>::from_consensus_message(SequencingMessage::General(
                         GeneralConsensusMessage::ViewSyncPreCommitCertificate2(certificate.clone()),
                     ))
@@ -601,7 +601,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> EventTransformerState<TYPES,
                     sender: sender.clone(),
                     kind: message_kind,
                 };
-                let serialized_message = match upgrade_lock.serialize(&message).await {
+                let serialized_message = match upgrade_lock.serialize(&message) {
                     Ok(serialized) => serialized,
                     Err(e) => {
                         panic!("Failed to serialize message: {e}");
@@ -650,7 +650,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> EventTransformerState<TYPES,
                 if !self.dishonest_proposal_view_numbers.contains(&view_number) {
                     return vec![event.clone()];
                 }
-                let message_kind = if upgrade_lock.epochs_enabled(view_number).await {
+                let message_kind = if upgrade_lock.epochs_enabled(view_number) {
                     MessageKind::<TYPES>::from_consensus_message(SequencingMessage::General(
                         GeneralConsensusMessage::ViewSyncCommitCertificate2(certificate.clone()),
                     ))
@@ -665,7 +665,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> EventTransformerState<TYPES,
                     sender: sender.clone(),
                     kind: message_kind,
                 };
-                let serialized_message = match upgrade_lock.serialize(&message).await {
+                let serialized_message = match upgrade_lock.serialize(&message) {
                     Ok(serialized) => serialized,
                     Err(e) => {
                         panic!("Failed to serialize message: {e}");
@@ -759,7 +759,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> EventTransformerState<TYPES,
                     return vec![event.clone()];
                 }
                 let view_number = vote.data.round;
-                let vote = if upgrade_lock.epochs_enabled(view_number).await {
+                let vote = if upgrade_lock.epochs_enabled(view_number) {
                     ViewSyncPreCommitVote2::<TYPES>::create_signed_vote(
                         ViewSyncPreCommitData2 {
                             relay: 0,

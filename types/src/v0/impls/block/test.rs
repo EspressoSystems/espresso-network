@@ -12,8 +12,8 @@ use jf_advz::VidScheme;
 use rand::RngCore;
 
 use crate::{
-    v0_3::ChainConfig, BlockSize, NamespaceId, NodeState, NsProof, Payload, Transaction, TxProof,
-    ValidatedState,
+    BlockSize, NamespaceId, NodeState, NsProof, Payload, Transaction, TxProof, ValidatedState,
+    v0_3::ChainConfig,
 };
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use libp2p::{multiaddr::Protocol, Multiaddr, PeerId};
+use libp2p::{Multiaddr, PeerId, multiaddr::Protocol};
 
 /// Split off the peer ID from a multiaddress, returning the shortened address and the peer ID.
 ///

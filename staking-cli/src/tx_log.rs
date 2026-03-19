@@ -14,7 +14,7 @@ use alloy::{
     providers::Provider,
     rpc::types::{TransactionReceipt, TransactionRequest},
 };
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 use tokio::{
     sync::{OwnedSemaphorePermit, Semaphore},
@@ -304,11 +304,11 @@ pub async fn submit_with_retry(
                 }
 
                 // On timeout, tx might have been accepted - check if already confirmed
-                if is_timeout_error(&err_str) {
-                    if let Ok(Some(_receipt)) = provider.get_transaction_receipt(tx_hash).await {
-                        tracing::info!("tx {} already confirmed despite timeout", tx_hash);
-                        return Ok(tx_hash);
-                    }
+                if is_timeout_error(&err_str)
+                    && let Ok(Some(_receipt)) = provider.get_transaction_receipt(tx_hash).await
+                {
+                    tracing::info!("tx {} already confirmed despite timeout", tx_hash);
+                    return Ok(tx_hash);
                 }
 
                 attempts += 1;
@@ -519,10 +519,10 @@ async fn execute_signed_tx_log_inner<P: Provider + Clone + 'static>(
                     let provider = provider.clone();
                     async move {
                         let receipt = get_receipt_with_retry(&provider, tx.tx_hash).await?;
-                        if let Some(r) = &receipt {
-                            if !r.status() {
-                                bail!("tx {} failed (reverted)", tx.tx_hash);
-                            }
+                        if let Some(r) = &receipt
+                            && !r.status()
+                        {
+                            bail!("tx {} failed (reverted)", tx.tx_hash);
                         }
                         Ok((tx, receipt.is_some()))
                     }
@@ -658,11 +658,13 @@ mod tests {
         let archived = log.archive(&path).unwrap();
         assert!(!path.exists());
         assert!(archived.exists());
-        assert!(archived
-            .file_name()
-            .unwrap()
-            .to_string_lossy()
-            .contains(".completed."));
+        assert!(
+            archived
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .contains(".completed.")
+        );
     }
 
     #[test]

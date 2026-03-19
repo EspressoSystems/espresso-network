@@ -12,8 +12,8 @@ use alloy::primitives::U256;
 use criterion::Criterion;
 use espresso_types::{
     reward_mt::{
-        storage::OuterIndex, InMemoryRewardMerkleTreeV2, RewardMerkleTreeV2,
-        REWARD_MERKLE_TREE_V2_HEIGHT,
+        InMemoryRewardMerkleTreeV2, REWARD_MERKLE_TREE_V2_HEIGHT, RewardMerkleTreeV2,
+        storage::OuterIndex,
     },
     v0_3::RewardAmount,
     v0_4::RewardAccountV2,
@@ -66,7 +66,7 @@ fn random_account(rng: &mut impl Rng) -> RewardAccountV2 {
 }
 
 fn random_amount(rng: &mut impl Rng) -> RewardAmount {
-    RewardAmount(U256::from(rng.gen::<u64>()))
+    RewardAmount(U256::from(rng.r#gen::<u64>()))
 }
 
 fn generate_kv_pairs(n: usize) -> Vec<(RewardAccountV2, RewardAmount)> {

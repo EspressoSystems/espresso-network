@@ -16,11 +16,11 @@ use alloy::primitives::U256;
 use anyhow::{anyhow, ensure};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use bincode::{
+    DefaultOptions, Options,
     config::{
         FixintEncoding, LittleEndian, RejectTrailing, WithOtherEndian, WithOtherIntEncoding,
         WithOtherLimit, WithOtherTrailing,
     },
-    DefaultOptions, Options,
 };
 use committable::{Commitment, Committable};
 use digest::OutputSizeUser;
@@ -32,11 +32,11 @@ use vbs::version::Version;
 use versions::EPOCH_VERSION;
 
 use crate::{
+    PeerConfig,
     data::{EpochNumber, Leaf2, VidCommitment, ViewNumber},
     stake_table::StakeTableEntries,
-    traits::{node_implementation::NodeType, ValidatedState},
+    traits::{ValidatedState, node_implementation::NodeType},
     vote::{Certificate, HasViewNumber},
-    PeerConfig,
 };
 
 /// A view's state

@@ -31,16 +31,16 @@ use crate::{
     simple_vote::HasEpoch,
     stake_table::HSStakeTable,
     traits::{
+        BlockPayload,
         block_contents::EncodeBytes,
         node_implementation::NodeType,
         signature_key::{SignatureKey, StakeTableEntryType},
-        BlockPayload,
     },
     vid::{
-        advz::{advz_scheme, ADVZCommitment, ADVZCommon, ADVZScheme, ADVZShare},
-        avidm::{init_avidm_param, AvidMCommitment, AvidMCommon, AvidMScheme, AvidMShare},
+        advz::{ADVZCommitment, ADVZCommon, ADVZScheme, ADVZShare, advz_scheme},
+        avidm::{AvidMCommitment, AvidMCommon, AvidMScheme, AvidMShare, init_avidm_param},
         avidm_gf2::{
-            init_avidm_gf2_param, AvidmGf2Commitment, AvidmGf2Common, AvidmGf2Scheme, AvidmGf2Share,
+            AvidmGf2Commitment, AvidmGf2Common, AvidmGf2Scheme, AvidmGf2Share, init_avidm_gf2_param,
         },
     },
     vote::HasViewNumber,

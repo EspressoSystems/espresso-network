@@ -1,15 +1,14 @@
 use std::{num::NonZeroUsize, time::Duration};
 
 use hotshot_types::{
+    HotShotConfig, PeerConfig, ValidatorConfig, VersionedDaCommittee,
     network::{
         BuilderType, CombinedNetworkConfig, Libp2pConfig, NetworkConfig, RandomBuilderConfig,
     },
-    HotShotConfig, PeerConfig, ValidatorConfig, VersionedDaCommittee,
 };
 use serde::{Deserialize, Serialize};
 use tide_disco::Url;
 use vec1::Vec1;
-use versions::{Upgrade, VERSION_0_1};
 
 use crate::{PubKey, SeqTypes};
 
@@ -82,8 +81,6 @@ pub struct PublicHotShotConfig {
     drb_difficulty: u64,
     #[serde(default = "default_drb_upgrade_difficulty")]
     drb_upgrade_difficulty: u64,
-    #[serde(default = "default_version_upgrade")]
-    upgrade: Upgrade,
 }
 
 fn default_stake_table_capacity() -> usize {
@@ -98,11 +95,6 @@ fn default_drb_difficulty() -> u64 {
 /// Default DRB upgrade difficulty, set to 0 (intended to be overwritten)
 fn default_drb_upgrade_difficulty() -> u64 {
     0
-}
-
-/// Default version upgrade (intended to be overwritten)
-fn default_version_upgrade() -> Upgrade {
-    Upgrade::trivial(VERSION_0_1)
 }
 
 impl From<HotShotConfig<SeqTypes>> for PublicHotShotConfig {
@@ -137,7 +129,6 @@ impl From<HotShotConfig<SeqTypes>> for PublicHotShotConfig {
             stake_table_capacity,
             drb_difficulty,
             drb_upgrade_difficulty,
-            upgrade,
         } = v;
 
         Self {
@@ -167,7 +158,6 @@ impl From<HotShotConfig<SeqTypes>> for PublicHotShotConfig {
             stake_table_capacity,
             drb_difficulty,
             drb_upgrade_difficulty,
-            upgrade,
         }
     }
 }
@@ -201,7 +191,6 @@ impl PublicHotShotConfig {
             stake_table_capacity: self.stake_table_capacity,
             drb_difficulty: self.drb_difficulty,
             drb_upgrade_difficulty: self.drb_upgrade_difficulty,
-            upgrade: self.upgrade,
         }
     }
 

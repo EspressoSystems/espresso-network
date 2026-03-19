@@ -1,8 +1,8 @@
 use alloy::{
     eips::BlockId,
     network::EthereumWallet,
-    primitives::{utils::parse_ether, Address, U256},
-    signers::local::{coins_bip39::English, MnemonicBuilder, PrivateKeySigner},
+    primitives::{Address, U256, utils::parse_ether},
+    signers::local::{MnemonicBuilder, PrivateKeySigner, coins_bip39::English},
 };
 use anyhow::Result;
 use clap::{ArgAction, Parser, Subcommand};

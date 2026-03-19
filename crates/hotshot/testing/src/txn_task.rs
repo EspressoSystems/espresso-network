@@ -62,12 +62,11 @@ impl<TYPES: NodeType, I: TestableNodeImplementation<TYPES>> TxnTask<TYPES, I> {
                     let txn = I::leaf_create_random_transaction(&leaf, &mut thread_rng(), 0);
 
                     let res = node.handle.submit_transaction(txn.clone()).await;
-                    if let Err(HotShotError::InvalidState(e)) = res.as_ref() {
-                        if e.contains("Catchup already in progress")
-                            || e.contains("Starting catchup")
-                        {
-                            return;
-                        }
+                    if let Err(HotShotError::InvalidState(e)) = res.as_ref()
+                        && (e.contains("Catchup already in progress")
+                            || e.contains("Starting catchup"))
+                    {
+                        return;
                     }
                     res.expect("Could not send transaction");
                 },

@@ -2,37 +2,37 @@ use std::time::Duration;
 
 use espresso_types::{NamespaceId, NsProof, PubKey, StateCertQueryDataV1, StateCertQueryDataV2};
 use futures::{
-    future::{try_join_all, FutureExt, TryFutureExt},
+    future::{FutureExt, TryFutureExt, try_join_all},
     join,
     stream::{Stream, StreamExt, TryStreamExt},
     try_join,
 };
 use hotshot_query_service::{
+    ApiState,
     availability::{
         self, AvailabilityDataSource, BlockQueryData, Error, FetchBlockSnafu, VidCommonQueryData,
     },
     node::{BlockId, NodeDataSource},
     types::HeightIndexed,
-    ApiState,
 };
 use hotshot_types::{
     data::VidShare, simple_certificate::LightClientStateUpdateCertificateV2,
     traits::network::ConnectedNetwork, vid::avidm::AvidMShare,
 };
 use snafu::OptionExt;
-use tide_disco::{method::ReadState, Api, RequestParams, StatusCode};
+use tide_disco::{Api, RequestParams, StatusCode, method::ReadState};
 use tracing::warn;
 use vbs::version::StaticVersionType;
 
 use crate::{
+    SeqTypes, SequencerApiVersion, SequencerPersistence,
     api::{
+        StorageState,
         data_source::{
             RequestResponseDataSource, SequencerDataSource, StateCertDataSource,
             StateCertFetchingDataSource,
         },
-        StorageState,
     },
-    SeqTypes, SequencerApiVersion, SequencerPersistence,
 };
 
 pub(in crate::api) type AvailState<N, P, D> = ApiState<StorageState<N, P, D>>;
@@ -149,7 +149,7 @@ fn extract_ns_proof_v0(
             return Err(Error::Custom {
                 message: "Unsupported VID version, use new API version instead.".to_string(),
                 status: StatusCode::NOT_FOUND,
-            })
+            });
         },
         None => None,
     };
@@ -250,7 +250,7 @@ fn get_block_stream_for_ns_proof<'a, S>(
     req: RequestParams,
     state: &'a S,
 ) -> impl 'a
-       + Stream<
++ Stream<
     Item = Result<
         (
             NamespaceId,

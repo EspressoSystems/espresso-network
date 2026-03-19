@@ -5,7 +5,8 @@
 ## Install system dependencies
 
     sudo apt-get update
-    sudo apt-get install -y curl cmake pkg-config libssl-dev protobuf-compiler git postgresql-client lsb-release gpg
+    sudo apt-get install -y curl cmake pkg-config libssl-dev protobuf-compiler git postgresql-client lsb-release gpg nodejs npm
+    sudo npm install -g yarn
 
 ## Install docker
 
@@ -37,6 +38,10 @@ Just is outdated in the official ubuntu repos.
 
     git clone --recursive https://github.com/espressosystems/espresso-sequencer
     cd espresso-sequencer
+
+## Install npm dependencies
+
+    yarn install
 
 ## Build the contracts
 

@@ -2,17 +2,17 @@ use std::time::Duration;
 
 use alloy::{
     primitives::{
-        utils::{format_ether, parse_ether},
         Address, U256,
+        utils::{format_ether, parse_ether},
     },
     signers::local::coins_bip39::{English, Mnemonic},
 };
 use anyhow::Result;
-use common::{base_cmd, MetadataCommand, Signer, TestSystemExt};
+use common::{MetadataCommand, Signer, TestSystemExt, base_cmd};
 use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
 use hotshot_types::signature_key::BLSPubKey;
 use predicates::{prelude::PredicateBooleanExt, str};
-use rand::{rngs::StdRng, SeedableRng as _};
+use rand::{SeedableRng as _, rngs::StdRng};
 use serde::Deserialize;
 use staking_cli::{
     demo::DelegationConfig,

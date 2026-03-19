@@ -17,7 +17,6 @@ use std::{
     time::Duration,
 };
 
-use async_lock::RwLock;
 use bincode::Options;
 use committable::{Commitment, CommitmentBoundsArkless, Committable, RawCommitmentBuilder};
 use hotshot_utils::anytrace::*;
@@ -28,12 +27,12 @@ use tagged_base64::{TaggedBase64, Tb64Error};
 use thiserror::Error;
 use vbs::version::Version;
 use vec1::Vec1;
-use versions::{Upgrade, EPOCH_VERSION, VID2_UPGRADE_VERSION};
+use versions::{EPOCH_VERSION, Upgrade, VID2_UPGRADE_VERSION};
 
 use crate::{
     drb::DrbResult,
     epoch_membership::EpochMembershipCoordinator,
-    message::{convert_proposal, Proposal, UpgradeLock},
+    message::{Proposal, UpgradeLock, convert_proposal},
     simple_certificate::{
         LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
         NextEpochQuorumCertificate2, QuorumCertificate, QuorumCertificate2, TimeoutCertificate,
@@ -42,20 +41,20 @@ use crate::{
     },
     simple_vote::{HasEpoch, QuorumData, QuorumData2, UpgradeProposalData, VersionedVoteData},
     traits::{
+        BlockPayload,
         block_contents::{BlockHeader, BuilderFee, EncodeBytes, TestableBlock},
         node_implementation::NodeType,
         signature_key::SignatureKey,
         states::TestableState,
-        BlockPayload,
     },
     utils::{
-        bincode_opts, genesis_epoch_from_version, option_epoch_from_block_number,
-        EpochTransitionIndicator,
+        EpochTransitionIndicator, bincode_opts, genesis_epoch_from_version,
+        option_epoch_from_block_number,
     },
     vid::{
-        advz::{advz_scheme, ADVZScheme},
-        avidm::{init_avidm_param, AvidMScheme},
-        avidm_gf2::{init_avidm_gf2_param, AvidmGf2Scheme},
+        advz::{ADVZScheme, advz_scheme},
+        avidm::{AvidMScheme, init_avidm_param},
+        avidm_gf2::{AvidmGf2Scheme, init_avidm_gf2_param},
     },
     vote::{Certificate, HasViewNumber},
 };
@@ -572,8 +571,8 @@ impl<TYPES: NodeType> VidDisperse<TYPES> {
         metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
         upgrade_lock: &UpgradeLock<TYPES>,
     ) -> Result<VidDisperseAndDuration<TYPES>> {
-        let epochs_enabled = upgrade_lock.epochs_enabled(view).await;
-        let upgraded_vid2 = upgrade_lock.upgraded_vid2(view).await;
+        let epochs_enabled = upgrade_lock.epochs_enabled(view);
+        let upgraded_vid2 = upgrade_lock.upgraded_vid2(view);
         if upgraded_vid2 {
             VidDisperse2::calculate_vid_disperse(
                 payload,
@@ -1099,7 +1098,7 @@ impl<TYPES: NodeType> QuorumProposal2<TYPES> {
         epoch_height: u64,
     ) -> Result<()> {
         let calculated_epoch = option_epoch_from_block_number(
-            upgrade_lock.epochs_enabled(self.view_number()).await,
+            upgrade_lock.epochs_enabled(self.view_number()),
             self.block_header.block_number(),
             epoch_height,
         );
@@ -1616,11 +1615,7 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
     /// # Errors
     /// Returns an error if the certificates are not identical, or that when we no longer see a
     /// cert, it's for the right reason.
-    pub async fn extends_upgrade(
-        &self,
-        parent: &Self,
-        decided_upgrade_certificate: &Arc<RwLock<Option<UpgradeCertificate<TYPES>>>>,
-    ) -> Result<()> {
+    pub fn extends_upgrade(&self, parent: &Self, upgrade: &UpgradeLock<TYPES>) -> Result<()> {
         match (self.upgrade_certificate(), parent.upgrade_certificate()) {
             // Easiest cases are:
             //   - no upgrade certificate on either: this is the most common case, and is always fine.
@@ -1630,7 +1625,7 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
             //    - no longer care because we have passed new_version_first_view, or
             //    - no longer care because we have passed `decide_by` without deciding the certificate.
             (None, Some(parent_cert)) => {
-                let decided_upgrade_certificate_read = decided_upgrade_certificate.read().await;
+                let decided_upgrade_certificate_read = upgrade.decided_upgrade_cert();
                 ensure!(
                     self.view_number() > parent_cert.data.new_version_first_view
                         || (self.view_number() > parent_cert.data.decide_by
@@ -1846,7 +1841,7 @@ impl<TYPES: NodeType> QuorumCertificate2<TYPES> {
         let genesis_view = ViewNumber::genesis();
 
         let genesis_leaf = Leaf2::genesis(validated_state, instance_state, upgrade.base).await;
-        let block_number = if upgrade_lock.epochs_enabled(genesis_view).await {
+        let block_number = if upgrade_lock.epochs_enabled(genesis_view) {
             Some(genesis_leaf.height())
         } else {
             None
@@ -2003,11 +1998,7 @@ impl<TYPES: NodeType> Leaf<TYPES> {
     /// # Errors
     /// Returns an error if the certificates are not identical, or that when we no longer see a
     /// cert, it's for the right reason.
-    pub async fn extends_upgrade(
-        &self,
-        parent: &Self,
-        decided_upgrade_certificate: &Arc<RwLock<Option<UpgradeCertificate<TYPES>>>>,
-    ) -> Result<()> {
+    pub fn extends_upgrade(&self, parent: &Self, upgrade: &UpgradeLock<TYPES>) -> Result<()> {
         match (self.upgrade_certificate(), parent.upgrade_certificate()) {
             // Easiest cases are:
             //   - no upgrade certificate on either: this is the most common case, and is always fine.
@@ -2017,7 +2008,7 @@ impl<TYPES: NodeType> Leaf<TYPES> {
             //    - no longer care because we have passed new_version_first_view, or
             //    - no longer care because we have passed `decide_by` without deciding the certificate.
             (None, Some(parent_cert)) => {
-                let decided_upgrade_certificate_read = decided_upgrade_certificate.read().await;
+                let decided_upgrade_certificate_read = upgrade.decided_upgrade_cert();
                 ensure!(
                     self.view_number() > parent_cert.data.new_version_first_view
                         || (self.view_number() > parent_cert.data.decide_by
@@ -2197,8 +2188,8 @@ pub mod null_block {
     use crate::{
         data::VidCommitment,
         traits::{
-            block_contents::BuilderFee, node_implementation::NodeType,
-            signature_key::BuilderSignatureKey, BlockPayload,
+            BlockPayload, block_contents::BuilderFee, node_implementation::NodeType,
+            signature_key::BuilderSignatureKey,
         },
         vid::advz::advz_scheme,
     };

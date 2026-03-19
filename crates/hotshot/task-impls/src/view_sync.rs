@@ -34,7 +34,7 @@ use crate::{
     events::{HotShotEvent, HotShotTaskCompleted},
     helpers::{broadcast_event, broadcast_view_change},
     vote_collection::{
-        create_vote_accumulator, AccumulatorInfo, HandleVoteEvent, VoteCollectionTaskState,
+        AccumulatorInfo, HandleVoteEvent, VoteCollectionTaskState, create_vote_accumulator,
     },
 };
 
@@ -332,7 +332,7 @@ impl<TYPES: NodeType> ViewSyncTaskState<TYPES> {
                 .await;
             },
 
-            HotShotEvent::ViewSyncPreCommitVoteRecv(ref vote) => {
+            HotShotEvent::ViewSyncPreCommitVoteRecv(vote) => {
                 let mut map = self.pre_commit_relay_map.write().await;
                 let vote_view = vote.view_number();
                 let relay = vote.date().relay;
@@ -386,7 +386,7 @@ impl<TYPES: NodeType> ViewSyncTaskState<TYPES> {
                 relay_map.insert(relay, vote_collector);
             },
 
-            HotShotEvent::ViewSyncCommitVoteRecv(ref vote) => {
+            HotShotEvent::ViewSyncCommitVoteRecv(vote) => {
                 let mut map = self.commit_relay_map.write().await;
                 let vote_view = vote.view_number();
                 let relay = vote.date().relay;

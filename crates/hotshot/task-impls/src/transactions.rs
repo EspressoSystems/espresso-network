@@ -11,22 +11,22 @@ use std::{
 
 use async_broadcast::{Receiver, Sender};
 use async_trait::async_trait;
-use futures::{stream::FuturesUnordered, StreamExt};
+use futures::{StreamExt, stream::FuturesUnordered};
 use hotshot_builder_api::v0_1::block_info::AvailableBlockInfo;
 use hotshot_task::task::TaskState;
 use hotshot_types::{
     consensus::OuterConsensus,
-    data::{null_block, EpochNumber, PackedBundle, VidCommitment, ViewNumber},
+    data::{EpochNumber, PackedBundle, VidCommitment, ViewNumber, null_block},
     epoch_membership::EpochMembershipCoordinator,
     event::{Event, EventType},
     message::UpgradeLock,
     traits::{
+        BlockPayload,
         block_contents::{BlockHeader, BuilderFee, EncodeBytes},
         node_implementation::NodeType,
         signature_key::{BuilderSignatureKey, SignatureKey},
-        BlockPayload,
     },
-    utils::{is_epoch_transition, is_last_block, ViewInner},
+    utils::{ViewInner, is_epoch_transition, is_last_block},
 };
 use hotshot_utils::anytrace::*;
 use tokio::time::{sleep, timeout};
@@ -132,7 +132,7 @@ impl<TYPES: NodeType> TransactionTaskState<TYPES> {
         block_epoch: Option<EpochNumber>,
         vid: Option<VidCommitment>,
     ) -> Option<HotShotTaskCompleted> {
-        let version = match self.upgrade_lock.version(block_view).await {
+        let version = match self.upgrade_lock.version(block_view) {
             Ok(v) => v,
             Err(err) => {
                 tracing::error!(
@@ -160,7 +160,6 @@ impl<TYPES: NodeType> TransactionTaskState<TYPES> {
                     > self
                         .upgrade_lock
                         .upgrade_view()
-                        .await
                         .unwrap_or(ViewNumber::new(0))
                         + 1
                 {
@@ -206,9 +205,7 @@ impl<TYPES: NodeType> TransactionTaskState<TYPES> {
         let block = {
             if self
                 .upgrade_lock
-                .decided_upgrade_certificate
-                .read()
-                .await
+                .decided_upgrade_cert()
                 .as_ref()
                 .is_some_and(|cert| cert.upgrading_in(block_view))
             {
@@ -370,7 +367,7 @@ impl<TYPES: NodeType> TransactionTaskState<TYPES> {
                 let view_number = proposal.data.view_number();
                 let next_view = view_number + 1;
 
-                let version = match self.upgrade_lock.version(next_view).await {
+                let version = match self.upgrade_lock.version(next_view) {
                     Ok(v) => v,
                     Err(e) => {
                         tracing::error!("Failed to calculate version: {e:?}");

@@ -21,7 +21,6 @@ use traits::{
 use url::Url;
 use vbs::version::Version;
 use vec1::Vec1;
-use versions::Upgrade;
 
 use crate::utils::bincode_opts;
 pub mod bundle;
@@ -254,8 +253,6 @@ pub struct HotShotConfig<TYPES: NodeType> {
     pub drb_difficulty: u64,
     /// number of iterations in the DRB calculation
     pub drb_upgrade_difficulty: u64,
-    /// Configured version upgrade.
-    pub upgrade: Upgrade,
 }
 
 fn default_epoch_start_block() -> u64 {
@@ -287,7 +284,7 @@ impl<TYPES: NodeType> HotShotConfig<TYPES> {
 
 pub mod version_ser {
 
-    use serde::{de, Deserialize, Deserializer, Serializer};
+    use serde::{Deserialize, Deserializer, Serializer, de};
     use vbs::version::Version;
 
     pub fn serialize<S>(ver: &Version, serializer: S) -> Result<S::Ok, S::Error>

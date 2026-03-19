@@ -25,24 +25,25 @@ use catchup::{ParallelStateCatchup, StatePeers};
 use context::SequencerContext;
 use derivative::Derivative;
 use espresso_types::{
+    BackoffParams, EpochCommittees, L1ClientOptions, NodeState, PubKey, SeqTypes, ValidatedState,
     traits::{EventConsumer, MembershipPersistence},
     v0::traits::SequencerPersistence,
     v0_3::Fetcher,
-    BackoffParams, EpochCommittees, L1ClientOptions, NodeState, PubKey, SeqTypes, ValidatedState,
 };
 pub use genesis::Genesis;
 use genesis::L1Finalized;
 use hotshot::{
     traits::implementations::{
-        derive_libp2p_multiaddr, derive_libp2p_peer_id, CdnMetricsValue, CdnTopic,
-        CombinedNetworks, GossipConfig, KeyPair, Libp2pNetwork, MemoryNetwork, PushCdnNetwork,
-        RequestResponseConfig, WrappedSignatureKey,
+        CdnMetricsValue, CdnTopic, CombinedNetworks, GossipConfig, KeyPair, Libp2pNetwork,
+        MemoryNetwork, PushCdnNetwork, RequestResponseConfig, WrappedSignatureKey,
+        derive_libp2p_multiaddr, derive_libp2p_peer_id,
     },
     types::SignatureKey,
 };
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtPersistentStorage;
-use hotshot_orchestrator::client::{get_complete_config, OrchestratorClient};
+use hotshot_orchestrator::client::{OrchestratorClient, get_complete_config};
 use hotshot_types::{
+    ValidatorConfig,
     data::ViewNumber,
     epoch_membership::EpochMembershipCoordinator,
     light_client::{StateKeyPair, StateSignKey},
@@ -54,7 +55,6 @@ use hotshot_types::{
         storage::Storage,
     },
     utils::BuilderCommitment,
-    ValidatorConfig,
 };
 use libp2p::Multiaddr;
 use moka::future::Cache;
@@ -457,7 +457,6 @@ where
     network_config.config.drb_upgrade_difficulty = drb_upgrade_difficulty;
     network_config.config.epoch_start_block = epoch_start_block;
     network_config.config.stake_table_capacity = stake_table_capacity;
-    network_config.config.upgrade = version_upgrade;
 
     if let Some(da_committees) = &genesis.da_committees {
         tracing::warn!("setting da_committees from genesis: {da_committees:?}");
@@ -708,6 +707,7 @@ where
 
     let mut ctx = SequencerContext::init(
         network_config,
+        version_upgrade,
         validator_config,
         coordinator,
         instance_state,
@@ -745,11 +745,11 @@ pub mod testing {
         node_bindings::{Anvil, AnvilInstance},
         primitives::{Address, U256},
         providers::{
+            Provider, ProviderBuilder, RootProvider,
             fillers::{
                 BlobGasFiller, ChainIdFiller, FillProvider, GasFiller, JoinFill, NonceFiller,
             },
             layers::AnvilProvider,
-            Provider, ProviderBuilder, RootProvider,
         },
         signers::{
             k256::ecdsa::SigningKey,
@@ -760,14 +760,14 @@ pub mod testing {
     use catchup::NullStateCatchup;
     use committable::Committable;
     use espresso_contract_deployer::{
-        builder::DeployerArgsBuilder, network_config::light_client_genesis_from_stake_table,
-        Contract, Contracts, DEFAULT_EXIT_ESCROW_PERIOD_SECONDS,
+        Contract, Contracts, DEFAULT_EXIT_ESCROW_PERIOD_SECONDS, builder::DeployerArgsBuilder,
+        network_config::light_client_genesis_from_stake_table,
     };
     use espresso_types::{
-        eth_signature_key::EthKeyPair,
-        v0::traits::{EventConsumer, NullEventConsumer, PersistenceOptions, StateCatchup},
         EpochVersion, Event, FeeAccount, L1Client, NetworkConfig, PubKey, SeqTypes, Transaction,
         Upgrade, UpgradeMap,
+        eth_signature_key::EthKeyPair,
+        v0::traits::{EventConsumer, NullEventConsumer, PersistenceOptions, StateCatchup},
     };
     use futures::{
         future::join_all,
@@ -775,8 +775,8 @@ pub mod testing {
     };
     use hotshot::{
         traits::{
-            implementations::{MasterMap, MemoryNetwork},
             BlockPayload,
+            implementations::{MasterMap, MemoryNetwork},
         },
         types::EventType::{self, Decide},
     };
@@ -787,15 +787,15 @@ pub mod testing {
         BuilderTask, SimpleBuilderImplementation, TestBuilderImplementation,
     };
     use hotshot_types::{
+        HotShotConfig, PeerConfig,
         data::EpochNumber,
         event::LeafInfo,
         light_client::StateKeyPair,
         signature_key::BLSKeyPair,
         traits::{
-            block_contents::BlockHeader, metrics::NoMetrics, network::Topic,
-            signature_key::BuilderSignatureKey, EncodeBytes,
+            EncodeBytes, block_contents::BlockHeader, metrics::NoMetrics, network::Topic,
+            signature_key::BuilderSignatureKey,
         },
-        HotShotConfig, PeerConfig,
     };
     use rand::SeedableRng as _;
     use rand_chacha::ChaCha20Rng;
@@ -803,7 +803,7 @@ pub mod testing {
     use test_utils::reserve_tcp_port;
     use tokio::spawn;
     use vbs::version::{StaticVersionType, Version};
-    use versions::{EPOCH_VERSION, VERSION_0_1};
+    use versions::EPOCH_VERSION;
 
     use super::*;
     use crate::{
@@ -998,11 +998,6 @@ pub mod testing {
             self
         }
 
-        pub fn version_upgrade(mut self, u: versions::Upgrade) -> Self {
-            self.config.upgrade = u;
-            self
-        }
-
         /// Version specific upgrade setup. Extend to future upgrades
         /// by adding a branch to the `match` statement.
         pub async fn set_upgrades(mut self, version: Version) -> Self {
@@ -1175,7 +1170,6 @@ pub mod testing {
                 stake_table_capacity: hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY,
                 drb_difficulty: 10,
                 drb_upgrade_difficulty: 20,
-                upgrade: versions::Upgrade::trivial(VERSION_0_1),
             };
 
             let anvil = Anvil::new()
@@ -1266,7 +1260,9 @@ pub mod testing {
             staking_priv_keys(&self.priv_keys, &self.state_key_pairs, self.num_nodes())
         }
 
-        pub fn validator_providers(&self) -> Vec<(Address, impl Provider + Clone)> {
+        pub fn validator_providers(
+            &self,
+        ) -> Vec<(Address, impl Provider + Clone + use<NUM_NODES>)> {
             self.staking_priv_keys()
                 .into_iter()
                 .map(|(signer, ..)| {
@@ -1320,8 +1316,7 @@ pub mod testing {
             upgrade: versions::Upgrade,
             upgrades: BTreeMap<Version, Upgrade>,
         ) -> SequencerContext<network::Memory, P::Persistence> {
-            let mut config = self.config.clone();
-            config.upgrade = upgrade;
+            let config = self.config.clone();
             let my_peer_config = &config.known_nodes_with_stake[i];
             let is_da = config.known_da_nodes.contains(my_peer_config);
 
@@ -1420,11 +1415,11 @@ pub mod testing {
                 chain_config,
                 l1_client,
                 Arc::new(catchup_providers.clone()),
-                config.upgrade.base,
+                upgrade.base,
                 coordinator.clone(),
-                config.upgrade.base,
+                upgrade.base,
             )
-            .with_current_version(config.upgrade.base)
+            .with_current_version(upgrade.base)
             .with_genesis(state)
             .with_epoch_height(config.epoch_height)
             .with_upgrades(upgrades)
@@ -1444,6 +1439,7 @@ pub mod testing {
                     // the base consensus config does not matter.
                     ..Default::default()
                 },
+                upgrade,
                 validator_config,
                 coordinator,
                 node_state,
@@ -1507,8 +1503,9 @@ pub mod testing {
     /// Waits until a node has reached the given target epoch (exclusive).
     /// The function returns once the first event indicates an epoch higher than `target_epoch`.
     pub async fn wait_for_epochs(
-        events: &mut (impl futures::Stream<Item = hotshot_types::event::Event<SeqTypes>>
-                  + std::marker::Unpin),
+        events: &mut (
+                 impl futures::Stream<Item = hotshot_types::event::Event<SeqTypes>> + std::marker::Unpin
+             ),
         epoch_height: u64,
         target_epoch: u64,
     ) {
@@ -1532,7 +1529,7 @@ pub mod testing {
 #[cfg(test)]
 mod test {
     use alloy::node_bindings::Anvil;
-    use espresso_types::{Header, NamespaceId, Payload, Transaction, MOCK_SEQUENCER_VERSIONS};
+    use espresso_types::{Header, MOCK_SEQUENCER_VERSIONS, NamespaceId, Payload, Transaction};
     use futures::StreamExt;
     use hotshot::types::EventType::Decide;
     use hotshot_example_types::node_types::TEST_VERSIONS;
@@ -1540,7 +1537,7 @@ mod test {
         event::LeafInfo,
         traits::block_contents::{BlockHeader, BlockPayload},
     };
-    use testing::{wait_for_decide_on_handle, TestConfigBuilder};
+    use testing::{TestConfigBuilder, wait_for_decide_on_handle};
 
     use self::testing::run_test_builder;
     use super::*;

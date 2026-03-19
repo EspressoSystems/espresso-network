@@ -10,11 +10,11 @@ use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use syn::{
+    Expr, ExprArray, ExprField, ExprPath, ExprTuple, Ident, LitBool, PathArguments, Token,
+    TypePath,
     parse::{Parse, ParseStream, Result},
     parse_macro_input,
     punctuated::Punctuated,
-    Expr, ExprArray, ExprField, ExprPath, ExprTuple, Ident, LitBool, PathArguments, Token,
-    TypePath,
 };
 
 /// Bracketed types, e.g. [A, B, `C<D>`]
@@ -206,7 +206,7 @@ impl TestData {
             #[tracing::instrument]
             async fn #test_name() {
                 let mut __metadata = #metadata;
-                __metadata.test_config.upgrade = #version;
+                __metadata.upgrade = #version;
                 hotshot_testing::test_builder::TestDescription::<#ty, #imply>::gen_launcher(__metadata).launch().run_test::<#builder_impl>().await;
             }
         }

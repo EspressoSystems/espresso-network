@@ -53,8 +53,8 @@ pub mod testing {
     use async_lock::RwLock;
     use committable::Committable;
     use espresso_types::{
-        traits::SequencerPersistence, v0_3::ChainConfig, Event, FeeAccount, NamespaceId, NodeState,
-        PrivKey, PubKey, Transaction, ValidatedState,
+        Event, FeeAccount, NamespaceId, NodeState, PrivKey, PubKey, Transaction, ValidatedState,
+        traits::SequencerPersistence, v0_3::ChainConfig,
     };
     use futures::stream::{Stream, StreamExt};
     use hotshot::{
@@ -73,6 +73,7 @@ pub mod testing {
         events_source::{EventConsumer, EventsStreamer},
     };
     use hotshot_types::{
+        HotShotConfig, PeerConfig, ValidatorConfig,
         data::{Leaf2, ViewNumber},
         event::LeafInfo,
         light_client::StateKeyPair,
@@ -80,12 +81,10 @@ pub mod testing {
             block_contents::BlockHeader, node_implementation::NodeType,
             signature_key::BuilderSignatureKey as _,
         },
-        HotShotConfig, PeerConfig, ValidatorConfig,
     };
-    use sequencer::{context::Consensus, network, SequencerApiVersion};
+    use sequencer::{SequencerApiVersion, context::Consensus, network};
     use surf_disco::Client;
     use vbs::version::{StaticVersion, Version};
-    use versions::{Upgrade, VERSION_0_1};
 
     use super::*;
     use crate::non_permissioned::BuilderConfig;
@@ -147,7 +146,6 @@ pub mod testing {
                 stake_table_capacity: hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY,
                 drb_difficulty: 0,
                 drb_upgrade_difficulty: 0,
-                upgrade: Upgrade::trivial(VERSION_0_1),
             };
 
             Self {

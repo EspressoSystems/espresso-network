@@ -13,12 +13,12 @@ use vbs::version::Version;
 use versions::DRB_AND_HEADER_UPGRADE_VERSION;
 
 use crate::{
+    HotShotConfig,
     data::EpochNumber,
     traits::{
         node_implementation::NodeType,
         storage::{LoadDrbProgressFn, StoreDrbProgressFn},
     },
-    HotShotConfig,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

@@ -4,24 +4,24 @@ use anyhow::Context;
 use async_broadcast::broadcast;
 use async_lock::{Mutex, RwLock};
 use espresso_types::{
-    eth_signature_key::EthKeyPair, v0_1::NoStorage, v0_3::Fetcher, EpochCommittees, FeeAmount,
-    NodeState, Payload, SeqTypes, ValidatedState,
+    EpochCommittees, FeeAmount, NodeState, Payload, SeqTypes, ValidatedState,
+    eth_signature_key::EthKeyPair, v0_1::NoStorage, v0_3::Fetcher,
 };
 use hotshot::traits::BlockPayload;
 use hotshot_builder_legacy::{
     builder_state::{BuilderState, MessageType},
     service::{
-        run_non_permissioned_standalone_builder_service, GlobalState, ProxyGlobalState,
-        ReceivedTransaction,
+        GlobalState, ProxyGlobalState, ReceivedTransaction,
+        run_non_permissioned_standalone_builder_service,
     },
 };
 use hotshot_builder_shared::{block::ParentBlockReferences, utils::EventServiceStream};
 use hotshot_types::{
-    data::{fake_commitment, vid_commitment, ViewNumber},
+    data::{ViewNumber, fake_commitment, vid_commitment},
     epoch_membership::EpochMembershipCoordinator,
-    traits::{block_contents::GENESIS_VID_NUM_STORAGE_NODES, metrics::NoMetrics, EncodeBytes},
+    traits::{EncodeBytes, block_contents::GENESIS_VID_NUM_STORAGE_NODES, metrics::NoMetrics},
 };
-use sequencer::{catchup::StatePeers, L1Params, SequencerApiVersion};
+use sequencer::{L1Params, SequencerApiVersion, catchup::StatePeers};
 use tide_disco::Url;
 use tokio::spawn;
 use vbs::version::Version;
@@ -247,9 +247,9 @@ mod test {
     use futures::StreamExt;
     use sequencer::{
         api::{
+            Options,
             options::HotshotEvents,
             test_helpers::{TestNetwork, TestNetworkConfigBuilder},
-            Options,
         },
         persistence,
         testing::TestConfigBuilder,
@@ -258,7 +258,7 @@ mod test {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::testing::{test_builder_impl, NonPermissionedBuilderTestConfig};
+    use crate::testing::{NonPermissionedBuilderTestConfig, test_builder_impl};
 
     /// Test the non-permissioned builder core
     /// It creates a memory hotshot network and launches the hotshot event streaming api

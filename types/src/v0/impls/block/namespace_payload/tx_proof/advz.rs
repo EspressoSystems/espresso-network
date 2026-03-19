@@ -1,16 +1,16 @@
 use hotshot_types::{
     data::{VidCommitment, VidCommon},
     traits::EncodeBytes,
-    vid::advz::{advz_scheme, ADVZCommon, ADVZScheme},
+    vid::advz::{ADVZCommon, ADVZScheme, advz_scheme},
 };
 use jf_advz::{
-    payload_prover::{PayloadProver, Statement},
     VidScheme,
+    payload_prover::{PayloadProver, Statement},
 };
 
 use crate::{
-    v0_1::ADVZTxProof, Index, NsTable, NumTxs, NumTxsRange, Payload, PayloadByteLen, Transaction,
-    TxIndex, TxPayloadRange, TxTableEntriesRange,
+    Index, NsTable, NumTxs, NumTxsRange, Payload, PayloadByteLen, Transaction, TxIndex,
+    TxPayloadRange, TxTableEntriesRange, v0_1::ADVZTxProof,
 };
 
 impl ADVZTxProof {

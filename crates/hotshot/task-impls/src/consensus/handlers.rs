@@ -14,7 +14,7 @@ use hotshot_types::{
     simple_certificate::EpochRootQuorumCertificateV2,
     simple_vote::{EpochRootQuorumVote2, HasEpoch, QuorumVote2, TimeoutData2, TimeoutVote2},
     traits::node_implementation::{NodeImplementation, NodeType},
-    utils::{is_epoch_root, is_epoch_transition, is_last_block, EpochTransitionIndicator},
+    utils::{EpochTransitionIndicator, is_epoch_root, is_epoch_transition, is_last_block},
     vote::{HasViewNumber, Vote},
 };
 use hotshot_utils::anytrace::*;
@@ -204,7 +204,7 @@ pub async fn send_high_qc<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     sender: &Sender<Arc<HotShotEvent<TYPES>>>,
     task_state: &mut ConsensusTaskState<TYPES, I>,
 ) -> Result<()> {
-    let version = task_state.upgrade_lock.version(new_view_number).await?;
+    let version = task_state.upgrade_lock.version(new_view_number)?;
     ensure!(
         version >= EPOCH_VERSION,
         debug!("HotStuff 2 upgrade not yet in effect")
@@ -379,16 +379,10 @@ pub(crate) async fn handle_view_change<TYPES: NodeType, I: NodeImplementation<TY
         .update_view(new_view_number)?;
 
     // If we have a decided upgrade certificate, the protocol version may also have been upgraded.
-    let decided_upgrade_certificate_read = task_state
-        .upgrade_lock
-        .decided_upgrade_certificate
-        .read()
-        .await
-        .clone();
-    if let Some(cert) = decided_upgrade_certificate_read {
-        if new_view_number == cert.data.new_version_first_view {
-            tracing::error!("Version upgraded based on a decided upgrade cert: {cert:?}");
-        }
+    if let Some(cert) = task_state.upgrade_lock.decided_upgrade_cert()
+        && new_view_number == cert.data.new_version_first_view
+    {
+        tracing::error!("Version upgraded based on a decided upgrade cert: {cert:?}");
     }
 
     // Spawn a timeout task if we did actually update view

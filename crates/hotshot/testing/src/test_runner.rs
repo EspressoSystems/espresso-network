@@ -11,13 +11,13 @@ use std::{
     sync::Arc,
 };
 
-use async_broadcast::{broadcast, Receiver, Sender};
+use async_broadcast::{Receiver, Sender, broadcast};
 use async_lock::RwLock;
 use futures::future::join_all;
 use hotshot::{
+    HotShotInitializer, InitializerEpochInfo, SystemContext,
     traits::TestableNodeImplementation,
     types::{Event, SystemContextHandle},
-    HotShotInitializer, InitializerEpochInfo, SystemContext,
 };
 use hotshot_example_types::{
     block_types::TestBlockHeader,
@@ -26,6 +26,7 @@ use hotshot_example_types::{
 };
 use hotshot_task_impls::events::HotShotEvent;
 use hotshot_types::{
+    HotShotConfig, ValidatorConfig,
     consensus::ConsensusMetricsValue,
     constants::EVENT_CHANNEL_SIZE,
     data::{EpochNumber, Leaf2, ViewNumber},
@@ -38,7 +39,6 @@ use hotshot_types::{
         network::ConnectedNetwork,
         node_implementation::{NodeImplementation, NodeType},
     },
-    HotShotConfig, ValidatorConfig,
 };
 use tide_disco::Url;
 #[allow(deprecated)]
@@ -53,7 +53,7 @@ use crate::{
     spinning_task::{ChangeNode, NodeAction, SpinningTask},
     test_builder::create_test_handle,
     test_launcher::{Network, TestLauncher},
-    test_task::{spawn_timeout_task, TestResult, TestTask},
+    test_task::{TestResult, TestTask, spawn_timeout_task},
     txn_task::TxnTaskDescription,
     view_sync_task::ViewSyncTask,
 };
@@ -63,14 +63,14 @@ pub trait TaskErr: std::error::Error + Sync + Send + 'static {}
 impl<T: std::error::Error + Sync + Send + 'static> TaskErr for T {}
 
 impl<
-        TYPES: NodeType<
+    TYPES: NodeType<
             InstanceState = TestInstanceState,
             ValidatedState = TestValidatedState,
             BlockHeader = TestBlockHeader,
         >,
-        I: TestableNodeImplementation<TYPES>,
-        N: ConnectedNetwork<TYPES::SignatureKey>,
-    > TestRunner<TYPES, I, N>
+    I: TestableNodeImplementation<TYPES>,
+    N: ConnectedNetwork<TYPES::SignatureKey>,
+> TestRunner<TYPES, I, N>
 where
     I: TestableNodeImplementation<TYPES>,
     I: NodeImplementation<TYPES, Network = N, Storage = TestStorage<TYPES>>,
@@ -181,13 +181,13 @@ where
             last_decided_leaf: Leaf2::genesis(
                 &TestValidatedState::default(),
                 &TestInstanceState::default(),
-                launcher.metadata.test_config.upgrade.base,
+                launcher.metadata.upgrade.base,
             )
             .await,
             high_qc: QuorumCertificate2::genesis(
                 &TestValidatedState::default(),
                 &TestInstanceState::default(),
-                launcher.metadata.test_config.upgrade,
+                launcher.metadata.upgrade,
             )
             .await,
             next_epoch_high_qc: None,
@@ -196,6 +196,7 @@ where
             channel_generator: launcher.resource_generators.channel_generator,
             state_cert: None,
             node_stakes: launcher.metadata.node_stakes.clone(),
+            upgrade: launcher.metadata.upgrade,
         };
         let spinning_task = TestTask::<SpinningTask<TYPES, N, I>>::new(
             spinning_task_state,
@@ -438,7 +439,7 @@ where
                             drb_result: INITIAL_DRB_RESULT,
                             block_header: None,
                         }],
-                        config.upgrade,
+                        self.launcher.metadata.upgrade,
                     )
                     .await
                     .unwrap();
@@ -456,6 +457,7 @@ where
                         ),
                         initializer,
                         config,
+                        self.launcher.metadata.upgrade,
                         validator_config,
                         storage,
                     )
@@ -552,6 +554,7 @@ where
         memberships: TYPES::Membership,
         initializer: HotShotInitializer<TYPES>,
         config: HotShotConfig<TYPES>,
+        upgrade: versions::Upgrade,
         validator_config: ValidatorConfig<TYPES>,
         storage: I::Storage,
     ) -> Arc<SystemContext<TYPES, I>> {
@@ -567,6 +570,7 @@ where
             state_private_key,
             node_id,
             config,
+            upgrade,
             EpochMembershipCoordinator::new(
                 Arc::new(RwLock::new(memberships)),
                 epoch_height,
@@ -591,6 +595,7 @@ where
         memberships: Arc<RwLock<TYPES::Membership>>,
         initializer: HotShotInitializer<TYPES>,
         config: HotShotConfig<TYPES>,
+        upgrade: versions::Upgrade,
         validator_config: ValidatorConfig<TYPES>,
         storage: I::Storage,
         internal_channel: (
@@ -611,6 +616,7 @@ where
             state_private_key,
             node_id,
             config,
+            upgrade,
             EpochMembershipCoordinator::new(memberships, epoch_height, &storage.clone()),
             network,
             initializer,

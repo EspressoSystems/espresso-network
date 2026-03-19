@@ -5,13 +5,12 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use cliquenet::{Address, Keypair, NetConf, PublicKey, Retry, SecretKey};
-use futures::future::ready;
 #[cfg(feature = "hotshot-testing")]
 use hotshot_types::traits::network::{
     AsyncGenerator, NetworkReliability, TestableNetworkingImplementation,
 };
 use hotshot_types::{
-    boxed_sync,
+    BoxSyncFuture, boxed_sync,
     data::{EpochNumber, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     traits::{
@@ -20,7 +19,6 @@ use hotshot_types::{
         node_implementation::NodeType,
         signature_key::{PrivateSignatureKey, SignatureKey},
     },
-    BoxSyncFuture,
 };
 
 #[derive(Clone)]
@@ -124,20 +122,16 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Cliquenet<T> {
 
     async fn wait_for_ready(&self) {}
 
-    fn pause(&self) {
-        unimplemented!("Pausing not implemented for cliquenet");
-    }
+    fn pause(&self) {}
 
-    fn resume(&self) {
-        unimplemented!("Resuming not implemented for cliquenet");
-    }
+    fn resume(&self) {}
 
     fn shut_down<'a, 'b>(&'a self) -> BoxSyncFuture<'b, ()>
     where
         'a: 'b,
         Self: 'b,
     {
-        boxed_sync(ready(()))
+        boxed_sync(self.net.close())
     }
 }
 
