@@ -34,17 +34,13 @@ jobs:
           fetch-depth: 0
           filter: blob:none
 
-      - name: Install Nix
-        uses: cachix/install-nix-action@v31
-
-      - name: Enable Cachix
-        uses: cachix/cachix-action@v16
-        continue-on-error: true
+      - name: Install cargo-binstall
+        uses: taiki-e/install-action@v2
         with:
-          name: espresso-systems-private
-          authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
-          extraPullNames: nix-community
-          skipPush: ${{ github.actor == 'dependabot[bot]' }}
+          tool: cargo-binstall
+
+      - name: Install dregs
+        run: cargo binstall --git https://github.com/EspressoSystems/dregs dregs --no-confirm
 
       - name: Configure shard count
         id: shards
@@ -63,11 +59,9 @@ jobs:
       - name: Generate mutants
         run: |
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            nix develop --accept-flake-config -c \
-              dregs generate --project . --diff-base "origin/${{ github.base_ref }}" --output ./mutants
+            dregs generate --diff-base "origin/${{ github.base_ref }}" --output ./mutants
           else
-            nix develop --accept-flake-config -c \
-              dregs generate --project . --output ./mutants
+            dregs generate --output ./mutants
           fi
 
       - name: Check for mutants
@@ -132,17 +126,16 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install Nix
-        uses: cachix/install-nix-action@v31
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
 
-      - name: Enable Cachix
-        uses: cachix/cachix-action@v16
-        continue-on-error: true
+      - name: Install cargo-binstall
+        uses: taiki-e/install-action@v2
         with:
-          name: espresso-systems-private
-          authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
-          extraPullNames: nix-community
-          skipPush: ${{ github.actor == 'dependabot[bot]' }}
+          tool: cargo-binstall
+
+      - name: Install dregs
+        run: cargo binstall --git https://github.com/EspressoSystems/dregs dregs --no-confirm
 
       - name: Download mutants
         uses: actions/download-artifact@v8
@@ -154,20 +147,17 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: diff-test
-          path: ./bin
+          path: ~/.local/bin
 
       - name: Make diff-test executable
-        run: chmod +x ./bin/diff-test
+        run: chmod +x ~/.local/bin/diff-test
 
       - name: Run mutation tests (shard ${{ matrix.shard }}/${{ needs.generate.outputs.total_shards }})
         run: |
-          nix develop --accept-flake-config -c \
-            env PATH="${PWD}/bin:${PATH}" \
-            dregs test \
-              --manifest ./mutants/manifest.json \
-              --project . \
-              --partition "slice:${{ matrix.shard }}/${{ needs.generate.outputs.total_shards }}" \
-              --output "results-${{ matrix.shard }}.json"
+          dregs test \
+            --manifest ./mutants/manifest.json \
+            --partition "slice:${{ matrix.shard }}/${{ needs.generate.outputs.total_shards }}" \
+            --output "results-${{ matrix.shard }}.json"
 
       - name: Upload results
         if: always()
