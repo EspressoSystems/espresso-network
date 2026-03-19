@@ -223,7 +223,7 @@ ledger = false
         .arg("account")
         .assert()
         .failure()
-        .stderr(str::contains("Signer configuration required"));
+        .stderr(str::contains("--mnemonic, --private-key, or --ledger"));
 
     Ok(())
 }
