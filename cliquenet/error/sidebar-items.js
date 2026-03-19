@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["Empty","NetworkError"]};
+window.SIDEBAR_ITEMS = {"enum":["Empty","NetworkError"],"struct":["NetworkDown"]};

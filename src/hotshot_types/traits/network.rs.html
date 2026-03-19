@@ -30,7 +30,7 @@
 <a href=#30 id=30 data-nosnippet>30</a>
 <a href=#31 id=31 data-nosnippet>31</a><span class="kw">use </span>super::{node_implementation::NodeType, signature_key::SignatureKey};
 <a href=#32 id=32 data-nosnippet>32</a><span class="kw">use </span>crate::{
-<a href=#33 id=33 data-nosnippet>33</a>    BoxSyncFuture,
+<a href=#33 id=33 data-nosnippet>33</a>    BoxSyncFuture, PeerConnectInfo,
 <a href=#34 id=34 data-nosnippet>34</a>    data::{EpochNumber, ViewNumber},
 <a href=#35 id=35 data-nosnippet>35</a>    epoch_membership::EpochMembershipCoordinator,
 <a href=#36 id=36 data-nosnippet>36</a>    message::SequencingMessage,
@@ -173,10 +173,10 @@
 <a href=#173 id=173 data-nosnippet>173</a>    </span>Denied,
 <a href=#174 id=174 data-nosnippet>174</a>}
 <a href=#175 id=175 data-nosnippet>175</a>
-<a href=#176 id=176 data-nosnippet>176</a><span class="attr">#[derive(Debug, Clone, PartialEq, Eq)]
-<a href=#177 id=177 data-nosnippet>177</a></span><span class="doccomment">/// When a message should be broadcast to the network.
-<a href=#178 id=178 data-nosnippet>178</a>///
-<a href=#179 id=179 data-nosnippet>179</a>/// Network implementations may or may not respect this, at their discretion.
+<a href=#176 id=176 data-nosnippet>176</a><span class="doccomment">/// When a message should be broadcast to the network.
+<a href=#177 id=177 data-nosnippet>177</a>///
+<a href=#178 id=178 data-nosnippet>178</a>/// Network implementations may or may not respect this, at their discretion.
+<a href=#179 id=179 data-nosnippet>179</a></span><span class="attr">#[derive(Debug, Clone, PartialEq, Eq)]
 <a href=#180 id=180 data-nosnippet>180</a></span><span class="kw">pub enum </span>BroadcastDelay {
 <a href=#181 id=181 data-nosnippet>181</a>    <span class="doccomment">/// Broadcast the message immediately
 <a href=#182 id=182 data-nosnippet>182</a>    </span><span class="prelude-val">None</span>,
@@ -184,11 +184,11 @@
 <a href=#184 id=184 data-nosnippet>184</a>    </span>View(u64),
 <a href=#185 id=185 data-nosnippet>185</a>}
 <a href=#186 id=186 data-nosnippet>186</a>
-<a href=#187 id=187 data-nosnippet>187</a><span class="attr">#[async_trait]
-<a href=#188 id=188 data-nosnippet>188</a></span><span class="doccomment">/// represents a networking implmentration
-<a href=#189 id=189 data-nosnippet>189</a>/// exposes low level API for interacting with a network
-<a href=#190 id=190 data-nosnippet>190</a>/// intended to be implemented for libp2p, the centralized server,
-<a href=#191 id=191 data-nosnippet>191</a>/// and memory network
+<a href=#187 id=187 data-nosnippet>187</a><span class="doccomment">/// represents a networking implmentration
+<a href=#188 id=188 data-nosnippet>188</a>/// exposes low level API for interacting with a network
+<a href=#189 id=189 data-nosnippet>189</a>/// intended to be implemented for libp2p, the centralized server,
+<a href=#190 id=190 data-nosnippet>190</a>/// and memory network
+<a href=#191 id=191 data-nosnippet>191</a></span><span class="attr">#[async_trait]
 <a href=#192 id=192 data-nosnippet>192</a></span><span class="kw">pub trait </span>ConnectedNetwork&lt;K: SignatureKey + <span class="lifetime">'static</span>&gt;: Clone + Send + Sync + <span class="lifetime">'static </span>{
 <a href=#193 id=193 data-nosnippet>193</a>    <span class="doccomment">/// Pauses the underlying network
 <a href=#194 id=194 data-nosnippet>194</a>    </span><span class="kw">fn </span>pause(<span class="kw-2">&amp;</span><span class="self">self</span>);
@@ -308,309 +308,310 @@
 <a href=#308 id=308 data-nosnippet>308</a>        da_committee_size: usize,
 <a href=#309 id=309 data-nosnippet>309</a>        reliability_config: <span class="prelude-ty">Option</span>&lt;Box&lt;<span class="kw">dyn </span>NetworkReliability&gt;&gt;,
 <a href=#310 id=310 data-nosnippet>310</a>        secondary_network_delay: Duration,
-<a href=#311 id=311 data-nosnippet>311</a>    ) -&gt; AsyncGenerator&lt;Arc&lt;<span class="self">Self</span>&gt;&gt;;
-<a href=#312 id=312 data-nosnippet>312</a>
-<a href=#313 id=313 data-nosnippet>313</a>    <span class="doccomment">/// Get the number of messages in-flight.
-<a href=#314 id=314 data-nosnippet>314</a>    ///
-<a href=#315 id=315 data-nosnippet>315</a>    /// Some implementations will not be able to tell how many messages there are in-flight. These implementations should return `None`.
-<a href=#316 id=316 data-nosnippet>316</a>    </span><span class="kw">fn </span>in_flight_message_count(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;usize&gt;;
-<a href=#317 id=317 data-nosnippet>317</a>}
-<a href=#318 id=318 data-nosnippet>318</a>
-<a href=#319 id=319 data-nosnippet>319</a><span class="doccomment">/// Changes that can occur in the network
-<a href=#320 id=320 data-nosnippet>320</a></span><span class="attr">#[derive(Debug)]
-<a href=#321 id=321 data-nosnippet>321</a></span><span class="kw">pub enum </span>NetworkChange&lt;P: SignatureKey&gt; {
-<a href=#322 id=322 data-nosnippet>322</a>    <span class="doccomment">/// A node is connected
-<a href=#323 id=323 data-nosnippet>323</a>    </span>NodeConnected(P),
-<a href=#324 id=324 data-nosnippet>324</a>
-<a href=#325 id=325 data-nosnippet>325</a>    <span class="doccomment">/// A node is disconnected
-<a href=#326 id=326 data-nosnippet>326</a>    </span>NodeDisconnected(P),
-<a href=#327 id=327 data-nosnippet>327</a>}
-<a href=#328 id=328 data-nosnippet>328</a>
-<a href=#329 id=329 data-nosnippet>329</a><span class="doccomment">/// interface describing how reliable the network is
-<a href=#330 id=330 data-nosnippet>330</a></span><span class="attr">#[async_trait]
-<a href=#331 id=331 data-nosnippet>331</a></span><span class="kw">pub trait </span>NetworkReliability: Debug + Sync + std::marker::Send + DynClone + <span class="lifetime">'static </span>{
-<a href=#332 id=332 data-nosnippet>332</a>    <span class="doccomment">/// Sample from bernoulli distribution to decide whether
-<a href=#333 id=333 data-nosnippet>333</a>    /// or not to keep a packet
-<a href=#334 id=334 data-nosnippet>334</a>    /// # Panics
-<a href=#335 id=335 data-nosnippet>335</a>    ///
-<a href=#336 id=336 data-nosnippet>336</a>    /// Panics if `self.keep_numerator &gt; self.keep_denominator`
-<a href=#337 id=337 data-nosnippet>337</a>    ///
-<a href=#338 id=338 data-nosnippet>338</a>    </span><span class="kw">fn </span>sample_keep(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
-<a href=#339 id=339 data-nosnippet>339</a>        <span class="bool-val">true
-<a href=#340 id=340 data-nosnippet>340</a>    </span>}
-<a href=#341 id=341 data-nosnippet>341</a>
-<a href=#342 id=342 data-nosnippet>342</a>    <span class="doccomment">/// sample from uniform distribution to decide whether
-<a href=#343 id=343 data-nosnippet>343</a>    /// or not to keep a packet
-<a href=#344 id=344 data-nosnippet>344</a>    </span><span class="kw">fn </span>sample_delay(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Duration {
-<a href=#345 id=345 data-nosnippet>345</a>        std::time::Duration::ZERO
-<a href=#346 id=346 data-nosnippet>346</a>    }
-<a href=#347 id=347 data-nosnippet>347</a>
-<a href=#348 id=348 data-nosnippet>348</a>    <span class="doccomment">/// scramble the packet
-<a href=#349 id=349 data-nosnippet>349</a>    </span><span class="kw">fn </span>scramble(<span class="kw-2">&amp;</span><span class="self">self</span>, msg: Vec&lt;u8&gt;) -&gt; Vec&lt;u8&gt; {
-<a href=#350 id=350 data-nosnippet>350</a>        msg
-<a href=#351 id=351 data-nosnippet>351</a>    }
-<a href=#352 id=352 data-nosnippet>352</a>
-<a href=#353 id=353 data-nosnippet>353</a>    <span class="doccomment">/// number of times to repeat the packet
-<a href=#354 id=354 data-nosnippet>354</a>    </span><span class="kw">fn </span>sample_repeat(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
-<a href=#355 id=355 data-nosnippet>355</a>        <span class="number">1
-<a href=#356 id=356 data-nosnippet>356</a>    </span>}
-<a href=#357 id=357 data-nosnippet>357</a>
-<a href=#358 id=358 data-nosnippet>358</a>    <span class="doccomment">/// given a message and a way to send the message,
-<a href=#359 id=359 data-nosnippet>359</a>    /// decide whether or not to send the message
-<a href=#360 id=360 data-nosnippet>360</a>    /// how long to delay the message
-<a href=#361 id=361 data-nosnippet>361</a>    /// whether or not to send duplicates
-<a href=#362 id=362 data-nosnippet>362</a>    /// and whether or not to include noise with the message
-<a href=#363 id=363 data-nosnippet>363</a>    /// then send the message
-<a href=#364 id=364 data-nosnippet>364</a>    /// note: usually self is stored in a rwlock
-<a href=#365 id=365 data-nosnippet>365</a>    /// so instead of doing the sending part, we just fiddle with the message
-<a href=#366 id=366 data-nosnippet>366</a>    /// then return a future that does the sending and delaying
-<a href=#367 id=367 data-nosnippet>367</a>    </span><span class="kw">fn </span>chaos_send_msg(
-<a href=#368 id=368 data-nosnippet>368</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#369 id=369 data-nosnippet>369</a>        msg: Vec&lt;u8&gt;,
-<a href=#370 id=370 data-nosnippet>370</a>        send_fn: Arc&lt;<span class="kw">dyn </span>Send + Sync + <span class="lifetime">'static </span>+ Fn(Vec&lt;u8&gt;) -&gt; BoxSyncFuture&lt;<span class="lifetime">'static</span>, ()&gt;&gt;,
-<a href=#371 id=371 data-nosnippet>371</a>    ) -&gt; BoxSyncFuture&lt;<span class="lifetime">'static</span>, ()&gt; {
-<a href=#372 id=372 data-nosnippet>372</a>        <span class="kw">let </span>sample_keep = <span class="self">self</span>.sample_keep();
-<a href=#373 id=373 data-nosnippet>373</a>        <span class="kw">let </span>delay = <span class="self">self</span>.sample_delay();
-<a href=#374 id=374 data-nosnippet>374</a>        <span class="kw">let </span>repeats = <span class="self">self</span>.sample_repeat();
-<a href=#375 id=375 data-nosnippet>375</a>        <span class="kw">let </span><span class="kw-2">mut </span>msgs = Vec::new();
-<a href=#376 id=376 data-nosnippet>376</a>        <span class="kw">for </span>_idx <span class="kw">in </span><span class="number">0</span>..repeats {
-<a href=#377 id=377 data-nosnippet>377</a>            <span class="kw">let </span>scrambled = <span class="self">self</span>.scramble(msg.clone());
-<a href=#378 id=378 data-nosnippet>378</a>            msgs.push(scrambled);
-<a href=#379 id=379 data-nosnippet>379</a>        }
-<a href=#380 id=380 data-nosnippet>380</a>        <span class="kw">let </span>closure = <span class="kw">async move </span>{
-<a href=#381 id=381 data-nosnippet>381</a>            <span class="kw">if </span>sample_keep {
-<a href=#382 id=382 data-nosnippet>382</a>                sleep(delay).<span class="kw">await</span>;
-<a href=#383 id=383 data-nosnippet>383</a>                <span class="kw">for </span>msg <span class="kw">in </span>msgs {
-<a href=#384 id=384 data-nosnippet>384</a>                    send_fn(msg).<span class="kw">await</span>;
-<a href=#385 id=385 data-nosnippet>385</a>                }
-<a href=#386 id=386 data-nosnippet>386</a>            }
-<a href=#387 id=387 data-nosnippet>387</a>        };
-<a href=#388 id=388 data-nosnippet>388</a>        Box::pin(closure)
-<a href=#389 id=389 data-nosnippet>389</a>    }
-<a href=#390 id=390 data-nosnippet>390</a>}
-<a href=#391 id=391 data-nosnippet>391</a>
-<a href=#392 id=392 data-nosnippet>392</a><span class="comment">// hack to get clone
-<a href=#393 id=393 data-nosnippet>393</a></span><span class="macro">dyn_clone::clone_trait_object!</span>(NetworkReliability);
-<a href=#394 id=394 data-nosnippet>394</a>
-<a href=#395 id=395 data-nosnippet>395</a><span class="doccomment">/// ideal network
-<a href=#396 id=396 data-nosnippet>396</a></span><span class="attr">#[derive(Clone, Copy, Debug, Default)]
-<a href=#397 id=397 data-nosnippet>397</a></span><span class="kw">pub struct </span>PerfectNetwork {}
-<a href=#398 id=398 data-nosnippet>398</a>
-<a href=#399 id=399 data-nosnippet>399</a><span class="kw">impl </span>NetworkReliability <span class="kw">for </span>PerfectNetwork {}
-<a href=#400 id=400 data-nosnippet>400</a>
-<a href=#401 id=401 data-nosnippet>401</a><span class="doccomment">/// A synchronous network. Packets may be delayed, but are guaranteed
-<a href=#402 id=402 data-nosnippet>402</a>/// to arrive within `timeout` ns
-<a href=#403 id=403 data-nosnippet>403</a></span><span class="attr">#[derive(Clone, Copy, Debug, Default)]
-<a href=#404 id=404 data-nosnippet>404</a></span><span class="kw">pub struct </span>SynchronousNetwork {
-<a href=#405 id=405 data-nosnippet>405</a>    <span class="doccomment">/// Max value in milliseconds that a packet may be delayed
-<a href=#406 id=406 data-nosnippet>406</a>    </span><span class="kw">pub </span>delay_high_ms: u64,
-<a href=#407 id=407 data-nosnippet>407</a>    <span class="doccomment">/// Lowest value in milliseconds that a packet may be delayed
-<a href=#408 id=408 data-nosnippet>408</a>    </span><span class="kw">pub </span>delay_low_ms: u64,
-<a href=#409 id=409 data-nosnippet>409</a>}
-<a href=#410 id=410 data-nosnippet>410</a>
-<a href=#411 id=411 data-nosnippet>411</a><span class="kw">impl </span>NetworkReliability <span class="kw">for </span>SynchronousNetwork {
-<a href=#412 id=412 data-nosnippet>412</a>    <span class="doccomment">/// never drop a packet
-<a href=#413 id=413 data-nosnippet>413</a>    </span><span class="kw">fn </span>sample_keep(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
-<a href=#414 id=414 data-nosnippet>414</a>        <span class="bool-val">true
-<a href=#415 id=415 data-nosnippet>415</a>    </span>}
-<a href=#416 id=416 data-nosnippet>416</a>    <span class="kw">fn </span>sample_delay(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Duration {
-<a href=#417 id=417 data-nosnippet>417</a>        Duration::from_millis(
-<a href=#418 id=418 data-nosnippet>418</a>            Uniform::new_inclusive(<span class="self">self</span>.delay_low_ms, <span class="self">self</span>.delay_high_ms)
-<a href=#419 id=419 data-nosnippet>419</a>                .sample(<span class="kw-2">&amp;mut </span>rand::thread_rng()),
-<a href=#420 id=420 data-nosnippet>420</a>        )
-<a href=#421 id=421 data-nosnippet>421</a>    }
-<a href=#422 id=422 data-nosnippet>422</a>}
-<a href=#423 id=423 data-nosnippet>423</a>
-<a href=#424 id=424 data-nosnippet>424</a><span class="doccomment">/// An asynchronous network. Packets may be dropped entirely
-<a href=#425 id=425 data-nosnippet>425</a>/// or delayed for arbitrarily long periods
-<a href=#426 id=426 data-nosnippet>426</a>/// probability that packet is kept = `keep_numerator` / `keep_denominator`
-<a href=#427 id=427 data-nosnippet>427</a>/// packet delay is obtained by sampling from a uniform distribution
-<a href=#428 id=428 data-nosnippet>428</a>/// between `delay_low_ms` and `delay_high_ms`, inclusive
-<a href=#429 id=429 data-nosnippet>429</a></span><span class="attr">#[derive(Debug, Clone, Copy)]
-<a href=#430 id=430 data-nosnippet>430</a></span><span class="kw">pub struct </span>AsynchronousNetwork {
-<a href=#431 id=431 data-nosnippet>431</a>    <span class="doccomment">/// numerator for probability of keeping packets
-<a href=#432 id=432 data-nosnippet>432</a>    </span><span class="kw">pub </span>keep_numerator: u32,
-<a href=#433 id=433 data-nosnippet>433</a>    <span class="doccomment">/// denominator for probability of keeping packets
-<a href=#434 id=434 data-nosnippet>434</a>    </span><span class="kw">pub </span>keep_denominator: u32,
-<a href=#435 id=435 data-nosnippet>435</a>    <span class="doccomment">/// lowest value in milliseconds that a packet may be delayed
-<a href=#436 id=436 data-nosnippet>436</a>    </span><span class="kw">pub </span>delay_low_ms: u64,
-<a href=#437 id=437 data-nosnippet>437</a>    <span class="doccomment">/// highest value in milliseconds that a packet may be delayed
-<a href=#438 id=438 data-nosnippet>438</a>    </span><span class="kw">pub </span>delay_high_ms: u64,
-<a href=#439 id=439 data-nosnippet>439</a>}
-<a href=#440 id=440 data-nosnippet>440</a>
-<a href=#441 id=441 data-nosnippet>441</a><span class="kw">impl </span>NetworkReliability <span class="kw">for </span>AsynchronousNetwork {
-<a href=#442 id=442 data-nosnippet>442</a>    <span class="kw">fn </span>sample_keep(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
-<a href=#443 id=443 data-nosnippet>443</a>        Bernoulli::from_ratio(<span class="self">self</span>.keep_numerator, <span class="self">self</span>.keep_denominator)
-<a href=#444 id=444 data-nosnippet>444</a>            .unwrap()
-<a href=#445 id=445 data-nosnippet>445</a>            .sample(<span class="kw-2">&amp;mut </span>rand::thread_rng())
-<a href=#446 id=446 data-nosnippet>446</a>    }
-<a href=#447 id=447 data-nosnippet>447</a>    <span class="kw">fn </span>sample_delay(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Duration {
-<a href=#448 id=448 data-nosnippet>448</a>        Duration::from_millis(
-<a href=#449 id=449 data-nosnippet>449</a>            Uniform::new_inclusive(<span class="self">self</span>.delay_low_ms, <span class="self">self</span>.delay_high_ms)
-<a href=#450 id=450 data-nosnippet>450</a>                .sample(<span class="kw-2">&amp;mut </span>rand::thread_rng()),
-<a href=#451 id=451 data-nosnippet>451</a>        )
-<a href=#452 id=452 data-nosnippet>452</a>    }
-<a href=#453 id=453 data-nosnippet>453</a>}
-<a href=#454 id=454 data-nosnippet>454</a>
-<a href=#455 id=455 data-nosnippet>455</a><span class="doccomment">/// An partially synchronous network. Behaves asynchronously
-<a href=#456 id=456 data-nosnippet>456</a>/// until some arbitrary time bound, GST,
-<a href=#457 id=457 data-nosnippet>457</a>/// then synchronously after GST
-<a href=#458 id=458 data-nosnippet>458</a></span><span class="attr">#[allow(clippy::similar_names)]
-<a href=#459 id=459 data-nosnippet>459</a>#[derive(Debug, Clone, Copy)]
-<a href=#460 id=460 data-nosnippet>460</a></span><span class="kw">pub struct </span>PartiallySynchronousNetwork {
-<a href=#461 id=461 data-nosnippet>461</a>    <span class="doccomment">/// asynchronous portion of network
-<a href=#462 id=462 data-nosnippet>462</a>    </span><span class="kw">pub </span>asynchronous: AsynchronousNetwork,
-<a href=#463 id=463 data-nosnippet>463</a>    <span class="doccomment">/// synchronous portion of network
-<a href=#464 id=464 data-nosnippet>464</a>    </span><span class="kw">pub </span>synchronous: SynchronousNetwork,
-<a href=#465 id=465 data-nosnippet>465</a>    <span class="doccomment">/// time when GST occurs
-<a href=#466 id=466 data-nosnippet>466</a>    </span><span class="kw">pub </span>gst: std::time::Duration,
-<a href=#467 id=467 data-nosnippet>467</a>    <span class="doccomment">/// when the network was started
-<a href=#468 id=468 data-nosnippet>468</a>    </span><span class="kw">pub </span>start: std::time::Instant,
-<a href=#469 id=469 data-nosnippet>469</a>}
-<a href=#470 id=470 data-nosnippet>470</a>
-<a href=#471 id=471 data-nosnippet>471</a><span class="kw">impl </span>NetworkReliability <span class="kw">for </span>PartiallySynchronousNetwork {
-<a href=#472 id=472 data-nosnippet>472</a>    <span class="doccomment">/// never drop a packet
-<a href=#473 id=473 data-nosnippet>473</a>    </span><span class="kw">fn </span>sample_keep(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
-<a href=#474 id=474 data-nosnippet>474</a>        <span class="bool-val">true
-<a href=#475 id=475 data-nosnippet>475</a>    </span>}
-<a href=#476 id=476 data-nosnippet>476</a>    <span class="kw">fn </span>sample_delay(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Duration {
-<a href=#477 id=477 data-nosnippet>477</a>        <span class="comment">// act asynchronous before gst
-<a href=#478 id=478 data-nosnippet>478</a>        </span><span class="kw">if </span><span class="self">self</span>.start.elapsed() &lt; <span class="self">self</span>.gst {
-<a href=#479 id=479 data-nosnippet>479</a>            <span class="kw">if </span><span class="self">self</span>.asynchronous.sample_keep() {
-<a href=#480 id=480 data-nosnippet>480</a>                <span class="self">self</span>.asynchronous.sample_delay()
-<a href=#481 id=481 data-nosnippet>481</a>            } <span class="kw">else </span>{
-<a href=#482 id=482 data-nosnippet>482</a>                <span class="comment">// assume packet was "dropped" and will arrive after gst
-<a href=#483 id=483 data-nosnippet>483</a>                </span><span class="self">self</span>.synchronous.sample_delay() + <span class="self">self</span>.gst
-<a href=#484 id=484 data-nosnippet>484</a>            }
-<a href=#485 id=485 data-nosnippet>485</a>        } <span class="kw">else </span>{
-<a href=#486 id=486 data-nosnippet>486</a>            <span class="comment">// act synchronous after gst
-<a href=#487 id=487 data-nosnippet>487</a>            </span><span class="self">self</span>.synchronous.sample_delay()
-<a href=#488 id=488 data-nosnippet>488</a>        }
-<a href=#489 id=489 data-nosnippet>489</a>    }
-<a href=#490 id=490 data-nosnippet>490</a>}
-<a href=#491 id=491 data-nosnippet>491</a>
-<a href=#492 id=492 data-nosnippet>492</a><span class="kw">impl </span>Default <span class="kw">for </span>AsynchronousNetwork {
-<a href=#493 id=493 data-nosnippet>493</a>    <span class="comment">// disable all chance of failure
-<a href=#494 id=494 data-nosnippet>494</a>    </span><span class="kw">fn </span>default() -&gt; <span class="self">Self </span>{
-<a href=#495 id=495 data-nosnippet>495</a>        AsynchronousNetwork {
-<a href=#496 id=496 data-nosnippet>496</a>            keep_numerator: <span class="number">1</span>,
-<a href=#497 id=497 data-nosnippet>497</a>            keep_denominator: <span class="number">1</span>,
-<a href=#498 id=498 data-nosnippet>498</a>            delay_low_ms: <span class="number">0</span>,
-<a href=#499 id=499 data-nosnippet>499</a>            delay_high_ms: <span class="number">0</span>,
-<a href=#500 id=500 data-nosnippet>500</a>        }
-<a href=#501 id=501 data-nosnippet>501</a>    }
-<a href=#502 id=502 data-nosnippet>502</a>}
-<a href=#503 id=503 data-nosnippet>503</a>
-<a href=#504 id=504 data-nosnippet>504</a><span class="kw">impl </span>Default <span class="kw">for </span>PartiallySynchronousNetwork {
-<a href=#505 id=505 data-nosnippet>505</a>    <span class="kw">fn </span>default() -&gt; <span class="self">Self </span>{
-<a href=#506 id=506 data-nosnippet>506</a>        PartiallySynchronousNetwork {
-<a href=#507 id=507 data-nosnippet>507</a>            synchronous: SynchronousNetwork::default(),
-<a href=#508 id=508 data-nosnippet>508</a>            asynchronous: AsynchronousNetwork::default(),
-<a href=#509 id=509 data-nosnippet>509</a>            gst: std::time::Duration::new(<span class="number">0</span>, <span class="number">0</span>),
-<a href=#510 id=510 data-nosnippet>510</a>            start: std::time::Instant::now(),
-<a href=#511 id=511 data-nosnippet>511</a>        }
-<a href=#512 id=512 data-nosnippet>512</a>    }
-<a href=#513 id=513 data-nosnippet>513</a>}
-<a href=#514 id=514 data-nosnippet>514</a>
-<a href=#515 id=515 data-nosnippet>515</a><span class="kw">impl </span>SynchronousNetwork {
-<a href=#516 id=516 data-nosnippet>516</a>    <span class="doccomment">/// create new `SynchronousNetwork`
-<a href=#517 id=517 data-nosnippet>517</a>    </span><span class="attr">#[must_use]
-<a href=#518 id=518 data-nosnippet>518</a>    </span><span class="kw">pub fn </span>new(timeout: u64, delay_low_ms: u64) -&gt; <span class="self">Self </span>{
-<a href=#519 id=519 data-nosnippet>519</a>        SynchronousNetwork {
-<a href=#520 id=520 data-nosnippet>520</a>            delay_high_ms: timeout,
-<a href=#521 id=521 data-nosnippet>521</a>            delay_low_ms,
-<a href=#522 id=522 data-nosnippet>522</a>        }
-<a href=#523 id=523 data-nosnippet>523</a>    }
-<a href=#524 id=524 data-nosnippet>524</a>}
-<a href=#525 id=525 data-nosnippet>525</a>
-<a href=#526 id=526 data-nosnippet>526</a><span class="kw">impl </span>AsynchronousNetwork {
-<a href=#527 id=527 data-nosnippet>527</a>    <span class="doccomment">/// create new `AsynchronousNetwork`
-<a href=#528 id=528 data-nosnippet>528</a>    </span><span class="attr">#[must_use]
-<a href=#529 id=529 data-nosnippet>529</a>    </span><span class="kw">pub fn </span>new(
-<a href=#530 id=530 data-nosnippet>530</a>        keep_numerator: u32,
-<a href=#531 id=531 data-nosnippet>531</a>        keep_denominator: u32,
-<a href=#532 id=532 data-nosnippet>532</a>        delay_low_ms: u64,
-<a href=#533 id=533 data-nosnippet>533</a>        delay_high_ms: u64,
-<a href=#534 id=534 data-nosnippet>534</a>    ) -&gt; <span class="self">Self </span>{
-<a href=#535 id=535 data-nosnippet>535</a>        AsynchronousNetwork {
-<a href=#536 id=536 data-nosnippet>536</a>            keep_numerator,
-<a href=#537 id=537 data-nosnippet>537</a>            keep_denominator,
-<a href=#538 id=538 data-nosnippet>538</a>            delay_low_ms,
-<a href=#539 id=539 data-nosnippet>539</a>            delay_high_ms,
-<a href=#540 id=540 data-nosnippet>540</a>        }
-<a href=#541 id=541 data-nosnippet>541</a>    }
-<a href=#542 id=542 data-nosnippet>542</a>}
-<a href=#543 id=543 data-nosnippet>543</a>
-<a href=#544 id=544 data-nosnippet>544</a><span class="kw">impl </span>PartiallySynchronousNetwork {
-<a href=#545 id=545 data-nosnippet>545</a>    <span class="doccomment">/// create new `PartiallySynchronousNetwork`
-<a href=#546 id=546 data-nosnippet>546</a>    </span><span class="attr">#[allow(clippy::similar_names)]
-<a href=#547 id=547 data-nosnippet>547</a>    #[must_use]
-<a href=#548 id=548 data-nosnippet>548</a>    </span><span class="kw">pub fn </span>new(
-<a href=#549 id=549 data-nosnippet>549</a>        asynchronous: AsynchronousNetwork,
-<a href=#550 id=550 data-nosnippet>550</a>        synchronous: SynchronousNetwork,
-<a href=#551 id=551 data-nosnippet>551</a>        gst: std::time::Duration,
-<a href=#552 id=552 data-nosnippet>552</a>    ) -&gt; <span class="self">Self </span>{
-<a href=#553 id=553 data-nosnippet>553</a>        PartiallySynchronousNetwork {
-<a href=#554 id=554 data-nosnippet>554</a>            asynchronous,
-<a href=#555 id=555 data-nosnippet>555</a>            synchronous,
-<a href=#556 id=556 data-nosnippet>556</a>            gst,
-<a href=#557 id=557 data-nosnippet>557</a>            start: std::time::Instant::now(),
-<a href=#558 id=558 data-nosnippet>558</a>        }
-<a href=#559 id=559 data-nosnippet>559</a>    }
-<a href=#560 id=560 data-nosnippet>560</a>}
-<a href=#561 id=561 data-nosnippet>561</a>
-<a href=#562 id=562 data-nosnippet>562</a><span class="doccomment">/// A chaotic network using all the networking calls
-<a href=#563 id=563 data-nosnippet>563</a></span><span class="attr">#[derive(Debug, Clone)]
-<a href=#564 id=564 data-nosnippet>564</a></span><span class="kw">pub struct </span>ChaosNetwork {
-<a href=#565 id=565 data-nosnippet>565</a>    <span class="doccomment">/// numerator for probability of keeping packets
-<a href=#566 id=566 data-nosnippet>566</a>    </span><span class="kw">pub </span>keep_numerator: u32,
-<a href=#567 id=567 data-nosnippet>567</a>    <span class="doccomment">/// denominator for probability of keeping packets
-<a href=#568 id=568 data-nosnippet>568</a>    </span><span class="kw">pub </span>keep_denominator: u32,
-<a href=#569 id=569 data-nosnippet>569</a>    <span class="doccomment">/// lowest value in milliseconds that a packet may be delayed
-<a href=#570 id=570 data-nosnippet>570</a>    </span><span class="kw">pub </span>delay_low_ms: u64,
-<a href=#571 id=571 data-nosnippet>571</a>    <span class="doccomment">/// highest value in milliseconds that a packet may be delayed
-<a href=#572 id=572 data-nosnippet>572</a>    </span><span class="kw">pub </span>delay_high_ms: u64,
-<a href=#573 id=573 data-nosnippet>573</a>    <span class="doccomment">/// lowest value of repeats for a message
-<a href=#574 id=574 data-nosnippet>574</a>    </span><span class="kw">pub </span>repeat_low: usize,
-<a href=#575 id=575 data-nosnippet>575</a>    <span class="doccomment">/// highest value of repeats for a message
-<a href=#576 id=576 data-nosnippet>576</a>    </span><span class="kw">pub </span>repeat_high: usize,
-<a href=#577 id=577 data-nosnippet>577</a>}
-<a href=#578 id=578 data-nosnippet>578</a>
-<a href=#579 id=579 data-nosnippet>579</a><span class="kw">impl </span>NetworkReliability <span class="kw">for </span>ChaosNetwork {
-<a href=#580 id=580 data-nosnippet>580</a>    <span class="kw">fn </span>sample_keep(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
-<a href=#581 id=581 data-nosnippet>581</a>        Bernoulli::from_ratio(<span class="self">self</span>.keep_numerator, <span class="self">self</span>.keep_denominator)
-<a href=#582 id=582 data-nosnippet>582</a>            .unwrap()
-<a href=#583 id=583 data-nosnippet>583</a>            .sample(<span class="kw-2">&amp;mut </span>rand::thread_rng())
-<a href=#584 id=584 data-nosnippet>584</a>    }
-<a href=#585 id=585 data-nosnippet>585</a>
-<a href=#586 id=586 data-nosnippet>586</a>    <span class="kw">fn </span>sample_delay(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Duration {
-<a href=#587 id=587 data-nosnippet>587</a>        Duration::from_millis(
-<a href=#588 id=588 data-nosnippet>588</a>            Uniform::new_inclusive(<span class="self">self</span>.delay_low_ms, <span class="self">self</span>.delay_high_ms)
-<a href=#589 id=589 data-nosnippet>589</a>                .sample(<span class="kw-2">&amp;mut </span>rand::thread_rng()),
-<a href=#590 id=590 data-nosnippet>590</a>        )
-<a href=#591 id=591 data-nosnippet>591</a>    }
-<a href=#592 id=592 data-nosnippet>592</a>
-<a href=#593 id=593 data-nosnippet>593</a>    <span class="kw">fn </span>sample_repeat(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
-<a href=#594 id=594 data-nosnippet>594</a>        Uniform::new_inclusive(<span class="self">self</span>.repeat_low, <span class="self">self</span>.repeat_high).sample(<span class="kw-2">&amp;mut </span>rand::thread_rng())
-<a href=#595 id=595 data-nosnippet>595</a>    }
-<a href=#596 id=596 data-nosnippet>596</a>}
-<a href=#597 id=597 data-nosnippet>597</a>
-<a href=#598 id=598 data-nosnippet>598</a><span class="doccomment">/// Used when broadcasting messages
-<a href=#599 id=599 data-nosnippet>599</a></span><span class="attr">#[derive(Clone, Debug, PartialEq, Eq, Hash, Copy)]
-<a href=#600 id=600 data-nosnippet>600</a></span><span class="kw">pub enum </span>Topic {
-<a href=#601 id=601 data-nosnippet>601</a>    <span class="doccomment">/// The `Global` topic goes out to all nodes
-<a href=#602 id=602 data-nosnippet>602</a>    </span>Global,
-<a href=#603 id=603 data-nosnippet>603</a>    <span class="doccomment">/// The `Da` topic goes out to only the DA committee
-<a href=#604 id=604 data-nosnippet>604</a>    </span>Da,
-<a href=#605 id=605 data-nosnippet>605</a>}
-<a href=#606 id=606 data-nosnippet>606</a>
-<a href=#607 id=607 data-nosnippet>607</a><span class="doccomment">/// Libp2p topics require a string, so we need to convert our enum to a string
-<a href=#608 id=608 data-nosnippet>608</a></span><span class="kw">impl </span>Display <span class="kw">for </span>Topic {
-<a href=#609 id=609 data-nosnippet>609</a>    <span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>std::fmt::Formatter&lt;<span class="lifetime">'_</span>&gt;) -&gt; std::fmt::Result {
-<a href=#610 id=610 data-nosnippet>610</a>        <span class="kw">match </span><span class="self">self </span>{
-<a href=#611 id=611 data-nosnippet>611</a>            Topic::Global =&gt; <span class="macro">write!</span>(f, <span class="string">"global"</span>),
-<a href=#612 id=612 data-nosnippet>612</a>            Topic::Da =&gt; <span class="macro">write!</span>(f, <span class="string">"DA"</span>),
-<a href=#613 id=613 data-nosnippet>613</a>        }
-<a href=#614 id=614 data-nosnippet>614</a>    }
-<a href=#615 id=615 data-nosnippet>615</a>}
+<a href=#311 id=311 data-nosnippet>311</a>        connect_infos: <span class="kw-2">&amp;mut </span>HashMap&lt;TYPES::SignatureKey, PeerConnectInfo&gt;,
+<a href=#312 id=312 data-nosnippet>312</a>    ) -&gt; AsyncGenerator&lt;Arc&lt;<span class="self">Self</span>&gt;&gt;;
+<a href=#313 id=313 data-nosnippet>313</a>
+<a href=#314 id=314 data-nosnippet>314</a>    <span class="doccomment">/// Get the number of messages in-flight.
+<a href=#315 id=315 data-nosnippet>315</a>    ///
+<a href=#316 id=316 data-nosnippet>316</a>    /// Some implementations will not be able to tell how many messages there are in-flight. These implementations should return `None`.
+<a href=#317 id=317 data-nosnippet>317</a>    </span><span class="kw">fn </span>in_flight_message_count(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;usize&gt;;
+<a href=#318 id=318 data-nosnippet>318</a>}
+<a href=#319 id=319 data-nosnippet>319</a>
+<a href=#320 id=320 data-nosnippet>320</a><span class="doccomment">/// Changes that can occur in the network
+<a href=#321 id=321 data-nosnippet>321</a></span><span class="attr">#[derive(Debug)]
+<a href=#322 id=322 data-nosnippet>322</a></span><span class="kw">pub enum </span>NetworkChange&lt;P: SignatureKey&gt; {
+<a href=#323 id=323 data-nosnippet>323</a>    <span class="doccomment">/// A node is connected
+<a href=#324 id=324 data-nosnippet>324</a>    </span>NodeConnected(P),
+<a href=#325 id=325 data-nosnippet>325</a>
+<a href=#326 id=326 data-nosnippet>326</a>    <span class="doccomment">/// A node is disconnected
+<a href=#327 id=327 data-nosnippet>327</a>    </span>NodeDisconnected(P),
+<a href=#328 id=328 data-nosnippet>328</a>}
+<a href=#329 id=329 data-nosnippet>329</a>
+<a href=#330 id=330 data-nosnippet>330</a><span class="doccomment">/// interface describing how reliable the network is
+<a href=#331 id=331 data-nosnippet>331</a></span><span class="attr">#[async_trait]
+<a href=#332 id=332 data-nosnippet>332</a></span><span class="kw">pub trait </span>NetworkReliability: Debug + Sync + std::marker::Send + DynClone + <span class="lifetime">'static </span>{
+<a href=#333 id=333 data-nosnippet>333</a>    <span class="doccomment">/// Sample from bernoulli distribution to decide whether
+<a href=#334 id=334 data-nosnippet>334</a>    /// or not to keep a packet
+<a href=#335 id=335 data-nosnippet>335</a>    /// # Panics
+<a href=#336 id=336 data-nosnippet>336</a>    ///
+<a href=#337 id=337 data-nosnippet>337</a>    /// Panics if `self.keep_numerator &gt; self.keep_denominator`
+<a href=#338 id=338 data-nosnippet>338</a>    ///
+<a href=#339 id=339 data-nosnippet>339</a>    </span><span class="kw">fn </span>sample_keep(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+<a href=#340 id=340 data-nosnippet>340</a>        <span class="bool-val">true
+<a href=#341 id=341 data-nosnippet>341</a>    </span>}
+<a href=#342 id=342 data-nosnippet>342</a>
+<a href=#343 id=343 data-nosnippet>343</a>    <span class="doccomment">/// sample from uniform distribution to decide whether
+<a href=#344 id=344 data-nosnippet>344</a>    /// or not to keep a packet
+<a href=#345 id=345 data-nosnippet>345</a>    </span><span class="kw">fn </span>sample_delay(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Duration {
+<a href=#346 id=346 data-nosnippet>346</a>        std::time::Duration::ZERO
+<a href=#347 id=347 data-nosnippet>347</a>    }
+<a href=#348 id=348 data-nosnippet>348</a>
+<a href=#349 id=349 data-nosnippet>349</a>    <span class="doccomment">/// scramble the packet
+<a href=#350 id=350 data-nosnippet>350</a>    </span><span class="kw">fn </span>scramble(<span class="kw-2">&amp;</span><span class="self">self</span>, msg: Vec&lt;u8&gt;) -&gt; Vec&lt;u8&gt; {
+<a href=#351 id=351 data-nosnippet>351</a>        msg
+<a href=#352 id=352 data-nosnippet>352</a>    }
+<a href=#353 id=353 data-nosnippet>353</a>
+<a href=#354 id=354 data-nosnippet>354</a>    <span class="doccomment">/// number of times to repeat the packet
+<a href=#355 id=355 data-nosnippet>355</a>    </span><span class="kw">fn </span>sample_repeat(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
+<a href=#356 id=356 data-nosnippet>356</a>        <span class="number">1
+<a href=#357 id=357 data-nosnippet>357</a>    </span>}
+<a href=#358 id=358 data-nosnippet>358</a>
+<a href=#359 id=359 data-nosnippet>359</a>    <span class="doccomment">/// given a message and a way to send the message,
+<a href=#360 id=360 data-nosnippet>360</a>    /// decide whether or not to send the message
+<a href=#361 id=361 data-nosnippet>361</a>    /// how long to delay the message
+<a href=#362 id=362 data-nosnippet>362</a>    /// whether or not to send duplicates
+<a href=#363 id=363 data-nosnippet>363</a>    /// and whether or not to include noise with the message
+<a href=#364 id=364 data-nosnippet>364</a>    /// then send the message
+<a href=#365 id=365 data-nosnippet>365</a>    /// note: usually self is stored in a rwlock
+<a href=#366 id=366 data-nosnippet>366</a>    /// so instead of doing the sending part, we just fiddle with the message
+<a href=#367 id=367 data-nosnippet>367</a>    /// then return a future that does the sending and delaying
+<a href=#368 id=368 data-nosnippet>368</a>    </span><span class="kw">fn </span>chaos_send_msg(
+<a href=#369 id=369 data-nosnippet>369</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#370 id=370 data-nosnippet>370</a>        msg: Vec&lt;u8&gt;,
+<a href=#371 id=371 data-nosnippet>371</a>        send_fn: Arc&lt;<span class="kw">dyn </span>Send + Sync + <span class="lifetime">'static </span>+ Fn(Vec&lt;u8&gt;) -&gt; BoxSyncFuture&lt;<span class="lifetime">'static</span>, ()&gt;&gt;,
+<a href=#372 id=372 data-nosnippet>372</a>    ) -&gt; BoxSyncFuture&lt;<span class="lifetime">'static</span>, ()&gt; {
+<a href=#373 id=373 data-nosnippet>373</a>        <span class="kw">let </span>sample_keep = <span class="self">self</span>.sample_keep();
+<a href=#374 id=374 data-nosnippet>374</a>        <span class="kw">let </span>delay = <span class="self">self</span>.sample_delay();
+<a href=#375 id=375 data-nosnippet>375</a>        <span class="kw">let </span>repeats = <span class="self">self</span>.sample_repeat();
+<a href=#376 id=376 data-nosnippet>376</a>        <span class="kw">let </span><span class="kw-2">mut </span>msgs = Vec::new();
+<a href=#377 id=377 data-nosnippet>377</a>        <span class="kw">for </span>_idx <span class="kw">in </span><span class="number">0</span>..repeats {
+<a href=#378 id=378 data-nosnippet>378</a>            <span class="kw">let </span>scrambled = <span class="self">self</span>.scramble(msg.clone());
+<a href=#379 id=379 data-nosnippet>379</a>            msgs.push(scrambled);
+<a href=#380 id=380 data-nosnippet>380</a>        }
+<a href=#381 id=381 data-nosnippet>381</a>        <span class="kw">let </span>closure = <span class="kw">async move </span>{
+<a href=#382 id=382 data-nosnippet>382</a>            <span class="kw">if </span>sample_keep {
+<a href=#383 id=383 data-nosnippet>383</a>                sleep(delay).<span class="kw">await</span>;
+<a href=#384 id=384 data-nosnippet>384</a>                <span class="kw">for </span>msg <span class="kw">in </span>msgs {
+<a href=#385 id=385 data-nosnippet>385</a>                    send_fn(msg).<span class="kw">await</span>;
+<a href=#386 id=386 data-nosnippet>386</a>                }
+<a href=#387 id=387 data-nosnippet>387</a>            }
+<a href=#388 id=388 data-nosnippet>388</a>        };
+<a href=#389 id=389 data-nosnippet>389</a>        Box::pin(closure)
+<a href=#390 id=390 data-nosnippet>390</a>    }
+<a href=#391 id=391 data-nosnippet>391</a>}
+<a href=#392 id=392 data-nosnippet>392</a>
+<a href=#393 id=393 data-nosnippet>393</a><span class="comment">// hack to get clone
+<a href=#394 id=394 data-nosnippet>394</a></span><span class="macro">dyn_clone::clone_trait_object!</span>(NetworkReliability);
+<a href=#395 id=395 data-nosnippet>395</a>
+<a href=#396 id=396 data-nosnippet>396</a><span class="doccomment">/// ideal network
+<a href=#397 id=397 data-nosnippet>397</a></span><span class="attr">#[derive(Clone, Copy, Debug, Default)]
+<a href=#398 id=398 data-nosnippet>398</a></span><span class="kw">pub struct </span>PerfectNetwork {}
+<a href=#399 id=399 data-nosnippet>399</a>
+<a href=#400 id=400 data-nosnippet>400</a><span class="kw">impl </span>NetworkReliability <span class="kw">for </span>PerfectNetwork {}
+<a href=#401 id=401 data-nosnippet>401</a>
+<a href=#402 id=402 data-nosnippet>402</a><span class="doccomment">/// A synchronous network. Packets may be delayed, but are guaranteed
+<a href=#403 id=403 data-nosnippet>403</a>/// to arrive within `timeout` ns
+<a href=#404 id=404 data-nosnippet>404</a></span><span class="attr">#[derive(Clone, Copy, Debug, Default)]
+<a href=#405 id=405 data-nosnippet>405</a></span><span class="kw">pub struct </span>SynchronousNetwork {
+<a href=#406 id=406 data-nosnippet>406</a>    <span class="doccomment">/// Max value in milliseconds that a packet may be delayed
+<a href=#407 id=407 data-nosnippet>407</a>    </span><span class="kw">pub </span>delay_high_ms: u64,
+<a href=#408 id=408 data-nosnippet>408</a>    <span class="doccomment">/// Lowest value in milliseconds that a packet may be delayed
+<a href=#409 id=409 data-nosnippet>409</a>    </span><span class="kw">pub </span>delay_low_ms: u64,
+<a href=#410 id=410 data-nosnippet>410</a>}
+<a href=#411 id=411 data-nosnippet>411</a>
+<a href=#412 id=412 data-nosnippet>412</a><span class="kw">impl </span>NetworkReliability <span class="kw">for </span>SynchronousNetwork {
+<a href=#413 id=413 data-nosnippet>413</a>    <span class="doccomment">/// never drop a packet
+<a href=#414 id=414 data-nosnippet>414</a>    </span><span class="kw">fn </span>sample_keep(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+<a href=#415 id=415 data-nosnippet>415</a>        <span class="bool-val">true
+<a href=#416 id=416 data-nosnippet>416</a>    </span>}
+<a href=#417 id=417 data-nosnippet>417</a>    <span class="kw">fn </span>sample_delay(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Duration {
+<a href=#418 id=418 data-nosnippet>418</a>        Duration::from_millis(
+<a href=#419 id=419 data-nosnippet>419</a>            Uniform::new_inclusive(<span class="self">self</span>.delay_low_ms, <span class="self">self</span>.delay_high_ms)
+<a href=#420 id=420 data-nosnippet>420</a>                .sample(<span class="kw-2">&amp;mut </span>rand::thread_rng()),
+<a href=#421 id=421 data-nosnippet>421</a>        )
+<a href=#422 id=422 data-nosnippet>422</a>    }
+<a href=#423 id=423 data-nosnippet>423</a>}
+<a href=#424 id=424 data-nosnippet>424</a>
+<a href=#425 id=425 data-nosnippet>425</a><span class="doccomment">/// An asynchronous network. Packets may be dropped entirely
+<a href=#426 id=426 data-nosnippet>426</a>/// or delayed for arbitrarily long periods
+<a href=#427 id=427 data-nosnippet>427</a>/// probability that packet is kept = `keep_numerator` / `keep_denominator`
+<a href=#428 id=428 data-nosnippet>428</a>/// packet delay is obtained by sampling from a uniform distribution
+<a href=#429 id=429 data-nosnippet>429</a>/// between `delay_low_ms` and `delay_high_ms`, inclusive
+<a href=#430 id=430 data-nosnippet>430</a></span><span class="attr">#[derive(Debug, Clone, Copy)]
+<a href=#431 id=431 data-nosnippet>431</a></span><span class="kw">pub struct </span>AsynchronousNetwork {
+<a href=#432 id=432 data-nosnippet>432</a>    <span class="doccomment">/// numerator for probability of keeping packets
+<a href=#433 id=433 data-nosnippet>433</a>    </span><span class="kw">pub </span>keep_numerator: u32,
+<a href=#434 id=434 data-nosnippet>434</a>    <span class="doccomment">/// denominator for probability of keeping packets
+<a href=#435 id=435 data-nosnippet>435</a>    </span><span class="kw">pub </span>keep_denominator: u32,
+<a href=#436 id=436 data-nosnippet>436</a>    <span class="doccomment">/// lowest value in milliseconds that a packet may be delayed
+<a href=#437 id=437 data-nosnippet>437</a>    </span><span class="kw">pub </span>delay_low_ms: u64,
+<a href=#438 id=438 data-nosnippet>438</a>    <span class="doccomment">/// highest value in milliseconds that a packet may be delayed
+<a href=#439 id=439 data-nosnippet>439</a>    </span><span class="kw">pub </span>delay_high_ms: u64,
+<a href=#440 id=440 data-nosnippet>440</a>}
+<a href=#441 id=441 data-nosnippet>441</a>
+<a href=#442 id=442 data-nosnippet>442</a><span class="kw">impl </span>NetworkReliability <span class="kw">for </span>AsynchronousNetwork {
+<a href=#443 id=443 data-nosnippet>443</a>    <span class="kw">fn </span>sample_keep(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+<a href=#444 id=444 data-nosnippet>444</a>        Bernoulli::from_ratio(<span class="self">self</span>.keep_numerator, <span class="self">self</span>.keep_denominator)
+<a href=#445 id=445 data-nosnippet>445</a>            .unwrap()
+<a href=#446 id=446 data-nosnippet>446</a>            .sample(<span class="kw-2">&amp;mut </span>rand::thread_rng())
+<a href=#447 id=447 data-nosnippet>447</a>    }
+<a href=#448 id=448 data-nosnippet>448</a>    <span class="kw">fn </span>sample_delay(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Duration {
+<a href=#449 id=449 data-nosnippet>449</a>        Duration::from_millis(
+<a href=#450 id=450 data-nosnippet>450</a>            Uniform::new_inclusive(<span class="self">self</span>.delay_low_ms, <span class="self">self</span>.delay_high_ms)
+<a href=#451 id=451 data-nosnippet>451</a>                .sample(<span class="kw-2">&amp;mut </span>rand::thread_rng()),
+<a href=#452 id=452 data-nosnippet>452</a>        )
+<a href=#453 id=453 data-nosnippet>453</a>    }
+<a href=#454 id=454 data-nosnippet>454</a>}
+<a href=#455 id=455 data-nosnippet>455</a>
+<a href=#456 id=456 data-nosnippet>456</a><span class="doccomment">/// An partially synchronous network. Behaves asynchronously
+<a href=#457 id=457 data-nosnippet>457</a>/// until some arbitrary time bound, GST,
+<a href=#458 id=458 data-nosnippet>458</a>/// then synchronously after GST
+<a href=#459 id=459 data-nosnippet>459</a></span><span class="attr">#[allow(clippy::similar_names)]
+<a href=#460 id=460 data-nosnippet>460</a>#[derive(Debug, Clone, Copy)]
+<a href=#461 id=461 data-nosnippet>461</a></span><span class="kw">pub struct </span>PartiallySynchronousNetwork {
+<a href=#462 id=462 data-nosnippet>462</a>    <span class="doccomment">/// asynchronous portion of network
+<a href=#463 id=463 data-nosnippet>463</a>    </span><span class="kw">pub </span>asynchronous: AsynchronousNetwork,
+<a href=#464 id=464 data-nosnippet>464</a>    <span class="doccomment">/// synchronous portion of network
+<a href=#465 id=465 data-nosnippet>465</a>    </span><span class="kw">pub </span>synchronous: SynchronousNetwork,
+<a href=#466 id=466 data-nosnippet>466</a>    <span class="doccomment">/// time when GST occurs
+<a href=#467 id=467 data-nosnippet>467</a>    </span><span class="kw">pub </span>gst: std::time::Duration,
+<a href=#468 id=468 data-nosnippet>468</a>    <span class="doccomment">/// when the network was started
+<a href=#469 id=469 data-nosnippet>469</a>    </span><span class="kw">pub </span>start: std::time::Instant,
+<a href=#470 id=470 data-nosnippet>470</a>}
+<a href=#471 id=471 data-nosnippet>471</a>
+<a href=#472 id=472 data-nosnippet>472</a><span class="kw">impl </span>NetworkReliability <span class="kw">for </span>PartiallySynchronousNetwork {
+<a href=#473 id=473 data-nosnippet>473</a>    <span class="doccomment">/// never drop a packet
+<a href=#474 id=474 data-nosnippet>474</a>    </span><span class="kw">fn </span>sample_keep(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+<a href=#475 id=475 data-nosnippet>475</a>        <span class="bool-val">true
+<a href=#476 id=476 data-nosnippet>476</a>    </span>}
+<a href=#477 id=477 data-nosnippet>477</a>    <span class="kw">fn </span>sample_delay(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Duration {
+<a href=#478 id=478 data-nosnippet>478</a>        <span class="comment">// act asynchronous before gst
+<a href=#479 id=479 data-nosnippet>479</a>        </span><span class="kw">if </span><span class="self">self</span>.start.elapsed() &lt; <span class="self">self</span>.gst {
+<a href=#480 id=480 data-nosnippet>480</a>            <span class="kw">if </span><span class="self">self</span>.asynchronous.sample_keep() {
+<a href=#481 id=481 data-nosnippet>481</a>                <span class="self">self</span>.asynchronous.sample_delay()
+<a href=#482 id=482 data-nosnippet>482</a>            } <span class="kw">else </span>{
+<a href=#483 id=483 data-nosnippet>483</a>                <span class="comment">// assume packet was "dropped" and will arrive after gst
+<a href=#484 id=484 data-nosnippet>484</a>                </span><span class="self">self</span>.synchronous.sample_delay() + <span class="self">self</span>.gst
+<a href=#485 id=485 data-nosnippet>485</a>            }
+<a href=#486 id=486 data-nosnippet>486</a>        } <span class="kw">else </span>{
+<a href=#487 id=487 data-nosnippet>487</a>            <span class="comment">// act synchronous after gst
+<a href=#488 id=488 data-nosnippet>488</a>            </span><span class="self">self</span>.synchronous.sample_delay()
+<a href=#489 id=489 data-nosnippet>489</a>        }
+<a href=#490 id=490 data-nosnippet>490</a>    }
+<a href=#491 id=491 data-nosnippet>491</a>}
+<a href=#492 id=492 data-nosnippet>492</a>
+<a href=#493 id=493 data-nosnippet>493</a><span class="kw">impl </span>Default <span class="kw">for </span>AsynchronousNetwork {
+<a href=#494 id=494 data-nosnippet>494</a>    <span class="comment">// disable all chance of failure
+<a href=#495 id=495 data-nosnippet>495</a>    </span><span class="kw">fn </span>default() -&gt; <span class="self">Self </span>{
+<a href=#496 id=496 data-nosnippet>496</a>        AsynchronousNetwork {
+<a href=#497 id=497 data-nosnippet>497</a>            keep_numerator: <span class="number">1</span>,
+<a href=#498 id=498 data-nosnippet>498</a>            keep_denominator: <span class="number">1</span>,
+<a href=#499 id=499 data-nosnippet>499</a>            delay_low_ms: <span class="number">0</span>,
+<a href=#500 id=500 data-nosnippet>500</a>            delay_high_ms: <span class="number">0</span>,
+<a href=#501 id=501 data-nosnippet>501</a>        }
+<a href=#502 id=502 data-nosnippet>502</a>    }
+<a href=#503 id=503 data-nosnippet>503</a>}
+<a href=#504 id=504 data-nosnippet>504</a>
+<a href=#505 id=505 data-nosnippet>505</a><span class="kw">impl </span>Default <span class="kw">for </span>PartiallySynchronousNetwork {
+<a href=#506 id=506 data-nosnippet>506</a>    <span class="kw">fn </span>default() -&gt; <span class="self">Self </span>{
+<a href=#507 id=507 data-nosnippet>507</a>        PartiallySynchronousNetwork {
+<a href=#508 id=508 data-nosnippet>508</a>            synchronous: SynchronousNetwork::default(),
+<a href=#509 id=509 data-nosnippet>509</a>            asynchronous: AsynchronousNetwork::default(),
+<a href=#510 id=510 data-nosnippet>510</a>            gst: std::time::Duration::new(<span class="number">0</span>, <span class="number">0</span>),
+<a href=#511 id=511 data-nosnippet>511</a>            start: std::time::Instant::now(),
+<a href=#512 id=512 data-nosnippet>512</a>        }
+<a href=#513 id=513 data-nosnippet>513</a>    }
+<a href=#514 id=514 data-nosnippet>514</a>}
+<a href=#515 id=515 data-nosnippet>515</a>
+<a href=#516 id=516 data-nosnippet>516</a><span class="kw">impl </span>SynchronousNetwork {
+<a href=#517 id=517 data-nosnippet>517</a>    <span class="doccomment">/// create new `SynchronousNetwork`
+<a href=#518 id=518 data-nosnippet>518</a>    </span><span class="attr">#[must_use]
+<a href=#519 id=519 data-nosnippet>519</a>    </span><span class="kw">pub fn </span>new(timeout: u64, delay_low_ms: u64) -&gt; <span class="self">Self </span>{
+<a href=#520 id=520 data-nosnippet>520</a>        SynchronousNetwork {
+<a href=#521 id=521 data-nosnippet>521</a>            delay_high_ms: timeout,
+<a href=#522 id=522 data-nosnippet>522</a>            delay_low_ms,
+<a href=#523 id=523 data-nosnippet>523</a>        }
+<a href=#524 id=524 data-nosnippet>524</a>    }
+<a href=#525 id=525 data-nosnippet>525</a>}
+<a href=#526 id=526 data-nosnippet>526</a>
+<a href=#527 id=527 data-nosnippet>527</a><span class="kw">impl </span>AsynchronousNetwork {
+<a href=#528 id=528 data-nosnippet>528</a>    <span class="doccomment">/// create new `AsynchronousNetwork`
+<a href=#529 id=529 data-nosnippet>529</a>    </span><span class="attr">#[must_use]
+<a href=#530 id=530 data-nosnippet>530</a>    </span><span class="kw">pub fn </span>new(
+<a href=#531 id=531 data-nosnippet>531</a>        keep_numerator: u32,
+<a href=#532 id=532 data-nosnippet>532</a>        keep_denominator: u32,
+<a href=#533 id=533 data-nosnippet>533</a>        delay_low_ms: u64,
+<a href=#534 id=534 data-nosnippet>534</a>        delay_high_ms: u64,
+<a href=#535 id=535 data-nosnippet>535</a>    ) -&gt; <span class="self">Self </span>{
+<a href=#536 id=536 data-nosnippet>536</a>        AsynchronousNetwork {
+<a href=#537 id=537 data-nosnippet>537</a>            keep_numerator,
+<a href=#538 id=538 data-nosnippet>538</a>            keep_denominator,
+<a href=#539 id=539 data-nosnippet>539</a>            delay_low_ms,
+<a href=#540 id=540 data-nosnippet>540</a>            delay_high_ms,
+<a href=#541 id=541 data-nosnippet>541</a>        }
+<a href=#542 id=542 data-nosnippet>542</a>    }
+<a href=#543 id=543 data-nosnippet>543</a>}
+<a href=#544 id=544 data-nosnippet>544</a>
+<a href=#545 id=545 data-nosnippet>545</a><span class="kw">impl </span>PartiallySynchronousNetwork {
+<a href=#546 id=546 data-nosnippet>546</a>    <span class="doccomment">/// create new `PartiallySynchronousNetwork`
+<a href=#547 id=547 data-nosnippet>547</a>    </span><span class="attr">#[allow(clippy::similar_names)]
+<a href=#548 id=548 data-nosnippet>548</a>    #[must_use]
+<a href=#549 id=549 data-nosnippet>549</a>    </span><span class="kw">pub fn </span>new(
+<a href=#550 id=550 data-nosnippet>550</a>        asynchronous: AsynchronousNetwork,
+<a href=#551 id=551 data-nosnippet>551</a>        synchronous: SynchronousNetwork,
+<a href=#552 id=552 data-nosnippet>552</a>        gst: std::time::Duration,
+<a href=#553 id=553 data-nosnippet>553</a>    ) -&gt; <span class="self">Self </span>{
+<a href=#554 id=554 data-nosnippet>554</a>        PartiallySynchronousNetwork {
+<a href=#555 id=555 data-nosnippet>555</a>            asynchronous,
+<a href=#556 id=556 data-nosnippet>556</a>            synchronous,
+<a href=#557 id=557 data-nosnippet>557</a>            gst,
+<a href=#558 id=558 data-nosnippet>558</a>            start: std::time::Instant::now(),
+<a href=#559 id=559 data-nosnippet>559</a>        }
+<a href=#560 id=560 data-nosnippet>560</a>    }
+<a href=#561 id=561 data-nosnippet>561</a>}
+<a href=#562 id=562 data-nosnippet>562</a>
+<a href=#563 id=563 data-nosnippet>563</a><span class="doccomment">/// A chaotic network using all the networking calls
+<a href=#564 id=564 data-nosnippet>564</a></span><span class="attr">#[derive(Debug, Clone)]
+<a href=#565 id=565 data-nosnippet>565</a></span><span class="kw">pub struct </span>ChaosNetwork {
+<a href=#566 id=566 data-nosnippet>566</a>    <span class="doccomment">/// numerator for probability of keeping packets
+<a href=#567 id=567 data-nosnippet>567</a>    </span><span class="kw">pub </span>keep_numerator: u32,
+<a href=#568 id=568 data-nosnippet>568</a>    <span class="doccomment">/// denominator for probability of keeping packets
+<a href=#569 id=569 data-nosnippet>569</a>    </span><span class="kw">pub </span>keep_denominator: u32,
+<a href=#570 id=570 data-nosnippet>570</a>    <span class="doccomment">/// lowest value in milliseconds that a packet may be delayed
+<a href=#571 id=571 data-nosnippet>571</a>    </span><span class="kw">pub </span>delay_low_ms: u64,
+<a href=#572 id=572 data-nosnippet>572</a>    <span class="doccomment">/// highest value in milliseconds that a packet may be delayed
+<a href=#573 id=573 data-nosnippet>573</a>    </span><span class="kw">pub </span>delay_high_ms: u64,
+<a href=#574 id=574 data-nosnippet>574</a>    <span class="doccomment">/// lowest value of repeats for a message
+<a href=#575 id=575 data-nosnippet>575</a>    </span><span class="kw">pub </span>repeat_low: usize,
+<a href=#576 id=576 data-nosnippet>576</a>    <span class="doccomment">/// highest value of repeats for a message
+<a href=#577 id=577 data-nosnippet>577</a>    </span><span class="kw">pub </span>repeat_high: usize,
+<a href=#578 id=578 data-nosnippet>578</a>}
+<a href=#579 id=579 data-nosnippet>579</a>
+<a href=#580 id=580 data-nosnippet>580</a><span class="kw">impl </span>NetworkReliability <span class="kw">for </span>ChaosNetwork {
+<a href=#581 id=581 data-nosnippet>581</a>    <span class="kw">fn </span>sample_keep(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+<a href=#582 id=582 data-nosnippet>582</a>        Bernoulli::from_ratio(<span class="self">self</span>.keep_numerator, <span class="self">self</span>.keep_denominator)
+<a href=#583 id=583 data-nosnippet>583</a>            .unwrap()
+<a href=#584 id=584 data-nosnippet>584</a>            .sample(<span class="kw-2">&amp;mut </span>rand::thread_rng())
+<a href=#585 id=585 data-nosnippet>585</a>    }
+<a href=#586 id=586 data-nosnippet>586</a>
+<a href=#587 id=587 data-nosnippet>587</a>    <span class="kw">fn </span>sample_delay(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Duration {
+<a href=#588 id=588 data-nosnippet>588</a>        Duration::from_millis(
+<a href=#589 id=589 data-nosnippet>589</a>            Uniform::new_inclusive(<span class="self">self</span>.delay_low_ms, <span class="self">self</span>.delay_high_ms)
+<a href=#590 id=590 data-nosnippet>590</a>                .sample(<span class="kw-2">&amp;mut </span>rand::thread_rng()),
+<a href=#591 id=591 data-nosnippet>591</a>        )
+<a href=#592 id=592 data-nosnippet>592</a>    }
+<a href=#593 id=593 data-nosnippet>593</a>
+<a href=#594 id=594 data-nosnippet>594</a>    <span class="kw">fn </span>sample_repeat(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
+<a href=#595 id=595 data-nosnippet>595</a>        Uniform::new_inclusive(<span class="self">self</span>.repeat_low, <span class="self">self</span>.repeat_high).sample(<span class="kw-2">&amp;mut </span>rand::thread_rng())
+<a href=#596 id=596 data-nosnippet>596</a>    }
+<a href=#597 id=597 data-nosnippet>597</a>}
+<a href=#598 id=598 data-nosnippet>598</a>
+<a href=#599 id=599 data-nosnippet>599</a><span class="doccomment">/// Used when broadcasting messages
+<a href=#600 id=600 data-nosnippet>600</a></span><span class="attr">#[derive(Clone, Debug, PartialEq, Eq, Hash, Copy)]
+<a href=#601 id=601 data-nosnippet>601</a></span><span class="kw">pub enum </span>Topic {
+<a href=#602 id=602 data-nosnippet>602</a>    <span class="doccomment">/// The `Global` topic goes out to all nodes
+<a href=#603 id=603 data-nosnippet>603</a>    </span>Global,
+<a href=#604 id=604 data-nosnippet>604</a>    <span class="doccomment">/// The `Da` topic goes out to only the DA committee
+<a href=#605 id=605 data-nosnippet>605</a>    </span>Da,
+<a href=#606 id=606 data-nosnippet>606</a>}
+<a href=#607 id=607 data-nosnippet>607</a>
+<a href=#608 id=608 data-nosnippet>608</a><span class="doccomment">/// Libp2p topics require a string, so we need to convert our enum to a string
+<a href=#609 id=609 data-nosnippet>609</a></span><span class="kw">impl </span>Display <span class="kw">for </span>Topic {
+<a href=#610 id=610 data-nosnippet>610</a>    <span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>std::fmt::Formatter&lt;<span class="lifetime">'_</span>&gt;) -&gt; std::fmt::Result {
+<a href=#611 id=611 data-nosnippet>611</a>        <span class="kw">match </span><span class="self">self </span>{
+<a href=#612 id=612 data-nosnippet>612</a>            Topic::Global =&gt; <span class="macro">write!</span>(f, <span class="string">"global"</span>),
+<a href=#613 id=613 data-nosnippet>613</a>            Topic::Da =&gt; <span class="macro">write!</span>(f, <span class="string">"DA"</span>),
+<a href=#614 id=614 data-nosnippet>614</a>        }
+<a href=#615 id=615 data-nosnippet>615</a>    }
+<a href=#616 id=616 data-nosnippet>616</a>}
 </code></pre></div></section></main></body></html>

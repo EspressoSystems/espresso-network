@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["derive_keypair"],"struct":["Cliquenet"]};
+window.SIDEBAR_ITEMS = {"fn":["gen_parties"],"struct":["Cliquenet","Inner"]};
