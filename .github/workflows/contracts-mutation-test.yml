@@ -34,6 +34,12 @@ jobs:
           fetch-depth: 0
           filter: blob:none
 
+      - name: Install solc
+        run: |
+          pip install solc-select
+          solc-select install 0.8.28
+          solc-select use 0.8.28
+
       - name: Install cargo-binstall
         uses: taiki-e/install-action@v2
         with:
