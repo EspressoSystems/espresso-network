@@ -418,12 +418,9 @@ impl RewardMerkleTreeDataSource for SqlStorage {
         version: Version,
     ) -> impl Send + Future<Output = anyhow::Result<()>> {
         async move {
-            // For V4 (per-block rewards), rate-limit since this is called every block.
+            // For V4 (per-block rewards), rate limit since this is called every block.
             // For V5+ (epoch rewards), this is only called at epoch boundaries.
-            if !cfg!(any(test, feature = "testing"))
-                && version < EPOCH_REWARD_VERSION
-                && !(height + node_state.node_id).is_multiple_of(30)
-            {
+            if version < EPOCH_REWARD_VERSION && !(height + node_state.node_id).is_multiple_of(30) {
                 return Ok(());
             }
 
