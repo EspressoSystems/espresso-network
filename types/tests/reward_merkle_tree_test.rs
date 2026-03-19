@@ -8,13 +8,13 @@ use alloy::{
 };
 use anyhow::Result;
 use espresso_contract_deployer::{
-    builder::DeployerArgsBuilder, network_config::light_client_genesis_from_stake_table, Contract,
-    Contracts, DEFAULT_EXIT_ESCROW_PERIOD_SECONDS,
+    Contract, Contracts, DEFAULT_EXIT_ESCROW_PERIOD_SECONDS, builder::DeployerArgsBuilder,
+    network_config::light_client_genesis_from_stake_table,
 };
 use espresso_types::{
     v0::v0_4::{RewardAccountProofV2, RewardAccountV2, RewardMerkleTreeV2},
     v0_3::RewardAmount,
-    v0_4::{RewardAccountQueryDataV2, REWARD_MERKLE_TREE_V2_HEIGHT},
+    v0_4::{REWARD_MERKLE_TREE_V2_HEIGHT, RewardAccountQueryDataV2},
 };
 use hotshot_contract_adapter::sol_types::{LightClientV3Mock, RewardClaim};
 use jf_merkle_tree_compat::{MerkleCommitment, MerkleTreeScheme, UniversalMerkleTreeScheme};
@@ -139,7 +139,7 @@ async fn test_tree_helper(num_keys: usize) -> Result<u64> {
     for _i in 0..num_keys {
         let key = RewardAccountV2::from(Address::random());
         // Use u64 values to ensure they fit in Solidity proofs
-        let value = RewardAmount::from(rand::thread_rng().gen::<u64>());
+        let value = RewardAmount::from(rand::thread_rng().r#gen::<u64>());
         test_data.push((key, value));
     }
 

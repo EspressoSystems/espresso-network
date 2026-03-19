@@ -23,18 +23,18 @@ use derivative::Derivative;
 use futures::stream::BoxStream;
 use hotshot_types::{
     simple_certificate::QuorumCertificate2,
-    traits::{block_contents::BlockHeader, node_implementation::NodeType, BlockPayload},
+    traits::{BlockPayload, block_contents::BlockHeader, node_implementation::NodeType},
 };
 use sqlx::{Arguments, FromRow, Row};
 
-use super::{db::DbBackend, Transaction};
+use super::{Transaction, db::DbBackend};
 use crate::{
+    Header, Leaf2, Payload, QueryError, QueryResult,
     availability::{
         BlockId, BlockQueryData, LeafQueryData, PayloadQueryData, QueryableHeader,
         QueryablePayload, VidCommonQueryData,
     },
     data_source::storage::{PayloadMetadata, VidCommonMetadata},
-    Header, Leaf2, Payload, QueryError, QueryResult,
 };
 
 pub(super) mod availability;

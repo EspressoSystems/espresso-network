@@ -1,11 +1,11 @@
 use async_trait::async_trait;
 use futures::stream::StreamExt;
 use refinery_core::{
-    traits::r#async::{AsyncMigrate, AsyncQuery, AsyncTransaction},
     Migration,
+    traits::r#async::{AsyncMigrate, AsyncQuery, AsyncTransaction},
 };
-use sqlx::{pool::PoolConnection, Acquire, Executor, Row};
-use time::{format_description::well_known::Rfc3339, OffsetDateTime};
+use sqlx::{Acquire, Executor, Row, pool::PoolConnection};
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 use super::{db::BackendPoolConnection, queries::DecodeError};
 

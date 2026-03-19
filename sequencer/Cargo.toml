@@ -2,7 +2,7 @@
 name = "sequencer"
 version = "0.1.0"
 authors = ["Espresso Systems <hello@espressosys.com>"]
-edition = "2021"
+edition.workspace = true
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["hotshot-testing"]

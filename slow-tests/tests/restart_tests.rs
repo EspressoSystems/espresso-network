@@ -5,56 +5,57 @@ use alloy::{
     node_bindings::Anvil,
     primitives::{Address, U256},
     providers::{
+        Provider, ProviderBuilder, RootProvider,
         ext::AnvilApi,
         fillers::{BlobGasFiller, ChainIdFiller, FillProvider, GasFiller, JoinFill, NonceFiller},
         layers::AnvilProvider,
-        Provider, ProviderBuilder, RootProvider,
     },
     signers::local::LocalSigner,
 };
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use async_lock::RwLock;
 use cdn_broker::{
-    reexports::{crypto::signature::KeyPair, def::hook::NoMessageHook},
     Broker, Config as BrokerConfig,
+    reexports::{crypto::signature::KeyPair, def::hook::NoMessageHook},
 };
 use cdn_marshal::{Config as MarshalConfig, Marshal};
 use clap::Parser;
 use committable::{Commitment, Committable};
 use derivative::Derivative;
 use espresso_contract_deployer::{
-    builder::DeployerArgsBuilder, network_config::light_client_genesis_from_stake_table, Contract,
-    Contracts,
+    Contract, Contracts, builder::DeployerArgsBuilder,
+    network_config::light_client_genesis_from_stake_table,
 };
 use espresso_types::{
-    eth_signature_key::EthKeyPair, traits::PersistenceOptions, v0_3::ChainConfig, FeeAccount,
-    L1Client, Leaf2, PrivKey, PubKey, SeqTypes, Transaction,
+    FeeAccount, L1Client, Leaf2, PrivKey, PubKey, SeqTypes, Transaction,
+    eth_signature_key::EthKeyPair, traits::PersistenceOptions, v0_3::ChainConfig,
 };
 use futures::{
-    future::{join_all, try_join_all, BoxFuture, FutureExt},
+    future::{BoxFuture, FutureExt, join_all, try_join_all},
     stream::{BoxStream, StreamExt},
 };
 use hotshot::traits::implementations::derive_libp2p_peer_id;
 use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
 use hotshot_orchestrator::run_orchestrator;
-use hotshot_query_service::data_source::storage::sql::{testing::TmpDb, DbBackend};
+use hotshot_query_service::data_source::storage::sql::{DbBackend, testing::TmpDb};
 use hotshot_testing::{
     block_builder::{SimpleBuilderImplementation, TestBuilderImplementation},
     test_builder::BuilderChange,
 };
 use hotshot_types::{
+    PeerConfig,
     data::EpochNumber,
     event::{Event, EventType},
     light_client::StateKeyPair,
     network::{Libp2pConfig, NetworkConfig},
     signature_key::{BLSPrivKey, BLSPubKey},
     traits::signature_key::SignatureKey,
-    PeerConfig,
 };
 use itertools::Itertools;
 use rstest::rstest;
 use rstest_reuse::{self, apply, template};
 use sequencer::{
+    SequencerApiVersion,
     api::{
         self, data_source::testing::TestableSequencerDataSource, options::Query,
         test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
@@ -68,14 +69,13 @@ use sequencer::{
     options::{Modules, Options},
     run::init_with_storage,
     testing::{staking_priv_keys, wait_for_decide_on_handle},
-    SequencerApiVersion,
 };
 use staking_cli::demo::{DelegationConfig, StakingTransactions};
-use surf_disco::{error::ClientError, Url};
+use surf_disco::{Url, error::ClientError};
 use tempfile::TempDir;
 use test_utils::reserve_tcp_port;
 use tokio::{
-    task::{spawn, JoinHandle},
+    task::{JoinHandle, spawn},
     time::{sleep, timeout},
 };
 use vbs::version::Version;

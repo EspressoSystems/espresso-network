@@ -8,19 +8,19 @@ use std::{
     time::Instant,
 };
 
-use anyhow::{anyhow, bail, Context};
+use anyhow::{Context, anyhow, bail};
 use async_lock::RwLock;
 use async_trait::async_trait;
 use clap::Parser;
 use espresso_types::{
+    AuthenticatedValidatorMap, Leaf, Leaf2, NetworkConfig, Payload, PubKey, RegisteredValidatorMap,
+    SeqTypes, StakeTableHash,
     traits::{EventsPersistenceRead, MembershipPersistence, StakeTuple},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
     v0_3::{
         AuthenticatedValidator, EventKey, IndexedStake, RegisteredValidator, RewardAmount,
         StakeTableEvent,
     },
-    AuthenticatedValidatorMap, Leaf, Leaf2, NetworkConfig, Payload, PubKey, RegisteredValidatorMap,
-    SeqTypes, StakeTableHash,
 };
 use hotshot::InitializerEpochInfo;
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::{
@@ -33,7 +33,7 @@ use hotshot_types::{
     },
     drb::{DrbInput, DrbResult},
     event::{Event, EventType, HotShotAction, LeafInfo},
-    message::{convert_proposal, Proposal},
+    message::{Proposal, convert_proposal},
     simple_certificate::{
         CertificatePair, LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
         NextEpochQuorumCertificate2, QuorumCertificate, QuorumCertificate2, UpgradeCertificate,
@@ -48,8 +48,8 @@ use hotshot_types::{
 use itertools::Itertools;
 
 use crate::{
+    RECENT_STAKE_TABLES_LIMIT, ViewNumber,
     persistence::{migrate_network_config, persistence_metrics::PersistenceMetricsValue},
-    ViewNumber, RECENT_STAKE_TABLES_LIMIT,
 };
 
 /// Options for file system backed persistence.
@@ -351,10 +351,10 @@ impl Inner {
 
         for (file_view, path) in view_files(dir_path)? {
             // If the view is the anchor view, keep it no matter what.
-            if let Some(decided_view) = keep_decided_view {
-                if decided_view == file_view {
-                    continue;
-                }
+            if let Some(decided_view) = keep_decided_view
+                && decided_view == file_view
+            {
+                continue;
             }
             // Otherwise, delete it if it is time to prune this view _or_ if the given intervals,
             // which we've already successfully processed, contain the view; in this case we simply
@@ -2335,7 +2335,7 @@ mod test {
         light_client::LightClientState,
         simple_certificate::QuorumCertificate,
         simple_vote::QuorumData,
-        traits::{block_contents::GENESIS_VID_NUM_STORAGE_NODES, EncodeBytes},
+        traits::{EncodeBytes, block_contents::GENESIS_VID_NUM_STORAGE_NODES},
         vid::advz::advz_scheme,
     };
     use jf_advz::VidScheme;
@@ -2343,7 +2343,7 @@ mod test {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::{persistence::tests::TestablePersistence, BLSPubKey};
+    use crate::{BLSPubKey, persistence::tests::TestablePersistence};
 
     #[async_trait]
     impl TestablePersistence for Persistence {

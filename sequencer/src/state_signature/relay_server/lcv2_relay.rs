@@ -1,5 +1,5 @@
 use std::{
-    collections::{hash_map::Entry, BTreeSet, HashMap},
+    collections::{BTreeSet, HashMap, hash_map::Entry},
     sync::Arc,
 };
 
@@ -10,7 +10,7 @@ use hotshot_types::{
     },
     traits::signature_key::LCV2StateSignatureKey,
 };
-use tide_disco::{error::ServerError, Error, StatusCode};
+use tide_disco::{Error, StatusCode, error::ServerError};
 
 use super::stake_table_tracker::StakeTableTracker;
 

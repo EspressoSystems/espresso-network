@@ -1,4 +1,4 @@
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{Context, Result, bail, ensure};
 use espresso_types::{Header, NamespaceId, NsProof, Transaction};
 use hotshot_types::data::VidCommon;
 use serde::{Deserialize, Serialize};

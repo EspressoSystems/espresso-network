@@ -20,7 +20,7 @@
 
 use std::{collections::HashMap, marker::PhantomData, time::Instant};
 
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use async_trait::async_trait;
 use committable::Committable;
 use futures::{future::Future, stream::TryStreamExt};
@@ -28,34 +28,35 @@ use hotshot_types::{
     data::VidShare,
     simple_certificate::CertificatePair,
     traits::{
+        EncodeBytes,
         block_contents::BlockHeader,
         metrics::{Counter, Gauge, Histogram, Metrics},
         node_implementation::NodeType,
-        EncodeBytes,
     },
 };
 use itertools::Itertools;
 use jf_merkle_tree_compat::prelude::MerkleProof;
-use sqlx::{query_builder::Separated, Database, Encode, Execute, Executor, QueryBuilder, Type};
+use sqlx::{Database, Encode, Execute, Executor, QueryBuilder, Type, query_builder::Separated};
 
 use super::{
     db::{BackendTransaction, DbBackend, SqlPool},
     queries::{
         self,
-        state::{batch_insert_hashes, build_hash_batch_insert, collect_nodes_from_proofs, Node},
+        state::{Node, batch_insert_hashes, build_hash_batch_insert, collect_nodes_from_proofs},
     },
 };
 use crate::{
+    Header, Payload, QueryError, QueryResult,
     availability::{
         BlockQueryData, LeafQueryData, QueryableHeader, QueryablePayload, VidCommonQueryData,
     },
     data_source::{
-        storage::{pruning::PrunedHeightStorage, NodeStorage, UpdateAvailabilityStorage},
+        storage::{NodeStorage, UpdateAvailabilityStorage, pruning::PrunedHeightStorage},
         update,
     },
     merklized_state::{MerklizedState, UpdateStateData},
     types::HeightIndexed,
-    with_backend, Header, Payload, QueryError, QueryResult,
+    with_backend,
 };
 
 /// Marker type indicating a transaction with read-write access to the database.
@@ -497,7 +498,7 @@ impl Transaction<Write> {
     }
 
     /// Record the height of the latest pruned header.
-    pub(super) async fn save_pruned_height(&mut self, height: u64) -> anyhow::Result<()> {
+    pub(crate) async fn save_pruned_height(&mut self, height: u64) -> anyhow::Result<()> {
         // id is set to 1 so that there is only one row in the table.
         // height is updated if the row already exists.
         self.upsert(
@@ -525,15 +526,15 @@ where
 
         // Ignore the leaf if it is below the pruned height. This can happen if, for instance, the
         // fetcher is racing with the pruner.
-        if let Some(pruned_height) = self.load_pruned_height().await? {
-            if height <= pruned_height {
-                tracing::info!(
-                    height,
-                    pruned_height,
-                    "ignoring leaf which is already pruned"
-                );
-                return Ok(());
-            }
+        if let Some(pruned_height) = self.load_pruned_height().await?
+            && height <= pruned_height
+        {
+            tracing::info!(
+                height,
+                pruned_height,
+                "ignoring leaf which is already pruned"
+            );
+            return Ok(());
         }
 
         // While we don't necessarily have the full block for this leaf yet, we can initialize the
@@ -606,15 +607,15 @@ where
 
         // Ignore the block if it is below the pruned height. This can happen if, for instance, the
         // fetcher is racing with the pruner.
-        if let Some(pruned_height) = self.load_pruned_height().await? {
-            if height <= pruned_height {
-                tracing::info!(
-                    height,
-                    pruned_height,
-                    "ignoring block which is already pruned"
-                );
-                return Ok(());
-            }
+        if let Some(pruned_height) = self.load_pruned_height().await?
+            && height <= pruned_height
+        {
+            tracing::info!(
+                height,
+                pruned_height,
+                "ignoring block which is already pruned"
+            );
+            return Ok(());
         }
 
         // The header and payload tables should already have been initialized when we inserted the
@@ -668,15 +669,15 @@ where
 
         // Ignore the object if it is below the pruned height. This can happen if, for instance,
         // the fetcher is racing with the pruner.
-        if let Some(pruned_height) = self.load_pruned_height().await? {
-            if height <= pruned_height {
-                tracing::info!(
-                    height,
-                    pruned_height,
-                    "ignoring VID common which is already pruned"
-                );
-                return Ok(());
-            }
+        if let Some(pruned_height) = self.load_pruned_height().await?
+            && height <= pruned_height
+        {
+            tracing::info!(
+                height,
+                pruned_height,
+                "ignoring VID common which is already pruned"
+            );
+            return Ok(());
         }
 
         let common_data =

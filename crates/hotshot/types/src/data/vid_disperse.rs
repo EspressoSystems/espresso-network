@@ -31,16 +31,16 @@ use crate::{
     simple_vote::HasEpoch,
     stake_table::HSStakeTable,
     traits::{
+        BlockPayload,
         block_contents::EncodeBytes,
         node_implementation::NodeType,
         signature_key::{SignatureKey, StakeTableEntryType},
-        BlockPayload,
     },
     vid::{
-        advz::{advz_scheme, ADVZCommitment, ADVZCommon, ADVZScheme, ADVZShare},
-        avidm::{init_avidm_param, AvidMCommitment, AvidMCommon, AvidMScheme, AvidMShare},
+        advz::{ADVZCommitment, ADVZCommon, ADVZScheme, ADVZShare, advz_scheme},
+        avidm::{AvidMCommitment, AvidMCommon, AvidMScheme, AvidMShare, init_avidm_param},
         avidm_gf2::{
-            init_avidm_gf2_param, AvidmGf2Commitment, AvidmGf2Common, AvidmGf2Scheme, AvidmGf2Share,
+            AvidmGf2Commitment, AvidmGf2Common, AvidmGf2Scheme, AvidmGf2Share, init_avidm_gf2_param,
         },
     },
     vote::HasViewNumber,
@@ -281,11 +281,23 @@ impl<TYPES: NodeType> ADVZDisperseShare<TYPES> {
         Some(vid_disperse)
     }
 
-    /// Internally verify the share given necessary information
-    pub fn verify(&self, total_weight: usize) -> bool {
+    /// Check if vid common is consistent with the commitment.
+    pub fn is_consistent(&self) -> bool {
+        ADVZScheme::is_consistent(&self.payload_commitment, &self.common).is_ok()
+    }
+
+    /// Verify share assuming common data is already verified consistent.
+    /// Caller MUST call `is_consistent()` first.
+    pub fn verify_with_verified_common(&self) -> bool {
+        let total_weight = ADVZScheme::get_num_storage_nodes(&self.common) as usize;
         advz_scheme(total_weight)
             .verify_share(&self.share, &self.common, &self.payload_commitment)
             .is_ok_and(|r| r.is_ok())
+    }
+
+    /// Internally verify the share given necessary information
+    pub fn verify(&self, _total_weight: usize) -> bool {
+        self.is_consistent() && self.verify_with_verified_common()
     }
 
     /// Returns the payload length in bytes.
@@ -613,10 +625,23 @@ impl<TYPES: NodeType> AvidMDisperseShare<TYPES> {
         self.share.payload_byte_len() as u32
     }
 
-    /// Internally verify the share given necessary information
-    pub fn verify(&self, _total_weight: usize) -> bool {
+    /// Check if vid common is consistent with the commitment.
+    /// For AvidM, ns_commits is inside the share, so there's no separate consistency check.
+    pub fn is_consistent(&self) -> bool {
+        true
+    }
+
+    /// Verify share assuming common data is already verified consistent.
+    /// For AvidM, this is equivalent to the full verify since there's
+    /// no separate consistency check (ns_commits is inside the share).
+    pub fn verify_with_verified_common(&self) -> bool {
         AvidMScheme::verify_share(&self.common, &self.payload_commitment, &self.share)
             .is_ok_and(|r| r.is_ok())
+    }
+
+    /// Internally verify the share given necessary information
+    pub fn verify(&self, _total_weight: usize) -> bool {
+        self.is_consistent() && self.verify_with_verified_common()
     }
 }
 
@@ -860,9 +885,20 @@ impl<TYPES: NodeType> AvidmGf2DisperseShare<TYPES> {
     pub fn payload_byte_len(&self) -> u32 {
         self.common.payload_byte_len() as u32
     }
+    /// Check if vid common is consistent with the commitment.
+    pub fn is_consistent(&self) -> bool {
+        AvidmGf2Scheme::is_consistent(&self.payload_commitment, &self.common)
+    }
+
+    /// Verify share assuming common data is already verified consistent.
+    /// Caller MUST call `is_consistent()` first.
+    pub fn verify_with_verified_common(&self) -> bool {
+        AvidmGf2Scheme::verify_share_with_verified_common(&self.common, &self.share)
+            .is_ok_and(|r| r.is_ok())
+    }
+
     /// Internally verify the share given necessary information
     pub fn verify(&self, _total_weight: usize) -> bool {
-        AvidmGf2Scheme::verify_share(&self.payload_commitment, &self.common, &self.share)
-            .is_ok_and(|r| r.is_ok())
+        self.is_consistent() && self.verify_with_verified_common()
     }
 }

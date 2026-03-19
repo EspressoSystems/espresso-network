@@ -73,8 +73,8 @@
 use std::{
     future::IntoFuture,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
 };
 
@@ -82,7 +82,7 @@ use async_lock::Mutex;
 use derivative::Derivative;
 use futures::future::{BoxFuture, FutureExt};
 use tokio::sync::{
-    mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
+    mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel},
     oneshot,
 };
 use tracing::warn;
@@ -131,11 +131,11 @@ impl<T: Clone> Subscriber<T> {
         // Now we are committed to sending the message to this subscriber if possible. We can take
         // the sender. We need to check for closed again in case the subscriber was closed since the
         // previous check.
-        if let Some(sender) = self.sender.take() {
-            if sender.send(msg.clone()).is_err() {
-                // This is equivalent to the previous behavior in `async-compatibility-layer`
-                warn!("Failed to send notification: channel closed");
-            }
+        if let Some(sender) = self.sender.take()
+            && sender.send(msg.clone()).is_err()
+        {
+            // This is equivalent to the previous behavior in `async-compatibility-layer`
+            warn!("Failed to send notification: channel closed");
         }
     }
 }

@@ -12,9 +12,9 @@
 pub mod documentation;
 
 use committable::Committable;
-use futures::future::{select, Either};
+use futures::future::{Either, select};
 use hotshot_types::{
-    drb::{drb_difficulty_selector, DrbResult, INITIAL_DRB_RESULT},
+    drb::{DrbResult, INITIAL_DRB_RESULT, drb_difficulty_selector},
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
     simple_certificate::{CertificatePair, LightClientStateUpdateCertificateV2},
@@ -33,7 +33,7 @@ pub mod types;
 
 pub mod tasks;
 use hotshot_types::data::QuorumProposalWrapper;
-use versions::{Upgrade, EPOCH_VERSION};
+use versions::{EPOCH_VERSION, Upgrade};
 
 /// Contains helper functions for the crate
 pub mod helpers;
@@ -46,7 +46,7 @@ use std::{
 };
 
 use alloy::primitives::U256;
-use async_broadcast::{broadcast, InactiveReceiver, Receiver, Sender};
+use async_broadcast::{InactiveReceiver, Receiver, Sender, broadcast};
 use async_lock::RwLock;
 use async_trait::async_trait;
 use futures::join;
@@ -56,6 +56,7 @@ use hotshot_task_impls::{events::HotShotEvent, helpers::broadcast_event};
 /// Reexport error type
 pub use hotshot_types::error::HotShotError;
 use hotshot_types::{
+    HotShotConfig,
     consensus::{
         Consensus, ConsensusMetricsValue, OuterConsensus, PayloadWithMetadata, VidShares, View,
         ViewInner,
@@ -72,7 +73,6 @@ use hotshot_types::{
         signature_key::SignatureKey, states::ValidatedState,
     },
     utils::{genesis_epoch_from_version, option_epoch_from_block_number},
-    HotShotConfig,
 };
 use hotshot_utils::warn;
 /// Reexport rand crate
@@ -202,6 +202,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
         state_private_key: <TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
         nonce: u64,
         config: HotShotConfig<TYPES>,
+        upgrade: versions::Upgrade,
         memberships: EpochMembershipCoordinator<TYPES>,
         network: Arc<I::Network>,
         initializer: HotShotInitializer<TYPES>,
@@ -218,6 +219,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
             state_private_key,
             nonce,
             config,
+            upgrade,
             memberships,
             network,
             initializer,
@@ -244,6 +246,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
         state_private_key: <TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
         nonce: u64,
         config: HotShotConfig<TYPES>,
+        upgrade: versions::Upgrade,
         mut membership_coordinator: EpochMembershipCoordinator<TYPES>,
         network: Arc<I::Network>,
         initializer: HotShotInitializer<TYPES>,
@@ -284,8 +287,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
 
         tracing::warn!(
             "Starting consensus with versions:\n\n Base: {:?}\nUpgrade: {:?}.",
-            config.upgrade.base,
-            config.upgrade.target
+            upgrade.base,
+            upgrade.target
         );
         tracing::warn!(
             "Loading previously decided upgrade certificate from storage: {:?}",
@@ -293,14 +296,14 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
         );
 
         let upgrade_lock = UpgradeLock::<TYPES>::from_certificate(
-            config.upgrade,
+            upgrade,
             &initializer.decided_upgrade_certificate,
         );
 
         let current_version = if let Some(cert) = initializer.decided_upgrade_certificate {
             cert.data.new_version
         } else {
-            config.upgrade.base
+            upgrade.base
         };
 
         debug!("Setting DRB difficulty selector in membership");
@@ -426,12 +429,12 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
                 .await;
             // If we already have an epoch root, we can trigger catchup for the epoch
             // which that root applies to.
-            if let Some(high_qc_block_number) = high_qc_block_number {
-                if is_ge_epoch_root(high_qc_block_number, config.epoch_height) {
-                    let _ = membership_coordinator
-                        .stake_table_for_epoch(Some(epoch + 2))
-                        .await;
-                }
+            if let Some(high_qc_block_number) = high_qc_block_number
+                && is_ge_epoch_root(high_qc_block_number, config.epoch_height)
+            {
+                let _ = membership_coordinator
+                    .stake_table_for_epoch(Some(epoch + 2))
+                    .await;
             }
 
             if let Ok(drb_result) = storage.load_drb_result(epoch + 1).await {
@@ -487,7 +490,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
         let consensus = self.consensus.read().await;
 
         let first_epoch = option_epoch_from_block_number(
-            self.upgrade_lock.upgrade.base >= EPOCH_VERSION,
+            self.upgrade_lock.upgrade().base >= EPOCH_VERSION,
             self.config.epoch_start_block,
             self.config.epoch_height,
         );
@@ -552,7 +555,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
                 let qc = QuorumCertificate2::genesis(
                     &validated_state,
                     self.instance_state.as_ref(),
-                    self.upgrade_lock.upgrade,
+                    self.upgrade_lock.upgrade(),
                 )
                 .await;
 
@@ -612,7 +615,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
             kind: MessageKind::from(message_kind),
         };
 
-        let serialized_message = self.upgrade_lock.serialize(&message).await.map_err(|err| {
+        let serialized_message = self.upgrade_lock.serialize(&message).map_err(|err| {
             HotShotError::FailedToSerialize(format!("failed to serialize transaction: {err}"))
         })?;
 
@@ -727,6 +730,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
         state_private_key: <TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
         node_id: u64,
         config: HotShotConfig<TYPES>,
+        upgrade: versions::Upgrade,
         memberships: EpochMembershipCoordinator<TYPES>,
         network: Arc<I::Network>,
         initializer: HotShotInitializer<TYPES>,
@@ -747,6 +751,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
             state_private_key,
             node_id,
             config,
+            upgrade,
             memberships,
             network,
             initializer,
@@ -891,6 +896,7 @@ where
         state_private_key: <TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
         nonce: u64,
         config: HotShotConfig<TYPES>,
+        upgrade: versions::Upgrade,
         memberships: EpochMembershipCoordinator<TYPES>,
         network: Arc<I::Network>,
         initializer: HotShotInitializer<TYPES>,
@@ -905,6 +911,7 @@ where
             state_private_key.clone(),
             nonce,
             config.clone(),
+            upgrade,
             memberships.clone(),
             Arc::clone(&network),
             initializer.clone(),
@@ -919,6 +926,7 @@ where
             state_private_key,
             nonce,
             config,
+            upgrade,
             memberships,
             network,
             initializer,
@@ -1022,7 +1030,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TwinsHandlerState<TYPES, I>
         &mut self,
         event: &HotShotEvent<TYPES>,
     ) -> Vec<Either<HotShotEvent<TYPES>, HotShotEvent<TYPES>>> {
-        let random: bool = rand::thread_rng().gen();
+        let random: bool = rand::thread_rng().r#gen();
 
         #[allow(clippy::match_bool)]
         match random {

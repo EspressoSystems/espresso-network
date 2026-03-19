@@ -2,7 +2,7 @@
 
 use alloy::{
     hex::FromHex,
-    primitives::{Address, Bytes, B256, U256},
+    primitives::{Address, B256, Bytes, U256},
     providers::{Provider, WalletProvider},
 };
 use anyhow::{Context, Result};
@@ -12,21 +12,20 @@ use hotshot_contract_adapter::sol_types::{LightClientStateSol, StakeTableStateSo
 use url::Url;
 
 use crate::{
-    encode_function_call,
+    Contract, Contracts, OwnableContract, encode_function_call,
     proposals::{
         multisig::{
+            LightClientV2UpgradeParams, StakeTableV2UpgradeParams, TransferOwnershipParams,
             call_propose_transaction_generic_script, transfer_ownership_from_multisig_to_timelock,
             upgrade_esp_token_v2_multisig_owner, upgrade_fee_contract_multisig_owner,
             upgrade_light_client_v2_multisig_owner, upgrade_light_client_v3_multisig_owner,
-            upgrade_stake_table_v2_multisig_owner, LightClientV2UpgradeParams,
-            StakeTableV2UpgradeParams, TransferOwnershipParams,
+            upgrade_stake_table_v2_multisig_owner,
         },
         timelock::{
-            derive_timelock_address_from_contract_type, perform_timelock_operation,
             TimelockOperationParams, TimelockOperationPayload, TimelockOperationType,
+            derive_timelock_address_from_contract_type, perform_timelock_operation,
         },
     },
-    Contract, Contracts, OwnableContract,
 };
 
 /// Convenient handler that builds all the input arguments ready to be deployed.

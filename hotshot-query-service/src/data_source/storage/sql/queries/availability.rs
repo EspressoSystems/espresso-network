@@ -22,17 +22,18 @@ use sqlx::Row;
 
 use super::{
     super::transaction::{Transaction, TransactionMode},
-    QueryBuilder, BLOCK_COLUMNS, LEAF_COLUMNS, PAYLOAD_COLUMNS, PAYLOAD_METADATA_COLUMNS,
+    BLOCK_COLUMNS, LEAF_COLUMNS, PAYLOAD_COLUMNS, PAYLOAD_METADATA_COLUMNS, QueryBuilder,
     VID_COMMON_COLUMNS, VID_COMMON_METADATA_COLUMNS,
 };
 use crate::{
+    Header, MissingSnafu, Payload, QueryError, QueryResult,
     availability::{
         BlockId, BlockQueryData, LeafId, LeafQueryData, NamespaceInfo, NamespaceMap,
         PayloadQueryData, QueryableHeader, QueryablePayload, TransactionHash, VidCommonQueryData,
     },
     data_source::storage::{AvailabilityStorage, PayloadMetadata, VidCommonMetadata},
     types::HeightIndexed,
-    with_backend, Header, MissingSnafu, Payload, QueryResult,
+    with_backend,
 };
 
 #[async_trait]

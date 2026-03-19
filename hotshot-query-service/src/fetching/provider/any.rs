@@ -18,10 +18,10 @@ use hotshot_types::{data::VidCommon, traits::node_implementation::NodeType};
 
 use super::{Provider, Request};
 use crate::{
+    Payload,
     availability::LeafQueryData,
     data_source::AvailabilityProvider,
     fetching::request::{LeafRequest, PayloadRequest, VidCommonRequest},
-    Payload,
 };
 
 /// Blanket trait combining [`Debug`] and [`Provider`].
@@ -216,8 +216,9 @@ mod test {
 
     use super::*;
     use crate::{
-        availability::{define_api, AvailabilityDataSource, UpdateAvailabilityData},
-        data_source::storage::sql::{testing::TmpDb, DbBackend},
+        ApiState, Error,
+        availability::{AvailabilityDataSource, UpdateAvailabilityData, define_api},
+        data_source::storage::sql::{DbBackend, testing::TmpDb},
         fetching::provider::{NoFetching, QueryServiceProvider},
         task::BackgroundTask,
         testing::{
@@ -225,7 +226,6 @@ mod test {
             mocks::{MockBase, MockTypes},
         },
         types::HeightIndexed,
-        ApiState, Error,
     };
 
     #[template]

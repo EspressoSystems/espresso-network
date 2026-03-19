@@ -13,7 +13,7 @@ use std::{
 };
 
 use committable::Committable;
-use futures::{future::BoxFuture, FutureExt, Stream};
+use futures::{FutureExt, Stream, future::BoxFuture};
 use hotshot::types::{BLSPubKey, SignatureKey, SystemContextHandle};
 use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestTransaction},
@@ -35,15 +35,15 @@ use hotshot_types::{
         DaData2, DaVote2, QuorumData2, QuorumVote2, TimeoutData2, TimeoutVote2,
         UpgradeProposalData, UpgradeVote, ViewSyncFinalizeData2, ViewSyncFinalizeVote2,
     },
-    traits::{consensus_api::ConsensusApi, node_implementation::NodeType, BlockPayload},
-    utils::{genesis_epoch_from_version, EpochTransitionIndicator},
+    traits::{BlockPayload, consensus_api::ConsensusApi, node_implementation::NodeType},
+    utils::{EpochTransitionIndicator, genesis_epoch_from_version},
 };
-use rand::{thread_rng, Rng};
+use rand::{Rng, thread_rng};
 use sha2::{Digest, Sha256};
 use versions::Upgrade;
 
 use crate::helpers::{
-    build_cert, build_da_certificate, build_vid_proposal, da_payload_commitment, TestNodeKeyMap,
+    TestNodeKeyMap, build_cert, build_da_certificate, build_vid_proposal, da_payload_commitment,
 };
 
 #[derive(Clone)]
@@ -125,7 +125,7 @@ impl TestView {
 
         let leader_public_key = public_key;
 
-        let genesis_version = upgrade_lock.version_infallible(genesis_view).await;
+        let genesis_version = upgrade_lock.version_infallible(genesis_view);
 
         let payload_commitment = da_payload_commitment::<TestTypes>(
             &epoch_membership,
@@ -307,7 +307,7 @@ impl TestView {
             &metadata,
         );
 
-        let version = self.upgrade_lock.version_infallible(next_view).await;
+        let version = self.upgrade_lock.version_infallible(next_view);
         let membership = self
             .membership
             .membership_for_epoch(self.epoch_number)
@@ -490,7 +490,7 @@ impl TestView {
             _pd: PhantomData,
         };
 
-        let upgrade_lock = UpgradeLock::new(self.upgrade_lock.upgrade);
+        let upgrade_lock = UpgradeLock::new(self.upgrade_lock.upgrade());
 
         TestView {
             quorum_proposal,

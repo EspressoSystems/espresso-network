@@ -25,21 +25,21 @@ use tokio::spawn;
 use tracing::Instrument;
 
 use super::{
-    header::HeaderCallback, AvailabilityProvider, FetchRequest, Fetchable, Fetcher, Heights,
-    Notifiers, RangedFetchable, Storable,
+    AvailabilityProvider, FetchRequest, Fetchable, Fetcher, Heights, Notifiers, RangedFetchable,
+    Storable, header::HeaderCallback,
 };
 use crate::{
+    Header, Payload, QueryError, QueryResult,
     availability::{LeafId, LeafQueryData, QueryableHeader, QueryablePayload},
     data_source::{
-        storage::{
-            pruning::PrunedHeightStorage, AvailabilityStorage, NodeStorage,
-            UpdateAvailabilityStorage,
-        },
         VersionedDataSource,
+        storage::{
+            AvailabilityStorage, NodeStorage, UpdateAvailabilityStorage,
+            pruning::PrunedHeightStorage,
+        },
     },
-    fetching::{self, request, Callback},
+    fetching::{self, Callback, request},
     types::HeightIndexed,
-    Header, Payload, QueryError, QueryResult,
 };
 
 pub(super) type LeafFetcher<Types, S, P> =
@@ -252,15 +252,11 @@ pub(super) fn trigger_fetch_for_parent<Types, S, P>(
             match fetcher.storage.read().await {
                 Ok(mut tx) => {
                     // Don't bother fetching a pruned leaf.
-                    if let Ok(pruned_height) = tx.load_pruned_height().await {
-                        if pruned_height.is_some_and(|ph| height <= ph) {
-                            tracing::info!(
-                                height,
-                                ?pruned_height,
-                                "not fetching pruned parent leaf"
-                            );
-                            return;
-                        }
+                    if let Ok(pruned_height) = tx.load_pruned_height().await
+                        && pruned_height.is_some_and(|ph| height <= ph)
+                    {
+                        tracing::info!(height, ?pruned_height, "not fetching pruned parent leaf");
+                        return;
                     }
 
                     if tx.get_leaf(((height - 1) as usize).into()).await.is_ok() {

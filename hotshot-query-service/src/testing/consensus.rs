@@ -16,17 +16,18 @@ use alloy::primitives::U256;
 use async_lock::RwLock;
 use async_trait::async_trait;
 use futures::{
-    future::{join_all, Future},
+    future::{Future, join_all},
     stream::StreamExt,
 };
 use hotshot::{
+    HotShotInitializer, SystemContext,
     traits::implementations::{MasterMap, MemoryNetwork},
     types::{Event, SystemContextHandle},
-    HotShotInitializer, SystemContext,
 };
 use hotshot_example_types::{state_types::TestInstanceState, storage_types::TestStorage};
 use hotshot_testing::block_builder::{SimpleBuilderImplementation, TestBuilderImplementation};
 use hotshot_types::{
+    HotShotConfig, PeerConfig,
     consensus::ConsensusMetricsValue,
     data::EpochNumber,
     drb::INITIAL_DRB_RESULT,
@@ -35,26 +36,25 @@ use hotshot_types::{
     signature_key::BLSPubKey,
     storage_metrics::StorageMetricsValue,
     traits::{election::Membership, network::Topic, signature_key::SignatureKey as _},
-    HotShotConfig, PeerConfig,
 };
 use test_utils::reserve_tcp_port;
 use tokio::{
     runtime::Handle,
     task::{block_in_place, yield_now},
 };
-use tracing::{info_span, Instrument};
+use tracing::{Instrument, info_span};
 use url::Url;
-use versions::{Upgrade, VERSION_0_1};
+use versions::{MIN_SUPPORTED_VERSION, Upgrade};
 
 use super::mocks::{MockMembership, MockNodeImpl, MockTransaction, MockTypes};
 use crate::{
+    SignatureKey,
     availability::{AvailabilityDataSource, UpdateAvailabilityData},
     data_source::{FileSystemDataSource, SqlDataSource, VersionedDataSource},
     fetching::provider::NoFetching,
     node::NodeDataSource,
     status::{StatusDataSource, UpdateStatusData},
     task::BackgroundTask,
-    SignatureKey,
 };
 
 struct MockNode<D: DataSourceLifeCycle> {
@@ -154,9 +154,9 @@ impl<D: DataSourceLifeCycle + UpdateStatusData> MockNetwork<D> {
             stake_table_capacity: hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY,
             drb_difficulty: DIFFICULTY_LEVEL,
             drb_upgrade_difficulty: DIFFICULTY_LEVEL,
-            upgrade: Upgrade::trivial(VERSION_0_1),
         };
         update_config(&mut config);
+        let upgrade = Upgrade::trivial(MIN_SUPPORTED_VERSION);
 
         let nodes = join_all(
             priv_keys
@@ -215,7 +215,7 @@ impl<D: DataSourceLifeCycle + UpdateStatusData> MockNetwork<D> {
                             0,
                             0,
                             vec![],
-                            config.upgrade,
+                            upgrade,
                         )
                         .await
                         .unwrap();
@@ -226,6 +226,7 @@ impl<D: DataSourceLifeCycle + UpdateStatusData> MockNetwork<D> {
                             state_priv_keys[node_id].clone(),
                             node_id as u64,
                             config,
+                            upgrade,
                             memberships,
                             network,
                             init,

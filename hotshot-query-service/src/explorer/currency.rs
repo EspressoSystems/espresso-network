@@ -12,7 +12,7 @@
 
 use std::fmt::Display;
 
-use serde::{ser::SerializeStruct, Deserialize, Serialize, Serializer};
+use serde::{Deserialize, Serialize, Serializer, ser::SerializeStruct};
 
 use super::errors::ExplorerAPIError;
 

@@ -4,21 +4,22 @@ use std::{fmt, future::Future, pin::Pin, str::FromStr, time::Duration};
 
 use alloy::primitives::Address;
 use anyhow::Context;
-use espresso_types::{v0_3::AuthenticatedValidator, BackoffParams, SeqTypes};
+use espresso_types::{BackoffParams, SeqTypes, v0_3::AuthenticatedValidator};
 use futures::{
+    FutureExt, Sink, SinkExt, Stream, StreamExt,
     channel::mpsc::{self, SendError, Sender},
     future::{BoxFuture, Either},
-    pin_mut, FutureExt, Sink, SinkExt, Stream, StreamExt,
+    pin_mut,
 };
 use hotshot_query_service::{
     availability::{BlockQueryData, Leaf1QueryData},
     types::HeightIndexed,
 };
-use hotshot_types::{signature_key::BLSPubKey, PeerConfig};
+use hotshot_types::{PeerConfig, signature_key::BLSPubKey};
 use indexmap::IndexMap;
 use prometheus_parse::{Sample, Scrape};
 use serde::{Deserialize, Serialize};
-use tide_disco::{api::ApiError, socket::Connection, Api};
+use tide_disco::{Api, api::ApiError, socket::Connection};
 use tokio::{spawn, task::JoinHandle, time::timeout};
 use url::Url;
 use vbs::version::{StaticVersion, StaticVersionType, Version};

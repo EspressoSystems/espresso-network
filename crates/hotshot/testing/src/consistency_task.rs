@@ -25,7 +25,7 @@ use versions::{Upgrade, VERSION_0_0};
 use crate::{
     overall_safety_task::OverallSafetyPropertiesDescription,
     test_builder::TransactionValidator,
-    test_task::{spawn_timeout_task, TestEvent, TestResult, TestTaskState},
+    test_task::{TestEvent, TestResult, TestTaskState, spawn_timeout_task},
 };
 
 /// Map from views to leaves for a single node, allowing multiple leaves for each view (because the node may a priori send us multiple leaves for a given view).
@@ -74,13 +74,13 @@ async fn validate_node_map<TYPES: NodeType>(node_map: &NodeMapSanitized<TYPES>) 
     let mut view_decided = ViewNumber::new(0);
 
     for (grandparent, _parent, child) in leaf_triples {
-        if let Some(cert) = grandparent.upgrade_certificate() {
-            if cert.data.decide_by <= child.view_number() {
-                decided_upgrade_certificate = Some(cert);
-                view_decided = child.view_number();
+        if let Some(cert) = grandparent.upgrade_certificate()
+            && cert.data.decide_by <= child.view_number()
+        {
+            decided_upgrade_certificate = Some(cert);
+            view_decided = child.view_number();
 
-                break;
-            }
+            break;
         }
     }
 
@@ -101,8 +101,7 @@ async fn validate_node_map<TYPES: NodeType>(node_map: &NodeMapSanitized<TYPES>) 
         );
 
         child
-            .extends_upgrade(parent, &upgrade_lock.decided_upgrade_certificate)
-            .await
+            .extends_upgrade(parent, &upgrade_lock)
             .context(|e| error!("Leaf {child:?} does not extend its parent {parent:?}: {e}"))?;
 
         ensure!(
@@ -123,11 +122,7 @@ async fn validate_node_map<TYPES: NodeType>(node_map: &NodeMapSanitized<TYPES>) 
         }
 
         if child.view_number() == view_decided {
-            upgrade_lock
-                .decided_upgrade_certificate
-                .write()
-                .await
-                .clone_from(&decided_upgrade_certificate);
+            upgrade_lock.set_decided_upgrade_cert(decided_upgrade_certificate.clone());
         }
     }
 

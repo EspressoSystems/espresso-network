@@ -27,23 +27,23 @@ use hotshot_types::{
 use itertools::Itertools;
 use log::LevelFilter;
 use sqlx::{
+    ConnectOptions, Row,
     pool::PoolOptions,
     postgres::{PgConnectOptions, PgSslMode},
     sqlite::SqliteConnectOptions,
-    ConnectOptions,
 };
 
 use crate::{
+    Header, QueryError, QueryResult,
     availability::{QueryableHeader, QueryablePayload, VidCommonMetadata, VidCommonQueryData},
     data_source::{
+        VersionedDataSource,
         storage::pruning::{PruneStorage, PrunerCfg, PrunerConfig},
         update::Transaction as _,
-        VersionedDataSource,
     },
     metrics::PrometheusMetrics,
     node::BlockId,
     status::HasMetrics,
-    Header, QueryError, QueryResult,
 };
 pub extern crate sqlx;
 
@@ -54,10 +54,10 @@ mod transaction;
 
 pub use anyhow::Error;
 pub use db::{
-    syntax_helpers, BackendPoolConnection, BackendTransaction, DbBackend, SqlPool, SyntaxHelpers,
+    BackendPoolConnection, BackendTransaction, DbBackend, SqlPool, SyntaxHelpers, syntax_helpers,
 };
 pub use include_dir::include_dir;
-pub use queries::{query, query_as, QueryBuilder};
+pub use queries::{QueryBuilder, query, query_as};
 pub use refinery::Migration;
 pub use transaction::*;
 
@@ -1105,17 +1105,17 @@ impl PruneStorage for SqlStorage {
             pruner.target_height = target_height;
         };
 
-        if let Some(target_height) = target_height {
-            if height < target_height {
-                height = min(height + batch_size, target_height);
-                let mut tx = self.write().await?;
-                tx.delete_batch(state_tables, height).await?;
-                tx.commit().await.map_err(|e| QueryError::Error {
-                    message: format!("failed to commit {e}"),
-                })?;
-                pruner.pruned_height = Some(height);
-                return Ok(Some(height));
-            }
+        if let Some(target_height) = target_height
+            && height < target_height
+        {
+            height = min(height + batch_size, target_height);
+            let mut tx = self.write().await?;
+            tx.delete_batch(state_tables, height).await?;
+            tx.commit().await.map_err(|e| QueryError::Error {
+                message: format!("failed to commit {e}"),
+            })?;
+            pruner.pruned_height = Some(height);
+            return Ok(Some(height));
         }
 
         // If threshold is set, prune data exceeding minimum retention in batches
@@ -1141,23 +1141,22 @@ impl PruneStorage for SqlStorage {
                     pruner.minimum_retention_height = minimum_retention_height;
                 }
 
-                if let Some(min_retention_height) = minimum_retention_height {
-                    if (usage as f64 / threshold as f64) > (f64::from(max_usage) / 10000.0)
-                        && height < min_retention_height
-                    {
-                        height = min(height + batch_size, min_retention_height);
-                        let mut tx = self.write().await?;
-                        tx.delete_batch(state_tables, height).await?;
-                        tx.commit().await.map_err(|e| QueryError::Error {
-                            message: format!("failed to commit {e}"),
-                        })?;
+                if let Some(min_retention_height) = minimum_retention_height
+                    && (usage as f64 / threshold as f64) > (f64::from(max_usage) / 10000.0)
+                    && height < min_retention_height
+                {
+                    height = min(height + batch_size, min_retention_height);
+                    let mut tx = self.write().await?;
+                    tx.delete_batch(state_tables, height).await?;
+                    tx.commit().await.map_err(|e| QueryError::Error {
+                        message: format!("failed to commit {e}"),
+                    })?;
 
-                        self.vacuum().await?;
+                    self.vacuum().await?;
 
-                        pruner.pruned_height = Some(height);
+                    pruner.pruned_height = Some(height);
 
-                        return Ok(Some(height));
-                    }
+                    return Ok(Some(height));
                 }
             }
         }
@@ -1506,11 +1505,10 @@ pub mod testing {
             };
 
             let migration_sql = TestMerkleTreeMigration::create("test_tree", &cfg);
-            cfg = cfg.migrations(vec![Migration::unapplied(
-                "V101__create_test_merkle_tree_table.sql",
-                &migration_sql,
-            )
-            .unwrap()]);
+            cfg = cfg.migrations(vec![
+                Migration::unapplied("V101__create_test_merkle_tree_table.sql", &migration_sql)
+                    .unwrap(),
+            ]);
 
             cfg
         }
@@ -1705,14 +1703,14 @@ mod test {
         data::{QuorumProposal, ViewNumber},
         simple_vote::QuorumData,
         traits::{
-            block_contents::{BlockHeader, GENESIS_VID_NUM_STORAGE_NODES},
             EncodeBytes,
+            block_contents::{BlockHeader, GENESIS_VID_NUM_STORAGE_NODES},
         },
         vid::advz::advz_scheme,
     };
     use jf_advz::VidScheme;
     use jf_merkle_tree_compat::{
-        prelude::UniversalMerkleTree, MerkleTreeScheme, ToTraversalPath, UniversalMerkleTreeScheme,
+        MerkleTreeScheme, ToTraversalPath, UniversalMerkleTreeScheme, prelude::UniversalMerkleTree,
     };
     use rstest::rstest;
     use rstest_reuse::{self, apply, template};
@@ -1721,9 +1719,9 @@ mod test {
     use super::{testing::TmpDb, *};
     use crate::{
         availability::LeafQueryData,
-        data_source::storage::{pruning::PrunedHeightStorage, UpdateAvailabilityStorage},
+        data_source::storage::{UpdateAvailabilityStorage, pruning::PrunedHeightStorage},
         merklized_state::{MerklizedState, UpdateStateData},
-        testing::mocks::{MockHeader, MockMerkleTree, MockPayload, MockTypes, MOCK_UPGRADE},
+        testing::mocks::{MOCK_UPGRADE, MockHeader, MockMerkleTree, MockPayload, MockTypes},
     };
 
     #[template]
@@ -2098,14 +2096,16 @@ mod test {
         let storage = SqlStorage::connect(cfg, StorageConnectionType::Query)
             .await
             .unwrap();
-        assert!(storage
-            .read()
-            .await
-            .unwrap()
-            .load_pruned_height()
-            .await
-            .unwrap()
-            .is_none());
+        assert!(
+            storage
+                .read()
+                .await
+                .unwrap()
+                .load_pruned_height()
+                .await
+                .unwrap()
+                .is_none()
+        );
         for height in [10, 20, 30] {
             let mut tx = storage.write().await.unwrap();
             tx.save_pruned_height(height).await.unwrap();

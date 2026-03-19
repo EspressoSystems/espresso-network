@@ -71,6 +71,26 @@ impl ResourceSyncStatus {
     pub fn is_fully_synced(&self) -> bool {
         self.missing == 0
     }
+
+    /// Extend this [`ResourceSyncStatus`] to additionally cover the range covered by `other`.
+    pub fn extend(&mut self, other: Self) {
+        self.missing += other.missing;
+
+        let mut ranges = other.ranges.into_iter();
+
+        // Check if the last range of `self` and the first range of `other` can be combined.
+        if let Some(last) = self.ranges.last_mut()
+            && let Some(next) = ranges.next()
+        {
+            if last.status == next.status && last.end == next.start {
+                last.end = next.end;
+            } else {
+                self.ranges.push(next);
+            }
+        }
+
+        self.ranges.extend(ranges);
+    }
 }
 
 /// [`SyncStatus`] for the entire database.
