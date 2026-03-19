@@ -119,7 +119,7 @@ async fn memory_network_direct_queue() {
     // Send messages
     for sent_message in first_messages {
         let view = sent_message.view_number();
-        let serialized_message = upgrade_lock.serialize(&sent_message).await.unwrap();
+        let serialized_message = upgrade_lock.serialize(&sent_message).unwrap();
         network1
             .direct_message(view, serialized_message.clone(), pub_key_2)
             .await
@@ -129,7 +129,7 @@ async fn memory_network_direct_queue() {
             .await
             .expect("Failed to receive message");
         let (deserialized_message, _version) =
-            upgrade_lock.deserialize(&recv_message).await.unwrap();
+            upgrade_lock.deserialize(&recv_message).unwrap();
         assert!(timeout(Duration::from_secs(1), network2.recv_message())
             .await
             .is_err());
@@ -142,7 +142,7 @@ async fn memory_network_direct_queue() {
     // Send messages
     for sent_message in second_messages {
         let view = sent_message.view_number();
-        let serialized_message = upgrade_lock.serialize(&sent_message).await.unwrap();
+        let serialized_message = upgrade_lock.serialize(&sent_message).unwrap();
         network2
             .direct_message(view, serialized_message.clone(), pub_key_1)
             .await
@@ -152,7 +152,7 @@ async fn memory_network_direct_queue() {
             .await
             .expect("Failed to receive message");
         let (deserialized_message, _version) =
-            upgrade_lock.deserialize(&recv_message).await.unwrap();
+            upgrade_lock.deserialize(&recv_message).unwrap();
         assert!(timeout(Duration::from_secs(1), network1.recv_message())
             .await
             .is_err());
@@ -180,7 +180,7 @@ async fn memory_network_broadcast_queue() {
     // Send messages
     for sent_message in first_messages {
         let view = sent_message.view_number();
-        let serialized_message = upgrade_lock.serialize(&sent_message).await.unwrap();
+        let serialized_message = upgrade_lock.serialize(&sent_message).unwrap();
         network1
             .broadcast_message(view, serialized_message.clone(), Topic::Da, BroadcastDelay::None)
             .await
@@ -190,7 +190,7 @@ async fn memory_network_broadcast_queue() {
             .await
             .expect("Failed to receive message");
         let (deserialized_message, _version) =
-            upgrade_lock.deserialize(&recv_message).await.unwrap();
+            upgrade_lock.deserialize(&recv_message).unwrap();
         assert!(timeout(Duration::from_secs(1), network2.recv_message())
             .await
             .is_err());
@@ -203,7 +203,7 @@ async fn memory_network_broadcast_queue() {
     // Send messages
     for sent_message in second_messages {
         let view = sent_message.view_number();
-        let serialized_message = upgrade_lock.serialize(&sent_message).await.unwrap();
+        let serialized_message = upgrade_lock.serialize(&sent_message).unwrap();
         network2
             .broadcast_message(
                 view,
@@ -218,7 +218,7 @@ async fn memory_network_broadcast_queue() {
             .await
             .expect("Failed to receive message");
         let (deserialized_message, _version) =
-            upgrade_lock.deserialize(&recv_message).await.unwrap();
+            upgrade_lock.deserialize(&recv_message).unwrap();
         assert!(timeout(Duration::from_secs(1), network1.recv_message())
             .await
             .is_err());
@@ -253,7 +253,7 @@ async fn memory_network_test_in_flight_message_count() {
 
     for (count, message) in messages.iter().enumerate() {
         let view = message.view_number();
-        let serialized_message = upgrade_lock.serialize(message).await.unwrap();
+        let serialized_message = upgrade_lock.serialize(message).unwrap();
 
         network1
             .direct_message(view, serialized_message.clone(), pub_key_2)

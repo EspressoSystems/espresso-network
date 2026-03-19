@@ -302,7 +302,6 @@ impl<TYPES: NodeType> LightClientStateUpdateVoteAccumulator<TYPES> {
         if self
             .upgrade_lock
             .proposal2_version(ViewNumber::new(vote.light_client_state.view_number))
-            .await
             && !<TYPES::StateSignatureKey as LCV3StateSignatureKey>::verify_state_sig(
                 &state_ver_key,
                 &vote.signature,

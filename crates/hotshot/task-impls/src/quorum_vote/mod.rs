@@ -275,7 +275,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static> VoteDependencyHand
 
         let mut maybe_current_epoch_vid_share = None;
         // If this is an epoch transition block, we might need two VID shares.
-        if self.upgrade_lock.epochs_enabled(leaf.view_number()).await
+        if self.upgrade_lock.epochs_enabled(leaf.view_number())
             && is_epoch_transition(leaf.block_header().block_number(), self.epoch_height)
         {
             let current_epoch = option_epoch_from_block_number(

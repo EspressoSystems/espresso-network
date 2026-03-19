@@ -125,7 +125,7 @@ impl TestView {
 
         let leader_public_key = public_key;
 
-        let genesis_version = upgrade_lock.version_infallible(genesis_view).await;
+        let genesis_version = upgrade_lock.version_infallible(genesis_view);
 
         let payload_commitment = da_payload_commitment::<TestTypes>(
             &epoch_membership,
@@ -307,7 +307,7 @@ impl TestView {
             &metadata,
         );
 
-        let version = self.upgrade_lock.version_infallible(next_view).await;
+        let version = self.upgrade_lock.version_infallible(next_view);
         let membership = self
             .membership
             .membership_for_epoch(self.epoch_number)
@@ -490,7 +490,7 @@ impl TestView {
             _pd: PhantomData,
         };
 
-        let upgrade_lock = UpgradeLock::new(self.upgrade_lock.upgrade);
+        let upgrade_lock = UpgradeLock::new(self.upgrade_lock.upgrade());
 
         TestView {
             quorum_proposal,

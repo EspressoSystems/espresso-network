@@ -17,7 +17,6 @@ use std::{
     time::Duration,
 };
 
-use async_lock::RwLock;
 use bincode::Options;
 use committable::{Commitment, CommitmentBoundsArkless, Committable, RawCommitmentBuilder};
 use hotshot_utils::anytrace::*;
@@ -573,8 +572,8 @@ impl<TYPES: NodeType> VidDisperse<TYPES> {
         metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
         upgrade_lock: &UpgradeLock<TYPES>,
     ) -> Result<VidDisperseAndDuration<TYPES>> {
-        let epochs_enabled = upgrade_lock.epochs_enabled(view).await;
-        let upgraded_vid2 = upgrade_lock.upgraded_vid2(view).await;
+        let epochs_enabled = upgrade_lock.epochs_enabled(view);
+        let upgraded_vid2 = upgrade_lock.upgraded_vid2(view);
         if upgraded_vid2 {
             VidDisperse2::calculate_vid_disperse(
                 payload,
@@ -1142,7 +1141,7 @@ impl<TYPES: NodeType> QuorumProposal2<TYPES> {
         epoch_height: u64,
     ) -> Result<()> {
         let calculated_epoch = option_epoch_from_block_number(
-            upgrade_lock.epochs_enabled(self.view_number()).await,
+            upgrade_lock.epochs_enabled(self.view_number()),
             self.block_header.block_number(),
             epoch_height,
         );
@@ -1659,11 +1658,7 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
     /// # Errors
     /// Returns an error if the certificates are not identical, or that when we no longer see a
     /// cert, it's for the right reason.
-    pub async fn extends_upgrade(
-        &self,
-        parent: &Self,
-        decided_upgrade_certificate: &Arc<RwLock<Option<UpgradeCertificate<TYPES>>>>,
-    ) -> Result<()> {
+    pub fn extends_upgrade(&self, parent: &Self, upgrade: &UpgradeLock<TYPES>) -> Result<()> {
         match (self.upgrade_certificate(), parent.upgrade_certificate()) {
             // Easiest cases are:
             //   - no upgrade certificate on either: this is the most common case, and is always fine.
@@ -1673,7 +1668,7 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
             //    - no longer care because we have passed new_version_first_view, or
             //    - no longer care because we have passed `decide_by` without deciding the certificate.
             (None, Some(parent_cert)) => {
-                let decided_upgrade_certificate_read = decided_upgrade_certificate.read().await;
+                let decided_upgrade_certificate_read = upgrade.decided_upgrade_cert();
                 ensure!(
                     self.view_number() > parent_cert.data.new_version_first_view
                         || (self.view_number() > parent_cert.data.decide_by
@@ -1889,7 +1884,7 @@ impl<TYPES: NodeType> QuorumCertificate2<TYPES> {
         let genesis_view = ViewNumber::genesis();
 
         let genesis_leaf = Leaf2::genesis(validated_state, instance_state, upgrade.base).await;
-        let block_number = if upgrade_lock.epochs_enabled(genesis_view).await {
+        let block_number = if upgrade_lock.epochs_enabled(genesis_view) {
             Some(genesis_leaf.height())
         } else {
             None
@@ -2046,11 +2041,7 @@ impl<TYPES: NodeType> Leaf<TYPES> {
     /// # Errors
     /// Returns an error if the certificates are not identical, or that when we no longer see a
     /// cert, it's for the right reason.
-    pub async fn extends_upgrade(
-        &self,
-        parent: &Self,
-        decided_upgrade_certificate: &Arc<RwLock<Option<UpgradeCertificate<TYPES>>>>,
-    ) -> Result<()> {
+    pub fn extends_upgrade(&self, parent: &Self, upgrade: &UpgradeLock<TYPES>) -> Result<()> {
         match (self.upgrade_certificate(), parent.upgrade_certificate()) {
             // Easiest cases are:
             //   - no upgrade certificate on either: this is the most common case, and is always fine.
@@ -2060,7 +2051,7 @@ impl<TYPES: NodeType> Leaf<TYPES> {
             //    - no longer care because we have passed new_version_first_view, or
             //    - no longer care because we have passed `decide_by` without deciding the certificate.
             (None, Some(parent_cert)) => {
-                let decided_upgrade_certificate_read = decided_upgrade_certificate.read().await;
+                let decided_upgrade_certificate_read = upgrade.decided_upgrade_cert();
                 ensure!(
                     self.view_number() > parent_cert.data.new_version_first_view
                         || (self.view_number() > parent_cert.data.decide_by

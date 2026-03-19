@@ -218,7 +218,6 @@ async fn init_consensus(
         stake_table_capacity: hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY,
         drb_difficulty: 0,
         drb_upgrade_difficulty: 0,
-        upgrade: MOCK_UPGRADE,
     };
 
     let nodes = join_all(priv_keys.into_iter().zip(data_sources).enumerate().map(
@@ -263,6 +262,7 @@ async fn init_consensus(
                     state_private_keys[node_id].clone(),
                     node_id as u64,
                     config,
+                    MOCK_UPGRADE,
                     coordinator,
                     network,
                     HotShotInitializer::from_genesis(

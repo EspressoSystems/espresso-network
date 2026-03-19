@@ -101,8 +101,7 @@ async fn validate_node_map<TYPES: NodeType>(node_map: &NodeMapSanitized<TYPES>) 
         );
 
         child
-            .extends_upgrade(parent, &upgrade_lock.decided_upgrade_certificate)
-            .await
+            .extends_upgrade(parent, &upgrade_lock)
             .context(|e| error!("Leaf {child:?} does not extend its parent {parent:?}: {e}"))?;
 
         ensure!(
@@ -123,11 +122,7 @@ async fn validate_node_map<TYPES: NodeType>(node_map: &NodeMapSanitized<TYPES>) 
         }
 
         if child.view_number() == view_decided {
-            upgrade_lock
-                .decided_upgrade_certificate
-                .write()
-                .await
-                .clone_from(&decided_upgrade_certificate);
+            upgrade_lock.set_decided_upgrade_cert(decided_upgrade_certificate.clone());
         }
     }
 

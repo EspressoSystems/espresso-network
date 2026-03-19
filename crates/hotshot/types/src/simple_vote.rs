@@ -309,7 +309,7 @@ impl<TYPES: NodeType, DATA: Voteable<TYPES>> VersionedVoteData<TYPES, DATA> {
         view: ViewNumber,
         upgrade_lock: &UpgradeLock<TYPES>,
     ) -> Result<Self> {
-        let version = upgrade_lock.version(view).await?;
+        let version = upgrade_lock.version(view)?;
 
         Ok(Self {
             data,
@@ -327,7 +327,7 @@ impl<TYPES: NodeType, DATA: Voteable<TYPES>> VersionedVoteData<TYPES, DATA> {
         view: ViewNumber,
         upgrade_lock: &UpgradeLock<TYPES>,
     ) -> Self {
-        let version = upgrade_lock.version_infallible(view).await;
+        let version = upgrade_lock.version_infallible(view);
 
         Self {
             data,
