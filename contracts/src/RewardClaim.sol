@@ -14,10 +14,10 @@ import {
 import {
     ReentrancyGuardUpgradeable
 } from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
-import "./LightClientV3.sol";
-import "./EspTokenV2.sol";
-import "./libraries/RewardMerkleTreeVerifier.sol";
-import "./interfaces/IRewardClaim.sol";
+import { LightClientV3 } from "./LightClientV3.sol";
+import { EspTokenV2 } from "./EspTokenV2.sol";
+import { RewardMerkleTreeVerifier } from "./libraries/RewardMerkleTreeVerifier.sol";
+import { IRewardClaim } from "./interfaces/IRewardClaim.sol";
 
 /// @title RewardClaim - Espresso Reward Claim Contract
 /// @notice Allows validators and delegators to claim ESP token rewards based on cryptographic
