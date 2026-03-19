@@ -994,19 +994,14 @@ impl<TYPES: NodeType> QuorumProposal2<TYPES> {
         let entries = StakeTableEntries::<TYPES>::from(stake_table.stake_table().await).0;
         let threshold = stake_table.success_threshold().await;
         self.justify_qc
-            .is_valid_cert(&entries, threshold, upgrade_lock)
-            .await?;
+            .is_valid_cert(&entries, threshold, upgrade_lock)?;
         let view_change_view = match &self.view_change_evidence {
             Some(ViewChangeEvidence2::Timeout(timeout_cert)) => {
-                timeout_cert
-                    .is_valid_cert(&entries, threshold, upgrade_lock)
-                    .await?;
+                timeout_cert.is_valid_cert(&entries, threshold, upgrade_lock)?;
                 Some(timeout_cert.view_number() + 1)
             },
             Some(ViewChangeEvidence2::ViewSync(view_sync_cert)) => {
-                view_sync_cert
-                    .is_valid_cert(&entries, threshold, upgrade_lock)
-                    .await?;
+                view_sync_cert.is_valid_cert(&entries, threshold, upgrade_lock)?;
                 Some(view_sync_cert.view_number())
             },
             _ => None,
@@ -1855,8 +1850,7 @@ impl<TYPES: NodeType> QuorumCertificate<TYPES> {
         };
 
         let versioned_data =
-            VersionedVoteData::<_, _>::new_infallible(data.clone(), genesis_view, &upgrade_lock)
-                .await;
+            VersionedVoteData::<_, _>::new_infallible(data.clone(), genesis_view, &upgrade_lock);
 
         let bytes: [u8; 32] = versioned_data.commit().into();
 
@@ -1896,8 +1890,7 @@ impl<TYPES: NodeType> QuorumCertificate2<TYPES> {
         };
 
         let versioned_data =
-            VersionedVoteData::<_, _>::new_infallible(data.clone(), genesis_view, &upgrade_lock)
-                .await;
+            VersionedVoteData::<_, _>::new_infallible(data.clone(), genesis_view, &upgrade_lock);
 
         let bytes: [u8; 32] = versioned_data.commit().into();
 

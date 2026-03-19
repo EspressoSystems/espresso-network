@@ -84,7 +84,7 @@ pub trait Certificate<TYPES: NodeType, T>: HasViewNumber {
         stake_table: &[<TYPES::SignatureKey as SignatureKey>::StakeTableEntry],
         threshold: U256,
         upgrade_lock: &UpgradeLock<TYPES>,
-    ) -> impl std::future::Future<Output = Result<()>>;
+    ) -> Result<()>;
     /// Get the list of signers given a certificate.
     fn signers(
         &self,
@@ -116,7 +116,7 @@ pub trait Certificate<TYPES: NodeType, T>: HasViewNumber {
     fn data_commitment(
         &self,
         upgrade_lock: &UpgradeLock<TYPES>,
-    ) -> impl std::future::Future<Output = Result<Commitment<VersionedVoteData<TYPES, Self::Voteable>>>>;
+    ) -> Result<Commitment<VersionedVoteData<TYPES, Self::Voteable>>>;
 }
 /// Mapping of vote commitment to signatures and bitvec
 type SignersMap<COMMITMENT, KEY> = HashMap<
@@ -172,9 +172,7 @@ impl<
             vote.date().clone(),
             vote.view_number(),
             &self.upgrade_lock,
-        )
-        .await
-        {
+        ) {
             Ok(data) => data.commit(),
             Err(e) => {
                 tracing::warn!("Failed to generate versioned vote data: {e}");

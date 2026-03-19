@@ -192,12 +192,10 @@ pub async fn build_cert<
         private_key,
         upgrade_lock,
     )
-    .await
     .expect("Failed to sign data!");
 
     let vote_commitment =
         VersionedVoteData::new(vote.date().clone(), vote.view_number(), upgrade_lock)
-            .await
             .expect("Failed to create VersionedVoteData!")
             .commit();
 
@@ -259,7 +257,6 @@ pub async fn build_assembled_sig<
             &private_key_i,
             upgrade_lock,
         )
-        .await
         .expect("Failed to sign data!");
         let original_signature: <TYPES::SignatureKey as SignatureKey>::PureAssembledSignatureType =
             vote.signature();

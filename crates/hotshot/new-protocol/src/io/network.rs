@@ -60,7 +60,7 @@ impl<TYPES: NodeType, N: ConnectedNetwork<TYPES::SignatureKey>> Network<TYPES, N
         todo!()
     }
     async fn handle_message(&self, message: Vec<u8>) -> Result<()> {
-        let message = self.deserialize(message).await?;
+        let message = self.deserialize(message)?;
         match message.message_type {
             MessageType::Consensus(consensus_message) => {
                 self.handle_consensus_message(consensus_message).await;
@@ -83,10 +83,10 @@ impl<TYPES: NodeType, N: ConnectedNetwork<TYPES::SignatureKey>> Network<TYPES, N
     async fn handle_external_message(&self, external_message: Vec<u8>) {
         todo!()
     }
-    async fn deserialize(&self, message: Vec<u8>) -> Result<Message<TYPES>> {
+    fn deserialize(&self, message: Vec<u8>) -> Result<Message<TYPES>> {
         // Deserialize the message and get the version
         let (deserialized_message, version): (Message<TYPES>, Version) =
-            match self.upgrade_lock.deserialize(&message).await {
+            match self.upgrade_lock.deserialize(&message) {
                 Ok(message) => message,
                 Err(e) => {
                     tracing::error!("Failed to deserialize message: {:?}", e);
@@ -109,10 +109,9 @@ impl<TYPES: NodeType, N: ConnectedNetwork<TYPES::SignatureKey>> Network<TYPES, N
         }
         Ok(deserialized_message)
     }
-    async fn serialize(&self, message: Message<TYPES>) -> Result<Vec<u8>> {
+    fn serialize(&self, message: Message<TYPES>) -> Result<Vec<u8>> {
         self.upgrade_lock
             .serialize(&message)
-            .await
             .context("Failed to serialize message")
     }
 }

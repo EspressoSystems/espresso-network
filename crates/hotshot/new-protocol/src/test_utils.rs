@@ -102,11 +102,13 @@ impl TestView {
     }
 
     /// Build a ConsensusEvent::TimeoutCertificate for this view.
+    #[allow(dead_code)]
     pub fn timeout_event(&self) -> ConsensusEvent<TestTypes> {
         ConsensusEvent::TimeoutCertificate(self.timeout_cert.clone())
     }
 
     /// Build a ConsensusEvent::ViewSyncCertificate for this view.
+    #[allow(dead_code)]
     pub fn view_sync_event(&self) -> ConsensusEvent<TestTypes> {
         ConsensusEvent::ViewSyncCertificate(self.view_sync_cert.clone())
     }

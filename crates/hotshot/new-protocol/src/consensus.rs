@@ -335,7 +335,6 @@ impl<TYPES: NodeType> Consensus<TYPES> {
             &self.private_key,
             &upgrade_lock::<TYPES>(),
         )
-        .await
         .unwrap();
         let vote = Vote1 {
             vote: inner_vote,
@@ -396,7 +395,6 @@ impl<TYPES: NodeType> Consensus<TYPES> {
             &self.private_key,
             &upgrade_lock::<TYPES>(),
         )
-        .await
         .unwrap();
         self.coordinator_handle
             .send_message(RequestMessageSender::Vote2(vote))
@@ -487,12 +485,8 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         let safety_check = proposal
             .justify_qc
             .data_commitment(&upgrade_lock::<TYPES>())
-            .await
             .ok()?
-            == locked_qc
-                .data_commitment(&upgrade_lock::<TYPES>())
-                .await
-                .ok()?;
+            == locked_qc.data_commitment(&upgrade_lock::<TYPES>()).ok()?;
         if !safety_check && !liveness_check {
             return None;
         }
@@ -511,7 +505,6 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         let entries = StakeTableEntries::<TYPES>::from(stake_table.stake_table().await).0;
         let threshold = stake_table.success_threshold().await;
         cert.is_valid_cert(&entries, threshold, &upgrade_lock::<TYPES>())
-            .await
             .context("invalid threshold signature")
     }
 
