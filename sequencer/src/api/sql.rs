@@ -4,10 +4,11 @@ use anyhow::{Context, bail, ensure};
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
 use espresso_types::{
-    BlockMerkleTree, FeeAccount, FeeMerkleTree, Leaf2, NodeState, ValidatedState, get_l1_deposits,
+    BlockMerkleTree, ChainConfig, FeeAccount, FeeMerkleTree, Leaf2, NodeState, ValidatedState,
+    get_l1_deposits,
     v0_1::IterableFeeInfo,
     v0_3::{
-        ChainConfig, REWARD_MERKLE_TREE_V1_HEIGHT, RewardAccountProofV1, RewardAccountQueryDataV1,
+        REWARD_MERKLE_TREE_V1_HEIGHT, RewardAccountProofV1, RewardAccountQueryDataV1,
         RewardAccountV1, RewardMerkleTreeV1,
     },
     v0_4::{PermittedRewardMerkleTreeV2, RewardAccountV2, RewardMerkleTreeV2},

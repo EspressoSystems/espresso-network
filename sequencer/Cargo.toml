@@ -109,6 +109,7 @@ vid = { workspace = true }
 [build-dependencies]
 anyhow = { workspace = true }
 vergen = { workspace = true }
+vergen-gitcl = { workspace = true }
 
 [dev-dependencies]
 escargot = { workspace = true }
