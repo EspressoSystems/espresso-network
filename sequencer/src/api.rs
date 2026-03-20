@@ -5127,6 +5127,7 @@ mod test {
         wait_for_epochs(&mut events, EPOCH_HEIGHT, 4).await;
 
         // start the node again.
+        tracing::info!("restarting node");
         let node_0 = opt
             .serve(|metrics, consumer, storage| {
                 let cfg = network.cfg.clone();
@@ -5218,12 +5219,23 @@ mod test {
         node_0.shutdown_consensus().await;
         let decided_leaf = node_0.decided_leaf().await;
         let state = node_0.decided_state().await;
+        tracing::info!(
+            height = decided_leaf.height(),
+            ?decided_leaf,
+            ?state,
+            "final state"
+        );
 
         state
             .block_merkle_tree
             .lookup(decided_leaf.height() - 1)
             .expect_ok()
-            .expect("block state not found");
+            .unwrap_or_else(|err| {
+                panic!(
+                    "block state not found ({err:#}):\n{:#?}",
+                    state.block_merkle_tree
+                )
+            });
 
         Ok(())
     }

@@ -102,7 +102,7 @@ use crate::{
         PayloadQueryData, QueryableHeader, QueryablePayload, TransactionHash,
         UpdateAvailabilityData, VidCommonMetadata, VidCommonQueryData,
     },
-    data_source::fetching::vid::VidCommonRangeFetcher,
+    data_source::fetching::{leaf::RangeRequest, vid::VidCommonRangeFetcher},
     explorer::{self, ExplorerDataSource},
     fetching::{self, Provider, request},
     merklized_state::{
@@ -1460,24 +1460,33 @@ where
                     }
 
                     tracing::info!(?range, "fetching missing block range");
-                    self.clone()
+
+                    // Break the range into manageable, aligned chunks (which improves cacheability
+                    // for the upstream server).
+                    //
+                    // We iterate in reverse order because leaves are inherently fetched in reverse,
+                    // since we cannot (actively) fetch a leaf until we have the subsequent leaf,
+                    // which tells us what the hash of its parent should be.
+                    for chunk in range_chunks_aligned_rev(
+                        Bound::Included(range.start),
+                        range.end - 1,
+                        chunk_size,
+                    ) {
+                        tracing::info!(?chunk, "fetching missing block chunk");
+
                         // Fetching the payload metadata is enough to trigger an active fetch of the
                         // corresponding leaf and the full block if they are missing.
-                        //
-                        // We iterate in reverse order because leaves are inherently fetched in
-                        // reverse, since we cannot (actively) fetch a leaf until we have the
-                        // subsequent leaf, which tells us what the hash of its parent should be.
-                        .get_range_with_chunk_size_rev::<PayloadMetadata<Types>>(
-                            chunk_size,
-                            Bound::Included(range.start),
-                            range.end - 1,
-                        )
-                        .then(|fetch| async move {fetch.await;})
-                        .collect::<()>()
+                        self.get::<Vec<BlockQueryData<Types>>>(RangeRequest {
+                            start: chunk.start as u64,
+                            end: chunk.end as u64,
+                        })
+                        .await
                         .await;
-                    metrics
-                        .missing_blocks
-                        .update((range.start as i64) - (range.end as i64));
+
+                        metrics
+                            .missing_blocks
+                            .update((chunk.start as i64) - (chunk.end as i64));
+                    }
                 }
 
                 // Do the same for VID.
@@ -1488,20 +1497,23 @@ where
                     }
 
                     tracing::info!(?range, "fetching missing VID range");
-                    self.clone()
-                        .get_range_with_chunk_size_rev::<VidCommonMetadata<Types>>(
-                            chunk_size,
-                            Bound::Included(range.start),
-                            range.end - 1,
-                        )
-                        .then(|fetch| async move {
-                            fetch.await;
+                    for chunk in range_chunks_aligned_rev(
+                        Bound::Included(range.start),
+                        range.end - 1,
+                        chunk_size,
+                    ) {
+                        tracing::info!(?chunk, "fetching missing VID chunk");
+                        self.get::<Vec<VidCommonQueryData<Types>>>(RangeRequest {
+                            start: chunk.start as u64,
+                            end: chunk.end as u64,
                         })
-                        .collect::<()>()
+                        .await
                         .await;
-                    metrics
-                        .missing_vid
-                        .update((range.start as i64) - (range.end as i64));
+
+                        metrics
+                            .missing_vid
+                            .update((chunk.start as i64) - (chunk.end as i64));
+                    }
                 }
 
                 tracing::info!("completed proactive scan, will scan again in {interval:?}");
@@ -2173,16 +2185,7 @@ where
     R: RangeBounds<usize>,
 {
     // Transform range to explicit start (inclusive) and end (exclusive) bounds.
-    let mut start = match range.start_bound() {
-        Bound::Included(i) => *i,
-        Bound::Excluded(i) => *i + 1,
-        Bound::Unbounded => 0,
-    };
-    let end = match range.end_bound() {
-        Bound::Included(i) => *i + 1,
-        Bound::Excluded(i) => *i,
-        Bound::Unbounded => usize::MAX,
-    };
+    let Range { mut start, end } = range_to_bounds(range);
     std::iter::from_fn(move || {
         let chunk_end = min(start + chunk_size, end);
         if chunk_end == start {
@@ -2195,14 +2198,59 @@ where
     })
 }
 
+/// Break a range into fixed-alignment chunks.
+///
+/// Each chunk is of size `alignment`, and starts on a multiple of `alignment`, with the possible
+/// exception of the first chunk (which may be misaligned and small) and the last (which may be
+/// small).
+#[allow(dead_code)]
+fn range_chunks_aligned<R>(range: R, alignment: usize) -> impl Iterator<Item = Range<usize>>
+where
+    R: RangeBounds<usize>,
+{
+    // Transform range to explicit start (inclusive) and end (exclusive) bounds.
+    let Range { mut start, end } = range_to_bounds(range);
+
+    // If necessary, generate a partial first chunk to force the remaining chunks into alignment.
+    let first = if start.is_multiple_of(alignment) {
+        None
+    } else {
+        // The partial first chunk ends at the next multiple of the alignment, or at the end of the
+        // overall range, whichever comes first.
+        let chunk_end = min(start.next_multiple_of(alignment), end);
+        let chunk = start..chunk_end;
+
+        // Start the series of aligned chunks at the end of the partial first chunk.
+        start = chunk_end;
+        Some(chunk)
+    };
+
+    first.into_iter().chain(range_chunks(start..end, alignment))
+}
+
+/// Transform a range to explicit start (inclusive) and end (exclusive) bounds.
+fn range_to_bounds(range: impl RangeBounds<usize>) -> Range<usize> {
+    let start = match range.start_bound() {
+        Bound::Included(i) => *i,
+        Bound::Excluded(i) => *i + 1,
+        Bound::Unbounded => 0,
+    };
+    let end = match range.end_bound() {
+        Bound::Included(i) => *i + 1,
+        Bound::Excluded(i) => *i,
+        Bound::Unbounded => usize::MAX,
+    };
+    Range { start, end }
+}
+
 /// Break a range into fixed-size chunks, starting from the end and moving towards the start.
 ///
 /// While the chunks are yielded in reverse order, from `end` to `start`, each individual chunk is
 /// in the usual ascending order. That is, the first chunk ends with `end` and the last chunk starts
 /// with `start`.
 ///
-/// Note that unlike [`range_chunks_rev`], which accepts any range and yields an infinite iterator
-/// if the range has no upper bound, this function requires there to be a defined upper bound,
+/// Note that unlike [`range_chunks`], which accepts any range and yields an infinite iterator if
+/// the range has no upper bound, this function requires there to be a defined upper bound,
 /// otherwise we don't know where the reversed iterator should _start_. The `end` bound given here
 /// is inclusive; i.e. the end of the first chunk yielded by the stream will be exactly `end`.
 fn range_chunks_rev(
@@ -2229,6 +2277,56 @@ fn range_chunks_rev(
         end = chunk_start;
         Some(chunk)
     })
+}
+
+/// Break a range into fixed-alignment chunks, starting from the end and moving towards the start.
+///
+/// Each chunk is of size `alignment`, and starts on a multiple of `alignment` (that is, the lower
+/// bound an _exclusive_ upper bound of each chunk are multiples of `alignment`), with the possible
+/// exception of the first chunk (the last chunk in numerical order, which may be small) and the
+/// last (which may be misaligned and small).
+///
+/// While the chunks are yielded in reverse order, from `end` to `start`, each individual chunk is
+/// in the usual ascending order. That is, the first chunk ends with `end` and the last chunk starts
+/// with `start`.
+///
+/// Note that unlike [`range_chunks_aligned`], which accepts any range and yields an infinite
+/// iterator if the range has no upper bound, this function requires there to be a defined upper
+/// bound, otherwise we don't know where the reversed iterator should _start_. The `end` bound given
+/// here is inclusive; i.e. the end of the first chunk yielded by the stream will be exactly `end`.
+fn range_chunks_aligned_rev(
+    start: Bound<usize>,
+    end: usize,
+    alignment: usize,
+) -> impl Iterator<Item = Range<usize>> {
+    // Transform the start bound to be inclusive.
+    let start = match start {
+        Bound::Included(i) => i,
+        Bound::Excluded(i) => i + 1,
+        Bound::Unbounded => 0,
+    };
+    // Transform the end bound to be exclusive.
+    let mut end = end + 1;
+
+    // If necessary, generate a partial first chunk to force the remaining chunks into alignment.
+    let first = if end.is_multiple_of(alignment) {
+        None
+    } else {
+        // The partial first chunk starts at the previous multiple of the alignment, or at the start
+        // of the overall range, whichever comes first.
+        let next_multiple = end.next_multiple_of(alignment);
+        let prev_multiple = next_multiple - alignment;
+        let chunk_start = max(prev_multiple, start);
+        let chunk = chunk_start..end;
+
+        // Start the reverse series of aligned chunks at the start of the partial first chunk.
+        end = chunk_start;
+        Some(chunk)
+    };
+
+    first
+        .into_iter()
+        .chain(range_chunks_rev(Bound::Included(start), end - 1, alignment))
 }
 
 trait ResultExt<T, E> {
@@ -2400,6 +2498,32 @@ mod test {
     }
 
     #[test]
+    fn test_range_chunks_aligned() {
+        #![allow(clippy::single_range_in_vec_init)]
+
+        // Aligned first chunk, partial last chunk.
+        assert_eq!(
+            range_chunks_aligned(2..5, 2).collect::<Vec<_>>(),
+            [2..4, 4..5]
+        );
+
+        // Misaligned first chunk, complete last chunk.
+        assert_eq!(
+            range_chunks_aligned(1..4, 2).collect::<Vec<_>>(),
+            [1..2, 2..4]
+        );
+
+        // Incomplete chunk.
+        assert_eq!(range_chunks_aligned(1..3, 10).collect::<Vec<_>>(), [1..3]);
+
+        // Unbounded.
+        assert_eq!(
+            range_chunks_aligned(1.., 2).take(5).collect::<Vec<_>>(),
+            [1..2, 2..4, 4..6, 6..8, 8..10]
+        );
+    }
+
+    #[test]
     fn test_range_chunks_rev() {
         // Inclusive bounds, partial last chunk.
         assert_eq!(
@@ -2423,6 +2547,29 @@ mod test {
         assert_eq!(
             range_chunks_rev(Bound::Excluded(0), 4, 2).collect::<Vec<_>>(),
             [3..5, 1..3]
+        );
+    }
+
+    #[test]
+    fn test_range_chunks_aligned_rev() {
+        #![allow(clippy::single_range_in_vec_init)]
+
+        // Aligned first chunk, partial last chunk.
+        assert_eq!(
+            range_chunks_aligned_rev(Bound::Included(1), 3, 2).collect::<Vec<_>>(),
+            [2..4, 1..2]
+        );
+
+        // Misaligned first chunk, complete last chunk.
+        assert_eq!(
+            range_chunks_aligned_rev(Bound::Included(0), 2, 2).collect::<Vec<_>>(),
+            [2..3, 0..2]
+        );
+
+        // Incomplete chunk.
+        assert_eq!(
+            range_chunks_aligned_rev(Bound::Excluded(0), 3, 10).collect::<Vec<_>>(),
+            [1..4]
         );
     }
 
