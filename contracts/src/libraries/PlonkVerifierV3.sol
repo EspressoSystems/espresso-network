@@ -116,7 +116,9 @@ library PlonkVerifierV3 {
         uint256[5] memory publicInput,
         IPlonkVerifier.PlonkProof memory proof
     ) private view returns (bool) {
-        if (verifyingKey.numInputs != 5) revert WrongPlonkVK();
+        if (verifyingKey.numInputs != 5) {
+            revert WrongPlonkVK();
+        }
 
         Challenges memory chal = _computeChallenges(verifyingKey, publicInput, proof);
 

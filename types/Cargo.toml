@@ -82,7 +82,7 @@ vid = { workspace = true }
 [dev-dependencies]
 criterion = "0.5"
 espresso-contract-deployer = { workspace = true }
-espresso-types = { path = ".", features = [ "testing" ] }
+espresso-types = { path = ".", features = ["testing"] }
 rand_chacha = { workspace = true }
 rstest = { workspace = true }
 rstest_reuse = { workspace = true }

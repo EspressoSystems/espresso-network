@@ -20,14 +20,16 @@ import { LightClientV2 } from "../src/LightClientV2.sol";
 import { IPlonkVerifier as V } from "../src/interfaces/IPlonkVerifier.sol";
 import { LightClientCommonTest } from "./LightClientV3.t.sol";
 import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
-import { OwnableUpgradeable } from
-    "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import {
+    OwnableUpgradeable
+} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import { OpsTimelock } from "../src/OpsTimelock.sol";
 import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import { IAccessControl } from "@openzeppelin/contracts/access/IAccessControl.sol";
 import { TimelockController } from "@openzeppelin/contracts/governance/TimelockController.sol";
-import { PausableUpgradeable } from
-    "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
+import {
+    PausableUpgradeable
+} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 
 // Token contract
 import { EspToken } from "../src/EspToken.sol";
@@ -1284,15 +1286,17 @@ contract StakeTableUpgradeV2Test is Test {
         vm.expectRevert(
             abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, nonOwner)
         );
-        StakeTableV2(address(proxy)).initializeV2(
-            makeAddr("pauser"), makeAddr("admin"), 0, new StakeTableV2.InitialCommission[](0)
-        );
+        StakeTableV2(address(proxy))
+            .initializeV2(
+                makeAddr("pauser"), makeAddr("admin"), 0, new StakeTableV2.InitialCommission[](0)
+            );
         vm.stopPrank();
 
         vm.startPrank(stakeTableRegisterTest.admin());
-        StakeTableV2(address(proxy)).initializeV2(
-            makeAddr("pauser"), makeAddr("admin"), 0, new StakeTableV2.InitialCommission[](0)
-        );
+        StakeTableV2(address(proxy))
+            .initializeV2(
+                makeAddr("pauser"), makeAddr("admin"), 0, new StakeTableV2.InitialCommission[](0)
+            );
         vm.stopPrank();
     }
 
@@ -1545,7 +1549,7 @@ contract StakeTableUpgradeV2Test is Test {
             stakeTable.undelegations(validator, delegator);
         assertEq(delegatorAmountUndelegated, amountUndelegated); // undelegated amount is
         assertEq(unlocksAt, block.timestamp + stakeTable.exitEscrowPeriod()); // unlocks at is the
-            // current timestamp
+        // current timestamp
 
         // delegator tries to undelegate but gets an error because the validator already exited
         vm.startPrank(delegator);
@@ -2044,9 +2048,8 @@ contract StakeTableUpgradeV2Test is Test {
         vm.stopPrank();
 
         vm.startPrank(delegator);
-        stakeTableRegisterTest.stakeTable().token().approve(
-            address(stakeTableRegisterTest.stakeTable()), initialBalance / 2
-        );
+        stakeTableRegisterTest.stakeTable().token()
+            .approve(address(stakeTableRegisterTest.stakeTable()), initialBalance / 2);
         stakeTableRegisterTest.stakeTable().delegate(validator, initialBalance / 2);
         vm.stopPrank();
 
@@ -2092,9 +2095,8 @@ contract StakeTableUpgradeV2Test is Test {
         vm.stopPrank();
 
         vm.startPrank(delegator);
-        stakeTableRegisterTest.stakeTable().token().approve(
-            address(stakeTableRegisterTest.stakeTable()), initialBalance / 2
-        );
+        stakeTableRegisterTest.stakeTable().token()
+            .approve(address(stakeTableRegisterTest.stakeTable()), initialBalance / 2);
         stakeTableRegisterTest.stakeTable().delegate(validator, initialBalance / 2);
         vm.stopPrank();
 
