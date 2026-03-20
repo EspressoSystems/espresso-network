@@ -461,6 +461,9 @@ jobs:
         run: |
           docker pull ghcr.io/espressosystems/geth-l1:main
           docker pull ghcr.io/espressosystems/espresso-block-explorer:main
+          docker pull docker.io/eqalpha/keydb:latest
+          docker pull badouralix/curl-jq
+          docker pull postgres
 
       - name: Test docker demo
         run: |
