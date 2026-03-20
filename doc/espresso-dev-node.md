@@ -44,8 +44,8 @@ customizing the node, depending on what type of testing you are trying to do.
 ## APIs
 
 Once you have successfully run the dev node, you can access the corresponding ports to call the APIs of the
-[`builder`](https://docs.espressosys.com/sequencer/api-reference/builder-api),
-[`sequencer`](https://docs.espressosys.com/sequencer/api-reference/sequencer-api), and `prover`.
+[`builder`](https://docs.espressosys.com/network/api-reference/builder-api),
+[`espresso node`](https://docs.espressosys.com/network/api-reference/sequencer-api), and `prover`.
 
 In addition, you can access the `dev_node_port` to retrieve debugging information. Here are the details of the dev node
 API.

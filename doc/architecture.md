@@ -14,7 +14,7 @@ The diagram below shows how the Espresso Confirmation Layer fits into the rollup
 5. Espresso posts succinct commitment to block to L1. Contract verifies proof of Espresso state transition then stores
    the block commitment.
 6. Rollups post updated state to L1. ZK-rollups include a proof.
-7. Rollup contracts read certified sequence of block commitments from sequencer contract. Verify state transition proofs
+7. Rollup contracts read certified sequence of block commitments from Espresso contract. Verify state transition proofs
    against this sequence (ZK-rollup) or wait for fraud proof against this sequence (optimistic rollup).
 
 Below is sequence diagram to accompany the overview:
@@ -33,21 +33,21 @@ Below is sequence diagram to accompany the overview:
 6. A rollup node which has executed the block sends the new rollup state to the L1. It may include a validity proof (for
    ZK rollups) or open a window for fraud proofs (optimistic rollups).
 7. The L1 rollup contract verifies any proofs related to the state update, using the certified block commitment from the
-   sequencer contract to check that the state update corresponds to the correct block.
+   Espresso contract to check that the state update corresponds to the correct block.
 
 ## Espresso Confirmation Layer
 
 This diagram below depicts a simplified view of the current architecture of the Espresso Confirmation Layer. The diagram
 includes views of an Espresso node, the Espresso Network (nodes, CDN, builders, prover, state relay service), two
-rollups (one ZK rollup "Z", one optimistic rollup "O") that use the Espresso Sequencer for sequencing and some important
+rollups (one ZK rollup "Z", one optimistic rollup "O") that use Espresso Network for sequencing and some important
 L1 contracts.
 
 - Glossary
   - Namespace: an identifier to distinguish rollups, akin to an Ethereum chain ID
   - Rollup transaction: a transaction a user submits to a rollup, usually an EVM transaction
-  - Transaction: a transaction inside the Espresso Sequencer: a rollup transaction plus a namespace ID of the rollup
+  - Transaction: a transaction inside Espresso Network: a rollup transaction plus a namespace ID of the rollup
   - Rollup block: a block in a rollup consisting only of transactions in this rollup
-  - Espresso block: a block produced by the Espresso sequencer containing transactions of multiple rollups
+  - Espresso block: a block produced by Espresso Network containing transactions of multiple rollups
 
 ![Architecture diagram](./architecture.svg)
 
@@ -59,7 +59,7 @@ The sequence diagram below serves as a complement to the architecture diagram. T
 4. The rollups send their L2 blocks to the Espresso confirmation layer.
 5. The leader/proposer obtains a block from a builder.
 6. HotShot consensus creates new blocks containing sequenced rollup transactions.
-7. A rollup produces a rollup block with transactions sequenced by the Espresso sequencer.
+7. A rollup produces a rollup block with transactions finalized by Espresso Network.
 8. A proof for a HotShot state update is created and verified in the Light Client smart contract.
 9. A ZK rollup proves a correct state transaction by sending a proof to its rollup smart contract.
 10. A dispute is settled in an optimistic rollup. If necessary, the HotShot commitment is read from the Light Client

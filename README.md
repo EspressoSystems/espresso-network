@@ -33,8 +33,8 @@ circuit that encodes the state update logic. See [zk-rollups integration](doc/zk
 
 # Running the demo
 
-Refer to [sequencer-example-l2](https://github.com/EspressoSystems/sequencer-example-l2) for instructions on how to run
-a dockerized Espresso Sequencer network with an example Layer 2 rollup application.
+Refer to [espresso-example-l2](https://github.com/EspressoSystems/espresso-example-l2) for instructions on how to run
+a dockerized Espresso Network with an example Layer 2 rollup application.
 
 # Development
 
@@ -188,7 +188,7 @@ variables (see the code for the full list `sequencer/src/bin/deploy.rs`). Common
 - `ESPRESSO_SEQUENCER_ETH_MNEMONIC` — Mnemonic for the deployer wallet
 - `ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS` — Multisig admin address
 - `ESPRESSO_DEPLOYER_ACCOUNT_INDEX` — Account index in the wallet
-- `ESPRESSO_SEQUENCER_URL` — Sequencer node URL for HotShot config
+- `ESPRESSO_SEQUENCER_URL` — Espresso node URL for HotShot config
 
 You can use a `.env` file and load it with:
 
@@ -270,7 +270,7 @@ In order to profile the gas consumption of the light client contract do the foll
 
 ## Copyright
 
-**(c) 2022 Espresso Systems** `espresso-sequencer` was developed by Espresso Systems. While we plan to adopt an open
+**(c) 2022 Espresso Systems** `espresso-network` was developed by Espresso Systems. While we plan to adopt an open
 source license, we have not yet selected one. As such, all rights are reserved for the time being. Please reach out to
 us if you have thoughts on licensing.
 
