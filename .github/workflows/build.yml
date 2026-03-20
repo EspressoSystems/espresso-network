@@ -457,13 +457,9 @@ jobs:
           fi
           echo DOCKER_TAG=$DOCKER_TAG >> $GITHUB_ENV
 
-      - name: Pull external docker images
+      - name: Pull remaining docker images
         run: |
-          docker pull ghcr.io/espressosystems/geth-l1:main
-          docker pull ghcr.io/espressosystems/espresso-block-explorer:main
-          docker pull docker.io/eqalpha/keydb:latest
-          docker pull badouralix/curl-jq
-          docker pull postgres
+          docker compose pull --policy missing
 
       - name: Test docker demo
         run: |
