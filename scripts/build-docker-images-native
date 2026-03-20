@@ -278,5 +278,5 @@ cp package.json yarn.lock "$workdir/"
 export DOCKER_BUILDKIT=1
 
 for image in "${images[@]}"; do
-  docker build --platform $platform -t "ghcr.io/espressosystems/espresso-sequencer/$image:main" -f "docker/$image.Dockerfile" "$workdir"
+  docker build --platform $platform -t "ghcr.io/espressosystems/espresso-network/$image:main" -f "docker/$image.Dockerfile" "$workdir"
 done

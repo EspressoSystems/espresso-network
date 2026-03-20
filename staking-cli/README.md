@@ -51,7 +51,7 @@ Contracts:
 To run the staking-cli using Docker:
 
 ```bash
-docker run -it ghcr.io/espressosystems/espresso-sequencer/staking-cli:main staking-cli --help
+docker run -it ghcr.io/espressosystems/espresso-network/staking-cli:main staking-cli --help
 ```
 
 To build and run from source:

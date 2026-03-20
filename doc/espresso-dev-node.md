@@ -10,7 +10,7 @@ involving L3s. Developers can use dev node for development and testing.
 We highly recommend you to use our Docker image. You can run it from the command line:
 
 ```cmd
-docker run -p 8770:8770 ghcr.io/espressosystems/espresso-sequencer/espresso-dev-node:main
+docker run -p 8770:8770 ghcr.io/espressosystems/espresso-network/espresso-dev-node:main
 ```
 
 This command will run the minimal setup of the dev node with the default options. It will run an API server on port

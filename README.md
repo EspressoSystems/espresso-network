@@ -16,8 +16,8 @@ composable blockchains, providing a high trust, fast, and verifiable way to proc
 confirmations in return.
 
 - [Official Documentation](https://docs.espressosys.com/network/)
-- [Rust Documentation](https://sequencer.docs.espressosys.com/sequencer/)
-- [Smart Contract Documentation](https://sequencer.docs.espressosys.com/contracts/)
+- [Rust Documentation](https://espresso-network.docs.espressosys.com/sequencer/)
+- [Smart Contract Documentation](https://espresso-network.docs.espressosys.com/contracts/)
 
 ### Architecture
 
@@ -46,7 +46,7 @@ a dockerized Espresso Network with an example Layer 2 rollup application.
 
 ## Documentation
 
-The rust code documentation can be found at [sequencer.docs.espressosys.com](https://sequencer.docs.espressosys.com).
+The rust code documentation can be found at [espresso-network.docs.espressosys.com](https://espresso-network.docs.espressosys.com).
 Please note the disclaimer about API stability at the end of the readme.
 
 To generate the documentation locally and view it in the browser, run
