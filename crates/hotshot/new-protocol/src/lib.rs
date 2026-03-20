@@ -1,8 +1,8 @@
 mod consensus;
-mod validated_state;
-mod io;
 mod coordinator;
 mod helpers;
+mod io;
+mod validated_state;
 
 #[cfg(test)]
 mod tests;

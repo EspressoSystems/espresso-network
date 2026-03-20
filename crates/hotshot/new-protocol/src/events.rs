@@ -4,8 +4,8 @@ use committable::Commitment;
 use hotshot::traits::{BlockPayload, ValidatedState};
 use hotshot_types::{
     data::{
-        BlockNumber, EpochNumber, Leaf2, QuorumProposal2, VidCommitment, VidCommitment2, VidDisperse2,
-        ViewNumber,
+        BlockNumber, EpochNumber, Leaf2, QuorumProposal2, VidCommitment, VidCommitment2,
+        VidDisperse2, ViewNumber,
     },
     drb::{DrbInput, DrbResult},
     simple_certificate::{TimeoutCertificate2, ViewSyncFinalizeCertificate2},
@@ -15,7 +15,7 @@ use hotshot_types::{
         node_implementation::NodeType,
     },
     utils::BuilderCommitment,
-    vote::HasViewNumber,
+    vote::{Certificate, HasViewNumber},
 };
 
 use crate::{
@@ -31,7 +31,7 @@ pub struct StateRequest<TYPES: NodeType> {
     pub block: BlockNumber,
     pub proposal: QuorumProposal2<TYPES>,
     pub parent_commitment: Commitment<Leaf2<TYPES>>,
-    pub payload_size: u32,
+    pub payload_size: u32, // TODO: What is this for?
 }
 
 impl<T: NodeType> From<QuorumProposal2<T>> for StateRequest<T> {
@@ -41,7 +41,9 @@ impl<T: NodeType> From<QuorumProposal2<T>> for StateRequest<T> {
             parent_view: p.view_number() - 1,
             epoch: p.epoch().expect("QuorumProposal2 has epoch number"),
             block: p.block_header.block_number().into(),
+            parent_commitment: p.justify_qc.data().leaf_commit,
             proposal: p,
+            payload_size: 0,
         }
     }
 }
@@ -193,52 +195,50 @@ impl<TYPES: NodeType> ConsensusInput<TYPES> {
     }
 }
 
-impl<TYPES: NodeType> TryFrom<Update<TYPES>> for ConsensusEvent<TYPES> {
+impl<TYPES: NodeType> TryFrom<Event<TYPES>> for ConsensusInput<TYPES> {
     type Error = ();
 
-    fn try_from(update: Update<TYPES>) -> Result<Self, ()> {
+    fn try_from(update: Event<TYPES>) -> Result<Self, ()> {
         match update {
-            Update::MessageReceived(msg) => match msg {
+            Event::MessageReceived(msg) => match msg {
                 ConsensusMessage::Proposal(proposal_msg) => {
-                    Ok(ConsensusEvent::Proposal(proposal_msg))
+                    Ok(ConsensusInput::Proposal(proposal_msg))
                 },
                 ConsensusMessage::Certificate1(cert, _key) => {
-                    Ok(ConsensusEvent::Certificate1(cert))
+                    Ok(ConsensusInput::Certificate1(cert))
                 },
                 ConsensusMessage::Certificate2(cert, _key) => {
-                    Ok(ConsensusEvent::Certificate2(cert))
+                    Ok(ConsensusInput::Certificate2(cert))
                 },
                 _ => Err(()),
             },
-            Update::BlockReconstructed(view, _payload, vid_commit) => {
-                Ok(ConsensusEvent::BlockReconstructed(view, vid_commit))
+            Event::BlockReconstructed {
+                view, commitment, ..
+            } => Ok(ConsensusInput::BlockReconstructed(view, commitment)),
+            Event::Timeout(view) => Ok(ConsensusInput::Timeout(view)),
+            Event::TimeoutCertificateReceived(cert) => Ok(ConsensusInput::TimeoutCertificate(cert)),
+            Event::ViewSyncCertificateReceived(cert) => {
+                Ok(ConsensusInput::ViewSyncCertificate(cert))
             },
-            Update::Timeout(view) => Ok(ConsensusEvent::Timeout(view)),
-            Update::TimeoutCertificateReceived(cert) => {
-                Ok(ConsensusEvent::TimeoutCertificate(cert))
-            },
-            Update::ViewSyncCertificateReceived(cert) => {
-                Ok(ConsensusEvent::ViewSyncCertificate(cert))
-            },
-            Update::StateVerified(request) => {
+            Event::StateVerified(request) => {
                 let commitment = proposal_commitment(&request.proposal);
                 let state = TYPES::ValidatedState::from_header(&request.proposal.block_header);
-                Ok(ConsensusEvent::StateVerified(StateResponse {
+                Ok(ConsensusInput::StateVerified(StateResponse {
                     view: request.view,
                     commitment,
                     state: Arc::new(state),
                 }))
             },
-            Update::StateVerificationFailed(request) => {
+            Event::StateVerificationFailed(request) => {
                 let commitment = proposal_commitment(&request.proposal);
                 let state = TYPES::ValidatedState::from_header(&request.proposal.block_header);
-                Ok(ConsensusEvent::StateVerificationFailed(StateResponse {
+                Ok(ConsensusInput::StateVerificationFailed(StateResponse {
                     view: request.view,
                     commitment,
                     state: Arc::new(state),
                 }))
             },
-            Update::HeaderCreated(view, header) => Ok(ConsensusEvent::HeaderCreated(view, header)),
+            Event::HeaderCreated(view, header) => Ok(ConsensusInput::HeaderCreated(view, header)),
             _ => Err(()),
         }
     }

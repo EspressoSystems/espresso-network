@@ -619,7 +619,7 @@ impl Display for Topic {
 impl<N, K> ConnectedNetwork<K> for Arc<N>
 where
     N: ConnectedNetwork<K>,
-    K: SignatureKey + 'static
+    K: SignatureKey + 'static,
 {
     fn pause(&self) {
         (**self).pause()
@@ -636,7 +636,7 @@ where
     fn shut_down<'a, 'b>(&'a self) -> BoxSyncFuture<'b, ()>
     where
         'a: 'b,
-        Self: 'b
+        Self: 'b,
     {
         (**self).shut_down()
     }
@@ -647,9 +647,10 @@ where
         message: Vec<u8>,
         topic: Topic,
         broadcast_delay: BroadcastDelay,
-    ) -> Result<(), NetworkError>
-    {
-        (**self).broadcast_message(view, message, topic, broadcast_delay).await
+    ) -> Result<(), NetworkError> {
+        (**self)
+            .broadcast_message(view, message, topic, broadcast_delay)
+            .await
     }
 
     async fn da_broadcast_message(
@@ -659,7 +660,9 @@ where
         recipients: Vec<K>,
         broadcast_delay: BroadcastDelay,
     ) -> Result<(), NetworkError> {
-        (**self).da_broadcast_message(view, message, recipients, broadcast_delay).await
+        (**self)
+            .da_broadcast_message(view, message, recipients, broadcast_delay)
+            .await
     }
 
     async fn vid_broadcast_message(
@@ -705,4 +708,3 @@ where
         (**self).is_primary_down()
     }
 }
-

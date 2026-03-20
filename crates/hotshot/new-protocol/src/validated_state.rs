@@ -16,7 +16,6 @@ use tokio::{
 };
 
 use crate::{
-    coordinator::handle::CoordinatorHandle,
     events::{HeaderRequest, StateEvent, StateRequest, StateResponse},
     helpers::{proposal_commitment, upgrade_lock},
 };
@@ -40,7 +39,6 @@ pub(crate) struct ValidatedStateManager<TYPES: NodeType> {
     event_rx: Receiver<StateEvent<TYPES>>,
     completed_requests_tx: Sender<CompletedRequest<TYPES>>,
     completed_requests_rx: Receiver<CompletedRequest<TYPES>>,
-    coordinator_handle: CoordinatorHandle<TYPES>,
 
     instance_state: Arc<TYPES::InstanceState>,
 }
@@ -49,7 +47,6 @@ impl<TYPES: NodeType> ValidatedStateManager<TYPES> {
     pub fn new(
         event_rx: Receiver<StateEvent<TYPES>>,
         instance_state: Arc<TYPES::InstanceState>,
-        coordinator_handle: CoordinatorHandle<TYPES>,
     ) -> Self {
         let (completed_requests_tx, completed_requests_rx) = mpsc::channel(100);
         Self {
@@ -60,7 +57,6 @@ impl<TYPES: NodeType> ValidatedStateManager<TYPES> {
             event_rx,
             completed_requests_tx,
             completed_requests_rx,
-            coordinator_handle,
             instance_state,
         }
     }
@@ -117,10 +113,10 @@ impl<TYPES: NodeType> ValidatedStateManager<TYPES> {
         match state {
             Ok(response) => {
                 let (_, request) = self.in_progress_requests.remove(&response.commitment)?;
-                self.coordinator_handle
-                    .respond_state(request.clone())
-                    .await
-                    .ok()?;
+                //self.coordinator_handle
+                //    .respond_state(request.clone())
+                //    .await
+                //    .ok()?;
                 let leaf = Leaf2::from_quorum_proposal(&QuorumProposalWrapper::<TYPES> {
                     proposal: request.proposal,
                 });
@@ -148,10 +144,10 @@ impl<TYPES: NodeType> ValidatedStateManager<TYPES> {
         match result {
             Ok((view, header)) => {
                 self.in_progress_headers.remove(&view);
-                self.coordinator_handle
-                    .respond_header(view, header)
-                    .await
-                    .ok()?;
+                //self.coordinator_handle
+                //    .respond_header(view, header)
+                //    .await
+                //    .ok()?;
             },
             Err(error) => {
                 self.handle_header_error(error).await;
@@ -372,7 +368,7 @@ mod test {
 
     use super::*;
     use crate::{
-        events::{Event, HeaderRequest, StateRequest, Update},
+        events::{Event, HeaderRequest, StateRequest},
         helpers::proposal_commitment,
         tests::test_utils::{TestData, TestView},
     };
@@ -384,7 +380,7 @@ mod test {
             view: view.view_number,
             parent_view: proposal.justify_qc.view_number(),
             epoch: view.epoch_number,
-            block_number: BlockHeader::<TestTypes>::block_number(&proposal.block_header),
+            block: BlockHeader::<TestTypes>::block_number(&proposal.block_header).into(),
             proposal: proposal.clone(),
             parent_commitment: proposal.justify_qc.data().leaf_commit,
             payload_size: 0,

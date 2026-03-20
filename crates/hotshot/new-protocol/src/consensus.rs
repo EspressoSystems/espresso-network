@@ -21,12 +21,15 @@ use hotshot_types::{
     vote::{self, Certificate, HasViewNumber},
 };
 use hotshot_utils::anytrace;
+use tracing::warn;
 
 use crate::{
     events::{Action, BlockAndHeaderRequest, ConsensusInput, ConsensusOutput, Event},
     helpers::{Outbox, proposal_commitment, upgrade_lock},
     message::{Certificate1, Certificate2, ProposalMessage, Vote1, Vote2Data},
 };
+
+type Result<T> = std::result::Result<T, ConsensusError>;
 
 pub struct Consensus<T: NodeType> {
     proposals: BTreeMap<ViewNumber, QuorumProposal2<T>>,
@@ -85,18 +88,21 @@ impl<T: NodeType> Consensus<T> {
         }
     }
 
-    async fn is_leader(&self, view: ViewNumber, epoch: EpochNumber) -> bool {
-        let Ok(stake_table) = self
+    async fn ensure_is_leader(&self, view: ViewNumber, epoch: EpochNumber) -> Result<()> {
+        let stake_table = self
             .stake_table_coordinator
             .membership_for_epoch(Some(epoch))
             .await
-        else {
-            return false;
-        };
-        let Ok(leader) = stake_table.leader(view).await else {
-            return false;
-        };
-        leader == self.public_key
+            .map_err(ConsensusError::EpochMembership)?;
+        let leader = stake_table
+            .leader(view)
+            .await
+            .map_err(ConsensusError::Internal)?;
+        if leader == self.public_key {
+            Ok(())
+        } else {
+            Err(ConsensusError::NotLeader(view))
+        }
     }
 
     pub async fn apply(
@@ -109,18 +115,35 @@ impl<T: NodeType> Consensus<T> {
             return;
         }
         match input {
-            ConsensusInput::Proposal(proposal) => self.handle_proposal(proposal, outbox).await,
+            ConsensusInput::Proposal(proposal) => {
+                if let Err(err) = self.handle_proposal(proposal, outbox).await {
+                    warn!(%err, "handle_proposal");
+                    return;
+                }
+            },
             ConsensusInput::Certificate1(certificate) => {
-                self.handle_certificate1(certificate).await
+                if let Err(err) = self.handle_certificate1(certificate).await {
+                    warn!(%err, "handle_certificate1");
+                    return;
+                }
             },
             ConsensusInput::Certificate2(certificate) => {
-                self.handle_certificate2(certificate).await
+                if let Err(err) = self.handle_certificate2(certificate).await {
+                    warn!(%err, "handle_certificate2");
+                    return;
+                }
             },
             ConsensusInput::TimeoutCertificate(certificate) => {
-                self.handle_timeout_certificate(certificate, outbox).await
+                if let Err(err) = self.handle_timeout_certificate(certificate, outbox).await {
+                    warn!(%err, "handle_timeout_certificate");
+                    return;
+                }
             },
             ConsensusInput::ViewSyncCertificate(certificate) => {
-                self.handle_view_sync_certificate(certificate, outbox).await
+                if let Err(err) = self.handle_view_sync_certificate(certificate, outbox).await {
+                    warn!(%err, "handle_view_sync_certificate");
+                    return;
+                }
             },
             ConsensusInput::BlockReconstructed(view, vid_commitment) => {
                 self.blocks_reconstructed.insert(view, vid_commitment);
@@ -149,13 +172,16 @@ impl<T: NodeType> Consensus<T> {
                 return;
             },
             ConsensusInput::BlockBuilt(view, epoch, block, metadata) => {
-                self.handle_block_built(view, epoch, block, metdata, outbox);
+                self.handle_block_built(view, epoch, block, metadata, outbox);
             },
             ConsensusInput::VidDisperseCreated(view, vid_disperse) => {
                 self.vid_disperses.insert(view, vid_disperse);
             },
         }
-        self.maybe_vote_1(view, outbox);
+
+        if let Err(err) = self.maybe_vote_1(view, outbox) {
+            warn!(%err, "maybe_vote_1");
+        }
         self.maybe_vote_2_and_update_lock(view, outbox);
         self.maybe_decide(view, outbox);
         self.maybe_propose(view, outbox).await;
@@ -167,8 +193,8 @@ impl<T: NodeType> Consensus<T> {
         &mut self,
         view: ViewNumber,
         epoch: EpochNumber,
-        block: TYPES::BlockPayload,
-        metadata: <TYPES::BlockPayload as hotshot::traits::BlockPayload<TYPES>>::Metadata,
+        block: T::BlockPayload,
+        metadata: <T::BlockPayload as hotshot::traits::BlockPayload<T>>::Metadata,
         outbox: &mut Outbox<ConsensusOutput<T>>,
     ) {
         outbox.push_back(Action::RequestVidDisperse {
@@ -180,32 +206,25 @@ impl<T: NodeType> Consensus<T> {
         self.blocks.insert(view, block);
     }
 
-    async fn maybe_propose(&mut self, view: ViewNumber, outbox: &mut Outbox<ConsensusOutput<T>>) {
+    async fn maybe_propose(
+        &mut self,
+        view: ViewNumber,
+        outbox: &mut Outbox<ConsensusOutput<T>>,
+    ) -> Result<()> {
         let is_after_timeout =
             self.view_sync_certs.contains_key(&view) || self.timeout_certs.contains_key(&view);
         let qc = if is_after_timeout {
-            self.locked_qc.as_ref()
+            self.get_locked_qc()?
         } else {
-            self.certs.get(&ViewNumber::from(view.saturating_sub(1)))
+            self.get_qc1(ViewNumber::from(view.saturating_sub(1)))?
         };
-        let Some(qc) = qc else { return };
         let parent_view = qc.view_number();
-        let Some(proposal) = self.proposals.get(&parent_view) else {
-            return;
-        };
-        let Some(epoch) = proposal.epoch else { return };
-        if !self.is_leader(view, epoch).await {
-            return;
-        }
-        let Some(header) = self.headers.get(&parent_view) else {
-            return;
-        };
-        let Some(block) = self.blocks.get(&view) else {
-            return;
-        };
-        let Some(vid_disperse) = self.vid_disperses.get(&view) else {
-            return;
-        };
+        let proposal = self.get_proposal(parent_view)?;
+        let epoch = epoch(proposal.epoch)?;
+        self.ensure_is_leader(view, epoch).await?;
+        let header = self.get_header(parent_view)?;
+        let block = self.get_block(view)?;
+        let vid_disperse = self.get_vid_disperse(view)?;
 
         // TODO: Handle epoch change and properly set next epoch qc drb result and state cert
         let mut proposal = QuorumProposal2::<T> {
@@ -235,21 +254,25 @@ impl<T: NodeType> Consensus<T> {
         // TODO: Handle epoch change here
 
         outbox.push_back(Action::SendProposal(proposal, vid_disperse.clone()));
+        Ok(())
     }
 
-    fn maybe_decide(&mut self, view: ViewNumber, outbox: &mut Outbox<ConsensusOutput<T>>) {
+    fn maybe_decide(
+        &mut self,
+        view: ViewNumber,
+        outbox: &mut Outbox<ConsensusOutput<T>>,
+    ) -> Result<()> {
         if view <= self.last_decided_view {
-            return;
+            return Ok(());
         }
-        let Some(cert2) = self.certs2.get(&view) else {
-            return;
-        };
-        let Some(proposal) = self.proposals.get(&view) else {
-            return;
-        };
+        let cert2 = self.get_qc2(view)?;
+        let proposal = self
+            .proposals
+            .get(&view)
+            .ok_or(ConsensusError::Missing(Data::Proposal, Some(view)))?;
         let proposal_commit = proposal_commitment(proposal);
         if cert2.data.leaf_commit != proposal_commit {
-            return;
+            return Err(ConsensusError::CommitmentMismatch);
         }
         // we have a second certificate, and matching proposal, it is decided.
         let leaf = Leaf2::from_quorum_proposal(&QuorumProposalWrapper::from(proposal.clone()));
@@ -270,21 +293,20 @@ impl<T: NodeType> Consensus<T> {
             parent_commit = proposal.justify_qc.data.leaf_commit;
         }
         outbox.push_back(Event::LeafDecided(decided));
+        Ok(())
     }
 
-    fn maybe_vote_1(&mut self, view: ViewNumber, outbox: &mut Outbox<ConsensusOutput<T>>) {
+    fn maybe_vote_1(
+        &mut self,
+        view: ViewNumber,
+        outbox: &mut Outbox<ConsensusOutput<T>>,
+    ) -> Result<()> {
         if self.voted_1_views.contains(&view) {
-            return;
+            return Ok(());
         }
-        let Some(state_commitment) = self.states_verified.get(&view) else {
-            return;
-        };
-        let Some(proposal) = self.proposals.get(&view) else {
-            return;
-        };
-        let Some(vid_share) = self.vid_shares.get(&view) else {
-            return;
-        };
+        let state_commitment = self.get_commitment(view)?;
+        let proposal = self.get_proposal(view)?;
+        let vid_share = self.get_vid_share(view)?;
 
         // Verify parent chain unless justify_qc is the genesis QC
         let parent_view = proposal.justify_qc.view_number();
@@ -293,23 +315,19 @@ impl<T: NodeType> Consensus<T> {
         // or the genesis qc to be verified
         if parent_view != ViewNumber::genesis() {
             // Verify we have the block for the QC on this commitment
-            let Some(block_commitment) = self.blocks_reconstructed.get(&parent_view) else {
-                return;
-            };
-            let Some(prev_proposal) = self.proposals.get(&parent_view) else {
-                return;
-            };
+            let block_commitment = self.get_vid_commitment(parent_view)?;
+            let prev_proposal = self.get_proposal(parent_view)?;
             let VidCommitment::V2(prev_block_commitment) =
                 prev_proposal.block_header.payload_commitment()
             else {
-                return;
+                return Err(ConsensusError::VidCommitmentNotV2);
             };
             if block_commitment != &prev_block_commitment {
-                return;
+                return Err(ConsensusError::CommitmentMismatch);
             }
 
             if proposal.justify_qc.data().leaf_commit != proposal_commitment(prev_proposal) {
-                return;
+                return Err(ConsensusError::CommitmentMismatch);
             }
         }
 
@@ -317,7 +335,7 @@ impl<T: NodeType> Consensus<T> {
 
         // Verify the state commitment matches the proposal
         if state_commitment != &proposal_commit {
-            return;
+            return Err(ConsensusError::CommitmentMismatch);
         }
 
         let inner_vote = SimpleVote::create_signed_vote(
@@ -338,61 +356,56 @@ impl<T: NodeType> Consensus<T> {
         };
         outbox.push_back(Action::SendVote1(vote));
         self.voted_1_views.insert(view);
+        Ok(())
     }
 
     fn maybe_vote_2_and_update_lock(
         &mut self,
         view: ViewNumber,
         outbox: &mut Outbox<ConsensusOutput<T>>,
-    ) {
+    ) -> Result<()> {
         if self.voted_2_views.contains(&view) {
-            return;
+            return Ok(());
         }
 
         // we have a proposal, reconstructed block, and first certificate for this view
-        let Some(reconstructed_block_commitment) = self.blocks_reconstructed.get(&view) else {
-            return;
-        };
-        let Some(cert1) = self.certs.get(&view) else {
-            return;
-        };
-        let Some(proposal) = self.proposals.get(&view) else {
-            return;
-        };
-
+        let reconstructed_block_commitment = self.get_vid_commitment(view)?;
+        let cert1 = self.get_qc1(view)?;
+        let proposal = self.get_proposal(view)?;
         let proposal_commit = proposal_commitment(proposal);
 
         // The certificate must match the proposal
         if cert1.data.leaf_commit != proposal_commit {
-            return;
+            return Err(ConsensusError::CommitmentMismatch);
         }
         // The proposal block commitment must match the reconstructed block commitment
         let VidCommitment::V2(proposal_block_commitment) =
             proposal.block_header.payload_commitment()
         else {
-            return;
+            return Err(ConsensusError::VidCommitmentNotV2);
         };
         if &proposal_block_commitment != reconstructed_block_commitment {
-            return;
+            return Err(ConsensusError::CommitmentMismatch);
         }
+
+        let epoch = epoch(proposal.epoch)?;
+        let block = proposal.block_header.block_number();
 
         // We have a valid certificate, proposal, and reconstructed block
         // We can now update the lock and vote
         if self
             .locked_qc
-            .as_mut()
+            .as_ref()
             .is_none_or(|locked_qc| locked_qc.view_number() < cert1.view_number())
         {
             self.locked_qc = Some(cert1.clone());
         }
 
-        let Some(epoch) = proposal.epoch else { return };
-
         let vote = SimpleVote::create_signed_vote(
             Vote2Data {
                 leaf_commit: proposal_commit,
                 epoch,
-                block: proposal.block_header.block_number().into(),
+                block: block.into(),
             },
             view,
             &self.public_key,
@@ -402,42 +415,34 @@ impl<T: NodeType> Consensus<T> {
         .unwrap();
         outbox.push_back(Action::SendVote2(vote));
         self.voted_2_views.insert(view);
+        Ok(())
     }
 
     async fn handle_proposal(
         &mut self,
         proposal: ProposalMessage<T>,
         outbox: &mut Outbox<ConsensusOutput<T>>,
-    ) {
+    ) -> Result<()> {
         let view = proposal.view_number();
 
-        if let Err(err) = proposal
+        proposal
             .proposal
             .validate_signature(&self.stake_table_coordinator)
             .await
-        {
-            return;
-        }
+            .map_err(ConsensusError::InvalidProposalSignature)?;
 
         let vid_share = proposal.vid_share;
         let proposal = proposal.proposal.data;
-        let Some(epoch) = proposal.epoch else { return };
+        let epoch = epoch(proposal.epoch)?;
 
-        if !vid_matches_proposal(&vid_share, &proposal) {
-            return;
-        }
+        vid_matches_proposal(&vid_share, &proposal)?;
 
         if !vid_share.is_consistent() {
-            return;
+            return Err(ConsensusError::InvalidVidShare);
         }
 
-        if self.verify_vid_share(&vid_share, epoch).await.is_err() {
-            return;
-        }
-
-        if let Err(err) = self.validate_proposal(&proposal) {
-            return;
-        }
+        self.verify_vid_share(&vid_share, epoch).await?;
+        self.validate_proposal(&proposal)?;
 
         self.proposals.insert(view, proposal.clone());
         let payload_size = vid_share.payload_byte_len();
@@ -445,38 +450,38 @@ impl<T: NodeType> Consensus<T> {
 
         outbox.push_back(Action::RequestState(proposal.clone().into()));
 
-        if self.is_leader(view + 1, epoch).await {
-            outbox.push_back(Action::RequestBlockAndHeader(BlockAndHeaderRequest {
-                view: view + 1,
-                epoch,
-                parent_proposal: proposal,
-            }))
-        }
+        self.ensure_is_leader(view + 1, epoch).await?;
+
+        outbox.push_back(Action::RequestBlockAndHeader(BlockAndHeaderRequest {
+            view: view + 1,
+            epoch,
+            parent_proposal: proposal,
+        }));
+
+        Ok(())
     }
 
     async fn verify_vid_share(
         &self,
         vid_share: &VidDisperseShare2<T>,
         epoch: EpochNumber,
-    ) -> Result<(), ()> {
-        let Ok(stake_table) = self
+    ) -> Result<()> {
+        let stake_table = self
             .stake_table_coordinator
             .membership_for_epoch(Some(epoch))
             .await
-        else {
-            return Err(());
-        };
+            .map_err(ConsensusError::EpochMembership)?;
         let total_weight = vid_total_weight(&stake_table.stake_table().await, Some(epoch));
         if !vid_share.verify(total_weight) {
-            return Err(());
+            return Err(ConsensusError::InvalidVidShare);
         }
         Ok(())
     }
 
-    fn validate_proposal(&mut self, proposal: &QuorumProposal2<T>) -> Result<(), ConsensusError> {
+    fn validate_proposal(&mut self, proposal: &QuorumProposal2<T>) -> Result<()> {
         let Some(locked_qc) = self.locked_qc.as_ref() else {
             // Locked QC is not set which means it is at genesis
-            return Ok(())
+            return Ok(());
         };
         let Ok(qc_commit) = proposal.justify_qc.data_commitment(&upgrade_lock::<T>()) else {
             return Err(ConsensusError::QcDataCommitment);
@@ -495,7 +500,7 @@ impl<T: NodeType> Consensus<T> {
         Ok(())
     }
 
-    async fn verify_cert<C, A>(&self, cert: &C, epoch: EpochNumber) -> Result<(), ConsensusError>
+    async fn verify_cert<C, A>(&self, cert: &C, epoch: EpochNumber) -> Result<()>
     where
         C: vote::Certificate<T, A>,
     {
@@ -511,98 +516,195 @@ impl<T: NodeType> Consensus<T> {
             .map_err(ConsensusError::InvalidVoteCert)
     }
 
-    async fn handle_certificate1(&mut self, cert: Certificate1<T>) {
-        let Some(epoch) = cert.epoch() else { return };
-        if let Err(err) = self.verify_cert(&cert, epoch).await {
-            return;
-        };
+    async fn handle_certificate1(&mut self, cert: Certificate1<T>) -> Result<()> {
+        let epoch = epoch(cert.epoch())?;
+        self.verify_cert(&cert, epoch).await?;
         self.certs.insert(cert.view_number(), cert);
+        Ok(())
     }
 
-    async fn handle_certificate2(&mut self, cert: Certificate2<T>) {
-        let Some(epoch) = cert.epoch() else { return };
-        if let Err(err) = self.verify_cert(&cert, epoch).await {
-            return;
-        }
+    async fn handle_certificate2(&mut self, cert: Certificate2<T>) -> Result<()> {
+        let epoch = epoch(cert.epoch())?;
+        self.verify_cert(&cert, epoch).await?;
         self.certs2.insert(cert.view_number(), cert);
+        Ok(())
     }
 
     async fn handle_timeout_certificate(
         &mut self,
         cert: TimeoutCertificate2<T>,
         outbox: &mut Outbox<ConsensusOutput<T>>,
-    ) {
-        let Some(epoch) = cert.epoch() else { return };
+    ) -> Result<()> {
+        let epoch = epoch(cert.epoch())?;
         let view = cert.view_number() + 1;
         self.timeout_certs.insert(cert.view_number(), cert);
-        if !self.is_leader(view, epoch).await {
-            return;
-        }
-        let Some(locked_view) = self.locked_qc.as_ref().map(|qc| qc.view_number()) else {
-            return;
-        };
-
-        let Some(proposal) = self.proposals.get(&locked_view) else {
-            return;
-        };
+        self.ensure_is_leader(view, epoch).await?;
+        let locked_view = self.get_locked_qc()?.view_number();
+        let proposal = self.get_proposal(locked_view)?;
         outbox.push_back(Action::RequestBlockAndHeader(BlockAndHeaderRequest {
             view,
             epoch,
             parent_proposal: proposal.clone(),
         }));
+        Ok(())
     }
 
     async fn handle_view_sync_certificate(
         &mut self,
         cert: ViewSyncFinalizeCertificate2<T>,
         outbox: &mut Outbox<ConsensusOutput<T>>,
-    ) {
-        let Some(epoch) = cert.epoch() else { return };
+    ) -> Result<()> {
+        let epoch = epoch(cert.epoch())?;
         let view = cert.view_number();
         self.view_sync_certs.insert(view, cert);
-        if !self.is_leader(view, epoch).await {
-            return;
-        }
-        let Some(locked_view) = self.locked_qc.as_ref().map(|qc| qc.view_number()) else {
-            return;
-        };
-        let Some(proposal) = self.proposals.get(&locked_view) else {
-            return;
-        };
+        self.ensure_is_leader(view, epoch).await?;
+        let locked_view = self.get_locked_qc()?.view_number();
+        let proposal = self.get_proposal(locked_view)?;
         outbox.push_back(Action::RequestBlockAndHeader(BlockAndHeaderRequest {
             view: view + 1,
             epoch,
             parent_proposal: proposal.clone(),
         }));
+        Ok(())
     }
 
     fn handle_timeout(&mut self, view: ViewNumber) {
         self.timeout_view = view;
         // TODO: clear_view(view);
     }
+
+    fn get_proposal(&self, v: ViewNumber) -> Result<&QuorumProposal2<T>> {
+        self.proposals
+            .get(&v)
+            .ok_or(ConsensusError::Missing(Data::Proposal, Some(v)))
+    }
+
+    fn get_header(&self, v: ViewNumber) -> Result<&T::BlockHeader> {
+        self.headers
+            .get(&v)
+            .ok_or(ConsensusError::Missing(Data::Header, Some(v)))
+    }
+
+    fn get_block(&self, v: ViewNumber) -> Result<&T::BlockPayload> {
+        self.blocks
+            .get(&v)
+            .ok_or(ConsensusError::Missing(Data::Block, Some(v)))
+    }
+
+    fn get_vid_disperse(&self, v: ViewNumber) -> Result<&VidDisperse2<T>> {
+        self.vid_disperses
+            .get(&v)
+            .ok_or(ConsensusError::Missing(Data::VidDisperse, Some(v)))
+    }
+
+    fn get_vid_share(&self, v: ViewNumber) -> Result<&VidDisperseShare2<T>> {
+        self.vid_shares
+            .get(&v)
+            .ok_or(ConsensusError::Missing(Data::VidShare, Some(v)))
+    }
+
+    fn get_qc1(&self, v: ViewNumber) -> Result<&Certificate1<T>> {
+        self.certs
+            .get(&v)
+            .ok_or(ConsensusError::Missing(Data::Qc1, Some(v)))
+    }
+
+    fn get_qc2(&self, v: ViewNumber) -> Result<&Certificate2<T>> {
+        self.certs2
+            .get(&v)
+            .ok_or(ConsensusError::Missing(Data::Qc2, Some(v)))
+    }
+
+    fn get_locked_qc(&self) -> Result<&Certificate1<T>> {
+        self.locked_qc
+            .as_ref()
+            .ok_or(ConsensusError::Missing(Data::LockedQc, None))
+    }
+
+    fn get_commitment(&self, v: ViewNumber) -> Result<&Commitment<Leaf2<T>>> {
+        self.states_verified
+            .get(&v)
+            .ok_or(ConsensusError::Missing(Data::Commitment, Some(v)))
+    }
+
+    fn get_vid_commitment(&self, v: ViewNumber) -> Result<&VidCommitment2> {
+        self.blocks_reconstructed
+            .get(&v)
+            .ok_or(ConsensusError::Missing(Data::VidCommitment, Some(v)))
+    }
 }
 
-fn vid_matches_proposal<T>(share: &VidDisperseShare2<T>, proposal: &QuorumProposal2<T>) -> bool
+fn vid_matches_proposal<T>(
+    share: &VidDisperseShare2<T>,
+    proposal: &QuorumProposal2<T>,
+) -> Result<()>
 where
     T: NodeType,
 {
     let VidCommitment::V2(vid_comm) = proposal.block_header.payload_commitment() else {
-        return false;
+        return Err(ConsensusError::VidCommitmentNotV2);
     };
-    vid_comm == share.payload_commitment
+    if vid_comm != share.payload_commitment {
+        return Err(ConsensusError::CommitmentMismatch);
+    }
+    Ok(())
+}
+
+fn epoch(e: Option<EpochNumber>) -> Result<EpochNumber> {
+    e.ok_or(ConsensusError::Missing(Data::EpochNumber, None))
+}
+
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum Data {
+    Qc1,
+    Qc2,
+    LockedQc,
+    EpochNumber,
+    Proposal,
+    Header,
+    Block,
+    VidDisperse,
+    VidShare,
+    VidCommitment,
+    Commitment,
 }
 
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum ConsensusError {
+    #[error("missing {0:?} in view {1:?}")]
+    Missing(Data, Option<ViewNumber>),
+
     #[error("failed to get membership for epoch: {0}")]
     EpochMembership(#[source] anytrace::Error),
+
     #[error("invalid vote certificate: {0}")]
     InvalidVoteCert(#[source] anyhow::Error),
+
+    #[error("invalid proposal signature: {0}")]
+    InvalidProposalSignature(#[source] anytrace::Error),
+
+    #[error("invalid VID share")]
+    InvalidVidShare,
+
     #[error("failed to comput data commitment of qc")]
     QcDataCommitment,
+
     #[error("proposal does not pass safety and liveness check")]
     InvalidProposal,
+
+    #[error("vid commitment is not v2")]
+    VidCommitmentNotV2,
+
+    #[error("commitment mismatch")]
+    CommitmentMismatch,
+
+    #[error("not leader of view {0}")]
+    NotLeader(ViewNumber),
+
+    #[error("internal error: {0}")]
+    Internal(#[source] anytrace::Error),
 }
 
 #[cfg(test)]
@@ -613,58 +715,18 @@ mod test {
 
     use super::*;
     use crate::{
-        events::{Action, ConsensusInput, ConsensusOutput, Event},
-        test_utils::{TestData, mock_membership},
+        events::{Action, ConsensusInput, ConsensusOutput, Event, StateRequest},
+        tests::{
+            count_vote1, count_vote2, has_leaf_decided, has_proposal, has_request_block_and_header,
+            has_request_state, has_vote1, has_vote2, node_index_for_key,
+            test_utils::{TestData, mock_membership},
+        },
     };
 
     async fn make_consensus(node_index: u64) -> Consensus<TestTypes> {
         let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
         let membership = mock_membership().await;
         Consensus::new(membership, public_key, private_key)
-    }
-
-    /// Check if received outputs contain a Vote1 action.
-    fn has_vote1(outputs: &Outbox<ConsensusOutput<TestTypes>>) -> bool {
-        outputs
-            .iter()
-            .any(|e| matches!(e, ConsensusOutput::Action(Action::SendVote1(_))))
-    }
-
-    /// Check if received outputs contain a Vote2 action.
-    fn has_vote2(outputs: &Outbox<ConsensusOutput<TestTypes>>) -> bool {
-        outputs
-            .iter()
-            .any(|e| matches!(e, ConsensusOutput::Action(Action::SendVote2(_))))
-    }
-
-    /// Check if received outputs contain a LeafDecided update.
-    fn has_leaf_decided(outputs: &Outbox<ConsensusOutput<TestTypes>>) -> bool {
-        outputs
-            .iter()
-            .any(|e| matches!(e, ConsensusOutput::Event(Event::LeafDecided(_))))
-    }
-
-    /// Check if received outputs contain a RequestState action.
-    fn has_request_state(outputs: &Outbox<ConsensusOutput<TestTypes>>) -> bool {
-        outputs
-            .iter()
-            .any(|e| matches!(e, ConsensusOutput::Action(Action::RequestState(_))))
-    }
-
-    /// Count how many Vote1 actions are in the outputs.
-    fn count_vote1(outputs: &Outbox<ConsensusOutput<TestTypes>>) -> usize {
-        outputs
-            .iter()
-            .filter(|e| matches!(e, ConsensusOutput::Action(Action::SendVote1(_))))
-            .count()
-    }
-
-    /// Count how many Vote2 actions are in the outputs.
-    fn count_vote2(outputs: &Outbox<ConsensusOutput<TestTypes>>) -> usize {
-        outputs
-            .iter()
-            .filter(|e| matches!(e, ConsensusOutput::Action(Action::SendVote2(_))))
-            .count()
     }
 
     #[tokio::test]
@@ -701,7 +763,6 @@ mod test {
         let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
 
         // Set timeout at view 3
-<<<<<<< HEAD
         consensus
             .apply(ConsensusInput::Timeout(ViewNumber::new(3)), &mut outbox)
             .await;
@@ -984,40 +1045,33 @@ mod test {
             .apply(test_data.views[1].proposal_event(&node_key), &mut outbox)
             .await;
 
-        // StateVerificationFailed input with matching state request => removes proposal
-        consensus.apply(ConsensusInput::StateverificationFailed(
-                Event::Update(
-                    Update::StateVerificationFailed(
-                        StateRequest {
-                            view: test_data.views[1].view_number,
-                            parent_view: test_data.views[1]
-                                .proposal
-                                .data
-                                .proposal
-                                .justify_qc
-                                .view_number(),
-                            epoch: test_data.views[1].epoch_number,
-                            block_number: hotshot_types::traits::block_contents::BlockHeader::<
-                                TestTypes,
-                            >::block_number(
-                                &test_data.views[1].proposal.data.proposal.block_header,
-                            ),
-                            proposal: test_data.views[1].proposal.data.proposal.clone(),
-                            parent_commitment: test_data.views[1]
-                                .proposal
-                                .data
-                                .proposal
-                                .justify_qc
-                                .data()
-                                .leaf_commit,
-                            payload_size: 0,
-                        },
-                    ),
-                ),
-            ),
-            &mut outbox
-        )
-        .await;
+        // StateVerificationFailed with matching state request => removes proposal
+        let event = Event::StateVerificationFailed(StateRequest {
+            view: test_data.views[1].view_number,
+            parent_view: test_data.views[1]
+                .proposal
+                .data
+                .proposal
+                .justify_qc
+                .view_number(),
+            epoch: test_data.views[1].epoch_number,
+            block: hotshot_types::traits::block_contents::BlockHeader::<TestTypes>::block_number(
+                &test_data.views[1].proposal.data.proposal.block_header,
+            )
+            .into(),
+            proposal: test_data.views[1].proposal.data.proposal.clone(),
+            parent_commitment: test_data.views[1]
+                .proposal
+                .data
+                .proposal
+                .justify_qc
+                .data()
+                .leaf_commit,
+            payload_size: 0,
+        });
+        consensus
+            .apply(event.try_into().unwrap(), &mut outbox)
+            .await;
 
         // Now send cert1 + block_reconstructed — vote2 should NOT fire
         // because the proposal was removed
@@ -1218,30 +1272,33 @@ mod test {
         // Find who is leader for view 2 (test_data.views[1])
         let leader_for_view_2 = test_data.views[1].leader_public_key;
         let leader_index = node_index_for_key(&leader_for_view_2);
-        let harness = TestHarness::new(leader_index).await;
+        let mut consensus = make_consensus(leader_index).await;
+        let mut outbox = Outbox::new();
 
         // Send proposal for view 1 — since we're leader for view 2,
         // this triggers request_block_and_header for view 2.
         // The mock coordinator responds with HeaderCreated(2, ...) and BlockBuilt(2, ...).
-        harness
-            .send(test_data.views[0].proposal_update(&leader_for_view_2))
+        consensus
+            .apply(
+                test_data.views[0].proposal_event(&leader_for_view_2),
+                &mut outbox,
+            )
             .await;
 
         // Send cert1 for view 1 — triggers maybe_propose(2)
-        harness.send(test_data.views[0].cert1_update()).await;
-
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-        let events = harness.shutdown().await;
+        consensus
+            .apply(test_data.views[0].cert1_event(), &mut outbox)
+            .await;
 
         // The leader should have requested a block and header for view 2
         assert!(
-            has_request_block_and_header(&events),
+            has_request_block_and_header(&outbox),
             "Leader should request block and header for the next view"
         );
 
         // The leader should have sent a proposal for view 2
         assert!(
-            has_proposal(&events),
+            has_proposal(&outbox),
             "Leader should send a proposal when it has cert1, header, block, and vid_disperse"
         );
     }
@@ -1256,32 +1313,35 @@ mod test {
         // The timeout cert is for view 2, so the next view is 3.
         let leader_for_view_3 = test_data.views[2].leader_public_key;
         let leader_index = node_index_for_key(&leader_for_view_3);
-        let harness = TestHarness::new(leader_index).await;
+        let mut consensus = make_consensus(leader_index).await;
+        let mut outbox = Outbox::new();
 
         // Build up locked_qc: process view 1 fully so cert1 for view 1 sets locked_qc
-        harness
-            .send(test_data.views[0].proposal_update(&leader_for_view_3))
+        consensus
+            .apply(
+                test_data.views[0].proposal_event(&leader_for_view_3),
+                &mut outbox,
+            )
             .await;
-        harness
-            .send(test_data.views[0].block_reconstructed_update())
+        consensus
+            .apply(test_data.views[0].block_reconstructed_event(), &mut outbox)
             .await;
-        harness.send(test_data.views[0].cert1_update()).await;
-
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        consensus
+            .apply(test_data.views[0].cert1_event(), &mut outbox)
+            .await;
 
         // Now send timeout cert for view 2 — this triggers request_block_and_header
         // for view 3 if we are leader
-        harness.send(test_data.views[1].timeout_cert_update()).await;
-
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-        let events = harness.shutdown().await;
+        consensus
+            .apply(test_data.views[1].timeout_cert_event(), &mut outbox)
+            .await;
 
         assert!(
-            has_request_block_and_header(&events),
+            has_request_block_and_header(&outbox),
             "Leader should request block and header after timeout"
         );
         assert!(
-            has_proposal(&events),
+            has_proposal(&outbox),
             "Leader should send proposal with timeout view change evidence"
         );
     }
@@ -1296,21 +1356,24 @@ mod test {
         let leader_index = node_index_for_key(&leader_for_view_2);
         let non_leader_index = if leader_index == 0 { 1 } else { 0 };
         let non_leader_key = BLSPubKey::generated_from_seed_indexed([0; 32], non_leader_index).0;
-        let harness = TestHarness::new(non_leader_index).await;
+        let mut consensus = make_consensus(non_leader_index).await;
+        let mut outbox = Outbox::new();
 
         // Send proposal for view 1
-        harness
-            .send(test_data.views[0].proposal_update(&non_leader_key))
+        consensus
+            .apply(
+                test_data.views[0].proposal_event(&non_leader_key),
+                &mut outbox,
+            )
             .await;
 
         // Send cert1 for view 1
-        harness.send(test_data.views[0].cert1_update()).await;
-
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-        let events = harness.shutdown().await;
+        consensus
+            .apply(test_data.views[0].cert1_event(), &mut outbox)
+            .await;
 
         assert!(
-            !has_proposal(&events),
+            !has_proposal(&outbox),
             "Non-leader should NOT send a proposal"
         );
     }

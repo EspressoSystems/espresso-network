@@ -42,7 +42,7 @@ use hotshot_types::{
 
 use crate::{
     events::{ConsensusInput, StateResponse},
-    helpers::upgrade_lock,
+    helpers::{proposal_commitment, upgrade_lock},
     message::{Certificate1, Certificate2, ConsensusMessage, ProposalMessage, Vote2, Vote2Data},
 };
 
@@ -103,7 +103,7 @@ impl TestView {
         ConsensusInput::StateVerified(StateResponse {
             view: self.view_number,
             commitment,
-            state: todo!()
+            state: todo!(),
         })
     }
 
@@ -118,13 +118,11 @@ impl TestView {
     }
 
     /// Build an Event for a timeout certificate.
-    #[allow(dead_code)]
-    pub fn timeout_event(&self) -> ConsensusInput<TestTypes> {
+    pub fn timeout_cert_event(&self) -> ConsensusInput<TestTypes> {
         ConsensusInput::TimeoutCertificate(self.timeout_cert.clone())
     }
 
     /// Build an Event for a view sync certificate.
-    #[allow(dead_code)]
     pub fn view_sync_event(&self) -> ConsensusInput<TestTypes> {
         ConsensusInput::ViewSyncCertificate(self.view_sync_cert.clone())
     }

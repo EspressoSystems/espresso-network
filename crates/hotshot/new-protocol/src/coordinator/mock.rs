@@ -113,10 +113,11 @@ pub mod testing {
         async fn handle_event(&mut self, event: ConsensusOutput<TestTypes>) {
             match &event {
                 ConsensusOutput::Action(action) => self.handle_action(action).await,
-                ConsensusOutput::Event(event) =>
+                ConsensusOutput::Event(event) => {
                     if let Ok(consensus_event) = ConsensusOutput::try_from(event.clone()) {
                         self.consensus_tx.send(consensus_event).await.unwrap();
                     }
+                },
             }
             self.received_events.push(event);
         }
