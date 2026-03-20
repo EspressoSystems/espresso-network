@@ -83,7 +83,21 @@ pub enum ConsensusMessage<TYPES: NodeType> {
     Certificate2(Certificate2<TYPES>, TYPES::SignatureKey),
     TimeoutVote(TimeoutVote2<TYPES>),
     Transactions(Vec<TYPES::Transaction>, ViewNumber),
+    Dedup(DedupManifest<TYPES>),
     Checkpoint(ViewNumber, EpochNumber),
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
+#[serde(bound(deserialize = ""))]
+pub struct DedupManifest<TYPES: NodeType> {
+    pub view: ViewNumber,
+    pub hashes: Vec<Commitment<TYPES::Transaction>>,
+}
+
+impl<TYPES: NodeType> HasViewNumber for DedupManifest<TYPES> {
+    fn view_number(&self) -> ViewNumber {
+        self.view
+    }
 }
 
 impl<TYPES: NodeType> HasViewNumber for ConsensusMessage<TYPES> {
@@ -96,6 +110,7 @@ impl<TYPES: NodeType> HasViewNumber for ConsensusMessage<TYPES> {
             ConsensusMessage::Certificate2(certificate, _) => certificate.view_number(),
             ConsensusMessage::TimeoutVote(vote) => vote.view_number(),
             ConsensusMessage::Transactions(_, view_number) => *view_number,
+            ConsensusMessage::Dedup(manifest) => manifest.view_number(),
             ConsensusMessage::Checkpoint(view_number, _) => *view_number,
         }
     }

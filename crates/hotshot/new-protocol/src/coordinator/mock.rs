@@ -128,6 +128,8 @@ pub mod testing {
                 },
                 Action::RequestProposal { view, commitment } => {},
                 Action::RequestDRB(drb_input) => {},
+                Action::ForwardTransactions(..) => {},
+                Action::SendDedupManifest(_) => {},
                 Action::Shutdown => {
                     unreachable!()
                 },

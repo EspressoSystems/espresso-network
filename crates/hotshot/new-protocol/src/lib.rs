@@ -1,3 +1,4 @@
+mod block;
 mod consensus;
 mod validated_state;
 mod io;

@@ -15,7 +15,9 @@ use hotshot_types::{
     vote::HasViewNumber,
 };
 
-use crate::message::{Certificate1, Certificate2, ConsensusMessage, ProposalMessage, Vote1, Vote2};
+use crate::message::{
+    Certificate1, Certificate2, ConsensusMessage, DedupManifest, ProposalMessage, Vote1, Vote2,
+};
 
 #[derive(Eq, PartialEq, Debug)]
 pub struct StateRequest<TYPES: NodeType> {
@@ -87,6 +89,8 @@ pub enum Action<TYPES: NodeType> {
         commitment: Commitment<Leaf2<TYPES>>,
     },
     RequestDRB(DrbInput),
+    ForwardTransactions(Vec<TYPES::Transaction>, ViewNumber),
+    SendDedupManifest(DedupManifest<TYPES>),
     Shutdown,
 }
 
@@ -178,6 +182,15 @@ impl<TYPES: NodeType> ConsensusInput<TYPES> {
 pub enum NetworkEvent<TYPES: NodeType> {
     SendMessage(ConsensusMessage<TYPES>),
     ViewChanged(ViewNumber, EpochNumber),
+}
+
+#[allow(clippy::large_enum_variant)]
+pub enum BlockEvent<TYPES: NodeType> {
+    SubmitTransaction(TYPES::Transaction),
+    TransactionsReceived(Vec<TYPES::Transaction>, ViewNumber),
+    DedupManifestReceived(DedupManifest<TYPES>),
+    ViewChanged(ViewNumber, EpochNumber),
+    BlockReconstructed(ViewNumber, TYPES::BlockPayload),
 }
 
 #[allow(clippy::large_enum_variant)]

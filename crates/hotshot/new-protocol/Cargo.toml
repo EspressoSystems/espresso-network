@@ -33,7 +33,6 @@ hotshot-testing = { workspace = true }
 hotshot-types = { workspace = true }
 hotshot-utils = { workspace = true }
 jf-advz = { workspace = true }
-lru = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true }
 serde-inline-default = { workspace = true }
