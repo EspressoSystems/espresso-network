@@ -418,9 +418,14 @@ impl RewardMerkleTreeDataSource for SqlStorage {
         version: Version,
     ) -> impl Send + Future<Output = anyhow::Result<()>> {
         async move {
-            // For V4 (per-block rewards), rate limit since this is called every block.
+            // For V4 (per-block rewards), only persist proofs every 30th block.
             // For V5+ (epoch rewards), this is only called at epoch boundaries.
-            if version < EPOCH_REWARD_VERSION && !(height + node_state.node_id).is_multiple_of(30) {
+            // In tests, persist reward proofs at every block height so tests
+            // can query proofs at arbitrary heights.
+            if !cfg!(any(test, feature = "testing"))
+                && version < EPOCH_REWARD_VERSION
+                && !(height + node_state.node_id).is_multiple_of(30)
+            {
                 return Ok(());
             }
 
