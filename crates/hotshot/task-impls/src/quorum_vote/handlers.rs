@@ -227,10 +227,10 @@ pub(crate) async fn handle_quorum_proposal_validated<
             .add_point(cur_number_of_views_per_decide_event as f64);
         for leaf in leaf_views.iter().rev() {
             let qc_epoch = leaf.leaf.justify_qc().epoch();
-            if qc_epoch > Some(consensus_writer.current_proposal_participation_epoch()) {
-                if let Some(e) = qc_epoch {
-                    consensus_writer.update_validator_participation_epoch(e);
-                }
+            if qc_epoch > Some(consensus_writer.current_proposal_participation_epoch())
+                && let Some(e) = qc_epoch
+            {
+                consensus_writer.update_validator_participation_epoch(e);
             }
             if qc_epoch > consensus_writer.current_vote_participation_epoch() {
                 let (stake_table, success_threshold) = if let Ok(epoch_membership) =
