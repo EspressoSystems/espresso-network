@@ -1,8 +1,11 @@
+use std::sync::Arc;
+
 use committable::Commitment;
-use hotshot::traits::BlockPayload;
+use hotshot::traits::{BlockPayload, ValidatedState};
 use hotshot_types::{
     data::{
-        BlockNumber, EpochNumber, Leaf2, QuorumProposal2, VidCommitment2, VidDisperse2, ViewNumber,
+        BlockNumber, EpochNumber, Leaf2, QuorumProposal2, VidCommitment, VidCommitment2, VidDisperse2,
+        ViewNumber,
     },
     drb::{DrbInput, DrbResult},
     simple_certificate::{TimeoutCertificate2, ViewSyncFinalizeCertificate2},
@@ -15,15 +18,20 @@ use hotshot_types::{
     vote::HasViewNumber,
 };
 
-use crate::message::{Certificate1, Certificate2, ConsensusMessage, ProposalMessage, Vote1, Vote2};
+use crate::{
+    helpers::proposal_commitment,
+    message::{Certificate1, Certificate2, ConsensusMessage, ProposalMessage, Vote1, Vote2},
+};
 
-#[derive(Eq, PartialEq, Debug)]
+#[derive(Eq, PartialEq, Debug, Clone)]
 pub struct StateRequest<TYPES: NodeType> {
     pub view: ViewNumber,
     pub parent_view: ViewNumber,
     pub epoch: EpochNumber,
     pub block: BlockNumber,
     pub proposal: QuorumProposal2<TYPES>,
+    pub parent_commitment: Commitment<Leaf2<TYPES>>,
+    pub payload_size: u32,
 }
 
 impl<T: NodeType> From<QuorumProposal2<T>> for StateRequest<T> {
@@ -42,6 +50,7 @@ impl<T: NodeType> From<QuorumProposal2<T>> for StateRequest<T> {
 pub struct StateResponse<TYPES: NodeType> {
     pub view: ViewNumber,
     pub commitment: Commitment<Leaf2<TYPES>>,
+    pub state: Arc<TYPES::ValidatedState>,
 }
 
 #[derive(Clone, Eq, PartialEq, Debug)]
@@ -63,6 +72,7 @@ pub struct HeaderRequest<TYPES: NodeType> {
     pub view: ViewNumber,
     pub epoch: EpochNumber,
     pub parent_proposal: QuorumProposal2<TYPES>,
+    pub payload_commitment: VidCommitment,
     pub builder_commitment: BuilderCommitment,
     pub metadata: <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
     pub builder_fee: BuilderFee<TYPES>,
@@ -90,11 +100,12 @@ pub enum Action<TYPES: NodeType> {
     Shutdown,
 }
 
-#[derive(Eq, PartialEq, Debug)]
+#[derive(Clone, Eq, PartialEq, Debug)]
 #[allow(clippy::large_enum_variant)]
 pub enum Event<TYPES: NodeType> {
+    MessageReceived(ConsensusMessage<TYPES>),
     StateVerified(StateRequest<TYPES>),
-    HeaderCreated(TYPES::BlockHeader),
+    HeaderCreated(ViewNumber, TYPES::BlockHeader),
     StateVerificationFailed(StateRequest<TYPES>),
     HeaderCreationFailed(BlockAndHeaderRequest<TYPES>),
     VidDisperseCreated(VidCommitment2, VidDisperse2<TYPES>),
@@ -110,6 +121,9 @@ pub enum Event<TYPES: NodeType> {
         block: TYPES::BlockPayload,
         commitment: VidCommitment2,
     },
+    Timeout(ViewNumber),
+    TimeoutCertificateReceived(TimeoutCertificate2<TYPES>),
+    ViewSyncCertificateReceived(ViewSyncFinalizeCertificate2<TYPES>),
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -140,7 +154,12 @@ pub enum ConsensusInput<TYPES: NodeType> {
     TimeoutCertificate(TimeoutCertificate2<TYPES>),
     ViewSyncCertificate(ViewSyncFinalizeCertificate2<TYPES>),
     BlockReconstructed(ViewNumber, VidCommitment2),
-    BlockBuilt(ViewNumber, TYPES::BlockPayload),
+    BlockBuilt(
+        ViewNumber,
+        EpochNumber,
+        TYPES::BlockPayload,
+        <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
+    ),
     VidDisperseCreated(ViewNumber, VidDisperse2<TYPES>),
     StateVerified(StateResponse<TYPES>),
     HeaderCreated(ViewNumber, TYPES::BlockHeader),
@@ -168,8 +187,59 @@ impl<TYPES: NodeType> ConsensusInput<TYPES> {
             ConsensusInput::HeaderCreated(view_number, _) => *view_number,
             ConsensusInput::StateVerificationFailed(state_request) => state_request.view,
             ConsensusInput::Timeout(view_number) => *view_number,
-            ConsensusInput::BlockBuilt(view_number, _) => *view_number,
+            ConsensusInput::BlockBuilt(view_number, ..) => *view_number,
             ConsensusInput::VidDisperseCreated(view_number, _) => *view_number,
+        }
+    }
+}
+
+impl<TYPES: NodeType> TryFrom<Update<TYPES>> for ConsensusEvent<TYPES> {
+    type Error = ();
+
+    fn try_from(update: Update<TYPES>) -> Result<Self, ()> {
+        match update {
+            Update::MessageReceived(msg) => match msg {
+                ConsensusMessage::Proposal(proposal_msg) => {
+                    Ok(ConsensusEvent::Proposal(proposal_msg))
+                },
+                ConsensusMessage::Certificate1(cert, _key) => {
+                    Ok(ConsensusEvent::Certificate1(cert))
+                },
+                ConsensusMessage::Certificate2(cert, _key) => {
+                    Ok(ConsensusEvent::Certificate2(cert))
+                },
+                _ => Err(()),
+            },
+            Update::BlockReconstructed(view, _payload, vid_commit) => {
+                Ok(ConsensusEvent::BlockReconstructed(view, vid_commit))
+            },
+            Update::Timeout(view) => Ok(ConsensusEvent::Timeout(view)),
+            Update::TimeoutCertificateReceived(cert) => {
+                Ok(ConsensusEvent::TimeoutCertificate(cert))
+            },
+            Update::ViewSyncCertificateReceived(cert) => {
+                Ok(ConsensusEvent::ViewSyncCertificate(cert))
+            },
+            Update::StateVerified(request) => {
+                let commitment = proposal_commitment(&request.proposal);
+                let state = TYPES::ValidatedState::from_header(&request.proposal.block_header);
+                Ok(ConsensusEvent::StateVerified(StateResponse {
+                    view: request.view,
+                    commitment,
+                    state: Arc::new(state),
+                }))
+            },
+            Update::StateVerificationFailed(request) => {
+                let commitment = proposal_commitment(&request.proposal);
+                let state = TYPES::ValidatedState::from_header(&request.proposal.block_header);
+                Ok(ConsensusEvent::StateVerificationFailed(StateResponse {
+                    view: request.view,
+                    commitment,
+                    state: Arc::new(state),
+                }))
+            },
+            Update::HeaderCreated(view, header) => Ok(ConsensusEvent::HeaderCreated(view, header)),
+            _ => Err(()),
         }
     }
 }
@@ -199,7 +269,17 @@ pub enum StorageEvent<TYPES: NodeType> {
 pub enum StateEvent<TYPES: NodeType> {
     RequestState(StateRequest<TYPES>),
     RequestHeader(HeaderRequest<TYPES>),
-    UpdateState(TYPES::ValidatedState, ViewNumber, Commitment<Leaf2<TYPES>>),
+    UpdateState(TYPES::ValidatedState, ViewNumber, Leaf2<TYPES>),
+}
+
+impl<TYPES: NodeType> HasViewNumber for StateEvent<TYPES> {
+    fn view_number(&self) -> ViewNumber {
+        match self {
+            StateEvent::RequestState(request) => request.view,
+            StateEvent::RequestHeader(request) => request.view,
+            StateEvent::UpdateState(_, view, _) => *view,
+        }
+    }
 }
 
 #[allow(clippy::large_enum_variant)]

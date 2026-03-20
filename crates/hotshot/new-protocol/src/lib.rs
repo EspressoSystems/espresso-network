@@ -5,7 +5,7 @@ mod coordinator;
 mod helpers;
 
 #[cfg(test)]
-pub(crate) mod test_utils;
+mod tests;
 
 pub mod events;
 pub mod message;

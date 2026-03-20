@@ -12,6 +12,7 @@ use hotshot::{
     types::{BLSPrivKey, BLSPubKey, SchnorrPubKey},
 };
 use hotshot_example_types::{
+    block_types::TestBlockPayload,
     membership::{static_committee::StaticStakeTable, strict_membership::StrictMembership},
     node_types::{MemoryImpl, TEST_VERSIONS, TestTypes},
     storage_types::TestStorage,
@@ -41,8 +42,8 @@ use hotshot_types::{
 
 use crate::{
     events::{ConsensusInput, StateResponse},
-    helpers::{proposal_commitment, upgrade_lock},
-    message::{Certificate1, Certificate2, ProposalMessage, Vote2, Vote2Data},
+    helpers::upgrade_lock,
+    message::{Certificate1, Certificate2, ConsensusMessage, ProposalMessage, Vote2, Vote2Data},
 };
 
 #[allow(dead_code)]
@@ -102,6 +103,7 @@ impl TestView {
         ConsensusInput::StateVerified(StateResponse {
             view: self.view_number,
             commitment,
+            state: todo!()
         })
     }
 
@@ -115,13 +117,13 @@ impl TestView {
         ConsensusInput::Certificate2(self.cert2.clone())
     }
 
-    /// Build a ConsensusEvent::TimeoutCertificate for this view.
+    /// Build an Event for a timeout certificate.
     #[allow(dead_code)]
     pub fn timeout_event(&self) -> ConsensusInput<TestTypes> {
         ConsensusInput::TimeoutCertificate(self.timeout_cert.clone())
     }
 
-    /// Build a ConsensusEvent::ViewSyncCertificate for this view.
+    /// Build an Event for a view sync certificate.
     #[allow(dead_code)]
     pub fn view_sync_event(&self) -> ConsensusInput<TestTypes> {
         ConsensusInput::ViewSyncCertificate(self.view_sync_cert.clone())
