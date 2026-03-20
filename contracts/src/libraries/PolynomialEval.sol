@@ -211,10 +211,11 @@ library PolynomialEval {
                 suffixPtr := sub(suffixPtr, 0x20)
 
                 // suffix[length - i - 1] = suffix[length - i] * (zeta - g^(length - i))
-                currentElementSuffix :=
-                    mulmod(
-                        currentElementSuffix, addmod(sub(p, mload(localDomainElementsPtr)), zeta, p), p
-                    )
+                currentElementSuffix := mulmod(
+                    currentElementSuffix,
+                    addmod(sub(p, mload(localDomainElementsPtr)), zeta, p),
+                    p
+                )
                 mstore(suffixPtr, currentElementSuffix)
 
                 localDomainElementsPtr := sub(localDomainElementsPtr, 0x20)
@@ -243,10 +244,11 @@ library PolynomialEval {
                 sum := addmod(sum, currentTerm, p)
 
                 // currentElementPrefix holds \prod_{j=0}^{i} (zeta - g^j) and is updated at each i.
-                currentElementPrefix :=
-                    mulmod(
-                        currentElementPrefix, addmod(sub(p, mload(localDomainElementsPtr)), zeta, p), p
-                    )
+                currentElementPrefix := mulmod(
+                    currentElementPrefix,
+                    addmod(sub(p, mload(localDomainElementsPtr)), zeta, p),
+                    p
+                )
 
                 // move the pointers
                 suffixPtr := add(suffixPtr, 0x20)
@@ -280,8 +282,11 @@ library PolynomialEval {
         evalData.vanishEval = BN254.ScalarField.wrap(evaluateVanishingPoly(self, zeta));
         evalData.lagrangeOne =
             evaluateLagrangeOne(self, BN254.ScalarField.wrap(zeta), evalData.vanishEval);
-        evalData.piEval = BN254.ScalarField.wrap(
-            evaluatePiPoly(self, publicInput, zeta, BN254.ScalarField.unwrap(evalData.vanishEval))
-        );
+        evalData.piEval = BN254.ScalarField
+            .wrap(
+                evaluatePiPoly(
+                    self, publicInput, zeta, BN254.ScalarField.unwrap(evalData.vanishEval)
+                )
+            );
     }
 }

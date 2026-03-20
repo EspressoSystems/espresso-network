@@ -8,8 +8,9 @@ import { Test } from "forge-std/Test.sol";
 import { StakeTableV2 } from "../src/StakeTableV2.sol";
 import { StakeTable as S } from "../src/StakeTable.sol";
 import { IAccessControl } from "@openzeppelin/contracts/access/IAccessControl.sol";
-import { OwnableUpgradeable } from
-    "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import {
+    OwnableUpgradeable
+} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import { StakeTableUpgradeV2Test } from "./StakeTable.t.sol";
 import { StakeTable_register_Test } from "./StakeTable.t.sol";
 import { ILightClient } from "../src/interfaces/ILightClient.sol";
@@ -518,7 +519,7 @@ contract StakeTableV2GovernanceTest is Test {
 
         vm.startPrank(initialOwner);
         proxy.grantRole(proxy.PAUSER_ROLE(), notAdmin); // ensure notAdmin is in actors but not
-            // admin
+        // admin
         vm.stopPrank();
 
         vm.startPrank(notAdmin);
