@@ -62,9 +62,11 @@ impl RangeRequest {
     pub fn from_headers<Types: NodeType>(headers: &[impl BlockHeader<Types>]) -> Self {
         let expected_hash =
             Self::hash_payloads(headers.iter().map(|header| header.payload_commitment()));
+        let start = headers[0].block_number();
+        let end = start + (headers.len() as u64);
         Self {
-            start: headers[0].block_number(),
-            end: headers[headers.len() - 1].block_number(),
+            start,
+            end,
             expected_hash,
         }
     }

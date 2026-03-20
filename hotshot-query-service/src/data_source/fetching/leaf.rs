@@ -434,14 +434,15 @@ where
                     leaves[0].height(),
                     leaves[leaves.len() - 1].height() + 1
                 );
-
-                for (i, leaf) in leaves.into_iter().enumerate() {
-                    if i == 0 {
-                        // Trigger a fetch of the parent of the first leaf in the chain, if we don't already
-                        // have it.
-                        trigger_fetch_for_parent(&fetcher, &leaf);
-                    }
+                for leaf in leaves {
                     fetcher.store_and_notify(&leaf).await;
+
+                    // Unlike in the singular leaf version of this callback, we do not call
+                    // `trigger_fetch_for_parent` to start a potential chain reaction for a
+                    // contiguous range of leaves. This is because we have already just fetched a
+                    // contiguous range, and if we are currently bulk fetching, it is more efficient
+                    // to continue bulk fetching, rather than kick of a chain reaction of individual
+                    // fetches, which will end up fetching the same data, slower.
                 }
             },
             Self::Continuation { callback } => callback.run_range(

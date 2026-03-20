@@ -10,7 +10,9 @@
 // You should have received a copy of the GNU General Public License along with this program. If not,
 // see <https://www.gnu.org/licenses/>.
 
-use anyhow::Context;
+use std::fmt::Debug;
+
+use anyhow::{Context, ensure};
 use async_trait::async_trait;
 use committable::Committable;
 use hotshot_types::{
@@ -54,13 +56,11 @@ impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
     }
 }
 
-#[async_trait]
-impl<Types, Ver: StaticVersionType> Provider<Types, PayloadRequest> for QueryServiceProvider<Ver>
-where
-    Types: NodeType,
-{
-    async fn fetch(&self, req: PayloadRequest) -> Option<Payload<Types>> {
-        let client_url = self.client.base_url();
+impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
+    pub async fn fetch_payload<Types: NodeType>(
+        &self,
+        req: PayloadRequest,
+    ) -> anyhow::Result<Payload<Types>> {
         let req_hash = req.0;
 
         // Fetch the payload and the VID common data. We need the common data to recompute the VID
@@ -71,10 +71,7 @@ where
             .get::<BlockQueryData<Types>>(&format!("availability/block/payload-hash/{req_hash}"))
             .send()
             .await
-            .inspect_err(|err| {
-                tracing::info!(%req_hash, %client_url, "failed to fetch block: {err:#}");
-            })
-            .ok()?;
+            .context("fetching block")?;
         let common = self
             .client
             .get::<VidCommonQueryData<Types>>(&format!(
@@ -82,39 +79,22 @@ where
             ))
             .send()
             .await
-            .inspect_err(|err| {
-                tracing::info!(%req_hash, %client_url, "failed to fetch VID common bytes: {err:#}");
-            })
-            .ok()?;
+            .context("fetching VID common")?;
 
-        let comm = recompute_payload_commitment(&block, &common)
-            .inspect_err(|err| {
-                tracing::error!(?req, "failed to compute VID commitment: {err:#}");
-            })
-            .ok()?;
-        if comm != req_hash {
-            tracing::error!(
-                expected = %req_hash,
-                actual = %comm,
-                %client_url,
-                "VID commitment mismatch"
-            );
+        let comm =
+            recompute_payload_commitment(&block, &common).context("computing VID commitment")?;
+        ensure!(
+            comm == req_hash,
+            "VID commitment {comm} does not match request"
+        );
 
-            return None;
-        }
-
-        Some(block.payload)
+        Ok(block.payload)
     }
-}
 
-#[async_trait]
-impl<Types, Ver: StaticVersionType> Provider<Types, PayloadRangeRequest>
-    for QueryServiceProvider<Ver>
-where
-    Types: NodeType,
-{
-    async fn fetch(&self, req: PayloadRangeRequest) -> Option<Vec<Payload<Types>>> {
-        let client_url = self.client.base_url();
+    pub async fn fetch_payload_range<Types: NodeType>(
+        &self,
+        req: PayloadRangeRequest,
+    ) -> anyhow::Result<Vec<Payload<Types>>> {
         let req = RangeRequest::from(req);
 
         // Fetch the payload and the VID common data. We need the common data to recompute the VID
@@ -128,10 +108,7 @@ where
             ))
             .send()
             .await
-            .inspect_err(|err| {
-                tracing::info!(?req, %client_url, "failed to fetch blocks: {err:#}");
-            })
-            .ok()?;
+            .context("fetching blocks")?;
         let common = self
             .client
             .get::<Vec<VidCommonQueryData<Types>>>(&format!(
@@ -140,52 +117,63 @@ where
             ))
             .send()
             .await
-            .inspect_err(|err| {
-                tracing::info!(?req, %client_url, "failed to fetch VID common: {err:#}");
-            })
-            .ok()?;
+            .context("fetching VID common")?;
 
-        if blocks.len() != (req.end - req.start) as usize {
-            tracing::warn!(
-                %client_url,
-                expected = req.end - req.start,
-                actual = blocks.len(),
-                "server returned wrong number of blocks",
-            );
-            return None;
-        }
-        if common.len() != (req.end - req.start) as usize {
-            tracing::warn!(
-                %client_url,
-                expected = req.end - req.start,
-                actual = common.len(),
-                "server returned wrong number of VID common",
-            );
-            return None;
-        }
+        ensure!(
+            blocks.len() == (req.end - req.start) as usize,
+            "wrong number of blocks ({})",
+            blocks.len(),
+        );
+        ensure!(
+            common.len() == (req.end - req.start) as usize,
+            "wrong number of VID common ({})",
+            common.len(),
+        );
 
         let commits = blocks
             .iter()
             .zip(&common)
             .map(|(block, common)| recompute_payload_commitment(block, common))
             .collect::<Result<Vec<VidCommitment>, _>>()
-            .inspect_err(|err| {
-                tracing::error!(?req, "failed to compute VID commitments: {err:#}");
-            })
-            .ok()?;
-        let hash = RangeRequest::hash_payloads(commits);
-        if hash != req.expected_hash {
-            tracing::error!(
-                %client_url,
-                ?req,
-                %hash,
-                %req.expected_hash,
-                "server returned blocks with wrong payload hash",
-            );
-            return None;
-        }
+            .context("computing VID commitments")?;
+        let hash = RangeRequest::hash_payloads(commits.iter().copied());
+        ensure!(
+            hash == req.expected_hash,
+            "server returned blocks with wrong payload hash ({hash}, commits {commits:?})",
+        );
 
-        Some(blocks.into_iter().map(|block| block.payload).collect())
+        Ok(blocks.into_iter().map(|block| block.payload).collect())
+    }
+
+    fn handle_result<R: Debug, T>(&self, req: R, res: anyhow::Result<T>) -> Option<T> {
+        match res {
+            Ok(res) => Some(res),
+            Err(err) => {
+                tracing::warn!(upstream = %self.client.base_url(), ?req, "failed to fetch: {err:#}");
+                None
+            },
+        }
+    }
+}
+
+#[async_trait]
+impl<Types, Ver: StaticVersionType> Provider<Types, PayloadRequest> for QueryServiceProvider<Ver>
+where
+    Types: NodeType,
+{
+    async fn fetch(&self, req: PayloadRequest) -> Option<Payload<Types>> {
+        self.handle_result(req, self.fetch_payload::<Types>(req).await)
+    }
+}
+
+#[async_trait]
+impl<Types, Ver: StaticVersionType> Provider<Types, PayloadRangeRequest>
+    for QueryServiceProvider<Ver>
+where
+    Types: NodeType,
+{
+    async fn fetch(&self, req: PayloadRangeRequest) -> Option<Vec<Payload<Types>>> {
+        self.handle_result(req, self.fetch_payload_range::<Types>(req).await)
     }
 }
 
@@ -236,55 +224,33 @@ where
     }
 }
 
-#[async_trait]
-impl<Types, Ver: StaticVersionType> Provider<Types, LeafRequest<Types>>
-    for QueryServiceProvider<Ver>
-where
-    Types: NodeType,
-{
-    async fn fetch(&self, req: LeafRequest<Types>) -> Option<LeafQueryData<Types>> {
-        let client_url = self.client.base_url();
-
-        let leaf = self
+impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
+    pub async fn fetch_leaf<Types: NodeType>(
+        &self,
+        req: LeafRequest<Types>,
+    ) -> anyhow::Result<LeafQueryData<Types>> {
+        let mut leaf = self
             .client
             .get::<LeafQueryData<Types>>(&format!("availability/leaf/{}", req.height))
             .send()
-            .await;
-        let mut leaf = match leaf {
-            Ok(leaf) => leaf,
-            Err(err) => {
-                tracing::info!(%client_url, ?req, %err, "failed to fetch leaf");
-                return None;
-            },
-        };
+            .await
+            .context("fetching leaf")?;
 
-        if leaf.height() != req.height {
-            tracing::error!(
-                %client_url, ?req, ?leaf,
-                expected_height = req.height,
-                actual_height = leaf.height(),
-                "received leaf with the wrong height"
-            );
-            return None;
-        }
-        if leaf.hash() != req.expected_leaf {
-            tracing::error!(
-                %client_url, ?req, ?leaf,
-                expected_hash = %req.expected_leaf,
-                actual_hash = %leaf.hash(),
-                "received leaf with the wrong hash"
-            );
-            return None;
-        }
-        if leaf.qc().commit() != req.expected_qc {
-            tracing::error!(
-                %client_url, ?req, ?leaf,
-                expected_qc = %req.expected_qc,
-                actual_qc = %leaf.qc().commit(),
-                "received leaf with the wrong QC"
-            );
-            return None;
-        }
+        ensure!(
+            leaf.height() == req.height,
+            "received leaf with the wrong height ({})",
+            leaf.height(),
+        );
+        ensure!(
+            leaf.hash() == req.expected_leaf,
+            "received leaf with the wrong hash ({})",
+            leaf.hash()
+        );
+        ensure!(
+            leaf.qc().commit() == req.expected_qc,
+            "received leaf with the wrong QC ({})",
+            leaf.qc().commit()
+        );
 
         // There is a potential DOS attack where the peer sends us a leaf with the full
         // payload in it, which uses redundant resources in the database, since we fetch and
@@ -292,20 +258,14 @@ where
         // if present.
         leaf.leaf.unfill_block_payload();
 
-        Some(leaf)
+        Ok(leaf)
     }
-}
 
-#[async_trait]
-impl<Types, Ver: StaticVersionType> Provider<Types, LeafRangeRequest<Types>>
-    for QueryServiceProvider<Ver>
-where
-    Types: NodeType,
-{
-    async fn fetch(&self, req: LeafRangeRequest<Types>) -> Option<Vec<LeafQueryData<Types>>> {
-        let client_url = self.client.base_url();
-
-        let mut leaves = match self
+    pub async fn fetch_leaf_range<Types: NodeType>(
+        &self,
+        req: LeafRangeRequest<Types>,
+    ) -> anyhow::Result<Vec<LeafQueryData<Types>>> {
+        let mut leaves = self
             .client
             .get::<Vec<LeafQueryData<Types>>>(&format!(
                 "availability/leaf/{}/{}",
@@ -313,23 +273,13 @@ where
             ))
             .send()
             .await
-        {
-            Ok(leaves) => leaves,
-            Err(err) => {
-                tracing::warn!(%client_url, ?req, "failed to fetch leaf chain: {err:#}");
-                return None;
-            },
-        };
+            .context("fetching leaf chain")?;
 
-        if leaves.len() != (req.end - req.start) as usize {
-            tracing::warn!(
-                %client_url,
-                expected = req.end - req.start,
-                actual = leaves.len(),
-                "server returned wrong number of leaves",
-            );
-            return None;
-        }
+        ensure!(
+            leaves.len() == (req.end - req.start) as usize,
+            "server returned wrong number of leaves ({})",
+            leaves.len()
+        );
 
         // Verify hash chaining.
         let mut expected_leaf = req.last_leaf;
@@ -343,35 +293,111 @@ where
 
             let leaf_hash = leaf.hash();
             let qc_hash = leaf.qc().commit();
-            if leaf_hash != expected_leaf {
-                tracing::error!(
-                    %client_url,
-                    ?req,
-                    ?leaf,
-                    %expected_leaf,
-                    %leaf_hash,
-                    leaf_height = leaf.height(),
-                    "received leaf with wrong hash",
-                );
-                return None;
-            }
-            if qc_hash != expected_qc {
-                tracing::error!(
-                    %client_url,
-                    ?req,
-                    ?leaf,
-                    %expected_qc,
-                    %qc_hash,
-                    leaf_height = leaf.height(),
-                    "received leaf with wrong QC",
-                );
-                return None;
-            }
+            ensure!(
+                leaf_hash == expected_leaf,
+                "received leaf {} with wrong hash {leaf_hash}",
+                leaf.height(),
+            );
+            ensure!(
+                qc_hash == expected_qc,
+                "received leaf {} with wrong QC {qc_hash}",
+                leaf.height()
+            );
             expected_leaf = leaf.leaf().parent_commitment();
             expected_qc = leaf.leaf().justify_qc().commit();
         }
 
-        Some(leaves)
+        Ok(leaves)
+    }
+}
+
+#[async_trait]
+impl<Types, Ver: StaticVersionType> Provider<Types, LeafRequest<Types>>
+    for QueryServiceProvider<Ver>
+where
+    Types: NodeType,
+{
+    async fn fetch(&self, req: LeafRequest<Types>) -> Option<LeafQueryData<Types>> {
+        self.handle_result(req, self.fetch_leaf(req).await)
+    }
+}
+
+#[async_trait]
+impl<Types, Ver: StaticVersionType> Provider<Types, LeafRangeRequest<Types>>
+    for QueryServiceProvider<Ver>
+where
+    Types: NodeType,
+{
+    async fn fetch(&self, req: LeafRangeRequest<Types>) -> Option<Vec<LeafQueryData<Types>>> {
+        self.handle_result(req, self.fetch_leaf_range(req).await)
+    }
+}
+
+impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
+    pub async fn fetch_vid_common<Types: NodeType>(
+        &self,
+        req: VidCommonRequest,
+    ) -> anyhow::Result<VidCommon> {
+        let res = self
+            .client
+            .get::<VidCommonQueryData<Types>>(&format!(
+                "availability/vid/common/payload-hash/{}",
+                req.0
+            ))
+            .send()
+            .await
+            .context("fetching VID common")?;
+
+        ensure!(
+            res.common().is_consistent(&req.0),
+            "inconsistent VID common data {:?}",
+            res.common,
+        );
+        Ok(res.common)
+    }
+
+    pub async fn fetch_vid_common_range<Types: NodeType>(
+        &self,
+        req: VidCommonRangeRequest,
+    ) -> anyhow::Result<Vec<VidCommon>> {
+        let req = RangeRequest::from(req);
+        let common = self
+            .client
+            .get::<Vec<VidCommonQueryData<Types>>>(&format!(
+                "availability/vid/common/{}/{}",
+                req.start, req.end
+            ))
+            .send()
+            .await
+            .context("fetching VID common")?;
+
+        ensure!(
+            common.len() == (req.end - req.start) as usize,
+            "server returned wrong number of VID common ({})",
+            common.len()
+        );
+
+        let commits = common
+            .iter()
+            .map(|common| {
+                // Check that the given `VidCommon` matches the claimed payload commitment.
+                ensure!(
+                    common.common().is_consistent(&common.payload_hash()),
+                    "server returned VID common with inconsistent commitment {common:?}"
+                );
+
+                // Yield the payload commitment for hashing, to check that the full sequence of payloads
+                // is consistent with the request.
+                Ok(common.payload_hash())
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        let hash = RangeRequest::hash_payloads(commits.iter().copied());
+        ensure!(
+            hash == req.expected_hash,
+            "server returned wrong VID common (hash {hash}, commits {commits:?})"
+        );
+
+        Ok(common.into_iter().map(|common| common.common).collect())
     }
 }
 
@@ -381,34 +407,7 @@ where
     Types: NodeType,
 {
     async fn fetch(&self, req: VidCommonRequest) -> Option<VidCommon> {
-        let client_url = self.client.base_url();
-        let res = self
-            .client
-            .get::<VidCommonQueryData<Types>>(&format!(
-                "availability/vid/common/payload-hash/{}",
-                req.0
-            ))
-            .send()
-            .await;
-        let res = match res {
-            Ok(res) => res,
-            Err(err) => {
-                tracing::info!(
-                    %client_url, ?req, %err,
-                    "failed to fetch VID common"
-                );
-                return None;
-            },
-        };
-
-        if !res.common().is_consistent(&req.0) {
-            tracing::error!(
-                %client_url, ?req, ?res.common,
-                "fetched inconsistent VID common data"
-            );
-            return None;
-        }
-        Some(res.common)
+        self.handle_result(req, self.fetch_vid_common::<Types>(req).await)
     }
 }
 
@@ -419,57 +418,7 @@ where
     Types: NodeType,
 {
     async fn fetch(&self, req: VidCommonRangeRequest) -> Option<Vec<VidCommon>> {
-        let req = RangeRequest::from(req);
-        let client_url = self.client.base_url();
-        let common = self
-            .client
-            .get::<Vec<VidCommonQueryData<Types>>>(&format!(
-                "availability/vid/common/{}/{}",
-                req.start, req.end
-            ))
-            .send()
-            .await
-            .inspect_err(|err| {
-                tracing::warn!(%client_url, ?req, "failed to fetch VID common: {err:#}");
-            })
-            .ok()?;
-
-        if common.len() != (req.end - req.start) as usize {
-            tracing::error!(
-                %client_url,
-                ?req,
-                len = common.len(),
-                "server returned wrong number of VID common",
-            );
-            return None;
-        }
-
-        let commits = common
-            .iter()
-            .map(|common| {
-                // Check that the given `VidCommon` matches the claimed payload commitment.
-                if !common.common().is_consistent(&common.payload_hash()) {
-                    tracing::error!(
-                        %client_url,
-                        ?req,
-                        commit = %common.payload_hash(),
-                        "server returned VID common with inconsistent commitment",
-                    );
-                    return None;
-                }
-
-                // Yield the payload commitment for hashing, to check that the full sequence of payloads
-                // is consistent with the request.
-                Some(common.payload_hash())
-            })
-            .collect::<Option<Vec<_>>>()?;
-        let hash = RangeRequest::hash_payloads(commits);
-        if hash != req.expected_hash {
-            tracing::error!(%client_url, ?req, %hash, "server returned wrong VID common");
-            return None;
-        }
-
-        Some(common.into_iter().map(|common| common.common).collect())
+        self.handle_result(req, self.fetch_vid_common_range::<Types>(req).await)
     }
 }
 
@@ -478,7 +427,7 @@ where
 mod test {
     use std::{future::IntoFuture, time::Duration};
 
-    use committable::Committable;
+    use committable::{Commitment, Committable};
     use futures::{
         future::{FutureExt, join},
         stream::StreamExt,
@@ -498,7 +447,7 @@ mod test {
         api::load_api,
         availability::{
             AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, BlockWithTransaction,
-            Fetch, PayloadQueryData, UpdateAvailabilityData, define_api,
+            Fetch, UpdateAvailabilityData, define_api,
         },
         data_source::{
             AvailabilityProvider, FetchingDataSource, Transaction, VersionedDataSource,
@@ -1412,6 +1361,16 @@ mod test {
         VidCommitment::V0(GenericArray::from(bytes).into())
     }
 
+    fn random_leaf_request() -> LeafRequest<MockTypes> {
+        let mut bytes = [0; 32];
+        rand::thread_rng().fill_bytes(&mut bytes);
+        LeafRequest {
+            height: 1,
+            expected_leaf: Commitment::from_raw(bytes),
+            expected_qc: Commitment::from_raw(bytes),
+        }
+    }
+
     async fn malicious_server(port: u16) {
         let mut api = load_api::<(), ServerError, MockBase>(
             None::<std::path::PathBuf>,
@@ -1420,15 +1379,82 @@ mod test {
         )
         .unwrap();
 
-        api.get("get_payload", move |_, _| {
+        api.get("get_leaf", move |req, _| {
+            async move {
+                let height = req.integer_param("height")?;
+
+                // Respond with a leaf of the correct height, but with a dummy hash.
+                let mut leaf = LeafQueryData::<MockTypes>::genesis(
+                    &Default::default(),
+                    &Default::default(),
+                    TEST_VERSIONS.test,
+                )
+                .await;
+                leaf.leaf.block_header_mut().block_number = height;
+                Ok(leaf)
+            }
+            .boxed()
+        })
+        .unwrap()
+        .get("get_leaf_range", move |req, _| {
+            async move {
+                let start = req.integer_param("from")?;
+                let end = req.integer_param("until")?;
+
+                // Respond with the correct range, but using leaves with dummy data.
+                let leaf = LeafQueryData::<MockTypes>::genesis(
+                    &Default::default(),
+                    &Default::default(),
+                    TEST_VERSIONS.test,
+                )
+                .await;
+                let leaves = (start..end)
+                    .map(|i| {
+                        let mut leaf = leaf.clone();
+                        leaf.leaf.block_header_mut().block_number = i;
+                        leaf
+                    })
+                    .collect::<Vec<_>>();
+
+                Ok(leaves)
+            }
+            .boxed()
+        })
+        .unwrap()
+        .get("get_block", move |_, _| {
             async move {
                 // No matter what data we are asked for, always respond with dummy data.
-                Ok(PayloadQueryData::<MockTypes>::genesis(
+                Ok(BlockQueryData::<MockTypes>::genesis(
                     &Default::default(),
                     &Default::default(),
                     TEST_VERSIONS.test.base,
                 )
                 .await)
+            }
+            .boxed()
+        })
+        .unwrap()
+        .get("get_block_range", move |req, _| {
+            async move {
+                let start = req.integer_param("from")?;
+                let end = req.integer_param("until")?;
+
+                // Respond with the correct range, but using blocks with dummy data.
+                let block = BlockQueryData::<MockTypes>::genesis(
+                    &Default::default(),
+                    &Default::default(),
+                    TEST_VERSIONS.test.base,
+                )
+                .await;
+                let blocks = (start..end)
+                    .map(|i| {
+                        let mut block = block.clone();
+                        block.header.block_number = i;
+                        block
+                    })
+                    .collect::<Vec<_>>();
+
+                Ok(blocks)
             }
             .boxed()
         })
@@ -1442,6 +1468,31 @@ mod test {
                     TEST_VERSIONS.test.base,
                 )
                 .await)
+            }
+            .boxed()
+        })
+        .unwrap()
+        .get("get_vid_common_range", move |req, _| {
+            async move {
+                let start = req.integer_param("from")?;
+                let end = req.integer_param("until")?;
+
+                // Respond with the correct range, but using VID with dummy data.
+                let vid = VidCommonQueryData::<MockTypes>::genesis(
+                    &Default::default(),
+                    &Default::default(),
+                    TEST_VERSIONS.test.base,
+                )
+                .await;
+                let vids = (start..end)
+                    .map(|i| {
+                        let mut vid = vid.clone();
+                        vid.height = i;
+                        vid
+                    })
+                    .collect::<Vec<_>>();
+
+                Ok(vids)
             }
             .boxed()
         })
@@ -1465,19 +1516,82 @@ mod test {
         );
         provider.client.connect(None).await;
 
+        // Query for a random leaf, the server will respond with a different leaf, and we should
+        // detect the error.
+        tracing::info!("fetch leaf");
+        let err = provider
+            .fetch_leaf(random_leaf_request())
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("wrong hash"), "{err:#}");
+
+        // Ranged leaf request.
+        tracing::info!("fetch leaf range");
+        let req = random_leaf_request();
+        let err = provider
+            .fetch_leaf_range(LeafRangeRequest {
+                start: 0,
+                end: req.height + 1,
+                last_leaf: req.expected_leaf,
+                last_qc: req.expected_qc,
+            })
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("wrong hash"), "{err:#}");
+
         // Query for a random payload, the server will respond with a different payload, and we
         // should detect the error.
-        let res =
-            ProviderTrait::<MockTypes, _>::fetch(&provider, PayloadRequest(random_vid_commit()))
-                .await;
-        assert_eq!(res, None);
+        tracing::info!("fetch payload");
+        let err = provider
+            .fetch_payload::<MockTypes>(PayloadRequest(random_vid_commit()))
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("does not match request"),
+            "{err:#}"
+        );
+
+        // Payload range request.
+        tracing::info!("fetch payload range");
+        let err = provider
+            .fetch_payload_range::<MockTypes>(PayloadRangeRequest::from(RangeRequest {
+                start: 0,
+                end: 2,
+                expected_hash: RangeRequest::hash_payloads([
+                    random_vid_commit(),
+                    random_vid_commit(),
+                ]),
+            }))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("wrong payload hash"), "{err:#}");
 
         // Query for a random VID common, the server will respond with a different one, and we
         // should detect the error.
-        let res =
-            ProviderTrait::<MockTypes, _>::fetch(&provider, VidCommonRequest(random_vid_commit()))
-                .await;
-        assert_eq!(res, None);
+        tracing::info!("fetch VID");
+        let err = provider
+            .fetch_vid_common::<MockTypes>(VidCommonRequest(random_vid_commit()))
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("inconsistent VID common"),
+            "{err:#}"
+        );
+
+        // VID range request.
+        tracing::info!("fetch VID range");
+        let err = provider
+            .fetch_vid_common_range::<MockTypes>(VidCommonRangeRequest::from(RangeRequest {
+                start: 0,
+                end: 2,
+                expected_hash: RangeRequest::hash_payloads([
+                    random_vid_commit(),
+                    random_vid_commit(),
+                ]),
+            }))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("wrong VID common"), "{err:#}");
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -2442,5 +2556,104 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_metadata_stream_begin_failure_vid() {
         test_metadata_stream_begin_failure_helper(MetadataType::Vid).await
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test]
+    async fn test_ranged_fetch() {
+        // Create the consensus network.
+        let mut network = MockNetwork::<MockDataSource>::init().await;
+
+        // Start a web server that the non-consensus node can use to fetch blocks.
+        let port = reserve_tcp_port().unwrap();
+        let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
+        app.register_module(
+            "availability",
+            define_api(
+                &Default::default(),
+                MockBase::instance(),
+                "1.0.0".parse().unwrap(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        network.spawn(
+            "server",
+            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
+        );
+
+        // Start consensus.
+        network.start().await;
+
+        // Wait for a few blocks to be produced.
+        let leaves = network
+            .data_source()
+            .subscribe_leaves(0)
+            .await
+            .take(5)
+            .collect::<Vec<_>>()
+            .await;
+        let payloads = network
+            .data_source()
+            .subscribe_payloads(0)
+            .await
+            .take(5)
+            .collect::<Vec<_>>()
+            .await;
+        let vid = network
+            .data_source()
+            .subscribe_vid_common(0)
+            .await
+            .take(5)
+            .collect::<Vec<_>>()
+            .await;
+
+        // Connect a fetching provider.
+        let provider = QueryServiceProvider::new(
+            format!("http://localhost:{port}").parse().unwrap(),
+            MockBase::instance(),
+        );
+
+        // Make ranged requests.
+        tracing::info!("fetch leaf range");
+        assert_eq!(
+            provider
+                .fetch(LeafRangeRequest {
+                    start: 0,
+                    end: 5,
+                    last_leaf: leaves[4].hash(),
+                    last_qc: leaves[4].qc().commit(),
+                })
+                .await
+                .unwrap(),
+            leaves
+        );
+        let headers = leaves
+            .iter()
+            .map(|leaf| leaf.header().clone())
+            .collect::<Vec<_>>();
+        tracing::info!(?headers, "fetch payload range");
+        assert_eq!(
+            ProviderTrait::<MockTypes, _>::fetch(
+                &provider,
+                PayloadRangeRequest::from(RangeRequest::from_headers::<MockTypes>(&headers))
+            )
+            .await
+            .unwrap(),
+            payloads
+                .into_iter()
+                .map(|payload| payload.data)
+                .collect::<Vec<_>>()
+        );
+        tracing::info!(?headers, "fetch VID common range");
+        assert_eq!(
+            ProviderTrait::<MockTypes, _>::fetch(
+                &provider,
+                VidCommonRangeRequest::from(RangeRequest::from_headers::<MockTypes>(&headers))
+            )
+            .await
+            .unwrap(),
+            vid.into_iter().map(|vid| vid.common).collect::<Vec<_>>()
+        );
     }
 }
