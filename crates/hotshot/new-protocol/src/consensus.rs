@@ -573,154 +573,18 @@ mod test {
 
     use hotshot::{traits::ValidatedState, types::BLSPubKey};
     use hotshot_example_types::{node_types::TestTypes, state_types::TestValidatedState};
-    use hotshot_types::traits::signature_key::SignatureKey;
-    use tokio::{sync::mpsc::Sender, task::JoinHandle};
+    use hotshot_types::{data::ViewNumber, traits::signature_key::SignatureKey};
 
-    use super::*;
     use crate::{
-        coordinator::mock::testing::MockCoordinator,
-        events::{Action, ConsensusEvent, Event, RequestMessageSender, Update},
-        test_utils::{TestData, mock_membership},
+        events::{Action, ConsensusEvent, Event, StateResponse, Update},
+        helpers::proposal_commitment,
+        test_utils::TestData,
+        tests::{
+            TestHarness, count_vote1, count_vote2, has_leaf_decided, has_proposal,
+            has_request_block_and_header, has_request_state, has_vote1, has_vote2,
+            node_index_for_key,
+        },
     };
-
-    /// Test harness that spawns consensus + mock coordinator and provides
-    /// helpers to send events and collect results.
-    struct TestHarness {
-        /// Send ConsensusEvents directly to consensus
-        consensus_tx: Sender<ConsensusEvent<TestTypes>>,
-        /// Send Events to the mock coordinator (for shutdown etc.)
-        coordinator_handle: CoordinatorHandle<TestTypes>,
-        /// Join handle for mock coordinator (collects received events)
-        mock_join: JoinHandle<Vec<Event<TestTypes>>>,
-    }
-
-    impl TestHarness {
-        /// Create a new test harness with the given node index (0-9).
-        async fn new(node_index: u64) -> Self {
-            let (public_key, private_key) =
-                BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
-            let membership = mock_membership().await;
-            let (event_tx, event_rx) = tokio::sync::mpsc::channel(100);
-            let (consensus_tx, consensus_rx) = tokio::sync::mpsc::channel(100);
-
-            let mock_coordinator = MockCoordinator {
-                event_rx,
-                consensus_tx: consensus_tx.clone(),
-                state_tx: None,
-                membership_coordinator: membership.clone(),
-                received_events: Vec::new(),
-            };
-            let coordinator_handle = CoordinatorHandle::new(event_tx);
-            let mut consensus = Consensus::new(
-                consensus_rx,
-                coordinator_handle.clone(),
-                membership,
-                public_key,
-                private_key,
-            );
-
-            tokio::spawn(async move {
-                consensus.run().await;
-            });
-            let mock_join = tokio::spawn(async move { mock_coordinator.run().await });
-
-            Self {
-                consensus_tx,
-                coordinator_handle,
-                mock_join,
-            }
-        }
-
-        /// Send a ConsensusEvent directly to the consensus state machine.
-        async fn send(&self, event: ConsensusEvent<TestTypes>) {
-            self.consensus_tx.send(event).await.unwrap();
-        }
-
-        /// Send multiple ConsensusEvents in order.
-        async fn send_all(&self, events: Vec<ConsensusEvent<TestTypes>>) {
-            for event in events {
-                self.send(event).await;
-            }
-        }
-
-        /// Shut down consensus and the mock coordinator, returning all
-        /// events the mock coordinator received from consensus.
-        async fn shutdown(self) -> Vec<Event<TestTypes>> {
-            // Send shutdown to consensus
-            self.consensus_tx
-                .send(ConsensusEvent::Shutdown)
-                .await
-                .unwrap();
-            // Small delay to let consensus process shutdown and close its handle
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-            // Send shutdown to mock coordinator
-            self.coordinator_handle
-                .send_event(Event::Action(Action::Shutdown))
-                .await
-                .unwrap();
-            self.mock_join.await.unwrap()
-        }
-    }
-
-    /// Check if received events contain a Vote1 action.
-    fn has_vote1(events: &[Event<TestTypes>]) -> bool {
-        events.iter().any(|e| {
-            matches!(
-                e,
-                Event::Action(Action::SendMessage(RequestMessageSender::Vote1(_)))
-            )
-        })
-    }
-
-    /// Check if received events contain a Vote2 action.
-    fn has_vote2(events: &[Event<TestTypes>]) -> bool {
-        events.iter().any(|e| {
-            matches!(
-                e,
-                Event::Action(Action::SendMessage(RequestMessageSender::Vote2(_)))
-            )
-        })
-    }
-
-    /// Check if received events contain a LeafDecided update.
-    fn has_leaf_decided(events: &[Event<TestTypes>]) -> bool {
-        events
-            .iter()
-            .any(|e| matches!(e, Event::Update(Update::LeafDecided(_))))
-    }
-
-    /// Check if received events contain a RequestState action.
-    fn has_request_state(events: &[Event<TestTypes>]) -> bool {
-        events
-            .iter()
-            .any(|e| matches!(e, Event::Action(Action::RequestState(_))))
-    }
-
-    /// Count how many Vote1 actions are in the events.
-    fn count_vote1(events: &[Event<TestTypes>]) -> usize {
-        events
-            .iter()
-            .filter(|e| {
-                matches!(
-                    e,
-                    Event::Action(Action::SendMessage(RequestMessageSender::Vote1(_)))
-                )
-            })
-            .count()
-    }
-
-    /// Count how many Vote2 actions are in the events.
-    fn count_vote2(events: &[Event<TestTypes>]) -> usize {
-        events
-            .iter()
-            .filter(|e| {
-                matches!(
-                    e,
-                    Event::Action(Action::SendMessage(RequestMessageSender::Vote2(_)))
-                )
-            })
-            .count()
-    }
 
     /// Fresh consensus with no locked_qc accepts any proposal (genesis safety).
     #[tokio::test]
@@ -1027,13 +891,11 @@ mod test {
             &test_data.views[1].proposal.data.proposal.block_header,
         );
         harness
-            .send(ConsensusEvent::StateVerificationFailed(
-                crate::events::StateResponse {
-                    view: test_data.views[1].view_number,
-                    commitment: proposal_commit,
-                    state: Arc::new(state),
-                },
-            ))
+            .send(ConsensusEvent::StateVerificationFailed(StateResponse {
+                view: test_data.views[1].view_number,
+                commitment: proposal_commit,
+                state: Arc::new(state),
+            }))
             .await;
 
         // Now send cert1 + block_reconstructed — vote2 should NOT fire
@@ -1219,34 +1081,6 @@ mod test {
             !has_vote2(&events),
             "Vote2 should not fire after timeout for that view"
         );
-    }
-
-    /// Helper: find the node index (0..10) for a given public key.
-    fn node_index_for_key(key: &BLSPubKey) -> u64 {
-        for i in 0..10 {
-            let (pk, _) = BLSPubKey::generated_from_seed_indexed([0; 32], i);
-            if pk == *key {
-                return i;
-            }
-        }
-        panic!("Key not found in test keys (indices 0..10)");
-    }
-
-    /// Check if received events contain a Proposal action.
-    fn has_proposal(events: &[Event<TestTypes>]) -> bool {
-        events.iter().any(|e| {
-            matches!(
-                e,
-                Event::Action(Action::SendMessage(RequestMessageSender::Proposal(_, _)))
-            )
-        })
-    }
-
-    /// Check if received events contain a RequestBlockAndHeader action.
-    fn has_request_block_and_header(events: &[Event<TestTypes>]) -> bool {
-        events
-            .iter()
-            .any(|e| matches!(e, Event::Action(Action::RequestBlockAndHeader(_))))
     }
 
     /// Leader sends a proposal for view N+1 after receiving proposal for view N

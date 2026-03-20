@@ -8,15 +8,82 @@ pub mod testing {
         state_types::TestValidatedState,
     };
     use hotshot_types::{
-        data::{Leaf2, QuorumProposalWrapper, VidDisperse, vid_commitment},
+        data::{
+            Leaf2, QuorumProposal2, QuorumProposalWrapper, VidCommitment, VidDisperse,
+            vid_commitment,
+        },
         epoch_membership::EpochMembershipCoordinator,
         traits::{EncodeBytes, block_contents::BuilderFee, signature_key::BuilderSignatureKey},
+        utils::BuilderCommitment,
     };
 
     use crate::{
         events::*,
         helpers::{proposal_commitment, upgrade_lock},
     };
+
+    /// A mock block with its derived commitments and metadata.
+    struct MockBlock {
+        block: TestBlockPayload,
+        metadata: TestMetadata,
+        payload_commitment: VidCommitment,
+        builder_commitment: BuilderCommitment,
+    }
+
+    impl MockBlock {
+        fn new() -> Self {
+            let block = TestBlockPayload::genesis();
+            let metadata = TestMetadata {
+                num_transactions: 0,
+            };
+            let payload_commitment = vid_commitment(
+                &block.encode(),
+                &metadata.encode(),
+                10,
+                TEST_VERSIONS.test.base,
+            );
+            let builder_commitment =
+                <TestBlockPayload as BlockPayload<TestTypes>>::builder_commitment(
+                    &block, &metadata,
+                );
+            Self {
+                block,
+                metadata,
+                payload_commitment,
+                builder_commitment,
+            }
+        }
+    }
+
+    fn mock_builder_fee() -> BuilderFee<TestTypes> {
+        let (builder_key, builder_private_key) =
+            <hotshot_types::signature_key::BuilderKey as BuilderSignatureKey>::generated_from_seed_indexed([0; 32], 0);
+        let builder_signature =
+            <hotshot_types::signature_key::BuilderKey as BuilderSignatureKey>::sign_builder_message(
+                &builder_private_key,
+                &[0u8],
+            )
+            .unwrap();
+        BuilderFee {
+            fee_amount: 0,
+            fee_account: builder_key,
+            fee_signature: builder_signature,
+        }
+    }
+
+    fn state_verified_event(
+        proposal: &QuorumProposal2<TestTypes>,
+        view: hotshot_types::data::ViewNumber,
+    ) -> ConsensusEvent<TestTypes> {
+        let commitment = proposal_commitment(proposal);
+        let state =
+            <TestValidatedState as ValidatedState<TestTypes>>::from_header(&proposal.block_header);
+        ConsensusEvent::StateVerified(StateResponse {
+            view,
+            commitment,
+            state: Arc::new(state),
+        })
+    }
 
     /// MockCoordinator is for testing the various different modules the coordinator will
     /// coordinate.  It will send back appropriate responses for actions it receives.
@@ -56,108 +123,60 @@ pub mod testing {
                 Action::SendMessage(_message) => {},
                 Action::RequestState(state_request) => {
                     if let Some(state_tx) = &self.state_tx {
-                        // Forward to the real ValidatedStateManager
                         state_tx
                             .send(StateEvent::RequestState(state_request.clone()))
                             .await
                             .unwrap();
                     } else {
-                        // Inline mock: immediately respond with a fake state
-                        let commitment = proposal_commitment(&state_request.proposal);
-                        let state = <TestValidatedState as ValidatedState<TestTypes>>::from_header(
-                            &state_request.proposal.block_header,
-                        );
                         self.consensus_tx
-                            .send(ConsensusEvent::StateVerified(StateResponse {
-                                view: state_request.view,
-                                commitment,
-                                state: Arc::new(state),
-                            }))
-                            .await
-                            .unwrap();
-                    }
-                },
-                Action::RequestBlockAndHeader(block_and_header_request) => {
-                    let block = TestBlockPayload::genesis();
-                    let metadata = TestMetadata {
-                        num_transactions: 0,
-                    };
-
-                    if let Some(state_tx) = &self.state_tx {
-                        // Forward header creation to the ValidatedStateManager
-                        let payload_commitment = vid_commitment(
-                            &block.encode(),
-                            &metadata.encode(),
-                            10,
-                            TEST_VERSIONS.test.base,
-                        );
-                        let builder_commitment =
-                            <TestBlockPayload as BlockPayload<TestTypes>>::builder_commitment(
-                                &block, &metadata,
-                            );
-                        let (builder_key, builder_private_key) =
-                            <hotshot_types::signature_key::BuilderKey as BuilderSignatureKey>::generated_from_seed_indexed([0; 32], 0);
-                        let builder_signature =
-                            <hotshot_types::signature_key::BuilderKey as BuilderSignatureKey>::sign_builder_message(
-                                &builder_private_key,
-                                &[0u8],
-                            )
-                            .unwrap();
-                        state_tx
-                            .send(StateEvent::RequestHeader(HeaderRequest {
-                                view: block_and_header_request.view,
-                                epoch: block_and_header_request.epoch,
-                                parent_proposal: block_and_header_request.parent_proposal.clone(),
-                                payload_commitment,
-                                builder_commitment,
-                                metadata: metadata.clone(),
-                                builder_fee: BuilderFee {
-                                    fee_amount: 0,
-                                    fee_account: builder_key,
-                                    fee_signature: builder_signature,
-                                },
-                            }))
-                            .await
-                            .unwrap();
-                    } else {
-                        // Inline mock: create header directly
-                        let wrapper = QuorumProposalWrapper::<TestTypes> {
-                            proposal: block_and_header_request.parent_proposal.clone(),
-                        };
-                        let payload_commitment = vid_commitment(
-                            &block.encode(),
-                            &metadata.encode(),
-                            10,
-                            TEST_VERSIONS.test.base,
-                        );
-                        let builder_commitment =
-                            <TestBlockPayload as BlockPayload<TestTypes>>::builder_commitment(
-                                &block, &metadata,
-                            );
-                        let parent_leaf = Leaf2::from_quorum_proposal(&wrapper);
-                        let header = TestBlockHeader::new(
-                            &parent_leaf,
-                            payload_commitment,
-                            builder_commitment,
-                            metadata.clone(),
-                            TEST_VERSIONS.test.base,
-                        );
-                        self.consensus_tx
-                            .send(ConsensusEvent::HeaderCreated(
-                                block_and_header_request.view,
-                                header,
+                            .send(state_verified_event(
+                                &state_request.proposal,
+                                state_request.view,
                             ))
                             .await
                             .unwrap();
                     }
+                },
+                Action::RequestBlockAndHeader(req) => {
+                    let mock_block = MockBlock::new();
 
-                    // Always send the block to consensus
+                    if let Some(state_tx) = &self.state_tx {
+                        state_tx
+                            .send(StateEvent::RequestHeader(HeaderRequest {
+                                view: req.view,
+                                epoch: req.epoch,
+                                parent_proposal: req.parent_proposal.clone(),
+                                payload_commitment: mock_block.payload_commitment,
+                                builder_commitment: mock_block.builder_commitment,
+                                metadata: mock_block.metadata.clone(),
+                                builder_fee: mock_builder_fee(),
+                            }))
+                            .await
+                            .unwrap();
+                    } else {
+                        let wrapper = QuorumProposalWrapper::<TestTypes> {
+                            proposal: req.parent_proposal.clone(),
+                        };
+                        let parent_leaf = Leaf2::from_quorum_proposal(&wrapper);
+                        let header = TestBlockHeader::new(
+                            &parent_leaf,
+                            mock_block.payload_commitment,
+                            mock_block.builder_commitment,
+                            mock_block.metadata.clone(),
+                            TEST_VERSIONS.test.base,
+                        );
+                        self.consensus_tx
+                            .send(ConsensusEvent::HeaderCreated(req.view, header))
+                            .await
+                            .unwrap();
+                    }
+
                     self.consensus_tx
                         .send(ConsensusEvent::BlockBuilt(
-                            block_and_header_request.view,
-                            block_and_header_request.epoch,
-                            block,
-                            metadata,
+                            req.view,
+                            req.epoch,
+                            mock_block.block,
+                            mock_block.metadata,
                         ))
                         .await
                         .unwrap();
@@ -194,22 +213,15 @@ pub mod testing {
         async fn handle_update(&self, update: &Update<TestTypes>) {
             match update {
                 Update::StateVerified(state_request) => {
-                    // State manager verified a state — forward to consensus
-                    let commitment = proposal_commitment(&state_request.proposal);
-                    let state = <TestValidatedState as ValidatedState<TestTypes>>::from_header(
-                        &state_request.proposal.block_header,
-                    );
                     self.consensus_tx
-                        .send(ConsensusEvent::StateVerified(StateResponse {
-                            view: state_request.view,
-                            commitment,
-                            state: Arc::new(state),
-                        }))
+                        .send(state_verified_event(
+                            &state_request.proposal,
+                            state_request.view,
+                        ))
                         .await
                         .unwrap();
                 },
                 Update::HeaderCreated(view, header) => {
-                    // State manager created a header — forward to consensus
                     self.consensus_tx
                         .send(ConsensusEvent::HeaderCreated(*view, header.clone()))
                         .await

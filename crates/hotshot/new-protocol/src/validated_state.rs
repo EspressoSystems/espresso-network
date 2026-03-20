@@ -31,7 +31,7 @@ enum CompletedRequest<TYPES: NodeType> {
     Header(Result<(ViewNumber, TYPES::BlockHeader), HeaderError<TYPES>>),
 }
 
-struct ValidatedStateManager<TYPES: NodeType> {
+pub(crate) struct ValidatedStateManager<TYPES: NodeType> {
     validated_states: BTreeMap<ViewNumber, (Arc<TYPES::ValidatedState>, Leaf2<TYPES>)>,
     in_progress_requests: HashMap<Commitment<Leaf2<TYPES>>, InProgressRequest<TYPES>>,
     in_progress_headers: HashMap<ViewNumber, JoinHandle<()>>,
@@ -65,8 +65,18 @@ impl<TYPES: NodeType> ValidatedStateManager<TYPES> {
         }
     }
 
-    async fn run(mut self) {
-        while let Some(event) = self.event_rx.recv().await {
+    /// Seed the manager with a validated state at a given view.
+    pub(crate) fn seed_state(
+        &mut self,
+        view: ViewNumber,
+        state: Arc<TYPES::ValidatedState>,
+        leaf: Leaf2<TYPES>,
+    ) {
+        self.validated_states.insert(view, (state, leaf));
+    }
+
+    pub(crate) async fn run(mut self) {
+        loop {
             tokio::select! {
                 Some(event) = self.event_rx.recv() => {
                     self.handle_event(event).await;
@@ -74,6 +84,7 @@ impl<TYPES: NodeType> ValidatedStateManager<TYPES> {
                 Some(completed_request) = self.completed_requests_rx.recv() => {
                     self.handle_completed_request(completed_request).await;
                 },
+                else => break,
             }
         }
     }
@@ -448,10 +459,8 @@ mod test {
                 TEST_VERSIONS.test.base,
             )
             .await;
-            self.manager.validated_states.insert(
-                ViewNumber::genesis(),
-                (Arc::new(genesis_state), genesis_leaf),
-            );
+            self.manager
+                .seed_state(ViewNumber::genesis(), Arc::new(genesis_state), genesis_leaf);
         }
 
         async fn request_state(&mut self, request: StateRequest<TestTypes>) {
@@ -668,15 +677,18 @@ mod test {
 
         // Let view 1 complete — should also start the pending header.
         harness.process_completions().await;
-        // Process again for the header task.
-        harness.process_completions().await;
-
         let events = harness.collect_events();
         assert_eq!(
             StateTestHarness::count_state_verified(&events),
             1,
             "State should be verified"
         );
+
+        // Process again for the header task.
+        harness.process_completions().await;
+
+        let events = harness.collect_events();
+
         assert_eq!(
             StateTestHarness::count_header_created(&events),
             1,
