@@ -1307,7 +1307,7 @@ impl ExplorerHeader<SeqTypes> for Header {
     /// rewards have not yet been implemented.
     ///
     /// TODO: update implementation when rewards have been created / supported.
-    ///       Issue: https://github.com/EspressoSystems/espresso-sequencer/issues/1453
+    ///       Issue: https://github.com/EspressoSystems/espresso-network/issues/1453
     fn reward_balance(&self) -> Self::BalanceAmount {
         FeeAmount::from(0)
     }

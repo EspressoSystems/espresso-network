@@ -1,8 +1,8 @@
 {
-  "name": "espresso-sequencer",
+  "name": "espresso-network",
   "version": "0.1.0",
   "main": "index.js",
-  "repository": "https://github.com/EspressoSystems/espresso-sequencer.git",
+  "repository": "https://github.com/EspressoSystems/espresso-network.git",
   "author": "Espresso Systems <hello@espressosys.com>",
   "license": "UNLICENSED",
   "devDependencies": {
