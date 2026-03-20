@@ -165,6 +165,7 @@ async fn init_consensus(
         .map(|(pub_key, state_key_pair)| PeerConfig::<MockTypes> {
             stake_table_entry: pub_key.stake_table_entry(U256::from(1)),
             state_ver_key: state_key_pair.ver_key(),
+            connect_info: None,
         })
         .collect::<Vec<_>>();
 

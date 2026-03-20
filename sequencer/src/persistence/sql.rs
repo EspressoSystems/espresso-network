@@ -3618,6 +3618,8 @@ mod test {
             commission: 100,
             delegators: HashMap::new(),
             authenticated: true,
+            x25519_key: None,
+            p2p_addr: None,
         };
 
         // Create an unauthenticated validator
@@ -3629,6 +3631,8 @@ mod test {
             commission: 200,
             delegators: HashMap::new(),
             authenticated: false,
+            x25519_key: None,
+            p2p_addr: None,
         };
 
         let mut validators: IndexMap<Address, RegisteredValidator<BLSPubKey>> = IndexMap::new();

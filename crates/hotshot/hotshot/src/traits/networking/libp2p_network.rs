@@ -7,8 +7,6 @@
 //! Libp2p based/production networking implementation
 //! This module provides a libp2p based networking implementation where each node in the
 //! network forms a tcp or udp connection to a subset of other nodes in the network
-#[cfg(feature = "hotshot-testing")]
-use std::str::FromStr;
 use std::{
     cmp::min,
     collections::{BTreeSet, HashSet},
@@ -21,6 +19,8 @@ use std::{
     },
     time::Duration,
 };
+#[cfg(feature = "hotshot-testing")]
+use std::{collections::HashMap, str::FromStr};
 
 use anyhow::{Context, anyhow};
 use async_lock::RwLock;
@@ -44,10 +44,6 @@ use hotshot_libp2p_networking::{
     },
     reexport::Multiaddr,
 };
-#[cfg(feature = "hotshot-testing")]
-use hotshot_types::traits::network::{
-    AsyncGenerator, NetworkReliability, TestableNetworkingImplementation,
-};
 use hotshot_types::{
     BoxSyncFuture, boxed_sync,
     constants::LOOK_AHEAD,
@@ -59,6 +55,11 @@ use hotshot_types::{
         node_implementation::NodeType,
         signature_key::{PrivateSignatureKey, SignatureKey},
     },
+};
+#[cfg(feature = "hotshot-testing")]
+use hotshot_types::{
+    PeerConnectInfo,
+    traits::network::{AsyncGenerator, NetworkReliability, TestableNetworkingImplementation},
 };
 use libp2p_identity::{
     Keypair, PeerId,
@@ -205,6 +206,7 @@ impl<T: NodeType> TestableNetworkingImplementation<T> for Libp2pNetwork<T> {
         da_committee_size: usize,
         reliability_config: Option<Box<dyn NetworkReliability>>,
         _secondary_network_delay: Duration,
+        _connect_infos: &mut HashMap<T::SignatureKey, PeerConnectInfo>,
     ) -> AsyncGenerator<Arc<Self>> {
         assert!(
             da_committee_size <= expected_node_count,

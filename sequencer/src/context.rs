@@ -27,6 +27,7 @@ use hotshot_types::{
     consensus::ConsensusMetricsValue,
     data::{Leaf2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
+    message::UpgradeLock,
     network::NetworkConfig,
     storage_metrics::StorageMetricsValue,
     traits::{metrics::Metrics, network::ConnectedNetwork},
@@ -338,6 +339,10 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
     /// Return a reference to the underlying consensus handle.
     pub fn consensus(&self) -> Arc<RwLock<Consensus<N, P>>> {
         Arc::clone(&self.handle)
+    }
+
+    pub async fn upgrade_lock(&self) -> UpgradeLock<SeqTypes> {
+        self.handle.read().await.hotshot.upgrade_lock.clone()
     }
 
     pub async fn shutdown_consensus(&self) {

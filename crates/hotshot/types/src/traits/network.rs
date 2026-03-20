@@ -30,7 +30,7 @@ use tokio::{sync::mpsc::error::TrySendError, time::sleep};
 
 use super::{node_implementation::NodeType, signature_key::SignatureKey};
 use crate::{
-    BoxSyncFuture,
+    BoxSyncFuture, PeerConnectInfo,
     data::{EpochNumber, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::SequencingMessage,
@@ -173,10 +173,10 @@ pub enum ResponseMessage<TYPES: NodeType> {
     Denied,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
 /// When a message should be broadcast to the network.
 ///
 /// Network implementations may or may not respect this, at their discretion.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BroadcastDelay {
     /// Broadcast the message immediately
     None,
@@ -184,11 +184,11 @@ pub enum BroadcastDelay {
     View(u64),
 }
 
-#[async_trait]
 /// represents a networking implmentration
 /// exposes low level API for interacting with a network
 /// intended to be implemented for libp2p, the centralized server,
 /// and memory network
+#[async_trait]
 pub trait ConnectedNetwork<K: SignatureKey + 'static>: Clone + Send + Sync + 'static {
     /// Pauses the underlying network
     fn pause(&self);
@@ -308,6 +308,7 @@ where
         da_committee_size: usize,
         reliability_config: Option<Box<dyn NetworkReliability>>,
         secondary_network_delay: Duration,
+        connect_infos: &mut HashMap<TYPES::SignatureKey, PeerConnectInfo>,
     ) -> AsyncGenerator<Arc<Self>>;
 
     /// Get the number of messages in-flight.
