@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use committable::Commitment;
-use hotshot::traits::BlockPayload;
+use hotshot::traits::{BlockPayload, ValidatedState};
 use hotshot_types::{
     data::{
         EpochNumber, Leaf2, QuorumProposal2, VidCommitment, VidCommitment2, VidDisperse2,
@@ -14,7 +14,10 @@ use hotshot_types::{
     vote::HasViewNumber,
 };
 
-use crate::message::{Certificate1, Certificate2, ConsensusMessage, ProposalMessage, Vote1, Vote2};
+use crate::{
+    helpers::proposal_commitment,
+    message::{Certificate1, Certificate2, ConsensusMessage, ProposalMessage, Vote1, Vote2},
+};
 
 #[derive(Eq, PartialEq, Debug, Clone)]
 pub(crate) struct StateRequest<TYPES: NodeType> {
@@ -84,9 +87,10 @@ pub enum Action<TYPES: NodeType> {
     Shutdown,
 }
 
-#[derive(Eq, PartialEq, Debug)]
+#[derive(Clone, Eq, PartialEq, Debug)]
 #[allow(clippy::large_enum_variant)]
 pub enum Update<TYPES: NodeType> {
+    MessageReceived(ConsensusMessage<TYPES>),
     StateVerified(StateRequest<TYPES>),
     HeaderCreated(ViewNumber, TYPES::BlockHeader),
     StateVerificationFailed(StateRequest<TYPES>),
@@ -97,6 +101,9 @@ pub enum Update<TYPES: NodeType> {
     LockUpdated(Certificate2<TYPES>),
     ViewChanged(ViewNumber, EpochNumber),
     BlockReconstructed(ViewNumber, TYPES::BlockPayload, VidCommitment2),
+    Timeout(ViewNumber),
+    TimeoutCertificateReceived(TimeoutCertificate2<TYPES>),
+    ViewSyncCertificateReceived(ViewSyncFinalizeCertificate2<TYPES>),
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -151,6 +158,57 @@ impl<TYPES: NodeType> ConsensusEvent<TYPES> {
             ConsensusEvent::BlockBuilt(view_number, ..) => *view_number,
             ConsensusEvent::VidDisperseCreated(view_number, _) => *view_number,
             ConsensusEvent::Shutdown => ViewNumber::genesis(),
+        }
+    }
+}
+
+impl<TYPES: NodeType> TryFrom<Update<TYPES>> for ConsensusEvent<TYPES> {
+    type Error = ();
+
+    fn try_from(update: Update<TYPES>) -> Result<Self, ()> {
+        match update {
+            Update::MessageReceived(msg) => match msg {
+                ConsensusMessage::Proposal(proposal_msg) => {
+                    Ok(ConsensusEvent::Proposal(proposal_msg))
+                },
+                ConsensusMessage::Certificate1(cert, _key) => {
+                    Ok(ConsensusEvent::Certificate1(cert.clone()))
+                },
+                ConsensusMessage::Certificate2(cert, _key) => {
+                    Ok(ConsensusEvent::Certificate2(cert.clone()))
+                },
+                _ => Err(()),
+            },
+            Update::BlockReconstructed(view, _payload, vid_commit) => {
+                Ok(ConsensusEvent::BlockReconstructed(view, vid_commit.clone()))
+            },
+            Update::Timeout(view) => Ok(ConsensusEvent::Timeout(view)),
+            Update::TimeoutCertificateReceived(cert) => {
+                Ok(ConsensusEvent::TimeoutCertificate(cert))
+            },
+            Update::ViewSyncCertificateReceived(cert) => {
+                Ok(ConsensusEvent::ViewSyncCertificate(cert))
+            },
+            Update::StateVerified(request) => {
+                let commitment = proposal_commitment(&request.proposal);
+                let state = TYPES::ValidatedState::from_header(&request.proposal.block_header);
+                Ok(ConsensusEvent::StateVerified(StateResponse {
+                    view: request.view,
+                    commitment,
+                    state: Arc::new(state),
+                }))
+            },
+            Update::StateVerificationFailed(request) => {
+                let commitment = proposal_commitment(&request.proposal);
+                let state = TYPES::ValidatedState::from_header(&request.proposal.block_header);
+                Ok(ConsensusEvent::StateVerificationFailed(StateResponse {
+                    view: request.view,
+                    commitment,
+                    state: Arc::new(state),
+                }))
+            },
+            Update::HeaderCreated(view, header) => Ok(ConsensusEvent::HeaderCreated(view, header)),
+            _ => Err(()),
         }
     }
 }

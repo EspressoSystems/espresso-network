@@ -11,12 +11,12 @@ use hotshot_types::{
     data::{Leaf2, ViewNumber},
     traits::signature_key::SignatureKey,
 };
-use tokio::{sync::mpsc::Sender, task::JoinHandle};
+use tokio::task::JoinHandle;
 
 use crate::{
     consensus::Consensus,
     coordinator::{handle::CoordinatorHandle, mock::testing::MockCoordinator},
-    events::{Action, ConsensusEvent, Event, RequestMessageSender, Update},
+    events::{Action, Event, RequestMessageSender, Update},
     test_utils::mock_membership,
     validated_state::ValidatedStateManager,
 };
@@ -24,13 +24,11 @@ use crate::{
 /// Test harness that spawns consensus + mock coordinator and provides
 /// helpers to send events and collect results.
 ///
-/// Can be created with or without a `ValidatedStateManager`:
-/// - `new()` — consensus + mock coordinator (inline state handling)
-/// - `new_with_state_manager()` — consensus + state manager + mock coordinator
+/// All events are sent through the MockCoordinator via the coordinator handle.
+/// The mock converts `Update` variants into `ConsensusEvent`s and forwards
+/// them to consensus.
 pub(crate) struct TestHarness {
-    /// Send ConsensusEvents directly to consensus
-    consensus_tx: Sender<ConsensusEvent<TestTypes>>,
-    /// Send Events to the mock coordinator (for shutdown etc.)
+    /// Send Events to the mock coordinator
     coordinator_handle: CoordinatorHandle<TestTypes>,
     /// Join handle for mock coordinator (collects received events)
     mock_join: JoinHandle<Vec<Event<TestTypes>>>,
@@ -47,7 +45,7 @@ impl TestHarness {
 
         let mock_coordinator = MockCoordinator {
             event_rx,
-            consensus_tx: consensus_tx.clone(),
+            consensus_tx,
             state_tx: None,
             membership_coordinator: membership.clone(),
             received_events: Vec::new(),
@@ -67,7 +65,6 @@ impl TestHarness {
         let mock_join = tokio::spawn(async move { mock_coordinator.run().await });
 
         Self {
-            consensus_tx,
             coordinator_handle,
             mock_join,
         }
@@ -82,8 +79,6 @@ impl TestHarness {
         let (consensus_tx, consensus_rx) = tokio::sync::mpsc::channel(100);
         let (state_tx, state_rx) = tokio::sync::mpsc::channel(100);
 
-        // The ValidatedStateManager shares the same coordinator handle so
-        // its responses flow back through the mock coordinator.
         let coordinator_handle = CoordinatorHandle::new(event_tx);
         let mut state_manager = ValidatedStateManager::new(
             state_rx,
@@ -91,7 +86,6 @@ impl TestHarness {
             coordinator_handle.clone(),
         );
 
-        // Seed genesis state so view-1 state requests can find a parent.
         let genesis_state = TestValidatedState::default();
         let genesis_leaf = Leaf2::<TestTypes>::genesis(
             &genesis_state,
@@ -107,7 +101,7 @@ impl TestHarness {
 
         let mock_coordinator = MockCoordinator {
             event_rx,
-            consensus_tx: consensus_tx.clone(),
+            consensus_tx,
             state_tx: Some(state_tx),
             membership_coordinator: membership.clone(),
             received_events: Vec::new(),
@@ -126,25 +120,21 @@ impl TestHarness {
         let mock_join = tokio::spawn(async move { mock_coordinator.run().await });
 
         Self {
-            consensus_tx,
             coordinator_handle,
             mock_join,
         }
     }
 
-    /// Send a ConsensusEvent directly to the consensus state machine.
-    pub async fn send(&self, event: ConsensusEvent<TestTypes>) {
-        self.consensus_tx.send(event).await.unwrap();
+    /// Send an Event through the mock coordinator.
+    pub async fn send(&self, event: Event<TestTypes>) {
+        self.coordinator_handle.send_event(event).await.unwrap();
     }
 
-    /// Shut down consensus and the mock coordinator, returning all
-    /// events the mock coordinator received from consensus.
+    /// Shut down and return all events the mock coordinator collected.
     pub async fn shutdown(self) -> Vec<Event<TestTypes>> {
-        self.consensus_tx
-            .send(ConsensusEvent::Shutdown)
-            .await
-            .unwrap();
+        // Small delay to let async processing complete
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        // Shutdown signal — the mock will forward ConsensusEvent::Shutdown to consensus
         self.coordinator_handle
             .send_event(Event::Action(Action::Shutdown))
             .await

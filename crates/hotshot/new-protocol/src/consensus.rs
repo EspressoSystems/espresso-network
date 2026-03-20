@@ -569,15 +569,16 @@ impl<TYPES: NodeType> Consensus<TYPES> {
 
 #[cfg(test)]
 mod test {
-    use std::sync::Arc;
-
-    use hotshot::{traits::ValidatedState, types::BLSPubKey};
-    use hotshot_example_types::{node_types::TestTypes, state_types::TestValidatedState};
-    use hotshot_types::{data::ViewNumber, traits::signature_key::SignatureKey};
+    use hotshot::types::BLSPubKey;
+    use hotshot_example_types::node_types::TestTypes;
+    use hotshot_types::{
+        data::ViewNumber,
+        traits::signature_key::SignatureKey,
+        vote::{Certificate, HasViewNumber},
+    };
 
     use crate::{
-        events::{Action, ConsensusEvent, Event, StateResponse, Update},
-        helpers::proposal_commitment,
+        events::{Action, Event, Update},
         test_utils::TestData,
         tests::{
             TestHarness, count_vote1, count_vote2, has_leaf_decided, has_proposal,
@@ -595,7 +596,7 @@ mod test {
 
         // Send proposal for view 1 — locked_qc is None, so safety passes
         harness
-            .send(test_data.views[0].proposal_event(&node_key))
+            .send(test_data.views[0].proposal_update(&node_key))
             .await;
 
         // Allow async processing
@@ -619,17 +620,17 @@ mod test {
 
         // Set timeout at view 3
         harness
-            .send(ConsensusEvent::Timeout(ViewNumber::new(3)))
+            .send(Event::Update(Update::Timeout(ViewNumber::new(3))))
             .await;
 
         // Send stale proposal (view 2, which is <= timeout_view 3)
         harness
-            .send(test_data.views[1].proposal_event(&node_key))
+            .send(test_data.views[1].proposal_update(&node_key))
             .await;
 
         // Send fresh proposal (view 4, which is > timeout_view 3)
         harness
-            .send(test_data.views[3].proposal_event(&node_key))
+            .send(test_data.views[3].proposal_update(&node_key))
             .await;
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -657,15 +658,15 @@ mod test {
 
         // Send proposal for view 1 (parent data setup)
         harness
-            .send(test_data.views[0].proposal_event(&node_key))
+            .send(test_data.views[0].proposal_update(&node_key))
             .await;
         harness
-            .send(test_data.views[0].block_reconstructed_event())
+            .send(test_data.views[0].block_reconstructed_update())
             .await;
 
         // Send proposal for view 2 — mock auto-responds with StateVerified
         harness
-            .send(test_data.views[1].proposal_event(&node_key))
+            .send(test_data.views[1].proposal_update(&node_key))
             .await;
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -686,7 +687,7 @@ mod test {
 
         // Send proposal for view 1 — justify_qc references genesis
         harness
-            .send(test_data.views[0].proposal_event(&node_key))
+            .send(test_data.views[0].proposal_update(&node_key))
             .await;
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -708,18 +709,18 @@ mod test {
 
         // Set up view 1 as parent
         harness
-            .send(test_data.views[0].proposal_event(&node_key))
+            .send(test_data.views[0].proposal_update(&node_key))
             .await;
         harness
-            .send(test_data.views[0].block_reconstructed_event())
+            .send(test_data.views[0].block_reconstructed_update())
             .await;
 
         // Send proposal for view 2 + BlockReconstructed but NO cert1
         harness
-            .send(test_data.views[1].proposal_event(&node_key))
+            .send(test_data.views[1].proposal_update(&node_key))
             .await;
         harness
-            .send(test_data.views[1].block_reconstructed_event())
+            .send(test_data.views[1].block_reconstructed_update())
             .await;
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -741,20 +742,20 @@ mod test {
 
         // Set up view 1 as parent
         harness
-            .send(test_data.views[0].proposal_event(&node_key))
+            .send(test_data.views[0].proposal_update(&node_key))
             .await;
         harness
-            .send(test_data.views[0].block_reconstructed_event())
+            .send(test_data.views[0].block_reconstructed_update())
             .await;
 
         // View 2: proposal + block reconstructed + cert1
         harness
-            .send(test_data.views[1].proposal_event(&node_key))
+            .send(test_data.views[1].proposal_update(&node_key))
             .await;
         harness
-            .send(test_data.views[1].block_reconstructed_event())
+            .send(test_data.views[1].block_reconstructed_update())
             .await;
-        harness.send(test_data.views[1].cert1_event()).await;
+        harness.send(test_data.views[1].cert1_update()).await;
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         let events = harness.shutdown().await;
@@ -774,21 +775,21 @@ mod test {
 
         // Set up view 1 as parent
         harness
-            .send(test_data.views[0].proposal_event(&node_key))
+            .send(test_data.views[0].proposal_update(&node_key))
             .await;
         harness
-            .send(test_data.views[0].block_reconstructed_event())
+            .send(test_data.views[0].block_reconstructed_update())
             .await;
 
         // View 2: full consensus round
         harness
-            .send(test_data.views[1].proposal_event(&node_key))
+            .send(test_data.views[1].proposal_update(&node_key))
             .await;
         harness
-            .send(test_data.views[1].block_reconstructed_event())
+            .send(test_data.views[1].block_reconstructed_update())
             .await;
-        harness.send(test_data.views[1].cert1_event()).await;
-        harness.send(test_data.views[1].cert2_event()).await;
+        harness.send(test_data.views[1].cert1_update()).await;
+        harness.send(test_data.views[1].cert2_update()).await;
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         let events = harness.shutdown().await;
@@ -810,14 +811,14 @@ mod test {
 
         // View 1: trigger vote1 via proposal (genesis parent, mock responds with StateVerified)
         harness
-            .send(test_data.views[0].proposal_event(&node_key))
+            .send(test_data.views[0].proposal_update(&node_key))
             .await;
 
         // Send block_reconstructed + cert1 which re-trigger maybe_vote_1 for same view
         harness
-            .send(test_data.views[0].block_reconstructed_event())
+            .send(test_data.views[0].block_reconstructed_update())
             .await;
-        harness.send(test_data.views[0].cert1_event()).await;
+        harness.send(test_data.views[0].cert1_update()).await;
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         let events = harness.shutdown().await;
@@ -838,22 +839,22 @@ mod test {
 
         // Set up parent
         harness
-            .send(test_data.views[0].proposal_event(&node_key))
+            .send(test_data.views[0].proposal_update(&node_key))
             .await;
         harness
-            .send(test_data.views[0].block_reconstructed_event())
+            .send(test_data.views[0].block_reconstructed_update())
             .await;
 
         // View 2: trigger vote2
         harness
-            .send(test_data.views[1].proposal_event(&node_key))
+            .send(test_data.views[1].proposal_update(&node_key))
             .await;
         harness
-            .send(test_data.views[1].block_reconstructed_event())
+            .send(test_data.views[1].block_reconstructed_update())
             .await;
-        harness.send(test_data.views[1].cert1_event()).await;
+        harness.send(test_data.views[1].cert1_update()).await;
         // Sending cert2 triggers maybe_vote_2 again (via handle_event post-calls)
-        harness.send(test_data.views[1].cert2_event()).await;
+        harness.send(test_data.views[1].cert2_update()).await;
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         let events = harness.shutdown().await;
@@ -874,36 +875,57 @@ mod test {
 
         // Set up parent
         harness
-            .send(test_data.views[0].proposal_event(&node_key))
+            .send(test_data.views[0].proposal_update(&node_key))
             .await;
         harness
-            .send(test_data.views[0].block_reconstructed_event())
+            .send(test_data.views[0].block_reconstructed_update())
             .await;
 
         // Send proposal for view 2 (stores proposal and vid_share)
         harness
-            .send(test_data.views[1].proposal_event(&node_key))
+            .send(test_data.views[1].proposal_update(&node_key))
             .await;
 
-        // Send StateVerificationFailed with matching commitment — removes proposal
-        let proposal_commit = proposal_commitment(&test_data.views[1].proposal.data.proposal);
-        let state = <TestValidatedState as ValidatedState<TestTypes>>::from_header(
-            &test_data.views[1].proposal.data.proposal.block_header,
-        );
+        // Send StateVerificationFailed with matching state request — removes proposal
         harness
-            .send(ConsensusEvent::StateVerificationFailed(StateResponse {
-                view: test_data.views[1].view_number,
-                commitment: proposal_commit,
-                state: Arc::new(state),
-            }))
+            .send(
+                Event::Update(
+                    Update::StateVerificationFailed(
+                        crate::events::StateRequest {
+                            view: test_data.views[1].view_number,
+                            parent_view: test_data.views[1]
+                                .proposal
+                                .data
+                                .proposal
+                                .justify_qc
+                                .view_number(),
+                            epoch: test_data.views[1].epoch_number,
+                            block_number: hotshot_types::traits::block_contents::BlockHeader::<
+                                TestTypes,
+                            >::block_number(
+                                &test_data.views[1].proposal.data.proposal.block_header,
+                            ),
+                            proposal: test_data.views[1].proposal.data.proposal.clone(),
+                            parent_commitment: test_data.views[1]
+                                .proposal
+                                .data
+                                .proposal
+                                .justify_qc
+                                .data()
+                                .leaf_commit,
+                            payload_size: 0,
+                        },
+                    ),
+                ),
+            )
             .await;
 
         // Now send cert1 + block_reconstructed — vote2 should NOT fire
         // because the proposal was removed
         harness
-            .send(test_data.views[1].block_reconstructed_event())
+            .send(test_data.views[1].block_reconstructed_update())
             .await;
-        harness.send(test_data.views[1].cert1_event()).await;
+        harness.send(test_data.views[1].cert1_update()).await;
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         let events = harness.shutdown().await;
@@ -923,20 +945,20 @@ mod test {
 
         // Set up view 1 as parent
         harness
-            .send(test_data.views[0].proposal_event(&node_key))
+            .send(test_data.views[0].proposal_update(&node_key))
             .await;
         harness
-            .send(test_data.views[0].block_reconstructed_event())
+            .send(test_data.views[0].block_reconstructed_update())
             .await;
 
         // View 2: everything except cert2
         harness
-            .send(test_data.views[1].proposal_event(&node_key))
+            .send(test_data.views[1].proposal_update(&node_key))
             .await;
         harness
-            .send(test_data.views[1].block_reconstructed_event())
+            .send(test_data.views[1].block_reconstructed_update())
             .await;
-        harness.send(test_data.views[1].cert1_event()).await;
+        harness.send(test_data.views[1].cert1_update()).await;
         // No cert2 sent
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -958,17 +980,17 @@ mod test {
 
         // Set up view 1 as parent
         harness
-            .send(test_data.views[0].proposal_event(&node_key))
+            .send(test_data.views[0].proposal_update(&node_key))
             .await;
         harness
-            .send(test_data.views[0].block_reconstructed_event())
+            .send(test_data.views[0].block_reconstructed_update())
             .await;
 
         // View 2: proposal + cert1, but NO block_reconstructed for view 2
         harness
-            .send(test_data.views[1].proposal_event(&node_key))
+            .send(test_data.views[1].proposal_update(&node_key))
             .await;
-        harness.send(test_data.views[1].cert1_event()).await;
+        harness.send(test_data.views[1].cert1_update()).await;
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         let events = harness.shutdown().await;
@@ -988,21 +1010,21 @@ mod test {
 
         // Set up parent
         harness
-            .send(test_data.views[0].proposal_event(&node_key))
+            .send(test_data.views[0].proposal_update(&node_key))
             .await;
         harness
-            .send(test_data.views[0].block_reconstructed_event())
+            .send(test_data.views[0].block_reconstructed_update())
             .await;
 
         // View 2: proposal + cert1 first (no block_reconstructed yet)
         harness
-            .send(test_data.views[1].proposal_event(&node_key))
+            .send(test_data.views[1].proposal_update(&node_key))
             .await;
-        harness.send(test_data.views[1].cert1_event()).await;
+        harness.send(test_data.views[1].cert1_update()).await;
 
         // Now send block_reconstructed — should trigger vote2
         harness
-            .send(test_data.views[1].block_reconstructed_event())
+            .send(test_data.views[1].block_reconstructed_update())
             .await;
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -1023,10 +1045,10 @@ mod test {
 
         // Process each view: proposal + block_reconstructed + cert1 + cert2
         for view in &test_data.views {
-            harness.send(view.proposal_event(&node_key)).await;
-            harness.send(view.block_reconstructed_event()).await;
-            harness.send(view.cert1_event()).await;
-            harness.send(view.cert2_event()).await;
+            harness.send(view.proposal_update(&node_key)).await;
+            harness.send(view.block_reconstructed_update()).await;
+            harness.send(view.cert1_update()).await;
+            harness.send(view.cert2_update()).await;
         }
 
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
@@ -1052,27 +1074,29 @@ mod test {
 
         // Set up view 1 as parent
         harness
-            .send(test_data.views[0].proposal_event(&node_key))
+            .send(test_data.views[0].proposal_update(&node_key))
             .await;
         harness
-            .send(test_data.views[0].block_reconstructed_event())
+            .send(test_data.views[0].block_reconstructed_update())
             .await;
 
         // Send proposal for view 2 (this gets stored)
         harness
-            .send(test_data.views[1].proposal_event(&node_key))
+            .send(test_data.views[1].proposal_update(&node_key))
             .await;
         harness
-            .send(test_data.views[1].block_reconstructed_event())
+            .send(test_data.views[1].block_reconstructed_update())
             .await;
 
         // Timeout view 2 — now cert1 for view 2 should be dropped
         harness
-            .send(ConsensusEvent::Timeout(test_data.views[1].view_number))
+            .send(Event::Update(Update::Timeout(
+                test_data.views[1].view_number,
+            )))
             .await;
 
         // Send cert1 for view 2 — should be stale
-        harness.send(test_data.views[1].cert1_event()).await;
+        harness.send(test_data.views[1].cert1_update()).await;
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         let events = harness.shutdown().await;
@@ -1098,11 +1122,11 @@ mod test {
         // this triggers request_block_and_header for view 2.
         // The mock coordinator responds with HeaderCreated(2, ...) and BlockBuilt(2, ...).
         harness
-            .send(test_data.views[0].proposal_event(&leader_for_view_2))
+            .send(test_data.views[0].proposal_update(&leader_for_view_2))
             .await;
 
         // Send cert1 for view 1 — triggers maybe_propose(2)
-        harness.send(test_data.views[0].cert1_event()).await;
+        harness.send(test_data.views[0].cert1_update()).await;
 
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         let events = harness.shutdown().await;
@@ -1134,18 +1158,18 @@ mod test {
 
         // Build up locked_qc: process view 1 fully so cert1 for view 1 sets locked_qc
         harness
-            .send(test_data.views[0].proposal_event(&leader_for_view_3))
+            .send(test_data.views[0].proposal_update(&leader_for_view_3))
             .await;
         harness
-            .send(test_data.views[0].block_reconstructed_event())
+            .send(test_data.views[0].block_reconstructed_update())
             .await;
-        harness.send(test_data.views[0].cert1_event()).await;
+        harness.send(test_data.views[0].cert1_update()).await;
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
         // Now send timeout cert for view 2 — this triggers request_block_and_header
         // for view 3 if we are leader
-        harness.send(test_data.views[1].timeout_event()).await;
+        harness.send(test_data.views[1].timeout_cert_update()).await;
 
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         let events = harness.shutdown().await;
@@ -1174,11 +1198,11 @@ mod test {
 
         // Send proposal for view 1
         harness
-            .send(test_data.views[0].proposal_event(&non_leader_key))
+            .send(test_data.views[0].proposal_update(&non_leader_key))
             .await;
 
         // Send cert1 for view 1
-        harness.send(test_data.views[0].cert1_event()).await;
+        harness.send(test_data.views[0].cert1_update()).await;
 
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         let events = harness.shutdown().await;
@@ -1198,22 +1222,22 @@ mod test {
 
         // Full round for view 2
         harness
-            .send(test_data.views[0].proposal_event(&node_key))
+            .send(test_data.views[0].proposal_update(&node_key))
             .await;
         harness
-            .send(test_data.views[0].block_reconstructed_event())
+            .send(test_data.views[0].block_reconstructed_update())
             .await;
         harness
-            .send(test_data.views[1].proposal_event(&node_key))
+            .send(test_data.views[1].proposal_update(&node_key))
             .await;
         harness
-            .send(test_data.views[1].block_reconstructed_event())
+            .send(test_data.views[1].block_reconstructed_update())
             .await;
-        harness.send(test_data.views[1].cert1_event()).await;
-        harness.send(test_data.views[1].cert2_event()).await;
+        harness.send(test_data.views[1].cert1_update()).await;
+        harness.send(test_data.views[1].cert2_update()).await;
 
         // Send cert2 again for same view — should not produce another decide
-        harness.send(test_data.views[1].cert2_event()).await;
+        harness.send(test_data.views[1].cert2_update()).await;
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         let events = harness.shutdown().await;

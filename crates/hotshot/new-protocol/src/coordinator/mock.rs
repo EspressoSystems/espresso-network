@@ -104,6 +104,8 @@ pub mod testing {
         pub async fn run(mut self) -> Vec<Event<TestTypes>> {
             while let Some(event) = self.event_rx.recv().await {
                 if matches!(event, Event::Action(Action::Shutdown)) {
+                    // Signal consensus to shut down before stopping
+                    let _ = self.consensus_tx.send(ConsensusEvent::Shutdown).await;
                     break;
                 }
                 self.handle_event(event).await;
@@ -111,9 +113,13 @@ pub mod testing {
             self.received_events
         }
         async fn handle_event(&mut self, event: Event<TestTypes>) {
-            match &event {
-                Event::Action(action) => self.handle_action(action).await,
-                Event::Update(update) => self.handle_update(update).await,
+            match event {
+                Event::Action(ref action) => self.handle_action(action).await,
+                Event::Update(ref update) => {
+                    if let Ok(consensus_event) = ConsensusEvent::try_from(update.clone()) {
+                        self.consensus_tx.send(consensus_event).await.unwrap();
+                    }
+                },
             }
             self.received_events.push(event);
         }
@@ -207,27 +213,6 @@ pub mod testing {
                 Action::Shutdown => {
                     unreachable!()
                 },
-            }
-        }
-
-        async fn handle_update(&self, update: &Update<TestTypes>) {
-            match update {
-                Update::StateVerified(state_request) => {
-                    self.consensus_tx
-                        .send(state_verified_event(
-                            &state_request.proposal,
-                            state_request.view,
-                        ))
-                        .await
-                        .unwrap();
-                },
-                Update::HeaderCreated(view, header) => {
-                    self.consensus_tx
-                        .send(ConsensusEvent::HeaderCreated(*view, header.clone()))
-                        .await
-                        .unwrap();
-                },
-                _ => {},
             }
         }
     }
