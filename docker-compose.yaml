@@ -133,7 +133,7 @@ services:
         condition: service_completed_successfully
 
   claim-rewards:
-    image: ghcr.io/espressosystems/espresso-network/staking-cli:main
+    image: ghcr.io/espressosystems/espresso-network/staking-cli:${DOCKER_TAG:-main}
     command: /scripts/claim-rewards-loop 10
     volumes:
       - ./scripts:/scripts:ro
