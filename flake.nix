@@ -14,11 +14,6 @@
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
-  # Use ...foundry.nix/stable for latest stable release
-  # On 1.4 foundry's formatting is a bit strange, so we pin 1.3.6 for now
-  inputs.foundry-nix.url = "github:shazow/foundry.nix/e632b06dc759e381ef04f15ff9541f889eda6013";
-  inputs.foundry-nix.inputs.nixpkgs.follows = "nixpkgs";
-
   inputs.rust-overlay.url = "github:oxalica/rust-overlay";
   inputs.rust-overlay.inputs.nixpkgs.follows = "nixpkgs";
 
@@ -43,7 +38,6 @@
   outputs =
     { self
     , nixpkgs
-    , foundry-nix
     , rust-overlay
     , nixpkgs-cross-overlay
     , flake-utils
@@ -72,7 +66,6 @@
 
       overlays = [
         (import rust-overlay)
-        foundry-nix.overlay
         solc-bin.overlays.default
         (final: prev: {
           solhint = prev.callPackage ./nix/solhint { };
@@ -247,7 +240,7 @@
             coreutils
 
             # Ethereum contracts, solidity, ...
-            foundry-bin
+            foundry
             solc
             nodePackages.prettier
             solhint
@@ -364,7 +357,7 @@
         myShell {
           packages = [
             # Foundry tools
-            foundry-bin
+            foundry
             solc
 
             # Security analysis tools

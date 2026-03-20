@@ -32,7 +32,7 @@ use hotshot_contract_adapter::sol_types::{
     },
 };
 use hotshot_types::{
-    PeerConfig,
+    PeerConfig, PeerConnectInfo,
     data::{EpochNumber, ViewNumber, vid_disperse::VID_TARGET_TOTAL_STAKE},
     drb::{
         DrbResult,
@@ -342,6 +342,8 @@ impl StakeTableState {
                     commission,
                     delegators: HashMap::new(),
                     authenticated: true,
+                    x25519_key: None,
+                    p2p_addr: None,
                 });
             },
 
@@ -401,6 +403,8 @@ impl StakeTableState {
                     commission: *commission,
                     delegators: HashMap::new(),
                     authenticated,
+                    x25519_key: None,
+                    p2p_addr: None,
                 });
             },
 
@@ -1837,6 +1841,13 @@ impl EpochCommittees {
                             v.stake,
                         ),
                         state_ver_key: v.state_ver_key.clone(),
+                        connect_info: v.x25519_key.and_then(|p| {
+                            let a = v.p2p_addr.clone()?;
+                            Some(PeerConnectInfo {
+                                x25519_key: p,
+                                p2p_addr: a,
+                            })
+                        }),
                     },
                 )
             })
@@ -2616,7 +2627,7 @@ impl super::v0_3::StakeTable {
     pub fn mock(n: u64) -> Self {
         [..n]
             .iter()
-            .map(|_| PeerConfig::default())
+            .map(|_| PeerConfig::test_default())
             .collect::<Vec<PeerConfig<SeqTypes>>>()
             .into()
     }
@@ -2628,7 +2639,7 @@ impl DAMembers {
     pub fn mock(n: u64) -> Self {
         [..n]
             .iter()
-            .map(|_| PeerConfig::default())
+            .map(|_| PeerConfig::test_default())
             .collect::<Vec<PeerConfig<SeqTypes>>>()
             .into()
     }
@@ -2768,6 +2779,8 @@ pub mod testing {
                 commission: val.commission,
                 delegators,
                 authenticated: true,
+                x25519_key: None,
+                p2p_addr: None,
             }
         }
     }

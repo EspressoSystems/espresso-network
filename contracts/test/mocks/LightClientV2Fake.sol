@@ -6,7 +6,9 @@ import { BN254 } from "bn254/BN254.sol";
 import { IPlonkVerifier } from "../../src/interfaces/IPlonkVerifier.sol";
 import { LightClient } from "../../src/LightClient.sol";
 import { PlonkVerifier } from "../../src/libraries/PlonkVerifier.sol";
-import { LightClientStateUpdateVK as VkLib } from "../../src/libraries/LightClientStateUpdateVK.sol";
+import {
+    LightClientStateUpdateVK as VkLib
+} from "../../src/libraries/LightClientStateUpdateVK.sol";
 
 /// @dev a Fake V2 for testing upgradability purposes only
 contract LightClientV2Fake is LightClient {

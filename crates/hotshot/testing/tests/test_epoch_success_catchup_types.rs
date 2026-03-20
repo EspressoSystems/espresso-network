@@ -7,7 +7,7 @@
 use hotshot_example_types::{
     membership::static_committee::StaticStakeTable,
     node_types::{
-        CliquenetImpl, Libp2pImpl, MemoryImpl, PushCdnImpl, TEST_VERSIONS,
+        CliquenetImpl, CompatNetImpl, Libp2pImpl, MemoryImpl, PushCdnImpl, TEST_VERSIONS,
         TestTypesEpochCatchupTypes,
     },
 };
@@ -17,7 +17,7 @@ use hotshot_types::signature_key::{BLSPubKey, SchnorrPubKey};
 
 cross_tests!(
     TestName: test_epoch_success,
-    Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl, CliquenetImpl],
+    Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl, CliquenetImpl, CompatNetImpl],
     Types: [TestTypesEpochCatchupTypes<StaticStakeTable<BLSPubKey, SchnorrPubKey>>],
     Versions: [TEST_VERSIONS.epoch],
     Ignore: false,

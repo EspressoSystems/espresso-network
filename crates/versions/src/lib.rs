@@ -16,8 +16,9 @@ pub const DRB_AND_HEADER_UPGRADE_VERSION: Version = version(0, 4);
 pub const EPOCH_REWARD_VERSION: Version = version(0, 5);
 pub const DA_UPGRADE_VERSION: Version = version(0, 6);
 pub const VID2_UPGRADE_VERSION: Version = version(0, 7);
+pub const CLIQUENET_VERSION: Version = version(0, 8);
 pub const MIN_SUPPORTED_VERSION: Version = VERSION_0_1;
-pub const MAX_SUPPORTED_VERSION: Version = EPOCH_REWARD_VERSION;
+pub const MAX_SUPPORTED_VERSION: Version = CLIQUENET_VERSION;
 
 // Known upgrade hashes:
 

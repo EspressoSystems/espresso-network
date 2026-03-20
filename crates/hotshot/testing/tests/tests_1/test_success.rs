@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use hotshot_example_types::{
     node_types::{
-        CliquenetImpl, Libp2pImpl, MemoryImpl, PushCdnImpl, TestConsecutiveLeaderTypes, TestTypes, TestTypesRandomizedLeader, TEST_VERSIONS
+        CliquenetImpl, CompatNetImpl, Libp2pImpl, MemoryImpl, PushCdnImpl, TEST_VERSIONS, TestConsecutiveLeaderTypes, TestTypes, TestTypesRandomizedLeader
     },
     testable_delay::{DelayConfig, DelayOptions, DelaySettings, SupportedTraitTypesForAsyncDelay},
 };
@@ -21,7 +21,7 @@ use hotshot_testing::{
 
 cross_tests!(
     TestName: test_success,
-    Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl, CliquenetImpl],
+    Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl, CliquenetImpl, CompatNetImpl],
     Types: [TestTypes, TestTypesRandomizedLeader],
     Versions: [TEST_VERSIONS.test],
     Ignore: false,
@@ -36,7 +36,7 @@ cross_tests!(
 
 cross_tests!(
     TestName: test_success_with_async_delay,
-    Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl, CliquenetImpl],
+    Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl, CliquenetImpl, CompatNetImpl],
     Types: [TestTypes],
     Versions: [TEST_VERSIONS.test],
     Ignore: false,
@@ -64,7 +64,7 @@ cross_tests!(
 
 cross_tests!(
     TestName: test_success_with_async_delay_2,
-    Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl, CliquenetImpl],
+    Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl, CliquenetImpl, CompatNetImpl],
     Types: [TestTypes],
     Versions: [TEST_VERSIONS.test],
     Ignore: false,
@@ -100,7 +100,7 @@ cross_tests!(
 
 cross_tests!(
     TestName: test_with_double_leader_no_failures,
-    Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl, CliquenetImpl],
+    Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl, CliquenetImpl, CompatNetImpl],
     Types: [TestConsecutiveLeaderTypes],
     Versions: [TEST_VERSIONS.test],
     Ignore: false,

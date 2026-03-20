@@ -9,7 +9,7 @@
 //! This module defines the [`NodeImplementation`] trait, which is a composite trait used for
 //! describing the overall behavior of a node, as a composition of implementations of the node trait.
 
-use std::{fmt::Debug, hash::Hash, sync::Arc, time::Duration};
+use std::{collections::HashMap, fmt::Debug, hash::Hash, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -28,6 +28,7 @@ use super::{
     storage::Storage,
 };
 use crate::{
+    PeerConnectInfo,
     constants::DEFAULT_UPGRADE_CONSTANTS,
     data::{Leaf2, TestableLeaf},
     traits::{
@@ -88,6 +89,7 @@ pub trait TestableNodeImplementation<TYPES: NodeType>: NodeImplementation<TYPES>
         da_committee_size: usize,
         reliability_config: Option<Box<dyn NetworkReliability>>,
         secondary_network_delay: Duration,
+        connect_infos: &mut HashMap<TYPES::SignatureKey, PeerConnectInfo>,
     ) -> AsyncGenerator<Arc<Self::Network>>;
 }
 
@@ -130,6 +132,7 @@ where
         da_committee_size: usize,
         reliability_config: Option<Box<dyn NetworkReliability>>,
         secondary_network_delay: Duration,
+        connect_infos: &mut HashMap<TYPES::SignatureKey, PeerConnectInfo>,
     ) -> AsyncGenerator<Arc<Self::Network>> {
         <I::Network as TestableNetworkingImplementation<TYPES>>::generator(
             expected_node_count,
@@ -138,6 +141,7 @@ where
             da_committee_size,
             reliability_config.clone(),
             secondary_network_delay,
+            connect_infos,
         )
     }
 }

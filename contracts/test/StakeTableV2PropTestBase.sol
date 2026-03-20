@@ -201,16 +201,17 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
 
         // Upgrade to V2
         MockStakeTableV2.InitialCommission[] memory emptyCommissions;
-        StakeTable(payable(address(proxy))).upgradeToAndCall(
-            address(stakeTableV2Impl),
-            abi.encodeWithSignature(
-                "initializeV2(address,address,uint256,(address,uint16)[])",
-                admin,
-                admin,
-                0,
-                emptyCommissions
-            )
-        );
+        StakeTable(payable(address(proxy)))
+            .upgradeToAndCall(
+                address(stakeTableV2Impl),
+                abi.encodeWithSignature(
+                    "initializeV2(address,address,uint256,(address,uint16)[])",
+                    admin,
+                    admin,
+                    0,
+                    emptyCommissions
+                )
+            );
 
         // Cast to V2 interface
         stakeTable = MockStakeTableV2(payable(address(proxy)));
@@ -540,9 +541,8 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         if (validators.withPendingWithdrawals.length() == 0) return;
 
         // Pick a validator with pending withdrawals
-        address val = validators.withPendingWithdrawals.at(
-            withdrawalIndex % validators.withPendingWithdrawals.length()
-        );
+        address val = validators.withPendingWithdrawals
+            .at(withdrawalIndex % validators.withPendingWithdrawals.length());
 
         // Pick an actor with pending withdrawal for this validator
         EnumerableSet.AddressSet storage pendingActors = delegators.pendingWithdrawals[val];
