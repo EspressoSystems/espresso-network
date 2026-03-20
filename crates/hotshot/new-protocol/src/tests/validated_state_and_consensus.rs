@@ -1,8 +1,7 @@
 use hotshot::types::BLSPubKey;
 use hotshot_types::traits::signature_key::SignatureKey;
 
-use super::*;
-use crate::test_utils::TestData;
+use super::{test_utils::TestData, *};
 
 /// Integration: proposal accepted and Vote1 sent via real state validation.
 #[tokio::test]

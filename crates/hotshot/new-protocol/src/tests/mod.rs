@@ -1,3 +1,4 @@
+pub(crate) mod test_utils;
 mod validated_state_and_consensus;
 
 use std::sync::Arc;
@@ -11,13 +12,13 @@ use hotshot_types::{
     data::{Leaf2, ViewNumber},
     traits::signature_key::SignatureKey,
 };
+use test_utils::mock_membership;
 use tokio::task::JoinHandle;
 
 use crate::{
     consensus::Consensus,
     coordinator::{handle::CoordinatorHandle, mock::testing::MockCoordinator},
     events::{Action, Event, RequestMessageSender, Update},
-    test_utils::mock_membership,
     validated_state::ValidatedStateManager,
 };
 

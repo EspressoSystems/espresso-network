@@ -579,11 +579,10 @@ mod test {
 
     use crate::{
         events::{Action, Event, Update},
-        test_utils::TestData,
         tests::{
             TestHarness, count_vote1, count_vote2, has_leaf_decided, has_proposal,
             has_request_block_and_header, has_request_state, has_vote1, has_vote2,
-            node_index_for_key,
+            node_index_for_key, test_utils::TestData,
         },
     };
 
