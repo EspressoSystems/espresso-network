@@ -441,7 +441,7 @@ where
                         // have it.
                         trigger_fetch_for_parent(&fetcher, &leaf);
                     }
-                    fetcher.store_and_notify(leaf).await;
+                    fetcher.store_and_notify(&leaf).await;
                 }
             },
             Self::Continuation { callback } => callback.run_range(

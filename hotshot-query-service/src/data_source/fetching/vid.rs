@@ -112,13 +112,9 @@ where
             AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
         P: AvailabilityProvider<Types>,
     {
-        fetch_header_and_then(
-            tx,
-            req.0,
-            HeaderCallback::VidCommon {
-                fetcher: fetcher.clone(),
-            },
-        )
+        fetch_header_and_then(tx, req.0, HeaderCallback::VidCommon {
+            fetcher: fetcher.clone(),
+        })
         .await
     }
 
@@ -481,7 +477,7 @@ where
 
         for (header, common) in self.headers.into_iter().zip(commons) {
             let data = VidCommonQueryData::new(header, common);
-            self.fetcher.store_and_notify(data).await;
+            self.fetcher.store_and_notify(&data).await;
         }
     }
 }

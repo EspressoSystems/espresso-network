@@ -139,7 +139,7 @@ pub struct Builder<Types, S, P> {
     rate_limit: usize,
     range_chunk_size: usize,
     proactive_interval: Duration,
-    proactive_range_chunk_size: Option<usize>,
+    proactive_range_chunk_size: usize,
     sync_status_chunk_size: usize,
     active_fetch_delay: Duration,
     chunk_fetch_delay: Duration,
@@ -167,7 +167,7 @@ impl<Types, S, P> Builder<Types, S, P> {
             rate_limit: 32,
             range_chunk_size: 25,
             proactive_interval: Duration::from_hours(8),
-            proactive_range_chunk_size: None,
+            proactive_range_chunk_size: 100,
             sync_status_chunk_size: 100_000,
             active_fetch_delay: Duration::from_millis(50),
             chunk_fetch_delay: Duration::from_millis(100),
@@ -244,11 +244,8 @@ impl<Types, S, P> Builder<Types, S, P> {
     /// This is similar to [`Self::with_range_chunk_size`], but only affects the chunk size for
     /// proactive fetching scans, not for normal subscription streams. This can be useful to tune
     /// the proactive scanner to be more or less greedy with persistent storage resources.
-    ///
-    /// By default (i.e. if this method is not called) the proactive range chunk size will be set to
-    /// whatever the normal range chunk size is.
     pub fn with_proactive_range_chunk_size(mut self, range_chunk_size: usize) -> Self {
-        self.proactive_range_chunk_size = Some(range_chunk_size);
+        self.proactive_range_chunk_size = range_chunk_size;
         self
     }
 
@@ -467,9 +464,7 @@ where
             .unwrap_or(builder.range_chunk_size);
         let proactive_fetching = builder.proactive_fetching;
         let proactive_interval = builder.proactive_interval;
-        let proactive_range_chunk_size = builder
-            .proactive_range_chunk_size
-            .unwrap_or(builder.range_chunk_size);
+        let proactive_range_chunk_size = builder.proactive_range_chunk_size;
         let scanner_metrics = ScannerMetrics::new(builder.storage.metrics());
         let aggregator_metrics = AggregatorMetrics::new(builder.storage.metrics());
 
@@ -2467,34 +2462,41 @@ mod test {
     #[test]
     fn test_range_chunks() {
         // Inclusive bounds, partial last chunk.
-        assert_eq!(
-            range_chunks(0..=4, 2).collect::<Vec<_>>(),
-            [0..2, 2..4, 4..5]
-        );
+        assert_eq!(range_chunks(0..=4, 2).collect::<Vec<_>>(), [
+            0..2,
+            2..4,
+            4..5
+        ]);
 
         // Inclusive bounds, complete last chunk.
-        assert_eq!(
-            range_chunks(0..=5, 2).collect::<Vec<_>>(),
-            [0..2, 2..4, 4..6]
-        );
+        assert_eq!(range_chunks(0..=5, 2).collect::<Vec<_>>(), [
+            0..2,
+            2..4,
+            4..6
+        ]);
 
         // Exclusive bounds, partial last chunk.
-        assert_eq!(
-            range_chunks(0..5, 2).collect::<Vec<_>>(),
-            [0..2, 2..4, 4..5]
-        );
+        assert_eq!(range_chunks(0..5, 2).collect::<Vec<_>>(), [
+            0..2,
+            2..4,
+            4..5
+        ]);
 
         // Exclusive bounds, complete last chunk.
-        assert_eq!(
-            range_chunks(0..6, 2).collect::<Vec<_>>(),
-            [0..2, 2..4, 4..6]
-        );
+        assert_eq!(range_chunks(0..6, 2).collect::<Vec<_>>(), [
+            0..2,
+            2..4,
+            4..6
+        ]);
 
         // Unbounded.
-        assert_eq!(
-            range_chunks(0.., 2).take(5).collect::<Vec<_>>(),
-            [0..2, 2..4, 4..6, 6..8, 8..10]
-        );
+        assert_eq!(range_chunks(0.., 2).take(5).collect::<Vec<_>>(), [
+            0..2,
+            2..4,
+            4..6,
+            6..8,
+            8..10
+        ]);
     }
 
     #[test]
@@ -2502,25 +2504,28 @@ mod test {
         #![allow(clippy::single_range_in_vec_init)]
 
         // Aligned first chunk, partial last chunk.
-        assert_eq!(
-            range_chunks_aligned(2..5, 2).collect::<Vec<_>>(),
-            [2..4, 4..5]
-        );
+        assert_eq!(range_chunks_aligned(2..5, 2).collect::<Vec<_>>(), [
+            2..4,
+            4..5
+        ]);
 
         // Misaligned first chunk, complete last chunk.
-        assert_eq!(
-            range_chunks_aligned(1..4, 2).collect::<Vec<_>>(),
-            [1..2, 2..4]
-        );
+        assert_eq!(range_chunks_aligned(1..4, 2).collect::<Vec<_>>(), [
+            1..2,
+            2..4
+        ]);
 
         // Incomplete chunk.
         assert_eq!(range_chunks_aligned(1..3, 10).collect::<Vec<_>>(), [1..3]);
 
         // Unbounded.
-        assert_eq!(
-            range_chunks_aligned(1.., 2).take(5).collect::<Vec<_>>(),
-            [1..2, 2..4, 4..6, 6..8, 8..10]
-        );
+        assert_eq!(range_chunks_aligned(1.., 2).take(5).collect::<Vec<_>>(), [
+            1..2,
+            2..4,
+            4..6,
+            6..8,
+            8..10
+        ]);
     }
 
     #[test]
@@ -2635,41 +2640,32 @@ mod test {
         for &(start, end) in present_ranges {
             if start != prev {
                 let range = ranges.next().unwrap();
-                assert_eq!(
-                    range,
-                    SyncStatusRange {
-                        start: prev,
-                        end: start,
-                        status: if prev == 0 {
-                            SyncStatus::Pruned
-                        } else {
-                            SyncStatus::Missing
-                        },
-                    }
-                );
+                assert_eq!(range, SyncStatusRange {
+                    start: prev,
+                    end: start,
+                    status: if prev == 0 {
+                        SyncStatus::Pruned
+                    } else {
+                        SyncStatus::Missing
+                    },
+                });
             }
             let range = ranges.next().unwrap();
-            assert_eq!(
-                range,
-                SyncStatusRange {
-                    start,
-                    end,
-                    status: SyncStatus::Present,
-                }
-            );
+            assert_eq!(range, SyncStatusRange {
+                start,
+                end,
+                status: SyncStatus::Present,
+            });
             prev = end;
         }
 
         if prev != block_height {
             let range = ranges.next().unwrap();
-            assert_eq!(
-                range,
-                SyncStatusRange {
-                    start: prev,
-                    end: block_height,
-                    status: SyncStatus::Missing,
-                }
-            );
+            assert_eq!(range, SyncStatusRange {
+                start: prev,
+                end: block_height,
+                status: SyncStatus::Missing,
+            });
         }
 
         assert_eq!(ranges.next(), None);

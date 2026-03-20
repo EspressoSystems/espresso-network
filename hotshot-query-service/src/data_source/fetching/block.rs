@@ -104,13 +104,9 @@ where
             AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
         P: AvailabilityProvider<Types>,
     {
-        fetch_header_and_then(
-            tx,
-            req,
-            HeaderCallback::Payload {
-                fetcher: fetcher.clone(),
-            },
-        )
+        fetch_header_and_then(tx, req, HeaderCallback::Payload {
+            fetcher: fetcher.clone(),
+        })
         .await
     }
 
@@ -527,7 +523,7 @@ where
 
         for (header, payload) in self.headers.into_iter().zip(payloads) {
             let block = BlockQueryData::new(header, payload);
-            self.fetcher.store_and_notify(block).await;
+            self.fetcher.store_and_notify(&block).await;
         }
     }
 }
