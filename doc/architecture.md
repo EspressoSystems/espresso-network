@@ -25,7 +25,7 @@ Below is sequence diagram to accompany the overview:
 2. The rollup builds a block that includes the rollup's transaction.
 3. The rollup builds an Espress transaction containing the serialized L2 block, and an identifier for that rollup, and
    sends it to the Espresso confirmation layer.
-4. Clients, rollup validators and bridges are notified the L2 block is confirmed by Espresso. Interested parties can now
+4. Clients, rollup validators and bridges are notified the L2 block is finalized by Espresso. Interested parties can now
    derive the new state of the rollup if desired. The zk proof or fraud proofs guarantee that the rollups canonical
    chain will be derived from the rollup block confirmed by Espresso.
 5. A commitment to the block containing the transaction is persisted in the L1 Light Client contract (along with a proof
@@ -39,7 +39,7 @@ Below is sequence diagram to accompany the overview:
 
 This diagram below depicts a simplified view of the current architecture of the Espresso Confirmation Layer. The diagram
 includes views of an Espresso node, the Espresso Network (nodes, CDN, builders, prover, state relay service), two
-rollups (one ZK rollup "Z", one optimistic rollup "O") that use Espresso Network for sequencing and some important
+rollups (one ZK rollup "Z", one optimistic rollup "O") that use Espresso Network for finalization and some important
 L1 contracts.
 
 - Glossary
@@ -56,9 +56,9 @@ The sequence diagram below serves as a complement to the architecture diagram. T
 1. Builders deposit funds into the fee contract on Ethereum Layer 1. These funds are later used to pay fees.
 2. Users submit L2 transactions to the rollup RPCs.
 3. The rollups build L2 / rollup blocks.
-4. The rollups send their L2 blocks to the Espresso confirmation layer.
+4. The rollups send their L2 blocks to the Espresso network.
 5. The leader/proposer obtains a block from a builder.
-6. HotShot consensus creates new blocks containing sequenced rollup transactions.
+6. HotShot consensus creates new blocks containing rollup transactions.
 7. A rollup produces a rollup block with transactions finalized by Espresso Network.
 8. A proof for a HotShot state update is created and verified in the Light Client smart contract.
 9. A ZK rollup proves a correct state transaction by sending a proof to its rollup smart contract.
