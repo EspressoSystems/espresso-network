@@ -172,15 +172,15 @@ impl<TYPES: NodeType> TryFrom<Update<TYPES>> for ConsensusEvent<TYPES> {
                     Ok(ConsensusEvent::Proposal(proposal_msg))
                 },
                 ConsensusMessage::Certificate1(cert, _key) => {
-                    Ok(ConsensusEvent::Certificate1(cert.clone()))
+                    Ok(ConsensusEvent::Certificate1(cert))
                 },
                 ConsensusMessage::Certificate2(cert, _key) => {
-                    Ok(ConsensusEvent::Certificate2(cert.clone()))
+                    Ok(ConsensusEvent::Certificate2(cert))
                 },
                 _ => Err(()),
             },
             Update::BlockReconstructed(view, _payload, vid_commit) => {
-                Ok(ConsensusEvent::BlockReconstructed(view, vid_commit.clone()))
+                Ok(ConsensusEvent::BlockReconstructed(view, vid_commit))
             },
             Update::Timeout(view) => Ok(ConsensusEvent::Timeout(view)),
             Update::TimeoutCertificateReceived(cert) => {

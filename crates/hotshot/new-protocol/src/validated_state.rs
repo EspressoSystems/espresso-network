@@ -374,11 +374,11 @@ mod test {
     use crate::{
         events::{Event, HeaderRequest, StateRequest, Update},
         helpers::proposal_commitment,
-        tests::test_utils::TestData,
+        tests::test_utils::{TestData, TestView},
     };
 
     /// Build a StateRequest from a TestView.
-    fn make_state_request(view: &crate::tests::test_utils::TestView) -> StateRequest<TestTypes> {
+    fn make_state_request(view: &TestView) -> StateRequest<TestTypes> {
         let proposal = &view.proposal.data.proposal;
         StateRequest {
             view: view.view_number,
@@ -393,7 +393,7 @@ mod test {
 
     /// Build a HeaderRequest from a TestView (as the parent).
     fn make_header_request(
-        parent_view: &crate::tests::test_utils::TestView,
+        parent_view: &TestView,
         target_view: ViewNumber,
     ) -> HeaderRequest<TestTypes> {
         let parent_proposal = &parent_view.proposal.data.proposal;

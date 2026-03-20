@@ -154,7 +154,7 @@ pub mod testing {
                                 parent_proposal: req.parent_proposal.clone(),
                                 payload_commitment: mock_block.payload_commitment,
                                 builder_commitment: mock_block.builder_commitment,
-                                metadata: mock_block.metadata.clone(),
+                                metadata: mock_block.metadata,
                                 builder_fee: mock_builder_fee(),
                             }))
                             .await
@@ -168,7 +168,7 @@ pub mod testing {
                             &parent_leaf,
                             mock_block.payload_commitment,
                             mock_block.builder_commitment,
-                            mock_block.metadata.clone(),
+                            mock_block.metadata,
                             TEST_VERSIONS.test.base,
                         );
                         self.consensus_tx
