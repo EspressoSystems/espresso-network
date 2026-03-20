@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{VecDeque, vec_deque};
 
 use committable::{Commitment, Committable};
 use hotshot_types::{
@@ -54,6 +54,15 @@ impl<T> Outbox<T> {
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &T> {
+        self.0.iter()
+    }
+}
+
+impl<'a, T> IntoIterator for &'a Outbox<T> {
+    type IntoIter = vec_deque::Iter<'a, T>;
+    type Item = &'a T;
+
+    fn into_iter(self) -> Self::IntoIter {
         self.0.iter()
     }
 }

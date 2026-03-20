@@ -12,8 +12,6 @@ use crate::{
     message::{ConsensusMessage, MessageType},
 };
 
-pub(crate) mod mock;
-
 pub struct Coordinator<T: NodeType, N> {
     consensus: Consensus<T>,
     outbox: Outbox<ConsensusOutput<T>>,

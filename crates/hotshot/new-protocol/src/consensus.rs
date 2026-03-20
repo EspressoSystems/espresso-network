@@ -222,7 +222,7 @@ impl<T: NodeType> Consensus<T> {
         let proposal = self.get_proposal(parent_view)?;
         let epoch = epoch(proposal.epoch)?;
         self.ensure_is_leader(view, epoch).await?;
-        let header = self.get_header(parent_view)?;
+        let header = self.get_header(view)?;
         let block = self.get_block(view)?;
         let vid_disperse = self.get_vid_disperse(view)?;
 
@@ -537,7 +537,7 @@ impl<T: NodeType> Consensus<T> {
     ) -> Result<()> {
         let epoch = epoch(cert.epoch())?;
         let view = cert.view_number() + 1;
-        self.timeout_certs.insert(cert.view_number(), cert);
+        self.timeout_certs.insert(view, cert);
         self.ensure_is_leader(view, epoch).await?;
         let locked_view = self.get_locked_qc()?.view_number();
         let proposal = self.get_proposal(locked_view)?;
@@ -717,8 +717,8 @@ mod test {
     use crate::{
         events::{Action, ConsensusInput, ConsensusOutput, Event, StateRequest},
         tests::{
-            count_vote1, count_vote2, has_leaf_decided, has_proposal, has_request_block_and_header,
-            has_request_state, has_vote1, has_vote2, node_index_for_key,
+            count_vote1, count_vote2, has_leaf_decided, has_proposal, has_request_state, has_vote1,
+            has_vote2, map_block_requests, node_index_for_key,
             test_utils::{TestData, mock_membership},
         },
     };
@@ -1274,10 +1274,10 @@ mod test {
         let leader_index = node_index_for_key(&leader_for_view_2);
         let mut consensus = make_consensus(leader_index).await;
         let mut outbox = Outbox::new();
+        let mut outputs = Vec::new();
 
         // Send proposal for view 1 — since we're leader for view 2,
-        // this triggers request_block_and_header for view 2.
-        // The mock coordinator responds with HeaderCreated(2, ...) and BlockBuilt(2, ...).
+        // this triggers RequestBlockAndHeader for view 2.
         consensus
             .apply(
                 test_data.views[0].proposal_event(&leader_for_view_2),
@@ -1285,20 +1285,20 @@ mod test {
             )
             .await;
 
+        // Fulfill the block/header/vid requests (simulates coordinator).
+        fulfill_block_requests(&mut consensus, &mut outbox, &mut outputs).await;
+
         // Send cert1 for view 1 — triggers maybe_propose(2)
         consensus
             .apply(test_data.views[0].cert1_event(), &mut outbox)
             .await;
 
-        // The leader should have requested a block and header for view 2
-        assert!(
-            has_request_block_and_header(&outbox),
-            "Leader should request block and header for the next view"
-        );
+        // Fulfill any further requests triggered by cert1.
+        fulfill_block_requests(&mut consensus, &mut outbox, &mut outputs).await;
 
         // The leader should have sent a proposal for view 2
         assert!(
-            has_proposal(&outbox),
+            has_proposal(&outputs),
             "Leader should send a proposal when it has cert1, header, block, and vid_disperse"
         );
     }
@@ -1315,6 +1315,7 @@ mod test {
         let leader_index = node_index_for_key(&leader_for_view_3);
         let mut consensus = make_consensus(leader_index).await;
         let mut outbox = Outbox::new();
+        let mut outputs = Vec::new();
 
         // Build up locked_qc: process view 1 fully so cert1 for view 1 sets locked_qc
         consensus
@@ -1323,6 +1324,10 @@ mod test {
                 &mut outbox,
             )
             .await;
+
+        // Fulfill block requests from the proposal (leader requested block/header).
+        fulfill_block_requests(&mut consensus, &mut outbox, &mut outputs).await;
+
         consensus
             .apply(test_data.views[0].block_reconstructed_event(), &mut outbox)
             .await;
@@ -1330,18 +1335,20 @@ mod test {
             .apply(test_data.views[0].cert1_event(), &mut outbox)
             .await;
 
-        // Now send timeout cert for view 2 — this triggers request_block_and_header
+        // Fulfill any requests triggered by cert1.
+        fulfill_block_requests(&mut consensus, &mut outbox, &mut outputs).await;
+
+        // Now send timeout cert for view 2 — this triggers RequestBlockAndHeader
         // for view 3 if we are leader
         consensus
             .apply(test_data.views[1].timeout_cert_event(), &mut outbox)
             .await;
 
+        // Fulfill block/header/vid requests for view 3.
+        fulfill_block_requests(&mut consensus, &mut outbox, &mut outputs).await;
+
         assert!(
-            has_request_block_and_header(&outbox),
-            "Leader should request block and header after timeout"
-        );
-        assert!(
-            has_proposal(&outbox),
+            has_proposal(&outputs),
             "Leader should send proposal with timeout view change evidence"
         );
     }
@@ -1416,5 +1423,23 @@ mod test {
             .filter(|e| matches!(e, ConsensusOutput::Event(Event::LeafDecided(_))))
             .count();
         assert_eq!(decide_count, 1, "Should only decide once per view");
+    }
+
+    async fn fulfill_block_requests(
+        consensus: &mut Consensus<TestTypes>,
+        outbox: &mut Outbox<ConsensusOutput<TestTypes>>,
+        outputs: &mut Vec<ConsensusOutput<TestTypes>>,
+    ) {
+        loop {
+            let (new_inputs, other_outputs) = map_block_requests(outbox).await;
+            assert!(outbox.is_empty());
+            outputs.extend(other_outputs);
+            if new_inputs.is_empty() {
+                break;
+            }
+            for i in new_inputs {
+                consensus.apply(i, outbox).await;
+            }
+        }
     }
 }

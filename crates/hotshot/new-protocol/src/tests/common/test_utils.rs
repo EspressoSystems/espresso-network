@@ -8,11 +8,10 @@ use async_lock::RwLock;
 use committable::{Commitment, Committable};
 use futures::StreamExt;
 use hotshot::{
-    traits::implementations::MemoryNetwork,
+    traits::{ValidatedState, implementations::MemoryNetwork},
     types::{BLSPrivKey, BLSPubKey, SchnorrPubKey},
 };
 use hotshot_example_types::{
-    block_types::TestBlockPayload,
     membership::{static_committee::StaticStakeTable, strict_membership::StrictMembership},
     node_types::{MemoryImpl, TEST_VERSIONS, TestTypes},
     storage_types::TestStorage,
@@ -43,7 +42,7 @@ use hotshot_types::{
 use crate::{
     events::{ConsensusInput, StateResponse},
     helpers::{proposal_commitment, upgrade_lock},
-    message::{Certificate1, Certificate2, ConsensusMessage, ProposalMessage, Vote2, Vote2Data},
+    message::{Certificate1, Certificate2, ProposalMessage, Vote2, Vote2Data},
 };
 
 #[allow(dead_code)]
@@ -100,10 +99,13 @@ impl TestView {
     /// Build a ConsensusInput::StateVerified for this view.
     pub fn state_verified_event(&self) -> ConsensusInput<TestTypes> {
         let commitment = proposal_commitment(&self.proposal.data.proposal);
+        let state = <hotshot_example_types::state_types::TestValidatedState as ValidatedState<
+            TestTypes,
+        >>::from_header(&self.proposal.data.proposal.block_header);
         ConsensusInput::StateVerified(StateResponse {
             view: self.view_number,
             commitment,
-            state: todo!(),
+            state: Arc::new(state),
         })
     }
 
