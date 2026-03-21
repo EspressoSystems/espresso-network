@@ -271,7 +271,7 @@ impl<TYPES: NodeType> HasViewNumber for StateEvent<TYPES> {
 #[allow(clippy::large_enum_variant)]
 pub enum CpuEvent<TYPES: NodeType> {
     DrbRequest(DrbInput),
-    VidShare(VidShareInput<TYPES>),
+    Proposal(ProposalMessage<TYPES>),
     VidDisperseRequest(VidDisperseRequest<TYPES>),
     Vote1(Vote1<TYPES>),
     Vote2(Vote2<TYPES>),

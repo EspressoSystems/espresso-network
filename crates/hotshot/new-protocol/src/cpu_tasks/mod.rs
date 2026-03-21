@@ -8,6 +8,7 @@ use hotshot_types::{
     message::UpgradeLock,
     simple_vote::QuorumVote2,
     traits::{
+        block_contents::BlockHeader,
         node_implementation::NodeType,
         storage::{LoadDrbProgressFn, StoreDrbProgressFn},
     },
@@ -135,8 +136,14 @@ impl<TYPES: NodeType> CpuTaskManager<TYPES> {
             CpuEvent::DrbRequest(drb_input) => {
                 let _ = self.drb_request_task.send(drb_input).await;
             },
-            CpuEvent::VidShare(vid_share) => {
-                let _ = self.vid_share_task.send(vid_share).await;
+            CpuEvent::Proposal(proposal) => {
+                let _ = self
+                    .vid_share_task
+                    .send(VidShareInput {
+                        share: proposal.vid_share,
+                        metadata: Some(proposal.proposal.data.block_header.metadata().clone()),
+                    })
+                    .await;
             },
             CpuEvent::VidDisperseRequest(vid_disperse_request) => {
                 let _ = self.vid_disperse_task.send(vid_disperse_request).await;
