@@ -116,6 +116,24 @@ impl<TYPES: NodeType> CoordinatorHandle<TYPES> {
             .await
     }
 
+    pub async fn respond_certificate1(
+        &self,
+        cert: crate::message::Certificate1<TYPES>,
+    ) -> Result<(), SendError<Event<TYPES>>> {
+        self.event_tx
+            .send(Event::Update(Update::Certificate1Formed(cert)))
+            .await
+    }
+
+    pub async fn respond_certificate2(
+        &self,
+        cert: crate::message::Certificate2<TYPES>,
+    ) -> Result<(), SendError<Event<TYPES>>> {
+        self.event_tx
+            .send(Event::Update(Update::Certificate2Formed(cert)))
+            .await
+    }
+
     pub async fn respond_drb(&self, result: DrbResult) -> Result<(), SendError<Event<TYPES>>> {
         self.event_tx
             .send(Event::Update(Update::DrbCalculated(result)))

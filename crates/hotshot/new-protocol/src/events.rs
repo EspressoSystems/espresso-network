@@ -116,6 +116,8 @@ pub enum Update<TYPES: NodeType> {
     LockUpdated(Certificate2<TYPES>),
     ViewChanged(ViewNumber, EpochNumber),
     BlockReconstructed(ViewNumber, TYPES::BlockPayload, VidCommitment2),
+    Certificate1Formed(Certificate1<TYPES>),
+    Certificate2Formed(Certificate2<TYPES>),
     Timeout(ViewNumber),
     TimeoutCertificateReceived(TimeoutCertificate2<TYPES>),
     ViewSyncCertificateReceived(ViewSyncFinalizeCertificate2<TYPES>),
