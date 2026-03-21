@@ -1,13 +1,15 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use hotshot_types::{
     data::{EpochNumber, VidCommitment2, VidDisperse2, ViewNumber},
     drb::{DrbInput, DrbResult, compute_drb_result},
     epoch_membership::EpochMembershipCoordinator,
     traits::{
+        BlockPayload,
         node_implementation::NodeType,
         storage::{LoadDrbProgressFn, StoreDrbProgressFn},
     },
+    vid::avidm_gf2::{AvidmGf2Common, AvidmGf2Scheme, AvidmGf2Share},
 };
 use tokio::{
     spawn,
@@ -17,7 +19,7 @@ use tokio::{
 
 use crate::{
     coordinator::handle::CoordinatorHandle,
-    events::{CpuEvent, VidDisperseRequest},
+    events::{CpuEvent, VidDisperseRequest, VidShareInput},
     message::{Vote1, Vote2},
 };
 
@@ -39,7 +41,7 @@ struct CpuTaskManager<TYPES: NodeType> {
     event_rx: tokio::sync::mpsc::Receiver<CpuEvent<TYPES>>,
 
     vid_disperse_task: Task<VidDisperseRequest<TYPES>>,
-    vid_share_task: Task<VidDisperse2<TYPES>>,
+    vid_share_task: Task<VidShareInput<TYPES>>,
     vote1_task: Task<Vote1<TYPES>>,
     vote2_task: Task<Vote2<TYPES>>,
     drb_request_task: Task<DrbInput>,
@@ -239,5 +241,98 @@ impl<TYPES: NodeType> DrbRequestTask<TYPES> {
             let result = compute_drb_result(drb_input, store_drb_progress, load_drb_progress).await;
             let _ = tx.send((epoch, result)).await;
         })
+    }
+}
+
+struct VidShareAccumulator<TYPES: NodeType> {
+    shares: Vec<AvidmGf2Share>,
+    accumulated_weight: usize,
+    common: AvidmGf2Common,
+    metadata: <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
+}
+
+impl<TYPES: NodeType> VidShareAccumulator<TYPES> {
+    fn has_enough_shares(&self) -> bool {
+        self.accumulated_weight >= self.common.param.recovery_threshold
+    }
+}
+
+struct VidShareTask<TYPES: NodeType> {
+    accumulators: BTreeMap<ViewNumber, VidShareAccumulator<TYPES>>,
+    reconstructed: BTreeSet<ViewNumber>,
+    rx: tokio::sync::mpsc::Receiver<VidShareInput<TYPES>>,
+    coordinator_handle: CoordinatorHandle<TYPES>,
+    internal_tx: mpsc::Sender<(ViewNumber, VidCommitment2, TYPES::BlockPayload)>,
+    internal_rx: mpsc::Receiver<(ViewNumber, VidCommitment2, TYPES::BlockPayload)>,
+}
+
+impl<TYPES: NodeType> VidShareTask<TYPES> {
+    fn new(
+        rx: tokio::sync::mpsc::Receiver<VidShareInput<TYPES>>,
+        coordinator_handle: CoordinatorHandle<TYPES>,
+    ) -> Self {
+        let (internal_tx, internal_rx) = mpsc::channel(100);
+        Self {
+            accumulators: BTreeMap::new(),
+            reconstructed: BTreeSet::new(),
+            rx,
+            coordinator_handle,
+            internal_tx,
+            internal_rx,
+        }
+    }
+
+    async fn run(mut self) {
+        loop {
+            tokio::select! {
+                Some(input) = self.rx.recv() => {
+                    let view = input.share.view_number;
+                    if self.reconstructed.contains(&view) {
+                        continue;
+                    }
+                    let payload_commitment = input.share.payload_commitment;
+                    let weight = input.share.share.weight();
+                    let accumulator = self.accumulators.entry(view).or_insert_with(|| {
+                        VidShareAccumulator {
+                            shares: Vec::new(),
+                            accumulated_weight: 0,
+                            common: input.share.common.clone(),
+                            metadata: input.metadata.clone(),
+                        }
+                    });
+                    accumulator.accumulated_weight += weight;
+                    accumulator.shares.push(input.share.share);
+                    if accumulator.has_enough_shares() {
+                        self.try_reconstruct(view, payload_commitment);
+                    }
+                },
+                Some((view, vid_commitment, payload)) = self.internal_rx.recv() => {
+                    self.accumulators.remove(&view);
+                    self.reconstructed.insert(view);
+                    let _ = self.coordinator_handle.respond_block_reconstructed(view, payload, vid_commitment).await;
+                },
+                else => break,
+            }
+        }
+    }
+
+    fn try_reconstruct(&self, view: ViewNumber, payload_commitment: VidCommitment2) {
+        let Some(accumulator) = self.accumulators.get(&view) else {
+            return;
+        };
+        let shares = accumulator.shares.clone();
+        let common = accumulator.common.clone();
+        let metadata = accumulator.metadata.clone();
+        let tx = self.internal_tx.clone();
+        spawn(async move {
+            let result =
+                tokio::task::spawn_blocking(move || AvidmGf2Scheme::recover(&common, &shares))
+                    .await;
+            let Ok(Ok(bytes)) = result else {
+                return;
+            };
+            let payload = TYPES::BlockPayload::from_bytes(&bytes, &metadata);
+            let _ = tx.send((view, payload_commitment, payload)).await;
+        });
     }
 }

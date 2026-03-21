@@ -5,7 +5,7 @@ use hotshot::traits::{BlockPayload, ValidatedState};
 use hotshot_types::{
     data::{
         EpochNumber, Leaf2, QuorumProposal2, VidCommitment, VidCommitment2, VidDisperse2,
-        ViewNumber,
+        VidDisperseShare2, ViewNumber,
     },
     drb::{DrbInput, DrbResult},
     message::Proposal,
@@ -68,6 +68,12 @@ pub struct VidDisperseRequest<TYPES: NodeType> {
     pub view: ViewNumber,
     pub epoch: EpochNumber,
     pub block: TYPES::BlockPayload,
+    pub metadata: <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
+}
+
+#[derive(Clone, Eq, PartialEq, Debug)]
+pub struct VidShareInput<TYPES: NodeType> {
+    pub share: VidDisperseShare2<TYPES>,
     pub metadata: <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
 }
 
@@ -263,7 +269,7 @@ impl<TYPES: NodeType> HasViewNumber for StateEvent<TYPES> {
 #[allow(clippy::large_enum_variant)]
 pub enum CpuEvent<TYPES: NodeType> {
     DrbRequest(DrbInput),
-    VidShare(VidDisperse2<TYPES>),
+    VidShare(VidShareInput<TYPES>),
     VidDisperseRequest(VidDisperseRequest<TYPES>),
     Vote1(Vote1<TYPES>),
     Vote2(Vote2<TYPES>),

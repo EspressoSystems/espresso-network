@@ -101,6 +101,21 @@ impl<TYPES: NodeType> CoordinatorHandle<TYPES> {
             .send(Event::Update(Update::HeaderCreated(view, header)))
             .await
     }
+    pub async fn respond_block_reconstructed(
+        &self,
+        view: ViewNumber,
+        payload: TYPES::BlockPayload,
+        vid_commitment: VidCommitment2,
+    ) -> Result<(), SendError<Event<TYPES>>> {
+        self.event_tx
+            .send(Event::Update(Update::BlockReconstructed(
+                view,
+                payload,
+                vid_commitment,
+            )))
+            .await
+    }
+
     pub async fn respond_drb(&self, result: DrbResult) -> Result<(), SendError<Event<TYPES>>> {
         self.event_tx
             .send(Event::Update(Update::DrbCalculated(result)))
