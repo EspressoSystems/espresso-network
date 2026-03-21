@@ -143,6 +143,13 @@ impl<TYPES: NodeType> CpuTaskManager<TYPES> {
             },
             CpuEvent::Vote1(vote1) => {
                 let _ = self.vote1_task.send(vote1.vote).await;
+                let _ = self
+                    .vid_share_task
+                    .send(VidShareInput {
+                        share: vote1.vid_share,
+                        metadata: None,
+                    })
+                    .await;
             },
             CpuEvent::Vote2(vote2) => {
                 let _ = self.vote2_task.send(vote2).await;
