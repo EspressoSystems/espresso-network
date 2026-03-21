@@ -99,7 +99,7 @@ struct VidShareAccumulator<TYPES: NodeType> {
     shares: Vec<AvidmGf2Share>,
     accumulated_weight: usize,
     common: AvidmGf2Common,
-    metadata: <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
+    metadata: Option<<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata>,
 }
 
 impl<TYPES: NodeType> VidShareAccumulator<TYPES> {
@@ -173,7 +173,10 @@ impl<TYPES: NodeType> VidShareTask<TYPES> {
         };
         let shares = accumulator.shares.clone();
         let common = accumulator.common.clone();
-        let metadata = accumulator.metadata.clone();
+        // Metadata comes from when we get the proposal, otherwise we can't reconstruct the payload
+        let Some(metadata) = accumulator.metadata.clone() else {
+            return;
+        };
         let tx = self.internal_tx.clone();
         spawn(async move {
             let result =

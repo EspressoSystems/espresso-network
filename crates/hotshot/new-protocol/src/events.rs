@@ -74,7 +74,7 @@ pub struct VidDisperseRequest<TYPES: NodeType> {
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub struct VidShareInput<TYPES: NodeType> {
     pub share: VidDisperseShare2<TYPES>,
-    pub metadata: <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
+    pub metadata: Option<<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata>,
 }
 
 #[derive(Eq, PartialEq, Debug)]
