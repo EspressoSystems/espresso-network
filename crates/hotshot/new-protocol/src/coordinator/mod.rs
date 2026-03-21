@@ -11,7 +11,7 @@ const CHANNEL_BUFFER_SIZE: usize = 256;
 
 pub(crate) struct Coordinator<TYPES: NodeType> {
     event_rx: tokio::sync::mpsc::Receiver<Event<TYPES>>,
-    cpu_tx: std::sync::mpsc::Sender<CpuEvent<TYPES>>,
+    cpu_tx: tokio::sync::mpsc::Sender<CpuEvent<TYPES>>,
     state_tx: tokio::sync::mpsc::Sender<StateEvent<TYPES>>,
     io_tx: tokio::sync::mpsc::Sender<IOEvent<TYPES>>,
     consensus_tx: tokio::sync::mpsc::Sender<ConsensusEvent<TYPES>>,
@@ -24,10 +24,10 @@ impl<TYPES: NodeType> Coordinator<TYPES> {
         system_context: SystemContextHandle<TYPES, I>,
     ) -> (Self, CoordinatorHandle<TYPES>) {
         let (event_tx, event_rx) = mpsc::channel(CHANNEL_BUFFER_SIZE);
-        let (cpu_tx, cpu_rx) = std::sync::mpsc::channel();
-        let (state_tx, state_rx) = tokio::sync::mpsc::channel(CHANNEL_BUFFER_SIZE);
-        let (io_tx, io_rx) = tokio::sync::mpsc::channel(CHANNEL_BUFFER_SIZE);
-        let (consensus_tx, consensus_rx) = tokio::sync::mpsc::channel(CHANNEL_BUFFER_SIZE);
+        let (cpu_tx, cpu_rx) = mpsc::channel(CHANNEL_BUFFER_SIZE);
+        let (state_tx, state_rx) = mpsc::channel(CHANNEL_BUFFER_SIZE);
+        let (io_tx, io_rx) = mpsc::channel(CHANNEL_BUFFER_SIZE);
+        let (consensus_tx, consensus_rx) = mpsc::channel(CHANNEL_BUFFER_SIZE);
         let coordinator = Self {
             event_rx,
             cpu_tx,
@@ -45,5 +45,22 @@ impl<TYPES: NodeType> Coordinator<TYPES> {
             system_context.private_key().clone(),
         );
         (coordinator, coordinator_handle)
+    }
+
+    pub async fn run(&mut self) {
+        while let Some(event) = self.event_rx.recv().await {
+            match event {
+                Event::Update(update) => self.handle_update(update).await,
+                Event::Action(action) => self.handle_action(action).await,
+            }
+        }
+    }
+
+    async fn handle_update(&mut self, update: Update<TYPES>) {
+        todo!()
+    }
+
+    async fn handle_action(&mut self, action: Action<TYPES>) {
+        todo!()
     }
 }

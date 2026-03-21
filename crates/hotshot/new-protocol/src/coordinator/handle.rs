@@ -1,6 +1,7 @@
 use hotshot::traits::BlockPayload;
 use hotshot_types::{
-    data::{EpochNumber, Leaf2, QuorumProposal2, ViewNumber},
+    data::{EpochNumber, Leaf2, QuorumProposal2, VidCommitment2, VidDisperse2, ViewNumber},
+    drb::DrbResult,
     simple_vote::HasEpoch,
     traits::{block_contents::BlockHeader, node_implementation::NodeType},
     vote::{Certificate, HasViewNumber},
@@ -98,6 +99,24 @@ impl<TYPES: NodeType> CoordinatorHandle<TYPES> {
     ) -> Result<(), SendError<Event<TYPES>>> {
         self.event_tx
             .send(Event::Update(Update::HeaderCreated(view, header)))
+            .await
+    }
+    pub async fn respond_drb(&self, result: DrbResult) -> Result<(), SendError<Event<TYPES>>> {
+        self.event_tx
+            .send(Event::Update(Update::DrbCalculated(result)))
+            .await
+    }
+
+    pub async fn respond_vid_disperse(
+        &self,
+        payload_commitment: VidCommitment2,
+        disperse: VidDisperse2<TYPES>,
+    ) -> Result<(), SendError<Event<TYPES>>> {
+        self.event_tx
+            .send(Event::Update(Update::VidDisperseCreated(
+                payload_commitment,
+                disperse,
+            )))
             .await
     }
 }

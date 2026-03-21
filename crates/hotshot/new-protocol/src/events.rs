@@ -8,6 +8,7 @@ use hotshot_types::{
         ViewNumber,
     },
     drb::{DrbInput, DrbResult},
+    message::Proposal,
     simple_certificate::{TimeoutCertificate2, ViewSyncFinalizeCertificate2},
     traits::{block_contents::BuilderFee, node_implementation::NodeType},
     utils::BuilderCommitment,
@@ -62,10 +63,18 @@ pub(crate) struct HeaderRequest<TYPES: NodeType> {
     pub builder_fee: BuilderFee<TYPES>,
 }
 
+#[derive(Clone, Eq, PartialEq, Debug)]
+pub struct VidDisperseRequest<TYPES: NodeType> {
+    pub view: ViewNumber,
+    pub epoch: EpochNumber,
+    pub block: TYPES::BlockPayload,
+    pub metadata: <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
+}
+
 #[derive(Eq, PartialEq, Debug)]
 #[allow(clippy::large_enum_variant)]
 pub enum RequestMessageSender<TYPES: NodeType> {
-    Proposal(QuorumProposal2<TYPES>, VidDisperse2<TYPES>),
+    Proposal(Proposal<TYPES, QuorumProposal2<TYPES>>, VidDisperse2<TYPES>),
     Vote1(Vote1<TYPES>),
     Vote2(Vote2<TYPES>),
 }
@@ -255,6 +264,7 @@ impl<TYPES: NodeType> HasViewNumber for StateEvent<TYPES> {
 pub enum CpuEvent<TYPES: NodeType> {
     DrbRequest(DrbInput),
     VidShare(VidDisperse2<TYPES>),
+    VidDisperseRequest(VidDisperseRequest<TYPES>),
     Vote1(Vote1<TYPES>),
     Vote2(Vote2<TYPES>),
 }

@@ -344,7 +344,11 @@ impl<TYPES: NodeType> ValidatedStateManager<TYPES> {
     ) {
         let commitment = leaf.commit();
         self.validated_states.insert(view, (Arc::new(state), leaf));
-        self.in_progress_requests.remove(&commitment);
+        if let Some((handle, _)) = self.in_progress_requests.remove(&commitment) {
+            // we have the state for this commitment so we cancel the
+            // in progress request for this commitment.
+            handle.abort();
+        }
         self.start_pending(commitment).await;
     }
 }

@@ -1,10 +1,11 @@
 use std::{
     cmp::max,
     collections::{BTreeMap, BTreeSet},
+    marker::PhantomData,
 };
 
 use anyhow::Context;
-use committable::Commitment;
+use committable::{Commitment, Committable};
 use hotshot_types::{
     data::{
         EpochNumber, Leaf2, QuorumProposal2, QuorumProposalWrapper, VidCommitment, VidCommitment2,
@@ -12,6 +13,7 @@ use hotshot_types::{
         vid_disperse::vid_total_weight,
     },
     epoch_membership::EpochMembershipCoordinator,
+    message::Proposal,
     simple_certificate::{TimeoutCertificate2, ViewSyncFinalizeCertificate2},
     simple_vote::{HasEpoch, QuorumData2, SimpleVote},
     stake_table::StakeTableEntries,
@@ -241,9 +243,20 @@ impl<TYPES: NodeType> Consensus<TYPES> {
 
         // TODO: Handle epoch change here
 
+        // Sign the proposal
+        let proposed_leaf =
+            Leaf2::from_quorum_proposal(&QuorumProposalWrapper::from(proposal.clone()));
+        let signature =
+            TYPES::SignatureKey::sign(&self.private_key, proposed_leaf.commit().as_ref()).ok()?;
+
+        let message = Proposal {
+            data: proposal,
+            signature,
+            _pd: PhantomData,
+        };
         self.coordinator_handle
             .send_message(RequestMessageSender::Proposal(
-                proposal,
+                message,
                 vid_disperse.clone(),
             ))
             .await
