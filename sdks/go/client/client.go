@@ -84,7 +84,7 @@ func NewClientFromOptions(options ...EspressoClientConfigOption) (*Client, error
 func NewClient(baseUrl string) *Client {
 	url := formatUrl(baseUrl)
 	return &Client{
-		baseUrl:              baseUrl,
+		baseUrl:              url,
 		client:               http.DefaultClient,
 		transactionSubmitter: NewQuerySubmitter(url),
 	}
