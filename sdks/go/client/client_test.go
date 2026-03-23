@@ -36,8 +36,35 @@ func TestApiWithEspressoDevNode(t *testing.T) {
 	}
 
 	client := NewClient("http://localhost:21000")
+	ClientTestHelper(ctx, client, t)
 
-	_, err = client.FetchLatestBlockHeight(ctx)
+	var clientOptions []EspressoClientConfigOption
+	builderSubmitter, err := NewBuilderSubmitter([]string{"http://localhost:21000"})
+	if err != nil {
+		t.Fatal("failed to create builder submitter", err)
+	}
+
+	clientOptions = append(clientOptions, WithTransactionSubmitter(builderSubmitter))
+	clientOptions = append(clientOptions, WithBaseUrl("http://localhost:21000"))
+
+	client, err = NewClientFromOptions(clientOptions...)
+	if err != nil {
+		t.Fatal("failed to create espresso client with builder submitter")
+	}
+
+	clientOptions = []EspressoClientConfigOption{}
+	querySubmitter := NewQuerySubmitter("http://localhost:21000")
+	if err != nil {
+		t.Fatal("failed to create builder submitter", err)
+	}
+	clientOptions = append(clientOptions, WithTransactionSubmitter(querySubmitter))
+	clientOptions = append(clientOptions, WithBaseUrl("http://localhost:21000"))
+
+	client, err = NewClientFromOptions(clientOptions...)
+}
+
+func ClientTestHelper(ctx context.Context, client EspressoClient, t *testing.T) {
+	_, err := client.FetchLatestBlockHeight(ctx)
 	if err != nil {
 		t.Fatal("failed to fetch block height", err)
 	}
