@@ -421,8 +421,10 @@ impl RewardMerkleTreeDataSource for SqlStorage {
         async move {
             // For V4 (per-block rewards), only persist proofs every 30th block.
             // For V5+ (epoch rewards), this is only called at epoch boundaries.
-            // In tests, persist reward proofs at every block height so tests
-            // can query proofs at arbitrary heights.
+            //
+            // In tests, we persist proofs at every block height so
+            // reward claim tests can query proofs at arbitrary heights. This can be
+            // removed once all reward claim tests are updated
             if !cfg!(any(test, feature = "testing"))
                 && version < EPOCH_REWARD_VERSION
                 && !(height + node_state.node_id).is_multiple_of(30)
@@ -430,6 +432,9 @@ impl RewardMerkleTreeDataSource for SqlStorage {
                 return Ok(());
             }
 
+            // In tests, we use the current block height directly instead
+            // of querying the L1 finalized HotShot height, because test environments don't
+            // deploy a light client contract
             let finalized_hotshot_height = if cfg!(any(test, feature = "testing")) {
                 height
             } else {
