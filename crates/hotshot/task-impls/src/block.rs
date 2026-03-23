@@ -285,7 +285,7 @@ impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
                         .unwrap_or(TYPES::View::new(0))
                         + 1
                 {
-                    tracing::warn!("High QC in epoch version and not the first QC after upgrade");
+                    tracing::error!("High QC in epoch version and not the first QC after upgrade");
                     self.send_empty_block(event_stream, block_view, block_epoch, version)
                         .await;
                     return None;
@@ -312,7 +312,7 @@ impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
             {
                 // We are proposing a transition block it should be empty
                 if !is_last_block(high_qc_block_number, self.epoch_height) {
-                    tracing::info!(
+                    tracing::error!(
                         "Sending empty block event. View number: {block_view}. Parent Block \
                          number: {high_qc_block_number}"
                     );
@@ -358,6 +358,7 @@ impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
             )
             .await;
         } else {
+            tracing::error!("Failed to get block for view {block_view}, sending empty block");
             self.send_empty_block(event_stream, block_view, block_epoch, version)
                 .await;
         };
@@ -365,21 +366,20 @@ impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
         return None;
     }
 
-    // async fn handle_block(
-    //     &mut self,
-    //     view: TYPES::View,
-    //     block_payload: TYPES::BlockPayload,
-    //     metadata: <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
-    // ) {
-    //     let _ = self.consensus.write().await.update_saved_payloads(
-    //         view,
-    //         Arc::new(PayloadWithMetadata {
-    //             payload: block_payload.clone(),
-    //             metadata: metadata.clone(),
-    //         }),
-    //     );
-    //     self.mempool.receive_block(view, block_payload, &metadata);
-    // }
+    async fn handle_block(
+        &mut self,
+        view: TYPES::View,
+        block_payload: TYPES::BlockPayload,
+        metadata: <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
+    ) {
+        let _ = self.consensus.write().await.update_saved_payloads(
+            view,
+            Arc::new(PayloadWithMetadata {
+                payload: block_payload.clone(),
+                metadata: metadata.clone(),
+            }),
+        );
+    }
     async fn wait_for_block(
         &mut self,
         block_view: TYPES::View,
@@ -443,22 +443,30 @@ impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
             })
             .collect();
 
-        let validated_state = self
+        let Some(validated_state) = self
             .consensus
             .read()
             .await
             .validated_state_map()
             .get(&(block_view - 1))?
-            .leaf_and_state()?
-            .1
-            .clone();
-        let (payload, metadata) = <TYPES::BlockPayload as BlockPayload<TYPES>>::from_transactions(
-            transactions,
-            &validated_state,
-            &self.instance_state,
-        )
-        .await
-        .ok()?;
+            .leaf_and_state()
+            .map(|(_, state)| state.clone())
+        else {
+            tracing::error!("No validated state found for block {block_view}");
+            return None;
+        };
+        let Some((payload, metadata)) =
+            <TYPES::BlockPayload as BlockPayload<TYPES>>::from_transactions(
+                transactions,
+                &validated_state,
+                &self.instance_state,
+            )
+            .await
+            .ok()
+        else {
+            tracing::error!("Failed to build block for view {block_view}");
+            return None;
+        };
         Some(PayloadWithMetadata { payload, metadata })
     }
 
@@ -617,9 +625,9 @@ impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
                     return Ok(());
                 }
             },
-            HotShotEvent::BlockReconstructed(..) => {
-                // self.handle_block(*view, block.clone(), metadata.clone())
-                //     .await;
+            HotShotEvent::BlockReconstructed(block, metadata, _, view) => {
+                self.handle_block(*view, block.clone(), metadata.clone())
+                    .await;
             },
             HotShotEvent::QuorumProposalValidated(proposal, _leaf) => {
                 let view_number = proposal.data.view_number();

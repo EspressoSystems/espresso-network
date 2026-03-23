@@ -58,7 +58,7 @@ async fn try_reconstruct_block<TYPES: NodeType>(
     let mut failed_attempts: u64 = 0;
     loop {
         let Some(()) = signal_rx.recv().await else {
-            tracing::error!("Signal received, stopping reconstruction task for view {view}");
+            tracing::warn!("Signal received, stopping reconstruction task for view {view}");
             break;
         };
         let iteration_start = Instant::now();
