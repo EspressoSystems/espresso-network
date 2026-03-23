@@ -8,7 +8,8 @@ use anyhow::{Context, Result, anyhow};
 use espresso_types::v0_1::L1Client;
 use hotshot_contract_adapter::sol_types::{
     EspToken, EspTokenV2, FeeContract, LightClientV2, LightClientV2Mock, LightClientV3,
-    LightClientV3Mock, PlonkVerifierV2, PlonkVerifierV3, StakeTable, StakeTableV2,
+    LightClientV3Mock, OwnableUpgradeable, PlonkVerifierV2, PlonkVerifierV3, StakeTable,
+    StakeTableV2,
 };
 
 use crate::{
@@ -129,6 +130,16 @@ pub async fn upgrade_light_client_v2_multisig_owner(
         .ok_or_else(|| anyhow!("LightClientProxy (multisig owner) not found, can't upgrade"))?;
     tracing::info!("LightClientProxy found at {proxy_addr:#x}");
 
+    let owner_addr = OwnableUpgradeable::new(proxy_addr, &provider)
+        .owner()
+        .call()
+        .await?;
+    if !crate::is_contract(&provider, owner_addr).await? {
+        anyhow::bail!(
+            "LightClientProxy owner {owner_addr:#x} is not a contract (expected multisig)"
+        );
+    }
+
     let pv2_addr = contracts
         .deploy(
             Contract::PlonkVerifierV2,
@@ -213,6 +224,16 @@ pub async fn upgrade_light_client_v3_multisig_owner(
         .ok_or_else(|| anyhow!("LightClientProxy (multisig owner) not found, can't upgrade"))?;
     tracing::info!("LightClientProxy found at {proxy_addr:#x}");
 
+    let owner_addr = OwnableUpgradeable::new(proxy_addr, &provider)
+        .owner()
+        .call()
+        .await?;
+    if !crate::is_contract(&provider, owner_addr).await? {
+        anyhow::bail!(
+            "LightClientProxy owner {owner_addr:#x} is not a contract (expected multisig)"
+        );
+    }
+
     let pv3_addr = contracts
         .deploy(
             Contract::PlonkVerifierV3,
@@ -292,7 +313,10 @@ pub async fn upgrade_esp_token_v2_multisig_owner(
         .ok_or_else(|| anyhow!("EspTokenProxy (multisig owner) not found, can't upgrade"))?;
     tracing::info!("EspTokenProxy found at {proxy_addr:#x}");
     let proxy = EspToken::new(proxy_addr, &provider);
-    let _owner_addr = proxy.owner().call().await?;
+    let owner_addr = proxy.owner().call().await?;
+    if !crate::is_contract(&provider, owner_addr).await? {
+        anyhow::bail!("EspTokenProxy owner {owner_addr:#x} is not a contract (expected multisig)");
+    }
 
     let esp_token_v2_addr = contracts
         .deploy(Contract::EspTokenV2, EspTokenV2::deploy_builder(&provider))
@@ -343,6 +367,11 @@ pub async fn upgrade_stake_table_v2_multisig_owner(
             params.multisig_address
         );
     }
+    if !crate::is_contract(&provider, owner_addr).await? {
+        anyhow::bail!(
+            "StakeTableProxy owner {owner_addr:#x} is not a contract (expected multisig)"
+        );
+    }
 
     let (_init_commissions, _init_active_stake, init_data) =
         crate::prepare_stake_table_v2_upgrade(l1_client, proxy_addr, params.pauser, owner_addr)
@@ -373,6 +402,12 @@ pub async fn upgrade_fee_contract_multisig_owner(
         .ok_or_else(|| anyhow!("FeeContractProxy (multisig owner) not found, can't upgrade"))?;
     tracing::info!("FeeContractProxy found at {proxy_addr:#x}");
     let proxy = FeeContract::new(proxy_addr, &provider);
+    let owner_addr = proxy.owner().call().await?;
+    if !crate::is_contract(&provider, owner_addr).await? {
+        anyhow::bail!(
+            "FeeContractProxy owner {owner_addr:#x} is not a contract (expected multisig)"
+        );
+    }
 
     let curr_version = proxy.getVersion().call().await?;
     if curr_version.majorVersion != 1 {
