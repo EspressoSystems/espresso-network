@@ -35,7 +35,7 @@ func (q *QuerySubmitter) SubmitTransaction(ctx context.Context, tx types.Transac
 
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("%w: %v", ErrEphemeral, err)
+		return nil, fmt.Errorf("%w: %v", ErrEphemeral, response.Status)
 	}
 
 	body, err := io.ReadAll(response.Body)

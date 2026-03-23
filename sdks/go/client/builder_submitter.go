@@ -31,6 +31,7 @@ func NewBuilderSubmitter(builderUrls []string) (*BuilderSubmitter, error) {
 
 	for i, url := range builderUrls {
 		builderUrls[i] = formatUrl(url)
+		builderClients[i] = http.DefaultClient
 	}
 
 	return &BuilderSubmitter{
@@ -63,7 +64,7 @@ func (c *BuilderSubmitter) SubmitTransaction(ctx context.Context, tx types.Trans
 
 		defer response.Body.Close()
 		if response.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("%w: %v", ErrEphemeral, err)
+			return nil, fmt.Errorf("%w: %v", ErrEphemeral, response.Status)
 		}
 
 		body, err := io.ReadAll(response.Body)
