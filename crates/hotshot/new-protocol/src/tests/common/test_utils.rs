@@ -8,7 +8,6 @@ use hotshot::{
     types::{BLSPrivKey, BLSPubKey, SchnorrPubKey},
 };
 use hotshot_example_types::{
-    block_types::TestBlockPayload,
     membership::{static_committee::StaticStakeTable, strict_membership::StrictMembership},
     node_types::{MemoryImpl, TEST_VERSIONS, TestTypes},
     storage_types::TestStorage,
@@ -36,9 +35,9 @@ use hotshot_types::{
 };
 
 use crate::{
-    events::{ConsensusOutput, Event},
+    events::ConsensusInput,
     helpers::upgrade_lock,
-    message::{Certificate1, Certificate2, ConsensusMessage, ProposalMessage, Vote2, Vote2Data},
+    message::{Certificate1, Certificate2, ProposalMessage, Vote2, Vote2Data},
 };
 
 #[allow(dead_code)]
@@ -82,52 +81,36 @@ impl TestView {
         self.vid_disperse.payload_commitment
     }
 
-    /// Build an ConsensusOutput for a proposal (routed through the coordinator).
-    pub fn proposal_update(&self, recipient_key: &BLSPubKey) -> ConsensusOutput<TestTypes> {
-        ConsensusOutput::Event(Event::MessageReceived(ConsensusMessage::Proposal(
-            self.proposal_message(recipient_key),
-        )))
+    /// Build a ConsensusInput for a proposal.
+    pub fn proposal_input(&self, recipient_key: &BLSPubKey) -> ConsensusInput<TestTypes> {
+        ConsensusInput::Proposal(self.proposal_message(recipient_key))
     }
 
-    /// Build an ConsensusOutput for block reconstructed.
-    pub fn block_reconstructed_update(&self) -> ConsensusOutput<TestTypes> {
-        ConsensusOutput::Event(Event::BlockReconstructed(
-            self.view_number,
-            TestBlockPayload::genesis(),
-            self.vid_commitment(),
-        ))
+    /// Build a ConsensusInput for block reconstructed.
+    pub fn block_reconstructed_input(&self) -> ConsensusInput<TestTypes> {
+        ConsensusInput::BlockReconstructed(self.view_number, self.vid_commitment())
     }
 
-    /// Build an ConsensusOutput for Certificate1.
-    pub fn cert1_update(&self) -> ConsensusOutput<TestTypes> {
-        ConsensusOutput::Event(Event::MessageReceived(ConsensusMessage::Certificate1(
-            self.cert1.clone(),
-            self.leader_public_key,
-        )))
+    /// Build a ConsensusInput for Certificate1.
+    pub fn cert1_input(&self) -> ConsensusInput<TestTypes> {
+        ConsensusInput::Certificate1(self.cert1.clone())
     }
 
-    /// Build an ConsensusOutput for Certificate2.
-    pub fn cert2_update(&self) -> ConsensusOutput<TestTypes> {
-        ConsensusOutput::Event(Event::MessageReceived(ConsensusMessage::Certificate2(
-            self.cert2.clone(),
-            self.leader_public_key,
-        )))
+    /// Build a ConsensusInput for Certificate2.
+    pub fn cert2_input(&self) -> ConsensusInput<TestTypes> {
+        ConsensusInput::Certificate2(self.cert2.clone())
     }
 
-    /// Build an ConsensusOutput for a timeout certificate.
+    /// Build a ConsensusInput for a timeout certificate.
     #[allow(dead_code)]
-    pub fn timeout_cert_update(&self) -> ConsensusOutput<TestTypes> {
-        ConsensusOutput::Event(Event::TimeoutCertificateReceived(
-            self.timeout_cert.clone(),
-        ))
+    pub fn timeout_cert_input(&self) -> ConsensusInput<TestTypes> {
+        ConsensusInput::TimeoutCertificate(self.timeout_cert.clone())
     }
 
-    /// Build an ConsensusOutput for a view sync certificate.
+    /// Build a ConsensusInput for a view sync certificate.
     #[allow(dead_code)]
-    pub fn view_sync_cert_update(&self) -> ConsensusOutput<TestTypes> {
-        ConsensusOutput::Event(Event::ViewSyncCertificateReceived(
-            self.view_sync_cert.clone(),
-        ))
+    pub fn view_sync_cert_input(&self) -> ConsensusInput<TestTypes> {
+        ConsensusInput::ViewSyncCertificate(self.view_sync_cert.clone())
     }
 }
 

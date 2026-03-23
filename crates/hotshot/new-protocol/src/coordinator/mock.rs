@@ -18,7 +18,10 @@ pub mod testing {
     };
 
     use crate::{
-        Outbox, consensus::Consensus, events::*, helpers::{proposal_commitment, upgrade_lock}
+        Outbox,
+        consensus::Consensus,
+        events::*,
+        helpers::{proposal_commitment, upgrade_lock},
     };
 
     /// A mock block with its derived commitments and metadata.
@@ -90,39 +93,46 @@ pub mod testing {
     ///
     /// When `state_tx` is `Some`, state and header requests are forwarded to a
     /// `ValidatedStateManager` instead of being handled inline. Responses from
-    /// the state manager come back through the shared `event_rx` channel as
-    /// `Event` variants and are forwarded to consensus.
+    /// the state manager come back through the bridge task as `ConsensusInput`
+    /// variants and are forwarded to consensus.
     pub struct MockCoordinator {
         pub consensus: Consensus<TestTypes>,
-        pub event_rx: tokio::sync::mpsc::Receiver<ConsensusOutput<TestTypes>>,
+        pub input_rx: tokio::sync::mpsc::Receiver<ConsensusInput<TestTypes>>,
+        pub shutdown_rx: tokio::sync::oneshot::Receiver<()>,
         pub state_tx: Option<tokio::sync::mpsc::Sender<StateEvent<TestTypes>>>,
         pub membership_coordinator: EpochMembershipCoordinator<TestTypes>,
         pub outbox: Outbox<ConsensusOutput<TestTypes>>,
+        pub received_events: Vec<ConsensusOutput<TestTypes>>,
     }
     impl MockCoordinator {
         pub async fn run(mut self) -> Vec<ConsensusOutput<TestTypes>> {
-            while let Some(event) = self.event_rx.recv().await {
-                if matches!(event, ConsensusOutput::Action(Action::Shutdown)) {
-                    break;
+            loop {
+                tokio::select! {
+                    Some(input) = self.input_rx.recv() => {
+                        self.process_input(input).await;
+                    }
+                    _ = &mut self.shutdown_rx => break,
+                    else => break,
                 }
-                self.handle_event(event).await;
             }
             self.received_events
         }
 
-        async fn handle_event(&mut self, event: ConsensusOutput<TestTypes>) {
-            match event {
-                ConsensusOutput::Action(ref action) => self.handle_action(action).await,
-                ConsensusOutput::Event(ref update) => {
-                    if let Ok(consensus_event) = ConsensusInput::try_from(update.clone()) {
-                        self.consensus.apply(consensus_event).await;
-                    }
-                },
-            }
-            self.received_events.push(event);
+        async fn process_input(&mut self, input: ConsensusInput<TestTypes>) {
+            self.consensus.apply(input, &mut self.outbox).await;
+            self.process_outputs().await
         }
 
-        async fn handle_action(&self, action: &Action<TestTypes>) {
+        async fn process_outputs(&mut self) {
+            while let Some(output) = self.outbox.pop_front() {
+                if let ConsensusOutput::Action(action) = &output {
+                    self.handle_action(action).await;
+                }
+                self.received_events.push(output);
+            }
+        }
+
+        async fn handle_action(&mut self, action: &Action<TestTypes>) {
             match action {
                 Action::SendProposal(..) => {},
                 Action::SendVote1(..) => {},
@@ -134,13 +144,9 @@ pub mod testing {
                             .await
                             .unwrap();
                     } else {
-                        self.consensus_tx
-                            .send(state_verified_event(
-                                &state_request.proposal,
-                                state_request.view,
-                            ))
-                            .await
-                            .unwrap();
+                        let input =
+                            state_verified_event(&state_request.proposal, state_request.view);
+                        self.consensus.apply(input, &mut self.outbox).await;
                     }
                 },
                 Action::RequestBlockAndHeader(req) => {
@@ -171,21 +177,25 @@ pub mod testing {
                             mock_block.metadata,
                             TEST_VERSIONS.test.base,
                         );
-                        self.consensus_tx
-                            .send(ConsensusInput::HeaderCreated(req.view, header))
-                            .await
-                            .unwrap();
+                        self.consensus
+                            .apply(
+                                ConsensusInput::HeaderCreated(req.view, header),
+                                &mut self.outbox,
+                            )
+                            .await;
                     }
 
-                    self.consensus_tx
-                        .send(ConsensusInput::BlockBuilt(
-                            req.view,
-                            req.epoch,
-                            mock_block.block,
-                            mock_block.metadata,
-                        ))
-                        .await
-                        .unwrap();
+                    self.consensus
+                        .apply(
+                            ConsensusInput::BlockBuilt(
+                                req.view,
+                                req.epoch,
+                                mock_block.block,
+                                mock_block.metadata,
+                            ),
+                            &mut self.outbox,
+                        )
+                        .await;
                 },
                 Action::RequestVidDisperse(view, epoch, block, metadata) => {
                     let vid_disperse = VidDisperse::calculate_vid_disperse(
@@ -203,10 +213,12 @@ pub mod testing {
                     let VidDisperse::V2(vid) = vid_disperse.disperse else {
                         panic!("VidDisperse is not a V2");
                     };
-                    self.consensus_tx
-                        .send(ConsensusInput::VidDisperseCreated(*view, vid))
-                        .await
-                        .unwrap();
+                    self.consensus
+                        .apply(
+                            ConsensusInput::VidDisperseCreated(*view, vid),
+                            &mut self.outbox,
+                        )
+                        .await;
                 },
                 Action::RequestProposal(_view, _commitment) => {},
                 Action::RequestDRB(_drb_input) => {},

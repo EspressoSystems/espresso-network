@@ -1,10 +1,18 @@
 use hotshot::traits::BlockPayload;
 use hotshot_types::{
-    data::{EpochNumber, Leaf2, QuorumProposal2, VidCommitment2, VidDisperse2, ViewNumber}, drb::DrbResult, message::Proposal, simple_vote::HasEpoch, traits::{block_contents::BlockHeader, node_implementation::NodeType}, vote::{Certificate, HasViewNumber}
+    data::{EpochNumber, Leaf2, QuorumProposal2, VidCommitment2, VidDisperse2, ViewNumber},
+    drb::DrbResult,
+    message::Proposal,
+    simple_vote::HasEpoch,
+    traits::{block_contents::BlockHeader, node_implementation::NodeType},
+    vote::{Certificate, HasViewNumber},
 };
 use tokio::sync::mpsc::error::SendError;
 
-use crate::{events::*, message::{Vote1, Vote2}};
+use crate::{
+    events::*,
+    message::{Vote1, Vote2},
+};
 
 #[derive(Clone)]
 pub(crate) struct CoordinatorHandle<TYPES: NodeType> {
@@ -19,16 +27,18 @@ impl<TYPES: NodeType> CoordinatorHandle<TYPES> {
     pub async fn send_proposal(
         &self,
         message: Proposal<TYPES, QuorumProposal2<TYPES>>,
-        share: VidDisperse2<TYPES>
+        share: VidDisperse2<TYPES>,
     ) -> Result<(), SendError<ConsensusOutput<TYPES>>> {
         self.event_tx
-            .send(ConsensusOutput::Action(Action::SendProposal(message, share)))
+            .send(ConsensusOutput::Action(Action::SendProposal(
+                message, share,
+            )))
             .await
     }
 
     pub async fn send_vote1(
         &self,
-        message: Vote1<TYPES>
+        message: Vote1<TYPES>,
     ) -> Result<(), SendError<ConsensusOutput<TYPES>>> {
         self.event_tx
             .send(ConsensusOutput::Action(Action::SendVote1(message)))
@@ -37,7 +47,7 @@ impl<TYPES: NodeType> CoordinatorHandle<TYPES> {
 
     pub async fn send_vote2(
         &self,
-        message: Vote2<TYPES>
+        message: Vote2<TYPES>,
     ) -> Result<(), SendError<ConsensusOutput<TYPES>>> {
         self.event_tx
             .send(ConsensusOutput::Action(Action::SendVote2(message)))
@@ -51,15 +61,17 @@ impl<TYPES: NodeType> CoordinatorHandle<TYPES> {
     ) -> Result<(), SendError<ConsensusOutput<TYPES>>> {
         let parent_commitment = proposal.justify_qc.data().leaf_commit;
         self.event_tx
-            .send(ConsensusOutput::Action(Action::RequestState(StateRequest {
-                view: proposal.view_number(),
-                parent_view: proposal.view_number() - 1,
-                epoch: proposal.epoch().unwrap(),
-                block_number: proposal.block_header.block_number(),
-                proposal,
-                parent_commitment,
-                payload_size,
-            })))
+            .send(ConsensusOutput::Action(Action::RequestState(
+                StateRequest {
+                    view: proposal.view_number(),
+                    parent_view: proposal.view_number() - 1,
+                    epoch: proposal.epoch().unwrap(),
+                    block_number: proposal.block_header.block_number(),
+                    proposal,
+                    parent_commitment,
+                    payload_size,
+                },
+            )))
             .await
     }
     pub async fn request_block_and_header(
@@ -149,7 +161,10 @@ impl<TYPES: NodeType> CoordinatorHandle<TYPES> {
             .await
     }
 
-    pub async fn respond_drb(&self, result: DrbResult) -> Result<(), SendError<ConsensusOutput<TYPES>>> {
+    pub async fn respond_drb(
+        &self,
+        result: DrbResult,
+    ) -> Result<(), SendError<ConsensusOutput<TYPES>>> {
         self.event_tx
             .send(ConsensusOutput::Event(Event::DrbCalculated(result)))
             .await
@@ -172,7 +187,10 @@ impl<TYPES: NodeType> CoordinatorHandle<TYPES> {
 mod test {
     use super::*;
     impl<TYPES: NodeType> CoordinatorHandle<TYPES> {
-        pub async fn send_event(&self, event: ConsensusOutput<TYPES>) -> Result<(), SendError<ConsensusOutput<TYPES>>> {
+        pub async fn send_event(
+            &self,
+            event: ConsensusOutput<TYPES>,
+        ) -> Result<(), SendError<ConsensusOutput<TYPES>>> {
             self.event_tx.send(event).await
         }
     }

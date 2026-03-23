@@ -376,7 +376,7 @@ mod test {
 
     use super::*;
     use crate::{
-        events::{ConsensusOutput, HeaderRequest, StateRequest, Event},
+        events::{ConsensusOutput, Event, HeaderRequest, StateRequest},
         helpers::proposal_commitment,
         tests::test_utils::{TestData, TestView},
     };
