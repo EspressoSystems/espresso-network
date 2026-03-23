@@ -36,7 +36,7 @@ pub struct TestInstanceState {
 
 impl InstanceState for TestInstanceState {
     fn max_block_size(&self) -> u64 {
-        1024 * 1024 // 1MB
+        (1024 * 1024) / 10 // 100kb
     }
 }
 
