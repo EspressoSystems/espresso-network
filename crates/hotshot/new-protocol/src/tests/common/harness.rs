@@ -52,10 +52,10 @@ impl TestHarness {
         let bridge_input_tx = input_tx.clone();
         tokio::spawn(async move {
             while let Some(output) = coordinator_rx.recv().await {
-                if let ConsensusOutput::Event(event) = output {
-                    if let Ok(input) = ConsensusInput::try_from(event) {
-                        bridge_input_tx.send(input).await.ok();
-                    }
+                if let ConsensusOutput::Event(event) = output
+                    && let Ok(input) = ConsensusInput::try_from(event)
+                {
+                    bridge_input_tx.send(input).await.ok();
                 }
             }
         });

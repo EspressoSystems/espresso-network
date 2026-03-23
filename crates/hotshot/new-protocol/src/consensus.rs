@@ -421,7 +421,8 @@ impl<T: NodeType> Consensus<T> {
                 proposal.view_change_evidence =
                     Some(ViewChangeEvidence2::Timeout(timeout_cert.clone()));
             } else {
-                warn!(%view, "after timeout, but no view-sync nor timout certificate")
+                warn!(%view, "after timeout, but no view-sync nor timeout certificate");
+                return;
             }
         }
 
