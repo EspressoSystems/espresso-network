@@ -397,7 +397,7 @@
 <a href=#397 id=397 data-nosnippet>397</a>                <span class="macro">tracing::info!</span>(<span class="string">"fetched leaf {}"</span>, leaf.height());
 <a href=#398 id=398 data-nosnippet>398</a>                <span class="comment">// Trigger a fetch of the parent leaf, if we don't already have it.
 <a href=#399 id=399 data-nosnippet>399</a>                </span>trigger_fetch_for_parent(<span class="kw-2">&amp;</span>fetcher, <span class="kw-2">&amp;</span>leaf);
-<a href=#400 id=400 data-nosnippet>400</a>                fetcher.store_and_notify(leaf).<span class="kw">await</span>;
+<a href=#400 id=400 data-nosnippet>400</a>                fetcher.store_and_notify(<span class="kw-2">&amp;</span>leaf).<span class="kw">await</span>;
 <a href=#401 id=401 data-nosnippet>401</a>            },
 <a href=#402 id=402 data-nosnippet>402</a>            <span class="self">Self</span>::Continuation { callback } =&gt; callback.run(leaf.leaf.block_header().clone()),
 <a href=#403 id=403 data-nosnippet>403</a>        }
