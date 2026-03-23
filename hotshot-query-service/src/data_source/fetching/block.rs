@@ -306,7 +306,7 @@ where
     async fn run(self, payload: Payload<Types>) {
         tracing::info!("fetched payload {:?}", self.header.payload_commitment());
         let block = BlockQueryData::new(self.header, payload);
-        self.fetcher.store_and_notify(block).await;
+        self.fetcher.store_and_notify(&block).await;
     }
 }
 

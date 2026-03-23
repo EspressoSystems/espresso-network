@@ -850,30 +850,41 @@ pub mod node_tests {
             )
             .await,
         ];
+        let dispersal = vid.disperse([]).unwrap();
+        let mut vid_data = vec![(
+            VidCommonQueryData::new(
+                leaves[0].header().clone(),
+                VidCommon::V0(dispersal.common.clone()),
+            ),
+            dispersal.shares[0].clone(),
+        )];
         for i in 0..2 {
+            // Generate a unique payload and VID data, so that missing data is actually missing
+            // (otherwise it could be borrowed from another block).
+            let (payload, metadata) = <MockPayload as BlockPayload<MockTypes>>::from_transactions(
+                vec![mock_transaction(vec![i as u8])],
+                &Default::default(),
+                &Default::default(),
+            )
+            .await
+            .unwrap();
+            let dispersal = vid.disperse(payload.encode()).unwrap();
+
             let mut leaf = leaves[i].clone();
             leaf.leaf.block_header_mut().block_number += 1;
-            leaves.push(leaf);
+            leaf.leaf.block_header_mut().payload_commitment = VidCommitment::V0(dispersal.commit);
+            leaf.leaf.block_header_mut().metadata = metadata;
+            let block = BlockQueryData::new(leaf.header().clone(), payload);
+            let vid_common = VidCommonQueryData::new(
+                leaf.header().clone(),
+                VidCommon::V0(dispersal.common.clone()),
+            );
+            let vid_share = dispersal.shares[0].clone();
 
-            let mut block = blocks[i].clone();
-            block.header.block_number += 1;
+            leaves.push(leaf);
             blocks.push(block);
+            vid_data.push((vid_common, vid_share));
         }
-        // Generate mock VID data. We reuse the same (empty) payload for each block, but with
-        // different metadata.
-        let disperse = vid.disperse([]).unwrap();
-        let vid = leaves
-            .iter()
-            .map(|leaf| {
-                (
-                    VidCommonQueryData::new(
-                        leaf.header().clone(),
-                        VidCommon::V0(disperse.common.clone()),
-                    ),
-                    disperse.shares[0].clone(),
-                )
-            })
-            .collect::<Vec<_>>();
 
         // At first, the node is fully synced.
         assert!(ds.sync_status().await.unwrap().is_fully_synced());
@@ -977,7 +988,7 @@ pub mod node_tests {
         // Insert VID common without a corresponding share.
         {
             let mut tx = ds.write().await.unwrap();
-            tx.insert_vid(vid[0].0.clone(), None).await.unwrap();
+            tx.insert_vid(vid_data[0].0.clone(), None).await.unwrap();
             tx.commit().await.unwrap();
         }
         assert_eq!(
@@ -1042,18 +1053,27 @@ pub mod node_tests {
         {
             let mut tx = ds.write().await.unwrap();
             tx.insert_block(blocks[0].clone()).await.unwrap();
-            tx.insert_vid(vid[0].0.clone(), Some(VidShare::V0(vid[0].1.clone())))
-                .await
-                .unwrap();
+            tx.insert_vid(
+                vid_data[0].0.clone(),
+                Some(VidShare::V0(vid_data[0].1.clone())),
+            )
+            .await
+            .unwrap();
             tx.insert_leaf(leaves[1].clone()).await.unwrap();
             tx.insert_block(blocks[1].clone()).await.unwrap();
-            tx.insert_vid(vid[1].0.clone(), Some(VidShare::V0(vid[1].1.clone())))
-                .await
-                .unwrap();
+            tx.insert_vid(
+                vid_data[1].0.clone(),
+                Some(VidShare::V0(vid_data[1].1.clone())),
+            )
+            .await
+            .unwrap();
             tx.insert_block(blocks[2].clone()).await.unwrap();
-            tx.insert_vid(vid[2].0.clone(), Some(VidShare::V0(vid[2].1.clone())))
-                .await
-                .unwrap();
+            tx.insert_vid(
+                vid_data[2].0.clone(),
+                Some(VidShare::V0(vid_data[2].1.clone())),
+            )
+            .await
+            .unwrap();
             tx.commit().await.unwrap();
         }
 
@@ -1150,7 +1170,7 @@ pub mod node_tests {
         // that we already have; that is, `insert_vid` should be monotonic.
         {
             let mut tx = ds.write().await.unwrap();
-            tx.insert_vid(vid[0].0.clone(), None).await.unwrap();
+            tx.insert_vid(vid_data[0].0.clone(), None).await.unwrap();
             tx.commit().await.unwrap();
         }
         assert_eq!(ds.sync_status().await.unwrap(), expected_sync_status);
