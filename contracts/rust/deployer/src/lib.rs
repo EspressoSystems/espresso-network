@@ -1825,6 +1825,7 @@ mod tests {
     use super::*;
     use crate::{
         Contracts,
+        builder::DeployerArgsBuilder,
         impersonate_filler::ImpersonateFiller,
         proposals::{
             multisig::{
@@ -4529,7 +4530,7 @@ mod tests {
     }
 
     #[test_log::test(tokio::test)]
-    async fn test_propose_multisig_transaction_dry_run() -> Result<()> {
+    async fn test_encode_multisig_transaction() -> Result<()> {
         let (anvil, provider, _l1_client) =
             ProviderBuilder::new().connect_anvil_with_l1_client()?;
         let mut contracts = Contracts::new();
@@ -4539,7 +4540,7 @@ mod tests {
             deploy_fee_contract_proxy(&provider, &mut contracts, provider_wallet).await?;
         let new_owner = Address::random();
 
-        // Use DeployerArgsBuilder to test propose_multisig_transaction
+        // Use DeployerArgsBuilder to test encode_multisig_transaction
         use builder::DeployerArgsBuilder;
 
         let mut args_builder = DeployerArgsBuilder::default();
@@ -4554,7 +4555,7 @@ mod tests {
 
         let args = args_builder.build()?;
 
-        let result = args.propose_multisig_transaction().await;
+        let result = args.encode_multisig_transaction().await;
 
         match result {
             Ok(_) => {
@@ -4565,6 +4566,39 @@ mod tests {
                 tracing::info!("Multisig transaction proposal failed: {}", e);
             },
         }
+
+        Ok(())
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn transfer_ownership_to_timelock_target_eoa_fails() -> Result<()> {
+        let provider = ProviderBuilder::new().connect_anvil_with_wallet();
+        let multisig = Address::random();
+        let eoa_address = Address::random();
+
+        // Set up contracts with an EOA address registered as the OpsTimelock
+        let mut contracts = Contracts::new();
+        contracts.insert(Contract::OpsTimelock, eoa_address);
+
+        // Deploy a FeeContractProxy so there's a target contract
+        let admin = provider.get_accounts().await?[0];
+        deploy_fee_contract_proxy(&provider, &mut contracts, admin).await?;
+
+        let mut args_builder = DeployerArgsBuilder::default();
+        args_builder
+            .deployer(provider.clone())
+            .rpc_url(Url::parse("http://localhost:8545")?)
+            .multisig(multisig)
+            .target_contract(OwnableContract::FeeContractProxy);
+
+        let args = args_builder.build()?;
+        assert!(
+            args.encode_transfer_ownership_to_timelock(&mut contracts)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("Timelock address is not a contract")
+        );
 
         Ok(())
     }

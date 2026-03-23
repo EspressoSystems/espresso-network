@@ -840,7 +840,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Execute ownership transfer proposal if requested
     if opt.propose_transfer_ownership_to_timelock {
-        args.propose_transfer_ownership_to_timelock(&mut contracts)
+        args.encode_transfer_ownership_to_timelock(&mut contracts)
             .await?;
     }
 
@@ -855,7 +855,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     if opt.propose_multisig_transaction {
-        args.propose_multisig_transaction().await?;
+        args.encode_multisig_transaction().await?;
     }
 
     // finally print out or persist deployed addresses

@@ -720,8 +720,8 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
         Ok(())
     }
 
-    /// Propose ownership transfer from multisig to timelock
-    pub async fn propose_transfer_ownership_to_timelock(
+    /// Encode ownership transfer from multisig to timelock as calldata
+    pub async fn encode_transfer_ownership_to_timelock(
         &self,
         contracts: &mut Contracts,
     ) -> Result<()> {
@@ -741,9 +741,15 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
         let timelock_address =
             derive_timelock_address_from_contract_type(ownable_contract, contracts)?;
 
+        if !crate::is_contract(&self.deployer, timelock_address).await? {
+            anyhow::bail!(
+                "Timelock address is not a contract (expected timelock at {timelock_address:#x})"
+            );
+        }
+
         let contract: Contract = ownable_contract.into();
         tracing::info!(
-            "Proposing transfer of ownership from multisig to timelock for {:?} (timelock: {:?})",
+            "Encoding transfer of ownership from multisig to timelock for {:?} (timelock: {:?})",
             contract,
             timelock_address
         );
@@ -822,7 +828,7 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
     }
 
     /// Encode a multisig transaction as calldata and output it
-    pub async fn propose_multisig_transaction(&self) -> Result<()> {
+    pub async fn encode_multisig_transaction(&self) -> Result<()> {
         let target = self
             .multisig_transaction_target
             .context("Multisig transaction target address not found")?;
