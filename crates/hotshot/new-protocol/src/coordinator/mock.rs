@@ -1,91 +1,20 @@
 pub mod testing {
-    use std::sync::Arc;
-
-    use hotshot::traits::{BlockPayload, ValidatedState};
     use hotshot_example_types::{
-        block_types::{TestBlockHeader, TestBlockPayload, TestMetadata},
+        block_types::TestBlockHeader,
         node_types::{TEST_VERSIONS, TestTypes},
-        state_types::TestValidatedState,
     };
     use hotshot_types::{
-        data::{
-            Leaf2, QuorumProposal2, QuorumProposalWrapper, VidCommitment, VidDisperse,
-            vid_commitment,
-        },
+        data::{Leaf2, QuorumProposalWrapper, VidDisperse},
         epoch_membership::EpochMembershipCoordinator,
-        traits::{EncodeBytes, block_contents::BuilderFee, signature_key::BuilderSignatureKey},
-        utils::BuilderCommitment,
     };
 
     use crate::{
         Outbox,
         consensus::Consensus,
         events::*,
-        helpers::{proposal_commitment, upgrade_lock},
+        helpers::upgrade_lock,
+        tests::test_utils::{MockBlock, mock_builder_fee, state_verified_input},
     };
-
-    /// A mock block with its derived commitments and metadata.
-    struct MockBlock {
-        block: TestBlockPayload,
-        metadata: TestMetadata,
-        payload_commitment: VidCommitment,
-        builder_commitment: BuilderCommitment,
-    }
-
-    impl MockBlock {
-        fn new() -> Self {
-            let block = TestBlockPayload::genesis();
-            let metadata = TestMetadata {
-                num_transactions: 0,
-            };
-            let payload_commitment = vid_commitment(
-                &block.encode(),
-                &metadata.encode(),
-                10,
-                TEST_VERSIONS.test.base,
-            );
-            let builder_commitment =
-                <TestBlockPayload as BlockPayload<TestTypes>>::builder_commitment(
-                    &block, &metadata,
-                );
-            Self {
-                block,
-                metadata,
-                payload_commitment,
-                builder_commitment,
-            }
-        }
-    }
-
-    fn mock_builder_fee() -> BuilderFee<TestTypes> {
-        let (builder_key, builder_private_key) =
-            <hotshot_types::signature_key::BuilderKey as BuilderSignatureKey>::generated_from_seed_indexed([0; 32], 0);
-        let builder_signature =
-            <hotshot_types::signature_key::BuilderKey as BuilderSignatureKey>::sign_builder_message(
-                &builder_private_key,
-                &[0u8],
-            )
-            .unwrap();
-        BuilderFee {
-            fee_amount: 0,
-            fee_account: builder_key,
-            fee_signature: builder_signature,
-        }
-    }
-
-    fn state_verified_event(
-        proposal: &QuorumProposal2<TestTypes>,
-        view: hotshot_types::data::ViewNumber,
-    ) -> ConsensusInput<TestTypes> {
-        let commitment = proposal_commitment(proposal);
-        let state =
-            <TestValidatedState as ValidatedState<TestTypes>>::from_header(&proposal.block_header);
-        ConsensusInput::StateVerified(StateResponse {
-            view,
-            commitment,
-            state: Arc::new(state),
-        })
-    }
 
     /// MockCoordinator is for testing the various different modules the coordinator will
     /// coordinate.  It will send back appropriate responses for actions it receives.
@@ -145,7 +74,7 @@ pub mod testing {
                             .unwrap();
                     } else {
                         let input =
-                            state_verified_event(&state_request.proposal, state_request.view);
+                            state_verified_input(&state_request.proposal, state_request.view);
                         self.consensus.apply(input, &mut self.outbox).await;
                     }
                 },

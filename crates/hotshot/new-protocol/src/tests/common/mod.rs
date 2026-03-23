@@ -38,35 +38,6 @@ pub(crate) struct TestHarness {
 }
 
 impl TestHarness {
-    /// Create a test harness with the given node index (0-9).
-    /// State verification is handled inline by the mock coordinator.
-    pub async fn new(node_index: u64) -> Self {
-        let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
-        let membership = mock_membership().await;
-        let (input_tx, input_rx) = tokio::sync::mpsc::channel(100);
-        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
-
-        let consensus = Consensus::new(membership.clone(), public_key, private_key);
-
-        let mock_coordinator = MockCoordinator {
-            consensus,
-            input_rx,
-            shutdown_rx,
-            state_tx: None,
-            membership_coordinator: membership,
-            outbox: Outbox::new(),
-            received_events: Vec::new(),
-        };
-
-        let mock_join = tokio::spawn(async move { mock_coordinator.run().await });
-
-        Self {
-            input_tx,
-            shutdown_tx: Some(shutdown_tx),
-            mock_join,
-        }
-    }
-
     /// Create a test harness that wires Consensus and ValidatedStateManager
     /// together through the MockCoordinator.
     pub async fn new_with_state_manager(node_index: u64) -> Self {

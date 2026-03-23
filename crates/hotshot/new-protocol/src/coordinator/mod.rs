@@ -5,6 +5,8 @@ use tokio::sync::mpsc::{self};
 use crate::{consensus::Consensus, coordinator::handle::CoordinatorHandle, events::*};
 
 pub mod handle;
+
+#[cfg(test)]
 pub(crate) mod mock;
 
 const CHANNEL_BUFFER_SIZE: usize = 256;
