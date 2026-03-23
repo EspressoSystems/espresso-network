@@ -21,7 +21,7 @@ use crate::{
 };
 
 #[derive(Eq, PartialEq, Debug, Clone)]
-pub(crate) struct StateRequest<TYPES: NodeType> {
+pub struct StateRequest<TYPES: NodeType> {
     pub view: ViewNumber,
     pub parent_view: ViewNumber,
     pub epoch: EpochNumber,
@@ -32,28 +32,28 @@ pub(crate) struct StateRequest<TYPES: NodeType> {
 }
 
 #[derive(Eq, PartialEq, Debug)]
-pub(crate) struct StateResponse<TYPES: NodeType> {
+pub struct StateResponse<TYPES: NodeType> {
     pub view: ViewNumber,
     pub commitment: Commitment<Leaf2<TYPES>>,
     pub state: Arc<TYPES::ValidatedState>,
 }
 
 #[derive(Clone, Eq, PartialEq, Debug)]
-pub(crate) struct BlockAndHeaderRequest<TYPES: NodeType> {
+pub struct BlockAndHeaderRequest<TYPES: NodeType> {
     pub view: ViewNumber,
-    pub parent_proposal: QuorumProposal2<TYPES>,
     pub epoch: EpochNumber,
+    pub parent_proposal: QuorumProposal2<TYPES>,
 }
 
 #[derive(Clone, Eq, PartialEq, Debug)]
-pub(crate) struct BlockRequest<TYPES: NodeType> {
+pub struct BlockRequest<TYPES: NodeType> {
     pub view: ViewNumber,
     pub parent_proposal: QuorumProposal2<TYPES>,
     pub epoch: EpochNumber,
 }
 
 #[derive(Eq, PartialEq, Debug)]
-pub(crate) struct HeaderRequest<TYPES: NodeType> {
+pub struct HeaderRequest<TYPES: NodeType> {
     pub view: ViewNumber,
     pub epoch: EpochNumber,
     pub parent_proposal: QuorumProposal2<TYPES>,
@@ -79,16 +79,10 @@ pub struct VidShareInput<TYPES: NodeType> {
 
 #[derive(Eq, PartialEq, Debug)]
 #[allow(clippy::large_enum_variant)]
-pub enum RequestMessageSender<TYPES: NodeType> {
-    Proposal(Proposal<TYPES, QuorumProposal2<TYPES>>, VidDisperse2<TYPES>),
-    Vote1(Vote1<TYPES>),
-    Vote2(Vote2<TYPES>),
-}
-
-#[derive(Eq, PartialEq, Debug)]
-#[allow(clippy::large_enum_variant)]
 pub enum Action<TYPES: NodeType> {
-    SendMessage(RequestMessageSender<TYPES>),
+    SendProposal(Proposal<TYPES, QuorumProposal2<TYPES>>, VidDisperse2<TYPES>),
+    SendVote1(Vote1<TYPES>),
+    SendVote2(Vote2<TYPES>),
     RequestState(StateRequest<TYPES>),
     RequestBlockAndHeader(BlockAndHeaderRequest<TYPES>),
     RequestVidDisperse(
@@ -104,7 +98,7 @@ pub enum Action<TYPES: NodeType> {
 
 #[derive(Clone, Eq, PartialEq, Debug)]
 #[allow(clippy::large_enum_variant)]
-pub enum Update<TYPES: NodeType> {
+pub enum Event<TYPES: NodeType> {
     MessageReceived(ConsensusMessage<TYPES>),
     StateVerified(StateRequest<TYPES>),
     HeaderCreated(ViewNumber, TYPES::BlockHeader),
@@ -125,13 +119,24 @@ pub enum Update<TYPES: NodeType> {
 
 #[allow(clippy::large_enum_variant)]
 #[derive(Eq, PartialEq, Debug)]
-pub enum Event<TYPES: NodeType> {
+pub enum ConsensusOutput<TYPES: NodeType> {
     Action(Action<TYPES>),
-    Update(Update<TYPES>),
+    Event(Event<TYPES>),
 }
 
+impl<T: NodeType> From<Action<T>> for ConsensusOutput<T> {
+    fn from(a: Action<T>) -> Self {
+        Self::Action(a)
+    }
+}
+
+impl<T: NodeType> From<Event<T>> for ConsensusOutput<T> {
+    fn from(e: Event<T>) -> Self {
+        Self::Event(e)
+    }
+}
 #[allow(clippy::large_enum_variant)]
-pub enum ConsensusEvent<TYPES: NodeType> {
+pub enum ConsensusInput<TYPES: NodeType> {
     Proposal(ProposalMessage<TYPES>),
     Certificate1(Certificate1<TYPES>),
     Certificate2(Certificate2<TYPES>),
@@ -149,82 +154,78 @@ pub enum ConsensusEvent<TYPES: NodeType> {
     HeaderCreated(ViewNumber, TYPES::BlockHeader),
     StateVerificationFailed(StateResponse<TYPES>),
     Timeout(ViewNumber),
-    Shutdown,
     // TODO: Add checkpoint events
 }
 
-impl<TYPES: NodeType> ConsensusEvent<TYPES> {
+impl<TYPES: NodeType> ConsensusInput<TYPES> {
     pub fn view_number(&self) -> ViewNumber {
         match self {
-            ConsensusEvent::Proposal(proposal) => proposal.view_number(),
-            ConsensusEvent::Certificate1(certificate) => certificate.view_number(),
-            ConsensusEvent::Certificate2(certificate) => certificate.view_number(),
-            ConsensusEvent::TimeoutCertificate(simple_certificate) => {
+            ConsensusInput::Proposal(proposal) => proposal.view_number(),
+            ConsensusInput::Certificate1(certificate) => certificate.view_number(),
+            ConsensusInput::Certificate2(certificate) => certificate.view_number(),
+            ConsensusInput::TimeoutCertificate(simple_certificate) => {
                 // Add one because we are moving to the next view so all event
                 // processing is for the next view
                 simple_certificate.view_number() + 1
             },
-            ConsensusEvent::ViewSyncCertificate(simple_certificate) => {
+            ConsensusInput::ViewSyncCertificate(simple_certificate) => {
                 simple_certificate.view_number()
             },
-            ConsensusEvent::BlockReconstructed(view_number, _) => *view_number,
-            ConsensusEvent::StateVerified(state_response) => state_response.view,
-            ConsensusEvent::HeaderCreated(view_number, _) => *view_number,
-            ConsensusEvent::StateVerificationFailed(state_request) => state_request.view,
-            ConsensusEvent::Timeout(view_number) => *view_number,
-            ConsensusEvent::BlockBuilt(view_number, ..) => *view_number,
-            ConsensusEvent::VidDisperseCreated(view_number, _) => *view_number,
-            ConsensusEvent::Shutdown => ViewNumber::genesis(),
+            ConsensusInput::BlockReconstructed(view_number, _) => *view_number,
+            ConsensusInput::StateVerified(state_response) => state_response.view,
+            ConsensusInput::HeaderCreated(view_number, _) => *view_number,
+            ConsensusInput::StateVerificationFailed(state_request) => state_request.view,
+            ConsensusInput::Timeout(view_number) => *view_number,
+            ConsensusInput::BlockBuilt(view_number, ..) => *view_number,
+            ConsensusInput::VidDisperseCreated(view_number, _) => *view_number,
         }
     }
 }
 
-impl<TYPES: NodeType> TryFrom<Update<TYPES>> for ConsensusEvent<TYPES> {
+impl<TYPES: NodeType> TryFrom<Event<TYPES>> for ConsensusInput<TYPES> {
     type Error = ();
 
-    fn try_from(update: Update<TYPES>) -> Result<Self, ()> {
+    fn try_from(update: Event<TYPES>) -> Result<Self, ()> {
         match update {
-            Update::MessageReceived(msg) => match msg {
+            Event::MessageReceived(msg) => match msg {
                 ConsensusMessage::Proposal(proposal_msg) => {
-                    Ok(ConsensusEvent::Proposal(proposal_msg))
+                    Ok(ConsensusInput::Proposal(proposal_msg))
                 },
                 ConsensusMessage::Certificate1(cert, _key) => {
-                    Ok(ConsensusEvent::Certificate1(cert))
+                    Ok(ConsensusInput::Certificate1(cert))
                 },
                 ConsensusMessage::Certificate2(cert, _key) => {
-                    Ok(ConsensusEvent::Certificate2(cert))
+                    Ok(ConsensusInput::Certificate2(cert))
                 },
                 _ => Err(()),
             },
-            Update::BlockReconstructed(view, _payload, vid_commit) => {
-                Ok(ConsensusEvent::BlockReconstructed(view, vid_commit))
+            Event::BlockReconstructed(view, _payload, vid_commit) => {
+                Ok(ConsensusInput::BlockReconstructed(view, vid_commit))
             },
-            Update::Timeout(view) => Ok(ConsensusEvent::Timeout(view)),
-            Update::TimeoutCertificateReceived(cert) => {
-                Ok(ConsensusEvent::TimeoutCertificate(cert))
+            Event::Timeout(view) => Ok(ConsensusInput::Timeout(view)),
+            Event::TimeoutCertificateReceived(cert) => Ok(ConsensusInput::TimeoutCertificate(cert)),
+            Event::ViewSyncCertificateReceived(cert) => {
+                Ok(ConsensusInput::ViewSyncCertificate(cert))
             },
-            Update::ViewSyncCertificateReceived(cert) => {
-                Ok(ConsensusEvent::ViewSyncCertificate(cert))
-            },
-            Update::StateVerified(request) => {
+            Event::StateVerified(request) => {
                 let commitment = proposal_commitment(&request.proposal);
                 let state = TYPES::ValidatedState::from_header(&request.proposal.block_header);
-                Ok(ConsensusEvent::StateVerified(StateResponse {
+                Ok(ConsensusInput::StateVerified(StateResponse {
                     view: request.view,
                     commitment,
                     state: Arc::new(state),
                 }))
             },
-            Update::StateVerificationFailed(request) => {
+            Event::StateVerificationFailed(request) => {
                 let commitment = proposal_commitment(&request.proposal);
                 let state = TYPES::ValidatedState::from_header(&request.proposal.block_header);
-                Ok(ConsensusEvent::StateVerificationFailed(StateResponse {
+                Ok(ConsensusInput::StateVerificationFailed(StateResponse {
                     view: request.view,
                     commitment,
                     state: Arc::new(state),
                 }))
             },
-            Update::HeaderCreated(view, header) => Ok(ConsensusEvent::HeaderCreated(view, header)),
+            Event::HeaderCreated(view, header) => Ok(ConsensusInput::HeaderCreated(view, header)),
             _ => Err(()),
         }
     }
@@ -237,7 +238,7 @@ pub enum NetworkEvent<TYPES: NodeType> {
 }
 
 #[allow(clippy::large_enum_variant)]
-pub enum IOEvent<TYPES: NodeType> {
+pub enum IoEvent<TYPES: NodeType> {
     StorageEvent(StorageEvent<TYPES>),
     NetworkEvent(NetworkEvent<TYPES>),
 }

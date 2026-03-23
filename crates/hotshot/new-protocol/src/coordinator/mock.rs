@@ -18,8 +18,7 @@ pub mod testing {
     };
 
     use crate::{
-        events::*,
-        helpers::{proposal_commitment, upgrade_lock},
+        Outbox, consensus::Consensus, events::*, helpers::{proposal_commitment, upgrade_lock}
     };
 
     /// A mock block with its derived commitments and metadata.
@@ -74,11 +73,11 @@ pub mod testing {
     fn state_verified_event(
         proposal: &QuorumProposal2<TestTypes>,
         view: hotshot_types::data::ViewNumber,
-    ) -> ConsensusEvent<TestTypes> {
+    ) -> ConsensusInput<TestTypes> {
         let commitment = proposal_commitment(proposal);
         let state =
             <TestValidatedState as ValidatedState<TestTypes>>::from_header(&proposal.block_header);
-        ConsensusEvent::StateVerified(StateResponse {
+        ConsensusInput::StateVerified(StateResponse {
             view,
             commitment,
             state: Arc::new(state),
@@ -92,32 +91,31 @@ pub mod testing {
     /// When `state_tx` is `Some`, state and header requests are forwarded to a
     /// `ValidatedStateManager` instead of being handled inline. Responses from
     /// the state manager come back through the shared `event_rx` channel as
-    /// `Update` variants and are forwarded to consensus.
+    /// `Event` variants and are forwarded to consensus.
     pub struct MockCoordinator {
-        pub event_rx: tokio::sync::mpsc::Receiver<Event<TestTypes>>,
-        pub consensus_tx: tokio::sync::mpsc::Sender<ConsensusEvent<TestTypes>>,
+        pub consensus: Consensus<TestTypes>,
+        pub event_rx: tokio::sync::mpsc::Receiver<ConsensusOutput<TestTypes>>,
         pub state_tx: Option<tokio::sync::mpsc::Sender<StateEvent<TestTypes>>>,
         pub membership_coordinator: EpochMembershipCoordinator<TestTypes>,
-        pub received_events: Vec<Event<TestTypes>>,
+        pub outbox: Outbox<ConsensusOutput<TestTypes>>,
     }
     impl MockCoordinator {
-        pub async fn run(mut self) -> Vec<Event<TestTypes>> {
+        pub async fn run(mut self) -> Vec<ConsensusOutput<TestTypes>> {
             while let Some(event) = self.event_rx.recv().await {
-                if matches!(event, Event::Action(Action::Shutdown)) {
-                    // Signal consensus to shut down before stopping
-                    let _ = self.consensus_tx.send(ConsensusEvent::Shutdown).await;
+                if matches!(event, ConsensusOutput::Action(Action::Shutdown)) {
                     break;
                 }
                 self.handle_event(event).await;
             }
             self.received_events
         }
-        async fn handle_event(&mut self, event: Event<TestTypes>) {
+
+        async fn handle_event(&mut self, event: ConsensusOutput<TestTypes>) {
             match event {
-                Event::Action(ref action) => self.handle_action(action).await,
-                Event::Update(ref update) => {
-                    if let Ok(consensus_event) = ConsensusEvent::try_from(update.clone()) {
-                        self.consensus_tx.send(consensus_event).await.unwrap();
+                ConsensusOutput::Action(ref action) => self.handle_action(action).await,
+                ConsensusOutput::Event(ref update) => {
+                    if let Ok(consensus_event) = ConsensusInput::try_from(update.clone()) {
+                        self.consensus.apply(consensus_event).await;
                     }
                 },
             }
@@ -126,7 +124,9 @@ pub mod testing {
 
         async fn handle_action(&self, action: &Action<TestTypes>) {
             match action {
-                Action::SendMessage(_message) => {},
+                Action::SendProposal(..) => {},
+                Action::SendVote1(..) => {},
+                Action::SendVote2(..) => {},
                 Action::RequestState(state_request) => {
                     if let Some(state_tx) = &self.state_tx {
                         state_tx
@@ -172,13 +172,13 @@ pub mod testing {
                             TEST_VERSIONS.test.base,
                         );
                         self.consensus_tx
-                            .send(ConsensusEvent::HeaderCreated(req.view, header))
+                            .send(ConsensusInput::HeaderCreated(req.view, header))
                             .await
                             .unwrap();
                     }
 
                     self.consensus_tx
-                        .send(ConsensusEvent::BlockBuilt(
+                        .send(ConsensusInput::BlockBuilt(
                             req.view,
                             req.epoch,
                             mock_block.block,
@@ -204,7 +204,7 @@ pub mod testing {
                         panic!("VidDisperse is not a V2");
                     };
                     self.consensus_tx
-                        .send(ConsensusEvent::VidDisperseCreated(*view, vid))
+                        .send(ConsensusInput::VidDisperseCreated(*view, vid))
                         .await
                         .unwrap();
                 },

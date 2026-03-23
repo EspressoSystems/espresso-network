@@ -1,31 +1,46 @@
 use hotshot::traits::BlockPayload;
 use hotshot_types::{
-    data::{EpochNumber, Leaf2, QuorumProposal2, VidCommitment2, VidDisperse2, ViewNumber},
-    drb::DrbResult,
-    simple_vote::HasEpoch,
-    traits::{block_contents::BlockHeader, node_implementation::NodeType},
-    vote::{Certificate, HasViewNumber},
+    data::{EpochNumber, Leaf2, QuorumProposal2, VidCommitment2, VidDisperse2, ViewNumber}, drb::DrbResult, message::Proposal, simple_vote::HasEpoch, traits::{block_contents::BlockHeader, node_implementation::NodeType}, vote::{Certificate, HasViewNumber}
 };
 use tokio::sync::mpsc::error::SendError;
 
-use crate::events::*;
+use crate::{events::*, message::{Vote1, Vote2}};
 
 #[derive(Clone)]
 pub(crate) struct CoordinatorHandle<TYPES: NodeType> {
-    event_tx: tokio::sync::mpsc::Sender<Event<TYPES>>,
+    event_tx: tokio::sync::mpsc::Sender<ConsensusOutput<TYPES>>,
 }
 
 impl<TYPES: NodeType> CoordinatorHandle<TYPES> {
-    pub fn new(event_tx: tokio::sync::mpsc::Sender<Event<TYPES>>) -> Self {
+    pub fn new(event_tx: tokio::sync::mpsc::Sender<ConsensusOutput<TYPES>>) -> Self {
         Self { event_tx }
     }
 
-    pub async fn send_message(
+    pub async fn send_proposal(
         &self,
-        message: RequestMessageSender<TYPES>,
-    ) -> Result<(), SendError<Event<TYPES>>> {
+        message: Proposal<TYPES, QuorumProposal2<TYPES>>,
+        share: VidDisperse2<TYPES>
+    ) -> Result<(), SendError<ConsensusOutput<TYPES>>> {
         self.event_tx
-            .send(Event::Action(Action::SendMessage(message)))
+            .send(ConsensusOutput::Action(Action::SendProposal(message, share)))
+            .await
+    }
+
+    pub async fn send_vote1(
+        &self,
+        message: Vote1<TYPES>
+    ) -> Result<(), SendError<ConsensusOutput<TYPES>>> {
+        self.event_tx
+            .send(ConsensusOutput::Action(Action::SendVote1(message)))
+            .await
+    }
+
+    pub async fn send_vote2(
+        &self,
+        message: Vote2<TYPES>
+    ) -> Result<(), SendError<ConsensusOutput<TYPES>>> {
+        self.event_tx
+            .send(ConsensusOutput::Action(Action::SendVote2(message)))
             .await
     }
 
@@ -33,10 +48,10 @@ impl<TYPES: NodeType> CoordinatorHandle<TYPES> {
         &self,
         proposal: QuorumProposal2<TYPES>,
         payload_size: u32,
-    ) -> Result<(), SendError<Event<TYPES>>> {
+    ) -> Result<(), SendError<ConsensusOutput<TYPES>>> {
         let parent_commitment = proposal.justify_qc.data().leaf_commit;
         self.event_tx
-            .send(Event::Action(Action::RequestState(StateRequest {
+            .send(ConsensusOutput::Action(Action::RequestState(StateRequest {
                 view: proposal.view_number(),
                 parent_view: proposal.view_number() - 1,
                 epoch: proposal.epoch().unwrap(),
@@ -52,9 +67,9 @@ impl<TYPES: NodeType> CoordinatorHandle<TYPES> {
         parent: QuorumProposal2<TYPES>,
         view: ViewNumber,
         epoch: EpochNumber,
-    ) -> Result<(), SendError<Event<TYPES>>> {
+    ) -> Result<(), SendError<ConsensusOutput<TYPES>>> {
         self.event_tx
-            .send(Event::Action(Action::RequestBlockAndHeader(
+            .send(ConsensusOutput::Action(Action::RequestBlockAndHeader(
                 BlockAndHeaderRequest {
                     view,
                     parent_proposal: parent,
@@ -66,9 +81,9 @@ impl<TYPES: NodeType> CoordinatorHandle<TYPES> {
     pub async fn send_decided(
         &self,
         decided: Vec<Leaf2<TYPES>>,
-    ) -> Result<(), SendError<Event<TYPES>>> {
+    ) -> Result<(), SendError<ConsensusOutput<TYPES>>> {
         self.event_tx
-            .send(Event::Update(Update::LeafDecided(decided)))
+            .send(ConsensusOutput::Event(Event::LeafDecided(decided)))
             .await
     }
     pub async fn request_vid_disperse(
@@ -77,9 +92,9 @@ impl<TYPES: NodeType> CoordinatorHandle<TYPES> {
         epoch: EpochNumber,
         block: TYPES::BlockPayload,
         metadata: <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
-    ) -> Result<(), SendError<Event<TYPES>>> {
+    ) -> Result<(), SendError<ConsensusOutput<TYPES>>> {
         self.event_tx
-            .send(Event::Action(Action::RequestVidDisperse(
+            .send(ConsensusOutput::Action(Action::RequestVidDisperse(
                 view, epoch, block, metadata,
             )))
             .await
@@ -87,18 +102,18 @@ impl<TYPES: NodeType> CoordinatorHandle<TYPES> {
     pub async fn respond_state(
         &self,
         request: StateRequest<TYPES>,
-    ) -> Result<(), SendError<Event<TYPES>>> {
+    ) -> Result<(), SendError<ConsensusOutput<TYPES>>> {
         self.event_tx
-            .send(Event::Update(Update::StateVerified(request)))
+            .send(ConsensusOutput::Event(Event::StateVerified(request)))
             .await
     }
     pub async fn respond_header(
         &self,
         view: ViewNumber,
         header: TYPES::BlockHeader,
-    ) -> Result<(), SendError<Event<TYPES>>> {
+    ) -> Result<(), SendError<ConsensusOutput<TYPES>>> {
         self.event_tx
-            .send(Event::Update(Update::HeaderCreated(view, header)))
+            .send(ConsensusOutput::Event(Event::HeaderCreated(view, header)))
             .await
     }
     pub async fn respond_block_reconstructed(
@@ -106,9 +121,9 @@ impl<TYPES: NodeType> CoordinatorHandle<TYPES> {
         view: ViewNumber,
         payload: TYPES::BlockPayload,
         vid_commitment: VidCommitment2,
-    ) -> Result<(), SendError<Event<TYPES>>> {
+    ) -> Result<(), SendError<ConsensusOutput<TYPES>>> {
         self.event_tx
-            .send(Event::Update(Update::BlockReconstructed(
+            .send(ConsensusOutput::Event(Event::BlockReconstructed(
                 view,
                 payload,
                 vid_commitment,
@@ -119,24 +134,24 @@ impl<TYPES: NodeType> CoordinatorHandle<TYPES> {
     pub async fn respond_certificate1(
         &self,
         cert: crate::message::Certificate1<TYPES>,
-    ) -> Result<(), SendError<Event<TYPES>>> {
+    ) -> Result<(), SendError<ConsensusOutput<TYPES>>> {
         self.event_tx
-            .send(Event::Update(Update::Certificate1Formed(cert)))
+            .send(ConsensusOutput::Event(Event::Certificate1Formed(cert)))
             .await
     }
 
     pub async fn respond_certificate2(
         &self,
         cert: crate::message::Certificate2<TYPES>,
-    ) -> Result<(), SendError<Event<TYPES>>> {
+    ) -> Result<(), SendError<ConsensusOutput<TYPES>>> {
         self.event_tx
-            .send(Event::Update(Update::Certificate2Formed(cert)))
+            .send(ConsensusOutput::Event(Event::Certificate2Formed(cert)))
             .await
     }
 
-    pub async fn respond_drb(&self, result: DrbResult) -> Result<(), SendError<Event<TYPES>>> {
+    pub async fn respond_drb(&self, result: DrbResult) -> Result<(), SendError<ConsensusOutput<TYPES>>> {
         self.event_tx
-            .send(Event::Update(Update::DrbCalculated(result)))
+            .send(ConsensusOutput::Event(Event::DrbCalculated(result)))
             .await
     }
 
@@ -144,9 +159,9 @@ impl<TYPES: NodeType> CoordinatorHandle<TYPES> {
         &self,
         payload_commitment: VidCommitment2,
         disperse: VidDisperse2<TYPES>,
-    ) -> Result<(), SendError<Event<TYPES>>> {
+    ) -> Result<(), SendError<ConsensusOutput<TYPES>>> {
         self.event_tx
-            .send(Event::Update(Update::VidDisperseCreated(
+            .send(ConsensusOutput::Event(Event::VidDisperseCreated(
                 payload_commitment,
                 disperse,
             )))
@@ -157,7 +172,7 @@ impl<TYPES: NodeType> CoordinatorHandle<TYPES> {
 mod test {
     use super::*;
     impl<TYPES: NodeType> CoordinatorHandle<TYPES> {
-        pub async fn send_event(&self, event: Event<TYPES>) -> Result<(), SendError<Event<TYPES>>> {
+        pub async fn send_event(&self, event: ConsensusOutput<TYPES>) -> Result<(), SendError<ConsensusOutput<TYPES>>> {
             self.event_tx.send(event).await
         }
     }

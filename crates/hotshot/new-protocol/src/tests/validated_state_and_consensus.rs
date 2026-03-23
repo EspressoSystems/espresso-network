@@ -2,7 +2,7 @@ use hotshot::types::BLSPubKey;
 use hotshot_types::traits::signature_key::SignatureKey;
 
 use super::{common::test_utils::TestData, *};
-use crate::events::{Event, Update};
+use crate::events::{ConsensusOutput, Event};
 
 /// Integration: proposal accepted and Vote1 sent via real state validation.
 #[tokio::test]
@@ -126,7 +126,7 @@ async fn test_multi_view_decide() {
 
     let decide_count = events
         .iter()
-        .filter(|e| matches!(e, Event::Update(Update::LeafDecided(_))))
+        .filter(|e| matches!(e, ConsensusOutput::Event(Event::LeafDecided(_))))
         .count();
     assert!(
         decide_count == 5,

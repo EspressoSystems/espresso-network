@@ -17,7 +17,7 @@ use tokio::task::JoinHandle;
 use crate::{
     consensus::Consensus,
     coordinator::{handle::CoordinatorHandle, mock::testing::MockCoordinator},
-    events::{Action, Event, RequestMessageSender, Update},
+    events::{Action, ConsensusOutput, Event},
     validated_state::ValidatedStateManager,
 };
 
@@ -25,13 +25,13 @@ use crate::{
 /// helpers to send events and collect results.
 ///
 /// All events are sent through the MockCoordinator via the coordinator handle.
-/// The mock converts `Update` variants into `ConsensusEvent`s and forwards
+/// The mock converts `Event` variants into `ConsensusEvent`s and forwards
 /// them to consensus.
 pub(crate) struct TestHarness {
     /// Send Events to the mock coordinator
     coordinator_handle: CoordinatorHandle<TestTypes>,
     /// Join handle for mock coordinator (collects received events)
-    mock_join: JoinHandle<Vec<Event<TestTypes>>>,
+    mock_join: JoinHandle<Vec<ConsensusOutput<TestTypes>>>,
 }
 
 impl TestHarness {
@@ -41,27 +41,22 @@ impl TestHarness {
         let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
         let membership = mock_membership().await;
         let (event_tx, event_rx) = tokio::sync::mpsc::channel(100);
-        let (consensus_tx, consensus_rx) = tokio::sync::mpsc::channel(100);
 
-        let mock_coordinator = MockCoordinator {
-            event_rx,
-            consensus_tx,
-            state_tx: None,
-            membership_coordinator: membership.clone(),
-            received_events: Vec::new(),
-        };
-        let coordinator_handle = CoordinatorHandle::new(event_tx);
         let mut consensus = Consensus::new(
-            consensus_rx,
-            coordinator_handle.clone(),
             membership,
             public_key,
             private_key,
         );
 
-        tokio::spawn(async move {
-            consensus.run().await;
-        });
+        let mock_coordinator = MockCoordinator {
+            event_rx,
+            state_tx: None,
+            membership_coordinator: membership.clone(),
+            consensus,
+            received_events: Vec::new(),
+        };
+        let coordinator_handle = CoordinatorHandle::new(event_tx);
+
         let mock_join = tokio::spawn(async move { mock_coordinator.run().await });
 
         Self {
@@ -125,90 +120,90 @@ impl TestHarness {
         }
     }
 
-    /// Send an Event through the mock coordinator.
-    pub async fn send(&self, event: Event<TestTypes>) {
+    /// Send an ConsensusOutput through the mock coordinator.
+    pub async fn send(&self, event: ConsensusOutput<TestTypes>) {
         self.coordinator_handle.send_event(event).await.unwrap();
     }
 
     /// Shut down and return all events the mock coordinator collected.
-    pub async fn shutdown(self) -> Vec<Event<TestTypes>> {
+    pub async fn shutdown(self) -> Vec<ConsensusOutput<TestTypes>> {
         // Small delay to let async processing complete
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         // Shutdown signal — the mock will forward ConsensusEvent::Shutdown to consensus
         self.coordinator_handle
-            .send_event(Event::Action(Action::Shutdown))
+            .send_event(ConsensusOutput::Action(Action::Shutdown))
             .await
             .unwrap();
         self.mock_join.await.unwrap()
     }
 }
 
-// ── Event assertion helpers ──
+// ── ConsensusOutput assertion helpers ──
 
-pub(crate) fn has_vote1(events: &[Event<TestTypes>]) -> bool {
+pub(crate) fn has_vote1(events: &[ConsensusOutput<TestTypes>]) -> bool {
     events.iter().any(|e| {
         matches!(
             e,
-            Event::Action(Action::SendMessage(RequestMessageSender::Vote1(_)))
+            ConsensusOutput::Action(Action::SendVote1(_))
         )
     })
 }
 
-pub(crate) fn has_vote2(events: &[Event<TestTypes>]) -> bool {
+pub(crate) fn has_vote2(events: &[ConsensusOutput<TestTypes>]) -> bool {
     events.iter().any(|e| {
         matches!(
             e,
-            Event::Action(Action::SendMessage(RequestMessageSender::Vote2(_)))
+            ConsensusOutput::Action(Action::SendVote2(_))
         )
     })
 }
 
-pub(crate) fn has_leaf_decided(events: &[Event<TestTypes>]) -> bool {
+pub(crate) fn has_leaf_decided(events: &[ConsensusOutput<TestTypes>]) -> bool {
     events
         .iter()
-        .any(|e| matches!(e, Event::Update(Update::LeafDecided(_))))
+        .any(|e| matches!(e, ConsensusOutput::Event(Event::LeafDecided(_))))
 }
 
-pub(crate) fn has_request_state(events: &[Event<TestTypes>]) -> bool {
+pub(crate) fn has_request_state(events: &[ConsensusOutput<TestTypes>]) -> bool {
     events
         .iter()
-        .any(|e| matches!(e, Event::Action(Action::RequestState(_))))
+        .any(|e| matches!(e, ConsensusOutput::Action(Action::RequestState(_))))
 }
 
-pub(crate) fn has_proposal(events: &[Event<TestTypes>]) -> bool {
+pub(crate) fn has_proposal(events: &[ConsensusOutput<TestTypes>]) -> bool {
     events.iter().any(|e| {
         matches!(
             e,
-            Event::Action(Action::SendMessage(RequestMessageSender::Proposal(_, _)))
+            ConsensusOutput::Action(Action::SendProposal(..))
         )
     })
 }
 
-pub(crate) fn has_request_block_and_header(events: &[Event<TestTypes>]) -> bool {
+pub(crate) fn has_request_block_and_header(events: &[ConsensusOutput<TestTypes>]) -> bool {
     events
         .iter()
-        .any(|e| matches!(e, Event::Action(Action::RequestBlockAndHeader(_))))
+        .any(|e| matches!(e, ConsensusOutput::Action(Action::RequestBlockAndHeader(_))))
 }
 
-pub(crate) fn count_vote1(events: &[Event<TestTypes>]) -> usize {
+pub(crate) fn count_vote1(events: &[ConsensusOutput<TestTypes>]) -> usize {
     events
         .iter()
         .filter(|e| {
             matches!(
                 e,
-                Event::Action(Action::SendMessage(RequestMessageSender::Vote1(_)))
+                ConsensusOutput::Action(Action::SendVote1(_))
             )
         })
         .count()
 }
 
-pub(crate) fn count_vote2(events: &[Event<TestTypes>]) -> usize {
+pub(crate) fn count_vote2(events: &[ConsensusOutput<TestTypes>]) -> usize {
     events
         .iter()
         .filter(|e| {
             matches!(
                 e,
-                Event::Action(Action::SendMessage(RequestMessageSender::Vote2(_)))
+                ConsensusOutput::Action(Action::SendVote2(_))
             )
         })
         .count()
