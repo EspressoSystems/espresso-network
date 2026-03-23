@@ -1573,7 +1573,8 @@ pub async fn validate_vid_share<TYPES: NodeType>(
     tracing::warn!(
         "validate_vid_share view={view} total={total_elapsed:?} dedup={dedup_elapsed:?} \
          membership={membership_elapsed:?} signature={sig_elapsed:?} \
-         crypto_verify={crypto_elapsed:?} (membership={membership_elapsed2:?} verify={verify_elapsed:?})"
+         crypto_verify={crypto_elapsed:?} (membership={membership_elapsed2:?} \
+         verify={verify_elapsed:?})"
     );
 
     Ok(())

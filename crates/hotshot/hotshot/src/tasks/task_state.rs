@@ -14,21 +14,12 @@ use async_lock::RwLock;
 use async_trait::async_trait;
 use chrono::Utc;
 use hotshot_task_impls::{
-    block::{BlockTaskState, Mempool},
-    block_storer::BlockStorerTaskState,
-    builder::BuilderClient,
-    consensus::ConsensusTaskState,
-    quorum_proposal::QuorumProposalTaskState,
-    quorum_proposal_recv::QuorumProposalRecvTaskState,
-    quorum_vote::QuorumVoteTaskState,
-    reconstruct::ReconstructTaskState,
-    request::NetworkRequestState,
-    rewind::RewindTaskState,
-    stats::StatsTaskState,
-    transactions::TransactionTaskState,
-    upgrade::UpgradeTaskState,
-    vid::VidTaskState,
-    view_sync::ViewSyncTaskState,
+    block::BlockTaskState, block_storer::BlockStorerTaskState, builder::BuilderClient,
+    consensus::ConsensusTaskState, quorum_proposal::QuorumProposalTaskState,
+    quorum_proposal_recv::QuorumProposalRecvTaskState, quorum_vote::QuorumVoteTaskState,
+    reconstruct::ReconstructTaskState, request::NetworkRequestState, rewind::RewindTaskState,
+    stats::StatsTaskState, transactions::TransactionTaskState, upgrade::UpgradeTaskState,
+    vid::VidTaskState, view_sync::ViewSyncTaskState,
 };
 use hotshot_types::{
     consensus::OuterConsensus,
@@ -286,7 +277,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             id: handle.hotshot.id,
             upgrade_lock: handle.hotshot.upgrade_lock.clone(),
             epoch_height: handle.epoch_height,
-            mempool: Mempool::new(max_block_size),
             base_fee: 1,
             builder_key,
             builder_private_key,

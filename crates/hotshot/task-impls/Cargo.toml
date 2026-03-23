@@ -34,6 +34,7 @@ hotshot-utils = { workspace = true }
 jf-advz = { workspace = true }
 lru = { workspace = true }
 rand = { workspace = true }
+rand_chacha = { workspace = true }
 serde = { workspace = true }
 sha2 = { workspace = true }
 surf-disco = { workspace = true }
