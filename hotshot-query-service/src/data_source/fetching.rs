@@ -1748,9 +1748,8 @@ where
             // object that we fetched, keeping it in memory. Log the error, retry a few times, and
             // eventually move on.
             tracing::warn!(
-                "failed to store fetched {} {}: {err:#}",
-                T::name(),
-                obj.height()
+                obj = obj.debug_name(),
+                "failed to store fetched object: {err:#}"
             );
 
             let Some(delay) = backoff.next_backoff() else {
@@ -2131,17 +2130,17 @@ where
 }
 
 /// An object which can be stored in the database.
-trait Storable<Types: NodeType>: HeightIndexed + Clone {
-    /// The name of this type of object, for debugging purposes.
-    fn name() -> &'static str;
+trait Storable<Types: NodeType>: Clone {
+    /// The name of this object, for debugging purposes.
+    fn debug_name(&self) -> String;
 
     /// Notify anyone waiting for this object that it has become available.
     fn notify(&self, notifiers: &Notifiers<Types>) -> impl Send + Future<Output = ()>;
 
     /// Store the object in the local database.
     fn store(
-        self,
-        storage: &mut (impl UpdateAvailabilityStorage<Types> + Send),
+        &self,
+        storage: &mut impl UpdateAvailabilityStorage<Types>,
         leaf_only: bool,
     ) -> impl Send + Future<Output = anyhow::Result<()>>;
 }
@@ -2157,8 +2156,8 @@ impl<Types: NodeType> HeightIndexed
 impl<Types: NodeType> Storable<Types>
     for (LeafQueryData<Types>, Option<[CertificatePair<Types>; 2]>)
 {
-    fn name() -> &'static str {
-        "leaf with QC chain"
+    fn debug_name(&self) -> String {
+        format!("leaf {} with QC chain", self.0.height())
     }
 
     async fn notify(&self, notifiers: &Notifiers<Types>) {
@@ -2166,11 +2165,13 @@ impl<Types: NodeType> Storable<Types>
     }
 
     async fn store(
-        self,
-        storage: &mut (impl UpdateAvailabilityStorage<Types> + Send),
+        &self,
+        storage: &mut impl UpdateAvailabilityStorage<Types>,
         _leaf_only: bool,
     ) -> anyhow::Result<()> {
-        storage.insert_leaf_with_qc_chain(self.0, self.1).await
+        storage
+            .insert_leaf_with_qc_chain(&self.0, self.1.clone())
+            .await
     }
 }
 
@@ -2600,9 +2601,9 @@ mod test {
             let mut tx = ds.write().await.unwrap();
 
             for &(start, end) in present_ranges {
-                for leaf in leaves[start..end].iter() {
+                for leaf in &leaves[start..end] {
                     tracing::info!(height = leaf.height(), "insert leaf");
-                    tx.insert_leaf(leaf.clone()).await.unwrap();
+                    tx.insert_leaf(leaf).await.unwrap();
                 }
             }
 

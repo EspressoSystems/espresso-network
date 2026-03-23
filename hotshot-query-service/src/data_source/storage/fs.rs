@@ -630,42 +630,20 @@ where
     Payload<Types>: QueryablePayload<Types>,
     Header<Types>: QueryableHeader<Types>,
 {
-    async fn insert_leaf_with_qc_chain(
+    async fn insert_qc_chain(
         &mut self,
-        leaf: LeafQueryData<Types>,
+        height: u64,
         qc_chain: Option<[CertificatePair<Types>; 2]>,
     ) -> anyhow::Result<()> {
-        self.inner
-            .leaf_storage
-            .insert(leaf.height() as usize, leaf.clone())?;
-        self.inner
-            .index_by_leaf_hash
-            .insert(leaf.hash(), leaf.height());
-        update_index_by_hash(
-            &mut self.inner.index_by_block_hash,
-            leaf.block_hash(),
-            leaf.height(),
-        );
-        update_index_by_hash(
-            &mut self.inner.index_by_payload_hash,
-            leaf.payload_hash(),
-            leaf.height(),
-        );
-        self.inner
-            .index_by_time
-            .entry(leaf.header().timestamp())
-            .or_default()
-            .push(leaf.height());
-
-        if leaf.height() + 1 >= (self.inner.leaf_storage.iter().len() as u64) {
-            // If this is the latest leaf we know about, also store it's QC chain so that we can
-            // prove to clients that this leaf is finalized. (If it is not the latest leaf, this
-            // is unnecessary, since we can prove it is an ancestor of some later, finalized
+        if height + 1 >= (self.inner.leaf_storage.iter().len() as u64) {
+            // If this QC chain is for the latest leaf we know about, store it so that we can prove
+            // to clients that the corresponding leaf is finalized. (If it is not the latest leaf,
+            // this is unnecessary, since we can prove it is an ancestor of some later, finalized
             // leaf.)
             if let Some(qc_chain) = qc_chain {
                 self.inner.latest_qc_chain = Some(qc_chain);
             } else {
-                // Since we have a new latest leaf, we have to updated latest QC chain even if we
+                // Since we have a new latest leaf, we have to update latest QC chain even if we
                 // don't actually have a QC chain to store.
                 self.inner.latest_qc_chain = None;
             }
@@ -674,35 +652,76 @@ where
         Ok(())
     }
 
-    async fn insert_block(&mut self, block: BlockQueryData<Types>) -> anyhow::Result<()> {
-        if !self
-            .inner
-            .block_storage
-            .insert(block.height() as usize, block.clone())?
-        {
-            // The block was already present.
-            return Ok(());
-        }
-        self.inner.num_transactions += block.len();
-        self.inner.payload_size += block.size() as usize;
-        for (_, txn) in block.enumerate() {
+    async fn insert_leaf_range<'a>(
+        &mut self,
+        leaves: impl Send + IntoIterator<Item = &'a LeafQueryData<Types>>,
+    ) -> anyhow::Result<()> {
+        for leaf in leaves {
+            self.inner
+                .leaf_storage
+                .insert(leaf.height() as usize, leaf.clone())?;
+            self.inner
+                .index_by_leaf_hash
+                .insert(leaf.hash(), leaf.height());
             update_index_by_hash(
-                &mut self.inner.index_by_txn_hash,
-                txn.commit(),
-                block.height(),
+                &mut self.inner.index_by_block_hash,
+                leaf.block_hash(),
+                leaf.height(),
             );
+            update_index_by_hash(
+                &mut self.inner.index_by_payload_hash,
+                leaf.payload_hash(),
+                leaf.height(),
+            );
+            self.inner
+                .index_by_time
+                .entry(leaf.header().timestamp())
+                .or_default()
+                .push(leaf.height());
+        }
+
+        Ok(())
+    }
+
+    async fn insert_block_range<'a>(
+        &mut self,
+        blocks: impl Send + IntoIterator<IntoIter: Send, Item = &'a BlockQueryData<Types>>,
+    ) -> anyhow::Result<()> {
+        for block in blocks {
+            if !self
+                .inner
+                .block_storage
+                .insert(block.height() as usize, block.clone())?
+            {
+                // The block was already present.
+                return Ok(());
+            }
+            self.inner.num_transactions += block.len();
+            self.inner.payload_size += block.size() as usize;
+            for (_, txn) in block.enumerate() {
+                update_index_by_hash(
+                    &mut self.inner.index_by_txn_hash,
+                    txn.commit(),
+                    block.height(),
+                );
+            }
         }
         Ok(())
     }
 
-    async fn insert_vid(
+    async fn insert_vid_range<'a>(
         &mut self,
-        common: VidCommonQueryData<Types>,
-        share: Option<VidShare>,
+        vid: impl Send
+        + IntoIterator<
+            IntoIter: Send,
+            Item = (&'a VidCommonQueryData<Types>, Option<&'a VidShare>),
+        >,
     ) -> anyhow::Result<()> {
-        self.inner
-            .vid_storage
-            .insert(common.height() as usize, (common, share))?;
+        for (common, share) in vid {
+            self.inner
+                .vid_storage
+                .insert(common.height() as usize, (common.clone(), share.cloned()))?;
+        }
         Ok(())
     }
 }

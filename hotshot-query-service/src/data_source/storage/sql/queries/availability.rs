@@ -490,7 +490,7 @@ mod test {
         // Insert the first leaf without payload or VID data.
         {
             let mut tx = db.write().await.unwrap();
-            tx.insert_leaf(leaves[0].clone()).await.unwrap();
+            tx.insert_leaf(&leaves[0]).await.unwrap();
             tx.commit().await.unwrap();
         }
 
@@ -513,9 +513,9 @@ mod test {
         // Insert the second block with all data.
         {
             let mut tx = db.write().await.unwrap();
-            tx.insert_leaf(leaves[1].clone()).await.unwrap();
-            tx.insert_block(blocks[1].clone()).await.unwrap();
-            tx.insert_vid(vid[1].clone(), None).await.unwrap();
+            tx.insert_leaf(&leaves[1]).await.unwrap();
+            tx.insert_block(&blocks[1]).await.unwrap();
+            tx.insert_vid(&vid[1], None).await.unwrap();
             tx.commit().await.unwrap();
         }
 
@@ -575,7 +575,7 @@ mod test {
         // Insert the first leaf without payload or VID data.
         {
             let mut tx = db.write().await.unwrap();
-            tx.insert_leaf(leaves[0].clone()).await.unwrap();
+            tx.insert_leaf(&leaves[0]).await.unwrap();
             tx.commit().await.unwrap();
         }
 
@@ -598,9 +598,9 @@ mod test {
         // Insert the second block with all data.
         {
             let mut tx = db.write().await.unwrap();
-            tx.insert_leaf(leaves[1].clone()).await.unwrap();
-            tx.insert_block(blocks[1].clone()).await.unwrap();
-            tx.insert_vid(vid[1].clone(), None).await.unwrap();
+            tx.insert_leaf(&leaves[1]).await.unwrap();
+            tx.insert_block(&blocks[1]).await.unwrap();
+            tx.insert_vid(&vid[1], None).await.unwrap();
             tx.commit().await.unwrap();
         }
 

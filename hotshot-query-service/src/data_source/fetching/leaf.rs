@@ -334,8 +334,8 @@ impl<Types> Storable<Types> for LeafQueryData<Types>
 where
     Types: NodeType,
 {
-    fn name() -> &'static str {
-        "leaf"
+    fn debug_name(&self) -> String {
+        format!("leaf {}", self.height())
     }
 
     async fn notify(&self, notifiers: &Notifiers<Types>) {
@@ -343,8 +343,8 @@ where
     }
 
     async fn store(
-        self,
-        storage: &mut (impl UpdateAvailabilityStorage<Types> + Send),
+        &self,
+        storage: &mut impl UpdateAvailabilityStorage<Types>,
         _leaf_only: bool,
     ) -> anyhow::Result<()> {
         storage.insert_leaf(self).await
@@ -546,6 +546,33 @@ where
             .await?
             .into_iter()
             .collect()
+    }
+}
+
+impl<Types> Storable<Types> for Vec<LeafQueryData<Types>>
+where
+    Types: NodeType,
+{
+    fn debug_name(&self) -> String {
+        format!(
+            "leaf range {}..{}",
+            self[0].height(),
+            self[self.len() - 1].height() + 1
+        )
+    }
+
+    async fn notify(&self, notifiers: &Notifiers<Types>) {
+        for leaf in self {
+            notifiers.leaf.notify(leaf).await;
+        }
+    }
+
+    async fn store(
+        &self,
+        storage: &mut impl UpdateAvailabilityStorage<Types>,
+        _leaf_only: bool,
+    ) -> anyhow::Result<()> {
+        storage.insert_leaf_range(self).await
     }
 }
 

@@ -1183,8 +1183,8 @@ mod test {
         // height) and one in the middle of the range, to test what happens when data is missing
         // from the beginning of the range but other data is available.
         let mut tx = data_source.write().await.unwrap();
-        tx.insert_leaf(finalized_leaves[2].clone()).await.unwrap();
-        tx.insert_leaf(finalized_leaves[4].clone()).await.unwrap();
+        tx.insert_leaf(&finalized_leaves[2]).await.unwrap();
+        tx.insert_leaf(&finalized_leaves[4]).await.unwrap();
         tx.commit().await.unwrap();
 
         // Get the whole range of leaves.
@@ -1817,7 +1817,7 @@ mod test {
         // Send the last leaf to the disconnected data source so it learns about the height.
         let last_leaf = leaves.last().unwrap();
         let mut tx = data_source.write().await.unwrap();
-        tx.insert_leaf(last_leaf.clone()).await.unwrap();
+        tx.insert_leaf(last_leaf).await.unwrap();
         tx.commit().await.unwrap();
 
         // Trigger a fetch of the first leaf; it should resolve even if we fail to store the leaf.
@@ -1922,7 +1922,7 @@ mod test {
         // Send the last leaf to the disconnected data source so it learns about the height.
         let last_leaf = leaves.last().unwrap();
         let mut tx = data_source.write().await.unwrap();
-        tx.insert_leaf(last_leaf.clone()).await.unwrap();
+        tx.insert_leaf(last_leaf).await.unwrap();
         tx.commit().await.unwrap();
 
         // Trigger a fetch of the first leaf; it should retry until it successfully stores the leaf.
@@ -2090,7 +2090,7 @@ mod test {
         // Send the last leaf to the disconnected data source so it learns about the height.
         let last_leaf = leaves.last().unwrap();
         let mut tx = data_source.write().await.unwrap();
-        tx.insert_leaf(last_leaf.clone()).await.unwrap();
+        tx.insert_leaf(last_leaf).await.unwrap();
         tx.commit().await.unwrap();
 
         // Trigger a fetch of the first leaf; it should retry until it is able to determine
@@ -2155,7 +2155,7 @@ mod test {
         // Send the leaf to the disconnected data source, so the corresponding block becomes
         // fetchable.
         let mut tx = data_source.write().await.unwrap();
-        tx.insert_leaf(leaf.clone()).await.unwrap();
+        tx.insert_leaf(&leaf).await.unwrap();
         tx.commit().await.unwrap();
 
         // Trigger a fetch of the block by hash; it should retry until it is able to determine the
@@ -2253,8 +2253,8 @@ mod test {
                 .await
                 .await;
             let mut tx = data_source.write().await.unwrap();
-            tx.insert_leaf(leaf.clone()).await.unwrap();
-            tx.insert_block(block.clone()).await.unwrap();
+            tx.insert_leaf(&leaf).await.unwrap();
+            tx.insert_block(&block).await.unwrap();
             tx.commit().await.unwrap();
         }
 
@@ -2344,7 +2344,7 @@ mod test {
         // Send the last leaf to the disconnected data source so it learns about the height.
         let last_leaf = leaves.last().unwrap();
         let mut tx = data_source.write().await.unwrap();
-        tx.insert_leaf(last_leaf.clone()).await.unwrap();
+        tx.insert_leaf(last_leaf).await.unwrap();
         tx.commit().await.unwrap();
 
         // Stream the leaves; it should retry until it is able to determine each leaf is fetchable
@@ -2418,7 +2418,7 @@ mod test {
         // Send the last leaf to the disconnected data source, so the blocks becomes fetchable.
         let last_leaf = leaves.last().unwrap();
         let mut tx = data_source.write().await.unwrap();
-        tx.insert_leaf(last_leaf.clone()).await.unwrap();
+        tx.insert_leaf(last_leaf).await.unwrap();
         tx.commit().await.unwrap();
 
         // Stream the blocks with a period of database failures.
@@ -2497,7 +2497,7 @@ mod test {
         // Send the last leaf to the disconnected data source, so the blocks becomes fetchable.
         let last_leaf = leaves.last().unwrap();
         let mut tx = data_source.write().await.unwrap();
-        tx.insert_leaf(last_leaf.clone()).await.unwrap();
+        tx.insert_leaf(last_leaf).await.unwrap();
         tx.commit().await.unwrap();
 
         // Send the first object to the disconnected data source, so we hit all the cases:

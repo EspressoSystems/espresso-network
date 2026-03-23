@@ -152,8 +152,8 @@ impl<Types> Storable<Types> for VidCommonQueryData<Types>
 where
     Types: NodeType,
 {
-    fn name() -> &'static str {
-        "VID common"
+    fn debug_name(&self) -> String {
+        format!("VID common {}", self.height())
     }
 
     async fn notify(&self, notifiers: &Notifiers<Types>) {
@@ -161,8 +161,8 @@ where
     }
 
     async fn store(
-        self,
-        storage: &mut (impl UpdateAvailabilityStorage<Types> + Send),
+        &self,
+        storage: &mut impl UpdateAvailabilityStorage<Types>,
         _leaf_only: bool,
     ) -> anyhow::Result<()> {
         storage.insert_vid(self, None).await
@@ -173,8 +173,8 @@ impl<Types> Storable<Types> for (VidCommonQueryData<Types>, Option<VidShare>)
 where
     Types: NodeType,
 {
-    fn name() -> &'static str {
-        "VID data"
+    fn debug_name(&self) -> String {
+        format!("VID data {}", self.0.height())
     }
 
     async fn notify(&self, notifiers: &Notifiers<Types>) {
@@ -182,11 +182,11 @@ where
     }
 
     async fn store(
-        self,
-        storage: &mut (impl UpdateAvailabilityStorage<Types> + Send),
+        &self,
+        storage: &mut impl UpdateAvailabilityStorage<Types>,
         _leaf_only: bool,
     ) -> anyhow::Result<()> {
-        storage.insert_vid(self.0, self.1).await
+        storage.insert_vid(&self.0, self.1.as_ref()).await
     }
 }
 
@@ -397,6 +397,39 @@ where
     }
 }
 
+impl<Types> Storable<Types> for Vec<VidCommonQueryData<Types>>
+where
+    Types: NodeType,
+{
+    fn debug_name(&self) -> String {
+        format!(
+            "VID common range {}..{}",
+            self[0].height(),
+            self[self.len() - 1].height() + 1
+        )
+    }
+
+    async fn notify(&self, notifiers: &Notifiers<Types>) {
+        for common in self {
+            notifiers.vid_common.notify(common).await;
+        }
+    }
+
+    async fn store(
+        &self,
+        storage: &mut impl UpdateAvailabilityStorage<Types>,
+        leaf_only: bool,
+    ) -> anyhow::Result<()> {
+        if leaf_only {
+            return Ok(());
+        }
+
+        storage
+            .insert_vid_range(self.iter().map(|common| (common, None)))
+            .await
+    }
+}
+
 pub(super) fn fetch_vid_common_range_with_headers<Types, S, P>(
     fetcher: Arc<Fetcher<Types, S, P>>,
     headers: Vec<Header<Types>>,
@@ -478,10 +511,12 @@ where
             self.headers[0].block_number(),
             self.headers[self.headers.len() - 1].block_number() + 1
         );
-
-        for (header, common) in self.headers.into_iter().zip(commons) {
-            let data = VidCommonQueryData::new(header, common);
-            self.fetcher.store_and_notify(&data).await;
-        }
+        let data = self
+            .headers
+            .into_iter()
+            .zip(commons)
+            .map(|(header, common)| VidCommonQueryData::new(header, common))
+            .collect::<Vec<_>>();
+        self.fetcher.store_and_notify(&data).await;
     }
 }

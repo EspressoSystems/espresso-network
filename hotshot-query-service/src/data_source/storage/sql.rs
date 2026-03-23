@@ -1386,7 +1386,7 @@ mod test {
             leaf.leaf.block_header_mut().block_number = i;
             leaf.leaf.block_header_mut().timestamp = Utc::now().timestamp() as u64;
             let mut tx = storage.write().await.unwrap();
-            tx.insert_leaf(leaf.clone()).await.unwrap();
+            tx.insert_leaf(&leaf).await.unwrap();
             tx.commit().await.unwrap();
         }
 
@@ -1577,7 +1577,7 @@ mod test {
             leaf.leaf.block_header_mut().block_number = i;
             leaf.leaf.block_header_mut().timestamp = Utc::now().timestamp() as u64;
             let mut tx = storage.write().await.unwrap();
-            tx.insert_leaf(leaf.clone()).await.unwrap();
+            tx.insert_leaf(&leaf).await.unwrap();
             tx.commit().await.unwrap();
         }
 
@@ -1667,9 +1667,9 @@ mod test {
         .await;
         {
             let mut tx = storage.write().await.unwrap();
-            tx.insert_leaf(leaf.clone()).await.unwrap();
-            tx.insert_block(block.clone()).await.unwrap();
-            tx.insert_vid(vid.clone(), None).await.unwrap();
+            tx.insert_leaf(&leaf).await.unwrap();
+            tx.insert_block(&block).await.unwrap();
+            tx.insert_vid(&vid, None).await.unwrap();
             tx.commit().await.unwrap();
         }
 
@@ -1677,7 +1677,7 @@ mod test {
         leaf.leaf.block_header_mut().block_number += 1;
         {
             let mut tx = storage.write().await.unwrap();
-            tx.insert_leaf(leaf.clone()).await.unwrap();
+            tx.insert_leaf(&leaf).await.unwrap();
             tx.commit().await.unwrap();
         }
         {

@@ -4362,10 +4362,10 @@ mod postgres_tests {
         qc.view_number = view_number;
 
         let mut tx = storage.db.write().await.unwrap();
-        tx.insert_leaf(LeafQueryData::new(leaf, qc).unwrap())
+        tx.insert_leaf(&LeafQueryData::new(leaf, qc).unwrap())
             .await
             .unwrap();
-        tx.insert_block(BlockQueryData::<SeqTypes>::new(block_header, payload))
+        tx.insert_block(&BlockQueryData::<SeqTypes>::new(block_header, payload))
             .await
             .unwrap();
         tx.commit().await.unwrap();

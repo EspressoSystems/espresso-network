@@ -144,8 +144,8 @@ impl<Types> Storable<Types> for BlockQueryData<Types>
 where
     Types: NodeType,
 {
-    fn name() -> &'static str {
-        "block"
+    fn debug_name(&self) -> String {
+        format!("block {}", self.height())
     }
 
     async fn notify(&self, notifiers: &Notifiers<Types>) {
@@ -153,8 +153,8 @@ where
     }
 
     async fn store(
-        self,
-        storage: &mut (impl UpdateAvailabilityStorage<Types> + Send),
+        &self,
+        storage: &mut impl UpdateAvailabilityStorage<Types>,
         leaf_only: bool,
     ) -> anyhow::Result<()> {
         if leaf_only {
@@ -443,6 +443,37 @@ where
     }
 }
 
+impl<Types> Storable<Types> for Vec<BlockQueryData<Types>>
+where
+    Types: NodeType,
+{
+    fn debug_name(&self) -> String {
+        format!(
+            "block range {}..{}",
+            self[0].height(),
+            self[self.len() - 1].height() + 1
+        )
+    }
+
+    async fn notify(&self, notifiers: &Notifiers<Types>) {
+        for block in self {
+            notifiers.block.notify(block).await;
+        }
+    }
+
+    async fn store(
+        &self,
+        storage: &mut impl UpdateAvailabilityStorage<Types>,
+        leaf_only: bool,
+    ) -> anyhow::Result<()> {
+        if leaf_only {
+            return Ok(());
+        }
+
+        storage.insert_block_range(self).await
+    }
+}
+
 pub(super) fn fetch_block_range_with_headers<Types, S, P>(
     fetcher: Arc<Fetcher<Types, S, P>>,
     headers: Vec<Header<Types>>,
@@ -525,9 +556,12 @@ where
             self.headers[self.headers.len() - 1].block_number() + 1
         );
 
-        for (header, payload) in self.headers.into_iter().zip(payloads) {
-            let block = BlockQueryData::new(header, payload);
-            self.fetcher.store_and_notify(&block).await;
-        }
+        let data = self
+            .headers
+            .into_iter()
+            .zip(payloads)
+            .map(|(header, payload)| BlockQueryData::new(header, payload))
+            .collect::<Vec<_>>();
+        self.fetcher.store_and_notify(&data).await;
     }
 }
