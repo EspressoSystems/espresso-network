@@ -52,6 +52,8 @@ func TestApiWithEspressoDevNode(t *testing.T) {
 		t.Fatal("failed to create espresso client with builder submitter")
 	}
 
+	ClientTestHelper(ctx, client, t)
+
 	clientOptions = []EspressoClientConfigOption{}
 	querySubmitter := NewQuerySubmitter("http://localhost:21000")
 	if err != nil {
@@ -61,6 +63,10 @@ func TestApiWithEspressoDevNode(t *testing.T) {
 	clientOptions = append(clientOptions, WithBaseUrl("http://localhost:21000"))
 
 	client, err = NewClientFromOptions(clientOptions...)
+	if err != nil {
+		t.Fatal("Failed to create query submitter based client")
+	}
+	ClientTestHelper(ctx, client, t)
 }
 
 func ClientTestHelper(ctx context.Context, client EspressoClient, t *testing.T) {
