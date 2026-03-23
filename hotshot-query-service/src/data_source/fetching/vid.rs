@@ -112,9 +112,13 @@ where
             AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
         P: AvailabilityProvider<Types>,
     {
-        fetch_header_and_then(tx, req.0, HeaderCallback::VidCommon {
-            fetcher: fetcher.clone(),
-        })
+        fetch_header_and_then(
+            tx,
+            req.0,
+            HeaderCallback::VidCommon {
+                fetcher: fetcher.clone(),
+            },
+        )
         .await
     }
 
