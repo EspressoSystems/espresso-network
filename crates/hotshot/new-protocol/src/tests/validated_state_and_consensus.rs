@@ -1,8 +1,15 @@
 use hotshot::types::BLSPubKey;
 use hotshot_types::traits::signature_key::SignatureKey;
 
-use super::{common::test_utils::TestData, *};
-use crate::events::{Event, Update};
+use super::common::{
+    assertions::{
+        count_vote1, has_leaf_decided, has_proposal, has_request_block_and_header, has_vote1,
+        has_vote2, node_index_for_key,
+    },
+    harness::TestHarness,
+    utils::TestData,
+};
+use crate::events::{ConsensusOutput, Event};
 
 /// Integration: proposal accepted and Vote1 sent via real state validation.
 #[tokio::test]
@@ -12,7 +19,7 @@ async fn test_vote1_genesis_parent() {
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
 
     harness
-        .send(test_data.views[0].proposal_update(&node_key))
+        .send(test_data.views[0].proposal_input(&node_key))
         .await;
 
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
@@ -32,14 +39,14 @@ async fn test_sequential_vote1() {
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
 
     harness
-        .send(test_data.views[0].proposal_update(&node_key))
+        .send(test_data.views[0].proposal_input(&node_key))
         .await;
     harness
-        .send(test_data.views[0].block_reconstructed_update())
+        .send(test_data.views[0].block_reconstructed_input())
         .await;
 
     harness
-        .send(test_data.views[1].proposal_update(&node_key))
+        .send(test_data.views[1].proposal_input(&node_key))
         .await;
 
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
@@ -56,18 +63,18 @@ async fn test_single_view_decide() {
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
 
     harness
-        .send(test_data.views[0].proposal_update(&node_key))
+        .send(test_data.views[0].proposal_input(&node_key))
         .await;
     harness
-        .send(test_data.views[0].block_reconstructed_update())
+        .send(test_data.views[0].block_reconstructed_input())
         .await;
-    harness.send(test_data.views[0].cert1_update()).await;
-    harness.send(test_data.views[0].cert2_update()).await;
+    harness.send(test_data.views[0].cert1_input()).await;
+    harness.send(test_data.views[0].cert2_input()).await;
     harness
-        .send(test_data.views[1].proposal_update(&node_key))
+        .send(test_data.views[1].proposal_input(&node_key))
         .await;
     harness
-        .send(test_data.views[1].block_reconstructed_update())
+        .send(test_data.views[1].block_reconstructed_input())
         .await;
 
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
@@ -90,9 +97,9 @@ async fn test_leader_sends_proposal() {
     let harness = TestHarness::new_with_state_manager(leader_index).await;
 
     harness
-        .send(test_data.views[0].proposal_update(&leader_for_view_2))
+        .send(test_data.views[0].proposal_input(&leader_for_view_2))
         .await;
-    harness.send(test_data.views[0].cert1_update()).await;
+    harness.send(test_data.views[0].cert1_input()).await;
 
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     let events = harness.shutdown().await;
@@ -115,10 +122,10 @@ async fn test_multi_view_decide() {
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
 
     for view in &test_data.views {
-        harness.send(view.proposal_update(&node_key)).await;
-        harness.send(view.block_reconstructed_update()).await;
-        harness.send(view.cert1_update()).await;
-        harness.send(view.cert2_update()).await;
+        harness.send(view.proposal_input(&node_key)).await;
+        harness.send(view.block_reconstructed_input()).await;
+        harness.send(view.cert1_input()).await;
+        harness.send(view.cert2_input()).await;
     }
 
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
@@ -126,7 +133,7 @@ async fn test_multi_view_decide() {
 
     let decide_count = events
         .iter()
-        .filter(|e| matches!(e, Event::Update(Update::LeafDecided(_))))
+        .filter(|e| matches!(e, ConsensusOutput::Event(Event::LeafDecided(_))))
         .count();
     assert!(
         decide_count == 5,

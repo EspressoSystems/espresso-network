@@ -1,6 +1,7 @@
 use committable::{Commitment, Committable};
 use hotshot_types::{
     data::{EpochNumber, Leaf2, QuorumProposal2, VidDisperseShare2, ViewNumber},
+    message::Proposal,
     simple_certificate::{
         SimpleCertificate, SuccessThreshold, ViewSyncCommitCertificate2,
         ViewSyncFinalizeCertificate2, ViewSyncPreCommitCertificate2,
@@ -14,11 +15,15 @@ use hotshot_types::{
 };
 use serde::{Deserialize, Serialize};
 
+pub type Vote2<TYPES> = SimpleVote<TYPES, Vote2Data<TYPES>>;
+pub type Certificate1<TYPES> = SimpleCertificate<TYPES, QuorumData2<TYPES>, SuccessThreshold>;
+pub type Certificate2<TYPES> = SimpleCertificate<TYPES, Vote2Data<TYPES>, SuccessThreshold>;
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 #[serde(bound(deserialize = ""))]
 pub struct ProposalMessage<TYPES: NodeType> {
-    pub(crate) proposal: hotshot_types::message::Proposal<TYPES, QuorumProposal2<TYPES>>,
-    pub(crate) vid_share: hotshot_types::data::VidDisperseShare2<TYPES>,
+    pub(crate) proposal: Proposal<TYPES, QuorumProposal2<TYPES>>,
+    pub(crate) vid_share: VidDisperseShare2<TYPES>,
 }
 
 impl<TYPES: NodeType> HasViewNumber for ProposalMessage<TYPES> {
@@ -27,8 +32,8 @@ impl<TYPES: NodeType> HasViewNumber for ProposalMessage<TYPES> {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 /// Data used for a yes vote.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 #[serde(bound(deserialize = ""))]
 pub struct Vote2Data<TYPES: NodeType> {
     pub leaf_commit: Commitment<Leaf2<TYPES>>,
@@ -56,8 +61,8 @@ impl<TYPES: NodeType> Committable for Vote2Data<TYPES> {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 #[serde(bound(deserialize = ""))]
 pub struct Vote1<TYPES: NodeType> {
-    pub vote: QuorumVote2<TYPES>,
-    pub vid_share: VidDisperseShare2<TYPES>,
+    pub(crate) vote: QuorumVote2<TYPES>,
+    pub(crate) vid_share: VidDisperseShare2<TYPES>,
 }
 
 impl<TYPES: NodeType> HasViewNumber for Vote1<TYPES> {
@@ -65,11 +70,6 @@ impl<TYPES: NodeType> HasViewNumber for Vote1<TYPES> {
         self.vote.view_number()
     }
 }
-
-pub type Vote2<TYPES> = SimpleVote<TYPES, Vote2Data<TYPES>>;
-
-pub type Certificate1<TYPES> = SimpleCertificate<TYPES, QuorumData2<TYPES>, SuccessThreshold>;
-pub type Certificate2<TYPES> = SimpleCertificate<TYPES, Vote2Data<TYPES>, SuccessThreshold>;
 
 impl<TYPES: NodeType> QuorumMarker for Vote2Data<TYPES> {}
 
@@ -134,7 +134,7 @@ pub enum MessageType<TYPES: NodeType> {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 #[serde(bound(deserialize = ""))]
-pub(crate) struct Message<TYPES: NodeType> {
+pub struct Message<TYPES: NodeType> {
     pub sender: TYPES::SignatureKey,
     pub message_type: MessageType<TYPES>,
 }

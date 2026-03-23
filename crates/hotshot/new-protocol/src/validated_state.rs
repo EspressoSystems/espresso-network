@@ -376,9 +376,9 @@ mod test {
 
     use super::*;
     use crate::{
-        events::{Event, HeaderRequest, StateRequest, Update},
+        events::{ConsensusOutput, Event, HeaderRequest, StateRequest},
         helpers::proposal_commitment,
-        tests::test_utils::{TestData, TestView},
+        tests::common::utils::{TestData, TestView},
     };
 
     /// Build a StateRequest from a TestView.
@@ -438,7 +438,7 @@ mod test {
 
     struct StateTestHarness {
         manager: ValidatedStateManager<TestTypes>,
-        event_rx: mpsc::Receiver<Event<TestTypes>>,
+        event_rx: mpsc::Receiver<ConsensusOutput<TestTypes>>,
     }
 
     impl StateTestHarness {
@@ -483,7 +483,7 @@ mod test {
             }
         }
 
-        fn collect_events(&mut self) -> Vec<Event<TestTypes>> {
+        fn collect_events(&mut self) -> Vec<ConsensusOutput<TestTypes>> {
             let mut events = Vec::new();
             while let Ok(event) = self.event_rx.try_recv() {
                 events.push(event);
@@ -491,17 +491,17 @@ mod test {
             events
         }
 
-        fn count_state_verified(events: &[Event<TestTypes>]) -> usize {
+        fn count_state_verified(events: &[ConsensusOutput<TestTypes>]) -> usize {
             events
                 .iter()
-                .filter(|e| matches!(e, Event::Update(Update::StateVerified(_))))
+                .filter(|e| matches!(e, ConsensusOutput::Event(Event::StateVerified(_))))
                 .count()
         }
 
-        fn count_header_created(events: &[Event<TestTypes>]) -> usize {
+        fn count_header_created(events: &[ConsensusOutput<TestTypes>]) -> usize {
             events
                 .iter()
-                .filter(|e| matches!(e, Event::Update(Update::HeaderCreated(_, _))))
+                .filter(|e| matches!(e, ConsensusOutput::Event(Event::HeaderCreated(_, _))))
                 .count()
         }
     }

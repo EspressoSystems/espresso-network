@@ -1,0 +1,66 @@
+use hotshot::types::BLSPubKey;
+use hotshot_example_types::node_types::TestTypes;
+use hotshot_types::traits::signature_key::SignatureKey;
+
+use crate::events::{Action, ConsensusOutput, Event};
+
+pub(crate) fn has_vote1(events: &[ConsensusOutput<TestTypes>]) -> bool {
+    events
+        .iter()
+        .any(|e| matches!(e, ConsensusOutput::Action(Action::SendVote1(_))))
+}
+
+pub(crate) fn has_vote2(events: &[ConsensusOutput<TestTypes>]) -> bool {
+    events
+        .iter()
+        .any(|e| matches!(e, ConsensusOutput::Action(Action::SendVote2(_))))
+}
+
+pub(crate) fn has_leaf_decided(events: &[ConsensusOutput<TestTypes>]) -> bool {
+    events
+        .iter()
+        .any(|e| matches!(e, ConsensusOutput::Event(Event::LeafDecided(_))))
+}
+
+pub(crate) fn has_request_state(events: &[ConsensusOutput<TestTypes>]) -> bool {
+    events
+        .iter()
+        .any(|e| matches!(e, ConsensusOutput::Action(Action::RequestState(_))))
+}
+
+pub(crate) fn has_proposal(events: &[ConsensusOutput<TestTypes>]) -> bool {
+    events
+        .iter()
+        .any(|e| matches!(e, ConsensusOutput::Action(Action::SendProposal(..))))
+}
+
+pub(crate) fn has_request_block_and_header(events: &[ConsensusOutput<TestTypes>]) -> bool {
+    events
+        .iter()
+        .any(|e| matches!(e, ConsensusOutput::Action(Action::RequestBlockAndHeader(_))))
+}
+
+pub(crate) fn count_vote1(events: &[ConsensusOutput<TestTypes>]) -> usize {
+    events
+        .iter()
+        .filter(|e| matches!(e, ConsensusOutput::Action(Action::SendVote1(_))))
+        .count()
+}
+
+pub(crate) fn count_vote2(events: &[ConsensusOutput<TestTypes>]) -> usize {
+    events
+        .iter()
+        .filter(|e| matches!(e, ConsensusOutput::Action(Action::SendVote2(_))))
+        .count()
+}
+
+/// Find the node index (0..10) for a given public key.
+pub(crate) fn node_index_for_key(key: &BLSPubKey) -> u64 {
+    for i in 0..10 {
+        let (pk, _) = BLSPubKey::generated_from_seed_indexed([0; 32], i);
+        if pk == *key {
+            return i;
+        }
+    }
+    panic!("Key not found in test keys (indices 0..10)");
+}

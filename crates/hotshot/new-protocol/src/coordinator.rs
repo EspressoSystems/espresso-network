@@ -5,16 +5,17 @@ use tokio::sync::mpsc::{self};
 use crate::{consensus::Consensus, coordinator::handle::CoordinatorHandle, events::*};
 
 pub mod handle;
+
+#[cfg(test)]
 pub(crate) mod mock;
 
 const CHANNEL_BUFFER_SIZE: usize = 256;
 
 pub(crate) struct Coordinator<TYPES: NodeType> {
-    event_rx: tokio::sync::mpsc::Receiver<Event<TYPES>>,
+    event_rx: tokio::sync::mpsc::Receiver<ConsensusOutput<TYPES>>,
     cpu_tx: tokio::sync::mpsc::Sender<CpuEvent<TYPES>>,
     state_tx: tokio::sync::mpsc::Sender<StateEvent<TYPES>>,
-    io_tx: tokio::sync::mpsc::Sender<IOEvent<TYPES>>,
-    consensus_tx: tokio::sync::mpsc::Sender<ConsensusEvent<TYPES>>,
+    io_tx: tokio::sync::mpsc::Sender<IoEvent<TYPES>>,
     external_tx: async_broadcast::Sender<hotshot_types::event::Event<TYPES>>,
 }
 
@@ -27,19 +28,15 @@ impl<TYPES: NodeType> Coordinator<TYPES> {
         let (cpu_tx, cpu_rx) = mpsc::channel(CHANNEL_BUFFER_SIZE);
         let (state_tx, state_rx) = mpsc::channel(CHANNEL_BUFFER_SIZE);
         let (io_tx, io_rx) = mpsc::channel(CHANNEL_BUFFER_SIZE);
-        let (consensus_tx, consensus_rx) = mpsc::channel(CHANNEL_BUFFER_SIZE);
         let coordinator = Self {
             event_rx,
             cpu_tx,
             state_tx,
             io_tx,
-            consensus_tx,
             external_tx,
         };
         let coordinator_handle = CoordinatorHandle::new(event_tx);
         let consensus = Consensus::new(
-            consensus_rx,
-            coordinator_handle.clone(),
             system_context.membership_coordinator.clone(),
             system_context.public_key(),
             system_context.private_key().clone(),
@@ -50,13 +47,13 @@ impl<TYPES: NodeType> Coordinator<TYPES> {
     pub async fn run(&mut self) {
         while let Some(event) = self.event_rx.recv().await {
             match event {
-                Event::Update(update) => self.handle_update(update).await,
-                Event::Action(action) => self.handle_action(action).await,
+                ConsensusOutput::Event(update) => self.handle_update(update).await,
+                ConsensusOutput::Action(action) => self.handle_action(action).await,
             }
         }
     }
 
-    async fn handle_update(&mut self, update: Update<TYPES>) {
+    async fn handle_update(&mut self, update: Event<TYPES>) {
         todo!()
     }
 

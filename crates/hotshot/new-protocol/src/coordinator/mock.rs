@@ -1,89 +1,20 @@
 pub mod testing {
-    use std::sync::Arc;
-
-    use hotshot::traits::{BlockPayload, ValidatedState};
     use hotshot_example_types::{
-        block_types::{TestBlockHeader, TestBlockPayload, TestMetadata},
+        block_types::TestBlockHeader,
         node_types::{TEST_VERSIONS, TestTypes},
-        state_types::TestValidatedState,
     };
     use hotshot_types::{
-        data::{
-            Leaf2, QuorumProposal2, QuorumProposalWrapper, VidCommitment, VidDisperse,
-            vid_commitment,
-        },
+        data::{Leaf2, QuorumProposalWrapper, VidDisperse},
         epoch_membership::EpochMembershipCoordinator,
-        traits::{EncodeBytes, block_contents::BuilderFee, signature_key::BuilderSignatureKey},
-        utils::BuilderCommitment,
     };
 
     use crate::{
+        Outbox,
+        consensus::Consensus,
         events::*,
-        helpers::{proposal_commitment, upgrade_lock},
+        helpers::upgrade_lock,
+        tests::common::utils::{MockBlock, mock_builder_fee, state_verified_input},
     };
-
-    /// A mock block with its derived commitments and metadata.
-    struct MockBlock {
-        block: TestBlockPayload,
-        metadata: TestMetadata,
-        payload_commitment: VidCommitment,
-        builder_commitment: BuilderCommitment,
-    }
-
-    impl MockBlock {
-        fn new() -> Self {
-            let block = TestBlockPayload::genesis();
-            let metadata = TestMetadata {
-                num_transactions: 0,
-            };
-            let payload_commitment = vid_commitment(
-                &block.encode(),
-                &metadata.encode(),
-                10,
-                TEST_VERSIONS.test.base,
-            );
-            let builder_commitment =
-                <TestBlockPayload as BlockPayload<TestTypes>>::builder_commitment(
-                    &block, &metadata,
-                );
-            Self {
-                block,
-                metadata,
-                payload_commitment,
-                builder_commitment,
-            }
-        }
-    }
-
-    fn mock_builder_fee() -> BuilderFee<TestTypes> {
-        let (builder_key, builder_private_key) =
-            <hotshot_types::signature_key::BuilderKey as BuilderSignatureKey>::generated_from_seed_indexed([0; 32], 0);
-        let builder_signature =
-            <hotshot_types::signature_key::BuilderKey as BuilderSignatureKey>::sign_builder_message(
-                &builder_private_key,
-                &[0u8],
-            )
-            .unwrap();
-        BuilderFee {
-            fee_amount: 0,
-            fee_account: builder_key,
-            fee_signature: builder_signature,
-        }
-    }
-
-    fn state_verified_event(
-        proposal: &QuorumProposal2<TestTypes>,
-        view: hotshot_types::data::ViewNumber,
-    ) -> ConsensusEvent<TestTypes> {
-        let commitment = proposal_commitment(proposal);
-        let state =
-            <TestValidatedState as ValidatedState<TestTypes>>::from_header(&proposal.block_header);
-        ConsensusEvent::StateVerified(StateResponse {
-            view,
-            commitment,
-            state: Arc::new(state),
-        })
-    }
 
     /// MockCoordinator is for testing the various different modules the coordinator will
     /// coordinate.  It will send back appropriate responses for actions it receives.
@@ -91,42 +22,50 @@ pub mod testing {
     ///
     /// When `state_tx` is `Some`, state and header requests are forwarded to a
     /// `ValidatedStateManager` instead of being handled inline. Responses from
-    /// the state manager come back through the shared `event_rx` channel as
-    /// `Update` variants and are forwarded to consensus.
+    /// the state manager come back through the bridge task as `ConsensusInput`
+    /// variants and are forwarded to consensus.
     pub struct MockCoordinator {
-        pub event_rx: tokio::sync::mpsc::Receiver<Event<TestTypes>>,
-        pub consensus_tx: tokio::sync::mpsc::Sender<ConsensusEvent<TestTypes>>,
+        pub consensus: Consensus<TestTypes>,
+        pub input_rx: tokio::sync::mpsc::Receiver<ConsensusInput<TestTypes>>,
+        pub shutdown_rx: tokio::sync::oneshot::Receiver<()>,
         pub state_tx: Option<tokio::sync::mpsc::Sender<StateEvent<TestTypes>>>,
         pub membership_coordinator: EpochMembershipCoordinator<TestTypes>,
-        pub received_events: Vec<Event<TestTypes>>,
+        pub outbox: Outbox<ConsensusOutput<TestTypes>>,
+        pub received_events: Vec<ConsensusOutput<TestTypes>>,
     }
     impl MockCoordinator {
-        pub async fn run(mut self) -> Vec<Event<TestTypes>> {
-            while let Some(event) = self.event_rx.recv().await {
-                if matches!(event, Event::Action(Action::Shutdown)) {
-                    // Signal consensus to shut down before stopping
-                    let _ = self.consensus_tx.send(ConsensusEvent::Shutdown).await;
-                    break;
+        pub async fn run(mut self) -> Vec<ConsensusOutput<TestTypes>> {
+            loop {
+                tokio::select! {
+                    Some(input) = self.input_rx.recv() => {
+                        self.process_input(input).await;
+                    }
+                    _ = &mut self.shutdown_rx => break,
+                    else => break,
                 }
-                self.handle_event(event).await;
             }
             self.received_events
         }
-        async fn handle_event(&mut self, event: Event<TestTypes>) {
-            match event {
-                Event::Action(ref action) => self.handle_action(action).await,
-                Event::Update(ref update) => {
-                    if let Ok(consensus_event) = ConsensusEvent::try_from(update.clone()) {
-                        self.consensus_tx.send(consensus_event).await.unwrap();
-                    }
-                },
-            }
-            self.received_events.push(event);
+
+        async fn process_input(&mut self, input: ConsensusInput<TestTypes>) {
+            self.consensus.apply(input, &mut self.outbox).await;
+            self.process_outputs().await
         }
 
-        async fn handle_action(&self, action: &Action<TestTypes>) {
+        async fn process_outputs(&mut self) {
+            while let Some(output) = self.outbox.pop_front() {
+                if let ConsensusOutput::Action(action) = &output {
+                    self.handle_action(action).await;
+                }
+                self.received_events.push(output);
+            }
+        }
+
+        async fn handle_action(&mut self, action: &Action<TestTypes>) {
             match action {
-                Action::SendMessage(_message) => {},
+                Action::SendProposal(..) => {},
+                Action::SendVote1(..) => {},
+                Action::SendVote2(..) => {},
                 Action::RequestState(state_request) => {
                     if let Some(state_tx) = &self.state_tx {
                         state_tx
@@ -134,13 +73,9 @@ pub mod testing {
                             .await
                             .unwrap();
                     } else {
-                        self.consensus_tx
-                            .send(state_verified_event(
-                                &state_request.proposal,
-                                state_request.view,
-                            ))
-                            .await
-                            .unwrap();
+                        let input =
+                            state_verified_input(&state_request.proposal, state_request.view);
+                        self.consensus.apply(input, &mut self.outbox).await;
                     }
                 },
                 Action::RequestBlockAndHeader(req) => {
@@ -171,21 +106,25 @@ pub mod testing {
                             mock_block.metadata,
                             TEST_VERSIONS.test.base,
                         );
-                        self.consensus_tx
-                            .send(ConsensusEvent::HeaderCreated(req.view, header))
-                            .await
-                            .unwrap();
+                        self.consensus
+                            .apply(
+                                ConsensusInput::HeaderCreated(req.view, header),
+                                &mut self.outbox,
+                            )
+                            .await;
                     }
 
-                    self.consensus_tx
-                        .send(ConsensusEvent::BlockBuilt(
-                            req.view,
-                            req.epoch,
-                            mock_block.block,
-                            mock_block.metadata,
-                        ))
-                        .await
-                        .unwrap();
+                    self.consensus
+                        .apply(
+                            ConsensusInput::BlockBuilt(
+                                req.view,
+                                req.epoch,
+                                mock_block.block,
+                                mock_block.metadata,
+                            ),
+                            &mut self.outbox,
+                        )
+                        .await;
                 },
                 Action::RequestVidDisperse(view, epoch, block, metadata) => {
                     let vid_disperse = VidDisperse::calculate_vid_disperse(
@@ -203,10 +142,12 @@ pub mod testing {
                     let VidDisperse::V2(vid) = vid_disperse.disperse else {
                         panic!("VidDisperse is not a V2");
                     };
-                    self.consensus_tx
-                        .send(ConsensusEvent::VidDisperseCreated(*view, vid))
-                        .await
-                        .unwrap();
+                    self.consensus
+                        .apply(
+                            ConsensusInput::VidDisperseCreated(*view, vid),
+                            &mut self.outbox,
+                        )
+                        .await;
                 },
                 Action::RequestProposal(_view, _commitment) => {},
                 Action::RequestDRB(_drb_input) => {},

@@ -4,13 +4,14 @@ use async_lock::RwLock;
 use committable::{Commitment, Committable};
 use futures::StreamExt;
 use hotshot::{
-    traits::implementations::MemoryNetwork,
+    traits::{BlockPayload, ValidatedState, implementations::MemoryNetwork},
     types::{BLSPrivKey, BLSPubKey, SchnorrPubKey},
 };
 use hotshot_example_types::{
-    block_types::TestBlockPayload,
+    block_types::{TestBlockPayload, TestMetadata},
     membership::{static_committee::StaticStakeTable, strict_membership::StrictMembership},
     node_types::{MemoryImpl, TEST_VERSIONS, TestTypes},
+    state_types::TestValidatedState,
     storage_types::TestStorage,
 };
 use hotshot_testing::{
@@ -19,7 +20,8 @@ use hotshot_testing::{
 };
 use hotshot_types::{
     data::{
-        EpochNumber, Leaf2, QuorumProposalWrapper, VidDisperse2, VidDisperseShare2, ViewNumber,
+        EpochNumber, Leaf2, QuorumProposal2, QuorumProposalWrapper, VidCommitment, VidDisperse2,
+        VidDisperseShare2, ViewNumber, vid_commitment,
     },
     epoch_membership::EpochMembershipCoordinator,
     message::Proposal,
@@ -28,17 +30,19 @@ use hotshot_types::{
         QuorumVote2, TimeoutData2, TimeoutVote2, ViewSyncFinalizeData2, ViewSyncFinalizeVote2,
     },
     traits::{
-        block_contents::BlockHeader,
+        EncodeBytes,
+        block_contents::{BlockHeader, BuilderFee},
         election::Membership,
         network::TestableNetworkingImplementation,
         signature_key::{SignatureKey, StakeTableEntryType},
     },
+    utils::BuilderCommitment,
 };
 
 use crate::{
-    events::{Event, Update},
-    helpers::upgrade_lock,
-    message::{Certificate1, Certificate2, ConsensusMessage, ProposalMessage, Vote2, Vote2Data},
+    events::{ConsensusInput, StateResponse},
+    helpers::{proposal_commitment, upgrade_lock},
+    message::{Certificate1, Certificate2, ProposalMessage, Vote2, Vote2Data},
 };
 
 #[allow(dead_code)]
@@ -82,56 +86,39 @@ impl TestView {
         self.vid_disperse.payload_commitment
     }
 
-    /// Build an Event for a proposal (routed through the coordinator).
-    pub fn proposal_update(&self, recipient_key: &BLSPubKey) -> Event<TestTypes> {
-        Event::Update(Update::MessageReceived(ConsensusMessage::Proposal(
-            self.proposal_message(recipient_key),
-        )))
+    /// Build a ConsensusInput for a proposal.
+    pub fn proposal_input(&self, recipient_key: &BLSPubKey) -> ConsensusInput<TestTypes> {
+        ConsensusInput::Proposal(self.proposal_message(recipient_key))
     }
 
-    /// Build an Event for block reconstructed.
-    pub fn block_reconstructed_update(&self) -> Event<TestTypes> {
-        Event::Update(Update::BlockReconstructed(
-            self.view_number,
-            TestBlockPayload::genesis(),
-            self.vid_commitment(),
-        ))
+    /// Build a ConsensusInput for block reconstructed.
+    pub fn block_reconstructed_input(&self) -> ConsensusInput<TestTypes> {
+        ConsensusInput::BlockReconstructed(self.view_number, self.vid_commitment())
     }
 
-    /// Build an Event for Certificate1.
-    pub fn cert1_update(&self) -> Event<TestTypes> {
-        Event::Update(Update::MessageReceived(ConsensusMessage::Certificate1(
-            self.cert1.clone(),
-            self.leader_public_key,
-        )))
+    /// Build a ConsensusInput for Certificate1.
+    pub fn cert1_input(&self) -> ConsensusInput<TestTypes> {
+        ConsensusInput::Certificate1(self.cert1.clone())
     }
 
-    /// Build an Event for Certificate2.
-    pub fn cert2_update(&self) -> Event<TestTypes> {
-        Event::Update(Update::MessageReceived(ConsensusMessage::Certificate2(
-            self.cert2.clone(),
-            self.leader_public_key,
-        )))
+    /// Build a ConsensusInput for Certificate2.
+    pub fn cert2_input(&self) -> ConsensusInput<TestTypes> {
+        ConsensusInput::Certificate2(self.cert2.clone())
     }
 
-    /// Build an Event for a timeout certificate.
+    /// Build a ConsensusInput for a timeout certificate.
     #[allow(dead_code)]
-    pub fn timeout_cert_update(&self) -> Event<TestTypes> {
-        Event::Update(Update::TimeoutCertificateReceived(
-            self.timeout_cert.clone(),
-        ))
+    pub fn timeout_cert_input(&self) -> ConsensusInput<TestTypes> {
+        ConsensusInput::TimeoutCertificate(self.timeout_cert.clone())
     }
 
-    /// Build an Event for a view sync certificate.
+    /// Build a ConsensusInput for a view sync certificate.
     #[allow(dead_code)]
-    pub fn view_sync_cert_update(&self) -> Event<TestTypes> {
-        Event::Update(Update::ViewSyncCertificateReceived(
-            self.view_sync_cert.clone(),
-        ))
+    pub fn view_sync_cert_input(&self) -> ConsensusInput<TestTypes> {
+        ConsensusInput::ViewSyncCertificate(self.view_sync_cert.clone())
     }
 }
 
-#[allow(dead_code)]
 pub struct TestData {
     pub views: Vec<TestView>,
 }
@@ -259,6 +246,68 @@ pub fn key_map() -> BTreeMap<BLSPubKey, BLSPrivKey> {
         map.insert(public_key, private_key);
     }
     map
+}
+
+/// A mock block with its derived commitments and metadata.
+pub struct MockBlock {
+    pub block: TestBlockPayload,
+    pub metadata: TestMetadata,
+    pub payload_commitment: VidCommitment,
+    pub builder_commitment: BuilderCommitment,
+}
+
+impl MockBlock {
+    pub fn new() -> Self {
+        let block = TestBlockPayload::genesis();
+        let metadata = TestMetadata {
+            num_transactions: 0,
+        };
+        let payload_commitment = vid_commitment(
+            &block.encode(),
+            &metadata.encode(),
+            10,
+            TEST_VERSIONS.test.base,
+        );
+        let builder_commitment =
+            <TestBlockPayload as BlockPayload<TestTypes>>::builder_commitment(&block, &metadata);
+        Self {
+            block,
+            metadata,
+            payload_commitment,
+            builder_commitment,
+        }
+    }
+}
+
+pub fn mock_builder_fee() -> BuilderFee<TestTypes> {
+    use hotshot_types::traits::signature_key::BuilderSignatureKey;
+    let (builder_key, builder_private_key) =
+        <hotshot_types::signature_key::BuilderKey as BuilderSignatureKey>::generated_from_seed_indexed([0; 32], 0);
+    let builder_signature =
+        <hotshot_types::signature_key::BuilderKey as BuilderSignatureKey>::sign_builder_message(
+            &builder_private_key,
+            &[0u8],
+        )
+        .unwrap();
+    BuilderFee {
+        fee_amount: 0,
+        fee_account: builder_key,
+        fee_signature: builder_signature,
+    }
+}
+
+pub fn state_verified_input(
+    proposal: &QuorumProposal2<TestTypes>,
+    view: ViewNumber,
+) -> ConsensusInput<TestTypes> {
+    let commitment = proposal_commitment(proposal);
+    let state =
+        <TestValidatedState as ValidatedState<TestTypes>>::from_header(&proposal.block_header);
+    ConsensusInput::StateVerified(StateResponse {
+        view,
+        commitment,
+        state: Arc::new(state),
+    })
 }
 
 fn extract_vid_shares(disperse: &VidDisperse2<TestTypes>) -> Vec<VidDisperseShare2<TestTypes>> {

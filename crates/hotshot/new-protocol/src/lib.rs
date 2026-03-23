@@ -23,5 +23,9 @@ mod events;
 #[allow(dead_code, unused_variables)]
 mod helpers;
 
+mod outbox;
+
 #[cfg(test)]
 mod tests;
+
+pub use outbox::Outbox;
