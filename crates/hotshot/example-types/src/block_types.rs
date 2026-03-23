@@ -126,6 +126,10 @@ impl Committable for TestTransaction {
 }
 
 impl Transaction for TestTransaction {
+    fn new(_namespace: u64, payload: Vec<u8>) -> Self {
+        Self(payload)
+    }
+
     fn minimum_block_size(&self) -> u64 {
         // the estimation on transaction size is the length of the transaction
         self.0.len() as u64

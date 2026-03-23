@@ -6015,6 +6015,7 @@ dependencies = [
  "jf-advz",
  "lru 0.12.5",
  "rand 0.8.5",
+ "rand_chacha 0.3.1",
  "serde",
  "sha2 0.10.9",
  "surf-disco",

@@ -41,6 +41,8 @@ pub trait EncodeBytes {
 pub trait Transaction:
     Clone + Serialize + DeserializeOwned + Debug + PartialEq + Eq + Sync + Send + Committable + Hash
 {
+    /// Create a new transaction
+    fn new(namespace: u64, payload: Vec<u8>) -> Self;
     /// The function to estimate the transaction size
     /// It takes in the transaction itself and a boolean indicating if the transaction adds a new namespace
     /// Since each new namespace adds overhead
