@@ -1,7 +1,14 @@
 use hotshot::types::BLSPubKey;
 use hotshot_types::traits::signature_key::SignatureKey;
 
-use super::{common::test_utils::TestData, *};
+use super::common::{
+    assertions::{
+        count_vote1, has_leaf_decided, has_proposal, has_request_block_and_header, has_vote1,
+        has_vote2, node_index_for_key,
+    },
+    harness::TestHarness,
+    utils::TestData,
+};
 use crate::events::{ConsensusOutput, Event};
 
 /// Integration: proposal accepted and Vote1 sent via real state validation.

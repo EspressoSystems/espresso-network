@@ -13,7 +13,7 @@ pub mod testing {
         consensus::Consensus,
         events::*,
         helpers::upgrade_lock,
-        tests::test_utils::{MockBlock, mock_builder_fee, state_verified_input},
+        tests::common::utils::{MockBlock, mock_builder_fee, state_verified_input},
     };
 
     /// MockCoordinator is for testing the various different modules the coordinator will

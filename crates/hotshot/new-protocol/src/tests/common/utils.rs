@@ -119,7 +119,6 @@ impl TestView {
     }
 }
 
-#[allow(dead_code)]
 pub struct TestData {
     pub views: Vec<TestView>,
 }

@@ -378,7 +378,7 @@ mod test {
     use crate::{
         events::{ConsensusOutput, Event, HeaderRequest, StateRequest},
         helpers::proposal_commitment,
-        tests::test_utils::{TestData, TestView},
+        tests::common::utils::{TestData, TestView},
     };
 
     /// Build a StateRequest from a TestView.
