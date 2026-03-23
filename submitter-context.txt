@@ -1,0 +1,259 @@
+# Espresso Submitter Context
+
+## Overview
+
+The `./espresso/submitter` package implements submission of Nitro L2 messages to the Espresso
+network for fast finality. It provides two distinct implementations behind a shared interface,
+plus adapter/worker types for composability.
+
+**Files (2,262 total lines):**
+
+| File | Purpose |
+|------|---------|
+| `submitter.go` | Interface definitions, shared config, functional options, validation |
+| `polling_espresso_submitter.go` | Legacy polling-based implementation (database-backed, 3 goroutines) |
+| `multi_worker_queue_espresso_submitter.go` | Modern multi-worker queue implementation (scalable worker pools) |
+| `nitro_message_to_espresso_transaction_adapter.go` | Adapter: bridges Nitro messages → Espresso transactions with bundling |
+| `submit_transaction_worker.go` | Worker for submitting individual transactions to Espresso |
+| `transaction_included_worker.go` | Worker for verifying transaction inclusion in Espresso blocks |
+
+---
+
+## Interfaces
+
+### `MessageGetter` (submitter.go:21-23)
+
+```go
+type MessageGetter interface {
+    GetMessage(seqNum arbutil.MessageIndex) (*arbostypes.MessageWithMetadata, error)
+}
+```
+
+Abstracts retrieval of Nitro messages by sequence number. Both `PollingEspressoSubmitter`
+and `NitroMessageToEspressoTransactionAdapter` depend on this. Enables tests to inject
+synthetic message streams without blockchain access.
+
+### `EspressoSubmitter` (submitter.go:25-32)
+
+```go
+type EspressoSubmitter interface {
+    Start(sw *stopwaiter.StopWaiter) error
+    NotifyNewPendingMessages(pos arbutil.MessageIndex, messages []arbostypes.MessageWithMetadataAndBlockInfo) error
+    GetKeyManager() espresso_key_manager.EspressoKeyManagerInterface
+    Init() error
+    RegisterService() error
+    EnqueuePendingTransaction(pos []arbutil.MessageIndex) error
+}
+```
+
+The public contract for all submitter implementations. Callers (e.g., `batch_poster.go`,
+`arbnode/espresso_caff_node.go`) depend only on this interface, never on concrete types.
+
+**Lifecycle order**: `Init()` → `RegisterService()` → `Start(sw)`
+
+**Implementations (both verified at compile time):**
+- `PollingEspressoSubmitter` (polling_espresso_submitter.go:72)
+- `NitroMessageToEspressoTransactionAdapter` (nitro_message_to_espresso_transaction_adapter.go:45)
+
+---
+
+## Configuration: Functional Options Pattern
+
+`EspressoSubmitterConfig` (submitter.go:36-78) is constructed via functional options:
+
+```go
+type EspressoSubmitterConfigOption func(*EspressoSubmitterConfig)
+
+submitter := NewPollingEspressoSubmitter(
+    WithChainID(1),
+    WithMessageGetter(getter),
+    WithEspressoClient(client),
+    WithDb(db),
+    // ...
+)
+```
+
+Key config fields:
+- **Client Dependencies**: `EspressoClient`, `LightClientReader`, `KeyManager`, `MessageGetter`, `Db`
+- **Timing**: `EspressoTxnsMonitoringInterval`, `EspressoTxnsResubmissionInterval`, `EspressoTxnSendingInterval`
+- **Limits**: `EspressoMaxTransactionSize`, `ResubmitEspressoTxDeadline`
+- **Multi-worker scaling**: `NumberOfSubmitTransactionWorkers`, `NumberOfTransactionIncludedWorkers`, queue sizes
+- **TEE attestation**: `UserDataAttestationFile`, `QuoteFile`
+- **Initial state**: `InitialFinalizedSequencerMessageCount`, `InitialNitroMessageAvailable`, `InitialNitroMessageToSubmit`
+
+Validation (submitter.go:371-413) enforces required fields and range checks at construction
+time (e.g., `EspressoTxnsMonitoringInterval <= 2s`), preventing silent misconfiguration.
+
+`WithMultipleOptions` (submitter.go:135) allows composing option slices, useful for
+building shared base configs in tests.
+
+---
+
+## Implementation 1: PollingEspressoSubmitter (Legacy)
+
+**Key dependencies:**
+- `MessageGetter` (interface)
+- `espresso_client.EspressoClient` (SDK interface)
+- `espresso_key_manager.EspressoKeyManagerInterface`
+- `ethdb.Database` for RLP-encoded persistence
+
+**Concurrency model**: 3 polling loops started in `Start()`:
+
+```
+Loop 1: submitTransactionsToEspresso()
+  - Reads pending positions from DB (_espressoPendingTxnsPos)
+  - Fetches messages via MessageGetter
+  - Builds payload via arbutil.BuildRawHotShotPayload
+  - Signs via espressoKeyManager.SignPayload
+  - Submits to Espresso via espressoClient.SubmitTransaction
+  - Stores submitted txns + hash in DB (_espressoSubmittedTxns)
+
+Loop 2: pollSubmittedTransactionForFinality()
+  - Checks transaction inclusion via FetchExplorerTransactionByHash
+  - Verifies payload matches FetchTransactionsInBlock
+  - Updates DB on confirmation
+
+Loop 3: pollToResubmitEspressoTransactions()
+  - Detects unconfirmed transactions past ResubmitEspressoTxDeadline
+  - Resubmits via re-enqueue to pending positions
+```
+
+**Database persistence keys:**
+- `_espressoPendingTxnsPos`: `[]arbutil.MessageIndex` (positions pending submission)
+- `_espressoSubmittedTxns`: `[]arbutil.SubmittedEspressoTx` (hash, positions, payload, timestamp)
+
+Persistence enables recovery after restart and provides an audit trail.
+
+**Resubmission deadline logic** uses `lastSubmitFailureAt` with a grace period before
+triggering resubmission, preventing immediate retry storms.
+
+---
+
+## Implementation 2: NitroMessageToEspressoTransactionAdapter + MultiWorkerQueueEspressoSubmitter (Modern)
+
+The modern path composes two types: an adapter that handles message bundling and
+a multi-worker queue that handles parallel submission + verification.
+
+### NitroMessageToEspressoTransactionAdapter
+
+Facade over `MultiWorkerQueueEspressoSubmitter`. Owns:
+- `MessageGetter` for fetching messages
+- `availableTransaction chan arbutil.MessageIndex` for buffering incoming indices
+- `sendingInterval` for timer-based message bundling
+- `EspressoKeyManagerInterface` for signing
+- TEE attestation files (`userDataAttestationFile`, `quoteFile`)
+
+**bundleTransactionsProcess goroutine** (nitro_message_to_espresso_transaction_adapter.go:114):
+Receives message indices from the channel and uses a timer to batch them into a single
+Espresso transaction payload, then delegates to `MultiWorkerQueueEspressoSubmitter.SubmitTransaction`.
+
+### MultiWorkerQueueEspressoSubmitter
+
+Scalable two-phase worker pool. Phases can be scaled independently:
+
+**Double-channel worker registration pattern:**
+```go
+// Worker registers interest:
+w.submitTxnsJobQueue <- ch   // register
+job, ok := <-ch              // wait for assignment
+
+// Scheduler dispatches:
+worker := <-w.submitTxnsJobQueue  // get available worker
+worker <- job                      // send job
+```
+Workers naturally self-balance; no polling overhead.
+
+**Phase 1 — Submit Transaction:**
+- `submitTransactionScheduler` goroutine routes jobs to available `submitTransactionWorker`s
+- Workers apply exponential-style backoff: `attempt * delayPenalty` before retry
+- On success: advances to Phase 2
+- On failure: requeues with incremented attempt count
+
+**Phase 2 — Transaction Included:**
+- `transactionIncludedScheduler` goroutine routes jobs to available `transactionIncludedQueueWorker`s
+- Workers call `FetchTransactionByHash` then `FetchTransactionsInBlock` + `doesTransactionExistInBlock`
+- On success: job complete
+- On timeout > `resubmissionDeadline`: requeue to Phase 1
+- On failure: requeue with incremented attempt count
+
+**Graceful shutdown**: `drainSubmitTransactionWorkers` and `drainTransactionIncludedWorkers`
+close channels to signal goroutines to exit cleanly.
+
+**Goroutine count**: 3 + 2N (where N = workers per phase) + 4 scheduler/response goroutines.
+
+---
+
+## Cross-Cutting Concerns
+
+### Message Type Discrimination
+
+Both implementations detect delayed L1→L2 messages and exclude their payload from
+Espresso submission (polling_espresso_submitter.go:59-66):
+
+```go
+if prevMsg.DelayedMessagesRead+1 == msg.DelayedMessagesRead {
+    // Delayed message from L1 — clear L2 payload before bundling
+    msg.Message.L2msg = []byte{}
+}
+```
+
+### TEE Attestation Strategy (NitroMessageToEspressoTransactionAdapter.Init)
+
+```go
+switch teeType := n.keyManager.TeeType(); teeType {
+case espresso_key_manager.SGX:   return n.keyManager.InitRegistration(n.getAttestationQuote)
+case espresso_key_manager.NITRO: return n.keyManager.InitRegistration(n.getNitroAttestation)
+case espresso_key_manager.TESTS: return n.keyManager.InitRegistration(n.getAttestationQuote)
+}
+```
+
+Supports SGX enclaves, AWS Nitro enclaves, and a test mode that skips real attestation.
+
+### Custom Error Types
+
+16 typed errors (e.g., `ErrorSubmitTransactionFailed`, `ErrorTransactionNotFoundInBlock`,
+`ErrorWorkerQueuesAreFull`) enable type-safe error handling in callers and exhaustive
+testing of error paths.
+
+---
+
+## Interface-Driven Composability and Testability
+
+The design achieves loose coupling through three strategies:
+
+1. **Interface injection for all external dependencies**: `MessageGetter`, `EspressoClient`,
+   `EspressoKeyManagerInterface` are all interfaces. Tests can inject mocks (see
+   `system_tests/espresso/transaction_streamer/mock_transaction_streamer_environment.go`)
+   without any blockchain or Espresso network.
+
+2. **Compile-time interface assertions**: Both concrete types assert `EspressoSubmitter`
+   compliance at compile time, ensuring the interface stays in sync.
+
+3. **Functional options for test configuration**: Tests can build minimal configs by
+   only providing the options they need; defaults cover the rest. `WithMultipleOptions`
+   enables a shared base config reused across multiple test cases.
+
+The two implementations are interchangeable behind `EspressoSubmitter`: callers in
+`batch_poster.go` and `arbnode/espresso_caff_node.go` never reference the concrete types.
+
+---
+
+## Dependency Graph
+
+```
+EspressoSubmitter (interface)
+├── PollingEspressoSubmitter
+│   ├── MessageGetter (interface)
+│   ├── EspressoClient (SDK interface)
+│   ├── EspressoKeyManagerInterface
+│   └── ethdb.Database
+│
+└── NitroMessageToEspressoTransactionAdapter
+    ├── MessageGetter (interface)
+    ├── EspressoKeyManagerInterface
+    ├── ethdb.Database
+    └── MultiWorkerQueueEspressoSubmitter
+        ├── EspressoClient (SDK interface)
+        ├── submitTransactionWorker × N
+        └── transactionIncludedQueueWorker × N
+```
