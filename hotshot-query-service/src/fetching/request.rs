@@ -18,12 +18,15 @@ use alloy::primitives::{FixedBytes, Keccak256};
 use derive_more::{From, Into};
 use hotshot_types::{
     data::{VidCommitment, VidCommon},
-    traits::{block_contents::BlockHeader, node_implementation::NodeType},
+    traits::node_implementation::NodeType,
 };
 
 use crate::{
     Payload,
-    availability::{LeafHash, LeafQueryData, QcHash},
+    availability::{
+        BlockQueryData, LeafHash, LeafQueryData, QcHash, QueryableHeader, VidCommonQueryData,
+    },
+    fetching::NonEmptyRange,
 };
 
 /// A request for a resource.
@@ -59,14 +62,14 @@ pub struct RangeRequest {
 
 impl RangeRequest {
     /// A request for a range of data corresponding to a range of headers.
-    pub fn from_headers<Types: NodeType>(headers: &[impl BlockHeader<Types>]) -> Self {
+    pub fn from_headers<Types: NodeType>(
+        headers: &NonEmptyRange<impl QueryableHeader<Types>>,
+    ) -> Self {
         let expected_hash =
             Self::hash_payloads(headers.iter().map(|header| header.payload_commitment()));
-        let start = headers[0].block_number();
-        let end = start + (headers.len() as u64);
         Self {
-            start,
-            end,
+            start: headers.start(),
+            end: headers.end(),
             expected_hash,
         }
     }
@@ -83,16 +86,18 @@ impl RangeRequest {
     }
 }
 
-/// A request for a consecutive range of payloads.
+/// A request for a consecutive range of blocks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, From, Into)]
-pub struct PayloadRangeRequest(RangeRequest);
+pub struct BlockRangeRequest(RangeRequest);
 
-impl<Types: NodeType> Request<Types> for PayloadRangeRequest {
-    type Response = Vec<Payload<Types>>;
+impl<Types: NodeType> Request<Types> for BlockRangeRequest {
+    type Response = NonEmptyRange<BlockQueryData<Types>>;
 }
 
-impl PayloadRangeRequest {
-    pub fn from_headers<Types: NodeType>(headers: &[impl BlockHeader<Types>]) -> Self {
+impl BlockRangeRequest {
+    pub fn from_headers<Types: NodeType>(
+        headers: &NonEmptyRange<impl QueryableHeader<Types>>,
+    ) -> Self {
         RangeRequest::from_headers(headers).into()
     }
 }
@@ -110,11 +115,13 @@ impl<Types: NodeType> Request<Types> for VidCommonRequest {
 pub struct VidCommonRangeRequest(RangeRequest);
 
 impl<Types: NodeType> Request<Types> for VidCommonRangeRequest {
-    type Response = Vec<VidCommon>;
+    type Response = NonEmptyRange<VidCommonQueryData<Types>>;
 }
 
 impl VidCommonRangeRequest {
-    pub fn from_headers<Types: NodeType>(headers: &[impl BlockHeader<Types>]) -> Self {
+    pub fn from_headers<Types: NodeType>(
+        headers: &NonEmptyRange<impl QueryableHeader<Types>>,
+    ) -> Self {
         RangeRequest::from_headers(headers).into()
     }
 }
@@ -165,5 +172,5 @@ pub struct LeafRangeRequest<Types: NodeType> {
 }
 
 impl<Types: NodeType> Request<Types> for LeafRangeRequest<Types> {
-    type Response = Vec<LeafQueryData<Types>>;
+    type Response = NonEmptyRange<LeafQueryData<Types>>;
 }

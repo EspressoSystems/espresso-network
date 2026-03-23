@@ -32,9 +32,12 @@ use super::Provider;
 use crate::{
     Error, Payload,
     availability::{BlockQueryData, LeafQueryData, VidCommonQueryData},
-    fetching::request::{
-        LeafRangeRequest, LeafRequest, PayloadRangeRequest, PayloadRequest, RangeRequest,
-        VidCommonRangeRequest, VidCommonRequest,
+    fetching::{
+        NonEmptyRange,
+        request::{
+            BlockRangeRequest, LeafRangeRequest, LeafRequest, PayloadRequest, RangeRequest,
+            VidCommonRangeRequest, VidCommonRequest,
+        },
     },
     types::HeightIndexed,
 };
@@ -93,8 +96,8 @@ impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
 
     pub async fn fetch_payload_range<Types: NodeType>(
         &self,
-        req: PayloadRangeRequest,
-    ) -> anyhow::Result<Vec<Payload<Types>>> {
+        req: BlockRangeRequest,
+    ) -> anyhow::Result<NonEmptyRange<BlockQueryData<Types>>> {
         let req = RangeRequest::from(req);
 
         // Fetch the payload and the VID common data. We need the common data to recompute the VID
@@ -102,7 +105,7 @@ impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
         // commitments.
         let blocks = self
             .client
-            .get::<Vec<BlockQueryData<Types>>>(&format!(
+            .get::<NonEmptyRange<BlockQueryData<Types>>>(&format!(
                 "availability/block/{}/{}",
                 req.start, req.end
             ))
@@ -111,7 +114,7 @@ impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
             .context("fetching blocks")?;
         let common = self
             .client
-            .get::<Vec<VidCommonQueryData<Types>>>(&format!(
+            .get::<NonEmptyRange<VidCommonQueryData<Types>>>(&format!(
                 "availability/vid/common/{}/{}",
                 req.start, req.end
             ))
@@ -120,14 +123,16 @@ impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
             .context("fetching VID common")?;
 
         ensure!(
-            blocks.len() == (req.end - req.start) as usize,
-            "wrong number of blocks ({})",
-            blocks.len(),
+            blocks.start() == req.start && blocks.end() == req.end,
+            "wrong block range ({}..{})",
+            blocks.start(),
+            blocks.end()
         );
         ensure!(
-            common.len() == (req.end - req.start) as usize,
-            "wrong number of VID common ({})",
-            common.len(),
+            common.start() == req.start && common.end() == req.end,
+            "wrong VID common range (expected {}..{})",
+            common.start(),
+            common.end()
         );
 
         let commits = blocks
@@ -142,7 +147,7 @@ impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
             "server returned blocks with wrong payload hash ({hash}, commits {commits:?})",
         );
 
-        Ok(blocks.into_iter().map(|block| block.payload).collect())
+        Ok(blocks)
     }
 
     fn handle_result<R: Debug, T>(&self, req: R, res: anyhow::Result<T>) -> Option<T> {
@@ -167,12 +172,11 @@ where
 }
 
 #[async_trait]
-impl<Types, Ver: StaticVersionType> Provider<Types, PayloadRangeRequest>
-    for QueryServiceProvider<Ver>
+impl<Types, Ver: StaticVersionType> Provider<Types, BlockRangeRequest> for QueryServiceProvider<Ver>
 where
     Types: NodeType,
 {
-    async fn fetch(&self, req: PayloadRangeRequest) -> Option<Vec<Payload<Types>>> {
+    async fn fetch(&self, req: BlockRangeRequest) -> Option<NonEmptyRange<BlockQueryData<Types>>> {
         self.handle_result(req, self.fetch_payload_range::<Types>(req).await)
     }
 }
@@ -229,7 +233,7 @@ impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
         &self,
         req: LeafRequest<Types>,
     ) -> anyhow::Result<LeafQueryData<Types>> {
-        let mut leaf = self
+        let leaf = self
             .client
             .get::<LeafQueryData<Types>>(&format!("availability/leaf/{}", req.height))
             .send()
@@ -252,22 +256,16 @@ impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
             leaf.qc().commit()
         );
 
-        // There is a potential DOS attack where the peer sends us a leaf with the full
-        // payload in it, which uses redundant resources in the database, since we fetch and
-        // store payloads separately. We can defend ourselves by simply dropping the payload
-        // if present.
-        leaf.leaf.unfill_block_payload();
-
         Ok(leaf)
     }
 
     pub async fn fetch_leaf_range<Types: NodeType>(
         &self,
         req: LeafRangeRequest<Types>,
-    ) -> anyhow::Result<Vec<LeafQueryData<Types>>> {
-        let mut leaves = self
+    ) -> anyhow::Result<NonEmptyRange<LeafQueryData<Types>>> {
+        let leaves = self
             .client
-            .get::<Vec<LeafQueryData<Types>>>(&format!(
+            .get::<NonEmptyRange<LeafQueryData<Types>>>(&format!(
                 "availability/leaf/{}/{}",
                 req.start, req.end
             ))
@@ -276,21 +274,16 @@ impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
             .context("fetching leaf chain")?;
 
         ensure!(
-            leaves.len() == (req.end - req.start) as usize,
-            "server returned wrong number of leaves ({})",
-            leaves.len()
+            leaves.start() == req.start && leaves.end() == req.end,
+            "server returned wrong range of leaves ({}..{})",
+            leaves.start(),
+            leaves.end()
         );
 
         // Verify hash chaining.
         let mut expected_leaf = req.last_leaf;
         let mut expected_qc = req.last_qc;
-        for leaf in leaves.iter_mut().rev() {
-            // There is a potential DOS attack where the peer sends us a leaf with the full payload
-            // in it, which uses redundant resources in the database, since we fetch and store
-            // payloads separately. We can defend ourselves by simply dropping the payload if
-            // present.
-            leaf.leaf.unfill_block_payload();
-
+        for leaf in leaves.iter().rev() {
             let leaf_hash = leaf.hash();
             let qc_hash = leaf.qc().commit();
             ensure!(
@@ -328,7 +321,10 @@ impl<Types, Ver: StaticVersionType> Provider<Types, LeafRangeRequest<Types>>
 where
     Types: NodeType,
 {
-    async fn fetch(&self, req: LeafRangeRequest<Types>) -> Option<Vec<LeafQueryData<Types>>> {
+    async fn fetch(
+        &self,
+        req: LeafRangeRequest<Types>,
+    ) -> Option<NonEmptyRange<LeafQueryData<Types>>> {
         self.handle_result(req, self.fetch_leaf_range(req).await)
     }
 }
@@ -359,11 +355,11 @@ impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
     pub async fn fetch_vid_common_range<Types: NodeType>(
         &self,
         req: VidCommonRangeRequest,
-    ) -> anyhow::Result<Vec<VidCommon>> {
+    ) -> anyhow::Result<NonEmptyRange<VidCommonQueryData<Types>>> {
         let req = RangeRequest::from(req);
         let common = self
             .client
-            .get::<Vec<VidCommonQueryData<Types>>>(&format!(
+            .get::<NonEmptyRange<VidCommonQueryData<Types>>>(&format!(
                 "availability/vid/common/{}/{}",
                 req.start, req.end
             ))
@@ -372,9 +368,10 @@ impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
             .context("fetching VID common")?;
 
         ensure!(
-            common.len() == (req.end - req.start) as usize,
-            "server returned wrong number of VID common ({})",
-            common.len()
+            common.start() == req.start && common.end() == req.end,
+            "server returned wrong VID common ({}..{})",
+            common.start(),
+            common.end()
         );
 
         let commits = common
@@ -397,7 +394,7 @@ impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
             "server returned wrong VID common (hash {hash}, commits {commits:?})"
         );
 
-        Ok(common.into_iter().map(|common| common.common).collect())
+        Ok(common)
     }
 }
 
@@ -417,7 +414,10 @@ impl<Types, Ver: StaticVersionType> Provider<Types, VidCommonRangeRequest>
 where
     Types: NodeType,
 {
-    async fn fetch(&self, req: VidCommonRangeRequest) -> Option<Vec<VidCommon>> {
+    async fn fetch(
+        &self,
+        req: VidCommonRangeRequest,
+    ) -> Option<NonEmptyRange<VidCommonQueryData<Types>>> {
         self.handle_result(req, self.fetch_vid_common_range::<Types>(req).await)
     }
 }
@@ -1391,6 +1391,7 @@ mod test {
                 )
                 .await;
                 leaf.leaf.block_header_mut().block_number = height;
+                leaf.qc.data.leaf_commit = leaf.hash();
                 Ok(leaf)
             }
             .boxed()
@@ -1412,6 +1413,7 @@ mod test {
                     .map(|i| {
                         let mut leaf = leaf.clone();
                         leaf.leaf.block_header_mut().block_number = i;
+                        leaf.qc.data.leaf_commit = leaf.hash();
                         leaf
                     })
                     .collect::<Vec<_>>();
@@ -1554,7 +1556,7 @@ mod test {
         // Payload range request.
         tracing::info!("fetch payload range");
         let err = provider
-            .fetch_payload_range::<MockTypes>(PayloadRangeRequest::from(RangeRequest {
+            .fetch_payload_range::<MockTypes>(BlockRangeRequest::from(RangeRequest {
                 start: 0,
                 end: 2,
                 expected_hash: RangeRequest::hash_payloads([
@@ -2593,9 +2595,9 @@ mod test {
             .take(5)
             .collect::<Vec<_>>()
             .await;
-        let payloads = network
+        let blocks = network
             .data_source()
-            .subscribe_payloads(0)
+            .subscribe_blocks(0)
             .await
             .take(5)
             .collect::<Vec<_>>()
@@ -2628,22 +2630,16 @@ mod test {
                 .unwrap(),
             leaves
         );
-        let headers = leaves
-            .iter()
-            .map(|leaf| leaf.header().clone())
-            .collect::<Vec<_>>();
-        tracing::info!(?headers, "fetch payload range");
+        let headers = NonEmptyRange::new(leaves.iter().map(|leaf| leaf.header().clone())).unwrap();
+        tracing::info!(?headers, "fetch block range");
         assert_eq!(
             ProviderTrait::<MockTypes, _>::fetch(
                 &provider,
-                PayloadRangeRequest::from(RangeRequest::from_headers::<MockTypes>(&headers))
+                BlockRangeRequest::from(RangeRequest::from_headers::<MockTypes>(&headers))
             )
             .await
             .unwrap(),
-            payloads
-                .into_iter()
-                .map(|payload| payload.data)
-                .collect::<Vec<_>>()
+            blocks
         );
         tracing::info!(?headers, "fetch VID common range");
         assert_eq!(
@@ -2653,7 +2649,7 @@ mod test {
             )
             .await
             .unwrap(),
-            vid.into_iter().map(|vid| vid.common).collect::<Vec<_>>()
+            vid
         );
     }
 }

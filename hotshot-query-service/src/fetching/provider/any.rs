@@ -19,11 +19,14 @@ use hotshot_types::{data::VidCommon, traits::node_implementation::NodeType};
 use super::{Provider, Request};
 use crate::{
     Payload,
-    availability::LeafQueryData,
+    availability::{BlockQueryData, LeafQueryData, VidCommonQueryData},
     data_source::AvailabilityProvider,
-    fetching::request::{
-        LeafRangeRequest, LeafRequest, PayloadRangeRequest, PayloadRequest, VidCommonRangeRequest,
-        VidCommonRequest,
+    fetching::{
+        NonEmptyRange,
+        request::{
+            BlockRangeRequest, LeafRangeRequest, LeafRequest, PayloadRequest,
+            VidCommonRangeRequest, VidCommonRequest,
+        },
     },
 };
 
@@ -48,7 +51,7 @@ where
 }
 
 type PayloadProvider<Types> = Arc<dyn DebugProvider<Types, PayloadRequest>>;
-type PayloadRangeProvider<Types> = Arc<dyn DebugProvider<Types, PayloadRangeRequest>>;
+type PayloadRangeProvider<Types> = Arc<dyn DebugProvider<Types, BlockRangeRequest>>;
 type LeafProvider<Types> = Arc<dyn DebugProvider<Types, LeafRequest<Types>>>;
 type LeafRangeProvider<Types> = Arc<dyn DebugProvider<Types, LeafRangeRequest<Types>>>;
 type VidCommonProvider<Types> = Arc<dyn DebugProvider<Types, VidCommonRequest>>;
@@ -117,11 +120,11 @@ where
 }
 
 #[async_trait]
-impl<Types> Provider<Types, PayloadRangeRequest> for AnyProvider<Types>
+impl<Types> Provider<Types, BlockRangeRequest> for AnyProvider<Types>
 where
     Types: NodeType,
 {
-    async fn fetch(&self, req: PayloadRangeRequest) -> Option<Vec<Payload<Types>>> {
+    async fn fetch(&self, req: BlockRangeRequest) -> Option<NonEmptyRange<BlockQueryData<Types>>> {
         any_fetch(&self.payload_range_providers, req).await
     }
 }
@@ -141,7 +144,10 @@ impl<Types> Provider<Types, LeafRangeRequest<Types>> for AnyProvider<Types>
 where
     Types: NodeType,
 {
-    async fn fetch(&self, req: LeafRangeRequest<Types>) -> Option<Vec<LeafQueryData<Types>>> {
+    async fn fetch(
+        &self,
+        req: LeafRangeRequest<Types>,
+    ) -> Option<NonEmptyRange<LeafQueryData<Types>>> {
         any_fetch(&self.leaf_range_providers, req).await
     }
 }
@@ -161,7 +167,10 @@ impl<Types> Provider<Types, VidCommonRangeRequest> for AnyProvider<Types>
 where
     Types: NodeType,
 {
-    async fn fetch(&self, req: VidCommonRangeRequest) -> Option<Vec<VidCommon>> {
+    async fn fetch(
+        &self,
+        req: VidCommonRangeRequest,
+    ) -> Option<NonEmptyRange<VidCommonQueryData<Types>>> {
         any_fetch(&self.vid_common_range_providers, req).await
     }
 }
@@ -197,7 +206,7 @@ where
     /// Add a sub-provider which fetches block ranges.
     pub fn with_block_range_provider<P>(mut self, provider: P) -> Self
     where
-        P: Provider<Types, PayloadRangeRequest> + Debug + 'static,
+        P: Provider<Types, BlockRangeRequest> + Debug + 'static,
     {
         self.payload_range_providers.push(Arc::new(provider));
         self

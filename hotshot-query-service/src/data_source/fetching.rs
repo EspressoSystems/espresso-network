@@ -104,7 +104,7 @@ use crate::{
     },
     data_source::fetching::{leaf::RangeRequest, vid::VidCommonRangeFetcher},
     explorer::{self, ExplorerDataSource},
-    fetching::{self, Provider, request},
+    fetching::{self, NonEmptyRange, Provider, request},
     merklized_state::{
         MerklizedState, MerklizedStateDataSource, MerklizedStateHeightPersistence, Snapshot,
     },
@@ -1471,7 +1471,7 @@ where
 
                         // Fetching the payload metadata is enough to trigger an active fetch of the
                         // corresponding leaf and the full block if they are missing.
-                        self.get::<Vec<BlockQueryData<Types>>>(RangeRequest {
+                        self.get::<NonEmptyRange<BlockQueryData<Types>>>(RangeRequest {
                             start: chunk.start as u64,
                             end: chunk.end as u64,
                         })
@@ -1498,7 +1498,7 @@ where
                         chunk_size,
                     ) {
                         tracing::info!(?chunk, "fetching missing VID chunk");
-                        self.get::<Vec<VidCommonQueryData<Types>>>(RangeRequest {
+                        self.get::<NonEmptyRange<VidCommonQueryData<Types>>>(RangeRequest {
                             start: chunk.start as u64,
                             end: chunk.end as u64,
                         })
@@ -2016,7 +2016,7 @@ pub trait AvailabilityProvider<Types: NodeType>:
     Provider<Types, request::LeafRequest<Types>>
     + Provider<Types, request::LeafRangeRequest<Types>>
     + Provider<Types, request::PayloadRequest>
-    + Provider<Types, request::PayloadRangeRequest>
+    + Provider<Types, request::BlockRangeRequest>
     + Provider<Types, request::VidCommonRequest>
     + Provider<Types, request::VidCommonRangeRequest>
     + Sync
@@ -2027,7 +2027,7 @@ impl<Types: NodeType, P> AvailabilityProvider<Types> for P where
     P: Provider<Types, request::LeafRequest<Types>>
         + Provider<Types, request::LeafRangeRequest<Types>>
         + Provider<Types, request::PayloadRequest>
-        + Provider<Types, request::PayloadRangeRequest>
+        + Provider<Types, request::BlockRangeRequest>
         + Provider<Types, request::VidCommonRequest>
         + Provider<Types, request::VidCommonRangeRequest>
         + Sync

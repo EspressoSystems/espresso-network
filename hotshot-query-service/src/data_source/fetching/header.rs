@@ -41,6 +41,7 @@ use crate::{
         },
         update::VersionedDataSource,
     },
+    fetching::NonEmptyRange,
 };
 
 impl<Types: NodeType> From<LeafQueryData<Types>> for HeaderQueryData<Types> {
@@ -202,21 +203,21 @@ where
         }
     }
 
-    pub(super) fn run_range(self, headers: Vec<Header<Types>>) {
+    pub(super) fn run_range(self, headers: NonEmptyRange<Header<Types>>) {
         match self {
             Self::Payload { fetcher } => {
                 tracing::info!(
                     "fetched leaves {}..{}, will now fetch payload",
-                    headers[0].block_number(),
-                    headers[headers.len() - 1].block_number() + 1,
+                    headers.start(),
+                    headers.end(),
                 );
                 fetch_block_range_with_headers(fetcher, headers);
             },
             Self::VidCommon { fetcher } => {
                 tracing::info!(
                     "fetched leaves {}..{}, will now VID common",
-                    headers[0].block_number(),
-                    headers[headers.len() - 1].block_number() + 1,
+                    headers.start(),
+                    headers.end(),
                 );
                 fetch_vid_common_range_with_headers(fetcher, headers);
             },
@@ -300,13 +301,9 @@ where
     P: AvailabilityProvider<Types>,
 {
     // Check if at least the headers are available in local storage.
-    match tx
-        .get_header_range((req.start as usize)..(req.end as usize))
-        .await
-        .and_then(|results| results.into_iter().collect())
-    {
-        Ok(headers) => {
-            callback.run_range(headers);
+    match <NonEmptyRange<LeafQueryData<Types>>>::load(tx, req).await {
+        Ok(leaves) => {
+            callback.run_range(leaves.as_ref_cloned());
             return Ok(());
         },
         Err(QueryError::Missing | QueryError::NotFound) => {

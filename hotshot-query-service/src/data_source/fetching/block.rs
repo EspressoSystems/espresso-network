@@ -25,7 +25,7 @@ use super::{
     header::{HeaderCallback, fetch_header_and_then},
 };
 use crate::{
-    Header, Payload, QueryResult,
+    Header, Payload, QueryError, QueryResult,
     availability::{
         BlockId, BlockQueryData, PayloadMetadata, PayloadQueryData, QueryableHeader,
         QueryablePayload,
@@ -39,8 +39,8 @@ use crate::{
         },
     },
     fetching::{
-        self, Callback,
-        request::{self, PayloadRangeRequest, PayloadRequest},
+        self, Callback, NonEmptyRange,
+        request::{self, BlockRangeRequest, PayloadRequest},
     },
     types::HeightIndexed,
 };
@@ -48,7 +48,7 @@ pub(super) type PayloadFetcher<Types, S, P> =
     fetching::Fetcher<request::PayloadRequest, PayloadCallback<Types, S, P>>;
 
 pub(super) type PayloadRangeFetcher<Types, S, P> =
-    fetching::Fetcher<request::PayloadRangeRequest, PayloadRangeCallback<Types, S, P>>;
+    fetching::Fetcher<request::BlockRangeRequest, BlockRangeCallback<Types, S, P>>;
 
 impl<Types> FetchRequest for BlockId<Types>
 where
@@ -388,7 +388,7 @@ where
 }
 
 #[async_trait]
-impl<Types> Fetchable<Types> for Vec<BlockQueryData<Types>>
+impl<Types> Fetchable<Types> for NonEmptyRange<BlockQueryData<Types>>
 where
     Types: NodeType,
     Header<Types>: QueryableHeader<Types>,
@@ -412,7 +412,7 @@ where
         .await;
 
         join_all(waits.into_iter().map(|wait| wait.into_future()))
-            .map(|options| options.into_iter().collect())
+            .map(|options| NonEmptyRange::new(options.into_iter().flatten()).ok())
             .boxed()
     }
 
@@ -435,24 +435,23 @@ where
     where
         S: AvailabilityStorage<Types>,
     {
-        storage
+        let blocks = storage
             .get_block_range((req.start as usize)..(req.end as usize))
             .await?
             .into_iter()
-            .collect()
+            .collect::<QueryResult<Vec<_>>>()?;
+        NonEmptyRange::new(blocks).map_err(|err| QueryError::Error {
+            message: format!("expected contiguous range, but: {err:#}"),
+        })
     }
 }
 
-impl<Types> Storable<Types> for Vec<BlockQueryData<Types>>
+impl<Types> Storable<Types> for NonEmptyRange<BlockQueryData<Types>>
 where
     Types: NodeType,
 {
     fn debug_name(&self) -> String {
-        format!(
-            "block range {}..{}",
-            self[0].height(),
-            self[self.len() - 1].height() + 1
-        )
+        format!("block range {}..{}", self.start(), self.end())
     }
 
     async fn notify(&self, notifiers: &Notifiers<Types>) {
@@ -476,7 +475,7 @@ where
 
 pub(super) fn fetch_block_range_with_headers<Types, S, P>(
     fetcher: Arc<Fetcher<Types, S, P>>,
-    headers: Vec<Header<Types>>,
+    headers: NonEmptyRange<Header<Types>>,
 ) where
     Types: NodeType,
     Header<Types>: QueryableHeader<Types>,
@@ -493,14 +492,13 @@ pub(super) fn fetch_block_range_with_headers<Types, S, P>(
     // Now that we have the header, we only need to retrieve the payload.
     tracing::info!(
         "spawned active fetch for payload range {}..{}",
-        headers[0].block_number(),
-        headers[headers.len() - 1].block_number() + 1,
+        headers.start(),
+        headers.end()
     );
     payload_range_fetcher.spawn_fetch(
-        PayloadRangeRequest::from_headers(&headers),
+        BlockRangeRequest::from_headers(&headers),
         fetcher.provider.clone(),
-        once(PayloadRangeCallback {
-            headers,
+        once(BlockRangeCallback {
             fetcher: fetcher.clone(),
         }),
     );
@@ -508,40 +506,34 @@ pub(super) fn fetch_block_range_with_headers<Types, S, P>(
 
 #[derive(Derivative)]
 #[derivative(Debug(bound = ""))]
-pub(super) struct PayloadRangeCallback<Types: NodeType, S, P> {
-    headers: Vec<Header<Types>>,
+pub(super) struct BlockRangeCallback<Types: NodeType, S, P> {
     #[derivative(Debug = "ignore")]
     fetcher: Arc<Fetcher<Types, S, P>>,
 }
 
-impl<Types: NodeType, S, P> PartialEq for PayloadRangeCallback<Types, S, P> {
+impl<Types: NodeType, S, P> PartialEq for BlockRangeCallback<Types, S, P> {
     fn eq(&self, other: &Self) -> bool {
         self.cmp(other).is_eq()
     }
 }
 
-impl<Types: NodeType, S, P> Eq for PayloadRangeCallback<Types, S, P> {}
+impl<Types: NodeType, S, P> Eq for BlockRangeCallback<Types, S, P> {}
 
-impl<Types: NodeType, S, P> Ord for PayloadRangeCallback<Types, S, P> {
-    fn cmp(&self, other: &Self) -> Ordering {
-        (
-            self.headers[0].block_number(),
-            self.headers[self.headers.len() - 1].block_number(),
-        )
-            .cmp(&(
-                other.headers[0].block_number(),
-                other.headers[other.headers.len() - 1].block_number(),
-            ))
+impl<Types: NodeType, S, P> Ord for BlockRangeCallback<Types, S, P> {
+    fn cmp(&self, _: &Self) -> Ordering {
+        // All callbacks for a given block range request do the same thing: just store the range.
+        Ordering::Equal
     }
 }
 
-impl<Types: NodeType, S, P> PartialOrd for PayloadRangeCallback<Types, S, P> {
+impl<Types: NodeType, S, P> PartialOrd for BlockRangeCallback<Types, S, P> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl<Types: NodeType, S, P> Callback<Vec<Payload<Types>>> for PayloadRangeCallback<Types, S, P>
+impl<Types: NodeType, S, P> Callback<NonEmptyRange<BlockQueryData<Types>>>
+    for BlockRangeCallback<Types, S, P>
 where
     Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
@@ -549,19 +541,8 @@ where
     for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
     P: AvailabilityProvider<Types>,
 {
-    async fn run(self, payloads: Vec<Payload<Types>>) {
-        tracing::info!(
-            "fetched payloads {}..{}",
-            self.headers[0].block_number(),
-            self.headers[self.headers.len() - 1].block_number() + 1
-        );
-
-        let data = self
-            .headers
-            .into_iter()
-            .zip(payloads)
-            .map(|(header, payload)| BlockQueryData::new(header, payload))
-            .collect::<Vec<_>>();
-        self.fetcher.store_and_notify(&data).await;
+    async fn run(self, blocks: NonEmptyRange<BlockQueryData<Types>>) {
+        tracing::info!("fetched blocks {}..{}", blocks.start(), blocks.end());
+        self.fetcher.store_and_notify(&blocks).await;
     }
 }

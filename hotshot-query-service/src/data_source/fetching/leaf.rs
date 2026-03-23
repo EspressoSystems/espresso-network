@@ -46,7 +46,7 @@ use crate::{
         },
     },
     fetching::{
-        self, Callback,
+        self, Callback, NonEmptyRange,
         request::{self, LeafRangeRequest},
     },
     types::HeightIndexed,
@@ -417,7 +417,8 @@ where
     }
 }
 
-impl<Types: NodeType, S, P> Callback<Vec<LeafQueryData<Types>>> for LeafCallback<Types, S, P>
+impl<Types: NodeType, S, P> Callback<NonEmptyRange<LeafQueryData<Types>>>
+    for LeafCallback<Types, S, P>
 where
     Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
@@ -426,31 +427,20 @@ where
     for<'a> S::ReadOnly<'a>: AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
     P: AvailabilityProvider<Types>,
 {
-    async fn run(self, leaves: Vec<LeafQueryData<Types>>) {
+    async fn run(self, leaves: NonEmptyRange<LeafQueryData<Types>>) {
         match self {
             Self::Leaf { fetcher } => {
-                tracing::info!(
-                    "fetched leaf range {}..{}",
-                    leaves[0].height(),
-                    leaves[leaves.len() - 1].height() + 1
-                );
-                for leaf in leaves {
-                    fetcher.store_and_notify(&leaf).await;
+                tracing::info!("fetched leaf range {}..{}", leaves.start(), leaves.end());
+                fetcher.store_and_notify(&leaves).await;
 
-                    // Unlike in the singular leaf version of this callback, we do not call
-                    // `trigger_fetch_for_parent` to start a potential chain reaction for a
-                    // contiguous range of leaves. This is because we have already just fetched a
-                    // contiguous range, and if we are currently bulk fetching, it is more efficient
-                    // to continue bulk fetching, rather than kick of a chain reaction of individual
-                    // fetches, which will end up fetching the same data, slower.
-                }
+                // Unlike in the singular leaf version of this callback, we do not call
+                // `trigger_fetch_for_parent` to start a potential chain reaction for a
+                // contiguous range of leaves. This is because we have already just fetched a
+                // contiguous range, and if we are currently bulk fetching, it is more efficient to
+                // continue bulk fetching, rather than kick of a chain reaction of individual
+                // fetches, which will end up fetching the same data, slower.
             },
-            Self::Continuation { callback } => callback.run_range(
-                leaves
-                    .into_iter()
-                    .map(|leaf| leaf.header().clone())
-                    .collect(),
-            ),
+            Self::Continuation { callback } => callback.run_range(leaves.as_ref_cloned()),
         }
     }
 }
@@ -478,23 +468,13 @@ impl FetchRequest for RangeRequest {
 }
 
 impl RangeRequest {
-    pub fn len(&self) -> usize {
-        (self.end - self.start) as usize
-    }
-
-    pub fn is_satisfied(&self, range: &[impl HeightIndexed]) -> bool {
-        if range.len() != self.len() {
-            return false;
-        }
-        if self.len() == 0 {
-            return true;
-        }
-        range[0].height() == self.start
+    pub fn is_satisfied(&self, range: &NonEmptyRange<impl HeightIndexed>) -> bool {
+        range.start() == self.start && range.end() == self.end
     }
 }
 
 #[async_trait]
-impl<Types> Fetchable<Types> for Vec<LeafQueryData<Types>>
+impl<Types> Fetchable<Types> for NonEmptyRange<LeafQueryData<Types>>
 where
     Types: NodeType,
     Header<Types>: QueryableHeader<Types>,
@@ -518,7 +498,7 @@ where
         .await;
 
         join_all(waits.into_iter().map(|wait| wait.into_future()))
-            .map(|options| options.into_iter().collect())
+            .map(|options| NonEmptyRange::new(options.into_iter().flatten()).ok())
             .boxed()
     }
 
@@ -541,24 +521,23 @@ where
     where
         S: AvailabilityStorage<Types>,
     {
-        storage
+        let leaves = storage
             .get_leaf_range((req.start as usize)..(req.end as usize))
             .await?
             .into_iter()
-            .collect()
+            .collect::<QueryResult<Vec<_>>>()?;
+        NonEmptyRange::new(leaves).map_err(|err| QueryError::Error {
+            message: format!("expected contiguous range, but: {err:#}"),
+        })
     }
 }
 
-impl<Types> Storable<Types> for Vec<LeafQueryData<Types>>
+impl<Types> Storable<Types> for NonEmptyRange<LeafQueryData<Types>>
 where
     Types: NodeType,
 {
     fn debug_name(&self) -> String {
-        format!(
-            "leaf range {}..{}",
-            self[0].height(),
-            self[self.len() - 1].height() + 1
-        )
+        format!("leaf range {}..{}", self.start(), self.end())
     }
 
     async fn notify(&self, notifiers: &Notifiers<Types>) {
