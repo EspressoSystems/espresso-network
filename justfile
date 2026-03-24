@@ -155,7 +155,7 @@ test-all:
     just nextest --features embedded-db --profile all
     just nextest --profile all
 
-test-integration: (build "test" "--features fee")
+test-integration: (build "test")
 	INTEGRATION_TEST_SEQUENCER_VERSION=2 cargo nextest run -p tests --nocapture --profile integration test_native_demo_basic
 
 # Run process-compose integration tests with minimal features
@@ -190,7 +190,7 @@ test-demo test_name:
 			;;
 		da-committees)
 			features="--no-default-features"
-			test="test_native_demo_drb_header_base"
+			test="test_native_demo_da_committee"
 			;;
 		*)
 			echo "Unknown test: {{test_name}}"
@@ -237,7 +237,7 @@ dev-cdn *args:
 dev-state-relay-server:
     target/release/state-relay-server -p 8083
 
-dev-sequencer:
+dev-espresso-node:
     target/release/espresso-node \
     --orchestrator-url http://localhost:8080 \
     --cdn-endpoint "127.0.0.1:1738" \
