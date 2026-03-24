@@ -437,10 +437,9 @@ impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
     async fn build_block(&mut self, block_view: TYPES::View) -> Option<PayloadWithMetadata<TYPES>> {
         tracing::info!(?block_view, "Building block",);
         let txn_size = self.max_block_size / 10;
+        let mut rng = ChaChaRng::from_entropy();
         let transactions: Vec<TYPES::Transaction> = (0..10)
-            .map(|_| {
-                random_transaction::<TYPES>(txn_size, txn_size, &mut ChaChaRng::from_entropy())
-            })
+            .map(|_| random_transaction::<TYPES>(txn_size, txn_size, &mut rng))
             .collect();
 
         let Some(validated_state) = self
