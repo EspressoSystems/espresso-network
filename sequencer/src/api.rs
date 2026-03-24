@@ -78,6 +78,7 @@ pub mod fs;
 pub mod light_client;
 pub mod options;
 pub mod sql;
+pub mod unlock_schedule;
 mod update;
 
 pub use options::Options;
@@ -194,8 +195,16 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> EventsSource<SeqTypes
 impl<N: ConnectedNetwork<PubKey>, D: Send + Sync, P: SequencerPersistence> TokenDataSource<SeqTypes>
     for StorageState<N, P, D>
 {
+    async fn get_initial_supply_l1(&self) -> anyhow::Result<U256> {
+        self.as_ref().get_initial_supply_l1().await
+    }
+
     async fn get_total_supply_l1(&self) -> anyhow::Result<U256> {
         self.as_ref().get_total_supply_l1().await
+    }
+
+    async fn get_decided_header(&self) -> espresso_types::Header {
+        self.as_ref().get_decided_header().await
     }
 }
 
@@ -292,6 +301,22 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, P: SequencerPersistence> StakeTableDa
 impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> TokenDataSource<SeqTypes>
     for ApiState<N, P>
 {
+    async fn get_initial_supply_l1(&self) -> anyhow::Result<U256> {
+        let node_state = self.sequencer_context.as_ref().get().await.node_state();
+        let fetcher = node_state
+            .coordinator
+            .membership()
+            .read()
+            .await
+            .fetcher()
+            .clone();
+        let cached = *fetcher.initial_supply.read().await;
+        match cached {
+            Some(supply) => Ok(supply),
+            None => Ok(fetcher.fetch_and_update_initial_supply().await?),
+        }
+    }
+
     async fn get_total_supply_l1(&self) -> anyhow::Result<U256> {
         match self.token_supply.get(&()).await {
             Some(supply) => Ok(supply),
@@ -314,6 +339,17 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> TokenDataSource<SeqTy
                 Ok(supply)
             },
         }
+    }
+
+    async fn get_decided_header(&self) -> espresso_types::Header {
+        self.consensus()
+            .await
+            .read()
+            .await
+            .decided_leaf()
+            .await
+            .block_header()
+            .clone()
     }
 }
 
@@ -1699,6 +1735,7 @@ pub mod test_helpers {
         api_config: Option<Options>,
         network_config: Option<TestConfig<{ NUM_NODES }>>,
         contracts: Option<Contracts>,
+        initial_token_supply: Option<U256>,
     }
 
     impl Default for TestNetworkConfigBuilder<5, no_storage::Options, NullStateCatchup> {
@@ -1710,6 +1747,7 @@ pub mod test_helpers {
                 network_config: None,
                 api_config: None,
                 contracts: None,
+                initial_token_supply: None,
             }
         }
     }
@@ -1726,6 +1764,7 @@ pub mod test_helpers {
                 network_config: None,
                 api_config: None,
                 contracts: None,
+                initial_token_supply: None,
             }
         }
     }
@@ -1740,6 +1779,11 @@ pub mod test_helpers {
             self
         }
 
+        pub fn initial_token_supply(mut self, supply: U256) -> Self {
+            self.initial_token_supply = Some(supply);
+            self
+        }
+
         pub fn persistences<NP: PersistenceOptions>(
             self,
             persistence: [NP; NUM_NODES],
@@ -1751,6 +1795,7 @@ pub mod test_helpers {
                 api_config: self.api_config,
                 persistence: Some(persistence),
                 contracts: self.contracts,
+                initial_token_supply: self.initial_token_supply,
             }
         }
 
@@ -1770,6 +1815,7 @@ pub mod test_helpers {
                 api_config: self.api_config,
                 persistence: self.persistence,
                 contracts: self.contracts,
+                initial_token_supply: self.initial_token_supply,
             }
         }
 
@@ -1830,7 +1876,7 @@ pub mod test_helpers {
                 .multisig_pauser(signer.address())
                 .token_name("Espresso".to_string())
                 .token_symbol("ESP".to_string())
-                .initial_token_supply(U256::from(100000u64))
+                .initial_token_supply(self.initial_token_supply.unwrap_or(U256::from(100000u64)))
                 .ops_timelock_delay(U256::from(0))
                 .ops_timelock_admin(signer.address())
                 .ops_timelock_proposers(vec![signer.address()])
@@ -5579,12 +5625,19 @@ mod test {
         Ok(())
     }
 
+    /// `chain_id`: None = default (35353, non-mainnet), Some(1) = mainnet
     #[rstest]
-    #[case(POS_V4)]
+    #[case(POS_V4, None)]
+    #[case(POS_V4, Some(1u64))]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_token_supply_api(#[case] upgrade: Upgrade) -> anyhow::Result<()> {
-        let epoch_height = 10;
+    async fn test_token_supply_api(
+        #[case] upgrade: Upgrade,
+        #[case] chain_id: Option<u64>,
+    ) -> anyhow::Result<()> {
+        use alloy::primitives::utils::parse_ether;
+        use espresso_types::v0_3::ChainConfig;
 
+        let epoch_height = 10;
         let network_config = TestConfigBuilder::default()
             .epoch_height(epoch_height)
             .build();
@@ -5592,7 +5645,6 @@ mod test {
         let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         const NUM_NODES: usize = 1;
-        // Initialize nodes.
         let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
         let persistence: [_; NUM_NODES] = storage
             .iter()
@@ -5601,7 +5653,12 @@ mod test {
             .try_into()
             .unwrap();
 
-        let config = TestNetworkConfigBuilder::with_num_nodes()
+        // Use the real initial supply (3.59B tokens) so the unlock schedule
+        // produces realistic locked/unlocked values in the supply calculations.
+        let initial_supply_tokens = U256::from(3_590_000_000u64);
+        let initial_supply_wei = parse_ether("3590000000").unwrap();
+
+        let mut builder = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(SqlDataSource::options(
                 &storage[0],
                 Options::with_port(api_port),
@@ -5616,6 +5673,22 @@ mod test {
                     &NoMetrics,
                 )
             }))
+            .initial_token_supply(initial_supply_tokens);
+
+        // Must set states before pos_hook, which preserves chain_id from state[0].
+        if let Some(id) = chain_id {
+            let state = ValidatedState {
+                chain_config: ChainConfig {
+                    chain_id: U256::from(id).into(),
+                    ..Default::default()
+                }
+                .into(),
+                ..Default::default()
+            };
+            builder = builder.states(std::array::from_fn(|_| state.clone()));
+        }
+
+        let config = builder
             .pos_hook(
                 DelegationConfig::VariableAmounts,
                 Default::default(),
@@ -5639,14 +5712,64 @@ mod test {
             .await
             .unwrap();
 
-        let total_minted_supply = client
-            .get::<String>("token/total-minted-supply")
+        let minted: String = client
+            .get("token/total-minted-supply")
             .send()
             .await
-            .expect("failed to get total_minted_supply");
-        tracing::info!("total_minted_supply={total_minted_supply:?}");
+            .expect("total-minted-supply");
+        let circ_eth: String = client
+            .get("token/circulating-supply-ethereum")
+            .send()
+            .await
+            .expect("circulating-supply-ethereum");
+        let circulating: String = client
+            .get("token/circulating-supply")
+            .send()
+            .await
+            .expect("circulating-supply");
+        tracing::info!(%minted, %circ_eth, %circulating);
 
-        assert_eq!(total_minted_supply, "100000.0");
+        let minted = parse_ether(&minted)?;
+        let circ_eth = parse_ether(&circ_eth)?;
+        let circ = parse_ether(&circulating)?;
+
+        // Fetch the decided header to compute expected values from the same
+        // timestamp and reward the endpoint used.
+        let height: u64 = client.get("node/block-height").send().await.unwrap();
+        assert!(height > 0);
+        let header: Header = client
+            .get(&format!("availability/header/{}", height - 1))
+            .send()
+            .await
+            .unwrap();
+        let ts = header.timestamp_internal();
+        let reward = header
+            .total_reward_distributed()
+            .map(|r| r.0)
+            .unwrap_or(U256::ZERO);
+
+        let unlocked = crate::api::unlock_schedule::unlocked_amount_at(ts);
+        let is_mainnet = chain_id == Some(1);
+        let expected_locked = if is_mainnet {
+            initial_supply_wei.saturating_sub(unlocked)
+        } else {
+            U256::ZERO
+        };
+
+        assert_eq!(minted, initial_supply_wei);
+        assert_eq!(circ_eth, minted.saturating_sub(expected_locked));
+        assert_eq!(
+            circ,
+            initial_supply_wei
+                .saturating_add(reward)
+                .saturating_sub(expected_locked)
+        );
+
+        if is_mainnet {
+            // Sanity check: tokens are still locked (vesting ends ~2032).
+            // Delete this assert after full vesting.
+            assert!(expected_locked > U256::ZERO);
+        }
 
         Ok(())
     }
