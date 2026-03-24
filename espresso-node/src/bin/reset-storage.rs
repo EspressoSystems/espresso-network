@@ -4,7 +4,7 @@ use espresso_node::{
     persistence,
 };
 use espresso_types::v0::traits::MembershipPersistence;
-use sequencer_utils::logging;
+use espresso_utils::logging;
 
 /// Reset the persistent storage of a sequencer.
 ///

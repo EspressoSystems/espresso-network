@@ -1401,11 +1401,11 @@ impl MerklizedState<SeqTypes, { Self::ARITY }> for RewardMerkleTreeV1 {
 mod test {
     use std::{sync::Arc, time::Duration};
 
+    use espresso_utils::ser::FromStringOrInteger;
     use hotshot::traits::BlockPayload;
     use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_query_service::{Resolvable, testing::mocks::MOCK_UPGRADE};
     use hotshot_types::{data::ViewNumber, traits::signature_key::BuilderSignatureKey};
-    use sequencer_utils::ser::FromStringOrInteger;
     use tracing::debug;
     use versions::{FEE_VERSION, MAX_SUPPORTED_VERSION, version};
 

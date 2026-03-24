@@ -26,6 +26,7 @@ use std::{fmt::Debug, path::Path, str::FromStr};
 use alloy::primitives::{Address, U160, U256};
 use committable::Committable;
 use espresso_types::{StateCertQueryDataV1, StateCertQueryDataV2};
+use espresso_utils::commitment_to_u256;
 use hotshot_example_types::node_types::TEST_VERSIONS;
 use hotshot_query_service::availability::{
     BlockQueryData, LeafQueryData, LeafQueryDataLegacy, PayloadQueryData, TransactionQueryData,
@@ -47,7 +48,6 @@ use jf_advz::VidScheme;
 use jf_merkle_tree_compat::{MerkleTreeScheme, UniversalMerkleTreeScheme};
 use pretty_assertions::assert_eq;
 use rand::{Rng, RngCore};
-use sequencer_utils::commitment_to_u256;
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 use tagged_base64::TaggedBase64;

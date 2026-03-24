@@ -1,7 +1,7 @@
 //! sequencer utility programs
 
 use clap::{Parser, Subcommand};
-use sequencer_utils::logging;
+use espresso_utils::logging;
 mod keygen;
 mod ns_aggregator;
 mod pubkey;

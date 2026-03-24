@@ -19,7 +19,7 @@ testing = [
     "hotshot-testing",
     "espresso-types/testing",
     "light-client/testing",
-    "sequencer-utils/testing",
+    "espresso-utils/testing",
     "hotshot-query-service/testing",
 ]
 benchmarking = []
@@ -83,7 +83,7 @@ reqwest = { workspace = true }
 rstest = { workspace = true }
 rstest_reuse = { workspace = true }
 semver = { workspace = true }
-sequencer-utils = { workspace = true }
+espresso-utils = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }

@@ -8,6 +8,9 @@ use anyhow::{Context, bail, ensure};
 use ark_serialize::{
     CanonicalDeserialize, CanonicalSerialize, Compress, Read, SerializationError, Valid, Validate,
 };
+use espresso_utils::{
+    impl_serde_from_string_or_integer, impl_to_fixed_bytes, ser::FromStringOrInteger,
+};
 use hotshot::types::BLSPubKey;
 use hotshot_contract_adapter::reward::RewardProofSiblings;
 use hotshot_types::{
@@ -20,9 +23,6 @@ use jf_merkle_tree_compat::{
     MerkleTreeScheme, ToTraversalPath, UniversalMerkleTreeScheme, prelude::MerkleNode,
 };
 use num_traits::CheckedSub;
-use sequencer_utils::{
-    impl_serde_from_string_or_integer, impl_to_fixed_bytes, ser::FromStringOrInteger,
-};
 use vbs::version::Version;
 use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION};
 

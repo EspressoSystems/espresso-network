@@ -1,7 +1,7 @@
 use clap::Parser;
 use espresso_node::{SequencerApiVersion, state_signature::relay_server::run_relay_server};
+use espresso_utils::logging;
 use hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY;
-use sequencer_utils::logging;
 use url::Url;
 use vbs::version::StaticVersionType;
 

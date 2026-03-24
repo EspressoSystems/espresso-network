@@ -16,14 +16,14 @@ pub const GIT_COMMIT_TIMESTAMP: &str = env!("VERGEN_GIT_COMMIT_TIMESTAMP");
 /// Use [`BuildInfo::with_header`] to include `pkg_name` as a header line:
 ///
 /// ```ignore
-/// print!("{}", sequencer_utils::build_info!().with_header());
+/// print!("{}", espresso_utils::build_info!().with_header());
 /// ```
 ///
 /// For clap's `long_version`, use [`BuildInfo::clap_version`] which prepends a
 /// newline (clap already prints the binary name):
 ///
 /// ```ignore
-/// #[command(long_version = sequencer_utils::build_info!().clap_version())]
+/// #[command(long_version = espresso_utils::build_info!().clap_version())]
 /// ```
 pub struct BuildInfo {
     pub pkg_name: &'static str,

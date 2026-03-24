@@ -10,10 +10,10 @@ use alloy::hex;
 use anyhow::anyhow;
 use clap::{Parser, ValueEnum};
 use derive_more::Display;
+use espresso_utils::logging;
 use hotshot::types::SignatureKey;
 use hotshot_types::{light_client::StateKeyPair, signature_key::BLSPubKey, x25519};
 use rand::{RngCore, SeedableRng};
-use sequencer_utils::logging;
 use tagged_base64::TaggedBase64;
 use tracing::info_span;
 

@@ -9,10 +9,10 @@ use alloy::{
 use clap::Parser;
 use espresso_node::SequencerApiVersion;
 use espresso_types::{Header, L1BlockInfo};
+use espresso_utils::logging;
 use futures::future::join_all;
 use hotshot_types::traits::block_contents::BlockHeader;
 use itertools::Itertools;
-use sequencer_utils::logging;
 use surf_disco::Url;
 use tokio::time::sleep;
 use vbs::version::StaticVersionType;

@@ -39,6 +39,7 @@ use espresso_node::{
 use espresso_types::{
     L1ClientOptions, SeqTypes, ValidatedState, parse_duration, v0_3::ChainConfig,
 };
+use espresso_utils::logging;
 use futures::{FutureExt, StreamExt, future::BoxFuture, stream::FuturesUnordered};
 use hotshot_contract_adapter::sol_types::LightClientV2Mock::{self, LightClientV2MockInstance};
 use hotshot_state_prover::{StateProverConfig, v2::service::run_prover_service};
@@ -47,7 +48,6 @@ use hotshot_types::{
     utils::epoch_from_block_number,
 };
 use itertools::izip;
-use sequencer_utils::logging;
 use serde::{Deserialize, Serialize};
 use staking_cli::demo::{DelegationConfig, StakingTransactions};
 use tempfile::NamedTempFile;

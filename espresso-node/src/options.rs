@@ -14,10 +14,10 @@ use anyhow::{Context, bail};
 use clap::{Args, FromArgMatches, Parser, error::ErrorKind};
 use derivative::Derivative;
 use espresso_types::{BackoffParams, L1ClientOptions, parse_duration};
+use espresso_utils::logging;
 use hotshot_types::{addr::NetAddr, light_client::StateSignKey, signature_key::BLSPrivKey, x25519};
 use jf_signature::{bls_over_bn254, schnorr};
 use libp2p::Multiaddr;
-use sequencer_utils::logging;
 use tagged_base64::TaggedBase64;
 use url::Url;
 
@@ -472,7 +472,7 @@ fn get_default_node_type() -> String {
 }
 
 fn build_version() -> String {
-    let info = sequencer_utils::build_info!();
+    let info = espresso_utils::build_info!();
     format!(
         "{}\nfeatures: {}",
         info.clap_version(),

@@ -218,7 +218,7 @@ where
     Arc<P>: Storage<SeqTypes>,
 {
     // Expose git information via status API.
-    let info = sequencer_utils::build_info!();
+    let info = espresso_utils::build_info!();
     metrics
         .text_family(
             "version".into(),

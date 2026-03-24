@@ -4,12 +4,12 @@ use alloy::hex::{self, FromHexError};
 use clap::Parser;
 use derive_more::From;
 use espresso_types::{Ratio, SeqTypes, parse_duration};
+use espresso_utils::logging;
 use hotshot_orchestrator::run_orchestrator;
 use hotshot_types::{
     PeerConfig,
     network::{Libp2pConfig, NetworkConfig},
 };
-use sequencer_utils::logging;
 use snafu::Snafu;
 use url::Url;
 use vec1::Vec1;

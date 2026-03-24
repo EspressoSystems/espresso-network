@@ -32,6 +32,7 @@ use espresso_types::{
     ADVZNamespaceProofQueryData, BlockMerkleTree, FeeMerkleTree, Header, SeqTypes, parse_duration,
     v0_1::IterableFeeInfo,
 };
+use espresso_utils::logging;
 use futures::{
     future::{FutureExt, TryFuture, TryFutureExt},
     stream::{Peekable, StreamExt},
@@ -50,7 +51,6 @@ use jf_merkle_tree_compat::{
     ForgetableMerkleTreeScheme, MerkleTreeScheme, UniversalMerkleTreeScheme,
 };
 use rand::{RngCore, seq::SliceRandom};
-use sequencer_utils::logging;
 use serde::de::DeserializeOwned;
 use strum::{EnumDiscriminants, VariantArray};
 use surf_disco::{Error, StatusCode, Url, error::ClientError, socket};

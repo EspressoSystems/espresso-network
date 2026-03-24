@@ -17,8 +17,8 @@ use espresso_contract_deployer::{
     provider::connect_ledger,
 };
 use espresso_types::{config::PublicNetworkConfig, parse_duration};
+use espresso_utils::logging;
 use hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY;
-use sequencer_utils::logging;
 use tide_disco::error::ServerError;
 use url::Url;
 use vbs::version::StaticVersion;

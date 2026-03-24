@@ -301,9 +301,9 @@ mod test {
             lines.contains(
                 &format!(
                     "consensus_version{{desc=\"{}\",rev=\"{}\",timestamp=\"{}\"}} 1",
-                    sequencer_utils::build_info::GIT_DESCRIBE,
-                    sequencer_utils::build_info::GIT_SHA,
-                    sequencer_utils::build_info::GIT_COMMIT_TIMESTAMP,
+                    espresso_utils::build_info::GIT_DESCRIBE,
+                    espresso_utils::build_info::GIT_SHA,
+                    espresso_utils::build_info::GIT_COMMIT_TIMESTAMP,
                 )
                 .as_str()
             ),

@@ -2501,6 +2501,7 @@ dependencies = [
  "committable",
  "espresso-node",
  "espresso-types",
+ "espresso-utils",
  "futures",
  "hotshot",
  "hotshot-builder-api",
@@ -2512,7 +2513,6 @@ dependencies = [
  "hotshot-types",
  "jf-signature 0.4.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-signature-v0.4.0)",
  "rand 0.8.5",
- "sequencer-utils",
  "surf-disco",
  "tempfile",
  "test-log",
@@ -4454,10 +4454,10 @@ dependencies = [
  "derive_more 2.1.0",
  "dotenvy",
  "espresso-types",
+ "espresso-utils",
  "hotshot-contract-adapter",
  "hotshot-types",
  "rand 0.8.5",
- "sequencer-utils",
  "serde_json",
  "surf-disco",
  "test-log",
@@ -4503,6 +4503,7 @@ dependencies = [
  "espresso-contract-deployer",
  "espresso-node",
  "espresso-types",
+ "espresso-utils",
  "futures",
  "hotshot-contract-adapter",
  "hotshot-query-service",
@@ -4512,7 +4513,6 @@ dependencies = [
  "jf-merkle-tree-compat",
  "rand 0.8.5",
  "rstest",
- "sequencer-utils",
  "serde",
  "serde_json",
  "staking-cli",
@@ -4568,6 +4568,7 @@ dependencies = [
  "espresso-macros",
  "espresso-node",
  "espresso-types",
+ "espresso-utils",
  "futures",
  "generic-tests",
  "hotshot",
@@ -4605,7 +4606,6 @@ dependencies = [
  "rstest",
  "rstest_reuse",
  "semver 1.0.27",
- "sequencer-utils",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -4677,6 +4677,7 @@ dependencies = [
  "either",
  "espresso-contract-deployer",
  "espresso-types",
+ "espresso-utils",
  "ethers-core",
  "fluent-asserter",
  "futures",
@@ -4703,7 +4704,6 @@ dependencies = [
  "rand_chacha 0.3.1",
  "rstest",
  "rstest_reuse",
- "sequencer-utils",
  "serde",
  "serde_bytes",
  "serde_json",
@@ -4726,6 +4726,31 @@ dependencies = [
  "vec1",
  "versions",
  "vid",
+]
+
+[[package]]
+name = "espresso-utils"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "ark-serialize 0.5.0",
+ "async-trait",
+ "clap 4.5.53",
+ "committable",
+ "hotshot",
+ "hotshot-example-types",
+ "log-panics",
+ "serde",
+ "serde_json",
+ "surf",
+ "test-log",
+ "tokio",
+ "toml",
+ "tracing",
+ "url",
+ "vergen",
+ "vergen-gitcl",
 ]
 
 [[package]]
@@ -6136,6 +6161,7 @@ dependencies = [
  "displaydoc",
  "espresso-contract-deployer",
  "espresso-types",
+ "espresso-utils",
  "futures",
  "hotshot-contract-adapter",
  "hotshot-query-service",
@@ -6155,7 +6181,6 @@ dependencies = [
  "jf-utils",
  "reqwest",
  "rstest",
- "sequencer-utils",
  "serde",
  "surf-disco",
  "test-log",
@@ -10867,31 +10892,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cd0b0ec5f1c1ca621c432a25813d8d60c88abe6d3e08a3eb9cf37d97a0fe3d73"
 
 [[package]]
-name = "sequencer-utils"
-version = "0.1.0"
-dependencies = [
- "alloy",
- "anyhow",
- "ark-serialize 0.5.0",
- "async-trait",
- "clap 4.5.53",
- "committable",
- "hotshot",
- "hotshot-example-types",
- "log-panics",
- "serde",
- "serde_json",
- "surf",
- "test-log",
- "tokio",
- "toml",
- "tracing",
- "url",
- "vergen",
- "vergen-gitcl",
-]
-
-[[package]]
 name = "serde"
 version = "1.0.228"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11689,6 +11689,7 @@ dependencies = [
  "dotenvy",
  "espresso-contract-deployer",
  "espresso-types",
+ "espresso-utils",
  "futures-util",
  "hotshot-contract-adapter",
  "hotshot-state-prover",
@@ -11704,7 +11705,6 @@ dependencies = [
  "rstest",
  "rstest_reuse",
  "rust_decimal",
- "sequencer-utils",
  "serde",
  "serde_json",
  "staking-cli",
@@ -12140,6 +12140,7 @@ dependencies = [
  "espresso-contract-deployer",
  "espresso-node",
  "espresso-types",
+ "espresso-utils",
  "futures",
  "hotshot-contract-adapter",
  "hotshot-query-service",
@@ -12148,7 +12149,6 @@ dependencies = [
  "jf-signature 0.4.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-signature-v0.4.0)",
  "rand 0.8.5",
  "reqwest",
- "sequencer-utils",
  "serde_json",
  "staking-cli",
  "surf-disco",

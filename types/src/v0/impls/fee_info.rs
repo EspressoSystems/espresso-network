@@ -9,6 +9,9 @@ use ark_serialize::{
     CanonicalDeserialize, CanonicalSerialize, Compress, Read, SerializationError, Valid, Validate,
 };
 use committable::{Commitment, Committable, RawCommitmentBuilder};
+use espresso_utils::{
+    impl_serde_from_string_or_integer, impl_to_fixed_bytes, ser::FromStringOrInteger,
+};
 use hotshot_contract_adapter::sol_types::Deposit;
 use hotshot_query_service::explorer::MonetaryValue;
 use hotshot_types::traits::block_contents::BuilderFee;
@@ -18,9 +21,6 @@ use jf_merkle_tree_compat::{
     MerkleTreeScheme, ToTraversalPath, UniversalMerkleTreeScheme,
 };
 use num_traits::CheckedSub;
-use sequencer_utils::{
-    impl_serde_from_string_or_integer, impl_to_fixed_bytes, ser::FromStringOrInteger,
-};
 use thiserror::Error;
 
 use super::v0_1::IterableFeeInfo;

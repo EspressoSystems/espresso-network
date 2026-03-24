@@ -1,5 +1,5 @@
 [package]
-name = "sequencer-utils"
+name = "espresso-utils"
 version = "0.1.0"
 authors = ["Espresso Systems <hello@espressosys.com>"]
 edition.workspace = true

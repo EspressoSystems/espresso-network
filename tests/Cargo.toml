@@ -24,7 +24,7 @@ jf-signature = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true }
 espresso-node = { workspace = true, default-features = false, features = ["testing"] }
-sequencer-utils = { workspace = true }
+espresso-utils = { workspace = true }
 staking-cli = { workspace = true }
 surf-disco = { workspace = true }
 tagged-base64 = { workspace = true }

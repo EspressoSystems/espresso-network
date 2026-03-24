@@ -24,7 +24,7 @@ hotshot-state-prover = { workspace = true }
 hotshot-types = { workspace = true }
 rand = { workspace = true }
 espresso-node = { workspace = true, default-features = false }
-sequencer-utils = { workspace = true }
+espresso-utils = { workspace = true }
 surf-disco = { workspace = true }
 test-utils = { workspace = true }
 tide-disco = { workspace = true }

@@ -11,6 +11,7 @@ use bytesize::ByteSize;
 use clap::Parser;
 use committable::Committable;
 use derive_more::{From, Into};
+use espresso_utils::{impl_serde_from_string_or_integer, ser::FromStringOrInteger};
 use futures::future::BoxFuture;
 use hotshot_types::{
     consensus::CommitmentMap,
@@ -18,7 +19,6 @@ use hotshot_types::{
     traits::node_implementation::NodeType,
 };
 use rand::Rng;
-use sequencer_utils::{impl_serde_from_string_or_integer, ser::FromStringOrInteger};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use time::{

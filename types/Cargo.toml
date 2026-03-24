@@ -58,7 +58,7 @@ parking_lot = { workspace = true }
 paste = { workspace = true }
 pretty_assertions = { workspace = true }
 rand = { workspace = true }
-sequencer-utils = { workspace = true }
+espresso-utils = { workspace = true }
 serde = { workspace = true }
 serde_bytes = { workspace = true }
 serde_json = { workspace = true }

@@ -10,9 +10,9 @@ use anyhow::{Context, bail, ensure};
 use clap::{Parser, Subcommand};
 use client::SequencerClient;
 use espresso_types::{Header, eth_signature_key::EthKeyPair, parse_duration};
+use espresso_utils::logging;
 use futures::stream::StreamExt;
 use hotshot_contract_adapter::sol_types::FeeContract;
-use sequencer_utils::logging;
 use surf_disco::Url;
 
 /// Command-line utility for working with the Espresso bridge.

@@ -303,7 +303,7 @@ mod test {
     use espresso_types::{
         L1BlockInfo, TimeBasedUpgrade, Timestamp, UpgradeMode, UpgradeType, ViewBasedUpgrade,
     };
-    use sequencer_utils::ser::FromStringOrInteger;
+    use espresso_utils::ser::FromStringOrInteger;
     use toml::toml;
 
     use super::*;

@@ -15,6 +15,7 @@ use committable::{Commitment, Committable};
 use csv::Writer;
 use espresso_node::SequencerApiVersion;
 use espresso_types::{SeqTypes, Transaction, parse_duration, parse_size};
+use espresso_utils::logging;
 use futures::{
     channel::mpsc::{self, Sender},
     sink::SinkExt,
@@ -24,7 +25,6 @@ use hotshot_query_service::{Error, availability::BlockQueryData, types::HeightIn
 use rand::{Rng, RngCore, SeedableRng};
 use rand_chacha::ChaChaRng;
 use rand_distr::Distribution;
-use sequencer_utils::logging;
 use surf_disco::{Client, Url, reexports::WebSocketConfig};
 use tide_disco::{App, error::ServerError};
 use tokio::{task::spawn, time::sleep};
