@@ -931,6 +931,16 @@ where
         }
         .boxed()
     })?
+    .get("reward_merkle_tree_v2", move |req, state| {
+        async move {
+            let (height, view) = parse_height_view(&req)?;
+            state
+                .get_reward_merkle_tree_v2(height, view)
+                .await
+                .map_err(|err| Error::catch_all(StatusCode::NOT_FOUND, format!("{err:#}")))
+        }
+        .boxed()
+    })?
     .get("state_cert", |req, state| {
         async move {
             let epoch = req
