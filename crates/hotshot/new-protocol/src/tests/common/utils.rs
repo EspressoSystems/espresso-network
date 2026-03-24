@@ -1,4 +1,8 @@
-use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::Arc,
+    time::Duration,
+};
 
 use async_lock::RwLock;
 use committable::{Commitment, Committable};
@@ -274,6 +278,7 @@ pub async fn mock_membership() -> EpochMembershipCoordinator<TestTypes> {
             10,
             None,
             Duration::from_secs(1),
+            &mut HashMap::new(),
         )(0)
         .await;
     let members = gen_node_lists(10, 10, &TestNodeStakes::default()).0;
