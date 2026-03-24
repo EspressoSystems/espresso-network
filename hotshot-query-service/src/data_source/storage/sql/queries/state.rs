@@ -775,13 +775,21 @@ mod test {
             let test_data = serde_json::json!({ MockMerkleTree::header_state_commitment_field() : serde_json::to_value(test_tree.commitment()).unwrap()});
             tx.upsert(
                 "header",
-                ["height", "hash", "payload_hash", "timestamp", "data"],
+                [
+                    "height",
+                    "hash",
+                    "payload_hash",
+                    "timestamp",
+                    "ns_table",
+                    "data",
+                ],
                 ["height"],
                 [(
                     block_height as i64,
                     format!("randomHash{i}"),
                     "t".to_string(),
                     0,
+                    "ns_table".to_string(),
                     test_data,
                 )],
             )
@@ -841,7 +849,14 @@ mod test {
         let test_data = serde_json::json!({ MockMerkleTree::header_state_commitment_field() : serde_json::to_value(test_tree.commitment()).unwrap()});
         tx.upsert(
             "header",
-            ["height", "hash", "payload_hash", "timestamp", "data"],
+            [
+                "height",
+                "hash",
+                "payload_hash",
+                "timestamp",
+                "data",
+                "ns_table",
+            ],
             ["height"],
             [(
                 2i64,
@@ -849,6 +864,7 @@ mod test {
                 "t".to_string(),
                 0,
                 test_data,
+                "ns_table".to_string(),
             )],
         )
         .await
@@ -939,7 +955,14 @@ mod test {
         let mut tx = storage.write().await.unwrap();
         tx.upsert(
             "header",
-            ["height", "hash", "payload_hash", "timestamp", "data"],
+            [
+                "height",
+                "hash",
+                "payload_hash",
+                "timestamp",
+                "data",
+                "ns_table",
+            ],
             ["height"],
             [(
                 block_height as i64,
@@ -947,6 +970,7 @@ mod test {
                 "t".to_string(),
                 0,
                 test_data,
+                "ns_table".to_string(),
             )],
         )
         .await
@@ -1008,7 +1032,7 @@ mod test {
         // Insert the new header
         tx.upsert(
                 "header",
-                ["height", "hash", "payload_hash", "timestamp", "data"],
+                ["height", "hash", "payload_hash", "timestamp", "data", "ns_table"],
                 ["height"],
                 [(
                     2i64,
@@ -1016,6 +1040,7 @@ mod test {
                     "t".to_string(),
                     0,
                     serde_json::json!({ MockMerkleTree::header_state_commitment_field() : serde_json::to_value(test_tree.commitment()).unwrap()}),
+                    "ns_table".to_string(),
                 )],
             )
             .await
@@ -1072,14 +1097,15 @@ mod test {
             // Insert a dummy header
             tx.upsert(
                 "header",
-                ["height", "hash", "payload_hash", "timestamp", "data"],
+                ["height", "hash", "payload_hash", "timestamp", "data", "ns_table"],
                 ["height"],
                 [(
                     i as i64,
                     format!("hash{i}"),
                     "t".to_string(),
                     0,
-                    serde_json::json!({ MockMerkleTree::header_state_commitment_field() : serde_json::to_value(test_tree.commitment()).unwrap()})
+                    serde_json::json!({ MockMerkleTree::header_state_commitment_field() : serde_json::to_value(test_tree.commitment()).unwrap()}),
+                    "ns_table".to_string(),
                 )],
             )
             .await
@@ -1145,7 +1171,14 @@ mod test {
         let mut tx = storage.write().await.unwrap();
         tx.upsert(
             "header",
-            ["height", "hash", "payload_hash", "timestamp", "data"],
+            [
+                "height",
+                "hash",
+                "payload_hash",
+                "timestamp",
+                "data",
+                "ns_table",
+            ],
             ["height"],
             [(
                 block_height as i64,
@@ -1153,6 +1186,7 @@ mod test {
                 "t".to_string(),
                 0,
                 test_data,
+                "ns_table".to_string(),
             )],
         )
         .await
@@ -1215,7 +1249,14 @@ mod test {
             // insert the header with merkle commitment
             tx.upsert(
                 "header",
-                ["height", "hash", "payload_hash", "timestamp", "data"],
+                [
+                    "height",
+                    "hash",
+                    "payload_hash",
+                    "timestamp",
+                    "data",
+                    "ns_table",
+                ],
                 ["height"],
                 [(
                     block_height as i64,
@@ -1223,6 +1264,7 @@ mod test {
                     "t".to_string(),
                     0,
                     test_data,
+                    "ns_table".to_string(),
                 )],
             )
             .await
@@ -1280,7 +1322,14 @@ mod test {
         let mut tx = storage.write().await.unwrap();
         tx.upsert(
             "header",
-            ["height", "hash", "payload_hash", "timestamp", "data"],
+            [
+                "height",
+                "hash",
+                "payload_hash",
+                "timestamp",
+                "data",
+                "ns_table",
+            ],
             ["height"],
             [(
                 block_height as i64,
@@ -1288,6 +1337,7 @@ mod test {
                 "t".to_string(),
                 0,
                 test_data,
+                "ns_table".to_string(),
             )],
         )
         .await
@@ -1317,7 +1367,14 @@ mod test {
         let mut tx = storage.write().await.unwrap();
         tx.upsert(
             "header",
-            ["height", "hash", "payload_hash", "timestamp", "data"],
+            [
+                "height",
+                "hash",
+                "payload_hash",
+                "timestamp",
+                "data",
+                "ns_table",
+            ],
             ["height"],
             [(
                 2i64,
@@ -1325,6 +1382,7 @@ mod test {
                 "t".to_string(),
                 0,
                 test_data,
+                "ns_table".to_string(),
             )],
         )
         .await
@@ -1442,13 +1500,14 @@ mod test {
             }
             // insert the header with merkle commitment
             tx
-            .upsert("header", ["height", "hash", "payload_hash", "timestamp", "data"], ["height"],
+            .upsert("header", ["height", "hash", "payload_hash", "timestamp", "data", "ns_table"], ["height"],
                 [(
                     block_height as i64,
                     format!("hash{block_height}"),
                     "hash".to_string(),
                     0i64,
                     serde_json::json!({ MockMerkleTree::header_state_commitment_field() : serde_json::to_value(tree.commitment()).unwrap()}),
+                    "ns_table".to_string(),
                 )],
             )
             .await
@@ -1572,7 +1631,7 @@ mod test {
             // Insert a header with the tree commitment.
             tx.upsert(
                 "header",
-                ["height", "hash", "payload_hash", "timestamp", "data"],
+                ["height", "hash", "payload_hash", "timestamp", "data", "ns_table"],
                 ["height"],
                 [(
                     0i64,
@@ -1580,6 +1639,7 @@ mod test {
                     "hash".to_string(),
                     0,
                     serde_json::json!({ MockMerkleTree::header_state_commitment_field() : serde_json::to_value(test_tree.commitment()).unwrap()}),
+                    "ns_table".to_string(),
                 )],
             )
             .await
