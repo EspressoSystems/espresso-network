@@ -67,7 +67,11 @@ pub struct Options {
     pub cdn_endpoint: String,
 
     /// The address to bind to for cliquenet (in `host:port` | `ip:port` form)
-    #[clap(long, env = "ESPRESSO_SEQUENCER_CLIQUENET_BIND_ADDRESS")]
+    #[clap(
+        long,
+        env = "ESPRESSO_SEQUENCER_CLIQUENET_BIND_ADDRESS",
+        default_value = "0.0.0.0:9977"
+    )]
     pub cliquenet_bind_address: NetAddr,
 
     /// The address to bind to for Libp2p (in `host:port` form)
