@@ -13,7 +13,7 @@ pub mod testing {
     use crate::{
         Outbox,
         consensus::Consensus,
-        cpu_tasks::vote::VoteCollectionTask,
+        cpu_tasks::{vid::VidDisperseTask, vote::VoteCollectionTask},
         events::*,
         helpers::upgrade_lock,
         message::{Certificate1, Certificate2, ConsensusMessage, Vote2},
@@ -38,6 +38,7 @@ pub mod testing {
             Option<VoteCollectionTask<TestTypes, QuorumVote2<TestTypes>, Certificate1<TestTypes>>>,
         pub vote2_task:
             Option<VoteCollectionTask<TestTypes, Vote2<TestTypes>, Certificate2<TestTypes>>>,
+        pub vid_disperse_task: Option<VidDisperseTask<TestTypes>>,
         pub membership_coordinator: EpochMembershipCoordinator<TestTypes>,
         pub outbox: Outbox<ConsensusOutput<TestTypes>>,
         pub received_events: Vec<ConsensusOutput<TestTypes>>,
@@ -86,6 +87,10 @@ pub mod testing {
                     Some(cert2) = PendingIfNone(self.vote2_task.as_mut().map(|task| task.next())) => {
                         self.received_events.push(ConsensusOutput::Event(Event::Certificate2Formed(cert2.clone())));
                         self.process_input(ConsensusInput::Certificate2(cert2)).await;
+                    }
+                    Some(Ok((view, vid_commitment, vid_disperse))) = PendingIfNone(self.vid_disperse_task.as_mut().map(|task| task.next())) => {
+                        self.received_events.push(ConsensusOutput::Event(Event::VidDisperseCreated(vid_commitment, vid_disperse.clone())));
+                        self.process_input(ConsensusInput::VidDisperseCreated(view, vid_disperse)).await;
                     }
                     _ = &mut self.shutdown_rx => break,
                     else => break,
@@ -168,16 +173,15 @@ pub mod testing {
                         .await;
                 },
                 Action::RequestVidDisperse(view, epoch, block, metadata) => {
-                    if let Some(cpu_tx) = &self.cpu_tx {
-                        cpu_tx
-                            .send(CpuEvent::VidDisperseRequest(VidDisperseRequest {
+                    if let Some(vid_disperse_task) = &mut self.vid_disperse_task {
+                        vid_disperse_task
+                            .request_vid_disperse(VidDisperseRequest {
                                 view: *view,
                                 epoch: *epoch,
                                 block: block.clone(),
                                 metadata: *metadata,
-                            }))
-                            .await
-                            .unwrap();
+                            })
+                            .await;
                     } else {
                         let vid_disperse = VidDisperse::calculate_vid_disperse(
                             block,

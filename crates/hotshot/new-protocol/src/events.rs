@@ -294,6 +294,5 @@ impl<TYPES: NodeType> HasViewNumber for StateEvent<TYPES> {
 pub enum CpuEvent<TYPES: NodeType> {
     DrbRequest(DrbInput),
     Proposal(ProposalMessage<TYPES>),
-    VidDisperseRequest(VidDisperseRequest<TYPES>),
     Vote1(Vote1<TYPES>),
 }

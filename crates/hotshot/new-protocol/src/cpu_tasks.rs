@@ -1,5 +1,5 @@
-mod drb;
-mod vid;
+pub mod drb;
+pub mod vid;
 pub mod vote;
 
 use hotshot_types::{
@@ -18,13 +18,10 @@ use tokio::{
     task::JoinHandle,
 };
 
-use self::{
-    drb::DrbRequestTask,
-    vid::{VidDisperseTask, VidShareTask},
-};
+use self::{drb::DrbRequestTask, vid::VidShareTask};
 use crate::{
     coordinator::handle::CoordinatorHandle,
-    events::{CpuEvent, VidDisperseRequest, VidShareInput},
+    events::{CpuEvent, VidShareInput},
 };
 
 struct Task<T> {
@@ -44,7 +41,6 @@ impl<T> Task<T> {
 pub(crate) struct CpuTaskManager<TYPES: NodeType> {
     event_rx: mpsc::Receiver<CpuEvent<TYPES>>,
 
-    vid_disperse_task: Task<VidDisperseRequest<TYPES>>,
     vid_share_task: Task<VidShareInput<TYPES>>,
     drb_request_task: Task<DrbInput>,
 }
@@ -58,14 +54,6 @@ impl<TYPES: NodeType> CpuTaskManager<TYPES> {
         store_drb_progress: StoreDrbProgressFn,
         load_drb_progress: LoadDrbProgressFn,
     ) -> Self {
-        let (vid_disperse_tx, vid_disperse_rx) = mpsc::channel(100);
-        let vid_disperse = VidDisperseTask::new(
-            vid_disperse_rx,
-            coordinator_handle.clone(),
-            epoch_membership_coordinator.clone(),
-        );
-        let vid_disperse_task = Task::new(vid_disperse_tx, spawn(vid_disperse.run()));
-
         let (drb_request_tx, drb_request_rx) = mpsc::channel(100);
         let drb_request = DrbRequestTask::<TYPES>::new(
             drb_request_rx,
@@ -81,7 +69,6 @@ impl<TYPES: NodeType> CpuTaskManager<TYPES> {
 
         Self {
             event_rx,
-            vid_disperse_task,
             vid_share_task,
             drb_request_task,
         }
@@ -106,9 +93,6 @@ impl<TYPES: NodeType> CpuTaskManager<TYPES> {
                         metadata: Some(proposal.proposal.data.block_header.metadata().clone()),
                     })
                     .await;
-            },
-            CpuEvent::VidDisperseRequest(vid_disperse_request) => {
-                let _ = self.vid_disperse_task.send(vid_disperse_request).await;
             },
             CpuEvent::Vote1(vote1) => {
                 // let _ = self.vote1_task.send(vote1.vote).await;

@@ -19,7 +19,7 @@ use crate::{
     Outbox,
     consensus::Consensus,
     coordinator::{handle::CoordinatorHandle, mock::testing::MockCoordinator},
-    cpu_tasks::{CpuTaskManager, vote::VoteCollectionTask},
+    cpu_tasks::{CpuTaskManager, vid::VidDisperseTask, vote::VoteCollectionTask},
     events::ConsensusOutput,
     helpers::upgrade_lock,
     validated_state::ValidatedStateManager,
@@ -69,6 +69,7 @@ impl TestHarness {
         });
         let consensus = Consensus::new(membership.clone(), public_key, private_key);
 
+        let vid_disperse_task = VidDisperseTask::new(membership.clone());
         let mock_coordinator = MockCoordinator {
             consensus,
             input_rx: coordinator_rx,
@@ -77,6 +78,7 @@ impl TestHarness {
             cpu_tx: Some(cpu_tx),
             vote1_task: Some(vote1_task),
             vote2_task: Some(vote2_task),
+            vid_disperse_task: Some(vid_disperse_task),
             membership_coordinator: membership,
             outbox: Outbox::new(),
             received_events: Vec::new(),
@@ -119,6 +121,7 @@ impl TestHarness {
             cpu_tx: None,
             vote1_task: None,
             vote2_task: None,
+            vid_disperse_task: None,
             state_manager: Some(state_manager),
             membership_coordinator: membership,
             outbox: Outbox::new(),
