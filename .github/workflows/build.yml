@@ -55,7 +55,7 @@ jobs:
 
           - binary: espresso-node-sqlite
             # uses it's own lock file
-            shared-key: sequencer-embedded
+            shared-key: espresso-node-embedded
             save-cache: true
 
           - binary: espresso-dev-node
@@ -118,7 +118,7 @@ jobs:
 
           - binary: espresso-node-sqlite
             # uses it's own lock file
-            shared-key: sequencer-embedded
+            shared-key: espresso-node-embedded
             save-cache: true
 
           - binary: espresso-dev-node

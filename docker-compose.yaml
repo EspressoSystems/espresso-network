@@ -50,7 +50,7 @@ services:
       - ESPRESSO_SEQUENCER_ORCHESTRATOR_URL=http://orchestrator:${ESPRESSO_ORCHESTRATOR_PORT}
       - ESPRESSO_SEQUENCER_L1_PROVIDER=http://demo-l1-network:${ESPRESSO_SEQUENCER_L1_PORT}
       - ESPRESSO_SEQUENCER_L1_POLLING_INTERVAL
-      - ESPRESSO_SEQUENCER_URL=http://sequencer0:${ESPRESSO_SEQUENCER0_API_PORT}
+      - ESPRESSO_SEQUENCER_URL=http://espresso-node-0:${ESPRESSO_SEQUENCER0_API_PORT}
       - ESPRESSO_SEQUENCER_STAKE_TABLE_CAPACITY
       - ESPRESSO_SEQUENCER_PERMISSIONED_PROVER
       - ESPRESSO_DEPLOYER_ACCOUNT_INDEX
@@ -65,7 +65,7 @@ services:
     depends_on:
       demo-l1-network:
         condition: service_healthy
-      sequencer0:
+      espresso-node-0:
         condition: service_healthy
       # Make sure this doesn't start until the other contracts have been deployed, since we use the same mnemonic.
       deploy-espresso-contracts:
@@ -77,11 +77,11 @@ services:
       /scripts/wait-for-header version 4
       /scripts/wait-for-header new-epochs 1
     environment:
-      - SEQUENCER_URL=http://sequencer0:${ESPRESSO_SEQUENCER0_API_PORT}
+      - SEQUENCER_URL=http://espresso-node-0:${ESPRESSO_SEQUENCER0_API_PORT}
     volumes:
       - ./scripts:/scripts:ro
     depends_on:
-      sequencer0:
+      espresso-node-0:
         condition: service_healthy
       deploy-prover-contracts:
         condition: service_completed_successfully
@@ -142,13 +142,13 @@ services:
       - RUST_LOG_FORMAT
       - L1_PROVIDER=http://demo-l1-network:${ESPRESSO_SEQUENCER_L1_PORT}
       - STAKE_TABLE_ADDRESS=${ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS}
-      - ESPRESSO_URL=http://sequencer0:24000
+      - ESPRESSO_URL=http://espresso-node-0:24000
       - MNEMONIC
       - ACCOUNT_INDEX=20
     depends_on:
       deploy-pos-contracts-upgrades:
         condition: service_completed_successfully
-      sequencer0:
+      espresso-node-0:
         condition: service_healthy
 
   fund-builder:
@@ -157,7 +157,7 @@ services:
     environment:
       - L1_PROVIDER=http://demo-l1-network:${ESPRESSO_SEQUENCER_L1_PORT}
       - L1_POLLING_INTERVAL=$ESPRESSO_SEQUENCER_L1_POLLING_INTERVAL
-      - ESPRESSO_PROVIDER=http://sequencer1:$ESPRESSO_SEQUENCER1_API_PORT
+      - ESPRESSO_PROVIDER=http://espresso-node-1:$ESPRESSO_SEQUENCER1_API_PORT
       - CONTRACT_ADDRESS=$ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS
       - MNEMONIC=$ESPRESSO_BUILDER_ETH_MNEMONIC
       - ACCOUNT_INDEX=$ESPRESSO_BUILDER_ETH_ACCOUNT_INDEX
@@ -168,7 +168,7 @@ services:
     depends_on:
       deploy-espresso-contracts:
         condition: service_completed_successfully
-      sequencer1:
+      espresso-node-1:
         condition: service_healthy
 
   stake-for-demo:
@@ -304,7 +304,7 @@ services:
     environment:
       - ESPRESSO_STATE_RELAY_SERVER_PORT
       - ESPRESSO_STATE_SIGNATURE_TOTAL_STAKE
-      - ESPRESSO_SEQUENCER_URL=http://sequencer0:${ESPRESSO_SEQUENCER0_API_PORT}
+      - ESPRESSO_SEQUENCER_URL=http://espresso-node-0:${ESPRESSO_SEQUENCER0_API_PORT}
       - ESPRESSO_SEQUENCER_STAKE_TABLE_CAPACITY
       - RUST_LOG
       - RUST_LOG_FORMAT
@@ -320,7 +320,7 @@ services:
         delay: ${ESPRESSO_STATE_PROVER_UPDATE_INTERVAL_SECS}s
     environment:
       - ESPRESSO_STATE_RELAY_SERVER_URL=http://state-relay-server:${ESPRESSO_STATE_RELAY_SERVER_PORT}
-      - ESPRESSO_SEQUENCER_URL=http://sequencer0:${ESPRESSO_SEQUENCER0_API_PORT}
+      - ESPRESSO_SEQUENCER_URL=http://espresso-node-0:${ESPRESSO_SEQUENCER0_API_PORT}
       - ESPRESSO_SEQUENCER_L1_PROVIDER=http://demo-l1-network:${ESPRESSO_SEQUENCER_L1_PORT}
       - ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS
       - ESPRESSO_SEQUENCER_STAKE_TABLE_CAPACITY
@@ -333,7 +333,7 @@ services:
       - RUST_LOG_FORMAT
       - ASYNC_STD_THREAD_COUNT
     depends_on:
-      sequencer0:
+      espresso-node-0:
         condition: service_healthy
       state-relay-server:
         condition: service_healthy
@@ -342,7 +342,7 @@ services:
       deploy-prover-contracts:
         condition: service_completed_successfully
 
-  sequencer0:
+  espresso-node-0:
     image: ghcr.io/espressosystems/espresso-network/espresso-node:${DOCKER_TAG:-main}
     ports:
       - "$ESPRESSO_SEQUENCER0_API_PORT:$ESPRESSO_SEQUENCER0_API_PORT"
@@ -355,12 +355,12 @@ services:
       - ESPRESSO_SEQUENCER_CDN_ENDPOINT=marshal-0:${ESPRESSO_CDN_SERVER_PORT}
       - ESPRESSO_SEQUENCER_API_PORT=$ESPRESSO_SEQUENCER0_API_PORT
       - ESPRESSO_SEQUENCER_MAX_CONNECTIONS
-      - ESPRESSO_SEQUENCER_API_PEERS=http://sequencer1:$ESPRESSO_SEQUENCER1_API_PORT
-      - ESPRESSO_SEQUENCER_STATE_PEERS=http://sequencer1:$ESPRESSO_SEQUENCER1_API_PORT
-      - ESPRESSO_SEQUENCER_POSTGRES_HOST=sequencer-db-0
+      - ESPRESSO_SEQUENCER_API_PEERS=http://espresso-node-1:$ESPRESSO_SEQUENCER1_API_PORT
+      - ESPRESSO_SEQUENCER_STATE_PEERS=http://espresso-node-1:$ESPRESSO_SEQUENCER1_API_PORT
+      - ESPRESSO_SEQUENCER_POSTGRES_HOST=espresso-node-db-0
       - ESPRESSO_SEQUENCER_POSTGRES_USER=root
       - ESPRESSO_SEQUENCER_POSTGRES_PASSWORD=password
-      - ESPRESSO_SEQUENCER_POSTGRES_DATABASE=sequencer
+      - ESPRESSO_SEQUENCER_POSTGRES_DATABASE=espresso
       - ESPRESSO_SEQUENCER_L1_PROVIDER=http://demo-l1-network:${ESPRESSO_SEQUENCER_L1_PORT}
       - ESPRESSO_SEQUENCER_L1_POLLING_INTERVAL
       - ESPRESSO_SEQUENCER_L1_EVENTS_MAX_BLOCK_RANGE
@@ -370,10 +370,10 @@ services:
       - ESPRESSO_SEQUENCER_PRIVATE_STATE_KEY=$ESPRESSO_DEMO_SEQUENCER_STATE_PRIVATE_KEY_0
       - ESPRESSO_SEQUENCER_PRIVATE_X25519_KEY=$ESPRESSO_DEMO_SEQUENCER_X25519_PRIVATE_KEY_0
       - ESPRESSO_SEQUENCER_LIBP2P_BIND_ADDRESS=0.0.0.0:$ESPRESSO_DEMO_SEQUENCER_LIBP2P_PORT_0
-      - ESPRESSO_SEQUENCER_LIBP2P_ADVERTISE_ADDRESS=sequencer0:$ESPRESSO_DEMO_SEQUENCER_LIBP2P_PORT_0
+      - ESPRESSO_SEQUENCER_LIBP2P_ADVERTISE_ADDRESS=espresso-node-0:$ESPRESSO_DEMO_SEQUENCER_LIBP2P_PORT_0
       - ESPRESSO_SEQUENCER_CLIQUENET_BIND_ADDRESS=0.0.0.0:${ESPRESSO_DEMO_SEQUENCER_CLIQUENET_PORT_0}
       - ESPRESSO_SEQUENCER_IS_DA=true
-      - ESPRESSO_SEQUENCER_IDENTITY_NODE_NAME=sequencer0
+      - ESPRESSO_SEQUENCER_IDENTITY_NODE_NAME=espresso-node-0
       - ESPRESSO_SEQUENCER_IDENTITY_WALLET_ADDRESS=0x0000000000000000000000000000000000000000
       - ESPRESSO_SEQUENCER_IDENTITY_COMPANY_NAME=Espresso Systems
       - ESPRESSO_SEQUENCER_IDENTITY_COMPANY_WEBSITE=https://www.espressosys.com/
@@ -382,7 +382,7 @@ services:
       - ESPRESSO_SEQUENCER_IDENTITY_COUNTRY_CODE=US
       - ESPRESSO_SEQUENCER_IDENTITY_LATITUDE=40.7128
       - ESPRESSO_SEQUENCER_IDENTITY_LONGITUDE=-74.0060
-      - ESPRESSO_SEQUENCER_PUBLIC_API_URL=http://sequencer0:$ESPRESSO_SEQUENCER0_API_PORT/
+      - ESPRESSO_SEQUENCER_PUBLIC_API_URL=http://espresso-node-0:$ESPRESSO_SEQUENCER0_API_PORT/
       - RUST_LOG
       - RUST_LOG_FORMAT
       - ASYNC_STD_THREAD_COUNT
@@ -391,7 +391,7 @@ services:
         condition: service_healthy
       demo-l1-network:
         condition: service_healthy
-      sequencer-db-0:
+      espresso-node-db-0:
         condition: service_healthy
       state-relay-server:
         condition: service_healthy
@@ -404,7 +404,7 @@ services:
       stake-for-demo:
         condition: service_completed_successfully
 
-  sequencer1:
+  espresso-node-1:
     image: ghcr.io/espressosystems/espresso-network/espresso-node:${DOCKER_TAG:-main}
     ports:
       - "$ESPRESSO_SEQUENCER1_API_PORT:$ESPRESSO_SEQUENCER1_API_PORT"
@@ -416,12 +416,12 @@ services:
       - ESPRESSO_SEQUENCER_CDN_ENDPOINT=marshal-0:${ESPRESSO_CDN_SERVER_PORT}
       - ESPRESSO_SEQUENCER_API_PORT=$ESPRESSO_SEQUENCER1_API_PORT
       - ESPRESSO_SEQUENCER_MAX_CONNECTIONS
-      - ESPRESSO_SEQUENCER_API_PEERS=http://sequencer4:$ESPRESSO_SEQUENCER4_API_PORT
-      - ESPRESSO_SEQUENCER_STATE_PEERS=http://sequencer2:$ESPRESSO_SEQUENCER2_API_PORT
-      - ESPRESSO_SEQUENCER_POSTGRES_HOST=sequencer-db-1
+      - ESPRESSO_SEQUENCER_API_PEERS=http://espresso-node-4:$ESPRESSO_SEQUENCER4_API_PORT
+      - ESPRESSO_SEQUENCER_STATE_PEERS=http://espresso-node-2:$ESPRESSO_SEQUENCER2_API_PORT
+      - ESPRESSO_SEQUENCER_POSTGRES_HOST=espresso-node-db-1
       - ESPRESSO_SEQUENCER_POSTGRES_USER=root
       - ESPRESSO_SEQUENCER_POSTGRES_PASSWORD=password
-      - ESPRESSO_SEQUENCER_POSTGRES_DATABASE=sequencer
+      - ESPRESSO_SEQUENCER_POSTGRES_DATABASE=espresso
       - ESPRESSO_SEQUENCER_L1_PROVIDER=http://demo-l1-network:${ESPRESSO_SEQUENCER_L1_PORT}
       - ESPRESSO_SEQUENCER_L1_WS_PROVIDER=ws://demo-l1-network:${ESPRESSO_SEQUENCER_L1_WS_PORT}
       - ESPRESSO_SEQUENCER_L1_POLLING_INTERVAL
@@ -432,10 +432,10 @@ services:
       - ESPRESSO_SEQUENCER_PRIVATE_STATE_KEY=$ESPRESSO_DEMO_SEQUENCER_STATE_PRIVATE_KEY_1
       - ESPRESSO_SEQUENCER_PRIVATE_X25519_KEY=$ESPRESSO_DEMO_SEQUENCER_X25519_PRIVATE_KEY_1
       - ESPRESSO_SEQUENCER_LIBP2P_BIND_ADDRESS=0.0.0.0:$ESPRESSO_DEMO_SEQUENCER_LIBP2P_PORT_1
-      - ESPRESSO_SEQUENCER_LIBP2P_ADVERTISE_ADDRESS=sequencer1:$ESPRESSO_DEMO_SEQUENCER_LIBP2P_PORT_1
+      - ESPRESSO_SEQUENCER_LIBP2P_ADVERTISE_ADDRESS=espresso-node-1:$ESPRESSO_DEMO_SEQUENCER_LIBP2P_PORT_1
       - ESPRESSO_SEQUENCER_CLIQUENET_BIND_ADDRESS=0.0.0.0:${ESPRESSO_DEMO_SEQUENCER_CLIQUENET_PORT_1}
       - ESPRESSO_SEQUENCER_IS_DA=true
-      - ESPRESSO_SEQUENCER_IDENTITY_NODE_NAME=sequencer1
+      - ESPRESSO_SEQUENCER_IDENTITY_NODE_NAME=espresso-node-1
       - ESPRESSO_SEQUENCER_IDENTITY_WALLET_ADDRESS=0x0000000000000000000000000000000000000001
       - ESPRESSO_SEQUENCER_IDENTITY_COMPANY_NAME=Espresso Systems
       - ESPRESSO_SEQUENCER_IDENTITY_COMPANY_WEBSITE=https://www.espressosys.com/
@@ -444,7 +444,7 @@ services:
       - ESPRESSO_SEQUENCER_IDENTITY_COUNTRY_CODE=GR
       - ESPRESSO_SEQUENCER_IDENTITY_LATITUDE=39.0742
       - ESPRESSO_SEQUENCER_IDENTITY_LONGITUDE=21.8243
-      - ESPRESSO_SEQUENCER_PUBLIC_API_URL=http://sequencer1:$ESPRESSO_SEQUENCER1_API_PORT/
+      - ESPRESSO_SEQUENCER_PUBLIC_API_URL=http://espresso-node-1:$ESPRESSO_SEQUENCER1_API_PORT/
       - RUST_LOG
       - RUST_LOG_FORMAT
       - ASYNC_STD_THREAD_COUNT
@@ -453,7 +453,7 @@ services:
         condition: service_healthy
       demo-l1-network:
         condition: service_healthy
-      sequencer-db-1:
+      espresso-node-db-1:
         condition: service_healthy
       state-relay-server:
         condition: service_healthy
@@ -466,7 +466,7 @@ services:
       stake-for-demo:
         condition: service_completed_successfully
 
-  sequencer2:
+  espresso-node-2:
     image: ghcr.io/espressosystems/espresso-network/espresso-node:${DOCKER_TAG:-main}
     ports:
       - "$ESPRESSO_SEQUENCER2_API_PORT:$ESPRESSO_SEQUENCER2_API_PORT"
@@ -478,7 +478,7 @@ services:
       - ESPRESSO_SEQUENCER_CDN_ENDPOINT=marshal-0:${ESPRESSO_CDN_SERVER_PORT}
       - ESPRESSO_SEQUENCER_API_PORT=$ESPRESSO_SEQUENCER2_API_PORT
       - ESPRESSO_SEQUENCER_MAX_CONNECTIONS
-      - ESPRESSO_SEQUENCER_STATE_PEERS=http://sequencer3:$ESPRESSO_SEQUENCER3_API_PORT
+      - ESPRESSO_SEQUENCER_STATE_PEERS=http://espresso-node-3:$ESPRESSO_SEQUENCER3_API_PORT
       - ESPRESSO_SEQUENCER_L1_PROVIDER=http://demo-l1-network:${ESPRESSO_SEQUENCER_L1_PORT}
       - ESPRESSO_SEQUENCER_L1_POLLING_INTERVAL
       - ESPRESSO_SEQUENCER_L1_EVENTS_MAX_BLOCK_RANGE
@@ -488,10 +488,10 @@ services:
       - ESPRESSO_SEQUENCER_PRIVATE_STATE_KEY=$ESPRESSO_DEMO_SEQUENCER_STATE_PRIVATE_KEY_2
       - ESPRESSO_SEQUENCER_PRIVATE_X25519_KEY=$ESPRESSO_DEMO_SEQUENCER_X25519_PRIVATE_KEY_2
       - ESPRESSO_SEQUENCER_LIBP2P_BIND_ADDRESS=0.0.0.0:$ESPRESSO_DEMO_SEQUENCER_LIBP2P_PORT_2
-      - ESPRESSO_SEQUENCER_LIBP2P_ADVERTISE_ADDRESS=sequencer2:$ESPRESSO_DEMO_SEQUENCER_LIBP2P_PORT_2
+      - ESPRESSO_SEQUENCER_LIBP2P_ADVERTISE_ADDRESS=espresso-node-2:$ESPRESSO_DEMO_SEQUENCER_LIBP2P_PORT_2
       - ESPRESSO_SEQUENCER_CLIQUENET_BIND_ADDRESS=0.0.0.0:${ESPRESSO_DEMO_SEQUENCER_CLIQUENET_PORT_2}
       - ESPRESSO_SEQUENCER_IS_DA=true
-      - ESPRESSO_SEQUENCER_IDENTITY_NODE_NAME=sequencer2
+      - ESPRESSO_SEQUENCER_IDENTITY_NODE_NAME=espresso-node-2
       - ESPRESSO_SEQUENCER_IDENTITY_WALLET_ADDRESS=0x0000000000000000000000000000000000000002
       - ESPRESSO_SEQUENCER_IDENTITY_COMPANY_NAME=Espresso Systems
       - ESPRESSO_SEQUENCER_IDENTITY_COMPANY_WEBSITE=https://www.espressosys.com/
@@ -500,7 +500,7 @@ services:
       - ESPRESSO_SEQUENCER_IDENTITY_COUNTRY_CODE=CN
       - ESPRESSO_SEQUENCER_IDENTITY_LATITUDE=35.8617
       - ESPRESSO_SEQUENCER_IDENTITY_LONGITUDE=104.1954
-      - ESPRESSO_SEQUENCER_PUBLIC_API_URL=http://sequencer2:$ESPRESSO_SEQUENCER2_API_PORT/
+      - ESPRESSO_SEQUENCER_PUBLIC_API_URL=http://espresso-node-2:$ESPRESSO_SEQUENCER2_API_PORT/
       - RUST_LOG
       - RUST_LOG_FORMAT
       - ASYNC_STD_THREAD_COUNT
@@ -520,7 +520,7 @@ services:
       stake-for-demo:
         condition: service_completed_successfully
 
-  sequencer3:
+  espresso-node-3:
     image: ghcr.io/espressosystems/espresso-network/espresso-node:${DOCKER_TAG:-main}
     ports:
       - "$ESPRESSO_SEQUENCER3_API_PORT:$ESPRESSO_SEQUENCER3_API_PORT"
@@ -532,7 +532,7 @@ services:
       - ESPRESSO_SEQUENCER_CDN_ENDPOINT=marshal-0:${ESPRESSO_CDN_SERVER_PORT}
       - ESPRESSO_SEQUENCER_API_PORT=$ESPRESSO_SEQUENCER3_API_PORT
       - ESPRESSO_SEQUENCER_MAX_CONNECTIONS
-      - ESPRESSO_SEQUENCER_STATE_PEERS=http://sequencer4:$ESPRESSO_SEQUENCER4_API_PORT
+      - ESPRESSO_SEQUENCER_STATE_PEERS=http://espresso-node-4:$ESPRESSO_SEQUENCER4_API_PORT
       - ESPRESSO_SEQUENCER_L1_PROVIDER=http://demo-l1-network:${ESPRESSO_SEQUENCER_L1_PORT}
       - ESPRESSO_SEQUENCER_L1_WS_PROVIDER=ws://demo-l1-network:${ESPRESSO_SEQUENCER_L1_WS_PORT}
       - ESPRESSO_SEQUENCER_L1_POLLING_INTERVAL
@@ -543,9 +543,9 @@ services:
       - ESPRESSO_SEQUENCER_PRIVATE_STATE_KEY=$ESPRESSO_DEMO_SEQUENCER_STATE_PRIVATE_KEY_3
       - ESPRESSO_SEQUENCER_PRIVATE_X25519_KEY=$ESPRESSO_DEMO_SEQUENCER_X25519_PRIVATE_KEY_3
       - ESPRESSO_SEQUENCER_LIBP2P_BIND_ADDRESS=0.0.0.0:$ESPRESSO_DEMO_SEQUENCER_LIBP2P_PORT_3
-      - ESPRESSO_SEQUENCER_LIBP2P_ADVERTISE_ADDRESS=sequencer3:$ESPRESSO_DEMO_SEQUENCER_LIBP2P_PORT_3
+      - ESPRESSO_SEQUENCER_LIBP2P_ADVERTISE_ADDRESS=espresso-node-3:$ESPRESSO_DEMO_SEQUENCER_LIBP2P_PORT_3
       - ESPRESSO_SEQUENCER_CLIQUENET_BIND_ADDRESS=0.0.0.0:${ESPRESSO_DEMO_SEQUENCER_CLIQUENET_PORT_3}
-      - ESPRESSO_SEQUENCER_IDENTITY_NODE_NAME=sequencer3
+      - ESPRESSO_SEQUENCER_IDENTITY_NODE_NAME=espresso-node-3
       - ESPRESSO_SEQUENCER_IDENTITY_WALLET_ADDRESS=0x0000000000000000000000000000000000000003
       - ESPRESSO_SEQUENCER_IDENTITY_COMPANY_NAME=Espresso Systems
       - ESPRESSO_SEQUENCER_IDENTITY_COMPANY_WEBSITE=https://www.espressosys.com/
@@ -555,7 +555,7 @@ services:
       - ESPRESSO_SEQUENCER_IDENTITY_COUNTRY_CODE=CN
       - ESPRESSO_SEQUENCER_IDENTITY_LATITUDE=35.8617
       - ESPRESSO_SEQUENCER_IDENTITY_LONGITUDE=104.1954
-      - ESPRESSO_SEQUENCER_PUBLIC_API_URL=http://sequencer3:$ESPRESSO_SEQUENCER3_API_PORT/
+      - ESPRESSO_SEQUENCER_PUBLIC_API_URL=http://espresso-node-3:$ESPRESSO_SEQUENCER3_API_PORT/
       - RUST_LOG
       - RUST_LOG_FORMAT
       - ASYNC_STD_THREAD_COUNT
@@ -575,7 +575,7 @@ services:
       stake-for-demo:
         condition: service_completed_successfully
 
-  sequencer4:
+  espresso-node-4:
     image: ghcr.io/espressosystems/espresso-network/espresso-node:${DOCKER_TAG:-main}
     ports:
       - "$ESPRESSO_SEQUENCER4_API_PORT:$ESPRESSO_SEQUENCER4_API_PORT"
@@ -587,8 +587,8 @@ services:
       - ESPRESSO_SEQUENCER_CDN_ENDPOINT=marshal-0:${ESPRESSO_CDN_SERVER_PORT}
       - ESPRESSO_SEQUENCER_API_PORT=$ESPRESSO_SEQUENCER4_API_PORT
       - ESPRESSO_SEQUENCER_MAX_CONNECTIONS
-      - ESPRESSO_SEQUENCER_STATE_PEERS=http://sequencer0:$ESPRESSO_SEQUENCER0_API_PORT
-      - ESPRESSO_SEQUENCER_API_PEERS=http://sequencer0:$ESPRESSO_SEQUENCER0_API_PORT
+      - ESPRESSO_SEQUENCER_STATE_PEERS=http://espresso-node-0:$ESPRESSO_SEQUENCER0_API_PORT
+      - ESPRESSO_SEQUENCER_API_PEERS=http://espresso-node-0:$ESPRESSO_SEQUENCER0_API_PORT
       - ESPRESSO_SEQUENCER_L1_PROVIDER=http://demo-l1-network:${ESPRESSO_SEQUENCER_L1_PORT}
       - ESPRESSO_SEQUENCER_L1_POLLING_INTERVAL
       - ESPRESSO_SEQUENCER_L1_EVENTS_MAX_BLOCK_RANGE
@@ -598,9 +598,9 @@ services:
       - ESPRESSO_SEQUENCER_PRIVATE_STATE_KEY=$ESPRESSO_DEMO_SEQUENCER_STATE_PRIVATE_KEY_4
       - ESPRESSO_SEQUENCER_PRIVATE_X25519_KEY=$ESPRESSO_DEMO_SEQUENCER_X25519_PRIVATE_KEY_4
       - ESPRESSO_SEQUENCER_LIBP2P_BIND_ADDRESS=0.0.0.0:$ESPRESSO_DEMO_SEQUENCER_LIBP2P_PORT_4
-      - ESPRESSO_SEQUENCER_LIBP2P_ADVERTISE_ADDRESS=sequencer4:$ESPRESSO_DEMO_SEQUENCER_LIBP2P_PORT_4
+      - ESPRESSO_SEQUENCER_LIBP2P_ADVERTISE_ADDRESS=espresso-node-4:$ESPRESSO_DEMO_SEQUENCER_LIBP2P_PORT_4
       - ESPRESSO_SEQUENCER_CLIQUENET_BIND_ADDRESS=0.0.0.0:${ESPRESSO_DEMO_SEQUENCER_CLIQUENET_PORT_4}
-      - ESPRESSO_SEQUENCER_IDENTITY_NODE_NAME=sequencer4
+      - ESPRESSO_SEQUENCER_IDENTITY_NODE_NAME=espresso-node-4
       - ESPRESSO_SEQUENCER_IDENTITY_WALLET_ADDRESS=0x0000000000000000000000000000000000000004
       - ESPRESSO_SEQUENCER_IDENTITY_COMPANY_NAME=Espresso Systems
       - ESPRESSO_SEQUENCER_IDENTITY_COMPANY_WEBSITE=https://www.espressosys.com/
@@ -609,7 +609,7 @@ services:
       - ESPRESSO_SEQUENCER_IDENTITY_COUNTRY_CODE=AU
       - ESPRESSO_SEQUENCER_IDENTITY_LATITUDE=-25.2744
       - ESPRESSO_SEQUENCER_IDENTITY_LONGITUDE=133.7751
-      - ESPRESSO_SEQUENCER_PUBLIC_API_URL=http://sequencer4:$ESPRESSO_SEQUENCER4_API_PORT/
+      - ESPRESSO_SEQUENCER_PUBLIC_API_URL=http://espresso-node-4:$ESPRESSO_SEQUENCER4_API_PORT/
       - RUST_LOG
       - RUST_LOG_FORMAT
       - ASYNC_STD_THREAD_COUNT
@@ -639,12 +639,12 @@ services:
       - ESPRESSO_SUBMIT_TRANSACTIONS_DELAY
       - ESPRESSO_BENCH_START_BLOCK
       - ESPRESSO_BENCH_END_BLOCK
-      - ESPRESSO_SEQUENCER_URLS=http://sequencer0:${ESPRESSO_SEQUENCER0_API_PORT},http://sequencer1:${ESPRESSO_SEQUENCER1_API_PORT}
+      - ESPRESSO_SEQUENCER_URLS=http://espresso-node-0:${ESPRESSO_SEQUENCER0_API_PORT},http://espresso-node-1:${ESPRESSO_SEQUENCER1_API_PORT}
       - RUST_LOG
       - RUST_LOG_FORMAT
       - ASYNC_STD_THREAD_COUNT
     depends_on:
-      sequencer0:
+      espresso-node-0:
         condition: service_healthy
       # We don't directly depend on the builder, but transactions will not be finalized until it has
       # started, so there is no point in starting before then.
@@ -662,12 +662,12 @@ services:
       - ESPRESSO_SUBMIT_TRANSACTIONS_DELAY
       - ESPRESSO_BENCH_START_BLOCK
       - ESPRESSO_BENCH_END_BLOCK
-      - ESPRESSO_SEQUENCER_URLS=http://sequencer0:${ESPRESSO_SEQUENCER0_API_PORT},http://sequencer1:${ESPRESSO_SEQUENCER1_API_PORT}
+      - ESPRESSO_SEQUENCER_URLS=http://espresso-node-0:${ESPRESSO_SEQUENCER0_API_PORT},http://espresso-node-1:${ESPRESSO_SEQUENCER1_API_PORT}
       - RUST_LOG
       - RUST_LOG_FORMAT
       - ASYNC_STD_THREAD_COUNT
     depends_on:
-      sequencer0:
+      espresso-node-0:
         condition: service_healthy
       permissionless-builder:
         condition: service_healthy
@@ -677,8 +677,8 @@ services:
     ports:
       - "$ESPRESSO_BUILDER_SERVER_PORT:$ESPRESSO_BUILDER_SERVER_PORT"
     environment:
-      - ESPRESSO_SEQUENCER_URL=http://sequencer0:$ESPRESSO_SEQUENCER0_API_PORT
-      - ESPRESSO_SEQUENCER_STATE_PEERS=http://sequencer0:$ESPRESSO_SEQUENCER0_API_PORT
+      - ESPRESSO_SEQUENCER_URL=http://espresso-node-0:$ESPRESSO_SEQUENCER0_API_PORT
+      - ESPRESSO_SEQUENCER_STATE_PEERS=http://espresso-node-0:$ESPRESSO_SEQUENCER0_API_PORT
       - ESPRESSO_BUILDER_GENESIS_FILE=${ESPRESSO_SEQUENCER_GENESIS_FILE:-genesis/demo.toml}
       - ESPRESSO_BUILDER_ETH_MNEMONIC
       - ESPRESSO_BUILDER_ETH_ACCOUNT_INDEX
@@ -694,7 +694,7 @@ services:
       - RUST_LOG_FORMAT
       - ASYNC_STD_THREAD_COUNT
     depends_on:
-      sequencer0:
+      espresso-node-0:
         condition: service_healthy
       fund-builder:
         condition: service_completed_successfully
@@ -704,14 +704,14 @@ services:
     ports:
       - "$ESPRESSO_NASTY_CLIENT_PORT:$ESPRESSO_NASTY_CLIENT_PORT"
     environment:
-      # Point the nasty client at sequencer1, the only one running the state API.
-      - ESPRESSO_SEQUENCER_URL=http://sequencer1:$ESPRESSO_SEQUENCER1_API_PORT
+      # Point the nasty client at espresso-node-1, the only one running the state API.
+      - ESPRESSO_SEQUENCER_URL=http://espresso-node-1:$ESPRESSO_SEQUENCER1_API_PORT
       - ESPRESSO_NASTY_CLIENT_PORT
       - RUST_LOG
       - RUST_LOG_FORMAT
       - ASYNC_STD_THREAD_COUNT
     depends_on:
-      sequencer0:
+      espresso-node-0:
         condition: service_healthy
 
   node-validator:
@@ -722,22 +722,22 @@ services:
       - RUST_LOG
       - RUST_LOG_FORMAT
       - ESPRESSO_NODE_VALIDATOR_PORT
-      - ESPRESSO_NODE_VALIDATOR_STAKE_TABLE_SOURCE_BASE_URL=http://sequencer0:$ESPRESSO_SEQUENCER0_API_PORT/v0/
-      - ESPRESSO_NODE_VALIDATOR_LEAF_STREAM_SOURCE_BASE_URL=http://sequencer0:$ESPRESSO_SEQUENCER0_API_PORT/v0/
-      - ESPRESSO_NODE_VALIDATOR_INITIAL_NODE_PUBLIC_BASE_URLS=http://sequencer0:$ESPRESSO_SEQUENCER0_API_PORT/,http://sequencer1:$ESPRESSO_SEQUENCER1_API_PORT/,http://sequencer2:$ESPRESSO_SEQUENCER2_API_PORT/,http://sequencer3:$ESPRESSO_SEQUENCER3_API_PORT/,http://sequencer4:$ESPRESSO_SEQUENCER4_API_PORT/
+      - ESPRESSO_NODE_VALIDATOR_STAKE_TABLE_SOURCE_BASE_URL=http://espresso-node-0:$ESPRESSO_SEQUENCER0_API_PORT/v0/
+      - ESPRESSO_NODE_VALIDATOR_LEAF_STREAM_SOURCE_BASE_URL=http://espresso-node-0:$ESPRESSO_SEQUENCER0_API_PORT/v0/
+      - ESPRESSO_NODE_VALIDATOR_INITIAL_NODE_PUBLIC_BASE_URLS=http://espresso-node-0:$ESPRESSO_SEQUENCER0_API_PORT/,http://espresso-node-1:$ESPRESSO_SEQUENCER1_API_PORT/,http://espresso-node-2:$ESPRESSO_SEQUENCER2_API_PORT/,http://espresso-node-3:$ESPRESSO_SEQUENCER3_API_PORT/,http://espresso-node-4:$ESPRESSO_SEQUENCER4_API_PORT/
     depends_on:
-      sequencer0:
+      espresso-node-0:
         condition: service_healthy
-      sequencer1:
+      espresso-node-1:
         condition: service_healthy
-      sequencer2:
+      espresso-node-2:
         condition: service_healthy
-      sequencer3:
+      espresso-node-3:
         condition: service_healthy
-      sequencer4:
+      espresso-node-4:
         condition: service_healthy
 
-  sequencer-db-0:
+  espresso-node-db-0:
     image: postgres
     user: root
     ports:
@@ -745,16 +745,16 @@ services:
     environment:
       - POSTGRES_PASSWORD=password
       - POSTGRES_USER=root
-      - POSTGRES_DB=sequencer
+      - POSTGRES_DB=espresso
     healthcheck:
       # Postgres can be falsely "ready" once before running init scripts.
       # See https://github.com/docker-library/postgres/issues/146 for discussion.
-      test: "pg_isready -U root -d sequencer && sleep 1 && pg_isready -U root -d sequencer"
+      test: "pg_isready -U root -d espresso && sleep 1 && pg_isready -U root -d espresso"
       interval: 5s
       timeout: 4s
       retries: 20
 
-  sequencer-db-1:
+  espresso-node-db-1:
     image: postgres
     user: root
     ports:
@@ -762,11 +762,11 @@ services:
     environment:
       - POSTGRES_PASSWORD=password
       - POSTGRES_USER=root
-      - POSTGRES_DB=sequencer
+      - POSTGRES_DB=espresso
     healthcheck:
       # Postgres can be falsely "ready" once before running init scripts.
       # See https://github.com/docker-library/postgres/issues/146 for discussion.
-      test: "pg_isready -U root -d sequencer && sleep 1 && pg_isready -U root -d sequencer"
+      test: "pg_isready -U root -d espresso && sleep 1 && pg_isready -U root -d espresso"
       interval: 5s
       timeout: 4s
       retries: 20
@@ -779,5 +779,5 @@ services:
       - QUERY_SERVICE_URI=http://localhost:$ESPRESSO_SEQUENCER1_API_PORT/v0/
       - NODE_VALIDATOR_URI=ws://localhost:$ESPRESSO_NODE_VALIDATOR_PORT/v0/
     depends_on:
-      sequencer1:
+      espresso-node-1:
         condition: service_healthy
