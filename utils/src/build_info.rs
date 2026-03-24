@@ -98,8 +98,8 @@ mod test {
             assert!(output.contains(field), "missing {field}: {output}");
         }
         assert!(output.starts_with("describe:"));
-        assert!(!output.contains("sequencer-utils"));
-        assert_eq!(info.pkg_name, "sequencer-utils");
+        assert!(!output.contains("espresso-utils"));
+        assert_eq!(info.pkg_name, "espresso-utils");
         assert!(!info.git_sha.is_empty());
         assert!(!info.os.is_empty());
         assert!(!info.arch.is_empty());
