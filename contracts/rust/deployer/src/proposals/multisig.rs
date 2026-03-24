@@ -17,6 +17,12 @@ use crate::{
     output::{CalldataInfo, FunctionInfo},
 };
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MultisigOwnerCheck {
+    RequireContract,
+    Skip,
+}
+
 #[derive(Clone)]
 pub struct TransferOwnershipParams {
     pub new_owner: Address,
@@ -122,6 +128,7 @@ pub async fn upgrade_light_client_v2_multisig_owner(
     contracts: &mut Contracts,
     params: LightClientV2UpgradeParams,
     is_mock: bool,
+    multisig_owner_check: MultisigOwnerCheck,
 ) -> Result<CalldataInfo> {
     let expected_major_version: u8 = 2;
 
@@ -134,7 +141,9 @@ pub async fn upgrade_light_client_v2_multisig_owner(
         .owner()
         .call()
         .await?;
-    if !crate::is_contract(&provider, owner_addr).await? {
+    if multisig_owner_check == MultisigOwnerCheck::RequireContract
+        && !crate::is_contract(&provider, owner_addr).await?
+    {
         anyhow::bail!(
             "LightClientProxy owner {owner_addr:#x} is not a contract (expected multisig)"
         );
@@ -216,6 +225,7 @@ pub async fn upgrade_light_client_v3_multisig_owner(
     provider: impl Provider,
     contracts: &mut Contracts,
     is_mock: bool,
+    multisig_owner_check: MultisigOwnerCheck,
 ) -> Result<CalldataInfo> {
     let expected_major_version: u8 = 3;
 
@@ -228,7 +238,9 @@ pub async fn upgrade_light_client_v3_multisig_owner(
         .owner()
         .call()
         .await?;
-    if !crate::is_contract(&provider, owner_addr).await? {
+    if multisig_owner_check == MultisigOwnerCheck::RequireContract
+        && !crate::is_contract(&provider, owner_addr).await?
+    {
         anyhow::bail!(
             "LightClientProxy owner {owner_addr:#x} is not a contract (expected multisig)"
         );
@@ -307,6 +319,7 @@ pub async fn upgrade_light_client_v3_multisig_owner(
 pub async fn upgrade_esp_token_v2_multisig_owner(
     provider: impl Provider,
     contracts: &mut Contracts,
+    multisig_owner_check: MultisigOwnerCheck,
 ) -> Result<CalldataInfo> {
     let proxy_addr = contracts
         .address(Contract::EspTokenProxy)
@@ -314,7 +327,9 @@ pub async fn upgrade_esp_token_v2_multisig_owner(
     tracing::info!("EspTokenProxy found at {proxy_addr:#x}");
     let proxy = EspToken::new(proxy_addr, &provider);
     let owner_addr = proxy.owner().call().await?;
-    if !crate::is_contract(&provider, owner_addr).await? {
+    if multisig_owner_check == MultisigOwnerCheck::RequireContract
+        && !crate::is_contract(&provider, owner_addr).await?
+    {
         anyhow::bail!("EspTokenProxy owner {owner_addr:#x} is not a contract (expected multisig)");
     }
 
@@ -352,6 +367,7 @@ pub async fn upgrade_stake_table_v2_multisig_owner(
     l1_client: L1Client,
     contracts: &mut Contracts,
     params: StakeTableV2UpgradeParams,
+    multisig_owner_check: MultisigOwnerCheck,
 ) -> Result<CalldataInfo> {
     tracing::info!("Upgrading StakeTableProxy to StakeTableV2 using multisig owner");
     let Some(proxy_addr) = contracts.address(Contract::StakeTableProxy) else {
@@ -367,7 +383,9 @@ pub async fn upgrade_stake_table_v2_multisig_owner(
             params.multisig_address
         );
     }
-    if !crate::is_contract(&provider, owner_addr).await? {
+    if multisig_owner_check == MultisigOwnerCheck::RequireContract
+        && !crate::is_contract(&provider, owner_addr).await?
+    {
         anyhow::bail!(
             "StakeTableProxy owner {owner_addr:#x} is not a contract (expected multisig)"
         );
@@ -396,6 +414,7 @@ pub async fn upgrade_stake_table_v2_multisig_owner(
 pub async fn upgrade_fee_contract_multisig_owner(
     provider: impl Provider,
     contracts: &mut Contracts,
+    multisig_owner_check: MultisigOwnerCheck,
 ) -> Result<CalldataInfo> {
     let proxy_addr = contracts
         .address(Contract::FeeContractProxy)
@@ -403,7 +422,9 @@ pub async fn upgrade_fee_contract_multisig_owner(
     tracing::info!("FeeContractProxy found at {proxy_addr:#x}");
     let proxy = FeeContract::new(proxy_addr, &provider);
     let owner_addr = proxy.owner().call().await?;
-    if !crate::is_contract(&provider, owner_addr).await? {
+    if multisig_owner_check == MultisigOwnerCheck::RequireContract
+        && !crate::is_contract(&provider, owner_addr).await?
+    {
         anyhow::bail!(
             "FeeContractProxy owner {owner_addr:#x} is not a contract (expected multisig)"
         );

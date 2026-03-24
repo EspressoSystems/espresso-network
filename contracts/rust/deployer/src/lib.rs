@@ -1829,10 +1829,10 @@ mod tests {
         impersonate_filler::ImpersonateFiller,
         proposals::{
             multisig::{
-                LightClientV2UpgradeParams, StakeTableV2UpgradeParams, TransferOwnershipParams,
-                transfer_ownership_from_multisig_to_timelock, upgrade_esp_token_v2_multisig_owner,
-                upgrade_fee_contract_multisig_owner, upgrade_light_client_v2_multisig_owner,
-                upgrade_stake_table_v2_multisig_owner,
+                LightClientV2UpgradeParams, MultisigOwnerCheck, StakeTableV2UpgradeParams,
+                TransferOwnershipParams, transfer_ownership_from_multisig_to_timelock,
+                upgrade_esp_token_v2_multisig_owner, upgrade_fee_contract_multisig_owner,
+                upgrade_light_client_v2_multisig_owner, upgrade_stake_table_v2_multisig_owner,
             },
             timelock::{
                 TimelockOperationParams, TimelockOperationPayload, TimelockOperationType,
@@ -2591,6 +2591,7 @@ mod tests {
                 epoch_start_block,
             },
             options.is_mock,
+            MultisigOwnerCheck::Skip,
         )
         .await?;
         tracing::info!(
@@ -2877,6 +2878,7 @@ mod tests {
                 multisig_address: multisig_admin,
                 pauser,
             },
+            MultisigOwnerCheck::Skip,
         )
         .await?;
         assert_eq!(calldata.to, stake_table_proxy_addr);
@@ -3120,7 +3122,12 @@ mod tests {
         contracts.insert(Contract::RewardClaimProxy, fake_reward_claim);
 
         // then encode upgrade calldata for the multisig wallet
-        let calldata = upgrade_esp_token_v2_multisig_owner(&provider, &mut contracts).await?;
+        let calldata = upgrade_esp_token_v2_multisig_owner(
+            &provider,
+            &mut contracts,
+            MultisigOwnerCheck::Skip,
+        )
+        .await?;
         tracing::info!(
             "Encoded calldata for EspTokenProxy upgrade: to={:#x}, data={}",
             calldata.to,
@@ -4359,7 +4366,12 @@ mod tests {
         contracts.remove(&Contract::FeeContract);
 
         // Encode upgrade calldata for the multisig wallet
-        let calldata = upgrade_fee_contract_multisig_owner(&provider, &mut contracts).await?;
+        let calldata = upgrade_fee_contract_multisig_owner(
+            &provider,
+            &mut contracts,
+            MultisigOwnerCheck::Skip,
+        )
+        .await?;
 
         tracing::info!(
             "Encoded calldata for FeeContractProxy upgrade: to={:#x}, data={}",

@@ -18,11 +18,11 @@ use crate::{
     output::output_safe_tx_builder,
     proposals::{
         multisig::{
-            LightClientV2UpgradeParams, StakeTableV2UpgradeParams, TransferOwnershipParams,
-            encode_generic_calldata, transfer_ownership_from_multisig_to_timelock,
-            upgrade_esp_token_v2_multisig_owner, upgrade_fee_contract_multisig_owner,
-            upgrade_light_client_v2_multisig_owner, upgrade_light_client_v3_multisig_owner,
-            upgrade_stake_table_v2_multisig_owner,
+            LightClientV2UpgradeParams, MultisigOwnerCheck, StakeTableV2UpgradeParams,
+            TransferOwnershipParams, encode_generic_calldata,
+            transfer_ownership_from_multisig_to_timelock, upgrade_esp_token_v2_multisig_owner,
+            upgrade_fee_contract_multisig_owner, upgrade_light_client_v2_multisig_owner,
+            upgrade_light_client_v3_multisig_owner, upgrade_stake_table_v2_multisig_owner,
         },
         timelock::{
             TimelockOperationParams, TimelockOperationPayload, TimelockOperationType,
@@ -163,9 +163,13 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
 
                     tracing::info!(?use_multisig, "Upgrading FeeContract to V1.0.1");
                     if use_multisig {
-                        let calldata = upgrade_fee_contract_multisig_owner(provider, contracts)
-                            .await?
-                            .with_description("Upgrade FeeContract to V1.0.1".to_string());
+                        let calldata = upgrade_fee_contract_multisig_owner(
+                            provider,
+                            contracts,
+                            MultisigOwnerCheck::RequireContract,
+                        )
+                        .await?
+                        .with_description("Upgrade FeeContract to V1.0.1".to_string());
                         output_safe_tx_builder(
                             &calldata,
                             self.output_path.as_deref(),
@@ -243,9 +247,13 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 let use_multisig = self.use_multisig;
 
                 if use_multisig {
-                    let calldata = upgrade_esp_token_v2_multisig_owner(provider, contracts)
-                        .await?
-                        .with_description("Upgrade EspToken to V2".to_string());
+                    let calldata = upgrade_esp_token_v2_multisig_owner(
+                        provider,
+                        contracts,
+                        MultisigOwnerCheck::RequireContract,
+                    )
+                    .await?
+                    .with_description("Upgrade EspToken to V2".to_string());
                     output_safe_tx_builder(&calldata, self.output_path.as_deref(), self.chain_id)?;
                 } else {
                     crate::upgrade_esp_token_v2(provider, contracts).await?;
@@ -340,6 +348,7 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                             epoch_start_block,
                         },
                         use_mock,
+                        MultisigOwnerCheck::RequireContract,
                     )
                     .await?
                     .with_description("Upgrade LightClient to V2".to_string());
@@ -362,10 +371,14 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
 
                 tracing::info!(?use_multisig, "Upgrading LightClientV3 with ");
                 if use_multisig {
-                    let calldata =
-                        upgrade_light_client_v3_multisig_owner(provider, contracts, use_mock)
-                            .await?
-                            .with_description("Upgrade LightClient to V3".to_string());
+                    let calldata = upgrade_light_client_v3_multisig_owner(
+                        provider,
+                        contracts,
+                        use_mock,
+                        MultisigOwnerCheck::RequireContract,
+                    )
+                    .await?
+                    .with_description("Upgrade LightClient to V3".to_string());
                     output_safe_tx_builder(&calldata, self.output_path.as_deref(), self.chain_id)?;
                 } else {
                     crate::upgrade_light_client_v3(provider, contracts, use_mock).await?;
@@ -446,6 +459,7 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                             )?,
                             pauser: multisig_pauser,
                         },
+                        MultisigOwnerCheck::RequireContract,
                     )
                     .await?
                     .with_description("Upgrade StakeTable to V2".to_string());
