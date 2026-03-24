@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Unlicensed
 
-/* solhint-disable contract-name-camelcase, func-name-mixedcase, one-contract-per-file, no-console */
+/* solhint-disable contract-name-camelcase, func-name-mixedcase, one-contract-per-file, no-console
+*/
 
 pragma solidity ^0.8.0;
 
@@ -9,8 +10,9 @@ import "forge-std/Test.sol";
 import { IPlonkVerifier as V } from "../src/interfaces/IPlonkVerifier.sol";
 import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
-import { OwnableUpgradeable } from
-    "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import {
+    OwnableUpgradeable
+} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 
 // Target contract
 import { LightClient as LC } from "../src/LightClient.sol";
@@ -958,8 +960,8 @@ contract LightClient_LivenessDetectionTest is LightClientCommonTest {
     function test_LagAfterLastUpdate() public {
         vm.roll(block.number + 10);
         uint256 lastUpdateL1Height = updateL1Heights[numUpdates - 1];
-        for (uint256 queriedBlock = lastUpdateL1Height; queriedBlock < block.number; queriedBlock++)
-        {
+        for (
+            uint256 queriedBlock = lastUpdateL1Height; queriedBlock < block.number; queriedBlock++) {
             for (uint256 threshold = 0; threshold <= 10 + 5; threshold++) {
                 if (queriedBlock - lastUpdateL1Height > threshold) {
                     assertTrue(lc.lagOverEscapeHatchThreshold(queriedBlock, threshold));

@@ -71,6 +71,9 @@ pub trait QueryableHeader<Types: NodeType>: BlockHeader<Types> {
 
     /// Get the size taken up by the given namespace in the payload.
     fn namespace_size(&self, i: &Self::NamespaceIndex, payload_size: usize) -> u64;
+
+    /// Get the namespace table as a VARCHAR.
+    fn ns_table(&self) -> String;
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

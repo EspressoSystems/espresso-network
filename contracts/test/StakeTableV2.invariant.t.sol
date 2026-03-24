@@ -6,7 +6,9 @@ import "forge-std/Test.sol";
 import "forge-std/StdInvariant.sol";
 import { console } from "forge-std/console.sol";
 import {
-    StakeTableV2PropTestBase, MockStakeTableV2, MockERC20
+    StakeTableV2PropTestBase,
+    MockStakeTableV2,
+    MockERC20
 } from "./StakeTableV2PropTestBase.sol";
 import { StakeTable } from "../src/StakeTable.sol";
 import { BN254 } from "bn254/BN254.sol";

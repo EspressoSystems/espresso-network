@@ -254,7 +254,7 @@ where
 {
     async fn run(self, common: VidCommon) {
         let common = VidCommonQueryData::new(self.header, common);
-        self.fetcher.store_and_notify(common).await;
+        self.fetcher.store_and_notify(&common).await;
     }
 }
 

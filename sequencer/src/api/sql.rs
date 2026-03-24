@@ -4,10 +4,11 @@ use anyhow::{Context, bail, ensure};
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
 use espresso_types::{
-    BlockMerkleTree, FeeAccount, FeeMerkleTree, Leaf2, NodeState, ValidatedState, get_l1_deposits,
+    BlockMerkleTree, ChainConfig, FeeAccount, FeeMerkleTree, Leaf2, NodeState, ValidatedState,
+    get_l1_deposits,
     v0_1::IterableFeeInfo,
     v0_3::{
-        ChainConfig, REWARD_MERKLE_TREE_V1_HEIGHT, RewardAccountProofV1, RewardAccountQueryDataV1,
+        REWARD_MERKLE_TREE_V1_HEIGHT, RewardAccountProofV1, RewardAccountQueryDataV1,
         RewardAccountV1, RewardMerkleTreeV1,
     },
     v0_4::{PermittedRewardMerkleTreeV2, RewardAccountV2, RewardMerkleTreeV2},
@@ -91,10 +92,6 @@ impl SequencerDataSource for DataSource {
         }
         if opt.disable_proactive_fetching {
             builder = builder.disable_proactive_fetching();
-        }
-
-        if let Some(batch_size) = opt.types_migration_batch_size {
-            builder = builder.with_types_migration_batch_size(batch_size);
         }
 
         builder.build().await
@@ -1349,7 +1346,14 @@ mod tests {
         });
         tx.upsert(
             "header",
-            ["height", "hash", "payload_hash", "timestamp", "data"],
+            [
+                "height",
+                "hash",
+                "payload_hash",
+                "timestamp",
+                "data",
+                "ns_table",
+            ],
             ["height"],
             [(
                 block_height as i64,
@@ -1357,6 +1361,7 @@ mod tests {
                 format!("payload_{}", block_height),
                 block_height as i64,
                 test_data,
+                "ns_table".to_string(),
             )],
         )
         .await
