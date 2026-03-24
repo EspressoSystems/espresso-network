@@ -1,6 +1,5 @@
 use std::{
     collections::{BTreeMap, HashMap, VecDeque},
-    future::pending,
     sync::Arc,
 };
 
@@ -33,11 +32,14 @@ pub(crate) struct ValidatedStateManager<T: NodeType> {
 }
 
 enum Completed<T: NodeType> {
-    State(
-        Commitment<Leaf2<T>>,
-        Result<StateResponse<T>, StateError<T>>,
-    ),
-    Header(ViewNumber, Result<T::BlockHeader, HeaderError<T>>),
+    State {
+        commitment: Commitment<Leaf2<T>>,
+        result: Result<StateResponse<T>, StateError<T>>,
+    },
+    Header {
+        view: ViewNumber,
+        result: Result<T::BlockHeader, HeaderError<T>>,
+    },
 }
 
 enum Pending<T: NodeType> {
@@ -54,11 +56,7 @@ impl<T: NodeType> ValidatedStateManager<T> {
             header_requests: HashMap::new(),
             pending_requests: HashMap::new(),
             ready: VecDeque::new(),
-            tasks: {
-                let mut s = JoinSet::new();
-                s.spawn(pending());
-                s
-            },
+            tasks: JoinSet::new(),
         }
     }
 
@@ -113,7 +111,7 @@ impl<T: NodeType> ValidatedStateManager<T> {
                     commitment,
                     state: Arc::new(state),
                 });
-            Completed::State(commitment, result)
+            Completed::State { commitment, result }
         });
 
         self.state_requests.insert(commitment, (handle, request));
@@ -162,7 +160,7 @@ impl<T: NodeType> ValidatedStateManager<T> {
                 *view,
             )
             .await;
-            Completed::Header(view, result)
+            Completed::Header { view, result }
         });
 
         self.header_requests.insert(view, handle);
@@ -179,24 +177,24 @@ impl<T: NodeType> ValidatedStateManager<T> {
     }
 
     /// Wait for the next event.
-    pub async fn next(&mut self) -> Event<T> {
+    pub async fn next(&mut self) -> Option<Event<T>> {
         loop {
             if let Some(event) = self.ready.pop_front() {
-                return event;
+                return Some(event);
             }
             match self.tasks.join_next().await {
                 Some(Ok(result)) => match result {
-                    Completed::State(c, r) => self.handle_state_result(c, r),
-                    Completed::Header(v, r) => self.handle_header_result(v, r),
+                    Completed::State { commitment, result } => {
+                        self.handle_state_result(commitment, result)
+                    },
+                    Completed::Header { view, result } => self.handle_header_result(view, result),
                 },
                 Some(Err(err)) => {
                     if err.is_panic() {
                         error!(%err, "task panicked");
                     }
                 },
-                None => {
-                    unreachable!("join set contains pending sentinel")
-                },
+                None => return None,
             }
         }
     }
@@ -387,10 +385,11 @@ mod test {
         // View 1's parent is genesis (view 0), which isn't seeded.
         manager.request_state(make_state_request(&test_data.views[0]));
 
-        // No task was spawned, so next() should not produce output.
-        let result =
-            tokio::time::timeout(std::time::Duration::from_millis(100), manager.next()).await;
-        assert!(result.is_err(), "No output when parent is missing");
+        // No task was spawned, so next() should return None.
+        assert!(
+            manager.next().await.is_none(),
+            "No output when parent is missing"
+        );
 
         // But the empty state should be stored for the view.
         assert!(
@@ -409,7 +408,7 @@ mod test {
 
         manager.request_state(make_state_request(&test_data.views[0]));
 
-        let output = manager.next().await;
+        let output = manager.next().await.expect("should produce output");
         assert!(
             matches!(output, Event::StateVerified(_)),
             "Should receive StateVerified after validation completes"
@@ -424,11 +423,11 @@ mod test {
 
         // Request view 1 and let it complete.
         manager.request_state(make_state_request(&test_data.views[0]));
-        let _ = manager.next().await;
+        manager.next().await.expect("view 1 should complete");
 
         // Request view 2 — parent (view 1) should now exist.
         manager.request_state(make_state_request(&test_data.views[1]));
-        let output = manager.next().await;
+        let output = manager.next().await.expect("should produce output");
         assert!(
             matches!(output, Event::StateVerified(_)),
             "View 2 should produce StateVerified"
@@ -453,8 +452,8 @@ mod test {
         );
 
         // next() should process view 1, then eagerly chain view 2.
-        let output1 = manager.next().await;
-        let output2 = manager.next().await;
+        let output1 = manager.next().await.expect("view 1 should complete");
+        let output2 = manager.next().await.expect("view 2 should complete");
         assert_eq!(
             count_state_verified(&[output1, output2]),
             2,
@@ -470,13 +469,13 @@ mod test {
 
         // Complete state for view 1 so it can be used as parent for header.
         manager.request_state(make_state_request(&test_data.views[0]));
-        let _ = manager.next().await;
+        manager.next().await.expect("view 1 should complete");
 
         // Now request a header with view 1 as parent.
         let header_req = make_header_request(&test_data.views[0], test_data.views[1].view_number);
         manager.request_header(header_req);
 
-        let output = manager.next().await;
+        let output = manager.next().await.expect("should produce output");
         assert!(
             matches!(output, Event::HeaderCreated(_, _)),
             "Should receive HeaderCreated after header creation completes"
@@ -504,13 +503,13 @@ mod test {
         );
 
         // next() processes state completion, which chains the header request.
-        let output1 = manager.next().await;
+        let output1 = manager.next().await.expect("state should complete");
         assert!(
             matches!(output1, Event::StateVerified(_)),
             "State should be verified first"
         );
 
-        let output2 = manager.next().await;
+        let output2 = manager.next().await.expect("header should complete");
         assert!(
             matches!(output2, Event::HeaderCreated(_, _)),
             "Header should be created after pending state resolves"
@@ -527,14 +526,12 @@ mod test {
         manager.request_state(make_state_request(&test_data.views[0]));
         manager.request_state(make_state_request(&test_data.views[0]));
 
-        let output = manager.next().await;
+        let output = manager.next().await.expect("should produce output");
         assert!(matches!(output, Event::StateVerified(_)));
 
         // No second output — duplicate was ignored.
-        let result =
-            tokio::time::timeout(std::time::Duration::from_millis(100), manager.next()).await;
         assert!(
-            result.is_err(),
+            manager.next().await.is_none(),
             "Duplicate request should be ignored — only one response"
         );
     }
@@ -555,7 +552,7 @@ mod test {
         // Collect all outputs.
         let mut outputs = Vec::new();
         for _ in 0..3 {
-            outputs.push(manager.next().await);
+            outputs.push(manager.next().await.expect("should produce output"));
         }
 
         assert_eq!(

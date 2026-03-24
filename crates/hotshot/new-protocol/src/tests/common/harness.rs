@@ -93,8 +93,6 @@ impl TestHarness {
         let (input_tx, input_rx) = tokio::sync::mpsc::channel(100);
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
 
-
-
         let genesis_state = TestValidatedState::default();
         let genesis_leaf = Leaf2::<TestTypes>::genesis(
             &genesis_state,

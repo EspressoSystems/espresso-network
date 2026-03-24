@@ -52,7 +52,7 @@ pub mod testing {
                                 cpu_tx.send(cpu_event).await.unwrap();
                             }
                     }
-                    event = PendingIfNone(self.state_manager.as_mut().map(|sm| sm.next())) => {
+                    Some(event) = PendingIfNone(self.state_manager.as_mut().map(|sm| sm.next())) => {
                         self.received_events.push(ConsensusOutput::Event(event.clone()));
                         if let Ok(input) = ConsensusInput::try_from(event) {
                             self.process_input(input).await;
