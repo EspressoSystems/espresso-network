@@ -27,6 +27,7 @@ COPY data/genesis /genesis
 # Allow injecting a genesis file with aws secretsmanager
 # Set `ESPRESSO_SEQUENCER_GENESIS_SECRET`
 COPY docker/scripts/espresso-node-awssecretsmanager.sh /bin/espresso-node-awssecretsmanager.sh
+RUN chmod +x /bin/espresso-node-awssecretsmanager.sh
 
 # Copy entrypoint script
 COPY scripts/espresso-node-entrypoint /bin/espresso-node
