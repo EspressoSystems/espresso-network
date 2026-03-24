@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashMap, VecDeque},
+    collections::{BTreeMap, HashMap},
     sync::Arc,
 };
 
@@ -27,7 +27,6 @@ pub(crate) struct ValidatedStateManager<T: NodeType> {
     state_requests: HashMap<Commitment<Leaf2<T>>, (AbortHandle, StateRequest<T>)>,
     header_requests: HashMap<ViewNumber, AbortHandle>,
     pending_requests: HashMap<Commitment<Leaf2<T>>, Vec<Pending<T>>>,
-    ready: VecDeque<Event<T>>,
     tasks: JoinSet<Completed<T>>,
 }
 
@@ -55,7 +54,6 @@ impl<T: NodeType> ValidatedStateManager<T> {
             state_requests: HashMap::new(),
             header_requests: HashMap::new(),
             pending_requests: HashMap::new(),
-            ready: VecDeque::new(),
             tasks: JoinSet::new(),
         }
     }
@@ -179,15 +177,18 @@ impl<T: NodeType> ValidatedStateManager<T> {
     /// Wait for the next event.
     pub async fn next(&mut self) -> Option<Event<T>> {
         loop {
-            if let Some(event) = self.ready.pop_front() {
-                return Some(event);
-            }
             match self.tasks.join_next().await {
                 Some(Ok(result)) => match result {
                     Completed::State { commitment, result } => {
-                        self.handle_state_result(commitment, result)
+                        if let Some(event) = self.handle_state_result(commitment, result) {
+                            return Some(event);
+                        }
                     },
-                    Completed::Header { view, result } => self.handle_header_result(view, result),
+                    Completed::Header { view, result } => {
+                        if let Some(event) = self.handle_header_result(view, result) {
+                            return Some(event);
+                        }
+                    },
                 },
                 Some(Err(err)) => {
                     if err.is_panic() {
@@ -203,10 +204,8 @@ impl<T: NodeType> ValidatedStateManager<T> {
         &mut self,
         commitment: Commitment<Leaf2<T>>,
         result: Result<StateResponse<T>, StateError<T>>,
-    ) {
-        let Some((_, request)) = self.state_requests.remove(&commitment) else {
-            return;
-        };
+    ) -> Option<Event<T>> {
+        let (_, request) = self.state_requests.remove(&commitment)?;
         match result {
             Ok(response) => {
                 let leaf = Leaf2::from_quorum_proposal(&QuorumProposalWrapper::<T> {
@@ -214,13 +213,14 @@ impl<T: NodeType> ValidatedStateManager<T> {
                 });
                 self.validated_states
                     .insert(response.view, (response.state, leaf));
-                self.ready.push_back(Event::StateVerified(request));
                 self.start_pending(response.commitment);
+                Some(Event::StateVerified(request))
             },
             Err(err) => {
                 error!(%err, "state validation failed");
                 // Remove dependents of this failed request. TODO: double-check
                 self.pending_requests.remove(&commitment);
+                None
             },
         }
     }
@@ -229,16 +229,13 @@ impl<T: NodeType> ValidatedStateManager<T> {
         &mut self,
         view: ViewNumber,
         result: Result<T::BlockHeader, HeaderError<T>>,
-    ) {
-        if self.header_requests.remove(&view).is_none() {
-            return;
-        }
+    ) -> Option<Event<T>> {
+        self.header_requests.remove(&view)?;
         match result {
-            Ok(header) => {
-                self.ready.push_back(Event::HeaderCreated(view, header));
-            },
+            Ok(header) => Some(Event::HeaderCreated(view, header)),
             Err(err) => {
                 error!(%err, "header creation failed");
+                None
             },
         }
     }
