@@ -140,7 +140,7 @@ impl<T: NodeType> ValidatedStateManager<T> {
         let instance = self.instance.clone();
         let view = request.view;
 
-        let Ok(upgrade_lock) = upgrade_lock::<T>().version(view) else {
+        let Ok(version) = upgrade_lock::<T>().version(view) else {
             error!(%view, "unsupported version");
             return;
         };
@@ -154,7 +154,7 @@ impl<T: NodeType> ValidatedStateManager<T> {
                 request.builder_commitment,
                 request.metadata,
                 request.builder_fee,
-                upgrade_lock,
+                version,
                 *view,
             )
             .await;

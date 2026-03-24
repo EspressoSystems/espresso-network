@@ -10,10 +10,22 @@ pub(crate) fn has_vote1(events: &[ConsensusOutput<TestTypes>]) -> bool {
         .any(|e| matches!(e, ConsensusOutput::Action(Action::SendVote1(_))))
 }
 
+pub(crate) fn has_cert1(events: &[ConsensusOutput<TestTypes>]) -> bool {
+    events
+        .iter()
+        .any(|e| matches!(e, ConsensusOutput::Event(Event::Certificate1Formed(_))))
+}
 pub(crate) fn has_vote2(events: &[ConsensusOutput<TestTypes>]) -> bool {
     events
         .iter()
         .any(|e| matches!(e, ConsensusOutput::Action(Action::SendVote2(_))))
+}
+
+#[allow(dead_code)]
+pub(crate) fn has_cert2(events: &[ConsensusOutput<TestTypes>]) -> bool {
+    events
+        .iter()
+        .any(|e| matches!(e, ConsensusOutput::Event(Event::Certificate2Formed(_))))
 }
 
 pub(crate) fn has_leaf_decided(events: &[ConsensusOutput<TestTypes>]) -> bool {

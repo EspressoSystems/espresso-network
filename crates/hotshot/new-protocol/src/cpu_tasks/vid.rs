@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use hotshot_types::{
     data::{VidCommitment2, VidDisperse2, ViewNumber},
@@ -98,6 +98,7 @@ impl<TYPES: NodeType> VidDisperseTask<TYPES> {
 struct VidShareAccumulator<TYPES: NodeType> {
     shares: Vec<AvidmGf2Share>,
     accumulated_weight: usize,
+    seen_keys: HashSet<TYPES::SignatureKey>,
     common: AvidmGf2Common,
     metadata: Option<<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata>,
 }
@@ -142,15 +143,21 @@ impl<TYPES: NodeType> VidShareTask<TYPES> {
                         continue;
                     }
                     let payload_commitment = input.share.payload_commitment;
+                    let recipient_key = input.share.recipient_key.clone();
                     let weight = input.share.share.weight();
                     let accumulator = self.accumulators.entry(view).or_insert_with(|| {
                         VidShareAccumulator {
                             shares: Vec::new(),
                             accumulated_weight: 0,
+                            seen_keys: HashSet::new(),
                             common: input.share.common.clone(),
                             metadata: input.metadata.clone(),
                         }
                     });
+                    if !accumulator.seen_keys.insert(recipient_key) {
+                        // Already have a share from this key, skip duplicate
+                        continue;
+                    }
                     accumulator.accumulated_weight += weight;
                     accumulator.shares.push(input.share.share);
                     if accumulator.has_enough_shares() {

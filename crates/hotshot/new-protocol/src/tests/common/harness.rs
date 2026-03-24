@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use hotshot::types::BLSPubKey;
+use hotshot::{helpers::initialize_logging, types::BLSPubKey};
 use hotshot_example_types::{
     node_types::{TEST_VERSIONS, TestTypes},
     state_types::{TestInstanceState, TestValidatedState},
@@ -19,7 +19,7 @@ use crate::{
     Outbox,
     consensus::Consensus,
     coordinator::{handle::CoordinatorHandle, mock::testing::MockCoordinator},
-    cpu_tasks::CpuTaskManager,
+    cpu_tasks::{CpuTaskManager, vote::VoteCollectionTask},
     events::ConsensusOutput,
     helpers::upgrade_lock,
     validated_state::ValidatedStateManager,
@@ -42,6 +42,7 @@ pub(crate) struct TestHarness {
 
 impl TestHarness {
     pub async fn new_with_cpu_tasks(node_index: u64) -> Self {
+        initialize_logging();
         let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
         let membership = mock_membership().await;
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
@@ -61,6 +62,8 @@ impl TestHarness {
             store_drb_progress,
             load_drb_progress,
         );
+        let vote1_task = VoteCollectionTask::new(membership.clone(), upgrade_lock());
+        let vote2_task = VoteCollectionTask::new(membership.clone(), upgrade_lock());
         tokio::spawn(async move {
             cpu_task_manager.run().await;
         });
@@ -72,6 +75,8 @@ impl TestHarness {
             shutdown_rx,
             state_manager: None,
             cpu_tx: Some(cpu_tx),
+            vote1_task: Some(vote1_task),
+            vote2_task: Some(vote2_task),
             membership_coordinator: membership,
             outbox: Outbox::new(),
             received_events: Vec::new(),
@@ -88,6 +93,7 @@ impl TestHarness {
     /// Create a test harness that wires Consensus and ValidatedStateManager
     /// together through the MockCoordinator.
     pub async fn new_with_state_manager(node_index: u64) -> Self {
+        initialize_logging();
         let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
         let membership = mock_membership().await;
         let (input_tx, input_rx) = tokio::sync::mpsc::channel(100);
@@ -111,6 +117,8 @@ impl TestHarness {
             input_rx,
             shutdown_rx,
             cpu_tx: None,
+            vote1_task: None,
+            vote2_task: None,
             state_manager: Some(state_manager),
             membership_coordinator: membership,
             outbox: Outbox::new(),

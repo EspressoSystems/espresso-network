@@ -8,7 +8,10 @@ use super::common::{
     harness::TestHarness,
     utils::TestData,
 };
-use crate::events::{ConsensusOutput, Event};
+use crate::{
+    events::{ConsensusOutput, Event},
+    tests::common::assertions::{has_cert1, has_vote2},
+};
 
 /// Threshold for SuccessThreshold with 10 nodes of stake 1: (10*2)/3 + 1 = 7.
 const THRESHOLD: u64 = 7;
@@ -45,7 +48,7 @@ async fn send_vote2s(harness: &TestHarness, test_data: &TestData, view_idx: usiz
 /// CPU tasks form Certificate1 from accumulated Vote1 messages, enabling
 /// consensus to continue (verified by Vote1 emission for subsequent views).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn test_cert1_formed_from_vote1s() {
+async fn test_cert1_formed_and_vote2_sent() {
     let harness = TestHarness::new_with_cpu_tasks(0).await;
     let test_data = TestData::new(3).await;
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
@@ -54,11 +57,13 @@ async fn test_cert1_formed_from_vote1s() {
     send_proposal_and_vote1s(&harness, &test_data, 0, &node_key).await;
 
     // Wait for CPU tasks to process votes
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     let events = harness.shutdown().await;
 
     assert!(has_vote1(&events), "Vote1 should be sent for proposal");
+    assert!(has_vote2(&events), "Vote2 should be sent for proposal");
+    assert!(has_cert1(&events), "Certificate1 should be formed");
 }
 
 /// Full decide path: CPU tasks form Certificate1, Certificate2, and
@@ -76,21 +81,19 @@ async fn test_full_decide_via_cpu_tasks() {
     //   CPU VoteCollectionTask: accumulates QuorumVote2s → forms cert1
     //   CPU VidShareTask: accumulates VID shares → reconstructs block
     send_proposal_and_vote1s(&harness, &test_data, 0, &node_key).await;
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
     // Send Vote2s for view 1 → CPU forms cert2
     send_vote2s(&harness, &test_data, 0).await;
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 
     // View 2: full round to trigger decision on view 1
     send_proposal_and_vote1s(&harness, &test_data, 1, &node_key).await;
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     send_vote2s(&harness, &test_data, 1).await;
 
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     let events = harness.shutdown().await;
 
     assert!(has_vote1(&events), "Vote1 should be sent");
+    assert!(has_vote2(&events), "Vote2 should be sent");
     // LeafDecided proves the full pipeline: cert1 formation, block
     // reconstruction from VID shares, cert2 formation, and decision.
     assert!(
@@ -119,7 +122,7 @@ async fn test_leader_proposal_via_cpu_tasks() {
     //   3. VID disperse computed by CPU VidDisperseTask
     send_proposal_and_vote1s(&harness, &test_data, 0, &leader_for_view_2).await;
 
-    tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     let events = harness.shutdown().await;
 
     assert!(
@@ -144,12 +147,10 @@ async fn test_multi_view_decide_via_cpu_tasks() {
 
     for i in 0..test_data.views.len() {
         send_proposal_and_vote1s(&harness, &test_data, i, &node_key).await;
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         send_vote2s(&harness, &test_data, i).await;
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     }
 
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     let events = harness.shutdown().await;
 
     let decide_count = events

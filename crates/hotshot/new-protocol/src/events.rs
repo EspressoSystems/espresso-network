@@ -245,7 +245,6 @@ impl<TYPES: NodeType> TryFrom<Event<TYPES>> for CpuEvent<TYPES> {
             Event::MessageReceived(msg) => match msg {
                 ConsensusMessage::Proposal(proposal) => Ok(CpuEvent::Proposal(proposal)),
                 ConsensusMessage::Vote1(vote) => Ok(CpuEvent::Vote1(vote)),
-                ConsensusMessage::Vote2(vote) => Ok(CpuEvent::Vote2(vote)),
                 _ => Err(()),
             },
             _ => Err(()),
@@ -297,5 +296,4 @@ pub enum CpuEvent<TYPES: NodeType> {
     Proposal(ProposalMessage<TYPES>),
     VidDisperseRequest(VidDisperseRequest<TYPES>),
     Vote1(Vote1<TYPES>),
-    Vote2(Vote2<TYPES>),
 }

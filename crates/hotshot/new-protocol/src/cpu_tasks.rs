@@ -1,12 +1,11 @@
 mod drb;
 mod vid;
-mod vote;
+pub mod vote;
 
 use hotshot_types::{
     drb::DrbInput,
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
-    simple_vote::QuorumVote2,
     traits::{
         block_contents::BlockHeader,
         node_implementation::NodeType,
@@ -22,12 +21,10 @@ use tokio::{
 use self::{
     drb::DrbRequestTask,
     vid::{VidDisperseTask, VidShareTask},
-    vote::VoteCollectionTask,
 };
 use crate::{
     coordinator::handle::CoordinatorHandle,
     events::{CpuEvent, VidDisperseRequest, VidShareInput},
-    message::Vote2,
 };
 
 struct Task<T> {
@@ -49,8 +46,6 @@ pub(crate) struct CpuTaskManager<TYPES: NodeType> {
 
     vid_disperse_task: Task<VidDisperseRequest<TYPES>>,
     vid_share_task: Task<VidShareInput<TYPES>>,
-    vote1_task: Task<QuorumVote2<TYPES>>,
-    vote2_task: Task<Vote2<TYPES>>,
     drb_request_task: Task<DrbInput>,
 }
 
@@ -84,43 +79,10 @@ impl<TYPES: NodeType> CpuTaskManager<TYPES> {
         let vid_share = VidShareTask::new(vid_share_rx, coordinator_handle.clone());
         let vid_share_task = Task::new(vid_share_tx, spawn(vid_share.run()));
 
-        let (vote1_tx, vote1_rx) = mpsc::channel(100);
-        let vote1 = VoteCollectionTask::new(
-            vote1_rx,
-            epoch_membership_coordinator.clone(),
-            upgrade_lock.clone(),
-        );
-        let handle = coordinator_handle.clone();
-        let vote1_task = Task::new(
-            vote1_tx,
-            spawn(vote1.run(move |cert| {
-                let handle = handle.clone();
-                Box::pin(async move {
-                    let _ = handle.respond_certificate1(cert).await;
-                })
-            })),
-        );
-
-        let (vote2_tx, vote2_rx) = mpsc::channel(100);
-        let vote2 =
-            VoteCollectionTask::new(vote2_rx, epoch_membership_coordinator.clone(), upgrade_lock);
-        let handle = coordinator_handle.clone();
-        let vote2_task = Task::new(
-            vote2_tx,
-            spawn(vote2.run(move |cert| {
-                let handle = handle.clone();
-                Box::pin(async move {
-                    let _ = handle.respond_certificate2(cert).await;
-                })
-            })),
-        );
-
         Self {
             event_rx,
             vid_disperse_task,
             vid_share_task,
-            vote1_task,
-            vote2_task,
             drb_request_task,
         }
     }
@@ -149,7 +111,7 @@ impl<TYPES: NodeType> CpuTaskManager<TYPES> {
                 let _ = self.vid_disperse_task.send(vid_disperse_request).await;
             },
             CpuEvent::Vote1(vote1) => {
-                let _ = self.vote1_task.send(vote1.vote).await;
+                // let _ = self.vote1_task.send(vote1.vote).await;
                 let _ = self
                     .vid_share_task
                     .send(VidShareInput {
@@ -157,9 +119,6 @@ impl<TYPES: NodeType> CpuTaskManager<TYPES> {
                         metadata: None,
                     })
                     .await;
-            },
-            CpuEvent::Vote2(vote2) => {
-                let _ = self.vote2_task.send(vote2).await;
             },
         }
     }

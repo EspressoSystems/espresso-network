@@ -13,6 +13,7 @@ pub fn proposal_commitment<TYPES: NodeType>(
     Leaf2::from_quorum_proposal(&wrapper).commit()
 }
 
+// TODO: Remove this and use the actual upgrade lock
 pub fn upgrade_lock<TYPES: NodeType>() -> UpgradeLock<TYPES> {
     UpgradeLock::new(Upgrade::trivial(VID2_UPGRADE_VERSION))
 }
