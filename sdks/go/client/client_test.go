@@ -39,7 +39,7 @@ func TestApiWithEspressoDevNode(t *testing.T) {
 	ClientTestHelper(ctx, client, t)
 
 	var clientOptions []EspressoClientConfigOption
-	builderSubmitter, err := NewBuilderSubmitter([]string{"http://localhost:21000"})
+	builderSubmitter, err := NewBuilderSubmitter([]string{"http://localhost:23000"})
 	if err != nil {
 		t.Fatal("failed to create builder submitter", err)
 	}
