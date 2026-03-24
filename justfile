@@ -112,12 +112,6 @@ demo-native-benchmark:
 down *args:
     docker compose down {{args}}
 
-docker-cli *cmd:
-    docker exec -it espresso-sequencer-example-rollup-1 bin/cli {{cmd}}
-
-cli *cmd:
-    target/release/cli {{cmd}}
-
 pull:
     docker compose pull
 
