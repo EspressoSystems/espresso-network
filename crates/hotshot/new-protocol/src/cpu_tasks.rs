@@ -44,7 +44,7 @@ impl<T> Task<T> {
     }
 }
 
-struct CpuTaskManager<TYPES: NodeType> {
+pub(crate) struct CpuTaskManager<TYPES: NodeType> {
     event_rx: mpsc::Receiver<CpuEvent<TYPES>>,
 
     vid_disperse_task: Task<VidDisperseRequest<TYPES>>,

@@ -40,9 +40,11 @@ use hotshot_types::{
 };
 
 use crate::{
-    events::{ConsensusInput, StateResponse},
+    events::{ConsensusInput, Event, StateResponse},
     helpers::{proposal_commitment, upgrade_lock},
-    message::{Certificate1, Certificate2, ProposalMessage, Vote2, Vote2Data},
+    message::{
+        Certificate1, Certificate2, ConsensusMessage, ProposalMessage, Vote1, Vote2, Vote2Data,
+    },
 };
 
 #[allow(dead_code)]
@@ -86,36 +88,91 @@ impl TestView {
         self.vid_disperse.payload_commitment
     }
 
-    /// Build a ConsensusInput for a proposal.
-    pub fn proposal_input(&self, recipient_key: &BLSPubKey) -> ConsensusInput<TestTypes> {
-        ConsensusInput::Proposal(self.proposal_message(recipient_key))
+    /// Build an Event for a proposal.
+    pub fn proposal_input(&self, recipient_key: &BLSPubKey) -> Event<TestTypes> {
+        Event::MessageReceived(ConsensusMessage::Proposal(
+            self.proposal_message(recipient_key),
+        ))
     }
 
-    /// Build a ConsensusInput for block reconstructed.
-    pub fn block_reconstructed_input(&self) -> ConsensusInput<TestTypes> {
-        ConsensusInput::BlockReconstructed(self.view_number, self.vid_commitment())
+    /// Build an Event for block reconstructed.
+    pub fn block_reconstructed_input(&self) -> Event<TestTypes> {
+        Event::BlockReconstructed(
+            self.view_number,
+            TestBlockPayload::genesis(),
+            self.vid_commitment(),
+        )
     }
 
-    /// Build a ConsensusInput for Certificate1.
-    pub fn cert1_input(&self) -> ConsensusInput<TestTypes> {
-        ConsensusInput::Certificate1(self.cert1.clone())
+    /// Build an Event for Certificate1.
+    pub fn cert1_input(&self) -> Event<TestTypes> {
+        Event::Certificate1Formed(self.cert1.clone())
     }
 
-    /// Build a ConsensusInput for Certificate2.
-    pub fn cert2_input(&self) -> ConsensusInput<TestTypes> {
-        ConsensusInput::Certificate2(self.cert2.clone())
+    /// Build an Event for Certificate2.
+    pub fn cert2_input(&self) -> Event<TestTypes> {
+        Event::Certificate2Formed(self.cert2.clone())
     }
 
-    /// Build a ConsensusInput for a timeout certificate.
+    /// Build a Vote1 Event from a specific validator, carrying that validator's
+    /// QuorumVote2 and VID share.
+    pub fn vote1_input(&self, node_index: u64) -> Event<TestTypes> {
+        let (pub_key, priv_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], node_index);
+        let data = hotshot_types::simple_vote::QuorumData2 {
+            leaf_commit: proposal_commitment(&self.proposal.data.proposal),
+            epoch: Some(self.epoch_number),
+            block_number: Some(BlockHeader::<TestTypes>::block_number(
+                &self.proposal.data.proposal.block_header,
+            )),
+        };
+        let vote = hotshot_types::simple_vote::SimpleVote::create_signed_vote(
+            data,
+            self.view_number,
+            &pub_key,
+            &priv_key,
+            &upgrade_lock(),
+        )
+        .expect("Failed to sign QuorumVote2");
+        let vid_share = self
+            .vid_shares
+            .iter()
+            .find(|s| s.recipient_key == pub_key)
+            .expect("VID share not found for node")
+            .clone();
+        Event::MessageReceived(ConsensusMessage::Vote1(Vote1 { vote, vid_share }))
+    }
+
+    /// Build a Vote2 Event from a specific validator.
+    pub fn vote2_input(&self, node_index: u64) -> Event<TestTypes> {
+        let (pub_key, priv_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], node_index);
+        let data = Vote2Data {
+            leaf_commit: proposal_commitment(&self.proposal.data.proposal),
+            epoch: self.epoch_number,
+            block_number: BlockHeader::<TestTypes>::block_number(
+                &self.proposal.data.proposal.block_header,
+            ),
+        };
+        let vote = hotshot_types::simple_vote::SimpleVote::create_signed_vote(
+            data,
+            self.view_number,
+            &pub_key,
+            &priv_key,
+            &upgrade_lock(),
+        )
+        .expect("Failed to sign Vote2");
+        Event::MessageReceived(ConsensusMessage::Vote2(vote))
+    }
+
+    /// Build an Event for a timeout certificate.
     #[allow(dead_code)]
-    pub fn timeout_cert_input(&self) -> ConsensusInput<TestTypes> {
-        ConsensusInput::TimeoutCertificate(self.timeout_cert.clone())
+    pub fn timeout_cert_input(&self) -> Event<TestTypes> {
+        Event::TimeoutCertificateReceived(self.timeout_cert.clone())
     }
 
-    /// Build a ConsensusInput for a view sync certificate.
+    /// Build an Event for a view sync certificate.
     #[allow(dead_code)]
-    pub fn view_sync_cert_input(&self) -> ConsensusInput<TestTypes> {
-        ConsensusInput::ViewSyncCertificate(self.view_sync_cert.clone())
+    pub fn view_sync_cert_input(&self) -> Event<TestTypes> {
+        Event::ViewSyncCertificateReceived(self.view_sync_cert.clone())
     }
 }
 

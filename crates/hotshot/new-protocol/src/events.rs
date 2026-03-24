@@ -31,7 +31,7 @@ pub struct StateRequest<TYPES: NodeType> {
     pub payload_size: u32,
 }
 
-#[derive(Eq, PartialEq, Debug)]
+#[derive(Eq, PartialEq, Debug, Clone)]
 pub struct StateResponse<TYPES: NodeType> {
     pub view: ViewNumber,
     pub commitment: Commitment<Leaf2<TYPES>>,
@@ -77,7 +77,7 @@ pub struct VidShareInput<TYPES: NodeType> {
     pub metadata: Option<<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata>,
 }
 
-#[derive(Eq, PartialEq, Debug)]
+#[derive(Eq, PartialEq, Debug, Clone)]
 #[allow(clippy::large_enum_variant)]
 pub enum Action<TYPES: NodeType> {
     SendProposal(Proposal<TYPES, QuorumProposal2<TYPES>>, VidDisperse2<TYPES>),
@@ -118,7 +118,7 @@ pub enum Event<TYPES: NodeType> {
 }
 
 #[allow(clippy::large_enum_variant)]
-#[derive(Eq, PartialEq, Debug)]
+#[derive(Eq, PartialEq, Debug, Clone)]
 pub enum ConsensusOutput<TYPES: NodeType> {
     Action(Action<TYPES>),
     Event(Event<TYPES>),
@@ -136,6 +136,7 @@ impl<T: NodeType> From<Event<T>> for ConsensusOutput<T> {
     }
 }
 #[allow(clippy::large_enum_variant)]
+#[derive(Eq, PartialEq, Debug, Clone)]
 pub enum ConsensusInput<TYPES: NodeType> {
     Proposal(ProposalMessage<TYPES>),
     Certificate1(Certificate1<TYPES>),
@@ -226,6 +227,27 @@ impl<TYPES: NodeType> TryFrom<Event<TYPES>> for ConsensusInput<TYPES> {
                 }))
             },
             Event::HeaderCreated(view, header) => Ok(ConsensusInput::HeaderCreated(view, header)),
+            Event::Certificate1Formed(cert) => Ok(ConsensusInput::Certificate1(cert)),
+            Event::Certificate2Formed(cert) => Ok(ConsensusInput::Certificate2(cert)),
+            Event::VidDisperseCreated(_commitment, disperse) => Ok(
+                ConsensusInput::VidDisperseCreated(disperse.view_number, disperse),
+            ),
+            _ => Err(()),
+        }
+    }
+}
+
+impl<TYPES: NodeType> TryFrom<Event<TYPES>> for CpuEvent<TYPES> {
+    type Error = ();
+
+    fn try_from(event: Event<TYPES>) -> Result<Self, ()> {
+        match event {
+            Event::MessageReceived(msg) => match msg {
+                ConsensusMessage::Proposal(proposal) => Ok(CpuEvent::Proposal(proposal)),
+                ConsensusMessage::Vote1(vote) => Ok(CpuEvent::Vote1(vote)),
+                ConsensusMessage::Vote2(vote) => Ok(CpuEvent::Vote2(vote)),
+                _ => Err(()),
+            },
             _ => Err(()),
         }
     }

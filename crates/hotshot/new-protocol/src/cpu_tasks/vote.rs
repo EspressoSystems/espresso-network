@@ -108,6 +108,7 @@ where
                         warn!("Invalid certificate formed: {e}");
                         votes.push(vote);
                         // Recover the good votes, this takes a long time
+                        // TODO make this more efficient by parallelizing the validation
                         votes.retain(|v: &V| {
                             let vote_commitment =
                                 Self::generate_vote_commitment(v, &upgrade_lock());

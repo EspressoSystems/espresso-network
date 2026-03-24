@@ -26,9 +26,10 @@ pub mod testing {
     /// variants and are forwarded to consensus.
     pub struct MockCoordinator {
         pub consensus: Consensus<TestTypes>,
-        pub input_rx: tokio::sync::mpsc::Receiver<ConsensusInput<TestTypes>>,
+        pub input_rx: tokio::sync::mpsc::Receiver<ConsensusOutput<TestTypes>>,
         pub shutdown_rx: tokio::sync::oneshot::Receiver<()>,
         pub state_tx: Option<tokio::sync::mpsc::Sender<StateEvent<TestTypes>>>,
+        pub cpu_tx: Option<tokio::sync::mpsc::Sender<CpuEvent<TestTypes>>>,
         pub membership_coordinator: EpochMembershipCoordinator<TestTypes>,
         pub outbox: Outbox<ConsensusOutput<TestTypes>>,
         pub received_events: Vec<ConsensusOutput<TestTypes>>,
@@ -38,7 +39,16 @@ pub mod testing {
             loop {
                 tokio::select! {
                     Some(input) = self.input_rx.recv() => {
-                        self.process_input(input).await;
+                        if let ConsensusOutput::Event(event) = input.clone()
+                            && let Ok(consensus_input) = ConsensusInput::try_from(event) {
+                                self.process_input(consensus_input).await;
+
+                        };
+                        if let Some(cpu_tx) = &self.cpu_tx
+                            && let ConsensusOutput::Event(event) = input
+                            && let Ok(cpu_event) = CpuEvent::try_from(event) {
+                                cpu_tx.send(cpu_event).await.unwrap();
+                            }
                     }
                     _ = &mut self.shutdown_rx => break,
                     else => break,
@@ -127,27 +137,39 @@ pub mod testing {
                         .await;
                 },
                 Action::RequestVidDisperse(view, epoch, block, metadata) => {
-                    let vid_disperse = VidDisperse::calculate_vid_disperse(
-                        block,
-                        &self.membership_coordinator,
-                        *view,
-                        Some(*epoch),
-                        Some(*epoch),
-                        metadata,
-                        &upgrade_lock(),
-                    )
-                    .await
-                    .unwrap();
-
-                    let VidDisperse::V2(vid) = vid_disperse.disperse else {
-                        panic!("VidDisperse is not a V2");
-                    };
-                    self.consensus
-                        .apply(
-                            ConsensusInput::VidDisperseCreated(*view, vid),
-                            &mut self.outbox,
+                    if let Some(cpu_tx) = &self.cpu_tx {
+                        cpu_tx
+                            .send(CpuEvent::VidDisperseRequest(VidDisperseRequest {
+                                view: *view,
+                                epoch: *epoch,
+                                block: block.clone(),
+                                metadata: *metadata,
+                            }))
+                            .await
+                            .unwrap();
+                    } else {
+                        let vid_disperse = VidDisperse::calculate_vid_disperse(
+                            block,
+                            &self.membership_coordinator,
+                            *view,
+                            Some(*epoch),
+                            Some(*epoch),
+                            metadata,
+                            &upgrade_lock(),
                         )
-                        .await;
+                        .await
+                        .unwrap();
+
+                        let VidDisperse::V2(vid) = vid_disperse.disperse else {
+                            panic!("VidDisperse is not a V2");
+                        };
+                        self.consensus
+                            .apply(
+                                ConsensusInput::VidDisperseCreated(*view, vid),
+                                &mut self.outbox,
+                            )
+                            .await;
+                    }
                 },
                 Action::RequestProposal(_view, _commitment) => {},
                 Action::RequestDRB(_drb_input) => {},

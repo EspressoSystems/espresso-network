@@ -43,10 +43,17 @@ impl ConsensusHarness {
         }
     }
 
-    /// Apply an input and drain outputs, auto-responding to actions that
-    /// consensus expects feedback for (RequestState, RequestBlockAndHeader,
-    /// RequestVidDisperse).
-    async fn apply(&mut self, input: ConsensusInput<TestTypes>) {
+    /// Apply an Event by converting it to ConsensusInput first.
+    async fn apply(&mut self, event: Event<TestTypes>) {
+        let input: ConsensusInput<TestTypes> = event
+            .try_into()
+            .expect("Event not convertible to ConsensusInput");
+        self.apply_input(input).await;
+    }
+
+    /// Apply a ConsensusInput directly and drain outputs, auto-responding to
+    /// actions that consensus expects feedback for.
+    async fn apply_input(&mut self, input: ConsensusInput<TestTypes>) {
         let mut outbox = Outbox::new();
         self.consensus.apply(input, &mut outbox).await;
         self.drain_outbox(&mut outbox).await;
@@ -153,7 +160,7 @@ async fn test_timeout_filters_stale_events() {
 
     // Set timeout at view 3
     harness
-        .apply(ConsensusInput::Timeout(ViewNumber::new(3)))
+        .apply_input(ConsensusInput::Timeout(ViewNumber::new(3)))
         .await;
 
     // Send stale proposal (view 2, which is <= timeout_view 3)
@@ -378,7 +385,8 @@ async fn test_state_verification_failed_removes_proposal() {
     // by directly applying the proposal input, then manually sending
     // StateVerificationFailed instead of letting the harness auto-respond.
     // We need to call consensus.apply directly to avoid auto StateVerified.
-    let proposal_input = test_data.views[1].proposal_input(&node_key);
+    let proposal_event = test_data.views[1].proposal_input(&node_key);
+    let proposal_input: ConsensusInput<TestTypes> = proposal_event.try_into().unwrap();
     let mut outbox = Outbox::new();
     harness.consensus.apply(proposal_input, &mut outbox).await;
     // Drain the outbox but DON'T auto-respond to RequestState
@@ -389,7 +397,7 @@ async fn test_state_verification_failed_removes_proposal() {
     // Send StateVerificationFailed — removes proposal
     let proposal = &test_data.views[1].proposal.data.proposal;
     harness
-        .apply(ConsensusInput::StateVerificationFailed(StateResponse {
+        .apply_input(ConsensusInput::StateVerificationFailed(StateResponse {
             view: test_data.views[1].view_number,
             commitment: proposal_commitment(proposal),
             state: Arc::new(
@@ -547,7 +555,7 @@ async fn test_timeout_prevents_voting() {
 
     // Timeout view 2 — now cert1 for view 2 should be dropped
     harness
-        .apply(ConsensusInput::Timeout(test_data.views[1].view_number))
+        .apply_input(ConsensusInput::Timeout(test_data.views[1].view_number))
         .await;
 
     // Send cert1 for view 2 — should be stale

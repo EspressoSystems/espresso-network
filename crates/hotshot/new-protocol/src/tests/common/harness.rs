@@ -7,7 +7,10 @@ use hotshot_example_types::{
 };
 use hotshot_types::{
     data::{Leaf2, ViewNumber},
-    traits::signature_key::SignatureKey,
+    traits::{
+        signature_key::SignatureKey,
+        storage::{null_load_drb_progress_fn, null_store_drb_progress_fn},
+    },
 };
 use tokio::task::JoinHandle;
 
@@ -16,7 +19,9 @@ use crate::{
     Outbox,
     consensus::Consensus,
     coordinator::{handle::CoordinatorHandle, mock::testing::MockCoordinator},
-    events::{ConsensusInput, ConsensusOutput},
+    cpu_tasks::CpuTaskManager,
+    events::ConsensusOutput,
+    helpers::upgrade_lock,
     validated_state::ValidatedStateManager,
 };
 
@@ -28,7 +33,7 @@ use crate::{
 /// from `ConsensusOutput::Event` to `ConsensusInput` via a bridge task.
 pub(crate) struct TestHarness {
     /// Send ConsensusInput to the mock coordinator
-    input_tx: tokio::sync::mpsc::Sender<ConsensusInput<TestTypes>>,
+    input_tx: tokio::sync::mpsc::Sender<ConsensusOutput<TestTypes>>,
     /// Oneshot to signal shutdown
     shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
     /// Join handle for mock coordinator (collects received events)
@@ -36,29 +41,60 @@ pub(crate) struct TestHarness {
 }
 
 impl TestHarness {
+    pub async fn new_with_cpu_tasks(node_index: u64) -> Self {
+        let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
+        let membership = mock_membership().await;
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+        let (cpu_tx, cpu_rx) = tokio::sync::mpsc::channel(100);
+
+        let (coordinator_tx, coordinator_rx) = tokio::sync::mpsc::channel(100);
+        let coordinator_handle = CoordinatorHandle::new(coordinator_tx.clone());
+
+        let store_drb_progress = null_store_drb_progress_fn();
+        let load_drb_progress = null_load_drb_progress_fn();
+
+        let cpu_task_manager = CpuTaskManager::new(
+            cpu_rx,
+            coordinator_handle.clone(),
+            membership.clone(),
+            upgrade_lock(),
+            store_drb_progress,
+            load_drb_progress,
+        );
+        tokio::spawn(async move {
+            cpu_task_manager.run().await;
+        });
+        let consensus = Consensus::new(membership.clone(), public_key, private_key);
+
+        let mock_coordinator = MockCoordinator {
+            consensus,
+            input_rx: coordinator_rx,
+            shutdown_rx,
+            state_tx: None,
+            cpu_tx: Some(cpu_tx),
+            membership_coordinator: membership,
+            outbox: Outbox::new(),
+            received_events: Vec::new(),
+        };
+        let mock_join = tokio::spawn(async move { mock_coordinator.run().await });
+
+        Self {
+            input_tx: coordinator_tx,
+            shutdown_tx: Some(shutdown_tx),
+            mock_join,
+        }
+    }
     /// Create a test harness that wires Consensus and ValidatedStateManager
     /// together through the MockCoordinator.
     pub async fn new_with_state_manager(node_index: u64) -> Self {
         let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
         let membership = mock_membership().await;
-        let (input_tx, input_rx) = tokio::sync::mpsc::channel(100);
+        // let (input_tx, input_rx) = tokio::sync::mpsc::channel(100);
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
         let (state_tx, state_rx) = tokio::sync::mpsc::channel(100);
 
-        // The ValidatedStateManager needs a CoordinatorHandle to send responses.
-        // We bridge its output channel back to ConsensusInput for the mock.
-        let (coordinator_tx, mut coordinator_rx) = tokio::sync::mpsc::channel(100);
-        let coordinator_handle = CoordinatorHandle::new(coordinator_tx);
-        let bridge_input_tx = input_tx.clone();
-        tokio::spawn(async move {
-            while let Some(output) = coordinator_rx.recv().await {
-                if let ConsensusOutput::Event(event) = output
-                    && let Ok(input) = ConsensusInput::try_from(event)
-                {
-                    bridge_input_tx.send(input).await.ok();
-                }
-            }
-        });
+        let (coordinator_tx, coordinator_rx) = tokio::sync::mpsc::channel(100);
+        let coordinator_handle = CoordinatorHandle::new(coordinator_tx.clone());
 
         let mut state_manager = ValidatedStateManager::new(
             state_rx,
@@ -83,9 +119,10 @@ impl TestHarness {
 
         let mock_coordinator = MockCoordinator {
             consensus,
-            input_rx,
+            input_rx: coordinator_rx,
             shutdown_rx,
             state_tx: Some(state_tx),
+            cpu_tx: None,
             membership_coordinator: membership,
             outbox: Outbox::new(),
             received_events: Vec::new(),
@@ -93,15 +130,15 @@ impl TestHarness {
         let mock_join = tokio::spawn(async move { mock_coordinator.run().await });
 
         Self {
-            input_tx,
+            input_tx: coordinator_tx,
             shutdown_tx: Some(shutdown_tx),
             mock_join,
         }
     }
 
-    /// Send a ConsensusInput to the mock coordinator.
-    pub async fn send(&self, input: ConsensusInput<TestTypes>) {
-        self.input_tx.send(input).await.unwrap();
+    /// Send an event to the mock coordinator.
+    pub async fn send(&self, input: impl Into<ConsensusOutput<TestTypes>>) {
+        self.input_tx.send(input.into()).await.unwrap();
     }
 
     /// Shut down and return all events the mock coordinator collected.
