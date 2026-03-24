@@ -1,0 +1,122 @@
+# Currently without prompt and CLAUDE.md to evaluate how it performs on our codebase.
+name: Claude PR Review
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  classify-paths:
+    name: Classify changed paths
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    outputs:
+      review_tier: ${{ steps.classify.outputs.tier }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Classify review tier
+        id: classify
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          CHANGED_FILES=$(git diff --name-only "origin/${BASE_REF}...HEAD")
+
+          CRITICAL_PATTERNS="\.rs$|^contracts/src/"
+          LIGHT_PATTERNS="\.md$|^\.github/workflows/|^doc/|^nix/"
+
+          HAS_CRITICAL=false
+          ONLY_LIGHT=true
+
+          while IFS= read -r file; do
+            [ -z "$file" ] && continue
+            if echo "$file" | grep -qE "$CRITICAL_PATTERNS"; then
+              HAS_CRITICAL=true
+              ONLY_LIGHT=false
+            elif ! echo "$file" | grep -qE "$LIGHT_PATTERNS"; then
+              ONLY_LIGHT=false
+            fi
+          done <<< "$CHANGED_FILES"
+
+          if [ "$HAS_CRITICAL" = true ]; then
+            echo "tier=critical" >> "$GITHUB_OUTPUT"
+          elif [ "$ONLY_LIGHT" = true ]; then
+            echo "tier=light" >> "$GITHUB_OUTPUT"
+          else
+            echo "tier=standard" >> "$GITHUB_OUTPUT"
+          fi
+
+  review-critical:
+    name: Deep review (critical paths)
+    needs: classify-paths
+    if: needs.classify-paths.outputs.review_tier == 'critical'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # CLAUDE.md is written for development, not review — it biases the
+      # reviewer toward checking project rules instead of actually reviewing code.
+      - name: Remove project instructions
+        run: rm -f CLAUDE.md AGENTS.md
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_args: "--model claude-opus-4-6 --max-turns 10"
+
+  review-standard:
+    name: Review (standard paths)
+    needs: classify-paths
+    if: needs.classify-paths.outputs.review_tier == 'standard'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Remove project instructions
+        run: rm -f CLAUDE.md AGENTS.md
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_args: "--model claude-opus-4-6 --max-turns 5"
+
+  review-light:
+    name: Light review (docs/CI)
+    needs: classify-paths
+    if: needs.classify-paths.outputs.review_tier == 'light'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Remove project instructions
+        run: rm -f CLAUDE.md AGENTS.md
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_args: "--model claude-opus-4-6 --max-turns 3"
