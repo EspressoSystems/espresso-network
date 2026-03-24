@@ -1,6 +1,6 @@
 networks:
   default:
-    name: espresso-sequencer
+    name: espresso-network
 
 services:
   demo-l1-network:
