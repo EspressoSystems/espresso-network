@@ -146,7 +146,7 @@ fn main() -> anyhow::Result<()> {
 
             // Write the mnemonic and index as a comment at the top
             if let Some(mnemonic) = &opts.key_options.mnemonic {
-                writeln!(file, "# Mnemonic: {}", hex::encode(mnemonic.to_phrase()))?;
+                writeln!(file, "# Mnemonic: {}", mnemonic.to_phrase())?;
                 writeln!(file, "# Index: {index}")?;
             }
             Box::new(file) as Box<dyn Write>
