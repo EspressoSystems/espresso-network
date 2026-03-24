@@ -288,13 +288,6 @@ pub struct Options {
     #[clap(long, env = "ESPRESSO_SEQUENCER_DATABASE_QUERY_MAX_CONNECTIONS", default_value = None)]
     pub(crate) query_max_connections: Option<u32>,
 
-    /// Sets the batch size for the types migration.
-    /// Determines how many `(leaf, vid)` rows are selected from the old types table
-    /// and migrated at once.
-    /// Default is `10000`` if not set
-    #[clap(long, env = "ESPRESSO_SEQUENCER_DATABASE_TYPES_MIGRATION_BATCH_SIZE")]
-    pub(crate) types_migration_batch_size: Option<u64>,
-
     // Keep the database connection pool when persistence is created,
     // allowing it to be reused across multiple instances instead of creating
     // a new pool each time such as for API, consensus storage etc
@@ -404,7 +397,6 @@ impl From<SqliteOptions> for Options {
             archive: false,
             lightweight: false,
             min_connections: 0,
-            types_migration_batch_size: None,
             pool: None,
         }
     }
@@ -3618,6 +3610,8 @@ mod test {
             commission: 100,
             delegators: HashMap::new(),
             authenticated: true,
+            x25519_key: None,
+            p2p_addr: None,
         };
 
         // Create an unauthenticated validator
@@ -3629,6 +3623,8 @@ mod test {
             commission: 200,
             delegators: HashMap::new(),
             authenticated: false,
+            x25519_key: None,
+            p2p_addr: None,
         };
 
         let mut validators: IndexMap<Address, RegisteredValidator<BLSPubKey>> = IndexMap::new();

@@ -41,7 +41,6 @@ use super::{
     UpdateAggregatesStorage, UpdateAvailabilityStorage, VidCommonMetadata,
     ledger_log::{Iter, LedgerLog},
     pruning::{PruneStorage, PrunedHeightStorage, PrunerConfig},
-    sql::MigrateTypes,
 };
 use crate::{
     Header, MissingSnafu, NotFoundSnafu, Payload, QueryError, QueryResult,
@@ -147,17 +146,6 @@ where
     Payload<Types>: QueryablePayload<Types>,
 {
     type Pruner = ();
-}
-
-#[async_trait]
-impl<Types: NodeType> MigrateTypes<Types> for FileSystemStorage<Types>
-where
-    Header<Types>: QueryableHeader<Types>,
-    Payload<Types>: QueryablePayload<Types>,
-{
-    async fn migrate_types(&self, _batch_size: u64) -> anyhow::Result<()> {
-        Ok(())
-    }
 }
 
 impl<Types: NodeType> FileSystemStorage<Types>

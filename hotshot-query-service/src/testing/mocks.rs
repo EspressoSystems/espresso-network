@@ -62,6 +62,10 @@ impl QueryableHeader<MockTypes> for MockHeader {
         // Test types only support a single namespace.
         if *i == 0 { payload_size as u64 } else { 0 }
     }
+
+    fn ns_table(&self) -> String {
+        self.metadata.to_string()
+    }
 }
 
 impl ExplorerHeader<MockTypes> for MockHeader {

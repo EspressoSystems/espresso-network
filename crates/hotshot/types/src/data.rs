@@ -431,6 +431,9 @@ impl<'a> VidCommonRef<'a> {
             (Self::V0(common), VidCommitment::V0(comm)) => {
                 ADVZScheme::is_consistent(comm, common).is_ok()
             },
+            // We don't check consistency here because for V1 the VidCommon is simply the VidParam,
+            // which doesn't contain any information about the payload, and has nothing to do with
+            // the commitment. The meaningful checks are in VID share verification.
             (Self::V1(_), VidCommitment::V1(_)) => true,
             (Self::V2(common), VidCommitment::V2(comm)) => {
                 AvidmGf2Scheme::is_consistent(comm, common)

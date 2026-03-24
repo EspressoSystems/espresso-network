@@ -142,6 +142,15 @@ Return all RewardMerkleTreeV2 accounts stored for the requested height, paginate
 `:offset` (limit must be <= 10000). The response is a list of `(account, balance)`
 """
 
+[route.reward_merkle_tree_v2]
+PATH = ["/reward-merkle-tree-v2/:height/:view"]
+":height" = "Integer"
+":view" = "Integer"
+DOC = """
+Get the RewardMerkleTreeV2 from consensus state at the given height and view.
+Returns the full tree serialized as RewardMerkleTreeV2Data.
+"""
+
 [route.state_cert]
 PATH = ["/:epoch/state-cert"]
 ":epoch" = "Integer"

@@ -8,15 +8,18 @@ import { LightClientV3Fake as LCV3 } from "./mocks/LightClientV3Fake.sol";
 // import { DeployLightClientContractWithoutMultiSigScript as DeployScript } from
 //     "../script/LightClient.s.sol";
 
-import { DeployLightClientContractWithoutMultiSigScript as DeployScript } from
-    "./script/LightClientTestScript.s.sol";
+import {
+    DeployLightClientContractWithoutMultiSigScript as DeployScript
+} from "./script/LightClientTestScript.s.sol";
 import { UpgradeLightClientScript as UpgradeScript } from "./script/UpgradeLightClientToV2.s.sol";
-import { DowngradeLightClientScript as DowngradeScript } from
-    "./script/DowngradeLightClientV2ToV1.s.sol";
+import {
+    DowngradeLightClientScript as DowngradeScript
+} from "./script/DowngradeLightClientV2ToV1.s.sol";
 
 import { UpgradeLightClientScript as ULCV3 } from "./script/UpgradeLightClientToV3.s.sol";
-import { OwnableUpgradeable } from
-    "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import {
+    OwnableUpgradeable
+} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import { BN254 } from "bn254/BN254.sol";
 import { IPlonkVerifier as V } from "../src/interfaces/IPlonkVerifier.sol";
@@ -77,10 +80,10 @@ contract LightClientUpgradeToVxTest is Test {
         LCV1.LightClientState memory expectedLightClientState =
             LCV1.LightClientState(stateV1.viewNum, stateV1.blockHeight, stateV1.blockCommRoot);
 
-        LCV2.ExtendedLightClientState memory expectedExtendedLightClientState = LCV2
-            .ExtendedLightClientState(
-            stateV1.viewNum, stateV1.blockHeight, stateV1.blockCommRoot, extraField
-        );
+        LCV2.ExtendedLightClientState memory expectedExtendedLightClientState =
+            LCV2.ExtendedLightClientState(
+                stateV1.viewNum, stateV1.blockHeight, stateV1.blockCommRoot, extraField
+            );
 
         // compare with the current version of the light client state
         (uint64 viewNum, uint64 blockHeight, BN254.ScalarField blockCommRoot) =
@@ -118,10 +121,10 @@ contract LightClientUpgradeToVxTest is Test {
         LCV1.LightClientState memory expectedLightClientState =
             LCV1.LightClientState(stateV1.viewNum, stateV1.blockHeight, stateV1.blockCommRoot);
 
-        LCV2.ExtendedLightClientState memory expectedExtendedLightClientState = LCV2
-            .ExtendedLightClientState(
-            stateV1.viewNum, stateV1.blockHeight, stateV1.blockCommRoot, extraField
-        );
+        LCV2.ExtendedLightClientState memory expectedExtendedLightClientState =
+            LCV2.ExtendedLightClientState(
+                stateV1.viewNum, stateV1.blockHeight, stateV1.blockCommRoot, extraField
+            );
 
         // compare with the current version of the light client state
         (uint64 viewNum, uint64 blockHeight, BN254.ScalarField blockCommRoot) =
@@ -211,8 +214,10 @@ contract LightClientUpgradeToVxTest is Test {
         LCV1.LightClientState memory expectedLightClientState =
             LCV1.LightClientState(stateV1.viewNum, stateV1.blockHeight, stateV1.blockCommRoot);
 
-        LCV2.ExtendedLightClientState memory expectedExtendedLightClientState = LCV2
-            .ExtendedLightClientState(stateV1.viewNum, stateV1.blockHeight, stateV1.blockCommRoot, 2);
+        LCV2.ExtendedLightClientState memory expectedExtendedLightClientState =
+            LCV2.ExtendedLightClientState(
+                stateV1.viewNum, stateV1.blockHeight, stateV1.blockCommRoot, 2
+            );
 
         (
             uint64 viewNumV2,
@@ -252,10 +257,10 @@ contract LightClientUpgradeToVxTest is Test {
         LCV1.LightClientState memory expectedLightClientState =
             LCV1.LightClientState(stateV1.viewNum, stateV1.blockHeight, stateV1.blockCommRoot);
 
-        LCV2.ExtendedLightClientState memory expectedExtendedLightClientState = LCV2
-            .ExtendedLightClientState(
-            stateV1.viewNum, stateV1.blockHeight, stateV1.blockCommRoot, extraField
-        );
+        LCV2.ExtendedLightClientState memory expectedExtendedLightClientState =
+            LCV2.ExtendedLightClientState(
+                stateV1.viewNum, stateV1.blockHeight, stateV1.blockCommRoot, extraField
+            );
 
         // compare with the current version of the light client state
         (uint64 viewNum, uint64 blockHeight, BN254.ScalarField blockCommRoot) =
