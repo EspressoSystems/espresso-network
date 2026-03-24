@@ -5940,7 +5940,6 @@ dependencies = [
  "chrono",
  "committable",
  "csv",
- "either",
  "futures",
  "hotshot",
  "hotshot-builder-api",
