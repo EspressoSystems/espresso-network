@@ -5,6 +5,7 @@ use std::{
     env,
 };
 
+use alloy::primitives::utils::format_ether;
 use anyhow::{Context, Result};
 use committable::Committable;
 use espresso_types::{
@@ -13,9 +14,10 @@ use espresso_types::{
     FeeAccount, FeeMerkleTree, PubKey, Transaction,
 };
 
-use crate::{
+use crate::api::{
     api::{data_source::TokenDataSource, RewardAmount, RewardMerkleTreeV2Data},
-    U256,
+    data_source::TokenDataSource,
+    unlock_schedule, RewardAmount, RewardMerkleTreeV2Data, U256,
 };
 // re-exported here to avoid breaking changes in consumers
 // "deprecated" does not work with "pub use": https://github.com/rust-lang/rust/issues/30827
@@ -403,6 +405,7 @@ where
         + Sync
         + TokenDataSource<SeqTypes>
         + NodeDataSource<SeqTypes>
+        + NodeStateDataSource
         + AvailabilityDataSource<SeqTypes>,
 {
     // Extend the base API
@@ -425,16 +428,67 @@ where
                     status: StatusCode::NOT_FOUND,
                 })?;
 
-            let scale = U256::from(10u64.pow(18));
-            let quotient = value / scale;
-            let remainder = value % scale;
+            Ok(format_ether(value))
+        }
+        .boxed()
+    })?;
 
-            Ok(format!("{quotient}.{remainder}"))
+    api.at("get_circulating_supply", |_, state| {
+        async move {
+            let calc = fetch_supply_inputs(state).await?;
+            Ok(format_ether(calc.circulating_supply()))
+        }
+        .boxed()
+    })?;
+
+    api.at("get_circulating_supply_ethereum", |_, state| {
+        async move {
+            let calc = fetch_supply_inputs(state).await?;
+            Ok(format_ether(calc.circulating_supply_ethereum()))
         }
         .boxed()
     })?;
 
     Ok(api)
+}
+
+/// Fetch state data and build a [`unlock_schedule::SupplyCalculator`].
+async fn fetch_supply_inputs<S: ReadState>(
+    state: &S,
+) -> Result<unlock_schedule::SupplyCalculator, node::Error>
+where
+    S::State: Send + Sync + TokenDataSource<SeqTypes> + NodeStateDataSource,
+{
+    let node_state = state.read(|s| s.node_state().boxed()).await;
+    let chain_id = node_state.chain_config.chain_id;
+
+    let header = state.read(|s| s.get_decided_header().boxed()).await;
+    let now_secs = header.timestamp_internal();
+    let total_reward_distributed = header.total_reward_distributed();
+
+    let initial_supply = state
+        .read(|s| s.get_initial_supply_l1().boxed())
+        .await
+        .map_err(|err| node::Error::Custom {
+            message: format!("failed to get initial supply: {err:#}"),
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+        })?;
+
+    let total_supply_l1 = state
+        .read(|s| s.get_total_supply_l1().boxed())
+        .await
+        .map_err(|err| node::Error::Custom {
+            message: format!("failed to get total supply: {err:#}"),
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+        })?;
+
+    Ok(unlock_schedule::SupplyCalculator::new(
+        chain_id,
+        now_secs,
+        initial_supply,
+        total_supply_l1,
+        total_reward_distributed,
+    ))
 }
 
 pub(super) fn node<S>(api_ver: semver::Version) -> Result<Api<S, node::Error, StaticVersion<0, 1>>>
