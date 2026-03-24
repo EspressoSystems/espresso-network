@@ -29,8 +29,8 @@ use crate::{
 /// helpers to send events and collect results.
 ///
 /// All inputs are sent directly as `ConsensusInput` to the mock coordinator.
-/// When a `ValidatedStateManager` is wired in, its responses are bridged
-/// from `ConsensusOutput::Event` to `ConsensusInput` via a bridge task.
+/// When a `ValidatedStateManager` is wired in, the mock coordinator owns it
+/// directly and polls `next()` to feed completions back as `ConsensusInput`.
 pub(crate) struct TestHarness {
     /// Send ConsensusInput to the mock coordinator
     input_tx: tokio::sync::mpsc::Sender<ConsensusOutput<TestTypes>>,
@@ -70,7 +70,7 @@ impl TestHarness {
             consensus,
             input_rx: coordinator_rx,
             shutdown_rx,
-            state_tx: None,
+            state_manager: None,
             cpu_tx: Some(cpu_tx),
             membership_coordinator: membership,
             outbox: Outbox::new(),
@@ -84,23 +84,14 @@ impl TestHarness {
             mock_join,
         }
     }
+
     /// Create a test harness that wires Consensus and ValidatedStateManager
     /// together through the MockCoordinator.
     pub async fn new_with_state_manager(node_index: u64) -> Self {
         let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
         let membership = mock_membership().await;
-        // let (input_tx, input_rx) = tokio::sync::mpsc::channel(100);
+        let (input_tx, input_rx) = tokio::sync::mpsc::channel(100);
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
-        let (state_tx, state_rx) = tokio::sync::mpsc::channel(100);
-
-        let (coordinator_tx, coordinator_rx) = tokio::sync::mpsc::channel(100);
-        let coordinator_handle = CoordinatorHandle::new(coordinator_tx.clone());
-
-        let mut state_manager = ValidatedStateManager::new(
-            state_rx,
-            Arc::new(TestInstanceState::default()),
-            coordinator_handle,
-        );
 
         let genesis_state = TestValidatedState::default();
         let genesis_leaf = Leaf2::<TestTypes>::genesis(
@@ -109,20 +100,18 @@ impl TestHarness {
             TEST_VERSIONS.test.base,
         )
         .await;
-        state_manager.seed_state(ViewNumber::genesis(), Arc::new(genesis_state), genesis_leaf);
 
-        tokio::spawn(async move {
-            state_manager.run().await;
-        });
+        let mut state_manager = ValidatedStateManager::new(Arc::new(TestInstanceState::default()));
+        state_manager.seed_state(ViewNumber::genesis(), Arc::new(genesis_state), genesis_leaf);
 
         let consensus = Consensus::new(membership.clone(), public_key, private_key);
 
         let mock_coordinator = MockCoordinator {
             consensus,
-            input_rx: coordinator_rx,
+            input_rx,
             shutdown_rx,
-            state_tx: Some(state_tx),
             cpu_tx: None,
+            state_manager: Some(state_manager),
             membership_coordinator: membership,
             outbox: Outbox::new(),
             received_events: Vec::new(),
@@ -130,7 +119,7 @@ impl TestHarness {
         let mock_join = tokio::spawn(async move { mock_coordinator.run().await });
 
         Self {
-            input_tx: coordinator_tx,
+            input_tx,
             shutdown_tx: Some(shutdown_tx),
             mock_join,
         }

@@ -1,12 +1,13 @@
 use std::{
     collections::{BTreeMap, HashMap},
+    future::{Pending, pending},
     sync::Arc,
     time::Duration,
 };
 
 use async_lock::RwLock;
 use committable::{Commitment, Committable};
-use futures::StreamExt;
+use futures::{StreamExt, future::Either};
 use hotshot::{
     traits::{BlockPayload, ValidatedState, implementations::MemoryNetwork},
     types::{BLSPrivKey, BLSPubKey, SchnorrPubKey},
@@ -502,4 +503,22 @@ async fn build_view_sync_cert(
         &upgrade_lock::<TestTypes>(),
     )
     .await
+}
+
+/// Helper for optional `IntoFuture`s.
+///
+/// If no future is given, `pending` will be used, i.e. no result will become available.
+pub(crate) struct PendingIfNone<T>(pub Option<T>);
+
+impl<T: IntoFuture> IntoFuture for PendingIfNone<T> {
+    type Output = T::Output;
+    type IntoFuture = Either<Pending<T::Output>, T::IntoFuture>;
+
+    fn into_future(self) -> Self::IntoFuture {
+        if let Some(v) = self.0 {
+            Either::Right(v.into_future())
+        } else {
+            Either::Left(pending())
+        }
+    }
 }
