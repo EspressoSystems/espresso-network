@@ -185,6 +185,9 @@ impl<T: NodeType> Consensus<T> {
         outbox: &mut Outbox<ConsensusOutput<T>>,
     ) -> Protocol {
         let view = proposal.view_number();
+
+        // TODO: This signature check is slow (> 1ms).  We should consider
+        // if this should be done off the main thread.
         if let Err(err) = proposal
             .proposal
             .validate_signature(&self.stake_table_coordinator)
@@ -258,6 +261,8 @@ impl<T: NodeType> Consensus<T> {
             warn!(%view, "certificate1 has no epoch number");
             return Protocol::Abort;
         };
+        // TODO: This signature check is slow (> 1ms).  We should consider
+        // if this should be done off the main thread.
         if !self.verify_cert(&certificate, certificate_epoch).await {
             warn!(%view, "certificate1 not verified");
             return Protocol::Abort;
@@ -277,6 +282,8 @@ impl<T: NodeType> Consensus<T> {
             warn!(%view, "certificate2 has no epoch number");
             return Protocol::Abort;
         };
+        // TODO: This signature check is slow (> 1ms).  We should consider
+        // if this should be done off the main thread.
         if !self.verify_cert(&certificate, certificate_epoch).await {
             warn!(%view, "certificate2 not verified");
             return Protocol::Abort;

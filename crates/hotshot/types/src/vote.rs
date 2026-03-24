@@ -17,6 +17,7 @@ use bitvec::{bitvec, vec::BitVec};
 use committable::{Commitment, Committable};
 use hotshot_utils::anytrace::*;
 use tracing::error;
+use vbs::version::Version;
 
 use crate::{
     PeerConfig,
@@ -158,6 +159,14 @@ impl<
     CERT: Certificate<TYPES, VOTE::Commitment, Voteable = VOTE::Commitment>,
 > VoteAccumulator<TYPES, VOTE, CERT>
 {
+    pub fn new(upgrade_lock: UpgradeLock<TYPES>) -> Self {
+        Self {
+            vote_outcomes: HashMap::new(),
+            signers: HashMap::new(),
+            phantom: PhantomData,
+            upgrade_lock,
+        }
+    }
     /// Add a vote to the total accumulated votes for the given epoch.
     /// Returns the accumulator or the certificate if we
     /// have accumulated enough votes to exceed the threshold for creating a certificate.
@@ -180,7 +189,9 @@ impl<
             },
         };
 
-        if !key.validate(&vote.signature(), vote_commitment.as_ref()) {
+        if self.upgrade_lock.version(vote.view_number()).ok()? < (Version { major: 0, minor: 6 })
+            && !key.validate(&vote.signature(), vote_commitment.as_ref())
+        {
             error!("Invalid vote! Vote Data {:?}", vote.date());
             return None;
         }
