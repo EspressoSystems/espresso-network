@@ -2,6 +2,11 @@ use std::{cmp::max, fs, path::PathBuf, process::ExitCode, time::Duration};
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use espresso_node::{
+    SequencerApiVersion,
+    api::{data_source::SequencerDataSource, sql::DataSource},
+    persistence::sql,
+};
 use espresso_types::parse_duration;
 use hotshot_query_service::{
     ApiState,
@@ -17,11 +22,6 @@ use light_client::{
 };
 use light_client_query_service::{LogFormat, init_logging};
 use semver::Version;
-use sequencer::{
-    SequencerApiVersion,
-    api::{data_source::SequencerDataSource, sql::DataSource},
-    persistence::sql,
-};
 use tide_disco::{App, Url};
 use tokio::{spawn, time::sleep};
 use tracing::instrument;

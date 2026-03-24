@@ -10,10 +10,10 @@ use cdn_broker::{
 };
 use cdn_marshal::{Config as MarshalConfig, Marshal};
 use clap::Parser;
+use espresso_node::network::cdn::{TestingDef, WrappedSignatureKey};
 use espresso_types::SeqTypes;
 use hotshot_types::traits::{node_implementation::NodeType, signature_key::SignatureKey};
 use rand::{RngCore, SeedableRng, rngs::StdRng};
-use sequencer::network::cdn::{TestingDef, WrappedSignatureKey};
 use test_utils::reserve_tcp_port;
 use tokio::spawn;
 

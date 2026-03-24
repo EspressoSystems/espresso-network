@@ -9,7 +9,7 @@ name = "espresso-dev-node"
 path = "src/main.rs"
 
 [dependencies]
-sequencer = { path = "../sequencer", features = ["testing", "embedded-db"] }
+espresso-node = { path = "../espresso-node", features = ["testing", "embedded-db"] }
 
 alloy = { workspace = true }
 anyhow = { workspace = true }

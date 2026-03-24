@@ -12,6 +12,7 @@ use escargot::CargoBuild;
 use espresso_dev_node::{
     AltChainInfo, DevInfo, DevNodeVersion, SetHotshotDownReqBody, SetHotshotUpReqBody,
 };
+use espresso_node::SequencerApiVersion;
 use espresso_types::{BlockMerkleTree, Header, NamespaceProofQueryData, SeqTypes, Transaction};
 use futures::{StreamExt, TryStreamExt};
 use hotshot_contract_adapter::sol_types::LightClientV2Mock;
@@ -21,7 +22,6 @@ use hotshot_query_service::{
 };
 use jf_merkle_tree_compat::MerkleTreeScheme;
 use rand::Rng;
-use sequencer::SequencerApiVersion;
 use surf_disco::Client;
 use test_utils::reserve_tcp_port;
 use tide_disco::error::ServerError;

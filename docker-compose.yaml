@@ -13,7 +13,7 @@ services:
       - "./geth-config/genesis-default.json:/genesis.json"
       - "./geth-config/test-jwt-secret.txt:/config/test-jwt-secret.txt"
 
-  deploy-sequencer-contracts:
+  deploy-espresso-contracts:
     image: ghcr.io/espressosystems/espresso-network/deploy:${DOCKER_TAG:-main}
     command: deploy --deploy-ops-timelock --deploy-safe-exit-timelock --deploy-fee-v1 --deploy-esp-token-v1 --deploy-stake-table-v1
     environment:
@@ -68,7 +68,7 @@ services:
       sequencer0:
         condition: service_healthy
       # Make sure this doesn't start until the other contracts have been deployed, since we use the same mnemonic.
-      deploy-sequencer-contracts:
+      deploy-espresso-contracts:
         condition: service_completed_successfully
 
   wait-for-v4:
@@ -166,7 +166,7 @@ services:
       - RUST_LOG
       - RUST_LOG_FORMAT
     depends_on:
-      deploy-sequencer-contracts:
+      deploy-espresso-contracts:
         condition: service_completed_successfully
       sequencer1:
         condition: service_healthy
@@ -193,7 +193,7 @@ services:
       - RUST_LOG
       - RUST_LOG_FORMAT
     depends_on:
-      deploy-sequencer-contracts:
+      deploy-espresso-contracts:
         condition: service_completed_successfully
 
   orchestrator:
@@ -343,11 +343,11 @@ services:
         condition: service_completed_successfully
 
   sequencer0:
-    image: ghcr.io/espressosystems/espresso-network/sequencer:${DOCKER_TAG:-main}
+    image: ghcr.io/espressosystems/espresso-network/espresso-node:${DOCKER_TAG:-main}
     ports:
       - "$ESPRESSO_SEQUENCER0_API_PORT:$ESPRESSO_SEQUENCER0_API_PORT"
     # Run the full API server with all modules, Postgres storage
-    command: sequencer -- storage-sql -- http -- query -- submit -- hotshot-events -- config
+    command: espresso-node -- storage-sql -- http -- query -- submit -- hotshot-events -- config
     environment:
       - ESPRESSO_SEQUENCER_EMBEDDED_DB=false
       - ESPRESSO_SEQUENCER_GENESIS_FILE=${ESPRESSO_SEQUENCER_GENESIS_FILE:-genesis/demo.toml}
@@ -405,10 +405,10 @@ services:
         condition: service_completed_successfully
 
   sequencer1:
-    image: ghcr.io/espressosystems/espresso-network/sequencer:${DOCKER_TAG:-main}
+    image: ghcr.io/espressosystems/espresso-network/espresso-node:${DOCKER_TAG:-main}
     ports:
       - "$ESPRESSO_SEQUENCER1_API_PORT:$ESPRESSO_SEQUENCER1_API_PORT"
-    command: sequencer -- storage-sql -- http -- query -- explorer
+    command: espresso-node -- storage-sql -- http -- query -- explorer
     environment:
       - ESPRESSO_SEQUENCER_EMBEDDED_DB=false
       - ESPRESSO_SEQUENCER_GENESIS_FILE=${ESPRESSO_SEQUENCER_GENESIS_FILE:-genesis/demo.toml}
@@ -467,10 +467,10 @@ services:
         condition: service_completed_successfully
 
   sequencer2:
-    image: ghcr.io/espressosystems/espresso-network/sequencer:${DOCKER_TAG:-main}
+    image: ghcr.io/espressosystems/espresso-network/espresso-node:${DOCKER_TAG:-main}
     ports:
       - "$ESPRESSO_SEQUENCER2_API_PORT:$ESPRESSO_SEQUENCER2_API_PORT"
-    command: sequencer -- http
+    command: espresso-node -- http
     environment:
       - ESPRESSO_SEQUENCER_EMBEDDED_DB=false
       - ESPRESSO_SEQUENCER_GENESIS_FILE=${ESPRESSO_SEQUENCER_GENESIS_FILE:-genesis/demo.toml}
@@ -521,10 +521,10 @@ services:
         condition: service_completed_successfully
 
   sequencer3:
-    image: ghcr.io/espressosystems/espresso-network/sequencer:${DOCKER_TAG:-main}
+    image: ghcr.io/espressosystems/espresso-network/espresso-node:${DOCKER_TAG:-main}
     ports:
       - "$ESPRESSO_SEQUENCER3_API_PORT:$ESPRESSO_SEQUENCER3_API_PORT"
-    command: sequencer -- http -- query -- storage-fs
+    command: espresso-node -- http -- query -- storage-fs
     environment:
       - ESPRESSO_SEQUENCER_EMBEDDED_DB=false
       - ESPRESSO_SEQUENCER_GENESIS_FILE=${ESPRESSO_SEQUENCER_GENESIS_FILE:-genesis/demo.toml}
@@ -576,10 +576,10 @@ services:
         condition: service_completed_successfully
 
   sequencer4:
-    image: ghcr.io/espressosystems/espresso-network/sequencer:${DOCKER_TAG:-main}
+    image: ghcr.io/espressosystems/espresso-network/espresso-node:${DOCKER_TAG:-main}
     ports:
       - "$ESPRESSO_SEQUENCER4_API_PORT:$ESPRESSO_SEQUENCER4_API_PORT"
-    command: sequencer -- http -- query -- storage-fs
+    command: espresso-node -- http -- query -- storage-fs
     environment:
       - ESPRESSO_SEQUENCER_EMBEDDED_DB=true
       - ESPRESSO_SEQUENCER_GENESIS_FILE=${ESPRESSO_SEQUENCER_GENESIS_FILE:-genesis/demo.toml}

@@ -1,8 +1,12 @@
 [package]
-name = "sequencer"
+name = "espresso-node"
 version = "0.1.0"
 authors = ["Espresso Systems <hello@espressosys.com>"]
 edition.workspace = true
+
+[lib]
+name = "espresso_node"
+path = "src/lib.rs"
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["hotshot-testing"]
@@ -124,7 +128,7 @@ test-log = { workspace = true }
 
 # Enable "testing" feature when running tests
 light-client = { workspace = true, features = ["testing"] }
-sequencer = { path = ".", features = ["testing"] }
+espresso-node = { path = ".", features = ["testing"] }
 tempfile = { workspace = true }
 
 [lints]

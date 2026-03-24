@@ -1,4 +1,4 @@
 #[tokio::main]
 pub async fn main() -> anyhow::Result<()> {
-    sequencer::main().await
+    espresso_node::main().await
 }

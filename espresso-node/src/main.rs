@@ -11,24 +11,24 @@ compile_error!(
 #[cfg(all(feature = "embedded-db", not(debug_assertions), not(clippy)))]
 compile_error!(
     r#"
-The `embedded-db` feature is enabled, but the sequencer binary is not compatible
+The `embedded-db` feature is enabled, but the espresso-node binary is not compatible
 with the `embedded-db` feature. Aborting build.
 
-If the intention is to build the sequencer-sqlite binary run `cargo build -p
-sequencer-sqlite` instead.
+If the intention is to build the espresso-node-sqlite binary run `cargo build -p
+espresso-node-sqlite` instead.
 
-To build the (postgres) sequencer binary make sure the embedded-db feature is
-disabled and the sequencer-sqlite crate is **not** part of the build. Including
-the sequencer-sqlite crate in the build will enable the `embedded-db` feature
+To build the (postgres) espresso-node binary make sure the embedded-db feature is
+disabled and the espresso-node-sqlite crate is **not** part of the build. Including
+the espresso-node-sqlite crate in the build will enable the `embedded-db` feature
 globally.
 
-By default the sequencer-sqlite workspace crate is excluded from cargo
+By default the espresso-node-sqlite workspace crate is excluded from cargo
 invocations because it's not a default workspace member. Avoid using the
 `--workspace` cargo flag unless enabling the `embedded-db` feature (via
-inclusion of the sequencer-sqlite crate in the build) is intended.
+inclusion of the espresso-node-sqlite crate in the build) is intended.
 
 Similarly, avoid enabling the `embedded-db` feature by using passing the cargo
-flag `--all-features` when building the sequencer binary target.
+flag `--all-features` when building the espresso-node binary target.
 "#
 );
 
@@ -39,13 +39,13 @@ pub async fn main() -> anyhow::Result<()> {
     #[cfg(feature = "embedded-db")]
     {
         panic!(
-            r#"The sequencer binary is not compatible with the embedded-db feature.
-     Please build the sequencer-sqlite binary instead."#
+            r#"The espresso-node binary is not compatible with the embedded-db feature.
+     Please build the espresso-node-sqlite binary instead."#
         );
     }
 
     #[cfg(not(feature = "embedded-db"))]
     {
-        sequencer::main().await
+        espresso_node::main().await
     }
 }

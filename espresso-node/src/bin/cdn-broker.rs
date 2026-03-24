@@ -6,9 +6,9 @@ use cdn_broker::{
     reexports::{crypto::signature::KeyPair, def::hook::NoMessageHook},
 };
 use clap::Parser;
+use espresso_node::network::cdn::{ProductionDef, WrappedSignatureKey};
 use espresso_types::{SeqTypes, parse_size};
 use hotshot_types::traits::{node_implementation::NodeType, signature_key::SignatureKey};
-use sequencer::network::cdn::{ProductionDef, WrappedSignatureKey};
 use sha2::Digest;
 use tracing_subscriber::EnvFilter;
 

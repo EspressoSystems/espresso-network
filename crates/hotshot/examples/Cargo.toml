@@ -35,7 +35,7 @@ hotshot-types = { workspace = true }
 local-ip-address = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true }
-sequencer = { workspace = true, default-features = false }
+espresso-node = { workspace = true, default-features = false }
 serde = { workspace = true }
 sha2 = { workspace = true }
 surf-disco = { workspace = true }

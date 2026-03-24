@@ -35,8 +35,8 @@ members = [
     "node-metrics",
     "request-response",
     "sdks/crypto-helper",
-    "sequencer",
-    "sequencer-sqlite",
+    "espresso-node",
+    "espresso-node-sqlite",
     "slow-tests",
     "staking-cli",
     "test-utils",
@@ -46,7 +46,7 @@ members = [
     "vid",
 ]
 
-# All crates except sequencer-sqlite and espresso-dev-node, to avoid turning on embedded-db feature
+# All crates except espresso-node-sqlite and espresso-dev-node, to avoid turning on embedded-db feature
 # for the whole workspace by default.
 default-members = [
     "alloy-compat",
@@ -81,7 +81,7 @@ default-members = [
     "node-metrics",
     "request-response",
     "sdks/crypto-helper",
-    "sequencer",
+    "espresso-node",
     "slow-tests",
     "staking-cli",
     "test-utils",
@@ -90,7 +90,8 @@ default-members = [
     "utils",
     "vid",
 ]
-exclude = ["sequencer-sqlite"]
+exclude = ["espresso-node-sqlite"]
+# Note: workspace members/default-members reference directory paths, not crate names.
 
 [workspace.package]
 version = "0.1.0"
@@ -263,7 +264,7 @@ rstest_reuse = "0.7.0"
 rust_decimal = "1.36.0"
 scopeguard = "1.2.0"
 semver = "1"
-sequencer = { path = "sequencer", default-features = false }
+espresso-node = { path = "espresso-node", default-features = false }
 sequencer-utils = { path = "utils" }
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde-inline-default = "0.2"
@@ -324,7 +325,7 @@ debug = "full"
 
 [profile.test]
 opt-level = 1
-[profile.test.package.sequencer]
+[profile.test.package.espresso-node]
 opt-level = 0
 [profile.test.package.hotshot-testing]
 opt-level = 0

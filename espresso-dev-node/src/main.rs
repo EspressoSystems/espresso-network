@@ -26,6 +26,16 @@ use espresso_contract_deployer::{
 use espresso_dev_node::{
     AltChainInfo, DevInfo, DevNodeVersion, SetHotshotDownReqBody, SetHotshotUpReqBody,
 };
+use espresso_node::{
+    SequencerApiVersion,
+    api::{
+        options,
+        test_helpers::{STAKE_TABLE_CAPACITY_FOR_TEST, TestNetwork, TestNetworkConfigBuilder},
+    },
+    persistence,
+    state_signature::relay_server::{StateRelayServerState, run_relay_server_with_state},
+    testing::TestConfigBuilder,
+};
 use espresso_types::{
     L1ClientOptions, SeqTypes, ValidatedState, parse_duration, v0_3::ChainConfig,
 };
@@ -37,16 +47,6 @@ use hotshot_types::{
     utils::epoch_from_block_number,
 };
 use itertools::izip;
-use sequencer::{
-    SequencerApiVersion,
-    api::{
-        options,
-        test_helpers::{STAKE_TABLE_CAPACITY_FOR_TEST, TestNetwork, TestNetworkConfigBuilder},
-    },
-    persistence,
-    state_signature::relay_server::{StateRelayServerState, run_relay_server_with_state},
-    testing::TestConfigBuilder,
-};
 use sequencer_utils::logging;
 use serde::{Deserialize, Serialize};
 use staking_cli::demo::{DelegationConfig, StakingTransactions};

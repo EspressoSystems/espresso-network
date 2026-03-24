@@ -93,7 +93,7 @@ docker compose run --rm \
   -e RPC_URL \
   -e ESPRESSO_SEQUENCER_ETH_MNEMONIC \
   -e ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS \
-  deploy-sequencer-contracts \
+  deploy-espresso-contracts \
   deploy --rpc-url=$RPC_URL \
   --transfer-ownership-from-eoa \
   --target-contract FeeContract \
@@ -170,7 +170,7 @@ export RPC_URL=http://host.docker.internal:8545
 docker compose run --rm \
   -e RPC_URL \
   -v $(pwd)/.env.mydemo:/app/.env.mydemo \
-  deploy-sequencer-contracts \
+  deploy-espresso-contracts \
   deploy --deploy-ops-timelock --deploy-fee-v1 --use-timelock-owner --rpc-url=$RPC_URL --out .env.mydemo
 ```
 
@@ -252,7 +252,7 @@ export RPC_URL=http://host.docker.internal:8545
 docker compose run --rm \
   -e RPC_URL \
   -v $(pwd)/.env.mydemo:/app/.env.mydemo \
-  deploy-sequencer-contracts \
+  deploy-espresso-contracts \
   deploy --deploy-safe-exit-timelock --deploy-esp-token-v1 --use-timelock-owner --rpc-url=$RPC_URL --out .env.mydemo
 ```
 
@@ -421,7 +421,7 @@ set +a
 docker compose run --rm \
   -e ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS \
   -e ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS \
-  deploy-sequencer-contracts \
+  deploy-espresso-contracts \
   deploy --rpc-url=$RPC_URL \
   --perform-timelock-operation \
   --timelock-operation-type schedule \
@@ -439,7 +439,7 @@ docker compose run --rm \
 docker compose run --rm \
   -e ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS \
   -e ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS \
-  deploy-sequencer-contracts \
+  deploy-espresso-contracts \
   deploy --rpc-url=$RPC_URL \
   --perform-timelock-operation \
   --timelock-operation-type execute \
@@ -575,7 +575,7 @@ docker compose run --rm \
   -e ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS \
   -e ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS \
   -e ESPRESSO_SEQUENCER_FEE_CONTRACT_ADDRESS \
-  deploy-sequencer-contracts \
+  deploy-espresso-contracts \
   deploy --rpc-url=$RPC_URL \
   --perform-timelock-operation \
   --timelock-operation-type schedule \
@@ -595,7 +595,7 @@ docker compose run --rm \
   -e ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS \
   -e ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS \
   -e ESPRESSO_SEQUENCER_FEE_CONTRACT_ADDRESS \
-  deploy-sequencer-contracts \
+  deploy-espresso-contracts \
   deploy --rpc-url=$RPC_URL \
   --perform-timelock-operation \
   --timelock-operation-type execute \
@@ -700,7 +700,7 @@ docker compose run --rm \
   -e RPC_URL \
   -e ESPRESSO_SEQUENCER_ETH_MNEMONIC \
   -v $(pwd)/.env.mydemo:/app/.env.mydemo \
-  deploy-sequencer-contracts \
+  deploy-espresso-contracts \
   deploy --deploy-esp-token-v1 --upgrade-esp-token-v2 --rpc-url=$RPC_URL --use-multisig
   # to simulate, add --dry-run
 ```
@@ -782,7 +782,7 @@ export ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS="0x..."      # timelock contract 
 export RPC_URL=""
 
 # Run the ownership transfer proposal
-docker-compose run --rm deploy-sequencer-contracts \
+docker-compose run --rm deploy-espresso-contracts \
     --propose-transfer-ownership-to-timelock \
     --target-contract lightclient \
     --light-client-proxy $ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS \
@@ -906,7 +906,7 @@ docker compose run --rm \
   -e ESPRESSO_SAFE_EXIT_TIMELOCK_EXECUTORS \
   -e ESPRESSO_SAFE_EXIT_TIMELOCK_DELAY \
   -v $(pwd)/$OUTPUT_FILE:/app/$OUTPUT_FILE \
-  deploy-sequencer-contracts \
+  deploy-espresso-contracts \
   deploy --deploy-safe-exit-timelock --rpc-url=$RPC_URL \
   --safe-exit-timelock-proposers=$ESPRESSO_DEVS_ADDRESS_1 \
   --safe-exit-timelock-proposers=$ESPRESSO_DEVS_ADDRESS_2 \
@@ -984,7 +984,7 @@ docker compose run --rm \
   -e ESPRESSO_OPS_TIMELOCK_EXECUTORS \
   -e ESPRESSO_OPS_TIMELOCK_DELAY \
   -v $(pwd)/$OUTPUT_FILE:/app/$OUTPUT_FILE \
-  deploy-sequencer-contracts \
+  deploy-espresso-contracts \
   deploy --deploy-ops-timelock --rpc-url=$RPC_URL \
   --ops-timelock-proposers=$ESPRESSO_DEVS_ADDRESS_1 \
   --ops-timelock-proposers=$ESPRESSO_DEVS_ADDRESS_2 \
@@ -1070,7 +1070,7 @@ docker compose run --rm \
   -e ESPRESSO_SEQUENCER_URL \
   -v $(pwd)/$OUTPUT_FILE:/app/$OUTPUT_FILE \
   \
-  deploy-sequencer-contracts \
+  deploy-espresso-contracts \
   deploy --upgrade-light-client-v2 --rpc-url=$RPC_URL --use-multisig --out $OUTPUT_FILE
   # to simulate, add --dry-run
 ```
@@ -1153,7 +1153,7 @@ docker compose run --rm \
   -e ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS \
   -v $(pwd)/$OUTPUT_FILE:/app/$OUTPUT_FILE \
   \
-  deploy-sequencer-contracts \
+  deploy-espresso-contracts \
   deploy --propose-transfer-ownership-to-timelock \
   --target-contract lightclient \
   --timelock-address $ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS \
@@ -1222,7 +1222,7 @@ docker compose run --rm \
   -e ESP_TOKEN_INITIAL_GRANT_RECIPIENT_ADDRESS \
   -v $(pwd)/$OUTPUT_FILE:/app/$OUTPUT_FILE \
   \
-  deploy-sequencer-contracts \
+  deploy-espresso-contracts \
   deploy --deploy-esp-token-v1 --use-timelock-owner --rpc-url=$RPC_URL --out $OUTPUT_FILE
   # to simulate, add --dry-run
 ```
@@ -1331,7 +1331,7 @@ docker compose run --rm \
   -e ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS \
   -v $(pwd)/$OUTPUT_FILE:/app/$OUTPUT_FILE \
   \
-  deploy-sequencer-contracts \
+  deploy-espresso-contracts \
   deploy --deploy-stake-table-v1 --upgrade-stake-table-v2 --use-timelock-owner --rpc-url=$RPC_URL --out $OUTPUT_FILE
   # to simulate, add --dry-run
 ```
@@ -1554,7 +1554,7 @@ docker compose run --rm \
   -e ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS \
   -v $(pwd)/$OUTPUT_FILE:/app/$OUTPUT_FILE \
   \
-  deploy-sequencer-contracts \
+  deploy-espresso-contracts \
   deploy --propose-transfer-ownership-to-timelock \
   --target-contract esptoken \
   --timelock-address $ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS \
@@ -1628,7 +1628,7 @@ docker compose run --rm \
   -e ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS \
   -v $(pwd)/$OUTPUT_FILE:/app/$OUTPUT_FILE \
   \
-  deploy-sequencer-contracts \
+  deploy-espresso-contracts \
   deploy --propose-transfer-ownership-to-timelock \
   --target-contract staketable \
   --timelock-address $ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS \
@@ -1707,7 +1707,7 @@ docker compose run --rm \
   -e ESPRESSO_TRANSFER_OWNERSHIP_NEW_OWNER \
   -v $(pwd)/$OUTPUT_FILE:/app/$OUTPUT_FILE \
   \
-  deploy-sequencer-contracts \
+  deploy-espresso-contracts \
   deploy --transfer-ownership-from-eoa \
   --target-contract lightclient \
   --transfer-ownership-new-owner $ESPRESSO_TRANSFER_OWNERSHIP_NEW_OWNER \
@@ -1876,7 +1876,7 @@ docker compose run --rm \
   -e ESPRESSO_TRANSFER_OWNERSHIP_NEW_OWNER \
   -v $(pwd)/$OUTPUT_FILE:/app/$OUTPUT_FILE \
   \
-  deploy-sequencer-contracts \
+  deploy-espresso-contracts \
   deploy --transfer-ownership-from-eoa \
   --target-contract staketable \
   --transfer-ownership-new-owner $ESPRESSO_TRANSFER_OWNERSHIP_NEW_OWNER \

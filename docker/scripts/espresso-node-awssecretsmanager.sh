@@ -6,4 +6,4 @@ if [[ -v ESPRESSO_SEQUENCER_GENESIS_SECRET ]]; then
   aws secretsmanager  get-secret-value --secret-id ${ESPRESSO_SEQUENCER_GENESIS_SECRET} --query SecretString --output text | tee /genesis/injected.toml >/dev/null
 fi
 
-/bin/sequencer "$@"
+/bin/espresso-node "$@"

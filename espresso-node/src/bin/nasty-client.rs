@@ -27,6 +27,7 @@ use async_lock::RwLock;
 use clap::Parser;
 use committable::Committable;
 use derivative::Derivative;
+use espresso_node::SequencerApiVersion;
 use espresso_types::{
     ADVZNamespaceProofQueryData, BlockMerkleTree, FeeMerkleTree, Header, SeqTypes, parse_duration,
     v0_1::IterableFeeInfo,
@@ -49,7 +50,6 @@ use jf_merkle_tree_compat::{
     ForgetableMerkleTreeScheme, MerkleTreeScheme, UniversalMerkleTreeScheme,
 };
 use rand::{RngCore, seq::SliceRandom};
-use sequencer::SequencerApiVersion;
 use sequencer_utils::logging;
 use serde::de::DeserializeOwned;
 use strum::{EnumDiscriminants, VariantArray};

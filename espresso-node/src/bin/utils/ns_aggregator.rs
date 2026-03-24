@@ -2,9 +2,9 @@ use std::cmp::min;
 
 use anyhow::{Context, ensure};
 use clap::Parser;
+use espresso_node::SequencerApiVersion;
 use espresso_types::{Header, NamespaceId, NamespaceProofQueryData};
 use futures::{future::try_join_all, stream::StreamExt};
-use sequencer::SequencerApiVersion;
 use surf_disco::Url;
 
 /// Count transactions and bytes confirmed in a given namespace.

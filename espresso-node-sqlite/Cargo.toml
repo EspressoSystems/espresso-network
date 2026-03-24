@@ -1,12 +1,16 @@
 # As a workaround for feature unification by cargo this separate crate
 # that is **not** a default member of the workspace.
 [package]
-name = "sequencer-sqlite"
+name = "espresso-node-sqlite"
 version = "0.1.0"
 edition.workspace = true
+
+[[bin]]
+name = "espresso-node-sqlite"
+path = "src/main.rs"
 
 [dependencies]
 anyhow = { workspace = true }
 # disable default features to allow including versions on demand
-sequencer = { workspace = true, default-features = false, features = ["embedded-db"] }
+espresso-node = { workspace = true, default-features = false, features = ["embedded-db"] }
 tokio = { workspace = true }

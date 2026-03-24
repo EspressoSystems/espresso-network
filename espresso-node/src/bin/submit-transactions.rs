@@ -13,6 +13,7 @@ use clap::Parser;
 use committable::{Commitment, Committable};
 #[cfg(feature = "benchmarking")]
 use csv::Writer;
+use espresso_node::SequencerApiVersion;
 use espresso_types::{SeqTypes, Transaction, parse_duration, parse_size};
 use futures::{
     channel::mpsc::{self, Sender},
@@ -23,7 +24,6 @@ use hotshot_query_service::{Error, availability::BlockQueryData, types::HeightIn
 use rand::{Rng, RngCore, SeedableRng};
 use rand_chacha::ChaChaRng;
 use rand_distr::Distribution;
-use sequencer::SequencerApiVersion;
 use sequencer_utils::logging;
 use surf_disco::{Client, Url, reexports::WebSocketConfig};
 use tide_disco::{App, error::ServerError};

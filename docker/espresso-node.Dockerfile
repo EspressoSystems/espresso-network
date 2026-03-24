@@ -2,11 +2,11 @@ FROM ghcr.io/espressosystems/ubuntu-base:main
 
 ARG TARGETARCH
 
-COPY target/$TARGETARCH/release/sequencer /bin/sequencer-postgres
-RUN chmod +x /bin/sequencer-postgres
+COPY target/$TARGETARCH/release/espresso-node /bin/espresso-node-postgres
+RUN chmod +x /bin/espresso-node-postgres
 
-COPY target/$TARGETARCH/release/sequencer-sqlite /bin/sequencer-sqlite
-RUN chmod +x /bin/sequencer-sqlite
+COPY target/$TARGETARCH/release/espresso-node-sqlite /bin/espresso-node-sqlite
+RUN chmod +x /bin/espresso-node-sqlite
 
 COPY target/$TARGETARCH/release/utils /bin/utils
 RUN chmod +x /bin/utils
@@ -26,11 +26,11 @@ COPY data/genesis /genesis
 
 # Allow injecting a genesis file with aws secretsmanager
 # Set `ESPRESSO_SEQUENCER_GENESIS_SECRET`
-COPY docker/scripts/sequencer-awssecretsmanager.sh /bin/sequencer-awssecretsmanager.sh
+COPY docker/scripts/espresso-node-awssecretsmanager.sh /bin/espresso-node-awssecretsmanager.sh
 
 # Copy entrypoint script
-COPY scripts/sequencer-entrypoint /bin/sequencer
-RUN chmod +x /bin/sequencer
+COPY scripts/espresso-node-entrypoint /bin/espresso-node
+RUN chmod +x /bin/espresso-node
 
 # Set a path to save the consensus config on startup.
 #
@@ -43,6 +43,6 @@ ENV ESPRESSO_SEQUENCER_STORAGE_PATH=/store/sequencer
 # is very old.
 ENV ESPRESSO_SEQUENCER_L1_FINALIZED_SAFETY_MARGIN=100
 
-CMD ["/bin/sequencer", "--", "http"]
+CMD ["/bin/espresso-node", "--", "http"]
 HEALTHCHECK --interval=1s --timeout=1s --retries=100 CMD curl --fail http://localhost:${ESPRESSO_SEQUENCER_API_PORT}/healthcheck  || exit 1
 EXPOSE ${ESPRESSO_SEQUENCER_API_PORT}

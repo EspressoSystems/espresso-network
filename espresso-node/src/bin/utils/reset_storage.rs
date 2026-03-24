@@ -1,5 +1,5 @@
 use clap::Subcommand;
-use sequencer::{
+use espresso_node::{
     api::data_source::{DataSourceOptions, SequencerDataSource},
     persistence,
 };

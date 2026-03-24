@@ -1,9 +1,9 @@
 use clap::{Parser, Subcommand};
-use espresso_types::v0::traits::MembershipPersistence;
-use sequencer::{
+use espresso_node::{
     api::data_source::{DataSourceOptions, SequencerDataSource},
     persistence,
 };
+use espresso_types::v0::traits::MembershipPersistence;
 use sequencer_utils::logging;
 
 /// Reset the persistent storage of a sequencer.

@@ -45,7 +45,7 @@ jobs:
     strategy:
       matrix:
         include:
-          - binary: sequencer
+          - binary: espresso-node
             shared-key: postgres
             save-cache: false
 
@@ -53,7 +53,7 @@ jobs:
             shared-key: postgres
             save-cache: true
 
-          - binary: sequencer-sqlite
+          - binary: espresso-node-sqlite
             # uses it's own lock file
             shared-key: sequencer-embedded
             save-cache: true
@@ -108,7 +108,7 @@ jobs:
     strategy:
       matrix:
         include:
-          - binary: sequencer
+          - binary: espresso-node
             shared-key: postgres
             save-cache: false
 
@@ -116,7 +116,7 @@ jobs:
             shared-key: postgres
             save-cache: true
 
-          - binary: sequencer-sqlite
+          - binary: espresso-node-sqlite
             # uses it's own lock file
             shared-key: sequencer-embedded
             save-cache: true
@@ -179,7 +179,7 @@ jobs:
           - node-validator
           - orchestrator
           - prover-service
-          - sequencer
+          - espresso-node
           - staking-cli
           - state-relay-server
           - submit-transactions
@@ -287,7 +287,7 @@ jobs:
           - node-validator
           - orchestrator
           - prover-service
-          - sequencer
+          - espresso-node
           - staking-cli
           - state-relay-server
           - submit-transactions
@@ -371,7 +371,7 @@ jobs:
           - node-validator
           - orchestrator
           - prover-service
-          - sequencer
+          - espresso-node
           - staking-cli
           - state-relay-server
           - submit-transactions

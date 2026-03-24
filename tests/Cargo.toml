@@ -23,7 +23,7 @@ hotshot-types = { workspace = true }
 jf-signature = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true }
-sequencer = { workspace = true, default-features = false, features = ["testing"] }
+espresso-node = { workspace = true, default-features = false, features = ["testing"] }
 sequencer-utils = { workspace = true }
 staking-cli = { workspace = true }
 surf-disco = { workspace = true }
