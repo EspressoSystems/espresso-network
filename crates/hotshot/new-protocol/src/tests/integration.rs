@@ -10,7 +10,9 @@ use super::common::{
 };
 use crate::{
     events::{ConsensusOutput, Event},
-    tests::common::assertions::{has_cert1, has_vote2},
+    tests::common::assertions::{
+        has_block_reconstructed, has_cert1, has_request_vid_disperse, has_vid_disperse, has_vote2,
+    },
 };
 
 /// Threshold for SuccessThreshold with 10 nodes of stake 1: (10*2)/3 + 1 = 7.
@@ -108,7 +110,7 @@ async fn test_full_decide_via_cpu_tasks() {
 /// to the CPU task when cpu_tx is set). SendProposal in the output
 /// proves the full leader path: cert1 formation → block/header request
 /// → VID disperse via CPU → proposal sent.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_leader_proposal_via_cpu_tasks() {
     let test_data = TestData::new(4).await;
     let leader_for_view_2 = test_data.views[1].leader_public_key;
@@ -129,6 +131,23 @@ async fn test_leader_proposal_via_cpu_tasks() {
         has_request_block_and_header(&events),
         "Leader should request block and header after CPU forms cert1"
     );
+    assert!(
+        has_request_vid_disperse(&events),
+        "Leader should request VID disperse after CPU forms cert1"
+    );
+    assert!(
+        has_vid_disperse(&events),
+        "Leader should request VID disperse after CPU forms cert1"
+    );
+    assert!(
+        has_cert1(&events),
+        "Leader should form cert1 (requires CPU VID disperse)"
+    );
+    assert!(
+        has_block_reconstructed(&events),
+        "Leader should reconstruct block after CPU forms cert1"
+    );
+
     // SendProposal proves the CPU VidDisperseTask computed the VID
     // disperse — consensus cannot send a proposal without it.
     assert!(
