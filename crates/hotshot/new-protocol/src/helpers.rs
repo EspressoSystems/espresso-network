@@ -6,14 +6,12 @@ use hotshot_types::{
 };
 use versions::{Upgrade, VID2_UPGRADE_VERSION};
 
-pub fn proposal_commitment<TYPES: NodeType>(
-    proposal: &QuorumProposal2<TYPES>,
-) -> Commitment<Leaf2<TYPES>> {
+pub fn proposal_commitment<T: NodeType>(proposal: &QuorumProposal2<T>) -> Commitment<Leaf2<T>> {
     let wrapper = QuorumProposalWrapper::from(proposal.clone());
     Leaf2::from_quorum_proposal(&wrapper).commit()
 }
 
 // TODO: Remove this and use the actual upgrade lock
-pub fn upgrade_lock<TYPES: NodeType>() -> UpgradeLock<TYPES> {
+pub fn upgrade_lock<T: NodeType>() -> UpgradeLock<T> {
     UpgradeLock::new(Upgrade::trivial(VID2_UPGRADE_VERSION))
 }

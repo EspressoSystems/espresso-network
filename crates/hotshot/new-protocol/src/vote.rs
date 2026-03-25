@@ -32,24 +32,24 @@ fn generate_vote_commitment<T: NodeType, V: Vote<T>>(
     }
 }
 
-pub(crate) struct VoteCollectionTask<TYPES: NodeType, V, C> {
+pub(crate) struct VoteCollectionTask<T: NodeType, V, C> {
     accumulators: BTreeMap<ViewNumber, (mpsc::Sender<V>, AbortHandle)>,
     completed_certificates: BTreeSet<ViewNumber>,
-    epoch_membership_coordinator: EpochMembershipCoordinator<TYPES>,
-    upgrade_lock: UpgradeLock<TYPES>,
+    epoch_membership_coordinator: EpochMembershipCoordinator<T>,
+    upgrade_lock: UpgradeLock<T>,
     tasks: JoinSet<C>,
 }
 
-impl<TYPES, V, C> VoteCollectionTask<TYPES, V, C>
+impl<T, V, C> VoteCollectionTask<T, V, C>
 where
-    TYPES: NodeType,
-    V: Vote<TYPES> + HasEpoch + Send + Sync + 'static,
-    C: Certificate<TYPES, V::Commitment, Voteable = V::Commitment> + Send + Sync + 'static,
+    T: NodeType,
+    V: Vote<T> + HasEpoch + Send + Sync + 'static,
+    C: Certificate<T, V::Commitment, Voteable = V::Commitment> + Send + Sync + 'static,
 {
     #[instrument(level = "debug", skip_all)]
     pub fn new(
-        epoch_membership_coordinator: EpochMembershipCoordinator<TYPES>,
-        upgrade_lock: UpgradeLock<TYPES>,
+        epoch_membership_coordinator: EpochMembershipCoordinator<T>,
+        upgrade_lock: UpgradeLock<T>,
     ) -> Self {
         Self {
             accumulators: BTreeMap::new(),
@@ -102,8 +102,8 @@ where
     async fn run_per_view(
         view: ViewNumber,
         mut rx: mpsc::Receiver<V>,
-        mut accumulator: VoteAccumulator<TYPES, V, C>,
-        membership_coordinator: EpochMembershipCoordinator<TYPES>,
+        mut accumulator: VoteAccumulator<T, V, C>,
+        membership_coordinator: EpochMembershipCoordinator<T>,
     ) -> C {
         let mut votes = Vec::new();
         while let Some(vote) = rx.recv().await {
@@ -115,7 +115,7 @@ where
                 let stake_table = membership.stake_table().await;
                 let threshold = membership.success_threshold().await;
                 match cert.is_valid_cert(
-                    &StakeTableEntries::<TYPES>::from(stake_table).0,
+                    &StakeTableEntries::<T>::from(stake_table).0,
                     threshold,
                     &upgrade_lock(),
                 ) {

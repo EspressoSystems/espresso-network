@@ -12,19 +12,19 @@ use crate::{
     message::{ConsensusMessage, Message, MessageType, ViewSyncMessage},
 };
 
-struct Network<TYPES: NodeType, N: ConnectedNetwork<TYPES::SignatureKey>> {
-    receiver: Receiver<NetworkEvent<TYPES>>,
+struct Network<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> {
+    receiver: Receiver<NetworkEvent<T>>,
     network: N,
-    membership_coordinator: EpochMembershipCoordinator<TYPES>,
-    upgrade_lock: UpgradeLock<TYPES>,
+    membership_coordinator: EpochMembershipCoordinator<T>,
+    upgrade_lock: UpgradeLock<T>,
 }
 
-impl<TYPES: NodeType, N: ConnectedNetwork<TYPES::SignatureKey>> Network<TYPES, N> {
+impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Network<T, N> {
     pub fn new(
-        receiver: Receiver<NetworkEvent<TYPES>>,
+        receiver: Receiver<NetworkEvent<T>>,
         network: N,
-        membership_coordinator: EpochMembershipCoordinator<TYPES>,
-        upgrade_lock: UpgradeLock<TYPES>,
+        membership_coordinator: EpochMembershipCoordinator<T>,
+        upgrade_lock: UpgradeLock<T>,
     ) -> Self {
         Self {
             receiver,
@@ -40,7 +40,7 @@ impl<TYPES: NodeType, N: ConnectedNetwork<TYPES::SignatureKey>> Network<TYPES, N
         };
         Ok(())
     }
-    async fn handle_event(&self, event: NetworkEvent<TYPES>) {
+    async fn handle_event(&self, event: NetworkEvent<T>) {
         match event {
             NetworkEvent::SendMessage(message) => {
                 self.send_message(message).await;
@@ -52,7 +52,7 @@ impl<TYPES: NodeType, N: ConnectedNetwork<TYPES::SignatureKey>> Network<TYPES, N
             },
         }
     }
-    async fn send_message(&self, message: ConsensusMessage<TYPES>) {
+    async fn send_message(&self, message: ConsensusMessage<T>) {
         todo!()
     }
     async fn handle_message(&self, message: Vec<u8>) -> Result<()> {
@@ -70,18 +70,18 @@ impl<TYPES: NodeType, N: ConnectedNetwork<TYPES::SignatureKey>> Network<TYPES, N
         }
         Ok(())
     }
-    async fn handle_consensus_message(&self, consensus_message: ConsensusMessage<TYPES>) {
+    async fn handle_consensus_message(&self, consensus_message: ConsensusMessage<T>) {
         todo!()
     }
-    async fn handle_view_sync_message(&self, view_sync_message: ViewSyncMessage<TYPES>) {
+    async fn handle_view_sync_message(&self, view_sync_message: ViewSyncMessage<T>) {
         todo!()
     }
     async fn handle_external_message(&self, external_message: Vec<u8>) {
         todo!()
     }
-    fn deserialize(&self, message: Vec<u8>) -> Result<Message<TYPES>> {
+    fn deserialize(&self, message: Vec<u8>) -> Result<Message<T>> {
         // Deserialize the message and get the version
-        let (deserialized_message, version): (Message<TYPES>, Version) =
+        let (deserialized_message, version): (Message<T>, Version) =
             match self.upgrade_lock.deserialize(&message) {
                 Ok(message) => message,
                 Err(e) => {
@@ -95,7 +95,7 @@ impl<TYPES: NodeType, N: ConnectedNetwork<TYPES::SignatureKey>> Network<TYPES, N
         if version == EXTERNAL_MESSAGE_VERSION
             && !matches!(
                 deserialized_message.message_type,
-                MessageType::<TYPES>::External(_)
+                MessageType::<T>::External(_)
             )
         {
             tracing::warn!("Received a non-external message with version 0.0");
@@ -105,7 +105,7 @@ impl<TYPES: NodeType, N: ConnectedNetwork<TYPES::SignatureKey>> Network<TYPES, N
         }
         Ok(deserialized_message)
     }
-    fn serialize(&self, message: Message<TYPES>) -> Result<Vec<u8>> {
+    fn serialize(&self, message: Message<T>) -> Result<Vec<u8>> {
         self.upgrade_lock
             .serialize(&message)
             .context("Failed to serialize message")

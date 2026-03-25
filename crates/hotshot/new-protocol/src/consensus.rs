@@ -38,19 +38,19 @@ enum Protocol {
     Continue,
 }
 
-pub struct Consensus<TYPES: NodeType> {
-    proposals: BTreeMap<ViewNumber, QuorumProposal2<TYPES>>,
-    vid_shares: BTreeMap<ViewNumber, VidDisperseShare2<TYPES>>,
-    states_verified: BTreeMap<ViewNumber, Commitment<Leaf2<TYPES>>>,
+pub struct Consensus<T: NodeType> {
+    proposals: BTreeMap<ViewNumber, QuorumProposal2<T>>,
+    vid_shares: BTreeMap<ViewNumber, VidDisperseShare2<T>>,
+    states_verified: BTreeMap<ViewNumber, Commitment<Leaf2<T>>>,
     blocks_reconstructed: BTreeMap<ViewNumber, VidCommitment2>,
-    blocks: BTreeMap<ViewNumber, TYPES::BlockPayload>,
-    vid_disperses: BTreeMap<ViewNumber, VidDisperse2<TYPES>>,
-    certs: BTreeMap<ViewNumber, Certificate1<TYPES>>,
-    certs2: BTreeMap<ViewNumber, Certificate2<TYPES>>,
-    timeout_certs: BTreeMap<ViewNumber, TimeoutCertificate2<TYPES>>,
-    view_sync_certs: BTreeMap<ViewNumber, ViewSyncFinalizeCertificate2<TYPES>>,
-    locked_qc: Option<Certificate1<TYPES>>,
-    headers: BTreeMap<ViewNumber, TYPES::BlockHeader>,
+    blocks: BTreeMap<ViewNumber, T::BlockPayload>,
+    vid_disperses: BTreeMap<ViewNumber, VidDisperse2<T>>,
+    certs: BTreeMap<ViewNumber, Certificate1<T>>,
+    certs2: BTreeMap<ViewNumber, Certificate2<T>>,
+    timeout_certs: BTreeMap<ViewNumber, TimeoutCertificate2<T>>,
+    view_sync_certs: BTreeMap<ViewNumber, ViewSyncFinalizeCertificate2<T>>,
+    locked_qc: Option<Certificate1<T>>,
+    headers: BTreeMap<ViewNumber, T::BlockHeader>,
     last_decided_view: ViewNumber,
 
     voted_1_views: BTreeSet<ViewNumber>,
@@ -60,10 +60,10 @@ pub struct Consensus<TYPES: NodeType> {
 
     // TODO: We need a next epoch stake table to handle the transition
     // And a way to set these stake tables, probably an event from coordinator
-    stake_table_coordinator: EpochMembershipCoordinator<TYPES>,
+    stake_table_coordinator: EpochMembershipCoordinator<T>,
 
-    public_key: TYPES::SignatureKey,
-    private_key: <TYPES::SignatureKey as SignatureKey>::PrivateKey,
+    public_key: T::SignatureKey,
+    private_key: <T::SignatureKey as SignatureKey>::PrivateKey,
 }
 
 impl<T: NodeType> Consensus<T> {

@@ -5,27 +5,31 @@ use crate::events::*;
 
 const CHANNEL_BUFFER_SIZE: usize = 256;
 
-pub(crate) struct Coordinator<TYPES: NodeType> {
-    external_tx: async_broadcast::Sender<hotshot_types::event::Event<TYPES>>,
+pub(crate) struct Coordinator<T: NodeType, I: NodeImplementation<T>> {
+    external_tx: async_broadcast::Sender<hotshot_types::event::Event<T>>,
+    system_context: SystemContextHandle<T, I>,
 }
 
-impl<TYPES: NodeType> Coordinator<TYPES> {
-    pub async fn new<I: NodeImplementation<TYPES>>(
-        external_tx: async_broadcast::Sender<hotshot_types::event::Event<TYPES>>,
-        _system_context: SystemContextHandle<TYPES, I>,
+impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
+    pub async fn new(
+        external_tx: async_broadcast::Sender<hotshot_types::event::Event<T>>,
+        system_context: SystemContextHandle<T, I>,
     ) -> Self {
-        Self { external_tx }
+        Self {
+            external_tx,
+            system_context,
+        }
     }
 
     pub async fn run(&mut self) {
         todo!()
     }
 
-    async fn handle_update(&mut self, update: Event<TYPES>) {
+    async fn handle_update(&mut self, update: Event<T>) {
         todo!()
     }
 
-    async fn handle_action(&mut self, action: Action<TYPES>) {
+    async fn handle_action(&mut self, action: Action<T>) {
         todo!()
     }
 }
