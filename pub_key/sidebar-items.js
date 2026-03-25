@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["PrivateKey"],"fn":["main"],"struct":["Options"]};
+window.SIDEBAR_ITEMS = {"enum":["Scheme"],"fn":["main"],"struct":["Options"]};
