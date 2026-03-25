@@ -93,7 +93,6 @@ pub enum Action<T: NodeType> {
     ),
     RequestProposal(ViewNumber, Commitment<Leaf2<T>>),
     RequestDRB(DrbInput),
-    Shutdown,
 }
 
 #[derive(Clone, Eq, PartialEq, Debug)]
@@ -232,21 +231,13 @@ impl<T: NodeType> TryFrom<Event<T>> for ConsensusInput<T> {
             Event::VidDisperseCreated(_commitment, disperse) => Ok(
                 ConsensusInput::VidDisperseCreated(disperse.view_number, disperse),
             ),
-            _ => Err(()),
+            Event::HeaderCreationFailed(_)
+            | Event::LeafDecided(_)
+            | Event::LockUpdated(_)
+            | Event::ViewChanged(..)
+            | Event::DrbCalculated(_) => Err(()),
         }
     }
-}
-
-#[allow(clippy::large_enum_variant)]
-pub enum NetworkEvent<T: NodeType> {
-    SendMessage(ConsensusMessage<T>),
-    ViewChanged(ViewNumber, EpochNumber),
-}
-
-#[allow(clippy::large_enum_variant)]
-pub enum IoEvent<T: NodeType> {
-    StorageEvent(StorageEvent<T>),
-    NetworkEvent(NetworkEvent<T>),
 }
 
 #[allow(clippy::large_enum_variant)]

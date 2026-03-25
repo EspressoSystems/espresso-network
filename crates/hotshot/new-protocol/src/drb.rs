@@ -8,7 +8,7 @@ use hotshot_types::{
 use tokio::task::{AbortHandle, JoinSet};
 use tracing::warn;
 
-pub struct DrbRequestTask {
+pub struct DrbRequester {
     calculations: BTreeMap<EpochNumber, AbortHandle>,
     completed_epochs: BTreeSet<EpochNumber>,
     store_drb_progress: StoreDrbProgressFn,
@@ -16,7 +16,7 @@ pub struct DrbRequestTask {
     tasks: JoinSet<(EpochNumber, DrbResult)>,
 }
 
-impl DrbRequestTask {
+impl DrbRequester {
     pub fn new(
         store_drb_progress: StoreDrbProgressFn,
         load_drb_progress: LoadDrbProgressFn,
