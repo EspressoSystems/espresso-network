@@ -156,11 +156,8 @@ pub mod testing {
         }
 
         async fn handle_event(&mut self, event: &Event<TestTypes>) {
-            match event {
-                Event::ViewChanged(view_number, _epoch) => {
-                    self.timer.reset(*view_number);
-                },
-                _ => {},
+            if let Event::ViewChanged(view_number, _epoch) = event {
+                self.timer.reset(*view_number);
             }
         }
 
