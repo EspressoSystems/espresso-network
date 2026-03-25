@@ -12,9 +12,6 @@ pub mod validated_state;
 pub mod io;
 
 #[allow(dead_code, unused_variables)]
-pub mod cpu_tasks;
-
-#[allow(dead_code, unused_variables)]
 pub mod coordinator;
 
 #[allow(dead_code, unused_variables)]
@@ -24,6 +21,15 @@ mod events;
 mod helpers;
 
 mod outbox;
+
+#[allow(dead_code, unused_variables)]
+pub mod drb;
+
+#[allow(dead_code, unused_variables)]
+pub mod vid;
+
+#[allow(dead_code, unused_variables)]
+pub mod vote;
 
 #[cfg(test)]
 mod tests;

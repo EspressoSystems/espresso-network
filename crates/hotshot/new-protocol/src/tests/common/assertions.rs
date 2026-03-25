@@ -10,10 +10,22 @@ pub(crate) fn has_vote1(events: &[ConsensusOutput<TestTypes>]) -> bool {
         .any(|e| matches!(e, ConsensusOutput::Action(Action::SendVote1(_))))
 }
 
+pub(crate) fn has_cert1(events: &[ConsensusOutput<TestTypes>]) -> bool {
+    events
+        .iter()
+        .any(|e| matches!(e, ConsensusOutput::Event(Event::Certificate1Formed(_))))
+}
 pub(crate) fn has_vote2(events: &[ConsensusOutput<TestTypes>]) -> bool {
     events
         .iter()
         .any(|e| matches!(e, ConsensusOutput::Action(Action::SendVote2(_))))
+}
+
+#[allow(dead_code)]
+pub(crate) fn has_cert2(events: &[ConsensusOutput<TestTypes>]) -> bool {
+    events
+        .iter()
+        .any(|e| matches!(e, ConsensusOutput::Event(Event::Certificate2Formed(_))))
 }
 
 pub(crate) fn has_leaf_decided(events: &[ConsensusOutput<TestTypes>]) -> bool {
@@ -38,6 +50,24 @@ pub(crate) fn has_request_block_and_header(events: &[ConsensusOutput<TestTypes>]
     events
         .iter()
         .any(|e| matches!(e, ConsensusOutput::Action(Action::RequestBlockAndHeader(_))))
+}
+
+pub(crate) fn has_request_vid_disperse(events: &[ConsensusOutput<TestTypes>]) -> bool {
+    events
+        .iter()
+        .any(|e| matches!(e, ConsensusOutput::Action(Action::RequestVidDisperse(..))))
+}
+
+pub(crate) fn has_vid_disperse(events: &[ConsensusOutput<TestTypes>]) -> bool {
+    events
+        .iter()
+        .any(|e| matches!(e, ConsensusOutput::Event(Event::VidDisperseCreated(..))))
+}
+
+pub(crate) fn has_block_reconstructed(events: &[ConsensusOutput<TestTypes>]) -> bool {
+    events
+        .iter()
+        .any(|e| matches!(e, ConsensusOutput::Event(Event::BlockReconstructed(..))))
 }
 
 pub(crate) fn count_vote1(events: &[ConsensusOutput<TestTypes>]) -> usize {

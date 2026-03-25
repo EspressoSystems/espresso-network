@@ -1,2 +1,2 @@
-mod network;
+pub mod network;
 mod storage;

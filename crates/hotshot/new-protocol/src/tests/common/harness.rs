@@ -18,11 +18,13 @@ use super::utils::mock_membership;
 use crate::{
     Outbox,
     consensus::Consensus,
-    coordinator::{handle::CoordinatorHandle, mock::testing::MockCoordinator},
-    cpu_tasks::CpuTaskManager,
+    drb::DrbRequester,
     events::ConsensusOutput,
     helpers::upgrade_lock,
+    tests::common::mock::testing::MockCoordinator,
     validated_state::ValidatedStateManager,
+    vid::{VidDisperser, VidReconstructor},
+    vote::VoteCollector,
 };
 
 /// Test harness that spawns consensus + mock coordinator and provides
@@ -45,33 +47,30 @@ impl TestHarness {
         let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
         let membership = mock_membership().await;
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
-        let (cpu_tx, cpu_rx) = tokio::sync::mpsc::channel(100);
 
         let (coordinator_tx, coordinator_rx) = tokio::sync::mpsc::channel(100);
-        let coordinator_handle = CoordinatorHandle::new(coordinator_tx.clone());
 
         let store_drb_progress = null_store_drb_progress_fn();
         let load_drb_progress = null_load_drb_progress_fn();
+        let drb_request_task = DrbRequester::new(store_drb_progress, load_drb_progress);
 
-        let cpu_task_manager = CpuTaskManager::new(
-            cpu_rx,
-            coordinator_handle.clone(),
-            membership.clone(),
-            upgrade_lock(),
-            store_drb_progress,
-            load_drb_progress,
-        );
-        tokio::spawn(async move {
-            cpu_task_manager.run().await;
-        });
+        let vote1_task = VoteCollector::new(membership.clone(), upgrade_lock());
+        let vote2_task = VoteCollector::new(membership.clone(), upgrade_lock());
+
         let consensus = Consensus::new(membership.clone(), public_key, private_key);
 
+        let vid_disperse_task = VidDisperser::new(membership.clone());
+        let vid_reconstruction_task = VidReconstructor::new();
         let mock_coordinator = MockCoordinator {
             consensus,
             input_rx: coordinator_rx,
             shutdown_rx,
             state_manager: None,
-            cpu_tx: Some(cpu_tx),
+            vote1_task: Some(vote1_task),
+            vote2_task: Some(vote2_task),
+            vid_disperse_task: Some(vid_disperse_task),
+            vid_reconstruction_task: Some(vid_reconstruction_task),
+            drb_request_task: Some(drb_request_task),
             membership_coordinator: membership,
             outbox: Outbox::new(),
             received_events: Vec::new(),
@@ -110,7 +109,11 @@ impl TestHarness {
             consensus,
             input_rx,
             shutdown_rx,
-            cpu_tx: None,
+            vote1_task: None,
+            vote2_task: None,
+            vid_disperse_task: None,
+            vid_reconstruction_task: None,
+            drb_request_task: None,
             state_manager: Some(state_manager),
             membership_coordinator: membership,
             outbox: Outbox::new(),

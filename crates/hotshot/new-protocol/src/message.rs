@@ -139,12 +139,18 @@ pub struct Message<TYPES: NodeType> {
     pub message_type: MessageType<TYPES>,
 }
 
+impl<TYPES: NodeType> Message<TYPES> {
+    pub fn is_external(&self) -> bool {
+        matches!(self.message_type, MessageType::External(_))
+    }
+}
+
 impl<TYPES: NodeType> HasViewNumber for Message<TYPES> {
     fn view_number(&self) -> ViewNumber {
         match &self.message_type {
             MessageType::Consensus(consensus_message) => consensus_message.view_number(),
             MessageType::ViewSync(view_sync_message) => view_sync_message.view_number(),
-            MessageType::External(_) => ViewNumber::new(0),
+            MessageType::External(_) => ViewNumber::new(0), // TODO: This can become a problem
         }
     }
 }

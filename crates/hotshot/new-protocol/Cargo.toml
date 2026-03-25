@@ -19,6 +19,7 @@ async-broadcast = { workspace = true }
 async-lock = { workspace = true }
 async-trait = { workspace = true }
 bincode = { workspace = true }
+bon = { workspace = true }
 chrono = { workspace = true }
 committable = { workspace = true }
 csv = { workspace = true }
