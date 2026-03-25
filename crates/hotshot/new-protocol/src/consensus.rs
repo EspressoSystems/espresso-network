@@ -340,7 +340,7 @@ impl<T: NodeType> Consensus<T> {
             debug!(%epoch, "not leader");
             return Protocol::Abort;
         }
-        let Some(locked_view) = self.locked_cert.as_ref().map(|qc| qc.view_number()) else {
+        let Some(locked_view) = self.locked_cert.as_ref().map(|cert| cert.view_number()) else {
             debug!("locked qc not available");
             return Protocol::Abort;
         };
@@ -632,7 +632,7 @@ impl<T: NodeType> Consensus<T> {
         if self
             .locked_cert
             .as_mut()
-            .is_none_or(|locked_qc| locked_qc.view_number() < cert1.view_number())
+            .is_none_or(|locked_cert| locked_cert.view_number() < cert1.view_number())
         {
             self.locked_cert = Some(cert1.clone());
         }
@@ -694,7 +694,7 @@ impl<T: NodeType> Consensus<T> {
         let locked_commit = match locked_cert.data_commitment(&upgrade_lock::<T>()) {
             Ok(c) => c,
             Err(err) => {
-                warn!(%err, "failed to compute locked qc data commitment");
+                warn!(%err, "failed to compute locked certificate data");
                 return false;
             },
         };
