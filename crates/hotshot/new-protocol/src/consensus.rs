@@ -178,6 +178,25 @@ impl<T: NodeType> Consensus<T> {
         self.maybe_propose(view + 1, outbox).await;
     }
 
+    pub fn gc(&mut self, view_number: ViewNumber, epoch: EpochNumber) {
+        self.states_verified = self.states_verified.split_off(&view_number);
+        self.blocks_reconstructed = self.blocks_reconstructed.split_off(&view_number);
+        self.blocks = self.blocks.split_off(&view_number);
+        self.vid_disperses = self.vid_disperses.split_off(&view_number);
+        self.certs = self.certs.split_off(&view_number);
+        self.certs2 = self.certs2.split_off(&view_number);
+        self.timeout_certs = self.timeout_certs.split_off(&view_number);
+        self.view_sync_certs = self.view_sync_certs.split_off(&view_number);
+        self.locked_qc = self
+            .locked_qc
+            .take()
+            .filter(|qc| qc.view_number() > view_number);
+        self.headers = self.headers.split_off(&view_number);
+        self.voted_1_views = self.voted_1_views.split_off(&view_number);
+        self.voted_2_views = self.voted_2_views.split_off(&view_number);
+        self.last_decided_view = self.last_decided_view.max(view_number);
+    }
+
     #[instrument(level = "debug", skip_all)]
     async fn handle_proposal(
         &mut self,

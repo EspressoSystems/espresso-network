@@ -75,6 +75,13 @@ impl<T: NodeType> VidDisperser<T> {
             disperse,
         ))
     }
+    pub fn gc(&mut self, view_number: ViewNumber) {
+        let keep = self.calculations.split_off(&view_number);
+        for handle in self.calculations.values_mut() {
+            handle.abort();
+        }
+        self.calculations = keep;
+    }
 }
 
 pub(crate) struct VidShareAccumulator<T: NodeType> {
@@ -178,6 +185,15 @@ impl<T: NodeType> VidReconstructor<T> {
             Ok((view, payload_commitment, payload))
         });
         self.calculations.insert(view, task);
+    }
+
+    pub fn gc(&mut self, view_number: ViewNumber) {
+        let keep = self.calculations.split_off(&view_number);
+        for handle in self.calculations.values_mut() {
+            handle.abort();
+        }
+        self.calculations = keep;
+        self.accumulators = self.accumulators.split_off(&view_number);
     }
 }
 

@@ -156,7 +156,6 @@ pub enum ConsensusInput<T: NodeType> {
     HeaderCreated(ViewNumber, T::BlockHeader),
     StateVerificationFailed(StateResponse<T>),
     Timeout(ViewNumber),
-    // TODO: Add checkpoint events
 }
 
 impl<T: NodeType> ConsensusInput<T> {

@@ -153,6 +153,14 @@ where
         }
         unreachable!()
     }
+    pub fn gc(&mut self, _view_number: ViewNumber) {
+        let keep = self.accumulators.split_off(&_view_number);
+        self.completed_certificates = self.completed_certificates.split_off(&_view_number);
+        for (_, handle) in self.accumulators.values_mut() {
+            handle.abort();
+        }
+        self.accumulators = keep;
+    }
 }
 
 #[cfg(test)]
