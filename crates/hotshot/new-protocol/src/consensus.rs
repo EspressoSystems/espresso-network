@@ -267,6 +267,7 @@ impl<T: NodeType> Consensus<T> {
             warn!(%view, "certificate1 not verified");
             return Protocol::Abort;
         }
+        outbox.push_back(Event::ViewChanged(view + 1, certificate_epoch));
         self.certs.insert(view, certificate);
         Protocol::Continue
     }
@@ -303,11 +304,16 @@ impl<T: NodeType> Consensus<T> {
             warn!(view = %certificate.view_number(), "timeout certificate has no epoch number");
             return Protocol::Abort;
         };
-        self.timeout_certs.insert(view, certificate);
+        self.timeout_certs.insert(view, certificate.clone());
+        outbox.push_back(Event::TimeoutCertificateReceived(certificate));
+        outbox.push_back(Event::ViewChanged(view, epoch));
         if !self.is_leader(view, epoch).await {
             debug!(%epoch, "not leader");
             return Protocol::Abort;
         }
+
+        // if we are the leader of the next view, try to get a block to propose
+        // after forming the TC
         let Some(locked_view) = self.locked_qc.as_ref().map(|qc| qc.view_number()) else {
             debug!("locked qc not available");
             return Protocol::Abort;
@@ -335,7 +341,9 @@ impl<T: NodeType> Consensus<T> {
             warn!(%view, "view-sync certificate has no epoch number");
             return Protocol::Abort;
         };
-        self.view_sync_certs.insert(view, certificate);
+        self.view_sync_certs.insert(view, certificate.clone());
+        outbox.push_back(Event::ViewSyncCertificateReceived(certificate));
+        outbox.push_back(Event::ViewChanged(view, epoch));
         if !self.is_leader(view, epoch).await {
             debug!(%epoch, "not leader");
             return Protocol::Abort;

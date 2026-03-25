@@ -643,6 +643,150 @@ async fn test_non_leader_does_not_propose() {
     );
 }
 
+/// After advancing the lock, a proposal whose justify_qc references a view
+/// below the locked QC (and with a different commitment) is rejected by the
+/// safety rule, preventing vote1.
+#[tokio::test]
+async fn test_safety_rejects_proposal_below_lock() {
+    let mut harness = ConsensusHarness::new(0).await;
+    let test_data = TestData::new(4).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+
+    // Process view 1 fully: proposal + block_reconstructed + cert1 → locked_qc = view 1
+    harness
+        .apply(test_data.views[0].proposal_input(&node_key))
+        .await;
+    harness
+        .apply(test_data.views[0].block_reconstructed_input())
+        .await;
+    harness.apply(test_data.views[0].cert1_input()).await;
+
+    // Process view 2 fully → locked_qc = view 2
+    harness
+        .apply(test_data.views[1].proposal_input(&node_key))
+        .await;
+    harness
+        .apply(test_data.views[1].block_reconstructed_input())
+        .await;
+    harness.apply(test_data.views[1].cert1_input()).await;
+
+    let state_requests_before = harness
+        .events()
+        .iter()
+        .filter(|e| matches!(e, ConsensusOutput::Action(Action::RequestState(_))))
+        .count();
+
+    // Re-send view 1's proposal. Its justify_qc references genesis (view 0),
+    // while locked_qc is at view 2.
+    // Liveness: 0 > 2 = false
+    // Safety:   genesis commitment != cert1(view 2) commitment = false
+    // → Proposal rejected by is_safe, no RequestState emitted.
+    harness
+        .apply(test_data.views[0].proposal_input(&node_key))
+        .await;
+
+    let state_requests_after = harness
+        .events()
+        .iter()
+        .filter(|e| matches!(e, ConsensusOutput::Action(Action::RequestState(_))))
+        .count();
+
+    assert_eq!(
+        state_requests_before, state_requests_after,
+        "Proposal below lock should be rejected — no new RequestState"
+    );
+}
+
+/// After receiving a timeout certificate, new proposals for higher views are
+/// accepted and voted on — demonstrating the protocol continues.
+#[tokio::test]
+async fn test_vote_after_timeout_cert() {
+    let mut harness = ConsensusHarness::new(0).await;
+    let test_data = TestData::new(5).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+
+    // Process view 1 fully → locked_qc = view 1
+    harness
+        .apply(test_data.views[0].proposal_input(&node_key))
+        .await;
+    harness
+        .apply(test_data.views[0].block_reconstructed_input())
+        .await;
+    harness.apply(test_data.views[0].cert1_input()).await;
+
+    // Process view 2 proposal + block_reconstructed (need parent data for view 3)
+    harness
+        .apply(test_data.views[1].proposal_input(&node_key))
+        .await;
+    harness
+        .apply(test_data.views[1].block_reconstructed_input())
+        .await;
+
+    // Receive timeout cert for view 2 → view advances to 3
+    harness.apply(test_data.views[1].timeout_cert_input()).await;
+
+    let vote1_before = count_vote1(harness.events());
+
+    // Process proposal for view 3. Its justify_qc is at view 2, which is
+    // >= locked_qc at view 1 (liveness passes). Parent data for view 2 exists.
+    harness
+        .apply(test_data.views[2].proposal_input(&node_key))
+        .await;
+
+    assert!(
+        count_vote1(harness.events()) > vote1_before,
+        "Vote1 should fire for proposal after timeout certificate"
+    );
+}
+
+/// After a timeout certificate advances the view, a proposal whose
+/// justify_qc references a view below the lock is rejected by the
+/// safety rule. This simulates a leader with a stale lock proposing
+/// after a timeout — the replica's higher lock prevents voting.
+///
+/// The proposal's view (3) passes the stale filter (timeout_view is 0
+/// because no local Timeout fired), but is_safe rejects it because
+/// justify_qc.view (2) < locked_qc.view (3) and the commitments differ.
+#[tokio::test]
+async fn test_no_vote_after_timeout_for_proposal_below_lock() {
+    let mut harness = ConsensusHarness::new(0).await;
+    let test_data = TestData::new(6).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+
+    // Process views 1-3 fully → locked_qc = cert1 for view 3
+    for i in 0..3 {
+        harness
+            .apply(test_data.views[i].proposal_input(&node_key))
+            .await;
+        harness
+            .apply(test_data.views[i].block_reconstructed_input())
+            .await;
+        harness.apply(test_data.views[i].cert1_input()).await;
+    }
+
+    // Receive timeout cert for view 3 → view advances to 4.
+    // No local Timeout fires, so timeout_view stays at 0 and proposals
+    // are filtered only by the safety rule, not the stale filter.
+    harness.apply(test_data.views[2].timeout_cert_input()).await;
+
+    let vote1_count = count_vote1(harness.events());
+
+    // Re-send view 3's proposal. Its justify_qc is cert1 for view 2.
+    // Stale filter: view 3 > timeout_view (0) → passes.
+    // Safety:  justify_qc.view (2) > locked_qc.view (3) → false (liveness fails)
+    //          justify_qc commitment ≠ locked_qc commitment → false (safety fails)
+    // → Proposal rejected by is_safe.
+    harness
+        .apply(test_data.views[2].proposal_input(&node_key))
+        .await;
+
+    assert_eq!(
+        count_vote1(harness.events()),
+        vote1_count,
+        "No new Vote1 — proposal with justify_qc below lock rejected by safety rule"
+    );
+}
+
 /// Cert2 for a view that is already decided is ignored.
 #[tokio::test]
 async fn test_decide_not_repeated_for_same_view() {

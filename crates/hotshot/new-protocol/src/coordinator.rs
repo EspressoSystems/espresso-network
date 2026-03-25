@@ -1,12 +1,16 @@
+use std::time::Duration;
+
 use bon::Builder;
+use futures::{FutureExt, future::BoxFuture};
 use hotshot::{traits::NodeImplementation, types::SystemContextHandle};
 use hotshot_types::{
+    data::ViewNumber,
     epoch_membership::EpochMembershipCoordinator,
     simple_certificate::{QuorumCertificate2, TimeoutCertificate2},
     simple_vote::{QuorumVote2, TimeoutVote2},
     traits::{block_contents::BlockHeader, node_implementation::NodeType},
 };
-use tokio::select;
+use tokio::{select, time::sleep};
 use tracing::{error, warn};
 
 use crate::{
@@ -20,6 +24,30 @@ use crate::{
     vid::{VidDisperser, VidReconstructor},
     vote::VoteCollector,
 };
+
+pub struct Timer {
+    pub(crate) timer: BoxFuture<'static, ViewNumber>,
+    timeout_time: Duration,
+}
+
+impl Timer {
+    pub fn new(timeout_time: Duration) -> Self {
+        Self {
+            timer: sleep(timeout_time)
+                .map(|_| ViewNumber::genesis())
+                .fuse()
+                .boxed(),
+            timeout_time,
+        }
+    }
+
+    pub fn reset(&mut self, view_number: ViewNumber) {
+        self.timer = sleep(self.timeout_time)
+            .map(move |_| view_number)
+            .fuse()
+            .boxed();
+    }
+}
 
 #[derive(Builder)]
 pub(crate) struct Coordinator<T: NodeType, I: NodeImplementation<T>> {
@@ -37,12 +65,18 @@ pub(crate) struct Coordinator<T: NodeType, I: NodeImplementation<T>> {
     membership_coordinator: EpochMembershipCoordinator<T>,
     #[builder(default)]
     outbox: Outbox<ConsensusOutput<T>>,
+
+    timer: Timer,
 }
 
 impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
     pub async fn run(mut self) {
         loop {
             select! {
+                view_number = &mut self.timer.timer => {
+                    self.evaluate(ConsensusInput::Timeout(view_number)).await;
+                    self.timer.reset(view_number + 1);
+                }
                 message = self.network.receive() => match message {
                     Ok(m) => {
                         self.on_message(m).await
@@ -155,6 +189,7 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
             Action::SendProposal(..) => {},
             Action::SendVote1(..) => {},
             Action::SendVote2(..) => {},
+            Action::SendTimeoutVote(..) => {},
             Action::RequestState(state_request) => {
                 self.state_manager.request_state(state_request);
             },
@@ -179,6 +214,12 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
     }
 
     fn handle_event(&mut self, event: Event<T>) {
-        error!("TODO")
+        match event {
+            Event::ViewChanged(view_number, _epoch) => {
+                self.timer.reset(view_number);
+            },
+
+            _ => error!("TODO"),
+        }
     }
 }

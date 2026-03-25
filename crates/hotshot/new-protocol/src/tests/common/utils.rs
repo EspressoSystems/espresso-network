@@ -168,6 +168,24 @@ impl TestView {
         Event::MessageReceived(ConsensusMessage::Vote2(vote))
     }
 
+    /// Build a TimeoutVote Event from a specific validator.
+    pub fn timeout_vote_input(&self, node_index: u64) -> Event<TestTypes> {
+        let (pub_key, priv_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], node_index);
+        let data = TimeoutData2 {
+            view: self.view_number,
+            epoch: Some(self.epoch_number),
+        };
+        let vote = hotshot_types::simple_vote::SimpleVote::create_signed_vote(
+            data,
+            self.view_number,
+            &pub_key,
+            &priv_key,
+            &upgrade_lock(),
+        )
+        .expect("Failed to sign TimeoutVote2");
+        Event::MessageReceived(ConsensusMessage::TimeoutVote(vote))
+    }
+
     /// Build an Event for a timeout certificate.
     #[allow(dead_code)]
     pub fn timeout_cert_input(&self) -> Event<TestTypes> {

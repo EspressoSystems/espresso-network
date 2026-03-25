@@ -10,6 +10,7 @@ use hotshot_types::{
     drb::{DrbInput, DrbResult},
     message::Proposal,
     simple_certificate::{TimeoutCertificate2, ViewSyncFinalizeCertificate2},
+    simple_vote::TimeoutVote2,
     traits::{block_contents::BuilderFee, node_implementation::NodeType},
     utils::BuilderCommitment,
     vote::HasViewNumber,
@@ -83,6 +84,7 @@ pub enum Action<T: NodeType> {
     SendProposal(Proposal<T, QuorumProposal2<T>>, VidDisperse2<T>),
     SendVote1(Vote1<T>),
     SendVote2(Vote2<T>),
+    SendTimeoutVote(TimeoutVote2<T>),
     RequestState(StateRequest<T>),
     RequestBlockAndHeader(BlockAndHeaderRequest<T>),
     RequestVidDisperse(

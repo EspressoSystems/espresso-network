@@ -6,13 +6,15 @@ pub mod testing {
     use hotshot_types::{
         data::{Leaf2, QuorumProposalWrapper, VidDisperse},
         epoch_membership::EpochMembershipCoordinator,
-        simple_vote::QuorumVote2,
+        simple_certificate::TimeoutCertificate2,
+        simple_vote::{QuorumVote2, TimeoutVote2},
     };
     use tokio::select;
 
     use crate::{
         Outbox,
         consensus::Consensus,
+        coordinator::Timer,
         drb::DrbRequester,
         events::*,
         helpers::upgrade_lock,
@@ -38,18 +40,28 @@ pub mod testing {
         pub vote1_task:
             Option<VoteCollector<TestTypes, QuorumVote2<TestTypes>, Certificate1<TestTypes>>>,
         pub vote2_task: Option<VoteCollector<TestTypes, Vote2<TestTypes>, Certificate2<TestTypes>>>,
+        pub timeout_collector: Option<
+            VoteCollector<TestTypes, TimeoutVote2<TestTypes>, TimeoutCertificate2<TestTypes>>,
+        >,
         pub vid_disperse_task: Option<VidDisperser<TestTypes>>,
         pub vid_reconstruction_task: Option<VidReconstructor<TestTypes>>,
         pub drb_request_task: Option<DrbRequester>,
         pub membership_coordinator: EpochMembershipCoordinator<TestTypes>,
         pub outbox: Outbox<ConsensusOutput<TestTypes>>,
         pub received_events: Vec<ConsensusOutput<TestTypes>>,
+        pub timer: Timer,
     }
 
     impl MockCoordinator {
         pub async fn run(mut self) -> Vec<ConsensusOutput<TestTypes>> {
             loop {
                 select! {
+                    view_number = &mut self.timer.timer => {
+                        self.received_events.push(ConsensusOutput::Event(Event::Timeout(view_number)));
+                        self.process_input(ConsensusInput::Timeout(view_number)).await;
+                        // Match real coordinator: keep the timer ticking for the next view
+                        self.timer.reset(view_number + 1);
+                    }
                     Some(input) = self.input_rx.recv() => {
                         if let ConsensusOutput::Event(event) = input.clone()
                             && let Ok(consensus_input) = ConsensusInput::try_from(event) {
@@ -82,6 +94,11 @@ pub mod testing {
                                     });
                                 }
                             }
+                            ConsensusOutput::Event(Event::MessageReceived(ConsensusMessage::TimeoutVote(vote))) => {
+                                if let Some(timeout_collector) = &mut self.timeout_collector {
+                                    timeout_collector.accumulate_vote(vote).await;
+                                }
+                            }
                             _ => {},
                         }
                     }
@@ -98,6 +115,10 @@ pub mod testing {
                     Some(cert2) = PendingIfNone(self.vote2_task.as_mut().map(|task| task.next())) => {
                         self.received_events.push(ConsensusOutput::Event(Event::Certificate2Formed(cert2.clone())));
                         self.process_input(ConsensusInput::Certificate2(cert2)).await;
+                    }
+                    Some(tcert) = PendingIfNone(self.timeout_collector.as_mut().map(|task| task.next())) => {
+                        self.received_events.push(ConsensusOutput::Event(Event::TimeoutCertificateReceived(tcert.clone())));
+                        self.process_input(ConsensusInput::TimeoutCertificate(tcert)).await;
                     }
                     Some(Ok((view, vid_commitment, vid_disperse))) = PendingIfNone(self.vid_disperse_task.as_mut().map(|task| task.next())) => {
                         self.received_events.push(ConsensusOutput::Event(Event::VidDisperseCreated(vid_commitment, vid_disperse.clone())));
@@ -127,7 +148,19 @@ pub mod testing {
                 if let ConsensusOutput::Action(action) = &output {
                     self.handle_action(action).await;
                 }
-                self.received_events.push(output);
+                if let ConsensusOutput::Event(event) = &output {
+                    self.handle_event(event).await;
+                }
+                self.received_events.push(output.clone());
+            }
+        }
+
+        async fn handle_event(&mut self, event: &Event<TestTypes>) {
+            match event {
+                Event::ViewChanged(view_number, _epoch) => {
+                    self.timer.reset(*view_number);
+                },
+                _ => {},
             }
         }
 
@@ -136,6 +169,7 @@ pub mod testing {
                 Action::SendProposal(..) => {},
                 Action::SendVote1(..) => {},
                 Action::SendVote2(..) => {},
+                Action::SendTimeoutVote(..) => {},
                 Action::RequestState(state_request) => {
                     if let Some(sm) = &mut self.state_manager {
                         sm.request_state(state_request.clone());

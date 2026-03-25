@@ -84,6 +84,21 @@ pub(crate) fn count_vote2(events: &[ConsensusOutput<TestTypes>]) -> usize {
         .count()
 }
 
+pub(crate) fn has_timeout_cert(events: &[ConsensusOutput<TestTypes>]) -> bool {
+    events.iter().any(|e| {
+        matches!(
+            e,
+            ConsensusOutput::Event(Event::TimeoutCertificateReceived(_))
+        )
+    })
+}
+
+pub(crate) fn has_view_changed(events: &[ConsensusOutput<TestTypes>]) -> bool {
+    events
+        .iter()
+        .any(|e| matches!(e, ConsensusOutput::Event(Event::ViewChanged(..))))
+}
+
 /// Find the node index (0..10) for a given public key.
 pub(crate) fn node_index_for_key(key: &BLSPubKey) -> u64 {
     for i in 0..10 {

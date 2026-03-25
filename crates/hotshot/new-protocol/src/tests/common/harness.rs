@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use hotshot::types::BLSPubKey;
 use hotshot_example_types::{
@@ -7,6 +7,8 @@ use hotshot_example_types::{
 };
 use hotshot_types::{
     data::{Leaf2, ViewNumber},
+    simple_certificate::TimeoutCertificate2,
+    simple_vote::TimeoutVote2,
     traits::{
         signature_key::SignatureKey,
         storage::{null_load_drb_progress_fn, null_store_drb_progress_fn},
@@ -18,6 +20,7 @@ use super::utils::mock_membership;
 use crate::{
     Outbox,
     consensus::Consensus,
+    coordinator::Timer,
     drb::DrbRequester,
     events::ConsensusOutput,
     helpers::upgrade_lock,
@@ -44,6 +47,13 @@ pub(crate) struct TestHarness {
 
 impl TestHarness {
     pub async fn new_with_cpu_tasks(node_index: u64) -> Self {
+        // Default timer is long enough to not fire during normal tests,
+        // which complete in ~100-200ms. Use new_with_cpu_tasks_and_timer
+        // for tests that exercise timeout behavior.
+        Self::new_with_cpu_tasks_and_timer(node_index, Duration::from_secs(2)).await
+    }
+
+    pub async fn new_with_cpu_tasks_and_timer(node_index: u64, timer_duration: Duration) -> Self {
         let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
         let membership = mock_membership().await;
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
@@ -56,6 +66,11 @@ impl TestHarness {
 
         let vote1_task = VoteCollector::new(membership.clone(), upgrade_lock());
         let vote2_task = VoteCollector::new(membership.clone(), upgrade_lock());
+        let timeout_collector: VoteCollector<
+            TestTypes,
+            TimeoutVote2<TestTypes>,
+            TimeoutCertificate2<TestTypes>,
+        > = VoteCollector::new(membership.clone(), upgrade_lock());
 
         let consensus = Consensus::new(membership.clone(), public_key, private_key);
 
@@ -68,12 +83,14 @@ impl TestHarness {
             state_manager: None,
             vote1_task: Some(vote1_task),
             vote2_task: Some(vote2_task),
+            timeout_collector: Some(timeout_collector),
             vid_disperse_task: Some(vid_disperse_task),
             vid_reconstruction_task: Some(vid_reconstruction_task),
             drb_request_task: Some(drb_request_task),
             membership_coordinator: membership,
             outbox: Outbox::new(),
             received_events: Vec::new(),
+            timer: Timer::new(timer_duration),
         };
         let mock_join = tokio::spawn(async move { mock_coordinator.run().await });
 
@@ -111,6 +128,7 @@ impl TestHarness {
             shutdown_rx,
             vote1_task: None,
             vote2_task: None,
+            timeout_collector: None,
             vid_disperse_task: None,
             vid_reconstruction_task: None,
             drb_request_task: None,
@@ -118,6 +136,7 @@ impl TestHarness {
             membership_coordinator: membership,
             outbox: Outbox::new(),
             received_events: Vec::new(),
+            timer: Timer::new(Duration::from_secs(2)),
         };
         let mock_join = tokio::spawn(async move { mock_coordinator.run().await });
 
