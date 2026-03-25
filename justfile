@@ -128,10 +128,11 @@ anvil *args:
     docker run -p 127.0.0.1:8545:8545 ghcr.io/foundry-rs/foundry:latest "anvil {{args}}"
 
 # hotshot-testing: tested in hotshot.yml
+# hotshot-new-protocol: tested in hotshot.yml
 # sequencer-sqlite: no tests, enables embedded-db feature
 # slow-tests: slow and serial tests
 # espresso-dev-node: enables embedded-db
-nextest_excludes := "--exclude sequencer-sqlite --exclude hotshot-testing --exclude slow-tests --exclude espresso-dev-node"
+nextest_excludes := "--exclude sequencer-sqlite --exclude hotshot-testing --exclude hotshot-new-protocol --exclude slow-tests --exclude espresso-dev-node"
 
 nextest *args:
     cargo nextest run --locked --workspace {{nextest_excludes}} --verbose {{args}}
