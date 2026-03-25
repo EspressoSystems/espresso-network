@@ -2,18 +2,22 @@
 pragma solidity ^0.8.28;
 
 import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
-import { UUPSUpgradeable } from
-    "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
-import { PausableUpgradeable } from
-    "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
-import { AccessControlUpgradeable } from
-    "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
-import { ReentrancyGuardUpgradeable } from
-    "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
-import "./LightClientV3.sol";
-import "./EspTokenV2.sol";
-import "./libraries/RewardMerkleTreeVerifier.sol";
-import "./interfaces/IRewardClaim.sol";
+import {
+    UUPSUpgradeable
+} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import {
+    PausableUpgradeable
+} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
+import {
+    AccessControlUpgradeable
+} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
+import {
+    ReentrancyGuardUpgradeable
+} from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
+import { LightClientV3 } from "./LightClientV3.sol";
+import { EspTokenV2 } from "./EspTokenV2.sol";
+import { RewardMerkleTreeVerifier } from "./libraries/RewardMerkleTreeVerifier.sol";
+import { IRewardClaim } from "./interfaces/IRewardClaim.sol";
 
 /// @title RewardClaim - Espresso Reward Claim Contract
 /// @notice Allows validators and delegators to claim ESP token rewards based on cryptographic
@@ -289,7 +293,8 @@ contract RewardClaim is
         virtual
         override
         onlyRole(DEFAULT_ADMIN_ROLE)
-    // solhint-disable-next-line no-empty-blocks
+        // solhint-disable-next-line no-empty-blocks
+
     {
         // Only the timelock can authorize upgrades
         // No additional checks needed beyond the onlyRole modifier

@@ -130,8 +130,9 @@ contract UpgradeTestHelper is Test {
 
 contract NetworkStorageLayoutSanityTest is UpgradeTestHelper {
     function test_Network_StorageLayout_Sanity_IncompatibleMissingField() public {
-        bool compatible =
-            isLocalLayoutCompatible("sepolia", sepoliaStakeTableProxy, "StakeTableMissingFieldTest");
+        bool compatible = isLocalLayoutCompatible(
+            "sepolia", sepoliaStakeTableProxy, "StakeTableMissingFieldTest"
+        );
         assertFalse(compatible, "Missing field should be incompatible");
     }
 

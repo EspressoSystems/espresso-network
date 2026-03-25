@@ -73,6 +73,7 @@ use futures::{
 };
 use hotshot_types::{
     data::VidShare,
+    simple_certificate::CertificatePair,
     traits::{
         metrics::{Gauge, Metrics},
         node_implementation::NodeType,
@@ -91,7 +92,6 @@ use super::{
         MerklizedStateHeightStorage, MerklizedStateStorage, NodeStorage, UpdateAggregatesStorage,
         UpdateAvailabilityStorage,
         pruning::{PruneStorage, PrunedHeightDataSource, PrunedHeightStorage},
-        sql::MigrateTypes,
     },
 };
 use crate::{
@@ -145,7 +145,6 @@ pub struct Builder<Types, S, P> {
     proactive_fetching: bool,
     aggregator: bool,
     aggregator_chunk_size: Option<usize>,
-    types_migration_batch_size: u64,
     leaf_only: bool,
     _types: PhantomData<Types>,
 }
@@ -174,7 +173,6 @@ impl<Types, S, P> Builder<Types, S, P> {
             proactive_fetching: true,
             aggregator: true,
             aggregator_chunk_size: None,
-            types_migration_batch_size: 10000,
             leaf_only: false,
             _types: Default::default(),
         }
@@ -321,14 +319,6 @@ impl<Types, S, P> Builder<Types, S, P> {
         self
     }
 
-    /// Sets the batch size for the types migration.
-    /// Determines how many `(leaf, vid)` rows are selected from the old types table
-    /// and migrated at once.
-    pub fn with_types_migration_batch_size(mut self, batch: u64) -> Self {
-        self.types_migration_batch_size = batch;
-        self
-    }
-
     pub fn is_leaf_only(&self) -> bool {
         self.leaf_only
     }
@@ -339,7 +329,7 @@ where
     Types: NodeType,
     Payload<Types>: QueryablePayload<Types>,
     Header<Types>: QueryableHeader<Types>,
-    S: PruneStorage + VersionedDataSource + HasMetrics + MigrateTypes<Types> + 'static,
+    S: PruneStorage + VersionedDataSource + HasMetrics + 'static,
     for<'a> S::ReadOnly<'a>: AvailabilityStorage<Types>
         + PrunedHeightStorage
         + NodeStorage<Types>
@@ -455,7 +445,7 @@ where
     Types: NodeType,
     Payload<Types>: QueryablePayload<Types>,
     Header<Types>: QueryableHeader<Types>,
-    S: VersionedDataSource + PruneStorage + HasMetrics + MigrateTypes<Types> + 'static,
+    S: VersionedDataSource + PruneStorage + HasMetrics + 'static,
     for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types> + UpdateAggregatesStorage<Types>,
     for<'a> S::ReadOnly<'a>: AvailabilityStorage<Types>
         + NodeStorage<Types>
@@ -479,18 +469,10 @@ where
         let proactive_range_chunk_size = builder
             .proactive_range_chunk_size
             .unwrap_or(builder.range_chunk_size);
-        let migration_batch_size = builder.types_migration_batch_size;
         let scanner_metrics = ScannerMetrics::new(builder.storage.metrics());
         let aggregator_metrics = AggregatorMetrics::new(builder.storage.metrics());
 
         let fetcher = Arc::new(Fetcher::new(builder).await?);
-
-        // Migrate the old types to new PoS types
-        // This is a one-time operation that should be done before starting the data source
-        // It migrates leaf1 storage to leaf2
-        // and vid to vid2
-        fetcher.storage.migrate_types(migration_batch_size).await?;
-
         let scanner = if proactive_fetching && !leaf_only {
             Some(BackgroundTask::spawn(
                 "proactive scanner",
@@ -771,32 +753,82 @@ where
 {
     async fn append(&self, info: BlockInfo<Types>) -> anyhow::Result<()> {
         let height = info.height() as usize;
-        let fetch_block = info.block.is_none();
-        let fetch_vid = info.vid_common.is_none();
+
+        // Save the new decided leaf.
+        self.fetcher
+            .store(&(info.leaf.clone(), info.qc_chain))
+            .await;
 
         // Trigger a fetch of the parent leaf, if we don't already have it.
         leaf::trigger_fetch_for_parent(&self.fetcher, &info.leaf);
 
-        self.fetcher.store_and_notify(info).await;
-
-        if fetch_block || fetch_vid {
-            // If data related to this block is missing, try and fetch it. Do this in an async task:
-            // we're triggering a fire-and-forget fetch; we don't need to block the caller on this.
-            let fetcher = self.fetcher.clone();
-            let span = tracing::info_span!("fetch missing data", height);
-            spawn(
-                async move {
-                    tracing::info!(fetch_block, fetch_vid, "fetching missing data");
-                    if fetch_block {
-                        fetcher.get::<PayloadMetadata<Types>>(height).await;
-                    }
-                    if fetch_vid {
-                        fetcher.get::<VidCommonMetadata<Types>>(height).await;
-                    }
-                }
-                .instrument(span),
-            );
+        // Store and notify the block data and VID common, if available. Spawn a fetch to retrieve
+        // it, if not.
+        //
+        // Note a special case here: if the data was not available in the decide event, but _is_
+        // available locally in the database, without having to spawn a fetch for it, we _must_
+        // notify now. Thus, we must pattern match to distinguish `Fetch::Ready`/`Fetch::Pending`.
+        //
+        // Why? As soon as we inserted the leaf, the corresponding object may become available, if
+        // we already had an identical payload/VID common in the database, from a different block.
+        // Then calling `get()` will not spawn a fetch/notification, and existing fetches waiting
+        // for the newly decided object to arrive will miss it. Thus, if `get()` returned a `Ready`
+        // object, it is our responsibility, as the task processing newly decided objects, to make
+        // sure those fetches get notified.
+        let block = match info.block {
+            Some(block) => Some(block),
+            None => match self.fetcher.get::<BlockQueryData<Types>>(height).await {
+                Fetch::Ready(block) => Some(block),
+                Fetch::Pending(fut) => {
+                    let span = tracing::info_span!("fetch missing block", height);
+                    spawn(
+                        async move {
+                            tracing::info!("fetching missing block");
+                            fut.await;
+                        }
+                        .instrument(span),
+                    );
+                    None
+                },
+            },
+        };
+        if let Some(block) = &block {
+            self.fetcher.store(block).await;
         }
+        let vid = match info.vid_common {
+            Some(vid) => Some(vid),
+            None => match self.fetcher.get::<VidCommonQueryData<Types>>(height).await {
+                Fetch::Ready(vid) => Some(vid),
+                Fetch::Pending(fut) => {
+                    let span = tracing::info_span!("fetch missing VID common", height);
+                    spawn(
+                        async move {
+                            tracing::info!("fetching missing VID common");
+                            fut.await;
+                        }
+                        .instrument(span),
+                    );
+                    None
+                },
+            },
+        };
+        if let Some(vid) = &vid {
+            self.fetcher.store(&(vid.clone(), info.vid_share)).await;
+        }
+
+        // Send notifications for the new objects after storing all of them. This ensures that as
+        // soon as a fetch for any of these objects resolves, the corresponding data will
+        // immediately be available. This isn't strictly required for correctness; after all,
+        // objects can generally be fetched as asynchronously as we want. But this is the most
+        // intuitive behavior to provide when possible.
+        info.leaf.notify(&self.fetcher.notifiers).await;
+        if let Some(block) = &block {
+            block.notify(&self.fetcher.notifiers).await;
+        }
+        if let Some(vid) = &vid {
+            vid.notify(&self.fetcher.notifiers).await;
+        }
+
         Ok(())
     }
 }
@@ -1638,7 +1670,40 @@ where
     for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
 {
     /// Store an object and notify anyone waiting on this object that it is available.
-    async fn store_and_notify<T>(&self, obj: T)
+    async fn store_and_notify<T>(&self, obj: &T)
+    where
+        T: Storable<Types>,
+    {
+        self.store(obj).await;
+
+        // Send a notification about the newly received object. It is important that we do this
+        // _after_ our attempt to store the object in local storage, otherwise there is a potential
+        // missed notification deadlock:
+        // * we send the notification
+        // * a task calls [`get`](Self::get) or [`get_chunk`](Self::get_chunk), finds that the
+        //   requested object is not in storage, and begins waiting for a notification
+        // * we store the object. This ensures that no other task will be triggered to fetch it,
+        //   which means no one will ever notify the waiting task.
+        //
+        // Note that we send the notification regardless of whether the store actually succeeded or
+        // not. This is to avoid _another_ subtle deadlock: if we failed to notify just because we
+        // failed to store, some fetches might not resolve, even though the object in question has
+        // actually been fetched. This should actually be ok, because as long as the object is not
+        // in storage, eventually some other task will come along and fetch, store, and notify about
+        // it. However, this is certainly not ideal, since we could resolve those pending fetches
+        // right now, and it causes bigger problems when the fetch that fails to resolve is the
+        // proactive scanner task, who is often the one that would eventually come along and
+        // re-fetch the object.
+        //
+        // The key thing to note is that it does no harm to notify even if we fail to store: at best
+        // we wake some tasks up sooner; at worst, anyone who misses the notification still
+        // satisfies the invariant that we only wait on notifications for objects which are not in
+        // storage, and eventually some other task will come along, find the object missing from
+        // storage, and re-fetch it.
+        obj.notify(&self.notifiers).await;
+    }
+
+    async fn store<T>(&self, obj: &T)
     where
         T: Storable<Types>,
     {
@@ -1670,32 +1735,6 @@ where
             tracing::info!(?delay, "retrying failed operation");
             sleep(delay).await;
         }
-
-        // Send a notification about the newly received object. It is important that we do this
-        // _after_ our attempt to store the object in local storage, otherwise there is a potential
-        // missed notification deadlock:
-        // * we send the notification
-        // * a task calls [`get`](Self::get) or [`get_chunk`](Self::get_chunk), finds that the
-        //   requested object is not in storage, and begins waiting for a notification
-        // * we store the object. This ensures that no other task will be triggered to fetch it,
-        //   which means no one will ever notify the waiting task.
-        //
-        // Note that we send the notification regardless of whether the store actually succeeded or
-        // not. This is to avoid _another_ subtle deadlock: if we failed to notify just because we
-        // failed to store, some fetches might not resolve, even though the object in question has
-        // actually been fetched. This should actually be ok, because as long as the object is not
-        // in storage, eventually some other task will come along and fetch, store, and notify about
-        // it. However, this is certainly not ideal, since we could resolve those pending fetches
-        // right now, and it causes bigger problems when the fetch that fails to resolve is the
-        // proactive scanner task, who is often the one that would eventually come along and
-        // re-fetch the object.
-        //
-        // The key thing to note is that it does no harm to notify even if we fail to store: at best
-        // we wake some tasks up sooner; at worst, anyone who misses the notification still
-        // satisfies the invariant that we only wait on notifications for objects which are not in
-        // storage, and eventually some other task will come along, find the object missing from
-        // storage, and re-fetch it.
-        obj.notify(&self.notifiers).await;
     }
 }
 
@@ -2077,40 +2116,31 @@ trait Storable<Types: NodeType>: HeightIndexed + Clone {
     ) -> impl Send + Future<Output = anyhow::Result<()>>;
 }
 
-impl<Types: NodeType> Storable<Types> for BlockInfo<Types> {
+impl<Types: NodeType> HeightIndexed
+    for (LeafQueryData<Types>, Option<[CertificatePair<Types>; 2]>)
+{
+    fn height(&self) -> u64 {
+        self.0.height()
+    }
+}
+
+impl<Types: NodeType> Storable<Types>
+    for (LeafQueryData<Types>, Option<[CertificatePair<Types>; 2]>)
+{
     fn name() -> &'static str {
-        "block info"
+        "leaf with QC chain"
     }
 
     async fn notify(&self, notifiers: &Notifiers<Types>) {
-        self.leaf.notify(notifiers).await;
-
-        if let Some(block) = &self.block {
-            block.notify(notifiers).await;
-        }
-        if let Some(vid) = &self.vid_common {
-            vid.notify(notifiers).await;
-        }
+        self.0.notify(notifiers).await;
     }
 
     async fn store(
         self,
         storage: &mut (impl UpdateAvailabilityStorage<Types> + Send),
-        leaf_only: bool,
+        _leaf_only: bool,
     ) -> anyhow::Result<()> {
-        storage
-            .insert_leaf_with_qc_chain(self.leaf, self.qc_chain)
-            .await?;
-
-        if let Some(common) = self.vid_common {
-            (common, self.vid_share).store(storage, leaf_only).await?;
-        }
-
-        if let Some(block) = self.block {
-            block.store(storage, leaf_only).await?;
-        }
-
-        Ok(())
+        storage.insert_leaf_with_qc_chain(self.0, self.1).await
     }
 }
 
