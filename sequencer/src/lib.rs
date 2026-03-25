@@ -7,6 +7,7 @@ pub mod api;
 pub mod catchup;
 pub mod context;
 pub mod genesis;
+pub mod keyset;
 pub mod network;
 pub mod options;
 pub mod persistence;

@@ -219,15 +219,6 @@ jobs:
       - uses: foundry-rs/foundry-toolchain@v1
       - uses: taiki-e/install-action@nextest
 
-      - name: Install node deps
-        uses: nick-fields/retry@v3
-        with:
-          timeout_minutes: 3
-          max_attempts: 10
-          retry_wait_seconds: 60
-          retry_on: error
-          command: yarn
-
       - name: Download archive
         uses: actions/download-artifact@v4
         with:
@@ -253,15 +244,6 @@ jobs:
         with:
           version: nightly
       - uses: taiki-e/install-action@nextest
-
-      - name: Install node deps
-        uses: nick-fields/retry@v3
-        with:
-          timeout_minutes: 3
-          max_attempts: 10
-          retry_wait_seconds: 60
-          retry_on: error
-          command: yarn
 
       - name: Download archive
         uses: actions/download-artifact@v4
