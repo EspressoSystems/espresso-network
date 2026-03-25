@@ -1778,9 +1778,9 @@ async fn test_cli_export_calldata_delegate() -> Result<()> {
         .arg("100")
         .assert()
         .success()
-        .stdout(str::contains("Target:"))
-        .stdout(str::contains("Calldata:"))
-        .stdout(str::contains("Value: 0"));
+        .stdout(str::contains("transactions"))
+        .stdout(str::contains("contractMethod"))
+        .stdout(str::contains("\"value\": \"0\""));
 
     Ok(())
 }
@@ -1921,8 +1921,8 @@ async fn test_cli_export_calldata_no_signer() -> Result<()> {
         .arg("1000")
         .assert()
         .success()
-        .stdout(str::contains("Target:"))
-        .stdout(str::contains("Calldata:"));
+        .stdout(str::contains("transactions"))
+        .stdout(str::contains("contractMethod"));
 
     Ok(())
 }
@@ -1944,8 +1944,10 @@ async fn test_cli_export_calldata_register_validator_direct_keys() -> Result<()>
         .arg("--no-metadata-uri")
         .assert()
         .success()
-        .stdout(str::contains("Target:"))
-        .stdout(str::contains("Calldata:"));
+        .stdout(str::contains("transactions"))
+        .stdout(str::contains("\"contractMethod\": null"))
+        .stdout(str::contains("\"data\": \"0x"))
+        .stdout(str::contains("\"description\": \"Register validator"));
 
     Ok(())
 }
@@ -1968,8 +1970,12 @@ async fn test_cli_export_calldata_update_consensus_keys_direct_keys() -> Result<
         .arg(new_state.sign_key().to_tagged_base64()?.to_string())
         .assert()
         .success()
-        .stdout(str::contains("Target:"))
-        .stdout(str::contains("Calldata:"));
+        .stdout(str::contains("transactions"))
+        .stdout(str::contains("\"contractMethod\": null"))
+        .stdout(str::contains("\"data\": \"0x"))
+        .stdout(str::contains(
+            "\"description\": \"Update consensus keys for",
+        ));
 
     Ok(())
 }
@@ -2017,7 +2023,7 @@ async fn test_cli_skip_simulation_does_not_require_sender_address() -> Result<()
         .arg("1")
         .assert()
         .success()
-        .stdout(str::contains("Calldata:"));
+        .stdout(str::contains("contractMethod"));
 
     Ok(())
 }
@@ -2057,8 +2063,8 @@ async fn test_cli_export_calldata_claim_rewards() -> Result<()> {
         .arg("claim-rewards")
         .assert()
         .success()
-        .stdout(str::contains("Target:"))
-        .stdout(str::contains("Calldata:"));
+        .stdout(str::contains("transactions"))
+        .stdout(str::contains("contractMethod"));
 
     Ok(())
 }
@@ -2078,8 +2084,8 @@ async fn test_cli_export_calldata_validation_succeeds() -> Result<()> {
         .arg("100")
         .assert()
         .success()
-        .stdout(str::contains("Target:"))
-        .stdout(str::contains("Calldata:"));
+        .stdout(str::contains("transactions"))
+        .stdout(str::contains("contractMethod"));
 
     Ok(())
 }
@@ -2089,6 +2095,7 @@ async fn test_cli_export_calldata_validation_succeeds() -> Result<()> {
 /// for visual verification - there are no automated assertions on the output.
 /// Note: V1 export is not supported (deprecated), so this test only runs on V2.
 #[tokio::test(flavor = "multi_thread")]
+#[ignore = "manual inspection only"]
 async fn test_cli_export_calldata_all_operations_manual_inspect() -> Result<()> {
     let system = TestSystem::deploy().await?;
 
