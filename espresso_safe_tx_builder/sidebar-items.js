@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["build_safe_method","output_safe_tx_builder"],"struct":["CalldataInfo","FunctionInfo","SafeBatchMeta","SafeContractMethod","SafeMethodInput","SafeTransaction","SafeTransactionBuilderBatch"]};

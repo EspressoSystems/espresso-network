@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["output_safe_tx_builder"],"struct":["CalldataInfo","FunctionInfo"]};
