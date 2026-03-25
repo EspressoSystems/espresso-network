@@ -13,6 +13,7 @@ import (
 	types "github.com/EspressoSystems/espresso-network/sdks/go/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 var errs []error
@@ -212,44 +213,48 @@ func TestApiWithSingleEspressoDevNode(t *testing.T) {
 }
 
 func TestNamespaceTransactionsInRangeForMultiClient(t *testing.T) {
-	ctx := context.Background()
-	hotshotURLs := []string{"https://query-0.decaf.testnet.espresso.network", "https://query-1.decaf.testnet.espresso.network"}
-	client, err := NewMultipleNodesClient(hotshotURLs)
-	if err != nil {
-		t.Fatal("failed to create multiple nodes client", err)
-	}
-	namespace := uint64(22266222)
-	startHeight := uint64(6386698)
-	endHeight := uint64(6386700)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	blocksWithNamespaceTransactions, err := client.FetchNamespaceTransactionsInRange(ctx, startHeight, endHeight, namespace)
-	if err != nil {
-		t.Fatal("failed to fetch namespace transactions in range", err)
-	}
+	dir, err := os.MkdirTemp("", "espresso-dev-node")
+	require.NoError(t, err)
+	defer os.RemoveAll(dir)
+	cleanup := runDevNode(ctx, dir)
+	defer cleanup()
 
-	if len(blocksWithNamespaceTransactions) != 2 {
-		t.Fatalf("expected 2 blocks with namespace transactions, got %d", len(blocksWithNamespaceTransactions))
-	}
+	err = waitForEspressoNode(ctx)
+	require.NoError(t, err, "failed to start espresso dev node")
 
-	for _, blocks := range blocksWithNamespaceTransactions {
-		for _, tx := range blocks.Transactions {
-			if tx.Namespace != namespace {
-				t.Fatalf("expected namespace %d, got %d", namespace, tx.Namespace)
-			}
-			if len(tx.Payload) == 0 {
-				t.Fatal("transaction payload is empty")
-			}
+	client, err := NewMultipleNodesClient([]string{"http://localhost:21000", "http://localhost:21000"})
+	require.NoError(t, err)
+
+	namespace := uint64(12345)
+	tx := types.Transaction{Namespace: namespace, Payload: []byte("multi-client namespace test")}
+	_, err = client.SubmitTransaction(ctx, tx)
+	require.NoError(t, err, "failed to submit transaction")
+
+	// Wait for the transaction to be included in a block.
+	var blocksWithNamespaceTransactions []types.NamespaceTransactionsRangeData
+	err = waitForWith(ctx, 30*time.Second, 2*time.Second, func() bool {
+		height, fetchErr := client.FetchLatestBlockHeight(ctx)
+		if fetchErr != nil || height < 2 {
+			return false
+		}
+		blocksWithNamespaceTransactions, fetchErr = client.FetchNamespaceTransactionsInRange(ctx, 1, height, namespace)
+		return fetchErr == nil && len(blocksWithNamespaceTransactions) > 0
+	})
+	require.NoError(t, err, "failed to fetch namespace transactions in range")
+
+	for _, block := range blocksWithNamespaceTransactions {
+		for _, txn := range block.Transactions {
+			require.Equal(t, namespace, txn.Namespace)
+			require.NotEmpty(t, txn.Payload)
 		}
 	}
 
-	startHeight = uint64(6386698)
-	endHeight = uint64(6389700)
-
-	// test if startHeight and endHeight are greater than 100 (which is the limit) then it throws an error
-	_, err = client.FetchNamespaceTransactionsInRange(ctx, startHeight, endHeight, namespace)
-	if err == nil {
-		t.Fatal("expected error for large range, but got none")
-	}
+	// Test that a range exceeding the limit returns an error.
+	_, err = client.FetchNamespaceTransactionsInRange(ctx, 0, 1000, namespace)
+	require.Error(t, err, "expected error for large range")
 }
 
 func getHeaderFromTestFile(path string, t *testing.T) types.HeaderInterface {
