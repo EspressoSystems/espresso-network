@@ -20,14 +20,14 @@ use std::{
 use alloy::primitives::FixedBytes;
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use vbs::version::Version;
 
 use super::signature_key::BuilderSignatureKey;
 use crate::{
-    data::{Leaf2, VidCommitment},
+    data::{Leaf2, VidCommitment, ViewNumber},
     light_client::LightClientState,
-    traits::{node_implementation::NodeType, states::InstanceState, ValidatedState},
+    traits::{ValidatedState, node_implementation::NodeType, states::InstanceState},
     utils::BuilderCommitment,
 };
 
@@ -211,7 +211,7 @@ pub trait BlockHeader<TYPES: NodeType>:
     fn builder_commitment(&self) -> BuilderCommitment;
 
     /// Get the light client state
-    fn get_light_client_state(&self, view: TYPES::View) -> anyhow::Result<LightClientState>;
+    fn get_light_client_state(&self, view: ViewNumber) -> anyhow::Result<LightClientState>;
 
     /// Returns the `auth_root` value for versions >= V4 (`DrbAndHeaderUpgrade`).
     ///

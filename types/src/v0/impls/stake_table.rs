@@ -10,12 +10,12 @@ use std::{
 
 use alloy::{
     eips::{BlockId, BlockNumberOrTag},
-    primitives::{utils::format_ether, Address, U256},
+    primitives::{Address, U256, utils::format_ether},
     providers::Provider,
     rpc::types::{Filter, Log},
     sol_types::{SolEvent, SolEventInterface},
 };
-use anyhow::{bail, ensure, Context};
+use anyhow::{Context, bail, ensure};
 use ark_ec::AffineRepr;
 use ark_serialize::CanonicalSerialize;
 use async_lock::{Mutex, RwLock, RwLockUpgradableReadGuard};
@@ -32,23 +32,23 @@ use hotshot_contract_adapter::sol_types::{
     },
 };
 use hotshot_types::{
-    data::{vid_disperse::VID_TARGET_TOTAL_STAKE, EpochNumber},
+    PeerConfig, PeerConnectInfo,
+    data::{EpochNumber, ViewNumber, vid_disperse::VID_TARGET_TOTAL_STAKE},
     drb::{
-        election::{generate_stake_cdf, select_randomized_leader, RandomizedCommittee},
         DrbResult,
+        election::{RandomizedCommittee, generate_stake_cdf, select_randomized_leader},
     },
     epoch_membership::EpochMembershipCoordinator,
     stake_table::{HSStakeTable, StakeTableEntry},
     traits::{
         block_contents::BlockHeader,
         election::Membership,
-        node_implementation::{ConsensusTime, NodeImplementation, NodeType},
+        node_implementation::{NodeImplementation, NodeType},
         signature_key::StakeTableEntryType,
     },
     utils::{
         epoch_from_block_number, is_epoch_root, root_block_in_epoch, transition_block_for_epoch,
     },
-    PeerConfig,
 };
 use humantime::format_duration;
 use indexmap::IndexMap;
@@ -62,24 +62,24 @@ use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION};
 #[cfg(any(test, feature = "testing"))]
 use super::v0_3::DAMembers;
 use super::{
+    Header, L1Client, Leaf2, PubKey, SeqTypes,
     traits::{MembershipPersistence, StateCatchup},
     v0_3::{
         AuthenticatedValidator, ChainConfig, EventKey, Fetcher, RegisteredValidator,
         StakeTableEvent, StakeTableUpdateTask,
     },
-    Header, L1Client, Leaf2, PubKey, SeqTypes,
 };
 use crate::{
     traits::EventsPersistenceRead,
     v0_1::L1Provider,
     v0_3::{
-        EventSortingError, ExpectedStakeTableError, FetchRewardError, RewardAmount,
-        StakeTableError, ASSUMED_BLOCK_TIME_SECONDS, BLOCKS_PER_YEAR, COMMISSION_BASIS_POINTS,
-        INFLATION_RATE, MILLISECONDS_PER_YEAR,
+        ASSUMED_BLOCK_TIME_SECONDS, BLOCKS_PER_YEAR, COMMISSION_BASIS_POINTS, EventSortingError,
+        ExpectedStakeTableError, FetchRewardError, INFLATION_RATE, MILLISECONDS_PER_YEAR,
+        RewardAmount, StakeTableError,
     },
 };
 
-type Epoch = <SeqTypes as NodeType>::Epoch;
+type Epoch = EpochNumber;
 pub type RegisteredValidatorMap = IndexMap<Address, RegisteredValidator<BLSPubKey>>;
 pub type AuthenticatedValidatorMap = IndexMap<Address, AuthenticatedValidator<BLSPubKey>>;
 
@@ -342,6 +342,8 @@ impl StakeTableState {
                     commission,
                     delegators: HashMap::new(),
                     authenticated: true,
+                    x25519_key: None,
+                    p2p_addr: None,
                 });
             },
 
@@ -401,6 +403,8 @@ impl StakeTableState {
                     commission: *commission,
                     delegators: HashMap::new(),
                     authenticated,
+                    x25519_key: None,
+                    p2p_addr: None,
                 });
             },
 
@@ -822,7 +826,7 @@ impl Fetcher {
     /// This function polls the finalized block number from the L1 client at an interval
     /// and fetches stake table from contract
     /// and updates the persistence
-    fn update_loop(&self) -> impl Future<Output = ()> {
+    fn update_loop(&self) -> impl Future<Output = ()> + use<> {
         let span = tracing::warn_span!("Stake table update loop");
         let self_clone = self.clone();
         let state = self.l1_client.state.clone();
@@ -1636,15 +1640,15 @@ impl EpochCommittees {
 
         // If the previous epoch is not in the first two epochs,
         // there should be a stake table for it
-        if *prev_epoch > first_epoch + 1 {
-            if let Err(err) = coordinator.stake_table_for_epoch(Some(prev_epoch)).await {
-                tracing::info!("failed to get membership for epoch={prev_epoch:?}: {err:#}");
+        if *prev_epoch > first_epoch + 1
+            && let Err(err) = coordinator.stake_table_for_epoch(Some(prev_epoch)).await
+        {
+            tracing::info!("failed to get membership for epoch={prev_epoch:?}: {err:#}");
 
-                coordinator
-                    .wait_for_catchup(prev_epoch)
-                    .await
-                    .context(format!("failed to catch up for epoch={prev_epoch}"))?;
-            }
+            coordinator
+                .wait_for_catchup(prev_epoch)
+                .await
+                .context(format!("failed to catch up for epoch={prev_epoch}"))?;
         }
 
         let membership_read = coordinator.membership().read().await;
@@ -1802,6 +1806,13 @@ impl EpochCommittees {
                             v.stake,
                         ),
                         state_ver_key: v.state_ver_key.clone(),
+                        connect_info: v.x25519_key.and_then(|p| {
+                            let a = v.p2p_addr.clone()?;
+                            Some(PeerConnectInfo {
+                                x25519_key: p,
+                                p2p_addr: a,
+                            })
+                        }),
                     },
                 )
             })
@@ -2099,7 +2110,7 @@ impl Membership<SeqTypes> for EpochCommittees {
     /// Get all members of the committee for the current view
     fn committee_members(
         &self,
-        _view_number: <SeqTypes as NodeType>::View,
+        _view_number: ViewNumber,
         epoch: Option<Epoch>,
     ) -> BTreeSet<PubKey> {
         let stake_table = self.stake_table(epoch);
@@ -2112,7 +2123,7 @@ impl Membership<SeqTypes> for EpochCommittees {
     /// Get all members of the committee for the current view
     fn da_committee_members(
         &self,
-        _view_number: <SeqTypes as NodeType>::View,
+        _view_number: ViewNumber,
         epoch: Option<Epoch>,
     ) -> BTreeSet<PubKey> {
         self.da_stake_table(epoch)
@@ -2173,7 +2184,7 @@ impl Membership<SeqTypes> for EpochCommittees {
     /// Returns `LeaderLookupError` if the epoch is before the first epoch or if the committee is missing.
     fn lookup_leader(
         &self,
-        view_number: <SeqTypes as NodeType>::View,
+        view_number: ViewNumber,
         epoch: Option<Epoch>,
     ) -> Result<PubKey, Self::Error> {
         match (self.first_epoch(), epoch) {
@@ -2392,17 +2403,12 @@ impl Membership<SeqTypes> for EpochCommittees {
                     );
                 }
 
-                if let Some(previous_validators) = previous_validators {
-                    if let Err(e) = persistence_lock
+                if let Some(previous_validators) = previous_validators
+                    && let Err(e) = persistence_lock
                         .store_all_validators(previous_epoch, previous_validators)
                         .await
-                    {
-                        tracing::error!(
-                            ?e,
-                            ?epoch,
-                            "`add_epoch_root`, error storing all validators"
-                        );
-                    }
+                {
+                    tracing::error!(?e, ?epoch, "`add_epoch_root`, error storing all validators");
                 }
             } else {
                 panic!(
@@ -2484,7 +2490,7 @@ impl Membership<SeqTypes> for EpochCommittees {
                     .randomized_committees
                     .get(&epoch)
                     .map(|committee| committee.drb_result())
-                    .context(format!("Missing randomized committee for epoch {epoch}"))
+                    .context(format!("Missing randomized committee for epoch {epoch}"));
             },
         };
 
@@ -2551,7 +2557,7 @@ impl Membership<SeqTypes> for EpochCommittees {
         self.add_drb_result(epoch + 1, initial_drb_result);
     }
 
-    fn first_epoch(&self) -> Option<<SeqTypes as NodeType>::Epoch> {
+    fn first_epoch(&self) -> Option<EpochNumber> {
         self.first_epoch
     }
 
@@ -2586,7 +2592,7 @@ impl super::v0_3::StakeTable {
     pub fn mock(n: u64) -> Self {
         [..n]
             .iter()
-            .map(|_| PeerConfig::default())
+            .map(|_| PeerConfig::test_default())
             .collect::<Vec<PeerConfig<SeqTypes>>>()
             .into()
     }
@@ -2598,7 +2604,7 @@ impl DAMembers {
     pub fn mock(n: u64) -> Self {
         [..n]
             .iter()
-            .map(|_| PeerConfig::default())
+            .map(|_| PeerConfig::test_default())
             .collect::<Vec<PeerConfig<SeqTypes>>>()
             .into()
     }
@@ -2609,7 +2615,7 @@ pub mod testing {
     use alloy::primitives::Bytes;
     use hotshot_contract_adapter::{
         sol_types::{EdOnBN254PointSol, G1PointSol, G2PointSol},
-        stake_table::{sign_address_bls, sign_address_schnorr, StateSignatureSol},
+        stake_table::{StateSignatureSol, sign_address_bls, sign_address_schnorr},
     };
     use hotshot_types::{light_client::StateKeyPair, signature_key::BLSKeyPair};
     use rand::{Rng as _, RngCore as _};
@@ -2738,6 +2744,8 @@ pub mod testing {
                 commission: val.commission,
                 delegators,
                 authenticated: true,
+                x25519_key: None,
+                p2p_addr: None,
             }
         }
     }
@@ -2763,13 +2771,13 @@ pub mod testing {
 mod tests {
 
     use alloy::{primitives::Address, rpc::types::Log};
-    use hotshot_contract_adapter::stake_table::{sign_address_bls, StakeTableContractVersion};
+    use hotshot_contract_adapter::stake_table::{StakeTableContractVersion, sign_address_bls};
     use hotshot_types::signature_key::BLSKeyPair;
     use pretty_assertions::assert_matches;
     use rstest::rstest;
 
     use super::*;
-    use crate::{v0::impls::testing::*, L1ClientOptions};
+    use crate::{L1ClientOptions, v0::impls::testing::*};
 
     #[test_log::test]
     fn test_from_l1_events() -> anyhow::Result<()> {
@@ -3616,9 +3624,9 @@ mod tests {
             l1_retry_delay: Duration::from_secs(1),
             ..Default::default()
         }
-        .connect(vec!["https://ethereum-sepolia.publicnode.com"
-            .parse()
-            .unwrap()])
+        .connect(vec![
+            "https://ethereum-sepolia.publicnode.com".parse().unwrap(),
+        ])
         .expect("unable to construct l1 client");
 
         let latest_block = l1.provider.get_block_number().await.unwrap();

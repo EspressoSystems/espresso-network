@@ -4,7 +4,7 @@ pub use hotshot_types::{
     message::Proposal,
     signature_key::BLSPubKey,
     simple_certificate::{QuorumCertificate2, SimpleCertificate, SuccessThreshold},
-    traits::{block_contents::BlockPayload, node_implementation::ConsensusTime},
+    traits::block_contents::BlockPayload,
 };
 
 pub use crate::builder_state::{BuilderState, MessageType};
@@ -27,13 +27,13 @@ mod tests {
     };
     use hotshot_example_types::{
         block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
-        node_types::{TestTypes, TEST_VERSIONS},
+        node_types::{TEST_VERSIONS, TestTypes},
         state_types::{TestInstanceState, TestValidatedState},
     };
     use hotshot_types::{
-        data::{vid_commitment, DaProposal2, Leaf2, QuorumProposal2, QuorumProposalWrapper},
+        data::{DaProposal2, Leaf2, QuorumProposal2, QuorumProposalWrapper, vid_commitment},
         simple_vote::QuorumData2,
-        traits::{block_contents::BlockHeader, EncodeBytes},
+        traits::{EncodeBytes, block_contents::BlockHeader},
         utils::{BuilderCommitment, EpochTransitionIndicator},
     };
     use sha2::{Digest, Sha256};
@@ -45,7 +45,7 @@ mod tests {
         builder_state::{
             DaProposalMessage, DecideMessage, QuorumProposalMessage, TransactionSource,
         },
-        service::{handle_received_txns, GlobalState, ProxyGlobalState, ReceivedTransaction},
+        service::{GlobalState, ProxyGlobalState, ReceivedTransaction, handle_received_txns},
     };
     /// This test simulates multiple builder states receiving messages from the channels and processing them
     #[tokio::test]
@@ -433,7 +433,7 @@ mod tests {
                         },
                     };
 
-                    DecideMessage::<TestTypes> {
+                    DecideMessage {
                         latest_decide_view_number: leaf.view_number(),
                     }
                 };

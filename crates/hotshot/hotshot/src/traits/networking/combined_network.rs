@@ -11,22 +11,18 @@ use std::{
     future::Future,
     num::NonZeroUsize,
     sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
 
-use async_broadcast::{broadcast, InactiveReceiver, Sender};
+use async_broadcast::{InactiveReceiver, Sender, broadcast};
 use async_lock::RwLock;
 use async_trait::async_trait;
-use futures::{join, select, FutureExt};
-#[cfg(feature = "hotshot-testing")]
-use hotshot_types::traits::network::{
-    AsyncGenerator, NetworkReliability, TestableNetworkingImplementation,
-};
+use futures::{FutureExt, join, select};
 use hotshot_types::{
-    boxed_sync,
+    BoxSyncFuture, boxed_sync,
     constants::{
         COMBINED_NETWORK_CACHE_SIZE, COMBINED_NETWORK_DELAY_DURATION,
         COMBINED_NETWORK_MIN_PRIMARY_FAILURES, COMBINED_NETWORK_PRIMARY_CHECK_INTERVAL,
@@ -37,14 +33,18 @@ use hotshot_types::{
         network::{BroadcastDelay, ConnectedNetwork, Topic},
         node_implementation::NodeType,
     },
-    BoxSyncFuture,
+};
+#[cfg(feature = "hotshot-testing")]
+use hotshot_types::{
+    PeerConnectInfo,
+    traits::network::{AsyncGenerator, NetworkReliability, TestableNetworkingImplementation},
 };
 use lru::LruCache;
 use parking_lot::RwLock as PlRwLock;
 use tokio::{spawn, sync::mpsc::error::TrySendError, time::sleep};
 use tracing::{debug, info, warn};
 
-use super::{push_cdn_network::PushCdnNetwork, NetworkError};
+use super::{NetworkError, push_cdn_network::PushCdnNetwork};
 use crate::traits::implementations::Libp2pNetwork;
 
 /// Thread-safe ref counted lock to a map of channels to the delayed tasks
@@ -257,6 +257,7 @@ impl<TYPES: NodeType> TestableNetworkingImplementation<TYPES> for CombinedNetwor
         da_committee_size: usize,
         reliability_config: Option<Box<dyn NetworkReliability>>,
         secondary_network_delay: Duration,
+        connect_infos: &mut HashMap<TYPES::SignatureKey, PeerConnectInfo>,
     ) -> AsyncGenerator<Arc<Self>> {
         let generators = (
             <PushCdnNetwork<TYPES::SignatureKey> as TestableNetworkingImplementation<TYPES>>::generator(
@@ -266,6 +267,7 @@ impl<TYPES: NodeType> TestableNetworkingImplementation<TYPES> for CombinedNetwor
                 da_committee_size,
                 None,
                 Duration::default(),
+                connect_infos
             ),
             <Libp2pNetwork<TYPES> as TestableNetworkingImplementation<TYPES>>::generator(
                 expected_node_count,
@@ -274,6 +276,7 @@ impl<TYPES: NodeType> TestableNetworkingImplementation<TYPES> for CombinedNetwor
                 da_committee_size,
                 reliability_config,
                 Duration::default(),
+                connect_infos
             )
         );
         Box::pin(move |node_id| {

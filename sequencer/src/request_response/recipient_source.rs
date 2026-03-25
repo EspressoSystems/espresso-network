@@ -3,11 +3,8 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use espresso_types::{PubKey, SeqTypes};
-use hotshot::{traits::NodeImplementation, SystemContext};
-use hotshot_types::{
-    data::EpochNumber, epoch_membership::EpochMembershipCoordinator,
-    traits::node_implementation::ConsensusTime,
-};
+use hotshot::{SystemContext, traits::NodeImplementation};
+use hotshot_types::{data::EpochNumber, epoch_membership::EpochMembershipCoordinator};
 use request_response::recipient_source::RecipientSource as RecipientSourceTrait;
 use tracing::warn;
 

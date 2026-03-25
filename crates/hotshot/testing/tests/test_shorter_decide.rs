@@ -5,8 +5,8 @@
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
 use hotshot_example_types::node_types::{
-    CliquenetImpl, CombinedImpl, Libp2pImpl, PushCdnImpl, TestTwoStakeTablesTypes, TestTypes,
-    TEST_VERSIONS,
+    CliquenetImpl, CombinedImpl, CompatNetImpl, Libp2pImpl, PushCdnImpl, TEST_VERSIONS,
+    TestTwoStakeTablesTypes, TestTypes,
 };
 use hotshot_macros::cross_tests;
 use hotshot_testing::{
@@ -18,7 +18,7 @@ use hotshot_testing::{
 // This test fails with the old decide rule
 cross_tests!(
     TestName: test_shorter_decide,
-    Impls: [Libp2pImpl, PushCdnImpl, CombinedImpl, CliquenetImpl],
+    Impls: [Libp2pImpl, PushCdnImpl, CombinedImpl, CliquenetImpl, CompatNetImpl],
     Types: [TestTypes, TestTwoStakeTablesTypes],
     Versions: [TEST_VERSIONS.epoch],
     Ignore: false,

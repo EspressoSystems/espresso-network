@@ -5,33 +5,33 @@ use alloy::{
     node_bindings::Anvil,
     primitives::{Address, U256},
     providers::{
+        Provider, ProviderBuilder, RootProvider,
         ext::AnvilApi,
         fillers::{BlobGasFiller, ChainIdFiller, FillProvider, GasFiller, JoinFill, NonceFiller},
         layers::AnvilProvider,
-        Provider, ProviderBuilder, RootProvider,
     },
     signers::local::LocalSigner,
 };
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use async_lock::RwLock;
 use cdn_broker::{
-    reexports::{crypto::signature::KeyPair, def::hook::NoMessageHook},
     Broker, Config as BrokerConfig,
+    reexports::{crypto::signature::KeyPair, def::hook::NoMessageHook},
 };
 use cdn_marshal::{Config as MarshalConfig, Marshal};
 use clap::Parser;
 use committable::{Commitment, Committable};
 use derivative::Derivative;
 use espresso_contract_deployer::{
-    builder::DeployerArgsBuilder, network_config::light_client_genesis_from_stake_table, Contract,
-    Contracts,
+    Contract, Contracts, builder::DeployerArgsBuilder,
+    network_config::light_client_genesis_from_stake_table,
 };
 use espresso_types::{
-    eth_signature_key::EthKeyPair, traits::PersistenceOptions, v0_3::ChainConfig, FeeAccount,
-    L1Client, Leaf2, PrivKey, PubKey, SeqTypes, Transaction,
+    FeeAccount, L1Client, Leaf2, PrivKey, PubKey, SeqTypes, Transaction,
+    eth_signature_key::EthKeyPair, traits::PersistenceOptions, v0_3::ChainConfig,
 };
 use futures::{
-    future::{join_all, try_join_all, BoxFuture, FutureExt},
+    future::{BoxFuture, FutureExt, join_all, try_join_all},
     stream::{BoxStream, StreamExt},
 };
 use hotshot::traits::implementations::derive_libp2p_peer_id;
@@ -42,16 +42,18 @@ use hotshot_testing::{
     test_builder::BuilderChange,
 };
 use hotshot_types::{
+    PeerConfig,
     data::EpochNumber,
     event::{Event, EventType},
     light_client::StateKeyPair,
     network::{Libp2pConfig, NetworkConfig},
     signature_key::{BLSPrivKey, BLSPubKey},
-    traits::{node_implementation::ConsensusTime, signature_key::SignatureKey},
-    PeerConfig,
+    traits::signature_key::SignatureKey,
+    x25519,
 };
 use itertools::Itertools;
 use sequencer::{
+    SequencerApiVersion,
     api::{
         self, data_source::testing::TestableSequencerDataSource, options::Query,
         test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
@@ -65,14 +67,14 @@ use sequencer::{
     options::{Modules, Options},
     run::init_with_storage,
     testing::{staking_priv_keys, wait_for_decide_on_handle},
-    SequencerApiVersion,
 };
 use staking_cli::demo::{DelegationConfig, StakingTransactions};
-use surf_disco::{error::ClientError, Url};
+use surf_disco::{Url, error::ClientError};
+use tagged_base64::TaggedBase64;
 use tempfile::TempDir;
 use test_utils::reserve_tcp_port;
 use tokio::{
-    task::{spawn, JoinHandle},
+    task::{JoinHandle, spawn},
     time::{sleep, timeout},
 };
 use vbs::version::Version;
@@ -231,8 +233,10 @@ struct NetworkParams<'a> {
 struct NodeParams {
     api_port: u16,
     libp2p_port: u16,
+    cliquenet_port: u16,
     staking_key: PrivKey,
     state_key: StateKeyPair,
+    x25519_key: x25519::Keypair,
     is_da: bool,
 }
 
@@ -241,8 +245,10 @@ impl NodeParams {
         Ok(Self {
             api_port: reserve_tcp_port()?,
             libp2p_port: reserve_tcp_port()?,
+            cliquenet_port: reserve_tcp_port()?,
             staking_key: PubKey::generated_from_seed_indexed([0; 32], i).1,
             state_key: StateKeyPair::generate_from_seed_indexed([0; 32], i),
+            x25519_key: x25519::Keypair::generated_from_seed_indexed([0; 32], i)?,
             is_da,
         })
     }
@@ -303,6 +309,10 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
                 .to_tagged_base64()
                 .expect("valid tagged-base64")
                 .to_string(),
+            "--private-x25519-key",
+            &TaggedBase64::try_from(node.x25519_key.secret_key())
+                .expect("valid key")
+                .to_string(),
             "--genesis-file",
             &network.genesis_file.display().to_string(),
             "--orchestrator-url",
@@ -311,6 +321,8 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             &format!("0.0.0.0:{}", node.libp2p_port),
             "--libp2p-advertise-address",
             &format!("127.0.0.1:{}", node.libp2p_port),
+            "--cliquenet-bind-address",
+            &format!("0.0.0.0:{}", node.cliquenet_port),
             "--cdn-endpoint",
             &format!("127.0.0.1:{}", network.cdn_port),
             "--state-peers",
@@ -816,6 +828,7 @@ impl TestNetwork {
             .map(|(bls, state)| PeerConfig {
                 stake_table_entry: BLSPubKey::from_private(bls).stake_table_entry(U256::from(1)),
                 state_ver_key: state.ver_key(),
+                connect_info: None,
             })
             .collect();
 

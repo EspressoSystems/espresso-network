@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use alloy::primitives::U256;
 use hotshot_example_types::node_types::{
-    MemoryImpl, TestTypes, TestTypesRandomizedLeader, TEST_VERSIONS,
+    CliquenetImpl, CompatNetImpl, MemoryImpl, TEST_VERSIONS, TestTypes, TestTypesRandomizedLeader,
 };
 use hotshot_macros::cross_tests;
 use hotshot_testing::{
@@ -22,7 +22,7 @@ use vbs::version::Version;
 
 cross_tests!(
     TestName: test_da_committees_downhalf,
-    Impls: [MemoryImpl],
+    Impls: [MemoryImpl, CliquenetImpl, CompatNetImpl],
     Types: [TestTypes, TestTypesRandomizedLeader],
     Versions: [TEST_VERSIONS.da_committee],
     Ignore: false,
@@ -95,7 +95,7 @@ cross_tests!(
 
 cross_tests!(
     TestName: test_da_committees_uphalf,
-    Impls: [MemoryImpl],
+    Impls: [MemoryImpl, CliquenetImpl, CompatNetImpl],
     Types: [TestTypes, TestTypesRandomizedLeader],
     Versions: [TEST_VERSIONS.da_committee],
     Ignore: false,
@@ -160,7 +160,7 @@ cross_tests!(
 
 cross_tests!(
     TestName: test_da_committees_changehalf,
-    Impls: [MemoryImpl],
+    Impls: [MemoryImpl, CliquenetImpl, CompatNetImpl],
     Types: [TestTypes, TestTypesRandomizedLeader],
     Versions: [TEST_VERSIONS.da_committee],
     Ignore: false,
@@ -239,7 +239,7 @@ cross_tests!(
 
 cross_tests!(
     TestName: test_da_committees_changehalf_small,
-    Impls: [MemoryImpl],
+    Impls: [MemoryImpl, CliquenetImpl, CompatNetImpl],
     Types: [TestTypes, TestTypesRandomizedLeader],
     Versions: [TEST_VERSIONS.da_committee],
     Ignore: false,

@@ -1,11 +1,11 @@
 use std::{num::NonZeroUsize, path::PathBuf, time::Duration};
 
-use builder::non_permissioned::{build_instance_state, BuilderConfig};
+use builder::non_permissioned::{BuilderConfig, build_instance_state};
 use clap::Parser;
 use espresso_types::{eth_signature_key::EthKeyPair, parse_duration};
 use futures::future::pending;
 use hotshot::traits::ValidatedState;
-use hotshot_types::{data::ViewNumber, traits::node_implementation::ConsensusTime};
+use hotshot_types::data::ViewNumber;
 use sequencer::{Genesis, L1Params};
 use sequencer_utils::logging;
 use url::Url;

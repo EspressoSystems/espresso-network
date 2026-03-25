@@ -61,7 +61,7 @@ mod test_helpers {
     };
 
     /// Apply an upper bound to a range based on the currently available block height.
-    async fn bound_range<R, D>(ds: &D, range: R) -> impl RangeBounds<usize>
+    async fn bound_range<R, D>(ds: &D, range: R) -> impl RangeBounds<usize> + use<R, D>
     where
         D: TestableDataSource,
         R: RangeBounds<usize>,
@@ -133,12 +133,12 @@ pub mod availability_tests {
 
     use super::test_helpers::*;
     use crate::{
-        availability::{payload_size, BlockId},
+        availability::{BlockId, payload_size},
         data_source::storage::{AvailabilityStorage, NodeStorage},
         node::NodeDataSource,
         testing::{
             consensus::{MockNetwork, TestableDataSource},
-            mocks::{mock_transaction, MockTypes},
+            mocks::{MockTypes, mock_transaction},
         },
         types::HeightIndexed,
     };
@@ -572,10 +572,11 @@ pub mod persistence_tests {
     use hotshot_types::simple_certificate::QuorumCertificate2;
 
     use crate::{
+        Leaf2,
         availability::{BlockQueryData, LeafQueryData},
         data_source::{
-            storage::{AvailabilityStorage, NodeStorage, UpdateAvailabilityStorage},
             Transaction,
+            storage::{AvailabilityStorage, NodeStorage, UpdateAvailabilityStorage},
         },
         node::NodeDataSource,
         testing::{
@@ -583,7 +584,6 @@ pub mod persistence_tests {
             mocks::{MockPayload, MockTypes},
         },
         types::HeightIndexed,
-        Leaf2,
     };
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -787,34 +787,35 @@ pub mod node_tests {
     use hotshot::traits::BlockPayload;
     use hotshot_example_types::{
         block_types::{TestBlockHeader, TestBlockPayload, TestMetadata},
-        node_types::{TestTypes, TEST_VERSIONS},
+        node_types::{TEST_VERSIONS, TestTypes},
         state_types::{TestInstanceState, TestValidatedState},
     };
     use hotshot_types::{
-        data::{vid_commitment, VidCommitment, VidCommon, VidShare, ViewNumber},
+        data::{VidCommitment, VidCommon, VidShare, ViewNumber, vid_commitment},
         simple_certificate::{CertificatePair, QuorumCertificate2},
-        traits::{
-            block_contents::{BlockHeader, EncodeBytes},
-            node_implementation::ConsensusTime,
-        },
-        vid::advz::{advz_scheme, ADVZScheme},
+        traits::block_contents::{BlockHeader, EncodeBytes},
+        vid::advz::{ADVZScheme, advz_scheme},
     };
     use jf_advz::VidScheme;
+    use pretty_assertions::assert_eq;
 
     use crate::{
+        Header, Leaf2,
         availability::{BlockInfo, BlockQueryData, LeafQueryData, VidCommonQueryData},
         data_source::{
             storage::{NodeStorage, UpdateAvailabilityStorage},
             update::Transaction,
         },
-        node::{BlockId, NodeDataSource, SyncStatus, TimeWindowQueryData, WindowStart},
+        node::{
+            BlockId, NodeDataSource, ResourceSyncStatus, SyncStatus, SyncStatusQueryData,
+            SyncStatusRange, TimeWindowQueryData, WindowStart,
+        },
         testing::{
             consensus::{MockNetwork, TestableDataSource},
-            mocks::{mock_transaction, MockPayload, MockTypes},
+            mocks::{MockPayload, MockTypes, mock_transaction},
             sleep,
         },
         types::HeightIndexed,
-        Header, Leaf2,
     };
 
     fn block_header_timestamp(header: &Header<MockTypes>) -> u64 {
@@ -849,30 +850,41 @@ pub mod node_tests {
             )
             .await,
         ];
+        let dispersal = vid.disperse([]).unwrap();
+        let mut vid_data = vec![(
+            VidCommonQueryData::new(
+                leaves[0].header().clone(),
+                VidCommon::V0(dispersal.common.clone()),
+            ),
+            dispersal.shares[0].clone(),
+        )];
         for i in 0..2 {
+            // Generate a unique payload and VID data, so that missing data is actually missing
+            // (otherwise it could be borrowed from another block).
+            let (payload, metadata) = <MockPayload as BlockPayload<MockTypes>>::from_transactions(
+                vec![mock_transaction(vec![i as u8])],
+                &Default::default(),
+                &Default::default(),
+            )
+            .await
+            .unwrap();
+            let dispersal = vid.disperse(payload.encode()).unwrap();
+
             let mut leaf = leaves[i].clone();
             leaf.leaf.block_header_mut().block_number += 1;
-            leaves.push(leaf);
+            leaf.leaf.block_header_mut().payload_commitment = VidCommitment::V0(dispersal.commit);
+            leaf.leaf.block_header_mut().metadata = metadata;
+            let block = BlockQueryData::new(leaf.header().clone(), payload);
+            let vid_common = VidCommonQueryData::new(
+                leaf.header().clone(),
+                VidCommon::V0(dispersal.common.clone()),
+            );
+            let vid_share = dispersal.shares[0].clone();
 
-            let mut block = blocks[i].clone();
-            block.header.block_number += 1;
+            leaves.push(leaf);
             blocks.push(block);
+            vid_data.push((vid_common, vid_share));
         }
-        // Generate mock VID data. We reuse the same (empty) payload for each block, but with
-        // different metadata.
-        let disperse = vid.disperse([]).unwrap();
-        let vid = leaves
-            .iter()
-            .map(|leaf| {
-                (
-                    VidCommonQueryData::new(
-                        leaf.header().clone(),
-                        VidCommon::V0(disperse.common.clone()),
-                    ),
-                    disperse.shares[0].clone(),
-                )
-            })
-            .collect::<Vec<_>>();
 
         // At first, the node is fully synced.
         assert!(ds.sync_status().await.unwrap().is_fully_synced());
@@ -882,11 +894,39 @@ pub mod node_tests {
         ds.append(leaves[0].clone().into()).await.unwrap();
         assert_eq!(
             ds.sync_status().await.unwrap(),
-            SyncStatus {
-                missing_blocks: 1,
-                missing_vid_common: 1,
-                missing_vid_shares: 1,
-                missing_leaves: 0,
+            SyncStatusQueryData {
+                blocks: ResourceSyncStatus {
+                    missing: 1,
+                    ranges: vec![SyncStatusRange {
+                        start: 0,
+                        end: 1,
+                        status: SyncStatus::Missing,
+                    }]
+                },
+                vid_common: ResourceSyncStatus {
+                    missing: 1,
+                    ranges: vec![SyncStatusRange {
+                        start: 0,
+                        end: 1,
+                        status: SyncStatus::Missing,
+                    }]
+                },
+                vid_shares: ResourceSyncStatus {
+                    missing: 1,
+                    ranges: vec![SyncStatusRange {
+                        start: 0,
+                        end: 1,
+                        status: SyncStatus::Missing,
+                    }]
+                },
+                leaves: ResourceSyncStatus {
+                    missing: 0,
+                    ranges: vec![SyncStatusRange {
+                        start: 0,
+                        end: 1,
+                        status: SyncStatus::Present,
+                    }]
+                },
                 pruned_height: None,
             }
         );
@@ -896,11 +936,51 @@ pub mod node_tests {
         ds.append(leaves[2].clone().into()).await.unwrap();
         assert_eq!(
             ds.sync_status().await.unwrap(),
-            SyncStatus {
-                missing_blocks: 3,
-                missing_vid_common: 3,
-                missing_vid_shares: 3,
-                missing_leaves: 1,
+            SyncStatusQueryData {
+                blocks: ResourceSyncStatus {
+                    missing: 3,
+                    ranges: vec![SyncStatusRange {
+                        start: 0,
+                        end: 3,
+                        status: SyncStatus::Missing,
+                    }]
+                },
+                vid_common: ResourceSyncStatus {
+                    missing: 3,
+                    ranges: vec![SyncStatusRange {
+                        start: 0,
+                        end: 3,
+                        status: SyncStatus::Missing,
+                    }]
+                },
+                vid_shares: ResourceSyncStatus {
+                    missing: 3,
+                    ranges: vec![SyncStatusRange {
+                        start: 0,
+                        end: 3,
+                        status: SyncStatus::Missing,
+                    }]
+                },
+                leaves: ResourceSyncStatus {
+                    missing: 1,
+                    ranges: vec![
+                        SyncStatusRange {
+                            start: 0,
+                            end: 1,
+                            status: SyncStatus::Present,
+                        },
+                        SyncStatusRange {
+                            start: 1,
+                            end: 2,
+                            status: SyncStatus::Missing,
+                        },
+                        SyncStatusRange {
+                            start: 2,
+                            end: 3,
+                            status: SyncStatus::Present,
+                        }
+                    ]
+                },
                 pruned_height: None,
             }
         );
@@ -908,16 +988,63 @@ pub mod node_tests {
         // Insert VID common without a corresponding share.
         {
             let mut tx = ds.write().await.unwrap();
-            tx.insert_vid(vid[0].0.clone(), None).await.unwrap();
+            tx.insert_vid(vid_data[0].0.clone(), None).await.unwrap();
             tx.commit().await.unwrap();
         }
         assert_eq!(
             ds.sync_status().await.unwrap(),
-            SyncStatus {
-                missing_blocks: 3,
-                missing_vid_common: 2,
-                missing_vid_shares: 3,
-                missing_leaves: 1,
+            SyncStatusQueryData {
+                blocks: ResourceSyncStatus {
+                    missing: 3,
+                    ranges: vec![SyncStatusRange {
+                        start: 0,
+                        end: 3,
+                        status: SyncStatus::Missing,
+                    }]
+                },
+                vid_common: ResourceSyncStatus {
+                    missing: 2,
+                    ranges: vec![
+                        SyncStatusRange {
+                            start: 0,
+                            end: 1,
+                            status: SyncStatus::Present,
+                        },
+                        SyncStatusRange {
+                            start: 1,
+                            end: 3,
+                            status: SyncStatus::Missing,
+                        },
+                    ]
+                },
+                vid_shares: ResourceSyncStatus {
+                    missing: 3,
+                    ranges: vec![SyncStatusRange {
+                        start: 0,
+                        end: 3,
+                        status: SyncStatus::Missing,
+                    }]
+                },
+                leaves: ResourceSyncStatus {
+                    missing: 1,
+                    ranges: vec![
+                        SyncStatusRange {
+                            start: 0,
+                            end: 1,
+                            status: SyncStatus::Present,
+                        },
+                        SyncStatusRange {
+                            start: 1,
+                            end: 2,
+                            status: SyncStatus::Missing,
+                        },
+                        SyncStatusRange {
+                            start: 2,
+                            end: 3,
+                            status: SyncStatus::Present,
+                        }
+                    ]
+                },
                 pruned_height: None,
             }
         );
@@ -926,18 +1053,27 @@ pub mod node_tests {
         {
             let mut tx = ds.write().await.unwrap();
             tx.insert_block(blocks[0].clone()).await.unwrap();
-            tx.insert_vid(vid[0].0.clone(), Some(VidShare::V0(vid[0].1.clone())))
-                .await
-                .unwrap();
+            tx.insert_vid(
+                vid_data[0].0.clone(),
+                Some(VidShare::V0(vid_data[0].1.clone())),
+            )
+            .await
+            .unwrap();
             tx.insert_leaf(leaves[1].clone()).await.unwrap();
             tx.insert_block(blocks[1].clone()).await.unwrap();
-            tx.insert_vid(vid[1].0.clone(), Some(VidShare::V0(vid[1].1.clone())))
-                .await
-                .unwrap();
+            tx.insert_vid(
+                vid_data[1].0.clone(),
+                Some(VidShare::V0(vid_data[1].1.clone())),
+            )
+            .await
+            .unwrap();
             tx.insert_block(blocks[2].clone()).await.unwrap();
-            tx.insert_vid(vid[2].0.clone(), Some(VidShare::V0(vid[2].1.clone())))
-                .await
-                .unwrap();
+            tx.insert_vid(
+                vid_data[2].0.clone(),
+                Some(VidShare::V0(vid_data[2].1.clone())),
+            )
+            .await
+            .unwrap();
             tx.commit().await.unwrap();
         }
 
@@ -945,20 +1081,87 @@ pub mod node_tests {
         // data. These would have just ignored the insertion of `vid[0]` (the share) and
         // `leaves[1]`. Detect if this is the case; then we allow 1 missing leaf and 1 missing VID
         // share.
-        let expected_missing = if ds.get_leaf(1).await.try_resolve().is_err() {
+        let (leaves, vid_shares) = if ds.get_leaf(1).await.try_resolve().is_err() {
             tracing::warn!(
                 "data source does not support out-of-order filling, allowing one missing leaf and \
                  VID share"
             );
-            1
+            (
+                ResourceSyncStatus {
+                    missing: 1,
+                    ranges: vec![
+                        SyncStatusRange {
+                            start: 0,
+                            end: 1,
+                            status: SyncStatus::Present,
+                        },
+                        SyncStatusRange {
+                            start: 1,
+                            end: 2,
+                            status: SyncStatus::Missing,
+                        },
+                        SyncStatusRange {
+                            start: 2,
+                            end: 3,
+                            status: SyncStatus::Present,
+                        },
+                    ],
+                },
+                ResourceSyncStatus {
+                    missing: 1,
+                    ranges: vec![
+                        SyncStatusRange {
+                            start: 0,
+                            end: 1,
+                            status: SyncStatus::Missing,
+                        },
+                        SyncStatusRange {
+                            start: 1,
+                            end: 3,
+                            status: SyncStatus::Present,
+                        },
+                    ],
+                },
+            )
         } else {
-            0
+            (
+                ResourceSyncStatus {
+                    missing: 0,
+                    ranges: vec![SyncStatusRange {
+                        start: 0,
+                        end: 3,
+                        status: SyncStatus::Present,
+                    }],
+                },
+                ResourceSyncStatus {
+                    missing: 0,
+                    ranges: vec![SyncStatusRange {
+                        start: 0,
+                        end: 3,
+                        status: SyncStatus::Present,
+                    }],
+                },
+            )
         };
-        let expected_sync_status = SyncStatus {
-            missing_blocks: 0,
-            missing_leaves: expected_missing,
-            missing_vid_common: 0,
-            missing_vid_shares: expected_missing,
+        let expected_sync_status = SyncStatusQueryData {
+            leaves,
+            vid_shares,
+            blocks: ResourceSyncStatus {
+                missing: 0,
+                ranges: vec![SyncStatusRange {
+                    start: 0,
+                    end: 3,
+                    status: SyncStatus::Present,
+                }],
+            },
+            vid_common: ResourceSyncStatus {
+                missing: 0,
+                ranges: vec![SyncStatusRange {
+                    start: 0,
+                    end: 3,
+                    status: SyncStatus::Present,
+                }],
+            },
             pruned_height: None,
         };
         assert_eq!(ds.sync_status().await.unwrap(), expected_sync_status);
@@ -967,7 +1170,7 @@ pub mod node_tests {
         // that we already have; that is, `insert_vid` should be monotonic.
         {
             let mut tx = ds.write().await.unwrap();
-            tx.insert_vid(vid[0].0.clone(), None).await.unwrap();
+            tx.insert_vid(vid_data[0].0.clone(), None).await.unwrap();
             tx.commit().await.unwrap();
         }
         assert_eq!(ds.sync_status().await.unwrap(), expected_sync_status);

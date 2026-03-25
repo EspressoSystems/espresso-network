@@ -24,24 +24,24 @@ use hotshot_types::{
 };
 
 use super::{
-    header::{fetch_header_and_then, HeaderCallback},
     AvailabilityProvider, FetchRequest, Fetchable, Fetcher, Heights, Notifiers, RangedFetchable,
     Storable,
+    header::{HeaderCallback, fetch_header_and_then},
 };
 use crate::{
+    Header, Payload, QueryResult,
     availability::{
         BlockId, QueryableHeader, QueryablePayload, VidCommonMetadata, VidCommonQueryData,
     },
     data_source::{
-        storage::{
-            pruning::PrunedHeightStorage, AvailabilityStorage, NodeStorage,
-            UpdateAvailabilityStorage,
-        },
         VersionedDataSource,
+        storage::{
+            AvailabilityStorage, NodeStorage, UpdateAvailabilityStorage,
+            pruning::PrunedHeightStorage,
+        },
     },
-    fetching::{self, request, Callback},
+    fetching::{self, Callback, request},
     types::HeightIndexed,
-    Header, Payload, QueryResult,
 };
 
 pub(super) type VidCommonFetcher<Types, S, P> =
@@ -254,7 +254,7 @@ where
 {
     async fn run(self, common: VidCommon) {
         let common = VidCommonQueryData::new(self.header, common);
-        self.fetcher.store_and_notify(common).await;
+        self.fetcher.store_and_notify(&common).await;
     }
 }
 

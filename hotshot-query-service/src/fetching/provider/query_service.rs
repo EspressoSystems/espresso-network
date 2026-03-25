@@ -13,27 +13,27 @@
 use async_trait::async_trait;
 use committable::Committable;
 use hotshot_types::{
-    data::{ns_table, VidCommitment, VidCommon},
-    traits::{block_contents::BlockHeader, node_implementation::NodeType, EncodeBytes},
+    data::{VidCommitment, VidCommon, ns_table},
+    traits::{EncodeBytes, block_contents::BlockHeader, node_implementation::NodeType},
     vid::{
-        advz::{advz_scheme, ADVZScheme},
-        avidm::{init_avidm_param, AvidMScheme},
+        advz::{ADVZScheme, advz_scheme},
+        avidm::{AvidMScheme, init_avidm_param},
         avidm_gf2::AvidmGf2Scheme,
     },
 };
 use jf_advz::VidScheme;
 use surf_disco::{Client, Url};
-use vbs::{version::StaticVersionType, BinarySerializer};
+use vbs::{BinarySerializer, version::StaticVersionType};
 
 use super::Provider;
 use crate::{
+    Error, Header, Payload,
     availability::{
         ADVZCommonQueryData, ADVZPayloadQueryData, LeafQueryData, LeafQueryDataLegacy,
         PayloadQueryData, VidCommonQueryData,
     },
     fetching::request::{LeafRequest, PayloadRequest, VidCommonRequest},
     types::HeightIndexed,
-    Error, Header, Payload,
 };
 
 /// Data availability provider backed by another instance of this query service.
@@ -539,7 +539,7 @@ mod test {
 
     use committable::Committable;
     use futures::{
-        future::{join, FutureExt},
+        future::{FutureExt, join},
         stream::StreamExt,
     };
     // generic-array 0.14.x is deprecated, but VidCommitment requires this version
@@ -549,36 +549,36 @@ mod test {
     use hotshot_example_types::node_types::{EpochVersion, TEST_VERSIONS};
     use rand::RngCore;
     use test_utils::reserve_tcp_port;
-    use tide_disco::{error::ServerError, App};
+    use tide_disco::{App, error::ServerError};
     use vbs::version::StaticVersion;
 
     use super::*;
     use crate::{
+        ApiState,
         api::load_api,
         availability::{
-            define_api, AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData,
-            BlockWithTransaction, Fetch, UpdateAvailabilityData,
+            AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, BlockWithTransaction,
+            Fetch, UpdateAvailabilityData, define_api,
         },
         data_source::{
+            AvailabilityProvider, FetchingDataSource, Transaction, VersionedDataSource,
             sql::{self, SqlDataSource},
             storage::{
+                AvailabilityStorage, SqlStorage, StorageConnectionType, UpdateAvailabilityStorage,
                 fail_storage::{FailStorage, FailableAction},
                 pruning::{PrunedHeightStorage, PrunerCfg},
                 sql::testing::TmpDb,
-                AvailabilityStorage, SqlStorage, StorageConnectionType, UpdateAvailabilityStorage,
             },
-            AvailabilityProvider, FetchingDataSource, Transaction, VersionedDataSource,
         },
         fetching::provider::{NoFetching, Provider as ProviderTrait, TestProvider},
-        node::{data_source::NodeDataSource, SyncStatus},
+        node::{SyncStatusQueryData, data_source::NodeDataSource},
         task::BackgroundTask,
         testing::{
             consensus::{MockDataSource, MockNetwork},
-            mocks::{mock_transaction, MockBase, MockTypes},
+            mocks::{MockBase, MockTypes, mock_transaction},
             sleep,
         },
         types::HeightIndexed,
-        ApiState,
     };
 
     type Provider = TestProvider<QueryServiceProvider<MockBase>>;
@@ -1652,8 +1652,7 @@ mod test {
             .builder(provider.clone())
             .await
             .unwrap()
-            .with_minor_scan_interval(Duration::from_secs(1))
-            .with_major_scan_interval(1)
+            .with_proactive_interval(Duration::from_secs(1))
             .build()
             .await
             .unwrap();
@@ -1680,9 +1679,9 @@ mod test {
             // VID shares are unique to a node and will never be fetched from a peer; this is
             // acceptable since there is redundancy built into the VID scheme. Ignore missing VID
             // shares in the `is_fully_synced` check.
-            if (SyncStatus {
-                missing_vid_shares: 0,
-                ..sync_status
+            if (SyncStatusQueryData {
+                vid_shares: Default::default(),
+                ..sync_status.clone()
             })
             .is_fully_synced()
             {
@@ -1696,12 +1695,12 @@ mod test {
         sleep(Duration::from_secs(3)).await;
         let sync_status = data_source.sync_status().await.unwrap();
         assert!(
-            (SyncStatus {
-                missing_vid_shares: 0,
-                ..sync_status
+            (SyncStatusQueryData {
+                vid_shares: Default::default(),
+                ..sync_status.clone()
             })
             .is_fully_synced(),
-            "{sync_status:?}"
+            "{sync_status:#?}"
         );
     }
 

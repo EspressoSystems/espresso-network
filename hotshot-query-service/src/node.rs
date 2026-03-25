@@ -27,10 +27,10 @@ use futures::FutureExt;
 use hotshot_types::traits::node_implementation::NodeType;
 use serde::{Deserialize, Serialize};
 use snafu::{ResultExt, Snafu};
-use tide_disco::{api::ApiError, method::ReadState, Api, RequestError, StatusCode};
+use tide_disco::{Api, RequestError, StatusCode, api::ApiError, method::ReadState};
 use vbs::version::StaticVersionType;
 
-use crate::{api::load_api, availability::QueryableHeader, Header, QueryError};
+use crate::{Header, QueryError, api::load_api, availability::QueryableHeader};
 
 pub(crate) mod data_source;
 pub(crate) mod query_data;
@@ -226,8 +226,8 @@ mod test {
         data::{VidDisperseShare, VidShare},
         event::{EventType, LeafInfo},
         traits::{
-            block_contents::{BlockHeader, BlockPayload},
             EncodeBytes,
+            block_contents::{BlockHeader, BlockPayload},
         },
     };
     use surf_disco::Client;
@@ -239,13 +239,13 @@ mod test {
 
     use super::*;
     use crate::{
+        ApiState, Error, Header,
         data_source::ExtensibleDataSource,
         task::BackgroundTask,
         testing::{
             consensus::{MockDataSource, MockNetwork, MockSqlDataSource},
-            mocks::{mock_transaction, MockBase, MockTypes},
+            mocks::{MockBase, MockTypes, mock_transaction},
         },
-        ApiState, Error, Header,
     };
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -418,12 +418,11 @@ mod test {
 
         // In this simple test, the node should be fully synchronized.
         let sync_status = client
-            .get::<SyncStatus>("sync-status")
+            .get::<SyncStatusQueryData>("sync-status")
             .send()
             .await
             .unwrap();
-        assert_eq!(sync_status.missing_blocks, 0);
-        assert_eq!(sync_status.missing_leaves, 0);
+        assert!(sync_status.is_fully_synced(), "{sync_status:#?}");
 
         network.shut_down().await;
     }
@@ -654,7 +653,7 @@ mod test {
         assert_eq!(client.get::<u64>("ext").send().await.unwrap(), 42);
 
         // Ensure we can still access the built-in functionality.
-        let sync_status: SyncStatus = client.get("sync-status").send().await.unwrap();
-        assert!(sync_status.is_fully_synced(), "{sync_status:?}");
+        let sync_status: SyncStatusQueryData = client.get("sync-status").send().await.unwrap();
+        assert!(sync_status.is_fully_synced(), "{sync_status:#?}");
     }
 }

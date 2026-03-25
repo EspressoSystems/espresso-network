@@ -18,14 +18,13 @@ pub use refinery::Migration;
 pub use sql::Transaction;
 
 use super::{
-    fetching,
+    AvailabilityProvider, FetchingDataSource, fetching,
     storage::sql::{self, SqlStorage, StorageConnectionType},
-    AvailabilityProvider, FetchingDataSource,
 };
 pub use crate::include_migrations;
 use crate::{
-    availability::{QueryableHeader, QueryablePayload},
     Header, Payload,
+    availability::{QueryableHeader, QueryablePayload},
 };
 
 pub type Builder<Types, Provider> = fetching::Builder<Types, SqlStorage, Provider>;
@@ -385,6 +384,7 @@ mod generic_test {
 
 #[cfg(all(test, not(target_os = "windows")))]
 mod test {
+    use futures::StreamExt;
     use hotshot_example_types::{
         node_types::TEST_VERSIONS,
         state_types::{TestInstanceState, TestValidatedState},
@@ -398,12 +398,12 @@ mod test {
     use super::*;
     use crate::{
         availability::{
-            AvailabilityDataSource, BlockInfo, LeafQueryData, UpdateAvailabilityData,
-            VidCommonQueryData,
+            AvailabilityDataSource, BlockInfo, BlockQueryData, LeafQueryData,
+            UpdateAvailabilityData, VidCommonQueryData,
         },
         data_source::{
-            storage::{NodeStorage, UpdateAvailabilityStorage},
             Transaction, VersionedDataSource,
+            storage::{NodeStorage, UpdateAvailabilityStorage},
         },
         fetching::provider::NoFetching,
         testing::{consensus::DataSourceLifeCycle, mocks::MockTypes},
@@ -451,6 +451,76 @@ mod test {
                 .await
                 .unwrap(),
             share0
+        );
+    }
+
+    /// Test subscription streams for identical payloads.
+    ///
+    /// The specific case that may be problematic is this:
+    /// * We get a `Decide` which is missing the payload and/or VID common
+    /// * _But_ we already have a block with an identical payload/VID common
+    /// * We call `store_and_notify` without the payload/VID common, meaning existing subscription
+    ///   streams will not get notified
+    /// * We call `Fetcher::get` got fetch the missing data, but because we already have data in the
+    ///   database that satisfies, the request, we do not spawn a fetch and notify
+    ///
+    /// This specifically affects subscription streams which are following the chain head. In all
+    /// other cases, we would try explicitly loading the next object in the stream from the database
+    /// before passively waiting for it, and this would succeed. Only in the case of a stream
+    /// following the head, do we rely on a passive notification without a corresponding explicit
+    /// fetch, even though the explicit fetch would have actually succeeded.
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_subscribe_identical_payload() {
+        let storage = D::create(0).await;
+        let ds = <D as DataSourceLifeCycle>::connect(&storage).await;
+
+        let mut blocks = ds.subscribe_blocks(0).await;
+        let mut vid = ds.subscribe_vid_common(0).await;
+
+        // Send a decide event with all relevant data.
+        let mut leaf =
+            LeafQueryData::genesis(&Default::default(), &Default::default(), TEST_VERSIONS.test)
+                .await;
+        let block = BlockQueryData::genesis(
+            &Default::default(),
+            &Default::default(),
+            TEST_VERSIONS.test.base,
+        )
+        .await;
+        let common = VidCommonQueryData::genesis(
+            &Default::default(),
+            &Default::default(),
+            TEST_VERSIONS.test.base,
+        )
+        .await;
+        tracing::info!("first decide");
+        ds.append(BlockInfo::new(
+            leaf.clone(),
+            Some(block.clone()),
+            Some(common.clone()),
+            None,
+        ))
+        .await
+        .unwrap();
+
+        tracing::info!("waiting for first block and VID");
+        assert_eq!(blocks.next().await.unwrap(), block);
+        assert_eq!(vid.next().await.unwrap(), common);
+
+        // Send a decide event with only the next leaf.
+        leaf.leaf.block_header_mut().block_number += 1;
+        tracing::info!("second decide");
+        ds.append(leaf.clone().into()).await.unwrap();
+
+        tracing::info!("waiting for second block and VID");
+        assert_eq!(
+            blocks.next().await.unwrap(),
+            BlockQueryData::new(leaf.header().clone(), block.payload)
+        );
+        assert_eq!(
+            vid.next().await.unwrap(),
+            VidCommonQueryData::new(leaf.header().clone(), common.common)
         );
     }
 }

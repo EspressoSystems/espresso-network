@@ -6,16 +6,16 @@ use ark_bn254::Bn254;
 use ark_ed_on_bn254::EdwardsConfig;
 use ark_ff::PrimeField;
 use ark_std::{
-    rand::{rngs::StdRng, CryptoRng, Rng, RngCore},
     UniformRand,
+    rand::{Rng, RngCore, rngs::StdRng},
 };
 use espresso_types::SeqTypes;
 use hotshot_contract_adapter::{field_to_u256, jellyfish::open_key};
 use hotshot_types::{
+    PeerConfig,
     light_client::{GenericLightClientState, GenericStakeTableState, LightClientState},
     stake_table::{HSStakeTable, StakeTableEntry},
     utils::{epoch_from_block_number, is_epoch_root, is_ge_epoch_root, is_last_block},
-    PeerConfig,
 };
 use itertools::izip;
 use jf_pcs::prelude::UnivariateUniversalParams;
@@ -25,15 +25,16 @@ use jf_plonk_compat::{
 };
 use jf_relation_compat::{Arithmetization, Circuit, PlonkCircuit};
 use jf_signature::{
+    SignatureScheme,
     bls_over_bn254::{BLSOverBN254CurveSignatureScheme, VerKey as BLSVerKey},
     schnorr::{SchnorrSignatureScheme, Signature},
-    SignatureScheme,
 };
 use jf_utils::test_rng;
 
 use super::{
-    circuit::GenericPublicInput, generate_state_update_proof, preprocess, Proof, VerifyingKey,
+    Proof, VerifyingKey, circuit::GenericPublicInput, generate_state_update_proof, preprocess,
 };
+use crate::test_utils::{key_pairs_for_testing, stake_table_for_testing};
 
 type F = ark_ed_on_bn254::Fq;
 type SchnorrVerKey = jf_signature::schnorr::VerKey<EdwardsConfig>;
@@ -239,6 +240,7 @@ impl MockLedger {
                         stake_amount: amount,
                     },
                     state_ver_key: schnorr_key.1.clone(),
+                    connect_info: None,
                 },
             );
             self.key_archive.insert(bls_key, schnorr_key.0.clone());
@@ -436,44 +438,6 @@ impl MockLedger {
     fn new_dummy_comm(&mut self) -> F {
         F::rand(&mut self.rng)
     }
-}
-
-/// Helper function for test
-fn key_pairs_for_testing<R: CryptoRng + RngCore>(
-    num_validators: usize,
-    prng: &mut R,
-) -> (Vec<BLSVerKey>, Vec<(SchnorrSignKey, SchnorrVerKey)>) {
-    let bls_keys = (0..num_validators)
-        .map(|_| {
-            BLSOverBN254CurveSignatureScheme::key_gen(&(), prng)
-                .unwrap()
-                .1
-        })
-        .collect::<Vec<_>>();
-    let schnorr_keys = (0..num_validators)
-        .map(|_| SchnorrSignatureScheme::key_gen(&(), prng).unwrap())
-        .collect::<Vec<_>>();
-    (bls_keys, schnorr_keys)
-}
-
-/// Helper function for test
-fn stake_table_for_testing(
-    bls_keys: &[BLSVerKey],
-    schnorr_keys: &[(SchnorrSignKey, SchnorrVerKey)],
-) -> HSStakeTable<SeqTypes> {
-    bls_keys
-        .iter()
-        .enumerate()
-        .zip(schnorr_keys)
-        .map(|((i, bls_key), (_, schnorr_key))| PeerConfig {
-            stake_table_entry: StakeTableEntry {
-                stake_key: *bls_key,
-                stake_amount: U256::from((i + 1) as u32),
-            },
-            state_ver_key: schnorr_key.clone(),
-        })
-        .collect::<Vec<_>>()
-        .into()
 }
 
 // modify from <https://github.com/EspressoSystems/cape/blob/main/contracts/rust/src/plonk_verifier/helpers.rs>

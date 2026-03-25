@@ -20,7 +20,7 @@
 
 use std::{collections::HashMap, marker::PhantomData, time::Instant};
 
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use async_trait::async_trait;
 use committable::Committable;
 use derive_more::{Deref, DerefMut};
@@ -31,39 +31,40 @@ use hotshot_types::{
     data::VidShare,
     simple_certificate::CertificatePair,
     traits::{
+        EncodeBytes,
         block_contents::BlockHeader,
         metrics::{Counter, Gauge, Histogram, Metrics},
         node_implementation::NodeType,
-        EncodeBytes,
     },
 };
 use itertools::Itertools;
 use jf_merkle_tree_compat::prelude::MerkleProof;
 pub use sqlx::Executor;
-use sqlx::{pool::Pool, query_builder::Separated, Encode, Execute, FromRow, QueryBuilder, Type};
+use sqlx::{Encode, Execute, FromRow, QueryBuilder, Type, pool::Pool, query_builder::Separated};
+use tracing::instrument;
 
 #[cfg(not(feature = "embedded-db"))]
 use super::queries::state::batch_insert_hashes;
 #[cfg(feature = "embedded-db")]
 use super::queries::state::build_hash_batch_insert;
 use super::{
+    Database, Db,
     queries::{
         self,
-        state::{collect_nodes_from_proofs, Node},
+        state::{Node, collect_nodes_from_proofs},
     },
-    Database, Db,
 };
 use crate::{
+    Header, Payload, QueryError, QueryResult,
     availability::{
         BlockQueryData, LeafQueryData, QueryableHeader, QueryablePayload, VidCommonQueryData,
     },
     data_source::{
-        storage::{pruning::PrunedHeightStorage, NodeStorage, UpdateAvailabilityStorage},
+        storage::{NodeStorage, UpdateAvailabilityStorage, pruning::PrunedHeightStorage},
         update,
     },
     merklized_state::{MerklizedState, UpdateStateData},
     types::HeightIndexed,
-    Header, Payload, QueryError, QueryResult,
 };
 
 pub type Query<'q> = sqlx::query::Query<'q, Db, <Db as Database>::Arguments<'q>>;
@@ -418,13 +419,66 @@ impl Transaction<Write> {
 /// Query service specific mutations.
 impl Transaction<Write> {
     /// Delete a batch of data for pruning.
+    #[instrument(skip(self))]
     pub(super) async fn delete_batch(
         &mut self,
         state_tables: Vec<String>,
         height: u64,
     ) -> anyhow::Result<()> {
-        self.execute(query("DELETE FROM header WHERE height <= $1").bind(height as i64))
+        // Delete payloads which are only referenced by the headers we're going to delete.
+        let res = query(
+            "WITH to_delete AS (
+                SELECT h.payload_hash, h.ns_table FROM header AS h
+                 WHERE (h.payload_hash, h.ns_table) IN (
+                    SELECT range.payload_hash, range.ns_table
+                      FROM header AS range
+                     WHERE range.height <= $1
+                 )
+                GROUP BY h.payload_hash, h.ns_table
+                HAVING count(*) <= 1
+            )
+            DELETE FROM payload AS p
+             WHERE (p.hash, p.ns_table) IN (SELECT * FROM to_delete)",
+        )
+        .bind(height as i64)
+        .execute(self.as_mut())
+        .await
+        .context("deleting payloads")?;
+        tracing::debug!(
+            rows_affected = res.rows_affected(),
+            "garbage collected payloads"
+        );
+
+        // Delete VID common which are only referenced by the headers we're going to delete.
+        let res = query(
+            "WITH to_delete AS (
+                SELECT h.payload_hash FROM header AS h
+                 WHERE h.payload_hash IN (
+                    SELECT range.payload_hash
+                      FROM header AS range
+                     WHERE range.height <= $1
+                 )
+                GROUP BY h.payload_hash
+                HAVING count(*) <= 1
+            )
+            DELETE FROM vid_common AS v
+             WHERE v.hash IN (SELECT * FROM to_delete)",
+        )
+        .bind(height as i64)
+        .execute(self.as_mut())
+        .await
+        .context("deleting VID common")?;
+        tracing::debug!(
+            rows_affected = res.rows_affected(),
+            "garbage collected VID common"
+        );
+
+        // Delete headers (cascading to other tables).
+        let res = query("DELETE FROM header WHERE height <= $1")
+            .bind(height as i64)
+            .execute(self.as_mut())
             .await?;
+        tracing::debug!(rows_affected = res.rows_affected(), "pruned headers");
 
         // prune merklized state tables
         // only delete nodes having created < h AND
@@ -449,7 +503,7 @@ impl Transaction<Write> {
     }
 
     /// Record the height of the latest pruned header.
-    pub(super) async fn save_pruned_height(&mut self, height: u64) -> anyhow::Result<()> {
+    pub(crate) async fn save_pruned_height(&mut self, height: u64) -> anyhow::Result<()> {
         // id is set to 1 so that there is only one row in the table.
         // height is updated if the row already exists.
         self.upsert(
@@ -477,15 +531,15 @@ where
 
         // Ignore the leaf if it is below the pruned height. This can happen if, for instance, the
         // fetcher is racing with the pruner.
-        if let Some(pruned_height) = self.load_pruned_height().await? {
-            if height <= pruned_height {
-                tracing::info!(
-                    height,
-                    pruned_height,
-                    "ignoring leaf which is already pruned"
-                );
-                return Ok(());
-            }
+        if let Some(pruned_height) = self.load_pruned_height().await?
+            && height <= pruned_height
+        {
+            tracing::info!(
+                height,
+                pruned_height,
+                "ignoring leaf which is already pruned"
+            );
+            return Ok(());
         }
 
         // While we don't necessarily have the full block for this leaf yet, we can initialize the
@@ -494,31 +548,29 @@ where
             .context("failed to serialize header")?;
         self.upsert(
             "header",
-            ["height", "hash", "payload_hash", "data", "timestamp"],
+            [
+                "height",
+                "hash",
+                "payload_hash",
+                "ns_table",
+                "data",
+                "timestamp",
+            ],
             ["height"],
             [(
                 height as i64,
                 leaf.block_hash().to_string(),
                 leaf.leaf().block_header().payload_commitment().to_string(),
+                leaf.leaf().block_header().ns_table(),
                 header_json,
                 leaf.leaf().block_header().timestamp() as i64,
             )],
         )
-        .await?;
+        .await
+        .context("inserting header")?;
 
-        // Similarly, we can initialize the payload table with a null payload, which can help us
-        // distinguish between blocks that haven't been produced yet and blocks we haven't received
-        // yet when answering queries.
-        // We don't overwrite the payload if it already exists.
-        // During epoch transition in PoS, the same height block is sent multiple times.
-        // The first block may have the payload, but subsequent blocks might be missing it.
-        // Overwriting would cause the payload to be lost since the block height is the same
-        let query = query("INSERT INTO payload (height) VALUES ($1) ON CONFLICT DO NOTHING")
-            .bind(height as i64);
-        query.execute(self.as_mut()).await?;
-
-        // Finally, we insert the leaf itself, which references the header row we created.
-        // Serialize the full leaf and QC to JSON for easy storage.
+        // Insert the leaf itself, which references the header row we created. Serialize the full
+        // leaf and QC to JSON for easy storage.
         let leaf_json = serde_json::to_value(leaf.leaf()).context("failed to serialize leaf")?;
         let qc_json = serde_json::to_value(leaf.qc()).context("failed to serialize QC")?;
         self.upsert(
@@ -533,7 +585,8 @@ where
                 qc_json,
             )],
         )
-        .await?;
+        .await
+        .context("inserting leaf")?;
 
         let block_height = NodeStorage::<Types>::block_height(self).await? as u64;
         if height + 1 >= block_height {
@@ -543,7 +596,8 @@ where
             // leaf.)
             let qcs = serde_json::to_value(&qc_chain)?;
             self.upsert("latest_qc_chain", ["id", "qcs"], ["id"], [(1i32, qcs)])
-                .await?;
+                .await
+                .context("inserting QC chain")?;
         }
 
         Ok(())
@@ -554,33 +608,31 @@ where
 
         // Ignore the block if it is below the pruned height. This can happen if, for instance, the
         // fetcher is racing with the pruner.
-        if let Some(pruned_height) = self.load_pruned_height().await? {
-            if height <= pruned_height {
-                tracing::info!(
-                    height,
-                    pruned_height,
-                    "ignoring block which is already pruned"
-                );
-                return Ok(());
-            }
+        if let Some(pruned_height) = self.load_pruned_height().await?
+            && height <= pruned_height
+        {
+            tracing::info!(
+                height,
+                pruned_height,
+                "ignoring block which is already pruned"
+            );
+            return Ok(());
         }
-
-        // The header and payload tables should already have been initialized when we inserted the
-        // corresponding leaf. All we have to do is add the payload itself and its size.
-        let payload = block.payload.encode();
 
         self.upsert(
             "payload",
-            ["height", "data", "size", "num_transactions"],
-            ["height"],
+            ["hash", "ns_table", "size", "num_transactions", "data"],
+            ["hash", "ns_table"],
             [(
-                height as i64,
-                payload.as_ref().to_vec(),
+                block.payload_hash().to_string(),
+                block.header().ns_table(),
                 block.size() as i32,
                 block.num_transactions() as i32,
+                block.payload.encode().as_ref().to_vec(),
             )],
         )
-        .await?;
+        .await
+        .context("inserting payload")?;
 
         // Index the transactions and namespaces in the block.
         let mut rows = vec![];
@@ -601,7 +653,8 @@ where
                 ["block_height", "ns_id", "position"],
                 rows,
             )
-            .await?;
+            .await
+            .context("inserting transactions")?;
         }
 
         Ok(())
@@ -616,40 +669,39 @@ where
 
         // Ignore the object if it is below the pruned height. This can happen if, for instance, the
         // fetcher is racing with the pruner.
-        if let Some(pruned_height) = self.load_pruned_height().await? {
-            if height <= pruned_height {
-                tracing::info!(
-                    height,
-                    pruned_height,
-                    "ignoring VID common which is already pruned"
-                );
-                return Ok(());
-            }
+        if let Some(pruned_height) = self.load_pruned_height().await?
+            && height <= pruned_height
+        {
+            tracing::info!(
+                height,
+                pruned_height,
+                "ignoring VID common which is already pruned"
+            );
+            return Ok(());
         }
 
         let common_data =
             bincode::serialize(common.common()).context("failed to serialize VID common data")?;
+        self.upsert(
+            "vid_common",
+            ["hash", "data"],
+            ["hash"],
+            [(common.payload_hash().to_string(), common_data)],
+        )
+        .await
+        .context("isnerting VID common")?;
+
         if let Some(share) = share {
             let share_data = bincode::serialize(&share).context("failed to serialize VID share")?;
-            self.upsert(
-                "vid2",
-                ["height", "common", "share"],
-                ["height"],
-                [(height as i64, common_data, share_data)],
-            )
-            .await
-        } else {
-            // Don't touch the `share` column at all if we don't have a share to insert. It's
-            // possible that this column already exists, and we are just upserting the common data,
-            // in which case we don't want to overwrite the share with NULL.
-            self.upsert(
-                "vid2",
-                ["height", "common"],
-                ["height"],
-                [(height as i64, common_data)],
-            )
-            .await
+            query("UPDATE header SET vid_share = $1 WHERE height = $2")
+                .bind(share_data)
+                .bind(height as i64)
+                .execute(self.as_mut())
+                .await
+                .context("inserting VID share")?;
         }
+
+        Ok(())
     }
 }
 

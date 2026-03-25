@@ -28,15 +28,13 @@ use hotshot_types::{
     },
     simple_certificate::{DaCertificate, QuorumCertificate, UpgradeCertificate},
     simple_vote::{DaData, DaVote, QuorumData, QuorumVote, UpgradeProposalData, UpgradeVote},
-    traits::{
-        node_implementation::ConsensusTime, signature_key::SignatureKey, BlockPayload, EncodeBytes,
-    },
+    traits::{BlockPayload, EncodeBytes, signature_key::SignatureKey},
 };
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use vbs::{
-    version::{StaticVersion, StaticVersionType, Version},
     BinarySerializer,
+    version::{StaticVersion, StaticVersionType, Version},
 };
 
 #[cfg(feature = "testing")]
@@ -44,9 +42,10 @@ async fn test_message_compat<Ver: StaticVersionType>(_ver: Ver) {
     use std::sync::Arc;
 
     use async_lock::RwLock;
-    use espresso_types::{v0_3::Fetcher, EpochCommittees, Leaf, Payload, SeqTypes, Transaction};
+    use espresso_types::{EpochCommittees, Leaf, Payload, SeqTypes, Transaction, v0_3::Fetcher};
     use hotshot_example_types::{node_types::TEST_VERSIONS, storage_types::TestStorage};
     use hotshot_types::{
+        PeerConfig,
         data::vid_disperse::ADVZDisperse,
         epoch_membership::EpochMembershipCoordinator,
         simple_certificate::{
@@ -57,12 +56,11 @@ async fn test_message_compat<Ver: StaticVersionType>(_ver: Ver) {
             TimeoutData, TimeoutVote, ViewSyncCommitData, ViewSyncCommitVote, ViewSyncFinalizeData,
             ViewSyncFinalizeVote, ViewSyncPreCommitData, ViewSyncPreCommitVote,
         },
-        PeerConfig,
     };
 
     let (sender, priv_key) = PubKey::generated_from_seed_indexed(Default::default(), 0);
     let signature = PubKey::sign(&priv_key, &[]).unwrap();
-    let committee = vec![PeerConfig::default()]; /* one committee member, necessary to generate a VID share */
+    let committee = vec![PeerConfig::test_default()]; /* one committee member, necessary to generate a VID share */
     let storage = TestStorage::default();
     let epoch_height = 10;
 

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{Context, Result, bail, ensure};
 use committable::Committable;
 use espresso_types::{Leaf2, SeqTypes};
 use hotshot_query_service::availability::LeafQueryData;
@@ -306,7 +306,7 @@ mod test {
     use pretty_assertions::assert_eq;
 
     use super::*;
-    use crate::testing::{leaf_chain, AlwaysFalseQuorum, AlwaysTrueQuorum, LEGACY_VERSION};
+    use crate::testing::{AlwaysFalseQuorum, AlwaysTrueQuorum, LEGACY_VERSION, leaf_chain};
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_hotstuff2() {

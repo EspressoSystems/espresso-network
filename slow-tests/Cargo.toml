@@ -2,7 +2,7 @@
 name = "slow-tests"
 version = "0.1.0"
 authors = ["Espresso Systems <hello@espressosys.com>"]
-edition = "2021"
+edition.workspace = true
 
 [features]
 embedded-db = ["sequencer/embedded-db"]
@@ -35,6 +35,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 staking-cli = { workspace = true }
 surf-disco = { workspace = true }
+tagged-base64 = { workspace = true }
 tempfile = { workspace = true }
 test-log = { workspace = true }
 test-utils = { workspace = true }

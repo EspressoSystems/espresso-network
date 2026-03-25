@@ -14,8 +14,8 @@
 
 use std::{
     collections::{
-        hash_map::{Entry, HashMap},
         BTreeMap,
+        hash_map::{Entry, HashMap},
     },
     hash::Hash,
     iter,
@@ -33,31 +33,30 @@ use hotshot_types::{
     simple_certificate::CertificatePair,
     traits::{block_contents::BlockHeader, node_implementation::NodeType},
 };
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 use snafu::OptionExt;
 
 use super::{
-    ledger_log::{Iter, LedgerLog},
-    pruning::{PruneStorage, PrunedHeightStorage, PrunerConfig},
-    sql::MigrateTypes,
     Aggregate, AggregatesStorage, AvailabilityStorage, NodeStorage, PayloadMetadata,
     UpdateAggregatesStorage, UpdateAvailabilityStorage, VidCommonMetadata,
+    ledger_log::{Iter, LedgerLog},
+    pruning::{PruneStorage, PrunedHeightStorage, PrunerConfig},
 };
 use crate::{
+    Header, MissingSnafu, NotFoundSnafu, Payload, QueryError, QueryResult,
     availability::{
+        NamespaceId,
         data_source::{BlockId, LeafId},
         query_data::{
             BlockHash, BlockQueryData, LeafHash, LeafQueryData, PayloadQueryData, QueryableHeader,
             QueryablePayload, TransactionHash, VidCommonQueryData,
         },
-        NamespaceId,
     },
-    data_source::{update, VersionedDataSource},
+    data_source::{VersionedDataSource, update},
     metrics::PrometheusMetrics,
-    node::{SyncStatus, TimeWindowQueryData, WindowStart},
+    node::{SyncStatusQueryData, TimeWindowQueryData, WindowStart},
     status::HasMetrics,
     types::HeightIndexed,
-    Header, MissingSnafu, NotFoundSnafu, Payload, QueryError, QueryResult,
 };
 
 const CACHED_LEAVES_COUNT: usize = 100;
@@ -147,17 +146,6 @@ where
     Payload<Types>: QueryablePayload<Types>,
 {
     type Pruner = ();
-}
-
-#[async_trait]
-impl<Types: NodeType> MigrateTypes<Types> for FileSystemStorage<Types>
-where
-    Header<Types>: QueryableHeader<Types>,
-    Payload<Types>: QueryablePayload<Types>,
-{
-    async fn migrate_types(&self, _batch_size: u64) -> anyhow::Result<()> {
-        Ok(())
-    }
 }
 
 impl<Types: NodeType> FileSystemStorage<Types>
@@ -807,25 +795,21 @@ where
             .context(MissingSnafu)
     }
 
-    async fn sync_status(&mut self) -> QueryResult<SyncStatus> {
-        let height = self.inner.leaf_storage.iter().len();
-
-        // The number of missing VID common is just the number of completely missing VID
-        // entries, since every entry we have is guaranteed to have the common data.
-        let missing_vid = self.inner.vid_storage.missing(height);
-        // Missing shares includes the completely missing VID entries, plus any entry which
-        // is _not_ messing but which has a null share.
-        let null_vid_shares: usize = self
-            .inner
-            .vid_storage
-            .iter()
-            .map(|res| if matches!(res, Some((_, None))) { 1 } else { 0 })
-            .sum();
-        Ok(SyncStatus {
-            missing_blocks: self.inner.block_storage.missing(height),
-            missing_leaves: self.inner.leaf_storage.missing(height),
-            missing_vid_common: missing_vid,
-            missing_vid_shares: missing_vid + null_vid_shares,
+    async fn sync_status_for_range(
+        &mut self,
+        start: usize,
+        end: usize,
+    ) -> QueryResult<SyncStatusQueryData> {
+        Ok(SyncStatusQueryData {
+            leaves: self.inner.leaf_storage.sync_status(start, end, |_| false),
+            blocks: self.inner.block_storage.sync_status(start, end, |_| false),
+            vid_common: self.inner.vid_storage.sync_status(start, end, |_| false),
+            vid_shares: self
+                .inner
+                .vid_storage
+                // Missing shares includes the completely missing VID entries, plus any entry which
+                // is _not_ missing but which has a null share.
+                .sync_status(start, end, |(_, share)| share.is_none()),
             pruned_height: None,
         })
     }

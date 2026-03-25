@@ -3,20 +3,17 @@ use std::{future::Future, path::PathBuf, str::FromStr};
 use alloy::primitives::Address;
 use anyhow::{Context, Result};
 use derive_more::{Display, From};
-use espresso_types::{v0_3::RegisteredValidator, PubKey, SeqTypes, StakeTableState};
+use espresso_types::{PubKey, SeqTypes, StakeTableState, v0_3::RegisteredValidator};
 use futures::TryStreamExt;
 use hotshot_query_service::{
     availability::{BlockId, LeafId, LeafQueryData},
     types::HeightIndexed,
 };
-use hotshot_types::{
-    data::EpochNumber, light_client::StateVerKey, traits::node_implementation::ConsensusTime,
-};
+use hotshot_types::{data::EpochNumber, light_client::StateVerKey};
 use serde_json::Value;
 use sqlx::{
-    query, query_as,
+    QueryBuilder, SqlitePool, query, query_as,
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
-    QueryBuilder, SqlitePool,
 };
 
 /// Different ways to ask the database for a leaf.
@@ -70,7 +67,7 @@ pub trait Storage: Sized + Send + Sync + 'static {
     ///
     /// This may result in an older leaf being removed.
     fn insert_leaf(&self, leaf: LeafQueryData<SeqTypes>)
-        -> impl Send + Future<Output = Result<()>>;
+    -> impl Send + Future<Output = Result<()>>;
 
     /// Get the stake table for the latest epoch which is not later than `epoch`.
     ///

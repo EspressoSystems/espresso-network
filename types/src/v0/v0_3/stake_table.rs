@@ -13,7 +13,8 @@ use hotshot_contract_adapter::sol_types::StakeTableV2::{
     UndelegatedV2, ValidatorExit, ValidatorExitV2, ValidatorRegistered, ValidatorRegisteredV2,
 };
 use hotshot_types::{
-    data::EpochNumber, light_client::StateVerKey, network::PeerConfigKeys, PeerConfig,
+    PeerConfig, data::EpochNumber, light_client::StateVerKey, network::PeerConfigKeys, x25519,
+    addr::NetAddr
 };
 use itertools::Itertools;
 use jf_utils::to_bytes;
@@ -59,6 +60,10 @@ pub struct Validator<KEY: SignatureKey> {
     // TODO: MA commission is only valid from 0 to 10_000. Add newtype to enforce this.
     pub commission: u16,
     pub delegators: HashMap<Address, U256>,
+    /// Public X25519 key for network communication.
+    pub x25519_key: Option<x25519::PublicKey>,
+    /// Network address.
+    pub p2p_addr: Option<NetAddr>
 }
 
 pub(crate) fn to_fixed_bytes(value: U256) -> [u8; std::mem::size_of::<U256>()] {
@@ -79,6 +84,8 @@ impl<KEY: SignatureKey> Committable for Validator<KEY> {
             .fixed_size_field("stake", &to_fixed_bytes(self.stake))
             .constant_str("commission")
             .u16(self.commission);
+            //.var_size_field("x25519_key", self.x25519_key.as_ref().map(|k| k.as_slice()).unwrap_or_default())
+            //.var_size_field("p2p_addr", self.p2p_addr.as_ref().map(|a| a.to_string()).unwrap_or_default().as_bytes());
 
         builder = builder.constant_str("delegators");
         for (address, stake) in self.delegators.iter().sorted() {
@@ -106,6 +113,8 @@ impl<KEY: SignatureKey> Validator<KEY> {
             commission: self.commission,
             delegators: self.delegators,
             authenticated: true,
+            x25519_key: self.x25519_key,
+            p2p_addr: self.p2p_addr
         }
     }
 }
@@ -131,6 +140,10 @@ pub struct RegisteredValidator<KEY: SignatureKey> {
     /// Whether the validator's registration signature has been verified.
     /// Contract can verify BLS but only length-check Schnorr.
     pub authenticated: bool,
+    /// Public X25519 key for network communication.
+    pub x25519_key: Option<x25519::PublicKey>,
+    /// Network address.
+    pub p2p_addr: Option<NetAddr>
 }
 
 /// Validator eligible for consensus participation.
@@ -212,6 +225,8 @@ impl<KEY: SignatureKey> Committable for RegisteredValidator<KEY> {
             .fixed_size_field("stake", &to_fixed_bytes(self.stake))
             .constant_str("commission")
             .u16(self.commission);
+            //.var_size_field("x25519_key", self.x25519_key.as_ref().map(|k| k.as_slice()).unwrap_or_default())
+            //.var_size_field("p2p_addr", self.p2p_addr.as_ref().map(|a| a.to_string()).unwrap_or_default().as_bytes());
 
         builder = builder.constant_str("delegators");
         for (address, stake) in self.delegators.iter().sorted() {
@@ -429,6 +444,8 @@ mod tests {
             stake,
             commission,
             delegators: delegators.clone(),
+            x25519_key: None,
+            p2p_addr: None
         };
 
         let new_validator = RegisteredValidator {
@@ -439,6 +456,8 @@ mod tests {
             commission,
             delegators,
             authenticated: true,
+            x25519_key: None,
+            p2p_addr: None
         };
 
         let old_commitment = old_validator.commit();
@@ -474,6 +493,8 @@ mod tests {
             stake,
             commission,
             delegators: delegators.clone(),
+            x25519_key: None,
+            p2p_addr: None
         };
 
         let unauthenticated_validator = RegisteredValidator {
@@ -484,6 +505,8 @@ mod tests {
             commission,
             delegators,
             authenticated: false,
+            x25519_key: None,
+            p2p_addr: None
         };
 
         let old_commitment = old_validator.commit();

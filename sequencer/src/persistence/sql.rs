@@ -7,7 +7,7 @@ use std::{
 };
 
 use alloy::primitives::Address;
-use anyhow::{bail, ensure, Context};
+use anyhow::{Context, bail, ensure};
 use async_trait::async_trait;
 use clap::Parser;
 use committable::Committable;
@@ -15,16 +15,16 @@ use derivative::Derivative;
 use derive_more::derive::{From, Into};
 use either::Either;
 use espresso_types::{
-    parse_duration, parse_size,
+    AuthenticatedValidatorMap, BackoffParams, BlockMerkleTree, FeeMerkleTree, Leaf, Leaf2,
+    NetworkConfig, Payload, PubKey, RegisteredValidatorMap, StakeTableHash, parse_duration,
+    parse_size,
     traits::{EventsPersistenceRead, MembershipPersistence, StakeTuple},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence, StateCatchup},
     v0_3::{
         AuthenticatedValidator, EventKey, IndexedStake, RegisteredValidator, RewardAmount,
         StakeTableEvent,
     },
-    v0_4::{RewardAccountV2, RewardMerkleTreeV2, REWARD_MERKLE_TREE_V2_HEIGHT},
-    AuthenticatedValidatorMap, BackoffParams, BlockMerkleTree, FeeMerkleTree, Leaf, Leaf2,
-    NetworkConfig, Payload, PubKey, RegisteredValidatorMap, StakeTableHash,
+    v0_4::{REWARD_MERKLE_TREE_V2_HEIGHT, RewardAccountV2, RewardMerkleTreeV2},
 };
 use futures::stream::StreamExt;
 use hotshot::InitializerEpochInfo;
@@ -34,19 +34,19 @@ use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::{
 use hotshot_query_service::{
     availability::{BlockId, LeafQueryData},
     data_source::{
+        Transaction as _, VersionedDataSource,
         storage::{
+            AvailabilityStorage,
             pruning::PrunerCfg,
             sql::{
-                include_migrations, query_as, syntax_helpers::MAX_FN, Config, Db, Read, SqlStorage,
-                StorageConnectionType, Transaction, TransactionMode, Write,
+                Config, Db, Read, SqlStorage, StorageConnectionType, Transaction, TransactionMode,
+                Write, include_migrations, query_as, syntax_helpers::MAX_FN,
             },
-            AvailabilityStorage,
         },
-        Transaction as _, VersionedDataSource,
     },
     fetching::{
-        request::{LeafRequest, PayloadRequest, VidCommonRequest},
         Provider,
+        request::{LeafRequest, PayloadRequest, VidCommonRequest},
     },
     merklized_state::MerklizedState,
 };
@@ -57,7 +57,7 @@ use hotshot_types::{
     },
     drb::{DrbInput, DrbResult},
     event::{Event, EventType, HotShotAction, LeafInfo},
-    message::{convert_proposal, Proposal},
+    message::{Proposal, convert_proposal},
     simple_certificate::{
         CertificatePair, LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
         NextEpochQuorumCertificate2, QuorumCertificate, QuorumCertificate2, UpgradeCertificate,
@@ -65,20 +65,19 @@ use hotshot_types::{
     traits::{
         block_contents::{BlockHeader, BlockPayload},
         metrics::Metrics,
-        node_implementation::ConsensusTime,
     },
     vote::HasViewNumber,
 };
 use indexmap::IndexMap;
 use itertools::Itertools;
 use jf_merkle_tree_compat::MerkleTreeScheme;
-use sqlx::{query, Executor, QueryBuilder, Row};
+use sqlx::{Executor, QueryBuilder, Row, query};
 
 use crate::{
+    NodeType, RECENT_STAKE_TABLES_LIMIT, SeqTypes, ViewNumber,
     api::RewardMerkleTreeV2Data,
     catchup::SqlStateCatchup,
     persistence::{migrate_network_config, persistence_metrics::PersistenceMetricsValue},
-    NodeType, SeqTypes, ViewNumber, RECENT_STAKE_TABLES_LIMIT,
 };
 
 /// Options for Postgres-backed persistence.
@@ -201,6 +200,15 @@ pub struct Options {
     #[clap(long, env = "ESPRESSO_SEQUENCER_CHUNK_FETCH_DELAY", value_parser = parse_duration)]
     pub(crate) chunk_fetch_delay: Option<Duration>,
 
+    /// The number of items to process in a single transaction when scanning the database for
+    /// missing objects.
+    #[clap(long, env = "ESPRESSO_SEQUENCER_SYNC_STATUS_CHUNK_SIZE")]
+    pub(crate) sync_status_chunk_size: Option<usize>,
+
+    /// Disable the proactive scanner task.
+    #[clap(long, env = "ESPRESSO_SEQUENCER_DISABLE_PROACTIVE_FETCHING")]
+    pub(crate) disable_proactive_fetching: bool,
+
     /// Disable pruning and reconstruct previously pruned data.
     ///
     /// While running without pruning is the default behavior, the default will not try to
@@ -279,13 +287,6 @@ pub struct Options {
     #[cfg(not(feature = "embedded-db"))]
     #[clap(long, env = "ESPRESSO_SEQUENCER_DATABASE_QUERY_MAX_CONNECTIONS", default_value = None)]
     pub(crate) query_max_connections: Option<u32>,
-
-    /// Sets the batch size for the types migration.
-    /// Determines how many `(leaf, vid)` rows are selected from the old types table
-    /// and migrated at once.
-    /// Default is `10000`` if not set
-    #[clap(long, env = "ESPRESSO_SEQUENCER_DATABASE_TYPES_MIGRATION_BATCH_SIZE")]
-    pub(crate) types_migration_batch_size: Option<u64>,
 
     // Keep the database connection pool when persistence is created,
     // allowing it to be reused across multiple instances instead of creating
@@ -391,10 +392,11 @@ impl From<SqliteOptions> for Options {
             fetch_rate_limit: None,
             active_fetch_delay: None,
             chunk_fetch_delay: None,
+            sync_status_chunk_size: None,
+            disable_proactive_fetching: false,
             archive: false,
             lightweight: false,
             min_connections: 0,
-            types_migration_batch_size: None,
             pool: None,
         }
     }
@@ -825,15 +827,15 @@ impl Persistence {
                 // Ensure we are only dealing with a consecutive chain of leaves. We don't want to
                 // garbage collect any views for which we missed a leaf or decide event; at least
                 // not right away, in case we need to recover that data later.
-                if let Some(parent) = parent {
-                    if height != parent + 1 {
-                        tracing::debug!(
-                            height,
-                            parent,
-                            "ending decide event at non-consecutive leaf"
-                        );
-                        break;
-                    }
+                if let Some(parent) = parent
+                    && height != parent + 1
+                {
+                    tracing::debug!(
+                        height,
+                        parent,
+                        "ending decide event at non-consecutive leaf"
+                    );
+                    break;
                 }
                 parent = Some(height);
                 leaves.push(leaf);
@@ -2717,7 +2719,7 @@ impl SequencerPersistence for Persistence {
                         .map(|data| bincode::deserialize(&data))
                         .transpose()?;
                     Ok(Some(InitializerEpochInfo::<SeqTypes> {
-                        epoch: <SeqTypes as NodeType>::Epoch::new(epoch as u64),
+                        epoch: EpochNumber::new(epoch as u64),
                         drb_result: drb_result_array,
                         block_header,
                     }))
@@ -3340,32 +3342,32 @@ mod testing {
 #[cfg(test)]
 mod test {
     use committable::{Commitment, CommitmentBoundsArkless};
-    use espresso_types::{traits::NullEventConsumer, Header, Leaf, NodeState, ValidatedState};
+    use espresso_types::{Header, Leaf, NodeState, ValidatedState, traits::NullEventConsumer};
     use futures::stream::TryStreamExt;
     use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_types::{
         data::{
-            ns_table::parse_ns_table, vid_disperse::AvidMDisperseShare, EpochNumber,
-            QuorumProposal2,
+            EpochNumber, QuorumProposal2, ns_table::parse_ns_table,
+            vid_disperse::AvidMDisperseShare,
         },
         message::convert_proposal,
         simple_certificate::QuorumCertificate,
         simple_vote::QuorumData,
         traits::{
+            EncodeBytes,
             block_contents::{BlockHeader, GENESIS_VID_NUM_STORAGE_NODES},
             signature_key::SignatureKey,
-            EncodeBytes,
         },
         utils::EpochTransitionIndicator,
         vid::{
             advz::advz_scheme,
-            avidm::{init_avidm_param, AvidMScheme},
+            avidm::{AvidMScheme, init_avidm_param},
         },
     };
     use jf_advz::VidScheme;
 
     use super::*;
-    use crate::{persistence::tests::TestablePersistence as _, BLSPubKey, PubKey};
+    use crate::{BLSPubKey, PubKey, persistence::tests::TestablePersistence as _};
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_quorum_proposals_leaf_hash_migration() {
@@ -3608,6 +3610,8 @@ mod test {
             commission: 100,
             delegators: HashMap::new(),
             authenticated: true,
+            x25519_key: None,
+            p2p_addr: None,
         };
 
         // Create an unauthenticated validator
@@ -3619,6 +3623,8 @@ mod test {
             commission: 200,
             delegators: HashMap::new(),
             authenticated: false,
+            x25519_key: None,
+            p2p_addr: None,
         };
 
         let mut validators: IndexMap<Address, RegisteredValidator<BLSPubKey>> = IndexMap::new();
@@ -4017,7 +4023,7 @@ mod test {
             let proposal = Proposal {
                 data: quorum_proposal.clone(),
                 signature: quorum_proposal_signature,
-                _pd: std::marker::PhantomData,
+                _pd: std::marker::PhantomData::<SeqTypes>,
             };
 
             let proposal_bytes = bincode::serialize(&proposal)
@@ -4265,10 +4271,10 @@ mod postgres_tests {
         data::vid_commitment,
         simple_certificate::QuorumCertificate,
         traits::{
+            EncodeBytes,
             block_contents::{BlockHeader, BuilderFee, GENESIS_VID_NUM_STORAGE_NODES},
             election::Membership,
             signature_key::BuilderSignatureKey,
-            EncodeBytes,
         },
     };
 

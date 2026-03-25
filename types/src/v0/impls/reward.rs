@@ -1,10 +1,10 @@
 use std::{borrow::Borrow, collections::HashSet, iter::once, str::FromStr, sync::Arc};
 
 use alloy::primitives::{
-    utils::{parse_units, ParseUnits},
     Address, B256, U256,
+    utils::{ParseUnits, parse_units},
 };
-use anyhow::{bail, ensure, Context};
+use anyhow::{Context, bail, ensure};
 use ark_serialize::{
     CanonicalDeserialize, CanonicalSerialize, Compress, Read, SerializationError, Valid, Validate,
 };
@@ -12,13 +12,12 @@ use hotshot::types::BLSPubKey;
 use hotshot_contract_adapter::reward::RewardProofSiblings;
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
-    traits::{election::Membership, node_implementation::ConsensusTime},
+    traits::election::Membership,
     utils::epoch_from_block_number,
 };
 use jf_merkle_tree_compat::{
-    prelude::MerkleNode, ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme,
-    LookupResult, MerkleTreeScheme, PersistentUniversalMerkleTreeScheme, ToTraversalPath,
-    UniversalMerkleTreeScheme,
+    ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme, LookupResult,
+    MerkleTreeScheme, ToTraversalPath, UniversalMerkleTreeScheme, prelude::MerkleNode,
 };
 use num_traits::CheckedSub;
 use sequencer_utils::{
@@ -28,21 +27,21 @@ use vbs::version::Version;
 use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION};
 
 use super::{
-    v0_3::{AuthenticatedValidator, RewardAmount, COMMISSION_BASIS_POINTS},
-    v0_4::{
-        forgotten_accounts_include, RewardAccountProofV2, RewardAccountQueryDataV2,
-        RewardAccountV2, RewardMerkleCommitmentV2, RewardMerkleProofV2, RewardMerkleTreeV2,
-    },
     Leaf2, NodeState, ValidatedState,
+    v0_3::{AuthenticatedValidator, COMMISSION_BASIS_POINTS, RewardAmount},
+    v0_4::{
+        RewardAccountProofV2, RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleCommitmentV2,
+        RewardMerkleProofV2, RewardMerkleTreeV2, forgotten_accounts_include,
+    },
 };
 use crate::{
+    FeeAccount,
     eth_signature_key::EthKeyPair,
     v0_3::{
         RewardAccountProofV1, RewardAccountV1, RewardMerkleCommitmentV1, RewardMerkleProofV1,
         RewardMerkleTreeV1,
     },
     v0_4::{Delta, REWARD_MERKLE_TREE_V2_ARITY, REWARD_MERKLE_TREE_V2_HEIGHT},
-    FeeAccount,
 };
 
 impl_serde_from_string_or_integer!(RewardAmount);
@@ -428,7 +427,7 @@ impl TryInto<RewardProofSiblings> for RewardAccountProofV2 {
             bail!("only presence proofs supported")
         };
 
-        let path = ToTraversalPath::<REWARD_MERKLE_TREE_V2_ARITY>::to_traversal_path(
+        let path = ToTraversalPath::<{ REWARD_MERKLE_TREE_V2_ARITY }>::to_traversal_path(
             &RewardAccountV2(self.account),
             REWARD_MERKLE_TREE_V2_HEIGHT,
         );
@@ -669,12 +668,11 @@ impl RewardDistributor {
         amount: P::Element,
     ) -> anyhow::Result<()>
     where
-        P: PersistentUniversalMerkleTreeScheme,
-        P: MerkleTreeScheme<Element = RewardAmount>,
+        P: UniversalMerkleTreeScheme<Element = RewardAmount>,
         P::Index: Borrow<<P as MerkleTreeScheme>::Index> + std::fmt::Display,
     {
         let mut err = None;
-        *tree = tree.persistent_update_with(account.clone(), |balance| {
+        tree.update_with(account.clone(), |balance| {
             let balance = balance.copied();
             match balance.unwrap_or_default().0.checked_add(amount.0) {
                 Some(updated) => Some(updated.into()),
@@ -1054,12 +1052,14 @@ pub mod tests {
         assert_eq!(*leader_commission, distributor.block_reward);
 
         let distributor = make_distributor(10001);
-        assert!(distributor
-            .compute_rewards()
-            .err()
-            .unwrap()
-            .to_string()
-            .contains("must not exceed"));
+        assert!(
+            distributor
+                .compute_rewards()
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("must not exceed")
+        );
     }
 
     #[test]

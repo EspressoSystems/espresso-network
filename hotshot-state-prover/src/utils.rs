@@ -57,7 +57,7 @@ impl ChainIdRetry {
 #[cfg(test)]
 mod tests {
     use alloy::{node_bindings::Anvil, providers::ProviderBuilder, rpc::client::RpcClient};
-    use espresso_types::{v0_1::SwitchingTransport, L1ClientOptions};
+    use espresso_types::{L1ClientOptions, v0_1::SwitchingTransport};
     use rstest::rstest;
 
     use super::*;
@@ -100,9 +100,11 @@ mod tests {
         .get_chain_id(&provider)
         .await;
 
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Failed to get chain ID"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Failed to get chain ID")
+        );
     }
 }

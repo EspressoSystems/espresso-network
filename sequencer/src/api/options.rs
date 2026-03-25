@@ -2,49 +2,49 @@
 
 use std::sync::Arc;
 
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use clap::Parser;
 use espresso_types::{
+    BlockMerkleTree, PubKey, SeqTypes,
     v0::traits::{EventConsumer, NullEventConsumer, PersistenceOptions, SequencerPersistence},
     v0_3::RewardMerkleTreeV1,
     v0_4::RewardMerkleTreeV2,
-    BlockMerkleTree, PubKey, SeqTypes,
 };
 use futures::{
     channel::oneshot,
     future::{BoxFuture, Future},
 };
 use hotshot_query_service::{
+    ApiState as AppState, Error,
     data_source::{ExtensibleDataSource, MetricsDataSource},
     fetching::provider::QueryServiceProvider,
     status::{self, UpdateStatusData},
-    ApiState as AppState, Error,
 };
 use hotshot_types::traits::{
     metrics::{Metrics, NoMetrics},
     network::ConnectedNetwork,
 };
 use jf_merkle_tree_compat::MerkleTreeScheme;
-use tide_disco::{listener::RateLimitListener, method::ReadState, Api, App, Url};
+use tide_disco::{Api, App, Url, listener::RateLimitListener, method::ReadState};
 use vbs::version::StaticVersionType;
 
 use super::{
+    ApiState, StorageState,
     data_source::{
-        provider, CatchupDataSource, HotShotConfigDataSource, NodeStateDataSource, Provider,
-        SequencerDataSource, StateSignatureDataSource, SubmitDataSource,
+        CatchupDataSource, HotShotConfigDataSource, NodeStateDataSource, Provider,
+        SequencerDataSource, StateSignatureDataSource, SubmitDataSource, provider,
     },
     endpoints, fs, light_client, sql,
     update::ApiEventConsumer,
-    ApiState, StorageState,
 };
 use crate::{
+    SequencerApiVersion,
     api::endpoints::RewardMerkleTreeVersion,
     catchup::CatchupStorage,
     context::{SequencerContext, TaskList},
     persistence,
     request_response::data_source::Storage as RequestResponseStorage,
     state::update_state_storage_loop,
-    SequencerApiVersion,
 };
 
 #[derive(Clone, Debug)]
@@ -560,7 +560,7 @@ impl Options {
         port: u16,
         app: App<S, E>,
         bind_version: ApiVer,
-    ) -> impl Future<Output = anyhow::Result<()>>
+    ) -> impl Future<Output = anyhow::Result<()>> + use<S, E, ApiVer>
     where
         S: Send + Sync + 'static,
         E: Send + Sync + tide_disco::Error,

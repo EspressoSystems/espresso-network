@@ -11,9 +11,10 @@ use anyhow::anyhow;
 use clap::{Parser, ValueEnum};
 use derive_more::Display;
 use hotshot::types::SignatureKey;
-use hotshot_types::{light_client::StateKeyPair, signature_key::BLSPubKey};
+use hotshot_types::{light_client::StateKeyPair, signature_key::BLSPubKey, x25519};
 use rand::{RngCore, SeedableRng};
 use sequencer_utils::logging;
+use tagged_base64::TaggedBase64;
 use tracing::info_span;
 
 #[derive(Clone, Copy, Debug, Display, Default, ValueEnum)]
@@ -25,14 +26,17 @@ enum Scheme {
     Bls,
     #[display("schnorr")]
     Schnorr,
+    #[display("x25519")]
+    X25519,
 }
 
 impl Scheme {
-    fn gen(self, seed: [u8; 32], index: u64, output: &mut impl Write) -> anyhow::Result<()> {
+    fn r#gen(self, seed: [u8; 32], index: u64, output: &mut impl Write) -> anyhow::Result<()> {
         match self {
             Self::All => {
-                Self::Bls.gen(seed, index, output)?;
-                Self::Schnorr.gen(seed, index, output)?;
+                Self::Bls.r#gen(seed, index, output)?;
+                Self::Schnorr.r#gen(seed, index, output)?;
+                Self::X25519.r#gen(seed, index, output)?;
             },
             Self::Bls => {
                 let (pub_key, priv_key) = BLSPubKey::generated_from_seed_indexed(seed, index);
@@ -51,6 +55,14 @@ impl Scheme {
                 )?;
                 writeln!(output, "ESPRESSO_SEQUENCER_PRIVATE_STATE_KEY={priv_key}")?;
                 tracing::info!(pub_key = %key_pair.ver_key(), "generated state key");
+            },
+            Self::X25519 => {
+                let kp = x25519::Keypair::generated_from_seed_indexed(seed, index)?;
+                let sk = TaggedBase64::try_from(kp.secret_key())?;
+                let pk = kp.public_key();
+                writeln!(output, "ESPRESSO_SEQUENCER_PUBLIC_X25519_KEY={pk}")?;
+                writeln!(output, "ESPRESSO_SEQUENCER_PRIVATE_X25519_KEY={sk}")?;
+                tracing::info!(pub_key = %pk, "generated x25519 key");
             },
         }
         Ok(())
@@ -154,7 +166,7 @@ fn main() -> anyhow::Result<()> {
             Box::new(std::io::stdout())
         };
 
-        opts.scheme.gen(seed, index as u64, &mut output)?;
+        opts.scheme.r#gen(seed, index as u64, &mut output)?;
 
         if let Some(ref out_dir) = opts.out {
             tracing::info!(

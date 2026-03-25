@@ -13,32 +13,32 @@
 //! A generic algorithm for updating a HotShot Query Service data source with new data.
 use std::iter::once;
 
-use anyhow::{ensure, Context};
+use anyhow::{Context, ensure};
 use async_trait::async_trait;
 use futures::future::Future;
 use hotshot::types::{Event, EventType};
 use hotshot_types::{
-    data::{ns_table::parse_ns_table, Leaf2, VidCommitment, VidCommon, VidDisperseShare, VidShare},
+    data::{Leaf2, VidCommitment, VidCommon, VidDisperseShare, VidShare, ns_table::parse_ns_table},
     event::LeafInfo,
     traits::{
         block_contents::{BlockHeader, BlockPayload, EncodeBytes, GENESIS_VID_NUM_STORAGE_NODES},
-        node_implementation::{ConsensusTime, NodeType},
+        node_implementation::NodeType,
     },
     vid::{
         advz::advz_scheme,
-        avidm::{init_avidm_param, AvidMScheme},
-        avidm_gf2::{init_avidm_gf2_param, AvidmGf2Scheme},
+        avidm::{AvidMScheme, init_avidm_param},
+        avidm_gf2::{AvidmGf2Scheme, init_avidm_gf2_param},
     },
     vote::HasViewNumber,
 };
 use jf_advz::VidScheme;
 
 use crate::{
+    Header, Payload,
     availability::{
         BlockInfo, BlockQueryData, LeafQueryData, QueryableHeader, QueryablePayload,
         UpdateAvailabilityData, VidCommonQueryData,
     },
-    Header, Payload,
 };
 
 /// An extension trait for types which implement the update trait for each API module.
@@ -175,12 +175,11 @@ where
                 }
 
                 let mut info = BlockInfo::new(leaf_data, block_data, vid_common, vid_share);
-                if let Some(deciding_qc) = deciding_qc {
-                    if committing_qc.view_number() == info.leaf.leaf().view_number() {
-                        let qc_chain =
-                            [committing_qc.as_ref().clone(), deciding_qc.as_ref().clone()];
-                        info = info.with_qc_chain(qc_chain);
-                    }
+                if let Some(deciding_qc) = deciding_qc
+                    && committing_qc.view_number() == info.leaf.leaf().view_number()
+                {
+                    let qc_chain = [committing_qc.as_ref().clone(), deciding_qc.as_ref().clone()];
+                    info = info.with_qc_chain(qc_chain);
                 }
                 if let Err(err) = self.append(info).await {
                     tracing::error!(height, "failed to append leaf information: {err:#}");

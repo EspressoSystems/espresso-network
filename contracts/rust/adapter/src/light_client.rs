@@ -28,9 +28,9 @@ impl LightClientStateSol {
     /// Return a random value
     pub fn rand<R: Rng>(rng: &mut R) -> Self {
         Self {
-            viewNum: rng.gen::<u64>(),
-            blockHeight: rng.gen::<u64>(),
-            blockCommRoot: U256::from_limbs(rng.gen::<[u64; 4]>()),
+            viewNum: rng.r#gen::<u64>(),
+            blockHeight: rng.r#gen::<u64>(),
+            blockCommRoot: U256::from_limbs(rng.r#gen::<[u64; 4]>()),
         }
     }
 }
@@ -80,10 +80,10 @@ impl StakeTableStateSol {
     /// Returns a random value
     pub fn rand<R: Rng>(rng: &mut R) -> Self {
         Self {
-            threshold: U256::from_limbs(rng.gen::<[u64; 4]>()),
-            blsKeyComm: U256::from_limbs(rng.gen::<[u64; 4]>()),
-            schnorrKeyComm: U256::from_limbs(rng.gen::<[u64; 4]>()),
-            amountComm: U256::from_limbs(rng.gen::<[u64; 4]>()),
+            threshold: U256::from_limbs(rng.r#gen::<[u64; 4]>()),
+            blsKeyComm: U256::from_limbs(rng.r#gen::<[u64; 4]>()),
+            schnorrKeyComm: U256::from_limbs(rng.r#gen::<[u64; 4]>()),
+            amountComm: U256::from_limbs(rng.r#gen::<[u64; 4]>()),
         }
     }
 }

@@ -14,8 +14,8 @@ use async_lock::RwLock;
 use async_trait::async_trait;
 use futures::future::join_all;
 use hotshot::{
-    traits::TestableNodeImplementation, types::EventType, HotShotInitializer, InitializerEpochInfo,
-    SystemContext,
+    HotShotInitializer, InitializerEpochInfo, SystemContext, traits::TestableNodeImplementation,
+    types::EventType,
 };
 use hotshot_example_types::{
     block_types::TestBlockHeader,
@@ -24,8 +24,9 @@ use hotshot_example_types::{
     testable_delay::DelayConfig,
 };
 use hotshot_types::{
+    ValidatorConfig,
     constants::EVENT_CHANNEL_SIZE,
-    data::Leaf2,
+    data::{Leaf2, ViewNumber},
     event::Event,
     message::convert_proposal,
     simple_certificate::{
@@ -34,11 +35,10 @@ use hotshot_types::{
     traits::{
         election::Membership,
         network::{AsyncGenerator, ConnectedNetwork},
-        node_implementation::{ConsensusTime, NodeImplementation, NodeType},
+        node_implementation::{NodeImplementation, NodeType},
     },
     utils::genesis_epoch_from_version,
     vote::HasViewNumber,
-    ValidatorConfig,
 };
 use hotshot_utils::anytrace::*;
 
@@ -69,9 +69,9 @@ pub struct SpinningTask<
     /// late start nodes
     pub(crate) late_start: HashMap<u64, LateStartNode<TYPES, I>>,
     /// time based changes
-    pub(crate) changes: BTreeMap<TYPES::View, Vec<ChangeNode>>,
+    pub(crate) changes: BTreeMap<ViewNumber, Vec<ChangeNode>>,
     /// most recent view seen by spinning task
-    pub(crate) latest_view: Option<TYPES::View>,
+    pub(crate) latest_view: Option<ViewNumber>,
     /// Last decided leaf that can be used as the anchor leaf to initialize the node.
     pub(crate) last_decided_leaf: Leaf2<TYPES>,
     /// Highest qc seen in the test for restarting nodes
@@ -88,18 +88,20 @@ pub struct SpinningTask<
     pub(crate) state_cert: Option<LightClientStateUpdateCertificateV2<TYPES>>,
     /// Node stakes
     pub(crate) node_stakes: TestNodeStakes,
+    /// Configured version upgrade
+    pub(crate) upgrade: versions::Upgrade,
 }
 
 #[async_trait]
 impl<
-        TYPES: NodeType<
+    TYPES: NodeType<
             InstanceState = TestInstanceState,
             ValidatedState = TestValidatedState,
             BlockHeader = TestBlockHeader,
         >,
-        I: TestableNodeImplementation<TYPES>,
-        N: ConnectedNetwork<TYPES::SignatureKey>,
-    > TestTaskState for SpinningTask<TYPES, N, I>
+    I: TestableNodeImplementation<TYPES>,
+    N: ConnectedNetwork<TYPES::SignatureKey>,
+> TestTaskState for SpinningTask<TYPES, N, I>
 where
     I: TestableNodeImplementation<TYPES>,
     I: NodeImplementation<TYPES, Network = N, Storage = TestStorage<TYPES>>,
@@ -153,11 +155,27 @@ where
                                     // Node not initialized. Initialize it
                                     // based on the received leaf.
                                     LateNodeContext::UninitializedContext(late_context_params) => {
-                                        let LateNodeContextParameters {
-                                            storage,
-                                            memberships,
-                                            config,
-                                        } = late_context_params;
+                                        let LateNodeContextParameters { storage, config } =
+                                            late_context_params;
+
+                                        // We assign node's public key and stake value rather than read from config file since it's a test
+                                        let validator_config: ValidatorConfig<TYPES> =
+                                            ValidatorConfig::generated_from_seed_indexed(
+                                                [0u8; 32],
+                                                node_id,
+                                                self.node_stakes.get(node_id),
+                                                // For tests, make the node DA based on its index
+                                                node_id < config.da_staked_committee_size as u64,
+                                            );
+
+                                        let memberships = <TYPES as NodeType>::Membership::new::<I>(
+                                            config.known_nodes_with_stake.clone(),
+                                            config.known_da_nodes.clone(),
+                                            storage.clone(),
+                                            network.clone(),
+                                            validator_config.public_key.clone(),
+                                            config.epoch_height,
+                                        );
 
                                         let initializer = HotShotInitializer::<TYPES>::load(
                                             TestInstanceState::new(
@@ -171,27 +189,16 @@ where
                                             self.start_epoch_info.clone(),
                                             self.last_decided_leaf.clone(),
                                             (
-                                                TYPES::View::genesis(),
-                                                genesis_epoch_from_version::<TYPES>(
-                                                    config.upgrade.base,
-                                                ),
+                                                ViewNumber::genesis(),
+                                                genesis_epoch_from_version(self.upgrade.base),
                                             ),
                                             (self.high_qc.clone(), self.next_epoch_high_qc.clone()),
-                                            TYPES::View::genesis(),
+                                            ViewNumber::genesis(),
                                             BTreeMap::new(),
                                             BTreeMap::new(),
                                             None,
                                             self.state_cert.clone(),
                                         );
-                                        // We assign node's public key and stake value rather than read from config file since it's a test
-                                        let validator_config =
-                                            ValidatorConfig::generated_from_seed_indexed(
-                                                [0u8; 32],
-                                                node_id,
-                                                self.node_stakes.get(node_id),
-                                                // For tests, make the node DA based on its index
-                                                node_id < config.da_staked_committee_size as u64,
-                                            );
 
                                         TestRunner::add_node_with_config(
                                             node_id,
@@ -199,6 +206,7 @@ where
                                             memberships,
                                             initializer,
                                             config,
+                                            self.upgrade,
                                             validator_config,
                                             storage,
                                         )
@@ -269,7 +277,7 @@ where
                                     QuorumCertificate2::genesis(
                                         &TestValidatedState::default(),
                                         &TestInstanceState::default(),
-                                        config.upgrade,
+                                        self.upgrade,
                                     )
                                     .await,
                                 );
@@ -327,6 +335,7 @@ where
                                         Arc::clone(&membership),
                                         initializer,
                                         config,
+                                        self.upgrade,
                                         validator_config,
                                         storage.clone(),
                                         internal_chan,

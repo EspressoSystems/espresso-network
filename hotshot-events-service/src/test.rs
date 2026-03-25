@@ -7,15 +7,12 @@ mod tests {
     use futures::stream::StreamExt;
     use hotshot_example_types::node_types::TestTypes;
     use hotshot_types::{
+        PeerConfig,
         data::ViewNumber,
         event::{Event, EventType},
         light_client::StateKeyPair,
         signature_key::BLSPubKey,
-        traits::{
-            node_implementation::{ConsensusTime, NodeType},
-            signature_key::SignatureKey,
-        },
-        PeerConfig,
+        traits::{node_implementation::NodeType, signature_key::SignatureKey},
     };
     use surf_disco::Client;
     use test_utils::reserve_tcp_port;
@@ -25,11 +22,11 @@ mod tests {
     use vbs::version::{StaticVersion, StaticVersionType};
 
     //use crate::fetch::Fetch;
-    use crate::events::{define_api, Error, Options};
+    use crate::events::{Error, Options, define_api};
     use crate::events_source::{EventConsumer, EventsStreamer, StartupInfo}; // EventsUpdater};
 
     // return a empty transaction event
-    fn generate_event<Types: NodeType<View = ViewNumber>>(view_number: u64) -> Event<Types> {
+    fn generate_event<Types: NodeType>(view_number: u64) -> Event<Types> {
         Event {
             view_number: ViewNumber::new(view_number),
             event: EventType::Transactions {
@@ -102,6 +99,7 @@ mod tests {
         let peer_config = PeerConfig::<TestTypes> {
             stake_table_entry: pub_key.stake_table_entry(U256::from(1)),
             state_ver_key: state_key_pair.ver_key(),
+            connect_info: None,
         };
 
         let known_nodes_with_stake = vec![peer_config];

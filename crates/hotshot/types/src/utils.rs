@@ -16,11 +16,11 @@ use alloy::primitives::U256;
 use anyhow::{anyhow, ensure};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use bincode::{
+    DefaultOptions, Options,
     config::{
         FixintEncoding, LittleEndian, RejectTrailing, WithOtherEndian, WithOtherIntEncoding,
         WithOtherLimit, WithOtherTrailing,
     },
-    DefaultOptions, Options,
 };
 use committable::{Commitment, Committable};
 use digest::OutputSizeUser;
@@ -32,14 +32,11 @@ use vbs::version::Version;
 use versions::EPOCH_VERSION;
 
 use crate::{
-    data::{Leaf2, VidCommitment},
-    stake_table::StakeTableEntries,
-    traits::{
-        node_implementation::{ConsensusTime, NodeType},
-        ValidatedState,
-    },
-    vote::{Certificate, HasViewNumber},
     PeerConfig,
+    data::{EpochNumber, Leaf2, VidCommitment, ViewNumber},
+    stake_table::StakeTableEntries,
+    traits::{ValidatedState, node_implementation::NodeType},
+    vote::{Certificate, HasViewNumber},
 };
 
 /// A view's state
@@ -55,7 +52,7 @@ pub enum ViewInner<TYPES: NodeType> {
         /// Payload commitment to the available block.
         payload_commitment: VidCommitment,
         /// An epoch to which the data belongs to. Relevant for validating against the correct stake table
-        epoch: Option<TYPES::Epoch>,
+        epoch: Option<EpochNumber>,
     },
     /// Undecided view
     Leaf {
@@ -66,7 +63,7 @@ pub enum ViewInner<TYPES: NodeType> {
         /// Optional state delta.
         delta: Option<Arc<<TYPES::ValidatedState as ValidatedState<TYPES>>::Delta>>,
         /// An epoch to which the data belongs to. Relevant for validating against the correct stake table
-        epoch: Option<TYPES::Epoch>,
+        epoch: Option<EpochNumber>,
     },
     /// Leaf has failed
     Failed,
@@ -232,7 +229,7 @@ impl<TYPES: NodeType> ViewInner<TYPES> {
 
     /// Returns `Epoch` if possible
     // #3967 REVIEW NOTE: This type is kinda ugly, should we Result<Option<Epoch>> instead?
-    pub fn epoch(&self) -> Option<Option<TYPES::Epoch>> {
+    pub fn epoch(&self) -> Option<Option<EpochNumber>> {
         match self {
             Self::Da { epoch, .. } | Self::Leaf { epoch, .. } => Some(*epoch),
             Self::Failed => None,
@@ -258,9 +255,9 @@ pub struct View<TYPES: NodeType> {
 
 /// A struct containing information about a finished round.
 #[derive(Debug, Clone)]
-pub struct RoundFinishedEvent<TYPES: NodeType> {
+pub struct RoundFinishedEvent {
     /// The round that finished
-    pub view_number: TYPES::View,
+    pub view_number: ViewNumber,
 }
 
 /// Whether or not to stop inclusively or exclusively when walking
@@ -363,11 +360,11 @@ pub fn transition_block_for_epoch(epoch: u64, epoch_height: u64) -> u64 {
 /// Returns an `Option<Epoch>` based on a boolean condition of whether or not epochs are enabled, a block number,
 /// and the epoch height. If epochs are disabled or the epoch height is zero, returns None.
 #[must_use]
-pub fn option_epoch_from_block_number<TYPES: NodeType>(
+pub fn option_epoch_from_block_number(
     with_epoch: bool,
     block_number: u64,
     epoch_height: u64,
-) -> Option<TYPES::Epoch> {
+) -> Option<EpochNumber> {
     if with_epoch {
         if epoch_height == 0 {
             None
@@ -378,7 +375,7 @@ pub fn option_epoch_from_block_number<TYPES: NodeType>(
         } else {
             Some(block_number / epoch_height + 1)
         }
-        .map(TYPES::Epoch::new)
+        .map(EpochNumber::new)
     } else {
         None
     }
@@ -386,8 +383,8 @@ pub fn option_epoch_from_block_number<TYPES: NodeType>(
 
 /// Returns Some(1) if epochs are enabled by `base`, otherwise returns None
 #[must_use]
-pub fn genesis_epoch_from_version<TYPES: NodeType>(base: Version) -> Option<TYPES::Epoch> {
-    (base >= EPOCH_VERSION).then(|| TYPES::Epoch::new(1))
+pub fn genesis_epoch_from_version(base: Version) -> Option<EpochNumber> {
+    (base >= EPOCH_VERSION).then(|| EpochNumber::new(1))
 }
 
 /// A function for generating a cute little user mnemonic from a hash

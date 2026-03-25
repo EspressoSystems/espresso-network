@@ -19,19 +19,18 @@ use async_lock::RwLock;
 use async_trait::async_trait;
 use cdn_broker::reexports::crypto::signature::KeyPair;
 use chrono::Utc;
-use clap::{value_parser, Arg, Command, Parser};
+use clap::{Arg, Command, Parser, value_parser};
 use futures::StreamExt;
 use hotshot::{
+    SystemContext,
     traits::{
-        implementations::{
-            derive_libp2p_multiaddr, derive_libp2p_peer_id, CdnMetricsValue, CdnTopic,
-            CombinedNetworks, Libp2pMetricsValue, Libp2pNetwork, PushCdnNetwork,
-            WrappedSignatureKey,
-        },
         BlockPayload, NodeImplementation,
+        implementations::{
+            CdnMetricsValue, CdnTopic, CombinedNetworks, Libp2pMetricsValue, Libp2pNetwork,
+            PushCdnNetwork, WrappedSignatureKey, derive_libp2p_multiaddr, derive_libp2p_peer_id,
+        },
     },
     types::SystemContextHandle,
-    SystemContext,
 };
 use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestTransaction},
@@ -40,19 +39,20 @@ use hotshot_example_types::{
     storage_types::TestStorage,
 };
 use hotshot_libp2p_networking::network::{
-    behaviours::dht::store::persistent::DhtNoPersistence, GossipConfig, RequestResponseConfig,
+    GossipConfig, RequestResponseConfig, behaviours::dht::store::persistent::DhtNoPersistence,
 };
 use hotshot_orchestrator::{
     self,
-    client::{get_complete_config, BenchResults, OrchestratorClient, ValidatorArgs},
+    client::{BenchResults, OrchestratorClient, ValidatorArgs, get_complete_config},
 };
 use hotshot_testing::block_builder::{
     BuilderTask, RandomBuilderImplementation, SimpleBuilderImplementation,
     TestBuilderImplementation,
 };
 use hotshot_types::{
+    HotShotConfig, PeerConfig, ValidatorConfig,
     consensus::ConsensusMetricsValue,
-    data::{Leaf, TestableLeaf},
+    data::{Leaf, TestableLeaf, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     event::{Event, EventType},
     network::{BuilderType, NetworkConfig, NetworkConfigFile, NetworkConfigSource},
@@ -61,15 +61,15 @@ use hotshot_types::{
         block_contents::{BlockHeader, TestableBlock},
         election::Membership,
         network::ConnectedNetwork,
-        node_implementation::{ConsensusTime, NodeType},
+        node_implementation::NodeType,
         states::TestableState,
     },
     utils::genesis_epoch_from_version,
-    HotShotConfig, PeerConfig, ValidatorConfig,
 };
-use rand::{rngs::StdRng, SeedableRng};
+use rand::{SeedableRng, rngs::StdRng};
 use surf_disco::Url;
 use tracing::{debug, error, info, warn};
+use versions::{MIN_SUPPORTED_VERSION, Upgrade};
 
 #[derive(Debug, Clone)]
 /// Arguments passed to the orchestrator
@@ -222,7 +222,7 @@ pub fn read_orchestrator_init_config<TYPES: NodeType>() -> (NetworkConfig<TYPES>
     if let Some(total_nodes_string) = matches.get_one::<String>("total_nodes") {
         config.config.num_nodes_with_stake = total_nodes_string.parse::<NonZeroUsize>().unwrap();
         config.config.known_nodes_with_stake =
-            vec![PeerConfig::default(); config.config.num_nodes_with_stake.get() as usize];
+            vec![PeerConfig::test_default(); config.config.num_nodes_with_stake.get() as usize];
         error!(
             "config.config.total_nodes: {:?}",
             config.config.num_nodes_with_stake
@@ -282,7 +282,7 @@ pub fn load_config_from_file<TYPES: NodeType>(config_file: &str) -> NetworkConfi
 
     // initialize it with size for better assignment of peers' config
     config.config.known_nodes_with_stake =
-        vec![PeerConfig::default(); config.config.num_nodes_with_stake.get() as usize];
+        vec![PeerConfig::test_default(); config.config.num_nodes_with_stake.get() as usize];
 
     config
 }
@@ -363,12 +363,14 @@ pub trait RunDa<
     /// get the anchored view
     /// Note: sequencing leaf does not have state, so does not return state
     async fn initialize_state_and_hotshot(&self) -> SystemContextHandle<TYPES, NODE> {
+        let upgrade = Upgrade::trivial(MIN_SUPPORTED_VERSION);
+
         let initializer = hotshot::HotShotInitializer::<TYPES>::from_genesis(
             TestInstanceState::default(),
             self.config().config.epoch_height,
             self.config().config.epoch_start_block,
             vec![],
-            self.config().config.upgrade,
+            upgrade,
         )
         .await
         .expect("Couldn't generate genesis block");
@@ -401,6 +403,7 @@ pub trait RunDa<
             state_sk,
             config.node_index,
             config.config,
+            upgrade,
             EpochMembershipCoordinator::new(membership, epoch_height, &storage.clone()),
             network,
             initializer,
@@ -437,7 +440,7 @@ pub trait RunDa<
         let start = Instant::now();
 
         let mut event_stream = context.event_stream();
-        let mut anchor_view: TYPES::View = <TYPES::View as ConsensusTime>::genesis();
+        let mut anchor_view = ViewNumber::genesis();
         let mut num_successful_commits = 0;
 
         context.hotshot.start_consensus().await;
@@ -535,8 +538,8 @@ pub trait RunDa<
         let num_eligible_leaders = context
             .hotshot
             .membership_coordinator
-            .membership_for_epoch(genesis_epoch_from_version::<TYPES>(
-                context.hotshot.upgrade_lock.upgrade.base,
+            .membership_for_epoch(genesis_epoch_from_version(
+                context.hotshot.upgrade_lock.upgrade().base,
             ))
             .await
             .unwrap()
@@ -621,18 +624,18 @@ pub struct PushCdnDaRun<TYPES: NodeType> {
 
 #[async_trait]
 impl<
-        TYPES: NodeType<
+    TYPES: NodeType<
             Transaction = TestTransaction,
             BlockPayload = TestBlockPayload,
             BlockHeader = TestBlockHeader,
             InstanceState = TestInstanceState,
         >,
-        NODE: NodeImplementation<
+    NODE: NodeImplementation<
             TYPES,
             Network = PushCdnNetwork<TYPES::SignatureKey>,
             Storage = TestStorage<TYPES>,
         >,
-    > RunDa<TYPES, PushCdnNetwork<TYPES::SignatureKey>, NODE> for PushCdnDaRun<TYPES>
+> RunDa<TYPES, PushCdnNetwork<TYPES::SignatureKey>, NODE> for PushCdnDaRun<TYPES>
 where
     <TYPES as NodeType>::ValidatedState: TestableState<TYPES>,
     <TYPES as NodeType>::BlockPayload: TestableBlock<TYPES>,
@@ -706,14 +709,14 @@ pub struct Libp2pDaRun<TYPES: NodeType> {
 
 #[async_trait]
 impl<
-        TYPES: NodeType<
+    TYPES: NodeType<
             Transaction = TestTransaction,
             BlockPayload = TestBlockPayload,
             BlockHeader = TestBlockHeader,
             InstanceState = TestInstanceState,
         >,
-        NODE: NodeImplementation<TYPES, Network = Libp2pNetwork<TYPES>, Storage = TestStorage<TYPES>>,
-    > RunDa<TYPES, Libp2pNetwork<TYPES>, NODE> for Libp2pDaRun<TYPES>
+    NODE: NodeImplementation<TYPES, Network = Libp2pNetwork<TYPES>, Storage = TestStorage<TYPES>>,
+> RunDa<TYPES, Libp2pNetwork<TYPES>, NODE> for Libp2pDaRun<TYPES>
 where
     <TYPES as NodeType>::ValidatedState: TestableState<TYPES>,
     <TYPES as NodeType>::BlockPayload: TestableBlock<TYPES>,
@@ -808,14 +811,14 @@ pub struct CombinedDaRun<TYPES: NodeType> {
 
 #[async_trait]
 impl<
-        TYPES: NodeType<
+    TYPES: NodeType<
             Transaction = TestTransaction,
             BlockPayload = TestBlockPayload,
             BlockHeader = TestBlockHeader,
             InstanceState = TestInstanceState,
         >,
-        NODE: NodeImplementation<TYPES, Network = CombinedNetworks<TYPES>, Storage = TestStorage<TYPES>>,
-    > RunDa<TYPES, CombinedNetworks<TYPES>, NODE> for CombinedDaRun<TYPES>
+    NODE: NodeImplementation<TYPES, Network = CombinedNetworks<TYPES>, Storage = TestStorage<TYPES>>,
+> RunDa<TYPES, CombinedNetworks<TYPES>, NODE> for CombinedDaRun<TYPES>
 where
     <TYPES as NodeType>::ValidatedState: TestableState<TYPES>,
     <TYPES as NodeType>::BlockPayload: TestableBlock<TYPES>,
@@ -883,16 +886,16 @@ where
     }
 }
 
-#[allow(clippy::too_many_lines)]
 /// Main entry point for validators
 /// # Panics
 /// if unable to get the local ip address
+#[allow(clippy::too_many_lines)]
 pub async fn main_entry_point<
     TYPES: NodeType<
-        Transaction = TestTransaction,
-        BlockHeader = TestBlockHeader,
-        InstanceState = TestInstanceState,
-    >,
+            Transaction = TestTransaction,
+            BlockHeader = TestBlockHeader,
+            InstanceState = TestInstanceState,
+        >,
     NETWORK: ConnectedNetwork<TYPES::SignatureKey>,
     NODE: NodeImplementation<TYPES, Network = NETWORK, Storage = TestStorage<TYPES>>,
     RUNDA: RunDa<TYPES, NETWORK, NODE>,
@@ -912,7 +915,7 @@ pub async fn main_entry_point<
     let orchestrator_client: OrchestratorClient = OrchestratorClient::new(args.url.clone());
 
     // We assume one node will not call this twice to generate two validator_config-s with same identity.
-    let validator_config = NetworkConfig::<TYPES>::generate_init_validator_config(
+    let validator_config = NetworkConfig::<TYPES>::generate_init_test_validator_config(
         orchestrator_client
             .get_node_index_for_init_validator_config()
             .await,
@@ -1033,10 +1036,10 @@ pub async fn main_entry_point<
 /// Returns a `BuilderTask` if this node is going to be running a builder.
 async fn initialize_builder<
     TYPES: NodeType<
-        Transaction = TestTransaction,
-        BlockHeader = TestBlockHeader,
-        InstanceState = TestInstanceState,
-    >,
+            Transaction = TestTransaction,
+            BlockHeader = TestBlockHeader,
+            InstanceState = TestInstanceState,
+        >,
 >(
     run_config: &mut NetworkConfig<TYPES>,
     validator_config: &ValidatorConfig<TYPES>,

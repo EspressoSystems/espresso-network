@@ -1,19 +1,19 @@
 use core::fmt::Debug;
 use std::{cmp::max, sync::Arc, time::Duration};
 
-use anyhow::{bail, ensure, Context};
+use anyhow::{Context, bail, ensure};
 use either::Either;
 use espresso_types::{
+    BlockMerkleTree, FeeAccount, FeeMerkleTree, Leaf2, ValidatedState,
     traits::StateCatchup,
     v0_3::{ChainConfig, RewardAccountV1, RewardMerkleTreeV1},
     v0_4::{Delta, RewardMerkleTreeV2},
-    BlockMerkleTree, FeeAccount, FeeMerkleTree, Leaf2, ValidatedState,
 };
-use futures::{future::Future, StreamExt};
+use futures::{StreamExt, future::Future};
 use hotshot::traits::ValidatedState as HotShotState;
 use hotshot_query_service::{
     availability::{AvailabilityDataSource, LeafQueryData},
-    data_source::{storage::pruning::PrunedHeightDataSource, Transaction, VersionedDataSource},
+    data_source::{Transaction, VersionedDataSource, storage::pruning::PrunedHeightDataSource},
     merklized_state::{MerklizedStateHeightPersistence, UpdateStateData},
     status::StatusDataSource,
     types::HeightIndexed,
@@ -26,10 +26,10 @@ use vbs::version::Version;
 use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION};
 
 use crate::{
+    NodeState, SeqTypes,
     api::RewardMerkleTreeDataSource,
     catchup::{CatchupStorage, SqlStateCatchup},
     persistence::ChainConfigPersistence,
-    NodeState, SeqTypes,
 };
 
 pub(crate) async fn compute_state_update(
@@ -40,6 +40,19 @@ pub(crate) async fn compute_state_update(
     proposed_leaf: &Leaf2,
 ) -> anyhow::Result<(ValidatedState, Delta)> {
     let header = proposed_leaf.block_header();
+
+    let mut parent_state = parent_state.clone();
+
+    // if the protocol has been upgraded, the new chain_config should be used
+    // as the base chain config for the call to `apply_header`. This mirrors the
+    // `apply_upgrade` step at the start of `apply_header`
+    //
+    // We need to do this here because this loop may need to process historical upgrades
+    // that are no longer recorded in our genesis file. but it's safe, because this loop
+    // only handles decided leaves
+    if proposed_leaf.block_header().version() > parent_leaf.block_header().version() {
+        parent_state.chain_config = proposed_leaf.block_header().chain_config()
+    }
 
     let (state, delta, total_rewards_distributed) = parent_state
         .apply_header(

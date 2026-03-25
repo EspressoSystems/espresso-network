@@ -15,21 +15,21 @@ use std::{
     sync::Arc,
 };
 
-use async_lock::RwLock;
 use committable::Committable;
 use hotshot_utils::anytrace::*;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use parking_lot::RwLock;
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use vbs::version::Version;
-use versions::{Upgrade, DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, VID2_UPGRADE_VERSION};
+use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, Upgrade, VID2_UPGRADE_VERSION};
 
 /// The version we should expect for external messages
 pub const EXTERNAL_MESSAGE_VERSION: Version = Version { major: 0, minor: 0 };
 
 use crate::{
     data::{
-        DaProposal, DaProposal2, Leaf, Leaf2, QuorumProposal, QuorumProposal2,
+        DaProposal, DaProposal2, EpochNumber, Leaf, Leaf2, QuorumProposal, QuorumProposal2,
         QuorumProposal2Legacy, QuorumProposalWrapper, UpgradeProposal, VidDisperseShare0,
-        VidDisperseShare1, VidDisperseShare2,
+        VidDisperseShare1, VidDisperseShare2, ViewNumber,
     },
     epoch_membership::EpochMembership,
     request_response::ProposalRequestPayload,
@@ -48,7 +48,7 @@ use crate::{
     traits::{
         election::Membership,
         network::{DataRequest, ResponseMessage, ViewMessage},
-        node_implementation::{ConsensusTime, NodeType},
+        node_implementation::NodeType,
         signature_key::SignatureKey,
     },
     utils::mnemonic,
@@ -75,9 +75,9 @@ impl<TYPES: NodeType> fmt::Debug for Message<TYPES> {
     }
 }
 
-impl<TYPES: NodeType> HasViewNumber<TYPES> for Message<TYPES> {
+impl<TYPES: NodeType> HasViewNumber for Message<TYPES> {
     /// get the view number out of a message
-    fn view_number(&self) -> TYPES::View {
+    fn view_number(&self) -> ViewNumber {
         self.kind.view_number()
     }
 }
@@ -157,22 +157,22 @@ impl<TYPES: NodeType> From<DataMessage<TYPES>> for MessageKind<TYPES> {
 }
 
 impl<TYPES: NodeType> ViewMessage<TYPES> for MessageKind<TYPES> {
-    fn view_number(&self) -> TYPES::View {
+    fn view_number(&self) -> ViewNumber {
         match &self {
             MessageKind::Consensus(message) => message.view_number(),
             MessageKind::Data(DataMessage::SubmitTransaction(_, v)) => *v,
             MessageKind::Data(DataMessage::RequestData(msg)) => msg.view,
             MessageKind::Data(DataMessage::DataResponse(msg)) => match msg {
                 ResponseMessage::Found(m) => m.view_number(),
-                ResponseMessage::NotFound | ResponseMessage::Denied => TYPES::View::new(1),
+                ResponseMessage::NotFound | ResponseMessage::Denied => ViewNumber::new(1),
             },
-            MessageKind::External(_) => TYPES::View::new(1),
+            MessageKind::External(_) => ViewNumber::new(1),
         }
     }
 }
 
-impl<TYPES: NodeType> HasEpoch<TYPES> for MessageKind<TYPES> {
-    fn epoch(&self) -> Option<TYPES::Epoch> {
+impl<TYPES: NodeType> HasEpoch for MessageKind<TYPES> {
+    fn epoch(&self) -> Option<EpochNumber> {
         match &self {
             MessageKind::Consensus(message) => message.epoch_number(),
             MessageKind::Data(DataMessage::SubmitTransaction(..) | DataMessage::RequestData(_))
@@ -217,7 +217,7 @@ pub enum GeneralConsensusMessage<TYPES: NodeType> {
     TimeoutVote(TimeoutVote<TYPES>),
 
     /// Message with an upgrade proposal
-    UpgradeProposal(Proposal<TYPES, UpgradeProposal<TYPES>>),
+    UpgradeProposal(Proposal<TYPES, UpgradeProposal>),
 
     /// Message with an upgrade vote
     UpgradeVote(UpgradeVote<TYPES>),
@@ -340,7 +340,7 @@ pub enum SequencingMessage<TYPES: NodeType> {
 
 impl<TYPES: NodeType> SequencingMessage<TYPES> {
     /// Get the view number this message relates to
-    fn view_number(&self) -> TYPES::View {
+    fn view_number(&self) -> ViewNumber {
         match &self {
             SequencingMessage::General(general_message) => {
                 match general_message {
@@ -438,7 +438,7 @@ impl<TYPES: NodeType> SequencingMessage<TYPES> {
     }
 
     /// Get the epoch number this message relates to, if applicable
-    fn epoch_number(&self) -> Option<TYPES::Epoch> {
+    fn epoch_number(&self) -> Option<EpochNumber> {
         match &self {
             SequencingMessage::General(general_message) => {
                 match general_message {
@@ -531,7 +531,7 @@ pub enum DataMessage<TYPES: NodeType> {
     /// Contains a transaction to be submitted
     /// TODO rethink this when we start to send these messages
     /// we only need the view number for broadcast
-    SubmitTransaction(TYPES::Transaction, TYPES::View),
+    SubmitTransaction(TYPES::Transaction, ViewNumber),
     /// A request for data
     RequestData(DataRequest<TYPES>),
     /// A response to a data request
@@ -541,10 +541,7 @@ pub enum DataMessage<TYPES: NodeType> {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
 #[serde(bound(deserialize = ""))]
 /// Prepare qc from the leader
-pub struct Proposal<
-    TYPES: NodeType,
-    PROPOSAL: HasViewNumber<TYPES> + HasEpoch<TYPES> + DeserializeOwned,
-> {
+pub struct Proposal<TYPES: NodeType, PROPOSAL: HasViewNumber + HasEpoch + DeserializeOwned> {
     // NOTE: optimization could include view number to help look up parent leaf
     // could even do 16 bit numbers if we want
     /// The data being proposed.
@@ -561,8 +558,8 @@ pub fn convert_proposal<TYPES, PROPOSAL, PROPOSAL2>(
 ) -> Proposal<TYPES, PROPOSAL2>
 where
     TYPES: NodeType,
-    PROPOSAL: HasViewNumber<TYPES> + HasEpoch<TYPES> + DeserializeOwned,
-    PROPOSAL2: HasViewNumber<TYPES> + HasEpoch<TYPES> + DeserializeOwned + From<PROPOSAL>,
+    PROPOSAL: HasViewNumber + HasEpoch + DeserializeOwned,
+    PROPOSAL2: HasViewNumber + HasEpoch + DeserializeOwned + From<PROPOSAL>,
 {
     Proposal {
         data: proposal.data.into(),
@@ -623,10 +620,9 @@ where
 
 /// A lock for an upgrade certificate decided by HotShot.
 #[derive(Clone, Debug)]
-#[non_exhaustive]
 pub struct UpgradeLock<TYPES: NodeType> {
-    pub decided_upgrade_certificate: Arc<RwLock<Option<UpgradeCertificate<TYPES>>>>,
-    pub upgrade: Upgrade,
+    decided_upgrade_certificate: Arc<RwLock<Option<UpgradeCertificate<TYPES>>>>,
+    upgrade: Upgrade,
 }
 
 impl<TYPES: NodeType> UpgradeLock<TYPES> {
@@ -649,92 +645,109 @@ impl<TYPES: NodeType> UpgradeLock<TYPES> {
         }
     }
 
-    pub async fn upgrade_view(&self) -> Option<TYPES::View> {
-        let upgrade_certificate = self.decided_upgrade_certificate.read().await;
-        upgrade_certificate
+    pub fn upgrade(&self) -> Upgrade {
+        self.upgrade
+    }
+
+    pub fn upgrade_view(&self) -> Option<ViewNumber> {
+        self.decided_upgrade_certificate
+            .read()
             .as_ref()
             .map(|cert| cert.data.new_version_first_view)
+    }
+
+    pub fn decided_upgrade_cert(&self) -> Option<UpgradeCertificate<TYPES>> {
+        self.decided_upgrade_certificate.read().clone()
+    }
+
+    pub fn set_decided_upgrade_cert<C>(&self, cert: C)
+    where
+        C: Into<Option<UpgradeCertificate<TYPES>>>,
+    {
+        *self.decided_upgrade_certificate.write() = cert.into()
+    }
+
+    /// Apply a function to the upgrade certificate.
+    pub fn apply<F>(&self, f: F)
+    where
+        F: FnOnce(&mut Option<UpgradeCertificate<TYPES>>),
+    {
+        let mut guard = self.decided_upgrade_certificate.write();
+        f(&mut *guard)
     }
 
     /// Calculate the version applied in a view, based on the provided upgrade lock.
     ///
     /// # Errors
     /// Returns an error if we do not support the version required by the decided upgrade certificate.
-    pub async fn version(&self, view: TYPES::View) -> Result<Version> {
-        let upgrade_certificate = self.decided_upgrade_certificate.read().await;
-
-        let version = match *upgrade_certificate {
-            Some(ref cert) => {
-                if view >= cert.data.new_version_first_view {
-                    if cert.data.new_version == self.upgrade.target {
-                        self.upgrade.target
-                    } else {
-                        bail!("The network has upgraded to a new version that we do not support!");
-                    }
+    pub fn version(&self, view: ViewNumber) -> Result<Version> {
+        if let Some(cert) = &*self.decided_upgrade_certificate.read() {
+            if view >= cert.data.new_version_first_view {
+                if cert.data.new_version == self.upgrade.target {
+                    Ok(self.upgrade.target)
                 } else {
-                    self.upgrade.base
+                    bail!("The network has upgraded to a new version that we do not support!");
                 }
-            },
-            None => self.upgrade.base,
-        };
-
-        Ok(version)
+            } else {
+                Ok(self.upgrade.base)
+            }
+        } else {
+            Ok(self.upgrade.base)
+        }
     }
 
     /// Calculate the version applied in a view, based on the provided upgrade lock.
     ///
     /// This function does not fail, since it does not check that the version is supported.
-    pub async fn version_infallible(&self, view: TYPES::View) -> Version {
-        let upgrade_certificate = self.decided_upgrade_certificate.read().await;
-
-        match *upgrade_certificate {
-            Some(ref cert) => {
-                if view >= cert.data.new_version_first_view {
-                    cert.data.new_version
-                } else {
-                    cert.data.old_version
-                }
-            },
-            None => self.upgrade.base,
+    pub fn version_infallible(&self, view: ViewNumber) -> Version {
+        if let Some(cert) = &*self.decided_upgrade_certificate.read() {
+            if view >= cert.data.new_version_first_view {
+                cert.data.new_version
+            } else {
+                cert.data.old_version
+            }
+        } else {
+            self.upgrade.base
         }
     }
 
     /// Return whether epochs are enabled in the given view
-    pub async fn epochs_enabled(&self, view: TYPES::View) -> bool {
-        self.version_infallible(view).await >= EPOCH_VERSION
+    pub fn epochs_enabled(&self, view: ViewNumber) -> bool {
+        self.version_infallible(view) >= EPOCH_VERSION
     }
 
     /// Return whether `QuorumProposal2Legacy` is the correct message type for the given view
-    pub async fn proposal2_legacy_version(&self, view: TYPES::View) -> bool {
-        self.epochs_enabled(view).await && !self.upgraded_drb_and_header(view).await
+    pub fn proposal2_legacy_version(&self, view: ViewNumber) -> bool {
+        let version = self.version_infallible(view);
+        version >= EPOCH_VERSION && version < DRB_AND_HEADER_UPGRADE_VERSION
     }
 
     /// Return whether `QuorumProposal2` is the correct message type for the given view
-    pub async fn proposal2_version(&self, view: TYPES::View) -> bool {
-        self.epochs_enabled(view).await && self.upgraded_drb_and_header(view).await
+    pub fn proposal2_version(&self, view: ViewNumber) -> bool {
+        let version = self.version_infallible(view);
+        version >= EPOCH_VERSION && version >= DRB_AND_HEADER_UPGRADE_VERSION
     }
 
     /// Return whether epochs are enabled in the given view
-    pub async fn upgraded_drb_and_header(&self, view: TYPES::View) -> bool {
-        self.version_infallible(view).await >= DRB_AND_HEADER_UPGRADE_VERSION
+    pub fn upgraded_drb_and_header(&self, view: ViewNumber) -> bool {
+        self.version_infallible(view) >= DRB_AND_HEADER_UPGRADE_VERSION
     }
 
-    pub async fn upgraded_vid2(&self, view: TYPES::View) -> bool {
-        self.version_infallible(view).await >= VID2_UPGRADE_VERSION
+    pub fn upgraded_vid2(&self, view: ViewNumber) -> bool {
+        self.version_infallible(view) >= VID2_UPGRADE_VERSION
     }
 
-    /// Serialize a message with a version number, using `message.view_number()` and an optional decided upgrade certificate to determine the message's version.
+    /// Serialize a message with a version number, using `message.view_number()`
+    /// and an optional decided upgrade certificate to determine the message's
+    /// version.
     ///
     /// # Errors
     ///
     /// Errors if serialization fails.
-    pub async fn serialize<M: HasViewNumber<TYPES> + Serialize>(
-        &self,
-        message: &M,
-    ) -> Result<Vec<u8>> {
+    pub fn serialize<M: HasViewNumber + Serialize>(&self, message: &M) -> Result<Vec<u8>> {
         let view = message.view_number();
 
-        let version = self.version(view).await?;
+        let version = self.version(view)?;
 
         let serialized_message = if version == self.upgrade.base || version == self.upgrade.target {
             versions::encode(version, message)
@@ -750,13 +763,16 @@ impl<TYPES: NodeType> UpgradeLock<TYPES> {
             .context(info!("Failed to serialize message!"))
     }
 
-    /// Deserialize a message with a version number, using `message.view_number()` to determine the message's version. This function will fail on improperly versioned messages.
+    /// Deserialize a message with a version number, using `message.view_number()`
+    /// to determine the message's version. This function will fail on improperly
+    /// versioned messages.
+    ///
     /// Returns both the deserialized message and the version of the message
     ///
     /// # Errors
     ///
     /// Errors if deserialization fails.
-    pub async fn deserialize<M: Debug + HasViewNumber<TYPES> + DeserializeOwned>(
+    pub fn deserialize<M: Debug + HasViewNumber + DeserializeOwned>(
         &self,
         message: &[u8],
     ) -> Result<(M, Version)> {
@@ -785,7 +801,7 @@ impl<TYPES: NodeType> UpgradeLock<TYPES> {
         let view = deserialized_message.view_number();
 
         // Get the expected version for the message based on the view number
-        let expected_version = self.version(view).await?;
+        let expected_version = self.version(view)?;
 
         // Check that the actual version matches the expected version
         if version != expected_version {

@@ -5,11 +5,12 @@ use futures::future::FutureExt;
 use hotshot_types::traits::metrics::NoMetrics;
 
 use super::{
+    Genesis, L1Params, NetworkParams,
     api::{self, data_source::DataSourceOptions},
     context::SequencerContext,
     init_node, network,
     options::{Modules, Options},
-    persistence, Genesis, L1Params, NetworkParams,
+    persistence,
 };
 
 pub async fn main() -> anyhow::Result<()> {
@@ -59,7 +60,7 @@ pub async fn init_with_storage<S>(
 where
     S: DataSourceOptions,
 {
-    let (private_staking_key, private_state_key) = opt.private_keys()?;
+    let (private_staking_key, private_state_key, x25519_sk) = opt.private_keys()?;
     let l1_params = L1Params {
         urls: opt.l1_provider_url,
         options: opt.l1_options,
@@ -67,6 +68,8 @@ where
 
     let network_params = NetworkParams {
         cdn_endpoint: opt.cdn_endpoint,
+        cliquenet_bind_addr: opt.cliquenet_bind_address,
+        x25519_secret_key: x25519_sk,
         libp2p_advertise_address: opt.libp2p_advertise_address,
         libp2p_bind_address: opt.libp2p_bind_address,
         libp2p_bootstrap_nodes: opt.libp2p_bootstrap_nodes,
@@ -150,7 +153,7 @@ where
                         init_node(
                             genesis,
                             network_params,
-                            &*metrics,
+                            metrics,
                             persistence,
                             l1_params,
                             storage,
@@ -169,7 +172,7 @@ where
             init_node(
                 genesis,
                 network_params,
-                &NoMetrics,
+                Box::new(NoMetrics),
                 persistence,
                 l1_params,
                 None,
@@ -190,8 +193,9 @@ mod test {
     use std::time::Duration;
 
     use espresso_types::PubKey;
-    use hotshot_types::{light_client::StateKeyPair, traits::signature_key::SignatureKey};
-    use surf_disco::{error::ClientError, Client, Url};
+    use hotshot_types::{light_client::StateKeyPair, traits::signature_key::SignatureKey, x25519};
+    use surf_disco::{Client, Url, error::ClientError};
+    use tagged_base64::TaggedBase64;
     use tempfile::TempDir;
     use test_utils::reserve_tcp_port;
     use tokio::spawn;
@@ -199,18 +203,20 @@ mod test {
 
     use super::*;
     use crate::{
+        SequencerApiVersion,
         api::options::Http,
         genesis::{L1Finalized, StakeTableConfig},
         persistence::fs,
-        SequencerApiVersion,
     };
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_startup_before_orchestrator() {
         let (pub_key, priv_key) = PubKey::generated_from_seed_indexed([0; 32], 0);
         let state_key = StateKeyPair::generate_from_seed_indexed([0; 32], 0);
+        let x25519_kp = x25519::Keypair::generate().unwrap();
 
-        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let port1 = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let port2 = reserve_tcp_port().expect("OS should have ephemeral ports available");
         let tmp = TempDir::new().unwrap();
 
         let genesis_file = tmp.path().join("genesis.toml");
@@ -234,7 +240,7 @@ mod test {
         genesis.to_file(&genesis_file).unwrap();
 
         let modules = Modules {
-            http: Some(Http::with_port(port)),
+            http: Some(Http::with_port(port1)),
             query: Some(Default::default()),
             storage_fs: Some(fs::Options::new(tmp.path().into())),
             ..Default::default()
@@ -249,6 +255,12 @@ mod test {
                 .to_tagged_base64()
                 .expect("valid key")
                 .to_string(),
+            "--private-x25519-key",
+            &TaggedBase64::try_from(x25519_kp.secret_key())
+                .expect("valid key")
+                .to_string(),
+            "--cliquenet-bind-address",
+            &format!("127.0.0.1:{port2}"),
             "--genesis-file",
             &genesis_file.display().to_string(),
         ]);
@@ -256,7 +268,7 @@ mod test {
         // Start the sequencer in a background task. This process will not complete, because it will
         // be waiting for the orchestrator, but it should at least start up the API server and
         // populate some metrics.
-        tracing::info!(port, "starting sequencer");
+        tracing::info!(port = %port1, "starting sequencer");
         let task = spawn(async move {
             if let Err(err) =
                 init_with_storage(genesis, modules, opt, fs::Options::new(tmp.path().into())).await
@@ -268,7 +280,7 @@ mod test {
         // The healthcheck should eventually come up even though the node is waiting for the
         // orchestrator.
         tracing::info!("waiting for API to start");
-        let url: Url = format!("http://localhost:{port}").parse().unwrap();
+        let url: Url = format!("http://localhost:{port1}").parse().unwrap();
         let client = Client::<ClientError, SequencerApiVersion>::new(url.clone());
         assert!(client.connect(Some(Duration::from_secs(60))).await);
         client.get::<()>("healthcheck").send().await.unwrap();

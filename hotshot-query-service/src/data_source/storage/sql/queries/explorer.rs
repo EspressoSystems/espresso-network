@@ -23,26 +23,25 @@ use sqlx::{FromRow, Row};
 use tagged_base64::{Tagged, TaggedBase64};
 
 use super::{
-    super::transaction::{query, Transaction, TransactionMode},
-    Database, Db, DecodeError, BLOCK_COLUMNS,
+    super::transaction::{Transaction, TransactionMode, query},
+    BLOCK_COLUMNS, Database, Db, DecodeError,
 };
 use crate::{
+    Header, Payload, QueryError, QueryResult, Transaction as HotshotTransaction,
     availability::{BlockQueryData, QueryableHeader, QueryablePayload},
     data_source::storage::{ExplorerStorage, NodeStorage},
     explorer::{
-        self,
+        self, BalanceAmount, BlockDetail, BlockIdentifier, BlockRange, BlockSummary,
+        ExplorerHistograms, ExplorerSummary, GenesisOverview, GetBlockDetailError,
+        GetBlockSummariesError, GetBlockSummariesRequest, GetExplorerSummaryError,
+        GetSearchResultsError, GetTransactionDetailError, GetTransactionSummariesError,
+        GetTransactionSummariesRequest, MonetaryValue, SearchResult, TransactionIdentifier,
+        TransactionRange, TransactionSummary, TransactionSummaryFilter,
         errors::{self, NotFound},
         query_data::TransactionDetailResponse,
         traits::ExplorerHeader,
-        BalanceAmount, BlockDetail, BlockIdentifier, BlockRange, BlockSummary, ExplorerHistograms,
-        ExplorerSummary, GenesisOverview, GetBlockDetailError, GetBlockSummariesError,
-        GetBlockSummariesRequest, GetExplorerSummaryError, GetSearchResultsError,
-        GetTransactionDetailError, GetTransactionSummariesError, GetTransactionSummariesRequest,
-        MonetaryValue, SearchResult, TransactionIdentifier, TransactionRange, TransactionSummary,
-        TransactionSummaryFilter,
     },
     types::HeightIndexed,
-    Header, Payload, QueryError, QueryResult, Transaction as HotshotTransaction,
 };
 
 impl From<sqlx::Error> for GetExplorerSummaryError {
@@ -113,7 +112,7 @@ lazy_static::lazy_static! {
         format!(
             "SELECT {BLOCK_COLUMNS}
                 FROM header AS h
-                JOIN payload AS p ON h.height = p.height
+                JOIN payload AS p ON (h.payload_hash, h.ns_table) = (p.hash, p.ns_table)
                 ORDER BY h.height DESC
                 LIMIT $1"
             )
@@ -123,7 +122,7 @@ lazy_static::lazy_static! {
         format!(
             "SELECT {BLOCK_COLUMNS}
                 FROM header AS h
-                JOIN payload AS p ON h.height = p.height
+                JOIN payload AS p ON (h.payload_hash, h.ns_table) = (p.hash, p.ns_table)
                 WHERE h.height <= $1
                 ORDER BY h.height DESC
                 LIMIT $2"
@@ -139,7 +138,7 @@ lazy_static::lazy_static! {
         format!(
             "SELECT {BLOCK_COLUMNS}
                 FROM header AS h
-                JOIN payload AS p ON h.height = p.height
+                JOIN payload AS p ON (h.payload_hash, h.ns_table) = (p.hash, p.ns_table)
                 WHERE h.height <= (SELECT h1.height FROM header AS h1 WHERE h1.hash = $1)
                 ORDER BY h.height DESC
                 LIMIT $2",
@@ -150,7 +149,7 @@ lazy_static::lazy_static! {
         format!(
             "SELECT {BLOCK_COLUMNS}
                 FROM header AS h
-                JOIN payload AS p ON h.height = p.height
+                JOIN payload AS p ON (h.payload_hash, h.ns_table) = (p.hash, p.ns_table)
                 ORDER BY h.height DESC
                 LIMIT 1"
         )
@@ -160,7 +159,7 @@ lazy_static::lazy_static! {
         format!(
             "SELECT {BLOCK_COLUMNS}
                 FROM header AS h
-                JOIN payload AS p ON h.height = p.height
+                JOIN payload AS p ON (h.payload_hash, h.ns_table) = (p.hash, p.ns_table)
                 WHERE h.height = $1
                 ORDER BY h.height DESC
                 LIMIT 1"
@@ -171,7 +170,7 @@ lazy_static::lazy_static! {
         format!(
             "SELECT {BLOCK_COLUMNS}
                 FROM header AS h
-                JOIN payload AS p ON h.height = p.height
+                JOIN payload AS p ON (h.payload_hash, h.ns_table) = (p.hash, p.ns_table)
                 WHERE h.hash = $1
                 ORDER BY h.height DESC
                 LIMIT 1"
@@ -183,7 +182,7 @@ lazy_static::lazy_static! {
         format!(
             "SELECT {BLOCK_COLUMNS}
                FROM header AS h
-               JOIN payload AS p ON h.height = p.height
+               JOIN payload AS p ON (h.payload_hash, h.ns_table) = (p.hash, p.ns_table)
                WHERE h.height IN (
                    SELECT t.block_height
                        FROM transactions AS t
@@ -199,7 +198,7 @@ lazy_static::lazy_static! {
         format!(
             "SELECT {BLOCK_COLUMNS}
                FROM header AS h
-               JOIN payload AS p ON h.height = p.height
+               JOIN payload AS p ON (h.payload_hash, h.ns_table) = (p.hash, p.ns_table)
                WHERE h.height IN (
                    SELECT t.block_height
                        FROM transactions AS t
@@ -216,7 +215,7 @@ lazy_static::lazy_static! {
         format!(
             "SELECT {BLOCK_COLUMNS}
                 FROM header AS h
-                JOIN payload AS p ON h.height = p.height
+                JOIN payload AS p ON (h.payload_hash, h.ns_table) = (p.hash, p.ns_table)
                 WHERE  h.height = $1
                 ORDER BY h.height DESC"
         )
@@ -226,7 +225,7 @@ lazy_static::lazy_static! {
         format!(
             "SELECT {BLOCK_COLUMNS}
                 FROM header AS h
-                JOIN payload AS p ON h.height = p.height
+                JOIN payload AS p ON (h.payload_hash, h.ns_table) = (p.hash, p.ns_table)
                 WHERE h.height = (
                     SELECT MAX(t1.block_height)
                         FROM transactions AS t1
@@ -239,7 +238,7 @@ lazy_static::lazy_static! {
         format!(
             "SELECT {BLOCK_COLUMNS}
                 FROM header AS h
-                JOIN payload AS p ON h.height = p.height
+                JOIN payload AS p ON (h.payload_hash, h.ns_table) = (p.hash, p.ns_table)
                 WHERE h.height = (
                     SELECT t1.block_height
                         FROM transactions AS t1
@@ -257,7 +256,7 @@ lazy_static::lazy_static! {
         format!(
             "SELECT {BLOCK_COLUMNS}
                 FROM header AS h
-                JOIN payload AS p ON h.height = p.height
+                JOIN payload AS p ON (h.payload_hash, h.ns_table) = (p.hash, p.ns_table)
                 WHERE h.height = (
                     SELECT t1.block_height
                         FROM transactions AS t1
@@ -525,8 +524,7 @@ where
                     p.size AS size,
                     p.num_transactions AS transactions
                 FROM header AS h
-                JOIN payload AS p ON
-                    p.height = h.height
+                JOIN payload AS p ON (h.payload_hash, h.ns_table) = (p.hash, p.ns_table)
                 WHERE
                     h.height IN (SELECT height FROM header ORDER BY height DESC LIMIT $1)
                 ORDER BY h.height
@@ -634,7 +632,7 @@ where
             let block_query = format!(
                 "SELECT {BLOCK_COLUMNS}
                     FROM header AS h
-                    JOIN payload AS p ON h.height = p.height
+                    JOIN payload AS p ON (h.payload_hash, h.ns_table) = (p.hash, p.ns_table)
                     WHERE h.hash = $1
                     ORDER BY h.height DESC
                     LIMIT 1"
@@ -654,7 +652,7 @@ where
             let transactions_query = format!(
                 "SELECT {BLOCK_COLUMNS}
                     FROM header AS h
-                    JOIN payload AS p ON h.height = p.height
+                    JOIN payload AS p ON (h.payload_hash, h.ns_table) = (p.hash, p.ns_table)
                     JOIN transactions AS t ON h.height = t.block_height
                     WHERE t.hash = $1
                     ORDER BY h.height DESC

@@ -25,7 +25,7 @@ use hotshot_types::{
     message::UpgradeLock,
     traits::{
         election::Membership,
-        node_implementation::{ConsensusTime, NodeType},
+        node_implementation::{NodeType},
     },
 };
 use tokio::time::timeout;

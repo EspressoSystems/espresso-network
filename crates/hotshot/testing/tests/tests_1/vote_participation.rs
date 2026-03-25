@@ -20,7 +20,7 @@ mod tests {
         simple_vote::QuorumData2,
         stake_table::{supermajority_threshold, HSStakeTable},
         traits::{
-            node_implementation::{ConsensusTime, NodeType},
+            node_implementation::NodeType,
             signature_key::{SignatureKey, StateSignatureKey},
         },
         PeerConfig,
@@ -40,6 +40,7 @@ mod tests {
                 PeerConfig::<TestTypes> {
                     stake_table_entry: pub_key.stake_table_entry(U256::from(1u64)),
                     state_ver_key: state_key,
+                    connect_info: None,
                 }
             })
             .collect();

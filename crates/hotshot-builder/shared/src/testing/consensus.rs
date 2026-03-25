@@ -11,18 +11,18 @@ use hotshot::{
 };
 use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
-    node_types::{TestTypes, TEST_VERSIONS},
+    node_types::{TEST_VERSIONS, TestTypes},
     state_types::{TestInstanceState, TestValidatedState},
 };
 use hotshot_types::{
     data::{
-        vid_commitment, DaProposal2, EpochNumber, Leaf2, QuorumProposal2, QuorumProposalWrapper,
-        ViewNumber,
+        DaProposal2, EpochNumber, Leaf2, QuorumProposal2, QuorumProposalWrapper, ViewNumber,
+        vid_commitment,
     },
     message::Proposal,
     simple_certificate::{QuorumCertificate2, SimpleCertificate, SuccessThreshold},
     simple_vote::QuorumData2,
-    traits::{node_implementation::ConsensusTime, EncodeBytes},
+    traits::EncodeBytes,
     utils::EpochTransitionIndicator,
 };
 use sha2::{Digest, Sha256};
@@ -49,7 +49,7 @@ impl SimulatedChainState {
     pub async fn simulate_consensus_round(
         &mut self,
         transactions: Option<Vec<TestTransaction>>,
-    ) -> BuilderStateId<TestTypes> {
+    ) -> BuilderStateId {
         let transactions = transactions.unwrap_or_default();
         let num_transactions = transactions.len() as u64;
         let encoded_transactions = TestTransaction::encode(&transactions);

@@ -19,6 +19,7 @@ async-lock = { workspace = true }
 async-trait = { workspace = true }
 bincode = { workspace = true }
 committable = { workspace = true }
+derive_more = { workspace = true }
 hotshot = { workspace = true }
 hotshot-task-impls = { workspace = true }
 hotshot-types = { workspace = true }

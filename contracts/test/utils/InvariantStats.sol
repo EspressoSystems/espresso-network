@@ -73,11 +73,7 @@ contract InvariantStats {
         );
     }
 
-    function _formatString(string memory str, uint256 width)
-        internal
-        pure
-        returns (string memory)
-    {
+    function _formatString(string memory str, uint256 width) internal pure returns (string memory) {
         bytes memory strBytes = bytes(str);
 
         if (strBytes.length >= width) {

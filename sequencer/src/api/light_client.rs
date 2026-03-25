@@ -3,17 +3,17 @@ use std::{fmt::Display, sync::Arc, time::Duration};
 use anyhow::Result;
 use espresso_types::{BlockMerkleTree, NsProof, SeqTypes};
 use futures::{
-    future::{try_join, FutureExt},
-    stream::StreamExt,
     TryStreamExt,
+    future::{FutureExt, try_join},
+    stream::StreamExt,
 };
 use hotshot_query_service::{
+    Error,
     availability::{self, AvailabilityDataSource, LeafId},
-    data_source::{storage::NodeStorage, VersionedDataSource},
+    data_source::{VersionedDataSource, storage::NodeStorage},
     merklized_state::{MerklizedStateDataSource, Snapshot},
     node::BlockId,
     types::HeightIndexed,
-    Error,
 };
 use hotshot_types::utils::{epoch_from_block_number, root_block_in_epoch};
 use itertools::izip;
@@ -21,7 +21,7 @@ use jf_merkle_tree_compat::MerkleTreeScheme;
 use light_client::consensus::{
     header::HeaderProof, leaf::LeafProof, namespace::NamespaceProof, payload::PayloadProof,
 };
-use tide_disco::{method::ReadState, Api, RequestParams, StatusCode};
+use tide_disco::{Api, RequestParams, StatusCode, method::ReadState};
 use vbs::version::StaticVersionType;
 
 use crate::api::data_source::{NodeStateDataSource, StakeTableDataSource};
@@ -556,7 +556,7 @@ mod test {
     use futures::future::join_all;
     use hotshot_query_service::{
         availability::{BlockQueryData, TransactionIndex, VidCommonQueryData},
-        data_source::{storage::UpdateAvailabilityStorage, Transaction},
+        data_source::{Transaction, storage::UpdateAvailabilityStorage},
         merklized_state::UpdateStateData,
     };
     use hotshot_types::simple_certificate::CertificatePair;
@@ -564,8 +564,8 @@ mod test {
     use light_client::{
         consensus::leaf::{FinalityProof, LeafProofHint},
         testing::{
-            leaf_chain, leaf_chain_with_upgrade, AlwaysTrueQuorum, TestClient, VersionCheckQuorum,
-            ENABLE_EPOCHS, LEGACY_VERSION,
+            AlwaysTrueQuorum, ENABLE_EPOCHS, LEGACY_VERSION, TestClient, VersionCheckQuorum,
+            leaf_chain, leaf_chain_with_upgrade,
         },
     };
     use tide_disco::Error;
@@ -573,7 +573,7 @@ mod test {
 
     use super::*;
     use crate::api::{
-        data_source::{testing::TestableSequencerDataSource, SequencerDataSource},
+        data_source::{SequencerDataSource, testing::TestableSequencerDataSource},
         sql::DataSource,
     };
 

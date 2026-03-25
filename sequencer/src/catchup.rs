@@ -7,11 +7,13 @@ use std::{
 };
 
 use alloy::primitives::U256;
-use anyhow::{anyhow, bail, ensure, Context};
+use anyhow::{Context, anyhow, bail, ensure};
 use async_lock::RwLock;
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
 use espresso_types::{
+    BackoffParams, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
+    FeeMerkleTree, Leaf2, NodeState, PubKey, SeqTypes, ValidatedState,
     config::PublicNetworkConfig,
     traits::SequencerPersistence,
     v0::traits::StateCatchup,
@@ -20,18 +22,17 @@ use espresso_types::{
         RewardMerkleTreeV1,
     },
     v0_4::{
-        forgotten_accounts_include, PermittedRewardMerkleTreeV2, RewardAccountProofV2,
-        RewardAccountV2, RewardMerkleCommitmentV2, RewardMerkleTreeV2,
+        PermittedRewardMerkleTreeV2, RewardAccountProofV2, RewardAccountV2,
+        RewardMerkleCommitmentV2, RewardMerkleTreeV2, forgotten_accounts_include,
     },
-    BackoffParams, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
-    FeeMerkleTree, Leaf2, NodeState, PubKey, SeqTypes, ValidatedState,
 };
 use futures::{
+    StreamExt,
     future::{Future, FutureExt, TryFuture, TryFutureExt},
     stream::FuturesUnordered,
-    StreamExt,
 };
 use hotshot_types::{
+    ValidatorConfig,
     consensus::Consensus,
     data::ViewNumber,
     message::UpgradeLock,
@@ -39,16 +40,14 @@ use hotshot_types::{
     simple_certificate::LightClientStateUpdateCertificateV2,
     stake_table::HSStakeTable,
     traits::{
+        ValidatedState as ValidatedStateTrait,
         metrics::{Counter, CounterFamily, Metrics},
         network::ConnectedNetwork,
-        node_implementation::{ConsensusTime as _, NodeType},
-        ValidatedState as ValidatedStateTrait,
     },
-    utils::{verify_leaf_chain, View, ViewInner},
-    ValidatorConfig,
+    utils::{View, ViewInner, verify_leaf_chain},
 };
 use itertools::Itertools;
-use jf_merkle_tree_compat::{prelude::MerkleNode, ForgetableMerkleTreeScheme, MerkleTreeScheme};
+use jf_merkle_tree_compat::{ForgetableMerkleTreeScheme, MerkleTreeScheme, prelude::MerkleNode};
 use parking_lot::Mutex;
 use priority_queue::PriorityQueue;
 use serde::de::DeserializeOwned;
@@ -174,7 +173,7 @@ impl<ApiVer: StaticVersionType> StatePeers<ApiVer> {
         while let Some((id, score)) = scores.pop() {
             let client = &self.clients[id];
             tracing::info!("fetching from {}", client.url);
-            match timeout(timeout_dur, f(client.clone()).into_future()).await {
+            match timeout(timeout_dur, TryFutureExt::into_future(f(client.clone()))).await {
                 Ok(Ok(t)) => {
                     requests.insert(id, true);
                     res = Ok(t);
@@ -399,17 +398,35 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
         &self,
         retry: usize,
         height: u64,
-        _view: ViewNumber,
+        view: ViewNumber,
         reward_merkle_tree_root: RewardMerkleCommitmentV2,
         accounts: Arc<Vec<RewardAccountV2>>,
     ) -> anyhow::Result<PermittedRewardMerkleTreeV2> {
         let result = self
             .fetch(retry, |client| async move {
-                let tree_bytes = client
+                // Try the catchup endpoint first which returns tree from consensuss decided state
+                // if not present, then fall back to
+                // the reward-state-v2 endpoint which returns from storage decided state
+                let tree_bytes = match client
                     .inner
-                    .get::<Vec<u8>>(&format!("reward-state-v2/reward-merkle-tree-v2/{height}",))
+                    .get::<Vec<u8>>(&format!("catchup/reward-merkle-tree-v2/{height}/{}", *view))
                     .send()
-                    .await?;
+                    .await
+                {
+                    Ok(bytes) => bytes,
+                    Err(err) => {
+                        tracing::info!(
+                            "catchup endpoint failed, falling back to reward-state-v2: {err:#}"
+                        );
+                        client
+                            .inner
+                            .get::<Vec<u8>>(&format!(
+                                "reward-state-v2/reward-merkle-tree-v2/{height}"
+                            ))
+                            .send()
+                            .await?
+                    },
+                };
 
                 Ok::<Vec<u8>, anyhow::Error>(tree_bytes)
             })
@@ -1642,7 +1659,7 @@ impl StateCatchup for ParallelStateCatchup {
 #[allow(clippy::type_complexity)]
 pub async fn add_fee_accounts_to_state<N: ConnectedNetwork<PubKey>, P: SequencerPersistence>(
     consensus: &Arc<RwLock<Consensus<SeqTypes>>>,
-    view: &<SeqTypes as NodeType>::View,
+    view: &ViewNumber,
     accounts: &[FeeAccount],
     tree: &FeeMerkleTree,
     leaf: Leaf2,
@@ -1699,7 +1716,7 @@ pub async fn add_v2_reward_accounts_to_state<
     P: SequencerPersistence,
 >(
     consensus: &Arc<RwLock<Consensus<SeqTypes>>>,
-    view: &<SeqTypes as NodeType>::View,
+    view: &ViewNumber,
     accounts: &[RewardAccountV2],
     tree: &RewardMerkleTreeV2,
     leaf: Leaf2,
@@ -1756,7 +1773,7 @@ pub async fn add_v1_reward_accounts_to_state<
     P: SequencerPersistence,
 >(
     consensus: &Arc<RwLock<Consensus<SeqTypes>>>,
-    view: &<SeqTypes as NodeType>::View,
+    view: &ViewNumber,
     accounts: &[RewardAccountV1],
     tree: &RewardMerkleTreeV1,
     leaf: Leaf2,
