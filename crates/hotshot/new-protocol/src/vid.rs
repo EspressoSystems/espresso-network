@@ -13,13 +13,13 @@ use crate::events::{VidDisperseRequest, VidShareInput};
 type VidDisperseResult<T> = Result<(ViewNumber, VidCommitment2, VidDisperse2<T>), ()>;
 type VidShareResult<T> = Result<(ViewNumber, VidCommitment2, <T as NodeType>::BlockPayload), ()>;
 
-pub struct VidDisperseTask<T: NodeType> {
+pub struct VidDisperser<T: NodeType> {
     calculations: BTreeMap<ViewNumber, AbortHandle>,
     epoch_membership_coordinator: EpochMembershipCoordinator<T>,
     tasks: JoinSet<VidDisperseResult<T>>,
 }
 
-impl<T: NodeType> VidDisperseTask<T> {
+impl<T: NodeType> VidDisperser<T> {
     pub fn new(epoch_membership_coordinator: EpochMembershipCoordinator<T>) -> Self {
         Self {
             calculations: BTreeMap::new(),
@@ -92,14 +92,14 @@ impl<T: NodeType> VidShareAccumulator<T> {
 }
 
 #[derive(Default)]
-pub struct VidReconstructionTask<T: NodeType> {
+pub struct VidReconstructor<T: NodeType> {
     accumulators: BTreeMap<ViewNumber, VidShareAccumulator<T>>,
     reconstructed: BTreeSet<ViewNumber>,
     tasks: JoinSet<VidShareResult<T>>,
     calculations: BTreeMap<ViewNumber, AbortHandle>,
 }
 
-impl<T: NodeType> VidReconstructionTask<T> {
+impl<T: NodeType> VidReconstructor<T> {
     pub fn new() -> Self {
         Self {
             accumulators: BTreeMap::new(),

@@ -13,14 +13,14 @@ pub mod testing {
     use crate::{
         Outbox,
         consensus::Consensus,
-        drb::DrbRequestTask,
+        drb::DrbRequester,
         events::*,
         helpers::upgrade_lock,
         message::{Certificate1, Certificate2, ConsensusMessage, Vote2},
         tests::common::utils::{MockBlock, PendingIfNone, mock_builder_fee, state_verified_input},
         validated_state::ValidatedStateManager,
-        vid::{VidDisperseTask, VidReconstructionTask},
-        vote::VoteCollectionTask,
+        vid::{VidDisperser, VidReconstructor},
+        vote::VoteCollector,
     };
 
     /// MockCoordinator is for testing the various different modules the coordinator will
@@ -36,12 +36,11 @@ pub mod testing {
         pub shutdown_rx: tokio::sync::oneshot::Receiver<()>,
         pub state_manager: Option<ValidatedStateManager<TestTypes>>,
         pub vote1_task:
-            Option<VoteCollectionTask<TestTypes, QuorumVote2<TestTypes>, Certificate1<TestTypes>>>,
-        pub vote2_task:
-            Option<VoteCollectionTask<TestTypes, Vote2<TestTypes>, Certificate2<TestTypes>>>,
-        pub vid_disperse_task: Option<VidDisperseTask<TestTypes>>,
-        pub vid_reconstruction_task: Option<VidReconstructionTask<TestTypes>>,
-        pub drb_request_task: Option<DrbRequestTask>,
+            Option<VoteCollector<TestTypes, QuorumVote2<TestTypes>, Certificate1<TestTypes>>>,
+        pub vote2_task: Option<VoteCollector<TestTypes, Vote2<TestTypes>, Certificate2<TestTypes>>>,
+        pub vid_disperse_task: Option<VidDisperser<TestTypes>>,
+        pub vid_reconstruction_task: Option<VidReconstructor<TestTypes>>,
+        pub drb_request_task: Option<DrbRequester>,
         pub membership_coordinator: EpochMembershipCoordinator<TestTypes>,
         pub outbox: Outbox<ConsensusOutput<TestTypes>>,
         pub received_events: Vec<ConsensusOutput<TestTypes>>,
@@ -228,9 +227,6 @@ pub mod testing {
                     if let Some(drb_request_task) = &mut self.drb_request_task {
                         drb_request_task.request_drb(drb_input.clone());
                     }
-                },
-                Action::Shutdown => {
-                    unreachable!()
                 },
             }
         }

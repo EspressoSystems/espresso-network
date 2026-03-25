@@ -1,112 +1,103 @@
-use anyhow::{Context, Result};
+use hotshot::traits::NetworkError;
 use hotshot_types::{
+    data::{EpochNumber, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::{EXTERNAL_MESSAGE_VERSION, UpgradeLock},
-    traits::{network::ConnectedNetwork, node_implementation::NodeType},
-};
-use vbs::version::Version;
-
-use crate::{
-    events::NetworkEvent,
-    message::{ConsensusMessage, Message, MessageType, ViewSyncMessage},
+    traits::{
+        network::{BroadcastDelay, ConnectedNetwork, Topic},
+        node_implementation::NodeType,
+    },
+    vote::HasViewNumber,
 };
 
-pub struct Network<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> {
+use crate::message::Message;
+
+pub type Result<T> = std::result::Result<T, NetworkError>;
+
+pub struct Network<T: NodeType, N> {
     network: N,
     membership_coordinator: EpochMembershipCoordinator<T>,
     upgrade_lock: UpgradeLock<T>,
 }
 
-impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Network<T, N> {
-    pub fn new(
-        network: N,
-        membership_coordinator: EpochMembershipCoordinator<T>,
-        upgrade_lock: UpgradeLock<T>,
-    ) -> Self {
+impl<T, N> Network<T, N>
+where
+    T: NodeType,
+    N: ConnectedNetwork<T::SignatureKey>,
+{
+    pub fn new(n: N, m: EpochMembershipCoordinator<T>, u: UpgradeLock<T>) -> Self {
         Self {
-            network,
-            membership_coordinator,
-            upgrade_lock,
+            network: n,
+            membership_coordinator: m,
+            upgrade_lock: u,
         }
     }
 
-    pub async fn recv_message(&self) -> Result<ConsensusMessage<T>> {
-        let message = self.network.recv_message().await?;
-        let message: Message<T> = self.deserialize(message)?;
-        match message.message_type {
-            MessageType::Consensus(consensus_message) => Ok(consensus_message),
-            _ => Err(anyhow::anyhow!("Received a non-consensus message")),
-        }
+    pub async fn receive(&mut self) -> Result<Message<T>> {
+        let m = self.network.recv_message().await?;
+        self.deserialize(m)
     }
 
-    async fn handle_event(&self, event: NetworkEvent<T>) {
-        match event {
-            NetworkEvent::SendMessage(message) => {
-                self.send_message(message).await;
-            },
-            NetworkEvent::ViewChanged(view, epoch) => {
-                self.network
-                    .update_view(view, Some(epoch), self.membership_coordinator.clone())
-                    .await;
-            },
-        }
-    }
-    pub async fn send_message(&self, message: ConsensusMessage<T>) {
-        todo!()
-    }
-    async fn handle_message(&self, message: Vec<u8>) -> Result<()> {
-        let message = self.deserialize(message)?;
-        match message.message_type {
-            MessageType::Consensus(consensus_message) => {
-                self.handle_consensus_message(consensus_message).await;
-            },
-            MessageType::ViewSync(view_sync_message) => {
-                self.handle_view_sync_message(view_sync_message).await;
-            },
-            MessageType::External(external_message) => {
-                self.handle_external_message(external_message).await;
-            },
-        }
+    pub async fn broadcast(&mut self, msg: Message<T>) -> Result<()> {
+        let view = msg.view_number();
+        let bytes = self.serialize(&msg)?;
+        self.network
+            .broadcast_message(view, bytes, Topic::Global, BroadcastDelay::None)
+            .await?;
         Ok(())
     }
-    async fn handle_consensus_message(&self, consensus_message: ConsensusMessage<T>) {
-        todo!()
-    }
-    async fn handle_view_sync_message(&self, view_sync_message: ViewSyncMessage<T>) {
-        todo!()
-    }
-    async fn handle_external_message(&self, external_message: Vec<u8>) {
-        todo!()
-    }
-    fn deserialize(&self, message: Vec<u8>) -> Result<Message<T>> {
-        // Deserialize the message and get the version
-        let (deserialized_message, version): (Message<T>, Version) =
-            match self.upgrade_lock.deserialize(&message) {
-                Ok(message) => message,
-                Err(e) => {
-                    tracing::error!("Failed to deserialize message: {:?}", e);
-                    return Err(anyhow::anyhow!("Failed to deserialize message: {:?}", e));
-                },
-            };
 
-        // Special case: external messages (version 0.0). We want to make sure it is an external message
-        // and warn and continue otherwise.
-        if version == EXTERNAL_MESSAGE_VERSION
-            && !matches!(
-                deserialized_message.message_type,
-                MessageType::<T>::External(_)
-            )
-        {
-            tracing::warn!("Received a non-external message with version 0.0");
-            return Err(anyhow::anyhow!(
-                "Received a non-external message with version 0.0"
-            ));
-        }
-        Ok(deserialized_message)
+    pub async fn unicast(&mut self, to: T::SignatureKey, msg: Message<T>) -> Result<()> {
+        let view = msg.view_number();
+        let bytes = self.serialize(&msg)?;
+        self.network.direct_message(view, bytes, to).await?;
+        Ok(())
     }
-    fn serialize(&self, message: Message<T>) -> Result<Vec<u8>> {
+
+    pub async fn update_view(&mut self, v: ViewNumber, e: EpochNumber) {
+        self.network
+            .update_view(v, Some(e), self.membership_coordinator.clone())
+            .await;
+    }
+
+    fn deserialize(&self, bytes: Vec<u8>) -> Result<Message<T>> {
+        match self.upgrade_lock.deserialize::<Message<T>>(&bytes) {
+            Ok((m, v)) => {
+                if v == EXTERNAL_MESSAGE_VERSION && !m.is_external() {
+                    let e = "received a non-external message with version 0.0".to_string();
+                    return Err(NetworkError::FailedToDeserialize(e));
+                }
+                Ok(m)
+            },
+            Err(err) => Err(NetworkError::FailedToDeserialize(err.to_string())),
+        }
+    }
+
+    fn serialize(&self, m: &Message<T>) -> Result<Vec<u8>> {
         self.upgrade_lock
-            .serialize(&message)
-            .context("Failed to serialize message")
+            .serialize(m)
+            .map_err(|e| NetworkError::FailedToSerialize(e.to_string()))
+    }
+}
+
+pub fn is_critical(e: &NetworkError) -> bool {
+    match e {
+        NetworkError::ChannelReceiveError(_)
+        | NetworkError::ChannelSendError(_)
+        | NetworkError::ConfigError(_)
+        | NetworkError::ListenError(_)
+        | NetworkError::ShutDown
+        | NetworkError::Unimplemented => true,
+
+        NetworkError::FailedToDeserialize(_)
+        | NetworkError::FailedToSerialize(_)
+        | NetworkError::LookupError(_)
+        | NetworkError::MessageReceiveError(_)
+        | NetworkError::MessageSendError(_)
+        | NetworkError::NoPeersYet
+        | NetworkError::RequestCancelled
+        | NetworkError::Timeout(_) => false,
+
+        NetworkError::Multiple(es) => es.iter().any(is_critical),
     }
 }

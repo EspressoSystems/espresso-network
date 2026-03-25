@@ -1,175 +1,162 @@
-use std::sync::Arc;
-
-use hotshot::{
-    traits::NodeImplementation,
-    types::{SignatureKey, SystemContextHandle},
-};
+use bon::Builder;
+use hotshot::{traits::NodeImplementation, types::SystemContextHandle};
 use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
-    message::UpgradeLock,
     simple_certificate::{QuorumCertificate2, TimeoutCertificate2},
     simple_vote::{QuorumVote2, TimeoutVote2},
-    traits::{
-        block_contents::BlockHeader,
-        node_implementation::NodeType,
-        storage::{null_load_drb_progress_fn, null_store_drb_progress_fn},
-    },
+    traits::{block_contents::BlockHeader, node_implementation::NodeType},
 };
+use tokio::select;
+use tracing::{error, warn};
 
 use crate::{
     Outbox,
     consensus::Consensus,
-    drb::DrbRequestTask,
+    drb::DrbRequester,
     events::*,
-    io::network::Network,
-    message::{Certificate2, ConsensusMessage, Vote2},
+    io::network::{Network, is_critical},
+    message::{Certificate2, ConsensusMessage, Message, MessageType, Vote2},
     validated_state::ValidatedStateManager,
-    vid::{VidDisperseTask, VidReconstructionTask},
-    vote::VoteCollectionTask,
+    vid::{VidDisperser, VidReconstructor},
+    vote::VoteCollector,
 };
 
-// TODO: Use a builder pattern to construct the coordinator
+#[derive(Builder)]
 pub(crate) struct Coordinator<T: NodeType, I: NodeImplementation<T>> {
     external_tx: async_broadcast::Sender<hotshot_types::event::Event<T>>,
     system_context: SystemContextHandle<T, I>,
     consensus: Consensus<T>,
     network: Network<T, I::Network>,
     state_manager: ValidatedStateManager<T>,
-    vid_disperse_task: VidDisperseTask<T>,
-    vid_reconstruction_task: VidReconstructionTask<T>,
-    vote1_task: VoteCollectionTask<T, QuorumVote2<T>, QuorumCertificate2<T>>,
-    vote2_task: VoteCollectionTask<T, Vote2<T>, Certificate2<T>>,
-    timeout_vote_task: VoteCollectionTask<T, TimeoutVote2<T>, TimeoutCertificate2<T>>,
-    drb_request_task: DrbRequestTask,
+    vid_disperser: VidDisperser<T>,
+    vid_reconstructor: VidReconstructor<T>,
+    vote1_collector: VoteCollector<T, QuorumVote2<T>, QuorumCertificate2<T>>,
+    vote2_collector: VoteCollector<T, Vote2<T>, Certificate2<T>>,
+    timeout_collector: VoteCollector<T, TimeoutVote2<T>, TimeoutCertificate2<T>>,
+    drb_requester: DrbRequester,
     membership_coordinator: EpochMembershipCoordinator<T>,
+    #[builder(default)]
     outbox: Outbox<ConsensusOutput<T>>,
 }
 
 impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
-    #[allow(clippy::too_many_arguments)]
-    pub async fn new(
-        external_tx: async_broadcast::Sender<hotshot_types::event::Event<T>>,
-        system_context: SystemContextHandle<T, I>,
-        membership_coordinator: EpochMembershipCoordinator<T>,
-        public_key: T::SignatureKey,
-        private_key: <T::SignatureKey as SignatureKey>::PrivateKey,
-        instance_state: Arc<T::InstanceState>,
-        upgrade_lock: UpgradeLock<T>,
-        network: Network<T, I::Network>,
-    ) -> Self {
-        Self {
-            external_tx,
-            system_context,
-            consensus: Consensus::new(membership_coordinator.clone(), public_key, private_key),
-            network,
-            state_manager: ValidatedStateManager::new(instance_state),
-            vid_disperse_task: VidDisperseTask::new(membership_coordinator.clone()),
-            vid_reconstruction_task: VidReconstructionTask::new(),
-            vote1_task: VoteCollectionTask::new(
-                membership_coordinator.clone(),
-                upgrade_lock.clone(),
-            ),
-            vote2_task: VoteCollectionTask::new(
-                membership_coordinator.clone(),
-                upgrade_lock.clone(),
-            ),
-            timeout_vote_task: VoteCollectionTask::new(
-                membership_coordinator.clone(),
-                upgrade_lock.clone(),
-            ),
-            drb_request_task: DrbRequestTask::new(
-                null_store_drb_progress_fn(),
-                null_load_drb_progress_fn(),
-            ),
-            membership_coordinator,
-            outbox: Outbox::new(),
-        }
-    }
-
     pub async fn run(mut self) {
         loop {
-            tokio::select! {
-                Ok(message) = self.network.recv_message() => {
-                    match message {
-                        ConsensusMessage::Proposal(proposal) => {
-                            self.vid_reconstruction_task.handle_vid_share(VidShareInput {
-                                share: proposal.vid_share.clone(),
-                                metadata: Some(proposal.proposal.data.block_header.metadata().clone()),
-                            });
-                            self.process_input(ConsensusInput::Proposal(proposal)).await;
-
-                        }
-                        ConsensusMessage::Vote1(vote1) => {
-                            self.vote1_task.accumulate_vote(vote1.vote).await;
-                            self.vid_reconstruction_task.handle_vid_share(VidShareInput {
-                                share: vote1.vid_share,
-                                metadata: None,
-                            });
-                        }
-                        ConsensusMessage::Vote2(vote2) => {
-                            self.vote2_task.accumulate_vote(vote2).await;
-                        }
-                        ConsensusMessage::Certificate1(certificate1, _key) => {
-                            self.process_input(ConsensusInput::Certificate1(certificate1)).await;
-                        }
-                        ConsensusMessage::Certificate2(certificate2, _key) => {
-                            self.process_input(ConsensusInput::Certificate2(certificate2)).await;
-                        }
-                        ConsensusMessage::TimeoutVote(timeout_vote) => {
-                            self.timeout_vote_task.accumulate_vote(timeout_vote).await;
-                        }
-                        ConsensusMessage::Transactions(transactions, view) => {
-                            todo!()
-                        }
-                        ConsensusMessage::Checkpoint(view, epoch) => {
-                            todo!()
-                        }
+            select! {
+                message = self.network.receive() => match message {
+                    Ok(m) => {
+                        self.on_message(m).await
                     }
-                }
+                    Err(err) if is_critical(&err) => {
+                        error!(%err, "critical network error => exiting");
+                        break
+                    }
+                    Err(err) => {
+                        warn!(%err, "network error")
+                    }
+                },
                 Some(state_event) = self.state_manager.next() => {
                     if let Ok(input) = ConsensusInput::try_from(state_event) {
-                        self.process_input(input).await;
+                        self.evaluate(input).await;
                     }
                 }
-                Some(cert1) = self.vote1_task.next() => {
-                    self.process_input(ConsensusInput::Certificate1(cert1)).await;
+                Some(tcert) = self.timeout_collector.next() => {
+                    self.evaluate(ConsensusInput::TimeoutCertificate(tcert)).await;
                 }
-                Some(cert2) = self.vote2_task.next() => {
-                    self.process_input(ConsensusInput::Certificate2(cert2)).await;
+                Some(cert1) = self.vote1_collector.next() => {
+                    self.evaluate(ConsensusInput::Certificate1(cert1)).await;
                 }
-                Some(Ok((view, vid_commitment, vid_disperse))) = self.vid_disperse_task.next() => {
-                    self.process_input(ConsensusInput::VidDisperseCreated(view, vid_disperse)).await;
+                Some(cert2) = self.vote2_collector.next() => {
+                    self.evaluate(ConsensusInput::Certificate2(cert2)).await;
                 }
-                Some(Ok((view, vid_commitment, payload))) = self.vid_reconstruction_task.next() => {
-                    self.process_input(ConsensusInput::BlockReconstructed(view, vid_commitment)).await;
-                }
-                Some((_epoch, drb_result)) = self.drb_request_task.next() => {
+                Some(item) = self.vid_disperser.next() => match item {
+                    Ok((view, _, disperse)) => {
+                        self.evaluate(ConsensusInput::VidDisperseCreated(view, disperse)).await;
+                    }
+                    Err(err) => {
+                        warn!(?err, "vid disperser error")
+                    }
+                },
+                Some(item) = self.vid_reconstructor.next() => match item {
+                    Ok((view, commitment, _)) => {
+                        self.evaluate(ConsensusInput::BlockReconstructed(view, commitment)).await;
+                    }
+                    Err(err) => {
+                        warn!(?err, "vid reconstructor error")
+                    }
+                },
+                Some((_epoch, drb_result)) = self.drb_requester.next() => {
                     todo!()
                 }
+                else => {
+                    error!("all coordinator inputs are closed => exiting");
+                    break
+                }
             }
         }
     }
 
-    async fn process_input(&mut self, input: ConsensusInput<T>) {
+    /// Process an incoming network message.
+    async fn on_message(&mut self, msg: Message<T>) {
+        match msg.message_type {
+            MessageType::Consensus(msg) => match msg {
+                ConsensusMessage::Proposal(proposal) => {
+                    self.vid_reconstructor.handle_vid_share(VidShareInput {
+                        share: proposal.vid_share.clone(),
+                        metadata: Some(proposal.proposal.data.block_header.metadata().clone()),
+                    });
+                    self.evaluate(ConsensusInput::Proposal(proposal)).await;
+                },
+                ConsensusMessage::Vote1(vote1) => {
+                    self.vote1_collector.accumulate_vote(vote1.vote).await;
+                    self.vid_reconstructor.handle_vid_share(VidShareInput {
+                        share: vote1.vid_share,
+                        metadata: None,
+                    });
+                },
+                ConsensusMessage::Vote2(vote2) => {
+                    self.vote2_collector.accumulate_vote(vote2).await;
+                },
+                ConsensusMessage::Certificate1(certificate1, _key) => {
+                    self.evaluate(ConsensusInput::Certificate1(certificate1))
+                        .await;
+                },
+                ConsensusMessage::Certificate2(certificate2, _key) => {
+                    self.evaluate(ConsensusInput::Certificate2(certificate2))
+                        .await;
+                },
+                ConsensusMessage::TimeoutVote(timeout_vote) => {
+                    self.timeout_collector.accumulate_vote(timeout_vote).await;
+                },
+                ConsensusMessage::Transactions(transactions, view) => {
+                    todo!()
+                },
+                ConsensusMessage::Checkpoint(view, epoch) => {
+                    todo!()
+                },
+            },
+            MessageType::ViewSync(_) => todo!(),
+            MessageType::External(_) => todo!(),
+        }
+    }
+
+    async fn evaluate(&mut self, input: ConsensusInput<T>) {
         self.consensus.apply(input, &mut self.outbox).await;
-        self.process_outputs().await
-    }
-
-    async fn process_outputs(&mut self) {
         while let Some(output) = self.outbox.pop_front() {
-            if let ConsensusOutput::Action(action) = &output {
-                self.handle_action(action).await;
+            match output {
+                ConsensusOutput::Action(a) => self.handle_action(a).await,
+                ConsensusOutput::Event(e) => self.handle_event(e),
             }
         }
     }
 
-    async fn handle_action(&mut self, action: &Action<T>) {
+    async fn handle_action(&mut self, action: Action<T>) {
         match action {
             Action::SendProposal(..) => {},
             Action::SendVote1(..) => {},
             Action::SendVote2(..) => {},
             Action::RequestState(state_request) => {
-                self.state_manager.request_state(state_request.clone());
+                self.state_manager.request_state(state_request);
             },
             Action::RequestBlockAndHeader(req) => {
                 // TODO: add a block builder, and use it to build the block,
@@ -177,21 +164,21 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                 todo!()
             },
             Action::RequestVidDisperse(view, epoch, block, metadata) => {
-                self.vid_disperse_task
-                    .request_vid_disperse(VidDisperseRequest {
-                        view: *view,
-                        epoch: *epoch,
-                        block: block.clone(),
-                        metadata: metadata.clone(),
-                    });
+                self.vid_disperser.request_vid_disperse(VidDisperseRequest {
+                    view,
+                    epoch,
+                    block,
+                    metadata,
+                });
             },
             Action::RequestProposal(_view, _commitment) => {},
             Action::RequestDRB(drb_input) => {
-                self.drb_request_task.request_drb(drb_input.clone());
-            },
-            Action::Shutdown => {
-                unreachable!()
+                self.drb_requester.request_drb(drb_input);
             },
         }
+    }
+
+    fn handle_event(&mut self, event: Event<T>) {
+        error!("TODO")
     }
 }

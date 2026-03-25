@@ -32,7 +32,7 @@ fn generate_vote_commitment<T: NodeType, V: Vote<T>>(
     }
 }
 
-pub(crate) struct VoteCollectionTask<T: NodeType, V, C> {
+pub(crate) struct VoteCollector<T: NodeType, V, C> {
     accumulators: BTreeMap<ViewNumber, (mpsc::Sender<V>, AbortHandle)>,
     completed_certificates: BTreeSet<ViewNumber>,
     epoch_membership_coordinator: EpochMembershipCoordinator<T>,
@@ -40,7 +40,7 @@ pub(crate) struct VoteCollectionTask<T: NodeType, V, C> {
     tasks: JoinSet<C>,
 }
 
-impl<T, V, C> VoteCollectionTask<T, V, C>
+impl<T, V, C> VoteCollector<T, V, C>
 where
     T: NodeType,
     V: Vote<T> + HasEpoch + Send + Sync + 'static,
@@ -172,7 +172,7 @@ mod tests {
     };
     use tokio::{sync::mpsc, time::timeout};
 
-    use super::VoteCollectionTask;
+    use super::VoteCollector;
     use crate::{
         helpers::upgrade_lock,
         message::{Certificate1, Certificate2, Vote2, Vote2Data},
@@ -247,11 +247,11 @@ mod tests {
     /// - cert notification channel (receives (view, cert) when a certificate is formed)
     /// - task JoinHandle (abort this to clean up)
     async fn setup_cert1_task()
-    -> VoteCollectionTask<TestTypes, QuorumVote2<TestTypes>, Certificate1<TestTypes>> {
+    -> VoteCollector<TestTypes, QuorumVote2<TestTypes>, Certificate1<TestTypes>> {
         setup_task::<QuorumVote2<TestTypes>, Certificate1<TestTypes>>().await
     }
     async fn setup_cert2_task()
-    -> VoteCollectionTask<TestTypes, Vote2<TestTypes>, Certificate2<TestTypes>> {
+    -> VoteCollector<TestTypes, Vote2<TestTypes>, Certificate2<TestTypes>> {
         setup_task::<Vote2<TestTypes>, Certificate2<TestTypes>>().await
     }
 
@@ -259,9 +259,9 @@ mod tests {
     async fn setup_task<
         V: Vote<TestTypes> + HasEpoch + Send + Sync + 'static,
         C: Certificate<TestTypes, V::Commitment, Voteable = V::Commitment> + Send + Sync + 'static,
-    >() -> VoteCollectionTask<TestTypes, V, C> {
+    >() -> VoteCollector<TestTypes, V, C> {
         let membership = mock_membership().await;
-        VoteCollectionTask::<TestTypes, V, C>::new(membership, upgrade_lock())
+        VoteCollector::<TestTypes, V, C>::new(membership, upgrade_lock())
     }
 
     /// Wait for exactly `expected` certificates, then abort the task.
@@ -289,7 +289,7 @@ mod tests {
             + Sync
             + 'static,
     >(
-        task: &mut VoteCollectionTask<TestTypes, V, C>,
+        task: &mut VoteCollector<TestTypes, V, C>,
     ) {
         let result = tokio::time::timeout(NO_CERT_TIMEOUT, task.next()).await;
         match result {

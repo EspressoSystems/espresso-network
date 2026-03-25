@@ -18,13 +18,13 @@ use super::utils::mock_membership;
 use crate::{
     Outbox,
     consensus::Consensus,
-    drb::DrbRequestTask,
+    drb::DrbRequester,
     events::ConsensusOutput,
     helpers::upgrade_lock,
     tests::common::mock::testing::MockCoordinator,
     validated_state::ValidatedStateManager,
-    vid::{VidDisperseTask, VidReconstructionTask},
-    vote::VoteCollectionTask,
+    vid::{VidDisperser, VidReconstructor},
+    vote::VoteCollector,
 };
 
 /// Test harness that spawns consensus + mock coordinator and provides
@@ -52,15 +52,15 @@ impl TestHarness {
 
         let store_drb_progress = null_store_drb_progress_fn();
         let load_drb_progress = null_load_drb_progress_fn();
-        let drb_request_task = DrbRequestTask::new(store_drb_progress, load_drb_progress);
+        let drb_request_task = DrbRequester::new(store_drb_progress, load_drb_progress);
 
-        let vote1_task = VoteCollectionTask::new(membership.clone(), upgrade_lock());
-        let vote2_task = VoteCollectionTask::new(membership.clone(), upgrade_lock());
+        let vote1_task = VoteCollector::new(membership.clone(), upgrade_lock());
+        let vote2_task = VoteCollector::new(membership.clone(), upgrade_lock());
 
         let consensus = Consensus::new(membership.clone(), public_key, private_key);
 
-        let vid_disperse_task = VidDisperseTask::new(membership.clone());
-        let vid_reconstruction_task = VidReconstructionTask::new();
+        let vid_disperse_task = VidDisperser::new(membership.clone());
+        let vid_reconstruction_task = VidReconstructor::new();
         let mock_coordinator = MockCoordinator {
             consensus,
             input_rx: coordinator_rx,
