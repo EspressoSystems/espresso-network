@@ -212,6 +212,7 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
             Action::SendVote1(..) => {},
             Action::SendVote2(..) => {},
             Action::SendTimeoutVote(..) => {},
+            Action::SendCheckpointVote(..) => {},
             Action::RequestState(state_request) => {
                 self.state_manager.request_state(state_request);
             },
@@ -240,6 +241,7 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
             Event::ViewChanged(view_number, _epoch) => {
                 self.timer.reset(view_number);
             },
+            Event::LeafDecided(leaves) => {},
 
             _ => error!("TODO"),
         }

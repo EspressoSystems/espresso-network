@@ -27,7 +27,7 @@ use crate::{
     Outbox,
     events::{Action, BlockAndHeaderRequest, ConsensusInput, ConsensusOutput, Event, StateRequest},
     helpers::{proposal_commitment, upgrade_lock},
-    message::{Certificate1, Certificate2, ProposalMessage, Vote1, Vote2Data},
+    message::{Certificate1, Certificate2, CheckpointData, ProposalMessage, Vote1, Vote2Data},
 };
 
 /// Protocol flow directive.
@@ -64,6 +64,8 @@ pub struct Consensus<T: NodeType> {
 
     public_key: T::SignatureKey,
     private_key: <T::SignatureKey as SignatureKey>::PrivateKey,
+
+    garbage_collection_interval: u64,
 }
 
 impl<T: NodeType> Consensus<T> {
@@ -92,6 +94,8 @@ impl<T: NodeType> Consensus<T> {
             voted_2_views: BTreeSet::new(),
             private_key,
             vid_shares: BTreeMap::new(),
+            // TODO: make this configurable or Constant
+            garbage_collection_interval: 100,
         }
     }
 
@@ -504,6 +508,10 @@ impl<T: NodeType> Consensus<T> {
         // we have a second certificate, and matching proposal, it is decided.
         let leaf = Leaf2::from_quorum_proposal(&QuorumProposalWrapper::from(proposal.clone()));
         self.last_decided_view = max(self.last_decided_view, leaf.view_number());
+        let mut gc = None;
+        if leaf.block_header().block_number() % self.garbage_collection_interval == 0 {
+            gc = Some((leaf.view_number(), leaf.justify_qc().epoch()));
+        }
         let mut decided = vec![leaf];
 
         let mut parent_view = proposal.justify_qc.view_number();
@@ -515,11 +523,36 @@ impl<T: NodeType> Consensus<T> {
                 break;
             }
             let leaf = Leaf2::from_quorum_proposal(&QuorumProposalWrapper::from(proposal.clone()));
+            if gc.is_none()
+                && leaf.block_header().block_number() % self.garbage_collection_interval == 0
+            {
+                gc = Some((leaf.view_number(), leaf.justify_qc().epoch()));
+            }
             decided.push(leaf);
             parent_view = proposal.justify_qc.view_number();
             parent_commit = proposal.justify_qc.data.leaf_commit;
         }
         outbox.push_back(Event::LeafDecided(decided));
+        if let Some(gc) = gc {
+            let gc_data = CheckpointData {
+                view: gc.0,
+                epoch: gc.1.unwrap_or_default(),
+            };
+            let vote = match SimpleVote::create_signed_vote(
+                gc_data,
+                view,
+                &self.public_key,
+                &self.private_key,
+                &upgrade_lock::<T>(),
+            ) {
+                Ok(vote) => vote,
+                Err(err) => {
+                    warn!(%view, %err, "failed to create signed checkpoint vote");
+                    return;
+                },
+            };
+            outbox.push_back(Action::SendCheckpointVote(vote));
+        }
     }
 
     #[instrument(level = "debug", skip_all)]

@@ -18,7 +18,9 @@ use hotshot_types::{
 
 use crate::{
     helpers::proposal_commitment,
-    message::{Certificate1, Certificate2, ConsensusMessage, ProposalMessage, Vote1, Vote2},
+    message::{
+        Certificate1, Certificate2, CheckpointVote, ConsensusMessage, ProposalMessage, Vote1, Vote2,
+    },
 };
 
 #[derive(Eq, PartialEq, Debug, Clone)]
@@ -85,6 +87,7 @@ pub enum Action<T: NodeType> {
     SendVote1(Vote1<T>),
     SendVote2(Vote2<T>),
     SendTimeoutVote(TimeoutVote2<T>),
+    SendCheckpointVote(CheckpointVote<T>),
     RequestState(StateRequest<T>),
     RequestBlockAndHeader(BlockAndHeaderRequest<T>),
     RequestVidDisperse(
