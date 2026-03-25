@@ -224,7 +224,7 @@ async fn test_timeout_votes_form_tc() {
 /// The 200ms timer is long enough for VID disperse to complete (~50-100ms)
 /// but short enough to actually fire during the test, proving the timeout
 /// mechanism does not interfere with the leader's proposal path.
-#[tokio::test(flavor = "multi_thread", worker_threads = 1S)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_leader_proposes_after_timeout_via_cpu_tasks() {
     let test_data = TestData::new(5).await;
     // Timeout cert for view 2 advances to view 3; we need to be leader of view 3
