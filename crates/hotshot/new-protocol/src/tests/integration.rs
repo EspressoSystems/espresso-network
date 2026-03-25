@@ -224,7 +224,7 @@ async fn test_timeout_votes_form_tc() {
 /// The 200ms timer is long enough for VID disperse to complete (~50-100ms)
 /// but short enough to actually fire during the test, proving the timeout
 /// mechanism does not interfere with the leader's proposal path.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1S)]
 async fn test_leader_proposes_after_timeout_via_cpu_tasks() {
     let test_data = TestData::new(5).await;
     // Timeout cert for view 2 advances to view 3; we need to be leader of view 3
@@ -235,7 +235,7 @@ async fn test_leader_proposes_after_timeout_via_cpu_tasks() {
     // fire for view 2 during the test.
     let harness = TestHarness::new_with_cpu_tasks_and_timer(
         leader_index,
-        std::time::Duration::from_millis(200),
+        std::time::Duration::from_millis(400),
     )
     .await;
 
@@ -244,7 +244,7 @@ async fn test_leader_proposes_after_timeout_via_cpu_tasks() {
 
     // Wait for cert1 formation + block reconstruction → locked_qc set,
     // and for the view 2 timer to fire (Timeout(2) sets timeout_view=2).
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
     // Send timeout votes for view 2 → CPU timeout collector forms TC
     // → consensus handles TC → leader of view 3 requests block/header → proposes.
@@ -254,7 +254,7 @@ async fn test_leader_proposes_after_timeout_via_cpu_tasks() {
     send_timeout_votes(&harness, &test_data, 1).await;
 
     // Wait for TC formation, block/header creation, VID disperse, and proposal
-    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     let events = harness.shutdown().await;
 
     // Verify the timeout actually fired (not avoided)
