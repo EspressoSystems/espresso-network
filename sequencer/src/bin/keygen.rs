@@ -6,7 +6,7 @@ use std::{
     path::PathBuf,
 };
 
-use alloy::{hex, signers::local::coins_bip39::Mnemonic};
+use alloy::signers::local::coins_bip39::Mnemonic;
 use clap::{Parser, ValueEnum};
 use derive_more::Display;
 use hotshot::types::SignatureKey;
