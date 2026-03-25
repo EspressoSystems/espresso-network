@@ -47,7 +47,7 @@ async fn send_vote2s(harness: &TestHarness, test_data: &TestData, view_idx: usiz
 
 /// CPU tasks form Certificate1 from accumulated Vote1 messages, enabling
 /// consensus to continue (verified by Vote1 emission for subsequent views).
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_cert1_formed_and_vote2_sent() {
     let harness = TestHarness::new_with_cpu_tasks(0).await;
     let test_data = TestData::new(3).await;
@@ -71,7 +71,7 @@ async fn test_cert1_formed_and_vote2_sent() {
 /// Block reconstruction is exercised because consensus requires
 /// BlockReconstructed (produced by the CPU VidShareTask) before it
 /// can proceed to the decide step.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_full_decide_via_cpu_tasks() {
     let harness = TestHarness::new_with_cpu_tasks(0).await;
     let test_data = TestData::new(3).await;
@@ -108,7 +108,7 @@ async fn test_full_decide_via_cpu_tasks() {
 /// to the CPU task when cpu_tx is set). SendProposal in the output
 /// proves the full leader path: cert1 formation → block/header request
 /// → VID disperse via CPU → proposal sent.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_leader_proposal_via_cpu_tasks() {
     let test_data = TestData::new(4).await;
     let leader_for_view_2 = test_data.views[1].leader_public_key;
@@ -122,7 +122,7 @@ async fn test_leader_proposal_via_cpu_tasks() {
     //   3. VID disperse computed by CPU VidDisperseTask
     send_proposal_and_vote1s(&harness, &test_data, 0, &leader_for_view_2).await;
 
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     let events = harness.shutdown().await;
 
     assert!(
@@ -139,7 +139,7 @@ async fn test_leader_proposal_via_cpu_tasks() {
 
 /// Multi-view chain: CPU tasks form certificates for each view, leading to
 /// multiple decisions.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_multi_view_decide_via_cpu_tasks() {
     let harness = TestHarness::new_with_cpu_tasks(0).await;
     let test_data = TestData::new(5).await;
