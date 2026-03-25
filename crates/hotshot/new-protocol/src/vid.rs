@@ -6,20 +6,14 @@ use hotshot_types::{
     traits::{BlockPayload, node_implementation::NodeType},
     vid::avidm_gf2::{AvidmGf2Common, AvidmGf2Scheme, AvidmGf2Share},
 };
-use tokio::{
-    spawn,
-    sync::mpsc::{self},
-    task::{AbortHandle, JoinSet},
-};
+use tokio::task::{AbortHandle, JoinSet};
 
-use crate::{
-    coordinator::handle::CoordinatorHandle,
-    events::{VidDisperseRequest, VidShareInput},
-};
+use crate::events::{VidDisperseRequest, VidShareInput};
 
 type VidDisperseResult<T> = Result<(ViewNumber, VidCommitment2, VidDisperse2<T>), ()>;
+type VidShareResult<T> = Result<(ViewNumber, VidCommitment2, <T as NodeType>::BlockPayload), ()>;
 
-pub(crate) struct VidDisperseTask<T: NodeType> {
+pub struct VidDisperseTask<T: NodeType> {
     calculations: BTreeMap<ViewNumber, AbortHandle>,
     epoch_membership_coordinator: EpochMembershipCoordinator<T>,
     tasks: JoinSet<VidDisperseResult<T>>,
@@ -97,72 +91,75 @@ impl<T: NodeType> VidShareAccumulator<T> {
     }
 }
 
-pub(super) struct VidShareTask<T: NodeType> {
+#[derive(Default)]
+pub struct VidReconstructionTask<T: NodeType> {
     accumulators: BTreeMap<ViewNumber, VidShareAccumulator<T>>,
     reconstructed: BTreeSet<ViewNumber>,
-    rx: mpsc::Receiver<VidShareInput<T>>,
-    coordinator_handle: CoordinatorHandle<T>,
-    internal_tx: mpsc::Sender<(ViewNumber, VidCommitment2, T::BlockPayload)>,
-    internal_rx: mpsc::Receiver<(ViewNumber, VidCommitment2, T::BlockPayload)>,
+    tasks: JoinSet<VidShareResult<T>>,
+    calculations: BTreeMap<ViewNumber, AbortHandle>,
 }
 
-impl<T: NodeType> VidShareTask<T> {
-    pub fn new(
-        rx: mpsc::Receiver<VidShareInput<T>>,
-        coordinator_handle: CoordinatorHandle<T>,
-    ) -> Self {
-        let (internal_tx, internal_rx) = mpsc::channel(100);
+impl<T: NodeType> VidReconstructionTask<T> {
+    pub fn new() -> Self {
         Self {
             accumulators: BTreeMap::new(),
             reconstructed: BTreeSet::new(),
-            rx,
-            coordinator_handle,
-            internal_tx,
-            internal_rx,
+            tasks: JoinSet::new(),
+            calculations: BTreeMap::new(),
         }
     }
 
-    pub async fn run(mut self) {
+    pub(crate) fn handle_vid_share(&mut self, vid_share: VidShareInput<T>) {
+        let view = vid_share.share.view_number;
+        if self.reconstructed.contains(&view) {
+            return;
+        }
+        let payload_commitment = vid_share.share.payload_commitment;
+        let recipient_key = vid_share.share.recipient_key.clone();
+        let weight = vid_share.share.share.weight();
+        let accumulator = self
+            .accumulators
+            .entry(view)
+            .or_insert_with(|| VidShareAccumulator {
+                shares: Vec::new(),
+                accumulated_weight: 0,
+                seen_keys: HashSet::new(),
+                common: vid_share.share.common.clone(),
+                metadata: vid_share.metadata.clone(),
+            });
+        if !accumulator.seen_keys.insert(recipient_key) {
+            // Already have a share from this key, skip duplicate
+            return;
+        }
+        accumulator.accumulated_weight += weight;
+        accumulator.shares.push(vid_share.share.share);
+        if accumulator.has_enough_shares() {
+            self.try_reconstruct(view, payload_commitment);
+        }
+    }
+
+    pub async fn next(
+        &mut self,
+    ) -> Option<Result<(ViewNumber, VidCommitment2, <T as NodeType>::BlockPayload), ()>> {
         loop {
-            tokio::select! {
-                Some(input) = self.rx.recv() => {
-                    let view = input.share.view_number;
-                    if self.reconstructed.contains(&view) {
-                        continue;
-                    }
-                    let payload_commitment = input.share.payload_commitment;
-                    let recipient_key = input.share.recipient_key.clone();
-                    let weight = input.share.share.weight();
-                    let accumulator = self.accumulators.entry(view).or_insert_with(|| {
-                        VidShareAccumulator {
-                            shares: Vec::new(),
-                            accumulated_weight: 0,
-                            seen_keys: HashSet::new(),
-                            common: input.share.common.clone(),
-                            metadata: input.metadata.clone(),
-                        }
-                    });
-                    if !accumulator.seen_keys.insert(recipient_key) {
-                        // Already have a share from this key, skip duplicate
-                        continue;
-                    }
-                    accumulator.accumulated_weight += weight;
-                    accumulator.shares.push(input.share.share);
-                    if accumulator.has_enough_shares() {
-                        self.try_reconstruct(view, payload_commitment);
+            match self.tasks.join_next().await {
+                Some(Ok(result)) => {
+                    if let Ok((view, vid_commitment, payload)) = result {
+                        self.calculations.remove(&view);
+                        self.accumulators.remove(&view);
+                        self.reconstructed.insert(view);
+                        return Some(Ok((view, vid_commitment, payload)));
+                    } else {
+                        // TODO: Handle error
+                        return Some(Err(()));
                     }
                 },
-                Some((view, vid_commitment, payload)) = self.internal_rx.recv() => {
-                    self.accumulators.remove(&view);
-                    self.reconstructed.insert(view);
-                    let _ = self.coordinator_handle.respond_block_reconstructed(view, payload, vid_commitment).await;
-                },
-                else => break,
+                Some(Err(_)) => continue,
+                None => return None,
             }
         }
     }
-
-    fn try_reconstruct(&self, view: ViewNumber, payload_commitment: VidCommitment2) {
+    fn try_reconstruct(&mut self, view: ViewNumber, payload_commitment: VidCommitment2) {
         let Some(accumulator) = self.accumulators.get(&view) else {
             return;
         };
@@ -172,17 +169,15 @@ impl<T: NodeType> VidShareTask<T> {
         let Some(metadata) = accumulator.metadata.clone() else {
             return;
         };
-        let tx = self.internal_tx.clone();
-        spawn(async move {
-            let result =
-                tokio::task::spawn_blocking(move || AvidmGf2Scheme::recover(&common, &shares))
-                    .await;
-            let Ok(Ok(bytes)) = result else {
-                return;
+        let task = self.tasks.spawn_blocking(move || {
+            let Ok(result) = AvidmGf2Scheme::recover(&common, &shares) else {
+                // TODO: Handle error
+                return Err(());
             };
-            let payload = T::BlockPayload::from_bytes(&bytes, &metadata);
-            let _ = tx.send((view, payload_commitment, payload)).await;
+            let payload = T::BlockPayload::from_bytes(&result, &metadata);
+            Ok((view, payload_commitment, payload))
         });
+        self.calculations.insert(view, task);
     }
 }
 

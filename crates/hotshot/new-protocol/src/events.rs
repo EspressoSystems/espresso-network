@@ -237,21 +237,6 @@ impl<TYPES: NodeType> TryFrom<Event<TYPES>> for ConsensusInput<TYPES> {
     }
 }
 
-impl<TYPES: NodeType> TryFrom<Event<TYPES>> for CpuEvent<TYPES> {
-    type Error = ();
-
-    fn try_from(event: Event<TYPES>) -> Result<Self, ()> {
-        match event {
-            Event::MessageReceived(msg) => match msg {
-                ConsensusMessage::Proposal(proposal) => Ok(CpuEvent::Proposal(proposal)),
-                ConsensusMessage::Vote1(vote) => Ok(CpuEvent::Vote1(vote)),
-                _ => Err(()),
-            },
-            _ => Err(()),
-        }
-    }
-}
-
 #[allow(clippy::large_enum_variant)]
 pub enum NetworkEvent<TYPES: NodeType> {
     SendMessage(ConsensusMessage<TYPES>),
@@ -288,11 +273,4 @@ impl<TYPES: NodeType> HasViewNumber for StateEvent<TYPES> {
             StateEvent::UpdateState(_, view, _) => *view,
         }
     }
-}
-
-#[allow(clippy::large_enum_variant)]
-pub enum CpuEvent<TYPES: NodeType> {
-    DrbRequest(DrbInput),
-    Proposal(ProposalMessage<TYPES>),
-    Vote1(Vote1<TYPES>),
 }

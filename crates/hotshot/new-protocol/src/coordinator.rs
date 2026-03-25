@@ -13,7 +13,6 @@ const CHANNEL_BUFFER_SIZE: usize = 256;
 
 pub(crate) struct Coordinator<TYPES: NodeType> {
     event_rx: tokio::sync::mpsc::Receiver<ConsensusOutput<TYPES>>,
-    cpu_tx: tokio::sync::mpsc::Sender<CpuEvent<TYPES>>,
     state_tx: tokio::sync::mpsc::Sender<StateEvent<TYPES>>,
     io_tx: tokio::sync::mpsc::Sender<IoEvent<TYPES>>,
     external_tx: async_broadcast::Sender<hotshot_types::event::Event<TYPES>>,
@@ -25,12 +24,10 @@ impl<TYPES: NodeType> Coordinator<TYPES> {
         system_context: SystemContextHandle<TYPES, I>,
     ) -> (Self, CoordinatorHandle<TYPES>) {
         let (event_tx, event_rx) = mpsc::channel(CHANNEL_BUFFER_SIZE);
-        let (cpu_tx, cpu_rx) = mpsc::channel(CHANNEL_BUFFER_SIZE);
         let (state_tx, state_rx) = mpsc::channel(CHANNEL_BUFFER_SIZE);
         let (io_tx, io_rx) = mpsc::channel(CHANNEL_BUFFER_SIZE);
         let coordinator = Self {
             event_rx,
-            cpu_tx,
             state_tx,
             io_tx,
             external_tx,

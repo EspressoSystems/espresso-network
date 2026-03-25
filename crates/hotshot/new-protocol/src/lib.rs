@@ -25,6 +25,15 @@ mod helpers;
 
 mod outbox;
 
+#[allow(dead_code, unused_variables)]
+pub mod drb;
+
+#[allow(dead_code, unused_variables)]
+pub mod vid;
+
+#[allow(dead_code, unused_variables)]
+pub mod vote;
+
 #[cfg(test)]
 mod tests;
 

@@ -13,12 +13,14 @@ pub mod testing {
     use crate::{
         Outbox,
         consensus::Consensus,
-        cpu_tasks::{vid::VidDisperseTask, vote::VoteCollectionTask},
+        drb::DrbRequestTask,
         events::*,
         helpers::upgrade_lock,
         message::{Certificate1, Certificate2, ConsensusMessage, Vote2},
         tests::common::utils::{MockBlock, PendingIfNone, mock_builder_fee, state_verified_input},
         validated_state::ValidatedStateManager,
+        vid::{VidDisperseTask, VidReconstructionTask},
+        vote::VoteCollectionTask,
     };
 
     /// MockCoordinator is for testing the various different modules the coordinator will
@@ -32,13 +34,14 @@ pub mod testing {
         pub consensus: Consensus<TestTypes>,
         pub input_rx: tokio::sync::mpsc::Receiver<ConsensusOutput<TestTypes>>,
         pub shutdown_rx: tokio::sync::oneshot::Receiver<()>,
-        pub cpu_tx: Option<tokio::sync::mpsc::Sender<CpuEvent<TestTypes>>>,
         pub state_manager: Option<ValidatedStateManager<TestTypes>>,
         pub vote1_task:
             Option<VoteCollectionTask<TestTypes, QuorumVote2<TestTypes>, Certificate1<TestTypes>>>,
         pub vote2_task:
             Option<VoteCollectionTask<TestTypes, Vote2<TestTypes>, Certificate2<TestTypes>>>,
         pub vid_disperse_task: Option<VidDisperseTask<TestTypes>>,
+        pub vid_reconstruction_task: Option<VidReconstructionTask<TestTypes>>,
+        pub drb_request_task: Option<DrbRequestTask>,
         pub membership_coordinator: EpochMembershipCoordinator<TestTypes>,
         pub outbox: Outbox<ConsensusOutput<TestTypes>>,
         pub received_events: Vec<ConsensusOutput<TestTypes>>,
@@ -54,21 +57,30 @@ pub mod testing {
                                 self.process_input(consensus_input).await;
 
                         };
-                        if let Some(cpu_tx) = &self.cpu_tx
-                            && let ConsensusOutput::Event(event) = input.clone()
-                            && let Ok(cpu_event) = CpuEvent::try_from(event) {
-                                cpu_tx.send(cpu_event).await.unwrap();
-                            }
 
                         match input {
                             ConsensusOutput::Event(Event::MessageReceived(ConsensusMessage::Vote1(vote1))) => {
                                 if let Some(vote1_task) = &mut self.vote1_task {
                                     vote1_task.accumulate_vote(vote1.vote).await;
                                 }
+                                if let Some(vid_reconstruction_task) = &mut self.vid_reconstruction_task {
+                                    vid_reconstruction_task.handle_vid_share(VidShareInput {
+                                        share: vote1.vid_share,
+                                        metadata: None,
+                                    });
+                                }
                             }
                             ConsensusOutput::Event(Event::MessageReceived(ConsensusMessage::Vote2(vote2))) => {
                                 if let Some(vote2_task) = &mut self.vote2_task {
                                     vote2_task.accumulate_vote(vote2).await;
+                                }
+                            }
+                            ConsensusOutput::Event(Event::MessageReceived(ConsensusMessage::Proposal(proposal))) => {
+                                if let Some(vid_reconstruction_task) = &mut self.vid_reconstruction_task {
+                                    vid_reconstruction_task.handle_vid_share(VidShareInput {
+                                        share: proposal.vid_share,
+                                        metadata: Some(proposal.proposal.data.block_header.metadata),
+                                    });
                                 }
                             }
                             _ => {},
@@ -91,6 +103,13 @@ pub mod testing {
                     Some(Ok((view, vid_commitment, vid_disperse))) = PendingIfNone(self.vid_disperse_task.as_mut().map(|task| task.next())) => {
                         self.received_events.push(ConsensusOutput::Event(Event::VidDisperseCreated(vid_commitment, vid_disperse.clone())));
                         self.process_input(ConsensusInput::VidDisperseCreated(view, vid_disperse)).await;
+                    }
+                    Some(Ok((view, vid_commitment, payload))) = PendingIfNone(self.vid_reconstruction_task.as_mut().map(|task| task.next())) => {
+                        self.received_events.push(ConsensusOutput::Event(Event::BlockReconstructed(view, payload, vid_commitment)));
+                        self.process_input(ConsensusInput::BlockReconstructed(view, vid_commitment)).await;
+                    }
+                    Some((epoch, drb_result)) = PendingIfNone(self.drb_request_task.as_mut().map(|task| task.next())) => {
+                        self.received_events.push(ConsensusOutput::Event(Event::DrbCalculated(drb_result)));
                     }
                     _ = &mut self.shutdown_rx => break,
                     else => break,
@@ -207,7 +226,11 @@ pub mod testing {
                     }
                 },
                 Action::RequestProposal(_view, _commitment) => {},
-                Action::RequestDRB(_drb_input) => {},
+                Action::RequestDRB(drb_input) => {
+                    if let Some(drb_request_task) = &mut self.drb_request_task {
+                        drb_request_task.request_drb(drb_input.clone());
+                    }
+                },
                 Action::Shutdown => {
                     unreachable!()
                 },
