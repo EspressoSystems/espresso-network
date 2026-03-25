@@ -8,14 +8,12 @@ use tokio::sync::mpsc::Receiver;
 use vbs::version::Version;
 
 use crate::{
-    coordinator::handle::CoordinatorHandle,
     events::NetworkEvent,
     message::{ConsensusMessage, Message, MessageType, ViewSyncMessage},
 };
 
 struct Network<TYPES: NodeType, N: ConnectedNetwork<TYPES::SignatureKey>> {
     receiver: Receiver<NetworkEvent<TYPES>>,
-    coordinator_handle: CoordinatorHandle<TYPES>,
     network: N,
     membership_coordinator: EpochMembershipCoordinator<TYPES>,
     upgrade_lock: UpgradeLock<TYPES>,
@@ -24,14 +22,12 @@ struct Network<TYPES: NodeType, N: ConnectedNetwork<TYPES::SignatureKey>> {
 impl<TYPES: NodeType, N: ConnectedNetwork<TYPES::SignatureKey>> Network<TYPES, N> {
     pub fn new(
         receiver: Receiver<NetworkEvent<TYPES>>,
-        coordinator_handle: CoordinatorHandle<TYPES>,
         network: N,
         membership_coordinator: EpochMembershipCoordinator<TYPES>,
         upgrade_lock: UpgradeLock<TYPES>,
     ) -> Self {
         Self {
             receiver,
-            coordinator_handle,
             network,
             membership_coordinator,
             upgrade_lock,

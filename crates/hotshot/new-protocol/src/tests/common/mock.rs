@@ -108,7 +108,7 @@ pub mod testing {
                         self.received_events.push(ConsensusOutput::Event(Event::BlockReconstructed(view, payload, vid_commitment)));
                         self.process_input(ConsensusInput::BlockReconstructed(view, vid_commitment)).await;
                     }
-                    Some((epoch, drb_result)) = PendingIfNone(self.drb_request_task.as_mut().map(|task| task.next())) => {
+                    Some((_epoch, drb_result)) = PendingIfNone(self.drb_request_task.as_mut().map(|task| task.next())) => {
                         self.received_events.push(ConsensusOutput::Event(Event::DrbCalculated(drb_result)));
                     }
                     _ = &mut self.shutdown_rx => break,

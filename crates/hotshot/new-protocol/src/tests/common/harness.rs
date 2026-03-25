@@ -18,10 +18,10 @@ use super::utils::mock_membership;
 use crate::{
     Outbox,
     consensus::Consensus,
-    coordinator::mock::testing::MockCoordinator,
     drb::DrbRequestTask,
     events::ConsensusOutput,
     helpers::upgrade_lock,
+    tests::common::mock::testing::MockCoordinator,
     validated_state::ValidatedStateManager,
     vid::{VidDisperseTask, VidReconstructionTask},
     vote::VoteCollectionTask,
