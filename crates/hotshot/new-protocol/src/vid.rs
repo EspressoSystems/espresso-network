@@ -28,7 +28,7 @@ impl<T: NodeType> VidDisperseTask<T> {
         }
     }
 
-    pub async fn request_vid_disperse(&mut self, vid_disperse_request: VidDisperseRequest<T>) {
+    pub fn request_vid_disperse(&mut self, vid_disperse_request: VidDisperseRequest<T>) {
         let view = vid_disperse_request.view;
         if self.calculations.contains_key(&view) {
             return;

@@ -4,7 +4,6 @@ use hotshot_types::{
     message::{EXTERNAL_MESSAGE_VERSION, UpgradeLock},
     traits::{network::ConnectedNetwork, node_implementation::NodeType},
 };
-use tokio::sync::mpsc::Receiver;
 use vbs::version::Version;
 
 use crate::{
@@ -12,8 +11,7 @@ use crate::{
     message::{ConsensusMessage, Message, MessageType, ViewSyncMessage},
 };
 
-struct Network<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> {
-    receiver: Receiver<NetworkEvent<T>>,
+pub struct Network<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> {
     network: N,
     membership_coordinator: EpochMembershipCoordinator<T>,
     upgrade_lock: UpgradeLock<T>,
@@ -21,25 +19,26 @@ struct Network<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> {
 
 impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Network<T, N> {
     pub fn new(
-        receiver: Receiver<NetworkEvent<T>>,
         network: N,
         membership_coordinator: EpochMembershipCoordinator<T>,
         upgrade_lock: UpgradeLock<T>,
     ) -> Self {
         Self {
-            receiver,
             network,
             membership_coordinator,
             upgrade_lock,
         }
     }
-    pub async fn run(mut self) -> Result<()> {
-        tokio::select! {
-            event = self.receiver.recv() => { self.handle_event(event.context("Failed to receive event")?).await; },
-            message = self.network.recv_message() => { let _ = self.handle_message(message.context("Failed to receive message")?).await; },
-        };
-        Ok(())
+
+    pub async fn recv_message(&self) -> Result<ConsensusMessage<T>> {
+        let message = self.network.recv_message().await?;
+        let message: Message<T> = self.deserialize(message)?;
+        match message.message_type {
+            MessageType::Consensus(consensus_message) => Ok(consensus_message),
+            _ => Err(anyhow::anyhow!("Received a non-consensus message")),
+        }
     }
+
     async fn handle_event(&self, event: NetworkEvent<T>) {
         match event {
             NetworkEvent::SendMessage(message) => {
@@ -52,7 +51,7 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Network<T, N> {
             },
         }
     }
-    async fn send_message(&self, message: ConsensusMessage<T>) {
+    pub async fn send_message(&self, message: ConsensusMessage<T>) {
         todo!()
     }
     async fn handle_message(&self, message: Vec<u8>) -> Result<()> {

@@ -193,14 +193,12 @@ pub mod testing {
                 },
                 Action::RequestVidDisperse(view, epoch, block, metadata) => {
                     if let Some(vid_disperse_task) = &mut self.vid_disperse_task {
-                        vid_disperse_task
-                            .request_vid_disperse(VidDisperseRequest {
-                                view: *view,
-                                epoch: *epoch,
-                                block: block.clone(),
-                                metadata: *metadata,
-                            })
-                            .await;
+                        vid_disperse_task.request_vid_disperse(VidDisperseRequest {
+                            view: *view,
+                            epoch: *epoch,
+                            block: block.clone(),
+                            metadata: *metadata,
+                        });
                     } else {
                         let vid_disperse = VidDisperse::calculate_vid_disperse(
                             block,
