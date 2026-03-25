@@ -1,4 +1,4 @@
-name: Claude
+name: Claude Code
 
 on:
   issue_comment:
@@ -16,25 +16,11 @@ concurrency:
 
 jobs:
   claude:
-    name: Claude Code
     if: |
-      (
-        (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
-        (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
-        (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
-        (github.event_name == 'issues' && contains(github.event.issue.body, '@claude'))
-      ) && (
-        github.event.sender.type == 'Bot' ||
-        github.event.comment.author_association == 'MEMBER' ||
-        github.event.comment.author_association == 'COLLABORATOR' ||
-        github.event.comment.author_association == 'OWNER' ||
-        github.event.issue.author_association == 'MEMBER' ||
-        github.event.issue.author_association == 'COLLABORATOR' ||
-        github.event.issue.author_association == 'OWNER' ||
-        github.event.review.author_association == 'MEMBER' ||
-        github.event.review.author_association == 'COLLABORATOR' ||
-        github.event.review.author_association == 'OWNER'
-      )
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
+      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -45,9 +31,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 1
 
       - uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          claude_args: "--max-turns 15"
+          claude_args: "--model claude-opus-4-6 --max-turns 15"
