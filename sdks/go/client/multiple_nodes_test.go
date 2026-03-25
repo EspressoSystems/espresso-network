@@ -156,29 +156,15 @@ func TestFetchWithMajority(t *testing.T) {
 }
 
 func TestApiWithSingleEspressoDevNode(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	dir, err := os.MkdirTemp("", "espresso-dev-node")
-	if err != nil {
-		panic(err)
-	}
-	defer os.RemoveAll(dir)
-	cleanup := runDevNode(ctx, dir)
-	defer cleanup()
-
-	err = waitForEspressoNode(ctx)
-	if err != nil {
-		t.Fatal("failed to start espresso dev node", err)
-	}
+	ctx := setupDevNode(t)
 
 	// Test constructing the client with a single url to ensure that it requires more than one.
-	_, err = NewMultipleNodesClient([]string{"http://localhost:21000"})
+	_, err := NewMultipleNodesClient([]string{devNodeURL})
 	if err == nil {
 		t.Fatal("Constructing the client with 1 url should result in an error")
 	}
 
-	client, err := NewMultipleNodesClient([]string{"http://localhost:21000", "http://localhost:21000"})
+	client, err := NewMultipleNodesClient([]string{devNodeURL, devNodeURL})
 	if err != nil {
 		t.Fatal("Constructing the client with more than 1 url should succeed")
 	}
@@ -213,48 +199,10 @@ func TestApiWithSingleEspressoDevNode(t *testing.T) {
 }
 
 func TestNamespaceTransactionsInRangeForMultiClient(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	dir, err := os.MkdirTemp("", "espresso-dev-node")
+	ctx := setupDevNode(t)
+	client, err := NewMultipleNodesClient([]string{devNodeURL, devNodeURL})
 	require.NoError(t, err)
-	defer os.RemoveAll(dir)
-	cleanup := runDevNode(ctx, dir)
-	defer cleanup()
-
-	err = waitForEspressoNode(ctx)
-	require.NoError(t, err, "failed to start espresso dev node")
-
-	client, err := NewMultipleNodesClient([]string{"http://localhost:21000", "http://localhost:21000"})
-	require.NoError(t, err)
-
-	namespace := uint64(12345)
-	tx := types.Transaction{Namespace: namespace, Payload: []byte("multi-client namespace test")}
-	_, err = client.SubmitTransaction(ctx, tx)
-	require.NoError(t, err, "failed to submit transaction")
-
-	// Wait for the transaction to be included in a block.
-	var blocksWithNamespaceTransactions []types.NamespaceTransactionsRangeData
-	err = waitForWith(ctx, 30*time.Second, 2*time.Second, func() bool {
-		height, fetchErr := client.FetchLatestBlockHeight(ctx)
-		if fetchErr != nil || height < 2 {
-			return false
-		}
-		blocksWithNamespaceTransactions, fetchErr = client.FetchNamespaceTransactionsInRange(ctx, 1, height, namespace)
-		return fetchErr == nil && len(blocksWithNamespaceTransactions) > 0
-	})
-	require.NoError(t, err, "failed to fetch namespace transactions in range")
-
-	for _, block := range blocksWithNamespaceTransactions {
-		for _, txn := range block.Transactions {
-			require.Equal(t, namespace, txn.Namespace)
-			require.NotEmpty(t, txn.Payload)
-		}
-	}
-
-	// Test that a range exceeding the limit returns an error.
-	_, err = client.FetchNamespaceTransactionsInRange(ctx, 0, 1000, namespace)
-	require.Error(t, err, "expected error for large range")
+	testNamespaceTransactionsInRange(t, ctx, client, "multi-client namespace test")
 }
 
 func getHeaderFromTestFile(path string, t *testing.T) types.HeaderInterface {

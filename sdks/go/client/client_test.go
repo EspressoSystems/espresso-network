@@ -17,26 +17,58 @@ import (
 
 var workingDir = "../../../"
 
-func TestApiWithEspressoDevNode(t *testing.T) {
+const devNodeURL = "http://localhost:21000"
+
+func setupDevNode(t *testing.T) context.Context {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	t.Cleanup(cancel)
 
-	dir, err := os.MkdirTemp("", "espresso-dev-node")
-	if err != nil {
-		panic(err)
-	}
-	defer os.RemoveAll(dir)
+	dir := t.TempDir()
 	cleanup := runDevNode(ctx, dir)
-	defer cleanup()
+	t.Cleanup(cleanup)
 
-	err = waitForEspressoNode(ctx)
-	if err != nil {
-		t.Fatal("failed to start espresso dev node", err)
+	err := waitForEspressoNode(ctx)
+	require.NoError(t, err, "failed to start espresso dev node")
+
+	return ctx
+}
+
+func testNamespaceTransactionsInRange(t *testing.T, ctx context.Context, client EspressoClient, txPayload string) {
+	t.Helper()
+
+	namespace := uint64(12345)
+	tx := types.Transaction{Namespace: namespace, Payload: []byte(txPayload)}
+	_, err := client.SubmitTransaction(ctx, tx)
+	require.NoError(t, err, "failed to submit transaction")
+
+	var blocksWithNamespaceTransactions []types.NamespaceTransactionsRangeData
+	err = waitForWith(ctx, 30*time.Second, 2*time.Second, func() bool {
+		height, fetchErr := client.FetchLatestBlockHeight(ctx)
+		if fetchErr != nil || height < 2 {
+			return false
+		}
+		blocksWithNamespaceTransactions, fetchErr = client.FetchNamespaceTransactionsInRange(ctx, 1, height, namespace)
+		return fetchErr == nil && len(blocksWithNamespaceTransactions) > 0
+	})
+	require.NoError(t, err, "failed to fetch namespace transactions in range")
+
+	for _, block := range blocksWithNamespaceTransactions {
+		for _, txn := range block.Transactions {
+			require.Equal(t, namespace, txn.Namespace)
+			require.NotEmpty(t, txn.Payload)
+		}
 	}
 
-	client := NewClient("http://localhost:21000")
+	_, err = client.FetchNamespaceTransactionsInRange(ctx, 0, 1000, namespace)
+	require.Error(t, err, "expected error for large range")
+}
 
-	_, err = client.FetchLatestBlockHeight(ctx)
+func TestApiWithEspressoDevNode(t *testing.T) {
+	ctx := setupDevNode(t)
+	client := NewClient(devNodeURL)
+
+	_, err := client.FetchLatestBlockHeight(ctx)
 	if err != nil {
 		t.Fatal("failed to fetch block height", err)
 	}
@@ -177,7 +209,7 @@ func waitForWith(
 }
 
 func waitForEspressoNode(ctx context.Context) error {
-	client := NewClient("http://localhost:21000")
+	client := NewClient(devNodeURL)
 	return waitForWith(ctx, 200*time.Second, 1*time.Second, func() bool {
 		height, err := client.FetchLatestBlockHeight(ctx)
 		return err == nil && height >= 2
@@ -185,19 +217,8 @@ func waitForEspressoNode(ctx context.Context) error {
 }
 
 func TestExplorerFetchTransactionByHash(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	dir, err := os.MkdirTemp("", "espresso-dev-node")
-	require.NoError(t, err)
-	defer os.RemoveAll(dir)
-	cleanup := runDevNode(ctx, dir)
-	defer cleanup()
-
-	err = waitForEspressoNode(ctx)
-	require.NoError(t, err, "failed to start espresso dev node")
-
-	client := NewClient("http://localhost:21000")
+	ctx := setupDevNode(t)
+	client := NewClient(devNodeURL)
 
 	tx := types.Transaction{Namespace: 1, Payload: []byte("explorer test")}
 	hash, err := client.SubmitTransaction(ctx, tx)
@@ -212,45 +233,7 @@ func TestExplorerFetchTransactionByHash(t *testing.T) {
 }
 
 func TestNamespaceTransactionsInRange(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	dir, err := os.MkdirTemp("", "espresso-dev-node")
-	require.NoError(t, err)
-	defer os.RemoveAll(dir)
-	cleanup := runDevNode(ctx, dir)
-	defer cleanup()
-
-	err = waitForEspressoNode(ctx)
-	require.NoError(t, err, "failed to start espresso dev node")
-
-	client := NewClient("http://localhost:21000")
-
-	namespace := uint64(12345)
-	tx := types.Transaction{Namespace: namespace, Payload: []byte("namespace range test")}
-	_, err = client.SubmitTransaction(ctx, tx)
-	require.NoError(t, err, "failed to submit transaction")
-
-	// Wait for the transaction to be included in a block.
-	var blocksWithNamespaceTransactions []types.NamespaceTransactionsRangeData
-	err = waitForWith(ctx, 30*time.Second, 2*time.Second, func() bool {
-		height, fetchErr := client.FetchLatestBlockHeight(ctx)
-		if fetchErr != nil || height < 2 {
-			return false
-		}
-		blocksWithNamespaceTransactions, fetchErr = client.FetchNamespaceTransactionsInRange(ctx, 1, height, namespace)
-		return fetchErr == nil && len(blocksWithNamespaceTransactions) > 0
-	})
-	require.NoError(t, err, "failed to fetch namespace transactions in range")
-
-	for _, block := range blocksWithNamespaceTransactions {
-		for _, txn := range block.Transactions {
-			require.Equal(t, namespace, txn.Namespace)
-			require.NotEmpty(t, txn.Payload)
-		}
-	}
-
-	// Test that a range exceeding the limit returns an error.
-	_, err = client.FetchNamespaceTransactionsInRange(ctx, 0, 1000, namespace)
-	require.Error(t, err, "expected error for large range")
+	ctx := setupDevNode(t)
+	client := NewClient(devNodeURL)
+	testNamespaceTransactionsInRange(t, ctx, client, "namespace range test")
 }
