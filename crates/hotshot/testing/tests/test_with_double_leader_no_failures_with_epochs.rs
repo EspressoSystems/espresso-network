@@ -5,8 +5,8 @@
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
 use hotshot_example_types::node_types::{
-    CliquenetImpl, CombinedImpl, EpochsTestVersions, PushCdnImpl,
-    TestConsecutiveLeaderTypes, TestTwoStakeTablesTypes,
+    CliquenetImpl, CombinedImpl, EpochsTestVersions, PushCdnImpl, TestConsecutiveLeaderTypes,
+    TestTwoStakeTablesTypes,
 };
 use hotshot_macros::cross_tests;
 use hotshot_testing::{

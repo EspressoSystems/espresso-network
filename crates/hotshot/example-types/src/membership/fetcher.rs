@@ -30,7 +30,7 @@ pub struct Leaf2Fetcher<TYPES: NodeType> {
     pub storage: TestStorage<TYPES>,
     pub listener: Option<JoinHandle<()>>,
     pub public_key: TYPES::SignatureKey,
-    pub network_receiver: Option<Receiver<Event<TYPES>>>,
+    pub network_receiver: Option<Receiver<Arc<Event<TYPES>>>>,
 }
 
 pub type RecvMessageFn =
@@ -100,7 +100,7 @@ impl<TYPES: NodeType> Leaf2Fetcher<TYPES> {
         }
     }
 
-    pub fn set_external_channel(&mut self, mut network_receiver: Receiver<Event<TYPES>>) {
+    pub fn set_external_channel(&mut self, mut network_receiver: Receiver<Arc<Event<TYPES>>>) {
         let public_key = self.public_key.clone();
         let storage = self.storage.clone();
         let network_functions = self.network_functions.clone();
@@ -110,12 +110,18 @@ impl<TYPES: NodeType> Leaf2Fetcher<TYPES> {
         let listener = tokio::spawn(async move {
             loop {
                 match network_receiver.recv_direct().await {
-                    Ok(Event {
-                        view_number: view,
-                        event: EventType::ExternalMessageReceived { sender: _, data },
-                    }) => {
+                    Ok(event) => {
+                        let Event {
+                            view_number: view,
+                            event,
+                        } = event.as_ref();
+                        let EventType::ExternalMessageReceived { sender: _, data } = event else {
+                            continue;
+                        };
+                        let view = *view;
+
                         let (requested_height, requester): (u64, TYPES::SignatureKey) =
-                            match bincode::deserialize(&data) {
+                            match bincode::deserialize(data) {
                                 Ok(message) => message,
                                 Err(e) => {
                                     tracing::debug!("Failed to deserialize message: {e:?}");
@@ -174,7 +180,7 @@ impl<TYPES: NodeType> Leaf2Fetcher<TYPES> {
                     Err(RecvError::Closed) => {
                         break;
                     },
-                    _ => {
+                    Err(RecvError::Overflowed(_)) => {
                         continue;
                     },
                 }
@@ -244,11 +250,16 @@ impl<TYPES: NodeType> Leaf2Fetcher<TYPES> {
         tokio::time::timeout(std::time::Duration::from_millis(20), async {
             loop {
                 match network_receiver.recv_direct().await {
-                    Ok(Event {
-                        view_number: _,
-                        event: EventType::ExternalMessageReceived { sender: _, data },
-                    }) => {
-                        let leaf: Leaf2<TYPES> = match bincode::deserialize(&data) {
+                    Ok(event) => {
+                        let Event {
+                            view_number: _,
+                            event,
+                        } = event.as_ref();
+                        let EventType::ExternalMessageReceived { sender: _, data } = event else {
+                            continue;
+                        };
+
+                        let leaf: Leaf2<TYPES> = match bincode::deserialize(data) {
                             Ok(message) => message,
                             Err(e) => {
                                 tracing::debug!("Failed to deserialize message: {e:?}");
@@ -265,7 +276,7 @@ impl<TYPES: NodeType> Leaf2Fetcher<TYPES> {
                             "Failed to fetch leaf: network task receiver closed"
                         ));
                     },
-                    _ => {
+                    Err(RecvError::Overflowed(_)) => {
                         continue;
                     },
                 }

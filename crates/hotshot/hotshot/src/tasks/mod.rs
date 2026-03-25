@@ -75,7 +75,8 @@ pub async fn add_request_network_task<
 >(
     handle: &mut SystemContextHandle<TYPES, I, V>,
 ) {
-    let state = NetworkRequestState::<TYPES, I>::create_from(handle).await;
+    let mut state = NetworkRequestState::<TYPES, I>::create_from(handle).await;
+    state.vid_event_stream = handle.vid_event_stream.0.clone();
 
     let task = Task::new(
         state,
@@ -145,6 +146,7 @@ pub fn add_network_message_task<
     let network_state: NetworkMessageTaskState<TYPES, V> = NetworkMessageTaskState {
         internal_event_stream: handle.internal_event_stream.0.clone(),
         external_event_stream: handle.output_event_stream.0.clone(),
+        vid_event_stream: handle.vid_event_stream.0.clone(),
         public_key: handle.public_key().clone(),
         upgrade_lock: upgrade_lock.clone(),
         id: handle.hotshot.id,
@@ -258,7 +260,7 @@ pub async fn add_consensus_tasks<TYPES: NodeType, I: NodeImplementation<TYPES>, 
     handle.add_task(ViewSyncTaskState::<TYPES, V>::create_from(handle).await);
     handle.add_task(VidTaskState::<TYPES, I, V>::create_from(handle).await);
     handle.add_task(BlockStorerTaskState::<TYPES, I>::create_from(handle).await);
-    handle.add_task(ReconstructTaskState::<TYPES>::create_from(handle).await);
+    handle.add_task_with_vid(ReconstructTaskState::<TYPES>::create_from(handle).await);
     handle.add_task(BlockTaskState::<TYPES, V>::create_from(handle).await);
     // handle.add_task(TransactionTaskState::<TYPES, V>::create_from(handle).await);
 
@@ -293,10 +295,10 @@ pub async fn add_consensus_tasks<TYPES: NodeType, I: NodeImplementation<TYPES>, 
         };
 
         handle.add_task(QuorumProposalTaskState::<TYPES, I, V>::create_from(handle).await);
-        handle.add_task(QuorumVoteTaskState::<TYPES, I, V>::create_from(handle).await);
+        handle.add_task_with_vid(QuorumVoteTaskState::<TYPES, I, V>::create_from(handle).await);
         handle.add_task(QuorumProposalRecvTaskState::<TYPES, I, V>::create_from(handle).await);
         handle.add_task(ConsensusTaskState::<TYPES, I, V>::create_from(handle).await);
-        handle.add_task(StatsTaskState::<TYPES>::create_from(handle).await);
+        handle.add_task_with_vid(StatsTaskState::<TYPES>::create_from(handle).await);
     }
     add_queue_len_task(handle);
     #[cfg(feature = "rewind")]
@@ -401,6 +403,9 @@ where
         let output_event_stream = hotshot.external_event_stream.clone();
         let internal_event_stream = hotshot.internal_event_stream.clone();
 
+        let (vid_tx, mut vid_rx) = broadcast(EVENT_CHANNEL_SIZE);
+        vid_rx.set_overflow(true);
+
         let mut handle = SystemContextHandle {
             consensus_registry,
             network_registry,
@@ -411,6 +416,7 @@ where
             network: Arc::clone(&hotshot.network),
             membership_coordinator: memberships.clone(),
             epoch_height,
+            vid_event_stream: (vid_tx, vid_rx.deactivate()),
         };
 
         add_consensus_tasks::<TYPES, I, V>(&mut handle).await;

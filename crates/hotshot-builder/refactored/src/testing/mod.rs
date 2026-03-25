@@ -63,7 +63,7 @@ fn assert_eq_generic_err(err: BuildError, expected_err: Error<TestTypes>) {
 /// as well as routing requests through as many API surfaces as
 /// possible to shake out more potential bugs
 struct TestServiceWrapper {
-    event_sender: Sender<Event<TestTypes>>,
+    event_sender: Sender<Arc<Event<TestTypes>>>,
     proxy_global_state: ProxyGlobalState<TestTypes>,
     client: BuilderClient<TestTypes>,
 }
@@ -71,7 +71,7 @@ struct TestServiceWrapper {
 impl TestServiceWrapper {
     async fn new(
         global_state: Arc<GlobalState<TestTypes>>,
-        event_stream_sender: Sender<Event<TestTypes>>,
+        event_stream_sender: Sender<Arc<Event<TestTypes>>>,
     ) -> Self {
         let port = portpicker::pick_unused_port().unwrap();
         let url: Url = format!("http://localhost:{port}").parse().unwrap();
@@ -163,12 +163,12 @@ impl TestServiceWrapper {
     /// Emulates submission of transactions through HotShot gossiping
     pub(crate) async fn submit_transactions_public(&self, transactions: Vec<TestTransaction>) {
         self.event_sender
-            .broadcast(Event {
+            .broadcast(Arc::new(Event {
                 // This field is never actually used in the builder, so we can just use
                 // an arbitrary value
                 view_number: ViewNumber::genesis(),
                 event: EventType::Transactions { transactions },
-            })
+            }))
             .await
             .unwrap();
     }

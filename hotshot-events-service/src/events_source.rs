@@ -42,7 +42,7 @@ pub trait EventConsumer<Types>
 where
     Types: NodeType,
 {
-    async fn handle_event(&mut self, event: Event<Types>);
+    async fn handle_event(&mut self, event: Arc<Event<Types>>);
 }
 
 #[derive(Debug)]
@@ -68,8 +68,8 @@ impl<Types: NodeType> EventsStreamer<Types> {
 
 #[async_trait]
 impl<Types: NodeType> EventConsumer<Types> for EventsStreamer<Types> {
-    async fn handle_event(&mut self, event: Event<Types>) {
-        if let Err(e) = self.subscriber_send_channel.broadcast(event.into()).await {
+    async fn handle_event(&mut self, event: Arc<Event<Types>>) {
+        if let Err(e) = self.subscriber_send_channel.broadcast(event).await {
             tracing::debug!("Error broadcasting the event: {e:?}");
         }
     }

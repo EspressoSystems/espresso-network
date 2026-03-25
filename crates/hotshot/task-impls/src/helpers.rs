@@ -21,7 +21,10 @@ use committable::{Commitment, Committable};
 use hotshot_contract_adapter::sol_types::{LightClientStateSol, StakeTableStateSol};
 use hotshot_types::{
     consensus::OuterConsensus,
-    data::{Leaf2, QuorumProposalWrapper, ViewChangeEvidence2},
+    data::{
+        vid_disperse::vid_total_weight, Leaf2, QuorumProposalWrapper, VidDisperseShare,
+        ViewChangeEvidence2,
+    },
     drb::DrbResult,
     epoch_membership::EpochMembershipCoordinator,
     event::{Event, EventType, LeafInfo},
@@ -1089,10 +1092,10 @@ pub(crate) async fn validate_proposal_safety_and_liveness<
         ensure!(safety_check || liveness_check, {
             if let Err(e) = outcome {
                 broadcast_event(
-                    Event {
+                    Arc::new(Event {
                         view_number,
                         event: EventType::Error { error: Arc::new(e) },
-                    },
+                    }),
                     &validation_info.output_event_stream,
                 )
                 .await;
@@ -1110,13 +1113,13 @@ pub(crate) async fn validate_proposal_safety_and_liveness<
 
     // We accept the proposal, notify the application layer
     broadcast_event(
-        Event {
+        Arc::new(Event {
             view_number,
             event: EventType::QuorumProposal {
                 proposal: proposal.clone(),
                 sender,
             },
-        },
+        }),
         &validation_info.output_event_stream,
     )
     .await;
@@ -1500,4 +1503,79 @@ pub fn derive_signed_state_digest(
             .abi_encode_packed(),
     );
     CircuitField::from_be_bytes_mod_order(res.as_ref())
+}
+
+/// Validates a VID share: checks signature (sender or leader) and cryptographic share verification.
+/// Does NOT check sender membership — shares can come from anyone.
+pub async fn validate_vid_share<TYPES: NodeType>(
+    sender: &TYPES::SignatureKey,
+    share: &Proposal<TYPES, VidDisperseShare<TYPES>>,
+    membership: &EpochMembershipCoordinator<TYPES>,
+    consensus: OuterConsensus<TYPES>,
+) -> Result<()> {
+    let view = share.data.view_number();
+    let validate_start = std::time::Instant::now();
+
+    // if we have the share already we are done
+    let dedup_start = std::time::Instant::now();
+    if consensus
+        .read()
+        .await
+        .vid_shares()
+        .get(&view)
+        .is_some_and(|key_map| key_map.get(share.data.recipient_key()).is_some())
+    {
+        bail!("Duplicate VID share recv");
+    }
+    let dedup_elapsed = dedup_start.elapsed();
+
+    let vid_epoch = share.data.epoch();
+    let target_epoch = share.data.target_epoch();
+    let membership_start = std::time::Instant::now();
+    let membership_reader = membership.membership_for_epoch(vid_epoch).await?;
+    let leader = membership_reader.leader(view).await?;
+    let membership_elapsed = membership_start.elapsed();
+
+    // Check that the signature is valid
+    let sig_start = std::time::Instant::now();
+    let payload_commitment = share.data.payload_commitment_ref();
+    ensure!(
+        sender.validate(&share.signature, payload_commitment.as_ref())
+            || leader.validate(&share.signature, payload_commitment.as_ref()),
+        "VID share signature is invalid, sender: {}, signature: {:?}, payload_commitment: {:?}",
+        sender,
+        share.signature,
+        payload_commitment
+    );
+    let sig_elapsed = sig_start.elapsed();
+
+    // Cryptographic share verification
+    let crypto_start = std::time::Instant::now();
+    let membership2_start = std::time::Instant::now();
+    let total_weight = vid_total_weight::<TYPES>(
+        &membership
+            .membership_for_epoch(target_epoch)
+            .await?
+            .stake_table()
+            .await,
+        target_epoch,
+    );
+    let membership_elapsed2 = membership2_start.elapsed();
+
+    let verify_start = std::time::Instant::now();
+    if !share.data.verify(total_weight) {
+        bail!("Failed to verify VID share");
+    }
+    let verify_elapsed = verify_start.elapsed();
+    let crypto_elapsed = crypto_start.elapsed();
+
+    let total_elapsed = validate_start.elapsed();
+    tracing::warn!(
+        "validate_vid_share view={view} total={total_elapsed:?} dedup={dedup_elapsed:?} \
+         membership={membership_elapsed:?} signature={sig_elapsed:?} \
+         crypto_verify={crypto_elapsed:?} (membership={membership_elapsed2:?} \
+         verify={verify_elapsed:?})"
+    );
+
+    Ok(())
 }

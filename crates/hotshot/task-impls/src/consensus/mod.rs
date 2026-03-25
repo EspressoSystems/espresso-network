@@ -86,7 +86,7 @@ pub struct ConsensusTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V: 
     pub cur_epoch: Option<TYPES::Epoch>,
 
     /// Output events to application
-    pub output_event_stream: async_broadcast::Sender<Event<TYPES>>,
+    pub output_event_stream: async_broadcast::Sender<Arc<Event<TYPES>>>,
 
     /// Timeout task handle
     pub timeout_task: JoinHandle<()>,

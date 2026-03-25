@@ -2,7 +2,7 @@ use std::{
     fmt::{Debug, Display},
     marker::PhantomData,
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::Context;
@@ -319,7 +319,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
     }
 
     /// Stream consensus events.
-    pub async fn event_stream(&self) -> impl Stream<Item = Event<SeqTypes>> {
+    pub async fn event_stream(&self) -> impl Stream<Item = Arc<Event<SeqTypes>>> {
         self.handle.read().await.event_stream()
     }
 
@@ -460,7 +460,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Drop
 async fn handle_events<N, P, V>(
     consensus: Arc<RwLock<Consensus<N, P, V>>>,
     node_id: u64,
-    mut events: impl Stream<Item = Event<SeqTypes>> + Unpin,
+    mut events: impl Stream<Item = Arc<Event<SeqTypes>>> + Unpin,
     persistence: Arc<P>,
     state_signer: Arc<RwLock<StateSigner<SequencerApiVersion>>>,
     external_event_handler: ExternalEventHandler<V>,
@@ -486,16 +486,62 @@ async fn handle_events<N, P, V>(
     }
 
     while let Some(event) = events.next().await {
+        let event_name = event_type_name(&event);
         tracing::debug!(node_id, ?event, "consensus event");
+
+        // Log process memory on every Decide event
+        if matches!(&event.event, EventType::Decide { .. }) {
+            if let Ok(contents) = std::fs::read_to_string("/proc/self/status") {
+                let vm_rss = contents
+                    .lines()
+                    .find(|l| l.starts_with("VmRSS:"))
+                    .and_then(|l| l.split_whitespace().nth(1))
+                    .and_then(|v| v.parse::<u64>().ok())
+                    .unwrap_or(0)
+                    / 1024; // Convert kB to MB
+                let vm_size = contents
+                    .lines()
+                    .find(|l| l.starts_with("VmSize:"))
+                    .and_then(|l| l.split_whitespace().nth(1))
+                    .and_then(|v| v.parse::<u64>().ok())
+                    .unwrap_or(0)
+                    / 1024;
+                let cgroup_mb = std::fs::read_to_string("/sys/fs/cgroup/memory.current")
+                    .ok()
+                    .and_then(|s| s.trim().parse::<u64>().ok())
+                    .unwrap_or(0)
+                    / (1024 * 1024);
+                tracing::warn!(
+                    node_id,
+                    view = *event.view_number,
+                    rss_mb = vm_rss,
+                    vm_size_mb = vm_size,
+                    cgroup_mb,
+                    "process memory on decide"
+                );
+            }
+        }
+
+        let t_start = Instant::now();
+
         // Store latest consensus state.
         persistence.handle_event(&event, &event_consumer).await;
+        let t_persistence = t_start.elapsed();
 
         // Generate state signature.
-        state_signer
-            .write()
-            .await
-            .handle_event(&event, consensus.clone())
-            .await;
+        {
+            let state_signer = state_signer.clone();
+            let consensus = consensus.clone();
+            let event = event.clone();
+            tokio::spawn(async move {
+                state_signer
+                    .write()
+                    .await
+                    .handle_event(&event, consensus)
+                    .await;
+            });
+        }
+        let t_signer = t_start.elapsed() - t_persistence;
 
         // Handle external messages
         if let EventType::ExternalMessageReceived { data, .. } = &event.event {
@@ -503,11 +549,57 @@ async fn handle_events<N, P, V>(
                 tracing::warn!("Failed to handle external message: {:?}", err);
             };
         }
+        let t_external = t_start.elapsed() - t_persistence - t_signer;
 
         // Send the event via the event streaming service
         if let Some(events_streamer) = events_streamer.as_ref() {
             events_streamer.write().await.handle_event(event).await;
         }
+        let t_total = t_start.elapsed();
+        let t_streamer = t_total - t_persistence - t_signer - t_external;
+
+        // Log timing for every event at info level, and warn for slow events.
+        let slow_threshold = Duration::from_millis(200);
+        if t_total >= slow_threshold {
+            tracing::warn!(
+                node_id,
+                event = event_name,
+                total_ms = t_total.as_millis() as u64,
+                persistence_ms = t_persistence.as_millis() as u64,
+                state_signer_ms = t_signer.as_millis() as u64,
+                external_handler_ms = t_external.as_millis() as u64,
+                events_streamer_ms = t_streamer.as_millis() as u64,
+                "slow event processing"
+            );
+        } else {
+            tracing::info!(
+                node_id,
+                event = event_name,
+                total_ms = t_total.as_millis() as u64,
+                persistence_ms = t_persistence.as_millis() as u64,
+                state_signer_ms = t_signer.as_millis() as u64,
+                external_handler_ms = t_external.as_millis() as u64,
+                events_streamer_ms = t_streamer.as_millis() as u64,
+                "event processing timing"
+            );
+        }
+    }
+}
+
+/// Return a short string name for the event variant, for use in structured logging.
+fn event_type_name(event: &Event<SeqTypes>) -> &'static str {
+    match &event.event {
+        EventType::Error { .. } => "Error",
+        EventType::Decide { .. } => "Decide",
+        EventType::ReplicaViewTimeout { .. } => "ReplicaViewTimeout",
+        EventType::ViewFinished { .. } => "ViewFinished",
+        EventType::ViewTimeout { .. } => "ViewTimeout",
+        EventType::Transactions { .. } => "Transactions",
+        EventType::DaProposal { .. } => "DaProposal",
+        EventType::QuorumProposal { .. } => "QuorumProposal",
+        EventType::UpgradeProposal { .. } => "UpgradeProposal",
+        EventType::ExternalMessageReceived { .. } => "ExternalMessageReceived",
+        _ => "Unknown",
     }
 }
 

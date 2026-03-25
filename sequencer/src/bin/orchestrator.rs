@@ -5,7 +5,7 @@ use clap::Parser;
 use derive_more::From;
 use espresso_types::{parse_duration, Ratio, SeqTypes};
 use hotshot_orchestrator::run_orchestrator;
-use hotshot_types::network::{NetworkConfig};
+use hotshot_types::network::NetworkConfig;
 use sequencer_utils::logging;
 use snafu::Snafu;
 use url::Url;

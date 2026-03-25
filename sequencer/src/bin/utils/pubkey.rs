@@ -4,9 +4,7 @@ use anyhow::bail;
 use clap::Parser;
 use espresso_types::{PrivKey, PubKey};
 use hotshot::types::SignatureKey;
-use hotshot_types::{
-    light_client::{StateKeyPair, StateSignKey},
-};
+use hotshot_types::light_client::{StateKeyPair, StateSignKey};
 use tagged_base64::TaggedBase64;
 
 #[derive(Clone, Debug)]

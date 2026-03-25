@@ -5,15 +5,12 @@
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
 use std::{
-    collections::{HashMap, HashSet},
-    num::NonZero,
     sync::Arc,
-    time::{Duration, Instant},
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
 use async_broadcast::{Receiver, Sender};
 use async_trait::async_trait;
-use committable::{Commitment, Committable};
 use hotshot_task::task::TaskState;
 use hotshot_types::{
     consensus::{OuterConsensus, PayloadWithMetadata},
@@ -28,10 +25,10 @@ use hotshot_types::{
         BlockPayload, EncodeBytes,
     },
     utils::{is_epoch_transition, is_last_block},
-    vote::HasViewNumber,
 };
 use hotshot_utils::anytrace::*;
-use tokio::time::timeout;
+use rand::{Rng, RngCore, SeedableRng};
+use rand_chacha::ChaChaRng;
 use tracing::instrument;
 use vbs::version::{StaticVersionType, Version};
 
@@ -52,97 +49,155 @@ pub struct BuilderResponse<TYPES: NodeType> {
     pub metadata: <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
 }
 
-#[derive(Clone)]
-struct ReceivedTransaction<TYPES: NodeType> {
-    tx: TYPES::Transaction,
-    len: u64,
-    commit: Commitment<TYPES::Transaction>,
-    view: TYPES::View,
+// #[derive(Clone)]
+// struct ReceivedTransaction<TYPES: NodeType> {
+//     tx: TYPES::Transaction,
+//     len: u64,
+//     commit: Commitment<TYPES::Transaction>,
+//     view: TYPES::View,
+// }
+
+fn random_transaction<TYPES: NodeType>(
+    min_size: u64,
+    max_size: u64,
+    rng: &mut ChaChaRng,
+) -> TYPES::Transaction {
+    // TODO instead use NamespaceId::random, but that does not allow us to
+    // enforce `gen_range(opt.min_namespace..=opt.max_namespace)`
+    let namespace = rng.gen_range(10000..=10010);
+
+    let len = rng.gen_range(min_size..=max_size);
+
+    let len = len - 16; // 16 bytes for timestamp
+    let mut payload = vec![0; len as usize];
+    rng.fill_bytes(&mut payload);
+
+    // get the current UNIX timestamp in nanoseconds
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time is before unix epoch")
+        .as_nanos();
+    // The last 16 bytes in payload are occupied by timestamp
+    payload.extend_from_slice(&timestamp.to_le_bytes());
+
+    TYPES::Transaction::new(namespace.try_into().unwrap(), payload)
 }
 
-pub struct Mempool<TYPES: NodeType> {
-    max_block_size: u64,
-    transactions: Vec<ReceivedTransaction<TYPES>>,
-    recently_decided_transactions: lru::LruCache<Commitment<TYPES::Transaction>, bool>,
-    recently_proposed_blocks: HashMap<TYPES::View, Vec<TYPES::Transaction>>,
-}
+// /// Maximum total size of transactions held in the mempool.
+// const MAX_MEMPOOL_SIZE: u64 = 500 * 1024 * 1024; // 500 MB
 
-impl<TYPES: NodeType> Mempool<TYPES> {
-    pub fn new(max_block_size: u64) -> Self {
-        Self {
-            max_block_size,
-            transactions: Vec::new(),
-            recently_decided_transactions: lru::LruCache::new(NonZero::new(1000).unwrap()),
-            recently_proposed_blocks: HashMap::new(),
-        }
-    }
-    fn receive_transaction(&mut self, transaction: TYPES::Transaction, view: TYPES::View) {
-        let now = Instant::now();
-        let commit = transaction.commit();
-        if self
-            .recently_decided_transactions
-            .contains(&transaction.commit())
-        {
-            return;
-        }
-        let len = transaction.minimum_block_size();
-        if len > self.max_block_size {
-            return;
-        }
+// pub struct Mempool<TYPES: NodeType> {
+//     max_block_size: u64,
+//     total_bytes: u64,
+//     transactions: Vec<ReceivedTransaction<TYPES>>,
+//     recently_decided_transactions: lru::LruCache<Commitment<TYPES::Transaction>, bool>,
+//     recently_proposed_blocks: HashMap<TYPES::View, Vec<TYPES::Transaction>>,
+// }
 
-        self.transactions.push(ReceivedTransaction {
-            tx: transaction,
-            len,
-            commit,
-            view,
-        });
-        let elapsed = now.elapsed();
-        tracing::info!("Received transactions in {elapsed:?}");
-    }
+// impl<TYPES: NodeType> Mempool<TYPES> {
+//     pub fn new(max_block_size: u64) -> Self {
+//         Self {
+//             max_block_size,
+//             total_bytes: 0,
+//             transactions: Vec::new(),
+//             recently_decided_transactions: lru::LruCache::new(NonZero::new(1000).unwrap()),
+//             recently_proposed_blocks: HashMap::new(),
+//         }
+//     }
+//     fn receive_transaction(&mut self, transaction: TYPES::Transaction, view: TYPES::View) {
+//         let now = Instant::now();
+//         let commit = transaction.commit();
+//         if self
+//             .recently_decided_transactions
+//             .contains(&transaction.commit())
+//         {
+//             return;
+//         }
+//         let len = transaction.minimum_block_size();
+//         if len > self.max_block_size {
+//             return;
+//         }
 
-    fn decide_block(
-        &mut self,
-        view: TYPES::View,
-        block_payload: &TYPES::BlockPayload,
-        metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
-    ) {
-        let now = Instant::now();
-        let txn_set: HashSet<Commitment<TYPES::Transaction>> = block_payload
-            .transactions(metadata)
-            .map(|tx| tx.commit())
-            .collect();
-        for txn_commit in &txn_set {
-            self.recently_decided_transactions
-                .put(txn_commit.clone(), true);
-        }
-        self.transactions
-            .retain(|tx| !txn_set.contains(&tx.commit) && tx.view >= view);
-        self.recently_proposed_blocks.remove(&view);
-        let elapsed = now.elapsed();
-        tracing::info!("Mempool processed block in {elapsed:?}");
-    }
+//         if self.total_bytes + len > MAX_MEMPOOL_SIZE {
+//             tracing::warn!(
+//                 mempool_len = self.transactions.len(),
+//                 mempool_mb = self.total_bytes / (1024 * 1024),
+//                 max_mempool_mb = MAX_MEMPOOL_SIZE / (1024 * 1024),
+//                 tx_len = len,
+//                 "Rejecting transaction: mempool size cap reached",
+//             );
+//             return;
+//         }
 
-    fn receive_block(
-        &mut self,
-        view: TYPES::View,
-        block_payload: TYPES::BlockPayload,
-        metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
-    ) {
-        self.recently_proposed_blocks
-            .insert(view, block_payload.transactions(metadata).collect());
-    }
-}
+//         self.total_bytes += len;
+//         self.transactions.push(ReceivedTransaction {
+//             tx: transaction,
+//             len,
+//             commit,
+//             view,
+//         });
+//         let elapsed = now.elapsed();
+//         tracing::info!(
+//             mempool_len = self.transactions.len(),
+//             mempool_mb = self.total_bytes / (1024 * 1024),
+//             "Received transaction, elapsed={elapsed:?}",
+//         );
+//     }
 
-impl<TYPES: NodeType> Default for Mempool<TYPES> {
-    fn default() -> Self {
-        Self::new(1 * 1024 * 1024) // 1MB
-    }
-}
+//     fn decide_block(
+//         &mut self,
+//         view: TYPES::View,
+//         block_payload: &TYPES::BlockPayload,
+//         metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
+//     ) {
+//         let now = Instant::now();
+//         let txn_set: HashSet<Commitment<TYPES::Transaction>> = block_payload
+//             .transactions(metadata)
+//             .map(|tx| tx.commit())
+//             .collect();
+//         for txn_commit in &txn_set {
+//             self.recently_decided_transactions.put(*txn_commit, true);
+//         }
+//         let before_len = self.transactions.len();
+//         self.transactions
+//             .retain(|tx| !txn_set.contains(&tx.commit) && tx.view >= view);
+//         self.recently_proposed_blocks.remove(&view);
+//         let removed = before_len - self.transactions.len();
+
+//         self.total_bytes = self.transactions.iter().map(|t| t.len).sum();
+
+//         let elapsed = now.elapsed();
+//         tracing::info!(
+//             decided_txns = txn_set.len(),
+//             removed,
+//             mempool_len = self.transactions.len(),
+//             mempool_mb = self.total_bytes / (1024 * 1024),
+//             recently_proposed = self.recently_proposed_blocks.len(),
+//             "Mempool processed block, elapsed={elapsed:?}",
+//         );
+//     }
+
+//     fn receive_block(
+//         &mut self,
+//         view: TYPES::View,
+//         block_payload: TYPES::BlockPayload,
+//         metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
+//     ) {
+//         self.recently_proposed_blocks
+//             .insert(view, block_payload.transactions(metadata).collect());
+//     }
+// }
+
+// impl<TYPES: NodeType> Default for Mempool<TYPES> {
+//     fn default() -> Self {
+//         Self::new(1024 * 1024) // 1MB
+//     }
+// }
 
 /// Tracks state of a Transaction task
 pub struct BlockTaskState<TYPES: NodeType, V: Versions> {
     /// Output events to application
-    pub output_event_stream: async_broadcast::Sender<Event<TYPES>>,
+    pub output_event_stream: async_broadcast::Sender<Arc<Event<TYPES>>>,
 
     /// View number this view is executing in.
     pub cur_view: TYPES::View,
@@ -174,9 +229,8 @@ pub struct BlockTaskState<TYPES: NodeType, V: Versions> {
     /// Number of blocks in an epoch, zero means there are no epochs
     pub epoch_height: u64,
 
-    /// Mempool for the block task
-    pub mempool: Mempool<TYPES>,
-
+    // /// Mempool for the block task
+    // pub mempool: Mempool<TYPES>,
     /// Base fee for the block task
     pub base_fee: u64,
 
@@ -231,7 +285,7 @@ impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
                         .unwrap_or(TYPES::View::new(0))
                         + 1
                 {
-                    tracing::warn!("High QC in epoch version and not the first QC after upgrade");
+                    tracing::error!("High QC in epoch version and not the first QC after upgrade");
                     self.send_empty_block(event_stream, block_view, block_epoch, version)
                         .await;
                     return None;
@@ -258,7 +312,7 @@ impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
             {
                 // We are proposing a transition block it should be empty
                 if !is_last_block(high_qc_block_number, self.epoch_height) {
-                    tracing::info!(
+                    tracing::error!(
                         "Sending empty block event. View number: {block_view}. Parent Block \
                          number: {high_qc_block_number}"
                     );
@@ -304,6 +358,7 @@ impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
             )
             .await;
         } else {
+            tracing::error!("Failed to get block for view {block_view}, sending empty block");
             self.send_empty_block(event_stream, block_view, block_epoch, version)
                 .await;
         };
@@ -324,12 +379,11 @@ impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
                 metadata: metadata.clone(),
             }),
         );
-        self.mempool.receive_block(view, block_payload, &metadata);
     }
     async fn wait_for_block(
         &mut self,
         block_view: TYPES::View,
-        receiver: Receiver<Arc<HotShotEvent<TYPES>>>,
+        _receiver: Receiver<Arc<HotShotEvent<TYPES>>>,
     ) -> Option<BuilderResponse<TYPES>> {
         // let now = Instant::now();
         // let (previous_block, metadata) = timeout(
@@ -379,57 +433,43 @@ impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
         })
     }
 
+    /// Build a block with 10 random transactions that is equal to the max block size
     async fn build_block(&mut self, block_view: TYPES::View) -> Option<PayloadWithMetadata<TYPES>> {
-        let mut transactions = self.mempool.transactions.clone();
-        let mut view = block_view - 1;
-        let mut in_flight_txns = HashSet::new();
-        while let Some(payload) = self.mempool.recently_proposed_blocks.get(&view) {
-            in_flight_txns.extend(payload);
-            let Some(proposal) = self
-                .consensus
-                .read()
-                .await
-                .last_proposals()
-                .get(&view)
-                .cloned()
-            else {
-                break;
-            };
-            view = proposal.data.justify_qc().view_number();
-        }
-        transactions.retain(|transaction| !in_flight_txns.contains(&transaction.tx));
-        let transactions_to_include = transactions.iter().scan(0, |total_size, tx| {
-            let prev_size = *total_size;
-            *total_size += tx.len;
-            // We will include one transaction over our target block length
-            // if it's the first transaction in queue, otherwise we'd have a possible failure
-            // state where a single transaction larger than target block state is stuck in
-            // queue and we just build empty blocks forever
-            if *total_size >= self.max_block_size && prev_size != 0 {
-                None
-            } else {
-                Some(tx.tx.clone())
-            }
-        });
-        let validated_state = self
+        tracing::info!(?block_view, "Building block",);
+        let txn_size = self.max_block_size / 10;
+        let mut rng = ChaChaRng::from_entropy();
+        let transactions: Vec<TYPES::Transaction> = (0..10)
+            .map(|_| random_transaction::<TYPES>(txn_size, txn_size, &mut rng))
+            .collect();
+
+        let Some(validated_state) = self
             .consensus
             .read()
             .await
             .validated_state_map()
             .get(&(block_view - 1))?
-            .leaf_and_state()?
-            .1
-            .clone();
-        let (payload, metadata) = <TYPES::BlockPayload as BlockPayload<TYPES>>::from_transactions(
-            transactions_to_include,
-            &validated_state,
-            &self.instance_state,
-        )
-        .await
-        .ok()?;
+            .leaf_and_state()
+            .map(|(_, state)| state.clone())
+        else {
+            tracing::error!("No validated state found for block {block_view}");
+            return None;
+        };
+        let Some((payload, metadata)) =
+            <TYPES::BlockPayload as BlockPayload<TYPES>>::from_transactions(
+                transactions,
+                &validated_state,
+                &self.instance_state,
+            )
+            .await
+            .ok()
+        else {
+            tracing::error!("Failed to build block for view {block_view}");
+            return None;
+        };
         Some(PayloadWithMetadata { payload, metadata })
     }
 
+    #[allow(dead_code)]
     async fn wait_for_previous_block(
         &mut self,
         parent_view: TYPES::View,
@@ -558,14 +598,7 @@ impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
         receiver: Receiver<Arc<HotShotEvent<TYPES>>>,
     ) -> Result<()> {
         match event.as_ref() {
-            HotShotEvent::TransactionsRecv(transactions) => {
-                for transaction in transactions {
-                    self.mempool.receive_transaction(
-                        transaction.clone(),
-                        self.consensus.read().await.cur_view(),
-                    );
-                }
-            },
+            HotShotEvent::TransactionsRecv(_transactions) => {},
             HotShotEvent::ViewChange(view, epoch) => {
                 let view = TYPES::View::new(std::cmp::max(1, **view));
                 ensure!(
@@ -633,22 +666,22 @@ impl<TYPES: NodeType, V: Versions> BlockTaskState<TYPES, V> {
                     return Ok(());
                 }
             },
-            HotShotEvent::LeavesDecided(leaves) => {
-                for leaf in leaves {
-                    if let Some(payload) = self
-                        .consensus
-                        .read()
-                        .await
-                        .saved_payloads()
-                        .get(&leaf.view_number())
-                    {
-                        self.mempool.decide_block(
-                            leaf.view_number(),
-                            &payload.payload,
-                            &payload.metadata,
-                        );
-                    }
-                }
+            HotShotEvent::LeavesDecided(_leaves) => {
+                // for leaf in leaves {
+                //     if let Some(payload) = self
+                //         .consensus
+                //         .read()
+                //         .await
+                //         .saved_payloads()
+                //         .get(&leaf.view_number())
+                //     {
+                //         self.mempool.decide_block(
+                //             leaf.view_number(),
+                //             &payload.payload,
+                //             &payload.metadata,
+                //         );
+                //     }
+                // }
             },
             _ => {},
         }

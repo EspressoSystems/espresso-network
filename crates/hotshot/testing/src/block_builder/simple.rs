@@ -289,7 +289,7 @@ pub struct SimpleBuilderTask<TYPES: NodeType> {
 impl<TYPES: NodeType> BuilderTask<TYPES> for SimpleBuilderTask<TYPES> {
     fn start(
         mut self: Box<Self>,
-        mut stream: Box<dyn Stream<Item = Event<TYPES>> + std::marker::Unpin + Send + 'static>,
+        mut stream: Box<dyn Stream<Item = Arc<Event<TYPES>>> + std::marker::Unpin + Send + 'static>,
     ) {
         spawn(async move {
             let mut should_build_blocks = true;
@@ -298,9 +298,9 @@ impl<TYPES: NodeType> BuilderTask<TYPES> for SimpleBuilderTask<TYPES> {
                     None => {
                         break;
                     },
-                    Some(evt) => match evt.event {
+                    Some(evt) => match &evt.event {
                         EventType::ViewFinished { view_number } => {
-                            if let Some(change) = self.changes.remove(&view_number) {
+                            if let Some(change) = self.changes.remove(view_number) {
                                 match change {
                                     BuilderChange::Up => should_build_blocks = true,
                                     BuilderChange::Down => {

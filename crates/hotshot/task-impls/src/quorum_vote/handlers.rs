@@ -248,7 +248,7 @@ pub(crate) async fn handle_quorum_proposal_validated<
         // none if we've reached a new decide, so this is safe to unwrap.
         let committing_qc = Arc::new(committing_qc.unwrap());
         broadcast_event(
-            Event {
+            Arc::new(Event {
                 view_number: decided_view_number,
                 event: EventType::Decide {
                     leaf_chain: Arc::new(leaf_views.clone()),
@@ -256,7 +256,7 @@ pub(crate) async fn handle_quorum_proposal_validated<
                     deciding_qc: deciding_qc.map(Arc::new),
                     block_size: included_txns.map(|txns| txns.len().try_into().unwrap()),
                 },
-            },
+            }),
             &task_state.output_event_stream,
         )
         .await;
@@ -371,6 +371,7 @@ pub(crate) async fn update_shared_state<TYPES: NodeType, V: Versions>(
         .await
         .wrap()
         .context(warn!("Block header doesn't extend the proposal!"))?;
+    broadcast_event(Arc::new(HotShotEvent::StateValidated(view_number)), &sender).await;
     let validation_duration = now.elapsed();
     // tracing::error!("Validation time: {validation_duration:?}");
 
@@ -540,7 +541,7 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
         )
         .await;
     } else {
-        tracing::error!(
+        tracing::warn!(
             "sending vote to next quorum leader {:?}",
             vote.view_number() + 1
         );

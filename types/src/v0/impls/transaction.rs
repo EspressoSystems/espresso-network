@@ -102,6 +102,13 @@ impl Transaction {
 }
 
 impl HotShotTransaction for Transaction {
+    fn new(namespace: u64, payload: Vec<u8>) -> Self {
+        Self {
+            namespace: NamespaceId(namespace),
+            payload,
+        }
+    }
+
     fn minimum_block_size(&self) -> u64 {
         // Any block containing this transaction will have at least:
         let len =
