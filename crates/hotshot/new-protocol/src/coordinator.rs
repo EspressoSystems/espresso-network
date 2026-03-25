@@ -19,7 +19,7 @@ use crate::{
     drb::DrbRequester,
     events::*,
     io::network::{Network, is_critical},
-    message::{Certificate2, ConsensusMessage, Message, MessageType, Vote2},
+    message::{Certificate2, ConsensusMessage, Message, MessageType, ProposalMessage, Vote2},
     validated_state::ValidatedStateManager,
     vid::{VidDisperser, VidReconstructor},
     vote::VoteCollector,
@@ -186,10 +186,60 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
 
     async fn handle_action(&mut self, action: Action<T>) {
         match action {
-            Action::SendProposal(..) => {},
-            Action::SendVote1(..) => {},
-            Action::SendVote2(..) => {},
-            Action::SendTimeoutVote(..) => {},
+            Action::SendProposal(proposal, vid_disperse) => {
+                for vid_share in vid_disperse.to_shares() {
+                    let recipient_key = vid_share.recipient_key.clone();
+                    let message = Message {
+                        sender: self.system_context.public_key(),
+                        message_type: MessageType::Consensus(ConsensusMessage::Proposal(
+                            ProposalMessage {
+                                proposal: proposal.clone(),
+                                vid_share,
+                            },
+                        )),
+                    };
+                    let _ = self
+                        .network
+                        .unicast(recipient_key, message)
+                        .await
+                        .inspect_err(|e| warn!(%e, "failed to send proposal to recipient"));
+                }
+            },
+            Action::SendVote1(vote1) => {
+                let message = Message {
+                    sender: self.system_context.public_key(),
+                    message_type: MessageType::Consensus(ConsensusMessage::Vote1(vote1)),
+                };
+                let _ = self
+                    .network
+                    .broadcast(message)
+                    .await
+                    .inspect_err(|e| warn!(%e, "failed to send vote1"));
+            },
+            Action::SendVote2(vote2) => {
+                let message = Message {
+                    sender: self.system_context.public_key(),
+                    message_type: MessageType::Consensus(ConsensusMessage::Vote2(vote2)),
+                };
+                let _ = self
+                    .network
+                    .broadcast(message)
+                    .await
+                    .inspect_err(|e| warn!(%e, "failed to send vote2"));
+            },
+            Action::SendTimeoutVote(timeout_vote) => {
+                let message = Message {
+                    sender: self.system_context.public_key(),
+                    message_type: MessageType::Consensus(ConsensusMessage::TimeoutVote(
+                        timeout_vote,
+                    )),
+                };
+                let _ = self
+                    .network
+                    .broadcast(message)
+                    .await
+                    .inspect_err(|e| warn!(%e, "failed to send timeout vote"));
+            },
             Action::RequestState(state_request) => {
                 self.state_manager.request_state(state_request);
             },
