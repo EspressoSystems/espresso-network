@@ -269,12 +269,6 @@ cp -v docker/scripts/espresso-node-awssecretsmanager.sh "${workdir}/docker/scrip
 mkdir -p "${workdir}/scripts"
 cp -v scripts/espresso-node-entrypoint "${workdir}/scripts/"
 
-# Copy the safeSDK for multisig transaction proposals
-mkdir -p "${workdir}/contracts/script/multisigTransactionProposals"
-cp -rv contracts/script/multisigTransactionProposals/safeSDK "${workdir}/contracts/script/multisigTransactionProposals/"
-cp -v scripts/multisig-upgrade-entrypoint "${workdir}/scripts/"
-cp package.json yarn.lock "$workdir/"
-
 export DOCKER_BUILDKIT=1
 
 for image in "${images[@]}"; do

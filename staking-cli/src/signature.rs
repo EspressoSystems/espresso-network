@@ -50,9 +50,10 @@ pub enum NodeSignatureInput {
 }
 
 /// Serialization formats supported by the CLI
-#[derive(Clone, Debug, Copy, Default, clap::ValueEnum, PartialEq, Eq)]
+#[derive(Clone, Debug, Copy, clap::ValueEnum, PartialEq, Eq)]
 pub enum SerializationFormat {
-    #[default]
+    #[value(name = "safe")]
+    Safe,
     #[value(name = "json")]
     Json,
     #[value(name = "toml")]
@@ -162,6 +163,9 @@ impl NodeSignatures {
         match destination {
             NodeSignatureDestination::Stdout(format) => {
                 let output = match format {
+                    SerializationFormat::Safe => anyhow::bail!(
+                        "Safe format is only valid for calldata export, not node signatures"
+                    ),
                     SerializationFormat::Json => serde_json::to_string_pretty(self)?,
                     SerializationFormat::Toml => toml::to_string_pretty(self)?,
                 };
@@ -169,6 +173,9 @@ impl NodeSignatures {
             },
             NodeSignatureDestination::File { path, format } => {
                 let output = match format {
+                    SerializationFormat::Safe => anyhow::bail!(
+                        "Safe format is only valid for calldata export, not node signatures"
+                    ),
                     SerializationFormat::Json => serde_json::to_string_pretty(self)?,
                     SerializationFormat::Toml => toml::to_string_pretty(self)?,
                 };
@@ -187,7 +194,7 @@ impl NodeSignatureSource {
         format: Option<SerializationFormat>,
     ) -> anyhow::Result<Self> {
         if path.to_string_lossy() == "-" {
-            Ok(Self::Stdin(format.unwrap_or_default()))
+            Ok(Self::Stdin(format.unwrap_or(SerializationFormat::Json)))
         } else {
             // Infer format from extension if not explicitly provided
             let format = if let Some(format) = format {
@@ -206,7 +213,7 @@ impl TryFrom<OutputArgs> for NodeSignatureDestination {
     fn try_from(args: OutputArgs) -> anyhow::Result<Self> {
         match args.output {
             None => {
-                let format = args.format.unwrap_or_default();
+                let format = args.format.unwrap_or(SerializationFormat::Json);
                 Ok(Self::Stdout(format))
             },
             Some(path) => {
@@ -236,6 +243,9 @@ impl TryFrom<NodeSignatureSource> for NodeSignatures {
                 std::io::stdin().read_to_string(&mut buffer)?;
 
                 match format {
+                    SerializationFormat::Safe => {
+                        bail!("Safe format is only valid for calldata export, not node signatures")
+                    },
                     SerializationFormat::Json => serde_json::from_str::<Self>(&buffer)
                         .or_else(|e| bail!("Failed to parse JSON from stdin: {e}")),
                     SerializationFormat::Toml => toml::from_str::<Self>(&buffer)
@@ -251,6 +261,9 @@ impl TryFrom<NodeSignatureSource> for NodeSignatures {
                 };
 
                 match format {
+                    SerializationFormat::Safe => {
+                        bail!("Safe format is only valid for calldata export, not node signatures")
+                    },
                     SerializationFormat::Json => serde_json::from_str::<Self>(&content)
                         .or_else(|e| bail!("Failed to parse JSON file {}: {e}", path.display())),
                     SerializationFormat::Toml => toml::from_str::<Self>(&content)
@@ -378,10 +391,10 @@ mod tests {
     #[rstest]
     fn test_signature_source_parse_stdin() {
         let result = NodeSignatureSource::parse(PathBuf::from("-"), None).unwrap();
-        matches!(
+        assert!(matches!(
             result,
             NodeSignatureSource::Stdin(SerializationFormat::Json)
-        );
+        ));
     }
 
     #[rstest]
@@ -389,10 +402,10 @@ mod tests {
         let result =
             NodeSignatureSource::parse(PathBuf::from("-"), Some(SerializationFormat::Toml))
                 .unwrap();
-        matches!(
+        assert!(matches!(
             result,
             NodeSignatureSource::Stdin(SerializationFormat::Toml)
-        );
+        ));
     }
 
     #[rstest]
@@ -407,7 +420,7 @@ mod tests {
 
         if should_succeed {
             let source = result.unwrap();
-            matches!(source, NodeSignatureSource::File { path: p, .. } if p == path);
+            assert!(matches!(source, NodeSignatureSource::File { path: p, .. } if p == path));
         } else {
             assert!(result.is_err());
             assert!(
@@ -426,10 +439,10 @@ mod tests {
             format: Some(SerializationFormat::Json),
         };
         let result = NodeSignatureDestination::try_from(args).unwrap();
-        matches!(
+        assert!(matches!(
             result,
             NodeSignatureDestination::Stdout(SerializationFormat::Json)
-        );
+        ));
     }
 
     #[rstest]
@@ -558,6 +571,7 @@ mod tests {
         let parsed: NodeSignatures = match format {
             SerializationFormat::Json => serde_json::from_str(&content)?,
             SerializationFormat::Toml => toml::from_str(&content)?,
+            SerializationFormat::Safe => unreachable!("Safe format not used in this test"),
         };
         assert_eq!(parsed.address, sample_node_signatures.address);
         Ok(())

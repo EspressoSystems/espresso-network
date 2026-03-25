@@ -18,6 +18,7 @@ use alloy::{
 use anyhow::{Context, bail, ensure};
 use ark_ec::AffineRepr;
 use ark_serialize::CanonicalSerialize;
+use ark_std::One;
 use async_lock::{Mutex, RwLock, RwLockUpgradableReadGuard};
 use bigdecimal::BigDecimal;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
@@ -2048,7 +2049,7 @@ pub fn calculate_proportion_staked_and_reward_rate(
 
     let proportion_staked = total_stake / total_supply;
 
-    if proportion_staked < BigDecimal::from(0) || proportion_staked > BigDecimal::from(1) {
+    if proportion_staked < BigDecimal::zero() || proportion_staked > BigDecimal::one() {
         return Err(anyhow::anyhow!("Stake ratio p must be in the range [0, 1]"));
     }
 
@@ -3661,9 +3662,9 @@ mod tests {
         let (p, rp) =
             calculate_proportion_staked_and_reward_rate(&total_stake, &total_supply).unwrap();
 
-        assert!(p > BigDecimal::from(0));
-        assert!(p < BigDecimal::from(1));
-        assert!(rp > BigDecimal::from(0));
+        assert!(p > BigDecimal::zero());
+        assert!(p < BigDecimal::one());
+        assert!(rp > BigDecimal::zero());
     }
 
     #[test]
@@ -3706,7 +3707,7 @@ mod tests {
 
         assert!(p > BigDecimal::from_str("0").unwrap());
         assert!(p < BigDecimal::from_str("1e-18").unwrap()); // p should be extremely small
-        assert!(rp > BigDecimal::from(0));
+        assert!(rp > BigDecimal::zero());
     }
 
     #[test]
@@ -3717,9 +3718,9 @@ mod tests {
         let (p, rp) =
             calculate_proportion_staked_and_reward_rate(&total_stake, &total_supply).unwrap();
 
-        assert!(p < BigDecimal::from(1));
+        assert!(p < BigDecimal::one());
         assert!(p > BigDecimal::from_str("0.999999999999999999999999999").unwrap());
-        assert!(rp > BigDecimal::from(0));
+        assert!(rp > BigDecimal::zero());
     }
 
     /// tests `calculate_proportion_staked_and_reward_rate` produces correct p and R(p) values

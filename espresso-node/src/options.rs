@@ -3,25 +3,22 @@
 use core::fmt::Display;
 use std::{
     cmp::Ordering,
-    collections::{HashMap, HashSet},
+    collections::HashSet,
     fmt::{self, Formatter},
     iter::once,
     path::PathBuf,
     time::Duration,
 };
 
-use anyhow::{Context, bail};
 use clap::{Args, FromArgMatches, Parser, error::ErrorKind};
 use derivative::Derivative;
 use espresso_types::{BackoffParams, L1ClientOptions, parse_duration};
 use espresso_utils::logging;
-use hotshot_types::{addr::NetAddr, light_client::StateSignKey, signature_key::BLSPrivKey, x25519};
-use jf_signature::{bls_over_bn254, schnorr};
+use hotshot_types::addr::NetAddr;
 use libp2p::Multiaddr;
-use tagged_base64::TaggedBase64;
 use url::Url;
 
-use crate::{api, persistence, proposal_fetcher::ProposalFetcherConfig};
+use crate::{api, keyset::KeySetOptions, persistence, proposal_fetcher::ProposalFetcherConfig};
 
 // This options struct is a bit unconventional. The sequencer has multiple optional modules which
 // can be added, in any combination, to the service. These include, for example, the API server.
@@ -67,7 +64,11 @@ pub struct Options {
     pub cdn_endpoint: String,
 
     /// The address to bind to for cliquenet (in `host:port` | `ip:port` form)
-    #[clap(long, env = "ESPRESSO_SEQUENCER_CLIQUENET_BIND_ADDRESS")]
+    #[clap(
+        long,
+        env = "ESPRESSO_SEQUENCER_CLIQUENET_BIND_ADDRESS",
+        default_value = "0.0.0.0:9977"
+    )]
     pub cliquenet_bind_address: NetAddr,
 
     /// The address to bind to for Libp2p (in `host:port` form)
@@ -266,48 +267,8 @@ pub struct Options {
     )]
     pub genesis_file: PathBuf,
 
-    /// Path to file containing private keys.
-    ///
-    /// The file should follow the .env format, with two keys:
-    /// * ESPRESSO_SEQUENCER_PRIVATE_STAKING_KEY
-    /// * ESPRESSO_SEQUENCER_PRIVATE_STATE_KEY
-    ///
-    /// Appropriate key files can be generated with the `keygen` utility program.
-    #[clap(long, name = "KEY_FILE", env = "ESPRESSO_SEQUENCER_KEY_FILE")]
-    pub key_file: Option<PathBuf>,
-
-    /// Private staking key.
-    ///
-    /// This can be used as an alternative to KEY_FILE.
-    #[clap(
-        long,
-        env = "ESPRESSO_SEQUENCER_PRIVATE_STAKING_KEY",
-        conflicts_with = "KEY_FILE"
-    )]
-    #[derivative(Debug = "ignore")]
-    pub private_staking_key: Option<TaggedBase64>,
-
-    /// Private state signing key.
-    ///
-    /// This can be used as an alternative to KEY_FILE.
-    #[clap(
-        long,
-        env = "ESPRESSO_SEQUENCER_PRIVATE_STATE_KEY",
-        conflicts_with = "KEY_FILE"
-    )]
-    #[derivative(Debug = "ignore")]
-    pub private_state_key: Option<TaggedBase64>,
-
-    /// Private x25519 key.
-    ///
-    /// This can be used as an alternative to KEY_FILE.
-    #[clap(
-        long,
-        env = "ESPRESSO_SEQUENCER_PRIVATE_X25519_KEY",
-        conflicts_with = "KEY_FILE"
-    )]
-    #[derivative(Debug = "ignore")]
-    pub private_x25519_key: Option<TaggedBase64>,
+    #[clap(flatten)]
+    pub key_set: KeySetOptions,
 
     /// Add optional modules to the service.
     ///
@@ -382,42 +343,6 @@ pub struct Options {
 impl Options {
     pub fn modules(&self) -> Modules {
         ModuleArgs(self.modules.clone()).parse()
-    }
-
-    pub fn private_keys(&self) -> anyhow::Result<(BLSPrivKey, StateSignKey, x25519::SecretKey)> {
-        if let Some(path) = &self.key_file {
-            let vars = dotenvy::from_path_iter(path)?.collect::<Result<HashMap<_, _>, _>>()?;
-            let staking = TaggedBase64::parse(
-                vars.get("ESPRESSO_SEQUENCER_PRIVATE_STAKING_KEY")
-                    .context("key file missing ESPRESSO_SEQUENCER_PRIVATE_STAKING_KEY")?,
-            )?
-            .try_into()?;
-
-            let state = TaggedBase64::parse(
-                vars.get("ESPRESSO_SEQUENCER_PRIVATE_STATE_KEY")
-                    .context("key file missing ESPRESSO_SEQUENCER_PRIVATE_STATE_KEY")?,
-            )?
-            .try_into()?;
-
-            let x25519 = TaggedBase64::parse(
-                vars.get("ESPRESSO_SEQUENCER_PRIVATE_X25519_KEY")
-                    .context("key file missing ESPRESSO_SEQUENCER_PRIVATE_X25519_KEY")?,
-            )?
-            .try_into()?;
-
-            Ok((staking, state, x25519))
-        } else if let (Some(staking), Some(state), Some(x25519)) = (
-            self.private_staking_key.clone(),
-            self.private_state_key.clone(),
-            self.private_x25519_key.clone(),
-        ) {
-            let staking = bls_over_bn254::SignKey::try_from(staking)?;
-            let state = schnorr::SignKey::try_from(state)?;
-            let x25519 = x25519::SecretKey::try_from(x25519)?;
-            Ok((staking, state, x25519))
-        } else {
-            bail!("neither key file nor full set of private keys was provided")
-        }
     }
 }
 

@@ -1,65 +1,71 @@
-use std::str::FromStr;
-
-use anyhow::bail;
-use clap::Parser;
-use espresso_types::{PrivKey, PubKey};
+use anyhow::Context;
+use clap::{Parser, ValueEnum};
+use derive_more::Display;
+use espresso_node::keyset::{KeySet, KeySetOptions};
+use espresso_types::PubKey;
 use hotshot::{traits::implementations::derive_libp2p_peer_id, types::BLSPubKey};
-use hotshot_types::{
-    light_client::{StateKeyPair, StateSignKey},
-    traits::signature_key::SignatureKey,
-};
-use tagged_base64::TaggedBase64;
+use hotshot_types::{light_client::StateKeyPair, traits::signature_key::SignatureKey, x25519};
 
-#[derive(Clone, Debug)]
-enum PrivateKey {
-    Bls(PrivKey),
-    Schnorr(StateSignKey),
+#[derive(Clone, Copy, Debug, Display, Default, ValueEnum)]
+enum Scheme {
+    #[default]
+    #[display("all")]
+    All,
+    #[display("bls")]
+    Bls,
+    #[display("schnorr")]
+    Schnorr,
+    #[display("x25519")]
+    X25519,
+    #[display("libp2p")]
+    Libp2p,
 }
 
-impl FromStr for PrivateKey {
-    type Err = anyhow::Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if let Ok(key) = TaggedBase64::parse(s)?.try_into() {
-            Ok(Self::Bls(key))
-        } else if let Ok(key) = TaggedBase64::parse(s)?.try_into() {
-            Ok(Self::Schnorr(key))
-        } else {
-            bail!("unrecognized key type")
+impl Scheme {
+    fn print(self, keys: &KeySet) -> anyhow::Result<()> {
+        match self {
+            Scheme::All => {
+                for scheme in [Scheme::Bls, Scheme::Schnorr, Scheme::X25519, Scheme::Libp2p] {
+                    scheme.print(keys)?;
+                }
+            },
+            Scheme::Bls => println!("{}", PubKey::from_private(&keys.staking)),
+            Scheme::Schnorr => println!(
+                "{}",
+                StateKeyPair::from_sign_key(keys.state.clone()).ver_key()
+            ),
+            Scheme::X25519 => println!(
+                "{}",
+                x25519::Keypair::from(keys.x25519.clone()).public_key()
+            ),
+            Scheme::Libp2p => println!(
+                "{}",
+                derive_libp2p_peer_id::<BLSPubKey>(&keys.staking)
+                    .context("deriving libp2p peer ID")?
+            ),
         }
+
+        Ok(())
     }
 }
 
-/// Get the public key corresponding to a private key.
+/// Print the public keys for the configured node.
+///
+/// This command takes the same options/env vars pertaining to private keys as the main node, and
+/// prints the public keys corresponding to the configured private keys.
 #[derive(Clone, Debug, Parser)]
 struct Options {
-    /// The private key to get the public key for.
-    key: PrivateKey,
+    #[clap(flatten)]
+    key_set: KeySetOptions,
 
-    // Whether or not to derive the libp2p peer ID from the private key.
-    #[clap(long, short)]
-    libp2p: bool,
+    /// Which key to print.
+    #[clap(short, long)]
+    scheme: Scheme,
 }
 
-fn main() {
+fn main() -> anyhow::Result<()> {
     let opt = Options::parse();
-
-    match (opt.libp2p, opt.key) {
-        // Non-libp2p
-        (false, PrivateKey::Bls(key)) => println!("{}", PubKey::from_private(&key)),
-        (false, PrivateKey::Schnorr(key)) => {
-            println!("{}", StateKeyPair::from_sign_key(key).ver_key())
-        },
-
-        // Libp2p
-        (true, PrivateKey::Bls(key)) => {
-            println!(
-                "{}",
-                derive_libp2p_peer_id::<BLSPubKey>(&key).expect("Failed to derive libp2p peer ID")
-            );
-        },
-        (true, _) => {
-            eprintln!("Key type unsupported for libp2p peer ID derivation");
-        },
-    }
+    let keys = KeySet::try_from(opt.key_set).context("generating keys")?;
+    opt.scheme.print(&keys)?;
+    Ok(())
 }

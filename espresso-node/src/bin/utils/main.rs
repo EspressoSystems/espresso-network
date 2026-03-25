@@ -2,9 +2,7 @@
 
 use clap::{Parser, Subcommand};
 use espresso_utils::logging;
-mod keygen;
 mod ns_aggregator;
-mod pubkey;
 mod reset_storage;
 
 #[derive(Debug, Parser)]
@@ -18,8 +16,6 @@ struct Options {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    Keygen(keygen::Options),
-    Pubkey(pubkey::Options),
     #[command(subcommand)]
     ResetStorage(reset_storage::Commands),
     NsAggregator(ns_aggregator::Options),
@@ -31,11 +27,6 @@ async fn main() -> anyhow::Result<()> {
     opt.logging.init();
 
     match opt.command {
-        Command::Keygen(opt) => keygen::run(opt),
-        Command::Pubkey(opt) => {
-            pubkey::run(opt);
-            Ok(())
-        },
         Command::ResetStorage(opt) => reset_storage::run(opt).await,
         Command::NsAggregator(opt) => ns_aggregator::run(opt).await,
     }

@@ -271,7 +271,7 @@ async fn main() {
         }
 
         // Get all transactions which were submitted before this block.
-        while let Ok(Some(tx)) = receiver.try_next() {
+        while let Ok(tx) = receiver.try_recv() {
             pending.insert(tx.hash, tx.submitted_at);
         }
 

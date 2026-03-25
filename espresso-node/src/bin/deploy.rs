@@ -13,7 +13,7 @@ use espresso_contract_deployer::{
     Contract, Contracts, DeployedContracts, OwnableContract, build_provider, build_provider_ledger,
     builder::DeployerArgsBuilder,
     network_config::{light_client_genesis, light_client_genesis_from_stake_table},
-    proposals::{multisig::verify_node_js_files, timelock::TimelockOperationType},
+    proposals::timelock::TimelockOperationType,
     provider::connect_ledger,
 };
 use espresso_types::{config::PublicNetworkConfig, parse_duration};
@@ -243,18 +243,13 @@ struct Options {
     #[clap(long, default_value = "false")]
     pub use_multisig: bool,
 
-    /// Option to test upgrade stake table v2 multisig owner dry run
-    /// TODO: have dry-runs handle all operations
-    #[clap(long, default_value = "false")]
-    pub dry_run: bool,
-
     /// Option to test locally but with a real eth network
     #[clap(long, default_value = "false")]
     pub mock_espresso_live_network: bool,
 
-    /// Option to verify access to Node.js files required for Safe multisig operations.
-    #[clap(long, default_value = "false")]
-    pub verify_node_js_files: bool,
+    /// Path to write calldata output (default: stdout)
+    #[clap(long, name = "CALLDATA_OUT")]
+    pub calldata_out: Option<PathBuf>,
 
     /// Stake table capacity for the prover circuit
     #[clap(short, long, env = "ESPRESSO_SEQUENCER_STAKE_TABLE_CAPACITY", default_value_t = DEFAULT_STAKE_TABLE_CAPACITY)]
@@ -472,7 +467,6 @@ struct Options {
 enum Command {
     Account,
     Balance,
-    VerifyNodeJsFiles,
 }
 
 #[tokio::main]
@@ -480,11 +474,6 @@ async fn main() -> anyhow::Result<()> {
     let opt = Options::parse();
 
     opt.logging.init();
-
-    if matches!(opt.command, Some(Command::VerifyNodeJsFiles)) {
-        verify_node_js_files().await?;
-        return Ok(());
-    };
 
     let mut contracts = Contracts::from(opt.contracts);
     contracts.set_cooldown(opt.post_deployment_cooldown);
@@ -524,7 +513,6 @@ async fn main() -> anyhow::Result<()> {
                 println!("{account}: {} Eth", format_ether(balance));
                 return Ok(());
             },
-            _ => unreachable!(),
         };
     };
 
@@ -548,9 +536,11 @@ async fn main() -> anyhow::Result<()> {
         .deployer(provider.clone())
         .mock_light_client(opt.use_mock)
         .use_multisig(opt.use_multisig)
-        .dry_run(opt.dry_run)
         .rpc_url(opt.rpc_url.clone())
-        .ledger(opt.ledger);
+        .chain_id(chain_id);
+    if let Some(path) = opt.calldata_out {
+        args_builder.output_path(path);
+    }
     if let Some(multisig) = opt.multisig_address {
         args_builder.multisig(multisig);
     }
@@ -580,31 +570,30 @@ async fn main() -> anyhow::Result<()> {
         }
     }
     if opt.upgrade_light_client_v2 || opt.upgrade_light_client_v3 {
-        let (blocks_per_epoch, epoch_start_block) =
-            if (opt.dry_run && opt.use_multisig) || opt.mock_espresso_live_network {
-                (10, 22)
-            } else {
-                // fetch epoch length from HotShot config
-                // Request the configuration until it is successful
-                loop {
-                    match surf_disco::Client::<ServerError, StaticVersion<0, 1>>::new(
-                        opt.sequencer_url.clone(),
-                    )
-                    .get::<PublicNetworkConfig>("config/hotshot")
-                    .send()
-                    .await
-                    {
-                        Ok(resp) => {
-                            let config = resp.hotshot_config();
-                            break (config.blocks_per_epoch(), config.epoch_start_block());
-                        },
-                        Err(e) => {
-                            tracing::error!("Failed to fetch the network config: {e}");
-                            sleep(Duration::from_secs(5));
-                        },
-                    }
+        let (blocks_per_epoch, epoch_start_block) = if opt.mock_espresso_live_network {
+            (10, 22)
+        } else {
+            // fetch epoch length from HotShot config
+            // Request the configuration until it is successful
+            loop {
+                match surf_disco::Client::<ServerError, StaticVersion<0, 1>>::new(
+                    opt.sequencer_url.clone(),
+                )
+                .get::<PublicNetworkConfig>("config/hotshot")
+                .send()
+                .await
+                {
+                    Ok(resp) => {
+                        let config = resp.hotshot_config();
+                        break (config.blocks_per_epoch(), config.epoch_start_block());
+                    },
+                    Err(e) => {
+                        tracing::error!("Failed to fetch the network config: {e}");
+                        sleep(Duration::from_secs(5));
+                    },
                 }
-            };
+            }
+        };
         args_builder.blocks_per_epoch(blocks_per_epoch);
         args_builder.epoch_start_block(epoch_start_block);
     }
@@ -851,7 +840,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Execute ownership transfer proposal if requested
     if opt.propose_transfer_ownership_to_timelock {
-        args.propose_transfer_ownership_to_timelock(&mut contracts)
+        args.encode_transfer_ownership_to_timelock(&mut contracts)
             .await?;
     }
 
@@ -866,7 +855,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     if opt.propose_multisig_transaction {
-        args.propose_multisig_transaction().await?;
+        args.encode_multisig_transaction().await?;
     }
 
     // finally print out or persist deployed addresses

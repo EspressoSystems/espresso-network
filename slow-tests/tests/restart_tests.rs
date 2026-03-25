@@ -34,6 +34,7 @@ use espresso_node::{
     },
     context::SequencerContext,
     genesis::{Genesis, L1Finalized, StakeTableConfig},
+    keyset::KeySet,
     network::{
         self,
         cdn::{TestingDef, WrappedSignatureKey},
@@ -814,8 +815,8 @@ impl TestNetwork {
             .iter()
             .chain(self.regular_nodes.iter())
             .map(|node| {
-                let keys = node.opt.private_keys().unwrap();
-                (keys.0, StateKeyPair::from_sign_key(keys.1))
+                let keys = KeySet::try_from(node.opt.key_set.clone()).unwrap();
+                (keys.staking, StateKeyPair::from_sign_key(keys.state))
             })
             .collect();
 
