@@ -7,8 +7,8 @@ use hotshot::{
 use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
-    simple_certificate::QuorumCertificate2,
-    simple_vote::QuorumVote2,
+    simple_certificate::{QuorumCertificate2, TimeoutCertificate2},
+    simple_vote::{QuorumVote2, TimeoutVote2},
     traits::{
         block_contents::BlockHeader,
         node_implementation::NodeType,
@@ -39,6 +39,7 @@ pub(crate) struct Coordinator<T: NodeType, I: NodeImplementation<T>> {
     vid_reconstruction_task: VidReconstructionTask<T>,
     vote1_task: VoteCollectionTask<T, QuorumVote2<T>, QuorumCertificate2<T>>,
     vote2_task: VoteCollectionTask<T, Vote2<T>, Certificate2<T>>,
+    timeout_vote_task: VoteCollectionTask<T, TimeoutVote2<T>, TimeoutCertificate2<T>>,
     drb_request_task: DrbRequestTask,
     membership_coordinator: EpochMembershipCoordinator<T>,
     outbox: Outbox<ConsensusOutput<T>>,
@@ -68,7 +69,14 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                 membership_coordinator.clone(),
                 upgrade_lock.clone(),
             ),
-            vote2_task: VoteCollectionTask::new(membership_coordinator.clone(), upgrade_lock),
+            vote2_task: VoteCollectionTask::new(
+                membership_coordinator.clone(),
+                upgrade_lock.clone(),
+            ),
+            timeout_vote_task: VoteCollectionTask::new(
+                membership_coordinator.clone(),
+                upgrade_lock.clone(),
+            ),
             drb_request_task: DrbRequestTask::new(
                 null_store_drb_progress_fn(),
                 null_load_drb_progress_fn(),
@@ -108,8 +116,7 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                             self.process_input(ConsensusInput::Certificate2(certificate2)).await;
                         }
                         ConsensusMessage::TimeoutVote(timeout_vote) => {
-                            // we meed a vote accumulator for timeout votes
-                            todo!()
+                            self.timeout_vote_task.accumulate_vote(timeout_vote).await;
                         }
                         ConsensusMessage::Transactions(transactions, view) => {
                             todo!()
