@@ -397,7 +397,7 @@ async fn test_state_verification_failed_removes_proposal() {
     // Send StateVerificationFailed — removes proposal
     let proposal = &test_data.views[1].proposal.data.proposal;
     harness
-        .apply_input(ConsensusInput::StateVerificationFailed(StateResponse {
+        .apply_input(ConsensusInput::StateValidationFailed(StateResponse {
             view: test_data.views[1].view_number,
             commitment: proposal_commitment(proposal),
             state: Arc::new(

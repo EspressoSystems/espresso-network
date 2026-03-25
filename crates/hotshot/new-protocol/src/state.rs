@@ -21,7 +21,7 @@ use crate::{
 type StateError<T> = <<T as NodeType>::ValidatedState as ValidatedState<T>>::Error;
 type HeaderError<T> = <<T as NodeType>::BlockHeader as BlockHeader<T>>::Error;
 
-pub(crate) struct ValidatedStateManager<T: NodeType> {
+pub(crate) struct StateManager<T: NodeType> {
     instance: Arc<T::InstanceState>,
     validated_states: BTreeMap<ViewNumber, (Arc<T::ValidatedState>, Leaf2<T>)>,
     state_requests: HashMap<Commitment<Leaf2<T>>, (AbortHandle, StateRequest<T>)>,
@@ -46,7 +46,7 @@ enum Pending<T: NodeType> {
     Header(HeaderRequest<T>),
 }
 
-impl<T: NodeType> ValidatedStateManager<T> {
+impl<T: NodeType> StateManager<T> {
     pub fn new(instance: Arc<T::InstanceState>) -> Self {
         Self {
             instance,
@@ -214,7 +214,7 @@ impl<T: NodeType> ValidatedStateManager<T> {
                 self.validated_states
                     .insert(response.view, (response.state, leaf));
                 self.start_pending(response.commitment);
-                Some(Event::StateVerified(request))
+                Some(Event::StateValidated(request))
             },
             Err(err) => {
                 error!(%err, "state validation failed");
@@ -346,8 +346,8 @@ mod test {
         }
     }
 
-    async fn new_manager() -> ValidatedStateManager<TestTypes> {
-        let mut manager = ValidatedStateManager::new(Arc::new(TestInstanceState::default()));
+    async fn new_manager() -> StateManager<TestTypes> {
+        let mut manager = StateManager::new(Arc::new(TestInstanceState::default()));
         let genesis_state = TestValidatedState::default();
         let genesis_leaf = Leaf2::<TestTypes>::genesis(
             &genesis_state,
@@ -362,7 +362,7 @@ mod test {
     fn count_state_verified(events: &[Event<TestTypes>]) -> usize {
         events
             .iter()
-            .filter(|e| matches!(e, Event::StateVerified(_)))
+            .filter(|e| matches!(e, Event::StateValidated(_)))
             .count()
     }
 
@@ -376,7 +376,7 @@ mod test {
     /// State request with missing parent inserts empty state (no output produced).
     #[tokio::test]
     async fn test_state_request_missing_parent_inserts_empty() {
-        let mut manager = ValidatedStateManager::new(Arc::new(TestInstanceState::default()));
+        let mut manager = StateManager::new(Arc::new(TestInstanceState::default()));
         let test_data = TestData::new(2).await;
 
         // View 1's parent is genesis (view 0), which isn't seeded.
@@ -407,7 +407,7 @@ mod test {
 
         let output = manager.next().await.expect("should produce output");
         assert!(
-            matches!(output, Event::StateVerified(_)),
+            matches!(output, Event::StateValidated(_)),
             "Should receive StateVerified after validation completes"
         );
     }
@@ -426,7 +426,7 @@ mod test {
         manager.request_state(make_state_request(&test_data.views[1]));
         let output = manager.next().await.expect("should produce output");
         assert!(
-            matches!(output, Event::StateVerified(_)),
+            matches!(output, Event::StateValidated(_)),
             "View 2 should produce StateVerified"
         );
     }
@@ -502,7 +502,7 @@ mod test {
         // next() processes state completion, which chains the header request.
         let output1 = manager.next().await.expect("state should complete");
         assert!(
-            matches!(output1, Event::StateVerified(_)),
+            matches!(output1, Event::StateValidated(_)),
             "State should be verified first"
         );
 
@@ -524,7 +524,7 @@ mod test {
         manager.request_state(make_state_request(&test_data.views[0]));
 
         let output = manager.next().await.expect("should produce output");
-        assert!(matches!(output, Event::StateVerified(_)));
+        assert!(matches!(output, Event::StateValidated(_)));
 
         // No second output — duplicate was ignored.
         assert!(
