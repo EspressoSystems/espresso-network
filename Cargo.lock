@@ -10773,6 +10773,7 @@ dependencies = [
  "async-once-cell",
  "async-trait",
  "bincode",
+ "blake3",
  "byteorder",
  "cdn-broker",
  "cdn-marshal",

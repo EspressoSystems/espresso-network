@@ -118,16 +118,14 @@ impl TryFrom<KeySetOptions> for KeySet {
 
         // If provided, a mnemonic or key file can be used to fill in missing keys.
         if let Some(mnemonic) = opt.mnemonic {
-            let seed64 = mnemonic.to_seed(None).context("invalid mnemonic")?;
-            // Just take the first 32 bytes of entropy.
-            let mut seed = [0; 32];
-            seed.copy_from_slice(&seed64[..32]);
-
+            let entropy = mnemonic.to_seed(None).context("invalid mnemonic")?;
             let index = opt.index.unwrap_or_default();
             if staking.is_none() {
+                let seed = blake3::derive_key("espresso staking key", &entropy);
                 staking = Some(BLSPubKey::generated_from_seed_indexed(seed, index).1);
             }
             if state.is_none() {
+                let seed = blake3::derive_key("espresso state key", &entropy);
                 state = Some(
                     StateKeyPair::generate_from_seed_indexed(seed, index)
                         .0
@@ -135,6 +133,7 @@ impl TryFrom<KeySetOptions> for KeySet {
                 );
             }
             if x25519.is_none() {
+                let seed = blake3::derive_key("espresso x25519 key", &entropy);
                 x25519 = Some(
                     x25519::Keypair::generated_from_seed_indexed(seed, index)
                         .context("generating x25519 key from mnemonic")?

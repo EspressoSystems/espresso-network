@@ -1,3 +1,4 @@
+use anyhow::Context;
 use clap::{Parser, ValueEnum};
 use derive_more::Display;
 use espresso_types::PubKey;
@@ -21,11 +22,11 @@ enum Scheme {
 }
 
 impl Scheme {
-    fn print(self, keys: &KeySet) {
+    fn print(self, keys: &KeySet) -> anyhow::Result<()> {
         match self {
             Scheme::All => {
                 for scheme in [Scheme::Bls, Scheme::Schnorr, Scheme::X25519, Scheme::Libp2p] {
-                    scheme.print(keys);
+                    scheme.print(keys)?;
                 }
             },
             Scheme::Bls => println!("{}", PubKey::from_private(&keys.staking)),
@@ -40,9 +41,11 @@ impl Scheme {
             Scheme::Libp2p => println!(
                 "{}",
                 derive_libp2p_peer_id::<BLSPubKey>(&keys.staking)
-                    .expect("Failed to derive libp2p peer ID")
+                    .context("deriving libp2p peer ID")?
             ),
         }
+
+        Ok(())
     }
 }
 
@@ -60,8 +63,9 @@ struct Options {
     scheme: Scheme,
 }
 
-fn main() {
+fn main() -> anyhow::Result<()> {
     let opt = Options::parse();
-    let keys = KeySet::try_from(opt.key_set).unwrap();
-    opt.scheme.print(&keys);
+    let keys = KeySet::try_from(opt.key_set).context("generating keys")?;
+    opt.scheme.print(&keys)?;
+    Ok(())
 }
