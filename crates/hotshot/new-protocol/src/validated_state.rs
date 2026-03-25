@@ -262,6 +262,16 @@ impl<T: NodeType> ValidatedStateManager<T> {
             ),
         );
     }
+    pub fn gc(&mut self, view_number: ViewNumber) {
+        self.validated_states = self.validated_states.split_off(&view_number);
+        for (handle, request) in self.state_requests.values_mut() {
+            if request.view < view_number {
+                handle.abort();
+            }
+        }
+        self.state_requests
+            .retain(|_, (_, request)| request.view >= view_number);
+    }
 }
 
 #[cfg(test)]

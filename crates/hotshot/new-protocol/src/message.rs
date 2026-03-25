@@ -16,6 +16,8 @@ use hotshot_types::{
 use serde::{Deserialize, Serialize};
 
 pub type Vote2<TYPES> = SimpleVote<TYPES, Vote2Data<TYPES>>;
+pub type CheckpointVote<TYPES> = SimpleVote<TYPES, CheckpointData>;
+pub type CheckpointCertificate<TYPES> = SimpleCertificate<TYPES, CheckpointData, SuccessThreshold>;
 pub type Certificate1<TYPES> = SimpleCertificate<TYPES, QuorumData2<TYPES>, SuccessThreshold>;
 pub type Certificate2<TYPES> = SimpleCertificate<TYPES, Vote2Data<TYPES>, SuccessThreshold>;
 
@@ -40,6 +42,37 @@ pub struct Vote2Data<TYPES: NodeType> {
     pub epoch: EpochNumber,
     pub block_number: u64,
 }
+
+/// Data used .
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
+#[serde(bound(deserialize = ""))]
+pub struct CheckpointData {
+    pub view: ViewNumber,
+    pub epoch: EpochNumber,
+}
+
+impl Committable for CheckpointData {
+    fn commit(&self) -> Commitment<Self> {
+        committable::RawCommitmentBuilder::new("CheckpointData")
+            .u64(*self.view)
+            .u64(*self.epoch)
+            .finalize()
+    }
+}
+
+impl HasViewNumber for CheckpointData {
+    fn view_number(&self) -> ViewNumber {
+        self.view
+    }
+}
+
+impl HasEpoch for CheckpointData {
+    fn epoch(&self) -> Option<EpochNumber> {
+        Some(self.epoch)
+    }
+}
+
+impl QuorumMarker for CheckpointData {}
 
 impl<TYPES: NodeType> HasEpoch for Vote2Data<TYPES> {
     fn epoch(&self) -> Option<EpochNumber> {
@@ -83,7 +116,7 @@ pub enum ConsensusMessage<TYPES: NodeType> {
     Certificate2(Certificate2<TYPES>, TYPES::SignatureKey),
     TimeoutVote(TimeoutVote2<TYPES>),
     Transactions(Vec<TYPES::Transaction>, ViewNumber),
-    Checkpoint(ViewNumber, EpochNumber),
+    Checkpoint(CheckpointVote<TYPES>),
 }
 
 impl<TYPES: NodeType> HasViewNumber for ConsensusMessage<TYPES> {
@@ -96,7 +129,7 @@ impl<TYPES: NodeType> HasViewNumber for ConsensusMessage<TYPES> {
             ConsensusMessage::Certificate2(certificate, _) => certificate.view_number(),
             ConsensusMessage::TimeoutVote(vote) => vote.view_number(),
             ConsensusMessage::Transactions(_, view_number) => *view_number,
-            ConsensusMessage::Checkpoint(view_number, _) => *view_number,
+            ConsensusMessage::Checkpoint(vote) => vote.view_number(),
         }
     }
 }

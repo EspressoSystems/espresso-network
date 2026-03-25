@@ -167,6 +167,7 @@ pub mod testing {
                 Action::SendVote1(..) => {},
                 Action::SendVote2(..) => {},
                 Action::SendTimeoutVote(..) => {},
+                Action::SendCheckpointVote(..) => {},
                 Action::RequestState(state_request) => {
                     if let Some(sm) = &mut self.state_manager {
                         sm.request_state(state_request.clone());

@@ -4,11 +4,12 @@ use bon::Builder;
 use futures::{FutureExt, future::BoxFuture};
 use hotshot::{traits::NodeImplementation, types::SystemContextHandle};
 use hotshot_types::{
-    data::ViewNumber,
+    data::{EpochNumber, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     simple_certificate::{QuorumCertificate2, TimeoutCertificate2},
-    simple_vote::{QuorumVote2, TimeoutVote2},
+    simple_vote::{HasEpoch, QuorumVote2, TimeoutVote2},
     traits::{block_contents::BlockHeader, node_implementation::NodeType},
+    vote::HasViewNumber,
 };
 use tokio::{select, time::sleep};
 use tracing::{error, warn};
@@ -19,7 +20,10 @@ use crate::{
     drb::DrbRequester,
     events::*,
     io::network::{Network, is_critical},
-    message::{Certificate2, ConsensusMessage, Message, MessageType, ProposalMessage, Vote2},
+    message::{
+        Certificate2, CheckpointCertificate, CheckpointVote, ConsensusMessage, Message,
+        MessageType, ProposalMessage, Vote2,
+    },
     validated_state::ValidatedStateManager,
     vid::{VidDisperser, VidReconstructor},
     vote::VoteCollector,
@@ -61,6 +65,7 @@ pub(crate) struct Coordinator<T: NodeType, I: NodeImplementation<T>> {
     vote1_collector: VoteCollector<T, QuorumVote2<T>, QuorumCertificate2<T>>,
     vote2_collector: VoteCollector<T, Vote2<T>, Certificate2<T>>,
     timeout_collector: VoteCollector<T, TimeoutVote2<T>, TimeoutCertificate2<T>>,
+    checkpoint_collector: VoteCollector<T, CheckpointVote<T>, CheckpointCertificate<T>>,
     drb_requester: DrbRequester,
     membership_coordinator: EpochMembershipCoordinator<T>,
     #[builder(default)]
@@ -103,6 +108,9 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                 Some(cert2) = self.vote2_collector.next() => {
                     self.evaluate(ConsensusInput::Certificate2(cert2)).await;
                 }
+                Some(checkpoint_cert) = self.checkpoint_collector.next() => {
+                    self.gc(checkpoint_cert.view_number(), checkpoint_cert.epoch().unwrap());
+                }
                 Some(item) = self.vid_disperser.next() => match item {
                     Ok((view, _, disperse)) => {
                         self.evaluate(ConsensusInput::VidDisperseCreated(view, disperse)).await;
@@ -128,6 +136,20 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                 }
             }
         }
+    }
+
+    fn gc(&mut self, view_number: ViewNumber, epoch: EpochNumber) {
+        self.consensus.gc(view_number, epoch);
+        self.checkpoint_collector.gc(view_number);
+        self.network.gc(view_number, epoch);
+        self.state_manager.gc(view_number);
+        self.vid_disperser.gc(view_number);
+        self.vid_reconstructor.gc(view_number);
+        self.vote1_collector.gc(view_number);
+        self.vote2_collector.gc(view_number);
+        self.timeout_collector.gc(view_number);
+        self.checkpoint_collector.gc(view_number);
+        self.drb_requester.gc(epoch);
     }
 
     /// Process an incoming network message.
@@ -165,8 +187,8 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                 ConsensusMessage::Transactions(transactions, view) => {
                     todo!()
                 },
-                ConsensusMessage::Checkpoint(view, epoch) => {
-                    todo!()
+                ConsensusMessage::Checkpoint(checkpoint) => {
+                    self.checkpoint_collector.accumulate_vote(checkpoint).await;
                 },
             },
             MessageType::ViewSync(_) => todo!(),
@@ -240,6 +262,19 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                     .await
                     .inspect_err(|e| warn!(%e, "failed to send timeout vote"));
             },
+            Action::SendCheckpointVote(checkpoint_vote) => {
+                let message = Message {
+                    sender: self.system_context.public_key(),
+                    message_type: MessageType::Consensus(ConsensusMessage::Checkpoint(
+                        checkpoint_vote,
+                    )),
+                };
+                let _ = self
+                    .network
+                    .broadcast(message)
+                    .await
+                    .inspect_err(|e| warn!(%e, "failed to send checkpoint vote"));
+            },
             Action::RequestState(state_request) => {
                 self.state_manager.request_state(state_request);
             },
@@ -268,6 +303,7 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
             Event::ViewChanged(view_number, _epoch) => {
                 self.timer.reset(view_number);
             },
+            Event::LeafDecided(leaves) => {},
 
             _ => error!("TODO"),
         }
