@@ -45,6 +45,7 @@ pub(crate) struct BlockBuilder<T: NodeType> {
     config: BlockBuilderConfig,
     current_view: ViewNumber,
     #[cfg(test)]
+    #[allow(clippy::type_complexity)]
     test_drain: Option<Box<dyn Fn(ViewNumber) -> Vec<T::Transaction> + Send>>,
 }
 
