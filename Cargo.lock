@@ -4453,13 +4453,16 @@ dependencies = [
  "derive_builder",
  "derive_more 2.1.0",
  "dotenvy",
+ "espresso-safe-tx-builder",
  "espresso-types",
  "hotshot-contract-adapter",
  "hotshot-types",
  "rand 0.8.5",
  "sequencer-utils",
+ "serde",
  "serde_json",
  "surf-disco",
+ "tempfile",
  "test-log",
  "tide-disco",
  "tokio",
@@ -4537,6 +4540,18 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 1.0.109",
+]
+
+[[package]]
+name = "espresso-safe-tx-builder"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tracing",
 ]
 
 [[package]]
@@ -5924,6 +5939,26 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.111",
+]
+
+[[package]]
+name = "hotshot-new-protocol"
+version = "0.1.0"
+dependencies = [
+ "async-broadcast",
+ "async-lock 3.4.1",
+ "bon",
+ "committable",
+ "futures",
+ "hotshot",
+ "hotshot-example-types",
+ "hotshot-testing",
+ "hotshot-types",
+ "serde",
+ "time 0.3.47",
+ "tokio",
+ "tracing",
+ "versions",
 ]
 
 [[package]]
@@ -10773,6 +10808,7 @@ dependencies = [
  "async-once-cell",
  "async-trait",
  "bincode",
+ "blake3",
  "byteorder",
  "cdn-broker",
  "cdn-marshal",
@@ -11688,6 +11724,7 @@ dependencies = [
  "directories 6.0.0",
  "dotenvy",
  "espresso-contract-deployer",
+ "espresso-safe-tx-builder",
  "espresso-types",
  "futures-util",
  "hotshot-contract-adapter",

@@ -15,14 +15,16 @@
 ## Prerequisites
 
 - Rust and Cargo installed
-- Docker and Docker Compose installed
+- Docker and Docker Compose installed (only needed for docker-compose deployment)
 - Foundry (for verification commands)
 - Access to an Ethereum RPC endpoint
 
 ## Assumptions
 
 - the config in .env file is valid, if not, check the readme or code for the requirements
-- if using multisigs, the eth network is supported by Safe SDK
+- if using multisigs, the deployer outputs
+  [Safe TX Builder](https://help.safe.global/en/articles/40795-transaction-builder) JSON that can be imported into the
+  Safe UI
 
 # Fee Contract
 
@@ -333,14 +335,10 @@ RUST_LOG=info cargo run --bin deploy -- \
 **Requirements:**
 
 - `ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS` must be set
-- The deployer account must have proposal rights on the Safe multisig
-- Operations create a Safe proposal requiring multisig approval
-- After approval, the proposal can be executed **Note:** After creating a multisig proposal, you'll receive a link to
-  the Safe UI where signers can approve the proposal:
-
-```
-Send this link to the signers to sign the proposal: https://app.safe.global/transactions/queue?safe=0xMULTISIG_ADDRESS
-```
+- Multisig operations output Safe TX Builder JSON to stdout
+- Import the JSON into the Safe UI's
+  [Transaction Builder](https://help.safe.global/en/articles/40795-transaction-builder) to create the transaction
+- After the required signers approve, the transaction can be executed
 
 ## Transfer Ownership
 
@@ -670,7 +668,7 @@ Before upgrading to ESP Token V2, ensure you have:
 
 - Deployed ESP Token V1
 - The token proxy is owned by the appropriate timelock
-- set the multisig as a real multisig address or add `--dry-run` to the commands below if not doing a real run.
+- set the multisig address (the deployer will output Safe TX Builder JSON for multisig operations)
 
 ```bash
 export ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS="<0x...multisig-address>"
@@ -689,7 +687,7 @@ RUST_LOG=info cargo run --bin deploy -- \
   --upgrade-esp-token-v2 \
   --rpc-url=$RPC_URL \
   --use-multisig
-  # to simulate, add --dry-run
+
 ```
 
 ### Upgrading with Docker Compose
@@ -702,11 +700,12 @@ docker compose run --rm \
   -v $(pwd)/.env.mydemo:/app/.env.mydemo \
   deploy-sequencer-contracts \
   deploy --deploy-esp-token-v1 --upgrade-esp-token-v2 --rpc-url=$RPC_URL --use-multisig
-  # to simulate, add --dry-run
+
 ```
 
-You should see the output which says something like:
-`EspTokenProxy upgrade proposal sent. Send this link to the signers to sign the proposal: https://app.safe.global/transactions/queue?safe=YOUR_MULTISIG_ADDRESS`
+The deployer will output Safe TX Builder JSON to stdout. Import this JSON into the Safe UI's
+[Transaction Builder](https://help.safe.global/en/articles/40795-transaction-builder) to create the multisig
+transaction.
 
 ### Verifying the Upgrade
 
@@ -1072,23 +1071,22 @@ docker compose run --rm \
   \
   deploy-sequencer-contracts \
   deploy --upgrade-light-client-v2 --rpc-url=$RPC_URL --use-multisig --out $OUTPUT_FILE
-  # to simulate, add --dry-run
+
 ```
 
 **Note**: The upgrade process will:
 
 - Deploy LightClientV2 implementation
-- Create a multisig proposal to upgrade the proxy
+- Output Safe TX Builder JSON for upgrading the proxy via multisig
 - Initialize the V2 contract with the provided epoch configuration
-- The timelock address is owned by a multisig currently so we have to send through a multisig proposal to handle the
-  upgrade
+- The timelock address is owned by a multisig, so the upgrade must go through the multisig
 
-5. Verify the upgrade proposal was created
+5. The deployer will output Safe TX Builder JSON to stdout. Import this JSON into the Safe UI's
+   [Transaction Builder](https://help.safe.global/en/articles/40795-transaction-builder) to create the multisig
+   transaction.
 
-You should see output similar to:
-`LightClientProxy upgrade proposal sent. Send this link to the signers to sign the proposal: https://app.safe.global/transactions/queue?safe=YOUR_MULTISIG_ADDRESS`
-
-6. After the multisig signs and executes the proposal, verify the upgrade on-chain (assuming you have Foundry installed)
+6. After the multisig signs and executes the transaction, verify the upgrade on-chain (assuming you have Foundry
+   installed)
 
 ```bash
 # First, source the output file to load the deployed contract address
@@ -1159,22 +1157,21 @@ docker compose run --rm \
   --timelock-address $ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS \
   --rpc-url=$RPC_URL \
   --out $OUTPUT_FILE
-  # to simulate, add --dry-run
+
 ```
 
 **Note**: The admin transfer process will:
 
-- Create a multisig proposal to call `transferOwnership(address)` on the LightClientProxy
+- Output Safe TX Builder JSON to call `transferOwnership(address)` on the LightClientProxy via multisig
 - Set the OpsTimelock as the new admin/owner of the LightClientProxy
 - Maintain the proxy's functionality while changing administrative control
 
-5. Verify the admin transfer proposal was created
+5. The deployer will output Safe TX Builder JSON to stdout. Import this JSON into the Safe UI's
+   [Transaction Builder](https://help.safe.global/en/articles/40795-transaction-builder) to create the multisig
+   transaction.
 
-You should see output similar to:
-`LightClientProxy ownership transfer proposal sent. Send this link to the signers to sign the proposal: https://app.safe.global/transactions/queue?safe=0xESPRESSOSYS_MULTISIG_ADDRESS`
-
-6. After the signer threshold signs the proposal and one executes the proposal, verify the admin transfer on-chain
-   (assuming you have Foundry installed)
+6. After the signer threshold signs and executes the transaction, verify the admin transfer on-chain (assuming you have
+   Foundry installed)
 
 ```bash
 # First, source the output file to load the deployed contract addresses
@@ -1224,7 +1221,7 @@ docker compose run --rm \
   \
   deploy-sequencer-contracts \
   deploy --deploy-esp-token-v1 --use-timelock-owner --rpc-url=$RPC_URL --out $OUTPUT_FILE
-  # to simulate, add --dry-run
+
 ```
 
 **Note**: The EspToken deployment process will:
@@ -1333,7 +1330,7 @@ docker compose run --rm \
   \
   deploy-sequencer-contracts \
   deploy --deploy-stake-table-v1 --upgrade-stake-table-v2 --use-timelock-owner --rpc-url=$RPC_URL --out $OUTPUT_FILE
-  # to simulate, add --dry-run
+
 ```
 
 **Note**: The StakeTable deployment and upgrade process will:
@@ -1560,21 +1557,20 @@ docker compose run --rm \
   --timelock-address $ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS \
   --rpc-url=$RPC_URL \
   --out $OUTPUT_FILE
-  # to simulate, add --dry-run
+
 ```
 
 **Note**: The admin transfer process will:
 
-- Create a multisig proposal to call `transferOwnership(address)` on the EspToken proxy
+- Output Safe TX Builder JSON to call `transferOwnership(address)` on the EspToken proxy via multisig
 - Set the SafeExitTimelock as the new admin/owner of the EspToken proxy
 - Maintain the proxy's functionality while changing administrative control
 
-3. **Verify the admin transfer proposal was created:**
+3. The deployer will output Safe TX Builder JSON to stdout. Import this JSON into the Safe UI's
+   [Transaction Builder](https://help.safe.global/en/articles/40795-transaction-builder) to create the multisig
+   transaction.
 
-You should see output similar to:
-`EspTokenProxy ownership transfer proposal sent. Send this link to the signers to sign the proposal: https://app.safe.global/transactions/queue?safe=0xMULTISIG_ADDRESS`
-
-4. **After the signer threshold signs the proposal and one executes the proposal, verify the admin transfer on-chain:**
+4. **After the signer threshold signs and executes the transaction, verify the admin transfer on-chain:**
 
 ```bash
 # First, source the output file to load the deployed contract addresses
@@ -1634,7 +1630,7 @@ docker compose run --rm \
   --timelock-address $ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS \
   --rpc-url=$RPC_URL \
   --out $OUTPUT_FILE
-  # to simulate, add --dry-run
+
 ```
 
 Then create a multisig proposal to transfer ownership of the StakeTableProxy to the OpsTimelock.
@@ -1713,7 +1709,7 @@ docker compose run --rm \
   --transfer-ownership-new-owner $ESPRESSO_TRANSFER_OWNERSHIP_NEW_OWNER \
   --rpc-url=$RPC_URL \
   --out $OUTPUT_FILE
-  # to simulate, add --dry-run
+
 ```
 
 **Note**: The admin transfer process will:
@@ -1882,5 +1878,5 @@ docker compose run --rm \
   --transfer-ownership-new-owner $ESPRESSO_TRANSFER_OWNERSHIP_NEW_OWNER \
   --rpc-url=$RPC_URL \
   --out $OUTPUT_FILE
-  # to simulate, add --dry-run
+
 ```

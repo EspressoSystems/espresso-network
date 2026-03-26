@@ -9,6 +9,7 @@ members = [
     "contracts/rust/deployment-info",
     "contracts/rust/diff-test",
     "contracts/rust/gen-vk-contract",
+    "contracts/rust/safe-tx-builder",
     "crates/builder",
     "crates/cliquenet",
     "crates/hotshot-builder/legacy",
@@ -19,6 +20,7 @@ members = [
     "crates/hotshot/hotshot",
     "crates/hotshot/libp2p-networking",
     "crates/hotshot/macros",
+    "crates/hotshot/new-protocol",
     "crates/hotshot/orchestrator",
     "crates/hotshot/task",
     "crates/hotshot/task-impls",
@@ -55,6 +57,7 @@ default-members = [
     "contracts/rust/adapter",
     "contracts/rust/deployer",
     "contracts/rust/deployment-info",
+    "contracts/rust/safe-tx-builder",
     "contracts/rust/diff-test",
     "contracts/rust/gen-vk-contract",
     "crates/builder",
@@ -71,6 +74,7 @@ default-members = [
     "crates/hotshot/testing",
     "crates/hotshot/types",
     "crates/hotshot/utils",
+    "crates/hotshot/new-protocol",
     "crates/hotshot-builder/legacy",
     "crates/hotshot-builder/refactored",
     "hotshot-events-service",
@@ -167,6 +171,7 @@ es-version = { git = "https://github.com/EspressoSystems/es-version.git", branch
 escargot = "0.5.10"
 espresso-contract-deployer = { path = "contracts/rust/deployer" }
 espresso-macros = { git = "https://github.com/EspressoSystems/espresso-macros.git", tag = "0.1.0" }
+espresso-safe-tx-builder = { path = "contracts/rust/safe-tx-builder" }
 espresso-types = { path = "types" }
 ethers = { version = "2.0", features = ["solc", "ws"] }
 ethers-core = "2.0"
@@ -187,6 +192,7 @@ hotshot-events-service = { path = "hotshot-events-service" }
 hotshot-example-types = { path = "crates/hotshot/example-types" }
 hotshot-libp2p-networking = { path = "crates/hotshot/libp2p-networking" }
 hotshot-macros = { path = "crates/hotshot/macros" }
+hotshot-new-protocol = { path = "crates/hotshot/new-protocol" }
 hotshot-orchestrator = { path = "crates/hotshot/orchestrator" }
 hotshot-query-service = { path = "hotshot-query-service" }
 hotshot-state-prover = { path = "hotshot-state-prover" }

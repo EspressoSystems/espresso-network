@@ -348,7 +348,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + std::fmt::Debug>
                 private_key,
                 upgrade_lock,
             )
-            .await
             .context("Failed to sign vote")
             .unwrap();
             tracing::debug!("Sending Quorum Vote for view: {new_view:?}");
@@ -433,7 +432,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + std::fmt::Debug>
                         private_key,
                         upgrade_lock,
                     )
-                    .await
                     .context("Failed to sign vote")
                     .unwrap();
                     return vec![HotShotEvent::QuorumVoteSend(vote)];
@@ -771,7 +769,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> EventTransformerState<TYPES,
                         private_key,
                         upgrade_lock,
                     )
-                    .await
                     .context("Failed to sign pre commit vote!")
                     .unwrap()
                 } else {
@@ -785,7 +782,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> EventTransformerState<TYPES,
                         private_key,
                         upgrade_lock,
                     )
-                    .await
                     .context("Failed to sign pre commit vote!")
                     .unwrap();
                     vote.to_vote2()

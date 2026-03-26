@@ -5,7 +5,7 @@ use alloy::{
     self,
     eips::BlockId,
     network::{Ethereum, EthereumWallet, NetworkWallet},
-    primitives::Address,
+    primitives::{Address, U256},
     providers::{Provider, ProviderBuilder},
     rpc::types::Log,
     sol_types::SolEventInterface,
@@ -799,8 +799,15 @@ pub async fn run() -> Result<()> {
             })?;
             tx.simulate(&readonly_provider, sender).await?;
         }
-        let (to, data) = tx.calldata();
-        return output_calldata(&CalldataInfo::new(to, data), &config.output);
+        let description = tx.description();
+        let (to, data, fi) = tx.calldata();
+        let chain_id = readonly_provider.get_chain_id().await?;
+        let info = match fi {
+            Some(fi) => CalldataInfo::with_method(to, data, U256::ZERO, fi),
+            None => CalldataInfo::new(to, data),
+        }
+        .with_description(description);
+        return output_calldata(&info, &config.output, chain_id);
     }
 
     // For execution, we need the wallet

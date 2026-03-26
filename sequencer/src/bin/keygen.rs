@@ -6,13 +6,13 @@ use std::{
     path::PathBuf,
 };
 
-use alloy::hex;
-use anyhow::anyhow;
+use alloy::signers::local::coins_bip39::Mnemonic;
 use clap::{Parser, ValueEnum};
 use derive_more::Display;
 use hotshot::types::SignatureKey;
 use hotshot_types::{light_client::StateKeyPair, signature_key::BLSPubKey, x25519};
-use rand::{RngCore, SeedableRng};
+use rand::{SeedableRng, rngs::StdRng};
+use sequencer::keyset::{KeySet, KeySetOptions};
 use sequencer_utils::logging;
 use tagged_base64::TaggedBase64;
 use tracing::info_span;
@@ -31,22 +31,23 @@ enum Scheme {
 }
 
 impl Scheme {
-    fn r#gen(self, seed: [u8; 32], index: u64, output: &mut impl Write) -> anyhow::Result<()> {
+    fn r#gen(self, keys: &KeySet, output: &mut impl Write) -> anyhow::Result<()> {
         match self {
             Self::All => {
-                Self::Bls.r#gen(seed, index, output)?;
-                Self::Schnorr.r#gen(seed, index, output)?;
-                Self::X25519.r#gen(seed, index, output)?;
+                Self::Bls.r#gen(keys, output)?;
+                Self::Schnorr.r#gen(keys, output)?;
+                Self::X25519.r#gen(keys, output)?;
             },
             Self::Bls => {
-                let (pub_key, priv_key) = BLSPubKey::generated_from_seed_indexed(seed, index);
+                let priv_key = &keys.staking;
+                let pub_key = BLSPubKey::from_private(priv_key);
                 let priv_key = priv_key.to_tagged_base64()?;
                 writeln!(output, "ESPRESSO_SEQUENCER_PUBLIC_STAKING_KEY={pub_key}")?;
                 writeln!(output, "ESPRESSO_SEQUENCER_PRIVATE_STAKING_KEY={priv_key}")?;
                 tracing::info!(%pub_key, "generated staking key")
             },
             Self::Schnorr => {
-                let key_pair = StateKeyPair::generate_from_seed_indexed(seed, index);
+                let key_pair = StateKeyPair::from_sign_key(keys.state.clone());
                 let priv_key = key_pair.sign_key_ref().to_tagged_base64()?;
                 writeln!(
                     output,
@@ -57,7 +58,7 @@ impl Scheme {
                 tracing::info!(pub_key = %key_pair.ver_key(), "generated state key");
             },
             Self::X25519 => {
-                let kp = x25519::Keypair::generated_from_seed_indexed(seed, index)?;
+                let kp = x25519::Keypair::from(keys.x25519.clone());
                 let sk = TaggedBase64::try_from(kp.secret_key())?;
                 let pk = kp.public_key();
                 writeln!(output, "ESPRESSO_SEQUENCER_PUBLIC_X25519_KEY={pk}")?;
@@ -78,11 +79,8 @@ impl Scheme {
 /// configure a sequencer node. Public information about the generated keys is printed to stdout.
 #[derive(Clone, Debug, Parser)]
 struct Options {
-    /// Seed for generating keys.
-    ///
-    /// If not provided, a random seed will be generated using system entropy.
-    #[clap(long, short = 's', value_parser = parse_seed)]
-    seed: Option<[u8; 32]>,
+    #[clap(flatten)]
+    key_options: KeySetOptions,
 
     /// Signature scheme to generate.
     ///
@@ -113,22 +111,8 @@ struct Options {
     logging: logging::Config,
 }
 
-fn parse_seed(s: &str) -> Result<[u8; 32], anyhow::Error> {
-    let bytes = hex::decode(s)?;
-    bytes
-        .try_into()
-        .map_err(|bytes: Vec<u8>| anyhow!("invalid seed length: {} (expected 32)", bytes.len()))
-}
-
-fn gen_default_seed() -> [u8; 32] {
-    let mut seed = [0u8; 32];
-    let mut rng = rand_chacha::ChaChaRng::from_entropy();
-    rng.fill_bytes(&mut seed);
-
-    seed
-}
 fn main() -> anyhow::Result<()> {
-    let opts = Options::parse();
+    let mut opts = Options::parse();
     opts.logging.init();
 
     tracing::debug!(
@@ -137,16 +121,17 @@ fn main() -> anyhow::Result<()> {
         opts.scheme
     );
 
-    let seed = opts.seed.unwrap_or_else(|| {
-        tracing::debug!("No seed provided, generating a random seed");
-        gen_default_seed()
-    });
+    if opts.key_options.mnemonic.is_none() {
+        opts.key_options.mnemonic = Some(Mnemonic::new(&mut StdRng::from_entropy()));
+    }
 
     if let Some(ref out_dir) = opts.out {
         fs::create_dir_all(out_dir)?;
     }
 
     for index in 0..opts.num {
+        opts.key_options.index = Some(index as u64);
+
         let span = info_span!("gen", index);
         let _enter = span.enter();
         tracing::info!("generating new key set");
@@ -159,14 +144,18 @@ fn main() -> anyhow::Result<()> {
                 .truncate(true)
                 .open(&path)?;
 
-            // Write the seed as a comment at the top
-            writeln!(file, "# Seed: {}", hex::encode(seed))?;
+            // Write the mnemonic and index as a comment at the top
+            if let Some(mnemonic) = &opts.key_options.mnemonic {
+                writeln!(file, "# Mnemonic: {}", mnemonic.to_phrase())?;
+                writeln!(file, "# Index: {index}")?;
+            }
             Box::new(file) as Box<dyn Write>
         } else {
             Box::new(std::io::stdout())
         };
 
-        opts.scheme.r#gen(seed, index as u64, &mut output)?;
+        let keys = KeySet::try_from(opts.key_options.clone())?;
+        opts.scheme.r#gen(&keys, &mut output)?;
 
         if let Some(ref out_dir) = opts.out {
             tracing::info!(

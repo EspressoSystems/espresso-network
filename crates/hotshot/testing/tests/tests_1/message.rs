@@ -108,7 +108,6 @@ async fn test_certificate2_validity() {
             membership_success_threshold,
             &handle.hotshot.upgrade_lock
         )
-        .await
         .is_ok());
 
     assert!(qc2
@@ -117,7 +116,6 @@ async fn test_certificate2_validity() {
             membership_success_threshold,
             &handle.hotshot.upgrade_lock
         )
-        .await
         .is_ok());
 
     // ensure that we don't break the leaf commitment chain
