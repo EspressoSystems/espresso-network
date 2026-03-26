@@ -28,6 +28,7 @@ use hotshot_contract_adapter::sol_types::*;
 pub mod builder;
 pub mod impersonate_filler;
 pub mod network_config;
+pub mod output;
 pub mod proposals;
 pub mod provider;
 
@@ -1824,13 +1825,14 @@ mod tests {
     use super::*;
     use crate::{
         Contracts,
+        builder::DeployerArgsBuilder,
         impersonate_filler::ImpersonateFiller,
         proposals::{
             multisig::{
-                LightClientV2UpgradeParams, StakeTableV2UpgradeParams, TransferOwnershipParams,
-                transfer_ownership_from_multisig_to_timelock, upgrade_esp_token_v2_multisig_owner,
-                upgrade_fee_contract_multisig_owner, upgrade_light_client_v2_multisig_owner,
-                upgrade_stake_table_v2_multisig_owner,
+                LightClientV2UpgradeParams, MultisigOwnerCheck, StakeTableV2UpgradeParams,
+                TransferOwnershipParams, transfer_ownership_from_multisig_to_timelock,
+                upgrade_esp_token_v2_multisig_owner, upgrade_fee_contract_multisig_owner,
+                upgrade_light_client_v2_multisig_owner, upgrade_stake_table_v2_multisig_owner,
             },
             timelock::{
                 TimelockOperationParams, TimelockOperationPayload, TimelockOperationType,
@@ -2488,7 +2490,6 @@ mod tests {
     async fn test_upgrade_light_client_to_v3() -> Result<()> {
         test_upgrade_light_client_to_v3_helper(UpgradeTestOptions {
             is_mock: false,
-            run_mode: RunMode::RealRun,
             upgrade_count: UpgradeCount::Once,
         })
         .await
@@ -2498,16 +2499,9 @@ mod tests {
     async fn test_upgrade_mock_light_client_v3() -> Result<()> {
         test_upgrade_light_client_to_v3_helper(UpgradeTestOptions {
             is_mock: true,
-            run_mode: RunMode::RealRun,
             upgrade_count: UpgradeCount::Once,
         })
         .await
-    }
-
-    #[derive(Debug, Clone, Copy)]
-    pub enum RunMode {
-        DryRun,
-        RealRun,
     }
 
     #[derive(Debug, Clone, Copy)]
@@ -2519,7 +2513,6 @@ mod tests {
     #[derive(Debug, Clone, Copy)]
     pub struct UpgradeTestOptions {
         pub is_mock: bool,
-        pub run_mode: RunMode,
         pub upgrade_count: UpgradeCount,
     }
     // This test is used to test the upgrade of the LightClientProxy via the multisig wallet
@@ -2530,38 +2523,10 @@ mod tests {
     async fn test_upgrade_light_client_to_v2_multisig_owner_helper(
         options: UpgradeTestOptions,
     ) -> Result<()> {
-        let mut sepolia_rpc_url = "http://localhost:8545".to_string();
-        let mut multisig_admin = Address::random();
-        let mut mnemonic =
-            "test test test test test test test test test test test junk".to_string();
-        let mut account_index = 0;
+        let multisig_admin = Address::random();
+        let mnemonic = "test test test test test test test test test test test junk".to_string();
+        let account_index = 0u32;
         let anvil = Anvil::default().spawn();
-        let dry_run = matches!(options.run_mode, RunMode::DryRun);
-        if !dry_run {
-            dotenvy::from_filename_override(".env.deployer.rs.test").ok();
-
-            for item in dotenvy::from_filename_iter(".env.deployer.rs.test")
-                .expect("Failed to read .env.deployer.rs.test")
-            {
-                let (key, val) = item?;
-                if key == "ESPRESSO_SEQUENCER_L1_PROVIDER" {
-                    sepolia_rpc_url = val.to_string();
-                } else if key == "ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS" {
-                    multisig_admin = val.parse::<Address>()?;
-                } else if key == "ESPRESSO_SEQUENCER_ETH_MNEMONIC" {
-                    mnemonic = val.to_string();
-                } else if key == "ESPRESSO_DEPLOYER_ACCOUNT_INDEX" {
-                    account_index = val.parse::<u32>()?;
-                }
-            }
-
-            if sepolia_rpc_url.is_empty() || multisig_admin.is_zero() {
-                panic!(
-                    "ESPRESSO_SEQUENCER_L1_PROVIDER and ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS \
-                     must be set in .env.deployer.rs.test"
-                );
-            }
-        }
 
         let mut contracts = Contracts::new();
         let blocks_per_epoch = 10; // for test
@@ -2572,17 +2537,10 @@ mod tests {
             .expect("wrong mnemonic or index")
             .build()?;
         let admin = admin_signer.address();
-        let provider = if !dry_run {
-            ProviderBuilder::new()
-                .wallet(admin_signer)
-                .connect(&sepolia_rpc_url)
-                .await?
-        } else {
-            ProviderBuilder::new()
-                .wallet(admin_signer)
-                .connect(&anvil.endpoint())
-                .await?
-        };
+        let provider = ProviderBuilder::new()
+            .wallet(admin_signer)
+            .connect(&anvil.endpoint())
+            .await?;
 
         // prepare `initialize()` input
         let genesis_state = LightClientStateSol::dummy_genesis();
@@ -2624,8 +2582,8 @@ mod tests {
         let lc = LightClient::new(lc_proxy_addr, &provider);
         assert_eq!(lc.owner().call().await?, multisig_admin);
 
-        // then send upgrade proposal to the multisig wallet
-        let result = upgrade_light_client_v2_multisig_owner(
+        // then encode upgrade calldata for the multisig wallet
+        let calldata = upgrade_light_client_v2_multisig_owner(
             &provider,
             &mut contracts,
             LightClientV2UpgradeParams {
@@ -2633,44 +2591,26 @@ mod tests {
                 epoch_start_block,
             },
             options.is_mock,
-            sepolia_rpc_url.clone(),
-            dry_run,
+            MultisigOwnerCheck::Skip,
         )
         .await?;
         tracing::info!(
-            "Result when trying to upgrade LightClientProxy via the multisig wallet: {:?}",
-            result
+            "Encoded calldata for LightClientProxy upgrade: to={:#x}, data={}",
+            calldata.to,
+            calldata.data
         );
-        if dry_run {
-            let data: serde_json::Value = serde_json::from_str(&result)?;
-            assert_eq!(data["rpcUrl"], sepolia_rpc_url);
-            assert_eq!(data["safeAddress"], multisig_admin.to_string());
-            assert_eq!(data["proxyAddress"], lc_proxy_addr.to_string());
+        // Calldata target is the proxy
+        assert_eq!(calldata.to, lc_proxy_addr);
+        // Calldata is non-empty (encodes upgradeToAndCall)
+        assert!(!calldata.data.is_empty());
 
-            let expected_init_data = if matches!(options.upgrade_count, UpgradeCount::Twice) {
-                "0x" // no init data for the second upgrade because the proxy was already initialized
-            } else {
-                &LightClientV2::new(lc_proxy_addr, &provider)
-                    .initializeV2(blocks_per_epoch, epoch_start_block)
-                    .calldata()
-                    .to_owned()
-                    .to_string()
-            };
-
-            assert_eq!(data["initData"], expected_init_data.to_string());
-            assert_eq!(data["useHardwareWallet"], false);
-        }
-        // v1 state persistence cannot be tested here because the upgrade proposal is not yet executed
-        // One has to test that the upgrade proposal is available via the Safe UI
-        // and then test that the v1 state is persisted
         Ok(())
     }
 
     #[test_log::test(tokio::test)]
-    async fn test_upgrade_light_client_to_v2_multisig_owner_dry_run() -> Result<()> {
+    async fn test_upgrade_light_client_to_v2_multisig_owner() -> Result<()> {
         test_upgrade_light_client_to_v2_multisig_owner_helper(UpgradeTestOptions {
             is_mock: false,
-            run_mode: RunMode::DryRun,
             upgrade_count: UpgradeCount::Once,
         })
         .await
@@ -2678,22 +2618,10 @@ mod tests {
 
     // We expect no init data for the second upgrade because the proxy was already initialized
     #[test_log::test(tokio::test)]
-    async fn test_upgrade_light_client_to_v2_twice_multisig_owner_dry_run() -> Result<()> {
+    async fn test_upgrade_light_client_to_v2_twice_multisig_owner() -> Result<()> {
         test_upgrade_light_client_to_v2_multisig_owner_helper(UpgradeTestOptions {
             is_mock: false,
-            run_mode: RunMode::DryRun,
             upgrade_count: UpgradeCount::Twice,
-        })
-        .await
-    }
-
-    #[test_log::test(tokio::test)]
-    #[ignore]
-    async fn test_upgrade_light_client_to_v2_multisig_owner_live_eth_network() -> Result<()> {
-        test_upgrade_light_client_to_v2_multisig_owner_helper(UpgradeTestOptions {
-            is_mock: false,
-            run_mode: RunMode::RealRun,
-            upgrade_count: UpgradeCount::Once,
         })
         .await
     }
@@ -2887,34 +2815,14 @@ mod tests {
     // SAFE_MULTISIG_ADDRESS=0x0000000000000000000000000000000000000000
     // SAFE_ORCHESTRATOR_PRIVATE_KEY=0x0000000000000000000000000000000000000000000000000000000000000000
     // Ensure that the private key has proposal rights on the Safe Multisig Wallet and the SDK supports the network
-    async fn test_upgrade_stake_table_to_v2_multisig_owner_helper(dry_run: bool) -> Result<()> {
-        let mut sepolia_rpc_url = "http://localhost:8545".to_string();
-        let mut multisig_admin = Address::random();
+    async fn test_upgrade_stake_table_to_v2_multisig_owner_helper() -> Result<()> {
+        let multisig_admin = Address::random();
         let (_anvil, provider, l1_client) =
             ProviderBuilder::new().connect_anvil_with_l1_client()?;
         let mut contracts = Contracts::new();
         let init_recipient = provider.get_accounts().await?[0];
         let token_owner = Address::random();
         let initial_supply = U256::from(3590000000u64);
-
-        if !dry_run {
-            dotenvy::from_filename_override(".env.deployer.rs.test").ok();
-
-            for item in dotenvy::from_filename_iter(".env.deployer.rs.test")
-                .expect("Failed to read .env.deployer.rs.test")
-            {
-                let (key, val) = item?;
-                if key == "RPC_URL" {
-                    sepolia_rpc_url = val.to_string();
-                } else if key == "SAFE_MULTISIG_ADDRESS" {
-                    multisig_admin = val.parse::<Address>()?;
-                }
-            }
-
-            if sepolia_rpc_url.is_empty() || multisig_admin.is_zero() {
-                panic!("RPC_URL and SAFE_MULTISIG_ADDRESS must be set in .env.deployer.rs.test");
-            }
-        }
 
         // deploy proxy and V1
         let token_addr = deploy_token_proxy(
@@ -2960,30 +2868,27 @@ mod tests {
         .await?;
         let stake_table = StakeTable::new(stake_table_proxy_addr, &provider);
         assert_eq!(stake_table.owner().call().await?, multisig_admin);
-        // then send upgrade proposal to the multisig wallet
+        // then encode upgrade calldata for the multisig wallet
         let pauser = Address::random();
-        upgrade_stake_table_v2_multisig_owner(
+        let calldata = upgrade_stake_table_v2_multisig_owner(
             &provider,
             l1_client,
             &mut contracts,
             StakeTableV2UpgradeParams {
-                rpc_url: sepolia_rpc_url,
                 multisig_address: multisig_admin,
                 pauser,
-                dry_run,
             },
+            MultisigOwnerCheck::Skip,
         )
         .await?;
+        assert_eq!(calldata.to, stake_table_proxy_addr);
 
-        // v1 state persistence cannot be tested here because the upgrade proposal is not yet executed
-        // One has to test that the upgrade proposal is available via the Safe UI
-        // and then test that the v1 state is persisted
         Ok(())
     }
 
     #[test_log::test(tokio::test)]
-    async fn test_upgrade_stake_table_to_v2_multisig_owner_dry_run() -> Result<()> {
-        test_upgrade_stake_table_to_v2_multisig_owner_helper(true).await
+    async fn test_upgrade_stake_table_to_v2_multisig_owner() -> Result<()> {
+        test_upgrade_stake_table_to_v2_multisig_owner_helper().await
     }
 
     #[test_log::test(tokio::test)]
@@ -3149,10 +3054,9 @@ mod tests {
 
     // We expect no init data for the upgrade because there is no reinitializer for v2
     #[test_log::test(tokio::test)]
-    async fn test_upgrade_esp_token_v2_multisig_owner_dry_run() -> Result<()> {
+    async fn test_upgrade_esp_token_v2_multisig_owner() -> Result<()> {
         test_upgrade_esp_token_v2_multisig_owner_helper(UpgradeTestOptions {
             is_mock: false,
-            run_mode: RunMode::DryRun,
             upgrade_count: UpgradeCount::Once,
         })
         .await
@@ -3166,39 +3070,10 @@ mod tests {
     async fn test_upgrade_esp_token_v2_multisig_owner_helper(
         options: UpgradeTestOptions,
     ) -> Result<()> {
-        let mut sepolia_rpc_url = "http://localhost:8545".to_string();
-        let mut multisig_admin = Address::random();
-        let mut mnemonic =
-            "test test test test test test test test test test test junk".to_string();
-        let mut account_index = 0;
+        let multisig_admin = Address::random();
+        let mnemonic = "test test test test test test test test test test test junk".to_string();
+        let account_index = 0u32;
         let anvil = Anvil::default().spawn();
-        let dry_run = matches!(options.run_mode, RunMode::DryRun);
-
-        if !dry_run {
-            dotenvy::from_filename_override(".env.deployer.rs.test").ok();
-
-            for item in dotenvy::from_filename_iter(".env.deployer.rs.test")
-                .expect("Failed to read .env.deployer.rs.test")
-            {
-                let (key, val) = item?;
-                if key == "ESPRESSO_SEQUENCER_L1_PROVIDER" {
-                    sepolia_rpc_url = val.to_string();
-                } else if key == "ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS" {
-                    multisig_admin = val.parse::<Address>()?;
-                } else if key == "ESPRESSO_SEQUENCER_ETH_MNEMONIC" {
-                    mnemonic = val.to_string();
-                } else if key == "ESPRESSO_DEPLOYER_ACCOUNT_INDEX" {
-                    account_index = val.parse::<u32>()?;
-                }
-            }
-
-            if sepolia_rpc_url.is_empty() || multisig_admin.is_zero() {
-                panic!(
-                    "ESPRESSO_SEQUENCER_L1_PROVIDER and ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS \
-                     must be set in .env.deployer.rs.test"
-                );
-            }
-        }
 
         let mut contracts = Contracts::new();
         let admin_signer = MnemonicBuilder::<English>::default()
@@ -3207,17 +3082,10 @@ mod tests {
             .expect("wrong mnemonic or index")
             .build()?;
         let admin = admin_signer.address();
-        let provider = if !dry_run {
-            ProviderBuilder::new()
-                .wallet(admin_signer)
-                .connect(&sepolia_rpc_url)
-                .await?
-        } else {
-            ProviderBuilder::new()
-                .wallet(admin_signer)
-                .connect(&anvil.endpoint())
-                .await?
-        };
+        let provider = ProviderBuilder::new()
+            .wallet(admin_signer)
+            .connect(&anvil.endpoint())
+            .await?;
         let init_recipient = provider.get_accounts().await?[0];
         let initial_supply = U256::from(3590000000u64);
         let token_name = "Espresso";
@@ -3253,34 +3121,21 @@ mod tests {
         let fake_reward_claim = Address::random();
         contracts.insert(Contract::RewardClaimProxy, fake_reward_claim);
 
-        let init_data = EspTokenV2::new(Address::ZERO, &provider)
-            .initializeV2(fake_reward_claim)
-            .calldata()
-            .to_owned();
-
-        // then send upgrade proposal to the multisig wallet
-        let result = upgrade_esp_token_v2_multisig_owner(
+        // then encode upgrade calldata for the multisig wallet
+        let calldata = upgrade_esp_token_v2_multisig_owner(
             &provider,
             &mut contracts,
-            sepolia_rpc_url.clone(),
-            dry_run,
+            MultisigOwnerCheck::Skip,
         )
         .await?;
         tracing::info!(
-            "Result when trying to upgrade EspTokenProxy via the multisig wallet: {:?}",
-            result
+            "Encoded calldata for EspTokenProxy upgrade: to={:#x}, data={}",
+            calldata.to,
+            calldata.data
         );
-        if dry_run {
-            let data: serde_json::Value = serde_json::from_str(&result)?;
-            assert_eq!(data["rpcUrl"], sepolia_rpc_url);
-            assert_eq!(data["safeAddress"], multisig_admin.to_string());
-            assert_eq!(data["proxyAddress"], esp_token_proxy_addr.to_string());
-            assert_eq!(data["initData"], init_data.to_string());
-            assert_eq!(data["useHardwareWallet"], false);
-        }
-        // v1 state persistence cannot be tested here because the upgrade proposal is not yet executed
-        // One has to test that the upgrade proposal is available via the Safe UI
-        // and then test that the v1 state is persisted
+        assert_eq!(calldata.to, esp_token_proxy_addr);
+        assert!(!calldata.data.is_empty());
+
         Ok(())
     }
 
@@ -3433,49 +3288,12 @@ mod tests {
         Ok(())
     }
 
-    async fn test_transfer_ownership_helper(
-        contract_type: Contract,
-        options: UpgradeTestOptions,
-    ) -> Result<()> {
-        assert!(
-            std::path::Path::new("../../../scripts/multisig-upgrade-entrypoint").exists(),
-            "Script not found!"
-        );
-        let mut sepolia_rpc_url = "http://127.0.0.1:8545".parse::<Url>()?;
-        let mut multisig_admin = Address::random();
-        let mut timelock = Address::random();
-        let mut mnemonic =
-            "test test test test test test test test test test test junk".to_string();
-        let mut account_index = 0;
+    async fn test_transfer_ownership_helper(contract_type: Contract) -> Result<()> {
+        let multisig_admin = Address::random();
+        let timelock = Address::random();
+        let mnemonic = "test test test test test test test test test test test junk".to_string();
+        let account_index = 0u32;
         let anvil = Anvil::default().spawn();
-        let dry_run = matches!(options.run_mode, RunMode::DryRun);
-        if !dry_run {
-            dotenvy::from_filename_override(".env.deployer.rs.test").ok();
-
-            for item in dotenvy::from_filename_iter(".env.deployer.rs.test")
-                .expect("Failed to read .env.deployer.rs.test")
-            {
-                let (key, val) = item?;
-                if key == "ESPRESSO_SEQUENCER_L1_PROVIDER" {
-                    sepolia_rpc_url = val.parse()?;
-                } else if key == "ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS" {
-                    multisig_admin = val.parse::<Address>()?;
-                } else if key == "ESPRESSO_SEQUENCER_ETH_MNEMONIC" {
-                    mnemonic = val.to_string();
-                } else if key == "ESPRESSO_DEPLOYER_ACCOUNT_INDEX" {
-                    account_index = val.parse::<u32>()?;
-                } else if key == "ESPRESSO_SEQUENCER_TIMELOCK_ADDRESS" {
-                    timelock = val.parse::<Address>()?;
-                }
-            }
-
-            if multisig_admin.is_zero() || timelock.is_zero() {
-                panic!(
-                    "ESPRESSO_SEQUENCER_L1_PROVIDER, ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS, \
-                     ESPRESSO_SEQUENCER_TIMELOCK_ADDRESS must be set in .env.deployer.rs.test"
-                );
-            }
-        }
 
         let mut contracts = Contracts::new();
         let admin_signer = MnemonicBuilder::<English>::default()
@@ -3484,15 +3302,9 @@ mod tests {
             .expect("wrong mnemonic or index")
             .build()?;
         let admin = admin_signer.address();
-        let provider = if !dry_run {
-            ProviderBuilder::new()
-                .wallet(admin_signer)
-                .connect_http(sepolia_rpc_url.clone())
-        } else {
-            ProviderBuilder::new()
-                .wallet(admin_signer)
-                .connect_http(anvil.endpoint_url())
-        };
+        let provider = ProviderBuilder::new()
+            .wallet(admin_signer)
+            .connect_http(anvil.endpoint_url());
 
         // prepare `initialize()` input
         let genesis_state = LightClientStateSol::dummy_genesis();
@@ -3592,55 +3404,54 @@ mod tests {
             multisig_admin
         );
 
-        // then send transfer ownership proposal to the multisig wallet
-        let result = transfer_ownership_from_multisig_to_timelock(
-            &provider,
+        // encode transfer ownership calldata for the multisig wallet
+        let calldata = transfer_ownership_from_multisig_to_timelock(
             &mut contracts,
             contract_type,
             TransferOwnershipParams {
                 new_owner: timelock,
-                rpc_url: sepolia_rpc_url.clone(),
-                safe_addr: multisig_admin,
-                use_hardware_wallet: false,
-                dry_run,
             },
-        )
-        .await?;
-        assert!(result.status.success());
-        tracing::info!("Transfer ownership output: {:?}", result);
+        )?;
+        tracing::info!(
+            "Transfer ownership calldata: to={:#x}, data={}",
+            calldata.to,
+            calldata.data
+        );
+        assert_eq!(calldata.to, proxy_addr);
 
-        let stdout = String::from_utf8_lossy(&result.stdout);
-        let first_line = stdout.lines().next().unwrap();
-        let data: serde_json::Value = serde_json::from_str(first_line)?;
-        assert_eq!(data["rpcUrl"], sepolia_rpc_url.to_string());
-        assert_eq!(data["safeAddress"], multisig_admin.to_string());
+        let expected_calldata =
+            crate::encode_function_call("transferOwnership(address)", vec![timelock.to_string()])
+                .unwrap();
+        assert_eq!(calldata.data, expected_calldata);
 
-        let expected_init_data = match contract_type {
-            Contract::LightClientProxy => LightClient::new(proxy_addr, &provider)
-                .transferOwnership(timelock)
-                .calldata()
-                .to_string(),
-            Contract::FeeContractProxy => FeeContract::new(proxy_addr, &provider)
-                .transferOwnership(timelock)
-                .calldata()
-                .to_string(),
-            Contract::EspTokenProxy => EspToken::new(proxy_addr, &provider)
-                .transferOwnership(timelock)
-                .calldata()
-                .to_string(),
-            Contract::StakeTableProxy => StakeTable::new(proxy_addr, &provider)
-                .transferOwnership(timelock)
-                .calldata()
-                .to_string(),
-            _ => "0x".to_string(),
-        };
+        // Execute the calldata on Anvil as multisig_admin to verify it works
+        let impersonation_provider = ProviderBuilder::new()
+            .filler(ImpersonateFiller::new(multisig_admin))
+            .connect_http(anvil.endpoint_url());
+        let anvil_provider = AnvilProvider::new(impersonation_provider.clone(), Arc::new(anvil));
+        anvil_provider.anvil_auto_impersonate_account(true).await?;
+        anvil_provider
+            .anvil_set_balance(multisig_admin, parse_ether("100")?)
+            .await?;
 
-        assert_eq!(data["initData"], expected_init_data);
-        assert_eq!(data["useHardwareWallet"], false);
-        // }
-        // v1 state persistence cannot be tested here because the upgrade proposal is not yet executed
-        // One has to test that the upgrade proposal is available via the Safe UI
-        // and then test that the v1 state is persisted
+        let tx = alloy::rpc::types::TransactionRequest::default()
+            .to(calldata.to)
+            .input(calldata.data.into());
+        impersonation_provider
+            .send_transaction(tx)
+            .await?
+            .get_receipt()
+            .await?;
+
+        assert_eq!(
+            OwnableUpgradeable::new(proxy_addr, &impersonation_provider)
+                .owner()
+                .call()
+                .await?,
+            timelock,
+            "ownership should have transferred to timelock"
+        );
+
         Ok(())
     }
 
@@ -3730,71 +3541,22 @@ mod tests {
 
     #[test_log::test(tokio::test)]
     async fn test_transfer_ownership_light_client_proxy() -> Result<()> {
-        test_transfer_ownership_helper(
-            Contract::LightClientProxy,
-            UpgradeTestOptions {
-                is_mock: false,
-                run_mode: RunMode::DryRun,
-                upgrade_count: UpgradeCount::Once,
-            },
-        )
-        .await
+        test_transfer_ownership_helper(Contract::LightClientProxy).await
     }
 
     #[test_log::test(tokio::test)]
     async fn test_transfer_ownership_fee_contract_proxy() -> Result<()> {
-        test_transfer_ownership_helper(
-            Contract::FeeContractProxy,
-            UpgradeTestOptions {
-                is_mock: false,
-                run_mode: RunMode::DryRun,
-                upgrade_count: UpgradeCount::Once,
-            },
-        )
-        .await
-    }
-
-    #[test_log::test(tokio::test)]
-    #[ignore]
-    async fn test_transfer_ownership_fee_contract_proxy_real_proposal() -> Result<()> {
-        println!("Starting test_transfer_ownership_fee_contract_proxy_real_proposal");
-        tracing::info!("Starting test_transfer_ownership_fee_contract_proxy_real_proposal");
-
-        test_transfer_ownership_helper(
-            Contract::FeeContractProxy,
-            UpgradeTestOptions {
-                is_mock: false,
-                run_mode: RunMode::RealRun,
-                upgrade_count: UpgradeCount::Once,
-            },
-        )
-        .await
+        test_transfer_ownership_helper(Contract::FeeContractProxy).await
     }
 
     #[test_log::test(tokio::test)]
     async fn test_transfer_ownership_esp_token_proxy() -> Result<()> {
-        test_transfer_ownership_helper(
-            Contract::EspTokenProxy,
-            UpgradeTestOptions {
-                is_mock: false,
-                run_mode: RunMode::DryRun,
-                upgrade_count: UpgradeCount::Once,
-            },
-        )
-        .await
+        test_transfer_ownership_helper(Contract::EspTokenProxy).await
     }
 
     #[test_log::test(tokio::test)]
     async fn test_transfer_ownership_stake_table_proxy() -> Result<()> {
-        test_transfer_ownership_helper(
-            Contract::StakeTableProxy,
-            UpgradeTestOptions {
-                is_mock: false,
-                run_mode: RunMode::DryRun,
-                upgrade_count: UpgradeCount::Once,
-            },
-        )
-        .await
+        test_transfer_ownership_helper(Contract::StakeTableProxy).await
     }
 
     #[test_log::test(tokio::test)]
@@ -4579,43 +4341,13 @@ mod tests {
         assert_eq!(proxy.owner().call().await?, another_wallet);
         Ok(())
     }
-    // This test is used to test the upgrade of the FeeContractProxy via the multisig wallet
-    // It only tests the upgrade proposal via the typescript script and thus requires the upgrade proposal to be sent to a real network
-    // However, the contracts are deployed on anvil, so the test will pass even if the upgrade proposal is not executed
-    // The test assumes that there is a file .env.deployer.rs.test in the root directory with the following variables:
-    // RPC_URL=
-    // SAFE_MULTISIG_ADDRESS=0x0000000000000000000000000000000000000000
-    // SAFE_ORCHESTRATOR_PRIVATE_KEY=0x0000000000000000000000000000000000000000000000000000000000000000
-    // Ensure that the private key has proposal rights on the Safe Multisig Wallet and the SDK supports the network
-    async fn test_upgrade_fee_contract_multisig_owner_helper(dry_run: bool) -> Result<()> {
-        let mut localhost_rpc_url = "http://localhost:8545".to_string();
-        let mut multisig_admin = Address::random();
-        let (_anvil, provider, _l1_client) =
+    #[test_log::test(tokio::test)]
+    async fn test_upgrade_fee_contract_multisig_owner() -> Result<()> {
+        let multisig_admin = Address::random();
+        let (anvil, provider, _l1_client) =
             ProviderBuilder::new().connect_anvil_with_l1_client()?;
         let mut contracts = Contracts::new();
         let admin = provider.get_accounts().await?[0];
-
-        if !dry_run {
-            dotenvy::from_filename_override(".env.deployer.rs.test")
-                .map_err(|e| anyhow!("Failed to load .env.deployer.rs.test: {}", e))?;
-
-            for item in dotenvy::from_filename_iter(".env.deployer.rs.test")
-                .expect("Failed to read .env.deployer.rs.test")
-            {
-                let (key, val) = item?;
-                if key == "RPC_URL" {
-                    localhost_rpc_url = val.to_string();
-                } else if key == "SAFE_MULTISIG_ADDRESS" {
-                    multisig_admin = val.parse::<Address>()?;
-                }
-            }
-
-            if localhost_rpc_url.is_empty() || multisig_admin.is_zero() {
-                anyhow::bail!(
-                    "RPC_URL and SAFE_MULTISIG_ADDRESS must be set in .env.deployer.rs.test"
-                );
-            }
-        }
 
         // Deploy FeeContract proxy
         let fee_contract_proxy_addr =
@@ -4630,38 +4362,58 @@ mod tests {
         )
         .await?;
 
-        // Then send upgrade proposal to the multisig wallet
-        let result = upgrade_fee_contract_multisig_owner(
+        // For patch upgrades the implementation must be redeployed; clear the cached address
+        contracts.remove(&Contract::FeeContract);
+
+        // Encode upgrade calldata for the multisig wallet
+        let calldata = upgrade_fee_contract_multisig_owner(
             &provider,
             &mut contracts,
-            localhost_rpc_url.clone(),
-            dry_run,
+            MultisigOwnerCheck::Skip,
         )
         .await?;
 
         tracing::info!(
-            "Result when trying to upgrade FeeContractProxy via the multisig wallet: {:?}",
-            result
+            "Encoded calldata for FeeContractProxy upgrade: to={:#x}, data={}",
+            calldata.to,
+            calldata.data
         );
 
-        if dry_run {
-            let data: serde_json::Value = serde_json::from_str(&result)?;
-            assert_eq!(data["rpcUrl"], localhost_rpc_url);
-            assert_eq!(data["safeAddress"], multisig_admin.to_string());
-            assert_eq!(data["proxyAddress"], fee_contract_proxy_addr.to_string());
-            assert_eq!(data["initData"], "0x".to_string());
-            assert_eq!(data["useHardwareWallet"], false);
-        }
+        assert_eq!(calldata.to, fee_contract_proxy_addr);
+        // Verify it encodes upgradeToAndCall with empty init data
+        let fee_impl_addr = contracts.address(Contract::FeeContract).unwrap_or_default();
+        let expected = crate::encode_function_call(
+            "upgradeToAndCall(address,bytes)",
+            vec![fee_impl_addr.to_string(), "0x".to_string()],
+        )
+        .unwrap();
+        assert_eq!(calldata.data, expected);
 
-        // v1 state persistence cannot be tested here because the upgrade proposal is not yet executed
-        // One has to test that the upgrade proposal is available via the Safe UI
-        // and then test that the v1 state is persisted
+        // Execute the calldata on Anvil as multisig_admin to verify it works
+        let impersonation_provider = ProviderBuilder::new()
+            .filler(ImpersonateFiller::new(multisig_admin))
+            .connect_http(anvil.endpoint_url());
+        let anvil_provider = AnvilProvider::new(impersonation_provider.clone(), Arc::new(anvil));
+        anvil_provider.anvil_auto_impersonate_account(true).await?;
+        anvil_provider
+            .anvil_set_balance(multisig_admin, parse_ether("100")?)
+            .await?;
+
+        let tx = alloy::rpc::types::TransactionRequest::default()
+            .to(calldata.to)
+            .input(calldata.data.into());
+        let receipt = impersonation_provider
+            .send_transaction(tx)
+            .await?
+            .get_receipt()
+            .await?;
+        assert!(receipt.inner.is_success(), "upgrade tx failed");
+
+        // Verify the proxy now points to the new implementation
+        let new_impl = read_proxy_impl(&impersonation_provider, fee_contract_proxy_addr).await?;
+        assert_eq!(new_impl, fee_impl_addr, "proxy should point to new impl");
+
         Ok(())
-    }
-
-    #[test_log::test(tokio::test)]
-    async fn test_upgrade_fee_contract_multisig_owner_dry_run() -> Result<()> {
-        test_upgrade_fee_contract_multisig_owner_helper(true).await
     }
 
     #[test_log::test(tokio::test)]
@@ -4790,7 +4542,7 @@ mod tests {
     }
 
     #[test_log::test(tokio::test)]
-    async fn test_propose_multisig_transaction_dry_run() -> Result<()> {
+    async fn test_encode_multisig_transaction() -> Result<()> {
         let (anvil, provider, _l1_client) =
             ProviderBuilder::new().connect_anvil_with_l1_client()?;
         let mut contracts = Contracts::new();
@@ -4800,7 +4552,7 @@ mod tests {
             deploy_fee_contract_proxy(&provider, &mut contracts, provider_wallet).await?;
         let new_owner = Address::random();
 
-        // Use DeployerArgsBuilder to test propose_multisig_transaction
+        // Use DeployerArgsBuilder to test encode_multisig_transaction
         use builder::DeployerArgsBuilder;
 
         let mut args_builder = DeployerArgsBuilder::default();
@@ -4808,7 +4560,6 @@ mod tests {
             .deployer(provider.clone())
             .rpc_url(anvil.endpoint_url())
             .multisig(provider_wallet)
-            .dry_run(true)
             .multisig_transaction_target(fee_contract_proxy_addr)
             .multisig_transaction_function_signature("transferOwnership(address)".to_string())
             .multisig_transaction_function_args(vec![new_owner.to_string()])
@@ -4816,7 +4567,7 @@ mod tests {
 
         let args = args_builder.build()?;
 
-        let result = args.propose_multisig_transaction().await;
+        let result = args.encode_multisig_transaction().await;
 
         match result {
             Ok(_) => {
@@ -4827,6 +4578,39 @@ mod tests {
                 tracing::info!("Multisig transaction proposal failed: {}", e);
             },
         }
+
+        Ok(())
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn transfer_ownership_to_timelock_target_eoa_fails() -> Result<()> {
+        let provider = ProviderBuilder::new().connect_anvil_with_wallet();
+        let multisig = Address::random();
+        let eoa_address = Address::random();
+
+        // Set up contracts with an EOA address registered as the OpsTimelock
+        let mut contracts = Contracts::new();
+        contracts.insert(Contract::OpsTimelock, eoa_address);
+
+        // Deploy a FeeContractProxy so there's a target contract
+        let admin = provider.get_accounts().await?[0];
+        deploy_fee_contract_proxy(&provider, &mut contracts, admin).await?;
+
+        let mut args_builder = DeployerArgsBuilder::default();
+        args_builder
+            .deployer(provider.clone())
+            .rpc_url(Url::parse("http://localhost:8545")?)
+            .multisig(multisig)
+            .target_contract(OwnableContract::FeeContractProxy);
+
+        let args = args_builder.build()?;
+        assert!(
+            args.encode_transfer_ownership_to_timelock(&mut contracts)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("Timelock address is not a contract")
+        );
 
         Ok(())
     }

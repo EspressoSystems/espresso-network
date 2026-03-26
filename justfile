@@ -341,6 +341,12 @@ gen-go-bindings:
 build-go-crypto-helper *args:
     ./scripts/build-go-crypto-helper {{args}}
 
+fmt-go:
+    gofmt -w sdks/go/
+
+lint-go:
+    cd sdks/go && go vet ./...
+
 test-go *args:
     #!/usr/bin/env bash
     export LD_LIBRARY_PATH=$PWD/sdks/go/verification/target/lib:$LD_LIBRARY_PATH
