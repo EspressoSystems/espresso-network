@@ -17,9 +17,7 @@ use hotshot_types::{
 
 use crate::{
     helpers::proposal_commitment,
-    message::{
-        Certificate1, Certificate2, ConsensusMessage, ProposalMessage, Vote1, Vote2,
-    },
+    message::{Certificate1, Certificate2, ConsensusMessage, ProposalMessage, Vote1, Vote2},
 };
 
 #[derive(Eq, PartialEq, Debug, Clone)]

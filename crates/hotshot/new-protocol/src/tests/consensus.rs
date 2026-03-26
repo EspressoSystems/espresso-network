@@ -13,8 +13,9 @@ use hotshot_types::{
 
 use super::common::{
     assertions::{
-        count_vote1, count_vote2, has_leaf_decided, has_proposal, has_request_block_and_header,
-        has_request_state, has_vote1, has_vote2, node_index_for_key, views,
+        count_decided, count_vote1, count_vote2, has_leaf_decided, has_proposal,
+        has_request_block_and_header, has_request_state, has_vote1, has_vote2, node_index_for_key,
+        views,
     },
     utils::{MockBlock, TestData, mock_membership, state_verified_input},
 };
@@ -23,7 +24,6 @@ use crate::{
     consensus::Consensus,
     events::{Action, ConsensusInput, ConsensusOutput, Event, StateResponse},
     helpers::{proposal_commitment, upgrade_lock},
-    tests::common::assertions::count_decided,
 };
 
 struct ConsensusHarness {

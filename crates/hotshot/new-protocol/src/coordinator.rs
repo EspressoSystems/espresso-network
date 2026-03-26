@@ -169,6 +169,9 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
             },
             Action::RequestBlockAndHeader(req) => {
                 let (_txns, _manifest) = self.block_builder.drain(req.view);
+                // TODO: add a block builder, and use it to build the block,
+                // Then on block built, request the header
+                todo!()
             },
             Action::RequestVidDisperse(view, epoch, block, metadata) => {
                 self.vid_disperser.request_vid_disperse(VidDisperseRequest {
