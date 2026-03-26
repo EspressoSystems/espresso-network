@@ -13,10 +13,7 @@ pub mod testing {
         epoch_membership::EpochMembershipCoordinator,
         simple_certificate::TimeoutCertificate2,
         simple_vote::{QuorumVote2, TimeoutVote2},
-        traits::{
-            network::{BroadcastDelay, ConnectedNetwork, Topic},
-            node_implementation::NodeType,
-        },
+        traits::network::{BroadcastDelay, ConnectedNetwork, Topic},
     };
     use tokio::{
         select,
@@ -31,24 +28,24 @@ pub mod testing {
         events::*,
         helpers::upgrade_lock,
         message::{Certificate1, Certificate2, ConsensusMessage, Message, Vote2},
+        state::StateManager,
         tests::common::utils::{MockBlock, PendingIfNone, mock_builder_fee, state_verified_input},
-        validated_state::ValidatedStateManager,
         vid::{VidDisperser, VidReconstructor},
         vote::VoteCollector,
     };
 
     /// MockCoordinator is for testing the various different modules the coordinator will
-    /// coordinate.  It will send back appropriate responses for actions it receives.
+    /// coordinate. It will send back appropriate responses for actions it receives.
     /// It will also store the events it receives for verification.
     ///
     /// When `state_manager` is `Some`, state and header requests are forwarded to
-    /// the `ValidatedStateManager`. Its completions are polled via `next()` and
+    /// the `StateManager`. Its completions are polled via `next()` and
     /// fed back as `ConsensusInput`.
     pub struct MockCoordinator {
         pub consensus: Consensus<TestTypes>,
         pub input_rx: tokio::sync::mpsc::Receiver<ConsensusOutput<TestTypes>>,
         pub shutdown_rx: tokio::sync::oneshot::Receiver<()>,
-        pub state_manager: Option<ValidatedStateManager<TestTypes>>,
+        pub state_manager: Option<StateManager<TestTypes>>,
         pub vote1_task:
             Option<VoteCollector<TestTypes, QuorumVote2<TestTypes>, Certificate1<TestTypes>>>,
         pub vote2_task: Option<VoteCollector<TestTypes, Vote2<TestTypes>, Certificate2<TestTypes>>>,
@@ -75,11 +72,10 @@ pub mod testing {
                         self.timer.reset(view_number + 1);
                     }
                     Some(input) = self.input_rx.recv() => {
-                        if let ConsensusOutput::Event(event) = input.clone()
-                            && let Ok(consensus_input) = ConsensusInput::try_from(event) {
+                        if let ConsensusOutput::Event(event) = &input
+                            && let Ok(consensus_input) = ConsensusInput::try_from(event.clone()) {
                                 self.process_input(consensus_input).await;
-
-                        };
+                        }
 
                         match input {
                             ConsensusOutput::Event(Event::MessageReceived(ConsensusMessage::Vote1(vote1))) => {

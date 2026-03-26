@@ -104,9 +104,9 @@ pub enum Action<T: NodeType> {
 #[allow(clippy::large_enum_variant)]
 pub enum Event<T: NodeType> {
     MessageReceived(ConsensusMessage<T>),
-    StateVerified(StateRequest<T>),
+    StateValidated(StateRequest<T>),
     HeaderCreated(ViewNumber, T::BlockHeader),
-    StateVerificationFailed(StateRequest<T>),
+    StateValidationFailed(StateRequest<T>),
     HeaderCreationFailed(BlockAndHeaderRequest<T>),
     VidDisperseCreated(VidCommitment2, VidDisperse2<T>),
     LeafDecided(Vec<Leaf2<T>>),
@@ -155,9 +155,9 @@ pub enum ConsensusInput<T: NodeType> {
         <T::BlockPayload as BlockPayload<T>>::Metadata,
     ),
     VidDisperseCreated(ViewNumber, VidDisperse2<T>),
-    StateVerified(StateResponse<T>),
+    StateValidated(StateResponse<T>),
     HeaderCreated(ViewNumber, T::BlockHeader),
-    StateVerificationFailed(StateResponse<T>),
+    StateValidationFailed(StateResponse<T>),
     Timeout(ViewNumber),
 }
 
@@ -176,9 +176,9 @@ impl<T: NodeType> ConsensusInput<T> {
                 simple_certificate.view_number()
             },
             ConsensusInput::BlockReconstructed(view_number, _) => *view_number,
-            ConsensusInput::StateVerified(state_response) => state_response.view,
+            ConsensusInput::StateValidated(state_response) => state_response.view,
             ConsensusInput::HeaderCreated(view_number, _) => *view_number,
-            ConsensusInput::StateVerificationFailed(state_request) => state_request.view,
+            ConsensusInput::StateValidationFailed(state_request) => state_request.view,
             ConsensusInput::Timeout(view_number) => *view_number,
             ConsensusInput::BlockBuilt(view_number, ..) => *view_number,
             ConsensusInput::VidDisperseCreated(view_number, _) => *view_number,
@@ -211,19 +211,19 @@ impl<T: NodeType> TryFrom<Event<T>> for ConsensusInput<T> {
             Event::ViewSyncCertificateReceived(cert) => {
                 Ok(ConsensusInput::ViewSyncCertificate(cert))
             },
-            Event::StateVerified(request) => {
+            Event::StateValidated(request) => {
                 let commitment = proposal_commitment(&request.proposal);
                 let state = T::ValidatedState::from_header(&request.proposal.block_header);
-                Ok(ConsensusInput::StateVerified(StateResponse {
+                Ok(ConsensusInput::StateValidated(StateResponse {
                     view: request.view,
                     commitment,
                     state: Arc::new(state),
                 }))
             },
-            Event::StateVerificationFailed(request) => {
+            Event::StateValidationFailed(request) => {
                 let commitment = proposal_commitment(&request.proposal);
                 let state = T::ValidatedState::from_header(&request.proposal.block_header);
-                Ok(ConsensusInput::StateVerificationFailed(StateResponse {
+                Ok(ConsensusInput::StateValidationFailed(StateResponse {
                     view: request.view,
                     commitment,
                     state: Arc::new(state),

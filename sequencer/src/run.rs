@@ -12,6 +12,7 @@ use super::{
     options::{Modules, Options},
     persistence,
 };
+use crate::keyset::KeySet;
 
 pub async fn main() -> anyhow::Result<()> {
     let opt = Options::parse();
@@ -60,7 +61,11 @@ pub async fn init_with_storage<S>(
 where
     S: DataSourceOptions,
 {
-    let (private_staking_key, private_state_key, x25519_sk) = opt.private_keys()?;
+    let KeySet {
+        staking,
+        state,
+        x25519,
+    } = opt.key_set.try_into()?;
     let l1_params = L1Params {
         urls: opt.l1_provider_url,
         options: opt.l1_options,
@@ -69,7 +74,7 @@ where
     let network_params = NetworkParams {
         cdn_endpoint: opt.cdn_endpoint,
         cliquenet_bind_addr: opt.cliquenet_bind_address,
-        x25519_secret_key: x25519_sk,
+        x25519_secret_key: x25519,
         libp2p_advertise_address: opt.libp2p_advertise_address,
         libp2p_bind_address: opt.libp2p_bind_address,
         libp2p_bootstrap_nodes: opt.libp2p_bootstrap_nodes,
@@ -77,8 +82,8 @@ where
         builder_urls: opt.builder_urls,
         state_relay_server_url: opt.state_relay_server_url,
         public_api_url: opt.public_api_url,
-        private_staking_key,
-        private_state_key,
+        private_staking_key: staking,
+        private_state_key: state,
         state_peers: opt.state_peers,
         config_peers: opt.config_peers,
         catchup_backoff: opt.catchup_backoff,

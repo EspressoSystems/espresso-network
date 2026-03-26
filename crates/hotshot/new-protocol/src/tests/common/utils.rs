@@ -384,7 +384,7 @@ pub fn state_verified_input(
     let commitment = proposal_commitment(proposal);
     let state =
         <TestValidatedState as ValidatedState<TestTypes>>::from_header(&proposal.block_header);
-    ConsensusInput::StateVerified(StateResponse {
+    ConsensusInput::StateValidated(StateResponse {
         view,
         commitment,
         state: Arc::new(state),
