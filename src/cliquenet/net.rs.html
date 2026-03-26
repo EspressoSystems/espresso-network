@@ -282,10 +282,10 @@
 <a href=#282 id=282 data-nosnippet>282</a>        }
 <a href=#283 id=283 data-nosnippet>283</a>
 <a href=#284 id=284 data-nosnippet>284</a>        <span class="comment">// Command channel from application to network.
-<a href=#285 id=285 data-nosnippet>285</a>        </span><span class="kw">let </span>(otx, orx) = mpsc::channel(cfg.total_capacity_egress);
+<a href=#285 id=285 data-nosnippet>285</a>        </span><span class="kw">let </span>(otx, orx) = mpsc::channel(cfg.total_capacity_egress.get());
 <a href=#286 id=286 data-nosnippet>286</a>
 <a href=#287 id=287 data-nosnippet>287</a>        <span class="comment">// Channel of messages from peers to the application.
-<a href=#288 id=288 data-nosnippet>288</a>        </span><span class="kw">let </span>(itx, irx) = mpsc::channel(cfg.total_capacity_ingress);
+<a href=#288 id=288 data-nosnippet>288</a>        </span><span class="kw">let </span>(itx, irx) = mpsc::channel(cfg.total_capacity_ingress.get());
 <a href=#289 id=289 data-nosnippet>289</a>
 <a href=#290 id=290 data-nosnippet>290</a>        <span class="kw">let </span><span class="kw-2">mut </span>interval = tokio::time::interval(PING_INTERVAL);
 <a href=#291 id=291 data-nosnippet>291</a>        interval.set_missed_tick_behavior(MissedTickBehavior::Delay);

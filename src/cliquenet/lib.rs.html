@@ -10,7 +10,7 @@
 <a href=#10 id=10 data-nosnippet>10</a>
 <a href=#11 id=11 data-nosnippet>11</a><span class="kw">pub mod </span>retry;
 <a href=#12 id=12 data-nosnippet>12</a>
-<a href=#13 id=13 data-nosnippet>13</a><span class="kw">use </span>std::{fmt, sync::Arc};
+<a href=#13 id=13 data-nosnippet>13</a><span class="kw">use </span>std::{cmp::max, fmt, num::NonZeroUsize, sync::Arc};
 <a href=#14 id=14 data-nosnippet>14</a>
 <a href=#15 id=15 data-nosnippet>15</a><span class="kw">use </span>bon::Builder;
 <a href=#16 id=16 data-nosnippet>16</a><span class="kw">pub use </span>error::{NetworkDown, NetworkError};
@@ -76,21 +76,21 @@
 <a href=#76 id=76 data-nosnippet>76</a>    </span><span class="attr">#[builder(with = &lt;<span class="kw">_</span>&gt;::from_iter)]
 <a href=#77 id=77 data-nosnippet>77</a>    </span>parties: Vec&lt;(K, PublicKey, NetAddr)&gt;,
 <a href=#78 id=78 data-nosnippet>78</a>
-<a href=#79 id=79 data-nosnippet>79</a>    <span class="doccomment">/// Total egress channel capacity.
-<a href=#80 id=80 data-nosnippet>80</a>    </span><span class="attr">#[builder(default = <span class="number">64 </span>* parties.len())]
-<a href=#81 id=81 data-nosnippet>81</a>    </span>total_capacity_egress: usize,
+<a href=#79 id=79 data-nosnippet>79</a>    <span class="doccomment">/// Egress channel capacity per peer.
+<a href=#80 id=80 data-nosnippet>80</a>    </span><span class="attr">#[builder(default = <span class="number">64</span>)]
+<a href=#81 id=81 data-nosnippet>81</a>    </span>peer_capacity_egress: usize,
 <a href=#82 id=82 data-nosnippet>82</a>
-<a href=#83 id=83 data-nosnippet>83</a>    <span class="doccomment">/// Total ingress channel capacity.
-<a href=#84 id=84 data-nosnippet>84</a>    </span><span class="attr">#[builder(default = <span class="number">32 </span>* parties.len())]
-<a href=#85 id=85 data-nosnippet>85</a>    </span>total_capacity_ingress: usize,
+<a href=#83 id=83 data-nosnippet>83</a>    <span class="doccomment">/// Ingress channel capacity per peer.
+<a href=#84 id=84 data-nosnippet>84</a>    </span><span class="attr">#[builder(default = <span class="number">32</span>)]
+<a href=#85 id=85 data-nosnippet>85</a>    </span>peer_capacity_ingress: usize,
 <a href=#86 id=86 data-nosnippet>86</a>
-<a href=#87 id=87 data-nosnippet>87</a>    <span class="doccomment">/// Egress channel capacity per peer.
-<a href=#88 id=88 data-nosnippet>88</a>    </span><span class="attr">#[builder(default = <span class="number">64</span>)]
-<a href=#89 id=89 data-nosnippet>89</a>    </span>peer_capacity_egress: usize,
+<a href=#87 id=87 data-nosnippet>87</a>    <span class="doccomment">/// Total egress channel capacity.
+<a href=#88 id=88 data-nosnippet>88</a>    </span><span class="attr">#[builder(default = NonZeroUsize::new(max(peer_capacity_egress * parties.len(), <span class="number">1</span>)).unwrap())]
+<a href=#89 id=89 data-nosnippet>89</a>    </span>total_capacity_egress: NonZeroUsize,
 <a href=#90 id=90 data-nosnippet>90</a>
-<a href=#91 id=91 data-nosnippet>91</a>    <span class="doccomment">/// Ingress channel capacity per peer.
-<a href=#92 id=92 data-nosnippet>92</a>    </span><span class="attr">#[builder(default = <span class="number">32</span>)]
-<a href=#93 id=93 data-nosnippet>93</a>    </span>peer_capacity_ingress: usize,
+<a href=#91 id=91 data-nosnippet>91</a>    <span class="doccomment">/// Total ingress channel capacity.
+<a href=#92 id=92 data-nosnippet>92</a>    </span><span class="attr">#[builder(default = NonZeroUsize::new(max(peer_capacity_ingress * parties.len(), <span class="number">1</span>)).unwrap())]
+<a href=#93 id=93 data-nosnippet>93</a>    </span>total_capacity_ingress: NonZeroUsize,
 <a href=#94 id=94 data-nosnippet>94</a>
 <a href=#95 id=95 data-nosnippet>95</a>    <span class="doccomment">/// Max. number of bytes per message to send or receive.
 <a href=#96 id=96 data-nosnippet>96</a>    </span><span class="attr">#[builder(default = MAX_MESSAGE_SIZE)]
