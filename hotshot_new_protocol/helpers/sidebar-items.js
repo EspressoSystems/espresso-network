@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["proposal_commitment","upgrade_lock"]};

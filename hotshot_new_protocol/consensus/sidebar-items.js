@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["Protocol"],"fn":["vid_matches_proposal"],"struct":["Consensus"]};

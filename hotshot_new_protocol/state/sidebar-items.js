@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["Completed","Pending"],"struct":["StateManager"],"type":["HeaderError","StateError"]};

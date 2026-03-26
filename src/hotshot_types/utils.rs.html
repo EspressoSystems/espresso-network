@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `crates/hotshot/types/src/utils.rs`."><title>utils.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-77263533.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="hotshot_types" data-themes="" data-resource-suffix="" data-rustdoc-version="1.94.0 (4a4ef493e 2026-03-02)" data-channel="1.94.0" data-search-js="search-9e2438ea.js" data-stringdex-js="stringdex-b897f86f.js" data-settings-js="settings-c38705f0.js" ><script src="../../static.files/storage-e2aeef58.js"></script><script defer src="../../static.files/src-script-813739b1.js"></script><script defer src="../../src-files.js"></script><script defer src="../../static.files/main-7bab91a1.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-ffcac47a.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">hotshot_types/</div>utils.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-3"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="comment">// Copyright (c) 2021-2024 Espresso Systems (espressosys.com)
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `crates/hotshot/types/src/utils.rs`."><title>utils.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-77263533.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="hotshot_types" data-themes="" data-resource-suffix="" data-rustdoc-version="1.94.1 (e408947bf 2026-03-25)" data-channel="1.94.1" data-search-js="search-9e2438ea.js" data-stringdex-js="stringdex-b897f86f.js" data-settings-js="settings-c38705f0.js" ><script src="../../static.files/storage-e2aeef58.js"></script><script defer src="../../static.files/src-script-813739b1.js"></script><script defer src="../../src-files.js"></script><script defer src="../../static.files/main-7bab91a1.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-ffcac47a.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">hotshot_types/</div>utils.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-3"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="comment">// Copyright (c) 2021-2024 Espresso Systems (espressosys.com)
 <a href=#2 id=2 data-nosnippet>2</a>// This file is part of the HotShot repository.
 <a href=#3 id=3 data-nosnippet>3</a>
 <a href=#4 id=4 data-nosnippet>4</a>// You should have received a copy of the MIT License
@@ -144,27 +144,27 @@
 <a href=#144 id=144 data-nosnippet>144</a>    </span><span class="kw">let </span>stake_table_entries = StakeTableEntries::&lt;T&gt;::from(stake_table.to_vec()).<span class="number">0</span>;
 <a href=#145 id=145 data-nosnippet>145</a>
 <a href=#146 id=146 data-nosnippet>146</a>    <span class="comment">// verify all QCs are valid
-<a href=#147 id=147 data-nosnippet>147</a>    </span>newest_leaf
-<a href=#148 id=148 data-nosnippet>148</a>        .justify_qc()
-<a href=#149 id=149 data-nosnippet>149</a>        .is_valid_cert(<span class="kw-2">&amp;</span>stake_table_entries, success_threshold, upgrade_lock)
-<a href=#150 id=150 data-nosnippet>150</a>        .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#151 id=151 data-nosnippet>151</a>    parent
-<a href=#152 id=152 data-nosnippet>152</a>        .justify_qc()
-<a href=#153 id=153 data-nosnippet>153</a>        .is_valid_cert(<span class="kw-2">&amp;</span>stake_table_entries, success_threshold, upgrade_lock)
-<a href=#154 id=154 data-nosnippet>154</a>        .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#155 id=155 data-nosnippet>155</a>    grand_parent
-<a href=#156 id=156 data-nosnippet>156</a>        .justify_qc()
-<a href=#157 id=157 data-nosnippet>157</a>        .is_valid_cert(<span class="kw-2">&amp;</span>stake_table_entries, success_threshold, upgrade_lock)
-<a href=#158 id=158 data-nosnippet>158</a>        .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#159 id=159 data-nosnippet>159</a>
-<a href=#160 id=160 data-nosnippet>160</a>    <span class="comment">// Verify the root is in the chain of decided leaves
-<a href=#161 id=161 data-nosnippet>161</a>    </span><span class="kw">let </span><span class="kw-2">mut </span>last_leaf = parent;
-<a href=#162 id=162 data-nosnippet>162</a>    <span class="kw">for </span>leaf <span class="kw">in </span>leaf_chain.iter().skip(<span class="number">2</span>) {
-<a href=#163 id=163 data-nosnippet>163</a>        <span class="macro">ensure!</span>(last_leaf.justify_qc().view_number() == leaf.view_number());
-<a href=#164 id=164 data-nosnippet>164</a>        <span class="macro">ensure!</span>(last_leaf.justify_qc().data().leaf_commit == leaf.commit());
-<a href=#165 id=165 data-nosnippet>165</a>        leaf.justify_qc()
-<a href=#166 id=166 data-nosnippet>166</a>            .is_valid_cert(<span class="kw-2">&amp;</span>stake_table_entries, success_threshold, upgrade_lock)
-<a href=#167 id=167 data-nosnippet>167</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#147 id=147 data-nosnippet>147</a>    </span>newest_leaf.justify_qc().is_valid_cert(
+<a href=#148 id=148 data-nosnippet>148</a>        <span class="kw-2">&amp;</span>stake_table_entries,
+<a href=#149 id=149 data-nosnippet>149</a>        success_threshold,
+<a href=#150 id=150 data-nosnippet>150</a>        upgrade_lock,
+<a href=#151 id=151 data-nosnippet>151</a>    )<span class="question-mark">?</span>;
+<a href=#152 id=152 data-nosnippet>152</a>    parent
+<a href=#153 id=153 data-nosnippet>153</a>        .justify_qc()
+<a href=#154 id=154 data-nosnippet>154</a>        .is_valid_cert(<span class="kw-2">&amp;</span>stake_table_entries, success_threshold, upgrade_lock)<span class="question-mark">?</span>;
+<a href=#155 id=155 data-nosnippet>155</a>    grand_parent.justify_qc().is_valid_cert(
+<a href=#156 id=156 data-nosnippet>156</a>        <span class="kw-2">&amp;</span>stake_table_entries,
+<a href=#157 id=157 data-nosnippet>157</a>        success_threshold,
+<a href=#158 id=158 data-nosnippet>158</a>        upgrade_lock,
+<a href=#159 id=159 data-nosnippet>159</a>    )<span class="question-mark">?</span>;
+<a href=#160 id=160 data-nosnippet>160</a>
+<a href=#161 id=161 data-nosnippet>161</a>    <span class="comment">// Verify the root is in the chain of decided leaves
+<a href=#162 id=162 data-nosnippet>162</a>    </span><span class="kw">let </span><span class="kw-2">mut </span>last_leaf = parent;
+<a href=#163 id=163 data-nosnippet>163</a>    <span class="kw">for </span>leaf <span class="kw">in </span>leaf_chain.iter().skip(<span class="number">2</span>) {
+<a href=#164 id=164 data-nosnippet>164</a>        <span class="macro">ensure!</span>(last_leaf.justify_qc().view_number() == leaf.view_number());
+<a href=#165 id=165 data-nosnippet>165</a>        <span class="macro">ensure!</span>(last_leaf.justify_qc().data().leaf_commit == leaf.commit());
+<a href=#166 id=166 data-nosnippet>166</a>        leaf.justify_qc()
+<a href=#167 id=167 data-nosnippet>167</a>            .is_valid_cert(<span class="kw-2">&amp;</span>stake_table_entries, success_threshold, upgrade_lock)<span class="question-mark">?</span>;
 <a href=#168 id=168 data-nosnippet>168</a>        <span class="kw">if </span>leaf.height() == expected_height {
 <a href=#169 id=169 data-nosnippet>169</a>            <span class="kw">return </span><span class="prelude-val">Ok</span>(leaf.clone());
 <a href=#170 id=170 data-nosnippet>170</a>        }

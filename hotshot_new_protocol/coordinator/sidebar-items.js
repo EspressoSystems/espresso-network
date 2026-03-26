@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"mod":["coordinator_builder"],"struct":["Coordinator","CoordinatorBuilder"]};
