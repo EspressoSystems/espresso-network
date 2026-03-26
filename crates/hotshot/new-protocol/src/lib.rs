@@ -31,6 +31,9 @@ pub mod vid;
 #[allow(dead_code, unused_variables)]
 pub mod vote;
 
+#[allow(dead_code, unused_variables)]
+mod block;
+
 #[cfg(test)]
 mod tests;
 

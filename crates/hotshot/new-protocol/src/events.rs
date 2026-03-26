@@ -17,7 +17,9 @@ use hotshot_types::{
 
 use crate::{
     helpers::proposal_commitment,
-    message::{Certificate1, Certificate2, ConsensusMessage, ProposalMessage, Vote1, Vote2},
+    message::{
+        Certificate1, Certificate2, ConsensusMessage, ProposalMessage, Vote1, Vote2,
+    },
 };
 
 #[derive(Eq, PartialEq, Debug, Clone)]
@@ -83,6 +85,8 @@ pub enum Action<T: NodeType> {
     SendProposal(Proposal<T, QuorumProposal2<T>>, VidDisperse2<T>),
     SendVote1(Vote1<T>),
     SendVote2(Vote2<T>),
+    SendTransactions(ViewNumber, Vec<T::Transaction>),
+    SendDedupManifest(ViewNumber, Vec<Commitment<T::Transaction>>),
     RequestState(StateRequest<T>),
     RequestBlockAndHeader(BlockAndHeaderRequest<T>),
     RequestVidDisperse(
@@ -121,6 +125,23 @@ pub enum Event<T: NodeType> {
 pub enum ConsensusOutput<T: NodeType> {
     Action(Action<T>),
     Event(Event<T>),
+}
+
+impl<T: NodeType> Action<T> {
+    pub fn view_number(&self) -> Option<ViewNumber> {
+        match self {
+            Action::SendProposal(proposal, _) => Some(proposal.data.view_number()),
+            Action::SendVote1(vote) => Some(vote.view_number()),
+            Action::SendVote2(vote) => Some(vote.view_number()),
+            Action::RequestState(req) => Some(req.view),
+            Action::RequestBlockAndHeader(req) => Some(req.view),
+            Action::RequestVidDisperse(view, ..) => Some(*view),
+            Action::RequestProposal(view, _) => Some(*view),
+            Action::SendTransactions(view, _) => Some(*view),
+            Action::SendDedupManifest(view, _) => Some(*view),
+            Action::RequestDRB(_) => None,
+        }
+    }
 }
 
 impl<T: NodeType> From<Action<T>> for ConsensusOutput<T> {

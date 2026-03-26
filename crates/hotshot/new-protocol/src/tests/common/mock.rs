@@ -227,6 +227,8 @@ pub mod testing {
                         drb_request_task.request_drb(drb_input.clone());
                     }
                 },
+                Action::SendTransactions(..) => {},
+                Action::SendDedupManifest(..) => {},
             }
         }
     }

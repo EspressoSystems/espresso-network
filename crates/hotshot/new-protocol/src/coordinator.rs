@@ -11,11 +11,12 @@ use tracing::{error, warn};
 
 use crate::{
     Outbox,
+    block::BlockBuilder,
     consensus::Consensus,
     drb::DrbRequester,
     events::*,
     io::network::{Network, is_critical},
-    message::{Certificate2, ConsensusMessage, Message, MessageType, Vote2},
+    message::{BlockMessage, Certificate2, ConsensusMessage, Message, MessageType, Vote2},
     state::StateManager,
     vid::{VidDisperser, VidReconstructor},
     vote::VoteCollector,
@@ -37,6 +38,8 @@ pub(crate) struct Coordinator<T: NodeType, I: NodeImplementation<T>> {
     membership_coordinator: EpochMembershipCoordinator<T>,
     #[builder(default)]
     outbox: Outbox<ConsensusOutput<T>>,
+    #[builder(default)]
+    block_builder: BlockBuilder<T>,
 }
 
 impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
@@ -78,7 +81,8 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                     }
                 },
                 Some(item) = self.vid_reconstructor.next() => match item {
-                    Ok((view, commitment, _)) => {
+                    Ok((view, commitment, payload)) => {
+                        self.block_builder.on_block_reconstructed(view, payload);
                         self.evaluate(ConsensusInput::BlockReconstructed(view, commitment)).await;
                     }
                     Err(err) => {
@@ -128,11 +132,16 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                 ConsensusMessage::TimeoutVote(timeout_vote) => {
                     self.timeout_collector.accumulate_vote(timeout_vote).await;
                 },
-                ConsensusMessage::Transactions(transactions, view) => {
-                    todo!()
-                },
                 ConsensusMessage::Checkpoint(view, epoch) => {
                     todo!()
+                },
+            },
+            MessageType::Block(msg) => match msg {
+                BlockMessage::Transactions(tx_msg) => {
+                    self.block_builder.on_transactions(tx_msg);
+                },
+                BlockMessage::DedupManifest(manifest) => {
+                    self.block_builder.on_dedup_manifest(manifest);
                 },
             },
             MessageType::ViewSync(_) => todo!(),
@@ -159,9 +168,7 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                 self.state_manager.request_state(state_request);
             },
             Action::RequestBlockAndHeader(req) => {
-                // TODO: add a block builder, and use it to build the block,
-                // Then on block built, request the header
-                todo!()
+                let (_txns, _manifest) = self.block_builder.drain(req.view);
             },
             Action::RequestVidDisperse(view, epoch, block, metadata) => {
                 self.vid_disperser.request_vid_disperse(VidDisperseRequest {
@@ -175,6 +182,8 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
             Action::RequestDRB(drb_input) => {
                 self.drb_requester.request_drb(drb_input);
             },
+            Action::SendTransactions(_view, _txns) => {},
+            Action::SendDedupManifest(_view, _manifest) => {},
         }
     }
 
