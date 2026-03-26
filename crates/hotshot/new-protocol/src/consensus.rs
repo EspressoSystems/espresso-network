@@ -5,12 +5,14 @@ use std::{
 };
 
 use committable::{Commitment, Committable};
+use hotshot::traits::BlockPayload;
 use hotshot_types::{
     data::{
         EpochNumber, Leaf2, QuorumProposal2, QuorumProposalWrapper, VidCommitment, VidCommitment2,
         VidDisperse2, VidDisperseShare2, ViewChangeEvidence2, ViewNumber,
         vid_disperse::vid_total_weight,
     },
+    drb::DrbInput,
     epoch_membership::EpochMembershipCoordinator,
     message::Proposal,
     simple_certificate::{TimeoutCertificate2, ViewSyncFinalizeCertificate2},
@@ -24,18 +26,60 @@ use hotshot_types::{
 use tracing::{debug, instrument, warn};
 
 use crate::{
-    Outbox,
-    events::{Action, BlockAndHeaderRequest, ConsensusInput, ConsensusOutput, Event, StateRequest},
+    block::BlockAndHeaderRequest,
     helpers::{proposal_commitment, upgrade_lock},
-    message::{Certificate1, Certificate2, CheckpointData, ProposalMessage, Vote1, Vote2Data},
+    message::{
+        Certificate1, Certificate2, CheckpointData, CheckpointVote, ProposalMessage, Vote1, Vote2,
+        Vote2Data,
+    },
+    outbox::Outbox,
+    state::{StateRequest, StateResponse},
 };
 
-/// Protocol flow directive.
-enum Protocol {
-    /// Stop with further protocol steps.
-    Abort,
-    /// Continue with protocol.
-    Continue,
+#[derive(Eq, PartialEq, Debug, Clone)]
+pub enum ConsensusInput<T: NodeType> {
+    BlockBuilt {
+        view: ViewNumber,
+        epoch: EpochNumber,
+        payload: T::BlockPayload,
+        metadata: <T::BlockPayload as BlockPayload<T>>::Metadata,
+    },
+    BlockReconstructed(ViewNumber, VidCommitment2),
+    Certificate1(Certificate1<T>),
+    Certificate2(Certificate2<T>),
+    HeaderCreated(ViewNumber, T::BlockHeader),
+    Proposal(ProposalMessage<T>),
+    StateValidated(StateResponse<T>),
+    StateValidationFailed(StateResponse<T>),
+    Timeout(ViewNumber),
+    TimeoutCertificate(TimeoutCertificate2<T>),
+    VidDisperseCreated(ViewNumber, VidDisperse2<T>),
+    ViewSyncCertificate(ViewSyncFinalizeCertificate2<T>),
+}
+
+#[derive(Eq, PartialEq, Debug, Clone)]
+pub enum ConsensusOutput<T: NodeType> {
+    RequestBlockAndHeader(BlockAndHeaderRequest<T>),
+    RequestDRB(DrbInput),
+    RequestProposal(ViewNumber, Commitment<Leaf2<T>>),
+    RequestState(StateRequest<T>),
+    SendProposal(Proposal<T, QuorumProposal2<T>>, VidDisperse2<T>),
+    SendCheckpointVote(CheckpointVote<T>),
+    SendVote1(Vote1<T>),
+    SendVote2(Vote2<T>),
+    RequestVidDisperse {
+        view: ViewNumber,
+        epoch: EpochNumber,
+        payload: T::BlockPayload,
+        metadata: <T::BlockPayload as BlockPayload<T>>::Metadata,
+    },
+    Certificate1Formed(Certificate1<T>),
+    Certificate2Formed(Certificate2<T>),
+    LeafDecided(Vec<Leaf2<T>>),
+    LockUpdated(Certificate2<T>),
+    TimeoutCertificateReceived(TimeoutCertificate2<T>),
+    ViewChanged(ViewNumber, EpochNumber),
+    ViewSyncCertificateReceived(ViewSyncFinalizeCertificate2<T>),
 }
 
 pub struct Consensus<T: NodeType> {
@@ -66,6 +110,14 @@ pub struct Consensus<T: NodeType> {
     private_key: <T::SignatureKey as SignatureKey>::PrivateKey,
 
     garbage_collection_interval: u64,
+}
+
+/// Protocol flow directive.
+enum Protocol {
+    /// Stop with further protocol steps.
+    Abort,
+    /// Continue with protocol.
+    Continue,
 }
 
 impl<T: NodeType> Consensus<T> {
@@ -116,7 +168,7 @@ impl<T: NodeType> Consensus<T> {
                 self.handle_certificate1(certificate, outbox).await
             },
             ConsensusInput::Certificate2(certificate) => {
-                self.handle_certificate2(certificate, outbox).await
+                self.handle_certificate2(certificate).await
             },
             ConsensusInput::TimeoutCertificate(certificate) => {
                 self.handle_timeout_certificate(certificate, outbox).await
@@ -153,14 +205,19 @@ impl<T: NodeType> Consensus<T> {
                 // we are done after timeout, don't try to vote, decide, or propose
                 return;
             },
-            ConsensusInput::BlockBuilt(view, epoch, block, metadata) => {
-                outbox.push_back(Action::RequestVidDisperse(
+            ConsensusInput::BlockBuilt {
+                view,
+                epoch,
+                payload,
+                metadata,
+            } => {
+                outbox.push_back(ConsensusOutput::RequestVidDisperse {
                     view,
                     epoch,
-                    block.clone(),
+                    payload: payload.clone(),
                     metadata,
-                ));
-                self.blocks.insert(view, block);
+                });
+                self.blocks.insert(view, payload);
                 Protocol::Continue
             },
             ConsensusInput::VidDisperseCreated(view, vid_disperse) => {
@@ -182,23 +239,23 @@ impl<T: NodeType> Consensus<T> {
         self.maybe_propose(view + 1, outbox).await;
     }
 
-    pub fn gc(&mut self, view_number: ViewNumber, epoch: EpochNumber) {
-        self.states_verified = self.states_verified.split_off(&view_number);
-        self.blocks_reconstructed = self.blocks_reconstructed.split_off(&view_number);
-        self.blocks = self.blocks.split_off(&view_number);
-        self.vid_disperses = self.vid_disperses.split_off(&view_number);
-        self.certs = self.certs.split_off(&view_number);
-        self.certs2 = self.certs2.split_off(&view_number);
-        self.timeout_certs = self.timeout_certs.split_off(&view_number);
-        self.view_sync_certs = self.view_sync_certs.split_off(&view_number);
+    pub fn gc(&mut self, view: ViewNumber, _epoch: EpochNumber) {
+        self.states_verified = self.states_verified.split_off(&view);
+        self.blocks_reconstructed = self.blocks_reconstructed.split_off(&view);
+        self.blocks = self.blocks.split_off(&view);
+        self.vid_disperses = self.vid_disperses.split_off(&view);
+        self.certs = self.certs.split_off(&view);
+        self.certs2 = self.certs2.split_off(&view);
+        self.timeout_certs = self.timeout_certs.split_off(&view);
+        self.view_sync_certs = self.view_sync_certs.split_off(&view);
         self.locked_cert = self
             .locked_cert
             .take()
-            .filter(|cert| cert.view_number() > view_number);
-        self.headers = self.headers.split_off(&view_number);
-        self.voted_1_views = self.voted_1_views.split_off(&view_number);
-        self.voted_2_views = self.voted_2_views.split_off(&view_number);
-        self.last_decided_view = self.last_decided_view.max(view_number);
+            .filter(|cert| cert.view_number() > view);
+        self.headers = self.headers.split_off(&view);
+        self.voted_1_views = self.voted_1_views.split_off(&view);
+        self.voted_2_views = self.voted_2_views.split_off(&view);
+        self.last_decided_view = self.last_decided_view.max(view);
     }
 
     #[instrument(level = "debug", skip_all)]
@@ -252,22 +309,24 @@ impl<T: NodeType> Consensus<T> {
         self.proposals.insert(view, proposal.clone());
         self.vid_shares.insert(view, vid_share);
 
-        outbox.push_back(Action::RequestState(StateRequest {
+        outbox.push_back(ConsensusOutput::RequestState(StateRequest {
             view: proposal.view_number(),
             parent_view: proposal.view_number().saturating_sub(1).into(),
             epoch,
-            block_number: proposal.block_header.block_number(),
+            block: proposal.block_header.block_number().into(),
             proposal: proposal.clone(),
             parent_commitment: proposal.justify_qc.data().leaf_commit,
             payload_size,
         }));
 
         if self.is_leader(view + 1, epoch).await {
-            outbox.push_back(Action::RequestBlockAndHeader(BlockAndHeaderRequest {
-                view: view + 1,
-                epoch,
-                parent_proposal: proposal,
-            }));
+            outbox.push_back(ConsensusOutput::RequestBlockAndHeader(
+                BlockAndHeaderRequest {
+                    view: view + 1,
+                    epoch,
+                    parent_proposal: proposal,
+                },
+            ));
         }
 
         Protocol::Continue
@@ -290,17 +349,13 @@ impl<T: NodeType> Consensus<T> {
             warn!(%view, "certificate1 not verified");
             return Protocol::Abort;
         }
-        outbox.push_back(Event::ViewChanged(view + 1, certificate_epoch));
+        outbox.push_back(ConsensusOutput::ViewChanged(view + 1, certificate_epoch));
         self.certs.insert(view, certificate);
         Protocol::Continue
     }
 
     #[instrument(level = "debug", skip_all)]
-    async fn handle_certificate2(
-        &mut self,
-        certificate: Certificate2<T>,
-        outbox: &mut Outbox<ConsensusOutput<T>>,
-    ) -> Protocol {
+    async fn handle_certificate2(&mut self, certificate: Certificate2<T>) -> Protocol {
         let view = certificate.view_number();
         let Some(certificate_epoch) = certificate.epoch() else {
             warn!(%view, "certificate2 has no epoch number");
@@ -328,8 +383,8 @@ impl<T: NodeType> Consensus<T> {
             return Protocol::Abort;
         };
         self.timeout_certs.insert(view, certificate.clone());
-        outbox.push_back(Event::TimeoutCertificateReceived(certificate));
-        outbox.push_back(Event::ViewChanged(view, epoch));
+        outbox.push_back(ConsensusOutput::TimeoutCertificateReceived(certificate));
+        outbox.push_back(ConsensusOutput::ViewChanged(view, epoch));
         if !self.is_leader(view, epoch).await {
             debug!(%epoch, "not leader");
             return Protocol::Abort;
@@ -345,11 +400,13 @@ impl<T: NodeType> Consensus<T> {
             debug!(%locked_view, "proposal not available");
             return Protocol::Abort;
         };
-        outbox.push_back(Action::RequestBlockAndHeader(BlockAndHeaderRequest {
-            view,
-            epoch,
-            parent_proposal: proposal.clone(),
-        }));
+        outbox.push_back(ConsensusOutput::RequestBlockAndHeader(
+            BlockAndHeaderRequest {
+                view,
+                epoch,
+                parent_proposal: proposal.clone(),
+            },
+        ));
         Protocol::Continue
     }
 
@@ -365,8 +422,8 @@ impl<T: NodeType> Consensus<T> {
             return Protocol::Abort;
         };
         self.view_sync_certs.insert(view, certificate.clone());
-        outbox.push_back(Event::ViewSyncCertificateReceived(certificate));
-        outbox.push_back(Event::ViewChanged(view, epoch));
+        outbox.push_back(ConsensusOutput::ViewSyncCertificateReceived(certificate));
+        outbox.push_back(ConsensusOutput::ViewChanged(view, epoch));
         if !self.is_leader(view, epoch).await {
             debug!(%epoch, "not leader");
             return Protocol::Abort;
@@ -379,11 +436,13 @@ impl<T: NodeType> Consensus<T> {
             debug!(%locked_view, "proposal not available");
             return Protocol::Abort;
         };
-        outbox.push_back(Action::RequestBlockAndHeader(BlockAndHeaderRequest {
-            view,
-            epoch,
-            parent_proposal: proposal.clone(),
-        }));
+        outbox.push_back(ConsensusOutput::RequestBlockAndHeader(
+            BlockAndHeaderRequest {
+                view,
+                epoch,
+                parent_proposal: proposal.clone(),
+            },
+        ));
         Protocol::Continue
     }
 
@@ -428,7 +487,7 @@ impl<T: NodeType> Consensus<T> {
             debug!("no block header");
             return;
         };
-        let Some(block) = self.blocks.get(&view) else {
+        if !self.blocks.contains_key(&view) {
             debug!("no block");
             return;
         };
@@ -484,7 +543,7 @@ impl<T: NodeType> Consensus<T> {
             _pd: PhantomData,
         };
 
-        outbox.push_back(Action::SendProposal(message, vid_disperse.clone()));
+        outbox.push_back(ConsensusOutput::SendProposal(message, vid_disperse.clone()));
     }
 
     #[instrument(level = "debug", skip_all)]
@@ -532,7 +591,7 @@ impl<T: NodeType> Consensus<T> {
             parent_view = proposal.justify_qc.view_number();
             parent_commit = proposal.justify_qc.data.leaf_commit;
         }
-        outbox.push_back(Event::LeafDecided(decided));
+        outbox.push_back(ConsensusOutput::LeafDecided(decided));
         if let Some(gc) = gc {
             let gc_data = CheckpointData {
                 view: gc.0,
@@ -551,7 +610,7 @@ impl<T: NodeType> Consensus<T> {
                     return;
                 },
             };
-            outbox.push_back(Action::SendCheckpointVote(vote));
+            outbox.push_back(ConsensusOutput::SendCheckpointVote(vote));
         }
     }
 
@@ -638,7 +697,7 @@ impl<T: NodeType> Consensus<T> {
             vote: inner_vote,
             vid_share: vid_share.clone(),
         };
-        outbox.push_back(Action::SendVote1(vote));
+        outbox.push_back(ConsensusOutput::SendVote1(vote));
         self.voted_1_views.insert(view);
     }
 
@@ -714,7 +773,7 @@ impl<T: NodeType> Consensus<T> {
                 return;
             },
         };
-        outbox.push_back(Action::SendVote2(vote));
+        outbox.push_back(ConsensusOutput::SendVote2(vote));
         self.voted_2_views.insert(view);
     }
 
@@ -822,5 +881,28 @@ where
         vid_comm == share.payload_commitment
     } else {
         false
+    }
+}
+
+impl<T: NodeType> ConsensusInput<T> {
+    fn view_number(&self) -> ViewNumber {
+        match self {
+            ConsensusInput::BlockBuilt { view, .. } => *view,
+            ConsensusInput::BlockReconstructed(view, _) => *view,
+            ConsensusInput::Certificate1(cert) => cert.view_number(),
+            ConsensusInput::Certificate2(cert) => cert.view_number(),
+            ConsensusInput::HeaderCreated(view, _) => *view,
+            ConsensusInput::Proposal(prop) => prop.view_number(),
+            ConsensusInput::StateValidated(response) => response.view,
+            ConsensusInput::StateValidationFailed(request) => request.view,
+            ConsensusInput::Timeout(view) => *view,
+            ConsensusInput::TimeoutCertificate(cert) => {
+                // Add one because we are moving to the next view so all event
+                // processing is for the next view
+                cert.view_number() + 1
+            },
+            ConsensusInput::VidDisperseCreated(view, _) => *view,
+            ConsensusInput::ViewSyncCertificate(cert) => cert.view_number(),
+        }
     }
 }

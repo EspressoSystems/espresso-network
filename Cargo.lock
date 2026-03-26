@@ -5956,6 +5956,7 @@ dependencies = [
  "hotshot-testing",
  "hotshot-types",
  "serde",
+ "thiserror 2.0.17",
  "time 0.3.47",
  "tokio",
  "tracing",

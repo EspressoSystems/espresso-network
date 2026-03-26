@@ -4,46 +4,95 @@ use std::{
 };
 
 use committable::{Commitment, Committable};
-use hotshot::traits::ValidatedState;
+use hotshot::traits::{BlockPayload, ValidatedState};
 use hotshot_types::{
-    data::{Leaf2, QuorumProposal2, QuorumProposalWrapper, ViewNumber},
-    traits::{block_contents::BlockHeader, node_implementation::NodeType},
+    data::{
+        BlockNumber, EpochNumber, Leaf2, QuorumProposal2, QuorumProposalWrapper, VidCommitment,
+        ViewNumber,
+    },
+    traits::{
+        block_contents::{BlockHeader, BuilderFee},
+        node_implementation::NodeType,
+    },
+    utils::BuilderCommitment,
     vote::HasViewNumber,
 };
 use tokio::task::{AbortHandle, JoinSet};
-use tracing::error;
+use tracing::{error, warn};
 
-use crate::{
-    events::{Event, HeaderRequest, StateRequest, StateResponse},
-    helpers::{proposal_commitment, upgrade_lock},
-};
+use crate::helpers::{proposal_commitment, upgrade_lock};
 
-type StateError<T> = <<T as NodeType>::ValidatedState as ValidatedState<T>>::Error;
-type HeaderError<T> = <<T as NodeType>::BlockHeader as BlockHeader<T>>::Error;
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StateRequest<T: NodeType> {
+    pub view: ViewNumber,
+    pub parent_view: ViewNumber,
+    pub epoch: EpochNumber,
+    pub block: BlockNumber,
+    pub proposal: QuorumProposal2<T>,
+    pub parent_commitment: Commitment<Leaf2<T>>,
+    pub payload_size: u32,
+}
 
-pub(crate) struct StateManager<T: NodeType> {
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HeaderRequest<T: NodeType> {
+    pub view: ViewNumber,
+    pub epoch: EpochNumber,
+    pub parent_proposal: QuorumProposal2<T>,
+    pub payload_commitment: VidCommitment,
+    pub builder_commitment: BuilderCommitment,
+    pub metadata: <T::BlockPayload as BlockPayload<T>>::Metadata,
+    pub builder_fee: BuilderFee<T>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StateResponse<T: NodeType> {
+    pub view: ViewNumber,
+    pub commitment: Commitment<Leaf2<T>>,
+    pub state: Arc<T::ValidatedState>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HeaderResponse<T: NodeType> {
+    pub view: ViewNumber,
+    pub epoch: EpochNumber,
+    pub parent_proposal: QuorumProposal2<T>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum StateManagerOutput<T: NodeType> {
+    State {
+        response: StateResponse<T>,
+        validated: bool,
+    },
+    Header {
+        response: HeaderResponse<T>,
+        header: Option<T::BlockHeader>,
+    },
+}
+
+pub struct StateManager<T: NodeType> {
     instance: Arc<T::InstanceState>,
     validated_states: BTreeMap<ViewNumber, (Arc<T::ValidatedState>, Leaf2<T>)>,
-    state_requests: HashMap<Commitment<Leaf2<T>>, (AbortHandle, StateRequest<T>)>,
+    state_requests: HashMap<Commitment<Leaf2<T>>, (AbortHandle, ViewNumber)>,
     header_requests: HashMap<ViewNumber, AbortHandle>,
     pending_requests: HashMap<Commitment<Leaf2<T>>, Vec<Pending<T>>>,
     tasks: JoinSet<Completed<T>>,
 }
 
-enum Completed<T: NodeType> {
-    State {
-        commitment: Commitment<Leaf2<T>>,
-        result: Result<StateResponse<T>, StateError<T>>,
-    },
-    Header {
-        view: ViewNumber,
-        result: Result<T::BlockHeader, HeaderError<T>>,
-    },
-}
-
 enum Pending<T: NodeType> {
     State(StateRequest<T>),
     Header(HeaderRequest<T>),
+}
+
+enum Completed<T: NodeType> {
+    State {
+        response: StateResponse<T>,
+        leaf: Option<Leaf2<T>>,
+    },
+    Header {
+        response: HeaderResponse<T>,
+        header: Option<T::BlockHeader>,
+    },
 }
 
 impl<T: NodeType> StateManager<T> {
@@ -109,10 +158,28 @@ impl<T: NodeType> StateManager<T> {
                     commitment,
                     state: Arc::new(state),
                 });
-            Completed::State { commitment, result }
+            match result {
+                Ok(response) => Completed::State {
+                    response,
+                    leaf: Some(Leaf2::from_quorum_proposal(&QuorumProposalWrapper {
+                        proposal: request.proposal,
+                    })),
+                },
+                Err(err) => {
+                    warn!(%err, "state validation failed");
+                    Completed::State {
+                        response: StateResponse {
+                            view,
+                            commitment,
+                            state: Arc::new(T::ValidatedState::from_header(&header)),
+                        },
+                        leaf: None,
+                    }
+                },
+            }
         });
 
-        self.state_requests.insert(commitment, (handle, request));
+        self.state_requests.insert(commitment, (handle, view));
     }
 
     pub fn request_header(&mut self, request: HeaderRequest<T>) {
@@ -139,6 +206,8 @@ impl<T: NodeType> StateManager<T> {
 
         let instance = self.instance.clone();
         let view = request.view;
+        let epoch = request.epoch;
+        let parent_proposal = request.parent_proposal;
 
         let Ok(version) = upgrade_lock::<T>().version(view) else {
             error!(%view, "unsupported version");
@@ -158,7 +227,27 @@ impl<T: NodeType> StateManager<T> {
                 *view,
             )
             .await;
-            Completed::Header { view, result }
+            match result {
+                Ok(header) => Completed::Header {
+                    response: HeaderResponse {
+                        view,
+                        epoch,
+                        parent_proposal,
+                    },
+                    header: Some(header),
+                },
+                Err(err) => {
+                    warn!(%err, "header creation failed");
+                    Completed::Header {
+                        response: HeaderResponse {
+                            view,
+                            epoch,
+                            parent_proposal,
+                        },
+                        header: None,
+                    }
+                },
+            }
         });
 
         self.header_requests.insert(view, handle);
@@ -168,26 +257,45 @@ impl<T: NodeType> StateManager<T> {
     pub fn update_state(&mut self, state: T::ValidatedState, view: ViewNumber, leaf: Leaf2<T>) {
         let commitment = leaf.commit();
         self.validated_states.insert(view, (Arc::new(state), leaf));
-        if let Some((abort_handle, _)) = self.state_requests.remove(&commitment) {
-            abort_handle.abort();
+        if let Some((task, _)) = self.state_requests.remove(&commitment) {
+            task.abort();
         }
         self.start_pending(commitment);
     }
 
-    /// Wait for the next event.
-    pub async fn next(&mut self) -> Option<Event<T>> {
+    /// Get the next output.
+    pub async fn next(&mut self) -> Option<StateManagerOutput<T>> {
         loop {
             match self.tasks.join_next().await {
                 Some(Ok(result)) => match result {
-                    Completed::State { commitment, result } => {
-                        if let Some(event) = self.handle_state_result(commitment, result) {
-                            return Some(event);
+                    Completed::State {
+                        response,
+                        leaf: leaf2,
+                    } => {
+                        if self.state_requests.remove(&response.commitment).is_none() {
+                            continue;
+                        }
+                        if let Some(leaf) = leaf2 {
+                            self.validated_states
+                                .insert(response.view, (response.state.clone(), leaf));
+                            self.start_pending(response.commitment);
+                            return Some(StateManagerOutput::State {
+                                response,
+                                validated: true,
+                            });
+                        } else {
+                            self.pending_requests.remove(&response.commitment);
+                            return Some(StateManagerOutput::State {
+                                response,
+                                validated: false,
+                            });
                         }
                     },
-                    Completed::Header { view, result } => {
-                        if let Some(event) = self.handle_header_result(view, result) {
-                            return Some(event);
+                    Completed::Header { response, header } => {
+                        if self.header_requests.remove(&response.view).is_none() {
+                            continue;
                         }
+                        return Some(StateManagerOutput::Header { response, header });
                     },
                 },
                 Some(Err(err)) => {
@@ -200,44 +308,15 @@ impl<T: NodeType> StateManager<T> {
         }
     }
 
-    fn handle_state_result(
-        &mut self,
-        commitment: Commitment<Leaf2<T>>,
-        result: Result<StateResponse<T>, StateError<T>>,
-    ) -> Option<Event<T>> {
-        let (_, request) = self.state_requests.remove(&commitment)?;
-        match result {
-            Ok(response) => {
-                let leaf = Leaf2::from_quorum_proposal(&QuorumProposalWrapper::<T> {
-                    proposal: request.proposal.clone(),
-                });
-                self.validated_states
-                    .insert(response.view, (response.state, leaf));
-                self.start_pending(response.commitment);
-                Some(Event::StateValidated(request))
-            },
-            Err(err) => {
-                error!(%err, "state validation failed");
-                // Remove dependents of this failed request. TODO: double-check
-                self.pending_requests.remove(&commitment);
-                None
-            },
+    pub fn gc(&mut self, view_number: ViewNumber) {
+        self.validated_states = self.validated_states.split_off(&view_number);
+        for (task, view) in self.state_requests.values() {
+            if *view < view_number {
+                task.abort();
+            }
         }
-    }
-
-    fn handle_header_result(
-        &mut self,
-        view: ViewNumber,
-        result: Result<T::BlockHeader, HeaderError<T>>,
-    ) -> Option<Event<T>> {
-        self.header_requests.remove(&view)?;
-        match result {
-            Ok(header) => Some(Event::HeaderCreated(view, header)),
-            Err(err) => {
-                error!(%err, "header creation failed");
-                None
-            },
-        }
+        self.state_requests
+            .retain(|_, (_, view)| *view >= view_number);
     }
 
     fn start_pending(&mut self, finished_commitment: Commitment<Leaf2<T>>) {
@@ -261,16 +340,6 @@ impl<T: NodeType> StateManager<T> {
                 Leaf2::from_quorum_proposal(&QuorumProposalWrapper::<T> { proposal }),
             ),
         );
-    }
-    pub fn gc(&mut self, view_number: ViewNumber) {
-        self.validated_states = self.validated_states.split_off(&view_number);
-        for (handle, request) in self.state_requests.values_mut() {
-            if request.view < view_number {
-                handle.abort();
-            }
-        }
-        self.state_requests
-            .retain(|_, (_, request)| request.view >= view_number);
     }
 }
 
@@ -296,7 +365,6 @@ mod test {
 
     use super::*;
     use crate::{
-        events::{Event, HeaderRequest, StateRequest},
         helpers::proposal_commitment,
         tests::common::utils::{TestData, TestView},
     };
@@ -308,7 +376,7 @@ mod test {
             view: view.view_number,
             parent_view: proposal.justify_qc.view_number(),
             epoch: view.epoch_number,
-            block_number: BlockHeader::<TestTypes>::block_number(&proposal.block_header),
+            block: BlockHeader::<TestTypes>::block_number(&proposal.block_header).into(),
             proposal: proposal.clone(),
             parent_commitment: proposal.justify_qc.data().leaf_commit,
             payload_size: 0,
@@ -369,17 +437,33 @@ mod test {
         manager
     }
 
-    fn count_state_verified(events: &[Event<TestTypes>]) -> usize {
+    fn count_state_verified(events: &[StateManagerOutput<TestTypes>]) -> usize {
         events
             .iter()
-            .filter(|e| matches!(e, Event::StateValidated(_)))
+            .filter(|e| {
+                matches!(
+                    e,
+                    StateManagerOutput::State {
+                        validated: true,
+                        ..
+                    }
+                )
+            })
             .count()
     }
 
-    fn count_header_created(events: &[Event<TestTypes>]) -> usize {
+    fn count_header_created(events: &[StateManagerOutput<TestTypes>]) -> usize {
         events
             .iter()
-            .filter(|e| matches!(e, Event::HeaderCreated(_, _)))
+            .filter(|e| {
+                matches!(
+                    e,
+                    StateManagerOutput::Header {
+                        header: Some(_),
+                        ..
+                    }
+                )
+            })
             .count()
     }
 
@@ -417,8 +501,14 @@ mod test {
 
         let output = manager.next().await.expect("should produce output");
         assert!(
-            matches!(output, Event::StateValidated(_)),
-            "Should receive StateVerified after validation completes"
+            matches!(
+                output,
+                StateManagerOutput::State {
+                    validated: true,
+                    ..
+                }
+            ),
+            "Should receive validated state output after validation completes"
         );
     }
 
@@ -436,7 +526,13 @@ mod test {
         manager.request_state(make_state_request(&test_data.views[1]));
         let output = manager.next().await.expect("should produce output");
         assert!(
-            matches!(output, Event::StateValidated(_)),
+            matches!(
+                output,
+                StateManagerOutput::State {
+                    validated: true,
+                    ..
+                }
+            ),
             "View 2 should produce StateVerified"
         );
     }
@@ -484,7 +580,13 @@ mod test {
 
         let output = manager.next().await.expect("should produce output");
         assert!(
-            matches!(output, Event::HeaderCreated(_, _)),
+            matches!(
+                output,
+                StateManagerOutput::Header {
+                    header: Some(_),
+                    ..
+                }
+            ),
             "Should receive HeaderCreated after header creation completes"
         );
     }
@@ -512,13 +614,25 @@ mod test {
         // next() processes state completion, which chains the header request.
         let output1 = manager.next().await.expect("state should complete");
         assert!(
-            matches!(output1, Event::StateValidated(_)),
+            matches!(
+                output1,
+                StateManagerOutput::State {
+                    validated: true,
+                    ..
+                }
+            ),
             "State should be verified first"
         );
 
         let output2 = manager.next().await.expect("header should complete");
         assert!(
-            matches!(output2, Event::HeaderCreated(_, _)),
+            matches!(
+                output2,
+                StateManagerOutput::Header {
+                    header: Some(_),
+                    ..
+                }
+            ),
             "Header should be created after pending state resolves"
         );
     }
@@ -534,7 +648,13 @@ mod test {
         manager.request_state(make_state_request(&test_data.views[0]));
 
         let output = manager.next().await.expect("should produce output");
-        assert!(matches!(output, Event::StateValidated(_)));
+        assert!(matches!(
+            output,
+            StateManagerOutput::State {
+                validated: true,
+                ..
+            }
+        ));
 
         // No second output — duplicate was ignored.
         assert!(

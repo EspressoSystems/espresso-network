@@ -1,17 +1,29 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use hotshot_types::{
-    data::{VidCommitment2, VidDisperse2, ViewNumber},
+    data::{EpochNumber, VidCommitment2, VidDisperse2, VidDisperseShare2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     traits::{BlockPayload, node_implementation::NodeType},
     vid::avidm_gf2::{AvidmGf2Common, AvidmGf2Scheme, AvidmGf2Share},
 };
 use tokio::task::{AbortHandle, JoinSet};
 
-use crate::events::{VidDisperseRequest, VidShareInput};
-
 type VidDisperseResult<T> = Result<(ViewNumber, VidCommitment2, VidDisperse2<T>), ()>;
 type VidShareResult<T> = Result<(ViewNumber, VidCommitment2, <T as NodeType>::BlockPayload), ()>;
+
+#[derive(Clone, Eq, PartialEq, Debug)]
+pub struct VidShareInput<T: NodeType> {
+    pub share: VidDisperseShare2<T>,
+    pub metadata: Option<<T::BlockPayload as BlockPayload<T>>::Metadata>,
+}
+
+#[derive(Clone, Eq, PartialEq, Debug)]
+pub struct VidDisperseRequest<T: NodeType> {
+    pub view: ViewNumber,
+    pub epoch: EpochNumber,
+    pub block: T::BlockPayload,
+    pub metadata: <T::BlockPayload as BlockPayload<T>>::Metadata,
+}
 
 pub struct VidDisperser<T: NodeType> {
     calculations: BTreeMap<ViewNumber, AbortHandle>,
@@ -56,7 +68,7 @@ impl<T: NodeType> VidDisperser<T> {
         epoch_membership_coordinator: EpochMembershipCoordinator<T>,
         vid_disperse_request: VidDisperseRequest<T>,
     ) -> Result<(ViewNumber, VidCommitment2, VidDisperse2<T>), ()> {
-        let Ok((disperse, duration)) = VidDisperse2::calculate_vid_disperse(
+        let Ok((disperse, _duration)) = VidDisperse2::calculate_vid_disperse(
             &vid_disperse_request.block,
             &epoch_membership_coordinator,
             vid_disperse_request.view,

@@ -17,7 +17,7 @@ use super::common::{
     utils::TestData,
 };
 use crate::{
-    events::{ConsensusInput, ConsensusOutput, Event},
+    consensus::{ConsensusInput, ConsensusOutput},
     tests::common::{
         assertions::{
             count_vote1, has_block_reconstructed, has_cert1, has_cert2, has_request_vid_disperse,
@@ -78,12 +78,12 @@ async fn send_block_built_and_header_created(
     let parent_proposal = test_data.views[parent_view_idx].proposal.clone();
     let block = MockBlock::new();
     harness
-        .send_input(ConsensusInput::BlockBuilt(
-            test_view.view_number,
-            test_view.epoch_number,
-            block.block,
-            block.metadata,
-        ))
+        .send_input(ConsensusInput::BlockBuilt {
+            view: test_view.view_number,
+            epoch: test_view.epoch_number,
+            payload: block.block,
+            metadata: block.metadata,
+        })
         .await;
     let wrapper = QuorumProposalWrapper::<TestTypes> {
         proposal: parent_proposal.data.proposal,
@@ -246,7 +246,7 @@ async fn test_multi_view_decide_via_cpu_tasks() {
     let decide_count = harness
         .outputs()
         .iter()
-        .filter(|e| matches!(e, ConsensusOutput::Event(Event::LeafDecided(_))))
+        .filter(|e| matches!(e, ConsensusOutput::LeafDecided(_)))
         .count();
     assert!(
         decide_count >= 2,

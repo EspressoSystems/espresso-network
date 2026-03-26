@@ -3,7 +3,7 @@ use hotshot_example_types::node_types::TestTypes;
 use hotshot_types::traits::signature_key::SignatureKey;
 
 use super::common::utils::TestData;
-use crate::{events::VidShareInput, vid::VidReconstructor};
+use crate::vid::{VidReconstructor, VidShareInput};
 
 /// Threshold for SuccessThreshold with 10 nodes of stake 1: (10*2)/3 + 1 = 7.
 const THRESHOLD: u64 = 7;
