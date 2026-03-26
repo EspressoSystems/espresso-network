@@ -386,3 +386,29 @@ fn gen_parties<K: SignatureKey>() -> impl Iterator<Item = (Keypair, K, NetAddr)>
         (kpair, public, addr)
     })
 }
+
+#[cfg(test)]
+mod test {
+    use std::str::FromStr;
+
+    use hotshot_types::{signature_key::BLSKeyPair, traits::metrics::NoMetrics, x25519};
+    use rand::thread_rng;
+    use test_utils::reserve_tcp_port;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn test_create_empty_network() {
+        let port = reserve_tcp_port().unwrap();
+        Cliquenet::create(
+            "test",
+            BLSKeyPair::generate(&mut thread_rng()).ver_key(),
+            x25519::Keypair::generate().unwrap(),
+            NetAddr::from_str(&format!("0.0.0.0:{port}")).unwrap(),
+            [],
+            Box::new(NoMetrics),
+        )
+        .await
+        .unwrap();
+    }
+}
