@@ -24,7 +24,7 @@ use crate::{
         Certificate2, CheckpointCertificate, CheckpointVote, ConsensusMessage, Message,
         MessageType, Vote2,
     },
-    validated_state::ValidatedStateManager,
+    state::StateManager,
     vid::{VidDisperser, VidReconstructor},
     vote::VoteCollector,
 };
@@ -59,7 +59,7 @@ pub(crate) struct Coordinator<T: NodeType, I: NodeImplementation<T>> {
     system_context: SystemContextHandle<T, I>,
     consensus: Consensus<T>,
     network: Network<T, I::Network>,
-    state_manager: ValidatedStateManager<T>,
+    state_manager: StateManager<T>,
     vid_disperser: VidDisperser<T>,
     vid_reconstructor: VidReconstructor<T>,
     vote1_collector: VoteCollector<T, QuorumVote2<T>, QuorumCertificate2<T>>,

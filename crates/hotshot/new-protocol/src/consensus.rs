@@ -49,7 +49,7 @@ pub struct Consensus<T: NodeType> {
     certs2: BTreeMap<ViewNumber, Certificate2<T>>,
     timeout_certs: BTreeMap<ViewNumber, TimeoutCertificate2<T>>,
     view_sync_certs: BTreeMap<ViewNumber, ViewSyncFinalizeCertificate2<T>>,
-    locked_qc: Option<Certificate1<T>>,
+    locked_cert: Option<Certificate1<T>>,
     headers: BTreeMap<ViewNumber, T::BlockHeader>,
     last_decided_view: ViewNumber,
 
@@ -84,7 +84,7 @@ impl<T: NodeType> Consensus<T> {
             certs2: BTreeMap::new(),
             timeout_certs: BTreeMap::new(),
             view_sync_certs: BTreeMap::new(),
-            locked_qc: None,
+            locked_cert: None,
             last_decided_view: ViewNumber::genesis(),
             headers: BTreeMap::new(),
             public_key,
@@ -128,7 +128,7 @@ impl<T: NodeType> Consensus<T> {
                 self.blocks_reconstructed.insert(view, vid_commitment);
                 Protocol::Continue
             },
-            ConsensusInput::StateVerified(state_response) => {
+            ConsensusInput::StateValidated(state_response) => {
                 self.states_verified
                     .insert(state_response.view, state_response.commitment);
                 Protocol::Continue
@@ -137,7 +137,7 @@ impl<T: NodeType> Consensus<T> {
                 self.headers.insert(view, header);
                 Protocol::Continue
             },
-            ConsensusInput::StateVerificationFailed(state_response) => {
+            ConsensusInput::StateValidationFailed(state_response) => {
                 if let Some(proposal) = self.proposals.remove(&state_response.view)
                     && proposal_commitment(&proposal) != state_response.commitment
                 {
@@ -191,10 +191,10 @@ impl<T: NodeType> Consensus<T> {
         self.certs2 = self.certs2.split_off(&view_number);
         self.timeout_certs = self.timeout_certs.split_off(&view_number);
         self.view_sync_certs = self.view_sync_certs.split_off(&view_number);
-        self.locked_qc = self
-            .locked_qc
+        self.locked_cert = self
+            .locked_cert
             .take()
-            .filter(|qc| qc.view_number() > view_number);
+            .filter(|cert| cert.view_number() > view_number);
         self.headers = self.headers.split_off(&view_number);
         self.voted_1_views = self.voted_1_views.split_off(&view_number);
         self.voted_2_views = self.voted_2_views.split_off(&view_number);
@@ -335,10 +335,10 @@ impl<T: NodeType> Consensus<T> {
             return Protocol::Abort;
         }
 
-        // if we are the leader of the next view, try to get a block to propose
+        // If we are the leader of the next view, try to get a block to propose
         // after forming the TC
-        let Some(locked_view) = self.locked_qc.as_ref().map(|qc| qc.view_number()) else {
-            debug!("locked qc not available");
+        let Some(locked_view) = self.locked_cert.as_ref().map(|cert| cert.view_number()) else {
+            debug!("locked certificate not available");
             return Protocol::Abort;
         };
         let Some(proposal) = self.proposals.get(&locked_view) else {
@@ -371,7 +371,7 @@ impl<T: NodeType> Consensus<T> {
             debug!(%epoch, "not leader");
             return Protocol::Abort;
         }
-        let Some(locked_view) = self.locked_qc.as_ref().map(|qc| qc.view_number()) else {
+        let Some(locked_view) = self.locked_cert.as_ref().map(|cert| cert.view_number()) else {
             debug!("locked qc not available");
             return Protocol::Abort;
         };
@@ -397,20 +397,20 @@ impl<T: NodeType> Consensus<T> {
     async fn maybe_propose(&mut self, view: ViewNumber, outbox: &mut Outbox<ConsensusOutput<T>>) {
         let is_after_timeout =
             self.view_sync_certs.contains_key(&view) || self.timeout_certs.contains_key(&view);
-        let qc = if is_after_timeout {
-            let Some(qc) = &self.locked_qc else {
+        let parent_cert = if is_after_timeout {
+            let Some(cert) = &self.locked_cert else {
                 debug!("no locked qc");
                 return;
             };
-            qc
+            cert
         } else {
-            let Some(qc) = self.certs.get(&ViewNumber::from(view.saturating_sub(1))) else {
+            let Some(cert) = self.certs.get(&ViewNumber::from(view.saturating_sub(1))) else {
                 debug!("no parent certificate");
                 return;
             };
-            qc
+            cert
         };
-        let parent_view = qc.view_number();
+        let parent_view = parent_cert.view_number();
         let Some(proposal) = self.proposals.get(&parent_view) else {
             debug!(parent = %parent_view, "no proposal for parent view");
             return;
@@ -442,7 +442,7 @@ impl<T: NodeType> Consensus<T> {
             block_header: header.clone(),
             view_number: view,
             epoch: proposal.epoch,
-            justify_qc: qc.clone(),
+            justify_qc: parent_cert.clone(),
             next_epoch_justify_qc: None,
             upgrade_certificate: None,
             view_change_evidence: None,
@@ -690,11 +690,11 @@ impl<T: NodeType> Consensus<T> {
         // We have a valid certificate, proposal, and reconstructed block
         // We can now update the lock and vote
         if self
-            .locked_qc
+            .locked_cert
             .as_mut()
-            .is_none_or(|locked_qc| locked_qc.view_number() < cert1.view_number())
+            .is_none_or(|locked_cert| locked_cert.view_number() < cert1.view_number())
         {
-            self.locked_qc = Some(cert1.clone());
+            self.locked_cert = Some(cert1.clone());
         }
 
         let vote = match SimpleVote::create_signed_vote(
@@ -738,28 +738,28 @@ impl<T: NodeType> Consensus<T> {
 
     #[instrument(level = "trace", skip_all)]
     fn is_safe(&self, proposal: &QuorumProposal2<T>) -> bool {
-        let Some(locked_qc) = self.locked_qc.as_ref() else {
-            // Locked QC is not set which means it is at genesis
+        let Some(locked_cert) = self.locked_cert.as_ref() else {
+            // Locked certificate is not set which means it is at genesis
             debug!("at genesis");
             return true;
         };
-        let liveness_check = proposal.justify_qc.view_number() > locked_qc.view_number();
-        let justify_qc_commit = match proposal.justify_qc.data_commitment(&upgrade_lock::<T>()) {
+        let liveness_check = proposal.justify_qc.view_number() > locked_cert.view_number();
+        let parent_commit = match proposal.justify_qc.data_commitment(&upgrade_lock::<T>()) {
             Ok(c) => c,
             Err(err) => {
                 warn!(%err, "failed to compute justify qc data commitment");
                 return false;
             },
         };
-        let locked_qc_commit = match locked_qc.data_commitment(&upgrade_lock::<T>()) {
+        let locked_commit = match locked_cert.data_commitment(&upgrade_lock::<T>()) {
             Ok(c) => c,
             Err(err) => {
-                warn!(%err, "failed to compute locked qc data commitment");
+                warn!(%err, "failed to compute locked certificate data");
                 return false;
             },
         };
 
-        let safety_check = justify_qc_commit == locked_qc_commit;
+        let safety_check = parent_commit == locked_commit;
 
         safety_check || liveness_check
     }
