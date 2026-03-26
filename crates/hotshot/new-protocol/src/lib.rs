@@ -9,7 +9,7 @@ pub mod consensus;
 pub mod validated_state;
 
 #[allow(dead_code, unused_variables)]
-pub mod io;
+pub mod network;
 
 #[allow(dead_code, unused_variables)]
 pub mod coordinator;

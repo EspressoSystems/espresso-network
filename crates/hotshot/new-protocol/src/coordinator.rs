@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use bon::Builder;
 use futures::{FutureExt, future::BoxFuture};
-use hotshot::{traits::NodeImplementation, types::SystemContextHandle};
+use hotshot::traits::NodeImplementation;
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
@@ -19,11 +19,11 @@ use crate::{
     consensus::Consensus,
     drb::DrbRequester,
     events::*,
-    io::network::{Network, is_critical},
     message::{
         Certificate2, CheckpointCertificate, CheckpointVote, ConsensusMessage, Message,
         MessageType, ProposalMessage, Vote2,
     },
+    network::{Network, is_critical},
     validated_state::ValidatedStateManager,
     vid::{VidDisperser, VidReconstructor},
     vote::VoteCollector,
@@ -56,7 +56,7 @@ impl Timer {
 #[derive(Builder)]
 pub(crate) struct Coordinator<T: NodeType, I: NodeImplementation<T>> {
     external_tx: async_broadcast::Sender<hotshot_types::event::Event<T>>,
-    system_context: SystemContextHandle<T, I>,
+    // system_context: SystemContextHandle<T, I>,
     consensus: Consensus<T>,
     network: Network<T, I::Network>,
     state_manager: ValidatedStateManager<T>,
@@ -70,6 +70,8 @@ pub(crate) struct Coordinator<T: NodeType, I: NodeImplementation<T>> {
     membership_coordinator: EpochMembershipCoordinator<T>,
     #[builder(default)]
     outbox: Outbox<ConsensusOutput<T>>,
+
+    public_key: T::SignatureKey,
 
     timer: Timer,
 }
@@ -212,7 +214,7 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                 for vid_share in vid_disperse.to_shares() {
                     let recipient_key = vid_share.recipient_key.clone();
                     let message = Message {
-                        sender: self.system_context.public_key(),
+                        sender: self.public_key.clone(),
                         message_type: MessageType::Consensus(ConsensusMessage::Proposal(
                             ProposalMessage {
                                 proposal: proposal.clone(),
@@ -229,7 +231,7 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
             },
             Action::SendVote1(vote1) => {
                 let message = Message {
-                    sender: self.system_context.public_key(),
+                    sender: self.public_key.clone(),
                     message_type: MessageType::Consensus(ConsensusMessage::Vote1(vote1)),
                 };
                 let _ = self
@@ -240,7 +242,7 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
             },
             Action::SendVote2(vote2) => {
                 let message = Message {
-                    sender: self.system_context.public_key(),
+                    sender: self.public_key.clone(),
                     message_type: MessageType::Consensus(ConsensusMessage::Vote2(vote2)),
                 };
                 let _ = self
@@ -251,7 +253,7 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
             },
             Action::SendTimeoutVote(timeout_vote) => {
                 let message = Message {
-                    sender: self.system_context.public_key(),
+                    sender: self.public_key.clone(),
                     message_type: MessageType::Consensus(ConsensusMessage::TimeoutVote(
                         timeout_vote,
                     )),
@@ -264,7 +266,7 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
             },
             Action::SendCheckpointVote(checkpoint_vote) => {
                 let message = Message {
-                    sender: self.system_context.public_key(),
+                    sender: self.public_key.clone(),
                     message_type: MessageType::Consensus(ConsensusMessage::Checkpoint(
                         checkpoint_vote,
                     )),

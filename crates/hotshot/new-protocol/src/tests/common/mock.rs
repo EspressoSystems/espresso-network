@@ -1,15 +1,27 @@
 pub mod testing {
+    use std::{collections::HashSet, sync::Arc};
+
+    use async_trait::async_trait;
+    use hotshot::{traits::NetworkError, types::SignatureKey};
     use hotshot_example_types::{
         block_types::TestBlockHeader,
         node_types::{TEST_VERSIONS, TestTypes},
     };
     use hotshot_types::{
-        data::{Leaf2, QuorumProposalWrapper, VidDisperse},
+        BoxSyncFuture,
+        data::{Leaf2, QuorumProposalWrapper, VidDisperse, ViewNumber},
         epoch_membership::EpochMembershipCoordinator,
         simple_certificate::TimeoutCertificate2,
         simple_vote::{QuorumVote2, TimeoutVote2},
+        traits::{
+            network::{BroadcastDelay, ConnectedNetwork, Topic},
+            node_implementation::NodeType,
+        },
     };
-    use tokio::select;
+    use tokio::{
+        select,
+        sync::{Mutex, mpsc},
+    };
 
     use crate::{
         Outbox,
@@ -18,7 +30,7 @@ pub mod testing {
         drb::DrbRequester,
         events::*,
         helpers::upgrade_lock,
-        message::{Certificate1, Certificate2, ConsensusMessage, Vote2},
+        message::{Certificate1, Certificate2, ConsensusMessage, Message, Vote2},
         tests::common::utils::{MockBlock, PendingIfNone, mock_builder_fee, state_verified_input},
         validated_state::ValidatedStateManager,
         vid::{VidDisperser, VidReconstructor},
@@ -261,6 +273,98 @@ pub mod testing {
                     }
                 },
             }
+        }
+    }
+
+    struct InnerMockNetwork {
+        pub rx: mpsc::Receiver<Vec<u8>>,
+        sent_messages: HashSet<Vec<u8>>,
+    }
+
+    #[derive(Clone)]
+    pub struct MockNetwork {
+        inner: Arc<Mutex<InnerMockNetwork>>,
+    }
+
+    impl MockNetwork {
+        fn create() -> (Self, mpsc::Sender<Vec<u8>>) {
+            let (tx, rx) = mpsc::channel(100);
+            (
+                Self {
+                    inner: Arc::new(Mutex::new(InnerMockNetwork {
+                        rx,
+                        sent_messages: HashSet::new(),
+                    })),
+                },
+                tx,
+            )
+        }
+        pub async fn shutdown(&self) -> HashSet<Vec<u8>> {
+            let mut inner = self.inner.lock().await;
+            let sent_messages = inner.sent_messages.clone();
+            inner.rx.close();
+            sent_messages
+        }
+    }
+
+    #[async_trait]
+    impl<K: SignatureKey + 'static> ConnectedNetwork<K> for MockNetwork {
+        fn pause(&self) {
+            todo!()
+        }
+
+        fn resume(&self) {
+            todo!()
+        }
+
+        async fn wait_for_ready(&self) {
+            todo!()
+        }
+
+        fn shut_down<'a, 'b>(&'a self) -> BoxSyncFuture<'b, ()>
+        where
+            'a: 'b,
+            Self: 'b,
+        {
+            todo!()
+        }
+
+        async fn broadcast_message(
+            &self,
+            _view: ViewNumber,
+            message: Vec<u8>,
+            topic: Topic,
+            delay: BroadcastDelay,
+        ) -> Result<(), NetworkError> {
+            let mut inner = self.inner.lock().await;
+            inner.sent_messages.insert(message.clone());
+            Ok(())
+        }
+
+        async fn da_broadcast_message(
+            &self,
+            _view: ViewNumber,
+            message: Vec<u8>,
+            recipients: Vec<K>,
+            delay: BroadcastDelay,
+        ) -> Result<(), NetworkError> {
+            todo!()
+        }
+
+        async fn direct_message(
+            &self,
+            _view: ViewNumber,
+            message: Vec<u8>,
+            recipient: K,
+        ) -> Result<(), NetworkError> {
+            let mut inner = self.inner.lock().await;
+            inner.sent_messages.insert(message.clone());
+            Ok(())
+        }
+
+        async fn recv_message(&self) -> Result<Vec<u8>, NetworkError> {
+            let mut inner = self.inner.lock().await;
+            Ok(inner.rx.recv().await.unwrap())
         }
     }
 }
