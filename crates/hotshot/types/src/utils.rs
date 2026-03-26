@@ -144,18 +144,19 @@ pub async fn verify_leaf_chain<T: NodeType>(
     let stake_table_entries = StakeTableEntries::<T>::from(stake_table.to_vec()).0;
 
     // verify all QCs are valid
-    newest_leaf
-        .justify_qc()
-        .is_valid_cert(&stake_table_entries, success_threshold, upgrade_lock)
-        .await?;
+    newest_leaf.justify_qc().is_valid_cert(
+        &stake_table_entries,
+        success_threshold,
+        upgrade_lock,
+    )?;
     parent
         .justify_qc()
-        .is_valid_cert(&stake_table_entries, success_threshold, upgrade_lock)
-        .await?;
-    grand_parent
-        .justify_qc()
-        .is_valid_cert(&stake_table_entries, success_threshold, upgrade_lock)
-        .await?;
+        .is_valid_cert(&stake_table_entries, success_threshold, upgrade_lock)?;
+    grand_parent.justify_qc().is_valid_cert(
+        &stake_table_entries,
+        success_threshold,
+        upgrade_lock,
+    )?;
 
     // Verify the root is in the chain of decided leaves
     let mut last_leaf = parent;
@@ -163,8 +164,7 @@ pub async fn verify_leaf_chain<T: NodeType>(
         ensure!(last_leaf.justify_qc().view_number() == leaf.view_number());
         ensure!(last_leaf.justify_qc().data().leaf_commit == leaf.commit());
         leaf.justify_qc()
-            .is_valid_cert(&stake_table_entries, success_threshold, upgrade_lock)
-            .await?;
+            .is_valid_cert(&stake_table_entries, success_threshold, upgrade_lock)?;
         if leaf.height() == expected_height {
             return Ok(leaf.clone());
         }

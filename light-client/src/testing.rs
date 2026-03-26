@@ -488,7 +488,6 @@ impl InnerTestClient {
                 view_number,
                 &UpgradeLock::<SeqTypes>::new(upgrade),
             )
-            .await
             .commit();
             let signatures = quorum
                 .iter()

@@ -17,6 +17,7 @@ use bitvec::{bitvec, vec::BitVec};
 use committable::{Commitment, Committable};
 use hotshot_utils::anytrace::*;
 use tracing::error;
+use vbs::version::Version;
 
 use crate::{
     PeerConfig,
@@ -84,7 +85,7 @@ pub trait Certificate<TYPES: NodeType, T>: HasViewNumber {
         stake_table: &[<TYPES::SignatureKey as SignatureKey>::StakeTableEntry],
         threshold: U256,
         upgrade_lock: &UpgradeLock<TYPES>,
-    ) -> impl std::future::Future<Output = Result<()>>;
+    ) -> Result<()>;
     /// Get the list of signers given a certificate.
     fn signers(
         &self,
@@ -116,7 +117,7 @@ pub trait Certificate<TYPES: NodeType, T>: HasViewNumber {
     fn data_commitment(
         &self,
         upgrade_lock: &UpgradeLock<TYPES>,
-    ) -> impl std::future::Future<Output = Result<Commitment<VersionedVoteData<TYPES, Self::Voteable>>>>;
+    ) -> Result<Commitment<VersionedVoteData<TYPES, Self::Voteable>>>;
 }
 /// Mapping of vote commitment to signatures and bitvec
 type SignersMap<COMMITMENT, KEY> = HashMap<
@@ -158,6 +159,14 @@ impl<
     CERT: Certificate<TYPES, VOTE::Commitment, Voteable = VOTE::Commitment>,
 > VoteAccumulator<TYPES, VOTE, CERT>
 {
+    pub fn new(upgrade_lock: UpgradeLock<TYPES>) -> Self {
+        Self {
+            vote_outcomes: HashMap::new(),
+            signers: HashMap::new(),
+            phantom: PhantomData,
+            upgrade_lock,
+        }
+    }
     /// Add a vote to the total accumulated votes for the given epoch.
     /// Returns the accumulator or the certificate if we
     /// have accumulated enough votes to exceed the threshold for creating a certificate.
@@ -172,9 +181,7 @@ impl<
             vote.date().clone(),
             vote.view_number(),
             &self.upgrade_lock,
-        )
-        .await
-        {
+        ) {
             Ok(data) => data.commit(),
             Err(e) => {
                 tracing::warn!("Failed to generate versioned vote data: {e}");
@@ -182,7 +189,9 @@ impl<
             },
         };
 
-        if !key.validate(&vote.signature(), vote_commitment.as_ref()) {
+        if self.upgrade_lock.version(vote.view_number()).ok()? < (Version { major: 0, minor: 6 })
+            && !key.validate(&vote.signature(), vote_commitment.as_ref())
+        {
             error!("Invalid vote! Vote Data {:?}", vote.date());
             return None;
         }
