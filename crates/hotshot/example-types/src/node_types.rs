@@ -394,13 +394,9 @@ mod tests {
         let view_1 = ViewNumber::new(1);
 
         let versioned_data_0 =
-            VersionedVoteData::<TestTypes, TestData>::new(data, view_0, &upgrade_lock)
-                .await
-                .unwrap();
+            VersionedVoteData::<TestTypes, TestData>::new(data, view_0, &upgrade_lock).unwrap();
         let versioned_data_1 =
-            VersionedVoteData::<TestTypes, TestData>::new(data, view_1, &upgrade_lock)
-                .await
-                .unwrap();
+            VersionedVoteData::<TestTypes, TestData>::new(data, view_1, &upgrade_lock).unwrap();
 
         let versioned_data_commitment_0: [u8; 32] = versioned_data_0.commit().into();
         let versioned_data_commitment_1: [u8; 32] = versioned_data_1.commit().into();

@@ -70,6 +70,34 @@ jobs:
         env:
           RUST_BACKTRACE: full
 
+  test-new-protocol:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        name: Checkout Repository
+
+      - uses: Swatinem/rust-cache@v2
+        name: Enable Rust Caching
+        with:
+          shared-key: "hotshot-tests"
+          cache-on-failure: "true"
+          save-if: false
+          prefix-key: v1-hotshot
+
+      - uses: taiki-e/install-action@nextest
+
+      - name: Build tests
+        run: |
+          cargo nextest run -p hotshot-new-protocol --no-run
+        timeout-minutes: 60
+
+      - name: Run tests
+        run: |
+          cargo nextest run -p hotshot-new-protocol --no-fail-fast
+        timeout-minutes: 30
+        env:
+          RUST_BACKTRACE: full
+
   test-examples:
     strategy:
       fail-fast: false
@@ -95,7 +123,7 @@ jobs:
 
   # This job enables having a single required status check in github for all hotshot tests.
   aggregate-hotshot-tests:
-    needs: [test, test-examples]
+    needs: [test, test-new-protocol, test-examples]
     runs-on: ubuntu-latest
     # explicitly run and fail the job if dependencies failed
     if: ${{ always() && !cancelled() }}

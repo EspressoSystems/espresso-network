@@ -715,7 +715,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> QuorumVoteTaskState<TYPES, I
                     membership_da_success_threshold,
                     &self.upgrade_lock,
                 )
-                .await
                 .context(|e| warn!("Invalid DAC: {e}"))?;
 
                 // Add to the storage.

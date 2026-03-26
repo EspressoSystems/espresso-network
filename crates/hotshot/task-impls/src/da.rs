@@ -258,8 +258,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> DaTaskState<TYPES, I> {
                     &self.public_key,
                     &self.private_key,
                     &self.upgrade_lock,
-                )
-                .await?;
+                )?;
 
                 tracing::debug!("Sending vote to the DA leader {}", vote.view_number());
 

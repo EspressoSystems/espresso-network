@@ -140,7 +140,6 @@ pub(crate) async fn fetch_proposal<TYPES: NodeType>(
             membership_success_threshold,
             upgrade_lock,
         )
-        .await
         .context(|e| warn!("Invalid justify_qc in proposal for view {view_number}: {e}"))?;
 
     let mut consensus_writer = consensus.write().await;
@@ -1167,7 +1166,6 @@ pub(crate) async fn validate_proposal_view_and_certs<
                         membership_success_threshold,
                         &validation_info.upgrade_lock,
                     )
-                    .await
                     .context(|e| {
                         warn!("Timeout certificate for view {view_number} was invalid: {e}")
                     })?;
@@ -1193,7 +1191,6 @@ pub(crate) async fn validate_proposal_view_and_certs<
                         membership_success_threshold,
                         &validation_info.upgrade_lock,
                     )
-                    .await
                     .context(|e| warn!("Invalid view sync finalize cert provided: {e}"))?;
             },
         }
@@ -1253,15 +1250,11 @@ pub async fn validate_qc_and_next_epoch_qc<TYPES: NodeType>(
     let membership_stake_table = epoch_membership.stake_table().await;
     let membership_success_threshold = epoch_membership.success_threshold().await;
 
-    if let Err(e) = cert
-        .qc()
-        .is_valid_cert(
-            &StakeTableEntries::<TYPES>::from(membership_stake_table).0,
-            membership_success_threshold,
-            upgrade_lock,
-        )
-        .await
-    {
+    if let Err(e) = cert.qc().is_valid_cert(
+        &StakeTableEntries::<TYPES>::from(membership_stake_table).0,
+        membership_success_threshold,
+        upgrade_lock,
+    ) {
         consensus.read().await.metrics.invalid_qc.update(1);
         return Err(warn!("Invalid certificate: {e}"));
     }
@@ -1279,7 +1272,6 @@ pub async fn validate_qc_and_next_epoch_qc<TYPES: NodeType>(
                 membership_next_success_threshold,
                 upgrade_lock,
             )
-            .await
             .context(|e| warn!("Invalid next epoch certificate: {e}"))?;
     }
 
