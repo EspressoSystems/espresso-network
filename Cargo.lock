@@ -2689,7 +2689,7 @@ dependencies = [
 [[package]]
 name = "cdn-broker"
 version = "0.6.2-compat"
-source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.6.2-bcompat-patch2#4dd60c168fc90514b0f9c0cd33673768474baa53"
+source = "git+https://github.com/EspressoSystems/Push-CDN?branch=lr%2Fkeepalive-and-logs#6b787e06cb1e16fa767853a8052f113dd1cc4399"
 dependencies = [
  "cdn-proto",
  "clap 4.5.53",
@@ -2711,7 +2711,7 @@ dependencies = [
 [[package]]
 name = "cdn-client"
 version = "0.6.2"
-source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.6.2-bcompat-patch2#4dd60c168fc90514b0f9c0cd33673768474baa53"
+source = "git+https://github.com/EspressoSystems/Push-CDN?branch=lr%2Fkeepalive-and-logs#6b787e06cb1e16fa767853a8052f113dd1cc4399"
 dependencies = [
  "cdn-proto",
  "clap 4.5.53",
@@ -2727,7 +2727,7 @@ dependencies = [
 [[package]]
 name = "cdn-marshal"
 version = "0.6.2-compat"
-source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.6.2-bcompat-patch2#4dd60c168fc90514b0f9c0cd33673768474baa53"
+source = "git+https://github.com/EspressoSystems/Push-CDN?branch=lr%2Fkeepalive-and-logs#6b787e06cb1e16fa767853a8052f113dd1cc4399"
 dependencies = [
  "cdn-proto",
  "clap 4.5.53",
@@ -2740,7 +2740,7 @@ dependencies = [
 [[package]]
 name = "cdn-proto"
 version = "0.6.2-compat"
-source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.6.2-bcompat-patch2#4dd60c168fc90514b0f9c0cd33673768474baa53"
+source = "git+https://github.com/EspressoSystems/Push-CDN?branch=lr%2Fkeepalive-and-logs#6b787e06cb1e16fa767853a8052f113dd1cc4399"
 dependencies = [
  "anyhow",
  "ark-serialize 0.5.0",
@@ -2762,6 +2762,7 @@ dependencies = [
  "rkyv",
  "rustls 0.23.35",
  "rustls-pki-types",
+ "socket2 0.6.1",
  "sqlx",
  "thiserror 1.0.69",
  "tokio",

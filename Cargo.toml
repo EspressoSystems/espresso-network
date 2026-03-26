@@ -284,11 +284,11 @@ vergen-gitcl = "9"
 zeroize = "1.7"
 
 # Push CDN imports
-cdn-broker = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "0.6.2-bcompat-patch2", package = "cdn-broker", features = [
+cdn-broker = { git = "https://github.com/EspressoSystems/Push-CDN", branch = "lr/keepalive-and-logs", package = "cdn-broker", features = [
     "global-permits",
 ] }
-cdn-client = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "0.6.2-bcompat-patch2", package = "cdn-client" }
-cdn-marshal = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "0.6.2-bcompat-patch2", package = "cdn-marshal" }
+cdn-client = { git = "https://github.com/EspressoSystems/Push-CDN", branch = "lr/keepalive-and-logs", package = "cdn-client" }
+cdn-marshal = { git = "https://github.com/EspressoSystems/Push-CDN", branch = "lr/keepalive-and-logs", package = "cdn-marshal" }
 
 [workspace.lints.clippy]
 # may prevent accidental deadlocks from holding guards over match statments
