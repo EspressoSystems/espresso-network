@@ -19,6 +19,7 @@ derive_more = { workspace = true }
 directories = { workspace = true }
 dotenvy = { workspace = true }
 espresso-contract-deployer = { workspace = true }
+espresso-safe-tx-builder = { workspace = true }
 espresso-types = { workspace = true }
 futures-util = { workspace = true }
 
