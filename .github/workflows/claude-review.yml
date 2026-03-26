@@ -2,7 +2,7 @@ name: Claude PR Review
 
 on:
   pull_request:
-    types: [opened, synchronize, ready_for_review, reopened]
+    types: [opened, ready_for_review, reopened]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
@@ -60,7 +60,21 @@ jobs:
                - Verify README updates for new features
                - Check API documentation accuracy
 
+            Before reviewing, check existing review threads on this PR:
+            1. Query review threads:
+               `gh api graphql -f query='{ repository(owner:"${{ github.repository_owner }}", name:"${{ github.event.repository.name }}") { pullRequest(number:${{ github.event.pull_request.number }}) { reviewThreads(first:100) { nodes { id isResolved path comments(first:1) { nodes { author { login } body } } } } } } }'`
+            2. For threads where the first comment author is `claude[bot]` and not already resolved: if the code they reference has changed, resolve them:
+               `gh api graphql -f query='mutation { resolveReviewThread(input: {threadId: "<thread_id>"}) { thread { isResolved } } }'`
+               Keep threads that are still relevant.
+            3. Read all unresolved threads from other reviewers. Do not duplicate feedback already given by any reviewer (human or bot).
+            4. IMPORTANT: Only resolve your own threads. Never resolve threads from other users.
+
+            Do NOT comment on:
+            - `todo!()` or `// TODO` -- these are intentional, just factor them into your understanding
+            - Unnecessary clones or clone optimization suggestions
+            - Unused code, fields, or parameters -- clippy catches these, and `_` prefixed names are intentionally unused
+
             Provide detailed feedback using inline comments for specific issues.
             Use top-level comments for general observations or praise.
           claude_args: |
-            --model claude-opus-4-6 --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)"
+            --model claude-opus-4-6 --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh api graphql:*)"
