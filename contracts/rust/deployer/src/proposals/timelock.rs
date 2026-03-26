@@ -10,8 +10,8 @@ use hotshot_contract_adapter::sol_types::{
 };
 
 use crate::{
-    Contract, Contracts, OwnableContract,
-    proposals::multisig::call_propose_transaction_generic_script, retry_until_true,
+    Contract, Contracts, OwnableContract, proposals::multisig::encode_generic_calldata,
+    retry_until_true,
 };
 
 /// Data structure for timelock operations payload
@@ -36,10 +36,6 @@ pub struct TimelockOperationPayload {
 pub struct TimelockOperationParams {
     /// Optional multisig proposer address. If provided, operation will be routed through Safe proposal.
     pub multisig_proposer: Option<Address>,
-    /// RPC URL (required if using multisig)
-    pub rpc_url: Option<String>,
-    /// Whether to use hardware wallet for signing
-    pub use_hardware_wallet: bool,
     /// Optional operation ID (for cancel operations when you already have the ID)
     pub operation_id: Option<B256>,
     /// Whether to perform a dry run (for testing, no proposal is created)
@@ -373,20 +369,12 @@ pub async fn perform_timelock_operation(
         };
 
     if let Some(multisig_proposer) = params.multisig_proposer {
-        // Multisig path
-        let rpc_url = params
-            .rpc_url
-            .ok_or_else(|| anyhow::anyhow!("RPC URL is required when using multisig proposer"))?;
-
         perform_timelock_operation_via_multisig(
             timelock,
             operation,
             operation_type,
             operation_id,
-            rpc_url,
             multisig_proposer,
-            params.use_hardware_wallet,
-            params.dry_run,
         )
         .await
     } else {
@@ -456,16 +444,12 @@ async fn perform_timelock_operation_via_eoa(
 }
 
 /// Perform timelock operation via Safe multisig proposal
-#[allow(clippy::too_many_arguments)]
 async fn perform_timelock_operation_via_multisig(
     timelock: TimelockContract,
     operation: TimelockOperationPayload,
     operation_type: TimelockOperationType,
     operation_id: B256,
-    rpc_url: String,
     multisig_proposer: Address,
-    use_hardware_wallet: bool,
-    dry_run: bool,
 ) -> Result<B256> {
     let timelock_addr = match timelock {
         TimelockContract::OpsTimelock(addr) => addr,
@@ -474,21 +458,19 @@ async fn perform_timelock_operation_via_multisig(
 
     // Determine function signature and arguments based on operation type
     let (function_signature, function_args) = match operation_type {
-        TimelockOperationType::Schedule => {
-            (
-                "schedule(address,uint256,bytes,bytes32,bytes32,uint256)".to_string(),
-                vec![
-                    operation.target.to_string(),
-                    operation.value.to_string(),
-                    operation.data.to_string(), // Bytes implements Display with 0x prefix
-                    operation.predecessor.to_string(), // B256 implements Display with 0x prefix
-                    operation.salt.to_string(), // B256 implements Display with 0x prefix
-                    operation.delay.to_string(),
-                ],
-            )
-        },
+        TimelockOperationType::Schedule => (
+            "schedule(address,uint256,bytes,bytes32,bytes32,uint256)",
+            vec![
+                operation.target.to_string(),
+                operation.value.to_string(),
+                operation.data.to_string(),
+                operation.predecessor.to_string(),
+                operation.salt.to_string(),
+                operation.delay.to_string(),
+            ],
+        ),
         TimelockOperationType::Execute => (
-            "execute(address,uint256,bytes,bytes32,bytes32)".to_string(),
+            "execute(address,uint256,bytes,bytes32,bytes32)",
             vec![
                 operation.target.to_string(),
                 operation.value.to_string(),
@@ -497,40 +479,28 @@ async fn perform_timelock_operation_via_multisig(
                 operation.salt.to_string(),
             ],
         ),
-        TimelockOperationType::Cancel => {
-            (
-                "cancel(bytes32)".to_string(),
-                vec![operation_id.to_string()], // B256 implements Display with 0x prefix
-            )
-        },
+        TimelockOperationType::Cancel => ("cancel(bytes32)", vec![operation_id.to_string()]),
     };
 
     tracing::info!(
-        "Calling proposeTransactionGeneric.ts for {:?} operation on timelock {}",
+        "Encoding {:?} operation calldata for timelock {}",
         operation_type,
         timelock_addr
     );
 
-    call_propose_transaction_generic_script(
-        timelock_addr,
-        function_signature,
-        function_args,
-        rpc_url,
-        multisig_proposer,
-        use_hardware_wallet,
-        Some("0".to_string()), //value is zero because we don't need to send any value to the timelock contract
-        dry_run,
-    )
-    .await?;
+    let calldata =
+        encode_generic_calldata(timelock_addr, function_signature, function_args, U256::ZERO)?;
 
     tracing::info!(
-        "Timelock {:?} operation multisig proposal created successfully. Operation ID: {}",
+        "Timelock {:?} operation calldata encoded. Operation ID: {}",
         operation_type,
         operation_id
     );
     tracing::info!(
-        "Send this link to the signers to sign the proposal: https://app.safe.global/transactions/queue?safe={}",
-        multisig_proposer
+        "Multisig proposer: {}. To: {}, Data: {}",
+        multisig_proposer,
+        calldata.to,
+        calldata.data
     );
 
     Ok(operation_id)
