@@ -44,16 +44,7 @@ impl ConsensusHarness {
     }
 
     /// Apply an Event by converting it to ConsensusInput first.
-    async fn apply(&mut self, event: Event<TestTypes>) {
-        let input: ConsensusInput<TestTypes> = event
-            .try_into()
-            .expect("Event not convertible to ConsensusInput");
-        self.apply_input(input).await;
-    }
-
-    /// Apply a ConsensusInput directly and drain outputs, auto-responding to
-    /// actions that consensus expects feedback for.
-    async fn apply_input(&mut self, input: ConsensusInput<TestTypes>) {
+    async fn apply(&mut self, input: ConsensusInput<TestTypes>) {
         let mut outbox = Outbox::new();
         self.consensus.apply(input, &mut outbox).await;
         self.drain_outbox(&mut outbox).await;
@@ -142,7 +133,7 @@ async fn test_safety_genesis_no_lock() {
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
 
     harness
-        .apply(test_data.views[0].proposal_input(&node_key))
+        .apply(test_data.views[0].proposal_input_consensus(&node_key))
         .await;
 
     assert!(
@@ -160,17 +151,17 @@ async fn test_timeout_filters_stale_events() {
 
     // Set timeout at view 3
     harness
-        .apply_input(ConsensusInput::Timeout(ViewNumber::new(3)))
+        .apply(ConsensusInput::Timeout(ViewNumber::new(3)))
         .await;
 
     // Send stale proposal (view 2, which is <= timeout_view 3)
     harness
-        .apply(test_data.views[1].proposal_input(&node_key))
+        .apply(test_data.views[1].proposal_input_consensus(&node_key))
         .await;
 
     // Send fresh proposal (view 4, which is > timeout_view 3)
     harness
-        .apply(test_data.views[3].proposal_input(&node_key))
+        .apply(test_data.views[3].proposal_input_consensus(&node_key))
         .await;
 
     let request_states: Vec<_> = harness
@@ -194,14 +185,14 @@ async fn test_vote1_for_sequential_views() {
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
 
     harness
-        .apply(test_data.views[0].proposal_input(&node_key))
+        .apply(test_data.views[0].proposal_input_consensus(&node_key))
         .await;
     harness
         .apply(test_data.views[0].block_reconstructed_input())
         .await;
 
     harness
-        .apply(test_data.views[1].proposal_input(&node_key))
+        .apply(test_data.views[1].proposal_input_consensus(&node_key))
         .await;
 
     assert_eq!(
@@ -219,7 +210,7 @@ async fn test_vote1_genesis_parent() {
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
 
     harness
-        .apply(test_data.views[0].proposal_input(&node_key))
+        .apply(test_data.views[0].proposal_input_consensus(&node_key))
         .await;
 
     assert!(
@@ -237,14 +228,14 @@ async fn test_vote2_missing_cert1() {
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
 
     harness
-        .apply(test_data.views[0].proposal_input(&node_key))
+        .apply(test_data.views[0].proposal_input_consensus(&node_key))
         .await;
     harness
         .apply(test_data.views[0].block_reconstructed_input())
         .await;
 
     harness
-        .apply(test_data.views[1].proposal_input(&node_key))
+        .apply(test_data.views[1].proposal_input_consensus(&node_key))
         .await;
     harness
         .apply(test_data.views[1].block_reconstructed_input())
@@ -264,14 +255,14 @@ async fn test_vote2_with_cert1() {
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
 
     harness
-        .apply(test_data.views[0].proposal_input(&node_key))
+        .apply(test_data.views[0].proposal_input_consensus(&node_key))
         .await;
     harness
         .apply(test_data.views[0].block_reconstructed_input())
         .await;
 
     harness
-        .apply(test_data.views[1].proposal_input(&node_key))
+        .apply(test_data.views[1].proposal_input_consensus(&node_key))
         .await;
     harness
         .apply(test_data.views[1].block_reconstructed_input())
@@ -292,14 +283,14 @@ async fn test_single_view_decide() {
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
 
     harness
-        .apply(test_data.views[0].proposal_input(&node_key))
+        .apply(test_data.views[0].proposal_input_consensus(&node_key))
         .await;
     harness
         .apply(test_data.views[0].block_reconstructed_input())
         .await;
 
     harness
-        .apply(test_data.views[1].proposal_input(&node_key))
+        .apply(test_data.views[1].proposal_input_consensus(&node_key))
         .await;
     harness
         .apply(test_data.views[1].block_reconstructed_input())
@@ -323,7 +314,7 @@ async fn test_no_duplicate_vote1() {
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
 
     harness
-        .apply(test_data.views[0].proposal_input(&node_key))
+        .apply(test_data.views[0].proposal_input_consensus(&node_key))
         .await;
     harness
         .apply(test_data.views[0].block_reconstructed_input())
@@ -345,14 +336,14 @@ async fn test_no_duplicate_vote2() {
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
 
     harness
-        .apply(test_data.views[0].proposal_input(&node_key))
+        .apply(test_data.views[0].proposal_input_consensus(&node_key))
         .await;
     harness
         .apply(test_data.views[0].block_reconstructed_input())
         .await;
 
     harness
-        .apply(test_data.views[1].proposal_input(&node_key))
+        .apply(test_data.views[1].proposal_input_consensus(&node_key))
         .await;
     harness
         .apply(test_data.views[1].block_reconstructed_input())
@@ -375,7 +366,7 @@ async fn test_state_verification_failed_removes_proposal() {
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
 
     harness
-        .apply(test_data.views[0].proposal_input(&node_key))
+        .apply(test_data.views[0].proposal_input_consensus(&node_key))
         .await;
     harness
         .apply(test_data.views[0].block_reconstructed_input())
@@ -385,8 +376,7 @@ async fn test_state_verification_failed_removes_proposal() {
     // by directly applying the proposal input, then manually sending
     // StateVerificationFailed instead of letting the harness auto-respond.
     // We need to call consensus.apply directly to avoid auto StateVerified.
-    let proposal_event = test_data.views[1].proposal_input(&node_key);
-    let proposal_input: ConsensusInput<TestTypes> = proposal_event.try_into().unwrap();
+    let proposal_input = test_data.views[1].proposal_input_consensus(&node_key);
     let mut outbox = Outbox::new();
     harness.consensus.apply(proposal_input, &mut outbox).await;
     // Drain the outbox but DON'T auto-respond to RequestState
@@ -397,7 +387,7 @@ async fn test_state_verification_failed_removes_proposal() {
     // Send StateVerificationFailed — removes proposal
     let proposal = &test_data.views[1].proposal.data.proposal;
     harness
-        .apply_input(ConsensusInput::StateValidationFailed(StateResponse {
+        .apply(ConsensusInput::StateValidationFailed(StateResponse {
             view: test_data.views[1].view_number,
             commitment: proposal_commitment(proposal),
             state: Arc::new(
@@ -428,14 +418,14 @@ async fn test_decide_requires_cert2() {
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
 
     harness
-        .apply(test_data.views[0].proposal_input(&node_key))
+        .apply(test_data.views[0].proposal_input_consensus(&node_key))
         .await;
     harness
         .apply(test_data.views[0].block_reconstructed_input())
         .await;
 
     harness
-        .apply(test_data.views[1].proposal_input(&node_key))
+        .apply(test_data.views[1].proposal_input_consensus(&node_key))
         .await;
     harness
         .apply(test_data.views[1].block_reconstructed_input())
@@ -458,7 +448,7 @@ async fn test_vote2_missing_block_reconstructed() {
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
 
     harness
-        .apply(test_data.views[0].proposal_input(&node_key))
+        .apply(test_data.views[0].proposal_input_consensus(&node_key))
         .await;
     harness
         .apply(test_data.views[0].block_reconstructed_input())
@@ -466,7 +456,7 @@ async fn test_vote2_missing_block_reconstructed() {
 
     // View 2: proposal + cert1, but NO block_reconstructed for view 2
     harness
-        .apply(test_data.views[1].proposal_input(&node_key))
+        .apply(test_data.views[1].proposal_input_consensus(&node_key))
         .await;
     harness.apply(test_data.views[1].cert1_input()).await;
 
@@ -484,7 +474,7 @@ async fn test_vote2_block_reconstructed_arrives_late() {
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
 
     harness
-        .apply(test_data.views[0].proposal_input(&node_key))
+        .apply(test_data.views[0].proposal_input_consensus(&node_key))
         .await;
     harness
         .apply(test_data.views[0].block_reconstructed_input())
@@ -492,7 +482,7 @@ async fn test_vote2_block_reconstructed_arrives_late() {
 
     // View 2: proposal + cert1 first (no block_reconstructed yet)
     harness
-        .apply(test_data.views[1].proposal_input(&node_key))
+        .apply(test_data.views[1].proposal_input_consensus(&node_key))
         .await;
     harness.apply(test_data.views[1].cert1_input()).await;
 
@@ -515,7 +505,9 @@ async fn test_multi_view_chain_decide() {
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
 
     for view in &test_data.views {
-        harness.apply(view.proposal_input(&node_key)).await;
+        harness
+            .apply(view.proposal_input_consensus(&node_key))
+            .await;
         harness.apply(view.block_reconstructed_input()).await;
         harness.apply(view.cert1_input()).await;
         harness.apply(view.cert2_input()).await;
@@ -540,14 +532,14 @@ async fn test_timeout_prevents_voting() {
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
 
     harness
-        .apply(test_data.views[0].proposal_input(&node_key))
+        .apply(test_data.views[0].proposal_input_consensus(&node_key))
         .await;
     harness
         .apply(test_data.views[0].block_reconstructed_input())
         .await;
 
     harness
-        .apply(test_data.views[1].proposal_input(&node_key))
+        .apply(test_data.views[1].proposal_input_consensus(&node_key))
         .await;
     harness
         .apply(test_data.views[1].block_reconstructed_input())
@@ -555,7 +547,7 @@ async fn test_timeout_prevents_voting() {
 
     // Timeout view 2 — now cert1 for view 2 should be dropped
     harness
-        .apply_input(ConsensusInput::Timeout(test_data.views[1].view_number))
+        .apply(ConsensusInput::Timeout(test_data.views[1].view_number))
         .await;
 
     // Send cert1 for view 2 — should be stale
@@ -577,7 +569,7 @@ async fn test_leader_sends_proposal() {
     let mut harness = ConsensusHarness::new(leader_index).await;
 
     harness
-        .apply(test_data.views[0].proposal_input(&leader_for_view_2))
+        .apply(test_data.views[0].proposal_input_consensus(&leader_for_view_2))
         .await;
     harness.apply(test_data.views[0].cert1_input()).await;
 
@@ -602,7 +594,7 @@ async fn test_leader_proposes_after_timeout() {
 
     // Build up locked_qc: process view 1 so cert1 sets locked_qc
     harness
-        .apply(test_data.views[0].proposal_input(&leader_for_view_3))
+        .apply(test_data.views[0].proposal_input_consensus(&leader_for_view_3))
         .await;
     harness
         .apply(test_data.views[0].block_reconstructed_input())
@@ -633,7 +625,7 @@ async fn test_non_leader_does_not_propose() {
     let mut harness = ConsensusHarness::new(non_leader_index).await;
 
     harness
-        .apply(test_data.views[0].proposal_input(&non_leader_key))
+        .apply(test_data.views[0].proposal_input_consensus(&non_leader_key))
         .await;
     harness.apply(test_data.views[0].cert1_input()).await;
 
@@ -654,7 +646,7 @@ async fn test_safety_rejects_proposal_below_lock() {
 
     // Process view 1 fully: proposal + block_reconstructed + cert1 → locked_qc = view 1
     harness
-        .apply(test_data.views[0].proposal_input(&node_key))
+        .apply(test_data.views[0].proposal_input_consensus(&node_key))
         .await;
     harness
         .apply(test_data.views[0].block_reconstructed_input())
@@ -663,7 +655,7 @@ async fn test_safety_rejects_proposal_below_lock() {
 
     // Process view 2 fully → locked_qc = view 2
     harness
-        .apply(test_data.views[1].proposal_input(&node_key))
+        .apply(test_data.views[1].proposal_input_consensus(&node_key))
         .await;
     harness
         .apply(test_data.views[1].block_reconstructed_input())
@@ -682,7 +674,7 @@ async fn test_safety_rejects_proposal_below_lock() {
     // Safety:   genesis commitment != cert1(view 2) commitment = false
     // → Proposal rejected by is_safe, no RequestState emitted.
     harness
-        .apply(test_data.views[0].proposal_input(&node_key))
+        .apply(test_data.views[0].proposal_input_consensus(&node_key))
         .await;
 
     let state_requests_after = harness
@@ -707,7 +699,7 @@ async fn test_vote_after_timeout_cert() {
 
     // Process view 1 fully → locked_qc = view 1
     harness
-        .apply(test_data.views[0].proposal_input(&node_key))
+        .apply(test_data.views[0].proposal_input_consensus(&node_key))
         .await;
     harness
         .apply(test_data.views[0].block_reconstructed_input())
@@ -716,7 +708,7 @@ async fn test_vote_after_timeout_cert() {
 
     // Process view 2 proposal + block_reconstructed (need parent data for view 3)
     harness
-        .apply(test_data.views[1].proposal_input(&node_key))
+        .apply(test_data.views[1].proposal_input_consensus(&node_key))
         .await;
     harness
         .apply(test_data.views[1].block_reconstructed_input())
@@ -730,7 +722,7 @@ async fn test_vote_after_timeout_cert() {
     // Process proposal for view 3. Its justify_qc is at view 2, which is
     // >= locked_qc at view 1 (liveness passes). Parent data for view 2 exists.
     harness
-        .apply(test_data.views[2].proposal_input(&node_key))
+        .apply(test_data.views[2].proposal_input_consensus(&node_key))
         .await;
 
     assert!(
@@ -756,7 +748,7 @@ async fn test_no_vote_after_timeout_for_proposal_below_lock() {
     // Process views 1-3 fully → locked_qc = cert1 for view 3
     for i in 0..3 {
         harness
-            .apply(test_data.views[i].proposal_input(&node_key))
+            .apply(test_data.views[i].proposal_input_consensus(&node_key))
             .await;
         harness
             .apply(test_data.views[i].block_reconstructed_input())
@@ -777,7 +769,7 @@ async fn test_no_vote_after_timeout_for_proposal_below_lock() {
     //          justify_qc commitment ≠ locked_qc commitment → false (safety fails)
     // → Proposal rejected by is_safe.
     harness
-        .apply(test_data.views[2].proposal_input(&node_key))
+        .apply(test_data.views[2].proposal_input_consensus(&node_key))
         .await;
 
     assert_eq!(
@@ -796,13 +788,13 @@ async fn test_decide_not_repeated_for_same_view() {
 
     // Full round for view 2
     harness
-        .apply(test_data.views[0].proposal_input(&node_key))
+        .apply(test_data.views[0].proposal_input_consensus(&node_key))
         .await;
     harness
         .apply(test_data.views[0].block_reconstructed_input())
         .await;
     harness
-        .apply(test_data.views[1].proposal_input(&node_key))
+        .apply(test_data.views[1].proposal_input_consensus(&node_key))
         .await;
     harness
         .apply(test_data.views[1].block_reconstructed_input())

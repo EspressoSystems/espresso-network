@@ -57,7 +57,7 @@ impl Timer {
 pub(crate) struct Coordinator<T: NodeType, I: NodeImplementation<T>> {
     external_tx: async_broadcast::Sender<hotshot_types::event::Event<T>>,
     // system_context: SystemContextHandle<T, I>,
-    consensus: Consensus<T>,
+    pub(crate) consensus: Consensus<T>,
     network: Network<T, I::Network>,
     state_manager: StateManager<T>,
     vid_disperser: VidDisperser<T>,
@@ -69,7 +69,7 @@ pub(crate) struct Coordinator<T: NodeType, I: NodeImplementation<T>> {
     drb_requester: DrbRequester,
     membership_coordinator: EpochMembershipCoordinator<T>,
     #[builder(default)]
-    outbox: Outbox<ConsensusOutput<T>>,
+    pub(crate) outbox: Outbox<ConsensusOutput<T>>,
 
     public_key: T::SignatureKey,
 
@@ -79,63 +79,71 @@ pub(crate) struct Coordinator<T: NodeType, I: NodeImplementation<T>> {
 impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
     pub async fn run(mut self) {
         loop {
-            select! {
-                view_number = &mut self.timer.timer => {
-                    self.evaluate(ConsensusInput::Timeout(view_number)).await;
-                    self.timer.reset(view_number + 1);
+            if let Some(input) = self.next_input().await {
+                self.consensus.apply(input, &mut self.outbox).await;
+                self.evaluate_outputs().await;
+            }
+        }
+    }
+    pub(crate) async fn next_input(&mut self) -> Option<ConsensusInput<T>> {
+        select! {
+            view_number = &mut self.timer.timer => {
+                self.timer.reset(view_number + 1);
+                Some(ConsensusInput::Timeout(view_number))
+            }
+            message = self.network.receive() => match message {
+                Ok(m) => {
+                    self.on_message(m).await
                 }
-                message = self.network.receive() => match message {
-                    Ok(m) => {
-                        self.on_message(m).await
-                    }
-                    Err(err) if is_critical(&err) => {
-                        error!(%err, "critical network error => exiting");
-                        break
-                    }
-                    Err(err) => {
-                        warn!(%err, "network error")
-                    }
-                },
-                Some(state_event) = self.state_manager.next() => {
-                    if let Ok(input) = ConsensusInput::try_from(state_event) {
-                        self.evaluate(input).await;
-                    }
+                Err(err) if is_critical(&err) => {
+                    error!(%err, "critical network error => exiting");
+                    None
                 }
-                Some(tcert) = self.timeout_collector.next() => {
-                    self.evaluate(ConsensusInput::TimeoutCertificate(tcert)).await;
+                Err(err) => {
+                    warn!(%err, "network error");
+                    None
                 }
-                Some(cert1) = self.vote1_collector.next() => {
-                    self.evaluate(ConsensusInput::Certificate1(cert1)).await;
+            },
+            Some(state_event) = self.state_manager.next() => {
+                ConsensusInput::try_from(state_event).ok()
+            }
+            Some(tcert) = self.timeout_collector.next() => {
+                Some(ConsensusInput::TimeoutCertificate(tcert))
+            }
+            Some(cert1) = self.vote1_collector.next() => {
+                Some(ConsensusInput::Certificate1(cert1))
+            }
+            Some(cert2) = self.vote2_collector.next() => {
+                Some(ConsensusInput::Certificate2(cert2))
+            }
+            Some(checkpoint_cert) = self.checkpoint_collector.next() => {
+                self.gc(checkpoint_cert.view_number(), checkpoint_cert.epoch().unwrap());
+                None
+            }
+            Some(item) = self.vid_disperser.next() => match item {
+                Ok((view, _, disperse)) => {
+                    Some(ConsensusInput::VidDisperseCreated(view, disperse))
                 }
-                Some(cert2) = self.vote2_collector.next() => {
-                    self.evaluate(ConsensusInput::Certificate2(cert2)).await;
+                Err(err) => {
+                    warn!(?err, "vid disperser error");
+                    None
                 }
-                Some(checkpoint_cert) = self.checkpoint_collector.next() => {
-                    self.gc(checkpoint_cert.view_number(), checkpoint_cert.epoch().unwrap());
+            },
+            Some(item) = self.vid_reconstructor.next() => match item {
+                Ok((view, commitment, _)) => {
+                    Some(ConsensusInput::BlockReconstructed(view, commitment))
                 }
-                Some(item) = self.vid_disperser.next() => match item {
-                    Ok((view, _, disperse)) => {
-                        self.evaluate(ConsensusInput::VidDisperseCreated(view, disperse)).await;
-                    }
-                    Err(err) => {
-                        warn!(?err, "vid disperser error")
-                    }
-                },
-                Some(item) = self.vid_reconstructor.next() => match item {
-                    Ok((view, commitment, _)) => {
-                        self.evaluate(ConsensusInput::BlockReconstructed(view, commitment)).await;
-                    }
-                    Err(err) => {
-                        warn!(?err, "vid reconstructor error")
-                    }
-                },
-                Some((_epoch, drb_result)) = self.drb_requester.next() => {
-                    todo!()
+                Err(err) => {
+                    warn!(?err, "vid reconstructor error");
+                    None
                 }
-                else => {
-                    error!("all coordinator inputs are closed => exiting");
-                    break
-                }
+            },
+            Some((_epoch, drb_result)) = self.drb_requester.next() => {
+                todo!()
+            }
+            else => {
+                error!("all coordinator inputs are closed => exiting");
+                None
             }
         }
     }
@@ -155,7 +163,7 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
     }
 
     /// Process an incoming network message.
-    async fn on_message(&mut self, msg: Message<T>) {
+    pub(crate) async fn on_message(&mut self, msg: Message<T>) -> Option<ConsensusInput<T>> {
         match msg.message_type {
             MessageType::Consensus(msg) => match msg {
                 ConsensusMessage::Proposal(proposal) => {
@@ -163,7 +171,7 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                         share: proposal.vid_share.clone(),
                         metadata: Some(proposal.proposal.data.block_header.metadata().clone()),
                     });
-                    self.evaluate(ConsensusInput::Proposal(proposal)).await;
+                    Some(ConsensusInput::Proposal(proposal))
                 },
                 ConsensusMessage::Vote1(vote1) => {
                     self.vote1_collector.accumulate_vote(vote1.vote).await;
@@ -171,26 +179,28 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                         share: vote1.vid_share,
                         metadata: None,
                     });
+                    None
                 },
                 ConsensusMessage::Vote2(vote2) => {
                     self.vote2_collector.accumulate_vote(vote2).await;
+                    None
                 },
                 ConsensusMessage::Certificate1(certificate1, _key) => {
-                    self.evaluate(ConsensusInput::Certificate1(certificate1))
-                        .await;
+                    Some(ConsensusInput::Certificate1(certificate1))
                 },
                 ConsensusMessage::Certificate2(certificate2, _key) => {
-                    self.evaluate(ConsensusInput::Certificate2(certificate2))
-                        .await;
+                    Some(ConsensusInput::Certificate2(certificate2))
                 },
                 ConsensusMessage::TimeoutVote(timeout_vote) => {
                     self.timeout_collector.accumulate_vote(timeout_vote).await;
+                    None
                 },
                 ConsensusMessage::Transactions(transactions, view) => {
                     todo!()
                 },
                 ConsensusMessage::Checkpoint(checkpoint) => {
                     self.checkpoint_collector.accumulate_vote(checkpoint).await;
+                    None
                 },
             },
             MessageType::ViewSync(_) => todo!(),
@@ -198,8 +208,7 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
         }
     }
 
-    async fn evaluate(&mut self, input: ConsensusInput<T>) {
-        self.consensus.apply(input, &mut self.outbox).await;
+    pub(crate) async fn evaluate_outputs(&mut self) {
         while let Some(output) = self.outbox.pop_front() {
             match output {
                 ConsensusOutput::Action(a) => self.handle_action(a).await,
@@ -283,7 +292,6 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
             Action::RequestBlockAndHeader(req) => {
                 // TODO: add a block builder, and use it to build the block,
                 // Then on block built, request the header
-                todo!()
             },
             Action::RequestVidDisperse(view, epoch, block, metadata) => {
                 self.vid_disperser.request_vid_disperse(VidDisperseRequest {
@@ -308,6 +316,27 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
             Event::LeafDecided(leaves) => {},
 
             _ => error!("TODO"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
+        pub fn outbox(&self) -> &Outbox<ConsensusOutput<T>> {
+            &self.outbox
+        }
+
+        pub fn consensus(&self) -> &Consensus<T> {
+            &self.consensus
+        }
+        pub fn network(&self) -> &Network<T, I::Network> {
+            &self.network
+        }
+        pub fn state_manager(&self) -> &StateManager<T> {
+            &self.state_manager
         }
     }
 }

@@ -380,7 +380,7 @@ impl<T: NodeType> Consensus<T> {
             return Protocol::Abort;
         };
         outbox.push_back(Action::RequestBlockAndHeader(BlockAndHeaderRequest {
-            view: view + 1,
+            view,
             epoch,
             parent_proposal: proposal.clone(),
         }));

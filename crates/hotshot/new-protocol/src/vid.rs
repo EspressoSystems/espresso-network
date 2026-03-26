@@ -167,6 +167,9 @@ impl<T: NodeType> VidReconstructor<T> {
         }
     }
     fn try_reconstruct(&mut self, view: ViewNumber, payload_commitment: VidCommitment2) {
+        if self.calculations.contains_key(&view) {
+            return;
+        }
         let Some(accumulator) = self.accumulators.get(&view) else {
             return;
         };
@@ -196,6 +199,3 @@ impl<T: NodeType> VidReconstructor<T> {
         self.accumulators = self.accumulators.split_off(&view_number);
     }
 }
-
-// TODO: add tests for vid reconstruction where we receive duplicate shares, including
-// the case where we receive identical shares from multiple keys

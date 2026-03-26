@@ -7,14 +7,11 @@ use hotshot_example_types::{
 };
 use hotshot_types::{
     data::{Leaf2, ViewNumber},
-    simple_certificate::TimeoutCertificate2,
-    simple_vote::TimeoutVote2,
     traits::{
         signature_key::SignatureKey,
         storage::{null_load_drb_progress_fn, null_store_drb_progress_fn},
     },
 };
-use tokio::task::JoinHandle;
 
 use super::utils::mock_membership;
 use crate::{
@@ -22,10 +19,12 @@ use crate::{
     consensus::Consensus,
     coordinator::Timer,
     drb::DrbRequester,
-    events::ConsensusOutput,
+    events::{ConsensusInput, ConsensusOutput},
     helpers::upgrade_lock,
+    message::Message,
+    network::Network,
     state::StateManager,
-    tests::common::mock::testing::MockCoordinator,
+    tests::common::mock::testing::{MockCoordinator, MockNetwork},
     vid::{VidDisperser, VidReconstructor},
     vote::VoteCollector,
 };
@@ -37,28 +36,20 @@ use crate::{
 /// When a `StateManager` is wired in, the mock coordinator owns it
 /// directly and polls `next()` to feed completions back as `ConsensusInput`.
 pub(crate) struct TestHarness {
-    /// Send ConsensusInput to the mock coordinator
-    input_tx: tokio::sync::mpsc::Sender<ConsensusOutput<TestTypes>>,
-    /// Oneshot to signal shutdown
-    shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
-    /// Join handle for mock coordinator (collects received events)
-    mock_join: JoinHandle<Vec<ConsensusOutput<TestTypes>>>,
+    coordinator: MockCoordinator,
+    outputs: Vec<ConsensusOutput<TestTypes>>,
 }
 
 impl TestHarness {
-    pub async fn new_with_cpu_tasks(node_index: u64) -> Self {
+    pub async fn new(node_index: u64) -> Self {
         // Default timer is long enough to not fire during normal tests,
-        // which complete in ~100-200ms. Use new_with_cpu_tasks_and_timer
-        // for tests that exercise timeout behavior.
-        Self::new_with_cpu_tasks_and_timer(node_index, Duration::from_secs(2)).await
+        // which complete in ~100-200ms.
+        Self::new_with_timer(node_index, Duration::from_secs(2)).await
     }
 
-    pub async fn new_with_cpu_tasks_and_timer(node_index: u64, timer_duration: Duration) -> Self {
+    pub async fn new_with_timer(node_index: u64, timer_duration: Duration) -> Self {
         let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
         let membership = mock_membership().await;
-        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
-
-        let (coordinator_tx, coordinator_rx) = tokio::sync::mpsc::channel(100);
 
         let store_drb_progress = null_store_drb_progress_fn();
         let load_drb_progress = null_load_drb_progress_fn();
@@ -66,49 +57,15 @@ impl TestHarness {
 
         let vote1_task = VoteCollector::new(membership.clone(), upgrade_lock());
         let vote2_task = VoteCollector::new(membership.clone(), upgrade_lock());
-        let timeout_collector: VoteCollector<
-            TestTypes,
-            TimeoutVote2<TestTypes>,
-            TimeoutCertificate2<TestTypes>,
-        > = VoteCollector::new(membership.clone(), upgrade_lock());
+        let timeout_collector = VoteCollector::new(membership.clone(), upgrade_lock());
+        let checkpoint_collector = VoteCollector::new(membership.clone(), upgrade_lock());
 
-        let consensus = Consensus::new(membership.clone(), public_key, private_key);
+        let consensus = Consensus::new(membership.clone(), public_key, private_key.clone());
 
         let vid_disperse_task = VidDisperser::new(membership.clone());
         let vid_reconstruction_task = VidReconstructor::new();
-        let mock_coordinator = MockCoordinator {
-            consensus,
-            input_rx: coordinator_rx,
-            shutdown_rx,
-            state_manager: None,
-            vote1_task: Some(vote1_task),
-            vote2_task: Some(vote2_task),
-            timeout_collector: Some(timeout_collector),
-            vid_disperse_task: Some(vid_disperse_task),
-            vid_reconstruction_task: Some(vid_reconstruction_task),
-            drb_request_task: Some(drb_request_task),
-            membership_coordinator: membership,
-            outbox: Outbox::new(),
-            received_events: Vec::new(),
-            timer: Timer::new(timer_duration),
-        };
-        let mock_join = tokio::spawn(async move { mock_coordinator.run().await });
 
-        Self {
-            input_tx: coordinator_tx,
-            shutdown_tx: Some(shutdown_tx),
-            mock_join,
-        }
-    }
-
-    /// Create a test harness that wires Consensus and StateManager
-    /// together through the MockCoordinator.
-    pub async fn new_with_state_manager(node_index: u64) -> Self {
-        let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
-        let membership = mock_membership().await;
-        let (input_tx, input_rx) = tokio::sync::mpsc::channel(100);
-        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
-
+        let mut state_manager = StateManager::new(Arc::new(TestInstanceState::default()));
         let genesis_state = TestValidatedState::default();
         let genesis_leaf = Leaf2::<TestTypes>::genesis(
             &genesis_state,
@@ -116,47 +73,79 @@ impl TestHarness {
             TEST_VERSIONS.test.base,
         )
         .await;
-
-        let mut state_manager = StateManager::new(Arc::new(TestInstanceState::default()));
         state_manager.seed_state(ViewNumber::genesis(), Arc::new(genesis_state), genesis_leaf);
 
-        let consensus = Consensus::new(membership.clone(), public_key, private_key);
+        let network = Network::new(MockNetwork::default(), membership.clone(), upgrade_lock());
 
-        let mock_coordinator = MockCoordinator {
-            consensus,
-            input_rx,
-            shutdown_rx,
-            vote1_task: None,
-            vote2_task: None,
-            timeout_collector: None,
-            vid_disperse_task: None,
-            vid_reconstruction_task: None,
-            drb_request_task: None,
-            state_manager: Some(state_manager),
-            membership_coordinator: membership,
-            outbox: Outbox::new(),
-            received_events: Vec::new(),
-            timer: Timer::new(Duration::from_secs(2)),
-        };
-        let mock_join = tokio::spawn(async move { mock_coordinator.run().await });
+        let (tx, _rx) = async_broadcast::broadcast(1);
 
+        let coordinator = MockCoordinator::builder()
+            .external_tx(tx)
+            .consensus(consensus)
+            .network(network)
+            .state_manager(state_manager)
+            .vote1_collector(vote1_task)
+            .vote2_collector(vote2_task)
+            .timeout_collector(timeout_collector)
+            .checkpoint_collector(checkpoint_collector)
+            .vid_disperser(vid_disperse_task)
+            .vid_reconstructor(vid_reconstruction_task)
+            .drb_requester(drb_request_task)
+            .membership_coordinator(membership)
+            .outbox(Outbox::new())
+            .timer(Timer::new(timer_duration))
+            .public_key(public_key)
+            .build();
         Self {
-            input_tx,
-            shutdown_tx: Some(shutdown_tx),
-            mock_join,
+            coordinator,
+            outputs: Vec::new(),
         }
     }
 
-    /// Send an event to the mock coordinator.
-    pub async fn send(&self, input: impl Into<ConsensusOutput<TestTypes>>) {
-        self.input_tx.send(input.into()).await.unwrap();
+    pub async fn message(&mut self, message: Message<TestTypes>) {
+        if let Some(input) = self.coordinator.on_message(message).await {
+            self.send_input(input).await;
+        }
     }
 
-    /// Shut down and return all events the mock coordinator collected.
-    pub async fn shutdown(mut self) -> Vec<ConsensusOutput<TestTypes>> {
-        // Small delay to let async processing complete
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        let _ = self.shutdown_tx.take().unwrap().send(());
-        self.mock_join.await.unwrap()
+    pub async fn send_input(&mut self, input: ConsensusInput<TestTypes>) {
+        self.coordinator
+            .consensus
+            .apply(input, &mut self.coordinator.outbox)
+            .await;
+        for output in self.coordinator.outbox().iter() {
+            self.outputs.push(output.clone());
+        }
+        self.coordinator.evaluate_outputs().await;
+    }
+
+    pub async fn next_inputs(&mut self, num_inputs: usize) -> Vec<ConsensusInput<TestTypes>> {
+        let mut inputs = Vec::new();
+        for _ in 0..num_inputs {
+            if let Some(input) = self.coordinator.next_input().await {
+                if matches!(input, ConsensusInput::Timeout(_)) {
+                    panic!("Expected a non-timeout input, got timeout");
+                }
+                inputs.push(input);
+            }
+        }
+        for input in inputs.clone() {
+            self.send_input(input).await;
+        }
+        inputs
+    }
+
+    pub async fn next_timeout(&mut self) -> Option<ConsensusInput<TestTypes>> {
+        let next = self.coordinator.next_input().await;
+        if let Some(input) = next
+            && matches!(input, ConsensusInput::Timeout(_))
+        {
+            return Some(input);
+        }
+
+        None
+    }
+    pub fn outputs(&self) -> &Vec<ConsensusOutput<TestTypes>> {
+        &self.outputs
     }
 }
