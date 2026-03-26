@@ -6,7 +6,7 @@ pub mod message;
 pub mod consensus;
 
 #[allow(dead_code, unused_variables)]
-pub mod validated_state;
+pub mod state;
 
 #[allow(dead_code, unused_variables)]
 pub mod io;

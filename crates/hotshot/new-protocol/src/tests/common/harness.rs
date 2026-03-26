@@ -24,8 +24,8 @@ use crate::{
     drb::DrbRequester,
     events::ConsensusOutput,
     helpers::upgrade_lock,
+    state::StateManager,
     tests::common::mock::testing::MockCoordinator,
-    validated_state::ValidatedStateManager,
     vid::{VidDisperser, VidReconstructor},
     vote::VoteCollector,
 };
@@ -34,7 +34,7 @@ use crate::{
 /// helpers to send events and collect results.
 ///
 /// All inputs are sent directly as `ConsensusInput` to the mock coordinator.
-/// When a `ValidatedStateManager` is wired in, the mock coordinator owns it
+/// When a `StateManager` is wired in, the mock coordinator owns it
 /// directly and polls `next()` to feed completions back as `ConsensusInput`.
 pub(crate) struct TestHarness {
     /// Send ConsensusInput to the mock coordinator
@@ -101,7 +101,7 @@ impl TestHarness {
         }
     }
 
-    /// Create a test harness that wires Consensus and ValidatedStateManager
+    /// Create a test harness that wires Consensus and StateManager
     /// together through the MockCoordinator.
     pub async fn new_with_state_manager(node_index: u64) -> Self {
         let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
@@ -117,7 +117,7 @@ impl TestHarness {
         )
         .await;
 
-        let mut state_manager = ValidatedStateManager::new(Arc::new(TestInstanceState::default()));
+        let mut state_manager = StateManager::new(Arc::new(TestInstanceState::default()));
         state_manager.seed_state(ViewNumber::genesis(), Arc::new(genesis_state), genesis_leaf);
 
         let consensus = Consensus::new(membership.clone(), public_key, private_key);
