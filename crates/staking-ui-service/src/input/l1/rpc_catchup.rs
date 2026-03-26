@@ -1,12 +1,13 @@
 //! L1 catchup based on a JSON-RPC provider.
 
-use std::{cmp::min, collections::BTreeMap};
+use std::{cmp::min, collections::BTreeMap, time::Duration};
 
 use alloy::{
     eips::BlockId,
     providers::{Provider, RootProvider},
     rpc::types::Filter,
 };
+use tokio::time::sleep;
 
 use crate::{
     Error, Result,
@@ -21,6 +22,7 @@ pub struct RpcCatchup {
     stake_table_addr: Address,
     reward_addr: Address,
     chunk_size: u64,
+    retry_delay: Duration,
 }
 
 impl RpcCatchup {
@@ -32,6 +34,7 @@ impl RpcCatchup {
             stake_table_addr: opt.stake_table_address,
             reward_addr: opt.reward_contract_address,
             chunk_size: opt.l1_events_max_block_range,
+            retry_delay: opt.l1_retry_delay,
         })
     }
 }
@@ -65,18 +68,33 @@ impl L1Catchup for RpcCatchup {
         );
 
         // To avoid making large RPC calls, divide the range into smaller chunks.
-        let chunks = block_range_chunks(from + 1, finalized.number(), self.chunk_size);
+        let target = finalized.number();
+        let chunks = block_range_chunks(from + 1, target, self.chunk_size);
 
+        let max_delay = self.retry_delay * 32;
         let mut events = BTreeMap::new();
         for (from, to) in chunks {
-            tracing::debug!(from, to, "fetch L1 events in chunk");
-            let chunk_events = get_events(
-                &self.provider,
-                Filter::new().from_block(from).to_block(to),
-                self.stake_table_addr,
-                self.reward_addr,
-            )
-            .await?;
+            tracing::debug!(from, to, target, "catchup progress");
+            let mut delay = self.retry_delay;
+            let mut attempt = 0u32;
+            let chunk_events = loop {
+                match get_events(
+                    &self.provider,
+                    Filter::new().from_block(from).to_block(to),
+                    self.stake_table_addr,
+                    self.reward_addr,
+                )
+                .await
+                {
+                    Ok(events) => break events,
+                    Err(err) => {
+                        attempt += 1;
+                        tracing::warn!(from, to, attempt, ?err, "fetch L1 events failed, retrying");
+                        sleep(delay).await;
+                        delay = (delay * 2).min(max_delay);
+                    }
+                }
+            };
             events.extend(chunk_events);
         }
 
