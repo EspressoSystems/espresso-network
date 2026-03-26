@@ -159,6 +159,7 @@ impl<T: NodeType> VidReconstructor<T> {
             }
         }
     }
+
     fn try_reconstruct(&mut self, view: ViewNumber, payload_commitment: VidCommitment2) {
         let Some(accumulator) = self.accumulators.get(&view) else {
             return;

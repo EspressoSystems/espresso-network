@@ -14,7 +14,7 @@ use hotshot_types::{
 use super::common::{
     assertions::{
         count_vote1, count_vote2, has_leaf_decided, has_proposal, has_request_block_and_header,
-        has_request_state, has_vote1, has_vote2, node_index_for_key,
+        has_request_state, has_vote1, has_vote2, node_index_for_key, views,
     },
     utils::{MockBlock, TestData, mock_membership, state_verified_input},
 };
@@ -23,6 +23,7 @@ use crate::{
     consensus::Consensus,
     events::{Action, ConsensusInput, ConsensusOutput, Event, StateResponse},
     helpers::{proposal_commitment, upgrade_lock},
+    tests::common::assertions::count_decided,
 };
 
 struct ConsensusHarness {
@@ -134,7 +135,7 @@ impl ConsensusHarness {
     }
 }
 
-/// Fresh consensus with no locked_qc accepts any proposal (genesis safety).
+/// Fresh consensus with no locked_cert accepts any proposal (genesis safety).
 #[tokio::test]
 async fn test_safety_genesis_no_lock() {
     let mut harness = ConsensusHarness::new(0).await;
@@ -147,7 +148,7 @@ async fn test_safety_genesis_no_lock() {
 
     assert!(
         has_request_state(harness.events()),
-        "Proposal should be accepted with no locked QC"
+        "Proposal should be accepted with no locked cert"
     );
 }
 
@@ -173,16 +174,17 @@ async fn test_timeout_filters_stale_events() {
         .apply(test_data.views[3].proposal_input(&node_key))
         .await;
 
-    let request_states: Vec<_> = harness
-        .events()
-        .iter()
-        .filter(|e| matches!(e, ConsensusOutput::Action(Action::RequestState(_))))
-        .collect();
+    let views = views(harness.events(), |a| matches!(a, Action::RequestState(_)));
     assert_eq!(
-        request_states.len(),
+        views.len(),
         1,
         "Only one RequestState expected (fresh view), got {}",
-        request_states.len()
+        views.len()
+    );
+    assert_eq!(
+        views[0], test_data.views[3].view_number,
+        "RequestState should be for view 4, got {:?}",
+        views[0]
     );
 }
 
@@ -367,9 +369,9 @@ async fn test_no_duplicate_vote2() {
     );
 }
 
-/// StateVerificationFailed with matching commitment removes proposal and vid_share.
+/// StateValidationFailed with matching commitment removes proposal and vid_share.
 #[tokio::test]
-async fn test_state_verification_failed_removes_proposal() {
+async fn test_state_validation_failed_removes_proposal() {
     let mut harness = ConsensusHarness::new(0).await;
     let test_data = TestData::new(3).await;
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
@@ -383,8 +385,8 @@ async fn test_state_verification_failed_removes_proposal() {
 
     // Send proposal for view 2 — but bypass the harness auto-response
     // by directly applying the proposal input, then manually sending
-    // StateVerificationFailed instead of letting the harness auto-respond.
-    // We need to call consensus.apply directly to avoid auto StateVerified.
+    // StateValidationFailed instead of letting the harness auto-respond.
+    // We need to call consensus.apply directly to avoid auto StateValidated.
     let proposal_event = test_data.views[1].proposal_input(&node_key);
     let proposal_input: ConsensusInput<TestTypes> = proposal_event.try_into().unwrap();
     let mut outbox = Outbox::new();
@@ -394,7 +396,7 @@ async fn test_state_verification_failed_removes_proposal() {
         harness.collected.push(output);
     }
 
-    // Send StateVerificationFailed — removes proposal
+    // Send StateValidationFailed — removes proposal
     let proposal = &test_data.views[1].proposal.data.proposal;
     harness
         .apply_input(ConsensusInput::StateValidationFailed(StateResponse {
@@ -521,11 +523,7 @@ async fn test_multi_view_chain_decide() {
         harness.apply(view.cert2_input()).await;
     }
 
-    let decide_count = harness
-        .events()
-        .iter()
-        .filter(|e| matches!(e, ConsensusOutput::Event(Event::LeafDecided(_))))
-        .count();
+    let decide_count = count_decided(harness.events());
     assert!(
         decide_count >= 2,
         "Multiple views should produce decisions, got {decide_count}"
@@ -591,7 +589,7 @@ async fn test_leader_sends_proposal() {
     );
 }
 
-/// Leader sends a proposal after a timeout using the locked QC and
+/// Leader sends a proposal after a timeout using the locked cert and
 /// view change evidence.
 #[tokio::test]
 async fn test_leader_proposes_after_timeout() {
@@ -600,7 +598,7 @@ async fn test_leader_proposes_after_timeout() {
     let leader_index = node_index_for_key(&leader_for_view_3);
     let mut harness = ConsensusHarness::new(leader_index).await;
 
-    // Build up locked_qc: process view 1 so cert1 sets locked_qc
+    // Build up locked_cert: process view 1 so cert1 sets locked_cert
     harness
         .apply(test_data.views[0].proposal_input(&leader_for_view_3))
         .await;
@@ -669,10 +667,6 @@ async fn test_decide_not_repeated_for_same_view() {
     // Send cert2 again for same view — should not produce another decide
     harness.apply(test_data.views[1].cert2_input()).await;
 
-    let decide_count = harness
-        .events()
-        .iter()
-        .filter(|e| matches!(e, ConsensusOutput::Event(Event::LeafDecided(_))))
-        .count();
+    let decide_count = count_decided(harness.events());
     assert_eq!(decide_count, 1, "Should only decide once per view");
 }

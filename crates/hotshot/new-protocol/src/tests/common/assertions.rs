@@ -1,6 +1,6 @@
 use hotshot::types::BLSPubKey;
 use hotshot_example_types::node_types::TestTypes;
-use hotshot_types::traits::signature_key::SignatureKey;
+use hotshot_types::{data::ViewNumber, traits::signature_key::SignatureKey};
 
 use crate::events::{Action, ConsensusOutput, Event};
 
@@ -82,6 +82,31 @@ pub(crate) fn count_vote2(events: &[ConsensusOutput<TestTypes>]) -> usize {
         .iter()
         .filter(|e| matches!(e, ConsensusOutput::Action(Action::SendVote2(_))))
         .count()
+}
+
+pub(crate) fn count_decided(events: &[ConsensusOutput<TestTypes>]) -> usize {
+    events
+        .iter()
+        .filter(|e| matches!(e, ConsensusOutput::Event(Event::LeafDecided(_))))
+        .count()
+}
+
+pub(crate) fn views<F>(events: &[ConsensusOutput<TestTypes>], pred: F) -> Vec<ViewNumber>
+where
+    F: Fn(&Action<TestTypes>) -> bool,
+{
+    events
+        .iter()
+        .filter_map(|e| {
+            if let ConsensusOutput::Action(a) = e
+                && pred(a)
+            {
+                a.view_number()
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 /// Find the node index (0..10) for a given public key.
