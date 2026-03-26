@@ -1,7 +1,6 @@
 #![doc = include_str!("../README.md")]
 
 use std::{
-    cmp::max,
     collections::HashMap,
     fmt::Display,
     future::pending,
@@ -283,10 +282,10 @@ where
         }
 
         // Command channel from application to network.
-        let (otx, orx) = mpsc::channel(max(cfg.total_capacity_egress, 1));
+        let (otx, orx) = mpsc::channel(cfg.total_capacity_egress.get());
 
         // Channel of messages from peers to the application.
-        let (itx, irx) = mpsc::channel(max(cfg.total_capacity_ingress, 1));
+        let (itx, irx) = mpsc::channel(cfg.total_capacity_ingress.get());
 
         let mut interval = tokio::time::interval(PING_INTERVAL);
         interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
