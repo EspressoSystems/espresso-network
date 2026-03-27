@@ -867,7 +867,7 @@
 <a href=#867 id=867 data-nosnippet>867</a>        _epoch: <span class="prelude-ty">Option</span>&lt;EpochNumber&gt;,
 <a href=#868 id=868 data-nosnippet>868</a>        action: HotShotAction,
 <a href=#869 id=869 data-nosnippet>869</a>    ) -&gt; anyhow::Result&lt;()&gt; {
-<a href=#870 id=870 data-nosnippet>870</a>        <span class="comment">// Todo Remove this after https://github.com/EspressoSystems/espresso-sequencer/issues/1931
+<a href=#870 id=870 data-nosnippet>870</a>        <span class="comment">// Todo Remove this after https://github.com/EspressoSystems/espresso-network/issues/1931
 <a href=#871 id=871 data-nosnippet>871</a>        </span><span class="kw">if </span>!<span class="macro">matches!</span>(action, HotShotAction::Propose | HotShotAction::Vote) {
 <a href=#872 id=872 data-nosnippet>872</a>            <span class="kw">return </span><span class="prelude-val">Ok</span>(());
 <a href=#873 id=873 data-nosnippet>873</a>        }

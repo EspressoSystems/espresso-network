@@ -186,16 +186,16 @@
 <a href=#186 id=186 data-nosnippet>186</a>        <span class="comment">// TODO `metadata_bytes` equals `ns_table_bytes`, so we are
 <a href=#187 id=187 data-nosnippet>187</a>        // double-hashing the ns_table. Why? To maintain serialization
 <a href=#188 id=188 data-nosnippet>188</a>        // compatibility.
-<a href=#189 id=189 data-nosnippet>189</a>        // https://github.com/EspressoSystems/espresso-sequencer/issues/1576
+<a href=#189 id=189 data-nosnippet>189</a>        // https://github.com/EspressoSystems/espresso-network/issues/1576
 <a href=#190 id=190 data-nosnippet>190</a>        </span><span class="kw">let </span>metadata_bytes = metadata.encode();
 <a href=#191 id=191 data-nosnippet>191</a>
 <a href=#192 id=192 data-nosnippet>192</a>        <span class="kw">let </span><span class="kw-2">mut </span>digest = sha2::Sha256::new();
 <a href=#193 id=193 data-nosnippet>193</a>        digest.update((<span class="self">self</span>.raw_payload.len() <span class="kw">as </span>u64).to_le_bytes());
 <a href=#194 id=194 data-nosnippet>194</a>        digest.update((ns_table_bytes.len() <span class="kw">as </span>u64).to_le_bytes());
-<a href=#195 id=195 data-nosnippet>195</a>        digest.update((metadata_bytes.len() <span class="kw">as </span>u64).to_le_bytes()); <span class="comment">// https://github.com/EspressoSystems/espresso-sequencer/issues/1576
+<a href=#195 id=195 data-nosnippet>195</a>        digest.update((metadata_bytes.len() <span class="kw">as </span>u64).to_le_bytes()); <span class="comment">// https://github.com/EspressoSystems/espresso-network/issues/1576
 <a href=#196 id=196 data-nosnippet>196</a>        </span>digest.update(<span class="kw-2">&amp;</span><span class="self">self</span>.raw_payload);
 <a href=#197 id=197 data-nosnippet>197</a>        digest.update(ns_table_bytes);
-<a href=#198 id=198 data-nosnippet>198</a>        digest.update(metadata_bytes); <span class="comment">// https://github.com/EspressoSystems/espresso-sequencer/issues/1576
+<a href=#198 id=198 data-nosnippet>198</a>        digest.update(metadata_bytes); <span class="comment">// https://github.com/EspressoSystems/espresso-network/issues/1576
 <a href=#199 id=199 data-nosnippet>199</a>        </span>BuilderCommitment::from_raw_digest(digest.finalize())
 <a href=#200 id=200 data-nosnippet>200</a>    }
 <a href=#201 id=201 data-nosnippet>201</a>

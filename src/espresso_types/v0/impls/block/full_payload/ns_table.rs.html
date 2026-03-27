@@ -89,7 +89,7 @@
 <a href=#89 id=89 data-nosnippet>89</a>        <span class="kw">let </span>start = index.<span class="number">0 </span>* (NS_ID_BYTE_LEN + NS_OFFSET_BYTE_LEN) + NUM_NSS_BYTE_LEN;
 <a href=#90 id=90 data-nosnippet>90</a>
 <a href=#91 id=91 data-nosnippet>91</a>        <span class="comment">// TODO hack to deserialize `NamespaceId` from `NS_ID_BYTE_LEN` bytes
-<a href=#92 id=92 data-nosnippet>92</a>        // https://github.com/EspressoSystems/espresso-sequencer/issues/1574
+<a href=#92 id=92 data-nosnippet>92</a>        // https://github.com/EspressoSystems/espresso-network/issues/1574
 <a href=#93 id=93 data-nosnippet>93</a>        </span>NamespaceId::from(u32_from_bytes::&lt;NS_ID_BYTE_LEN&gt;(
 <a href=#94 id=94 data-nosnippet>94</a>            <span class="kw-2">&amp;</span><span class="self">self</span>.bytes[start..start + NS_ID_BYTE_LEN],
 <a href=#95 id=95 data-nosnippet>95</a>        ))
@@ -114,9 +114,9 @@
 <a href=#114 id=114 data-nosnippet>114</a>    /// 2. All offsets must increase monotonically. Offsets
 <a href=#115 id=115 data-nosnippet>115</a>    ///    must be nonzero. Namespace IDs must be unique.
 <a href=#116 id=116 data-nosnippet>116</a>    /// 3. Header consistent with byte length. (Obsolete after
-<a href=#117 id=117 data-nosnippet>117</a>    ///    &lt;https://github.com/EspressoSystems/espresso-sequencer/issues/1604&gt;.)
+<a href=#117 id=117 data-nosnippet>117</a>    ///    &lt;https://github.com/EspressoSystems/espresso-network/issues/1604&gt;.)
 <a href=#118 id=118 data-nosnippet>118</a>    /// 4. Final offset must equal `payload_byte_len`. (Obsolete after
-<a href=#119 id=119 data-nosnippet>119</a>    ///    &lt;https://github.com/EspressoSystems/espresso-sequencer/issues/1604&gt;.)
+<a href=#119 id=119 data-nosnippet>119</a>    ///    &lt;https://github.com/EspressoSystems/espresso-network/issues/1604&gt;.)
 <a href=#120 id=120 data-nosnippet>120</a>    ///    If the namespace table is empty then `payload_byte_len` must be 0.
 <a href=#121 id=121 data-nosnippet>121</a>    </span><span class="kw">pub fn </span>validate(
 <a href=#122 id=122 data-nosnippet>122</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
@@ -165,7 +165,7 @@
 <a href=#165 id=165 data-nosnippet>165</a>    /// QUANTITY IS NEVER USED. Instead use [`NsTable::len`].
 <a href=#166 id=166 data-nosnippet>166</a>    ///
 <a href=#167 id=167 data-nosnippet>167</a>    /// TODO Delete this method after
-<a href=#168 id=168 data-nosnippet>168</a>    /// &lt;https://github.com/EspressoSystems/espresso-sequencer/issues/1604&gt;
+<a href=#168 id=168 data-nosnippet>168</a>    /// &lt;https://github.com/EspressoSystems/espresso-network/issues/1604&gt;
 <a href=#169 id=169 data-nosnippet>169</a>    </span><span class="kw">fn </span>read_num_nss(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
 <a href=#170 id=170 data-nosnippet>170</a>        <span class="kw">let </span>num_nss_byte_len = NUM_NSS_BYTE_LEN.min(<span class="self">self</span>.bytes.len());
 <a href=#171 id=171 data-nosnippet>171</a>        usize_from_bytes::&lt;NUM_NSS_BYTE_LEN&gt;(<span class="kw-2">&amp;</span><span class="self">self</span>.bytes[..num_nss_byte_len])
@@ -206,7 +206,7 @@
 <a href=#206 id=206 data-nosnippet>206</a>        <span class="comment">// Header must declare the correct number of namespaces
 <a href=#207 id=207 data-nosnippet>207</a>        //
 <a href=#208 id=208 data-nosnippet>208</a>        // TODO this check obsolete after
-<a href=#209 id=209 data-nosnippet>209</a>        // https://github.com/EspressoSystems/espresso-sequencer/issues/1604
+<a href=#209 id=209 data-nosnippet>209</a>        // https://github.com/EspressoSystems/espresso-network/issues/1604
 <a href=#210 id=210 data-nosnippet>210</a>        </span><span class="kw">if </span><span class="self">self</span>.len().<span class="number">0 </span>!= <span class="self">self</span>.read_num_nss() {
 <a href=#211 id=211 data-nosnippet>211</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(InvalidHeader);
 <a href=#212 id=212 data-nosnippet>212</a>        }
