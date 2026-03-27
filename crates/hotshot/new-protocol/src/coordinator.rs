@@ -23,7 +23,7 @@ use crate::{
     drb::DrbRequester,
     message::{
         Certificate2, CheckpointCertificate, CheckpointVote, ConsensusMessage, Message,
-        MessageType, Vote2,
+        MessageType, ProposalMessage, Vote2,
     },
     network::Network,
     outbox::Outbox,
@@ -262,7 +262,7 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                 self.network
                     .broadcast(message)
                     .await
-                    .map_err(|e| CoordinatorError::from(e).context("network broadcast"))?
+                    .map_err(|e| CoordinatorError::from(e).context("broadcast checkpoint vote"))?
             },
             ConsensusOutput::Certificate1Formed(_) => {}, // TODO
             ConsensusOutput::Certificate2Formed(_) => {}, // TODO
@@ -270,12 +270,63 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
             ConsensusOutput::LockUpdated(_) => {},        // TODO
             ConsensusOutput::RequestBlockAndHeader(_) => {}, // TODO
             ConsensusOutput::RequestProposal(..) => {},   // TODO
-            ConsensusOutput::SendProposal(..) => {},      // TODO
-            ConsensusOutput::SendVote1(..) => {},         // TODO
-            ConsensusOutput::SendVote2(..) => {},         // TODO
+            ConsensusOutput::SendProposal(proposal, vid_disperse) => {
+                // TODO: This may be done async in network so we do not spend
+                // too much time here in this loop.
+                for vid_share in vid_disperse.to_shares() {
+                    let recipient_key = vid_share.recipient_key.clone();
+                    let message = Message {
+                        sender: self.public_key.clone(),
+                        message_type: MessageType::Consensus(ConsensusMessage::Proposal(
+                            ProposalMessage {
+                                proposal: proposal.clone(),
+                                vid_share,
+                            },
+                        )),
+                    };
+                    if let Err(err) = self.network.unicast(recipient_key, message).await {
+                        let err = CoordinatorError::from(err).context("vid share unicast");
+                        if err.severity == Severity::Critical {
+                            return Err(err);
+                        } else {
+                            warn!(%err, "network error while sending vid share")
+                        }
+                    }
+                }
+            },
+            ConsensusOutput::SendTimeoutVote(vote) => {
+                let message = Message {
+                    sender: self.public_key.clone(),
+                    message_type: MessageType::Consensus(ConsensusMessage::TimeoutVote(vote)),
+                };
+                self.network
+                    .broadcast(message)
+                    .await
+                    .map_err(|e| CoordinatorError::from(e).context("broadcast timeout vote"))?
+            },
+            ConsensusOutput::SendVote1(vote1) => {
+                let message = Message {
+                    sender: self.public_key.clone(),
+                    message_type: MessageType::Consensus(ConsensusMessage::Vote1(vote1)),
+                };
+                self.network
+                    .broadcast(message)
+                    .await
+                    .map_err(|e| CoordinatorError::from(e).context("broadcast vote1"))?
+            },
+            ConsensusOutput::SendVote2(vote2) => {
+                let message = Message {
+                    sender: self.public_key.clone(),
+                    message_type: MessageType::Consensus(ConsensusMessage::Vote2(vote2)),
+                };
+                self.network
+                    .broadcast(message)
+                    .await
+                    .map_err(|e| CoordinatorError::from(e).context("broadcast vote2"))?
+            },
             ConsensusOutput::TimeoutCertificateReceived(..) => {}, // TODO
             ConsensusOutput::ViewSyncCertificateReceived(_) => {}, // TODO
-            ConsensusOutput::ViewChanged(..) => {},       // TODO
+            ConsensusOutput::ViewChanged(..) => {},                // TODO
         }
         Ok(())
     }

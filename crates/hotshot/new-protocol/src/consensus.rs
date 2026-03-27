@@ -16,7 +16,7 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     message::Proposal,
     simple_certificate::{TimeoutCertificate2, ViewSyncFinalizeCertificate2},
-    simple_vote::{HasEpoch, QuorumData2, SimpleVote},
+    simple_vote::{HasEpoch, QuorumData2, SimpleVote, TimeoutVote2},
     stake_table::StakeTableEntries,
     traits::{
         block_contents::BlockHeader, node_implementation::NodeType, signature_key::SignatureKey,
@@ -65,6 +65,7 @@ pub enum ConsensusOutput<T: NodeType> {
     RequestState(StateRequest<T>),
     SendProposal(Proposal<T, QuorumProposal2<T>>, VidDisperse2<T>),
     SendCheckpointVote(CheckpointVote<T>),
+    SendTimeoutVote(TimeoutVote2<T>),
     SendVote1(Vote1<T>),
     SendVote2(Vote2<T>),
     RequestVidDisperse {
