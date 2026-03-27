@@ -1,6 +1,9 @@
-use std::collections::{VecDeque, vec_deque};
+use std::{
+    collections::{VecDeque, vec_deque},
+    mem,
+};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Outbox<T>(VecDeque<T>);
 
 impl<T> Default for Outbox<T> {
@@ -37,6 +40,19 @@ impl<T> Outbox<T> {
     pub fn iter(&self) -> impl Iterator<Item = &T> {
         self.0.iter()
     }
+
+    pub fn take(&mut self) -> Self {
+        Self(mem::take(&mut self.0))
+    }
+}
+
+impl<T> IntoIterator for Outbox<T> {
+    type IntoIter = vec_deque::IntoIter<T>;
+    type Item = T;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
 }
 
 impl<'a, T> IntoIterator for &'a Outbox<T> {
@@ -45,6 +61,12 @@ impl<'a, T> IntoIterator for &'a Outbox<T> {
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.iter()
+    }
+}
+
+impl<T> Extend<T> for Outbox<T> {
+    fn extend<I: IntoIterator<Item = T>>(&mut self, iter: I) {
+        self.0.extend(iter)
     }
 }
 

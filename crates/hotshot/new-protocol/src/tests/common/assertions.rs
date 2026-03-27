@@ -2,86 +2,172 @@ use hotshot::types::BLSPubKey;
 use hotshot_example_types::node_types::TestTypes;
 use hotshot_types::traits::signature_key::SignatureKey;
 
-use crate::events::{Action, ConsensusOutput, Event};
+use crate::consensus::{ConsensusInput, ConsensusOutput};
 
-pub(crate) fn has_vote1(events: &[ConsensusOutput<TestTypes>]) -> bool {
-    events
-        .iter()
-        .any(|e| matches!(e, ConsensusOutput::Action(Action::SendVote1(_))))
+pub(crate) fn has_vote1<'a, I>(outputs: I) -> bool
+where
+    I: IntoIterator<Item = &'a ConsensusOutput<TestTypes>>,
+{
+    outputs
+        .into_iter()
+        .any(|e| matches!(e, ConsensusOutput::SendVote1(_)))
 }
 
-pub(crate) fn has_cert1(events: &[ConsensusOutput<TestTypes>]) -> bool {
-    events
-        .iter()
-        .any(|e| matches!(e, ConsensusOutput::Event(Event::Certificate1Formed(_))))
-}
-pub(crate) fn has_vote2(events: &[ConsensusOutput<TestTypes>]) -> bool {
-    events
-        .iter()
-        .any(|e| matches!(e, ConsensusOutput::Action(Action::SendVote2(_))))
+pub(crate) fn has_vote2<'a, I>(outputs: I) -> bool
+where
+    I: IntoIterator<Item = &'a ConsensusOutput<TestTypes>>,
+{
+    outputs
+        .into_iter()
+        .any(|e| matches!(e, ConsensusOutput::SendVote2(_)))
 }
 
-#[allow(dead_code)]
-pub(crate) fn has_cert2(events: &[ConsensusOutput<TestTypes>]) -> bool {
-    events
-        .iter()
-        .any(|e| matches!(e, ConsensusOutput::Event(Event::Certificate2Formed(_))))
+pub(crate) fn has_cert1<'a, I>(inputs: I) -> bool
+where
+    I: IntoIterator<Item = &'a ConsensusInput<TestTypes>>,
+{
+    inputs
+        .into_iter()
+        .any(|e| matches!(e, ConsensusInput::Certificate1(_)))
 }
 
-pub(crate) fn has_leaf_decided(events: &[ConsensusOutput<TestTypes>]) -> bool {
-    events
-        .iter()
-        .any(|e| matches!(e, ConsensusOutput::Event(Event::LeafDecided(_))))
+pub(crate) fn has_cert2<'a, I>(inputs: I) -> bool
+where
+    I: IntoIterator<Item = &'a ConsensusInput<TestTypes>>,
+{
+    inputs
+        .into_iter()
+        .any(|e| matches!(e, ConsensusInput::Certificate2(_)))
 }
 
-pub(crate) fn has_request_state(events: &[ConsensusOutput<TestTypes>]) -> bool {
-    events
-        .iter()
-        .any(|e| matches!(e, ConsensusOutput::Action(Action::RequestState(_))))
+pub(crate) fn has_leaf_decided<'a, I>(outputs: I) -> bool
+where
+    I: IntoIterator<Item = &'a ConsensusOutput<TestTypes>>,
+{
+    outputs
+        .into_iter()
+        .any(|e| matches!(e, ConsensusOutput::LeafDecided(_)))
 }
 
-pub(crate) fn has_proposal(events: &[ConsensusOutput<TestTypes>]) -> bool {
-    events
-        .iter()
-        .any(|e| matches!(e, ConsensusOutput::Action(Action::SendProposal(..))))
-}
-
-pub(crate) fn has_request_block_and_header(events: &[ConsensusOutput<TestTypes>]) -> bool {
-    events
-        .iter()
-        .any(|e| matches!(e, ConsensusOutput::Action(Action::RequestBlockAndHeader(_))))
-}
-
-pub(crate) fn has_request_vid_disperse(events: &[ConsensusOutput<TestTypes>]) -> bool {
-    events
-        .iter()
-        .any(|e| matches!(e, ConsensusOutput::Action(Action::RequestVidDisperse(..))))
-}
-
-pub(crate) fn has_vid_disperse(events: &[ConsensusOutput<TestTypes>]) -> bool {
-    events
-        .iter()
-        .any(|e| matches!(e, ConsensusOutput::Event(Event::VidDisperseCreated(..))))
-}
-
-pub(crate) fn has_block_reconstructed(events: &[ConsensusOutput<TestTypes>]) -> bool {
-    events
-        .iter()
-        .any(|e| matches!(e, ConsensusOutput::Event(Event::BlockReconstructed(..))))
-}
-
-pub(crate) fn count_vote1(events: &[ConsensusOutput<TestTypes>]) -> usize {
-    events
-        .iter()
-        .filter(|e| matches!(e, ConsensusOutput::Action(Action::SendVote1(_))))
+pub(crate) fn count_leaf_decided<'a, I>(outputs: I) -> usize
+where
+    I: IntoIterator<Item = &'a ConsensusOutput<TestTypes>>,
+{
+    outputs
+        .into_iter()
+        .filter(|e| matches!(e, ConsensusOutput::LeafDecided(_)))
         .count()
 }
 
-pub(crate) fn count_vote2(events: &[ConsensusOutput<TestTypes>]) -> usize {
-    events
-        .iter()
-        .filter(|e| matches!(e, ConsensusOutput::Action(Action::SendVote2(_))))
+pub(crate) fn has_request_state<'a, I>(outputs: I) -> bool
+where
+    I: IntoIterator<Item = &'a ConsensusOutput<TestTypes>>,
+{
+    outputs
+        .into_iter()
+        .any(|e| matches!(e, ConsensusOutput::RequestState(_)))
+}
+
+pub(crate) fn has_proposal<'a, I>(outputs: I) -> bool
+where
+    I: IntoIterator<Item = &'a ConsensusOutput<TestTypes>>,
+{
+    outputs
+        .into_iter()
+        .any(|e| matches!(e, ConsensusOutput::SendProposal(..)))
+}
+
+pub(crate) fn has_request_block_and_header<'a, I>(outputs: I) -> bool
+where
+    I: IntoIterator<Item = &'a ConsensusOutput<TestTypes>>,
+{
+    outputs
+        .into_iter()
+        .any(|e| matches!(e, ConsensusOutput::RequestBlockAndHeader(_)))
+}
+
+pub(crate) fn has_request_vid_disperse<'a, I>(outputs: I) -> bool
+where
+    I: IntoIterator<Item = &'a ConsensusOutput<TestTypes>>,
+{
+    outputs
+        .into_iter()
+        .any(|e| matches!(e, ConsensusOutput::RequestVidDisperse { .. }))
+}
+
+pub(crate) fn has_vid_disperse<'a, I>(inputs: I) -> bool
+where
+    I: IntoIterator<Item = &'a ConsensusInput<TestTypes>>,
+{
+    inputs
+        .into_iter()
+        .any(|e| matches!(e, ConsensusInput::VidDisperseCreated(..)))
+}
+
+pub(crate) fn has_block_reconstructed<'a, I>(inputs: I) -> bool
+where
+    I: IntoIterator<Item = &'a ConsensusInput<TestTypes>>,
+{
+    inputs
+        .into_iter()
+        .any(|e| matches!(e, ConsensusInput::BlockReconstructed(..)))
+}
+
+pub(crate) fn has_state_validated<'a, I>(inputs: I) -> bool
+where
+    I: IntoIterator<Item = &'a ConsensusInput<TestTypes>>,
+{
+    inputs
+        .into_iter()
+        .any(|e| matches!(e, ConsensusInput::StateValidated(..)))
+}
+
+pub(crate) fn count_vote1<'a, I>(outputs: I) -> usize
+where
+    I: IntoIterator<Item = &'a ConsensusOutput<TestTypes>>,
+{
+    outputs
+        .into_iter()
+        .filter(|e| matches!(e, ConsensusOutput::SendVote1(_)))
         .count()
+}
+
+pub(crate) fn count_vote2<'a, I>(outputs: I) -> usize
+where
+    I: IntoIterator<Item = &'a ConsensusOutput<TestTypes>>,
+{
+    outputs
+        .into_iter()
+        .filter(|e| matches!(e, ConsensusOutput::SendVote2(_)))
+        .count()
+}
+
+pub(crate) fn count_state_requests<'a, I>(outputs: I) -> usize
+where
+    I: IntoIterator<Item = &'a ConsensusOutput<TestTypes>>,
+{
+    outputs
+        .into_iter()
+        .filter(|e| matches!(e, ConsensusOutput::RequestState(_)))
+        .count()
+}
+
+pub(crate) fn has_timeout_cert<'a, I>(inputs: I) -> bool
+where
+    I: IntoIterator<Item = &'a ConsensusInput<TestTypes>>,
+{
+    inputs
+        .into_iter()
+        .any(|e| matches!(e, ConsensusInput::TimeoutCertificate(_)))
+}
+
+pub(crate) fn has_view_changed<'a, I>(outputs: I) -> bool
+where
+    I: IntoIterator<Item = &'a ConsensusOutput<TestTypes>>,
+{
+    outputs
+        .into_iter()
+        .any(|e| matches!(e, ConsensusOutput::ViewChanged(..)))
 }
 
 /// Find the node index (0..10) for a given public key.
