@@ -290,7 +290,6 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
         self.vote1_collector.gc(view);
         self.vote2_collector.gc(view);
         self.timeout_collector.gc(view);
-        self.checkpoint_collector.gc(view);
         self.drb_requester.gc(epoch);
     }
 }
