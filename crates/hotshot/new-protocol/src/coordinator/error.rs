@@ -71,6 +71,12 @@ pub enum ErrorKind {
 
     #[error("coordinator has no inputs")]
     NoInput,
+
+    #[error("{0}")]
+    StaticMessage(&'static str),
+
+    #[error("{0}")]
+    Message(String),
 }
 
 impl From<NetworkError> for CoordinatorError {
@@ -80,5 +86,17 @@ impl From<NetworkError> for CoordinatorError {
         } else {
             Self::regular(e)
         }
+    }
+}
+
+impl From<&'static str> for ErrorKind {
+    fn from(msg: &'static str) -> Self {
+        Self::StaticMessage(msg)
+    }
+}
+
+impl From<String> for ErrorKind {
+    fn from(msg: String) -> Self {
+        Self::Message(msg)
     }
 }

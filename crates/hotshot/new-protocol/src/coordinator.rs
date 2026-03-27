@@ -112,8 +112,12 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                 Some(cert2) = self.vote2_collector.next() => {
                     return Ok(ConsensusInput::Certificate2(cert2))
                 }
-                Some(checkpoint_cert) = self.checkpoint_collector.next() => {
-                    self.gc(checkpoint_cert.view_number(), checkpoint_cert.epoch().unwrap());
+                Some(cert) = self.checkpoint_collector.next() => {
+                    let Some(epoch) = cert.epoch() else {
+                        let msg = format!("missing epoch in view {}", cert.view_number());
+                        return Err(CoordinatorError::critical(msg).context("gc certificate"))
+                    };
+                    self.gc(cert.view_number(), epoch);
                 }
                 Some(item) = self.vid_disperser.next() => match item {
                     Ok((view, _, disperse)) => {
