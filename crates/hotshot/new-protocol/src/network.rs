@@ -32,6 +32,9 @@ where
             upgrade_lock: u,
         }
     }
+    pub fn gc(&mut self, _view_number: ViewNumber, _epoch: EpochNumber) {
+        // TODO: Implement
+    }
 
     pub async fn receive(&mut self) -> Result<Message<T>> {
         let m = self.network.recv_message().await?;

@@ -156,6 +156,21 @@ impl Committable for EpochNumber {
 
 impl_u64_wrapper!(EpochNumber, 1u64);
 
+#[derive(
+    Copy, Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
+#[serde(transparent)]
+pub struct BlockNumber(u64);
+
+impl Committable for BlockNumber {
+    fn commit(&self) -> Commitment<Self> {
+        let builder = RawCommitmentBuilder::new("BlockNumber Commitment");
+        builder.u64(self.0).finalize()
+    }
+}
+
+impl_u64_wrapper!(BlockNumber, 0u64);
+
 /// A proposal to start providing data availability for a block.
 #[derive(derive_more::Debug, Serialize, Deserialize, Clone, Eq, PartialEq, Hash)]
 #[serde(bound = "TYPES: NodeType")]
