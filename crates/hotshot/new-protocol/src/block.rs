@@ -117,11 +117,10 @@ impl<T: NodeType> BlockBuilder<T> {
 
     /// Returns transactions and an optional dedup manifest to broadcast.
     pub fn drain(&mut self, view: ViewNumber) -> (Vec<T::Transaction>, Option<DedupManifest<T>>) {
-        let txs: Vec<_> = self.leader_buffer.drain().map(|(_, tx)| tx).collect();
+        let (hashes, txs): (Vec<_>, Vec<_>) = self.leader_buffer.drain().unzip();
         self.leader_total_bytes = 0;
 
         let manifest = if !txs.is_empty() {
-            let hashes = txs.iter().map(|tx| tx.commit()).collect();
             Some(DedupManifest { view, hashes })
         } else {
             None
