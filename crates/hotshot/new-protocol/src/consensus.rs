@@ -37,6 +37,7 @@ use crate::{
 };
 
 #[derive(Eq, PartialEq, Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 pub enum ConsensusInput<T: NodeType> {
     BlockBuilt {
         view: ViewNumber,

@@ -59,6 +59,7 @@ pub struct HeaderResponse<T: NodeType> {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[allow(clippy::large_enum_variant)]
 pub enum StateManagerOutput<T: NodeType> {
     State {
         response: StateResponse<T>,

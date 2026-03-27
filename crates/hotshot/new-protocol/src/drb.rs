@@ -61,7 +61,7 @@ impl DrbRequester {
     pub fn gc(&mut self, epoch: EpochNumber) {
         let keep = self.calculations.split_off(&epoch);
         self.completed_epochs = self.completed_epochs.split_off(&epoch);
-        for (_epoch, handle) in &self.calculations {
+        for handle in self.calculations.values() {
             handle.abort();
         }
         self.calculations = keep;
