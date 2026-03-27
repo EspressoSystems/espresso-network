@@ -1,6 +1,6 @@
 # Contract Tests
 
-This directory contains test suites for the Espresso Sequencer smart contracts, focusing on the StakeTable contract.
+This directory contains test suites for the Espresso Network smart contracts, focusing on the StakeTable contract.
 
 ## Running Tests
 

@@ -165,11 +165,11 @@ else
     "")
     # By default compile all binaries
     cargo_cmd_line="cargo build $cargo_extra_args \
-    && cargo build --bin espresso-dev-node --features 'embedded-db testing' $cargo_extra_args \
+    && cargo build -p espresso-dev-node  $cargo_extra_args \
     && cargo build -p sequencer-sqlite $cargo_extra_args"
       ;;
     "espresso-dev-node")
-      cargo_cmd_line="cargo build --bin espresso-dev-node --features 'embedded-db testing' $cargo_extra_args"
+      cargo_cmd_line="cargo build -p espresso-dev-node $cargo_extra_args"
       ;;
     "sequencer")
       cargo_cmd_line="cargo build \
@@ -278,5 +278,5 @@ cp package.json yarn.lock "$workdir/"
 export DOCKER_BUILDKIT=1
 
 for image in "${images[@]}"; do
-  docker build --platform $platform -t "ghcr.io/espressosystems/espresso-sequencer/$image:main" -f "docker/$image.Dockerfile" "$workdir"
+  docker build --platform $platform -t "ghcr.io/espressosystems/espresso-network/$image:main" -f "docker/$image.Dockerfile" "$workdir"
 done

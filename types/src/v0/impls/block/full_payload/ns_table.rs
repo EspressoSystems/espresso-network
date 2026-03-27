@@ -89,7 +89,7 @@ impl NsTable {
         let start = index.0 * (NS_ID_BYTE_LEN + NS_OFFSET_BYTE_LEN) + NUM_NSS_BYTE_LEN;
 
         // TODO hack to deserialize `NamespaceId` from `NS_ID_BYTE_LEN` bytes
-        // https://github.com/EspressoSystems/espresso-sequencer/issues/1574
+        // https://github.com/EspressoSystems/espresso-network/issues/1574
         NamespaceId::from(u32_from_bytes::<NS_ID_BYTE_LEN>(
             &self.bytes[start..start + NS_ID_BYTE_LEN],
         ))
@@ -114,9 +114,9 @@ impl NsTable {
     /// 2. All offsets must increase monotonically. Offsets
     ///    must be nonzero. Namespace IDs must be unique.
     /// 3. Header consistent with byte length. (Obsolete after
-    ///    <https://github.com/EspressoSystems/espresso-sequencer/issues/1604>.)
+    ///    <https://github.com/EspressoSystems/espresso-network/issues/1604>.)
     /// 4. Final offset must equal `payload_byte_len`. (Obsolete after
-    ///    <https://github.com/EspressoSystems/espresso-sequencer/issues/1604>.)
+    ///    <https://github.com/EspressoSystems/espresso-network/issues/1604>.)
     ///    If the namespace table is empty then `payload_byte_len` must be 0.
     pub fn validate(
         &self,
@@ -165,7 +165,7 @@ impl NsTable {
     /// QUANTITY IS NEVER USED. Instead use [`NsTable::len`].
     ///
     /// TODO Delete this method after
-    /// <https://github.com/EspressoSystems/espresso-sequencer/issues/1604>
+    /// <https://github.com/EspressoSystems/espresso-network/issues/1604>
     fn read_num_nss(&self) -> usize {
         let num_nss_byte_len = NUM_NSS_BYTE_LEN.min(self.bytes.len());
         usize_from_bytes::<NUM_NSS_BYTE_LEN>(&self.bytes[..num_nss_byte_len])
@@ -206,7 +206,7 @@ impl NsTable {
         // Header must declare the correct number of namespaces
         //
         // TODO this check obsolete after
-        // https://github.com/EspressoSystems/espresso-sequencer/issues/1604
+        // https://github.com/EspressoSystems/espresso-network/issues/1604
         if self.len().0 != self.read_num_nss() {
             return Err(InvalidHeader);
         }
