@@ -326,7 +326,9 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
             },
             ConsensusOutput::TimeoutCertificateReceived(..) => {}, // TODO
             ConsensusOutput::ViewSyncCertificateReceived(_) => {}, // TODO
-            ConsensusOutput::ViewChanged(..) => {},                // TODO
+            ConsensusOutput::ViewChanged(view, _) => {
+                self.timer.reset_with(view);
+            },
         }
         Ok(())
     }

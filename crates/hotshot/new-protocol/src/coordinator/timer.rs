@@ -30,6 +30,11 @@ impl Timer {
         self.view += 1;
         self.sleep.as_mut().reset(Instant::now() + self.duration);
     }
+
+    pub fn reset_with(&mut self, v: ViewNumber) {
+        self.view = v;
+        self.sleep.as_mut().reset(Instant::now() + self.duration);
+    }
 }
 
 impl Future for Timer {
