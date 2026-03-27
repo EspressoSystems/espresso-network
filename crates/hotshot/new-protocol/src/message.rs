@@ -23,9 +23,9 @@ pub type Certificate2<TYPES> = SimpleCertificate<TYPES, Vote2Data<TYPES>, Succes
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 #[serde(bound(deserialize = ""))]
-pub struct ProposalMessage<TYPES: NodeType> {
-    pub(crate) proposal: Proposal<TYPES, QuorumProposal2<TYPES>>,
-    pub(crate) vid_share: VidDisperseShare2<TYPES>,
+pub struct ProposalMessage<T: NodeType> {
+    pub proposal: Proposal<T, QuorumProposal2<T>>,
+    pub vid_share: VidDisperseShare2<T>,
 }
 
 impl<TYPES: NodeType> HasViewNumber for ProposalMessage<TYPES> {
@@ -94,8 +94,8 @@ impl<TYPES: NodeType> Committable for Vote2Data<TYPES> {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 #[serde(bound(deserialize = ""))]
 pub struct Vote1<TYPES: NodeType> {
-    pub(crate) vote: QuorumVote2<TYPES>,
-    pub(crate) vid_share: VidDisperseShare2<TYPES>,
+    pub vote: QuorumVote2<TYPES>,
+    pub vid_share: VidDisperseShare2<TYPES>,
 }
 
 impl<TYPES: NodeType> HasViewNumber for Vote1<TYPES> {
@@ -108,6 +108,7 @@ impl<TYPES: NodeType> QuorumMarker for Vote2Data<TYPES> {}
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 #[serde(bound(deserialize = ""))]
+#[allow(clippy::large_enum_variant)]
 pub enum ConsensusMessage<TYPES: NodeType> {
     Proposal(ProposalMessage<TYPES>),
     Vote1(Vote1<TYPES>),
@@ -159,6 +160,7 @@ impl<TYPES: NodeType> HasViewNumber for ViewSyncMessage<TYPES> {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 #[serde(bound(deserialize = ""))]
+#[allow(clippy::large_enum_variant)]
 pub enum MessageType<TYPES: NodeType> {
     Consensus(ConsensusMessage<TYPES>),
     ViewSync(ViewSyncMessage<TYPES>),

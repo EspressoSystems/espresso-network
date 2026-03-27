@@ -1,13 +1,12 @@
 use std::{
     collections::{BTreeMap, HashMap},
-    future::{Pending, pending},
     sync::Arc,
     time::Duration,
 };
 
 use async_lock::RwLock;
 use committable::{Commitment, Committable};
-use futures::{StreamExt, future::Either};
+use futures::StreamExt;
 use hotshot::{
     traits::{BlockPayload, ValidatedState, implementations::MemoryNetwork},
     types::{BLSPrivKey, BLSPubKey, SchnorrPubKey},
@@ -45,11 +44,13 @@ use hotshot_types::{
 };
 
 use crate::{
-    events::{ConsensusInput, Event, StateResponse},
+    consensus::ConsensusInput,
     helpers::{proposal_commitment, upgrade_lock},
     message::{
-        Certificate1, Certificate2, ConsensusMessage, ProposalMessage, Vote1, Vote2, Vote2Data,
+        Certificate1, Certificate2, ConsensusMessage, Message, MessageType, ProposalMessage, Vote1,
+        Vote2, Vote2Data,
     },
+    state::StateResponse,
 };
 
 #[allow(dead_code)]
@@ -94,34 +95,36 @@ impl TestView {
     }
 
     /// Build an Event for a proposal.
-    pub fn proposal_input(&self, recipient_key: &BLSPubKey) -> Event<TestTypes> {
-        Event::MessageReceived(ConsensusMessage::Proposal(
-            self.proposal_message(recipient_key),
-        ))
+    pub fn proposal_input(&self, recipient_key: &BLSPubKey) -> Message<TestTypes> {
+        Message {
+            sender: self.leader_public_key,
+            message_type: MessageType::Consensus(ConsensusMessage::Proposal(
+                self.proposal_message(recipient_key),
+            )),
+        }
+    }
+    pub fn proposal_input_consensus(&self, recipient_key: &BLSPubKey) -> ConsensusInput<TestTypes> {
+        ConsensusInput::Proposal(self.proposal_message(recipient_key))
     }
 
     /// Build an Event for block reconstructed.
-    pub fn block_reconstructed_input(&self) -> Event<TestTypes> {
-        Event::BlockReconstructed(
-            self.view_number,
-            TestBlockPayload::genesis(),
-            self.vid_commitment(),
-        )
+    pub fn block_reconstructed_input(&self) -> ConsensusInput<TestTypes> {
+        ConsensusInput::BlockReconstructed(self.view_number, self.vid_commitment())
     }
 
     /// Build an Event for Certificate1.
-    pub fn cert1_input(&self) -> Event<TestTypes> {
-        Event::Certificate1Formed(self.cert1.clone())
+    pub fn cert1_input(&self) -> ConsensusInput<TestTypes> {
+        ConsensusInput::Certificate1(self.cert1.clone())
     }
 
     /// Build an Event for Certificate2.
-    pub fn cert2_input(&self) -> Event<TestTypes> {
-        Event::Certificate2Formed(self.cert2.clone())
+    pub fn cert2_input(&self) -> ConsensusInput<TestTypes> {
+        ConsensusInput::Certificate2(self.cert2.clone())
     }
 
     /// Build a Vote1 Event from a specific validator, carrying that validator's
     /// QuorumVote2 and VID share.
-    pub fn vote1_input(&self, node_index: u64) -> Event<TestTypes> {
+    pub fn vote1_input(&self, node_index: u64) -> Message<TestTypes> {
         let (pub_key, priv_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], node_index);
         let data = hotshot_types::simple_vote::QuorumData2 {
             leaf_commit: proposal_commitment(&self.proposal.data.proposal),
@@ -144,11 +147,17 @@ impl TestView {
             .find(|s| s.recipient_key == pub_key)
             .expect("VID share not found for node")
             .clone();
-        Event::MessageReceived(ConsensusMessage::Vote1(Vote1 { vote, vid_share }))
+        Message {
+            sender: self.leader_public_key,
+            message_type: MessageType::Consensus(ConsensusMessage::Vote1(Vote1 {
+                vote,
+                vid_share,
+            })),
+        }
     }
 
     /// Build a Vote2 Event from a specific validator.
-    pub fn vote2_input(&self, node_index: u64) -> Event<TestTypes> {
+    pub fn vote2_input(&self, node_index: u64) -> Message<TestTypes> {
         let (pub_key, priv_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], node_index);
         let data = Vote2Data {
             leaf_commit: proposal_commitment(&self.proposal.data.proposal),
@@ -165,11 +174,14 @@ impl TestView {
             &upgrade_lock(),
         )
         .expect("Failed to sign Vote2");
-        Event::MessageReceived(ConsensusMessage::Vote2(vote))
+        Message {
+            sender: self.leader_public_key,
+            message_type: MessageType::Consensus(ConsensusMessage::Vote2(vote)),
+        }
     }
 
     /// Build a TimeoutVote Event from a specific validator.
-    pub fn timeout_vote_input(&self, node_index: u64) -> Event<TestTypes> {
+    pub fn timeout_vote_input(&self, node_index: u64) -> Message<TestTypes> {
         let (pub_key, priv_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], node_index);
         let data = TimeoutData2 {
             view: self.view_number,
@@ -183,19 +195,16 @@ impl TestView {
             &upgrade_lock(),
         )
         .expect("Failed to sign TimeoutVote2");
-        Event::MessageReceived(ConsensusMessage::TimeoutVote(vote))
+        Message {
+            sender: self.leader_public_key,
+            message_type: MessageType::Consensus(ConsensusMessage::TimeoutVote(vote)),
+        }
     }
 
     /// Build an Event for a timeout certificate.
     #[allow(dead_code)]
-    pub fn timeout_cert_input(&self) -> Event<TestTypes> {
-        Event::TimeoutCertificateReceived(self.timeout_cert.clone())
-    }
-
-    /// Build an Event for a view sync certificate.
-    #[allow(dead_code)]
-    pub fn view_sync_cert_input(&self) -> Event<TestTypes> {
-        Event::ViewSyncCertificateReceived(self.view_sync_cert.clone())
+    pub fn timeout_cert_input(&self) -> ConsensusInput<TestTypes> {
+        ConsensusInput::TimeoutCertificate(self.timeout_cert.clone())
     }
 }
 
@@ -360,6 +369,7 @@ impl MockBlock {
     }
 }
 
+#[allow(dead_code)]
 pub fn mock_builder_fee() -> BuilderFee<TestTypes> {
     use hotshot_types::traits::signature_key::BuilderSignatureKey;
     let (builder_key, builder_private_key) =
@@ -521,22 +531,4 @@ async fn build_view_sync_cert(
         &upgrade_lock::<TestTypes>(),
     )
     .await
-}
-
-/// Helper for optional `IntoFuture`s.
-///
-/// If no future is given, `pending` will be used, i.e. no result will become available.
-pub(crate) struct PendingIfNone<T>(pub Option<T>);
-
-impl<T: IntoFuture> IntoFuture for PendingIfNone<T> {
-    type Output = T::Output;
-    type IntoFuture = Either<Pending<T::Output>, T::IntoFuture>;
-
-    fn into_future(self) -> Self::IntoFuture {
-        if let Some(v) = self.0 {
-            Either::Right(v.into_future())
-        } else {
-            Either::Left(pending())
-        }
-    }
 }

@@ -14,6 +14,7 @@ stats = []
 [dependencies]
 async-broadcast = { workspace = true }
 async-lock = { workspace = true }
+async-trait = { workspace = true }
 bon = { workspace = true }
 committable = { workspace = true }
 futures = { workspace = true }
@@ -22,6 +23,7 @@ hotshot-example-types = { workspace = true }
 hotshot-testing = { workspace = true }
 hotshot-types = { workspace = true }
 serde = { workspace = true }
+thiserror = { workspace = true }
 time = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
