@@ -44,9 +44,6 @@ pub(crate) struct BlockBuilder<T: NodeType> {
     dedup_views: VecDeque<(ViewNumber, Vec<Commitment<T::Transaction>>)>,
     config: BlockBuilderConfig,
     current_view: ViewNumber,
-    #[cfg(test)]
-    #[allow(clippy::type_complexity)]
-    test_drain: Option<Box<dyn Fn(ViewNumber) -> Vec<T::Transaction> + Send>>,
 }
 
 impl<T: NodeType> Default for BlockBuilder<T> {
@@ -66,18 +63,7 @@ impl<T: NodeType> BlockBuilder<T> {
             dedup_views: VecDeque::new(),
             config,
             current_view: ViewNumber::genesis(),
-            #[cfg(test)]
-            test_drain: None,
         }
-    }
-
-    #[cfg(test)]
-    pub fn with_test_drain(
-        mut self,
-        f: impl Fn(ViewNumber) -> Vec<T::Transaction> + Send + 'static,
-    ) -> Self {
-        self.test_drain = Some(Box::new(f));
-        self
     }
 
     pub fn on_submit_transaction(&mut self, tx: T::Transaction) {
@@ -131,20 +117,6 @@ impl<T: NodeType> BlockBuilder<T> {
 
     /// Returns transactions and an optional dedup manifest to broadcast.
     pub fn drain(&mut self, view: ViewNumber) -> (Vec<T::Transaction>, Option<DedupManifest<T>>) {
-        #[cfg(test)]
-        if let Some(drain_fn) = &self.test_drain {
-            let txs = drain_fn(view);
-            let manifest = if !txs.is_empty() {
-                Some(DedupManifest {
-                    view,
-                    hashes: txs.iter().map(|tx| tx.commit()).collect(),
-                })
-            } else {
-                None
-            };
-            return (txs, manifest);
-        }
-
         let txs: Vec<_> = self.leader_buffer.drain().map(|(_, tx)| tx).collect();
         self.leader_total_bytes = 0;
 
