@@ -282,10 +282,10 @@ where
         }
 
         // Command channel from application to network.
-        let (otx, orx) = mpsc::channel(cfg.total_capacity_egress);
+        let (otx, orx) = mpsc::channel(cfg.total_capacity_egress.get());
 
         // Channel of messages from peers to the application.
-        let (itx, irx) = mpsc::channel(cfg.total_capacity_ingress);
+        let (itx, irx) = mpsc::channel(cfg.total_capacity_ingress.get());
 
         let mut interval = tokio::time::interval(PING_INTERVAL);
         interval.set_missed_tick_behavior(MissedTickBehavior::Delay);

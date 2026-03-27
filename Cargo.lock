@@ -6170,6 +6170,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "hotshot-new-protocol"
+version = "0.1.0"
+dependencies = [
+ "async-broadcast",
+ "async-lock 3.4.2",
+ "bon",
+ "committable",
+ "futures",
+ "hotshot",
+ "hotshot-example-types",
+ "hotshot-testing",
+ "hotshot-types",
+ "serde",
+ "time 0.3.47",
+ "tokio",
+ "tracing",
+ "versions",
+]
+
+[[package]]
 name = "hotshot-orchestrator"
 version = "0.1.0"
 dependencies = [

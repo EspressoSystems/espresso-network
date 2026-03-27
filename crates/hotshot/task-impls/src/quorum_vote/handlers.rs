@@ -453,7 +453,6 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>>(
         &private_key,
         &upgrade_lock,
     )
-    .await
     .wrap()
     .context(error!("Failed to sign vote. This should never happen."))?;
     let now = Instant::now();
