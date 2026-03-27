@@ -16,7 +16,7 @@ use hotshot_types::{
 use super::utils::mock_membership;
 use crate::{
     consensus::{Consensus, ConsensusInput, ConsensusOutput},
-    coordinator::Timer,
+    coordinator::timer::Timer,
     drb::DrbRequester,
     helpers::upgrade_lock,
     message::Message,
@@ -89,7 +89,7 @@ impl TestHarness {
             .drb_requester(drb_request_task)
             .membership_coordinator(membership)
             .outbox(Outbox::new())
-            .timer(Timer::new(timer_duration))
+            .timer(Timer::new(timer_duration, ViewNumber::genesis()))
             .public_key(public_key)
             .build();
         Self {

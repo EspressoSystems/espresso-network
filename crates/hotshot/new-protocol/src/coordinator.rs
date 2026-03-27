@@ -1,8 +1,8 @@
-use std::{fmt, time::Duration};
+pub mod error;
+pub(crate) mod timer;
 
 use bon::Builder;
-use futures::{FutureExt, future::BoxFuture};
-use hotshot::traits::{NetworkError, NodeImplementation};
+use hotshot::traits::NodeImplementation;
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
@@ -11,43 +11,26 @@ use hotshot_types::{
     traits::{block_contents::BlockHeader, node_implementation::NodeType},
     vote::HasViewNumber,
 };
-use tokio::{select, time::sleep};
+use tokio::select;
 use tracing::{error, warn};
 
 use crate::{
     consensus::{Consensus, ConsensusInput, ConsensusOutput},
+    coordinator::{
+        error::{CoordinatorError, ErrorKind, Severity},
+        timer::Timer,
+    },
     drb::DrbRequester,
     message::{
         Certificate2, CheckpointCertificate, CheckpointVote, ConsensusMessage, Message,
         MessageType, Vote2,
     },
-    network::{Network, is_critical},
+    network::Network,
     outbox::Outbox,
     state::{StateManager, StateManagerOutput},
     vid::{VidDisperseRequest, VidDisperser, VidReconstructor, VidShareInput},
     vote::VoteCollector,
 };
-
-pub struct Timer {
-    pub(crate) timer: BoxFuture<'static, ViewNumber>,
-    duration: Duration,
-}
-
-impl Timer {
-    pub fn new(duration: Duration) -> Self {
-        Self {
-            timer: sleep(duration)
-                .map(|_| ViewNumber::genesis())
-                .fuse()
-                .boxed(),
-            duration,
-        }
-    }
-
-    pub fn reset(&mut self, view: ViewNumber) {
-        self.timer = sleep(self.duration).map(move |_| view).fuse().boxed();
-    }
-}
 
 #[derive(Builder)]
 pub struct Coordinator<T: NodeType, I: NodeImplementation<T>> {
@@ -106,16 +89,14 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                             return Ok(input)
                         }
                     }
-                    Err(err) if is_critical(&err) => {
-                        return Err(CoordinatorError::critical(err).context("network receive"))
-                    }
-                    Err(err) => {
-                        return Err(CoordinatorError::regular(err).context("network receive"))
+                    Err(e) => {
+                        return Err(CoordinatorError::from(e).context("network receive"))
                     }
                 },
-                view = &mut self.timer.timer => {
-                    self.timer.reset(view + 1);
-                    return Ok(ConsensusInput::Timeout(view))
+                () = &mut self.timer => {
+                    let input = ConsensusInput::Timeout(self.timer.view());
+                    self.timer.reset();
+                    return Ok(input)
                 }
                 Some(output) = self.state_manager.next() => {
                     if let Some(input) = self.on_state_manager_output(output).await {
@@ -307,84 +288,5 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
         self.timeout_collector.gc(view);
         self.checkpoint_collector.gc(view);
         self.drb_requester.gc(epoch);
-    }
-}
-
-#[derive(Debug, thiserror::Error)]
-#[error("{severity} coordinator error: {context}")]
-pub struct CoordinatorError {
-    pub severity: Severity,
-    pub source: ErrorKind,
-    pub context: &'static str,
-}
-
-impl CoordinatorError {
-    pub fn regular<E: Into<ErrorKind>>(e: E) -> Self {
-        Self {
-            context: "",
-            severity: Severity::Regular,
-            source: e.into(),
-        }
-    }
-
-    pub fn critical<E: Into<ErrorKind>>(e: E) -> Self {
-        Self {
-            context: "",
-            severity: Severity::Critical,
-            source: e.into(),
-        }
-    }
-
-    pub fn unspecified() -> Self {
-        Self {
-            context: "",
-            severity: Severity::Unspecified,
-            source: ErrorKind::Unspecified,
-        }
-    }
-
-    pub fn context(mut self, m: &'static str) -> Self {
-        self.context = m;
-        self
-    }
-}
-
-#[derive(Debug, Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub enum Severity {
-    Unspecified,
-    Regular,
-    Critical,
-}
-
-impl fmt::Display for Severity {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Unspecified => f.write_str("unspecified"),
-            Self::Regular => f.write_str("regular"),
-            Self::Critical => f.write_str("critical"),
-        }
-    }
-}
-
-#[derive(Debug, thiserror::Error)]
-#[non_exhaustive]
-pub enum ErrorKind {
-    #[error("network error: {0}")]
-    Network(#[from] NetworkError),
-
-    #[error("unspecified error")]
-    Unspecified,
-
-    #[error("coordinator has no inputs")]
-    NoInput,
-}
-
-impl From<NetworkError> for CoordinatorError {
-    fn from(e: NetworkError) -> Self {
-        if is_critical(&e) {
-            Self::critical(e)
-        } else {
-            Self::regular(e)
-        }
     }
 }
