@@ -7,7 +7,7 @@ use hotshot_example_types::{
     state_types::TestValidatedState,
 };
 use hotshot_types::{
-    data::{Leaf2, QuorumProposalWrapper, VidDisperse, ViewNumber},
+    data::{VidDisperse, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     traits::signature_key::SignatureKey,
 };
@@ -22,6 +22,7 @@ use super::common::{
 use crate::{
     consensus::{Consensus, ConsensusInput, ConsensusOutput},
     helpers::{proposal_commitment, upgrade_lock},
+    message::Proposal,
     outbox::Outbox,
     state::StateResponse,
     tests::common::assertions::{count_leaf_decided, count_state_requests},
@@ -72,10 +73,8 @@ impl ConsensusHarness {
             },
             ConsensusOutput::RequestBlockAndHeader(req) => {
                 let mock_block = MockBlock::new();
-                let wrapper = QuorumProposalWrapper::<TestTypes> {
-                    proposal: req.parent_proposal.clone(),
-                };
-                let parent_leaf = Leaf2::from_quorum_proposal(&wrapper);
+
+                let parent_leaf = req.parent_proposal.clone().into();
                 let header = TestBlockHeader::new(
                     &parent_leaf,
                     mock_block.payload_commitment,
@@ -378,11 +377,11 @@ async fn test_state_verification_failed_removes_proposal() {
     harness.collected.extend(outbox.take());
 
     // Send StateVerificationFailed — removes proposal
-    let proposal = &test_data.views[1].proposal.data.proposal;
+    let proposal: Proposal<TestTypes> = test_data.views[1].proposal.data.clone().into();
     harness
         .apply(ConsensusInput::StateValidationFailed(StateResponse {
             view: test_data.views[1].view_number,
-            commitment: proposal_commitment(proposal),
+            commitment: proposal_commitment(&proposal),
             state: Arc::new(
                 <TestValidatedState as ValidatedState<TestTypes>>::from_header(
                     &proposal.block_header,

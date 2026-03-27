@@ -8,13 +8,12 @@ use committable::{Commitment, Committable};
 use hotshot::traits::BlockPayload;
 use hotshot_types::{
     data::{
-        EpochNumber, Leaf2, QuorumProposal2, QuorumProposalWrapper, VidCommitment, VidCommitment2,
-        VidDisperse2, VidDisperseShare2, ViewChangeEvidence2, ViewNumber,
-        vid_disperse::vid_total_weight,
+        EpochNumber, Leaf2, VidCommitment, VidCommitment2, VidDisperse2, VidDisperseShare2,
+        ViewChangeEvidence2, ViewNumber, vid_disperse::vid_total_weight,
     },
     drb::DrbInput,
     epoch_membership::EpochMembershipCoordinator,
-    message::Proposal,
+    message::Proposal as SignedProposal,
     simple_certificate::{TimeoutCertificate2, ViewSyncFinalizeCertificate2},
     simple_vote::{HasEpoch, QuorumData2, SimpleVote, TimeoutVote2},
     stake_table::StakeTableEntries,
@@ -29,8 +28,8 @@ use crate::{
     block::BlockAndHeaderRequest,
     helpers::{proposal_commitment, upgrade_lock},
     message::{
-        Certificate1, Certificate2, CheckpointData, CheckpointVote, ProposalMessage, Vote1, Vote2,
-        Vote2Data,
+        Certificate1, Certificate2, CheckpointData, CheckpointVote, Proposal, ProposalMessage,
+        Vote1, Vote2, Vote2Data,
     },
     outbox::Outbox,
     state::{StateRequest, StateResponse},
@@ -64,7 +63,7 @@ pub enum ConsensusOutput<T: NodeType> {
     RequestDRB(DrbInput),
     RequestProposal(ViewNumber, Commitment<Leaf2<T>>),
     RequestState(StateRequest<T>),
-    SendProposal(Proposal<T, QuorumProposal2<T>>, VidDisperse2<T>),
+    SendProposal(SignedProposal<T, Proposal<T>>, VidDisperse2<T>),
     SendCheckpointVote(CheckpointVote<T>),
     SendTimeoutVote(TimeoutVote2<T>),
     SendVote1(Vote1<T>),
@@ -85,7 +84,7 @@ pub enum ConsensusOutput<T: NodeType> {
 }
 
 pub struct Consensus<T: NodeType> {
-    proposals: BTreeMap<ViewNumber, QuorumProposal2<T>>,
+    proposals: BTreeMap<ViewNumber, Proposal<T>>,
     vid_shares: BTreeMap<ViewNumber, VidDisperseShare2<T>>,
     states_verified: BTreeMap<ViewNumber, Commitment<Leaf2<T>>>,
     blocks_reconstructed: BTreeMap<ViewNumber, VidCommitment2>,
@@ -270,21 +269,14 @@ impl<T: NodeType> Consensus<T> {
 
         // TODO: This signature check is slow (> 1ms).  We should consider
         // if this should be done off the main thread.
-        if let Err(err) = proposal
-            .proposal
-            .validate_signature(&self.stake_table_coordinator)
-            .await
-        {
-            warn!(%view, %err, "invalid proposal signature");
+        if !self.validate_proposal_signature(&proposal.proposal).await {
+            warn!(%view, "invalid proposal signature");
             return Protocol::Abort;
         }
 
         let vid_share = proposal.vid_share;
         let proposal = proposal.proposal.data;
-        let Some(epoch) = proposal.epoch else {
-            warn!(%view, "proposal has no epoch number");
-            return Protocol::Abort;
-        };
+        let epoch = proposal.epoch;
 
         if !vid_matches_proposal(&vid_share, &proposal) {
             debug!("vid share does not match proposal");
@@ -476,10 +468,7 @@ impl<T: NodeType> Consensus<T> {
             debug!(parent = %parent_view, "no proposal for parent view");
             return;
         };
-        let Some(proposal_epoch) = proposal.epoch else {
-            warn!(%view, parent = %parent_view, "proposal has no epoch");
-            return;
-        };
+        let proposal_epoch = proposal.epoch;
         if !self.is_leader(view, proposal_epoch).await {
             debug!(epoch = %proposal_epoch, "not a leader of proposal");
             return;
@@ -499,7 +488,7 @@ impl<T: NodeType> Consensus<T> {
         };
 
         // TODO: Handle epoch change and properly set next epoch qc drb result and state cert
-        let mut proposal = QuorumProposal2::<T> {
+        let mut proposal = Proposal::<T> {
             block_header: header.clone(),
             view_number: view,
             epoch: proposal.epoch,
@@ -528,8 +517,7 @@ impl<T: NodeType> Consensus<T> {
         // TODO: Handle epoch change here
 
         // Sign the proposal
-        let proposed_leaf =
-            Leaf2::from_quorum_proposal(&QuorumProposalWrapper::from(proposal.clone()));
+        let proposed_leaf: Leaf2<T> = proposal.clone().into();
         let signature =
             match T::SignatureKey::sign(&self.private_key, proposed_leaf.commit().as_ref()) {
                 Ok(sig) => sig,
@@ -539,7 +527,7 @@ impl<T: NodeType> Consensus<T> {
                 },
             };
 
-        let message = Proposal {
+        let message = SignedProposal {
             data: proposal,
             signature,
             _pd: PhantomData,
@@ -567,7 +555,7 @@ impl<T: NodeType> Consensus<T> {
             return;
         }
         // we have a second certificate, and matching proposal, it is decided.
-        let leaf = Leaf2::from_quorum_proposal(&QuorumProposalWrapper::from(proposal.clone()));
+        let leaf: Leaf2<T> = proposal.clone().into();
         self.last_decided_view = max(self.last_decided_view, leaf.view_number());
         let mut gc = None;
         if leaf.block_header().block_number() % self.garbage_collection_interval == 0 {
@@ -583,7 +571,7 @@ impl<T: NodeType> Consensus<T> {
             if proposal_commit != parent_commit {
                 break;
             }
-            let leaf = Leaf2::from_quorum_proposal(&QuorumProposalWrapper::from(proposal.clone()));
+            let leaf: Leaf2<T> = proposal.clone().into();
             if gc.is_none()
                 && leaf.block_header().block_number() % self.garbage_collection_interval == 0
             {
@@ -681,7 +669,7 @@ impl<T: NodeType> Consensus<T> {
         let inner_vote = match SimpleVote::create_signed_vote(
             QuorumData2 {
                 leaf_commit: proposal_commit,
-                epoch: proposal.epoch,
+                epoch: proposal.epoch(),
                 block_number: Some(proposal.block_header.block_number()),
             },
             view,
@@ -724,10 +712,7 @@ impl<T: NodeType> Consensus<T> {
             debug!("proposal not available");
             return;
         };
-        let Some(proposal_epoch) = proposal.epoch else {
-            warn!(%view, "proposal has no epoch number");
-            return;
-        };
+        let proposal_epoch = proposal.epoch;
 
         let proposal_commit = proposal_commitment(proposal);
 
@@ -798,7 +783,7 @@ impl<T: NodeType> Consensus<T> {
     }
 
     #[instrument(level = "trace", skip_all)]
-    fn is_safe(&self, proposal: &QuorumProposal2<T>) -> bool {
+    fn is_safe(&self, proposal: &Proposal<T>) -> bool {
         let Some(locked_cert) = self.locked_cert.as_ref() else {
             // Locked certificate is not set which means it is at genesis
             debug!("at genesis");
@@ -873,9 +858,34 @@ impl<T: NodeType> Consensus<T> {
             },
         }
     }
+    async fn validate_proposal_signature(&self, proposal: &SignedProposal<T, Proposal<T>>) -> bool {
+        let view = proposal.data.view_number();
+        let epoch = proposal.data.epoch;
+        let membership = match self
+            .stake_table_coordinator
+            .membership_for_epoch(Some(epoch))
+            .await
+        {
+            Ok(membership) => membership,
+            Err(err) => {
+                warn!(%epoch, %err, "failed to get stake table");
+                return false;
+            },
+        };
+        let view_leader_key = match membership.leader(view).await {
+            Ok(leader) => leader,
+            Err(err) => {
+                warn!(%view, %epoch, %err, "failed to get leader from stake table");
+                return false;
+            },
+        };
+        let proposed_leaf: Leaf2<T> = proposal.data.clone().into();
+        let signature = &proposal.signature;
+        view_leader_key.validate(signature, proposed_leaf.commit().as_ref())
+    }
 }
 
-fn vid_matches_proposal<T>(share: &VidDisperseShare2<T>, proposal: &QuorumProposal2<T>) -> bool
+fn vid_matches_proposal<T>(share: &VidDisperseShare2<T>, proposal: &Proposal<T>) -> bool
 where
     T: NodeType,
 {

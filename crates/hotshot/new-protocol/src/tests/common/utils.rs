@@ -24,11 +24,11 @@ use hotshot_testing::{
 };
 use hotshot_types::{
     data::{
-        EpochNumber, Leaf2, QuorumProposal2, QuorumProposalWrapper, VidCommitment, VidDisperse2,
-        VidDisperseShare2, ViewNumber, vid_commitment,
+        EpochNumber, Leaf2, QuorumProposalWrapper, VidCommitment, VidDisperse2, VidDisperseShare2,
+        ViewNumber, vid_commitment,
     },
     epoch_membership::EpochMembershipCoordinator,
-    message::Proposal,
+    message::Proposal as SignedProposal,
     simple_certificate::{TimeoutCertificate2, ViewSyncFinalizeCertificate2},
     simple_vote::{
         QuorumVote2, TimeoutData2, TimeoutVote2, ViewSyncFinalizeData2, ViewSyncFinalizeVote2,
@@ -47,8 +47,8 @@ use crate::{
     consensus::ConsensusInput,
     helpers::{proposal_commitment, upgrade_lock},
     message::{
-        Certificate1, Certificate2, ConsensusMessage, Message, MessageType, ProposalMessage, Vote1,
-        Vote2, Vote2Data,
+        Certificate1, Certificate2, ConsensusMessage, Message, MessageType, Proposal,
+        ProposalMessage, Vote1, Vote2, Vote2Data,
     },
     state::StateResponse,
 };
@@ -58,7 +58,7 @@ pub struct TestView {
     pub view_number: ViewNumber,
     pub epoch_number: EpochNumber,
     pub leader_public_key: BLSPubKey,
-    pub proposal: Proposal<TestTypes, QuorumProposalWrapper<TestTypes>>,
+    pub proposal: SignedProposal<TestTypes, QuorumProposalWrapper<TestTypes>>,
     pub leaf: Leaf2<TestTypes>,
     pub vid_disperse: VidDisperse2<TestTypes>,
     pub vid_shares: Vec<VidDisperseShare2<TestTypes>>,
@@ -72,8 +72,8 @@ impl TestView {
     /// Build a ProposalMessage suitable for sending as a ConsensusEvent::Proposal.
     /// `recipient_key` is the public key of the node that will receive the VID share.
     pub fn proposal_message(&self, recipient_key: &BLSPubKey) -> ProposalMessage<TestTypes> {
-        let inner_proposal = Proposal {
-            data: self.proposal.data.proposal.clone(),
+        let inner_proposal = SignedProposal::<TestTypes, Proposal<TestTypes>> {
+            data: self.proposal.data.clone().into(),
             signature: self.proposal.signature.clone(),
             _pd: std::marker::PhantomData,
         };
@@ -127,7 +127,7 @@ impl TestView {
     pub fn vote1_input(&self, node_index: u64) -> Message<TestTypes> {
         let (pub_key, priv_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], node_index);
         let data = hotshot_types::simple_vote::QuorumData2 {
-            leaf_commit: proposal_commitment(&self.proposal.data.proposal),
+            leaf_commit: proposal_commitment(&self.proposal.data.clone().into()),
             epoch: Some(self.epoch_number),
             block_number: Some(BlockHeader::<TestTypes>::block_number(
                 &self.proposal.data.proposal.block_header,
@@ -160,7 +160,7 @@ impl TestView {
     pub fn vote2_input(&self, node_index: u64) -> Message<TestTypes> {
         let (pub_key, priv_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], node_index);
         let data = Vote2Data {
-            leaf_commit: proposal_commitment(&self.proposal.data.proposal),
+            leaf_commit: proposal_commitment(&self.proposal.data.clone().into()),
             epoch: self.epoch_number,
             block_number: BlockHeader::<TestTypes>::block_number(
                 &self.proposal.data.proposal.block_header,
@@ -388,7 +388,7 @@ pub fn mock_builder_fee() -> BuilderFee<TestTypes> {
 }
 
 pub fn state_verified_input(
-    proposal: &QuorumProposal2<TestTypes>,
+    proposal: &Proposal<TestTypes>,
     view: ViewNumber,
 ) -> ConsensusInput<TestTypes> {
     let commitment = proposal_commitment(proposal);

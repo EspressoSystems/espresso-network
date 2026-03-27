@@ -1,9 +1,14 @@
 use committable::{Commitment, Committable};
 use hotshot_types::{
-    data::{EpochNumber, Leaf2, QuorumProposal2, VidDisperseShare2, ViewNumber},
-    message::Proposal,
+    data::{
+        EpochNumber, Leaf2, QuorumProposal2, QuorumProposalWrapper, VidDisperseShare2,
+        ViewChangeEvidence2, ViewNumber,
+    },
+    drb::DrbResult,
+    message::Proposal as SignedProposal,
     simple_certificate::{
-        SimpleCertificate, SuccessThreshold, ViewSyncCommitCertificate2,
+        LightClientStateUpdateCertificateV2, QuorumCertificate2, SimpleCertificate,
+        SuccessThreshold, UpgradeCertificate, ViewSyncCommitCertificate2,
         ViewSyncFinalizeCertificate2, ViewSyncPreCommitCertificate2,
     },
     simple_vote::{
@@ -15,20 +20,104 @@ use hotshot_types::{
 };
 use serde::{Deserialize, Serialize};
 
-pub type Vote2<TYPES> = SimpleVote<TYPES, Vote2Data<TYPES>>;
-pub type CheckpointVote<TYPES> = SimpleVote<TYPES, CheckpointData>;
-pub type CheckpointCertificate<TYPES> = SimpleCertificate<TYPES, CheckpointData, SuccessThreshold>;
-pub type Certificate1<TYPES> = SimpleCertificate<TYPES, QuorumData2<TYPES>, SuccessThreshold>;
-pub type Certificate2<TYPES> = SimpleCertificate<TYPES, Vote2Data<TYPES>, SuccessThreshold>;
+pub type Vote2<T> = SimpleVote<T, Vote2Data<T>>;
+pub type CheckpointVote<T> = SimpleVote<T, CheckpointData>;
+pub type CheckpointCertificate<T> = SimpleCertificate<T, CheckpointData, SuccessThreshold>;
+pub type Certificate1<T> = SimpleCertificate<T, QuorumData2<T>, SuccessThreshold>;
+pub type Certificate2<T> = SimpleCertificate<T, Vote2Data<T>, SuccessThreshold>;
+
+/// Proposal to append a block.
+#[derive(derive_more::Debug, Serialize, Deserialize, Clone, Eq, PartialEq, Hash)]
+#[serde(bound(deserialize = ""))]
+pub struct Proposal<T: NodeType> {
+    /// The block header to append
+    pub block_header: T::BlockHeader,
+
+    /// view number for the proposal
+    pub view_number: ViewNumber,
+
+    /// The epoch number corresponding to the block number. Can be `None` for pre-epoch version.
+    pub epoch: EpochNumber,
+
+    /// certificate that the proposal is chaining from
+    pub justify_qc: QuorumCertificate2<T>,
+
+    /// certificate proving the last block of the epoch is decided
+    pub next_epoch_justify_qc: Option<Certificate2<T>>,
+
+    /// Possible upgrade certificate, which the leader may optionally attach.
+    pub upgrade_certificate: Option<UpgradeCertificate<T>>,
+
+    /// Possible timeout or view sync certificate. If the `justify_qc` is not for a proposal in the immediately preceding view, then either a timeout or view sync certificate must be attached.
+    pub view_change_evidence: Option<ViewChangeEvidence2<T>>,
+
+    /// The DRB result for the next epoch.
+    ///
+    /// This is required only for the last block of the epoch. Nodes will verify that it's
+    /// consistent with the result from their computations.
+    #[serde(with = "serde_bytes")]
+    pub next_drb_result: Option<DrbResult>,
+
+    /// The light client state update certificate for the next epoch.
+    /// This is required for the epoch root.
+    pub state_cert: Option<LightClientStateUpdateCertificateV2<T>>,
+}
+
+impl<T: NodeType> HasViewNumber for Proposal<T> {
+    fn view_number(&self) -> ViewNumber {
+        self.view_number
+    }
+}
+
+impl<T: NodeType> HasEpoch for Proposal<T> {
+    fn epoch(&self) -> Option<EpochNumber> {
+        Some(self.epoch)
+    }
+}
+
+impl<T: NodeType> From<QuorumProposalWrapper<T>> for Proposal<T> {
+    fn from(wrapper: QuorumProposalWrapper<T>) -> Self {
+        let qp = wrapper.proposal;
+        Self {
+            block_header: qp.block_header,
+            view_number: qp.view_number,
+            epoch: qp.epoch.unwrap_or(EpochNumber::new(0)),
+            justify_qc: qp.justify_qc,
+            next_epoch_justify_qc: None,
+            upgrade_certificate: qp.upgrade_certificate,
+            view_change_evidence: qp.view_change_evidence,
+            next_drb_result: qp.next_drb_result,
+            state_cert: qp.state_cert,
+        }
+    }
+}
+
+#[allow(clippy::from_over_into)]
+impl<T: NodeType> Into<Leaf2<T>> for Proposal<T> {
+    fn into(self) -> Leaf2<T> {
+        let qp = QuorumProposal2 {
+            block_header: self.block_header,
+            view_number: self.view_number,
+            epoch: Some(self.epoch),
+            justify_qc: self.justify_qc,
+            next_epoch_justify_qc: None,
+            upgrade_certificate: self.upgrade_certificate,
+            view_change_evidence: self.view_change_evidence,
+            next_drb_result: self.next_drb_result,
+            state_cert: self.state_cert,
+        };
+        Leaf2::from_quorum_proposal(&QuorumProposalWrapper::from(qp))
+    }
+}
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 #[serde(bound(deserialize = ""))]
 pub struct ProposalMessage<T: NodeType> {
-    pub proposal: Proposal<T, QuorumProposal2<T>>,
+    pub proposal: SignedProposal<T, Proposal<T>>,
     pub vid_share: VidDisperseShare2<T>,
 }
 
-impl<TYPES: NodeType> HasViewNumber for ProposalMessage<TYPES> {
+impl<T: NodeType> HasViewNumber for ProposalMessage<T> {
     fn view_number(&self) -> ViewNumber {
         self.proposal.data.view_number
     }
@@ -37,8 +126,8 @@ impl<TYPES: NodeType> HasViewNumber for ProposalMessage<TYPES> {
 /// Data used for a yes vote.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 #[serde(bound(deserialize = ""))]
-pub struct Vote2Data<TYPES: NodeType> {
-    pub leaf_commit: Commitment<Leaf2<TYPES>>,
+pub struct Vote2Data<T: NodeType> {
+    pub leaf_commit: Commitment<Leaf2<T>>,
     pub epoch: EpochNumber,
     pub block_number: u64,
 }
@@ -74,13 +163,13 @@ impl HasEpoch for CheckpointData {
 
 impl QuorumMarker for CheckpointData {}
 
-impl<TYPES: NodeType> HasEpoch for Vote2Data<TYPES> {
+impl<T: NodeType> HasEpoch for Vote2Data<T> {
     fn epoch(&self) -> Option<EpochNumber> {
         Some(self.epoch)
     }
 }
 
-impl<TYPES: NodeType> Committable for Vote2Data<TYPES> {
+impl<T: NodeType> Committable for Vote2Data<T> {
     fn commit(&self) -> Commitment<Self> {
         committable::RawCommitmentBuilder::new("Vote2Data")
             .var_size_bytes(self.leaf_commit.as_ref())
@@ -93,34 +182,34 @@ impl<TYPES: NodeType> Committable for Vote2Data<TYPES> {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 #[serde(bound(deserialize = ""))]
-pub struct Vote1<TYPES: NodeType> {
-    pub vote: QuorumVote2<TYPES>,
-    pub vid_share: VidDisperseShare2<TYPES>,
+pub struct Vote1<T: NodeType> {
+    pub vote: QuorumVote2<T>,
+    pub vid_share: VidDisperseShare2<T>,
 }
 
-impl<TYPES: NodeType> HasViewNumber for Vote1<TYPES> {
+impl<T: NodeType> HasViewNumber for Vote1<T> {
     fn view_number(&self) -> ViewNumber {
         self.vote.view_number()
     }
 }
 
-impl<TYPES: NodeType> QuorumMarker for Vote2Data<TYPES> {}
+impl<T: NodeType> QuorumMarker for Vote2Data<T> {}
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 #[serde(bound(deserialize = ""))]
 #[allow(clippy::large_enum_variant)]
-pub enum ConsensusMessage<TYPES: NodeType> {
-    Proposal(ProposalMessage<TYPES>),
-    Vote1(Vote1<TYPES>),
-    Vote2(Vote2<TYPES>),
-    Certificate1(Certificate1<TYPES>, TYPES::SignatureKey),
-    Certificate2(Certificate2<TYPES>, TYPES::SignatureKey),
-    TimeoutVote(TimeoutVote2<TYPES>),
-    Transactions(Vec<TYPES::Transaction>, ViewNumber),
-    Checkpoint(CheckpointVote<TYPES>),
+pub enum ConsensusMessage<T: NodeType> {
+    Proposal(ProposalMessage<T>),
+    Vote1(Vote1<T>),
+    Vote2(Vote2<T>),
+    Certificate1(Certificate1<T>, T::SignatureKey),
+    Certificate2(Certificate2<T>, T::SignatureKey),
+    TimeoutVote(TimeoutVote2<T>),
+    Transactions(Vec<T::Transaction>, ViewNumber),
+    Checkpoint(CheckpointVote<T>),
 }
 
-impl<TYPES: NodeType> HasViewNumber for ConsensusMessage<TYPES> {
+impl<T: NodeType> HasViewNumber for ConsensusMessage<T> {
     fn view_number(&self) -> ViewNumber {
         match self {
             ConsensusMessage::Proposal(proposal) => proposal.view_number(),
@@ -136,16 +225,16 @@ impl<TYPES: NodeType> HasViewNumber for ConsensusMessage<TYPES> {
 }
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 #[serde(bound(deserialize = ""))]
-pub enum ViewSyncMessage<TYPES: NodeType> {
-    ViewSyncPreCommitVote(ViewSyncPreCommitVote2<TYPES>),
-    ViewSyncCommitVote(ViewSyncCommitVote2<TYPES>),
-    ViewSyncFinalizeVote(ViewSyncFinalizeVote2<TYPES>),
-    ViewSyncPreCommitCertificate(ViewSyncPreCommitCertificate2<TYPES>),
-    ViewSyncCommitCertificate(ViewSyncCommitCertificate2<TYPES>),
-    ViewSyncFinalizeCertificate(ViewSyncFinalizeCertificate2<TYPES>),
+pub enum ViewSyncMessage<T: NodeType> {
+    ViewSyncPreCommitVote(ViewSyncPreCommitVote2<T>),
+    ViewSyncCommitVote(ViewSyncCommitVote2<T>),
+    ViewSyncFinalizeVote(ViewSyncFinalizeVote2<T>),
+    ViewSyncPreCommitCertificate(ViewSyncPreCommitCertificate2<T>),
+    ViewSyncCommitCertificate(ViewSyncCommitCertificate2<T>),
+    ViewSyncFinalizeCertificate(ViewSyncFinalizeCertificate2<T>),
 }
 
-impl<TYPES: NodeType> HasViewNumber for ViewSyncMessage<TYPES> {
+impl<T: NodeType> HasViewNumber for ViewSyncMessage<T> {
     fn view_number(&self) -> ViewNumber {
         match self {
             ViewSyncMessage::ViewSyncPreCommitVote(vote) => vote.view_number(),
@@ -161,26 +250,26 @@ impl<TYPES: NodeType> HasViewNumber for ViewSyncMessage<TYPES> {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 #[serde(bound(deserialize = ""))]
 #[allow(clippy::large_enum_variant)]
-pub enum MessageType<TYPES: NodeType> {
-    Consensus(ConsensusMessage<TYPES>),
-    ViewSync(ViewSyncMessage<TYPES>),
+pub enum MessageType<T: NodeType> {
+    Consensus(ConsensusMessage<T>),
+    ViewSync(ViewSyncMessage<T>),
     External(Vec<u8>),
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 #[serde(bound(deserialize = ""))]
-pub struct Message<TYPES: NodeType> {
-    pub sender: TYPES::SignatureKey,
-    pub message_type: MessageType<TYPES>,
+pub struct Message<T: NodeType> {
+    pub sender: T::SignatureKey,
+    pub message_type: MessageType<T>,
 }
 
-impl<TYPES: NodeType> Message<TYPES> {
+impl<T: NodeType> Message<T> {
     pub fn is_external(&self) -> bool {
         matches!(self.message_type, MessageType::External(_))
     }
 }
 
-impl<TYPES: NodeType> HasViewNumber for Message<TYPES> {
+impl<T: NodeType> HasViewNumber for Message<T> {
     fn view_number(&self) -> ViewNumber {
         match &self.message_type {
             MessageType::Consensus(consensus_message) => consensus_message.view_number(),
