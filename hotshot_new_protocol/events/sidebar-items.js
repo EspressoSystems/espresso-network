@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["Action","ConsensusInput","ConsensusOutput","Event","StateEvent","StorageEvent"],"struct":["BlockAndHeaderRequest","BlockRequest","HeaderRequest","StateRequest","StateResponse","VidDisperseRequest","VidShareInput"]};

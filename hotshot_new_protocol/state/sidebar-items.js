@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["Completed","Pending"],"struct":["StateManager"],"type":["HeaderError","StateError"]};
+window.SIDEBAR_ITEMS = {"enum":["Completed","Pending","StateManagerOutput"],"struct":["HeaderRequest","HeaderResponse","StateManager","StateRequest","StateResponse"]};

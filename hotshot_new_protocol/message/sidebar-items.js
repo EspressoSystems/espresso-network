@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["ConsensusMessage","MessageType","ViewSyncMessage"],"struct":["Message","ProposalMessage","Vote1","Vote2Data"],"type":["Certificate1","Certificate2","Vote2"]};
+window.SIDEBAR_ITEMS = {"enum":["ConsensusMessage","MessageType","ViewSyncMessage"],"struct":["CheckpointData","Message","ProposalMessage","Vote1","Vote2Data"],"type":["Certificate1","Certificate2","CheckpointCertificate","CheckpointVote","Vote2"]};
