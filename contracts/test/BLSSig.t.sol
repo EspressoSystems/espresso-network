@@ -52,7 +52,7 @@ contract BLSSig_Test is Test {
 
     // This is due to a current limitation/bug of foundry. See
     // https://github.com/foundry-rs/foundry/issues/4405
-    // See https://github.com/EspressoSystems/espresso-sequencer/issues/847
+    // See https://github.com/EspressoSystems/espresso-network/issues/847
     function wrapVerifyBlsSig(
         bytes memory message,
         BN254.G1Point memory sig,
