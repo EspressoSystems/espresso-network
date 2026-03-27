@@ -93,6 +93,9 @@ impl SequencerDataSource for DataSource {
         if let Some(chunk_size) = opt.sync_status_chunk_size {
             builder = builder.with_sync_status_chunk_size(chunk_size);
         }
+        if let Some(ttl) = opt.sync_status_ttl {
+            builder = builder.with_sync_status_ttl(ttl);
+        }
         if let Some(chunk_size) = opt.proactive_scan_chunk_size {
             builder = builder.with_proactive_range_chunk_size(chunk_size);
         }
