@@ -15,14 +15,13 @@ use hotshot_types::{
 
 use super::utils::mock_membership;
 use crate::{
-    Outbox,
-    consensus::Consensus,
-    coordinator::Timer,
+    consensus::{Consensus, ConsensusInput, ConsensusOutput},
+    coordinator::timer::Timer,
     drb::DrbRequester,
-    events::{ConsensusInput, ConsensusOutput},
     helpers::upgrade_lock,
     message::Message,
     network::Network,
+    outbox::Outbox,
     state::StateManager,
     tests::common::mock::testing::{MockCoordinator, MockNetwork},
     vid::{VidDisperser, VidReconstructor},
@@ -37,7 +36,7 @@ use crate::{
 /// directly and polls `next()` to feed completions back as `ConsensusInput`.
 pub(crate) struct TestHarness {
     coordinator: MockCoordinator,
-    outputs: Vec<ConsensusOutput<TestTypes>>,
+    outputs: Outbox<ConsensusOutput<TestTypes>>,
 }
 
 impl TestHarness {
@@ -77,10 +76,7 @@ impl TestHarness {
 
         let network = Network::new(MockNetwork::default(), membership.clone(), upgrade_lock());
 
-        let (tx, _rx) = async_broadcast::broadcast(1);
-
         let coordinator = MockCoordinator::builder()
-            .external_tx(tx)
             .consensus(consensus)
             .network(network)
             .state_manager(state_manager)
@@ -93,40 +89,43 @@ impl TestHarness {
             .drb_requester(drb_request_task)
             .membership_coordinator(membership)
             .outbox(Outbox::new())
-            .timer(Timer::new(timer_duration))
+            .timer(Timer::new(timer_duration, ViewNumber::genesis()))
             .public_key(public_key)
             .build();
         Self {
             coordinator,
-            outputs: Vec::new(),
+            outputs: Outbox::new(),
         }
     }
 
     pub async fn message(&mut self, message: Message<TestTypes>) {
-        if let Some(input) = self.coordinator.on_message(message).await {
+        if let Some(input) = self.coordinator.on_network_message(message).await {
             self.send_input(input).await;
         }
     }
 
     pub async fn send_input(&mut self, input: ConsensusInput<TestTypes>) {
-        self.coordinator
-            .consensus
-            .apply(input, &mut self.coordinator.outbox)
-            .await;
-        for output in self.coordinator.outbox().iter() {
-            self.outputs.push(output.clone());
+        self.coordinator.apply_consensus(input).await;
+        self.outputs
+            .extend(self.coordinator.outbox().iter().cloned());
+        for out in self.coordinator.outbox_mut().take() {
+            if let Err(err) = self.coordinator.process_consensus_output(out).await {
+                panic!("unexpected error: {err}")
+            }
         }
-        self.coordinator.evaluate_outputs().await;
     }
 
     pub async fn next_inputs(&mut self, num_inputs: usize) -> Vec<ConsensusInput<TestTypes>> {
         let mut inputs = Vec::new();
         for _ in 0..num_inputs {
-            if let Some(input) = self.coordinator.next_input().await {
-                if matches!(input, ConsensusInput::Timeout(_)) {
-                    panic!("Expected a non-timeout input, got timeout");
-                }
-                inputs.push(input);
+            match self.coordinator.next_consensus_input().await {
+                Ok(input) => {
+                    if matches!(input, ConsensusInput::Timeout(_)) {
+                        panic!("Expected a non-timeout input, got timeout");
+                    }
+                    inputs.push(input);
+                },
+                Err(err) => panic!("Unexpected error: {err}"),
             }
         }
         for input in inputs.clone() {
@@ -136,8 +135,8 @@ impl TestHarness {
     }
 
     pub async fn next_timeout(&mut self) -> Option<ConsensusInput<TestTypes>> {
-        let next = self.coordinator.next_input().await;
-        if let Some(input) = next
+        let next = self.coordinator.next_consensus_input().await;
+        if let Ok(input) = next
             && matches!(input, ConsensusInput::Timeout(_))
         {
             return Some(input);
@@ -145,7 +144,8 @@ impl TestHarness {
 
         None
     }
-    pub fn outputs(&self) -> &Vec<ConsensusOutput<TestTypes>> {
+
+    pub fn outputs(&self) -> &Outbox<ConsensusOutput<TestTypes>> {
         &self.outputs
     }
 }

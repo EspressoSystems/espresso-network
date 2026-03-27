@@ -8,6 +8,7 @@ use hotshot_example_types::{
 };
 use hotshot_types::{
     data::{Leaf2, QuorumProposalWrapper, VidDisperse, ViewNumber},
+    epoch_membership::EpochMembershipCoordinator,
     traits::signature_key::SignatureKey,
 };
 
@@ -19,16 +20,17 @@ use super::common::{
     utils::{MockBlock, TestData, mock_membership, state_verified_input},
 };
 use crate::{
-    Outbox,
-    consensus::Consensus,
-    events::{Action, ConsensusInput, ConsensusOutput, Event, StateResponse},
+    consensus::{Consensus, ConsensusInput, ConsensusOutput},
     helpers::{proposal_commitment, upgrade_lock},
+    outbox::Outbox,
+    state::StateResponse,
+    tests::common::assertions::{count_leaf_decided, count_state_requests},
 };
 
 struct ConsensusHarness {
     consensus: Consensus<TestTypes>,
-    membership_coordinator: hotshot_types::epoch_membership::EpochMembershipCoordinator<TestTypes>,
-    collected: Vec<ConsensusOutput<TestTypes>>,
+    membership_coordinator: EpochMembershipCoordinator<TestTypes>,
+    collected: Outbox<ConsensusOutput<TestTypes>>,
 }
 
 impl ConsensusHarness {
@@ -39,11 +41,12 @@ impl ConsensusHarness {
         Self {
             consensus,
             membership_coordinator: membership,
-            collected: Vec::new(),
+            collected: Outbox::new(),
         }
     }
 
-    /// Apply an Event by converting it to ConsensusInput first.
+    /// Apply a ConsensusInput directly and drain outputs, auto-responding to
+    /// actions that consensus expects feedback for.
     async fn apply(&mut self, input: ConsensusInput<TestTypes>) {
         let mut outbox = Outbox::new();
         self.consensus.apply(input, &mut outbox).await;
@@ -52,24 +55,22 @@ impl ConsensusHarness {
 
     async fn drain_outbox(&mut self, outbox: &mut Outbox<ConsensusOutput<TestTypes>>) {
         while let Some(output) = outbox.pop_front() {
-            if let ConsensusOutput::Action(action) = &output {
-                self.handle_action(action, outbox).await;
-            }
-            self.collected.push(output);
+            self.handle_output(&output, outbox).await;
+            self.collected.push_back(output);
         }
     }
 
-    async fn handle_action(
+    async fn handle_output(
         &mut self,
-        action: &Action<TestTypes>,
+        output: &ConsensusOutput<TestTypes>,
         outbox: &mut Outbox<ConsensusOutput<TestTypes>>,
     ) {
-        match action {
-            Action::RequestState(req) => {
+        match output {
+            ConsensusOutput::RequestState(req) => {
                 let input = state_verified_input(&req.proposal, req.view);
                 self.consensus.apply(input, outbox).await;
             },
-            Action::RequestBlockAndHeader(req) => {
+            ConsensusOutput::RequestBlockAndHeader(req) => {
                 let mock_block = MockBlock::new();
                 let wrapper = QuorumProposalWrapper::<TestTypes> {
                     proposal: req.parent_proposal.clone(),
@@ -87,19 +88,24 @@ impl ConsensusHarness {
                     .await;
                 self.consensus
                     .apply(
-                        ConsensusInput::BlockBuilt(
-                            req.view,
-                            req.epoch,
-                            mock_block.block,
-                            mock_block.metadata,
-                        ),
+                        ConsensusInput::BlockBuilt {
+                            view: req.view,
+                            epoch: req.epoch,
+                            payload: mock_block.block,
+                            metadata: mock_block.metadata,
+                        },
                         outbox,
                     )
                     .await;
             },
-            Action::RequestVidDisperse(view, epoch, block, metadata) => {
+            ConsensusOutput::RequestVidDisperse {
+                view,
+                epoch,
+                payload,
+                metadata,
+            } => {
                 let vid_disperse = VidDisperse::calculate_vid_disperse(
-                    block,
+                    payload,
                     &self.membership_coordinator,
                     *view,
                     Some(*epoch),
@@ -120,7 +126,7 @@ impl ConsensusHarness {
         }
     }
 
-    fn events(&self) -> &[ConsensusOutput<TestTypes>] {
+    fn outputs(&self) -> &Outbox<ConsensusOutput<TestTypes>> {
         &self.collected
     }
 }
@@ -137,7 +143,7 @@ async fn test_safety_genesis_no_lock() {
         .await;
 
     assert!(
-        has_request_state(harness.events()),
+        has_request_state(harness.outputs()),
         "Proposal should be accepted with no locked QC"
     );
 }
@@ -164,17 +170,7 @@ async fn test_timeout_filters_stale_events() {
         .apply(test_data.views[3].proposal_input_consensus(&node_key))
         .await;
 
-    let request_states: Vec<_> = harness
-        .events()
-        .iter()
-        .filter(|e| matches!(e, ConsensusOutput::Action(Action::RequestState(_))))
-        .collect();
-    assert_eq!(
-        request_states.len(),
-        1,
-        "Only one RequestState expected (fresh view), got {}",
-        request_states.len()
-    );
+    assert_eq!(1, count_state_requests(harness.outputs()));
 }
 
 /// Vote1 fires for sequential views when all preconditions are met.
@@ -196,7 +192,7 @@ async fn test_vote1_for_sequential_views() {
         .await;
 
     assert_eq!(
-        count_vote1(harness.events()),
+        count_vote1(harness.outputs()),
         2,
         "Vote1 should fire for sequential views"
     );
@@ -214,7 +210,7 @@ async fn test_vote1_genesis_parent() {
         .await;
 
     assert!(
-        has_vote1(harness.events()),
+        has_vote1(harness.outputs()),
         "Vote1 should fire for view 1 with genesis parent"
     );
 }
@@ -242,7 +238,7 @@ async fn test_vote2_missing_cert1() {
         .await;
 
     assert!(
-        !has_vote2(harness.events()),
+        !has_vote2(harness.outputs()),
         "Vote2 should not be sent without Certificate1"
     );
 }
@@ -270,7 +266,7 @@ async fn test_vote2_with_cert1() {
     harness.apply(test_data.views[1].cert1_input()).await;
 
     assert!(
-        has_vote2(harness.events()),
+        has_vote2(harness.outputs()),
         "Vote2 should be sent when cert1 is present"
     );
 }
@@ -298,10 +294,10 @@ async fn test_single_view_decide() {
     harness.apply(test_data.views[1].cert1_input()).await;
     harness.apply(test_data.views[1].cert2_input()).await;
 
-    assert!(has_vote1(harness.events()), "Vote1 should be sent");
-    assert!(has_vote2(harness.events()), "Vote2 should be sent");
+    assert!(has_vote1(harness.outputs()), "Vote1 should be sent");
+    assert!(has_vote2(harness.outputs()), "Vote2 should be sent");
     assert!(
-        has_leaf_decided(harness.events()),
+        has_leaf_decided(harness.outputs()),
         "Leaf should be decided after cert2"
     );
 }
@@ -322,7 +318,7 @@ async fn test_no_duplicate_vote1() {
     harness.apply(test_data.views[0].cert1_input()).await;
 
     assert_eq!(
-        count_vote1(harness.events()),
+        count_vote1(harness.outputs()),
         1,
         "Should only send one Vote1 per view"
     );
@@ -352,7 +348,7 @@ async fn test_no_duplicate_vote2() {
     harness.apply(test_data.views[1].cert2_input()).await;
 
     assert_eq!(
-        count_vote2(harness.events()),
+        count_vote2(harness.outputs()),
         1,
         "Should only send one Vote2 per view"
     );
@@ -379,10 +375,7 @@ async fn test_state_verification_failed_removes_proposal() {
     let proposal_input = test_data.views[1].proposal_input_consensus(&node_key);
     let mut outbox = Outbox::new();
     harness.consensus.apply(proposal_input, &mut outbox).await;
-    // Drain the outbox but DON'T auto-respond to RequestState
-    while let Some(output) = outbox.pop_front() {
-        harness.collected.push(output);
-    }
+    harness.collected.extend(outbox.take());
 
     // Send StateVerificationFailed — removes proposal
     let proposal = &test_data.views[1].proposal.data.proposal;
@@ -405,7 +398,7 @@ async fn test_state_verification_failed_removes_proposal() {
     harness.apply(test_data.views[1].cert1_input()).await;
 
     assert!(
-        !has_vote2(harness.events()),
+        !has_vote2(harness.outputs()),
         "Vote2 should not fire after proposal removed by StateVerificationFailed"
     );
 }
@@ -433,9 +426,9 @@ async fn test_decide_requires_cert2() {
     harness.apply(test_data.views[1].cert1_input()).await;
     // No cert2 sent
 
-    assert!(has_vote2(harness.events()), "Vote2 should still fire");
+    assert!(has_vote2(harness.outputs()), "Vote2 should still fire");
     assert!(
-        !has_leaf_decided(harness.events()),
+        !has_leaf_decided(harness.outputs()),
         "No decision without Certificate2"
     );
 }
@@ -461,7 +454,7 @@ async fn test_vote2_missing_block_reconstructed() {
     harness.apply(test_data.views[1].cert1_input()).await;
 
     assert!(
-        !has_vote2(harness.events()),
+        !has_vote2(harness.outputs()),
         "Vote2 should not fire without BlockReconstructed"
     );
 }
@@ -492,7 +485,7 @@ async fn test_vote2_block_reconstructed_arrives_late() {
         .await;
 
     assert!(
-        has_vote2(harness.events()),
+        has_vote2(harness.outputs()),
         "Vote2 should fire when BlockReconstructed arrives late"
     );
 }
@@ -513,15 +506,7 @@ async fn test_multi_view_chain_decide() {
         harness.apply(view.cert2_input()).await;
     }
 
-    let decide_count = harness
-        .events()
-        .iter()
-        .filter(|e| matches!(e, ConsensusOutput::Event(Event::LeafDecided(_))))
-        .count();
-    assert!(
-        decide_count >= 2,
-        "Multiple views should produce decisions, got {decide_count}"
-    );
+    assert!(count_leaf_decided(harness.outputs()) >= 2);
 }
 
 /// Timeout event sets timeout_view and prevents processing of that view.
@@ -554,7 +539,7 @@ async fn test_timeout_prevents_voting() {
     harness.apply(test_data.views[1].cert1_input()).await;
 
     assert!(
-        !has_vote2(harness.events()),
+        !has_vote2(harness.outputs()),
         "Vote2 should not fire after timeout for that view"
     );
 }
@@ -574,11 +559,11 @@ async fn test_leader_sends_proposal() {
     harness.apply(test_data.views[0].cert1_input()).await;
 
     assert!(
-        has_request_block_and_header(harness.events()),
+        has_request_block_and_header(harness.outputs()),
         "Leader should request block and header for the next view"
     );
     assert!(
-        has_proposal(harness.events()),
+        has_proposal(harness.outputs()),
         "Leader should send a proposal when it has cert1, header, block, and vid_disperse"
     );
 }
@@ -605,11 +590,11 @@ async fn test_leader_proposes_after_timeout() {
     harness.apply(test_data.views[1].timeout_cert_input()).await;
 
     assert!(
-        has_request_block_and_header(harness.events()),
+        has_request_block_and_header(harness.outputs()),
         "Leader should request block and header after timeout"
     );
     assert!(
-        has_proposal(harness.events()),
+        has_proposal(harness.outputs()),
         "Leader should send proposal with timeout view change evidence"
     );
 }
@@ -630,7 +615,7 @@ async fn test_non_leader_does_not_propose() {
     harness.apply(test_data.views[0].cert1_input()).await;
 
     assert!(
-        !has_proposal(harness.events()),
+        !has_proposal(harness.outputs()),
         "Non-leader should NOT send a proposal"
     );
 }
@@ -662,11 +647,7 @@ async fn test_safety_rejects_proposal_below_lock() {
         .await;
     harness.apply(test_data.views[1].cert1_input()).await;
 
-    let state_requests_before = harness
-        .events()
-        .iter()
-        .filter(|e| matches!(e, ConsensusOutput::Action(Action::RequestState(_))))
-        .count();
+    let state_requests_before = count_state_requests(harness.outputs());
 
     // Re-send view 1's proposal. Its justify_qc references genesis (view 0),
     // while locked_qc is at view 2.
@@ -677,11 +658,7 @@ async fn test_safety_rejects_proposal_below_lock() {
         .apply(test_data.views[0].proposal_input_consensus(&node_key))
         .await;
 
-    let state_requests_after = harness
-        .events()
-        .iter()
-        .filter(|e| matches!(e, ConsensusOutput::Action(Action::RequestState(_))))
-        .count();
+    let state_requests_after = count_state_requests(harness.outputs());
 
     assert_eq!(
         state_requests_before, state_requests_after,
@@ -717,7 +694,7 @@ async fn test_vote_after_timeout_cert() {
     // Receive timeout cert for view 2 → view advances to 3
     harness.apply(test_data.views[1].timeout_cert_input()).await;
 
-    let vote1_before = count_vote1(harness.events());
+    let vote1_before = count_vote1(harness.outputs());
 
     // Process proposal for view 3. Its justify_qc is at view 2, which is
     // >= locked_qc at view 1 (liveness passes). Parent data for view 2 exists.
@@ -726,7 +703,7 @@ async fn test_vote_after_timeout_cert() {
         .await;
 
     assert!(
-        count_vote1(harness.events()) > vote1_before,
+        count_vote1(harness.outputs()) > vote1_before,
         "Vote1 should fire for proposal after timeout certificate"
     );
 }
@@ -761,7 +738,7 @@ async fn test_no_vote_after_timeout_for_proposal_below_lock() {
     // are filtered only by the safety rule, not the stale filter.
     harness.apply(test_data.views[2].timeout_cert_input()).await;
 
-    let vote1_count = count_vote1(harness.events());
+    let vote1_count = count_vote1(harness.outputs());
 
     // Re-send view 3's proposal. Its justify_qc is cert1 for view 2.
     // Stale filter: view 3 > timeout_view (0) → passes.
@@ -773,7 +750,7 @@ async fn test_no_vote_after_timeout_for_proposal_below_lock() {
         .await;
 
     assert_eq!(
-        count_vote1(harness.events()),
+        count_vote1(harness.outputs()),
         vote1_count,
         "No new Vote1 — proposal with justify_qc below lock rejected by safety rule"
     );
@@ -805,10 +782,5 @@ async fn test_decide_not_repeated_for_same_view() {
     // Send cert2 again for same view — should not produce another decide
     harness.apply(test_data.views[1].cert2_input()).await;
 
-    let decide_count = harness
-        .events()
-        .iter()
-        .filter(|e| matches!(e, ConsensusOutput::Event(Event::LeafDecided(_))))
-        .count();
-    assert_eq!(decide_count, 1, "Should only decide once per view");
+    assert_eq!(1, count_leaf_decided(harness.outputs()));
 }
