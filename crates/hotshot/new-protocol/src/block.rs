@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use committable::{Commitment, Committable};
 use hotshot::traits::BlockPayload;
 use hotshot_types::{
-    data::{EpochNumber, ViewNumber},
+    data::{EpochNumber, QuorumProposal2, ViewNumber},
     traits::{block_contents::Transaction, node_implementation::NodeType},
 };
 
@@ -49,7 +49,7 @@ struct RetryEntry<T: NodeType> {
     size: u64,
 }
 
-pub(crate) struct BlockBuilder<T: NodeType> {
+pub struct BlockBuilder<T: NodeType> {
     retry_pending: HashMap<Commitment<T::Transaction>, RetryEntry<T>>,
     retry_total_bytes: u64,
     leader_buffer: HashMap<Commitment<T::Transaction>, T::Transaction>,

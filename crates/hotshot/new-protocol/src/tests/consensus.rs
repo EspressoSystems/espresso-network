@@ -14,9 +14,8 @@ use hotshot_types::{
 
 use super::common::{
     assertions::{
-        count_decided, count_vote1, count_vote2, has_leaf_decided, has_proposal,
-        has_request_block_and_header, has_request_state, has_vote1, has_vote2, node_index_for_key,
-        views,
+        count_vote1, count_vote2, has_leaf_decided, has_proposal, has_request_block_and_header,
+        has_request_state, has_vote1, has_vote2, node_index_for_key,
     },
     utils::{MockBlock, TestData, mock_membership, state_verified_input},
 };

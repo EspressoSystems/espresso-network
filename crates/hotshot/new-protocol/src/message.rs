@@ -74,7 +74,7 @@ impl HasEpoch for CheckpointData {
 
 impl QuorumMarker for CheckpointData {}
 
-impl<TYPES: NodeType> HasEpoch for Vote2Data<TYPES> {
+impl<T: NodeType> HasEpoch for Vote2Data<T> {
     fn epoch(&self) -> Option<EpochNumber> {
         Some(self.epoch)
     }
@@ -93,9 +93,9 @@ impl<T: NodeType> Committable for Vote2Data<T> {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 #[serde(bound(deserialize = ""))]
-pub struct Vote1<TYPES: NodeType> {
-    pub vote: QuorumVote2<TYPES>,
-    pub vid_share: VidDisperseShare2<TYPES>,
+pub struct Vote1<T: NodeType> {
+    pub vote: QuorumVote2<T>,
+    pub vid_share: VidDisperseShare2<T>,
 }
 
 impl<T: NodeType> HasViewNumber for Vote1<T> {

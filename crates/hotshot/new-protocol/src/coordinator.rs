@@ -15,6 +15,7 @@ use tokio::select;
 use tracing::{error, warn};
 
 use crate::{
+    block::BlockBuilder,
     consensus::{Consensus, ConsensusInput, ConsensusOutput},
     coordinator::{
         error::{CoordinatorError, ErrorKind, Severity},
@@ -130,7 +131,7 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                     }
                 },
                 Some(item) = self.vid_reconstructor.next() => match item {
-                    Ok((view, commitment, _)) => {
+                    Ok((view, commitment, payload, metadata)) => {
                         self.block_builder.on_block_reconstructed(view, payload, metadata);
                         return Ok(ConsensusInput::BlockReconstructed(view, commitment))
                     }
