@@ -2,7 +2,7 @@ name: Claude PR Review
 
 on:
   pull_request:
-    types: [opened, synchronize, ready_for_review, reopened]
+    types: [opened, ready_for_review, reopened]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
@@ -23,6 +23,15 @@ jobs:
 
       - name: Remove project instructions
         run: rm -f CLAUDE.md AGENTS.md
+
+      - name: Fetch team review comments
+        run: |
+          mkdir -p ./tmp
+          scripts/fetch-pr-team-comments \
+            "${{ github.repository_owner }}" \
+            "${{ github.event.repository.name }}" \
+            "${{ github.event.pull_request.number }}" \
+            > ./tmp/pr-review-comments.json
 
       - name: Claude Code Review
         uses: anthropics/claude-code-action@v1
@@ -60,7 +69,25 @@ jobs:
                - Verify README updates for new features
                - Check API documentation accuracy
 
+            Before reviewing, read existing comments from `./tmp/pr-review-comments.json`.
+            - Do not duplicate feedback already given by any reviewer.
+            - For your own unresolved review threads: respond to any changes or replies, then resolve if the issue is fixed, explained, or answered satisfactorily.
+              `gh api graphql -f query='mutation { resolveReviewThread(input: {threadId: "<thread_id>"}) { thread { isResolved } } }'`
+            - Only resolve your own threads, never others'.
+
+            Do NOT comment on:
+            - `todo!()` or `// TODO` -- these are intentional, just factor them into your understanding
+            - Unnecessary clones or clone optimization suggestions
+            - Unused code, fields, or parameters -- clippy catches these, and `_` prefixed names are intentionally unused
+
             Provide detailed feedback using inline comments for specific issues.
             Use top-level comments for general observations or praise.
+          # Allowed tools (minimal permissions):
+          #   mcp__github_inline_comment__create_inline_comment - post inline code comments
+          #   gh pr comment  - post top-level PR comments
+          #   gh pr diff     - read PR diff
+          #   gh pr view     - read PR metadata
+          #   gh api */pulls/*/comments  - reply to review thread comments
+          #   gh api graphql mutation resolveReviewThread - resolve own review threads
           claude_args: |
-            --model claude-opus-4-6 --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)"
+            --model claude-opus-4-6 --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh api */pulls/*/comments*),Bash(gh api graphql -f query='mutation { resolveReviewThread*)"
