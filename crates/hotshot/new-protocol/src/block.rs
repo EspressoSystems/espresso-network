@@ -9,6 +9,20 @@ use hotshot_types::{
 
 use crate::message::{DedupManifest, TransactionMessage};
 
+#[derive(Clone, Eq, PartialEq, Debug)]
+pub struct BlockAndHeaderRequest<T: NodeType> {
+    pub view: ViewNumber,
+    pub epoch: EpochNumber,
+    pub parent_proposal: QuorumProposal2<T>,
+}
+
+#[derive(Clone, Eq, PartialEq, Debug)]
+pub struct BlockRequest<T: NodeType> {
+    pub view: ViewNumber,
+    pub parent_proposal: QuorumProposal2<T>,
+    pub epoch: EpochNumber,
+}
+
 pub struct BlockBuilderConfig {
     pub max_retry_bytes: usize,
     pub max_leader_bytes: usize,

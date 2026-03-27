@@ -23,7 +23,7 @@ pub const NS_OFFSET_BYTE_LEN: usize = 4;
 
 // TODO prefer [`NS_ID_BYTE_LEN`] set to `8` because [`NamespaceId`] is a `u64`
 // but we need to maintain serialization compatibility.
-// https://github.com/EspressoSystems/espresso-sequencer/issues/1574
+// https://github.com/EspressoSystems/espresso-network/issues/1574
 pub const NS_ID_BYTE_LEN: usize = 4;
 
 /// Raw binary data for a namespace table.
@@ -118,7 +118,7 @@ pub const NS_ID_BYTE_LEN: usize = 4;
 /// pub struct NsTable(#[serde(with = "base64_bytes")] Vec<u8>);
 /// ```
 /// but we need to maintain serialization compatibility.
-/// <https://github.com/EspressoSystems/espresso-sequencer/issues/1575>
+/// <https://github.com/EspressoSystems/espresso-network/issues/1575>
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 // Boilerplate: `#[serde(remote = "Self")]` needed to check invariants on
 // deserialization. See
@@ -135,8 +135,8 @@ pub enum NsTableValidationError {
     InvalidByteLen,
     NonIncreasingEntries,
     DuplicateNamespaceId,
-    InvalidHeader, // TODO this variant obsolete after https://github.com/EspressoSystems/espresso-sequencer/issues/1604
-    InvalidFinalOffset, // TODO this variant obsolete after https://github.com/EspressoSystems/espresso-sequencer/issues/1604
+    InvalidHeader, // TODO this variant obsolete after https://github.com/EspressoSystems/espresso-network/issues/1604
+    InvalidFinalOffset, // TODO this variant obsolete after https://github.com/EspressoSystems/espresso-network/issues/1604
     ExpectNonemptyNsTable,
 }
 

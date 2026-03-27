@@ -16,14 +16,16 @@ use hotshot_types::{
 use serde::{Deserialize, Serialize};
 
 pub type Vote2<T> = SimpleVote<T, Vote2Data<T>>;
+pub type CheckpointVote<T> = SimpleVote<T, CheckpointData>;
+pub type CheckpointCertificate<T> = SimpleCertificate<T, CheckpointData, SuccessThreshold>;
 pub type Certificate1<T> = SimpleCertificate<T, QuorumData2<T>, SuccessThreshold>;
 pub type Certificate2<T> = SimpleCertificate<T, Vote2Data<T>, SuccessThreshold>;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 #[serde(bound(deserialize = ""))]
 pub struct ProposalMessage<T: NodeType> {
-    pub(crate) proposal: Proposal<T, QuorumProposal2<T>>,
-    pub(crate) vid_share: VidDisperseShare2<T>,
+    pub proposal: Proposal<T, QuorumProposal2<T>>,
+    pub vid_share: VidDisperseShare2<T>,
 }
 
 impl<T: NodeType> HasViewNumber for ProposalMessage<T> {
@@ -41,7 +43,38 @@ pub struct Vote2Data<T: NodeType> {
     pub block_number: u64,
 }
 
-impl<T: NodeType> HasEpoch for Vote2Data<T> {
+/// Data used .
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
+#[serde(bound(deserialize = ""))]
+pub struct CheckpointData {
+    pub view: ViewNumber,
+    pub epoch: EpochNumber,
+}
+
+impl Committable for CheckpointData {
+    fn commit(&self) -> Commitment<Self> {
+        committable::RawCommitmentBuilder::new("CheckpointData")
+            .u64(*self.view)
+            .u64(*self.epoch)
+            .finalize()
+    }
+}
+
+impl HasViewNumber for CheckpointData {
+    fn view_number(&self) -> ViewNumber {
+        self.view
+    }
+}
+
+impl HasEpoch for CheckpointData {
+    fn epoch(&self) -> Option<EpochNumber> {
+        Some(self.epoch)
+    }
+}
+
+impl QuorumMarker for CheckpointData {}
+
+impl<TYPES: NodeType> HasEpoch for Vote2Data<TYPES> {
     fn epoch(&self) -> Option<EpochNumber> {
         Some(self.epoch)
     }
@@ -60,9 +93,9 @@ impl<T: NodeType> Committable for Vote2Data<T> {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 #[serde(bound(deserialize = ""))]
-pub struct Vote1<T: NodeType> {
-    pub(crate) vote: QuorumVote2<T>,
-    pub(crate) vid_share: VidDisperseShare2<T>,
+pub struct Vote1<TYPES: NodeType> {
+    pub vote: QuorumVote2<TYPES>,
+    pub vid_share: VidDisperseShare2<TYPES>,
 }
 
 impl<T: NodeType> HasViewNumber for Vote1<T> {
@@ -75,6 +108,7 @@ impl<T: NodeType> QuorumMarker for Vote2Data<T> {}
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 #[serde(bound(deserialize = ""))]
+#[allow(clippy::large_enum_variant)]
 pub enum ConsensusMessage<T: NodeType> {
     Proposal(ProposalMessage<T>),
     Vote1(Vote1<T>),
@@ -82,7 +116,7 @@ pub enum ConsensusMessage<T: NodeType> {
     Certificate1(Certificate1<T>, T::SignatureKey),
     Certificate2(Certificate2<T>, T::SignatureKey),
     TimeoutVote(TimeoutVote2<T>),
-    Checkpoint(ViewNumber, EpochNumber),
+    Checkpoint(CheckpointVote<T>),
 }
 
 impl<T: NodeType> HasViewNumber for ConsensusMessage<T> {
@@ -94,7 +128,7 @@ impl<T: NodeType> HasViewNumber for ConsensusMessage<T> {
             ConsensusMessage::Certificate1(certificate, _) => certificate.view_number(),
             ConsensusMessage::Certificate2(certificate, _) => certificate.view_number(),
             ConsensusMessage::TimeoutVote(vote) => vote.view_number(),
-            ConsensusMessage::Checkpoint(view_number, _) => *view_number,
+            ConsensusMessage::Checkpoint(vote) => vote.view_number(),
         }
     }
 }

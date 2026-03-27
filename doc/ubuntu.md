@@ -36,8 +36,8 @@ Just is outdated in the official ubuntu repos.
 
 ## Clone the repository
 
-    git clone --recursive https://github.com/espressosystems/espresso-sequencer
-    cd espresso-sequencer
+    git clone --recursive https://github.com/espressosystems/espresso-network
+    cd espresso-network
 
 ## Install npm dependencies
 
