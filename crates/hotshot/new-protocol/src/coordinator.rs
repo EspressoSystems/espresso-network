@@ -81,8 +81,8 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                     }
                 },
                 Some(item) = self.vid_reconstructor.next() => match item {
-                    Ok((view, commitment, payload)) => {
-                        self.block_builder.on_block_reconstructed(view, payload);
+                    Ok((view, commitment, payload, metadata)) => {
+                        self.block_builder.on_block_reconstructed(view, payload, metadata);
                         self.evaluate(ConsensusInput::BlockReconstructed(view, commitment)).await;
                     }
                     Err(err) => {

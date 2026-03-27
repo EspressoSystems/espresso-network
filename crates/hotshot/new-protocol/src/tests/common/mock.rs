@@ -102,7 +102,7 @@ pub mod testing {
                         self.received_events.push(ConsensusOutput::Event(Event::VidDisperseCreated(vid_commitment, vid_disperse.clone())));
                         self.process_input(ConsensusInput::VidDisperseCreated(view, vid_disperse)).await;
                     }
-                    Some(Ok((view, vid_commitment, payload))) = PendingIfNone(self.vid_reconstruction_task.as_mut().map(|task| task.next())) => {
+                    Some(Ok((view, vid_commitment, payload, _))) = PendingIfNone(self.vid_reconstruction_task.as_mut().map(|task| task.next())) => {
                         self.received_events.push(ConsensusOutput::Event(Event::BlockReconstructed(view, payload, vid_commitment)));
                         self.process_input(ConsensusInput::BlockReconstructed(view, vid_commitment)).await;
                     }

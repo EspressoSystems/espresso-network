@@ -105,10 +105,13 @@ impl<T: NodeType> BlockBuilder<T> {
             .collect()
     }
 
-    pub fn on_block_reconstructed(&mut self, _view: ViewNumber, payload: T::BlockPayload) {
-        let (_, metadata) = T::BlockPayload::empty();
-        for tx in payload.transactions(&metadata) {
-            let hash = tx.commit();
+    pub fn on_block_reconstructed(
+        &mut self,
+        _view: ViewNumber,
+        payload: T::BlockPayload,
+        metadata: <T::BlockPayload as BlockPayload<T>>::Metadata,
+    ) {
+        for hash in payload.transaction_commitments(&metadata) {
             if let Some(entry) = self.retry_pending.remove(&hash) {
                 self.retry_total_bytes -= entry.size;
             }
@@ -207,7 +210,7 @@ impl<T: NodeType> BlockBuilder<T> {
 mod tests {
     use committable::Committable;
     use hotshot_example_types::{
-        block_types::{TestBlockPayload, TestTransaction},
+        block_types::{TestBlockPayload, TestMetadata, TestTransaction},
         node_types::TestTypes,
     };
     use hotshot_types::data::{EpochNumber, ViewNumber};
@@ -260,6 +263,9 @@ mod tests {
             view(1),
             TestBlockPayload {
                 transactions: vec![t1],
+            },
+            TestMetadata {
+                num_transactions: 1,
             },
         );
 
