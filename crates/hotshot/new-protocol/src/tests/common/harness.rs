@@ -54,7 +54,7 @@ impl TestHarness {
         let timeout_collector = VoteCollector::new(membership.clone(), upgrade_lock());
         let checkpoint_collector = VoteCollector::new(membership.clone(), upgrade_lock());
 
-        let consensus = Consensus::new(membership.clone(), public_key, private_key.clone());
+        let consensus = Consensus::new(membership.clone(), public_key, private_key.clone(), 10);
 
         let vid_disperse_task = VidDisperser::new(membership.clone());
         let vid_reconstruction_task = VidReconstructor::new();

@@ -255,6 +255,9 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                     metadata,
                 });
             },
+            ConsensusOutput::RequestDrbResult(epoch) => {
+                self.epoch_manager.request_drb_result(epoch);
+            },
             ConsensusOutput::SendCheckpointVote(checkpoint_vote) => {
                 let message = Message {
                     sender: self.public_key.clone(),

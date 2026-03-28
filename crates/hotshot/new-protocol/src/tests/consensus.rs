@@ -38,7 +38,7 @@ impl ConsensusHarness {
     async fn new(node_index: u64) -> Self {
         let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
         let membership = mock_membership().await;
-        let consensus = Consensus::new(membership.clone(), public_key, private_key);
+        let consensus = Consensus::new(membership.clone(), public_key, private_key, 10);
         Self {
             consensus,
             membership_coordinator: membership,

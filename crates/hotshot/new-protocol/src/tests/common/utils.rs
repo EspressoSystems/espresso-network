@@ -32,6 +32,7 @@ use hotshot_types::{
     simple_certificate::{TimeoutCertificate2, ViewSyncFinalizeCertificate2},
     simple_vote::{
         QuorumVote2, TimeoutData2, TimeoutVote2, ViewSyncFinalizeData2, ViewSyncFinalizeVote2,
+        Vote2Data,
     },
     traits::{
         EncodeBytes,
@@ -48,7 +49,7 @@ use crate::{
     helpers::{proposal_commitment, upgrade_lock},
     message::{
         Certificate1, Certificate2, ConsensusMessage, Message, MessageType, Proposal,
-        ProposalMessage, Vote1, Vote2, Vote2Data,
+        ProposalMessage, Vote1, Vote2,
     },
     state::StateResponse,
 };
