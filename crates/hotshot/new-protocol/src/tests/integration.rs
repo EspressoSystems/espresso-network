@@ -136,7 +136,7 @@ async fn test_sequential_vote1() {
 
 /// CPU tasks form Certificate1 from accumulated Vote1 messages, enabling
 /// consensus to continue (verified by Vote1 emission for subsequent views).
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn test_cert1_formed_and_vote2_sent() {
     let mut harness = TestHarness::new(0).await;
     let test_data = TestData::new(3).await;
@@ -156,7 +156,7 @@ async fn test_cert1_formed_and_vote2_sent() {
 /// Block reconstruction is exercised because consensus requires
 /// BlockReconstructed (produced by the CPU VidShareTask) before it
 /// can proceed to the decide step.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn test_full_decide_via_cpu_tasks() {
     let mut harness = TestHarness::new(0).await;
     let test_data = TestData::new(3).await;
@@ -190,7 +190,7 @@ async fn test_full_decide_via_cpu_tasks() {
 /// to the CPU task when cpu_tx is set). SendProposal in the output
 /// proves the full leader path: cert1 formation → block/header request
 /// → VID disperse via CPU → proposal sent.
-#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[tokio::test]
 async fn test_leader_proposal_via_cpu_tasks() {
     let test_data = TestData::new(4).await;
     let leader_for_view_2 = test_data.views[1].leader_public_key;
@@ -232,7 +232,7 @@ async fn test_leader_proposal_via_cpu_tasks() {
 
 /// Multi-view chain: CPU tasks form certificates for each view, leading to
 /// multiple decisions.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn test_multi_view_decide_via_cpu_tasks() {
     let mut harness = TestHarness::new(0).await;
     let test_data = TestData::new(5).await;
@@ -274,7 +274,7 @@ async fn send_timeout_votes(harness: &mut TestHarness, test_data: &TestData, vie
 
 /// Timeout votes are collected by the CPU VoteCollector and form a
 /// TimeoutCertificate, which advances the view.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn test_timeout_votes_form_tc() {
     let mut harness = TestHarness::new(0).await;
     let test_data = TestData::new(4).await;
@@ -300,7 +300,7 @@ async fn test_timeout_votes_form_tc() {
 /// The 200ms timer is long enough for VID disperse to complete (~50-100ms)
 /// but short enough to actually fire during the test, proving the timeout
 /// mechanism does not interfere with the leader's proposal path.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn test_leader_proposes_after_timeout_via_cpu_tasks() {
     let test_data = TestData::new(5).await;
     // Timeout cert for view 2 advances to view 3; we need to be leader of view 3
