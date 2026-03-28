@@ -7,17 +7,14 @@ use hotshot_example_types::{
 };
 use hotshot_types::{
     data::{Leaf2, ViewNumber},
-    traits::{
-        signature_key::SignatureKey,
-        storage::{null_load_drb_progress_fn, null_store_drb_progress_fn},
-    },
+    traits::signature_key::SignatureKey,
 };
 
 use super::utils::mock_membership;
 use crate::{
     consensus::{Consensus, ConsensusInput, ConsensusOutput},
     coordinator::timer::Timer,
-    drb::DrbRequester,
+    epoch::EpochManager,
     helpers::upgrade_lock,
     message::Message,
     network::Network,
@@ -50,9 +47,7 @@ impl TestHarness {
         let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
         let membership = mock_membership().await;
 
-        let store_drb_progress = null_store_drb_progress_fn();
-        let load_drb_progress = null_load_drb_progress_fn();
-        let drb_request_task = DrbRequester::new(store_drb_progress, load_drb_progress);
+        let epoch_manager = EpochManager::new(10, membership.clone());
 
         let vote1_task = VoteCollector::new(membership.clone(), upgrade_lock());
         let vote2_task = VoteCollector::new(membership.clone(), upgrade_lock());
@@ -86,7 +81,7 @@ impl TestHarness {
             .checkpoint_collector(checkpoint_collector)
             .vid_disperser(vid_disperse_task)
             .vid_reconstructor(vid_reconstruction_task)
-            .drb_requester(drb_request_task)
+            .epoch_manager(epoch_manager)
             .membership_coordinator(membership)
             .outbox(Outbox::new())
             .timer(Timer::new(timer_duration, ViewNumber::genesis()))

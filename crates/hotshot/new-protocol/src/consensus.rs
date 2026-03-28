@@ -11,7 +11,7 @@ use hotshot_types::{
         EpochNumber, Leaf2, VidCommitment, VidCommitment2, VidDisperse2, VidDisperseShare2,
         ViewChangeEvidence2, ViewNumber, vid_disperse::vid_total_weight,
     },
-    drb::DrbInput,
+    drb::DrbResult,
     epoch_membership::EpochMembershipCoordinator,
     message::Proposal as SignedProposal,
     simple_certificate::{TimeoutCertificate2, ViewSyncFinalizeCertificate2},
@@ -20,6 +20,7 @@ use hotshot_types::{
     traits::{
         block_contents::BlockHeader, node_implementation::NodeType, signature_key::SignatureKey,
     },
+    utils::{is_epoch_transition, is_last_block},
     vote::{self, Certificate, HasViewNumber},
 };
 use tracing::{debug, instrument, warn};
@@ -55,12 +56,12 @@ pub enum ConsensusInput<T: NodeType> {
     TimeoutCertificate(TimeoutCertificate2<T>),
     VidDisperseCreated(ViewNumber, VidDisperse2<T>),
     ViewSyncCertificate(ViewSyncFinalizeCertificate2<T>),
+    DrbResult(EpochNumber, DrbResult),
 }
 
 #[derive(Eq, PartialEq, Debug, Clone)]
 pub enum ConsensusOutput<T: NodeType> {
     RequestBlockAndHeader(BlockAndHeaderRequest<T>),
-    RequestDRB(DrbInput),
     RequestProposal(ViewNumber, Commitment<Leaf2<T>>),
     RequestState(StateRequest<T>),
     SendProposal(SignedProposal<T, Proposal<T>>, VidDisperse2<T>),
@@ -74,13 +75,9 @@ pub enum ConsensusOutput<T: NodeType> {
         payload: T::BlockPayload,
         metadata: <T::BlockPayload as BlockPayload<T>>::Metadata,
     },
-    Certificate1Formed(Certificate1<T>),
-    Certificate2Formed(Certificate2<T>),
     LeafDecided(Vec<Leaf2<T>>),
     LockUpdated(Certificate2<T>),
-    TimeoutCertificateReceived(TimeoutCertificate2<T>),
     ViewChanged(ViewNumber, EpochNumber),
-    ViewSyncCertificateReceived(ViewSyncFinalizeCertificate2<T>),
 }
 
 pub struct Consensus<T: NodeType> {
@@ -97,6 +94,7 @@ pub struct Consensus<T: NodeType> {
     locked_cert: Option<Certificate1<T>>,
     headers: BTreeMap<ViewNumber, T::BlockHeader>,
     last_decided_view: ViewNumber,
+    drb_results: BTreeMap<EpochNumber, DrbResult>,
 
     voted_1_views: BTreeSet<ViewNumber>,
     voted_2_views: BTreeSet<ViewNumber>,
@@ -111,6 +109,7 @@ pub struct Consensus<T: NodeType> {
     private_key: <T::SignatureKey as SignatureKey>::PrivateKey,
 
     garbage_collection_interval: u64,
+    epoch_height: u64,
 }
 
 /// Protocol flow directive.
@@ -140,6 +139,7 @@ impl<T: NodeType> Consensus<T> {
             locked_cert: None,
             last_decided_view: ViewNumber::genesis(),
             headers: BTreeMap::new(),
+            drb_results: BTreeMap::new(),
             public_key,
             timeout_view: ViewNumber::genesis(),
             stake_table_coordinator: membership_coordinator,
@@ -160,7 +160,8 @@ impl<T: NodeType> Consensus<T> {
         outbox: &mut Outbox<ConsensusOutput<T>>,
     ) {
         let view = input.view_number();
-        if view <= self.timeout_view {
+        // Ignore old inputs unless it's a DRB result
+        if !matches!(input, ConsensusInput::DrbResult(_, _)) && view <= self.timeout_view {
             return;
         }
         let proto = match input {
@@ -225,6 +226,10 @@ impl<T: NodeType> Consensus<T> {
                 self.vid_disperses.insert(view, vid_disperse);
                 Protocol::Continue
             },
+            ConsensusInput::DrbResult(epoch, drb_result) => {
+                self.drb_results.insert(epoch, drb_result);
+                Protocol::Continue
+            },
         };
 
         if matches!(proto, Protocol::Abort) {
@@ -267,6 +272,16 @@ impl<T: NodeType> Consensus<T> {
     ) -> Protocol {
         let view = proposal.view_number();
 
+        if self
+            .locked_cert
+            .as_ref()
+            .is_some_and(|l| l.view_number() > view)
+            || self.proposals.contains_key(&view)
+        {
+            warn!(%view, "proposal for old view");
+            return Protocol::Abort;
+        }
+
         // TODO: This signature check is slow (> 1ms).  We should consider
         // if this should be done off the main thread.
         if !self.validate_proposal_signature(&proposal.proposal).await {
@@ -277,6 +292,12 @@ impl<T: NodeType> Consensus<T> {
         let vid_share = proposal.vid_share;
         let proposal = proposal.proposal.data;
         let epoch = proposal.epoch;
+        // QC can be for a different epoch
+        let Some(qc_epoch) = proposal.justify_qc.epoch() else {
+            warn!(%view, "proposal has no epoch number");
+            return Protocol::Abort;
+        };
+        let block_number = proposal.block_header.block_number();
 
         if !vid_matches_proposal(&vid_share, &proposal) {
             debug!("vid share does not match proposal");
@@ -295,6 +316,44 @@ impl<T: NodeType> Consensus<T> {
 
         if !self.is_safe(&proposal) {
             debug!("proposal not safe");
+            return Protocol::Abort;
+        }
+
+        // Validate the epoch transition rules.
+        // - DRB result must be attached and match our calculated result.
+        // - Next epoch justify QC (deciding QC) must be attached to the first proposal of the new epoch
+        if is_epoch_transition(block_number, self.epoch_height) {
+            let Some(drb) = self.drb_results.get(&(epoch + 1)) else {
+                debug!(%epoch, "no DRB result for epoch");
+                outbox.push_back(ConsensusOutput::RequestDrbResult(epoch + 1));
+                return Protocol::Abort;
+            };
+            if !proposal.next_drb_result.is_some_and(|drb| drb == drb) {
+                warn!(%epoch, "DRB result does not match proposal");
+                return Protocol::Abort;
+            }
+        }
+        // if the previous block is the last block of the epoch, this proposal must be the first proposal of the new epoch
+        if is_last_block(block_number.saturating_sub(1), self.epoch_height) {
+            let Some(cert2) = proposal.next_epoch_justify_qc.as_ref() else {
+                warn!(%epoch, "no next epoch justify QC");
+                return Protocol::Abort;
+            };
+            if cert2.data.leaf_commit != proposal.justify_qc.data().leaf_commit {
+                warn!(%epoch, "next epoch justify QC does not match proposal");
+                return Protocol::Abort;
+            }
+            if !self.verify_cert(&cert2, qc_epoch).await {
+                warn!(%epoch, "next epoch justify QC not verified");
+                return Protocol::Abort;
+            }
+        }
+
+        if !self
+            .verify_cert(&proposal.justify_qc, proposal.justify_qc.epoch())
+            .await
+        {
+            warn!(%epoch, "justify QC not verified");
             return Protocol::Abort;
         }
 
@@ -377,7 +436,6 @@ impl<T: NodeType> Consensus<T> {
             return Protocol::Abort;
         };
         self.timeout_certs.insert(view, certificate.clone());
-        outbox.push_back(ConsensusOutput::TimeoutCertificateReceived(certificate));
         outbox.push_back(ConsensusOutput::ViewChanged(view, epoch));
         if !self.is_leader(view, epoch).await {
             debug!(%epoch, "not leader");
@@ -416,7 +474,6 @@ impl<T: NodeType> Consensus<T> {
             return Protocol::Abort;
         };
         self.view_sync_certs.insert(view, certificate.clone());
-        outbox.push_back(ConsensusOutput::ViewSyncCertificateReceived(certificate));
         outbox.push_back(ConsensusOutput::ViewChanged(view, epoch));
         if !self.is_leader(view, epoch).await {
             debug!(%epoch, "not leader");
@@ -488,6 +545,15 @@ impl<T: NodeType> Consensus<T> {
         };
 
         // TODO: Handle epoch change and properly set next epoch qc drb result and state cert
+        let next_drb_result = if is_epoch_transition(header.block_number(), self.epoch_height) {
+            let Some(drb) = self.drb_results.get(&proposal.epoch) else {
+                debug!(%proposal.epoch, "no DRB result for epoch");
+                return;
+            };
+            Some(drb.clone())
+        } else {
+            None
+        };
         let mut proposal = Proposal::<T> {
             block_header: header.clone(),
             view_number: view,
@@ -496,7 +562,7 @@ impl<T: NodeType> Consensus<T> {
             next_epoch_justify_qc: None,
             upgrade_certificate: None,
             view_change_evidence: None,
-            next_drb_result: None,
+            next_drb_result,
             state_cert: None,
         };
 
@@ -915,6 +981,7 @@ impl<T: NodeType> ConsensusInput<T> {
             },
             ConsensusInput::VidDisperseCreated(view, _) => *view,
             ConsensusInput::ViewSyncCertificate(cert) => cert.view_number(),
+            ConsensusInput::DrbResult(epoch, _) => ViewNumber::genesis(),
         }
     }
 }

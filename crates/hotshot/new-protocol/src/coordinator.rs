@@ -20,7 +20,7 @@ use crate::{
         error::{CoordinatorError, ErrorKind, Severity},
         timer::Timer,
     },
-    drb::DrbRequester,
+    epoch::{EpochManager, EpochRootResult},
     message::{
         Certificate2, CheckpointCertificate, CheckpointVote, ConsensusMessage, Message,
         MessageType, ProposalMessage, Vote2,
@@ -44,7 +44,7 @@ pub struct Coordinator<T: NodeType, I: NodeImplementation<T>> {
     vote2_collector: VoteCollector<T, Vote2<T>, Certificate2<T>>,
     timeout_collector: VoteCollector<T, TimeoutVote2<T>, TimeoutCertificate2<T>>,
     checkpoint_collector: VoteCollector<T, CheckpointVote<T>, CheckpointCertificate<T>>,
-    drb_requester: DrbRequester,
+    epoch_manager: EpochManager<T>,
     #[builder(default)]
     outbox: Outbox<ConsensusOutput<T>>,
     public_key: T::SignatureKey,
@@ -135,9 +135,15 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                         return Err(CoordinatorError::unspecified().context("vid reconstruction"))
                     }
                 },
-                Some((_epoch, _drb_result)) = self.drb_requester.next() => {
-                    todo!()
-                }
+                Some(result) = self.epoch_manager.next() => match result {
+                    Ok(EpochRootResult::DrbResult(epoch, drb_result)) => {
+                        return Ok(ConsensusInput::DrbResult(epoch, drb_result))
+                    }
+                    Ok(EpochRootResult::RootAdded(epoch)) => {}
+                    Err(_) => {
+                        return Err(CoordinatorError::unspecified().context("epoch root"))
+                    }
+                },
                 else => {
                     return Err(CoordinatorError::critical(ErrorKind::NoInput))
                 }
@@ -249,9 +255,6 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                     metadata,
                 });
             },
-            ConsensusOutput::RequestDRB(drb_input) => {
-                self.drb_requester.request_drb(drb_input);
-            },
             ConsensusOutput::SendCheckpointVote(checkpoint_vote) => {
                 let message = Message {
                     sender: self.public_key.clone(),
@@ -264,12 +267,14 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                     .await
                     .map_err(|e| CoordinatorError::from(e).context("broadcast checkpoint vote"))?
             },
-            ConsensusOutput::Certificate1Formed(_) => {}, // TODO
-            ConsensusOutput::Certificate2Formed(_) => {}, // TODO
-            ConsensusOutput::LeafDecided(_) => {},        // TODO
-            ConsensusOutput::LockUpdated(_) => {},        // TODO
+            ConsensusOutput::LeafDecided(leaves) => {
+                for leaf in leaves {
+                    self.epoch_manager.handle_leaf_decided(leaf);
+                }
+            },
+            ConsensusOutput::LockUpdated(_) => {}, // TODO
             ConsensusOutput::RequestBlockAndHeader(_) => {}, // TODO
-            ConsensusOutput::RequestProposal(..) => {},   // TODO
+            ConsensusOutput::RequestProposal(..) => {}, // TODO
             ConsensusOutput::SendProposal(proposal, vid_disperse) => {
                 // TODO: This may be done async in network so we do not spend
                 // too much time here in this loop.
@@ -324,8 +329,6 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                     .await
                     .map_err(|e| CoordinatorError::from(e).context("broadcast vote2"))?
             },
-            ConsensusOutput::TimeoutCertificateReceived(..) => {}, // TODO
-            ConsensusOutput::ViewSyncCertificateReceived(_) => {}, // TODO
             ConsensusOutput::ViewChanged(view, _) => {
                 self.timer.reset_with(view);
             },
@@ -343,6 +346,6 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
         self.vote1_collector.gc(view);
         self.vote2_collector.gc(view);
         self.timeout_collector.gc(view);
-        self.drb_requester.gc(epoch);
+        self.epoch_manager.gc(epoch);
     }
 }
