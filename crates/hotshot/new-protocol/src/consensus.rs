@@ -258,10 +258,6 @@ impl<T: NodeType> Consensus<T> {
         self.certs2 = self.certs2.split_off(&view);
         self.timeout_certs = self.timeout_certs.split_off(&view);
         self.view_sync_certs = self.view_sync_certs.split_off(&view);
-        self.locked_cert = self
-            .locked_cert
-            .take()
-            .filter(|cert| cert.view_number() > view);
         self.headers = self.headers.split_off(&view);
         self.voted_1_views = self.voted_1_views.split_off(&view);
         self.voted_2_views = self.voted_2_views.split_off(&view);

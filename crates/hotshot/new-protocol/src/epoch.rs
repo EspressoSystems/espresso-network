@@ -83,7 +83,8 @@ impl<T: NodeType> EpochManager<T> {
     }
     pub fn request_drb_result(&mut self, epoch: EpochNumber) {
         let membership_coordinator = self.membership_coordinator.clone();
-        self.tasks.spawn(async move {
+        let handles = self.handles.entry(epoch).or_default();
+        handles.push(self.tasks.spawn(async move {
             match membership_coordinator
                 .stake_table_for_epoch(Some(epoch))
                 .await
@@ -105,6 +106,6 @@ impl<T: NodeType> EpochManager<T> {
                         .map_err(|e| warn!("Failed to get DRB result: {}", e))
                 },
             }
-        });
+        }));
     }
 }
