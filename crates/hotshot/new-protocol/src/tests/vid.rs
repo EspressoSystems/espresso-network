@@ -11,7 +11,7 @@ const THRESHOLD: u64 = 7;
 /// Feeding shares beyond the reconstruction threshold for the same view
 /// should produce exactly one BlockReconstructed result from `next()`,
 /// not one per extra share.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn test_no_duplicate_reconstruction_after_threshold() {
     let test_data = TestData::new(1).await;
     let view = &test_data.views[0];
@@ -74,7 +74,7 @@ async fn test_no_duplicate_reconstruction_after_threshold() {
 
 /// Shares arriving after reconstruction has already completed for a view
 /// should be silently dropped (the `reconstructed` set guards this path).
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn test_shares_after_reconstruction_are_ignored() {
     let test_data = TestData::new(1).await;
     let view = &test_data.views[0];
