@@ -1097,15 +1097,17 @@ impl L1Client {
         tx_hash: B256,
     ) -> anyhow::Result<TransactionReceipt> {
         let num_providers = self.transport.urls.len();
+        let tolerance = self.options().l1_consecutive_failure_tolerance.max(1);
+        let max_attempts = tolerance * num_providers;
 
-        for attempt in 0..num_providers {
+        for attempt in 0..max_attempts {
             match self.get_transaction_receipt(tx_hash).await? {
                 Some(receipt) => return Ok(receipt),
                 None => {
-                    tracing::warn!(
+                    tracing::info!(
                         %tx_hash,
                         attempt,
-                        num_providers,
+                        max_attempts,
                         "provider returned null for transaction receipt, reporting failure"
                     );
                     self.transport.report_failure();
