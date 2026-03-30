@@ -474,6 +474,14 @@ pub async fn run() -> Result<()> {
         return Ok(());
     }
 
+    let create_l1_client = || {
+        L1ClientOptions {
+            l1_events_max_block_range: config.events_block_range,
+            ..Default::default()
+        }
+        .connect(vec![config.rpc_url.clone()])
+    };
+
     if let Commands::PendingWithdrawals {
         address,
         claims_output,
@@ -482,11 +490,7 @@ pub async fn run() -> Result<()> {
         let address = address
             .or_from_wallet(wallet.as_ref())
             .context("Address required - provide --address or configure a signer")?;
-        let l1 = L1ClientOptions {
-            l1_events_max_block_range: config.events_block_range,
-            ..Default::default()
-        }
-        .connect(vec![config.rpc_url.clone()])?;
+        let l1 = create_l1_client()?;
         let claims =
             crate::undelegation::fetch_pending_claims(&l1, stake_table_addr, address).await?;
         let block = l1
@@ -502,11 +506,7 @@ pub async fn run() -> Result<()> {
     }
 
     if let Commands::ClaimAllWithdrawals { input } = config.commands {
-        let l1 = L1ClientOptions {
-            l1_events_max_block_range: config.events_block_range,
-            ..Default::default()
-        }
-        .connect(vec![config.rpc_url.clone()])?;
+        let l1 = create_l1_client()?;
         if config.export_calldata {
             let address = config.sender_address.context(
                 "claim-all-withdrawals with --export-calldata requires --sender-address",

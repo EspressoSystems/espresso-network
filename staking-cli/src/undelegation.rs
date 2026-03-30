@@ -271,13 +271,18 @@ pub async fn claim_all_unlocked(
                         d > U256::ZERO
                     },
                 };
-                if still_exists && claim.unlocks_at <= current_ts {
-                    valid.push(claim);
-                } else if !still_exists {
+                if !still_exists {
                     output_info(format!(
                         "Skipping {} from {} (already claimed)",
                         claim.kind, claim.validator
                     ));
+                } else if claim.unlocks_at > current_ts {
+                    output_info(format!(
+                        "Skipping {} from {} (still locked)",
+                        claim.kind, claim.validator
+                    ));
+                } else {
+                    valid.push(claim);
                 }
             }
             valid
