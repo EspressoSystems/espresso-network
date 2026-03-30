@@ -194,17 +194,10 @@ where
             )
             .await?;
 
-        // VID shares can be missing if the corresponding header is missing _or_ if the share data
-        // is NULL, so we use the `share` column as an indicator.
-        let vid_shares = self
-            .sync_status_ranges("header", "vid_share", from, to)
-            .await?;
-
         Ok(SyncStatusQueryData {
             leaves,
             blocks,
             vid_common,
-            vid_shares,
             pruned_height: None,
         })
     }
@@ -1016,7 +1009,6 @@ mod test {
                 },
                 blocks: missing.clone(),
                 vid_common: missing.clone(),
-                vid_shares: missing,
                 pruned_height: None,
             }
         );
@@ -1055,21 +1047,6 @@ mod test {
                 leaves: present.clone(),
                 blocks: present.clone(),
                 vid_common: present,
-                vid_shares: ResourceSyncStatus {
-                    missing: 1,
-                    ranges: vec![
-                        SyncStatusRange {
-                            status: SyncStatus::Missing,
-                            start: 0,
-                            end: 1,
-                        },
-                        SyncStatusRange {
-                            status: SyncStatus::Present,
-                            start: 1,
-                            end: 2,
-                        },
-                    ]
-                },
                 pruned_height: None,
             }
         );
@@ -1143,7 +1120,6 @@ mod test {
                 },
                 blocks: missing.clone(),
                 vid_common: missing.clone(),
-                vid_shares: missing,
                 pruned_height: None,
             }
         );
@@ -1199,7 +1175,6 @@ mod test {
                 leaves: present.clone(),
                 blocks: missing.clone(),
                 vid_common: present,
-                vid_shares: missing,
                 pruned_height: None,
             }
         );

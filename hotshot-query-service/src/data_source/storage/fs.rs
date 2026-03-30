@@ -825,15 +825,9 @@ where
         end: usize,
     ) -> QueryResult<SyncStatusQueryData> {
         Ok(SyncStatusQueryData {
-            leaves: self.inner.leaf_storage.sync_status(start, end, |_| false),
-            blocks: self.inner.block_storage.sync_status(start, end, |_| false),
-            vid_common: self.inner.vid_storage.sync_status(start, end, |_| false),
-            vid_shares: self
-                .inner
-                .vid_storage
-                // Missing shares includes the completely missing VID entries, plus any entry which
-                // is _not_ missing but which has a null share.
-                .sync_status(start, end, |(_, share)| share.is_none()),
+            leaves: self.inner.leaf_storage.sync_status(start, end),
+            blocks: self.inner.block_storage.sync_status(start, end),
+            vid_common: self.inner.vid_storage.sync_status(start, end),
             pruned_height: None,
         })
     }
