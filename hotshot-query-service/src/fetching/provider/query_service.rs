@@ -460,7 +460,7 @@ mod test {
             },
         },
         fetching::provider::{NoFetching, Provider as ProviderTrait, TestProvider},
-        node::{SyncStatusQueryData, data_source::NodeDataSource},
+        node::data_source::NodeDataSource,
         task::BackgroundTask,
         testing::{
             consensus::{MockDataSource, MockNetwork},
@@ -1731,16 +1731,7 @@ mod test {
         // Wait for the data to be restored. It should be restored by the next major scan.
         loop {
             let sync_status = data_source.sync_status().await.unwrap();
-
-            // VID shares are unique to a node and will never be fetched from a peer; this is
-            // acceptable since there is redundancy built into the VID scheme. Ignore missing VID
-            // shares in the `is_fully_synced` check.
-            if (SyncStatusQueryData {
-                vid_shares: Default::default(),
-                ..sync_status.clone()
-            })
-            .is_fully_synced()
-            {
+            if sync_status.is_fully_synced() {
                 break;
             }
             tracing::info!(?sync_status, "waiting for node to sync");
@@ -1750,14 +1741,7 @@ mod test {
         // The node remains fully synced even after some time; no pruning.
         sleep(Duration::from_secs(3)).await;
         let sync_status = data_source.sync_status().await.unwrap();
-        assert!(
-            (SyncStatusQueryData {
-                vid_shares: Default::default(),
-                ..sync_status.clone()
-            })
-            .is_fully_synced(),
-            "{sync_status:#?}"
-        );
+        assert!(sync_status.is_fully_synced(), "{sync_status:#?}");
     }
 
     #[derive(Clone, Copy, Debug)]

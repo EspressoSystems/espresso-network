@@ -851,12 +851,9 @@ pub mod node_tests {
             .await,
         ];
         let dispersal = vid.disperse([]).unwrap();
-        let mut vid_data = vec![(
-            VidCommonQueryData::new(
-                leaves[0].header().clone(),
-                VidCommon::V0(dispersal.common.clone()),
-            ),
-            dispersal.shares[0].clone(),
+        let mut vid_commons = vec![VidCommonQueryData::new(
+            leaves[0].header().clone(),
+            VidCommon::V0(dispersal.common.clone()),
         )];
         for i in 0..2 {
             // Generate a unique payload and VID data, so that missing data is actually missing
@@ -879,11 +876,10 @@ pub mod node_tests {
                 leaf.header().clone(),
                 VidCommon::V0(dispersal.common.clone()),
             );
-            let vid_share = dispersal.shares[0].clone();
 
             leaves.push(leaf);
             blocks.push(block);
-            vid_data.push((vid_common, vid_share));
+            vid_commons.push(vid_common);
         }
 
         // At first, the node is fully synced.
@@ -892,251 +888,182 @@ pub mod node_tests {
         // Insert a leaf without the corresponding block or VID info, make sure we detect that the
         // block and VID info are missing.
         ds.append(leaves[0].clone().into()).await.unwrap();
-        assert_eq!(
-            ds.sync_status().await.unwrap(),
-            SyncStatusQueryData {
-                blocks: ResourceSyncStatus {
-                    missing: 1,
-                    ranges: vec![SyncStatusRange {
-                        start: 0,
-                        end: 1,
-                        status: SyncStatus::Missing,
-                    }]
-                },
-                vid_common: ResourceSyncStatus {
-                    missing: 1,
-                    ranges: vec![SyncStatusRange {
-                        start: 0,
-                        end: 1,
-                        status: SyncStatus::Missing,
-                    }]
-                },
-                vid_shares: ResourceSyncStatus {
-                    missing: 1,
-                    ranges: vec![SyncStatusRange {
-                        start: 0,
-                        end: 1,
-                        status: SyncStatus::Missing,
-                    }]
-                },
-                leaves: ResourceSyncStatus {
-                    missing: 0,
-                    ranges: vec![SyncStatusRange {
-                        start: 0,
-                        end: 1,
-                        status: SyncStatus::Present,
-                    }]
-                },
-                pruned_height: None,
-            }
-        );
+        assert_eq!(ds.sync_status().await.unwrap(), SyncStatusQueryData {
+            blocks: ResourceSyncStatus {
+                missing: 1,
+                ranges: vec![SyncStatusRange {
+                    start: 0,
+                    end: 1,
+                    status: SyncStatus::Missing,
+                }]
+            },
+            vid_common: ResourceSyncStatus {
+                missing: 1,
+                ranges: vec![SyncStatusRange {
+                    start: 0,
+                    end: 1,
+                    status: SyncStatus::Missing,
+                }]
+            },
+            leaves: ResourceSyncStatus {
+                missing: 0,
+                ranges: vec![SyncStatusRange {
+                    start: 0,
+                    end: 1,
+                    status: SyncStatus::Present,
+                }]
+            },
+            pruned_height: None,
+        });
 
         // Insert a leaf whose height is not the successor of the previous leaf. We should now
         // detect that the leaf in between is missing (along with all _three_ corresponding blocks).
         ds.append(leaves[2].clone().into()).await.unwrap();
-        assert_eq!(
-            ds.sync_status().await.unwrap(),
-            SyncStatusQueryData {
-                blocks: ResourceSyncStatus {
-                    missing: 3,
-                    ranges: vec![SyncStatusRange {
+        assert_eq!(ds.sync_status().await.unwrap(), SyncStatusQueryData {
+            blocks: ResourceSyncStatus {
+                missing: 3,
+                ranges: vec![SyncStatusRange {
+                    start: 0,
+                    end: 3,
+                    status: SyncStatus::Missing,
+                }]
+            },
+            vid_common: ResourceSyncStatus {
+                missing: 3,
+                ranges: vec![SyncStatusRange {
+                    start: 0,
+                    end: 3,
+                    status: SyncStatus::Missing,
+                }]
+            },
+            leaves: ResourceSyncStatus {
+                missing: 1,
+                ranges: vec![
+                    SyncStatusRange {
                         start: 0,
-                        end: 3,
+                        end: 1,
+                        status: SyncStatus::Present,
+                    },
+                    SyncStatusRange {
+                        start: 1,
+                        end: 2,
                         status: SyncStatus::Missing,
-                    }]
-                },
-                vid_common: ResourceSyncStatus {
-                    missing: 3,
-                    ranges: vec![SyncStatusRange {
-                        start: 0,
+                    },
+                    SyncStatusRange {
+                        start: 2,
                         end: 3,
-                        status: SyncStatus::Missing,
-                    }]
-                },
-                vid_shares: ResourceSyncStatus {
-                    missing: 3,
-                    ranges: vec![SyncStatusRange {
-                        start: 0,
-                        end: 3,
-                        status: SyncStatus::Missing,
-                    }]
-                },
-                leaves: ResourceSyncStatus {
-                    missing: 1,
-                    ranges: vec![
-                        SyncStatusRange {
-                            start: 0,
-                            end: 1,
-                            status: SyncStatus::Present,
-                        },
-                        SyncStatusRange {
-                            start: 1,
-                            end: 2,
-                            status: SyncStatus::Missing,
-                        },
-                        SyncStatusRange {
-                            start: 2,
-                            end: 3,
-                            status: SyncStatus::Present,
-                        }
-                    ]
-                },
-                pruned_height: None,
-            }
-        );
+                        status: SyncStatus::Present,
+                    }
+                ]
+            },
+            pruned_height: None,
+        });
 
         // Insert VID common without a corresponding share.
         {
             let mut tx = ds.write().await.unwrap();
-            tx.insert_vid(&vid_data[0].0, None).await.unwrap();
+            tx.insert_vid(&vid_commons[0].clone(), None).await.unwrap();
             tx.commit().await.unwrap();
         }
-        assert_eq!(
-            ds.sync_status().await.unwrap(),
-            SyncStatusQueryData {
-                blocks: ResourceSyncStatus {
-                    missing: 3,
-                    ranges: vec![SyncStatusRange {
+        assert_eq!(ds.sync_status().await.unwrap(), SyncStatusQueryData {
+            blocks: ResourceSyncStatus {
+                missing: 3,
+                ranges: vec![SyncStatusRange {
+                    start: 0,
+                    end: 3,
+                    status: SyncStatus::Missing,
+                }]
+            },
+            vid_common: ResourceSyncStatus {
+                missing: 2,
+                ranges: vec![
+                    SyncStatusRange {
                         start: 0,
+                        end: 1,
+                        status: SyncStatus::Present,
+                    },
+                    SyncStatusRange {
+                        start: 1,
                         end: 3,
                         status: SyncStatus::Missing,
-                    }]
-                },
-                vid_common: ResourceSyncStatus {
-                    missing: 2,
-                    ranges: vec![
-                        SyncStatusRange {
-                            start: 0,
-                            end: 1,
-                            status: SyncStatus::Present,
-                        },
-                        SyncStatusRange {
-                            start: 1,
-                            end: 3,
-                            status: SyncStatus::Missing,
-                        },
-                    ]
-                },
-                vid_shares: ResourceSyncStatus {
-                    missing: 3,
-                    ranges: vec![SyncStatusRange {
+                    },
+                ]
+            },
+            leaves: ResourceSyncStatus {
+                missing: 1,
+                ranges: vec![
+                    SyncStatusRange {
                         start: 0,
-                        end: 3,
+                        end: 1,
+                        status: SyncStatus::Present,
+                    },
+                    SyncStatusRange {
+                        start: 1,
+                        end: 2,
                         status: SyncStatus::Missing,
-                    }]
-                },
-                leaves: ResourceSyncStatus {
-                    missing: 1,
-                    ranges: vec![
-                        SyncStatusRange {
-                            start: 0,
-                            end: 1,
-                            status: SyncStatus::Present,
-                        },
-                        SyncStatusRange {
-                            start: 1,
-                            end: 2,
-                            status: SyncStatus::Missing,
-                        },
-                        SyncStatusRange {
-                            start: 2,
-                            end: 3,
-                            status: SyncStatus::Present,
-                        }
-                    ]
-                },
-                pruned_height: None,
-            }
-        );
+                    },
+                    SyncStatusRange {
+                        start: 2,
+                        end: 3,
+                        status: SyncStatus::Present,
+                    }
+                ]
+            },
+            pruned_height: None,
+        });
 
         // Rectify the missing data.
         {
             let mut tx = ds.write().await.unwrap();
             tx.insert_block(&blocks[0]).await.unwrap();
-            tx.insert_vid(&vid_data[0].0, Some(&VidShare::V0(vid_data[0].1.clone())))
-                .await
-                .unwrap();
+            tx.insert_vid(&vid_commons[0], None).await.unwrap();
             tx.insert_leaf(&leaves[1]).await.unwrap();
             tx.insert_block(&blocks[1]).await.unwrap();
-            tx.insert_vid(&vid_data[1].0, Some(&VidShare::V0(vid_data[1].1.clone())))
-                .await
-                .unwrap();
+            tx.insert_vid(&vid_commons[1], None).await.unwrap();
             tx.insert_block(&blocks[2]).await.unwrap();
-            tx.insert_vid(&vid_data[2].0, Some(&VidShare::V0(vid_data[2].1.clone())))
-                .await
-                .unwrap();
+            tx.insert_vid(&vid_commons[2], None).await.unwrap();
             tx.commit().await.unwrap();
         }
 
         // Some data sources (e.g. file system) don't support out-of-order insertion of missing
-        // data. These would have just ignored the insertion of `vid[0]` (the share) and
-        // `leaves[1]`. Detect if this is the case; then we allow 1 missing leaf and 1 missing VID
-        // share.
-        let (leaves, vid_shares) = if ds.get_leaf(1).await.try_resolve().is_err() {
+        // data. These would have just ignored the insertion of `leaves[1]`. Detect if this is the
+        // case; then we allow 1 missing leaf.
+        let leaves = if ds.get_leaf(1).await.try_resolve().is_err() {
             tracing::warn!(
-                "data source does not support out-of-order filling, allowing one missing leaf and \
-                 VID share"
+                "data source does not support out-of-order filling, allowing one missing leaf"
             );
-            (
-                ResourceSyncStatus {
-                    missing: 1,
-                    ranges: vec![
-                        SyncStatusRange {
-                            start: 0,
-                            end: 1,
-                            status: SyncStatus::Present,
-                        },
-                        SyncStatusRange {
-                            start: 1,
-                            end: 2,
-                            status: SyncStatus::Missing,
-                        },
-                        SyncStatusRange {
-                            start: 2,
-                            end: 3,
-                            status: SyncStatus::Present,
-                        },
-                    ],
-                },
-                ResourceSyncStatus {
-                    missing: 1,
-                    ranges: vec![
-                        SyncStatusRange {
-                            start: 0,
-                            end: 1,
-                            status: SyncStatus::Missing,
-                        },
-                        SyncStatusRange {
-                            start: 1,
-                            end: 3,
-                            status: SyncStatus::Present,
-                        },
-                    ],
-                },
-            )
+            ResourceSyncStatus {
+                missing: 1,
+                ranges: vec![
+                    SyncStatusRange {
+                        start: 0,
+                        end: 1,
+                        status: SyncStatus::Present,
+                    },
+                    SyncStatusRange {
+                        start: 1,
+                        end: 2,
+                        status: SyncStatus::Missing,
+                    },
+                    SyncStatusRange {
+                        start: 2,
+                        end: 3,
+                        status: SyncStatus::Present,
+                    },
+                ],
+            }
         } else {
-            (
-                ResourceSyncStatus {
-                    missing: 0,
-                    ranges: vec![SyncStatusRange {
-                        start: 0,
-                        end: 3,
-                        status: SyncStatus::Present,
-                    }],
-                },
-                ResourceSyncStatus {
-                    missing: 0,
-                    ranges: vec![SyncStatusRange {
-                        start: 0,
-                        end: 3,
-                        status: SyncStatus::Present,
-                    }],
-                },
-            )
+            ResourceSyncStatus {
+                missing: 0,
+                ranges: vec![SyncStatusRange {
+                    start: 0,
+                    end: 3,
+                    status: SyncStatus::Present,
+                }],
+            }
         };
         let expected_sync_status = SyncStatusQueryData {
             leaves,
-            vid_shares,
             blocks: ResourceSyncStatus {
                 missing: 0,
                 ranges: vec![SyncStatusRange {
@@ -1155,15 +1082,6 @@ pub mod node_tests {
             },
             pruned_height: None,
         };
-        assert_eq!(ds.sync_status().await.unwrap(), expected_sync_status);
-
-        // If we re-insert one of the VID entries without a share, it should not overwrite the share
-        // that we already have; that is, `insert_vid` should be monotonic.
-        {
-            let mut tx = ds.write().await.unwrap();
-            tx.insert_vid(&vid_data[0].0, None).await.unwrap();
-            tx.commit().await.unwrap();
-        }
         assert_eq!(ds.sync_status().await.unwrap(), expected_sync_status);
     }
 
@@ -1404,12 +1322,10 @@ pub mod node_tests {
         // Recover payload.
         tracing::info!("recovering payload");
         let bytes = vid.recover_payload(&shares, common).unwrap();
-        let recovered = <MockPayload as BlockPayload<TestTypes>>::from_bytes(
-            &bytes,
-            &TestMetadata {
+        let recovered =
+            <MockPayload as BlockPayload<TestTypes>>::from_bytes(&bytes, &TestMetadata {
                 num_transactions: 7, // arbitrary
-            },
-        );
+            });
         assert_eq!(recovered, *block.payload());
         assert_eq!(recovered.transactions, vec![txn]);
     }
@@ -1638,13 +1554,10 @@ pub mod node_tests {
             qc2.view_number += 1;
 
             let leaf = LeafQueryData::new(leaf, qc1.clone()).unwrap();
-            (
-                leaf,
-                [
-                    CertificatePair::non_epoch_change(qc1),
-                    CertificatePair::non_epoch_change(qc2),
-                ],
-            )
+            (leaf, [
+                CertificatePair::non_epoch_change(qc1),
+                CertificatePair::non_epoch_change(qc2),
+            ])
         }
 
         // Insert a leaf with QC chain.
