@@ -219,7 +219,7 @@ jobs:
         uses: docker/metadata-action@v5
         id: metadata
         with:
-          images: ghcr.io/espressosystems/espresso-sequencer/${{matrix.service}}
+          images: ghcr.io/espressosystems/espresso-network/${{matrix.service}}
 
       # There is no straightforward way to import a multiplatform image from a tar file with
       # docker.
@@ -255,7 +255,7 @@ jobs:
           labels: ${{ steps.metadata.outputs.labels  }}
           # Note: the final multiarch image will receive the tag
           platforms: linux/amd64
-          outputs: type=image,name=ghcr.io/espressosystems/espresso-sequencer/${{ matrix.service }},push-by-digest=true,name-canonical=true,push=true
+          outputs: type=image,name=ghcr.io/espressosystems/espresso-network/${{ matrix.service }},push-by-digest=true,name-canonical=true,push=true
 
       - name: Export docker image digest
         if: github.event_name != 'pull_request'
@@ -335,7 +335,7 @@ jobs:
         uses: docker/metadata-action@v5
         id: metadata
         with:
-          images: ghcr.io/espressosystems/espresso-sequencer/${{ matrix.service }}
+          images: ghcr.io/espressosystems/espresso-network/${{ matrix.service }}
 
       - name: Build and push docker
         uses: docker/build-push-action@v6
@@ -346,7 +346,7 @@ jobs:
           labels: ${{ steps.metadata.outputs.labels  }}
           # Note: the final multiarch image will receive the tag
           platforms: linux/arm64
-          outputs: type=image,name=ghcr.io/espressosystems/espresso-sequencer/${{  matrix.service }},push-by-digest=true,name-canonical=true,push=true
+          outputs: type=image,name=ghcr.io/espressosystems/espresso-network/${{  matrix.service }},push-by-digest=true,name-canonical=true,push=true
 
 
       - name: Export docker image digest
@@ -425,7 +425,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/espressosystems/espresso-sequencer/${{ matrix.service }}
+          images: ghcr.io/espressosystems/espresso-network/${{ matrix.service }}
 
       - name: Create manifest list and push
         working-directory: "${{ runner.temp }}/digests"
@@ -440,11 +440,18 @@ jobs:
           fi
 
           docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
-            $(printf 'ghcr.io/espressosystems/espresso-sequencer/${{ matrix.service }}@sha256:%s ' *)
+            $(printf 'ghcr.io/espressosystems/espresso-network/${{ matrix.service }}@sha256:%s ' *)
 
       - name: Inspect image
         run: |
-          docker buildx imagetools inspect ghcr.io/espressosystems/espresso-sequencer/${{ matrix.service }}:${{ steps.meta.outputs.version }}
+          docker buildx imagetools inspect ghcr.io/espressosystems/espresso-network/${{ matrix.service }}:${{ steps.meta.outputs.version }}
+
+      - name: Copy image to legacy espresso-sequencer registry
+        run: |
+          for tag in $(jq -cr '.tags[]' <<< "$DOCKER_METADATA_OUTPUT_JSON"); do
+            legacy_tag="${tag/espresso-network/espresso-sequencer}"
+            docker buildx imagetools create -t "$legacy_tag" "$tag"
+          done
 
   test-demo-pr:
     if: github.event_name == 'pull_request'

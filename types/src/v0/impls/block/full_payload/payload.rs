@@ -186,16 +186,16 @@ impl BlockPayload<SeqTypes> for Payload {
         // TODO `metadata_bytes` equals `ns_table_bytes`, so we are
         // double-hashing the ns_table. Why? To maintain serialization
         // compatibility.
-        // https://github.com/EspressoSystems/espresso-sequencer/issues/1576
+        // https://github.com/EspressoSystems/espresso-network/issues/1576
         let metadata_bytes = metadata.encode();
 
         let mut digest = sha2::Sha256::new();
         digest.update((self.raw_payload.len() as u64).to_le_bytes());
         digest.update((ns_table_bytes.len() as u64).to_le_bytes());
-        digest.update((metadata_bytes.len() as u64).to_le_bytes()); // https://github.com/EspressoSystems/espresso-sequencer/issues/1576
+        digest.update((metadata_bytes.len() as u64).to_le_bytes()); // https://github.com/EspressoSystems/espresso-network/issues/1576
         digest.update(&self.raw_payload);
         digest.update(ns_table_bytes);
-        digest.update(metadata_bytes); // https://github.com/EspressoSystems/espresso-sequencer/issues/1576
+        digest.update(metadata_bytes); // https://github.com/EspressoSystems/espresso-network/issues/1576
         BuilderCommitment::from_raw_digest(digest.finalize())
     }
 

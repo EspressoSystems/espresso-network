@@ -164,7 +164,7 @@ fn monotonic_increase() {
 }
 
 // TODO this test obsolete after
-// https://github.com/EspressoSystems/espresso-sequencer/issues/1604
+// https://github.com/EspressoSystems/espresso-network/issues/1604
 #[test_log::test]
 fn header() {
     let mut rng = jf_utils::test_rng();

@@ -85,4 +85,4 @@ jobs:
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./public
-          cname: sequencer.docs.espressosys.com
+          cname: espresso-network.docs.espressosys.com

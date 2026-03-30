@@ -57,4 +57,13 @@ impl DrbRequester {
         });
         self.calculations.insert(epoch, handle);
     }
+
+    pub fn gc(&mut self, epoch: EpochNumber) {
+        let keep = self.calculations.split_off(&epoch);
+        self.completed_epochs = self.completed_epochs.split_off(&epoch);
+        for handle in self.calculations.values() {
+            handle.abort();
+        }
+        self.calculations = keep;
+    }
 }
