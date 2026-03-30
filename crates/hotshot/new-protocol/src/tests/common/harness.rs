@@ -22,6 +22,7 @@ use crate::{
     message::Message,
     network::Network,
     outbox::Outbox,
+    proposal::ProposalValidator,
     state::StateManager,
     tests::common::mock::testing::{MockCoordinator, MockNetwork},
     vid::{VidDisperser, VidReconstructor},
@@ -74,6 +75,8 @@ impl TestHarness {
         .await;
         state_manager.seed_state(ViewNumber::genesis(), Arc::new(genesis_state), genesis_leaf);
 
+        let proposal_validator = ProposalValidator::new(membership.clone());
+
         let network = Network::new(MockNetwork::default(), membership.clone(), upgrade_lock());
 
         let coordinator = MockCoordinator::builder()
@@ -87,6 +90,7 @@ impl TestHarness {
             .vid_disperser(vid_disperse_task)
             .vid_reconstructor(vid_reconstruction_task)
             .drb_requester(drb_request_task)
+            .proposal_validator(proposal_validator)
             .membership_coordinator(membership)
             .outbox(Outbox::new())
             .timer(Timer::new(timer_duration, ViewNumber::genesis()))
@@ -98,8 +102,12 @@ impl TestHarness {
         }
     }
 
-    pub async fn message(&mut self, message: Message<TestTypes>) {
-        if let Some(input) = self.coordinator.on_network_message(message).await {
+    pub async fn message<S>(&mut self, m: Message<TestTypes, S>) {
+        if let Some(input) = self
+            .coordinator
+            .on_network_message(m.into_unchecked())
+            .await
+        {
             self.send_input(input).await;
         }
     }

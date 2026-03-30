@@ -29,8 +29,8 @@ use crate::{
     block::BlockAndHeaderRequest,
     helpers::{proposal_commitment, upgrade_lock},
     message::{
-        Certificate1, Certificate2, CheckpointData, CheckpointVote, ProposalMessage, Vote1, Vote2,
-        Vote2Data,
+        Certificate1, Certificate2, CheckpointData, CheckpointVote, ProposalMessage, Validated,
+        Vote1, Vote2, Vote2Data,
     },
     outbox::Outbox,
     state::{StateRequest, StateResponse},
@@ -49,7 +49,7 @@ pub enum ConsensusInput<T: NodeType> {
     Certificate1(Certificate1<T>),
     Certificate2(Certificate2<T>),
     HeaderCreated(ViewNumber, T::BlockHeader),
-    Proposal(ProposalMessage<T>),
+    Proposal(ProposalMessage<T, Validated>),
     StateValidated(StateResponse<T>),
     StateValidationFailed(StateResponse<T>),
     Timeout(ViewNumber),
@@ -263,21 +263,10 @@ impl<T: NodeType> Consensus<T> {
     #[instrument(level = "debug", skip_all)]
     async fn handle_proposal(
         &mut self,
-        proposal: ProposalMessage<T>,
+        proposal: ProposalMessage<T, Validated>,
         outbox: &mut Outbox<ConsensusOutput<T>>,
     ) -> Protocol {
         let view = proposal.view_number();
-
-        // TODO: This signature check is slow (> 1ms).  We should consider
-        // if this should be done off the main thread.
-        if let Err(err) = proposal
-            .proposal
-            .validate_signature(&self.stake_table_coordinator)
-            .await
-        {
-            warn!(%view, %err, "invalid proposal signature");
-            return Protocol::Abort;
-        }
 
         let vid_share = proposal.vid_share;
         let proposal = proposal.proposal.data;
