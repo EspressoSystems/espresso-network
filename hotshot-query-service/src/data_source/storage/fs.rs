@@ -657,9 +657,14 @@ where
         leaves: impl Send + IntoIterator<Item = &'a LeafQueryData<Types>>,
     ) -> anyhow::Result<()> {
         for leaf in leaves {
-            self.inner
+            if !self
+                .inner
                 .leaf_storage
-                .insert(leaf.height() as usize, leaf.clone())?;
+                .insert(leaf.height() as usize, leaf.clone())?
+            {
+                // The leaf was already present.
+                continue;
+            }
             self.inner
                 .index_by_leaf_hash
                 .insert(leaf.hash(), leaf.height());
@@ -694,7 +699,7 @@ where
                 .insert(block.height() as usize, block.clone())?
             {
                 // The block was already present.
-                return Ok(());
+                continue;
             }
             self.inner.num_transactions += block.len();
             self.inner.payload_size += block.size() as usize;
