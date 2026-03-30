@@ -216,7 +216,8 @@ fn reference_fee_info() -> FeeInfo {
 }
 
 fn reference_stake_table_hash() -> StakeTableHash {
-    let events_json = std::fs::read_to_string("../data/v3/decaf_stake_table_events.json").unwrap();
+    let events_json =
+        std::fs::read_to_string("../../../data/v3/decaf_stake_table_events.json").unwrap();
     let events: Vec<(EventKey, StakeTableEvent)> = serde_json::from_str(&events_json).unwrap();
 
     // Reconstruct stake table from events
@@ -287,7 +288,7 @@ fn reference_test_without_committable<T: Serialize + DeserializeOwned + Eq + Deb
 ) {
     // Load the expected serialization from the repo.
     let data_dir = Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap())
-        .join("../data")
+        .join("../../../data")
         .join(version);
 
     let file_path = data_dir.join(format!("{name}.json"));
@@ -687,8 +688,8 @@ async fn test_state_cert_query_data_v4() {
 async fn test_reward_proof_endpoint_serialization() {
     let mut settings = insta::Settings::clone_current();
 
-    let data_dir =
-        Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap()).join("../data/insta_snapshots");
+    let data_dir = Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap())
+        .join("../../../data/insta_snapshots");
 
     settings.set_snapshot_path(data_dir);
 

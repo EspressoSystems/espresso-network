@@ -271,7 +271,7 @@ async fn test_message_compat<Ver: StaticVersionType>(_ver: Ver) {
     let version_sub_dir = format!("v{}", Ver::VERSION.minor);
     // Load the expected serialization from the repo.
     let data_dir = Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap())
-        .join("../data")
+        .join("../../../data")
         .join(version_sub_dir);
     let expected_bytes = std::fs::read(data_dir.join("messages.json")).unwrap();
     let expected: Value = serde_json::from_slice(&expected_bytes).unwrap();

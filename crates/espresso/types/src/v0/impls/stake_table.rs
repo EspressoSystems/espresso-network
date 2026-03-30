@@ -3596,7 +3596,7 @@ mod tests {
         */
 
         let events_json =
-            std::fs::read_to_string("../data/v3/decaf_stake_table_events.json").unwrap();
+            std::fs::read_to_string("../../../data/v3/decaf_stake_table_events.json").unwrap();
         let events: Vec<(EventKey, StakeTableEvent)> = serde_json::from_str(&events_json).unwrap();
 
         // Reconstruct stake table from events
@@ -3606,7 +3606,7 @@ mod tests {
                 .active_validators;
 
         let stake_table_json =
-            std::fs::read_to_string("../data/v3/decaf_stake_table.json").unwrap();
+            std::fs::read_to_string("../../../data/v3/decaf_stake_table.json").unwrap();
         let expected: AuthenticatedValidatorMap = serde_json::from_str(&stake_table_json).unwrap();
 
         assert_eq!(

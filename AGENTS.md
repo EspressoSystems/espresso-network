@@ -82,7 +82,7 @@ The codebase separates **consensus** (HotShot) from **application logic** (Espre
   voting, leader election, certificates, and network communication. Application-agnostic.
 
 - **Espresso Network** (`crates/espresso/node/`, `crates/espresso/types/`): Espresso-specific application built on HotShot. Implements `NodeType` via
-  `SeqTypes` in `types/src/v0/mod.rs`, defining concrete types for headers, payloads, transactions, and validated state.
+  `SeqTypes` in `crates/espresso/types/src/v0/mod.rs`, defining concrete types for headers, payloads, transactions, and validated state.
   Handles L1 integration, namespaces, fees, and rollup-specific logic.
 
 ### Espresso Network Internal Architecture
@@ -134,7 +134,7 @@ components:
 
 The Espresso node uses **only finalized L1 blocks** to avoid reorg issues:
 
-- **L1Client** (`types/src/v0/impls/l1.rs`): Tracks L1 `head` and `finalized` block numbers. Uses `BlockId::finalized()`
+- **L1Client** (`crates/espresso/types/src/v0/impls/l1.rs`): Tracks L1 `head` and `finalized` block numbers. Uses `BlockId::finalized()`
   for all reads.
 - **Block headers**: Every Espresso header contains `l1_finalized` referencing the latest finalized L1 block. Proposal
   validation enforces this is non-decreasing.
@@ -148,7 +148,7 @@ The StakeTable contract emits events that affect consensus membership:
 - `Delegated/Undelegated` - Stake delegation changes
 - `ConsensusKeysUpdated` - Key rotation
 
-The `Fetcher` (`types/src/v0/impls/stake_table.rs`) polls finalized L1 blocks, fetches events, validates signatures.
+The `Fetcher` (`crates/espresso/types/src/v0/impls/stake_table.rs`) polls finalized L1 blocks, fetches events, validates signatures.
 Events transform into a `ValidatorMap`, then `select_active_validator_set()` picks top 100 validators by stake. Changes
 affect consensus starting from the next epoch boundary.
 
@@ -187,7 +187,7 @@ table sync.
 | Crate                      | Purpose                                                    |
 | -------------------------- | ---------------------------------------------------------- |
 | `espresso-node`            | Main node binary, API, persistence                         |
-| `espresso-types` (types/)  | Domain types: Header, Payload, Transaction, ValidatedState |
+| `espresso-types` (crates/espresso/types/)  | Domain types: Header, Payload, Transaction, ValidatedState |
 | `hotshot`                  | BFT consensus implementation                               |
 | `hotshot-query-service`    | Query APIs for blocks and availability data                |
 | `hotshot-state-prover`     | ZK proof generation for light client updates               |
@@ -206,7 +206,7 @@ table sync.
 
 ### Protocol Versions
 
-Versions in `types/src/v0/mod.rs`. `SequencerVersions<Base, Upgrade>` defines version pairs for network operation.
+Versions in `crates/espresso/types/src/v0/mod.rs`. `SequencerVersions<Base, Upgrade>` defines version pairs for network operation.
 
 | Version | Alias                        | Key Changes                                                                |
 | ------- | ---------------------------- | -------------------------------------------------------------------------- |
@@ -259,7 +259,7 @@ Agents make writing tests fast. There is no excuse for untested code.
 | Layer                   | Location                        | Purpose                                   | Command                                  |
 | ----------------------- | ------------------------------- | ----------------------------------------- | ---------------------------------------- |
 | Unit tests              | Within crate modules            | Test individual functions/modules         | `cargo test -p <crate>`                  |
-| Reference/Serialization | `types/src/reference_tests.rs`  | Verify serialization compatibility        | `cargo test -p espresso-types reference` |
+| Reference/Serialization | `crates/espresso/types/src/reference_tests.rs`  | Verify serialization compatibility        | `cargo test -p espresso-types reference` |
 | HotShot tests           | `crates/hotshot/testing/tests/` | Consensus task tests, network simulations | `just hotshot::test <test_name>`         |
 | Integration (E2E)       | `tests/`                        | Full system tests                         | `cargo nextest run -p tests`             |
 | Slow tests              | `slow-tests/`                   | Long-running tests                        | `just test-slow`                         |
@@ -267,7 +267,7 @@ Agents make writing tests fast. There is no excuse for untested code.
 
 ### Serialization Compatibility Tests
 
-**IMPORTANT:** The `types/src/reference_tests.rs` module ensures backward compatibility. If you change a serializable
+**IMPORTANT:** The `crates/espresso/types/src/reference_tests.rs` module ensures backward compatibility. If you change a serializable
 type:
 
 1. Run `cargo test -p espresso-types reference`
