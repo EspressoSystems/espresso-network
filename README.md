@@ -182,7 +182,7 @@ cargo run --bin deploy -- --help
 **Configuration**
 
 You can configure the deployer using CLI flags or environment variables. Most options can be set via environment
-variables (see the code for the full list `espresso-node/src/bin/deploy.rs`). Common environment variables:
+variables (see the code for the full list `crates/espresso/node/src/bin/deploy.rs`). Common environment variables:
 
 - `ESPRESSO_SEQUENCER_L1_PROVIDER` — L1 JSON-RPC endpoint
 - `ESPRESSO_SEQUENCER_ETH_MNEMONIC` — Mnemonic for the deployer wallet

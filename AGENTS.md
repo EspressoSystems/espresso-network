@@ -7,10 +7,10 @@ This file provides guidance to AI coding agents when working with code in this r
 Espresso Network is the **global confirmation layer** for Ethereum rollups. Rollups post their blocks to Espresso for
 fast finality and cross-rollup composability. This repo contains:
 
-- **Espresso node** (`espresso-node/`): Rust binary for running consensus and serving APIs
+- **Espresso node** (`crates/espresso/node/`): Rust binary for running consensus and serving APIs
 - **HotShot** (`crates/hotshot/`): BFT consensus library
 - **Contracts** (`contracts/`): Solidity contracts for L1 integration (light client, staking, fees, rewards)
-- **Types** (`types/`): Domain types shared across crates
+- **Types** (`crates/espresso/types/`): Domain types shared across crates
 
 ## Critical Rules
 
@@ -81,7 +81,7 @@ The codebase separates **consensus** (HotShot) from **application logic** (Espre
 - **HotShot** (`crates/hotshot/`): Generic BFT consensus library. Defines traits like `NodeType`, handles view-based
   voting, leader election, certificates, and network communication. Application-agnostic.
 
-- **Espresso Network** (`espresso-node/`, `types/`): Espresso-specific application built on HotShot. Implements `NodeType` via
+- **Espresso Network** (`crates/espresso/node/`, `crates/espresso/types/`): Espresso-specific application built on HotShot. Implements `NodeType` via
   `SeqTypes` in `types/src/v0/mod.rs`, defining concrete types for headers, payloads, transactions, and validated state.
   Handles L1 integration, namespaces, fees, and rollup-specific logic.
 
@@ -171,7 +171,7 @@ on-demand.
 
 **Triggered during** `ValidatedState::apply_header()` when fee accounts or block frontier entries are missing.
 
-**Providers** (`espresso-node/src/catchup.rs`):
+**Providers** (`crates/espresso/node/src/catchup.rs`):
 
 - `SqlStateCatchup` - Local database lookup
 - `StatePeers` - Remote peer HTTP fetch with reliability scoring
@@ -180,7 +180,7 @@ on-demand.
 **Data fetched:** Fee account proofs, reward account proofs, block merkle frontier, chain config, leaf chain for stake
 table sync.
 
-**API:** Endpoints under `/catchup/` serve proof data to peers (schema in `espresso-node/api/catchup.toml`).
+**API:** Endpoints under `/catchup/` serve proof data to peers (schema in `crates/espresso/node/api/catchup.toml`).
 
 ### Key Crates
 
@@ -294,18 +294,18 @@ For node operator details, see https://docs.espressosys.com/network/guides/node-
 
 - Uses [Refinery](https://github.com/rust-db/refinery) migration framework
 - Naming: `V{version}__{description}.sql` (e.g., `V501__epoch_tables.sql`)
-- Locations: `espresso-node/api/migrations/{postgres,sqlite}/`, `hotshot-query-service/migrations/{postgres,sqlite}/`
+- Locations: `crates/espresso/node/api/migrations/{postgres,sqlite}/`, `hotshot-query-service/migrations/{postgres,sqlite}/`
 - Version numbering: hotshot-query-service uses multiples of 100 (V100, V200...) leaving gaps for applications
 
-**Filesystem Migrations (`espresso-node/src/persistence/fs.rs`):**
+**Filesystem Migrations (`crates/espresso/node/src/persistence/fs.rs`):**
 
 - Code-based migrations tracked via `migrated` HashSet
 - Requirements: Must be recoverable, use atomic file operations, be tested
 
 **Adding storage functionality checklist:**
 
-1. Add PostgreSQL migration: `espresso-node/api/migrations/postgres/V{next}__{name}.sql`
-2. Add SQLite migration: `espresso-node/api/migrations/sqlite/V{next}__{name}.sql`
+1. Add PostgreSQL migration: `crates/espresso/node/api/migrations/postgres/V{next}__{name}.sql`
+2. Add SQLite migration: `crates/espresso/node/api/migrations/sqlite/V{next}__{name}.sql`
 3. Update filesystem persistence if data format changes
 4. Update `SequencerPersistence` trait implementation for all backends
 5. Test: `cargo test -p espresso-node persistence`
@@ -314,12 +314,12 @@ For node operator details, see https://docs.espressosys.com/network/guides/node-
 
 APIs use [tide-disco](https://github.com/EspressoSystems/tide-disco) with TOML schema definitions.
 
-**Schema files:** `espresso-node/api/*.toml`, `hotshot-query-service/api/*.toml`
+**Schema files:** `crates/espresso/node/api/*.toml`, `hotshot-query-service/api/*.toml`
 
 **Adding a new endpoint:**
 
 1. Add route to `.toml` file with `PATH`, parameter types, `METHOD`, and `DOC`
-2. Implement handler in corresponding Rust module (e.g., `espresso-node/src/api/endpoints.rs`)
+2. Implement handler in corresponding Rust module (e.g., `crates/espresso/node/src/api/endpoints.rs`)
 3. Register handler with `.get("route_name", handler)` or `.at("route_name", handler)`
 4. Ensure data source trait has required method
 
@@ -340,7 +340,7 @@ intentional.
 - `data/genesis/*.toml` - Genesis configurations
 - `data/v1/`, `data/v2/`, etc. - Reference serialization test vectors
 - `doc/upgrades.md` - Upgrade mechanism documentation
-- `espresso-node/api/*.toml` - API schema definitions
+- `crates/espresso/node/api/*.toml` - API schema definitions
 
 ## Maintaining This Document
 
