@@ -1176,9 +1176,11 @@ mod test {
 
     use alloy::{
         eips::BlockNumberOrTag,
+        network::TransactionBuilder,
         node_bindings::{Anvil, AnvilInstance},
         primitives::utils::parse_ether,
         providers::layers::AnvilProvider,
+        rpc::types::TransactionRequest,
     };
     use espresso_contract_deployer::{Contracts, deploy_fee_contract_proxy};
     use time::OffsetDateTime;
@@ -1743,8 +1745,6 @@ mod test {
     /// the provider returns `None` for a receipt that exists
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_get_transaction_receipt_with_failover() {
-        use alloy::{network::TransactionBuilder, rpc::types::TransactionRequest};
-
         // Spin up two anvil instances.
         let anvil_a = Anvil::new().block_time(1).spawn();
         let anvil_b = Anvil::new().block_time(1).spawn();
