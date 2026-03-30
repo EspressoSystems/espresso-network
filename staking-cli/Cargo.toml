@@ -12,6 +12,7 @@ testing = ["warp", "test-utils"]
 alloy = { workspace = true }
 anyhow = { workspace = true }
 ark-serialize = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
 clap = { workspace = true }
 clap-serde = { workspace = true }
 clap-serde-derive = { workspace = true }

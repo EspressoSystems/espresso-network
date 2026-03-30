@@ -5,6 +5,7 @@ use alloy::{
         Address, U256,
         utils::{format_ether, parse_ether},
     },
+    providers::ext::AnvilApi,
     signers::local::coins_bip39::{English, Mnemonic},
 };
 use anyhow::Result;
@@ -818,6 +819,157 @@ async fn test_cli_claim_validator_exit(#[case] version: StakeTableContractVersio
         .assert()
         .success()
         .stdout(str::contains(expected_event));
+    Ok(())
+}
+
+#[test_log::test(rstest_reuse::apply(stake_table_versions))]
+async fn test_cli_pending_withdrawals(#[case] version: StakeTableContractVersion) -> Result<()> {
+    let system = TestSystem::deploy_version(version).await?;
+    let amount = parse_ether("1")?;
+    system.register_validator().await?;
+    system.delegate(amount).await?;
+    system.undelegate(amount).await?;
+
+    let mut cmd = system.cmd(Signer::Mnemonic);
+    cmd.arg("pending-withdrawals")
+        .arg("--address")
+        .arg(system.deployer_address.to_string())
+        .assert()
+        .success()
+        .stdout(str::contains("undelegation from").and(str::contains("1 ESP")));
+    Ok(())
+}
+
+#[test_log::test(rstest_reuse::apply(stake_table_versions))]
+async fn test_cli_pending_withdrawals_empty(
+    #[case] version: StakeTableContractVersion,
+) -> Result<()> {
+    let system = TestSystem::deploy_version(version).await?;
+
+    let mut cmd = system.cmd(Signer::Mnemonic);
+    cmd.arg("pending-withdrawals")
+        .arg("--address")
+        .arg(system.deployer_address.to_string())
+        .assert()
+        .success()
+        .stdout(str::contains("No pending claims found"));
+    Ok(())
+}
+
+/// Regression: config files without events_block_range must use the default (10000),
+/// not 0 which causes "invalid block range params" from the RPC.
+#[test_log::test(tokio::test)]
+async fn test_cli_pending_withdrawals_config_without_block_range() -> Result<()> {
+    let system = TestSystem::deploy().await?;
+
+    let tmpdir = tempfile::tempdir()?;
+    let config_path = tmpdir.path().join("config.toml");
+    std::fs::write(
+        &config_path,
+        format!(
+            "rpc_url = \"{}\"\nstake_table_address = \"{}\"",
+            system.rpc_url, system.stake_table
+        ),
+    )?;
+
+    base_cmd()
+        .arg("--config")
+        .arg(&config_path)
+        .arg("pending-withdrawals")
+        .arg("--address")
+        .arg(system.deployer_address.to_string())
+        .assert()
+        .success()
+        .stdout(str::contains("No pending claims found"));
+    Ok(())
+}
+
+#[test_log::test(rstest_reuse::apply(stake_table_versions))]
+async fn test_cli_claim_all_withdrawals(#[case] version: StakeTableContractVersion) -> Result<()> {
+    let system = TestSystem::deploy_version(version).await?;
+    // Delegate 3, undelegate 1 (regular undelegation), then deregister (exit claim for remaining 2).
+    system.register_validator().await?;
+    system.delegate(parse_ether("3")?).await?;
+    system.undelegate(parse_ether("1")?).await?;
+    system.deregister_validator().await?;
+    system.warp_to_unlock_time().await?;
+    // Mine a block so the warped timestamp is reflected in the latest block.
+    system.provider.anvil_mine(Some(1), None).await?;
+
+    let mut cmd = system.cmd(Signer::Mnemonic);
+    let output = cmd
+        .arg("claim-all-withdrawals")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let stdout = String::from_utf8(output)?;
+    // Both claims should be processed.
+    assert_eq!(
+        stdout.matches("Claimed ").count(),
+        2,
+        "Expected 2 claims, got: {stdout}"
+    );
+    Ok(())
+}
+
+#[test_log::test(rstest_reuse::apply(stake_table_versions))]
+async fn test_cli_claim_all_withdrawals_none_unlocked(
+    #[case] version: StakeTableContractVersion,
+) -> Result<()> {
+    let system = TestSystem::deploy_version(version).await?;
+    let amount = parse_ether("1")?;
+    system.register_validator().await?;
+    system.delegate(amount).await?;
+    system.undelegate(amount).await?;
+
+    let mut cmd = system.cmd(Signer::Mnemonic);
+    cmd.arg("claim-all-withdrawals")
+        .assert()
+        .success()
+        .stdout(str::contains("No unlocked claims to process"));
+    Ok(())
+}
+
+#[test_log::test(rstest_reuse::apply(stake_table_versions))]
+async fn test_cli_claim_all_withdrawals_export(
+    #[case] version: StakeTableContractVersion,
+) -> Result<()> {
+    let system = TestSystem::deploy_version(version).await?;
+    // Delegate 3, undelegate 1, then deregister for 2 claims in the batch.
+    system.register_validator().await?;
+    system.delegate(parse_ether("3")?).await?;
+    system.undelegate(parse_ether("1")?).await?;
+    system.deregister_validator().await?;
+    system.warp_to_unlock_time().await?;
+    system.provider.anvil_mine(Some(1), None).await?;
+
+    let output = system
+        .export_calldata_cmd()
+        .arg("claim-all-withdrawals")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let json: serde_json::Value = serde_json::from_slice(&output)?;
+    assert_eq!(json["version"], "1.0");
+    assert!(json["chainId"].is_string());
+    assert!(json["meta"]["name"].is_string());
+    assert!(
+        json["meta"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("2 withdrawal(s)")
+    );
+    let txs = json["transactions"].as_array().expect("transactions array");
+    assert_eq!(txs.len(), 2);
+    for tx in txs {
+        assert!(tx["to"].is_string());
+        assert!(tx["value"].is_string());
+    }
     Ok(())
 }
 

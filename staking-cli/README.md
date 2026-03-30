@@ -104,6 +104,8 @@ Commands:
   undelegate              Initiate a withdrawal of delegated funds from a validator
   claim-withdrawal        Claim withdrawal after an undelegation
   claim-validator-exit    Claim withdrawal after validator exit
+  pending-withdrawals    List pending withdrawals (undelegations and validator exit claims)
+  claim-all-withdrawals Claim all unlocked undelegations and validator exit claims
   claim-rewards           Claim staking rewards
   unclaimed-rewards       Check unclaimed staking rewards
   token-balance           Check ESP token balance
@@ -433,16 +435,34 @@ This section covers commands for stakers/delegators.
 
 ### Undelegating
 
-1.  If you would like to undelegate your tokens, use the `undelegate` command.
+1.  Check your pending undelegations and validator exit claims:
+
+    ```bash
+    staking-cli pending-withdrawals
+    ```
+
+2.  If you would like to undelegate your tokens, use the `undelegate` command.
 
     ```bash
     staking-cli undelegate --validator-address 0x12...34 --amount 123
     ```
 
-1.  Wait for the exit escrow period to end (currently 1 week), then withdraw to your wallet.
+3.  Wait for the exit escrow period to end (currently 1 week), then withdraw to your wallet.
 
     ```bash
     staking-cli claim-withdrawal --validator-address 0x12...34
+    ```
+
+    Alternatively, claim all unlocked undelegations and validator exit claims at once:
+
+    ```bash
+    staking-cli claim-all-withdrawals
+    ```
+
+    For multisig wallets, export as a Safe Transaction Builder batch JSON:
+
+    ```bash
+    staking-cli --export-calldata --sender-address 0x12...34 --output batch.json claim-all-withdrawals
     ```
 
 ### Recovering funds after a validator exit

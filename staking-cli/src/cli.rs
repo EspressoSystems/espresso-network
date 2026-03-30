@@ -207,8 +207,8 @@ pub async fn run() -> Result<()> {
         Config::from(&mut cli.config)
     } else if let Ok(f) = std::fs::read_to_string(&config_path) {
         // parse toml
-        match toml::from_str::<Config>(&f) {
-            Ok(config) => config.merge(&mut cli.config),
+        match toml::from_str::<<Config as ClapSerde>::Opt>(&f) {
+            Ok(config) => Config::from(config).merge(&mut cli.config),
             Err(err) => {
                 // This is a user error print the hopefully helpful error
                 // message without backtrace and exit.
@@ -470,6 +470,61 @@ pub async fn run() -> Result<()> {
             exit_err("Failed to check unclaimed rewards", err);
         });
         println!("{}", format_esp(unclaimed));
+        return Ok(());
+    }
+
+    if let Commands::PendingWithdrawals { address } = config.commands {
+        let address = address
+            .or_from_wallet(wallet.as_ref())
+            .context("Address required - provide --address or configure a signer")?;
+        let claims = crate::undelegation::fetch_pending_claims(
+            &readonly_provider,
+            stake_table_addr,
+            address,
+            config.events_block_range,
+        )
+        .await?;
+        let block = readonly_provider
+            .get_block(BlockId::latest())
+            .await?
+            .context("Failed to fetch latest block")?;
+        crate::undelegation::display_pending_claims(&claims, block.header.timestamp);
+        return Ok(());
+    }
+
+    if let Commands::ClaimAllWithdrawals {} = config.commands {
+        if config.export_calldata {
+            let address = config.sender_address.context(
+                "claim-all-withdrawals with --export-calldata requires --sender-address",
+            )?;
+            crate::undelegation::export_unlocked_claims(
+                &readonly_provider,
+                stake_table_addr,
+                address,
+                config.output.output.as_deref(),
+                config.events_block_range,
+            )
+            .await?;
+        } else {
+            let wallet = wallet.ok_or_else(&require_wallet)?;
+            let account = NetworkWallet::<Ethereum>::default_signer_address(&wallet);
+            let balance = readonly_provider.get_balance(account).await?;
+            if balance.is_zero() {
+                exit(format!(
+                    "zero Ethereum balance for account {account}, please fund account"
+                ));
+            }
+            let provider = ProviderBuilder::new()
+                .wallet(wallet)
+                .connect_http(config.rpc_url.clone());
+            crate::undelegation::claim_all_unlocked(
+                &provider,
+                stake_table_addr,
+                account,
+                config.events_block_range,
+            )
+            .await?;
+        }
         return Ok(());
     }
 
@@ -777,6 +832,8 @@ pub async fn run() -> Result<()> {
         | Commands::TokenAllowance { .. }
         | Commands::ExportNodeSignatures { .. }
         | Commands::PreviewMetadata { .. }
+        | Commands::PendingWithdrawals { .. }
+        | Commands::ClaimAllWithdrawals { .. }
         | Commands::Demo(..)
         | Commands::StakeForDemo { .. } => {
             unreachable!("Non-state-change commands are handled earlier in the function")
