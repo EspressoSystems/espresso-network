@@ -1256,13 +1256,16 @@ impl Fetcher {
                     init_log: init_log.clone().into(),
                 })?;
 
-        // Get the transaction that emitted the Initialized event
-        let init_tx = provider
-            .get_transaction_receipt(tx_hash)
+        // Get the transaction that emitted the Initialized event.
+        // Use `get_transaction_receipt_with_failover` instead of `get_transaction_receipt` so that
+        // if the current L1 provider doesn't have the receipt
+        // it will automatically fail over to the next provider and retry.
+        let init_tx = self
+            .l1_client
+            .get_transaction_receipt_with_failover(tx_hash)
             .await
-            .map_err(FetchRewardError::Rpc)?
-            .ok_or_else(|| FetchRewardError::MissingTransactionReceipt {
-                tx_hash: tx_hash.to_string(),
+            .map_err(|err| FetchRewardError::MissingTransactionReceipt {
+                tx_hash: format!("{tx_hash}: {err:#}"),
             })?;
 
         let mint_transfer = init_tx.decoded_log::<EspToken::Transfer>().ok_or(
