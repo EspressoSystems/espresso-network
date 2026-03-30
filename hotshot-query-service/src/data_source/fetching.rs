@@ -1555,7 +1555,6 @@ where
             res.blocks.ranges.push(range);
             res.leaves.ranges.push(range);
             res.vid_common.ranges.push(range);
-            res.vid_shares.ranges.push(range);
 
             height + 1
         } else {
@@ -1587,7 +1586,6 @@ where
             res.blocks.extend(range_status.blocks);
             res.leaves.extend(range_status.leaves);
             res.vid_common.extend(range_status.vid_common);
-            res.vid_shares.extend(range_status.vid_shares);
         }
 
         Ok(res)
