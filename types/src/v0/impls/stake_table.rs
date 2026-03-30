@@ -1257,12 +1257,12 @@ impl Fetcher {
                 })?;
 
         // Get the transaction that emitted the Initialized event.
-        // Use `get_transaction_receipt_with_failover` instead of `get_transaction_receipt` so that
+        // Use `get_transaction_receipt_all_providers` instead of `get_transaction_receipt` so that
         // if the current L1 provider doesn't have the receipt
         // it will automatically fail over to the next provider and retry.
         let init_tx = self
             .l1_client
-            .get_transaction_receipt_with_failover(tx_hash)
+            .get_transaction_receipt_all_providers(tx_hash)
             .await
             .map_err(|err| FetchRewardError::MissingTransactionReceipt {
                 tx_hash: format!("{tx_hash}: {err:#}"),

@@ -1065,7 +1065,7 @@ impl L1Client {
     /// This is necessary because a pruned L1 node will return a valid JSON-RPC response with
     /// `result: null` for old receipts it has discarded. The transport layer sees this as a
     /// success, so the normal retry logic would keep hitting the same pruned node forever.
-    pub async fn get_transaction_receipt_with_failover(
+    pub async fn get_transaction_receipt_all_providers(
         &self,
         tx_hash: B256,
     ) -> anyhow::Result<TransactionReceipt> {
@@ -1715,10 +1715,10 @@ mod test {
         provider.get_block_number().await.unwrap_err();
     }
 
-    /// Tests that `get_transaction_receipt_with_failover` tries all providers and finds the
+    /// Tests that `get_transaction_receipt_all_providers` tries all providers and finds the
     /// receipt
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_get_transaction_receipt_with_failover() {
+    async fn test_get_transaction_receipt_all_providers() {
         // Spin up two independent anvil instances — they share no state.
         let anvil_a = Anvil::new().block_time(1).spawn();
         let anvil_b = Anvil::new().block_time(1).spawn();
@@ -1750,9 +1750,9 @@ mod test {
         let result = l1.get_transaction_receipt(tx_hash).await.unwrap();
         assert!(result.is_none(), "anvil_a should not have this receipt");
 
-        // get_transaction_receipt_with_failover tries all providers and finds it on anvil_b.
+        // get_transaction_receipt_all_providers tries all providers and finds it on anvil_b.
         let result = l1
-            .get_transaction_receipt_with_failover(tx_hash)
+            .get_transaction_receipt_all_providers(tx_hash)
             .await
             .expect("should find the receipt on anvil_b");
         assert_eq!(result.transaction_hash, tx_hash);
