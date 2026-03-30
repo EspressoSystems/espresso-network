@@ -5,7 +5,7 @@ set -euo pipefail
 # ──────────────
 # This script pre-fetches PR review comments for use by AI code reviewers
 # (Claude, etc.). Only comments from team members (MEMBER, OWNER,
-# COLLABORATOR) and trusted bots (claude[bot], gemini-code-assist[bot])
+# COLLABORATOR) and trusted bots (claude, gemini-code-assist)
 # are included.
 #
 # This mitigates prompt injection: external contributors' comments are
@@ -96,7 +96,7 @@ query($owner: String!, $repo: String!, $pr: Int!) {
   result="$(echo "${pr_data}" | jq '
     def trusted:
       (.authorAssociation | IN("MEMBER","OWNER","COLLABORATOR"))
-      or (.author.login | IN("claude[bot]","gemini-code-assist[bot]"));
+      or (.author.login | IN("claude","gemini-code-assist"));
     {
       comments: [.comments.nodes[] | select(trusted)],
       reviewThreads: [.reviewThreads.nodes[]
