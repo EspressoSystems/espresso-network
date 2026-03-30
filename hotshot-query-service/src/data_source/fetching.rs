@@ -2688,4 +2688,70 @@ mod test {
     async fn test_sync_status_multiple_chunks_missing_range_overlapping_chunk() {
         test_sync_status(5, &[(0, 1), (4, 5)]).await;
     }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_load_range_incomplete() {
+        let storage = TmpDb::init().await;
+        let db = SqlStorage::connect(storage.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+        {
+            let mut tx = db.write().await.unwrap();
+            tx.insert_leaf(
+                &LeafQueryData::<MockTypes>::genesis(
+                    &Default::default(),
+                    &Default::default(),
+                    TEST_VERSIONS.test,
+                )
+                .await,
+            )
+            .await
+            .unwrap();
+            tx.insert_block(
+                &BlockQueryData::<MockTypes>::genesis(
+                    &Default::default(),
+                    &Default::default(),
+                    TEST_VERSIONS.test.base,
+                )
+                .await,
+            )
+            .await
+            .unwrap();
+            tx.insert_vid(
+                &VidCommonQueryData::<MockTypes>::genesis(
+                    &Default::default(),
+                    &Default::default(),
+                    TEST_VERSIONS.test.base,
+                )
+                .await,
+                None,
+            )
+            .await
+            .unwrap();
+            tx.commit().await.unwrap();
+        }
+
+        let mut tx = db.read().await.unwrap();
+        let req = RangeRequest { start: 0, end: 100 };
+
+        let err = <NonEmptyRange<BlockQueryData<MockTypes>>>::load(&mut tx, req)
+            .await
+            .unwrap_err();
+        tracing::info!("loading partial block range failed as expected: {err:#}");
+        assert!(matches!(err, QueryError::Missing));
+
+        let err =
+            <NonEmptyRange<LeafQueryData<MockTypes>> as Fetchable<MockTypes>>::load(&mut tx, req)
+                .await
+                .unwrap_err();
+        tracing::info!("loading partial leaf range failed as expected: {err:#}");
+        assert!(matches!(err, QueryError::Missing));
+
+        let err = <NonEmptyRange<VidCommonQueryData<MockTypes>>>::load(&mut tx, req)
+            .await
+            .unwrap_err();
+        tracing::info!("loading partial VID common range failed as expected: {err:#}");
+        assert!(matches!(err, QueryError::Missing));
+    }
 }

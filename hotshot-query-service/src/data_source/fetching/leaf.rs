@@ -471,6 +471,10 @@ impl RangeRequest {
     pub fn is_satisfied(&self, range: &NonEmptyRange<impl HeightIndexed>) -> bool {
         range.start() == self.start && range.end() == self.end
     }
+
+    pub fn len(&self) -> usize {
+        (self.end - self.start) as usize
+    }
 }
 
 #[async_trait]
@@ -526,6 +530,14 @@ where
             .await?
             .into_iter()
             .collect::<QueryResult<Vec<_>>>()?;
+        if leaves.len() != req.len() {
+            tracing::debug!(
+                ?req,
+                len = leaves.len(),
+                "database returned partial result, unable to load full range"
+            );
+            return Err(QueryError::Missing);
+        }
         NonEmptyRange::new(leaves).map_err(|err| QueryError::Error {
             message: format!("expected contiguous range, but: {err:#}"),
         })

@@ -394,6 +394,14 @@ where
             .await?
             .into_iter()
             .collect::<QueryResult<Vec<_>>>()?;
+        if vid.len() != req.len() {
+            tracing::debug!(
+                ?req,
+                len = vid.len(),
+                "database returned partial result, unable to load full range"
+            );
+            return Err(QueryError::Missing);
+        }
         NonEmptyRange::new(vid).map_err(|err| QueryError::Error {
             message: format!("expected contiguous range, but: {err:#}"),
         })
