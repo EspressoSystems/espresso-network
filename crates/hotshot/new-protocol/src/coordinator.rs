@@ -29,7 +29,7 @@ use crate::{
     outbox::Outbox,
     proposal::ProposalValidator,
     state::{StateManager, StateManagerOutput},
-    vid::{VidDisperseRequest, VidDisperser, VidReconstructor, VidShareInput},
+    vid::{VidDisperseRequest, VidDisperser, VidReconstructor},
     vote::VoteCollector,
 };
 
@@ -116,10 +116,9 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                 }
                 Some(item) = self.proposal_validator.next() => match item {
                     Ok(p) => {
-                        self.vid_reconstructor.handle_vid_share(VidShareInput {
-                            share: p.vid_share.clone(),
-                            metadata: Some(p.proposal.data.block_header.metadata().clone()),
-                        });
+                        let s = p.vid_share.clone();
+                        let m = p.proposal.data.block_header.metadata().clone();
+                        self.vid_reconstructor.handle_vid_share(s, m);
                         return Ok(ConsensusInput::Proposal(p))
                     }
                     Err(e) => {
@@ -209,10 +208,8 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                 },
                 ConsensusMessage::Vote1(vote1) => {
                     self.vote1_collector.accumulate_vote(vote1.vote).await;
-                    self.vid_reconstructor.handle_vid_share(VidShareInput {
-                        share: vote1.vid_share,
-                        metadata: None,
-                    });
+                    self.vid_reconstructor
+                        .handle_vid_share(vote1.vid_share, None);
                     None
                 },
                 ConsensusMessage::Vote2(vote2) => {
