@@ -38,7 +38,7 @@ use super::{
     },
 };
 use crate::{
-    FeeAccount, SeqTypes,
+    EpochCommittees, FeeAccount, SeqTypes,
     eth_signature_key::EthKeyPair,
     v0_3::{
         RewardAccountProofV1, RewardAccountV1, RewardMerkleCommitmentV1, RewardMerkleProofV1,
@@ -616,6 +616,53 @@ impl ComputedRewards {
         self.delegators
             .into_iter()
             .chain(once((self.leader_address, self.leader_commission)))
+            .collect()
+    }
+}
+
+/// Maps each validator to its leader count for an epoch.
+struct ValidatorLeaderCounts(Vec<(AuthenticatedValidator<BLSPubKey>, u16)>);
+
+impl ValidatorLeaderCounts {
+    /// Construct from a sorted validator list and the corresponding leader counts array.
+    ///
+    /// Returns an error if any validator in the stake table is missing from `get_validator_config`.
+    /// Validators whose leader count is zero are included so that indexing remains consistent.
+    fn new(
+        membership: &EpochCommittees,
+        epoch: &EpochNumber,
+        leader_counts: LeaderCounts,
+    ) -> anyhow::Result<Self> {
+        let entries: Vec<_> = membership
+            .stake_table(Some(*epoch))
+            .iter()
+            .sorted_by(|a, b| a.stake_table_entry.key().cmp(b.stake_table_entry.key()))
+            .zip(leader_counts.iter().copied())
+            .map(|(entry, count)| {
+                let validator =
+                    membership.get_validator_config(epoch, entry.stake_table_entry.stake_key)?;
+                Ok((validator, count))
+            })
+            .collect::<anyhow::Result<_>>()?;
+
+        Ok(Self(entries))
+    }
+
+    /// Iterate over all validators that have count greater than 0
+    fn active_leaders(&self) -> impl Iterator<Item = (&AuthenticatedValidator<BLSPubKey>, u16)> {
+        self.0
+            .iter()
+            .filter(|(_, count)| *count > 0)
+            .map(|(v, count)| (v, *count))
+    }
+
+    /// All reward accounts (validator + delegators) for validators that led blocks.
+    fn accounts_to_update(&self) -> Vec<RewardAccountV2> {
+        self.active_leaders()
+            .flat_map(|(v, _)| {
+                std::iter::once(RewardAccountV2(v.account))
+                    .chain(v.delegators.keys().map(|d| RewardAccountV2(*d)))
+            })
             .collect()
     }
 }
@@ -1204,16 +1251,8 @@ impl EpochRewardsCalculator {
         };
 
         let membership = coordinator.membership().read().await;
-        let validators: Vec<_> = membership
-            .stake_table(Some(epoch))
-            .iter()
-            .sorted_by(|a, b| a.stake_table_entry.key().cmp(b.stake_table_entry.key()))
-            .filter_map(|entry| {
-                membership
-                    .get_validator_config(&epoch, entry.stake_table_entry.stake_key)
-                    .ok()
-            })
-            .collect();
+        let validator_leader_counts =
+            ValidatorLeaderCounts::new(&membership, &epoch, leader_counts)?;
         let block_reward = membership
             .epoch_block_reward(epoch)
             .context("block reward not found for epoch")?;
@@ -1221,23 +1260,12 @@ impl EpochRewardsCalculator {
 
         tracing::info!(
             %epoch,
-            num_validators = validators.len(),
             %block_reward,
-            "fetch_and_calculate: got validators and block_reward"
+            "fetch_and_calculate: got block_reward"
         );
 
         // Check if we're missing accounts that need to be in the tree
-        let accounts_to_update: Vec<_> = leader_counts
-            .iter()
-            .enumerate()
-            .filter(|&(_, &count)| count > 0)
-            .flat_map(|(index, _)| {
-                validators.get(index).into_iter().flat_map(|v| {
-                    std::iter::once(RewardAccountV2(v.account))
-                        .chain(v.delegators.keys().map(|d| RewardAccountV2(*d)))
-                })
-            })
-            .collect();
+        let accounts_to_update = validator_leader_counts.accounts_to_update();
 
         let missing_accounts: Vec<_> = accounts_to_update
             .iter()
@@ -1286,30 +1314,20 @@ impl EpochRewardsCalculator {
             "starting final epoch calculation"
         );
 
-        Self::calculate_all_rewards(epoch, leader_counts, reward_tree, block_reward, validators)
-            .await
+        Self::calculate_all_rewards(epoch, validator_leader_counts, reward_tree, block_reward).await
     }
 
     /// Calculate all rewards for the epoch and update the reward tree.
-    pub async fn calculate_all_rewards(
+    async fn calculate_all_rewards(
         epoch: EpochNumber,
-        leader_counts: LeaderCounts,
+        validator_leader_counts: ValidatorLeaderCounts,
         mut reward_tree: RewardMerkleTreeV2,
         block_reward: RewardAmount,
-        validators: Vec<AuthenticatedValidator<BLSPubKey>>,
     ) -> anyhow::Result<EpochRewardsResult> {
         let mut total_distributed = U256::ZERO;
         let mut changed_accounts = HashSet::new();
 
-        for (index, &count) in leader_counts.iter().enumerate() {
-            if count == 0 {
-                continue;
-            }
-
-            let validator = validators.get(index).context(format!(
-                "validator not found for leader index {index} with count {count} in epoch {epoch}"
-            ))?;
-
+        for (validator, count) in validator_leader_counts.active_leaders() {
             // validator_reward = count * block_reward
             let validator_reward = block_reward
                 .0
