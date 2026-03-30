@@ -329,11 +329,12 @@ impl RewardMerkleTreeDataSource for SqlStorage {
                     WITH delete_batch AS (
                         SELECT d.height FROM reward_merkle_tree_v2_data AS d
                             WHERE d.height < $1
-                            {for_update}
+                            ORDER BY d.height DESC
                             LIMIT $2
+                            {for_update}
                     )
                     DELETE FROM reward_merkle_tree_v2_data AS del
-                    WHERE del.height IN delete_batch
+                    WHERE del.height IN (SELECT * FROM delete_batch)
                 "
                 ))
                 .bind(height as i64)
@@ -369,11 +370,12 @@ impl RewardMerkleTreeDataSource for SqlStorage {
                     WITH delete_batch AS (
                         SELECT d.height, d.account FROM reward_merkle_tree_v2_proofs AS d
                             WHERE d.height < $1
-                            {for_update}
+                            ORDER BY d.height, d.account DESC
                             LIMIT $2
+                            {for_update}
                     )
                     DELETE FROM reward_merkle_tree_v2_proofs AS del
-                    WHERE (del.height, del.account) IN delete_batch
+                    WHERE (del.height, del.account) IN (SELECT * FROM delete_batch)
                 ",
                 ))
                 .bind(height as i64)
@@ -1836,7 +1838,7 @@ mod tests {
         // Make sure the proof at height 2 is still available.
         assert_eq!(
             storage.load_proof(2, account.clone()).await.unwrap(),
-            3u64.to_le_bytes()
+            2u64.to_le_bytes()
         );
 
         // Meanwhile, the proofs at heights 0-1 have been garbage collected.
