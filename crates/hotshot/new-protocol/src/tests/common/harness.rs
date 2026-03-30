@@ -31,10 +31,6 @@ use crate::{
 
 /// Test harness that spawns consensus + mock coordinator and provides
 /// helpers to send events and collect results.
-///
-/// All inputs are sent directly as `ConsensusInput` to the mock coordinator.
-/// When a `StateManager` is wired in, the mock coordinator owns it
-/// directly and polls `next()` to feed completions back as `ConsensusInput`.
 pub(crate) struct TestHarness {
     coordinator: MockCoordinator,
     outputs: Outbox<ConsensusOutput<TestTypes>>,
@@ -108,11 +104,11 @@ impl TestHarness {
             .on_network_message(m.into_unchecked())
             .await
         {
-            self.send_input(input).await;
+            self.apply_and_process(input).await;
         }
     }
 
-    pub async fn send_input(&mut self, input: ConsensusInput<TestTypes>) {
+    pub async fn apply_and_process(&mut self, input: ConsensusInput<TestTypes>) {
         self.coordinator.apply_consensus(input).await;
         self.outputs
             .extend(self.coordinator.outbox().iter().cloned());
@@ -123,34 +119,30 @@ impl TestHarness {
         }
     }
 
-    pub async fn next_inputs(&mut self, num_inputs: usize) -> Vec<ConsensusInput<TestTypes>> {
+    /// Process events from the coordinator until `predicate` is satisfied.
+    ///
+    /// Each event is immediately applied and appended to the collected list.
+    /// The predicate is checked after every event; once it returns `true`
+    /// the collected inputs are returned.
+    ///
+    /// This avoids any assumption about the order or number of events
+    /// produced by asynchronous coordinator subsystems (proposal validator,
+    /// VID reconstructor, vote collectors, state manager, timer).
+    pub async fn process_until<F>(&mut self, mut pred: F) -> Vec<ConsensusInput<TestTypes>>
+    where
+        F: FnMut(&[ConsensusInput<TestTypes>]) -> bool,
+    {
         let mut inputs = Vec::new();
-        for _ in 0..num_inputs {
+        while !pred(&inputs) {
             match self.coordinator.next_consensus_input().await {
                 Ok(input) => {
-                    if matches!(input, ConsensusInput::Timeout(_)) {
-                        panic!("Expected a non-timeout input, got timeout");
-                    }
+                    self.apply_and_process(input.clone()).await;
                     inputs.push(input);
                 },
                 Err(err) => panic!("Unexpected error: {err}"),
             }
         }
-        for input in inputs.clone() {
-            self.send_input(input).await;
-        }
         inputs
-    }
-
-    pub async fn next_timeout(&mut self) -> Option<ConsensusInput<TestTypes>> {
-        let next = self.coordinator.next_consensus_input().await;
-        if let Ok(input) = next
-            && matches!(input, ConsensusInput::Timeout(_))
-        {
-            return Some(input);
-        }
-
-        None
     }
 
     pub fn outputs(&self) -> &Outbox<ConsensusOutput<TestTypes>> {
