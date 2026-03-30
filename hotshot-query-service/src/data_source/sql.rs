@@ -441,9 +441,7 @@ mod test {
         // Re-insert the common data with the share.
         let share0 = VidShare::V0(disperse.shares[0].clone());
         let mut tx = ds.write().await.unwrap();
-        tx.insert_vid(common.clone(), Some(share0.clone()))
-            .await
-            .unwrap();
+        tx.insert_vid(&common, Some(&share0)).await.unwrap();
         tx.commit().await.unwrap();
         assert_eq!(ds.get_vid_common(0).await.await, common);
         assert_eq!(

@@ -592,9 +592,9 @@ mod test {
         let leaves = leaf_chain(1..=3, EPOCH_VERSION).await;
         {
             let mut tx = ds.write().await.unwrap();
-            tx.insert_leaf(leaves[0].clone()).await.unwrap();
-            tx.insert_leaf(leaves[1].clone()).await.unwrap();
-            tx.insert_leaf(leaves[2].clone()).await.unwrap();
+            tx.insert_leaf(&leaves[0]).await.unwrap();
+            tx.insert_leaf(&leaves[1]).await.unwrap();
+            tx.insert_leaf(&leaves[2]).await.unwrap();
             tx.commit().await.unwrap();
         }
 
@@ -625,7 +625,7 @@ mod test {
         let leaves = leaf_chain(1..=2, EPOCH_VERSION).await;
         {
             let mut tx = ds.write().await.unwrap();
-            tx.insert_leaf(leaves[0].clone()).await.unwrap();
+            tx.insert_leaf(&leaves[0]).await.unwrap();
             tx.commit().await.unwrap();
         }
 
@@ -657,7 +657,7 @@ mod test {
         let leaves = leaf_chain(1..2, EPOCH_VERSION).await;
         {
             let mut tx = ds.write().await.unwrap();
-            tx.insert_leaf(leaves[0].clone()).await.unwrap();
+            tx.insert_leaf(&leaves[0]).await.unwrap();
             tx.commit().await.unwrap();
         }
 
@@ -683,9 +683,9 @@ mod test {
         let leaves = leaf_chain(1..=4, EPOCH_VERSION).await;
         {
             let mut tx = ds.write().await.unwrap();
-            tx.insert_leaf(leaves[0].clone()).await.unwrap();
-            tx.insert_leaf(leaves[2].clone()).await.unwrap();
-            tx.insert_leaf(leaves[3].clone()).await.unwrap();
+            tx.insert_leaf(&leaves[0]).await.unwrap();
+            tx.insert_leaf(&leaves[2]).await.unwrap();
+            tx.insert_leaf(&leaves[3]).await.unwrap();
             tx.commit().await.unwrap();
         }
 
@@ -722,7 +722,7 @@ mod test {
         ];
         {
             let mut tx = ds.write().await.unwrap();
-            tx.insert_leaf_with_qc_chain(leaves[0].clone(), Some(qcs.clone()))
+            tx.insert_leaf_with_qc_chain(&leaves[0], Some(qcs.clone()))
                 .await
                 .unwrap();
             tx.commit().await.unwrap();
@@ -761,8 +761,8 @@ mod test {
         ];
         {
             let mut tx = ds.write().await.unwrap();
-            tx.insert_leaf(leaves[0].clone()).await.unwrap();
-            tx.insert_leaf_with_qc_chain(leaves[1].clone(), Some(qcs.clone()))
+            tx.insert_leaf(&leaves[0]).await.unwrap();
+            tx.insert_leaf_with_qc_chain(&leaves[1], Some(qcs.clone()))
                 .await
                 .unwrap();
             tx.commit().await.unwrap();
@@ -812,7 +812,7 @@ mod test {
         {
             let mut tx = ds.write().await.unwrap();
             for (leaf, mt) in leaves.iter().zip(&mts) {
-                tx.insert_leaf(leaf.clone()).await.unwrap();
+                tx.insert_leaf(leaf).await.unwrap();
 
                 if leaf.height() > 0 {
                     let merkle_path = mt.lookup(leaf.height() - 1).expect_ok().unwrap().1;
@@ -885,15 +885,15 @@ mod test {
         {
             let mut tx = ds.write().await.unwrap();
             for (leaf, payload, vid_common) in izip!(&leaves, &payloads, &vid_commons) {
-                tx.insert_leaf(leaf.clone()).await.unwrap();
-                tx.insert_block(BlockQueryData::<SeqTypes>::new(
+                tx.insert_leaf(leaf).await.unwrap();
+                tx.insert_block(&BlockQueryData::<SeqTypes>::new(
                     leaf.header().clone(),
                     payload.clone(),
                 ))
                 .await
                 .unwrap();
                 tx.insert_vid(
-                    VidCommonQueryData::<SeqTypes>::new(leaf.header().clone(), vid_common.clone()),
+                    &VidCommonQueryData::<SeqTypes>::new(leaf.header().clone(), vid_common.clone()),
                     None,
                 )
                 .await

@@ -18,18 +18,19 @@ use crate::{
     block::BlockBuilder,
     consensus::{Consensus, ConsensusInput, ConsensusOutput},
     coordinator::{
-        error::{CoordinatorError, ErrorKind, Severity},
+        error::{CoordinatorError, ErrorSource, Severity},
         timer::Timer,
     },
     drb::DrbRequester,
     message::{
         Certificate2, CheckpointCertificate, CheckpointVote, ConsensusMessage, Message,
-        MessageType, ProposalMessage, Vote2,
+        MessageType, ProposalMessage, Unchecked, Vote2,
     },
     network::Network,
     outbox::Outbox,
+    proposal::ProposalValidator,
     state::{StateManager, StateManagerOutput},
-    vid::{VidDisperseRequest, VidDisperser, VidReconstructor, VidShareInput},
+    vid::{VidDisperseRequest, VidDisperser, VidReconstructor},
     vote::VoteCollector,
 };
 
@@ -46,6 +47,7 @@ pub struct Coordinator<T: NodeType, I: NodeImplementation<T>> {
     timeout_collector: VoteCollector<T, TimeoutVote2<T>, TimeoutCertificate2<T>>,
     checkpoint_collector: VoteCollector<T, CheckpointVote<T>, CheckpointCertificate<T>>,
     drb_requester: DrbRequester,
+    proposal_validator: ProposalValidator<T>,
     #[builder(default)]
     outbox: Outbox<ConsensusOutput<T>>,
     #[builder(default)]
@@ -115,6 +117,17 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                 Some(cert2) = self.vote2_collector.next() => {
                     return Ok(ConsensusInput::Certificate2(cert2))
                 }
+                Some(item) = self.proposal_validator.next() => match item {
+                    Ok(p) => {
+                        let s = p.vid_share.clone();
+                        let m = p.proposal.data.block_header.metadata().clone();
+                        self.vid_reconstructor.handle_vid_share(s, m);
+                        return Ok(ConsensusInput::Proposal(p))
+                    }
+                    Err(e) => {
+                        return Err(CoordinatorError::regular(e).context("proposal validation"))
+                    }
+                },
                 Some(cert) = self.checkpoint_collector.next() => {
                     let Some(epoch) = cert.epoch() else {
                         let msg = format!("missing epoch in view {}", cert.view_number());
@@ -143,7 +156,7 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                     todo!()
                 }
                 else => {
-                    return Err(CoordinatorError::critical(ErrorKind::NoInput))
+                    return Err(CoordinatorError::critical(ErrorSource::NoInput))
                 }
             }
         }
@@ -187,22 +200,20 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
         }
     }
 
-    pub async fn on_network_message(&mut self, msg: Message<T>) -> Option<ConsensusInput<T>> {
-        match msg.message_type {
+    pub async fn on_network_message(
+        &mut self,
+        message: Message<T, Unchecked>,
+    ) -> Option<ConsensusInput<T>> {
+        match message.message_type {
             MessageType::Consensus(msg) => match msg {
-                ConsensusMessage::Proposal(proposal) => {
-                    self.vid_reconstructor.handle_vid_share(VidShareInput {
-                        share: proposal.vid_share.clone(),
-                        metadata: Some(proposal.proposal.data.block_header.metadata().clone()),
-                    });
-                    Some(ConsensusInput::Proposal(proposal))
+                ConsensusMessage::Proposal(p) => {
+                    self.proposal_validator.validate(p);
+                    None
                 },
                 ConsensusMessage::Vote1(vote1) => {
                     self.vote1_collector.accumulate_vote(vote1.vote).await;
-                    self.vid_reconstructor.handle_vid_share(VidShareInput {
-                        share: vote1.vid_share,
-                        metadata: None,
-                    });
+                    self.vid_reconstructor
+                        .handle_vid_share(vote1.vid_share, None);
                     None
                 },
                 ConsensusMessage::Vote2(vote2) => {
@@ -280,10 +291,7 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                     let message = Message {
                         sender: self.public_key.clone(),
                         message_type: MessageType::Consensus(ConsensusMessage::Proposal(
-                            ProposalMessage {
-                                proposal: proposal.clone(),
-                                vid_share,
-                            },
+                            ProposalMessage::validated(proposal.clone(), vid_share),
                         )),
                     };
                     if let Err(err) = self.network.unicast(recipient_key, message).await {

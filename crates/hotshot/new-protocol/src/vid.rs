@@ -21,12 +21,6 @@ type VidShareResult<T> = Result<
 >;
 
 #[derive(Clone, Eq, PartialEq, Debug)]
-pub struct VidShareInput<T: NodeType> {
-    pub share: VidDisperseShare2<T>,
-    pub metadata: Option<<T::BlockPayload as BlockPayload<T>>::Metadata>,
-}
-
-#[derive(Clone, Eq, PartialEq, Debug)]
 pub struct VidDisperseRequest<T: NodeType> {
     pub view: ViewNumber,
     pub epoch: EpochNumber,
@@ -135,14 +129,18 @@ impl<T: NodeType> VidReconstructor<T> {
         }
     }
 
-    pub(crate) fn handle_vid_share(&mut self, vid_share: VidShareInput<T>) {
-        let view = vid_share.share.view_number;
+    pub(crate) fn handle_vid_share<M>(&mut self, share: VidDisperseShare2<T>, metadata: M)
+    where
+        M: Into<Option<<T::BlockPayload as BlockPayload<T>>::Metadata>>,
+    {
+        let view = share.view_number;
         if self.reconstructed.contains(&view) {
             return;
         }
-        let payload_commitment = vid_share.share.payload_commitment;
-        let recipient_key = vid_share.share.recipient_key.clone();
-        let weight = vid_share.share.share.weight();
+        let payload_commitment = share.payload_commitment;
+        let recipient_key = share.recipient_key.clone();
+        let weight = share.share.weight();
+        let metadata = metadata.into();
         let accumulator = self
             .accumulators
             .entry(view)
@@ -150,15 +148,18 @@ impl<T: NodeType> VidReconstructor<T> {
                 shares: Vec::new(),
                 accumulated_weight: 0,
                 seen_keys: HashSet::new(),
-                common: vid_share.share.common.clone(),
-                metadata: vid_share.metadata.clone(),
+                common: share.common.clone(),
+                metadata: None,
             });
-        if !accumulator.seen_keys.insert(recipient_key) {
-            // Already have a share from this key, skip duplicate
-            return;
+        if accumulator.metadata.is_none()
+            && let Some(m) = metadata
+        {
+            accumulator.metadata = Some(m)
         }
-        accumulator.accumulated_weight += weight;
-        accumulator.shares.push(vid_share.share.share);
+        if accumulator.seen_keys.insert(recipient_key) {
+            accumulator.accumulated_weight += weight;
+            accumulator.shares.push(share.share);
+        }
         if accumulator.has_enough_shares() {
             self.try_reconstruct(view, payload_commitment);
         }
