@@ -336,7 +336,7 @@ impl<T: NodeType> Consensus<T> {
                 return Protocol::Abort;
             }
         }
-        // if the previous block is the last block of the epoch, this proposal must be the first proposal of the new epoch
+        // if the previous block is the last block of the epoch, this proposal is the first proposal of the new epoch
         if is_last_block(block_number.saturating_sub(1), self.epoch_height) {
             let Some(cert2) = proposal.next_epoch_justify_qc.as_ref() else {
                 warn!(%epoch, "no next epoch justify QC");
