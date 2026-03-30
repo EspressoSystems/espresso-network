@@ -215,7 +215,7 @@ where
             },
             Self::VidCommon { fetcher } => {
                 tracing::info!(
-                    "fetched leaves {}..{}, will now VID common",
+                    "fetched leaves {}..{}, will now fetch VID common",
                     headers.start(),
                     headers.end(),
                 );
