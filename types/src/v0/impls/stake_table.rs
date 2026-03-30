@@ -798,6 +798,60 @@ struct DaCommittee {
     indexed_committee: HashMap<PubKey, PeerConfig<SeqTypes>>,
 }
 
+/// Break a block range into fixed-size chunks.
+fn block_range_chunks(
+    from_block: u64,
+    to_block: u64,
+    chunk_size: u64,
+) -> impl Iterator<Item = (u64, u64)> {
+    let mut start = from_block;
+    let end = to_block;
+    std::iter::from_fn(move || {
+        let chunk_end = min(start + chunk_size - 1, end);
+        if chunk_end < start {
+            return None;
+        }
+        let chunk = (start, chunk_end);
+        start = chunk_end + 1;
+        Some(chunk)
+    })
+}
+
+/// Fetch logs matching a filter across a block range, with chunking and retries.
+///
+/// The range is divided into chunks of `l1_events_max_block_range` blocks.
+/// Each chunk is retried on failure using the L1Client's retry configuration.
+///
+/// Any `from_block`/`to_block` already set on the filter will be overridden.
+pub async fn fetch_logs_in_range(
+    l1_client: &L1Client,
+    filter: Filter,
+    from_block: u64,
+    to_block: u64,
+) -> Vec<Log> {
+    let retry_delay = l1_client.options().l1_retry_delay;
+    let max_retry_duration = l1_client.options().l1_events_max_retry_duration;
+    let chunk_size = l1_client.options().l1_events_max_block_range;
+    let chunks = block_range_chunks(from_block, to_block, chunk_size);
+
+    let mut all_logs = vec![];
+    for (chunk_from, chunk_to) in chunks {
+        let provider = l1_client.provider.clone();
+        let filter = filter.clone();
+
+        tracing::debug!(chunk_from, chunk_to, "fetching logs in range");
+        let logs: Vec<Log> = retry(retry_delay, max_retry_duration, "log fetch", move || {
+            let provider = provider.clone();
+            let filter = filter.clone().from_block(chunk_from).to_block(chunk_to);
+            Box::pin(async move { provider.get_logs(&filter).await })
+        })
+        .await;
+
+        all_logs.extend(logs);
+    }
+    all_logs
+}
+
 impl Fetcher {
     pub fn new(
         peers: Arc<dyn StateCatchup>,
@@ -1014,25 +1068,6 @@ impl Fetcher {
         Ok(true)
     }
 
-    /// Break a block range into fixed-size chunks.
-    fn block_range_chunks(
-        from_block: u64,
-        to_block: u64,
-        chunk_size: u64,
-    ) -> impl Iterator<Item = (u64, u64)> {
-        let mut start = from_block;
-        let end = to_block;
-        std::iter::from_fn(move || {
-            let chunk_end = min(start + chunk_size - 1, end);
-            if chunk_end < start {
-                return None;
-            }
-            let chunk = (start, chunk_end);
-            start = chunk_end + 1;
-            Some(chunk)
-        })
-    }
-
     /// Fetch all stake table events from L1
     pub async fn fetch_events_from_contract(
         l1_client: L1Client,
@@ -1067,65 +1102,35 @@ impl Fetcher {
             },
         };
 
-        // To avoid making large RPC calls, divide the range into smaller chunks.
-        // chunk size is from env "ESPRESSO_SEQUENCER_L1_EVENTS_MAX_BLOCK_RANGE
-        // default value  is `10000` if env variable is not set
-        let chunk_size = l1_client.options().l1_events_max_block_range;
-        let chunks = Self::block_range_chunks(from_block, to_block, chunk_size);
+        let filter = Filter::new()
+            .events([
+                ValidatorRegistered::SIGNATURE,
+                ValidatorRegisteredV2::SIGNATURE,
+                ValidatorExit::SIGNATURE,
+                ValidatorExitV2::SIGNATURE,
+                Delegated::SIGNATURE,
+                Undelegated::SIGNATURE,
+                UndelegatedV2::SIGNATURE,
+                ConsensusKeysUpdated::SIGNATURE,
+                ConsensusKeysUpdatedV2::SIGNATURE,
+                CommissionUpdated::SIGNATURE,
+            ])
+            .address(contract);
 
-        let mut events = vec![];
+        let logs = fetch_logs_in_range(&l1_client, filter, from_block, to_block).await;
 
-        for (from, to) in chunks {
-            let provider = l1_client.provider.clone();
-
-            tracing::debug!(from, to, "fetch all stake table events in range");
-            // fetch events
-            // retry if the call to the provider to fetch the events fails
-            let logs: Vec<Log> = retry(
-                retry_delay,
-                max_retry_duration,
-                "stake table events fetch",
-                move || {
-                    let provider = provider.clone();
-
-                    Box::pin(async move {
-                        let filter = Filter::new()
-                            .events([
-                                ValidatorRegistered::SIGNATURE,
-                                ValidatorRegisteredV2::SIGNATURE,
-                                ValidatorExit::SIGNATURE,
-                                ValidatorExitV2::SIGNATURE,
-                                Delegated::SIGNATURE,
-                                Undelegated::SIGNATURE,
-                                UndelegatedV2::SIGNATURE,
-                                ConsensusKeysUpdated::SIGNATURE,
-                                ConsensusKeysUpdatedV2::SIGNATURE,
-                                CommissionUpdated::SIGNATURE,
-                            ])
-                            .address(contract)
-                            .from_block(from)
-                            .to_block(to);
-                        provider.get_logs(&filter).await
-                    })
-                },
-            )
-            .await;
-
-            let chunk_events = logs
-                .into_iter()
-                .filter_map(|log| {
-                    let event =
-                        StakeTableV2Events::decode_raw_log(log.topics(), &log.data().data).ok()?;
-                    match Self::validate_event(&event, &log) {
-                        Ok(true) => Some(Ok((event, log))),
-                        Ok(false) => None,
-                        Err(e) => Some(Err(e)),
-                    }
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-
-            events.extend(chunk_events);
-        }
+        let events = logs
+            .into_iter()
+            .filter_map(|log| {
+                let event =
+                    StakeTableV2Events::decode_raw_log(log.topics(), &log.data().data).ok()?;
+                match Self::validate_event(&event, &log) {
+                    Ok(true) => Some(Ok((event, log))),
+                    Ok(false) => None,
+                    Err(e) => Some(Err(e)),
+                }
+            })
+            .collect::<Result<Vec<_>, _>>()?;
 
         sort_stake_table_events(events).map_err(Into::into)
     }

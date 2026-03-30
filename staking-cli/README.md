@@ -441,6 +441,12 @@ This section covers commands for stakers/delegators.
     staking-cli pending-withdrawals
     ```
 
+    Optionally save the claims to a file for later use:
+
+    ```bash
+    staking-cli pending-withdrawals --claims-output claims.json
+    ```
+
 2.  If you would like to undelegate your tokens, use the `undelegate` command.
 
     ```bash
@@ -457,6 +463,12 @@ This section covers commands for stakers/delegators.
 
     ```bash
     staking-cli claim-all-withdrawals
+    ```
+
+    To skip re-scanning events, claim from a previously saved file:
+
+    ```bash
+    staking-cli claim-all-withdrawals --input claims.json
     ```
 
     For multisig wallets, export as a Safe Transaction Builder batch JSON:

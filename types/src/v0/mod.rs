@@ -25,7 +25,8 @@ pub use impls::testing;
 pub(crate) use impls::validator_set_from_l1_events;
 pub use impls::{
     BuilderValidationError, EpochCommittees, FeeError, ProposalValidationError,
-    StateValidationError, get_l1_deposits, retain_accounts, validators_from_l1_events,
+    StateValidationError, fetch_logs_in_range, get_l1_deposits, retain_accounts,
+    validators_from_l1_events,
 };
 pub use nsproof::*;
 pub use txproof::*;

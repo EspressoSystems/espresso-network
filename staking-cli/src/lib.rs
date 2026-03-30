@@ -98,7 +98,7 @@ pub(crate) struct Config {
     pub stake_table_address: Address,
 
     /// Maximum number of blocks to scan per RPC query when fetching events.
-    #[default(undelegation::DEFAULT_BLOCK_RANGE)]
+    #[default(10_000u64)]
     #[serde(skip_deserializing)]
     #[clap(long, env = "EVENTS_BLOCK_RANGE")]
     pub events_block_range: u64,
@@ -422,9 +422,18 @@ pub(crate) enum Commands {
         /// The address to check.
         #[clap(long)]
         address: Option<Address>,
+
+        /// Save claims to a JSON file for later use with claim-all-withdrawals --input.
+        #[clap(long)]
+        claims_output: Option<std::path::PathBuf>,
     },
     /// Claim all unlocked undelegations and validator exit claims.
-    ClaimAllWithdrawals {},
+    ClaimAllWithdrawals {
+        /// Load claims from a JSON file (from pending-withdrawals --claims-output)
+        /// instead of scanning the chain.
+        #[clap(long)]
+        input: Option<std::path::PathBuf>,
+    },
     /// Claim staking rewards.
     ClaimRewards {},
     /// Check unclaimed staking rewards.

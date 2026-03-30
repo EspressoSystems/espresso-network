@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, path::Path};
 
 use alloy::{
     eips::BlockId,
@@ -10,7 +10,9 @@ use alloy::{
 use anyhow::{Context, Result};
 use chrono::DateTime;
 use espresso_safe_tx_builder::{CalldataInfo, output_safe_tx_builder_batch};
+use espresso_types::{L1Client, fetch_logs_in_range};
 use hotshot_contract_adapter::sol_types::StakeTableV2::{self, Delegated};
+use serde::{Deserialize, Serialize};
 
 use crate::{
     output::{format_esp, output_info, output_success},
@@ -18,11 +20,10 @@ use crate::{
     transaction::Transaction,
 };
 
-pub const DEFAULT_BLOCK_RANGE: u64 = 10_000;
-
 const VALIDATOR_STATUS_EXITED: u8 = 2;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ClaimKind {
     Undelegation,
     ValidatorExit,
@@ -37,7 +38,7 @@ impl std::fmt::Display for ClaimKind {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PendingClaim {
     pub kind: ClaimKind,
     pub validator: Address,
@@ -48,12 +49,11 @@ pub struct PendingClaim {
 /// Scan on-chain events to discover all validators a delegator has interacted with,
 /// then check for pending undelegations and validator exit claims.
 pub async fn fetch_pending_claims(
-    provider: &impl Provider,
+    l1_client: &L1Client,
     stake_table_address: Address,
     delegator: Address,
-    block_range: u64,
 ) -> Result<Vec<PendingClaim>> {
-    let stake_table = StakeTableV2::new(stake_table_address, provider);
+    let stake_table = StakeTableV2::new(stake_table_address, &l1_client.provider);
 
     let initialized_at: u64 = stake_table
         .initializedAtBlock()
@@ -62,39 +62,28 @@ pub async fn fetch_pending_claims(
         .context("Failed to get initializedAtBlock")?
         .to();
 
-    let latest_block = provider
+    let latest_block = l1_client
+        .provider
         .get_block_number()
         .await
         .context("Failed to get latest block number")?;
 
     output_info(format!(
-        "Scanning blocks {initialized_at}..{latest_block} (chunk size {block_range})"
+        "Scanning blocks {initialized_at}..{latest_block} for delegation events"
     ));
 
-    // Scan Delegated events in chunks to find all validators this delegator interacted with.
+    let filter = Filter::new()
+        .event_signature(Delegated::SIGNATURE_HASH)
+        .address(stake_table_address)
+        .topic1(B256::left_padding_from(delegator.as_slice()));
+
+    let logs = fetch_logs_in_range(l1_client, filter, initialized_at, latest_block).await;
+
     let mut validators = BTreeSet::new();
-    let mut from = initialized_at;
-    while from <= latest_block {
-        let to = (from + block_range - 1).min(latest_block);
-        let filter = Filter::new()
-            .event_signature(Delegated::SIGNATURE_HASH)
-            .address(stake_table_address)
-            .topic1(B256::left_padding_from(delegator.as_slice()))
-            .from_block(from)
-            .to_block(to);
-
-        let logs = provider
-            .get_logs(&filter)
-            .await
-            .context("Failed to fetch Delegated logs")?;
-
-        for log in &logs {
-            if let Some(topic2) = log.topics().get(2) {
-                validators.insert(Address::from_word(*topic2));
-            }
+    for log in &logs {
+        if log.topics().len() > 2 {
+            validators.insert(Address::from_word(log.topics()[2]));
         }
-
-        from = to + 1;
     }
 
     // For each validator, check for pending undelegations and exit claims.
@@ -150,6 +139,27 @@ pub async fn fetch_pending_claims(
     Ok(claims)
 }
 
+/// Load claims from a JSON file.
+pub fn load_claims(path: &Path) -> Result<Vec<PendingClaim>> {
+    let data = std::fs::read_to_string(path)
+        .with_context(|| format!("Failed to read claims file: {}", path.display()))?;
+    serde_json::from_str(&data)
+        .with_context(|| format!("Failed to parse claims file: {}", path.display()))
+}
+
+/// Save claims to a JSON file.
+pub fn save_claims(claims: &[PendingClaim], path: &Path) -> Result<()> {
+    let data = serde_json::to_string_pretty(claims)?;
+    std::fs::write(path, data)
+        .with_context(|| format!("Failed to write claims file: {}", path.display()))?;
+    output_info(format!(
+        "Saved {} claim(s) to {}",
+        claims.len(),
+        path.display()
+    ));
+    Ok(())
+}
+
 fn format_timestamp(ts: U256) -> String {
     let secs: i64 = ts.try_into().unwrap_or(i64::MAX);
     DateTime::from_timestamp(secs, 0)
@@ -197,13 +207,12 @@ fn build_claim_tx(stake_table_address: Address, claim: &PendingClaim) -> Transac
 /// Fetch all pending claims and export calldata for unlocked ones
 /// in Safe Transaction Builder batch JSON format.
 pub async fn export_unlocked_claims(
-    provider: &impl Provider,
+    l1_client: &L1Client,
     stake_table_address: Address,
     delegator: Address,
-    output_path: Option<&std::path::Path>,
-    block_range: u64,
+    output_path: Option<&Path>,
 ) -> Result<()> {
-    let unlocked = fetch_unlocked(provider, stake_table_address, delegator, block_range).await?;
+    let unlocked = fetch_unlocked(l1_client, stake_table_address, delegator).await?;
 
     if unlocked.is_empty() {
         output_success("No unlocked claims to export");
@@ -220,19 +229,61 @@ pub async fn export_unlocked_claims(
         })
         .collect();
 
-    let chain_id = provider.get_chain_id().await?;
+    let chain_id = l1_client.provider.get_chain_id().await?;
     let description = format!("Claim {} withdrawal(s) for {delegator}", unlocked.len());
     output_safe_tx_builder_batch(&txs, output_path, chain_id, &description)
 }
 
-/// Fetch all pending claims, display them, and claim any that are unlocked.
+/// Claim all unlocked withdrawals. If `claims` is provided, use those instead of scanning.
 pub async fn claim_all_unlocked(
-    provider: &impl Provider,
+    l1_client: &L1Client,
     stake_table_address: Address,
     delegator: Address,
-    block_range: u64,
+    provider: &impl Provider,
+    claims: Option<Vec<PendingClaim>>,
 ) -> Result<()> {
-    let unlocked = fetch_unlocked(provider, stake_table_address, delegator, block_range).await?;
+    let unlocked = match claims {
+        Some(claims) => {
+            // Verify claims from file are still valid on-chain, then filter to unlocked.
+            let stake_table = StakeTableV2::new(stake_table_address, &l1_client.provider);
+            let block = l1_client
+                .provider
+                .get_block(BlockId::latest())
+                .await?
+                .context("Failed to fetch latest block")?;
+            let current_ts = U256::from(block.header.timestamp);
+
+            let mut valid = Vec::new();
+            for claim in claims {
+                let still_exists = match claim.kind {
+                    ClaimKind::Undelegation => {
+                        let u = stake_table
+                            .undelegations(claim.validator, delegator)
+                            .call()
+                            .await?;
+                        u.amount > U256::ZERO
+                    },
+                    ClaimKind::ValidatorExit => {
+                        let d = stake_table
+                            .delegations(claim.validator, delegator)
+                            .call()
+                            .await?;
+                        d > U256::ZERO
+                    },
+                };
+                if still_exists && claim.unlocks_at <= current_ts {
+                    valid.push(claim);
+                } else if !still_exists {
+                    output_info(format!(
+                        "Skipping {} from {} (already claimed)",
+                        claim.kind, claim.validator
+                    ));
+                }
+            }
+            valid
+        },
+        None => fetch_unlocked(l1_client, stake_table_address, delegator).await?,
+    };
 
     if unlocked.is_empty() {
         output_success("No unlocked claims to process");
@@ -256,15 +307,14 @@ pub async fn claim_all_unlocked(
 }
 
 async fn fetch_unlocked(
-    provider: &impl Provider,
+    l1_client: &L1Client,
     stake_table_address: Address,
     delegator: Address,
-    block_range: u64,
 ) -> Result<Vec<PendingClaim>> {
-    let claims =
-        fetch_pending_claims(provider, stake_table_address, delegator, block_range).await?;
+    let claims = fetch_pending_claims(l1_client, stake_table_address, delegator).await?;
 
-    let block = provider
+    let block = l1_client
+        .provider
         .get_block(BlockId::latest())
         .await?
         .context("Failed to fetch latest block")?;
@@ -283,17 +333,16 @@ mod test {
     use super::*;
     use crate::deploy::TestSystem;
 
+    fn test_l1_client(system: &TestSystem) -> L1Client {
+        L1Client::new(vec![system.rpc_url.clone()]).expect("Failed to create L1Client")
+    }
+
     #[tokio::test]
     async fn test_fetch_pending_empty() -> Result<()> {
         let system = TestSystem::deploy().await?;
+        let l1 = test_l1_client(&system);
 
-        let claims = fetch_pending_claims(
-            &system.provider,
-            system.stake_table,
-            system.deployer_address,
-            DEFAULT_BLOCK_RANGE,
-        )
-        .await?;
+        let claims = fetch_pending_claims(&l1, system.stake_table, system.deployer_address).await?;
 
         assert!(claims.is_empty());
         Ok(())
@@ -302,19 +351,14 @@ mod test {
     #[tokio::test]
     async fn test_fetch_pending_undelegation() -> Result<()> {
         let system = TestSystem::deploy().await?;
+        let l1 = test_l1_client(&system);
         let amount = parse_ether("1")?;
 
         system.register_validator().await?;
         system.delegate(amount).await?;
         system.undelegate(amount).await?;
 
-        let claims = fetch_pending_claims(
-            &system.provider,
-            system.stake_table,
-            system.deployer_address,
-            DEFAULT_BLOCK_RANGE,
-        )
-        .await?;
+        let claims = fetch_pending_claims(&l1, system.stake_table, system.deployer_address).await?;
 
         assert_eq!(claims.len(), 1);
         assert_eq!(claims[0].kind, ClaimKind::Undelegation);
@@ -327,6 +371,7 @@ mod test {
     #[tokio::test]
     async fn test_fetch_pending_after_claim() -> Result<()> {
         let system = TestSystem::deploy().await?;
+        let l1 = test_l1_client(&system);
         let amount = parse_ether("1")?;
 
         system.register_validator().await?;
@@ -343,13 +388,7 @@ mod test {
         .assert_success()
         .await?;
 
-        let claims = fetch_pending_claims(
-            &system.provider,
-            system.stake_table,
-            system.deployer_address,
-            DEFAULT_BLOCK_RANGE,
-        )
-        .await?;
+        let claims = fetch_pending_claims(&l1, system.stake_table, system.deployer_address).await?;
 
         assert!(claims.is_empty());
         Ok(())
@@ -358,19 +397,14 @@ mod test {
     #[tokio::test]
     async fn test_fetch_pending_validator_exit() -> Result<()> {
         let system = TestSystem::deploy().await?;
+        let l1 = test_l1_client(&system);
         let amount = parse_ether("1")?;
 
         system.register_validator().await?;
         system.delegate(amount).await?;
         system.deregister_validator().await?;
 
-        let claims = fetch_pending_claims(
-            &system.provider,
-            system.stake_table,
-            system.deployer_address,
-            DEFAULT_BLOCK_RANGE,
-        )
-        .await?;
+        let claims = fetch_pending_claims(&l1, system.stake_table, system.deployer_address).await?;
 
         assert_eq!(claims.len(), 1);
         assert_eq!(claims[0].kind, ClaimKind::ValidatorExit);
@@ -383,6 +417,7 @@ mod test {
     #[tokio::test]
     async fn test_claim_all_unlocked() -> Result<()> {
         let system = TestSystem::deploy().await?;
+        let l1 = test_l1_client(&system);
         let undelegation_amount = parse_ether("1")?;
         let exit_amount = parse_ether("2")?;
         let total = undelegation_amount + exit_amount;
@@ -396,13 +431,7 @@ mod test {
         system.provider.anvil_mine(Some(1), None).await?;
 
         // Verify both claim types are detected.
-        let claims = fetch_pending_claims(
-            &system.provider,
-            system.stake_table,
-            system.deployer_address,
-            DEFAULT_BLOCK_RANGE,
-        )
-        .await?;
+        let claims = fetch_pending_claims(&l1, system.stake_table, system.deployer_address).await?;
         assert_eq!(claims.len(), 2);
         assert!(claims.iter().any(|c| c.kind == ClaimKind::Undelegation));
         assert!(claims.iter().any(|c| c.kind == ClaimKind::ValidatorExit));
@@ -410,15 +439,101 @@ mod test {
         let balance_before = system.balance(system.deployer_address).await?;
 
         claim_all_unlocked(
-            &system.provider,
+            &l1,
             system.stake_table,
             system.deployer_address,
-            DEFAULT_BLOCK_RANGE,
+            &system.provider,
+            None,
         )
         .await?;
 
         let balance_after = system.balance(system.deployer_address).await?;
         assert_eq!(balance_after, balance_before + total);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_claim_from_saved_file() -> Result<()> {
+        let system = TestSystem::deploy().await?;
+        let l1 = test_l1_client(&system);
+        let amount = parse_ether("1")?;
+
+        system.register_validator().await?;
+        system.delegate(amount).await?;
+        system.undelegate(amount).await?;
+        system.warp_to_unlock_time().await?;
+        system.provider.anvil_mine(Some(1), None).await?;
+
+        // Fetch and save claims.
+        let claims = fetch_pending_claims(&l1, system.stake_table, system.deployer_address).await?;
+        assert_eq!(claims.len(), 1);
+
+        let tmpdir = tempfile::tempdir()?;
+        let path = tmpdir.path().join("claims.json");
+        save_claims(&claims, &path)?;
+
+        // Load and claim from file.
+        let loaded = load_claims(&path)?;
+        assert_eq!(loaded, claims);
+
+        let balance_before = system.balance(system.deployer_address).await?;
+
+        claim_all_unlocked(
+            &l1,
+            system.stake_table,
+            system.deployer_address,
+            &system.provider,
+            Some(loaded),
+        )
+        .await?;
+
+        let balance_after = system.balance(system.deployer_address).await?;
+        assert_eq!(balance_after, balance_before + amount);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_claim_from_file_skips_already_claimed() -> Result<()> {
+        let system = TestSystem::deploy().await?;
+        let l1 = test_l1_client(&system);
+        let amount = parse_ether("1")?;
+
+        system.register_validator().await?;
+        system.delegate(amount).await?;
+        system.undelegate(amount).await?;
+        system.warp_to_unlock_time().await?;
+        system.provider.anvil_mine(Some(1), None).await?;
+
+        // Fetch claims and save.
+        let claims = fetch_pending_claims(&l1, system.stake_table, system.deployer_address).await?;
+
+        // Claim directly first.
+        Transaction::ClaimWithdrawal {
+            stake_table: system.stake_table,
+            validator: system.deployer_address,
+        }
+        .send(&system.provider)
+        .await?
+        .assert_success()
+        .await?;
+
+        // Now try to claim from the stale file - should skip already claimed.
+        let balance_before = system.balance(system.deployer_address).await?;
+
+        claim_all_unlocked(
+            &l1,
+            system.stake_table,
+            system.deployer_address,
+            &system.provider,
+            Some(claims),
+        )
+        .await?;
+
+        // Balance unchanged - the claim was already processed.
+        let balance_after = system.balance(system.deployer_address).await?;
+        assert_eq!(balance_after, balance_before);
 
         Ok(())
     }

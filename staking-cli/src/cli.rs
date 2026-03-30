@@ -13,6 +13,7 @@ use alloy::{
 use anyhow::{Context, Result};
 use clap::Parser;
 use clap_serde_derive::ClapSerde;
+use espresso_types::v0_1::L1ClientOptions;
 use hotshot_contract_adapter::sol_types::{
     EspToken::{self, EspTokenEvents},
     RewardClaim::RewardClaimEvents,
@@ -473,39 +474,54 @@ pub async fn run() -> Result<()> {
         return Ok(());
     }
 
-    if let Commands::PendingWithdrawals { address } = config.commands {
+    if let Commands::PendingWithdrawals {
+        address,
+        claims_output,
+    } = config.commands
+    {
         let address = address
             .or_from_wallet(wallet.as_ref())
             .context("Address required - provide --address or configure a signer")?;
-        let claims = crate::undelegation::fetch_pending_claims(
-            &readonly_provider,
-            stake_table_addr,
-            address,
-            config.events_block_range,
-        )
-        .await?;
-        let block = readonly_provider
+        let l1 = L1ClientOptions {
+            l1_events_max_block_range: config.events_block_range,
+            ..Default::default()
+        }
+        .connect(vec![config.rpc_url.clone()])?;
+        let claims =
+            crate::undelegation::fetch_pending_claims(&l1, stake_table_addr, address).await?;
+        let block = l1
+            .provider
             .get_block(BlockId::latest())
             .await?
             .context("Failed to fetch latest block")?;
         crate::undelegation::display_pending_claims(&claims, block.header.timestamp);
+        if let Some(path) = claims_output {
+            crate::undelegation::save_claims(&claims, &path)?;
+        }
         return Ok(());
     }
 
-    if let Commands::ClaimAllWithdrawals {} = config.commands {
+    if let Commands::ClaimAllWithdrawals { input } = config.commands {
+        let l1 = L1ClientOptions {
+            l1_events_max_block_range: config.events_block_range,
+            ..Default::default()
+        }
+        .connect(vec![config.rpc_url.clone()])?;
         if config.export_calldata {
             let address = config.sender_address.context(
                 "claim-all-withdrawals with --export-calldata requires --sender-address",
             )?;
             crate::undelegation::export_unlocked_claims(
-                &readonly_provider,
+                &l1,
                 stake_table_addr,
                 address,
                 config.output.output.as_deref(),
-                config.events_block_range,
             )
             .await?;
         } else {
+            let claims = input
+                .map(|p| crate::undelegation::load_claims(&p))
+                .transpose()?;
             let wallet = wallet.ok_or_else(&require_wallet)?;
             let account = NetworkWallet::<Ethereum>::default_signer_address(&wallet);
             let balance = readonly_provider.get_balance(account).await?;
@@ -518,10 +534,11 @@ pub async fn run() -> Result<()> {
                 .wallet(wallet)
                 .connect_http(config.rpc_url.clone());
             crate::undelegation::claim_all_unlocked(
-                &provider,
+                &l1,
                 stake_table_addr,
                 account,
-                config.events_block_range,
+                &provider,
+                claims,
             )
             .await?;
         }

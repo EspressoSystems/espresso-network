@@ -856,8 +856,7 @@ async fn test_cli_pending_withdrawals_empty(
     Ok(())
 }
 
-/// Regression: config files without events_block_range must use the default (10000),
-/// not 0 which causes "invalid block range params" from the RPC.
+/// Regression: minimal config files must work with pending-withdrawals command.
 #[test_log::test(tokio::test)]
 async fn test_cli_pending_withdrawals_config_without_block_range() -> Result<()> {
     let system = TestSystem::deploy().await?;
@@ -970,6 +969,48 @@ async fn test_cli_claim_all_withdrawals_export(
         assert!(tx["to"].is_string());
         assert!(tx["value"].is_string());
     }
+    Ok(())
+}
+
+/// Save claims to file with pending-withdrawals --claims-output, then claim from file.
+#[test_log::test(tokio::test)]
+async fn test_cli_claim_from_saved_file() -> Result<()> {
+    let system = TestSystem::deploy().await?;
+    let amount = parse_ether("1")?;
+    system.register_validator().await?;
+    system.delegate(amount).await?;
+    system.undelegate(amount).await?;
+    system.warp_to_unlock_time().await?;
+    system.provider.anvil_mine(Some(1), None).await?;
+
+    let tmpdir = tempfile::tempdir()?;
+    let claims_path = tmpdir.path().join("claims.json");
+
+    // Save claims to file.
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("pending-withdrawals")
+        .arg("--claims-output")
+        .arg(&claims_path)
+        .assert()
+        .success()
+        .stdout(str::contains("undelegation from"));
+
+    // Verify the file was created and contains valid JSON.
+    let claims_json = std::fs::read_to_string(&claims_path)?;
+    let claims: serde_json::Value = serde_json::from_str(&claims_json)?;
+    assert_eq!(claims.as_array().unwrap().len(), 1);
+
+    // Claim from the saved file.
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("claim-all-withdrawals")
+        .arg("--input")
+        .arg(&claims_path)
+        .assert()
+        .success()
+        .stdout(str::contains("Claimed "));
+
     Ok(())
 }
 
