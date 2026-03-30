@@ -29,7 +29,8 @@ use crate::{
     block::BlockAndHeaderRequest,
     helpers::{proposal_commitment, upgrade_lock},
     message::{
-        Certificate1, Certificate2, CheckpointVote, Proposal, ProposalMessage, Vote1, Vote2,
+        Certificate1, Certificate2, CheckpointVote, Proposal, ProposalMessage, Validated, Vote1,
+        Vote2,
     },
     outbox::Outbox,
     state::{StateRequest, StateResponse},
@@ -48,7 +49,7 @@ pub enum ConsensusInput<T: NodeType> {
     Certificate1(Certificate1<T>),
     Certificate2(Certificate2<T>),
     HeaderCreated(ViewNumber, T::BlockHeader),
-    Proposal(ProposalMessage<T>),
+    Proposal(ProposalMessage<T, Validated>),
     StateValidated(StateResponse<T>),
     StateValidationFailed(StateResponse<T>),
     Timeout(ViewNumber),
@@ -267,7 +268,7 @@ impl<T: NodeType> Consensus<T> {
     #[instrument(level = "debug", skip_all)]
     async fn handle_proposal(
         &mut self,
-        proposal: ProposalMessage<T>,
+        proposal: ProposalMessage<T, Validated>,
         outbox: &mut Outbox<ConsensusOutput<T>>,
     ) -> Protocol {
         let view = proposal.view_number();
@@ -279,13 +280,6 @@ impl<T: NodeType> Consensus<T> {
             || self.proposals.contains_key(&view)
         {
             warn!(%view, "proposal for old view");
-            return Protocol::Abort;
-        }
-
-        // TODO: This signature check is slow (> 1ms).  We should consider
-        // if this should be done off the main thread.
-        if !self.validate_proposal_signature(&proposal.proposal).await {
-            warn!(%view, "invalid proposal signature");
             return Protocol::Abort;
         }
 
@@ -937,31 +931,7 @@ impl<T: NodeType> Consensus<T> {
             },
         }
     }
-    async fn validate_proposal_signature(&self, proposal: &SignedProposal<T, Proposal<T>>) -> bool {
-        let view = proposal.data.view_number();
-        let epoch = proposal.data.epoch;
-        let membership = match self
-            .stake_table_coordinator
-            .membership_for_epoch(Some(epoch))
-            .await
-        {
-            Ok(membership) => membership,
-            Err(err) => {
-                warn!(%epoch, %err, "failed to get stake table");
-                return false;
-            },
-        };
-        let view_leader_key = match membership.leader(view).await {
-            Ok(leader) => leader,
-            Err(err) => {
-                warn!(%view, %epoch, %err, "failed to get leader from stake table");
-                return false;
-            },
-        };
-        let proposed_leaf: Leaf2<T> = proposal.data.clone().into();
-        let signature = &proposal.signature;
-        view_leader_key.validate(signature, proposed_leaf.commit().as_ref())
-    }
+
     async fn staked_in_epoch(&self, epoch: EpochNumber) -> bool {
         match self
             .stake_table_coordinator

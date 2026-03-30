@@ -25,6 +25,8 @@ jobs:
         run: rm -f CLAUDE.md AGENTS.md
 
       - name: Fetch team review comments
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p ./tmp
           scripts/fetch-pr-team-comments \

@@ -619,8 +619,8 @@ pub mod persistence_tests {
 
         // Insert, but do not commit, some data and check that we can read it back.
         let mut tx = ds.write().await.unwrap();
-        tx.insert_leaf(leaf.clone()).await.unwrap();
-        tx.insert_block(block.clone()).await.unwrap();
+        tx.insert_leaf(&leaf).await.unwrap();
+        tx.insert_block(&block).await.unwrap();
 
         assert_eq!(tx.block_height().await.unwrap(), 2);
         assert_eq!(leaf, tx.get_leaf(1.into()).await.unwrap());
@@ -669,8 +669,8 @@ pub mod persistence_tests {
 
         // Insert some data and check that we can read it back.
         let mut tx = ds.write().await.unwrap();
-        tx.insert_leaf(leaf.clone()).await.unwrap();
-        tx.insert_block(block.clone()).await.unwrap();
+        tx.insert_leaf(&leaf).await.unwrap();
+        tx.insert_block(&block).await.unwrap();
         tx.commit().await.unwrap();
 
         assert_eq!(
@@ -731,8 +731,8 @@ pub mod persistence_tests {
         // Insert, but do not commit, some data and check that we can read it back.
         tracing::info!("write");
         let mut tx = ds.write().await.unwrap();
-        tx.insert_leaf(leaf.clone()).await.unwrap();
-        tx.insert_block(block.clone()).await.unwrap();
+        tx.insert_leaf(&leaf).await.unwrap();
+        tx.insert_block(&block).await.unwrap();
 
         assert_eq!(tx.block_height().await.unwrap(), 2);
         assert_eq!(leaf, tx.get_leaf(1.into()).await.unwrap());
@@ -755,8 +755,8 @@ pub mod persistence_tests {
 
         tracing::info!("write again");
         let mut tx = ds.write().await.unwrap();
-        tx.insert_leaf(leaf.clone()).await.unwrap();
-        tx.insert_block(block.clone()).await.unwrap();
+        tx.insert_leaf(&leaf).await.unwrap();
+        tx.insert_block(&block).await.unwrap();
         tx.commit().await.unwrap();
 
         // Read the data back. We should have _only_ the data that was written in the final
@@ -988,7 +988,7 @@ pub mod node_tests {
         // Insert VID common without a corresponding share.
         {
             let mut tx = ds.write().await.unwrap();
-            tx.insert_vid(vid_data[0].0.clone(), None).await.unwrap();
+            tx.insert_vid(&vid_data[0].0, None).await.unwrap();
             tx.commit().await.unwrap();
         }
         assert_eq!(
@@ -1052,28 +1052,19 @@ pub mod node_tests {
         // Rectify the missing data.
         {
             let mut tx = ds.write().await.unwrap();
-            tx.insert_block(blocks[0].clone()).await.unwrap();
-            tx.insert_vid(
-                vid_data[0].0.clone(),
-                Some(VidShare::V0(vid_data[0].1.clone())),
-            )
-            .await
-            .unwrap();
-            tx.insert_leaf(leaves[1].clone()).await.unwrap();
-            tx.insert_block(blocks[1].clone()).await.unwrap();
-            tx.insert_vid(
-                vid_data[1].0.clone(),
-                Some(VidShare::V0(vid_data[1].1.clone())),
-            )
-            .await
-            .unwrap();
-            tx.insert_block(blocks[2].clone()).await.unwrap();
-            tx.insert_vid(
-                vid_data[2].0.clone(),
-                Some(VidShare::V0(vid_data[2].1.clone())),
-            )
-            .await
-            .unwrap();
+            tx.insert_block(&blocks[0]).await.unwrap();
+            tx.insert_vid(&vid_data[0].0, Some(&VidShare::V0(vid_data[0].1.clone())))
+                .await
+                .unwrap();
+            tx.insert_leaf(&leaves[1]).await.unwrap();
+            tx.insert_block(&blocks[1]).await.unwrap();
+            tx.insert_vid(&vid_data[1].0, Some(&VidShare::V0(vid_data[1].1.clone())))
+                .await
+                .unwrap();
+            tx.insert_block(&blocks[2]).await.unwrap();
+            tx.insert_vid(&vid_data[2].0, Some(&VidShare::V0(vid_data[2].1.clone())))
+                .await
+                .unwrap();
             tx.commit().await.unwrap();
         }
 
@@ -1170,7 +1161,7 @@ pub mod node_tests {
         // that we already have; that is, `insert_vid` should be monotonic.
         {
             let mut tx = ds.write().await.unwrap();
-            tx.insert_vid(vid_data[0].0.clone(), None).await.unwrap();
+            tx.insert_vid(&vid_data[0].0, None).await.unwrap();
             tx.commit().await.unwrap();
         }
         assert_eq!(ds.sync_status().await.unwrap(), expected_sync_status);
@@ -1331,7 +1322,7 @@ pub mod node_tests {
         // already have.
         {
             let mut tx = ds.write().await.unwrap();
-            tx.insert_vid(common.clone(), None).await.unwrap();
+            tx.insert_vid(&common, None).await.unwrap();
             tx.commit().await.unwrap();
         }
         {
@@ -1660,7 +1651,7 @@ pub mod node_tests {
         {
             let (leaf, qcs) = leaf_with_qc_chain(2).await;
             let mut tx = ds.write().await.unwrap();
-            tx.insert_leaf_with_qc_chain(leaf, Some(qcs.clone()))
+            tx.insert_leaf_with_qc_chain(&leaf, Some(qcs.clone()))
                 .await
                 .unwrap();
             tx.commit().await.unwrap();
@@ -1676,7 +1667,7 @@ pub mod node_tests {
         {
             let (leaf, _) = leaf_with_qc_chain(3).await;
             let mut tx = ds.write().await.unwrap();
-            tx.insert_leaf_with_qc_chain(leaf, None).await.unwrap();
+            tx.insert_leaf_with_qc_chain(&leaf, None).await.unwrap();
             tx.commit().await.unwrap();
 
             assert_eq!(
@@ -1690,7 +1681,9 @@ pub mod node_tests {
         {
             let (leaf, qcs) = leaf_with_qc_chain(1).await;
             let mut tx = ds.write().await.unwrap();
-            tx.insert_leaf_with_qc_chain(leaf, Some(qcs)).await.unwrap();
+            tx.insert_leaf_with_qc_chain(&leaf, Some(qcs))
+                .await
+                .unwrap();
             tx.commit().await.unwrap();
 
             assert_eq!(

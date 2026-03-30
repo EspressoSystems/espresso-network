@@ -6,7 +6,9 @@ use ark_serialize::CanonicalSerialize;
 use base64::{Engine, prelude::BASE64_STANDARD};
 use committable::{Commitment, Committable, RawCommitmentBuilder};
 use either::Either;
-use hotshot_query_service::{availability::QueryableHeader, explorer::ExplorerHeader};
+use hotshot_query_service::{
+    availability::QueryableHeader, explorer::ExplorerHeader, types::HeightIndexed,
+};
 use hotshot_types::{
     data::{EpochNumber, VidCommitment, ViewNumber, vid_commitment},
     light_client::LightClientState,
@@ -1266,6 +1268,12 @@ impl BlockHeader<SeqTypes> for Header {
                 Ok(hasher.finalize())
             },
         }
+    }
+}
+
+impl HeightIndexed for Header {
+    fn height(&self) -> u64 {
+        self.height()
     }
 }
 

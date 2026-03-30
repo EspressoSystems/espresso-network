@@ -1,3 +1,5 @@
+use std::marker::PhantomData;
+
 use hotshot_types::{
     data::{
         EpochNumber, Leaf2, QuorumProposal2, QuorumProposalWrapper, VidDisperseShare2,
@@ -109,14 +111,43 @@ impl<T: NodeType> Into<Leaf2<T>> for Proposal<T> {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord, Hash, Deserialize)]
+pub enum Unchecked {}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord, Hash, Serialize)]
+pub enum Validated {}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
-#[serde(bound(deserialize = ""))]
-pub struct ProposalMessage<T: NodeType> {
+#[serde(bound(deserialize = "S: Deserialize<'de>"))]
+pub struct ProposalMessage<T: NodeType, S> {
     pub proposal: SignedProposal<T, Proposal<T>>,
     pub vid_share: VidDisperseShare2<T>,
+    #[serde(skip)]
+    _marker: PhantomData<fn() -> S>,
 }
 
-impl<T: NodeType> HasViewNumber for ProposalMessage<T> {
+impl<T: NodeType> ProposalMessage<T, Validated> {
+    pub fn validated(p: SignedProposal<T, Proposal<T>>, s: VidDisperseShare2<T>) -> Self {
+        Self {
+            proposal: p,
+            vid_share: s,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<T: NodeType, S> ProposalMessage<T, S> {
+    #[cfg(test)]
+    pub fn into_unchecked(self) -> ProposalMessage<T, Unchecked> {
+        ProposalMessage {
+            proposal: self.proposal,
+            vid_share: self.vid_share,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<T: NodeType, S> HasViewNumber for ProposalMessage<T, S> {
     fn view_number(&self) -> ViewNumber {
         self.proposal.data.view_number
     }
@@ -136,10 +167,10 @@ impl<T: NodeType> HasViewNumber for Vote1<T> {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
-#[serde(bound(deserialize = ""))]
+#[serde(bound(deserialize = "S: Deserialize<'de>"))]
 #[allow(clippy::large_enum_variant)]
-pub enum ConsensusMessage<T: NodeType> {
-    Proposal(ProposalMessage<T>),
+pub enum ConsensusMessage<T: NodeType, S> {
+    Proposal(ProposalMessage<T, S>),
     Vote1(Vote1<T>),
     Vote2(Vote2<T>),
     Certificate1(Certificate1<T>, T::SignatureKey),
@@ -149,20 +180,37 @@ pub enum ConsensusMessage<T: NodeType> {
     Checkpoint(CheckpointVote<T>),
 }
 
-impl<T: NodeType> HasViewNumber for ConsensusMessage<T> {
-    fn view_number(&self) -> ViewNumber {
+impl<T: NodeType, S> ConsensusMessage<T, S> {
+    #[cfg(test)]
+    pub fn into_unchecked(self) -> ConsensusMessage<T, Unchecked> {
         match self {
-            ConsensusMessage::Proposal(proposal) => proposal.view_number(),
-            ConsensusMessage::Vote1(vote) => vote.view_number(),
-            ConsensusMessage::Vote2(vote) => vote.view_number(),
-            ConsensusMessage::Certificate1(certificate, _) => certificate.view_number(),
-            ConsensusMessage::Certificate2(certificate, _) => certificate.view_number(),
-            ConsensusMessage::TimeoutVote(vote) => vote.view_number(),
-            ConsensusMessage::Transactions(_, view_number) => *view_number,
-            ConsensusMessage::Checkpoint(vote) => vote.view_number(),
+            Self::Proposal(p) => ConsensusMessage::Proposal(p.into_unchecked()),
+            Self::Vote1(v) => ConsensusMessage::Vote1(v),
+            Self::Vote2(v) => ConsensusMessage::Vote2(v),
+            Self::Certificate1(c, k) => ConsensusMessage::Certificate1(c, k),
+            Self::Certificate2(c, k) => ConsensusMessage::Certificate2(c, k),
+            Self::TimeoutVote(v) => ConsensusMessage::TimeoutVote(v),
+            Self::Transactions(t, v) => ConsensusMessage::Transactions(t, v),
+            Self::Checkpoint(v) => ConsensusMessage::Checkpoint(v),
         }
     }
 }
+
+impl<T: NodeType, S> HasViewNumber for ConsensusMessage<T, S> {
+    fn view_number(&self) -> ViewNumber {
+        match self {
+            Self::Proposal(proposal) => proposal.view_number(),
+            Self::Vote1(vote) => vote.view_number(),
+            Self::Vote2(vote) => vote.view_number(),
+            Self::Certificate1(certificate, _) => certificate.view_number(),
+            Self::Certificate2(certificate, _) => certificate.view_number(),
+            Self::TimeoutVote(vote) => vote.view_number(),
+            Self::Transactions(_, view_number) => *view_number,
+            Self::Checkpoint(vote) => vote.view_number(),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 #[serde(bound(deserialize = ""))]
 pub enum ViewSyncMessage<T: NodeType> {
@@ -188,28 +236,47 @@ impl<T: NodeType> HasViewNumber for ViewSyncMessage<T> {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
-#[serde(bound(deserialize = ""))]
+#[serde(bound(deserialize = "S: Deserialize<'de>"))]
 #[allow(clippy::large_enum_variant)]
-pub enum MessageType<T: NodeType> {
-    Consensus(ConsensusMessage<T>),
+pub enum MessageType<T: NodeType, S> {
+    Consensus(ConsensusMessage<T, S>),
     ViewSync(ViewSyncMessage<T>),
     External(Vec<u8>),
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
-#[serde(bound(deserialize = ""))]
-pub struct Message<T: NodeType> {
-    pub sender: T::SignatureKey,
-    pub message_type: MessageType<T>,
-}
-
-impl<T: NodeType> Message<T> {
-    pub fn is_external(&self) -> bool {
-        matches!(self.message_type, MessageType::External(_))
+impl<T: NodeType, S> MessageType<T, S> {
+    #[cfg(test)]
+    pub fn into_unchecked(self) -> MessageType<T, Unchecked> {
+        match self {
+            Self::Consensus(c) => MessageType::Consensus(c.into_unchecked()),
+            Self::ViewSync(m) => MessageType::ViewSync(m),
+            Self::External(v) => MessageType::External(v),
+        }
     }
 }
 
-impl<T: NodeType> HasViewNumber for Message<T> {
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
+#[serde(bound(deserialize = "S: Deserialize<'de>"))]
+pub struct Message<T: NodeType, S> {
+    pub sender: T::SignatureKey,
+    pub message_type: MessageType<T, S>,
+}
+
+impl<T: NodeType, S> Message<T, S> {
+    pub fn is_external(&self) -> bool {
+        matches!(self.message_type, MessageType::External(_))
+    }
+
+    #[cfg(test)]
+    pub fn into_unchecked(self) -> Message<T, Unchecked> {
+        Message {
+            sender: self.sender,
+            message_type: self.message_type.into_unchecked(),
+        }
+    }
+}
+
+impl<T: NodeType, S> HasViewNumber for Message<T, S> {
     fn view_number(&self) -> ViewNumber {
         match &self.message_type {
             MessageType::Consensus(consensus_message) => consensus_message.view_number(),

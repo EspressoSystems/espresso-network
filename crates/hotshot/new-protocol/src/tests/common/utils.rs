@@ -49,7 +49,7 @@ use crate::{
     helpers::{proposal_commitment, upgrade_lock},
     message::{
         Certificate1, Certificate2, ConsensusMessage, Message, MessageType, Proposal,
-        ProposalMessage, Vote1, Vote2,
+        ProposalMessage, Validated, Vote1, Vote2,
     },
     state::StateResponse,
 };
@@ -72,8 +72,11 @@ pub struct TestView {
 impl TestView {
     /// Build a ProposalMessage suitable for sending as a ConsensusEvent::Proposal.
     /// `recipient_key` is the public key of the node that will receive the VID share.
-    pub fn proposal_message(&self, recipient_key: &BLSPubKey) -> ProposalMessage<TestTypes> {
-        let inner_proposal = SignedProposal::<TestTypes, Proposal<TestTypes>> {
+    pub fn proposal_message(
+        &self,
+        recipient_key: &BLSPubKey,
+    ) -> ProposalMessage<TestTypes, Validated> {
+        let inner_proposal = SignedProposal {
             data: self.proposal.data.clone().into(),
             signature: self.proposal.signature.clone(),
             _pd: std::marker::PhantomData,
@@ -84,10 +87,7 @@ impl TestView {
             .find(|s| s.recipient_key == *recipient_key)
             .expect("VID share not found for recipient key")
             .clone();
-        ProposalMessage {
-            proposal: inner_proposal,
-            vid_share,
-        }
+        ProposalMessage::validated(inner_proposal, vid_share)
     }
 
     /// Get the VidCommitment2 for this view (for BlockReconstructed events).
@@ -96,7 +96,7 @@ impl TestView {
     }
 
     /// Build an Event for a proposal.
-    pub fn proposal_input(&self, recipient_key: &BLSPubKey) -> Message<TestTypes> {
+    pub fn proposal_input(&self, recipient_key: &BLSPubKey) -> Message<TestTypes, Validated> {
         Message {
             sender: self.leader_public_key,
             message_type: MessageType::Consensus(ConsensusMessage::Proposal(
@@ -125,7 +125,7 @@ impl TestView {
 
     /// Build a Vote1 Event from a specific validator, carrying that validator's
     /// QuorumVote2 and VID share.
-    pub fn vote1_input(&self, node_index: u64) -> Message<TestTypes> {
+    pub fn vote1_input(&self, node_index: u64) -> Message<TestTypes, Validated> {
         let (pub_key, priv_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], node_index);
         let data = hotshot_types::simple_vote::QuorumData2 {
             leaf_commit: proposal_commitment(&self.proposal.data.clone().into()),
@@ -158,7 +158,7 @@ impl TestView {
     }
 
     /// Build a Vote2 Event from a specific validator.
-    pub fn vote2_input(&self, node_index: u64) -> Message<TestTypes> {
+    pub fn vote2_input(&self, node_index: u64) -> Message<TestTypes, Validated> {
         let (pub_key, priv_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], node_index);
         let data = Vote2Data {
             leaf_commit: proposal_commitment(&self.proposal.data.clone().into()),
@@ -182,7 +182,7 @@ impl TestView {
     }
 
     /// Build a TimeoutVote Event from a specific validator.
-    pub fn timeout_vote_input(&self, node_index: u64) -> Message<TestTypes> {
+    pub fn timeout_vote_input(&self, node_index: u64) -> Message<TestTypes, Validated> {
         let (pub_key, priv_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], node_index);
         let data = TimeoutData2 {
             view: self.view_number,
