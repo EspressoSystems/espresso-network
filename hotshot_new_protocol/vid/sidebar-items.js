@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"struct":["VidDisperseRequest","VidDisperser","VidReconstructor","VidShareAccumulator","VidShareInput"],"type":["VidDisperseResult","VidShareResult"]};
+window.SIDEBAR_ITEMS = {"struct":["VidDisperseRequest","VidDisperser","VidReconstructor","VidShareAccumulator"],"type":["VidDisperseResult","VidShareResult"]};
