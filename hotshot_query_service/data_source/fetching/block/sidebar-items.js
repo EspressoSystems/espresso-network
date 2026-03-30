@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["fetch_block_with_header"],"struct":["PayloadCallback"],"type":["PayloadFetcher"]};
+window.SIDEBAR_ITEMS = {"fn":["fetch_block_range_with_headers","fetch_block_with_header"],"struct":["BlockRangeCallback","PayloadCallback"],"type":["PayloadFetcher","PayloadRangeFetcher"]};

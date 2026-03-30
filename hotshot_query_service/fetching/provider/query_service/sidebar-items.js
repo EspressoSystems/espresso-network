@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"struct":["QueryServiceProvider"]};
+window.SIDEBAR_ITEMS = {"fn":["recompute_payload_commitment"],"struct":["QueryServiceProvider"]};

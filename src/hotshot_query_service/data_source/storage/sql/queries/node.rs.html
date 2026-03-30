@@ -830,8 +830,8 @@
 <a href=#830 id=830 data-nosnippet>830</a>            <span class="kw">let </span><span class="kw-2">mut </span>tx = db.write().<span class="kw">await</span>.unwrap();
 <a href=#831 id=831 data-nosnippet>831</a>
 <a href=#832 id=832 data-nosnippet>832</a>            <span class="kw">for </span><span class="kw-2">&amp;</span>(start, end) <span class="kw">in </span>present_ranges {
-<a href=#833 id=833 data-nosnippet>833</a>                <span class="kw">for </span>leaf <span class="kw">in </span>leaves[start..end].iter() {
-<a href=#834 id=834 data-nosnippet>834</a>                    tx.insert_leaf(leaf.clone()).<span class="kw">await</span>.unwrap();
+<a href=#833 id=833 data-nosnippet>833</a>                <span class="kw">for </span>leaf <span class="kw">in </span><span class="kw-2">&amp;</span>leaves[start..end] {
+<a href=#834 id=834 data-nosnippet>834</a>                    tx.insert_leaf(leaf).<span class="kw">await</span>.unwrap();
 <a href=#835 id=835 data-nosnippet>835</a>                }
 <a href=#836 id=836 data-nosnippet>836</a>            }
 <a href=#837 id=837 data-nosnippet>837</a>
@@ -988,7 +988,7 @@
 <a href=#988 id=988 data-nosnippet>988</a>        <span class="comment">// Insert the first leaf without payload or VID data.
 <a href=#989 id=989 data-nosnippet>989</a>        </span>{
 <a href=#990 id=990 data-nosnippet>990</a>            <span class="kw">let </span><span class="kw-2">mut </span>tx = db.write().<span class="kw">await</span>.unwrap();
-<a href=#991 id=991 data-nosnippet>991</a>            tx.insert_leaf(leaves[<span class="number">0</span>].clone()).<span class="kw">await</span>.unwrap();
+<a href=#991 id=991 data-nosnippet>991</a>            tx.insert_leaf(<span class="kw-2">&amp;</span>leaves[<span class="number">0</span>]).<span class="kw">await</span>.unwrap();
 <a href=#992 id=992 data-nosnippet>992</a>            tx.commit().<span class="kw">await</span>.unwrap();
 <a href=#993 id=993 data-nosnippet>993</a>        }
 <a href=#994 id=994 data-nosnippet>994</a>
@@ -1024,14 +1024,14 @@
 <a href=#1024 id=1024 data-nosnippet>1024</a>        <span class="comment">// Insert the second block with all data.
 <a href=#1025 id=1025 data-nosnippet>1025</a>        </span>{
 <a href=#1026 id=1026 data-nosnippet>1026</a>            <span class="kw">let </span><span class="kw-2">mut </span>tx = db.write().<span class="kw">await</span>.unwrap();
-<a href=#1027 id=1027 data-nosnippet>1027</a>            tx.insert_leaf(leaves[<span class="number">1</span>].clone()).<span class="kw">await</span>.unwrap();
-<a href=#1028 id=1028 data-nosnippet>1028</a>            tx.insert_block(blocks[<span class="number">1</span>].clone()).<span class="kw">await</span>.unwrap();
+<a href=#1027 id=1027 data-nosnippet>1027</a>            tx.insert_leaf(<span class="kw-2">&amp;</span>leaves[<span class="number">1</span>]).<span class="kw">await</span>.unwrap();
+<a href=#1028 id=1028 data-nosnippet>1028</a>            tx.insert_block(<span class="kw-2">&amp;</span>blocks[<span class="number">1</span>]).<span class="kw">await</span>.unwrap();
 <a href=#1029 id=1029 data-nosnippet>1029</a>            tx.insert_vid(
-<a href=#1030 id=1030 data-nosnippet>1030</a>                VidCommonQueryData::&lt;MockTypes&gt;::new(
+<a href=#1030 id=1030 data-nosnippet>1030</a>                <span class="kw-2">&amp;</span>VidCommonQueryData::&lt;MockTypes&gt;::new(
 <a href=#1031 id=1031 data-nosnippet>1031</a>                    leaves[<span class="number">1</span>].header().clone(),
 <a href=#1032 id=1032 data-nosnippet>1032</a>                    hotshot_types::data::VidCommon::V0(dispersal.common),
 <a href=#1033 id=1033 data-nosnippet>1033</a>                ),
-<a href=#1034 id=1034 data-nosnippet>1034</a>                <span class="prelude-val">Some</span>(VidShare::V0(dispersal.shares[<span class="number">0</span>].clone())),
+<a href=#1034 id=1034 data-nosnippet>1034</a>                <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>VidShare::V0(dispersal.shares[<span class="number">0</span>].clone())),
 <a href=#1035 id=1035 data-nosnippet>1035</a>            )
 <a href=#1036 id=1036 data-nosnippet>1036</a>            .<span class="kw">await
 <a href=#1037 id=1037 data-nosnippet>1037</a>            </span>.unwrap();
@@ -1115,7 +1115,7 @@
 <a href=#1115 id=1115 data-nosnippet>1115</a>        <span class="comment">// Insert the first leaf without payload or VID data.
 <a href=#1116 id=1116 data-nosnippet>1116</a>        </span>{
 <a href=#1117 id=1117 data-nosnippet>1117</a>            <span class="kw">let </span><span class="kw-2">mut </span>tx = db.write().<span class="kw">await</span>.unwrap();
-<a href=#1118 id=1118 data-nosnippet>1118</a>            tx.insert_leaf(leaves[<span class="number">0</span>].clone()).<span class="kw">await</span>.unwrap();
+<a href=#1118 id=1118 data-nosnippet>1118</a>            tx.insert_leaf(<span class="kw-2">&amp;</span>leaves[<span class="number">0</span>]).<span class="kw">await</span>.unwrap();
 <a href=#1119 id=1119 data-nosnippet>1119</a>            tx.commit().<span class="kw">await</span>.unwrap();
 <a href=#1120 id=1120 data-nosnippet>1120</a>        }
 <a href=#1121 id=1121 data-nosnippet>1121</a>
@@ -1151,14 +1151,14 @@
 <a href=#1151 id=1151 data-nosnippet>1151</a>        <span class="comment">// Insert the second block with all data.
 <a href=#1152 id=1152 data-nosnippet>1152</a>        </span>{
 <a href=#1153 id=1153 data-nosnippet>1153</a>            <span class="kw">let </span><span class="kw-2">mut </span>tx = db.write().<span class="kw">await</span>.unwrap();
-<a href=#1154 id=1154 data-nosnippet>1154</a>            tx.insert_leaf(leaves[<span class="number">1</span>].clone()).<span class="kw">await</span>.unwrap();
-<a href=#1155 id=1155 data-nosnippet>1155</a>            tx.insert_block(blocks[<span class="number">1</span>].clone()).<span class="kw">await</span>.unwrap();
+<a href=#1154 id=1154 data-nosnippet>1154</a>            tx.insert_leaf(<span class="kw-2">&amp;</span>leaves[<span class="number">1</span>]).<span class="kw">await</span>.unwrap();
+<a href=#1155 id=1155 data-nosnippet>1155</a>            tx.insert_block(<span class="kw-2">&amp;</span>blocks[<span class="number">1</span>]).<span class="kw">await</span>.unwrap();
 <a href=#1156 id=1156 data-nosnippet>1156</a>            tx.insert_vid(
-<a href=#1157 id=1157 data-nosnippet>1157</a>                VidCommonQueryData::&lt;MockTypes&gt;::new(
+<a href=#1157 id=1157 data-nosnippet>1157</a>                <span class="kw-2">&amp;</span>VidCommonQueryData::&lt;MockTypes&gt;::new(
 <a href=#1158 id=1158 data-nosnippet>1158</a>                    leaves[<span class="number">1</span>].header().clone(),
 <a href=#1159 id=1159 data-nosnippet>1159</a>                    hotshot_types::data::VidCommon::V0(dispersal.common),
 <a href=#1160 id=1160 data-nosnippet>1160</a>                ),
-<a href=#1161 id=1161 data-nosnippet>1161</a>                <span class="prelude-val">Some</span>(VidShare::V0(dispersal.shares[<span class="number">0</span>].clone())),
+<a href=#1161 id=1161 data-nosnippet>1161</a>                <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>VidShare::V0(dispersal.shares[<span class="number">0</span>].clone())),
 <a href=#1162 id=1162 data-nosnippet>1162</a>            )
 <a href=#1163 id=1163 data-nosnippet>1163</a>            .<span class="kw">await
 <a href=#1164 id=1164 data-nosnippet>1164</a>            </span>.unwrap();

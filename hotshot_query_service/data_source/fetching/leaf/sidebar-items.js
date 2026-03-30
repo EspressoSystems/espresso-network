@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["LeafCallback"],"fn":["fetch_leaf_with_callbacks","trigger_fetch_for_parent"],"type":["LeafFetcher"]};
+window.SIDEBAR_ITEMS = {"enum":["LeafCallback"],"fn":["fetch_leaf_range_with_callbacks","fetch_leaf_with_callbacks","trigger_fetch_for_parent"],"struct":["RangeRequest"],"type":["LeafFetcher","LeafRangeFetcher"]};

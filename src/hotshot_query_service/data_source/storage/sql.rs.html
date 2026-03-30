@@ -1386,7 +1386,7 @@
 <a href=#1386 id=1386 data-nosnippet>1386</a>            leaf.leaf.block_header_mut().block_number = i;
 <a href=#1387 id=1387 data-nosnippet>1387</a>            leaf.leaf.block_header_mut().timestamp = Utc::now().timestamp() <span class="kw">as </span>u64;
 <a href=#1388 id=1388 data-nosnippet>1388</a>            <span class="kw">let </span><span class="kw-2">mut </span>tx = storage.write().<span class="kw">await</span>.unwrap();
-<a href=#1389 id=1389 data-nosnippet>1389</a>            tx.insert_leaf(leaf.clone()).<span class="kw">await</span>.unwrap();
+<a href=#1389 id=1389 data-nosnippet>1389</a>            tx.insert_leaf(<span class="kw-2">&amp;</span>leaf).<span class="kw">await</span>.unwrap();
 <a href=#1390 id=1390 data-nosnippet>1390</a>            tx.commit().<span class="kw">await</span>.unwrap();
 <a href=#1391 id=1391 data-nosnippet>1391</a>        }
 <a href=#1392 id=1392 data-nosnippet>1392</a>
@@ -1577,7 +1577,7 @@
 <a href=#1577 id=1577 data-nosnippet>1577</a>            leaf.leaf.block_header_mut().block_number = i;
 <a href=#1578 id=1578 data-nosnippet>1578</a>            leaf.leaf.block_header_mut().timestamp = Utc::now().timestamp() <span class="kw">as </span>u64;
 <a href=#1579 id=1579 data-nosnippet>1579</a>            <span class="kw">let </span><span class="kw-2">mut </span>tx = storage.write().<span class="kw">await</span>.unwrap();
-<a href=#1580 id=1580 data-nosnippet>1580</a>            tx.insert_leaf(leaf.clone()).<span class="kw">await</span>.unwrap();
+<a href=#1580 id=1580 data-nosnippet>1580</a>            tx.insert_leaf(<span class="kw-2">&amp;</span>leaf).<span class="kw">await</span>.unwrap();
 <a href=#1581 id=1581 data-nosnippet>1581</a>            tx.commit().<span class="kw">await</span>.unwrap();
 <a href=#1582 id=1582 data-nosnippet>1582</a>        }
 <a href=#1583 id=1583 data-nosnippet>1583</a>
@@ -1667,9 +1667,9 @@
 <a href=#1667 id=1667 data-nosnippet>1667</a>        .<span class="kw">await</span>;
 <a href=#1668 id=1668 data-nosnippet>1668</a>        {
 <a href=#1669 id=1669 data-nosnippet>1669</a>            <span class="kw">let </span><span class="kw-2">mut </span>tx = storage.write().<span class="kw">await</span>.unwrap();
-<a href=#1670 id=1670 data-nosnippet>1670</a>            tx.insert_leaf(leaf.clone()).<span class="kw">await</span>.unwrap();
-<a href=#1671 id=1671 data-nosnippet>1671</a>            tx.insert_block(block.clone()).<span class="kw">await</span>.unwrap();
-<a href=#1672 id=1672 data-nosnippet>1672</a>            tx.insert_vid(vid.clone(), <span class="prelude-val">None</span>).<span class="kw">await</span>.unwrap();
+<a href=#1670 id=1670 data-nosnippet>1670</a>            tx.insert_leaf(<span class="kw-2">&amp;</span>leaf).<span class="kw">await</span>.unwrap();
+<a href=#1671 id=1671 data-nosnippet>1671</a>            tx.insert_block(<span class="kw-2">&amp;</span>block).<span class="kw">await</span>.unwrap();
+<a href=#1672 id=1672 data-nosnippet>1672</a>            tx.insert_vid(<span class="kw-2">&amp;</span>vid, <span class="prelude-val">None</span>).<span class="kw">await</span>.unwrap();
 <a href=#1673 id=1673 data-nosnippet>1673</a>            tx.commit().<span class="kw">await</span>.unwrap();
 <a href=#1674 id=1674 data-nosnippet>1674</a>        }
 <a href=#1675 id=1675 data-nosnippet>1675</a>
@@ -1677,7 +1677,7 @@
 <a href=#1677 id=1677 data-nosnippet>1677</a>        </span>leaf.leaf.block_header_mut().block_number += <span class="number">1</span>;
 <a href=#1678 id=1678 data-nosnippet>1678</a>        {
 <a href=#1679 id=1679 data-nosnippet>1679</a>            <span class="kw">let </span><span class="kw-2">mut </span>tx = storage.write().<span class="kw">await</span>.unwrap();
-<a href=#1680 id=1680 data-nosnippet>1680</a>            tx.insert_leaf(leaf.clone()).<span class="kw">await</span>.unwrap();
+<a href=#1680 id=1680 data-nosnippet>1680</a>            tx.insert_leaf(<span class="kw-2">&amp;</span>leaf).<span class="kw">await</span>.unwrap();
 <a href=#1681 id=1681 data-nosnippet>1681</a>            tx.commit().<span class="kw">await</span>.unwrap();
 <a href=#1682 id=1682 data-nosnippet>1682</a>        }
 <a href=#1683 id=1683 data-nosnippet>1683</a>        {
