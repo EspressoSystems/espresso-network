@@ -961,17 +961,16 @@
 <a href=#961 id=961 data-nosnippet>961</a>        <span class="macro">assert_eq!</span>(sync_status.blocks.missing, <span class="number">0</span>);
 <a href=#962 id=962 data-nosnippet>962</a>        <span class="macro">assert_eq!</span>(sync_status.leaves.missing, <span class="number">0</span>);
 <a href=#963 id=963 data-nosnippet>963</a>        <span class="macro">assert_eq!</span>(sync_status.vid_common.missing, <span class="number">1</span>);
-<a href=#964 id=964 data-nosnippet>964</a>        <span class="macro">assert_eq!</span>(sync_status.vid_shares.missing, <span class="number">1</span>);
-<a href=#965 id=965 data-nosnippet>965</a>
-<a href=#966 id=966 data-nosnippet>966</a>        <span class="macro">assert_eq!</span>(
-<a href=#967 id=967 data-nosnippet>967</a>            client
-<a href=#968 id=968 data-nosnippet>968</a>                .get::&lt;MockHeader&gt;(<span class="string">"availability/header/0"</span>)
-<a href=#969 id=969 data-nosnippet>969</a>                .send()
-<a href=#970 id=970 data-nosnippet>970</a>                .<span class="kw">await
-<a href=#971 id=971 data-nosnippet>971</a>                </span>.unwrap()
-<a href=#972 id=972 data-nosnippet>972</a>                .block_number,
-<a href=#973 id=973 data-nosnippet>973</a>            <span class="number">0
-<a href=#974 id=974 data-nosnippet>974</a>        </span>);
-<a href=#975 id=975 data-nosnippet>975</a>    }
-<a href=#976 id=976 data-nosnippet>976</a>}
+<a href=#964 id=964 data-nosnippet>964</a>
+<a href=#965 id=965 data-nosnippet>965</a>        <span class="macro">assert_eq!</span>(
+<a href=#966 id=966 data-nosnippet>966</a>            client
+<a href=#967 id=967 data-nosnippet>967</a>                .get::&lt;MockHeader&gt;(<span class="string">"availability/header/0"</span>)
+<a href=#968 id=968 data-nosnippet>968</a>                .send()
+<a href=#969 id=969 data-nosnippet>969</a>                .<span class="kw">await
+<a href=#970 id=970 data-nosnippet>970</a>                </span>.unwrap()
+<a href=#971 id=971 data-nosnippet>971</a>                .block_number,
+<a href=#972 id=972 data-nosnippet>972</a>            <span class="number">0
+<a href=#973 id=973 data-nosnippet>973</a>        </span>);
+<a href=#974 id=974 data-nosnippet>974</a>    }
+<a href=#975 id=975 data-nosnippet>975</a>}
 </code></pre></div></section></main></body></html>
