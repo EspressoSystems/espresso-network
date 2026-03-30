@@ -8,6 +8,8 @@ use async_broadcast::{InactiveReceiver, Receiver, Sender, broadcast};
 use async_lock::{Mutex, RwLock};
 use committable::Commitment;
 use hotshot_utils::{anytrace::*, *};
+use sha2::{Digest, Sha256};
+use versions::DRB_FIX_VERSION;
 
 use crate::{
     PeerConfig,
@@ -504,8 +506,14 @@ where
         let drb_difficulty = drb_difficulty_selector(root_leaf.block_header().version()).await;
 
         let mut drb_seed_input = [0u8; 32];
-        let len = drb_seed_input_vec.len().min(32);
-        drb_seed_input[..len].copy_from_slice(&drb_seed_input_vec[..len]);
+
+        if root_leaf.block_header().version() >= DRB_FIX_VERSION {
+            drb_seed_input = Sha256::digest(&drb_seed_input_vec).into();
+        } else {
+            let len = drb_seed_input_vec.len().min(32);
+            drb_seed_input[..len].copy_from_slice(&drb_seed_input_vec[..len]);
+        }
+
         let drb_input = DrbInput {
             epoch: *epoch,
             iteration: 0,
