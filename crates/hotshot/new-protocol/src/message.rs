@@ -146,7 +146,6 @@ pub enum ConsensusMessage<T: NodeType, S> {
     Certificate1(Certificate1<T>, T::SignatureKey),
     Certificate2(Certificate2<T>, T::SignatureKey),
     TimeoutVote(TimeoutVote2<T>),
-    Transactions(Vec<T::Transaction>, ViewNumber),
     Checkpoint(CheckpointVote<T>),
 }
 
@@ -160,17 +159,9 @@ impl<T: NodeType, S> ConsensusMessage<T, S> {
             Self::Certificate1(c, k) => ConsensusMessage::Certificate1(c, k),
             Self::Certificate2(c, k) => ConsensusMessage::Certificate2(c, k),
             Self::TimeoutVote(v) => ConsensusMessage::TimeoutVote(v),
-            Self::Transactions(t, v) => ConsensusMessage::Transactions(t, v),
             Self::Checkpoint(v) => ConsensusMessage::Checkpoint(v),
         }
     }
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
-#[serde(bound(deserialize = ""))]
-pub struct DedupManifest<T: NodeType> {
-    pub(crate) view: ViewNumber,
-    pub(crate) hashes: Vec<Commitment<T::Transaction>>,
 }
 
 impl<T: NodeType, S> HasViewNumber for ConsensusMessage<T, S> {
@@ -182,10 +173,16 @@ impl<T: NodeType, S> HasViewNumber for ConsensusMessage<T, S> {
             Self::Certificate1(certificate, _) => certificate.view_number(),
             Self::Certificate2(certificate, _) => certificate.view_number(),
             Self::TimeoutVote(vote) => vote.view_number(),
-            Self::Transactions(_, view_number) => *view_number,
             Self::Checkpoint(vote) => vote.view_number(),
         }
     }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
+#[serde(bound(deserialize = ""))]
+pub struct DedupManifest<T: NodeType> {
+    pub(crate) view: ViewNumber,
+    pub(crate) hashes: Vec<Commitment<T::Transaction>>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
@@ -236,7 +233,7 @@ impl<T: NodeType> HasViewNumber for ViewSyncMessage<T> {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
-#[serde(bound(deserialize = ""))]
+#[serde(bound(deserialize = "S: Deserialize<'de>"))]
 #[allow(clippy::large_enum_variant)]
 pub enum MessageType<T: NodeType, S> {
     Consensus(ConsensusMessage<T, S>),
@@ -250,6 +247,7 @@ impl<T: NodeType, S> MessageType<T, S> {
     pub fn into_unchecked(self) -> MessageType<T, Unchecked> {
         match self {
             Self::Consensus(c) => MessageType::Consensus(c.into_unchecked()),
+            Self::Block(b) => MessageType::Block(b),
             Self::ViewSync(m) => MessageType::ViewSync(m),
             Self::External(v) => MessageType::External(v),
         }
