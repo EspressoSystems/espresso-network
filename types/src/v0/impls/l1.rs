@@ -390,29 +390,6 @@ impl Service<RequestPacket> for SwitchingTransport {
 }
 
 impl SwitchingTransport {
-    /// Report a failure
-    ///
-    /// This should be called when the RPC response is technically valid (e.g. `Ok(None)` for a
-    /// missing transaction receipt) but indicates the provider doesn't have the
-    /// expected data. This counts toward the failure and may trigger a failover to the
-    /// next provider
-    pub(crate) fn report_failure(&self) {
-        let current_transport = self.current_transport.read().clone();
-
-        if let Some(f) = self
-            .metrics
-            .failures
-            .get(current_transport.generation % self.urls.len())
-        {
-            f.add(1);
-        }
-
-        if current_transport.status.write().log_failure(&self.opt) {
-            self.metrics.failovers.add(1);
-            self.switch_to(current_transport.generation + 1, current_transport);
-        }
-    }
-
     fn switch_to(&self, next_gen: usize, current_transport: SingleTransport) -> SingleTransport {
         let next_index = next_gen % self.urls.len();
         let url = self.urls[next_index].clone();
@@ -1082,36 +1059,33 @@ impl L1Client {
     /// Fetch a transaction receipt, trying all configured providers.
     ///
     /// Unlike the standard `get_transaction_receipt` (which returns `Ok(None)` when the current
-    /// provider doesn't have the receipt), this method treats a `None` response as a provider
-    /// failure. It reports the failure to the [`SwitchingTransport`], which may trigger a failover
-    /// to the next provider, and retries until either a receipt is found or all providers have been
-    /// exhausted.
+    /// provider doesn't have the receipt), this method tries each configured provider URL
+    /// independently until one returns the receipt.
     ///
     /// This is necessary because a pruned L1 node will return a valid JSON-RPC response with
-    /// `result: null` for old receipts it has discarded, which the transport layer sees as a
-    /// success.
-    /// Without this method, the client would keep retrying on the same pruned node
-    /// forever.
+    /// `result: null` for old receipts it has discarded. The transport layer sees this as a
+    /// success, so the normal retry logic would keep hitting the same pruned node forever.
     pub async fn get_transaction_receipt_with_failover(
         &self,
         tx_hash: B256,
     ) -> anyhow::Result<TransactionReceipt> {
-        let num_providers = self.transport.urls.len();
-        let tolerance = self.options().l1_consecutive_failure_tolerance.max(1);
-        let max_attempts = tolerance * num_providers;
-
-        for attempt in 0..max_attempts {
-            match self.get_transaction_receipt(tx_hash).await? {
-                Some(receipt) => return Ok(receipt),
-                None => {
+        for url in self.transport.urls.iter() {
+            let provider = ProviderBuilder::new().connect_http(url.clone());
+            match provider.get_transaction_receipt(tx_hash).await {
+                Ok(Some(receipt)) => return Ok(receipt),
+                Ok(None) => {
                     tracing::info!(
                         %tx_hash,
-                        attempt,
-                        max_attempts,
-                        "provider returned null for transaction receipt, reporting failure"
+                        %url,
+                        "provider returned null for transaction receipt, trying next"
                     );
-                    self.transport.report_failure();
-                    self.retry_delay().await;
+                },
+                Err(err) => {
+                    tracing::warn!(
+                        %tx_hash,
+                        %url,
+                        "failed to fetch transaction receipt: {err:#}, trying next"
+                    );
                 },
             }
         }
@@ -1741,11 +1715,11 @@ mod test {
         provider.get_block_number().await.unwrap_err();
     }
 
-    /// Tests that `get_transaction_receipt_with_failover` automatically switches providers when
-    /// the provider returns `None` for a receipt that exists
+    /// Tests that `get_transaction_receipt_with_failover` tries all providers and finds the
+    /// receipt
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_get_transaction_receipt_with_failover() {
-        // Spin up two anvil instances.
+        // Spin up two independent anvil instances — they share no state.
         let anvil_a = Anvil::new().block_time(1).spawn();
         let anvil_b = Anvil::new().block_time(1).spawn();
 
@@ -1768,47 +1742,25 @@ mod test {
             .expect("failed to get receipt");
         let tx_hash = receipt.transaction_hash;
 
-        // anvil_a does NOT have this receipt.
-        let provider_a = ProviderBuilder::new().connect_http(anvil_a.endpoint_url());
-        assert!(
-            provider_a
-                .get_transaction_receipt(tx_hash)
-                .await
-                .unwrap()
-                .is_none(),
-            "anvil_a should not have this receipt"
-        );
+        let l1 = L1ClientOptions::default()
+            .connect(vec![anvil_a.endpoint_url(), anvil_b.endpoint_url()])
+            .expect("Failed to create L1 client");
 
-        // Create a switching L1 client: anvil_a, anvil_b
-        let l1 = L1ClientOptions {
-            l1_polling_interval: Duration::from_secs(1),
-            l1_retry_delay: Duration::from_millis(10),
-            l1_consecutive_failure_tolerance: 1,
-            l1_frequent_failure_tolerance: Duration::from_millis(0),
-            ..Default::default()
-        }
-        .connect(vec![anvil_a.endpoint_url(), anvil_b.endpoint_url()])
-        .expect("Failed to create L1 client");
-
-        assert_eq!(get_failover_index(&l1), 0);
-
-        // The standard get_transaction_receipt returns None without failing over.
+        // The standard get_transaction_receipt returns None (anvil_a doesn't have it).
         let result = l1.get_transaction_receipt(tx_hash).await.unwrap();
-        assert!(
-            result.is_none(),
-            "standard method should return None from anvil_a"
-        );
-        assert_eq!(get_failover_index(&l1), 0, "should still be on anvil_a");
+        assert!(result.is_none(), "anvil_a should not have this receipt");
 
+        // get_transaction_receipt_with_failover tries all providers and finds it on anvil_b.
         let result = l1
             .get_transaction_receipt_with_failover(tx_hash)
             .await
-            .expect("should find the receipt after failover");
+            .expect("should find the receipt on anvil_b");
         assert_eq!(result.transaction_hash, tx_hash);
+
         assert_eq!(
             get_failover_index(&l1),
-            1,
-            "should have failed over to anvil_b"
+            0,
+            "transport should still be on anvil_a"
         );
     }
 
