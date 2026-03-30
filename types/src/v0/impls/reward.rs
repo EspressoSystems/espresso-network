@@ -16,7 +16,6 @@ use hotshot_types::{
     traits::election::Membership,
     utils::epoch_from_block_number,
 };
-use itertools::Itertools;
 use jf_merkle_tree_compat::{
     ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme, LookupResult,
     MerkleTreeScheme, ToTraversalPath, UniversalMerkleTreeScheme, prelude::MerkleNode,
@@ -636,7 +635,6 @@ impl ValidatorLeaderCounts {
         let entries: Vec<_> = membership
             .stake_table(Some(*epoch))
             .iter()
-            .sorted_by(|a, b| a.stake_table_entry.key().cmp(b.stake_table_entry.key()))
             .zip(leader_counts.iter().copied())
             .map(|(entry, count)| {
                 let validator =
