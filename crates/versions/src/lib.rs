@@ -13,6 +13,7 @@ pub const VERSION_0_1: Version = version(0, 1);
 pub const FEE_VERSION: Version = version(0, 2);
 pub const EPOCH_VERSION: Version = version(0, 3);
 pub const DRB_AND_HEADER_UPGRADE_VERSION: Version = version(0, 4);
+pub const DRB_FIX_VERSION: Version = version(0, 5);
 pub const DA_UPGRADE_VERSION: Version = version(0, 5);
 pub const VID2_UPGRADE_VERSION: Version = version(0, 6);
 pub const CLIQUENET_VERSION: Version = version(0, 7);
