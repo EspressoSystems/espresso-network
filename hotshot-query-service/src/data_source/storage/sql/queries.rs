@@ -194,10 +194,8 @@ where
 {
     fn from_row(row: &'r <Db as Database>::Row) -> sqlx::Result<Self> {
         // First, check if we have the payload for this block yet.
-        let size: Option<i32> = row.try_get("payload_size")?;
-        let payload_data: Option<Vec<u8>> = row.try_get("payload_data")?;
-        let (size, payload_data) = size.zip(payload_data).ok_or(sqlx::Error::RowNotFound)?;
-        let size = size as u64;
+        let size = row.try_get::<i32, _>("payload_size")? as u64;
+        let payload_data = row.try_get::<Vec<u8>, _>("payload_data")?;
 
         // Reconstruct the full header.
         let header_data = row.try_get("header_data")?;
@@ -254,12 +252,8 @@ where
                 .try_get::<String, _>("payload_hash")?
                 .parse()
                 .decode_error("malformed payload hash")?,
-            size: row
-                .try_get::<Option<i32>, _>("payload_size")?
-                .ok_or(sqlx::Error::RowNotFound)? as u64,
-            num_transactions: row
-                .try_get::<Option<i32>, _>("num_transactions")?
-                .ok_or(sqlx::Error::RowNotFound)? as u64,
+            size: row.try_get::<i32, _>("payload_size")? as u64,
+            num_transactions: row.try_get::<i32, _>("num_transactions")? as u64,
 
             // Per-namespace info must be loaded in a separate query.
             namespaces: Default::default(),
@@ -268,7 +262,7 @@ where
 }
 
 const VID_COMMON_COLUMNS: &str = "h.height AS height, h.hash AS block_hash, h.payload_hash AS \
-                                  payload_hash, v.common AS common_data";
+                                  payload_hash, v.data AS common_data";
 
 impl<'r, Types> FromRow<'r, <Db as Database>::Row> for VidCommonQueryData<Types>
 where

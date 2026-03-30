@@ -185,7 +185,6 @@ impl StakeTable {
     {
         let upgrade = Upgrade::trivial(version(V::MAJOR, V::MINOR));
         cert.is_valid_cert(&self.entries, self.threshold, &UpgradeLock::new(upgrade))
-            .await
             .context("invalid threshold signature")
     }
 }

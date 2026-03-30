@@ -14,7 +14,7 @@ services:
       - "./geth-config/test-jwt-secret.txt:/config/test-jwt-secret.txt"
 
   deploy-sequencer-contracts:
-    image: ghcr.io/espressosystems/espresso-sequencer/deploy:${DOCKER_TAG:-main}
+    image: ghcr.io/espressosystems/espresso-network/deploy:${DOCKER_TAG:-main}
     command: deploy --deploy-ops-timelock --deploy-safe-exit-timelock --deploy-fee-v1 --deploy-esp-token-v1 --deploy-stake-table-v1
     environment:
       - ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS
@@ -44,7 +44,7 @@ services:
         condition: service_healthy
 
   deploy-prover-contracts:
-    image: ghcr.io/espressosystems/espresso-sequencer/deploy:${DOCKER_TAG:-main}
+    image: ghcr.io/espressosystems/espresso-network/deploy:${DOCKER_TAG:-main}
     command: deploy --use-mock --deploy-light-client-v1 --upgrade-light-client-v2
     environment:
       - ESPRESSO_SEQUENCER_ORCHESTRATOR_URL=http://orchestrator:${ESPRESSO_ORCHESTRATOR_PORT}
@@ -87,7 +87,7 @@ services:
         condition: service_completed_successfully
 
   deploy-lcv3-upgrade:
-    image: ghcr.io/espressosystems/espresso-sequencer/deploy:${DOCKER_TAG:-main}
+    image: ghcr.io/espressosystems/espresso-network/deploy:${DOCKER_TAG:-main}
     command: deploy --upgrade-light-client-v3 --use-mock
     environment:
       - ESPRESSO_SEQUENCER_L1_PROVIDER=http://demo-l1-network:${ESPRESSO_SEQUENCER_L1_PORT}
@@ -108,7 +108,7 @@ services:
         condition: service_completed_successfully
 
   deploy-pos-contracts-upgrades:
-    image: ghcr.io/espressosystems/espresso-sequencer/deploy:${DOCKER_TAG:-main}
+    image: ghcr.io/espressosystems/espresso-network/deploy:${DOCKER_TAG:-main}
     command: deploy --deploy-reward-claim-v1 --upgrade-esp-token-v2 --upgrade-stake-table-v2
     environment:
       - ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS
@@ -133,7 +133,7 @@ services:
         condition: service_completed_successfully
 
   claim-rewards:
-    image: ghcr.io/espressosystems/espresso-sequencer/staking-cli:main
+    image: ghcr.io/espressosystems/espresso-network/staking-cli:${DOCKER_TAG:-main}
     command: /scripts/claim-rewards-loop 10
     volumes:
       - ./scripts:/scripts:ro
@@ -152,7 +152,7 @@ services:
         condition: service_healthy
 
   fund-builder:
-    image: ghcr.io/espressosystems/espresso-sequencer/bridge:${DOCKER_TAG:-main}
+    image: ghcr.io/espressosystems/espresso-network/bridge:${DOCKER_TAG:-main}
     command: espresso-bridge deposit
     environment:
       - L1_PROVIDER=http://demo-l1-network:${ESPRESSO_SEQUENCER_L1_PORT}
@@ -172,7 +172,7 @@ services:
         condition: service_healthy
 
   stake-for-demo:
-    image: ghcr.io/espressosystems/espresso-sequencer/staking-cli:${DOCKER_TAG:-main}
+    image: ghcr.io/espressosystems/espresso-network/staking-cli:${DOCKER_TAG:-main}
     command: staking-cli stake-for-demo
     environment:
       - L1_PROVIDER=http://demo-l1-network:${ESPRESSO_SEQUENCER_L1_PORT}
@@ -197,7 +197,7 @@ services:
         condition: service_completed_successfully
 
   orchestrator:
-    image: ghcr.io/espressosystems/espresso-sequencer/orchestrator:${DOCKER_TAG:-main}
+    image: ghcr.io/espressosystems/espresso-network/orchestrator:${DOCKER_TAG:-main}
     ports:
       - "$ESPRESSO_ORCHESTRATOR_PORT:$ESPRESSO_ORCHESTRATOR_PORT"
     environment:
@@ -228,7 +228,7 @@ services:
     environment:
       - RUST_LOG
       - ESPRESSO_CDN_SERVER_METRICS_PORT
-    image: ghcr.io/espressosystems/espresso-sequencer/cdn-marshal:${DOCKER_TAG:-main}
+    image: ghcr.io/espressosystems/espresso-network/cdn-marshal:${DOCKER_TAG:-main}
     command:
       - cdn-marshal
       - -d
@@ -246,7 +246,7 @@ services:
     environment:
       - RUST_LOG
       - ESPRESSO_CDN_SERVER_METRICS_PORT
-    image: ghcr.io/espressosystems/espresso-sequencer/cdn-broker:${DOCKER_TAG:-main}
+    image: ghcr.io/espressosystems/espresso-network/cdn-broker:${DOCKER_TAG:-main}
     command:
       - cdn-broker
       - -d
@@ -266,7 +266,7 @@ services:
     environment:
       - RUST_LOG
       - ESPRESSO_CDN_SERVER_METRICS_PORT
-    image: ghcr.io/espressosystems/espresso-sequencer/cdn-broker:${DOCKER_TAG:-main}
+    image: ghcr.io/espressosystems/espresso-network/cdn-broker:${DOCKER_TAG:-main}
     command:
       - cdn-broker
       - -d
@@ -286,7 +286,7 @@ services:
     environment:
       - RUST_LOG
       - ESPRESSO_SEQUENCER_ORCHESTRATOR_URL=http://orchestrator:${ESPRESSO_ORCHESTRATOR_PORT}
-    image: ghcr.io/espressosystems/espresso-sequencer/cdn-whitelist:${DOCKER_TAG:-main}
+    image: ghcr.io/espressosystems/espresso-network/cdn-whitelist:${DOCKER_TAG:-main}
     command:
       - cdn-whitelist
       - -d
@@ -298,7 +298,7 @@ services:
         condition: service_healthy
 
   state-relay-server:
-    image: ghcr.io/espressosystems/espresso-sequencer/state-relay-server:${DOCKER_TAG:-main}
+    image: ghcr.io/espressosystems/espresso-network/state-relay-server:${DOCKER_TAG:-main}
     ports:
       - "$ESPRESSO_STATE_RELAY_SERVER_PORT:$ESPRESSO_STATE_RELAY_SERVER_PORT"
     environment:
@@ -311,7 +311,7 @@ services:
       - ASYNC_STD_THREAD_COUNT
 
   prover-one-shot:
-    image: ghcr.io/espressosystems/espresso-sequencer/prover-service:${DOCKER_TAG:-main}
+    image: ghcr.io/espressosystems/espresso-network/prover-service:${DOCKER_TAG:-main}
     # "nice" this compute heavy process to reduce load
     command: nice state-prover
     deploy:
@@ -343,7 +343,7 @@ services:
         condition: service_completed_successfully
 
   sequencer0:
-    image: ghcr.io/espressosystems/espresso-sequencer/sequencer:${DOCKER_TAG:-main}
+    image: ghcr.io/espressosystems/espresso-network/sequencer:${DOCKER_TAG:-main}
     ports:
       - "$ESPRESSO_SEQUENCER0_API_PORT:$ESPRESSO_SEQUENCER0_API_PORT"
     # Run the full API server with all modules, Postgres storage
@@ -405,7 +405,7 @@ services:
         condition: service_completed_successfully
 
   sequencer1:
-    image: ghcr.io/espressosystems/espresso-sequencer/sequencer:${DOCKER_TAG:-main}
+    image: ghcr.io/espressosystems/espresso-network/sequencer:${DOCKER_TAG:-main}
     ports:
       - "$ESPRESSO_SEQUENCER1_API_PORT:$ESPRESSO_SEQUENCER1_API_PORT"
     command: sequencer -- storage-sql -- http -- query -- explorer
@@ -467,7 +467,7 @@ services:
         condition: service_completed_successfully
 
   sequencer2:
-    image: ghcr.io/espressosystems/espresso-sequencer/sequencer:${DOCKER_TAG:-main}
+    image: ghcr.io/espressosystems/espresso-network/sequencer:${DOCKER_TAG:-main}
     ports:
       - "$ESPRESSO_SEQUENCER2_API_PORT:$ESPRESSO_SEQUENCER2_API_PORT"
     command: sequencer -- http
@@ -521,7 +521,7 @@ services:
         condition: service_completed_successfully
 
   sequencer3:
-    image: ghcr.io/espressosystems/espresso-sequencer/sequencer:${DOCKER_TAG:-main}
+    image: ghcr.io/espressosystems/espresso-network/sequencer:${DOCKER_TAG:-main}
     ports:
       - "$ESPRESSO_SEQUENCER3_API_PORT:$ESPRESSO_SEQUENCER3_API_PORT"
     command: sequencer -- http -- query -- storage-fs
@@ -576,7 +576,7 @@ services:
         condition: service_completed_successfully
 
   sequencer4:
-    image: ghcr.io/espressosystems/espresso-sequencer/sequencer:${DOCKER_TAG:-main}
+    image: ghcr.io/espressosystems/espresso-network/sequencer:${DOCKER_TAG:-main}
     ports:
       - "$ESPRESSO_SEQUENCER4_API_PORT:$ESPRESSO_SEQUENCER4_API_PORT"
     command: sequencer -- http -- query -- storage-fs
@@ -630,7 +630,7 @@ services:
         condition: service_completed_successfully
 
   submit-transactions-public:
-    image: ghcr.io/espressosystems/espresso-sequencer/submit-transactions:${DOCKER_TAG:-main}
+    image: ghcr.io/espressosystems/espresso-network/submit-transactions:${DOCKER_TAG:-main}
     ports:
       - "$ESPRESSO_SUBMIT_TRANSACTIONS_PUBLIC_PORT:8080"
     environment:
@@ -652,7 +652,7 @@ services:
         condition: service_healthy
 
   submit-transactions-private:
-    image: ghcr.io/espressosystems/espresso-sequencer/submit-transactions:${DOCKER_TAG:-main}
+    image: ghcr.io/espressosystems/espresso-network/submit-transactions:${DOCKER_TAG:-main}
     ports:
       - "$ESPRESSO_SUBMIT_TRANSACTIONS_PRIVATE_PORT:8080"
     environment:
@@ -673,7 +673,7 @@ services:
         condition: service_healthy
 
   permissionless-builder:
-    image: ghcr.io/espressosystems/espresso-sequencer/builder:${DOCKER_TAG:-main}
+    image: ghcr.io/espressosystems/espresso-network/builder:${DOCKER_TAG:-main}
     ports:
       - "$ESPRESSO_BUILDER_SERVER_PORT:$ESPRESSO_BUILDER_SERVER_PORT"
     environment:
@@ -700,7 +700,7 @@ services:
         condition: service_completed_successfully
 
   nasty-client:
-    image: ghcr.io/espressosystems/espresso-sequencer/nasty-client:${DOCKER_TAG:-main}
+    image: ghcr.io/espressosystems/espresso-network/nasty-client:${DOCKER_TAG:-main}
     ports:
       - "$ESPRESSO_NASTY_CLIENT_PORT:$ESPRESSO_NASTY_CLIENT_PORT"
     environment:
@@ -715,7 +715,7 @@ services:
         condition: service_healthy
 
   node-validator:
-    image: ghcr.io/espressosystems/espresso-sequencer/node-validator:${DOCKER_TAG:-main}
+    image: ghcr.io/espressosystems/espresso-network/node-validator:${DOCKER_TAG:-main}
     ports:
       - "$ESPRESSO_NODE_VALIDATOR_PORT:$ESPRESSO_NODE_VALIDATOR_PORT"
     environment:

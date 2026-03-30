@@ -32,7 +32,7 @@ use crate::{
 };
 
 /// Marker that data should use the quorum cert type
-pub(crate) trait QuorumMarker {}
+pub trait QuorumMarker {}
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 /// Data used for a yes vote.
@@ -256,16 +256,14 @@ impl<TYPES: NodeType, DATA: Voteable<TYPES> + 'static> SimpleVote<TYPES, DATA> {
     /// Creates and signs a simple vote
     /// # Errors
     /// If we are unable to sign the data
-    pub async fn create_signed_vote(
+    pub fn create_signed_vote(
         data: DATA,
         view: ViewNumber,
         pub_key: &TYPES::SignatureKey,
         private_key: &<TYPES::SignatureKey as SignatureKey>::PrivateKey,
         upgrade_lock: &UpgradeLock<TYPES>,
     ) -> Result<Self> {
-        let commit = VersionedVoteData::new(data.clone(), view, upgrade_lock)
-            .await?
-            .commit();
+        let commit = VersionedVoteData::new(data.clone(), view, upgrade_lock)?.commit();
 
         let signature = (
             pub_key.clone(),
@@ -304,11 +302,7 @@ impl<TYPES: NodeType, DATA: Voteable<TYPES>> VersionedVoteData<TYPES, DATA> {
     /// # Errors
     ///
     /// Returns an error if `upgrade_lock.version(view)` is unable to return a version we support
-    pub async fn new(
-        data: DATA,
-        view: ViewNumber,
-        upgrade_lock: &UpgradeLock<TYPES>,
-    ) -> Result<Self> {
+    pub fn new(data: DATA, view: ViewNumber, upgrade_lock: &UpgradeLock<TYPES>) -> Result<Self> {
         let version = upgrade_lock.version(view)?;
 
         Ok(Self {
@@ -322,11 +316,7 @@ impl<TYPES: NodeType, DATA: Voteable<TYPES>> VersionedVoteData<TYPES, DATA> {
     /// Create a new `VersionedVoteData` struct
     ///
     /// This function cannot error, but may use an invalid version.
-    pub async fn new_infallible(
-        data: DATA,
-        view: ViewNumber,
-        upgrade_lock: &UpgradeLock<TYPES>,
-    ) -> Self {
+    pub fn new_infallible(data: DATA, view: ViewNumber, upgrade_lock: &UpgradeLock<TYPES>) -> Self {
         let version = upgrade_lock.version_infallible(view);
 
         Self {

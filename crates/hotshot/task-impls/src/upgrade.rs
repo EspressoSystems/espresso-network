@@ -267,8 +267,7 @@ impl<TYPES: NodeType> UpgradeTaskState<TYPES> {
                     &self.public_key,
                     &self.private_key,
                     &self.upgrade_lock,
-                )
-                .await?;
+                )?;
 
                 tracing::debug!("Sending upgrade vote {:?}", vote.view_number());
                 broadcast_event(Arc::new(HotShotEvent::UpgradeVoteSend(vote)), &tx).await;

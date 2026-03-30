@@ -15,7 +15,7 @@ use alloy::{
     rpc::{
         client::RpcClient,
         json_rpc::{RequestPacket, ResponsePacket},
-        types::Block,
+        types::{Block, TransactionReceipt},
     },
     transports::{RpcError, TransportErrorKind, http::Http},
 };
@@ -1055,6 +1055,43 @@ impl L1Client {
     async fn retry_delay(&self) {
         sleep(self.options().l1_retry_delay).await;
     }
+
+    /// Fetch a transaction receipt, trying all configured providers.
+    ///
+    /// Unlike the standard `get_transaction_receipt` (which returns `Ok(None)` when the current
+    /// provider doesn't have the receipt), this method tries each configured provider URL
+    /// independently until one returns the receipt.
+    ///
+    /// This is necessary because a pruned L1 node will return a valid JSON-RPC response with
+    /// `result: null` for old receipts it has discarded. The transport layer sees this as a
+    /// success, so the normal retry logic would keep hitting the same pruned node forever.
+    pub async fn get_transaction_receipt_all_providers(
+        &self,
+        tx_hash: B256,
+    ) -> anyhow::Result<TransactionReceipt> {
+        for url in self.transport.urls.iter() {
+            let provider = ProviderBuilder::new().connect_http(url.clone());
+            match provider.get_transaction_receipt(tx_hash).await {
+                Ok(Some(receipt)) => return Ok(receipt),
+                Ok(None) => {
+                    tracing::info!(
+                        %tx_hash,
+                        %url,
+                        "provider returned null for transaction receipt, trying next"
+                    );
+                },
+                Err(err) => {
+                    tracing::warn!(
+                        %tx_hash,
+                        %url,
+                        "failed to fetch transaction receipt: {err:#}, trying next"
+                    );
+                },
+            }
+        }
+
+        anyhow::bail!("txn receipt {tx_hash} not found on any of the providers")
+    }
 }
 
 impl L1State {
@@ -1113,9 +1150,11 @@ mod test {
 
     use alloy::{
         eips::BlockNumberOrTag,
+        network::TransactionBuilder,
         node_bindings::{Anvil, AnvilInstance},
         primitives::utils::parse_ether,
         providers::layers::AnvilProvider,
+        rpc::types::TransactionRequest,
     };
     use espresso_contract_deployer::{Contracts, deploy_fee_contract_proxy};
     use time::OffsetDateTime;
@@ -1674,6 +1713,55 @@ mod test {
         // Eventually we revert back to the primary and requests fail again.
         sleep(Duration::from_millis(2100)).await;
         provider.get_block_number().await.unwrap_err();
+    }
+
+    /// Tests that `get_transaction_receipt_all_providers` tries all providers and finds the
+    /// receipt
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_get_transaction_receipt_all_providers() {
+        // Spin up two independent anvil instances — they share no state.
+        let anvil_a = Anvil::new().block_time(1).spawn();
+        let anvil_b = Anvil::new().block_time(1).spawn();
+
+        // Send a transaction on anvil_b so it has a receipt that anvil_a doesn't.
+        let wallet_b = anvil_b.wallet().unwrap();
+        let sender = wallet_b.default_signer().address();
+        let provider_b = ProviderBuilder::new()
+            .wallet(wallet_b)
+            .connect_http(anvil_b.endpoint_url());
+        let tx = TransactionRequest::default()
+            .with_from(sender)
+            .with_to(sender)
+            .with_value(alloy::primitives::U256::from(1));
+        let receipt = provider_b
+            .send_transaction(tx)
+            .await
+            .expect("failed to send tx")
+            .get_receipt()
+            .await
+            .expect("failed to get receipt");
+        let tx_hash = receipt.transaction_hash;
+
+        let l1 = L1ClientOptions::default()
+            .connect(vec![anvil_a.endpoint_url(), anvil_b.endpoint_url()])
+            .expect("Failed to create L1 client");
+
+        // The standard get_transaction_receipt returns None (anvil_a doesn't have it).
+        let result = l1.get_transaction_receipt(tx_hash).await.unwrap();
+        assert!(result.is_none(), "anvil_a should not have this receipt");
+
+        // get_transaction_receipt_all_providers tries all providers and finds it on anvil_b.
+        let result = l1
+            .get_transaction_receipt_all_providers(tx_hash)
+            .await
+            .expect("should find the receipt on anvil_b");
+        assert_eq!(result.transaction_hash, tx_hash);
+
+        assert_eq!(
+            get_failover_index(&l1),
+            0,
+            "transport should still be on anvil_a"
+        );
     }
 
     // Checks that the L1 client initialized the state on startup even

@@ -1,0 +1,33 @@
+[package]
+authors = { workspace = true }
+description = "Implementation of Fast Finality Protocol"
+edition = { workspace = true }
+name = "hotshot-new-protocol"
+version = { workspace = true }
+license = "MIT"
+
+[features]
+example-upgrade = []
+rewind = []
+stats = []
+
+[dependencies]
+async-broadcast = { workspace = true }
+async-lock = { workspace = true }
+async-trait = { workspace = true }
+bon = { workspace = true }
+committable = { workspace = true }
+futures = { workspace = true }
+hotshot = { workspace = true }
+hotshot-example-types = { workspace = true }
+hotshot-testing = { workspace = true }
+hotshot-types = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+time = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+versions = { workspace = true }
+
+[lints]
+workspace = true

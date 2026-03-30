@@ -536,7 +536,6 @@ impl TestView {
             handle.private_key(),
             &handle.hotshot.upgrade_lock,
         )
-        .await
         .expect("Failed to generate a signature on QuorumVote")
     }
 
@@ -552,7 +551,6 @@ impl TestView {
             handle.private_key(),
             &handle.hotshot.upgrade_lock,
         )
-        .await
         .expect("Failed to generate a signature on UpgradVote")
     }
 
@@ -568,7 +566,6 @@ impl TestView {
             handle.private_key(),
             &handle.hotshot.upgrade_lock,
         )
-        .await
         .expect("Failed to sign DaData")
     }
 }

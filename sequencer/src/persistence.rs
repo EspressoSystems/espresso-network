@@ -957,7 +957,7 @@ mod tests {
         .into();
 
         let versioned_data =
-            VersionedVoteData::new_infallible(data.clone(), genesis_view, &upgrade_lock).await;
+            VersionedVoteData::new_infallible(data.clone(), genesis_view, &upgrade_lock);
 
         let bytes: [u8; 32] = versioned_data.commit().into();
 

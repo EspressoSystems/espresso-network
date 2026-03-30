@@ -397,7 +397,7 @@ where
                 tracing::info!("fetched leaf {}", leaf.height());
                 // Trigger a fetch of the parent leaf, if we don't already have it.
                 trigger_fetch_for_parent(&fetcher, &leaf);
-                fetcher.store_and_notify(leaf).await;
+                fetcher.store_and_notify(&leaf).await;
             },
             Self::Continuation { callback } => callback.run(leaf.leaf.block_header().clone()),
         }

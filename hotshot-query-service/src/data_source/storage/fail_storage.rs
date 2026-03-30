@@ -25,7 +25,6 @@ use super::{
     Aggregate, AggregatesStorage, AvailabilityStorage, NodeStorage, UpdateAggregatesStorage,
     UpdateAvailabilityStorage,
     pruning::{PruneStorage, PrunedHeightStorage, PrunerCfg, PrunerConfig},
-    sql::MigrateTypes,
 };
 use crate::{
     Header, Payload, QueryError, QueryResult,
@@ -256,16 +255,6 @@ where
 
     fn get_pruning_config(&self) -> Option<PrunerCfg> {
         self.inner.get_pruning_config()
-    }
-}
-
-#[async_trait]
-impl<S, Types: NodeType> MigrateTypes<Types> for FailStorage<S>
-where
-    S: MigrateTypes<Types> + Sync,
-{
-    async fn migrate_types(&self, _batch_size: u64) -> anyhow::Result<()> {
-        Ok(())
     }
 }
 
