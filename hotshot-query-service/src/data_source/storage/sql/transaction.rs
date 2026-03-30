@@ -522,30 +522,66 @@ where
     Payload<Types>: QueryablePayload<Types>,
     Header<Types>: QueryableHeader<Types>,
 {
-    async fn insert_leaf_with_qc_chain(
+    async fn insert_qc_chain(
         &mut self,
-        leaf: LeafQueryData<Types>,
+        height: u64,
         qc_chain: Option<[CertificatePair<Types>; 2]>,
     ) -> anyhow::Result<()> {
-        let height = leaf.height();
-
-        // Ignore the leaf if it is below the pruned height. This can happen if, for instance, the
-        // fetcher is racing with the pruner.
-        if let Some(pruned_height) = self.load_pruned_height().await?
-            && height <= pruned_height
-        {
-            tracing::info!(
-                height,
-                pruned_height,
-                "ignoring leaf which is already pruned"
-            );
-            return Ok(());
+        let block_height = NodeStorage::<Types>::block_height(self).await? as u64;
+        if height + 1 >= block_height {
+            // If this QC chain is for the latest leaf we know about, store it so that we can prove
+            // to clients that the corresponding leaf is finalized. (If it is not the latest leaf,
+            // this is unnecessary, since we can prove it is an ancestor of some later, finalized
+            // leaf.)
+            let qcs = serde_json::to_value(&qc_chain)?;
+            self.upsert("latest_qc_chain", ["id", "qcs"], ["id"], [(1i32, qcs)])
+                .await
+                .context("inserting QC chain")?;
         }
 
-        // While we don't necessarily have the full block for this leaf yet, we can initialize the
-        // header table with block metadata taken from the leaf.
-        let header_json = serde_json::to_value(leaf.leaf().block_header())
-            .context("failed to serialize header")?;
+        Ok(())
+    }
+
+    async fn insert_leaf_range<'a>(
+        &mut self,
+        leaves: impl Send + IntoIterator<IntoIter: Send, Item = &'a LeafQueryData<Types>>,
+    ) -> anyhow::Result<()> {
+        let leaves = leaves.into_iter();
+
+        // Ignore leaves below the pruned height.
+        let pruned_height = self.load_pruned_height().await?;
+        let leaves = leaves.skip_while(|leaf| pruned_height.is_some_and(|h| leaf.height() <= h));
+
+        // While we don't necessarily have the full block for these leaves yet, we can initialize
+        // the header and leaf tables with block metadata taken from the leaves.
+        let (header_rows, leaf_rows): (Vec<_>, Vec<_>) = leaves
+            .map(|leaf| {
+                let header_json = serde_json::to_value(leaf.leaf().block_header())
+                    .context("failed to serialize header")?;
+                let header_row = (
+                    leaf.height() as i64,
+                    leaf.block_hash().to_string(),
+                    leaf.leaf().block_header().payload_commitment().to_string(),
+                    leaf.leaf().block_header().ns_table(),
+                    header_json,
+                    leaf.leaf().block_header().timestamp() as i64,
+                );
+
+                let leaf_json =
+                    serde_json::to_value(leaf.leaf()).context("failed to serialize leaf")?;
+                let qc_json = serde_json::to_value(leaf.qc()).context("failed to serialize QC")?;
+                let leaf_row = (
+                    leaf.height() as i64,
+                    leaf.hash().to_string(),
+                    leaf.block_hash().to_string(),
+                    leaf_json,
+                    qc_json,
+                );
+
+                anyhow::Ok((header_row, leaf_row))
+            })
+            .process_results(|iter| iter.unzip())?;
+
         self.upsert(
             "header",
             [
@@ -557,101 +593,76 @@ where
                 "timestamp",
             ],
             ["height"],
-            [(
-                height as i64,
-                leaf.block_hash().to_string(),
-                leaf.leaf().block_header().payload_commitment().to_string(),
-                leaf.leaf().block_header().ns_table(),
-                header_json,
-                leaf.leaf().block_header().timestamp() as i64,
-            )],
+            header_rows,
         )
         .await
-        .context("inserting header")?;
+        .context("inserting headers")?;
 
-        // Insert the leaf itself, which references the header row we created. Serialize the full
-        // leaf and QC to JSON for easy storage.
-        let leaf_json = serde_json::to_value(leaf.leaf()).context("failed to serialize leaf")?;
-        let qc_json = serde_json::to_value(leaf.qc()).context("failed to serialize QC")?;
+        // Insert the leaves themselves, which reference the header rows we created.
         self.upsert(
             "leaf2",
             ["height", "hash", "block_hash", "leaf", "qc"],
             ["height"],
-            [(
-                height as i64,
-                leaf.hash().to_string(),
-                leaf.block_hash().to_string(),
-                leaf_json,
-                qc_json,
-            )],
+            leaf_rows,
         )
         .await
-        .context("inserting leaf")?;
-
-        let block_height = NodeStorage::<Types>::block_height(self).await? as u64;
-        if height + 1 >= block_height {
-            // If this is the latest leaf we know about, also store it's QC chain so that we can
-            // prove to clients that this leaf is finalized. (If it is not the latest leaf, this
-            // is unnecessary, since we can prove it is an ancestor of some later, finalized
-            // leaf.)
-            let qcs = serde_json::to_value(&qc_chain)?;
-            self.upsert("latest_qc_chain", ["id", "qcs"], ["id"], [(1i32, qcs)])
-                .await
-                .context("inserting QC chain")?;
-        }
+        .context("inserting leaves")?;
 
         Ok(())
     }
 
-    async fn insert_block(&mut self, block: BlockQueryData<Types>) -> anyhow::Result<()> {
-        let height = block.height();
+    async fn insert_block_range<'a>(
+        &mut self,
+        blocks: impl Send + IntoIterator<IntoIter: Send, Item = &'a BlockQueryData<Types>>,
+    ) -> anyhow::Result<()> {
+        let blocks = blocks.into_iter();
 
-        // Ignore the block if it is below the pruned height. This can happen if, for instance, the
-        // fetcher is racing with the pruner.
-        if let Some(pruned_height) = self.load_pruned_height().await?
-            && height <= pruned_height
-        {
-            tracing::info!(
-                height,
-                pruned_height,
-                "ignoring block which is already pruned"
-            );
-            return Ok(());
-        }
+        // Ignore blocks below the pruned height.
+        let pruned_height = self.load_pruned_height().await?;
+        let blocks = blocks.skip_while(|block| pruned_height.is_some_and(|h| block.height() <= h));
+
+        let (payload_rows, tx_rows): (Vec<_>, Vec<_>) = blocks
+            .map(|block| {
+                let payload_row = (
+                    block.payload_hash().to_string(),
+                    block.header().ns_table(),
+                    block.size() as i32,
+                    block.num_transactions() as i32,
+                    block.payload.encode().as_ref().to_vec(),
+                );
+
+                let tx_rows = block.enumerate().map(|(txn_ix, txn)| {
+                    let ns_id = block.header().namespace_id(&txn_ix.ns_index).unwrap();
+                    (
+                        txn.commit().to_string(),
+                        block.height() as i64,
+                        txn_ix.ns_index.into(),
+                        ns_id.into(),
+                        txn_ix.position as i64,
+                    )
+                });
+
+                (payload_row, tx_rows)
+            })
+            .unzip();
+        let tx_rows = tx_rows.into_iter().flatten().collect::<Vec<_>>();
 
         self.upsert(
             "payload",
             ["hash", "ns_table", "size", "num_transactions", "data"],
             ["hash", "ns_table"],
-            [(
-                block.payload_hash().to_string(),
-                block.header().ns_table(),
-                block.size() as i32,
-                block.num_transactions() as i32,
-                block.payload.encode().as_ref().to_vec(),
-            )],
+            payload_rows,
         )
         .await
-        .context("inserting payload")?;
+        .context("inserting payloads")?;
 
         // Index the transactions and namespaces in the block.
-        let mut rows = vec![];
-        for (txn_ix, txn) in block.enumerate() {
-            let ns_id = block.header().namespace_id(&txn_ix.ns_index).unwrap();
-            rows.push((
-                txn.commit().to_string(),
-                height as i64,
-                txn_ix.ns_index.into(),
-                ns_id.into(),
-                txn_ix.position as i64,
-            ));
-        }
-        if !rows.is_empty() {
+        if !tx_rows.is_empty() {
             self.upsert(
                 "transactions",
                 ["hash", "block_height", "ns_index", "ns_id", "position"],
                 ["block_height", "ns_id", "position"],
-                rows,
+                tx_rows,
             )
             .await
             .context("inserting transactions")?;
@@ -660,45 +671,57 @@ where
         Ok(())
     }
 
-    async fn insert_vid(
+    async fn insert_vid_range<'a>(
         &mut self,
-        common: VidCommonQueryData<Types>,
-        share: Option<VidShare>,
+        vid: impl Send
+        + IntoIterator<
+            IntoIter: Send,
+            Item = (&'a VidCommonQueryData<Types>, Option<&'a VidShare>),
+        >,
     ) -> anyhow::Result<()> {
-        let height = common.height();
+        let vid = vid.into_iter();
 
-        // Ignore the object if it is below the pruned height. This can happen if, for instance, the
-        // fetcher is racing with the pruner.
-        if let Some(pruned_height) = self.load_pruned_height().await?
-            && height <= pruned_height
-        {
-            tracing::info!(
-                height,
-                pruned_height,
-                "ignoring VID common which is already pruned"
+        // Ignore objects below the pruned height.
+        let pruned_height = self.load_pruned_height().await?;
+        let vid = vid.skip_while(|(common, _)| pruned_height.is_some_and(|h| common.height() <= h));
+
+        let (common_rows, share_rows): (Vec<_>, Vec<_>) = vid
+            .map(|(common, share)| {
+                let common_data = bincode::serialize(common.common())
+                    .context("failed to serialize VID common data")?;
+                let common_row = (common.payload_hash().to_string(), common_data);
+
+                let share_row = if let Some(share) = share {
+                    let share_data =
+                        bincode::serialize(&share).context("failed to serialize VID share")?;
+                    Some((common.height() as i64, share_data))
+                } else {
+                    None
+                };
+
+                anyhow::Ok((common_row, share_row))
+            })
+            .process_results(|iter| iter.unzip())?;
+        let share_rows = share_rows.into_iter().flatten().collect::<Vec<_>>();
+
+        self.upsert("vid_common", ["hash", "data"], ["hash"], common_rows)
+            .await
+            .context("inserting VID common")?;
+
+        if !share_rows.is_empty() {
+            let mut q = QueryBuilder::new("WITH rows (height, share) AS (");
+            q.push_values(share_rows, |mut q, (height, share)| {
+                q.push_bind(height).push_bind(share);
+            });
+            q.push(
+                ") UPDATE header SET vid_share = rows.share
+                FROM rows
+                WHERE header.height = rows.height",
             );
-            return Ok(());
-        }
-
-        let common_data =
-            bincode::serialize(common.common()).context("failed to serialize VID common data")?;
-        self.upsert(
-            "vid_common",
-            ["hash", "data"],
-            ["hash"],
-            [(common.payload_hash().to_string(), common_data)],
-        )
-        .await
-        .context("isnerting VID common")?;
-
-        if let Some(share) = share {
-            let share_data = bincode::serialize(&share).context("failed to serialize VID share")?;
-            query("UPDATE header SET vid_share = $1 WHERE height = $2")
-                .bind(share_data)
-                .bind(height as i64)
+            q.build()
                 .execute(self.as_mut())
                 .await
-                .context("inserting VID share")?;
+                .context("inserting VID shares")?;
         }
 
         Ok(())

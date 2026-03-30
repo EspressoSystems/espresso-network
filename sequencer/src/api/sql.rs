@@ -90,6 +90,12 @@ impl SequencerDataSource for DataSource {
         if let Some(chunk_size) = opt.sync_status_chunk_size {
             builder = builder.with_sync_status_chunk_size(chunk_size);
         }
+        if let Some(chunk_size) = opt.proactive_scan_chunk_size {
+            builder = builder.with_proactive_range_chunk_size(chunk_size);
+        }
+        if let Some(interval) = opt.proactive_scan_interval {
+            builder = builder.with_proactive_interval(interval);
+        }
         if opt.disable_proactive_fetching {
             builder = builder.disable_proactive_fetching();
         }
@@ -934,7 +940,7 @@ async fn load_chain_config<Mode: TransactionMode>(
 /// This is because reconstructing the `ValidatedState` involves replaying the STF over a
 /// range of leaves, and the STF requires all associated data to be present in the `ValidatedState`;
 /// otherwise, it will attempt to trigger catchup itself.
-#[tracing::instrument(skip(instance, tx))]
+#[tracing::instrument(skip(instance, db, tx))]
 pub(crate) async fn reconstruct_state<Mode: TransactionMode>(
     instance: &NodeState,
     db: &SqlStorage,
