@@ -463,27 +463,41 @@ where
     Payload<Types>: QueryablePayload<Types>,
     T: UpdateAvailabilityStorage<Types> + Send + Sync,
 {
-    async fn insert_leaf_with_qc_chain(
+    async fn insert_qc_chain(
         &mut self,
-        leaf: LeafQueryData<Types>,
+        height: u64,
         qc_chain: Option<[CertificatePair<Types>; 2]>,
     ) -> anyhow::Result<()> {
         self.maybe_fail_write(FailableAction::Any).await?;
-        self.inner.insert_leaf_with_qc_chain(leaf, qc_chain).await
+        self.inner.insert_qc_chain(height, qc_chain).await
     }
 
-    async fn insert_block(&mut self, block: BlockQueryData<Types>) -> anyhow::Result<()> {
-        self.maybe_fail_write(FailableAction::Any).await?;
-        self.inner.insert_block(block).await
-    }
-
-    async fn insert_vid(
+    async fn insert_leaf_range<'a>(
         &mut self,
-        common: VidCommonQueryData<Types>,
-        share: Option<VidShare>,
+        leaves: impl Send + IntoIterator<IntoIter: Send, Item = &'a LeafQueryData<Types>>,
     ) -> anyhow::Result<()> {
         self.maybe_fail_write(FailableAction::Any).await?;
-        self.inner.insert_vid(common, share).await
+        self.inner.insert_leaf_range(leaves).await
+    }
+
+    async fn insert_block_range<'a>(
+        &mut self,
+        blocks: impl Send + IntoIterator<IntoIter: Send, Item = &'a BlockQueryData<Types>>,
+    ) -> anyhow::Result<()> {
+        self.maybe_fail_write(FailableAction::Any).await?;
+        self.inner.insert_block_range(blocks).await
+    }
+
+    async fn insert_vid_range<'a>(
+        &mut self,
+        vid: impl Send
+        + IntoIterator<
+            IntoIter: Send,
+            Item = (&'a VidCommonQueryData<Types>, Option<&'a VidShare>),
+        >,
+    ) -> anyhow::Result<()> {
+        self.maybe_fail_write(FailableAction::Any).await?;
+        self.inner.insert_vid_range(vid).await
     }
 }
 

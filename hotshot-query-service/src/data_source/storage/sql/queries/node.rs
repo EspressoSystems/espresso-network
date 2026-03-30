@@ -830,8 +830,8 @@ mod test {
             let mut tx = db.write().await.unwrap();
 
             for &(start, end) in present_ranges {
-                for leaf in leaves[start..end].iter() {
-                    tx.insert_leaf(leaf.clone()).await.unwrap();
+                for leaf in &leaves[start..end] {
+                    tx.insert_leaf(leaf).await.unwrap();
                 }
             }
 
@@ -988,7 +988,7 @@ mod test {
         // Insert the first leaf without payload or VID data.
         {
             let mut tx = db.write().await.unwrap();
-            tx.insert_leaf(leaves[0].clone()).await.unwrap();
+            tx.insert_leaf(&leaves[0]).await.unwrap();
             tx.commit().await.unwrap();
         }
 
@@ -1024,14 +1024,14 @@ mod test {
         // Insert the second block with all data.
         {
             let mut tx = db.write().await.unwrap();
-            tx.insert_leaf(leaves[1].clone()).await.unwrap();
-            tx.insert_block(blocks[1].clone()).await.unwrap();
+            tx.insert_leaf(&leaves[1]).await.unwrap();
+            tx.insert_block(&blocks[1]).await.unwrap();
             tx.insert_vid(
-                VidCommonQueryData::<MockTypes>::new(
+                &VidCommonQueryData::<MockTypes>::new(
                     leaves[1].header().clone(),
                     hotshot_types::data::VidCommon::V0(dispersal.common),
                 ),
-                Some(VidShare::V0(dispersal.shares[0].clone())),
+                Some(&VidShare::V0(dispersal.shares[0].clone())),
             )
             .await
             .unwrap();
@@ -1115,7 +1115,7 @@ mod test {
         // Insert the first leaf without payload or VID data.
         {
             let mut tx = db.write().await.unwrap();
-            tx.insert_leaf(leaves[0].clone()).await.unwrap();
+            tx.insert_leaf(&leaves[0]).await.unwrap();
             tx.commit().await.unwrap();
         }
 
@@ -1151,14 +1151,14 @@ mod test {
         // Insert the second block with all data.
         {
             let mut tx = db.write().await.unwrap();
-            tx.insert_leaf(leaves[1].clone()).await.unwrap();
-            tx.insert_block(blocks[1].clone()).await.unwrap();
+            tx.insert_leaf(&leaves[1]).await.unwrap();
+            tx.insert_block(&blocks[1]).await.unwrap();
             tx.insert_vid(
-                VidCommonQueryData::<MockTypes>::new(
+                &VidCommonQueryData::<MockTypes>::new(
                     leaves[1].header().clone(),
                     hotshot_types::data::VidCommon::V0(dispersal.common),
                 ),
-                Some(VidShare::V0(dispersal.shares[0].clone())),
+                Some(&VidShare::V0(dispersal.shares[0].clone())),
             )
             .await
             .unwrap();

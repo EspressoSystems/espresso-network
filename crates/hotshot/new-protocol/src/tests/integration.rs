@@ -21,7 +21,7 @@ use crate::{
     tests::common::{
         assertions::{
             count_vote1, has_block_reconstructed, has_cert1, has_cert2, has_request_vid_disperse,
-            has_state_validated, has_vid_disperse, has_vote2,
+            has_state_validated, has_timeout, has_vid_disperse, has_vote2,
         },
         utils::MockBlock,
     },
@@ -33,10 +33,9 @@ const THRESHOLD: u64 = 7;
 /// Send a proposal and enough Vote1 messages to form Certificate1.
 ///
 /// Sends the proposal first (providing metadata for VID reconstruction),
-/// then Vote1 messages from `THRESHOLD` validators. Our own node's vote
-/// from consensus goes through `Action::SendVote1` which the mock
-/// coordinator doesn't forward to the CPU task, so we need all THRESHOLD
-/// votes to come from external Vote1 messages.
+/// then Vote1 messages from `THRESHOLD` validators. Waits until
+/// Certificate1, BlockReconstructed and StateValidated have all been
+/// produced — in any order.
 async fn send_proposal_and_vote1s(
     harness: &mut TestHarness,
     test_data: &TestData,
@@ -49,13 +48,11 @@ async fn send_proposal_and_vote1s(
     for i in 0..THRESHOLD {
         harness.message(test_view.vote1_input(i)).await;
     }
-    let inputs = harness.next_inputs(3).await;
-    assert!(has_cert1(&inputs), "Certificate1 should be formed");
-    assert!(
-        has_block_reconstructed(&inputs),
-        "Block should be reconstructed"
-    );
-    assert!(has_state_validated(&inputs), "State should be validated");
+    harness
+        .process_until(|inputs| {
+            has_cert1(inputs) && has_block_reconstructed(inputs) && has_state_validated(inputs)
+        })
+        .await;
 }
 
 /// Send enough Vote2 messages to form Certificate2.
@@ -64,8 +61,7 @@ async fn send_vote2s(harness: &mut TestHarness, test_data: &TestData, view_idx: 
     for i in 0..THRESHOLD {
         harness.message(test_view.vote2_input(i)).await;
     }
-    let inputs = harness.next_inputs(1).await;
-    assert!(has_cert2(&inputs), "Certificate2 should be formed");
+    harness.process_until(|inputs| has_cert2(inputs)).await;
 }
 
 async fn send_block_built_and_header_created(
@@ -78,7 +74,7 @@ async fn send_block_built_and_header_created(
     let parent_proposal = test_data.views[parent_view_idx].proposal.clone();
     let block = MockBlock::new();
     harness
-        .send_input(ConsensusInput::BlockBuilt {
+        .apply_and_process(ConsensusInput::BlockBuilt {
             view: test_view.view_number,
             epoch: test_view.epoch_number,
             payload: block.block,
@@ -97,7 +93,7 @@ async fn send_block_built_and_header_created(
         TEST_VERSIONS.test.base,
     );
     harness
-        .send_input(ConsensusInput::HeaderCreated(test_view.view_number, header))
+        .apply_and_process(ConsensusInput::HeaderCreated(test_view.view_number, header))
         .await;
 }
 
@@ -112,20 +108,20 @@ async fn test_sequential_vote1() {
         .message(test_data.views[0].proposal_input(&node_key))
         .await;
     harness
-        .send_input(test_data.views[0].block_reconstructed_input())
+        .apply_and_process(test_data.views[0].block_reconstructed_input())
         .await;
 
     harness
         .message(test_data.views[1].proposal_input(&node_key))
         .await;
 
-    let inputs = harness.next_inputs(2).await;
-    for input in inputs {
-        assert!(
-            matches!(input, ConsensusInput::StateValidated(_)),
-            "State validated for both views"
-        );
-    }
+    let count_sv = |inputs: &[ConsensusInput<TestTypes>]| {
+        inputs
+            .iter()
+            .filter(|i| matches!(i, ConsensusInput::StateValidated(_)))
+            .count()
+    };
+    harness.process_until(|inputs| count_sv(inputs) >= 2).await;
 
     assert_eq!(
         count_vote1(harness.outputs()),
@@ -216,11 +212,9 @@ async fn test_leader_proposal_via_cpu_tasks() {
         "Leader should request VID disperse after CPU forms cert1"
     );
 
-    let inputs = harness.next_inputs(1).await;
-    assert!(
-        has_vid_disperse(&inputs),
-        "Leader get VID disperse after cert1 formation"
-    );
+    harness
+        .process_until(|inputs| has_vid_disperse(inputs))
+        .await;
 
     // SendProposal proves the CPU VidDisperseTask computed the VID
     // disperse — consensus cannot send a proposal without it.
@@ -260,13 +254,11 @@ async fn send_timeout_votes(harness: &mut TestHarness, test_data: &TestData, vie
     for i in 0..THRESHOLD {
         harness.message(test_view.timeout_vote_input(i)).await;
     }
-    let inputs = harness.next_inputs(1).await;
-    assert!(
-        has_timeout_cert(&inputs),
-        "TimeoutCertificate should be formed from timeout votes"
-    );
     harness
-        .send_input(ConsensusInput::TimeoutCertificate(
+        .process_until(|inputs| has_timeout_cert(inputs))
+        .await;
+    harness
+        .apply_and_process(ConsensusInput::TimeoutCertificate(
             test_view.timeout_cert.clone(),
         ))
         .await;
@@ -297,9 +289,9 @@ async fn test_timeout_votes_form_tc() {
 /// fires for view 2 (Timeout) → timeout votes form TC → leader proposes
 /// for view 3 before the view 3 timer fires.
 ///
-/// The 200ms timer is long enough for VID disperse to complete (~50-100ms)
-/// but short enough to actually fire during the test, proving the timeout
-/// mechanism does not interfere with the leader's proposal path.
+/// The 100ms timer is short enough to actually fire during the test,
+/// proving the timeout mechanism does not interfere with the leader's
+/// proposal path.
 #[tokio::test]
 async fn test_leader_proposes_after_timeout_via_cpu_tasks() {
     let test_data = TestData::new(5).await;
@@ -315,14 +307,14 @@ async fn test_leader_proposes_after_timeout_via_cpu_tasks() {
     // View 1: process fully to establish locked_qc
     send_proposal_and_vote1s(&mut harness, &test_data, 0, &leader_for_view_3).await;
 
-    // Verify the timeout actually fired (not avoided)
-    harness.next_timeout().await;
+    // Wait for the timeout to fire (non-timeout events are processed inline).
+    harness.process_until(|inputs| has_timeout(inputs)).await;
 
     // Send timeout votes for view 2 → CPU timeout collector forms TC
     // → consensus handles TC → leader of view 3 requests block/header → proposes.
     // The TC input view is 3 (cert.view+1), which passes the stale filter
     // (3 > timeout_view=2). After ViewChanged(3) resets the timer, the leader
-    // must complete VID disperse before the 500ms timer fires for view 3.
+    // must complete VID disperse before the timer fires for view 3.
     send_timeout_votes(&mut harness, &test_data, 1).await;
 
     // TODO eventually check a timeout vote was sent
@@ -335,12 +327,10 @@ async fn test_leader_proposes_after_timeout_via_cpu_tasks() {
         has_request_vid_disperse(harness.outputs()),
         "Leader should request VID disperse after TC"
     );
-    // get the VID disperse
-    let inputs = harness.next_inputs(1).await;
-    assert!(
-        has_vid_disperse(&inputs),
-        "Leader should get VID disperse after TC"
-    );
+    // Wait for the VID disperse to be computed.
+    harness
+        .process_until(|inputs| has_vid_disperse(inputs))
+        .await;
     assert!(
         has_proposal(harness.outputs()),
         "Leader should send proposal with timeout view change evidence"

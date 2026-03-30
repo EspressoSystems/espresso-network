@@ -10,7 +10,7 @@ use hotshot_types::{
     vote::HasViewNumber,
 };
 
-use crate::message::Message;
+use crate::message::{Message, Unchecked, Validated};
 
 pub type Result<T> = std::result::Result<T, NetworkError>;
 
@@ -36,12 +36,12 @@ where
         // TODO: Implement
     }
 
-    pub async fn receive(&mut self) -> Result<Message<T>> {
+    pub async fn receive(&mut self) -> Result<Message<T, Unchecked>> {
         let m = self.network.recv_message().await?;
         self.deserialize(m)
     }
 
-    pub async fn broadcast(&mut self, msg: Message<T>) -> Result<()> {
+    pub async fn broadcast(&mut self, msg: Message<T, Validated>) -> Result<()> {
         let view = msg.view_number();
         let bytes = self.serialize(&msg)?;
         self.network
@@ -50,7 +50,7 @@ where
         Ok(())
     }
 
-    pub async fn unicast(&mut self, to: T::SignatureKey, msg: Message<T>) -> Result<()> {
+    pub async fn unicast(&mut self, to: T::SignatureKey, msg: Message<T, Validated>) -> Result<()> {
         let view = msg.view_number();
         let bytes = self.serialize(&msg)?;
         self.network.direct_message(view, bytes, to).await?;
@@ -63,8 +63,11 @@ where
             .await;
     }
 
-    fn deserialize(&self, bytes: Vec<u8>) -> Result<Message<T>> {
-        match self.upgrade_lock.deserialize::<Message<T>>(&bytes) {
+    fn deserialize(&self, bytes: Vec<u8>) -> Result<Message<T, Unchecked>> {
+        match self
+            .upgrade_lock
+            .deserialize::<Message<T, Unchecked>>(&bytes)
+        {
             Ok((m, v)) => {
                 if v == EXTERNAL_MESSAGE_VERSION && !m.is_external() {
                     let e = "received a non-external message with version 0.0".to_string();
@@ -76,7 +79,7 @@ where
         }
     }
 
-    fn serialize(&self, m: &Message<T>) -> Result<Vec<u8>> {
+    fn serialize(&self, m: &Message<T, Validated>) -> Result<Vec<u8>> {
         self.upgrade_lock
             .serialize(m)
             .map_err(|e| NetworkError::FailedToSerialize(e.to_string()))

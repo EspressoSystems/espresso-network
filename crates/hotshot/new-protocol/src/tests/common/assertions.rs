@@ -152,6 +152,15 @@ where
         .count()
 }
 
+pub(crate) fn has_timeout<'a, I>(inputs: I) -> bool
+where
+    I: IntoIterator<Item = &'a ConsensusInput<TestTypes>>,
+{
+    inputs
+        .into_iter()
+        .any(|e| matches!(e, ConsensusInput::Timeout(_)))
+}
+
 pub(crate) fn has_timeout_cert<'a, I>(inputs: I) -> bool
 where
     I: IntoIterator<Item = &'a ConsensusInput<TestTypes>>,
