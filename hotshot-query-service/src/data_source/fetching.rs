@@ -1470,6 +1470,7 @@ where
                 for range in sync_status.blocks.ranges {
                     metrics.scanned_blocks.set(range.start);
                     if range.status != SyncStatus::Missing {
+                        metrics.scanned_blocks.set(range.end);
                         continue;
                     }
 
@@ -1500,6 +1501,7 @@ where
                         metrics
                             .missing_blocks
                             .update((chunk.start as i64) - (chunk.end as i64));
+                        metrics.scanned_blocks.set(chunk.end);
                     }
                 }
 
@@ -1507,6 +1509,7 @@ where
                 for range in sync_status.vid_common.ranges {
                     metrics.scanned_vid.set(range.start);
                     if range.status != SyncStatus::Missing {
+                        metrics.scanned_vid.set(range.end);
                         continue;
                     }
 
@@ -1527,6 +1530,7 @@ where
                         metrics
                             .missing_vid
                             .update((chunk.start as i64) - (chunk.end as i64));
+                        metrics.scanned_vid.set(chunk.end);
                     }
                 }
 
