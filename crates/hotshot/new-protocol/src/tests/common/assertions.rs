@@ -152,6 +152,24 @@ where
         .count()
 }
 
+pub(crate) fn has_block_built<'a, I>(inputs: I) -> bool
+where
+    I: IntoIterator<Item = &'a ConsensusInput<TestTypes>>,
+{
+    inputs
+        .into_iter()
+        .any(|e| matches!(e, ConsensusInput::BlockBuilt { .. }))
+}
+
+pub(crate) fn has_header_created<'a, I>(inputs: I) -> bool
+where
+    I: IntoIterator<Item = &'a ConsensusInput<TestTypes>>,
+{
+    inputs
+        .into_iter()
+        .any(|e| matches!(e, ConsensusInput::HeaderCreated(..)))
+}
+
 pub(crate) fn has_timeout<'a, I>(inputs: I) -> bool
 where
     I: IntoIterator<Item = &'a ConsensusInput<TestTypes>>,
