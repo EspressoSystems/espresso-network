@@ -14,13 +14,13 @@ use alloy::{
 use anyhow::{Context, Result, anyhow};
 use client::SequencerClient;
 use espresso_contract_deployer::build_signer;
+use espresso_node::Genesis;
 use espresso_types::FeeAmount;
 use futures::{
     FutureExt,
     future::{BoxFuture, join_all},
 };
 use hotshot_contract_adapter::sol_types::{EspTokenV2, LightClientV3, RewardClaim, StakeTableV2};
-use sequencer::Genesis;
 use surf_disco::Url;
 use tokio::time::{sleep, timeout};
 

@@ -22,7 +22,7 @@ hotshot-query-service = { workspace = true }
 light-client = { workspace = true }
 log-panics = { workspace = true }
 semver = { workspace = true }
-sequencer = { workspace = true, default-features = false }
+espresso-node = { workspace = true, default-features = false }
 tide-disco = { workspace = true }
 tokio = { workspace = true }
 toml = { workspace = true }

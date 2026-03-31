@@ -28,7 +28,7 @@ vbs = { workspace = true }
 [dev-dependencies]
 espresso-types = { workspace = true, features = ["testing"] }
 rand = { workspace = true }
-sequencer-utils = { workspace = true }
+espresso-utils = { workspace = true }
 tempfile = { workspace = true }
 test-log = { workspace = true }
 

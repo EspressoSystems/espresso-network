@@ -1,9 +1,9 @@
+use espresso_node::SequencerApiVersion;
 use espresso_types::SeqTypes;
 use hotshot_builder_api::v0_1::builder::{
     Error as BuilderApiError, Options as HotshotBuilderApiOptions,
 };
 use hotshot_builder_legacy::service::ProxyGlobalState;
-use sequencer::SequencerApiVersion;
 use tide_disco::{App, Url};
 use tokio::spawn;
 use vbs::version::{StaticVersion, StaticVersionType};
@@ -52,6 +52,7 @@ pub mod testing {
     };
     use async_lock::RwLock;
     use committable::Committable;
+    use espresso_node::{SequencerApiVersion, context::Consensus, network};
     use espresso_types::{
         Event, FeeAccount, NamespaceId, NodeState, PrivKey, PubKey, Transaction, ValidatedState,
         traits::SequencerPersistence, v0_3::ChainConfig,
@@ -82,7 +83,6 @@ pub mod testing {
             signature_key::BuilderSignatureKey as _,
         },
     };
-    use sequencer::{SequencerApiVersion, context::Consensus, network};
     use surf_disco::Client;
     use vbs::version::{StaticVersion, Version};
 

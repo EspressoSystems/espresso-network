@@ -43,7 +43,7 @@ jf-signature = { workspace = true }
 jf-signature-compat = { workspace = true }
 jf-utils = { workspace = true }
 reqwest = { workspace = true }
-sequencer-utils = { workspace = true }
+espresso-utils = { workspace = true }
 serde = { workspace = true }
 surf-disco = { workspace = true }
 tide-disco = { workspace = true }
@@ -56,7 +56,7 @@ vbs = { workspace = true }
 
 [dev-dependencies]
 rstest = { workspace = true }
-sequencer-utils = { workspace = true, features = ["testing"] }
+espresso-utils = { workspace = true, features = ["testing"] }
 test-log = { workspace = true }
 
 [lints]

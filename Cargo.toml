@@ -27,8 +27,12 @@ members = [
     "crates/hotshot/testing",
     "crates/hotshot/types",
     "crates/hotshot/utils",
+    "crates/espresso/dev-node",
+    "crates/espresso/node",
+    "crates/espresso/node-sqlite",
+    "crates/espresso/types",
+    "crates/espresso/utils",
     "crates/versions",
-    "espresso-dev-node",
     "hotshot-events-service",
     "hotshot-query-service",
     "hotshot-state-prover",
@@ -37,18 +41,14 @@ members = [
     "node-metrics",
     "request-response",
     "sdks/crypto-helper",
-    "sequencer",
-    "sequencer-sqlite",
     "slow-tests",
     "staking-cli",
     "test-utils",
     "tests",
-    "types",
-    "utils",
     "vid",
 ]
 
-# All crates except sequencer-sqlite and espresso-dev-node, to avoid turning on embedded-db feature
+# All crates except espresso-node-sqlite and espresso-dev-node, to avoid turning on embedded-db feature
 # for the whole workspace by default.
 default-members = [
     "alloy-compat",
@@ -85,16 +85,17 @@ default-members = [
     "node-metrics",
     "request-response",
     "sdks/crypto-helper",
-    "sequencer",
+    "crates/espresso/node",
     "slow-tests",
     "staking-cli",
     "test-utils",
     "tests",
-    "types",
-    "utils",
+    "crates/espresso/types",
+    "crates/espresso/utils",
     "vid",
 ]
-exclude = ["sequencer-sqlite"]
+exclude = ["crates/espresso/node-sqlite"]
+# Note: workspace members/default-members reference directory paths, not crate names.
 
 [workspace.package]
 version = "0.1.0"
@@ -172,7 +173,7 @@ escargot = "0.5.10"
 espresso-contract-deployer = { path = "contracts/rust/deployer" }
 espresso-macros = { git = "https://github.com/EspressoSystems/espresso-macros.git", tag = "0.1.0" }
 espresso-safe-tx-builder = { path = "contracts/rust/safe-tx-builder" }
-espresso-types = { path = "types" }
+espresso-types = { path = "crates/espresso/types" }
 ethers = { version = "2.0", features = ["solc", "ws"] }
 ethers-core = "2.0"
 fluent-asserter = "0.1.9"
@@ -269,8 +270,8 @@ rstest_reuse = "0.7.0"
 rust_decimal = "1.36.0"
 scopeguard = "1.2.0"
 semver = "1"
-sequencer = { path = "sequencer", default-features = false }
-sequencer-utils = { path = "utils" }
+espresso-node = { path = "crates/espresso/node", default-features = false }
+espresso-utils = { path = "crates/espresso/utils" }
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde-inline-default = "0.2"
 serde_arrays = "0.2.0"
@@ -330,7 +331,7 @@ debug = "full"
 
 [profile.test]
 opt-level = 1
-[profile.test.package.sequencer]
+[profile.test.package.espresso-node]
 opt-level = 0
 [profile.test.package.hotshot-testing]
 opt-level = 0
