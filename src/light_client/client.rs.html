@@ -197,23 +197,23 @@
 <a href=#197 id=197 data-nosnippet>197</a>    <span class="kw">use </span>std::time::Duration;
 <a href=#198 id=198 data-nosnippet>198</a>
 <a href=#199 id=199 data-nosnippet>199</a>    <span class="kw">use </span>committable::Committable;
-<a href=#200 id=200 data-nosnippet>200</a>    <span class="kw">use </span>espresso_types::{Header, Transaction};
-<a href=#201 id=201 data-nosnippet>201</a>    <span class="kw">use </span>futures::{TryStreamExt, stream::StreamExt};
-<a href=#202 id=202 data-nosnippet>202</a>    <span class="kw">use </span>hotshot_query_service::{
-<a href=#203 id=203 data-nosnippet>203</a>        Resolvable,
-<a href=#204 id=204 data-nosnippet>204</a>        availability::{BlockQueryData, LeafQueryData},
-<a href=#205 id=205 data-nosnippet>205</a>    };
-<a href=#206 id=206 data-nosnippet>206</a>    <span class="kw">use </span>pretty_assertions::assert_eq;
-<a href=#207 id=207 data-nosnippet>207</a>    <span class="kw">use </span>rand::RngCore;
-<a href=#208 id=208 data-nosnippet>208</a>    <span class="kw">use </span>sequencer::{
-<a href=#209 id=209 data-nosnippet>209</a>        api::{
-<a href=#210 id=210 data-nosnippet>210</a>            Options,
-<a href=#211 id=211 data-nosnippet>211</a>            data_source::testing::TestableSequencerDataSource,
-<a href=#212 id=212 data-nosnippet>212</a>            sql::DataSource,
-<a href=#213 id=213 data-nosnippet>213</a>            test_helpers::{TestNetwork, TestNetworkConfigBuilder},
-<a href=#214 id=214 data-nosnippet>214</a>        },
-<a href=#215 id=215 data-nosnippet>215</a>        testing::{TestConfigBuilder, wait_for_decide_on_handle},
-<a href=#216 id=216 data-nosnippet>216</a>    };
+<a href=#200 id=200 data-nosnippet>200</a>    <span class="kw">use </span>espresso_node::{
+<a href=#201 id=201 data-nosnippet>201</a>        api::{
+<a href=#202 id=202 data-nosnippet>202</a>            Options,
+<a href=#203 id=203 data-nosnippet>203</a>            data_source::testing::TestableSequencerDataSource,
+<a href=#204 id=204 data-nosnippet>204</a>            sql::DataSource,
+<a href=#205 id=205 data-nosnippet>205</a>            test_helpers::{TestNetwork, TestNetworkConfigBuilder},
+<a href=#206 id=206 data-nosnippet>206</a>        },
+<a href=#207 id=207 data-nosnippet>207</a>        testing::{TestConfigBuilder, wait_for_decide_on_handle},
+<a href=#208 id=208 data-nosnippet>208</a>    };
+<a href=#209 id=209 data-nosnippet>209</a>    <span class="kw">use </span>espresso_types::{Header, Transaction};
+<a href=#210 id=210 data-nosnippet>210</a>    <span class="kw">use </span>futures::{TryStreamExt, stream::StreamExt};
+<a href=#211 id=211 data-nosnippet>211</a>    <span class="kw">use </span>hotshot_query_service::{
+<a href=#212 id=212 data-nosnippet>212</a>        Resolvable,
+<a href=#213 id=213 data-nosnippet>213</a>        availability::{BlockQueryData, LeafQueryData},
+<a href=#214 id=214 data-nosnippet>214</a>    };
+<a href=#215 id=215 data-nosnippet>215</a>    <span class="kw">use </span>pretty_assertions::assert_eq;
+<a href=#216 id=216 data-nosnippet>216</a>    <span class="kw">use </span>rand::RngCore;
 <a href=#217 id=217 data-nosnippet>217</a>    <span class="kw">use </span>test_utils;
 <a href=#218 id=218 data-nosnippet>218</a>    <span class="kw">use </span>tokio::time::sleep;
 <a href=#219 id=219 data-nosnippet>219</a>    <span class="kw">use </span>versions::{EPOCH_VERSION, Upgrade};

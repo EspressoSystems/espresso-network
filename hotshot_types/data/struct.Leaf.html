@@ -58,7 +58,7 @@ header and payload consistency</p>
     &amp;self,
     parent: &amp;Self,
     upgrade: &amp;<a class="struct" href="../message/struct.UpgradeLock.html" title="struct hotshot_types::message::UpgradeLock">UpgradeLock</a>&lt;TYPES&gt;,
-) -&gt; <a class="type" href="../../hotshot_utils/anytrace/type.Result.html" title="type hotshot_utils::anytrace::Result">Result</a>&lt;<a class="primitive" href="https://doc.rust-lang.org/1.94.1/std/primitive.unit.html">()</a>&gt;</h4></section></summary><div class="docblock"><p>Validate that a leaf has the right upgrade certificate to be the immediate child of another leaf</p>
+) -&gt; Result&lt;<a class="primitive" href="https://doc.rust-lang.org/1.94.1/std/primitive.unit.html">()</a>&gt;</h4></section></summary><div class="docblock"><p>Validate that a leaf has the right upgrade certificate to be the immediate child of another leaf</p>
 <p>This may not be a complete function. Please double-check that it performs the checks you expect before substituting validation logic with it.</p>
 <h5 id="errors-1"><a class="doc-anchor" href="#errors-1">§</a>Errors</h5>
 <p>Returns an error if the certificates are not identical, or that when we no longer see a

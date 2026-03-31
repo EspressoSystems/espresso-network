@@ -23,7 +23,7 @@ encapsulates both.</p>
 </div></details><details class="toggle method-toggle" open><summary><section id="method.verify_next_epoch_qc" class="method"><a class="src rightside" href="../../src/hotshot_types/simple_certificate.rs.html#1005-1031">Source</a><h4 class="code-header">pub fn <a href="#method.verify_next_epoch_qc" class="fn">verify_next_epoch_qc</a>(
     &amp;self,
     epoch_height: <a class="primitive" href="https://doc.rust-lang.org/1.94.1/std/primitive.u64.html">u64</a>,
-) -&gt; <a class="type" href="../../hotshot_utils/anytrace/type.Result.html" title="type hotshot_utils::anytrace::Result">Result</a>&lt;<a class="enum" href="https://doc.rust-lang.org/1.94.1/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;&amp;<a class="type" href="type.NextEpochQuorumCertificate2.html" title="type hotshot_types::simple_certificate::NextEpochQuorumCertificate2">NextEpochQuorumCertificate2</a>&lt;TYPES&gt;&gt;&gt;</h4></section></summary><div class="docblock"><p>Verify that the next epoch QC is present and consistent if required.</p>
+) -&gt; Result&lt;<a class="enum" href="https://doc.rust-lang.org/1.94.1/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;&amp;<a class="type" href="type.NextEpochQuorumCertificate2.html" title="type hotshot_types::simple_certificate::NextEpochQuorumCertificate2">NextEpochQuorumCertificate2</a>&lt;TYPES&gt;&gt;&gt;</h4></section></summary><div class="docblock"><p>Verify that the next epoch QC is present and consistent if required.</p>
 <p>This checks that if required, the next epoch QC is present and is consistent with the
 primary QC. It does not check the signature on either QC, only that the data being signed
 over is consistent between the two.</p>

@@ -18,7 +18,7 @@
     membership: &amp;<a class="struct" href="../../epoch_membership/struct.EpochMembershipCoordinator.html" title="struct hotshot_types::epoch_membership::EpochMembershipCoordinator">EpochMembershipCoordinator</a>&lt;TYPES&gt;,
     target_epoch: <a class="enum" href="https://doc.rust-lang.org/1.94.1/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;<a class="struct" href="../struct.EpochNumber.html" title="struct hotshot_types::data::EpochNumber">EpochNumber</a>&gt;,
     data_epoch: <a class="enum" href="https://doc.rust-lang.org/1.94.1/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;<a class="struct" href="../struct.EpochNumber.html" title="struct hotshot_types::data::EpochNumber">EpochNumber</a>&gt;,
-) -&gt; <a class="type" href="../../../hotshot_utils/anytrace/type.Result.html" title="type hotshot_utils::anytrace::Result">Result</a>&lt;Self&gt;</h4></section></summary><div class="docblock"><p>Create VID dispersal from a specified membership for the target epoch.
+) -&gt; Result&lt;Self&gt;</h4></section></summary><div class="docblock"><p>Create VID dispersal from a specified membership for the target epoch.
 Uses the specified function to calculate share dispersal
 Allows for more complex stake table functionality</p>
 </div></details><details class="toggle method-toggle" open><summary><section id="method.calculate_vid_disperse" class="method"><a class="src rightside" href="../../../src/hotshot_types/data/vid_disperse.rs.html#139-167">Source</a><h4 class="code-header">pub async fn <a href="#method.calculate_vid_disperse" class="fn">calculate_vid_disperse</a>(
@@ -27,7 +27,7 @@ Allows for more complex stake table functionality</p>
     view: <a class="struct" href="../struct.ViewNumber.html" title="struct hotshot_types::data::ViewNumber">ViewNumber</a>,
     target_epoch: <a class="enum" href="https://doc.rust-lang.org/1.94.1/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;<a class="struct" href="../struct.EpochNumber.html" title="struct hotshot_types::data::EpochNumber">EpochNumber</a>&gt;,
     data_epoch: <a class="enum" href="https://doc.rust-lang.org/1.94.1/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;<a class="struct" href="../struct.EpochNumber.html" title="struct hotshot_types::data::EpochNumber">EpochNumber</a>&gt;,
-) -&gt; <a class="type" href="../../../hotshot_utils/anytrace/type.Result.html" title="type hotshot_utils::anytrace::Result">Result</a>&lt;(Self, <a class="struct" href="https://doc.rust-lang.org/1.94.1/core/time/struct.Duration.html" title="struct core::time::Duration">Duration</a>)&gt;</h4></section></summary><div class="docblock"><p>Calculate the vid disperse information from the payload given a view, epoch and membership,
+) -&gt; Result&lt;(Self, <a class="struct" href="https://doc.rust-lang.org/1.94.1/core/time/struct.Duration.html" title="struct core::time::Duration">Duration</a>)&gt;</h4></section></summary><div class="docblock"><p>Calculate the vid disperse information from the payload given a view, epoch and membership,
 If the sender epoch is missing, it means it’s the same as the target epoch.</p>
 <h5 id="errors"><a class="doc-anchor" href="#errors">§</a>Errors</h5>
 <p>Returns an error if the disperse or commitment calculation fails</p>

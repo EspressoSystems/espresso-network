@@ -12,7 +12,7 @@
     data: DATA,
     view: <a class="struct" href="../data/struct.ViewNumber.html" title="struct hotshot_types::data::ViewNumber">ViewNumber</a>,
     upgrade_lock: &amp;<a class="struct" href="../message/struct.UpgradeLock.html" title="struct hotshot_types::message::UpgradeLock">UpgradeLock</a>&lt;TYPES&gt;,
-) -&gt; <a class="type" href="../../hotshot_utils/anytrace/type.Result.html" title="type hotshot_utils::anytrace::Result">Result</a>&lt;Self&gt;</h4></section></summary><div class="docblock"><p>Create a new <code>VersionedVoteData</code> struct</p>
+) -&gt; Result&lt;Self&gt;</h4></section></summary><div class="docblock"><p>Create a new <code>VersionedVoteData</code> struct</p>
 <h5 id="errors"><a class="doc-anchor" href="#errors">§</a>Errors</h5>
 <p>Returns an error if <code>upgrade_lock.version(view)</code> is unable to return a version we support</p>
 </div></details><details class="toggle method-toggle" open><summary><section id="method.new_infallible" class="method"><a class="src rightside" href="../../src/hotshot_types/simple_vote.rs.html#319-328">Source</a><h4 class="code-header">pub fn <a href="#method.new_infallible" class="fn">new_infallible</a>(
