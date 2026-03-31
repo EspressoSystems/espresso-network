@@ -189,7 +189,7 @@ impl<T: NodeType> BlockBuilder<T> {
                 Some(Ok(result)) => return Some(result),
                 Some(Err(err)) => {
                     if err.is_panic() {
-                        error!(%err, "task panicked");
+                        error!(%err, "block builder task panicked");
                     }
                 },
                 None => return None,
@@ -233,7 +233,23 @@ impl<T: NodeType> BlockBuilder<T> {
 
     pub fn on_transactions(&mut self, msg: TransactionMessage<T>) {
         for tx in msg.transactions {
-            self.handle_tx(tx);
+            let hash = tx.commit();
+
+            if self.dedup_set.contains(&hash) {
+                continue;
+            }
+
+            if self.leader_buffer.contains_key(&hash) {
+                continue;
+            }
+
+            let size = tx.minimum_block_size();
+            if self.leader_total_bytes + size > self.config.max_leader_bytes {
+                continue;
+            }
+
+            self.leader_total_bytes += size;
+            self.leader_buffer.insert(hash, tx);
         }
     }
 
@@ -310,27 +326,6 @@ impl<T: NodeType> BlockBuilder<T> {
         };
 
         (txs, manifest)
-    }
-
-    fn handle_tx(&mut self, tx: T::Transaction) -> bool {
-        let hash = tx.commit();
-
-        if self.dedup_set.contains(&hash) {
-            return false;
-        }
-
-        if self.leader_buffer.contains_key(&hash) {
-            return false;
-        }
-
-        let size = tx.minimum_block_size();
-        if self.leader_total_bytes + size > self.config.max_leader_bytes {
-            return false;
-        }
-
-        self.leader_total_bytes += size;
-        self.leader_buffer.insert(hash, tx);
-        true
     }
 }
 
