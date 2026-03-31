@@ -45,7 +45,7 @@ jobs:
     strategy:
       matrix:
         include:
-          - binary: sequencer
+          - binary: espresso-node
             shared-key: postgres
             save-cache: false
 
@@ -53,9 +53,9 @@ jobs:
             shared-key: postgres
             save-cache: true
 
-          - binary: sequencer-sqlite
+          - binary: espresso-node-sqlite
             # uses it's own lock file
-            shared-key: sequencer-embedded
+            shared-key: espresso-node-embedded
             save-cache: true
 
           - binary: espresso-dev-node
@@ -108,7 +108,7 @@ jobs:
     strategy:
       matrix:
         include:
-          - binary: sequencer
+          - binary: espresso-node
             shared-key: postgres
             save-cache: false
 
@@ -116,9 +116,9 @@ jobs:
             shared-key: postgres
             save-cache: true
 
-          - binary: sequencer-sqlite
+          - binary: espresso-node-sqlite
             # uses it's own lock file
-            shared-key: sequencer-embedded
+            shared-key: espresso-node-embedded
             save-cache: true
 
           - binary: espresso-dev-node
@@ -179,7 +179,7 @@ jobs:
           - node-validator
           - orchestrator
           - prover-service
-          - sequencer
+          - espresso-node
           - staking-cli
           - state-relay-server
           - submit-transactions
@@ -287,7 +287,7 @@ jobs:
           - node-validator
           - orchestrator
           - prover-service
-          - sequencer
+          - espresso-node
           - staking-cli
           - state-relay-server
           - submit-transactions
@@ -371,7 +371,7 @@ jobs:
           - node-validator
           - orchestrator
           - prover-service
-          - sequencer
+          - espresso-node
           - staking-cli
           - state-relay-server
           - submit-transactions
@@ -419,12 +419,31 @@ jobs:
         run: |
           docker buildx imagetools inspect ghcr.io/espressosystems/espresso-network/${{ matrix.service }}:${{ steps.meta.outputs.version }}
 
+      # DEPRECATED: Push copies to the old espresso-sequencer registry for backward compatibility.
+      # These legacy images will be removed in a future release. Consumers should migrate to
+      # ghcr.io/espressosystems/espresso-network/<service>.
       - name: Copy image to legacy espresso-sequencer registry
+        if: matrix.service != 'espresso-node'
         run: |
           for tag in $(jq -cr '.tags[]' <<< "$DOCKER_METADATA_OUTPUT_JSON"); do
             legacy_tag="${tag/espresso-network/espresso-sequencer}"
             docker buildx imagetools create -t "$legacy_tag" "$tag"
           done
+
+      # DEPRECATED: Push a legacy image with old binary names (sequencer, sequencer-postgres,
+      # sequencer-sqlite) as symlinks to the new names. This will be removed in a future release.
+      # Consumers should migrate to ghcr.io/espressosystems/espresso-network/espresso-node.
+      - name: Build and push legacy sequencer image with old binary names
+        if: matrix.service == 'espresso-node'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./docker/espresso-node-legacy.Dockerfile
+          build-args: |
+            BASE_IMAGE=ghcr.io/espressosystems/espresso-network/espresso-node:${{ steps.meta.outputs.version }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ghcr.io/espressosystems/espresso-sequencer/sequencer:${{ steps.meta.outputs.version }}
 
   test-demo-pr:
     if: github.event_name == 'pull_request'

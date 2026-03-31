@@ -43,8 +43,8 @@ get_proc_cwd() {
 # List of native processes managed by process-compose
 # Update this list when adding/removing processes in process-compose.yaml
 NATIVE_PROCESSES=(
-	sequencer
-	sequencer-sqlite
+	espresso-node
+	espresso-node-sqlite
 	orchestrator
 	state-relay-server
 	cdn-marshal
