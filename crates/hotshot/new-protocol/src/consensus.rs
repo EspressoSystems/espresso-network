@@ -705,17 +705,16 @@ impl<T: NodeType> Consensus<T> {
         }
         // Handle Epoch Change by broadcasting the epoch change message if we have
         // all the data we need.
-        if is_last_block(proposal.block_header.block_number(), self.epoch_height) {
-            if let Some(cert1) = self.certs.get(&view)
-                && cert1.data.leaf_commit == proposal_commit
-            {
-                let epoch_change = EpochChangeMessage {
-                    cert1: cert1.clone(),
-                    cert2: cert2.clone(),
-                    proposal: proposal.clone(),
-                };
-                outbox.push_back(ConsensusOutput::SendEpochChange(epoch_change));
-            }
+        if is_last_block(proposal.block_header.block_number(), self.epoch_height)
+            && let Some(cert1) = self.certs.get(&view)
+            && cert1.data.leaf_commit == proposal_commit
+        {
+            let epoch_change = EpochChangeMessage {
+                cert1: cert1.clone(),
+                cert2: cert2.clone(),
+                proposal: proposal.clone(),
+            };
+            outbox.push_back(ConsensusOutput::SendEpochChange(epoch_change));
         }
         // we have a second certificate, and matching proposal, it is decided.
         let leaf: Leaf2<T> = proposal.clone().into();
