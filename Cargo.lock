@@ -5955,6 +5955,7 @@ dependencies = [
  "hotshot-example-types",
  "hotshot-testing",
  "hotshot-types",
+ "hotshot-utils",
  "serde",
  "thiserror 2.0.17",
  "time 0.3.47",
