@@ -29,14 +29,14 @@ use crate::{
     network::Network,
     outbox::Outbox,
     proposal::ProposalValidator,
-    state::{StateManager, StateManagerOutput},
+    state::{HeaderRequest, StateManager, StateManagerOutput},
     vid::{VidDisperseRequest, VidDisperser, VidReconstructor},
     vote::VoteCollector,
 };
 
 #[derive(Builder)]
 pub struct Coordinator<T: NodeType, I: NodeImplementation<T>> {
-    _membership_coordinator: EpochMembershipCoordinator<T>,
+    membership_coordinator: EpochMembershipCoordinator<T>,
     consensus: Consensus<T>,
     network: Network<T, I::Network>,
     state_manager: StateManager<T>,
@@ -47,11 +47,10 @@ pub struct Coordinator<T: NodeType, I: NodeImplementation<T>> {
     timeout_collector: VoteCollector<T, TimeoutVote2<T>, TimeoutCertificate2<T>>,
     checkpoint_collector: VoteCollector<T, CheckpointVote<T>, CheckpointCertificate<T>>,
     drb_requester: DrbRequester,
+    block_builder: BlockBuilder<T>,
     proposal_validator: ProposalValidator<T>,
     #[builder(default)]
     outbox: Outbox<ConsensusOutput<T>>,
-    #[builder(default)]
-    block_builder: BlockBuilder<T>,
     public_key: T::SignatureKey,
     timer: Timer,
 }
@@ -135,6 +134,28 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                     };
                     self.gc(cert.view_number(), epoch);
                 }
+                Some(block) = self.block_builder.next() => match block {
+                    Ok(result) => {
+                        self.state_manager.request_header(HeaderRequest {
+                            view: result.view,
+                            epoch: result.epoch,
+                            parent_proposal: result.parent_proposal.clone(),
+                            payload_commitment: result.payload_commitment,
+                            builder_commitment: result.builder_commitment,
+                            metadata: result.metadata.clone(),
+                            builder_fee: result.builder_fee,
+                        });
+                        return Ok(ConsensusInput::BlockBuilt {
+                            view: result.view,
+                            epoch: result.epoch,
+                            payload: result.payload,
+                            metadata: result.metadata,
+                        })
+                    }
+                    Err(()) => {
+                        return Err(CoordinatorError::unspecified().context("block building"))
+                    }
+                },
                 Some(item) = self.vid_disperser.next() => match item {
                     Ok((view, _, disperse)) => {
                         return Ok(ConsensusInput::VidDisperseCreated(view, disperse))
@@ -281,8 +302,11 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
             ConsensusOutput::Certificate2Formed(_) => {}, // TODO
             ConsensusOutput::LeafDecided(_) => {},        // TODO
             ConsensusOutput::LockUpdated(_) => {},        // TODO
-            ConsensusOutput::RequestBlockAndHeader(_) => {}, // TODO
-            ConsensusOutput::RequestProposal(..) => {},   // TODO
+            ConsensusOutput::RequestBlockAndHeader(request) => {
+                self.block_builder
+                    .request_block(request, self.membership_coordinator.clone());
+            },
+            ConsensusOutput::RequestProposal(..) => {}, // TODO
             ConsensusOutput::SendProposal(proposal, vid_disperse) => {
                 // TODO: This may be done async in network so we do not spend
                 // too much time here in this loop.
@@ -354,5 +378,6 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
         self.vote2_collector.gc(view);
         self.timeout_collector.gc(view);
         self.drb_requester.gc(epoch);
+        self.block_builder.gc(view);
     }
 }

@@ -1,13 +1,30 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::{
+    collections::{BTreeMap, HashMap, HashSet, VecDeque},
+    sync::Arc,
+};
 
 use committable::{Commitment, Committable};
 use hotshot::traits::BlockPayload;
 use hotshot_types::{
-    data::{EpochNumber, QuorumProposal2, ViewNumber},
-    traits::{block_contents::Transaction, node_implementation::NodeType},
+    data::{
+        EpochNumber, QuorumProposal2, VidCommitment, ViewNumber, vid_commitment,
+        vid_disperse::vid_total_weight,
+    },
+    epoch_membership::EpochMembershipCoordinator,
+    traits::{
+        EncodeBytes,
+        block_contents::{BuilderFee, Transaction},
+        node_implementation::NodeType,
+        signature_key::BuilderSignatureKey,
+    },
+    utils::BuilderCommitment,
 };
+use tokio::task::{AbortHandle, JoinSet};
 
-use crate::message::{DedupManifest, TransactionMessage};
+use crate::{
+    helpers::upgrade_lock,
+    message::{DedupManifest, TransactionMessage},
+};
 
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub struct BlockAndHeaderRequest<T: NodeType> {
@@ -16,11 +33,16 @@ pub struct BlockAndHeaderRequest<T: NodeType> {
     pub parent_proposal: QuorumProposal2<T>,
 }
 
-#[derive(Clone, Eq, PartialEq, Debug)]
-pub struct BlockRequest<T: NodeType> {
+pub struct BlockBuilderOutput<T: NodeType> {
     pub view: ViewNumber,
-    pub parent_proposal: QuorumProposal2<T>,
     pub epoch: EpochNumber,
+    pub payload: T::BlockPayload,
+    pub metadata: <T::BlockPayload as BlockPayload<T>>::Metadata,
+    pub parent_proposal: QuorumProposal2<T>,
+    pub builder_commitment: BuilderCommitment,
+    pub builder_fee: BuilderFee<T>,
+    pub payload_commitment: VidCommitment,
+    pub manifest: DedupManifest<T>,
 }
 
 pub struct BlockBuilderConfig {
@@ -50,6 +72,7 @@ struct RetryEntry<T: NodeType> {
 }
 
 pub struct BlockBuilder<T: NodeType> {
+    instance: Arc<T::InstanceState>,
     retry_pending: HashMap<Commitment<T::Transaction>, RetryEntry<T>>,
     retry_total_bytes: u64,
     leader_buffer: HashMap<Commitment<T::Transaction>, T::Transaction>,
@@ -58,26 +81,102 @@ pub struct BlockBuilder<T: NodeType> {
     dedup_views: VecDeque<(ViewNumber, Vec<Commitment<T::Transaction>>)>,
     config: BlockBuilderConfig,
     current_view: ViewNumber,
-}
-
-impl<T: NodeType> Default for BlockBuilder<T> {
-    fn default() -> Self {
-        Self::new(BlockBuilderConfig::default())
-    }
+    calculations: BTreeMap<ViewNumber, AbortHandle>,
+    tasks: JoinSet<Result<BlockBuilderOutput<T>, ()>>,
 }
 
 impl<T: NodeType> BlockBuilder<T> {
-    pub fn new(config: BlockBuilderConfig) -> Self {
+    pub fn new(instance: Arc<T::InstanceState>, config: BlockBuilderConfig) -> Self {
         Self {
+            instance,
+            config,
             retry_pending: HashMap::new(),
             retry_total_bytes: 0,
             leader_buffer: HashMap::new(),
             leader_total_bytes: 0,
             dedup_set: HashSet::new(),
             dedup_views: VecDeque::new(),
-            config,
             current_view: ViewNumber::genesis(),
+            calculations: BTreeMap::new(),
+            tasks: JoinSet::new(),
         }
+    }
+
+    pub fn request_block(
+        &mut self,
+        request: BlockAndHeaderRequest<T>,
+        membership_coordinator: EpochMembershipCoordinator<T>,
+    ) {
+        let view = request.view;
+        if self.calculations.contains_key(&view) {
+            return;
+        }
+        let Ok(version) = upgrade_lock::<T>().version(view) else {
+            tracing::warn!(%view, "unsupported version for block building");
+            return;
+        };
+        let epoch = request.epoch;
+        let (txs, manifest) = self.drain(view);
+        let instance = self.instance.clone();
+        let handle = self.tasks.spawn(async move {
+            let (payload, metadata) =
+                T::BlockPayload::from_transactions(txs, &T::ValidatedState::default(), &instance)
+                    .await
+                    .map_err(|_| ())?;
+
+            let total_weight = {
+                let target_mem = membership_coordinator
+                    .stake_table_for_epoch(Some(epoch))
+                    .await
+                    .map_err(|_| ())?;
+                vid_total_weight::<T>(&target_mem.stake_table().await, Some(epoch))
+            };
+            let payload_commitment =
+                vid_commitment(&payload.encode(), &metadata.encode(), total_weight, version);
+
+            let builder_commitment = payload.builder_commitment(&metadata);
+            let (builder_key, builder_private_key) =
+                T::BuilderSignatureKey::generated_from_seed_indexed([0u8; 32], 0);
+            let builder_fee = BuilderFee {
+                fee_amount: 0,
+                fee_account: builder_key,
+                fee_signature: T::BuilderSignatureKey::sign_builder_message(
+                    &builder_private_key,
+                    builder_commitment.as_ref(),
+                )
+                .map_err(|_| ())?,
+            };
+            Ok(BlockBuilderOutput {
+                view,
+                epoch,
+                payload,
+                metadata,
+                parent_proposal: request.parent_proposal,
+                builder_commitment,
+                builder_fee,
+                payload_commitment,
+                manifest,
+            })
+        });
+        self.calculations.insert(view, handle);
+    }
+
+    pub async fn next(&mut self) -> Option<Result<BlockBuilderOutput<T>, ()>> {
+        loop {
+            match self.tasks.join_next().await {
+                Some(Ok(result)) => return Some(result),
+                Some(Err(_)) => continue,
+                None => return None,
+            }
+        }
+    }
+
+    pub fn gc(&mut self, view_number: ViewNumber) {
+        let keep = self.calculations.split_off(&view_number);
+        for handle in self.calculations.values_mut() {
+            handle.abort();
+        }
+        self.calculations = keep;
     }
 
     pub fn on_submit_transaction(&mut self, tx: T::Transaction) {
@@ -132,18 +231,10 @@ impl<T: NodeType> BlockBuilder<T> {
         }
     }
 
-    /// Returns transactions and an optional dedup manifest to broadcast.
-    pub fn drain(&mut self, view: ViewNumber) -> (Vec<T::Transaction>, Option<DedupManifest<T>>) {
+    pub fn drain(&mut self, view: ViewNumber) -> (Vec<T::Transaction>, DedupManifest<T>) {
         let (hashes, txs): (Vec<_>, Vec<_>) = self.leader_buffer.drain().unzip();
         self.leader_total_bytes = 0;
-
-        let manifest = if !txs.is_empty() {
-            Some(DedupManifest { view, hashes })
-        } else {
-            None
-        };
-
-        (txs, manifest)
+        (txs, DedupManifest { view, hashes })
     }
 
     fn handle_submit(&mut self, tx: T::Transaction) {
@@ -226,6 +317,7 @@ mod tests {
     use hotshot_example_types::{
         block_types::{TestBlockPayload, TestMetadata, TestTransaction},
         node_types::TestTypes,
+        state_types::TestInstanceState,
     };
     use hotshot_types::data::{EpochNumber, ViewNumber};
 
@@ -261,7 +353,7 @@ mod tests {
     }
 
     fn builder() -> BlockBuilder<TestTypes> {
-        BlockBuilder::new(small_config())
+        BlockBuilder::new(Arc::new(TestInstanceState::default()), small_config())
     }
 
     #[test]
@@ -302,28 +394,23 @@ mod tests {
         let (mut txns, manifest) = b.drain(view(1));
         txns.sort_by_key(|t| t.bytes().clone());
         assert_eq!(txns.len(), 2, "both transactions should be drained");
-        assert!(
-            manifest.is_some(),
-            "non-empty drain should produce a dedup manifest"
-        );
-        let m = manifest.unwrap();
-        assert_eq!(m.hashes.len(), 2, "manifest should have one hash per tx");
+        assert_eq!(manifest.hashes.len(), 2, "manifest should have one hash per tx");
 
         // buffer is cleared after drain
         let (txns2, manifest2) = b.drain(view(2));
         assert!(txns2.is_empty(), "second drain should be empty");
-        assert!(
-            manifest2.is_none(),
-            "second drain should produce no manifest"
-        );
+        assert!(manifest2.hashes.is_empty(), "second drain manifest should have no hashes");
     }
 
     #[test]
     fn test_dedup_window() {
-        let mut b: BlockBuilder<TestTypes> = BlockBuilder::new(BlockBuilderConfig {
-            dedup_window_size: 2,
-            ..small_config()
-        });
+        let mut b: BlockBuilder<TestTypes> = BlockBuilder::new(
+            Arc::new(TestInstanceState::default()),
+            BlockBuilderConfig {
+                dedup_window_size: 2,
+                ..small_config()
+            },
+        );
         let t = tx(1);
 
         b.on_dedup_manifest(DedupManifest {

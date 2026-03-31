@@ -15,6 +15,7 @@ use hotshot_types::{
 
 use super::utils::mock_membership;
 use crate::{
+    block::{BlockBuilder, BlockBuilderConfig},
     consensus::{Consensus, ConsensusInput, ConsensusOutput},
     coordinator::timer::Timer,
     drb::DrbRequester,
@@ -60,6 +61,14 @@ impl TestHarness {
 
         let vid_disperse_task = VidDisperser::new(membership.clone());
         let vid_reconstruction_task = VidReconstructor::new();
+        let config = BlockBuilderConfig {
+            max_retry_bytes: 1024,
+            max_leader_bytes: 512,
+            ttl: 5,
+            num_forward_leaders: 3,
+            dedup_window_size: 3,
+        };
+        let block_builder = BlockBuilder::new(Arc::new(TestInstanceState::default()), config);
 
         let mut state_manager = StateManager::new(Arc::new(TestInstanceState::default()));
         let genesis_state = TestValidatedState::default();
@@ -86,6 +95,7 @@ impl TestHarness {
             .vid_disperser(vid_disperse_task)
             .vid_reconstructor(vid_reconstruction_task)
             .drb_requester(drb_request_task)
+            .block_builder(block_builder)
             .proposal_validator(proposal_validator)
             .membership_coordinator(membership)
             .outbox(Outbox::new())
