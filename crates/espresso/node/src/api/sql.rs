@@ -804,7 +804,7 @@ impl super::data_source::DatabaseMetadataSource for SqlStorage {
             let mut table_sizes = Vec::new();
             for row in rows {
                 let table_name: String = row.try_get("table_name")?;
-                let row_count: i64 = row.try_get("row_count").unwrap_or(0);
+                let row_count: i64 = row.try_get("row_count").unwrap_or(-1);
                 let total_size_bytes: Option<i64> = row.try_get("total_size_bytes").ok();
 
                 table_sizes.push(super::data_source::TableSize {
