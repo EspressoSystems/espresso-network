@@ -23,8 +23,8 @@ hotshot-example-types = { workspace = true }
 hotshot-state-prover = { workspace = true }
 hotshot-types = { workspace = true }
 rand = { workspace = true }
-sequencer = { workspace = true, default-features = false }
-sequencer-utils = { workspace = true }
+espresso-node = { workspace = true, default-features = false }
+espresso-utils = { workspace = true }
 surf-disco = { workspace = true }
 test-utils = { workspace = true }
 tide-disco = { workspace = true }
@@ -37,7 +37,7 @@ versions = { workspace = true }
 
 [dev-dependencies]
 jf-signature = { workspace = true }
-sequencer = { workspace = true, default-features = false, features = ["testing"] }
+espresso-node = { workspace = true, default-features = false, features = ["testing"] }
 tempfile = { workspace = true }
 test-log = { workspace = true }
 

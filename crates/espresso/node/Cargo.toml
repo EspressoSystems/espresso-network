@@ -1,0 +1,136 @@
+[package]
+name = "espresso-node"
+version = "0.1.0"
+authors = ["Espresso Systems <hello@espressosys.com>"]
+edition.workspace = true
+
+[lib]
+name = "espresso_node"
+path = "src/lib.rs"
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["hotshot-testing"]
+
+[package.metadata.cargo-machete]
+ignored = ["vergen", "vergen-gitcl", "include_dir", "hotshot_builder_api"]
+
+[features]
+testing = [
+    "hotshot-testing",
+    "espresso-types/testing",
+    "light-client/testing",
+    "espresso-utils/testing",
+    "hotshot-query-service/testing",
+]
+benchmarking = []
+embedded-db = ["hotshot-query-service/embedded-db", "sqlx/sqlite"]
+
+[dependencies]
+alloy = { workspace = true }
+anyhow = { workspace = true }
+ark-ff = { workspace = true }
+ark-serialize = { workspace = true }
+async-channel = { workspace = true }
+async-lock = { workspace = true }
+async-once-cell = { workspace = true }
+async-trait = { workspace = true }
+bincode = { workspace = true }
+blake3 = { workspace = true }
+byteorder = { workspace = true }
+cdn-broker = { workspace = true }
+cdn-marshal = { workspace = true }
+clap = { workspace = true }
+client = { workspace = true }
+committable = { workspace = true }
+csv = { workspace = true }
+derivative = { workspace = true }
+derive_more = { workspace = true }
+dotenvy = { workspace = true }
+either = { workspace = true }
+espresso-contract-deployer = { workspace = true }
+espresso-types = { workspace = true }
+futures = { workspace = true }
+generic-tests = { workspace = true }
+hotshot = { workspace = true }
+hotshot-builder-refactored = { workspace = true }
+hotshot-contract-adapter = { workspace = true }
+hotshot-events-service = { workspace = true }
+hotshot-libp2p-networking = { workspace = true }
+hotshot-orchestrator = { workspace = true }
+hotshot-query-service = { workspace = true }
+hotshot-state-prover = { workspace = true }
+hotshot-task-impls = { workspace = true }
+hotshot-testing = { workspace = true, optional = true }
+hotshot-types = { workspace = true }
+include_dir = { workspace = true }
+indexmap = { workspace = true }
+itertools = { workspace = true }
+jf-advz = { workspace = true }
+jf-crhf = { workspace = true }
+jf-merkle-tree-compat = { workspace = true }
+jf-rescue = { workspace = true }
+jf-signature = { workspace = true }
+libp2p = { workspace = true }
+light-client = { workspace = true }
+moka = { workspace = true }
+num_enum = { workspace = true }
+parking_lot = { workspace = true }
+priority-queue = { workspace = true }
+rand = { workspace = true }
+rand_chacha = { workspace = true }
+rand_distr = { workspace = true }
+request-response = { workspace = true }
+reqwest = { workspace = true }
+rstest = { workspace = true }
+rstest_reuse = { workspace = true }
+semver = { workspace = true }
+espresso-utils = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+snafu = { workspace = true }
+sqlx = { workspace = true }
+staking-cli = { workspace = true }
+static_assertions = { workspace = true }
+strum = { workspace = true }
+surf-disco = { workspace = true }
+tagged-base64 = { workspace = true }
+tempfile = { workspace = true }
+test-utils = { workspace = true }
+thiserror = { workspace = true }
+tide-disco = { workspace = true }
+time = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+toml = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+url = { workspace = true }
+vbs = { workspace = true }
+vec1 = { workspace = true }
+versions = { workspace = true }
+vid = { workspace = true }
+
+[build-dependencies]
+anyhow = { workspace = true }
+vergen = { workspace = true }
+vergen-gitcl = { workspace = true }
+
+[dev-dependencies]
+escargot = { workspace = true }
+espresso-macros = { workspace = true }
+hotshot-example-types = { workspace = true }
+hotshot-query-service = { workspace = true }
+hotshot-testing = { workspace = true }
+pretty_assertions = { workspace = true }
+rand = { workspace = true }
+reqwest = { workspace = true }
+test-log = { workspace = true }
+
+# Enable "testing" feature when running tests
+light-client = { workspace = true, features = ["testing"] }
+espresso-node = { path = ".", features = ["testing"] }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

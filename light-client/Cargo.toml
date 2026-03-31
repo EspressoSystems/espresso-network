@@ -41,7 +41,7 @@ rand = { workspace = true, optional = true }
 [dev-dependencies]
 light-client = { path = ".", features = ["testing"] }
 pretty_assertions = { workspace = true }
-sequencer = { workspace = true, default-features = false, features = ["testing"] }
+espresso-node = { workspace = true, default-features = false, features = ["testing"] }
 test-log = { workspace = true }
 test-utils = { workspace = true }
 

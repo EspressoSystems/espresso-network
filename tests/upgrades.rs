@@ -1,10 +1,10 @@
 use std::time::Duration;
 
 use anyhow::Result;
+use espresso_node::Genesis;
 use espresso_types::UpgradeMode;
 use futures::{StreamExt, future::join_all};
 use hotshot_types::utils::epoch_from_block_number;
-use sequencer::Genesis;
 use versions::{
     DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, EPOCH_VERSION, FEE_VERSION, Upgrade,
 };

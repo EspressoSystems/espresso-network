@@ -5,7 +5,7 @@ default:
 
 doc *args:
     cargo doc --no-deps --document-private-items {{args}}
-    echo "file://${CARGO_TARGET_DIR:-$PWD/target}/doc/sequencer/index.html"
+    echo "file://${CARGO_TARGET_DIR:-$PWD/target}/doc/espresso_node/index.html"
 
 doc-contracts:
     #!/usr/bin/env bash
@@ -31,9 +31,9 @@ doc-all-serve: doc doc-contracts
     mkdir -p ./public/contracts
     cp -r "${CARGO_TARGET_DIR:-target}"/doc/* ./public/
     cp -r docs/book/* ./public/contracts/
-    echo '<meta http-equiv="refresh" content="0; url=sequencer">' > ./public/index.html
+    echo '<meta http-equiv="refresh" content="0; url=espresso_node">' > ./public/index.html
     echo "Serving at http://localhost:8000"
-    echo "  Rust docs: http://localhost:8000/sequencer"
+    echo "  Rust docs: http://localhost:8000/espresso_node"
     echo "  Contract docs: http://localhost:8000/contracts"
     python3 -m http.server 8000 --directory ./public
 
@@ -69,20 +69,20 @@ lint *args:
 clippy *args:
     # check all targets in default workspace members
     cargo clippy --features testing --all-targets {{args}}
-    # check entire workspace (including sequencer-sqlite crate) with embedded-db feature
+    # check entire workspace (including espresso-node-sqlite crate) with embedded-db feature
     cargo clippy --workspace --features "embedded-db testing" --all-targets {{args}}
 
 check *args:
     # postgres
     cargo check {{args}}
     # embedded-db
-    cargo check -p sequencer-sqlite -p espresso-dev-node {{args}}
+    cargo check -p espresso-node-sqlite -p espresso-dev-node {{args}}
 
 build profile="dev" features="":
     # postgres
     cargo build --profile {{profile}} {{features}}
     # embedded-db
-    cargo build --profile {{profile}} -p sequencer-sqlite -p espresso-dev-node {{features}}
+    cargo build --profile {{profile}} -p espresso-node-sqlite -p espresso-dev-node {{features}}
 
 demo-native-fee *args: (build "test" "--no-default-features")
     ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo.toml scripts/demo-native -f process-compose.yaml {{args}}
@@ -118,12 +118,6 @@ demo-native-benchmark:
 down *args:
     docker compose down {{args}}
 
-docker-cli *cmd:
-    docker exec -it espresso-sequencer-example-rollup-1 bin/cli {{cmd}}
-
-cli *cmd:
-    target/release/cli {{cmd}}
-
 pull:
     docker compose pull
 
@@ -135,10 +129,10 @@ anvil *args:
 
 # hotshot-testing: tested in hotshot.yml
 # hotshot-new-protocol: tested in hotshot.yml
-# sequencer-sqlite: no tests, enables embedded-db feature
+# espresso-node-sqlite: no tests, enables embedded-db feature
 # slow-tests: slow and serial tests
 # espresso-dev-node: enables embedded-db
-nextest_excludes := "--exclude sequencer-sqlite --exclude hotshot-testing --exclude hotshot-new-protocol --exclude slow-tests --exclude espresso-dev-node"
+nextest_excludes := "--exclude espresso-node-sqlite --exclude hotshot-testing --exclude hotshot-new-protocol --exclude slow-tests --exclude espresso-dev-node"
 
 nextest *args:
     cargo nextest run --locked --workspace {{nextest_excludes}} --verbose {{args}}
@@ -168,7 +162,7 @@ test-all:
     just nextest --features embedded-db --profile all
     just nextest --profile all
 
-test-integration: (build "test" "--features fee")
+test-integration: (build "test")
 	INTEGRATION_TEST_SEQUENCER_VERSION=2 cargo nextest run -p tests --nocapture --profile integration test_native_demo_basic
 
 # Run process-compose integration tests with minimal features
@@ -203,7 +197,7 @@ test-demo test_name:
 			;;
 		da-committees)
 			features="--no-default-features"
-			test="test_native_demo_drb_header_base"
+			test="test_native_demo_da_committee"
 			;;
 		epoch-reward-base)
 			features="--no-default-features"
@@ -258,8 +252,8 @@ dev-cdn *args:
 dev-state-relay-server:
     target/release/state-relay-server -p 8083
 
-dev-sequencer:
-    target/release/sequencer \
+dev-espresso-node:
+    target/release/espresso-node \
     --orchestrator-url http://localhost:8080 \
     --cdn-endpoint "127.0.0.1:1738" \
     --state-relay-server-url http://localhost:8083 \
