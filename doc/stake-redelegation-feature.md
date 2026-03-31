@@ -112,20 +112,20 @@ version bump required.
 
 **`types/src/v0/impls/stake_table.rs`**
 
-- Rust bindings must be regenerated with the V3 ABI (`just gen-bindings`) so that `StakeTableV2Events` (or a new
-  `StakeTableV3Events`) includes the `Redelegated` variant. Without this, `decode_raw_log` silently drops the event.
+- Rust bindings must be regenerated with the V3 ABI (`just gen-bindings`). This produces a new `StakeTableV3Events` enum
+  containing the `Redelegated` variant. Without this, `decode_raw_log` silently drops the event.
 
-- `TryFrom` impl (~line 129): map `Redelegated` filter log to
+- Add `TryFrom<StakeTableV3Events>` impl (or extend the existing V2 impl): map `Redelegated` filter log to
   `StakeTableEvent::Redelegate { delegator, from_validator, to_validator, amount }`
 
-- `apply_event` (~line 299): handle `Redelegate` as an atomic move:
+- `apply_event`: handle `Redelegate` as an atomic move:
   - Subtract `amount` from source validator's delegated stake and delegator's delegation
   - Add `amount` to destination validator's delegated stake and delegator's delegation
-  - Pattern matches existing `Delegate` (line 418) and `Undelegate` (line 459) handlers
+  - Pattern matches existing `Delegate` and `Undelegate` handlers
 
-- Event filter (~line 1089): add `Redelegated::SIGNATURE` to the filter topic list
+- Event filter: add `Redelegated::SIGNATURE` to the filter topic list
 
-- `Debug` impl (~line 756): add debug arm for `Redelegate`
+- `Debug` impl: add debug arm for `Redelegate`
 
 ## 4. Staking CLI Changes
 
