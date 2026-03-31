@@ -783,10 +783,6 @@ impl<T: NodeType> Consensus<T> {
         };
         let proposal_epoch = proposal.epoch;
 
-        if !self.staked_in_epoch(proposal_epoch).await {
-            return;
-        }
-
         let proposal_commit = proposal_commitment(proposal);
 
         // The certificate must match the proposal
@@ -814,6 +810,10 @@ impl<T: NodeType> Consensus<T> {
             .is_none_or(|locked_cert| locked_cert.view_number() < cert1.view_number())
         {
             self.locked_cert = Some(cert1.clone());
+        }
+
+        if !self.staked_in_epoch(proposal_epoch).await {
+            return;
         }
 
         let vote = match SimpleVote::create_signed_vote(
