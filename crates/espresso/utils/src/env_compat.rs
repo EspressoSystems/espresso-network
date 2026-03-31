@@ -664,27 +664,6 @@ pub fn migrate_legacy_env_vars() {
             "ESPRESSO_STATE_PROVER_ACCOUNT_INDEX",
             "ESPRESSO_SEQUENCER_STATE_PROVER_ACCOUNT_INDEX",
         ),
-        // ── node-metrics/src/lib.rs ──
-        // Initial public API URLs for all nodes
-        (
-            "ESPRESSO_VALIDATOR_INITIAL_NODE_PUBLIC_BASE_URLS",
-            "ESPRESSO_SEQUENCER_VALIDATOR_INITIAL_NODE_PUBLIC_BASE_URLS",
-        ),
-        // Base URL for leaf stream availability API
-        (
-            "ESPRESSO_VALIDATOR_LEAF_STREAM_SOURCE_BASE_URL",
-            "ESPRESSO_SEQUENCER_VALIDATOR_LEAF_STREAM_SOURCE_BASE_URL",
-        ),
-        // Port for the node validator service
-        (
-            "ESPRESSO_VALIDATOR_PORT",
-            "ESPRESSO_SEQUENCER_VALIDATOR_PORT",
-        ),
-        // Base URL for stake table config API
-        (
-            "ESPRESSO_VALIDATOR_STAKE_TABLE_SOURCE_BASE_URL",
-            "ESPRESSO_SEQUENCER_VALIDATOR_STAKE_TABLE_SOURCE_BASE_URL",
-        ),
         // ── staking-cli/src/lib.rs ──
         // Stake table proxy contract address
         (

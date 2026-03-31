@@ -89,7 +89,7 @@ pub(crate) struct Config {
     /// [DEPRECATED] Deployed ESP token contract address.
     ///
     /// [DEPRECATED] This is fetched from the stake table contract now.
-    #[clap(long, env = "ESPRESSO_ESP_TOKEN_CONTRACT_ADDRESS")]
+    #[clap(long, env = "ESP_TOKEN_CONTRACT_ADDRESS")]
     pub token_address: Option<Address>,
 
     /// Deployed stake table contract address.

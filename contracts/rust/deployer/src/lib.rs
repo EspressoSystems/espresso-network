@@ -223,11 +223,11 @@ pub enum Contract {
     FeeContract,
     #[display("ESPRESSO_FEE_CONTRACT_PROXY_ADDRESS")]
     FeeContractProxy,
-    #[display("ESPRESSO_ESP_TOKEN_ADDRESS")]
+    #[display("ESP_TOKEN_ADDRESS")]
     EspToken,
-    #[display("ESPRESSO_ESP_TOKEN_V2_ADDRESS")]
+    #[display("ESP_TOKEN_V2_ADDRESS")]
     EspTokenV2,
-    #[display("ESPRESSO_ESP_TOKEN_PROXY_ADDRESS")]
+    #[display("ESP_TOKEN_PROXY_ADDRESS")]
     EspTokenProxy,
     #[display("ESPRESSO_STAKE_TABLE_ADDRESS")]
     StakeTable,

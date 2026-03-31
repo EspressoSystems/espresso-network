@@ -28,7 +28,7 @@ while [[ $# -gt 0 ]]; do
             echo ""
             echo "    ESPRESSO_OPS_TIMELOCK_ADDRESS"
             echo "    ESPRESSO_SAFE_EXIT_TIMELOCK_ADDRESS"
-            echo "    ESPRESSO_ESP_TOKEN_PROXY_ADDRESS"
+            echo "    ESP_TOKEN_PROXY_ADDRESS"
             echo "    ESPRESSO_FEE_CONTRACT_PROXY_ADDRESS"
             echo "    ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS"
             echo "    ESPRESSO_STAKE_TABLE_PROXY_ADDRESS"
@@ -42,7 +42,7 @@ while [[ $# -gt 0 ]]; do
             echo "    ESPRESSO_OPS_TIMELOCK_DELAY"
             echo "    ESPRESSO_SAFE_EXIT_TIMELOCK_DELAY"
             echo "    ESPRESSO_ETH_MULTISIG_PAUSER_ADDRESS"
-            echo "    ESPRESSO_ESP_TOKEN_INITIAL_SUPPLY"
+            echo "    ESP_TOKEN_INITIAL_SUPPLY"
             echo "    ESPRESSO_LIGHT_CLIENT_BLOCKS_PER_EPOCH"
             echo "    ESPRESSO_LIGHT_CLIENT_EPOCH_START_BLOCK"
             echo "    RPC_URL"
@@ -143,9 +143,9 @@ fi
 echo ""
 
 # Check contract ownership
-[ -n "${ESPRESSO_ESP_TOKEN_PROXY_ADDRESS:-}" ] && [ -n "${ESPRESSO_SAFE_EXIT_TIMELOCK_ADDRESS:-}" ] && {
-    check_owner "$ESPRESSO_ESP_TOKEN_PROXY_ADDRESS" "$ESPRESSO_SAFE_EXIT_TIMELOCK_ADDRESS" "EspToken owned by SafeExit Timelock: $ESPRESSO_SAFE_EXIT_TIMELOCK_ADDRESS"
-} || echo -e "${YELLOW}⚠${NC} ESPRESSO_ESP_TOKEN_PROXY_ADDRESS not set, skipping EspToken ownership check"
+[ -n "${ESP_TOKEN_PROXY_ADDRESS:-}" ] && [ -n "${ESPRESSO_SAFE_EXIT_TIMELOCK_ADDRESS:-}" ] && {
+    check_owner "$ESP_TOKEN_PROXY_ADDRESS" "$ESPRESSO_SAFE_EXIT_TIMELOCK_ADDRESS" "EspToken owned by SafeExit Timelock: $ESPRESSO_SAFE_EXIT_TIMELOCK_ADDRESS"
+} || echo -e "${YELLOW}⚠${NC} ESP_TOKEN_PROXY_ADDRESS not set, skipping EspToken ownership check"
 
 [ -n "${ESPRESSO_FEE_CONTRACT_PROXY_ADDRESS:-}" ] && [ -n "${ESPRESSO_OPS_TIMELOCK_ADDRESS:-}" ] && {
     check_owner "$ESPRESSO_FEE_CONTRACT_PROXY_ADDRESS" "$ESPRESSO_OPS_TIMELOCK_ADDRESS" "FeeContract owned by Ops Timelock: $ESPRESSO_OPS_TIMELOCK_ADDRESS"
@@ -184,32 +184,32 @@ echo ""
 
 # Check contract versions
 [ -n "${ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS:-}" ] && check_version "$ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS" 3 "LightClient" || echo -e "${YELLOW}⚠${NC} ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS not set, skipping version check"
-[ -n "${ESPRESSO_ESP_TOKEN_PROXY_ADDRESS:-}" ] && check_version "$ESPRESSO_ESP_TOKEN_PROXY_ADDRESS" 2 "EspToken" || echo -e "${YELLOW}⚠${NC} ESPRESSO_ESP_TOKEN_PROXY_ADDRESS not set, skipping version check"
+[ -n "${ESP_TOKEN_PROXY_ADDRESS:-}" ] && check_version "$ESP_TOKEN_PROXY_ADDRESS" 2 "EspToken" || echo -e "${YELLOW}⚠${NC} ESP_TOKEN_PROXY_ADDRESS not set, skipping version check"
 [ -n "${ESPRESSO_STAKE_TABLE_PROXY_ADDRESS:-}" ] && check_version "$ESPRESSO_STAKE_TABLE_PROXY_ADDRESS" 2 "StakeTable" || echo -e "${YELLOW}⚠${NC} ESPRESSO_STAKE_TABLE_PROXY_ADDRESS not set, skipping version check"
 [ -n "${ESPRESSO_REWARD_CLAIM_PROXY_ADDRESS:-}" ] && check_version "$ESPRESSO_REWARD_CLAIM_PROXY_ADDRESS" 1 "RewardClaim" || echo -e "${YELLOW}⚠${NC} ESPRESSO_REWARD_CLAIM_PROXY_ADDRESS not set, skipping version check"
 [ -n "${ESPRESSO_FEE_CONTRACT_PROXY_ADDRESS:-}" ] && check_version "$ESPRESSO_FEE_CONTRACT_PROXY_ADDRESS" 1 "FeeContract" || echo -e "${YELLOW}⚠${NC} ESPRESSO_FEE_CONTRACT_PROXY_ADDRESS not set, skipping version check"
 
 # Check EspToken <-> RewardClaim link
-[ -n "${ESPRESSO_ESP_TOKEN_PROXY_ADDRESS:-}" ] && [ -n "${ESPRESSO_REWARD_CLAIM_PROXY_ADDRESS:-}" ] && {
-    ESP_REWARD_CLAIM=$(cast call "$ESPRESSO_ESP_TOKEN_PROXY_ADDRESS" "rewardClaim()(address)" --rpc-url "$RPC_URL" 2>/dev/null)
+[ -n "${ESP_TOKEN_PROXY_ADDRESS:-}" ] && [ -n "${ESPRESSO_REWARD_CLAIM_PROXY_ADDRESS:-}" ] && {
+    ESP_REWARD_CLAIM=$(cast call "$ESP_TOKEN_PROXY_ADDRESS" "rewardClaim()(address)" --rpc-url "$RPC_URL" 2>/dev/null)
     ESP_REWARD_CLAIM_LOWER=$(echo "$ESP_REWARD_CLAIM" | tr '[:upper:]' '[:lower:]')
     ESP_RC_ADDR_LOWER=$(echo "$ESPRESSO_REWARD_CLAIM_PROXY_ADDRESS" | tr '[:upper:]' '[:lower:]')
     [ "$ESP_REWARD_CLAIM_LOWER" = "$ESP_RC_ADDR_LOWER" ] && echo -e "${GREEN}✓${NC} EspToken reward claim: $ESP_REWARD_CLAIM" || echo -e "${RED}✗${NC} EspToken reward claim: $ESP_REWARD_CLAIM (expected $ESPRESSO_REWARD_CLAIM_PROXY_ADDRESS)"
     
     RC_ESP_TOKEN=$(cast call "$ESPRESSO_REWARD_CLAIM_PROXY_ADDRESS" "espToken()(address)" --rpc-url "$RPC_URL" 2>/dev/null)
     RC_ESP_TOKEN_LOWER=$(echo "$RC_ESP_TOKEN" | tr '[:upper:]' '[:lower:]')
-    ESP_TOKEN_ADDR_LOWER=$(echo "$ESPRESSO_ESP_TOKEN_PROXY_ADDRESS" | tr '[:upper:]' '[:lower:]')
-    [ "$RC_ESP_TOKEN_LOWER" = "$ESP_TOKEN_ADDR_LOWER" ] && echo -e "${GREEN}✓${NC} RewardClaim espToken: $RC_ESP_TOKEN" || echo -e "${RED}✗${NC} RewardClaim espToken: $RC_ESP_TOKEN (expected $ESPRESSO_ESP_TOKEN_PROXY_ADDRESS)"
+    ESP_TOKEN_ADDR_LOWER=$(echo "$ESP_TOKEN_PROXY_ADDRESS" | tr '[:upper:]' '[:lower:]')
+    [ "$RC_ESP_TOKEN_LOWER" = "$ESP_TOKEN_ADDR_LOWER" ] && echo -e "${GREEN}✓${NC} RewardClaim espToken: $RC_ESP_TOKEN" || echo -e "${RED}✗${NC} RewardClaim espToken: $RC_ESP_TOKEN (expected $ESP_TOKEN_PROXY_ADDRESS)"
 }
 
 # Check token supply
-if [ -n "${ESPRESSO_ESP_TOKEN_PROXY_ADDRESS:-}" ]; then
-    if [ -n "${ESPRESSO_ESP_TOKEN_INITIAL_SUPPLY:-}" ]; then
-        ESP_TOKEN_SUPPLY=$(cast call "$ESPRESSO_ESP_TOKEN_PROXY_ADDRESS" "totalSupply()(uint256)" --rpc-url "$RPC_URL" 2>/dev/null | awk '{print $1}')
-        ESP_INITIAL_SUPPLY_IN_WEI=$(echo "$ESPRESSO_ESP_TOKEN_INITIAL_SUPPLY * 10^18" | bc)
+if [ -n "${ESP_TOKEN_PROXY_ADDRESS:-}" ]; then
+    if [ -n "${ESP_TOKEN_INITIAL_SUPPLY:-}" ]; then
+        ESP_TOKEN_SUPPLY=$(cast call "$ESP_TOKEN_PROXY_ADDRESS" "totalSupply()(uint256)" --rpc-url "$RPC_URL" 2>/dev/null | awk '{print $1}')
+        ESP_INITIAL_SUPPLY_IN_WEI=$(echo "$ESP_TOKEN_INITIAL_SUPPLY * 10^18" | bc)
         [ $(echo "$ESP_TOKEN_SUPPLY == $ESP_INITIAL_SUPPLY_IN_WEI" | bc) -eq 1 ] && echo -e "${GREEN}✓${NC} EspToken supply: $ESP_TOKEN_SUPPLY" || echo -e "${RED}✗${NC} EspToken supply: $ESP_TOKEN_SUPPLY (expected $ESP_INITIAL_SUPPLY_IN_WEI)"
     else
-        echo -e "${YELLOW}⚠${NC} ESPRESSO_ESP_TOKEN_INITIAL_SUPPLY not set, skipping supply check"
+        echo -e "${YELLOW}⚠${NC} ESP_TOKEN_INITIAL_SUPPLY not set, skipping supply check"
     fi
 fi
 # Check LightClient config
@@ -232,8 +232,8 @@ fi
 [ -n "${ESPRESSO_STAKE_TABLE_PROXY_ADDRESS:-}" ] && {
     ST_TOKEN=$(cast call "$ESPRESSO_STAKE_TABLE_PROXY_ADDRESS" "token()(address)" --rpc-url "$RPC_URL")
     ST_TOKEN_LOWER=$(echo "$ST_TOKEN" | tr '[:upper:]' '[:lower:]')
-    ESP_TOKEN_ADDR_LOWER=$(echo "$ESPRESSO_ESP_TOKEN_PROXY_ADDRESS" | tr '[:upper:]' '[:lower:]')
-    [ "$ST_TOKEN_LOWER" = "$ESP_TOKEN_ADDR_LOWER" ] && echo -e "${GREEN}✓${NC} StakeTable token: $ST_TOKEN" || echo -e "${RED}✗${NC} StakeTable token: $ST_TOKEN (expected $ESPRESSO_ESP_TOKEN_PROXY_ADDRESS)"
+    ESP_TOKEN_ADDR_LOWER=$(echo "$ESP_TOKEN_PROXY_ADDRESS" | tr '[:upper:]' '[:lower:]')
+    [ "$ST_TOKEN_LOWER" = "$ESP_TOKEN_ADDR_LOWER" ] && echo -e "${GREEN}✓${NC} StakeTable token: $ST_TOKEN" || echo -e "${RED}✗${NC} StakeTable token: $ST_TOKEN (expected $ESP_TOKEN_PROXY_ADDRESS)"
     
     ST_LIGHT_CLIENT=$(cast call "$ESPRESSO_STAKE_TABLE_PROXY_ADDRESS" "lightClient()(address)" --rpc-url "$RPC_URL")
     ST_LIGHT_CLIENT_LOWER=$(echo "$ST_LIGHT_CLIENT" | tr '[:upper:]' '[:lower:]')

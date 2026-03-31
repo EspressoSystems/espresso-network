@@ -200,7 +200,7 @@ export RPC_URL=http://localhost:8545
 set -a
 source .env
 set +a
-unset ESPRESSO_ESP_TOKEN_PROXY_ADDRESS
+unset ESP_TOKEN_PROXY_ADDRESS
 unset ESPRESSO_ETH_MULTISIG_ADDRESS
 RUST_LOG=info cargo run --bin deploy -- --deploy-esp-token-v1 --rpc-url=$RPC_URL
 ```
@@ -213,7 +213,7 @@ RUST_LOG=info cargo run --bin deploy -- --deploy-esp-token-v1 --rpc-url=$RPC_URL
 set -a
 source .env
 set +a
-unset ESPRESSO_ESP_TOKEN_PROXY_ADDRESS
+unset ESP_TOKEN_PROXY_ADDRESS
 RUST_LOG=info cargo run --bin deploy -- --deploy-esp-token-v1 --rpc-url=$RPC_URL
 ```
 
@@ -229,7 +229,7 @@ The code sets the OpsTimelock as the owner of the FeeContract
 set -a
 source .env
 set +a
-unset ESPRESSO_ESP_TOKEN_PROXY_ADDRESS
+unset ESP_TOKEN_PROXY_ADDRESS
 RUST_LOG=info cargo run --bin deploy -- --deploy-safe-exit-timelock --deploy-esp-token-v1 --use-timelock-owner --rpc-url=$RPC_URL
 ```
 
@@ -680,7 +680,7 @@ export ESPRESSO_ETH_MULTISIG_ADDRESS="<0x...multisig-address>"
 set -a
 source .env
 set +a
-unset ESPRESSO_ESP_TOKEN_PROXY_ADDRESS
+unset ESP_TOKEN_PROXY_ADDRESS
 # If doing a real run then, export ESPRESSO_ETH_MULTISIG_ADDRESS=YOUR_MULTISIG_ADDRESS
 RUST_LOG=info cargo run --bin deploy -- \
   --deploy-esp-token-v1 \
@@ -714,10 +714,10 @@ address and version number.
 
 ```bash
 # Check the implementation address
-cast storage $ESPRESSO_ESP_TOKEN_PROXY_ADDRESS 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc --rpc-url http://127.0.0.1:8545
+cast storage $ESP_TOKEN_PROXY_ADDRESS 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc --rpc-url http://127.0.0.1:8545
 
 # Check V2 specific functions (if available)
-cast call $ESPRESSO_ESP_TOKEN_PROXY_ADDRESS "version()(string)" --rpc-url http://127.0.0.1:8545
+cast call $ESP_TOKEN_PROXY_ADDRESS "version()(string)" --rpc-url http://127.0.0.1:8545
 ```
 
 ## Upgrade Verification Checklist
@@ -1198,12 +1198,12 @@ touch $OUTPUT_FILE
 export ESPRESSO_SAFE_EXIT_TIMELOCK_ADDRESS=0xSAFE_EXIT_TIMELOCK_ADDRESS
 
 # Set the initial token supply (optional, will use default if not set)
-export ESPRESSO_ESP_TOKEN_INITIAL_SUPPLY=3590000000000000000000000000 # 3.59 billion tokens with 18 decimals
+export ESP_TOKEN_INITIAL_SUPPLY=3590000000000000000000000000 # 3.59 billion tokens with 18 decimals
 
 # Set the token name and symbol (optional, will use defaults if not set)
-export ESPRESSO_ESP_TOKEN_NAME="Espresso Token"
-export ESPRESSO_ESP_TOKEN_SYMBOL="ESP"
-export ESPRESSO_ESP_TOKEN_INITIAL_GRANT_RECIPIENT_ADDRESS=0xRecipientAddress
+export ESP_TOKEN_NAME="Espresso Token"
+export ESP_TOKEN_SYMBOL="ESP"
+export ESP_TOKEN_INITIAL_GRANT_RECIPIENT_ADDRESS=0xRecipientAddress
 ```
 
 4. Run the docker-compose command to deploy EspTokenProxy with SafeExitTimelock as admin
@@ -1213,10 +1213,10 @@ docker compose run --rm \
   -e RPC_URL \
   -e ESPRESSO_ETH_MNEMONIC \
   -e ESPRESSO_SAFE_EXIT_TIMELOCK_ADDRESS \
-  -e ESPRESSO_ESP_TOKEN_INITIAL_SUPPLY \
-  -e ESPRESSO_ESP_TOKEN_NAME \
-  -e ESPRESSO_ESP_TOKEN_SYMBOL \
-  -e ESPRESSO_ESP_TOKEN_INITIAL_GRANT_RECIPIENT_ADDRESS \
+  -e ESP_TOKEN_INITIAL_SUPPLY \
+  -e ESP_TOKEN_NAME \
+  -e ESP_TOKEN_SYMBOL \
+  -e ESP_TOKEN_INITIAL_GRANT_RECIPIENT_ADDRESS \
   -v $(pwd)/$OUTPUT_FILE:/app/$OUTPUT_FILE \
   \
   deploy-espresso-contracts \
@@ -1240,8 +1240,8 @@ cat $OUTPUT_FILE
 Example output file ($OUTPUT_FILE) contents after a successful EspToken deployment:
 
 ```text
-ESPRESSO_ESP_TOKEN_PROXY_ADDRESS=0x1234567890123456789012345678901234567890
-ESPRESSO_ESP_TOKEN_ADDRESS=0x0987654321098765432109876543210987654321
+ESP_TOKEN_PROXY_ADDRESS=0x1234567890123456789012345678901234567890
+ESP_TOKEN_ADDRESS=0x0987654321098765432109876543210987654321
 ESPRESSO_SAFE_EXIT_TIMELOCK_ADDRESS=0x5555555555555555555555555555555555555555
 ```
 
@@ -1256,23 +1256,23 @@ You should see output similar to: `EspTokenProxy deployed successfully` `Ownersh
 source $OUTPUT_FILE
 
 # Check the owner/admin of the EspToken proxy (should be SafeExitTimelock)
-cast call $ESPRESSO_ESP_TOKEN_PROXY_ADDRESS "owner()(address)" --rpc-url $RPC_URL
+cast call $ESP_TOKEN_PROXY_ADDRESS "owner()(address)" --rpc-url $RPC_URL
 
 # Verify the SafeExitTimelock is the owner
-cast call $ESPRESSO_ESP_TOKEN_PROXY_ADDRESS "owner()(address)" --rpc-url $RPC_URL | grep -i $ESPRESSO_SAFE_EXIT_TIMELOCK_ADDRESS
+cast call $ESP_TOKEN_PROXY_ADDRESS "owner()(address)" --rpc-url $RPC_URL | grep -i $ESPRESSO_SAFE_EXIT_TIMELOCK_ADDRESS
 
 # Check the implementation address (should point to EspTokenV1)
-cast storage $ESPRESSO_ESP_TOKEN_PROXY_ADDRESS 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc --rpc-url $RPC_URL
+cast storage $ESP_TOKEN_PROXY_ADDRESS 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc --rpc-url $RPC_URL
 
 # Check the token name and symbol
-cast call $ESPRESSO_ESP_TOKEN_PROXY_ADDRESS "name()(string)" --rpc-url $RPC_URL
-cast call $ESPRESSO_ESP_TOKEN_PROXY_ADDRESS "symbol()(string)" --rpc-url $RPC_URL
+cast call $ESP_TOKEN_PROXY_ADDRESS "name()(string)" --rpc-url $RPC_URL
+cast call $ESP_TOKEN_PROXY_ADDRESS "symbol()(string)" --rpc-url $RPC_URL
 
 # Check the total supply
-cast call $ESPRESSO_ESP_TOKEN_PROXY_ADDRESS "totalSupply()(uint256)" --rpc-url $RPC_URL
+cast call $ESP_TOKEN_PROXY_ADDRESS "totalSupply()(uint256)" --rpc-url $RPC_URL
 
 # Check the decimals
-cast call $ESPRESSO_ESP_TOKEN_PROXY_ADDRESS "decimals()(uint8)" --rpc-url $RPC_URL
+cast call $ESP_TOKEN_PROXY_ADDRESS "decimals()(uint8)" --rpc-url $RPC_URL
 ```
 
 ### Step 6: Deploy StakeTableProxy & immediately Upgrade to StakeTableV2, setting the EspressoSys Multisig as the pauser
@@ -1302,7 +1302,7 @@ export ESPRESSO_ETH_MULTISIG_ADDRESS=0xESPRESSOSYS_MULTISIG_ADDRESS
 export ESPRESSO_ETH_MULTISIG_PAUSER_ADDRESS=0xESPRESSOSYS_MULTISIG_ADDRESS
 
 # Set the EspToken address (required for StakeTableV2)
-export ESPRESSO_ESP_TOKEN_PROXY_ADDRESS=0xESP_TOKEN_PROXY_ADDRESS
+export ESP_TOKEN_PROXY_ADDRESS=0xESP_TOKEN_PROXY_ADDRESS
 
 # Set the LightClient proxy address (required for StakeTable initialization)
 export ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS=0xLIGHT_CLIENT_PROXY_ADDRESS
@@ -1322,7 +1322,7 @@ docker compose run --rm \
   -e ESPRESSO_ETH_MNEMONIC \
   -e ESPRESSO_ETH_MULTISIG_ADDRESS \
   -e ESPRESSO_ETH_MULTISIG_PAUSER_ADDRESS \
-  -e ESPRESSO_ESP_TOKEN_PROXY_ADDRESS \
+  -e ESP_TOKEN_PROXY_ADDRESS \
   -e ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS \
   -e ESPRESSO_OPS_TIMELOCK_ADDRESS \
   -e ESPRESSO_SAFE_EXIT_TIMELOCK_ADDRESS \
@@ -1377,7 +1377,7 @@ cast call $ESPRESSO_STAKE_TABLE_PROXY_ADDRESS "hasRole(bytes32,address)(bool)" \
   $ESPRESSO_ETH_MULTISIG_PAUSER_ADDRESS --rpc-url $RPC_URL
 
 # Verify the EspToken address matches
-cast call $ESPRESSO_STAKE_TABLE_PROXY_ADDRESS "token()(address)" --rpc-url $RPC_URL | grep -i $ESPRESSO_ESP_TOKEN_PROXY_ADDRESS
+cast call $ESPRESSO_STAKE_TABLE_PROXY_ADDRESS "token()(address)" --rpc-url $RPC_URL | grep -i $ESP_TOKEN_PROXY_ADDRESS
 ```
 
 ### Final Verification Checklist
@@ -1537,7 +1537,7 @@ export ESPRESSO_ETH_MULTISIG_ADDRESS=0xMULTISIG_ADDRESS
 export ESPRESSO_SAFE_EXIT_TIMELOCK_ADDRESS=0xSAFE_EXIT_TIMELOCK_ADDRESS
 
 # Set the EspToken proxy address
-export ESPRESSO_ESP_TOKEN_PROXY_ADDRESS=0xESP_TOKEN_PROXY_ADDRESS
+export ESP_TOKEN_PROXY_ADDRESS=0xESP_TOKEN_PROXY_ADDRESS
 ```
 
 2. **Run the docker-compose command to create the multisig proposal for admin transfer:**
@@ -1548,7 +1548,7 @@ docker compose run --rm \
   -e ESPRESSO_ETH_MNEMONIC \
   -e ESPRESSO_ETH_MULTISIG_ADDRESS \
   -e ESPRESSO_SAFE_EXIT_TIMELOCK_ADDRESS \
-  -e ESPRESSO_ESP_TOKEN_PROXY_ADDRESS \
+  -e ESP_TOKEN_PROXY_ADDRESS \
   -v $(pwd)/$OUTPUT_FILE:/app/$OUTPUT_FILE \
   \
   deploy-espresso-contracts \
@@ -1580,7 +1580,7 @@ source $OUTPUT_FILE
 echo "SafeExitTimelock Address: $ESPRESSO_SAFE_EXIT_TIMELOCK_ADDRESS"
 
 # Verify the SafeExitTimelock is now the owner
-cast call $ESPRESSO_ESP_TOKEN_PROXY_ADDRESS "owner()(address)" --rpc-url $RPC_URL | grep -i $ESPRESSO_SAFE_EXIT_TIMELOCK_ADDRESS
+cast call $ESP_TOKEN_PROXY_ADDRESS "owner()(address)" --rpc-url $RPC_URL | grep -i $ESPRESSO_SAFE_EXIT_TIMELOCK_ADDRESS
 ```
 
 ### Step 6: Upgrade to `StakeTableV2`. (Sets the `EspressoSys Multisig` as the pauser)

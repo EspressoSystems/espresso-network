@@ -135,7 +135,7 @@ impl TestConfig {
         let load_generator_url =
             url_from_port(dotenvy::var("ESPRESSO_SUBMIT_TRANSACTIONS_PRIVATE_PORT")?)?;
 
-        let l1_provider_url = url_from_port(dotenvy::var("ESPRESSO_NODE_L1_PORT")?)?;
+        let l1_provider_url = url_from_port(dotenvy::var("ESPRESSO_L1_PORT")?)?;
         let sequencer_api_url = url_from_port(dotenvy::var("ESPRESSO_NODE_1_API_PORT")?)?;
         let sequencer_clients = [
             dotenvy::var("ESPRESSO_NODE_0_API_PORT")?,

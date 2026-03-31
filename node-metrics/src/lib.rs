@@ -131,7 +131,7 @@ pub struct Options {
     /// URL.
     /// Example:
     ///   - https://query.cappuccino.testnet.espresso.network/v0/
-    #[clap(long, env = "ESPRESSO_VALIDATOR_STAKE_TABLE_SOURCE_BASE_URL")]
+    #[clap(long, env = "ESPRESSO_NODE_VALIDATOR_STAKE_TABLE_SOURCE_BASE_URL")]
     stake_table_source_base_url: Url,
 
     /// leaf_stream_base_url is the base URL for the availability API endpoint
@@ -142,7 +142,7 @@ pub struct Options {
     /// Example:
     ///   - https://query.cappuccino.testnet.espresso.network/v0/
     ///
-    #[clap(long, env = "ESPRESSO_VALIDATOR_LEAF_STREAM_SOURCE_BASE_URL")]
+    #[clap(long, env = "ESPRESSO_NODE_VALIDATOR_LEAF_STREAM_SOURCE_BASE_URL")]
     leaf_stream_base_url: Url,
 
     /// initial_node_public_base_urls is a list of URLs that are the initial
@@ -157,7 +157,7 @@ pub struct Options {
     ///  - https://query-1.cappuccino.testnet.espresso.network/
     #[clap(
         long,
-        env = "ESPRESSO_VALIDATOR_INITIAL_NODE_PUBLIC_BASE_URLS",
+        env = "ESPRESSO_NODE_VALIDATOR_INITIAL_NODE_PUBLIC_BASE_URLS",
         value_delimiter = ','
     )]
     initial_node_public_base_urls: Vec<Url>,
@@ -168,7 +168,7 @@ pub struct Options {
     #[clap(
         long,
         value_parser,
-        env = "ESPRESSO_VALIDATOR_PORT",
+        env = "ESPRESSO_NODE_VALIDATOR_PORT",
         default_value = "9000"
     )]
     port: u16,

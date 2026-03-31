@@ -22,7 +22,7 @@ environment:
   - ESPRESSO_NODE_GENESIS_FILE=${ESPRESSO_NODE_GENESIS_FILE:-data/genesis/demo.toml}
   - ESPRESSO_STATE_RELAY_SERVER_URL=http://localhost:${ESPRESSO_STATE_RELAY_SERVER_PORT}
   - QUERY_SERVICE_URI=http://localhost:${ESPRESSO_NODE_1_API_PORT}/v0/
-  - NODE_VALIDATOR_URI=ws://localhost:${ESPRESSO_VALIDATOR_PORT}/v0/
+  - NODE_VALIDATOR_URI=ws://localhost:${ESPRESSO_NODE_VALIDATOR_PORT}/v0/
 processes:
   # Cheating a bit here but since we don't usually have to debug go-ethereum
   # it's using the docker compose service which is a bit easier.
@@ -44,7 +44,7 @@ processes:
     command:
       unset
       ESPRESSO_FEE_CONTRACT_PROXY_ADDRESS
-      ESPRESSO_ESP_TOKEN_PROXY_ADDRESS
+      ESP_TOKEN_PROXY_ADDRESS
       ESPRESSO_STAKE_TABLE_PROXY_ADDRESS
       && deploy --deploy-ops-timelock --deploy-safe-exit-timelock --deploy-fee-v1 --deploy-esp-token-v1 --deploy-stake-table-v1
     namespace: setup
@@ -142,8 +142,8 @@ processes:
     environment:
       - L1_PROVIDER=http://localhost:${ESPRESSO_L1_PORT}
       - MNEMONIC=${ESPRESSO_ETH_MNEMONIC}
-      - ACCOUNT_INDEX=${ESPRESSO_ESP_TOKEN_INITIAL_GRANT_RECIPIENT_ACCOUNT_INDEX}
-      - ESPRESSO_ESP_TOKEN_CONTRACT_ADDRESS=${ESPRESSO_ESP_TOKEN_PROXY_ADDRESS}
+      - ACCOUNT_INDEX=${ESP_TOKEN_INITIAL_GRANT_RECIPIENT_ACCOUNT_INDEX}
+      - ESP_TOKEN_CONTRACT_ADDRESS=${ESP_TOKEN_PROXY_ADDRESS}
       - STAKE_TABLE_ADDRESS=${ESPRESSO_STAKE_TABLE_PROXY_ADDRESS}
     depends_on:
       deploy-espresso-contracts:
@@ -460,9 +460,9 @@ processes:
   node_validator:
     command: node-metrics --
     environment:
-      - ESPRESSO_VALIDATOR_STAKE_TABLE_SOURCE_BASE_URL=http://localhost:${ESPRESSO_NODE_0_API_PORT}/v0/
-      - ESPRESSO_VALIDATOR_LEAF_STREAM_SOURCE_BASE_URL=http://localhost:${ESPRESSO_NODE_0_API_PORT}/v0/
-      - ESPRESSO_VALIDATOR_INITIAL_NODE_PUBLIC_BASE_URLS=http://localhost:${ESPRESSO_NODE_0_API_PORT}/,http://localhost:${ESPRESSO_NODE_1_API_PORT}/,http://localhost:${ESPRESSO_NODE_2_API_PORT}/,http://localhost:${ESPRESSO_NODE_3_API_PORT}/,http://localhost:${ESPRESSO_NODE_4_API_PORT}/
+      - ESPRESSO_NODE_VALIDATOR_STAKE_TABLE_SOURCE_BASE_URL=http://localhost:${ESPRESSO_NODE_0_API_PORT}/v0/
+      - ESPRESSO_NODE_VALIDATOR_LEAF_STREAM_SOURCE_BASE_URL=http://localhost:${ESPRESSO_NODE_0_API_PORT}/v0/
+      - ESPRESSO_NODE_VALIDATOR_INITIAL_NODE_PUBLIC_BASE_URLS=http://localhost:${ESPRESSO_NODE_0_API_PORT}/,http://localhost:${ESPRESSO_NODE_1_API_PORT}/,http://localhost:${ESPRESSO_NODE_2_API_PORT}/,http://localhost:${ESPRESSO_NODE_3_API_PORT}/,http://localhost:${ESPRESSO_NODE_4_API_PORT}/
     depends_on:
       broker_0:
         condition: process_healthy

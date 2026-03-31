@@ -280,7 +280,7 @@ struct Options {
     /// The address that the tokens will be minted to.
     ///
     /// If unset the tokens will be minted to the deployer account.
-    #[clap(long, env = "ESPRESSO_ESP_TOKEN_INITIAL_GRANT_RECIPIENT_ADDRESS")]
+    #[clap(long, env = "ESP_TOKEN_INITIAL_GRANT_RECIPIENT_ADDRESS")]
     initial_token_grant_recipient: Option<Address>,
 
     /// The number of blocks per epoch for the HotShot consensus protocol.
@@ -292,15 +292,15 @@ struct Options {
     epoch_start_block: Option<u64>,
 
     /// The initial supply of the tokens.
-    #[clap(long, env = "ESPRESSO_ESP_TOKEN_INITIAL_SUPPLY")]
+    #[clap(long, env = "ESP_TOKEN_INITIAL_SUPPLY")]
     initial_token_supply: Option<U256>,
 
     /// The name of the tokens.
-    #[clap(long, env = "ESPRESSO_ESP_TOKEN_NAME")]
+    #[clap(long, env = "ESP_TOKEN_NAME")]
     token_name: Option<String>,
 
     /// The symbol of the tokens.
-    #[clap(long, env = "ESPRESSO_ESP_TOKEN_SYMBOL")]
+    #[clap(long, env = "ESP_TOKEN_SYMBOL")]
     token_symbol: Option<String>,
 
     /// The admin of the ops timelock

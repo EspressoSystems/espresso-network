@@ -144,10 +144,10 @@ BASE_ARGS=(
     --rpc-url "$RPC_URL"
     --account-index "$ACCOUNT_INDEX"
     --multisig-pauser-address "$ESPRESSO_ETH_MULTISIG_PAUSER_ADDRESS"
-    --token-name "$ESPRESSO_ESP_TOKEN_NAME"
-    --token-symbol "$ESPRESSO_ESP_TOKEN_SYMBOL"
-    --initial-token-supply "$ESPRESSO_ESP_TOKEN_INITIAL_SUPPLY"
-    --initial-token-grant-recipient "$ESPRESSO_ESP_TOKEN_INITIAL_GRANT_RECIPIENT_ADDRESS"
+    --token-name "$ESP_TOKEN_NAME"
+    --token-symbol "$ESP_TOKEN_SYMBOL"
+    --initial-token-supply "$ESP_TOKEN_INITIAL_SUPPLY"
+    --initial-token-grant-recipient "$ESP_TOKEN_INITIAL_GRANT_RECIPIENT_ADDRESS"
     --exit-escrow-period "$ESPRESSO_STAKE_TABLE_EXIT_ESCROW_PERIOD"
     --mock-espresso-live-network
 )
