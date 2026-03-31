@@ -46,6 +46,7 @@ impl TestHarness {
 
     pub async fn new_with_timer(node_index: u64, timer_duration: Duration) -> Self {
         let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
+        let instance = Arc::new(TestInstanceState::default());
         let membership = mock_membership().await;
 
         let store_drb_progress = null_store_drb_progress_fn();
@@ -61,23 +62,14 @@ impl TestHarness {
 
         let vid_disperse_task = VidDisperser::new(membership.clone());
         let vid_reconstruction_task = VidReconstructor::new();
-        let config = BlockBuilderConfig {
-            max_retry_bytes: 1024,
-            max_leader_bytes: 512,
-            ttl: 5,
-            num_forward_leaders: 3,
-            dedup_window_size: 3,
-        };
-        let block_builder = BlockBuilder::new(Arc::new(TestInstanceState::default()), config);
 
-        let mut state_manager = StateManager::new(Arc::new(TestInstanceState::default()));
+        let block_config = BlockBuilderConfig::default();
+        let block_builder = BlockBuilder::new(instance.clone(), block_config);
+
+        let mut state_manager = StateManager::new(instance.clone());
         let genesis_state = TestValidatedState::default();
-        let genesis_leaf = Leaf2::<TestTypes>::genesis(
-            &genesis_state,
-            &TestInstanceState::default(),
-            TEST_VERSIONS.test.base,
-        )
-        .await;
+        let genesis_leaf =
+            Leaf2::<TestTypes>::genesis(&genesis_state, &instance, TEST_VERSIONS.test.base).await;
         state_manager.seed_state(ViewNumber::genesis(), Arc::new(genesis_state), genesis_leaf);
 
         let proposal_validator = ProposalValidator::new(membership.clone());

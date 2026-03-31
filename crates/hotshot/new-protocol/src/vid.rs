@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
+use committable::Commitment;
 use hotshot::traits::BlockPayload;
 use hotshot_types::{
     data::{EpochNumber, VidCommitment2, VidDisperse2, VidDisperseShare2, ViewNumber},
@@ -16,6 +17,7 @@ type VidShareResult<T> = Result<
         VidCommitment2,
         <T as NodeType>::BlockPayload,
         <<T as NodeType>::BlockPayload as BlockPayload<T>>::Metadata,
+        Vec<Commitment<<T as NodeType>::Transaction>>,
     ),
     (),
 >;
@@ -169,11 +171,17 @@ impl<T: NodeType> VidReconstructor<T> {
         loop {
             match self.tasks.join_next().await {
                 Some(Ok(result)) => {
-                    if let Ok((view, vid_commitment, payload, metadata)) = result {
+                    if let Ok((view, vid_commitment, payload, metadata, tx_commitments)) = result {
                         self.calculations.remove(&view);
                         self.accumulators.remove(&view);
                         self.reconstructed.insert(view);
-                        return Some(Ok((view, vid_commitment, payload, metadata)));
+                        return Some(Ok((
+                            view,
+                            vid_commitment,
+                            payload,
+                            metadata,
+                            tx_commitments,
+                        )));
                     } else {
                         // TODO: Handle error
                         return Some(Err(()));
@@ -204,7 +212,8 @@ impl<T: NodeType> VidReconstructor<T> {
                 return Err(());
             };
             let payload = T::BlockPayload::from_bytes(&result, &metadata);
-            Ok((view, payload_commitment, payload, metadata))
+            let tx_commitments = payload.transaction_commitments(&metadata);
+            Ok((view, payload_commitment, payload, metadata, tx_commitments))
         });
         self.calculations.insert(view, task);
     }

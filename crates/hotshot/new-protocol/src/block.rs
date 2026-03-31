@@ -51,7 +51,6 @@ pub struct BlockBuilderConfig {
     pub max_retry_bytes: usize,
     pub max_leader_bytes: usize,
     pub ttl: u64,
-    pub num_forward_leaders: usize,
     pub dedup_window_size: usize,
 }
 
@@ -61,7 +60,6 @@ impl Default for BlockBuilderConfig {
             max_retry_bytes: 100 * 1024 * 1024,
             max_leader_bytes: 2 * 1024 * 1024,
             ttl: 50,
-            num_forward_leaders: 3,
             dedup_window_size: 10,
         }
     }
@@ -118,7 +116,7 @@ impl<T: NodeType> BlockBuilder<T> {
             return;
         };
         let epoch = request.epoch;
-        let (txs, manifest) = self.drain(view);
+        let (txs, manifest) = self.drain(view, epoch);
         let instance = self.instance.clone();
         let handle = self.tasks.spawn(async move {
             let (payload, metadata) =
@@ -202,17 +200,16 @@ impl<T: NodeType> BlockBuilder<T> {
     ) -> Vec<T::Transaction> {
         self.current_view = view;
 
-        let expired: Vec<_> = self
-            .retry_pending
-            .iter()
-            .filter(|(_, entry)| view > entry.valid_until)
-            .map(|(hash, _)| *hash)
-            .collect();
-        for hash in expired {
-            if let Some(entry) = self.retry_pending.remove(&hash) {
-                self.retry_total_bytes -= entry.size;
+        let mut expired_bytes = 0u64;
+        self.retry_pending.retain(|_, entry| {
+            if view > entry.valid_until {
+                expired_bytes += entry.size;
+                false
+            } else {
+                true
             }
-        }
+        });
+        self.retry_total_bytes -= expired_bytes;
 
         self.retry_pending
             .values()
@@ -220,23 +217,29 @@ impl<T: NodeType> BlockBuilder<T> {
             .collect()
     }
 
-    pub fn on_block_reconstructed(
-        &mut self,
-        _view: ViewNumber,
-        payload: T::BlockPayload,
-        metadata: <T::BlockPayload as BlockPayload<T>>::Metadata,
-    ) {
-        for hash in payload.transaction_commitments(&metadata) {
+    pub fn on_block_reconstructed(&mut self, tx_commitments: Vec<Commitment<T::Transaction>>) {
+        for hash in tx_commitments {
             if let Some(entry) = self.retry_pending.remove(&hash) {
                 self.retry_total_bytes -= entry.size;
             }
         }
     }
 
-    pub fn drain(&mut self, view: ViewNumber) -> (Vec<T::Transaction>, DedupManifest<T>) {
-        let (hashes, txs): (Vec<_>, Vec<_>) = self.leader_buffer.drain().unzip();
+    pub fn drain(
+        &mut self,
+        view: ViewNumber,
+        epoch: EpochNumber,
+    ) -> (Vec<T::Transaction>, DedupManifest<T>) {
+        let (hashes, txs) = self.leader_buffer.drain().unzip();
         self.leader_total_bytes = 0;
-        (txs, DedupManifest { view, hashes })
+
+        let manifest = DedupManifest {
+            view,
+            epoch,
+            hashes,
+        };
+
+        (txs, manifest)
     }
 
     fn handle_submit(&mut self, tx: T::Transaction) {
@@ -287,27 +290,27 @@ impl<T: NodeType> BlockBuilder<T> {
     }
 
     fn handle_dedup_manifest(&mut self, manifest: DedupManifest<T>) {
-        let hashes = manifest.hashes.clone();
-        self.dedup_set.extend(hashes.iter().copied());
-        self.dedup_views.push_back((manifest.view, hashes));
+        let DedupManifest { view, hashes, .. } = manifest;
 
-        while let Some((oldest_view, _)) = self.dedup_views.front() {
-            if self.current_view.u64().saturating_sub(oldest_view.u64())
-                > self.config.dedup_window_size as u64
-            {
-                if let Some((_, old_hashes)) = self.dedup_views.pop_front() {
-                    for hash in &old_hashes {
-                        self.dedup_set.remove(hash);
-                    }
-                }
-            } else {
-                break;
+        for hash in &hashes {
+            if let Some(tx) = self.leader_buffer.remove(hash) {
+                self.leader_total_bytes -= tx.minimum_block_size();
             }
         }
 
-        for hash in &manifest.hashes {
-            if let Some(tx) = self.leader_buffer.remove(hash) {
-                self.leader_total_bytes -= tx.minimum_block_size();
+        self.dedup_set.extend(hashes.iter().copied());
+        self.dedup_views.push_back((view, hashes));
+
+        let current = self.current_view.u64();
+        let window = self.config.dedup_window_size as u64;
+
+        while let Some((oldest, _)) = self.dedup_views.front() {
+            if current.saturating_sub(oldest.u64()) <= window {
+                break;
+            }
+            let (_, old_hashes) = self.dedup_views.pop_front().expect("dedup view exists");
+            for hash in &old_hashes {
+                self.dedup_set.remove(hash);
             }
         }
     }
@@ -342,9 +345,7 @@ impl<T: NodeType> From<BlockBuilderOutput<T>> for ConsensusInput<T> {
 mod tests {
     use committable::Committable;
     use hotshot_example_types::{
-        block_types::{TestBlockPayload, TestMetadata, TestTransaction},
-        node_types::TestTypes,
-        state_types::TestInstanceState,
+        block_types::TestTransaction, node_types::TestTypes, state_types::TestInstanceState,
     };
     use hotshot_types::data::{EpochNumber, ViewNumber};
 
@@ -374,7 +375,6 @@ mod tests {
             max_retry_bytes: 1024,
             max_leader_bytes: 512,
             ttl: 5,
-            num_forward_leaders: 3,
             dedup_window_size: 3,
         }
     }
@@ -392,15 +392,7 @@ mod tests {
         b.on_submit_transaction(t2.clone());
 
         // t1 reconstructed and should be removed from retry
-        b.on_block_reconstructed(
-            view(1),
-            TestBlockPayload {
-                transactions: vec![t1],
-            },
-            TestMetadata {
-                num_transactions: 1,
-            },
-        );
+        b.on_block_reconstructed(vec![t1.commit()]);
 
         let forwarded = b.on_view_changed(view(1), epoch());
         assert_eq!(
@@ -418,15 +410,22 @@ mod tests {
     fn test_leader_buffer_drain() {
         let mut b = builder();
         b.on_transactions(tx_msg(view(1), vec![tx(1), tx(2)]));
-        let (mut txns, manifest) = b.drain(view(1));
+        let (mut txns, manifest) = b.drain(view(1), epoch());
         txns.sort_by_key(|t| t.bytes().clone());
         assert_eq!(txns.len(), 2, "both transactions should be drained");
-        assert_eq!(manifest.hashes.len(), 2, "manifest should have one hash per tx");
+        assert_eq!(
+            manifest.hashes.len(),
+            2,
+            "manifest should have one hash per tx"
+        );
 
         // buffer is cleared after drain
-        let (txns2, manifest2) = b.drain(view(2));
+        let (txns2, manifest2) = b.drain(view(2), epoch());
         assert!(txns2.is_empty(), "second drain should be empty");
-        assert!(manifest2.hashes.is_empty(), "second drain manifest should have no hashes");
+        assert!(
+            manifest2.hashes.is_empty(),
+            "second drain manifest should have no hashes"
+        );
     }
 
     #[test]
@@ -442,10 +441,11 @@ mod tests {
 
         b.on_dedup_manifest(DedupManifest {
             view: view(1),
+            epoch: epoch(),
             hashes: vec![t.commit()],
         });
         b.on_transactions(tx_msg(view(1), vec![t.clone()]));
-        let (txns, _) = b.drain(view(1));
+        let (txns, _) = b.drain(view(1), epoch());
         assert!(
             txns.is_empty(),
             "tx should be blocked while in the dedup window"
@@ -455,11 +455,12 @@ mod tests {
         b.on_view_changed(view(4), epoch());
         b.on_dedup_manifest(DedupManifest {
             view: view(4),
+            epoch: epoch(),
             hashes: vec![],
         });
 
         b.on_transactions(tx_msg(view(4), vec![t.clone()]));
-        let (txns, _) = b.drain(view(4));
+        let (txns, _) = b.drain(view(4), epoch());
         assert_eq!(
             txns.len(),
             1,

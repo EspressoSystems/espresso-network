@@ -161,8 +161,8 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                     }
                 },
                 Some(item) = self.vid_reconstructor.next() => match item {
-                    Ok((view, commitment, payload, metadata)) => {
-                        self.block_builder.on_block_reconstructed(view, payload, metadata);
+                    Ok((view, commitment, _payload, _metadata, tx_commitments)) => {
+                        self.block_builder.on_block_reconstructed(tx_commitments);
                         return Ok(ConsensusInput::BlockReconstructed(view, commitment))
                     }
                     Err(()) => {
@@ -256,7 +256,11 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                 match msg {
                     BlockMessage::Transactions(msg) => self.block_builder.on_transactions(msg),
                     BlockMessage::DedupManifest(manifest) => {
-                        self.block_builder.on_dedup_manifest(manifest)
+                        if let Some(view_leader) = self.leader(manifest.view, manifest.epoch).await
+                            && view_leader == message.sender
+                        {
+                            self.block_builder.on_dedup_manifest(manifest)
+                        }
                     },
                 }
                 None
@@ -384,30 +388,15 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
         Ok(())
     }
 
-    // TODO: multicast to n upcoming leaders
     async fn unicast_to_leader(
         &mut self,
         view: ViewNumber,
         epoch: EpochNumber,
         msg: BlockMessage<T>,
     ) -> Result<(), CoordinatorError> {
-        let membership = match self
-            .membership_coordinator
-            .membership_for_epoch(Some(epoch))
-            .await
-        {
-            Ok(m) => m,
-            Err(err) => {
-                warn!(%err, "failed to get epoch membership");
-                return Ok(());
-            },
-        };
-        let leader = match membership.leader(view).await {
-            Ok(k) => k,
-            Err(err) => {
-                warn!(%err, "failed to get leader");
-                return Ok(());
-            },
+        let Some(leader) = self.leader(view, epoch).await else {
+            warn!(%view, %epoch, "failed to resolve leader for unicast");
+            return Ok(());
         };
         let message = Message {
             sender: self.public_key.clone(),
@@ -421,6 +410,15 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
             warn!(%err, "network error while sending to leader");
         }
         Ok(())
+    }
+
+    async fn leader(&self, view: ViewNumber, epoch: EpochNumber) -> Option<T::SignatureKey> {
+        let membership = self
+            .membership_coordinator
+            .membership_for_epoch(Some(epoch))
+            .await
+            .ok()?;
+        membership.leader(view).await.ok()
     }
 
     fn gc(&mut self, view: ViewNumber, epoch: EpochNumber) {
