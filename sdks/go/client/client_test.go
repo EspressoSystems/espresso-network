@@ -159,12 +159,12 @@ func runDevNode(ctx context.Context, tmpDir string) func() {
 	}
 
 	env := os.Environ()
-	env = append(env, "ESPRESSO_SEQUENCER_API_PORT=21000")
+	env = append(env, "ESPRESSO_NODE_API_PORT=21000")
 	env = append(env, "ESPRESSO_BUILDER_PORT=23000")
 	env = append(env, "ESPRESSO_DEV_NODE_PORT=20000")
-	env = append(env, "ESPRESSO_SEQUENCER_ETH_MNEMONIC=test test test test test test test test test test test junk")
+	env = append(env, "ESPRESSO_ETH_MNEMONIC=test test test test test test test test test test test junk")
 	env = append(env, "ESPRESSO_DEPLOYER_ACCOUNT_INDEX=0")
-	env = append(env, "ESPRESSO_SEQUENCER_STORAGE_PATH="+tmpDir)
+	env = append(env, "ESPRESSO_NODE_STORAGE_PATH="+tmpDir)
 	p.Env = env
 
 	go func() {

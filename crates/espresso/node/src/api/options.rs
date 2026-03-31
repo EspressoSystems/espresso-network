@@ -591,7 +591,7 @@ impl Options {
 #[derive(Parser, Clone, Copy, Debug)]
 pub struct Http {
     /// Port that the HTTP API will use.
-    #[clap(long, env = "ESPRESSO_SEQUENCER_API_PORT", default_value = "8080")]
+    #[clap(long, env = "ESPRESSO_NODE_API_PORT", default_value = "8080")]
     pub port: u16,
 
     /// Maximum number of concurrent HTTP connections the server will allow.
@@ -599,7 +599,7 @@ pub struct Http {
     /// Connections exceeding this will receive and immediate 429 response and be closed.
     ///
     /// Leave unset for no connection limit.
-    #[clap(long, env = "ESPRESSO_SEQUENCER_MAX_CONNECTIONS")]
+    #[clap(long, env = "ESPRESSO_NODE_API_MAX_CONNECTIONS")]
     pub max_connections: Option<usize>,
 }
 
@@ -633,7 +633,7 @@ pub struct Config;
 #[derive(Parser, Clone, Debug, Default)]
 pub struct Query {
     /// Peers for fetching missing data for the query service.
-    #[clap(long, env = "ESPRESSO_SEQUENCER_API_PEERS", value_delimiter = ',')]
+    #[clap(long, env = "ESPRESSO_NODE_API_PEERS", value_delimiter = ',')]
     pub peers: Vec<Url>,
 }
 

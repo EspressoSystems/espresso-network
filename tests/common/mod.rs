@@ -135,11 +135,11 @@ impl TestConfig {
         let load_generator_url =
             url_from_port(dotenvy::var("ESPRESSO_SUBMIT_TRANSACTIONS_PRIVATE_PORT")?)?;
 
-        let l1_provider_url = url_from_port(dotenvy::var("ESPRESSO_SEQUENCER_L1_PORT")?)?;
-        let sequencer_api_url = url_from_port(dotenvy::var("ESPRESSO_SEQUENCER1_API_PORT")?)?;
+        let l1_provider_url = url_from_port(dotenvy::var("ESPRESSO_NODE_L1_PORT")?)?;
+        let sequencer_api_url = url_from_port(dotenvy::var("ESPRESSO_NODE_1_API_PORT")?)?;
         let sequencer_clients = [
-            dotenvy::var("ESPRESSO_SEQUENCER0_API_PORT")?,
-            dotenvy::var("ESPRESSO_SEQUENCER1_API_PORT")?,
+            dotenvy::var("ESPRESSO_NODE_0_API_PORT")?,
+            dotenvy::var("ESPRESSO_NODE_1_API_PORT")?,
         ]
         .iter()
         .map(|port| url_from_port(port.clone()).unwrap())
@@ -151,9 +151,9 @@ impl TestConfig {
         let prover_url = url_from_port(dotenvy::var("ESPRESSO_PROVER_SERVICE_PORT")?)?;
 
         let light_client_address =
-            dotenvy::var("ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS")?.parse::<Address>()?;
+            dotenvy::var("ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS")?.parse::<Address>()?;
         let stake_table_address: Address =
-            dotenvy::var("ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS")?.parse()?;
+            dotenvy::var("ESPRESSO_STAKE_TABLE_PROXY_ADDRESS")?.parse()?;
 
         Ok(Self {
             load_generator_url,
@@ -179,8 +179,8 @@ impl TestConfig {
 
     /// Get the validator0 address (ACCOUNT_INDEX=20)
     pub fn validator0_address() -> Address {
-        let mnemonic = dotenvy::var("ESPRESSO_SEQUENCER_ETH_MNEMONIC")
-            .expect("ESPRESSO_SEQUENCER_ETH_MNEMONIC not set");
+        let mnemonic =
+            dotenvy::var("ESPRESSO_ETH_MNEMONIC").expect("ESPRESSO_ETH_MNEMONIC not set");
         let signer = build_signer(&mnemonic, VALIDATOR0_ACCOUNT_INDEX);
         signer.address()
     }

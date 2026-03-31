@@ -201,43 +201,43 @@ pub struct DeployedContracts {
 /// An identifier for a particular contract.
 #[derive(Clone, Copy, Debug, Display, PartialEq, Eq, Hash)]
 pub enum Contract {
-    #[display("ESPRESSO_SEQUENCER_PLONK_VERIFIER_ADDRESS")]
+    #[display("ESPRESSO_PLONK_VERIFIER_ADDRESS")]
     PlonkVerifier,
-    #[display("ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS")]
+    #[display("ESPRESSO_OPS_TIMELOCK_ADDRESS")]
     OpsTimelock,
-    #[display("ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS")]
+    #[display("ESPRESSO_SAFE_EXIT_TIMELOCK_ADDRESS")]
     SafeExitTimelock,
-    #[display("ESPRESSO_SEQUENCER_PLONK_VERIFIER_V2_ADDRESS")]
+    #[display("ESPRESSO_PLONK_VERIFIER_V2_ADDRESS")]
     PlonkVerifierV2,
-    #[display("ESPRESSO_SEQUENCER_PLONK_VERIFIER_V3_ADDRESS")]
+    #[display("ESPRESSO_PLONK_VERIFIER_V3_ADDRESS")]
     PlonkVerifierV3,
-    #[display("ESPRESSO_SEQUENCER_LIGHT_CLIENT_ADDRESS")]
+    #[display("ESPRESSO_LIGHT_CLIENT_ADDRESS")]
     LightClient,
-    #[display("ESPRESSO_SEQUENCER_LIGHT_CLIENT_V2_ADDRESS")]
+    #[display("ESPRESSO_LIGHT_CLIENT_V2_ADDRESS")]
     LightClientV2,
-    #[display("ESPRESSO_SEQUENCER_LIGHT_CLIENT_V3_ADDRESS")]
+    #[display("ESPRESSO_LIGHT_CLIENT_V3_ADDRESS")]
     LightClientV3,
-    #[display("ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS")]
+    #[display("ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS")]
     LightClientProxy,
-    #[display("ESPRESSO_SEQUENCER_FEE_CONTRACT_ADDRESS")]
+    #[display("ESPRESSO_FEE_CONTRACT_ADDRESS")]
     FeeContract,
-    #[display("ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS")]
+    #[display("ESPRESSO_FEE_CONTRACT_PROXY_ADDRESS")]
     FeeContractProxy,
-    #[display("ESPRESSO_SEQUENCER_ESP_TOKEN_ADDRESS")]
+    #[display("ESPRESSO_ESP_TOKEN_ADDRESS")]
     EspToken,
-    #[display("ESPRESSO_SEQUENCER_ESP_TOKEN_V2_ADDRESS")]
+    #[display("ESPRESSO_ESP_TOKEN_V2_ADDRESS")]
     EspTokenV2,
-    #[display("ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS")]
+    #[display("ESPRESSO_ESP_TOKEN_PROXY_ADDRESS")]
     EspTokenProxy,
-    #[display("ESPRESSO_SEQUENCER_STAKE_TABLE_ADDRESS")]
+    #[display("ESPRESSO_STAKE_TABLE_ADDRESS")]
     StakeTable,
-    #[display("ESPRESSO_SEQUENCER_STAKE_TABLE_V2_ADDRESS")]
+    #[display("ESPRESSO_STAKE_TABLE_V2_ADDRESS")]
     StakeTableV2,
-    #[display("ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS")]
+    #[display("ESPRESSO_STAKE_TABLE_PROXY_ADDRESS")]
     StakeTableProxy,
-    #[display("ESPRESSO_SEQUENCER_REWARD_CLAIM_ADDRESS")]
+    #[display("ESPRESSO_REWARD_CLAIM_ADDRESS")]
     RewardClaim,
-    #[display("ESPRESSO_SEQUENCER_REWARD_CLAIM_PROXY_ADDRESS")]
+    #[display("ESPRESSO_REWARD_CLAIM_PROXY_ADDRESS")]
     RewardClaimProxy,
 }
 
@@ -667,8 +667,8 @@ pub async fn upgrade_light_client_v2(
                         anyhow::bail!(
                             "LightClientV2 implementation address is already set in cache \
                              ({:#x}). For patch upgrades, the implementation must be redeployed. \
-                             Please unset ESPRESSO_SEQUENCER_LIGHT_CLIENT_V2_ADDRESS or remove it \
-                             from the cache first.",
+                             Please unset ESPRESSO_LIGHT_CLIENT_V2_ADDRESS or remove it from the \
+                             cache first.",
                             addr
                         );
                     }

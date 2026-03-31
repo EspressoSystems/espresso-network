@@ -14,7 +14,7 @@ use url::Url;
 struct NonPermissionedBuilderOptions {
     /// URL of hotshot events API running on Espresso Sequencer DA committee node
     /// The builder will subscribe to this server to receive hotshot events
-    #[clap(long, env = "ESPRESSO_SEQUENCER_URL")]
+    #[clap(long, env = "ESPRESSO_API_NODE_URL")]
     sequencer_api_url: Url,
 
     /// Mnemonic phrase for builder account.
@@ -38,7 +38,7 @@ struct NonPermissionedBuilderOptions {
     l1_provider_url: Vec<Url>,
 
     /// Peer nodes use to fetch missing state
-    #[clap(long, env = "ESPRESSO_SEQUENCER_STATE_PEERS", value_delimiter = ',')]
+    #[clap(long, env = "ESPRESSO_NODE_STATE_PEERS", value_delimiter = ',')]
     state_peers: Vec<Url>,
 
     /// Port to run the builder server on.
@@ -99,6 +99,7 @@ struct NonPermissionedBuilderOptions {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    espresso_utils::env_compat::migrate_legacy_env_vars();
     let opt = NonPermissionedBuilderOptions::parse();
     opt.logging.init();
 

@@ -128,7 +128,7 @@ struct Options {
     /// list of query service URLs.
     /// If `ESPRESSO_SUBMIT_TRANSACTIONS_SUBMIT_URL` is not provided,
     /// transactions will be sent to a random node from this list.
-    #[clap(env = "ESPRESSO_SEQUENCER_URLS", value_delimiter = ',', num_args = 1..,)]
+    #[clap(env = "ESPRESSO_API_NODE_URLS", value_delimiter = ',', num_args = 1..,)]
     urls: Vec<Url>,
 
     /// Relay num_nodes for benchmark results output
@@ -178,6 +178,7 @@ impl Options {
 
 #[tokio::main]
 async fn main() {
+    espresso_utils::env_compat::migrate_legacy_env_vars();
     let opt = Options::parse();
     opt.logging.init();
 

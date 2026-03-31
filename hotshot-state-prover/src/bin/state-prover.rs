@@ -52,7 +52,7 @@ struct Args {
     /// Url we will use for RPC communication with L1.
     #[clap(
         long,
-        env = "ESPRESSO_SEQUENCER_L1_PROVIDER",
+        env = "ESPRESSO_L1_PROVIDER",
         default_value = "http://localhost:8545",
         value_delimiter = ',',
         num_args = 1..,
@@ -64,26 +64,22 @@ struct Args {
     pub l1_options: L1ClientOptions,
 
     /// Address of LightClient contract on layer 1.
-    #[clap(long, env = "ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS")]
+    #[clap(long, env = "ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS")]
     light_client_address: Address,
 
     /// Mnemonic phrase for a funded Ethereum wallet.
-    #[clap(long, env = "ESPRESSO_SEQUENCER_ETH_MNEMONIC", default_value = None)]
+    #[clap(long, env = "ESPRESSO_ETH_MNEMONIC", default_value = None)]
     eth_mnemonic: String,
 
     /// Index of a funded account derived from eth-mnemonic.
-    #[clap(
-        long,
-        env = "ESPRESSO_SEQUENCER_STATE_PROVER_ACCOUNT_INDEX",
-        default_value = "0"
-    )]
+    #[clap(long, env = "ESPRESSO_STATE_PROVER_ACCOUNT_INDEX", default_value = "0")]
     eth_account_index: u32,
 
     /// URL of a sequencer node that is currently providing the HotShot config.
     /// This is used to initialize the stake table.
     #[clap(
         long,
-        env = "ESPRESSO_SEQUENCER_URL",
+        env = "ESPRESSO_API_NODE_URL",
         default_value = "http://localhost:24000"
     )]
     pub sequencer_url: Url,
@@ -95,7 +91,7 @@ struct Args {
     pub port: Option<u16>,
 
     /// Stake table capacity for the prover circuit
-    #[clap(short, long, env = "ESPRESSO_SEQUENCER_STAKE_TABLE_CAPACITY", default_value_t = DEFAULT_STAKE_TABLE_CAPACITY)]
+    #[clap(short, long, env = "ESPRESSO_STAKE_TABLE_CAPACITY", default_value_t = DEFAULT_STAKE_TABLE_CAPACITY)]
     pub stake_table_capacity: usize,
 
     /// max acceptable gas price **in Gwei** for prover to send light client update transaction
@@ -108,6 +104,7 @@ struct Args {
 
 #[tokio::main]
 async fn main() {
+    espresso_utils::env_compat::migrate_legacy_env_vars();
     let args = Args::parse();
     args.logging.init();
 

@@ -11,7 +11,7 @@ struct Args {
     #[clap(
         short,
         long,
-        env = "ESPRESSO_SEQUENCER_ORCHESTRATOR_URL",
+        env = "ESPRESSO_NODE_ORCHESTRATOR_URL",
         default_value = "http://localhost:8080"
     )]
     pub orchestrator_url: Url,
@@ -19,6 +19,7 @@ struct Args {
 
 #[tokio::main]
 async fn main() {
+    espresso_utils::env_compat::migrate_legacy_env_vars();
     let args = Args::parse();
     let pi: (LightClientStateSol, StakeTableStateSol) =
         light_client_genesis(&args.orchestrator_url, DEFAULT_STAKE_TABLE_CAPACITY)

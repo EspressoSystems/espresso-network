@@ -8,7 +8,7 @@ set -eu
 # Dependencies: curl, jq, sh
 
 MODE="${1:-}"
-SEQUENCER_URL="${SEQUENCER_URL:-http://localhost:24000}"
+ESPRESSO_API_URL="${ESPRESSO_API_URL:-http://localhost:24000}"
 POLL_INTERVAL="${POLL_INTERVAL:-5}"
 
 show_usage() {
@@ -18,25 +18,25 @@ Usage:
   $0 new-epochs <num-epochs>
 
 Environment Variables:
-  SEQUENCER_URL - Sequencer URL (default: http://localhost:24000)
+  ESPRESSO_API_URL - Sequencer URL (default: http://localhost:24000)
   POLL_INTERVAL - Polling interval in seconds (default: 5)
 
 Examples:
   $0 version 4
   $0 new-epochs 2
   POLL_INTERVAL=1 $0 version 4
-  SEQUENCER_URL=http://localhost:24000 $0 version 4
+  ESPRESSO_API_URL=http://localhost:24000 $0 version 4
 EOF
   exit 1
 }
 
 get_block_height() {
-  curl -sL "${SEQUENCER_URL}/status/block-height" 2>/dev/null || echo ""
+  curl -sL "${ESPRESSO_API_URL}/status/block-height" 2>/dev/null || echo ""
 }
 
 get_header_at_height() {
   local height="$1"
-  curl -sL "${SEQUENCER_URL}/v0/availability/header/${height}" 2>/dev/null || echo ""
+  curl -sL "${ESPRESSO_API_URL}/v0/availability/header/${height}" 2>/dev/null || echo ""
 }
 
 is_valid_value() {
@@ -54,7 +54,7 @@ wait_for_version() {
   local target_minor="$1"
 
   echo "Waiting for sequencer to upgrade to version 0.${target_minor}..."
-  echo "Polling sequencer at ${SEQUENCER_URL} every ${POLL_INTERVAL}s..."
+  echo "Polling sequencer at ${ESPRESSO_API_URL} every ${POLL_INTERVAL}s..."
 
   while true; do
     local height
@@ -104,7 +104,7 @@ wait_for_epochs() {
   initial_epoch=$((initial_height / blocks_per_epoch))
   target_epoch=$((initial_epoch + num_epochs))
   echo "Initial epoch: ${initial_epoch}, Target epoch: ${target_epoch}"
-  echo "Polling sequencer at ${SEQUENCER_URL} every ${POLL_INTERVAL}s..."
+  echo "Polling sequencer at ${ESPRESSO_API_URL} every ${POLL_INTERVAL}s..."
 
   local last_reported_epoch=-1
 
@@ -159,8 +159,8 @@ new-epochs)
   ;;
 esac
 
-echo "Getting hotshot config from: ${SEQUENCER_URL}/config/hotshot"
-blocks_per_epoch=$(curl -sL "${SEQUENCER_URL}/config/hotshot" | jq -r '.config.epoch_height')
+echo "Getting hotshot config from: ${ESPRESSO_API_URL}/config/hotshot"
+blocks_per_epoch=$(curl -sL "${ESPRESSO_API_URL}/config/hotshot" | jq -r '.config.epoch_height')
 echo "Blocks per epoch: ${blocks_per_epoch}"
 
 if [ "$MODE" = "new-epochs" ]; then

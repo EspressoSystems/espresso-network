@@ -25,27 +25,27 @@ pub struct KeySetOptions {
     #[clap(
         long,
         name = "MNEMONIC",
-        env = "ESPRESSO_SEQUENCER_KEY_MNEMONIC",
+        env = "ESPRESSO_NODE_KEY_MNEMONIC",
         conflicts_with = "KEY_FILE"
     )]
     #[derivative(Debug = "ignore")]
     pub mnemonic: Option<Mnemonic<English>>,
 
     /// Optional index to enable generating multiple keysets from the same mnemonic.
-    #[clap(long, env = "ESPRESSO_SEQUENCER_KEY_INDEX", requires = "MNEMONIC")]
+    #[clap(long, env = "ESPRESSO_NODE_KEY_INDEX", requires = "MNEMONIC")]
     pub index: Option<u64>,
 
     /// Path to file containing private keys.
     ///
     /// The file should follow the .env format, with two keys:
-    /// * ESPRESSO_SEQUENCER_PRIVATE_STAKING_KEY
-    /// * ESPRESSO_SEQUENCER_PRIVATE_STATE_KEY
+    /// * ESPRESSO_NODE_PRIVATE_STAKING_KEY
+    /// * ESPRESSO_NODE_PRIVATE_STATE_KEY
     ///
     /// Appropriate key files can be generated with the `keygen` utility program.
     #[clap(
         long,
         name = "KEY_FILE",
-        env = "ESPRESSO_SEQUENCER_KEY_FILE",
+        env = "ESPRESSO_NODE_KEY_FILE",
         conflicts_with = "MNEMONIC"
     )]
     pub key_file: Option<PathBuf>,
@@ -55,7 +55,7 @@ pub struct KeySetOptions {
     /// This can be used as an alternative to MNEMONIC or KEY_FILE.
     #[clap(
         long,
-        env = "ESPRESSO_SEQUENCER_PRIVATE_STAKING_KEY",
+        env = "ESPRESSO_NODE_PRIVATE_STAKING_KEY",
         conflicts_with = "KEY_FILE"
     )]
     #[derivative(Debug = "ignore")]
@@ -66,7 +66,7 @@ pub struct KeySetOptions {
     /// This can be used as an alternative to MNEMONIC or KEY_FILE.
     #[clap(
         long,
-        env = "ESPRESSO_SEQUENCER_PRIVATE_STATE_KEY",
+        env = "ESPRESSO_NODE_PRIVATE_STATE_KEY",
         conflicts_with = "KEY_FILE"
     )]
     #[derivative(Debug = "ignore")]
@@ -77,7 +77,7 @@ pub struct KeySetOptions {
     /// This can be used as an alternative to MNEMONIC or KEY_FILE.
     #[clap(
         long,
-        env = "ESPRESSO_SEQUENCER_PRIVATE_X25519_KEY",
+        env = "ESPRESSO_NODE_PRIVATE_X25519_KEY",
         conflicts_with = "KEY_FILE"
     )]
     #[derivative(Debug = "ignore")]
@@ -148,19 +148,19 @@ impl TryFrom<KeySetOptions> for KeySet {
             if staking.is_none() {
                 staking = Some(read_from_key_file(
                     &vars,
-                    "ESPRESSO_SEQUENCER_PRIVATE_STAKING_KEY",
+                    "ESPRESSO_NODE_PRIVATE_STAKING_KEY",
                 )?);
             }
             if state.is_none() {
                 state = Some(read_from_key_file(
                     &vars,
-                    "ESPRESSO_SEQUENCER_PRIVATE_STATE_KEY",
+                    "ESPRESSO_NODE_PRIVATE_STATE_KEY",
                 )?);
             }
             if x25519.is_none() {
                 x25519 = Some(read_from_key_file(
                     &vars,
-                    "ESPRESSO_SEQUENCER_PRIVATE_X25519_KEY",
+                    "ESPRESSO_NODE_PRIVATE_X25519_KEY",
                 )?);
             }
         }

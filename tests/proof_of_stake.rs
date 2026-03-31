@@ -20,7 +20,7 @@ async fn test_native_demo_pos_base() -> Result<()> {
     let _child = NativeDemo::run(
         None,
         Some(vec![(
-            "ESPRESSO_SEQUENCER_GENESIS_FILE".to_string(),
+            "ESPRESSO_NODE_GENESIS_FILE".to_string(),
             // process compose runs from the root of the repo
             genesis_path.to_string(),
         )]),
@@ -54,7 +54,7 @@ async fn test_native_demo_drb_header_base() -> Result<()> {
     let _child = NativeDemo::run(
         None,
         Some(vec![(
-            "ESPRESSO_SEQUENCER_GENESIS_FILE".to_string(),
+            "ESPRESSO_NODE_GENESIS_FILE".to_string(),
             // process compose runs from the root of the repo
             genesis_path.to_string(),
         )]),
@@ -93,7 +93,7 @@ async fn test_native_demo_da_committee() -> Result<()> {
     let _child = NativeDemo::run(
         None,
         Some(vec![(
-            "ESPRESSO_SEQUENCER_GENESIS_FILE".to_string(),
+            "ESPRESSO_NODE_GENESIS_FILE".to_string(),
             // process compose runs from the root of the repo
             genesis_path.to_string(),
         )]),
@@ -130,7 +130,7 @@ async fn assert_da_stake_table(
     entries: &[&PeerConfig<SeqTypes>],
 ) -> Result<()> {
     let start = Instant::now();
-    let sequencer_api_port = dotenvy::var("ESPRESSO_SEQUENCER1_API_PORT")?;
+    let sequencer_api_port = dotenvy::var("ESPRESSO_NODE1_API_PORT")?;
     let sequencer_url: Url = format!("http://localhost:{sequencer_api_port}").parse()?;
     let da_stake_table_url = format!("{sequencer_url}v1/node/da-stake-table/current");
     println!("Fetching da stake table from: {}", da_stake_table_url);

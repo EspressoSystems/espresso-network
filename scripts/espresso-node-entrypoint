@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 set -eEu -o pipefail
 
-export ESPRESSO_SEQUENCER_EMBEDDED_DB=${ESPRESSO_SEQUENCER_EMBEDDED_DB:-false}
+export ESPRESSO_NODE_EMBEDDED_DB=${ESPRESSO_NODE_EMBEDDED_DB:-false}
 
 # Trap SIGTERM and SIGINT signals and send them to the process group
 trap "trap - SIGTERM && kill -- -$$" SIGINT SIGTERM EXIT
 
 # Decide which binary to run based on the environment variable
-if [ "$ESPRESSO_SEQUENCER_EMBEDDED_DB" = "true" ]; then
+if [ "$ESPRESSO_NODE_EMBEDDED_DB" = "true" ]; then
     echo "Starting Espresso node with sqlite..."
     /bin/espresso-node-sqlite -- storage-sql "$@"
 else

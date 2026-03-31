@@ -47,7 +47,7 @@ pub struct Options {
     #[clap(
         short,
         long,
-        env = "ESPRESSO_SEQUENCER_ORCHESTRATOR_URL",
+        env = "ESPRESSO_NODE_ORCHESTRATOR_URL",
         default_value = "http://localhost:8080"
     )]
     #[derivative(Debug(format_with = "Display::fmt"))]
@@ -58,7 +58,7 @@ pub struct Options {
     #[clap(
         short,
         long,
-        env = "ESPRESSO_SEQUENCER_CDN_ENDPOINT",
+        env = "ESPRESSO_NODE_CDN_ENDPOINT",
         default_value = "127.0.0.1:8081"
     )]
     pub cdn_endpoint: String,
@@ -66,7 +66,7 @@ pub struct Options {
     /// The address to bind to for cliquenet (in `host:port` | `ip:port` form)
     #[clap(
         long,
-        env = "ESPRESSO_SEQUENCER_CLIQUENET_BIND_ADDRESS",
+        env = "ESPRESSO_NODE_CLIQUENET_BIND_ADDRESS",
         default_value = "0.0.0.0:9977"
     )]
     pub cliquenet_bind_address: NetAddr,
@@ -74,55 +74,39 @@ pub struct Options {
     /// The address to bind to for Libp2p (in `host:port` form)
     #[clap(
         long,
-        env = "ESPRESSO_SEQUENCER_LIBP2P_BIND_ADDRESS",
+        env = "ESPRESSO_NODE_LIBP2P_BIND_ADDRESS",
         default_value = "0.0.0.0:1769"
     )]
     pub libp2p_bind_address: String,
 
     /// Time between each Libp2p heartbeat
-    #[clap(long, env = "ESPRESSO_SEQUENCER_LIBP2P_HEARTBEAT_INTERVAL", default_value = "1s", value_parser = parse_duration)]
+    #[clap(long, env = "ESPRESSO_NODE_LIBP2P_HEARTBEAT_INTERVAL", default_value = "1s", value_parser = parse_duration)]
     pub libp2p_heartbeat_interval: Duration,
 
     /// Number of past heartbeats to gossip about on Libp2p
-    #[clap(
-        long,
-        env = "ESPRESSO_SEQUENCER_LIBP2P_HISTORY_GOSSIP",
-        default_value = "3"
-    )]
+    #[clap(long, env = "ESPRESSO_NODE_LIBP2P_HISTORY_GOSSIP", default_value = "3")]
     pub libp2p_history_gossip: usize,
 
     /// Number of heartbeats to keep in the Libp2p `memcache`
-    #[clap(
-        long,
-        env = "ESPRESSO_SEQUENCER_LIBP2P_HISTORY_LENGTH",
-        default_value = "5"
-    )]
+    #[clap(long, env = "ESPRESSO_NODE_LIBP2P_HISTORY_LENGTH", default_value = "5")]
     pub libp2p_history_length: usize,
 
     /// Target number of peers for the Libp2p mesh network
-    #[clap(long, env = "ESPRESSO_SEQUENCER_LIBP2P_MESH_N", default_value = "8")]
+    #[clap(long, env = "ESPRESSO_NODE_LIBP2P_MESH_N", default_value = "8")]
     pub libp2p_mesh_n: usize,
 
     /// Maximum number of peers in the Libp2p mesh network before removing some
-    #[clap(
-        long,
-        env = "ESPRESSO_SEQUENCER_LIBP2P_MESH_N_HIGH",
-        default_value = "12"
-    )]
+    #[clap(long, env = "ESPRESSO_NODE_LIBP2P_MESH_N_HIGH", default_value = "12")]
     pub libp2p_mesh_n_high: usize,
 
     /// Minimum number of peers in the Libp2p mesh network before adding more
-    #[clap(
-        long,
-        env = "ESPRESSO_SEQUENCER_LIBP2P_MESH_N_LOW",
-        default_value = "6"
-    )]
+    #[clap(long, env = "ESPRESSO_NODE_LIBP2P_MESH_N_LOW", default_value = "6")]
     pub libp2p_mesh_n_low: usize,
 
     /// Minimum number of outbound Libp2p peers in the mesh network before adding more
     #[clap(
         long,
-        env = "ESPRESSO_SEQUENCER_LIBP2P_MESH_OUTBOUND_MIN",
+        env = "ESPRESSO_NODE_LIBP2P_MESH_OUTBOUND_MIN",
         default_value = "2"
     )]
     pub libp2p_mesh_outbound_min: usize,
@@ -130,7 +114,7 @@ pub struct Options {
     /// The maximum number of messages to include in a Libp2p IHAVE message
     #[clap(
         long,
-        env = "ESPRESSO_SEQUENCER_LIBP2P_MAX_IHAVE_LENGTH",
+        env = "ESPRESSO_NODE_LIBP2P_MAX_IHAVE_LENGTH",
         default_value = "5000"
     )]
     pub libp2p_max_ihave_length: usize,
@@ -138,31 +122,31 @@ pub struct Options {
     /// The maximum number of IHAVE messages to accept from a Libp2p peer within a heartbeat
     #[clap(
         long,
-        env = "ESPRESSO_SEQUENCER_LIBP2P_MAX_IHAVE_MESSAGES",
+        env = "ESPRESSO_NODE_LIBP2P_MAX_IHAVE_MESSAGES",
         default_value = "10"
     )]
     pub libp2p_max_ihave_messages: usize,
 
     /// Libp2p published message ids time cache duration
-    #[clap(long, env = "ESPRESSO_SEQUENCER_LIBP2P_PUBLISHED_MESSAGE_IDS_CACHE_TIME", default_value = "10s", value_parser = parse_duration)]
+    #[clap(long, env = "ESPRESSO_NODE_LIBP2P_PUBLISHED_MESSAGE_IDS_CACHE_TIME", default_value = "10s", value_parser = parse_duration)]
     pub libp2p_published_message_ids_cache_time: Duration,
 
     /// Time to wait for a Libp2p message requested through IWANT following an IHAVE advertisement
     #[clap(
         long,
-        env = "ESPRESSO_SEQUENCER_LIBP2P_MAX_IWANT_FOLLOWUP_TIME",
+        env = "ESPRESSO_NODE_LIBP2P_MAX_IWANT_FOLLOWUP_TIME",
         default_value = "3s", value_parser = parse_duration
     )]
     pub libp2p_iwant_followup_time: Duration,
 
     /// The maximum number of Libp2p messages we will process in a given RPC
-    #[clap(long, env = "ESPRESSO_SEQUENCER_LIBP2P_MAX_MESSAGES_PER_RPC")]
+    #[clap(long, env = "ESPRESSO_NODE_LIBP2P_MAX_MESSAGES_PER_RPC")]
     pub libp2p_max_messages_per_rpc: Option<usize>,
 
     /// How many times we will allow a Libp2p peer to request the same message id through IWANT gossip before we start ignoring them
     #[clap(
         long,
-        env = "ESPRESSO_SEQUENCER_LIBP2P_GOSSIP_RETRANSMISSION",
+        env = "ESPRESSO_NODE_LIBP2P_GOSSIP_RETRANSMISSION",
         default_value = "3"
     )]
     pub libp2p_gossip_retransmission: u32,
@@ -170,43 +154,39 @@ pub struct Options {
     /// If enabled newly created messages will always be sent to all peers that are subscribed to the topic and have a good enough score
     #[clap(
         long,
-        env = "ESPRESSO_SEQUENCER_LIBP2P_FLOOD_PUBLISH",
+        env = "ESPRESSO_NODE_LIBP2P_FLOOD_PUBLISH",
         default_value = "true"
     )]
     pub libp2p_flood_publish: bool,
 
     /// The time period that Libp2p message hashes are stored in the cache
-    #[clap(long, env = "ESPRESSO_SEQUENCER_LIBP2P_DUPLICATE_CACHE_TIME", default_value = "20m", value_parser = parse_duration)]
+    #[clap(long, env = "ESPRESSO_NODE_LIBP2P_DUPLICATE_CACHE_TIME", default_value = "20m", value_parser = parse_duration)]
     pub libp2p_duplicate_cache_time: Duration,
 
     /// Time to live for Libp2p fanout peers
-    #[clap(long, env = "ESPRESSO_SEQUENCER_LIBP2P_FANOUT_TTL", default_value = "60s", value_parser = parse_duration)]
+    #[clap(long, env = "ESPRESSO_NODE_LIBP2P_FANOUT_TTL", default_value = "60s", value_parser = parse_duration)]
     pub libp2p_fanout_ttl: Duration,
 
     /// Initial delay in each Libp2p heartbeat
-    #[clap(long, env = "ESPRESSO_SEQUENCER_LIBP2P_HEARTBEAT_INITIAL_DELAY", default_value = "5s", value_parser = parse_duration)]
+    #[clap(long, env = "ESPRESSO_NODE_LIBP2P_HEARTBEAT_INITIAL_DELAY", default_value = "5s", value_parser = parse_duration)]
     pub libp2p_heartbeat_initial_delay: Duration,
 
     /// How many Libp2p peers we will emit gossip to at each heartbeat
     #[clap(
         long,
-        env = "ESPRESSO_SEQUENCER_LIBP2P_GOSSIP_FACTOR",
+        env = "ESPRESSO_NODE_LIBP2P_GOSSIP_FACTOR",
         default_value = "0.25"
     )]
     pub libp2p_gossip_factor: f64,
 
     /// Minimum number of Libp2p peers to emit gossip to during a heartbeat
-    #[clap(
-        long,
-        env = "ESPRESSO_SEQUENCER_LIBP2P_GOSSIP_LAZY",
-        default_value = "6"
-    )]
+    #[clap(long, env = "ESPRESSO_NODE_LIBP2P_GOSSIP_LAZY", default_value = "6")]
     pub libp2p_gossip_lazy: usize,
 
     /// The maximum number of bytes we will send in a single Libp2p gossip message
     #[clap(
         long,
-        env = "ESPRESSO_SEQUENCER_LIBP2P_MAX_GOSSIP_TRANSMIT_SIZE",
+        env = "ESPRESSO_NODE_LIBP2P_MAX_GOSSIP_TRANSMIT_SIZE",
         default_value = "2000000"
     )]
     pub libp2p_max_gossip_transmit_size: usize,
@@ -214,21 +194,21 @@ pub struct Options {
     /// The maximum number of bytes we will send in a single Libp2p direct message
     #[clap(
         long,
-        env = "ESPRESSO_SEQUENCER_LIBP2P_MAX_DIRECT_TRANSMIT_SIZE",
+        env = "ESPRESSO_NODE_LIBP2P_MAX_DIRECT_TRANSMIT_SIZE",
         default_value = "20000000"
     )]
     pub libp2p_max_direct_transmit_size: u64,
 
     /// The URL we advertise to other nodes as being for our public API.
     /// Should be supplied in `http://host:port` form.
-    #[clap(long, env = "ESPRESSO_SEQUENCER_PUBLIC_API_URL")]
+    #[clap(long, env = "ESPRESSO_NODE_PUBLIC_API_URL")]
     pub public_api_url: Option<Url>,
 
     /// The address we advertise to other nodes as being a Libp2p endpoint.
     /// Should be supplied in `host:port` form.
     #[clap(
         long,
-        env = "ESPRESSO_SEQUENCER_LIBP2P_ADVERTISE_ADDRESS",
+        env = "ESPRESSO_NODE_LIBP2P_ADVERTISE_ADDRESS",
         default_value = "localhost:1769"
     )]
     pub libp2p_advertise_address: String,
@@ -239,14 +219,14 @@ pub struct Options {
     /// Overrides those loaded from the `HotShot` config.
     #[clap(
         long,
-        env = "ESPRESSO_SEQUENCER_LIBP2P_BOOTSTRAP_NODES",
+        env = "ESPRESSO_NODE_LIBP2P_BOOTSTRAP_NODES",
         value_delimiter = ',',
         num_args = 1..
     )]
     pub libp2p_bootstrap_nodes: Option<Vec<Multiaddr>>,
 
     /// The URL of the builders to use for submitting transactions
-    #[clap(long, env = "ESPRESSO_SEQUENCER_BUILDER_URLS", value_delimiter = ',')]
+    #[clap(long, env = "ESPRESSO_BUILDER_URLS", value_delimiter = ',')]
     pub builder_urls: Vec<Url>,
 
     /// URL of the Light Client State Relay Server
@@ -262,7 +242,7 @@ pub struct Options {
     #[clap(
         long,
         name = "GENESIS_FILE",
-        env = "ESPRESSO_SEQUENCER_GENESIS_FILE",
+        env = "ESPRESSO_NODE_GENESIS_FILE",
         default_value = "/genesis/demo.toml"
     )]
     pub genesis_file: PathBuf,
@@ -289,7 +269,7 @@ pub struct Options {
     /// Url we will use for RPC communication with L1.
     #[clap(
         long,
-        env = "ESPRESSO_SEQUENCER_L1_PROVIDER",
+        env = "ESPRESSO_L1_PROVIDER",
         default_value = "http://localhost:8545",
         value_delimiter = ',',
         num_args = 1..,
@@ -302,11 +282,11 @@ pub struct Options {
     pub l1_options: L1ClientOptions,
 
     /// Whether or not we are a DA node.
-    #[clap(long, env = "ESPRESSO_SEQUENCER_IS_DA", action)]
+    #[clap(long, env = "ESPRESSO_NODE_IS_DA", action)]
     pub is_da: bool,
 
     /// Peer nodes use to fetch missing state
-    #[clap(long, env = "ESPRESSO_SEQUENCER_STATE_PEERS", value_delimiter = ',')]
+    #[clap(long, env = "ESPRESSO_NODE_STATE_PEERS", value_delimiter = ',')]
     #[derivative(Debug(format_with = "fmt_urls"))]
     pub state_peers: Vec<Url>,
 
@@ -316,7 +296,7 @@ pub struct Options {
     /// persisted and loaded from local storage each time the node restarts. However, if the
     /// persisted config is missing when the node restarts (for example, the node is being migrated
     /// to new persistent storage), it can instead be fetched directly from a peer.
-    #[clap(long, env = "ESPRESSO_SEQUENCER_CONFIG_PEERS", value_delimiter = ',')]
+    #[clap(long, env = "ESPRESSO_NODE_CONFIG_PEERS", value_delimiter = ',')]
     #[derivative(Debug(format_with = "fmt_opt_urls"))]
     pub config_peers: Option<Vec<Url>>,
 
@@ -327,7 +307,7 @@ pub struct Options {
     /// Base timeout for catchup requests to peers.
     ///
     /// This is the initial per peer timeout for HTTP requests during state catchup
-    #[clap(long, env = "ESPRESSO_SEQUENCER_CATCHUP_BASE_TIMEOUT", default_value = "2s", value_parser = parse_duration)]
+    #[clap(long, env = "ESPRESSO_NODE_CATCHUP_BASE_TIMEOUT", default_value = "2s", value_parser = parse_duration)]
     pub catchup_base_timeout: Duration,
 
     #[clap(flatten)]
@@ -353,40 +333,40 @@ impl Options {
 #[derive(Parser, Clone, Derivative)]
 #[derivative(Debug(bound = ""))]
 pub struct Identity {
-    #[clap(long, env = "ESPRESSO_SEQUENCER_IDENTITY_COUNTRY_CODE")]
+    #[clap(long, env = "ESPRESSO_NODE_IDENTITY_COUNTRY_CODE")]
     pub country_code: Option<String>,
-    #[clap(long, env = "ESPRESSO_SEQUENCER_IDENTITY_LATITUDE")]
+    #[clap(long, env = "ESPRESSO_NODE_IDENTITY_LATITUDE")]
     pub latitude: Option<f64>,
-    #[clap(long, env = "ESPRESSO_SEQUENCER_IDENTITY_LONGITUDE")]
+    #[clap(long, env = "ESPRESSO_NODE_IDENTITY_LONGITUDE")]
     pub longitude: Option<f64>,
 
-    #[clap(long, env = "ESPRESSO_SEQUENCER_IDENTITY_NODE_NAME")]
+    #[clap(long, env = "ESPRESSO_NODE_IDENTITY_NODE_NAME")]
     pub node_name: Option<String>,
-    #[clap(long, env = "ESPRESSO_SEQUENCER_IDENTITY_NODE_DESCRIPTION")]
+    #[clap(long, env = "ESPRESSO_NODE_IDENTITY_NODE_DESCRIPTION")]
     pub node_description: Option<String>,
 
-    #[clap(long, env = "ESPRESSO_SEQUENCER_IDENTITY_COMPANY_NAME")]
+    #[clap(long, env = "ESPRESSO_NODE_IDENTITY_COMPANY_NAME")]
     pub company_name: Option<String>,
-    #[clap(long, env = "ESPRESSO_SEQUENCER_IDENTITY_COMPANY_WEBSITE")]
+    #[clap(long, env = "ESPRESSO_NODE_IDENTITY_COMPANY_WEBSITE")]
     pub company_website: Option<Url>,
-    #[clap(long, env = "ESPRESSO_SEQUENCER_IDENTITY_OPERATING_SYSTEM", default_value = std::env::consts::OS)]
+    #[clap(long, env = "ESPRESSO_NODE_IDENTITY_OPERATING_SYSTEM", default_value = std::env::consts::OS)]
     pub operating_system: Option<String>,
-    #[clap(long, env = "ESPRESSO_SEQUENCER_IDENTITY_NODE_TYPE", default_value = get_default_node_type())]
+    #[clap(long, env = "ESPRESSO_NODE_IDENTITY_NODE_TYPE", default_value = get_default_node_type())]
     pub node_type: Option<String>,
-    #[clap(long, env = "ESPRESSO_SEQUENCER_IDENTITY_NETWORK_TYPE")]
+    #[clap(long, env = "ESPRESSO_NODE_IDENTITY_NETWORK_TYPE")]
     pub network_type: Option<String>,
 
-    #[clap(long, env = "ESPRESSO_SEQUENCER_IDENTITY_ICON_14x14_1x")]
+    #[clap(long, env = "ESPRESSO_NODE_IDENTITY_ICON_14x14_1x")]
     pub icon_14x14_1x: Option<Url>,
-    #[clap(long, env = "ESPRESSO_SEQUENCER_IDENTITY_ICON_14x14_2x")]
+    #[clap(long, env = "ESPRESSO_NODE_IDENTITY_ICON_14x14_2x")]
     pub icon_14x14_2x: Option<Url>,
-    #[clap(long, env = "ESPRESSO_SEQUENCER_IDENTITY_ICON_14x14_3x")]
+    #[clap(long, env = "ESPRESSO_NODE_IDENTITY_ICON_14x14_3x")]
     pub icon_14x14_3x: Option<Url>,
-    #[clap(long, env = "ESPRESSO_SEQUENCER_IDENTITY_ICON_24x24_1x")]
+    #[clap(long, env = "ESPRESSO_NODE_IDENTITY_ICON_24x24_1x")]
     pub icon_24x24_1x: Option<Url>,
-    #[clap(long, env = "ESPRESSO_SEQUENCER_IDENTITY_ICON_24x24_2x")]
+    #[clap(long, env = "ESPRESSO_NODE_IDENTITY_ICON_24x24_2x")]
     pub icon_24x24_2x: Option<Url>,
-    #[clap(long, env = "ESPRESSO_SEQUENCER_IDENTITY_ICON_24x24_3x")]
+    #[clap(long, env = "ESPRESSO_NODE_IDENTITY_ICON_24x24_3x")]
     pub icon_24x24_3x: Option<Url>,
 }
 

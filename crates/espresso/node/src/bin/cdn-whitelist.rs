@@ -23,7 +23,7 @@ struct Args {
     discovery_endpoint: String,
 
     /// The URL the orchestrator is running on. This should be something like `http://localhost:5555`
-    #[arg(short, long, env = "ESPRESSO_SEQUENCER_ORCHESTRATOR_URL")]
+    #[arg(short, long, env = "ESPRESSO_NODE_ORCHESTRATOR_URL")]
     orchestrator_url: String,
 
     /// Whether or not to use the local discovery client
@@ -33,6 +33,7 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    espresso_utils::env_compat::migrate_legacy_env_vars();
     // Parse the command line arguments
     let args = Args::parse();
 

@@ -20,13 +20,13 @@ struct Args {
     /// This is used to initialize the stake table.
     #[clap(
         long,
-        env = "ESPRESSO_SEQUENCER_URL",
+        env = "ESPRESSO_API_NODE_URL",
         default_value = "http://localhost:24000"
     )]
     pub sequencer_url: Url,
 
     /// Stake table capacity for the prover circuit
-    #[clap(short, long, env = "ESPRESSO_SEQUENCER_STAKE_TABLE_CAPACITY", default_value_t = DEFAULT_STAKE_TABLE_CAPACITY)]
+    #[clap(short, long, env = "ESPRESSO_STAKE_TABLE_CAPACITY", default_value_t = DEFAULT_STAKE_TABLE_CAPACITY)]
     pub stake_table_capacity: usize,
 
     #[clap(flatten)]
@@ -35,6 +35,7 @@ struct Args {
 
 #[tokio::main]
 async fn main() {
+    espresso_utils::env_compat::migrate_legacy_env_vars();
     let args = Args::parse();
     args.logging.init();
 

@@ -15,6 +15,7 @@ use super::{
 use crate::keyset::KeySet;
 
 pub async fn main() -> anyhow::Result<()> {
+    espresso_utils::env_compat::migrate_legacy_env_vars();
     let opt = Options::parse();
     opt.logging.init();
 

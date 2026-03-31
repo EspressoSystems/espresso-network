@@ -16,9 +16,9 @@ set -a; source .env; set +a;
 
 LOAD_GENERATOR=http://localhost:$ESPRESSO_SUBMIT_TRANSACTIONS_PRIVATE_PORT
 
-L1_PROVIDER=http://localhost:$ESPRESSO_SEQUENCER_L1_PORT
-SEQUENCER_API=http://localhost:$ESPRESSO_SEQUENCER1_API_PORT
-SEQUENCER_BLOCKS_TIMEOUT=180
+L1_PROVIDER=http://localhost:$ESPRESSO_L1_PORT
+ESPRESSO_API=http://localhost:$ESPRESSO_NODE_1_API_PORT
+ESPRESSO_BLOCKS_TIMEOUT=180
 
 # usage: wait_for timeout_in_secs name URL
 function wait_for() {
@@ -46,12 +46,12 @@ function get_balance() {
         # If the espresso-bridge program is built locally, use it.
         (
             unset MNEMONIC
-            RUST_LOG=off espresso-bridge balance -e $SEQUENCER_API -a $1 -b $2
+            RUST_LOG=off espresso-bridge balance -e $ESPRESSO_API -a $1 -b $2
         )
     else
         # Otherwise, use Docker.
         docker run --network="host" -e RUST_LOG=off ghcr.io/espressosystems/espresso-network/bridge:${DOCKER_TAG:-main} \
-            bridge balance -e $SEQUENCER_API -a $1 -b $2
+            bridge balance -e $ESPRESSO_API -a $1 -b $2
     fi
 }
 
@@ -62,7 +62,7 @@ function last_light_client_update() {
             "method": "eth_getLogs",
             "params": [{
                 "fromBlock": "earliest",
-                "address": "'"$ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS"'"
+                "address": "'"$ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS"'"
             }],
             "id": 1,
             "jsonrpc": "2.0"
@@ -76,8 +76,8 @@ wait_for 300 "demo load generator" "$LOAD_GENERATOR/healthcheck"
 
 # Get the block height and number of transactions, wait some time, and check that these numbers have
 # both increased.
-block_height=$(curl -sL $SEQUENCER_API/node/block-height)
-num_tx=$(curl -sL $SEQUENCER_API/node/transactions/count)
+block_height=$(curl -sL $ESPRESSO_API/node/block-height)
+num_tx=$(curl -sL $ESPRESSO_API/node/transactions/count)
 # Get the balance of the builder and fee recipient accounts. The former should decrease over time
 # while the latter should increase.
 builder_balance=$(get_balance 0x23618e81E3f5cdF7f54C3d65f7FBc0aBf5B21E8f $block_height)
@@ -98,8 +98,8 @@ START=$SECONDS
 # Check blocks and transactions are increasing
 # Every second until timeout after $TIMEOUT seconds
 while true; do
-    new_block_height=`curl -sL $SEQUENCER_API/node/block-height`
-    new_num_tx=`curl -sL $SEQUENCER_API/node/transactions/count`
+    new_block_height=`curl -sL $ESPRESSO_API/node/block-height`
+    new_num_tx=`curl -sL $ESPRESSO_API/node/transactions/count`
     new_light_client_updated=`last_light_client_update`
     if [[ $new_block_height -gt $block_height && $new_num_tx -gt $num_tx && $new_light_client_updated -gt $light_client_updated ]]; then
         new_builder_balance=`get_balance 0x23618e81E3f5cdF7f54C3d65f7FBc0aBf5B21E8f $new_block_height`
@@ -129,7 +129,7 @@ while true; do
         break
     fi
     sleep 1
-    if [[ $((SECONDS - START)) -gt $SEQUENCER_BLOCKS_TIMEOUT ]]; then
+    if [[ $((SECONDS - START)) -gt $ESPRESSO_BLOCKS_TIMEOUT ]]; then
         echo "Timeout waiting for block height, transaction count, and light client updates to increase"
         echo "Final state:"
         echo "  block_height: $new_block_height"

@@ -77,7 +77,7 @@ Time based:
 The window between `start_proposing_view/time` and `stop_proposing_view/time` should provide sufficient time for nodes
 to continue proposing the upgrade until successful.
 
-Ensure that the `ESPRESSO_SEQUENCER_GENESIS_FILE` environment variable is defined to point to the path of the genesis
+Ensure that the `ESPRESSO_NODE_GENESIS_FILE` environment variable is defined to point to the path of the genesis
 TOML file. For an example with upgrades enabled, refer to [`data/genesis/demo.toml`](../data/genesis/demo.toml).
 
 ### Example TOML Configuration

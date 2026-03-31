@@ -85,29 +85,29 @@ use crate::{
 #[derivative(Debug)]
 pub struct PostgresOptions {
     /// Hostname for the remote Postgres database server.
-    #[clap(long, env = "ESPRESSO_SEQUENCER_POSTGRES_HOST")]
+    #[clap(long, env = "ESPRESSO_NODE_POSTGRES_HOST")]
     pub(crate) host: Option<String>,
 
     /// Port for the remote Postgres database server.
-    #[clap(long, env = "ESPRESSO_SEQUENCER_POSTGRES_PORT")]
+    #[clap(long, env = "ESPRESSO_NODE_POSTGRES_PORT")]
     pub(crate) port: Option<u16>,
 
     /// Name of database to connect to.
-    #[clap(long, env = "ESPRESSO_SEQUENCER_POSTGRES_DATABASE")]
+    #[clap(long, env = "ESPRESSO_NODE_POSTGRES_DATABASE")]
     pub(crate) database: Option<String>,
 
     /// Postgres user to connect as.
-    #[clap(long, env = "ESPRESSO_SEQUENCER_POSTGRES_USER")]
+    #[clap(long, env = "ESPRESSO_NODE_POSTGRES_USER")]
     pub(crate) user: Option<String>,
 
     /// Password for Postgres user.
-    #[clap(long, env = "ESPRESSO_SEQUENCER_POSTGRES_PASSWORD")]
+    #[clap(long, env = "ESPRESSO_NODE_POSTGRES_PASSWORD")]
     // Hide from debug output since may contain sensitive data.
     #[derivative(Debug = "ignore")]
     pub(crate) password: Option<String>,
 
     /// Use TLS for an encrypted connection to the database.
-    #[clap(long, env = "ESPRESSO_SEQUENCER_POSTGRES_USE_TLS")]
+    #[clap(long, env = "ESPRESSO_NODE_POSTGRES_USE_TLS")]
     pub(crate) use_tls: bool,
 }
 
@@ -124,7 +124,7 @@ pub struct SqliteOptions {
     /// The SQLite file will be created in the `sqlite` subdirectory with filename as `database`.
     #[clap(
         long,
-        env = "ESPRESSO_SEQUENCER_STORAGE_PATH",
+        env = "ESPRESSO_NODE_STORAGE_PATH",
         value_parser = build_sqlite_path
     )]
     pub(crate) path: PathBuf,
@@ -177,7 +177,7 @@ pub struct Options {
     /// - batch_size: 1000
     /// - max_usage: 80%
     /// - interval: 1 hour
-    #[clap(long, env = "ESPRESSO_SEQUENCER_DATABASE_PRUNE")]
+    #[clap(long, env = "ESPRESSO_NODE_DATABASE_PRUNE")]
     pub(crate) prune: bool,
 
     /// Pruning parameters.
@@ -189,32 +189,32 @@ pub struct Options {
     pub(crate) consensus_pruning: ConsensusPruningOptions,
 
     /// Specifies the maximum number of concurrent fetch requests allowed from peers.
-    #[clap(long, env = "ESPRESSO_SEQUENCER_FETCH_RATE_LIMIT")]
+    #[clap(long, env = "ESPRESSO_NODE_FETCH_RATE_LIMIT")]
     pub(crate) fetch_rate_limit: Option<usize>,
 
     /// The minimum delay between active fetches in a stream.
-    #[clap(long, env = "ESPRESSO_SEQUENCER_ACTIVE_FETCH_DELAY", value_parser = parse_duration)]
+    #[clap(long, env = "ESPRESSO_NODE_ACTIVE_FETCH_DELAY", value_parser = parse_duration)]
     pub(crate) active_fetch_delay: Option<Duration>,
 
     /// The minimum delay between loading chunks in a stream.
-    #[clap(long, env = "ESPRESSO_SEQUENCER_CHUNK_FETCH_DELAY", value_parser = parse_duration)]
+    #[clap(long, env = "ESPRESSO_NODE_CHUNK_FETCH_DELAY", value_parser = parse_duration)]
     pub(crate) chunk_fetch_delay: Option<Duration>,
 
     /// The number of items to process in a single transaction when scanning the database for
     /// missing objects.
-    #[clap(long, env = "ESPRESSO_SEQUENCER_SYNC_STATUS_CHUNK_SIZE")]
+    #[clap(long, env = "ESPRESSO_NODE_SYNC_STATUS_CHUNK_SIZE")]
     pub(crate) sync_status_chunk_size: Option<usize>,
 
     /// The number of items to process at a time when scanning for proactive fetching.
-    #[clap(long, env = "ESPRESSO_SEQUENCER_PROACTIVE_SCAN_CHUNK_SIZE")]
+    #[clap(long, env = "ESPRESSO_NODE_PROACTIVE_SCAN_CHUNK_SIZE")]
     pub(crate) proactive_scan_chunk_size: Option<usize>,
 
     /// The time interval between proactive fetching scans.
-    #[clap(long, env = "ESPRESSO_SEQUENCER_PROACTIVE_SCAN_INTERVAL", value_parser = parse_duration)]
+    #[clap(long, env = "ESPRESSO_NODE_PROACTIVE_SCAN_INTERVAL", value_parser = parse_duration)]
     pub(crate) proactive_scan_interval: Option<Duration>,
 
     /// Disable the proactive scanner task.
-    #[clap(long, env = "ESPRESSO_SEQUENCER_DISABLE_PROACTIVE_FETCHING")]
+    #[clap(long, env = "ESPRESSO_NODE_DISABLE_PROACTIVE_FETCHING")]
     pub(crate) disable_proactive_fetching: bool,
 
     /// Disable pruning and reconstruct previously pruned data.
@@ -223,13 +223,13 @@ pub struct Options {
     /// reconstruct data that was pruned in a previous run where pruning was enabled. This option
     /// instructs the service to run without pruning _and_ reconstruct all previously pruned data by
     /// fetching from peers.
-    #[clap(long, env = "ESPRESSO_SEQUENCER_ARCHIVE", conflicts_with = "prune")]
+    #[clap(long, env = "ESPRESSO_NODE_ARCHIVE", conflicts_with = "prune")]
     pub(crate) archive: bool,
 
     /// Turns on leaf only data storage
     #[clap(
         long,
-        env = "ESPRESSO_SEQUENCER_LIGHTWEIGHT",
+        env = "ESPRESSO_NODE_LIGHTWEIGHT",
         default_value_t = false,
         conflicts_with = "archive"
     )]
@@ -239,7 +239,7 @@ pub struct Options {
     ///
     /// Any connection which has been open and unused longer than this duration will be
     /// automatically closed to reduce load on the server.
-    #[clap(long, env = "ESPRESSO_SEQUENCER_DATABASE_IDLE_CONNECTION_TIMEOUT", value_parser = parse_duration, default_value = "10m")]
+    #[clap(long, env = "ESPRESSO_NODE_DATABASE_IDLE_CONNECTION_TIMEOUT", value_parser = parse_duration, default_value = "10m")]
     pub(crate) idle_connection_timeout: Duration,
 
     /// The maximum lifetime of a database connection.
@@ -248,17 +248,17 @@ pub struct Options {
     /// (and, if needed, replaced), even if it is otherwise healthy. It is good practice to refresh
     /// even healthy connections once in a while (e.g. daily) in case of resource leaks in the
     /// server implementation.
-    #[clap(long, env = "ESPRESSO_SEQUENCER_DATABASE_CONNECTION_TIMEOUT", value_parser = parse_duration, default_value = "30m")]
+    #[clap(long, env = "ESPRESSO_NODE_DATABASE_CONNECTION_TIMEOUT", value_parser = parse_duration, default_value = "30m")]
     pub(crate) connection_timeout: Duration,
 
-    #[clap(long, env = "ESPRESSO_SEQUENCER_DATABASE_SLOW_STATEMENT_THRESHOLD", value_parser = parse_duration, default_value = "1s")]
+    #[clap(long, env = "ESPRESSO_NODE_DATABASE_SLOW_STATEMENT_THRESHOLD", value_parser = parse_duration, default_value = "1s")]
     pub(crate) slow_statement_threshold: Duration,
 
     /// The maximum time a single SQL statement is allowed to run before being canceled.
     ///
     /// This helps prevent queries from running indefinitely and consuming resources.
     /// Set to 10 minutes by default
-    #[clap(long, env = "ESPRESSO_SEQUENCER_DATABASE_STATEMENT_TIMEOUT", value_parser = parse_duration, default_value = "10m")]
+    #[clap(long, env = "ESPRESSO_NODE_DATABASE_STATEMENT_TIMEOUT", value_parser = parse_duration, default_value = "10m")]
     pub(crate) statement_timeout: Duration,
 
     /// The minimum number of database connections to maintain at any time.
@@ -268,7 +268,7 @@ pub struct Options {
     /// connections when at least this many simultaneous connections are frequently needed.
     #[clap(
         long,
-        env = "ESPRESSO_SEQUENCER_DATABASE_MIN_CONNECTIONS",
+        env = "ESPRESSO_NODE_DATABASE_MIN_CONNECTIONS",
         default_value = "0"
     )]
     pub(crate) min_connections: u32,
@@ -276,7 +276,7 @@ pub struct Options {
     /// Allows setting a different maximum number of connections for query operations.
     /// Default value of None implies using the min_connections value.
     #[cfg(not(feature = "embedded-db"))]
-    #[clap(long, env = "ESPRESSO_SEQUENCER_DATABASE_QUERY_MIN_CONNECTIONS", default_value = None)]
+    #[clap(long, env = "ESPRESSO_NODE_DATABASE_QUERY_MIN_CONNECTIONS", default_value = None)]
     pub(crate) query_min_connections: Option<u32>,
 
     /// The maximum number of database connections to maintain at any time.
@@ -285,7 +285,7 @@ pub struct Options {
     /// (or begin a transaction) will block until one of the existing connections is released.
     #[clap(
         long,
-        env = "ESPRESSO_SEQUENCER_DATABASE_MAX_CONNECTIONS",
+        env = "ESPRESSO_NODE_DATABASE_MAX_CONNECTIONS",
         default_value = "25"
     )]
     pub(crate) max_connections: u32,
@@ -293,7 +293,7 @@ pub struct Options {
     /// Allows setting a different maximum number of connections for query operations.
     /// Default value of None implies using the max_connections value.
     #[cfg(not(feature = "embedded-db"))]
-    #[clap(long, env = "ESPRESSO_SEQUENCER_DATABASE_QUERY_MAX_CONNECTIONS", default_value = None)]
+    #[clap(long, env = "ESPRESSO_NODE_DATABASE_QUERY_MAX_CONNECTIONS", default_value = None)]
     pub(crate) query_max_connections: Option<u32>,
 
     // Keep the database connection pool when persistence is created,
@@ -499,14 +499,14 @@ pub struct PruningOptions {
     /// Threshold for pruning, specified in bytes.
     /// If the disk usage surpasses this threshold, pruning is initiated for data older than the specified minimum retention period.
     /// Pruning continues until the disk usage drops below the MAX USAGE.
-    #[clap(long, env = "ESPRESSO_SEQUENCER_PRUNER_PRUNING_THRESHOLD", value_parser = parse_size)]
+    #[clap(long, env = "ESPRESSO_NODE_PRUNER_PRUNING_THRESHOLD", value_parser = parse_size)]
     pruning_threshold: Option<u64>,
 
     /// Minimum retention period.
     /// Data is retained for at least this duration, even if there's no free disk space.
     #[clap(
         long,
-        env = "ESPRESSO_SEQUENCER_PRUNER_MINIMUM_RETENTION",
+        env = "ESPRESSO_NODE_PRUNER_MINIMUM_RETENTION",
         value_parser = parse_duration,
     )]
     minimum_retention: Option<Duration>,
@@ -515,14 +515,14 @@ pub struct PruningOptions {
     /// Data older than this is pruned to free up space.
     #[clap(
         long,
-        env = "ESPRESSO_SEQUENCER_PRUNER_TARGET_RETENTION",
+        env = "ESPRESSO_NODE_PRUNER_TARGET_RETENTION",
         value_parser = parse_duration,
     )]
     target_retention: Option<Duration>,
 
     /// Batch size for pruning.
     /// This is the number of blocks data to delete in a single transaction.
-    #[clap(long, env = "ESPRESSO_SEQUENCER_PRUNER_BATCH_SIZE")]
+    #[clap(long, env = "ESPRESSO_NODE_PRUNER_BATCH_SIZE")]
     batch_size: Option<u64>,
 
     /// Maximum disk usage (in basis points).
@@ -530,13 +530,13 @@ pub struct PruningOptions {
     /// Pruning stops once the disk usage falls below this value, even if
     /// some data older than the `MINIMUM_RETENTION` remains. Values range
     /// from 0 (0%) to 10000 (100%).
-    #[clap(long, env = "ESPRESSO_SEQUENCER_PRUNER_MAX_USAGE")]
+    #[clap(long, env = "ESPRESSO_NODE_PRUNER_MAX_USAGE")]
     max_usage: Option<u16>,
 
     /// Interval for running the pruner.
     #[clap(
         long,
-        env = "ESPRESSO_SEQUENCER_PRUNER_INTERVAL",
+        env = "ESPRESSO_NODE_PRUNER_INTERVAL",
         value_parser = parse_duration,
     )]
     interval: Option<Duration>,
@@ -544,7 +544,7 @@ pub struct PruningOptions {
     /// Number of SQLite pages to vacuum from the freelist
     /// during each pruner cycle.
     /// This value corresponds to `N` in the SQLite PRAGMA `incremental_vacuum(N)`,
-    #[clap(long, env = "ESPRESSO_SEQUENCER_PRUNER_INCREMENTAL_VACUUM_PAGES")]
+    #[clap(long, env = "ESPRESSO_NODE_PRUNER_INCREMENTAL_VACUUM_PAGES")]
     pages: Option<u64>,
 }
 
@@ -610,7 +610,7 @@ pub struct ConsensusPruningOptions {
     #[clap(
         name = "TARGET_RETENTION",
         long = "consensus-storage-target-retention",
-        env = "ESPRESSO_SEQUENCER_CONSENSUS_STORAGE_TARGET_RETENTION",
+        env = "ESPRESSO_NODE_CONSENSUS_STORAGE_TARGET_RETENTION",
         default_value = "302000"
     )]
     target_retention: u64,
@@ -628,7 +628,7 @@ pub struct ConsensusPruningOptions {
     #[clap(
         name = "MINIMUM_RETENTION",
         long = "consensus-storage-minimum-retention",
-        env = "ESPRESSO_SEQUENCER_CONSENSUS_STORAGE_MINIMUM_RETENTION",
+        env = "ESPRESSO_NODE_CONSENSUS_STORAGE_MINIMUM_RETENTION",
         default_value = "130000"
     )]
     minimum_retention: u64,
@@ -640,7 +640,7 @@ pub struct ConsensusPruningOptions {
     #[clap(
         name = "TARGET_USAGE",
         long = "consensus-storage-target-usage",
-        env = "ESPRESSO_SEQUENCER_CONSENSUS_STORAGE_TARGET_USAGE",
+        env = "ESPRESSO_NODE_CONSENSUS_STORAGE_TARGET_USAGE",
         default_value = "1000000000"
     )]
     target_usage: u64,

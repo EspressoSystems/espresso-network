@@ -64,17 +64,14 @@ async fn slow_dev_node_test(
         .run()
         .unwrap()
         .command()
-        .env("ESPRESSO_SEQUENCER_L1_PROVIDER", l1_url.to_string())
+        .env("ESPRESSO_L1_PROVIDER", l1_url.to_string())
         .env("ESPRESSO_BUILDER_PORT", builder_port.to_string())
-        .env("ESPRESSO_SEQUENCER_API_PORT", api_port.to_string())
-        .env("ESPRESSO_SEQUENCER_ETH_MNEMONIC", TEST_MNEMONIC)
+        .env("ESPRESSO_NODE_API_PORT", api_port.to_string())
+        .env("ESPRESSO_ETH_MNEMONIC", TEST_MNEMONIC)
         .env("ESPRESSO_DEPLOYER_ACCOUNT_INDEX", "0")
         .env("ESPRESSO_DEV_NODE_PORT", dev_node_port.to_string())
-        .env(
-            "ESPRESSO_SEQUENCER_STORAGE_PATH",
-            tmp_dir.path().as_os_str(),
-        )
-        .env("ESPRESSO_SEQUENCER_DATABASE_MAX_CONNECTIONS", "25")
+        .env("ESPRESSO_NODE_STORAGE_PATH", tmp_dir.path().as_os_str())
+        .env("ESPRESSO_NODE_DATABASE_MAX_CONNECTIONS", "25")
         .env("ESPRESSO_DEV_NODE_MAX_BLOCK_SIZE", "500000")
         .env("ESPRESSO_DEV_NODE_VERSION", version.to_string())
         .spawn()
@@ -390,21 +387,18 @@ async fn slow_dev_node_multiple_lc_providers_test() {
         .run()
         .unwrap()
         .command()
-        .env("ESPRESSO_SEQUENCER_L1_PROVIDER", l1_url.to_string())
+        .env("ESPRESSO_L1_PROVIDER", l1_url.to_string())
         .env("ESPRESSO_BUILDER_PORT", builder_port.to_string())
-        .env("ESPRESSO_SEQUENCER_API_PORT", api_port.to_string())
-        .env("ESPRESSO_SEQUENCER_ETH_MNEMONIC", TEST_MNEMONIC)
+        .env("ESPRESSO_NODE_API_PORT", api_port.to_string())
+        .env("ESPRESSO_ETH_MNEMONIC", TEST_MNEMONIC)
         .env("ESPRESSO_DEPLOYER_ACCOUNT_INDEX", "0")
         .env("ESPRESSO_DEV_NODE_PORT", dev_node_port.to_string())
         .env(
             "ESPRESSO_DEPLOYER_ALT_CHAIN_PROVIDERS",
             alt_chains_env_value,
         )
-        .env(
-            "ESPRESSO_SEQUENCER_STORAGE_PATH",
-            tmp_dir.path().as_os_str(),
-        )
-        .env("ESPRESSO_SEQUENCER_DATABASE_MAX_CONNECTIONS", "25")
+        .env("ESPRESSO_NODE_STORAGE_PATH", tmp_dir.path().as_os_str())
+        .env("ESPRESSO_NODE_DATABASE_MAX_CONNECTIONS", "25")
         .spawn()
         .unwrap();
 

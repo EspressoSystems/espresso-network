@@ -66,7 +66,7 @@ impl fmt::Display for Network {
 struct Args {
     #[clap(
         long,
-        env = "ESPRESSO_SEQUENCER_L1_PROVIDER",
+        env = "ESPRESSO_L1_PROVIDER",
         help = "RPC URL for L1 provider. Defaults to publicnode when --network is specified."
     )]
     rpc_url: Option<Url>,
@@ -560,7 +560,7 @@ mod tests {
     fn test_load_addresses_empty_value_errors() {
         let dir = tempfile::tempdir().unwrap();
         let env_path = dir.path().join("test.env");
-        std::fs::write(&env_path, "ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS=\n").unwrap();
+        std::fs::write(&env_path, "ESPRESSO_STAKE_TABLE_PROXY_ADDRESS=\n").unwrap();
         let result = DeploymentAddresses::from_env_file(&env_path);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("empty"));
