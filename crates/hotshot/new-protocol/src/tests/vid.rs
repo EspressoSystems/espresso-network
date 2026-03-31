@@ -131,8 +131,8 @@ async fn test_shares_after_reconstruction_are_ignored() {
         Ok(Some(Err(()))) => { /* error, not a duplicate success */ },
         Ok(Some(Ok(out))) => {
             panic!(
-                "BUG: got a duplicate BlockReconstructed for view {:?} after reconstruction \
-                 was already completed",
+                "BUG: got a duplicate BlockReconstructed for view {:?} after reconstruction was \
+                 already completed",
                 out.view
             );
         },
