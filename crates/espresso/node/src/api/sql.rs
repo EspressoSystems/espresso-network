@@ -1519,7 +1519,7 @@ mod tests {
             Transaction, VersionedDataSource,
             sql::Config,
             storage::{
-                MerklizedStateStorage,
+                MerklizedStateStorage, UpdateAvailabilityStorage,
                 sql::{
                     SqlStorage, StorageConnectionType, Transaction as SqlTransaction, Write,
                     testing::TmpDb,
@@ -1531,6 +1531,8 @@ mod tests {
     use jf_merkle_tree_compat::{
         LookupResult, MerkleTreeScheme, ToTraversalPath, UniversalMerkleTreeScheme,
     };
+    use light_client::testing::{leaf_chain, leaf_chain_with_upgrade};
+    use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, Upgrade};
 
     use super::impl_testable_data_source::tmp_options;
     use crate::{SeqTypes, api::RewardMerkleTreeDataSource};
@@ -1980,6 +1982,14 @@ mod tests {
 
         let account = vec![0; 32];
 
+        // Insert mock leaves at heights 0-2 so load_proof can check leaf version.
+        let leaves = leaf_chain(0..=2, DRB_AND_HEADER_UPGRADE_VERSION).await;
+        let mut tx = storage.write().await.unwrap();
+        for leaf in &leaves {
+            tx.insert_leaf(leaf).await.unwrap();
+        }
+        Transaction::commit(tx).await.unwrap();
+
         // Insert some mock proofs at heights 0-2.
         for h in 0..=2 {
             storage
@@ -2007,5 +2017,112 @@ mod tests {
         storage.garbage_collect(3).await.unwrap();
         let err = storage.load_proof(2, account, 0).await.unwrap_err();
         assert!(err.to_string().contains("Missing proof"), "{err:#}");
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_load_proof_v5_epoch_boundary() {
+        let db = TmpDb::init().await;
+        let opt = tmp_options(&db);
+        let cfg = Config::try_from(&opt).expect("failed to create config from options");
+        let storage = SqlStorage::connect(cfg, StorageConnectionType::Query)
+            .await
+            .expect("failed to connect to storage");
+
+        let epoch_height = 10u64;
+        let account = vec![0; 32];
+
+        // Create V5 leaves at heights 0..=15.
+        let leaves = leaf_chain(0..=15, EPOCH_REWARD_VERSION).await;
+        let mut tx = storage.write().await.unwrap();
+        for leaf in &leaves {
+            tx.insert_leaf(leaf).await.unwrap();
+        }
+        Transaction::commit(tx).await.unwrap();
+
+        // Store proofs only at epoch boundaries (height 10).
+        let boundary_proof = b"proof_at_10".to_vec();
+        {
+            let mut tx = storage.write().await.unwrap();
+            tx.upsert(
+                "reward_merkle_tree_v2_proofs",
+                ["height", "account", "proof"],
+                ["height", "account"],
+                [(10i64, account.clone(), boundary_proof.clone())],
+            )
+            .await
+            .unwrap();
+            Transaction::commit(tx).await.unwrap();
+        }
+
+        // Querying at the epoch boundary itself should return the proof directly.
+        assert_eq!(
+            storage
+                .load_proof(10, account.clone(), epoch_height)
+                .await
+                .unwrap(),
+            boundary_proof,
+        );
+
+        // Querying at a non-boundary V5 height (e.g. 15) should resolve to the
+        // previous epoch boundary (10) and return its proof.
+        assert_eq!(
+            storage
+                .load_proof(15, account.clone(), epoch_height)
+                .await
+                .unwrap(),
+            boundary_proof,
+        );
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_load_proof_v4_to_v5_upgrade_boundary() {
+        let db = TmpDb::init().await;
+        let opt = tmp_options(&db);
+        let cfg = Config::try_from(&opt).expect("failed to create config from options");
+        let storage = SqlStorage::connect(cfg, StorageConnectionType::Query)
+            .await
+            .expect("failed to connect to storage");
+
+        let epoch_height = 10u64;
+        let account = vec![0; 32];
+
+        // V4 leaves at heights 0..=10, V5 from height 11 onward.
+        // The upgrade happens at height 11.
+        let upgrade = Upgrade::new(DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION);
+        let leaves = leaf_chain_with_upgrade(0..=15, 11, upgrade).await;
+        {
+            let mut tx = storage.write().await.unwrap();
+            for leaf in &leaves {
+                tx.insert_leaf(leaf).await.unwrap();
+            }
+            Transaction::commit(tx).await.unwrap();
+        }
+
+        // Querying at V5 height 15 resolves to prev epoch boundary
+        // But leaf at height 10 is V4, so this should fail.
+        storage
+            .load_proof(15, account.clone(), epoch_height)
+            .await
+            .unwrap_err();
+
+        let v4_proof = b"v4_proof_at_5".to_vec();
+        {
+            let mut tx = storage.write().await.unwrap();
+            tx.upsert(
+                "reward_merkle_tree_v2_proofs",
+                ["height", "account", "proof"],
+                ["height", "account"],
+                [(5i64, account.clone(), v4_proof.clone())],
+            )
+            .await
+            .unwrap();
+            Transaction::commit(tx).await.unwrap();
+        }
+        assert_eq!(
+            storage.load_proof(5, account.clone(), 0).await.unwrap(),
+            v4_proof,
+        );
     }
 }
