@@ -718,32 +718,35 @@ impl Persistence {
     /// check if there are any just-migrated quorum proposals with a `NULL` value for this column,
     /// and if so we populate the column manually.
     async fn migrate_quorum_proposal_leaf_hashes(&self) -> anyhow::Result<()> {
-        let mut tx = self.db.write().await?;
+        self.with_write_retry(|| async {
+            let mut tx = self.db.write().await?;
 
-        let mut proposals = tx.fetch("SELECT * FROM quorum_proposals");
+            let mut proposals = tx.fetch("SELECT * FROM quorum_proposals");
 
-        let mut updates = vec![];
-        while let Some(row) = proposals.next().await {
-            let row = row?;
+            let mut updates = vec![];
+            while let Some(row) = proposals.next().await {
+                let row = row?;
 
-            let hash: Option<String> = row.try_get("leaf_hash")?;
-            if hash.is_none() {
-                let view: i64 = row.try_get("view")?;
-                let data: Vec<u8> = row.try_get("data")?;
-                let proposal: Proposal<SeqTypes, QuorumProposal<SeqTypes>> =
-                    bincode::deserialize(&data)?;
-                let leaf = Leaf::from_quorum_proposal(&proposal.data);
-                let leaf_hash = Committable::commit(&leaf);
-                tracing::info!(view, %leaf_hash, "populating quorum proposal leaf hash");
-                updates.push((view, leaf_hash.to_string()));
+                let hash: Option<String> = row.try_get("leaf_hash")?;
+                if hash.is_none() {
+                    let view: i64 = row.try_get("view")?;
+                    let data: Vec<u8> = row.try_get("data")?;
+                    let proposal: Proposal<SeqTypes, QuorumProposal<SeqTypes>> =
+                        bincode::deserialize(&data)?;
+                    let leaf = Leaf::from_quorum_proposal(&proposal.data);
+                    let leaf_hash = Committable::commit(&leaf);
+                    tracing::info!(view, %leaf_hash, "populating quorum proposal leaf hash");
+                    updates.push((view, leaf_hash.to_string()));
+                }
             }
-        }
-        drop(proposals);
+            drop(proposals);
 
-        tx.upsert("quorum_proposals", ["view", "leaf_hash"], ["view"], updates)
-            .await?;
+            tx.upsert("quorum_proposals", ["view", "leaf_hash"], ["view"], updates)
+                .await?;
 
-        tx.commit().await
+            tx.commit().await
+        })
+        .await
     }
 
     async fn is_migration_complete(&self, name: &str, table_name: &str) -> anyhow::Result<bool> {
@@ -1101,52 +1104,55 @@ impl Persistence {
 
     #[tracing::instrument(skip(self))]
     async fn prune(&self, cur_view: ViewNumber) -> anyhow::Result<()> {
-        let mut tx = self.db.write().await?;
+        self.with_write_retry(|| async {
+            let mut tx = self.db.write().await?;
 
-        // Prune everything older than the target retention period.
-        prune_to_view(
-            &mut tx,
-            cur_view.u64().saturating_sub(self.gc_opt.target_retention),
-        )
-        .await?;
-
-        // Check our storage usage; if necessary we will prune more aggressively (up to the minimum
-        // retention) to get below the target usage.
-        #[cfg(feature = "embedded-db")]
-        let usage_query = format!(
-            "SELECT sum(pgsize) FROM dbstat WHERE name IN ({})",
-            PRUNE_TABLES
-                .iter()
-                .map(|table| format!("'{table}'"))
-                .join(",")
-        );
-
-        #[cfg(not(feature = "embedded-db"))]
-        let usage_query = {
-            let table_sizes = PRUNE_TABLES
-                .iter()
-                .map(|table| format!("pg_table_size('{table}')"))
-                .join(" + ");
-            format!("SELECT {table_sizes}")
-        };
-
-        let (usage,): (i64,) = query_as(&usage_query).fetch_one(tx.as_mut()).await?;
-        tracing::debug!(usage, "consensus storage usage after pruning");
-
-        if (usage as u64) > self.gc_opt.target_usage {
-            tracing::warn!(
-                usage,
-                gc_opt = ?self.gc_opt,
-                "consensus storage is running out of space, pruning to minimum retention"
-            );
+            // Prune everything older than the target retention period.
             prune_to_view(
                 &mut tx,
-                cur_view.u64().saturating_sub(self.gc_opt.minimum_retention),
+                cur_view.u64().saturating_sub(self.gc_opt.target_retention),
             )
             .await?;
-        }
 
-        tx.commit().await
+            // Check our storage usage; if necessary we will prune more aggressively (up to the
+            // minimum retention) to get below the target usage.
+            #[cfg(feature = "embedded-db")]
+            let usage_query = format!(
+                "SELECT sum(pgsize) FROM dbstat WHERE name IN ({})",
+                PRUNE_TABLES
+                    .iter()
+                    .map(|table| format!("'{table}'"))
+                    .join(",")
+            );
+
+            #[cfg(not(feature = "embedded-db"))]
+            let usage_query = {
+                let table_sizes = PRUNE_TABLES
+                    .iter()
+                    .map(|table| format!("pg_table_size('{table}')"))
+                    .join(" + ");
+                format!("SELECT {table_sizes}")
+            };
+
+            let (usage,): (i64,) = query_as(&usage_query).fetch_one(tx.as_mut()).await?;
+            tracing::debug!(usage, "consensus storage usage after pruning");
+
+            if (usage as u64) > self.gc_opt.target_usage {
+                tracing::warn!(
+                    usage,
+                    gc_opt = ?self.gc_opt,
+                    "consensus storage is running out of space, pruning to minimum retention"
+                );
+                prune_to_view(
+                    &mut tx,
+                    cur_view.u64().saturating_sub(self.gc_opt.minimum_retention),
+                )
+                .await?;
+            }
+
+            tx.commit().await
+        })
+        .await
     }
 
     /// Retry a write transaction body on PostgreSQL serialization failures (error code 40001).
@@ -1438,10 +1444,13 @@ impl SequencerPersistence for Persistence {
         tracing::info!("saving config to database");
         let json = serde_json::to_value(cfg)?;
 
-        let mut tx = self.db.write().await?;
-        tx.execute(query("INSERT INTO network_config (config) VALUES ($1)").bind(json))
-            .await?;
-        tx.commit().await
+        self.with_write_retry(|| async {
+            let mut tx = self.db.write().await?;
+            tx.execute(query("INSERT INTO network_config (config) VALUES ($1)").bind(json.clone()))
+                .await?;
+            tx.commit().await
+        })
+        .await
     }
 
     async fn append_decided_leaves(
@@ -1474,16 +1483,18 @@ impl SequencerPersistence for Persistence {
 
         // First, append the new leaves. We do this in its own transaction because even if GC or the
         // event consumer later fails, there is no need to abort the storage of the leaves.
-        let mut tx = self.db.write().await?;
-
-        tx.upsert(
-            "anchor_leaf2",
-            ["view", "leaf", "qc", "next_epoch_qc"],
-            ["view"],
-            values,
-        )
+        self.with_write_retry(|| async {
+            let mut tx = self.db.write().await?;
+            tx.upsert(
+                "anchor_leaf2",
+                ["view", "leaf", "qc", "next_epoch_qc"],
+                ["view"],
+                values.clone(),
+            )
+            .await?;
+            tx.commit().await
+        })
         .await?;
-        tx.commit().await?;
 
         // Generate an event for the new leaves and, only if it succeeds, clean up data we no longer
         // need.
@@ -1673,15 +1684,19 @@ impl SequencerPersistence for Persistence {
         let data_bytes = bincode::serialize(proposal).unwrap();
 
         let now = Instant::now();
-        let mut tx = self.db.write().await?;
-        tx.upsert(
-            "vid_share2",
-            ["view", "data", "payload_hash"],
-            ["view"],
-            [(view as i64, data_bytes, payload_hash.to_string())],
-        )
-        .await?;
-        let res = tx.commit().await;
+        let res = self
+            .with_write_retry(|| async {
+                let mut tx = self.db.write().await?;
+                tx.upsert(
+                    "vid_share2",
+                    ["view", "data", "payload_hash"],
+                    ["view"],
+                    [(view as i64, data_bytes.clone(), payload_hash.to_string())],
+                )
+                .await?;
+                tx.commit().await
+            })
+            .await;
         self.internal_metrics
             .internal_append_vid_duration
             .add_point(now.elapsed().as_secs_f64());
@@ -1698,15 +1713,19 @@ impl SequencerPersistence for Persistence {
         let data_bytes = bincode::serialize(proposal).unwrap();
 
         let now = Instant::now();
-        let mut tx = self.db.write().await?;
-        tx.upsert(
-            "da_proposal",
-            ["view", "data", "payload_hash"],
-            ["view"],
-            [(view as i64, data_bytes, vid_commit.to_string())],
-        )
-        .await?;
-        let res = tx.commit().await;
+        let res = self
+            .with_write_retry(|| async {
+                let mut tx = self.db.write().await?;
+                tx.upsert(
+                    "da_proposal",
+                    ["view", "data", "payload_hash"],
+                    ["view"],
+                    [(view as i64, data_bytes.clone(), vid_commit.to_string())],
+                )
+                .await?;
+                tx.commit().await
+            })
+            .await;
         self.internal_metrics
             .internal_append_da_duration
             .add_point(now.elapsed().as_secs_f64());
@@ -1759,31 +1778,41 @@ impl SequencerPersistence for Persistence {
         let proposal_bytes = bincode::serialize(&proposal).context("serializing proposal")?;
         let leaf_hash = Committable::commit(&Leaf2::from_quorum_proposal(&proposal.data));
 
-        let now = Instant::now();
-        let mut tx = self.db.write().await?;
-        tx.upsert(
-            "quorum_proposals2",
-            ["view", "leaf_hash", "data"],
-            ["view"],
-            [(view_number as i64, leaf_hash.to_string(), proposal_bytes)],
-        )
-        .await?;
-
         // We also keep track of any QC we see in case we need it to recover our archival storage.
         let justify_qc = proposal.data.justify_qc();
         let justify_qc_bytes = bincode::serialize(&justify_qc).context("serializing QC")?;
-        tx.upsert(
-            "quorum_certificate2",
-            ["view", "leaf_hash", "data"],
-            ["view"],
-            [(
-                justify_qc.view_number.u64() as i64,
-                justify_qc.data.leaf_commit.to_string(),
-                &justify_qc_bytes,
-            )],
-        )
-        .await?;
-        let res = tx.commit().await;
+        let justify_qc_view = justify_qc.view_number.u64() as i64;
+        let justify_qc_leaf_commit = justify_qc.data.leaf_commit.to_string();
+
+        let now = Instant::now();
+        let res = self
+            .with_write_retry(|| async {
+                let mut tx = self.db.write().await?;
+                tx.upsert(
+                    "quorum_proposals2",
+                    ["view", "leaf_hash", "data"],
+                    ["view"],
+                    [(
+                        view_number as i64,
+                        leaf_hash.to_string(),
+                        proposal_bytes.clone(),
+                    )],
+                )
+                .await?;
+                tx.upsert(
+                    "quorum_certificate2",
+                    ["view", "leaf_hash", "data"],
+                    ["view"],
+                    [(
+                        justify_qc_view,
+                        justify_qc_leaf_commit.clone(),
+                        justify_qc_bytes.clone(),
+                    )],
+                )
+                .await?;
+                tx.commit().await
+            })
+            .await;
         self.internal_metrics
             .internal_append_quorum2_duration
             .add_point(now.elapsed().as_secs_f64());
@@ -1818,15 +1847,18 @@ impl SequencerPersistence for Persistence {
         };
         let upgrade_certificate_bytes =
             bincode::serialize(&certificate).context("serializing upgrade certificate")?;
-        let mut tx = self.db.write().await?;
-        tx.upsert(
-            "upgrade_certificate",
-            ["id", "data"],
-            ["id"],
-            [(true, upgrade_certificate_bytes)],
-        )
-        .await?;
-        tx.commit().await
+        self.with_write_retry(|| async {
+            let mut tx = self.db.write().await?;
+            tx.upsert(
+                "upgrade_certificate",
+                ["id", "data"],
+                ["id"],
+                [(true, upgrade_certificate_bytes.clone())],
+            )
+            .await?;
+            tx.commit().await
+        })
+        .await
     }
 
     async fn migrate_anchor_leaf(&self) -> anyhow::Result<()> {
@@ -2458,15 +2490,18 @@ impl SequencerPersistence for Persistence {
         high_qc: NextEpochQuorumCertificate2<SeqTypes>,
     ) -> anyhow::Result<()> {
         let qc2_bytes = bincode::serialize(&high_qc).context("serializing next epoch qc")?;
-        let mut tx = self.db.write().await?;
-        tx.upsert(
-            "next_epoch_quorum_certificate",
-            ["id", "data"],
-            ["id"],
-            [(true, qc2_bytes)],
-        )
-        .await?;
-        tx.commit().await
+        self.with_write_retry(|| async {
+            let mut tx = self.db.write().await?;
+            tx.upsert(
+                "next_epoch_quorum_certificate",
+                ["id", "data"],
+                ["id"],
+                [(true, qc2_bytes.clone())],
+            )
+            .await?;
+            tx.commit().await
+        })
+        .await
     }
 
     async fn load_next_epoch_quorum_certificate(
@@ -2494,10 +2529,13 @@ impl SequencerPersistence for Persistence {
     ) -> anyhow::Result<()> {
         let eqc_bytes =
             bincode::serialize(&(high_qc, next_epoch_high_qc)).context("serializing eqc")?;
-        let mut tx = self.db.write().await?;
-        tx.upsert("eqc", ["id", "data"], ["id"], [(true, eqc_bytes)])
-            .await?;
-        tx.commit().await
+        self.with_write_retry(|| async {
+            let mut tx = self.db.write().await?;
+            tx.upsert("eqc", ["id", "data"], ["id"], [(true, eqc_bytes.clone())])
+                .await?;
+            tx.commit().await
+        })
+        .await
     }
 
     async fn load_eqc(
@@ -2637,21 +2675,22 @@ impl SequencerPersistence for Persistence {
         &self,
         state_cert: LightClientStateUpdateCertificateV2<SeqTypes>,
     ) -> anyhow::Result<()> {
+        let view_number = state_cert.light_client_state.view_number as i64;
         let state_cert_bytes = bincode::serialize(&state_cert)
             .context("serializing light client state update certificate")?;
 
-        let mut tx = self.db.write().await?;
-        tx.upsert(
-            "state_cert",
-            ["view", "state_cert"],
-            ["view"],
-            [(
-                state_cert.light_client_state.view_number as i64,
-                state_cert_bytes,
-            )],
-        )
-        .await?;
-        tx.commit().await
+        self.with_write_retry(|| async {
+            let mut tx = self.db.write().await?;
+            tx.upsert(
+                "state_cert",
+                ["view", "state_cert"],
+                ["view"],
+                [(view_number, state_cert_bytes.clone())],
+            )
+            .await?;
+            tx.commit().await
+        })
+        .await
     }
 
     async fn load_state_cert(
@@ -2886,8 +2925,7 @@ impl MembershipPersistence for Persistence {
         block_reward: Option<RewardAmount>,
         stake_table_hash: Option<StakeTableHash>,
     ) -> anyhow::Result<()> {
-        let mut tx = self.db.write().await?;
-
+        let epoch_i64 = epoch.u64() as i64;
         let stake_table_bytes = bincode::serialize(&stake).context("serializing stake table")?;
         let reward_bytes = block_reward
             .map(|r| bincode::serialize(&r).context("serializing block reward"))
@@ -2895,19 +2933,23 @@ impl MembershipPersistence for Persistence {
         let stake_table_hash_bytes = stake_table_hash
             .map(|h| bincode::serialize(&h).context("serializing stake table hash"))
             .transpose()?;
-        tx.upsert(
-            "epoch_drb_and_root",
-            ["epoch", "stake", "block_reward", "stake_table_hash"],
-            ["epoch"],
-            [(
-                epoch.u64() as i64,
-                stake_table_bytes,
-                reward_bytes,
-                stake_table_hash_bytes,
-            )],
-        )
-        .await?;
-        tx.commit().await
+        self.with_write_retry(|| async {
+            let mut tx = self.db.write().await?;
+            tx.upsert(
+                "epoch_drb_and_root",
+                ["epoch", "stake", "block_reward", "stake_table_hash"],
+                ["epoch"],
+                [(
+                    epoch_i64,
+                    stake_table_bytes.clone(),
+                    reward_bytes.clone(),
+                    stake_table_hash_bytes.clone(),
+                )],
+            )
+            .await?;
+            tx.commit().await
+        })
+        .await
     }
 
     async fn store_events(
@@ -2915,67 +2957,73 @@ impl MembershipPersistence for Persistence {
         l1_finalized: u64,
         events: Vec<(EventKey, StakeTableEvent)>,
     ) -> anyhow::Result<()> {
-        let mut tx = self.db.write().await?;
+        let l1_finalized_i64: i64 = l1_finalized.try_into()?;
+        let serialized_events = events
+            .into_iter()
+            .map(|((block_number, index), event)| {
+                Ok((
+                    i64::try_from(block_number)?,
+                    i64::try_from(index)?,
+                    serde_json::to_value(event).context("l1 event to value")?,
+                ))
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
 
-        // check last l1 block if there is any
-        let last_processed_l1_block = query_as::<(i64,)>(
-            "SELECT last_l1_block FROM stake_table_events_l1_block where id = 0",
-        )
-        .fetch_optional(tx.as_mut())
-        .await?
-        .map(|(l1,)| l1);
+        self.with_write_retry(|| async {
+            let mut tx = self.db.write().await?;
 
-        tracing::debug!("last l1 finalizes in database = {last_processed_l1_block:?}");
+            // check last l1 block if there is any
+            let last_processed_l1_block = query_as::<(i64,)>(
+                "SELECT last_l1_block FROM stake_table_events_l1_block where id = 0",
+            )
+            .fetch_optional(tx.as_mut())
+            .await?
+            .map(|(l1,)| l1);
 
-        // skip events storage if the database already has higher l1 block events
-        if last_processed_l1_block > Some(l1_finalized.try_into()?) {
-            tracing::debug!(
-                ?last_processed_l1_block,
-                ?l1_finalized,
-                ?events,
-                "last l1 finalized stored is already higher"
-            );
-            return Ok(());
-        }
+            tracing::debug!("last l1 finalizes in database = {last_processed_l1_block:?}");
 
-        if !events.is_empty() {
-            let mut query_builder: sqlx::QueryBuilder<Db> = sqlx::QueryBuilder::new(
-                "INSERT INTO stake_table_events (l1_block, log_index, event) ",
-            );
+            // skip events storage if the database already has higher l1 block events
+            if last_processed_l1_block > Some(l1_finalized_i64) {
+                tracing::debug!(
+                    ?last_processed_l1_block,
+                    l1_finalized,
+                    "last l1 finalized stored is already higher"
+                );
+                return Ok(());
+            }
 
-            let events = events
-                .into_iter()
-                .map(|((block_number, index), event)| {
-                    Ok((
-                        i64::try_from(block_number)?,
-                        i64::try_from(index)?,
-                        serde_json::to_value(event).context("l1 event to value")?,
-                    ))
-                })
-                .collect::<anyhow::Result<Vec<_>>>()?;
+            if !serialized_events.is_empty() {
+                let mut query_builder: sqlx::QueryBuilder<Db> = sqlx::QueryBuilder::new(
+                    "INSERT INTO stake_table_events (l1_block, log_index, event) ",
+                );
 
-            query_builder.push_values(events, |mut b, (l1_block, log_index, event)| {
-                b.push_bind(l1_block).push_bind(log_index).push_bind(event);
-            });
+                query_builder.push_values(
+                    serialized_events.iter().cloned(),
+                    |mut b, (l1_block, log_index, event)| {
+                        b.push_bind(l1_block).push_bind(log_index).push_bind(event);
+                    },
+                );
 
-            query_builder.push(" ON CONFLICT DO NOTHING");
-            let query = query_builder.build();
+                query_builder.push(" ON CONFLICT DO NOTHING");
+                let query = query_builder.build();
 
-            query.execute(tx.as_mut()).await?;
-        }
+                query.execute(tx.as_mut()).await?;
+            }
 
-        // update l1 block
-        tx.upsert(
-            "stake_table_events_l1_block",
-            ["id", "last_l1_block"],
-            ["id"],
-            [(0_i32, l1_finalized as i64)],
-        )
-        .await?;
+            // update l1 block
+            tx.upsert(
+                "stake_table_events_l1_block",
+                ["id", "last_l1_block"],
+                ["id"],
+                [(0_i32, l1_finalized_i64)],
+            )
+            .await?;
 
-        tx.commit().await?;
+            tx.commit().await?;
 
-        Ok(())
+            Ok(())
+        })
+        .await
     }
 
     /// Loads all events from persistent storage up to the specified L1 block.
@@ -3056,31 +3104,34 @@ impl MembershipPersistence for Persistence {
     }
 
     async fn delete_stake_tables(&self) -> anyhow::Result<()> {
-        let mut tx = self.db.write().await?;
-        #[cfg(not(feature = "embedded-db"))]
-        query(
-            "TRUNCATE stake_table_events, stake_table_events_l1_block, epoch_drb_and_root, \
-             stake_table_validators",
-        )
-        .execute(tx.as_mut())
-        .await?;
-        #[cfg(feature = "embedded-db")]
-        {
-            query("DELETE FROM stake_table_events")
-                .execute(tx.as_mut())
-                .await?;
-            query("DELETE FROM stake_table_events_l1_block")
-                .execute(tx.as_mut())
-                .await?;
-            query("DELETE FROM epoch_drb_and_root")
-                .execute(tx.as_mut())
-                .await?;
-            query("DELETE FROM stake_table_validators")
-                .execute(tx.as_mut())
-                .await?;
-        }
-        tx.commit().await?;
-        Ok(())
+        self.with_write_retry(|| async {
+            let mut tx = self.db.write().await?;
+            #[cfg(not(feature = "embedded-db"))]
+            query(
+                "TRUNCATE stake_table_events, stake_table_events_l1_block, epoch_drb_and_root, \
+                 stake_table_validators",
+            )
+            .execute(tx.as_mut())
+            .await?;
+            #[cfg(feature = "embedded-db")]
+            {
+                query("DELETE FROM stake_table_events")
+                    .execute(tx.as_mut())
+                    .await?;
+                query("DELETE FROM stake_table_events_l1_block")
+                    .execute(tx.as_mut())
+                    .await?;
+                query("DELETE FROM epoch_drb_and_root")
+                    .execute(tx.as_mut())
+                    .await?;
+                query("DELETE FROM stake_table_validators")
+                    .execute(tx.as_mut())
+                    .await?;
+            }
+            tx.commit().await?;
+            Ok(())
+        })
+        .await
     }
 
     async fn store_all_validators(
@@ -3088,32 +3139,47 @@ impl MembershipPersistence for Persistence {
         epoch: EpochNumber,
         all_validators: RegisteredValidatorMap,
     ) -> anyhow::Result<()> {
-        let mut tx = self.db.write().await?;
-
         if all_validators.is_empty() {
             return Ok(());
         }
 
-        let mut query_builder =
-            QueryBuilder::new("INSERT INTO stake_table_validators (epoch, address, validator) ");
+        let epoch_i64 = epoch.u64() as i64;
+        let serialized_validators = all_validators
+            .into_iter()
+            .map(|(address, validator)| {
+                let validator_json =
+                    serde_json::to_value(&validator).context("serializing validator to json")?;
+                Ok((address.to_string(), validator_json))
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
 
-        query_builder.push_values(all_validators, |mut b, (address, validator)| {
-            let validator_json =
-                serde_json::to_value(&validator).expect("cannot serialize validator to json");
-            b.push_bind(epoch.u64() as i64)
-                .push_bind(address.to_string())
-                .push_bind(validator_json);
-        });
+        self.with_write_retry(|| async {
+            let mut tx = self.db.write().await?;
 
-        query_builder
-            .push(" ON CONFLICT (epoch, address) DO UPDATE SET validator = EXCLUDED.validator");
+            let mut query_builder = QueryBuilder::new(
+                "INSERT INTO stake_table_validators (epoch, address, validator) ",
+            );
 
-        let query = query_builder.build();
+            query_builder.push_values(
+                serialized_validators.iter().cloned(),
+                |mut b, (address, validator)| {
+                    b.push_bind(epoch_i64)
+                        .push_bind(address)
+                        .push_bind(validator);
+                },
+            );
 
-        query.execute(tx.as_mut()).await?;
+            query_builder
+                .push(" ON CONFLICT (epoch, address) DO UPDATE SET validator = EXCLUDED.validator");
 
-        tx.commit().await?;
-        Ok(())
+            let query = query_builder.build();
+
+            query.execute(tx.as_mut()).await?;
+
+            tx.commit().await?;
+            Ok(())
+        })
+        .await
     }
 
     async fn load_all_validators(
@@ -3165,18 +3231,21 @@ impl DhtPersistentStorage for Persistence {
         let stmt = "INSERT INTO libp2p_dht (id, serialized_records) VALUES (0, $1) ON CONFLICT \
                     (id) DO UPDATE SET serialized_records = $1";
 
-        // Execute the query
-        let mut tx = self
-            .db
-            .write()
-            .await
-            .with_context(|| "failed to start an atomic DB transaction")?;
-        tx.execute(query(stmt).bind(to_save))
-            .await
-            .with_context(|| "failed to execute DB query")?;
+        self.with_write_retry(|| async {
+            // Execute the query
+            let mut tx = self
+                .db
+                .write()
+                .await
+                .with_context(|| "failed to start an atomic DB transaction")?;
+            tx.execute(query(stmt).bind(to_save.clone()))
+                .await
+                .with_context(|| "failed to execute DB query")?;
 
-        // Commit the state
-        tx.commit().await.with_context(|| "failed to commit to DB")
+            // Commit the state
+            tx.commit().await.with_context(|| "failed to commit to DB")
+        })
+        .await
     }
 
     /// Load the DHT from the database
