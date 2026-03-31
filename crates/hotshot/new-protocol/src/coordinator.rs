@@ -137,7 +137,7 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                 Some(item) = self.block_builder.next() => match item {
                     Ok(block) => {
                         self.state_manager.request_header(HeaderRequest::from(&block));
-                        let next_view = ViewNumber::new(block.view.u64() + 1);
+                        let next_view = block.view + 1;
                         let epoch = block.epoch;
                         let manifest = block.manifest.clone();
                         self.unicast_to_leader(
@@ -148,22 +148,22 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                         .await?;
                         return Ok(block.into())
                     }
-                    Err(()) => {
-                        return Err(CoordinatorError::unspecified().context("block building"))
+                    Err(err) => {
+                        return Err(CoordinatorError::regular(err).context("block building"))
                     }
                 },
                 Some(item) = self.vid_disperser.next() => match item {
-                    Ok((view, _, disperse)) => {
-                        return Ok(ConsensusInput::VidDisperseCreated(view, disperse))
+                    Ok(out) => {
+                        return Ok(ConsensusInput::VidDisperseCreated(out.view, out.disperse))
                     }
                     Err(()) => {
                         return Err(CoordinatorError::unspecified().context("vid disperse"))
                     }
                 },
                 Some(item) = self.vid_reconstructor.next() => match item {
-                    Ok((view, commitment, _payload, _metadata, tx_commitments)) => {
-                        self.block_builder.on_block_reconstructed(tx_commitments);
-                        return Ok(ConsensusInput::BlockReconstructed(view, commitment))
+                    Ok(out) => {
+                        self.block_builder.on_block_reconstructed(out.tx_commitments);
+                        return Ok(ConsensusInput::BlockReconstructed(out.view, out.payload_commitment))
                     }
                     Err(()) => {
                         return Err(CoordinatorError::unspecified().context("vid reconstruction"))
@@ -311,8 +311,7 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
             ConsensusOutput::LeafDecided(_) => {},        // TODO
             ConsensusOutput::LockUpdated(_) => {},        // TODO
             ConsensusOutput::RequestBlockAndHeader(request) => {
-                self.block_builder
-                    .request_block(request, self.membership_coordinator.clone());
+                self.block_builder.request_block(request);
             },
             ConsensusOutput::RequestProposal(..) => {}, // TODO
             ConsensusOutput::SendProposal(proposal, vid_disperse) => {
@@ -372,7 +371,7 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                 self.timer.reset_with(view);
                 let txns = self.block_builder.on_view_changed(view, epoch);
                 if !txns.is_empty() {
-                    let next_view = ViewNumber::new(view.u64() + 1);
+                    let next_view = view + 1;
                     self.unicast_to_leader(
                         next_view,
                         epoch,
@@ -381,7 +380,8 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                             transactions: txns,
                         }),
                     )
-                    .await?;
+                    .await
+                    .map_err(|e| CoordinatorError::from(e).context("unicast transactions"))?;
                 }
             },
         }
@@ -402,14 +402,10 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
             sender: self.public_key.clone(),
             message_type: MessageType::Block(msg),
         };
-        if let Err(err) = self.network.unicast(leader, message).await {
-            let err = CoordinatorError::from(err).context("leader unicast");
-            if err.severity == Severity::Critical {
-                return Err(err);
-            }
-            warn!(%err, "network error while sending to leader");
-        }
-        Ok(())
+        self.network
+            .unicast(leader, message)
+            .await
+            .map_err(|e| CoordinatorError::from(e).context("leader unicast"))
     }
 
     async fn leader(&self, view: ViewNumber, epoch: EpochNumber) -> Option<T::SignatureKey> {

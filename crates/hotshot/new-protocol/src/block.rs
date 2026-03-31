@@ -20,6 +20,7 @@ use hotshot_types::{
     utils::BuilderCommitment,
 };
 use tokio::task::{AbortHandle, JoinSet};
+use tracing::{error, warn};
 
 use crate::{
     consensus::ConsensusInput,
@@ -27,6 +28,16 @@ use crate::{
     message::{DedupManifest, TransactionMessage},
     state::HeaderRequest,
 };
+
+#[derive(Debug, thiserror::Error)]
+pub enum BlockError {
+    #[error("payload construction failed: {0}")]
+    PayloadConstruction(String),
+    #[error("stake table unavailable")]
+    StakeTableUnavailable,
+    #[error("builder signature failed")]
+    BuilderSignature,
+}
 
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub struct BlockAndHeaderRequest<T: NodeType> {
@@ -48,10 +59,10 @@ pub struct BlockBuilderOutput<T: NodeType> {
 }
 
 pub struct BlockBuilderConfig {
-    pub max_retry_bytes: usize,
-    pub max_leader_bytes: usize,
+    pub max_retry_bytes: u64,
+    pub max_leader_bytes: u64,
     pub ttl: u64,
-    pub dedup_window_size: usize,
+    pub dedup_window_size: u64,
 }
 
 impl Default for BlockBuilderConfig {
@@ -73,6 +84,7 @@ struct RetryEntry<T: NodeType> {
 
 pub struct BlockBuilder<T: NodeType> {
     instance: Arc<T::InstanceState>,
+    membership: EpochMembershipCoordinator<T>,
     retry_pending: HashMap<Commitment<T::Transaction>, RetryEntry<T>>,
     retry_total_bytes: u64,
     leader_buffer: HashMap<Commitment<T::Transaction>, T::Transaction>,
@@ -82,13 +94,18 @@ pub struct BlockBuilder<T: NodeType> {
     config: BlockBuilderConfig,
     current_view: ViewNumber,
     calculations: BTreeMap<ViewNumber, AbortHandle>,
-    tasks: JoinSet<Result<BlockBuilderOutput<T>, ()>>,
+    tasks: JoinSet<Result<BlockBuilderOutput<T>, BlockError>>,
 }
 
 impl<T: NodeType> BlockBuilder<T> {
-    pub fn new(instance: Arc<T::InstanceState>, config: BlockBuilderConfig) -> Self {
+    pub fn new(
+        instance: Arc<T::InstanceState>,
+        membership: EpochMembershipCoordinator<T>,
+        config: BlockBuilderConfig,
+    ) -> Self {
         Self {
             instance,
+            membership,
             config,
             retry_pending: HashMap::new(),
             retry_total_bytes: 0,
@@ -102,33 +119,38 @@ impl<T: NodeType> BlockBuilder<T> {
         }
     }
 
-    pub fn request_block(
-        &mut self,
-        request: BlockAndHeaderRequest<T>,
-        membership_coordinator: EpochMembershipCoordinator<T>,
-    ) {
+    pub fn request_block(&mut self, request: BlockAndHeaderRequest<T>) {
         let view = request.view;
         if self.calculations.contains_key(&view) {
             return;
         }
         let Ok(version) = upgrade_lock::<T>().version(view) else {
-            tracing::warn!(%view, "unsupported version for block building");
+            warn!(%view, "unsupported version");
             return;
         };
         let epoch = request.epoch;
-        let (txs, manifest) = self.drain(view, epoch);
+        let buffer = std::mem::take(&mut self.leader_buffer);
+        self.leader_total_bytes = 0;
         let instance = self.instance.clone();
+        let membership = self.membership.clone();
+
         let handle = self.tasks.spawn(async move {
+            let (hashes, txs): (Vec<_>, Vec<_>) = buffer.into_iter().unzip();
+            let manifest = DedupManifest {
+                view,
+                epoch,
+                hashes,
+            };
             let (payload, metadata) =
                 T::BlockPayload::from_transactions(txs, &T::ValidatedState::default(), &instance)
                     .await
-                    .map_err(|_| ())?;
+                    .map_err(|e| BlockError::PayloadConstruction(e.to_string()))?;
 
             let total_weight = {
-                let target_mem = membership_coordinator
+                let target_mem = membership
                     .stake_table_for_epoch(Some(epoch))
                     .await
-                    .map_err(|_| ())?;
+                    .map_err(|_| BlockError::StakeTableUnavailable)?;
                 vid_total_weight::<T>(&target_mem.stake_table().await, Some(epoch))
             };
             let payload_commitment =
@@ -144,7 +166,7 @@ impl<T: NodeType> BlockBuilder<T> {
                     &builder_private_key,
                     builder_commitment.as_ref(),
                 )
-                .map_err(|_| ())?,
+                .map_err(|_| BlockError::BuilderSignature)?,
             };
             Ok(BlockBuilderOutput {
                 view,
@@ -161,11 +183,15 @@ impl<T: NodeType> BlockBuilder<T> {
         self.calculations.insert(view, handle);
     }
 
-    pub async fn next(&mut self) -> Option<Result<BlockBuilderOutput<T>, ()>> {
+    pub async fn next(&mut self) -> Option<Result<BlockBuilderOutput<T>, BlockError>> {
         loop {
             match self.tasks.join_next().await {
                 Some(Ok(result)) => return Some(result),
-                Some(Err(_)) => continue,
+                Some(Err(err)) => {
+                    if err.is_panic() {
+                        error!(%err, "task panicked");
+                    }
+                },
                 None => return None,
             }
         }
@@ -173,14 +199,36 @@ impl<T: NodeType> BlockBuilder<T> {
 
     pub fn gc(&mut self, view_number: ViewNumber) {
         let keep = self.calculations.split_off(&view_number);
-        for handle in self.calculations.values_mut() {
+        for handle in self.calculations.values() {
             handle.abort();
         }
         self.calculations = keep;
     }
 
     pub fn on_submit_transaction(&mut self, tx: T::Transaction) {
-        self.handle_submit(tx);
+        let hash = tx.commit();
+
+        if self.retry_pending.contains_key(&hash) {
+            return;
+        }
+
+        let size = tx.minimum_block_size();
+        if self.retry_total_bytes + size > self.config.max_retry_bytes {
+            warn!("retry buffer full, rejecting {hash}");
+            return;
+        }
+
+        let valid_until = self.current_view + self.config.ttl;
+
+        self.retry_total_bytes += size;
+        self.retry_pending.insert(
+            hash,
+            RetryEntry {
+                tx,
+                valid_until,
+                size,
+            },
+        );
     }
 
     pub fn on_transactions(&mut self, msg: TransactionMessage<T>) {
@@ -190,7 +238,29 @@ impl<T: NodeType> BlockBuilder<T> {
     }
 
     pub fn on_dedup_manifest(&mut self, manifest: DedupManifest<T>) {
-        self.handle_dedup_manifest(manifest);
+        let DedupManifest { view, hashes, .. } = manifest;
+
+        for hash in &hashes {
+            if let Some(tx) = self.leader_buffer.remove(hash) {
+                self.leader_total_bytes -= tx.minimum_block_size();
+            }
+        }
+
+        self.dedup_set.extend(hashes.iter().copied());
+        self.dedup_views.push_back((view, hashes));
+
+        let current = self.current_view.u64();
+        let window = self.config.dedup_window_size;
+
+        while let Some((view, hashes)) = self.dedup_views.pop_front() {
+            if current.saturating_sub(view.u64()) <= window {
+                self.dedup_views.push_front((view, hashes));
+                break;
+            }
+            for hash in &hashes {
+                self.dedup_set.remove(hash);
+            }
+        }
     }
 
     pub fn on_view_changed(
@@ -220,7 +290,7 @@ impl<T: NodeType> BlockBuilder<T> {
     pub fn on_block_reconstructed(&mut self, tx_commitments: Vec<Commitment<T::Transaction>>) {
         for hash in tx_commitments {
             if let Some(entry) = self.retry_pending.remove(&hash) {
-                self.retry_total_bytes -= entry.size;
+                self.retry_total_bytes = self.retry_total_bytes.saturating_sub(entry.size);
             }
         }
     }
@@ -242,32 +312,6 @@ impl<T: NodeType> BlockBuilder<T> {
         (txs, manifest)
     }
 
-    fn handle_submit(&mut self, tx: T::Transaction) {
-        let hash = tx.commit();
-
-        if self.retry_pending.contains_key(&hash) {
-            return;
-        }
-
-        let size = tx.minimum_block_size();
-        if self.retry_total_bytes + size > self.config.max_retry_bytes as u64 {
-            tracing::warn!("Retry buffer full, rejecting transaction {hash}");
-            return;
-        }
-
-        let valid_until = ViewNumber::new(self.current_view.u64() + self.config.ttl);
-
-        self.retry_total_bytes += size;
-        self.retry_pending.insert(
-            hash,
-            RetryEntry {
-                tx,
-                valid_until,
-                size,
-            },
-        );
-    }
-
     fn handle_tx(&mut self, tx: T::Transaction) -> bool {
         let hash = tx.commit();
 
@@ -280,39 +324,13 @@ impl<T: NodeType> BlockBuilder<T> {
         }
 
         let size = tx.minimum_block_size();
-        if self.leader_total_bytes + size > self.config.max_leader_bytes as u64 {
+        if self.leader_total_bytes + size > self.config.max_leader_bytes {
             return false;
         }
 
         self.leader_total_bytes += size;
         self.leader_buffer.insert(hash, tx);
         true
-    }
-
-    fn handle_dedup_manifest(&mut self, manifest: DedupManifest<T>) {
-        let DedupManifest { view, hashes, .. } = manifest;
-
-        for hash in &hashes {
-            if let Some(tx) = self.leader_buffer.remove(hash) {
-                self.leader_total_bytes -= tx.minimum_block_size();
-            }
-        }
-
-        self.dedup_set.extend(hashes.iter().copied());
-        self.dedup_views.push_back((view, hashes));
-
-        let current = self.current_view.u64();
-        let window = self.config.dedup_window_size as u64;
-
-        while let Some((oldest, _)) = self.dedup_views.front() {
-            if current.saturating_sub(oldest.u64()) <= window {
-                break;
-            }
-            let (_, old_hashes) = self.dedup_views.pop_front().expect("dedup view exists");
-            for hash in &old_hashes {
-                self.dedup_set.remove(hash);
-            }
-        }
     }
 }
 
@@ -350,6 +368,7 @@ mod tests {
     use hotshot_types::data::{EpochNumber, ViewNumber};
 
     use super::*;
+    use crate::tests::common::utils::mock_membership;
 
     fn tx(n: u8) -> TestTransaction {
         TestTransaction::new(vec![n])
@@ -379,13 +398,17 @@ mod tests {
         }
     }
 
-    fn builder() -> BlockBuilder<TestTypes> {
-        BlockBuilder::new(Arc::new(TestInstanceState::default()), small_config())
+    async fn builder() -> BlockBuilder<TestTypes> {
+        BlockBuilder::new(
+            Arc::new(TestInstanceState::default()),
+            mock_membership().await,
+            small_config(),
+        )
     }
 
-    #[test]
-    fn test_retry_buffer() {
-        let mut b = builder();
+    #[tokio::test]
+    async fn test_retry_buffer() {
+        let mut b = builder().await;
         let t1 = tx(1);
         let t2 = tx(2);
         b.on_submit_transaction(t1.clone());
@@ -406,9 +429,9 @@ mod tests {
         assert!(forwarded.is_empty(), "tx past ttl should expire");
     }
 
-    #[test]
-    fn test_leader_buffer_drain() {
-        let mut b = builder();
+    #[tokio::test]
+    async fn test_leader_buffer_drain() {
+        let mut b = builder().await;
         b.on_transactions(tx_msg(view(1), vec![tx(1), tx(2)]));
         let (mut txns, manifest) = b.drain(view(1), epoch());
         txns.sort_by_key(|t| t.bytes().clone());
@@ -428,10 +451,11 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_dedup_window() {
-        let mut b: BlockBuilder<TestTypes> = BlockBuilder::new(
+    #[tokio::test]
+    async fn test_dedup_window() {
+        let mut b = BlockBuilder::new(
             Arc::new(TestInstanceState::default()),
+            mock_membership().await,
             BlockBuilderConfig {
                 dedup_window_size: 2,
                 ..small_config()
