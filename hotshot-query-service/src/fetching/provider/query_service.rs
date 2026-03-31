@@ -114,14 +114,8 @@ impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
             .await
             .context("fetching blocks")?;
         let common = self
-            .client
-            .get::<NonEmptyRange<VidCommonQueryData<Types>>>(&format!(
-                "availability/vid/common/{}/{}",
-                req.start, req.end
-            ))
-            .send()
-            .await
-            .context("fetching VID common")?;
+            .fetch_vid_common_range_with_fallback(req.start, req.end)
+            .await?;
 
         ensure!(
             blocks.start() == req.start && blocks.end() == req.end,
@@ -353,29 +347,29 @@ impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
         Ok(res.common)
     }
 
-    pub async fn fetch_vid_common_range<Types: NodeType>(
+    async fn fetch_vid_common_range_with_fallback<Types: NodeType>(
         &self,
-        req: VidCommonRangeRequest,
+        start: u64,
+        end: u64,
     ) -> anyhow::Result<NonEmptyRange<VidCommonQueryData<Types>>> {
-        let req = RangeRequest::from(req);
         let res = self
             .client
             .get::<NonEmptyRange<VidCommonQueryData<Types>>>(&format!(
-                "availability/vid/common/{}/{}",
-                req.start, req.end
+                "availability/vid/common/{start}/{end}",
             ))
             .send()
             .await;
-        let common = match res {
-            Ok(common) => common,
+        match res {
+            Ok(common) => Ok(common),
             Err(Error::Custom { message, .. }) if message.contains("No route matches") => {
                 // Old versions of the upstream query service do not support the ranged VID common
                 // endpoint. Fall back to fetching each object individually.
                 tracing::info!(
-                    ?req,
+                    start,
+                    end,
                     "server does not support ranged VID fetching, falling back to individual fetches"
                 );
-                let common = try_join_all((req.start..req.end).map(|i| {
+                let common = try_join_all((start..end).map(|i| {
                     self.client
                         .get::<VidCommonQueryData<Types>>(&format!("availability/vid/common/{i}"))
                         .send()
@@ -385,12 +379,20 @@ impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
                 }))
                 .await?;
                 NonEmptyRange::new(common)
-                    .context("converting individually fetched VID common into range")?
+                    .context("converting individually fetched VID common into range")
             },
-            Err(err) => {
-                return Err(err).context("fetching VID common range");
-            },
-        };
+            Err(err) => Err(err).context("fetching VID common range"),
+        }
+    }
+
+    pub async fn fetch_vid_common_range<Types: NodeType>(
+        &self,
+        req: VidCommonRangeRequest,
+    ) -> anyhow::Result<NonEmptyRange<VidCommonQueryData<Types>>> {
+        let req = RangeRequest::from(req);
+        let common = self
+            .fetch_vid_common_range_with_fallback(req.start, req.end)
+            .await?;
 
         ensure!(
             common.start() == req.start && common.end() == req.end,
