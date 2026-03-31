@@ -114,10 +114,6 @@ pub trait Storage<TYPES: NodeType>: Send + Sync + Clone + 'static {
         &self,
         decided_upgrade_certificate: Option<UpgradeCertificate<TYPES>>,
     ) -> Result<()>;
-    /// Migrate leaves from `Leaf` to `Leaf2`, and proposals from `QuorumProposal` to `QuorumProposal2`
-    async fn migrate_storage(&self) -> Result<()> {
-        Ok(())
-    }
     /// Add a drb result
     async fn store_drb_result(&self, epoch: EpochNumber, drb_result: DrbResult) -> Result<()>;
     /// Add an epoch block header

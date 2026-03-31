@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::BTreeMap,
     fs::{self, File, OpenOptions},
     io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write},
     ops::RangeInclusive,
@@ -13,14 +13,11 @@ use async_lock::RwLock;
 use async_trait::async_trait;
 use clap::Parser;
 use espresso_types::{
-    AuthenticatedValidatorMap, Leaf, Leaf2, NetworkConfig, Payload, PubKey, RegisteredValidatorMap,
+    AuthenticatedValidatorMap, Leaf2, NetworkConfig, Payload, PubKey, RegisteredValidatorMap,
     SeqTypes, StakeTableHash,
     traits::{EventsPersistenceRead, MembershipPersistence, StakeTuple},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
-    v0_3::{
-        AuthenticatedValidator, EventKey, IndexedStake, RegisteredValidator, RewardAmount,
-        StakeTableEvent,
-    },
+    v0_3::{EventKey, IndexedStake, RegisteredValidator, RewardAmount, StakeTableEvent},
 };
 use hotshot::InitializerEpochInfo;
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::{
@@ -28,15 +25,15 @@ use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::{
 };
 use hotshot_types::{
     data::{
-        DaProposal, DaProposal2, EpochNumber, QuorumProposal, QuorumProposalWrapper,
-        QuorumProposalWrapperLegacy, VidCommitment, VidDisperseShare, VidDisperseShare0,
+        DaProposal, DaProposal2, EpochNumber, QuorumProposalWrapper,
+        QuorumProposalWrapperLegacy, VidCommitment, VidDisperseShare,
     },
     drb::{DrbInput, DrbResult},
     event::{Event, EventType, HotShotAction, LeafInfo},
     message::{Proposal, convert_proposal},
     simple_certificate::{
         CertificatePair, LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
-        NextEpochQuorumCertificate2, QuorumCertificate, QuorumCertificate2, UpgradeCertificate,
+        NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate,
     },
     traits::{
         block_contents::{BlockHeader, BlockPayload},
@@ -109,21 +106,9 @@ impl PersistenceOptions for Options {
         let path = self.path.clone();
         let view_retention = self.consensus_view_retention;
 
-        let migration_path = path.join("migration");
-        let migrated = if migration_path.is_file() {
-            let bytes = fs::read(&migration_path).context(format!(
-                "unable to read migration from {}",
-                migration_path.display()
-            ))?;
-            bincode::deserialize(&bytes).context("malformed migration file")?
-        } else {
-            HashSet::new()
-        };
-
         Ok(Persistence {
             inner: Arc::new(RwLock::new(Inner {
                 path,
-                migrated,
                 view_retention,
             })),
             metrics: Arc::new(PersistenceMetricsValue::default()),
@@ -150,16 +135,11 @@ pub struct Persistence {
 struct Inner {
     path: PathBuf,
     view_retention: u64,
-    migrated: HashSet<String>,
 }
 
 impl Inner {
     fn config_path(&self) -> PathBuf {
         self.path.join("hotshot.cfg")
-    }
-
-    fn migration(&self) -> PathBuf {
-        self.path.join("migration")
     }
 
     fn voted_view_path(&self) -> PathBuf {
@@ -170,11 +150,6 @@ impl Inner {
         self.path.join("restart_view")
     }
 
-    /// Path to a directory containing decided leaves.
-    fn decided_leaf_path(&self) -> PathBuf {
-        self.path.join("decided_leaves")
-    }
-
     fn decided_leaf2_path(&self) -> PathBuf {
         self.path.join("decided_leaves2")
     }
@@ -182,10 +157,6 @@ impl Inner {
     /// The path from previous versions where there was only a single file for anchor leaves.
     fn legacy_anchor_leaf_path(&self) -> PathBuf {
         self.path.join("anchor_leaf")
-    }
-
-    fn vid_dir_path(&self) -> PathBuf {
-        self.path.join("vid")
     }
 
     fn vid2_dir_path(&self) -> PathBuf {
@@ -202,10 +173,6 @@ impl Inner {
 
     fn da2_dir_path(&self) -> PathBuf {
         self.path.join("da2")
-    }
-
-    fn quorum_proposals_dir_path(&self) -> PathBuf {
-        self.path.join("quorum_proposals")
     }
 
     fn quorum_proposals2_dir_path(&self) -> PathBuf {
@@ -245,20 +212,6 @@ impl Inner {
 
     fn state_cert_dir_path(&self) -> PathBuf {
         self.path.join("state_cert")
-    }
-
-    fn update_migration(&mut self) -> anyhow::Result<()> {
-        let path = self.migration();
-        let bytes = bincode::serialize(&self.migrated)?;
-
-        self.replace(
-            &path,
-            |_| Ok(true),
-            |mut file| {
-                file.write_all(&bytes)?;
-                Ok(())
-            },
-        )
     }
 
     /// Overwrite a file if a condition is met.
@@ -644,10 +597,6 @@ impl Inner {
 
 #[async_trait]
 impl SequencerPersistence for Persistence {
-    async fn migrate_reward_merkle_tree_v2(&self) -> anyhow::Result<()> {
-        Ok(())
-    }
-
     async fn load_config(&self) -> anyhow::Result<Option<NetworkConfig>> {
         let inner = self.inner.read().await;
         let path = inner.config_path();
@@ -1171,383 +1120,6 @@ impl SequencerPersistence for Persistence {
         self.append_quorum_proposal2(proposal).await
     }
 
-    async fn migrate_anchor_leaf(&self) -> anyhow::Result<()> {
-        let mut inner = self.inner.write().await;
-
-        if inner.migrated.contains("anchor_leaf") {
-            tracing::info!("decided leaves already migrated");
-            return Ok(());
-        }
-
-        let new_leaf_dir = inner.decided_leaf2_path();
-
-        fs::create_dir_all(new_leaf_dir.clone()).context("failed to create anchor leaf 2  dir")?;
-
-        let old_leaf_dir = inner.decided_leaf_path();
-        if !old_leaf_dir.is_dir() {
-            return Ok(());
-        }
-
-        tracing::warn!("migrating decided leaves..");
-        for entry in fs::read_dir(old_leaf_dir)? {
-            let entry = entry?;
-            let path = entry.path();
-
-            let Some(file) = path.file_stem().and_then(|n| n.to_str()) else {
-                continue;
-            };
-            let Ok(view) = file.parse::<u64>() else {
-                continue;
-            };
-
-            let bytes =
-                fs::read(&path).context(format!("reading decided leaf {}", path.display()))?;
-            let (leaf, qc) = bincode::deserialize::<(Leaf, QuorumCertificate<SeqTypes>)>(&bytes)
-                .context(format!("parsing decided leaf {}", path.display()))?;
-
-            let leaf2: Leaf2 = leaf.into();
-            let cert = CertificatePair::non_epoch_change(qc.to_qc2());
-
-            let new_leaf_path = new_leaf_dir.join(view.to_string()).with_extension("txt");
-
-            inner.replace(
-                &new_leaf_path,
-                |_| {
-                    tracing::warn!(view, "duplicate decided leaf");
-                    Ok(false)
-                },
-                |mut file| {
-                    let bytes = bincode::serialize(&(&leaf2.clone(), cert))?;
-                    file.write_all(&bytes)?;
-                    Ok(())
-                },
-            )?;
-
-            if view % 100 == 0 {
-                tracing::info!(view, "decided leaves migration progress");
-            }
-        }
-
-        inner.migrated.insert("anchor_leaf".to_string());
-        inner.update_migration()?;
-        tracing::warn!("successfully migrated decided leaves");
-        Ok(())
-    }
-    async fn migrate_da_proposals(&self) -> anyhow::Result<()> {
-        let mut inner = self.inner.write().await;
-
-        if inner.migrated.contains("da_proposal") {
-            tracing::info!("da proposals already migrated");
-            return Ok(());
-        }
-
-        let new_da_dir = inner.da2_dir_path();
-
-        fs::create_dir_all(new_da_dir.clone()).context("failed to create da proposals 2 dir")?;
-
-        let old_da_dir = inner.da_dir_path();
-        if !old_da_dir.is_dir() {
-            return Ok(());
-        }
-
-        tracing::warn!("migrating da proposals..");
-
-        for entry in fs::read_dir(old_da_dir)? {
-            let entry = entry?;
-            let path = entry.path();
-
-            let Some(file) = path.file_stem().and_then(|n| n.to_str()) else {
-                continue;
-            };
-            let Ok(view) = file.parse::<u64>() else {
-                continue;
-            };
-
-            let bytes =
-                fs::read(&path).context(format!("reading da proposal {}", path.display()))?;
-            let proposal = bincode::deserialize::<Proposal<SeqTypes, DaProposal<SeqTypes>>>(&bytes)
-                .context(format!("parsing da proposal {}", path.display()))?;
-
-            let new_da_path = new_da_dir.join(view.to_string()).with_extension("txt");
-
-            let proposal2: Proposal<SeqTypes, DaProposal2<SeqTypes>> = convert_proposal(proposal);
-
-            inner.replace(
-                &new_da_path,
-                |_| {
-                    tracing::warn!(view, "duplicate DA proposal 2");
-                    Ok(false)
-                },
-                |mut file| {
-                    let bytes = bincode::serialize(&proposal2)?;
-                    file.write_all(&bytes)?;
-                    Ok(())
-                },
-            )?;
-
-            if view % 100 == 0 {
-                tracing::info!(view, "DA proposals migration progress");
-            }
-        }
-
-        inner.migrated.insert("da_proposal".to_string());
-        inner.update_migration()?;
-        tracing::warn!("successfully migrated da proposals");
-        Ok(())
-    }
-    async fn migrate_vid_shares(&self) -> anyhow::Result<()> {
-        let mut inner = self.inner.write().await;
-
-        if inner.migrated.contains("vid_share") {
-            tracing::info!("vid shares already migrated");
-            return Ok(());
-        }
-
-        let new_vid_dir = inner.vid2_dir_path();
-
-        fs::create_dir_all(new_vid_dir.clone()).context("failed to create vid shares 2 dir")?;
-
-        let old_vid_dir = inner.vid_dir_path();
-        if !old_vid_dir.is_dir() {
-            return Ok(());
-        }
-
-        tracing::warn!("migrating vid shares..");
-
-        for entry in fs::read_dir(old_vid_dir)? {
-            let entry = entry?;
-            let path = entry.path();
-
-            let Some(file) = path.file_stem().and_then(|n| n.to_str()) else {
-                continue;
-            };
-            let Ok(view) = file.parse::<u64>() else {
-                continue;
-            };
-
-            let bytes = fs::read(&path).context(format!("reading vid share {}", path.display()))?;
-            let proposal =
-                bincode::deserialize::<Proposal<SeqTypes, VidDisperseShare0<SeqTypes>>>(&bytes)
-                    .context(format!("parsing vid share {}", path.display()))?;
-
-            let new_vid_path = new_vid_dir.join(view.to_string()).with_extension("txt");
-
-            let proposal2: Proposal<SeqTypes, VidDisperseShare<SeqTypes>> =
-                convert_proposal(proposal);
-
-            inner.replace(
-                &new_vid_path,
-                |_| {
-                    tracing::warn!(view, "duplicate VID share ");
-                    Ok(false)
-                },
-                |mut file| {
-                    let bytes = bincode::serialize(&proposal2)?;
-                    file.write_all(&bytes)?;
-                    Ok(())
-                },
-            )?;
-
-            if view % 100 == 0 {
-                tracing::info!(view, "VID shares migration progress");
-            }
-        }
-
-        inner.migrated.insert("vid_share".to_string());
-        inner.update_migration()?;
-        tracing::warn!("successfully migrated vid shares");
-        Ok(())
-    }
-
-    async fn migrate_quorum_proposals(&self) -> anyhow::Result<()> {
-        let mut inner = self.inner.write().await;
-
-        if inner.migrated.contains("quorum_proposals") {
-            tracing::info!("quorum proposals already migrated");
-            return Ok(());
-        }
-
-        let new_quorum_proposals_dir = inner.quorum_proposals2_dir_path();
-
-        fs::create_dir_all(new_quorum_proposals_dir.clone())
-            .context("failed to create quorum proposals 2 dir")?;
-
-        let old_quorum_proposals_dir = inner.quorum_proposals_dir_path();
-        if !old_quorum_proposals_dir.is_dir() {
-            tracing::info!("no existing quorum proposals found for migration");
-            return Ok(());
-        }
-
-        tracing::warn!("migrating quorum proposals..");
-        for entry in fs::read_dir(old_quorum_proposals_dir)? {
-            let entry = entry?;
-            let path = entry.path();
-
-            let Some(file) = path.file_stem().and_then(|n| n.to_str()) else {
-                continue;
-            };
-            let Ok(view) = file.parse::<u64>() else {
-                continue;
-            };
-
-            let bytes =
-                fs::read(&path).context(format!("reading quorum proposal {}", path.display()))?;
-            let proposal =
-                bincode::deserialize::<Proposal<SeqTypes, QuorumProposal<SeqTypes>>>(&bytes)
-                    .context(format!("parsing quorum proposal {}", path.display()))?;
-
-            let new_file_path = new_quorum_proposals_dir
-                .join(view.to_string())
-                .with_extension("txt");
-
-            let proposal2: Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>> =
-                convert_proposal(proposal);
-
-            inner.replace(
-                &new_file_path,
-                |_| {
-                    tracing::warn!(view, "duplicate Quorum proposal2 ");
-                    Ok(false)
-                },
-                |mut file| {
-                    let bytes = bincode::serialize(&proposal2)?;
-                    file.write_all(&bytes)?;
-                    Ok(())
-                },
-            )?;
-
-            if view % 100 == 0 {
-                tracing::info!(view, "Quorum proposals migration progress");
-            }
-        }
-
-        inner.migrated.insert("quorum_proposals".to_string());
-        inner.update_migration()?;
-        tracing::warn!("successfully migrated quorum proposals");
-        Ok(())
-    }
-    async fn migrate_quorum_certificates(&self) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    async fn migrate_validator_authenticated(&self) -> anyhow::Result<()> {
-        #[allow(deprecated)]
-        use espresso_types::v0_3::Validator;
-
-        let mut inner = self.inner.write().await;
-
-        if inner.migrated.contains("validator_authenticated") {
-            tracing::info!("validator_authenticated migration already complete");
-            return Ok(());
-        }
-
-        let path = inner.stake_table_dir_path();
-        if !path.is_dir() {
-            return Ok(());
-        }
-
-        tracing::warn!("migrating stake tables...");
-
-        for (epoch, file_path) in epoch_files(&path)? {
-            let bytes = fs::read(&file_path).with_context(|| {
-                format!("failed to read stake table file at {}", file_path.display())
-            })?;
-
-            // Try new format - if it works, already migrated
-            if bincode::deserialize::<StakeTuple>(&bytes).is_ok() {
-                continue;
-            }
-
-            // Deserialize legacy format
-            #[allow(deprecated)]
-            type LegacyValidatorMap =
-                indexmap::IndexMap<alloy::primitives::Address, Validator<PubKey>>;
-            type LegacyStakeTuple = (
-                LegacyValidatorMap,
-                Option<RewardAmount>,
-                Option<StakeTableHash>,
-            );
-
-            let legacy: LegacyStakeTuple = bincode::deserialize(&bytes).with_context(|| {
-                format!(
-                    "failed to deserialize stake table at {} (tried both new and legacy formats)",
-                    file_path.display()
-                )
-            })?;
-
-            // Migrate validators
-            let migrated: AuthenticatedValidatorMap = legacy
-                .0
-                .into_iter()
-                .map(|(addr, v)| {
-                    let registered = v.migrate();
-                    (
-                        addr,
-                        AuthenticatedValidator::try_from(registered)
-                            .expect("migrate() sets authenticated=true"),
-                    )
-                })
-                .collect();
-
-            // Write back in new format (atomic: write to temp, then rename)
-            let new_data: StakeTuple = (migrated, legacy.1, legacy.2);
-            let new_bytes = bincode::serialize(&new_data)?;
-            let tmp_path = file_path.with_extension("txt.tmp");
-            fs::write(&tmp_path, new_bytes)?;
-            fs::rename(&tmp_path, &file_path)?;
-
-            tracing::info!(?epoch, "migrated stake table");
-        }
-
-        // Also migrate validators JSON files (used by store_all_validators)
-        let validators_dir = path.join("validators");
-        if validators_dir.is_dir() {
-            #[allow(deprecated)]
-            type LegacyValidatorMap =
-                indexmap::IndexMap<alloy::primitives::Address, Validator<PubKey>>;
-
-            for entry in fs::read_dir(&validators_dir)? {
-                let entry = entry?;
-                let file_path = entry.path();
-                if file_path.extension().is_some_and(|ext| ext == "json") {
-                    let content = fs::read_to_string(&file_path)?;
-
-                    // Try new format first
-                    if serde_json::from_str::<RegisteredValidatorMap>(&content).is_ok() {
-                        continue;
-                    }
-
-                    // Migrate from legacy format
-                    let legacy: LegacyValidatorMap =
-                        serde_json::from_str(&content).with_context(|| {
-                            format!(
-                                "failed to deserialize validators at {} (tried both formats)",
-                                file_path.display()
-                            )
-                        })?;
-
-                    let migrated: RegisteredValidatorMap = legacy
-                        .into_iter()
-                        .map(|(addr, v)| (addr, v.migrate()))
-                        .collect();
-
-                    // Atomic write: write to temp, then rename
-                    let new_json = serde_json::to_string_pretty(&migrated)?;
-                    let tmp_path = file_path.with_extension("json.tmp");
-                    fs::write(&tmp_path, new_json)?;
-                    fs::rename(&tmp_path, &file_path)?;
-
-                    tracing::info!(?file_path, "migrated validators file");
-                }
-            }
-        }
-
-        inner.migrated.insert("validator_authenticated".to_string());
-        inner.update_migration()?;
-        tracing::warn!("validator_authenticated migration complete");
-        Ok(())
-    }
-
     async fn store_drb_input(&self, drb_input: DrbInput) -> anyhow::Result<()> {
         if let Ok(loaded_drb_input) = self.load_drb_input(drb_input.epoch).await {
             if loaded_drb_input.difficulty_level != drb_input.difficulty_level {
@@ -1870,8 +1442,7 @@ impl MembershipPersistence for Persistence {
             format!("failed to read stake table file at {}", file_path.display())
         })?;
 
-        // No fallback for legacy format needed: migrate_validator_authenticated() runs on startup
-        // and must succeed for the node to start, so all files are already in the new format.
+        // All files are expected to be in the current format.
         let stake: StakeTuple = bincode::deserialize(&bytes).with_context(|| {
             format!(
                 "failed to deserialize stake table at {}",
@@ -1895,7 +1466,7 @@ impl MembershipPersistence for Persistence {
                 format!("failed to read stake table file at {}", file_path.display())
             })?;
 
-            // No fallback for legacy format needed: migrate_validator_authenticated() runs on startup.
+            // All files are expected to be in the current format.
             let stake: StakeTuple = bincode::deserialize(&bytes).with_context(|| {
                 format!(
                     "failed to deserialize stake table at {}",
@@ -2323,22 +1894,11 @@ fn epoch_files(
 
 #[cfg(test)]
 mod test {
-    use std::marker::PhantomData;
-
-    use committable::{Commitment, CommitmentBoundsArkless, Committable};
-    use espresso_types::{Header, Leaf, NodeState, PubKey, ValidatedState};
+    use espresso_types::{Leaf, NodeState, PubKey};
     use hotshot::types::SignatureKey;
     use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_query_service::testing::mocks::MOCK_UPGRADE;
-    use hotshot_types::{
-        data::QuorumProposal2,
-        light_client::LightClientState,
-        simple_certificate::QuorumCertificate,
-        simple_vote::QuorumData,
-        traits::{EncodeBytes, block_contents::GENESIS_VID_NUM_STORAGE_NODES},
-        vid::advz::advz_scheme,
-    };
-    use jf_advz::VidScheme;
+    use hotshot_types::data::QuorumProposal2;
     use serde_json::json;
     use tempfile::TempDir;
 
@@ -2466,250 +2026,6 @@ mod test {
         });
 
         assert_eq!(migrate_network_config(before.clone()).unwrap(), before);
-    }
-
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    pub async fn test_consensus_migration() {
-        let rows = 300;
-        let tmp = Persistence::tmp_storage().await;
-        let mut opt = Persistence::options(&tmp);
-        let storage = opt.create().await.unwrap();
-
-        let inner = storage.inner.read().await;
-
-        let decided_leaves_path = inner.decided_leaf_path();
-        fs::create_dir_all(decided_leaves_path.clone()).expect("failed to create proposals dir");
-
-        let qp_dir_path = inner.quorum_proposals_dir_path();
-        fs::create_dir_all(qp_dir_path.clone()).expect("failed to create proposals dir");
-
-        let state_cert_dir_path = inner.state_cert_dir_path();
-        fs::create_dir_all(state_cert_dir_path.clone()).expect("failed to create state cert dir");
-        drop(inner);
-
-        assert!(storage.load_state_cert().await.unwrap().is_none());
-
-        for i in 0..rows {
-            let view = ViewNumber::new(i);
-            let validated_state = ValidatedState::default();
-            let instance_state = NodeState::default();
-
-            let (pubkey, privkey) = BLSPubKey::generated_from_seed_indexed([0; 32], i);
-            let (payload, metadata) =
-                Payload::from_transactions([], &validated_state, &instance_state)
-                    .await
-                    .unwrap();
-
-            let payload_bytes = payload.encode();
-
-            let block_header = Header::genesis(
-                &instance_state,
-                payload.clone(),
-                &metadata,
-                TEST_VERSIONS.test.base,
-            );
-
-            let state_cert = LightClientStateUpdateCertificateV2::<SeqTypes> {
-                epoch: EpochNumber::new(i),
-                light_client_state: LightClientState {
-                    view_number: i,
-                    block_height: i,
-                    block_comm_root: Default::default(),
-                },
-                next_stake_table_state: Default::default(),
-                signatures: vec![], // filling arbitrary value
-                auth_root: Default::default(),
-            };
-            assert!(storage.add_state_cert(state_cert).await.is_ok());
-
-            let null_quorum_data = QuorumData {
-                leaf_commit: Commitment::<Leaf>::default_commitment_no_preimage(),
-            };
-
-            let justify_qc = QuorumCertificate::new(
-                null_quorum_data.clone(),
-                null_quorum_data.commit(),
-                view,
-                None,
-                PhantomData,
-            );
-
-            let quorum_proposal = QuorumProposal {
-                block_header,
-                view_number: view,
-                justify_qc: justify_qc.clone(),
-                upgrade_certificate: None,
-                proposal_certificate: None,
-            };
-
-            let quorum_proposal_signature =
-                BLSPubKey::sign(&privkey, &bincode::serialize(&quorum_proposal).unwrap())
-                    .expect("Failed to sign quorum proposal");
-
-            let proposal = Proposal {
-                data: quorum_proposal.clone(),
-                signature: quorum_proposal_signature,
-                _pd: PhantomData::<SeqTypes>,
-            };
-
-            let mut leaf = Leaf::from_quorum_proposal(&quorum_proposal);
-            leaf.fill_block_payload(
-                payload,
-                GENESIS_VID_NUM_STORAGE_NODES,
-                TEST_VERSIONS.test.base,
-            )
-            .unwrap();
-
-            let mut inner = storage.inner.write().await;
-
-            tracing::debug!("inserting decided leaves");
-            let file_path = decided_leaves_path
-                .join(view.to_string())
-                .with_extension("txt");
-
-            tracing::debug!("inserting decided leaves");
-
-            inner
-                .replace(
-                    &file_path,
-                    |_| Ok(true),
-                    |mut file| {
-                        let bytes = bincode::serialize(&(&leaf.clone(), justify_qc))?;
-                        file.write_all(&bytes)?;
-                        Ok(())
-                    },
-                )
-                .expect("replace decided leaves");
-
-            let file_path = qp_dir_path.join(view.to_string()).with_extension("txt");
-
-            tracing::debug!("inserting qc for {view}");
-
-            inner
-                .replace(
-                    &file_path,
-                    |_| Ok(true),
-                    |mut file| {
-                        let proposal_bytes =
-                            bincode::serialize(&proposal).context("serialize proposal")?;
-
-                        file.write_all(&proposal_bytes)?;
-                        Ok(())
-                    },
-                )
-                .unwrap();
-
-            drop(inner);
-            let disperse = advz_scheme(GENESIS_VID_NUM_STORAGE_NODES)
-                .disperse(payload_bytes.clone())
-                .unwrap();
-
-            let vid = VidDisperseShare0::<SeqTypes> {
-                view_number: ViewNumber::new(i),
-                payload_commitment: Default::default(),
-                share: disperse.shares[0].clone(),
-                common: disperse.common,
-                recipient_key: pubkey,
-            };
-
-            let (payload, metadata) =
-                Payload::from_transactions([], &ValidatedState::default(), &NodeState::default())
-                    .await
-                    .unwrap();
-
-            let da = DaProposal::<SeqTypes> {
-                encoded_transactions: payload.encode(),
-                metadata,
-                view_number: ViewNumber::new(i),
-            };
-
-            let block_payload_signature =
-                BLSPubKey::sign(&privkey, &payload_bytes).expect("Failed to sign block payload");
-
-            let da_proposal = Proposal {
-                data: da,
-                signature: block_payload_signature,
-                _pd: Default::default(),
-            };
-
-            tracing::debug!("inserting vid for {view}");
-            storage
-                .append_vid(&convert_proposal(vid.to_proposal(&privkey).unwrap()))
-                .await
-                .unwrap();
-
-            tracing::debug!("inserting da for {view}");
-            storage
-                .append_da(&da_proposal, VidCommitment::V0(disperse.commit))
-                .await
-                .unwrap();
-        }
-
-        storage.migrate_storage().await.unwrap();
-        let inner = storage.inner.read().await;
-        let decided_leaves = fs::read_dir(inner.decided_leaf2_path()).unwrap();
-        let decided_leaves_count = decided_leaves
-            .filter_map(Result::ok)
-            .filter(|e| e.path().is_file())
-            .count();
-        assert_eq!(
-            decided_leaves_count, rows as usize,
-            "decided leaves count does not match",
-        );
-
-        let da_proposals = fs::read_dir(inner.da2_dir_path()).unwrap();
-        let da_proposals_count = da_proposals
-            .filter_map(Result::ok)
-            .filter(|e| e.path().is_file())
-            .count();
-        assert_eq!(
-            da_proposals_count, rows as usize,
-            "da proposals does not match",
-        );
-
-        let vids = fs::read_dir(inner.vid2_dir_path()).unwrap();
-        let vids_count = vids
-            .filter_map(Result::ok)
-            .filter(|e| e.path().is_file())
-            .count();
-        assert_eq!(vids_count, rows as usize, "vid shares count does not match",);
-
-        let qps = fs::read_dir(inner.quorum_proposals2_dir_path()).unwrap();
-        let qps_count = qps
-            .filter_map(Result::ok)
-            .filter(|e| e.path().is_file())
-            .count();
-        assert_eq!(
-            qps_count, rows as usize,
-            "quorum proposals count does not match",
-        );
-
-        let state_certs = fs::read_dir(inner.state_cert_dir_path()).unwrap();
-        let state_cert_count = state_certs
-            .filter_map(Result::ok)
-            .filter(|e| e.path().is_file())
-            .count();
-        assert_eq!(
-            state_cert_count, rows as usize,
-            "light client state update certificate count does not match",
-        );
-
-        // Reinitialize the file system persistence using the same path.
-        // re run the consensus migration.
-        // No changes will occur, as the migration has already been completed.
-        let storage = opt.create().await.unwrap();
-        storage.migrate_storage().await.unwrap();
-
-        let inner = storage.inner.read().await;
-        let decided_leaves = fs::read_dir(inner.decided_leaf2_path()).unwrap();
-        let decided_leaves_count = decided_leaves
-            .filter_map(Result::ok)
-            .filter(|e| e.path().is_file())
-            .count();
-        assert_eq!(
-            decided_leaves_count, rows as usize,
-            "decided leaves count does not match",
-        );
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -2848,153 +2164,6 @@ mod test {
                 (Some(EventsPersistenceRead::UntilL1Block(i)), vec![])
             );
         }
-    }
-
-    #[allow(deprecated)]
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_migrate_validator_authenticated() {
-        use std::collections::HashMap;
-
-        use alloy::primitives::{Address, U256};
-        use espresso_types::v0_3::Validator;
-        use indexmap::IndexMap;
-
-        type LegacyValidatorMap = IndexMap<Address, Validator<BLSPubKey>>;
-
-        let tmp = Persistence::tmp_storage().await;
-        let mut opt = Persistence::options(&tmp);
-        let storage = opt.create().await.unwrap();
-
-        // Create legacy validator data (without `authenticated` field)
-        let legacy_validator = Validator {
-            account: Address::random(),
-            stake_table_key: BLSPubKey::generated_from_seed_indexed([0u8; 32], 0).0,
-            state_ver_key: hotshot_types::light_client::StateVerKey::default(),
-            stake: U256::from(1000),
-            commission: 100,
-            delegators: HashMap::new(),
-            x25519_key: None,
-            p2p_addr: None,
-        };
-
-        let mut legacy_map: LegacyValidatorMap = IndexMap::new();
-        legacy_map.insert(legacy_validator.account, legacy_validator.clone());
-
-        // Serialize in the legacy format: (ValidatorMap, Option<RewardAmount>, Option<StakeTableHash>)
-        type LegacyStakeTuple = (
-            LegacyValidatorMap,
-            Option<RewardAmount>,
-            Option<StakeTableHash>,
-        );
-        let legacy_data: LegacyStakeTuple = (legacy_map, None, None);
-        let bytes = bincode::serialize(&legacy_data).unwrap();
-
-        // Write directly to the stake table file
-        let inner = storage.inner.read().await;
-        let path = inner.stake_table_dir_path();
-        drop(inner);
-        fs::create_dir_all(&path).unwrap();
-        let file_path = path.join("1.txt");
-        fs::write(&file_path, &bytes).unwrap();
-
-        // Run migration
-        storage.migrate_validator_authenticated().await.unwrap();
-
-        // Loading should succeed after migration
-        let result = storage.load_stake(EpochNumber::new(1)).await;
-        assert!(result.is_ok(), "load_stake should succeed after migration");
-        let stake = result.unwrap();
-        assert!(stake.is_some(), "stake should be present");
-        let (validators, reward, hash) = stake.unwrap();
-        assert_eq!(validators.len(), 1);
-        assert!(reward.is_none());
-        assert!(hash.is_none());
-
-        // Verify the migrated validator has correct data
-        let migrated = validators.get(&legacy_validator.account).unwrap();
-        assert_eq!(migrated.stake_table_key, legacy_validator.stake_table_key);
-        assert_eq!(migrated.stake, legacy_validator.stake);
-
-        // Running migration again should be a no-op (idempotent)
-        storage.migrate_validator_authenticated().await.unwrap();
-
-        // Still loadable
-        let result2 = storage.load_stake(EpochNumber::new(1)).await;
-        assert!(result2.is_ok());
-    }
-
-    #[allow(deprecated)]
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_migrate_validator_authenticated_json_files() {
-        use std::collections::HashMap;
-
-        use alloy::primitives::{Address, U256};
-        use espresso_types::v0_3::Validator;
-        use indexmap::IndexMap;
-
-        type LegacyValidatorMap = IndexMap<Address, Validator<BLSPubKey>>;
-
-        let tmp = Persistence::tmp_storage().await;
-        let mut opt = Persistence::options(&tmp);
-        let storage = opt.create().await.unwrap();
-
-        // Create legacy validator data (without `authenticated` field)
-        let legacy_validator = Validator {
-            account: Address::random(),
-            stake_table_key: BLSPubKey::generated_from_seed_indexed([0u8; 32], 0).0,
-            state_ver_key: hotshot_types::light_client::StateVerKey::default(),
-            stake: U256::from(2000),
-            commission: 200,
-            delegators: HashMap::new(),
-            x25519_key: None,
-            p2p_addr: None,
-        };
-
-        let mut legacy_map: LegacyValidatorMap = IndexMap::new();
-        legacy_map.insert(legacy_validator.account, legacy_validator.clone());
-
-        // Write legacy format to validators JSON file
-        let inner = storage.inner.read().await;
-        let path = inner.stake_table_dir_path();
-        drop(inner);
-        let validators_dir = path.join("validators");
-        fs::create_dir_all(&validators_dir).unwrap();
-        let file_path = validators_dir.join("epoch_1.json");
-        let legacy_json = serde_json::to_string_pretty(&legacy_map).unwrap();
-        fs::write(&file_path, &legacy_json).unwrap();
-
-        // Run migration
-        storage.migrate_validator_authenticated().await.unwrap();
-
-        // Loading should succeed after migration
-        let result = storage
-            .load_all_validators(EpochNumber::new(1), 0, 100)
-            .await;
-        assert!(
-            result.is_ok(),
-            "load_all_validators should succeed after migration"
-        );
-        let validators = result.unwrap();
-        assert_eq!(validators.len(), 1);
-
-        // Verify the migrated validator has correct data and authenticated=true
-        let migrated = &validators[0];
-        assert_eq!(migrated.account, legacy_validator.account);
-        assert_eq!(migrated.stake_table_key, legacy_validator.stake_table_key);
-        assert_eq!(migrated.stake, legacy_validator.stake);
-        assert!(
-            migrated.authenticated,
-            "migrated validator should be authenticated"
-        );
-
-        // Running migration again should be a no-op (idempotent)
-        storage.migrate_validator_authenticated().await.unwrap();
-
-        // Still loadable
-        let result2 = storage
-            .load_all_validators(EpochNumber::new(1), 0, 100)
-            .await;
-        assert!(result2.is_ok());
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]

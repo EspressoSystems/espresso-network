@@ -554,8 +554,6 @@ pub trait MembershipPersistence: Send + Sync + 'static {
 pub trait SequencerPersistence:
     Sized + Send + Sync + Clone + 'static + DhtPersistentStorage + MembershipPersistence
 {
-    async fn migrate_reward_merkle_tree_v2(&self) -> anyhow::Result<()>;
-
     /// Use this storage as a state catchup backend, if supported.
     fn into_catchup_provider(
         self,
@@ -896,32 +894,6 @@ pub trait SequencerPersistence:
         &self,
         decided_upgrade_certificate: Option<UpgradeCertificate<SeqTypes>>,
     ) -> anyhow::Result<()>;
-
-    async fn migrate_storage(&self) -> anyhow::Result<()> {
-        tracing::warn!("migrating consensus data...");
-
-        self.migrate_anchor_leaf().await?;
-        self.migrate_da_proposals().await?;
-        self.migrate_vid_shares().await?;
-        self.migrate_quorum_proposals().await?;
-        self.migrate_quorum_certificates().await?;
-        self.migrate_reward_merkle_tree_v2()
-            .await
-            .context("failed to migrate reward merkle tree v2")?;
-        self.migrate_validator_authenticated().await?;
-
-        tracing::warn!("consensus storage has been migrated to new types");
-
-        Ok(())
-    }
-
-    async fn migrate_validator_authenticated(&self) -> anyhow::Result<()>;
-
-    async fn migrate_anchor_leaf(&self) -> anyhow::Result<()>;
-    async fn migrate_da_proposals(&self) -> anyhow::Result<()>;
-    async fn migrate_vid_shares(&self) -> anyhow::Result<()>;
-    async fn migrate_quorum_proposals(&self) -> anyhow::Result<()>;
-    async fn migrate_quorum_certificates(&self) -> anyhow::Result<()>;
 
     async fn load_anchor_view(&self) -> anyhow::Result<ViewNumber> {
         match self.load_anchor_leaf().await? {
