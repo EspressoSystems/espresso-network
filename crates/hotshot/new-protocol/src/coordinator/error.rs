@@ -2,18 +2,18 @@ use std::fmt;
 
 use hotshot::traits::NetworkError;
 
-use crate::network::is_critical;
+use crate::{network::is_critical, proposal::ValidationError};
 
 #[derive(Debug, thiserror::Error)]
-#[error("{severity} coordinator error: {context}")]
+#[error("{severity} coordinator error ({context}): source: {source}")]
 pub struct CoordinatorError {
     pub severity: Severity,
-    pub source: ErrorKind,
+    pub source: ErrorSource,
     pub context: &'static str,
 }
 
 impl CoordinatorError {
-    pub fn regular<E: Into<ErrorKind>>(e: E) -> Self {
+    pub fn regular<E: Into<ErrorSource>>(e: E) -> Self {
         Self {
             context: "",
             severity: Severity::Regular,
@@ -21,7 +21,7 @@ impl CoordinatorError {
         }
     }
 
-    pub fn critical<E: Into<ErrorKind>>(e: E) -> Self {
+    pub fn critical<E: Into<ErrorSource>>(e: E) -> Self {
         Self {
             context: "",
             severity: Severity::Critical,
@@ -33,7 +33,7 @@ impl CoordinatorError {
         Self {
             context: "",
             severity: Severity::Unspecified,
-            source: ErrorKind::Unspecified,
+            source: ErrorSource::Unspecified,
         }
     }
 
@@ -62,9 +62,12 @@ impl fmt::Display for Severity {
 
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
-pub enum ErrorKind {
+pub enum ErrorSource {
     #[error("network error: {0}")]
     Network(#[from] NetworkError),
+
+    #[error("proposal validation error: {0}")]
+    Proposal(#[from] ValidationError),
 
     #[error("unspecified error")]
     Unspecified,
@@ -89,13 +92,13 @@ impl From<NetworkError> for CoordinatorError {
     }
 }
 
-impl From<&'static str> for ErrorKind {
+impl From<&'static str> for ErrorSource {
     fn from(msg: &'static str) -> Self {
         Self::StaticMessage(msg)
     }
 }
 
-impl From<String> for ErrorKind {
+impl From<String> for ErrorSource {
     fn from(msg: String) -> Self {
         Self::Message(msg)
     }

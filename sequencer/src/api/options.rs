@@ -398,7 +398,11 @@ impl Options {
 
         // Use the database itself as a fetching provider: sometimes we can fetch data that is
         // missing from the query service from ephemeral consensus storage.
-        provider = provider.with_provider(mod_opt.clone().create().await?);
+        let db_provider = mod_opt.clone().create().await?;
+        provider = provider
+            .with_leaf_provider(db_provider.clone())
+            .with_block_provider(db_provider.clone())
+            .with_vid_common_provider(db_provider);
         // If that fails, fetch missing data from peers.
         for peer in query_opt.peers {
             tracing::info!("will fetch missing data from {peer}");

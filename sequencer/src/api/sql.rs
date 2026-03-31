@@ -24,6 +24,7 @@ use hotshot_query_service::{
         sql::{Config, SqlDataSource, Transaction},
         storage::{
             AvailabilityStorage, MerklizedStateStorage, NodeStorage, SqlStorage,
+            pruning::PrunerConfig,
             sql::{Db, TransactionMode, Write, query_as},
         },
     },
@@ -91,6 +92,12 @@ impl SequencerDataSource for DataSource {
         }
         if let Some(chunk_size) = opt.sync_status_chunk_size {
             builder = builder.with_sync_status_chunk_size(chunk_size);
+        }
+        if let Some(chunk_size) = opt.proactive_scan_chunk_size {
+            builder = builder.with_proactive_range_chunk_size(chunk_size);
+        }
+        if let Some(interval) = opt.proactive_scan_interval {
+            builder = builder.with_proactive_interval(interval);
         }
         if opt.disable_proactive_fetching {
             builder = builder.disable_proactive_fetching();
@@ -329,24 +336,39 @@ impl RewardMerkleTreeDataSource for SqlStorage {
 
     fn garbage_collect(&self, height: u64) -> impl Send + Future<Output = anyhow::Result<()>> {
         async move {
-            tracing::debug!(
-                height,
-                "garbage collecting reward merkle tree data and proofs"
-            );
-            {
+            let batch_size = self.get_pruning_config().unwrap_or_default().batch_size();
+
+            // Postgres supports improved performance by using `FOR UPDATE` in a sub-select to
+            // acquire exclusive locks on visited rows, which are later deleted. SQLite does not
+            // support this syntax.
+            #[cfg(not(feature = "embedded-db"))]
+            let for_update = "FOR UPDATE";
+            #[cfg(feature = "embedded-db")]
+            let for_update = "";
+
+            // Delete batches from the merkle data table until there is nothing left to delete.
+            loop {
                 let mut tx = self
                     .write()
                     .await
                     .context("opening transaction for state update")?;
 
-                sqlx::query(
-                    r#"
-                  DELETE FROM reward_merkle_tree_v2_data
-                  WHERE height < $1
-                "#,
-                )
+                let res = sqlx::query(&format!(
+                    "
+                    WITH delete_batch AS (
+                        SELECT d.height FROM reward_merkle_tree_v2_data AS d
+                            WHERE d.height < $1
+                            ORDER BY d.height DESC
+                            LIMIT $2
+                            {for_update}
+                    )
+                    DELETE FROM reward_merkle_tree_v2_data AS del
+                    WHERE del.height IN (SELECT * FROM delete_batch)
+                "
+                ))
                 .bind(height as i64)
-                .fetch_optional(tx.as_mut())
+                .bind(batch_size as i64)
+                .execute(tx.as_mut())
                 .await?;
 
                 hotshot_query_service::data_source::Transaction::commit(tx)
@@ -354,26 +376,54 @@ impl RewardMerkleTreeDataSource for SqlStorage {
                     .context(
                         "Transaction to garbage collect reward merkle trees from storage failed.",
                     )?;
+
+                if res.rows_affected() == 0 {
+                    break;
+                } else {
+                    tracing::debug!(
+                        "deleted {} rows from reward_merkle_tree_v2_data",
+                        res.rows_affected()
+                    );
+                }
             }
-            {
+
+            // Delete batches from the proofs table until there is nothing left to delete.
+            loop {
                 let mut tx = self
                     .write()
                     .await
                     .context("opening transaction for state update")?;
 
-                sqlx::query(
-                    r#"
-                  DELETE FROM reward_merkle_tree_v2_proofs
-                  WHERE height < $1
-                "#,
-                )
+                let res = sqlx::query(&format!(
+                    "
+                    WITH delete_batch AS (
+                        SELECT d.height, d.account FROM reward_merkle_tree_v2_proofs AS d
+                            WHERE d.height < $1
+                            ORDER BY d.height, d.account DESC
+                            LIMIT $2
+                            {for_update}
+                    )
+                    DELETE FROM reward_merkle_tree_v2_proofs AS del
+                    WHERE (del.height, del.account) IN (SELECT * FROM delete_batch)
+                ",
+                ))
                 .bind(height as i64)
-                .fetch_optional(tx.as_mut())
+                .bind(batch_size as i64)
+                .execute(tx.as_mut())
                 .await?;
 
                 hotshot_query_service::data_source::Transaction::commit(tx)
                     .await
                     .context("Transaction to garbage collect proofs from storage failed.")?;
+
+                if res.rows_affected() == 0 {
+                    break;
+                } else {
+                    tracing::debug!(
+                        "deleted {} rows from reward_merkle_tree_v2_proofs",
+                        res.rows_affected()
+                    );
+                }
             }
 
             Ok(())
@@ -1094,7 +1144,7 @@ async fn load_chain_config<Mode: TransactionMode>(
 /// This is because reconstructing the `ValidatedState` involves replaying the STF over a
 /// range of leaves, and the STF requires all associated data to be present in the `ValidatedState`;
 /// otherwise, it will attempt to trigger catchup itself.
-#[tracing::instrument(skip(instance, tx))]
+#[tracing::instrument(skip(instance, db, tx))]
 pub(crate) async fn reconstruct_state<Mode: TransactionMode>(
     instance: &NodeState,
     db: &SqlStorage,
@@ -1483,7 +1533,7 @@ mod tests {
     };
 
     use super::impl_testable_data_source::tmp_options;
-    use crate::SeqTypes;
+    use crate::{SeqTypes, api::RewardMerkleTreeDataSource};
 
     fn make_reward_account(i: usize) -> RewardAccountV2 {
         let mut addr_bytes = [0u8; 20];
@@ -1916,5 +1966,46 @@ mod tests {
             );
         }
         tracing::info!("Height 3: Verified 10 non-membership proofs");
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_merkle_proof_gc() {
+        let db = TmpDb::init().await;
+        let opt = tmp_options(&db);
+        let cfg = Config::try_from(&opt).expect("failed to create config from options");
+        let storage = SqlStorage::connect(cfg, StorageConnectionType::Query)
+            .await
+            .expect("failed to connect to storage");
+
+        let account = vec![0; 32];
+
+        // Insert some mock proofs at heights 0-2.
+        for h in 0..=2 {
+            storage
+                .persist_proofs(h, [(account.clone(), h.to_le_bytes().to_vec())].into_iter())
+                .await
+                .unwrap();
+        }
+
+        // Test garbage collection.
+        storage.garbage_collect(2).await.unwrap();
+
+        // Make sure the proof at height 2 is still available.
+        assert_eq!(
+            storage.load_proof(2, account.clone()).await.unwrap(),
+            2u64.to_le_bytes()
+        );
+
+        // Meanwhile, the proofs at heights 0-1 have been garbage collected.
+        for h in 0..2 {
+            let err = storage.load_proof(h, account.clone()).await.unwrap_err();
+            assert!(err.to_string().contains("Missing proof"), "{err:#}");
+        }
+
+        // Garbage collect the remaining proof.
+        storage.garbage_collect(3).await.unwrap();
+        let err = storage.load_proof(2, account).await.unwrap_err();
+        assert!(err.to_string().contains("Missing proof"), "{err:#}");
     }
 }
