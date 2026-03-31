@@ -130,7 +130,7 @@ async fn assert_da_stake_table(
     entries: &[&PeerConfig<SeqTypes>],
 ) -> Result<()> {
     let start = Instant::now();
-    let sequencer_api_port = dotenvy::var("ESPRESSO_NODE1_API_PORT")?;
+    let sequencer_api_port = dotenvy::var("ESPRESSO_NODE_1_API_PORT")?;
     let sequencer_url: Url = format!("http://localhost:{sequencer_api_port}").parse()?;
     let da_stake_table_url = format!("{sequencer_url}v1/node/da-stake-table/current");
     println!("Fetching da stake table from: {}", da_stake_table_url);
