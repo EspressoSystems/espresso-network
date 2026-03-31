@@ -4,6 +4,6 @@ METHOD = "GET"
 DOC = """
 Get the sizes of all database tables.
 
-Returns a map from table name to size information, including row counts and disk usage.
-Works with both PostgreSQL and SQLite backends (via embedded-db feature).
+Returns a list of table size information, including row counts (estimated for PostgreSQL) and disk usage.
+Works with both PostgreSQL and SQLite backends (via embedded-db feature; disk usage currently PostgreSQL only).
 """
