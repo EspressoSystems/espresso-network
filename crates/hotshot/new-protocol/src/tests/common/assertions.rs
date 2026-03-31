@@ -87,7 +87,7 @@ where
     P: Fn(&A) -> bool,
     A: 'a,
 {
-    items.into_iter().filter(|output| pred(output)).count()
+    items.into_iter().filter(|it| pred(it)).count()
 }
 
 /// Find the node index (0..10) for a given public key.

@@ -4,13 +4,11 @@ use hotshot_types::traits::signature_key::SignatureKey;
 use super::common::{harness::TestHarness, utils::TestData};
 use crate::{
     consensus::ConsensusInput,
-    tests::common::{
-        assertions::{
-            any, count_matching, is_block_built, is_block_reconstructed, is_cert1, is_cert2,
-            is_header_created, is_leaf_decided, is_proposal, is_request_block_and_header,
-            is_request_vid_disperse, is_state_validated, is_timeout, is_timeout_cert,
-            is_vid_disperse, is_view_changed, is_vote1, is_vote2, node_index_for_key,
-        },
+    tests::common::assertions::{
+        any, count_matching, is_block_built, is_block_reconstructed, is_cert1, is_cert2,
+        is_header_created, is_leaf_decided, is_proposal, is_request_block_and_header,
+        is_request_vid_disperse, is_state_validated, is_timeout, is_timeout_cert, is_vid_disperse,
+        is_view_changed, is_vote1, is_vote2, node_index_for_key,
     },
 };
 
