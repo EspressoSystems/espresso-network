@@ -15,6 +15,7 @@ use std::fmt::Debug;
 use anyhow::{Context, ensure};
 use async_trait::async_trait;
 use committable::Committable;
+use futures::{TryFutureExt, future::try_join_all};
 use hotshot_types::{
     data::{VidCommitment, VidCommon, ns_table},
     traits::{EncodeBytes, node_implementation::NodeType},
@@ -357,15 +358,39 @@ impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
         req: VidCommonRangeRequest,
     ) -> anyhow::Result<NonEmptyRange<VidCommonQueryData<Types>>> {
         let req = RangeRequest::from(req);
-        let common = self
+        let res = self
             .client
             .get::<NonEmptyRange<VidCommonQueryData<Types>>>(&format!(
                 "availability/vid/common/{}/{}",
                 req.start, req.end
             ))
             .send()
-            .await
-            .context("fetching VID common")?;
+            .await;
+        let common = match res {
+            Ok(common) => common,
+            Err(Error::Custom { message, .. }) if message.contains("No route matches") => {
+                // Old versions of the upstream query service do not support the ranged VID common
+                // endpoint. Fall back to fetching each object individually.
+                tracing::info!(
+                    ?req,
+                    "server does not support ranged VID fetching, falling back to individual fetches"
+                );
+                let common = try_join_all((req.start..req.end).map(|i| {
+                    self.client
+                        .get::<VidCommonQueryData<Types>>(&format!("availability/vid/common/{i}"))
+                        .send()
+                        .map_err(move |err| {
+                            anyhow::Error::new(err).context(format!("fetching VID common {i}"))
+                        })
+                }))
+                .await?;
+                NonEmptyRange::new(common)
+                    .context("converting individually fetched VID common into range")?
+            },
+            Err(err) => {
+                return Err(err).context("fetching VID common range");
+            },
+        };
 
         ensure!(
             common.start() == req.start && common.end() == req.end,
@@ -439,14 +464,16 @@ mod test {
     use hotshot_example_types::node_types::{EpochVersion, TEST_VERSIONS};
     use rand::RngCore;
     use test_utils::reserve_tcp_port;
-    use tide_disco::{App, error::ServerError};
+    use tide_disco::{Api, App, error::ServerError};
+    use toml::toml;
+    use vbs::version::StaticVersion;
 
     use super::*;
     use crate::{
         ApiState,
         api::load_api,
         availability::{
-            AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, BlockWithTransaction,
+            self, AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, BlockWithTransaction,
             Fetch, UpdateAvailabilityData, define_api,
         },
         data_source::{
@@ -2634,6 +2661,75 @@ mod test {
             .await
             .unwrap(),
             vid
+        );
+    }
+
+    /// A test server which does not support ranged VID common requests.
+    async fn old_server(port: u16) {
+        let mut api = Api::<(), availability::Error, StaticVersion<1, 0>>::new(toml! {
+            [route.get_vid_common]
+            PATH = ["vid/common/:height"]
+            ":height" = "Integer"
+        })
+        .unwrap();
+
+        api.get("get_vid_common", move |req, _| {
+            async move {
+                let mut common = VidCommonQueryData::<MockTypes>::genesis(
+                    &Default::default(),
+                    &Default::default(),
+                    TEST_VERSIONS.test.base,
+                )
+                .await;
+                common.height = req.integer_param("height")?;
+                Ok(common)
+            }
+            .boxed()
+        })
+        .unwrap();
+
+        let mut app = App::<(), Error>::with_state(());
+        app.register_module("availability", api).unwrap();
+        app.serve(format!("0.0.0.0:{port}"), MockBase::instance())
+            .await
+            .ok();
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_vid_common_fallback() {
+        let port = reserve_tcp_port().unwrap();
+        let _server = BackgroundTask::spawn("old server", old_server(port));
+        let provider = QueryServiceProvider::new(
+            format!("http://localhost:{port}").parse().unwrap(),
+            StaticVersion::<1, 0>::instance(),
+        );
+
+        // First fetch a range of VID common one by one, to get a ground truth.
+        let common = try_join_all((0..5).map(|i| {
+            provider
+                .client
+                .get::<VidCommonQueryData<MockTypes>>(&format!("availability/vid/common/{i}"))
+                .send()
+        }))
+        .await
+        .unwrap();
+
+        // Now fetch the whole thing as a range.
+        let expected_hash =
+            RangeRequest::hash_payloads(common.iter().map(|common| common.payload_hash));
+        let req = RangeRequest {
+            start: 0,
+            end: 5,
+            expected_hash,
+        };
+        assert_eq!(
+            common.as_slice(),
+            provider
+                .fetch_vid_common_range(req.into())
+                .await
+                .unwrap()
+                .as_ref()
         );
     }
 }

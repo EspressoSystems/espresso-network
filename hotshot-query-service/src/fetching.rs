@@ -304,3 +304,9 @@ impl<'a, T> IntoIterator for &'a NonEmptyRange<T> {
         self.0.iter()
     }
 }
+
+impl<T> AsRef<[T]> for NonEmptyRange<T> {
+    fn as_ref(&self) -> &[T] {
+        self.0.as_ref()
+    }
+}
