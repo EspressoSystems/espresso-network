@@ -20,6 +20,7 @@ pub use impls::mock;
 // export reward types for staking-ui-service
 pub use impls::reward::{
     ComputedRewards, EpochRewardsCalculator, EpochRewardsResult, RewardDistributor,
+    ValidatorLeaderCounts,
 };
 #[cfg(any(test, feature = "testing"))]
 pub use impls::testing;

@@ -2931,7 +2931,7 @@ mod test {
         ADVZNamespaceProofQueryData, FeeAmount, Header, L1Client, L1ClientOptions,
         MOCK_SEQUENCER_VERSIONS, NamespaceId, NamespaceProofQueryData, NsProof,
         RegisteredValidatorMap, RewardDistributor, StakeTableState, StateCertQueryDataV1,
-        StateCertQueryDataV2, ValidatedState,
+        StateCertQueryDataV2, ValidatedState, ValidatorLeaderCounts,
         config::PublicHotShotConfig,
         traits::{MembershipPersistence, NullEventConsumer, PersistenceOptions},
         v0_3::{COMMISSION_BASIS_POINTS, Fetcher, RewardAmount, RewardMerkleProofV1},
@@ -5048,35 +5048,18 @@ mod test {
             let leader_address = membership
                 .address(&epoch_number, leader)
                 .expect("leader should have an address");
+
+            let validator_leader_counts =
+                ValidatorLeaderCounts::new(&membership, &epoch_number, *header_leader_counts)
+                    .expect("ValidatorLeaderCounts should build from header leader_counts");
             drop(membership);
 
             *expected_counts.entry(leader_address).or_insert(0) += 1;
 
-            // Convert the header's leader_counts array to a HashMap<Address, u16>
-            // using the stake table to map index -> address
-            let validators = client
-                .get::<AuthenticatedValidatorMap>(&format!("node/validators/{epoch}"))
-                .send()
-                .await
-                .expect("failed to get validators");
-            let mut validator_entries: Vec<_> = validators
-                .iter()
-                .map(|(addr, v)| (*addr, v.stake_table_key))
+            let header_counts: HashMap<Address, u16> = validator_leader_counts
+                .active_leaders()
+                .map(|(v, count)| (v.account, count))
                 .collect();
-            validator_entries.sort_by(|a, b| a.1.cmp(&b.1));
-            let validator_addresses: Vec<Address> =
-                validator_entries.iter().map(|(addr, _)| *addr).collect();
-
-            let mut header_counts: HashMap<Address, u16> = HashMap::new();
-            for (index, &count) in header_leader_counts.iter().enumerate() {
-                if count == 0 {
-                    continue;
-                }
-                let address = validator_addresses
-                    .get(index)
-                    .expect("leader_counts index should map to a validator");
-                header_counts.insert(*address, count);
-            }
 
             assert_eq!(
                 header_counts, expected_counts,

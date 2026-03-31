@@ -620,14 +620,14 @@ impl ComputedRewards {
 }
 
 /// Maps each validator to its leader count for an epoch.
-struct ValidatorLeaderCounts(Vec<(AuthenticatedValidator<BLSPubKey>, u16)>);
+pub struct ValidatorLeaderCounts(Vec<(AuthenticatedValidator<BLSPubKey>, u16)>);
 
 impl ValidatorLeaderCounts {
     /// Construct from a sorted validator list and the corresponding leader counts array.
     ///
     /// Returns an error if any validator in the stake table is missing from `get_validator_config`.
     /// Validators whose leader count is zero are included so that indexing remains consistent.
-    fn new(
+    pub fn new(
         membership: &EpochCommittees,
         epoch: &EpochNumber,
         leader_counts: LeaderCounts,
@@ -647,7 +647,9 @@ impl ValidatorLeaderCounts {
     }
 
     /// Iterate over all validators that have count greater than 0
-    fn active_leaders(&self) -> impl Iterator<Item = (&AuthenticatedValidator<BLSPubKey>, u16)> {
+    pub fn active_leaders(
+        &self,
+    ) -> impl Iterator<Item = (&AuthenticatedValidator<BLSPubKey>, u16)> {
         self.0
             .iter()
             .filter(|(_, count)| *count > 0)
