@@ -35,7 +35,6 @@ async fn test_view_sync_task() {
         hotshot_types::traits::consensus_api::ConsensusApi::private_key(&handle),
         &handle.hotshot.upgrade_lock,
     )
-    .await
     .expect("Failed to create a ViewSyncPreCommitVote!");
 
     tracing::error!("Vote in test is {:?}", vote.clone());

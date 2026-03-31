@@ -320,6 +320,36 @@ where
     })
 }
 
+async fn get_vid_common_range_handler<Types, State>(
+    req: tide_disco::RequestParams,
+    state: &State,
+    limit: usize,
+    timeout: Duration,
+) -> Result<Vec<VidCommonQueryData<Types>>, Error>
+where
+    State: 'static + Send + Sync + ReadState,
+    <State as ReadState>::State: Send + Sync + AvailabilityDataSource<Types>,
+    Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
+    Payload<Types>: QueryablePayload<Types>,
+{
+    let from = req.integer_param("from")?;
+    let until = req.integer_param("until")?;
+    enforce_range_limit(from, until, limit)?;
+
+    let vid = state
+        .read(|state| state.get_vid_common_range(from..until).boxed())
+        .await;
+    vid.enumerate()
+        .then(|(index, fetch)| async move {
+            fetch.with_timeout(timeout).await.context(FetchBlockSnafu {
+                resource: (index + from).to_string(),
+            })
+        })
+        .try_collect::<Vec<_>>()
+        .await
+}
+
 pub fn define_api<State, Types: NodeType, Ver: StaticVersionType + 'static>(
     options: &Options,
     _: Ver,
@@ -423,6 +453,21 @@ where
                 })
                 .boxed()
         })?
+        .at("get_vid_common_range", move |req, state| {
+            get_vid_common_range_handler(req, state, small_object_range_limit, timeout)
+                .map(|r| match r {
+                    Ok(data) => data
+                        .into_iter()
+                        .map(downgrade_vid_common_query_data)
+                        .collect::<Option<Vec<_>>>()
+                        .ok_or(Error::Custom {
+                            message: "Incompatible VID version.".to_string(),
+                            status: StatusCode::BAD_REQUEST,
+                        }),
+                    Err(e) => Err(e),
+                })
+                .boxed()
+        })?
         .stream("stream_vid_common", move |req, state| {
             async move {
                 let height = req.integer_param("height")?;
@@ -446,6 +491,11 @@ where
     } else {
         api.at("get_vid_common", move |req, state| {
             get_vid_common_handler(req, state, timeout).boxed().boxed()
+        })?
+        .at("get_vid_common_range", move |req, state| {
+            get_vid_common_range_handler(req, state, small_object_range_limit, timeout)
+                .boxed()
+                .boxed()
         })?
         .stream("stream_vid_common", move |req, state| {
             async move {
@@ -1098,6 +1148,14 @@ mod test {
 
             assert_eq!(payload_range.len() as u64, i);
 
+            let vid_common_range: Vec<VidCommonQueryData<MockTypes>> = client
+                .get(&format!("vid/common/{}/{}", 0, i))
+                .send()
+                .await
+                .unwrap();
+
+            assert_eq!(vid_common_range.len() as u64, i);
+
             let header_range: Vec<Header<MockTypes>> = client
                 .get(&format!("header/{}/{}", 0, i))
                 .send()
@@ -1441,6 +1499,14 @@ mod test {
                 .unwrap();
 
             assert_eq!(payload_range.len() as u64, i);
+
+            let vid_common_range: Vec<ADVZCommonQueryData<MockTypes>> = client
+                .get(&format!("vid/common/{}/{}", 0, i))
+                .send()
+                .await
+                .unwrap();
+
+            assert_eq!(vid_common_range.len() as u64, i);
 
             let header_range: Vec<Header<MockTypes>> = client
                 .get(&format!("header/{}/{}", 0, i))

@@ -154,91 +154,117 @@ jobs:
         uses: docker/metadata-action@v5
         id: sequencer
         with:
-          images: ghcr.io/espressosystems/espresso-sequencer/sequencer
+          images: |
+            ghcr.io/espressosystems/espresso-network/sequencer
+            ghcr.io/espressosystems/espresso-sequencer/sequencer
           flavor: suffix=bench
 
       - name: Generate cdn-broker docker metadata
         uses: docker/metadata-action@v5
         id: cdn-broker
         with:
-          images: ghcr.io/espressosystems/espresso-sequencer/cdn-broker
+          images: |
+            ghcr.io/espressosystems/espresso-network/cdn-broker
+            ghcr.io/espressosystems/espresso-sequencer/cdn-broker
           flavor: suffix=bench
 
       - name: Generate cdn-marshal docker metadata
         uses: docker/metadata-action@v5
         id: cdn-marshal
         with:
-          images: ghcr.io/espressosystems/espresso-sequencer/cdn-marshal
+          images: |
+            ghcr.io/espressosystems/espresso-network/cdn-marshal
+            ghcr.io/espressosystems/espresso-sequencer/cdn-marshal
           flavor: suffix=bench
 
       - name: Generate cdn-whitelist docker metadata
         uses: docker/metadata-action@v5
         id: cdn-whitelist
         with:
-          images: ghcr.io/espressosystems/espresso-sequencer/cdn-whitelist
+          images: |
+            ghcr.io/espressosystems/espresso-network/cdn-whitelist
+            ghcr.io/espressosystems/espresso-sequencer/cdn-whitelist
           flavor: suffix=bench
 
       - name: Generate state-relay-server docker metadata
         uses: docker/metadata-action@v5
         id: state-relay-server
         with:
-          images: ghcr.io/espressosystems/espresso-sequencer/state-relay-server
+          images: |
+            ghcr.io/espressosystems/espresso-network/state-relay-server
+            ghcr.io/espressosystems/espresso-sequencer/state-relay-server
           flavor: suffix=bench
 
       - name: Generate prover-service docker metadata
         uses: docker/metadata-action@v5
         id: prover-service
         with:
-          images: ghcr.io/espressosystems/espresso-sequencer/prover-service
+          images: |
+            ghcr.io/espressosystems/espresso-network/prover-service
+            ghcr.io/espressosystems/espresso-sequencer/prover-service
           flavor: suffix=bench
 
       - name: Generate orchestrator docker metadata
         uses: docker/metadata-action@v5
         id: orchestrator
         with:
-          images: ghcr.io/espressosystems/espresso-sequencer/orchestrator
+          images: |
+            ghcr.io/espressosystems/espresso-network/orchestrator
+            ghcr.io/espressosystems/espresso-sequencer/orchestrator
           flavor: suffix=bench
 
       - name: Generate submit-transactions docker metadata
         uses: docker/metadata-action@v5
         id: submit-transactions
         with:
-          images: ghcr.io/espressosystems/espresso-sequencer/submit-transactions
+          images: |
+            ghcr.io/espressosystems/espresso-network/submit-transactions
+            ghcr.io/espressosystems/espresso-sequencer/submit-transactions
           flavor: suffix=bench
 
       - name: Generate deploy metadata
         uses: docker/metadata-action@v5
         id: deploy
         with:
-          images: ghcr.io/espressosystems/espresso-sequencer/deploy
+          images: |
+            ghcr.io/espressosystems/espresso-network/deploy
+            ghcr.io/espressosystems/espresso-sequencer/deploy
           flavor: suffix=bench
 
       - name: Generate builder metadata
         uses: docker/metadata-action@v5
         id: builder
         with:
-          images: ghcr.io/espressosystems/espresso-sequencer/builder
+          images: |
+            ghcr.io/espressosystems/espresso-network/builder
+            ghcr.io/espressosystems/espresso-sequencer/builder
           flavor: suffix=bench
 
       - name: Generate nasty-client metadata
         uses: docker/metadata-action@v5
         id: nasty-client
         with:
-          images: ghcr.io/espressosystems/espresso-sequencer/nasty-client
+          images: |
+            ghcr.io/espressosystems/espresso-network/nasty-client
+            ghcr.io/espressosystems/espresso-sequencer/nasty-client
           flavor: suffix=bench
 
       - name: Generate espresso-dev-node metadata
         uses: docker/metadata-action@v5
         id: espresso-dev-node
         with:
-          images: ghcr.io/espressosystems/espresso-sequencer/espresso-dev-node
+          images: |
+            ghcr.io/espressosystems/espresso-network/espresso-dev-node
+            ghcr.io/espressosystems/espresso-sequencer/espresso-dev-node
           flavor: suffix=bench
 
       - name: Generate bridge metadata
         uses: docker/metadata-action@v5
         id: bridge
         with:
-          images: ghcr.io/espressosystems/espresso-sequencer/bridge
+          images: |
+            ghcr.io/espressosystems/espresso-network/bridge
+            ghcr.io/espressosystems/espresso-sequencer/bridge
           flavor: suffix=bench
 
       - name: Build and push sequencer docker
@@ -396,18 +422,18 @@ jobs:
           docker pull ${{ needs.build-dockers.outputs.bridge-tag }}
       - name: Tag new docker images
         run: |
-          docker tag ${{ needs.build-dockers.outputs.sequencer-tag }} ghcr.io/espressosystems/espresso-sequencer/sequencer:main
-          docker tag ${{ needs.build-dockers.outputs.cdn-broker-tag }} ghcr.io/espressosystems/espresso-sequencer/cdn-broker:main
-          docker tag ${{ needs.build-dockers.outputs.cdn-marshal-tag }} ghcr.io/espressosystems/espresso-sequencer/cdn-marshal:main
-          docker tag ${{ needs.build-dockers.outputs.cdn-whitelist-tag }} ghcr.io/espressosystems/espresso-sequencer/cdn-whitelist:main
-          docker tag ${{ needs.build-dockers.outputs.state-relay-server-tag }} ghcr.io/espressosystems/espresso-sequencer/state-relay-server:main
-          docker tag ${{ needs.build-dockers.outputs.prover-service-tag }} ghcr.io/espressosystems/espresso-sequencer/prover-service:main
-          docker tag ${{ needs.build-dockers.outputs.orchestrator-tag }} ghcr.io/espressosystems/espresso-sequencer/orchestrator:main
-          docker tag ${{ needs.build-dockers.outputs.submit-transactions-tag }} ghcr.io/espressosystems/espresso-sequencer/submit-transactions:main
-          docker tag ${{ needs.build-dockers.outputs.deploy-tag }} ghcr.io/espressosystems/espresso-sequencer/deploy:main
-          docker tag ${{ needs.build-dockers.outputs.builder-tag }} ghcr.io/espressosystems/espresso-sequencer/builder:main
-          docker tag ${{ needs.build-dockers.outputs.nasty-client-tag }} ghcr.io/espressosystems/espresso-sequencer/nasty-client:main
-          docker tag ${{ needs.build-dockers.outputs.bridge-tag }} ghcr.io/espressosystems/espresso-sequencer/bridge:main
+          docker tag ${{ needs.build-dockers.outputs.sequencer-tag }} ghcr.io/espressosystems/espresso-network/sequencer:main
+          docker tag ${{ needs.build-dockers.outputs.cdn-broker-tag }} ghcr.io/espressosystems/espresso-network/cdn-broker:main
+          docker tag ${{ needs.build-dockers.outputs.cdn-marshal-tag }} ghcr.io/espressosystems/espresso-network/cdn-marshal:main
+          docker tag ${{ needs.build-dockers.outputs.cdn-whitelist-tag }} ghcr.io/espressosystems/espresso-network/cdn-whitelist:main
+          docker tag ${{ needs.build-dockers.outputs.state-relay-server-tag }} ghcr.io/espressosystems/espresso-network/state-relay-server:main
+          docker tag ${{ needs.build-dockers.outputs.prover-service-tag }} ghcr.io/espressosystems/espresso-network/prover-service:main
+          docker tag ${{ needs.build-dockers.outputs.orchestrator-tag }} ghcr.io/espressosystems/espresso-network/orchestrator:main
+          docker tag ${{ needs.build-dockers.outputs.submit-transactions-tag }} ghcr.io/espressosystems/espresso-network/submit-transactions:main
+          docker tag ${{ needs.build-dockers.outputs.deploy-tag }} ghcr.io/espressosystems/espresso-network/deploy:main
+          docker tag ${{ needs.build-dockers.outputs.builder-tag }} ghcr.io/espressosystems/espresso-network/builder:main
+          docker tag ${{ needs.build-dockers.outputs.nasty-client-tag }} ghcr.io/espressosystems/espresso-network/nasty-client:main
+          docker tag ${{ needs.build-dockers.outputs.bridge-tag }} ghcr.io/espressosystems/espresso-network/bridge:main
 
       - name: Test docker demo
         run: |

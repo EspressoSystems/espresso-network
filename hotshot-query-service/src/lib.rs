@@ -961,7 +961,6 @@ mod test {
         assert_eq!(sync_status.blocks.missing, 0);
         assert_eq!(sync_status.leaves.missing, 0);
         assert_eq!(sync_status.vid_common.missing, 1);
-        assert_eq!(sync_status.vid_shares.missing, 1);
 
         assert_eq!(
             client

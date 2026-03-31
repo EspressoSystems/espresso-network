@@ -3,9 +3,12 @@ use std::fmt;
 use alloy::primitives::{B256, Keccak256};
 use anyhow::{Context, ensure};
 use ark_serialize::CanonicalSerialize;
+use base64::{Engine, prelude::BASE64_STANDARD};
 use committable::{Commitment, Committable, RawCommitmentBuilder};
 use either::Either;
-use hotshot_query_service::{availability::QueryableHeader, explorer::ExplorerHeader};
+use hotshot_query_service::{
+    availability::QueryableHeader, explorer::ExplorerHeader, types::HeightIndexed,
+};
 use hotshot_types::{
     data::{EpochNumber, VidCommitment, ViewNumber, vid_commitment},
     light_client::LightClientState,
@@ -1268,6 +1271,12 @@ impl BlockHeader<SeqTypes> for Header {
     }
 }
 
+impl HeightIndexed for Header {
+    fn height(&self) -> u64 {
+        self.height()
+    }
+}
+
 impl QueryableHeader<SeqTypes> for Header {
     type NamespaceId = NamespaceId;
     type NamespaceIndex = NsIndex;
@@ -1281,6 +1290,10 @@ impl QueryableHeader<SeqTypes> for Header {
             .ns_range(i, &PayloadByteLen(payload_size))
             .byte_len()
             .0 as u64
+    }
+
+    fn ns_table(&self) -> String {
+        BASE64_STANDARD.encode(&self.ns_table().bytes)
     }
 }
 
@@ -1307,7 +1320,7 @@ impl ExplorerHeader<SeqTypes> for Header {
     /// rewards have not yet been implemented.
     ///
     /// TODO: update implementation when rewards have been created / supported.
-    ///       Issue: https://github.com/EspressoSystems/espresso-sequencer/issues/1453
+    ///       Issue: https://github.com/EspressoSystems/espresso-network/issues/1453
     fn reward_balance(&self) -> Self::BalanceAmount {
         FeeAmount::from(0)
     }

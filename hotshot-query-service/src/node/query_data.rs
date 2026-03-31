@@ -102,8 +102,6 @@ pub struct SyncStatusQueryData {
     pub leaves: ResourceSyncStatus,
     /// Summary of the [`SyncStatus`] of all VID common objects.
     pub vid_common: ResourceSyncStatus,
-    /// Summary of the [`SyncStatus`] of all VID shares.
-    pub vid_shares: ResourceSyncStatus,
 
     /// The height of the last pruned object.
     ///
@@ -117,7 +115,6 @@ impl SyncStatusQueryData {
         self.blocks.is_fully_synced()
             && self.leaves.is_fully_synced()
             && self.vid_common.is_fully_synced()
-            && self.vid_shares.is_fully_synced()
     }
 }
 

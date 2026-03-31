@@ -3861,7 +3861,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8d162beedaa69905488a8da94f5ac3edb4dd4788b732fadb7bd120b2625c1976"
 dependencies = [
  "data-encoding",
- "syn 2.0.111",
+ "syn 1.0.109",
 ]
 
 [[package]]
@@ -4453,13 +4453,16 @@ dependencies = [
  "derive_builder",
  "derive_more 2.1.0",
  "dotenvy",
+ "espresso-safe-tx-builder",
  "espresso-types",
  "hotshot-contract-adapter",
  "hotshot-types",
  "rand 0.8.5",
  "sequencer-utils",
+ "serde",
  "serde_json",
  "surf-disco",
+ "tempfile",
  "test-log",
  "tide-disco",
  "tokio",
@@ -4540,6 +4543,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "espresso-safe-tx-builder"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tracing",
+]
+
+[[package]]
 name = "espresso-systems-common"
 version = "0.4.0"
 source = "git+https://github.com/espressosystems/espresso-systems-common?tag=0.4.0#5abd890f79014a86db31286e1f3a529f161e69de"
@@ -4557,6 +4572,7 @@ dependencies = [
  "async-broadcast",
  "async-lock 3.4.1",
  "async-trait",
+ "base64 0.22.1",
  "base64-bytes",
  "bigdecimal",
  "bincode",
@@ -5828,6 +5844,7 @@ dependencies = [
  "async-trait",
  "bincode",
  "committable",
+ "derive_more 2.1.0",
  "hotshot",
  "hotshot-task-impls",
  "hotshot-types",
@@ -5922,6 +5939,29 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.111",
+]
+
+[[package]]
+name = "hotshot-new-protocol"
+version = "0.1.0"
+dependencies = [
+ "async-broadcast",
+ "async-lock 3.4.1",
+ "async-trait",
+ "bon",
+ "committable",
+ "futures",
+ "hotshot",
+ "hotshot-example-types",
+ "hotshot-testing",
+ "hotshot-types",
+ "hotshot-utils",
+ "serde",
+ "thiserror 2.0.17",
+ "time 0.3.47",
+ "tokio",
+ "tracing",
+ "versions",
 ]
 
 [[package]]
@@ -10512,9 +10552,9 @@ dependencies = [
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.8"
+version = "0.103.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2ffdfa2f5286e2247234e03f680868ac2815974dc39e00ea15adc445d0aafe52"
+checksum = "df33b2b81ac578cabaf06b89b0631153a3f416b0a886e8a7a1707fb51abbd1ef"
 dependencies = [
  "ring 0.17.14",
  "rustls-pki-types",
@@ -10771,6 +10811,7 @@ dependencies = [
  "async-once-cell",
  "async-trait",
  "bincode",
+ "blake3",
  "byteorder",
  "cdn-broker",
  "cdn-marshal",
@@ -11686,6 +11727,7 @@ dependencies = [
  "directories 6.0.0",
  "dotenvy",
  "espresso-contract-deployer",
+ "espresso-safe-tx-builder",
  "espresso-types",
  "futures-util",
  "hotshot-contract-adapter",

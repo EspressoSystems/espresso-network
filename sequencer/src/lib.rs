@@ -7,6 +7,7 @@ pub mod api;
 pub mod catchup;
 pub mod context;
 pub mod genesis;
+pub mod keyset;
 pub mod network;
 pub mod options;
 pub mod persistence;
@@ -1541,11 +1542,12 @@ pub mod testing {
         epoch_height: u64,
         target_epoch: u64,
     ) {
+        tracing::info!(target_epoch, "waiting for epoch");
         while let Some(event) = events.next().await {
             if let EventType::Decide { leaf_chain, .. } = event.event {
                 let leaf = leaf_chain[0].leaf.clone();
                 let epoch = leaf.epoch(epoch_height);
-                println!(
+                tracing::debug!(
                     "Node decided at height: {}, epoch: {epoch:?}",
                     leaf.height(),
                 );
@@ -1555,6 +1557,7 @@ pub mod testing {
                 }
             }
         }
+        tracing::info!(target_epoch, "epoch started");
     }
 }
 

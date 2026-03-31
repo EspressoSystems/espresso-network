@@ -51,7 +51,7 @@ Contracts:
 To run the staking-cli using Docker:
 
 ```bash
-docker run -it ghcr.io/espressosystems/espresso-sequencer/staking-cli:main staking-cli --help
+docker run -it ghcr.io/espressosystems/espresso-network/staking-cli:main staking-cli --help
 ```
 
 To build and run from source:
@@ -176,7 +176,7 @@ Options:
       --format <FORMAT>
           Output format
 
-          [possible values: json, toml]
+          [possible values: safe, json, toml]
 
   -h, --help
           Print help (see a summary with '-h')
@@ -323,22 +323,58 @@ through your multisig's interface.
 To export calldata for any command, add the `--export-calldata` flag:
 
 ```bash
-# Export delegate calldata as JSON (default)
+# Export delegate calldata in Safe TX Builder format (default)
 staking-cli --export-calldata delegate --validator-address 0x12...34 --amount 100
+
+# Export as legacy JSON
+staking-cli --export-calldata --format json delegate --validator-address 0x12...34 --amount 100
 
 # Export as TOML
 staking-cli --export-calldata --format toml delegate --validator-address 0x12...34 --amount 100
 
 # Save to file
-staking-cli --export-calldata --format json --output delegate.json delegate --validator-address 0x12...34 --amount 100
+staking-cli --export-calldata --output delegate.json delegate --validator-address 0x12...34 --amount 100
 ```
 
-The output includes the target contract address and the encoded calldata:
+The default output is [Safe Transaction Builder](https://help.safe.global/en/articles/40795-transaction-builder) JSON,
+which can be imported directly into the Safe UI with decoded function calls:
+
+```json
+{
+  "version": "1.0",
+  "chainId": "1",
+  "transactions": [
+    {
+      "to": "0x...",
+      "value": "0",
+      "data": null,
+      "contractMethod": {
+        "inputs": [
+          { "internalType": "address", "name": "validator", "type": "address" },
+          { "internalType": "uint256", "name": "amount", "type": "uint256" }
+        ],
+        "name": "delegate",
+        "payable": false
+      },
+      "contractInputsValues": {
+        "validator": "0x...",
+        "amount": "100000000000000000000"
+      }
+    }
+  ]
+}
+```
+
+For operations with complex arguments (e.g., `register-validator`, `update-consensus-keys`), the Safe output falls back
+to raw hex calldata since the struct arguments cannot be represented in the Safe TX Builder format.
+
+Use `--format json` or `--format toml` for the legacy flat format:
 
 ```json
 {
   "to": "0x...",
-  "data": "0x..."
+  "data": "0x...",
+  "value": "0"
 }
 ```
 
