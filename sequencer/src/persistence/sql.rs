@@ -1,5 +1,6 @@
 use std::{
     collections::BTreeMap,
+    future::Future,
     path::PathBuf,
     str::FromStr,
     sync::Arc,
@@ -1143,6 +1144,42 @@ impl Persistence {
 
         tx.commit().await
     }
+
+    /// Retry a write transaction body on PostgreSQL serialization failures (error code 40001).
+    /// These occur when concurrent SERIALIZABLE transactions conflict and are safe to retry.
+    /// The closure must be `Fn` (not `FnOnce`) so it can be called on each attempt — ensure
+    /// all captured variables are `Copy` or cloned before capture.
+    async fn with_write_retry<F, Fut, T>(&self, f: F) -> anyhow::Result<T>
+    where
+        F: Fn() -> Fut,
+        Fut: Future<Output = anyhow::Result<T>>,
+    {
+        const MAX_RETRIES: u32 = 5;
+        const RETRY_DELAY: Duration = Duration::from_millis(100);
+
+        let mut attempts = 0u32;
+        loop {
+            match f().await {
+                Ok(val) => return Ok(val),
+                Err(err) if attempts < MAX_RETRIES && Self::is_serialization_error(&err) => {
+                    attempts += 1;
+                    tracing::warn!(
+                        attempts,
+                        "serialization conflict, retrying write transaction"
+                    );
+                    tokio::time::sleep(RETRY_DELAY).await;
+                },
+                Err(err) => return Err(err),
+            }
+        }
+    }
+
+    fn is_serialization_error(err: &anyhow::Error) -> bool {
+        if let Some(sqlx::Error::Database(db_err)) = err.downcast_ref::<sqlx::Error>() {
+            return db_err.code().as_deref() == Some("40001");
+        }
+        false
+    }
 }
 
 const PRUNE_TABLES: &[&str] = &[
@@ -1683,25 +1720,30 @@ impl SequencerPersistence for Persistence {
             return Ok(());
         }
 
-        let stmt = format!(
-            "INSERT INTO highest_voted_view (id, view) VALUES (0, $1)
-            ON CONFLICT (id) DO UPDATE SET view = {MAX_FN}(highest_voted_view.view, excluded.view)"
-        );
-
-        let mut tx = self.db.write().await?;
-        tx.execute(query(&stmt).bind(view.u64() as i64)).await?;
-
-        if matches!(action, HotShotAction::Vote) {
-            let restart_view = view + 1;
+        self.with_write_retry(|| async {
             let stmt = format!(
-                "INSERT INTO restart_view (id, view) VALUES (0, $1)
-                ON CONFLICT (id) DO UPDATE SET view = {MAX_FN}(restart_view.view, excluded.view)"
+                "INSERT INTO highest_voted_view (id, view) VALUES (0, $1)
+                ON CONFLICT (id) DO UPDATE SET view = {MAX_FN}(highest_voted_view.view, \
+                 excluded.view)"
             );
-            tx.execute(query(&stmt).bind(restart_view.u64() as i64))
-                .await?;
-        }
 
-        tx.commit().await
+            let mut tx = self.db.write().await?;
+            tx.execute(query(&stmt).bind(view.u64() as i64)).await?;
+
+            if matches!(action, HotShotAction::Vote) {
+                let restart_view = view + 1;
+                let stmt = format!(
+                    "INSERT INTO restart_view (id, view) VALUES (0, $1)
+                    ON CONFLICT (id) DO UPDATE SET view = {MAX_FN}(restart_view.view, \
+                     excluded.view)"
+                );
+                tx.execute(query(&stmt).bind(restart_view.u64() as i64))
+                    .await?;
+            }
+
+            tx.commit().await
+        })
+        .await
     }
 
     async fn append_quorum_proposal2(
