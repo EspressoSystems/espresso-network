@@ -833,7 +833,7 @@ where
 }
 
 impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, D: CatchupStorage + Send + Sync>
-  data_source::DatabaseMetadataSource for StorageState<N, P, D>
+    data_source::DatabaseMetadataSource for StorageState<N, P, D>
 where
     N: ConnectedNetwork<PubKey>,
     P: SequencerPersistence,

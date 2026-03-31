@@ -845,7 +845,10 @@ impl super::data_source::DatabaseMetadataSource for SqlStorage {
                 let count_row = sqlx::query(&count_query)
                     .fetch_one(tx.as_mut())
                     .await
-                    .context(format!("failed to query row count for table {}", table_name))?;
+                    .context(format!(
+                        "failed to query row count for table {}",
+                        table_name
+                    ))?;
 
                 let row_count: i64 = count_row.try_get("count").unwrap_or(0);
 
@@ -1982,9 +1985,7 @@ mod tests {
         }
 
         // Verify that the header table has at least one row (we inserted one)
-        let header_table = table_sizes
-            .iter()
-            .find(|t| t.table_name.contains("header"));
+        let header_table = table_sizes.iter().find(|t| t.table_name.contains("header"));
 
         if let Some(header_table) = header_table {
             assert!(
@@ -1993,10 +1994,7 @@ mod tests {
             );
         }
 
-        tracing::info!(
-            "get_table_sizes returned {} tables",
-            table_sizes.len()
-        );
+        tracing::info!("get_table_sizes returned {} tables", table_sizes.len());
         for table_size in table_sizes {
             tracing::info!(
                 "Table: {}, Rows: {}, Size: {:?}",
