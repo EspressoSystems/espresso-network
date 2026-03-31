@@ -1943,12 +1943,18 @@ mod tests {
         storage.garbage_collect(3).await.unwrap();
         let err = storage.load_proof(2, account).await.unwrap_err();
         assert!(err.to_string().contains("Missing proof"), "{err:#}");
-
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_get_table_sizes() {
         use super::super::data_source::DatabaseMetadataSource;
+
+        let db = TmpDb::init().await;
+        let opt = tmp_options(&db);
+        let cfg = Config::try_from(&opt).expect("failed to create config from options");
+        let storage = SqlStorage::connect(cfg, StorageConnectionType::Query)
+            .await
+            .expect("failed to connect to storage");
 
         // Insert some test data to ensure tables have rows
         let mut tx = storage.write().await.unwrap();
