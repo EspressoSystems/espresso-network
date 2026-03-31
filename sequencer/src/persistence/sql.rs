@@ -706,6 +706,10 @@ pub struct Persistence {
     internal_metrics: PersistenceMetricsValue,
 }
 
+/// PostgreSQL error code for serialization failures under SERIALIZABLE isolation.
+/// Transactions that fail with this code are safe to retry from scratch.
+const PG_SERIALIZATION_FAILURE_CODE: &str = "40001";
+
 impl Persistence {
     /// Ensure the `leaf_hash` column is populated for all existing quorum proposals.
     ///
@@ -1176,7 +1180,7 @@ impl Persistence {
 
     fn is_serialization_error(err: &anyhow::Error) -> bool {
         if let Some(sqlx::Error::Database(db_err)) = err.downcast_ref::<sqlx::Error>() {
-            return db_err.code().as_deref() == Some("40001");
+            return db_err.code().as_deref() == Some(PG_SERIALIZATION_FAILURE_CODE);
         }
         false
     }
