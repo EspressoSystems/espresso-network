@@ -657,7 +657,7 @@ impl ValidatorLeaderCounts {
     }
 
     /// All reward accounts (validator + delegators) for validators that led blocks.
-    fn accounts_to_update(&self) -> Vec<RewardAccountV2> {
+    fn all_reward_accounts(&self) -> Vec<RewardAccountV2> {
         self.active_leaders()
             .flat_map(|(v, _)| {
                 std::iter::once(RewardAccountV2(v.account))
@@ -1265,7 +1265,7 @@ impl EpochRewardsCalculator {
         );
 
         // Check if we're missing accounts that need to be in the tree
-        let accounts_to_update = validator_leader_counts.accounts_to_update();
+        let accounts_to_update = validator_leader_counts.all_reward_accounts();
 
         let missing_accounts: Vec<_> = accounts_to_update
             .iter()
