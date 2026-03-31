@@ -40,6 +40,7 @@ pub(crate) mod registration;
 pub(crate) mod signature;
 pub(crate) mod transaction;
 pub(crate) mod tx_log;
+pub(crate) mod undelegation;
 
 /// Used by staking-cli integration tests.
 #[cfg(feature = "testing")]
@@ -95,6 +96,12 @@ pub(crate) struct Config {
     /// Deployed stake table contract address.
     #[clap(long, env = "STAKE_TABLE_ADDRESS")]
     pub stake_table_address: Address,
+
+    /// Maximum number of blocks to scan per RPC query when fetching events.
+    #[default(10_000u64)]
+    #[serde(skip_deserializing)]
+    #[clap(long, env = "EVENTS_BLOCK_RANGE")]
+    pub events_block_range: u64,
 
     /// Espresso sequencer API URL for reward claims.
     #[clap(long, env = "ESPRESSO_URL")]
@@ -409,6 +416,23 @@ pub(crate) enum Commands {
     ClaimValidatorExit {
         #[clap(long)]
         validator_address: Address,
+    },
+    /// List pending withdrawals (undelegations and validator exit claims).
+    PendingWithdrawals {
+        /// The address to check.
+        #[clap(long)]
+        address: Option<Address>,
+
+        /// Save claims to a JSON file for later use with claim-all-withdrawals --input.
+        #[clap(long)]
+        claims_output: Option<std::path::PathBuf>,
+    },
+    /// Claim all unlocked undelegations and validator exit claims.
+    ClaimAllWithdrawals {
+        /// Load claims from a JSON file (from pending-withdrawals --claims-output)
+        /// instead of scanning the chain.
+        #[clap(long)]
+        input: Option<std::path::PathBuf>,
     },
     /// Claim staking rewards.
     ClaimRewards {},

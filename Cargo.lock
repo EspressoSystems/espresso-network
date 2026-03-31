@@ -11720,6 +11720,7 @@ dependencies = [
  "anyhow",
  "ark-serialize 0.5.0",
  "assert_cmd",
+ "chrono",
  "clap 4.5.53",
  "clap-serde",
  "clap-serde-derive",

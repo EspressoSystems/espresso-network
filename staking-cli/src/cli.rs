@@ -13,6 +13,7 @@ use alloy::{
 use anyhow::{Context, Result};
 use clap::Parser;
 use clap_serde_derive::ClapSerde;
+use espresso_types::v0_1::L1ClientOptions;
 use hotshot_contract_adapter::sol_types::{
     EspToken::{self, EspTokenEvents},
     RewardClaim::RewardClaimEvents,
@@ -207,8 +208,8 @@ pub async fn run() -> Result<()> {
         Config::from(&mut cli.config)
     } else if let Ok(f) = std::fs::read_to_string(&config_path) {
         // parse toml
-        match toml::from_str::<Config>(&f) {
-            Ok(config) => config.merge(&mut cli.config),
+        match toml::from_str::<<Config as ClapSerde>::Opt>(&f) {
+            Ok(config) => Config::from(config).merge(&mut cli.config),
             Err(err) => {
                 // This is a user error print the hopefully helpful error
                 // message without backtrace and exit.
@@ -470,6 +471,77 @@ pub async fn run() -> Result<()> {
             exit_err("Failed to check unclaimed rewards", err);
         });
         println!("{}", format_esp(unclaimed));
+        return Ok(());
+    }
+
+    let create_l1_client = || {
+        L1ClientOptions {
+            l1_events_max_block_range: config.events_block_range,
+            ..Default::default()
+        }
+        .connect(vec![config.rpc_url.clone()])
+    };
+
+    if let Commands::PendingWithdrawals {
+        address,
+        claims_output,
+    } = config.commands
+    {
+        let address = address
+            .or_from_wallet(wallet.as_ref())
+            .context("Address required - provide --address or configure a signer")?;
+        let l1 = create_l1_client()?;
+        let claims =
+            crate::undelegation::fetch_pending_claims(&l1, stake_table_addr, address).await?;
+        let block = l1
+            .provider
+            .get_block(BlockId::latest())
+            .await?
+            .context("Failed to fetch latest block")?;
+        crate::undelegation::display_pending_claims(&claims, block.header.timestamp);
+        if let Some(path) = claims_output {
+            crate::undelegation::save_claims(&claims, &path)?;
+        }
+        return Ok(());
+    }
+
+    if let Commands::ClaimAllWithdrawals { input } = config.commands {
+        let l1 = create_l1_client()?;
+        if config.export_calldata {
+            let address = config.sender_address.context(
+                "claim-all-withdrawals with --export-calldata requires --sender-address",
+            )?;
+            crate::undelegation::export_unlocked_claims(
+                &l1,
+                stake_table_addr,
+                address,
+                config.output.output.as_deref(),
+            )
+            .await?;
+        } else {
+            let claims = input
+                .map(|p| crate::undelegation::load_claims(&p))
+                .transpose()?;
+            let wallet = wallet.ok_or_else(&require_wallet)?;
+            let account = NetworkWallet::<Ethereum>::default_signer_address(&wallet);
+            let balance = readonly_provider.get_balance(account).await?;
+            if balance.is_zero() {
+                exit(format!(
+                    "zero Ethereum balance for account {account}, please fund account"
+                ));
+            }
+            let provider = ProviderBuilder::new()
+                .wallet(wallet)
+                .connect_http(config.rpc_url.clone());
+            crate::undelegation::claim_all_unlocked(
+                &l1,
+                stake_table_addr,
+                account,
+                &provider,
+                claims,
+            )
+            .await?;
+        }
         return Ok(());
     }
 
@@ -777,6 +849,8 @@ pub async fn run() -> Result<()> {
         | Commands::TokenAllowance { .. }
         | Commands::ExportNodeSignatures { .. }
         | Commands::PreviewMetadata { .. }
+        | Commands::PendingWithdrawals { .. }
+        | Commands::ClaimAllWithdrawals { .. }
         | Commands::Demo(..)
         | Commands::StakeForDemo { .. } => {
             unreachable!("Non-state-change commands are handled earlier in the function")

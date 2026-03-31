@@ -161,11 +161,28 @@ fn build_safe_method(
     Ok((method, values))
 }
 
-pub fn output_safe_tx_builder(
-    info: &CalldataInfo,
-    output_path: Option<&Path>,
+fn to_safe_transaction(info: &CalldataInfo) -> Result<SafeTransaction> {
+    let (data, contract_method, contract_inputs_values) = match &info.function_info {
+        Some(fi) => {
+            let (m, v) = build_safe_method(fi)?;
+            (None, Some(m), Some(v))
+        },
+        None => (Some(info.data.to_string()), None, None),
+    };
+    Ok(SafeTransaction {
+        to: info.to.to_checksum(None),
+        value: info.value.to_string(),
+        data,
+        contract_method,
+        contract_inputs_values,
+    })
+}
+
+fn build_batch(
+    infos: &[CalldataInfo],
     chain_id: u64,
-) -> Result<()> {
+    description: &str,
+) -> Result<SafeTransactionBuilderBatch> {
     let created_at = u64::try_from(
         SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
@@ -174,32 +191,25 @@ pub fn output_safe_tx_builder(
     )
     .expect("timestamp fits u64");
 
-    let batch = SafeTransactionBuilderBatch {
+    let transactions = infos
+        .iter()
+        .map(to_safe_transaction)
+        .collect::<Result<Vec<_>>>()?;
+
+    Ok(SafeTransactionBuilderBatch {
         version: "1.0",
         chain_id: chain_id.to_string(),
         created_at,
         meta: SafeBatchMeta {
             name: "Espresso Multisig Transactions",
-            description: info.description.clone(),
+            description: description.to_string(),
         },
-        transactions: vec![{
-            let (data, contract_method, contract_inputs_values) = match &info.function_info {
-                Some(fi) => {
-                    let (m, v) = build_safe_method(fi)?;
-                    (None, Some(m), Some(v))
-                },
-                None => (Some(info.data.to_string()), None, None),
-            };
-            SafeTransaction {
-                to: info.to.to_checksum(None),
-                value: info.value.to_string(),
-                data,
-                contract_method,
-                contract_inputs_values,
-            }
-        }],
-    };
-    let text = serde_json::to_string_pretty(&batch)?;
+        transactions,
+    })
+}
+
+fn write_batch(batch: &SafeTransactionBuilderBatch, output_path: Option<&Path>) -> Result<()> {
+    let text = serde_json::to_string_pretty(batch)?;
 
     if let Some(path) = output_path {
         std::fs::write(path, &text)?;
@@ -209,6 +219,26 @@ pub fn output_safe_tx_builder(
     }
 
     Ok(())
+}
+
+pub fn output_safe_tx_builder(
+    info: &CalldataInfo,
+    output_path: Option<&Path>,
+    chain_id: u64,
+) -> Result<()> {
+    let batch = build_batch(std::slice::from_ref(info), chain_id, &info.description)?;
+    write_batch(&batch, output_path)
+}
+
+/// Output multiple transactions as a Safe Transaction Builder batch JSON.
+pub fn output_safe_tx_builder_batch(
+    infos: &[CalldataInfo],
+    output_path: Option<&Path>,
+    chain_id: u64,
+    description: &str,
+) -> Result<()> {
+    let batch = build_batch(infos, chain_id, description)?;
+    write_batch(&batch, output_path)
 }
 
 #[cfg(test)]
