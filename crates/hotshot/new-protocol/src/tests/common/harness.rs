@@ -130,9 +130,9 @@ impl TestHarness {
     /// This avoids any assumption about the order or number of events
     /// produced by asynchronous coordinator subsystems (proposal validator,
     /// VID reconstructor, vote collectors, state manager, timer).
-    pub async fn process_until<F>(&mut self, mut pred: F) -> Vec<ConsensusInput<TestTypes>>
+    pub async fn process_until<P>(&mut self, pred: P) -> Vec<ConsensusInput<TestTypes>>
     where
-        F: FnMut(&[ConsensusInput<TestTypes>]) -> bool,
+        P: Fn(&[ConsensusInput<TestTypes>]) -> bool,
     {
         let mut inputs = Vec::new();
         while !pred(&inputs) {
