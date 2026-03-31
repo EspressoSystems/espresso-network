@@ -1125,7 +1125,6 @@ async fn prune_to_view(tx: &mut Transaction<Write>, view: u64) -> anyhow::Result
 
 #[async_trait]
 impl SequencerPersistence for Persistence {
-
     fn into_catchup_provider(
         self,
         backoff: BackoffParams,
@@ -1391,7 +1390,8 @@ impl SequencerPersistence for Persistence {
     ) -> anyhow::Result<()> {
         let view = proposal.data.view_number().u64();
         let payload_hash = proposal.data.payload_commitment();
-        let data_bytes = bincode::serialize(proposal).unwrap();
+        let data_bytes = bincode::serialize(proposal)
+            .with_context(|| format!("serializing VID share proposal for view {view}"))?;
 
         let now = Instant::now();
         let mut tx = self.db.write().await?;
@@ -1416,7 +1416,8 @@ impl SequencerPersistence for Persistence {
     ) -> anyhow::Result<()> {
         let data = &proposal.data;
         let view = data.view_number().u64();
-        let data_bytes = bincode::serialize(proposal).unwrap();
+        let data_bytes = bincode::serialize(proposal)
+            .with_context(|| format!("serializing DA proposal for view {view}"))?;
 
         let now = Instant::now();
         let mut tx = self.db.write().await?;
@@ -1623,7 +1624,8 @@ impl SequencerPersistence for Persistence {
     ) -> anyhow::Result<()> {
         let data = &proposal.data;
         let view = data.view_number().u64();
-        let data_bytes = bincode::serialize(proposal).unwrap();
+        let data_bytes = bincode::serialize(proposal)
+            .with_context(|| format!("serializing DA proposal2 for view {view}"))?;
 
         let now = Instant::now();
         let mut tx = self.db.write().await?;
@@ -2499,11 +2501,7 @@ mod test {
         },
         message::convert_proposal,
         simple_certificate::QuorumCertificate,
-        traits::{
-            EncodeBytes,
-            block_contents::BlockHeader,
-            signature_key::SignatureKey,
-        },
+        traits::{EncodeBytes, block_contents::BlockHeader, signature_key::SignatureKey},
         utils::EpochTransitionIndicator,
         vid::avidm::{AvidMScheme, init_avidm_param},
     };
@@ -2968,7 +2966,6 @@ mod test {
         })
         .await
     }
-
 
     /// Regression test for an ambiguous behavior in `store_events`/`load_events`.
     ///
