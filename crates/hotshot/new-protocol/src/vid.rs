@@ -1,15 +1,28 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
+use committable::Commitment;
+use hotshot::traits::BlockPayload;
 use hotshot_types::{
     data::{EpochNumber, VidCommitment2, VidDisperse2, VidDisperseShare2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
-    traits::{BlockPayload, node_implementation::NodeType},
+    traits::node_implementation::NodeType,
     vid::avidm_gf2::{AvidmGf2Common, AvidmGf2Scheme, AvidmGf2Share},
 };
 use tokio::task::{AbortHandle, JoinSet};
 
-type VidDisperseResult<T> = Result<(ViewNumber, VidCommitment2, VidDisperse2<T>), ()>;
-type VidShareResult<T> = Result<(ViewNumber, VidCommitment2, <T as NodeType>::BlockPayload), ()>;
+pub struct VidDisperseOutput<T: NodeType> {
+    pub view: ViewNumber,
+    pub payload_commitment: VidCommitment2,
+    pub disperse: VidDisperse2<T>,
+}
+
+pub struct VidReconstructOutput<T: NodeType> {
+    pub view: ViewNumber,
+    pub payload_commitment: VidCommitment2,
+    pub payload: T::BlockPayload,
+    pub metadata: <T::BlockPayload as BlockPayload<T>>::Metadata,
+    pub tx_commitments: Vec<Commitment<T::Transaction>>,
+}
 
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub struct VidDisperseRequest<T: NodeType> {
@@ -22,7 +35,7 @@ pub struct VidDisperseRequest<T: NodeType> {
 pub struct VidDisperser<T: NodeType> {
     calculations: BTreeMap<ViewNumber, AbortHandle>,
     epoch_membership_coordinator: EpochMembershipCoordinator<T>,
-    tasks: JoinSet<VidDisperseResult<T>>,
+    tasks: JoinSet<Result<VidDisperseOutput<T>, ()>>,
 }
 
 impl<T: NodeType> VidDisperser<T> {
@@ -46,9 +59,7 @@ impl<T: NodeType> VidDisperser<T> {
         self.calculations.insert(view, handle);
     }
 
-    pub async fn next(
-        &mut self,
-    ) -> Option<Result<(ViewNumber, VidCommitment2, VidDisperse2<T>), ()>> {
+    pub async fn next(&mut self) -> Option<Result<VidDisperseOutput<T>, ()>> {
         loop {
             match self.tasks.join_next().await {
                 Some(Ok(result)) => return Some(result),
@@ -61,7 +72,7 @@ impl<T: NodeType> VidDisperser<T> {
     async fn handle_vid_disperse_request(
         epoch_membership_coordinator: EpochMembershipCoordinator<T>,
         vid_disperse_request: VidDisperseRequest<T>,
-    ) -> Result<(ViewNumber, VidCommitment2, VidDisperse2<T>), ()> {
+    ) -> Result<VidDisperseOutput<T>, ()> {
         let Ok((disperse, _duration)) = VidDisperse2::calculate_vid_disperse(
             &vid_disperse_request.block,
             &epoch_membership_coordinator,
@@ -75,11 +86,11 @@ impl<T: NodeType> VidDisperser<T> {
             // TODO: Handle error
             return Err(());
         };
-        Ok((
-            vid_disperse_request.view,
-            disperse.payload_commitment,
+        Ok(VidDisperseOutput {
+            view: vid_disperse_request.view,
+            payload_commitment: disperse.payload_commitment,
             disperse,
-        ))
+        })
     }
     pub fn gc(&mut self, view_number: ViewNumber) {
         let keep = self.calculations.split_off(&view_number);
@@ -108,7 +119,7 @@ impl<T: NodeType> VidShareAccumulator<T> {
 pub struct VidReconstructor<T: NodeType> {
     accumulators: BTreeMap<ViewNumber, VidShareAccumulator<T>>,
     reconstructed: BTreeSet<ViewNumber>,
-    tasks: JoinSet<VidShareResult<T>>,
+    tasks: JoinSet<Result<VidReconstructOutput<T>, ()>>,
     calculations: BTreeMap<ViewNumber, AbortHandle>,
 }
 
@@ -158,27 +169,25 @@ impl<T: NodeType> VidReconstructor<T> {
         }
     }
 
-    pub async fn next(
-        &mut self,
-    ) -> Option<Result<(ViewNumber, VidCommitment2, <T as NodeType>::BlockPayload), ()>> {
+    pub async fn next(&mut self) -> Option<Result<VidReconstructOutput<T>, ()>> {
         loop {
             match self.tasks.join_next().await {
-                Some(Ok(result)) => {
-                    if let Ok((view, vid_commitment, payload)) = result {
-                        self.calculations.remove(&view);
-                        self.accumulators.remove(&view);
-                        self.reconstructed.insert(view);
-                        return Some(Ok((view, vid_commitment, payload)));
-                    } else {
-                        // TODO: Handle error
-                        return Some(Err(()));
-                    }
+                Some(Ok(Ok(out))) => {
+                    self.calculations.remove(&out.view);
+                    self.accumulators.remove(&out.view);
+                    self.reconstructed.insert(out.view);
+                    return Some(Ok(out));
+                },
+                Some(Ok(Err(()))) => {
+                    // TODO: Handle error
+                    return Some(Err(()));
                 },
                 Some(Err(_)) => continue,
                 None => return None,
             }
         }
     }
+
     fn try_reconstruct(&mut self, view: ViewNumber, payload_commitment: VidCommitment2) {
         if self.calculations.contains_key(&view) {
             return;
@@ -198,7 +207,14 @@ impl<T: NodeType> VidReconstructor<T> {
                 return Err(());
             };
             let payload = T::BlockPayload::from_bytes(&result, &metadata);
-            Ok((view, payload_commitment, payload))
+            let tx_commitments = payload.transaction_commitments(&metadata);
+            Ok(VidReconstructOutput {
+                view,
+                payload_commitment,
+                payload,
+                metadata,
+                tx_commitments,
+            })
         });
         self.calculations.insert(view, task);
     }

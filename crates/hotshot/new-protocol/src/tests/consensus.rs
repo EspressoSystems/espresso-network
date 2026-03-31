@@ -131,7 +131,7 @@ impl ConsensusHarness {
     }
 }
 
-/// Fresh consensus with no locked_qc accepts any proposal (genesis safety).
+/// Fresh consensus with no locked_cert accepts any proposal (genesis safety).
 #[tokio::test]
 async fn test_safety_genesis_no_lock() {
     let mut harness = ConsensusHarness::new(0).await;
@@ -144,7 +144,7 @@ async fn test_safety_genesis_no_lock() {
 
     assert!(
         has_request_state(harness.outputs()),
-        "Proposal should be accepted with no locked QC"
+        "Proposal should be accepted with no locked cert"
     );
 }
 
@@ -354,9 +354,9 @@ async fn test_no_duplicate_vote2() {
     );
 }
 
-/// StateVerificationFailed with matching commitment removes proposal and vid_share.
+/// StateValidationFailed with matching commitment removes proposal and vid_share.
 #[tokio::test]
-async fn test_state_verification_failed_removes_proposal() {
+async fn test_state_validation_failed_removes_proposal() {
     let mut harness = ConsensusHarness::new(0).await;
     let test_data = TestData::new(3).await;
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
@@ -370,14 +370,14 @@ async fn test_state_verification_failed_removes_proposal() {
 
     // Send proposal for view 2 — but bypass the harness auto-response
     // by directly applying the proposal input, then manually sending
-    // StateVerificationFailed instead of letting the harness auto-respond.
+    // StateValidationFailed instead of letting the harness auto-respond.
     // We need to call consensus.apply directly to avoid auto StateVerified.
     let proposal_input = test_data.views[1].proposal_input_consensus(&node_key);
     let mut outbox = Outbox::new();
     harness.consensus.apply(proposal_input, &mut outbox).await;
     harness.collected.extend(outbox.take());
 
-    // Send StateVerificationFailed — removes proposal
+    // Send StateValidationFailed — removes proposal
     let proposal = &test_data.views[1].proposal.data.proposal;
     harness
         .apply(ConsensusInput::StateValidationFailed(StateResponse {
@@ -568,7 +568,7 @@ async fn test_leader_sends_proposal() {
     );
 }
 
-/// Leader sends a proposal after a timeout using the locked QC and
+/// Leader sends a proposal after a timeout using the locked cert and
 /// view change evidence.
 #[tokio::test]
 async fn test_leader_proposes_after_timeout() {
@@ -577,7 +577,7 @@ async fn test_leader_proposes_after_timeout() {
     let leader_index = node_index_for_key(&leader_for_view_3);
     let mut harness = ConsensusHarness::new(leader_index).await;
 
-    // Build up locked_qc: process view 1 so cert1 sets locked_qc
+    // Build up locked_cert: process view 1 so cert1 sets locked_cert
     harness
         .apply(test_data.views[0].proposal_input_consensus(&leader_for_view_3))
         .await;

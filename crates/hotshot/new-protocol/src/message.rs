@@ -146,7 +146,6 @@ pub enum ConsensusMessage<T: NodeType, S> {
     Certificate1(Certificate1<T>, T::SignatureKey),
     Certificate2(Certificate2<T>, T::SignatureKey),
     TimeoutVote(TimeoutVote2<T>),
-    Transactions(Vec<T::Transaction>, ViewNumber),
     Checkpoint(CheckpointVote<T>),
 }
 
@@ -160,7 +159,6 @@ impl<T: NodeType, S> ConsensusMessage<T, S> {
             Self::Certificate1(c, k) => ConsensusMessage::Certificate1(c, k),
             Self::Certificate2(c, k) => ConsensusMessage::Certificate2(c, k),
             Self::TimeoutVote(v) => ConsensusMessage::TimeoutVote(v),
-            Self::Transactions(t, v) => ConsensusMessage::Transactions(t, v),
             Self::Checkpoint(v) => ConsensusMessage::Checkpoint(v),
         }
     }
@@ -175,8 +173,38 @@ impl<T: NodeType, S> HasViewNumber for ConsensusMessage<T, S> {
             Self::Certificate1(certificate, _) => certificate.view_number(),
             Self::Certificate2(certificate, _) => certificate.view_number(),
             Self::TimeoutVote(vote) => vote.view_number(),
-            Self::Transactions(_, view_number) => *view_number,
             Self::Checkpoint(vote) => vote.view_number(),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
+#[serde(bound(deserialize = ""))]
+pub struct DedupManifest<T: NodeType> {
+    pub(crate) view: ViewNumber,
+    pub(crate) epoch: EpochNumber,
+    pub(crate) hashes: Vec<Commitment<T::Transaction>>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
+#[serde(bound(deserialize = ""))]
+pub struct TransactionMessage<T: NodeType> {
+    pub(crate) view: ViewNumber,
+    pub(crate) transactions: Vec<T::Transaction>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
+#[serde(bound(deserialize = ""))]
+pub enum BlockMessage<T: NodeType> {
+    Transactions(TransactionMessage<T>),
+    DedupManifest(DedupManifest<T>),
+}
+
+impl<T: NodeType> HasViewNumber for BlockMessage<T> {
+    fn view_number(&self) -> ViewNumber {
+        match self {
+            BlockMessage::Transactions(msg) => msg.view,
+            BlockMessage::DedupManifest(msg) => msg.view,
         }
     }
 }
@@ -210,6 +238,7 @@ impl<T: NodeType> HasViewNumber for ViewSyncMessage<T> {
 #[allow(clippy::large_enum_variant)]
 pub enum MessageType<T: NodeType, S> {
     Consensus(ConsensusMessage<T, S>),
+    Block(BlockMessage<T>),
     ViewSync(ViewSyncMessage<T>),
     External(Vec<u8>),
 }
@@ -219,6 +248,7 @@ impl<T: NodeType, S> MessageType<T, S> {
     pub fn into_unchecked(self) -> MessageType<T, Unchecked> {
         match self {
             Self::Consensus(c) => MessageType::Consensus(c.into_unchecked()),
+            Self::Block(b) => MessageType::Block(b),
             Self::ViewSync(m) => MessageType::ViewSync(m),
             Self::External(v) => MessageType::External(v),
         }
@@ -250,6 +280,7 @@ impl<T: NodeType, S> HasViewNumber for Message<T, S> {
     fn view_number(&self) -> ViewNumber {
         match &self.message_type {
             MessageType::Consensus(consensus_message) => consensus_message.view_number(),
+            MessageType::Block(block_message) => block_message.view_number(),
             MessageType::ViewSync(view_sync_message) => view_sync_message.view_number(),
             MessageType::External(_) => ViewNumber::new(0), // TODO: This can become a problem
         }
