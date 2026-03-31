@@ -367,7 +367,8 @@ impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
                 tracing::info!(
                     start,
                     end,
-                    "server does not support ranged VID fetching, falling back to individual fetches"
+                    "server does not support ranged VID fetching, falling back to individual \
+                     fetches"
                 );
                 let common = try_join_all((start..end).map(|i| {
                     self.client
