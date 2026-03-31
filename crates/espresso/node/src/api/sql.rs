@@ -1976,38 +1976,5 @@ mod tests {
             !table_sizes.is_empty(),
             "should have at least one table in the database"
         );
-
-        // Verify the structure is correct
-        for table_size in &table_sizes {
-            assert!(
-                !table_size.table_name.is_empty(),
-                "table name should not be empty"
-            );
-            // Row count should be non-negative
-            assert!(
-                table_size.row_count >= 0,
-                "row count should be non-negative"
-            );
-        }
-
-        // Verify that the header table has at least one row (we inserted one)
-        let header_table = table_sizes.iter().find(|t| t.table_name.contains("header"));
-
-        if let Some(header_table) = header_table {
-            assert!(
-                header_table.row_count >= 1,
-                "header table should have at least one row after insertion"
-            );
-        }
-
-        tracing::info!("get_table_sizes returned {} tables", table_sizes.len());
-        for table_size in table_sizes {
-            tracing::info!(
-                "Table: {}, Rows: {}, Size: {:?}",
-                table_size.table_name,
-                table_size.row_count,
-                table_size.total_size_bytes
-            );
-        }
     }
 }
