@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"struct":["BlockAndHeaderRequest","BlockRequest"]};
+window.SIDEBAR_ITEMS = {"enum":["BlockError"],"struct":["BlockAndHeaderRequest","BlockBuilder","BlockBuilderConfig","BlockBuilderOutput","RetryEntry"]};
