@@ -49,7 +49,7 @@ jobs:
             target/release/cdn-whitelist
             target/release/state-relay-server
             target/release/state-prover
-            target/release/sequencer
+            target/release/espresso-node
             target/release/cli
             target/release/submit-transactions
             target/release/utils
@@ -93,7 +93,7 @@ jobs:
             target/release/cdn-whitelist
             target/release/state-relay-server
             target/release/state-prover
-            target/release/sequencer
+            target/release/espresso-node
             target/release/cli
             target/release/submit-transactions
             target/release/reset-storage
@@ -106,11 +106,15 @@ jobs:
             target/release/pub-key
             target/release/espresso-bridge
 
+  # NOTE: Each metadata step below lists both espresso-network and espresso-sequencer registries.
+  # The espresso-sequencer images are DEPRECATED and provided only for backward compatibility.
+  # They will be removed in a future release. Consumers should migrate to
+  # ghcr.io/espressosystems/espresso-network/<service>.
   build-dockers:
     runs-on: ubuntu-latest
     needs: [build, build-arm]
     outputs:
-      sequencer-tag: ${{ steps.sequencer.outputs.tags }}
+      espresso-node-tag: ${{ steps.espresso-node.outputs.tags }}
       cdn-broker-tag: ${{ steps.cdn-broker.outputs.tags }}
       cdn-marshal-tag: ${{ steps.cdn-marshal.outputs.tags }}
       cdn-whitelist-tag: ${{ steps.cdn-whitelist.outputs.tags }}
@@ -150,13 +154,11 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Generate sequencer docker metadata
+      - name: Generate espresso-node docker metadata
         uses: docker/metadata-action@v5
-        id: sequencer
+        id: espresso-node
         with:
-          images: |
-            ghcr.io/espressosystems/espresso-network/sequencer
-            ghcr.io/espressosystems/espresso-sequencer/sequencer
+          images: ghcr.io/espressosystems/espresso-network/espresso-node
           flavor: suffix=bench
 
       - name: Generate cdn-broker docker metadata
@@ -267,15 +269,37 @@ jobs:
             ghcr.io/espressosystems/espresso-sequencer/bridge
           flavor: suffix=bench
 
-      - name: Build and push sequencer docker
+      - name: Build and push espresso-node docker
         uses: docker/build-push-action@v6
         with:
           context: ./
-          file: ./docker/sequencer.Dockerfile
+          file: ./docker/espresso-node.Dockerfile
           platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.sequencer.outputs.tags }}
-          labels: ${{ steps.sequencer.outputs.labels }}
+          tags: ${{ steps.espresso-node.outputs.tags }}
+          labels: ${{ steps.espresso-node.outputs.labels }}
+
+      # DEPRECATED: Push a legacy image with old binary names (sequencer, sequencer-postgres,
+      # sequencer-sqlite) as symlinks to the new names. This will be removed in a future release.
+      # Consumers should migrate to ghcr.io/espressosystems/espresso-network/espresso-node.
+      - name: Generate legacy sequencer docker metadata
+        uses: docker/metadata-action@v5
+        id: legacy-sequencer
+        with:
+          images: ghcr.io/espressosystems/espresso-sequencer/sequencer
+          flavor: suffix=bench
+
+      - name: Build and push legacy sequencer docker with old binary names
+        uses: docker/build-push-action@v6
+        with:
+          context: ./
+          file: ./docker/espresso-node-legacy.Dockerfile
+          build-args: |
+            BASE_IMAGE=ghcr.io/espressosystems/espresso-network/espresso-node:${{ steps.espresso-node.outputs.version }}
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.legacy-sequencer.outputs.tags }}
+          labels: ${{ steps.legacy-sequencer.outputs.labels }}
 
       - name: Build and push cdn-broker docker
         uses: docker/build-push-action@v6
@@ -408,7 +432,7 @@ jobs:
 
       - name: Pull docker images
         run: |
-          docker pull ${{ needs.build-dockers.outputs.sequencer-tag }}
+          docker pull ${{ needs.build-dockers.outputs.espresso-node-tag }}
           docker pull ${{ needs.build-dockers.outputs.cdn-broker-tag }}
           docker pull ${{ needs.build-dockers.outputs.cdn-marshal-tag }}
           docker pull ${{ needs.build-dockers.outputs.cdn-whitelist-tag }}
@@ -422,7 +446,7 @@ jobs:
           docker pull ${{ needs.build-dockers.outputs.bridge-tag }}
       - name: Tag new docker images
         run: |
-          docker tag ${{ needs.build-dockers.outputs.sequencer-tag }} ghcr.io/espressosystems/espresso-network/sequencer:main
+          docker tag ${{ needs.build-dockers.outputs.espresso-node-tag }} ghcr.io/espressosystems/espresso-network/espresso-node:main
           docker tag ${{ needs.build-dockers.outputs.cdn-broker-tag }} ghcr.io/espressosystems/espresso-network/cdn-broker:main
           docker tag ${{ needs.build-dockers.outputs.cdn-marshal-tag }} ghcr.io/espressosystems/espresso-network/cdn-marshal:main
           docker tag ${{ needs.build-dockers.outputs.cdn-whitelist-tag }} ghcr.io/espressosystems/espresso-network/cdn-whitelist:main

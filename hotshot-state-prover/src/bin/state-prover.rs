@@ -12,10 +12,10 @@ use alloy::{
 use clap::Parser;
 use espresso_contract_deployer::network_config::fetch_epoch_config_from_sequencer;
 use espresso_types::{L1ClientOptions, parse_duration, v0_1::SwitchingTransport};
+use espresso_utils::logging;
 use hotshot_contract_adapter::sol_types;
 use hotshot_state_prover::{StateProverConfig, utils::ChainIdRetry};
 use hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY;
-use sequencer_utils::logging;
 use url::Url;
 use vbs::version::StaticVersion;
 

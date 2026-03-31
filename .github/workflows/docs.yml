@@ -77,7 +77,7 @@ jobs:
           path: public/contracts
 
       - name: Create Index
-        run: echo '<meta http-equiv="refresh" content="0; url=sequencer">' > public/index.html
+        run: echo '<meta http-equiv="refresh" content="0; url=espresso_node">' > public/index.html
 
       - name: Deploy
         if: ${{ github.ref == 'refs/heads/main' }}
