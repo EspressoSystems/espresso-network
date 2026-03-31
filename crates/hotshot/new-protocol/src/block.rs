@@ -22,8 +22,10 @@ use hotshot_types::{
 use tokio::task::{AbortHandle, JoinSet};
 
 use crate::{
+    consensus::ConsensusInput,
     helpers::upgrade_lock,
     message::{DedupManifest, TransactionMessage},
+    state::HeaderRequest,
 };
 
 #[derive(Clone, Eq, PartialEq, Debug)]
@@ -307,6 +309,31 @@ impl<T: NodeType> BlockBuilder<T> {
             if let Some(tx) = self.leader_buffer.remove(hash) {
                 self.leader_total_bytes -= tx.minimum_block_size();
             }
+        }
+    }
+}
+
+impl<T: NodeType> From<&BlockBuilderOutput<T>> for HeaderRequest<T> {
+    fn from(output: &BlockBuilderOutput<T>) -> Self {
+        HeaderRequest {
+            view: output.view,
+            epoch: output.epoch,
+            parent_proposal: output.parent_proposal.clone(),
+            payload_commitment: output.payload_commitment,
+            builder_commitment: output.builder_commitment.clone(),
+            metadata: output.metadata.clone(),
+            builder_fee: output.builder_fee.clone(),
+        }
+    }
+}
+
+impl<T: NodeType> From<BlockBuilderOutput<T>> for ConsensusInput<T> {
+    fn from(output: BlockBuilderOutput<T>) -> Self {
+        ConsensusInput::BlockBuilt {
+            view: output.view,
+            epoch: output.epoch,
+            payload: output.payload,
+            metadata: output.metadata,
         }
     }
 }

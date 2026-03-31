@@ -23,8 +23,8 @@ use crate::{
     },
     drb::DrbRequester,
     message::{
-        Certificate2, CheckpointCertificate, CheckpointVote, ConsensusMessage, Message,
-        MessageType, ProposalMessage, Unchecked, Vote2,
+        BlockMessage, Certificate2, CheckpointCertificate, CheckpointVote, ConsensusMessage,
+        Message, MessageType, ProposalMessage, TransactionMessage, Unchecked, Vote2,
     },
     network::Network,
     outbox::Outbox,
@@ -134,23 +134,19 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                     };
                     self.gc(cert.view_number(), epoch);
                 }
-                Some(block) = self.block_builder.next() => match block {
-                    Ok(result) => {
-                        self.state_manager.request_header(HeaderRequest {
-                            view: result.view,
-                            epoch: result.epoch,
-                            parent_proposal: result.parent_proposal.clone(),
-                            payload_commitment: result.payload_commitment,
-                            builder_commitment: result.builder_commitment,
-                            metadata: result.metadata.clone(),
-                            builder_fee: result.builder_fee,
-                        });
-                        return Ok(ConsensusInput::BlockBuilt {
-                            view: result.view,
-                            epoch: result.epoch,
-                            payload: result.payload,
-                            metadata: result.metadata,
-                        })
+                Some(item) = self.block_builder.next() => match item {
+                    Ok(block) => {
+                        self.state_manager.request_header(HeaderRequest::from(&block));
+                        let next_view = ViewNumber::new(block.view.u64() + 1);
+                        let epoch = block.epoch;
+                        let manifest = block.manifest.clone();
+                        self.unicast_to_leader(
+                            next_view,
+                            epoch,
+                            BlockMessage::DedupManifest(manifest),
+                        )
+                        .await?;
+                        return Ok(block.into())
                     }
                     Err(()) => {
                         return Err(CoordinatorError::unspecified().context("block building"))
@@ -256,7 +252,15 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                     None
                 },
             },
-            MessageType::Block(_) => todo!(),
+            MessageType::Block(msg) => {
+                match msg {
+                    BlockMessage::Transactions(msg) => self.block_builder.on_transactions(msg),
+                    BlockMessage::DedupManifest(manifest) => {
+                        self.block_builder.on_dedup_manifest(manifest)
+                    },
+                }
+                None
+            },
             MessageType::ViewSync(_) => todo!(),
             MessageType::External(_) => todo!(),
         }
@@ -360,9 +364,61 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
             },
             ConsensusOutput::TimeoutCertificateReceived(..) => {}, // TODO
             ConsensusOutput::ViewSyncCertificateReceived(_) => {}, // TODO
-            ConsensusOutput::ViewChanged(view, _) => {
+            ConsensusOutput::ViewChanged(view, epoch) => {
                 self.timer.reset_with(view);
+                let txns = self.block_builder.on_view_changed(view, epoch);
+                if !txns.is_empty() {
+                    let next_view = ViewNumber::new(view.u64() + 1);
+                    self.unicast_to_leader(
+                        next_view,
+                        epoch,
+                        BlockMessage::Transactions(TransactionMessage {
+                            view: next_view,
+                            transactions: txns,
+                        }),
+                    )
+                    .await?;
+                }
             },
+        }
+        Ok(())
+    }
+
+    // TODO: multicast to n upcoming leaders
+    async fn unicast_to_leader(
+        &mut self,
+        view: ViewNumber,
+        epoch: EpochNumber,
+        msg: BlockMessage<T>,
+    ) -> Result<(), CoordinatorError> {
+        let membership = match self
+            .membership_coordinator
+            .membership_for_epoch(Some(epoch))
+            .await
+        {
+            Ok(m) => m,
+            Err(err) => {
+                warn!(%err, "failed to get epoch membership");
+                return Ok(());
+            },
+        };
+        let leader = match membership.leader(view).await {
+            Ok(k) => k,
+            Err(err) => {
+                warn!(%err, "failed to get leader");
+                return Ok(());
+            },
+        };
+        let message = Message {
+            sender: self.public_key.clone(),
+            message_type: MessageType::Block(msg),
+        };
+        if let Err(err) = self.network.unicast(leader, message).await {
+            let err = CoordinatorError::from(err).context("leader unicast");
+            if err.severity == Severity::Critical {
+                return Err(err);
+            }
+            warn!(%err, "network error while sending to leader");
         }
         Ok(())
     }
