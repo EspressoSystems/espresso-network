@@ -1,12 +1,6 @@
 use hotshot::types::BLSPubKey;
-use hotshot_example_types::{
-    block_types::TestBlockHeader,
-    node_types::{TEST_VERSIONS, TestTypes},
-};
-use hotshot_types::{
-    data::{Leaf2, QuorumProposalWrapper},
-    traits::signature_key::SignatureKey,
-};
+use hotshot_example_types::node_types::TestTypes;
+use hotshot_types::traits::signature_key::SignatureKey;
 
 use super::common::{
     assertions::{
@@ -18,12 +12,10 @@ use super::common::{
 };
 use crate::{
     consensus::{ConsensusInput, ConsensusOutput},
-    tests::common::{
-        assertions::{
-            count_vote1, has_block_reconstructed, has_cert1, has_cert2, has_request_vid_disperse,
-            has_state_validated, has_timeout, has_vid_disperse, has_vote2,
-        },
-        utils::MockBlock,
+    tests::common::assertions::{
+        count_vote1, has_block_built, has_block_reconstructed, has_cert1, has_cert2,
+        has_header_created, has_request_vid_disperse, has_state_validated, has_timeout,
+        has_vid_disperse, has_vote2,
     },
 };
 
@@ -64,36 +56,9 @@ async fn send_vote2s(harness: &mut TestHarness, test_data: &TestData, view_idx: 
     harness.process_until(|inputs| has_cert2(inputs)).await;
 }
 
-async fn send_block_built_and_header_created(
-    harness: &mut TestHarness,
-    test_data: &TestData,
-    view_idx: usize,
-    parent_view_idx: usize,
-) {
-    let test_view = &test_data.views[view_idx];
-    let parent_proposal = test_data.views[parent_view_idx].proposal.clone();
-    let block = MockBlock::new();
+async fn send_block_built_and_header_created(harness: &mut TestHarness) {
     harness
-        .apply_and_process(ConsensusInput::BlockBuilt {
-            view: test_view.view_number,
-            epoch: test_view.epoch_number,
-            payload: block.block,
-            metadata: block.metadata,
-        })
-        .await;
-    let wrapper = QuorumProposalWrapper::<TestTypes> {
-        proposal: parent_proposal.data.proposal,
-    };
-    let parent_leaf = Leaf2::from_quorum_proposal(&wrapper);
-    let header = TestBlockHeader::new(
-        &parent_leaf,
-        block.payload_commitment,
-        block.builder_commitment,
-        block.metadata,
-        TEST_VERSIONS.test.base,
-    );
-    harness
-        .apply_and_process(ConsensusInput::HeaderCreated(test_view.view_number, header))
+        .process_until(|inputs| has_block_built(inputs) && has_header_created(inputs))
         .await;
 }
 
@@ -205,7 +170,7 @@ async fn test_leader_proposal_via_cpu_tasks() {
         "Leader should request block and header after CPU forms cert1"
     );
 
-    send_block_built_and_header_created(&mut harness, &test_data, 1, 0).await;
+    send_block_built_and_header_created(&mut harness).await;
 
     assert!(
         has_request_vid_disperse(harness.outputs()),
@@ -322,7 +287,7 @@ async fn test_leader_proposes_after_timeout_via_cpu_tasks() {
         has_request_block_and_header(harness.outputs()),
         "Leader should request block and header after TC"
     );
-    send_block_built_and_header_created(&mut harness, &test_data, 2, 0).await;
+    send_block_built_and_header_created(&mut harness).await;
     assert!(
         has_request_vid_disperse(harness.outputs()),
         "Leader should request VID disperse after TC"
