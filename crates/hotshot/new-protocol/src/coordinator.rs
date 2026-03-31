@@ -381,7 +381,7 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                         }),
                     )
                     .await
-                    .map_err(|e| CoordinatorError::from(e).context("unicast transactions"))?;
+                    .map_err(|e| e.context("unicast transactions"))?;
                 }
             },
         }
