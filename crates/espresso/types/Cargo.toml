@@ -1,0 +1,98 @@
+[package]
+name = "espresso-types"
+version = "0.1.0"
+authors = ["Espresso Systems <hello@espressosys.com>"]
+edition.workspace = true
+
+[package.metadata.cargo-machete]
+ignored = ["base64_bytes", "hotshot_testing"]
+
+# TODO: fix comments so doctests don't fail
+[lib]
+doctest = false
+
+[features]
+testing = ["hotshot-query-service/testing"]
+
+[dependencies]
+alloy = { workspace = true }
+alloy-compat = { workspace = true }
+anyhow = { workspace = true }
+ark-ec = { workspace = true }
+ark-serialize = { workspace = true }
+ark-std = { workspace = true }
+async-broadcast = { workspace = true }
+async-lock = { workspace = true }
+async-trait = { workspace = true }
+base64 = { workspace = true }
+base64-bytes = { workspace = true }
+bigdecimal = { workspace = true }
+bincode = { workspace = true }
+blake3 = { workspace = true }
+bytesize = { workspace = true }
+clap = { workspace = true }
+cld = { workspace = true }
+committable = { workspace = true }
+derive_more = { workspace = true }
+either = { workspace = true }
+ethers-core = { workspace = true }
+fluent-asserter = { workspace = true }
+futures = { workspace = true }
+hotshot = { workspace = true }
+hotshot-contract-adapter = { workspace = true }
+hotshot-example-types = { workspace = true }
+hotshot-libp2p-networking = { workspace = true }
+hotshot-query-service = { workspace = true }
+hotshot-types = { workspace = true }
+humantime = { workspace = true }
+indexmap = { workspace = true }
+insta = { workspace = true }
+itertools = { workspace = true }
+jf-advz = { workspace = true }
+jf-merkle-tree-compat = { workspace = true }
+jf-utils = { workspace = true }                  # TODO temporary: used only for test_rng()
+lru = { workspace = true }
+moka = { workspace = true }
+num-traits = { workspace = true }
+parking_lot = { workspace = true }
+paste = { workspace = true }
+pretty_assertions = { workspace = true }
+rand = { workspace = true }
+espresso-utils = { workspace = true }
+serde = { workspace = true }
+serde_bytes = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }                      # TODO temporary, used only for VID, should be set in hotshot
+sha3 = { workspace = true }
+static_assertions = { workspace = true }
+surf-disco = { workspace = true }
+tagged-base64 = { workspace = true }
+tempfile = { workspace = true }
+thiserror = { workspace = true }
+tide-disco = { workspace = true }
+time = { workspace = true }
+tokio = { workspace = true }
+tower-service = { workspace = true }
+tracing = { workspace = true }
+url = { workspace = true }
+vbs = { workspace = true }
+vec1 = { workspace = true }
+versions = { workspace = true }
+vid = { workspace = true }
+
+[dev-dependencies]
+criterion = "0.5"
+espresso-contract-deployer = { workspace = true }
+espresso-types = { path = ".", features = ["testing"] }
+rand_chacha = { workspace = true }
+rstest = { workspace = true }
+rstest_reuse = { workspace = true }
+test-log = { workspace = true }
+test-utils = { workspace = true }
+
+[[bench]]
+name = "reward_mt"
+harness = false
+
+[lints]
+workspace = true

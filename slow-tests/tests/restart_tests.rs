@@ -26,6 +26,23 @@ use espresso_contract_deployer::{
     Contract, Contracts, builder::DeployerArgsBuilder,
     network_config::light_client_genesis_from_stake_table,
 };
+use espresso_node::{
+    SequencerApiVersion,
+    api::{
+        self, data_source::testing::TestableSequencerDataSource, options::Query,
+        test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
+    },
+    context::SequencerContext,
+    genesis::{Genesis, L1Finalized, StakeTableConfig},
+    keyset::KeySet,
+    network::{
+        self,
+        cdn::{TestingDef, WrappedSignatureKey},
+    },
+    options::{Modules, Options},
+    run::init_with_storage,
+    testing::{staking_priv_keys, wait_for_decide_on_handle},
+};
 use espresso_types::{
     FeeAccount, L1Client, Leaf2, PrivKey, PubKey, SeqTypes, Transaction,
     eth_signature_key::EthKeyPair, traits::PersistenceOptions, v0_3::ChainConfig,
@@ -52,23 +69,6 @@ use hotshot_types::{
     x25519,
 };
 use itertools::Itertools;
-use sequencer::{
-    SequencerApiVersion,
-    api::{
-        self, data_source::testing::TestableSequencerDataSource, options::Query,
-        test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
-    },
-    context::SequencerContext,
-    genesis::{Genesis, L1Finalized, StakeTableConfig},
-    keyset::KeySet,
-    network::{
-        self,
-        cdn::{TestingDef, WrappedSignatureKey},
-    },
-    options::{Modules, Options},
-    run::init_with_storage,
-    testing::{staking_priv_keys, wait_for_decide_on_handle},
-};
 use staking_cli::demo::{DelegationConfig, StakingTransactions};
 use surf_disco::{Url, error::ClientError};
 use tagged_base64::TaggedBase64;

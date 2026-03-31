@@ -2,11 +2,11 @@ use std::{fs, path::PathBuf, process::ExitCode};
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use espresso_node::SequencerApiVersion;
 use espresso_types::{DrbAndHeaderUpgradeVersion, Header, config::PublicNetworkConfig};
 use hotshot_types::{data::EpochNumber, utils::epoch_from_block_number};
 use light_client::state::Genesis;
 use light_client_query_service::{LogFormat, init_logging};
-use sequencer::SequencerApiVersion;
 use surf_disco::{Client, Url};
 use tracing::instrument;
 use vbs::version::StaticVersionType;
