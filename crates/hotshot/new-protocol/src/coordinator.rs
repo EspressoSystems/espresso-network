@@ -235,6 +235,9 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                 ConsensusMessage::Transactions(..) => {
                     todo!()
                 },
+                ConsensusMessage::EpochChange(epoch_change) => {
+                    Some(ConsensusInput::EpochChange(epoch_change))
+                },
                 ConsensusMessage::Checkpoint(checkpoint) => {
                     self.checkpoint_collector.accumulate_vote(checkpoint).await;
                     None
@@ -339,6 +342,18 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                     .broadcast(message)
                     .await
                     .map_err(|e| CoordinatorError::from(e).context("broadcast vote2"))?
+            },
+            ConsensusOutput::SendEpochChange(epoch_change) => {
+                let message = Message {
+                    sender: self.public_key.clone(),
+                    message_type: MessageType::Consensus(ConsensusMessage::EpochChange(
+                        epoch_change,
+                    )),
+                };
+                self.network
+                    .broadcast(message)
+                    .await
+                    .map_err(|e| CoordinatorError::from(e).context("broadcast epoch change"))?
             },
             ConsensusOutput::ViewChanged(view, _) => {
                 self.timer.reset_with(view);

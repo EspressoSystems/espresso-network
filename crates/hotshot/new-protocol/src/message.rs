@@ -167,6 +167,24 @@ impl<T: NodeType> HasViewNumber for Vote1<T> {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
+#[serde(bound(deserialize = ""))]
+/// Message sent at the end of an epoch by the current committee
+/// to the next committee.  Both certificates are on the last block of the epoch.
+/// The protocol spec only requires the second certificate, but for consistency
+/// in the code and with the existing Proposal and Leaf structures
+/// We include the Certificate1.  This allows us to use the Certificate1 as the
+/// Justify QC on the first proposal.  The Certificate2 also required on that proposal
+/// but as next_epoch_justify_qc on the Leaf.
+///
+/// We include the proposal because the new leader in the next epoch
+/// will need it to build a header for the first block of the next epoch.
+pub struct EpochChangeMessage<T: NodeType> {
+    pub cert1: Certificate1<T>,
+    pub cert2: Certificate2<T>,
+    pub proposal: Proposal<T>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 #[serde(bound(deserialize = "S: Deserialize<'de>"))]
 #[allow(clippy::large_enum_variant)]
 pub enum ConsensusMessage<T: NodeType, S> {
@@ -177,6 +195,7 @@ pub enum ConsensusMessage<T: NodeType, S> {
     Certificate2(Certificate2<T>, T::SignatureKey),
     TimeoutVote(TimeoutVote2<T>),
     Transactions(Vec<T::Transaction>, ViewNumber),
+    EpochChange(EpochChangeMessage<T>),
     Checkpoint(CheckpointVote<T>),
 }
 
@@ -192,6 +211,7 @@ impl<T: NodeType, S> ConsensusMessage<T, S> {
             Self::TimeoutVote(v) => ConsensusMessage::TimeoutVote(v),
             Self::Transactions(t, v) => ConsensusMessage::Transactions(t, v),
             Self::Checkpoint(v) => ConsensusMessage::Checkpoint(v),
+            Self::EpochChange(c) => ConsensusMessage::EpochChange(c),
         }
     }
 }
@@ -207,6 +227,7 @@ impl<T: NodeType, S> HasViewNumber for ConsensusMessage<T, S> {
             Self::TimeoutVote(vote) => vote.view_number(),
             Self::Transactions(_, view_number) => *view_number,
             Self::Checkpoint(vote) => vote.view_number(),
+            Self::EpochChange(epoch_change) => epoch_change.cert1.view_number(),
         }
     }
 }

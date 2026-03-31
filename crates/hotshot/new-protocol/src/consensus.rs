@@ -29,8 +29,8 @@ use crate::{
     block::BlockAndHeaderRequest,
     helpers::{proposal_commitment, upgrade_lock},
     message::{
-        Certificate1, Certificate2, CheckpointVote, Proposal, ProposalMessage, Validated, Vote1,
-        Vote2,
+        Certificate1, Certificate2, CheckpointVote, EpochChangeMessage, Proposal, ProposalMessage,
+        Validated, Vote1, Vote2,
     },
     outbox::Outbox,
     state::{StateRequest, StateResponse},
@@ -48,6 +48,7 @@ pub enum ConsensusInput<T: NodeType> {
     BlockReconstructed(ViewNumber, VidCommitment2),
     Certificate1(Certificate1<T>),
     Certificate2(Certificate2<T>),
+    EpochChange(EpochChangeMessage<T>),
     HeaderCreated(ViewNumber, T::BlockHeader),
     Proposal(ProposalMessage<T, Validated>),
     StateValidated(StateResponse<T>),
@@ -70,6 +71,7 @@ pub enum ConsensusOutput<T: NodeType> {
     SendTimeoutVote(TimeoutVote2<T>),
     SendVote1(Vote1<T>),
     SendVote2(Vote2<T>),
+    SendEpochChange(EpochChangeMessage<T>),
     RequestVidDisperse {
         view: ViewNumber,
         epoch: EpochNumber,
@@ -234,6 +236,9 @@ impl<T: NodeType> Consensus<T> {
             ConsensusInput::DrbResult(epoch, drb_result) => {
                 self.drb_results.insert(epoch, drb_result);
                 Protocol::Continue
+            },
+            ConsensusInput::EpochChange(epoch_change) => {
+                self.handle_epoch_change(epoch_change, outbox).await
             },
         };
 
@@ -497,6 +502,86 @@ impl<T: NodeType> Consensus<T> {
         // TODO: clear_view(view);
     }
 
+    #[instrument(level = "debug", skip_all)]
+    async fn handle_epoch_change(
+        &mut self,
+        epoch_change: EpochChangeMessage<T>,
+        outbox: &mut Outbox<ConsensusOutput<T>>,
+    ) -> Protocol {
+        let EpochChangeMessage {
+            cert1,
+            cert2,
+            proposal,
+        } = epoch_change;
+        // Check if this epoch change is new
+        if self
+            .locked_cert
+            .as_ref()
+            .is_some_and(|locked_cert| locked_cert.view_number() > cert1.view_number())
+        {
+            warn!("locked certificate is newer than epoch change certificate1");
+            return Protocol::Abort;
+        }
+        // Check if the certificates match
+        if cert1.view_number() != cert2.view_number()
+            || cert1.epoch() != cert2.epoch()
+            || cert1.data.leaf_commit != cert2.data.leaf_commit
+        {
+            warn!("epoch change certificates do not match");
+            return Protocol::Abort;
+        }
+        // check if it's the last block for the correct epoch
+        if cert2.data.block_number % self.epoch_height != 0 {
+            warn!("epoch change certificate2 is not the last block of the epoch");
+            return Protocol::Abort;
+        }
+        if cert2.data.block_number / self.epoch_height != *cert2.data.epoch {
+            warn!("epoch change certificate2 is not for the correct epoch");
+            return Protocol::Abort;
+        }
+        // Check if the proposal matches the certificate1
+        if proposal_commitment(&proposal) != cert1.data.leaf_commit {
+            warn!("epoch change proposal commitment does not match certificate1 leaf commitment");
+            return Protocol::Abort;
+        }
+        // Verify the certificates
+        let Some(cert1_epoch) = cert1.epoch() else {
+            warn!("epoch change certificate1 has no epoch number");
+            return Protocol::Abort;
+        };
+        if !self.verify_cert(&cert1, cert1_epoch).await {
+            warn!("epoch change certificate not verified");
+            return Protocol::Abort;
+        }
+        if !self.verify_cert(&cert2, cert2.data.epoch).await {
+            warn!("epoch change certificate not verified");
+            return Protocol::Abort;
+        }
+        outbox.push_back(ConsensusOutput::ViewChanged(
+            cert2.view_number(),
+            cert2.data.epoch + 1,
+        ));
+
+        // Request block and header if we're the first leader of the next epoch
+        if self
+            .is_leader(cert2.view_number(), cert2.data.epoch + 1)
+            .await
+        {
+            outbox.push_back(ConsensusOutput::RequestBlockAndHeader(
+                BlockAndHeaderRequest {
+                    view: cert2.view_number(),
+                    epoch: cert2.data.epoch + 1,
+                    parent_proposal: proposal.clone(),
+                },
+            ));
+        }
+
+        self.proposals.insert(cert2.view_number(), proposal);
+        self.certs.insert(cert1.view_number(), cert1);
+        self.certs2.insert(cert2.view_number(), cert2);
+        Protocol::Continue
+    }
+
     #[instrument(level = "debug", skip(self, outbox))]
     async fn maybe_propose(&mut self, view: ViewNumber, outbox: &mut Outbox<ConsensusOutput<T>>) {
         let mut view_change_evidence = None;
@@ -545,7 +630,7 @@ impl<T: NodeType> Consensus<T> {
             proposal.epoch + 1
         };
         if !self.is_leader(view, proposal_epoch).await {
-            debug!(epoch = %proposal_epoch, "not a leader of proposal");
+            warn!(epoch = %proposal_epoch, "not the leader for this view, we should not have a header");
             return;
         }
 
@@ -617,6 +702,20 @@ impl<T: NodeType> Consensus<T> {
         if cert2.data.leaf_commit != proposal_commit {
             debug!("cert2 commitment does not match proposal commitment");
             return;
+        }
+        // Handle Epoch Change by broadcasting the epoch change message if we have
+        // all the data we need.
+        if is_last_block(proposal.block_header.block_number(), self.epoch_height) {
+            if let Some(cert1) = self.certs.get(&view)
+                && cert1.data.leaf_commit == proposal_commit
+            {
+                let epoch_change = EpochChangeMessage {
+                    cert1: cert1.clone(),
+                    cert2: cert2.clone(),
+                    proposal: proposal.clone(),
+                };
+                outbox.push_back(ConsensusOutput::SendEpochChange(epoch_change));
+            }
         }
         // we have a second certificate, and matching proposal, it is decided.
         let leaf: Leaf2<T> = proposal.clone().into();
@@ -980,6 +1079,7 @@ impl<T: NodeType> ConsensusInput<T> {
             ConsensusInput::ViewSyncCertificate(cert) => cert.view_number(),
             // TODO: where else can this cause problems?
             ConsensusInput::DrbResult(..) => ViewNumber::genesis(),
+            ConsensusInput::EpochChange(epoch_change) => epoch_change.cert1.view_number(),
         }
     }
 }
