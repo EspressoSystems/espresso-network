@@ -34,8 +34,14 @@ Returns an integer.
 """
 
 [route.count_transactions]
-PATH = ["transactions/count", "transactions/count/:to", "transactions/count/:from/:to", "transactions/count/namespace/:namespace",
-        "transactions/count/namespace/:namespace/:to", "transactions/count/namespace/:namespace/:from/:to"]
+PATH = [
+    "transactions/count",
+    "transactions/count/:to",
+    "transactions/count/:from/:to",
+    "transactions/count/namespace/:namespace",
+    "transactions/count/namespace/:namespace/:to",
+    "transactions/count/namespace/:namespace/:from/:to",
+]
 ":from" = "Integer"
 ":to" = "Integer"
 ":namespace" = "Integer"
@@ -53,8 +59,15 @@ Returns an integer.
 """
 
 [route.payload_size]
-PATH = ["payloads/size", "payloads/size/:to", "payloads/size/:from/:to", "payloads/total-size",
-        "payloads/size/namespace/:namespace", "payloads/size/namespace/:namespace/:to", "payloads/size/namespace/:namespace/:from/:to"]
+PATH = [
+    "payloads/size",
+    "payloads/size/:to",
+    "payloads/size/:from/:to",
+    "payloads/total-size",
+    "payloads/size/namespace/:namespace",
+    "payloads/size/namespace/:namespace/:to",
+    "payloads/size/namespace/:namespace/:from/:to",
+]
 ":from" = "Integer"
 ":to" = "Integer"
 ":namespace" = "Integer"
@@ -72,7 +85,11 @@ Returns an integer.
 """
 
 [route.get_vid_share]
-PATH = ["vid/share/:height", "vid/share/hash/:hash", "vid/share/payload-hash/:payload-hash"]
+PATH = [
+    "vid/share/:height",
+    "vid/share/hash/:hash",
+    "vid/share/payload-hash/:payload-hash",
+]
 ":height" = "Integer"
 ":hash" = "TaggedBase64"
 ":payload-hash" = "TaggedBase64"
@@ -90,11 +107,31 @@ Get the node's progress in syncing with the latest state of the blockchain.
 Returns
 ```
 {
-    "missing_blocks": integer,
-    "missing_leaves": integer,
-    "missing_vid_common": integer,
-    "missing_vid_shares": integer,
-    "pruned_height": null | integer,
+    "blocks": {
+        "missing": integer,
+        "ranges": [{
+            "status": "Present" | "Missing" | "Pruned",
+            "start": integer,
+            "end": integer
+        }]
+    },
+    "leaves": {
+        "missing": integer,
+        "ranges": [{
+            "status": "Present" | "Missing" | "Pruned",
+            "start": integer,
+            "end": integer
+        }]
+    },
+    "vid_common": {
+        "missing": integer,
+        "ranges": [{
+            "status": "Present" | "Missing" | "Pruned",
+            "start": integer,
+            "end": integer
+        }]
+    },
+    "pruned_height": null | integer
 }
 ```
 """
