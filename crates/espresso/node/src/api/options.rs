@@ -423,7 +423,8 @@ impl Options {
 
         // Initialize database metadata API (SQL-only)
         register_api("database", &mut app, move |ver| {
-            endpoints::database(ver).context("failed to define database api")
+            endpoints::database::<_, SequencerApiVersion>(ver)
+                .context("failed to define database api")
         })?;
 
         // Initialize merklized state module for block merkle tree

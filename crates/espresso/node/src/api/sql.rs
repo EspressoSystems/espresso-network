@@ -789,11 +789,11 @@ impl super::data_source::DatabaseMetadataSource for SqlStorage {
         {
             let query = r#"
                 SELECT
-                    schemaname || '.' || tablename as table_name,
-                    n_live_tup as row_count,
-                    pg_total_relation_size(schemaname || '.' || tablename) as total_size_bytes
+                    schemaname || '.' || relname AS table_name,
+                    n_live_tup AS row_count,
+                    pg_total_relation_size(relid) AS total_size_bytes
                 FROM pg_stat_user_tables
-                ORDER BY pg_total_relation_size(schemaname || '.' || tablename) DESC
+                ORDER BY pg_total_relation_size(relid) DESC
             "#;
 
             let rows = sqlx::query(query)

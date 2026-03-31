@@ -1,5 +1,5 @@
-[route.table_sizes]
-PATH = ["database/table-sizes"]
+[route.get_table_sizes]
+PATH = ["table-sizes"]
 METHOD = "GET"
 DOC = """
 Get the sizes of all database tables.
