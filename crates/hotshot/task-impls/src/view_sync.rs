@@ -664,14 +664,11 @@ impl<TYPES: NodeType> ViewSyncReplicaTaskState<TYPES> {
                 let membership_failure_threshold = membership.failure_threshold().await;
 
                 // If certificate is not valid, return current state
-                if let Err(e) = certificate
-                    .is_valid_cert(
-                        &StakeTableEntries::<TYPES>::from(membership_stake_table).0,
-                        membership_failure_threshold,
-                        &self.upgrade_lock,
-                    )
-                    .await
-                {
+                if let Err(e) = certificate.is_valid_cert(
+                    &StakeTableEntries::<TYPES>::from(membership_stake_table).0,
+                    membership_failure_threshold,
+                    &self.upgrade_lock,
+                ) {
                     tracing::error!(
                         "Not valid view sync cert! data: {:?}, error: {}",
                         certificate.data(),
@@ -701,9 +698,7 @@ impl<TYPES: NodeType> ViewSyncReplicaTaskState<TYPES> {
                     &self.public_key,
                     &self.private_key,
                     &self.upgrade_lock,
-                )
-                .await
-                else {
+                ) else {
                     tracing::error!("Failed to sign ViewSyncCommitData!");
                     return None;
                 };
@@ -759,14 +754,11 @@ impl<TYPES: NodeType> ViewSyncReplicaTaskState<TYPES> {
                 let membership_success_threshold = membership.success_threshold().await;
 
                 // If certificate is not valid, return current state
-                if let Err(e) = certificate
-                    .is_valid_cert(
-                        &StakeTableEntries::<TYPES>::from(membership_stake_table).0,
-                        membership_success_threshold,
-                        &self.upgrade_lock,
-                    )
-                    .await
-                {
+                if let Err(e) = certificate.is_valid_cert(
+                    &StakeTableEntries::<TYPES>::from(membership_stake_table).0,
+                    membership_success_threshold,
+                    &self.upgrade_lock,
+                ) {
                     tracing::error!(
                         "Not valid view sync cert! data: {:?}, error: {}",
                         certificate.data(),
@@ -796,9 +788,7 @@ impl<TYPES: NodeType> ViewSyncReplicaTaskState<TYPES> {
                     &self.public_key,
                     &self.private_key,
                     &self.upgrade_lock,
-                )
-                .await
-                else {
+                ) else {
                     tracing::error!("Failed to sign view sync finalized vote!");
                     return None;
                 };
@@ -863,14 +853,11 @@ impl<TYPES: NodeType> ViewSyncReplicaTaskState<TYPES> {
                 let membership_success_threshold = membership.success_threshold().await;
 
                 // If certificate is not valid, return current state
-                if let Err(e) = certificate
-                    .is_valid_cert(
-                        &StakeTableEntries::<TYPES>::from(membership_stake_table).0,
-                        membership_success_threshold,
-                        &self.upgrade_lock,
-                    )
-                    .await
-                {
+                if let Err(e) = certificate.is_valid_cert(
+                    &StakeTableEntries::<TYPES>::from(membership_stake_table).0,
+                    membership_success_threshold,
+                    &self.upgrade_lock,
+                ) {
                     tracing::error!(
                         "Not valid view sync cert! data: {:?}, error: {}",
                         certificate.data(),
@@ -921,9 +908,7 @@ impl<TYPES: NodeType> ViewSyncReplicaTaskState<TYPES> {
                     &self.public_key,
                     &self.private_key,
                     &self.upgrade_lock,
-                )
-                .await
-                else {
+                ) else {
                     tracing::error!("Failed to sign pre commit vote!");
                     return None;
                 };
@@ -977,9 +962,7 @@ impl<TYPES: NodeType> ViewSyncReplicaTaskState<TYPES> {
                                 &self.public_key,
                                 &self.private_key,
                                 &self.upgrade_lock,
-                            )
-                            .await
-                            else {
+                            ) else {
                                 tracing::error!("Failed to sign ViewSyncPreCommitData!");
                                 return None;
                             };

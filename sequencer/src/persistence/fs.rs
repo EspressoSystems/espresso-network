@@ -867,7 +867,7 @@ impl SequencerPersistence for Persistence {
         _epoch: Option<EpochNumber>,
         action: HotShotAction,
     ) -> anyhow::Result<()> {
-        // Todo Remove this after https://github.com/EspressoSystems/espresso-sequencer/issues/1931
+        // Todo Remove this after https://github.com/EspressoSystems/espresso-network/issues/1931
         if !matches!(action, HotShotAction::Propose | HotShotAction::Vote) {
             return Ok(());
         }
@@ -2873,6 +2873,8 @@ mod test {
             stake: U256::from(1000),
             commission: 100,
             delegators: HashMap::new(),
+            x25519_key: None,
+            p2p_addr: None,
         };
 
         let mut legacy_map: LegacyValidatorMap = IndexMap::new();
@@ -2944,6 +2946,8 @@ mod test {
             stake: U256::from(2000),
             commission: 200,
             delegators: HashMap::new(),
+            x25519_key: None,
+            p2p_addr: None,
         };
 
         let mut legacy_map: LegacyValidatorMap = IndexMap::new();
@@ -3014,6 +3018,8 @@ mod test {
             commission: 100,
             delegators: HashMap::new(),
             authenticated: true,
+            x25519_key: None,
+            p2p_addr: None,
         };
 
         // Create an unauthenticated validator
@@ -3025,6 +3031,8 @@ mod test {
             commission: 200,
             delegators: HashMap::new(),
             authenticated: false,
+            x25519_key: None,
+            p2p_addr: None,
         };
 
         let mut validators: IndexMap<Address, RegisteredValidator<BLSPubKey>> = IndexMap::new();

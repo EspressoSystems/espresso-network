@@ -9,10 +9,12 @@ import { StakeTableV2 } from "../src/StakeTableV2.sol";
 import { StakeTableUpgradeV2Test } from "./StakeTable.t.sol";
 import { BN254 } from "bn254/BN254.sol";
 import { EdOnBN254 } from "../src/libraries/EdOnBn254.sol";
-import { PausableUpgradeable } from
-    "openzeppelin-contracts-upgradeable/contracts/utils/PausableUpgradeable.sol";
-import { OwnableUpgradeable } from
-    "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import {
+    PausableUpgradeable
+} from "openzeppelin-contracts-upgradeable/contracts/utils/PausableUpgradeable.sol";
+import {
+    OwnableUpgradeable
+} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import { IAccessControl } from "@openzeppelin/contracts/access/IAccessControl.sol";
 import { StakeTable as S } from "../src/StakeTable.sol";
 

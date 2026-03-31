@@ -88,6 +88,8 @@ pub struct SpinningTask<
     pub(crate) state_cert: Option<LightClientStateUpdateCertificateV2<TYPES>>,
     /// Node stakes
     pub(crate) node_stakes: TestNodeStakes,
+    /// Configured version upgrade
+    pub(crate) upgrade: versions::Upgrade,
 }
 
 #[async_trait]
@@ -153,11 +155,27 @@ where
                                     // Node not initialized. Initialize it
                                     // based on the received leaf.
                                     LateNodeContext::UninitializedContext(late_context_params) => {
-                                        let LateNodeContextParameters {
-                                            storage,
-                                            memberships,
-                                            config,
-                                        } = late_context_params;
+                                        let LateNodeContextParameters { storage, config } =
+                                            late_context_params;
+
+                                        // We assign node's public key and stake value rather than read from config file since it's a test
+                                        let validator_config: ValidatorConfig<TYPES> =
+                                            ValidatorConfig::generated_from_seed_indexed(
+                                                [0u8; 32],
+                                                node_id,
+                                                self.node_stakes.get(node_id),
+                                                // For tests, make the node DA based on its index
+                                                node_id < config.da_staked_committee_size as u64,
+                                            );
+
+                                        let memberships = <TYPES as NodeType>::Membership::new::<I>(
+                                            config.known_nodes_with_stake.clone(),
+                                            config.known_da_nodes.clone(),
+                                            storage.clone(),
+                                            network.clone(),
+                                            validator_config.public_key.clone(),
+                                            config.epoch_height,
+                                        );
 
                                         let initializer = HotShotInitializer::<TYPES>::load(
                                             TestInstanceState::new(
@@ -172,7 +190,7 @@ where
                                             self.last_decided_leaf.clone(),
                                             (
                                                 ViewNumber::genesis(),
-                                                genesis_epoch_from_version(config.upgrade.base),
+                                                genesis_epoch_from_version(self.upgrade.base),
                                             ),
                                             (self.high_qc.clone(), self.next_epoch_high_qc.clone()),
                                             ViewNumber::genesis(),
@@ -181,15 +199,6 @@ where
                                             None,
                                             self.state_cert.clone(),
                                         );
-                                        // We assign node's public key and stake value rather than read from config file since it's a test
-                                        let validator_config =
-                                            ValidatorConfig::generated_from_seed_indexed(
-                                                [0u8; 32],
-                                                node_id,
-                                                self.node_stakes.get(node_id),
-                                                // For tests, make the node DA based on its index
-                                                node_id < config.da_staked_committee_size as u64,
-                                            );
 
                                         TestRunner::add_node_with_config(
                                             node_id,
@@ -197,6 +206,7 @@ where
                                             memberships,
                                             initializer,
                                             config,
+                                            self.upgrade,
                                             validator_config,
                                             storage,
                                         )
@@ -267,7 +277,7 @@ where
                                     QuorumCertificate2::genesis(
                                         &TestValidatedState::default(),
                                         &TestInstanceState::default(),
-                                        config.upgrade,
+                                        self.upgrade,
                                     )
                                     .await,
                                 );
@@ -325,6 +335,7 @@ where
                                         Arc::clone(&membership),
                                         initializer,
                                         config,
+                                        self.upgrade,
                                         validator_config,
                                         storage.clone(),
                                         internal_chan,

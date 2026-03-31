@@ -14,11 +14,6 @@
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
-  # Use ...foundry.nix/stable for latest stable release
-  # On 1.4 foundry's formatting is a bit strange, so we pin 1.3.6 for now
-  inputs.foundry-nix.url = "github:shazow/foundry.nix/e632b06dc759e381ef04f15ff9541f889eda6013";
-  inputs.foundry-nix.inputs.nixpkgs.follows = "nixpkgs";
-
   inputs.rust-overlay.url = "github:oxalica/rust-overlay";
   inputs.rust-overlay.inputs.nixpkgs.follows = "nixpkgs";
 
@@ -45,7 +40,6 @@
   outputs =
     { self
     , nixpkgs
-    , foundry-nix
     , rust-overlay
     , nixpkgs-cross-overlay
     , flake-utils
@@ -75,7 +69,6 @@
 
       overlays = [
         (import rust-overlay)
-        foundry-nix.overlay
         solc-bin.overlays.default
         dregs.overlays.default
         (final: prev: {
@@ -189,7 +182,7 @@
               enable = true;
               description = "Enforce markdown formatting";
               entry = "prettier -w";
-              types_or = [ "markdown" "ts" ];
+              types_or = [ "markdown" ];
               pass_filenames = true;
             };
             spell-checking = {
@@ -251,14 +244,13 @@
             coreutils
 
             # Ethereum contracts, solidity, ...
-            foundry-bin
+            foundry
             solc
             dregs-unwrapped
             nodePackages.prettier
             solhint
             (python3.withPackages (ps: with ps; [ black ]))
             libusb1
-            yarn
             mdbook
             bc
 
@@ -274,9 +266,6 @@
 
             # Add the local scripts to the PATH
             export PATH="$my_pwd/scripts:$PATH"
-
-            # Add node binaries to PATH for development
-            export PATH="$my_pwd/node_modules/.bin:$PATH"
 
             # Prevent cargo aliases from using programs in `~/.cargo` to avoid conflicts
             # with rustup installations.
@@ -369,7 +358,7 @@
         myShell {
           packages = [
             # Foundry tools
-            foundry-bin
+            foundry
             solc
 
             # Security analysis tools

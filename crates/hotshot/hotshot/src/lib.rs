@@ -202,6 +202,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
         state_private_key: <TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
         nonce: u64,
         config: HotShotConfig<TYPES>,
+        upgrade: versions::Upgrade,
         memberships: EpochMembershipCoordinator<TYPES>,
         network: Arc<I::Network>,
         initializer: HotShotInitializer<TYPES>,
@@ -218,6 +219,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
             state_private_key,
             nonce,
             config,
+            upgrade,
             memberships,
             network,
             initializer,
@@ -244,6 +246,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
         state_private_key: <TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
         nonce: u64,
         config: HotShotConfig<TYPES>,
+        upgrade: versions::Upgrade,
         mut membership_coordinator: EpochMembershipCoordinator<TYPES>,
         network: Arc<I::Network>,
         initializer: HotShotInitializer<TYPES>,
@@ -284,8 +287,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
 
         tracing::warn!(
             "Starting consensus with versions:\n\n Base: {:?}\nUpgrade: {:?}.",
-            config.upgrade.base,
-            config.upgrade.target
+            upgrade.base,
+            upgrade.target
         );
         tracing::warn!(
             "Loading previously decided upgrade certificate from storage: {:?}",
@@ -293,14 +296,14 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
         );
 
         let upgrade_lock = UpgradeLock::<TYPES>::from_certificate(
-            config.upgrade,
+            upgrade,
             &initializer.decided_upgrade_certificate,
         );
 
         let current_version = if let Some(cert) = initializer.decided_upgrade_certificate {
             cert.data.new_version
         } else {
-            config.upgrade.base
+            upgrade.base
         };
 
         debug!("Setting DRB difficulty selector in membership");
@@ -487,7 +490,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
         let consensus = self.consensus.read().await;
 
         let first_epoch = option_epoch_from_block_number(
-            self.upgrade_lock.upgrade.base >= EPOCH_VERSION,
+            self.upgrade_lock.upgrade().base >= EPOCH_VERSION,
             self.config.epoch_start_block,
             self.config.epoch_height,
         );
@@ -552,7 +555,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
                 let qc = QuorumCertificate2::genesis(
                     &validated_state,
                     self.instance_state.as_ref(),
-                    self.upgrade_lock.upgrade,
+                    self.upgrade_lock.upgrade(),
                 )
                 .await;
 
@@ -612,7 +615,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
             kind: MessageKind::from(message_kind),
         };
 
-        let serialized_message = self.upgrade_lock.serialize(&message).await.map_err(|err| {
+        let serialized_message = self.upgrade_lock.serialize(&message).map_err(|err| {
             HotShotError::FailedToSerialize(format!("failed to serialize transaction: {err}"))
         })?;
 
@@ -727,6 +730,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
         state_private_key: <TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
         node_id: u64,
         config: HotShotConfig<TYPES>,
+        upgrade: versions::Upgrade,
         memberships: EpochMembershipCoordinator<TYPES>,
         network: Arc<I::Network>,
         initializer: HotShotInitializer<TYPES>,
@@ -747,6 +751,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
             state_private_key,
             node_id,
             config,
+            upgrade,
             memberships,
             network,
             initializer,
@@ -891,6 +896,7 @@ where
         state_private_key: <TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
         nonce: u64,
         config: HotShotConfig<TYPES>,
+        upgrade: versions::Upgrade,
         memberships: EpochMembershipCoordinator<TYPES>,
         network: Arc<I::Network>,
         initializer: HotShotInitializer<TYPES>,
@@ -905,6 +911,7 @@ where
             state_private_key.clone(),
             nonce,
             config.clone(),
+            upgrade,
             memberships.clone(),
             Arc::clone(&network),
             initializer.clone(),
@@ -919,6 +926,7 @@ where
             state_private_key,
             nonce,
             config,
+            upgrade,
             memberships,
             network,
             initializer,

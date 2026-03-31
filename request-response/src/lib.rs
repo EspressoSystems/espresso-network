@@ -12,12 +12,12 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow};
+use async_lock::RwLock;
 use data_source::DataSource;
 use derive_more::derive::Deref;
 use hotshot_types::traits::signature_key::SignatureKey;
 use message::{Message, RequestMessage, ResponseMessage};
 use network::{Bytes, Receiver, Sender};
-use parking_lot::RwLock;
 use rand::seq::SliceRandom;
 use recipient_source::RecipientSource;
 use request::Request;
@@ -28,6 +28,8 @@ use tokio::{
 use tokio_util::task::AbortOnDropHandle;
 use tracing::{debug, error, info, trace, warn};
 use util::{BoundedVecDeque, NamedSemaphore, NamedSemaphoreError};
+
+use crate::util::NamedSemaphorePermit;
 
 /// The data source trait. Is what we use to derive the response data for a request
 pub mod data_source;
@@ -55,7 +57,7 @@ pub type OutgoingRequestsMap<Req> =
 pub type IncomingRequests<K> = NamedSemaphore<K>;
 
 /// A type alias for the list of tasks that are validating incoming responses
-pub type IncomingResponses = NamedSemaphore<()>;
+pub type IncomingResponses = NamedSemaphore<RequestHash>;
 
 /// The type of request to make
 #[derive(PartialEq, Eq, Clone, Copy)]
@@ -340,7 +342,7 @@ impl<
 
             let request = {
                 // Get a write lock on the outgoing requests map
-                let mut outgoing_requests_write = self.outgoing_requests.write();
+                let mut outgoing_requests_write = self.outgoing_requests.write().await;
 
                 // Conditionally get the outgoing request, creating a new one if it doesn't exist or if
                 // the existing one has been dropped and not yet removed
@@ -368,8 +370,6 @@ impl<
                         receiver,
                         response_validation_fn,
                         request: request_message.request.clone(),
-                        outgoing_requests: Arc::clone(&self.outgoing_requests),
-                        request_hash,
                     }));
 
                     // Write the new outgoing request to the map
@@ -510,7 +510,9 @@ impl<
             self.config.max_incoming_requests_per_key,
             Some(self.config.max_incoming_requests),
         );
-        let mut incoming_responses = NamedSemaphore::new(self.config.max_incoming_responses, None);
+        // process 1 response per key, with a global maximum of [`config.max_incoming_responses`] responses
+        let mut incoming_responses =
+            NamedSemaphore::new(1, Some(self.config.max_incoming_responses));
 
         // While the receiver is open, we receive messages and handle them
         loop {
@@ -633,6 +635,32 @@ impl<
         });
     }
 
+    async fn wait_for_permit(
+        incoming_responses: &mut IncomingResponses,
+        request_hash: RequestHash,
+        outgoing_requests: &OutgoingRequestsMap<Req>,
+    ) -> Result<NamedSemaphorePermit<RequestHash>, NamedSemaphoreError> {
+        while outgoing_requests.read().await.contains_key(&request_hash) {
+            let permit = incoming_responses.try_acquire(request_hash);
+            let permit = match permit {
+                Ok(permit) => permit,
+                Err(NamedSemaphoreError::PerKeyLimitReached) => {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    continue;
+                },
+                Err(NamedSemaphoreError::GlobalLimitReached) => {
+                    warn!(
+                        "Failed to process response: too many responses are already being \
+                         processed"
+                    );
+                    return Err(NamedSemaphoreError::GlobalLimitReached);
+                },
+            };
+            return Ok(permit);
+        }
+        Err(NamedSemaphoreError::GlobalLimitReached)
+    }
+
     /// Handle a response sent to us
     fn handle_response(
         self: &Arc<Self>,
@@ -641,28 +669,38 @@ impl<
     ) {
         trace!("Handling response {response:?}");
 
-        // Get the entry in the map, ignoring it if it doesn't exist
-        let Some(outgoing_request) = self
-            .outgoing_requests
-            .read()
-            .get(&response.request_hash)
-            .cloned()
-            .and_then(|r| r.upgrade())
-        else {
-            return;
-        };
-
-        // Attempt to acquire a permit for the request. Warn if there are too many responses currently being processed
-        let permit = incoming_responses.try_acquire(());
-        let Ok(permit) = permit else {
-            warn!("Failed to process response: too many responses are already being processed");
-            return;
-        };
+        let outgoing_requests_clone = self.outgoing_requests.clone();
+        let mut incoming_responses_clone = incoming_responses.clone();
 
         // Spawn a task to validate the response and send it to the requester (us)
         let response_validate_timeout = self.config.incoming_response_timeout;
         tokio::spawn(async move {
             if timeout(response_validate_timeout, async move {
+                // Attempt to acquire a permit for the request. Warn if there are too many responses currently being processed
+                let permit = Self::wait_for_permit(
+                    &mut incoming_responses_clone,
+                    response.request_hash,
+                    &outgoing_requests_clone,
+                )
+                .await;
+
+                let Ok(permit) = permit else {
+                    warn!(
+                        "Failed to process response: too many responses are already being \
+                         processed"
+                    );
+                    return;
+                };
+                // Get the entry in the map, ignoring it if it doesn't exist
+                let Some(outgoing_request) = outgoing_requests_clone
+                    .read()
+                    .await
+                    .get(&response.request_hash)
+                    .cloned()
+                    .and_then(|r| r.upgrade())
+                else {
+                    return;
+                };
                 // Make sure the response is valid for the given request
                 let validation_result = match (outgoing_request.response_validation_fn)(
                     &outgoing_request.request,
@@ -679,6 +717,11 @@ impl<
 
                 // Send the response to the requester (the user of [`RequestResponse::request`])
                 let _ = outgoing_request.sender.try_broadcast(validation_result);
+
+                outgoing_requests_clone
+                    .write()
+                    .await
+                    .remove(&response.request_hash);
 
                 // Drop the permit
                 _ = permit;
@@ -710,17 +753,6 @@ pub struct OutgoingRequestInner<R: Request> {
 
     /// The function used to validate the response
     response_validation_fn: ResponseValidationFn<R>,
-
-    /// A copy of the map of currently active, outgoing requests
-    outgoing_requests: OutgoingRequestsMap<R>,
-    /// The hash of the request. We need this so we can remove ourselves from the map
-    request_hash: RequestHash,
-}
-
-impl<R: Request> Drop for OutgoingRequestInner<R> {
-    fn drop(&mut self) {
-        self.outgoing_requests.write().remove(&self.request_hash);
-    }
 }
 
 #[cfg(test)]
@@ -736,49 +768,6 @@ mod tests {
     use tokio::{sync::mpsc, task::JoinSet};
 
     use super::*;
-
-    /// This test makes sure that when all references to an outgoing request are dropped, it is
-    /// removed from the outgoing requests map
-    #[test]
-    fn test_outgoing_request_drop() {
-        // Create an outgoing requests map
-        let outgoing_requests = OutgoingRequestsMap::default();
-
-        // Create an outgoing request
-        let (sender, receiver) = async_broadcast::broadcast(1);
-        let outgoing_request = OutgoingRequest(Arc::new(OutgoingRequestInner {
-            sender,
-            receiver,
-            request: TestRequest(vec![1, 2, 3]),
-            response_validation_fn: Box::new(|_request, _response| {
-                Box::pin(async move { Ok(Arc::new(()) as ThreadSafeAny) })
-                    as ResponseValidationFuture
-            }),
-            outgoing_requests: Arc::clone(&outgoing_requests),
-            request_hash: blake3::hash(&[1, 2, 3]),
-        }));
-
-        // Insert the outgoing request into the map
-        outgoing_requests.write().insert(
-            outgoing_request.request_hash,
-            Arc::downgrade(&outgoing_request.0),
-        );
-
-        // Clone the outgoing request
-        let outgoing_request_clone = outgoing_request.clone();
-
-        // Drop the outgoing request
-        drop(outgoing_request);
-
-        // Make sure nothing has been removed
-        assert_eq!(outgoing_requests.read().len(), 1);
-
-        // Drop the clone
-        drop(outgoing_request_clone);
-
-        // Make sure it has been removed
-        assert_eq!(outgoing_requests.read().len(), 0);
-    }
 
     /// A test sender that has a list of all the participants in the network
     #[derive(Clone)]

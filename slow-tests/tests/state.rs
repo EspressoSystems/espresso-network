@@ -137,7 +137,14 @@ async fn insert_test_header(
     });
     tx.upsert(
         "header",
-        ["height", "hash", "payload_hash", "timestamp", "data"],
+        [
+            "height",
+            "hash",
+            "payload_hash",
+            "timestamp",
+            "data",
+            "ns_table",
+        ],
         ["height"],
         [(
             block_height as i64,
@@ -145,6 +152,7 @@ async fn insert_test_header(
             format!("payload_{}", block_height),
             block_height as i64,
             test_data,
+            "ns_table".to_string(),
         )],
     )
     .await

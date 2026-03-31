@@ -205,6 +205,18 @@ pub struct Options {
     #[clap(long, env = "ESPRESSO_SEQUENCER_SYNC_STATUS_CHUNK_SIZE")]
     pub(crate) sync_status_chunk_size: Option<usize>,
 
+    /// The number of items to process at a time when scanning for proactive fetching.
+    #[clap(long, env = "ESPRESSO_SEQUENCER_PROACTIVE_SCAN_CHUNK_SIZE")]
+    pub(crate) proactive_scan_chunk_size: Option<usize>,
+
+    /// The time interval between proactive fetching scans.
+    #[clap(long, env = "ESPRESSO_SEQUENCER_PROACTIVE_SCAN_INTERVAL", value_parser = parse_duration)]
+    pub(crate) proactive_scan_interval: Option<Duration>,
+
+    /// Disable the proactive scanner task.
+    #[clap(long, env = "ESPRESSO_SEQUENCER_DISABLE_PROACTIVE_FETCHING")]
+    pub(crate) disable_proactive_fetching: bool,
+
     /// Disable pruning and reconstruct previously pruned data.
     ///
     /// While running without pruning is the default behavior, the default will not try to
@@ -283,13 +295,6 @@ pub struct Options {
     #[cfg(not(feature = "embedded-db"))]
     #[clap(long, env = "ESPRESSO_SEQUENCER_DATABASE_QUERY_MAX_CONNECTIONS", default_value = None)]
     pub(crate) query_max_connections: Option<u32>,
-
-    /// Sets the batch size for the types migration.
-    /// Determines how many `(leaf, vid)` rows are selected from the old types table
-    /// and migrated at once.
-    /// Default is `10000`` if not set
-    #[clap(long, env = "ESPRESSO_SEQUENCER_DATABASE_TYPES_MIGRATION_BATCH_SIZE")]
-    pub(crate) types_migration_batch_size: Option<u64>,
 
     // Keep the database connection pool when persistence is created,
     // allowing it to be reused across multiple instances instead of creating
@@ -396,10 +401,12 @@ impl From<SqliteOptions> for Options {
             active_fetch_delay: None,
             chunk_fetch_delay: None,
             sync_status_chunk_size: None,
+            proactive_scan_chunk_size: None,
+            proactive_scan_interval: None,
+            disable_proactive_fetching: false,
             archive: false,
             lightweight: false,
             min_connections: 0,
-            types_migration_batch_size: None,
             pool: None,
         }
     }
@@ -1671,7 +1678,7 @@ impl SequencerPersistence for Persistence {
         _epoch: Option<EpochNumber>,
         action: HotShotAction,
     ) -> anyhow::Result<()> {
-        // Todo Remove this after https://github.com/EspressoSystems/espresso-sequencer/issues/1931
+        // Todo Remove this after https://github.com/EspressoSystems/espresso-network/issues/1931
         if !matches!(action, HotShotAction::Propose | HotShotAction::Vote) {
             return Ok(());
         }
@@ -3613,6 +3620,8 @@ mod test {
             commission: 100,
             delegators: HashMap::new(),
             authenticated: true,
+            x25519_key: None,
+            p2p_addr: None,
         };
 
         // Create an unauthenticated validator
@@ -3624,6 +3633,8 @@ mod test {
             commission: 200,
             delegators: HashMap::new(),
             authenticated: false,
+            x25519_key: None,
+            p2p_addr: None,
         };
 
         let mut validators: IndexMap<Address, RegisteredValidator<BLSPubKey>> = IndexMap::new();
@@ -4351,10 +4362,10 @@ mod postgres_tests {
         qc.view_number = view_number;
 
         let mut tx = storage.db.write().await.unwrap();
-        tx.insert_leaf(LeafQueryData::new(leaf, qc).unwrap())
+        tx.insert_leaf(&LeafQueryData::new(leaf, qc).unwrap())
             .await
             .unwrap();
-        tx.insert_block(BlockQueryData::<SeqTypes>::new(block_header, payload))
+        tx.insert_block(&BlockQueryData::<SeqTypes>::new(block_header, payload))
             .await
             .unwrap();
         tx.commit().await.unwrap();

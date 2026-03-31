@@ -5,26 +5,21 @@ edition.workspace = true
 description = "A fully connected mesh network"
 
 [features]
-metrics = ["dep:hotshot-types"]
+metrics = []
 
 [dependencies]
 bimap = { workspace = true }
 bon = { workspace = true }
-bs58 = { workspace = true }
 bytes = { workspace = true }
-ed25519-compact = { workspace = true }
+hotshot-types = { workspace = true }
 nohash-hasher = { workspace = true }
 parking_lot = { workspace = true }
-rand = "0.9.2"
-serde = { workspace = true }
-serde_bytes = { workspace = true }
+rand = "0.10.0"
+scopeguard = { workspace = true }
 snow = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
-
-# optional:
-hotshot-types = { workspace = true, optional = true }
 
 [dev-dependencies]
 criterion = { workspace = true }

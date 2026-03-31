@@ -6,12 +6,14 @@ use std::{
     future::pending,
     hash::Hash,
     iter::{once, repeat},
+    result::Result as StdResult,
     sync::Arc,
     time::Duration,
 };
 
 use bimap::BiHashMap;
 use bytes::{Bytes, BytesMut};
+use hotshot_types::addr::NetAddr;
 use parking_lot::Mutex;
 use snow::{Builder, HandshakeState, TransportState};
 use tokio::{
@@ -30,7 +32,7 @@ use tracing::{debug, error, info, trace, warn};
 #[cfg(feature = "metrics")]
 use crate::metrics::NetworkMetrics;
 use crate::{
-    Address, Id, Keypair, LAST_DELAY, NUM_DELAYS, NetConf, NetworkError, PublicKey, Role, chan,
+    Id, Keypair, LAST_DELAY, NUM_DELAYS, NetConf, NetworkDown, NetworkError, PublicKey, Role, chan,
     error::Empty,
     frame::{Header, Type},
     time::{Countdown, Timestamp},
@@ -71,10 +73,13 @@ const REPLY_TIMEOUT: Duration = Duration::from_secs(30);
 #[derive(Debug)]
 pub struct Network<K> {
     /// Name of this network.
-    name: &'static str,
+    pub(crate) name: &'static str,
 
     /// Log label.
-    label: K,
+    pub(crate) label: K,
+
+    /// Max. number of bytes per message.
+    pub(crate) max_message_size: usize,
 
     /// The network participants.
     parties: Mutex<HashMap<K, Role>>,
@@ -88,15 +93,14 @@ pub struct Network<K> {
     rx: AsyncMutex<Receiver<(K, Bytes, Option<OwnedSemaphorePermit>)>>,
 
     /// Handle of the server task that has been spawned by `Network`.
-    srv: JoinHandle<Result<Empty>>,
-
-    /// Max. number of bytes per message.
-    max_message_size: usize,
+    srv: Mutex<Option<JoinHandle<Result<Empty>>>>,
 }
 
 impl<K> Drop for Network<K> {
     fn drop(&mut self) {
-        self.srv.abort()
+        if let Some(srv) = self.srv.lock().take() {
+            srv.abort();
+        }
     }
 }
 
@@ -104,7 +108,7 @@ impl<K> Drop for Network<K> {
 #[derive(Debug)]
 pub(crate) enum Command<K> {
     /// Add the given peers.
-    Add(Vec<(K, PublicKey, Address)>),
+    Add(Role, Vec<(K, PublicKey, NetAddr)>),
     /// Remove the given peers.
     Remove(Vec<K>),
     /// Assign a `Role` to the given peers.
@@ -171,7 +175,7 @@ struct Server<K> {
 
 #[derive(Debug)]
 struct Peer {
-    addr: Address,
+    addr: NetAddr,
     role: Role,
     budget: Budget,
 }
@@ -218,6 +222,32 @@ enum Message {
     Pong(Timestamp),
 }
 
+impl<K> Network<K> {
+    pub fn public_key(&self) -> &K {
+        &self.label
+    }
+
+    pub fn name(&self) -> &str {
+        self.name
+    }
+
+    /// Get a clone of the MPSC sender.
+    pub(crate) fn sender(&self) -> Sender<Command<K>> {
+        self.tx.clone()
+    }
+}
+
+impl<K: Display> Network<K> {
+    pub async fn close(&self) {
+        let srv = self.srv.lock().take();
+        if let Some(srv) = srv {
+            info!(name = %self.name, node = %self.label, "aborting server task");
+            srv.abort();
+            let _ = srv.await;
+        }
+    }
+}
+
 impl<K> Network<K>
 where
     K: Eq + Ord + Clone + Display + Hash + Send + Sync + 'static,
@@ -252,10 +282,10 @@ where
         }
 
         // Command channel from application to network.
-        let (otx, orx) = mpsc::channel(cfg.total_capacity_egress);
+        let (otx, orx) = mpsc::channel(cfg.total_capacity_egress.get());
 
         // Channel of messages from peers to the application.
-        let (itx, irx) = mpsc::channel(cfg.total_capacity_ingress);
+        let (itx, irx) = mpsc::channel(cfg.total_capacity_ingress.get());
 
         let mut interval = tokio::time::interval(PING_INTERVAL);
         interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -294,24 +324,16 @@ where
             parties: Mutex::new(parties),
             rx: AsyncMutex::new(irx),
             tx: otx,
-            srv: spawn(server.run(listener)),
+            srv: Mutex::new(Some(spawn(server.run(listener)))),
             max_message_size: mmsze,
         })
     }
 
-    pub fn public_key(&self) -> &K {
-        &self.label
-    }
-
-    pub fn name(&self) -> &str {
-        self.name
-    }
-
-    pub fn parties(&self, r: Role) -> Vec<K> {
+    pub fn parties(&self, r: Option<Role>) -> Vec<K> {
         self.parties
             .lock()
             .iter()
-            .filter(|&(_, x)| r == *x)
+            .filter(|&(_, x)| r.map(|r| r == *x).unwrap_or(true))
             .map(|(k, _)| k.clone())
             .collect()
     }
@@ -354,28 +376,29 @@ where
     }
 
     /// Receive a message from a remote party.
-    pub async fn receive(&self) -> Result<(K, Bytes)> {
+    pub async fn receive(&self) -> StdResult<(K, Bytes), NetworkDown> {
         let mut rx = self.rx.lock().await;
-        let (k, b, _) = rx.recv().await.ok_or(NetworkError::ChannelClosed)?;
+        let (k, b, _) = rx.recv().await.ok_or(NetworkDown::new())?;
         Ok((k, b))
     }
 
     /// Add the given peers to the network.
-    ///
-    /// NB that peers added here are passive. See `Network::assign` for
-    /// giving peers a different `Role`.
-    pub async fn add(&self, peers: Vec<(K, PublicKey, Address)>) -> Result<()> {
+    pub async fn add(
+        &self,
+        r: Role,
+        peers: Vec<(K, PublicKey, NetAddr)>,
+    ) -> StdResult<(), NetworkDown> {
         self.parties
             .lock()
-            .extend(peers.iter().map(|(p, ..)| (p.clone(), Role::Passive)));
+            .extend(peers.iter().map(|(p, ..)| (p.clone(), r)));
         self.tx
-            .send(Command::Add(peers))
+            .send(Command::Add(r, peers))
             .await
-            .map_err(|_| NetworkError::ChannelClosed)
+            .map_err(|_| NetworkDown::new())
     }
 
     /// Remove the given peers from the network.
-    pub async fn remove(&self, peers: Vec<K>) -> Result<()> {
+    pub async fn remove(&self, peers: Vec<K>) -> StdResult<(), NetworkDown> {
         {
             let mut parties = self.parties.lock();
             for p in &peers {
@@ -385,11 +408,11 @@ where
         self.tx
             .send(Command::Remove(peers))
             .await
-            .map_err(|_| NetworkError::ChannelClosed)
+            .map_err(|_| NetworkDown::new())
     }
 
     /// Assign the given role to the given peers.
-    pub async fn assign(&self, r: Role, peers: Vec<K>) -> Result<()> {
+    pub async fn assign(&self, r: Role, peers: Vec<K>) -> StdResult<(), NetworkDown> {
         {
             let mut parties = self.parties.lock();
             for p in &peers {
@@ -401,12 +424,7 @@ where
         self.tx
             .send(Command::Assign(r, peers))
             .await
-            .map_err(|_| NetworkError::ChannelClosed)
-    }
-
-    /// Get a clone of the MPSC sender.
-    pub(crate) fn sender(&self) -> Sender<Command<K>> {
-        self.tx.clone()
+            .map_err(|_| NetworkDown::new())
     }
 }
 
@@ -607,32 +625,52 @@ where
                     };
                 },
                 cmd = self.obound.recv() => match cmd {
-                    Some(Command::Add(peers)) => {
+                    Some(Command::Add(role, peers)) => {
                         #[cfg(feature = "metrics")]
                         Arc::make_mut(&mut self.metrics).add_parties(peers.iter().map(|(k, ..)| k).cloned());
                         for (k, x, a) in peers {
-                            if self.peers.contains_key(&k) {
-                                warn!(
-                                    name = %self.conf.name,
-                                    node = %self.conf.label,
-                                    peer = %k,
-                                    "peer to add already exists"
-                                );
-                                continue
+                            let mut existing_budget = None;
+                            if let Some(peer) = self.peers.get(&k) {
+                                let Some(y) = self.index.get_by_left(&k) else {
+                                    error!(
+                                        name = %self.conf.name,
+                                        node = %self.conf.label,
+                                        peer = %k,
+                                        addr = %a,
+                                        "peer is known, but x25519 key not found"
+                                    );
+                                    continue
+                                };
+                                if a == peer.addr && x == *y {
+                                    debug!(
+                                        name = %self.conf.name,
+                                        node = %self.conf.label,
+                                        peer = %k,
+                                        addr = %a,
+                                        "peer to add already exists"
+                                    );
+                                    continue
+                                }
+                                existing_budget = Some(peer.budget.clone());
                             }
                             info!(
-                                name = %self.conf.name,
-                                node = %self.conf.label,
-                                peer = %k,
-                                "adding peer"
+                                name    = %self.conf.name,
+                                node    = %self.conf.label,
+                                role    = %role,
+                                peer    = %k,
+                                addr    = %a,
+                                replace = %existing_budget.is_some(),
+                                "adding or replacing peer"
                             );
                             let p = Peer {
                                 addr: a,
-                                role: Role::Passive,
-                                budget: self.conf.new_budget()
+                                role,
+                                budget: existing_budget.unwrap_or_else(|| self.conf.new_budget())
                             };
                             self.peers.insert(k.clone(), p);
                             self.index.insert(k.clone(), x);
+                            self.connecting.remove(&k);
+                            self.active.remove(&k);
                             self.spawn_connect(k)
                         }
                     }
@@ -948,7 +986,7 @@ where
         self.peers
             .get(k)
             .map(|p| {
-                let Address::Inet(ip, _) = p.addr else {
+                let NetAddr::Inet(ip, _) = p.addr else {
                     return true;
                 };
                 Some(ip) == s.peer_addr().ok().map(|a| a.ip())
@@ -965,7 +1003,7 @@ async fn connect<K>(
     name: &'static str,
     this: (K, Keypair),
     to: (K, PublicKey),
-    addr: Address,
+    addr: NetAddr,
     delays: [u8; NUM_DELAYS],
     #[cfg(feature = "metrics")] metrics: Arc<NetworkMetrics<K>>,
 ) -> (TcpStream, TransportState)
@@ -1120,11 +1158,11 @@ where
                                 Ok(Type::Data) => {
                                     let n = state.lock().read_message(&f, &mut buf)?;
                                     msg.extend_from_slice(&buf[..n]);
-                                    if !h.is_partial() {
-                                        break;
-                                    }
                                     if msg.len() > max_message_size {
                                         return Err(NetworkError::MessageTooLarge);
+                                    }
+                                    if !h.is_partial() {
+                                        break;
                                     }
                                 }
                                 Err(t) => return Err(NetworkError::UnknownFrameType(t)),

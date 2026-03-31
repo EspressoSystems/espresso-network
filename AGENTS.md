@@ -7,7 +7,7 @@ This file provides guidance to AI coding agents when working with code in this r
 Espresso Network is the **global confirmation layer** for Ethereum rollups. Rollups post their blocks to Espresso for
 fast finality and cross-rollup composability. This repo contains:
 
-- **Sequencer node** (`sequencer/`): Rust binary for running consensus and serving APIs
+- **Espresso node** (`sequencer/`): Rust binary for running consensus and serving APIs
 - **HotShot** (`crates/hotshot/`): BFT consensus library
 - **Contracts** (`contracts/`): Solidity contracts for L1 integration (light client, staking, fees, rewards)
 - **Types** (`types/`): Domain types shared across crates
@@ -74,20 +74,20 @@ just demo-native                      # Full local network via process-compose
 
 ## Architecture Overview
 
-### HotShot vs Sequencer Separation
+### HotShot vs Espresso Network Separation
 
-The codebase separates **consensus** (HotShot) from **application logic** (Sequencer):
+The codebase separates **consensus** (HotShot) from **application logic** (Espresso Network):
 
 - **HotShot** (`crates/hotshot/`): Generic BFT consensus library. Defines traits like `NodeType`, handles view-based
   voting, leader election, certificates, and network communication. Application-agnostic.
 
-- **Sequencer** (`sequencer/`, `types/`): Espresso-specific application built on HotShot. Implements `NodeType` via
+- **Espresso Network** (`sequencer/`, `types/`): Espresso-specific application built on HotShot. Implements `NodeType` via
   `SeqTypes` in `types/src/v0/mod.rs`, defining concrete types for headers, payloads, transactions, and validated state.
   Handles L1 integration, namespaces, fees, and rollup-specific logic.
 
-### Sequencer Internal Architecture
+### Espresso Network Internal Architecture
 
-The sequencer is built around `SequencerContext` (`context.rs`), which wraps HotShot's `SystemContextHandle`. Key
+The Espresso node is built around `SequencerContext` (`context.rs`), which wraps HotShot's `SystemContextHandle`. Key
 components:
 
 - **Node struct** (`lib.rs`): Generic over network (`N: ConnectedNetwork`) and persistence (`P: SequencerPersistence`)
@@ -101,7 +101,7 @@ components:
 **Transaction Submission:**
 
 1. Client submits via HTTP POST to `/submit/submit`
-2. Sequencer validates size, broadcasts to DA committee via P2P network
+2. Espresso node validates size, broadcasts to DA committee via P2P network
 3. Builders listen to the network and accumulate transactions
 
 **Block Proposal (Leader only):**
@@ -132,7 +132,7 @@ components:
 
 ### L1 Integration
 
-The sequencer uses **only finalized L1 blocks** to avoid reorg issues:
+The Espresso node uses **only finalized L1 blocks** to avoid reorg issues:
 
 - **L1Client** (`types/src/v0/impls/l1.rs`): Tracks L1 `head` and `finalized` block numbers. Uses `BlockId::finalized()`
   for all reads.

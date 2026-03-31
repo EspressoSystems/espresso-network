@@ -85,7 +85,6 @@ pub mod testing {
     use sequencer::{SequencerApiVersion, context::Consensus, network};
     use surf_disco::Client;
     use vbs::version::{StaticVersion, Version};
-    use versions::{Upgrade, VERSION_0_1};
 
     use super::*;
     use crate::non_permissioned::BuilderConfig;
@@ -147,7 +146,6 @@ pub mod testing {
                 stake_table_capacity: hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY,
                 drb_difficulty: 0,
                 drb_upgrade_difficulty: 0,
-                upgrade: Upgrade::trivial(VERSION_0_1),
             };
 
             Self {
@@ -187,6 +185,7 @@ pub mod testing {
             .map(|(pub_key, state_key_pair)| PeerConfig::<SeqTypes> {
                 stake_table_entry: pub_key.stake_table_entry(U256::from(stake_value)),
                 state_ver_key: state_key_pair.ver_key(),
+                connect_info: None,
             })
             .collect::<Vec<_>>();
 
@@ -225,6 +224,8 @@ pub mod testing {
                     state_public_key: self.staking_nodes_state_key_pairs[i].ver_key(),
                     state_private_key: self.staking_nodes_state_key_pairs[i].sign_key(),
                     is_da: true,
+                    x25519_keypair: None,
+                    p2p_addr: None,
                 }
             } else {
                 ValidatorConfig {
@@ -236,6 +237,8 @@ pub mod testing {
                     state_public_key: self.non_staking_nodes_state_key_pairs[i].ver_key(),
                     state_private_key: self.non_staking_nodes_state_key_pairs[i].sign_key(),
                     is_da: true,
+                    x25519_keypair: None,
+                    p2p_addr: None,
                 }
             }
         }

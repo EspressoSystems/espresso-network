@@ -31,12 +31,7 @@ impl std::fmt::Debug for UpgradeCertPredicate {
 #[async_trait]
 impl Predicate<QuorumVoteTaskTestState> for UpgradeCertPredicate {
     async fn evaluate(&self, input: &QuorumVoteTaskTestState) -> PredicateResult {
-        let upgrade_cert = input
-            .upgrade_lock
-            .decided_upgrade_certificate
-            .read()
-            .await
-            .clone();
+        let upgrade_cert = input.upgrade_lock.decided_upgrade_cert();
         PredicateResult::from((self.check)(upgrade_cert.into()))
     }
 

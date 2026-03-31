@@ -1,7 +1,7 @@
 use std::{collections::HashMap, path::Path};
 
 use alloy::primitives::Address;
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 
 const STAKE_TABLE_PROXY_ADDRESS: &str = "ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS";
 const ESP_TOKEN_PROXY_ADDRESS: &str = "ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS";

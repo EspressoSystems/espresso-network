@@ -452,7 +452,6 @@ where
         Ok(tmp_node_index)
     }
 
-    #[allow(clippy::cast_possible_truncation)]
     fn register_public_key(
         &mut self,
         pubkey: &mut Vec<u8>,
@@ -876,6 +875,7 @@ where
                 .stake_table_key
                 .stake_table_entry(U256::from(keys.stake)),
             state_ver_key: keys.state_ver_key.clone(),
+            connect_info: keys.connect_info.clone(),
         })
         .collect();
 
@@ -888,6 +888,7 @@ where
                 .stake_table_key
                 .stake_table_entry(U256::from(keys.stake)),
             state_ver_key: keys.state_ver_key.clone(),
+            connect_info: keys.connect_info.clone(),
         })
         .collect();
 

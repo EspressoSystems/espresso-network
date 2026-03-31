@@ -45,6 +45,7 @@ tokio = { workspace = true }
 
 tracing = { workspace = true }
 url = { workspace = true }
+versions = { workspace = true }
 
 [dev-dependencies]
 anyhow = { workspace = true }

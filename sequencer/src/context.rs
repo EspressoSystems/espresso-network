@@ -27,6 +27,7 @@ use hotshot_types::{
     consensus::ConsensusMetricsValue,
     data::{Leaf2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
+    message::UpgradeLock,
     network::NetworkConfig,
     storage_metrics::StorageMetricsValue,
     traits::{metrics::Metrics, network::ConnectedNetwork},
@@ -95,6 +96,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
     #[allow(clippy::too_many_arguments)]
     pub async fn init(
         network_config: NetworkConfig<SeqTypes>,
+        upgrade: versions::Upgrade,
         validator_config: ValidatorConfig<SeqTypes>,
         coordinator: EpochMembershipCoordinator<SeqTypes>,
         instance_state: NodeState,
@@ -122,7 +124,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
 
         // Load saved consensus state from storage.
         let (initializer, anchor_view) = persistence
-            .load_consensus_state(instance_state.clone(), config.upgrade)
+            .load_consensus_state(instance_state.clone(), upgrade)
             .await?;
 
         tracing::warn!(
@@ -147,6 +149,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
             validator_config.state_private_key.clone(),
             instance_state.node_id,
             config.clone(),
+            upgrade,
             coordinator.clone(),
             network.clone(),
             initializer,
@@ -182,7 +185,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
             request_batch_interval: Duration::from_secs(2),
             max_incoming_requests: 10,
             max_incoming_requests_per_key: 1,
-            max_incoming_responses: 20,
+            max_incoming_responses: 200,
         };
 
         // Create the request-response protocol
@@ -336,6 +339,10 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
     /// Return a reference to the underlying consensus handle.
     pub fn consensus(&self) -> Arc<RwLock<Consensus<N, P>>> {
         Arc::clone(&self.handle)
+    }
+
+    pub async fn upgrade_lock(&self) -> UpgradeLock<SeqTypes> {
+        self.handle.read().await.hotshot.upgrade_lock.clone()
     }
 
     pub async fn shutdown_consensus(&self) {

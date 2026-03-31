@@ -1023,6 +1023,14 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, D: CatchupStorage + S
         Ok(tree)
     }
 
+    async fn get_reward_merkle_tree_v2(
+        &self,
+        height: u64,
+        view: ViewNumber,
+    ) -> anyhow::Result<Vec<u8>> {
+        self.as_ref().get_reward_merkle_tree_v2(height, view).await
+    }
+
     #[tracing::instrument(skip(self))]
     async fn get_state_cert(
         &self,
@@ -1193,6 +1201,30 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> CatchupDataSource for
         retain_v1_reward_accounts(&state.reward_merkle_tree_v1, accounts.iter().copied())
     }
 
+    async fn get_reward_merkle_tree_v2(
+        &self,
+        height: u64,
+        view: ViewNumber,
+    ) -> anyhow::Result<Vec<u8>> {
+        let state = self
+            .consensus()
+            .await
+            .read()
+            .await
+            .state(view)
+            .await
+            .context(format!(
+                "state not available for height {height}, view {view}"
+            ))?;
+
+        let merkle_tree_bytes = bincode::serialize(&TryInto::<RewardMerkleTreeV2Data>::try_into(
+            &state.reward_merkle_tree_v2,
+        )?)
+        .context("Merkle tree serialization failed; this should never happen.")?;
+
+        Ok(merkle_tree_bytes)
+    }
+
     async fn get_state_cert(
         &self,
         epoch: u64,
@@ -1350,8 +1382,18 @@ pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
             } else if (height + node_state.node_id).is_multiple_of(30) {
                 let Ok(finalized_hotshot_height) = node_state.finalized_hotshot_height().await
                 else {
+                    // if we can't get the finalized hotshot height, there's nothing to do
                     return Ok(());
                 };
+
+                // as soon as we know the finalized height,
+                // we can garbage collect anything that we know we won't need
+                if let Err(err) = self
+                    .garbage_collect(std::cmp::min(height, finalized_hotshot_height))
+                    .await
+                {
+                    tracing::debug!("Failed to garbage collect reward merkle tree: {err}");
+                }
 
                 // check to see whether we have proofs at that height already stored
                 if !self.proof_exists(finalized_hotshot_height).await {
@@ -1476,6 +1518,7 @@ pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
 
     fn proof_exists(&self, height: u64) -> impl Send + Future<Output = bool>;
 
+    /// garbage collects merkle tree data for blocks strictly older than `height`
     fn garbage_collect(&self, height: u64) -> impl Send + Future<Output = anyhow::Result<()>>;
 }
 
@@ -2784,6 +2827,8 @@ mod api_tests {
     where
         D: TestableSequencerDataSource + Debug + 'static,
     {
+        use ark_serialize::CanonicalDeserialize;
+
         let storage = D::create_storage().await;
         let persistence = D::persistence_options(&storage).create().await.unwrap();
         let data_source: Arc<StorageState<network::Memory, NoStorage, _>> =
@@ -2825,9 +2870,14 @@ mod api_tests {
             .await
             .unwrap();
 
-        // Create another leaf, with missing data.
+        // Create another leaf, with missing data. We have to use a different payload commitment,
+        // otherwise the database will be able to combine the empty payload from the genesis block
+        // with this header, and the payload will not actually be missing.
         let mut block_header = leaf.block_header().clone();
         *block_header.height_mut() += 1;
+        *block_header.payload_commitment_mut() = VidCommitment::V1(
+            CanonicalDeserialize::deserialize_uncompressed_unchecked([1u8; 32].as_slice()).unwrap(),
+        );
         let qp = QuorumProposalWrapper {
             proposal: QuorumProposal2 {
                 block_header,
@@ -3799,9 +3849,7 @@ mod test {
         let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url.clone());
 
         let options = Options::with_port(port).config(Default::default());
-        let network_config = TestConfigBuilder::default()
-            .version_upgrade(MOCK_SEQUENCER_VERSIONS)
-            .build();
+        let network_config = TestConfigBuilder::default().build();
         let config = TestNetworkConfigBuilder::default()
             .api_config(options)
             .network_config(network_config)
@@ -5079,6 +5127,7 @@ mod test {
         wait_for_epochs(&mut events, EPOCH_HEIGHT, 4).await;
 
         // start the node again.
+        tracing::info!("restarting node");
         let node_0 = opt
             .serve(|metrics, consumer, storage| {
                 let cfg = network.cfg.clone();
@@ -5170,12 +5219,23 @@ mod test {
         node_0.shutdown_consensus().await;
         let decided_leaf = node_0.decided_leaf().await;
         let state = node_0.decided_state().await;
+        tracing::info!(
+            height = decided_leaf.height(),
+            ?decided_leaf,
+            ?state,
+            "final state"
+        );
 
         state
             .block_merkle_tree
             .lookup(decided_leaf.height() - 1)
             .expect_ok()
-            .expect("block state not found");
+            .unwrap_or_else(|err| {
+                panic!(
+                    "block state not found ({err:#}):\n{:#?}",
+                    state.block_merkle_tree
+                )
+            });
 
         Ok(())
     }

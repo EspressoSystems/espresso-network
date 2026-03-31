@@ -15,9 +15,9 @@ use std::{
     sync::Arc,
 };
 
-use async_lock::RwLock;
 use committable::Committable;
 use hotshot_utils::anytrace::*;
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use vbs::version::Version;
 use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, Upgrade, VID2_UPGRADE_VERSION};
@@ -31,7 +31,7 @@ use crate::{
         QuorumProposal2Legacy, QuorumProposalWrapper, UpgradeProposal, VidDisperseShare0,
         VidDisperseShare1, VidDisperseShare2, ViewNumber,
     },
-    epoch_membership::EpochMembership,
+    epoch_membership::{EpochMembership, EpochMembershipCoordinator},
     request_response::ProposalRequestPayload,
     simple_certificate::{
         DaCertificate, DaCertificate2, EpochRootQuorumCertificateV1, EpochRootQuorumCertificateV2,
@@ -618,12 +618,37 @@ where
     }
 }
 
+impl<TYPES> Proposal<TYPES, QuorumProposal2<TYPES>>
+where
+    TYPES: NodeType,
+{
+    pub async fn validate_signature(
+        &self,
+        membership_coordinator: &EpochMembershipCoordinator<TYPES>,
+    ) -> Result<()> {
+        let view_number = self.data.view_number();
+        let epoch = self.data.epoch().ok_or(error!("Epoch is not set"))?;
+        let membership = membership_coordinator
+            .membership_for_epoch(Some(epoch))
+            .await?;
+        let view_leader_key = membership.leader(view_number).await?;
+        let proposed_leaf =
+            Leaf2::from_quorum_proposal(&QuorumProposalWrapper::from(self.data.clone()));
+
+        ensure!(
+            view_leader_key.validate(&self.signature, proposed_leaf.commit().as_ref()),
+            "Proposal signature is invalid."
+        );
+
+        Ok(())
+    }
+}
+
 /// A lock for an upgrade certificate decided by HotShot.
 #[derive(Clone, Debug)]
-#[non_exhaustive]
 pub struct UpgradeLock<TYPES: NodeType> {
-    pub decided_upgrade_certificate: Arc<RwLock<Option<UpgradeCertificate<TYPES>>>>,
-    pub upgrade: Upgrade,
+    decided_upgrade_certificate: Arc<RwLock<Option<UpgradeCertificate<TYPES>>>>,
+    upgrade: Upgrade,
 }
 
 impl<TYPES: NodeType> UpgradeLock<TYPES> {
@@ -646,89 +671,109 @@ impl<TYPES: NodeType> UpgradeLock<TYPES> {
         }
     }
 
-    pub async fn upgrade_view(&self) -> Option<ViewNumber> {
-        let upgrade_certificate = self.decided_upgrade_certificate.read().await;
-        upgrade_certificate
+    pub fn upgrade(&self) -> Upgrade {
+        self.upgrade
+    }
+
+    pub fn upgrade_view(&self) -> Option<ViewNumber> {
+        self.decided_upgrade_certificate
+            .read()
             .as_ref()
             .map(|cert| cert.data.new_version_first_view)
+    }
+
+    pub fn decided_upgrade_cert(&self) -> Option<UpgradeCertificate<TYPES>> {
+        self.decided_upgrade_certificate.read().clone()
+    }
+
+    pub fn set_decided_upgrade_cert<C>(&self, cert: C)
+    where
+        C: Into<Option<UpgradeCertificate<TYPES>>>,
+    {
+        *self.decided_upgrade_certificate.write() = cert.into()
+    }
+
+    /// Apply a function to the upgrade certificate.
+    pub fn apply<F>(&self, f: F)
+    where
+        F: FnOnce(&mut Option<UpgradeCertificate<TYPES>>),
+    {
+        let mut guard = self.decided_upgrade_certificate.write();
+        f(&mut *guard)
     }
 
     /// Calculate the version applied in a view, based on the provided upgrade lock.
     ///
     /// # Errors
     /// Returns an error if we do not support the version required by the decided upgrade certificate.
-    pub async fn version(&self, view: ViewNumber) -> Result<Version> {
-        let upgrade_certificate = self.decided_upgrade_certificate.read().await;
-
-        let version = match *upgrade_certificate {
-            Some(ref cert) => {
-                if view >= cert.data.new_version_first_view {
-                    if cert.data.new_version == self.upgrade.target {
-                        self.upgrade.target
-                    } else {
-                        bail!("The network has upgraded to a new version that we do not support!");
-                    }
+    pub fn version(&self, view: ViewNumber) -> Result<Version> {
+        if let Some(cert) = &*self.decided_upgrade_certificate.read() {
+            if view >= cert.data.new_version_first_view {
+                if cert.data.new_version == self.upgrade.target {
+                    Ok(self.upgrade.target)
                 } else {
-                    self.upgrade.base
+                    bail!("The network has upgraded to a new version that we do not support!");
                 }
-            },
-            None => self.upgrade.base,
-        };
-
-        Ok(version)
+            } else {
+                Ok(self.upgrade.base)
+            }
+        } else {
+            Ok(self.upgrade.base)
+        }
     }
 
     /// Calculate the version applied in a view, based on the provided upgrade lock.
     ///
     /// This function does not fail, since it does not check that the version is supported.
-    pub async fn version_infallible(&self, view: ViewNumber) -> Version {
-        let upgrade_certificate = self.decided_upgrade_certificate.read().await;
-
-        match *upgrade_certificate {
-            Some(ref cert) => {
-                if view >= cert.data.new_version_first_view {
-                    cert.data.new_version
-                } else {
-                    cert.data.old_version
-                }
-            },
-            None => self.upgrade.base,
+    pub fn version_infallible(&self, view: ViewNumber) -> Version {
+        if let Some(cert) = &*self.decided_upgrade_certificate.read() {
+            if view >= cert.data.new_version_first_view {
+                cert.data.new_version
+            } else {
+                cert.data.old_version
+            }
+        } else {
+            self.upgrade.base
         }
     }
 
     /// Return whether epochs are enabled in the given view
-    pub async fn epochs_enabled(&self, view: ViewNumber) -> bool {
-        self.version_infallible(view).await >= EPOCH_VERSION
+    pub fn epochs_enabled(&self, view: ViewNumber) -> bool {
+        self.version_infallible(view) >= EPOCH_VERSION
     }
 
     /// Return whether `QuorumProposal2Legacy` is the correct message type for the given view
-    pub async fn proposal2_legacy_version(&self, view: ViewNumber) -> bool {
-        self.epochs_enabled(view).await && !self.upgraded_drb_and_header(view).await
+    pub fn proposal2_legacy_version(&self, view: ViewNumber) -> bool {
+        let version = self.version_infallible(view);
+        version >= EPOCH_VERSION && version < DRB_AND_HEADER_UPGRADE_VERSION
     }
 
     /// Return whether `QuorumProposal2` is the correct message type for the given view
-    pub async fn proposal2_version(&self, view: ViewNumber) -> bool {
-        self.epochs_enabled(view).await && self.upgraded_drb_and_header(view).await
+    pub fn proposal2_version(&self, view: ViewNumber) -> bool {
+        let version = self.version_infallible(view);
+        version >= EPOCH_VERSION && version >= DRB_AND_HEADER_UPGRADE_VERSION
     }
 
     /// Return whether epochs are enabled in the given view
-    pub async fn upgraded_drb_and_header(&self, view: ViewNumber) -> bool {
-        self.version_infallible(view).await >= DRB_AND_HEADER_UPGRADE_VERSION
+    pub fn upgraded_drb_and_header(&self, view: ViewNumber) -> bool {
+        self.version_infallible(view) >= DRB_AND_HEADER_UPGRADE_VERSION
     }
 
-    pub async fn upgraded_vid2(&self, view: ViewNumber) -> bool {
-        self.version_infallible(view).await >= VID2_UPGRADE_VERSION
+    pub fn upgraded_vid2(&self, view: ViewNumber) -> bool {
+        self.version_infallible(view) >= VID2_UPGRADE_VERSION
     }
 
-    /// Serialize a message with a version number, using `message.view_number()` and an optional decided upgrade certificate to determine the message's version.
+    /// Serialize a message with a version number, using `message.view_number()`
+    /// and an optional decided upgrade certificate to determine the message's
+    /// version.
     ///
     /// # Errors
     ///
     /// Errors if serialization fails.
-    pub async fn serialize<M: HasViewNumber + Serialize>(&self, message: &M) -> Result<Vec<u8>> {
+    pub fn serialize<M: HasViewNumber + Serialize>(&self, message: &M) -> Result<Vec<u8>> {
         let view = message.view_number();
 
-        let version = self.version(view).await?;
+        let version = self.version(view)?;
 
         let serialized_message = if version == self.upgrade.base || version == self.upgrade.target {
             versions::encode(version, message)
@@ -744,13 +789,16 @@ impl<TYPES: NodeType> UpgradeLock<TYPES> {
             .context(info!("Failed to serialize message!"))
     }
 
-    /// Deserialize a message with a version number, using `message.view_number()` to determine the message's version. This function will fail on improperly versioned messages.
+    /// Deserialize a message with a version number, using `message.view_number()`
+    /// to determine the message's version. This function will fail on improperly
+    /// versioned messages.
+    ///
     /// Returns both the deserialized message and the version of the message
     ///
     /// # Errors
     ///
     /// Errors if deserialization fails.
-    pub async fn deserialize<M: Debug + HasViewNumber + DeserializeOwned>(
+    pub fn deserialize<M: Debug + HasViewNumber + DeserializeOwned>(
         &self,
         message: &[u8],
     ) -> Result<(M, Version)> {
@@ -779,7 +827,7 @@ impl<TYPES: NodeType> UpgradeLock<TYPES> {
         let view = deserialized_message.view_number();
 
         // Get the expected version for the message based on the view number
-        let expected_version = self.version(view).await?;
+        let expected_version = self.version(view)?;
 
         // Check that the actual version matches the expected version
         if version != expected_version {

@@ -48,7 +48,7 @@ pub type NamespaceId<Types> = <Header<Types> as QueryableHeader<Types>>::Namespa
 
 pub type Timestamp = time::OffsetDateTime;
 
-pub trait QueryableHeader<Types: NodeType>: BlockHeader<Types> {
+pub trait QueryableHeader<Types: NodeType>: BlockHeader<Types> + HeightIndexed {
     /// Index for looking up a namespace.
     type NamespaceIndex: Clone + Debug + Hash + PartialEq + Eq + From<i64> + Into<i64> + Send + Sync;
 
@@ -71,6 +71,9 @@ pub trait QueryableHeader<Types: NodeType>: BlockHeader<Types> {
 
     /// Get the size taken up by the given namespace in the payload.
     fn namespace_size(&self, i: &Self::NamespaceIndex, payload_size: usize) -> u64;
+
+    /// Get the namespace table as a VARCHAR.
+    fn ns_table(&self) -> String;
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -202,9 +205,50 @@ where
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(bound = "")]
+// Important: use `try_from` on deserializing to ensure invariants are upheld.
+#[serde(try_from = "LeafQueryDataRaw<Types>", into = "LeafQueryDataRaw<Types>")]
 pub struct LeafQueryData<Types: NodeType> {
     pub(crate) leaf: Leaf2<Types>,
     pub(crate) qc: QuorumCertificate2<Types>,
+}
+
+impl<Types: NodeType> AsRef<Header<Types>> for LeafQueryData<Types> {
+    fn as_ref(&self) -> &Header<Types> {
+        self.leaf.block_header()
+    }
+}
+
+/// Raw [`LeafQueryData`] straight off the wire.
+///
+/// This type has compatible serialization with [`LeafQueryData`] (derived via serde), but it can be
+/// created via deserialization without calling the constructor. This means the invariants of
+/// [`LeafQueryData`] (namely that the `leaf` and `qc` correspond, and that the `leaf` is stripped
+/// of any payload data) may not hold for [`LeafQueryDataRaw`].
+///
+/// [`LeafQueryData`] uses this type for deserialization before calling the [`LeafQueryData`]
+/// constructor to ensure invariants are upheld.
+#[derive(Deserialize, Serialize)]
+#[serde(bound = "")]
+struct LeafQueryDataRaw<Types: NodeType> {
+    leaf: Leaf2<Types>,
+    qc: QuorumCertificate2<Types>,
+}
+
+impl<Types: NodeType> From<LeafQueryData<Types>> for LeafQueryDataRaw<Types> {
+    fn from(value: LeafQueryData<Types>) -> Self {
+        Self {
+            leaf: value.leaf,
+            qc: value.qc,
+        }
+    }
+}
+
+impl<Types: NodeType> TryFrom<LeafQueryDataRaw<Types>> for LeafQueryData<Types> {
+    type Error = InconsistentLeafError<Types>;
+
+    fn try_from(value: LeafQueryDataRaw<Types>) -> Result<Self, Self::Error> {
+        Self::new(value.leaf, value.qc)
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

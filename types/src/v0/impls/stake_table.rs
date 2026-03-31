@@ -32,7 +32,7 @@ use hotshot_contract_adapter::sol_types::{
     },
 };
 use hotshot_types::{
-    PeerConfig,
+    PeerConfig, PeerConnectInfo,
     data::{EpochNumber, ViewNumber, vid_disperse::VID_TARGET_TOTAL_STAKE},
     drb::{
         DrbResult,
@@ -342,6 +342,8 @@ impl StakeTableState {
                     commission,
                     delegators: HashMap::new(),
                     authenticated: true,
+                    x25519_key: None,
+                    p2p_addr: None,
                 });
             },
 
@@ -401,6 +403,8 @@ impl StakeTableState {
                     commission: *commission,
                     delegators: HashMap::new(),
                     authenticated,
+                    x25519_key: None,
+                    p2p_addr: None,
                 });
             },
 
@@ -1252,13 +1256,16 @@ impl Fetcher {
                     init_log: init_log.clone().into(),
                 })?;
 
-        // Get the transaction that emitted the Initialized event
-        let init_tx = provider
-            .get_transaction_receipt(tx_hash)
+        // Get the transaction that emitted the Initialized event.
+        // Use `get_transaction_receipt_all_providers` instead of `get_transaction_receipt` so that
+        // if the current L1 provider doesn't have the receipt
+        // it will automatically fail over to the next provider and retry.
+        let init_tx = self
+            .l1_client
+            .get_transaction_receipt_all_providers(tx_hash)
             .await
-            .map_err(FetchRewardError::Rpc)?
-            .ok_or_else(|| FetchRewardError::MissingTransactionReceipt {
-                tx_hash: tx_hash.to_string(),
+            .map_err(|err| FetchRewardError::MissingTransactionReceipt {
+                tx_hash: format!("{tx_hash}: {err:#}"),
             })?;
 
         let mint_transfer = init_tx.decoded_log::<EspToken::Transfer>().ok_or(
@@ -1802,6 +1809,13 @@ impl EpochCommittees {
                             v.stake,
                         ),
                         state_ver_key: v.state_ver_key.clone(),
+                        connect_info: v.x25519_key.and_then(|p| {
+                            let a = v.p2p_addr.clone()?;
+                            Some(PeerConnectInfo {
+                                x25519_key: p,
+                                p2p_addr: a,
+                            })
+                        }),
                     },
                 )
             })
@@ -2581,7 +2595,7 @@ impl super::v0_3::StakeTable {
     pub fn mock(n: u64) -> Self {
         [..n]
             .iter()
-            .map(|_| PeerConfig::default())
+            .map(|_| PeerConfig::test_default())
             .collect::<Vec<PeerConfig<SeqTypes>>>()
             .into()
     }
@@ -2593,7 +2607,7 @@ impl DAMembers {
     pub fn mock(n: u64) -> Self {
         [..n]
             .iter()
-            .map(|_| PeerConfig::default())
+            .map(|_| PeerConfig::test_default())
             .collect::<Vec<PeerConfig<SeqTypes>>>()
             .into()
     }
@@ -2733,6 +2747,8 @@ pub mod testing {
                 commission: val.commission,
                 delegators,
                 authenticated: true,
+                x25519_key: None,
+                p2p_addr: None,
             }
         }
     }

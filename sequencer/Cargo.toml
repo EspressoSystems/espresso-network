@@ -31,6 +31,7 @@ async-lock = { workspace = true }
 async-once-cell = { workspace = true }
 async-trait = { workspace = true }
 bincode = { workspace = true }
+blake3 = { workspace = true }
 byteorder = { workspace = true }
 cdn-broker = { workspace = true }
 cdn-marshal = { workspace = true }
@@ -109,6 +110,7 @@ vid = { workspace = true }
 [build-dependencies]
 anyhow = { workspace = true }
 vergen = { workspace = true }
+vergen-gitcl = { workspace = true }
 
 [dev-dependencies]
 escargot = { workspace = true }

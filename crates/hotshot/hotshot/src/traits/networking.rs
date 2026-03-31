@@ -13,10 +13,12 @@
 
 mod cliquenet_network;
 pub mod combined_network;
+mod compat_network;
 pub mod libp2p_network;
 pub mod memory_network;
 /// The Push CDN network
 pub mod push_cdn_network;
 
 pub use cliquenet_network::Cliquenet;
+pub use compat_network::CompatNetwork;
 pub use hotshot_types::traits::network::{NetworkError, NetworkReliability};
