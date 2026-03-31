@@ -205,16 +205,9 @@ impl<T: Serialize + DeserializeOwned + Clone> LedgerLog<T> {
     /// Find the sync status of this resource.
     ///
     /// This function will find all consecutive ranges of a given [`SyncStatus`] in
-    /// `[0, block_height)`. The predicate `is_missing` can be used to consider an object missing
-    /// even if there is actually an object present in the database (for example if some field is
-    /// [`None`]).
-    #[instrument(skip(self, is_missing))]
-    pub(crate) fn sync_status(
-        &self,
-        start: usize,
-        end: usize,
-        is_missing: impl Fn(&T) -> bool,
-    ) -> ResourceSyncStatus {
+    /// `[0, block_height)`.
+    #[instrument(skip(self))]
+    pub(crate) fn sync_status(&self, start: usize, end: usize) -> ResourceSyncStatus {
         let mut missing = 0;
         let mut ranges = vec![];
 
@@ -222,12 +215,8 @@ impl<T: Serialize + DeserializeOwned + Clone> LedgerLog<T> {
         // present range, we will interpolate a missing range.
         let mut curr: Option<SyncStatusRange> = None;
         for (i, obj) in self.iter().enumerate().skip(start) {
-            let Some(obj) = obj else {
+            if obj.is_none() {
                 tracing::debug!(i, "skipping placeholder object");
-                continue;
-            };
-            if is_missing(&obj) {
-                tracing::debug!(i, "skipping object which is considered missing");
                 continue;
             }
 

@@ -172,7 +172,7 @@ impl<T: NodeType> Consensus<T> {
         let proto = match input {
             ConsensusInput::Proposal(proposal) => self.handle_proposal(proposal, outbox).await,
             ConsensusInput::Certificate1(certificate) => {
-                self.handle_certificate1(certificate, outbox).await
+                self.handle_certificate1(certificate).await
             },
             ConsensusInput::Certificate2(certificate) => {
                 self.handle_certificate2(certificate).await
@@ -331,7 +331,8 @@ impl<T: NodeType> Consensus<T> {
             }
         }
         // if the previous block is the last block of the epoch, this proposal is the first proposal of the new epoch
-        if is_last_block(block_number.saturating_sub(1), self.epoch_height) {
+        let is_last_block = is_last_block(block_number.saturating_sub(1), self.epoch_height);
+        if is_last_block {
             let Some(cert2) = proposal.next_epoch_justify_qc.as_ref() else {
                 warn!(%epoch, "no next epoch justify QC");
                 return Protocol::Abort;
@@ -366,6 +367,8 @@ impl<T: NodeType> Consensus<T> {
             payload_size,
         }));
 
+        let epoch = if is_last_block { epoch + 1 } else { epoch };
+
         if self.is_leader(view + 1, epoch).await {
             outbox.push_back(ConsensusOutput::RequestBlockAndHeader(
                 BlockAndHeaderRequest {
@@ -380,11 +383,7 @@ impl<T: NodeType> Consensus<T> {
     }
 
     #[instrument(level = "debug", skip_all)]
-    async fn handle_certificate1(
-        &mut self,
-        certificate: Certificate1<T>,
-        outbox: &mut Outbox<ConsensusOutput<T>>,
-    ) -> Protocol {
+    async fn handle_certificate1(&mut self, certificate: Certificate1<T>) -> Protocol {
         let view = certificate.view_number();
         let Some(certificate_epoch) = certificate.epoch() else {
             warn!(%view, "certificate1 has no epoch number");
@@ -396,7 +395,6 @@ impl<T: NodeType> Consensus<T> {
             warn!(%view, "certificate1 not verified");
             return Protocol::Abort;
         }
-        outbox.push_back(ConsensusOutput::ViewChanged(view + 1, certificate_epoch));
         self.certs.insert(view, certificate);
         Protocol::Continue
     }
@@ -446,6 +444,8 @@ impl<T: NodeType> Consensus<T> {
             debug!(%locked_view, "proposal not available");
             return Protocol::Abort;
         };
+        // Note: We don't handle epoch change on timeout certificate, because
+        // we can't change epoch after a timeout
         outbox.push_back(ConsensusOutput::RequestBlockAndHeader(
             BlockAndHeaderRequest {
                 view,
@@ -803,13 +803,14 @@ impl<T: NodeType> Consensus<T> {
         }
 
         // We have a valid certificate, proposal, and reconstructed block
-        // We can now update the lock and vote
+        // We can now update the lock, change view and vote
         if self
             .locked_cert
             .as_mut()
             .is_none_or(|locked_cert| locked_cert.view_number() < cert1.view_number())
         {
             self.locked_cert = Some(cert1.clone());
+            outbox.push_back(ConsensusOutput::ViewChanged(view + 1, proposal_epoch));
         }
 
         if !self.staked_in_epoch(proposal_epoch).await {

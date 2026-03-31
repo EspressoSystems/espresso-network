@@ -197,15 +197,7 @@ mod test {
     use std::time::Duration;
 
     use committable::Committable;
-    use espresso_types::{Header, Transaction};
-    use futures::{TryStreamExt, stream::StreamExt};
-    use hotshot_query_service::{
-        Resolvable,
-        availability::{BlockQueryData, LeafQueryData},
-    };
-    use pretty_assertions::assert_eq;
-    use rand::RngCore;
-    use sequencer::{
+    use espresso_node::{
         api::{
             Options,
             data_source::testing::TestableSequencerDataSource,
@@ -214,6 +206,14 @@ mod test {
         },
         testing::{TestConfigBuilder, wait_for_decide_on_handle},
     };
+    use espresso_types::{Header, Transaction};
+    use futures::{TryStreamExt, stream::StreamExt};
+    use hotshot_query_service::{
+        Resolvable,
+        availability::{BlockQueryData, LeafQueryData},
+    };
+    use pretty_assertions::assert_eq;
+    use rand::RngCore;
     use test_utils;
     use tokio::time::sleep;
     use versions::{EPOCH_VERSION, Upgrade};

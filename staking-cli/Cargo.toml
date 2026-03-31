@@ -23,6 +23,7 @@ espresso-safe-tx-builder = { workspace = true }
 espresso-types = { workspace = true }
 futures-util = { workspace = true }
 
+espresso-utils = { workspace = true }
 hotshot-contract-adapter = { workspace = true }
 hotshot-state-prover = { workspace = true }
 hotshot-types = { workspace = true }
@@ -35,7 +36,6 @@ reqwest = { workspace = true }
 rstest = { workspace = true }
 rstest_reuse = { workspace = true }
 rust_decimal = { workspace = true }
-sequencer-utils = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 

@@ -8,6 +8,16 @@ use alloy::{
     rpc::client::RpcClient,
 };
 use espresso_contract_deployer::{Contract, build_signer};
+use espresso_node::{
+    SequencerApiVersion,
+    api::{
+        data_source::testing::TestableSequencerDataSource,
+        options,
+        test_helpers::{STAKE_TABLE_CAPACITY_FOR_TEST, TestNetwork, TestNetworkConfigBuilder},
+    },
+    state_signature::relay_server::{StateRelayServerState, run_relay_server_with_state},
+    testing::{TestConfigBuilder, wait_for_epochs},
+};
 use espresso_types::{L1ClientOptions, SeqTypes};
 use hotshot_contract_adapter::{
     reward::RewardClaimInput,
@@ -19,16 +29,6 @@ use hotshot_state_prover::{StateProverConfig, v3::service::run_prover_once};
 use hotshot_types::{
     stake_table::{HSStakeTable, one_honest_threshold},
     utils::epoch_from_block_number,
-};
-use sequencer::{
-    SequencerApiVersion,
-    api::{
-        data_source::testing::TestableSequencerDataSource,
-        options,
-        test_helpers::{STAKE_TABLE_CAPACITY_FOR_TEST, TestNetwork, TestNetworkConfigBuilder},
-    },
-    state_signature::relay_server::{StateRelayServerState, run_relay_server_with_state},
-    testing::{TestConfigBuilder, wait_for_epochs},
 };
 use staking_cli::demo::DelegationConfig;
 use test_utils::reserve_tcp_port;

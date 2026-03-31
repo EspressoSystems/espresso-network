@@ -152,7 +152,7 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                     Ok(EpochRootResult::DrbResult(epoch, drb_result)) => {
                         return Ok(ConsensusInput::DrbResult(epoch, drb_result))
                     }
-                    Ok(EpochRootResult::RootAdded(epoch)) => {}
+                    Ok(EpochRootResult::RootAdded(_epoch)) => {}
                     Err(_) => {
                         return Err(CoordinatorError::unspecified().context("epoch root"))
                     }

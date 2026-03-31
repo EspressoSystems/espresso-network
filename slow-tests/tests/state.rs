@@ -2,6 +2,16 @@ use std::time::{Duration, Instant};
 
 use alloy::primitives::{Address, U256};
 use committable::Commitment;
+use espresso_node::{
+    SequencerApiVersion,
+    api::{
+        Options,
+        data_source::testing::TestableSequencerDataSource,
+        sql::DataSource as SqlDataSource,
+        test_helpers::{TestNetwork, TestNetworkConfigBuilder},
+    },
+    testing::{TestConfig, TestConfigBuilder},
+};
 use espresso_types::{
     FeeAccount, FeeAmount, Header, SeqTypes,
     v0_3::RewardAmount,
@@ -23,16 +33,6 @@ use hotshot_query_service::{
 use jf_merkle_tree_compat::{
     LookupResult, MerkleTreeScheme, ToTraversalPath, UniversalMerkleTreeScheme,
     prelude::{MerkleProof, Sha3Node},
-};
-use sequencer::{
-    SequencerApiVersion,
-    api::{
-        Options,
-        data_source::testing::TestableSequencerDataSource,
-        sql::DataSource as SqlDataSource,
-        test_helpers::{TestNetwork, TestNetworkConfigBuilder},
-    },
-    testing::{TestConfig, TestConfigBuilder},
 };
 use surf_disco::Client;
 use test_utils::reserve_tcp_port;

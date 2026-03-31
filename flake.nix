@@ -25,6 +25,8 @@
   inputs.solc-bin.url = "github:EspressoSystems/nix-solc-bin";
   inputs.solc-bin.inputs.nixpkgs.follows = "nixpkgs";
 
+  inputs.dregs.url = "github:EspressoSystems/dregs";
+
   inputs.flake-compat.url = "github:edolstra/flake-compat";
   inputs.flake-compat.flake = false;
 
@@ -44,6 +46,7 @@
     , git-hooks
     , solc-bin
     , echidna-nixpkgs
+    , dregs
     , ...
     }:
     flake-utils.lib.eachDefaultSystem (system:
@@ -67,6 +70,7 @@
       overlays = [
         (import rust-overlay)
         solc-bin.overlays.default
+        dregs.overlays.default
         (final: prev: {
           solhint = prev.callPackage ./nix/solhint { };
         })
@@ -242,6 +246,7 @@
             # Ethereum contracts, solidity, ...
             foundry
             solc
+            dregs-unwrapped
             nodePackages.prettier
             solhint
             (python3.withPackages (ps: with ps; [ black ]))
