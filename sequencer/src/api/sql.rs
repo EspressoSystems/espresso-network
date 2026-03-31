@@ -1993,19 +1993,19 @@ mod tests {
 
         // Make sure the proof at height 2 is still available.
         assert_eq!(
-            storage.load_proof(2, account.clone()).await.unwrap(),
+            storage.load_proof(2, account.clone(), 0).await.unwrap(),
             2u64.to_le_bytes()
         );
 
         // Meanwhile, the proofs at heights 0-1 have been garbage collected.
         for h in 0..2 {
-            let err = storage.load_proof(h, account.clone()).await.unwrap_err();
+            let err = storage.load_proof(h, account.clone(), 0).await.unwrap_err();
             assert!(err.to_string().contains("Missing proof"), "{err:#}");
         }
 
         // Garbage collect the remaining proof.
         storage.garbage_collect(3).await.unwrap();
-        let err = storage.load_proof(2, account).await.unwrap_err();
+        let err = storage.load_proof(2, account, 0).await.unwrap_err();
         assert!(err.to_string().contains("Missing proof"), "{err:#}");
     }
 }
