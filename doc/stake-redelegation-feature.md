@@ -112,10 +112,11 @@ version bump required.
 
 **`types/src/v0/impls/stake_table.rs`**
 
-- Rust bindings must be regenerated with the V3 ABI (`just gen-bindings`). This produces a new `StakeTableV3Events` enum
-  containing the `Redelegated` variant. Without this, `decode_raw_log` silently drops the event.
+- Rust bindings must be regenerated with the V3 ABI (`just gen-bindings`). This produces `StakeTableV3Events` which is a
+  superset of V2 events (includes `Redelegated`). Replace `StakeTableV2Events` with `StakeTableV3Events` everywhere —
+  the V3 ABI decodes all V2 events plus the new one. Without this, `decode_raw_log` silently drops the event.
 
-- Add `TryFrom<StakeTableV3Events>` impl (or extend the existing V2 impl): map `Redelegated` filter log to
+- Update existing `TryFrom` impl to use `StakeTableV3Events`: map `Redelegated` filter log to
   `StakeTableEvent::Redelegate { delegator, from_validator, to_validator, amount }`
 
 - `apply_event`: handle `Redelegate` as an atomic move:
