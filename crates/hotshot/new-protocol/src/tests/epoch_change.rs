@@ -7,7 +7,7 @@ use hotshot_types::{
 };
 
 use super::common::{
-    assertions::{count_epoch_change, has_epoch_change, has_view_changed},
+    assertions::{count_epoch_change, has_epoch_change, is_view_changed},
     utils::{ConsensusHarness, TEST_DRB_RESULT, TestData},
 };
 use crate::{
@@ -15,7 +15,7 @@ use crate::{
     helpers::proposal_commitment,
     message::{EpochChangeMessage, Proposal},
     outbox::Outbox,
-    tests::common::assertions::has_proposal,
+    tests::common::assertions::{any, is_proposal},
 };
 
 const EPOCH_HEIGHT: u64 = 10;
@@ -112,7 +112,7 @@ async fn test_handle_epoch_change_valid() {
         .await;
 
     assert!(
-        has_view_changed(harness.outputs()),
+        any(harness.outputs(), is_view_changed),
         "Valid EpochChange should produce ViewChanged output"
     );
 }
@@ -349,7 +349,7 @@ async fn test_epoch_change_leader_proposes() {
         "node should be the leader for the next epoch and request a block"
     );
     assert!(
-        has_proposal(harness.outputs()),
+        any(harness.outputs(), is_proposal),
         "node should send a proposal after requesting a block and header"
     );
 }

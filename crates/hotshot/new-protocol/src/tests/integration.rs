@@ -1,21 +1,14 @@
 use hotshot::types::BLSPubKey;
-use hotshot_example_types::node_types::TestTypes;
 use hotshot_types::traits::signature_key::SignatureKey;
 
-use super::common::{
-    assertions::{
-        has_leaf_decided, has_proposal, has_request_block_and_header, has_timeout_cert,
-        has_view_changed, has_vote1, node_index_for_key,
-    },
-    harness::TestHarness,
-    utils::TestData,
-};
+use super::common::{harness::TestHarness, utils::TestData};
 use crate::{
-    consensus::{ConsensusInput, ConsensusOutput},
+    consensus::ConsensusInput,
     tests::common::assertions::{
-        count_vote1, has_block_built, has_block_reconstructed, has_cert1, has_cert2,
-        has_header_created, has_request_vid_disperse, has_state_validated, has_timeout,
-        has_vid_disperse, has_vote2,
+        any, count_matching, is_block_built, is_block_reconstructed, is_cert1, is_cert2,
+        is_header_created, is_leaf_decided, is_proposal, is_request_block_and_header,
+        is_request_vid_disperse, is_state_validated, is_timeout, is_timeout_cert, is_vid_disperse,
+        is_view_changed, is_vote1, is_vote2, node_index_for_key,
     },
 };
 
@@ -40,9 +33,13 @@ async fn send_proposal_and_vote1s(
     for i in 0..THRESHOLD {
         harness.message(test_view.vote1_input(i)).await;
     }
+
     harness
         .process_until(|inputs| {
-            has_cert1(inputs) && has_block_reconstructed(inputs) && has_state_validated(inputs)
+            any(inputs, is_timeout)
+                || any(inputs, is_cert1)
+                    && any(inputs, is_block_reconstructed)
+                    && any(inputs, is_state_validated)
         })
         .await;
 }
@@ -53,7 +50,9 @@ async fn send_vote2s(harness: &mut TestHarness, test_data: &TestData, view_idx: 
     for i in 0..THRESHOLD {
         harness.message(test_view.vote2_input(i)).await;
     }
-    harness.process_until(|inputs| has_cert2(inputs)).await;
+    harness
+        .process_until(|inputs| any(inputs, is_cert2) || any(inputs, is_timeout))
+        .await;
 }
 
 /// Integration: sequential views both produce Vote1 through real state validation.
@@ -74,16 +73,14 @@ async fn test_sequential_vote1() {
         .message(test_data.views[1].proposal_input(&node_key))
         .await;
 
-    let count_sv = |inputs: &[ConsensusInput<TestTypes>]| {
-        inputs
-            .iter()
-            .filter(|i| matches!(i, ConsensusInput::StateValidated(_)))
-            .count()
-    };
-    harness.process_until(|inputs| count_sv(inputs) >= 2).await;
+    harness
+        .process_until(|inputs| {
+            count_matching(inputs, is_state_validated) >= 2 || any(inputs, is_timeout)
+        })
+        .await;
 
     assert_eq!(
-        count_vote1(harness.outputs()),
+        count_matching(harness.outputs(), is_vote1),
         2,
         "Both views should produce Vote1"
     );
@@ -100,10 +97,14 @@ async fn test_cert1_formed_and_vote2_sent() {
     // View 1: proposal + Vote1 messages → CPU forms cert1 + reconstructs block
     send_proposal_and_vote1s(&mut harness, &test_data, 0, &node_key).await;
 
-    let events = harness.outputs();
-
-    assert!(has_vote1(events), "Vote1 should be sent for proposal");
-    assert!(has_vote2(events), "Vote2 should be sent for proposal");
+    assert!(
+        any(harness.outputs(), is_vote1),
+        "Vote1 should be sent for proposal"
+    );
+    assert!(
+        any(harness.outputs(), is_vote2),
+        "Vote2 should be sent for proposal"
+    );
 }
 
 /// Full decide path: CPU tasks form Certificate1, Certificate2, and
@@ -129,12 +130,12 @@ async fn test_full_decide_via_cpu_tasks() {
     send_proposal_and_vote1s(&mut harness, &test_data, 1, &node_key).await;
     send_vote2s(&mut harness, &test_data, 1).await;
 
-    assert!(has_vote1(harness.outputs()), "Vote1 should be sent");
-    assert!(has_vote2(harness.outputs()), "Vote2 should be sent");
+    assert!(any(harness.outputs(), is_vote1), "Vote1 should be sent");
+    assert!(any(harness.outputs(), is_vote2), "Vote2 should be sent");
     // LeafDecided proves the full pipeline: cert1 formation, block
     // reconstruction from VID shares, cert2 formation, and decision.
     assert!(
-        has_leaf_decided(harness.outputs()),
+        any(harness.outputs(), is_leaf_decided),
         "Leaf should be decided — requires block reconstruction + cert2 formation"
     );
 }
@@ -159,6 +160,7 @@ async fn test_leader_proposal_via_cpu_tasks() {
     //   3. VID disperse computed by CPU VidDisperseTask
 
     let test_view = &test_data.views[0];
+
     harness
         .message(test_view.proposal_input(&leader_for_view_2))
         .await;
@@ -169,19 +171,20 @@ async fn test_leader_proposal_via_cpu_tasks() {
 
     harness
         .process_until(|inputs| {
-            has_cert1(inputs)
-                && has_block_reconstructed(inputs)
-                && has_state_validated(inputs)
-                && has_block_built(inputs)
-                && has_header_created(inputs)
-                && has_vid_disperse(inputs)
+            any(inputs, is_timeout)
+                || any(inputs, is_cert1)
+                    && any(inputs, is_block_reconstructed)
+                    && any(inputs, is_state_validated)
+                    && any(inputs, is_block_built)
+                    && any(inputs, is_header_created)
+                    && any(inputs, is_vid_disperse)
         })
         .await;
 
     // SendProposal proves the CPU VidDisperseTask computed the VID
     // disperse — consensus cannot send a proposal without it.
     assert!(
-        has_proposal(harness.outputs()),
+        any(harness.outputs(), is_proposal),
         "Leader should send proposal (requires CPU VID disperse)"
     );
 }
@@ -199,15 +202,7 @@ async fn test_multi_view_decide_via_cpu_tasks() {
         send_vote2s(&mut harness, &test_data, i).await;
     }
 
-    let decide_count = harness
-        .outputs()
-        .iter()
-        .filter(|e| matches!(e, ConsensusOutput::LeafDecided(_)))
-        .count();
-    assert!(
-        decide_count >= 2,
-        "Multiple views should produce decisions, got {decide_count}"
-    );
+    assert!(count_matching(harness.outputs(), is_leaf_decided) >= 2);
 }
 
 /// Send enough timeout votes for a view.
@@ -217,7 +212,7 @@ async fn send_timeout_votes(harness: &mut TestHarness, test_data: &TestData, vie
         harness.message(test_view.timeout_vote_input(i)).await;
     }
     harness
-        .process_until(|inputs| has_timeout_cert(inputs))
+        .process_until(|inputs| any(inputs, is_timeout_cert) || any(inputs, is_timeout))
         .await;
     harness
         .apply_and_process(ConsensusInput::TimeoutCertificate(
@@ -239,10 +234,8 @@ async fn test_timeout_votes_form_tc() {
     // Send timeout votes for view 2 → CPU timeout collector forms TC
     send_timeout_votes(&mut harness, &test_data, 1).await;
 
-    let events = harness.outputs();
-
     assert!(
-        has_view_changed(events),
+        any(harness.outputs(), is_view_changed),
         "View should advance after timeout certificate"
     );
 }
@@ -270,7 +263,9 @@ async fn test_leader_proposes_after_timeout_via_cpu_tasks() {
     send_proposal_and_vote1s(&mut harness, &test_data, 0, &leader_for_view_3).await;
 
     // Wait for the timeout to fire (non-timeout events are processed inline).
-    harness.process_until(|inputs| has_timeout(inputs)).await;
+    harness
+        .process_until(|inputs| any(inputs, is_timeout))
+        .await;
 
     // Send timeout votes for view 2 → CPU timeout collector forms TC
     // → consensus handles TC → leader of view 3 requests block/header → proposes.
@@ -278,12 +273,15 @@ async fn test_leader_proposes_after_timeout_via_cpu_tasks() {
     // (3 > timeout_view=2). After ViewChanged(3) resets the timer, the leader
     // must complete VID disperse before the timer fires for view 3.
     let test_view = &test_data.views[1];
+
     for i in 0..THRESHOLD {
         harness.message(test_view.timeout_vote_input(i)).await;
     }
+
     harness
-        .process_until(|inputs| has_timeout_cert(inputs))
+        .process_until(|inputs| any(inputs, is_timeout_cert))
         .await;
+
     harness
         .apply_and_process(ConsensusInput::TimeoutCertificate(
             test_view.timeout_cert.clone(),
@@ -291,20 +289,20 @@ async fn test_leader_proposes_after_timeout_via_cpu_tasks() {
         .await;
 
     harness
-        .process_until(|inputs| has_vid_disperse(inputs))
+        .process_until(|inputs| any(inputs, is_vid_disperse) || any(inputs, is_timeout))
         .await;
 
     assert!(
-        has_request_block_and_header(harness.outputs()),
+        any(harness.outputs(), is_request_block_and_header),
         "Leader should request block and header after TC"
     );
 
     assert!(
-        has_request_vid_disperse(harness.outputs()),
+        any(harness.outputs(), is_request_vid_disperse),
         "Leader should request VID disperse after TC"
     );
     assert!(
-        has_proposal(harness.outputs()),
+        any(harness.outputs(), is_proposal),
         "Leader should send proposal with timeout view change evidence"
     );
 }
