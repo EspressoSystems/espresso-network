@@ -3018,10 +3018,12 @@ impl MembershipPersistence for Persistence {
             tracing::debug!("last l1 finalizes in database = {last_processed_l1_block:?}");
 
             // skip events storage if the database already has higher l1 block events
+            let serialized_events_len = serialized_events.len();
             if last_processed_l1_block > Some(l1_finalized_i64) {
                 tracing::debug!(
                     ?last_processed_l1_block,
                     l1_finalized,
+                    serialized_events_len,
                     "last l1 finalized stored is already higher"
                 );
                 return Ok(());
