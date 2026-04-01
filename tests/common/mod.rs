@@ -71,6 +71,11 @@ pub struct TestRequirements {
     pub max_consecutive_blocks_without_tx: u64,
     /// If Some, wait until rewards_claimed > 0 before exiting. Value used for diagnostic logging.
     pub first_reward_block: Option<u64>,
+    /// If Some, the test requires observing a reward claim that is provably from the new regime:
+    /// wait until LC finalizes this block, snapshot claimed_rewards at that point, then wait for
+    /// claimed_rewards to increase. This avoids exiting early on a claim made against an older
+    /// LC state (before the new reward scheme was active).
+    pub claim_after_lc_block: Option<u64>,
 }
 
 impl Default for TestRequirements {
@@ -84,6 +89,7 @@ impl Default for TestRequirements {
             block_timeout: Duration::from_secs(60),
             max_consecutive_blocks_without_tx: 10,
             first_reward_block: None,
+            claim_after_lc_block: None,
         }
     }
 }
