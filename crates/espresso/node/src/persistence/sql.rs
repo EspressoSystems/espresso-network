@@ -1168,13 +1168,17 @@ impl Persistence {
     /// These occur when concurrent SERIALIZABLE transactions conflict and are safe to retry.
     /// The closure must be `Fn` (not `FnOnce`) so it can be called on each attempt — ensure
     /// all captured variables are `Copy` or cloned before capture.
+    ///
+    /// Waits use full-jitter exponential backoff: each retry sleeps for a uniformly random
+    /// duration in `[0, min(MAX_DELAY_MS, BASE_DELAY_MS * 2^attempt)]` milliseconds.
     async fn with_write_retry<F, Fut, T>(&self, f: F) -> anyhow::Result<T>
     where
         F: Fn() -> Fut,
         Fut: Future<Output = anyhow::Result<T>>,
     {
         const MAX_RETRIES: u32 = 5;
-        const RETRY_DELAY: Duration = Duration::from_millis(100);
+        const BASE_DELAY_MS: u64 = 10;
+        const MAX_DELAY_MS: u64 = 500;
 
         let mut attempts = 0u32;
         loop {
@@ -1182,11 +1186,14 @@ impl Persistence {
                 Ok(val) => return Ok(val),
                 Err(err) if attempts < MAX_RETRIES && Self::is_serialization_error(&err) => {
                     attempts += 1;
+                    let cap_ms = MAX_DELAY_MS.min(BASE_DELAY_MS.saturating_mul(1u64 << attempts));
+                    let delay_ms = rand::Rng::gen_range(&mut rand::thread_rng(), 0..=cap_ms);
                     tracing::warn!(
                         attempts,
+                        delay_ms,
                         "serialization conflict, retrying write transaction"
                     );
-                    tokio::time::sleep(RETRY_DELAY).await;
+                    tokio::time::sleep(Duration::from_millis(delay_ms)).await;
                 },
                 Err(err) => return Err(err),
             }
