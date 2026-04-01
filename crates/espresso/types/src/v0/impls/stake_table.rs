@@ -1167,12 +1167,11 @@ impl Fetcher {
     /// Fetches and updates the initial token supply.
     ///
     /// - Locates the `Initialized` event of the token contract (emitted only once).
-    /// - Queries `Transfer` events from `address(0)` in the same block to find the initial mint.
+    /// - Queries `Transfer` events in the same block, matching by transaction hash and
+    ///   `from == address(0)` to find the initial mint.
     /// - If either step fails, the function aborts to prevent incorrect reward calculations.
     ///
-    /// We use the `Initialized` event to identify the block, then query Transfer events
-    /// in that block filtered to mints from the zero address. This avoids fetching
-    /// transaction receipts, which may be unavailable on pruned L1 nodes.
+    /// This avoids fetching transaction receipts, which may be unavailable on pruned L1 nodes.
     ///
     /// The ESP token contract itself does not expose the initialization block
     /// but the stake table contract does.
@@ -1271,7 +1270,9 @@ impl Fetcher {
 
         let (mint_transfer, _) = transfer_logs
             .iter()
-            .find(|(_, log)| log.transaction_hash == Some(init_tx_hash))
+            .find(|(transfer, log)| {
+                log.transaction_hash == Some(init_tx_hash) && transfer.from == Address::ZERO
+            })
             .ok_or(FetchRewardError::MissingTransferEvent)?;
 
         tracing::debug!("mint transfer event ={mint_transfer:?}");
