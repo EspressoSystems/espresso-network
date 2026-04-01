@@ -8,8 +8,8 @@ use committable::{Commitment, Committable};
 use hotshot::traits::BlockPayload;
 use hotshot_types::{
     data::{
-        EpochNumber, Leaf2, VidCommitment, VidCommitment2, VidDisperse2, VidDisperseShare2,
-        ViewChangeEvidence2, ViewNumber, vid_disperse::vid_total_weight,
+        BlockNumber, EpochNumber, Leaf2, VidCommitment, VidCommitment2, VidDisperse2,
+        VidDisperseShare2, ViewChangeEvidence2, ViewNumber, vid_disperse::vid_total_weight,
     },
     drb::DrbResult,
     epoch_membership::EpochMembershipCoordinator,
@@ -111,8 +111,8 @@ pub struct Consensus<T: NodeType> {
     public_key: T::SignatureKey,
     private_key: <T::SignatureKey as SignatureKey>::PrivateKey,
 
-    garbage_collection_interval: u64,
-    epoch_height: u64,
+    garbage_collection_interval: BlockNumber,
+    epoch_height: BlockNumber,
 }
 
 /// Protocol flow directive.
@@ -124,12 +124,15 @@ enum Protocol {
 }
 
 impl<T: NodeType> Consensus<T> {
-    pub fn new(
+    pub fn new<B>(
         membership_coordinator: EpochMembershipCoordinator<T>,
         public_key: T::SignatureKey,
         private_key: <T::SignatureKey as SignatureKey>::PrivateKey,
-        epoch_height: u64,
-    ) -> Self {
+        epoch_height: B,
+    ) -> Self
+    where
+        B: Into<BlockNumber>,
+    {
         Self {
             proposals: BTreeMap::new(),
             vid_disperses: BTreeMap::new(),
@@ -152,8 +155,8 @@ impl<T: NodeType> Consensus<T> {
             private_key,
             vid_shares: BTreeMap::new(),
             // TODO: make this configurable or Constant
-            garbage_collection_interval: 100,
-            epoch_height,
+            garbage_collection_interval: 100.into(),
+            epoch_height: epoch_height.into(),
         }
     }
 
@@ -321,7 +324,7 @@ impl<T: NodeType> Consensus<T> {
         // Validate the epoch transition rules.
         // - DRB result must be attached and match our calculated result.
         // - Next epoch justify QC (deciding QC) must be attached to the first proposal of the new epoch
-        if is_epoch_transition(block_number, self.epoch_height) {
+        if is_epoch_transition(block_number, *self.epoch_height) {
             let Some(drb) = self.drb_results.get(&(epoch + 1)) else {
                 debug!(%epoch, "no DRB result for epoch");
                 outbox.push_back(ConsensusOutput::RequestDrbResult(epoch + 1));
@@ -336,7 +339,7 @@ impl<T: NodeType> Consensus<T> {
             }
         }
         // if the previous block is the last block of the epoch, this proposal is the first proposal of the new epoch
-        if is_last_block(block_number.saturating_sub(1), self.epoch_height) {
+        if is_last_block(block_number.saturating_sub(1), *self.epoch_height) {
             let Some(cert2) = proposal.next_epoch_justify_qc.as_ref() else {
                 warn!(%epoch, "no next epoch justify QC");
                 return Protocol::Abort;
@@ -371,7 +374,7 @@ impl<T: NodeType> Consensus<T> {
             payload_size,
         }));
 
-        let epoch = if is_last_block(block_number, self.epoch_height) {
+        let epoch = if is_last_block(block_number, *self.epoch_height) {
             epoch + 1
         } else {
             epoch
@@ -534,11 +537,11 @@ impl<T: NodeType> Consensus<T> {
             return Protocol::Abort;
         }
         // check if it's the last block for the correct epoch
-        if !is_last_block(cert2.data.block_number, self.epoch_height) {
+        if !is_last_block(cert2.data.block_number, *self.epoch_height) {
             warn!("epoch change certificate2 is not the last block of the epoch");
             return Protocol::Abort;
         }
-        if cert2.data.block_number / self.epoch_height != *cert2.data.epoch {
+        if cert2.data.block_number / *self.epoch_height != *cert2.data.epoch {
             warn!("epoch change certificate2 is not for the correct epoch");
             return Protocol::Abort;
         }
@@ -623,7 +626,7 @@ impl<T: NodeType> Consensus<T> {
         };
 
         let first_proposal_of_epoch =
-            is_last_block(header.block_number().saturating_sub(1), self.epoch_height);
+            is_last_block(header.block_number().saturating_sub(1), *self.epoch_height);
         let proposal_epoch = if first_proposal_of_epoch {
             proposal.epoch + 1
         } else {
@@ -635,7 +638,7 @@ impl<T: NodeType> Consensus<T> {
         }
 
         // TODO: Handle epoch change and properly set next epoch qc drb result and state cert
-        let next_drb_result = if is_epoch_transition(header.block_number(), self.epoch_height) {
+        let next_drb_result = if is_epoch_transition(header.block_number(), *self.epoch_height) {
             let Some(drb) = self.drb_results.get(&EpochNumber::new(*proposal.epoch + 1)) else {
                 debug!(%proposal.epoch, "no DRB result for epoch");
                 return;
@@ -705,7 +708,7 @@ impl<T: NodeType> Consensus<T> {
         }
         // Handle Epoch Change by broadcasting the epoch change message if we have
         // all the data we need.
-        if is_last_block(proposal.block_header.block_number(), self.epoch_height)
+        if is_last_block(proposal.block_header.block_number(), *self.epoch_height)
             && let Some(cert1) = self.certs.get(&view)
             && cert1.data.leaf_commit == proposal_commit
         {
@@ -720,7 +723,7 @@ impl<T: NodeType> Consensus<T> {
         let leaf: Leaf2<T> = proposal.clone().into();
         self.last_decided_view = max(self.last_decided_view, leaf.view_number());
         let mut gc = None;
-        if leaf.block_header().block_number() % self.garbage_collection_interval == 0 {
+        if leaf.block_header().block_number() % *self.garbage_collection_interval == 0 {
             gc = Some((leaf.view_number(), leaf.justify_qc().epoch()));
         }
         let mut decided = vec![leaf];
@@ -735,7 +738,7 @@ impl<T: NodeType> Consensus<T> {
             }
             let leaf: Leaf2<T> = proposal.clone().into();
             if gc.is_none()
-                && leaf.block_header().block_number() % self.garbage_collection_interval == 0
+                && leaf.block_header().block_number() % *self.garbage_collection_interval == 0
             {
                 gc = Some((leaf.view_number(), leaf.justify_qc().epoch()));
             }

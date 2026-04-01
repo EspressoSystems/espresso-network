@@ -174,8 +174,8 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                         return Ok(ConsensusInput::DrbResult(epoch, drb_result))
                     }
                     Ok(EpochRootResult::RootAdded(_epoch)) => {}
-                    Err(_) => {
-                        return Err(CoordinatorError::unspecified().context("epoch root"))
+                    Err(err) => {
+                        return Err(CoordinatorError::regular(err))
                     }
                 },
                 else => {
