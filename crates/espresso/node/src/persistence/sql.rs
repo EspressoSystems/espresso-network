@@ -994,77 +994,86 @@ impl Persistence {
                     .await?;
             }
 
-            let mut tx = self.db.write().await?;
+            let from_view_i64 = from_view.u64() as i64;
+            let to_view_i64 = to_view.u64() as i64;
+            let serialized_state_certs = state_certs
+                .into_iter()
+                .map(|(epoch, cert)| Ok((epoch as i64, bincode::serialize(&cert)?)))
+                .collect::<anyhow::Result<Vec<(i64, Vec<u8>)>>>()?;
 
             // Now that we have definitely processed leaves up to `to_view`, we can update
             // `last_processed_view` so we don't process these leaves again. We may still fail at
             // this point, or shut down, and fail to complete this update. At worst this will lead
             // to us sending a duplicate decide event the next time we are called; this is fine as
             // the event consumer is required to be idempotent.
-            tx.upsert(
-                "event_stream",
-                ["id", "last_processed_view"],
-                ["id"],
-                [(1i32, to_view.u64() as i64)],
-            )
-            .await?;
-
-            // Store all the finalized state certs
-            for (epoch, state_cert) in state_certs {
-                let state_cert_bytes = bincode::serialize(&state_cert)?;
+            self.with_write_retry(|| async {
+                let mut tx = self.db.write().await?;
                 tx.upsert(
-                    "finalized_state_cert",
-                    ["epoch", "state_cert"],
-                    ["epoch"],
-                    [(epoch as i64, state_cert_bytes)],
+                    "event_stream",
+                    ["id", "last_processed_view"],
+                    ["id"],
+                    [(1i32, to_view_i64)],
                 )
                 .await?;
-            }
 
-            // Delete the data that has been fully processed.
-            tx.execute(
-                query("DELETE FROM vid_share2 where view >= $1 AND view <= $2")
-                    .bind(from_view.u64() as i64)
-                    .bind(to_view.u64() as i64),
-            )
-            .await?;
-            tx.execute(
-                query("DELETE FROM da_proposal2 where view >= $1 AND view <= $2")
-                    .bind(from_view.u64() as i64)
-                    .bind(to_view.u64() as i64),
-            )
-            .await?;
-            tx.execute(
-                query("DELETE FROM quorum_proposals2 where view >= $1 AND view <= $2")
-                    .bind(from_view.u64() as i64)
-                    .bind(to_view.u64() as i64),
-            )
-            .await?;
-            tx.execute(
-                query("DELETE FROM quorum_certificate2 where view >= $1 AND view <= $2")
-                    .bind(from_view.u64() as i64)
-                    .bind(to_view.u64() as i64),
-            )
-            .await?;
-            tx.execute(
-                query("DELETE FROM state_cert where view >= $1 AND view <= $2")
-                    .bind(from_view.u64() as i64)
-                    .bind(to_view.u64() as i64),
-            )
-            .await?;
+                // Store all the finalized state certs
+                for (epoch, state_cert_bytes) in &serialized_state_certs {
+                    tx.upsert(
+                        "finalized_state_cert",
+                        ["epoch", "state_cert"],
+                        ["epoch"],
+                        [(*epoch, state_cert_bytes.clone())],
+                    )
+                    .await?;
+                }
 
-            // Clean up leaves, but do not delete the most recent one (all leaves with a view number
-            // less than the given value). This is necessary to ensure that, in case of a restart,
-            // we can resume from the last decided leaf.
-            tx.execute(
-                query("DELETE FROM anchor_leaf2 WHERE view >= $1 AND view < $2")
-                    .bind(from_view.u64() as i64)
-                    .bind(to_view.u64() as i64),
-            )
-            .await?;
+                // Delete the data that has been fully processed.
+                tx.execute(
+                    query("DELETE FROM vid_share2 where view >= $1 AND view <= $2")
+                        .bind(from_view_i64)
+                        .bind(to_view_i64),
+                )
+                .await?;
+                tx.execute(
+                    query("DELETE FROM da_proposal2 where view >= $1 AND view <= $2")
+                        .bind(from_view_i64)
+                        .bind(to_view_i64),
+                )
+                .await?;
+                tx.execute(
+                    query("DELETE FROM quorum_proposals2 where view >= $1 AND view <= $2")
+                        .bind(from_view_i64)
+                        .bind(to_view_i64),
+                )
+                .await?;
+                tx.execute(
+                    query("DELETE FROM quorum_certificate2 where view >= $1 AND view <= $2")
+                        .bind(from_view_i64)
+                        .bind(to_view_i64),
+                )
+                .await?;
+                tx.execute(
+                    query("DELETE FROM state_cert where view >= $1 AND view <= $2")
+                        .bind(from_view_i64)
+                        .bind(to_view_i64),
+                )
+                .await?;
 
-            tx.commit().await?;
-            last_processed_view = Some(to_view.u64() as i64);
+                // Clean up leaves, but do not delete the most recent one (all leaves with a view
+                // number less than the given value). This is necessary to ensure that, in case of
+                // a restart, we can resume from the last decided leaf.
+                tx.execute(
+                    query("DELETE FROM anchor_leaf2 WHERE view >= $1 AND view < $2")
+                        .bind(from_view_i64)
+                        .bind(to_view_i64),
+                )
+                .await?;
+
+                tx.commit().await?;
+                Ok(())
+            })
+            .await?;
+            last_processed_view = Some(to_view_i64);
         }
     }
 
@@ -2572,15 +2581,19 @@ impl SequencerPersistence for Persistence {
         let data_bytes = bincode::serialize(proposal).unwrap();
 
         let now = Instant::now();
-        let mut tx = self.db.write().await?;
-        tx.upsert(
-            "da_proposal2",
-            ["view", "data", "payload_hash"],
-            ["view"],
-            [(view as i64, data_bytes, vid_commit.to_string())],
-        )
-        .await?;
-        let res = tx.commit().await;
+        let res = self
+            .with_write_retry(|| async {
+                let mut tx = self.db.write().await?;
+                tx.upsert(
+                    "da_proposal2",
+                    ["view", "data", "payload_hash"],
+                    ["view"],
+                    [(view as i64, data_bytes.clone(), vid_commit.to_string())],
+                )
+                .await?;
+                tx.commit().await
+            })
+            .await;
         self.internal_metrics
             .internal_append_da2_duration
             .add_point(now.elapsed().as_secs_f64());
@@ -2592,16 +2605,20 @@ impl SequencerPersistence for Persistence {
         epoch: EpochNumber,
         drb_result: DrbResult,
     ) -> anyhow::Result<()> {
+        let epoch_i64 = epoch.u64() as i64;
         let drb_result_vec = Vec::from(drb_result);
-        let mut tx = self.db.write().await?;
-        tx.upsert(
-            "epoch_drb_and_root",
-            ["epoch", "drb_result"],
-            ["epoch"],
-            [(epoch.u64() as i64, drb_result_vec)],
-        )
-        .await?;
-        tx.commit().await
+        self.with_write_retry(|| async {
+            let mut tx = self.db.write().await?;
+            tx.upsert(
+                "epoch_drb_and_root",
+                ["epoch", "drb_result"],
+                ["epoch"],
+                [(epoch_i64, drb_result_vec.clone())],
+            )
+            .await?;
+            tx.commit().await
+        })
+        .await
     }
 
     async fn store_epoch_root(
@@ -2609,18 +2626,22 @@ impl SequencerPersistence for Persistence {
         epoch: EpochNumber,
         block_header: <SeqTypes as NodeType>::BlockHeader,
     ) -> anyhow::Result<()> {
+        let epoch_i64 = epoch.u64() as i64;
         let block_header_bytes =
             bincode::serialize(&block_header).context("serializing block header")?;
 
-        let mut tx = self.db.write().await?;
-        tx.upsert(
-            "epoch_drb_and_root",
-            ["epoch", "block_header"],
-            ["epoch"],
-            [(epoch.u64() as i64, block_header_bytes)],
-        )
-        .await?;
-        tx.commit().await
+        self.with_write_retry(|| async {
+            let mut tx = self.db.write().await?;
+            tx.upsert(
+                "epoch_drb_and_root",
+                ["epoch", "block_header"],
+                ["epoch"],
+                [(epoch_i64, block_header_bytes.clone())],
+            )
+            .await?;
+            tx.commit().await
+        })
+        .await
     }
 
     async fn store_drb_input(&self, drb_input: DrbInput) -> anyhow::Result<()> {
@@ -2636,19 +2657,22 @@ impl SequencerPersistence for Persistence {
             }
         }
 
+        let drb_epoch_i64 = drb_input.epoch as i64;
         let drb_input_bytes = bincode::serialize(&drb_input)
             .context("Failed to serialize DrbInput. This is not fatal, but should never happen.")?;
 
-        let mut tx = self.db.write().await?;
-
-        tx.upsert(
-            "drb",
-            ["epoch", "drb_input"],
-            ["epoch"],
-            [(drb_input.epoch as i64, drb_input_bytes)],
-        )
-        .await?;
-        tx.commit().await
+        self.with_write_retry(|| async {
+            let mut tx = self.db.write().await?;
+            tx.upsert(
+                "drb",
+                ["epoch", "drb_input"],
+                ["epoch"],
+                [(drb_epoch_i64, drb_input_bytes.clone())],
+            )
+            .await?;
+            tx.commit().await
+        })
+        .await
     }
 
     async fn load_drb_input(&self, epoch: u64) -> anyhow::Result<DrbInput> {
@@ -2774,17 +2798,21 @@ impl SequencerPersistence for Persistence {
         epoch: u64,
         cert: LightClientStateUpdateCertificateV2<SeqTypes>,
     ) -> anyhow::Result<()> {
+        let epoch_i64 = epoch as i64;
         let bytes = bincode::serialize(&cert)
             .with_context(|| format!("Failed to serialize state cert for epoch {epoch}"))?;
 
-        let mut tx = self.db.write().await?;
-
-        tx.upsert(
-            "finalized_state_cert",
-            ["epoch", "state_cert"],
-            ["epoch"],
-            [(epoch as i64, bytes)],
-        )
+        self.with_write_retry(|| async {
+            let mut tx = self.db.write().await?;
+            tx.upsert(
+                "finalized_state_cert",
+                ["epoch", "state_cert"],
+                ["epoch"],
+                [(epoch_i64, bytes.clone())],
+            )
+            .await?;
+            tx.commit().await
+        })
         .await
     }
 
