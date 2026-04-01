@@ -45,8 +45,8 @@ use tide_disco::{Api, Error as _, RequestParams, StatusCode, method::ReadState};
 use vbs::version::{StaticVersion, StaticVersionType};
 
 use super::data_source::{
-    CatchupDataSource, HotShotConfigDataSource, NodeStateDataSource, StakeTableDataSource,
-    StateSignatureDataSource, SubmitDataSource,
+    CatchupDataSource, DatabaseMetadataSource, HotShotConfigDataSource, NodeStateDataSource,
+    StakeTableDataSource, StateSignatureDataSource, SubmitDataSource,
 };
 use crate::{SeqTypes, SequencerApiVersion, SequencerPersistence, api::RewardMerkleTreeDataSource};
 
@@ -640,6 +640,31 @@ where
 
     Ok(api)
 }
+
+pub(super) fn database<S, ApiVer: StaticVersionType + 'static>(
+    api_ver: semver::Version,
+) -> Result<Api<S, Error, ApiVer>>
+where
+    S: 'static + Send + Sync + ReadState,
+    <S as ReadState>::State: Send + Sync + DatabaseMetadataSource,
+{
+    let toml = toml::from_str::<toml::Value>(include_str!("../../api/database.toml"))?;
+    let mut api = Api::<S, Error, ApiVer>::new(toml)?;
+
+    api.with_version(api_ver)
+        .at("get_table_sizes", |_req, state| {
+            async move {
+                state
+                    .read(|state| state.get_table_sizes().boxed())
+                    .await
+                    .map_err(|err| Error::internal(format!("failed to get table sizes: {err:#}")))
+            }
+            .boxed()
+        })?;
+
+    Ok(api)
+}
+
 pub(super) fn submit<N, P, S, ApiVer: StaticVersionType + 'static>(
     api_ver: semver::Version,
 ) -> Result<Api<S, Error, ApiVer>>

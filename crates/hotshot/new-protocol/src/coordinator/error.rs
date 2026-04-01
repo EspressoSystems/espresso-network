@@ -2,7 +2,7 @@ use std::fmt;
 
 use hotshot::traits::NetworkError;
 
-use crate::{network::is_critical, proposal::ValidationError};
+use crate::{block::BlockError, network::is_critical, proposal::ValidationError};
 
 #[derive(Debug, thiserror::Error)]
 #[error("{severity} coordinator error ({context}): source: {source}")]
@@ -80,6 +80,9 @@ pub enum ErrorSource {
 
     #[error("{0}")]
     Message(String),
+
+    #[error("block builder error: {0}")]
+    Block(#[from] BlockError),
 }
 
 impl From<NetworkError> for CoordinatorError {

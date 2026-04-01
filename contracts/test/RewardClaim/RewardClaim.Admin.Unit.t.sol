@@ -20,6 +20,7 @@ contract RewardClaimAdminTest is RewardClaimTest {
         rewardClaim.setDailyLimit(basisPoints);
 
         assertEq(rewardClaim.dailyLimitWei(), expectedLimit);
+        assertEq(rewardClaim.lastSetDailyLimitBasisPoints(), basisPoints);
     }
 
     function test_SetDailyLimit_RevertsNonAdmin() public {

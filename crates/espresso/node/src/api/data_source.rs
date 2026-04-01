@@ -360,6 +360,22 @@ pub trait StateCertFetchingDataSource<Types: NodeType> {
     ) -> Result<LightClientStateUpdateCertificateV2<Types>, StateCertFetchError>;
 }
 
+/// Database table size information.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct TableSize {
+    pub table_name: String,
+    pub row_count: i64,
+    pub total_size_bytes: Option<i64>,
+}
+
+/// Data source for database metadata and statistics.
+///
+/// This trait is only implemented by SQL-based storage backends (PostgreSQL and SQLite).
+pub(crate) trait DatabaseMetadataSource {
+    /// Get the sizes of all tables in the database.
+    fn get_table_sizes(&self) -> impl Send + Future<Output = anyhow::Result<Vec<TableSize>>>;
+}
+
 #[cfg(any(test, feature = "testing"))]
 pub mod testing {
     use super::{super::Options, *};
