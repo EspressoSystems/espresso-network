@@ -17,6 +17,7 @@ async-lock = { workspace = true }
 async-trait = { workspace = true }
 bon = { workspace = true }
 committable = { workspace = true }
+derive_more = { workspace = true }
 futures = { workspace = true }
 hotshot = { workspace = true }
 hotshot-example-types = { workspace = true }
@@ -24,6 +25,7 @@ hotshot-testing = { workspace = true }
 hotshot-types = { workspace = true }
 hotshot-utils = { workspace = true }
 serde = { workspace = true }
+serde_bytes = { workspace = true }
 thiserror = { workspace = true }
 time = { workspace = true }
 tokio = { workspace = true }
