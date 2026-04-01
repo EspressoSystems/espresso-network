@@ -45,7 +45,9 @@ impl<T: NodeType> EpochManager<T> {
             match self.tasks.join_next().await {
                 Some(Ok(result)) => return Some(result),
                 Some(Err(err)) => {
-                    error!(%err, "epoch manager task panic")
+                    if !err.is_cancelled() {
+                        error!(%err, "epoch manager task panic")
+                    }
                 },
                 None => return None,
             }
