@@ -169,6 +169,11 @@ where
     pub block_reward: Vec<MonetaryValue>,
 }
 
+/// NANOS_PER_MILLI represents the conversion of the milli prefix to the
+/// nano prefix.  This is a constant that can be utilized to easily convert
+/// between the two values.
+const NANOS_PER_MILLI: i128 = 1_000_000;
+
 impl<Types: NodeType> TryFrom<BlockQueryData<Types>> for BlockDetail<Types>
 where
     BlockQueryData<Types>: HeightIndexed,
@@ -179,12 +184,14 @@ where
     type Error = TimestampConversionError;
 
     fn try_from(value: BlockQueryData<Types>) -> Result<Self, Self::Error> {
-        let seconds = i64::try_from(value.header.timestamp())?;
+        let milliseconds = i128::from(value.header.timestamp_millis());
 
         Ok(Self {
             hash: value.hash(),
             height: value.height(),
-            time: Timestamp(time::OffsetDateTime::from_unix_timestamp(seconds)?),
+            time: Timestamp(time::OffsetDateTime::from_unix_timestamp_nanos(
+                milliseconds * NANOS_PER_MILLI,
+            )?),
             num_transactions: value.num_transactions,
             proposer_id: value.header().proposer_id(),
             fee_recipient: value.header().fee_info_account(),
@@ -268,7 +275,7 @@ where
     type Error = TimestampConversionError;
 
     fn try_from(value: BlockQueryData<Types>) -> Result<Self, Self::Error> {
-        let seconds = i64::try_from(value.header.timestamp())?;
+        let milliseconds = i128::from(value.header.timestamp_millis());
 
         Ok(Self {
             hash: value.hash(),
@@ -276,7 +283,9 @@ where
             proposer_id: value.header().proposer_id(),
             num_transactions: value.num_transactions,
             size: value.size,
-            time: Timestamp(time::OffsetDateTime::from_unix_timestamp(seconds)?),
+            time: Timestamp(time::OffsetDateTime::from_unix_timestamp_nanos(
+                milliseconds * NANOS_PER_MILLI,
+            )?),
         })
     }
 }
@@ -360,14 +369,16 @@ where
             <Types as NodeType>::Transaction,
         ),
     ) -> Result<Self, Self::Error> {
-        let seconds = i64::try_from(block.header.timestamp())?;
+        let milliseconds = i128::from(block.header.timestamp_millis());
 
         Ok(Self {
             hash: transaction.commitment(),
             height: block.height(),
             offset: offset as u64,
             num_transactions: block.num_transactions,
-            time: Timestamp(time::OffsetDateTime::from_unix_timestamp(seconds)?),
+            time: Timestamp(time::OffsetDateTime::from_unix_timestamp_nanos(
+                milliseconds * NANOS_PER_MILLI,
+            )?),
             rollups: vec![transaction.namespace_id()],
         })
     }
@@ -394,7 +405,7 @@ where
             <Types as NodeType>::Transaction,
         ),
     ) -> Result<Self, Self::Error> {
-        let seconds = i64::try_from(block.header.timestamp())?;
+        let milliseconds = i128::from(block.header.timestamp_millis());
 
         Ok(Self {
             details: TransactionDetail {
@@ -404,7 +415,9 @@ where
                 offset: offset as u64,
                 num_transactions: block.num_transactions,
                 size: transaction.payload_size(),
-                time: Timestamp(time::OffsetDateTime::from_unix_timestamp(seconds)?),
+                time: Timestamp(time::OffsetDateTime::from_unix_timestamp_nanos(
+                    milliseconds * NANOS_PER_MILLI,
+                )?),
                 sequencing_fees: vec![],
                 fee_details: vec![],
             },
@@ -485,7 +498,7 @@ pub struct GenesisOverview {
 /// `block_transactions` for those `block_heights`.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ExplorerHistograms {
-    pub block_time: VecDeque<Option<u64>>,
+    pub block_time: VecDeque<Option<f64>>,
     pub block_size: VecDeque<Option<u64>>,
     pub block_transactions: VecDeque<u64>,
     pub block_heights: VecDeque<u64>,
