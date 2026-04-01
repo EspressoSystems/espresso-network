@@ -28,14 +28,14 @@ func NewBuilderSubmitter(builderUrls []string) (*BuilderSubmitter, error) {
 	}
 
 	builderClients := make([]*http.Client, len(builderUrls))
-
+	formattedUrls := make([]string, len(builderUrls))
 	for i, url := range builderUrls {
-		builderUrls[i] = formatUrl(url)
+		formattedUrls[i] = formatUrl(url)
 		builderClients[i] = http.DefaultClient
 	}
 
 	return &BuilderSubmitter{
-		builderUrls:    builderUrls,
+		builderUrls:    formattedUrls,
 		builderClients: builderClients,
 	}, nil
 }
@@ -66,22 +66,28 @@ func (c *BuilderSubmitter) SubmitTransaction(ctx context.Context, tx types.Trans
 
 		if err != nil {
 			c.previousSubmitErrors = append(c.previousSubmitErrors, err)
-			return nil, fmt.Errorf("%w: %v", ErrPermanent, err)
+			continue
 		}
 
 		defer response.Body.Close()
 		if response.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("%w: %v", ErrEphemeral, response.Status)
+			c.previousSubmitErrors = append(c.previousSubmitErrors, fmt.Errorf("%w: %v", ErrEphemeral, response.Status))
+			response.Body.Close()
+			continue
 		}
 
 		body, err := io.ReadAll(response.Body)
 		if err != nil {
-			return nil, fmt.Errorf("%w: %v", ErrEphemeral, err)
+			c.previousSubmitErrors = append(c.previousSubmitErrors, fmt.Errorf("%w: %v", ErrEphemeral, err))
+			response.Body.Close()
+			continue
 		}
 
 		var hash types.TaggedBase64
 		if err := json.Unmarshal(body, &hash); err != nil {
-			return nil, fmt.Errorf("%w: %v", ErrPermanent, err)
+			c.previousSubmitErrors = append(c.previousSubmitErrors, fmt.Errorf("%w: %v", ErrPermanent, err))
+			response.Body.Close()
+			continue
 		}
 		// If we receive a successful submission from the builder, we can exit as we don't need to send to other builders.
 		return &hash, nil
