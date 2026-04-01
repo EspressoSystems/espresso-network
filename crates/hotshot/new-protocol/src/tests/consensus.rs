@@ -1,134 +1,24 @@
 use std::sync::Arc;
 
 use hotshot::{traits::ValidatedState, types::BLSPubKey};
-use hotshot_example_types::{
-    block_types::TestBlockHeader,
-    node_types::{TEST_VERSIONS, TestTypes},
-    state_types::TestValidatedState,
-};
-use hotshot_types::{
-    data::{VidDisperse, ViewNumber},
-    epoch_membership::EpochMembershipCoordinator,
-    traits::signature_key::SignatureKey,
-};
+use hotshot_example_types::{node_types::TestTypes, state_types::TestValidatedState};
+use hotshot_types::{data::ViewNumber, traits::signature_key::SignatureKey};
 
 use super::common::{
     assertions::{
         count_vote1, count_vote2, has_leaf_decided, has_proposal, has_request_block_and_header,
         has_request_state, has_vote1, has_vote2, node_index_for_key,
     },
-    utils::{MockBlock, TestData, mock_membership, state_verified_input},
+    utils::{ConsensusHarness, TestData},
 };
 use crate::{
-    consensus::{Consensus, ConsensusInput, ConsensusOutput},
-    helpers::{proposal_commitment, upgrade_lock},
+    consensus::ConsensusInput,
+    helpers::proposal_commitment,
     message::Proposal,
     outbox::Outbox,
     state::StateResponse,
     tests::common::assertions::{count_leaf_decided, count_state_requests},
 };
-
-struct ConsensusHarness {
-    consensus: Consensus<TestTypes>,
-    membership_coordinator: EpochMembershipCoordinator<TestTypes>,
-    collected: Outbox<ConsensusOutput<TestTypes>>,
-}
-
-impl ConsensusHarness {
-    async fn new(node_index: u64) -> Self {
-        let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
-        let membership = mock_membership().await;
-        let consensus = Consensus::new(membership.clone(), public_key, private_key, 10);
-        Self {
-            consensus,
-            membership_coordinator: membership,
-            collected: Outbox::new(),
-        }
-    }
-
-    /// Apply a ConsensusInput directly and drain outputs, auto-responding to
-    /// actions that consensus expects feedback for.
-    async fn apply(&mut self, input: ConsensusInput<TestTypes>) {
-        let mut outbox = Outbox::new();
-        self.consensus.apply(input, &mut outbox).await;
-        self.drain_outbox(&mut outbox).await;
-    }
-
-    async fn drain_outbox(&mut self, outbox: &mut Outbox<ConsensusOutput<TestTypes>>) {
-        while let Some(output) = outbox.pop_front() {
-            self.handle_output(&output, outbox).await;
-            self.collected.push_back(output);
-        }
-    }
-
-    async fn handle_output(
-        &mut self,
-        output: &ConsensusOutput<TestTypes>,
-        outbox: &mut Outbox<ConsensusOutput<TestTypes>>,
-    ) {
-        match output {
-            ConsensusOutput::RequestState(req) => {
-                let input = state_verified_input(&req.proposal, req.view);
-                self.consensus.apply(input, outbox).await;
-            },
-            ConsensusOutput::RequestBlockAndHeader(req) => {
-                let mock_block = MockBlock::new();
-
-                let parent_leaf = req.parent_proposal.clone().into();
-                let header = TestBlockHeader::new(
-                    &parent_leaf,
-                    mock_block.payload_commitment,
-                    mock_block.builder_commitment,
-                    mock_block.metadata,
-                    TEST_VERSIONS.test.base,
-                );
-                self.consensus
-                    .apply(ConsensusInput::HeaderCreated(req.view, header), outbox)
-                    .await;
-                self.consensus
-                    .apply(
-                        ConsensusInput::BlockBuilt {
-                            view: req.view,
-                            epoch: req.epoch,
-                            payload: mock_block.block,
-                            metadata: mock_block.metadata,
-                        },
-                        outbox,
-                    )
-                    .await;
-            },
-            ConsensusOutput::RequestVidDisperse {
-                view,
-                epoch,
-                payload,
-                metadata,
-            } => {
-                let vid_disperse = VidDisperse::calculate_vid_disperse(
-                    payload,
-                    &self.membership_coordinator,
-                    *view,
-                    Some(*epoch),
-                    Some(*epoch),
-                    metadata,
-                    &upgrade_lock(),
-                )
-                .await
-                .unwrap();
-                let VidDisperse::V2(vid) = vid_disperse.disperse else {
-                    panic!("VidDisperse is not a V2");
-                };
-                self.consensus
-                    .apply(ConsensusInput::VidDisperseCreated(*view, vid), outbox)
-                    .await;
-            },
-            _ => {},
-        }
-    }
-
-    fn outputs(&self) -> &Outbox<ConsensusOutput<TestTypes>> {
-        &self.collected
-    }
-}
 
 /// Fresh consensus with no locked_cert accepts any proposal (genesis safety).
 #[tokio::test]
