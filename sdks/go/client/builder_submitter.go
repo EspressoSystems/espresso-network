@@ -45,6 +45,13 @@ func NewBuilderSubmitter(builderUrls []string) (*BuilderSubmitter, error) {
 var ErrAllBuildersFailed = errors.New("submission to all builders failed, check previousSubmitErrors")
 
 // SubmitTransaction:
+//
+// Submits a transaction to the espresso network via one of many  builder node that exposes the builder submit API.
+// on a successful submission to one of any of the BuilderSubmitter's builder URL's, the caller will receive a TaggedBase64 transaction hash
+// representing the transaction on the espresso network. If any attempts to submit to individual builders failed, they will be recorded
+// in the BuilderSubmitter's previousSubmitErrors buffer. If the caller cares about these errors, they can retrieve them via
+// BuilderSubmiter.GetPreviousSubmissionErrors()
+//
 // Parameters:
 // - ctx context.Context: context used for cancelling in flight requests when callers need to end the process,
 // - tx types.Transaction: The espresso transaction to submit with the client.
