@@ -560,8 +560,9 @@ impl<T: NodeType> Consensus<T> {
             warn!("epoch change certificate not verified");
             return Protocol::Abort;
         }
+        // Change view to the first view of the next epoch
         outbox.push_back(ConsensusOutput::ViewChanged(
-            cert2.view_number(),
+            cert2.view_number() + 1,
             cert2.data.epoch + 1,
         ));
 
@@ -628,9 +629,9 @@ impl<T: NodeType> Consensus<T> {
         let first_proposal_of_epoch =
             is_last_block(header.block_number().saturating_sub(1), self.epoch_height);
         let proposal_epoch = if first_proposal_of_epoch {
-            proposal.epoch
-        } else {
             proposal.epoch + 1
+        } else {
+            proposal.epoch
         };
         if !self.is_leader(view, proposal_epoch).await {
             warn!(epoch = %proposal_epoch, "not the leader for this view, we should not have a header");
