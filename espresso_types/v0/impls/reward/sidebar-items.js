@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["distribute_block_reward","get_leader_and_fetch_missing_rewards"],"struct":["ComputedRewards","RewardDistributor"]};
+window.SIDEBAR_ITEMS = {"fn":["distribute_block_reward","get_leader_and_fetch_missing_rewards"],"struct":["ComputedRewards","EpochRewardsCalculator","EpochRewardsResult","RewardDistributor","ValidatorLeaderCounts"]};

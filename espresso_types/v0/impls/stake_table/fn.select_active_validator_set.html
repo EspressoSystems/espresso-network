@@ -2,6 +2,6 @@
     candidates: &amp;<a class="type" href="../../type.RegisteredValidatorMap.html" title="type espresso_types::v0::RegisteredValidatorMap">RegisteredValidatorMap</a>,
 ) -&gt; <a class="enum" href="https://doc.rust-lang.org/1.94.1/core/result/enum.Result.html" title="enum core::result::Result">Result</a>&lt;<a class="type" href="../../type.AuthenticatedValidatorMap.html" title="type espresso_types::v0::AuthenticatedValidatorMap">AuthenticatedValidatorMap</a>, <a class="enum" href="../../v0_3/enum.StakeTableError.html" title="enum espresso_types::v0::v0_3::StakeTableError">StakeTableError</a>&gt;</code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Select active validators</p>
 <p>Filters out unauthenticated validator candidates, those without stake, and selects
-the top 100 staked validators.
+the top <a href="../../v0_3/constant.MAX_VALIDATORS.html" title="constant espresso_types::v0::v0_3::MAX_VALIDATORS"><code>MAX_VALIDATORS</code></a> staked validators.
 Returns a new AuthenticatedValidatorMap containing only the selected validators.</p>
 </div></details></section></div></main></body></html>

@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"constant":["VERSION"]};
+window.SIDEBAR_ITEMS = {"constant":["VERSION"],"mod":["header"],"struct":["Header"],"type":["LeaderCounts"]};
