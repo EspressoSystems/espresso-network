@@ -307,4 +307,164 @@ contract StakeTableV2CommissionTest is Test {
         proxy.deregisterValidator();
         vm.stopPrank();
     }
+
+    // TEST:st-commission-over-max-fails - tries commission = 10001 (above MAX_COMMISSION_BPS)
+    function test_CommissionUpdate_RevertsAboveMaxBps() public {
+        address validator = makeAddr("validator");
+        stakeTableUpgradeTest.registerValidatorOnStakeTableV2(validator, "123", 500, proxy);
+        vm.prank(validator);
+        vm.expectRevert(S.InvalidCommission.selector);
+        proxy.updateCommission(10001);
+    }
+
+    // TEST:st-commission-unchanged-fails - tries setting to same value
+    function test_CommissionUpdate_RevertsWhenUnchanged() public {
+        address validator = makeAddr("validator");
+        uint16 commission = 500;
+        stakeTableUpgradeTest.registerValidatorOnStakeTableV2(validator, "123", commission, proxy);
+        vm.prank(validator);
+        vm.expectRevert(StakeTableV2.CommissionUnchanged.selector);
+        proxy.updateCommission(commission);
+    }
+
+    // TEST:st-commission-decrease-free-ok - decrease immediately after increase (no rate limit)
+    function test_CommissionUpdate_DecreaseSkipsRateLimit() public {
+        address validator = makeAddr("validator");
+        uint16 initial = 500;
+        stakeTableUpgradeTest.registerValidatorOnStakeTableV2(validator, "123", initial, proxy);
+        vm.startPrank(validator);
+        // increase
+        proxy.updateCommission(initial + proxy.maxCommissionIncrease());
+        // decrease immediately (no warp) - should succeed
+        proxy.updateCommission(initial);
+        vm.stopPrank();
+    }
+
+    // TEST:st-commission-timestamp-ok - assert stored timestamp after increase
+    function test_CommissionUpdate_StoresTimestamp() public {
+        address validator = makeAddr("validator");
+        stakeTableUpgradeTest.registerValidatorOnStakeTableV2(validator, "123", 500, proxy);
+        vm.warp(1000);
+        vm.prank(validator);
+        proxy.updateCommission(600);
+        (uint16 storedCommission, uint256 storedTime) = proxy.commissionTracking(validator);
+        assertEq(storedCommission, 600);
+        assertEq(storedTime, 1000);
+    }
+
+    // TEST:st-commission-first-increase-ok - first increase always allowed (lastIncreaseTime=0)
+    function test_CommissionUpdate_FirstIncreaseAlwaysAllowed() public {
+        address validator = makeAddr("validator");
+        stakeTableUpgradeTest.registerValidatorOnStakeTableV2(validator, "123", 500, proxy);
+        // No warp - first increase should be allowed because lastIncreaseTime == 0
+        vm.prank(validator);
+        proxy.updateCommission(600);
+        (uint16 storedCommission,) = proxy.commissionTracking(validator);
+        assertEq(storedCommission, 600);
+    }
+
+    // TEST:st-commission-exact-10000-ok - commission exactly at MAX_COMMISSION_BPS is allowed
+    function test_CommissionUpdate_ExactMaxBpsAllowed() public {
+        address validator = makeAddr("validator");
+        // Register at 9600, then increase by max 500 to 10000
+        stakeTableUpgradeTest.registerValidatorOnStakeTableV2(validator, "123", 9600, proxy);
+        vm.prank(validator);
+        proxy.updateCommission(10000);
+        (uint16 storedCommission,) = proxy.commissionTracking(validator);
+        assertEq(storedCommission, 10000);
+    }
+
+    // TEST:st-set-interval-zero-fails
+    function test_SetMinCommissionUpdateInterval_RevertsWhenZero() public {
+        vm.prank(stakeTableUpgradeTest.admin());
+        vm.expectRevert(StakeTableV2.InvalidRateLimitParameters.selector);
+        proxy.setMinCommissionUpdateInterval(0);
+    }
+
+    // TEST:st-set-interval-over365-fails
+    function test_SetMinCommissionUpdateInterval_RevertsWhenAbove365Days() public {
+        vm.prank(stakeTableUpgradeTest.admin());
+        vm.expectRevert(StakeTableV2.InvalidRateLimitParameters.selector);
+        proxy.setMinCommissionUpdateInterval(365 days + 1);
+    }
+
+    // TEST:st-interval-exact-365-ok - exact boundary
+    function test_SetMinCommissionUpdateInterval_ExactBoundary() public {
+        vm.prank(stakeTableUpgradeTest.admin());
+        proxy.setMinCommissionUpdateInterval(365 days);
+        assertEq(proxy.minCommissionIncreaseInterval(), 365 days);
+    }
+
+    // TEST:st-set-maxinc-zero-fails
+    function test_SetMaxCommissionIncrease_RevertsWhenZero() public {
+        vm.prank(stakeTableUpgradeTest.admin());
+        vm.expectRevert(StakeTableV2.InvalidRateLimitParameters.selector);
+        proxy.setMaxCommissionIncrease(0);
+    }
+
+    // TEST:st-set-maxinc-over10000-fails
+    function test_SetMaxCommissionIncrease_RevertsWhenAboveMax() public {
+        vm.prank(stakeTableUpgradeTest.admin());
+        vm.expectRevert(StakeTableV2.InvalidRateLimitParameters.selector);
+        proxy.setMaxCommissionIncrease(10001);
+    }
+
+    // TEST:st-set-maxinc-ok - exact boundary 10000
+    function test_SetMaxCommissionIncrease_ExactBoundary() public {
+        vm.prank(stakeTableUpgradeTest.admin());
+        proxy.setMaxCommissionIncrease(10000);
+        assertEq(proxy.maxCommissionIncrease(), 10000);
+    }
+
+    // TEST:st-init-commission-invalid-fails - commission > 10000 in initialCommissions array
+    function test_InitializeV2_RevertsInvalidCommission() public {
+        StakeTableUpgradeV2Test upgradeTest = new StakeTableUpgradeV2Test();
+        upgradeTest.setUp();
+        S baseProxy = upgradeTest.getStakeTable();
+
+        address validator = makeAddr("validator");
+        upgradeTest.registerValidatorOnStakeTableV1(validator, "123", 500, baseProxy);
+
+        StakeTableV2.InitialCommission[] memory badCommissions =
+            new StakeTableV2.InitialCommission[](1);
+        badCommissions[0] =
+            StakeTableV2.InitialCommission({ validator: validator, commission: 10001 });
+
+        bytes memory initData = abi.encodeWithSelector(
+            StakeTableV2.initializeV2.selector, pauser, upgradeTest.admin(), 0, badCommissions
+        );
+
+        vm.startPrank(upgradeTest.admin());
+        StakeTableV2 implV2 = new StakeTableV2();
+        vm.expectRevert(S.InvalidCommission.selector);
+        baseProxy.upgradeToAndCall(address(implV2), initData);
+        vm.stopPrank();
+    }
+
+    // TEST:st-commission-ratelimit-exact-boundary - increase at exact boundary succeeds (kills >=
+    // to > mutant)
+    function test_CommissionUpdate_SucceedsAtExactInterval() public {
+        address validator = makeAddr("validator");
+        stakeTableUpgradeTest.registerValidatorOnStakeTableV2(validator, "123", 500, proxy);
+        vm.startPrank(validator);
+        uint256 t0 = block.timestamp;
+        proxy.updateCommission(600); // first increase at t0
+        // warp to exactly lastIncreaseTime + interval (not +1)
+        vm.warp(t0 + proxy.minCommissionIncreaseInterval());
+        proxy.updateCommission(700); // should succeed at exact boundary
+        (uint16 storedCommission,) = proxy.commissionTracking(validator);
+        assertEq(storedCommission, 700);
+        vm.stopPrank();
+    }
+
+    // TEST:st-commission-maxinc-fails - increase exceeds max in single step
+    function test_CommissionUpdate_RevertsWhenExceedsMaxIncrease() public {
+        address validator = makeAddr("validator");
+        stakeTableUpgradeTest.registerValidatorOnStakeTableV2(validator, "123", 500, proxy);
+        vm.startPrank(validator);
+        // maxCommissionIncrease is 500. Try to increase by 501.
+        vm.expectRevert(StakeTableV2.CommissionIncreaseExceedsMax.selector);
+        proxy.updateCommission(500 + 501);
+        vm.stopPrank();
+    }
 }

@@ -153,7 +153,7 @@ pub async fn submit_state_and_proof(
         tx
     );
     // send the tx
-    let (receipt, included_block) = sequencer_utils::contract_send(&tx)
+    let (receipt, included_block) = espresso_utils::contract_send(&tx)
         .await
         .map_err(ProverError::ContractError)?;
 
