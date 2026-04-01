@@ -2,12 +2,13 @@ use core::fmt::Debug;
 use std::{cmp::max, sync::Arc, time::Duration};
 
 use anyhow::{Context, bail, ensure};
+use async_lock::Mutex;
 use either::Either;
 use espresso_types::{
-    BlockMerkleTree, FeeAccount, FeeMerkleTree, Leaf2, ValidatedState,
+    BlockMerkleTree, EpochRewardsCalculator, FeeAccount, FeeMerkleTree, Leaf2, ValidatedState,
     traits::StateCatchup,
     v0_3::{ChainConfig, RewardAccountV1, RewardMerkleTreeV1},
-    v0_4::{Delta, RewardMerkleTreeV2},
+    v0_4::Delta,
 };
 use futures::{StreamExt, future::Future};
 use hotshot::traits::ValidatedState as HotShotState;
@@ -135,7 +136,7 @@ async fn store_state_update(
     block_number: u64,
     version: Version,
     state: &ValidatedState,
-    delta: Delta,
+    delta: &Delta,
 ) -> anyhow::Result<()> {
     let ValidatedState {
         fee_merkle_tree,
@@ -265,22 +266,32 @@ where
     .await
     .context("computing state update")?;
 
+    if version > EPOCH_VERSION && !delta.rewards_delta.is_empty() {
+        storage
+            .save_and_gc_reward_tree_v2(
+                instance,
+                block_number,
+                version,
+                &state.reward_merkle_tree_v2,
+            )
+            .await
+            .context("failed to save and gc reward merkle tree v2")?;
+
+        storage
+            .persist_reward_proofs(instance, block_number, version)
+            .await
+            .context("failed to persist reward proofs")?;
+    }
+
     tracing::debug!("storing state update");
     let mut tx = storage
         .write()
         .await
         .context("opening transaction for state update")?;
 
-    store_state_update(&mut tx, block_number, version, &state, delta).await?;
+    store_state_update(&mut tx, block_number, version, &state, &delta).await?;
 
     tx.commit().await?;
-
-    if version > EPOCH_VERSION {
-        storage
-            .save_reward_merkle_tree_v2(instance, block_number, &state.reward_merkle_tree_v2)
-            .await
-            .context("failed to store reward merkle nodes")?;
-    }
 
     let mut tx = storage
         .write()
@@ -357,7 +368,10 @@ where
     T: SequencerStateDataSource,
     for<'a> T::Transaction<'a>: SequencerStateUpdate,
 {
-    let instance = instance.await;
+    let mut instance = instance.await;
+    // Use a separate rewards calculator for the state loop so it doesn't
+    // interfere with consensus, which may be on a very different epoch.
+    instance.epoch_rewards_calculator = Arc::new(Mutex::new(EpochRewardsCalculator::new()));
     let peers = SqlStateCatchup::new(storage.clone(), Default::default());
 
     // get last saved merklized state
@@ -391,18 +405,6 @@ where
     // ready yet and another task needs a mutable lock on the state to produce the parent leaf.
     let mut parent_leaf = parent_leaf.await;
     let mut parent_state = ValidatedState::from_header(parent_leaf.header());
-
-    if parent_leaf.header().version() > EPOCH_VERSION && parent_leaf.height() > 0 {
-        let reward_merkle_tree_v2 = storage
-            .load_reward_merkle_tree_v2(parent_leaf.height())
-            .await
-            .context(
-                "Error starting the state storage update loop: failed to load RewardMerkleTreeV2 \
-                 for the previous height",
-            )?;
-
-        parent_state.reward_merkle_tree_v2 = reward_merkle_tree_v2.tree;
-    }
 
     if last_height == 0 {
         // If the last height is 0, we need to insert the genesis state, since this state is
@@ -482,7 +484,6 @@ pub(crate) trait SequencerStateUpdate:
     Transaction
     + UpdateStateData<SeqTypes, FeeMerkleTree, { FeeMerkleTree::ARITY }>
     + UpdateStateData<SeqTypes, BlockMerkleTree, { BlockMerkleTree::ARITY }>
-    + UpdateStateData<SeqTypes, RewardMerkleTreeV2, { RewardMerkleTreeV2::ARITY }>
     + UpdateStateData<SeqTypes, RewardMerkleTreeV1, { RewardMerkleTreeV1::ARITY }>
     + ChainConfigPersistence
 {
@@ -492,7 +493,6 @@ impl<T> SequencerStateUpdate for T where
     T: Transaction
         + UpdateStateData<SeqTypes, FeeMerkleTree, { FeeMerkleTree::ARITY }>
         + UpdateStateData<SeqTypes, BlockMerkleTree, { BlockMerkleTree::ARITY }>
-        + UpdateStateData<SeqTypes, RewardMerkleTreeV2, { RewardMerkleTreeV2::ARITY }>
         + UpdateStateData<SeqTypes, RewardMerkleTreeV1, { RewardMerkleTreeV1::ARITY }>
         + ChainConfigPersistence
 {
