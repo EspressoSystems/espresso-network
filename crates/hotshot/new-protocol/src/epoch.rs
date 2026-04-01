@@ -56,7 +56,10 @@ impl<T: NodeType> EpochManager<T> {
             return;
         };
 
-        let handles = self.handles.entry(epoch).or_default();
+        // Root and DRB apply in 2 epochs,
+        let target_epoch = epoch + 2;
+
+        let handles = self.handles.entry(target_epoch).or_default();
         let header = leaf.block_header().clone();
 
         handles.push(self.tasks.spawn(async move {
@@ -64,14 +67,16 @@ impl<T: NodeType> EpochManager<T> {
             T::Membership::add_epoch_root(mem, header.clone())
                 .await
                 .map_err(|e| warn!("Failed to add epoch root: {}", e))
-                .map(|_| EpochRootResult::RootAdded(epoch))
+                .map(|_| EpochRootResult::RootAdded(target_epoch))
         }));
 
         let membership_coordinator = self.membership_coordinator.clone();
         handles.push(self.tasks.spawn(async move {
-            let drb = membership_coordinator.compute_drb_result(epoch, leaf).await;
+            let drb = membership_coordinator
+                .compute_drb_result(target_epoch, leaf)
+                .await;
             drb.map_err(|e| warn!("Failed to compute DRB: {}", e))
-                .map(|drb| EpochRootResult::DrbResult(epoch, drb))
+                .map(|drb| EpochRootResult::DrbResult(target_epoch, drb))
         }));
     }
 

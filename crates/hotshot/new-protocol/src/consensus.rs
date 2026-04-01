@@ -560,21 +560,17 @@ impl<T: NodeType> Consensus<T> {
             warn!("epoch change certificate not verified");
             return Protocol::Abort;
         }
+        let next_view = cert2.view_number() + 1;
+        let next_epoch = cert2.data.epoch + 1;
         // Change view to the first view of the next epoch
-        outbox.push_back(ConsensusOutput::ViewChanged(
-            cert2.view_number() + 1,
-            cert2.data.epoch + 1,
-        ));
+        outbox.push_back(ConsensusOutput::ViewChanged(next_view, next_epoch));
 
         // Request block and header if we're the first leader of the next epoch
-        if self
-            .is_leader(cert2.view_number(), cert2.data.epoch + 1)
-            .await
-        {
+        if self.is_leader(next_view, next_epoch).await {
             outbox.push_back(ConsensusOutput::RequestBlockAndHeader(
                 BlockAndHeaderRequest {
-                    view: cert2.view_number(),
-                    epoch: cert2.data.epoch + 1,
+                    view: next_view,
+                    epoch: next_epoch,
                     parent_proposal: proposal.clone(),
                 },
             ));
@@ -649,7 +645,7 @@ impl<T: NodeType> Consensus<T> {
             None
         };
         let next_epoch_justify_qc = if first_proposal_of_epoch {
-            let Some(next_epoch_justify_qc) = self.certs2.get(&view) else {
+            let Some(next_epoch_justify_qc) = self.certs2.get(&parent_view) else {
                 debug!("no next epoch justify QC");
                 return;
             };

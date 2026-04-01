@@ -324,8 +324,8 @@ async fn test_epoch_change_leader_proposes() {
         proposal,
     };
 
-    let mut harness = ConsensusHarness::new(0).await;
-    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+    let mut harness = ConsensusHarness::new(1).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 1).0;
 
     run_views_full(&mut harness, &test_data, &node_key, 0..9).await;
 
