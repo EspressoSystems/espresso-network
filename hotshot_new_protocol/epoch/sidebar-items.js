@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["EpochRootResult"],"struct":["EpochManager"]};
+window.SIDEBAR_ITEMS = {"enum":["EpochManagerError","EpochRootResult"],"struct":["EpochManager"]};
