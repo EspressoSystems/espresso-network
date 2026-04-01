@@ -1,7 +1,13 @@
 use std::sync::Arc;
 
 use hotshot_types::{
-    epoch_membership::EpochMembershipCoordinator, traits::node_implementation::NodeType,
+    data::{
+        EpochNumber, QuorumProposal2, VidCommitment, VidDisperseShare2, ViewNumber,
+        vid_disperse::vid_total_weight,
+    },
+    epoch_membership::EpochMembershipCoordinator,
+    traits::{block_contents::BlockHeader, node_implementation::NodeType},
+    vote::HasViewNumber,
 };
 use hotshot_utils::anytrace;
 use tokio::task::JoinSet;
@@ -9,7 +15,7 @@ use tracing::error;
 
 use crate::message::{ProposalMessage, Unchecked, Validated};
 
-/// A proposal validator checks proposal signatures.
+/// A proposal validator checks proposal signature and integrity.
 pub struct ProposalValidator<T: NodeType> {
     tasks: JoinSet<Result<ProposalMessage<T, Validated>, ValidationError>>,
     stake_table_coordinator: Arc<EpochMembershipCoordinator<T>>,
@@ -29,6 +35,21 @@ impl<T: NodeType> ProposalValidator<T> {
             p.proposal
                 .validate_signature(&stake_table_coordinator)
                 .await?;
+
+            if !vid_matches_proposal(&p.vid_share, &p.proposal.data) {
+                return Err(ValidationError::VidCommitmentDoesNotMatchProposal);
+            }
+
+            if !p.vid_share.is_consistent() {
+                return Err(ValidationError::VidShareInconsistent);
+            }
+
+            let Some(epoch) = p.proposal.data.epoch else {
+                return Err(ValidationError::MissingEpochNumber(p.view_number()));
+            };
+
+            verify_vid_share(&stake_table_coordinator, &p.vid_share, epoch).await?;
+
             Ok(ProposalMessage::validated(p.proposal, p.vid_share))
         });
     }
@@ -50,6 +71,52 @@ impl<T: NodeType> ProposalValidator<T> {
     }
 }
 
+fn vid_matches_proposal<T>(share: &VidDisperseShare2<T>, proposal: &QuorumProposal2<T>) -> bool
+where
+    T: NodeType,
+{
+    if let VidCommitment::V2(vid_comm) = proposal.block_header.payload_commitment() {
+        vid_comm == share.payload_commitment
+    } else {
+        false
+    }
+}
+
+async fn verify_vid_share<T: NodeType>(
+    coord: &EpochMembershipCoordinator<T>,
+    share: &VidDisperseShare2<T>,
+    epoch: EpochNumber,
+) -> Result<(), ValidationError> {
+    match coord.membership_for_epoch(Some(epoch)).await {
+        Ok(stake_table) => {
+            let total_weight = vid_total_weight(&stake_table.stake_table().await, Some(epoch));
+            if share.verify(total_weight) {
+                Ok(())
+            } else {
+                Err(ValidationError::VidShareNotVerified)
+            }
+        },
+        Err(err) => Err(ValidationError::NoMembershipForEpoch(epoch, err)),
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
-#[error("validation failed: {0}")]
-pub struct ValidationError(#[from] anytrace::Error);
+pub enum ValidationError {
+    #[error("invalid proposal signature: {0}")]
+    Signature(#[from] anytrace::Error),
+
+    #[error("vid share does not match proposal")]
+    VidCommitmentDoesNotMatchProposal,
+
+    #[error("inconsistent vid share")]
+    VidShareInconsistent,
+
+    #[error("failed to verify vid share")]
+    VidShareNotVerified,
+
+    #[error("failed to get membership for epoch {0}: {1}")]
+    NoMembershipForEpoch(EpochNumber, anytrace::Error),
+
+    #[error("proposal in view {0} has no epoch number")]
+    MissingEpochNumber(ViewNumber),
+}

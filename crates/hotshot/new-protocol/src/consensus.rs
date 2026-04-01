@@ -10,7 +10,6 @@ use hotshot_types::{
     data::{
         EpochNumber, Leaf2, QuorumProposal2, QuorumProposalWrapper, VidCommitment, VidCommitment2,
         VidDisperse2, VidDisperseShare2, ViewChangeEvidence2, ViewNumber,
-        vid_disperse::vid_total_weight,
     },
     drb::DrbInput,
     epoch_membership::EpochMembershipCoordinator,
@@ -274,21 +273,6 @@ impl<T: NodeType> Consensus<T> {
             warn!(%view, "proposal has no epoch number");
             return Protocol::Abort;
         };
-
-        if !vid_matches_proposal(&vid_share, &proposal) {
-            debug!("vid share does not match proposal");
-            return Protocol::Abort;
-        }
-
-        if !vid_share.is_consistent() {
-            debug!("vid share is not consistent");
-            return Protocol::Abort;
-        }
-
-        if !self.verify_vid_share(&vid_share, epoch).await {
-            debug!("vid share not verified");
-            return Protocol::Abort;
-        }
 
         if !self.is_safe(&proposal) {
             debug!("proposal not safe");
@@ -768,24 +752,6 @@ impl<T: NodeType> Consensus<T> {
         self.voted_2_views.insert(view);
     }
 
-    #[instrument(level = "trace", skip(self, share))]
-    async fn verify_vid_share(&self, share: &VidDisperseShare2<T>, epoch: EpochNumber) -> bool {
-        match self
-            .stake_table_coordinator
-            .membership_for_epoch(Some(epoch))
-            .await
-        {
-            Ok(stake_table) => {
-                let total_weight = vid_total_weight(&stake_table.stake_table().await, Some(epoch));
-                share.verify(total_weight)
-            },
-            Err(err) => {
-                warn!(%epoch, %err, "failed to get membership for epoch");
-                false
-            },
-        }
-    }
-
     #[instrument(level = "trace", skip_all)]
     fn is_safe(&self, proposal: &QuorumProposal2<T>) -> bool {
         let Some(locked_cert) = self.locked_cert.as_ref() else {
@@ -861,17 +827,6 @@ impl<T: NodeType> Consensus<T> {
                 false
             },
         }
-    }
-}
-
-fn vid_matches_proposal<T>(share: &VidDisperseShare2<T>, proposal: &QuorumProposal2<T>) -> bool
-where
-    T: NodeType,
-{
-    if let VidCommitment::V2(vid_comm) = proposal.block_header.payload_commitment() {
-        vid_comm == share.payload_commitment
-    } else {
-        false
     }
 }
 
