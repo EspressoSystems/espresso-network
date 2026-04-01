@@ -4382,6 +4382,178 @@ mod test {
             );
         }
     }
+
+    // ---------------------------------------------------------------------------
+    // Tests for with_write_retry and is_serialization_error
+    // ---------------------------------------------------------------------------
+
+    /// Minimal `DatabaseError` implementation that lets tests construct a
+    /// `sqlx::Error::Database(...)` with an arbitrary SQLSTATE code without
+    /// needing a live database connection.
+    #[derive(Debug)]
+    struct MockDatabaseError {
+        code: &'static str,
+    }
+
+    impl std::fmt::Display for MockDatabaseError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "mock db error (code {})", self.code)
+        }
+    }
+
+    impl std::error::Error for MockDatabaseError {}
+
+    impl sqlx::error::DatabaseError for MockDatabaseError {
+        fn message(&self) -> &str {
+            "mock db error"
+        }
+
+        fn code(&self) -> Option<std::borrow::Cow<'_, str>> {
+            Some(std::borrow::Cow::Borrowed(self.code))
+        }
+
+        fn kind(&self) -> sqlx::error::ErrorKind {
+            sqlx::error::ErrorKind::Other
+        }
+
+        fn as_error(&self) -> &(dyn std::error::Error + Send + Sync + 'static) {
+            self
+        }
+
+        fn as_error_mut(&mut self) -> &mut (dyn std::error::Error + Send + Sync + 'static) {
+            self
+        }
+
+        fn into_error(self: Box<Self>) -> Box<dyn std::error::Error + Send + Sync + 'static> {
+            self
+        }
+    }
+
+    fn mock_serialization_error() -> anyhow::Error {
+        anyhow::Error::from(sqlx::Error::Database(Box::new(MockDatabaseError {
+            code: "40001",
+        })))
+    }
+
+    #[test]
+    fn test_is_serialization_error() {
+        // PostgreSQL error code 40001 must be recognised as a serialization failure.
+        assert!(Persistence::is_serialization_error(
+            &mock_serialization_error()
+        ));
+
+        // Any other database error code must NOT match.
+        let unique_violation =
+            anyhow::Error::from(sqlx::Error::Database(Box::new(MockDatabaseError {
+                code: "23505",
+            })));
+        assert!(!Persistence::is_serialization_error(&unique_violation));
+
+        // Non-database errors must not match.
+        assert!(!Persistence::is_serialization_error(&anyhow::anyhow!(
+            "plain error"
+        )));
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_with_write_retry_succeeds_immediately() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        let tmp = Persistence::tmp_storage().await;
+        let storage = Persistence::connect(&tmp).await;
+        let calls = Arc::new(AtomicU32::new(0));
+        let calls_clone = calls.clone();
+
+        let result = storage
+            .with_write_retry(|| {
+                let calls = calls_clone.clone();
+                async move {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                }
+            })
+            .await;
+
+        assert!(result.is_ok());
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_with_write_retry_retries_on_serialization_error() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        let tmp = Persistence::tmp_storage().await;
+        let storage = Persistence::connect(&tmp).await;
+        let calls = Arc::new(AtomicU32::new(0));
+        let calls_clone = calls.clone();
+
+        // The closure fails twice with a serialization error, then succeeds on the third attempt.
+        let result = storage
+            .with_write_retry(|| {
+                let calls = calls_clone.clone();
+                async move {
+                    let n = calls.fetch_add(1, Ordering::SeqCst);
+                    if n < 2 {
+                        Err(mock_serialization_error())
+                    } else {
+                        Ok(())
+                    }
+                }
+            })
+            .await;
+
+        assert!(result.is_ok());
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_with_write_retry_exhausts_retries() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        let tmp = Persistence::tmp_storage().await;
+        let storage = Persistence::connect(&tmp).await;
+        let calls = Arc::new(AtomicU32::new(0));
+        let calls_clone = calls.clone();
+
+        // The closure always fails; retry must give up after MAX_RETRIES (5) retries.
+        let result: anyhow::Result<()> = storage
+            .with_write_retry(|| {
+                let calls = calls_clone.clone();
+                async move {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    Err(mock_serialization_error())
+                }
+            })
+            .await;
+
+        assert!(result.is_err());
+        // 1 initial attempt + 5 retries = 6 total calls.
+        assert_eq!(calls.load(Ordering::SeqCst), 6);
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_with_write_retry_no_retry_on_other_errors() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        let tmp = Persistence::tmp_storage().await;
+        let storage = Persistence::connect(&tmp).await;
+        let calls = Arc::new(AtomicU32::new(0));
+        let calls_clone = calls.clone();
+
+        // Non-serialization errors must not be retried.
+        let result: anyhow::Result<()> = storage
+            .with_write_retry(|| {
+                let calls = calls_clone.clone();
+                async move {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    Err(anyhow::anyhow!("unrelated error"))
+                }
+            })
+            .await;
+
+        assert!(result.is_err());
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
 }
 
 #[cfg(test)]
@@ -4518,5 +4690,33 @@ mod postgres_tests {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_postgres_read_ns_table_v0_3() {
         test_postgres_read_ns_table(NodeState::mock_v3().with_epoch_height(0)).await;
+    }
+
+    /// Verify that concurrent calls to `record_action` all succeed under
+    /// PostgreSQL SERIALIZABLE isolation. The `with_write_retry` wrapper is
+    /// responsible for handling any 40001 serialization failures that arise
+    /// when many tasks race to update the same row.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_record_action_concurrent() {
+        let tmp = Persistence::tmp_storage().await;
+        let storage = Arc::new(Persistence::connect(&tmp).await);
+
+        let handles: Vec<_> = (0u64..20)
+            .map(|i| {
+                let storage = Arc::clone(&storage);
+                tokio::spawn(async move {
+                    storage
+                        .record_action(ViewNumber::new(i), None, HotShotAction::Vote)
+                        .await
+                })
+            })
+            .collect();
+
+        for handle in handles {
+            handle.await.unwrap().unwrap();
+        }
+
+        let latest = storage.load_latest_acted_view().await.unwrap();
+        assert_eq!(latest, Some(ViewNumber::new(19)));
     }
 }
