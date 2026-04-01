@@ -290,8 +290,10 @@ async fn test_leader_proposes_after_timeout_via_cpu_tasks() {
 
     harness
         .process_until(|inputs| {
-            (any(inputs, is_vid_disperse) && any(inputs, is_block_built))
-                && (any(inputs, is_header_created) || any(inputs, is_timeout))
+            (any(inputs, is_vid_disperse)
+                && any(inputs, is_block_built)
+                && any(inputs, is_header_created))
+                || any(inputs, is_timeout)
         })
         .await;
 
