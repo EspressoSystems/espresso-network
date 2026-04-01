@@ -302,7 +302,7 @@ mod tests {
 
         // Apply 3 QCs in epoch None; nodes [0,1,2] sign each.
         for view in 1u64..=3 {
-            let qc = make_qc(&stake_table, view, &[0, 1, 2], None);
+            let qc = make_qc(&stake_table, view, &[0, 1, 2], Some(EpochNumber::new(1)));
             consensus.update_vote_participation(qc).unwrap();
         }
 
