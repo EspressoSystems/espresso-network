@@ -10,6 +10,8 @@ use std::time::Duration;
 
 use crate::upgrade_config::UpgradeConstants;
 
+pub const EPOCH_PARTICIPATION_HISTORY: u64 = 100;
+
 /// timeout for fetching auction results from the solver
 pub const AUCTION_RESULTS_FETCH_TIMEOUT: Duration = Duration::from_millis(500);
 

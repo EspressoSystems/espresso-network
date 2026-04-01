@@ -447,7 +447,7 @@ where
             .skip(1)
             .zip(data_state_read_lock_guard.latest_blocks())
             .map(|(block_i, block_i_sub_1)| {
-                Some((block_i.time.0 - block_i_sub_1.time.0).whole_seconds() as u64)
+                Some((block_i.time.0 - block_i_sub_1.time.0).as_seconds_f64())
             })
             .collect(),
         block_transactions: data_state_read_lock_guard

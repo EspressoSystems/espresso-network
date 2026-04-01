@@ -258,16 +258,16 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, P: SequencerPersistence> StakeTableDa
         self.as_ref().current_proposal_participation().await
     }
     /// Get all the validator participation for the previous epoch
-    async fn previous_proposal_participation(&self) -> HashMap<PubKey, f64> {
-        self.as_ref().previous_proposal_participation().await
+    async fn proposal_participation(&self, epoch: EpochNumber) -> HashMap<PubKey, f64> {
+        self.as_ref().proposal_participation(epoch).await
     }
     /// Get all the vote participation for the current epoch
     async fn current_vote_participation(&self) -> HashMap<PubKey, f64> {
         self.as_ref().current_vote_participation().await
     }
-    /// Get all the vote participation for the previous epoch
-    async fn previous_vote_participation(&self) -> HashMap<PubKey, f64> {
-        self.as_ref().previous_vote_participation().await
+    /// Get all the vote participation for a given epoch
+    async fn vote_participation(&self, epoch: EpochNumber) -> HashMap<PubKey, f64> {
+        self.as_ref().vote_participation(epoch).await
     }
 
     async fn get_all_validators(
@@ -444,8 +444,8 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StakeTableDataSource<
             .current_proposal_participation()
     }
 
-    /// Get the previous proposal participation.
-    async fn previous_proposal_participation(&self) -> HashMap<PubKey, f64> {
+    /// Get the proposal participation for a given epoch.
+    async fn proposal_participation(&self, epoch: EpochNumber) -> HashMap<PubKey, f64> {
         self.consensus()
             .await
             .read()
@@ -453,7 +453,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StakeTableDataSource<
             .consensus()
             .read()
             .await
-            .previous_proposal_participation()
+            .proposal_participation(epoch)
     }
 
     /// Get the current vote participation.
@@ -468,8 +468,8 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StakeTableDataSource<
             .current_vote_participation()
     }
 
-    /// Get the previous vote participation.
-    async fn previous_vote_participation(&self) -> HashMap<PubKey, f64> {
+    /// Get the vote participation for a given epoch.
+    async fn vote_participation(&self, epoch: EpochNumber) -> HashMap<PubKey, f64> {
         self.consensus()
             .await
             .read()
@@ -477,7 +477,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StakeTableDataSource<
             .consensus()
             .read()
             .await
-            .previous_vote_participation()
+            .vote_participation(Some(epoch))
     }
 
     async fn get_all_validators(
@@ -830,6 +830,18 @@ where
 {
     async fn node_state(&self) -> NodeState {
         self.as_ref().node_state().await
+    }
+}
+
+impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, D: CatchupStorage + Send + Sync>
+    data_source::DatabaseMetadataSource for StorageState<N, P, D>
+where
+    N: ConnectedNetwork<PubKey>,
+    P: SequencerPersistence,
+    D: data_source::DatabaseMetadataSource + Send + Sync,
+{
+    async fn get_table_sizes(&self) -> anyhow::Result<Vec<data_source::TableSize>> {
+        self.inner().get_table_sizes().await
     }
 }
 
