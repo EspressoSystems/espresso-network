@@ -336,8 +336,7 @@ impl<T: NodeType> Consensus<T> {
             }
         }
         // if the previous block is the last block of the epoch, this proposal is the first proposal of the new epoch
-        let is_last_block = is_last_block(block_number.saturating_sub(1), self.epoch_height);
-        if is_last_block {
+        if is_last_block(block_number.saturating_sub(1), self.epoch_height) {
             let Some(cert2) = proposal.next_epoch_justify_qc.as_ref() else {
                 warn!(%epoch, "no next epoch justify QC");
                 return Protocol::Abort;
@@ -372,7 +371,11 @@ impl<T: NodeType> Consensus<T> {
             payload_size,
         }));
 
-        let epoch = if is_last_block { epoch + 1 } else { epoch };
+        let epoch = if is_last_block(block_number, self.epoch_height) {
+            epoch + 1
+        } else {
+            epoch
+        };
 
         if self.is_leader(view + 1, epoch).await {
             outbox.push_back(ConsensusOutput::RequestBlockAndHeader(
