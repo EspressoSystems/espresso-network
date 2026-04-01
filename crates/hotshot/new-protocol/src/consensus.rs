@@ -534,7 +534,7 @@ impl<T: NodeType> Consensus<T> {
             return Protocol::Abort;
         }
         // check if it's the last block for the correct epoch
-        if cert2.data.block_number % self.epoch_height != 0 {
+        if !is_last_block(cert2.data.block_number, self.epoch_height) {
             warn!("epoch change certificate2 is not the last block of the epoch");
             return Protocol::Abort;
         }
@@ -640,7 +640,7 @@ impl<T: NodeType> Consensus<T> {
 
         // TODO: Handle epoch change and properly set next epoch qc drb result and state cert
         let next_drb_result = if is_epoch_transition(header.block_number(), self.epoch_height) {
-            let Some(drb) = self.drb_results.get(&proposal.epoch) else {
+            let Some(drb) = self.drb_results.get(&EpochNumber::new(*proposal.epoch + 1)) else {
                 debug!(%proposal.epoch, "no DRB result for epoch");
                 return;
             };
@@ -660,7 +660,7 @@ impl<T: NodeType> Consensus<T> {
         let proposal = Proposal::<T> {
             block_header: header.clone(),
             view_number: view,
-            epoch: proposal.epoch,
+            epoch: proposal_epoch,
             justify_qc: parent_cert.clone(),
             next_epoch_justify_qc,
             upgrade_certificate: None,
