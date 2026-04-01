@@ -1212,12 +1212,8 @@ impl Fetcher {
 
         let token = EspToken::new(token_address, provider.clone());
 
-        // Try to fetch the `Initialized` event directly. This event is emitted only once,
-        // during the token contract initialization. The initialization transaction also transfers initial supply minted
-        // from the zero address. Since the result set is small (a single event),
-        // most RPC providers like Infura and Alchemy allow querying across the full block range
-        // If this fails because provider does not allow the query due to rate limiting (or some other error), we fall
-        // back to scanning over a fixed block range.
+        // Fetch the `Initialized` event (emitted once during token contract init).
+        // Falls back to scanning over a fixed block range if the full-range query fails.
         let init_logs = token
             .Initialized_filter()
             .from_block(0u64)
