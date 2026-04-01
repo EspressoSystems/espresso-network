@@ -356,23 +356,39 @@
 <a href=#356 id=356 data-nosnippet>356</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;LightClientStateUpdateCertificateV2&lt;Types&gt;, StateCertFetchError&gt;;
 <a href=#357 id=357 data-nosnippet>357</a>}
 <a href=#358 id=358 data-nosnippet>358</a>
-<a href=#359 id=359 data-nosnippet>359</a><span class="attr">#[cfg(any(test, feature = <span class="string">"testing"</span>))]
-<a href=#360 id=360 data-nosnippet>360</a></span><span class="kw">pub mod </span>testing {
-<a href=#361 id=361 data-nosnippet>361</a>    <span class="kw">use </span>super::{<span class="kw">super</span>::Options, <span class="kw-2">*</span>};
-<a href=#362 id=362 data-nosnippet>362</a>
-<a href=#363 id=363 data-nosnippet>363</a>    <span class="attr">#[async_trait]
-<a href=#364 id=364 data-nosnippet>364</a>    </span><span class="kw">pub trait </span>TestableSequencerDataSource: SequencerDataSource {
-<a href=#365 id=365 data-nosnippet>365</a>        <span class="kw">type </span>Storage: Sync;
+<a href=#359 id=359 data-nosnippet>359</a><span class="doccomment">/// Database table size information.
+<a href=#360 id=360 data-nosnippet>360</a></span><span class="attr">#[derive(Serialize, Deserialize, Clone, Debug)]
+<a href=#361 id=361 data-nosnippet>361</a></span><span class="kw">pub struct </span>TableSize {
+<a href=#362 id=362 data-nosnippet>362</a>    <span class="kw">pub </span>table_name: String,
+<a href=#363 id=363 data-nosnippet>363</a>    <span class="kw">pub </span>row_count: i64,
+<a href=#364 id=364 data-nosnippet>364</a>    <span class="kw">pub </span>total_size_bytes: <span class="prelude-ty">Option</span>&lt;i64&gt;,
+<a href=#365 id=365 data-nosnippet>365</a>}
 <a href=#366 id=366 data-nosnippet>366</a>
-<a href=#367 id=367 data-nosnippet>367</a>        <span class="kw">async fn </span>create_storage() -&gt; <span class="self">Self</span>::Storage;
-<a href=#368 id=368 data-nosnippet>368</a>        <span class="kw">fn </span>persistence_options(storage: <span class="kw-2">&amp;</span><span class="self">Self</span>::Storage) -&gt; <span class="self">Self</span>::Options;
-<a href=#369 id=369 data-nosnippet>369</a>        <span class="kw">fn </span>leaf_only_ds_options(
-<a href=#370 id=370 data-nosnippet>370</a>            _storage: <span class="kw-2">&amp;</span><span class="self">Self</span>::Storage,
-<a href=#371 id=371 data-nosnippet>371</a>            _opt: Options,
-<a href=#372 id=372 data-nosnippet>372</a>        ) -&gt; anyhow::Result&lt;Options&gt; {
-<a href=#373 id=373 data-nosnippet>373</a>            <span class="macro">anyhow::bail!</span>(<span class="string">"not supported"</span>)
-<a href=#374 id=374 data-nosnippet>374</a>        }
-<a href=#375 id=375 data-nosnippet>375</a>        <span class="kw">fn </span>options(storage: <span class="kw-2">&amp;</span><span class="self">Self</span>::Storage, opt: Options) -&gt; Options;
-<a href=#376 id=376 data-nosnippet>376</a>    }
-<a href=#377 id=377 data-nosnippet>377</a>}
+<a href=#367 id=367 data-nosnippet>367</a><span class="doccomment">/// Data source for database metadata and statistics.
+<a href=#368 id=368 data-nosnippet>368</a>///
+<a href=#369 id=369 data-nosnippet>369</a>/// This trait is only implemented by SQL-based storage backends (PostgreSQL and SQLite).
+<a href=#370 id=370 data-nosnippet>370</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">trait </span>DatabaseMetadataSource {
+<a href=#371 id=371 data-nosnippet>371</a>    <span class="doccomment">/// Get the sizes of all tables in the database.
+<a href=#372 id=372 data-nosnippet>372</a>    </span><span class="kw">fn </span>get_table_sizes(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw">impl </span>Send + Future&lt;Output = anyhow::Result&lt;Vec&lt;TableSize&gt;&gt;&gt;;
+<a href=#373 id=373 data-nosnippet>373</a>}
+<a href=#374 id=374 data-nosnippet>374</a>
+<a href=#375 id=375 data-nosnippet>375</a><span class="attr">#[cfg(any(test, feature = <span class="string">"testing"</span>))]
+<a href=#376 id=376 data-nosnippet>376</a></span><span class="kw">pub mod </span>testing {
+<a href=#377 id=377 data-nosnippet>377</a>    <span class="kw">use </span>super::{<span class="kw">super</span>::Options, <span class="kw-2">*</span>};
+<a href=#378 id=378 data-nosnippet>378</a>
+<a href=#379 id=379 data-nosnippet>379</a>    <span class="attr">#[async_trait]
+<a href=#380 id=380 data-nosnippet>380</a>    </span><span class="kw">pub trait </span>TestableSequencerDataSource: SequencerDataSource {
+<a href=#381 id=381 data-nosnippet>381</a>        <span class="kw">type </span>Storage: Sync;
+<a href=#382 id=382 data-nosnippet>382</a>
+<a href=#383 id=383 data-nosnippet>383</a>        <span class="kw">async fn </span>create_storage() -&gt; <span class="self">Self</span>::Storage;
+<a href=#384 id=384 data-nosnippet>384</a>        <span class="kw">fn </span>persistence_options(storage: <span class="kw-2">&amp;</span><span class="self">Self</span>::Storage) -&gt; <span class="self">Self</span>::Options;
+<a href=#385 id=385 data-nosnippet>385</a>        <span class="kw">fn </span>leaf_only_ds_options(
+<a href=#386 id=386 data-nosnippet>386</a>            _storage: <span class="kw-2">&amp;</span><span class="self">Self</span>::Storage,
+<a href=#387 id=387 data-nosnippet>387</a>            _opt: Options,
+<a href=#388 id=388 data-nosnippet>388</a>        ) -&gt; anyhow::Result&lt;Options&gt; {
+<a href=#389 id=389 data-nosnippet>389</a>            <span class="macro">anyhow::bail!</span>(<span class="string">"not supported"</span>)
+<a href=#390 id=390 data-nosnippet>390</a>        }
+<a href=#391 id=391 data-nosnippet>391</a>        <span class="kw">fn </span>options(storage: <span class="kw-2">&amp;</span><span class="self">Self</span>::Storage, opt: Options) -&gt; Options;
+<a href=#392 id=392 data-nosnippet>392</a>    }
+<a href=#393 id=393 data-nosnippet>393</a>}
 </code></pre></div></section></main></body></html>
