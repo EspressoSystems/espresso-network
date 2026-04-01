@@ -315,6 +315,7 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
             .fetch_leaf(height, stake_table, success_threshold)
             .await
     }
+
     async fn try_fetch_accounts(
         &self,
         retry: usize,
@@ -909,7 +910,6 @@ pub trait SequencerPersistence:
             .await
             .context("failed to migrate reward merkle tree v2")?;
         self.migrate_validator_authenticated().await?;
-
         tracing::warn!("consensus storage has been migrated to new types");
 
         Ok(())
