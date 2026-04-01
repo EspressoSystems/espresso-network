@@ -90,6 +90,25 @@ where
     items.into_iter().filter(|it| pred(it)).count()
 }
 
+pub(crate) fn has_epoch_change<'a, I>(outputs: I) -> bool
+where
+    I: IntoIterator<Item = &'a ConsensusOutput<TestTypes>>,
+{
+    outputs
+        .into_iter()
+        .any(|e| matches!(e, ConsensusOutput::SendEpochChange(_)))
+}
+
+pub(crate) fn count_epoch_change<'a, I>(outputs: I) -> usize
+where
+    I: IntoIterator<Item = &'a ConsensusOutput<TestTypes>>,
+{
+    outputs
+        .into_iter()
+        .filter(|e| matches!(e, ConsensusOutput::SendEpochChange(_)))
+        .count()
+}
+
 /// Find the node index (0..10) for a given public key.
 pub(crate) fn node_index_for_key(key: &BLSPubKey) -> u64 {
     for i in 0..10 {
