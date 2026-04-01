@@ -1,6 +1,6 @@
-base_version = "0.5"
+base_version = "0.4"
 upgrade_version = "0.5"
-genesis_version = "0.5"
+genesis_version = "0.4"
 epoch_height = 3000
 drb_difficulty = 5000000000
 drb_upgrade_difficulty = 5000000000
@@ -30,3 +30,19 @@ stake_table_contract = "0x12975173b87f7595ee45dffb2ab812ece596bf84"
 
 [l1_finalized]
 number = 0
+
+[[upgrade]]
+version = "0.5"
+start_voting_view = 0
+stop_voting_view = 999999999
+start_proposing_view = 6600
+stop_proposing_view = 7600
+
+[upgrade.epoch_reward]
+[upgrade.epoch_reward.chain_config]
+chain_id = 999999999
+max_block_size = "10mb"
+base_fee = "1 wei"
+fee_recipient = "0x0000000000000000000000000000000000000000"
+fee_contract = "0xa15bb66138824a1c7167f5e85b957d04dd34e468"
+stake_table_contract = "0x12975173b87f7595ee45dffb2ab812ece596bf84"
