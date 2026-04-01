@@ -6178,7 +6178,6 @@ dependencies = [
  "async-trait",
  "bon",
  "committable",
- "derive_more 2.1.1",
  "futures",
  "hotshot",
  "hotshot-example-types",
