@@ -2956,10 +2956,7 @@ mod test {
         testing::{EpochChangeQuorum, LEGACY_VERSION},
     };
     use alloy::{
-        eips::BlockId,
-        network::EthereumWallet,
-        primitives::{Address, U256},
-        providers::ProviderBuilder,
+        eips::BlockId, network::EthereumWallet, primitives::U256, providers::ProviderBuilder,
     };
     use async_lock::Mutex;
     use committable::{Commitment, Committable};
@@ -5829,19 +5826,23 @@ mod test {
             .unwrap();
 
         let init_block = init_log.block_number.context("missing block number")?;
+        let init_tx_hash = init_log
+            .transaction_hash
+            .context("missing transaction hash")?;
 
         let transfer_logs = token
             .Transfer_filter()
-            .topic1(Address::ZERO)
             .from_block(init_block)
             .to_block(init_block)
             .query()
             .await
             .unwrap();
 
-        let (mint_transfer, _) = transfer_logs.first().context("no mint transfer event")?;
+        let (mint_transfer, _) = transfer_logs
+            .iter()
+            .find(|(_, log)| log.transaction_hash == Some(init_tx_hash))
+            .context("no transfer event in init tx")?;
 
-        assert_eq!(mint_transfer.from, Address::ZERO);
         assert!(mint_transfer.value > U256::ZERO);
 
         Ok(())

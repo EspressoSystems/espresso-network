@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use alloy::{
-    primitives::{Address, U256},
+    primitives::{Address, Log, U256},
     transports::{RpcError, TransportErrorKind},
 };
 use async_lock::{Mutex, RwLock};
@@ -359,6 +359,9 @@ pub enum FetchRewardError {
 
     #[error("Token Initialized event logs are empty")]
     MissingInitializedEvent,
+
+    #[error("Transaction hash not found in Initialized event log: {init_log:?}")]
+    MissingTransactionHash { init_log: Log },
 
     #[error("Block number not found in Initialized event log")]
     MissingBlockNumber,

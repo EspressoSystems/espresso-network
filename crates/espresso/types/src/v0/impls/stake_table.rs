@@ -1255,12 +1255,18 @@ impl Fetcher {
             .block_number
             .ok_or(FetchRewardError::MissingBlockNumber)?;
 
-        // Query mint Transfer events in the initialization block instead of fetching
+        let init_tx_hash =
+            init_log
+                .transaction_hash
+                .ok_or_else(|| FetchRewardError::MissingTransactionHash {
+                    init_log: init_log.clone().into(),
+                })?;
+
+        // Query Transfer events in the initialization block instead of fetching
         // the transaction receipt, which pruned L1 nodes may not have.
-        // Filter by from=address(0) (topic1) to get only mints.
+        // Match by transaction hash to scope to the exact initialization tx.
         let transfer_logs = token
             .Transfer_filter()
-            .topic1(Address::ZERO)
             .from_block(init_block)
             .to_block(init_block)
             .query()
@@ -1268,7 +1274,8 @@ impl Fetcher {
             .map_err(FetchRewardError::TransferEventQuery)?;
 
         let (mint_transfer, _) = transfer_logs
-            .first()
+            .iter()
+            .find(|(_, log)| log.transaction_hash == Some(init_tx_hash))
             .ok_or(FetchRewardError::MissingTransferEvent)?;
 
         tracing::debug!("mint transfer event ={mint_transfer:?}");
