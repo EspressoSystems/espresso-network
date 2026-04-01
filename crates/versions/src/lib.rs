@@ -13,13 +13,13 @@ pub const VERSION_0_1: Version = version(0, 1);
 pub const FEE_VERSION: Version = version(0, 2);
 pub const EPOCH_VERSION: Version = version(0, 3);
 pub const DRB_AND_HEADER_UPGRADE_VERSION: Version = version(0, 4);
+pub const EPOCH_REWARD_VERSION: Version = version(0, 5);
 pub const DRB_FIX_VERSION: Version = version(0, 5);
-pub const DA_UPGRADE_VERSION: Version = version(0, 5);
-pub const VID2_UPGRADE_VERSION: Version = version(0, 6);
-pub const CLIQUENET_VERSION: Version = version(0, 7);
-
+pub const DA_UPGRADE_VERSION: Version = version(0, 6);
+pub const VID2_UPGRADE_VERSION: Version = version(0, 7);
+pub const CLIQUENET_VERSION: Version = version(0, 8);
 pub const MIN_SUPPORTED_VERSION: Version = VERSION_0_1;
-pub const MAX_SUPPORTED_VERSION: Version = DA_UPGRADE_VERSION;
+pub const MAX_SUPPORTED_VERSION: Version = CLIQUENET_VERSION;
 
 // Known upgrade hashes:
 
@@ -279,6 +279,7 @@ mod tests {
             check_encoding::<_, StaticVersion<0, 4>>(&s);
             check_encoding::<_, StaticVersion<0, 5>>(&s);
             check_encoding::<_, StaticVersion<0, 6>>(&s);
+            check_encoding::<_, StaticVersion<0, 7>>(&s);
         }
 
         QuickCheck::new()
