@@ -85,6 +85,7 @@ impl<T: NodeType> EpochManager<T> {
         let membership_coordinator = self.membership_coordinator.clone();
         let handles = self.handles.entry(epoch).or_default();
         handles.push(self.tasks.spawn(async move {
+            // Trigger catchup for the epoch or get the full stake table
             match membership_coordinator
                 .stake_table_for_epoch(Some(epoch))
                 .await
@@ -95,6 +96,7 @@ impl<T: NodeType> EpochManager<T> {
                     .map(|drb| EpochRootResult::DrbResult(epoch, drb))
                     .map_err(|e| warn!("Failed to get DRB result: {}", e)),
                 Err(_) => {
+                    // Wait for catchup to complete and get the full stake table
                     let stake_table = membership_coordinator
                         .wait_for_catchup(epoch)
                         .await
