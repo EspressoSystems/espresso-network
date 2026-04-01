@@ -2958,8 +2958,8 @@ mod test {
     use alloy::{
         eips::BlockId,
         network::EthereumWallet,
-        primitives::U256,
-        providers::{Provider, ProviderBuilder},
+        primitives::{Address, U256},
+        providers::ProviderBuilder,
     };
     use async_lock::Mutex;
     use committable::{Commitment, Committable};
@@ -5824,22 +5824,24 @@ mod test {
         let token = EspToken::new(token_address, provider.clone());
 
         let init_log = fetcher
-            .scan_token_contract_initialized_event_log(stake_table_init_block, token)
+            .scan_token_contract_initialized_event_log(stake_table_init_block, token.clone())
             .await
             .unwrap();
 
-        let init_tx = provider
-            .get_transaction_receipt(
-                init_log
-                    .transaction_hash
-                    .context(format!("transaction hash not found. init_log={init_log:?}"))?,
-            )
+        let init_block = init_log.block_number.context("missing block number")?;
+
+        let transfer_logs = token
+            .Transfer_filter()
+            .topic1(Address::ZERO)
+            .from_block(init_block)
+            .to_block(init_block)
+            .query()
             .await
-            .unwrap()
             .unwrap();
 
-        let mint_transfer = init_tx.decoded_log::<EspToken::Transfer>().unwrap();
+        let (mint_transfer, _) = transfer_logs.first().context("no mint transfer event")?;
 
+        assert_eq!(mint_transfer.from, Address::ZERO);
         assert!(mint_transfer.value > U256::ZERO);
 
         Ok(())

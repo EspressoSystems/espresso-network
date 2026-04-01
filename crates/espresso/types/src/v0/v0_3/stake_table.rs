@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use alloy::{
-    primitives::{Address, Log, U256},
+    primitives::{Address, U256},
     transports::{RpcError, TransportErrorKind},
 };
 use async_lock::{Mutex, RwLock};
@@ -360,20 +360,14 @@ pub enum FetchRewardError {
     #[error("Token Initialized event logs are empty")]
     MissingInitializedEvent,
 
-    #[error("Transaction hash not found in Initialized event log: {init_log:?}")]
-    MissingTransactionHash { init_log: Log },
+    #[error("Block number not found in Initialized event log")]
+    MissingBlockNumber,
 
-    #[error("Missing transaction receipt for Initialized event. tx_hash={tx_hash}")]
-    MissingTransactionReceipt { tx_hash: String },
+    #[error("Transfer event query failed: {0}")]
+    TransferEventQuery(#[source] alloy::contract::Error),
 
-    #[error("Failed to get transaction for Initialized event: {0}")]
-    MissingTransaction(#[source] alloy::contract::Error),
-
-    #[error("Failed to decode Transfer log. tx_hash={tx_hash}")]
-    DecodeTransferLog { tx_hash: String },
-
-    #[error("First transfer should be a mint from the zero address")]
-    InvalidMintFromAddress,
+    #[error("No Transfer event found in the Initialized event block")]
+    MissingTransferEvent,
 
     #[error("Division by zero {0}")]
     DivisionByZero(&'static str),
