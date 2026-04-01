@@ -7,8 +7,7 @@ use committable::{Commitment, Committable};
 use hotshot::traits::BlockPayload;
 use hotshot_types::{
     data::{
-        EpochNumber, QuorumProposal2, VidCommitment, ViewNumber, vid_commitment,
-        vid_disperse::vid_total_weight,
+        EpochNumber, VidCommitment, ViewNumber, vid_commitment, vid_disperse::vid_total_weight,
     },
     epoch_membership::EpochMembershipCoordinator,
     traits::{
@@ -25,7 +24,7 @@ use tracing::{error, warn};
 use crate::{
     consensus::ConsensusInput,
     helpers::upgrade_lock,
-    message::{DedupManifest, TransactionMessage},
+    message::{DedupManifest, Proposal, TransactionMessage},
     state::HeaderRequest,
 };
 
@@ -43,7 +42,7 @@ pub enum BlockError {
 pub struct BlockAndHeaderRequest<T: NodeType> {
     pub view: ViewNumber,
     pub epoch: EpochNumber,
-    pub parent_proposal: QuorumProposal2<T>,
+    pub parent_proposal: Proposal<T>,
 }
 
 pub struct BlockBuilderOutput<T: NodeType> {
@@ -51,7 +50,7 @@ pub struct BlockBuilderOutput<T: NodeType> {
     pub epoch: EpochNumber,
     pub payload: T::BlockPayload,
     pub metadata: <T::BlockPayload as BlockPayload<T>>::Metadata,
-    pub parent_proposal: QuorumProposal2<T>,
+    pub parent_proposal: Proposal<T>,
     pub builder_commitment: BuilderCommitment,
     pub builder_fee: BuilderFee<T>,
     pub payload_commitment: VidCommitment,

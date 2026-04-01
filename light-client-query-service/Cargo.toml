@@ -17,12 +17,12 @@ genesis = ["hotshot-types", "surf-disco"]
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true }
+espresso-node = { workspace = true, default-features = false }
 espresso-types = { workspace = true }
 hotshot-query-service = { workspace = true }
 light-client = { workspace = true }
 log-panics = { workspace = true }
 semver = { workspace = true }
-espresso-node = { workspace = true, default-features = false }
 tide-disco = { workspace = true }
 tokio = { workspace = true }
 toml = { workspace = true }
