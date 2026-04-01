@@ -373,11 +373,3 @@ contracts-test-network *args='-vv':
     fi
     forge test --match-test test_Network_ --jobs 1 {{args}}
 
-claude-sandbox:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [ "$(uname -s)" = "Darwin" ]; then
-        nix run github:neko-kai/claude-code-sandbox -- claude
-    else
-        nix run github:numtide/llm-agents.nix#claudebox
-    fi
