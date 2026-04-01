@@ -2,7 +2,10 @@ use std::sync::Arc;
 
 use hotshot::{traits::ValidatedState, types::BLSPubKey};
 use hotshot_example_types::{node_types::TestTypes, state_types::TestValidatedState};
-use hotshot_types::{data::ViewNumber, traits::signature_key::SignatureKey};
+use hotshot_types::{
+    data::{EpochNumber, ViewNumber},
+    traits::signature_key::SignatureKey,
+};
 
 use super::common::utils::TestData;
 use crate::{
@@ -46,7 +49,10 @@ async fn test_timeout_filters_stale_events() {
 
     // Set timeout at view 3
     harness
-        .apply(ConsensusInput::Timeout(ViewNumber::new(3)))
+        .apply(ConsensusInput::Timeout(
+            ViewNumber::new(3),
+            EpochNumber::genesis(),
+        ))
         .await;
 
     // Send stale proposal (view 2, which is <= timeout_view 3)
@@ -421,7 +427,10 @@ async fn test_timeout_prevents_voting() {
 
     // Timeout view 2 — now cert1 for view 2 should be dropped
     harness
-        .apply(ConsensusInput::Timeout(test_data.views[1].view_number))
+        .apply(ConsensusInput::Timeout(
+            test_data.views[1].view_number,
+            test_data.views[1].epoch_number,
+        ))
         .await;
 
     // Send cert1 for view 2 — should be stale

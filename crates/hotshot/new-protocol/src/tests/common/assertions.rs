@@ -57,7 +57,7 @@ pub(crate) fn is_state_validated(input: &ConsensusInput<TestTypes>) -> bool {
 }
 
 pub(crate) fn is_timeout(input: &ConsensusInput<TestTypes>) -> bool {
-    matches!(input, ConsensusInput::Timeout(_))
+    matches!(input, ConsensusInput::Timeout(..))
 }
 
 pub(crate) fn is_timeout_cert(input: &ConsensusInput<TestTypes>) -> bool {

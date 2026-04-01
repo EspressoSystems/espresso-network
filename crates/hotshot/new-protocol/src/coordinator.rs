@@ -98,7 +98,11 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                     }
                 },
                 () = &mut self.timer => {
-                    let input = ConsensusInput::Timeout(self.timer.view());
+                    let input = ConsensusInput::Timeout(self.timer.view(), self.timer.epoch());
+                    // Timer is only reset so we can resend the timeout vote
+                    // This isn't strictly necessary for the protocol, but it's a good idea to
+                    // resend the timeout vote to avoid a situation where the network is stuck
+                    // view because we fail to form a timeout certificate.
                     self.timer.reset();
                     return Ok(input)
                 }
@@ -389,7 +393,7 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                     .map_err(|e| CoordinatorError::from(e).context("broadcast epoch change"))?
             },
             ConsensusOutput::ViewChanged(view, epoch) => {
-                self.timer.reset_with(view);
+                self.timer.reset_with_epoch(view, epoch);
                 let txns = self.block_builder.on_view_changed(view, epoch);
                 if !txns.is_empty() {
                     let next_view = view + 1;

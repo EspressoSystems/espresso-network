@@ -15,7 +15,9 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     message::Proposal as SignedProposal,
     simple_certificate::{TimeoutCertificate2, ViewSyncFinalizeCertificate2},
-    simple_vote::{CheckpointData, HasEpoch, QuorumData2, SimpleVote, TimeoutVote2, Vote2Data},
+    simple_vote::{
+        CheckpointData, HasEpoch, QuorumData2, SimpleVote, TimeoutData2, TimeoutVote2, Vote2Data,
+    },
     stake_table::StakeTableEntries,
     traits::{
         block_contents::BlockHeader, node_implementation::NodeType, signature_key::SignatureKey,
@@ -53,7 +55,7 @@ pub enum ConsensusInput<T: NodeType> {
     Proposal(ProposalMessage<T, Validated>),
     StateValidated(StateResponse<T>),
     StateValidationFailed(StateResponse<T>),
-    Timeout(ViewNumber),
+    Timeout(ViewNumber, EpochNumber),
     TimeoutCertificate(TimeoutCertificate2<T>),
     VidDisperseCreated(ViewNumber, VidDisperse2<T>),
     ViewSyncCertificate(ViewSyncFinalizeCertificate2<T>),
@@ -209,8 +211,8 @@ impl<T: NodeType> Consensus<T> {
                 self.vid_shares.remove(&state_response.view);
                 return;
             },
-            ConsensusInput::Timeout(view) => {
-                self.handle_timeout(view);
+            ConsensusInput::Timeout(view, epoch) => {
+                self.handle_timeout(view, epoch, outbox);
                 // we are done after timeout, don't try to vote, decide, or propose
                 return;
             },
@@ -500,8 +502,27 @@ impl<T: NodeType> Consensus<T> {
     }
 
     #[instrument(level = "debug", skip_all)]
-    fn handle_timeout(&mut self, view: ViewNumber) {
+    fn handle_timeout(
+        &mut self,
+        view: ViewNumber,
+        epoch: EpochNumber,
+        outbox: &mut Outbox<ConsensusOutput<T>>,
+    ) {
         self.timeout_view = view;
+        let Ok(timeout_vote) = TimeoutVote2::create_signed_vote(
+            TimeoutData2 {
+                view,
+                epoch: Some(epoch),
+            },
+            view,
+            &self.public_key,
+            &self.private_key,
+            &upgrade_lock::<T>(),
+        ) else {
+            warn!("failed to create signed timeout vote");
+            return;
+        };
+        outbox.push_back(ConsensusOutput::SendTimeoutVote(timeout_vote));
         // TODO: clear_view(view);
     }
 
@@ -1068,7 +1089,7 @@ impl<T: NodeType> ConsensusInput<T> {
             ConsensusInput::Proposal(prop) => prop.view_number(),
             ConsensusInput::StateValidated(response) => response.view,
             ConsensusInput::StateValidationFailed(request) => request.view,
-            ConsensusInput::Timeout(view) => *view,
+            ConsensusInput::Timeout(view, _) => *view,
             ConsensusInput::TimeoutCertificate(cert) => {
                 // Add one because we are moving to the next view so all event
                 // processing is for the next view

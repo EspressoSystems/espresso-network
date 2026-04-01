@@ -6,7 +6,7 @@ use hotshot_example_types::{
     state_types::{TestInstanceState, TestValidatedState},
 };
 use hotshot_types::{
-    data::{Leaf2, ViewNumber},
+    data::{EpochNumber, Leaf2, ViewNumber},
     traits::signature_key::SignatureKey,
 };
 
@@ -86,7 +86,11 @@ impl TestHarness {
             .proposal_validator(proposal_validator)
             .membership_coordinator(membership)
             .outbox(Outbox::new())
-            .timer(Timer::new(timer_duration, ViewNumber::genesis()))
+            .timer(Timer::new(
+                timer_duration,
+                ViewNumber::genesis(),
+                EpochNumber::genesis(),
+            ))
             .public_key(public_key)
             .build();
         Self {
