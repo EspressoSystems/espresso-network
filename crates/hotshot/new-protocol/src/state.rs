@@ -115,7 +115,7 @@ impl<T: NodeType> StateManager<T> {
     pub fn get_state(&self, view: &ViewNumber) -> Option<Arc<T::ValidatedState>> {
         self.validated_states
             .get(view)
-            .map(|(state, _, _)| state.clone())
+            .map(|(state, ..)| state.clone())
     }
 
     /// Get the validated state and delta for a given view
@@ -222,7 +222,8 @@ impl<T: NodeType> StateManager<T> {
         }
 
         let parent_view = request.parent_proposal.view_number();
-        let Some((parent_state, _parent_delta, parent_leaf)) = self.validated_states.get(&parent_view).cloned()
+        let Some((parent_state, _parent_delta, parent_leaf)) =
+            self.validated_states.get(&parent_view).cloned()
         else {
             error!(view = %request.view, "parent state not found for header request");
             return;
