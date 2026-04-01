@@ -120,6 +120,14 @@ async fn run_upgrade_test(genesis_path: &str, upgrade: Upgrade) -> Result<()> {
         txn_count_increment: 2 * expected_block_height,
         global_timeout: Duration::from_secs(expected_block_height as u64 * 3),
         first_reward_block,
+        // For V5 (EPOCH_REWARD_VERSION), require a claim whose merkle proof was built against
+        // an LC state at or after first_reward_block, proving the new per-epoch reward tree
+        // is in use.
+        claim_after_lc_block: if upgrade.target >= EPOCH_REWARD_VERSION {
+            first_reward_block
+        } else {
+            None
+        },
         ..Default::default()
     };
 
