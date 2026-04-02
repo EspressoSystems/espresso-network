@@ -73,6 +73,7 @@ pub enum ConsensusOutput<T: NodeType> {
     SendVote2(Vote2<T>),
     SendCertificate1(Certificate1<T>),
     SendCertificate2(Certificate2<T>),
+    SendTimeoutCertificate(TimeoutCertificate2<T>, ViewNumber, EpochNumber),
     SendEpochChange(EpochChangeMessage<T>),
     RequestVidDisperse {
         view: ViewNumber,
@@ -458,6 +459,9 @@ impl<T: NodeType> Consensus<T> {
         };
         self.timeout_certs.insert(view, certificate.clone());
         outbox.push_back(ConsensusOutput::ViewChanged(view, epoch));
+        outbox.push_back(ConsensusOutput::SendTimeoutCertificate(
+            certificate, view, epoch,
+        ));
         if !self.is_leader(view, epoch).await {
             debug!(%epoch, "not leader");
             return Protocol::Abort;

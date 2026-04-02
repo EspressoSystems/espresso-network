@@ -253,6 +253,9 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                     self.timeout_collector.accumulate_vote(timeout_vote).await;
                     None
                 },
+                ConsensusMessage::TimeoutCertificate(tc) => {
+                    Some(ConsensusInput::TimeoutCertificate(tc))
+                },
                 ConsensusMessage::EpochChange(epoch_change) => {
                     Some(ConsensusInput::EpochChange(epoch_change))
                 },
@@ -355,6 +358,23 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                     .broadcast(message)
                     .await
                     .map_err(|e| CoordinatorError::from(e).context("broadcast timeout vote"))?
+            },
+            ConsensusOutput::SendTimeoutCertificate(tc, view, epoch) => {
+                if let Some(leader) = self.leader(view, epoch).await {
+                    let message = Message {
+                        sender: self.public_key.clone(),
+                        message_type: MessageType::Consensus(
+                            ConsensusMessage::TimeoutCertificate(tc),
+                        ),
+                    };
+                    self.network
+                        .unicast(leader, message)
+                        .await
+                        .map_err(|e| {
+                            CoordinatorError::from(e)
+                                .context("timeout certificate")
+                        })?;
+                }
             },
             ConsensusOutput::SendVote1(vote1) => {
                 let message = Message {

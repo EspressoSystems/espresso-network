@@ -10,7 +10,7 @@ use hotshot_types::{
     message::Proposal as SignedProposal,
     simple_certificate::{
         LightClientStateUpdateCertificateV2, QuorumCertificate2, SimpleCertificate,
-        SuccessThreshold, UpgradeCertificate, ViewSyncCommitCertificate2,
+        SuccessThreshold, TimeoutCertificate2, UpgradeCertificate, ViewSyncCommitCertificate2,
         ViewSyncFinalizeCertificate2, ViewSyncPreCommitCertificate2,
     },
     simple_vote::{
@@ -199,6 +199,7 @@ pub enum ConsensusMessage<T: NodeType, S> {
     Certificate1(Certificate1<T>, T::SignatureKey),
     Certificate2(Certificate2<T>, T::SignatureKey),
     TimeoutVote(TimeoutVote2<T>),
+    TimeoutCertificate(TimeoutCertificate2<T>),
     EpochChange(EpochChangeMessage<T>),
     Checkpoint(CheckpointVote<T>),
 }
@@ -213,6 +214,7 @@ impl<T: NodeType, S> ConsensusMessage<T, S> {
             Self::Certificate1(c, k) => ConsensusMessage::Certificate1(c, k),
             Self::Certificate2(c, k) => ConsensusMessage::Certificate2(c, k),
             Self::TimeoutVote(v) => ConsensusMessage::TimeoutVote(v),
+            Self::TimeoutCertificate(c) => ConsensusMessage::TimeoutCertificate(c),
             Self::Checkpoint(v) => ConsensusMessage::Checkpoint(v),
             Self::EpochChange(c) => ConsensusMessage::EpochChange(c),
         }
@@ -228,6 +230,7 @@ impl<T: NodeType, S> HasViewNumber for ConsensusMessage<T, S> {
             Self::Certificate1(certificate, _) => certificate.view_number(),
             Self::Certificate2(certificate, _) => certificate.view_number(),
             Self::TimeoutVote(vote) => vote.view_number(),
+            Self::TimeoutCertificate(certificate) => certificate.view_number(),
             Self::Checkpoint(vote) => vote.view_number(),
             Self::EpochChange(epoch_change) => epoch_change.cert1.view_number(),
         }
