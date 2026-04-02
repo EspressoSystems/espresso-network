@@ -240,9 +240,9 @@ impl Options {
                 });
             }
 
-            if let Some(grpc_port) = self.http.grpc_port {
-                tasks.spawn("gRPC server", async move {
-                    if let Err(e) = espresso_api::serve_grpc(grpc_port).await {
+            if let Some(tonic_port) = self.http.tonic_port {
+                tasks.spawn("Tonic gRPC server", async move {
+                    if let Err(e) = espresso_api::serve_tonic(tonic_port).await {
                         tracing::error!("gRPC server error: {}", e);
                     }
                 });
@@ -398,10 +398,10 @@ impl Options {
             });
         }
 
-        if let Some(grpc_port) = self.http.grpc_port {
-            tasks.spawn("gRPC server", async move {
-                if let Err(e) = espresso_api::serve_grpc(grpc_port).await {
-                    tracing::error!("gRPC server error: {}", e);
+        if let Some(tonic_port) = self.http.tonic_port {
+            tasks.spawn("Tonic gRPC server", async move {
+                if let Err(e) = espresso_api::serve_tonic(tonic_port).await {
+                    tracing::error!("Tonic gRPC server error: {}", e);
                 }
             });
         }
@@ -532,10 +532,10 @@ impl Options {
             });
         }
 
-        if let Some(grpc_port) = self.http.grpc_port {
-            tasks.spawn("gRPC server", async move {
-                if let Err(e) = espresso_api::serve_grpc(grpc_port).await {
-                    tracing::error!("gRPC server error: {}", e);
+        if let Some(tonic_port) = self.http.tonic_port {
+            tasks.spawn("Tonic gRPC server", async move {
+                if let Err(e) = espresso_api::serve_tonic(tonic_port).await {
+                    tracing::error!("Tonic gRPC server error: {}", e);
                 }
             });
         }
@@ -665,9 +665,9 @@ pub struct Http {
     #[clap(long, env = "ESPRESSO_SEQUENCER_AXUM_PORT")]
     pub axum_port: Option<u16>,
 
-    /// Optional port for gRPC API server (skeleton implementation).
-    #[clap(long, env = "ESPRESSO_SEQUENCER_GRPC_PORT")]
-    pub grpc_port: Option<u16>,
+    /// Optional port for Tonic gRPC API server.
+    #[clap(long, env = "ESPRESSO_SEQUENCER_TONIC_PORT")]
+    pub tonic_port: Option<u16>,
 }
 
 impl Http {
@@ -677,7 +677,7 @@ impl Http {
             port,
             max_connections: None,
             axum_port: None,
-            grpc_port: None,
+            tonic_port: None,
         }
     }
 }

@@ -178,9 +178,9 @@ struct Args {
     #[clap(long, env = "ESPRESSO_SEQUENCER_AXUM_PORT")]
     axum_port: Option<u16>,
 
-    /// Optional port for gRPC API server (skeleton implementation).
-    #[clap(long, env = "ESPRESSO_SEQUENCER_GRPC_PORT")]
-    grpc_port: Option<u16>,
+    /// Optional port for Tonic gRPC API server.
+    #[clap(long, env = "ESPRESSO_SEQUENCER_TONIC_PORT")]
+    tonic_port: Option<u16>,
 
     /// Port for connecting to the builder.
     #[clap(short, long, env = "ESPRESSO_BUILDER_PORT")]
@@ -263,7 +263,7 @@ async fn main() -> anyhow::Result<()> {
         sequencer_api_port,
         sequencer_api_max_connections,
         axum_port,
-        grpc_port,
+        tonic_port,
         builder_port,
         prover_port,
         dev_node_port,
@@ -647,7 +647,7 @@ async fn main() -> anyhow::Result<()> {
         port: sequencer_api_port,
         max_connections: sequencer_api_max_connections,
         axum_port,
-        grpc_port,
+        tonic_port,
     })
     .submit(Default::default())
     .config(Default::default())

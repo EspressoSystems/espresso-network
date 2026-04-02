@@ -17,6 +17,8 @@ prost = "0.14"
 tracing = "0.1"
 aide = { version = "0.15.1", features = ["axum", "axum-json", "scalar", "swagger"] }
 schemars = "0.9"
+async-trait = "0.1"
+anyhow = "1"
 
 [build-dependencies]
 tonic-build = "0.14"
