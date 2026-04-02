@@ -27,7 +27,8 @@ use catchup::{ParallelStateCatchup, StatePeers};
 use context::SequencerContext;
 use derivative::Derivative;
 use espresso_types::{
-    BackoffParams, EpochCommittees, L1ClientOptions, NodeState, PubKey, SeqTypes, ValidatedState,
+    BackoffParams, EpochCommittees, EpochRewardsCalculator, L1ClientOptions, NodeState, PubKey,
+    SeqTypes, ValidatedState,
     traits::{EventConsumer, MembershipPersistence},
     v0::traits::SequencerPersistence,
     v0_3::Fetcher,
@@ -648,6 +649,8 @@ where
         &persistence.clone(),
     );
 
+    let epoch_rewards_calculator = Arc::new(Mutex::new(EpochRewardsCalculator::new()));
+
     let instance_state = NodeState {
         chain_config: genesis.chain_config,
         genesis_chain_config,
@@ -663,6 +666,7 @@ where
         coordinator: coordinator.clone(),
         genesis_version: genesis.genesis_version,
         epoch_start_block: genesis.epoch_start_block.unwrap_or_default(),
+        epoch_rewards_calculator,
         light_client_contract_address: Cache::builder().max_capacity(1).build(),
         token_contract_address: Cache::builder().max_capacity(1).build(),
         finalized_hotshot_height: Cache::builder()

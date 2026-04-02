@@ -348,7 +348,6 @@ impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerP
                     return Ok(Response::RewardMerkleTreeV2(merkle_tree_bytes));
                 }
 
-                // Try to get the reward accounts from memory first, then fall back to storage
                 // Fall back to storage
                 let merkle_tree_bytes = match &self.storage {
                     Some(Storage::Sql(storage)) => storage

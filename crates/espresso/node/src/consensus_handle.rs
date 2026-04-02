@@ -12,13 +12,15 @@ use committable::Commitment;
 use futures::{StreamExt, stream::BoxStream};
 use hotshot::types::SystemContextHandle;
 use hotshot_new_protocol::{
-    consensus::ConsensusOutput, message::Certificate2, query::CoordinatorQuery,
+    consensus::ConsensusOutput,
+    message::{Certificate2, Proposal as NewProposal},
+    query::CoordinatorQuery,
 };
 use hotshot_types::{
     data::{EpochNumber, Leaf2, QuorumProposalWrapper, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     event::{Event, EventType},
-    message::{Proposal, UpgradeLock},
+    message::{Proposal as SignedProposal, UpgradeLock},
     traits::{ValidatedState, node_implementation::NodeType, signature_key::SignatureKey},
     utils::StateAndDelta,
 };
@@ -40,7 +42,7 @@ pub enum ConsensusEvent<T: NodeType> {
         view_number: ViewNumber,
     },
     QuorumProposal {
-        proposal: Proposal<T, QuorumProposalWrapper<T>>,
+        proposal: SignedProposal<T, NewProposal<T>>,
         sender: T::SignatureKey,
     },
     ExternalMessageReceived {
@@ -63,11 +65,7 @@ pub fn event_from_output<T: NodeType>(output: &ConsensusOutput<T>) -> Option<Con
         },
         ConsensusOutput::ProposalReceived { proposal, sender } => {
             Some(ConsensusEvent::QuorumProposal {
-                proposal: Proposal {
-                    data: QuorumProposalWrapper::from(proposal.data.clone()),
-                    signature: proposal.signature.clone(),
-                    _pd: std::marker::PhantomData,
-                },
+                proposal: proposal.clone(),
                 sender: sender.clone(),
             })
         },
@@ -159,22 +157,14 @@ impl<T: NodeType, I: hotshot::traits::NodeImplementation<T>> ConsensusHandle<T, 
             .flatten()
             .filter_map(|event| {
                 let adapter_event = match &event.event {
-                    EventType::Decide { .. } => Some(ConsensusEvent::LegacyEvent(event)),
+                    EventType::Decide { .. }
+                    | EventType::QuorumProposal { .. }
+                    | EventType::ExternalMessageReceived { .. } => {
+                        Some(ConsensusEvent::LegacyEvent(event))
+                    },
                     EventType::ViewFinished { view_number } => Some(ConsensusEvent::ViewChanged {
                         view_number: *view_number,
                     }),
-                    EventType::QuorumProposal { proposal, sender } => {
-                        Some(ConsensusEvent::QuorumProposal {
-                            proposal: proposal.clone(),
-                            sender: sender.clone(),
-                        })
-                    },
-                    EventType::ExternalMessageReceived { sender, data } => {
-                        Some(ConsensusEvent::ExternalMessageReceived {
-                            sender: sender.clone(),
-                            data: data.clone(),
-                        })
-                    },
                     _ => None,
                 };
                 futures::future::ready(adapter_event)
@@ -329,7 +319,7 @@ impl<T: NodeType, I: hotshot::traits::NodeImplementation<T>> ConsensusHandle<T, 
         view: ViewNumber,
         leaf_commitment: Commitment<Leaf2<T>>,
     ) -> anyhow::Result<
-        impl futures::Future<Output = anyhow::Result<Proposal<T, QuorumProposalWrapper<T>>>>,
+        impl futures::Future<Output = anyhow::Result<SignedProposal<T, QuorumProposalWrapper<T>>>>,
     > {
         let future = self
             .handle

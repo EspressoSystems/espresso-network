@@ -11,10 +11,7 @@ use hotshot_types::{
     simple_certificate::{QuorumCertificate2, TimeoutCertificate2},
     simple_vote::{HasEpoch, QuorumVote2, TimeoutVote2},
     traits::{
-        block_contents::BlockHeader,
-        node_implementation::NodeType,
-        signature_key::SignatureKey,
-        storage::{LoadDrbProgressFn, StoreDrbProgressFn},
+        block_contents::BlockHeader, node_implementation::NodeType, signature_key::SignatureKey,
     },
     vote::HasViewNumber,
 };
@@ -28,7 +25,7 @@ use crate::{
         error::{CoordinatorError, ErrorSource, Severity},
         timer::Timer,
     },
-    drb::DrbRequester,
+    epoch::{EpochManager, EpochRootResult},
     helpers::upgrade_lock,
     message::{
         BlockMessage, Certificate2, CheckpointCertificate, CheckpointVote, ConsensusMessage,
@@ -56,7 +53,7 @@ pub struct Coordinator<T: NodeType, I: NodeImplementation<T>> {
     vote2_collector: VoteCollector<T, Vote2<T>, Certificate2<T>>,
     timeout_collector: VoteCollector<T, TimeoutVote2<T>, TimeoutCertificate2<T>>,
     checkpoint_collector: VoteCollector<T, CheckpointVote<T>, CheckpointCertificate<T>>,
-    drb_requester: DrbRequester,
+    epoch_manager: EpochManager<T>,
     block_builder: BlockBuilder<T>,
     proposal_validator: ProposalValidator<T>,
     #[builder(default)]
@@ -74,8 +71,7 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
         public_key: T::SignatureKey,
         private_key: <T::SignatureKey as SignatureKey>::PrivateKey,
         genesis_leaf: Leaf2<T>,
-        store_drb_progress: StoreDrbProgressFn,
-        load_drb_progress: LoadDrbProgressFn,
+        epoch_height: u64,
         timeout_duration: Duration,
     ) -> (Self, mpsc::Sender<CoordinatorQuery<T>>) {
         let consensus = Consensus::new(
@@ -83,6 +79,7 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
             public_key.clone(),
             private_key,
             genesis_leaf,
+            epoch_height,
         );
         let state_manager = StateManager::new(instance_state.clone());
         let (query_tx, query_rx) = mpsc::channel(256);
@@ -112,7 +109,10 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                 lock.clone(),
             ))
             .checkpoint_collector(VoteCollector::new(membership_coordinator.clone(), lock))
-            .drb_requester(DrbRequester::new(store_drb_progress, load_drb_progress))
+            .epoch_manager(EpochManager::new(
+                epoch_height,
+                membership_coordinator.clone(),
+            ))
             .block_builder(BlockBuilder::new(
                 instance_state,
                 membership_coordinator.clone(),
@@ -250,9 +250,15 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                         return Err(CoordinatorError::unspecified().context("vid reconstruction"))
                     }
                 },
-                Some((_epoch, _drb_result)) = self.drb_requester.next() => {
-                    todo!()
-                }
+                Some(result) = self.epoch_manager.next() => match result {
+                    Ok(EpochRootResult::DrbResult(epoch, drb_result)) => {
+                        return Ok(ConsensusInput::DrbResult(epoch, drb_result))
+                    }
+                    Ok(EpochRootResult::RootAdded(_epoch)) => {}
+                    Err(err) => {
+                        return Err(CoordinatorError::regular(err))
+                    }
+                },
                 else => {
                     return Err(CoordinatorError::critical(ErrorSource::NoInput))
                 }
@@ -328,6 +334,9 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                     self.timeout_collector.accumulate_vote(timeout_vote).await;
                     None
                 },
+                ConsensusMessage::EpochChange(epoch_change) => {
+                    Some(ConsensusInput::EpochChange(epoch_change))
+                },
                 ConsensusMessage::Checkpoint(checkpoint) => {
                     self.checkpoint_collector.accumulate_vote(checkpoint).await;
                     None
@@ -379,8 +388,8 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                     metadata,
                 });
             },
-            ConsensusOutput::RequestDRB(drb_input) => {
-                self.drb_requester.request_drb(drb_input);
+            ConsensusOutput::RequestDrbResult(epoch) => {
+                self.epoch_manager.request_drb_result(epoch);
             },
             ConsensusOutput::SendCheckpointVote(checkpoint_vote) => {
                 let message = Message {
@@ -396,7 +405,11 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
             },
             ConsensusOutput::Certificate1Formed(_) => {}, // TODO
             ConsensusOutput::Certificate2Formed(_) => {}, // TODO
-            ConsensusOutput::LeafDecided { .. } => {},
+            ConsensusOutput::LeafDecided { leaves, .. } => {
+                for leaf in leaves {
+                    self.epoch_manager.handle_leaf_decided(leaf);
+                }
+            },
             ConsensusOutput::LockUpdated(_) => {}, // TODO
             ConsensusOutput::RequestBlockAndHeader(request) => {
                 self.block_builder.request_block(request);
@@ -456,6 +469,18 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                     .broadcast(message)
                     .await
                     .map_err(|e| CoordinatorError::from(e).context("broadcast vote2"))?
+            },
+            ConsensusOutput::SendEpochChange(epoch_change) => {
+                let message = Message {
+                    sender: self.public_key.clone(),
+                    message_type: MessageType::Consensus(ConsensusMessage::EpochChange(
+                        epoch_change,
+                    )),
+                };
+                self.network
+                    .broadcast(message)
+                    .await
+                    .map_err(|e| CoordinatorError::from(e).context("broadcast epoch change"))?
             },
             ConsensusOutput::TimeoutCertificateReceived(..) => {}, // TODO
             ConsensusOutput::ViewSyncCertificateReceived(_) => {}, // TODO
@@ -522,7 +547,7 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
         self.vote1_collector.gc(view);
         self.vote2_collector.gc(view);
         self.timeout_collector.gc(view);
-        self.drb_requester.gc(epoch);
+        self.epoch_manager.gc(epoch);
         self.block_builder.gc(view);
     }
 }

@@ -8,7 +8,9 @@ use derivative::Derivative;
 use espresso_types::{PubKey, ValidatedState, parse_duration, v0::traits::SequencerPersistence};
 use futures::stream::StreamExt;
 use hotshot_types::{
-    data::{Leaf2, ViewNumber},
+    data::{Leaf2, QuorumProposalWrapper, ViewNumber},
+    event::{Event, EventType},
+    message::Proposal,
     traits::{
         ValidatedState as _,
         metrics::{Counter, Gauge, Metrics},
@@ -131,7 +133,11 @@ where
     async fn scan(self) {
         let mut events = self.consensus_handle.event_stream();
         while let Some(event) = events.next().await {
-            let ConsensusEvent::QuorumProposal { proposal, .. } = event else {
+            let ConsensusEvent::LegacyEvent(Event {
+                event: EventType::QuorumProposal { proposal, .. },
+                ..
+            }) = event
+            else {
                 continue;
             };
             // Whenever we see a quorum proposal, ensure we have the chain of proposals stretching back
@@ -184,7 +190,7 @@ where
             }
 
             let future = self.consensus_handle.request_proposal(view, leaf).await?;
-            let proposal = timeout(self.cfg.fetch_timeout, future)
+            let proposal: Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>> = timeout(self.cfg.fetch_timeout, future)
                 .await
                 .context("timed out fetching proposal")?
                 .context("error fetching proposal")?;

@@ -31,7 +31,6 @@ use hotshot_types::{
     traits::{
         metrics::Metrics,
         network::ConnectedNetwork,
-        storage::{load_drb_progress_fn, store_drb_progress_fn},
     },
 };
 use parking_lot::Mutex;
@@ -165,6 +164,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
         let genesis_leaf =
             Leaf2::genesis(&genesis_validated_state, &instance_state, upgrade.base).await;
 
+        let epoch_height = network_config.config.epoch_height;
         let (new_coordinator, query_tx) = Coordinator::<SeqTypes, Node<N, P>>::new(
             coordinator.clone(),
             (*network).clone(),
@@ -172,12 +172,9 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
             validator_config.public_key,
             validator_config.private_key.clone(),
             genesis_leaf,
-            store_drb_progress_fn(Arc::clone(&persistence)),
-            load_drb_progress_fn(Arc::clone(&persistence)),
+            epoch_height,
             Duration::from_secs(10),
         );
-
-        let epoch_height = network_config.config.epoch_height;
         let hotshot_handle = Arc::new(RwLock::new(handle));
         let (consensus_handle, event_sender) =
             ConsensusHandle::new(hotshot_handle.clone(), query_tx, epoch_height, 128);
