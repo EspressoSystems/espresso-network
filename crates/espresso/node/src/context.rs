@@ -19,8 +19,6 @@ use futures::{
 use hotshot::SystemContext;
 use hotshot_events_service::events_source::{EventConsumer, EventsStreamer};
 use hotshot_new_protocol::coordinator::Coordinator;
-
-use crate::consensus_handle::{ConsensusEvent, ConsensusHandle};
 use hotshot_orchestrator::client::OrchestratorClient;
 use hotshot_types::{
     PeerConfig, ValidatorConfig,
@@ -45,6 +43,7 @@ use url::Url;
 use crate::{
     Node, SeqTypes, SequencerApiVersion,
     catchup::ParallelStateCatchup,
+    consensus_handle::{ConsensusEvent, ConsensusHandle},
     external_event_handler::ExternalEventHandler,
     proposal_fetcher::ProposalFetcherConfig,
     request_response::{
@@ -180,14 +179,9 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
 
         let epoch_height = network_config.config.epoch_height;
         let hotshot_handle = Arc::new(RwLock::new(handle));
-        let (consensus_handle, event_sender) = ConsensusHandle::new(
-            hotshot_handle.clone(),
-            query_tx,
-            epoch_height,
-            128,
-        );
+        let (consensus_handle, event_sender) =
+            ConsensusHandle::new(hotshot_handle.clone(), query_tx, epoch_height, 128);
         let consensus_handle = Arc::new(consensus_handle);
-
 
         let mut state_signer = StateSigner::new(
             validator_config.state_private_key.clone(),
@@ -245,7 +239,10 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
 
         // Create the external event handler
         let mut tasks = TaskList::default();
-        tasks.spawn("coordinator", run_coordinator(new_coordinator, event_sender));
+        tasks.spawn(
+            "coordinator",
+            run_coordinator(new_coordinator, event_sender),
+        );
         let external_event_handler = ExternalEventHandler::new(
             &mut tasks,
             request_response_sender,
@@ -330,7 +327,6 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
                 anchor_view,
             ),
         );
-
 
         ctx
     }
@@ -566,13 +562,13 @@ async fn handle_events<N, P>(
 async fn run_coordinator<N, P>(
     mut coordinator: Coordinator<SeqTypes, Node<N, P>>,
     event_sender: async_broadcast::Sender<ConsensusEvent<SeqTypes>>,
-)
-where
+) where
     N: ConnectedNetwork<PubKey>,
     P: SequencerPersistence,
 {
-    use crate::consensus_handle::event_from_output;
     use hotshot_new_protocol::coordinator::error::Severity;
+
+    use crate::consensus_handle::event_from_output;
 
     loop {
         match coordinator.next_consensus_input().await {

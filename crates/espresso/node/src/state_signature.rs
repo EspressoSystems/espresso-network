@@ -6,7 +6,6 @@ use alloy::primitives::FixedBytes;
 use async_lock::RwLock;
 use hotshot::types::{Event, EventType, SchnorrPubKey};
 use hotshot_task_impls::helpers::derive_signed_state_digest;
-use crate::consensus_handle::ConsensusHandle;
 use hotshot_types::{
     data::EpochNumber,
     event::LeafInfo,
@@ -29,7 +28,7 @@ use surf_disco::{Client, Url};
 use tide_disco::error::ServerError;
 use vbs::version::StaticVersionType;
 
-use crate::SeqTypes;
+use crate::{SeqTypes, consensus_handle::ConsensusHandle};
 
 /// A relay server that's collecting and serving the light client state signatures
 pub mod relay_server;

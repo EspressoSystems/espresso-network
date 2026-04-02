@@ -30,7 +30,6 @@ use futures::{
     future::{Future, FutureExt, TryFuture, TryFutureExt},
     stream::FuturesUnordered,
 };
-use crate::consensus_handle::ConsensusHandle;
 use hotshot_types::{
     ValidatorConfig,
     data::ViewNumber,
@@ -57,7 +56,10 @@ use url::Url;
 use vbs::version::StaticVersionType;
 use versions::EPOCH_VERSION;
 
-use crate::api::{BlocksFrontier, RewardMerkleTreeDataSource, RewardMerkleTreeV2Data};
+use crate::{
+    api::{BlocksFrontier, RewardMerkleTreeDataSource, RewardMerkleTreeV2Data},
+    consensus_handle::ConsensusHandle,
+};
 
 // This newtype is probably not worth having. It's only used to be able to log
 // URLs before doing requests.

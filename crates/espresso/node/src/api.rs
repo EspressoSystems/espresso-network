@@ -56,7 +56,6 @@ use serde::{Deserialize, Serialize};
 use tokio::time::timeout;
 
 use self::data_source::{HotShotConfigDataSource, NodeStateDataSource, StateSignatureDataSource};
-use crate::consensus_handle::ConsensusHandle;
 use crate::{
     Node, SeqTypes, SequencerApiVersion, SequencerContext,
     api::data_source::TokenDataSource,
@@ -64,6 +63,7 @@ use crate::{
         CatchupStorage, add_fee_accounts_to_state, add_v1_reward_accounts_to_state,
         add_v2_reward_accounts_to_state,
     },
+    consensus_handle::ConsensusHandle,
     request_response::{
         data_source::{retain_v1_reward_accounts, retain_v2_reward_accounts},
         request::{Request, Response},
@@ -129,9 +129,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> ApiState<N, P> {
             .event_streamer()
     }
 
-    async fn consensus_handle(
-        &self,
-    ) -> Arc<ConsensusHandle<SeqTypes, Node<N, P>>> {
+    async fn consensus_handle(&self) -> Arc<ConsensusHandle<SeqTypes, Node<N, P>>> {
         self.sequencer_context
             .as_ref()
             .get()
@@ -387,11 +385,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StakeTableDataSource<
         &self,
         epoch: Option<EpochNumber>,
     ) -> anyhow::Result<Option<RewardAmount>> {
-        let coordinator = self
-            .consensus_handle()
-            .await
-            .membership_coordinator()
-            .await;
+        let coordinator = self.consensus_handle().await.membership_coordinator().await;
 
         let membership = coordinator.membership().read().await;
         let block_reward = match epoch {
@@ -830,9 +824,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, D: CatchupStorage + S
         // state.
 
         let handle = self.as_ref().consensus_handle().await;
-        if let Err(err) =
-            add_fee_accounts_to_state(&*handle, &view, accounts, &tree, leaf).await
-        {
+        if let Err(err) = add_fee_accounts_to_state(&*handle, &view, accounts, &tree, leaf).await {
             tracing::warn!(?view, "cannot update fetched account state: {err:#}");
         }
         tracing::info!(?view, "updated with fetched account state");
@@ -1596,7 +1588,6 @@ pub mod test_helpers {
     };
     use hotshot::types::{Event, EventType};
     use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
-    use crate::consensus_handle::ConsensusEvent;
     use hotshot_types::{
         event::LeafInfo, light_client::LCV3StateSignatureRequestBody, traits::metrics::NoMetrics,
     };
@@ -1615,6 +1606,7 @@ pub mod test_helpers {
     use super::*;
     use crate::{
         catchup::NullStateCatchup,
+        consensus_handle::ConsensusEvent,
         network,
         persistence::no_storage,
         testing::{TestConfig, TestConfigBuilder, run_legacy_builder, wait_for_decide_on_handle},
@@ -1974,7 +1966,14 @@ pub mod test_helpers {
 
             // Hook the builder(s) up to the event stream from the first node
             for builder_task in builder_tasks {
-                builder_task.start(Box::new(handle_0.consensus_handle().hotshot().read().await.event_stream()));
+                builder_task.start(Box::new(
+                    handle_0
+                        .consensus_handle()
+                        .hotshot()
+                        .read()
+                        .await
+                        .event_stream(),
+                ));
             }
 
             for ctx in &nodes {
@@ -2901,7 +2900,6 @@ mod test {
         sol_types::{EspToken, StakeTableV2},
         stake_table::StakeTableContractVersion,
     };
-    use crate::consensus_handle::ConsensusEvent;
     use hotshot_query_service::{
         availability::{
             BlockQueryData, BlockSummaryQueryData, LeafQueryData, TransactionQueryData,
@@ -2948,6 +2946,7 @@ mod test {
         sql::DataSource as SqlDataSource,
     };
     use super::*;
+    use crate::consensus_handle::ConsensusEvent;
 
     async fn wait_until_block_height(
         client: &Client<ServerError, StaticVersion<0, 1>>,
@@ -3138,7 +3137,11 @@ mod test {
         let mut events = network.peers[0].event_stream();
         loop {
             let event = events.next().await.unwrap();
-            let ConsensusEvent::LegacyEvent(Event { event: EventType::Decide { leaf_chain, .. }, .. }) = event else {
+            let ConsensusEvent::LegacyEvent(Event {
+                event: EventType::Decide { leaf_chain, .. },
+                ..
+            }) = event
+            else {
                 continue;
             };
             if leaf_chain[0].leaf.height() > 0 {
@@ -3157,7 +3160,15 @@ mod test {
         network
             .server
             .event_stream()
-            .filter(|event| future::ready(matches!(event, ConsensusEvent::LegacyEvent(Event { event: EventType::Decide { .. }, .. }))))
+            .filter(|event| {
+                future::ready(matches!(
+                    event,
+                    ConsensusEvent::LegacyEvent(Event {
+                        event: EventType::Decide { .. },
+                        ..
+                    })
+                ))
+            })
             .take(3)
             .collect::<Vec<_>>()
             .await;
@@ -3190,7 +3201,11 @@ mod test {
         let mut proposers = [false; NUM_NODES];
         loop {
             let event = events.next().await.unwrap();
-            let ConsensusEvent::LegacyEvent(Event { event: EventType::Decide { leaf_chain, .. }, .. }) = event else {
+            let ConsensusEvent::LegacyEvent(Event {
+                event: EventType::Decide { leaf_chain, .. },
+                ..
+            }) = event
+            else {
                 continue;
             };
             for LeafInfo { leaf, .. } in leaf_chain.iter().rev() {
@@ -3242,7 +3257,11 @@ mod test {
         let mut events = network.peers[0].event_stream();
         loop {
             let event = events.next().await.unwrap();
-            let ConsensusEvent::LegacyEvent(Event { event: EventType::Decide { leaf_chain, .. }, .. }) = event else {
+            let ConsensusEvent::LegacyEvent(Event {
+                event: EventType::Decide { leaf_chain, .. },
+                ..
+            }) = event
+            else {
                 continue;
             };
             if leaf_chain[0].leaf.height() > 0 {
@@ -3261,7 +3280,15 @@ mod test {
         network
             .server
             .event_stream()
-            .filter(|event| future::ready(matches!(event, ConsensusEvent::LegacyEvent(Event { event: EventType::Decide { .. }, .. }))))
+            .filter(|event| {
+                future::ready(matches!(
+                    event,
+                    ConsensusEvent::LegacyEvent(Event {
+                        event: EventType::Decide { .. },
+                        ..
+                    })
+                ))
+            })
             .take(3)
             .collect::<Vec<_>>()
             .await;
@@ -3289,7 +3316,11 @@ mod test {
         let mut proposers = [false; NUM_NODES];
         loop {
             let event = events.next().await.unwrap();
-            let ConsensusEvent::LegacyEvent(Event { event: EventType::Decide { leaf_chain, .. }, .. }) = event else {
+            let ConsensusEvent::LegacyEvent(Event {
+                event: EventType::Decide { leaf_chain, .. },
+                ..
+            }) = event
+            else {
                 continue;
             };
             for LeafInfo { leaf, .. } in leaf_chain.iter().rev() {
@@ -3331,7 +3362,11 @@ mod test {
         let mut events = network.peers[0].event_stream();
         loop {
             let event = events.next().await.unwrap();
-            let ConsensusEvent::LegacyEvent(Event { event: EventType::Decide { leaf_chain, .. }, .. }) = event else {
+            let ConsensusEvent::LegacyEvent(Event {
+                event: EventType::Decide { leaf_chain, .. },
+                ..
+            }) = event
+            else {
                 continue;
             };
             tracing::error!("got decide height {}", leaf_chain[0].leaf.height());
@@ -3353,7 +3388,15 @@ mod test {
         network
             .server
             .event_stream()
-            .filter(|event| future::ready(matches!(event, ConsensusEvent::LegacyEvent(Event { event: EventType::Decide { .. }, .. }))))
+            .filter(|event| {
+                future::ready(matches!(
+                    event,
+                    ConsensusEvent::LegacyEvent(Event {
+                        event: EventType::Decide { .. },
+                        ..
+                    })
+                ))
+            })
             .take(3)
             .collect::<Vec<_>>()
             .await;
@@ -3381,7 +3424,11 @@ mod test {
         let mut proposers = [false; NUM_NODES];
         loop {
             let event = events.next().await.unwrap();
-            let ConsensusEvent::LegacyEvent(Event { event: EventType::Decide { leaf_chain, .. }, .. }) = event else {
+            let ConsensusEvent::LegacyEvent(Event {
+                event: EventType::Decide { leaf_chain, .. },
+                ..
+            }) = event
+            else {
                 continue;
             };
             for LeafInfo { leaf, .. } in leaf_chain.iter().rev() {
@@ -3441,7 +3488,15 @@ mod test {
         network
             .server
             .event_stream()
-            .filter(|event| future::ready(matches!(event, ConsensusEvent::LegacyEvent(Event { event: EventType::Decide { .. }, .. }))))
+            .filter(|event| {
+                future::ready(matches!(
+                    event,
+                    ConsensusEvent::LegacyEvent(Event {
+                        event: EventType::Decide { .. },
+                        ..
+                    })
+                ))
+            })
             .take(3)
             .collect::<Vec<_>>()
             .await;
@@ -3512,7 +3567,15 @@ mod test {
         network
             .server
             .event_stream()
-            .filter(|event| future::ready(matches!(event, ConsensusEvent::LegacyEvent(Event { event: EventType::Decide { .. }, .. }))))
+            .filter(|event| {
+                future::ready(matches!(
+                    event,
+                    ConsensusEvent::LegacyEvent(Event {
+                        event: EventType::Decide { .. },
+                        ..
+                    })
+                ))
+            })
             .take(3)
             .collect::<Vec<_>>()
             .await;
@@ -3579,7 +3642,13 @@ mod test {
         // Use the raw HotShot event stream for upgrade testing, since
         // UpgradeProposal events are HotShot-specific and not surfaced
         // through the ConsensusEvent adapter.
-        let mut hotshot_events = network.server.consensus_handle().hotshot().read().await.event_stream();
+        let mut hotshot_events = network
+            .server
+            .consensus_handle()
+            .hotshot()
+            .read()
+            .await
+            .event_stream();
         let upgrade = loop {
             let event = hotshot_events.next().await.unwrap();
             if let EventType::UpgradeProposal { proposal, .. } = event.event {
@@ -4346,7 +4415,11 @@ mod test {
         // Wait for the chain to progress beyond epoch 3 so rewards start being distributed.
         let mut events = network.peers[0].event_stream();
         while let Some(event) = events.next().await {
-            if let ConsensusEvent::LegacyEvent(Event { event: EventType::Decide { leaf_chain, .. }, .. }) = event {
+            if let ConsensusEvent::LegacyEvent(Event {
+                event: EventType::Decide { leaf_chain, .. },
+                ..
+            }) = event
+            {
                 let height = leaf_chain[0].leaf.height();
                 tracing::info!("Node 0 decided at height: {height}");
                 if height > EPOCH_HEIGHT * 3 {
@@ -4692,7 +4765,11 @@ mod test {
         // Wait for the peer 0 (node 1) to advance past three epochs
         let mut events = network.peers[0].event_stream();
         while let Some(event) = events.next().await {
-            if let ConsensusEvent::LegacyEvent(Event { event: EventType::Decide { leaf_chain, .. }, .. }) = event {
+            if let ConsensusEvent::LegacyEvent(Event {
+                event: EventType::Decide { leaf_chain, .. },
+                ..
+            }) = event
+            {
                 let height = leaf_chain[0].leaf.height();
                 tracing::info!("Node 0 decided at height: {height}");
                 if height > EPOCH_HEIGHT * 3 {
@@ -4708,7 +4785,11 @@ mod test {
         // Wait for epochs to progress with node 1 offline
         let mut events = network.server.event_stream();
         while let Some(event) = events.next().await {
-            if let ConsensusEvent::LegacyEvent(Event { event: EventType::Decide { leaf_chain, .. }, .. }) = event {
+            if let ConsensusEvent::LegacyEvent(Event {
+                event: EventType::Decide { leaf_chain, .. },
+                ..
+            }) = event
+            {
                 let height = leaf_chain[0].leaf.height();
                 if height > EPOCH_HEIGHT * 7 {
                     break;
@@ -4829,7 +4910,11 @@ mod test {
         // Wait for the peer 0 (node 1) to advance past three epochs
         let mut events = network.peers[0].event_stream();
         while let Some(event) = events.next().await {
-            if let ConsensusEvent::LegacyEvent(Event { event: EventType::Decide { leaf_chain, .. }, .. }) = event {
+            if let ConsensusEvent::LegacyEvent(Event {
+                event: EventType::Decide { leaf_chain, .. },
+                ..
+            }) = event
+            {
                 let height = leaf_chain[0].leaf.height();
                 tracing::info!("Node 0 decided at height: {height}");
                 if height > EPOCH_HEIGHT * 3 {
@@ -4845,7 +4930,11 @@ mod test {
         // Wait for epochs to progress with node 1 offline
         let mut events = network.server.event_stream();
         while let Some(event) = events.next().await {
-            if let ConsensusEvent::LegacyEvent(Event { event: EventType::Decide { leaf_chain, .. }, .. }) = event {
+            if let ConsensusEvent::LegacyEvent(Event {
+                event: EventType::Decide { leaf_chain, .. },
+                ..
+            }) = event
+            {
                 let height = leaf_chain[0].leaf.height();
                 tracing::info!("Server decided at height: {height}");
                 //  until 7 epochs
@@ -6269,7 +6358,11 @@ mod test {
             let event = events.next().await.unwrap();
             tracing::info!("Received event from handle: {event:?}");
 
-            if let ConsensusEvent::LegacyEvent(Event { event: EventType::Decide { leaf_chain, .. }, .. }) = event {
+            if let ConsensusEvent::LegacyEvent(Event {
+                event: EventType::Decide { leaf_chain, .. },
+                ..
+            }) = event
+            {
                 println!(
                     "Decide event received: {:?}",
                     leaf_chain.first().unwrap().leaf.height()

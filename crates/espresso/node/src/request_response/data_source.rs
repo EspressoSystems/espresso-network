@@ -13,7 +13,6 @@ use espresso_types::{
     v0_4::{RewardAccountV2, RewardMerkleTreeV2},
 };
 use hotshot::traits::NodeImplementation;
-use crate::consensus_handle::ConsensusHandle;
 use hotshot_query_service::{
     data_source::{
         VersionedDataSource,
@@ -36,6 +35,7 @@ use crate::{
         CatchupStorage, add_fee_accounts_to_state, add_v1_reward_accounts_to_state,
         add_v2_reward_accounts_to_state,
     },
+    consensus_handle::ConsensusHandle,
 };
 
 /// Query Service Storage types that can be used for request-response data source
@@ -156,7 +156,8 @@ impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerP
             },
             Request::ChainConfig(commitment) => {
                 // Try to get the chain config from memory first, then fall back to storage
-                let chain_config_from_memory = self.consensus_handle.decided_state().await.chain_config;
+                let chain_config_from_memory =
+                    self.consensus_handle.decided_state().await.chain_config;
                 if chain_config_from_memory.commit() == *commitment
                     && let Some(chain_config) = chain_config_from_memory.resolve()
                 {

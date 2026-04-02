@@ -12,20 +12,14 @@ use committable::Commitment;
 use futures::{StreamExt, stream::BoxStream};
 use hotshot::types::SystemContextHandle;
 use hotshot_new_protocol::{
-    consensus::{ConsensusOutput},
-    message::Certificate2,
-    query::CoordinatorQuery,
+    consensus::ConsensusOutput, message::Certificate2, query::CoordinatorQuery,
 };
 use hotshot_types::{
     data::{EpochNumber, Leaf2, QuorumProposalWrapper, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     event::{Event, EventType},
     message::{Proposal, UpgradeLock},
-    traits::{
-        ValidatedState,
-        node_implementation::NodeType,
-        signature_key::SignatureKey,
-    },
+    traits::{ValidatedState, node_implementation::NodeType, signature_key::SignatureKey},
     utils::StateAndDelta,
 };
 use tokio::sync::{mpsc, oneshot};
@@ -42,7 +36,9 @@ pub struct NewDecideEvent<T: NodeType> {
 pub enum ConsensusEvent<T: NodeType> {
     LegacyEvent(Event<T>),
     NewDecide(NewDecideEvent<T>),
-    ViewChanged { view_number: ViewNumber },
+    ViewChanged {
+        view_number: ViewNumber,
+    },
     QuorumProposal {
         proposal: Proposal<T, QuorumProposalWrapper<T>>,
         sender: T::SignatureKey,
@@ -53,9 +49,7 @@ pub enum ConsensusEvent<T: NodeType> {
     },
 }
 
-pub fn event_from_output<T: NodeType>(
-    output: &ConsensusOutput<T>,
-) -> Option<ConsensusEvent<T>> {
+pub fn event_from_output<T: NodeType>(output: &ConsensusOutput<T>) -> Option<ConsensusEvent<T>> {
     match output {
         ConsensusOutput::LeafDecided { leaves, cert2 } => leaves.first().map(|first_leaf| {
             ConsensusEvent::NewDecide(NewDecideEvent {

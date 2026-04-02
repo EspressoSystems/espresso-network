@@ -5,9 +5,8 @@ use hotshot_types::{
     traits::node_implementation::NodeType,
     utils::StateAndDelta,
 };
-use tokio::sync::oneshot;
-
 use oneshot::Sender;
+use tokio::sync::oneshot;
 
 pub enum CoordinatorQuery<T: NodeType> {
     CurView(Sender<ViewNumber>),

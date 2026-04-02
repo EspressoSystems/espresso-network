@@ -32,6 +32,7 @@ use espresso_node::{
         self, data_source::testing::TestableSequencerDataSource, options::Query,
         test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
     },
+    consensus_handle::ConsensusEvent,
     context::SequencerContext,
     genesis::{Genesis, L1Finalized, StakeTableConfig},
     keyset::KeySet,
@@ -58,7 +59,6 @@ use hotshot_testing::{
     block_builder::{SimpleBuilderImplementation, TestBuilderImplementation},
     test_builder::BuilderChange,
 };
-use espresso_node::consensus_handle::ConsensusEvent;
 use hotshot_types::{
     PeerConfig,
     data::EpochNumber,
@@ -472,7 +472,11 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         // (getting Decide events) and participating (able to propose).
         let mut events = context.event_stream();
         while let Some(event) = events.next().await {
-            let ConsensusEvent::LegacyEvent(Event { event: EventType::Decide { leaf_chain, .. }, .. }) = event else {
+            let ConsensusEvent::LegacyEvent(Event {
+                event: EventType::Decide { leaf_chain, .. },
+                ..
+            }) = event
+            else {
                 continue;
             };
 
@@ -513,7 +517,11 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         let mut state_write = self.reference_state.write().await;
 
         while let Some(event) = events.next().await {
-            let ConsensusEvent::LegacyEvent(Event { event: EventType::Decide { leaf_chain, .. }, .. }) = event else {
+            let ConsensusEvent::LegacyEvent(Event {
+                event: EventType::Decide { leaf_chain, .. },
+                ..
+            }) = event
+            else {
                 continue;
             };
 
@@ -601,9 +609,14 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         let timeout_duration = Duration::from_secs(60);
         timeout(timeout_duration, async {
             while let Some(event) = events.next().await {
-                let ConsensusEvent::LegacyEvent(Event { event: EventType::Decide {
-                    committing_qc: qc, ..
-                }, .. }) = event else {
+                let ConsensusEvent::LegacyEvent(Event {
+                    event:
+                        EventType::Decide {
+                            committing_qc: qc, ..
+                        },
+                    ..
+                }) = event
+                else {
                     continue;
                 };
                 if qc.epoch() >= Some(epoch) {
@@ -1019,7 +1032,11 @@ impl TestNetwork {
                     .next()
                     .await
                     .expect("event stream terminated unexpectedly");
-                let ConsensusEvent::LegacyEvent(Event { event: EventType::Decide { leaf_chain, .. }, .. }) = event else {
+                let ConsensusEvent::LegacyEvent(Event {
+                    event: EventType::Decide { leaf_chain, .. },
+                    ..
+                }) = event
+                else {
                     continue;
                 };
                 tracing::info!(?leaf_chain, "got decide, chain is progressing");
@@ -1090,7 +1107,11 @@ impl TestNetwork {
                             .next()
                             .await
                             .expect("event stream terminated unexpectedly");
-                        let ConsensusEvent::LegacyEvent(Event { event: EventType::Decide { leaf_chain, .. }, .. }) = event else {
+                        let ConsensusEvent::LegacyEvent(Event {
+                            event: EventType::Decide { leaf_chain, .. },
+                            ..
+                        }) = event
+                        else {
                             continue;
                         };
                         tracing::info!(?leaf_chain, "got decide, chain is progressing");

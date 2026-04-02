@@ -505,11 +505,7 @@ mod test {
             let mut bytes = vec![0; 32];
             rand::thread_rng().fill_bytes(&mut bytes);
             let tx = Transaction::new(ns, bytes);
-            network
-                .server
-                .submit_transaction(tx.clone())
-                .await
-                .unwrap();
+            network.server.submit_transaction(tx.clone()).await.unwrap();
             let block = wait_for_decide_on_handle(&mut events, &tx).await.0;
             tracing::info!(block, hash = %tx.commit(), ?tx, "transaction included");
 

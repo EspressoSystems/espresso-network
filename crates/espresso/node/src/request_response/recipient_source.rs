@@ -4,12 +4,12 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use espresso_types::{PubKey, SeqTypes};
 use hotshot::traits::NodeImplementation;
-use crate::consensus_handle::ConsensusHandle;
 use hotshot_types::{data::EpochNumber, epoch_membership::EpochMembershipCoordinator};
 use request_response::recipient_source::RecipientSource as RecipientSourceTrait;
 use tracing::warn;
 
 use super::request::Request;
+use crate::consensus_handle::ConsensusHandle;
 
 #[derive(Clone)]
 pub struct RecipientSource<I: NodeImplementation<SeqTypes>> {

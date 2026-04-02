@@ -7,9 +7,6 @@ use committable::Commitment;
 use derivative::Derivative;
 use espresso_types::{PubKey, ValidatedState, parse_duration, v0::traits::SequencerPersistence};
 use futures::stream::StreamExt;
-use crate::consensus_handle::ConsensusEvent;
-
-use crate::consensus_handle::ConsensusHandle;
 use hotshot_types::{
     data::{Leaf2, ViewNumber},
     traits::{
@@ -23,6 +20,7 @@ use tracing::Instrument;
 
 use crate::{
     Node, SeqTypes,
+    consensus_handle::{ConsensusEvent, ConsensusHandle},
     context::TaskList,
 };
 
@@ -185,10 +183,7 @@ where
                 },
             }
 
-            let future = self
-                .consensus_handle
-                .request_proposal(view, leaf)
-                .await?;
+            let future = self.consensus_handle.request_proposal(view, leaf).await?;
             let proposal = timeout(self.cfg.fetch_timeout, future)
                 .await
                 .context("timed out fetching proposal")?

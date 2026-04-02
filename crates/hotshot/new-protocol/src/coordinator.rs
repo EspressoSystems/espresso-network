@@ -90,14 +90,27 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
         let lock = upgrade_lock();
         let coordinator = Self::builder()
             .consensus(consensus)
-            .network(Network::new(network, membership_coordinator.clone(), lock.clone()))
+            .network(Network::new(
+                network,
+                membership_coordinator.clone(),
+                lock.clone(),
+            ))
             .state_manager(state_manager)
             .query_rx(query_rx)
             .vid_disperser(VidDisperser::new(membership_coordinator.clone()))
             .vid_reconstructor(VidReconstructor::new())
-            .vote1_collector(VoteCollector::new(membership_coordinator.clone(), lock.clone()))
-            .vote2_collector(VoteCollector::new(membership_coordinator.clone(), lock.clone()))
-            .timeout_collector(VoteCollector::new(membership_coordinator.clone(), lock.clone()))
+            .vote1_collector(VoteCollector::new(
+                membership_coordinator.clone(),
+                lock.clone(),
+            ))
+            .vote2_collector(VoteCollector::new(
+                membership_coordinator.clone(),
+                lock.clone(),
+            ))
+            .timeout_collector(VoteCollector::new(
+                membership_coordinator.clone(),
+                lock.clone(),
+            ))
             .checkpoint_collector(VoteCollector::new(membership_coordinator.clone(), lock))
             .drb_requester(DrbRequester::new(store_drb_progress, load_drb_progress))
             .block_builder(BlockBuilder::new(
@@ -335,10 +348,11 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
             },
             MessageType::ViewSync(_) => todo!(),
             MessageType::External(data) => {
-                self.outbox.push_back(ConsensusOutput::ExternalMessageReceived {
-                    sender: message.sender,
-                    data,
-                });
+                self.outbox
+                    .push_back(ConsensusOutput::ExternalMessageReceived {
+                        sender: message.sender,
+                        data,
+                    });
                 None
             },
         }
@@ -396,7 +410,11 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                     let message = Message {
                         sender: self.public_key.clone(),
                         message_type: MessageType::Consensus(ConsensusMessage::Proposal(
-                            ProposalMessage::validated(self.public_key.clone(), proposal.clone(), vid_share),
+                            ProposalMessage::validated(
+                                self.public_key.clone(),
+                                proposal.clone(),
+                                vid_share,
+                            ),
                         )),
                     };
                     if let Err(err) = self.network.unicast(recipient_key, message).await {

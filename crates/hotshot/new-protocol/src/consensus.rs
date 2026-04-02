@@ -262,18 +262,15 @@ impl<T: NodeType> Consensus<T> {
         self.maybe_propose(view + 1, outbox).await;
     }
 
-
-    
     pub fn last_decided_view(&self) -> ViewNumber {
         self.last_decided_view
     }
 
-    
     pub fn last_decided_leaf(&self) -> &Leaf2<T> {
         &self.last_decided_leaf
     }
 
-    // TODO: 
+    // TODO:
     pub fn undecided_leaves(&self) -> Vec<Leaf2<T>> {
         self.leaves
             .range((
@@ -284,15 +281,14 @@ impl<T: NodeType> Consensus<T> {
             .collect()
     }
 
-     pub fn cur_view(&self) -> ViewNumber {
+    pub fn cur_view(&self) -> ViewNumber {
         self.cur_view
     }
 
-     pub fn cur_epoch(&self) -> Option<EpochNumber> {
+    pub fn cur_epoch(&self) -> Option<EpochNumber> {
         self.cur_epoch
     }
 
-   
     pub fn set_view(&mut self, view: ViewNumber, epoch: EpochNumber) {
         self.cur_view = view;
         self.cur_epoch = Some(epoch);

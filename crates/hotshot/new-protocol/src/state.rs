@@ -73,7 +73,11 @@ pub enum StateManagerOutput<T: NodeType> {
 }
 
 type Delta<T> = Arc<<<T as NodeType>::ValidatedState as ValidatedState<T>>::Delta>;
-type ValidatedStateEntry<T> = (Arc<<T as NodeType>::ValidatedState>, Option<Delta<T>>, Leaf2<T>);
+type ValidatedStateEntry<T> = (
+    Arc<<T as NodeType>::ValidatedState>,
+    Option<Delta<T>>,
+    Leaf2<T>,
+);
 
 pub struct StateManager<T: NodeType> {
     instance: Arc<T::InstanceState>,
@@ -116,7 +120,7 @@ impl<T: NodeType> StateManager<T> {
     pub fn get_state(&self, view: &ViewNumber) -> Option<Arc<T::ValidatedState>> {
         self.validated_states
             .get(view)
-            .map(|(state, _, _)| state.clone())
+            .map(|(state, ..)| state.clone())
     }
 
     /// Get the validated state and delta for a given view
@@ -223,7 +227,8 @@ impl<T: NodeType> StateManager<T> {
         }
 
         let parent_view = request.parent_proposal.view_number();
-        let Some((parent_state, _parent_delta, parent_leaf)) = self.validated_states.get(&parent_view).cloned()
+        let Some((parent_state, _parent_delta, parent_leaf)) =
+            self.validated_states.get(&parent_view).cloned()
         else {
             error!(view = %request.view, "parent state not found for header request");
             return;

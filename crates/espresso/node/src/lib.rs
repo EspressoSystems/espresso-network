@@ -811,7 +811,6 @@ pub mod testing {
         },
         types::EventType,
     };
-    use crate::consensus_handle::ConsensusEvent;
     use hotshot_builder_refactored::service::{
         BuilderConfig as LegacyBuilderConfig, GlobalState as LegacyGlobalState,
     };
@@ -840,6 +839,7 @@ pub mod testing {
     use super::*;
     use crate::{
         catchup::ParallelStateCatchup,
+        consensus_handle::ConsensusEvent,
         persistence::no_storage::{self, NoStorage},
     };
 
@@ -1510,7 +1510,11 @@ pub mod testing {
             let event = events.next().await.unwrap();
             tracing::info!("Received event from handle: {event:?}");
 
-            if let ConsensusEvent::LegacyEvent(Event { event: EventType::Decide { leaf_chain, .. }, .. }) = event {
+            if let ConsensusEvent::LegacyEvent(Event {
+                event: EventType::Decide { leaf_chain, .. },
+                ..
+            }) = event
+            {
                 if let Some((height, size)) =
                     leaf_chain.iter().find_map(|LeafInfo { leaf, .. }| {
                         if leaf
@@ -1538,15 +1542,17 @@ pub mod testing {
     /// Waits until a node has reached the given target epoch (exclusive).
     /// The function returns once the first event indicates an epoch higher than `target_epoch`.
     pub async fn wait_for_epochs(
-        events: &mut (
-                 impl futures::Stream<Item = ConsensusEvent<SeqTypes>> + std::marker::Unpin
-             ),
+        events: &mut (impl futures::Stream<Item = ConsensusEvent<SeqTypes>> + std::marker::Unpin),
         epoch_height: u64,
         target_epoch: u64,
     ) {
         tracing::info!(target_epoch, "waiting for epoch");
         while let Some(event) = events.next().await {
-            if let ConsensusEvent::LegacyEvent(Event { event: EventType::Decide { leaf_chain, .. }, .. }) = event {
+            if let ConsensusEvent::LegacyEvent(Event {
+                event: EventType::Decide { leaf_chain, .. },
+                ..
+            }) = event
+            {
                 let leaf = leaf_chain[0].leaf.clone();
                 let epoch = leaf.epoch(epoch_height);
                 tracing::debug!(
@@ -1569,7 +1575,6 @@ mod test {
     use espresso_types::{Header, MOCK_SEQUENCER_VERSIONS, NamespaceId, Payload, Transaction};
     use futures::StreamExt;
     use hotshot::types::{Event, EventType};
-    use crate::consensus_handle::ConsensusEvent;
     use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_types::{
         event::LeafInfo,
@@ -1579,6 +1584,7 @@ mod test {
 
     use self::testing::run_test_builder;
     use super::*;
+    use crate::consensus_handle::ConsensusEvent;
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_skeleton_instantiation() {
@@ -1599,7 +1605,14 @@ mod test {
         let handle_0 = &handles[0];
 
         // Hook the builder up to the event stream from the first node
-        builder_task.start(Box::new(handle_0.consensus_handle().hotshot().read().await.event_stream()));
+        builder_task.start(Box::new(
+            handle_0
+                .consensus_handle()
+                .hotshot()
+                .read()
+                .await
+                .event_stream(),
+        ));
 
         let mut events = handle_0.event_stream();
 
@@ -1639,7 +1652,14 @@ mod test {
         let mut events = handle_0.event_stream();
 
         // Hook the builder up to the event stream from the first node
-        builder_task.start(Box::new(handle_0.consensus_handle().hotshot().read().await.event_stream()));
+        builder_task.start(Box::new(
+            handle_0
+                .consensus_handle()
+                .hotshot()
+                .read()
+                .await
+                .event_stream(),
+        ));
 
         for handle in handles.iter() {
             handle.start_consensus().await;
@@ -1664,7 +1684,11 @@ mod test {
         loop {
             let event = events.next().await.unwrap();
             tracing::info!("Received event from handle: {event:?}");
-            let ConsensusEvent::LegacyEvent(Event { event: EventType::Decide { leaf_chain, .. }, .. }) = event else {
+            let ConsensusEvent::LegacyEvent(Event {
+                event: EventType::Decide { leaf_chain, .. },
+                ..
+            }) = event
+            else {
                 continue;
             };
             tracing::info!("Got decide {leaf_chain:?}");

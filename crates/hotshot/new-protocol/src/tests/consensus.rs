@@ -35,8 +35,12 @@ impl ConsensusHarness {
         let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
         let membership = mock_membership().await;
         let instance = Arc::new(hotshot_example_types::state_types::TestInstanceState::default());
-        let genesis_leaf =
-            Leaf2::<TestTypes>::genesis(&TestValidatedState::default(), &instance, TEST_VERSIONS.test.base).await;
+        let genesis_leaf = Leaf2::<TestTypes>::genesis(
+            &TestValidatedState::default(),
+            &instance,
+            TEST_VERSIONS.test.base,
+        )
+        .await;
         let consensus = Consensus::new(membership.clone(), public_key, private_key, genesis_leaf);
         Self {
             consensus,
