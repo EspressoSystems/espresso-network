@@ -349,7 +349,7 @@ services:
     # Run the full API server with all modules, Postgres storage
     command: espresso-node -- storage-sql -- http -- query -- submit -- hotshot-events -- config
     environment:
-      - ESPRESSO_SEQUENCER_EMBEDDED_DB=false
+
       - ESPRESSO_SEQUENCER_GENESIS_FILE=${ESPRESSO_SEQUENCER_GENESIS_FILE:-genesis/demo.toml}
       - ESPRESSO_SEQUENCER_ORCHESTRATOR_URL=http://orchestrator:${ESPRESSO_ORCHESTRATOR_PORT}
       - ESPRESSO_SEQUENCER_CDN_ENDPOINT=marshal-0:${ESPRESSO_CDN_SERVER_PORT}
@@ -410,7 +410,7 @@ services:
       - "$ESPRESSO_SEQUENCER1_API_PORT:$ESPRESSO_SEQUENCER1_API_PORT"
     command: espresso-node -- storage-sql -- http -- query -- explorer
     environment:
-      - ESPRESSO_SEQUENCER_EMBEDDED_DB=false
+
       - ESPRESSO_SEQUENCER_GENESIS_FILE=${ESPRESSO_SEQUENCER_GENESIS_FILE:-genesis/demo.toml}
       - ESPRESSO_SEQUENCER_ORCHESTRATOR_URL=http://orchestrator:${ESPRESSO_ORCHESTRATOR_PORT}
       - ESPRESSO_SEQUENCER_CDN_ENDPOINT=marshal-0:${ESPRESSO_CDN_SERVER_PORT}
@@ -472,7 +472,7 @@ services:
       - "$ESPRESSO_SEQUENCER2_API_PORT:$ESPRESSO_SEQUENCER2_API_PORT"
     command: espresso-node -- http
     environment:
-      - ESPRESSO_SEQUENCER_EMBEDDED_DB=false
+
       - ESPRESSO_SEQUENCER_GENESIS_FILE=${ESPRESSO_SEQUENCER_GENESIS_FILE:-genesis/demo.toml}
       - ESPRESSO_SEQUENCER_ORCHESTRATOR_URL=http://orchestrator:${ESPRESSO_ORCHESTRATOR_PORT}
       - ESPRESSO_SEQUENCER_CDN_ENDPOINT=marshal-0:${ESPRESSO_CDN_SERVER_PORT}
@@ -526,7 +526,7 @@ services:
       - "$ESPRESSO_SEQUENCER3_API_PORT:$ESPRESSO_SEQUENCER3_API_PORT"
     command: espresso-node -- http -- query -- storage-fs
     environment:
-      - ESPRESSO_SEQUENCER_EMBEDDED_DB=false
+
       - ESPRESSO_SEQUENCER_GENESIS_FILE=${ESPRESSO_SEQUENCER_GENESIS_FILE:-genesis/demo.toml}
       - ESPRESSO_SEQUENCER_ORCHESTRATOR_URL=http://orchestrator:${ESPRESSO_ORCHESTRATOR_PORT}
       - ESPRESSO_SEQUENCER_CDN_ENDPOINT=marshal-0:${ESPRESSO_CDN_SERVER_PORT}
@@ -580,7 +580,7 @@ services:
       - "$ESPRESSO_SEQUENCER4_API_PORT:$ESPRESSO_SEQUENCER4_API_PORT"
     command: espresso-node -- http -- query -- storage-fs
     environment:
-      - ESPRESSO_SEQUENCER_EMBEDDED_DB=true
+
       - ESPRESSO_SEQUENCER_GENESIS_FILE=${ESPRESSO_SEQUENCER_GENESIS_FILE:-genesis/demo.toml}
       - ESPRESSO_SEQUENCER_ORCHESTRATOR_URL=http://orchestrator:${ESPRESSO_ORCHESTRATOR_PORT}
       - ESPRESSO_SEQUENCER_CDN_ENDPOINT=marshal-0:${ESPRESSO_CDN_SERVER_PORT}

@@ -24,11 +24,12 @@ use hotshot_types::{
     traits::{block_contents::BlockHeader, node_implementation::NodeType},
 };
 use snafu::OptionExt;
+use sqlx::Row;
 use tracing::instrument;
 
 use super::{
-    super::transaction::{Transaction, TransactionMode, Write, query, query_as},
-    DecodeError, HEADER_COLUMNS, QueryBuilder, parse_header,
+    super::transaction::{Transaction, TransactionMode, Write},
+    DecodeError, HEADER_COLUMNS, QueryBuilder,
 };
 use crate::{
     Header, MissingSnafu, QueryError, QueryResult,
@@ -41,6 +42,7 @@ use crate::{
         TimeWindowQueryData, WindowStart,
     },
     types::HeightIndexed,
+    with_backend,
 };
 
 #[async_trait]
@@ -51,16 +53,18 @@ where
     Header<Types>: QueryableHeader<Types>,
 {
     async fn block_height(&mut self) -> QueryResult<usize> {
-        match query_as::<(Option<i64>,)>("SELECT max(height) FROM header")
-            .fetch_one(self.as_mut())
-            .await?
-        {
-            (Some(height),) => {
+        let (height,): (Option<i64>,) = with_backend!(self, |tx| {
+            sqlx::query_as("SELECT max(height) FROM header")
+                .fetch_one(tx.as_mut())
+                .await
+        })?;
+        match height {
+            Some(height) => {
                 // The height of the block is the number of blocks below it, so the total number of
                 // blocks is one more than the height of the highest block.
                 Ok(height as usize + 1)
             },
-            (None,) => {
+            None => {
                 // If there are no blocks yet, the height is 0.
                 Ok(0)
             },
@@ -76,23 +80,27 @@ where
         let Some((from, to)) = aggregate_range_bounds::<Types>(self, range).await? else {
             return Ok(0);
         };
-        let (count,) = query_as::<(i64,)>(
-            "SELECT num_transactions FROM aggregate WHERE height = $1 AND namespace = $2",
-        )
-        .bind(to as i64)
-        .bind(namespace)
-        .fetch_one(self.as_mut())
-        .await?;
+        let (count,): (i64,) = with_backend!(self, |tx| {
+            sqlx::query_as(
+                "SELECT num_transactions FROM aggregate WHERE height = $1 AND namespace = $2",
+            )
+            .bind(to as i64)
+            .bind(namespace)
+            .fetch_one(tx.as_mut())
+            .await
+        })?;
         let mut count = count as usize;
 
         if from > 0 {
-            let (prev_count,) = query_as::<(i64,)>(
-                "SELECT num_transactions FROM aggregate WHERE height = $1 AND namespace = $2",
-            )
-            .bind((from - 1) as i64)
-            .bind(namespace)
-            .fetch_one(self.as_mut())
-            .await?;
+            let (prev_count,): (i64,) = with_backend!(self, |tx| {
+                sqlx::query_as(
+                    "SELECT num_transactions FROM aggregate WHERE height = $1 AND namespace = $2",
+                )
+                .bind((from - 1) as i64)
+                .bind(namespace)
+                .fetch_one(tx.as_mut())
+                .await
+            })?;
             count = count.saturating_sub(prev_count as usize);
         }
 
@@ -108,23 +116,27 @@ where
         let Some((from, to)) = aggregate_range_bounds::<Types>(self, range).await? else {
             return Ok(0);
         };
-        let (size,) = query_as::<(i64,)>(
-            "SELECT payload_size FROM aggregate WHERE height = $1 AND namespace = $2",
-        )
-        .bind(to as i64)
-        .bind(namespace)
-        .fetch_one(self.as_mut())
-        .await?;
+        let (size,): (i64,) = with_backend!(self, |tx| {
+            sqlx::query_as(
+                "SELECT payload_size FROM aggregate WHERE height = $1 AND namespace = $2",
+            )
+            .bind(to as i64)
+            .bind(namespace)
+            .fetch_one(tx.as_mut())
+            .await
+        })?;
         let mut size = size as usize;
 
         if from > 0 {
-            let (prev_size,) = query_as::<(i64,)>(
-                "SELECT payload_size FROM aggregate WHERE height = $1 AND namespace = $2",
-            )
-            .bind((from - 1) as i64)
-            .bind(namespace)
-            .fetch_one(self.as_mut())
-            .await?;
+            let (prev_size,): (i64,) = with_backend!(self, |tx| {
+                sqlx::query_as(
+                    "SELECT payload_size FROM aggregate WHERE height = $1 AND namespace = $2",
+                )
+                .bind((from - 1) as i64)
+                .bind(namespace)
+                .fetch_one(tx.as_mut())
+                .await
+            })?;
             size = size.saturating_sub(prev_size as usize);
         }
 
@@ -135,7 +147,7 @@ where
     where
         ID: Into<BlockId<Types>> + Send + Sync,
     {
-        let mut query = QueryBuilder::default();
+        let mut query = QueryBuilder::new(self.backend());
         let where_clause = query.header_where_clause(id.into())?;
         // ORDER BY h.height ASC ensures that if there are duplicate blocks (this can happen when
         // selecting by payload ID, as payloads are not unique), we return the first one.
@@ -145,9 +157,9 @@ where
               ORDER BY h.height
               LIMIT 1"
         );
-        let (share_data,) = query
+        let (share_data,): (Option<Vec<u8>>,) = query
             .query_as::<(Option<Vec<u8>>,)>(&sql)
-            .fetch_one(self.as_mut())
+            .fetch_one(self)
             .await?;
         let share_data = share_data.context(MissingSnafu)?;
         let share = bincode::deserialize(&share_data).decode_error("malformed VID share")?;
@@ -231,15 +243,20 @@ where
               ORDER BY h.height
               LIMIT $3"
         );
-        let rows = query(&sql)
-            .bind(first_block as i64)
-            .bind(end as i64)
-            .bind(limit as i64)
-            .fetch(self.as_mut());
-        let window = rows
-            .map(|row| parse_header::<Types>(row?))
-            .try_collect::<Vec<_>>()
-            .await?;
+        let window: Vec<Header<Types>> = with_backend!(self, |tx| {
+            sqlx::query(&sql)
+                .bind(first_block as i64)
+                .bind(end as i64)
+                .bind(limit as i64)
+                .fetch(tx.as_mut())
+                .map(|row| {
+                    let row = row?;
+                    let data = row.try_get("data")?;
+                    serde_json::from_value(data).decode_error("malformed header")
+                })
+                .try_collect()
+                .await
+        })?;
 
         // Find the block just before the window.
         let prev = if first_block > 0 {
@@ -264,11 +281,13 @@ where
               ORDER BY h.timestamp, h.height
               LIMIT 1"
             );
-            query(&sql)
-                .bind(end as i64)
-                .fetch_optional(self.as_mut())
-                .await?
-                .map(parse_header::<Types>)
+            let row: Option<(serde_json::Value,)> = with_backend!(self, |tx| {
+                sqlx::query_as(&sql)
+                    .bind(end as i64)
+                    .fetch_optional(tx.as_mut())
+                    .await
+            })?;
+            row.map(|(data,)| serde_json::from_value(data).decode_error("malformed header"))
                 .transpose()?
         } else {
             // If we have been limited, return a `null` next block indicating an incomplete window.
@@ -282,9 +301,11 @@ where
     }
 
     async fn latest_qc_chain(&mut self) -> QueryResult<Option<[CertificatePair<Types>; 2]>> {
-        let Some((json,)) = query_as("SELECT qcs FROM latest_qc_chain LIMIT 1")
-            .fetch_optional(self.as_mut())
-            .await?
+        let Some((json,)): Option<(serde_json::Value,)> = with_backend!(self, |tx| {
+            sqlx::query_as("SELECT qcs FROM latest_qc_chain LIMIT 1")
+                .fetch_optional(tx.as_mut())
+                .await
+        })?
         else {
             return Ok(None);
         };
@@ -350,11 +371,13 @@ where
               AND predecessor.indicator IS NULL
             ORDER BY successor.height"
         );
-        let range_starts = query_as::<(i64,)>(&query)
-            .bind(start as i64)
-            .bind(end as i64)
-            .fetch_all(self.as_mut())
-            .await?;
+        let range_starts: Vec<(i64,)> = with_backend!(self, |tx| {
+            sqlx::query_as(&query)
+                .bind(start as i64)
+                .bind(end as i64)
+                .fetch_all(tx.as_mut())
+                .await
+        })?;
         tracing::debug!(
             ?range_starts,
             "found {} starting heights for present ranges",
@@ -380,12 +403,14 @@ where
                 } else {
                     end as i64
                 };
-                let (end,) = query_as::<(i64,)>(&query)
-                    .bind(upper_bound)
-                    // This query is guaranteed to return one result, since `start` satisfies the
-                    // requirements even if nothing else does.
-                    .fetch_one(self.as_mut())
-                    .await?;
+                let (end,): (i64,) = with_backend!(self, |tx| {
+                    sqlx::query_as(&query)
+                        .bind(upper_bound)
+                        // This query is guaranteed to return one result, since `start` satisfies
+                        // the requirements even if nothing else does.
+                        .fetch_one(tx.as_mut())
+                        .await
+                })?;
                 tracing::debug!(start, end, "found end for present range");
                 ends.push((end,));
             }
@@ -406,11 +431,13 @@ where
                   AND successor.indicator IS NULL
                 ORDER BY predecessor.height"
             );
-            let ends = query_as::<(i64,)>(&query)
-                .bind(start as i64)
-                .bind(end as i64)
-                .fetch_all(self.as_mut())
-                .await?;
+            let ends: Vec<(i64,)> = with_backend!(self, |tx| {
+                sqlx::query_as(&query)
+                    .bind(start as i64)
+                    .bind(end as i64)
+                    .fetch_all(tx.as_mut())
+                    .await
+            })?;
             tracing::debug!(
                 ?ends,
                 "found {} ending heights for present ranges",
@@ -510,32 +537,37 @@ where
     Header<Types>: QueryableHeader<Types>,
 {
     async fn aggregates_height(&mut self) -> anyhow::Result<usize> {
-        let (height,): (i64,) = query_as("SELECT coalesce(max(height) + 1, 0) FROM aggregate")
-            .fetch_one(self.as_mut())
-            .await?;
+        let (height,): (i64,) = with_backend!(self, |tx| {
+            sqlx::query_as("SELECT coalesce(max(height) + 1, 0) FROM aggregate")
+                .fetch_one(tx.as_mut())
+                .await
+        })?;
         Ok(height as usize)
     }
 
     async fn load_prev_aggregate(&mut self) -> anyhow::Result<Option<Aggregate<Types>>> {
         // Get the maximum height for which we have stored aggregated results
         // then query all the namespace info for that height
-        let res: (Option<i64>,) =
-            query_as("SELECT max(height) FROM aggregate WHERE namespace = -1")
-                .fetch_one(self.as_mut())
-                .await?;
+        let res: (Option<i64>,) = with_backend!(self, |tx| {
+            sqlx::query_as("SELECT max(height) FROM aggregate WHERE namespace = -1")
+                .fetch_one(tx.as_mut())
+                .await
+        })?;
 
         let (Some(max_height),) = res else {
             return Ok(None);
         };
 
-        let rows: Vec<(i64, i64, i64)> = query_as(
-            r#"
+        let rows: Vec<(i64, i64, i64)> = with_backend!(self, |tx| {
+            sqlx::query_as(
+                r#"
         SELECT namespace, num_transactions, payload_size from aggregate WHERE height = $1
         "#,
-        )
-        .bind(max_height)
-        .fetch_all(self.as_mut())
-        .await?;
+            )
+            .bind(max_height)
+            .fetch_all(tx.as_mut())
+            .await
+        })?;
 
         let mut num_transactions = HashMap::default();
         let mut payload_size = HashMap::default();
@@ -676,15 +708,20 @@ impl<Mode: TransactionMode> Transaction<Mode> {
               ORDER BY h.timestamp, h.height
               LIMIT $3"
         );
-        let rows = query(&sql)
-            .bind(start as i64)
-            .bind(end as i64)
-            .bind(limit as i64)
-            .fetch(self.as_mut());
-        let window: Vec<_> = rows
-            .map(|row| parse_header::<Types>(row?))
-            .try_collect()
-            .await?;
+        let window: Vec<Header<Types>> = with_backend!(self, |tx| {
+            sqlx::query(&sql)
+                .bind(start as i64)
+                .bind(end as i64)
+                .bind(limit as i64)
+                .fetch(tx.as_mut())
+                .map(|row| {
+                    let row = row?;
+                    let data = row.try_get("data")?;
+                    serde_json::from_value(data).decode_error("malformed header")
+                })
+                .try_collect()
+                .await
+        })?;
 
         let next = if window.len() < limit {
             // If we are not limited, complete the window by finding the block just after.
@@ -695,11 +732,13 @@ impl<Mode: TransactionMode> Transaction<Mode> {
               ORDER BY h.timestamp, h.height
               LIMIT 1"
             );
-            query(&sql)
-                .bind(end as i64)
-                .fetch_optional(self.as_mut())
-                .await?
-                .map(parse_header::<Types>)
+            let row: Option<(serde_json::Value,)> = with_backend!(self, |tx| {
+                sqlx::query_as(&sql)
+                    .bind(end as i64)
+                    .fetch_optional(tx.as_mut())
+                    .await
+            })?;
+            row.map(|(data,)| serde_json::from_value(data).decode_error("malformed header"))
                 .transpose()?
         } else {
             // If we have been limited, return a `null` next block indicating an incomplete window.
@@ -728,11 +767,14 @@ impl<Mode: TransactionMode> Transaction<Mode> {
               ORDER BY h.timestamp DESC, h.height DESC
               LIMIT 1"
         );
-        let prev = query(&sql)
-            .bind(start as i64)
-            .fetch_optional(self.as_mut())
-            .await?
-            .map(parse_header::<Types>)
+        let prev: Option<(serde_json::Value,)> = with_backend!(self, |tx| {
+            sqlx::query_as(&sql)
+                .bind(start as i64)
+                .fetch_optional(tx.as_mut())
+                .await
+        })?;
+        let prev = prev
+            .map(|(data,)| serde_json::from_value(data).decode_error("malformed header"))
             .transpose()?;
 
         Ok(TimeWindowQueryData { window, prev, next })

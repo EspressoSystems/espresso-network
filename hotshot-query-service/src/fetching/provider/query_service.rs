@@ -466,6 +466,8 @@ mod test {
     use generic_array::GenericArray;
     use hotshot_example_types::node_types::{EpochVersion, TEST_VERSIONS};
     use rand::RngCore;
+    use rstest::rstest;
+    use rstest_reuse::{self, apply, template};
     use test_utils::reserve_tcp_port;
     use tide_disco::{Api, App, error::ServerError};
     use toml::toml;
@@ -486,7 +488,7 @@ mod test {
                 AvailabilityStorage, SqlStorage, StorageConnectionType, UpdateAvailabilityStorage,
                 fail_storage::{FailStorage, FailableAction},
                 pruning::{PrunedHeightStorage, PrunerCfg},
-                sql::testing::TmpDb,
+                sql::{DbBackend, testing::TmpDb},
             },
         },
         fetching::provider::{NoFetching, Provider as ProviderTrait, TestProvider},
@@ -499,6 +501,13 @@ mod test {
         },
         types::HeightIndexed,
     };
+
+    #[template]
+    #[rstest]
+    #[case::postgres(DbBackend::Postgres)]
+    #[case::sqlite(DbBackend::Sqlite)]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    fn sql_backends(#[case] backend: DbBackend) {}
 
     type Provider = TestProvider<QueryServiceProvider<MockBase>>;
     type EpochProvider = TestProvider<QueryServiceProvider<EpochVersion>>;
@@ -527,8 +536,8 @@ mod test {
         builder(db, provider).await.build().await.unwrap()
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_fetch_on_request() {
+    #[apply(sql_backends)]
+    async fn test_fetch_on_request(#[case] backend: DbBackend) {
         // Create the consensus network.
         let mut network = MockNetwork::<MockDataSource>::init().await;
 
@@ -551,7 +560,7 @@ mod test {
         );
 
         // Start a data source which is not receiving events from consensus, only from a peer.
-        let db = TmpDb::init().await;
+        let db = TmpDb::init_for(backend).await;
         let provider = Provider::new(QueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
             MockBase::instance(),
@@ -753,8 +762,8 @@ mod test {
         }
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_fetch_on_request_epoch_version() {
+    #[apply(sql_backends)]
+    async fn test_fetch_on_request_epoch_version(#[case] backend: DbBackend) {
         // This test verifies that our provider can handle fetching things by their hashes,
         // specifically focused on epoch version transitions
         tracing::info!("Starting test_fetch_on_request_epoch_version");
@@ -782,7 +791,7 @@ mod test {
 
         // Start a data source which is not receiving events from consensus, only from a peer.
         // Use our special test provider that handles epoch version transitions
-        let db = TmpDb::init().await;
+        let db = TmpDb::init_for(backend).await;
         let provider = EpochProvider::new(QueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
             EpochVersion::instance(),
@@ -983,8 +992,8 @@ mod test {
         tracing::info!("Test completed successfully!");
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_fetch_block_and_leaf_concurrently() {
+    #[apply(sql_backends)]
+    async fn test_fetch_block_and_leaf_concurrently(#[case] backend: DbBackend) {
         // Create the consensus network.
         let mut network = MockNetwork::<MockDataSource>::init().await;
 
@@ -1007,7 +1016,7 @@ mod test {
         );
 
         // Start a data source which is not receiving events from consensus, only from a peer.
-        let db = TmpDb::init().await;
+        let db = TmpDb::init_for(backend).await;
         let provider = Provider::new(QueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
             MockBase::instance(),
@@ -1044,8 +1053,8 @@ mod test {
         assert_eq!(leaf.header(), block.header());
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_fetch_different_blocks_same_payload() {
+    #[apply(sql_backends)]
+    async fn test_fetch_different_blocks_same_payload(#[case] backend: DbBackend) {
         // Create the consensus network.
         let mut network = MockNetwork::<MockDataSource>::init().await;
 
@@ -1068,7 +1077,7 @@ mod test {
         );
 
         // Start a data source which is not receiving events from consensus, only from a peer.
-        let db = TmpDb::init().await;
+        let db = TmpDb::init_for(backend).await;
         let provider = Provider::new(QueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
             MockBase::instance(),
@@ -1109,8 +1118,8 @@ mod test {
         assert_eq!(block2.header(), leaves[1].header());
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_fetch_stream() {
+    #[apply(sql_backends)]
+    async fn test_fetch_stream(#[case] backend: DbBackend) {
         // Create the consensus network.
         let mut network = MockNetwork::<MockDataSource>::init().await;
 
@@ -1133,7 +1142,7 @@ mod test {
         );
 
         // Start a data source which is not receiving events from consensus, only from a peer.
-        let db = TmpDb::init().await;
+        let db = TmpDb::init_for(backend).await;
         let provider = Provider::new(QueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
             MockBase::instance(),
@@ -1171,8 +1180,8 @@ mod test {
         }
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_fetch_range_start() {
+    #[apply(sql_backends)]
+    async fn test_fetch_range_start(#[case] backend: DbBackend) {
         // Create the consensus network.
         let mut network = MockNetwork::<MockDataSource>::init().await;
 
@@ -1195,7 +1204,7 @@ mod test {
         );
 
         // Start a data source which is not receiving events from consensus, only from a peer.
-        let db = TmpDb::init().await;
+        let db = TmpDb::init_for(backend).await;
         let provider = Provider::new(QueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
             MockBase::instance(),
@@ -1230,8 +1239,8 @@ mod test {
         }
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn fetch_transaction() {
+    #[apply(sql_backends)]
+    async fn fetch_transaction(#[case] backend: DbBackend) {
         // Create the consensus network.
         let mut network = MockNetwork::<MockDataSource>::init().await;
 
@@ -1255,7 +1264,7 @@ mod test {
 
         // Start a data source which is not receiving events from consensus. We don't give it a
         // fetcher since transactions are always fetched passively anyways.
-        let db = TmpDb::init().await;
+        let db = TmpDb::init_for(backend).await;
         let data_source = data_source(&db, &NoFetching).await;
 
         // Subscribe to blocks.
@@ -1309,8 +1318,8 @@ mod test {
         );
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_retry() {
+    #[apply(sql_backends)]
+    async fn test_retry(#[case] backend: DbBackend) {
         // Create the consensus network.
         let mut network = MockNetwork::<MockDataSource>::init().await;
 
@@ -1333,7 +1342,7 @@ mod test {
         );
 
         // Start a data source which is not receiving events from consensus.
-        let db = TmpDb::init().await;
+        let db = TmpDb::init_for(backend).await;
         let provider = Provider::new(QueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
             MockBase::instance(),
@@ -1626,8 +1635,8 @@ mod test {
         assert!(err.to_string().contains("wrong VID common"), "{err:#}");
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_archive_recovery() {
+    #[apply(sql_backends)]
+    async fn test_archive_recovery(#[case] backend: DbBackend) {
         // Create the consensus network.
         let mut network = MockNetwork::<MockDataSource>::init().await;
 
@@ -1651,7 +1660,7 @@ mod test {
 
         // Start a data source which is not receiving events from consensus, only from a peer. The
         // data source is at first configured to aggressively prune data.
-        let db = TmpDb::init().await;
+        let db = TmpDb::init_for(backend).await;
         let provider = Provider::new(QueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
             MockBase::instance(),
@@ -1781,7 +1790,7 @@ mod test {
         Commit,
     }
 
-    async fn test_fetch_storage_failure_helper(failure: FailureType) {
+    async fn test_fetch_storage_failure_helper(failure: FailureType, backend: DbBackend) {
         // Create the consensus network.
         let mut network = MockNetwork::<MockDataSource>::init().await;
 
@@ -1808,7 +1817,7 @@ mod test {
             format!("http://localhost:{port}").parse().unwrap(),
             MockBase::instance(),
         ));
-        let db = TmpDb::init().await;
+        let db = TmpDb::init_for(backend).await;
         let storage = FailStorage::from(
             SqlStorage::connect(db.config(), StorageConnectionType::Query)
                 .await
@@ -1872,22 +1881,22 @@ mod test {
         assert_eq!(leaves[0], fetch.try_resolve().ok().unwrap());
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_fetch_storage_failure_on_begin() {
-        test_fetch_storage_failure_helper(FailureType::Begin).await;
+    #[apply(sql_backends)]
+    async fn test_fetch_storage_failure_on_begin(#[case] backend: DbBackend) {
+        test_fetch_storage_failure_helper(FailureType::Begin, backend).await;
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_fetch_storage_failure_on_write() {
-        test_fetch_storage_failure_helper(FailureType::Write).await;
+    #[apply(sql_backends)]
+    async fn test_fetch_storage_failure_on_write(#[case] backend: DbBackend) {
+        test_fetch_storage_failure_helper(FailureType::Write, backend).await;
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_fetch_storage_failure_on_commit() {
-        test_fetch_storage_failure_helper(FailureType::Commit).await;
+    #[apply(sql_backends)]
+    async fn test_fetch_storage_failure_on_commit(#[case] backend: DbBackend) {
+        test_fetch_storage_failure_helper(FailureType::Commit, backend).await;
     }
 
-    async fn test_fetch_storage_failure_retry_helper(failure: FailureType) {
+    async fn test_fetch_storage_failure_retry_helper(failure: FailureType, backend: DbBackend) {
         // Create the consensus network.
         let mut network = MockNetwork::<MockDataSource>::init().await;
 
@@ -1914,7 +1923,7 @@ mod test {
             format!("http://localhost:{port}").parse().unwrap(),
             MockBase::instance(),
         ));
-        let db = TmpDb::init().await;
+        let db = TmpDb::init_for(backend).await;
         let storage = FailStorage::from(
             SqlStorage::connect(db.config(), StorageConnectionType::Query)
                 .await
@@ -1970,23 +1979,23 @@ mod test {
         assert_eq!(leaves[0], tx.get_leaf(1.into()).await.unwrap());
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_fetch_storage_failure_retry_on_begin() {
-        test_fetch_storage_failure_retry_helper(FailureType::Begin).await;
+    #[apply(sql_backends)]
+    async fn test_fetch_storage_failure_retry_on_begin(#[case] backend: DbBackend) {
+        test_fetch_storage_failure_retry_helper(FailureType::Begin, backend).await;
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_fetch_storage_failure_retry_on_write() {
-        test_fetch_storage_failure_retry_helper(FailureType::Write).await;
+    #[apply(sql_backends)]
+    async fn test_fetch_storage_failure_retry_on_write(#[case] backend: DbBackend) {
+        test_fetch_storage_failure_retry_helper(FailureType::Write, backend).await;
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_fetch_storage_failure_retry_on_commit() {
-        test_fetch_storage_failure_retry_helper(FailureType::Commit).await;
+    #[apply(sql_backends)]
+    async fn test_fetch_storage_failure_retry_on_commit(#[case] backend: DbBackend) {
+        test_fetch_storage_failure_retry_helper(FailureType::Commit, backend).await;
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_fetch_on_decide() {
+    #[apply(sql_backends)]
+    async fn test_fetch_on_decide(#[case] backend: DbBackend) {
         // Create the consensus network.
         let mut network = MockNetwork::<MockDataSource>::init().await;
 
@@ -2009,7 +2018,7 @@ mod test {
         );
 
         // Start a data source which is not receiving events from consensus.
-        let db = TmpDb::init().await;
+        let db = TmpDb::init_for(backend).await;
         let provider = Provider::new(QueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
             MockBase::instance(),
@@ -2054,8 +2063,8 @@ mod test {
         assert_eq!(vid.block_hash(), leaf.block_hash());
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_fetch_begin_failure() {
+    #[apply(sql_backends)]
+    async fn test_fetch_begin_failure(#[case] backend: DbBackend) {
         // Create the consensus network.
         let mut network = MockNetwork::<MockDataSource>::init().await;
 
@@ -2082,7 +2091,7 @@ mod test {
             format!("http://localhost:{port}").parse().unwrap(),
             MockBase::instance(),
         ));
-        let db = TmpDb::init().await;
+        let db = TmpDb::init_for(backend).await;
         let storage = FailStorage::from(
             SqlStorage::connect(db.config(), StorageConnectionType::Query)
                 .await
@@ -2119,8 +2128,8 @@ mod test {
         assert_eq!(leaves[0], data_source.get_leaf(1).await.await);
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_fetch_load_failure_block() {
+    #[apply(sql_backends)]
+    async fn test_fetch_load_failure_block(#[case] backend: DbBackend) {
         // Create the consensus network.
         let mut network = MockNetwork::<MockDataSource>::init().await;
 
@@ -2147,7 +2156,7 @@ mod test {
             format!("http://localhost:{port}").parse().unwrap(),
             MockBase::instance(),
         ));
-        let db = TmpDb::init().await;
+        let db = TmpDb::init_for(backend).await;
         let storage = FailStorage::from(
             SqlStorage::connect(db.config(), StorageConnectionType::Query)
                 .await
@@ -2202,8 +2211,8 @@ mod test {
         assert_eq!(block.hash(), leaf.block_hash());
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_fetch_load_failure_tx() {
+    #[apply(sql_backends)]
+    async fn test_fetch_load_failure_tx(#[case] backend: DbBackend) {
         // Create the consensus network.
         let mut network = MockNetwork::<MockDataSource>::init().await;
 
@@ -2230,7 +2239,7 @@ mod test {
             format!("http://localhost:{port}").parse().unwrap(),
             MockBase::instance(),
         ));
-        let db = TmpDb::init().await;
+        let db = TmpDb::init_for(backend).await;
         let storage = FailStorage::from(
             SqlStorage::connect(db.config(), StorageConnectionType::Query)
                 .await
@@ -2307,8 +2316,8 @@ mod test {
         assert_eq!(tx, fetch.await);
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_stream_begin_failure() {
+    #[apply(sql_backends)]
+    async fn test_stream_begin_failure(#[case] backend: DbBackend) {
         // Create the consensus network.
         let mut network = MockNetwork::<MockDataSource>::init().await;
 
@@ -2335,7 +2344,7 @@ mod test {
             format!("http://localhost:{port}").parse().unwrap(),
             MockBase::instance(),
         ));
-        let db = TmpDb::init().await;
+        let db = TmpDb::init_for(backend).await;
         let storage = FailStorage::from(
             SqlStorage::connect(db.config(), StorageConnectionType::Query)
                 .await
@@ -2381,8 +2390,8 @@ mod test {
         );
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_stream_load_failure() {
+    #[apply(sql_backends)]
+    async fn test_stream_load_failure(#[case] backend: DbBackend) {
         // Create the consensus network.
         let mut network = MockNetwork::<MockDataSource>::init().await;
 
@@ -2409,7 +2418,7 @@ mod test {
             format!("http://localhost:{port}").parse().unwrap(),
             MockBase::instance(),
         ));
-        let db = TmpDb::init().await;
+        let db = TmpDb::init_for(backend).await;
         let storage = FailStorage::from(
             SqlStorage::connect(db.config(), StorageConnectionType::Query)
                 .await
@@ -2461,7 +2470,7 @@ mod test {
         Vid,
     }
 
-    async fn test_metadata_stream_begin_failure_helper(stream: MetadataType) {
+    async fn test_metadata_stream_begin_failure_helper(stream: MetadataType, backend: DbBackend) {
         // Create the consensus network.
         let mut network = MockNetwork::<MockDataSource>::init().await;
 
@@ -2488,7 +2497,7 @@ mod test {
             format!("http://localhost:{port}").parse().unwrap(),
             MockBase::instance(),
         ));
-        let db = TmpDb::init().await;
+        let db = TmpDb::init_for(backend).await;
         let storage = FailStorage::from(
             SqlStorage::connect(db.config(), StorageConnectionType::Query)
                 .await
@@ -2564,14 +2573,14 @@ mod test {
         }
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_metadata_stream_begin_failure_payload() {
-        test_metadata_stream_begin_failure_helper(MetadataType::Payload).await
+    #[apply(sql_backends)]
+    async fn test_metadata_stream_begin_failure_payload(#[case] backend: DbBackend) {
+        test_metadata_stream_begin_failure_helper(MetadataType::Payload, backend).await
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_metadata_stream_begin_failure_vid() {
-        test_metadata_stream_begin_failure_helper(MetadataType::Vid).await
+    #[apply(sql_backends)]
+    async fn test_metadata_stream_begin_failure_vid(#[case] backend: DbBackend) {
+        test_metadata_stream_begin_failure_helper(MetadataType::Vid, backend).await
     }
 
     #[tokio::test(flavor = "multi_thread")]

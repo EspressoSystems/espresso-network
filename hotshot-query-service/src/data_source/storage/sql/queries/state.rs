@@ -17,7 +17,6 @@ use std::{
     sync::Arc,
 };
 
-#[cfg(not(feature = "embedded-db"))]
 use anyhow::Context;
 use ark_serialize::CanonicalDeserialize;
 use async_trait::async_trait;
@@ -30,7 +29,10 @@ use jf_merkle_tree_compat::{
 use sqlx::types::{BitVec, JsonValue};
 
 use super::{
-    super::transaction::{Transaction, TransactionMode, Write, query_as},
+    super::{
+        db::DbBackend,
+        transaction::{Transaction, TransactionMode, Write},
+    },
     DecodeError, QueryBuilder,
 };
 use crate::{
@@ -41,6 +43,7 @@ use crate::{
         sql::{build_where_in, sqlx::Row},
     },
     merklized_state::{MerklizedState, Snapshot},
+    with_backend,
 };
 
 #[async_trait]
@@ -66,10 +69,12 @@ where
 
         // Get all the nodes in the path to the index.
         // Order by pos DESC is to return nodes from the leaf to the root
-        let (query, sql) = build_get_path_query(state_type, traversal_path.clone(), created)?;
-        let rows = query.query(&sql).fetch_all(self.as_mut()).await?;
+        let backend = self.backend();
+        let (query, sql) =
+            build_get_path_query(state_type, traversal_path.clone(), created, backend)?;
+        let rows = query.query(&sql).fetch_all(self).await?;
 
-        let nodes: Vec<Node> = rows.into_iter().map(|r| r.into()).collect();
+        let nodes: Vec<Node> = rows.into_iter().map(Node::from_backend_row).collect();
 
         // insert all the hash ids to a hashset which is used to query later
         // HashSet is used to avoid duplicates
@@ -88,10 +93,11 @@ where
         // Find all the hash values and create a hashmap
         // Hashmap will be used to get the hash value of the nodes children and the node itself.
         let hashes = if !hash_ids.is_empty() {
-            let (query, sql) = build_where_in("SELECT id, value FROM hash", "id", hash_ids)?;
+            let (query, sql) =
+                build_where_in("SELECT id, value FROM hash", "id", hash_ids, backend)?;
             query
-                .query_as(&sql)
-                .fetch(self.as_mut())
+                .query_as::<(i32, Vec<u8>)>(&sql)
+                .fetch(self)
                 .try_collect::<HashMap<i32, Vec<u8>>>()
                 .await?
         } else {
@@ -258,10 +264,12 @@ where
 #[async_trait]
 impl<Mode: TransactionMode> MerklizedStateHeightStorage for Transaction<Mode> {
     async fn get_last_state_height(&mut self) -> QueryResult<usize> {
-        let Some((height,)) = query_as::<(i64,)>("SELECT height from last_merklized_state_height")
-            .fetch_optional(self.as_mut())
-            .await?
-        else {
+        let result: Option<(i64,)> = with_backend!(self, |tx| {
+            sqlx::query_as("SELECT height from last_merklized_state_height")
+                .fetch_optional(tx.as_mut())
+                .await
+        })?;
+        let Some((height,)) = result else {
             return Ok(0);
         };
         Ok(height as usize)
@@ -291,30 +299,36 @@ impl<Mode: TransactionMode> Transaction<Mode> {
                 // height we get, since any query against equivalent states will yield equivalent
                 // results, regardless of which block the state is from. Thus, we can make this
                 // query fast with `LIMIT 1` and no `ORDER BY`.
-                let (height,) = query_as(&format!(
+                let sql = format!(
                     "SELECT height
                        FROM header
                       WHERE {header_state_commitment_field} = $1
                       LIMIT 1"
-                ))
-                .bind(commit.to_string())
-                .fetch_one(self.as_mut())
-                .await?;
+                );
+                let (height,): (i64,) = with_backend!(self, |tx| {
+                    sqlx::query_as(&sql)
+                        .bind(commit.to_string())
+                        .fetch_one(tx.as_mut())
+                        .await
+                })?;
 
                 (height, commit)
             },
             Snapshot::Index(created) => {
                 let created = created as i64;
-                let (commit,) = query_as::<(String,)>(&format!(
+                let sql = format!(
                     "SELECT {header_state_commitment_field} AS root_commitment
                        FROM header
                       WHERE height = $1
                       LIMIT 1"
-                ))
-                .bind(created)
-                .fetch_one(self.as_mut())
-                .await?;
-                let commit = serde_json::from_value(commit.into())
+                );
+                let (commit_str,): (String,) = with_backend!(self, |tx| {
+                    sqlx::query_as(&sql)
+                        .bind(created)
+                        .fetch_one(tx.as_mut())
+                        .await
+                })?;
+                let commit = serde_json::from_value(commit_str.into())
                     .decode_error("malformed state commitment")?;
                 (created, commit)
             },
@@ -343,11 +357,11 @@ impl<Mode: TransactionMode> Transaction<Mode> {
 }
 
 // TODO: create a generic upsert function with retries that returns the column
-#[cfg(feature = "embedded-db")]
 pub(crate) fn build_hash_batch_insert(
     hashes: &[Vec<u8>],
+    backend: DbBackend,
 ) -> QueryResult<(QueryBuilder<'_>, String)> {
-    let mut query = QueryBuilder::default();
+    let mut query = QueryBuilder::new(backend);
     let params = hashes
         .iter()
         .map(|hash| Ok(format!("({})", query.bind(hash)?)))
@@ -362,7 +376,6 @@ pub(crate) fn build_hash_batch_insert(
 
 /// Batch insert hashes using UNNEST for large batches (postgres only).
 /// Returns a map from hash bytes to their database IDs.
-#[cfg(not(feature = "embedded-db"))]
 pub(crate) async fn batch_insert_hashes(
     hashes: Vec<Vec<u8>>,
     tx: &mut Transaction<Write>,
@@ -375,14 +388,22 @@ pub(crate) async fn batch_insert_hashes(
     let sql = "INSERT INTO hash(value) SELECT * FROM UNNEST($1::bytea[]) ON CONFLICT (value) DO \
                UPDATE SET value = EXCLUDED.value RETURNING value, id";
 
-    let result: HashMap<Vec<u8>, i32> = sqlx::query_as(sql)
-        .bind(&hashes)
-        .fetch(tx.as_mut())
-        .try_collect()
-        .await
-        .map_err(|e| QueryError::Error {
-            message: format!("batch hash insert failed: {e}"),
-        })?;
+    let result: HashMap<Vec<u8>, i32> = match &mut tx.inner {
+        super::super::db::BackendTransaction::Postgres(inner) => sqlx::query_as(sql)
+            .bind(&hashes)
+            .fetch(inner.as_mut())
+            .try_collect()
+            .await
+            .map_err(|e| QueryError::Error {
+                message: format!("batch hash insert failed: {e}"),
+            })?,
+        super::super::db::BackendTransaction::Sqlite(_) => {
+            return Err(QueryError::Error {
+                message: "batch_insert_hashes with UNNEST is only supported on Postgres"
+                    .to_string(),
+            });
+        },
+    };
 
     Ok(result)
 }
@@ -535,7 +556,6 @@ pub(crate) struct Node {
 /// Used during batch collection before database insertion.
 pub(crate) type NodeWithHashes = (Node, Option<Vec<Vec<u8>>>, Vec<u8>);
 
-#[cfg(feature = "embedded-db")]
 impl From<sqlx::sqlite::SqliteRow> for Node {
     fn from(row: sqlx::sqlite::SqliteRow) -> Self {
         let bit_string: Option<String> = row.get_unchecked("children_bitvec");
@@ -554,7 +574,6 @@ impl From<sqlx::sqlite::SqliteRow> for Node {
     }
 }
 
-#[cfg(not(feature = "embedded-db"))]
 impl From<sqlx::postgres::PgRow> for Node {
     fn from(row: sqlx::postgres::PgRow) -> Self {
         Self {
@@ -570,6 +589,13 @@ impl From<sqlx::postgres::PgRow> for Node {
 }
 
 impl Node {
+    pub(crate) fn from_backend_row(row: super::BackendRow) -> Self {
+        match row {
+            super::BackendRow::Postgres(row) => Self::from(row),
+            super::BackendRow::Sqlite(row) => Self::from(row),
+        }
+    }
+
     pub(crate) async fn upsert(
         name: &str,
         nodes: impl IntoIterator<Item = Self>,
@@ -578,53 +604,52 @@ impl Node {
         let nodes: Vec<_> = nodes.into_iter().collect();
 
         // Use UNNEST-based batch insert for postgres (more efficient and avoids parameter limits)
-        #[cfg(not(feature = "embedded-db"))]
-        return Self::upsert_batch_unnest(name, nodes, tx).await;
+        // For sqlite, use chunked inserts to avoid parameter limits
+        match tx.backend() {
+            DbBackend::Postgres => Self::upsert_batch_unnest(name, nodes, tx).await,
+            DbBackend::Sqlite => {
+                for node_chunk in nodes.chunks(20) {
+                    let rows: Vec<_> = node_chunk
+                        .iter()
+                        .map(|n| {
+                            let children_bitvec: Option<String> = n
+                                .children_bitvec
+                                .clone()
+                                .map(|b| b.iter().map(|bit| if bit { '1' } else { '0' }).collect());
 
-        #[cfg(feature = "embedded-db")]
-        {
-            for node_chunk in nodes.chunks(20) {
-                let rows: Vec<_> = node_chunk
-                    .iter()
-                    .map(|n| {
-                        let children_bitvec: Option<String> = n
-                            .children_bitvec
-                            .clone()
-                            .map(|b| b.iter().map(|bit| if bit { '1' } else { '0' }).collect());
+                            (
+                                n.path.clone(),
+                                n.created,
+                                n.hash_id,
+                                n.children.clone(),
+                                children_bitvec,
+                                n.idx.clone(),
+                                n.entry.clone(),
+                            )
+                        })
+                        .collect();
 
-                        (
-                            n.path.clone(),
-                            n.created,
-                            n.hash_id,
-                            n.children.clone(),
-                            children_bitvec,
-                            n.idx.clone(),
-                            n.entry.clone(),
-                        )
-                    })
-                    .collect();
-
-                tx.upsert(
-                    name,
-                    [
-                        "path",
-                        "created",
-                        "hash_id",
-                        "children",
-                        "children_bitvec",
-                        "idx",
-                        "entry",
-                    ],
-                    ["path", "created"],
-                    rows,
-                )
-                .await?;
-            }
-            Ok(())
+                    tx.upsert(
+                        name,
+                        [
+                            "path",
+                            "created",
+                            "hash_id",
+                            "children",
+                            "children_bitvec",
+                            "idx",
+                            "entry",
+                        ],
+                        ["path", "created"],
+                        rows,
+                    )
+                    .await?;
+                }
+                Ok(())
+            },
         }
     }
 
-    #[cfg(not(feature = "embedded-db"))]
     async fn upsert_batch_unnest(
         name: &str,
         nodes: Vec<Self>,
@@ -672,17 +697,24 @@ impl Node {
             "#
         );
 
-        sqlx::query(&sql)
-            .bind(&paths)
-            .bind(&createds)
-            .bind(&hash_ids)
-            .bind(&childrens)
-            .bind(&children_bitvecs)
-            .bind(&idxs)
-            .bind(&entries)
-            .execute(tx.as_mut())
-            .await
-            .context("batch upsert with UNNEST failed")?;
+        match &mut tx.inner {
+            super::super::db::BackendTransaction::Postgres(inner) => {
+                sqlx::query(&sql)
+                    .bind(&paths)
+                    .bind(&createds)
+                    .bind(&hash_ids)
+                    .bind(&childrens)
+                    .bind(&children_bitvecs)
+                    .bind(&idxs)
+                    .bind(&entries)
+                    .execute(inner.as_mut())
+                    .await
+                    .context("batch upsert with UNNEST failed")?;
+            },
+            super::super::db::BackendTransaction::Sqlite(_) => {
+                anyhow::bail!("upsert_batch_unnest is only supported on Postgres");
+            },
+        }
 
         Ok(())
     }
@@ -692,8 +724,9 @@ fn build_get_path_query<'q>(
     table: &'static str,
     traversal_path: Vec<usize>,
     created: i64,
+    backend: DbBackend,
 ) -> QueryResult<(QueryBuilder<'q>, String)> {
-    let mut query = QueryBuilder::default();
+    let mut query = QueryBuilder::new(backend);
     let mut traversal_path = traversal_path.into_iter().map(|x| x as i32);
 
     // We iterate through the path vector skipping the first element after each iteration
@@ -722,10 +755,9 @@ fn build_get_path_query<'q>(
 
     // PostgreSQL already orders JSON arrays by length, so no additional function is needed
     // For SQLite, `length()` is used to sort by length.
-    if cfg!(feature = "embedded-db") {
-        sql.push_str("ORDER BY length(t.path) DESC");
-    } else {
-        sql.push_str("ORDER BY t.path DESC");
+    match backend {
+        DbBackend::Sqlite => sql.push_str("ORDER BY length(t.path) DESC"),
+        DbBackend::Postgres => sql.push_str("ORDER BY t.path DESC"),
     }
 
     Ok((query, sql))
@@ -739,6 +771,8 @@ mod test {
         universal_merkle_tree::UniversalMerkleTree,
     };
     use rand::{RngCore, seq::IteratorRandom};
+    use rstest::rstest;
+    use rstest_reuse::{self, apply, template};
 
     use super::*;
     use crate::{
@@ -750,12 +784,19 @@ mod test {
         testing::mocks::{MockMerkleTree, MockTypes},
     };
 
+    #[template]
+    #[rstest]
+    #[case::postgres(DbBackend::Postgres)]
+    #[case::sqlite(DbBackend::Sqlite)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_merklized_state_storage() {
+    fn sql_backends(#[case] backend: DbBackend) {}
+
+    #[apply(sql_backends)]
+    async fn test_merklized_state_storage(#[case] backend: DbBackend) {
         // In this test we insert some entries into the tree and update the database
         // Each entry's merkle path is compared with the path from the tree
 
-        let db = TmpDb::init().await;
+        let db = TmpDb::init_for(backend).await;
         let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
             .await
             .unwrap();
@@ -897,11 +938,14 @@ mod test {
 
         // Find all the nodes of Index 0 in table
         let mut tx = storage.read().await.unwrap();
-        let rows = query("SELECT * from test_tree where path = $1 ORDER BY created")
-            .bind(serde_json::to_value(node_path).unwrap())
-            .fetch(tx.as_mut());
-
-        let nodes: Vec<Node> = rows.map(|res| res.unwrap().into()).collect().await;
+        let nodes: Vec<Node> = with_backend!(tx, |inner_tx| {
+            sqlx::query("SELECT * from test_tree where path = $1 ORDER BY created")
+                .bind(serde_json::to_value(&node_path).unwrap())
+                .fetch(inner_tx.as_mut())
+                .map(|res| Node::from(res.unwrap()))
+                .collect()
+                .await
+        });
         // There should be only 2 versions of this node
         assert!(nodes.len() == 2, "incorrect number of nodes");
         assert_eq!(nodes[0].created, 1, "wrong block height");
@@ -930,15 +974,15 @@ mod test {
         assert_eq!(path_with_bh_1, proof_bh_1);
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_merklized_state_non_membership_proof() {
+    #[apply(sql_backends)]
+    async fn test_merklized_state_non_membership_proof(#[case] backend: DbBackend) {
         // This test updates the Merkle tree with a new entry and inserts the corresponding Merkle nodes into the database with created = 1.
         // A Merkle node is then deleted from the tree.
         // The database is then updated to reflect the deletion of the entry with a created (block height) of 2
         // As the leaf node becomes a non-member, we do a universal lookup to obtain its non-membership proof path.
         // It is expected that the path retrieved from the tree matches the path obtained from the database.
 
-        let db = TmpDb::init().await;
+        let db = TmpDb::init_for(backend).await;
         let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
             .await
             .unwrap();
@@ -1078,9 +1122,9 @@ mod test {
         assert_eq!(proof_bh_1, proof_before_remove, "merkle paths dont match");
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_merklized_state_non_membership_proof_unseen_entry() {
-        let db = TmpDb::init().await;
+    #[apply(sql_backends)]
+    async fn test_merklized_state_non_membership_proof_unseen_entry(#[case] backend: DbBackend) {
+        let db = TmpDb::init_for(backend).await;
         let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
             .await
             .unwrap();
@@ -1150,11 +1194,11 @@ mod test {
         }
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_merklized_storage_with_commit() {
+    #[apply(sql_backends)]
+    async fn test_merklized_storage_with_commit(#[case] backend: DbBackend) {
         // This test insert a merkle path into the database and queries the path using the merkle commitment
 
-        let db = TmpDb::init().await;
+        let db = TmpDb::init_for(backend).await;
         let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
             .await
             .unwrap();
@@ -1223,8 +1267,8 @@ mod test {
 
         assert_eq!(merkle_proof, proof.clone(), "merkle paths mismatch");
     }
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_merklized_state_missing_state() {
+    #[apply(sql_backends)]
+    async fn test_merklized_state_missing_state(#[case] backend: DbBackend) {
         // This test checks that header commitment matches the root hash.
         // For this, the header merkle root commitment field is not updated, which should result in an error
         // The full merkle path verification is also done by recomputing the root hash
@@ -1232,7 +1276,7 @@ mod test {
         // The entry of the index is updated, and the updated nodes are inserted with created (bh) = 2.
         // A node which is in the traversal path with bh = 2 is deleted, so the get_path should return an error as an older version of one of the nodes is used.
 
-        let db = TmpDb::init().await;
+        let db = TmpDb::init_for(backend).await;
         let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
             .await
             .unwrap();
@@ -1403,14 +1447,16 @@ mod test {
             .rev()
             .map(|n| *n as i32)
             .collect::<Vec<_>>();
-        tx.execute(
-            query(&format!(
+        with_backend!(tx, |inner_tx| {
+            sqlx::query(&format!(
                 "DELETE FROM {} WHERE created = 2 and path = $1",
                 MockMerkleTree::state_type()
             ))
-            .bind(serde_json::to_value(node_path).unwrap()),
-        )
-        .await
+            .bind(serde_json::to_value(node_path).unwrap())
+            .execute(inner_tx.as_mut())
+            .await
+            .map(|_| ())
+        })
         .expect("failed to delete internal node");
         tx.commit().await.unwrap();
 
@@ -1424,9 +1470,9 @@ mod test {
         assert!(merkle_path.is_err());
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_merklized_state_snapshot() {
-        let db = TmpDb::init().await;
+    #[apply(sql_backends)]
+    async fn test_merklized_state_snapshot(#[case] backend: DbBackend) {
+        let db = TmpDb::init_for(backend).await;
         let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
             .await
             .unwrap();
@@ -1606,8 +1652,8 @@ mod test {
         validate(&storage, &test_tree, &expected, 1).await;
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_merklized_state_missing_leaf() {
+    #[apply(sql_backends)]
+    async fn test_merklized_state_missing_leaf(#[case] backend: DbBackend) {
         // Check that if a leaf is missing but its ancestors are present/key is in the tree, we
         // catch it rather than interpreting the entry as an empty node by default. Note that this
         // scenario should be impossible in normal usage, since we never store or delete partial
@@ -1615,7 +1661,7 @@ mod test {
         // corruption.
 
         for tree_size in 1..=3 {
-            let db = TmpDb::init().await;
+            let db = TmpDb::init_for(backend).await;
             let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
                 .await
                 .unwrap();
@@ -1685,14 +1731,16 @@ mod test {
             let index = serde_json::to_value(tree_size - 1).unwrap();
             let mut tx = storage.write().await.unwrap();
 
-            tx.execute(
-                query(&format!(
+            with_backend!(tx, |inner_tx| {
+                sqlx::query(&format!(
                     "DELETE FROM {} WHERE idx = $1",
                     MockMerkleTree::state_type()
                 ))
-                .bind(serde_json::to_value(index).unwrap()),
-            )
-            .await
+                .bind(serde_json::to_value(index).unwrap())
+                .execute(inner_tx.as_mut())
+                .await
+                .map(|_| ())
+            })
             .unwrap();
             tx.commit().await.unwrap();
 

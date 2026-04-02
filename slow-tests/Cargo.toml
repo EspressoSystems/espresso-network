@@ -4,9 +4,6 @@ version = "0.1.0"
 authors = ["Espresso Systems <hello@espressosys.com>"]
 edition.workspace = true
 
-[features]
-embedded-db = ["espresso-node/embedded-db"]
-
 [dependencies]
 alloy = { workspace = true }
 anyhow = { workspace = true }
@@ -31,6 +28,7 @@ jf-merkle-tree-compat = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true }
 rstest = { workspace = true }
+rstest_reuse = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 staking-cli = { workspace = true }

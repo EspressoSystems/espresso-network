@@ -25,10 +25,11 @@ use hotshot_query_service::{
         storage::{
             AvailabilityStorage, MerklizedStateStorage, NodeStorage, SqlStorage,
             pruning::PrunerConfig,
-            sql::{Db, TransactionMode, Write, query_as},
+            sql::{DbBackend, TransactionMode, Write},
         },
     },
     merklized_state::Snapshot,
+    with_backend,
 };
 use hotshot_types::{
     data::{EpochNumber, QuorumProposalWrapper, ViewNumber},
@@ -183,23 +184,25 @@ impl RewardMerkleTreeDataSource for SqlStorage {
                 .await
                 .context("opening transaction for state update")?;
 
-            let row = sqlx::query(
-                r#"
-                SELECT balances
-                FROM reward_merkle_tree_v2_data
-                WHERE height = $1
-                "#,
-            )
-            .bind(height as i64)
-            .fetch_optional(tx.as_mut())
-            .await?
-            .context(format!(
-                "No reward merkle tree for height {} in storage",
-                height
-            ))?;
+            with_backend!(tx, |inner_tx| {
+                let row = sqlx::query(
+                    r#"
+                    SELECT balances
+                    FROM reward_merkle_tree_v2_data
+                    WHERE height = $1
+                    "#,
+                )
+                .bind(height as i64)
+                .fetch_optional(inner_tx.as_mut())
+                .await?
+                .context(format!(
+                    "No reward merkle tree for height {} in storage",
+                    height
+                ))?;
 
-            row.try_get::<Vec<u8>, _>("balances")
-                .context("Missing field balances from row; this should never happen")
+                row.try_get::<Vec<u8>, _>("balances")
+                    .context("Missing field balances from row; this should never happen")
+            })
         }
     }
 
@@ -254,7 +257,7 @@ impl RewardMerkleTreeDataSource for SqlStorage {
     ///
     /// For V5+ (epoch rewards), if the requested height is not an epoch boundary,
     /// resolves to the previous epoch's last block. Verifies the boundary block is
-    /// V5+ to handle V4→V5 upgrades.
+    /// V5+ to handle V4->V5 upgrades.
     /// For V4 (per-block rewards), proofs are stored at every block height.
     fn load_proof(
         &self,
@@ -295,16 +298,22 @@ impl RewardMerkleTreeDataSource for SqlStorage {
                 prev_epoch_last_block
             };
 
-            sqlx::query_scalar(
-                "SELECT proof FROM reward_merkle_tree_v2_proofs WHERE height = $1 AND account = $2",
-            )
-            .bind(proof_height as i64)
-            .bind(account)
-            .fetch_optional(tx.as_mut())
-            .await?
-            .context(format!(
-                "Missing proofs at height {proof_height} (resolved from {height})"
-            ))
+            with_backend!(tx, |inner_tx| {
+                let row = sqlx::query(
+                    "SELECT proof FROM reward_merkle_tree_v2_proofs WHERE height = $1 AND account \
+                     = $2",
+                )
+                .bind(proof_height as i64)
+                .bind(account.clone())
+                .fetch_optional(inner_tx.as_mut())
+                .await?
+                .context(format!(
+                    "Missing proofs at height {proof_height} (resolved from {height})"
+                ))?;
+
+                row.try_get::<Vec<u8>, _>("proof")
+                    .context("Missing field proof from row; this should never happen")
+            })
         }
     }
 
@@ -318,22 +327,24 @@ impl RewardMerkleTreeDataSource for SqlStorage {
                 .await
                 .context("opening transaction for state update")?;
 
-            let row = sqlx::query(
-                r#"
-                SELECT proof 
-                FROM reward_merkle_tree_v2_proofs
-                WHERE account = $1
-                ORDER BY height DESC
-                LIMIT 1
-                "#,
-            )
-            .bind(account)
-            .fetch_optional(tx.as_mut())
-            .await?
-            .context("Missing proofs")?;
+            with_backend!(tx, |inner_tx| {
+                let row = sqlx::query(
+                    r#"
+                    SELECT proof
+                    FROM reward_merkle_tree_v2_proofs
+                    WHERE account = $1
+                    ORDER BY height DESC
+                    LIMIT 1
+                    "#,
+                )
+                .bind(account.clone())
+                .fetch_optional(inner_tx.as_mut())
+                .await?
+                .context("Missing proofs")?;
 
-            row.try_get::<Vec<u8>, _>("proof")
-                .context("Missing field proof from row; this should never happen")
+                row.try_get::<Vec<u8>, _>("proof")
+                    .context("Missing field proof from row; this should never happen")
+            })
         }
     }
 
@@ -344,10 +355,10 @@ impl RewardMerkleTreeDataSource for SqlStorage {
             // Postgres supports improved performance by using `FOR UPDATE` in a sub-select to
             // acquire exclusive locks on visited rows, which are later deleted. SQLite does not
             // support this syntax.
-            #[cfg(not(feature = "embedded-db"))]
-            let for_update = "FOR UPDATE";
-            #[cfg(feature = "embedded-db")]
-            let for_update = "";
+            let for_update = match self.backend() {
+                DbBackend::Postgres => "FOR UPDATE",
+                DbBackend::Sqlite => "",
+            };
 
             // Delete batches from the merkle data table until there is nothing left to delete.
             loop {
@@ -356,23 +367,26 @@ impl RewardMerkleTreeDataSource for SqlStorage {
                     .await
                     .context("opening transaction for state update")?;
 
-                let res = sqlx::query(&format!(
+                let rows_affected = with_backend!(tx, |inner_tx| {
+                    sqlx::query(&format!(
+                        "
+                        WITH delete_batch AS (
+                            SELECT d.height FROM reward_merkle_tree_v2_data AS d
+                                WHERE d.height < $1
+                                ORDER BY d.height DESC
+                                LIMIT $2
+                                {for_update}
+                        )
+                        DELETE FROM reward_merkle_tree_v2_data AS del
+                        WHERE del.height IN (SELECT * FROM delete_batch)
                     "
-                    WITH delete_batch AS (
-                        SELECT d.height FROM reward_merkle_tree_v2_data AS d
-                            WHERE d.height < $1
-                            ORDER BY d.height DESC
-                            LIMIT $2
-                            {for_update}
-                    )
-                    DELETE FROM reward_merkle_tree_v2_data AS del
-                    WHERE del.height IN (SELECT * FROM delete_batch)
-                "
-                ))
-                .bind(height as i64)
-                .bind(batch_size as i64)
-                .execute(tx.as_mut())
-                .await?;
+                    ))
+                    .bind(height as i64)
+                    .bind(batch_size as i64)
+                    .execute(inner_tx.as_mut())
+                    .await
+                    .map(|r| r.rows_affected())
+                })?;
 
                 hotshot_query_service::data_source::Transaction::commit(tx)
                     .await
@@ -380,12 +394,12 @@ impl RewardMerkleTreeDataSource for SqlStorage {
                         "Transaction to garbage collect reward merkle trees from storage failed.",
                     )?;
 
-                if res.rows_affected() == 0 {
+                if rows_affected == 0 {
                     break;
                 } else {
                     tracing::debug!(
                         "deleted {} rows from reward_merkle_tree_v2_data",
-                        res.rows_affected()
+                        rows_affected
                     );
                 }
             }
@@ -397,34 +411,37 @@ impl RewardMerkleTreeDataSource for SqlStorage {
                     .await
                     .context("opening transaction for state update")?;
 
-                let res = sqlx::query(&format!(
-                    "
-                    WITH delete_batch AS (
-                        SELECT d.height, d.account FROM reward_merkle_tree_v2_proofs AS d
-                            WHERE d.height < $1
-                            ORDER BY d.height, d.account DESC
-                            LIMIT $2
-                            {for_update}
-                    )
-                    DELETE FROM reward_merkle_tree_v2_proofs AS del
-                    WHERE (del.height, del.account) IN (SELECT * FROM delete_batch)
-                ",
-                ))
-                .bind(height as i64)
-                .bind(batch_size as i64)
-                .execute(tx.as_mut())
-                .await?;
+                let rows_affected = with_backend!(tx, |inner_tx| {
+                    sqlx::query(&format!(
+                        "
+                        WITH delete_batch AS (
+                            SELECT d.height, d.account FROM reward_merkle_tree_v2_proofs AS d
+                                WHERE d.height < $1
+                                ORDER BY d.height, d.account DESC
+                                LIMIT $2
+                                {for_update}
+                        )
+                        DELETE FROM reward_merkle_tree_v2_proofs AS del
+                        WHERE (del.height, del.account) IN (SELECT * FROM delete_batch)
+                    ",
+                    ))
+                    .bind(height as i64)
+                    .bind(batch_size as i64)
+                    .execute(inner_tx.as_mut())
+                    .await
+                    .map(|r| r.rows_affected())
+                })?;
 
                 hotshot_query_service::data_source::Transaction::commit(tx)
                     .await
                     .context("Transaction to garbage collect proofs from storage failed.")?;
 
-                if res.rows_affected() == 0 {
+                if rows_affected == 0 {
                     break;
                 } else {
                     tracing::debug!(
                         "deleted {} rows from reward_merkle_tree_v2_proofs",
-                        res.rows_affected()
+                        rows_affected
                     );
                 }
             }
@@ -439,22 +456,25 @@ impl RewardMerkleTreeDataSource for SqlStorage {
                 return false;
             };
 
-            sqlx::query_as(
-                r#"
-                SELECT EXISTS(
-                SELECT 1 FROM reward_merkle_tree_v2_proofs
-                WHERE height = $1
+            with_backend!(tx, |inner_tx| {
+                sqlx::query_as::<_, (bool,)>(
+                    r#"
+                    SELECT EXISTS(
+                    SELECT 1 FROM reward_merkle_tree_v2_proofs
+                    WHERE height = $1
+                    )
+                    "#,
                 )
-                "#,
-            )
-            .bind(height as i64)
-            .fetch_one(tx.as_mut())
-            .await
-            .ok()
-            .unwrap_or((false,))
-            .0
+                .bind(height as i64)
+                .fetch_one(inner_tx.as_mut())
+                .await
+                .ok()
+                .unwrap_or((false,))
+                .0
+            })
         }
     }
+
     /// Generate and persist reward proofs for the current L1-finalized height.
     ///
     /// For V5+ (epoch rewards), the reward tree is only stored at epoch boundaries.
@@ -944,81 +964,66 @@ impl super::data_source::DatabaseMetadataSource for SqlStorage {
             .await
             .context("opening transaction to fetch table sizes")?;
 
-        #[cfg(not(feature = "embedded-db"))]
-        {
-            let query = r#"
-                SELECT
-                    schemaname || '.' || relname AS table_name,
-                    n_live_tup AS row_count,
-                    pg_total_relation_size(relid) AS total_size_bytes
-                FROM pg_stat_user_tables
-                ORDER BY pg_total_relation_size(relid) DESC
-            "#;
+        match tx.backend() {
+            DbBackend::Postgres => {
+                let query = r#"
+                    SELECT
+                        schemaname || '.' || relname AS table_name,
+                        n_live_tup AS row_count,
+                        pg_total_relation_size(relid) AS total_size_bytes
+                    FROM pg_stat_user_tables
+                    ORDER BY pg_total_relation_size(relid) DESC
+                "#;
 
-            let rows = sqlx::query(query)
-                .fetch_all(tx.as_mut())
-                .await
-                .context("failed to query table sizes")?;
+                let rows: Vec<(String, i64, Option<i64>)> = with_backend!(tx, |inner_tx| {
+                    sqlx::query_as(query).fetch_all(inner_tx.as_mut()).await
+                })?;
 
-            let mut table_sizes = Vec::new();
-            for row in rows {
-                let table_name: String = row.try_get("table_name")?;
-                let row_count: i64 = row.try_get("row_count").unwrap_or(-1);
-                let total_size_bytes: Option<i64> = row.try_get("total_size_bytes").ok();
+                Ok(rows
+                    .into_iter()
+                    .map(|(table_name, row_count, total_size_bytes)| {
+                        super::data_source::TableSize {
+                            table_name,
+                            row_count,
+                            total_size_bytes,
+                        }
+                    })
+                    .collect())
+            },
+            DbBackend::Sqlite => {
+                let table_names_query = r#"
+                    SELECT name
+                    FROM sqlite_master
+                    WHERE type = 'table'
+                    AND name NOT LIKE 'sqlite_%'
+                    ORDER BY name
+                "#;
 
-                table_sizes.push(super::data_source::TableSize {
-                    table_name,
-                    row_count,
-                    total_size_bytes,
-                });
-            }
+                let table_names: Vec<(String,)> = with_backend!(tx, |inner_tx| {
+                    sqlx::query_as(table_names_query)
+                        .fetch_all(inner_tx.as_mut())
+                        .await
+                })?;
 
-            Ok(table_sizes)
-        }
+                let mut table_sizes = Vec::new();
 
-        #[cfg(feature = "embedded-db")]
-        {
-            // First, get all table names from sqlite_master
-            let table_names_query = r#"
-                SELECT name
-                FROM sqlite_master
-                WHERE type = 'table'
-                AND name NOT LIKE 'sqlite_%'
-                ORDER BY name
-            "#;
+                for (table_name,) in table_names {
+                    let count_query = format!("SELECT COUNT(*) as count FROM \"{}\"", table_name);
+                    let (row_count,): (i64,) = with_backend!(tx, |inner_tx| {
+                        sqlx::query_as(&count_query)
+                            .fetch_one(inner_tx.as_mut())
+                            .await
+                    })?;
 
-            let table_rows = sqlx::query(table_names_query)
-                .fetch_all(tx.as_mut())
-                .await
-                .context("failed to query table names")?;
+                    table_sizes.push(super::data_source::TableSize {
+                        table_name,
+                        row_count,
+                        total_size_bytes: None,
+                    });
+                }
 
-            let mut table_sizes = Vec::new();
-
-            // For each table, get the row count
-            for row in table_rows {
-                let table_name: String = row.try_get("name")?;
-
-                // Run SELECT COUNT(*) for this specific table
-                // Use format! here since we need to dynamically insert the table name
-                let count_query = format!("SELECT COUNT(*) as count FROM \"{}\"", table_name);
-                let count_row = sqlx::query(&count_query)
-                    .fetch_one(tx.as_mut())
-                    .await
-                    .context(format!(
-                        "failed to query row count for table {}",
-                        table_name
-                    ))?;
-
-                let row_count: i64 = count_row.try_get("count").unwrap_or(0);
-
-                table_sizes.push(super::data_source::TableSize {
-                    table_name,
-                    row_count,
-                    total_size_bytes: None,
-                });
-            }
-
-            Ok(table_sizes)
+                Ok(table_sizes)
+            },
         }
     }
 }
@@ -1220,11 +1225,16 @@ async fn load_chain_config<Mode: TransactionMode>(
     tx: &mut Transaction<Mode>,
     commitment: Commitment<ChainConfig>,
 ) -> anyhow::Result<ChainConfig> {
-    let (data,) = query_as::<(Vec<u8>,)>("SELECT data from chain_config where commitment = $1")
-        .bind(commitment.to_string())
-        .fetch_one(tx.as_mut())
-        .await
-        .unwrap();
+    let commitment_str = commitment.to_string();
+    let data: Vec<u8> = with_backend!(tx, |inner_tx| {
+        let (data,) =
+            sqlx::query_as::<_, (Vec<u8>,)>("SELECT data from chain_config where commitment = $1")
+                .bind(commitment_str.clone())
+                .fetch_one(inner_tx.as_mut())
+                .await
+                .unwrap();
+        data
+    });
 
     bincode::deserialize(&data[..]).context("failed to deserialize")
 }
@@ -1533,14 +1543,20 @@ async fn get_leaf_from_proposal<Mode, P>(
     param: P,
 ) -> anyhow::Result<Leaf2>
 where
-    P: Type<Db> + for<'q> Encode<'q, Db>,
+    P: Type<sqlx::Postgres>
+        + for<'q> Encode<'q, sqlx::Postgres>
+        + Type<sqlx::Sqlite>
+        + for<'q> Encode<'q, sqlx::Sqlite>
+        + Clone
+        + Send,
 {
-    let (data,) = query_as::<(Vec<u8>,)>(&format!(
-        "SELECT data FROM quorum_proposals2 WHERE {where_clause} LIMIT 1",
-    ))
-    .bind(param)
-    .fetch_one(tx.as_mut())
-    .await?;
+    let sql = format!("SELECT data FROM quorum_proposals2 WHERE {where_clause} LIMIT 1");
+    let (data,) = with_backend!(tx, |inner_tx| {
+        sqlx::query_as::<_, (Vec<u8>,)>(&sql)
+            .bind(param.clone())
+            .fetch_one(inner_tx.as_mut())
+            .await
+    })?;
     let proposal: Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>> =
         bincode::deserialize(&data)?;
     Ok(Leaf2::from_quorum_proposal(&proposal.data))
@@ -1555,23 +1571,19 @@ pub(crate) mod impl_testable_data_source {
     use crate::api::{self, data_source::testing::TestableSequencerDataSource};
 
     pub fn tmp_options(db: &TmpDb) -> Options {
-        #[cfg(not(feature = "embedded-db"))]
-        {
-            let opt = crate::persistence::sql::PostgresOptions {
+        match db {
+            TmpDb::Postgres { .. } => crate::persistence::sql::PostgresOptions {
                 port: Some(db.port()),
                 host: Some(db.host()),
                 user: Some("postgres".into()),
                 password: Some("password".into()),
                 ..Default::default()
-            };
-
-            opt.into()
-        }
-
-        #[cfg(feature = "embedded-db")]
-        {
-            let opt = crate::persistence::sql::SqliteOptions { path: db.path() };
-            opt.into()
+            }
+            .into(),
+            TmpDb::Sqlite { .. } => crate::persistence::sql::SqliteOptions {
+                path: Some(db.path()),
+            }
+            .into(),
         }
     }
 
@@ -1616,8 +1628,8 @@ mod tests {
             storage::{
                 MerklizedStateStorage, UpdateAvailabilityStorage,
                 sql::{
-                    SqlStorage, StorageConnectionType, Transaction as SqlTransaction, Write,
-                    testing::TmpDb,
+                    DbBackend, SqlStorage, StorageConnectionType, Transaction as SqlTransaction,
+                    Write, include_migrations, testing::TmpDb,
                 },
             },
         },
@@ -1627,10 +1639,19 @@ mod tests {
         LookupResult, MerkleTreeScheme, ToTraversalPath, UniversalMerkleTreeScheme,
     };
     use light_client::testing::{leaf_chain, leaf_chain_with_upgrade};
+    use rstest::rstest;
+    use rstest_reuse::{self, apply, template};
     use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, Upgrade};
 
     use super::impl_testable_data_source::tmp_options;
     use crate::{SeqTypes, api::RewardMerkleTreeDataSource};
+
+    #[template]
+    #[rstest]
+    #[case::postgres(DbBackend::Postgres)]
+    #[case::sqlite(DbBackend::Sqlite)]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    fn sql_backends(#[case] backend: DbBackend) {}
 
     fn make_reward_account(i: usize) -> RewardAccountV2 {
         let mut addr_bytes = [0u8; 20];
@@ -1707,17 +1728,22 @@ mod tests {
         .expect("failed to batch insert proofs");
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_reward_accounts_batch_insertion() {
-        // Batch insertion of 1000 accounts at height 1
-        // Balance updates for some accounts at height 2
-        // New accounts added at height 2
-        // More balance updates at height 3
-        // Querying correct balances at each height snapshot
-
-        let db = TmpDb::init().await;
-        let opt = tmp_options(&db);
-        let cfg = Config::try_from(&opt).expect("failed to create config from options");
+    #[apply(sql_backends)]
+    async fn test_reward_accounts_batch_insertion(#[case] backend: DbBackend) {
+        let db = TmpDb::init_for(backend).await;
+        let mut cfg = db.config();
+        match backend {
+            DbBackend::Postgres => {
+                cfg = cfg.migrations(include_migrations!(
+                    "$CARGO_MANIFEST_DIR/api/migrations/postgres"
+                ));
+            },
+            DbBackend::Sqlite => {
+                cfg = cfg.migrations(include_migrations!(
+                    "$CARGO_MANIFEST_DIR/api/migrations/sqlite"
+                ));
+            },
+        }
         let storage = SqlStorage::connect(cfg, StorageConnectionType::Query)
             .await
             .expect("failed to connect to storage");

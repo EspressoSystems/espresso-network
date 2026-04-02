@@ -18,23 +18,22 @@ use async_trait::async_trait;
 use futures::stream::{StreamExt, TryStreamExt};
 use hotshot_types::traits::node_implementation::NodeType;
 use snafu::OptionExt;
-use sqlx::FromRow;
+use sqlx::Row;
 
 use super::{
-    super::transaction::{Transaction, TransactionMode, query},
+    super::transaction::{Transaction, TransactionMode},
     BLOCK_COLUMNS, LEAF_COLUMNS, PAYLOAD_COLUMNS, PAYLOAD_METADATA_COLUMNS, QueryBuilder,
     VID_COMMON_COLUMNS, VID_COMMON_METADATA_COLUMNS,
 };
 use crate::{
-    Header, MissingSnafu, Payload, QueryError, QueryResult,
+    Header, MissingSnafu, Payload, QueryResult,
     availability::{
         BlockId, BlockQueryData, LeafId, LeafQueryData, NamespaceInfo, NamespaceMap,
         PayloadQueryData, QueryableHeader, QueryablePayload, TransactionHash, VidCommonQueryData,
     },
-    data_source::storage::{
-        AvailabilityStorage, PayloadMetadata, VidCommonMetadata, sql::sqlx::Row,
-    },
+    data_source::storage::{AvailabilityStorage, PayloadMetadata, VidCommonMetadata},
     types::HeightIndexed,
+    with_backend,
 };
 
 #[async_trait]
@@ -46,23 +45,18 @@ where
     Header<Types>: QueryableHeader<Types>,
 {
     async fn get_leaf(&mut self, id: LeafId<Types>) -> QueryResult<LeafQueryData<Types>> {
-        let mut query = QueryBuilder::default();
+        let mut query = QueryBuilder::new(self.backend());
         let where_clause = match id {
             LeafId::Number(n) => format!("height = {}", query.bind(n as i64)?),
             LeafId::Hash(h) => format!("hash = {}", query.bind(h.to_string())?),
         };
-        let row = query
-            .query(&format!(
-                "SELECT {LEAF_COLUMNS} FROM leaf2 WHERE {where_clause} LIMIT 1"
-            ))
-            .fetch_one(self.as_mut())
-            .await?;
-        let leaf = LeafQueryData::from_row(&row)?;
-        Ok(leaf)
+        let sql = format!("SELECT {LEAF_COLUMNS} FROM leaf2 WHERE {where_clause} LIMIT 1");
+        let row = query.query(&sql).fetch_one(self).await?;
+        Ok(row.from_row()?)
     }
 
     async fn get_block(&mut self, id: BlockId<Types>) -> QueryResult<BlockQueryData<Types>> {
-        let mut query = QueryBuilder::default();
+        let mut query = QueryBuilder::new(self.backend());
         let where_clause = query.header_where_clause(id)?;
         // ORDER BY h.height ASC ensures that if there are duplicate blocks (this can happen when
         // selecting by payload ID, as payloads are not unique), we return the first one.
@@ -74,9 +68,8 @@ where
               ORDER BY h.height
               LIMIT 1"
         );
-        let row = query.query(&sql).fetch_one(self.as_mut()).await?;
-        let block = BlockQueryData::from_row(&row)?;
-        Ok(block)
+        let row = query.query(&sql).fetch_one(self).await?;
+        Ok(row.from_row()?)
     }
 
     async fn get_header(&mut self, id: BlockId<Types>) -> QueryResult<Header<Types>> {
@@ -84,7 +77,7 @@ where
     }
 
     async fn get_payload(&mut self, id: BlockId<Types>) -> QueryResult<PayloadQueryData<Types>> {
-        let mut query = QueryBuilder::default();
+        let mut query = QueryBuilder::new(self.backend());
         let where_clause = query.header_where_clause(id)?;
         // ORDER BY h.height ASC ensures that if there are duplicate blocks (this can happen when
         // selecting by payload ID, as payloads are not unique), we return the first one.
@@ -96,16 +89,15 @@ where
               ORDER BY h.height
               LIMIT 1"
         );
-        let row = query.query(&sql).fetch_one(self.as_mut()).await?;
-        let payload = PayloadQueryData::from_row(&row)?;
-        Ok(payload)
+        let row = query.query(&sql).fetch_one(self).await?;
+        Ok(row.from_row()?)
     }
 
     async fn get_payload_metadata(
         &mut self,
         id: BlockId<Types>,
     ) -> QueryResult<PayloadMetadata<Types>> {
-        let mut query = QueryBuilder::default();
+        let mut query = QueryBuilder::new(self.backend());
         let where_clause = query.header_where_clause(id)?;
         // ORDER BY h.height ASC ensures that if there are duplicate blocks (this can happen when
         // selecting by payload ID, as payloads are not unique), we return the first one.
@@ -119,10 +111,10 @@ where
         );
         let row = query
             .query(&sql)
-            .fetch_optional(self.as_mut())
+            .fetch_optional(self)
             .await?
             .context(MissingSnafu)?;
-        let mut payload = PayloadMetadata::from_row(&row)?;
+        let mut payload: PayloadMetadata<Types> = row.from_row()?;
         payload.namespaces = self
             .load_namespaces::<Types>(payload.height(), payload.size)
             .await?;
@@ -133,7 +125,7 @@ where
         &mut self,
         id: BlockId<Types>,
     ) -> QueryResult<VidCommonQueryData<Types>> {
-        let mut query = QueryBuilder::default();
+        let mut query = QueryBuilder::new(self.backend());
         let where_clause = query.header_where_clause(id)?;
         // ORDER BY h.height ASC ensures that if there are duplicate blocks (this can happen when
         // selecting by payload ID, as payloads are not unique), we return the first one.
@@ -145,16 +137,15 @@ where
               ORDER BY h.height
               LIMIT 1"
         );
-        let row = query.query(&sql).fetch_one(self.as_mut()).await?;
-        let common = VidCommonQueryData::from_row(&row)?;
-        Ok(common)
+        let row = query.query(&sql).fetch_one(self).await?;
+        Ok(row.from_row()?)
     }
 
     async fn get_vid_common_metadata(
         &mut self,
         id: BlockId<Types>,
     ) -> QueryResult<VidCommonMetadata<Types>> {
-        let mut query = QueryBuilder::default();
+        let mut query = QueryBuilder::new(self.backend());
         let where_clause = query.header_where_clause(id)?;
         // ORDER BY h.height ASC ensures that if there are duplicate blocks (this can happen when
         // selecting by payload ID, as payloads are not unique), we return the first one.
@@ -166,9 +157,8 @@ where
               ORDER BY h.height ASC
               LIMIT 1"
         );
-        let row = query.query(&sql).fetch_one(self.as_mut()).await?;
-        let common = VidCommonMetadata::from_row(&row)?;
-        Ok(common)
+        let row = query.query(&sql).fetch_one(self).await?;
+        Ok(row.from_row()?)
     }
 
     async fn get_leaf_range<R>(
@@ -178,14 +168,13 @@ where
     where
         R: RangeBounds<usize> + Send,
     {
-        let mut query = QueryBuilder::default();
+        let mut query = QueryBuilder::new(self.backend());
         let where_clause = query.bounds_to_where_clause(range, "height")?;
         let sql = format!("SELECT {LEAF_COLUMNS} FROM leaf2 {where_clause} ORDER BY height ASC");
         Ok(query
             .query(&sql)
-            .fetch(self.as_mut())
-            .map(|res| LeafQueryData::from_row(&res?))
-            .map_err(QueryError::from)
+            .fetch(self)
+            .map(|res| Ok(res?.from_row()?))
             .collect()
             .await)
     }
@@ -197,7 +186,7 @@ where
     where
         R: RangeBounds<usize> + Send,
     {
-        let mut query = QueryBuilder::default();
+        let mut query = QueryBuilder::new(self.backend());
         let where_clause = query.bounds_to_where_clause(range, "h.height")?;
         let sql = format!(
             "SELECT {BLOCK_COLUMNS}
@@ -208,9 +197,8 @@ where
         );
         Ok(query
             .query(&sql)
-            .fetch(self.as_mut())
-            .map(|res| BlockQueryData::from_row(&res?))
-            .map_err(QueryError::from)
+            .fetch(self)
+            .map(|res| Ok(res?.from_row()?))
             .collect()
             .await)
     }
@@ -222,7 +210,7 @@ where
     where
         R: RangeBounds<usize> + Send,
     {
-        let mut query = QueryBuilder::default();
+        let mut query = QueryBuilder::new(self.backend());
         let where_clause = query.bounds_to_where_clause(range, "h.height")?;
 
         let headers = query
@@ -232,8 +220,12 @@ where
                   {where_clause}
                   ORDER BY h.height"
             ))
-            .fetch(self.as_mut())
-            .map(|res| serde_json::from_value(res?.get("data")).unwrap())
+            .fetch(self)
+            .map(|res| {
+                let row = res?;
+                let data: serde_json::Value = row.try_get("data")?;
+                Ok(serde_json::from_value(data).unwrap())
+            })
             .collect()
             .await;
 
@@ -247,7 +239,7 @@ where
     where
         R: RangeBounds<usize> + Send,
     {
-        let mut query = QueryBuilder::default();
+        let mut query = QueryBuilder::new(self.backend());
         let where_clause = query.bounds_to_where_clause(range, "h.height")?;
         let sql = format!(
             "SELECT {PAYLOAD_COLUMNS}
@@ -258,9 +250,8 @@ where
         );
         Ok(query
             .query(&sql)
-            .fetch(self.as_mut())
-            .map(|res| PayloadQueryData::from_row(&res?))
-            .map_err(QueryError::from)
+            .fetch(self)
+            .map(|res| Ok(res?.from_row()?))
             .collect()
             .await)
     }
@@ -272,7 +263,7 @@ where
     where
         R: RangeBounds<usize> + Send + 'static,
     {
-        let mut query = QueryBuilder::default();
+        let mut query = QueryBuilder::new(self.backend());
         let where_clause = query.bounds_to_where_clause(range, "h.height")?;
         let sql = format!(
             "SELECT {PAYLOAD_METADATA_COLUMNS}
@@ -281,15 +272,11 @@ where
               {where_clause}
               ORDER BY h.height ASC"
         );
-        let rows = query
-            .query(&sql)
-            .fetch(self.as_mut())
-            .collect::<Vec<_>>()
-            .await;
+        let rows: Vec<_> = query.query(&sql).fetch(self).collect::<Vec<_>>().await;
         let mut payloads = vec![];
         for row in rows {
             let res = async {
-                let mut meta = PayloadMetadata::from_row(&row?)?;
+                let mut meta: PayloadMetadata<Types> = row?.from_row()?;
                 meta.namespaces = self
                     .load_namespaces::<Types>(meta.height(), meta.size)
                     .await?;
@@ -308,7 +295,7 @@ where
     where
         R: RangeBounds<usize> + Send,
     {
-        let mut query = QueryBuilder::default();
+        let mut query = QueryBuilder::new(self.backend());
         let where_clause = query.bounds_to_where_clause(range, "h.height")?;
         let sql = format!(
             "SELECT {VID_COMMON_COLUMNS}
@@ -319,9 +306,8 @@ where
         );
         Ok(query
             .query(&sql)
-            .fetch(self.as_mut())
-            .map(|res| VidCommonQueryData::from_row(&res?))
-            .map_err(QueryError::from)
+            .fetch(self)
+            .map(|res| Ok(res?.from_row()?))
             .collect()
             .await)
     }
@@ -333,7 +319,7 @@ where
     where
         R: RangeBounds<usize> + Send,
     {
-        let mut query = QueryBuilder::default();
+        let mut query = QueryBuilder::new(self.backend());
         let where_clause = query.bounds_to_where_clause(range, "h.height")?;
         let sql = format!(
             "SELECT {VID_COMMON_METADATA_COLUMNS}
@@ -344,9 +330,8 @@ where
         );
         Ok(query
             .query(&sql)
-            .fetch(self.as_mut())
-            .map(|res| VidCommonMetadata::from_row(&res?))
-            .map_err(QueryError::from)
+            .fetch(self)
+            .map(|res| Ok(res?.from_row()?))
             .collect()
             .await)
     }
@@ -355,7 +340,7 @@ where
         &mut self,
         hash: TransactionHash<Types>,
     ) -> QueryResult<BlockQueryData<Types>> {
-        let mut query = QueryBuilder::default();
+        let mut query = QueryBuilder::new(self.backend());
         let hash_param = query.bind(hash.to_string())?;
 
         // ORDER BY ASC ensures that if there are duplicate transactions, we return the first
@@ -369,19 +354,18 @@ where
                 ORDER BY t.block_height, t.ns_id, t.position
                 LIMIT 1"
         );
-        let row = query.query(&sql).fetch_one(self.as_mut()).await?;
-        Ok(BlockQueryData::from_row(&row)?)
+        let row = query.query(&sql).fetch_one(self).await?;
+        Ok(row.from_row()?)
     }
 
     async fn first_available_leaf(&mut self, from: u64) -> QueryResult<LeafQueryData<Types>> {
-        let row = query(&format!(
-            "SELECT {LEAF_COLUMNS} FROM leaf2 WHERE height >= $1 ORDER BY height ASC LIMIT 1"
-        ))
-        .bind(from as i64)
-        .fetch_one(self.as_mut())
-        .await?;
-        let leaf = LeafQueryData::from_row(&row)?;
-        Ok(leaf)
+        let mut query = QueryBuilder::new(self.backend());
+        let param = query.bind(from as i64)?;
+        let sql = format!(
+            "SELECT {LEAF_COLUMNS} FROM leaf2 WHERE height >= {param} ORDER BY height ASC LIMIT 1"
+        );
+        let row = query.query(&sql).fetch_one(self).await?;
+        Ok(row.from_row()?)
     }
 }
 
@@ -402,29 +386,31 @@ where
         let header = self
             .get_header(BlockId::<Types>::from(height as usize))
             .await?;
-        let map = query(
-            "SELECT ns_id, ns_index, max(position) + 1 AS count
-               FROM  transactions
-               WHERE block_height = $1
-               GROUP BY ns_id, ns_index",
-        )
-        .bind(height as i64)
-        .fetch(self.as_mut())
-        .map_ok(|row| {
-            let ns = row.get::<i64, _>("ns_index").into();
-            let id = row.get::<i64, _>("ns_id").into();
-            let num_transactions = row.get::<i64, _>("count") as u64;
-            let size = header.namespace_size(&ns, payload_size as usize);
-            (
-                id,
-                NamespaceInfo {
-                    num_transactions,
-                    size,
-                },
+        let map = with_backend!(self, |tx| {
+            sqlx::query(
+                "SELECT ns_id, ns_index, max(position) + 1 AS count
+                   FROM  transactions
+                   WHERE block_height = $1
+                   GROUP BY ns_id, ns_index",
             )
-        })
-        .try_collect()
-        .await?;
+            .bind(height as i64)
+            .fetch(tx.as_mut())
+            .map_ok(|row| {
+                let ns = row.get::<i64, _>("ns_index").into();
+                let id = row.get::<i64, _>("ns_id").into();
+                let num_transactions = row.get::<i64, _>("count") as u64;
+                let size = header.namespace_size(&ns, payload_size as usize);
+                (
+                    id,
+                    NamespaceInfo {
+                        num_transactions,
+                        size,
+                    },
+                )
+            })
+            .try_collect()
+            .await
+        })?;
         Ok(map)
     }
 }
@@ -438,6 +424,7 @@ mod test {
 
     use super::*;
     use crate::{
+        QueryError,
         data_source::{
             Transaction, VersionedDataSource,
             sql::testing::TmpDb,

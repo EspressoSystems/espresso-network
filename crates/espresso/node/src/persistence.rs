@@ -173,6 +173,12 @@ mod tests {
         type Storage: Sync;
 
         async fn tmp_storage() -> Self::Storage;
+        async fn tmp_storage_for(
+            backend: hotshot_query_service::data_source::storage::sql::DbBackend,
+        ) -> Self::Storage {
+            let _ = backend;
+            Self::tmp_storage().await
+        }
         fn options(storage: &Self::Storage) -> impl PersistenceOptions<Persistence = Self>;
 
         async fn connect(storage: &Self::Storage) -> Self {

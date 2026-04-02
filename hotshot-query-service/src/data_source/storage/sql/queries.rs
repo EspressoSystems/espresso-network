@@ -20,16 +20,14 @@ use std::{
 
 use anyhow::Context;
 use derivative::Derivative;
+use futures::stream::BoxStream;
 use hotshot_types::{
     simple_certificate::QuorumCertificate2,
-    traits::{
-        block_contents::{BlockHeader, BlockPayload},
-        node_implementation::NodeType,
-    },
+    traits::{BlockPayload, block_contents::BlockHeader, node_implementation::NodeType},
 };
 use sqlx::{Arguments, FromRow, Row};
 
-use super::{Database, Db, Query, QueryAs, Transaction};
+use super::{Transaction, db::DbBackend};
 use crate::{
     Header, Leaf2, Payload, QueryError, QueryResult,
     availability::{
@@ -44,75 +42,319 @@ pub(super) mod explorer;
 pub(super) mod node;
 pub(super) mod state;
 
+/// Backend-dispatched arguments for SQL queries.
+pub enum BackendArguments<'a> {
+    Postgres(<sqlx::Postgres as sqlx::Database>::Arguments<'a>),
+    Sqlite(<sqlx::Sqlite as sqlx::Database>::Arguments<'a>),
+}
+
+impl<'a> BackendArguments<'a> {
+    fn len(&self) -> usize {
+        match self {
+            Self::Postgres(args) => args.len(),
+            Self::Sqlite(args) => args.len(),
+        }
+    }
+}
+
+/// A SQL query with backend-dispatched arguments. Returned by [`QueryBuilder::query`].
+pub enum BackendQuery<'q> {
+    Postgres(
+        sqlx::query::Query<'q, sqlx::Postgres, <sqlx::Postgres as sqlx::Database>::Arguments<'q>>,
+    ),
+    Sqlite(sqlx::query::Query<'q, sqlx::Sqlite, <sqlx::Sqlite as sqlx::Database>::Arguments<'q>>),
+}
+
+/// Generate `fetch_one`, `fetch_optional`, `fetch_all`, and `fetch` methods for a
+/// backend-dispatched query type. `$wrap_pg` and `$wrap_sq` are applied to each row returned
+/// by the Postgres and Sqlite variants respectively. `fetch_where` bounds are only added to
+/// the `fetch` method (which introduces its own `'e` lifetime).
+macro_rules! impl_backend_fetch {
+    ($Output:ty, $wrap_pg:expr, $wrap_sq:expr $(, fetch_where $($fetch_extra:tt)+)?) => {
+        pub async fn fetch_one<Mode>(
+            self,
+            tx: &mut Transaction<Mode>,
+        ) -> Result<$Output, sqlx::Error> {
+            match self {
+                Self::Postgres(q) => Ok($wrap_pg(q.fetch_one(tx.inner.as_postgres_mut()).await?)),
+                Self::Sqlite(q) => Ok($wrap_sq(q.fetch_one(tx.inner.as_sqlite_mut()).await?)),
+            }
+        }
+
+        pub async fn fetch_optional<Mode>(
+            self,
+            tx: &mut Transaction<Mode>,
+        ) -> Result<Option<$Output>, sqlx::Error> {
+            match self {
+                Self::Postgres(q) => Ok(q.fetch_optional(tx.inner.as_postgres_mut()).await?.map($wrap_pg)),
+                Self::Sqlite(q) => Ok(q.fetch_optional(tx.inner.as_sqlite_mut()).await?.map($wrap_sq)),
+            }
+        }
+
+        pub async fn fetch_all<Mode>(
+            self,
+            tx: &mut Transaction<Mode>,
+        ) -> Result<Vec<$Output>, sqlx::Error> {
+            match self {
+                Self::Postgres(q) => Ok(q
+                    .fetch_all(tx.inner.as_postgres_mut())
+                    .await?
+                    .into_iter()
+                    .map($wrap_pg)
+                    .collect()),
+                Self::Sqlite(q) => Ok(q
+                    .fetch_all(tx.inner.as_sqlite_mut())
+                    .await?
+                    .into_iter()
+                    .map($wrap_sq)
+                    .collect()),
+            }
+        }
+
+        pub fn fetch<'e, Mode>(
+            self,
+            tx: &'e mut Transaction<Mode>,
+        ) -> BoxStream<'e, Result<$Output, sqlx::Error>>
+        where
+            'q: 'e,
+            $($($fetch_extra)+)?
+        {
+            use futures::StreamExt;
+            match self {
+                Self::Postgres(q) => q
+                    .fetch(tx.inner.as_postgres_mut())
+                    .map(|r| r.map($wrap_pg))
+                    .boxed(),
+                Self::Sqlite(q) => q
+                    .fetch(tx.inner.as_sqlite_mut())
+                    .map(|r| r.map($wrap_sq))
+                    .boxed(),
+            }
+        }
+    };
+}
+
+impl<'q> BackendQuery<'q> {
+    pub fn bind<T>(self, value: T) -> Self
+    where
+        T: 'q
+            + sqlx::Encode<'q, sqlx::Postgres>
+            + sqlx::Type<sqlx::Postgres>
+            + sqlx::Encode<'q, sqlx::Sqlite>
+            + sqlx::Type<sqlx::Sqlite>
+            + Send,
+    {
+        match self {
+            Self::Postgres(q) => Self::Postgres(q.bind(value)),
+            Self::Sqlite(q) => Self::Sqlite(q.bind(value)),
+        }
+    }
+
+    pub async fn execute<Mode>(self, tx: &mut Transaction<Mode>) -> Result<u64, sqlx::Error> {
+        match self {
+            Self::Postgres(q) => Ok(q.execute(tx.inner.as_postgres_mut()).await?.rows_affected()),
+            Self::Sqlite(q) => Ok(q.execute(tx.inner.as_sqlite_mut()).await?.rows_affected()),
+        }
+    }
+
+    impl_backend_fetch!(BackendRow, BackendRow::Postgres, BackendRow::Sqlite);
+}
+
+/// A SQL query-as with backend-dispatched arguments. Returned by [`QueryBuilder::query_as`].
+pub enum BackendQueryAs<'q, T> {
+    Postgres(
+        sqlx::query::QueryAs<
+            'q,
+            sqlx::Postgres,
+            T,
+            <sqlx::Postgres as sqlx::Database>::Arguments<'q>,
+        >,
+    ),
+    Sqlite(
+        sqlx::query::QueryAs<'q, sqlx::Sqlite, T, <sqlx::Sqlite as sqlx::Database>::Arguments<'q>>,
+    ),
+}
+
+impl<'q, T> BackendQueryAs<'q, T>
+where
+    T: for<'r> FromRow<'r, sqlx::postgres::PgRow> + Send + Unpin,
+    T: for<'r> FromRow<'r, sqlx::sqlite::SqliteRow>,
+{
+    pub fn bind<V>(self, value: V) -> Self
+    where
+        V: 'q
+            + sqlx::Encode<'q, sqlx::Postgres>
+            + sqlx::Type<sqlx::Postgres>
+            + sqlx::Encode<'q, sqlx::Sqlite>
+            + sqlx::Type<sqlx::Sqlite>
+            + Send,
+    {
+        match self {
+            Self::Postgres(q) => Self::Postgres(q.bind(value)),
+            Self::Sqlite(q) => Self::Sqlite(q.bind(value)),
+        }
+    }
+
+    impl_backend_fetch!(T, std::convert::identity, std::convert::identity, fetch_where T: 'e);
+}
+
+/// A row returned from a backend-dispatched query.
+pub enum BackendRow {
+    Postgres(sqlx::postgres::PgRow),
+    Sqlite(sqlx::sqlite::SqliteRow),
+}
+
+impl BackendRow {
+    pub fn try_get<'r, T>(&'r self, col: &str) -> sqlx::Result<T>
+    where
+        T: sqlx::Decode<'r, sqlx::Postgres> + sqlx::Type<sqlx::Postgres>,
+        T: sqlx::Decode<'r, sqlx::Sqlite> + sqlx::Type<sqlx::Sqlite>,
+    {
+        match self {
+            Self::Postgres(row) => row.try_get(col),
+            Self::Sqlite(row) => row.try_get(col),
+        }
+    }
+
+    pub fn get<'r, T>(&'r self, col: &str) -> T
+    where
+        T: sqlx::Decode<'r, sqlx::Postgres> + sqlx::Type<sqlx::Postgres>,
+        T: sqlx::Decode<'r, sqlx::Sqlite> + sqlx::Type<sqlx::Sqlite>,
+    {
+        match self {
+            Self::Postgres(row) => row.get(col),
+            Self::Sqlite(row) => row.get(col),
+        }
+    }
+
+    #[allow(clippy::wrong_self_convention)]
+    pub fn from_row<T>(&self) -> sqlx::Result<T>
+    where
+        T: for<'r> FromRow<'r, sqlx::postgres::PgRow>,
+        T: for<'r> FromRow<'r, sqlx::sqlite::SqliteRow>,
+    {
+        match self {
+            Self::Postgres(row) => T::from_row(row),
+            Self::Sqlite(row) => T::from_row(row),
+        }
+    }
+}
+
+pub fn query(backend: DbBackend, sql: &str) -> BackendQuery<'_> {
+    match backend {
+        DbBackend::Postgres => BackendQuery::Postgres(sqlx::query(sql)),
+        DbBackend::Sqlite => BackendQuery::Sqlite(sqlx::query(sql)),
+    }
+}
+
+pub fn query_as<'q, T>(backend: DbBackend, sql: &'q str) -> BackendQueryAs<'q, T>
+where
+    T: for<'r> FromRow<'r, sqlx::postgres::PgRow> + Send + Unpin,
+    T: for<'r> FromRow<'r, sqlx::sqlite::SqliteRow>,
+{
+    match backend {
+        DbBackend::Postgres => BackendQueryAs::Postgres(sqlx::query_as(sql)),
+        DbBackend::Sqlite => BackendQueryAs::Sqlite(sqlx::query_as(sql)),
+    }
+}
+
 /// Helper type for programmatically constructing queries.
 ///
-/// This type can be used to bind arguments of various types, similar to [`Query`] or [`QueryAs`].
-/// With [`QueryBuilder`], though, the arguments are bound *first* and the SQL statement is given
-/// last. Each time an argument is bound, a SQL fragment is returned as a string which can be used
-/// to represent that argument in the statement (e.g. `$1` for the first argument bound). This makes
-/// it easier to programmatically construct queries where the statement is not a compile time
-/// constant.
+/// This type can be used to bind arguments of various types. The arguments are bound *first* and
+/// the SQL statement is given last. Each time an argument is bound, a SQL fragment is returned as
+/// a string which can be used to represent that argument in the statement (e.g. `$1` for the first
+/// argument bound). This makes it easier to programmatically construct queries where the statement
+/// is not a compile time constant.
 ///
 /// # Example
 ///
-/// ```
-/// # use hotshot_query_service::{
-/// #   data_source::storage::sql::{
-/// #       Database, Db, QueryBuilder, Transaction,
-/// #   },
-/// #   QueryResult,
-/// # };
-/// # use sqlx::FromRow;
-/// async fn search_and_maybe_filter<T, Mode>(
+/// ```ignore
+/// use hotshot_query_service::{
+///     data_source::storage::sql::{QueryBuilder, Transaction},
+///     QueryResult,
+/// };
+///
+/// async fn search_and_maybe_filter<Mode>(
 ///     tx: &mut Transaction<Mode>,
 ///     id: Option<i64>,
-/// ) -> QueryResult<Vec<T>>
-/// where
-///     for<'r> T: FromRow<'r, <Db as Database>::Row> + Send + Unpin,
-/// {
-///     let mut query = QueryBuilder::default();
-///     let mut sql = "SELECT * FROM table".into();
+/// ) -> QueryResult<Vec<BackendRow>> {
+///     let mut query = QueryBuilder::new(tx.backend());
+///     let mut sql = "SELECT * FROM table".to_string();
 ///     if let Some(id) = id {
 ///         sql = format!("{sql} WHERE id = {}", query.bind(id)?);
 ///     }
 ///     let results = query
-///         .query_as(&sql)
-///         .fetch_all(tx.as_mut())
+///         .query(&sql)
+///         .fetch_all(tx)
 ///         .await?;
 ///     Ok(results)
 /// }
 /// ```
-#[derive(Derivative, Default)]
+#[derive(Derivative)]
 #[derivative(Debug)]
 pub struct QueryBuilder<'a> {
     #[derivative(Debug = "ignore")]
-    arguments: <Db as Database>::Arguments<'a>,
+    arguments: BackendArguments<'a>,
+}
+
+impl<'a> QueryBuilder<'a> {
+    pub fn new(backend: DbBackend) -> Self {
+        let arguments = match backend {
+            DbBackend::Postgres => BackendArguments::Postgres(Default::default()),
+            DbBackend::Sqlite => BackendArguments::Sqlite(Default::default()),
+        };
+        Self { arguments }
+    }
 }
 
 impl<'q> QueryBuilder<'q> {
     /// Add an argument and return its name as a formal parameter in a SQL prepared statement.
     pub fn bind<T>(&mut self, arg: T) -> QueryResult<String>
     where
-        T: 'q + sqlx::Encode<'q, Db> + sqlx::Type<Db>,
+        T: 'q
+            + sqlx::Encode<'q, sqlx::Postgres>
+            + sqlx::Type<sqlx::Postgres>
+            + sqlx::Encode<'q, sqlx::Sqlite>
+            + sqlx::Type<sqlx::Sqlite>,
     {
-        self.arguments.add(arg).map_err(|err| QueryError::Error {
-            message: format!("{err:#}"),
-        })?;
+        match &mut self.arguments {
+            BackendArguments::Postgres(args) => {
+                args.add(arg).map_err(|err| QueryError::Error {
+                    message: format!("{err:#}"),
+                })?;
+            },
+            BackendArguments::Sqlite(args) => {
+                args.add(arg).map_err(|err| QueryError::Error {
+                    message: format!("{err:#}"),
+                })?;
+            },
+        }
 
         Ok(format!("${}", self.arguments.len()))
     }
 
     /// Finalize the query with a constructed SQL statement.
-    pub fn query(self, sql: &'q str) -> Query<'q> {
-        sqlx::query_with(sql, self.arguments)
+    pub fn query(self, sql: &'q str) -> BackendQuery<'q> {
+        match self.arguments {
+            BackendArguments::Postgres(args) => BackendQuery::Postgres(sqlx::query_with(sql, args)),
+            BackendArguments::Sqlite(args) => BackendQuery::Sqlite(sqlx::query_with(sql, args)),
+        }
     }
 
     /// Finalize the query with a constructed SQL statement and a specified output type.
-    pub fn query_as<T>(self, sql: &'q str) -> QueryAs<'q, T>
+    pub fn query_as<T>(self, sql: &'q str) -> BackendQueryAs<'q, T>
     where
-        T: for<'r> FromRow<'r, <Db as Database>::Row>,
+        T: for<'r> FromRow<'r, sqlx::postgres::PgRow>,
+        T: for<'r> FromRow<'r, sqlx::sqlite::SqliteRow>,
     {
-        sqlx::query_as_with(sql, self.arguments)
+        match self.arguments {
+            BackendArguments::Postgres(args) => {
+                BackendQueryAs::Postgres(sqlx::query_as_with(sql, args))
+            },
+            BackendArguments::Sqlite(args) => {
+                BackendQueryAs::Sqlite(sqlx::query_as_with(sql, args))
+            },
+        }
     }
 }
 
@@ -167,160 +409,160 @@ impl QueryBuilder<'_> {
 
 const LEAF_COLUMNS: &str = "leaf, qc";
 
-impl<'r, Types> FromRow<'r, <Db as Database>::Row> for LeafQueryData<Types>
-where
-    Types: NodeType,
-{
-    fn from_row(row: &'r <Db as Database>::Row) -> sqlx::Result<Self> {
-        let leaf = row.try_get("leaf")?;
-        let leaf: Leaf2<Types> = serde_json::from_value(leaf).decode_error("malformed leaf")?;
+macro_rules! impl_from_row_for_both {
+    ($ty:ty, |$row:ident| $body:expr $(, where $($bounds:tt)+)?) => {
+        impl<'r, Types> FromRow<'r, sqlx::postgres::PgRow> for $ty
+        where
+            Types: NodeType,
+            $($($bounds)+)?
+        {
+            fn from_row($row: &'r sqlx::postgres::PgRow) -> sqlx::Result<Self> {
+                $body
+            }
+        }
 
-        let qc = row.try_get("qc")?;
-        let qc: QuorumCertificate2<Types> =
-            serde_json::from_value(qc).decode_error("malformed QC")?;
-
-        Ok(Self { leaf, qc })
-    }
+        impl<'r, Types> FromRow<'r, sqlx::sqlite::SqliteRow> for $ty
+        where
+            Types: NodeType,
+            $($($bounds)+)?
+        {
+            fn from_row($row: &'r sqlx::sqlite::SqliteRow) -> sqlx::Result<Self> {
+                $body
+            }
+        }
+    };
 }
+
+impl_from_row_for_both!(LeafQueryData<Types>, |row| {
+    let leaf = row.try_get("leaf")?;
+    let leaf: Leaf2<Types> = serde_json::from_value(leaf).decode_error("malformed leaf")?;
+
+    let qc = row.try_get("qc")?;
+    let qc: QuorumCertificate2<Types> = serde_json::from_value(qc).decode_error("malformed QC")?;
+
+    Ok(Self { leaf, qc })
+});
 
 const BLOCK_COLUMNS: &str =
     "h.hash AS hash, h.data AS header_data, p.size AS payload_size, p.data AS payload_data";
 
-impl<'r, Types> FromRow<'r, <Db as Database>::Row> for BlockQueryData<Types>
-where
-    Types: NodeType,
+impl_from_row_for_both!(BlockQueryData<Types>, |row| {
+    // First, check if we have the payload for this block yet.
+    let size: Option<i32> = row.try_get("payload_size")?;
+    let payload_data: Option<Vec<u8>> = row.try_get("payload_data")?;
+    let (size, payload_data) = size.zip(payload_data).ok_or(sqlx::Error::RowNotFound)?;
+    let size = size as u64;
+
+    // Reconstruct the full header.
+    let header_data = row.try_get("header_data")?;
+    let header: Header<Types> =
+        serde_json::from_value(header_data).decode_error("malformed header")?;
+
+    // Reconstruct the full block payload.
+    let payload = Payload::<Types>::from_bytes(&payload_data, header.metadata());
+
+    // Reconstruct the query data by adding metadata.
+    let hash: String = row.try_get("hash")?;
+    let hash = hash.parse().decode_error("malformed block hash")?;
+
+    Ok(Self {
+        num_transactions: payload.len(header.metadata()) as u64,
+        header,
+        payload,
+        size,
+        hash,
+    })
+}, where
     Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
-{
-    fn from_row(row: &'r <Db as Database>::Row) -> sqlx::Result<Self> {
-        // First, check if we have the payload for this block yet.
-        let size = row.try_get::<i32, _>("payload_size")? as u64;
-        let payload_data = row.try_get::<Vec<u8>, _>("payload_data")?;
-
-        // Reconstruct the full header.
-        let header_data = row.try_get("header_data")?;
-        let header: Header<Types> =
-            serde_json::from_value(header_data).decode_error("malformed header")?;
-
-        // Reconstruct the full block payload.
-        let payload = Payload::<Types>::from_bytes(&payload_data, header.metadata());
-
-        // Reconstruct the query data by adding metadata.
-        let hash: String = row.try_get("hash")?;
-        let hash = hash.parse().decode_error("malformed block hash")?;
-
-        Ok(Self {
-            num_transactions: payload.len(header.metadata()) as u64,
-            header,
-            payload,
-            size,
-            hash,
-        })
-    }
-}
+);
 
 const PAYLOAD_COLUMNS: &str = BLOCK_COLUMNS;
 
-impl<'r, Types> FromRow<'r, <Db as Database>::Row> for PayloadQueryData<Types>
-where
-    Types: NodeType,
+impl_from_row_for_both!(PayloadQueryData<Types>, |row| {
+    BlockQueryData::<Types>::from_row(row).map(Self::from)
+}, where
     Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
-{
-    fn from_row(row: &'r <Db as Database>::Row) -> sqlx::Result<Self> {
-        <BlockQueryData<Types> as FromRow<<Db as Database>::Row>>::from_row(row).map(Self::from)
-    }
-}
+);
 
 const PAYLOAD_METADATA_COLUMNS: &str = "h.height AS height, h.hash AS hash, h.payload_hash AS \
                                         payload_hash, p.size AS payload_size, p.num_transactions \
                                         AS num_transactions";
 
-impl<'r, Types> FromRow<'r, <Db as Database>::Row> for PayloadMetadata<Types>
-where
-    Types: NodeType,
-    Header<Types>: QueryableHeader<Types>,
-{
-    fn from_row(row: &'r <Db as Database>::Row) -> sqlx::Result<Self> {
-        Ok(Self {
-            height: row.try_get::<i64, _>("height")? as u64,
-            block_hash: row
-                .try_get::<String, _>("hash")?
-                .parse()
-                .decode_error("malformed block hash")?,
-            hash: row
-                .try_get::<String, _>("payload_hash")?
-                .parse()
-                .decode_error("malformed payload hash")?,
-            size: row.try_get::<i32, _>("payload_size")? as u64,
-            num_transactions: row.try_get::<i32, _>("num_transactions")? as u64,
+impl_from_row_for_both!(PayloadMetadata<Types>, |row| {
+    Ok(Self {
+        height: row.try_get::<i64, _>("height")? as u64,
+        block_hash: row
+            .try_get::<String, _>("hash")?
+            .parse()
+            .decode_error("malformed block hash")?,
+        hash: row
+            .try_get::<String, _>("payload_hash")?
+            .parse()
+            .decode_error("malformed payload hash")?,
+        size: row.try_get::<i32, _>("payload_size")? as u64,
+        num_transactions: row.try_get::<i32, _>("num_transactions")? as u64,
 
-            // Per-namespace info must be loaded in a separate query.
-            namespaces: Default::default(),
-        })
-    }
-}
+        // Per-namespace info must be loaded in a separate query.
+        namespaces: Default::default(),
+    })
+}, where
+    Header<Types>: QueryableHeader<Types>,
+);
 
 const VID_COMMON_COLUMNS: &str = "h.height AS height, h.hash AS block_hash, h.payload_hash AS \
                                   payload_hash, v.data AS common_data";
 
-impl<'r, Types> FromRow<'r, <Db as Database>::Row> for VidCommonQueryData<Types>
-where
-    Types: NodeType,
+impl_from_row_for_both!(VidCommonQueryData<Types>, |row| {
+    let height = row.try_get::<i64, _>("height")? as u64;
+    let block_hash: String = row.try_get("block_hash")?;
+    let block_hash = block_hash.parse().decode_error("malformed block hash")?;
+    let payload_hash: String = row.try_get("payload_hash")?;
+    let payload_hash = payload_hash
+        .parse()
+        .decode_error("malformed payload hash")?;
+    let common_data: Vec<u8> = row.try_get("common_data")?;
+    let common =
+        bincode::deserialize(&common_data).decode_error("malformed VID common data")?;
+    Ok(Self {
+        height,
+        block_hash,
+        payload_hash,
+        common,
+    })
+}, where
     Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
-{
-    fn from_row(row: &'r <Db as Database>::Row) -> sqlx::Result<Self> {
-        let height = row.try_get::<i64, _>("height")? as u64;
-        let block_hash: String = row.try_get("block_hash")?;
-        let block_hash = block_hash.parse().decode_error("malformed block hash")?;
-        let payload_hash: String = row.try_get("payload_hash")?;
-        let payload_hash = payload_hash
-            .parse()
-            .decode_error("malformed payload hash")?;
-        let common_data: Vec<u8> = row.try_get("common_data")?;
-        let common =
-            bincode::deserialize(&common_data).decode_error("malformed VID common data")?;
-        Ok(Self {
-            height,
-            block_hash,
-            payload_hash,
-            common,
-        })
-    }
-}
+);
 
 const VID_COMMON_METADATA_COLUMNS: &str =
     "h.height AS height, h.hash AS block_hash, h.payload_hash AS payload_hash";
 
-impl<'r, Types> FromRow<'r, <Db as Database>::Row> for VidCommonMetadata<Types>
-where
-    Types: NodeType,
+impl_from_row_for_both!(VidCommonMetadata<Types>, |row| {
+    let height = row.try_get::<i64, _>("height")? as u64;
+    let block_hash: String = row.try_get("block_hash")?;
+    let block_hash = block_hash.parse().decode_error("malformed block hash")?;
+    let payload_hash: String = row.try_get("payload_hash")?;
+    let payload_hash = payload_hash
+        .parse()
+        .decode_error("malformed payload hash")?;
+    Ok(Self {
+        height,
+        block_hash,
+        payload_hash,
+    })
+}, where
     Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
-{
-    fn from_row(row: &'r <Db as Database>::Row) -> sqlx::Result<Self> {
-        let height = row.try_get::<i64, _>("height")? as u64;
-        let block_hash: String = row.try_get("block_hash")?;
-        let block_hash = block_hash.parse().decode_error("malformed block hash")?;
-        let payload_hash: String = row.try_get("payload_hash")?;
-        let payload_hash = payload_hash
-            .parse()
-            .decode_error("malformed payload hash")?;
-        Ok(Self {
-            height,
-            block_hash,
-            payload_hash,
-        })
-    }
-}
+);
 
 const HEADER_COLUMNS: &str = "h.data AS data";
 
 // We can't implement `FromRow` for `Header<Types>` since `Header<Types>` is not actually a type
 // defined in this crate; it's just an alias for `Types::BlockHeader`. So this standalone function
 // will have to do.
-fn parse_header<Types>(row: <Db as Database>::Row) -> sqlx::Result<Header<Types>>
+fn parse_header<Types>(row: BackendRow) -> sqlx::Result<Header<Types>>
 where
     Types: NodeType,
 {
@@ -356,7 +598,7 @@ impl<Mode> Transaction<Mode> {
         &mut self,
         id: impl Into<BlockId<Types>> + Send,
     ) -> QueryResult<Header<Types>> {
-        let mut query = QueryBuilder::default();
+        let mut query = QueryBuilder::new(self.backend());
         let where_clause = query.header_where_clause(id.into())?;
         // ORDER BY h.height ASC ensures that if there are duplicate blocks (this can happen when
         // selecting by payload ID, as payloads are not unique), we return the first one.
@@ -368,7 +610,7 @@ impl<Mode> Transaction<Mode> {
               LIMIT 1"
         );
 
-        let row = query.query(&sql).fetch_one(self.as_mut()).await?;
+        let row = query.query(&sql).fetch_one(self).await?;
         let header = parse_header::<Types>(row)?;
 
         Ok(header)

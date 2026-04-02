@@ -13,7 +13,6 @@ updates:
   - package-ecosystem: "cargo"
     directories:
       - "/"
-      - "/crates/espresso/node-sqlite"
     groups:
       # The `all` group should include mainly updates from crates.io which are
       # more likely to succeed without intervention.

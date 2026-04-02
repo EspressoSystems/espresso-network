@@ -14,7 +14,6 @@ members = [
     "crates/cliquenet",
     "crates/espresso/dev-node",
     "crates/espresso/node",
-    "crates/espresso/node-sqlite",
     "crates/espresso/types",
     "crates/espresso/utils",
     "crates/hotshot-builder/legacy",
@@ -48,8 +47,6 @@ members = [
     "vid",
 ]
 
-# All crates except espresso-node-sqlite and espresso-dev-node, to avoid turning on embedded-db feature
-# for the whole workspace by default.
 default-members = [
     "alloy-compat",
     "benchmark-stats",
@@ -77,6 +74,7 @@ default-members = [
     "crates/hotshot/new-protocol",
     "crates/hotshot-builder/legacy",
     "crates/hotshot-builder/refactored",
+    "crates/espresso/dev-node",
     "hotshot-events-service",
     "hotshot-query-service",
     "hotshot-state-prover",
@@ -94,8 +92,6 @@ default-members = [
     "crates/espresso/utils",
     "vid",
 ]
-exclude = ["crates/espresso/node-sqlite"]
-# Note: workspace members/default-members reference directory paths, not crate names.
 
 [workspace.package]
 version = "0.1.0"
@@ -281,7 +277,7 @@ sha2 = "0.10"
 sha3 = "0.10.8"
 snafu = "0.8"
 snow = { version = "0.10.0", features = ["ring-accelerated"] }
-sqlx = { version = "=0.8.3", features = ["bit-vec", "postgres", "runtime-tokio", "tls-native-tls"] }
+sqlx = { version = "=0.8.3", features = ["bit-vec", "json", "postgres", "sqlite", "runtime-tokio", "tls-native-tls"] }
 staking-cli = { path = "staking-cli" }
 static_assertions = "1.1"
 strum = { version = "0.26", features = ["derive"] }

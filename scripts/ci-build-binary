@@ -3,7 +3,7 @@
 #
 # ./ci-build-binary <binary>
 #
-# where <binary> is one of: espresso-node, espresso-node-sqlite, espresso-dev-node, other
+# where <binary> is one of: espresso-node, espresso-dev-node, other
 #
 set -euo pipefail
 
@@ -11,16 +11,13 @@ case "$1" in
     "espresso-node")
         cargo build --locked --release -p espresso-node --bin espresso-node
         ;;
-    "espresso-node-sqlite")
-        cargo build --locked --release -p espresso-node-sqlite
-        ;;
     "espresso-dev-node")
         cargo build --locked --release -p espresso-dev-node
         ;;
     "other")
         BINS="$(cargo metadata --no-deps --format-version 1 \
         | jq -r '.packages[].targets[] | select(.kind[] == "bin") | .name' \
-        | grep -v '^espresso-node$\|^espresso-node-sqlite$\|^espresso-dev-node$' \
+        | grep -v '^espresso-node$\|^espresso-dev-node$' \
         | xargs -I{} echo --bin {} \
         | tr '\n' ' ')"
         echo "Building other binaries: $BINS"

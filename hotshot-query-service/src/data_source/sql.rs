@@ -79,11 +79,11 @@ impl Config {
 ///
 /// ## Initialization
 ///
-/// When creating a PostgreSQL [`SqlDataSource`], the caller can use [`Config`] to specify the host, user, and
-/// database for the connection. If the `embedded-db` feature is enabled, the caller can instead specify the
-/// file path for an SQLite database.
-/// As such, [`SqlDataSource`] is not very opinionated about how the
-/// database instance is set up. The administrator must simply ensure that there is a database
+/// When creating a [`SqlDataSource`], the caller can use [`Config`] to specify the connection.
+/// For PostgreSQL, specify host, user, and database. For SQLite, specify a file path.
+/// The backend is selected at runtime based on the configuration.
+///
+/// For PostgreSQL, the administrator must ensure that there is a database
 /// dedicated to the [`SqlDataSource`] and a user with appropriate permissions (all on `SCHEMA` and
 /// all on `DATABASE`) over that database.
 ///
@@ -101,11 +101,10 @@ impl Config {
 ///
 /// For SQLite, simply provide the file path, and the file will be created if it does not already exist.
 ///
-/// One could then connect to this database with the following [`Config`] for postgres:
+/// One could then connect to a PostgreSQL database with the following [`Config`]:
 ///
 /// ```
 /// # use hotshot_query_service::data_source::sql::Config;
-/// #[cfg(not(feature= "embedded-db"))]
 /// Config::default()
 ///     .host("postgres.database.hostname")
 ///     .database("hotshot_query_service")
@@ -113,15 +112,16 @@ impl Config {
 ///     .password("password")
 /// # ;
 /// ```
-/// Or, if the `embedded-db` feature is enabled, configure it as follows for SQLite:
+///
+/// Or, to use SQLite, configure it with a file path:
 ///
 /// ```
 /// # use hotshot_query_service::data_source::sql::Config;
-/// #[cfg(feature= "embedded-db")]
-/// Config::default()
+/// Config::sqlite_default()
 ///     .db_path("temp.db".into())
 /// # ;
 /// ```
+///
 /// ## Resetting
 ///
 /// In general, resetting the database when necessary is left up to the administrator. However, for

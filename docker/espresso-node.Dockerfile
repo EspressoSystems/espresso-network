@@ -2,11 +2,8 @@ FROM ghcr.io/espressosystems/ubuntu-base:main
 
 ARG TARGETARCH
 
-COPY target/$TARGETARCH/release/espresso-node /bin/espresso-node-postgres
-RUN chmod +x /bin/espresso-node-postgres
-
-COPY target/$TARGETARCH/release/espresso-node-sqlite /bin/espresso-node-sqlite
-RUN chmod +x /bin/espresso-node-sqlite
+COPY target/$TARGETARCH/release/espresso-node /bin/espresso-node
+RUN chmod +x /bin/espresso-node
 
 COPY target/$TARGETARCH/release/utils /bin/utils
 RUN chmod +x /bin/utils
@@ -28,10 +25,6 @@ COPY data/genesis /genesis
 # Set `ESPRESSO_SEQUENCER_GENESIS_SECRET`
 COPY docker/scripts/espresso-node-awssecretsmanager.sh /bin/espresso-node-awssecretsmanager.sh
 RUN chmod +x /bin/espresso-node-awssecretsmanager.sh
-
-# Copy entrypoint script
-COPY scripts/espresso-node-entrypoint /bin/espresso-node
-RUN chmod +x /bin/espresso-node
 
 # Set a path to save the consensus config on startup.
 #

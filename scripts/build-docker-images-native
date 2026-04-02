@@ -165,8 +165,7 @@ else
     "")
     # By default compile all binaries
     cargo_cmd_line="cargo build $cargo_extra_args \
-    && cargo build -p espresso-dev-node  $cargo_extra_args \
-    && cargo build -p espresso-node-sqlite $cargo_extra_args"
+    && cargo build -p espresso-dev-node $cargo_extra_args"
       ;;
     "espresso-dev-node")
       cargo_cmd_line="cargo build -p espresso-dev-node $cargo_extra_args"
@@ -178,8 +177,7 @@ else
         --bin reset-storage \
         --bin keygen \
         --bin pub-key \
-        $cargo_extra_args \
-      && cargo build -p espresso-node-sqlite $cargo_extra_args"
+        $cargo_extra_args"
       ;;
     "builder")
       cargo_cmd_line="cargo build --bin permissionless-builder $cargo_extra_args"

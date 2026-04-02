@@ -14,7 +14,12 @@ ignored = ["vergen", "vergen-gitcl", "include_dir", "hotshot_builder_api"]
 name = "espresso_node"
 path = "src/lib.rs"
 
+[[bin]]
+name = "espresso-node"
+path = "src/main.rs"
+
 [features]
+default = []
 testing = [
     "hotshot-testing",
     "espresso-types/testing",
@@ -23,7 +28,6 @@ testing = [
     "hotshot-query-service/testing",
 ]
 benchmarking = []
-embedded-db = ["hotshot-query-service/embedded-db", "sqlx/sqlite"]
 
 [dependencies]
 alloy = { workspace = true }
