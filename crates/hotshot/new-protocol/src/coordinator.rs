@@ -3,12 +3,10 @@ pub(crate) mod timer;
 
 use std::{sync::Arc, time::Duration};
 
-use async_broadcast::Sender as EventSender;
-use async_lock::{Mutex, RwLock};
 use bon::Builder;
 use hotshot::traits::NodeImplementation;
 use hotshot_types::{
-    data::{EpochNumber, ViewNumber},
+    data::{EpochNumber, Leaf2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     simple_certificate::{QuorumCertificate2, TimeoutCertificate2},
     simple_vote::{HasEpoch, QuorumVote2, TimeoutVote2},
@@ -20,13 +18,12 @@ use hotshot_types::{
     },
     vote::HasViewNumber,
 };
-use tokio::select;
-use tracing::{error, warn};
+use tokio::{select, sync::mpsc};
+use tracing::warn;
 
 use crate::{
     block::{BlockBuilder, BlockBuilderConfig},
     consensus::{Consensus, ConsensusInput, ConsensusOutput},
-    consensus_handle::{ConsensusEvent, event_from_output},
     coordinator::{
         error::{CoordinatorError, ErrorSource, Severity},
         timer::Timer,
@@ -40,6 +37,7 @@ use crate::{
     network::Network,
     outbox::Outbox,
     proposal::ProposalValidator,
+    query::CoordinatorQuery,
     state::{HeaderRequest, StateManager, StateManagerOutput},
     vid::{VidDisperseRequest, VidDisperser, VidReconstructor},
     vote::VoteCollector,
@@ -48,9 +46,10 @@ use crate::{
 #[derive(Builder)]
 pub struct Coordinator<T: NodeType, I: NodeImplementation<T>> {
     membership_coordinator: EpochMembershipCoordinator<T>,
-    consensus: Arc<RwLock<Consensus<T>>>,
+    consensus: Consensus<T>,
     network: Network<T, I::Network>,
-    state_manager: Arc<Mutex<StateManager<T>>>,
+    state_manager: StateManager<T>,
+    query_rx: mpsc::Receiver<CoordinatorQuery<T>>,
     vid_disperser: VidDisperser<T>,
     vid_reconstructor: VidReconstructor<T>,
     vote1_collector: VoteCollector<T, QuorumVote2<T>, QuorumCertificate2<T>>,
@@ -67,29 +66,33 @@ pub struct Coordinator<T: NodeType, I: NodeImplementation<T>> {
 }
 
 impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         membership_coordinator: EpochMembershipCoordinator<T>,
         network: I::Network,
         instance_state: Arc<T::InstanceState>,
         public_key: T::SignatureKey,
         private_key: <T::SignatureKey as SignatureKey>::PrivateKey,
+        genesis_leaf: Leaf2<T>,
         store_drb_progress: StoreDrbProgressFn,
         load_drb_progress: LoadDrbProgressFn,
         timeout_duration: Duration,
-    ) -> Self {
-        let consensus = Arc::new(RwLock::new(Consensus::new(
+    ) -> (Self, mpsc::Sender<CoordinatorQuery<T>>) {
+        let consensus = Consensus::new(
             membership_coordinator.clone(),
             public_key.clone(),
             private_key,
-        )));
-        let state_manager = Arc::new(Mutex::new(StateManager::new(instance_state.clone())));
+            genesis_leaf,
+        );
+        let state_manager = StateManager::new(instance_state.clone());
+        let (query_tx, query_rx) = mpsc::channel(256);
 
-        // TODO:
         let lock = upgrade_lock();
-        Self::builder()
+        let coordinator = Self::builder()
             .consensus(consensus)
             .network(Network::new(network, membership_coordinator.clone(), lock.clone()))
             .state_manager(state_manager)
+            .query_rx(query_rx)
             .vid_disperser(VidDisperser::new(membership_coordinator.clone()))
             .vid_reconstructor(VidReconstructor::new())
             .vote1_collector(VoteCollector::new(membership_coordinator.clone(), lock.clone()))
@@ -106,49 +109,39 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
             .membership_coordinator(membership_coordinator)
             .timer(Timer::new(timeout_duration, ViewNumber::genesis()))
             .public_key(public_key)
-            .build()
+            .build();
+
+        (coordinator, query_tx)
     }
 
-    pub fn consensus(&self) -> Arc<RwLock<Consensus<T>>> {
-        self.consensus.clone()
-    }
-
-    pub fn state_manager(&self) -> Arc<Mutex<StateManager<T>>> {
-        self.state_manager.clone()
-    }
-
-    /// Convenience method to run the coordinator event loop.
-    ///
-    /// Combines `next_consensus_input`, `apply_consensus` and outbox processing.
-    pub async fn run(mut self, event_sender: EventSender<ConsensusEvent<T>>) {
-        loop {
-            match self.next_consensus_input().await {
-                Ok(input) => self.apply_consensus(input).await,
-                Err(err) if err.severity == Severity::Critical => {
-                    error!(%err, "while awaiting next consensus input");
-                    return;
-                },
-                Err(err) => {
-                    warn!(%err, "while awaiting next consensus input");
-                },
-            }
-            while let Some(output) = self.outbox.pop_front() {
-                
-                if let Some(event) = event_from_output(&output) {
-                    if let Err(err) = event_sender.try_broadcast(event) {
-                        tracing::info!(%err, "failed to broadcast consensus event");
-                    }
-                }
-
-                if let Err(err) = self.process_consensus_output(output).await {
-                    if err.severity == Severity::Critical {
-                        error!(%err, "while processing consensus output");
-                        return;
-                    } else {
-                        warn!(%err, "while processing consensus output");
-                    }
-                }
-            }
+    fn handle_query(&self, query: CoordinatorQuery<T>) {
+        match query {
+            CoordinatorQuery::CurView(tx) => {
+                let _ = tx.send(self.consensus.cur_view());
+            },
+            CoordinatorQuery::CurEpoch(tx) => {
+                let _ = tx.send(self.consensus.cur_epoch());
+            },
+            CoordinatorQuery::DecidedLeaf(tx) => {
+                let _ = tx.send(self.consensus.last_decided_leaf().clone());
+            },
+            CoordinatorQuery::DecidedState(tx) => {
+                let view = self.consensus.last_decided_leaf().view_number();
+                let state = self
+                    .state_manager
+                    .get_state(&view)
+                    .expect("no state for decided leaf");
+                let _ = tx.send(state);
+            },
+            CoordinatorQuery::UndecidedLeaves(tx) => {
+                let _ = tx.send(self.consensus.undecided_leaves());
+            },
+            CoordinatorQuery::GetState { view, respond } => {
+                let _ = respond.send(self.state_manager.get_state(&view));
+            },
+            CoordinatorQuery::GetStateAndDelta { view, respond } => {
+                let _ = respond.send(self.state_manager.get_state_and_delta(&view));
+            },
         }
     }
 
@@ -170,10 +163,13 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                     self.timer.reset();
                     return Ok(input)
                 }
-                Some(output) = async { self.state_manager.lock().await.next().await } => {
+                Some(output) = self.state_manager.next() => {
                     if let Some(input) = self.on_state_manager_output(output).await {
                         return Ok(input)
                     }
+                }
+                Some(query) = self.query_rx.recv() => {
+                    self.handle_query(query);
                 }
                 Some(tcert) = self.timeout_collector.next() => {
                     return Ok(ConsensusInput::TimeoutCertificate(tcert))
@@ -208,10 +204,7 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                 }
                 Some(item) = self.block_builder.next() => match item {
                     Ok(block) => {
-                        self.state_manager
-                            .lock()
-                            .await
-                            .request_header(HeaderRequest::from(&block));
+                        self.state_manager.request_header(HeaderRequest::from(&block));
                         let next_view = block.view + 1;
                         let epoch = block.epoch;
                         let manifest = block.manifest.clone();
@@ -255,11 +248,7 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
     }
 
     pub async fn apply_consensus(&mut self, input: ConsensusInput<T>) {
-        self.consensus
-            .write()
-            .await
-            .apply(input, &mut self.outbox)
-            .await;
+        self.consensus.apply(input, &mut self.outbox).await;
     }
 
     pub fn outbox(&self) -> &Outbox<ConsensusOutput<T>> {
@@ -361,7 +350,7 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
     ) -> Result<(), CoordinatorError> {
         match output {
             ConsensusOutput::RequestState(state_request) => {
-                self.state_manager.lock().await.request_state(state_request);
+                self.state_manager.request_state(state_request);
             },
             ConsensusOutput::RequestVidDisperse {
                 view,
@@ -455,7 +444,7 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
             ConsensusOutput::ProposalReceived { .. } => {},
             ConsensusOutput::ExternalMessageReceived { .. } => {},
             ConsensusOutput::ViewChanged(view, epoch) => {
-                self.consensus.write().await.set_view(view, epoch);
+                self.consensus.set_view(view, epoch);
                 self.timer.reset_with(view);
                 let txns = self.block_builder.on_view_changed(view, epoch);
                 if !txns.is_empty() {
@@ -506,10 +495,10 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
     }
 
     async fn gc(&mut self, view: ViewNumber, epoch: EpochNumber) {
-        self.consensus.write().await.gc(view, epoch);
+        self.consensus.gc(view, epoch);
         self.checkpoint_collector.gc(view);
         self.network.gc(view, epoch);
-        self.state_manager.lock().await.gc(view);
+        self.state_manager.gc(view);
         self.vid_disperser.gc(view);
         self.vid_reconstructor.gc(view);
         self.vote1_collector.gc(view);

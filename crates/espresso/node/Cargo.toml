@@ -30,6 +30,7 @@ alloy = { workspace = true }
 anyhow = { workspace = true }
 ark-ff = { workspace = true }
 ark-serialize = { workspace = true }
+async-broadcast = { workspace = true }
 async-channel = { workspace = true }
 async-lock = { workspace = true }
 async-once-cell = { workspace = true }
@@ -55,6 +56,7 @@ hotshot = { workspace = true }
 hotshot-builder-refactored = { workspace = true }
 hotshot-contract-adapter = { workspace = true }
 hotshot-events-service = { workspace = true }
+hotshot-new-protocol = { workspace = true }
 hotshot-libp2p-networking = { workspace = true }
 hotshot-orchestrator = { workspace = true }
 hotshot-query-service = { workspace = true }

@@ -14,13 +14,13 @@ use espresso_types::{
 };
 use futures::{
     future::{Future, join_all},
-    stream::{Stream, StreamExt},
+    stream::{BoxStream, Stream, StreamExt},
 };
-use hotshot::{
-    SystemContext,
-    types::{Event, EventType, SystemContextHandle},
-};
+use hotshot::SystemContext;
 use hotshot_events_service::events_source::{EventConsumer, EventsStreamer};
+use hotshot_new_protocol::coordinator::Coordinator;
+
+use crate::consensus_handle::{ConsensusEvent, ConsensusHandle};
 use hotshot_orchestrator::client::OrchestratorClient;
 use hotshot_types::{
     PeerConfig, ValidatorConfig,
@@ -30,7 +30,11 @@ use hotshot_types::{
     message::UpgradeLock,
     network::NetworkConfig,
     storage_metrics::StorageMetricsValue,
-    traits::{metrics::Metrics, network::ConnectedNetwork},
+    traits::{
+        metrics::Metrics,
+        network::ConnectedNetwork,
+        storage::{load_drb_progress_fn, store_drb_progress_fn},
+    },
 };
 use parking_lot::Mutex;
 use request_response::RequestResponseConfig;
@@ -51,17 +55,15 @@ use crate::{
     },
     state_signature::{self, StateSigner},
 };
-
-/// The consensus handle
-pub type Consensus<N, P> = SystemContextHandle<SeqTypes, Node<N, P>>;
+pub type Consensus<N, P> = hotshot::types::SystemContextHandle<SeqTypes, Node<N, P>>;
 
 /// The sequencer context contains a consensus handle and other sequencer specific information.
 #[derive(Derivative, Clone)]
 #[derivative(Debug(bound = ""))]
 pub struct SequencerContext<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> {
-    /// The consensus handle
+    /// The consensus adapter that dispatches between old HotShot and new coordinator.
     #[derivative(Debug = "ignore")]
-    handle: Arc<RwLock<Consensus<N, P>>>,
+    consensus_handle: Arc<ConsensusHandle<SeqTypes, Node<N, P>>>,
 
     /// The request-response protocol
     #[derivative(Debug = "ignore")]
@@ -160,6 +162,33 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
         .await?
         .0;
 
+        let genesis_validated_state = ValidatedState::default();
+        let genesis_leaf =
+            Leaf2::genesis(&genesis_validated_state, &instance_state, upgrade.base).await;
+
+        let (new_coordinator, query_tx) = Coordinator::<SeqTypes, Node<N, P>>::new(
+            coordinator.clone(),
+            (*network).clone(),
+            Arc::new(instance_state.clone()),
+            validator_config.public_key,
+            validator_config.private_key.clone(),
+            genesis_leaf,
+            store_drb_progress_fn(Arc::clone(&persistence)),
+            load_drb_progress_fn(Arc::clone(&persistence)),
+            Duration::from_secs(10),
+        );
+
+        let epoch_height = network_config.config.epoch_height;
+        let hotshot_handle = Arc::new(RwLock::new(handle));
+        let (consensus_handle, event_sender) = ConsensusHandle::new(
+            hotshot_handle.clone(),
+            query_tx,
+            epoch_height,
+            128,
+        );
+        let consensus_handle = Arc::new(consensus_handle);
+
+
         let mut state_signer = StateSigner::new(
             validator_config.state_private_key.clone(),
             validator_config.state_public_key.clone(),
@@ -195,14 +224,14 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
             request_response_receiver,
             RecipientSource {
                 memberships: coordinator,
-                consensus: handle.hotshot.clone(),
+                consensus_handle: consensus_handle.clone(),
                 public_key: validator_config.public_key,
             },
             DataSource {
                 node_state: instance_state.clone(),
                 storage,
                 persistence: persistence.clone(),
-                consensus: handle.hotshot.clone(),
+                consensus_handle: consensus_handle.clone(),
                 phantom: PhantomData,
             },
             validator_config.public_key,
@@ -216,6 +245,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
 
         // Create the external event handler
         let mut tasks = TaskList::default();
+        tasks.spawn("coordinator", run_coordinator(new_coordinator, event_sender));
         let external_event_handler = ExternalEventHandler::new(
             &mut tasks,
             request_response_sender,
@@ -227,7 +257,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
         .with_context(|| "Failed to create external event handler")?;
 
         Ok(Self::new(
-            handle,
+            consensus_handle,
             persistence,
             state_signer,
             external_event_handler,
@@ -247,7 +277,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
     /// Constructor
     #[allow(clippy::too_many_arguments)]
     fn new(
-        handle: Consensus<N, P>,
+        consensus_handle: Arc<ConsensusHandle<SeqTypes, Node<N, P>>>,
         persistence: Arc<P>,
         state_signer: StateSigner<SequencerApiVersion>,
         external_event_handler: ExternalEventHandler,
@@ -261,11 +291,11 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
         proposal_fetcher_cfg: ProposalFetcherConfig,
         metrics: &dyn Metrics,
     ) -> Self {
-        let events = handle.event_stream();
+        let events = consensus_handle.event_stream();
 
         let node_id = node_state.node_id;
         let mut ctx = Self {
-            handle: Arc::new(RwLock::new(handle)),
+            consensus_handle,
             state_signer: Arc::new(RwLock::new(state_signer)),
             request_response_protocol,
             tasks: Default::default(),
@@ -280,7 +310,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
         // Spawn proposal fetching tasks.
         proposal_fetcher_cfg.spawn(
             &mut ctx.tasks,
-            ctx.handle.clone(),
+            ctx.consensus_handle.clone(),
             persistence.clone(),
             metrics,
         );
@@ -289,7 +319,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
         ctx.spawn(
             "event handler",
             handle_events(
-                ctx.handle.clone(),
+                ctx.consensus_handle.clone(),
                 node_id,
                 events,
                 persistence,
@@ -300,6 +330,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
                 anchor_view,
             ),
         );
+
 
         ctx
     }
@@ -322,13 +353,12 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
     }
 
     /// Stream consensus events.
-    pub async fn event_stream(&self) -> impl Stream<Item = Event<SeqTypes>> + use<N, P> {
-        self.handle.read().await.event_stream()
+    pub fn event_stream(&self) -> BoxStream<'static, ConsensusEvent<SeqTypes>> {
+        self.consensus_handle.event_stream()
     }
 
     pub async fn submit_transaction(&self, tx: Transaction) -> anyhow::Result<()> {
-        self.handle.read().await.submit_transaction(tx).await?;
-        Ok(())
+        self.consensus_handle.submit_transaction(tx).await
     }
 
     /// get event streamer
@@ -336,29 +366,29 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
         self.events_streamer.clone()
     }
 
-    /// Return a reference to the underlying consensus handle.
-    pub fn consensus(&self) -> Arc<RwLock<Consensus<N, P>>> {
-        Arc::clone(&self.handle)
+    /// Return a reference to the consensus adapter.
+    pub fn consensus_handle(&self) -> Arc<ConsensusHandle<SeqTypes, Node<N, P>>> {
+        self.consensus_handle.clone()
     }
 
     pub async fn upgrade_lock(&self) -> UpgradeLock<SeqTypes> {
-        self.handle.read().await.hotshot.upgrade_lock.clone()
+        self.consensus_handle.upgrade_lock().await
     }
 
     pub async fn shutdown_consensus(&self) {
-        self.handle.write().await.shut_down().await
+        self.consensus_handle.shut_down().await
     }
 
     pub async fn decided_leaf(&self) -> Leaf2<SeqTypes> {
-        self.handle.read().await.decided_leaf().await
+        self.consensus_handle.decided_leaf().await
     }
 
     pub async fn state(&self, view: ViewNumber) -> Option<Arc<ValidatedState>> {
-        self.handle.read().await.state(view).await
+        self.consensus_handle.state(view).await
     }
 
     pub async fn decided_state(&self) -> Arc<ValidatedState> {
-        self.handle.read().await.decided_state().await
+        self.consensus_handle.decided_state().await
     }
 
     pub fn node_id(&self) -> u64 {
@@ -381,7 +411,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
             tracing::error!("Cannot get info from orchestrator client");
         }
         tracing::warn!("starting consensus");
-        self.handle.read().await.hotshot.start_consensus().await;
+        self.consensus_handle.start_consensus().await;
     }
 
     /// Spawn a background task attached to this context.
@@ -410,7 +440,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
     /// Stop participating in consensus.
     pub async fn shut_down(&mut self) {
         tracing::info!("shutting down SequencerContext");
-        self.handle.write().await.shut_down().await;
+        self.consensus_handle.shut_down().await;
         self.tasks.shut_down();
         self.node_state.l1_client.shut_down_tasks().await;
 
@@ -443,13 +473,13 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> Drop for SequencerCon
     fn drop(&mut self) {
         if !self.detached {
             // Spawn a task to shut down the context
-            let handle_clone = self.handle.clone();
+            let consensus_handle = self.consensus_handle.clone();
             let tasks_clone = self.tasks.clone();
             let node_state_clone = self.node_state.clone();
 
             spawn(async move {
                 tracing::info!("shutting down SequencerContext");
-                handle_clone.write().await.shut_down().await;
+                consensus_handle.shut_down().await;
                 tasks_clone.shut_down();
                 node_state_clone.l1_client.shut_down_tasks().await;
             });
@@ -463,9 +493,9 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> Drop for SequencerCon
 #[tracing::instrument(skip_all, fields(node_id))]
 #[allow(clippy::too_many_arguments)]
 async fn handle_events<N, P>(
-    consensus: Arc<RwLock<Consensus<N, P>>>,
+    consensus_handle: Arc<ConsensusHandle<SeqTypes, Node<N, P>>>,
     node_id: u64,
-    mut events: impl Stream<Item = Event<SeqTypes>> + Unpin,
+    mut events: impl Stream<Item = ConsensusEvent<SeqTypes>> + Unpin,
     persistence: Arc<P>,
     state_signer: Arc<RwLock<StateSigner<SequencerApiVersion>>>,
     external_event_handler: ExternalEventHandler,
@@ -491,26 +521,84 @@ async fn handle_events<N, P>(
 
     while let Some(event) = events.next().await {
         tracing::debug!(node_id, ?event, "consensus event");
-        // Store latest consensus state.
-        persistence.handle_event(&event, &event_consumer).await;
 
-        // Generate state signature.
-        state_signer
-            .write()
-            .await
-            .handle_event(&event, consensus.clone())
-            .await;
+        match event {
+            ConsensusEvent::LegacyEvent(ref hotshot_event) => {
+                // Persistence and state signer consume the original HotShot event.
+                persistence
+                    .handle_event(hotshot_event, &event_consumer)
+                    .await;
+                state_signer
+                    .write()
+                    .await
+                    .handle_event(hotshot_event, &consensus_handle)
+                    .await;
 
-        // Handle external messages
-        if let EventType::ExternalMessageReceived { data, .. } = &event.event
-            && let Err(err) = external_event_handler.handle_event(data).await
-        {
-            tracing::warn!("Failed to handle external message: {:?}", err);
-        };
+                // Forward to the event streaming service.
+                if let Some(events_streamer) = events_streamer.as_ref() {
+                    events_streamer
+                        .write()
+                        .await
+                        .handle_event(hotshot_event.clone())
+                        .await;
+                }
+            },
+            ConsensusEvent::NewDecide(_new_decide) => {
+                // TODO: Handle new protocol decide events.
+                // This will need to translate NewDecideEvent into the format
+                // expected by persistence, state signer, and events streamer.
+            },
+            ConsensusEvent::ExternalMessageReceived { ref data, .. } => {
+                if let Err(err) = external_event_handler.handle_event(data).await {
+                    tracing::warn!("Failed to handle external message: {:?}", err);
+                }
+            },
+            ConsensusEvent::QuorumProposal { .. } => {
+                // Handled by the proposal fetcher via its own event stream.
+            },
+            ConsensusEvent::ViewChanged { .. } => {
+                // View changes are tracked internally by the adapter.
+            },
+        }
+    }
+}
 
-        // Send the event via the event streaming service
-        if let Some(events_streamer) = events_streamer.as_ref() {
-            events_streamer.write().await.handle_event(event).await;
+async fn run_coordinator<N, P>(
+    mut coordinator: Coordinator<SeqTypes, Node<N, P>>,
+    event_sender: async_broadcast::Sender<ConsensusEvent<SeqTypes>>,
+)
+where
+    N: ConnectedNetwork<PubKey>,
+    P: SequencerPersistence,
+{
+    use crate::consensus_handle::event_from_output;
+    use hotshot_new_protocol::coordinator::error::Severity;
+
+    loop {
+        match coordinator.next_consensus_input().await {
+            Ok(input) => coordinator.apply_consensus(input).await,
+            Err(err) if err.severity == Severity::Critical => {
+                tracing::error!(%err, "coordinator: critical error");
+                return;
+            },
+            Err(err) => {
+                tracing::warn!(%err, "coordinator: non-critical error");
+            },
+        }
+        while let Some(output) = coordinator.outbox_mut().pop_front() {
+            if let Some(event) = event_from_output(&output)
+                && let Err(err) = event_sender.try_broadcast(event)
+            {
+                tracing::info!(%err, "failed to broadcast consensus event");
+            }
+            if let Err(err) = coordinator.process_consensus_output(output).await {
+                if err.severity == Severity::Critical {
+                    tracing::error!(%err, "coordinator: critical error processing output");
+                    return;
+                } else {
+                    tracing::warn!(%err, "coordinator: error processing output");
+                }
+            }
         }
     }
 }

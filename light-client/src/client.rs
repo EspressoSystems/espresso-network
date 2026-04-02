@@ -498,7 +498,7 @@ mod test {
 
         // Submit a couple of transactions to form non-empty blocks.
         let ns = NamespaceId::from(1u64);
-        let mut events = network.server.event_stream().await;
+        let mut events = network.server.event_stream();
         let mut txs = vec![];
         let mut headers = vec![];
         for _ in 0..2 {
@@ -507,9 +507,6 @@ mod test {
             let tx = Transaction::new(ns, bytes);
             network
                 .server
-                .consensus()
-                .read()
-                .await
                 .submit_transaction(tx.clone())
                 .await
                 .unwrap();

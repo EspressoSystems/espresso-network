@@ -7,16 +7,20 @@ use std::{
 };
 
 use async_broadcast::{InactiveReceiver, Sender};
-use async_lock::{Mutex, RwLock};
+use async_lock::RwLock;
+use committable::Commitment;
 use futures::{StreamExt, stream::BoxStream};
 use hotshot::types::SystemContextHandle;
-use committable::Commitment;
+use hotshot_new_protocol::{
+    consensus::{ConsensusOutput},
+    message::Certificate2,
+    query::CoordinatorQuery,
+};
 use hotshot_types::{
     data::{EpochNumber, Leaf2, QuorumProposalWrapper, ViewNumber},
-    message::Proposal,
     epoch_membership::EpochMembershipCoordinator,
     event::{Event, EventType},
-    message::UpgradeLock,
+    message::{Proposal, UpgradeLock},
     traits::{
         ValidatedState,
         node_implementation::NodeType,
@@ -24,15 +28,8 @@ use hotshot_types::{
     },
     utils::StateAndDelta,
 };
-
+use tokio::sync::{mpsc, oneshot};
 use versions::version;
-
-use crate::{
-    consensus::{Consensus, ConsensusOutput},
-    coordinator::Coordinator,
-    message::Certificate2,
-    state::StateManager,
-};
 
 #[derive(Clone, Debug)]
 pub struct NewDecideEvent<T: NodeType> {
@@ -70,7 +67,6 @@ pub fn event_from_output<T: NodeType>(
         ConsensusOutput::ViewChanged(view, _epoch) => {
             Some(ConsensusEvent::ViewChanged { view_number: *view })
         },
-        ConsensusOutput::SendProposal(..) => None,
         ConsensusOutput::ProposalReceived { proposal, sender } => {
             Some(ConsensusEvent::QuorumProposal {
                 proposal: Proposal {
@@ -93,8 +89,7 @@ pub fn event_from_output<T: NodeType>(
 
 pub struct ConsensusHandle<T: NodeType, I: hotshot::traits::NodeImplementation<T>> {
     handle: Arc<RwLock<SystemContextHandle<T, I>>>,
-    coordinator_consensus: Arc<RwLock<Consensus<T>>>,
-    coordinator_state_manager: Arc<Mutex<StateManager<T>>>,
+    query_tx: mpsc::Sender<CoordinatorQuery<T>>,
     coordinator_epoch_height: u64,
     new_protocol_active: AtomicBool,
     event_rx: InactiveReceiver<ConsensusEvent<T>>,
@@ -103,16 +98,16 @@ pub struct ConsensusHandle<T: NodeType, I: hotshot::traits::NodeImplementation<T
 impl<T: NodeType, I: hotshot::traits::NodeImplementation<T>> ConsensusHandle<T, I> {
     pub fn new(
         handle: Arc<RwLock<SystemContextHandle<T, I>>>,
-        coordinator: &Coordinator<T, I>,
+        query_tx: mpsc::Sender<CoordinatorQuery<T>>,
         coordinator_epoch_height: u64,
         event_channel_capacity: usize,
     ) -> (Self, Sender<ConsensusEvent<T>>) {
-        let (event_tx, event_rx) = async_broadcast::broadcast(event_channel_capacity);
+        let (event_tx, event_rx) =
+            async_broadcast::broadcast::<ConsensusEvent<T>>(event_channel_capacity);
 
         let adapter = Self {
             handle,
-            coordinator_consensus: coordinator.consensus(),
-            coordinator_state_manager: coordinator.state_manager(),
+            query_tx,
             coordinator_epoch_height,
             new_protocol_active: AtomicBool::new(false),
             event_rx: event_rx.deactivate(),
@@ -125,20 +120,22 @@ impl<T: NodeType, I: hotshot::traits::NodeImplementation<T>> ConsensusHandle<T, 
         self.handle.clone()
     }
 
-    pub fn coordinator_consensus(&self) -> Arc<RwLock<Consensus<T>>> {
-        self.coordinator_consensus.clone()
-    }
-
-    pub fn coordinator_state_manager(&self) -> Arc<Mutex<StateManager<T>>> {
-        self.coordinator_state_manager.clone()
+    async fn query<R>(
+        &self,
+        make_query: impl FnOnce(oneshot::Sender<R>) -> CoordinatorQuery<T>,
+    ) -> R {
+        let (tx, rx) = oneshot::channel();
+        self.query_tx
+            .send(make_query(tx))
+            .await
+            .expect("coordinator channel closed");
+        rx.await.expect("coordinator dropped response sender")
     }
 
     async fn new_protocol_at(&self, view: ViewNumber) -> bool {
         if self.new_protocol_active.load(Ordering::Relaxed) {
             return true;
         }
-
-        // TODO: is this the correct way to check version?
         let active = self
             .handle
             .read()
@@ -196,40 +193,30 @@ impl<T: NodeType, I: hotshot::traits::NodeImplementation<T>> ConsensusHandle<T, 
 
     pub async fn cur_view(&self) -> ViewNumber {
         if self.new_protocol().await {
-            return self.coordinator_consensus.read().await.cur_view();
+            return self.query(CoordinatorQuery::CurView).await;
         }
         self.handle.read().await.cur_view().await
     }
 
     pub async fn decided_leaf(&self) -> Leaf2<T> {
         if self.new_protocol().await {
-            if let Some(leaf) = self.coordinator_consensus.read().await.last_decided_leaf() {
-                return leaf.clone();
-            }
+            return self.query(CoordinatorQuery::DecidedLeaf).await;
         }
         self.handle.read().await.decided_leaf().await
     }
 
     pub async fn decided_state(&self) -> Arc<T::ValidatedState> {
         if self.new_protocol().await {
-            let view = self
-                .coordinator_consensus
-                .read()
-                .await
-                .last_decided_leaf()
-                .map(|leaf| leaf.view_number());
-            if let Some(view) = view {
-                if let Some(state) = self.coordinator_state_manager.lock().await.get_state(&view) {
-                    return state;
-                }
-            }
+            return self.query(CoordinatorQuery::DecidedState).await;
         }
         self.handle.read().await.decided_state().await
     }
 
     pub async fn state(&self, view: ViewNumber) -> Option<Arc<T::ValidatedState>> {
         if self.new_protocol_at(view).await {
-            return self.coordinator_state_manager.lock().await.get_state(&view);
+            return self
+                .query(|tx| CoordinatorQuery::GetState { view, respond: tx })
+                .await;
         }
         self.handle.read().await.state(view).await
     }
@@ -237,10 +224,8 @@ impl<T: NodeType, I: hotshot::traits::NodeImplementation<T>> ConsensusHandle<T, 
     pub async fn state_and_delta(&self, view: ViewNumber) -> StateAndDelta<T> {
         if self.new_protocol_at(view).await {
             return self
-                .coordinator_state_manager
-                .lock()
-                .await
-                .get_state_and_delta(&view);
+                .query(|tx| CoordinatorQuery::GetStateAndDelta { view, respond: tx })
+                .await;
         }
         self.handle
             .read()
@@ -254,7 +239,7 @@ impl<T: NodeType, I: hotshot::traits::NodeImplementation<T>> ConsensusHandle<T, 
 
     pub async fn undecided_leaves(&self) -> Vec<Leaf2<T>> {
         if self.new_protocol().await {
-            return self.coordinator_consensus.read().await.undecided_leaves();
+            return self.query(CoordinatorQuery::UndecidedLeaves).await;
         }
         self.handle
             .read()
@@ -268,7 +253,7 @@ impl<T: NodeType, I: hotshot::traits::NodeImplementation<T>> ConsensusHandle<T, 
 
     pub async fn cur_epoch(&self) -> Option<EpochNumber> {
         if self.new_protocol().await {
-            return self.coordinator_consensus.read().await.cur_epoch();
+            return self.query(CoordinatorQuery::CurEpoch).await;
         }
         self.handle.read().await.cur_epoch().await
     }
@@ -306,7 +291,6 @@ impl<T: NodeType, I: hotshot::traits::NodeImplementation<T>> ConsensusHandle<T, 
             .current_proposal_participation()
     }
 
-    //TODO: 
     pub async fn proposal_participation(
         &self,
         epoch: EpochNumber,

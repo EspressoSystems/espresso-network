@@ -73,10 +73,11 @@ pub enum StateManagerOutput<T: NodeType> {
 }
 
 type Delta<T> = Arc<<<T as NodeType>::ValidatedState as ValidatedState<T>>::Delta>;
+type ValidatedStateEntry<T> = (Arc<<T as NodeType>::ValidatedState>, Option<Delta<T>>, Leaf2<T>);
 
 pub struct StateManager<T: NodeType> {
     instance: Arc<T::InstanceState>,
-    validated_states: BTreeMap<ViewNumber, (Arc<T::ValidatedState>, Option<Delta<T>>, Leaf2<T>)>,
+    validated_states: BTreeMap<ViewNumber, ValidatedStateEntry<T>>,
     state_requests: HashMap<Commitment<Leaf2<T>>, (AbortHandle, ViewNumber)>,
     header_requests: HashMap<ViewNumber, AbortHandle>,
     pending_requests: HashMap<Commitment<Leaf2<T>>, Vec<Pending<T>>>,

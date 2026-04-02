@@ -12,7 +12,6 @@ rewind = []
 stats = []
 
 [dependencies]
-anyhow = { workspace = true } // TODO: remove it
 async-broadcast = { workspace = true }
 async-lock = { workspace = true }
 async-trait = { workspace = true }

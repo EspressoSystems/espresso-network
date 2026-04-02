@@ -111,7 +111,7 @@ pub struct Consensus<T: NodeType> {
     headers: BTreeMap<ViewNumber, T::BlockHeader>,
     leaves: BTreeMap<ViewNumber, Leaf2<T>>,
     last_decided_view: ViewNumber,
-    last_decided_leaf: Option<Leaf2<T>>,
+    last_decided_leaf: Leaf2<T>,
 
     voted_1_views: BTreeSet<ViewNumber>,
     voted_2_views: BTreeSet<ViewNumber>,
@@ -143,6 +143,7 @@ impl<T: NodeType> Consensus<T> {
         membership_coordinator: EpochMembershipCoordinator<T>,
         public_key: T::SignatureKey,
         private_key: <T::SignatureKey as SignatureKey>::PrivateKey,
+        genesis_leaf: Leaf2<T>,
     ) -> Self {
         Self {
             proposals: BTreeMap::new(),
@@ -157,7 +158,7 @@ impl<T: NodeType> Consensus<T> {
             locked_cert: None,
             leaves: BTreeMap::new(),
             last_decided_view: ViewNumber::genesis(),
-            last_decided_leaf: None,
+            last_decided_leaf: genesis_leaf,
             headers: BTreeMap::new(),
             public_key,
             timeout_view: ViewNumber::genesis(),
@@ -212,10 +213,10 @@ impl<T: NodeType> Consensus<T> {
                 Protocol::Continue
             },
             ConsensusInput::StateValidationFailed(state_response) => {
-                if let Some(proposal) = self.proposals.get(&state_response.view) {
-                    if proposal_commitment(proposal) != state_response.commitment {
-                        return;
-                    }
+                if let Some(proposal) = self.proposals.get(&state_response.view)
+                    && proposal_commitment(proposal) != state_response.commitment
+                {
+                    return;
                 }
                 self.proposals.remove(&state_response.view);
                 self.leaves.remove(&state_response.view);
@@ -268,8 +269,8 @@ impl<T: NodeType> Consensus<T> {
     }
 
     
-    pub fn last_decided_leaf(&self) -> Option<&Leaf2<T>> {
-        self.last_decided_leaf.as_ref()
+    pub fn last_decided_leaf(&self) -> &Leaf2<T> {
+        &self.last_decided_leaf
     }
 
     // TODO: 
@@ -619,6 +620,7 @@ impl<T: NodeType> Consensus<T> {
         // we have a second certificate, and matching proposal, it is decided.
         let leaf = Leaf2::from_quorum_proposal(&QuorumProposalWrapper::from(proposal.clone()));
         self.last_decided_view = max(self.last_decided_view, leaf.view_number());
+        self.last_decided_leaf = leaf.clone();
         let mut gc = None;
         if leaf.block_header().block_number() % self.garbage_collection_interval == 0 {
             gc = Some((leaf.view_number(), leaf.justify_qc().epoch()));
@@ -643,7 +645,6 @@ impl<T: NodeType> Consensus<T> {
             parent_view = proposal.justify_qc.view_number();
             parent_commit = proposal.justify_qc.data.leaf_commit;
         }
-        self.last_decided_leaf = decided.first().cloned();
         outbox.push_back(ConsensusOutput::LeafDecided {
             leaves: decided,
             cert2: cert2.clone(),

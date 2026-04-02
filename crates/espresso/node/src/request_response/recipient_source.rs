@@ -3,20 +3,18 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use espresso_types::{PubKey, SeqTypes};
-use hotshot::{SystemContext, traits::NodeImplementation};
+use hotshot::traits::NodeImplementation;
+use crate::consensus_handle::ConsensusHandle;
 use hotshot_types::{data::EpochNumber, epoch_membership::EpochMembershipCoordinator};
 use request_response::recipient_source::RecipientSource as RecipientSourceTrait;
 use tracing::warn;
 
 use super::request::Request;
 
-/// A type alias for the consensus context
-type Consensus<I> = Arc<SystemContext<SeqTypes, I>>;
-
 #[derive(Clone)]
 pub struct RecipientSource<I: NodeImplementation<SeqTypes>> {
-    /// A copy of the consensus context
-    pub consensus: Consensus<I>,
+    /// The consensus adapter handle
+    pub consensus_handle: Arc<ConsensusHandle<SeqTypes, I>>,
     /// A copy of the membership coordinator
     pub memberships: EpochMembershipCoordinator<SeqTypes>,
     /// The public key of the node
@@ -30,11 +28,9 @@ impl<I: NodeImplementation<SeqTypes>> RecipientSourceTrait<Request, PubKey> for 
     async fn get_expected_responders(&self, _request: &Request) -> Result<Vec<PubKey>> {
         // Get the current epoch number
         let epoch_number = self
-            .consensus
-            .consensus()
-            .read()
-            .await
+            .consensus_handle
             .cur_epoch()
+            .await
             .unwrap_or(EpochNumber::genesis());
 
         // Attempt to get the membership for the current epoch

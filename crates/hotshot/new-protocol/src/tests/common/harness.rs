@@ -1,6 +1,5 @@
 use std::{sync::Arc, time::Duration};
 
-use async_lock::{Mutex, RwLock};
 use hotshot::types::BLSPubKey;
 use hotshot_example_types::{
     node_types::{TEST_VERSIONS, TestTypes},
@@ -59,7 +58,16 @@ impl TestHarness {
         let timeout_collector = VoteCollector::new(membership.clone(), upgrade_lock());
         let checkpoint_collector = VoteCollector::new(membership.clone(), upgrade_lock());
 
-        let consensus = Consensus::new(membership.clone(), public_key, private_key.clone());
+        let genesis_state = TestValidatedState::default();
+        let genesis_leaf =
+            Leaf2::<TestTypes>::genesis(&genesis_state, &instance, TEST_VERSIONS.test.base).await;
+
+        let consensus = Consensus::new(
+            membership.clone(),
+            public_key,
+            private_key.clone(),
+            genesis_leaf.clone(),
+        );
 
         let vid_disperse_task = VidDisperser::new(membership.clone());
         let vid_reconstruction_task = VidReconstructor::new();
@@ -68,19 +76,18 @@ impl TestHarness {
         let block_builder = BlockBuilder::new(instance.clone(), membership.clone(), block_config);
 
         let mut state_manager = StateManager::new(instance.clone());
-        let genesis_state = TestValidatedState::default();
-        let genesis_leaf =
-            Leaf2::<TestTypes>::genesis(&genesis_state, &instance, TEST_VERSIONS.test.base).await;
         state_manager.seed_state(ViewNumber::genesis(), Arc::new(genesis_state), genesis_leaf);
 
         let proposal_validator = ProposalValidator::new(membership.clone());
 
         let network = Network::new(MockNetwork::default(), membership.clone(), upgrade_lock());
 
+        let (_query_tx, query_rx) = tokio::sync::mpsc::channel(64);
         let coordinator = MockCoordinator::builder()
-            .consensus(Arc::new(RwLock::new(consensus)))
+            .consensus(consensus)
             .network(network)
-            .state_manager(Arc::new(Mutex::new(state_manager)))
+            .state_manager(state_manager)
+            .query_rx(query_rx)
             .vote1_collector(vote1_task)
             .vote2_collector(vote2_task)
             .timeout_collector(timeout_collector)
