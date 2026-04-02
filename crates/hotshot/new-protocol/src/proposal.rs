@@ -134,10 +134,18 @@ impl<T: NodeType> Validator<T> {
     }
 
     async fn membership(&self, epoch: EpochNumber) -> Result<EpochMembership<T>> {
-        self.membership_coordinator
+        match self
+            .membership_coordinator
             .membership_for_epoch(Some(epoch))
             .await
-            .map_err(|err| ValidationError::NoMembershipForEpoch(epoch, err))
+        {
+            Ok(m) => Ok(m),
+            Err(_) => self
+                .membership_coordinator
+                .wait_for_catchup(epoch) // TODO: timeout?
+                .await
+                .map_err(|e| ValidationError::NoMembershipForEpoch(epoch, e)),
+        }
     }
 }
 
