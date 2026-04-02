@@ -27,6 +27,8 @@ members = [
     "crates/hotshot/testing",
     "crates/hotshot/types",
     "crates/hotshot/utils",
+    "crates/serialization/api",
+    "crates/espresso/api",
     "crates/espresso/dev-node",
     "crates/espresso/node",
     "crates/espresso/node-sqlite",
@@ -85,6 +87,8 @@ default-members = [
     "node-metrics",
     "request-response",
     "sdks/crypto-helper",
+    "crates/serialization/api",
+    "crates/espresso/api",
     "crates/espresso/node",
     "slow-tests",
     "staking-cli",
@@ -124,6 +128,7 @@ async-trait = "0.1"
 atomic = "0.6"
 atomic_store = { git = "https://github.com/EspressoSystems/atomicstore.git", tag = "0.1.5" }
 automod = "1.0.14"
+axum = "0.8.8"
 backoff = "0.4"
 base64 = "0.22"
 base64-bytes = "0.1"

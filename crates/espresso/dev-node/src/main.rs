@@ -174,6 +174,14 @@ struct Args {
     #[clap(long, env = "ESPRESSO_SEQUENCER_MAX_CONNECTIONS")]
     sequencer_api_max_connections: Option<usize>,
 
+    /// Optional port for new Axum API server (skeleton implementation).
+    #[clap(long, env = "ESPRESSO_SEQUENCER_AXUM_PORT")]
+    axum_port: Option<u16>,
+
+    /// Optional port for gRPC API server (skeleton implementation).
+    #[clap(long, env = "ESPRESSO_SEQUENCER_GRPC_PORT")]
+    grpc_port: Option<u16>,
+
     /// Port for connecting to the builder.
     #[clap(short, long, env = "ESPRESSO_BUILDER_PORT")]
     builder_port: Option<u16>,
@@ -254,6 +262,8 @@ async fn main() -> anyhow::Result<()> {
         alt_multisig_addresses,
         sequencer_api_port,
         sequencer_api_max_connections,
+        axum_port,
+        grpc_port,
         builder_port,
         prover_port,
         dev_node_port,
@@ -636,6 +646,8 @@ async fn main() -> anyhow::Result<()> {
     let api_options = options::Options::from(options::Http {
         port: sequencer_api_port,
         max_connections: sequencer_api_max_connections,
+        axum_port,
+        grpc_port,
     })
     .submit(Default::default())
     .config(Default::default())

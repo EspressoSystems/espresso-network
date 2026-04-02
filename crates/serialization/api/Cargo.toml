@@ -1,0 +1,16 @@
+[package]
+name = "serialization-api"
+version = "0.1.0"
+edition = "2021"
+
+[package.metadata]
+# Mark as generated to prevent manual edits
+generated = true
+
+[dependencies]
+prost = "0.14"
+serde = { version = "1", features = ["derive"] }
+schemars = "0.9"
+
+[build-dependencies]
+prost-build = "0.14"

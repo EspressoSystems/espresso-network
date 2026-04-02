@@ -3584,6 +3584,8 @@ mod test {
             .api_config(Options::from(options::Http {
                 port,
                 max_connections: None,
+                axum_port: None,
+                grpc_port: None,
             }))
             .states(states)
             .catchups(std::array::from_fn(|_| {
@@ -3648,6 +3650,8 @@ mod test {
             .api_config(Options::from(options::Http {
                 port,
                 max_connections: None,
+                axum_port: None,
+                grpc_port: None,
             }))
             .catchups(std::array::from_fn(|_| {
                 StatePeers::<SequencerApiVersion>::from_urls(
@@ -7068,6 +7072,8 @@ mod test {
             .api_config(Options::from(options::Http {
                 port,
                 max_connections: None,
+                axum_port: None,
+                grpc_port: None,
             }))
             .catchups(std::array::from_fn(|_| {
                 StatePeers::<SequencerApiVersion>::from_urls(

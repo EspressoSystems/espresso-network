@@ -1,0 +1,23 @@
+[package]
+name = "espresso-api"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serialization-api = { path = "../../serialization/api" }
+axum = { workspace = true }
+tokio = { version = "1", features = ["full"] }
+tower = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tonic = "0.14.5"
+tonic-reflection = "0.14"
+tonic-prost = "0.14"
+prost = "0.14"
+tracing = "0.1"
+aide = { version = "0.15.1", features = ["axum", "axum-json", "scalar", "swagger"] }
+schemars = "0.9"
+
+[build-dependencies]
+tonic-build = "0.14"
+tonic-prost-build = "0.14"

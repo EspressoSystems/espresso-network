@@ -1,0 +1,71 @@
+syntax = "proto3";
+
+package espresso.api.v1;
+
+// Represents a HotShot view number
+message ViewNumber {
+  uint64 value = 1;
+}
+
+// Transaction in a namespace
+message Transaction {
+  uint64 namespace = 1;
+  bytes payload = 2;
+}
+
+// Namespace proof query response
+message NamespaceProofQueryData {
+  optional NsProof proof = 1;
+  repeated Transaction transactions = 2;
+}
+
+// Namespace proof variants (protocol version evolution)
+message NsProof {
+  oneof proof {
+    ADVZNsProof v0 = 1;
+    AvidMNsProof v1 = 2;
+    AvidMIncorrectEncodingNsProof v1_incorrect_encoding = 3;
+    AvidmGf2NsProof v2 = 4;
+  }
+}
+
+// V0 proof variant (ADVZ)
+message ADVZNsProof {
+  uint64 ns_index = 1;
+  bytes ns_payload = 2;
+  string ns_proof = 3;
+}
+
+// V1 proof variant (AvidM)
+message AvidMNsProof {
+  uint64 ns_index = 1;
+  bytes ns_payload = 2;
+  string ns_proof = 3;
+}
+
+// V1 incorrect encoding variant
+message AvidMIncorrectEncodingNsProof {
+  uint64 ns_index = 1;
+  bytes ns_payload = 2;
+  string ns_proof = 3;
+}
+
+// V2 proof variant (AvidmGf2)
+message AvidmGf2NsProof {
+  uint64 ns_index = 1;
+  bytes ns_payload = 2;
+  string ns_proof = 3;
+}
+
+// gRPC service for status information
+service StatusService {
+  rpc GetViewNumber(GetViewNumberRequest) returns (ViewNumber);
+  rpc GetNamespaceProof(GetNamespaceProofRequest) returns (NamespaceProofQueryData);
+}
+
+message GetViewNumberRequest {}
+
+message GetNamespaceProofRequest {
+  uint64 height = 1;
+  uint64 namespace = 2;
+}

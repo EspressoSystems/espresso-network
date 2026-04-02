@@ -231,6 +231,23 @@ impl Options {
                 self.listen(self.http.port, app, SequencerApiVersion::instance()),
             );
 
+            // Spawn new Axum and gRPC servers if ports are configured
+            if let Some(axum_port) = self.http.axum_port {
+                tasks.spawn("Axum API server", async move {
+                    if let Err(e) = espresso_api::serve_axum(axum_port).await {
+                        tracing::error!("Axum server error: {}", e);
+                    }
+                });
+            }
+
+            if let Some(grpc_port) = self.http.grpc_port {
+                tasks.spawn("gRPC server", async move {
+                    if let Err(e) = espresso_api::serve_grpc(grpc_port).await {
+                        tracing::error!("gRPC server error: {}", e);
+                    }
+                });
+            }
+
             (metrics, Box::new(NullEventConsumer), None)
         } else {
             // If no status or availability API is requested, we don't need metrics or a query
@@ -371,6 +388,24 @@ impl Options {
         }
 
         tasks.spawn("API server", self.listen(self.http.port, app, bind_version));
+
+        // Spawn new Axum and gRPC servers if ports are configured
+        if let Some(axum_port) = self.http.axum_port {
+            tasks.spawn("Axum API server", async move {
+                if let Err(e) = espresso_api::serve_axum(axum_port).await {
+                    tracing::error!("Axum server error: {}", e);
+                }
+            });
+        }
+
+        if let Some(grpc_port) = self.http.grpc_port {
+            tasks.spawn("gRPC server", async move {
+                if let Err(e) = espresso_api::serve_grpc(grpc_port).await {
+                    tracing::error!("gRPC server error: {}", e);
+                }
+            });
+        }
+
         Ok((
             metrics,
             Box::new(ApiEventConsumer::from(ds)),
@@ -487,6 +522,24 @@ impl Options {
             "API server",
             self.listen(self.http.port, app, SequencerApiVersion::instance()),
         );
+
+        // Spawn new Axum and gRPC servers if ports are configured
+        if let Some(axum_port) = self.http.axum_port {
+            tasks.spawn("Axum API server", async move {
+                if let Err(e) = espresso_api::serve_axum(axum_port).await {
+                    tracing::error!("Axum server error: {}", e);
+                }
+            });
+        }
+
+        if let Some(grpc_port) = self.http.grpc_port {
+            tasks.spawn("gRPC server", async move {
+                if let Err(e) = espresso_api::serve_grpc(grpc_port).await {
+                    tracing::error!("gRPC server error: {}", e);
+                }
+            });
+        }
+
         Ok((
             metrics,
             Box::new(ApiEventConsumer::from(ds)),
@@ -607,6 +660,14 @@ pub struct Http {
     /// Leave unset for no connection limit.
     #[clap(long, env = "ESPRESSO_SEQUENCER_MAX_CONNECTIONS")]
     pub max_connections: Option<usize>,
+
+    /// Optional port for new Axum API server (skeleton implementation).
+    #[clap(long, env = "ESPRESSO_SEQUENCER_AXUM_PORT")]
+    pub axum_port: Option<u16>,
+
+    /// Optional port for gRPC API server (skeleton implementation).
+    #[clap(long, env = "ESPRESSO_SEQUENCER_GRPC_PORT")]
+    pub grpc_port: Option<u16>,
 }
 
 impl Http {
@@ -615,6 +676,8 @@ impl Http {
         Self {
             port,
             max_connections: None,
+            axum_port: None,
+            grpc_port: None,
         }
     }
 }
