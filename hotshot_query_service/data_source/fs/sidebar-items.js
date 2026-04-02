@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"mod":["impl_testable_data_source"],"type":["FileSystemDataSource"]};
+window.SIDEBAR_ITEMS = {"mod":["impl_testable_data_source"],"type":["Builder","FileSystemDataSource"]};

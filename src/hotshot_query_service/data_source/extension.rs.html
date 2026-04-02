@@ -560,7 +560,7 @@
 <a href=#560 id=560 data-nosnippet>560</a>
 <a href=#561 id=561 data-nosnippet>561</a>    <span class="kw">use </span>super::<span class="kw-2">*</span>;
 <a href=#562 id=562 data-nosnippet>562</a>    <span class="kw">use </span>crate::{
-<a href=#563 id=563 data-nosnippet>563</a>        data_source::UpdateDataSource,
+<a href=#563 id=563 data-nosnippet>563</a>        data_source::{UpdateDataSource, fetching::Builder},
 <a href=#564 id=564 data-nosnippet>564</a>        testing::{
 <a href=#565 id=565 data-nosnippet>565</a>            consensus::{DataSourceLifeCycle, TestableDataSource},
 <a href=#566 id=566 data-nosnippet>566</a>            mocks::MockTypes,
@@ -574,33 +574,41 @@
 <a href=#574 id=574 data-nosnippet>574</a>        U: Clone + Default + Send + Sync + <span class="lifetime">'static</span>,
 <a href=#575 id=575 data-nosnippet>575</a>    {
 <a href=#576 id=576 data-nosnippet>576</a>        <span class="kw">type </span>Storage = D::Storage;
-<a href=#577 id=577 data-nosnippet>577</a>
-<a href=#578 id=578 data-nosnippet>578</a>        <span class="kw">async fn </span>create(node_id: usize) -&gt; <span class="self">Self</span>::Storage {
-<a href=#579 id=579 data-nosnippet>579</a>            D::create(node_id).<span class="kw">await
-<a href=#580 id=580 data-nosnippet>580</a>        </span>}
-<a href=#581 id=581 data-nosnippet>581</a>
-<a href=#582 id=582 data-nosnippet>582</a>        <span class="kw">async fn </span>connect(storage: <span class="kw-2">&amp;</span><span class="self">Self</span>::Storage) -&gt; <span class="self">Self </span>{
-<a href=#583 id=583 data-nosnippet>583</a>            <span class="self">Self</span>::new(D::connect(storage).<span class="kw">await</span>, Default::default())
-<a href=#584 id=584 data-nosnippet>584</a>        }
-<a href=#585 id=585 data-nosnippet>585</a>
-<a href=#586 id=586 data-nosnippet>586</a>        <span class="kw">async fn </span>reset(storage: <span class="kw-2">&amp;</span><span class="self">Self</span>::Storage) -&gt; <span class="self">Self </span>{
-<a href=#587 id=587 data-nosnippet>587</a>            <span class="self">Self</span>::new(D::reset(storage).<span class="kw">await</span>, Default::default())
-<a href=#588 id=588 data-nosnippet>588</a>        }
-<a href=#589 id=589 data-nosnippet>589</a>
-<a href=#590 id=590 data-nosnippet>590</a>        <span class="kw">async fn </span>handle_event(<span class="kw-2">&amp;</span><span class="self">self</span>, event: <span class="kw-2">&amp;</span>Event&lt;MockTypes&gt;) {
-<a href=#591 id=591 data-nosnippet>591</a>            <span class="self">self</span>.update(event).<span class="kw">await</span>.unwrap();
+<a href=#577 id=577 data-nosnippet>577</a>        <span class="kw">type </span>S = D::S;
+<a href=#578 id=578 data-nosnippet>578</a>        <span class="kw">type </span>P = D::P;
+<a href=#579 id=579 data-nosnippet>579</a>
+<a href=#580 id=580 data-nosnippet>580</a>        <span class="kw">async fn </span>create(node_id: usize) -&gt; <span class="self">Self</span>::Storage {
+<a href=#581 id=581 data-nosnippet>581</a>            D::create(node_id).<span class="kw">await
+<a href=#582 id=582 data-nosnippet>582</a>        </span>}
+<a href=#583 id=583 data-nosnippet>583</a>
+<a href=#584 id=584 data-nosnippet>584</a>        <span class="kw">async fn </span>build(
+<a href=#585 id=585 data-nosnippet>585</a>            storage: <span class="kw-2">&amp;</span><span class="self">Self</span>::Storage,
+<a href=#586 id=586 data-nosnippet>586</a>            opt: <span class="kw">impl </span>Send
+<a href=#587 id=587 data-nosnippet>587</a>            + FnOnce(
+<a href=#588 id=588 data-nosnippet>588</a>                Builder&lt;MockTypes, <span class="self">Self</span>::S, <span class="self">Self</span>::P&gt;,
+<a href=#589 id=589 data-nosnippet>589</a>            ) -&gt; Builder&lt;MockTypes, <span class="self">Self</span>::S, <span class="self">Self</span>::P&gt;,
+<a href=#590 id=590 data-nosnippet>590</a>        ) -&gt; <span class="self">Self </span>{
+<a href=#591 id=591 data-nosnippet>591</a>            <span class="self">Self</span>::new(D::build(storage, opt).<span class="kw">await</span>, Default::default())
 <a href=#592 id=592 data-nosnippet>592</a>        }
-<a href=#593 id=593 data-nosnippet>593</a>    }
-<a href=#594 id=594 data-nosnippet>594</a>}
-<a href=#595 id=595 data-nosnippet>595</a>
-<a href=#596 id=596 data-nosnippet>596</a><span class="attr">#[cfg(test)]
-<a href=#597 id=597 data-nosnippet>597</a></span><span class="kw">mod </span>test {
-<a href=#598 id=598 data-nosnippet>598</a>    <span class="kw">use </span><span class="kw">super</span>::ExtensibleDataSource;
-<a href=#599 id=599 data-nosnippet>599</a>    <span class="kw">use </span><span class="kw">crate</span>::testing::consensus::MockDataSource;
-<a href=#600 id=600 data-nosnippet>600</a>    <span class="comment">// For some reason this is the only way to import the macro defined in another module of this
-<a href=#601 id=601 data-nosnippet>601</a>    // crate.
-<a href=#602 id=602 data-nosnippet>602</a>    </span><span class="kw">use </span>crate::<span class="kw-2">*</span>;
+<a href=#593 id=593 data-nosnippet>593</a>
+<a href=#594 id=594 data-nosnippet>594</a>        <span class="kw">async fn </span>reset(storage: <span class="kw-2">&amp;</span><span class="self">Self</span>::Storage) -&gt; <span class="self">Self </span>{
+<a href=#595 id=595 data-nosnippet>595</a>            <span class="self">Self</span>::new(D::reset(storage).<span class="kw">await</span>, Default::default())
+<a href=#596 id=596 data-nosnippet>596</a>        }
+<a href=#597 id=597 data-nosnippet>597</a>
+<a href=#598 id=598 data-nosnippet>598</a>        <span class="kw">async fn </span>handle_event(<span class="kw-2">&amp;</span><span class="self">self</span>, event: <span class="kw-2">&amp;</span>Event&lt;MockTypes&gt;) {
+<a href=#599 id=599 data-nosnippet>599</a>            <span class="self">self</span>.update(event).<span class="kw">await</span>.unwrap();
+<a href=#600 id=600 data-nosnippet>600</a>        }
+<a href=#601 id=601 data-nosnippet>601</a>    }
+<a href=#602 id=602 data-nosnippet>602</a>}
 <a href=#603 id=603 data-nosnippet>603</a>
-<a href=#604 id=604 data-nosnippet>604</a>    <span class="macro">instantiate_data_source_tests!</span>(ExtensibleDataSource&lt;MockDataSource, ()&gt;);
-<a href=#605 id=605 data-nosnippet>605</a>}
+<a href=#604 id=604 data-nosnippet>604</a><span class="attr">#[cfg(test)]
+<a href=#605 id=605 data-nosnippet>605</a></span><span class="kw">mod </span>test {
+<a href=#606 id=606 data-nosnippet>606</a>    <span class="kw">use </span><span class="kw">super</span>::ExtensibleDataSource;
+<a href=#607 id=607 data-nosnippet>607</a>    <span class="kw">use </span><span class="kw">crate</span>::testing::consensus::MockDataSource;
+<a href=#608 id=608 data-nosnippet>608</a>    <span class="comment">// For some reason this is the only way to import the macro defined in another module of this
+<a href=#609 id=609 data-nosnippet>609</a>    // crate.
+<a href=#610 id=610 data-nosnippet>610</a>    </span><span class="kw">use </span>crate::<span class="kw-2">*</span>;
+<a href=#611 id=611 data-nosnippet>611</a>
+<a href=#612 id=612 data-nosnippet>612</a>    <span class="macro">instantiate_data_source_tests!</span>(ExtensibleDataSource&lt;MockDataSource, ()&gt;);
+<a href=#613 id=613 data-nosnippet>613</a>}
 </code></pre></div></section></main></body></html>

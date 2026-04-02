@@ -50,7 +50,7 @@
 <a href=#50 id=50 data-nosnippet>50</a><span class="kw">use </span>crate::{
 <a href=#51 id=51 data-nosnippet>51</a>    SignatureKey,
 <a href=#52 id=52 data-nosnippet>52</a>    availability::{AvailabilityDataSource, UpdateAvailabilityData},
-<a href=#53 id=53 data-nosnippet>53</a>    data_source::{FileSystemDataSource, SqlDataSource, VersionedDataSource},
+<a href=#53 id=53 data-nosnippet>53</a>    data_source::{FileSystemDataSource, SqlDataSource, VersionedDataSource, fetching::Builder},
 <a href=#54 id=54 data-nosnippet>54</a>    fetching::provider::NoFetching,
 <a href=#55 id=55 data-nosnippet>55</a>    node::NodeDataSource,
 <a href=#56 id=56 data-nosnippet>56</a>    status::{StatusDataSource, UpdateStatusData},
@@ -357,35 +357,50 @@
 <a href=#357 id=357 data-nosnippet>357</a>    /// alive as long as the related data sources are open.
 <a href=#358 id=358 data-nosnippet>358</a>    </span><span class="kw">type </span>Storage: Send + Sync;
 <a href=#359 id=359 data-nosnippet>359</a>
-<a href=#360 id=360 data-nosnippet>360</a>    <span class="kw">async fn </span>create(node_id: usize) -&gt; <span class="self">Self</span>::Storage;
-<a href=#361 id=361 data-nosnippet>361</a>    <span class="kw">async fn </span>connect(storage: <span class="kw-2">&amp;</span><span class="self">Self</span>::Storage) -&gt; <span class="self">Self</span>;
-<a href=#362 id=362 data-nosnippet>362</a>    <span class="kw">async fn </span>reset(storage: <span class="kw-2">&amp;</span><span class="self">Self</span>::Storage) -&gt; <span class="self">Self</span>;
-<a href=#363 id=363 data-nosnippet>363</a>    <span class="kw">async fn </span>handle_event(<span class="kw-2">&amp;</span><span class="self">self</span>, event: <span class="kw-2">&amp;</span>Event&lt;MockTypes&gt;);
-<a href=#364 id=364 data-nosnippet>364</a>    <span class="kw">async fn </span>leaf_only_ds(_storage: <span class="kw-2">&amp;</span><span class="self">Self</span>::Storage) -&gt; <span class="self">Self </span>{
-<a href=#365 id=365 data-nosnippet>365</a>        <span class="macro">panic!</span>(<span class="string">"not supported"</span>)
-<a href=#366 id=366 data-nosnippet>366</a>    }
-<a href=#367 id=367 data-nosnippet>367</a>
-<a href=#368 id=368 data-nosnippet>368</a>    <span class="doccomment">/// Setup runs after setting up the network but before starting a test.
-<a href=#369 id=369 data-nosnippet>369</a>    </span><span class="kw">async fn </span>setup(_network: <span class="kw-2">&amp;mut </span>MockNetwork&lt;<span class="self">Self</span>&gt;) {}
-<a href=#370 id=370 data-nosnippet>370</a>}
-<a href=#371 id=371 data-nosnippet>371</a>
-<a href=#372 id=372 data-nosnippet>372</a><span class="kw">pub trait </span>TestableDataSource:
-<a href=#373 id=373 data-nosnippet>373</a>    DataSourceLifeCycle
-<a href=#374 id=374 data-nosnippet>374</a>    + AvailabilityDataSource&lt;MockTypes&gt;
-<a href=#375 id=375 data-nosnippet>375</a>    + UpdateAvailabilityData&lt;MockTypes&gt;
-<a href=#376 id=376 data-nosnippet>376</a>    + NodeDataSource&lt;MockTypes&gt;
-<a href=#377 id=377 data-nosnippet>377</a>    + StatusDataSource
-<a href=#378 id=378 data-nosnippet>378</a>    + VersionedDataSource
-<a href=#379 id=379 data-nosnippet>379</a>{
-<a href=#380 id=380 data-nosnippet>380</a>}
-<a href=#381 id=381 data-nosnippet>381</a>
-<a href=#382 id=382 data-nosnippet>382</a><span class="kw">impl</span>&lt;T&gt; TestableDataSource <span class="kw">for </span>T <span class="kw">where
-<a href=#383 id=383 data-nosnippet>383</a>    </span>T: DataSourceLifeCycle
-<a href=#384 id=384 data-nosnippet>384</a>        + AvailabilityDataSource&lt;MockTypes&gt;
-<a href=#385 id=385 data-nosnippet>385</a>        + UpdateAvailabilityData&lt;MockTypes&gt;
-<a href=#386 id=386 data-nosnippet>386</a>        + NodeDataSource&lt;MockTypes&gt;
-<a href=#387 id=387 data-nosnippet>387</a>        + StatusDataSource
-<a href=#388 id=388 data-nosnippet>388</a>        + VersionedDataSource
-<a href=#389 id=389 data-nosnippet>389</a>{
-<a href=#390 id=390 data-nosnippet>390</a>}
+<a href=#360 id=360 data-nosnippet>360</a>    <span class="doccomment">/// Type parameter for builder.
+<a href=#361 id=361 data-nosnippet>361</a>    </span><span class="kw">type </span>S;
+<a href=#362 id=362 data-nosnippet>362</a>
+<a href=#363 id=363 data-nosnippet>363</a>    <span class="doccomment">/// Type parameter for builder.
+<a href=#364 id=364 data-nosnippet>364</a>    </span><span class="kw">type </span>P;
+<a href=#365 id=365 data-nosnippet>365</a>
+<a href=#366 id=366 data-nosnippet>366</a>    <span class="kw">async fn </span>create(node_id: usize) -&gt; <span class="self">Self</span>::Storage;
+<a href=#367 id=367 data-nosnippet>367</a>    <span class="kw">async fn </span>build(
+<a href=#368 id=368 data-nosnippet>368</a>        storage: <span class="kw-2">&amp;</span><span class="self">Self</span>::Storage,
+<a href=#369 id=369 data-nosnippet>369</a>        opt: <span class="kw">impl </span>Send
+<a href=#370 id=370 data-nosnippet>370</a>        + FnOnce(Builder&lt;MockTypes, <span class="self">Self</span>::S, <span class="self">Self</span>::P&gt;) -&gt; Builder&lt;MockTypes, <span class="self">Self</span>::S, <span class="self">Self</span>::P&gt;,
+<a href=#371 id=371 data-nosnippet>371</a>    ) -&gt; <span class="self">Self</span>;
+<a href=#372 id=372 data-nosnippet>372</a>    <span class="kw">async fn </span>reset(storage: <span class="kw-2">&amp;</span><span class="self">Self</span>::Storage) -&gt; <span class="self">Self</span>;
+<a href=#373 id=373 data-nosnippet>373</a>    <span class="kw">async fn </span>handle_event(<span class="kw-2">&amp;</span><span class="self">self</span>, event: <span class="kw-2">&amp;</span>Event&lt;MockTypes&gt;);
+<a href=#374 id=374 data-nosnippet>374</a>
+<a href=#375 id=375 data-nosnippet>375</a>    <span class="kw">async fn </span>connect(storage: <span class="kw-2">&amp;</span><span class="self">Self</span>::Storage) -&gt; <span class="self">Self </span>{
+<a href=#376 id=376 data-nosnippet>376</a>        <span class="self">Self</span>::build(storage, |builder| builder).<span class="kw">await
+<a href=#377 id=377 data-nosnippet>377</a>    </span>}
+<a href=#378 id=378 data-nosnippet>378</a>
+<a href=#379 id=379 data-nosnippet>379</a>    <span class="kw">async fn </span>leaf_only_ds(storage: <span class="kw-2">&amp;</span><span class="self">Self</span>::Storage) -&gt; <span class="self">Self </span>{
+<a href=#380 id=380 data-nosnippet>380</a>        <span class="self">Self</span>::build(storage, |builder| builder.leaf_only()).<span class="kw">await
+<a href=#381 id=381 data-nosnippet>381</a>    </span>}
+<a href=#382 id=382 data-nosnippet>382</a>
+<a href=#383 id=383 data-nosnippet>383</a>    <span class="doccomment">/// Setup runs after setting up the network but before starting a test.
+<a href=#384 id=384 data-nosnippet>384</a>    </span><span class="kw">async fn </span>setup(_network: <span class="kw-2">&amp;mut </span>MockNetwork&lt;<span class="self">Self</span>&gt;) {}
+<a href=#385 id=385 data-nosnippet>385</a>}
+<a href=#386 id=386 data-nosnippet>386</a>
+<a href=#387 id=387 data-nosnippet>387</a><span class="kw">pub trait </span>TestableDataSource:
+<a href=#388 id=388 data-nosnippet>388</a>    DataSourceLifeCycle
+<a href=#389 id=389 data-nosnippet>389</a>    + AvailabilityDataSource&lt;MockTypes&gt;
+<a href=#390 id=390 data-nosnippet>390</a>    + UpdateAvailabilityData&lt;MockTypes&gt;
+<a href=#391 id=391 data-nosnippet>391</a>    + NodeDataSource&lt;MockTypes&gt;
+<a href=#392 id=392 data-nosnippet>392</a>    + StatusDataSource
+<a href=#393 id=393 data-nosnippet>393</a>    + VersionedDataSource
+<a href=#394 id=394 data-nosnippet>394</a>{
+<a href=#395 id=395 data-nosnippet>395</a>}
+<a href=#396 id=396 data-nosnippet>396</a>
+<a href=#397 id=397 data-nosnippet>397</a><span class="kw">impl</span>&lt;T&gt; TestableDataSource <span class="kw">for </span>T <span class="kw">where
+<a href=#398 id=398 data-nosnippet>398</a>    </span>T: DataSourceLifeCycle
+<a href=#399 id=399 data-nosnippet>399</a>        + AvailabilityDataSource&lt;MockTypes&gt;
+<a href=#400 id=400 data-nosnippet>400</a>        + UpdateAvailabilityData&lt;MockTypes&gt;
+<a href=#401 id=401 data-nosnippet>401</a>        + NodeDataSource&lt;MockTypes&gt;
+<a href=#402 id=402 data-nosnippet>402</a>        + StatusDataSource
+<a href=#403 id=403 data-nosnippet>403</a>        + VersionedDataSource
+<a href=#404 id=404 data-nosnippet>404</a>{
+<a href=#405 id=405 data-nosnippet>405</a>}
 </code></pre></div></section></main></body></html>

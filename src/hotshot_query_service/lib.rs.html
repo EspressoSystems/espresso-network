@@ -834,143 +834,147 @@
 <a href=#834 id=834 data-nosnippet>834</a>    </span><span class="kw">async fn </span>test_composition() {
 <a href=#835 id=835 data-nosnippet>835</a>        <span class="kw">let </span>dir = TempDir::with_prefix(<span class="string">"test_composition"</span>).unwrap();
 <a href=#836 id=836 data-nosnippet>836</a>        <span class="kw">let </span><span class="kw-2">mut </span>loader = AtomicStoreLoader::create(dir.path(), <span class="string">"test_composition"</span>).unwrap();
-<a href=#837 id=837 data-nosnippet>837</a>        <span class="kw">let </span>hotshot_qs = MockDataSource::create_with_store(<span class="kw-2">&amp;mut </span>loader, Default::default())
+<a href=#837 id=837 data-nosnippet>837</a>        <span class="kw">let </span>hotshot_qs = MockDataSource::create_builder_with_store(<span class="kw-2">&amp;mut </span>loader, Default::default())
 <a href=#838 id=838 data-nosnippet>838</a>            .<span class="kw">await
-<a href=#839 id=839 data-nosnippet>839</a>            </span>.unwrap();
-<a href=#840 id=840 data-nosnippet>840</a>
-<a href=#841 id=841 data-nosnippet>841</a>        <span class="comment">// Mock up some data and add a block to the store.
-<a href=#842 id=842 data-nosnippet>842</a>        </span><span class="kw">let </span>leaf = Leaf2::&lt;MockTypes&gt;::genesis(
-<a href=#843 id=843 data-nosnippet>843</a>            <span class="kw-2">&amp;</span>Default::default(),
-<a href=#844 id=844 data-nosnippet>844</a>            <span class="kw-2">&amp;</span>Default::default(),
-<a href=#845 id=845 data-nosnippet>845</a>            TEST_VERSIONS.test.base,
-<a href=#846 id=846 data-nosnippet>846</a>        )
-<a href=#847 id=847 data-nosnippet>847</a>        .<span class="kw">await</span>;
-<a href=#848 id=848 data-nosnippet>848</a>        <span class="kw">let </span>qc = QuorumCertificate2::genesis(
-<a href=#849 id=849 data-nosnippet>849</a>            <span class="kw-2">&amp;</span>Default::default(),
-<a href=#850 id=850 data-nosnippet>850</a>            <span class="kw-2">&amp;</span>Default::default(),
-<a href=#851 id=851 data-nosnippet>851</a>            TEST_VERSIONS.test,
-<a href=#852 id=852 data-nosnippet>852</a>        )
-<a href=#853 id=853 data-nosnippet>853</a>        .<span class="kw">await</span>;
-<a href=#854 id=854 data-nosnippet>854</a>        <span class="kw">let </span>leaf = LeafQueryData::new(leaf, qc).unwrap();
-<a href=#855 id=855 data-nosnippet>855</a>        <span class="kw">let </span>block = BlockQueryData::new(leaf.header().clone(), MockPayload::genesis());
-<a href=#856 id=856 data-nosnippet>856</a>        hotshot_qs
-<a href=#857 id=857 data-nosnippet>857</a>            .append(BlockInfo::new(leaf, <span class="prelude-val">Some</span>(block), <span class="prelude-val">None</span>, <span class="prelude-val">None</span>))
-<a href=#858 id=858 data-nosnippet>858</a>            .<span class="kw">await
-<a href=#859 id=859 data-nosnippet>859</a>            </span>.unwrap();
-<a href=#860 id=860 data-nosnippet>860</a>
-<a href=#861 id=861 data-nosnippet>861</a>        <span class="kw">let </span>module_state =
-<a href=#862 id=862 data-nosnippet>862</a>            RollingLog::create(<span class="kw-2">&amp;mut </span>loader, Default::default(), <span class="string">"module_state"</span>, <span class="number">1024</span>).unwrap();
-<a href=#863 id=863 data-nosnippet>863</a>        <span class="kw">let </span>state = CompositeState {
-<a href=#864 id=864 data-nosnippet>864</a>            hotshot_qs,
-<a href=#865 id=865 data-nosnippet>865</a>            module_state,
-<a href=#866 id=866 data-nosnippet>866</a>            store: AtomicStore::open(loader).unwrap(),
-<a href=#867 id=867 data-nosnippet>867</a>        };
-<a href=#868 id=868 data-nosnippet>868</a>
-<a href=#869 id=869 data-nosnippet>869</a>        <span class="kw">let </span>module_spec = <span class="macro">toml!</span> {
-<a href=#870 id=870 data-nosnippet>870</a>            [route.post_ext]
-<a href=#871 id=871 data-nosnippet>871</a>            PATH = [<span class="string">"/ext/:val"</span>]
-<a href=#872 id=872 data-nosnippet>872</a>            METHOD = <span class="string">"POST"
-<a href=#873 id=873 data-nosnippet>873</a>            ":val" </span>= <span class="string">"Integer"
-<a href=#874 id=874 data-nosnippet>874</a>
-<a href=#875 id=875 data-nosnippet>875</a>            </span>[route.get_ext]
-<a href=#876 id=876 data-nosnippet>876</a>            PATH = [<span class="string">"/ext"</span>]
-<a href=#877 id=877 data-nosnippet>877</a>            METHOD = <span class="string">"GET"
-<a href=#878 id=878 data-nosnippet>878</a>        </span>};
-<a href=#879 id=879 data-nosnippet>879</a>
-<a href=#880 id=880 data-nosnippet>880</a>        <span class="kw">let </span><span class="kw-2">mut </span>app = App::&lt;<span class="kw">_</span>, Error&gt;::with_state(RwLock::new(state));
-<a href=#881 id=881 data-nosnippet>881</a>        app.register_module(
-<a href=#882 id=882 data-nosnippet>882</a>            <span class="string">"availability"</span>,
-<a href=#883 id=883 data-nosnippet>883</a>            availability::define_api(
-<a href=#884 id=884 data-nosnippet>884</a>                <span class="kw-2">&amp;</span>Default::default(),
-<a href=#885 id=885 data-nosnippet>885</a>                MockBase::instance(),
-<a href=#886 id=886 data-nosnippet>886</a>                <span class="string">"0.0.1"</span>.parse().unwrap(),
-<a href=#887 id=887 data-nosnippet>887</a>            )
-<a href=#888 id=888 data-nosnippet>888</a>            .unwrap(),
-<a href=#889 id=889 data-nosnippet>889</a>        )
-<a href=#890 id=890 data-nosnippet>890</a>        .unwrap()
-<a href=#891 id=891 data-nosnippet>891</a>        .register_module(
-<a href=#892 id=892 data-nosnippet>892</a>            <span class="string">"node"</span>,
-<a href=#893 id=893 data-nosnippet>893</a>            node::define_api(
-<a href=#894 id=894 data-nosnippet>894</a>                <span class="kw-2">&amp;</span>Default::default(),
-<a href=#895 id=895 data-nosnippet>895</a>                MockBase::instance(),
-<a href=#896 id=896 data-nosnippet>896</a>                <span class="string">"0.0.1"</span>.parse().unwrap(),
-<a href=#897 id=897 data-nosnippet>897</a>            )
-<a href=#898 id=898 data-nosnippet>898</a>            .unwrap(),
-<a href=#899 id=899 data-nosnippet>899</a>        )
-<a href=#900 id=900 data-nosnippet>900</a>        .unwrap()
-<a href=#901 id=901 data-nosnippet>901</a>        .register_module(
-<a href=#902 id=902 data-nosnippet>902</a>            <span class="string">"status"</span>,
-<a href=#903 id=903 data-nosnippet>903</a>            status::define_api(
-<a href=#904 id=904 data-nosnippet>904</a>                <span class="kw-2">&amp;</span>Default::default(),
-<a href=#905 id=905 data-nosnippet>905</a>                MockBase::instance(),
-<a href=#906 id=906 data-nosnippet>906</a>                <span class="string">"0.0.1"</span>.parse().unwrap(),
-<a href=#907 id=907 data-nosnippet>907</a>            )
-<a href=#908 id=908 data-nosnippet>908</a>            .unwrap(),
-<a href=#909 id=909 data-nosnippet>909</a>        )
-<a href=#910 id=910 data-nosnippet>910</a>        .unwrap()
-<a href=#911 id=911 data-nosnippet>911</a>        .module::&lt;Error, MockBase&gt;(<span class="string">"mod"</span>, module_spec)
-<a href=#912 id=912 data-nosnippet>912</a>        .unwrap()
-<a href=#913 id=913 data-nosnippet>913</a>        .get(<span class="string">"get_ext"</span>, |<span class="kw">_</span>, state| {
-<a href=#914 id=914 data-nosnippet>914</a>            <span class="kw">async move </span>{ state.module_state.load_latest().map_err(Error::internal) }.boxed()
-<a href=#915 id=915 data-nosnippet>915</a>        })
+<a href=#839 id=839 data-nosnippet>839</a>            </span>.unwrap()
+<a href=#840 id=840 data-nosnippet>840</a>            .with_sync_status_ttl(Duration::ZERO)
+<a href=#841 id=841 data-nosnippet>841</a>            .build()
+<a href=#842 id=842 data-nosnippet>842</a>            .<span class="kw">await
+<a href=#843 id=843 data-nosnippet>843</a>            </span>.unwrap();
+<a href=#844 id=844 data-nosnippet>844</a>
+<a href=#845 id=845 data-nosnippet>845</a>        <span class="comment">// Mock up some data and add a block to the store.
+<a href=#846 id=846 data-nosnippet>846</a>        </span><span class="kw">let </span>leaf = Leaf2::&lt;MockTypes&gt;::genesis(
+<a href=#847 id=847 data-nosnippet>847</a>            <span class="kw-2">&amp;</span>Default::default(),
+<a href=#848 id=848 data-nosnippet>848</a>            <span class="kw-2">&amp;</span>Default::default(),
+<a href=#849 id=849 data-nosnippet>849</a>            TEST_VERSIONS.test.base,
+<a href=#850 id=850 data-nosnippet>850</a>        )
+<a href=#851 id=851 data-nosnippet>851</a>        .<span class="kw">await</span>;
+<a href=#852 id=852 data-nosnippet>852</a>        <span class="kw">let </span>qc = QuorumCertificate2::genesis(
+<a href=#853 id=853 data-nosnippet>853</a>            <span class="kw-2">&amp;</span>Default::default(),
+<a href=#854 id=854 data-nosnippet>854</a>            <span class="kw-2">&amp;</span>Default::default(),
+<a href=#855 id=855 data-nosnippet>855</a>            TEST_VERSIONS.test,
+<a href=#856 id=856 data-nosnippet>856</a>        )
+<a href=#857 id=857 data-nosnippet>857</a>        .<span class="kw">await</span>;
+<a href=#858 id=858 data-nosnippet>858</a>        <span class="kw">let </span>leaf = LeafQueryData::new(leaf, qc).unwrap();
+<a href=#859 id=859 data-nosnippet>859</a>        <span class="kw">let </span>block = BlockQueryData::new(leaf.header().clone(), MockPayload::genesis());
+<a href=#860 id=860 data-nosnippet>860</a>        hotshot_qs
+<a href=#861 id=861 data-nosnippet>861</a>            .append(BlockInfo::new(leaf, <span class="prelude-val">Some</span>(block), <span class="prelude-val">None</span>, <span class="prelude-val">None</span>))
+<a href=#862 id=862 data-nosnippet>862</a>            .<span class="kw">await
+<a href=#863 id=863 data-nosnippet>863</a>            </span>.unwrap();
+<a href=#864 id=864 data-nosnippet>864</a>
+<a href=#865 id=865 data-nosnippet>865</a>        <span class="kw">let </span>module_state =
+<a href=#866 id=866 data-nosnippet>866</a>            RollingLog::create(<span class="kw-2">&amp;mut </span>loader, Default::default(), <span class="string">"module_state"</span>, <span class="number">1024</span>).unwrap();
+<a href=#867 id=867 data-nosnippet>867</a>        <span class="kw">let </span>state = CompositeState {
+<a href=#868 id=868 data-nosnippet>868</a>            hotshot_qs,
+<a href=#869 id=869 data-nosnippet>869</a>            module_state,
+<a href=#870 id=870 data-nosnippet>870</a>            store: AtomicStore::open(loader).unwrap(),
+<a href=#871 id=871 data-nosnippet>871</a>        };
+<a href=#872 id=872 data-nosnippet>872</a>
+<a href=#873 id=873 data-nosnippet>873</a>        <span class="kw">let </span>module_spec = <span class="macro">toml!</span> {
+<a href=#874 id=874 data-nosnippet>874</a>            [route.post_ext]
+<a href=#875 id=875 data-nosnippet>875</a>            PATH = [<span class="string">"/ext/:val"</span>]
+<a href=#876 id=876 data-nosnippet>876</a>            METHOD = <span class="string">"POST"
+<a href=#877 id=877 data-nosnippet>877</a>            ":val" </span>= <span class="string">"Integer"
+<a href=#878 id=878 data-nosnippet>878</a>
+<a href=#879 id=879 data-nosnippet>879</a>            </span>[route.get_ext]
+<a href=#880 id=880 data-nosnippet>880</a>            PATH = [<span class="string">"/ext"</span>]
+<a href=#881 id=881 data-nosnippet>881</a>            METHOD = <span class="string">"GET"
+<a href=#882 id=882 data-nosnippet>882</a>        </span>};
+<a href=#883 id=883 data-nosnippet>883</a>
+<a href=#884 id=884 data-nosnippet>884</a>        <span class="kw">let </span><span class="kw-2">mut </span>app = App::&lt;<span class="kw">_</span>, Error&gt;::with_state(RwLock::new(state));
+<a href=#885 id=885 data-nosnippet>885</a>        app.register_module(
+<a href=#886 id=886 data-nosnippet>886</a>            <span class="string">"availability"</span>,
+<a href=#887 id=887 data-nosnippet>887</a>            availability::define_api(
+<a href=#888 id=888 data-nosnippet>888</a>                <span class="kw-2">&amp;</span>Default::default(),
+<a href=#889 id=889 data-nosnippet>889</a>                MockBase::instance(),
+<a href=#890 id=890 data-nosnippet>890</a>                <span class="string">"0.0.1"</span>.parse().unwrap(),
+<a href=#891 id=891 data-nosnippet>891</a>            )
+<a href=#892 id=892 data-nosnippet>892</a>            .unwrap(),
+<a href=#893 id=893 data-nosnippet>893</a>        )
+<a href=#894 id=894 data-nosnippet>894</a>        .unwrap()
+<a href=#895 id=895 data-nosnippet>895</a>        .register_module(
+<a href=#896 id=896 data-nosnippet>896</a>            <span class="string">"node"</span>,
+<a href=#897 id=897 data-nosnippet>897</a>            node::define_api(
+<a href=#898 id=898 data-nosnippet>898</a>                <span class="kw-2">&amp;</span>Default::default(),
+<a href=#899 id=899 data-nosnippet>899</a>                MockBase::instance(),
+<a href=#900 id=900 data-nosnippet>900</a>                <span class="string">"0.0.1"</span>.parse().unwrap(),
+<a href=#901 id=901 data-nosnippet>901</a>            )
+<a href=#902 id=902 data-nosnippet>902</a>            .unwrap(),
+<a href=#903 id=903 data-nosnippet>903</a>        )
+<a href=#904 id=904 data-nosnippet>904</a>        .unwrap()
+<a href=#905 id=905 data-nosnippet>905</a>        .register_module(
+<a href=#906 id=906 data-nosnippet>906</a>            <span class="string">"status"</span>,
+<a href=#907 id=907 data-nosnippet>907</a>            status::define_api(
+<a href=#908 id=908 data-nosnippet>908</a>                <span class="kw-2">&amp;</span>Default::default(),
+<a href=#909 id=909 data-nosnippet>909</a>                MockBase::instance(),
+<a href=#910 id=910 data-nosnippet>910</a>                <span class="string">"0.0.1"</span>.parse().unwrap(),
+<a href=#911 id=911 data-nosnippet>911</a>            )
+<a href=#912 id=912 data-nosnippet>912</a>            .unwrap(),
+<a href=#913 id=913 data-nosnippet>913</a>        )
+<a href=#914 id=914 data-nosnippet>914</a>        .unwrap()
+<a href=#915 id=915 data-nosnippet>915</a>        .module::&lt;Error, MockBase&gt;(<span class="string">"mod"</span>, module_spec)
 <a href=#916 id=916 data-nosnippet>916</a>        .unwrap()
-<a href=#917 id=917 data-nosnippet>917</a>        .post(<span class="string">"post_ext"</span>, |req, state| {
-<a href=#918 id=918 data-nosnippet>918</a>            <span class="kw">async move </span>{
-<a href=#919 id=919 data-nosnippet>919</a>                state
-<a href=#920 id=920 data-nosnippet>920</a>                    .module_state
-<a href=#921 id=921 data-nosnippet>921</a>                    .store_resource(<span class="kw-2">&amp;</span>req.integer_param(<span class="string">"val"</span>).map_err(Error::internal)<span class="question-mark">?</span>)
-<a href=#922 id=922 data-nosnippet>922</a>                    .map_err(Error::internal)<span class="question-mark">?</span>;
+<a href=#917 id=917 data-nosnippet>917</a>        .get(<span class="string">"get_ext"</span>, |<span class="kw">_</span>, state| {
+<a href=#918 id=918 data-nosnippet>918</a>            <span class="kw">async move </span>{ state.module_state.load_latest().map_err(Error::internal) }.boxed()
+<a href=#919 id=919 data-nosnippet>919</a>        })
+<a href=#920 id=920 data-nosnippet>920</a>        .unwrap()
+<a href=#921 id=921 data-nosnippet>921</a>        .post(<span class="string">"post_ext"</span>, |req, state| {
+<a href=#922 id=922 data-nosnippet>922</a>            <span class="kw">async move </span>{
 <a href=#923 id=923 data-nosnippet>923</a>                state
 <a href=#924 id=924 data-nosnippet>924</a>                    .module_state
-<a href=#925 id=925 data-nosnippet>925</a>                    .commit_version()
+<a href=#925 id=925 data-nosnippet>925</a>                    .store_resource(<span class="kw-2">&amp;</span>req.integer_param(<span class="string">"val"</span>).map_err(Error::internal)<span class="question-mark">?</span>)
 <a href=#926 id=926 data-nosnippet>926</a>                    .map_err(Error::internal)<span class="question-mark">?</span>;
 <a href=#927 id=927 data-nosnippet>927</a>                state
-<a href=#928 id=928 data-nosnippet>928</a>                    .hotshot_qs
-<a href=#929 id=929 data-nosnippet>929</a>                    .skip_version()
-<a href=#930 id=930 data-nosnippet>930</a>                    .<span class="kw">await
-<a href=#931 id=931 data-nosnippet>931</a>                    </span>.map_err(Error::internal)<span class="question-mark">?</span>;
-<a href=#932 id=932 data-nosnippet>932</a>                state.store.commit_version().map_err(Error::internal)
-<a href=#933 id=933 data-nosnippet>933</a>            }
-<a href=#934 id=934 data-nosnippet>934</a>            .boxed()
-<a href=#935 id=935 data-nosnippet>935</a>        })
-<a href=#936 id=936 data-nosnippet>936</a>        .unwrap();
-<a href=#937 id=937 data-nosnippet>937</a>
-<a href=#938 id=938 data-nosnippet>938</a>        <span class="kw">let </span>port = reserve_tcp_port().unwrap();
-<a href=#939 id=939 data-nosnippet>939</a>        <span class="kw">let </span>_server = BackgroundTask::spawn(
-<a href=#940 id=940 data-nosnippet>940</a>            <span class="string">"server"</span>,
-<a href=#941 id=941 data-nosnippet>941</a>            app.serve(<span class="macro">format!</span>(<span class="string">"0.0.0.0:{port}"</span>), MockBase::instance()),
-<a href=#942 id=942 data-nosnippet>942</a>        );
-<a href=#943 id=943 data-nosnippet>943</a>
-<a href=#944 id=944 data-nosnippet>944</a>        <span class="kw">let </span>client =
-<a href=#945 id=945 data-nosnippet>945</a>            Client::&lt;Error, MockBase&gt;::new(<span class="macro">format!</span>(<span class="string">"http://localhost:{port}"</span>).parse().unwrap());
-<a href=#946 id=946 data-nosnippet>946</a>        <span class="macro">assert!</span>(client.connect(<span class="prelude-val">Some</span>(Duration::from_secs(<span class="number">60</span>))).<span class="kw">await</span>);
+<a href=#928 id=928 data-nosnippet>928</a>                    .module_state
+<a href=#929 id=929 data-nosnippet>929</a>                    .commit_version()
+<a href=#930 id=930 data-nosnippet>930</a>                    .map_err(Error::internal)<span class="question-mark">?</span>;
+<a href=#931 id=931 data-nosnippet>931</a>                state
+<a href=#932 id=932 data-nosnippet>932</a>                    .hotshot_qs
+<a href=#933 id=933 data-nosnippet>933</a>                    .skip_version()
+<a href=#934 id=934 data-nosnippet>934</a>                    .<span class="kw">await
+<a href=#935 id=935 data-nosnippet>935</a>                    </span>.map_err(Error::internal)<span class="question-mark">?</span>;
+<a href=#936 id=936 data-nosnippet>936</a>                state.store.commit_version().map_err(Error::internal)
+<a href=#937 id=937 data-nosnippet>937</a>            }
+<a href=#938 id=938 data-nosnippet>938</a>            .boxed()
+<a href=#939 id=939 data-nosnippet>939</a>        })
+<a href=#940 id=940 data-nosnippet>940</a>        .unwrap();
+<a href=#941 id=941 data-nosnippet>941</a>
+<a href=#942 id=942 data-nosnippet>942</a>        <span class="kw">let </span>port = reserve_tcp_port().unwrap();
+<a href=#943 id=943 data-nosnippet>943</a>        <span class="kw">let </span>_server = BackgroundTask::spawn(
+<a href=#944 id=944 data-nosnippet>944</a>            <span class="string">"server"</span>,
+<a href=#945 id=945 data-nosnippet>945</a>            app.serve(<span class="macro">format!</span>(<span class="string">"0.0.0.0:{port}"</span>), MockBase::instance()),
+<a href=#946 id=946 data-nosnippet>946</a>        );
 <a href=#947 id=947 data-nosnippet>947</a>
-<a href=#948 id=948 data-nosnippet>948</a>        client.post::&lt;()&gt;(<span class="string">"mod/ext/42"</span>).send().<span class="kw">await</span>.unwrap();
-<a href=#949 id=949 data-nosnippet>949</a>        <span class="macro">assert_eq!</span>(client.get::&lt;u64&gt;(<span class="string">"mod/ext"</span>).send().<span class="kw">await</span>.unwrap(), <span class="number">42</span>);
-<a href=#950 id=950 data-nosnippet>950</a>
-<a href=#951 id=951 data-nosnippet>951</a>        <span class="comment">// Check that we can still access the built-in modules.
-<a href=#952 id=952 data-nosnippet>952</a>        </span><span class="macro">assert_eq!</span>(
-<a href=#953 id=953 data-nosnippet>953</a>            client
-<a href=#954 id=954 data-nosnippet>954</a>                .get::&lt;u64&gt;(<span class="string">"status/block-height"</span>)
-<a href=#955 id=955 data-nosnippet>955</a>                .send()
-<a href=#956 id=956 data-nosnippet>956</a>                .<span class="kw">await
-<a href=#957 id=957 data-nosnippet>957</a>                </span>.unwrap(),
-<a href=#958 id=958 data-nosnippet>958</a>            <span class="number">1
-<a href=#959 id=959 data-nosnippet>959</a>        </span>);
-<a href=#960 id=960 data-nosnippet>960</a>        <span class="kw">let </span>sync_status: SyncStatusQueryData = client.get(<span class="string">"node/sync-status"</span>).send().<span class="kw">await</span>.unwrap();
-<a href=#961 id=961 data-nosnippet>961</a>        <span class="macro">assert_eq!</span>(sync_status.blocks.missing, <span class="number">0</span>);
-<a href=#962 id=962 data-nosnippet>962</a>        <span class="macro">assert_eq!</span>(sync_status.leaves.missing, <span class="number">0</span>);
-<a href=#963 id=963 data-nosnippet>963</a>        <span class="macro">assert_eq!</span>(sync_status.vid_common.missing, <span class="number">1</span>);
-<a href=#964 id=964 data-nosnippet>964</a>
-<a href=#965 id=965 data-nosnippet>965</a>        <span class="macro">assert_eq!</span>(
-<a href=#966 id=966 data-nosnippet>966</a>            client
-<a href=#967 id=967 data-nosnippet>967</a>                .get::&lt;MockHeader&gt;(<span class="string">"availability/header/0"</span>)
-<a href=#968 id=968 data-nosnippet>968</a>                .send()
-<a href=#969 id=969 data-nosnippet>969</a>                .<span class="kw">await
-<a href=#970 id=970 data-nosnippet>970</a>                </span>.unwrap()
-<a href=#971 id=971 data-nosnippet>971</a>                .block_number,
-<a href=#972 id=972 data-nosnippet>972</a>            <span class="number">0
-<a href=#973 id=973 data-nosnippet>973</a>        </span>);
-<a href=#974 id=974 data-nosnippet>974</a>    }
-<a href=#975 id=975 data-nosnippet>975</a>}
+<a href=#948 id=948 data-nosnippet>948</a>        <span class="kw">let </span>client =
+<a href=#949 id=949 data-nosnippet>949</a>            Client::&lt;Error, MockBase&gt;::new(<span class="macro">format!</span>(<span class="string">"http://localhost:{port}"</span>).parse().unwrap());
+<a href=#950 id=950 data-nosnippet>950</a>        <span class="macro">assert!</span>(client.connect(<span class="prelude-val">Some</span>(Duration::from_secs(<span class="number">60</span>))).<span class="kw">await</span>);
+<a href=#951 id=951 data-nosnippet>951</a>
+<a href=#952 id=952 data-nosnippet>952</a>        client.post::&lt;()&gt;(<span class="string">"mod/ext/42"</span>).send().<span class="kw">await</span>.unwrap();
+<a href=#953 id=953 data-nosnippet>953</a>        <span class="macro">assert_eq!</span>(client.get::&lt;u64&gt;(<span class="string">"mod/ext"</span>).send().<span class="kw">await</span>.unwrap(), <span class="number">42</span>);
+<a href=#954 id=954 data-nosnippet>954</a>
+<a href=#955 id=955 data-nosnippet>955</a>        <span class="comment">// Check that we can still access the built-in modules.
+<a href=#956 id=956 data-nosnippet>956</a>        </span><span class="macro">assert_eq!</span>(
+<a href=#957 id=957 data-nosnippet>957</a>            client
+<a href=#958 id=958 data-nosnippet>958</a>                .get::&lt;u64&gt;(<span class="string">"status/block-height"</span>)
+<a href=#959 id=959 data-nosnippet>959</a>                .send()
+<a href=#960 id=960 data-nosnippet>960</a>                .<span class="kw">await
+<a href=#961 id=961 data-nosnippet>961</a>                </span>.unwrap(),
+<a href=#962 id=962 data-nosnippet>962</a>            <span class="number">1
+<a href=#963 id=963 data-nosnippet>963</a>        </span>);
+<a href=#964 id=964 data-nosnippet>964</a>        <span class="kw">let </span>sync_status: SyncStatusQueryData = client.get(<span class="string">"node/sync-status"</span>).send().<span class="kw">await</span>.unwrap();
+<a href=#965 id=965 data-nosnippet>965</a>        <span class="macro">assert_eq!</span>(sync_status.blocks.missing, <span class="number">0</span>);
+<a href=#966 id=966 data-nosnippet>966</a>        <span class="macro">assert_eq!</span>(sync_status.leaves.missing, <span class="number">0</span>);
+<a href=#967 id=967 data-nosnippet>967</a>        <span class="macro">assert_eq!</span>(sync_status.vid_common.missing, <span class="number">1</span>);
+<a href=#968 id=968 data-nosnippet>968</a>
+<a href=#969 id=969 data-nosnippet>969</a>        <span class="macro">assert_eq!</span>(
+<a href=#970 id=970 data-nosnippet>970</a>            client
+<a href=#971 id=971 data-nosnippet>971</a>                .get::&lt;MockHeader&gt;(<span class="string">"availability/header/0"</span>)
+<a href=#972 id=972 data-nosnippet>972</a>                .send()
+<a href=#973 id=973 data-nosnippet>973</a>                .<span class="kw">await
+<a href=#974 id=974 data-nosnippet>974</a>                </span>.unwrap()
+<a href=#975 id=975 data-nosnippet>975</a>                .block_number,
+<a href=#976 id=976 data-nosnippet>976</a>            <span class="number">0
+<a href=#977 id=977 data-nosnippet>977</a>        </span>);
+<a href=#978 id=978 data-nosnippet>978</a>    }
+<a href=#979 id=979 data-nosnippet>979</a>}
 </code></pre></div></section></main></body></html>
