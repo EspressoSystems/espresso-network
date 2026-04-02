@@ -1164,22 +1164,20 @@ impl Fetcher {
         Ok(RewardAmount(reward))
     }
 
-    /// This function fetches and updates the initial token supply.
-    /// It fetches the initial supply from the token contract.
+    /// Fetches and updates the initial token supply.
     ///
-    /// - We now rely on the `Initialized` event of the token contract (which should only occur once).
-    /// - After locating this event, we fetch its transaction receipt and look for a decoded `Transfer` log
+    /// - Locates the `Initialized` event of the token contract (emitted only once).
+    /// - Queries `Transfer` events in the same block, matching by transaction hash and
+    ///   `from == address(0)` to find the initial mint.
     /// - If either step fails, the function aborts to prevent incorrect reward calculations.
     ///
-    /// Relying on mint events directly e.g., searching for mints from the zero address is prone to errors
-    /// because in future when reward withdrawals are supported, there might be more than one mint transfer logs from
-    /// zero address
+    /// This avoids fetching transaction receipts, which may be unavailable on pruned L1 nodes.
     ///
     /// The ESP token contract itself does not expose the initialization block
-    /// but the stake table contract does
+    /// but the stake table contract does.
     /// The stake table contract is deployed after the token contract as it holds the token
-    /// contract address. We use the stake table contract initialization block as a safe upper bound when scanning
-    ///  backwards for the token contract initialization event
+    /// contract address. We use the stake table contract initialization block as a safe upper bound
+    /// when scanning backwards for the token contract initialization event.
     pub async fn fetch_and_update_initial_supply(&self) -> Result<U256, FetchRewardError> {
         tracing::info!("Fetching token initial supply");
         let chain_config = *self.chain_config.lock().await;
@@ -1213,12 +1211,8 @@ impl Fetcher {
 
         let token = EspToken::new(token_address, provider.clone());
 
-        // Try to fetch the `Initialized` event directly. This event is emitted only once,
-        // during the token contract initialization. The initialization transaction also transfers initial supply minted
-        // from the zero address. Since the result set is small (a single event),
-        // most RPC providers like Infura and Alchemy allow querying across the full block range
-        // If this fails because provider does not allow the query due to rate limiting (or some other error), we fall
-        // back to scanning over a fixed block range.
+        // Fetch the `Initialized` event (emitted once during token contract init).
+        // Falls back to scanning over a fixed block range if the full-range query fails.
         let init_logs = token
             .Initialized_filter()
             .from_block(0u64)
@@ -1244,41 +1238,44 @@ impl Fetcher {
                 tracing::warn!(
                     "RPC returned error {err:?}. will fallback to scanning over fixed block range"
                 );
-                self.scan_token_contract_initialized_event_log(stake_table_init_block, token)
-                    .await?
+                self.scan_token_contract_initialized_event_log(
+                    stake_table_init_block,
+                    token.clone(),
+                )
+                .await?
             },
         };
 
-        // Get the transaction that emitted the Initialized event
-        let tx_hash =
+        let init_block = init_log
+            .block_number
+            .ok_or(FetchRewardError::MissingBlockNumber)?;
+
+        let init_tx_hash =
             init_log
                 .transaction_hash
                 .ok_or_else(|| FetchRewardError::MissingTransactionHash {
                     init_log: init_log.clone().into(),
                 })?;
 
-        // Get the transaction that emitted the Initialized event.
-        // Use `get_transaction_receipt_all_providers` instead of `get_transaction_receipt` so that
-        // if the current L1 provider doesn't have the receipt
-        // it will automatically fail over to the next provider and retry.
-        let init_tx = self
-            .l1_client
-            .get_transaction_receipt_all_providers(tx_hash)
+        // Query Transfer events in the initialization block instead of fetching
+        // the transaction receipt, which pruned L1 nodes may not have.
+        // Match by transaction hash to scope to the exact initialization tx.
+        let transfer_logs = token
+            .Transfer_filter()
+            .from_block(init_block)
+            .to_block(init_block)
+            .query()
             .await
-            .map_err(|err| FetchRewardError::MissingTransactionReceipt {
-                tx_hash: format!("{tx_hash}: {err:#}"),
-            })?;
+            .map_err(FetchRewardError::TransferEventQuery)?;
 
-        let mint_transfer = init_tx.decoded_log::<EspToken::Transfer>().ok_or(
-            FetchRewardError::DecodeTransferLog {
-                tx_hash: tx_hash.to_string(),
-            },
-        )?;
+        let (mint_transfer, _) = transfer_logs
+            .iter()
+            .find(|(transfer, log)| {
+                log.transaction_hash == Some(init_tx_hash) && transfer.from == Address::ZERO
+            })
+            .ok_or(FetchRewardError::MissingTransferEvent)?;
 
         tracing::debug!("mint transfer event ={mint_transfer:?}");
-        if mint_transfer.from != Address::ZERO {
-            return Err(FetchRewardError::InvalidMintFromAddress);
-        }
 
         let initial_supply = mint_transfer.value;
 
