@@ -7,7 +7,9 @@ use hotshot_types::{
 use super::common::{harness::TestHarness, utils::TestData};
 use crate::{
     consensus::ConsensusInput,
-    message::{EpochChangeMessage, Proposal, ProposalMessage},
+    message::{
+        ConsensusMessage, EpochChangeMessage, Message, MessageType, Proposal, ProposalMessage,
+    },
     tests::common::assertions::{
         any, count_matching, has_epoch_change, is_block_built, is_block_reconstructed, is_cert1,
         is_cert2, is_drb_result, is_header_created, is_leaf_decided, is_proposal,
@@ -46,19 +48,6 @@ async fn send_proposal_and_vote1s(
                         && any(inputs, is_block_reconstructed)
                         && any(inputs, is_state_validated)
             },
-            |inputs| any(inputs, is_timeout),
-        )
-        .await;
-}
-
-async fn send_vote1s(harness: &mut TestHarness, test_data: &TestData, view_idx: usize) {
-    let test_view = &test_data.views[view_idx];
-    for i in 0..THRESHOLD {
-        harness.message(test_view.vote1_input(i)).await;
-    }
-    harness
-        .process_until(
-            |inputs| any(inputs, is_cert1),
             |inputs| any(inputs, is_timeout),
         )
         .await;
@@ -326,9 +315,9 @@ async fn test_leader_proposes_after_timeout_via_cpu_tasks() {
     harness
         .process_until(
             |inputs| {
-                (any(inputs, is_vid_disperse)
+                any(inputs, is_vid_disperse)
                     && any(inputs, is_block_built)
-                    && any(inputs, is_header_created))
+                    && any(inputs, is_header_created)
             },
             |inputs| any(inputs, is_timeout),
         )
@@ -473,8 +462,9 @@ async fn cross_epoch_boundary(
         .apply_and_process(ConsensusInput::EpochChange(epoch_change))
         .await;
 
-    // First block of the new epoch — must be fed directly with
-    // next_epoch_justify_qc because the Proposal conversion drops it.
+    // First block of the new epoch — construct with next_epoch_justify_qc
+    // and send as a network message so the full pipeline (ProposalValidator,
+    // VidReconstructor, StateManager) handles it naturally.
     let first_view = &test_data.views[boundary_idx + 1];
     let mut first_proposal: Proposal<TestTypes> = first_view.proposal.data.clone().into();
     first_proposal.epoch = EpochNumber::new(new_epoch);
@@ -491,30 +481,17 @@ async fn cross_epoch_boundary(
         .find(|s| s.recipient_key == *node_key)
         .expect("VID share not found")
         .clone();
+
+    let proposal_msg = ProposalMessage::validated(signed, vid_share);
     harness
-        .apply_and_process(ConsensusInput::Proposal(ProposalMessage::validated(
-            signed, vid_share,
-        )))
+        .message(Message {
+            sender: first_view.leader_public_key,
+            message_type: MessageType::Consensus(ConsensusMessage::Proposal(proposal_msg)),
+        })
         .await;
 
-    // Wait for state validation (the proposal was fed directly so the
-    // VidReconstructor has no shares — we feed block_reconstructed manually).
-    harness
-        .process_until(
-            |inputs| any(inputs, is_state_validated),
-            |inputs| any(inputs, is_timeout),
-        )
-        .await;
-
-    // Feed block_reconstructed manually since VidReconstructor wasn't
-    // involved for the directly-applied proposal.
-    harness
-        .apply_and_process(first_view.block_reconstructed_input())
-        .await;
-
-    // Send vote1s for cert1 formation (the proposal is already stored so
-    // the duplicate via send_proposal_and_vote1s is harmlessly rejected).
-    send_vote1s(harness, test_data, boundary_idx + 1).await;
+    // Send vote1s and vote2s through the normal pipeline.
+    send_proposal_and_vote1s(harness, test_data, boundary_idx + 1, node_key).await;
     send_vote2s(harness, test_data, boundary_idx + 1).await;
 }
 
