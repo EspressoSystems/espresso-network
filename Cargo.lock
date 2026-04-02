@@ -6173,6 +6173,7 @@ dependencies = [
 name = "hotshot-new-protocol"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "async-broadcast",
  "async-lock 3.4.2",
  "async-trait",
@@ -6185,6 +6186,7 @@ dependencies = [
  "hotshot-types",
  "hotshot-utils",
  "serde",
+ "serde_bytes",
  "thiserror 2.0.18",
  "time 0.3.47",
  "tokio",

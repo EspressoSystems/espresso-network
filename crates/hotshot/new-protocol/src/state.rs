@@ -6,10 +6,7 @@ use std::{
 use committable::{Commitment, Committable};
 use hotshot::traits::{BlockPayload, ValidatedState};
 use hotshot_types::{
-    data::{
-        BlockNumber, EpochNumber, Leaf2, QuorumProposal2, QuorumProposalWrapper, VidCommitment,
-        ViewNumber,
-    },
+    data::{BlockNumber, EpochNumber, Leaf2, VidCommitment, ViewNumber},
     traits::{
         block_contents::{BlockHeader, BuilderFee},
         node_implementation::NodeType,
@@ -20,7 +17,10 @@ use hotshot_types::{
 use tokio::task::{AbortHandle, JoinSet};
 use tracing::{error, warn};
 
-use crate::helpers::{proposal_commitment, upgrade_lock};
+use crate::{
+    helpers::{proposal_commitment, upgrade_lock},
+    message::Proposal,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StateRequest<T: NodeType> {
@@ -28,7 +28,7 @@ pub struct StateRequest<T: NodeType> {
     pub parent_view: ViewNumber,
     pub epoch: EpochNumber,
     pub block: BlockNumber,
-    pub proposal: QuorumProposal2<T>,
+    pub proposal: Proposal<T>,
     pub parent_commitment: Commitment<Leaf2<T>>,
     pub payload_size: u32,
 }
@@ -37,7 +37,7 @@ pub struct StateRequest<T: NodeType> {
 pub struct HeaderRequest<T: NodeType> {
     pub view: ViewNumber,
     pub epoch: EpochNumber,
-    pub parent_proposal: QuorumProposal2<T>,
+    pub parent_proposal: Proposal<T>,
     pub payload_commitment: VidCommitment,
     pub builder_commitment: BuilderCommitment,
     pub metadata: <T::BlockPayload as BlockPayload<T>>::Metadata,
@@ -55,7 +55,7 @@ pub struct StateResponse<T: NodeType> {
 pub struct HeaderResponse<T: NodeType> {
     pub view: ViewNumber,
     pub epoch: EpochNumber,
-    pub parent_proposal: QuorumProposal2<T>,
+    pub parent_proposal: Proposal<T>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -162,9 +162,7 @@ impl<T: NodeType> StateManager<T> {
             match result {
                 Ok(response) => Completed::State {
                     response,
-                    leaf: Some(Leaf2::from_quorum_proposal(&QuorumProposalWrapper {
-                        proposal: request.proposal,
-                    })),
+                    leaf: Some(request.proposal.into()),
                 },
                 Err(err) => {
                     warn!(%err, "state validation failed");
@@ -332,15 +330,10 @@ impl<T: NodeType> StateManager<T> {
         }
     }
 
-    fn insert_empty_state(&mut self, proposal: QuorumProposal2<T>) {
+    fn insert_empty_state(&mut self, proposal: Proposal<T>) {
         let state = T::ValidatedState::from_header(&proposal.block_header);
-        self.validated_states.insert(
-            proposal.view_number(),
-            (
-                Arc::new(state),
-                Leaf2::from_quorum_proposal(&QuorumProposalWrapper::<T> { proposal }),
-            ),
-        );
+        self.validated_states
+            .insert(proposal.view_number(), (Arc::new(state), proposal.into()));
     }
 
     #[cfg(test)]
