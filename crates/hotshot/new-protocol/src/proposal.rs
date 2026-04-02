@@ -79,10 +79,10 @@ impl<T: NodeType> Validator<T> {
             if commitment == vid.payload_commitment {
                 Ok(())
             } else {
-                Err(ValidationError::InvalidVidCommitmentVersion)
+                Err(ValidationError::VidCommitmentDoesNotMatchProposal)
             }
         } else {
-            Err(ValidationError::VidCommitmentDoesNotMatchProposal)
+            Err(ValidationError::InvalidVidCommitmentVersion)
         }
     }
 
