@@ -1,5 +1,6 @@
 pub mod block;
 pub mod consensus;
+pub mod consensus_handle;
 pub mod coordinator;
 pub mod drb;
 pub mod helpers;

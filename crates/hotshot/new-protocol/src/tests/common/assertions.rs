@@ -13,7 +13,7 @@ pub(crate) fn is_vote2(output: &ConsensusOutput<TestTypes>) -> bool {
 }
 
 pub(crate) fn is_leaf_decided(output: &ConsensusOutput<TestTypes>) -> bool {
-    matches!(output, ConsensusOutput::LeafDecided(_))
+    matches!(output, ConsensusOutput::LeafDecided { .. })
 }
 
 pub(crate) fn is_request_state(output: &ConsensusOutput<TestTypes>) -> bool {

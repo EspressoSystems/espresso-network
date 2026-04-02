@@ -1,6 +1,10 @@
 pub mod error;
 pub(crate) mod timer;
 
+use std::{sync::Arc, time::Duration};
+
+use async_broadcast::Sender as EventSender;
+use async_lock::{Mutex, RwLock};
 use bon::Builder;
 use hotshot::traits::NodeImplementation;
 use hotshot_types::{
@@ -8,20 +12,27 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     simple_certificate::{QuorumCertificate2, TimeoutCertificate2},
     simple_vote::{HasEpoch, QuorumVote2, TimeoutVote2},
-    traits::{block_contents::BlockHeader, node_implementation::NodeType},
+    traits::{
+        block_contents::BlockHeader,
+        node_implementation::NodeType,
+        signature_key::SignatureKey,
+        storage::{LoadDrbProgressFn, StoreDrbProgressFn},
+    },
     vote::HasViewNumber,
 };
 use tokio::select;
 use tracing::{error, warn};
 
 use crate::{
-    block::BlockBuilder,
+    block::{BlockBuilder, BlockBuilderConfig},
     consensus::{Consensus, ConsensusInput, ConsensusOutput},
+    consensus_handle::{ConsensusEvent, event_from_output},
     coordinator::{
         error::{CoordinatorError, ErrorSource, Severity},
         timer::Timer,
     },
     drb::DrbRequester,
+    helpers::upgrade_lock,
     message::{
         BlockMessage, Certificate2, CheckpointCertificate, CheckpointVote, ConsensusMessage,
         Message, MessageType, ProposalMessage, TransactionMessage, Unchecked, Vote2,
@@ -37,9 +48,9 @@ use crate::{
 #[derive(Builder)]
 pub struct Coordinator<T: NodeType, I: NodeImplementation<T>> {
     membership_coordinator: EpochMembershipCoordinator<T>,
-    consensus: Consensus<T>,
+    consensus: Arc<RwLock<Consensus<T>>>,
     network: Network<T, I::Network>,
-    state_manager: StateManager<T>,
+    state_manager: Arc<Mutex<StateManager<T>>>,
     vid_disperser: VidDisperser<T>,
     vid_reconstructor: VidReconstructor<T>,
     vote1_collector: VoteCollector<T, QuorumVote2<T>, QuorumCertificate2<T>>,
@@ -56,10 +67,60 @@ pub struct Coordinator<T: NodeType, I: NodeImplementation<T>> {
 }
 
 impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
+    pub fn new(
+        membership_coordinator: EpochMembershipCoordinator<T>,
+        network: I::Network,
+        instance_state: Arc<T::InstanceState>,
+        public_key: T::SignatureKey,
+        private_key: <T::SignatureKey as SignatureKey>::PrivateKey,
+        store_drb_progress: StoreDrbProgressFn,
+        load_drb_progress: LoadDrbProgressFn,
+        timeout_duration: Duration,
+    ) -> Self {
+        let consensus = Arc::new(RwLock::new(Consensus::new(
+            membership_coordinator.clone(),
+            public_key.clone(),
+            private_key,
+        )));
+        let state_manager = Arc::new(Mutex::new(StateManager::new(instance_state.clone())));
+
+        // TODO:
+        let lock = upgrade_lock();
+        Self::builder()
+            .consensus(consensus)
+            .network(Network::new(network, membership_coordinator.clone(), lock.clone()))
+            .state_manager(state_manager)
+            .vid_disperser(VidDisperser::new(membership_coordinator.clone()))
+            .vid_reconstructor(VidReconstructor::new())
+            .vote1_collector(VoteCollector::new(membership_coordinator.clone(), lock.clone()))
+            .vote2_collector(VoteCollector::new(membership_coordinator.clone(), lock.clone()))
+            .timeout_collector(VoteCollector::new(membership_coordinator.clone(), lock.clone()))
+            .checkpoint_collector(VoteCollector::new(membership_coordinator.clone(), lock))
+            .drb_requester(DrbRequester::new(store_drb_progress, load_drb_progress))
+            .block_builder(BlockBuilder::new(
+                instance_state,
+                membership_coordinator.clone(),
+                BlockBuilderConfig::default(),
+            ))
+            .proposal_validator(ProposalValidator::new(membership_coordinator.clone()))
+            .membership_coordinator(membership_coordinator)
+            .timer(Timer::new(timeout_duration, ViewNumber::genesis()))
+            .public_key(public_key)
+            .build()
+    }
+
+    pub fn consensus(&self) -> Arc<RwLock<Consensus<T>>> {
+        self.consensus.clone()
+    }
+
+    pub fn state_manager(&self) -> Arc<Mutex<StateManager<T>>> {
+        self.state_manager.clone()
+    }
+
     /// Convenience method to run the coordinator event loop.
     ///
     /// Combines `next_consensus_input`, `apply_consensus` and outbox processing.
-    pub async fn run(mut self) {
+    pub async fn run(mut self, event_sender: EventSender<ConsensusEvent<T>>) {
         loop {
             match self.next_consensus_input().await {
                 Ok(input) => self.apply_consensus(input).await,
@@ -72,6 +133,13 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                 },
             }
             while let Some(output) = self.outbox.pop_front() {
+                
+                if let Some(event) = event_from_output(&output) {
+                    if let Err(err) = event_sender.try_broadcast(event) {
+                        tracing::info!(%err, "failed to broadcast consensus event");
+                    }
+                }
+
                 if let Err(err) = self.process_consensus_output(output).await {
                     if err.severity == Severity::Critical {
                         error!(%err, "while processing consensus output");
@@ -102,7 +170,7 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                     self.timer.reset();
                     return Ok(input)
                 }
-                Some(output) = self.state_manager.next() => {
+                Some(output) = async { self.state_manager.lock().await.next().await } => {
                     if let Some(input) = self.on_state_manager_output(output).await {
                         return Ok(input)
                     }
@@ -121,6 +189,10 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                         let s = p.vid_share.clone();
                         let m = p.proposal.data.block_header.metadata().clone();
                         self.vid_reconstructor.handle_vid_share(s, m);
+                        self.outbox.push_back(ConsensusOutput::ProposalReceived {
+                            proposal: p.proposal.clone(),
+                            sender: p.sender.clone(),
+                        });
                         return Ok(ConsensusInput::Proposal(p))
                     }
                     Err(e) => {
@@ -132,11 +204,14 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                         let msg = format!("missing epoch in view {}", cert.view_number());
                         return Err(CoordinatorError::critical(msg).context("gc certificate"))
                     };
-                    self.gc(cert.view_number(), epoch);
+                    self.gc(cert.view_number(), epoch).await;
                 }
                 Some(item) = self.block_builder.next() => match item {
                     Ok(block) => {
-                        self.state_manager.request_header(HeaderRequest::from(&block));
+                        self.state_manager
+                            .lock()
+                            .await
+                            .request_header(HeaderRequest::from(&block));
                         let next_view = block.view + 1;
                         let epoch = block.epoch;
                         let manifest = block.manifest.clone();
@@ -180,7 +255,11 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
     }
 
     pub async fn apply_consensus(&mut self, input: ConsensusInput<T>) {
-        self.consensus.apply(input, &mut self.outbox).await;
+        self.consensus
+            .write()
+            .await
+            .apply(input, &mut self.outbox)
+            .await;
     }
 
     pub fn outbox(&self) -> &Outbox<ConsensusOutput<T>> {
@@ -224,7 +303,7 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
         match message.message_type {
             MessageType::Consensus(msg) => match msg {
                 ConsensusMessage::Proposal(p) => {
-                    self.proposal_validator.validate(p);
+                    self.proposal_validator.validate(p, message.sender.clone());
                     None
                 },
                 ConsensusMessage::Vote1(vote1) => {
@@ -266,7 +345,13 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                 None
             },
             MessageType::ViewSync(_) => todo!(),
-            MessageType::External(_) => todo!(),
+            MessageType::External(data) => {
+                self.outbox.push_back(ConsensusOutput::ExternalMessageReceived {
+                    sender: message.sender,
+                    data,
+                });
+                None
+            },
         }
     }
 
@@ -276,7 +361,7 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
     ) -> Result<(), CoordinatorError> {
         match output {
             ConsensusOutput::RequestState(state_request) => {
-                self.state_manager.request_state(state_request);
+                self.state_manager.lock().await.request_state(state_request);
             },
             ConsensusOutput::RequestVidDisperse {
                 view,
@@ -308,8 +393,8 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
             },
             ConsensusOutput::Certificate1Formed(_) => {}, // TODO
             ConsensusOutput::Certificate2Formed(_) => {}, // TODO
-            ConsensusOutput::LeafDecided(_) => {},        // TODO
-            ConsensusOutput::LockUpdated(_) => {},        // TODO
+            ConsensusOutput::LeafDecided { .. } => {},
+            ConsensusOutput::LockUpdated(_) => {}, // TODO
             ConsensusOutput::RequestBlockAndHeader(request) => {
                 self.block_builder.request_block(request);
             },
@@ -322,7 +407,7 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                     let message = Message {
                         sender: self.public_key.clone(),
                         message_type: MessageType::Consensus(ConsensusMessage::Proposal(
-                            ProposalMessage::validated(proposal.clone(), vid_share),
+                            ProposalMessage::validated(self.public_key.clone(), proposal.clone(), vid_share),
                         )),
                     };
                     if let Err(err) = self.network.unicast(recipient_key, message).await {
@@ -367,7 +452,10 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
             },
             ConsensusOutput::TimeoutCertificateReceived(..) => {}, // TODO
             ConsensusOutput::ViewSyncCertificateReceived(_) => {}, // TODO
+            ConsensusOutput::ProposalReceived { .. } => {},
+            ConsensusOutput::ExternalMessageReceived { .. } => {},
             ConsensusOutput::ViewChanged(view, epoch) => {
+                self.consensus.write().await.set_view(view, epoch);
                 self.timer.reset_with(view);
                 let txns = self.block_builder.on_view_changed(view, epoch);
                 if !txns.is_empty() {
@@ -417,11 +505,11 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
         membership.leader(view).await.ok()
     }
 
-    fn gc(&mut self, view: ViewNumber, epoch: EpochNumber) {
-        self.consensus.gc(view, epoch);
+    async fn gc(&mut self, view: ViewNumber, epoch: EpochNumber) {
+        self.consensus.write().await.gc(view, epoch);
         self.checkpoint_collector.gc(view);
         self.network.gc(view, epoch);
-        self.state_manager.gc(view);
+        self.state_manager.lock().await.gc(view);
         self.vid_disperser.gc(view);
         self.vid_reconstructor.gc(view);
         self.vote1_collector.gc(view);

@@ -86,7 +86,7 @@ impl TestView {
             .find(|s| s.recipient_key == *recipient_key)
             .expect("VID share not found for recipient key")
             .clone();
-        ProposalMessage::validated(inner_proposal, vid_share)
+        ProposalMessage::validated(self.leader_public_key, inner_proposal, vid_share)
     }
 
     /// Get the VidCommitment2 for this view (for BlockReconstructed events).
@@ -398,6 +398,7 @@ pub fn state_verified_input(
         view,
         commitment,
         state: Arc::new(state),
+        delta: None,
     })
 }
 

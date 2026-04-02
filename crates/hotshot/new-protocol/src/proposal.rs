@@ -23,13 +23,13 @@ impl<T: NodeType> ProposalValidator<T> {
         }
     }
 
-    pub fn validate(&mut self, p: ProposalMessage<T, Unchecked>) {
+    pub fn validate(&mut self, p: ProposalMessage<T, Unchecked>, sender: T::SignatureKey) {
         let stake_table_coordinator = self.stake_table_coordinator.clone();
         self.tasks.spawn(async move {
             p.proposal
                 .validate_signature(&stake_table_coordinator)
                 .await?;
-            Ok(ProposalMessage::validated(p.proposal, p.vid_share))
+            Ok(ProposalMessage::validated(sender, p.proposal, p.vid_share))
         });
     }
 

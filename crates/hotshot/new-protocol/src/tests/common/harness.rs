@@ -1,5 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
+use async_lock::{Mutex, RwLock};
 use hotshot::types::BLSPubKey;
 use hotshot_example_types::{
     node_types::{TEST_VERSIONS, TestTypes},
@@ -77,9 +78,9 @@ impl TestHarness {
         let network = Network::new(MockNetwork::default(), membership.clone(), upgrade_lock());
 
         let coordinator = MockCoordinator::builder()
-            .consensus(consensus)
+            .consensus(Arc::new(RwLock::new(consensus)))
             .network(network)
-            .state_manager(state_manager)
+            .state_manager(Arc::new(Mutex::new(state_manager)))
             .vote1_collector(vote1_task)
             .vote2_collector(vote2_task)
             .timeout_collector(timeout_collector)
