@@ -1,0 +1,424 @@
+//! This file contains the [`DataSource`] trait. This trait allows the [`RequestResponseProtocol`]
+//! to calculate/derive a response for a specific request. In the confirmation layer the implementer
+//! would be something like a [`FeeMerkleTree`] for fee catchup
+
+use std::{marker::PhantomData, sync::Arc};
+
+use anyhow::{Context, Result, bail};
+use async_trait::async_trait;
+use espresso_types::{
+    NodeState, PubKey, SeqTypes, retain_accounts,
+    traits::SequencerPersistence,
+    v0_3::{RewardAccountV1, RewardMerkleTreeV1},
+    v0_4::{RewardAccountV2, RewardMerkleTreeV2},
+};
+use hotshot::{SystemContext, traits::NodeImplementation};
+use hotshot_query_service::{
+    data_source::{
+        VersionedDataSource,
+        storage::{FileSystemStorage, NodeStorage, SqlStorage},
+    },
+    node::BlockId,
+};
+use hotshot_types::{data::ViewNumber, traits::network::ConnectedNetwork, vote::HasViewNumber};
+use itertools::Itertools;
+use jf_merkle_tree_compat::{
+    ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme, LookupResult,
+    MerkleTreeScheme, UniversalMerkleTreeScheme,
+};
+use request_response::data_source::DataSource as DataSourceTrait;
+
+use super::request::{Request, Response};
+use crate::{
+    api::{BlocksFrontier, RewardMerkleTreeDataSource, RewardMerkleTreeV2Data},
+    catchup::{
+        CatchupStorage, add_fee_accounts_to_state, add_v1_reward_accounts_to_state,
+        add_v2_reward_accounts_to_state,
+    },
+};
+
+/// Query Service Storage types that can be used for request-response data source
+#[derive(Clone)]
+pub enum Storage {
+    Sql(Arc<SqlStorage>),
+    Fs(Arc<FileSystemStorage<SeqTypes>>),
+}
+
+/// A type alias for the consensus handle
+type Consensus<I> = Arc<SystemContext<SeqTypes, I>>;
+
+#[derive(Clone)]
+pub struct DataSource<
+    I: NodeImplementation<SeqTypes>,
+    N: ConnectedNetwork<PubKey>,
+    P: SequencerPersistence,
+> {
+    /// The consensus handle
+    pub consensus: Consensus<I>,
+    /// The node's state
+    pub node_state: NodeState,
+    /// The storage
+    pub storage: Option<Storage>,
+    /// sequencer persistence
+    pub persistence: Arc<P>,
+    /// Phantom data
+    pub phantom: PhantomData<N>,
+}
+
+/// Implement the trait that allows the [`RequestResponseProtocol`] to calculate/derive a response for a specific request
+#[async_trait]
+impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerPersistence>
+    DataSourceTrait<Request> for DataSource<I, N, P>
+{
+    async fn derive_response_for(&self, request: &Request) -> Result<Response> {
+        match request {
+            Request::Accounts(height, view, accounts) => {
+                // Try to get accounts from memory first, then fall back to storage
+                if let Some(state) = self.consensus.state(ViewNumber::new(*view)).await
+                    && let Ok(accounts) =
+                        retain_accounts(&state.fee_merkle_tree, accounts.iter().copied())
+                {
+                    return Ok(Response::Accounts(accounts));
+                }
+
+                // Fall back to storage
+                let (merkle_tree, leaf) = match &self.storage {
+                    Some(Storage::Sql(storage)) => storage
+                        .get_accounts(&self.node_state, *height, ViewNumber::new(*view), accounts)
+                        .await
+                        .with_context(|| "failed to get accounts from sql storage")?,
+                    Some(Storage::Fs(_)) => bail!("fs storage not supported for accounts"),
+                    _ => bail!("storage was not initialized"),
+                };
+
+                // If we successfully fetched accounts from storage, try to add them back into the in-memory
+                // state.
+                if let Err(err) = add_fee_accounts_to_state::<N, P>(
+                    &self.consensus.consensus(),
+                    &ViewNumber::new(*view),
+                    accounts,
+                    &merkle_tree,
+                    leaf,
+                )
+                .await
+                {
+                    tracing::warn!(?view, "Cannot update fetched account state: {err:#}");
+                }
+
+                Ok(Response::Accounts(merkle_tree))
+            },
+
+            Request::Leaf(height) => {
+                // Try to get the leaves from memory first, then fall back to storage
+                let mut leaves = self.consensus.consensus().read().await.undecided_leaves();
+                leaves.sort_by_key(|l| l.view_number());
+
+                if let Some((position, mut last_leaf)) =
+                    leaves.iter().find_position(|l| l.height() == *height)
+                {
+                    let mut leaf_chain = vec![last_leaf.clone()];
+                    for leaf in leaves.iter().skip(position + 1) {
+                        if leaf.justify_qc().view_number() == last_leaf.view_number() {
+                            leaf_chain.push(leaf.clone());
+                        } else {
+                            continue;
+                        }
+                        if leaf.view_number() == last_leaf.view_number() + 1 {
+                            // one away from decide
+                            last_leaf = leaf;
+                            break;
+                        }
+                        last_leaf = leaf;
+                    }
+
+                    // Make sure we got one more leaf to confirm the decide
+                    for leaf in leaves
+                        .iter()
+                        .skip_while(|l| l.view_number() <= last_leaf.view_number())
+                    {
+                        if leaf.justify_qc().view_number() == last_leaf.view_number() {
+                            leaf_chain.push(leaf.clone());
+                            return Ok(Response::Leaf(leaf_chain));
+                        }
+                    }
+                }
+
+                // Fall back to storage
+                let leaf_chain = match &self.storage {
+                    Some(Storage::Sql(storage)) => storage
+                        .get_leaf_chain(*height)
+                        .await
+                        .with_context(|| "failed to get leaf from sql storage")?,
+                    // TODO: Actually implement FS storage for some of these
+                    Some(Storage::Fs(_)) => bail!("fs storage not supported for leaf"),
+                    _ => bail!("storage was not initialized"),
+                };
+
+                Ok(Response::Leaf(leaf_chain))
+            },
+            Request::ChainConfig(commitment) => {
+                // Try to get the chain config from memory first, then fall back to storage
+                let chain_config_from_memory = self.consensus.decided_state().await.chain_config;
+                if chain_config_from_memory.commit() == *commitment
+                    && let Some(chain_config) = chain_config_from_memory.resolve()
+                {
+                    return Ok(Response::ChainConfig(chain_config));
+                }
+
+                // Fall back to storage
+                Ok(Response::ChainConfig(match &self.storage {
+                    Some(Storage::Sql(storage)) => storage
+                        .get_chain_config(*commitment)
+                        .await
+                        .with_context(|| "failed to get chain config from sql storage")?,
+                    Some(Storage::Fs(_)) => {
+                        bail!("fs storage not supported for chain config")
+                    },
+                    _ => bail!("storage was not initialized"),
+                }))
+            },
+            Request::BlocksFrontier(height, view) => {
+                // First try to respond from memory
+                let blocks_frontier_from_memory: Option<Result<BlocksFrontier>> = self
+                    .consensus
+                    .state(ViewNumber::new(*view))
+                    .await
+                    .map(|state| {
+                        let tree = &state.block_merkle_tree;
+                        let frontier = tree.lookup(tree.num_leaves() - 1).expect_ok()?.1;
+                        Ok(frontier)
+                    });
+
+                if let Some(Ok(blocks_frontier_from_memory)) = blocks_frontier_from_memory {
+                    return Ok(Response::BlocksFrontier(blocks_frontier_from_memory));
+                } else {
+                    // If we can't get the blocks frontier from memory, fall through to storage
+                    let blocks_frontier_from_storage = match &self.storage {
+                        Some(Storage::Sql(storage)) => storage
+                            .get_frontier(&self.node_state, *height, ViewNumber::new(*view))
+                            .await
+                            .with_context(|| "failed to get blocks frontier from sql storage")?,
+                        Some(Storage::Fs(_)) => {
+                            bail!("fs storage not supported for blocks frontier")
+                        },
+                        _ => bail!("storage was not initialized"),
+                    };
+
+                    Ok(Response::BlocksFrontier(blocks_frontier_from_storage))
+                }
+            },
+            Request::RewardAccountsV2(height, view, accounts) => {
+                // Try to get the reward accounts from memory first, then fall back to storage
+                if let Some(state) = self.consensus.state(ViewNumber::new(*view)).await
+                    && let Ok(reward_accounts) = retain_v2_reward_accounts(
+                        &state.reward_merkle_tree_v2,
+                        accounts.iter().copied(),
+                    )
+                {
+                    return Ok(Response::RewardAccountsV2(reward_accounts));
+                }
+
+                // Fall back to storage
+                let (merkle_tree, leaf) = match &self.storage {
+                    Some(Storage::Sql(storage)) => storage
+                        .get_reward_accounts_v2(
+                            &self.node_state,
+                            *height,
+                            ViewNumber::new(*view),
+                            accounts,
+                        )
+                        .await
+                        .with_context(|| "failed to get accounts from sql storage")?,
+                    Some(Storage::Fs(_)) => {
+                        bail!("fs storage not supported for reward accounts")
+                    },
+                    _ => bail!("storage was not initialized"),
+                };
+
+                // If we successfully fetched accounts from storage, try to add them back into the in-memory
+                // state.
+                if let Err(err) = add_v2_reward_accounts_to_state::<N, P>(
+                    &self.consensus.consensus(),
+                    &ViewNumber::new(*view),
+                    accounts,
+                    &merkle_tree,
+                    leaf,
+                )
+                .await
+                {
+                    tracing::warn!(?view, "Cannot update fetched account state: {err:#}");
+                }
+
+                Ok(Response::RewardAccountsV2(merkle_tree))
+            },
+
+            Request::RewardAccountsV1(height, view, accounts) => {
+                // Try to get the reward accounts from memory first, then fall back to storage
+                if let Some(state) = self.consensus.state(ViewNumber::new(*view)).await
+                    && let Ok(reward_accounts) = retain_v1_reward_accounts(
+                        &state.reward_merkle_tree_v1,
+                        accounts.iter().copied(),
+                    )
+                {
+                    return Ok(Response::RewardAccountsV1(reward_accounts));
+                }
+
+                // Fall back to storage
+                let (merkle_tree, leaf) = match &self.storage {
+                    Some(Storage::Sql(storage)) => storage
+                        .get_reward_accounts_v1(
+                            &self.node_state,
+                            *height,
+                            ViewNumber::new(*view),
+                            accounts,
+                        )
+                        .await
+                        .with_context(|| "failed to get v1 reward accounts from sql storage")?,
+                    Some(Storage::Fs(_)) => {
+                        bail!("fs storage not supported for v1 reward accounts")
+                    },
+                    _ => bail!("storage was not initialized"),
+                };
+
+                // If we successfully fetched accounts from storage, try to add them back into the in-memory
+                // state.
+                if let Err(err) = add_v1_reward_accounts_to_state::<N, P>(
+                    &self.consensus.consensus(),
+                    &ViewNumber::new(*view),
+                    accounts,
+                    &merkle_tree,
+                    leaf,
+                )
+                .await
+                {
+                    tracing::warn!(
+                        ?view,
+                        "Cannot update fetched v1 reward account state: {err:#}"
+                    );
+                }
+
+                Ok(Response::RewardAccountsV1(merkle_tree))
+            },
+            Request::VidShare(block_number, _request_id) => {
+                // Load the VID share from storage
+                let vid_share = match &self.storage {
+                    Some(Storage::Sql(storage)) => storage
+                        .get_vid_share::<SeqTypes>(BlockId::Number(*block_number as usize))
+                        .await
+                        .with_context(|| "failed to get vid share from sql storage")?,
+                    Some(Storage::Fs(storage)) => {
+                        // Open a read transaction
+                        let mut transaction = storage
+                            .read()
+                            .await
+                            .with_context(|| "failed to open fs storage transaction")?;
+
+                        // Get the VID share
+                        transaction
+                            .vid_share(BlockId::Number(*block_number as usize))
+                            .await
+                            .with_context(|| "failed to get vid share from fs storage")?
+                    },
+                    _ => bail!("storage was not initialized"),
+                };
+
+                Ok(Response::VidShare(vid_share))
+            },
+            Request::StateCert(epoch) => {
+                let state_cert = self
+                    .persistence
+                    .get_state_cert_by_epoch(*epoch)
+                    .await
+                    .with_context(|| {
+                        format!("failed to get state cert for epoch {epoch} from persistence")
+                    })?;
+
+                match state_cert {
+                    Some(cert) => Ok(Response::StateCert(cert)),
+                    None => bail!("State certificate for epoch {epoch} not found"),
+                }
+            },
+            Request::RewardMerkleTreeV2(height, view) => {
+                // Try to get the reward merkle tree from memory first, then fall back to storage
+                if let Some(state) = self.consensus.state(ViewNumber::new(*view)).await {
+                    let merkle_tree_bytes = bincode::serialize(
+                        &TryInto::<RewardMerkleTreeV2Data>::try_into(&state.reward_merkle_tree_v2)?,
+                    )
+                    .context("Merkle tree serialization failed; this should never happen.")?;
+
+                    return Ok(Response::RewardMerkleTreeV2(merkle_tree_bytes));
+                }
+
+                // Fall back to storage
+                let merkle_tree_bytes = match &self.storage {
+                    Some(Storage::Sql(storage)) => storage
+                        .load_tree(*height)
+                        .await
+                        .with_context(|| "failed to get reward merkle tree from sql storage")?,
+                    Some(Storage::Fs(_)) => {
+                        bail!("fs storage not supported for reward merkle tree catchup")
+                    },
+                    _ => bail!("storage was not initialized"),
+                };
+
+                Ok(Response::RewardMerkleTreeV2(merkle_tree_bytes))
+            },
+        }
+    }
+}
+
+/// Get a partial snapshot of the given reward state, which contains only the specified accounts.
+///
+/// Fails if one of the requested accounts is not represented in the original `state`.
+pub fn retain_v2_reward_accounts(
+    state: &RewardMerkleTreeV2,
+    accounts: impl IntoIterator<Item = RewardAccountV2>,
+) -> anyhow::Result<RewardMerkleTreeV2> {
+    let mut snapshot = RewardMerkleTreeV2::from_commitment(state.commitment());
+    for account in accounts {
+        match state.universal_lookup(account) {
+            LookupResult::Ok(elem, proof) => {
+                // This remember cannot fail, since we just constructed a valid proof, and are
+                // remembering into a tree with the same commitment.
+                snapshot.remember(account, elem, proof).unwrap();
+            },
+            LookupResult::NotFound(proof) => {
+                // Likewise this cannot fail.
+                snapshot.non_membership_remember(account, proof).unwrap()
+            },
+            LookupResult::NotInMemory => {
+                bail!("missing account {account}");
+            },
+        }
+    }
+
+    Ok(snapshot)
+}
+
+/// Get a partial snapshot of the given reward state, which contains only the specified accounts.
+///
+/// Fails if one of the requested accounts is not represented in the original `state`.
+pub fn retain_v1_reward_accounts(
+    state: &RewardMerkleTreeV1,
+    accounts: impl IntoIterator<Item = RewardAccountV1>,
+) -> anyhow::Result<RewardMerkleTreeV1> {
+    let mut snapshot = RewardMerkleTreeV1::from_commitment(state.commitment());
+    for account in accounts {
+        match state.universal_lookup(account) {
+            LookupResult::Ok(elem, proof) => {
+                // This remember cannot fail, since we just constructed a valid proof, and are
+                // remembering into a tree with the same commitment.
+                snapshot.remember(account, elem, proof).unwrap();
+            },
+            LookupResult::NotFound(proof) => {
+                // Likewise this cannot fail.
+                snapshot.non_membership_remember(account, proof).unwrap()
+            },
+            LookupResult::NotInMemory => {
+                bail!("missing account {account}");
+            },
+        }
+    }
+
+    Ok(snapshot)
+}

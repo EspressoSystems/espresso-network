@@ -3,6 +3,7 @@ use std::{collections::VecDeque, num::NonZeroUsize, sync::Arc, time::Duration};
 use anyhow::Context;
 use async_broadcast::broadcast;
 use async_lock::{Mutex, RwLock};
+use espresso_node::{L1Params, SequencerApiVersion, catchup::StatePeers};
 use espresso_types::{
     EpochCommittees, FeeAmount, NodeState, Payload, SeqTypes, ValidatedState,
     eth_signature_key::EthKeyPair, v0_1::NoStorage, v0_3::Fetcher,
@@ -21,7 +22,6 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     traits::{EncodeBytes, block_contents::GENESIS_VID_NUM_STORAGE_NODES, metrics::NoMetrics},
 };
-use sequencer::{L1Params, SequencerApiVersion, catchup::StatePeers};
 use tide_disco::Url;
 use tokio::spawn;
 use vbs::version::Version;
@@ -36,7 +36,7 @@ pub struct BuilderConfig {
 }
 
 pub fn build_instance_state(
-    genesis: sequencer::Genesis,
+    genesis: espresso_node::Genesis,
     l1_params: L1Params,
     state_peers: Vec<Url>,
 ) -> NodeState {
@@ -70,7 +70,7 @@ pub fn build_instance_state(
             genesis.epoch_height.unwrap_or_default(),
         ))),
         genesis.epoch_height.unwrap_or_default(),
-        &Arc::new(sequencer::persistence::no_storage::NoStorage),
+        &Arc::new(espresso_node::persistence::no_storage::NoStorage),
     );
 
     NodeState::new(
@@ -243,9 +243,7 @@ impl BuilderConfig {
 
 #[cfg(test)]
 mod test {
-    use espresso_types::MOCK_SEQUENCER_VERSIONS;
-    use futures::StreamExt;
-    use sequencer::{
+    use espresso_node::{
         api::{
             Options,
             options::HotshotEvents,
@@ -254,6 +252,8 @@ mod test {
         persistence,
         testing::TestConfigBuilder,
     };
+    use espresso_types::MOCK_SEQUENCER_VERSIONS;
+    use futures::StreamExt;
     use surf_disco::Client;
     use tempfile::TempDir;
 

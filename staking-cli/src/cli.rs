@@ -301,7 +301,7 @@ pub async fn run() -> Result<()> {
             return Ok(());
         },
         Commands::Version => {
-            print!("{}", sequencer_utils::build_info!().with_header());
+            print!("{}", espresso_utils::build_info!().with_header());
             return Ok(());
         },
         Commands::ExportNodeSignatures {

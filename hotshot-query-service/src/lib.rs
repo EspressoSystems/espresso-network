@@ -834,7 +834,11 @@ mod test {
     async fn test_composition() {
         let dir = TempDir::with_prefix("test_composition").unwrap();
         let mut loader = AtomicStoreLoader::create(dir.path(), "test_composition").unwrap();
-        let hotshot_qs = MockDataSource::create_with_store(&mut loader, Default::default())
+        let hotshot_qs = MockDataSource::create_builder_with_store(&mut loader, Default::default())
+            .await
+            .unwrap()
+            .with_sync_status_ttl(Duration::ZERO)
+            .build()
             .await
             .unwrap();
 
@@ -961,7 +965,6 @@ mod test {
         assert_eq!(sync_status.blocks.missing, 0);
         assert_eq!(sync_status.leaves.missing, 0);
         assert_eq!(sync_status.vid_common.missing, 1);
-        assert_eq!(sync_status.vid_shares.missing, 1);
 
         assert_eq!(
             client

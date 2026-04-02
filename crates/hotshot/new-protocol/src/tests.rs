@@ -1,5 +1,8 @@
 pub(crate) mod common;
 
+mod block;
 mod consensus;
+mod epoch_change;
 mod integration;
-mod validated_state_and_consensus;
+mod state;
+mod vid;
