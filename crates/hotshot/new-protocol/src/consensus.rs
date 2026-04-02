@@ -114,7 +114,7 @@ pub struct Consensus<T: NodeType> {
     private_key: <T::SignatureKey as SignatureKey>::PrivateKey,
 
     garbage_collection_interval: u64,
-    epoch_height: u64,
+    pub epoch_height: u64,
 }
 
 /// Protocol flow directive.
@@ -323,7 +323,9 @@ impl<T: NodeType> Consensus<T> {
         // Validate the epoch transition rules.
         // - DRB result must be attached and match our calculated result.
         // - Next epoch justify QC (deciding QC) must be attached to the first proposal of the new epoch
-        if is_epoch_transition(block_number, self.epoch_height) {
+        if proposal.epoch > EpochNumber::genesis() + 1
+            && is_epoch_transition(block_number, self.epoch_height)
+        {
             let Some(drb) = self.drb_results.get(&(epoch + 1)) else {
                 debug!(%epoch, "no DRB result for epoch");
                 outbox.push_back(ConsensusOutput::RequestDrbResult(epoch + 1));
@@ -655,8 +657,12 @@ impl<T: NodeType> Consensus<T> {
             return;
         }
 
-        // TODO: Handle epoch change and properly set next epoch qc drb result and state cert
-        let next_drb_result = if is_epoch_transition(header.block_number(), self.epoch_height) {
+        // TODO: Handle epoch change state cert
+        // The first two epochs have no prior DRB computation so we skip the
+        // requirement — matching the same guard in handle_proposal.
+        let next_drb_result = if proposal.epoch > EpochNumber::genesis() + 1
+            && is_epoch_transition(header.block_number(), self.epoch_height)
+        {
             let Some(drb) = self.drb_results.get(&EpochNumber::new(*proposal.epoch + 1)) else {
                 debug!(%proposal.epoch, "no DRB result for epoch");
                 return;

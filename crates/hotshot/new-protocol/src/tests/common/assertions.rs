@@ -64,6 +64,10 @@ pub(crate) fn is_timeout_cert(input: &ConsensusInput<TestTypes>) -> bool {
     matches!(input, ConsensusInput::TimeoutCertificate(_))
 }
 
+pub(crate) fn is_drb_result(input: &ConsensusInput<TestTypes>) -> bool {
+    matches!(input, ConsensusInput::DrbResult(..))
+}
+
 pub(crate) fn is_block_built(input: &ConsensusInput<TestTypes>) -> bool {
     matches!(input, ConsensusInput::BlockBuilt { .. })
 }
@@ -107,6 +111,18 @@ where
         .into_iter()
         .filter(|e| matches!(e, ConsensusOutput::SendEpochChange(_)))
         .count()
+}
+
+pub(crate) fn has_request_drb_for_epoch<'a, I>(
+    outputs: I,
+    epoch: hotshot_types::data::EpochNumber,
+) -> bool
+where
+    I: IntoIterator<Item = &'a ConsensusOutput<TestTypes>>,
+{
+    outputs
+        .into_iter()
+        .any(|e| matches!(e, ConsensusOutput::RequestDrbResult(e) if *e == epoch))
 }
 
 /// Find the node index (0..10) for a given public key.

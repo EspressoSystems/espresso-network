@@ -41,7 +41,7 @@ use hotshot_types::{
         network::TestableNetworkingImplementation,
         signature_key::{SignatureKey, StakeTableEntryType},
     },
-    utils::{BuilderCommitment, is_epoch_transition},
+    utils::{BuilderCommitment, is_epoch_root, is_epoch_transition},
 };
 
 use crate::{
@@ -260,7 +260,9 @@ impl TestData {
 
             // ---- epoch-aware patching ----
             let needs_justify_update = prev_new_cert1.is_some();
-            let needs_drb = epoch_height > 0 && is_epoch_transition(block_number, epoch_height);
+            let needs_drb = epoch > EpochNumber::genesis()
+                && epoch_height > 0
+                && is_epoch_transition(block_number, epoch_height);
 
             if let Some(new_cert1) = prev_new_cert1.take() {
                 proposal.data.proposal.justify_qc = new_cert1;
@@ -273,6 +275,14 @@ impl TestData {
             // when we touched justify_qc or next_drb_result).
             let leaf = Leaf2::from_quorum_proposal(&proposal.data);
             let leaf_commit = leaf.commit();
+
+            // Re-sign the proposal when the leaf commitment changed due to patching.
+            if needs_drb || needs_justify_update {
+                let signature =
+                    <BLSPubKey as SignatureKey>::sign(leader_private_key, leaf_commit.as_ref())
+                        .expect("Failed to sign patched leaf commitment");
+                proposal.signature = signature;
+            }
 
             let cert1 = build_cert1(
                 leaf_commit,
@@ -365,7 +375,13 @@ pub async fn mock_membership() -> EpochMembershipCoordinator<TestTypes> {
         .write()
         .await
         .set_first_epoch(EpochNumber::genesis(), [0u8; 32]);
-    EpochMembershipCoordinator::new(membership, 10, &TestStorage::default())
+    let coordinator = EpochMembershipCoordinator::new(membership, 10, &TestStorage::default());
+    // Set the DRB difficulty selector so compute_drb_result can run.
+    // Difficulty 0 makes the computation instant for tests.
+    coordinator
+        .set_drb_difficulty_selector(std::sync::Arc::new(|_version| Box::pin(async { 0u64 })))
+        .await;
+    coordinator
 }
 
 pub fn key_map() -> BTreeMap<BLSPubKey, BLSPrivKey> {
@@ -571,6 +587,34 @@ impl ConsensusHarness {
                 self.consensus
                     .apply(ConsensusInput::DrbResult(*epoch, TEST_DRB_RESULT), outbox)
                     .await;
+            },
+            ConsensusOutput::LeafDecided(leaves) => {
+                // Mirror the EpochManager: when an epoch-root block is decided,
+                // register the future epoch in the membership (add_epoch_root)
+                // and store a DRB result for it (compute_drb_result).
+                let epoch_height = self.consensus.epoch_height;
+                for leaf in leaves {
+                    let block_number = BlockHeader::<TestTypes>::block_number(leaf.block_header());
+                    if !is_epoch_root(block_number, epoch_height) {
+                        continue;
+                    }
+                    let header = leaf.block_header().clone();
+                    <TestTypes as hotshot_types::traits::node_implementation::NodeType>::Membership::add_epoch_root(
+                        self.membership_coordinator.membership().clone(),
+                        header,
+                    )
+                    .await
+                    .expect("add_epoch_root should succeed in test harness");
+
+                    let epoch =
+                        hotshot_types::utils::epoch_from_block_number(block_number, epoch_height);
+                    let target_epoch = EpochNumber::new(epoch + 2);
+                    self.membership_coordinator
+                        .membership()
+                        .write()
+                        .await
+                        .add_drb_result(target_epoch, TEST_DRB_RESULT);
+                }
             },
             _ => {},
         }
