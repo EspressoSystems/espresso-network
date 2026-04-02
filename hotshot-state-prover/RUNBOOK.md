@@ -13,7 +13,7 @@ environment variables:
 - `relay_server` (URL): The relay server endpoint for validators' signatures.
   - `--relay-server <URL>`
   - `ESPRESSO_STATE_RELAY_SERVER_URL`
-- `sequencer_url` (URL): The sequencer endpoint for fetching consensus related states.
+- `sequencer_url` (URL): The Espresso node endpoint for fetching consensus related states.
   - `--sequencer-url <URL>`
   - `ESPRESSO_SEQUENCER_URL`
 - `l1_provider_url` (Vec<Url>): RPC endpoint to interact with the L1 network.
@@ -80,7 +80,7 @@ This will invoke `run_prover_once` and call `sync_state` once.
 A Docker image is available for the state prover. You can run it using the following command:
 
 ```bash
-docker run --env-file .env.docker ghcr.io/espressosystems/espresso-sequencer-prover-service:<TAG> [FLAGS/OPTIONS]
+docker run --env-file .env.docker ghcr.io/espressosystems/espresso-network/prover-service:<TAG> [FLAGS/OPTIONS]
 ```
 
 Make sure to replace `<TAG>` with the desired version.
@@ -106,7 +106,7 @@ version and runs the appropriate service. The legacy service implementation can 
 ## Troubleshooting
 
 - **Invalid State or Signatures:** Check logs for `ProverError::InvalidState`. Check if the stake table and
-  `stake_table_capacity` are configured correctly across the sequencers, relay server, and the prover.
+  `stake_table_capacity` are configured correctly across the Espresso nodes, relay server, and the prover.
 - **Contract Error:** Check logs for `ProverError::ContractError`. Ensure the provider urls are valid and the contract
   address is correct. If there's an error code, search it in the
   [bindings](../contracts/rust/adapter/src/bindings/lightclientv3.rs) for further debugging information.

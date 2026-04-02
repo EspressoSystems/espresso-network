@@ -501,12 +501,8 @@ impl_from_row_for_both!(PayloadMetadata<Types>, |row| {
             .try_get::<String, _>("payload_hash")?
             .parse()
             .decode_error("malformed payload hash")?,
-        size: row
-            .try_get::<Option<i32>, _>("payload_size")?
-            .ok_or(sqlx::Error::RowNotFound)? as u64,
-        num_transactions: row
-            .try_get::<Option<i32>, _>("num_transactions")?
-            .ok_or(sqlx::Error::RowNotFound)? as u64,
+        size: row.try_get::<i32, _>("payload_size")? as u64,
+        num_transactions: row.try_get::<i32, _>("num_transactions")? as u64,
 
         // Per-namespace info must be loaded in a separate query.
         namespaces: Default::default(),
@@ -516,7 +512,7 @@ impl_from_row_for_both!(PayloadMetadata<Types>, |row| {
 );
 
 const VID_COMMON_COLUMNS: &str = "h.height AS height, h.hash AS block_hash, h.payload_hash AS \
-                                  payload_hash, v.common AS common_data";
+                                  payload_hash, v.data AS common_data";
 
 impl_from_row_for_both!(VidCommonQueryData<Types>, |row| {
     let height = row.try_get::<i64, _>("height")? as u64;

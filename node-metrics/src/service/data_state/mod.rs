@@ -269,6 +269,12 @@ impl std::error::Error for ProcessLeafError {
     }
 }
 
+/// NANOS_PER_MILLI represents the conversion between the milli prefix and
+/// the nano prefix.
+///
+/// This is referenced as a local constant for convenience.
+const NANOS_PER_MILLI: i128 = 1_000_000;
+
 /// create_block_detail_from_block is a helper function that will create a
 /// [BlockDetail] from a [BlockQueryData].
 pub fn create_block_detail_from_block(block: &BlockQueryData<SeqTypes>) -> BlockDetail<SeqTypes> {
@@ -282,8 +288,10 @@ pub fn create_block_detail_from_block(block: &BlockQueryData<SeqTypes>) -> Block
         hash: block_header.commitment(),
         height: block_header.height(),
         time: Timestamp(
-            OffsetDateTime::from_unix_timestamp(block_header.timestamp() as i64)
-                .unwrap_or(OffsetDateTime::UNIX_EPOCH),
+            OffsetDateTime::from_unix_timestamp_nanos(
+                block_header.timestamp_millis() as i128 * NANOS_PER_MILLI,
+            )
+            .unwrap_or(OffsetDateTime::UNIX_EPOCH),
         ),
         proposer_id: block_header.proposer_id(),
         num_transactions,

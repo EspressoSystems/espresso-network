@@ -5,6 +5,7 @@ import { LightClientArbitrumV2 } from "../src/LightClientArbitrumV2.sol";
 import { LightClientArbitrum } from "../src/LightClientArbitrum.sol";
 import { LightClient } from "../src/LightClient.sol";
 import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
+
 /// @notice Deploys the upgradable light client contract
 /// the admin is not a multisig wallet but is the same as the associated mnemonic
 /// used in staging deployments only
@@ -127,9 +128,9 @@ contract UpgradeLightClientArbitrumV2Script is Script {
         returns (address)
     {
         LightClientArbitrum proxy = LightClientArbitrum(proxyAddress); //make the function call on
-            // the previous implementation
+        // the previous implementation
         proxy.upgradeToAndCall(newLightClient, data); //proxy address now points to the new
-            // implementation
+        // implementation
         vm.stopBroadcast();
         return address(proxy);
     }
@@ -182,9 +183,9 @@ contract UpgradeLightClientArbitrumV2PatchScript is Script {
         returns (address)
     {
         LightClientArbitrum proxy = LightClientArbitrum(proxyAddress); //make the function call on
-            // the previous implementation
+        // the previous implementation
         proxy.upgradeToAndCall(newLightClient, data); //proxy address now points to the new
-            // implementation
+        // implementation
         vm.stopBroadcast();
         return address(proxy);
     }
@@ -235,9 +236,9 @@ contract UpgradeLightClientArbitrumV2Patch2Script is Script {
         returns (address)
     {
         LightClientArbitrum proxy = LightClientArbitrum(proxyAddress); //make the function call on
-            // the previous implementation
+        // the previous implementation
         proxy.upgradeToAndCall(newLightClient, data); //proxy address now points to the new
-            // implementation
+        // implementation
         vm.stopBroadcast();
         return address(proxy);
     }

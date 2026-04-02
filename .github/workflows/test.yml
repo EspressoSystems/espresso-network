@@ -110,6 +110,7 @@ jobs:
             target/debug/staking-cli
 
   # The go-sdk test job only needs the dev-node binary, compile it separately.
+
   build-test-bins-dev-node:
     name: Build espresso-dev-node test binary
     runs-on: ubuntu-latest
@@ -174,6 +175,57 @@ jobs:
           --partition hash:${{ matrix.partition }}/20
         timeout-minutes: 30
 
+  test-postgres:
+    needs: build-test-artifacts-postgres
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/free-disk-space
+      - uses: foundry-rs/foundry-toolchain@v1
+      - uses: taiki-e/install-action@nextest
+
+      - name: Download archive
+        uses: actions/download-artifact@v4
+        with:
+          name: nextest-archive-postgres
+
+      - name: Test
+        run: |
+          cargo nextest run --archive-file nextest-archive-postgres.tar.zst  --verbose --no-fail-fast \
+          --workspace-remap $PWD \
+          --partition hash:${{ matrix.partition }}/10
+        timeout-minutes: 30
+
+  test-sqlite:
+    needs: build-test-artifacts-sqlite
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: nightly
+      - uses: taiki-e/install-action@nextest
+
+      - name: Download archive
+        uses: actions/download-artifact@v4
+        with:
+          name: nextest-archive-sqlite
+
+      - name: Test
+        run: |
+          cargo nextest run --archive-file nextest-archive-sqlite.tar.zst  --verbose --no-fail-fast \
+          --workspace-remap $PWD \
+          --partition hash:${{ matrix.partition }}/10
+        timeout-minutes: 30
+
   test-go-sdk:
     needs: build-test-bins-dev-node
     runs-on: ubuntu-latest
@@ -218,6 +270,7 @@ jobs:
           - test-name: test_native_demo_pos_upgrade
           - test-name: test_native_demo_drb_header_upgrade
           - test-name: test_native_demo_fee_to_drb_header_upgrade
+          - test-name: test_native_demo_epoch_reward_upgrade
           - test-name: test_native_demo_da_committee
 
       fail-fast: false

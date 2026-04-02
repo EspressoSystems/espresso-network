@@ -40,6 +40,7 @@ mod tests {
                 PeerConfig::<TestTypes> {
                     stake_table_entry: pub_key.stake_table_entry(U256::from(1u64)),
                     state_ver_key: state_key,
+                    connect_info: None,
                 }
             })
             .collect();
@@ -297,11 +298,11 @@ mod tests {
     #[test]
     fn test_epoch_transition_preserves_history() {
         let (stake_table, threshold) = make_stake_table(5);
-        let mut consensus = make_test_consensus(stake_table.clone(), threshold, None);
+        let mut consensus = make_test_consensus(stake_table.clone(), threshold, Some(EpochNumber::new(1)));
 
         // Apply 3 QCs in epoch None; nodes [0,1,2] sign each.
         for view in 1u64..=3 {
-            let qc = make_qc(&stake_table, view, &[0, 1, 2], None);
+            let qc = make_qc(&stake_table, view, &[0, 1, 2], Some(EpochNumber::new(1)));
             consensus.update_vote_participation(qc).unwrap();
         }
 
@@ -309,7 +310,7 @@ mod tests {
         let result = consensus.update_vote_participation_epoch(
             stake_table.clone(),
             threshold,
-            Some(EpochNumber::new(1)),
+            Some(EpochNumber::new(2)),
         );
         assert!(result.is_ok(), "epoch transition should succeed");
 
@@ -317,7 +318,7 @@ mod tests {
 
         // Previous epoch: nodes 0,1,2 each signed 3 of 3 views → 1.0;
         // nodes 3,4 signed 0 of 3 views → 0.0.
-        let prev = consensus.previous_vote_participation();
+        let prev = consensus.vote_participation(Some(EpochNumber::new(1)));
         for i in 0..3usize {
             let ratio = prev[&node_keys[i]];
             assert!(
@@ -369,53 +370,13 @@ mod tests {
         );
     }
 
-    /// `get_participation` returns the correct ratio for a known key and (None, None) for
-    /// a key not in the stake table.
-    #[test]
-    fn test_get_participation_known_and_unknown_key() {
-        let (stake_table, threshold) = make_stake_table(3);
-        let mut consensus = make_test_consensus(stake_table.clone(), threshold, None);
-
-        // Apply 2 views where node 0 signs both.
-        let qc1 = make_qc(&stake_table, 1, &[0], None);
-        let qc2 = make_qc(&stake_table, 2, &[0], None);
-        consensus.update_vote_participation(qc1).unwrap();
-        consensus.update_vote_participation(qc2).unwrap();
-
-        let (_, pub_key0) = key_pair_for_id::<TestTypes>(0);
-
-        // Node 0 signed both views (2 of 2 → 1.0); no epoch transition → last = None.
-        let (current, last) = consensus.get_participation(pub_key0);
-        assert!(
-            current.is_some(),
-            "node 0 should have a current participation value"
-        );
-        assert!(
-            (current.unwrap() - 1.0).abs() < f64::EPSILON,
-            "node 0 current participation should be 1.0"
-        );
-        assert!(last.is_none(), "no epoch transition → no previous participation");
-
-        // Generate a key that is NOT in the stake table.
-        let (_, unknown_key) = key_pair_for_id::<TestTypes>(99);
-        let (cur_unknown, last_unknown) = consensus.get_participation(unknown_key);
-        assert!(
-            cur_unknown.is_none(),
-            "unknown key should have no current participation"
-        );
-        assert!(
-            last_unknown.is_none(),
-            "unknown key should have no previous participation"
-        );
-    }
-
     /// `previous_vote_participation` is empty before any epoch transition.
     #[test]
     fn test_previous_participation_empty_before_epoch_change() {
         let (stake_table, threshold) = make_stake_table(3);
-        let consensus = make_test_consensus(stake_table, threshold, None);
+        let consensus = make_test_consensus(stake_table, threshold, Some(EpochNumber::new(1)));
 
-        let prev = consensus.previous_vote_participation();
+        let prev = consensus.vote_participation(None);
         assert!(
             prev.is_empty(),
             "previous participation should be empty before any epoch change"

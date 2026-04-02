@@ -16,7 +16,7 @@ use std::{cmp::Ordering, future::IntoFuture, iter::once, ops::RangeBounds, sync:
 
 use async_trait::async_trait;
 use derivative::Derivative;
-use futures::future::{BoxFuture, FutureExt};
+use futures::future::{BoxFuture, FutureExt, join_all};
 use hotshot_types::traits::{block_contents::BlockHeader, node_implementation::NodeType};
 
 use super::{
@@ -25,26 +25,30 @@ use super::{
     header::{HeaderCallback, fetch_header_and_then},
 };
 use crate::{
-    Header, Payload, QueryResult,
+    Header, Payload, QueryError, QueryResult,
     availability::{
         BlockId, BlockQueryData, PayloadMetadata, PayloadQueryData, QueryableHeader,
         QueryablePayload,
     },
     data_source::{
         VersionedDataSource,
+        fetching::{header::fetch_header_range_and_then, leaf::RangeRequest},
         storage::{
             AvailabilityStorage, NodeStorage, UpdateAvailabilityStorage,
             pruning::PrunedHeightStorage,
         },
     },
     fetching::{
-        self, Callback,
-        request::{self, PayloadRequest},
+        self, Callback, NonEmptyRange,
+        request::{self, BlockRangeRequest, PayloadRequest},
     },
     types::HeightIndexed,
 };
 pub(super) type PayloadFetcher<Types, S, P> =
     fetching::Fetcher<request::PayloadRequest, PayloadCallback<Types, S, P>>;
+
+pub(super) type PayloadRangeFetcher<Types, S, P> =
+    fetching::Fetcher<request::BlockRangeRequest, BlockRangeCallback<Types, S, P>>;
 
 impl<Types> FetchRequest for BlockId<Types>
 where
@@ -140,8 +144,8 @@ impl<Types> Storable<Types> for BlockQueryData<Types>
 where
     Types: NodeType,
 {
-    fn name() -> &'static str {
-        "block"
+    fn debug_name(&self) -> String {
+        format!("block {}", self.height())
     }
 
     async fn notify(&self, notifiers: &Notifiers<Types>) {
@@ -149,8 +153,8 @@ where
     }
 
     async fn store(
-        self,
-        storage: &mut (impl UpdateAvailabilityStorage<Types> + Send),
+        &self,
+        storage: &mut impl UpdateAvailabilityStorage<Types>,
         leaf_only: bool,
     ) -> anyhow::Result<()> {
         if leaf_only {
@@ -173,7 +177,7 @@ pub(super) fn fetch_block_with_header<Types, S, P>(
     P: AvailabilityProvider<Types>,
 {
     let Some(payload_fetcher) = fetcher.payload_fetcher.as_ref() else {
-        // If we're in light-weight mode, we don't need to fetch the VID common data.
+        // If we're in light-weight mode, we don't need to fetch the block data.
         return;
     };
 
@@ -306,7 +310,7 @@ where
     async fn run(self, payload: Payload<Types>) {
         tracing::info!("fetched payload {:?}", self.header.payload_commitment());
         let block = BlockQueryData::new(self.header, payload);
-        self.fetcher.store_and_notify(block).await;
+        self.fetcher.store_and_notify(&block).await;
     }
 }
 
@@ -380,5 +384,173 @@ where
         R: RangeBounds<usize> + Send + 'static,
     {
         storage.get_payload_metadata_range(range).await
+    }
+}
+
+#[async_trait]
+impl<Types> Fetchable<Types> for NonEmptyRange<BlockQueryData<Types>>
+where
+    Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
+    Payload<Types>: QueryablePayload<Types>,
+{
+    type Request = RangeRequest;
+
+    fn satisfies(&self, req: Self::Request) -> bool {
+        req.is_satisfied(self)
+    }
+
+    async fn passive_fetch(
+        notifiers: &Notifiers<Types>,
+        req: Self::Request,
+    ) -> BoxFuture<'static, Option<Self>> {
+        let waits = join_all(req.into_iter().map(|i| {
+            notifiers
+                .block
+                .wait_for(move |block| block.satisfies(BlockId::Number(i as usize)))
+        }))
+        .await;
+
+        join_all(waits.into_iter().map(|wait| wait.into_future()))
+            .map(|options| NonEmptyRange::new(options.into_iter().flatten()).ok())
+            .boxed()
+    }
+
+    async fn active_fetch<S, P>(
+        tx: &mut impl AvailabilityStorage<Types>,
+        fetcher: Arc<Fetcher<Types, S, P>>,
+        req: Self::Request,
+    ) -> anyhow::Result<()>
+    where
+        S: VersionedDataSource + 'static,
+        for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
+        for<'a> S::ReadOnly<'a>:
+            AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
+        P: AvailabilityProvider<Types>,
+    {
+        fetch_header_range_and_then(tx, req, HeaderCallback::Payload { fetcher }).await
+    }
+
+    async fn load<S>(storage: &mut S, req: Self::Request) -> QueryResult<Self>
+    where
+        S: AvailabilityStorage<Types>,
+    {
+        let blocks = storage
+            .get_block_range((req.start as usize)..(req.end as usize))
+            .await?
+            .into_iter()
+            .collect::<QueryResult<Vec<_>>>()?;
+        if blocks.len() != req.len() {
+            tracing::debug!(
+                ?req,
+                len = blocks.len(),
+                "database returned partial result, unable to load full range"
+            );
+            return Err(QueryError::Missing);
+        }
+        NonEmptyRange::new(blocks).map_err(|err| QueryError::Error {
+            message: format!("expected contiguous range, but: {err:#}"),
+        })
+    }
+}
+
+impl<Types> Storable<Types> for NonEmptyRange<BlockQueryData<Types>>
+where
+    Types: NodeType,
+{
+    fn debug_name(&self) -> String {
+        format!("block range {}..{}", self.start(), self.end())
+    }
+
+    async fn notify(&self, notifiers: &Notifiers<Types>) {
+        for block in self {
+            notifiers.block.notify(block).await;
+        }
+    }
+
+    async fn store(
+        &self,
+        storage: &mut impl UpdateAvailabilityStorage<Types>,
+        leaf_only: bool,
+    ) -> anyhow::Result<()> {
+        if leaf_only {
+            return Ok(());
+        }
+
+        storage.insert_block_range(self).await
+    }
+}
+
+pub(super) fn fetch_block_range_with_headers<Types, S, P>(
+    fetcher: Arc<Fetcher<Types, S, P>>,
+    headers: NonEmptyRange<Header<Types>>,
+) where
+    Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
+    Payload<Types>: QueryablePayload<Types>,
+    S: VersionedDataSource + 'static,
+    for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
+    P: AvailabilityProvider<Types>,
+{
+    let Some(payload_range_fetcher) = fetcher.payload_range_fetcher.as_ref() else {
+        // If we're in light-weight mode, we don't need to fetch the block data.
+        return;
+    };
+
+    // Now that we have the header, we only need to retrieve the payload.
+    tracing::info!(
+        "spawned active fetch for payload range {}..{}",
+        headers.start(),
+        headers.end()
+    );
+    payload_range_fetcher.spawn_fetch(
+        BlockRangeRequest::from_headers(&headers),
+        fetcher.provider.clone(),
+        once(BlockRangeCallback {
+            fetcher: fetcher.clone(),
+        }),
+    );
+}
+
+#[derive(Derivative)]
+#[derivative(Debug(bound = ""))]
+pub(super) struct BlockRangeCallback<Types: NodeType, S, P> {
+    #[derivative(Debug = "ignore")]
+    fetcher: Arc<Fetcher<Types, S, P>>,
+}
+
+impl<Types: NodeType, S, P> PartialEq for BlockRangeCallback<Types, S, P> {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other).is_eq()
+    }
+}
+
+impl<Types: NodeType, S, P> Eq for BlockRangeCallback<Types, S, P> {}
+
+impl<Types: NodeType, S, P> Ord for BlockRangeCallback<Types, S, P> {
+    fn cmp(&self, _: &Self) -> Ordering {
+        // All callbacks for a given block range request do the same thing: just store the range.
+        Ordering::Equal
+    }
+}
+
+impl<Types: NodeType, S, P> PartialOrd for BlockRangeCallback<Types, S, P> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<Types: NodeType, S, P> Callback<NonEmptyRange<BlockQueryData<Types>>>
+    for BlockRangeCallback<Types, S, P>
+where
+    Header<Types>: QueryableHeader<Types>,
+    Payload<Types>: QueryablePayload<Types>,
+    S: 'static + VersionedDataSource,
+    for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
+    P: AvailabilityProvider<Types>,
+{
+    async fn run(self, blocks: NonEmptyRange<BlockQueryData<Types>>) {
+        tracing::info!("fetched blocks {}..{}", blocks.start(), blocks.end());
+        self.fetcher.store_and_notify(&blocks).await;
     }
 }

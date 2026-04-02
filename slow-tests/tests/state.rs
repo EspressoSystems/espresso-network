@@ -2,6 +2,16 @@ use std::time::{Duration, Instant};
 
 use alloy::primitives::{Address, U256};
 use committable::Commitment;
+use espresso_node::{
+    SequencerApiVersion,
+    api::{
+        Options,
+        data_source::testing::TestableSequencerDataSource,
+        sql::DataSource as SqlDataSource,
+        test_helpers::{TestNetwork, TestNetworkConfigBuilder},
+    },
+    testing::{TestConfig, TestConfigBuilder},
+};
 use espresso_types::{
     FeeAccount, FeeAmount, Header, SeqTypes,
     v0_3::RewardAmount,
@@ -27,16 +37,6 @@ use jf_merkle_tree_compat::{
 };
 use rstest::rstest;
 use rstest_reuse::{self, apply, template};
-use sequencer::{
-    SequencerApiVersion,
-    api::{
-        Options,
-        data_source::testing::TestableSequencerDataSource,
-        sql::DataSource as SqlDataSource,
-        test_helpers::{TestNetwork, TestNetworkConfigBuilder},
-    },
-    testing::{TestConfig, TestConfigBuilder},
-};
 use surf_disco::Client;
 use test_utils::reserve_tcp_port;
 use tide_disco::error::ServerError;
@@ -147,7 +147,14 @@ async fn insert_test_header(
     });
     tx.upsert(
         "header",
-        ["height", "hash", "payload_hash", "timestamp", "data"],
+        [
+            "height",
+            "hash",
+            "payload_hash",
+            "timestamp",
+            "data",
+            "ns_table",
+        ],
         ["height"],
         [(
             block_height as i64,
@@ -155,6 +162,7 @@ async fn insert_test_header(
             format!("payload_{}", block_height),
             block_height as i64,
             test_data,
+            "ns_table".to_string(),
         )],
     )
     .await

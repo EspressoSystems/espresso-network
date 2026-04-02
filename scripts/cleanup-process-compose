@@ -68,7 +68,7 @@ kill_tree() {
 # List of native processes managed by process-compose
 # Update this list when adding/removing processes in process-compose.yaml
 NATIVE_PROCESSES=(
-	sequencer
+	espresso-node
 	orchestrator
 	state-relay-server
 	cdn-marshal
@@ -105,6 +105,8 @@ kill_project_processes() {
 		if [[ -n "$proc_cwd" && "$proc_cwd" == "$PROJECT_DIR"* ]]; then
 			echo "Killing $proc_name (pid $pid) from $proc_cwd"
 			kill_tree "$pid" "$signal"
+		elif [[ -n "$proc_cwd" ]]; then
+			echo "Skipping $proc_name (pid $pid): cwd $proc_cwd does not match $PROJECT_DIR"
 		fi
 	done
 }

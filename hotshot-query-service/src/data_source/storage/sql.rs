@@ -27,7 +27,7 @@ use hotshot_types::{
 use itertools::Itertools;
 use log::LevelFilter;
 use sqlx::{
-    ConnectOptions, Row,
+    ConnectOptions,
     pool::PoolOptions,
     postgres::{PgConnectOptions, PgSslMode},
     sqlite::SqliteConnectOptions,
@@ -1082,15 +1082,15 @@ impl PruneStorage for SqlStorage {
         // If any of these values are not set, they can be loaded from the database if necessary.
         let mut minimum_retention_height = pruner.minimum_retention_height;
         let mut target_height = pruner.target_height;
-        let mut height = match pruner.pruned_height {
-            Some(h) => h,
+        let pruned_height = match pruner.pruned_height {
+            Some(h) => Some(h),
             None => {
                 let Some(height) = self.get_minimum_height().await? else {
                     tracing::info!("database is empty, nothing to prune");
                     return Ok(None);
                 };
 
-                height
+                if height > 0 { Some(height - 1) } else { None }
             },
         };
 
@@ -1105,17 +1105,21 @@ impl PruneStorage for SqlStorage {
             pruner.target_height = target_height;
         };
 
-        if let Some(target_height) = target_height
-            && height < target_height
+        if let Some(th) = target_height
+            && pruned_height < Some(th)
         {
-            height = min(height + batch_size, target_height);
+            let batch_end = match pruned_height {
+                None => batch_size - 1,
+                Some(h) => h + batch_size,
+            };
+            let to = min(batch_end, th);
             let mut tx = self.write().await?;
-            tx.delete_batch(state_tables, height).await?;
+            tx.delete_batch(state_tables, to).await?;
             tx.commit().await.map_err(|e| QueryError::Error {
                 message: format!("failed to commit {e}"),
             })?;
-            pruner.pruned_height = Some(height);
-            return Ok(Some(height));
+            pruner.pruned_height = Some(to);
+            return Ok(Some(to));
         }
 
         // If threshold is set, prune data exceeding minimum retention in batches
@@ -1143,20 +1147,23 @@ impl PruneStorage for SqlStorage {
 
                 if let Some(min_retention_height) = minimum_retention_height
                     && (usage as f64 / threshold as f64) > (f64::from(max_usage) / 10000.0)
-                    && height < min_retention_height
+                    && pruned_height < Some(min_retention_height)
                 {
-                    height = min(height + batch_size, min_retention_height);
+                    let batch_end = match pruned_height {
+                        None => batch_size - 1,
+                        Some(h) => h + batch_size,
+                    };
+                    let to = min(batch_end, min_retention_height);
                     let mut tx = self.write().await?;
-                    tx.delete_batch(state_tables, height).await?;
+                    tx.delete_batch(state_tables, to).await?;
                     tx.commit().await.map_err(|e| QueryError::Error {
                         message: format!("failed to commit {e}"),
                     })?;
 
                     self.vacuum().await?;
 
-                    pruner.pruned_height = Some(height);
-
-                    return Ok(Some(height));
+                    pruner.pruned_height = Some(to);
+                    return Ok(Some(to));
                 }
             }
         }
@@ -1302,12 +1309,12 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
                 let mut query_builder = sqlx::QueryBuilder::new(
                     "INSERT INTO leaf2 (height, hash, block_hash, leaf, qc) ",
                 );
-                query_builder.push_values(&leaf_rows, |mut b, row| {
+                query_builder.push_values(leaf_rows.clone(), |mut b, row| {
                     b.push_bind(row.0)
-                        .push_bind(row.1.clone())
-                        .push_bind(row.2.clone())
-                        .push_bind(row.3.clone())
-                        .push_bind(row.4.clone());
+                        .push_bind(row.1)
+                        .push_bind(row.2)
+                        .push_bind(row.3)
+                        .push_bind(row.4);
                 });
                 query_builder.push(" ON CONFLICT DO NOTHING");
                 let query = query_builder.build();
@@ -1327,10 +1334,8 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
             with_backend!(tx, |inner| {
                 let mut query_builder =
                     sqlx::QueryBuilder::new("INSERT INTO vid2 (height, common, share) ");
-                query_builder.push_values(&vid_rows, |mut b, row| {
-                    b.push_bind(row.0)
-                        .push_bind(row.1.clone())
-                        .push_bind(row.2.clone());
+                query_builder.push_values(vid_rows.clone(), |mut b, row| {
+                    b.push_bind(row.0).push_bind(row.1).push_bind(row.2);
                 });
                 query_builder.push(" ON CONFLICT DO NOTHING");
                 let query = query_builder.build();
@@ -1693,8 +1698,7 @@ pub mod testing {
 mod test {
     use std::time::Duration;
 
-    use committable::{Commitment, CommitmentBoundsArkless, Committable};
-    use hotshot::traits::BlockPayload;
+    use committable::{Commitment, CommitmentBoundsArkless};
     use hotshot_example_types::{
         node_types::TEST_VERSIONS,
         state_types::{TestInstanceState, TestValidatedState},
@@ -1703,7 +1707,7 @@ mod test {
         data::{QuorumProposal, ViewNumber},
         simple_vote::QuorumData,
         traits::{
-            EncodeBytes,
+            BlockPayload, EncodeBytes,
             block_contents::{BlockHeader, GENESIS_VID_NUM_STORAGE_NODES},
         },
         vid::advz::advz_scheme,
@@ -1718,7 +1722,7 @@ mod test {
 
     use super::{testing::TmpDb, *};
     use crate::{
-        availability::LeafQueryData,
+        availability::{BlockQueryData, LeafQueryData},
         data_source::storage::{UpdateAvailabilityStorage, pruning::PrunedHeightStorage},
         merklized_state::{MerklizedState, UpdateStateData},
         testing::mocks::{MOCK_UPGRADE, MockHeader, MockMerkleTree, MockPayload, MockTypes},
@@ -1843,7 +1847,7 @@ mod test {
             leaf.leaf.block_header_mut().block_number = i;
             leaf.leaf.block_header_mut().timestamp = Utc::now().timestamp() as u64;
             let mut tx = storage.write().await.unwrap();
-            tx.insert_leaf(leaf.clone()).await.unwrap();
+            tx.insert_leaf(&leaf).await.unwrap();
             tx.commit().await.unwrap();
         }
 
@@ -1936,7 +1940,14 @@ mod test {
             let test_data = serde_json::json!({ MockMerkleTree::header_state_commitment_field() : serde_json::to_value(test_tree.commitment()).unwrap()});
             tx.upsert(
                 "header",
-                ["height", "hash", "payload_hash", "timestamp", "data"],
+                [
+                    "height",
+                    "hash",
+                    "payload_hash",
+                    "timestamp",
+                    "data",
+                    "ns_table",
+                ],
                 ["height"],
                 [(
                     block_height as i64,
@@ -1944,6 +1955,7 @@ mod test {
                     "t".to_string(),
                     0,
                     test_data,
+                    "ns_table".to_string(),
                 )],
             )
             .await
@@ -2028,7 +2040,7 @@ mod test {
             leaf.leaf.block_header_mut().block_number = i;
             leaf.leaf.block_header_mut().timestamp = Utc::now().timestamp() as u64;
             let mut tx = storage.write().await.unwrap();
-            tx.insert_leaf(leaf.clone()).await.unwrap();
+            tx.insert_leaf(&leaf).await.unwrap();
             tx.commit().await.unwrap();
         }
 
@@ -2086,6 +2098,162 @@ mod test {
         drop(tx);
         // the table should be empty
         assert_eq!(header_rows, 0);
+    }
+
+    #[apply(sql_backends)]
+    async fn test_payload_pruning(#[case] backend: DbBackend) {
+        let db = TmpDb::init_for(backend).await;
+        let mut storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+        storage.set_pruning_config(Default::default());
+
+        // Insert some mock data.
+        let mut leaf = LeafQueryData::<MockTypes>::genesis(
+            &TestValidatedState::default(),
+            &TestInstanceState::default(),
+            TEST_VERSIONS.test,
+        )
+        .await;
+        let block = BlockQueryData::<MockTypes>::genesis(
+            &Default::default(),
+            &Default::default(),
+            TEST_VERSIONS.test.base,
+        )
+        .await;
+        let vid = VidCommonQueryData::<MockTypes>::genesis(
+            &Default::default(),
+            &Default::default(),
+            TEST_VERSIONS.test.base,
+        )
+        .await;
+        {
+            let mut tx = storage.write().await.unwrap();
+            tx.insert_leaf(&leaf).await.unwrap();
+            tx.insert_block(&block).await.unwrap();
+            tx.insert_vid(&vid, None).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+
+        // Insert a second leaf sharing the same payload.
+        leaf.leaf.block_header_mut().block_number += 1;
+        {
+            let mut tx = storage.write().await.unwrap();
+            tx.insert_leaf(&leaf).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+        {
+            let mut tx = storage.read().await.unwrap();
+            let (num_payloads,): (i64,) = with_backend!(tx, |inner| {
+                sqlx::query_as("SELECT count(*) FROM payload")
+                    .fetch_one(inner.as_mut())
+                    .await
+            })
+            .unwrap();
+            assert_eq!(num_payloads, 1);
+            let (num_vid,): (i64,) = with_backend!(tx, |inner| {
+                sqlx::query_as("SELECT count(*) FROM vid_common")
+                    .fetch_one(inner.as_mut())
+                    .await
+            })
+            .unwrap();
+            assert_eq!(num_vid, 1);
+        }
+
+        // Prune the first leaf but not the second (and thus not the payload or VID).
+        let pruned_height = storage
+            .prune(&mut Pruner {
+                pruned_height: None,
+                target_height: Some(0),
+                minimum_retention_height: None,
+            })
+            .await
+            .unwrap();
+        tracing::info!(?pruned_height, "first pruning run complete");
+        {
+            let mut tx = storage.read().await.unwrap();
+
+            // First block is pruned.
+            let err = tx
+                .get_block(BlockId::<MockTypes>::Number(0))
+                .await
+                .unwrap_err();
+            assert!(matches!(err, QueryError::NotFound), "{err:#}");
+            let err = tx
+                .get_vid_common(BlockId::<MockTypes>::Number(0))
+                .await
+                .unwrap_err();
+            assert!(matches!(err, QueryError::NotFound), "{err:#}");
+
+            // Second block is still available.
+            assert_eq!(
+                tx.get_block(BlockId::<MockTypes>::Number(1)).await.unwrap(),
+                BlockQueryData::new(leaf.header().clone(), block.payload)
+            );
+            assert_eq!(
+                tx.get_vid_common(BlockId::<MockTypes>::Number(1))
+                    .await
+                    .unwrap(),
+                VidCommonQueryData::new(leaf.header().clone(), vid.common)
+            );
+
+            let (num_payloads,): (i64,) = with_backend!(tx, |inner| {
+                sqlx::query_as("SELECT count(*) FROM payload")
+                    .fetch_one(inner.as_mut())
+                    .await
+            })
+            .unwrap();
+            assert_eq!(num_payloads, 1);
+
+            let (num_vid,): (i64,) = with_backend!(tx, |inner| {
+                sqlx::query_as("SELECT count(*) FROM vid_common")
+                    .fetch_one(inner.as_mut())
+                    .await
+            })
+            .unwrap();
+            assert_eq!(num_vid, 1);
+        }
+
+        // Now prune the second leaf, ensuring the payload and VID get deleted as well.
+        let pruned_height = storage
+            .prune(&mut Pruner {
+                pruned_height,
+                target_height: Some(1),
+                minimum_retention_height: None,
+            })
+            .await
+            .unwrap();
+        tracing::info!(?pruned_height, "second pruning run complete");
+
+        let mut tx = storage.read().await.unwrap();
+        for i in 0..2 {
+            let err = tx
+                .get_block(BlockId::<MockTypes>::Number(i))
+                .await
+                .unwrap_err();
+            assert!(matches!(err, QueryError::NotFound), "{err:#}");
+
+            let err = tx
+                .get_vid_common(BlockId::<MockTypes>::Number(i))
+                .await
+                .unwrap_err();
+            assert!(matches!(err, QueryError::NotFound), "{err:#}");
+        }
+        let (num_payloads,): (i64,) = with_backend!(tx, |inner| {
+            sqlx::query_as("SELECT count(*) FROM payload")
+                .fetch_one(inner.as_mut())
+                .await
+        })
+        .unwrap();
+        assert_eq!(num_payloads, 0);
+
+        let (num_vid,): (i64,) = with_backend!(tx, |inner| {
+            sqlx::query_as("SELECT count(*) FROM vid_common")
+                .fetch_one(inner.as_mut())
+                .await
+        })
+        .unwrap();
+        assert_eq!(num_vid, 0);
     }
 
     #[apply(sql_backends)]

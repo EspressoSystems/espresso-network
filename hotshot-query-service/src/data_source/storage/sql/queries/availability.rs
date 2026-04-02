@@ -26,7 +26,7 @@ use super::{
     VID_COMMON_COLUMNS, VID_COMMON_METADATA_COLUMNS,
 };
 use crate::{
-    Header, MissingSnafu, Payload, QueryError, QueryResult,
+    Header, MissingSnafu, Payload, QueryResult,
     availability::{
         BlockId, BlockQueryData, LeafId, LeafQueryData, NamespaceInfo, NamespaceMap,
         PayloadQueryData, QueryableHeader, QueryablePayload, TransactionHash, VidCommonQueryData,
@@ -63,7 +63,7 @@ where
         let sql = format!(
             "SELECT {BLOCK_COLUMNS}
               FROM header AS h
-              JOIN payload AS p ON h.height = p.height
+              JOIN payload AS p ON (h.payload_hash, h.ns_table) = (p.hash, p.ns_table)
               WHERE {where_clause}
               ORDER BY h.height
               LIMIT 1"
@@ -84,7 +84,7 @@ where
         let sql = format!(
             "SELECT {PAYLOAD_COLUMNS}
               FROM header AS h
-              JOIN payload AS p ON h.height = p.height
+              JOIN payload AS p ON (h.payload_hash, h.ns_table) = (p.hash, p.ns_table)
               WHERE {where_clause}
               ORDER BY h.height
               LIMIT 1"
@@ -104,8 +104,8 @@ where
         let sql = format!(
             "SELECT {PAYLOAD_METADATA_COLUMNS}
               FROM header AS h
-              JOIN payload AS p ON h.height = p.height
-              WHERE {where_clause} AND p.num_transactions IS NOT NULL
+              JOIN payload AS p ON (h.payload_hash, h.ns_table) = (p.hash, p.ns_table)
+              WHERE {where_clause}
               ORDER BY h.height ASC
               LIMIT 1"
         );
@@ -132,7 +132,7 @@ where
         let sql = format!(
             "SELECT {VID_COMMON_COLUMNS}
               FROM header AS h
-              JOIN vid2 AS v ON h.height = v.height
+              JOIN vid_common AS v ON h.payload_hash = v.hash
               WHERE {where_clause}
               ORDER BY h.height
               LIMIT 1"
@@ -152,7 +152,7 @@ where
         let sql = format!(
             "SELECT {VID_COMMON_METADATA_COLUMNS}
               FROM header AS h
-              JOIN vid2 AS v ON h.height = v.height
+              JOIN vid_common AS v ON h.payload_hash = v.hash
               WHERE {where_clause}
               ORDER BY h.height ASC
               LIMIT 1"
@@ -191,7 +191,7 @@ where
         let sql = format!(
             "SELECT {BLOCK_COLUMNS}
               FROM header AS h
-              JOIN payload AS p ON h.height = p.height
+              JOIN payload AS p ON (h.payload_hash, h.ns_table) = (p.hash, p.ns_table)
               {where_clause}
               ORDER BY h.height"
         );
@@ -244,7 +244,7 @@ where
         let sql = format!(
             "SELECT {PAYLOAD_COLUMNS}
               FROM header AS h
-              JOIN payload AS p ON h.height = p.height
+              JOIN payload AS p ON (h.payload_hash, h.ns_table) = (p.hash, p.ns_table)
               {where_clause}
               ORDER BY h.height"
         );
@@ -268,8 +268,8 @@ where
         let sql = format!(
             "SELECT {PAYLOAD_METADATA_COLUMNS}
               FROM header AS h
-              JOIN payload AS p ON h.height = p.height
-              {where_clause} AND p.num_transactions IS NOT NULL
+              JOIN payload AS p ON (h.payload_hash, h.ns_table) = (p.hash, p.ns_table)
+              {where_clause}
               ORDER BY h.height ASC"
         );
         let rows: Vec<_> = query.query(&sql).fetch(self).collect::<Vec<_>>().await;
@@ -300,7 +300,7 @@ where
         let sql = format!(
             "SELECT {VID_COMMON_COLUMNS}
               FROM header AS h
-              JOIN vid2 AS v ON h.height = v.height
+              JOIN vid_common AS v ON h.payload_hash = v.hash
               {where_clause}
               ORDER BY h.height"
         );
@@ -324,7 +324,7 @@ where
         let sql = format!(
             "SELECT {VID_COMMON_METADATA_COLUMNS}
               FROM header AS h
-              JOIN vid2 AS v ON h.height = v.height
+              JOIN vid_common AS v ON h.payload_hash = v.hash
               {where_clause}
               ORDER BY h.height ASC"
         );
@@ -348,7 +348,7 @@ where
         let sql = format!(
             "SELECT {BLOCK_COLUMNS}
                 FROM header AS h
-                JOIN payload AS p ON h.height = p.height
+                JOIN payload AS p ON (h.payload_hash, h.ns_table) = (p.hash, p.ns_table)
                 JOIN transactions AS t ON t.block_height = h.height
                 WHERE t.hash = {hash_param}
                 ORDER BY t.block_height, t.ns_id, t.position
@@ -412,5 +412,205 @@ where
             .await
         })?;
         Ok(map)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use hotshot_example_types::node_types::TEST_VERSIONS;
+    use hotshot_types::{data::VidCommon, vid::advz::advz_scheme};
+    use jf_advz::VidScheme;
+    use pretty_assertions::assert_eq;
+
+    use super::*;
+    use crate::{
+        QueryError,
+        data_source::{
+            Transaction, VersionedDataSource,
+            sql::testing::TmpDb,
+            storage::{SqlStorage, StorageConnectionType, UpdateAvailabilityStorage},
+        },
+        testing::mocks::MockTypes,
+    };
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_duplicate_payload() {
+        let storage = TmpDb::init().await;
+        let db = SqlStorage::connect(storage.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+        let mut vid = advz_scheme(2);
+
+        // Create two blocks with the same (empty) payload.
+        let mut leaves = vec![
+            LeafQueryData::<MockTypes>::genesis(
+                &Default::default(),
+                &Default::default(),
+                TEST_VERSIONS.test,
+            )
+            .await,
+        ];
+        let mut blocks = vec![
+            BlockQueryData::<MockTypes>::genesis(
+                &Default::default(),
+                &Default::default(),
+                TEST_VERSIONS.test.base,
+            )
+            .await,
+        ];
+        let dispersal = vid.disperse([]).unwrap();
+        let mut vid = vec![VidCommonQueryData::<MockTypes>::new(
+            leaves[0].header().clone(),
+            VidCommon::V0(dispersal.common.clone()),
+        )];
+
+        let mut leaf = leaves[0].clone();
+        leaf.leaf.block_header_mut().block_number += 1;
+        let block = BlockQueryData::new(leaf.header().clone(), blocks[0].payload().clone());
+        let common =
+            VidCommonQueryData::new(leaf.header().clone(), VidCommon::V0(dispersal.common));
+        leaves.push(leaf);
+        blocks.push(block);
+        vid.push(common);
+
+        // Insert the first leaf without payload or VID data.
+        {
+            let mut tx = db.write().await.unwrap();
+            tx.insert_leaf(&leaves[0]).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+
+        // The block and VID data are missing.
+        {
+            let mut tx = db.read().await.unwrap();
+            assert_eq!(tx.get_leaf(LeafId::Number(0)).await.unwrap(), leaves[0]);
+            assert_absent(
+                tx.get_block(BlockId::<MockTypes>::Number(0))
+                    .await
+                    .unwrap_err(),
+            );
+            assert_absent(
+                tx.get_vid_common(BlockId::<MockTypes>::Number(0))
+                    .await
+                    .unwrap_err(),
+            );
+        }
+
+        // Insert the second block with all data.
+        {
+            let mut tx = db.write().await.unwrap();
+            tx.insert_leaf(&leaves[1]).await.unwrap();
+            tx.insert_block(&blocks[1]).await.unwrap();
+            tx.insert_vid(&vid[1], None).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+
+        // The identical block and VID common are shared by both leaves.
+        for i in 0..2 {
+            let mut tx = db.read().await.unwrap();
+            assert_eq!(tx.get_leaf(LeafId::Number(i)).await.unwrap(), leaves[i]);
+            assert_eq!(tx.get_block(BlockId::Number(i)).await.unwrap(), blocks[i]);
+            assert_eq!(tx.get_vid_common(BlockId::Number(i)).await.unwrap(), vid[i]);
+        }
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_same_payload_different_ns_table() {
+        let storage = TmpDb::init().await;
+        let db = SqlStorage::connect(storage.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+        let mut vid = advz_scheme(2);
+
+        // Create two blocks with byte-identical payloads, but different namespace tables (meaning
+        // the interpretation of the payload is different).
+        // Create two blocks with the same (empty) payload.
+        let mut leaves = vec![
+            LeafQueryData::<MockTypes>::genesis(
+                &Default::default(),
+                &Default::default(),
+                TEST_VERSIONS.test,
+            )
+            .await,
+        ];
+        let mut blocks = vec![
+            BlockQueryData::<MockTypes>::genesis(
+                &Default::default(),
+                &Default::default(),
+                TEST_VERSIONS.test.base,
+            )
+            .await,
+        ];
+        let dispersal = vid.disperse([]).unwrap();
+        let mut vid = vec![VidCommonQueryData::<MockTypes>::new(
+            leaves[0].header().clone(),
+            VidCommon::V0(dispersal.common.clone()),
+        )];
+
+        let mut leaf = leaves[0].clone();
+        leaf.leaf.block_header_mut().block_number += 1;
+        leaf.leaf.block_header_mut().metadata.num_transactions += 1;
+        let block = BlockQueryData::new(leaf.header().clone(), blocks[0].payload().clone());
+        let common =
+            VidCommonQueryData::new(leaf.header().clone(), VidCommon::V0(dispersal.common));
+        leaves.push(leaf);
+        blocks.push(block);
+        vid.push(common);
+
+        // Insert the first leaf without payload or VID data.
+        {
+            let mut tx = db.write().await.unwrap();
+            tx.insert_leaf(&leaves[0]).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+
+        // The block and VID data are missing.
+        {
+            let mut tx = db.read().await.unwrap();
+            assert_eq!(tx.get_leaf(LeafId::Number(0)).await.unwrap(), leaves[0]);
+            assert_absent(
+                tx.get_block(BlockId::<MockTypes>::Number(0))
+                    .await
+                    .unwrap_err(),
+            );
+            assert_absent(
+                tx.get_vid_common(BlockId::<MockTypes>::Number(0))
+                    .await
+                    .unwrap_err(),
+            );
+        }
+
+        // Insert the second block with all data.
+        {
+            let mut tx = db.write().await.unwrap();
+            tx.insert_leaf(&leaves[1]).await.unwrap();
+            tx.insert_block(&blocks[1]).await.unwrap();
+            tx.insert_vid(&vid[1], None).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+
+        // Both leaves and VID common are present.
+        let mut tx = db.read().await.unwrap();
+        for i in 0..2 {
+            assert_eq!(tx.get_leaf(LeafId::Number(i)).await.unwrap(), leaves[i]);
+            assert_eq!(tx.get_vid_common(BlockId::Number(i)).await.unwrap(), vid[i]);
+        }
+
+        // The first block is still missing, since the payload cannot be shared.
+        assert_absent(
+            tx.get_block(BlockId::<MockTypes>::Number(0))
+                .await
+                .unwrap_err(),
+        );
+        assert_eq!(tx.get_block(BlockId::Number(1)).await.unwrap(), blocks[1]);
+    }
+
+    fn assert_absent(err: QueryError) {
+        assert!(
+            matches!(err, QueryError::Missing | QueryError::NotFound),
+            "{err:#}"
+        );
     }
 }

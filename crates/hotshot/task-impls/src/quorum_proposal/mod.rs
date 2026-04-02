@@ -626,7 +626,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> QuorumProposalTaskState<TYPE
                         membership_success_threshold,
                         &self.upgrade_lock,
                     )
-                    .await
                     .context(|e| {
                         warn!(
                             "View Sync Finalize certificate {:?} was invalid: {}",

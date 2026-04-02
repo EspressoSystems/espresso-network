@@ -1,9 +1,9 @@
+use espresso_node::SequencerApiVersion;
 use espresso_types::SeqTypes;
 use hotshot_builder_api::v0_1::builder::{
     Error as BuilderApiError, Options as HotshotBuilderApiOptions,
 };
 use hotshot_builder_legacy::service::ProxyGlobalState;
-use sequencer::SequencerApiVersion;
 use tide_disco::{App, Url};
 use tokio::spawn;
 use vbs::version::{StaticVersion, StaticVersionType};
@@ -52,6 +52,7 @@ pub mod testing {
     };
     use async_lock::RwLock;
     use committable::Committable;
+    use espresso_node::{SequencerApiVersion, context::Consensus, network};
     use espresso_types::{
         Event, FeeAccount, NamespaceId, NodeState, PrivKey, PubKey, Transaction, ValidatedState,
         traits::SequencerPersistence, v0_3::ChainConfig,
@@ -82,7 +83,6 @@ pub mod testing {
             signature_key::BuilderSignatureKey as _,
         },
     };
-    use sequencer::{SequencerApiVersion, context::Consensus, network};
     use surf_disco::Client;
     use vbs::version::{StaticVersion, Version};
 
@@ -185,6 +185,7 @@ pub mod testing {
             .map(|(pub_key, state_key_pair)| PeerConfig::<SeqTypes> {
                 stake_table_entry: pub_key.stake_table_entry(U256::from(stake_value)),
                 state_ver_key: state_key_pair.ver_key(),
+                connect_info: None,
             })
             .collect::<Vec<_>>();
 
@@ -223,6 +224,8 @@ pub mod testing {
                     state_public_key: self.staking_nodes_state_key_pairs[i].ver_key(),
                     state_private_key: self.staking_nodes_state_key_pairs[i].sign_key(),
                     is_da: true,
+                    x25519_keypair: None,
+                    p2p_addr: None,
                 }
             } else {
                 ValidatorConfig {
@@ -234,6 +237,8 @@ pub mod testing {
                     state_public_key: self.non_staking_nodes_state_key_pairs[i].ver_key(),
                     state_private_key: self.non_staking_nodes_state_key_pairs[i].sign_key(),
                     is_da: true,
+                    x25519_keypair: None,
+                    p2p_addr: None,
                 }
             }
         }

@@ -40,6 +40,7 @@ use crate::{
         ViewSyncFinalizeCertificate2,
     },
     simple_vote::{HasEpoch, QuorumData, QuorumData2, UpgradeProposalData, VersionedVoteData},
+    stake_table::StakeTableEntries,
     traits::{
         BlockPayload,
         block_contents::{BlockHeader, BuilderFee, EncodeBytes, TestableBlock},
@@ -154,6 +155,21 @@ impl Committable for EpochNumber {
 }
 
 impl_u64_wrapper!(EpochNumber, 1u64);
+
+#[derive(
+    Copy, Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
+#[serde(transparent)]
+pub struct BlockNumber(u64);
+
+impl Committable for BlockNumber {
+    fn commit(&self) -> Commitment<Self> {
+        let builder = RawCommitmentBuilder::new("BlockNumber Commitment");
+        builder.u64(self.0).finalize()
+    }
+}
+
+impl_u64_wrapper!(BlockNumber, 0u64);
 
 /// A proposal to start providing data availability for a block.
 #[derive(derive_more::Debug, Serialize, Deserialize, Clone, Eq, PartialEq, Hash)]
@@ -430,6 +446,9 @@ impl<'a> VidCommonRef<'a> {
             (Self::V0(common), VidCommitment::V0(comm)) => {
                 ADVZScheme::is_consistent(comm, common).is_ok()
             },
+            // We don't check consistency here because for V1 the VidCommon is simply the VidParam,
+            // which doesn't contain any information about the payload, and has nothing to do with
+            // the commitment. The meaningful checks are in VID share verification.
             (Self::V1(_), VidCommitment::V1(_)) => true,
             (Self::V2(common), VidCommitment::V2(comm)) => {
                 AvidmGf2Scheme::is_consistent(comm, common)
@@ -981,6 +1000,43 @@ pub struct QuorumProposal2<TYPES: NodeType> {
     /// The light client state update certificate for the next epoch.
     /// This is required for the epoch root.
     pub state_cert: Option<LightClientStateUpdateCertificateV2<TYPES>>,
+}
+
+impl<TYPES: NodeType> QuorumProposal2<TYPES> {
+    pub async fn validate_certs(
+        &self,
+        membership: EpochMembershipCoordinator<TYPES>,
+        upgrade_lock: &UpgradeLock<TYPES>,
+    ) -> Result<()> {
+        let stake_table = membership.membership_for_epoch(self.epoch).await?;
+        let entries = StakeTableEntries::<TYPES>::from(stake_table.stake_table().await).0;
+        let threshold = stake_table.success_threshold().await;
+        self.justify_qc
+            .is_valid_cert(&entries, threshold, upgrade_lock)?;
+        let view_change_view = match &self.view_change_evidence {
+            Some(ViewChangeEvidence2::Timeout(timeout_cert)) => {
+                timeout_cert.is_valid_cert(&entries, threshold, upgrade_lock)?;
+                Some(timeout_cert.view_number() + 1)
+            },
+            Some(ViewChangeEvidence2::ViewSync(view_sync_cert)) => {
+                view_sync_cert.is_valid_cert(&entries, threshold, upgrade_lock)?;
+                Some(view_sync_cert.view_number())
+            },
+            _ => None,
+        };
+        if !(self.justify_qc.view_number() + 1 == self.view_number()
+            || view_change_view == Some(self.view_number()))
+        {
+            bail!("Invalid view change evidence");
+        }
+        Ok(())
+    }
+    pub fn is_validate_block_height(&self) -> bool {
+        self.justify_qc
+            .data()
+            .block_number
+            .is_some_and(|bn| bn + 1 == self.block_header.block_number())
+    }
 }
 
 /// Legacy version of `QuorumProposal2` corresponding to consensus protocol version V3.
@@ -1812,8 +1868,7 @@ impl<TYPES: NodeType> QuorumCertificate<TYPES> {
         };
 
         let versioned_data =
-            VersionedVoteData::<_, _>::new_infallible(data.clone(), genesis_view, &upgrade_lock)
-                .await;
+            VersionedVoteData::<_, _>::new_infallible(data.clone(), genesis_view, &upgrade_lock);
 
         let bytes: [u8; 32] = versioned_data.commit().into();
 
@@ -1853,8 +1908,7 @@ impl<TYPES: NodeType> QuorumCertificate2<TYPES> {
         };
 
         let versioned_data =
-            VersionedVoteData::<_, _>::new_infallible(data.clone(), genesis_view, &upgrade_lock)
-                .await;
+            VersionedVoteData::<_, _>::new_infallible(data.clone(), genesis_view, &upgrade_lock);
 
         let bytes: [u8; 32] = versioned_data.commit().into();
 

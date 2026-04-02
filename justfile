@@ -5,7 +5,7 @@ default:
 
 doc *args:
     cargo doc --no-deps --document-private-items {{args}}
-    echo "file://${CARGO_TARGET_DIR:-$PWD/target}/doc/sequencer/index.html"
+    echo "file://${CARGO_TARGET_DIR:-$PWD/target}/doc/espresso_node/index.html"
 
 doc-contracts:
     #!/usr/bin/env bash
@@ -31,9 +31,9 @@ doc-all-serve: doc doc-contracts
     mkdir -p ./public/contracts
     cp -r "${CARGO_TARGET_DIR:-target}"/doc/* ./public/
     cp -r docs/book/* ./public/contracts/
-    echo '<meta http-equiv="refresh" content="0; url=sequencer">' > ./public/index.html
+    echo '<meta http-equiv="refresh" content="0; url=espresso_node">' > ./public/index.html
     echo "Serving at http://localhost:8000"
-    echo "  Rust docs: http://localhost:8000/sequencer"
+    echo "  Rust docs: http://localhost:8000/espresso_node"
     echo "  Contract docs: http://localhost:8000/contracts"
     python3 -m http.server 8000 --directory ./public
 
@@ -96,18 +96,18 @@ demo-native-fee-to-drb-header-upgrade *args: (build "test" "--no-default-feature
 demo-native-da-committees *args: (build "test" "--no-default-features")
     ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo-da-committees.toml scripts/demo-native -f process-compose.yaml {{args}}
 
+demo-native-epoch-reward *args: (build "test" "--no-default-features")
+    ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo-epoch-reward.toml scripts/demo-native -f process-compose.yaml {{args}}
+
+demo-native-epoch-reward-upgrade *args: (build "test" "--no-default-features")
+    ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo-epoch-reward-upgrade.toml scripts/demo-native -f process-compose.yaml {{args}}
+
 demo-native-benchmark:
     cargo build --release --features benchmarking
     scripts/demo-native
 
 down *args:
     docker compose down {{args}}
-
-docker-cli *cmd:
-    docker exec -it espresso-sequencer-example-rollup-1 bin/cli {{cmd}}
-
-cli *cmd:
-    target/release/cli {{cmd}}
 
 pull:
     docker compose pull
@@ -119,8 +119,9 @@ anvil *args:
     docker run -p 127.0.0.1:8545:8545 ghcr.io/foundry-rs/foundry:latest "anvil {{args}}"
 
 # hotshot-testing: tested in hotshot.yml
+# hotshot-new-protocol: tested in hotshot.yml
 # slow-tests: slow and serial tests
-nextest_excludes := "--exclude hotshot-testing --exclude slow-tests"
+nextest_excludes := "--exclude hotshot-testing --exclude hotshot-new-protocol --exclude slow-tests"
 
 nextest *args:
     cargo nextest run --locked --workspace {{nextest_excludes}} --verbose {{args}}
@@ -146,7 +147,7 @@ test-dev-node *args:
 test-all:
     just nextest --profile all
 
-test-integration: (build "test" "--features fee")
+test-integration: (build "test")
 	INTEGRATION_TEST_SEQUENCER_VERSION=2 cargo nextest run -p tests --nocapture --profile integration test_native_demo_basic
 
 # Run process-compose integration tests with minimal features
@@ -181,11 +182,19 @@ test-demo test_name:
 			;;
 		da-committees)
 			features="--no-default-features"
-			test="test_native_demo_drb_header_base"
+			test="test_native_demo_da_committee"
+			;;
+		epoch-reward-base)
+			features="--no-default-features"
+			test="test_native_demo_epoch_reward_base"
+			;;
+		epoch-reward-upgrade)
+			features="--no-default-features"
+			test="test_native_demo_epoch_reward_upgrade"
 			;;
 		*)
 			echo "Unknown test: {{test_name}}"
-			echo "Available tests: base, pos-base, drb-header-base, pos-upgrade, drb-header-upgrade, fee-to-drb-header-upgrade, da-committees"
+			echo "Available tests: base, pos-base, drb-header-base, epoch-reward-base, pos-upgrade, drb-header-upgrade, fee-to-drb-header-upgrade, da-committees, epoch-reward-upgrade"
 			exit 1
 			;;
 	esac
@@ -228,8 +237,8 @@ dev-cdn *args:
 dev-state-relay-server:
     target/release/state-relay-server -p 8083
 
-dev-sequencer:
-    target/release/sequencer \
+dev-espresso-node:
+    target/release/espresso-node \
     --orchestrator-url http://localhost:8080 \
     --cdn-endpoint "127.0.0.1:1738" \
     --state-relay-server-url http://localhost:8083 \
@@ -274,7 +283,7 @@ sol-lint:
     solhint --fix 'contracts/{script,src,test}/**/*.sol'
 
 # Build diff-test binary and forge test
-# Note: we use an invalid etherscan api key in order to avoid annoying warnings. See https://github.com/EspressoSystems/espresso-sequencer/issues/979
+# Note: we use an invalid etherscan api key in order to avoid annoying warnings. See https://github.com/EspressoSystems/espresso-network/issues/979
 sol-test *args:
     export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-target} &&\
     cargo build --release --bin diff-test &&\
@@ -325,6 +334,12 @@ gen-go-bindings:
 build-go-crypto-helper *args:
     ./scripts/build-go-crypto-helper {{args}}
 
+fmt-go:
+    gofmt -w sdks/go/
+
+lint-go:
+    cd sdks/go && go vet ./...
+
 test-go *args:
     #!/usr/bin/env bash
     export LD_LIBRARY_PATH=$PWD/sdks/go/verification/target/lib:$LD_LIBRARY_PATH
@@ -341,6 +356,9 @@ contracts-test-fuzz *args='-vv':
 
 contracts-test-invariant *args='-vv':
     forge test --match-test invariant_ {{args}}
+
+contracts-mutation-test *args:
+    dregs run --project . {{args}}
 
 contracts-test-network *args='-vv':
     #!/usr/bin/env bash

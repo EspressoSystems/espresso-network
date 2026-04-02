@@ -9,11 +9,12 @@
 //! This modules provides the [`Storage`] trait.
 //!
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use anyhow::{Result, anyhow, ensure};
 use async_trait::async_trait;
 use futures::future::BoxFuture;
+use tokio::time::sleep;
 
 use super::node_implementation::NodeType;
 use crate::{
@@ -169,7 +170,21 @@ pub async fn store_drb_input_impl<TYPES: NodeType>(
     storage: impl Storage<TYPES>,
     drb_input: DrbInput,
 ) -> Result<()> {
-    storage.store_drb_input(drb_input).await
+    for attempt in 1..=3 {
+        match storage.store_drb_input(drb_input.clone()).await {
+            Ok(()) => return Ok(()),
+            Err(e) if attempt < 3 => {
+                tracing::warn!("Failed to store DRB input (attempt {attempt}/3): {e}");
+                sleep(Duration::from_millis(300)).await;
+            },
+            Err(e) => {
+                tracing::warn!("Failed to store DRB input (attempt {attempt}/3): {e}");
+                return Err(e);
+            },
+        }
+    }
+
+    Ok(())
 }
 
 pub type StoreDrbProgressFn =
@@ -197,7 +212,24 @@ async fn store_drb_result_impl<TYPES: NodeType>(
     epoch: EpochNumber,
     drb_result: DrbResult,
 ) -> Result<()> {
-    storage.store_drb_result(epoch, drb_result).await
+    for attempt in 1..=3 {
+        match storage.store_drb_result(epoch, drb_result).await {
+            Ok(()) => return Ok(()),
+            Err(e) if attempt < 3 => {
+                tracing::warn!(
+                    "Failed to store DRB result for epoch {epoch} (attempt {attempt}/3): {e}"
+                );
+                sleep(Duration::from_millis(300)).await;
+            },
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to store DRB result for epoch {epoch} (attempt {attempt}/3): {e}"
+                );
+                return Err(e);
+            },
+        }
+    }
+    Ok(())
 }
 
 /// Helper function to create a callback to add a drb result to storage

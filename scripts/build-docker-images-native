@@ -21,8 +21,8 @@ Examples:
   # build only the deploy image
   scripts/build-docker-images-native --image deploy
 
-  # build sequencer image with the `release` profile
-  scripts/build-docker-images-native --image sequencer -- --profile release
+  # build espresso-node image with the `release` profile
+  scripts/build-docker-images-native --image espresso-node -- --profile release
 
   # clean the build artifacts
   scripts/build-docker-images-native clean
@@ -147,7 +147,7 @@ else
       node-validator
       orchestrator
       prover-service
-      sequencer
+      espresso-node
       state-relay-server
       staking-cli
       submit-transactions
@@ -164,14 +164,15 @@ else
   case "$image" in
     "")
     # By default compile all binaries
-    cargo_cmd_line="cargo build $cargo_extra_args"
+    cargo_cmd_line="cargo build $cargo_extra_args \
+    && cargo build -p espresso-dev-node $cargo_extra_args"
       ;;
     "espresso-dev-node")
-      cargo_cmd_line="cargo build --bin espresso-dev-node --features testing $cargo_extra_args"
+      cargo_cmd_line="cargo build -p espresso-dev-node $cargo_extra_args"
       ;;
-    "sequencer")
+    "espresso-node")
       cargo_cmd_line="cargo build \
-        --bin sequencer \
+        --bin espresso-node \
         --bin utils \
         --bin reset-storage \
         --bin keygen \
@@ -260,20 +261,14 @@ for binary in "${binaries[@]}"; do
 done
 
 mkdir -p "${workdir}/docker/scripts"
-cp -v docker/scripts/sequencer-awssecretsmanager.sh "${workdir}/docker/scripts"
+cp -v docker/scripts/espresso-node-awssecretsmanager.sh "${workdir}/docker/scripts"
 
-# Copy the dev-node and sequencer-entrypoint script
+# Copy the dev-node and espresso-node-entrypoint script
 mkdir -p "${workdir}/scripts"
-cp -v scripts/sequencer-entrypoint "${workdir}/scripts/"
-
-# Copy the safeSDK for multisig transaction proposals
-mkdir -p "${workdir}/contracts/script/multisigTransactionProposals"
-cp -rv contracts/script/multisigTransactionProposals/safeSDK "${workdir}/contracts/script/multisigTransactionProposals/"
-cp -v scripts/multisig-upgrade-entrypoint "${workdir}/scripts/"
-cp package.json yarn.lock "$workdir/"
+cp -v scripts/espresso-node-entrypoint "${workdir}/scripts/"
 
 export DOCKER_BUILDKIT=1
 
 for image in "${images[@]}"; do
-  docker build --platform $platform -t "ghcr.io/espressosystems/espresso-sequencer/$image:main" -f "docker/$image.Dockerfile" "$workdir"
+  docker build --platform $platform -t "ghcr.io/espressosystems/espresso-network/$image:main" -f "docker/$image.Dockerfile" "$workdir"
 done

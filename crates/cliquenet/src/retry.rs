@@ -3,6 +3,7 @@ use std::{
     convert::Infallible,
     fmt::{self, Display},
     hash::Hash,
+    result::Result as StdResult,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -10,6 +11,7 @@ use std::{
 };
 
 use bytes::{Bytes, BytesMut};
+use hotshot_types::addr::NetAddr;
 use nohash_hasher::IntMap;
 use parking_lot::Mutex;
 use scopeguard::{ScopeGuard, guard};
@@ -22,7 +24,7 @@ use tokio::{
 use tracing::warn;
 
 use crate::{
-    Address, Id, NUM_DELAYS, NetConf, Network, NetworkError, PublicKey, Role, net::Command,
+    Id, NUM_DELAYS, NetConf, Network, NetworkDown, NetworkError, PublicKey, Role, net::Command,
 };
 
 type Result<T> = std::result::Result<T, NetworkError>;
@@ -170,15 +172,19 @@ where
         self.send(b.into(), Target::Single(to), data).await
     }
 
-    pub async fn add(&self, r: Role, peers: Vec<(K, PublicKey, Address)>) -> Result<()> {
+    pub async fn add(
+        &self,
+        r: Role,
+        peers: Vec<(K, PublicKey, NetAddr)>,
+    ) -> StdResult<(), NetworkDown> {
         self.inner.net.add(r, peers).await
     }
 
-    pub async fn remove(&self, peers: Vec<K>) -> Result<()> {
+    pub async fn remove(&self, peers: Vec<K>) -> StdResult<(), NetworkDown> {
         self.inner.net.remove(peers).await
     }
 
-    pub async fn assign(&self, r: Role, peers: Vec<K>) -> Result<()> {
+    pub async fn assign(&self, r: Role, peers: Vec<K>) -> StdResult<(), NetworkDown> {
         self.inner.net.assign(r, peers).await
     }
 

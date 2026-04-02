@@ -31,10 +31,13 @@ pub trait Quorum: Sync {
                 (0, 3) => self.verify_static::<StaticVersion<0, 3>>(cert).await,
                 (0, 4) => self.verify_static::<StaticVersion<0, 4>>(cert).await,
                 (0, 5) => self.verify_static::<StaticVersion<0, 5>>(cert).await,
+                (0, 6) => self.verify_static::<StaticVersion<0, 6>>(cert).await,
+                (0, 7) => self.verify_static::<StaticVersion<0, 7>>(cert).await,
+                (0, 8) => self.verify_static::<StaticVersion<0, 8>>(cert).await,
                 _ => {
                     const {
                         assert!(MAX_SUPPORTED_VERSION.major == 0);
-                        assert!(MAX_SUPPORTED_VERSION.minor == 5);
+                        assert!(MAX_SUPPORTED_VERSION.minor == 8);
                     }
                     bail!("unsupported version {version}");
                 },
@@ -182,7 +185,6 @@ impl StakeTable {
     {
         let upgrade = Upgrade::trivial(version(V::MAJOR, V::MINOR));
         cert.is_valid_cert(&self.entries, self.threshold, &UpgradeLock::new(upgrade))
-            .await
             .context("invalid threshold signature")
     }
 }

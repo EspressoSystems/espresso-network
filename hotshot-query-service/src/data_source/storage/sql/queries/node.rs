@@ -152,8 +152,7 @@ where
         // ORDER BY h.height ASC ensures that if there are duplicate blocks (this can happen when
         // selecting by payload ID, as payloads are not unique), we return the first one.
         let sql = format!(
-            "SELECT v.share AS share FROM vid2 AS v
-               JOIN header AS h ON v.height = h.height
+            "SELECT vid_share FROM header AS h
               WHERE {where_clause}
               ORDER BY h.height
               LIMIT 1"
@@ -172,10 +171,17 @@ where
         from: usize,
         to: usize,
     ) -> QueryResult<SyncStatusQueryData> {
-        // A block can be missing if its corresponding leaf is missing or if the block's `size`,
-        // `data`, and `num_transactions` fields are `NULL`. We use `size` as the indicator column
-        // to capture this while avoiding touching `data`, which can be quite large.
-        let blocks = self.sync_status_ranges("payload", "size", from, to).await?;
+        // A block can be missing if its corresponding header is missing or if the block's pyaload
+        // information is missing.
+        let blocks = self
+            .sync_status_ranges(
+                "header AS h JOIN payload AS p ON (h.payload_hash, h.ns_table) = (p.hash, \
+                 p.ns_table)",
+                "height",
+                from,
+                to,
+            )
+            .await?;
 
         let leaves = if blocks.is_fully_synced() {
             // A common special case is that there are no missing blocks. In this case, we already
@@ -190,18 +196,20 @@ where
             self.sync_status_ranges("leaf2", "height", from, to).await?
         };
 
-        // For VID, common data can only be missing if the entire row is missing, so we use an
-        // index-only scan over `height`.
-        let vid_common = self.sync_status_ranges("vid2", "height", from, to).await?;
-        // VID shares can be missing in that case _or_ if the row is present but share data is NULL,
-        // so we use the `share` column as an indicator.
-        let vid_shares = self.sync_status_ranges("vid2", "share", from, to).await?;
+        // VID common works just like blocks.
+        let vid_common = self
+            .sync_status_ranges(
+                "header AS h JOIN vid_common AS v ON h.payload_hash = v.hash",
+                "height",
+                from,
+                to,
+            )
+            .await?;
 
         Ok(SyncStatusQueryData {
             leaves,
             blocks,
             vid_common,
-            vid_shares,
             pruned_height: None,
         })
     }
@@ -815,11 +823,14 @@ where
 #[cfg(test)]
 mod test {
     use hotshot_example_types::node_types::TEST_VERSIONS;
+    use hotshot_types::vid::advz::advz_scheme;
     use itertools::Itertools;
+    use jf_advz::VidScheme;
+    use pretty_assertions::assert_eq;
 
     use super::*;
     use crate::{
-        availability::LeafQueryData,
+        availability::{BlockQueryData, LeafQueryData, VidCommonQueryData},
         data_source::{
             Transaction as _, VersionedDataSource,
             sql::testing::TmpDb,
@@ -854,8 +865,8 @@ mod test {
             let mut tx = db.write().await.unwrap();
 
             for &(start, end) in present_ranges {
-                for leaf in leaves[start..end].iter() {
-                    tx.insert_leaf(leaf.clone()).await.unwrap();
+                for leaf in &leaves[start..end] {
+                    tx.insert_leaf(leaf).await.unwrap();
                 }
             }
 
@@ -973,5 +984,241 @@ mod test {
     async fn test_sync_status_ranges_many_ranges_start_offset_bookends_missing() {
         let ranges = (2..=100).map(|i| (2 * i, 2 * i + 1)).collect_vec();
         test_sync_status_ranges(1, 202, &ranges).await;
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_sync_status_duplicate_payload() {
+        let storage = TmpDb::init().await;
+        let db = SqlStorage::connect(storage.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+        let mut vid = advz_scheme(2);
+
+        // Create two blocks with the same (empty) payload.
+        let mut leaves = vec![
+            LeafQueryData::<MockTypes>::genesis(
+                &Default::default(),
+                &Default::default(),
+                TEST_VERSIONS.test,
+            )
+            .await,
+        ];
+        let mut blocks = vec![
+            BlockQueryData::<MockTypes>::genesis(
+                &Default::default(),
+                &Default::default(),
+                TEST_VERSIONS.test.base,
+            )
+            .await,
+        ];
+        let dispersal = vid.disperse([]).unwrap();
+
+        let mut leaf = leaves[0].clone();
+        leaf.leaf.block_header_mut().block_number += 1;
+        let block = BlockQueryData::new(leaf.header().clone(), blocks[0].payload().clone());
+        leaves.push(leaf);
+        blocks.push(block);
+
+        // Insert the first leaf without payload or VID data.
+        {
+            let mut tx = db.write().await.unwrap();
+            tx.insert_leaf(&leaves[0]).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+
+        // The block and VID data are missing.
+        let missing = ResourceSyncStatus {
+            missing: 1,
+            ranges: vec![SyncStatusRange {
+                status: SyncStatus::Missing,
+                start: 0,
+                end: 1,
+            }],
+        };
+        assert_eq!(
+            NodeStorage::<MockTypes>::sync_status_for_range(&mut db.read().await.unwrap(), 0, 1)
+                .await
+                .unwrap(),
+            SyncStatusQueryData {
+                leaves: ResourceSyncStatus {
+                    missing: 0,
+                    ranges: vec![SyncStatusRange {
+                        status: SyncStatus::Present,
+                        start: 0,
+                        end: 1,
+                    }]
+                },
+                blocks: missing.clone(),
+                vid_common: missing.clone(),
+                pruned_height: None,
+            }
+        );
+
+        // Insert the second block with all data.
+        {
+            let mut tx = db.write().await.unwrap();
+            tx.insert_leaf(&leaves[1]).await.unwrap();
+            tx.insert_block(&blocks[1]).await.unwrap();
+            tx.insert_vid(
+                &VidCommonQueryData::<MockTypes>::new(
+                    leaves[1].header().clone(),
+                    hotshot_types::data::VidCommon::V0(dispersal.common),
+                ),
+                Some(&VidShare::V0(dispersal.shares[0].clone())),
+            )
+            .await
+            .unwrap();
+            tx.commit().await.unwrap();
+        }
+
+        // The payload data is shared by both leaves, and nothing is missing.
+        let present = ResourceSyncStatus {
+            missing: 0,
+            ranges: vec![SyncStatusRange {
+                status: SyncStatus::Present,
+                start: 0,
+                end: 2,
+            }],
+        };
+        assert_eq!(
+            NodeStorage::<MockTypes>::sync_status_for_range(&mut db.read().await.unwrap(), 0, 2)
+                .await
+                .unwrap(),
+            SyncStatusQueryData {
+                leaves: present.clone(),
+                blocks: present.clone(),
+                vid_common: present,
+                pruned_height: None,
+            }
+        );
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_sync_status_same_payload_different_ns_table() {
+        let storage = TmpDb::init().await;
+        let db = SqlStorage::connect(storage.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+        let mut vid = advz_scheme(2);
+
+        // Create two blocks with byte-identical payloads, but different namespace tables (meaning
+        // the interpretation of the payload is different).
+        // Create two blocks with the same (empty) payload.
+        let mut leaves = vec![
+            LeafQueryData::<MockTypes>::genesis(
+                &Default::default(),
+                &Default::default(),
+                TEST_VERSIONS.test,
+            )
+            .await,
+        ];
+        let mut blocks = vec![
+            BlockQueryData::<MockTypes>::genesis(
+                &Default::default(),
+                &Default::default(),
+                TEST_VERSIONS.test.base,
+            )
+            .await,
+        ];
+        let dispersal = vid.disperse([]).unwrap();
+
+        let mut leaf = leaves[0].clone();
+        leaf.leaf.block_header_mut().block_number += 1;
+        leaf.leaf.block_header_mut().metadata.num_transactions += 1;
+        let block = BlockQueryData::new(leaf.header().clone(), blocks[0].payload().clone());
+        leaves.push(leaf);
+        blocks.push(block);
+
+        // Insert the first leaf without payload or VID data.
+        {
+            let mut tx = db.write().await.unwrap();
+            tx.insert_leaf(&leaves[0]).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+
+        // The block and VID data are missing.
+        let missing = ResourceSyncStatus {
+            missing: 1,
+            ranges: vec![SyncStatusRange {
+                status: SyncStatus::Missing,
+                start: 0,
+                end: 1,
+            }],
+        };
+        assert_eq!(
+            NodeStorage::<MockTypes>::sync_status_for_range(&mut db.read().await.unwrap(), 0, 1)
+                .await
+                .unwrap(),
+            SyncStatusQueryData {
+                leaves: ResourceSyncStatus {
+                    missing: 0,
+                    ranges: vec![SyncStatusRange {
+                        status: SyncStatus::Present,
+                        start: 0,
+                        end: 1,
+                    }]
+                },
+                blocks: missing.clone(),
+                vid_common: missing.clone(),
+                pruned_height: None,
+            }
+        );
+
+        // Insert the second block with all data.
+        {
+            let mut tx = db.write().await.unwrap();
+            tx.insert_leaf(&leaves[1]).await.unwrap();
+            tx.insert_block(&blocks[1]).await.unwrap();
+            tx.insert_vid(
+                &VidCommonQueryData::<MockTypes>::new(
+                    leaves[1].header().clone(),
+                    hotshot_types::data::VidCommon::V0(dispersal.common),
+                ),
+                Some(&VidShare::V0(dispersal.shares[0].clone())),
+            )
+            .await
+            .unwrap();
+            tx.commit().await.unwrap();
+        }
+
+        // The payload data cannot be shared because metadata (e.g. num_transactions) differs. VID,
+        // on the other hand, is independent of the interpretation of the payload and is shared by
+        // both leaves.
+        let present = ResourceSyncStatus {
+            missing: 0,
+            ranges: vec![SyncStatusRange {
+                status: SyncStatus::Present,
+                start: 0,
+                end: 2,
+            }],
+        };
+        let missing = ResourceSyncStatus {
+            missing: 1,
+            ranges: vec![
+                SyncStatusRange {
+                    status: SyncStatus::Missing,
+                    start: 0,
+                    end: 1,
+                },
+                SyncStatusRange {
+                    status: SyncStatus::Present,
+                    start: 1,
+                    end: 2,
+                },
+            ],
+        };
+        assert_eq!(
+            NodeStorage::<MockTypes>::sync_status_for_range(&mut db.read().await.unwrap(), 0, 2)
+                .await
+                .unwrap(),
+            SyncStatusQueryData {
+                leaves: present.clone(),
+                blocks: missing.clone(),
+                vid_common: present,
+                pruned_height: None,
+            }
+        );
     }
 }

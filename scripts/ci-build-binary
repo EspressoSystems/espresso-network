@@ -3,13 +3,13 @@
 #
 # ./ci-build-binary <binary>
 #
-# where <binary> is one of: sequencer, espresso-dev-node, other
+# where <binary> is one of: espresso-node, espresso-dev-node, other
 #
 set -euo pipefail
 
 case "$1" in
-    "sequencer")
-        cargo build --locked --release -p sequencer --bin sequencer
+    "espresso-node")
+        cargo build --locked --release -p espresso-node --bin espresso-node
         ;;
     "espresso-dev-node")
         cargo build --locked --release -p espresso-dev-node
@@ -17,7 +17,7 @@ case "$1" in
     "other")
         BINS="$(cargo metadata --no-deps --format-version 1 \
         | jq -r '.packages[].targets[] | select(.kind[] == "bin") | .name' \
-        | grep -v '^sequencer$\|^espresso-dev-node$' \
+        | grep -v '^espresso-node$\|^espresso-dev-node$' \
         | xargs -I{} echo --bin {} \
         | tr '\n' ' ')"
         echo "Building other binaries: $BINS"

@@ -10,7 +10,9 @@ use std::{
 
 use hotshot::traits::{
     NodeImplementation,
-    implementations::{Cliquenet, CombinedNetworks, Libp2pNetwork, MemoryNetwork, PushCdnNetwork},
+    implementations::{
+        Cliquenet, CombinedNetworks, CompatNetwork, Libp2pNetwork, MemoryNetwork, PushCdnNetwork,
+    },
 };
 use hotshot_types::{
     constants::TEST_UPGRADE_CONSTANTS,
@@ -282,6 +284,10 @@ pub struct Libp2pImpl;
 #[derive(Clone, Debug, Deserialize, Serialize, Hash, Eq, PartialEq)]
 pub struct CliquenetImpl;
 
+/// Compatibility network implementation
+#[derive(Clone, Debug, Deserialize, Serialize, Hash, Eq, PartialEq)]
+pub struct CompatNetImpl;
+
 /// Web server network implementation
 #[derive(Clone, Debug, Deserialize, Serialize, Hash, Eq, PartialEq)]
 pub struct WebImpl;
@@ -311,7 +317,12 @@ impl<TYPES: NodeType> NodeImplementation<TYPES> for Libp2pImpl {
 }
 
 impl<TYPES: NodeType> NodeImplementation<TYPES> for CliquenetImpl {
-    type Network = Cliquenet<TYPES>;
+    type Network = Cliquenet<TYPES::SignatureKey>;
+    type Storage = TestStorage<TYPES>;
+}
+
+impl<TYPES: NodeType> NodeImplementation<TYPES> for CompatNetImpl {
+    type Network = CompatNetwork<CombinedNetworks<TYPES>, TYPES>;
     type Storage = TestStorage<TYPES>;
 }
 
@@ -328,10 +339,10 @@ pub struct TestVersions {
 pub const TEST_VERSIONS: TestVersions = TestVersions {
     epoch: Upgrade::trivial(version(0, 3)),
     da_committee: Upgrade::trivial(version(0, 4)),
-    vid2: Upgrade::trivial(version(0, 6)),
+    vid2: Upgrade::trivial(version(0, 7)),
     test: Upgrade::new(version(0, 1), version(0, 2)),
     epoch_upgrade: Upgrade::new(version(0, 3), version(0, 4)),
-    vid2_upgrade: Upgrade::new(version(0, 5), version(0, 6)),
+    vid2_upgrade: Upgrade::new(version(0, 5), version(0, 7)),
 };
 
 pub type EpochVersion = StaticVersion<0, 3>;
@@ -383,13 +394,9 @@ mod tests {
         let view_1 = ViewNumber::new(1);
 
         let versioned_data_0 =
-            VersionedVoteData::<TestTypes, TestData>::new(data, view_0, &upgrade_lock)
-                .await
-                .unwrap();
+            VersionedVoteData::<TestTypes, TestData>::new(data, view_0, &upgrade_lock).unwrap();
         let versioned_data_1 =
-            VersionedVoteData::<TestTypes, TestData>::new(data, view_1, &upgrade_lock)
-                .await
-                .unwrap();
+            VersionedVoteData::<TestTypes, TestData>::new(data, view_1, &upgrade_lock).unwrap();
 
         let versioned_data_commitment_0: [u8; 32] = versioned_data_0.commit().into();
         let versioned_data_commitment_1: [u8; 32] = versioned_data_1.commit().into();
