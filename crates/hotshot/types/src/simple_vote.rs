@@ -170,6 +170,64 @@ pub struct UpgradeData2 {
     pub epoch: Option<EpochNumber>,
 }
 
+/// Data used for a yes vote.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
+#[serde(bound(deserialize = ""))]
+pub struct Vote2Data<T: NodeType> {
+    pub leaf_commit: Commitment<Leaf2<T>>,
+    pub epoch: EpochNumber,
+    pub block_number: u64,
+}
+
+/// Data used .
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
+#[serde(bound(deserialize = ""))]
+pub struct CheckpointData {
+    pub view: ViewNumber,
+    pub epoch: EpochNumber,
+}
+
+impl Committable for CheckpointData {
+    fn commit(&self) -> Commitment<Self> {
+        committable::RawCommitmentBuilder::new("CheckpointData")
+            .u64(*self.view)
+            .u64(*self.epoch)
+            .finalize()
+    }
+}
+
+impl HasViewNumber for CheckpointData {
+    fn view_number(&self) -> ViewNumber {
+        self.view
+    }
+}
+
+impl HasEpoch for CheckpointData {
+    fn epoch(&self) -> Option<EpochNumber> {
+        Some(self.epoch)
+    }
+}
+
+impl QuorumMarker for CheckpointData {}
+impl<T: NodeType> QuorumMarker for Vote2Data<T> {}
+
+impl<T: NodeType> HasEpoch for Vote2Data<T> {
+    fn epoch(&self) -> Option<EpochNumber> {
+        Some(self.epoch)
+    }
+}
+
+impl<T: NodeType> Committable for Vote2Data<T> {
+    fn commit(&self) -> Commitment<Self> {
+        committable::RawCommitmentBuilder::new("Vote2Data")
+            .var_size_bytes(self.leaf_commit.as_ref())
+            .u64(*self.epoch)
+            .u64(self.block_number)
+            .constant_str("Vote2")
+            .finalize()
+    }
+}
+
 /// Marker trait for data or commitments that can be voted on.
 /// Only structs in this file can implement voteable.  This is enforced with the `Sealed` trait
 /// Sealing this trait prevents creating new vote types outside this file.

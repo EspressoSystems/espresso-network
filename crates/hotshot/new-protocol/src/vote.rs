@@ -173,7 +173,9 @@ mod tests {
     use hotshot_types::{
         data::{EpochNumber, ViewNumber},
         epoch_membership::EpochMembership,
-        simple_vote::{HasEpoch, QuorumData2, QuorumVote2, SimpleVote, VersionedVoteData},
+        simple_vote::{
+            HasEpoch, QuorumData2, QuorumVote2, SimpleVote, VersionedVoteData, Vote2Data,
+        },
         stake_table::StakeTableEntries,
         traits::signature_key::SignatureKey,
         vote::{Certificate, HasViewNumber, Vote},
@@ -183,7 +185,7 @@ mod tests {
     use super::VoteCollector;
     use crate::{
         helpers::upgrade_lock,
-        message::{Certificate1, Certificate2, Vote2, Vote2Data},
+        message::{Certificate1, Certificate2, Vote2},
         tests::common::utils::mock_membership,
     };
 

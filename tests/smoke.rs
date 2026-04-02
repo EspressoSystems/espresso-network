@@ -26,6 +26,7 @@ pub async fn assert_native_demo_works(requirements: TestRequirements) -> Result<
     let mut blocks_without_tx = 0;
     let mut iteration = 0u64;
     let mut prev_printed = None;
+    let mut lc_threshold_snapshot: Option<U256> = None;
 
     loop {
         match tokio::time::timeout(requirements.block_timeout, sub.next()).await {
@@ -69,8 +70,8 @@ pub async fn assert_native_demo_works(requirements: TestRequirements) -> Result<
 
         if start.elapsed() > requirements.global_timeout {
             panic!(
-                "Timeout waiting for block height, transaction count, and light client updates to \
-                 increase."
+                "Timeout waiting for block height, transaction count, light client updates, and \
+                 reward claim after LC threshold to increase."
             );
         }
 
@@ -91,6 +92,24 @@ pub async fn assert_native_demo_works(requirements: TestRequirements) -> Result<
                 new.rewards_claimed,
                 new.block_height.unwrap()
             );
+        }
+
+        if let Some(lc_block) = requirements.claim_after_lc_block {
+            // Wait for the LC to commit a state at or past the threshold block so that
+            // any subsequent claim uses a proof from the new regime.
+            if new.light_client_finalized_block_height < lc_block {
+                continue;
+            }
+            let snapshot = lc_threshold_snapshot.get_or_insert_with(|| {
+                println!(
+                    "LC reached threshold block {lc_block}, snapshotting claimed_rewards={}",
+                    new.rewards_claimed
+                );
+                new.rewards_claimed
+            });
+            if new.rewards_claimed <= *snapshot {
+                continue;
+            }
         }
 
         break;

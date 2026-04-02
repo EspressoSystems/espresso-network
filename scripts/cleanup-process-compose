@@ -74,6 +74,8 @@ kill_project_processes() {
 		if [[ -n "$proc_cwd" && "$proc_cwd" == "$PROJECT_DIR"* ]]; then
 			echo "Killing $proc_name (pid $pid) from $proc_cwd"
 			kill -"$signal" "$pid" || true
+		elif [[ -n "$proc_cwd" ]]; then
+			echo "Skipping $proc_name (pid $pid): cwd $proc_cwd does not match $PROJECT_DIR"
 		fi
 	done
 }

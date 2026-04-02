@@ -17,12 +17,12 @@ async-trait = { workspace = true }
 clap = { workspace = true }
 espresso-contract-deployer = { workspace = true }
 espresso-types = { workspace = true }
+espresso-utils = { workspace = true }
 futures = { workspace = true }
 hotshot-contract-adapter = { workspace = true }
 hotshot-state-prover = { workspace = true }
 hotshot-types = { workspace = true }
 itertools = { workspace = true }
-espresso-utils = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 staking-cli = { workspace = true }

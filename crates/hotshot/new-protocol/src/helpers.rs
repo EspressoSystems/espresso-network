@@ -1,14 +1,12 @@
 use committable::{Commitment, Committable};
-use hotshot_types::{
-    data::{Leaf2, QuorumProposal2, QuorumProposalWrapper},
-    message::UpgradeLock,
-    traits::node_implementation::NodeType,
-};
+use hotshot_types::{data::Leaf2, message::UpgradeLock, traits::node_implementation::NodeType};
 use versions::{Upgrade, VID2_UPGRADE_VERSION};
 
-pub fn proposal_commitment<T: NodeType>(proposal: &QuorumProposal2<T>) -> Commitment<Leaf2<T>> {
-    let wrapper = QuorumProposalWrapper::from(proposal.clone());
-    Leaf2::from_quorum_proposal(&wrapper).commit()
+use crate::message::Proposal;
+
+pub fn proposal_commitment<T: NodeType>(proposal: &Proposal<T>) -> Commitment<Leaf2<T>> {
+    let leaf: Leaf2<T> = proposal.clone().into();
+    leaf.commit()
 }
 
 // TODO: Remove this and use the actual upgrade lock

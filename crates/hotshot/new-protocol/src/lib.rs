@@ -1,7 +1,7 @@
 pub mod block;
 pub mod consensus;
 pub mod coordinator;
-pub mod drb;
+pub mod epoch;
 pub mod helpers;
 pub mod message;
 pub mod network;
