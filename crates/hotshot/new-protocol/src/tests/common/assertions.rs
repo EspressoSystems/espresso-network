@@ -36,6 +36,10 @@ pub(crate) fn is_view_changed(output: &ConsensusOutput<TestTypes>) -> bool {
     matches!(output, ConsensusOutput::ViewChanged(..))
 }
 
+pub(crate) fn is_send_epoch_change(output: &ConsensusOutput<TestTypes>) -> bool {
+    matches!(output, ConsensusOutput::SendEpochChange(..))
+}
+
 pub(crate) fn is_cert1(input: &ConsensusInput<TestTypes>) -> bool {
     matches!(input, ConsensusInput::Certificate1(_))
 }

@@ -7,10 +7,7 @@ use hotshot_example_types::{
 };
 use hotshot_types::{
     data::{Leaf2, ViewNumber},
-    traits::{
-        signature_key::SignatureKey,
-        storage::{null_load_drb_progress_fn, null_store_drb_progress_fn},
-    },
+    traits::signature_key::SignatureKey,
 };
 
 use super::utils::mock_membership;
@@ -18,7 +15,7 @@ use crate::{
     block::{BlockBuilder, BlockBuilderConfig},
     consensus::{Consensus, ConsensusInput, ConsensusOutput},
     coordinator::timer::Timer,
-    drb::DrbRequester,
+    epoch::EpochManager,
     helpers::upgrade_lock,
     message::Message,
     network::Network,
@@ -49,16 +46,14 @@ impl TestHarness {
         let instance = Arc::new(TestInstanceState::default());
         let membership = mock_membership().await;
 
-        let store_drb_progress = null_store_drb_progress_fn();
-        let load_drb_progress = null_load_drb_progress_fn();
-        let drb_request_task = DrbRequester::new(store_drb_progress, load_drb_progress);
+        let epoch_manager = EpochManager::new(10, membership.clone());
 
         let vote1_task = VoteCollector::new(membership.clone(), upgrade_lock());
         let vote2_task = VoteCollector::new(membership.clone(), upgrade_lock());
         let timeout_collector = VoteCollector::new(membership.clone(), upgrade_lock());
         let checkpoint_collector = VoteCollector::new(membership.clone(), upgrade_lock());
 
-        let consensus = Consensus::new(membership.clone(), public_key, private_key.clone());
+        let consensus = Consensus::new(membership.clone(), public_key, private_key.clone(), 10);
 
         let vid_disperse_task = VidDisperser::new(membership.clone());
         let vid_reconstruction_task = VidReconstructor::new();
@@ -86,7 +81,7 @@ impl TestHarness {
             .checkpoint_collector(checkpoint_collector)
             .vid_disperser(vid_disperse_task)
             .vid_reconstructor(vid_reconstruction_task)
-            .drb_requester(drb_request_task)
+            .epoch_manager(epoch_manager)
             .block_builder(block_builder)
             .proposal_validator(proposal_validator)
             .membership_coordinator(membership)

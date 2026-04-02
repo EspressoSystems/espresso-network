@@ -15,7 +15,8 @@ pub use super::v0_1::{
 };
 
 pub use super::v0_3::{
-    AvidMIncorrectEncodingNsProof, AvidMNsProof, AvidMTxProof, ChainConfig, ResolvableChainConfig,
+    AvidMIncorrectEncodingNsProof, AvidMNsProof, AvidMTxProof, ChainConfig, MAX_VALIDATORS,
+    ResolvableChainConfig,
 };
 
 pub const VERSION: Version = Version { major: 0, minor: 4 };
