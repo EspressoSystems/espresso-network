@@ -335,13 +335,21 @@ pub mod testing {
         for SqlDataSource<MockTypes, P>
     {
         type Storage = TmpDb;
+        type S = SqlStorage;
+        type P = P;
 
         async fn create(_node_id: usize) -> Self::Storage {
             TmpDb::init().await
         }
 
-        async fn connect(tmp_db: &Self::Storage) -> Self {
-            tmp_db.config().connect(Default::default()).await.unwrap()
+        async fn build(
+            tmp_db: &Self::Storage,
+            opt: impl Send + FnOnce(Builder<MockTypes, P>) -> Builder<MockTypes, P>,
+        ) -> Self {
+            opt(tmp_db.config().builder(Default::default()).await.unwrap())
+                .build()
+                .await
+                .unwrap()
         }
 
         async fn reset(tmp_db: &Self::Storage) -> Self {
@@ -351,17 +359,6 @@ pub mod testing {
                 .connect(Default::default())
                 .await
                 .unwrap()
-        }
-
-        async fn leaf_only_ds(tmp_db: &Self::Storage) -> Self {
-            let config = tmp_db.config();
-            let builder = config.builder(Default::default()).await.unwrap();
-
-            builder
-                .leaf_only()
-                .build()
-                .await
-                .expect("failed to build leaf only sql ds")
         }
 
         async fn handle_event(&self, event: &Event<MockTypes>) {

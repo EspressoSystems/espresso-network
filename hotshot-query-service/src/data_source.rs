@@ -828,7 +828,10 @@ pub mod node_tests {
         for<'a> D::Transaction<'a>: UpdateAvailabilityStorage<MockTypes>,
     {
         let storage = D::create(0).await;
-        let ds = D::connect(&storage).await;
+        let ds = D::build(&storage, |builder| {
+            builder.with_sync_status_ttl(Duration::ZERO)
+        })
+        .await;
 
         // Set up a mock VID scheme to use for generating test data.
         let mut vid = advz_scheme(2);

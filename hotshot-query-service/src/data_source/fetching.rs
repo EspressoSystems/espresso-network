@@ -58,13 +58,14 @@ use std::{
     marker::PhantomData,
     ops::{Bound, Range, RangeBounds},
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context, bail};
 use async_lock::Semaphore;
 use async_trait::async_trait;
 use backoff::{ExponentialBackoff, ExponentialBackoffBuilder, backoff::Backoff};
+use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use futures::{
     channel::oneshot,
@@ -75,13 +76,13 @@ use hotshot_types::{
     data::VidShare,
     simple_certificate::CertificatePair,
     traits::{
-        metrics::{Gauge, Metrics},
+        metrics::{Counter, Gauge, Histogram, Metrics},
         node_implementation::NodeType,
     },
 };
 use jf_merkle_tree_compat::{MerkleTreeScheme, prelude::MerkleProof};
 use tagged_base64::TaggedBase64;
-use tokio::{spawn, time::sleep};
+use tokio::{spawn, sync::Mutex, time::sleep};
 use tracing::Instrument;
 
 use super::{
@@ -147,6 +148,7 @@ pub struct Builder<Types, S, P> {
     aggregator: bool,
     aggregator_chunk_size: Option<usize>,
     leaf_only: bool,
+    sync_status_ttl: Duration,
     _types: PhantomData<Types>,
 }
 
@@ -175,6 +177,7 @@ impl<Types, S, P> Builder<Types, S, P> {
             aggregator: true,
             aggregator_chunk_size: None,
             leaf_only: false,
+            sync_status_ttl: Duration::from_mins(5),
             _types: Default::default(),
         }
     }
@@ -253,6 +256,16 @@ impl<Types, S, P> Builder<Types, S, P> {
     /// missing objects.
     pub fn with_sync_status_chunk_size(mut self, chunk_size: usize) -> Self {
         self.sync_status_chunk_size = chunk_size;
+        self
+    }
+
+    /// Duration to cache sync status results for.
+    ///
+    /// Computing the sync status is expensive, and it typically doesn't change that quickly. Thus,
+    /// it makes sense to cache the results whenever we do compute it, and return those cached
+    /// results if they are not too old.
+    pub fn with_sync_status_ttl(mut self, ttl: Duration) -> Self {
+        self.sync_status_ttl = ttl;
         self
     }
 
@@ -880,6 +893,8 @@ where
     // retry failed loads.
     retry_semaphore: Arc<Semaphore>,
     leaf_only: bool,
+    sync_status_metrics: SyncStatusMetrics,
+    sync_status: Mutex<CachedSyncStatus>,
 }
 
 impl<Types, S, P> VersionedDataSource for Fetcher<Types, S, P>
@@ -910,7 +925,7 @@ impl<Types, S, P> Fetcher<Types, S, P>
 where
     Types: NodeType,
     Header<Types>: QueryableHeader<Types>,
-    S: VersionedDataSource + Sync,
+    S: VersionedDataSource + HasMetrics + Sync,
     for<'a> S::ReadOnly<'a>: PrunedHeightStorage + NodeStorage<Types>,
 {
     pub async fn new(builder: Builder<Types, S, P>) -> anyhow::Result<Self> {
@@ -944,6 +959,8 @@ where
         let leaf_range_fetcher = fetching::Fetcher::new(retry_semaphore.clone(), backoff.clone());
 
         let leaf_only = builder.leaf_only;
+        let sync_status_metrics =
+            SyncStatusMetrics::new(builder.storage.metrics(), builder.sync_status_chunk_size);
 
         Ok(Self {
             storage: Arc::new(builder.storage),
@@ -962,6 +979,8 @@ where
             backoff,
             retry_semaphore,
             leaf_only,
+            sync_status_metrics,
+            sync_status: Mutex::new(CachedSyncStatus::new(builder.sync_status_ttl)),
         })
     }
 }
@@ -1451,6 +1470,7 @@ where
                 for range in sync_status.blocks.ranges {
                     metrics.scanned_blocks.set(range.start);
                     if range.status != SyncStatus::Missing {
+                        metrics.scanned_blocks.set(range.end);
                         continue;
                     }
 
@@ -1481,6 +1501,7 @@ where
                         metrics
                             .missing_blocks
                             .update((chunk.start as i64) - (chunk.end as i64));
+                        metrics.scanned_blocks.set(chunk.end);
                     }
                 }
 
@@ -1488,6 +1509,7 @@ where
                 for range in sync_status.vid_common.ranges {
                     metrics.scanned_vid.set(range.start);
                     if range.status != SyncStatus::Missing {
+                        metrics.scanned_vid.set(range.end);
                         continue;
                     }
 
@@ -1508,6 +1530,7 @@ where
                         metrics
                             .missing_vid
                             .update((chunk.start as i64) - (chunk.end as i64));
+                        metrics.scanned_vid.set(chunk.end);
                     }
                 }
 
@@ -1533,6 +1556,16 @@ where
     P: Send + Sync,
 {
     async fn sync_status(&self) -> anyhow::Result<SyncStatusQueryData> {
+        // Check the cache first. This prevents the expensive sync_status queries from being run too
+        // often, and also ensures that if two tasks try to get the sync status at the same time,
+        // only one will actually compute it; the other will find the cache populated by the time it
+        // gets a lock on the mutex.
+        let mut cache = self.sync_status.lock().await;
+        if let Some(sync_status) = cache.try_get() {
+            return Ok(sync_status.clone());
+        }
+        tracing::debug!("updating sync status");
+
         let heights = {
             let mut tx = self
                 .read()
@@ -1568,6 +1601,7 @@ where
             self.sync_status_chunk_size,
         ) {
             tracing::debug!(chunk.start, chunk.end, "checking sync status in sub-range");
+            let metrics = self.sync_status_metrics.start_range(&chunk);
             let mut tx = self
                 .read()
                 .await
@@ -1586,8 +1620,10 @@ where
             res.blocks.extend(range_status.blocks);
             res.leaves.extend(range_status.leaves);
             res.vid_common.extend(range_status.vid_common);
+            metrics.end();
         }
 
+        cache.update(res.clone());
         Ok(res)
     }
 }
@@ -2391,6 +2427,98 @@ impl AggregatorMetrics {
     }
 }
 
+#[derive(Debug)]
+struct SyncStatusMetrics {
+    current_range_start: Box<dyn Gauge>,
+    current_range_end: Box<dyn Gauge>,
+    current_start_time: Box<dyn Gauge>,
+    avg_rate: Box<dyn Histogram>,
+    ranges_scanned: Box<dyn Counter>,
+    running: Box<dyn Gauge>,
+}
+
+impl SyncStatusMetrics {
+    fn new(metrics: &PrometheusMetrics, size: usize) -> Self {
+        let group = metrics.subgroup("sync_status".into());
+        group.create_gauge("range_size".into(), None).set(size);
+
+        Self {
+            current_range_start: group.create_gauge("current_range_start".into(), None),
+            current_range_end: group.create_gauge("current_range_end".into(), None),
+            current_start_time: group
+                .create_gauge("current_range_start_time".into(), Some("s".into())),
+            avg_rate: group
+                .create_histogram("avg_time_per_block_scanned".into(), Some("ms".into())),
+            ranges_scanned: group.create_counter("ranges_scanned".into(), None),
+            running: group.create_gauge("running".into(), None),
+        }
+    }
+
+    fn start_range(&self, range: &Range<usize>) -> SyncStatusRangeMetrics<'_> {
+        let start = Utc::now();
+        self.current_range_start.set(range.start);
+        self.current_range_end.set(range.end);
+        self.current_start_time.set(start.timestamp() as usize);
+        self.running.set(1);
+        SyncStatusRangeMetrics {
+            size: range.end - range.start,
+            start,
+            metrics: self,
+        }
+    }
+}
+
+#[must_use]
+#[derive(Debug)]
+struct SyncStatusRangeMetrics<'a> {
+    size: usize,
+    start: DateTime<Utc>,
+    metrics: &'a SyncStatusMetrics,
+}
+
+impl<'a> SyncStatusRangeMetrics<'a> {
+    fn end(self) {
+        let elapsed = Utc::now() - self.start;
+        self.metrics
+            .avg_rate
+            .add_point((elapsed.num_milliseconds() as f64) / (self.size as f64));
+        self.metrics.ranges_scanned.add(1);
+        self.metrics.running.set(0);
+    }
+}
+
+#[derive(Debug)]
+struct CachedSyncStatus {
+    last_updated: Instant,
+    ttl: Duration,
+    cached: Option<SyncStatusQueryData>,
+}
+
+impl CachedSyncStatus {
+    fn new(ttl: Duration) -> Self {
+        Self {
+            last_updated: Instant::now(),
+            ttl,
+            cached: None,
+        }
+    }
+
+    /// Return the cached sync status, if present and fresh.
+    fn try_get(&self) -> Option<&SyncStatusQueryData> {
+        if self.last_updated.elapsed() > self.ttl {
+            // Cached value is stale.
+            return None;
+        }
+        self.cached.as_ref()
+    }
+
+    /// Refresh the cache with an updated value.
+    fn update(&mut self, value: SyncStatusQueryData) {
+        self.last_updated = Instant::now();
+        self.cached = Some(value);
+    }
+}
+
 /// Turn a fallible passive fetch future into an infallible "fetch".
 ///
 /// Basically, we ignore failures due to a channel sender being dropped, which should never happen.
@@ -2575,6 +2703,7 @@ mod test {
             .unwrap();
         let ds = MockSqlDataSource::builder(db, NoFetching)
             .with_sync_status_chunk_size(chunk_size)
+            .with_sync_status_ttl(Duration::ZERO)
             .build()
             .await
             .unwrap();

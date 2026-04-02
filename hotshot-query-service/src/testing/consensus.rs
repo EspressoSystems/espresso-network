@@ -50,7 +50,7 @@ use super::mocks::{MockMembership, MockNodeImpl, MockTransaction, MockTypes};
 use crate::{
     SignatureKey,
     availability::{AvailabilityDataSource, UpdateAvailabilityData},
-    data_source::{FileSystemDataSource, SqlDataSource, VersionedDataSource},
+    data_source::{FileSystemDataSource, SqlDataSource, VersionedDataSource, fetching::Builder},
     fetching::provider::NoFetching,
     node::NodeDataSource,
     status::{StatusDataSource, UpdateStatusData},
@@ -357,12 +357,27 @@ pub trait DataSourceLifeCycle: Clone + Send + Sync + Sized + 'static {
     /// alive as long as the related data sources are open.
     type Storage: Send + Sync;
 
+    /// Type parameter for builder.
+    type S;
+
+    /// Type parameter for builder.
+    type P;
+
     async fn create(node_id: usize) -> Self::Storage;
-    async fn connect(storage: &Self::Storage) -> Self;
+    async fn build(
+        storage: &Self::Storage,
+        opt: impl Send
+        + FnOnce(Builder<MockTypes, Self::S, Self::P>) -> Builder<MockTypes, Self::S, Self::P>,
+    ) -> Self;
     async fn reset(storage: &Self::Storage) -> Self;
     async fn handle_event(&self, event: &Event<MockTypes>);
-    async fn leaf_only_ds(_storage: &Self::Storage) -> Self {
-        panic!("not supported")
+
+    async fn connect(storage: &Self::Storage) -> Self {
+        Self::build(storage, |builder| builder).await
+    }
+
+    async fn leaf_only_ds(storage: &Self::Storage) -> Self {
+        Self::build(storage, |builder| builder.leaf_only()).await
     }
 
     /// Setup runs after setting up the network but before starting a test.
