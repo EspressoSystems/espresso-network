@@ -230,7 +230,9 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
         match message.message_type {
             MessageType::Consensus(msg) => match msg {
                 ConsensusMessage::Proposal(p) => {
-                    self.proposal_validator.validate(p);
+                    if self.consensus.wants_proposal(&p) {
+                        self.proposal_validator.validate(p);
+                    }
                     None
                 },
                 ConsensusMessage::Vote1(vote1) => {
