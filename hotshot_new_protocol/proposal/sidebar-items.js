@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["validate_proposal_signature"],"struct":["ProposalValidator","ValidationError"]};
+window.SIDEBAR_ITEMS = {"enum":["ValidationError"],"struct":["ProposalValidator","Validator"],"type":["Result"]};

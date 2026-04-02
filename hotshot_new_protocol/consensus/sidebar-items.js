@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["ConsensusInput","ConsensusOutput","Protocol"],"fn":["vid_matches_proposal"],"struct":["Consensus"]};
+window.SIDEBAR_ITEMS = {"enum":["ConsensusInput","ConsensusOutput","Protocol"],"struct":["Consensus"]};
