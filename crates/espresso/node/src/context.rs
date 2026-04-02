@@ -28,10 +28,7 @@ use hotshot_types::{
     message::UpgradeLock,
     network::NetworkConfig,
     storage_metrics::StorageMetricsValue,
-    traits::{
-        metrics::Metrics,
-        network::ConnectedNetwork,
-    },
+    traits::{metrics::Metrics, network::ConnectedNetwork},
 };
 use parking_lot::Mutex;
 use request_response::RequestResponseConfig;

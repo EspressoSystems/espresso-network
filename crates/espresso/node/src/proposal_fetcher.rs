@@ -190,10 +190,11 @@ where
             }
 
             let future = self.consensus_handle.request_proposal(view, leaf).await?;
-            let proposal: Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>> = timeout(self.cfg.fetch_timeout, future)
-                .await
-                .context("timed out fetching proposal")?
-                .context("error fetching proposal")?;
+            let proposal: Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>> =
+                timeout(self.cfg.fetch_timeout, future)
+                    .await
+                    .context("timed out fetching proposal")?
+                    .context("error fetching proposal")?;
             self.persistence
                 .append_quorum_proposal2(&proposal)
                 .await
