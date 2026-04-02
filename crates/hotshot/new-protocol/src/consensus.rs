@@ -813,9 +813,14 @@ impl<T: NodeType> Consensus<T> {
         // Verify parent chain unless justify_qc is the genesis QC
         let parent_view = proposal.justify_qc.view_number();
 
-        // We don't need the genesis block to be reconstructed or verified
+        // We don't need the genesis block or the last block of the epoch to be reconstructed or verified
         // or the genesis qc to be verified
-        if parent_view != ViewNumber::genesis() {
+        if parent_view != ViewNumber::genesis()
+            && !is_last_block(
+                proposal.block_header.block_number().saturating_sub(1),
+                self.epoch_height,
+            )
+        {
             // Verify we have the block for the QC on this commitment
             let Some(block_commitment) = self.blocks_reconstructed.get(&parent_view) else {
                 debug!(%parent_view, "block commitment not available");
