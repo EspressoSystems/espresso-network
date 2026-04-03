@@ -266,14 +266,14 @@
 <a href=#266 id=266 data-nosnippet>266</a>        <span class="kw">let </span>real_qc_pp =
 <a href=#267 id=267 data-nosnippet>267</a>            &lt;TYPES::SignatureKey <span class="kw">as </span>SignatureKey&gt;::public_parameter(stake_table, threshold);
 <a href=#268 id=268 data-nosnippet>268</a>        <span class="kw">let </span>commit = <span class="self">self</span>.data_commitment(upgrade_lock)<span class="question-mark">?</span>;
-<a href=#269 id=269 data-nosnippet>269</a>
-<a href=#270 id=270 data-nosnippet>270</a>        &lt;TYPES::SignatureKey <span class="kw">as </span>SignatureKey&gt;::check(
-<a href=#271 id=271 data-nosnippet>271</a>            <span class="kw-2">&amp;</span>real_qc_pp,
-<a href=#272 id=272 data-nosnippet>272</a>            commit.as_ref(),
-<a href=#273 id=273 data-nosnippet>273</a>            <span class="self">self</span>.signatures.as_ref().unwrap(),
-<a href=#274 id=274 data-nosnippet>274</a>        )
-<a href=#275 id=275 data-nosnippet>275</a>        .wrap()
-<a href=#276 id=276 data-nosnippet>276</a>        .context(|e| <span class="macro">warn!</span>(<span class="string">"Signature check failed: {e}"</span>))
+<a href=#269 id=269 data-nosnippet>269</a>        <span class="kw">let </span>signatures = <span class="self">self
+<a href=#270 id=270 data-nosnippet>270</a>            </span>.signatures
+<a href=#271 id=271 data-nosnippet>271</a>            .as_ref()
+<a href=#272 id=272 data-nosnippet>272</a>            .ok_or_else(|| <span class="macro">warn!</span>(<span class="string">"missing signatures"</span>))<span class="question-mark">?</span>;
+<a href=#273 id=273 data-nosnippet>273</a>
+<a href=#274 id=274 data-nosnippet>274</a>        &lt;TYPES::SignatureKey <span class="kw">as </span>SignatureKey&gt;::check(<span class="kw-2">&amp;</span>real_qc_pp, commit.as_ref(), signatures)
+<a href=#275 id=275 data-nosnippet>275</a>            .wrap()
+<a href=#276 id=276 data-nosnippet>276</a>            .context(|e| <span class="macro">warn!</span>(<span class="string">"Signature check failed: {e}"</span>))
 <a href=#277 id=277 data-nosnippet>277</a>    }
 <a href=#278 id=278 data-nosnippet>278</a>    <span class="kw">fn </span>signers(
 <a href=#279 id=279 data-nosnippet>279</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
@@ -349,14 +349,14 @@
 <a href=#349 id=349 data-nosnippet>349</a>        <span class="kw">let </span>real_qc_pp =
 <a href=#350 id=350 data-nosnippet>350</a>            &lt;TYPES::SignatureKey <span class="kw">as </span>SignatureKey&gt;::public_parameter(stake_table, threshold);
 <a href=#351 id=351 data-nosnippet>351</a>        <span class="kw">let </span>commit = <span class="self">self</span>.data_commitment(upgrade_lock)<span class="question-mark">?</span>;
-<a href=#352 id=352 data-nosnippet>352</a>
-<a href=#353 id=353 data-nosnippet>353</a>        &lt;TYPES::SignatureKey <span class="kw">as </span>SignatureKey&gt;::check(
-<a href=#354 id=354 data-nosnippet>354</a>            <span class="kw-2">&amp;</span>real_qc_pp,
-<a href=#355 id=355 data-nosnippet>355</a>            commit.as_ref(),
-<a href=#356 id=356 data-nosnippet>356</a>            <span class="self">self</span>.signatures.as_ref().unwrap(),
-<a href=#357 id=357 data-nosnippet>357</a>        )
-<a href=#358 id=358 data-nosnippet>358</a>        .wrap()
-<a href=#359 id=359 data-nosnippet>359</a>        .context(|e| <span class="macro">warn!</span>(<span class="string">"Signature check failed: {e}"</span>))
+<a href=#352 id=352 data-nosnippet>352</a>        <span class="kw">let </span>signatures = <span class="self">self
+<a href=#353 id=353 data-nosnippet>353</a>            </span>.signatures
+<a href=#354 id=354 data-nosnippet>354</a>            .as_ref()
+<a href=#355 id=355 data-nosnippet>355</a>            .ok_or_else(|| <span class="macro">warn!</span>(<span class="string">"missing signatures"</span>))<span class="question-mark">?</span>;
+<a href=#356 id=356 data-nosnippet>356</a>
+<a href=#357 id=357 data-nosnippet>357</a>        &lt;TYPES::SignatureKey <span class="kw">as </span>SignatureKey&gt;::check(<span class="kw-2">&amp;</span>real_qc_pp, commit.as_ref(), signatures)
+<a href=#358 id=358 data-nosnippet>358</a>            .wrap()
+<a href=#359 id=359 data-nosnippet>359</a>            .context(|e| <span class="macro">warn!</span>(<span class="string">"Signature check failed: {e}"</span>))
 <a href=#360 id=360 data-nosnippet>360</a>    }
 <a href=#361 id=361 data-nosnippet>361</a>    <span class="kw">fn </span>signers(
 <a href=#362 id=362 data-nosnippet>362</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
