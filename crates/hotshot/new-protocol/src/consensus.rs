@@ -983,8 +983,10 @@ impl<T: NodeType> Consensus<T> {
             return;
         }
 
-        self.current_epoch = Some(proposal_epoch);
-        outbox.push_back(ConsensusOutput::ViewChanged(view + 1, proposal_epoch));
+        if self.locked_cert.as_ref().is_some_and(|l| l.view_number() == view) {
+            self.current_epoch = Some(proposal_epoch);
+            outbox.push_back(ConsensusOutput::ViewChanged(view + 1, proposal_epoch));
+        }
 
         if !self.staked_in_epoch(proposal_epoch).await {
             return;
