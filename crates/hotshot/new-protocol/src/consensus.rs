@@ -73,6 +73,8 @@ pub enum ConsensusOutput<T: NodeType> {
     SendTimeoutVote(TimeoutVote2<T>),
     SendVote1(Vote1<T>),
     SendVote2(Vote2<T>),
+    SendCertificate1(Certificate1<T>),
+    SendCertificate2(Certificate2<T>),
     SendEpochChange(EpochChangeMessage<T>),
     RequestVidDisperse {
         view: ViewNumber,
@@ -179,10 +181,10 @@ impl<T: NodeType> Consensus<T> {
         let proto = match input {
             ConsensusInput::Proposal(proposal) => self.handle_proposal(proposal, outbox).await,
             ConsensusInput::Certificate1(certificate) => {
-                self.handle_certificate1(certificate).await
+                self.handle_certificate1(certificate, outbox).await
             },
             ConsensusInput::Certificate2(certificate) => {
-                self.handle_certificate2(certificate).await
+                self.handle_certificate2(certificate, outbox).await
             },
             ConsensusInput::TimeoutCertificate(certificate) => {
                 self.handle_timeout_certificate(certificate, outbox).await
@@ -382,8 +384,15 @@ impl<T: NodeType> Consensus<T> {
     }
 
     #[instrument(level = "debug", skip_all)]
-    async fn handle_certificate1(&mut self, certificate: Certificate1<T>) -> Protocol {
+    async fn handle_certificate1(
+        &mut self,
+        certificate: Certificate1<T>,
+        outbox: &mut Outbox<ConsensusOutput<T>>,
+    ) -> Protocol {
         let view = certificate.view_number();
+        if self.certs.contains_key(&view) {
+            return Protocol::Continue;
+        }
         let Some(certificate_epoch) = certificate.epoch() else {
             warn!(%view, "certificate1 has no epoch number");
             return Protocol::Abort;
@@ -394,13 +403,21 @@ impl<T: NodeType> Consensus<T> {
             warn!(%view, "certificate1 not verified");
             return Protocol::Abort;
         }
+        outbox.push_back(ConsensusOutput::SendCertificate1(certificate.clone()));
         self.certs.insert(view, certificate);
         Protocol::Continue
     }
 
     #[instrument(level = "debug", skip_all)]
-    async fn handle_certificate2(&mut self, certificate: Certificate2<T>) -> Protocol {
+    async fn handle_certificate2(
+        &mut self,
+        certificate: Certificate2<T>,
+        outbox: &mut Outbox<ConsensusOutput<T>>,
+    ) -> Protocol {
         let view = certificate.view_number();
+        if self.certs2.contains_key(&view) {
+            return Protocol::Continue;
+        }
         let Some(certificate_epoch) = certificate.epoch() else {
             warn!(%view, "certificate2 has no epoch number");
             return Protocol::Abort;
@@ -411,6 +428,7 @@ impl<T: NodeType> Consensus<T> {
             warn!(%view, "certificate2 not verified");
             return Protocol::Abort;
         }
+        outbox.push_back(ConsensusOutput::SendCertificate2(certificate.clone()));
         self.certs2.insert(view, certificate);
         Protocol::Continue
     }
