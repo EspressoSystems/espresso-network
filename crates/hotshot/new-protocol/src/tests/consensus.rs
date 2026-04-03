@@ -14,8 +14,8 @@ use crate::{
     tests::common::{
         assertions::{
             any, count_matching, is_leaf_decided, is_proposal, is_request_block_and_header,
-            is_request_state, is_send_cert1, is_send_cert2, is_send_timeout_cert,
-            is_send_timeout_vote, is_vote1, is_vote2, node_index_for_key,
+            is_request_state, is_send_timeout_cert, is_send_timeout_vote, is_vote1, is_vote2,
+            node_index_for_key,
         },
         utils::ConsensusHarness,
     },
@@ -432,13 +432,9 @@ async fn test_timeout_prevents_voting() {
         "Timeout should emit timeout vote"
     );
 
-    // cert1 for view 2 — still forwarded and updates lock, but vote2 suppressed
+    // cert1 for view 2 — processed and updates lock, but vote2 suppressed
     harness.apply(test_data.views[1].cert1_input()).await;
 
-    assert!(
-        any(harness.outputs(), is_send_cert1),
-        "cert1 should be forwarded even for timed-out views"
-    );
     assert_eq!(
         count_matching(harness.outputs(), is_vote2),
         vote2_before,

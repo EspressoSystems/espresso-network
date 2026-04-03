@@ -232,9 +232,7 @@ impl<T: NodeType> Consensus<T> {
                 self.vid_shares.remove(&state_response.view);
                 return;
             },
-            ConsensusInput::Timeout(view) => {
-                self.handle_timeout(view, self.current_epoch, outbox)
-            },
+            ConsensusInput::Timeout(view) => self.handle_timeout(view, self.current_epoch, outbox),
             ConsensusInput::TimeoutOneHonest(view, epoch) => {
                 self.handle_timeout(view, epoch, outbox)
             },
@@ -931,7 +929,11 @@ impl<T: NodeType> Consensus<T> {
     }
 
     #[instrument(level = "debug", skip_all)]
-    async fn maybe_vote_2_and_update_lock(&mut self, view: ViewNumber, outbox: &mut Outbox<ConsensusOutput<T>>) {
+    async fn maybe_vote_2_and_update_lock(
+        &mut self,
+        view: ViewNumber,
+        outbox: &mut Outbox<ConsensusOutput<T>>,
+    ) {
         if self.voted_2_views.contains(&view) {
             return;
         }
@@ -1036,7 +1038,11 @@ impl<T: NodeType> Consensus<T> {
             debug!("at genesis");
             return true;
         };
-                
+
+        // When cert1 + block arrive before state validation, maybe_vote_2_and_update_lock
+        // advances the lock to this view before maybe_vote_1 runs.  In that case
+        // the normal liveness/safety checks would both fail (justify_qc references
+        // the parent, not this view), so we verify the lock certifies this exact proposal.
         if locked_cert.view_number() == proposal.view_number() {
             return locked_cert.data.leaf_commit == proposal_commitment(proposal);
         }

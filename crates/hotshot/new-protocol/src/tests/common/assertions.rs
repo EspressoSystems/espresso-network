@@ -73,7 +73,7 @@ pub(crate) fn is_timeout(input: &ConsensusInput<TestTypes>) -> bool {
 }
 
 pub(crate) fn is_timeout_one_honest(input: &ConsensusInput<TestTypes>) -> bool {
-    matches!(input, ConsensusInput::TimeoutOneHonest(_))
+    matches!(input, ConsensusInput::TimeoutOneHonest(..))
 }
 
 pub(crate) fn is_timeout_cert(input: &ConsensusInput<TestTypes>) -> bool {
