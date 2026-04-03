@@ -1024,12 +1024,19 @@ impl ParallelStateCatchup {
         RT: Send + Sync + 'static,
     {
         let local_timeout = self.local_timeout;
-        timeout(
+        match timeout(
             local_timeout,
             self.on_providers(|provider| provider.is_local(), closure),
         )
         .await
-        .map_err(|_| anyhow::anyhow!("local provider timed out after {local_timeout:?}"))?
+        {
+            Ok(result) => result,
+            Err(_) => {
+                let err = format!("local provider timed out after {local_timeout:?}");
+                tracing::warn!("{err}");
+                Err(anyhow::anyhow!(err))
+            },
+        }
     }
 
     /// Perform an async operation on all remote providers, returning the first result to succeed
@@ -1494,11 +1501,11 @@ impl StateCatchup for ParallelStateCatchup {
 
         // If that fails, try the remote ones (with retry)
         self.on_remote_providers(clone! {(stake_table) move |provider| {
-         clone!{(stake_table) async move {
-             provider
-                 .fetch_leaf(height, stake_table, success_threshold)
-                 .await
-         }}
+        clone!{(stake_table) async move {
+            provider
+                .fetch_leaf(height, stake_table, success_threshold)
+                .await
+        }}
         }})
         .await
     }

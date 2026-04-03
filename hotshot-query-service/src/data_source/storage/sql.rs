@@ -879,6 +879,15 @@ impl PruneStorage for SqlStorage {
                 Some(h) => h + batch_size,
             };
             let to = min(batch_end, th);
+
+            // Update pruned height first so the fetcher does not
+            // try to fetch data that we are about to delete.
+            let mut tx = self.write().await?;
+            tx.save_pruned_height(to).await?;
+            tx.commit().await.map_err(|e| QueryError::Error {
+                message: format!("failed to commit save_pruned_height {e}"),
+            })?;
+
             let mut tx = self.write().await?;
             tx.delete_batch(to).await?;
             tx.commit().await.map_err(|e| QueryError::Error {
@@ -890,14 +899,6 @@ impl PruneStorage for SqlStorage {
             tx.delete_state_batch(state_tables, to).await?;
             tx.commit().await.map_err(|e| QueryError::Error {
                 message: format!("failed to commit {e}"),
-            })?;
-
-            // Save pruned height in a separate transaction to avoid serialization
-            // conflicts with concurrent reads on the pruned_height table.
-            let mut tx = self.write().await?;
-            tx.save_pruned_height(to).await?;
-            tx.commit().await.map_err(|e| QueryError::Error {
-                message: format!("failed to commit save_pruned_height {e}"),
             })?;
 
             pruner.pruned_height = Some(to);
@@ -936,10 +937,18 @@ impl PruneStorage for SqlStorage {
                         Some(h) => h + batch_size,
                     };
                     let to = min(batch_end, min_retention_height);
+                    // Update pruned height first so the fetcher does not
+                    // try to fetch data that we are about to delete.
+                    let mut tx = self.write().await?;
+                    tx.save_pruned_height(to).await?;
+                    tx.commit().await.map_err(|e| QueryError::Error {
+                        message: format!("failed to commit save_pruned_height {e}"),
+                    })?;
+
                     let mut tx = self.write().await?;
                     tx.delete_batch(to).await?;
                     tx.commit().await.map_err(|e| QueryError::Error {
-                        message: format!("failed to commit delete_batch{e}"),
+                        message: format!("failed to commit delete_batch {e}"),
                     })?;
 
                     // Prune state tables in a separate transaction.
@@ -947,14 +956,6 @@ impl PruneStorage for SqlStorage {
                     tx.delete_state_batch(state_tables, to).await?;
                     tx.commit().await.map_err(|e| QueryError::Error {
                         message: format!("failed to commit {e}"),
-                    })?;
-
-                    // Save pruned height in a separate transaction to avoid serialization
-                    // conflicts with concurrent reads on the pruned_height table.
-                    let mut tx = self.write().await?;
-                    tx.save_pruned_height(to).await?;
-                    tx.commit().await.map_err(|e| QueryError::Error {
-                        message: format!("failed to commit save_pruned_height {e}"),
                     })?;
 
                     self.vacuum().await?;
