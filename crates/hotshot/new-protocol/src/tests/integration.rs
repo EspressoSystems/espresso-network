@@ -72,7 +72,7 @@ async fn send_timeout_votes(
             .await;
     }
     harness
-        .process_until(|inputs| any(inputs, is_timeout_cert) || any(inputs, is_timeout))
+        .process_until(|inputs| any(inputs, is_timeout_cert))
         .await;
     harness
         .apply_and_process(ConsensusInput::TimeoutCertificate(
@@ -349,7 +349,6 @@ async fn test_cert_forwarding() {
 /// which causes the node to emit its own timeout vote.
 #[tokio::test]
 async fn test_f_plus_1_timeout_votes_trigger_timeout_one_honest() {
-    // f+1 = total_stake/3 + 1 = 10/3 + 1 = 4 for 10 nodes of stake 1
     const ONE_HONEST_THRESHOLD: u64 = 4;
 
     let mut harness = TestHarness::new(0).await;
@@ -369,12 +368,12 @@ async fn test_f_plus_1_timeout_votes_trigger_timeout_one_honest() {
     }
 
     harness
-        .process_until(|inputs| any(inputs, is_timeout_one_honest) || any(inputs, is_timeout))
+        .process_until(|inputs| any(inputs, is_timeout_one_honest))
         .await;
 
     assert!(
         any(harness.outputs(), is_send_timeout_vote),
-        "f+1 timeout votes should trigger TimeoutOneHonest → node emits its own timeout vote"
+        "f+1 timeout votes should trigger TimeoutOneHonest"
     );
 }
 
