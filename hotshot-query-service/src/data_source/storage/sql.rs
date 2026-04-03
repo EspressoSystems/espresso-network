@@ -880,10 +880,18 @@ impl PruneStorage for SqlStorage {
             };
             let to = min(batch_end, th);
             let mut tx = self.write().await?;
-            tx.delete_batch(state_tables, to).await?;
+            tx.delete_batch(to).await?;
             tx.commit().await.map_err(|e| QueryError::Error {
                 message: format!("failed to commit {e}"),
             })?;
+
+            // Prune state tables in a separate transaction.
+            let mut tx = self.write().await?;
+            tx.delete_state_batch(state_tables, to).await?;
+            tx.commit().await.map_err(|e| QueryError::Error {
+                message: format!("failed to commit {e}"),
+            })?;
+
             pruner.pruned_height = Some(to);
             return Ok(Some(to));
         }
@@ -921,7 +929,14 @@ impl PruneStorage for SqlStorage {
                     };
                     let to = min(batch_end, min_retention_height);
                     let mut tx = self.write().await?;
-                    tx.delete_batch(state_tables, to).await?;
+                    tx.delete_batch(to).await?;
+                    tx.commit().await.map_err(|e| QueryError::Error {
+                        message: format!("failed to commit {e}"),
+                    })?;
+
+                    // Prune state tables in a separate transaction.
+                    let mut tx = self.write().await?;
+                    tx.delete_state_batch(state_tables, to).await?;
                     tx.commit().await.map_err(|e| QueryError::Error {
                         message: format!("failed to commit {e}"),
                     })?;
@@ -1540,7 +1555,7 @@ mod test {
 
         // This should delete all the nodes having height < 250 and is not the newest node with its position
         let mut tx = storage.write().await.unwrap();
-        tx.delete_batch(vec!["test_tree".to_string()], 250)
+        tx.delete_state_batch(vec!["test_tree".to_string()], 250)
             .await
             .unwrap();
 
