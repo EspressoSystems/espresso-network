@@ -270,7 +270,9 @@ impl<TYPES: NodeType, THRESHOLD: Threshold<TYPES>> Certificate<TYPES, DaData2>
         <TYPES::SignatureKey as SignatureKey>::check(
             &real_qc_pp,
             commit.as_ref(),
-            self.signatures.as_ref().unwrap(),
+            self.signatures
+                .as_ref()
+                .ok_or_else(|| warn!("missing signatures"))?,
         )
         .wrap()
         .context(|e| warn!("Signature check failed: {e}"))
@@ -353,7 +355,9 @@ impl<
         <TYPES::SignatureKey as SignatureKey>::check(
             &real_qc_pp,
             commit.as_ref(),
-            self.signatures.as_ref().unwrap(),
+            self.signatures
+                .as_ref()
+                .ok_or_else(|| warn!("missing signatures"))?,
         )
         .wrap()
         .context(|e| warn!("Signature check failed: {e}"))
