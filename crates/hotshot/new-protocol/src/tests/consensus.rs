@@ -14,7 +14,8 @@ use crate::{
     tests::common::{
         assertions::{
             any, count_matching, is_leaf_decided, is_proposal, is_request_block_and_header,
-            is_request_state, is_send_cert1, is_send_cert2, is_vote1, is_vote2, node_index_for_key,
+            is_request_state, is_send_cert1, is_send_cert2, is_send_timeout_cert,
+            is_send_timeout_vote, is_vote1, is_vote2, node_index_for_key,
         },
         utils::ConsensusHarness,
     },
@@ -60,7 +61,7 @@ async fn test_timeout_filters_stale_events() {
         .apply(test_data.views[3].proposal_input_consensus(&node_key))
         .await;
 
-    assert_eq!(1, count_matching(harness.outputs(), is_request_state))
+    assert_eq!(1, count_matching(harness.outputs(), is_request_state));
 }
 
 /// Vote1 fires for sequential views when all preconditions are met.
@@ -399,7 +400,7 @@ async fn test_multi_view_chain_decide() {
     assert!(count_matching(harness.outputs(), is_leaf_decided) >= 2);
 }
 
-/// Timeout event sets timeout_view and prevents processing of that view.
+/// Timeout emits a timeout vote and suppresses vote2.
 #[tokio::test]
 async fn test_timeout_prevents_voting() {
     let mut harness = ConsensusHarness::new(0).await;
@@ -420,17 +421,35 @@ async fn test_timeout_prevents_voting() {
         .apply(test_data.views[1].block_reconstructed_input())
         .await;
 
-    // Timeout view 2 — now cert1 for view 2 should be dropped
+    let vote2_before = count_matching(harness.outputs(), is_vote2);
+
+    // Timeout view 2 — emits a timeout vote
     harness
         .apply(ConsensusInput::Timeout(test_data.views[1].view_number))
         .await;
+    assert!(
+        any(harness.outputs(), is_send_timeout_vote),
+        "Timeout should emit timeout vote"
+    );
 
-    // Send cert1 for view 2 — should be stale
+    // cert1 for view 2 — still forwarded and updates lock, but vote2 suppressed
     harness.apply(test_data.views[1].cert1_input()).await;
 
     assert!(
-        !any(harness.outputs(), is_vote2),
-        "Vote2 should not fire after timeout for that view"
+        any(harness.outputs(), is_send_cert1),
+        "cert1 should be forwarded even for timed-out views"
+    );
+    assert_eq!(
+        count_matching(harness.outputs(), is_vote2),
+        vote2_before,
+        "Vote2 should be suppressed after timeout"
+    );
+
+    // cert2 for view 2 — still triggers decide despite timeout
+    harness.apply(test_data.views[1].cert2_input()).await;
+    assert!(
+        any(harness.outputs(), is_leaf_decided),
+        "Decide should still work for timed-out views"
     );
 }
 
@@ -479,6 +498,10 @@ async fn test_leader_proposes_after_timeout() {
     // Now send timeout cert for view 2 — triggers proposal for view 3
     harness.apply(test_data.views[1].timeout_cert_input()).await;
 
+    assert!(
+        any(harness.outputs(), is_send_timeout_cert),
+        "Timeout certificate should be forwarded"
+    );
     assert!(
         any(harness.outputs(), is_request_block_and_header),
         "Leader should request block and header after timeout"
@@ -581,8 +604,20 @@ async fn test_vote_after_timeout_cert() {
         .apply(test_data.views[1].block_reconstructed_input())
         .await;
 
+    harness
+        .apply(ConsensusInput::Timeout(test_data.views[1].view_number))
+        .await;
+    assert!(
+        any(harness.outputs(), is_send_timeout_vote),
+        "Timeout should emit timeout vote"
+    );
+
     // Receive timeout cert for view 2 → view advances to 3
     harness.apply(test_data.views[1].timeout_cert_input()).await;
+    assert!(
+        any(harness.outputs(), is_send_timeout_cert),
+        "Timeout certificate should be forwarded"
+    );
 
     let vote1_before = count_matching(harness.outputs(), is_vote1);
 

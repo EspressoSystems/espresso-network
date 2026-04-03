@@ -25,7 +25,7 @@ use crate::{
     message::{
         self, BlockMessage, Certificate2, CheckpointCertificate, CheckpointVote, ConsensusMessage,
         Message, MessageType, ProposalMessage, TimeoutOneHonest, TransactionMessage, Unchecked,
-        Vote2
+        Vote2,
     },
     network::Network,
     outbox::Outbox,

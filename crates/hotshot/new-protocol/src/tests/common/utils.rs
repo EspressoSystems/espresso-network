@@ -186,7 +186,11 @@ impl TestView {
     }
 
     /// Build a TimeoutVote Event from a specific validator.
-    pub fn timeout_vote_input(&self, node_index: u64) -> Message<TestTypes, Validated> {
+    pub fn timeout_vote_input(
+        &self,
+        node_index: u64,
+        lock: Option<Certificate1<TestTypes>>,
+    ) -> Message<TestTypes, Validated> {
         let (pub_key, priv_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], node_index);
         let data = TimeoutData2 {
             view: self.view_number,
@@ -203,7 +207,7 @@ impl TestView {
         Message {
             sender: self.leader_public_key,
             message_type: MessageType::Consensus(ConsensusMessage::TimeoutVote(
-                TimeoutVoteMessage { vote, lock: None },
+                TimeoutVoteMessage { vote, lock },
             )),
         }
     }

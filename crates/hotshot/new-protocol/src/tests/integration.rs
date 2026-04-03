@@ -1,14 +1,17 @@
 use hotshot::types::BLSPubKey;
+use hotshot_example_types::node_types::TestTypes;
 use hotshot_types::traits::signature_key::SignatureKey;
 
 use super::common::{harness::TestHarness, utils::TestData};
 use crate::{
     consensus::ConsensusInput,
+    message::Certificate1,
     tests::common::assertions::{
         any, count_matching, is_block_built, is_block_reconstructed, is_cert1, is_cert2,
         is_header_created, is_leaf_decided, is_proposal, is_request_block_and_header,
-        is_request_vid_disperse, is_send_cert1, is_send_cert2, is_state_validated, is_timeout,
-        is_timeout_cert, is_vid_disperse, is_view_changed, is_vote1, is_vote2, node_index_for_key,
+        is_request_vid_disperse, is_send_cert1, is_send_cert2, is_send_timeout_vote,
+        is_state_validated, is_timeout, is_timeout_cert, is_timeout_one_honest, is_vid_disperse,
+        is_view_changed, is_vote1, is_vote2, node_index_for_key,
     },
 };
 
@@ -52,6 +55,29 @@ async fn send_vote2s(harness: &mut TestHarness, test_data: &TestData, view_idx: 
     }
     harness
         .process_until(|inputs| any(inputs, is_cert2) || any(inputs, is_timeout))
+        .await;
+}
+
+/// Send enough timeout votes to form a TimeoutCertificate.
+async fn send_timeout_votes(
+    harness: &mut TestHarness,
+    test_data: &TestData,
+    view_idx: usize,
+    lock: Option<Certificate1<TestTypes>>,
+) {
+    let test_view = &test_data.views[view_idx];
+    for i in 0..THRESHOLD {
+        harness
+            .message(test_view.timeout_vote_input(i, lock.clone()))
+            .await;
+    }
+    harness
+        .process_until(|inputs| any(inputs, is_timeout_cert) || any(inputs, is_timeout))
+        .await;
+    harness
+        .apply_and_process(ConsensusInput::TimeoutCertificate(
+            test_view.timeout_cert.clone(),
+        ))
         .await;
 }
 
@@ -214,22 +240,6 @@ async fn test_multi_view_decide_via_cpu_tasks() {
     assert!(count_matching(harness.outputs(), is_leaf_decided) >= 2);
 }
 
-/// Send enough timeout votes for a view.
-async fn send_timeout_votes(harness: &mut TestHarness, test_data: &TestData, view_idx: usize) {
-    let test_view = &test_data.views[view_idx];
-    for i in 0..THRESHOLD {
-        harness.message(test_view.timeout_vote_input(i)).await;
-    }
-    harness
-        .process_until(|inputs| any(inputs, is_timeout_cert) || any(inputs, is_timeout))
-        .await;
-    harness
-        .apply_and_process(ConsensusInput::TimeoutCertificate(
-            test_view.timeout_cert.clone(),
-        ))
-        .await;
-}
-
 /// Timeout votes are collected by the CPU VoteCollector and form a
 /// TimeoutCertificate, which advances the view.
 #[tokio::test]
@@ -240,8 +250,9 @@ async fn test_timeout_votes_form_tc() {
 
     // Process view 1 to establish locked_qc (needed for TC handling)
     send_proposal_and_vote1s(&mut harness, &test_data, 0, &node_key).await;
-    // Send timeout votes for view 2 → CPU timeout collector forms TC
-    send_timeout_votes(&mut harness, &test_data, 1).await;
+    // Send timeout votes for view 2 and form a TimeoutCertificate.
+    let lock = Some(test_data.views[0].cert1.clone());
+    send_timeout_votes(&mut harness, &test_data, 1, lock).await;
 
     assert!(
         any(harness.outputs(), is_view_changed),
@@ -281,21 +292,8 @@ async fn test_leader_proposes_after_timeout_via_cpu_tasks() {
     // The TC input view is 3 (cert.view+1), which passes the stale filter
     // (3 > timeout_view=2). After ViewChanged(3) resets the timer, the leader
     // must complete VID disperse before the timer fires for view 3.
-    let test_view = &test_data.views[1];
-
-    for i in 0..THRESHOLD {
-        harness.message(test_view.timeout_vote_input(i)).await;
-    }
-
-    harness
-        .process_until(|inputs| any(inputs, is_timeout_cert))
-        .await;
-
-    harness
-        .apply_and_process(ConsensusInput::TimeoutCertificate(
-            test_view.timeout_cert.clone(),
-        ))
-        .await;
+    let lock = Some(test_data.views[0].cert1.clone());
+    send_timeout_votes(&mut harness, &test_data, 1, lock).await;
 
     harness
         .process_until(|inputs| {
@@ -345,4 +343,56 @@ async fn test_cert_forwarding() {
 
     assert_eq!(count_matching(harness.outputs(), is_send_cert1), 1);
     assert_eq!(count_matching(harness.outputs(), is_send_cert2), 1);
+}
+
+/// f+1 timeout votes (OneHonestThreshold) trigger a TimeoutOneHonest input,
+/// which causes the node to emit its own timeout vote.
+#[tokio::test]
+async fn test_f_plus_1_timeout_votes_trigger_timeout_one_honest() {
+    // f+1 = total_stake/3 + 1 = 10/3 + 1 = 4 for 10 nodes of stake 1
+    const ONE_HONEST_THRESHOLD: u64 = 4;
+
+    let mut harness = TestHarness::new(0).await;
+    let test_data = TestData::new(4).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+
+    // Process view 1 to establish state
+    send_proposal_and_vote1s(&mut harness, &test_data, 0, &node_key).await;
+
+    // Send exactly f+1 timeout votes for view 2 (below the 2f+1 TC threshold).
+    let test_view = &test_data.views[1];
+    let lock = Some(test_data.views[0].cert1.clone());
+    for i in 0..ONE_HONEST_THRESHOLD {
+        harness
+            .message(test_view.timeout_vote_input(i, lock.clone()))
+            .await;
+    }
+
+    harness
+        .process_until(|inputs| any(inputs, is_timeout_one_honest) || any(inputs, is_timeout))
+        .await;
+
+    assert!(
+        any(harness.outputs(), is_send_timeout_vote),
+        "f+1 timeout votes should trigger TimeoutOneHonest → node emits its own timeout vote"
+    );
+}
+
+/// A timeout vote carrying a lock (Certificate1) has the lock extracted
+/// by the coordinator and forwarded to consensus as a Certificate1 input.
+#[tokio::test]
+async fn test_timeout_vote_lock_extracted_as_cert1() {
+    let mut harness = TestHarness::new(0).await;
+    let test_data = TestData::new(3).await;
+
+    // Send one timeout vote for view 2 carrying cert1(view 1) as lock.
+    // The coordinator extracts the lock and feeds it to consensus.
+    harness
+        .message(test_data.views[1].timeout_vote_input(1, Some(test_data.views[0].cert1.clone())))
+        .await;
+
+    assert!(
+        any(harness.outputs(), is_send_cert1),
+        "Lock in timeout vote should be extracted and forwarded as Certificate1"
+    );
 }
