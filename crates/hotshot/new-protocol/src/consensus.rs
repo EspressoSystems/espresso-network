@@ -88,8 +88,6 @@ pub enum ConsensusOutput<T: NodeType> {
     },
     LockUpdated(Certificate2<T>),
     ViewChanged(ViewNumber, EpochNumber),
-    TimeoutCertificateReceived(TimeoutCertificate2<T>),
-    ViewSyncCertificateReceived(ViewSyncFinalizeCertificate2<T>),
     ProposalReceived {
         proposal: SignedProposal<T, Proposal<T>>,
         sender: T::SignatureKey,

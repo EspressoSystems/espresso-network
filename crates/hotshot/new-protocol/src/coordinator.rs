@@ -218,7 +218,7 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                         let msg = format!("missing epoch in view {}", cert.view_number());
                         return Err(CoordinatorError::critical(msg).context("gc certificate"))
                     };
-                    self.gc(cert.view_number(), epoch).await;
+                    self.gc(cert.view_number(), epoch);
                 }
                 Some(item) = self.block_builder.next() => match item {
                     Ok(block) => {
@@ -515,8 +515,6 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                     .await
                     .map_err(|e| CoordinatorError::from(e).context("broadcast certificate2"))?
             },
-            ConsensusOutput::TimeoutCertificateReceived(..) => {},
-            ConsensusOutput::ViewSyncCertificateReceived(_) => {},
             ConsensusOutput::ProposalReceived { .. } => {},
             ConsensusOutput::ExternalMessageReceived { .. } => {},
             ConsensusOutput::ViewChanged(view, epoch) => {
@@ -570,7 +568,7 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
         membership.leader(view).await.ok()
     }
 
-    async fn gc(&mut self, view: ViewNumber, epoch: EpochNumber) {
+    fn gc(&mut self, view: ViewNumber, epoch: EpochNumber) {
         self.consensus.gc(view, epoch);
         self.checkpoint_collector.gc(view);
         self.network.gc(view, epoch);
