@@ -875,16 +875,27 @@ impl PruneStorage for SqlStorage {
             pruner.target_height = target_height;
         };
 
-        if let Some(target_height) = target_height {
-            if height < target_height {
-                height = min(height + batch_size, target_height);
+        if let Some(th) = target_height {
+            if pruned_height < Some(th) {
+                let batch_end = match pruned_height {
+                    None => batch_size - 1,
+                    Some(h) => h + batch_size,
+                };
+                let to = min(batch_end, th);
                 let mut tx = self.write().await?;
-                tx.delete_batch(state_tables, height).await?;
+                tx.delete_batch(state_tables, to).await?;
                 tx.commit().await.map_err(|e| QueryError::Error {
-                    message: format!("failed to commit {e}"),
+                    message: format!("failed to commit delete_batch {e}"),
                 })?;
-                pruner.pruned_height = Some(height);
-                return Ok(Some(height));
+                // Save pruned height in a separate transaction to avoid serialization
+                // conflicts with concurrent reads on the pruned_height table.
+                let mut tx = self.write().await?;
+                tx.save_pruned_height(to).await?;
+                tx.commit().await.map_err(|e| QueryError::Error {
+                    message: format!("failed to commit save_pruned_height {e}"),
+                })?;
+                pruner.pruned_height = Some(to);
+                return Ok(Some(to));
             }
         }
 
@@ -913,20 +924,30 @@ impl PruneStorage for SqlStorage {
 
                 if let Some(min_retention_height) = minimum_retention_height {
                     if (usage as f64 / threshold as f64) > (f64::from(max_usage) / 10000.0)
-                        && height < min_retention_height
+                        && pruned_height < Some(min_retention_height)
                     {
-                        height = min(height + batch_size, min_retention_height);
+                        let batch_end = match pruned_height {
+                            None => batch_size - 1,
+                            Some(h) => h + batch_size,
+                        };
+                        let to = min(batch_end, min_retention_height);
                         let mut tx = self.write().await?;
-                        tx.delete_batch(state_tables, height).await?;
+                        tx.delete_batch(state_tables, to).await?;
                         tx.commit().await.map_err(|e| QueryError::Error {
-                            message: format!("failed to commit {e}"),
+                            message: format!("failed to commit delete_batch{e}"),
                         })?;
 
                         self.vacuum().await?;
 
-                        pruner.pruned_height = Some(height);
-
-                        return Ok(Some(height));
+                        // Save pruned height in a separate transaction to avoid serialization
+                        // conflicts with concurrent reads on the pruned_height table.
+                        let mut tx = self.write().await?;
+                        tx.save_pruned_height(to).await?;
+                        tx.commit().await.map_err(|e| QueryError::Error {
+                            message: format!("failed to commit save_pruned_height {e}"),
+                        })?;
+                        pruner.pruned_height = Some(to);
+                        return Ok(Some(to));
                     }
                 }
             }
