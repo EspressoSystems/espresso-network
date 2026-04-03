@@ -27,6 +27,8 @@ type QueryService interface {
 	FetchVidCommonByHeight(ctx context.Context, blockHeight uint64) (types.VidCommon, error)
 	// Get the transaction by its hash from the explorer.
 	FetchExplorerTransactionByHash(ctx context.Context, hash *types.TaggedBase64) (types.ExplorerTransactionQueryData, error)
+	// Stream payloads starting from the given height
+	StreamPayloads(ctx context.Context, height uint64) (Stream[types.PayloadQueryData], error)
 	// Stream transactions starting from the given height.
 	StreamTransactions(ctx context.Context, height uint64) (Stream[types.TransactionQueryData], error)
 	// Stream transactions starting from the given height, filtered by namespace.
