@@ -852,7 +852,7 @@ impl PruneStorage for SqlStorage {
         // If any of these values are not set, they can be loaded from the database if necessary.
         let mut minimum_retention_height = pruner.minimum_retention_height;
         let mut target_height = pruner.target_height;
-        let mut height = match pruner.pruned_height {
+        let height = match pruner.pruned_height {
             Some(h) => h,
             None => {
                 let Some(height) = self.get_minimum_height().await? else {
@@ -876,24 +876,30 @@ impl PruneStorage for SqlStorage {
         };
 
         if let Some(th) = target_height {
-            if pruned_height < Some(th) {
-                let batch_end = match pruned_height {
-                    None => batch_size - 1,
-                    Some(h) => h + batch_size,
-                };
-                let to = min(batch_end, th);
-                let mut tx = self.write().await?;
-                tx.delete_batch(state_tables, to).await?;
-                tx.commit().await.map_err(|e| QueryError::Error {
-                    message: format!("failed to commit delete_batch {e}"),
-                })?;
-                // Save pruned height in a separate transaction to avoid serialization
-                // conflicts with concurrent reads on the pruned_height table.
+            if height < th {
+                let to = min(height + batch_size, th);
+
+                // Update pruned height first so the fetcher does not
+                // try to fetch data that we are about to delete.
                 let mut tx = self.write().await?;
                 tx.save_pruned_height(to).await?;
                 tx.commit().await.map_err(|e| QueryError::Error {
                     message: format!("failed to commit save_pruned_height {e}"),
                 })?;
+
+                let mut tx = self.write().await?;
+                tx.delete_batch(to).await?;
+                tx.commit().await.map_err(|e| QueryError::Error {
+                    message: format!("failed to commit delete_batch {e}"),
+                })?;
+
+                // Prune state tables in a separate transaction.
+                let mut tx = self.write().await?;
+                tx.delete_state_batch(state_tables, to).await?;
+                tx.commit().await.map_err(|e| QueryError::Error {
+                    message: format!("failed to commit {e}"),
+                })?;
+
                 pruner.pruned_height = Some(to);
                 return Ok(Some(to));
             }
@@ -924,28 +930,31 @@ impl PruneStorage for SqlStorage {
 
                 if let Some(min_retention_height) = minimum_retention_height {
                     if (usage as f64 / threshold as f64) > (f64::from(max_usage) / 10000.0)
-                        && pruned_height < Some(min_retention_height)
+                        && height < min_retention_height
                     {
-                        let batch_end = match pruned_height {
-                            None => batch_size - 1,
-                            Some(h) => h + batch_size,
-                        };
-                        let to = min(batch_end, min_retention_height);
-                        let mut tx = self.write().await?;
-                        tx.delete_batch(state_tables, to).await?;
-                        tx.commit().await.map_err(|e| QueryError::Error {
-                            message: format!("failed to commit delete_batch{e}"),
-                        })?;
-
-                        self.vacuum().await?;
-
-                        // Save pruned height in a separate transaction to avoid serialization
-                        // conflicts with concurrent reads on the pruned_height table.
+                        let to = min(height + batch_size, min_retention_height);
+                        // Update pruned height first so the fetcher does not
+                        // try to fetch data that we are about to delete.
                         let mut tx = self.write().await?;
                         tx.save_pruned_height(to).await?;
                         tx.commit().await.map_err(|e| QueryError::Error {
                             message: format!("failed to commit save_pruned_height {e}"),
                         })?;
+
+                        let mut tx = self.write().await?;
+                        tx.delete_batch(to).await?;
+                        tx.commit().await.map_err(|e| QueryError::Error {
+                            message: format!("failed to commit delete_batch {e}"),
+                        })?;
+
+                        // Prune state tables in a separate transaction.
+                        let mut tx = self.write().await?;
+                        tx.delete_state_batch(state_tables, to).await?;
+                        tx.commit().await.map_err(|e| QueryError::Error {
+                            message: format!("failed to commit {e}"),
+                        })?;
+
+                        self.vacuum().await?;
                         pruner.pruned_height = Some(to);
                         return Ok(Some(to));
                     }
@@ -1744,7 +1753,7 @@ mod test {
 
         // This should delete all the nodes having height < 250 and is not the newest node with its position
         let mut tx = storage.write().await.unwrap();
-        tx.delete_batch(vec!["test_tree".to_string()], 250)
+        tx.delete_state_batch(vec!["test_tree".to_string()], 250)
             .await
             .unwrap();
 
