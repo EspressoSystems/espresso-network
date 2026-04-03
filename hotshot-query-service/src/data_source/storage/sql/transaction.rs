@@ -498,7 +498,6 @@ impl Transaction<Write> {
             .await?;
         }
 
-        self.save_pruned_height(height).await?;
         Ok(())
     }
 
