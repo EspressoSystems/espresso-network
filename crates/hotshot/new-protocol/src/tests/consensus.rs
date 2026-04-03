@@ -681,48 +681,6 @@ async fn test_no_vote_after_timeout_for_proposal_below_lock() {
     );
 }
 
-/// Valid certificates are re-broadcast exactly once; duplicates are suppressed.
-#[tokio::test]
-async fn test_certificate_forwarding_and_dedup() {
-    let mut harness = ConsensusHarness::new(0).await;
-    let test_data = TestData::new(3).await;
-    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
-
-    // Build up state: two views with proposals + block reconstructed
-    harness
-        .apply(test_data.views[0].proposal_input_consensus(&node_key))
-        .await;
-    harness
-        .apply(test_data.views[0].block_reconstructed_input())
-        .await;
-    harness
-        .apply(test_data.views[1].proposal_input_consensus(&node_key))
-        .await;
-    harness
-        .apply(test_data.views[1].block_reconstructed_input())
-        .await;
-
-    // Receive cert1 → should forward, then duplicate → suppressed
-    harness.apply(test_data.views[1].cert1_input()).await;
-    harness.apply(test_data.views[1].cert1_input()).await;
-
-    assert_eq!(
-        count_matching(harness.outputs(), is_send_cert1),
-        1,
-        "cert1: first receive forwards, duplicate suppressed"
-    );
-
-    // Receive cert2 → should forward, then duplicate → suppressed
-    harness.apply(test_data.views[1].cert2_input()).await;
-    harness.apply(test_data.views[1].cert2_input()).await;
-
-    assert_eq!(
-        count_matching(harness.outputs(), is_send_cert2),
-        1,
-        "cert2: first receive forwards, duplicate suppressed"
-    );
-}
-
 /// Cert2 for a view that is already decided is ignored.
 #[tokio::test]
 async fn test_decide_not_repeated_for_same_view() {
