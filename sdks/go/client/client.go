@@ -1,14 +1,12 @@
 package client
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
 
 	types "github.com/EspressoSystems/espresso-network/sdks/go/types"
 	common "github.com/EspressoSystems/espresso-network/sdks/go/types/common"
@@ -19,19 +17,76 @@ var _ QueryService = (*Client)(nil)
 var _ SubmitAPI = (*Client)(nil)
 var _ EspressoClient = (*Client)(nil)
 
-type Client struct {
-	baseUrl string
-	client  *http.Client
+type EspressoClientConfigOption func(*EspressoClientConfig)
+
+type EspressoClientConfig struct {
+	BaseUrl              string
+	TransactionSubmitter SubmitAPI
 }
 
-func NewClient(url string) *Client {
-	if !strings.HasSuffix(url, "/") {
-		url += "/"
+var DefaultEspressoClientConfig = EspressoClientConfig{
+	BaseUrl: "query.main.net.espresso.network",
+}
+
+// Validate that the espressoClientConfig is valid.
+func ValidateEspressoClientConfig(config EspressoClientConfig) error {
+	if config.TransactionSubmitter == nil {
+		return fmt.Errorf("transaction submitter cannot be nil when creating an espresso client")
+	}
+	return nil
+}
+
+// This option is used to set the transaction submitter (any implementer of the SubmitAPI), during the constructor
+// of the EspressoClient.
+func WithTransactionSubmitter(transactionSubmitter SubmitAPI) EspressoClientConfigOption {
+	return func(config *EspressoClientConfig) {
+		config.TransactionSubmitter = transactionSubmitter
+	}
+}
+
+// This option is used to set the base URL of the client in the constructor.
+func WithBaseUrl(baseUrl string) EspressoClientConfigOption {
+	return func(config *EspressoClientConfig) {
+		formattedBaseUrl := formatUrl(baseUrl)
+		config.BaseUrl = formattedBaseUrl
+	}
+}
+
+type Client struct {
+	baseUrl              string
+	client               *http.Client
+	transactionSubmitter SubmitAPI
+}
+
+// NewClientFromOptions:
+// This function allows SDK users to construct an EspressoClient with any transaction submitter that implements
+// the SubmitAPI. This is the preferred method of constructing an EspressoClient.
+func NewClientFromOptions(options ...EspressoClientConfigOption) (*Client, error) {
+	config := DefaultEspressoClientConfig
+	for _, option := range options {
+		option(&config)
 	}
 
+	if err := ValidateEspressoClientConfig(config); err != nil {
+		return nil, err
+	}
 	return &Client{
-		baseUrl: url,
-		client:  http.DefaultClient,
+		baseUrl:              config.BaseUrl,
+		client:               http.DefaultClient,
+		transactionSubmitter: config.TransactionSubmitter,
+	}, nil
+}
+
+// NewClient:
+// This function is the default construction of the espresso client.
+// It has been left for compatibility reasons (namely, in the multiple-nodes client)
+// New instances of using this client should use NewClientFromOptions()
+func NewClient(baseUrl string) *Client {
+	url := formatUrl(baseUrl)
+	return &Client{
+		baseUrl:              url,
+		client:               http.DefaultClient,
+		transactionSubmitter: NewQuerySubmitter(url),
 	}
 }
 
@@ -179,27 +234,7 @@ func (c *Client) FetchTransactionsInBlock(ctx context.Context, blockHeight uint6
 }
 
 func (c *Client) SubmitTransaction(ctx context.Context, tx types.Transaction) (*types.TaggedBase64, error) {
-	response, err := c.tryPostRequest(ctx, c.baseUrl, tx)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrPermanent, err)
-	}
-
-	defer response.Body.Close()
-	if response.StatusCode != 200 {
-		return nil, fmt.Errorf("%w: %v", ErrEphemeral, err)
-	}
-
-	body, err := io.ReadAll(response.Body)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrEphemeral, err)
-	}
-
-	var hash types.TaggedBase64
-	if err := json.Unmarshal(body, &hash); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrPermanent, err)
-	}
-
-	return &hash, nil
+	return c.transactionSubmitter.SubmitTransaction(ctx, tx)
 }
 
 // Stream of JSON-encoded objects over a WebSocket connection
@@ -325,19 +360,4 @@ func (c *Client) tryGetRequest(ctx context.Context, baseUrl, format string, args
 	}
 	return c.client.Do(req)
 
-}
-
-func (c *Client) tryPostRequest(ctx context.Context, baseUrl string, tx types.Transaction) (*http.Response, error) {
-
-	marshalled, err := json.Marshal(tx)
-	if err != nil {
-		return nil, err
-	}
-
-	request, err := http.NewRequestWithContext(ctx, "POST", baseUrl+"submit/submit", bytes.NewBuffer(marshalled))
-	if err != nil {
-		return nil, err
-	}
-	request.Header.Set("Content-Type", "application/json")
-	return c.client.Do(request)
 }

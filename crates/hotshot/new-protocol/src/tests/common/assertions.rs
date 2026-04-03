@@ -40,6 +40,14 @@ pub(crate) fn is_send_epoch_change(output: &ConsensusOutput<TestTypes>) -> bool 
     matches!(output, ConsensusOutput::SendEpochChange(..))
 }
 
+pub(crate) fn is_send_cert1(output: &ConsensusOutput<TestTypes>) -> bool {
+    matches!(output, ConsensusOutput::SendCertificate1(_))
+}
+
+pub(crate) fn is_send_cert2(output: &ConsensusOutput<TestTypes>) -> bool {
+    matches!(output, ConsensusOutput::SendCertificate2(_))
+}
+
 pub(crate) fn is_cert1(input: &ConsensusInput<TestTypes>) -> bool {
     matches!(input, ConsensusInput::Certificate1(_))
 }
