@@ -457,6 +457,21 @@ impl Transaction<Prune> {
     /// and retries, recreating the payload.
     #[instrument(skip(self))]
     pub(super) async fn delete_batch(&mut self, height: u64) -> anyhow::Result<()> {
+        // Delete dependent tables individually before deleting headers.
+        let res = query("DELETE FROM payload WHERE height <= $1")
+            .bind(height as i64)
+            .execute(self.as_mut())
+            .await
+            .context("deleting payloads")?;
+        tracing::debug!(rows_affected = res.rows_affected(), "pruned payloads");
+
+        let res = query("DELETE FROM vid2 WHERE height <= $1")
+            .bind(height as i64)
+            .execute(self.as_mut())
+            .await
+            .context("deleting vid")?;
+        tracing::debug!(rows_affected = res.rows_affected(), "pruned vid");
+
         let res = query("DELETE FROM transactions WHERE block_height <= $1")
             .bind(height as i64)
             .execute(self.as_mut())
@@ -477,36 +492,6 @@ impl Transaction<Prune> {
             .await
             .context("deleting headers")?;
         tracing::debug!(rows_affected = res.rows_affected(), "pruned headers");
-
-        let res = query(
-            "DELETE FROM payload AS p
-             WHERE NOT EXISTS (
-                SELECT 1 FROM header AS h
-                WHERE h.payload_hash = p.hash AND h.ns_table = p.ns_table
-             )",
-        )
-        .execute(self.as_mut())
-        .await
-        .context("garbage collecting payloads")?;
-        tracing::debug!(
-            rows_affected = res.rows_affected(),
-            "garbage collected payloads"
-        );
-
-        let res = query(
-            "DELETE FROM vid_common AS v
-             WHERE NOT EXISTS (
-                SELECT 1 FROM header AS h
-                WHERE h.payload_hash = v.hash
-             )",
-        )
-        .execute(self.as_mut())
-        .await
-        .context("garbage collecting VID common")?;
-        tracing::debug!(
-            rows_affected = res.rows_affected(),
-            "garbage collected VID common"
-        );
 
         Ok(())
     }
