@@ -266,16 +266,14 @@ impl<TYPES: NodeType, THRESHOLD: Threshold<TYPES>> Certificate<TYPES, DaData2>
         let real_qc_pp =
             <TYPES::SignatureKey as SignatureKey>::public_parameter(stake_table, threshold);
         let commit = self.data_commitment(upgrade_lock)?;
+        let signatures = self
+            .signatures
+            .as_ref()
+            .ok_or_else(|| warn!("missing signatures"))?;
 
-        <TYPES::SignatureKey as SignatureKey>::check(
-            &real_qc_pp,
-            commit.as_ref(),
-            self.signatures
-                .as_ref()
-                .ok_or_else(|| warn!("missing signatures"))?,
-        )
-        .wrap()
-        .context(|e| warn!("Signature check failed: {e}"))
+        <TYPES::SignatureKey as SignatureKey>::check(&real_qc_pp, commit.as_ref(), signatures)
+            .wrap()
+            .context(|e| warn!("Signature check failed: {e}"))
     }
     fn signers(
         &self,
@@ -351,16 +349,14 @@ impl<
         let real_qc_pp =
             <TYPES::SignatureKey as SignatureKey>::public_parameter(stake_table, threshold);
         let commit = self.data_commitment(upgrade_lock)?;
+        let signatures = self
+            .signatures
+            .as_ref()
+            .ok_or_else(|| warn!("missing signatures"))?;
 
-        <TYPES::SignatureKey as SignatureKey>::check(
-            &real_qc_pp,
-            commit.as_ref(),
-            self.signatures
-                .as_ref()
-                .ok_or_else(|| warn!("missing signatures"))?,
-        )
-        .wrap()
-        .context(|e| warn!("Signature check failed: {e}"))
+        <TYPES::SignatureKey as SignatureKey>::check(&real_qc_pp, commit.as_ref(), signatures)
+            .wrap()
+            .context(|e| warn!("Signature check failed: {e}"))
     }
     fn signers(
         &self,
