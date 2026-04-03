@@ -137,9 +137,18 @@ impl<T: NodeType, I: hotshot::traits::NodeImplementation<T>> ConsensusHandle<T, 
             .version_infallible(view)
             >= version(0, 8);
         if active {
-            self.new_protocol_active.store(true, Ordering::Relaxed);
+            self.activate_new_protocol();
         }
         active
+    }
+
+    fn activate_new_protocol(&self) {
+        if self.new_protocol_active.swap(true, Ordering::Relaxed) {
+            return;
+        }
+        self.query_tx
+            .try_send(CoordinatorQuery::ActivateNetwork)
+            .expect("failed to activate coordinator network");
     }
 
     async fn new_protocol(&self) -> bool {

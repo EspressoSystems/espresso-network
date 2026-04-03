@@ -60,6 +60,8 @@ pub struct Coordinator<T: NodeType, I: NodeImplementation<T>> {
     outbox: Outbox<ConsensusOutput<T>>,
     public_key: T::SignatureKey,
     timer: Timer,
+    #[builder(default)]
+    network_active: bool,
 }
 
 impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
@@ -127,7 +129,7 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
         (coordinator, query_tx)
     }
 
-    fn handle_query(&self, query: CoordinatorQuery<T>) {
+    fn handle_query(&mut self, query: CoordinatorQuery<T>) {
         match query {
             CoordinatorQuery::CurView(tx) => {
                 let _ = tx.send(self.consensus.cur_view());
@@ -155,13 +157,16 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
             CoordinatorQuery::GetStateAndDelta { view, respond } => {
                 let _ = respond.send(self.state_manager.get_state_and_delta(&view));
             },
+            CoordinatorQuery::ActivateNetwork => {
+                self.network_active = true;
+            },
         }
     }
 
     pub async fn next_consensus_input(&mut self) -> Result<ConsensusInput<T>, CoordinatorError> {
         loop {
             select! {
-                message = self.network.receive() => match message {
+                message = self.network.receive(), if self.network_active => match message {
                     Ok(m) => {
                         if let Some(input) = self.on_network_message(m).await {
                             return Ok(input)
