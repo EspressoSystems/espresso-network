@@ -2931,7 +2931,7 @@ mod test {
         eips::BlockId,
         network::EthereumWallet,
         primitives::{Address, U256},
-        providers::{Provider, ProviderBuilder},
+        providers::ProviderBuilder,
     };
     use async_lock::Mutex;
     use committable::{Commitment, Committable};
@@ -6273,21 +6273,29 @@ mod test {
         let token = EspToken::new(token_address, provider.clone());
 
         let init_log = fetcher
-            .scan_token_contract_initialized_event_log(stake_table_init_block, token)
+            .scan_token_contract_initialized_event_log(stake_table_init_block, token.clone())
             .await
             .unwrap();
 
-        let init_tx = provider
-            .get_transaction_receipt(
-                init_log
-                    .transaction_hash
-                    .context(format!("transaction hash not found. init_log={init_log:?}"))?,
-            )
+        let init_block = init_log.block_number.context("missing block number")?;
+        let init_tx_hash = init_log
+            .transaction_hash
+            .context("missing transaction hash")?;
+
+        let transfer_logs = token
+            .Transfer_filter()
+            .from_block(init_block)
+            .to_block(init_block)
+            .query()
             .await
-            .unwrap()
             .unwrap();
 
-        let mint_transfer = init_tx.decoded_log::<EspToken::Transfer>().unwrap();
+        let (mint_transfer, _) = transfer_logs
+            .iter()
+            .find(|(transfer, log)| {
+                log.transaction_hash == Some(init_tx_hash) && transfer.from == Address::ZERO
+            })
+            .context("no mint transfer event in init tx")?;
 
         assert!(mint_transfer.value > U256::ZERO);
 

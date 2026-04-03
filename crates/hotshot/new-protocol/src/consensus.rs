@@ -9,7 +9,7 @@ use hotshot::traits::BlockPayload;
 use hotshot_types::{
     data::{
         BlockNumber, EpochNumber, Leaf2, VidCommitment, VidCommitment2, VidDisperse2,
-        VidDisperseShare2, ViewChangeEvidence2, ViewNumber, vid_disperse::vid_total_weight,
+        VidDisperseShare2, ViewChangeEvidence2, ViewNumber,
     },
     drb::DrbResult,
     epoch_membership::EpochMembershipCoordinator,
@@ -75,6 +75,8 @@ pub enum ConsensusOutput<T: NodeType> {
     SendVote1(Vote1<T>),
     SendVote2(Vote2<T>),
     SendTimeoutCertificate(TimeoutCertificate2<T>, ViewNumber, EpochNumber),
+    SendCertificate1(Certificate1<T>),
+    SendCertificate2(Certificate2<T>),
     SendEpochChange(EpochChangeMessage<T>),
     RequestVidDisperse {
         view: ViewNumber,
@@ -197,10 +199,10 @@ impl<T: NodeType> Consensus<T> {
         let proto = match input {
             ConsensusInput::Proposal(proposal) => self.handle_proposal(proposal, outbox).await,
             ConsensusInput::Certificate1(certificate) => {
-                self.handle_certificate1(certificate).await
+                self.handle_certificate1(certificate, outbox).await
             },
             ConsensusInput::Certificate2(certificate) => {
-                self.handle_certificate2(certificate).await
+                self.handle_certificate2(certificate, outbox).await
             },
             ConsensusInput::TimeoutCertificate(certificate) => {
                 self.handle_timeout_certificate(certificate, outbox).await
@@ -277,6 +279,7 @@ impl<T: NodeType> Consensus<T> {
         self.maybe_propose(view + 1, outbox).await;
     }
 
+
     fn view_changed(
         &mut self,
         view: ViewNumber,
@@ -285,6 +288,14 @@ impl<T: NodeType> Consensus<T> {
     ) {
         self.current_epoch = Some(epoch);
         outbox.push_back(ConsensusOutput::ViewChanged(view, epoch));
+    }
+
+    pub fn wants_proposal<S>(&self, p: &ProposalMessage<T, S>) -> bool {
+        !(self
+            .locked_cert
+            .as_ref()
+            .is_some_and(|l| l.view_number() > p.view_number())
+            || self.proposals.contains_key(&p.view_number()))
     }
 
     pub fn gc(&mut self, view: ViewNumber, _epoch: EpochNumber) {
@@ -310,13 +321,8 @@ impl<T: NodeType> Consensus<T> {
     ) -> Protocol {
         let view = proposal.view_number();
 
-        if self
-            .locked_cert
-            .as_ref()
-            .is_some_and(|l| l.view_number() > view)
-            || self.proposals.contains_key(&view)
-        {
-            warn!(%view, "proposal for old view");
+        if !self.wants_proposal(&proposal) {
+            warn!(%view, "proposal too old");
             return Protocol::Abort;
         }
 
@@ -329,21 +335,6 @@ impl<T: NodeType> Consensus<T> {
             return Protocol::Abort;
         };
         let block_number = proposal.block_header.block_number();
-
-        if !vid_matches_proposal(&vid_share, &proposal) {
-            debug!("vid share does not match proposal");
-            return Protocol::Abort;
-        }
-
-        if !vid_share.is_consistent() {
-            debug!("vid share is not consistent");
-            return Protocol::Abort;
-        }
-
-        if !self.verify_vid_share(&vid_share, epoch).await {
-            debug!("vid share not verified");
-            return Protocol::Abort;
-        }
 
         if !self.is_safe(&proposal) {
             debug!("proposal not safe");
@@ -367,9 +358,10 @@ impl<T: NodeType> Consensus<T> {
                 return Protocol::Abort;
             }
         }
+
         // if the previous block is the last block of the epoch, this proposal is the first proposal of the new epoch
         if is_last_block(block_number.saturating_sub(1), *self.epoch_height) {
-            let Some(cert2) = proposal.next_epoch_justify_qc.as_ref() else {
+            let Some(cert2) = &proposal.next_epoch_justify_qc else {
                 warn!(%epoch, "no next epoch justify QC");
                 return Protocol::Abort;
             };
@@ -381,11 +373,6 @@ impl<T: NodeType> Consensus<T> {
                 warn!(%epoch, "next epoch justify QC not verified");
                 return Protocol::Abort;
             }
-        }
-
-        if !self.verify_cert(&proposal.justify_qc, qc_epoch).await {
-            warn!(%epoch, "justify QC not verified");
-            return Protocol::Abort;
         }
 
         let payload_size = vid_share.payload_byte_len();
@@ -427,7 +414,11 @@ impl<T: NodeType> Consensus<T> {
     }
 
     #[instrument(level = "debug", skip_all)]
-    async fn handle_certificate1(&mut self, certificate: Certificate1<T>) -> Protocol {
+    async fn handle_certificate1(
+        &mut self,
+        certificate: Certificate1<T>,
+        outbox: &mut Outbox<ConsensusOutput<T>>,
+    ) -> Protocol {
         let view = certificate.view_number();
         if self.certs.contains_key(&view) {
             return Protocol::Continue;
@@ -442,12 +433,17 @@ impl<T: NodeType> Consensus<T> {
             warn!(%view, "certificate1 not verified");
             return Protocol::Abort;
         }
+        outbox.push_back(ConsensusOutput::SendCertificate1(certificate.clone()));
         self.certs.insert(view, certificate);
         Protocol::Continue
     }
 
     #[instrument(level = "debug", skip_all)]
-    async fn handle_certificate2(&mut self, certificate: Certificate2<T>) -> Protocol {
+    async fn handle_certificate2(
+        &mut self,
+        certificate: Certificate2<T>,
+        outbox: &mut Outbox<ConsensusOutput<T>>,
+    ) -> Protocol {
         let view = certificate.view_number();
         if self.certs2.contains_key(&view) {
             return Protocol::Continue;
@@ -462,6 +458,7 @@ impl<T: NodeType> Consensus<T> {
             warn!(%view, "certificate2 not verified");
             return Protocol::Abort;
         }
+        outbox.push_back(ConsensusOutput::SendCertificate2(certificate.clone()));
         self.certs2.insert(view, certificate);
         Protocol::Continue
     }
@@ -1013,24 +1010,6 @@ impl<T: NodeType> Consensus<T> {
         outbox.push_back(ConsensusOutput::SendVote2(vote));
     }
 
-    #[instrument(level = "trace", skip(self, share))]
-    async fn verify_vid_share(&self, share: &VidDisperseShare2<T>, epoch: EpochNumber) -> bool {
-        match self
-            .stake_table_coordinator
-            .membership_for_epoch(Some(epoch))
-            .await
-        {
-            Ok(stake_table) => {
-                let total_weight = vid_total_weight(&stake_table.stake_table().await, Some(epoch));
-                share.verify(total_weight)
-            },
-            Err(err) => {
-                warn!(%epoch, %err, "failed to get membership for epoch");
-                false
-            },
-        }
-    }
-
     #[instrument(level = "trace", skip_all)]
     fn is_safe(&self, proposal: &Proposal<T>) -> bool {
         let Some(locked_cert) = self.locked_cert.as_ref() else {
@@ -1129,17 +1108,6 @@ impl<T: NodeType> Consensus<T> {
                 false
             },
         }
-    }
-}
-
-fn vid_matches_proposal<T>(share: &VidDisperseShare2<T>, proposal: &Proposal<T>) -> bool
-where
-    T: NodeType,
-{
-    if let VidCommitment::V2(vid_comm) = proposal.block_header.payload_commitment() {
-        vid_comm == share.payload_commitment
-    } else {
-        false
     }
 }
 

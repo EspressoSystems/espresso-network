@@ -384,3 +384,4 @@ contracts-test-network *args='-vv':
         exit 1
     fi
     forge test --match-test test_Network_ --jobs 1 {{args}}
+
