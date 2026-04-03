@@ -183,7 +183,7 @@ impl<T: NodeType> Consensus<T> {
         //  - Proposal/BlockReconstructed: needed as prerequisites for lock updates and
         //    decisions; the actual vote2 send is suppressed inside maybe_vote_2_and_update_lock
         //
-        // TODO: Verify remaining inputs should be dissallowed for view <= timeout_view
+        // TODO: Verify remaining inputs should be disallowed for view <= timeout_view
         let allow_past_timeout = matches!(
             input,
             ConsensusInput::DrbResult(..)
