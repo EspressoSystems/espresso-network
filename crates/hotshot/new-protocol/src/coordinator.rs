@@ -515,15 +515,15 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
 
     fn gc(&mut self, view: ViewNumber, epoch: EpochNumber) {
         self.consensus.gc(view, epoch);
-        self.checkpoint_collector.gc(view);
+        self.checkpoint_collector.gc(view, epoch);
         self.network.gc(view, epoch);
         self.state_manager.gc(view);
         self.vid_disperser.gc(view);
         self.vid_reconstructor.gc(view);
-        self.vote1_collector.gc(view);
-        self.vote2_collector.gc(view);
-        self.timeout_collector.gc(view);
-        self.timeout_one_honest_collector.gc(view);
+        self.vote1_collector.gc(view, epoch);
+        self.vote2_collector.gc(view, epoch);
+        self.timeout_collector.gc(view, epoch);
+        self.timeout_one_honest_collector.gc(view, epoch);
         self.epoch_manager.gc(epoch);
         self.block_builder.gc(view);
     }

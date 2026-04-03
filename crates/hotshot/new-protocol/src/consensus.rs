@@ -279,7 +279,6 @@ impl<T: NodeType> Consensus<T> {
         self.maybe_propose(view + 1, outbox).await;
     }
 
-
     fn view_changed(
         &mut self,
         view: ViewNumber,
@@ -983,7 +982,11 @@ impl<T: NodeType> Consensus<T> {
             return;
         }
 
-        if self.locked_cert.as_ref().is_some_and(|l| l.view_number() == view) {
+        if self
+            .locked_cert
+            .as_ref()
+            .is_some_and(|l| l.view_number() == view)
+        {
             self.current_epoch = Some(proposal_epoch);
             outbox.push_back(ConsensusOutput::ViewChanged(view + 1, proposal_epoch));
         }
