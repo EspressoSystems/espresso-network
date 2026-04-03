@@ -420,11 +420,7 @@ impl Transaction<Write> {
 impl Transaction<Write> {
     /// Delete a batch of data for pruning.
     #[instrument(skip(self))]
-    pub(super) async fn delete_batch(
-        &mut self,
-        state_tables: Vec<String>,
-        height: u64,
-    ) -> anyhow::Result<()> {
+    pub(super) async fn delete_batch(&mut self, height: u64) -> anyhow::Result<()> {
         // Delete payloads which are only referenced by the headers we're going to delete.
         let res = query(
             "WITH to_delete AS (
@@ -473,24 +469,48 @@ impl Transaction<Write> {
             "garbage collected VID common"
         );
 
-        // Delete headers (cascading to other tables).
+        // Delete dependent tables individually before deleting headers.
+        let res = query("DELETE FROM transactions WHERE block_height <= $1")
+            .bind(height as i64)
+            .execute(self.as_mut())
+            .await
+            .context("deleting transactions")?;
+        tracing::debug!(rows_affected = res.rows_affected(), "pruned transactions");
+
+        let res = query("DELETE FROM leaf2 WHERE height <= $1")
+            .bind(height as i64)
+            .execute(self.as_mut())
+            .await
+            .context("deleting leaf2")?;
+        tracing::debug!(rows_affected = res.rows_affected(), "pruned leaf2");
+
         let res = query("DELETE FROM header WHERE height <= $1")
             .bind(height as i64)
             .execute(self.as_mut())
-            .await?;
+            .await
+            .context("deleting headers")?;
         tracing::debug!(rows_affected = res.rows_affected(), "pruned headers");
 
-        // prune merklized state tables
-        // only delete nodes having created < h AND
-        // is not the newest node with its position
+        Ok(())
+    }
+
+    /// Prune merklized state tables.
+    ///
+    /// Only deletes nodes having `created <= height` that are not the newest node at their position.
+    #[instrument(skip(self))]
+    pub(super) async fn delete_state_batch(
+        &mut self,
+        state_tables: Vec<String>,
+        height: u64,
+    ) -> anyhow::Result<()> {
         for state_table in state_tables {
             self.execute(
                 query(&format!(
                     "
                 DELETE FROM {state_table} WHERE (path, created) IN
-                (SELECT path, created FROM 
-                (SELECT path, created, 
-                ROW_NUMBER() OVER (PARTITION BY path ORDER BY created DESC) as rank 
+                (SELECT path, created FROM
+                (SELECT path, created,
+                ROW_NUMBER() OVER (PARTITION BY path ORDER BY created DESC) as rank
                 FROM {state_table} WHERE created <= $1) ranked_nodes WHERE rank != 1)"
                 ))
                 .bind(height as i64),
