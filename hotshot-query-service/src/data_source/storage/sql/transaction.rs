@@ -507,12 +507,12 @@ impl Transaction<Write> {
             self.execute(
                 query(&format!(
                     "
-                DELETE FROM {state_table} AS t
-                WHERE t.created <= $1
+                DELETE FROM {state_table}
+                WHERE {state_table}.created <= $1
                   AND EXISTS (
                     SELECT 1 FROM {state_table} AS t2
-                    WHERE t2.path = t.path
-                      AND t2.created > t.created
+                    WHERE t2.path = {state_table}.path
+                      AND t2.created > {state_table}.created
                       AND t2.created <= $1
                   )"
                 ))
