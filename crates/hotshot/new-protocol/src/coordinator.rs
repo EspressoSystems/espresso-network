@@ -178,8 +178,8 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                         return Ok(ConsensusInput::DrbResult(epoch, drb_result))
                     }
                     Ok(EpochRootResult::RootAdded(_epoch)) => {}
-                    Err(_) => {
-                        return Err(CoordinatorError::unspecified().context("epoch root"))
+                    Err(err) => {
+                        return Err(CoordinatorError::regular(err))
                     }
                 },
                 else => {
@@ -234,7 +234,9 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
         match message.message_type {
             MessageType::Consensus(msg) => match msg {
                 ConsensusMessage::Proposal(p) => {
-                    self.proposal_validator.validate(p);
+                    if self.consensus.wants_proposal(&p) {
+                        self.proposal_validator.validate(p);
+                    }
                     None
                 },
                 ConsensusMessage::Vote1(vote1) => {

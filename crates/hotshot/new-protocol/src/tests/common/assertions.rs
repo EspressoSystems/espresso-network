@@ -36,6 +36,10 @@ pub(crate) fn is_view_changed(output: &ConsensusOutput<TestTypes>) -> bool {
     matches!(output, ConsensusOutput::ViewChanged(..))
 }
 
+pub(crate) fn is_send_epoch_change(output: &ConsensusOutput<TestTypes>) -> bool {
+    matches!(output, ConsensusOutput::SendEpochChange(..))
+}
+
 pub(crate) fn is_cert1(input: &ConsensusInput<TestTypes>) -> bool {
     matches!(input, ConsensusInput::Certificate1(_))
 }
@@ -101,16 +105,6 @@ where
     outputs
         .into_iter()
         .any(|e| matches!(e, ConsensusOutput::SendEpochChange(_)))
-}
-
-pub(crate) fn count_epoch_change<'a, I>(outputs: I) -> usize
-where
-    I: IntoIterator<Item = &'a ConsensusOutput<TestTypes>>,
-{
-    outputs
-        .into_iter()
-        .filter(|e| matches!(e, ConsensusOutput::SendEpochChange(_)))
-        .count()
 }
 
 pub(crate) fn has_request_drb_for_epoch<'a, I>(

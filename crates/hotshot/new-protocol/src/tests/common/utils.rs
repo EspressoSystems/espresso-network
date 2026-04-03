@@ -595,7 +595,7 @@ impl ConsensusHarness {
                 let epoch_height = self.consensus.epoch_height;
                 for leaf in leaves {
                     let block_number = BlockHeader::<TestTypes>::block_number(leaf.block_header());
-                    if !is_epoch_root(block_number, epoch_height) {
+                    if !is_epoch_root(block_number, *epoch_height) {
                         continue;
                     }
                     let header = leaf.block_header().clone();
@@ -607,7 +607,7 @@ impl ConsensusHarness {
                     .expect("add_epoch_root should succeed in test harness");
 
                     let epoch =
-                        hotshot_types::utils::epoch_from_block_number(block_number, epoch_height);
+                        hotshot_types::utils::epoch_from_block_number(block_number, *epoch_height);
                     let target_epoch = EpochNumber::new(epoch + 2);
                     self.membership_coordinator
                         .membership()

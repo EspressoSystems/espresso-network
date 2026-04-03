@@ -2,7 +2,9 @@ use std::fmt;
 
 use hotshot::traits::NetworkError;
 
-use crate::{block::BlockError, network::is_critical, proposal::ValidationError};
+use crate::{
+    block::BlockError, epoch::EpochManagerError, network::is_critical, proposal::ValidationError,
+};
 
 #[derive(Debug, thiserror::Error)]
 #[error("{severity} coordinator error ({context}): source: {source}")]
@@ -83,6 +85,9 @@ pub enum ErrorSource {
 
     #[error("block builder error: {0}")]
     Block(#[from] BlockError),
+
+    #[error("epoch manager error: {0}")]
+    EpochManager(#[from] EpochManagerError),
 }
 
 impl From<NetworkError> for CoordinatorError {

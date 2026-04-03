@@ -12,12 +12,12 @@ rewind = []
 stats = []
 
 [dependencies]
+anyhow = { workspace = true }
 async-broadcast = { workspace = true }
 async-lock = { workspace = true }
 async-trait = { workspace = true }
 bon = { workspace = true }
 committable = { workspace = true }
-derive_more = { workspace = true }
 futures = { workspace = true }
 hotshot = { workspace = true }
 hotshot-example-types = { workspace = true }
