@@ -1139,8 +1139,9 @@ impl StateCatchup for ParallelStateCatchup {
             .await;
 
         // Check if we were successful locally
-        if local_result.is_ok() {
-            return local_result;
+        match &local_result {
+            Ok(_) => return local_result,
+            Err(err) => tracing::debug!("{err:#}"),
         }
 
         // If that fails, try the remote ones
@@ -1183,8 +1184,9 @@ impl StateCatchup for ParallelStateCatchup {
             .await;
 
         // Check if we were successful locally
-        if local_result.is_ok() {
-            return local_result;
+        match &local_result {
+            Ok(_) => return local_result,
+            Err(err) => tracing::debug!("{err:#}"),
         }
 
         // If that fails, try the remote ones
@@ -1283,8 +1285,9 @@ impl StateCatchup for ParallelStateCatchup {
             .await;
 
         // Check if we were successful locally
-        if local_result.is_ok() {
-            return local_result;
+        match &local_result {
+            Ok(_) => return local_result,
+            Err(err) => tracing::debug!("{err:#}"),
         }
 
         // If that fails, try the remote ones
@@ -1319,8 +1322,9 @@ impl StateCatchup for ParallelStateCatchup {
             .await;
 
         // Check if we were successful locally
-        if local_result.is_ok() {
-            return local_result;
+        match &local_result {
+            Ok(_) => return local_result,
+            Err(err) => tracing::debug!("{err:#}"),
         }
 
         // If that fails, try the remote ones
@@ -1368,8 +1372,9 @@ impl StateCatchup for ParallelStateCatchup {
             .await;
 
         // Check if we were successful locally
-        if local_result.is_ok() {
-            return local_result;
+        match &local_result {
+            Ok(_) => return local_result,
+            Err(err) => tracing::debug!("{err:#}"),
         }
 
         // If that fails, try the remote ones
@@ -1402,8 +1407,9 @@ impl StateCatchup for ParallelStateCatchup {
             .await;
 
         // Check if we were successful locally
-        if local_result.is_ok() {
-            return local_result;
+        match &local_result {
+            Ok(_) => return local_result,
+            Err(err) => tracing::debug!("{err:#}"),
         }
 
         // If that fails, try the remote ones
@@ -1457,8 +1463,9 @@ impl StateCatchup for ParallelStateCatchup {
             .await;
 
         // Check if we were successful locally
-        if local_result.is_ok() {
-            return local_result;
+        match &local_result {
+            Ok(_) => return local_result,
+            Err(err) => tracing::debug!("{err:#}"),
         }
 
         // If that fails, try the remote ones (with retry)
@@ -1495,8 +1502,9 @@ impl StateCatchup for ParallelStateCatchup {
             .await;
 
         // Check if we were successful locally
-        if local_result.is_ok() {
-            return local_result;
+        match &local_result {
+            Ok(_) => return local_result,
+            Err(err) => tracing::debug!("{err:#}"),
         }
 
         // If that fails, try the remote ones (with retry)
@@ -1522,8 +1530,9 @@ impl StateCatchup for ParallelStateCatchup {
             .await;
 
         // Check if we were successful locally
-        if local_result.is_ok() {
-            return local_result;
+        match &local_result {
+            Ok(_) => return local_result,
+            Err(err) => tracing::debug!("{err:#}"),
         }
 
         // If that fails, try the remote ones (with retry)
@@ -1561,8 +1570,9 @@ impl StateCatchup for ParallelStateCatchup {
             .await;
 
         // Check if we were successful locally
-        if local_result.is_ok() {
-            return local_result;
+        match &local_result {
+            Ok(_) => return local_result,
+            Err(err) => tracing::debug!("{err:#}"),
         }
 
         // If that fails, try the remote ones (with retry)
@@ -1592,8 +1602,9 @@ impl StateCatchup for ParallelStateCatchup {
             .await;
 
         // Check if we were successful locally
-        if local_result.is_ok() {
-            return local_result;
+        match &local_result {
+            Ok(_) => return local_result,
+            Err(err) => tracing::debug!("{err:#}"),
         }
 
         // If that fails, try the remote ones (with retry)
