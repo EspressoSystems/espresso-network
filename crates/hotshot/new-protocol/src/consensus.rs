@@ -15,7 +15,9 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     message::Proposal as SignedProposal,
     simple_certificate::{TimeoutCertificate2, ViewSyncFinalizeCertificate2},
-    simple_vote::{CheckpointData, HasEpoch, QuorumData2, SimpleVote, TimeoutVote2, Vote2Data},
+    simple_vote::{
+        CheckpointData, HasEpoch, QuorumData2, SimpleVote, TimeoutData2, TimeoutVote2, Vote2Data,
+    },
     stake_table::StakeTableEntries,
     traits::{
         block_contents::BlockHeader, node_implementation::NodeType, signature_key::SignatureKey,
@@ -55,6 +57,7 @@ pub enum ConsensusInput<T: NodeType> {
     StateValidationFailed(StateResponse<T>),
     Timeout(ViewNumber),
     TimeoutCertificate(TimeoutCertificate2<T>),
+    TimeoutOneHonest(ViewNumber),
     VidDisperseCreated(ViewNumber, VidDisperse2<T>),
     ViewSyncCertificate(ViewSyncFinalizeCertificate2<T>),
     DrbResult(EpochNumber, DrbResult),
@@ -68,7 +71,7 @@ pub enum ConsensusOutput<T: NodeType> {
     RequestDrbResult(EpochNumber),
     SendProposal(SignedProposal<T, Proposal<T>>, VidDisperse2<T>),
     SendCheckpointVote(CheckpointVote<T>),
-    SendTimeoutVote(TimeoutVote2<T>),
+    SendTimeoutVote(TimeoutVote2<T>, Option<Certificate1<T>>),
     SendVote1(Vote1<T>),
     SendVote2(Vote2<T>),
     SendCertificate1(Certificate1<T>),
@@ -171,10 +174,24 @@ impl<T: NodeType> Consensus<T> {
         outbox: &mut Outbox<ConsensusOutput<T>>,
     ) {
         let view = input.view_number();
-        // Ignore old inputs unless it's a DRB result
-        // TODO: This isn't correct, I think we need to process vote2 for views
-        // that haven't timed out, but are before the timeout view
-        if !matches!(input, ConsensusInput::DrbResult(_, _)) && view <= self.timeout_view {
+        // Allow certain inputs through even for views <= timeout_view:
+        //  - DrbResult: epoch DRB computations are view-independent
+        //  - Certificate1/2: needed for lock updates and late decisions (spec Lock rule)
+        //  - EpochChange: epoch transitions shouldn't be blocked by timeouts
+        //  - Proposal/BlockReconstructed: needed as prerequisites for lock updates and
+        //    decisions; the actual vote2 send is suppressed inside maybe_vote_2_and_update_lock
+        //
+        // TODO: Verify remaining inputs should be dissallowed for view <= timeout_view
+        let allow_past_timeout = matches!(
+            input,
+            ConsensusInput::DrbResult(..)
+                | ConsensusInput::Certificate1(_)
+                | ConsensusInput::Certificate2(_)
+                | ConsensusInput::EpochChange(_)
+                | ConsensusInput::Proposal(_)
+                | ConsensusInput::BlockReconstructed(..)
+        );
+        if !allow_past_timeout && view <= self.timeout_view {
             return;
         }
         let proto = match input {
@@ -215,9 +232,25 @@ impl<T: NodeType> Consensus<T> {
                 self.vid_shares.remove(&state_response.view);
                 return;
             },
-            ConsensusInput::Timeout(view) => {
-                self.handle_timeout(view);
-                // we are done after timeout, don't try to vote, decide, or propose
+            ConsensusInput::Timeout(view) | ConsensusInput::TimeoutOneHonest(view) => {
+                self.timeout_view = max(self.timeout_view, view);
+                let epoch = self.locked_cert.as_ref().and_then(|c| c.epoch());
+                let data = TimeoutData2 { view, epoch };
+                match SimpleVote::create_signed_vote(
+                    data,
+                    view,
+                    &self.public_key,
+                    &self.private_key,
+                    &upgrade_lock::<T>(),
+                ) {
+                    Ok(vote) => {
+                        outbox.push_back(ConsensusOutput::SendTimeoutVote(
+                            vote,
+                            self.locked_cert.clone(),
+                        ));
+                    },
+                    Err(err) => warn!(%view, %err, "failed to create timeout vote"),
+                }
                 return;
             },
             ConsensusInput::BlockBuilt {
@@ -367,6 +400,10 @@ impl<T: NodeType> Consensus<T> {
         self.proposals.insert(view, proposal.clone());
         self.vid_shares.insert(view, vid_share);
 
+        if view <= self.timeout_view {
+            return Protocol::Continue;
+        }
+
         outbox.push_back(ConsensusOutput::RequestState(StateRequest {
             view: proposal.view_number(),
             parent_view: proposal.view_number().saturating_sub(1).into(),
@@ -460,7 +497,9 @@ impl<T: NodeType> Consensus<T> {
         self.timeout_certs.insert(view, certificate.clone());
         outbox.push_back(ConsensusOutput::ViewChanged(view, epoch));
         outbox.push_back(ConsensusOutput::SendTimeoutCertificate(
-            certificate, view, epoch,
+            certificate,
+            view,
+            epoch,
         ));
         if !self.is_leader(view, epoch).await {
             debug!(%epoch, "not leader");
@@ -522,12 +561,6 @@ impl<T: NodeType> Consensus<T> {
             },
         ));
         Protocol::Continue
-    }
-
-    #[instrument(level = "debug", skip_all)]
-    fn handle_timeout(&mut self, view: ViewNumber) {
-        self.timeout_view = view;
-        // TODO: clear_view(view);
     }
 
     #[instrument(level = "debug", skip_all)]
@@ -793,7 +826,7 @@ impl<T: NodeType> Consensus<T> {
 
     #[instrument(level = "debug", skip_all)]
     async fn maybe_vote_1(&mut self, view: ViewNumber, outbox: &mut Outbox<ConsensusOutput<T>>) {
-        if self.voted_1_views.contains(&view) {
+        if view <= self.timeout_view || self.voted_1_views.contains(&view) {
             return;
         }
 
@@ -929,12 +962,21 @@ impl<T: NodeType> Consensus<T> {
         // We can now update the lock, change view and vote
         if self
             .locked_cert
-            .as_mut()
+            .as_ref()
             .is_none_or(|locked_cert| locked_cert.view_number() < cert1.view_number())
         {
             self.locked_cert = Some(cert1.clone());
-            outbox.push_back(ConsensusOutput::ViewChanged(view + 1, proposal_epoch));
         }
+
+        self.voted_2_views.insert(view);
+
+        // Spec Step 3 (Pre-commit/Vote2): send vote2 "while in any view v' ≤ v,
+        // provided it has not sent a timeout message in view v or higher."
+        if view <= self.timeout_view {
+            return;
+        }
+
+        outbox.push_back(ConsensusOutput::ViewChanged(view + 1, proposal_epoch));
 
         if !self.staked_in_epoch(proposal_epoch).await {
             return;
@@ -958,7 +1000,6 @@ impl<T: NodeType> Consensus<T> {
             },
         };
         outbox.push_back(ConsensusOutput::SendVote2(vote));
-        self.voted_2_views.insert(view);
     }
 
     #[instrument(level = "trace", skip(self, share))]
@@ -1094,6 +1135,7 @@ impl<T: NodeType> ConsensusInput<T> {
             ConsensusInput::StateValidated(response) => response.view,
             ConsensusInput::StateValidationFailed(request) => request.view,
             ConsensusInput::Timeout(view) => *view,
+            ConsensusInput::TimeoutOneHonest(view) => *view,
             ConsensusInput::TimeoutCertificate(cert) => {
                 // Add one because we are moving to the next view so all event
                 // processing is for the next view

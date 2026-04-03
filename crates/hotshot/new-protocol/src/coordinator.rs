@@ -23,9 +23,9 @@ use crate::{
     },
     epoch::{EpochManager, EpochRootResult},
     message::{
-        BlockMessage, Certificate2, CheckpointCertificate, CheckpointVote, ConsensusMessage,
+        self, BlockMessage, Certificate2, CheckpointCertificate, CheckpointVote, ConsensusMessage,
         Message, MessageType, ProposalMessage, TimeoutOneHonest, TransactionMessage, Unchecked,
-        Vote2,
+        Vote2
     },
     network::Network,
     outbox::Outbox,
@@ -254,12 +254,14 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                 ConsensusMessage::Certificate2(certificate2, _key) => {
                     Some(ConsensusInput::Certificate2(certificate2))
                 },
-                ConsensusMessage::TimeoutVote(timeout_vote) => {
+                ConsensusMessage::TimeoutVote(timeout_msg) => {
                     self.timeout_collector
-                        .accumulate_vote(timeout_vote.clone())
+                        .accumulate_vote(timeout_msg.vote.clone())
                         .await;
-                    self.timeout_one_honest_collector.accumulate_vote(timeout_vote).await;
-                    None
+                    self.timeout_one_honest_collector
+                        .accumulate_vote(timeout_msg.vote)
+                        .await;
+                    timeout_msg.lock.map(ConsensusInput::Certificate1)
                 },
                 ConsensusMessage::TimeoutCertificate(tc) => {
                     Some(ConsensusInput::TimeoutCertificate(tc))
@@ -357,10 +359,12 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                     }
                 }
             },
-            ConsensusOutput::SendTimeoutVote(vote) => {
+            ConsensusOutput::SendTimeoutVote(vote, lock) => {
                 let message = Message {
                     sender: self.public_key.clone(),
-                    message_type: MessageType::Consensus(ConsensusMessage::TimeoutVote(vote)),
+                    message_type: MessageType::Consensus(ConsensusMessage::TimeoutVote(
+                        message::TimeoutVoteMessage { vote, lock },
+                    )),
                 };
                 self.network
                     .broadcast(message)
@@ -371,17 +375,14 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                 if let Some(leader) = self.leader(view, epoch).await {
                     let message = Message {
                         sender: self.public_key.clone(),
-                        message_type: MessageType::Consensus(
-                            ConsensusMessage::TimeoutCertificate(tc),
-                        ),
+                        message_type: MessageType::Consensus(ConsensusMessage::TimeoutCertificate(
+                            tc,
+                        )),
                     };
                     self.network
                         .unicast(leader, message)
                         .await
-                        .map_err(|e| {
-                            CoordinatorError::from(e)
-                                .context("timeout certificate")
-                        })?;
+                        .map_err(|e| CoordinatorError::from(e).context("timeout certificate"))?;
                 }
             },
             ConsensusOutput::SendVote1(vote1) => {

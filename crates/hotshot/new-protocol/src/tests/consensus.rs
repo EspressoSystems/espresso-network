@@ -37,7 +37,8 @@ async fn test_safety_genesis_no_lock() {
     );
 }
 
-/// Events with view <= timeout_view are silently dropped.
+/// Stale proposals (view <= timeout_view) are stored for lock updates and
+/// decisions, but don't trigger state validation or block building.
 #[tokio::test]
 async fn test_timeout_filters_stale_events() {
     let mut harness = ConsensusHarness::new(0).await;

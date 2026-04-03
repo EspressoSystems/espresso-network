@@ -49,7 +49,7 @@ use crate::{
     helpers::{proposal_commitment, upgrade_lock},
     message::{
         Certificate1, Certificate2, ConsensusMessage, Message, MessageType, Proposal,
-        ProposalMessage, Validated, Vote1, Vote2,
+        ProposalMessage, TimeoutVoteMessage, Validated, Vote1, Vote2,
     },
     outbox::Outbox,
     state::StateResponse,
@@ -202,7 +202,9 @@ impl TestView {
         .expect("Failed to sign TimeoutVote2");
         Message {
             sender: self.leader_public_key,
-            message_type: MessageType::Consensus(ConsensusMessage::TimeoutVote(vote)),
+            message_type: MessageType::Consensus(ConsensusMessage::TimeoutVote(
+                TimeoutVoteMessage { vote, lock: None },
+            )),
         }
     }
 

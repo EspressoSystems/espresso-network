@@ -173,6 +173,19 @@ impl<T: NodeType> HasViewNumber for Vote1<T> {
     }
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
+#[serde(bound(deserialize = ""))]
+pub struct TimeoutVoteMessage<T: NodeType> {
+    pub vote: TimeoutVote2<T>,
+    pub lock: Option<Certificate1<T>>,
+}
+
+impl<T: NodeType> HasViewNumber for TimeoutVoteMessage<T> {
+    fn view_number(&self) -> ViewNumber {
+        self.vote.view_number()
+    }
+}
+
 /// Message sent at the end of an epoch by the current committee
 /// to the next committee.  Both certificates are on the last block of the epoch.
 /// The protocol spec only requires the second certificate, but for consistency
@@ -200,7 +213,7 @@ pub enum ConsensusMessage<T: NodeType, S> {
     Vote2(Vote2<T>),
     Certificate1(Certificate1<T>, T::SignatureKey),
     Certificate2(Certificate2<T>, T::SignatureKey),
-    TimeoutVote(TimeoutVote2<T>),
+    TimeoutVote(TimeoutVoteMessage<T>),
     TimeoutCertificate(TimeoutCertificate2<T>),
     EpochChange(EpochChangeMessage<T>),
     Checkpoint(CheckpointVote<T>),
@@ -231,7 +244,7 @@ impl<T: NodeType, S> HasViewNumber for ConsensusMessage<T, S> {
             Self::Vote2(vote) => vote.view_number(),
             Self::Certificate1(certificate, _) => certificate.view_number(),
             Self::Certificate2(certificate, _) => certificate.view_number(),
-            Self::TimeoutVote(vote) => vote.view_number(),
+            Self::TimeoutVote(msg) => msg.view_number(),
             Self::TimeoutCertificate(certificate) => certificate.view_number(),
             Self::Checkpoint(vote) => vote.view_number(),
             Self::EpochChange(epoch_change) => epoch_change.cert1.view_number(),
