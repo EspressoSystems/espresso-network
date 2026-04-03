@@ -3,8 +3,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use committable::{Commitment, Committable};
 use hotshot::types::SignatureKey;
 use hotshot_types::{
-    data::ViewNumber,
-    epoch_membership::EpochMembershipCoordinator,
+    data::{EpochNumber, ViewNumber},
+    epoch_membership::{EpochMembership, EpochMembershipCoordinator},
     message::UpgradeLock,
     simple_vote::{HasEpoch, VersionedVoteData},
     stake_table::StakeTableEntries,
@@ -23,6 +23,7 @@ pub struct VoteCollector<T: NodeType, V, C> {
     accumulators: BTreeMap<ViewNumber, (mpsc::Sender<V>, AbortHandle)>,
     completed_certificates: BTreeSet<ViewNumber>,
     epoch_membership_coordinator: EpochMembershipCoordinator<T>,
+    membership_cache: BTreeMap<EpochNumber, EpochMembership<T>>,
     upgrade_lock: UpgradeLock<T>,
     tasks: JoinSet<C>,
 }
@@ -42,6 +43,7 @@ where
             accumulators: BTreeMap::new(),
             completed_certificates: BTreeSet::new(),
             epoch_membership_coordinator,
+            membership_cache: BTreeMap::new(),
             upgrade_lock,
             tasks: JoinSet::new(),
         }
@@ -70,19 +72,33 @@ where
         if self.completed_certificates.contains(&view) {
             return;
         }
-        let (tx, _abort_handle) = self.accumulators.entry(view).or_insert_with(|| {
+        if !self.accumulators.contains_key(&view) {
+            let Some(epoch) = vote.epoch() else {
+                return;
+            };
+            let membership = if let Some(m) = self.membership_cache.get(&epoch) {
+                m.clone()
+            } else {
+                let Ok(m) = self
+                    .epoch_membership_coordinator
+                    .membership_for_epoch(Some(epoch))
+                    .await
+                else {
+                    return;
+                };
+                self.membership_cache.insert(epoch, m.clone());
+                m
+            };
             let (tx, rx) = mpsc::channel(100);
             let accumulator = VoteAccumulator::new(self.upgrade_lock.clone());
-            let membership_coordinator = self.epoch_membership_coordinator.clone();
-            let abort_handle = self.tasks.spawn(Self::run_per_view(
-                view,
-                rx,
-                accumulator,
-                membership_coordinator,
-            ));
-            (tx, abort_handle)
-        });
-        let _ = tx.send(vote).await;
+            let abort_handle =
+                self.tasks
+                    .spawn(Self::run_per_view(view, rx, accumulator, membership));
+            self.accumulators.insert(view, (tx, abort_handle));
+        }
+        if let Some((tx, _)) = self.accumulators.get(&view) {
+            let _ = tx.send(vote).await;
+        }
     }
 
     #[instrument(level = "debug", skip_all)]
@@ -90,14 +106,11 @@ where
         _view: ViewNumber,
         mut rx: mpsc::Receiver<V>,
         mut accumulator: VoteAccumulator<T, V, C>,
-        membership_coordinator: EpochMembershipCoordinator<T>,
+        membership: EpochMembership<T>,
     ) -> C {
         let mut votes = Vec::new();
+
         while let Some(vote) = rx.recv().await {
-            let epoch = vote.epoch();
-            let Ok(membership) = membership_coordinator.membership_for_epoch(epoch).await else {
-                continue;
-            };
             if let Some(cert) = accumulator.accumulate(&vote, membership.clone()).await {
                 let stake_table = C::stake_table(&membership).await;
                 let threshold = C::threshold(&membership).await;
