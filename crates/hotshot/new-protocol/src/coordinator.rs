@@ -390,6 +390,32 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                     .await
                     .map_err(|e| CoordinatorError::from(e).context("broadcast epoch change"))?
             },
+            ConsensusOutput::SendCertificate1(cert1) => {
+                let message = Message {
+                    sender: self.public_key.clone(),
+                    message_type: MessageType::Consensus(ConsensusMessage::Certificate1(
+                        cert1,
+                        self.public_key.clone(),
+                    )),
+                };
+                self.network
+                    .broadcast(message)
+                    .await
+                    .map_err(|e| CoordinatorError::from(e).context("broadcast certificate1"))?
+            },
+            ConsensusOutput::SendCertificate2(cert2) => {
+                let message = Message {
+                    sender: self.public_key.clone(),
+                    message_type: MessageType::Consensus(ConsensusMessage::Certificate2(
+                        cert2,
+                        self.public_key.clone(),
+                    )),
+                };
+                self.network
+                    .broadcast(message)
+                    .await
+                    .map_err(|e| CoordinatorError::from(e).context("broadcast certificate2"))?
+            },
             ConsensusOutput::ViewChanged(view, epoch) => {
                 self.timer.reset_with(view);
                 let txns = self.block_builder.on_view_changed(view, epoch);

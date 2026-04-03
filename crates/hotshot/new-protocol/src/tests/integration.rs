@@ -7,8 +7,8 @@ use crate::{
     tests::common::assertions::{
         any, count_matching, is_block_built, is_block_reconstructed, is_cert1, is_cert2,
         is_header_created, is_leaf_decided, is_proposal, is_request_block_and_header,
-        is_request_vid_disperse, is_state_validated, is_timeout, is_timeout_cert, is_vid_disperse,
-        is_view_changed, is_vote1, is_vote2, node_index_for_key,
+        is_request_vid_disperse, is_send_cert1, is_send_cert2, is_state_validated, is_timeout,
+        is_timeout_cert, is_vid_disperse, is_view_changed, is_vote1, is_vote2, node_index_for_key,
     },
 };
 
@@ -132,6 +132,15 @@ async fn test_full_decide_via_cpu_tasks() {
 
     assert!(any(harness.outputs(), is_vote1), "Vote1 should be sent");
     assert!(any(harness.outputs(), is_vote2), "Vote2 should be sent");
+
+    assert!(
+        any(harness.outputs(), is_send_cert1),
+        "Certificate1 should be sent"
+    );
+    assert!(
+        any(harness.outputs(), is_send_cert2),
+        "Certificate2 should be sent"
+    );
     // LeafDecided proves the full pipeline: cert1 formation, block
     // reconstruction from VID shares, cert2 formation, and decision.
     assert!(
@@ -310,4 +319,30 @@ async fn test_leader_proposes_after_timeout_via_cpu_tasks() {
         any(harness.outputs(), is_proposal),
         "Leader should send proposal with timeout view change evidence"
     );
+}
+
+/// Certificate1 formed from votes and certificate2 received from network
+/// are each forwarded exactly once. Duplicates from either source are ignored.
+#[tokio::test]
+async fn test_cert_forwarding() {
+    let mut harness = TestHarness::new(0).await;
+    let test_data = TestData::new(3).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+
+    // cert1 formed locally from votes
+    send_proposal_and_vote1s(&mut harness, &test_data, 0, &node_key).await;
+
+    // cert2 received from network
+    harness
+        .apply_and_process(test_data.views[0].cert2_input())
+        .await;
+
+    // Duplicates from either source are ignored
+    harness
+        .apply_and_process(test_data.views[0].cert1_input())
+        .await;
+    send_vote2s(&mut harness, &test_data, 0).await;
+
+    assert_eq!(count_matching(harness.outputs(), is_send_cert1), 1);
+    assert_eq!(count_matching(harness.outputs(), is_send_cert2), 1);
 }
