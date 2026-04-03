@@ -24,7 +24,8 @@ use crate::{
     epoch::{EpochManager, EpochRootResult},
     message::{
         BlockMessage, Certificate2, CheckpointCertificate, CheckpointVote, ConsensusMessage,
-        Message, MessageType, ProposalMessage, TransactionMessage, Unchecked, Vote2,
+        Message, MessageType, ProposalMessage, TimeoutOneHonest, TransactionMessage, Unchecked,
+        Vote2,
     },
     network::Network,
     outbox::Outbox,
@@ -45,6 +46,7 @@ pub struct Coordinator<T: NodeType, I: NodeImplementation<T>> {
     vote1_collector: VoteCollector<T, QuorumVote2<T>, QuorumCertificate2<T>>,
     vote2_collector: VoteCollector<T, Vote2<T>, Certificate2<T>>,
     timeout_collector: VoteCollector<T, TimeoutVote2<T>, TimeoutCertificate2<T>>,
+    timeout_one_honest_collector: VoteCollector<T, TimeoutVote2<T>, TimeoutOneHonest<T>>,
     checkpoint_collector: VoteCollector<T, CheckpointVote<T>, CheckpointCertificate<T>>,
     epoch_manager: EpochManager<T>,
     block_builder: BlockBuilder<T>,
@@ -109,6 +111,9 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                 }
                 Some(tcert) = self.timeout_collector.next() => {
                     return Ok(ConsensusInput::TimeoutCertificate(tcert))
+                }
+                Some(out) = self.timeout_one_honest_collector.next() => {
+                    return Ok(ConsensusInput::TimeoutOneHonest(out.view_number()))
                 }
                 Some(cert1) = self.vote1_collector.next() => {
                     return Ok(ConsensusInput::Certificate1(cert1))
@@ -250,7 +255,10 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                     Some(ConsensusInput::Certificate2(certificate2))
                 },
                 ConsensusMessage::TimeoutVote(timeout_vote) => {
-                    self.timeout_collector.accumulate_vote(timeout_vote).await;
+                    self.timeout_collector
+                        .accumulate_vote(timeout_vote.clone())
+                        .await;
+                    self.timeout_one_honest_collector.accumulate_vote(timeout_vote).await;
                     None
                 },
                 ConsensusMessage::TimeoutCertificate(tc) => {
@@ -494,6 +502,7 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
         self.vote1_collector.gc(view);
         self.vote2_collector.gc(view);
         self.timeout_collector.gc(view);
+        self.timeout_one_honest_collector.gc(view);
         self.epoch_manager.gc(epoch);
         self.block_builder.gc(view);
     }

@@ -99,8 +99,8 @@ where
                 continue;
             };
             if let Some(cert) = accumulator.accumulate(&vote, membership.clone()).await {
-                let stake_table = membership.stake_table().await;
-                let threshold = membership.success_threshold().await;
+                let stake_table = C::stake_table(&membership).await;
+                let threshold = C::threshold(&membership).await;
                 match cert.is_valid_cert(
                     &StakeTableEntries::<T>::from(stake_table).0,
                     threshold,

@@ -9,12 +9,12 @@ use hotshot_types::{
     drb::DrbResult,
     message::Proposal as SignedProposal,
     simple_certificate::{
-        LightClientStateUpdateCertificateV2, QuorumCertificate2, SimpleCertificate,
-        SuccessThreshold, TimeoutCertificate2, UpgradeCertificate, ViewSyncCommitCertificate2,
-        ViewSyncFinalizeCertificate2, ViewSyncPreCommitCertificate2,
+        LightClientStateUpdateCertificateV2, OneHonestThreshold, QuorumCertificate2,
+        SimpleCertificate, SuccessThreshold, TimeoutCertificate2, UpgradeCertificate,
+        ViewSyncCommitCertificate2, ViewSyncFinalizeCertificate2, ViewSyncPreCommitCertificate2,
     },
     simple_vote::{
-        CheckpointData, HasEpoch, QuorumData2, QuorumVote2, SimpleVote, TimeoutVote2,
+        CheckpointData, HasEpoch, QuorumData2, QuorumVote2, SimpleVote, TimeoutData2, TimeoutVote2,
         ViewSyncCommitVote2, ViewSyncFinalizeVote2, ViewSyncPreCommitVote2, Vote2Data,
     },
     traits::node_implementation::NodeType,
@@ -27,6 +27,8 @@ pub type CheckpointVote<T> = SimpleVote<T, CheckpointData>;
 pub type CheckpointCertificate<T> = SimpleCertificate<T, CheckpointData, SuccessThreshold>;
 pub type Certificate1<T> = SimpleCertificate<T, QuorumData2<T>, SuccessThreshold>;
 pub type Certificate2<T> = SimpleCertificate<T, Vote2Data<T>, SuccessThreshold>;
+pub type TimeoutCertificate<T> = SimpleCertificate<T, TimeoutData2, SuccessThreshold>;
+pub type TimeoutOneHonest<T> = SimpleCertificate<T, TimeoutData2, OneHonestThreshold>;
 
 /// Proposal to append a block.
 #[derive(Debug, Serialize, Deserialize, Clone, Eq, PartialEq, Hash)]
