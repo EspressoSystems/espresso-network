@@ -449,25 +449,98 @@ impl Transaction<Write> {
 /// Query service specific mutations.
 impl Transaction<Write> {
     /// Delete a batch of data for pruning.
-    pub(super) async fn delete_batch(
+    #[instrument(skip(self))]
+    pub(super) async fn delete_batch(&mut self, height: u64) -> anyhow::Result<()> {
+        // Delete payloads which are only referenced by the headers we're going to delete.
+        let res = query(
+            "WITH to_delete AS (
+                SELECT h.payload_hash, h.ns_table FROM header AS h
+                 WHERE (h.payload_hash, h.ns_table) IN (
+                    SELECT range.payload_hash, range.ns_table
+                      FROM header AS range
+                     WHERE range.height <= $1
+                 )
+                GROUP BY h.payload_hash, h.ns_table
+                HAVING count(*) <= 1
+            )
+            DELETE FROM payload AS p
+             WHERE (p.hash, p.ns_table) IN (SELECT * FROM to_delete)",
+        )
+        .bind(height as i64)
+        .execute(self.as_mut())
+        .await
+        .context("deleting payloads")?;
+        tracing::debug!(
+            rows_affected = res.rows_affected(),
+            "garbage collected payloads"
+        );
+
+        // Delete VID common which are only referenced by the headers we're going to delete.
+        let res = query(
+            "WITH to_delete AS (
+                SELECT h.payload_hash FROM header AS h
+                 WHERE h.payload_hash IN (
+                    SELECT range.payload_hash
+                      FROM header AS range
+                     WHERE range.height <= $1
+                 )
+                GROUP BY h.payload_hash
+                HAVING count(*) <= 1
+            )
+            DELETE FROM vid_common AS v
+             WHERE v.hash IN (SELECT * FROM to_delete)",
+        )
+        .bind(height as i64)
+        .execute(self.as_mut())
+        .await
+        .context("deleting VID common")?;
+        tracing::debug!(
+            rows_affected = res.rows_affected(),
+            "garbage collected VID common"
+        );
+
+        // Delete dependent tables individually before deleting headers.
+        let res = query("DELETE FROM transactions WHERE block_height <= $1")
+            .bind(height as i64)
+            .execute(self.as_mut())
+            .await
+            .context("deleting transactions")?;
+        tracing::debug!(rows_affected = res.rows_affected(), "pruned transactions");
+
+        let res = query("DELETE FROM leaf2 WHERE height <= $1")
+            .bind(height as i64)
+            .execute(self.as_mut())
+            .await
+            .context("deleting leaf2")?;
+        tracing::debug!(rows_affected = res.rows_affected(), "pruned leaf2");
+
+        let res = query("DELETE FROM header WHERE height <= $1")
+            .bind(height as i64)
+            .execute(self.as_mut())
+            .await
+            .context("deleting headers")?;
+        tracing::debug!(rows_affected = res.rows_affected(), "pruned headers");
+
+        Ok(())
+    }
+
+    /// Prune merklized state tables.
+    ///
+    /// Only deletes nodes having `created <= height` that are not the newest node at their position.
+    #[instrument(skip(self))]
+    pub(super) async fn delete_state_batch(
         &mut self,
         state_tables: Vec<String>,
         height: u64,
     ) -> anyhow::Result<()> {
-        self.execute(query("DELETE FROM header WHERE height <= $1").bind(height as i64))
-            .await?;
-
-        // prune merklized state tables
-        // only delete nodes having created < h AND
-        // is not the newest node with its position
         for state_table in state_tables {
             self.execute(
                 query(&format!(
                     "
                 DELETE FROM {state_table} WHERE (path, created) IN
-                (SELECT path, created FROM 
-                (SELECT path, created, 
-                ROW_NUMBER() OVER (PARTITION BY path ORDER BY created DESC) as rank 
+                (SELECT path, created FROM
+                (SELECT path, created,
+                ROW_NUMBER() OVER (PARTITION BY path ORDER BY created DESC) as rank
                 FROM {state_table} WHERE created <= $1) ranked_nodes WHERE rank != 1)"
                 ))
                 .bind(height as i64),
