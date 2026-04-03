@@ -892,6 +892,14 @@ impl PruneStorage for SqlStorage {
                 message: format!("failed to commit {e}"),
             })?;
 
+            // Save pruned height in a separate transaction to avoid serialization
+            // conflicts with concurrent reads on the pruned_height table.
+            let mut tx = self.write().await?;
+            tx.save_pruned_height(to).await?;
+            tx.commit().await.map_err(|e| QueryError::Error {
+                message: format!("failed to commit save_pruned_height {e}"),
+            })?;
+
             pruner.pruned_height = Some(to);
             return Ok(Some(to));
         }
@@ -939,6 +947,14 @@ impl PruneStorage for SqlStorage {
                     tx.delete_state_batch(state_tables, to).await?;
                     tx.commit().await.map_err(|e| QueryError::Error {
                         message: format!("failed to commit {e}"),
+                    })?;
+
+                    // Save pruned height in a separate transaction to avoid serialization
+                    // conflicts with concurrent reads on the pruned_height table.
+                    let mut tx = self.write().await?;
+                    tx.save_pruned_height(to).await?;
+                    tx.commit().await.map_err(|e| QueryError::Error {
+                        message: format!("failed to commit save_pruned_height {e}"),
                     })?;
 
                     self.vacuum().await?;

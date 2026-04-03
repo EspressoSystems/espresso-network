@@ -491,7 +491,6 @@ impl Transaction<Write> {
             .context("deleting headers")?;
         tracing::debug!(rows_affected = res.rows_affected(), "pruned headers");
 
-        self.save_pruned_height(height).await?;
         Ok(())
     }
 
