@@ -72,22 +72,10 @@ where
         if self.completed_certificates.contains(&view) {
             return;
         }
+
         if !self.accumulators.contains_key(&view) {
-            let Some(epoch) = vote.epoch() else {
+            let Some(membership) = self.resolve_membership(&vote).await else {
                 return;
-            };
-            let membership = if let Some(m) = self.membership_cache.get(&epoch) {
-                m.clone()
-            } else {
-                let Ok(m) = self
-                    .epoch_membership_coordinator
-                    .membership_for_epoch(Some(epoch))
-                    .await
-                else {
-                    return;
-                };
-                self.membership_cache.insert(epoch, m.clone());
-                m
             };
             let (tx, rx) = mpsc::channel(100);
             let accumulator = VoteAccumulator::new(self.upgrade_lock.clone());
@@ -96,9 +84,24 @@ where
                     .spawn(Self::run_per_view(view, rx, accumulator, membership));
             self.accumulators.insert(view, (tx, abort_handle));
         }
+
         if let Some((tx, _)) = self.accumulators.get(&view) {
             let _ = tx.send(vote).await;
         }
+    }
+
+    async fn resolve_membership(&mut self, vote: &V) -> Option<EpochMembership<T>> {
+        let epoch = vote.epoch()?;
+        if let Some(m) = self.membership_cache.get(&epoch) {
+            return Some(m.clone());
+        }
+        let m = self
+            .epoch_membership_coordinator
+            .membership_for_epoch(Some(epoch))
+            .await
+            .ok()?;
+        self.membership_cache.insert(epoch, m.clone());
+        Some(m)
     }
 
     #[instrument(level = "debug", skip_all)]

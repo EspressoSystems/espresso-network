@@ -176,24 +176,7 @@ impl<T: NodeType> Consensus<T> {
         outbox: &mut Outbox<ConsensusOutput<T>>,
     ) {
         let view = input.view_number();
-        // Allow certain inputs through even for views <= timeout_view:
-        //  - DrbResult: epoch DRB computations are view-independent
-        //  - Certificate1/2: needed as prerequisites for lock updates and decisions
-        //  - EpochChange: epoch transitions shouldn't be blocked by timeouts
-        //  - Proposal/BlockReconstructed: needed as prerequisites for lock updates and
-        //    decisions; the actual vote2 send is suppressed inside maybe_vote_2_and_update_lock
-        //
-        // TODO: Verify remaining inputs should be disallowed for view <= timeout_view
-        let allow_past_timeout = matches!(
-            input,
-            ConsensusInput::DrbResult(..)
-                | ConsensusInput::Certificate1(_)
-                | ConsensusInput::Certificate2(_)
-                | ConsensusInput::EpochChange(_)
-                | ConsensusInput::Proposal(_)
-                | ConsensusInput::BlockReconstructed(..)
-        );
-        if !allow_past_timeout && view <= self.timeout_view {
+        if !input.allow_past_timeout() && view <= self.timeout_view {
             return;
         }
         let proto = match input {
@@ -1117,6 +1100,24 @@ impl<T: NodeType> Consensus<T> {
 }
 
 impl<T: NodeType> ConsensusInput<T> {
+    /// Whether this input should be processed even for views that have timed out.
+    ///
+    /// Certificates, proposals, and block data are needed as prerequisites for lock
+    /// updates and decisions regardless of timeout state.  DRB results and epoch
+    /// changes are view-independent.  The actual vote2 send is suppressed inside
+    /// `maybe_vote_2_and_update_lock` for timed-out views.
+    fn allow_past_timeout(&self) -> bool {
+        matches!(
+            self,
+            ConsensusInput::DrbResult(..)
+                | ConsensusInput::Certificate1(_)
+                | ConsensusInput::Certificate2(_)
+                | ConsensusInput::EpochChange(_)
+                | ConsensusInput::Proposal(_)
+                | ConsensusInput::BlockReconstructed(..)
+        )
+    }
+
     fn view_number(&self) -> ViewNumber {
         match self {
             ConsensusInput::BlockBuilt { view, .. } => *view,
