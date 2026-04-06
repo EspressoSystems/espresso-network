@@ -190,10 +190,10 @@ impl VidScheme for AvidmGf2Scheme {
         };
         let ranges: Vec<_> = distribution
             .iter()
-            .scan(0, |sum, w| {
+            .scan(0usize, |sum, w| {
                 let prefix_sum = *sum;
-                *sum += w;
-                Some(prefix_sum as usize..*sum as usize)
+                *sum += *w as usize;
+                Some(prefix_sum..*sum)
             })
             .collect();
         let shares: Vec<_> = ranges
@@ -220,7 +220,7 @@ impl VidScheme for AvidmGf2Scheme {
         commit: &Self::Commit,
         share: &Self::Share,
     ) -> VidResult<crate::VerificationResult> {
-        if !share.validate() || share.range.end > param.total_weights {
+        if !share.validate() || share.range.is_empty() || share.range.end > param.total_weights {
             return Err(VidError::InvalidShare);
         }
         for (i, index) in share.range.clone().enumerate() {
