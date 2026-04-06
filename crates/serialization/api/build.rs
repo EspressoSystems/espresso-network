@@ -7,11 +7,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Generate message types with serde support for JSON serialization and OpenAPI schema
     // Output directly to src/ so generated types are committed to git for visibility
     prost_build::Config::new()
-        .type_attribute(".", "#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]")
+        .type_attribute(
+            ".",
+            "#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]",
+        )
         .out_dir(&out_dir)
-        .compile_protos(&["v1/common.proto"], &[proto_root])?;
+        .compile_protos(&["v1/common.proto", "v1/rewards.proto"], &[proto_root])?;
 
     println!("cargo:rerun-if-changed=proto/v1/common.proto");
+    println!("cargo:rerun-if-changed=proto/v1/rewards.proto");
 
     Ok(())
 }

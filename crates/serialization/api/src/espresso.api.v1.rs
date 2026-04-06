@@ -92,12 +92,36 @@ pub struct AvidmGf2NsProof {
 }
 #[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct GetViewNumberRequest {}
-#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
-#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetNamespaceProofRequest {
     #[prost(uint64, tag = "1")]
     pub height: u64,
     #[prost(uint64, tag = "2")]
     pub namespace: u64,
+}
+/// Reward claim input for contract submission
+/// Contains all data needed to call the claimRewards function on the L1 contract
+#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct RewardClaimInput {
+    /// Ethereum address of the reward recipient
+    #[prost(string, tag = "1")]
+    pub address: ::prost::alloc::string::String,
+    /// Total lifetime rewards for this address (uint256 encoded as string)
+    #[prost(string, tag = "2")]
+    pub lifetime_rewards: ::prost::alloc::string::String,
+    /// Auth data containing the Merkle proof and auth root inputs
+    /// This is the encoded RewardAuthData from the contract adapter
+    #[prost(bytes = "vec", tag = "3")]
+    pub auth_data: ::prost::alloc::vec::Vec<u8>,
+}
+/// Request to get reward claim input
+#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetRewardClaimInputRequest {
+    /// Block height (must match the height finalized in the Light Client contract)
+    #[prost(uint64, tag = "1")]
+    pub block_height: u64,
+    /// Ethereum address to query rewards for (hex format, e.g. "0x1234...")
+    #[prost(string, tag = "2")]
+    pub address: ::prost::alloc::string::String,
 }

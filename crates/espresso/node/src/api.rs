@@ -78,6 +78,7 @@ pub mod fs;
 pub mod light_client;
 pub mod options;
 pub mod sql;
+pub mod state;
 mod update;
 
 pub use options::Options;
@@ -1658,6 +1659,78 @@ where
 
     fn proof_exists(&self, height: u64) -> impl Send + Future<Output = bool> {
         async move { self.inner().proof_exists(height).await }
+    }
+}
+
+// Implement Reward MerkleTreeDataSource for Arc<D> to allow shared ownership
+impl<D> RewardMerkleTreeDataSource for Arc<D>
+where
+    D: RewardMerkleTreeDataSource,
+{
+    async fn load_v1_reward_account_proof(
+        &self,
+        height: u64,
+        account: RewardAccountV1,
+    ) -> anyhow::Result<RewardAccountQueryDataV1> {
+        (**self).load_v1_reward_account_proof(height, account).await
+    }
+
+    fn persist_tree(
+        &self,
+        height: u64,
+        merkle_tree: Vec<u8>,
+    ) -> impl Send + Future<Output = anyhow::Result<()>> {
+        async move { (**self).persist_tree(height, merkle_tree).await }
+    }
+
+    fn load_tree(&self, height: u64) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {
+        async move { (**self).load_tree(height).await }
+    }
+
+    fn load_reward_merkle_tree_v2(
+        &self,
+        height: u64,
+    ) -> impl Send + Future<Output = anyhow::Result<PermittedRewardMerkleTreeV2>> {
+        async move { (**self).load_reward_merkle_tree_v2(height).await }
+    }
+
+    fn load_reward_account_proof_v2(
+        &self,
+        height: u64,
+        account: RewardAccountV2,
+    ) -> impl Send + Future<Output = anyhow::Result<RewardAccountQueryDataV2>> {
+        async move { (**self).load_reward_account_proof_v2(height, account).await }
+    }
+
+    fn persist_proofs(
+        &self,
+        height: u64,
+        proofs: impl Iterator<Item = (Vec<u8>, Vec<u8>)> + Send,
+    ) -> impl Send + Future<Output = anyhow::Result<()>> {
+        async move { (**self).persist_proofs(height, proofs).await }
+    }
+
+    fn load_proof(
+        &self,
+        height: u64,
+        account: Vec<u8>,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {
+        async move { (**self).load_proof(height, account).await }
+    }
+
+    fn proof_exists(&self, height: u64) -> impl Send + Future<Output = bool> {
+        async move { (**self).proof_exists(height).await }
+    }
+
+    fn load_latest_proof(
+        &self,
+        account: Vec<u8>,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {
+        async move { (**self).load_latest_proof(account).await }
+    }
+
+    fn garbage_collect(&self, height: u64) -> impl Send + Future<Output = anyhow::Result<()>> {
+        async move { (**self).garbage_collect(height).await }
     }
 }
 
@@ -3585,7 +3658,7 @@ mod test {
                 port,
                 max_connections: None,
                 axum_port: None,
-                grpc_port: None,
+                tonic_port: None,
             }))
             .states(states)
             .catchups(std::array::from_fn(|_| {
@@ -3651,7 +3724,7 @@ mod test {
                 port,
                 max_connections: None,
                 axum_port: None,
-                grpc_port: None,
+                tonic_port: None,
             }))
             .catchups(std::array::from_fn(|_| {
                 StatePeers::<SequencerApiVersion>::from_urls(
@@ -7073,7 +7146,7 @@ mod test {
                 port,
                 max_connections: None,
                 axum_port: None,
-                grpc_port: None,
+                tonic_port: None,
             }))
             .catchups(std::array::from_fn(|_| {
                 StatePeers::<SequencerApiVersion>::from_urls(

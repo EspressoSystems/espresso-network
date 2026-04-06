@@ -1,0 +1,31 @@
+syntax = "proto3";
+
+package espresso.api.v1;
+
+// Reward claim input for contract submission
+// Contains all data needed to call the claimRewards function on the L1 contract
+message RewardClaimInput {
+  // Ethereum address of the reward recipient
+  string address = 1;
+
+  // Total lifetime rewards for this address (uint256 encoded as string)
+  string lifetime_rewards = 2;
+
+  // Auth data containing the Merkle proof and auth root inputs
+  // This is the encoded RewardAuthData from the contract adapter
+  bytes auth_data = 3;
+}
+
+// Request to get reward claim input
+message GetRewardClaimInputRequest {
+  // Block height (must match the height finalized in the Light Client contract)
+  uint64 block_height = 1;
+
+  // Ethereum address to query rewards for (hex format, e.g. "0x1234...")
+  string address = 2;
+}
+
+// gRPC service for reward queries
+service RewardService {
+  rpc GetRewardClaimInput(GetRewardClaimInputRequest) returns (RewardClaimInput);
+}

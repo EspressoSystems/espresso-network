@@ -1,10 +1,9 @@
 //! Axum HTTP/JSON API handlers
 
+pub mod routes;
+
 use aide::{
-    axum::{
-        routing::{get_with},
-        ApiRouter,
-    },
+    axum::{routing::get_with, ApiRouter},
     openapi::{Info, OpenApi},
     scalar::Scalar,
     swagger::Swagger,
@@ -15,32 +14,8 @@ use axum::{
     routing::get,
     Extension, Json, Router,
 };
-use serialization_api::v1::{NamespaceProofQueryData, ViewNumber};
 
-use crate::r#trait::{NodeApi, NodeApiState};
-
-/// Get the current view number
-async fn get_view_number_http(
-    State(state): State<NodeApiState>,
-) -> Result<Json<ViewNumber>, StatusCode> {
-    state
-        .get_view_number()
-        .await
-        .map(Json)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
-}
-
-/// Query namespace proof and transactions by height and namespace ID
-async fn get_namespace_proof_http(
-    State(state): State<NodeApiState>,
-    Path((height, namespace)): Path<(u64, u64)>,
-) -> Result<Json<NamespaceProofQueryData>, StatusCode> {
-    state
-        .get_namespace_proof(height, namespace)
-        .await
-        .map(Json)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
-}
+use crate::r#trait::NodeApi;
 
 /// Serve the OpenAPI spec (extracted from Extension)
 async fn serve_openapi_spec(Extension(api): Extension<OpenApi>) -> Json<OpenApi> {
@@ -48,7 +23,10 @@ async fn serve_openapi_spec(Extension(api): Extension<OpenApi>) -> Json<OpenApi>
 }
 
 /// Create the Axum router with OpenAPI documentation
-pub fn create_axum_router(state: NodeApiState) -> Router {
+pub fn create_axum_router<S>(state: S) -> Router
+where
+    S: NodeApi + Clone + Send + Sync + 'static,
+{
     let mut api = OpenApi {
         info: Info {
             title: "Espresso Sequencer API".to_string(),
@@ -59,19 +37,38 @@ pub fn create_axum_router(state: NodeApiState) -> Router {
         ..Default::default()
     };
 
+    // Create closures that capture the generic type
+    let get_namespace_proof =
+        |State(state): State<S>, Path((height, namespace)): Path<(u64, u64)>| async move {
+            state
+                .get_namespace_proof(height, namespace)
+                .await
+                .map(Json)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+        };
+
+    let get_reward_claim_input =
+        |State(state): State<S>, Path((block_height, address)): Path<(u64, String)>| async move {
+            state
+                .get_reward_claim_input(block_height, address)
+                .await
+                .map(Json)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+        };
+
     ApiRouter::new()
         .api_route(
-            "/view-number",
-            get_with(get_view_number_http, |op| {
-                op.description("Get the current HotShot view number")
-                    .tag("Status")
+            routes::NAMESPACE_PROOF_ROUTE,
+            get_with(get_namespace_proof, |op| {
+                op.description("Query namespace proof and transactions by height and namespace ID")
+                    .tag("Data Availability")
             }),
         )
         .api_route(
-            "/namespace-proof/{height}/{namespace}",
-            get_with(get_namespace_proof_http, |op| {
-                op.description("Query namespace proof and transactions by height and namespace ID")
-                    .tag("Data Availability")
+            routes::REWARD_CLAIM_INPUT_ROUTE,
+            get_with(get_reward_claim_input, |op| {
+                op.description("Get reward claim input for L1 contract submission")
+                    .tag("Rewards")
             }),
         )
         .finish_api(&mut api)

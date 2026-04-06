@@ -4789,6 +4789,7 @@ dependencies = [
  "semver 1.0.27",
  "serde",
  "serde_json",
+ "serialization-api",
  "sha2 0.10.9",
  "snafu 0.8.9",
  "sqlx",

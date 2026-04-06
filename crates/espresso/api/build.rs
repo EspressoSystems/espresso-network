@@ -10,9 +10,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     tonic_prost_build::configure()
         .extern_path(".espresso.api.v1", "::serialization_api::v1")
         .file_descriptor_set_path(out_dir.join("reflection_descriptor.bin"))
-        .compile_protos(&["v1/common.proto"], &[proto_root.to_str().unwrap()])?;
+        .compile_protos(
+            &["v1/common.proto", "v1/rewards.proto"],
+            &[proto_root.to_str().unwrap()],
+        )?;
 
     println!("cargo:rerun-if-changed=../../serialization/api/proto/v1/common.proto");
+    println!("cargo:rerun-if-changed=../../serialization/api/proto/v1/rewards.proto");
 
     Ok(())
 }

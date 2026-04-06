@@ -59,11 +59,8 @@ message AvidmGf2NsProof {
 
 // gRPC service for status information
 service StatusService {
-  rpc GetViewNumber(GetViewNumberRequest) returns (ViewNumber);
   rpc GetNamespaceProof(GetNamespaceProofRequest) returns (NamespaceProofQueryData);
 }
-
-message GetViewNumberRequest {}
 
 message GetNamespaceProofRequest {
   uint64 height = 1;

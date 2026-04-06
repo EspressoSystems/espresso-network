@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, bail};
 use clap::Parser;
+use espresso_api::NodeApiState;
 use espresso_types::{
     BlockMerkleTree, PubKey, SeqTypes,
     v0::traits::{EventConsumer, NullEventConsumer, PersistenceOptions, SequencerPersistence},
@@ -35,6 +36,7 @@ use super::{
         SequencerDataSource, StateSignatureDataSource, SubmitDataSource, provider,
     },
     endpoints, fs, light_client, sql,
+    state::NodeApiStateImpl,
     update::ApiEventConsumer,
 };
 use crate::{
@@ -232,9 +234,11 @@ impl Options {
             );
 
             // Spawn new Axum and gRPC servers if ports are configured
+            // TODO: Use NodeApiStateImpl with real data source once available for status-only mode
             if let Some(axum_port) = self.http.axum_port {
                 tasks.spawn("Axum API server", async move {
-                    if let Err(e) = espresso_api::serve_axum(axum_port).await {
+                    let state = NodeApiState::default();
+                    if let Err(e) = espresso_api::serve_axum(axum_port, state).await {
                         tracing::error!("Axum server error: {}", e);
                     }
                 });
@@ -242,7 +246,8 @@ impl Options {
 
             if let Some(tonic_port) = self.http.tonic_port {
                 tasks.spawn("Tonic gRPC server", async move {
-                    if let Err(e) = espresso_api::serve_tonic(tonic_port).await {
+                    let state = NodeApiState::default();
+                    if let Err(e) = espresso_api::serve_tonic(tonic_port, state).await {
                         tracing::error!("gRPC server error: {}", e);
                     }
                 });
@@ -390,9 +395,11 @@ impl Options {
         tasks.spawn("API server", self.listen(self.http.port, app, bind_version));
 
         // Spawn new Axum and gRPC servers if ports are configured
+        // Note: Filesystem storage doesn't support RewardMerkleTreeDataSource, so we use dummy implementation
         if let Some(axum_port) = self.http.axum_port {
             tasks.spawn("Axum API server", async move {
-                if let Err(e) = espresso_api::serve_axum(axum_port).await {
+                let state = NodeApiState::default();
+                if let Err(e) = espresso_api::serve_axum(axum_port, state).await {
                     tracing::error!("Axum server error: {}", e);
                 }
             });
@@ -400,7 +407,8 @@ impl Options {
 
         if let Some(tonic_port) = self.http.tonic_port {
             tasks.spawn("Tonic gRPC server", async move {
-                if let Err(e) = espresso_api::serve_tonic(tonic_port).await {
+                let state = NodeApiState::default();
+                if let Err(e) = espresso_api::serve_tonic(tonic_port, state).await {
                     tracing::error!("Tonic gRPC server error: {}", e);
                 }
             });
@@ -525,16 +533,20 @@ impl Options {
 
         // Spawn new Axum and gRPC servers if ports are configured
         if let Some(axum_port) = self.http.axum_port {
+            let ds_for_axum = ds.clone();
             tasks.spawn("Axum API server", async move {
-                if let Err(e) = espresso_api::serve_axum(axum_port).await {
+                let state = NodeApiStateImpl::new(ds_for_axum);
+                if let Err(e) = espresso_api::serve_axum(axum_port, state).await {
                     tracing::error!("Axum server error: {}", e);
                 }
             });
         }
 
         if let Some(tonic_port) = self.http.tonic_port {
+            let ds_for_tonic = ds.clone();
             tasks.spawn("Tonic gRPC server", async move {
-                if let Err(e) = espresso_api::serve_tonic(tonic_port).await {
+                let state = NodeApiStateImpl::new(ds_for_tonic);
+                if let Err(e) = espresso_api::serve_tonic(tonic_port, state).await {
                     tracing::error!("Tonic gRPC server error: {}", e);
                 }
             });
