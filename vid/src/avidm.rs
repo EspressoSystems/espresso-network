@@ -237,7 +237,7 @@ impl AvidMScheme {
         payload_byte_len: usize,
     ) -> VidResult<(AvidMCommit, Vec<AvidMShare>)> {
         // let payload_byte_len = payload.len();
-        let total_weights = distribution.iter().sum::<u32>() as usize;
+        let total_weights = distribution.iter().map(|&w| w as usize).sum::<usize>();
         if total_weights != param.total_weights {
             return Err(VidError::Argument(
                 "Weight distribution is inconsistent with the given param".to_string(),
