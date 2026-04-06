@@ -161,25 +161,19 @@ impl<T: NodeType, I: hotshot::traits::NodeImplementation<T>> ConsensusHandle<T, 
 
     pub fn event_stream(&self) -> BoxStream<'static, ConsensusEvent<T>> {
         let handle = self.handle.clone();
-
-        let old_stream = futures::stream::once(async move { handle.read().await.event_stream() })
-            .flatten()
-            .filter_map(|event| {
-                let adapter_event = match &event.event {
-                    EventType::Decide { .. }
-                    | EventType::QuorumProposal { .. }
-                    | EventType::DaProposal { .. }
-                    | EventType::Transactions { .. }
-                    | EventType::ExternalMessageReceived { .. } => {
-                        Some(ConsensusEvent::LegacyEvent(event))
-                    },
-                    EventType::ViewFinished { view_number } => Some(ConsensusEvent::ViewChanged {
-                        view_number: *view_number,
-                    }),
-                    _ => None,
-                };
-                futures::future::ready(adapter_event)
-            });
+        let old_stream = futures::stream::once(async move {
+            let read_lock = handle.read().await;
+            let stream = read_lock.event_stream();
+            drop(read_lock);
+            stream
+        })
+        .flatten()
+        .map(|event| match event.event {
+            EventType::ExternalMessageReceived { sender, data } => {
+                ConsensusEvent::ExternalMessageReceived { sender, data }
+            },
+            _ => ConsensusEvent::LegacyEvent(event),
+        });
 
         let new_stream = self.event_rx.activate_cloned();
 

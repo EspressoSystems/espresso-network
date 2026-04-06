@@ -124,6 +124,8 @@ pub struct NetworkParams {
     pub catchup_backoff: BackoffParams,
     /// Base timeout for catchup requests to peers.
     pub catchup_base_timeout: Duration,
+    /// Timeout for local catchup provider requests.
+    pub local_catchup_timeout: Duration,
     /// The address to advertise as our public API's URL
     pub public_api_url: Option<Url>,
     /// Cliquenet network address.
@@ -587,7 +589,8 @@ where
     }
 
     // Create the list of parallel catchup providers
-    let state_catchup_providers = ParallelStateCatchup::new(&[]);
+    let state_catchup_providers =
+        ParallelStateCatchup::new(&[], network_params.local_catchup_timeout);
 
     // Add the state peers to the list
     let state_peers = StatePeers::<SequencerApiVersion>::from_urls(
@@ -1392,7 +1395,7 @@ pub mod testing {
             let chain_config = state.chain_config.resolve().unwrap_or_default();
 
             // Create an empty list of catchup providers
-            let catchup_providers = ParallelStateCatchup::new(&[]);
+            let catchup_providers = ParallelStateCatchup::new(&[], Duration::from_secs(5));
 
             // If we have the state peers, add them
             if let Some(state_peers) = state_peers {

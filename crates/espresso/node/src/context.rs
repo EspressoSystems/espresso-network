@@ -18,7 +18,7 @@ use futures::{
 };
 use hotshot::SystemContext;
 use hotshot_events_service::events_source::{EventConsumer, EventsStreamer};
-use hotshot_new_protocol::coordinator::Coordinator;
+use hotshot_new_protocol::coordinator::{Coordinator, error::Severity};
 use hotshot_orchestrator::client::OrchestratorClient;
 use hotshot_types::{
     PeerConfig, ValidatorConfig,
@@ -39,7 +39,7 @@ use url::Url;
 use crate::{
     Node, SeqTypes, SequencerApiVersion,
     catchup::ParallelStateCatchup,
-    consensus_handle::{ConsensusEvent, ConsensusHandle},
+    consensus_handle::{ConsensusEvent, ConsensusHandle, event_from_output},
     external_event_handler::ExternalEventHandler,
     proposal_fetcher::ProposalFetcherConfig,
     request_response::{
@@ -560,10 +560,6 @@ async fn run_coordinator<N, P>(
     N: ConnectedNetwork<PubKey>,
     P: SequencerPersistence,
 {
-    use hotshot_new_protocol::coordinator::error::Severity;
-
-    use crate::consensus_handle::event_from_output;
-
     loop {
         match coordinator.next_consensus_input().await {
             Ok(input) => coordinator.apply_consensus(input).await,

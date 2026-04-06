@@ -994,14 +994,17 @@ impl StateCatchup for NullStateCatchup {
 pub struct ParallelStateCatchup {
     providers: Arc<Mutex<Vec<Arc<dyn StateCatchup>>>>,
     backoff: BackoffParams,
+    /// Timeout for local provider requests
+    local_timeout: Duration,
 }
 
 impl ParallelStateCatchup {
-    /// Create a new [`ParallelStateCatchup`] with two providers.
-    pub fn new(providers: &[Arc<dyn StateCatchup>]) -> Self {
+    /// Create a new [`ParallelStateCatchup`] with the given providers and local timeout.
+    pub fn new(providers: &[Arc<dyn StateCatchup>], local_timeout: Duration) -> Self {
         Self {
             providers: Arc::new(Mutex::new(providers.to_vec())),
             backoff: BackoffParams::disabled(),
+            local_timeout,
         }
     }
 
@@ -1010,15 +1013,30 @@ impl ParallelStateCatchup {
         self.providers.lock().push(provider);
     }
 
-    /// Perform an async operation on all local providers, returning the first result to succeed
+    /// Perform an async operation on all local providers, returning the first result to succeed.
+    ///
+    /// A timeout is applied so that a slow local lookup does not prevent the node from
+    /// falling back to remote providers in time to vote within the current view.
     pub async fn on_local_providers<C, F, RT>(&self, closure: C) -> anyhow::Result<RT>
     where
         C: Fn(Arc<dyn StateCatchup>) -> F + Clone + Send + Sync + 'static,
         F: Future<Output = anyhow::Result<RT>> + Send + 'static,
         RT: Send + Sync + 'static,
     {
-        self.on_providers(|provider| provider.is_local(), closure)
-            .await
+        let local_timeout = self.local_timeout;
+        match timeout(
+            local_timeout,
+            self.on_providers(|provider| provider.is_local(), closure),
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(_) => {
+                let err = format!("local provider timed out after {local_timeout:?}");
+                tracing::warn!("{err}");
+                Err(anyhow::anyhow!(err))
+            },
+        }
     }
 
     /// Perform an async operation on all remote providers, returning the first result to succeed
@@ -1121,8 +1139,9 @@ impl StateCatchup for ParallelStateCatchup {
             .await;
 
         // Check if we were successful locally
-        if local_result.is_ok() {
-            return local_result;
+        match &local_result {
+            Ok(_) => return local_result,
+            Err(err) => tracing::debug!("{err:#}"),
         }
 
         // If that fails, try the remote ones
@@ -1165,8 +1184,9 @@ impl StateCatchup for ParallelStateCatchup {
             .await;
 
         // Check if we were successful locally
-        if local_result.is_ok() {
-            return local_result;
+        match &local_result {
+            Ok(_) => return local_result,
+            Err(err) => tracing::debug!("{err:#}"),
         }
 
         // If that fails, try the remote ones
@@ -1265,8 +1285,9 @@ impl StateCatchup for ParallelStateCatchup {
             .await;
 
         // Check if we were successful locally
-        if local_result.is_ok() {
-            return local_result;
+        match &local_result {
+            Ok(_) => return local_result,
+            Err(err) => tracing::debug!("{err:#}"),
         }
 
         // If that fails, try the remote ones
@@ -1301,8 +1322,9 @@ impl StateCatchup for ParallelStateCatchup {
             .await;
 
         // Check if we were successful locally
-        if local_result.is_ok() {
-            return local_result;
+        match &local_result {
+            Ok(_) => return local_result,
+            Err(err) => tracing::debug!("{err:#}"),
         }
 
         // If that fails, try the remote ones
@@ -1350,8 +1372,9 @@ impl StateCatchup for ParallelStateCatchup {
             .await;
 
         // Check if we were successful locally
-        if local_result.is_ok() {
-            return local_result;
+        match &local_result {
+            Ok(_) => return local_result,
+            Err(err) => tracing::debug!("{err:#}"),
         }
 
         // If that fails, try the remote ones
@@ -1384,8 +1407,9 @@ impl StateCatchup for ParallelStateCatchup {
             .await;
 
         // Check if we were successful locally
-        if local_result.is_ok() {
-            return local_result;
+        match &local_result {
+            Ok(_) => return local_result,
+            Err(err) => tracing::debug!("{err:#}"),
         }
 
         // If that fails, try the remote ones
@@ -1439,8 +1463,9 @@ impl StateCatchup for ParallelStateCatchup {
             .await;
 
         // Check if we were successful locally
-        if local_result.is_ok() {
-            return local_result;
+        match &local_result {
+            Ok(_) => return local_result,
+            Err(err) => tracing::debug!("{err:#}"),
         }
 
         // If that fails, try the remote ones (with retry)
@@ -1477,17 +1502,18 @@ impl StateCatchup for ParallelStateCatchup {
             .await;
 
         // Check if we were successful locally
-        if local_result.is_ok() {
-            return local_result;
+        match &local_result {
+            Ok(_) => return local_result,
+            Err(err) => tracing::debug!("{err:#}"),
         }
 
         // If that fails, try the remote ones (with retry)
         self.on_remote_providers(clone! {(stake_table) move |provider| {
-         clone!{(stake_table) async move {
-             provider
-                 .fetch_leaf(height, stake_table, success_threshold)
-                 .await
-         }}
+        clone!{(stake_table) async move {
+            provider
+                .fetch_leaf(height, stake_table, success_threshold)
+                .await
+        }}
         }})
         .await
     }
@@ -1504,8 +1530,9 @@ impl StateCatchup for ParallelStateCatchup {
             .await;
 
         // Check if we were successful locally
-        if local_result.is_ok() {
-            return local_result;
+        match &local_result {
+            Ok(_) => return local_result,
+            Err(err) => tracing::debug!("{err:#}"),
         }
 
         // If that fails, try the remote ones (with retry)
@@ -1543,8 +1570,9 @@ impl StateCatchup for ParallelStateCatchup {
             .await;
 
         // Check if we were successful locally
-        if local_result.is_ok() {
-            return local_result;
+        match &local_result {
+            Ok(_) => return local_result,
+            Err(err) => tracing::debug!("{err:#}"),
         }
 
         // If that fails, try the remote ones (with retry)
@@ -1574,8 +1602,9 @@ impl StateCatchup for ParallelStateCatchup {
             .await;
 
         // Check if we were successful locally
-        if local_result.is_ok() {
-            return local_result;
+        match &local_result {
+            Ok(_) => return local_result,
+            Err(err) => tracing::debug!("{err:#}"),
         }
 
         // If that fails, try the remote ones (with retry)
