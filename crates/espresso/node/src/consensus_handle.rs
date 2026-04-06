@@ -168,6 +168,8 @@ impl<T: NodeType, I: hotshot::traits::NodeImplementation<T>> ConsensusHandle<T, 
                 let adapter_event = match &event.event {
                     EventType::Decide { .. }
                     | EventType::QuorumProposal { .. }
+                    | EventType::DaProposal { .. }
+                    | EventType::Transactions { .. }
                     | EventType::ExternalMessageReceived { .. } => {
                         Some(ConsensusEvent::LegacyEvent(event))
                     },
