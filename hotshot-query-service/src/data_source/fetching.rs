@@ -435,6 +435,7 @@ where
         let mut pruner = S::Pruner::default();
         'run: loop {
             let mut backoff = backoff.clone();
+            backoff.reset();
             'batch: loop {
                 match storage.prune(&mut pruner).await {
                     Ok(Some(height)) => {
@@ -1041,6 +1042,7 @@ where
         let span = tracing::warn_span!("get retry", ?req);
         spawn(
             async move {
+                backoff.reset();
                 let mut delay = backoff.next_backoff().unwrap_or(Duration::from_secs(1));
                 loop {
                     let res = {
@@ -1297,6 +1299,7 @@ where
             let span = tracing::warn_span!("get_chunk retry", ?chunk);
             spawn(
                 async move {
+                    backoff.reset();
                     let mut delay = backoff.next_backoff().unwrap_or(Duration::from_secs(1));
                     loop {
                         let res = {
