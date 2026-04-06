@@ -173,11 +173,13 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
             epoch_height,
             Duration::from_secs(10),
         );
+        let legacy_event_rx = handle.event_stream_known_impl().deactivate();
         let hotshot_handle = Arc::new(RwLock::new(handle));
         let (consensus_handle, event_sender) = ConsensusHandle::new(
             hotshot_handle.clone(),
             query_tx,
             epoch_height,
+            legacy_event_rx,
             EXTERNAL_EVENT_CHANNEL_SIZE,
         );
         let consensus_handle = Arc::new(consensus_handle);

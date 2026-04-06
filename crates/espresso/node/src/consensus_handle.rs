@@ -84,6 +84,7 @@ pub struct ConsensusHandle<T: NodeType, I: hotshot::traits::NodeImplementation<T
     query_tx: mpsc::Sender<CoordinatorQuery<T>>,
     coordinator_epoch_height: u64,
     new_protocol_active: AtomicBool,
+    legacy_event_rx: InactiveReceiver<Event<T>>,
     event_rx: InactiveReceiver<ConsensusEvent<T>>,
 }
 
@@ -92,16 +93,20 @@ impl<T: NodeType, I: hotshot::traits::NodeImplementation<T>> ConsensusHandle<T, 
         handle: Arc<RwLock<SystemContextHandle<T, I>>>,
         query_tx: mpsc::Sender<CoordinatorQuery<T>>,
         coordinator_epoch_height: u64,
+        legacy_event_rx: InactiveReceiver<Event<T>>,
         event_channel_capacity: usize,
     ) -> (Self, Sender<ConsensusEvent<T>>) {
-        let (event_tx, event_rx) =
+        let (mut event_tx, mut event_rx) =
             async_broadcast::broadcast::<ConsensusEvent<T>>(event_channel_capacity);
+        event_tx.set_await_active(false);
+        event_rx.set_overflow(true);
 
         let adapter = Self {
             handle,
             query_tx,
             coordinator_epoch_height,
             new_protocol_active: AtomicBool::new(false),
+            legacy_event_rx,
             event_rx: event_rx.deactivate(),
         };
 
@@ -160,20 +165,15 @@ impl<T: NodeType, I: hotshot::traits::NodeImplementation<T>> ConsensusHandle<T, 
     }
 
     pub fn event_stream(&self) -> BoxStream<'static, ConsensusEvent<T>> {
-        let handle = self.handle.clone();
-        let old_stream = futures::stream::once(async move {
-            let read_lock = handle.read().await;
-            let stream = read_lock.event_stream();
-            drop(read_lock);
-            stream
-        })
-        .flatten()
-        .map(|event| match event.event {
-            EventType::ExternalMessageReceived { sender, data } => {
-                ConsensusEvent::ExternalMessageReceived { sender, data }
-            },
-            _ => ConsensusEvent::LegacyEvent(event),
-        });
+        let old_stream = self
+            .legacy_event_rx
+            .activate_cloned()
+            .map(|event| match event.event {
+                EventType::ExternalMessageReceived { sender, data } => {
+                    ConsensusEvent::ExternalMessageReceived { sender, data }
+                },
+                _ => ConsensusEvent::LegacyEvent(event),
+            });
 
         let new_stream = self.event_rx.activate_cloned();
 
