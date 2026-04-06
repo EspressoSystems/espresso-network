@@ -141,13 +141,16 @@ impl<T: NodeType> BlockBuilder<T> {
                 hashes,
             };
 
-            let parent_header = request.parent_proposal.block_header.clone();
-            let validated_state = T::ValidatedState::from_header(&parent_header);
+            let validated_state =
+                T::ValidatedState::from_header(&request.parent_proposal.block_header);
             let (payload, metadata) =
                 T::BlockPayload::from_transactions(txs, &validated_state, &instance)
                     .await
                     .map_err(|e| BlockError::PayloadConstruction(e.to_string()))?;
             let payload: PayloadWithMetadata<T> = PayloadWithMetadata { payload, metadata };
+
+            let payload_bytes = payload.payload.encode();
+            let metadata_bytes = payload.metadata.encode();
 
             let total_weight = {
                 let target_mem = membership
@@ -157,8 +160,6 @@ impl<T: NodeType> BlockBuilder<T> {
                 vid_total_weight::<T>(&target_mem.stake_table().await, Some(epoch))
             };
             let payload_commitment = {
-                let payload_bytes = payload.payload.encode();
-                let metadata_bytes = payload.metadata.encode();
                 vid_commitment(
                     payload_bytes.as_ref(),
                     metadata_bytes.as_ref(),
@@ -170,8 +171,8 @@ impl<T: NodeType> BlockBuilder<T> {
             let builder_commitment = payload.payload.builder_commitment(&payload.metadata);
             let (builder_key, builder_private_key) =
                 T::BuilderSignatureKey::generated_from_seed_indexed([0u8; 32], 0);
-            let block_size = payload.payload.encode().len() as u64;
-            let offered_fee = 1u64.saturating_mul(block_size);
+            let block_size = payload_bytes.len() as u64;
+            let offered_fee = block_size;
             let builder_fee = BuilderFee {
                 fee_amount: offered_fee,
                 fee_account: builder_key,
