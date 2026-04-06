@@ -175,6 +175,15 @@ impl VidScheme for AvidmGf2Scheme {
         distribution: &[u32],
         payload: &[u8],
     ) -> VidResult<(Self::Commit, Vec<Self::Share>)> {
+        let total_weights = distribution.iter().sum::<u32>() as usize;
+        if total_weights != param.total_weights {
+            return Err(VidError::Argument(
+                "Weight distribution is inconsistent with the given param".to_string(),
+            ));
+        }
+        if distribution.contains(&0u32) {
+            return Err(VidError::Argument("Weight cannot be zero".to_string()));
+        }
         let (mt, shares) = Self::raw_disperse(param, payload)?;
         let commit = AvidmGf2Commit {
             commit: mt.commitment(),
@@ -207,11 +216,11 @@ impl VidScheme for AvidmGf2Scheme {
     }
 
     fn verify_share(
-        _param: &Self::Param,
+        param: &Self::Param,
         commit: &Self::Commit,
         share: &Self::Share,
     ) -> VidResult<crate::VerificationResult> {
-        if !share.validate() {
+        if !share.validate() || share.range.end > param.total_weights {
             return Err(VidError::InvalidShare);
         }
         for (i, index) in share.range.clone().enumerate() {
@@ -414,5 +423,55 @@ pub mod tests {
                 assert_eq!(payload_recovered, payload);
             }
         }
+    }
+
+    #[test]
+    fn disperse_rejects_inconsistent_distribution() {
+        let total_weights = 10usize;
+        let recovery_threshold = 4;
+        let params = AvidmGf2Scheme::setup(recovery_threshold, total_weights).unwrap();
+        let payload = vec![1u8; 100];
+
+        // distribution sums to 12, but param says total_weights=10
+        let bad_weights = vec![3u32; 4];
+        assert!(
+            AvidmGf2Scheme::disperse(&params, &bad_weights, &payload).is_err(),
+            "disperse should reject distribution that doesn't sum to total_weights"
+        );
+
+        // distribution contains a zero weight
+        let zero_weight = vec![0u32, 5, 5];
+        assert!(
+            AvidmGf2Scheme::disperse(&params, &zero_weight, &payload).is_err(),
+            "disperse should reject zero-weight entries"
+        );
+
+        // correct distribution should succeed
+        let good_weights = vec![2u32; 5];
+        assert!(AvidmGf2Scheme::disperse(&params, &good_weights, &payload).is_ok());
+    }
+
+    #[test]
+    fn verify_share_rejects_out_of_range() {
+        let total_weights = 10usize;
+        let recovery_threshold = 4;
+        let params = AvidmGf2Scheme::setup(recovery_threshold, total_weights).unwrap();
+        let payload = vec![1u8; 100];
+        let weights = vec![2u32; 5];
+
+        let (commit, shares) = AvidmGf2Scheme::disperse(&params, &weights, &payload).unwrap();
+
+        // valid shares pass
+        for share in &shares {
+            assert!(AvidmGf2Scheme::verify_share(&params, &commit, share).is_ok_and(|r| r.is_ok()));
+        }
+
+        // a share verified against a smaller param should be rejected
+        let smaller_params = AvidmGf2Scheme::setup(2, 5).unwrap();
+        let last_share = shares.last().unwrap();
+        assert!(
+            AvidmGf2Scheme::verify_share(&smaller_params, &commit, last_share).is_err(),
+            "verify_share should reject share with range.end > param.total_weights"
+        );
     }
 }
