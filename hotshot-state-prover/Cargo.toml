@@ -47,7 +47,9 @@ jf-rescue-compat = { package = "jf-rescue", git = "https://github.com/EspressoSy
 ] }
 jf-signature = { workspace = true, features = ["schnorr", "bls", "gadgets"] }
 jf-signature-compat = { package = "jf-signature", git = "https://github.com/EspressoSystems/jellyfish", branch = "jf-relation-v0.5.0-compat", features = [
-    "schnorr", "bls", "gadgets",
+    "schnorr",
+    "bls",
+    "gadgets",
 ] }
 jf-utils = { workspace = true }
 reqwest = { workspace = true }

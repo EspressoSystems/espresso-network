@@ -46,6 +46,7 @@ use jf_merkle_tree_compat::prelude::MerkleProof;
 pub use sqlx::Executor;
 use sqlx::{pool::Pool, query_builder::Separated, Encode, Execute, FromRow, QueryBuilder, Type};
 use tokio::time::sleep;
+use tracing::instrument;
 
 #[cfg(not(feature = "embedded-db"))]
 use super::queries::state::batch_insert_hashes;
@@ -449,25 +450,64 @@ impl Transaction<Write> {
 /// Query service specific mutations.
 impl Transaction<Write> {
     /// Delete a batch of data for pruning.
-    pub(super) async fn delete_batch(
+    #[instrument(skip(self))]
+    pub(super) async fn delete_batch(&mut self, height: u64) -> anyhow::Result<()> {
+        // Delete dependent tables individually before deleting headers.
+        let res = query("DELETE FROM payload WHERE height <= $1")
+            .bind(height as i64)
+            .execute(self.as_mut())
+            .await
+            .context("deleting payloads")?;
+        tracing::debug!(rows_affected = res.rows_affected(), "pruned payloads");
+
+        let res = query("DELETE FROM vid2 WHERE height <= $1")
+            .bind(height as i64)
+            .execute(self.as_mut())
+            .await
+            .context("deleting vid")?;
+        tracing::debug!(rows_affected = res.rows_affected(), "pruned vid");
+
+        let res = query("DELETE FROM transactions WHERE block_height <= $1")
+            .bind(height as i64)
+            .execute(self.as_mut())
+            .await
+            .context("deleting transactions")?;
+        tracing::debug!(rows_affected = res.rows_affected(), "pruned transactions");
+
+        let res = query("DELETE FROM leaf2 WHERE height <= $1")
+            .bind(height as i64)
+            .execute(self.as_mut())
+            .await
+            .context("deleting leaf2")?;
+        tracing::debug!(rows_affected = res.rows_affected(), "pruned leaf2");
+
+        let res = query("DELETE FROM header WHERE height <= $1")
+            .bind(height as i64)
+            .execute(self.as_mut())
+            .await
+            .context("deleting headers")?;
+        tracing::debug!(rows_affected = res.rows_affected(), "pruned headers");
+
+        Ok(())
+    }
+
+    /// Prune merklized state tables.
+    ///
+    /// Only deletes nodes having `created <= height` that are not the newest node at their position.
+    #[instrument(skip(self))]
+    pub(super) async fn delete_state_batch(
         &mut self,
         state_tables: Vec<String>,
         height: u64,
     ) -> anyhow::Result<()> {
-        self.execute(query("DELETE FROM header WHERE height <= $1").bind(height as i64))
-            .await?;
-
-        // prune merklized state tables
-        // only delete nodes having created < h AND
-        // is not the newest node with its position
         for state_table in state_tables {
             self.execute(
                 query(&format!(
                     "
                 DELETE FROM {state_table} WHERE (path, created) IN
-                (SELECT path, created FROM 
-                (SELECT path, created, 
-                ROW_NUMBER() OVER (PARTITION BY path ORDER BY created DESC) as rank 
+                (SELECT path, created FROM
+                (SELECT path, created,
+                ROW_NUMBER() OVER (PARTITION BY path ORDER BY created DESC) as rank
                 FROM {state_table} WHERE created <= $1) ranked_nodes WHERE rank != 1)"
                 ))
                 .bind(height as i64),
@@ -475,7 +515,6 @@ impl Transaction<Write> {
             .await?;
         }
 
-        self.save_pruned_height(height).await?;
         Ok(())
     }
 

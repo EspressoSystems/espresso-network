@@ -354,6 +354,13 @@ pub struct Options {
     #[clap(long, env = "ESPRESSO_SEQUENCER_CATCHUP_BASE_TIMEOUT", default_value = "2s", value_parser = parse_duration)]
     pub catchup_base_timeout: Duration,
 
+    /// Timeout for local catchup provider requests.
+    ///
+    /// If a local provider (e.g. database) takes longer than this, the node falls back to
+    /// remote providers so it can still vote within the current view.
+    #[clap(long, env = "ESPRESSO_SEQUENCER_LOCAL_CATCHUP_TIMEOUT", default_value = "5s", value_parser = parse_duration)]
+    pub local_catchup_timeout: Duration,
+
     #[clap(flatten)]
     pub logging: logging::Config,
 
