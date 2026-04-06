@@ -23,6 +23,7 @@ use hotshot_orchestrator::client::OrchestratorClient;
 use hotshot_types::{
     PeerConfig, ValidatorConfig,
     consensus::ConsensusMetricsValue,
+    constants::EXTERNAL_EVENT_CHANNEL_SIZE,
     data::{Leaf2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
@@ -173,8 +174,12 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
             Duration::from_secs(10),
         );
         let hotshot_handle = Arc::new(RwLock::new(handle));
-        let (consensus_handle, event_sender) =
-            ConsensusHandle::new(hotshot_handle.clone(), query_tx, epoch_height, 128);
+        let (consensus_handle, event_sender) = ConsensusHandle::new(
+            hotshot_handle.clone(),
+            query_tx,
+            epoch_height,
+            EXTERNAL_EVENT_CHANNEL_SIZE,
+        );
         let consensus_handle = Arc::new(consensus_handle);
 
         let mut state_signer = StateSigner::new(
@@ -572,10 +577,19 @@ async fn run_coordinator<N, P>(
             },
         }
         while let Some(output) = coordinator.outbox_mut().pop_front() {
-            if let Some(event) = event_from_output(&output)
-                && let Err(err) = event_sender.try_broadcast(event)
-            {
-                tracing::info!(%err, "failed to broadcast consensus event");
+            if let Some(event) = event_from_output(&output) {
+                match event_sender.broadcast_direct(event).await {
+                    Ok(None) => {},
+                    Ok(Some(overflowed)) => {
+                        tracing::debug!(
+                            ?overflowed,
+                            "coordinator event channel overflow, oldest event dropped"
+                        );
+                    },
+                    Err(err) => {
+                        tracing::warn!(%err, "failed to broadcast consensus event");
+                    },
+                }
             }
             if let Err(err) = coordinator.process_consensus_output(output).await {
                 if err.severity == Severity::Critical {
