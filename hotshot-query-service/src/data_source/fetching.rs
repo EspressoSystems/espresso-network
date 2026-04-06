@@ -416,9 +416,12 @@ where
 
         let future = async move {
             for i in 1.. {
+                // Delay before we start the pruner run to avoid a useless and expensive prune
+                // immediately on startup.
+                sleep(cfg.interval()).await;
+
                 tracing::warn!("starting pruner run {i} ");
                 Self::prune(storage.clone(), &backoff).await;
-                sleep(cfg.interval()).await;
             }
         };
 
