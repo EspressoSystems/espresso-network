@@ -852,15 +852,19 @@ impl PruneStorage for SqlStorage {
         // If any of these values are not set, they can be loaded from the database if necessary.
         let mut minimum_retention_height = pruner.minimum_retention_height;
         let mut target_height = pruner.target_height;
-        let mut height = match pruner.pruned_height {
-            Some(h) => h,
+        let pruned_height = match pruner.pruned_height {
+            Some(h) => Some(h),
             None => {
                 let Some(height) = self.get_minimum_height().await? else {
                     tracing::info!("database is empty, nothing to prune");
                     return Ok(None);
                 };
 
-                height
+                if height > 0 {
+                    Some(height - 1)
+                } else {
+                    None
+                }
             },
         };
 
