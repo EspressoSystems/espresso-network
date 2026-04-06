@@ -405,7 +405,7 @@ where
     Payload<Types>: QueryablePayload<Types>,
     S: PruneStorage + Send + Sync + 'static,
 {
-    async fn new(storage: Arc<S>) -> Self {
+    async fn new(storage: Arc<S>, backoff: ExponentialBackoff) -> Self {
         let cfg = storage.get_pruning_config();
         let Some(cfg) = cfg else {
             return Self {
@@ -417,7 +417,7 @@ where
         let future = async move {
             for i in 1.. {
                 tracing::warn!("starting pruner run {i} ");
-                Self::prune(storage.clone()).await;
+                Self::prune(storage.clone(), &backoff).await;
                 sleep(cfg.interval()).await;
             }
         };
@@ -430,22 +430,31 @@ where
         }
     }
 
-    async fn prune(storage: Arc<S>) {
+    async fn prune(storage: Arc<S>, backoff: &ExponentialBackoff) {
         // We loop until the whole run pruner run is complete
         let mut pruner = S::Pruner::default();
-        loop {
-            match storage.prune(&mut pruner).await {
-                Ok(Some(height)) => {
-                    tracing::warn!("Pruned to height {height}");
-                },
-                Ok(None) => {
-                    tracing::warn!("pruner run complete.");
-                    break;
-                },
-                Err(e) => {
-                    tracing::error!("pruner run failed: {e:?}");
-                    break;
-                },
+        'run: loop {
+            let mut backoff = backoff.clone();
+            'batch: loop {
+                match storage.prune(&mut pruner).await {
+                    Ok(Some(height)) => {
+                        tracing::warn!("Pruned to height {height}");
+                        break 'batch;
+                    },
+                    Ok(None) => {
+                        tracing::warn!("pruner run complete.");
+                        break 'run;
+                    },
+                    Err(e) => {
+                        tracing::warn!("error pruning batch: {e:#}");
+                        if let Some(delay) = backoff.next_backoff() {
+                            sleep(delay).await;
+                        } else {
+                            tracing::error!("pruning run failed after too many errors: {e:#}");
+                            break 'run;
+                        }
+                    },
+                }
             }
         }
     }
@@ -478,6 +487,7 @@ where
         let proactive_fetching = builder.proactive_fetching;
         let proactive_interval = builder.proactive_interval;
         let proactive_range_chunk_size = builder.proactive_range_chunk_size;
+        let backoff = builder.backoff.build();
         let scanner_metrics = ScannerMetrics::new(builder.storage.metrics());
         let aggregator_metrics = AggregatorMetrics::new(builder.storage.metrics());
 
@@ -508,7 +518,7 @@ where
 
         let storage = fetcher.storage.clone();
 
-        let pruner = Pruner::new(storage).await;
+        let pruner = Pruner::new(storage, backoff).await;
         let ds = Self {
             fetcher,
             scanner,
@@ -2589,34 +2599,41 @@ mod test {
     #[test]
     fn test_range_chunks() {
         // Inclusive bounds, partial last chunk.
-        assert_eq!(
-            range_chunks(0..=4, 2).collect::<Vec<_>>(),
-            [0..2, 2..4, 4..5]
-        );
+        assert_eq!(range_chunks(0..=4, 2).collect::<Vec<_>>(), [
+            0..2,
+            2..4,
+            4..5
+        ]);
 
         // Inclusive bounds, complete last chunk.
-        assert_eq!(
-            range_chunks(0..=5, 2).collect::<Vec<_>>(),
-            [0..2, 2..4, 4..6]
-        );
+        assert_eq!(range_chunks(0..=5, 2).collect::<Vec<_>>(), [
+            0..2,
+            2..4,
+            4..6
+        ]);
 
         // Exclusive bounds, partial last chunk.
-        assert_eq!(
-            range_chunks(0..5, 2).collect::<Vec<_>>(),
-            [0..2, 2..4, 4..5]
-        );
+        assert_eq!(range_chunks(0..5, 2).collect::<Vec<_>>(), [
+            0..2,
+            2..4,
+            4..5
+        ]);
 
         // Exclusive bounds, complete last chunk.
-        assert_eq!(
-            range_chunks(0..6, 2).collect::<Vec<_>>(),
-            [0..2, 2..4, 4..6]
-        );
+        assert_eq!(range_chunks(0..6, 2).collect::<Vec<_>>(), [
+            0..2,
+            2..4,
+            4..6
+        ]);
 
         // Unbounded.
-        assert_eq!(
-            range_chunks(0.., 2).take(5).collect::<Vec<_>>(),
-            [0..2, 2..4, 4..6, 6..8, 8..10]
-        );
+        assert_eq!(range_chunks(0.., 2).take(5).collect::<Vec<_>>(), [
+            0..2,
+            2..4,
+            4..6,
+            6..8,
+            8..10
+        ]);
     }
 
     #[test]
@@ -2624,25 +2641,28 @@ mod test {
         #![allow(clippy::single_range_in_vec_init)]
 
         // Aligned first chunk, partial last chunk.
-        assert_eq!(
-            range_chunks_aligned(2..5, 2).collect::<Vec<_>>(),
-            [2..4, 4..5]
-        );
+        assert_eq!(range_chunks_aligned(2..5, 2).collect::<Vec<_>>(), [
+            2..4,
+            4..5
+        ]);
 
         // Misaligned first chunk, complete last chunk.
-        assert_eq!(
-            range_chunks_aligned(1..4, 2).collect::<Vec<_>>(),
-            [1..2, 2..4]
-        );
+        assert_eq!(range_chunks_aligned(1..4, 2).collect::<Vec<_>>(), [
+            1..2,
+            2..4
+        ]);
 
         // Incomplete chunk.
         assert_eq!(range_chunks_aligned(1..3, 10).collect::<Vec<_>>(), [1..3]);
 
         // Unbounded.
-        assert_eq!(
-            range_chunks_aligned(1.., 2).take(5).collect::<Vec<_>>(),
-            [1..2, 2..4, 4..6, 6..8, 8..10]
-        );
+        assert_eq!(range_chunks_aligned(1.., 2).take(5).collect::<Vec<_>>(), [
+            1..2,
+            2..4,
+            4..6,
+            6..8,
+            8..10
+        ]);
     }
 
     #[test]
@@ -2758,41 +2778,32 @@ mod test {
         for &(start, end) in present_ranges {
             if start != prev {
                 let range = ranges.next().unwrap();
-                assert_eq!(
-                    range,
-                    SyncStatusRange {
-                        start: prev,
-                        end: start,
-                        status: if prev == 0 {
-                            SyncStatus::Pruned
-                        } else {
-                            SyncStatus::Missing
-                        },
-                    }
-                );
+                assert_eq!(range, SyncStatusRange {
+                    start: prev,
+                    end: start,
+                    status: if prev == 0 {
+                        SyncStatus::Pruned
+                    } else {
+                        SyncStatus::Missing
+                    },
+                });
             }
             let range = ranges.next().unwrap();
-            assert_eq!(
-                range,
-                SyncStatusRange {
-                    start,
-                    end,
-                    status: SyncStatus::Present,
-                }
-            );
+            assert_eq!(range, SyncStatusRange {
+                start,
+                end,
+                status: SyncStatus::Present,
+            });
             prev = end;
         }
 
         if prev != block_height {
             let range = ranges.next().unwrap();
-            assert_eq!(
-                range,
-                SyncStatusRange {
-                    start: prev,
-                    end: block_height,
-                    status: SyncStatus::Missing,
-                }
-            );
+            assert_eq!(range, SyncStatusRange {
+                start: prev,
+                end: block_height,
+                status: SyncStatus::Missing,
+            });
         }
 
         assert_eq!(ranges.next(), None);
