@@ -405,7 +405,7 @@ where
     Payload<Types>: QueryablePayload<Types>,
     S: PruneStorage + Send + Sync + 'static,
 {
-    async fn new(storage: Arc<S>) -> Self {
+    async fn new(storage: Arc<S>, backoff: ExponentialBackoff) -> Self {
         let cfg = storage.get_pruning_config();
         let Some(cfg) = cfg else {
             return Self {
@@ -417,7 +417,7 @@ where
         let future = async move {
             for i in 1.. {
                 tracing::warn!("starting pruner run {i} ");
-                Self::prune(storage.clone()).await;
+                Self::prune(storage.clone(), &backoff).await;
                 sleep(cfg.interval()).await;
             }
         };
@@ -430,22 +430,32 @@ where
         }
     }
 
-    async fn prune(storage: Arc<S>) {
+    async fn prune(storage: Arc<S>, backoff: &ExponentialBackoff) {
         // We loop until the whole run pruner run is complete
         let mut pruner = S::Pruner::default();
-        loop {
-            match storage.prune(&mut pruner).await {
-                Ok(Some(height)) => {
-                    tracing::warn!("Pruned to height {height}");
-                },
-                Ok(None) => {
-                    tracing::warn!("pruner run complete.");
-                    break;
-                },
-                Err(e) => {
-                    tracing::error!("pruner run failed: {e:?}");
-                    break;
-                },
+        'run: loop {
+            let mut backoff = backoff.clone();
+            backoff.reset();
+            'batch: loop {
+                match storage.prune(&mut pruner).await {
+                    Ok(Some(height)) => {
+                        tracing::warn!("Pruned to height {height}");
+                        break 'batch;
+                    },
+                    Ok(None) => {
+                        tracing::warn!("pruner run complete.");
+                        break 'run;
+                    },
+                    Err(e) => {
+                        tracing::warn!("error pruning batch: {e:#}");
+                        if let Some(delay) = backoff.next_backoff() {
+                            sleep(delay).await;
+                        } else {
+                            tracing::error!("pruning run failed after too many errors: {e:#}");
+                            break 'run;
+                        }
+                    },
+                }
             }
         }
     }
@@ -478,6 +488,7 @@ where
         let proactive_fetching = builder.proactive_fetching;
         let proactive_interval = builder.proactive_interval;
         let proactive_range_chunk_size = builder.proactive_range_chunk_size;
+        let backoff = builder.backoff.build();
         let scanner_metrics = ScannerMetrics::new(builder.storage.metrics());
         let aggregator_metrics = AggregatorMetrics::new(builder.storage.metrics());
 
@@ -508,7 +519,7 @@ where
 
         let storage = fetcher.storage.clone();
 
-        let pruner = Pruner::new(storage).await;
+        let pruner = Pruner::new(storage, backoff).await;
         let ds = Self {
             fetcher,
             scanner,
@@ -1031,6 +1042,7 @@ where
         let span = tracing::warn_span!("get retry", ?req);
         spawn(
             async move {
+                backoff.reset();
                 let mut delay = backoff.next_backoff().unwrap_or(Duration::from_secs(1));
                 loop {
                     let res = {
@@ -1287,6 +1299,7 @@ where
             let span = tracing::warn_span!("get_chunk retry", ?chunk);
             spawn(
                 async move {
+                    backoff.reset();
                     let mut delay = backoff.next_backoff().unwrap_or(Duration::from_secs(1));
                     loop {
                         let res = {
