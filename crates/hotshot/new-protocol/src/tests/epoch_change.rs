@@ -7,15 +7,14 @@ use hotshot_types::{
 };
 
 use super::common::{
-    assertions::{count_epoch_change, has_epoch_change, is_view_changed},
+    assertions::{is_send_epoch_change, is_view_changed},
     utils::{ConsensusHarness, TEST_DRB_RESULT, TestData},
 };
 use crate::{
     consensus::{ConsensusInput, ConsensusOutput},
     helpers::proposal_commitment,
     message::{EpochChangeMessage, Proposal},
-    outbox::Outbox,
-    tests::common::assertions::{any, is_proposal},
+    tests::common::assertions::{any, count_matching, is_proposal, is_request_block_and_header},
 };
 
 const EPOCH_HEIGHT: u64 = 10;
@@ -68,7 +67,7 @@ async fn test_epoch_change_sent_on_last_block() {
     run_views_full(&mut harness, &test_data, &node_key, 0..10).await;
 
     assert!(
-        has_epoch_change(harness.outputs()),
+        any(harness.outputs(), is_send_epoch_change),
         "SendEpochChange should be emitted when the last block of an epoch is decided"
     );
 }
@@ -84,7 +83,7 @@ async fn test_epoch_change_not_sent_mid_epoch() {
     run_views_full(&mut harness, &test_data, &node_key, 0..9).await;
 
     assert!(
-        !has_epoch_change(harness.outputs()),
+        !any(harness.outputs(), is_send_epoch_change),
         "SendEpochChange should NOT be emitted for mid-epoch blocks"
     );
 }
@@ -134,7 +133,7 @@ async fn test_handle_epoch_change_mismatched_views() {
         proposal,
     };
 
-    let view_changed_before = count_view_changed(harness.outputs());
+    let view_changed_before = count_matching(harness.outputs(), is_view_changed);
 
     harness
         .apply(ConsensusInput::EpochChange(epoch_change))
@@ -142,7 +141,7 @@ async fn test_handle_epoch_change_mismatched_views() {
 
     assert_eq!(
         view_changed_before,
-        count_view_changed(harness.outputs()),
+        count_matching(harness.outputs(), is_view_changed),
         "Mismatched EpochChange should be rejected — no new ViewChanged"
     );
 }
@@ -166,7 +165,7 @@ async fn test_handle_epoch_change_wrong_block_number() {
         proposal,
     };
 
-    let view_changed_before = count_view_changed(harness.outputs());
+    let view_changed_before = count_matching(harness.outputs(), is_view_changed);
 
     harness
         .apply(ConsensusInput::EpochChange(epoch_change))
@@ -174,7 +173,7 @@ async fn test_handle_epoch_change_wrong_block_number() {
 
     assert_eq!(
         view_changed_before,
-        count_view_changed(harness.outputs()),
+        count_matching(harness.outputs(), is_view_changed),
         "EpochChange with wrong block number should be rejected"
     );
 }
@@ -198,7 +197,7 @@ async fn test_handle_epoch_change_proposal_mismatch() {
         proposal: wrong_proposal,
     };
 
-    let view_changed_before = count_view_changed(harness.outputs());
+    let view_changed_before = count_matching(harness.outputs(), is_view_changed);
 
     harness
         .apply(ConsensusInput::EpochChange(epoch_change))
@@ -206,7 +205,7 @@ async fn test_handle_epoch_change_proposal_mismatch() {
 
     assert_eq!(
         view_changed_before,
-        count_view_changed(harness.outputs()),
+        count_matching(harness.outputs(), is_view_changed),
         "EpochChange with mismatched proposal should be rejected"
     );
 }
@@ -231,7 +230,7 @@ async fn test_handle_epoch_change_stale() {
         proposal,
     };
 
-    let view_changed_before = count_view_changed(harness.outputs());
+    let view_changed_before = count_matching(harness.outputs(), is_view_changed);
 
     harness
         .apply(ConsensusInput::EpochChange(stale_epoch_change))
@@ -239,7 +238,7 @@ async fn test_handle_epoch_change_stale() {
 
     assert_eq!(
         view_changed_before,
-        count_view_changed(harness.outputs()),
+        count_matching(harness.outputs(), is_view_changed),
         "Stale EpochChange should be rejected — no new ViewChanged"
     );
 }
@@ -255,7 +254,7 @@ async fn test_epoch_change_emitted_exactly_once() {
     run_views_full(&mut harness, &test_data, &node_key, 0..10).await;
 
     assert_eq!(
-        count_epoch_change(harness.outputs()),
+        count_matching(harness.outputs(), is_send_epoch_change),
         1,
         "Should emit exactly 1 SendEpochChange for 1 epoch boundary (block 10)"
     );
@@ -329,21 +328,14 @@ async fn test_epoch_change_leader_proposes() {
 
     run_views_full(&mut harness, &test_data, &node_key, 0..9).await;
 
-    let req_before = harness
-        .outputs()
-        .iter()
-        .filter(|o| matches!(o, ConsensusOutput::RequestBlockAndHeader(_)))
-        .count();
+    let req_before = count_matching(harness.outputs(), is_request_block_and_header);
 
     harness
         .apply(ConsensusInput::EpochChange(epoch_change.clone()))
         .await;
 
-    let req_after = harness
-        .outputs()
-        .iter()
-        .filter(|o| matches!(o, ConsensusOutput::RequestBlockAndHeader(_)))
-        .count();
+    let req_after = count_matching(harness.outputs(), is_request_block_and_header);
+
     assert!(
         req_after > req_before,
         "node should be the leader for the next epoch and request a block"
@@ -352,11 +344,4 @@ async fn test_epoch_change_leader_proposes() {
         any(harness.outputs(), is_proposal),
         "node should send a proposal after requesting a block and header"
     );
-}
-
-fn count_view_changed(outputs: &Outbox<ConsensusOutput<TestTypes>>) -> usize {
-    outputs
-        .iter()
-        .filter(|o| matches!(o, ConsensusOutput::ViewChanged(..)))
-        .count()
 }

@@ -5,7 +5,9 @@ use espresso_node::Genesis;
 use espresso_types::UpgradeMode;
 use futures::{StreamExt, future::join_all};
 use hotshot_types::utils::epoch_from_block_number;
-use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, FEE_VERSION, Upgrade};
+use versions::{
+    DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, EPOCH_VERSION, FEE_VERSION, Upgrade,
+};
 
 use crate::{
     common::{NativeDemo, TestRequirements, TestRuntime, load_genesis_file},
@@ -91,15 +93,20 @@ async fn run_upgrade_test(genesis_path: &str, upgrade: Upgrade) -> Result<()> {
     let epoch_start_block = genesis.epoch_start_block.unwrap_or(1);
 
     let first_epoch = epoch_from_block_number(epoch_start_block, epoch_length);
-    let first_reward_block = (first_epoch + 1) * epoch_length + 1;
 
-    let first_reward_block = if upgrade.target >= DRB_AND_HEADER_UPGRADE_VERSION {
-        Some(first_reward_block)
+    let first_reward_block = if upgrade.target >= EPOCH_REWARD_VERSION {
+        Some((first_epoch + 3) * epoch_length + 1)
+    } else if upgrade.target >= DRB_AND_HEADER_UPGRADE_VERSION {
+        Some((first_epoch + 1) * epoch_length + 1)
     } else {
         None
     };
 
-    let expected_block_height = (first_epoch + 2) * epoch_length + 10;
+    let expected_block_height = if upgrade.target >= EPOCH_REWARD_VERSION {
+        (first_epoch + 3) * epoch_length + 10
+    } else {
+        (first_epoch + 2) * epoch_length + 10
+    };
 
     println!("Upgrade test config:");
     println!("  epoch_start_block: {epoch_start_block}");
@@ -113,6 +120,14 @@ async fn run_upgrade_test(genesis_path: &str, upgrade: Upgrade) -> Result<()> {
         txn_count_increment: 2 * expected_block_height,
         global_timeout: Duration::from_secs(expected_block_height as u64 * 3),
         first_reward_block,
+        // For V5 (EPOCH_REWARD_VERSION), require a claim whose merkle proof was built against
+        // an LC state at or after first_reward_block, proving the new per-epoch reward tree
+        // is in use.
+        claim_after_lc_block: if upgrade.target >= EPOCH_REWARD_VERSION {
+            first_reward_block
+        } else {
+            None
+        },
         ..Default::default()
     };
 
@@ -144,6 +159,15 @@ async fn test_native_demo_fee_to_drb_header_upgrade() -> Result<()> {
     run_upgrade_test(
         "data/genesis/demo-fee-to-drb-header-upgrade.toml",
         Upgrade::new(FEE_VERSION, DRB_AND_HEADER_UPGRADE_VERSION),
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_native_demo_epoch_reward_upgrade() -> Result<()> {
+    run_upgrade_test(
+        "data/genesis/demo-epoch-reward-upgrade.toml",
+        Upgrade::new(DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION),
     )
     .await
 }

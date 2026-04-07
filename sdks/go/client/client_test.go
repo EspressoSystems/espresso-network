@@ -18,6 +18,7 @@ import (
 var workingDir = "../../../"
 
 const devNodeURL = "http://localhost:21000"
+const devNodeBuilderURL = "http://localhost:23000"
 
 func setupDevNode(t *testing.T) context.Context {
 	t.Helper()
@@ -59,7 +60,6 @@ func testNamespaceTransactionsInRange(t *testing.T, ctx context.Context, client 
 			require.NotEmpty(t, txn.Payload)
 		}
 	}
-
 	_, err = client.FetchNamespaceTransactionsInRange(ctx, 0, 1000, namespace)
 	require.Error(t, err, "expected error for large range")
 }
@@ -67,6 +67,41 @@ func testNamespaceTransactionsInRange(t *testing.T, ctx context.Context, client 
 func TestApiWithEspressoDevNode(t *testing.T) {
 	ctx := setupDevNode(t)
 	client := NewClient(devNodeURL)
+
+	ClientTestHelper(ctx, client, t)
+
+	var clientOptions []EspressoClientConfigOption
+	builderSubmitter, err := NewBuilderSubmitter([]string{devNodeBuilderURL})
+	if err != nil {
+		t.Fatal("failed to create builder submitter", err)
+	}
+
+	clientOptions = append(clientOptions, WithTransactionSubmitter(builderSubmitter))
+	clientOptions = append(clientOptions, WithBaseUrl(devNodeURL))
+
+	client, err = NewClientFromOptions(clientOptions...)
+	if err != nil {
+		t.Fatal("failed to create espresso client with builder submitter")
+	}
+
+	ClientTestHelper(ctx, client, t)
+
+	clientOptions = []EspressoClientConfigOption{}
+	querySubmitter := NewQuerySubmitter(devNodeURL)
+	if err != nil {
+		t.Fatal("failed to create builder submitter", err)
+	}
+	clientOptions = append(clientOptions, WithTransactionSubmitter(querySubmitter))
+	clientOptions = append(clientOptions, WithBaseUrl(devNodeURL))
+
+	client, err = NewClientFromOptions(clientOptions...)
+	if err != nil {
+		t.Fatal("Failed to create query submitter based client")
+	}
+	ClientTestHelper(ctx, client, t)
+}
+
+func ClientTestHelper(ctx context.Context, client EspressoClient, t *testing.T) {
 
 	_, err := client.FetchLatestBlockHeight(ctx)
 	if err != nil {

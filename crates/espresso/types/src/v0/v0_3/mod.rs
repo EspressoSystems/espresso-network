@@ -17,6 +17,13 @@ pub(crate) use super::v0_1::{L1ClientMetrics, L1Event, L1State, L1UpdateTask};
 
 pub const VERSION: Version = Version { major: 0, minor: 3 };
 
+/// Maximum number of active validators in the stake table.
+///
+/// `select_active_validator_set()` picks the top `MAX_VALIDATORS` validators
+/// by stake. Only these validators participate in consensus and can be elected
+/// leader.
+pub const MAX_VALIDATORS: usize = 100;
+
 mod chain_config;
 mod header;
 mod nsproof;
