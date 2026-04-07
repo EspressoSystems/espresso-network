@@ -40,12 +40,16 @@ pub(crate) fn is_send_epoch_change(output: &ConsensusOutput<TestTypes>) -> bool 
     matches!(output, ConsensusOutput::SendEpochChange(..))
 }
 
+pub(crate) fn is_send_timeout_vote(output: &ConsensusOutput<TestTypes>) -> bool {
+    matches!(output, ConsensusOutput::SendTimeoutVote(..))
+}
+
 pub(crate) fn is_send_cert1(output: &ConsensusOutput<TestTypes>) -> bool {
     matches!(output, ConsensusOutput::SendCertificate1(_))
 }
 
-pub(crate) fn is_send_cert2(output: &ConsensusOutput<TestTypes>) -> bool {
-    matches!(output, ConsensusOutput::SendCertificate2(_))
+pub(crate) fn is_send_timeout_cert(output: &ConsensusOutput<TestTypes>) -> bool {
+    matches!(output, ConsensusOutput::SendTimeoutCertificate(..))
 }
 
 pub(crate) fn is_cert1(input: &ConsensusInput<TestTypes>) -> bool {
@@ -70,6 +74,10 @@ pub(crate) fn is_state_validated(input: &ConsensusInput<TestTypes>) -> bool {
 
 pub(crate) fn is_timeout(input: &ConsensusInput<TestTypes>) -> bool {
     matches!(input, ConsensusInput::Timeout(..))
+}
+
+pub(crate) fn is_timeout_one_honest(input: &ConsensusInput<TestTypes>) -> bool {
+    matches!(input, ConsensusInput::TimeoutOneHonest(..))
 }
 
 pub(crate) fn is_timeout_cert(input: &ConsensusInput<TestTypes>) -> bool {

@@ -4639,6 +4639,7 @@ dependencies = [
  "byteorder",
  "cdn-broker",
  "cdn-marshal",
+ "chrono",
  "clap 4.6.0",
  "client",
  "committable",
