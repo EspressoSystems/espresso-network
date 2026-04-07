@@ -35,8 +35,8 @@ number = 0
 version = "0.5"
 start_voting_view = 0
 stop_voting_view = 999999999
-start_proposing_view = 6600
-stop_proposing_view = 7600
+start_proposing_view = 9600
+stop_proposing_view = 10600
 
 [upgrade.epoch_reward]
 [upgrade.epoch_reward.chain_config]
