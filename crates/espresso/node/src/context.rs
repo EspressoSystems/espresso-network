@@ -1,5 +1,6 @@
 use std::{
     fmt::{Debug, Display},
+    future::Future,
     marker::PhantomData,
     sync::Arc,
     time::Duration,
@@ -13,7 +14,7 @@ use espresso_types::{
     v0::traits::{EventConsumer as PersistenceEventConsumer, SequencerPersistence},
 };
 use futures::{
-    future::{Future, join_all},
+    future::join_all,
     stream::{BoxStream, Stream, StreamExt},
 };
 use hotshot::SystemContext;
@@ -41,6 +42,7 @@ use crate::{
     Node, SeqTypes, SequencerApiVersion,
     catchup::ParallelStateCatchup,
     consensus_handle::{ConsensusEvent, ConsensusHandle, event_from_output},
+    consensus_network::{ConsensusNetwork, create_consensus_networks},
     external_event_handler::ExternalEventHandler,
     proposal_fetcher::ProposalFetcherConfig,
     request_response::{
@@ -51,7 +53,8 @@ use crate::{
     },
     state_signature::{self, StateSigner},
 };
-pub type Consensus<N, P> = hotshot::types::SystemContextHandle<SeqTypes, Node<N, P>>;
+pub(crate) type ConsensusNode<N, P> = Node<ConsensusNetwork<N>, P>;
+pub type Consensus<N, P> = hotshot::types::SystemContextHandle<SeqTypes, ConsensusNode<N, P>>;
 
 /// The sequencer context contains a consensus handle and other sequencer specific information.
 #[derive(Derivative, Clone)]
@@ -59,12 +62,12 @@ pub type Consensus<N, P> = hotshot::types::SystemContextHandle<SeqTypes, Node<N,
 pub struct SequencerContext<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> {
     /// The consensus adapter that dispatches between old HotShot and new coordinator.
     #[derivative(Debug = "ignore")]
-    consensus_handle: Arc<ConsensusHandle<SeqTypes, Node<N, P>>>,
+    consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<N, P>>>,
 
     /// The request-response protocol
     #[derivative(Debug = "ignore")]
     #[allow(dead_code)]
-    pub request_response_protocol: RequestResponseProtocol<Node<N, P>, N, P>,
+    pub request_response_protocol: RequestResponseProtocol<ConsensusNode<N, P>, N, P>,
 
     /// Context for generating state signatures.
     state_signer: Arc<RwLock<StateSigner<SequencerApiVersion>>>,
@@ -140,6 +143,8 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
             stake_table.0,
             0,
         )));
+        let (legacy_network, coordinator_network, consensus_network_task) =
+            create_consensus_networks((*network).clone());
 
         let handle = SystemContext::init(
             validator_config.public_key,
@@ -149,7 +154,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
             config.clone(),
             upgrade,
             coordinator.clone(),
-            network.clone(),
+            Arc::new(legacy_network),
             initializer,
             ConsensusMetricsValue::new(metrics),
             Arc::clone(&persistence),
@@ -163,9 +168,9 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
             Leaf2::genesis(&genesis_validated_state, &instance_state, upgrade.base).await;
 
         let epoch_height = network_config.config.epoch_height;
-        let (new_coordinator, query_tx) = Coordinator::<SeqTypes, Node<N, P>>::new(
+        let (new_coordinator, query_tx) = Coordinator::<SeqTypes, ConsensusNode<N, P>>::new(
             coordinator.clone(),
-            (*network).clone(),
+            coordinator_network,
             Arc::new(instance_state.clone()),
             validator_config.public_key,
             validator_config.private_key.clone(),
@@ -240,6 +245,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
 
         // Create the external event handler
         let mut tasks = TaskList::default();
+        tasks.spawn("consensus network", consensus_network_task);
         tasks.spawn(
             "coordinator",
             run_coordinator(new_coordinator, event_sender),
@@ -275,11 +281,11 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
     /// Constructor
     #[allow(clippy::too_many_arguments)]
     fn new(
-        consensus_handle: Arc<ConsensusHandle<SeqTypes, Node<N, P>>>,
+        consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<N, P>>>,
         persistence: Arc<P>,
         state_signer: StateSigner<SequencerApiVersion>,
         external_event_handler: ExternalEventHandler,
-        request_response_protocol: RequestResponseProtocol<Node<N, P>, N, P>,
+        request_response_protocol: RequestResponseProtocol<ConsensusNode<N, P>, N, P>,
         event_streamer: Arc<RwLock<EventsStreamer<SeqTypes>>>,
         node_state: NodeState,
         network_config: NetworkConfig<SeqTypes>,
@@ -364,7 +370,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
     }
 
     /// Return a reference to the consensus adapter.
-    pub fn consensus_handle(&self) -> Arc<ConsensusHandle<SeqTypes, Node<N, P>>> {
+    pub fn consensus_handle(&self) -> Arc<ConsensusHandle<SeqTypes, ConsensusNode<N, P>>> {
         self.consensus_handle.clone()
     }
 
@@ -490,7 +496,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> Drop for SequencerCon
 #[tracing::instrument(skip_all, fields(node_id))]
 #[allow(clippy::too_many_arguments)]
 async fn handle_events<N, P>(
-    consensus_handle: Arc<ConsensusHandle<SeqTypes, Node<N, P>>>,
+    consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<N, P>>>,
     node_id: u64,
     mut events: impl Stream<Item = ConsensusEvent<SeqTypes>> + Unpin,
     persistence: Arc<P>,
@@ -561,7 +567,7 @@ async fn handle_events<N, P>(
 }
 
 async fn run_coordinator<N, P>(
-    mut coordinator: Coordinator<SeqTypes, Node<N, P>>,
+    mut coordinator: Coordinator<SeqTypes, ConsensusNode<N, P>>,
     event_sender: async_broadcast::Sender<ConsensusEvent<SeqTypes>>,
 ) where
     N: ConnectedNetwork<PubKey>,

@@ -21,9 +21,9 @@ use tokio::time::{sleep, timeout};
 use tracing::Instrument;
 
 use crate::{
-    Node, SeqTypes,
+    SeqTypes,
     consensus_handle::{ConsensusEvent, ConsensusHandle},
-    context::TaskList,
+    context::{ConsensusNode, TaskList},
 };
 
 #[derive(Clone, Copy, Debug, Parser)]
@@ -54,7 +54,7 @@ impl ProposalFetcherConfig {
     pub(crate) fn spawn<N, P>(
         self,
         tasks: &mut TaskList,
-        consensus_handle: Arc<ConsensusHandle<SeqTypes, Node<N, P>>>,
+        consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<N, P>>>,
         persistence: Arc<P>,
         metrics: &(impl Metrics + ?Sized),
     ) where
@@ -117,7 +117,7 @@ where
 {
     sender: Sender<Request>,
     #[derivative(Debug = "ignore")]
-    consensus_handle: Arc<ConsensusHandle<SeqTypes, Node<N, P>>>,
+    consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<N, P>>>,
     #[derivative(Debug = "ignore")]
     persistence: Arc<P>,
     cfg: ProposalFetcherConfig,

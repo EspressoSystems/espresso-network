@@ -58,13 +58,14 @@ use vbs::version::Version;
 
 use self::data_source::{HotShotConfigDataSource, NodeStateDataSource, StateSignatureDataSource};
 use crate::{
-    Node, SeqTypes, SequencerApiVersion, SequencerContext,
+    SeqTypes, SequencerApiVersion, SequencerContext,
     api::data_source::TokenDataSource,
     catchup::{
         CatchupStorage, add_fee_accounts_to_state, add_v1_reward_accounts_to_state,
         add_v2_reward_accounts_to_state,
     },
     consensus_handle::ConsensusHandle,
+    context::ConsensusNode,
     request_response::{
         data_source::{retain_v1_reward_accounts, retain_v2_reward_accounts},
         request::{Request, Response},
@@ -130,7 +131,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> ApiState<N, P> {
             .event_streamer()
     }
 
-    async fn consensus_handle(&self) -> Arc<ConsensusHandle<SeqTypes, Node<N, P>>> {
+    async fn consensus_handle(&self) -> Arc<ConsensusHandle<SeqTypes, ConsensusNode<N, P>>> {
         self.sequencer_context
             .as_ref()
             .get()

@@ -22,5 +22,4 @@ pub enum CoordinatorQuery<T: NodeType> {
         view: ViewNumber,
         respond: Sender<StateAndDelta<T>>,
     },
-    ActivateNetwork,
 }

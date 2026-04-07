@@ -1,3 +1,4 @@
+mod consensus_network;
 mod external_event_handler;
 mod message_compat_tests;
 mod proposal_fetcher;
