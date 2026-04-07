@@ -45,6 +45,7 @@ hotshot-builder-refactored = { path = "../crates/hotshot-builder/refactored" }
 # CDN imports
 cdn-broker = { workspace = true }
 cdn-marshal = { workspace = true }
+chrono = { workspace = true }
 clap = { workspace = true }
 client = { path = "../client" }
 committable = { workspace = true }
