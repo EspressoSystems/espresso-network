@@ -116,27 +116,9 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                     return Ok(ConsensusInput::TimeoutOneHonest(out.view_number(), out.data.epoch))
                 }
                 Some(cert1) = self.vote1_collector.next() => {
-                    let message = Message {
-                        sender: self.public_key.clone(),
-                        message_type: MessageType::Consensus(ConsensusMessage::Certificate1(
-                            cert1.clone(),
-                            self.public_key.clone(),
-                        )),
-                    };
-                    self.network.broadcast(message).await
-                        .map_err(|e| CoordinatorError::from(e).context("broadcast certificate1"))?;
                     return Ok(ConsensusInput::Certificate1(cert1))
                 }
                 Some(cert2) = self.vote2_collector.next() => {
-                    let message = Message {
-                        sender: self.public_key.clone(),
-                        message_type: MessageType::Consensus(ConsensusMessage::Certificate2(
-                            cert2.clone(),
-                            self.public_key.clone(),
-                        )),
-                    };
-                    self.network.broadcast(message).await
-                        .map_err(|e| CoordinatorError::from(e).context("broadcast certificate2"))?;
                     return Ok(ConsensusInput::Certificate2(cert2))
                 }
                 Some(item) = self.proposal_validator.next() => match item {
@@ -281,7 +263,7 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                     self.timeout_one_honest_collector
                         .accumulate_vote(timeout_msg.vote)
                         .await;
-                    timeout_msg.lock.map(ConsensusInput::Certificate1)
+                    None
                 },
                 ConsensusMessage::TimeoutCertificate(tc) => {
                     Some(ConsensusInput::TimeoutCertificate(tc))
@@ -449,19 +431,6 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                     .broadcast(message)
                     .await
                     .map_err(|e| CoordinatorError::from(e).context("broadcast certificate1"))?
-            },
-            ConsensusOutput::SendCertificate2(cert2) => {
-                let message = Message {
-                    sender: self.public_key.clone(),
-                    message_type: MessageType::Consensus(ConsensusMessage::Certificate2(
-                        cert2,
-                        self.public_key.clone(),
-                    )),
-                };
-                self.network
-                    .broadcast(message)
-                    .await
-                    .map_err(|e| CoordinatorError::from(e).context("broadcast certificate2"))?
             },
             ConsensusOutput::ViewChanged(view, epoch) => {
                 self.timer.reset_with(view);

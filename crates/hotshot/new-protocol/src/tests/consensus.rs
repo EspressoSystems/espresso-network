@@ -38,8 +38,7 @@ async fn test_safety_genesis_no_lock() {
     );
 }
 
-/// Stale proposals (view <= timeout_view) are stored for lock updates and
-/// decisions, but don't trigger state validation or block building.
+/// Events with view <= timeout_view are silently dropped.
 #[tokio::test]
 async fn test_timeout_filters_stale_events() {
     let mut harness = ConsensusHarness::new(0).await;
@@ -400,7 +399,7 @@ async fn test_multi_view_chain_decide() {
     assert!(count_matching(harness.outputs(), is_leaf_decided) >= 2);
 }
 
-/// Timeout emits a timeout vote and suppresses vote2.
+/// Timeout event sets timeout_view and prevents processing of that view.
 #[tokio::test]
 async fn test_timeout_prevents_voting() {
     let mut harness = ConsensusHarness::new(0).await;
@@ -421,9 +420,7 @@ async fn test_timeout_prevents_voting() {
         .apply(test_data.views[1].block_reconstructed_input())
         .await;
 
-    let vote2_before = count_matching(harness.outputs(), is_vote2);
-
-    // Timeout view 2 — emits a timeout vote
+    // Timeout view 2 — now cert1 for view 2 should be dropped
     harness
         .apply(ConsensusInput::Timeout(test_data.views[1].view_number))
         .await;
@@ -432,20 +429,12 @@ async fn test_timeout_prevents_voting() {
         "Timeout should emit timeout vote"
     );
 
-    // cert1 for view 2 — processed and updates lock, but vote2 suppressed
+    // Send cert1 for view 2 — should be stale
     harness.apply(test_data.views[1].cert1_input()).await;
 
-    assert_eq!(
-        count_matching(harness.outputs(), is_vote2),
-        vote2_before,
-        "Vote2 should be suppressed after timeout"
-    );
-
-    // cert2 for view 2 — still triggers decide despite timeout
-    harness.apply(test_data.views[1].cert2_input()).await;
     assert!(
-        any(harness.outputs(), is_leaf_decided),
-        "Decide should still work for timed-out views"
+        !any(harness.outputs(), is_vote2),
+        "Vote2 should not fire after timeout for that view"
     );
 }
 

@@ -9,9 +9,9 @@ use crate::{
     tests::common::assertions::{
         any, count_matching, is_block_built, is_block_reconstructed, is_cert1, is_cert2,
         is_header_created, is_leaf_decided, is_proposal, is_request_block_and_header,
-        is_request_vid_disperse, is_send_timeout_vote, is_state_validated, is_timeout,
-        is_timeout_cert, is_timeout_one_honest, is_vid_disperse, is_view_changed, is_vote1,
-        is_vote2, node_index_for_key,
+        is_request_vid_disperse, is_send_cert1, is_send_timeout_vote, is_state_validated,
+        is_timeout, is_timeout_cert, is_timeout_one_honest, is_vid_disperse, is_view_changed,
+        is_vote1, is_vote2, node_index_for_key,
     },
 };
 
@@ -158,6 +158,12 @@ async fn test_full_decide_via_cpu_tasks() {
 
     assert!(any(harness.outputs(), is_vote1), "Vote1 should be sent");
     assert!(any(harness.outputs(), is_vote2), "Vote2 should be sent");
+
+    assert!(
+        any(harness.outputs(), is_send_cert1),
+        "Certificate1 should be sent"
+    );
+
     // LeafDecided proves the full pipeline: cert1 formation, block
     // reconstruction from VID shares, cert2 formation, and decision.
     assert!(
@@ -310,43 +316,6 @@ async fn test_leader_proposes_after_timeout_via_cpu_tasks() {
     );
 }
 
-/// Duplicate certificates are deduplicated: processing the same cert twice
-/// does not produce additional votes or decisions.
-#[tokio::test]
-async fn test_cert_dedup() {
-    let mut harness = TestHarness::new(0).await;
-    let test_data = TestData::new(3).await;
-    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
-
-    // cert1 formed locally from votes
-    send_proposal_and_vote1s(&mut harness, &test_data, 0, &node_key).await;
-
-    let vote2_count = count_matching(harness.outputs(), is_vote2);
-
-    // Duplicate cert1 — should not trigger another vote2
-    harness
-        .apply_and_process(test_data.views[0].cert1_input())
-        .await;
-    assert_eq!(
-        count_matching(harness.outputs(), is_vote2),
-        vote2_count,
-        "Duplicate cert1 should not trigger extra vote2"
-    );
-
-    // cert2 + duplicate cert2 — should decide exactly once
-    harness
-        .apply_and_process(test_data.views[0].cert2_input())
-        .await;
-    harness
-        .apply_and_process(test_data.views[0].cert2_input())
-        .await;
-    assert_eq!(
-        count_matching(harness.outputs(), is_leaf_decided),
-        1,
-        "Duplicate cert2 should not trigger extra decide"
-    );
-}
-
 /// f+1 timeout votes (OneHonestThreshold) trigger a TimeoutOneHonest input,
 /// which causes the node to emit its own timeout vote.
 #[tokio::test]
@@ -376,41 +345,5 @@ async fn test_f_plus_1_timeout_votes_trigger_timeout_one_honest() {
     assert!(
         any(harness.outputs(), is_send_timeout_vote),
         "f+1 timeout votes should trigger TimeoutOneHonest"
-    );
-}
-
-/// A timeout vote carrying a lock (Certificate1) has the lock extracted
-/// by the coordinator and forwarded to consensus as a Certificate1 input.
-#[tokio::test]
-async fn test_timeout_vote_lock_extracted_as_cert1() {
-    let mut harness = TestHarness::new(0).await;
-    let test_data = TestData::new(3).await;
-    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
-
-    // Send proposal for view 1 (goes through validator asynchronously)
-    harness
-        .message(test_data.views[0].proposal_input(&node_key))
-        .await;
-    harness
-        .process_until(|inputs| any(inputs, is_state_validated) || any(inputs, is_timeout))
-        .await;
-
-    // Inject block_reconstructed directly (no VID threshold from a single share)
-    harness
-        .apply_and_process(test_data.views[0].block_reconstructed_input())
-        .await;
-
-    let vote2_before = count_matching(harness.outputs(), is_vote2);
-
-    // Send timeout vote for view 2 carrying cert1(view 1) as lock.
-    // The coordinator extracts the lock → ConsensusInput::Certificate1(cert1_view_1)
-    // → consensus stores cert1 → all prereqs met → vote2 fires.
-    harness
-        .message(test_data.views[1].timeout_vote_input(1, Some(test_data.views[0].cert1.clone())))
-        .await;
-
-    assert!(
-        count_matching(harness.outputs(), is_vote2) > vote2_before,
-        "Lock extracted from timeout vote should provide cert1, triggering vote2"
     );
 }

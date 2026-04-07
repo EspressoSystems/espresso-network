@@ -72,22 +72,18 @@ where
         if self.completed_certificates.contains(&view) {
             return;
         }
-
-        if !self.accumulators.contains_key(&view) {
-            let Some(membership) = self.resolve_membership(&vote).await else {
-                return;
-            };
+        let Some(membership) = self.resolve_membership(&vote).await else {
+            return;
+        };
+        let (tx, _abort_handle) = self.accumulators.entry(view).or_insert_with(|| {
             let (tx, rx) = mpsc::channel(100);
             let accumulator = VoteAccumulator::new(self.upgrade_lock.clone());
             let abort_handle =
                 self.tasks
                     .spawn(Self::run_per_view(view, rx, accumulator, membership));
-            self.accumulators.insert(view, (tx, abort_handle));
-        }
-
-        if let Some((tx, _)) = self.accumulators.get(&view) {
-            let _ = tx.send(vote).await;
-        }
+            (tx, abort_handle)
+        });
+        let _ = tx.send(vote).await;
     }
 
     async fn resolve_membership(&mut self, vote: &V) -> Option<EpochMembership<T>> {

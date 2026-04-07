@@ -44,6 +44,10 @@ pub(crate) fn is_send_timeout_vote(output: &ConsensusOutput<TestTypes>) -> bool 
     matches!(output, ConsensusOutput::SendTimeoutVote(..))
 }
 
+pub(crate) fn is_send_cert1(output: &ConsensusOutput<TestTypes>) -> bool {
+    matches!(output, ConsensusOutput::SendCertificate1(_))
+}
+
 pub(crate) fn is_send_timeout_cert(output: &ConsensusOutput<TestTypes>) -> bool {
     matches!(output, ConsensusOutput::SendTimeoutCertificate(..))
 }

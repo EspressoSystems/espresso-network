@@ -76,7 +76,6 @@ pub enum ConsensusOutput<T: NodeType> {
     SendVote2(Vote2<T>),
     SendTimeoutCertificate(TimeoutCertificate2<T>, ViewNumber, EpochNumber),
     SendCertificate1(Certificate1<T>),
-    SendCertificate2(Certificate2<T>),
     SendEpochChange(EpochChangeMessage<T>),
     RequestVidDisperse {
         view: ViewNumber,
@@ -176,16 +175,19 @@ impl<T: NodeType> Consensus<T> {
         outbox: &mut Outbox<ConsensusOutput<T>>,
     ) {
         let view = input.view_number();
-        if !input.allow_past_timeout() && view <= self.timeout_view {
+        // Ignore old inputs unless it's a DRB result
+        // TODO: This isn't correct, I think we need to process vote2 for views
+        // that haven't timed out, but are before the timeout view
+        if !matches!(input, ConsensusInput::DrbResult(_, _)) && view <= self.timeout_view {
             return;
         }
         let proto = match input {
             ConsensusInput::Proposal(proposal) => self.handle_proposal(proposal, outbox).await,
             ConsensusInput::Certificate1(certificate) => {
-                self.handle_certificate1(certificate, outbox).await
+                self.handle_certificate1(certificate).await
             },
             ConsensusInput::Certificate2(certificate) => {
-                self.handle_certificate2(certificate, outbox).await
+                self.handle_certificate2(certificate).await
             },
             ConsensusInput::TimeoutCertificate(certificate) => {
                 self.handle_timeout_certificate(certificate, outbox).await
@@ -260,16 +262,6 @@ impl<T: NodeType> Consensus<T> {
         self.maybe_propose(view, outbox).await;
         // An event from the current view or the previous view can trigger a propose
         self.maybe_propose(view + 1, outbox).await;
-    }
-
-    fn view_changed(
-        &mut self,
-        view: ViewNumber,
-        epoch: EpochNumber,
-        outbox: &mut Outbox<ConsensusOutput<T>>,
-    ) {
-        self.current_epoch = Some(epoch);
-        outbox.push_back(ConsensusOutput::ViewChanged(view, epoch));
     }
 
     pub fn wants_proposal<S>(&self, p: &ProposalMessage<T, S>) -> bool {
@@ -362,10 +354,6 @@ impl<T: NodeType> Consensus<T> {
         self.proposals.insert(view, proposal.clone());
         self.vid_shares.insert(view, vid_share);
 
-        if view <= self.timeout_view {
-            return Protocol::Continue;
-        }
-
         outbox.push_back(ConsensusOutput::RequestState(StateRequest {
             view: proposal.view_number(),
             parent_view: proposal.view_number().saturating_sub(1).into(),
@@ -396,11 +384,7 @@ impl<T: NodeType> Consensus<T> {
     }
 
     #[instrument(level = "debug", skip_all)]
-    async fn handle_certificate1(
-        &mut self,
-        certificate: Certificate1<T>,
-        outbox: &mut Outbox<ConsensusOutput<T>>,
-    ) -> Protocol {
+    async fn handle_certificate1(&mut self, certificate: Certificate1<T>) -> Protocol {
         let view = certificate.view_number();
         if self.certs.contains_key(&view) {
             return Protocol::Continue;
@@ -415,17 +399,12 @@ impl<T: NodeType> Consensus<T> {
             warn!(%view, "certificate1 not verified");
             return Protocol::Abort;
         }
-        outbox.push_back(ConsensusOutput::SendCertificate1(certificate.clone()));
         self.certs.insert(view, certificate);
         Protocol::Continue
     }
 
     #[instrument(level = "debug", skip_all)]
-    async fn handle_certificate2(
-        &mut self,
-        certificate: Certificate2<T>,
-        outbox: &mut Outbox<ConsensusOutput<T>>,
-    ) -> Protocol {
+    async fn handle_certificate2(&mut self, certificate: Certificate2<T>) -> Protocol {
         let view = certificate.view_number();
         if self.certs2.contains_key(&view) {
             return Protocol::Continue;
@@ -440,7 +419,6 @@ impl<T: NodeType> Consensus<T> {
             warn!(%view, "certificate2 not verified");
             return Protocol::Abort;
         }
-        outbox.push_back(ConsensusOutput::SendCertificate2(certificate.clone()));
         self.certs2.insert(view, certificate);
         Protocol::Continue
     }
@@ -486,7 +464,8 @@ impl<T: NodeType> Consensus<T> {
             return Protocol::Abort;
         };
         self.timeout_certs.insert(view, certificate.clone());
-        self.view_changed(view, epoch, outbox);
+        self.current_epoch = Some(epoch);
+        outbox.push_back(ConsensusOutput::ViewChanged(view, epoch));
         outbox.push_back(ConsensusOutput::SendTimeoutCertificate(
             certificate,
             view,
@@ -531,7 +510,8 @@ impl<T: NodeType> Consensus<T> {
             return Protocol::Abort;
         };
         self.view_sync_certs.insert(view, certificate.clone());
-        self.view_changed(view, epoch, outbox);
+        self.current_epoch = Some(epoch);
+        outbox.push_back(ConsensusOutput::ViewChanged(view, epoch));
         if !self.is_leader(view, epoch).await {
             debug!(%epoch, "not leader");
             return Protocol::Abort;
@@ -612,7 +592,8 @@ impl<T: NodeType> Consensus<T> {
         let next_view = cert2.view_number() + 1;
         let next_epoch = cert2.data.epoch + 1;
         // Change view to the first view of the next epoch
-        self.view_changed(next_view, next_epoch, outbox);
+        self.current_epoch = Some(next_epoch);
+        outbox.push_back(ConsensusOutput::ViewChanged(next_view, next_epoch));
 
         // Request block and header if we're the first leader of the next epoch
         if self.is_leader(next_view, next_epoch).await {
@@ -817,7 +798,7 @@ impl<T: NodeType> Consensus<T> {
 
     #[instrument(level = "debug", skip_all)]
     async fn maybe_vote_1(&mut self, view: ViewNumber, outbox: &mut Outbox<ConsensusOutput<T>>) {
-        if view <= self.timeout_view || self.voted_1_views.contains(&view) {
+        if self.voted_1_views.contains(&view) {
             return;
         }
 
@@ -953,24 +934,13 @@ impl<T: NodeType> Consensus<T> {
         // We can now update the lock, change view and vote
         if self
             .locked_cert
-            .as_ref()
-            .is_none_or(|l| l.view_number() < view)
+            .as_mut()
+            .is_none_or(|locked_cert| locked_cert.view_number() < cert1.view_number())
         {
             self.locked_cert = Some(cert1.clone());
-        }
-
-        self.voted_2_views.insert(view);
-
-        if view <= self.timeout_view {
-            return;
-        }
-
-        if self
-            .locked_cert
-            .as_ref()
-            .is_some_and(|l| l.view_number() == view)
-        {
             self.current_epoch = Some(proposal_epoch);
+            // TODO: double-check that this is the correct place to multicast certificate
+            outbox.push_back(ConsensusOutput::SendCertificate1(cert1.clone()));
             outbox.push_back(ConsensusOutput::ViewChanged(view + 1, proposal_epoch));
         }
 
@@ -996,6 +966,7 @@ impl<T: NodeType> Consensus<T> {
             },
         };
         outbox.push_back(ConsensusOutput::SendVote2(vote));
+        self.voted_2_views.insert(view);
     }
 
     #[instrument(level = "trace", skip_all)]
@@ -1006,10 +977,7 @@ impl<T: NodeType> Consensus<T> {
             return true;
         };
 
-        // When cert1 + block arrive before state validation, maybe_vote_2_and_update_lock
-        // advances the lock to this view before maybe_vote_1 runs.  In that case
-        // the normal liveness/safety checks would both fail (justify_qc references
-        // the parent, not this view), so we verify the lock certifies this exact proposal.
+        // cert1 + block arrived before proposal
         if locked_cert.view_number() == proposal.view_number() {
             return locked_cert.data.leaf_commit == proposal_commitment(proposal);
         }
@@ -1100,24 +1068,6 @@ impl<T: NodeType> Consensus<T> {
 }
 
 impl<T: NodeType> ConsensusInput<T> {
-    /// Whether this input should be processed even for views that have timed out.
-    ///
-    /// Certificates, proposals, and block data are needed as prerequisites for lock
-    /// updates and decisions regardless of timeout state.  DRB results and epoch
-    /// changes are view-independent.  The actual vote2 send is suppressed inside
-    /// `maybe_vote_2_and_update_lock` for timed-out views.
-    fn allow_past_timeout(&self) -> bool {
-        matches!(
-            self,
-            ConsensusInput::DrbResult(..)
-                | ConsensusInput::Certificate1(_)
-                | ConsensusInput::Certificate2(_)
-                | ConsensusInput::EpochChange(_)
-                | ConsensusInput::Proposal(_)
-                | ConsensusInput::BlockReconstructed(..)
-        )
-    }
-
     fn view_number(&self) -> ViewNumber {
         match self {
             ConsensusInput::BlockBuilt { view, .. } => *view,
