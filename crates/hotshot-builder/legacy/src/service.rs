@@ -209,7 +209,7 @@ impl<Types: NodeType> GlobalState<Types> {
     /// with a single entry of the same [`BuilderStateId`] and the given
     /// `bootstrap_sender`.
     /// `protocol_max_block_size` is maximum block size allowed by the protocol,
-    /// e.g. `chain_config.max_block_size` for espresso-sequencer.
+    /// e.g. `chain_config.max_block_size` for espresso-network.
     /// `max_block_size_increment_period` determines the interval between attempts
     /// to increase the builder's block size limit if it is less than the protocol maximum.
     #[allow(clippy::too_many_arguments)]

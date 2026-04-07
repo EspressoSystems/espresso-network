@@ -8,13 +8,13 @@ use anyhow::Result;
 use clap::{ArgAction, Parser, Subcommand};
 use clap_serde_derive::ClapSerde;
 use espresso_contract_deployer::provider::connect_ledger;
+use espresso_utils::logging;
 pub(crate) use hotshot_types::{
     light_client::StateSignKey,
     signature_key::{BLSPrivKey, BLSPubKey},
 };
 pub(crate) use jf_signature::bls_over_bn254::KeyPair as BLSKeyPair;
 use metadata::MetadataUriArgs;
-use sequencer_utils::logging;
 use serde::{Deserialize, Serialize};
 use signature::OutputArgs;
 use thiserror::Error;
@@ -79,7 +79,7 @@ pub const DEMO_VALIDATOR_START_INDEX: u32 = 20;
 
 /// CLI to interact with the Espresso stake table contract.
 #[derive(ClapSerde, Clone, Debug, Deserialize, Serialize)]
-#[command(version, long_version = sequencer_utils::build_info!().clap_version(), about, long_about = None)]
+#[command(version, long_version = espresso_utils::build_info!().clap_version(), about, long_about = None)]
 pub(crate) struct Config {
     /// L1 Ethereum RPC.
     #[clap(long, env = "L1_PROVIDER")]

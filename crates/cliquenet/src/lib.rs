@@ -10,7 +10,7 @@ mod metrics;
 
 pub mod retry;
 
-use std::{fmt, sync::Arc};
+use std::{cmp::max, fmt, num::NonZeroUsize, sync::Arc};
 
 use bon::Builder;
 pub use error::{NetworkDown, NetworkError};
@@ -76,14 +76,6 @@ pub struct NetConf<K> {
     #[builder(with = <_>::from_iter)]
     parties: Vec<(K, PublicKey, NetAddr)>,
 
-    /// Total egress channel capacity.
-    #[builder(default = 64 * parties.len())]
-    total_capacity_egress: usize,
-
-    /// Total ingress channel capacity.
-    #[builder(default = 32 * parties.len())]
-    total_capacity_ingress: usize,
-
     /// Egress channel capacity per peer.
     #[builder(default = 64)]
     peer_capacity_egress: usize,
@@ -91,6 +83,14 @@ pub struct NetConf<K> {
     /// Ingress channel capacity per peer.
     #[builder(default = 32)]
     peer_capacity_ingress: usize,
+
+    /// Total egress channel capacity.
+    #[builder(default = NonZeroUsize::new(max(peer_capacity_egress * parties.len(), 1)).unwrap())]
+    total_capacity_egress: NonZeroUsize,
+
+    /// Total ingress channel capacity.
+    #[builder(default = NonZeroUsize::new(max(peer_capacity_ingress * parties.len(), 1)).unwrap())]
+    total_capacity_ingress: NonZeroUsize,
 
     /// Max. number of bytes per message to send or receive.
     #[builder(default = MAX_MESSAGE_SIZE)]

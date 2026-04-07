@@ -1,9 +1,9 @@
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
+use espresso_node::api::data_source::StakeTableWithEpochNumber;
 use espresso_types::SeqTypes;
 use hotshot_types::{PeerConfig, utils::epoch_from_block_number};
-use sequencer::api::data_source::StakeTableWithEpochNumber;
 use url::Url;
 
 use crate::{

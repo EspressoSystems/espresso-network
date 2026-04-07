@@ -339,10 +339,10 @@ pub struct TestVersions {
 pub const TEST_VERSIONS: TestVersions = TestVersions {
     epoch: Upgrade::trivial(version(0, 3)),
     da_committee: Upgrade::trivial(version(0, 4)),
-    vid2: Upgrade::trivial(version(0, 6)),
+    vid2: Upgrade::trivial(version(0, 7)),
     test: Upgrade::new(version(0, 1), version(0, 2)),
     epoch_upgrade: Upgrade::new(version(0, 3), version(0, 4)),
-    vid2_upgrade: Upgrade::new(version(0, 5), version(0, 6)),
+    vid2_upgrade: Upgrade::new(version(0, 5), version(0, 7)),
 };
 
 pub type EpochVersion = StaticVersion<0, 3>;
@@ -394,13 +394,9 @@ mod tests {
         let view_1 = ViewNumber::new(1);
 
         let versioned_data_0 =
-            VersionedVoteData::<TestTypes, TestData>::new(data, view_0, &upgrade_lock)
-                .await
-                .unwrap();
+            VersionedVoteData::<TestTypes, TestData>::new(data, view_0, &upgrade_lock).unwrap();
         let versioned_data_1 =
-            VersionedVoteData::<TestTypes, TestData>::new(data, view_1, &upgrade_lock)
-                .await
-                .unwrap();
+            VersionedVoteData::<TestTypes, TestData>::new(data, view_1, &upgrade_lock).unwrap();
 
         let versioned_data_commitment_0: [u8; 32] = versioned_data_0.commit().into();
         let versioned_data_commitment_1: [u8; 32] = versioned_data_1.commit().into();

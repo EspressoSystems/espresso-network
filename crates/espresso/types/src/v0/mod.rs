@@ -1,0 +1,188 @@
+use hotshot_types::{
+    signature_key::{BLSPubKey, SchnorrPubKey},
+    traits::{node_implementation::NodeType, signature_key::SignatureKey},
+};
+use serde::{Deserialize, Serialize};
+
+pub mod config;
+mod header;
+mod impls;
+mod nsproof;
+pub mod reward_mt;
+pub mod sparse_mt;
+pub mod traits;
+mod txproof;
+mod utils;
+
+pub use header::Header;
+#[cfg(any(test, feature = "testing"))]
+pub use impls::mock;
+// export reward types for staking-ui-service
+pub use impls::reward::{
+    ComputedRewards, EpochRewardsCalculator, EpochRewardsResult, RewardDistributor,
+    ValidatorLeaderCounts,
+};
+#[cfg(any(test, feature = "testing"))]
+pub use impls::testing;
+#[allow(unused_imports)]
+pub(crate) use impls::validator_set_from_l1_events;
+pub use impls::{
+    BuilderValidationError, EpochCommittees, FeeError, ProposalValidationError,
+    StateValidationError, get_l1_deposits, retain_accounts, validators_from_l1_events,
+};
+pub use nsproof::*;
+pub use txproof::*;
+pub use utils::*;
+use vbs::version::StaticVersion;
+
+// This is the single source of truth for minor versions supported by this major version.
+//
+// It is written as a higher-level macro which takes a macro invocation as an argument and appends
+// the comma-separated list of minor version identifiers to the arguments of the given invocation.
+// This is to get around Rust's lazy macro expansion: this macro forces expansion of the given
+// invocation. We would rather write something like `some_macro!(args, minor_versions!())`, but the
+// `minor_versions!()` argument would not be expanded for pattern-matching in `some_macro!`, so
+// instead we write `with_minor_versions!(some_macro!(args))`.
+macro_rules! with_minor_versions {
+    ($m:ident!($($arg:tt),*)) => {
+        $m!($($arg,)* v0_1, v0_2, v0_3, v0_4, v0_5, v0_6);
+    };
+}
+
+// Define sub-modules for each supported minor version.
+macro_rules! define_modules {
+    ($($m:ident),+) => {
+        $(pub mod $m;)+
+    };
+}
+with_minor_versions!(define_modules!());
+
+macro_rules! assert_eq_all_versions_of_type {
+    ($t:ident, $($m:ident),+) => {
+        static_assertions::assert_type_eq_all!($($m::$t),+);
+    };
+}
+
+macro_rules! reexport_latest_version_of_type {
+    ($t:ident, $m:ident) => { pub use $m::$t; };
+    ($t:ident, $m1:ident, $($m:ident),+) => {
+        reexport_latest_version_of_type!($t, $($m),+);
+    }
+}
+
+/// Re-export types which have not changed across any minor version.
+macro_rules! reexport_unchanged_types {
+    ($($t:ident),+ $(,)?) => {
+        $(
+            with_minor_versions!(assert_eq_all_versions_of_type!($t));
+            with_minor_versions!(reexport_latest_version_of_type!($t));
+        )+
+    }
+}
+reexport_unchanged_types!(
+    AccountQueryData,
+    BlockMerkleCommitment,
+    BlockMerkleTree,
+    BuilderSignature,
+    ChainId,
+    FeeAccount,
+    FeeAccountProof,
+    FeeAmount,
+    FeeInfo,
+    FeeMerkleCommitment,
+    FeeMerkleProof,
+    FeeMerkleTree,
+    Index,
+    Iter,
+    L1BlockInfo,
+    L1Client,
+    L1ClientOptions,
+    L1Snapshot,
+    NamespaceId,
+    NsIndex,
+    NsIter,
+    NsPayload,
+    NsPayloadBuilder,
+    NsPayloadByteLen,
+    NsPayloadOwned,
+    NsPayloadRange,
+    NsTable,
+    NsTableBuilder,
+    NsTableValidationError,
+    NumNss,
+    NumTxs,
+    NumTxsRange,
+    NumTxsUnchecked,
+    Payload,
+    PayloadByteLen,
+    Transaction,
+    TxIndex,
+    TxIter,
+    TxPayload,
+    TxPayloadRange,
+    TxTableEntries,
+    TxTableEntriesRange,
+    Upgrade,
+    UpgradeType,
+    UpgradeMode,
+    TimeBasedUpgrade,
+    ViewBasedUpgrade,
+    BlockSize,
+);
+
+pub use v0_3::StateCertQueryDataV1;
+pub(crate) use v0_3::{L1ClientMetrics, L1Event, L1State, L1UpdateTask};
+pub use v0_4::StateCertQueryDataV2;
+use versions::version;
+
+#[derive(
+    Clone, Copy, Debug, Default, Hash, Eq, PartialEq, PartialOrd, Ord, Deserialize, Serialize,
+)]
+pub struct SeqTypes;
+
+impl NodeType for SeqTypes {
+    type BlockHeader = Header;
+    type BlockPayload = Payload;
+    type SignatureKey = PubKey;
+    type Transaction = Transaction;
+    type InstanceState = NodeState;
+    type ValidatedState = ValidatedState;
+    type Membership = EpochCommittees;
+    type BuilderSignatureKey = FeeAccount;
+    type StateSignatureKey = SchnorrPubKey;
+}
+
+pub const MOCK_SEQUENCER_VERSIONS: versions::Upgrade =
+    versions::Upgrade::new(version(0, 1), version(0, 2));
+
+pub type FeeVersion = StaticVersion<0, 2>;
+pub type EpochVersion = StaticVersion<0, 3>;
+pub type DrbAndHeaderUpgradeVersion = StaticVersion<0, 4>;
+pub type EpochRewardVersion = StaticVersion<0, 5>;
+pub type DaUpgradeVersion = StaticVersion<0, 6>;
+pub type Vid2UpgradeVersion = StaticVersion<0, 7>;
+
+pub type Leaf = hotshot_types::data::Leaf<SeqTypes>;
+pub type Leaf2 = hotshot_types::data::Leaf2<SeqTypes>;
+
+pub type Event = hotshot::types::Event<SeqTypes>;
+
+pub type PubKey = BLSPubKey;
+pub type PrivKey = <PubKey as SignatureKey>::PrivateKey;
+
+pub type NetworkConfig = hotshot_types::network::NetworkConfig<SeqTypes>;
+
+pub use self::impls::{
+    AuthenticatedValidatorMap, NodeState, RegisteredValidatorMap, UpgradeMap, ValidatedState,
+};
+pub use crate::{
+    v0::impls::{
+        StakeTableHash, StakeTableState, calculate_proportion_staked_and_reward_rate,
+        select_active_validator_set, to_registered_validator_map,
+    },
+    v0_1::{
+        BLOCK_MERKLE_TREE_HEIGHT, FEE_MERKLE_TREE_HEIGHT, NS_ID_BYTE_LEN, NS_OFFSET_BYTE_LEN,
+        NUM_NSS_BYTE_LEN, NUM_TXS_BYTE_LEN, TX_OFFSET_BYTE_LEN,
+    },
+    v0_3::ChainConfig,
+};
