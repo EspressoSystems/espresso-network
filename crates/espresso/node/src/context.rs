@@ -42,7 +42,6 @@ use crate::{
     Node, SeqTypes, SequencerApiVersion,
     catchup::ParallelStateCatchup,
     consensus_handle::{ConsensusEvent, ConsensusHandle, event_from_output},
-    consensus_network::{ConsensusNetwork, create_consensus_networks},
     external_event_handler::ExternalEventHandler,
     proposal_fetcher::ProposalFetcherConfig,
     request_response::{
@@ -53,7 +52,7 @@ use crate::{
     },
     state_signature::{self, StateSigner},
 };
-pub(crate) type ConsensusNode<N, P> = Node<ConsensusNetwork<N>, P>;
+pub(crate) type ConsensusNode<N, P> = Node<N, P>;
 pub type Consensus<N, P> = hotshot::types::SystemContextHandle<SeqTypes, ConsensusNode<N, P>>;
 
 /// The sequencer context contains a consensus handle and other sequencer specific information.
@@ -95,16 +94,17 @@ pub struct SequencerContext<N: ConnectedNetwork<PubKey>, P: SequencerPersistence
 impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P> {
     #[tracing::instrument(skip_all, fields(node_id = instance_state.node_id))]
     #[allow(clippy::too_many_arguments)]
-    pub async fn init(
+    pub async fn init<CN: ConnectedNetwork<PubKey>>(
         network_config: NetworkConfig<SeqTypes>,
         upgrade: versions::Upgrade,
         validator_config: ValidatorConfig<SeqTypes>,
-        coordinator: EpochMembershipCoordinator<SeqTypes>,
+        membership_coordinator: EpochMembershipCoordinator<SeqTypes>,
         instance_state: NodeState,
         storage: Option<RequestResponseStorage>,
         state_catchup: ParallelStateCatchup,
         persistence: Arc<P>,
         network: Arc<N>,
+        coordinator_network: CN,
         state_relay_server: Option<Url>,
         metrics: &dyn Metrics,
         stake_table_capacity: usize,
@@ -143,9 +143,6 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
             stake_table.0,
             0,
         )));
-        let (legacy_network, coordinator_network, consensus_network_task) =
-            create_consensus_networks((*network).clone());
-
         let handle = SystemContext::init(
             validator_config.public_key,
             validator_config.private_key.clone(),
@@ -153,8 +150,8 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
             instance_state.node_id,
             config.clone(),
             upgrade,
-            coordinator.clone(),
-            Arc::new(legacy_network),
+            membership_coordinator.clone(),
+            network.clone(),
             initializer,
             ConsensusMetricsValue::new(metrics),
             Arc::clone(&persistence),
@@ -168,8 +165,8 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
             Leaf2::genesis(&genesis_validated_state, &instance_state, upgrade.base).await;
 
         let epoch_height = network_config.config.epoch_height;
-        let (new_coordinator, query_tx) = Coordinator::<SeqTypes, ConsensusNode<N, P>>::new(
-            coordinator.clone(),
+        let (coordinator, query_tx) = Coordinator::<SeqTypes, CN>::new(
+            membership_coordinator.clone(),
             coordinator_network,
             Arc::new(instance_state.clone()),
             validator_config.public_key,
@@ -223,7 +220,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
             RequestResponseSender::new(outbound_message_sender),
             request_response_receiver,
             RecipientSource {
-                memberships: coordinator,
+                memberships: membership_coordinator,
                 consensus_handle: consensus_handle.clone(),
                 public_key: validator_config.public_key,
             },
@@ -245,11 +242,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
 
         // Create the external event handler
         let mut tasks = TaskList::default();
-        tasks.spawn("consensus network", consensus_network_task);
-        tasks.spawn(
-            "coordinator",
-            run_coordinator(new_coordinator, event_sender),
-        );
+        tasks.spawn("coordinator", run_coordinator(coordinator, event_sender));
         let external_event_handler = ExternalEventHandler::new(
             &mut tasks,
             request_response_sender,
@@ -574,13 +567,10 @@ async fn handle_events<N, P>(
     }
 }
 
-async fn run_coordinator<N, P>(
-    mut coordinator: Coordinator<SeqTypes, ConsensusNode<N, P>>,
+async fn run_coordinator<CN: ConnectedNetwork<PubKey>>(
+    mut coordinator: Coordinator<SeqTypes, CN>,
     event_sender: async_broadcast::Sender<ConsensusEvent<SeqTypes>>,
-) where
-    N: ConnectedNetwork<PubKey>,
-    P: SequencerPersistence,
-{
+) {
     loop {
         match coordinator.next_consensus_input().await {
             Ok(input) => coordinator.apply_consensus(input).await,

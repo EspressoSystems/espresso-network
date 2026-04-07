@@ -4,14 +4,14 @@ pub(crate) mod timer;
 use std::{sync::Arc, time::Duration};
 
 use bon::Builder;
-use hotshot::traits::NodeImplementation;
 use hotshot_types::{
     data::{EpochNumber, Leaf2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     simple_certificate::{QuorumCertificate2, TimeoutCertificate2},
     simple_vote::{HasEpoch, QuorumVote2, TimeoutVote2},
     traits::{
-        block_contents::BlockHeader, node_implementation::NodeType, signature_key::SignatureKey,
+        block_contents::BlockHeader, network::ConnectedNetwork, node_implementation::NodeType,
+        signature_key::SignatureKey,
     },
     vote::HasViewNumber,
 };
@@ -41,10 +41,10 @@ use crate::{
 };
 
 #[derive(Builder)]
-pub struct Coordinator<T: NodeType, I: NodeImplementation<T>> {
+pub struct Coordinator<T: NodeType, N> {
     membership_coordinator: EpochMembershipCoordinator<T>,
     consensus: Consensus<T>,
-    network: Network<T, I::Network>,
+    network: Network<T, N>,
     state_manager: StateManager<T>,
     query_rx: mpsc::Receiver<CoordinatorQuery<T>>,
     vid_disperser: VidDisperser<T>,
@@ -62,11 +62,11 @@ pub struct Coordinator<T: NodeType, I: NodeImplementation<T>> {
     timer: Timer,
 }
 
-impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
+impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Coordinator<T, N> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         membership_coordinator: EpochMembershipCoordinator<T>,
-        network: I::Network,
+        network: N,
         instance_state: Arc<T::InstanceState>,
         public_key: T::SignatureKey,
         private_key: <T::SignatureKey as SignatureKey>::PrivateKey,

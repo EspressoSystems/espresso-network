@@ -1,4 +1,3 @@
-mod consensus_network;
 mod external_event_handler;
 mod message_compat_tests;
 mod proposal_fetcher;
@@ -38,9 +37,9 @@ pub use genesis::Genesis;
 use genesis::L1Finalized;
 use hotshot::{
     traits::implementations::{
-        CdnMetricsValue, CdnTopic, Cliquenet, CombinedNetworks, CompatNetwork, GossipConfig,
-        KeyPair, Libp2pNetwork, MemoryNetwork, PushCdnNetwork, RequestResponseConfig,
-        WrappedSignatureKey, derive_libp2p_multiaddr, derive_libp2p_peer_id,
+        CdnMetricsValue, CdnTopic, Cliquenet, CombinedNetworks, GossipConfig, KeyPair,
+        Libp2pNetwork, MemoryNetwork, PushCdnNetwork, RequestResponseConfig, WrappedSignatureKey,
+        derive_libp2p_multiaddr, derive_libp2p_peer_id,
     },
     types::SignatureKey,
 };
@@ -717,7 +716,13 @@ where
         CombinedNetworks::new(cdn_network, p2p_network, Some(Duration::from_secs(1)))
     };
 
-    let network = {
+    // Legacy HotShot uses CombinedNetworks (CDN + libp2p).
+    // The new Coordinator uses CliqueNet directly.
+    // Each protocol gets its own dedicated network
+    // If we later upgrade to CliqueNet before the Fast Finality upgrade, we can
+    // reintroduce CompatNetwork for legacy and spin up a separate CliqueNet network
+    // for the fast finality consensus upgrade i.e Coordinator.
+    let cliquenet = {
         let peers = coordinator
             .stake_table_for_epoch(None)
             .await?
@@ -727,7 +732,7 @@ where
             .into_iter()
             .filter_map(|cfg| Some((cfg.stake_table_entry.stake_key, cfg.connect_info?)));
 
-        let c = Cliquenet::<PubKey>::create(
+        Cliquenet::<PubKey>::create(
             "sequencer",
             pub_key,
             network_params.x25519_secret_key.into(),
@@ -735,10 +740,10 @@ where
             peers,
             metrics.clone(),
         )
-        .await?;
-
-        Arc::new(CompatNetwork::new(c, combined_network).await)
+        .await?
     };
+
+    let network = Arc::new(combined_network);
 
     let mut ctx = SequencerContext::init(
         network_config,
@@ -750,6 +755,7 @@ where
         state_catchup_providers,
         persistence,
         network.clone(),
+        cliquenet,
         Some(network_params.state_relay_server_url),
         &*metrics,
         genesis.stake_table.capacity,
@@ -757,8 +763,6 @@ where
         proposal_fetcher_config,
     )
     .await?;
-
-    network.set_upgrade_lock(ctx.upgrade_lock().await);
 
     if wait_for_orchestrator {
         ctx = ctx.wait_for_orchestrator(orchestrator_client);
@@ -1475,6 +1479,7 @@ pub mod testing {
                 "starting node",
             );
 
+            let coordinator_network = (*network).clone();
             SequencerContext::init(
                 NetworkConfig {
                     config,
@@ -1490,6 +1495,7 @@ pub mod testing {
                 catchup_providers,
                 persistence,
                 network,
+                coordinator_network,
                 self.state_relay_url.clone(),
                 metrics,
                 stake_table_capacity,
