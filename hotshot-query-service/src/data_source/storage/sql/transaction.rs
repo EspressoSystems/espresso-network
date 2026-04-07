@@ -504,11 +504,14 @@ impl Transaction<Write> {
             self.execute(
                 query(&format!(
                     "
-                DELETE FROM {state_table} WHERE (path, created) IN
-                (SELECT path, created FROM
-                (SELECT path, created,
-                ROW_NUMBER() OVER (PARTITION BY path ORDER BY created DESC) as rank
-                FROM {state_table} WHERE created <= $1) ranked_nodes WHERE rank != 1)"
+                DELETE FROM {state_table}
+                WHERE {state_table}.created <= $1
+                  AND EXISTS (
+                    SELECT 1 FROM {state_table} AS t2
+                    WHERE t2.path = {state_table}.path
+                      AND t2.created > {state_table}.created
+                      AND t2.created <= $1
+                  )"
                 ))
                 .bind(height as i64),
             )
