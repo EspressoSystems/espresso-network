@@ -48,9 +48,10 @@ impl TestHarness {
 
         let epoch_manager = EpochManager::new(10, membership.clone());
 
-        let vote1_task = VoteCollector::new(membership.clone(), upgrade_lock());
-        let vote2_task = VoteCollector::new(membership.clone(), upgrade_lock());
+        let vote1_collector = VoteCollector::new(membership.clone(), upgrade_lock());
+        let vote2_collector = VoteCollector::new(membership.clone(), upgrade_lock());
         let timeout_collector = VoteCollector::new(membership.clone(), upgrade_lock());
+        let timeout_one_honest_collector = VoteCollector::new(membership.clone(), upgrade_lock());
         let checkpoint_collector = VoteCollector::new(membership.clone(), upgrade_lock());
 
         let genesis_state = TestValidatedState::default();
@@ -84,9 +85,10 @@ impl TestHarness {
             .network(network)
             .state_manager(state_manager)
             .query_rx(query_rx)
-            .vote1_collector(vote1_task)
-            .vote2_collector(vote2_task)
+            .vote1_collector(vote1_collector)
+            .vote2_collector(vote2_collector)
             .timeout_collector(timeout_collector)
+            .timeout_one_honest_collector(timeout_one_honest_collector)
             .checkpoint_collector(checkpoint_collector)
             .vid_disperser(vid_disperse_task)
             .vid_reconstructor(vid_reconstruction_task)

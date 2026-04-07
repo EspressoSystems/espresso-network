@@ -3,7 +3,7 @@ use std::{collections::HashMap, time::Duration};
 use alloy::{
     network::EthereumWallet,
     node_bindings::Anvil,
-    primitives::U256,
+    primitives::{U256, utils::parse_ether},
     providers::{Provider, ProviderBuilder, WalletProvider},
     rpc::client::RpcClient,
 };
@@ -293,6 +293,46 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
         balance_before + claim_input.lifetime_rewards,
         "ESP token balance did not increase correctly"
     );
+
+    // Verify circulating supply API endpoints reflect minted rewards.
+    let initial_supply = parse_ether("100000").unwrap();
+
+    let minted: String = http_client
+        .get(format!("{sequencer_url}token/total-minted-supply"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    let minted = parse_ether(&minted).unwrap();
+    assert_eq!(minted, initial_supply + claim_input.lifetime_rewards);
+
+    // Non-mainnet: locked=0, so circulating-supply-ethereum = total-minted-supply.
+    let circulating_ethereum: String = http_client
+        .get(format!("{sequencer_url}token/circulating-supply-ethereum"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    let circulating_ethereum = parse_ether(&circulating_ethereum).unwrap();
+    assert_eq!(
+        circulating_ethereum,
+        initial_supply + claim_input.lifetime_rewards
+    );
+
+    let circulating: String = http_client
+        .get(format!("{sequencer_url}token/circulating-supply"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    let circulating = parse_ether(&circulating).unwrap();
+    // An exact assertion isn't possible: the endpoint combines the Espresso decided
+    // header (reward_distributed) with the L1 contract (totalSupply), and we can't
+    // get a consistent snapshot across both from outside the node.
+    assert!(circulating >= circulating_ethereum);
 
     println!("Attempting to double-claim rewards");
     let double_claim_result = reward_claim_contract

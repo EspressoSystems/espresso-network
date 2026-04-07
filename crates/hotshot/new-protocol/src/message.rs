@@ -9,12 +9,12 @@ use hotshot_types::{
     drb::DrbResult,
     message::Proposal as SignedProposal,
     simple_certificate::{
-        LightClientStateUpdateCertificateV2, QuorumCertificate2, SimpleCertificate,
-        SuccessThreshold, UpgradeCertificate, ViewSyncCommitCertificate2,
-        ViewSyncFinalizeCertificate2, ViewSyncPreCommitCertificate2,
+        LightClientStateUpdateCertificateV2, OneHonestThreshold, QuorumCertificate2,
+        SimpleCertificate, SuccessThreshold, TimeoutCertificate2, UpgradeCertificate,
+        ViewSyncCommitCertificate2, ViewSyncFinalizeCertificate2, ViewSyncPreCommitCertificate2,
     },
     simple_vote::{
-        CheckpointData, HasEpoch, QuorumData2, QuorumVote2, SimpleVote, TimeoutVote2,
+        CheckpointData, HasEpoch, QuorumData2, QuorumVote2, SimpleVote, TimeoutData2, TimeoutVote2,
         ViewSyncCommitVote2, ViewSyncFinalizeVote2, ViewSyncPreCommitVote2, Vote2Data,
     },
     traits::node_implementation::NodeType,
@@ -27,6 +27,8 @@ pub type CheckpointVote<T> = SimpleVote<T, CheckpointData>;
 pub type CheckpointCertificate<T> = SimpleCertificate<T, CheckpointData, SuccessThreshold>;
 pub type Certificate1<T> = SimpleCertificate<T, QuorumData2<T>, SuccessThreshold>;
 pub type Certificate2<T> = SimpleCertificate<T, Vote2Data<T>, SuccessThreshold>;
+pub type TimeoutCertificate<T> = SimpleCertificate<T, TimeoutData2, SuccessThreshold>;
+pub type TimeoutOneHonest<T> = SimpleCertificate<T, TimeoutData2, OneHonestThreshold>;
 
 /// Proposal to append a block.
 #[derive(Debug, Serialize, Deserialize, Clone, Eq, PartialEq, Hash)]
@@ -178,6 +180,19 @@ impl<T: NodeType> HasViewNumber for Vote1<T> {
     }
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
+#[serde(bound(deserialize = ""))]
+pub struct TimeoutVoteMessage<T: NodeType> {
+    pub vote: TimeoutVote2<T>,
+    pub lock: Option<Certificate1<T>>,
+}
+
+impl<T: NodeType> HasViewNumber for TimeoutVoteMessage<T> {
+    fn view_number(&self) -> ViewNumber {
+        self.vote.view_number()
+    }
+}
+
 /// Message sent at the end of an epoch by the current committee
 /// to the next committee.  Both certificates are on the last block of the epoch.
 /// The protocol spec only requires the second certificate, but for consistency
@@ -205,7 +220,8 @@ pub enum ConsensusMessage<T: NodeType, S> {
     Vote2(Vote2<T>),
     Certificate1(Certificate1<T>, T::SignatureKey),
     Certificate2(Certificate2<T>, T::SignatureKey),
-    TimeoutVote(TimeoutVote2<T>),
+    TimeoutVote(TimeoutVoteMessage<T>),
+    TimeoutCertificate(TimeoutCertificate2<T>),
     EpochChange(EpochChangeMessage<T>),
     Checkpoint(CheckpointVote<T>),
 }
@@ -220,6 +236,7 @@ impl<T: NodeType, S> ConsensusMessage<T, S> {
             Self::Certificate1(c, k) => ConsensusMessage::Certificate1(c, k),
             Self::Certificate2(c, k) => ConsensusMessage::Certificate2(c, k),
             Self::TimeoutVote(v) => ConsensusMessage::TimeoutVote(v),
+            Self::TimeoutCertificate(c) => ConsensusMessage::TimeoutCertificate(c),
             Self::Checkpoint(v) => ConsensusMessage::Checkpoint(v),
             Self::EpochChange(c) => ConsensusMessage::EpochChange(c),
         }
@@ -234,7 +251,8 @@ impl<T: NodeType, S> HasViewNumber for ConsensusMessage<T, S> {
             Self::Vote2(vote) => vote.view_number(),
             Self::Certificate1(certificate, _) => certificate.view_number(),
             Self::Certificate2(certificate, _) => certificate.view_number(),
-            Self::TimeoutVote(vote) => vote.view_number(),
+            Self::TimeoutVote(msg) => msg.view_number(),
+            Self::TimeoutCertificate(certificate) => certificate.view_number(),
             Self::Checkpoint(vote) => vote.view_number(),
             Self::EpochChange(epoch_change) => epoch_change.cert1.view_number(),
         }
