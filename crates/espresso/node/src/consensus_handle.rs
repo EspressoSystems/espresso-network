@@ -19,7 +19,7 @@ use hotshot_new_protocol::{
 use hotshot_types::{
     data::{EpochNumber, Leaf2, QuorumProposalWrapper, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
-    event::{Event, EventType},
+    event::Event,
     message::{Proposal as SignedProposal, UpgradeLock},
     traits::{ValidatedState, node_implementation::NodeType, signature_key::SignatureKey},
     utils::StateAndDelta,
@@ -159,12 +159,7 @@ impl<T: NodeType, I: hotshot::traits::NodeImplementation<T>> ConsensusHandle<T, 
         let old_stream = self
             .legacy_event_rx
             .activate_cloned()
-            .map(|event| match event.event {
-                EventType::ExternalMessageReceived { sender, data } => {
-                    ConsensusEvent::ExternalMessageReceived { sender, data }
-                },
-                _ => ConsensusEvent::LegacyEvent(event),
-            });
+            .map(ConsensusEvent::LegacyEvent);
 
         let new_stream = self.event_rx.activate_cloned();
 

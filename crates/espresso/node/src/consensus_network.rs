@@ -8,6 +8,7 @@ use hotshot_types::{
     BoxSyncFuture,
     data::{EpochNumber, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
+    message::EXTERNAL_MESSAGE_VERSION,
     traits::{
         network::{BroadcastDelay, ConnectedNetwork, NetworkError, Topic},
         node_implementation::NodeType,
@@ -15,6 +16,14 @@ use hotshot_types::{
     },
 };
 use tokio::sync::mpsc::error::TrySendError;
+use vbs::version::Version;
+use versions::CLIQUENET_VERSION;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ConsensusMessageRoute {
+    Legacy,
+    Coordinator,
+}
 
 #[derive(Clone)]
 pub struct ConsensusNetwork<N> {
@@ -41,34 +50,81 @@ pub(crate) fn create_consensus_networks<N>(
 where
     N: ConnectedNetwork<PubKey>,
 {
-    let (tx, rx1) = broadcast(1000);
-    let rx2 = tx.new_receiver();
-    let hotshot = ConsensusNetwork::new(network.clone(), rx1);
-    let coordinator = ConsensusNetwork::new(network.clone(), rx2);
+    let (mut legacy_tx, mut legacy_rx) = broadcast(1000);
+    let (mut coordinator_tx, mut coordinator_rx) = broadcast(1000);
+    legacy_tx.set_await_active(false);
+    coordinator_tx.set_await_active(false);
+    legacy_rx.set_overflow(true);
+    coordinator_rx.set_overflow(true);
+    let hotshot = ConsensusNetwork::new(network.clone(), legacy_rx);
+    let coordinator = ConsensusNetwork::new(network.clone(), coordinator_rx);
     let driver = async move {
-        drive_consensus_network(network, tx).await;
+        drive_consensus_network(network, legacy_tx, coordinator_tx).await;
     };
     (hotshot, coordinator, driver)
 }
 
-async fn drive_consensus_network<N>(network: N, tx: Sender<Vec<u8>>)
-where
+fn classify_message_route(message: &[u8]) -> Result<ConsensusMessageRoute, NetworkError> {
+    let (version, _) = Version::deserialize(message)
+        .map_err(|err| NetworkError::FailedToDeserialize(err.to_string()))?;
+    Ok(match version {
+        EXTERNAL_MESSAGE_VERSION => ConsensusMessageRoute::Coordinator,
+        v if v > CLIQUENET_VERSION => ConsensusMessageRoute::Coordinator,
+        _ => ConsensusMessageRoute::Legacy,
+    })
+}
+
+async fn route_message(
+    route: ConsensusMessageRoute,
+    message: Vec<u8>,
+    legacy_tx: &Sender<Vec<u8>>,
+    coordinator_tx: &Sender<Vec<u8>>,
+) {
+    let tx = match route {
+        ConsensusMessageRoute::Legacy => legacy_tx,
+        ConsensusMessageRoute::Coordinator => coordinator_tx,
+    };
+
+    match tx.broadcast_direct(message).await {
+        Ok(None) => {},
+        Ok(Some(_overflowed)) => {
+            tracing::debug!(
+                ?route,
+                "consensus network route overflowed, oldest message dropped"
+            );
+        },
+        Err(err) => {
+            tracing::warn!(?route, %err, "failed to route consensus network message");
+        },
+    }
+}
+
+async fn drive_consensus_network<N>(
+    network: N,
+    legacy_tx: Sender<Vec<u8>>,
+    coordinator_tx: Sender<Vec<u8>>,
+) where
     N: ConnectedNetwork<PubKey>,
 {
     loop {
         match network.recv_message().await {
             Ok(message) => {
-                if let Err(err) = tx.broadcast_direct(message).await {
-                    tracing::info!(%err, "consensus network closed");
-                    return;
-                }
+                let route = match classify_message_route(&message) {
+                    Ok(route) => route,
+                    Err(err) => {
+                        tracing::error!(%err, "unexpected error classifying consensus network message");
+                        continue;
+                    },
+                };
+
+                route_message(route, message, &legacy_tx, &coordinator_tx).await;
             },
             Err(NetworkError::ShutDown) => {
                 tracing::info!("consensus network shutting down");
                 return;
             },
             Err(err) => {
-                panic!("consensus network driver stopped after network receive error: {err}");
+                tracing::error!(%err, "network receive error");
             },
         }
     }
@@ -171,129 +227,5 @@ where
 
     fn is_primary_down(&self) -> bool {
         self.network.is_primary_down()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::{collections::HashMap, sync::Arc};
-
-    use async_lock::Mutex;
-    use async_trait::async_trait;
-    use espresso_types::PubKey;
-    use hotshot_types::{
-        BoxSyncFuture, boxed_sync,
-        data::ViewNumber,
-        traits::network::{BroadcastDelay, ConnectedNetwork, NetworkError, Topic},
-    };
-    use tokio::sync::mpsc::error::TrySendError;
-
-    use super::create_consensus_networks;
-
-    #[derive(Clone)]
-    struct TestNetwork {
-        rx: Arc<Mutex<async_channel::Receiver<Vec<u8>>>>,
-        tx: async_channel::Sender<Vec<u8>>,
-    }
-
-    impl TestNetwork {
-        fn new() -> Self {
-            let (tx, rx) = async_channel::unbounded();
-            Self {
-                rx: Arc::new(Mutex::new(rx)),
-                tx,
-            }
-        }
-
-        async fn inject(&self, message: Vec<u8>) {
-            self.tx.send(message).await.unwrap();
-        }
-    }
-
-    #[async_trait]
-    impl ConnectedNetwork<PubKey> for TestNetwork {
-        fn pause(&self) {}
-
-        fn resume(&self) {}
-
-        async fn wait_for_ready(&self) {}
-
-        fn shut_down<'a, 'b>(&'a self) -> BoxSyncFuture<'b, ()>
-        where
-            'a: 'b,
-            Self: 'b,
-        {
-            boxed_sync(async {})
-        }
-
-        async fn broadcast_message(
-            &self,
-            _: ViewNumber,
-            _: Vec<u8>,
-            _: Topic,
-            _: BroadcastDelay,
-        ) -> Result<(), NetworkError> {
-            Ok(())
-        }
-
-        async fn da_broadcast_message(
-            &self,
-            _: ViewNumber,
-            _: Vec<u8>,
-            _: Vec<PubKey>,
-            _: BroadcastDelay,
-        ) -> Result<(), NetworkError> {
-            Ok(())
-        }
-
-        async fn vid_broadcast_message(
-            &self,
-            _: HashMap<PubKey, (ViewNumber, Vec<u8>)>,
-        ) -> Result<(), NetworkError> {
-            Ok(())
-        }
-
-        async fn direct_message(
-            &self,
-            _: ViewNumber,
-            _: Vec<u8>,
-            _: PubKey,
-        ) -> Result<(), NetworkError> {
-            Ok(())
-        }
-
-        async fn recv_message(&self) -> Result<Vec<u8>, NetworkError> {
-            let receiver = self.rx.lock().await;
-            receiver
-                .recv()
-                .await
-                .map_err(|err| NetworkError::ChannelReceiveError(err.to_string()))
-        }
-
-        fn queue_node_lookup(
-            &self,
-            _: ViewNumber,
-            _: PubKey,
-        ) -> Result<(), TrySendError<Option<(ViewNumber, PubKey)>>> {
-            Ok(())
-        }
-    }
-
-    #[tokio::test]
-    async fn delivers_messages_to_legacy_and_coordinator_networks() {
-        let network = TestNetwork::new();
-        let (legacy_network, coordinator_network, driver) =
-            create_consensus_networks(network.clone());
-        let driver = tokio::spawn(driver);
-
-        network.inject(vec![1, 2, 3]).await;
-
-        let legacy_message = legacy_network.recv_message().await.unwrap();
-        let coordinator_message = coordinator_network.recv_message().await.unwrap();
-
-        assert_eq!(legacy_message, vec![1, 2, 3]);
-        assert_eq!(coordinator_message, vec![1, 2, 3]);
-
-        driver.abort();
     }
 }

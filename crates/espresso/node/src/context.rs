@@ -527,6 +527,14 @@ async fn handle_events<N, P>(
 
         match event {
             ConsensusEvent::LegacyEvent(ref hotshot_event) => {
+                // Handle external messages from the legacy protocol.
+                if let hotshot_types::event::EventType::ExternalMessageReceived { ref data, .. } =
+                    hotshot_event.event
+                    && let Err(err) = external_event_handler.handle_event(data).await
+                {
+                    tracing::warn!("Failed to handle legacy external message: {:?}", err);
+                }
+
                 // Persistence and state signer consume the original HotShot event.
                 persistence
                     .handle_event(hotshot_event, &event_consumer)
