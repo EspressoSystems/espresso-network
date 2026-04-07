@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"mod":["data_source","endpoints","fs","light_client","options","sql","test_helpers","update"],"struct":["ApiState","RewardMerkleTreeV2Data"],"trait":["RewardMerkleTreeDataSource"],"type":["BlocksFrontier","BoxLazy","StorageState"]};
+window.SIDEBAR_ITEMS = {"mod":["data_source","endpoints","fs","light_client","options","sql","test_helpers","unlock_schedule","update"],"struct":["ApiState","RewardMerkleTreeV2Data"],"trait":["RewardMerkleTreeDataSource"],"type":["BlocksFrontier","BoxLazy","StorageState"]};
