@@ -834,7 +834,11 @@ mod test {
     async fn test_composition() {
         let dir = TempDir::with_prefix("test_composition").unwrap();
         let mut loader = AtomicStoreLoader::create(dir.path(), "test_composition").unwrap();
-        let hotshot_qs = MockDataSource::create_with_store(&mut loader, Default::default())
+        let hotshot_qs = MockDataSource::create_builder_with_store(&mut loader, Default::default())
+            .await
+            .unwrap()
+            .with_sync_status_ttl(Duration::ZERO)
+            .build()
             .await
             .unwrap();
 
