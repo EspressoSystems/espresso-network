@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     fs::{self, File, OpenOptions},
     io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write},
     ops::RangeInclusive,
@@ -8,6 +8,7 @@ use std::{
     time::Instant,
 };
 
+use alloy::primitives::{Address, U256};
 use anyhow::{Context, anyhow, bail};
 use async_lock::RwLock;
 use async_trait::async_trait;
@@ -55,12 +56,12 @@ use crate::{
 /// Validator without x25519_key/p2p_addr (pre-#3964).
 #[derive(serde::Deserialize)]
 struct ValidatorNoX25519 {
-    account: alloy::primitives::Address,
+    account: Address,
     stake_table_key: PubKey,
     state_ver_key: hotshot_types::light_client::StateVerKey,
-    stake: alloy::primitives::U256,
+    stake: U256,
     commission: u16,
-    delegators: std::collections::HashMap<alloy::primitives::Address, alloy::primitives::U256>,
+    delegators: HashMap<Address, U256>,
 }
 
 impl ValidatorNoX25519 {
@@ -84,12 +85,12 @@ impl ValidatorNoX25519 {
 /// RegisteredValidator without x25519_key/p2p_addr (pre-#3964).
 #[derive(serde::Deserialize)]
 struct RegisteredValidatorNoX25519 {
-    account: alloy::primitives::Address,
+    account: Address,
     stake_table_key: PubKey,
     state_ver_key: hotshot_types::light_client::StateVerKey,
-    stake: alloy::primitives::U256,
+    stake: U256,
     commission: u16,
-    delegators: std::collections::HashMap<alloy::primitives::Address, alloy::primitives::U256>,
+    delegators: HashMap<Address, U256>,
     authenticated: bool,
 }
 
@@ -109,47 +110,29 @@ impl RegisteredValidatorNoX25519 {
     }
 }
 
-/// Bincode config matching `bincode::serialize`/`bincode::deserialize` but rejecting trailing bytes.
-/// This ensures that when trying multiple legacy formats, a shorter struct doesn't falsely match
-/// data written by a longer struct.
-fn bincode_strict() -> bincode::config::WithOtherTrailing<
-    bincode::config::WithOtherIntEncoding<
-        bincode::config::DefaultOptions,
-        bincode::config::FixintEncoding,
-    >,
-    bincode::config::RejectTrailing,
-> {
-    use bincode::Options;
-    bincode::DefaultOptions::new()
-        .with_fixint_encoding()
-        .reject_trailing_bytes()
-}
-
 /// Deserialize a stake table from bytes, trying current and legacy formats.
-/// Formats are tried longest-first (most fields) so that `reject_trailing_bytes` can
-/// distinguish them. Returns (stake_tuple, needs_rewrite) where needs_rewrite=true means
-/// legacy format was used.
+/// Formats are tried longest-first (most fields) so a longer struct always fails on
+/// shorter data (not enough bytes) before we try the next shorter format.
+/// Returns (stake_tuple, needs_rewrite) where needs_rewrite=true means legacy format was used.
 fn deserialize_stake_table(bytes: &[u8]) -> anyhow::Result<(StakeTuple, bool)> {
-    use bincode::Options;
-    let strict = bincode_strict();
-
     // Try current format (9-field RegisteredValidator in AuthenticatedValidator wrapper).
-    if let Ok(stake) = strict.deserialize::<StakeTuple>(bytes) {
+    if let Ok(stake) = bincode::deserialize::<StakeTuple>(bytes) {
         return Ok((stake, false));
     }
 
     // Validator with x25519_key/p2p_addr but without authenticated (deprecated Validator type).
+    // May not exist on disk; included for safety.
     {
         #[allow(deprecated)]
         use espresso_types::v0_3::Validator;
         #[allow(deprecated)]
-        type LegacyValidatorMap = indexmap::IndexMap<alloy::primitives::Address, Validator<PubKey>>;
+        type LegacyValidatorMap = indexmap::IndexMap<Address, Validator<PubKey>>;
         type LegacyTuple = (
             LegacyValidatorMap,
             Option<RewardAmount>,
             Option<StakeTableHash>,
         );
-        if let Ok(legacy) = strict.deserialize::<LegacyTuple>(bytes) {
+        if let Ok(legacy) = bincode::deserialize::<LegacyTuple>(bytes) {
             let migrated: AuthenticatedValidatorMap = legacy
                 .0
                 .into_iter()
@@ -167,14 +150,13 @@ fn deserialize_stake_table(bytes: &[u8]) -> anyhow::Result<(StakeTuple, bool)> {
     }
 
     // V1: RegisteredValidator with authenticated but without x25519_key/p2p_addr.
-    type RegisteredValidatorNoX25519Map =
-        indexmap::IndexMap<alloy::primitives::Address, RegisteredValidatorNoX25519>;
+    type RegisteredValidatorNoX25519Map = indexmap::IndexMap<Address, RegisteredValidatorNoX25519>;
     type RegisteredValidatorNoX25519Tuple = (
         RegisteredValidatorNoX25519Map,
         Option<RewardAmount>,
         Option<StakeTableHash>,
     );
-    if let Ok(legacy) = strict.deserialize::<RegisteredValidatorNoX25519Tuple>(bytes) {
+    if let Ok(legacy) = bincode::deserialize::<RegisteredValidatorNoX25519Tuple>(bytes) {
         // This format only existed on disk between #3903 and #3964. store_stake writes
         // AuthenticatedValidatorMap which only contains authenticated=true entries, so
         // authenticated=false should never appear here.
@@ -194,14 +176,13 @@ fn deserialize_stake_table(bytes: &[u8]) -> anyhow::Result<(StakeTuple, bool)> {
     }
 
     // V0: Validator without authenticated or x25519_key/p2p_addr.
-    type ValidatorNoX25519Map = indexmap::IndexMap<alloy::primitives::Address, ValidatorNoX25519>;
+    type ValidatorNoX25519Map = indexmap::IndexMap<Address, ValidatorNoX25519>;
     type ValidatorNoX25519Tuple = (
         ValidatorNoX25519Map,
         Option<RewardAmount>,
         Option<StakeTableHash>,
     );
-    let legacy: ValidatorNoX25519Tuple = strict
-        .deserialize(bytes)
+    let legacy: ValidatorNoX25519Tuple = bincode::deserialize(bytes)
         .context("failed to deserialize stake table (tried all known formats)")?;
     let migrated: AuthenticatedValidatorMap = legacy
         .0
@@ -1645,8 +1626,7 @@ impl SequencerPersistence for Persistence {
         let validators_dir = path.join("validators");
         if validators_dir.is_dir() {
             #[allow(deprecated)]
-            type LegacyValidatorMap =
-                indexmap::IndexMap<alloy::primitives::Address, Validator<PubKey>>;
+            type LegacyValidatorMap = indexmap::IndexMap<Address, Validator<PubKey>>;
 
             for entry in fs::read_dir(&validators_dir)? {
                 let entry = entry?;
@@ -2474,9 +2454,8 @@ fn epoch_files(
 
 #[cfg(test)]
 mod test {
-    use std::{collections::HashMap, marker::PhantomData};
+    use std::marker::PhantomData;
 
-    use alloy::primitives::{Address, U256};
     use committable::{Commitment, CommitmentBoundsArkless, Committable};
     use espresso_types::{Header, Leaf, NodeState, PubKey, ValidatedState};
     use hotshot::types::SignatureKey;
