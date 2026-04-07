@@ -939,9 +939,8 @@ impl<T: NodeType> Consensus<T> {
         {
             self.locked_cert = Some(cert1.clone());
             self.current_epoch = Some(proposal_epoch);
-            // TODO: double-check that this is the correct place to multicast certificate
-            outbox.push_back(ConsensusOutput::SendCertificate1(cert1.clone()));
             outbox.push_back(ConsensusOutput::ViewChanged(view + 1, proposal_epoch));
+            outbox.push_back(ConsensusOutput::SendCertificate1(cert1.clone()));
         }
 
         if !self.staked_in_epoch(proposal_epoch).await {
