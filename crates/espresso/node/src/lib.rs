@@ -1479,7 +1479,16 @@ pub mod testing {
                 "starting node",
             );
 
-            let coordinator_network = (*network).clone();
+            // The coordinator needs its own separate MemoryNetwork so it doesn't
+            // steal messages from HotShot's network. We use a separate MasterMap
+            // to avoid overwriting HotShot's entry in the shared master map.
+            let coordinator_master_map = Arc::new(MasterMap::new());
+            let coordinator_network = MemoryNetwork::new(
+                &my_peer_config.stake_table_entry.stake_key,
+                &coordinator_master_map,
+                &topics,
+                None,
+            );
             SequencerContext::init(
                 NetworkConfig {
                     config,
