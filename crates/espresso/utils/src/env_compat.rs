@@ -371,6 +371,11 @@ pub fn migrate_legacy_env_vars() {
         ),
         // Builder URLs for submitting transactions
         ("ESPRESSO_BUILDER_URLS", "ESPRESSO_SEQUENCER_BUILDER_URLS"),
+        // Remote providers fallback timeout
+        (
+            "ESPRESSO_NODE_LOCAL_CATCHUP_TIMEOUT",
+            "ESPRESSO_SEQUENCER_LOCAL_CATCHUP_TIMEOUT",
+        ),
         // ── crates/espresso/node/src/persistence/fs.rs ──
         // Number of consensus views to retain
         (
@@ -382,6 +387,11 @@ pub fn migrate_legacy_env_vars() {
         (
             "ESPRESSO_NODE_ACTIVE_FETCH_DELAY",
             "ESPRESSO_SEQUENCER_ACTIVE_FETCH_DELAY",
+        ),
+        // Duration to cache sync status results for.
+        (
+            "ESPRESSO_NODE_SYNC_STATUS_TTL",
+            "ESPRESSO_SEQUENCER_SYNC_STATUS_TTL",
         ),
         // Disable pruning and reconstruct previously pruned data
         ("ESPRESSO_NODE_ARCHIVE", "ESPRESSO_SEQUENCER_ARCHIVE"),
