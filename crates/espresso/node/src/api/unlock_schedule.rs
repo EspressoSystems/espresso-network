@@ -5,7 +5,7 @@ use chrono::{Months, NaiveDate, NaiveDateTime, NaiveTime};
 use espresso_types::{v0_1::ChainId, v0_3::RewardAmount};
 use serde::Deserialize;
 
-const SCHEDULE_TOML: &str = include_str!("../../../data/token-unlock-schedule.toml");
+const SCHEDULE_TOML: &str = include_str!("../../../../../data/token-unlock-schedule.toml");
 
 pub(crate) const MAINNET_CHAIN_ID: u64 = 1;
 
