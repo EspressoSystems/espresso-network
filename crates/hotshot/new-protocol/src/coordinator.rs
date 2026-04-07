@@ -358,12 +358,12 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                 None
             },
             MessageType::ViewSync(_) => todo!(),
-            MessageType::External(_data) => {
-                // self.outbox
-                //     .push_back(ConsensusOutput::ExternalMessageReceived {
-                //         sender: message.sender,
-                //         data,
-                //     });
+            MessageType::External(data) => {
+                self.outbox
+                    .push_back(ConsensusOutput::ExternalMessageReceived {
+                        sender: message.sender,
+                        data,
+                    });
                 None
             },
         }

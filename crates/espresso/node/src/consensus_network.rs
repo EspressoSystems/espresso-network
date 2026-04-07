@@ -8,7 +8,6 @@ use hotshot_types::{
     BoxSyncFuture,
     data::{EpochNumber, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
-    message::EXTERNAL_MESSAGE_VERSION,
     traits::{
         network::{BroadcastDelay, ConnectedNetwork, NetworkError, Topic},
         node_implementation::NodeType,
@@ -68,7 +67,6 @@ fn classify_message_route(message: &[u8]) -> Result<ConsensusMessageRoute, Netwo
     let (version, _) = Version::deserialize(message)
         .map_err(|err| NetworkError::FailedToDeserialize(err.to_string()))?;
     Ok(match version {
-        EXTERNAL_MESSAGE_VERSION => ConsensusMessageRoute::Coordinator,
         v if v > CLIQUENET_VERSION => ConsensusMessageRoute::Coordinator,
         _ => ConsensusMessageRoute::Legacy,
     })
