@@ -15,9 +15,7 @@ use espresso_types::{
 };
 
 use crate::api::{
-    api::{data_source::TokenDataSource, RewardAmount, RewardMerkleTreeV2Data},
-    data_source::TokenDataSource,
-    unlock_schedule, RewardAmount, RewardMerkleTreeV2Data, U256,
+    data_source::TokenDataSource, unlock_schedule, RewardAmount, RewardMerkleTreeV2Data,
 };
 // re-exported here to avoid breaking changes in consumers
 // "deprecated" does not work with "pub use": https://github.com/rust-lang/rust/issues/30827
