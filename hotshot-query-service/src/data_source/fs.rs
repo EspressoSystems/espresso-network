@@ -22,6 +22,7 @@ use super::{AvailabilityProvider, FetchingDataSource, storage::FileSystemStorage
 use crate::{
     Header, Payload,
     availability::{QueryableHeader, query_data::QueryablePayload},
+    data_source::fetching,
 };
 
 /// A data source for the APIs provided in this crate, backed by the local file system.
@@ -158,6 +159,9 @@ use crate::{
 /// ```
 pub type FileSystemDataSource<Types, P> = FetchingDataSource<Types, FileSystemStorage<Types>, P>;
 
+/// Builder for configuring a [`FileSystemDataSource`].
+pub type Builder<Types, P> = fetching::Builder<Types, FileSystemStorage<Types>, P>;
+
 impl<Types: NodeType, P> FileSystemDataSource<Types, P>
 where
     Payload<Types>: QueryablePayload<Types>,
@@ -170,9 +174,20 @@ where
     ///
     /// The [FileSystemDataSource] will manage its own persistence synchronization.
     pub async fn create(path: &Path, provider: P) -> anyhow::Result<Self> {
-        FileSystemDataSource::builder(FileSystemStorage::create(path).await?, provider)
-            .build()
-            .await
+        Self::create_builder(path, provider).await?.build().await
+    }
+
+    /// Create a new [FileSystemDataSource] with storage at `path`, and return a builder for
+    /// configuration.
+    ///
+    /// If there is already data at `path`, it will be archived.
+    ///
+    /// The [FileSystemDataSource] will manage its own persistence synchronization.
+    pub async fn create_builder(path: &Path, provider: P) -> anyhow::Result<Builder<Types, P>> {
+        Ok(FileSystemDataSource::builder(
+            FileSystemStorage::create(path).await?,
+            provider,
+        ))
     }
 
     /// Open an existing [FileSystemDataSource] from storage at `path`.
@@ -181,9 +196,20 @@ where
     ///
     /// The [FileSystemDataSource] will manage its own persistence synchronization.
     pub async fn open(path: &Path, provider: P) -> anyhow::Result<Self> {
-        FileSystemDataSource::builder(FileSystemStorage::open(path).await?, provider)
-            .build()
-            .await
+        Self::open_builder(path, provider).await?.build().await
+    }
+
+    /// Open an existing [FileSystemDataSource] from storage at `path`, and return a builder for
+    /// configuration.
+    ///
+    /// If there is no data at `path`, a new store will be created.
+    ///
+    /// The [FileSystemDataSource] will manage its own persistence synchronization.
+    pub async fn open_builder(path: &Path, provider: P) -> anyhow::Result<Builder<Types, P>> {
+        Ok(FileSystemDataSource::builder(
+            FileSystemStorage::open(path).await?,
+            provider,
+        ))
     }
 
     /// Create a new [FileSystemDataSource] using a persistent storage loader.
@@ -198,12 +224,29 @@ where
         loader: &mut AtomicStoreLoader,
         provider: P,
     ) -> anyhow::Result<Self> {
-        FileSystemDataSource::builder(
+        Self::create_builder_with_store(loader, provider)
+            .await?
+            .build()
+            .await
+    }
+
+    /// Create a new [FileSystemDataSource] using a persistent storage loader, and return a builder
+    /// for configuration.
+    ///
+    /// If there is existing data corresponding to the [FileSystemDataSource] data structures, it
+    /// will be archived.
+    ///
+    /// The [FileSystemDataSource] will register its persistent data structures with `loader`. The
+    /// caller is responsible for creating an [AtomicStore](atomic_store::AtomicStore) from `loader`
+    /// and managing synchronization of the store.
+    pub async fn create_builder_with_store(
+        loader: &mut AtomicStoreLoader,
+        provider: P,
+    ) -> anyhow::Result<Builder<Types, P>> {
+        Ok(FileSystemDataSource::builder(
             FileSystemStorage::create_with_store(loader).await?,
             provider,
-        )
-        .build()
-        .await
+        ))
     }
 
     /// Open an existing [FileSystemDataSource] using a persistent storage loader.
@@ -218,9 +261,29 @@ where
         loader: &mut AtomicStoreLoader,
         provider: P,
     ) -> anyhow::Result<Self> {
-        FileSystemDataSource::builder(FileSystemStorage::open_with_store(loader).await?, provider)
+        Self::open_builder_with_store(loader, provider)
+            .await?
             .build()
             .await
+    }
+
+    /// Open an existing [FileSystemDataSource] using a persistent storage loader, and return a
+    /// builder for configuration.
+    ///
+    /// If there is no existing data corresponding to the [FileSystemDataSource] data structures, a
+    /// new store will be created.
+    ///
+    /// The [FileSystemDataSource] will register its persistent data structures with `loader`. The
+    /// caller is responsible for creating an [AtomicStore](atomic_store::AtomicStore) from `loader`
+    /// and managing synchronization of the store.
+    pub async fn open_builder_with_store(
+        loader: &mut AtomicStoreLoader,
+        provider: P,
+    ) -> anyhow::Result<Builder<Types, P>> {
+        Ok(FileSystemDataSource::builder(
+            FileSystemStorage::open_with_store(loader).await?,
+            provider,
+        ))
     }
 
     /// Advance the version of the persistent store without committing changes to persistent state.
@@ -255,15 +318,23 @@ mod impl_testable_data_source {
         for FileSystemDataSource<MockTypes, P>
     {
         type Storage = TempDir;
+        type S = FileSystemStorage<MockTypes>;
+        type P = P;
 
         async fn create(node_id: usize) -> Self::Storage {
             TempDir::with_prefix(format!("file_system_data_source_{node_id}")).unwrap()
         }
 
-        async fn connect(storage: &Self::Storage) -> Self {
-            Self::open(storage.path(), Default::default())
+        async fn build(
+            storage: &Self::Storage,
+            opt: impl Send + FnOnce(Builder<MockTypes, Self::P>) -> Builder<MockTypes, Self::P>,
+        ) -> Self {
+            opt(Self::open_builder(storage.path(), Default::default())
                 .await
-                .unwrap()
+                .unwrap())
+            .build()
+            .await
+            .unwrap()
         }
 
         async fn reset(storage: &Self::Storage) -> Self {

@@ -206,6 +206,10 @@ pub struct Options {
     #[clap(long, env = "ESPRESSO_SEQUENCER_SYNC_STATUS_CHUNK_SIZE")]
     pub(crate) sync_status_chunk_size: Option<usize>,
 
+    /// Duration to cache sync status results for.
+    #[clap(long, env = "ESPRESSO_SEQUENCER_SYNC_STATUS_TTL", value_parser = parse_duration)]
+    pub(crate) sync_status_ttl: Option<Duration>,
+
     /// The number of items to process at a time when scanning for proactive fetching.
     #[clap(long, env = "ESPRESSO_SEQUENCER_PROACTIVE_SCAN_CHUNK_SIZE")]
     pub(crate) proactive_scan_chunk_size: Option<usize>,
@@ -402,6 +406,7 @@ impl From<SqliteOptions> for Options {
             active_fetch_delay: None,
             chunk_fetch_delay: None,
             sync_status_chunk_size: None,
+            sync_status_ttl: None,
             proactive_scan_chunk_size: None,
             proactive_scan_interval: None,
             disable_proactive_fetching: false,
