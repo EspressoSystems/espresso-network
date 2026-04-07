@@ -1512,8 +1512,10 @@ mod test {
     use super::{testing::TmpDb, *};
     use crate::{
         availability::LeafQueryData,
-        data_source::storage::{pruning::PrunedHeightStorage, UpdateAvailabilityStorage},
-        merklized_state::{MerklizedState, UpdateStateData},
+        data_source::storage::{
+            pruning::PrunedHeightStorage, MerklizedStateStorage, UpdateAvailabilityStorage,
+        },
+        merklized_state::{MerklizedState, Snapshot, UpdateStateData},
         testing::mocks::{MockHeader, MockMerkleTree, MockPayload, MockTypes, MockVersions},
     };
 
@@ -1695,93 +1697,104 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_merklized_state_pruning() {
         let db = TmpDb::init().await;
-        let config = db.config();
-
-        let storage = SqlStorage::connect(config, StorageConnectionType::Query)
+        let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
             .await
             .unwrap();
+
+        let num_blocks = 10_000u64;
         let mut test_tree: UniversalMerkleTree<_, _, _, 8, _> =
             MockMerkleTree::new(MockMerkleTree::tree_height());
 
-        // insert some entries into the tree and the header table
-        // Header table is used the get_path query to check if the header exists for the block height.
+        // Insert entries and merkle nodes for each block height.
         let mut tx = storage.write().await.unwrap();
+        for height in 0..num_blocks {
+            test_tree.update(height as usize, height as usize).unwrap();
 
-        for block_height in 0..250 {
-            test_tree.update(block_height, block_height).unwrap();
-
-            // data field of the header
-            let test_data = serde_json::json!({ MockMerkleTree::header_state_commitment_field() : serde_json::to_value(test_tree.commitment()).unwrap()});
+            let test_data = serde_json::json!({
+                MockMerkleTree::header_state_commitment_field():
+                    serde_json::to_value(test_tree.commitment()).unwrap()
+            });
             tx.upsert(
                 "header",
                 ["height", "hash", "payload_hash", "timestamp", "data"],
                 ["height"],
                 [(
-                    block_height as i64,
-                    format!("randomHash{block_height}"),
-                    "t".to_string(),
+                    height as i64,
+                    format!("hash{height}"),
+                    "ph".to_string(),
                     0,
                     test_data,
                 )],
             )
             .await
             .unwrap();
-            // proof for the index from the tree
-            let (_, proof) = test_tree.lookup(block_height).expect_ok().unwrap();
-            // traversal path for the index.
-            let traversal_path =
-                <usize as ToTraversalPath<8>>::to_traversal_path(&block_height, test_tree.height());
 
+            let (_, proof) = test_tree.lookup(height as usize).expect_ok().unwrap();
+            let traversal_path = <usize as ToTraversalPath<8>>::to_traversal_path(
+                &(height as usize),
+                test_tree.height(),
+            );
             UpdateStateData::<_, MockMerkleTree, 8>::insert_merkle_nodes(
                 &mut tx,
                 proof.clone(),
-                traversal_path.clone(),
-                block_height as u64,
+                traversal_path,
+                height,
             )
             .await
-            .expect("failed to insert nodes");
+            .unwrap();
         }
-
-        // update saved state height
-        UpdateStateData::<_, MockMerkleTree, 8>::set_last_state_height(&mut tx, 250)
-            .await
-            .unwrap();
-        tx.commit().await.unwrap();
-
-        let mut tx = storage.read().await.unwrap();
-
-        // checking if the data is inserted correctly
-        // there should be multiple nodes with same index but different created time
-        let (count,) = query_as::<(i64,)>(
-            " SELECT count(*) FROM (SELECT count(*) as count FROM test_tree GROUP BY path having \
-             count(*) > 1) AS s",
+        UpdateStateData::<_, MockMerkleTree, 8>::set_last_state_height(
+            &mut tx,
+            num_blocks as usize,
         )
-        .fetch_one(tx.as_mut())
         .await
         .unwrap();
+        tx.commit().await.unwrap();
 
-        tracing::info!("Number of nodes with multiple snapshots : {count}");
-        assert!(count > 0);
-
-        // This should delete all the nodes having height < 250 and is not the newest node with its position
+        // Prune up to height 500, keeping only the newest version of each node.
+        let prune_height = 5678u64;
         let mut tx = storage.write().await.unwrap();
-        tx.delete_state_batch(vec!["test_tree".to_string()], 250)
+        tx.delete_state_batch(vec!["test_tree".to_string()], prune_height)
             .await
             .unwrap();
-
         tx.commit().await.unwrap();
+
+        // Verify no paths have multiple versions at or below the prune height.
         let mut tx = storage.read().await.unwrap();
-        let (count,) = query_as::<(i64,)>(
-            "SELECT count(*) FROM (SELECT count(*) as count FROM test_tree GROUP BY path having \
-             count(*) > 1) AS s",
+        let (duplicates,) = query_as::<(i64,)>(
+            "SELECT count(*) FROM (SELECT count(*) FROM test_tree WHERE created <= $1 GROUP BY \
+             path HAVING count(*) > 1) AS s",
         )
+        .bind(prune_height as i64)
         .fetch_one(tx.as_mut())
         .await
         .unwrap();
+        assert_eq!(
+            duplicates, 0,
+            "found {duplicates} paths with duplicate versions at or below prune height"
+        );
 
-        tracing::info!("Number of nodes with multiple snapshots : {count}");
-
-        assert!(count == 0);
+        // Verify get_path still works for the latest snapshot and returns correct proofs.
+        let commitment = test_tree.commitment();
+        let mut tx = storage.read().await.unwrap();
+        for key in 0..num_blocks as usize {
+            let proof = MerklizedStateStorage::<MockTypes, MockMerkleTree, 8>::get_path(
+                &mut tx,
+                Snapshot::Index(num_blocks - 1),
+                key,
+            )
+            .await
+            .unwrap_or_else(|e| panic!("get_path failed for key {key} after pruning: {e:#}"));
+            assert_eq!(
+                proof.elem(),
+                Some(&key),
+                "proof for key {key} has wrong element: {:?}",
+                proof.elem()
+            );
+            MockMerkleTree::verify(commitment, key, &proof)
+                .unwrap()
+                .unwrap();
+        }
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
