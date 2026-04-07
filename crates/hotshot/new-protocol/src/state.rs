@@ -74,9 +74,16 @@ pub enum StateManagerOutput<T: NodeType> {
 
 type Delta<T> = Arc<<<T as NodeType>::ValidatedState as ValidatedState<T>>::Delta>;
 
+#[derive(Clone)]
+pub struct StateEntry<T: NodeType> {
+    pub state: Arc<T::ValidatedState>,
+    pub delta: Option<Delta<T>>,
+    pub leaf: Leaf2<T>,
+}
+
 pub struct StateManager<T: NodeType> {
     instance: Arc<T::InstanceState>,
-    validated_states: BTreeMap<ViewNumber, (Arc<T::ValidatedState>, Option<Delta<T>>, Leaf2<T>)>,
+    validated_states: BTreeMap<ViewNumber, StateEntry<T>>,
     state_requests: HashMap<Commitment<Leaf2<T>>, (AbortHandle, ViewNumber)>,
     header_requests: HashMap<ViewNumber, AbortHandle>,
     pending_requests: HashMap<Commitment<Leaf2<T>>, Vec<Pending<T>>>,
@@ -115,7 +122,7 @@ impl<T: NodeType> StateManager<T> {
     pub fn get_state(&self, view: &ViewNumber) -> Option<Arc<T::ValidatedState>> {
         self.validated_states
             .get(view)
-            .map(|(state, ..)| state.clone())
+            .map(|entry| entry.state.clone())
     }
 
     /// Get the validated state and delta for a given view
@@ -124,13 +131,13 @@ impl<T: NodeType> StateManager<T> {
         view: &ViewNumber,
     ) -> (Option<Arc<T::ValidatedState>>, Option<Delta<T>>) {
         match self.validated_states.get(view) {
-            Some((state, delta, _)) => (Some(state.clone()), delta.clone()),
+            Some(entry) => (Some(entry.state.clone()), entry.delta.clone()),
             None => (None, None),
         }
     }
 
     pub fn seed_state(&mut self, view: ViewNumber, state: Arc<T::ValidatedState>, leaf: Leaf2<T>) {
-        self.validated_states.insert(view, (state, None, leaf));
+        self.insert_state(view, state, None, leaf);
     }
 
     pub fn request_state(&mut self, request: StateRequest<T>) {
@@ -147,9 +154,7 @@ impl<T: NodeType> StateManager<T> {
             return;
         }
 
-        let Some((parent_state, _parent_delta, parent_leaf)) =
-            self.validated_states.get(&request.parent_view).cloned()
-        else {
+        let Some(parent_entry) = self.validated_states.get(&request.parent_view).cloned() else {
             self.insert_empty_state(request.proposal);
             return;
         };
@@ -165,10 +170,11 @@ impl<T: NodeType> StateManager<T> {
         };
 
         let handle = self.tasks.spawn(async move {
-            let result = parent_state
+            let result = parent_entry
+                .state
                 .validate_and_apply_header(
                     &instance,
-                    &parent_leaf,
+                    &parent_entry.leaf,
                     &header,
                     payload_size,
                     upgrade_lock,
@@ -220,9 +226,7 @@ impl<T: NodeType> StateManager<T> {
         }
 
         let parent_view = request.parent_proposal.view_number();
-        let Some((parent_state, _parent_delta, parent_leaf)) =
-            self.validated_states.get(&parent_view).cloned()
-        else {
+        let Some(parent_entry) = self.validated_states.get(&parent_view).cloned() else {
             error!(view = %request.view, "parent state not found for header request");
             return;
         };
@@ -239,9 +243,9 @@ impl<T: NodeType> StateManager<T> {
 
         let handle = self.tasks.spawn(async move {
             let result = T::BlockHeader::new(
-                &parent_state,
+                &parent_entry.state,
                 &instance,
-                &parent_leaf,
+                &parent_entry.leaf,
                 request.payload_commitment,
                 request.builder_commitment,
                 request.metadata,
@@ -279,8 +283,7 @@ impl<T: NodeType> StateManager<T> {
     /// Provide an externally-obtained validated state.
     pub fn update_state(&mut self, state: T::ValidatedState, view: ViewNumber, leaf: Leaf2<T>) {
         let commitment = leaf.commit();
-        self.validated_states
-            .insert(view, (Arc::new(state), None, leaf));
+        self.insert_state(view, Arc::new(state), None, leaf);
         if let Some((task, _)) = self.state_requests.remove(&commitment) {
             task.abort();
         }
@@ -300,9 +303,11 @@ impl<T: NodeType> StateManager<T> {
                             continue;
                         }
                         if let Some(leaf) = leaf2 {
-                            self.validated_states.insert(
+                            self.insert_state(
                                 response.view,
-                                (response.state.clone(), response.delta.clone(), leaf),
+                                response.state.clone(),
+                                response.delta.clone(),
+                                leaf,
                             );
                             self.start_pending(response.commitment);
                             return Some(StateManagerOutput::State {
@@ -357,11 +362,40 @@ impl<T: NodeType> StateManager<T> {
         }
     }
 
+    /// Insert a state into the validated states map.
+    ///
+    /// States created via `from_header`
+    /// have no delta. States produced by `validate_and_apply_header` carry a delta representing
+    /// the state transition. This method prevents a `from_header` state from overwriting a
+    /// fully validated state that already has a delta.
+    fn insert_state(
+        &mut self,
+        view: ViewNumber,
+        state: Arc<T::ValidatedState>,
+        delta: Option<Delta<T>>,
+        leaf: Leaf2<T>,
+    ) {
+        if let Some(existing) = self.validated_states.get(&view)
+            && existing.delta.is_some()
+            && delta.is_none()
+        {
+            warn!(
+                ?view,
+                "Skipping state update to not override a state with a delta"
+            );
+            return;
+        }
+        self.validated_states
+            .insert(view, StateEntry { state, delta, leaf });
+    }
+
     fn insert_empty_state(&mut self, proposal: Proposal<T>) {
         let state = T::ValidatedState::from_header(&proposal.block_header);
-        self.validated_states.insert(
+        self.insert_state(
             proposal.view_number(),
-            (Arc::new(state), None, proposal.into()),
+            Arc::new(state),
+            None,
+            proposal.into(),
         );
     }
 
