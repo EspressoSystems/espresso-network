@@ -178,7 +178,10 @@ impl<T: NodeType> Consensus<T> {
         // Ignore old inputs unless it's a DRB result
         // TODO: This isn't correct, I think we need to process vote2 for views
         // that haven't timed out, but are before the timeout view
-        if !matches!(input, ConsensusInput::DrbResult(_, _)) && view <= self.timeout_view {
+        if !matches!(input, ConsensusInput::DrbResult(_, _))
+            && !matches!(input, ConsensusInput::Timeout(..))
+            && view <= self.timeout_view
+        {
             return;
         }
         let proto = match input {
