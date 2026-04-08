@@ -72,13 +72,13 @@ use crate::{
     state_signature::StateSigner,
 };
 
+pub mod axum_api;
 pub mod data_source;
 pub mod endpoints;
 pub mod fs;
 pub mod light_client;
 pub mod options;
 pub mod sql;
-pub mod state;
 mod update;
 
 pub use options::Options;
@@ -3657,8 +3657,7 @@ mod test {
             .api_config(Options::from(options::Http {
                 port,
                 max_connections: None,
-                axum_port: None,
-                tonic_port: None,
+                api_v2_port: None,
             }))
             .states(states)
             .catchups(std::array::from_fn(|_| {
@@ -3723,8 +3722,7 @@ mod test {
             .api_config(Options::from(options::Http {
                 port,
                 max_connections: None,
-                axum_port: None,
-                tonic_port: None,
+                api_v2_port: None,
             }))
             .catchups(std::array::from_fn(|_| {
                 StatePeers::<SequencerApiVersion>::from_urls(
@@ -7145,8 +7143,7 @@ mod test {
             .api_config(Options::from(options::Http {
                 port,
                 max_connections: None,
-                axum_port: None,
-                tonic_port: None,
+                api_v2_port: None,
             }))
             .catchups(std::array::from_fn(|_| {
                 StatePeers::<SequencerApiVersion>::from_urls(

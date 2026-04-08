@@ -12,6 +12,12 @@ members = [
     "contracts/rust/safe-tx-builder",
     "crates/builder",
     "crates/cliquenet",
+    "crates/espresso/api",
+    "crates/espresso/dev-node",
+    "crates/espresso/node",
+    "crates/espresso/node-sqlite",
+    "crates/espresso/types",
+    "crates/espresso/utils",
     "crates/hotshot-builder/legacy",
     "crates/hotshot-builder/refactored",
     "crates/hotshot/builder-api",
@@ -28,12 +34,6 @@ members = [
     "crates/hotshot/types",
     "crates/hotshot/utils",
     "crates/serialization/api",
-    "crates/espresso/api",
-    "crates/espresso/dev-node",
-    "crates/espresso/node",
-    "crates/espresso/node-sqlite",
-    "crates/espresso/types",
-    "crates/espresso/utils",
     "crates/versions",
     "hotshot-events-service",
     "hotshot-query-service",
@@ -177,8 +177,10 @@ es-version = { git = "https://github.com/EspressoSystems/es-version.git", branch
 escargot = "0.5.10"
 espresso-contract-deployer = { path = "contracts/rust/deployer" }
 espresso-macros = { git = "https://github.com/EspressoSystems/espresso-macros.git", tag = "0.1.0" }
+espresso-node = { path = "crates/espresso/node", default-features = false }
 espresso-safe-tx-builder = { path = "contracts/rust/safe-tx-builder" }
 espresso-types = { path = "crates/espresso/types" }
+espresso-utils = { path = "crates/espresso/utils" }
 ethers = { version = "2.0", features = ["solc", "ws"] }
 ethers-core = "2.0"
 fluent-asserter = "0.1.9"
@@ -275,8 +277,6 @@ rstest_reuse = "0.7.0"
 rust_decimal = "1.36.0"
 scopeguard = "1.2.0"
 semver = "1"
-espresso-node = { path = "crates/espresso/node", default-features = false }
-espresso-utils = { path = "crates/espresso/utils" }
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde-inline-default = "0.2"
 serde_arrays = "0.2.0"
