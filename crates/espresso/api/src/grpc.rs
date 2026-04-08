@@ -72,7 +72,7 @@ where
 }
 
 /// Create the status gRPC service
-pub fn create_status_service<S>(state: S) -> StatusServiceServer<StatusServiceImpl<S>>
+pub(crate) fn create_status_service<S>(state: S) -> StatusServiceServer<StatusServiceImpl<S>>
 where
     S: NodeApi + Send + Sync + Clone + 'static,
 {
@@ -80,17 +80,9 @@ where
 }
 
 /// Create the reward gRPC service
-pub fn create_reward_service<S>(state: S) -> RewardServiceServer<RewardServiceImpl<S>>
+pub(crate) fn create_reward_service<S>(state: S) -> RewardServiceServer<RewardServiceImpl<S>>
 where
     S: NodeApi + Send + Sync + Clone + 'static,
 {
     RewardServiceServer::new(RewardServiceImpl::new(state))
-}
-
-/// Create all gRPC services (backward compatibility)
-pub fn create_grpc_service<S>(state: S) -> StatusServiceServer<StatusServiceImpl<S>>
-where
-    S: NodeApi + Send + Sync + Clone + 'static,
-{
-    create_status_service(state)
 }

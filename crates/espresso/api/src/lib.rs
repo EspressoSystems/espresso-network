@@ -1,68 +1,48 @@
-//! Espresso API server with both Axum (HTTP/JSON) and gRPC endpoints
+//! Espresso API server with both Axum (HTTP/JSON) and gRPC endpoints on a single port
 
-// Module declarations
 mod axum;
 mod grpc;
 mod r#trait;
 
-// Generated gRPC service code
 pub mod proto {
     tonic::include_proto!("espresso.api.v1");
 }
 
-// Re-exports
 pub use r#trait::{NodeApi, NodeApiState};
 
-pub use self::{
-    axum::{create_axum_router, routes},
-    grpc::{create_grpc_service, create_reward_service, create_status_service},
+use self::{
+    axum::create_axum_router,
+    grpc::{create_reward_service, create_status_service},
 };
 
-/// Start Axum HTTP server
-pub async fn serve_axum<S>(port: u16, state: S) -> Result<(), Box<dyn std::error::Error>>
+const REFLECTION_DESCRIPTOR: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/reflection_descriptor.bin"));
+
+pub fn build_v2_router<S>(state: S) -> ::axum::Router
 where
     S: NodeApi + Clone + Send + Sync + 'static,
 {
-    tracing::info!("Starting Axum server on port {}", port);
+    let rest_router = create_axum_router(state.clone());
 
-    let app = create_axum_router(state);
-    let addr = format!("0.0.0.0:{}", port);
+    let status_svc = create_status_service(state.clone());
+    let reward_svc = create_reward_service(state);
+    let reflection_svc = tonic_reflection::server::Builder::configure()
+        .register_encoded_file_descriptor_set(REFLECTION_DESCRIPTOR)
+        .build_v1()
+        .expect("failed to build gRPC reflection service");
 
-    tracing::info!("Binding to {}", addr);
-    let listener = tokio::net::TcpListener::bind(&addr).await?;
+    let grpc_router = tonic::service::Routes::new(status_svc)
+        .add_service(reward_svc)
+        .add_service(reflection_svc)
+        .into_axum_router();
 
-    tracing::info!("Axum API server listening on {}", addr);
-    ::axum::serve(listener, app.into_make_service()).await?;
-
-    tracing::info!("Axum server stopped");
-    Ok(())
+    rest_router.merge(grpc_router)
 }
 
-/// Start Tonic gRPC server
-pub async fn serve_tonic<S>(port: u16, state: S) -> Result<(), Box<dyn std::error::Error>>
-where
-    S: NodeApi + Clone + Send + Sync + 'static,
-{
-    let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
-
-    let status_service = create_status_service(state.clone());
-    let reward_service = create_reward_service(state);
-
-    // Enable gRPC reflection for tools like grpcurl
-    let reflection_service = tonic_reflection::server::Builder::configure()
-        .register_encoded_file_descriptor_set(include_bytes!(concat!(
-            env!("OUT_DIR"),
-            "/reflection_descriptor.bin"
-        )))
-        .build_v1()?;
-
-    tracing::info!("gRPC server listening on {}", addr);
-    tonic::transport::Server::builder()
-        .add_service(status_service)
-        .add_service(reward_service)
-        .add_service(reflection_service)
-        .serve(addr)
-        .await?;
-
+pub async fn serve(port: u16, router: ::axum::Router) -> Result<(), Box<dyn std::error::Error>> {
+    let addr = format!("0.0.0.0:{port}");
+    tracing::info!("API v2 server listening on {addr}");
+    let listener = tokio::net::TcpListener::bind(&addr).await?;
+    ::axum::serve(listener, router.into_make_service()).await?;
     Ok(())
 }

@@ -233,22 +233,12 @@ impl Options {
                 self.listen(self.http.port, app, SequencerApiVersion::instance()),
             );
 
-            // Spawn new Axum and gRPC servers if ports are configured
-            // TODO: Use NodeApiStateImpl with real data source once available for status-only mode
-            if let Some(axum_port) = self.http.axum_port {
-                tasks.spawn("Axum API server", async move {
+            if let Some(port) = self.http.api_v2_port {
+                tasks.spawn("API v2 server", async move {
                     let state = NodeApiState::default();
-                    if let Err(e) = espresso_api::serve_axum(axum_port, state).await {
-                        tracing::error!("Axum server error: {}", e);
-                    }
-                });
-            }
-
-            if let Some(tonic_port) = self.http.tonic_port {
-                tasks.spawn("Tonic gRPC server", async move {
-                    let state = NodeApiState::default();
-                    if let Err(e) = espresso_api::serve_tonic(tonic_port, state).await {
-                        tracing::error!("gRPC server error: {}", e);
+                    let router = espresso_api::build_v2_router(state);
+                    if let Err(e) = espresso_api::serve(port, router).await {
+                        tracing::error!("API v2 server error: {e}");
                     }
                 });
             }
@@ -394,22 +384,12 @@ impl Options {
 
         tasks.spawn("API server", self.listen(self.http.port, app, bind_version));
 
-        // Spawn new Axum and gRPC servers if ports are configured
-        // Note: Filesystem storage doesn't support RewardMerkleTreeDataSource, so we use dummy implementation
-        if let Some(axum_port) = self.http.axum_port {
-            tasks.spawn("Axum API server", async move {
+        if let Some(port) = self.http.api_v2_port {
+            tasks.spawn("API v2 server", async move {
                 let state = NodeApiState::default();
-                if let Err(e) = espresso_api::serve_axum(axum_port, state).await {
-                    tracing::error!("Axum server error: {}", e);
-                }
-            });
-        }
-
-        if let Some(tonic_port) = self.http.tonic_port {
-            tasks.spawn("Tonic gRPC server", async move {
-                let state = NodeApiState::default();
-                if let Err(e) = espresso_api::serve_tonic(tonic_port, state).await {
-                    tracing::error!("Tonic gRPC server error: {}", e);
+                let router = espresso_api::build_v2_router(state);
+                if let Err(e) = espresso_api::serve(port, router).await {
+                    tracing::error!("API v2 server error: {e}");
                 }
             });
         }
@@ -531,23 +511,13 @@ impl Options {
             self.listen(self.http.port, app, SequencerApiVersion::instance()),
         );
 
-        // Spawn new Axum and gRPC servers if ports are configured
-        if let Some(axum_port) = self.http.axum_port {
-            let ds_for_axum = ds.clone();
-            tasks.spawn("Axum API server", async move {
-                let state = NodeApiStateImpl::new(ds_for_axum);
-                if let Err(e) = espresso_api::serve_axum(axum_port, state).await {
-                    tracing::error!("Axum server error: {}", e);
-                }
-            });
-        }
-
-        if let Some(tonic_port) = self.http.tonic_port {
-            let ds_for_tonic = ds.clone();
-            tasks.spawn("Tonic gRPC server", async move {
-                let state = NodeApiStateImpl::new(ds_for_tonic);
-                if let Err(e) = espresso_api::serve_tonic(tonic_port, state).await {
-                    tracing::error!("Tonic gRPC server error: {}", e);
+        if let Some(port) = self.http.api_v2_port {
+            let ds_clone = ds.clone();
+            tasks.spawn("API v2 server", async move {
+                let state = NodeApiStateImpl::new(ds_clone);
+                let router = espresso_api::build_v2_router(state);
+                if let Err(e) = espresso_api::serve(port, router).await {
+                    tracing::error!("API v2 server error: {e}");
                 }
             });
         }
@@ -673,13 +643,9 @@ pub struct Http {
     #[clap(long, env = "ESPRESSO_SEQUENCER_MAX_CONNECTIONS")]
     pub max_connections: Option<usize>,
 
-    /// Optional port for new Axum API server (skeleton implementation).
-    #[clap(long, env = "ESPRESSO_SEQUENCER_AXUM_PORT")]
-    pub axum_port: Option<u16>,
-
-    /// Optional port for Tonic gRPC API server.
-    #[clap(long, env = "ESPRESSO_SEQUENCER_TONIC_PORT")]
-    pub tonic_port: Option<u16>,
+    /// Optional port for the unified API v2 server (REST + gRPC).
+    #[clap(long, env = "ESPRESSO_SEQUENCER_API_V2_PORT")]
+    pub api_v2_port: Option<u16>,
 }
 
 impl Http {
@@ -688,8 +654,7 @@ impl Http {
         Self {
             port,
             max_connections: None,
-            axum_port: None,
-            tonic_port: None,
+            api_v2_port: None,
         }
     }
 }
