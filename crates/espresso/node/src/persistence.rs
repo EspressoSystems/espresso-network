@@ -8,14 +8,49 @@
 //! an extension that node operators can opt into. This module defines the minimum level of
 //! persistence which is _required_ to run a node.
 
+use std::collections::HashMap;
+
+use alloy::primitives::{Address, U256};
 use anyhow::Context;
 use async_trait::async_trait;
-use espresso_types::v0_3::ChainConfig;
+use espresso_types::{
+    PubKey,
+    v0_3::{ChainConfig, RegisteredValidator},
+};
 
 pub mod fs;
 pub mod no_storage;
 mod persistence_metrics;
 pub mod sql;
+
+/// RegisteredValidator without x25519_key/p2p_addr fields.
+/// Used for migrating data written before x25519 support was added.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub(crate) struct RegisteredValidatorNoX25519 {
+    pub account: Address,
+    pub stake_table_key: PubKey,
+    pub state_ver_key: hotshot_types::light_client::StateVerKey,
+    pub stake: U256,
+    pub commission: u16,
+    pub delegators: HashMap<Address, U256>,
+    pub authenticated: bool,
+}
+
+impl RegisteredValidatorNoX25519 {
+    pub fn migrate(self) -> RegisteredValidator<PubKey> {
+        RegisteredValidator {
+            account: self.account,
+            stake_table_key: self.stake_table_key,
+            state_ver_key: self.state_ver_key,
+            stake: self.stake,
+            commission: self.commission,
+            delegators: self.delegators,
+            authenticated: self.authenticated,
+            x25519_key: None,
+            p2p_addr: None,
+        }
+    }
+}
 
 /// Update a `NetworkConfig` that may have originally been persisted with an old version.
 fn migrate_network_config(
