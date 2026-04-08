@@ -39,6 +39,7 @@ blake3 = { workspace = true }
 byteorder = { workspace = true }
 cdn-broker = { workspace = true }
 cdn-marshal = { workspace = true }
+chrono = { workspace = true }
 clap = { workspace = true }
 client = { workspace = true }
 committable = { workspace = true }

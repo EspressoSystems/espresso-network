@@ -41,82 +41,9 @@ pub struct DAMembers(pub Vec<PeerConfig<SeqTypes>>);
 /// NewType to disambiguate StakeTable
 pub struct StakeTable(pub Vec<PeerConfig<SeqTypes>>);
 
-// Kept only for DB migration to handle old data without `authenticated` field.
-//
-// This type should be removed once all nodes are upgraded to a version that includes the
-// `RegisteredValidator` type.
-#[deprecated(note = "Use RegisteredValidator - kept only for DB migration")]
-#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq, Eq)]
-#[serde(bound(deserialize = ""))]
-pub struct Validator<KEY: SignatureKey> {
-    pub account: Address,
-    /// The peer's public key
-    pub stake_table_key: KEY,
-    /// the peer's state public key
-    pub state_ver_key: StateVerKey,
-    /// the peer's stake
-    pub stake: U256,
-    // commission
-    // TODO: MA commission is only valid from 0 to 10_000. Add newtype to enforce this.
-    pub commission: u16,
-    pub delegators: HashMap<Address, U256>,
-    /// Public X25519 key for network communication.
-    pub x25519_key: Option<x25519::PublicKey>,
-    /// Network address.
-    pub p2p_addr: Option<NetAddr>
-}
-
 pub(crate) fn to_fixed_bytes(value: U256) -> [u8; std::mem::size_of::<U256>()] {
     let bytes: [u8; std::mem::size_of::<U256>()] = value.to_le_bytes();
     bytes
-}
-
-#[allow(deprecated)]
-impl<KEY: SignatureKey> Committable for Validator<KEY> {
-    fn commit(&self) -> Commitment<Self> {
-        let mut builder = RawCommitmentBuilder::new(&Self::tag())
-            .fixed_size_field("account", &self.account)
-            .var_size_field(
-                "stake_table_key",
-                self.stake_table_key.to_bytes().as_slice(),
-            )
-            .var_size_field("state_ver_key", &to_bytes!(&self.state_ver_key).unwrap())
-            .fixed_size_field("stake", &to_fixed_bytes(self.stake))
-            .constant_str("commission")
-            .u16(self.commission);
-            //.var_size_field("x25519_key", self.x25519_key.as_ref().map(|k| k.as_slice()).unwrap_or_default())
-            //.var_size_field("p2p_addr", self.p2p_addr.as_ref().map(|a| a.to_string()).unwrap_or_default().as_bytes());
-
-        builder = builder.constant_str("delegators");
-        for (address, stake) in self.delegators.iter().sorted() {
-            builder = builder
-                .fixed_size_bytes(address)
-                .fixed_size_bytes(&to_fixed_bytes(*stake));
-        }
-
-        builder.finalize()
-    }
-
-    fn tag() -> String {
-        "VALIDATOR".to_string()
-    }
-}
-
-#[allow(deprecated)]
-impl<KEY: SignatureKey> Validator<KEY> {
-    pub fn migrate(self) -> RegisteredValidator<KEY> {
-        RegisteredValidator {
-            account: self.account,
-            stake_table_key: self.stake_table_key,
-            state_ver_key: self.state_ver_key,
-            stake: self.stake,
-            commission: self.commission,
-            delegators: self.delegators,
-            authenticated: true,
-            x25519_key: self.x25519_key,
-            p2p_addr: self.p2p_addr
-        }
-    }
 }
 
 /// Validator as registered in the stake table contract.
@@ -412,69 +339,11 @@ mod tests {
     use hotshot::types::{BLSPubKey, SignatureKey};
     use hotshot_types::light_client::StateVerKey;
 
-    #[allow(deprecated)]
-    use super::{RegisteredValidator, Validator};
+    use super::RegisteredValidator;
 
-    /// Verifies that an authenticated RegisteredValidator produces the same commitment
-    /// as the deprecated Validator type.
-    ///
-    /// This is critical for backwards compatibility. When the `authenticated` field was added,
-    /// we ensured that authenticated validators (the only kind that existed before) maintain
-    /// the same commitment. This test guards against accidental changes to the commitment
-    /// calculation that would break existing data.
+    /// Unauthenticated validators must produce a different commitment than authenticated ones.
+    /// This ensures validators with invalid signatures are distinguishable in the commitment tree.
     #[test]
-    #[allow(deprecated)]
-    fn test_authenticated_validator_commitment_matches_deprecated() {
-        let account = Address::random();
-        let stake_table_key = BLSPubKey::generated_from_seed_indexed([1u8; 32], 0).0;
-        let state_ver_key = StateVerKey::default();
-        let stake = U256::from(1000);
-        let commission = 500u16;
-        let mut delegators = HashMap::new();
-        delegators.insert(Address::random(), U256::from(100));
-        delegators.insert(Address::random(), U256::from(200));
-
-        let old_validator = Validator {
-            account,
-            stake_table_key,
-            state_ver_key: state_ver_key.clone(),
-            stake,
-            commission,
-            delegators: delegators.clone(),
-            x25519_key: None,
-            p2p_addr: None
-        };
-
-        let new_validator = RegisteredValidator {
-            account,
-            stake_table_key,
-            state_ver_key,
-            stake,
-            commission,
-            delegators,
-            authenticated: true,
-            x25519_key: None,
-            p2p_addr: None
-        };
-
-        let old_commitment = old_validator.commit();
-        let new_commitment = new_validator.commit();
-
-        let old_bytes: &[u8] = old_commitment.as_ref();
-        let new_bytes: &[u8] = new_commitment.as_ref();
-        assert_eq!(
-            old_bytes, new_bytes,
-            "Authenticated RegisteredValidator must produce the same commitment as deprecated \
-             Validator"
-        );
-    }
-
-    /// Verifies that an unauthenticated RegisteredValidator produces a different commitment.
-    ///
-    /// This ensures that validators with invalid signatures are distinguishable in the
-    /// commitment tree, preventing them from being confused with authenticated validators.
-    #[test]
-    #[allow(deprecated)]
     fn test_unauthenticated_validator_commitment_differs() {
         let account = Address::random();
         let stake_table_key = BLSPubKey::generated_from_seed_indexed([1u8; 32], 0).0;
@@ -483,18 +352,19 @@ mod tests {
         let commission = 500u16;
         let delegators = HashMap::new();
 
-        let old_validator = Validator {
+        let authenticated = RegisteredValidator {
             account,
             stake_table_key,
             state_ver_key: state_ver_key.clone(),
             stake,
             commission,
             delegators: delegators.clone(),
+            authenticated: true,
             x25519_key: None,
-            p2p_addr: None
+            p2p_addr: None,
         };
 
-        let unauthenticated_validator = RegisteredValidator {
+        let unauthenticated = RegisteredValidator {
             account,
             stake_table_key,
             state_ver_key,
@@ -503,17 +373,14 @@ mod tests {
             delegators,
             authenticated: false,
             x25519_key: None,
-            p2p_addr: None
+            p2p_addr: None,
         };
 
-        let old_commitment = old_validator.commit();
-        let unauthenticated_commitment = unauthenticated_validator.commit();
-
-        let old_bytes: &[u8] = old_commitment.as_ref();
-        let unauthenticated_bytes: &[u8] = unauthenticated_commitment.as_ref();
+        let auth_commitment = authenticated.commit();
+        let unauth_commitment = unauthenticated.commit();
         assert_ne!(
-            old_bytes, unauthenticated_bytes,
-            "Unauthenticated RegisteredValidator must produce a different commitment"
+            auth_commitment.as_ref() as &[u8],
+            unauth_commitment.as_ref() as &[u8]
         );
     }
 }
