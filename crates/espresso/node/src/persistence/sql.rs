@@ -1362,10 +1362,10 @@ impl SequencerPersistence for Persistence {
             [("reward_merkle_tree_v2_data".to_string(), true, offset)],
         )
         .await?;
-        query("DROP TABLE reward_merkle_tree_v2")
+        query("TRUNCATE reward_merkle_tree_v2")
             .execute(tx.as_mut())
             .await?;
-        query("DROP TABLE reward_merkle_tree")
+        query("TRUNCATE reward_merkle_tree")
             .execute(tx.as_mut())
             .await?;
         tx.commit().await?;
