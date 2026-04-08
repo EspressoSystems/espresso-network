@@ -3,35 +3,37 @@
 // Module declarations
 mod axum;
 mod grpc;
-mod r#trait;
+pub mod handlers;
+pub mod v1;
+pub mod v2;
 
-// Generated gRPC service code
+// Generated gRPC service code - committed to git for visibility in code review
 pub mod proto {
-    tonic::include_proto!("espresso.api.v1");
+    include!("espresso.api.v2.rs");
 }
 
 // Re-exports
-pub use r#trait::{NodeApi, NodeApiState};
-
 pub use self::{
-    axum::{create_axum_router, routes},
-    grpc::{create_grpc_service, create_reward_service, create_status_service},
+    axum::{create_router_v1, create_router_v2, create_combined_router, routes},
+    grpc::create_reward_service,
 };
 
-/// Start Axum HTTP server
+/// Start Axum HTTP server with combined v1 and v2 APIs
+///
+/// This serves both APIs at /v1/* and /v2/* from a single state implementation.
 pub async fn serve_axum<S>(port: u16, state: S) -> Result<(), Box<dyn std::error::Error>>
 where
-    S: NodeApi + Clone + Send + Sync + 'static,
+    S: v1::RewardApi + v2::RewardApi + Clone + Send + Sync + 'static,
 {
-    tracing::info!("Starting Axum server on port {}", port);
+    tracing::info!("Starting Axum server on port {} with v1 and v2 APIs", port);
 
-    let app = create_axum_router(state);
+    let app = create_combined_router(state);
     let addr = format!("0.0.0.0:{}", port);
 
     tracing::info!("Binding to {}", addr);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
 
-    tracing::info!("Axum API server listening on {}", addr);
+    tracing::info!("Axum API server listening on {} (v1 and v2 routes available)", addr);
     ::axum::serve(listener, app.into_make_service()).await?;
 
     tracing::info!("Axum server stopped");
@@ -41,11 +43,10 @@ where
 /// Start Tonic gRPC server
 pub async fn serve_tonic<S>(port: u16, state: S) -> Result<(), Box<dyn std::error::Error>>
 where
-    S: NodeApi + Clone + Send + Sync + 'static,
+    S: v2::RewardApi + Clone + Send + Sync + 'static,
 {
     let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
 
-    let status_service = create_status_service(state.clone());
     let reward_service = create_reward_service(state);
 
     // Enable gRPC reflection for tools like grpcurl
@@ -58,7 +59,6 @@ where
 
     tracing::info!("gRPC server listening on {}", addr);
     tonic::transport::Server::builder()
-        .add_service(status_service)
         .add_service(reward_service)
         .add_service(reflection_service)
         .serve(addr)

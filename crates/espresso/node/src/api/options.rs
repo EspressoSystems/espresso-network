@@ -4,7 +4,6 @@ use std::sync::Arc;
 
 use anyhow::{Context, bail};
 use clap::Parser;
-use espresso_api::NodeApiState;
 use espresso_types::{
     BlockMerkleTree, PubKey, SeqTypes,
     v0::traits::{EventConsumer, NullEventConsumer, PersistenceOptions, SequencerPersistence},
@@ -235,22 +234,12 @@ impl Options {
 
             // Spawn new Axum and gRPC servers if ports are configured
             // TODO: Use NodeApiStateImpl with real data source once available for status-only mode
-            if let Some(axum_port) = self.http.axum_port {
-                tasks.spawn("Axum API server", async move {
-                    let state = NodeApiState::default();
-                    if let Err(e) = espresso_api::serve_axum(axum_port, state).await {
-                        tracing::error!("Axum server error: {}", e);
-                    }
-                });
+            if self.http.axum_port.is_some() {
+                tracing::warn!("Axum reward API not available in status-only mode");
             }
 
-            if let Some(tonic_port) = self.http.tonic_port {
-                tasks.spawn("Tonic gRPC server", async move {
-                    let state = NodeApiState::default();
-                    if let Err(e) = espresso_api::serve_tonic(tonic_port, state).await {
-                        tracing::error!("gRPC server error: {}", e);
-                    }
-                });
+            if self.http.tonic_port.is_some() {
+                tracing::warn!("gRPC reward API not available in status-only mode");
             }
 
             (metrics, Box::new(NullEventConsumer), None)
@@ -394,24 +383,14 @@ impl Options {
 
         tasks.spawn("API server", self.listen(self.http.port, app, bind_version));
 
-        // Spawn new Axum and gRPC servers if ports are configured
-        // Note: Filesystem storage doesn't support RewardMerkleTreeDataSource, so we use dummy implementation
-        if let Some(axum_port) = self.http.axum_port {
-            tasks.spawn("Axum API server", async move {
-                let state = NodeApiState::default();
-                if let Err(e) = espresso_api::serve_axum(axum_port, state).await {
-                    tracing::error!("Axum server error: {}", e);
-                }
-            });
+        // Reward APIs not available with filesystem storage
+        // Note: Filesystem storage doesn't support RewardMerkleTreeDataSource
+        if self.http.axum_port.is_some() {
+            tracing::warn!("Axum reward API not available with filesystem storage");
         }
 
-        if let Some(tonic_port) = self.http.tonic_port {
-            tasks.spawn("Tonic gRPC server", async move {
-                let state = NodeApiState::default();
-                if let Err(e) = espresso_api::serve_tonic(tonic_port, state).await {
-                    tracing::error!("Tonic gRPC server error: {}", e);
-                }
-            });
+        if self.http.tonic_port.is_some() {
+            tracing::warn!("gRPC reward API not available with filesystem storage");
         }
 
         Ok((

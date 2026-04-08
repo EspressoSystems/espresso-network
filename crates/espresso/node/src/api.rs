@@ -72,6 +72,7 @@ use crate::{
     state_signature::StateSigner,
 };
 
+pub mod conversions;
 pub mod data_source;
 pub mod endpoints;
 pub mod fs;
@@ -1289,7 +1290,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StateSignatureDataSou
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 /// Representation of the RewardMerkleTreeV2 as a set of key-value pairs
-pub(crate) struct RewardMerkleTreeV2Data {
+pub struct RewardMerkleTreeV2Data {
     pub balances: Vec<(RewardAccountV2, RewardAmount)>,
 }
 

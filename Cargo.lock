@@ -11638,10 +11638,12 @@ dependencies = [
 name = "serialization-api"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "prost 0.14.3",
  "prost-build",
  "schemars 0.9.0",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

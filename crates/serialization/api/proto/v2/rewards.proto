@@ -1,0 +1,245 @@
+syntax = "proto3";
+
+package espresso.api.v2;
+
+//=============================================================================
+// Common Types
+//=============================================================================
+
+// U256 value encoded as hex string
+message U256 {
+  // Hex-encoded value with "0x" prefix (e.g., "0x32fe2fedb43f62b4ee2")
+  string value = 1;
+}
+
+//=============================================================================
+// Reward Claim Input (for L1 contract interaction)
+//=============================================================================
+
+// Reward claim input for contract submission
+// Contains all data needed to call the claimRewards function on the L1 contract
+message RewardClaimInput {
+  // Ethereum address of the reward recipient
+  string address = 1;
+
+  // Total lifetime rewards for this address (uint256 encoded as string)
+  string lifetime_rewards = 2;
+
+  // Auth data containing the Merkle proof and auth root inputs
+  // This is the encoded RewardAuthData from the contract adapter
+  bytes auth_data = 3;
+}
+
+// Request to get reward claim input
+message GetRewardClaimInputRequest {
+  // Block height (must match the height finalized in the Light Client contract)
+  uint64 block_height = 1;
+
+  // Ethereum address to query rewards for (hex format, e.g. "0x1234...")
+  string address = 2;
+}
+
+//=============================================================================
+// Reward Balance Queries
+//=============================================================================
+
+// Reward balance for an address
+message RewardBalance {
+  // Balance amount in wei (smallest unit), hex-encoded with "0x" prefix
+  string amount = 1;
+}
+
+// Request to get reward balance at a specific height
+message GetRewardBalanceRequest {
+  // Block height to query
+  uint64 height = 1;
+
+  // Ethereum address to query
+  string address = 2;
+}
+
+// Request to get latest reward balance
+message GetLatestRewardBalanceRequest {
+  // Ethereum address to query
+  string address = 1;
+}
+
+//=============================================================================
+// Reward Account Proofs
+//=============================================================================
+
+// Complete reward account query data with balance and merkle proof
+message RewardAccountQueryDataV2 {
+  // Current balance for this account, hex-encoded with "0x" prefix
+  string balance = 1;
+
+  // Merkle proof for this account
+  RewardAccountProofV2 proof = 2;
+}
+
+// Reward account proof containing account address and merkle path
+message RewardAccountProofV2 {
+  // Ethereum address of the account
+  string account = 1;
+
+  // Merkle proof (Presence or Absence)
+  RewardMerkleProofV2 proof = 2;
+}
+
+// Merkle proof variant (Presence for existing accounts, Absence for non-existing)
+message RewardMerkleProofV2 {
+  oneof proof_type {
+    MerkleProof presence = 1;
+    MerkleProof absence = 2;
+  }
+}
+
+// Merkle proof containing leaf position and path to root
+message MerkleProof {
+  // Leaf position (account address), TaggedBase64 format
+  string pos = 1;
+
+  // Merkle path from leaf to root (160 levels for binary tree)
+  repeated MerkleNode proof = 2;
+}
+
+// Merkle tree node (one of four variants)
+message MerkleNode {
+  oneof node_type {
+    Empty empty = 1;
+    Leaf leaf = 2;
+    Branch branch = 3;
+    ForgottenSubtree forgotten_subtree = 4;
+  }
+}
+
+// Dummy message for flattening Empty
+message EmptyData {
+}
+
+// Empty node variant (no data)
+message Empty {
+  // Dummy field for serde flatten compatibility (must be a message type)
+  EmptyData dummy = 1;
+}
+
+// Leaf node containing account and reward amount
+message Leaf {
+  // Leaf position (account address), TaggedBase64 format
+  string pos = 1;
+
+  // Reward amount (U256), TaggedBase64 format
+  string elem = 2;
+
+  // Node hash value, TaggedBase64 format
+  string value = 3;
+}
+
+// Branch node with hash and children
+message Branch {
+  // Hash value, TaggedBase64 format
+  string value = 1;
+
+  // Child nodes (up to 2 for binary tree)
+  repeated MerkleNode children = 2;
+}
+
+// Forgotten subtree node with hash only
+message ForgottenSubtree {
+  // Hash value, TaggedBase64 format
+  string value = 1;
+}
+
+
+// Request to get reward account proof at a specific height
+message GetRewardAccountProofRequest {
+  // Block height to query
+  uint64 height = 1;
+
+  // Ethereum address to query
+  string address = 2;
+}
+
+// Request to get latest reward account proof
+message GetLatestRewardAccountProofRequest {
+  // Ethereum address to query
+  string address = 1;
+}
+
+//=============================================================================
+// Bulk Reward Queries
+//=============================================================================
+
+// Single reward amount entry
+message RewardAmount {
+  // Ethereum address
+  string address = 1;
+
+  // Reward amount in wei, hex-encoded with "0x" prefix
+  string amount = 2;
+}
+
+// Paginated list of reward amounts
+message RewardAmounts {
+  // List of reward amounts in this page
+  repeated RewardAmount amounts = 1;
+
+  // Total number of accounts with rewards at this height
+  uint64 total = 2;
+}
+
+// Request to get paginated reward amounts
+message GetRewardAmountsRequest {
+  // Block height to query
+  uint64 height = 1;
+
+  // Starting offset for pagination
+  uint64 offset = 2;
+
+  // Maximum number of results (limit ≤ 10000)
+  uint64 limit = 3;
+}
+
+//=============================================================================
+// Merkle Tree Snapshots
+//=============================================================================
+
+// Raw RewardMerkleTreeV2 snapshot data
+message RewardMerkleTreeV2Data {
+  // Serialized merkle tree data
+  bytes data = 1;
+}
+
+// Request to get reward merkle tree snapshot
+message GetRewardMerkleTreeRequest {
+  // Block height to query
+  uint64 height = 1;
+}
+
+//=============================================================================
+// gRPC Service Definition
+//=============================================================================
+
+// gRPC service for reward state queries
+service RewardService {
+  // Get reward claim input for L1 contract submission
+  rpc GetRewardClaimInput(GetRewardClaimInputRequest) returns (RewardClaimInput);
+
+  // Get reward balance at a specific height
+  rpc GetRewardBalance(GetRewardBalanceRequest) returns (RewardBalance);
+
+  // Get latest reward balance
+  rpc GetLatestRewardBalance(GetLatestRewardBalanceRequest) returns (RewardBalance);
+
+  // Get Merkle proof for reward account at a specific height
+  rpc GetRewardAccountProof(GetRewardAccountProofRequest) returns (RewardAccountQueryDataV2);
+
+  // Get Merkle proof for reward account at latest height
+  rpc GetLatestRewardAccountProof(GetLatestRewardAccountProofRequest) returns (RewardAccountQueryDataV2);
+
+  // Get paginated list of reward amounts
+  rpc GetRewardAmounts(GetRewardAmountsRequest) returns (RewardAmounts);
+
+  // Get raw RewardMerkleTreeV2 snapshot
+  rpc GetRewardMerkleTreeV2(GetRewardMerkleTreeRequest) returns (RewardMerkleTreeV2Data);
+}

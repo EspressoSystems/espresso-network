@@ -15,7 +15,7 @@ tonic-reflection = "0.14"
 tonic-prost = "0.14"
 prost = "0.14"
 tracing = "0.1"
-aide = { version = "0.15.1", features = ["axum", "axum-json", "scalar", "swagger"] }
+aide = { version = "0.15.1", features = ["axum", "axum-json", "scalar", "swagger", "redoc"] }
 schemars = "0.9"
 async-trait = "0.1"
 anyhow = "1"
