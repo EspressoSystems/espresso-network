@@ -1,5 +1,5 @@
-TRUNCATE reward_merkle_tree_v2;
-TRUNCATE reward_merkle_tree;
+DELETE FROM reward_merkle_tree_v2;
+DELETE FROM reward_merkle_tree;
 
 -- For Postgres, we execute this migration conditionally only if the `reward_merkle_tree_v2_data`
 -- has already happened, allowing that migration to truncate the old tables if it has yet to happen.
