@@ -267,6 +267,8 @@ impl TestData {
             // ---- epoch-aware patching ----
             let needs_justify_update = prev_new_cert1.is_some();
             let needs_drb = epoch > EpochNumber::genesis() + 1
+                && epoch_height > 0
+                && is_epoch_transition(block_number, epoch_height);
 
             if let Some(new_cert1) = prev_new_cert1.take() {
                 proposal.data.proposal.justify_qc = new_cert1;
