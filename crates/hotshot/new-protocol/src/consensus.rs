@@ -90,6 +90,7 @@ pub enum ConsensusOutput<T: NodeType> {
 
 pub struct Consensus<T: NodeType> {
     proposals: BTreeMap<ViewNumber, Proposal<T>>,
+    proposed_views: BTreeSet<ViewNumber>,
     vid_shares: BTreeMap<ViewNumber, VidDisperseShare2<T>>,
     states_verified: BTreeMap<ViewNumber, Commitment<Leaf2<T>>>,
     blocks_reconstructed: BTreeMap<ViewNumber, VidCommitment2>,
@@ -141,6 +142,7 @@ impl<T: NodeType> Consensus<T> {
     {
         Self {
             proposals: BTreeMap::new(),
+            proposed_views: BTreeSet::new(),
             vid_disperses: BTreeMap::new(),
             blocks: BTreeMap::new(),
             states_verified: BTreeMap::new(),
@@ -614,6 +616,11 @@ impl<T: NodeType> Consensus<T> {
 
     #[instrument(level = "debug", skip(self, outbox))]
     async fn maybe_propose(&mut self, view: ViewNumber, outbox: &mut Outbox<ConsensusOutput<T>>) {
+        let node_short = Self::short_key_prefix(&self.public_key);
+        if self.proposed_views.contains(&view) {
+            return;
+        }
+
         let mut view_change_evidence = None;
         if let Some(view_sync_cert) = self.view_sync_certs.get(&view) {
             view_change_evidence = Some(ViewChangeEvidence2::ViewSync(view_sync_cert.clone()));
@@ -712,6 +719,7 @@ impl<T: NodeType> Consensus<T> {
             _pd: PhantomData,
         };
 
+        self.proposed_views.insert(view);
         outbox.push_back(ConsensusOutput::SendProposal(message, vid_disperse.clone()));
     }
 
