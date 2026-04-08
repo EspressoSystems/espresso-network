@@ -549,7 +549,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
 
         // Configure the builder to shut down in 50 views, so we don't leak resources or ports.
         let ctx = self.context.as_ref().unwrap();
-        let down_view = ctx.consensus_handle().cur_view().await + 50;
+        let down_view = ctx.consensus_handle().current_view().await + 50;
 
         // Start a builder.
         let url: Url = format!("http://localhost:{port}").parse().unwrap();
@@ -589,7 +589,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         tracing::info!(block, "transaction sequenced");
 
         // Wait until the builder is cleaned up.
-        while ctx.consensus_handle().cur_view().await <= down_view {
+        while ctx.consensus_handle().current_view().await <= down_view {
             sleep(Duration::from_secs(1)).await;
         }
     }

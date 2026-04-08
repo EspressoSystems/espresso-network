@@ -166,9 +166,9 @@ impl<T: NodeType, I: hotshot::traits::NodeImplementation<T>> ConsensusHandle<T, 
         futures::stream::select(old_stream, new_stream).boxed()
     }
 
-    pub async fn cur_view(&self) -> ViewNumber {
+    pub async fn current_view(&self) -> ViewNumber {
         if self.new_protocol().await {
-            return self.query(CoordinatorQuery::CurView).await;
+            return self.query(CoordinatorQuery::CurrentView).await;
         }
         self.legacy_handle.read().await.cur_view().await
     }
@@ -229,9 +229,9 @@ impl<T: NodeType, I: hotshot::traits::NodeImplementation<T>> ConsensusHandle<T, 
             .undecided_leaves()
     }
 
-    pub async fn cur_epoch(&self) -> Option<EpochNumber> {
+    pub async fn current_epoch(&self) -> Option<EpochNumber> {
         if self.new_protocol().await {
-            return self.query(CoordinatorQuery::CurEpoch).await;
+            return self.query(CoordinatorQuery::CurrentEpoch).await;
         }
         self.legacy_handle.read().await.cur_epoch().await
     }

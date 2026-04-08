@@ -29,7 +29,7 @@ impl<I: NodeImplementation<SeqTypes>> RecipientSourceTrait<Request, PubKey> for 
         // Get the current epoch number
         let epoch_number = self
             .consensus_handle
-            .cur_epoch()
+            .current_epoch()
             .await
             .unwrap_or(EpochNumber::genesis());
 

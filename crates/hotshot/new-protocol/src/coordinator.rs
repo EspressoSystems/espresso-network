@@ -135,10 +135,10 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Coordinator<T, N> {
 
     fn handle_query(&mut self, query: CoordinatorQuery<T>) {
         match query {
-            CoordinatorQuery::CurView(tx) => {
+            CoordinatorQuery::CurrentView(tx) => {
                 let _ = tx.send(self.consensus.cur_view());
             },
-            CoordinatorQuery::CurEpoch(tx) => {
+            CoordinatorQuery::CurrentEpoch(tx) => {
                 let _ = tx.send(self.consensus.cur_epoch());
             },
             CoordinatorQuery::DecidedLeaf(tx) => {

@@ -9,8 +9,8 @@ use oneshot::Sender;
 use tokio::sync::oneshot;
 
 pub enum CoordinatorQuery<T: NodeType> {
-    CurView(Sender<ViewNumber>),
-    CurEpoch(Sender<Option<EpochNumber>>),
+    CurrentView(Sender<ViewNumber>),
+    CurrentEpoch(Sender<Option<EpochNumber>>),
     DecidedLeaf(Sender<Leaf2<T>>),
     DecidedState(Sender<Option<Arc<T::ValidatedState>>>),
     UndecidedLeaves(Sender<Vec<Leaf2<T>>>),

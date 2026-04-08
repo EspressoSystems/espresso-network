@@ -362,7 +362,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StakeTableDataSource<
         epoch: Option<EpochNumber>,
     ) -> anyhow::Result<Vec<PeerConfig<SeqTypes>>> {
         let handle = self.consensus_handle().await;
-        let highest_epoch = handle.cur_epoch().await.map(|e| e + 1);
+        let highest_epoch = handle.current_epoch().await.map(|e| e + 1);
         if epoch > highest_epoch {
             return Err(anyhow::anyhow!(
                 "requested stake table for epoch {epoch:?} is beyond the current epoch + 1 \
@@ -380,7 +380,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StakeTableDataSource<
 
     /// Get the stake table for the current epoch and return it along with the epoch number
     async fn get_stake_table_current(&self) -> anyhow::Result<StakeTableWithEpochNumber<SeqTypes>> {
-        let epoch = self.consensus_handle().await.cur_epoch().await;
+        let epoch = self.consensus_handle().await.current_epoch().await;
 
         Ok(StakeTableWithEpochNumber {
             epoch,
@@ -409,7 +409,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StakeTableDataSource<
     async fn get_da_stake_table_current(
         &self,
     ) -> anyhow::Result<StakeTableWithEpochNumber<SeqTypes>> {
-        let epoch = self.consensus_handle().await.cur_epoch().await;
+        let epoch = self.consensus_handle().await.current_epoch().await;
 
         Ok(StakeTableWithEpochNumber {
             epoch,
@@ -652,7 +652,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StateCertFetchingData
         tracing::info!("fetching state certificate for epoch={epoch}");
         let handle = self.consensus_handle().await;
 
-        let current_epoch = handle.cur_epoch().await;
+        let current_epoch = handle.current_epoch().await;
 
         // The highest epoch we can have a state certificate for is current_epoch + 1
         // Check if requested epoch is beyond the highest possible epoch
