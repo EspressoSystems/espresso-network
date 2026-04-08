@@ -38,7 +38,7 @@ impl TestHarness {
     pub async fn new(node_index: u64) -> Self {
         // Default timer is long enough to not fire during normal tests,
         // which complete in ~100-200ms.
-        Self::new_with_timer(node_index, Duration::from_secs(2)).await
+        Self::new_with_timer(node_index, Duration::from_millis(500)).await
     }
 
     pub async fn new_with_timer(node_index: u64, timer_duration: Duration) -> Self {

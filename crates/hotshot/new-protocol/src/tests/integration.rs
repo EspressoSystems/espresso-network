@@ -45,14 +45,17 @@ async fn send_proposal_and_vote1s(
     harness
         .process_until(
             |inputs| {
-                any(inputs, is_timeout)
-                    || any(inputs, is_cert1)
-                        && any(inputs, is_block_reconstructed)
-                        && any(inputs, is_state_validated)
+                any(inputs, is_cert1)
+                    && any(inputs, is_block_reconstructed)
+                    && any(inputs, is_state_validated)
             },
             |inputs| any(inputs, is_timeout),
         )
         .await;
+    assert!(
+        any(harness.outputs(), is_view_changed),
+        "View should be changed"
+    );
 }
 
 /// Send enough Vote2 messages to form Certificate2.
@@ -98,8 +101,8 @@ async fn send_timeout_votes(
 /// Integration: sequential views both produce Vote1 through real state validation.
 #[tokio::test]
 async fn test_sequential_vote1() {
-    let mut harness = TestHarness::new(0).await;
     let test_data = TestData::new(3).await;
+    let mut harness = TestHarness::new(0).await;
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
 
     harness
@@ -131,8 +134,8 @@ async fn test_sequential_vote1() {
 /// consensus to continue (verified by Vote1 emission for subsequent views).
 #[tokio::test]
 async fn test_cert1_formed_and_vote2_sent() {
-    let mut harness = TestHarness::new(0).await;
     let test_data = TestData::new(3).await;
+    let mut harness = TestHarness::new(0).await;
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
 
     // View 1: proposal + Vote1 messages → CPU forms cert1 + reconstructs block
@@ -155,8 +158,8 @@ async fn test_cert1_formed_and_vote2_sent() {
 /// can proceed to the decide step.
 #[tokio::test]
 async fn test_full_decide_via_cpu_tasks() {
-    let mut harness = TestHarness::new(0).await;
     let test_data = TestData::new(3).await;
+    let mut harness = TestHarness::new(0).await;
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
 
     // View 1: send proposal + Vote1s
@@ -242,8 +245,8 @@ async fn test_leader_proposal_via_cpu_tasks() {
 /// multiple decisions.
 #[tokio::test]
 async fn test_multi_view_decide_via_cpu_tasks() {
-    let mut harness = TestHarness::new(0).await;
     let test_data = TestData::new(5).await;
+    let mut harness = TestHarness::new(0).await;
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
 
     for i in 0..test_data.views.len() {
@@ -258,8 +261,8 @@ async fn test_multi_view_decide_via_cpu_tasks() {
 /// TimeoutCertificate, which advances the view.
 #[tokio::test]
 async fn test_timeout_votes_form_tc() {
-    let mut harness = TestHarness::new(0).await;
     let test_data = TestData::new(4).await;
+    let mut harness = TestHarness::new(0).await;
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
 
     // Process view 1 to establish locked_qc (needed for TC handling)
@@ -374,8 +377,8 @@ async fn run_views_integration(
 /// and DRB calculation triggered by handle_leaf_decided.
 #[tokio::test]
 async fn test_epoch_boundary_emits_epoch_change() {
-    let mut harness = TestHarness::new(0).await;
     let test_data = TestData::new_with_epoch_height(11, EPOCH_HEIGHT).await;
+    let mut harness = TestHarness::new(0).await;
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
 
     run_views_integration(&mut harness, &test_data, &node_key, 0..10).await;
@@ -391,8 +394,8 @@ async fn test_epoch_boundary_emits_epoch_change() {
 /// pipeline (including epoch root computation) before applying the epoch change.
 #[tokio::test]
 async fn test_epoch_change_advances_view() {
-    let mut harness = TestHarness::new(0).await;
     let test_data = TestData::new_with_epoch_height(11, EPOCH_HEIGHT).await;
+    let mut harness = TestHarness::new(0).await;
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
 
     // Build state through views 1-9 via the full integration pipeline.
@@ -598,8 +601,8 @@ async fn test_node_votes_with_computed_drb_in_epoch3() {
 async fn test_f_plus_1_timeout_votes_trigger_timeout_one_honest() {
     const ONE_HONEST_THRESHOLD: u64 = 4;
 
-    let mut harness = TestHarness::new(0).await;
     let test_data = TestData::new(4).await;
+    let mut harness = TestHarness::new(0).await;
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
 
     // Process view 1 to establish state
