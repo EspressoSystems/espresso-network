@@ -1362,10 +1362,15 @@ impl SequencerPersistence for Persistence {
             [("reward_merkle_tree_v2_data".to_string(), true, offset)],
         )
         .await?;
-        query("TRUNCATE reward_merkle_tree_v2")
+        let truncate = if cfg!(feature = "embedded-db") {
+            "DELETE FROM"
+        } else {
+            "TRUNCATE"
+        };
+        query(&format!("{truncate} reward_merkle_tree_v2"))
             .execute(tx.as_mut())
             .await?;
-        query("TRUNCATE reward_merkle_tree")
+        query(&format!("{truncate} reward_merkle_tree"))
             .execute(tx.as_mut())
             .await?;
         tx.commit().await?;
