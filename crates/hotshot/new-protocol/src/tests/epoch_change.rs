@@ -35,9 +35,8 @@ async fn run_views_full(
     // Collect which epochs need DRB results and pre-feed them all up front.
     let mut drb_epochs = std::collections::BTreeSet::new();
     for i in range.clone() {
-        let block_number = BlockHeader::<TestTypes>::block_number(
-            &test_data.views[i].proposal.data.proposal.block_header,
-        );
+        let block_number =
+            BlockHeader::<TestTypes>::block_number(&test_data.views[i].proposal.data.block_header);
         if is_epoch_transition(block_number, EPOCH_HEIGHT) {
             drb_epochs.insert(test_data.views[i].epoch_number + 1);
         }
@@ -104,7 +103,7 @@ async fn test_handle_epoch_change_valid() {
 
     // Construct a valid EpochChangeMessage for view 10 (block 10, last block of epoch 1)
     let epoch_view = &test_data.views[9];
-    let proposal: Proposal<TestTypes> = epoch_view.proposal.data.clone().into();
+    let proposal: Proposal<TestTypes> = epoch_view.proposal.data.clone();
     let epoch_change = EpochChangeMessage {
         cert1: epoch_view.cert1.clone(),
         cert2: epoch_view.cert2.clone(),
@@ -131,7 +130,7 @@ async fn test_handle_epoch_change_mismatched_views() {
     run_views_full(&mut harness, &test_data, &node_key, 0..9).await;
 
     // Mix cert1 from view 9 with cert2 from view 10 — mismatched views
-    let proposal: Proposal<TestTypes> = test_data.views[9].proposal.data.clone().into();
+    let proposal: Proposal<TestTypes> = test_data.views[9].proposal.data.clone();
     let epoch_change = EpochChangeMessage {
         cert1: test_data.views[8].cert1.clone(),
         cert2: test_data.views[9].cert2.clone(),
@@ -163,7 +162,7 @@ async fn test_handle_epoch_change_wrong_block_number() {
 
     // Use view 6 (block 6) which is NOT the last block of the epoch
     let mid_view = &test_data.views[5];
-    let proposal: Proposal<TestTypes> = mid_view.proposal.data.clone().into();
+    let proposal: Proposal<TestTypes> = mid_view.proposal.data.clone();
     let epoch_change = EpochChangeMessage {
         cert1: mid_view.cert1.clone(),
         cert2: mid_view.cert2.clone(),
@@ -195,7 +194,7 @@ async fn test_handle_epoch_change_proposal_mismatch() {
 
     // Use cert1/cert2 from view 10 but proposal from view 9 — commitment mismatch
     let epoch_view = &test_data.views[9];
-    let wrong_proposal: Proposal<TestTypes> = test_data.views[8].proposal.data.clone().into();
+    let wrong_proposal: Proposal<TestTypes> = test_data.views[8].proposal.data.clone();
     let epoch_change = EpochChangeMessage {
         cert1: epoch_view.cert1.clone(),
         cert2: epoch_view.cert2.clone(),
@@ -228,7 +227,7 @@ async fn test_handle_epoch_change_stale() {
     // Use views[5] (view 6, block 6) as a stale epoch change — locked_cert
     // is at view 10 after processing all views, so view 6 is behind the lock.
     let stale_view = &test_data.views[5];
-    let proposal: Proposal<TestTypes> = stale_view.proposal.data.clone().into();
+    let proposal: Proposal<TestTypes> = stale_view.proposal.data.clone();
     let stale_epoch_change = EpochChangeMessage {
         cert1: stale_view.cert1.clone(),
         cert2: stale_view.cert2.clone(),
@@ -321,7 +320,7 @@ async fn test_epoch_change_leader_proposes() {
     let test_data = TestData::new_with_epoch_height(11, EPOCH_HEIGHT).await;
     let epoch_view = &test_data.views[9];
 
-    let proposal: Proposal<TestTypes> = epoch_view.proposal.data.clone().into();
+    let proposal: Proposal<TestTypes> = epoch_view.proposal.data.clone();
     let epoch_change = EpochChangeMessage {
         cert1: epoch_view.cert1.clone(),
         cert2: epoch_view.cert2.clone(),
@@ -358,7 +357,7 @@ async fn test_epoch_change_votes() {
     let test_data = TestData::new_with_epoch_height(11, EPOCH_HEIGHT).await;
     let epoch_view = &test_data.views[9]; // view 10, last block of epoch 1
 
-    let epoch_proposal: Proposal<TestTypes> = epoch_view.proposal.data.clone().into();
+    let epoch_proposal: Proposal<TestTypes> = epoch_view.proposal.data.clone();
     let epoch_change = EpochChangeMessage {
         cert1: epoch_view.cert1.clone(),
         cert2: epoch_view.cert2.clone(),
@@ -377,7 +376,7 @@ async fn test_epoch_change_votes() {
     // Build the proposal for the first view of epoch 2 with the
     // required next_epoch_justify_qc.
     let first_view = &test_data.views[10];
-    let mut proposal: Proposal<TestTypes> = first_view.proposal.data.clone().into();
+    let mut proposal: Proposal<TestTypes> = first_view.proposal.data.clone();
     proposal.epoch = EpochNumber::new(2);
     proposal.next_epoch_justify_qc = Some(epoch_view.cert2.clone());
 
@@ -461,7 +460,7 @@ async fn test_second_epoch_leader_proposes_without_drb() {
 
     // ---- Epoch boundary ----
     let epoch_view = &test_data.views[9];
-    let epoch_proposal: Proposal<TestTypes> = epoch_view.proposal.data.clone().into();
+    let epoch_proposal: Proposal<TestTypes> = epoch_view.proposal.data.clone();
     let epoch_change = EpochChangeMessage {
         cert1: epoch_view.cert1.clone(),
         cert2: epoch_view.cert2.clone(),
@@ -477,7 +476,7 @@ async fn test_second_epoch_leader_proposes_without_drb() {
     // This proposal needs next_epoch_justify_qc set because it's the
     // first proposal after the epoch boundary.
     let first_e2_view = &test_data.views[10];
-    let mut first_e2_proposal: Proposal<TestTypes> = first_e2_view.proposal.data.clone().into();
+    let mut first_e2_proposal: Proposal<TestTypes> = first_e2_view.proposal.data.clone();
     first_e2_proposal.epoch = EpochNumber::new(2);
     first_e2_proposal.next_epoch_justify_qc = Some(epoch_view.cert2.clone());
 
@@ -550,7 +549,7 @@ async fn test_epoch3_transition_requests_drb_for_future_epoch() {
 
     // ---- Epoch boundary ----
     let epoch_view = &test_data.views[9];
-    let epoch_proposal: Proposal<TestTypes> = epoch_view.proposal.data.clone().into();
+    let epoch_proposal: Proposal<TestTypes> = epoch_view.proposal.data.clone();
     let epoch_change = EpochChangeMessage {
         cert1: epoch_view.cert1.clone(),
         cert2: epoch_view.cert2.clone(),
@@ -563,7 +562,7 @@ async fn test_epoch3_transition_requests_drb_for_future_epoch() {
 
     // ---- First block of epoch 2 (view 11) ----
     let first_e2_view = &test_data.views[10];
-    let mut first_e2_proposal: Proposal<TestTypes> = first_e2_view.proposal.data.clone().into();
+    let mut first_e2_proposal: Proposal<TestTypes> = first_e2_view.proposal.data.clone();
     first_e2_proposal.epoch = EpochNumber::new(2);
     first_e2_proposal.next_epoch_justify_qc = Some(epoch_view.cert2.clone());
 
@@ -607,7 +606,7 @@ async fn test_epoch3_transition_requests_drb_for_future_epoch() {
     // epoch (epoch 1 + 2 = 3).
 
     let v17 = &test_data.views[16];
-    let mut v17_proposal: Proposal<TestTypes> = v17.proposal.data.clone().into();
+    let mut v17_proposal: Proposal<TestTypes> = v17.proposal.data.clone();
     v17_proposal.epoch = EpochNumber::new(3);
 
     let signed = SignedProposal {

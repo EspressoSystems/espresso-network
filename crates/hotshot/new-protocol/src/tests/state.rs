@@ -25,7 +25,7 @@ use crate::{
 
 /// Build a StateRequest from a TestView.
 fn make_state_request(view: &TestView) -> StateRequest<TestTypes> {
-    let proposal: Proposal<TestTypes> = view.proposal.data.clone().into();
+    let proposal: Proposal<TestTypes> = view.proposal.data.clone();
     StateRequest {
         view: view.view_number,
         parent_view: proposal.justify_qc.view_number(),
@@ -42,7 +42,7 @@ fn make_header_request(
     parent_view: &TestView,
     target_view: ViewNumber,
 ) -> HeaderRequest<TestTypes> {
-    let parent_proposal: Proposal<TestTypes> = parent_view.proposal.data.clone().into();
+    let parent_proposal: Proposal<TestTypes> = parent_view.proposal.data.clone();
     let block = TestBlockPayload::genesis();
     let metadata = TestMetadata {
         num_transactions: 0,
@@ -200,7 +200,7 @@ async fn test_state_request_queued_behind_parent() {
     manager.request_state(make_state_request(&test_data.views[1]));
 
     // View 2 should be queued as pending (parent view 1 is in progress).
-    let view_1_commit = proposal_commitment(&test_data.views[0].proposal.data.clone().into());
+    let view_1_commit = proposal_commitment(&test_data.views[0].proposal.data.clone());
     assert!(
         manager.pending_contains_commitment(&view_1_commit),
         "View 2 should be pending on view 1's commitment"
@@ -257,7 +257,7 @@ async fn test_header_request_queued_behind_state() {
     manager.request_header(header_req);
 
     // Header should be pending on view 1's commitment.
-    let view_1_commit = proposal_commitment(&test_data.views[0].proposal.data.clone().into());
+    let view_1_commit = proposal_commitment(&test_data.views[0].proposal.data.clone());
     assert!(
         manager.pending_contains_commitment(&view_1_commit),
         "Header should be pending on view 1's commitment"

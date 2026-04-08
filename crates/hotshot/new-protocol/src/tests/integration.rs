@@ -1,16 +1,11 @@
 use hotshot::types::BLSPubKey;
 use hotshot_example_types::node_types::TestTypes;
-use hotshot_types::{
-    data::EpochNumber, message::Proposal as SignedProposal, traits::signature_key::SignatureKey,
-};
+use hotshot_types::traits::signature_key::SignatureKey;
 
 use super::common::{harness::TestHarness, utils::TestData};
 use crate::{
     consensus::ConsensusInput,
-    message::{
-        Certificate1, ConsensusMessage, EpochChangeMessage, Message, MessageType, Proposal,
-        ProposalMessage,
-    },
+    message::{Certificate1, EpochChangeMessage, Proposal},
     tests::common::assertions::{
         any, count_matching, has_epoch_change, is_block_built, is_block_reconstructed, is_cert1,
         is_cert2, is_drb_result, is_header_created, is_leaf_decided, is_proposal,
@@ -350,7 +345,7 @@ const EPOCH_HEIGHT: u64 = 10;
 /// Helper to build an EpochChangeMessage from test data at the epoch boundary view.
 fn epoch_change_message(test_data: &TestData) -> EpochChangeMessage<TestTypes> {
     let epoch_view = &test_data.views[9]; // view 10, last block of epoch 1
-    let proposal: Proposal<TestTypes> = epoch_view.proposal.data.clone().into();
+    let proposal: Proposal<TestTypes> = epoch_view.proposal.data.clone();
     EpochChangeMessage {
         cert1: epoch_view.cert1.clone(),
         cert2: epoch_view.cert2.clone(),
@@ -452,10 +447,9 @@ async fn cross_epoch_boundary(
     test_data: &TestData,
     node_key: &BLSPubKey,
     boundary_idx: usize,
-    new_epoch: u64,
 ) {
     let boundary_view = &test_data.views[boundary_idx];
-    let proposal: Proposal<TestTypes> = boundary_view.proposal.data.clone().into();
+    let proposal: Proposal<TestTypes> = boundary_view.proposal.data.clone();
     let epoch_change = EpochChangeMessage {
         cert1: boundary_view.cert1.clone(),
         cert2: boundary_view.cert2.clone(),
@@ -463,34 +457,6 @@ async fn cross_epoch_boundary(
     };
     harness
         .apply_and_process(ConsensusInput::EpochChange(epoch_change))
-        .await;
-
-    // First block of the new epoch — construct with next_epoch_justify_qc
-    // and send as a network message so the full pipeline (ProposalValidator,
-    // VidReconstructor, StateManager) handles it naturally.
-    let first_view = &test_data.views[boundary_idx + 1];
-    let mut first_proposal: Proposal<TestTypes> = first_view.proposal.data.clone().into();
-    first_proposal.epoch = EpochNumber::new(new_epoch);
-    first_proposal.next_epoch_justify_qc = Some(boundary_view.cert2.clone());
-
-    let signed = SignedProposal {
-        data: first_proposal,
-        signature: first_view.proposal.signature.clone(),
-        _pd: std::marker::PhantomData,
-    };
-    let vid_share = first_view
-        .vid_shares
-        .iter()
-        .find(|s| s.recipient_key == *node_key)
-        .expect("VID share not found")
-        .clone();
-
-    let proposal_msg = ProposalMessage::validated(signed, vid_share);
-    harness
-        .message(Message {
-            sender: first_view.leader_public_key,
-            message_type: MessageType::Consensus(ConsensusMessage::Proposal(proposal_msg)),
-        })
         .await;
 
     // Send vote1s and vote2s through the normal pipeline.
@@ -528,13 +494,13 @@ async fn test_leader_proposes_with_computed_drb_in_epoch3() {
         .await;
 
     // ---- Epoch 1 → 2 boundary ----
-    cross_epoch_boundary(&mut harness, &test_data, &leader_key, 9, 2).await;
+    cross_epoch_boundary(&mut harness, &test_data, &leader_key, 9).await;
 
     // ---- Epoch 2 (views 12-20) ----
     run_views_integration(&mut harness, &test_data, &leader_key, 11..20).await;
 
     // ---- Epoch 2 → 3 boundary ----
-    cross_epoch_boundary(&mut harness, &test_data, &leader_key, 19, 3).await;
+    cross_epoch_boundary(&mut harness, &test_data, &leader_key, 19).await;
 
     // ---- Epoch 3 views 22-27 (reach transition window) ----
     run_views_integration(&mut harness, &test_data, &leader_key, 21..27).await;
@@ -569,13 +535,13 @@ async fn test_node_votes_with_computed_drb_in_epoch3() {
         .await;
 
     // ---- Epoch 1 → 2 boundary ----
-    cross_epoch_boundary(&mut harness, &test_data, &node_key, 9, 2).await;
+    cross_epoch_boundary(&mut harness, &test_data, &node_key, 9).await;
 
     // ---- Epoch 2 (views 12-20) ----
     run_views_integration(&mut harness, &test_data, &node_key, 11..20).await;
 
     // ---- Epoch 2 → 3 boundary ----
-    cross_epoch_boundary(&mut harness, &test_data, &node_key, 19, 3).await;
+    cross_epoch_boundary(&mut harness, &test_data, &node_key, 19).await;
 
     // ---- Epoch 3 views before transition window ----
     run_views_integration(&mut harness, &test_data, &node_key, 21..26).await;

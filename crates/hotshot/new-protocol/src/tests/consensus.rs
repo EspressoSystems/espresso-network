@@ -274,7 +274,7 @@ async fn test_state_validation_failed_removes_proposal() {
     harness.collected.extend(outbox.take());
 
     // Send StateVerificationFailed — removes proposal
-    let proposal: Proposal<TestTypes> = test_data.views[1].proposal.data.clone().into();
+    let proposal: Proposal<TestTypes> = test_data.views[1].proposal.data.clone();
     harness
         .apply(ConsensusInput::StateValidationFailed(StateResponse {
             view: test_data.views[1].view_number,

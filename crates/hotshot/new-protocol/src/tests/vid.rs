@@ -25,10 +25,7 @@ async fn test_no_duplicate_reconstruction_after_threshold() {
         .find(|s| s.recipient_key == proposal_key)
         .unwrap()
         .clone();
-    reconstructor.handle_vid_share(
-        proposal_share,
-        view.proposal.data.proposal.block_header.metadata,
-    );
+    reconstructor.handle_vid_share(proposal_share, view.proposal.data.block_header.metadata);
 
     // Feed remaining shares from other nodes — enough to exceed the threshold.
     for i in 1..view.vid_shares.len() as u64 {
@@ -86,10 +83,7 @@ async fn test_shares_after_reconstruction_are_ignored() {
         .find(|s| s.recipient_key == first_key)
         .unwrap()
         .clone();
-    reconstructor.handle_vid_share(
-        first_share,
-        view.proposal.data.proposal.block_header.metadata,
-    );
+    reconstructor.handle_vid_share(first_share, view.proposal.data.block_header.metadata);
 
     for i in 1..THRESHOLD {
         let key = BLSPubKey::generated_from_seed_indexed([0u8; 32], i).0;
