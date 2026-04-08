@@ -1631,7 +1631,7 @@ mod test {
         builder_task.start(Box::new(
             handle_0
                 .consensus_handle()
-                .hotshot()
+                .legacy_consensus()
                 .read()
                 .await
                 .event_stream(),
@@ -1678,7 +1678,7 @@ mod test {
         builder_task.start(Box::new(
             handle_0
                 .consensus_handle()
-                .hotshot()
+                .legacy_consensus()
                 .read()
                 .await
                 .event_stream(),

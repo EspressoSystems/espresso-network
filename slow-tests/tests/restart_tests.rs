@@ -429,7 +429,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             let next_view_timeout = {
                 context
                     .consensus_handle()
-                    .hotshot()
+                    .legacy_consensus()
                     .read()
                     .await
                     .hotshot
@@ -458,7 +458,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         let num_nodes = {
             context
                 .consensus_handle()
-                .hotshot()
+                .legacy_consensus()
                 .read()
                 .await
                 .hotshot

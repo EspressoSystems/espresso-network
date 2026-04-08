@@ -1986,7 +1986,7 @@ pub mod test_helpers {
                 builder_task.start(Box::new(
                     handle_0
                         .consensus_handle()
-                        .hotshot()
+                        .legacy_consensus()
                         .read()
                         .await
                         .event_stream(),
@@ -3692,7 +3692,7 @@ mod test {
         let mut hotshot_events = network
             .server
             .consensus_handle()
-            .hotshot()
+            .legacy_consensus()
             .read()
             .await
             .event_stream();

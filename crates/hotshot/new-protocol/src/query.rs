@@ -12,7 +12,7 @@ pub enum CoordinatorQuery<T: NodeType> {
     CurView(Sender<ViewNumber>),
     CurEpoch(Sender<Option<EpochNumber>>),
     DecidedLeaf(Sender<Leaf2<T>>),
-    DecidedState(Sender<Arc<T::ValidatedState>>),
+    DecidedState(Sender<Option<Arc<T::ValidatedState>>>),
     UndecidedLeaves(Sender<Vec<Leaf2<T>>>),
     GetState {
         view: ViewNumber,

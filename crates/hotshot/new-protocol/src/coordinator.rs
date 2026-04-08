@@ -146,11 +146,7 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Coordinator<T, N> {
             },
             CoordinatorQuery::DecidedState(tx) => {
                 let view = self.consensus.last_decided_leaf().view_number();
-                let state = self
-                    .state_manager
-                    .get_state(&view)
-                    .expect("no state for decided leaf");
-                let _ = tx.send(state);
+                let _ = tx.send(self.state_manager.get_state(&view));
             },
             CoordinatorQuery::UndecidedLeaves(tx) => {
                 let _ = tx.send(self.consensus.undecided_leaves());
