@@ -46,6 +46,14 @@ mkdir -p "$go_target_dir"
 ln -sv "$lib_path" "$go_target_dir/libespresso_crypto_helper-$triple.$extension"
 ln -sv "$lib_path" "$go_target_dir"
 
+# Also build for x86_64 if Go runs under Rosetta on an arm64 Mac.
+if [ "$os" = "Darwin" ] && [ "$(go env GOARCH 2>/dev/null)" = "amd64" ] && [ "$triple" = "aarch64-apple-darwin" ]; then
+    x86_lib_path="$(cargo build --manifest-path ./sdks/crypto-helper/Cargo.toml --target x86_64-apple-darwin --message-format json "$@" | jq -r '
+      select(.reason == "compiler-artifact") | select(.target.name == "espresso_crypto_helper") | .filenames[0]
+    ')"
+    ln -sv "$x86_lib_path" "$go_target_dir/libespresso_crypto_helper-x86_64-apple-darwin.$extension"
+fi
+
 cd $project_root/sdks/go
 
 env LD_LIBRARY_PATH="${go_target_dir}:${LD_LIBRARY_PATH:-}" go test -count=1 ./verification
