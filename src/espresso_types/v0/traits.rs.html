@@ -909,13 +909,13 @@
 <a href=#909 id=909 data-nosnippet>909</a>        <span class="self">self</span>.migrate_reward_merkle_tree_v2()
 <a href=#910 id=910 data-nosnippet>910</a>            .<span class="kw">await
 <a href=#911 id=911 data-nosnippet>911</a>            </span>.context(<span class="string">"failed to migrate reward merkle tree v2"</span>)<span class="question-mark">?</span>;
-<a href=#912 id=912 data-nosnippet>912</a>        <span class="self">self</span>.migrate_validator_authenticated().<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#912 id=912 data-nosnippet>912</a>        <span class="self">self</span>.migrate_x25519_keys().<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#913 id=913 data-nosnippet>913</a>        <span class="macro">tracing::warn!</span>(<span class="string">"consensus storage has been migrated to new types"</span>);
 <a href=#914 id=914 data-nosnippet>914</a>
 <a href=#915 id=915 data-nosnippet>915</a>        <span class="prelude-val">Ok</span>(())
 <a href=#916 id=916 data-nosnippet>916</a>    }
 <a href=#917 id=917 data-nosnippet>917</a>
-<a href=#918 id=918 data-nosnippet>918</a>    <span class="kw">async fn </span>migrate_validator_authenticated(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; anyhow::Result&lt;()&gt;;
+<a href=#918 id=918 data-nosnippet>918</a>    <span class="kw">async fn </span>migrate_x25519_keys(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; anyhow::Result&lt;()&gt;;
 <a href=#919 id=919 data-nosnippet>919</a>
 <a href=#920 id=920 data-nosnippet>920</a>    <span class="kw">async fn </span>migrate_anchor_leaf(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; anyhow::Result&lt;()&gt;;
 <a href=#921 id=921 data-nosnippet>921</a>    <span class="kw">async fn </span>migrate_da_proposals(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; anyhow::Result&lt;()&gt;;
