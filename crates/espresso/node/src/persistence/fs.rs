@@ -1998,11 +1998,10 @@ impl MembershipPersistence for Persistence {
                 file_path.display()
             )
         })?;
+        // migrate_validator_authenticated() rewrites all files at startup, so this is
+        // unreachable unless the migration was skipped or a file was written back in legacy format.
         if needs_rewrite {
-            tracing::debug!(
-                ?epoch,
-                "stake table in legacy format, expected current format"
-            );
+            panic!("stake table for epoch {epoch} in legacy format after migration");
         }
         Ok(Some(stake))
     }
@@ -2027,11 +2026,10 @@ impl MembershipPersistence for Persistence {
                     file_path.display()
                 )
             })?;
+            // migrate_validator_authenticated() rewrites all files at startup, so this is
+            // unreachable unless the migration was skipped or a file was written back in legacy format.
             if needs_rewrite {
-                tracing::debug!(
-                    ?epoch,
-                    "stake table in legacy format, expected current format"
-                );
+                panic!("stake table for epoch {epoch} in legacy format after migration");
             }
             validator_sets.push((epoch, (stake.0, stake.1), stake.2));
         }
