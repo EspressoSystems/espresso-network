@@ -40,7 +40,7 @@ stop_proposing_view = 1
 
 [upgrade.epoch_reward]
 [upgrade.epoch_reward.chain_config]
-chain_id = 999999999
+chain_id = 888888888
 max_block_size = "10mb"
 base_fee = "1 wei"
 fee_recipient = "0x0000000000000000000000000000000000000000"
