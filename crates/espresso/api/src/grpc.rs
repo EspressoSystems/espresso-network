@@ -11,7 +11,11 @@ use serialization_api::v2::{
 };
 use tonic::{Request, Response, Status};
 
-use crate::{handlers, proto::reward_service_server::{RewardService, RewardServiceServer}, v2};
+use crate::{
+    handlers,
+    proto::reward_service_server::{RewardService, RewardServiceServer},
+    v2,
+};
 
 /// gRPC reward service implementation wrapping a RewardApi implementation
 pub struct RewardServiceImpl<S> {

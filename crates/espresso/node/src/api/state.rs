@@ -5,22 +5,29 @@
 
 use alloy::primitives::U256;
 use async_trait::async_trait;
-use espresso_types::v0_3::RewardAmount as InternalRewardAmount;
-use espresso_types::v0_4::{
-    RewardAccountQueryDataV2 as InternalRewardAccountQueryData,
-    RewardAccountV2,
+use espresso_types::{
+    v0::sparse_mt::KeccakNode,
+    v0_3::RewardAmount as InternalRewardAmount,
+    v0_4::{
+        RewardAccountProofV2 as InternalRewardAccountProofV2,
+        RewardAccountQueryDataV2 as InternalRewardAccountQueryData, RewardAccountV2,
+        RewardMerkleProofV2 as InternalRewardMerkleProofV2,
+    },
+    v0_6::RewardClaimError,
 };
-use espresso_types::v0_6::RewardClaimError;
 use hotshot_contract_adapter::reward::RewardClaimInput as InternalRewardClaimInput;
+use jf_merkle_tree_compat::prelude::{
+    MerkleNode as InternalMerkleNode, MerkleProof as InternalMerkleProof,
+};
+use serde_json;
 use serialization_api::v2::{
-    RewardAccountQueryDataV2, RewardAmounts, RewardBalance, RewardClaimInput,
-    RewardMerkleTreeV2Data,
+    self, RewardAccountProofV2, RewardAccountQueryDataV2, RewardAmounts, RewardBalance,
+    RewardClaimInput, RewardMerkleProofV2, RewardMerkleTreeV2Data, merkle_node,
+    reward_merkle_proof_v2::ProofType,
 };
+use tagged_base64::TaggedBase64;
 
-use super::{
-    RewardMerkleTreeDataSource, RewardMerkleTreeV2Data as InternalRewardTreeData,
-    conversions::v2::{from_proto, to_proto},
-};
+use super::{RewardMerkleTreeDataSource, RewardMerkleTreeV2Data as InternalRewardTreeData};
 
 /// Node API state implementation
 ///
@@ -34,13 +41,113 @@ impl<D> NodeApiStateImpl<D> {
     pub fn new(data_source: D) -> Self {
         Self { data_source }
     }
+
+    /// Convert RewardAccountProofV2 to proto
+    fn convert_reward_account_proof_v2(
+        &self,
+        proof: &InternalRewardAccountProofV2,
+    ) -> anyhow::Result<RewardAccountProofV2> {
+        Ok(RewardAccountProofV2 {
+            account: format!("{:#x}", proof.account),
+            proof: Some(self.convert_reward_merkle_proof_v2(&proof.proof)?),
+        })
+    }
+
+    /// Convert RewardMerkleProofV2 enum to proto
+    fn convert_reward_merkle_proof_v2(
+        &self,
+        proof: &InternalRewardMerkleProofV2,
+    ) -> anyhow::Result<RewardMerkleProofV2> {
+        let proof_type = match proof {
+            InternalRewardMerkleProofV2::Presence(p) => {
+                ProofType::Presence(self.convert_merkle_proof(p)?)
+            },
+            InternalRewardMerkleProofV2::Absence(p) => {
+                ProofType::Absence(self.convert_merkle_proof(p)?)
+            },
+        };
+
+        Ok(RewardMerkleProofV2 {
+            proof_type: Some(proof_type),
+        })
+    }
+
+    /// Convert MerkleProof to proto
+    fn convert_merkle_proof(
+        &self,
+        proof: &InternalMerkleProof<InternalRewardAmount, RewardAccountV2, KeccakNode, 2>,
+    ) -> anyhow::Result<v2::MerkleProof> {
+        let proof_nodes: Result<Vec<v2::MerkleNode>, _> = proof
+            .proof
+            .iter()
+            .map(|node| self.convert_merkle_node(node))
+            .collect();
+
+        Ok(v2::MerkleProof {
+            pos: TaggedBase64::new("FIELD", proof.pos.0.as_slice())
+                .map_err(|e| anyhow::anyhow!("failed to encode proof pos: {}", e))?
+                .to_string(),
+            proof: proof_nodes?,
+        })
+    }
+
+    /// Convert MerkleNode to proto (recursive)
+    fn convert_merkle_node(
+        &self,
+        node: &InternalMerkleNode<InternalRewardAmount, RewardAccountV2, KeccakNode>,
+    ) -> anyhow::Result<v2::MerkleNode> {
+        let node_type = match node {
+            InternalMerkleNode::Empty => merkle_node::NodeType::Empty(v2::Empty {
+                dummy: Some(v2::EmptyData {}),
+            }),
+            InternalMerkleNode::Leaf { pos, elem, value } => {
+                merkle_node::NodeType::Leaf(v2::Leaf {
+                    pos: TaggedBase64::new("FIELD", pos.0.as_slice())
+                        .map_err(|e| anyhow::anyhow!("failed to encode leaf pos: {}", e))?
+                        .to_string(),
+                    elem: TaggedBase64::new("FIELD", &elem.0.to_le_bytes::<32>())
+                        .map_err(|e| anyhow::anyhow!("failed to encode leaf elem: {}", e))?
+                        .to_string(),
+                    value: TaggedBase64::new("FIELD", &value.0)
+                        .map_err(|e| anyhow::anyhow!("failed to encode leaf value: {}", e))?
+                        .to_string(),
+                })
+            },
+            InternalMerkleNode::Branch { value, children } => {
+                let proto_children: Result<Vec<v2::MerkleNode>, _> = children
+                    .iter()
+                    .map(|child| self.convert_merkle_node(child))
+                    .collect();
+
+                merkle_node::NodeType::Branch(v2::Branch {
+                    value: TaggedBase64::new("FIELD", &value.0)
+                        .map_err(|e| anyhow::anyhow!("failed to encode branch value: {}", e))?
+                        .to_string(),
+                    children: proto_children?,
+                })
+            },
+            InternalMerkleNode::ForgettenSubtree { value } => {
+                merkle_node::NodeType::ForgottenSubtree(v2::ForgottenSubtree {
+                    value: TaggedBase64::new("FIELD", &value.0)
+                        .map_err(|e| {
+                            anyhow::anyhow!("failed to encode forgotten subtree value: {}", e)
+                        })?
+                        .to_string(),
+                })
+            },
+        };
+
+        Ok(v2::MerkleNode {
+            node_type: Some(node_type),
+        })
+    }
 }
 
 // ============================================================================
-// EspressoSerializations implementation (conversion layer)
+// ApiSerializations implementation (conversion layer)
 // ============================================================================
 
-impl<D> serialization_api::EspressoSerializations for NodeApiStateImpl<D>
+impl<D> serialization_api::ApiSerializations for NodeApiStateImpl<D>
 where
     D: RewardMerkleTreeDataSource,
 {
@@ -56,7 +163,8 @@ where
 
     // Deserialize proto/string types → internal types
     fn deserialize_address(&self, s: &str) -> anyhow::Result<Self::Address> {
-        from_proto::parse_address(s)
+        s.parse()
+            .map_err(|_| anyhow::anyhow!("invalid ethereum address: {}", s))
     }
 
     // Serialize internal types → proto types
@@ -65,21 +173,44 @@ where
         address: &str,
         value: &Self::RewardClaimInput,
     ) -> anyhow::Result<RewardClaimInput> {
-        to_proto::reward_claim_input(address.to_string(), value)
+        // Serialize the entire RewardClaimInput to JSON first to get the proper auth_data format
+        let json_value = serde_json::to_value(value)
+            .map_err(|e| anyhow::anyhow!("failed to serialize RewardClaimInput to JSON: {}", e))?;
+
+        // Extract auth_data as hex string (it should already be hex-encoded by serde)
+        let auth_data = json_value
+            .get("auth_data")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("auth_data field not found or not a string"))?
+            .to_string();
+
+        Ok(RewardClaimInput {
+            address: address.to_string(),
+            lifetime_rewards: format!("{:#x}", value.lifetime_rewards), // Hex for contract
+            auth_data,
+        })
     }
 
     fn serialize_reward_balance(
         &self,
         value: &Self::RewardBalance,
     ) -> anyhow::Result<RewardBalance> {
-        Ok(to_proto::reward_balance(*value))
+        Ok(RewardBalance {
+            amount: value.to_string(), // Decimal string
+        })
     }
 
     fn serialize_reward_account_query_data(
         &self,
         value: &Self::RewardAccountQueryData,
     ) -> anyhow::Result<RewardAccountQueryDataV2> {
-        to_proto::reward_account_query_data_v2(value)
+        // Convert balance to decimal string
+        let balance = value.balance.to_string();
+
+        // Convert the proof
+        let proof = Some(self.convert_reward_account_proof_v2(&value.proof)?);
+
+        Ok(RewardAccountQueryDataV2 { balance, proof })
     }
 
     fn serialize_reward_amounts(
@@ -87,7 +218,16 @@ where
         value: &Self::RewardAmounts,
     ) -> anyhow::Result<RewardAmounts> {
         let (amounts_vec, total) = value;
-        let amounts = to_proto::reward_amounts(amounts_vec);
+
+        // Convert each account/amount pair to proto format
+        let amounts = amounts_vec
+            .iter()
+            .map(|(account, amount)| serialization_api::v2::RewardAmount {
+                address: format!("{:#x}", account.0),
+                amount: amount.0.to_string(), // Decimal string
+            })
+            .collect();
+
         Ok(RewardAmounts {
             amounts,
             total: *total,
@@ -98,9 +238,8 @@ where
         &self,
         value: &Self::RewardMerkleTreeData,
     ) -> anyhow::Result<RewardMerkleTreeV2Data> {
-        let bytes = bincode::serialize(value).map_err(|e| {
-            anyhow::anyhow!("failed to serialize RewardMerkleTreeV2Data: {}", e)
-        })?;
+        let bytes = bincode::serialize(value)
+            .map_err(|e| anyhow::anyhow!("failed to serialize RewardMerkleTreeV2Data: {}", e))?;
         Ok(RewardMerkleTreeV2Data { data: bytes })
     }
 }
@@ -114,7 +253,6 @@ impl<D> espresso_api::v2::RewardApi for NodeApiStateImpl<D>
 where
     D: RewardMerkleTreeDataSource,
 {
-
     async fn get_reward_claim_input(
         &self,
         block_height: u64,
@@ -177,7 +315,10 @@ where
         Ok(proof.balance)
     }
 
-    async fn get_latest_reward_balance(&self, address: Self::Address) -> anyhow::Result<Self::RewardBalance> {
+    async fn get_latest_reward_balance(
+        &self,
+        address: Self::Address,
+    ) -> anyhow::Result<Self::RewardBalance> {
         // Load the latest reward account proof
         let proof = self
             .data_source
@@ -318,7 +459,8 @@ where
         address: String,
     ) -> anyhow::Result<Self::RewardClaimInput> {
         // Parse the Ethereum address
-        let addr: alloy::primitives::Address = address.parse()
+        let addr: alloy::primitives::Address = address
+            .parse()
             .map_err(|_| anyhow::anyhow!("invalid ethereum address: {}", address))?;
 
         // Load the reward account proof from the data source
@@ -363,7 +505,8 @@ where
         address: String,
     ) -> anyhow::Result<Self::RewardBalance> {
         // Parse the Ethereum address
-        let addr: alloy::primitives::Address = address.parse()
+        let addr: alloy::primitives::Address = address
+            .parse()
             .map_err(|_| anyhow::anyhow!("invalid ethereum address: {}", address))?;
 
         // Load the reward account proof from the data source
@@ -384,9 +527,13 @@ where
         Ok(proof.balance)
     }
 
-    async fn get_latest_reward_balance(&self, address: String) -> anyhow::Result<Self::RewardBalance> {
+    async fn get_latest_reward_balance(
+        &self,
+        address: String,
+    ) -> anyhow::Result<Self::RewardBalance> {
         // Parse the Ethereum address
-        let addr: alloy::primitives::Address = address.parse()
+        let addr: alloy::primitives::Address = address
+            .parse()
             .map_err(|_| anyhow::anyhow!("invalid ethereum address: {}", address))?;
 
         // Load the latest reward account proof from the data source
@@ -395,11 +542,7 @@ where
             .load_latest_reward_account_proof_v2(addr.into())
             .await
             .map_err(|err| {
-                anyhow::anyhow!(
-                    "failed to load latest reward account {}: {}",
-                    address,
-                    err
-                )
+                anyhow::anyhow!("failed to load latest reward account {}: {}", address, err)
             })?;
 
         // Return the balance directly (U256)
@@ -412,7 +555,8 @@ where
         address: String,
     ) -> anyhow::Result<Self::RewardAccountQueryData> {
         // Parse the Ethereum address
-        let addr: alloy::primitives::Address = address.parse()
+        let addr: alloy::primitives::Address = address
+            .parse()
             .map_err(|_| anyhow::anyhow!("invalid ethereum address: {}", address))?;
 
         // Load and return the reward account proof directly (internal type)
@@ -437,7 +581,8 @@ where
         address: String,
     ) -> anyhow::Result<Self::RewardAccountQueryData> {
         // Parse the Ethereum address
-        let addr: alloy::primitives::Address = address.parse()
+        let addr: alloy::primitives::Address = address
+            .parse()
             .map_err(|_| anyhow::anyhow!("invalid ethereum address: {}", address))?;
 
         // Load and return the latest reward account proof directly (internal type)
@@ -446,11 +591,7 @@ where
             .load_latest_reward_account_proof_v2(addr.into())
             .await
             .map_err(|err| {
-                anyhow::anyhow!(
-                    "failed to load latest reward account {}: {}",
-                    address,
-                    err
-                )
+                anyhow::anyhow!("failed to load latest reward account {}: {}", address, err)
             })?;
 
         Ok(proof)

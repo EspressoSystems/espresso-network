@@ -40,7 +40,8 @@ pub mod v1 {
 
     /// Get latest reward balance
     /// Path: GET /v1/reward-state-v2/reward-balance/latest/{address}
-    pub const LATEST_REWARD_BALANCE_ROUTE: &str = "/v1/reward-state-v2/reward-balance/latest/{address}";
+    pub const LATEST_REWARD_BALANCE_ROUTE: &str =
+        "/v1/reward-state-v2/reward-balance/latest/{address}";
 
     /// Get reward account Merkle proof at a specific height
     /// Path: GET /v1/reward-state-v2/proof/{height}/{address}
@@ -48,7 +49,8 @@ pub mod v1 {
 
     /// Get latest reward account Merkle proof
     /// Path: GET /v1/reward-state-v2/proof/latest/{address}
-    pub const LATEST_REWARD_ACCOUNT_PROOF_ROUTE: &str = "/v1/reward-state-v2/proof/latest/{address}";
+    pub const LATEST_REWARD_ACCOUNT_PROOF_ROUTE: &str =
+        "/v1/reward-state-v2/proof/latest/{address}";
 
     /// Get paginated list of reward amounts
     /// Path: GET /v1/reward-state-v2/reward-amounts/{height}/{offset}/{limit}
@@ -57,7 +59,8 @@ pub mod v1 {
 
     /// Get raw RewardMerkleTreeV2 snapshot
     /// Path: GET /v1/reward-state-v2/reward-merkle-tree-v2/{height}
-    pub const REWARD_MERKLE_TREE_V2_ROUTE: &str = "/v1/reward-state-v2/reward-merkle-tree-v2/{height}";
+    pub const REWARD_MERKLE_TREE_V2_ROUTE: &str =
+        "/v1/reward-state-v2/reward-merkle-tree-v2/{height}";
 }
 
 //=============================================================================
@@ -134,19 +137,15 @@ pub mod v2 {
     // Documentation Routes (V2 only)
     //=========================================================================
 
-    /// OpenAPI specification endpoint (relative to router root)
-    pub const OPENAPI_SPEC_ROUTE: &str = "/docs/openapi.json";
-
-    /// OpenAPI specification endpoint (absolute path for V2)
-    pub const OPENAPI_SPEC_PATH: &str = "/v2/docs/openapi.json";
+    /// OpenAPI specification endpoint
+    pub const OPENAPI_SPEC_ROUTE: &str = "/v2/docs/openapi.json";
 
     /// Swagger documentation UI endpoint
-    pub const SWAGGER_ROUTE: &str = "/";
+    pub const SWAGGER_ROUTE: &str = "/v2";
 
     /// Scalar documentation UI endpoint
-    pub const SCALAR_ROUTE: &str = "/scalar";
+    pub const SCALAR_ROUTE: &str = "/v2/scalar";
 
     /// Redoc documentation UI endpoint
-    pub const REDOC_ROUTE: &str = "/redoc";
+    pub const REDOC_ROUTE: &str = "/v2/redoc";
 }
-

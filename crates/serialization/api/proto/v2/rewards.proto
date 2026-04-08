@@ -22,12 +22,12 @@ message RewardClaimInput {
   // Ethereum address of the reward recipient
   string address = 1;
 
-  // Total lifetime rewards for this address (uint256 encoded as string)
+  // Total lifetime rewards for this address (hex-encoded with "0x" prefix for contract)
   string lifetime_rewards = 2;
 
-  // Auth data containing the Merkle proof and auth root inputs
+  // Auth data containing the Merkle proof and auth root inputs (hex-encoded with "0x" prefix)
   // This is the encoded RewardAuthData from the contract adapter
-  bytes auth_data = 3;
+  string auth_data = 3;
 }
 
 // Request to get reward claim input
@@ -45,7 +45,7 @@ message GetRewardClaimInputRequest {
 
 // Reward balance for an address
 message RewardBalance {
-  // Balance amount in wei (smallest unit), hex-encoded with "0x" prefix
+  // Balance amount in wei (decimal string)
   string amount = 1;
 }
 
@@ -70,7 +70,7 @@ message GetLatestRewardBalanceRequest {
 
 // Complete reward account query data with balance and merkle proof
 message RewardAccountQueryDataV2 {
-  // Current balance for this account, hex-encoded with "0x" prefix
+  // Current balance for this account (decimal string)
   string balance = 1;
 
   // Merkle proof for this account
@@ -175,7 +175,7 @@ message RewardAmount {
   // Ethereum address
   string address = 1;
 
-  // Reward amount in wei, hex-encoded with "0x" prefix
+  // Reward amount in wei (decimal string)
   string amount = 2;
 }
 

@@ -8,6 +8,7 @@
 //! Both gRPC and Axum handlers use these functions, ensuring consistent behavior.
 
 use serialization_api::v2::*;
+
 use crate::v2::RewardApi;
 
 /// Handle get_reward_claim_input request
@@ -47,9 +48,7 @@ where
     let address = state.deserialize_address(&request.address)?;
 
     // Call trait method with parsed types
-    let result = state
-        .get_reward_balance(request.height, address)
-        .await?;
+    let result = state.get_reward_balance(request.height, address).await?;
 
     // Serialize response to proto
     state.serialize_reward_balance(&result)
@@ -67,9 +66,7 @@ where
     let address = state.deserialize_address(&request.address)?;
 
     // Call trait method with parsed types
-    let result = state
-        .get_latest_reward_balance(address)
-        .await?;
+    let result = state.get_latest_reward_balance(address).await?;
 
     // Serialize response to proto
     state.serialize_reward_balance(&result)
@@ -107,9 +104,7 @@ where
     let address = state.deserialize_address(&request.address)?;
 
     // Call trait method with parsed types
-    let result = state
-        .get_latest_reward_account_proof(address)
-        .await?;
+    let result = state.get_latest_reward_account_proof(address).await?;
 
     // Serialize response to proto
     state.serialize_reward_account_query_data(&result)
@@ -145,9 +140,7 @@ where
     // No address deserialization needed for this endpoint
 
     // Call trait method
-    let result = state
-        .get_reward_merkle_tree_v2(request.height)
-        .await?;
+    let result = state.get_reward_merkle_tree_v2(request.height).await?;
 
     // Serialize response to proto
     state.serialize_reward_merkle_tree_data(&result)

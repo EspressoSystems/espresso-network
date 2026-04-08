@@ -18,7 +18,7 @@ pub use v2::*;
 ///
 /// Implementations define their own internal types for addresses and rewards data,
 /// then provide conversions to/from the proto types for API serialization.
-pub trait EspressoSerializations {
+pub trait ApiSerializations {
     // Request types (implementation-defined)
 
     /// Address type used by the implementation
@@ -124,11 +124,9 @@ mod serde_tests {
         let branch_node = MerkleNode {
             node_type: Some(merkle_node::NodeType::Branch(Branch {
                 value: "FIELD~branch_value".to_string(),
-                children: vec![
-                    MerkleNode {
-                        node_type: Some(merkle_node::NodeType::Empty(Empty { dummy: None })),
-                    },
-                ],
+                children: vec![MerkleNode {
+                    node_type: Some(merkle_node::NodeType::Empty(Empty { dummy: None })),
+                }],
             })),
         };
 
@@ -164,10 +162,25 @@ mod serde_tests {
         println!("MerkleNode schema:\n{}", schema_json);
 
         // Verify schema contains oneOf with 4 variants
-        assert!(schema_json.contains("\"oneOf\""), "Schema should have oneOf");
-        assert!(schema_json.contains("\"Empty\""), "Schema should contain Empty variant");
-        assert!(schema_json.contains("\"Leaf\""), "Schema should contain Leaf variant");
-        assert!(schema_json.contains("\"Branch\""), "Schema should contain Branch variant");
-        assert!(schema_json.contains("\"ForgottenSubtree\""), "Schema should contain ForgottenSubtree variant");
+        assert!(
+            schema_json.contains("\"oneOf\""),
+            "Schema should have oneOf"
+        );
+        assert!(
+            schema_json.contains("\"Empty\""),
+            "Schema should contain Empty variant"
+        );
+        assert!(
+            schema_json.contains("\"Leaf\""),
+            "Schema should contain Leaf variant"
+        );
+        assert!(
+            schema_json.contains("\"Branch\""),
+            "Schema should contain Branch variant"
+        );
+        assert!(
+            schema_json.contains("\"ForgottenSubtree\""),
+            "Schema should contain ForgottenSubtree variant"
+        );
     }
 }

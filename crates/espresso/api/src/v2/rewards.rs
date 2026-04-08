@@ -1,18 +1,17 @@
 //! Rewards API trait for v2
 //!
 //! Accepts parsed request types and returns implementation-defined types.
-//! Implementations must also implement EspressoSerializations for conversions.
+//! Implementations must also implement ApiSerializations for conversions.
 
 use async_trait::async_trait;
-use serialization_api::EspressoSerializations;
+use serialization_api::ApiSerializations;
 
 /// Reward API trait - accepts parsed request types, returns internal types
 ///
-/// Implementations define their own types and provide conversions via EspressoSerializations.
+/// Implementations define their own types and provide conversions via ApiSerializations.
 /// Handlers in espresso-api handle parsing proto requests and converting responses.
 #[async_trait]
-pub trait RewardApi: EspressoSerializations {
-
+pub trait RewardApi: ApiSerializations {
     /// Get reward claim input for L1 contract submission
     ///
     /// Returns all data needed to call the claimRewards function on the L1 contract,
@@ -42,7 +41,10 @@ pub trait RewardApi: EspressoSerializations {
     ///
     /// # Arguments
     /// * `address` - Parsed Ethereum address (already validated)
-    async fn get_latest_reward_balance(&self, address: Self::Address) -> anyhow::Result<Self::RewardBalance>;
+    async fn get_latest_reward_balance(
+        &self,
+        address: Self::Address,
+    ) -> anyhow::Result<Self::RewardBalance>;
 
     /// Get Merkle proof for a reward account at a specific height
     ///

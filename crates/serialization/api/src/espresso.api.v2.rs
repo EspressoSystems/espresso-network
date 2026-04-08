@@ -15,13 +15,13 @@ pub struct RewardClaimInput {
     /// Ethereum address of the reward recipient
     #[prost(string, tag = "1")]
     pub address: ::prost::alloc::string::String,
-    /// Total lifetime rewards for this address (uint256 encoded as string)
+    /// Total lifetime rewards for this address (hex-encoded with "0x" prefix for contract)
     #[prost(string, tag = "2")]
     pub lifetime_rewards: ::prost::alloc::string::String,
-    /// Auth data containing the Merkle proof and auth root inputs
+    /// Auth data containing the Merkle proof and auth root inputs (hex-encoded with "0x" prefix)
     /// This is the encoded RewardAuthData from the contract adapter
-    #[prost(bytes = "vec", tag = "3")]
-    pub auth_data: ::prost::alloc::vec::Vec<u8>,
+    #[prost(string, tag = "3")]
+    pub auth_data: ::prost::alloc::string::String,
 }
 /// Request to get reward claim input
 #[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
@@ -38,7 +38,7 @@ pub struct GetRewardClaimInputRequest {
 #[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct RewardBalance {
-    /// Balance amount in wei (smallest unit), hex-encoded with "0x" prefix
+    /// Balance amount in wei (decimal string)
     #[prost(string, tag = "1")]
     pub amount: ::prost::alloc::string::String,
 }
@@ -65,7 +65,7 @@ pub struct GetLatestRewardBalanceRequest {
 #[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RewardAccountQueryDataV2 {
-    /// Current balance for this account, hex-encoded with "0x" prefix
+    /// Current balance for this account (decimal string)
     #[prost(string, tag = "1")]
     pub balance: ::prost::alloc::string::String,
     /// Merkle proof for this account
@@ -208,7 +208,7 @@ pub struct RewardAmount {
     /// Ethereum address
     #[prost(string, tag = "1")]
     pub address: ::prost::alloc::string::String,
-    /// Reward amount in wei, hex-encoded with "0x" prefix
+    /// Reward amount in wei (decimal string)
     #[prost(string, tag = "2")]
     pub amount: ::prost::alloc::string::String,
 }

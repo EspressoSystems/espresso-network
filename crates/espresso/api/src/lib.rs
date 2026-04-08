@@ -14,7 +14,7 @@ pub mod proto {
 
 // Re-exports
 pub use self::{
-    axum::{create_router_v1, create_router_v2, create_combined_router, routes},
+    axum::{create_combined_router, create_router_v1, create_router_v2, routes},
     grpc::create_reward_service,
 };
 
@@ -33,7 +33,10 @@ where
     tracing::info!("Binding to {}", addr);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
 
-    tracing::info!("Axum API server listening on {} (v1 and v2 routes available)", addr);
+    tracing::info!(
+        "Axum API server listening on {} (v1 and v2 routes available)",
+        addr
+    );
     ::axum::serve(listener, app.into_make_service()).await?;
 
     tracing::info!("Axum server stopped");

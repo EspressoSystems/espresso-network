@@ -56,7 +56,10 @@ pub trait RewardApi {
     ///
     /// # Arguments
     /// * `address` - Ethereum address to query rewards for
-    async fn get_latest_reward_balance(&self, address: String) -> anyhow::Result<Self::RewardBalance>;
+    async fn get_latest_reward_balance(
+        &self,
+        address: String,
+    ) -> anyhow::Result<Self::RewardBalance>;
 
     /// Get Merkle proof for a reward account at a specific height
     ///
