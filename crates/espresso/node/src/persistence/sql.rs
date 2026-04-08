@@ -1353,7 +1353,7 @@ impl SequencerPersistence for Persistence {
         .await?;
         tx.commit().await?;
 
-        // Mark migration as complete
+        // Mark migration as complete, and clean up old tables.
         let mut tx = self.db.write().await?;
         tx.upsert(
             "epoch_migration",
@@ -1362,6 +1362,12 @@ impl SequencerPersistence for Persistence {
             [("reward_merkle_tree_v2_data".to_string(), true, offset)],
         )
         .await?;
+        query("DROP TABLE reward_merkle_tree_v2")
+            .execute(tx.as_mut())
+            .await?;
+        query("DROP TABLE reward_merkle_tree")
+            .execute(tx.as_mut())
+            .await?;
         tx.commit().await?;
 
         tracing::warn!("migrated reward_merkle_tree_v2 at height {max_height}");
