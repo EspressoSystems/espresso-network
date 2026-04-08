@@ -72,7 +72,7 @@
 <a href=#72 id=72 data-nosnippet>72</a>                .clone()
 <a href=#73 id=73 data-nosnippet>73</a>                .zip(share.content.mt_proofs.iter())
 <a href=#74 id=74 data-nosnippet>74</a>            {
-<a href=#75 id=75 data-nosnippet>75</a>                <span class="kw">if </span>index &gt; param.total_weights {
+<a href=#75 id=75 data-nosnippet>75</a>                <span class="kw">if </span>index &gt;= param.total_weights {
 <a href=#76 id=76 data-nosnippet>76</a>                    <span class="kw">return </span><span class="prelude-val">Err</span>(VidError::InvalidShare);
 <a href=#77 id=77 data-nosnippet>77</a>                }
 <a href=#78 id=78 data-nosnippet>78</a>                <span class="kw">if </span>visited_indices.contains(<span class="kw-2">&amp;</span>index) {
@@ -511,5 +511,32 @@
 <a href=#511 id=511 data-nosnippet>511</a>        <span class="macro">assert_eq!</span>(proof.ns_index, <span class="number">1</span>);
 <a href=#512 id=512 data-nosnippet>512</a>        <span class="macro">assert!</span>(proof.verify(<span class="kw-2">&amp;</span>param, <span class="kw-2">&amp;</span>commit).unwrap().is_ok());
 <a href=#513 id=513 data-nosnippet>513</a>    }
-<a href=#514 id=514 data-nosnippet>514</a>}
+<a href=#514 id=514 data-nosnippet>514</a>
+<a href=#515 id=515 data-nosnippet>515</a>    <span class="attr">#[test]
+<a href=#516 id=516 data-nosnippet>516</a>    </span><span class="kw">fn </span>test_bad_encoding_proof_rejects_boundary_index() {
+<a href=#517 id=517 data-nosnippet>517</a>        <span class="comment">// Regression test: proof_of_incorrect_encoding must reject shares with
+<a href=#518 id=518 data-nosnippet>518</a>        // index == total_weights (off-by-one, previously used `&gt;` instead of `&gt;=`).
+<a href=#519 id=519 data-nosnippet>519</a>        </span><span class="kw">let </span>param = AvidMScheme::setup(<span class="number">3usize</span>, <span class="number">6usize</span>).unwrap();
+<a href=#520 id=520 data-nosnippet>520</a>        <span class="kw">let </span>payload = [<span class="number">1u8</span>; <span class="number">50</span>];
+<a href=#521 id=521 data-nosnippet>521</a>        <span class="kw">let </span>weights = [<span class="number">1u32</span>; <span class="number">6</span>];
+<a href=#522 id=522 data-nosnippet>522</a>        <span class="kw">let </span>(commit, shares) = AvidMScheme::disperse(<span class="kw-2">&amp;</span>param, <span class="kw-2">&amp;</span>weights, <span class="kw-2">&amp;</span>payload).unwrap();
+<a href=#523 id=523 data-nosnippet>523</a>
+<a href=#524 id=524 data-nosnippet>524</a>        <span class="comment">// Construct a share whose range.end == total_weights (last valid share).
+<a href=#525 id=525 data-nosnippet>525</a>        // This should succeed since range 5..6 means index 5 which is &lt; 6.
+<a href=#526 id=526 data-nosnippet>526</a>        </span><span class="kw">let </span>last_share = <span class="kw-2">&amp;</span>shares[<span class="number">5</span>];
+<a href=#527 id=527 data-nosnippet>527</a>        <span class="macro">assert_eq!</span>(last_share.content.range.end, param.total_weights);
+<a href=#528 id=528 data-nosnippet>528</a>        <span class="macro">assert!</span>(
+<a href=#529 id=529 data-nosnippet>529</a>            AvidMScheme::verify_internal(<span class="kw-2">&amp;</span>param, <span class="kw-2">&amp;</span>commit, <span class="kw-2">&amp;</span>last_share.content)
+<a href=#530 id=530 data-nosnippet>530</a>                .is_ok_and(|r| r.is_ok())
+<a href=#531 id=531 data-nosnippet>531</a>        );
+<a href=#532 id=532 data-nosnippet>532</a>
+<a href=#533 id=533 data-nosnippet>533</a>        <span class="comment">// Construct a fake share with range.end &gt; total_weights. This must be rejected.
+<a href=#534 id=534 data-nosnippet>534</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>bad_share = shares[<span class="number">5</span>].clone();
+<a href=#535 id=535 data-nosnippet>535</a>        bad_share.content.range = param.total_weights..param.total_weights + <span class="number">1</span>;
+<a href=#536 id=536 data-nosnippet>536</a>        <span class="macro">assert!</span>(
+<a href=#537 id=537 data-nosnippet>537</a>            AvidMScheme::proof_of_incorrect_encoding(<span class="kw-2">&amp;</span>param, <span class="kw-2">&amp;</span>commit, <span class="kw-2">&amp;</span>[bad_share]).is_err(),
+<a href=#538 id=538 data-nosnippet>538</a>            <span class="string">"proof_of_incorrect_encoding must reject share with index &gt;= total_weights"
+<a href=#539 id=539 data-nosnippet>539</a>        </span>);
+<a href=#540 id=540 data-nosnippet>540</a>    }
+<a href=#541 id=541 data-nosnippet>541</a>}
 </code></pre></div></section></main></body></html>
