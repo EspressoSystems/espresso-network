@@ -52,6 +52,7 @@ if [ "$os" = "Darwin" ] && [ "$(go env GOARCH 2>/dev/null)" = "amd64" ] && [ "$t
       select(.reason == "compiler-artifact") | select(.target.name == "espresso_crypto_helper") | .filenames[0]
     ')"
     ln -sv "$x86_lib_path" "$go_target_dir/libespresso_crypto_helper-x86_64-apple-darwin.$extension"
+    ln -sfv "$x86_lib_path" "$go_target_dir/libespresso_crypto_helper.$extension"
 fi
 
 cd $project_root/sdks/go
