@@ -7,10 +7,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Generate message types with serde support for JSON serialization and OpenAPI schema
     // Output directly to src/ so generated types are committed to git for visibility
     prost_build::Config::new()
-        .type_attribute(
-            ".",
-            "#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]",
-        )
+        .type_attribute(".", "#[derive(serde::Serialize, serde::Deserialize)]")
         .out_dir(&out_dir)
         .compile_protos(&["v1/common.proto", "v1/rewards.proto"], &[proto_root])?;
 

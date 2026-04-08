@@ -24,6 +24,7 @@ clap = { workspace = true }
 displaydoc = { workspace = true }
 espresso-contract-deployer = { workspace = true }
 espresso-types = { workspace = true }
+espresso-utils = { workspace = true }
 futures = { workspace = true }
 hotshot-contract-adapter = { workspace = true }
 hotshot-query-service = { workspace = true }
@@ -43,7 +44,6 @@ jf-signature = { workspace = true }
 jf-signature-compat = { workspace = true }
 jf-utils = { workspace = true }
 reqwest = { workspace = true }
-espresso-utils = { workspace = true }
 serde = { workspace = true }
 surf-disco = { workspace = true }
 tide-disco = { workspace = true }
@@ -55,8 +55,8 @@ url = { workspace = true }
 vbs = { workspace = true }
 
 [dev-dependencies]
-rstest = { workspace = true }
 espresso-utils = { workspace = true, features = ["testing"] }
+rstest = { workspace = true }
 test-log = { workspace = true }
 
 [lints]

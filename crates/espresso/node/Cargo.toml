@@ -4,15 +4,15 @@ version = "0.1.0"
 authors = ["Espresso Systems <hello@espressosys.com>"]
 edition.workspace = true
 
-[lib]
-name = "espresso_node"
-path = "src/lib.rs"
-
 [package.metadata.cargo-udeps.ignore]
 normal = ["hotshot-testing"]
 
 [package.metadata.cargo-machete]
 ignored = ["vergen", "vergen-gitcl", "include_dir", "hotshot_builder_api"]
+
+[lib]
+name = "espresso_node"
+path = "src/lib.rs"
 
 [features]
 testing = [
@@ -47,10 +47,10 @@ derivative = { workspace = true }
 derive_more = { workspace = true }
 dotenvy = { workspace = true }
 either = { workspace = true }
-espresso-contract-deployer = { workspace = true }
 espresso-api = { path = "../api" }
+espresso-contract-deployer = { workspace = true }
 espresso-types = { workspace = true }
-serialization-api = { path = "../../serialization/api" }
+espresso-utils = { workspace = true }
 futures = { workspace = true }
 generic-tests = { workspace = true }
 hotshot = { workspace = true }
@@ -86,9 +86,9 @@ reqwest = { workspace = true }
 rstest = { workspace = true }
 rstest_reuse = { workspace = true }
 semver = { workspace = true }
-espresso-utils = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+serialization-api = { path = "../../serialization/api" }
 sha2 = { workspace = true }
 snafu = { workspace = true }
 sqlx = { workspace = true }
@@ -130,8 +130,8 @@ reqwest = { workspace = true }
 test-log = { workspace = true }
 
 # Enable "testing" feature when running tests
-light-client = { workspace = true, features = ["testing"] }
 espresso-node = { path = ".", features = ["testing"] }
+light-client = { workspace = true, features = ["testing"] }
 tempfile = { workspace = true }
 
 [lints]

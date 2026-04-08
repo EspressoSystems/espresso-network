@@ -10,7 +10,6 @@ generated = true
 [dependencies]
 prost = "0.14"
 serde = { version = "1", features = ["derive"] }
-schemars = "0.9"
 
 [build-dependencies]
 prost-build = "0.14"
