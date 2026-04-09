@@ -1447,7 +1447,11 @@ mod tests {
     // ensuring that persisted data matches the on-chain events and that event fetcher work correctly.
     #[rstest_reuse::apply(persistence_types)]
     pub async fn test_stake_table_fetching_from_persistence<P: TestablePersistence>(
-        #[values(StakeTableContractVersion::V1, StakeTableContractVersion::V2)]
+        #[values(
+            StakeTableContractVersion::V1,
+            StakeTableContractVersion::V2,
+            StakeTableContractVersion::V3
+        )]
         stake_table_version: StakeTableContractVersion,
         _p: PhantomData<P>,
     ) -> anyhow::Result<()> {
@@ -1579,7 +1583,11 @@ mod tests {
 
     #[rstest_reuse::apply(persistence_types)]
     pub async fn test_stake_table_background_fetching<P: TestablePersistence>(
-        #[values(StakeTableContractVersion::V1, StakeTableContractVersion::V2)]
+        #[values(
+            StakeTableContractVersion::V1,
+            StakeTableContractVersion::V2,
+            StakeTableContractVersion::V3
+        )]
         stake_table_version: StakeTableContractVersion,
         _p: PhantomData<P>,
     ) -> anyhow::Result<()> {

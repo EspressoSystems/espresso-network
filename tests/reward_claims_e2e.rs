@@ -89,7 +89,7 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
         .persistences(persistence.clone())
         .pos_hook(
             DelegationConfig::default(),
-            StakeTableContractVersion::V2,
+            StakeTableContractVersion::V3,
             Upgrade::trivial(DRB_AND_HEADER_UPGRADE_VERSION),
         )
         .await?

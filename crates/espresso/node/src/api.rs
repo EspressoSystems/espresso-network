@@ -5562,7 +5562,7 @@ mod test {
             }))
             .pos_hook(
                 DelegationConfig::MultipleDelegators,
-                hotshot_contract_adapter::stake_table::StakeTableContractVersion::V2,
+                hotshot_contract_adapter::stake_table::StakeTableContractVersion::V3,
                 upgrade,
             )
             .await
@@ -5805,7 +5805,7 @@ mod test {
             }))
             .pos_hook(
                 DelegationConfig::MultipleDelegators,
-                hotshot_contract_adapter::stake_table::StakeTableContractVersion::V2,
+                hotshot_contract_adapter::stake_table::StakeTableContractVersion::V3,
                 upgrade,
             )
             .await
@@ -6823,7 +6823,7 @@ mod test {
             }))
             .pos_hook(
                 DelegationConfig::MultipleDelegators,
-                hotshot_contract_adapter::stake_table::StakeTableContractVersion::V2,
+                hotshot_contract_adapter::stake_table::StakeTableContractVersion::V3,
                 upgrade,
             )
             .await
@@ -6900,7 +6900,7 @@ mod test {
             }))
             .pos_hook(
                 DelegationConfig::MultipleDelegators,
-                hotshot_contract_adapter::stake_table::StakeTableContractVersion::V2,
+                hotshot_contract_adapter::stake_table::StakeTableContractVersion::V3,
                 upgrade,
             )
             .await
@@ -7030,7 +7030,7 @@ mod test {
             }))
             .pos_hook(
                 DelegationConfig::MultipleDelegators,
-                hotshot_contract_adapter::stake_table::StakeTableContractVersion::V2,
+                hotshot_contract_adapter::stake_table::StakeTableContractVersion::V3,
                 upgrade,
             )
             .await
@@ -7306,7 +7306,7 @@ mod test {
             }))
             .pos_hook(
                 DelegationConfig::MultipleDelegators,
-                hotshot_contract_adapter::stake_table::StakeTableContractVersion::V2,
+                hotshot_contract_adapter::stake_table::StakeTableContractVersion::V3,
                 upgrade,
             )
             .await
@@ -7538,7 +7538,7 @@ mod test {
             }))
             .pos_hook(
                 DelegationConfig::MultipleDelegators,
-                hotshot_contract_adapter::stake_table::StakeTableContractVersion::V2,
+                hotshot_contract_adapter::stake_table::StakeTableContractVersion::V3,
                 POS_V4,
             )
             .await

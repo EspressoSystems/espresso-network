@@ -3160,7 +3160,11 @@ mod tests {
     // duplicated BLS keys via the update keys events.
     #[rstest::rstest]
     fn test_regression_non_unique_bls_keys_not_discarded(
-        #[values(StakeTableContractVersion::V1, StakeTableContractVersion::V2)]
+        #[values(
+            StakeTableContractVersion::V1,
+            StakeTableContractVersion::V2,
+            StakeTableContractVersion::V3
+        )]
         version: StakeTableContractVersion,
     ) {
         let val = TestValidator::random();
@@ -3227,6 +3231,7 @@ mod tests {
     #[rstest]
     #[case::v1(StakeTableContractVersion::V1)]
     #[case::v2(StakeTableContractVersion::V2)]
+    #[case::v3(StakeTableContractVersion::V3)]
     fn test_register_validator(#[case] version: StakeTableContractVersion) {
         let mut state = StakeTableState::default();
         let validator = TestValidator::random();
@@ -3247,6 +3252,7 @@ mod tests {
     #[rstest]
     #[case::v1(StakeTableContractVersion::V1)]
     #[case::v2(StakeTableContractVersion::V2)]
+    #[case::v3(StakeTableContractVersion::V3)]
     fn test_validator_already_registered(#[case] version: StakeTableContractVersion) {
         let mut stake_table_state = StakeTableState::default();
 
@@ -3348,6 +3354,7 @@ mod tests {
     #[rstest]
     #[case::v1(StakeTableContractVersion::V1)]
     #[case::v2(StakeTableContractVersion::V2)]
+    #[case::v3(StakeTableContractVersion::V3)]
     fn test_deregister_validator(#[case] version: StakeTableContractVersion) {
         let mut state = StakeTableState::default();
         let val = TestValidator::random();
@@ -3371,6 +3378,7 @@ mod tests {
     #[rstest]
     #[case::v1(StakeTableContractVersion::V1)]
     #[case::v2(StakeTableContractVersion::V2)]
+    #[case::v3(StakeTableContractVersion::V3)]
     fn test_delegate_and_undelegate(#[case] version: StakeTableContractVersion) {
         let mut state = StakeTableState::default();
         let val = TestValidator::random();
@@ -3415,6 +3423,7 @@ mod tests {
     #[rstest]
     #[case::v1(StakeTableContractVersion::V1)]
     #[case::v2(StakeTableContractVersion::V2)]
+    #[case::v3(StakeTableContractVersion::V3)]
     fn test_key_update_event(#[case] version: StakeTableContractVersion) {
         let mut state = StakeTableState::default();
         let val = TestValidator::random();

@@ -15,6 +15,7 @@ mod test {
     #[rstest]
     #[case(StakeTableContractVersion::V1)]
     #[case(StakeTableContractVersion::V2)]
+    #[case(StakeTableContractVersion::V3)]
     #[tokio::test]
     async fn test_delegate(#[case] version: StakeTableContractVersion) -> Result<()> {
         let system = TestSystem::deploy_version(version).await?;
@@ -39,6 +40,7 @@ mod test {
     #[rstest]
     #[case(StakeTableContractVersion::V1)]
     #[case(StakeTableContractVersion::V2)]
+    #[case(StakeTableContractVersion::V3)]
     #[tokio::test]
     async fn test_undelegate(#[case] version: StakeTableContractVersion) -> Result<()> {
         let system = TestSystem::deploy_version(version).await?;

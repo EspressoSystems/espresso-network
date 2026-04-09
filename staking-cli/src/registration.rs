@@ -114,6 +114,7 @@ mod test {
     #[rstest]
     #[case(StakeTableContractVersion::V1)]
     #[case(StakeTableContractVersion::V2)]
+    #[case(StakeTableContractVersion::V3)]
     #[tokio::test]
     async fn test_deregister_validator(#[case] version: StakeTableContractVersion) -> Result<()> {
         let system = TestSystem::deploy_version(version).await?;

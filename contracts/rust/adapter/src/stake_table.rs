@@ -29,8 +29,8 @@ pub struct StateSignatureSol(pub Bytes);
 #[derive(Debug, Clone, Copy, Default)]
 pub enum StakeTableContractVersion {
     V1,
-    #[default]
     V2,
+    #[default]
     V3,
 }
 

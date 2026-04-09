@@ -178,7 +178,7 @@ pub async fn deploy_contracts_for_testing(
     let contracts = deploy_to_rpc(
         provider,
         rpc_url,
-        StakeTableContractVersion::V2,
+        StakeTableContractVersion::V3,
         exit_escrow_period,
     )
     .await?;
@@ -456,7 +456,7 @@ impl TestSystem {
     }
 
     pub async fn deploy() -> Result<Self> {
-        Self::deploy_version(StakeTableContractVersion::V2).await
+        Self::deploy_version(StakeTableContractVersion::V3).await
     }
 
     pub async fn deploy_version(
@@ -556,7 +556,7 @@ impl TestSystem {
         let contracts = deploy_to_rpc(
             provider.clone(),
             rpc_url.clone(),
-            StakeTableContractVersion::V2,
+            StakeTableContractVersion::V3,
             exit_escrow_period,
         )
         .await?;
@@ -590,7 +590,7 @@ impl TestSystem {
             state_key_pair,
             commission: Commission::try_from("12.34")?,
             approval_amount,
-            version: StakeTableContractVersion::V2,
+            version: StakeTableContractVersion::V3,
             anvil_instance: None,
         })
     }
