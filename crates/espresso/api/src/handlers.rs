@@ -28,9 +28,7 @@ where
     let address = state.deserialize_address(&request.address)?;
 
     // Call trait method with parsed types
-    let result = state
-        .get_reward_claim_input(request.block_height, address)
-        .await?;
+    let result = state.get_reward_claim_input(address).await?;
 
     // Serialize response to proto, passing original address string
     state.serialize_reward_claim_input(&address_string, &result)
@@ -48,25 +46,7 @@ where
     let address = state.deserialize_address(&request.address)?;
 
     // Call trait method with parsed types
-    let result = state.get_reward_balance(request.height, address).await?;
-
-    // Serialize response to proto
-    state.serialize_reward_balance(&result)
-}
-
-/// Handle get_latest_reward_balance request
-pub async fn get_latest_reward_balance<S>(
-    state: &S,
-    request: GetLatestRewardBalanceRequest,
-) -> anyhow::Result<RewardBalance>
-where
-    S: RewardApi,
-{
-    // Deserialize proto request fields
-    let address = state.deserialize_address(&request.address)?;
-
-    // Call trait method with parsed types
-    let result = state.get_latest_reward_balance(address).await?;
+    let result = state.get_reward_balance(address).await?;
 
     // Serialize response to proto
     state.serialize_reward_balance(&result)
@@ -84,37 +64,17 @@ where
     let address = state.deserialize_address(&request.address)?;
 
     // Call trait method with parsed types
-    let result = state
-        .get_reward_account_proof(request.height, address)
-        .await?;
+    let result = state.get_reward_account_proof(address).await?;
 
     // Serialize response to proto
     state.serialize_reward_account_query_data(&result)
 }
 
-/// Handle get_latest_reward_account_proof request
-pub async fn get_latest_reward_account_proof<S>(
+/// Handle get_reward_balances request
+pub async fn get_reward_balances<S>(
     state: &S,
-    request: GetLatestRewardAccountProofRequest,
-) -> anyhow::Result<RewardAccountQueryDataV2>
-where
-    S: RewardApi,
-{
-    // Deserialize proto request fields
-    let address = state.deserialize_address(&request.address)?;
-
-    // Call trait method with parsed types
-    let result = state.get_latest_reward_account_proof(address).await?;
-
-    // Serialize response to proto
-    state.serialize_reward_account_query_data(&result)
-}
-
-/// Handle get_reward_amounts request
-pub async fn get_reward_amounts<S>(
-    state: &S,
-    request: GetRewardAmountsRequest,
-) -> anyhow::Result<RewardAmounts>
+    request: GetRewardBalancesRequest,
+) -> anyhow::Result<RewardBalances>
 where
     S: RewardApi,
 {
@@ -122,11 +82,11 @@ where
 
     // Call trait method
     let result = state
-        .get_reward_amounts(request.height, request.offset, request.limit)
+        .get_reward_balances(request.height, request.offset, request.limit)
         .await?;
 
     // Serialize response to proto
-    state.serialize_reward_amounts(&result)
+    state.serialize_reward_balances(&result)
 }
 
 /// Handle get_reward_merkle_tree_v2 request

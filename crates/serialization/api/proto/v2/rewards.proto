@@ -30,13 +30,10 @@ message RewardClaimInput {
   string auth_data = 3;
 }
 
-// Request to get reward claim input
+// Request to get reward claim input (at latest finalized height)
 message GetRewardClaimInputRequest {
-  // Block height (must match the height finalized in the Light Client contract)
-  uint64 block_height = 1;
-
   // Ethereum address to query rewards for (hex format, e.g. "0x1234...")
-  string address = 2;
+  string address = 1;
 }
 
 //=============================================================================
@@ -49,17 +46,8 @@ message RewardBalance {
   string amount = 1;
 }
 
-// Request to get reward balance at a specific height
+// Request to get reward balance (at latest finalized height)
 message GetRewardBalanceRequest {
-  // Block height to query
-  uint64 height = 1;
-
-  // Ethereum address to query
-  string address = 2;
-}
-
-// Request to get latest reward balance
-message GetLatestRewardBalanceRequest {
   // Ethereum address to query
   string address = 1;
 }
@@ -151,17 +139,8 @@ message ForgottenSubtree {
 }
 
 
-// Request to get reward account proof at a specific height
+// Request to get reward account proof (at latest finalized height)
 message GetRewardAccountProofRequest {
-  // Block height to query
-  uint64 height = 1;
-
-  // Ethereum address to query
-  string address = 2;
-}
-
-// Request to get latest reward account proof
-message GetLatestRewardAccountProofRequest {
   // Ethereum address to query
   string address = 1;
 }
@@ -179,8 +158,8 @@ message RewardAmount {
   string amount = 2;
 }
 
-// Paginated list of reward amounts
-message RewardAmounts {
+// Paginated list of reward balances
+message RewardBalances {
   // List of reward amounts in this page
   repeated RewardAmount amounts = 1;
 
@@ -188,8 +167,8 @@ message RewardAmounts {
   uint64 total = 2;
 }
 
-// Request to get paginated reward amounts
-message GetRewardAmountsRequest {
+// Request to get paginated reward balances
+message GetRewardBalancesRequest {
   // Block height to query
   uint64 height = 1;
 
@@ -222,24 +201,18 @@ message GetRewardMerkleTreeRequest {
 
 // gRPC service for reward state queries
 service RewardService {
-  // Get reward claim input for L1 contract submission
+  // Get reward claim input for L1 contract submission (at latest finalized height)
   rpc GetRewardClaimInput(GetRewardClaimInputRequest) returns (RewardClaimInput);
 
-  // Get reward balance at a specific height
+  // Get reward balance (at latest finalized height)
   rpc GetRewardBalance(GetRewardBalanceRequest) returns (RewardBalance);
 
-  // Get latest reward balance
-  rpc GetLatestRewardBalance(GetLatestRewardBalanceRequest) returns (RewardBalance);
-
-  // Get Merkle proof for reward account at a specific height
+  // Get Merkle proof for reward account (at latest finalized height)
   rpc GetRewardAccountProof(GetRewardAccountProofRequest) returns (RewardAccountQueryDataV2);
 
-  // Get Merkle proof for reward account at latest height
-  rpc GetLatestRewardAccountProof(GetLatestRewardAccountProofRequest) returns (RewardAccountQueryDataV2);
+  // Get paginated list of reward balances at a specific height
+  rpc GetRewardBalances(GetRewardBalancesRequest) returns (RewardBalances);
 
-  // Get paginated list of reward amounts
-  rpc GetRewardAmounts(GetRewardAmountsRequest) returns (RewardAmounts);
-
-  // Get raw RewardMerkleTreeV2 snapshot
+  // Get raw RewardMerkleTreeV2 snapshot at a specific height
   rpc GetRewardMerkleTreeV2(GetRewardMerkleTreeRequest) returns (RewardMerkleTreeV2Data);
 }

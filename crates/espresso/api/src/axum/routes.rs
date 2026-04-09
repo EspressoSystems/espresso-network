@@ -72,56 +72,38 @@ pub mod v2 {
 
     /// Get reward claim input for L1 contract submission
     ///
-    /// HTTP: GET /v2/rewards/claim-input/{height}/{address}
+    /// HTTP: GET /v2/rewards/claim-input/{address}
     /// gRPC: /espresso.api.v2.RewardService/GetRewardClaimInput
     pub const REWARD_CLAIM_INPUT_ROUTE: Route = Route {
-        http: "/v2/rewards/claim-input/{height}/{address}",
+        http: "/v2/rewards/claim-input/{address}",
         grpc: "/espresso.api.v2.RewardService/GetRewardClaimInput",
     };
 
-    /// Get reward balance at a specific height
+    /// Get reward balance at the latest finalized height
     ///
-    /// HTTP: GET /v2/rewards/balance/{height}/{address}
+    /// HTTP: GET /v2/rewards/balance/{address}
     /// gRPC: /espresso.api.v2.RewardService/GetRewardBalance
     pub const REWARD_BALANCE_ROUTE: Route = Route {
-        http: "/v2/rewards/balance/{height}/{address}",
+        http: "/v2/rewards/balance/{address}",
         grpc: "/espresso.api.v2.RewardService/GetRewardBalance",
     };
 
-    /// Get latest reward balance
+    /// Get reward account Merkle proof at the latest finalized height
     ///
-    /// HTTP: GET /v2/rewards/balance/latest/{address}
-    /// gRPC: /espresso.api.v2.RewardService/GetLatestRewardBalance
-    pub const LATEST_REWARD_BALANCE_ROUTE: Route = Route {
-        http: "/v2/rewards/balance/latest/{address}",
-        grpc: "/espresso.api.v2.RewardService/GetLatestRewardBalance",
-    };
-
-    /// Get reward account Merkle proof at a specific height
-    ///
-    /// HTTP: GET /v2/rewards/proof/{height}/{address}
+    /// HTTP: GET /v2/rewards/proof/{address}
     /// gRPC: /espresso.api.v2.RewardService/GetRewardAccountProof
     pub const REWARD_ACCOUNT_PROOF_ROUTE: Route = Route {
-        http: "/v2/rewards/proof/{height}/{address}",
+        http: "/v2/rewards/proof/{address}",
         grpc: "/espresso.api.v2.RewardService/GetRewardAccountProof",
     };
 
-    /// Get latest reward account Merkle proof
+    /// Get paginated list of reward balances
     ///
-    /// HTTP: GET /v2/rewards/proof/latest/{address}
-    /// gRPC: /espresso.api.v2.RewardService/GetLatestRewardAccountProof
-    pub const LATEST_REWARD_ACCOUNT_PROOF_ROUTE: Route = Route {
-        http: "/v2/rewards/proof/latest/{address}",
-        grpc: "/espresso.api.v2.RewardService/GetLatestRewardAccountProof",
-    };
-
-    /// Get paginated list of reward amounts
-    ///
-    /// HTTP: GET /v2/rewards/amounts/{height}/{offset}/{limit}
-    /// gRPC: /espresso.api.v2.RewardService/GetRewardAmounts
-    pub const REWARD_AMOUNTS_ROUTE: Route = Route {
-        http: "/v2/rewards/amounts/{height}/{offset}/{limit}",
-        grpc: "/espresso.api.v2.RewardService/GetRewardAmounts",
+    /// HTTP: GET /v2/rewards/balances/{height}/{offset}/{limit}
+    /// gRPC: /espresso.api.v2.RewardService/GetRewardBalances
+    pub const REWARD_BALANCES_ROUTE: Route = Route {
+        http: "/v2/rewards/balances/{height}/{offset}/{limit}",
+        grpc: "/espresso.api.v2.RewardService/GetRewardBalances",
     };
 
     /// Get raw RewardMerkleTreeV2 snapshot

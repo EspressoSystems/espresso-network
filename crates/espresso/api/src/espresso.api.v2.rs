@@ -91,7 +91,7 @@ pub mod reward_service_client {
             self.inner = self.inner.max_encoding_message_size(limit);
             self
         }
-        /// Get reward claim input for L1 contract submission
+        /// Get reward claim input for L1 contract submission (at latest finalized height)
         pub async fn get_reward_claim_input(
             &mut self,
             request: impl tonic::IntoRequest<
@@ -123,7 +123,7 @@ pub mod reward_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
-        /// Get reward balance at a specific height
+        /// Get reward balance (at latest finalized height)
         pub async fn get_reward_balance(
             &mut self,
             request: impl tonic::IntoRequest<
@@ -152,39 +152,7 @@ pub mod reward_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
-        /// Get latest reward balance
-        pub async fn get_latest_reward_balance(
-            &mut self,
-            request: impl tonic::IntoRequest<
-                ::serialization_api::v2::GetLatestRewardBalanceRequest,
-            >,
-        ) -> std::result::Result<
-            tonic::Response<::serialization_api::v2::RewardBalance>,
-            tonic::Status,
-        > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::unknown(
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
-            let codec = tonic_prost::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/espresso.api.v2.RewardService/GetLatestRewardBalance",
-            );
-            let mut req = request.into_request();
-            req.extensions_mut()
-                .insert(
-                    GrpcMethod::new(
-                        "espresso.api.v2.RewardService",
-                        "GetLatestRewardBalance",
-                    ),
-                );
-            self.inner.unary(req, path, codec).await
-        }
-        /// Get Merkle proof for reward account at a specific height
+        /// Get Merkle proof for reward account (at latest finalized height)
         pub async fn get_reward_account_proof(
             &mut self,
             request: impl tonic::IntoRequest<
@@ -216,14 +184,14 @@ pub mod reward_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
-        /// Get Merkle proof for reward account at latest height
-        pub async fn get_latest_reward_account_proof(
+        /// Get paginated list of reward balances at a specific height
+        pub async fn get_reward_balances(
             &mut self,
             request: impl tonic::IntoRequest<
-                ::serialization_api::v2::GetLatestRewardAccountProofRequest,
+                ::serialization_api::v2::GetRewardBalancesRequest,
             >,
         ) -> std::result::Result<
-            tonic::Response<::serialization_api::v2::RewardAccountQueryDataV2>,
+            tonic::Response<::serialization_api::v2::RewardBalances>,
             tonic::Status,
         > {
             self.inner
@@ -236,48 +204,16 @@ pub mod reward_service_client {
                 })?;
             let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
-                "/espresso.api.v2.RewardService/GetLatestRewardAccountProof",
+                "/espresso.api.v2.RewardService/GetRewardBalances",
             );
             let mut req = request.into_request();
             req.extensions_mut()
                 .insert(
-                    GrpcMethod::new(
-                        "espresso.api.v2.RewardService",
-                        "GetLatestRewardAccountProof",
-                    ),
+                    GrpcMethod::new("espresso.api.v2.RewardService", "GetRewardBalances"),
                 );
             self.inner.unary(req, path, codec).await
         }
-        /// Get paginated list of reward amounts
-        pub async fn get_reward_amounts(
-            &mut self,
-            request: impl tonic::IntoRequest<
-                ::serialization_api::v2::GetRewardAmountsRequest,
-            >,
-        ) -> std::result::Result<
-            tonic::Response<::serialization_api::v2::RewardAmounts>,
-            tonic::Status,
-        > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::unknown(
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
-            let codec = tonic_prost::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/espresso.api.v2.RewardService/GetRewardAmounts",
-            );
-            let mut req = request.into_request();
-            req.extensions_mut()
-                .insert(
-                    GrpcMethod::new("espresso.api.v2.RewardService", "GetRewardAmounts"),
-                );
-            self.inner.unary(req, path, codec).await
-        }
-        /// Get raw RewardMerkleTreeV2 snapshot
+        /// Get raw RewardMerkleTreeV2 snapshot at a specific height
         pub async fn get_reward_merkle_tree_v2(
             &mut self,
             request: impl tonic::IntoRequest<
@@ -324,7 +260,7 @@ pub mod reward_service_server {
     /// Generated trait containing gRPC methods that should be implemented for use with RewardServiceServer.
     #[async_trait]
     pub trait RewardService: std::marker::Send + std::marker::Sync + 'static {
-        /// Get reward claim input for L1 contract submission
+        /// Get reward claim input for L1 contract submission (at latest finalized height)
         async fn get_reward_claim_input(
             &self,
             request: tonic::Request<::serialization_api::v2::GetRewardClaimInputRequest>,
@@ -332,7 +268,7 @@ pub mod reward_service_server {
             tonic::Response<::serialization_api::v2::RewardClaimInput>,
             tonic::Status,
         >;
-        /// Get reward balance at a specific height
+        /// Get reward balance (at latest finalized height)
         async fn get_reward_balance(
             &self,
             request: tonic::Request<::serialization_api::v2::GetRewardBalanceRequest>,
@@ -340,17 +276,7 @@ pub mod reward_service_server {
             tonic::Response<::serialization_api::v2::RewardBalance>,
             tonic::Status,
         >;
-        /// Get latest reward balance
-        async fn get_latest_reward_balance(
-            &self,
-            request: tonic::Request<
-                ::serialization_api::v2::GetLatestRewardBalanceRequest,
-            >,
-        ) -> std::result::Result<
-            tonic::Response<::serialization_api::v2::RewardBalance>,
-            tonic::Status,
-        >;
-        /// Get Merkle proof for reward account at a specific height
+        /// Get Merkle proof for reward account (at latest finalized height)
         async fn get_reward_account_proof(
             &self,
             request: tonic::Request<
@@ -360,25 +286,15 @@ pub mod reward_service_server {
             tonic::Response<::serialization_api::v2::RewardAccountQueryDataV2>,
             tonic::Status,
         >;
-        /// Get Merkle proof for reward account at latest height
-        async fn get_latest_reward_account_proof(
+        /// Get paginated list of reward balances at a specific height
+        async fn get_reward_balances(
             &self,
-            request: tonic::Request<
-                ::serialization_api::v2::GetLatestRewardAccountProofRequest,
-            >,
+            request: tonic::Request<::serialization_api::v2::GetRewardBalancesRequest>,
         ) -> std::result::Result<
-            tonic::Response<::serialization_api::v2::RewardAccountQueryDataV2>,
+            tonic::Response<::serialization_api::v2::RewardBalances>,
             tonic::Status,
         >;
-        /// Get paginated list of reward amounts
-        async fn get_reward_amounts(
-            &self,
-            request: tonic::Request<::serialization_api::v2::GetRewardAmountsRequest>,
-        ) -> std::result::Result<
-            tonic::Response<::serialization_api::v2::RewardAmounts>,
-            tonic::Status,
-        >;
-        /// Get raw RewardMerkleTreeV2 snapshot
+        /// Get raw RewardMerkleTreeV2 snapshot at a specific height
         async fn get_reward_merkle_tree_v2(
             &self,
             request: tonic::Request<::serialization_api::v2::GetRewardMerkleTreeRequest>,
@@ -565,58 +481,6 @@ pub mod reward_service_server {
                     };
                     Box::pin(fut)
                 }
-                "/espresso.api.v2.RewardService/GetLatestRewardBalance" => {
-                    #[allow(non_camel_case_types)]
-                    struct GetLatestRewardBalanceSvc<T: RewardService>(pub Arc<T>);
-                    impl<
-                        T: RewardService,
-                    > tonic::server::UnaryService<
-                        ::serialization_api::v2::GetLatestRewardBalanceRequest,
-                    > for GetLatestRewardBalanceSvc<T> {
-                        type Response = ::serialization_api::v2::RewardBalance;
-                        type Future = BoxFuture<
-                            tonic::Response<Self::Response>,
-                            tonic::Status,
-                        >;
-                        fn call(
-                            &mut self,
-                            request: tonic::Request<
-                                ::serialization_api::v2::GetLatestRewardBalanceRequest,
-                            >,
-                        ) -> Self::Future {
-                            let inner = Arc::clone(&self.0);
-                            let fut = async move {
-                                <T as RewardService>::get_latest_reward_balance(
-                                        &inner,
-                                        request,
-                                    )
-                                    .await
-                            };
-                            Box::pin(fut)
-                        }
-                    }
-                    let accept_compression_encodings = self.accept_compression_encodings;
-                    let send_compression_encodings = self.send_compression_encodings;
-                    let max_decoding_message_size = self.max_decoding_message_size;
-                    let max_encoding_message_size = self.max_encoding_message_size;
-                    let inner = self.inner.clone();
-                    let fut = async move {
-                        let method = GetLatestRewardBalanceSvc(inner);
-                        let codec = tonic_prost::ProstCodec::default();
-                        let mut grpc = tonic::server::Grpc::new(codec)
-                            .apply_compression_config(
-                                accept_compression_encodings,
-                                send_compression_encodings,
-                            )
-                            .apply_max_message_size_config(
-                                max_decoding_message_size,
-                                max_encoding_message_size,
-                            );
-                        let res = grpc.unary(method, req).await;
-                        Ok(res)
-                    };
-                    Box::pin(fut)
-                }
                 "/espresso.api.v2.RewardService/GetRewardAccountProof" => {
                     #[allow(non_camel_case_types)]
                     struct GetRewardAccountProofSvc<T: RewardService>(pub Arc<T>);
@@ -669,15 +533,15 @@ pub mod reward_service_server {
                     };
                     Box::pin(fut)
                 }
-                "/espresso.api.v2.RewardService/GetLatestRewardAccountProof" => {
+                "/espresso.api.v2.RewardService/GetRewardBalances" => {
                     #[allow(non_camel_case_types)]
-                    struct GetLatestRewardAccountProofSvc<T: RewardService>(pub Arc<T>);
+                    struct GetRewardBalancesSvc<T: RewardService>(pub Arc<T>);
                     impl<
                         T: RewardService,
                     > tonic::server::UnaryService<
-                        ::serialization_api::v2::GetLatestRewardAccountProofRequest,
-                    > for GetLatestRewardAccountProofSvc<T> {
-                        type Response = ::serialization_api::v2::RewardAccountQueryDataV2;
+                        ::serialization_api::v2::GetRewardBalancesRequest,
+                    > for GetRewardBalancesSvc<T> {
+                        type Response = ::serialization_api::v2::RewardBalances;
                         type Future = BoxFuture<
                             tonic::Response<Self::Response>,
                             tonic::Status,
@@ -685,15 +549,12 @@ pub mod reward_service_server {
                         fn call(
                             &mut self,
                             request: tonic::Request<
-                                ::serialization_api::v2::GetLatestRewardAccountProofRequest,
+                                ::serialization_api::v2::GetRewardBalancesRequest,
                             >,
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {
-                                <T as RewardService>::get_latest_reward_account_proof(
-                                        &inner,
-                                        request,
-                                    )
+                                <T as RewardService>::get_reward_balances(&inner, request)
                                     .await
                             };
                             Box::pin(fut)
@@ -705,56 +566,7 @@ pub mod reward_service_server {
                     let max_encoding_message_size = self.max_encoding_message_size;
                     let inner = self.inner.clone();
                     let fut = async move {
-                        let method = GetLatestRewardAccountProofSvc(inner);
-                        let codec = tonic_prost::ProstCodec::default();
-                        let mut grpc = tonic::server::Grpc::new(codec)
-                            .apply_compression_config(
-                                accept_compression_encodings,
-                                send_compression_encodings,
-                            )
-                            .apply_max_message_size_config(
-                                max_decoding_message_size,
-                                max_encoding_message_size,
-                            );
-                        let res = grpc.unary(method, req).await;
-                        Ok(res)
-                    };
-                    Box::pin(fut)
-                }
-                "/espresso.api.v2.RewardService/GetRewardAmounts" => {
-                    #[allow(non_camel_case_types)]
-                    struct GetRewardAmountsSvc<T: RewardService>(pub Arc<T>);
-                    impl<
-                        T: RewardService,
-                    > tonic::server::UnaryService<
-                        ::serialization_api::v2::GetRewardAmountsRequest,
-                    > for GetRewardAmountsSvc<T> {
-                        type Response = ::serialization_api::v2::RewardAmounts;
-                        type Future = BoxFuture<
-                            tonic::Response<Self::Response>,
-                            tonic::Status,
-                        >;
-                        fn call(
-                            &mut self,
-                            request: tonic::Request<
-                                ::serialization_api::v2::GetRewardAmountsRequest,
-                            >,
-                        ) -> Self::Future {
-                            let inner = Arc::clone(&self.0);
-                            let fut = async move {
-                                <T as RewardService>::get_reward_amounts(&inner, request)
-                                    .await
-                            };
-                            Box::pin(fut)
-                        }
-                    }
-                    let accept_compression_encodings = self.accept_compression_encodings;
-                    let send_compression_encodings = self.send_compression_encodings;
-                    let max_decoding_message_size = self.max_decoding_message_size;
-                    let max_encoding_message_size = self.max_encoding_message_size;
-                    let inner = self.inner.clone();
-                    let fut = async move {
-                        let method = GetRewardAmountsSvc(inner);
+                        let method = GetRewardBalancesSvc(inner);
                         let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(

@@ -21,8 +21,7 @@ use axum::{
 };
 use serde::Serialize;
 use serialization_api::v2::{
-    GetLatestRewardAccountProofRequest, GetLatestRewardBalanceRequest,
-    GetRewardAccountProofRequest, GetRewardAmountsRequest, GetRewardBalanceRequest,
+    GetRewardAccountProofRequest, GetRewardBalanceRequest, GetRewardBalancesRequest,
     GetRewardClaimInputRequest, GetRewardMerkleTreeRequest,
 };
 
@@ -296,14 +295,10 @@ where
         ..Default::default()
     };
 
-    // Handler closures: build proto requests and call shared handlers
+    // Handler closures: use proto request types directly with Path<T>
 
     let get_reward_claim_input =
-        |State(state): State<S>, Path((height, address)): Path<(u64, String)>| async move {
-            let request = GetRewardClaimInputRequest {
-                block_height: height,
-                address,
-            };
+        |State(state): State<S>, Path(request): Path<GetRewardClaimInputRequest>| async move {
             handlers::get_reward_claim_input(&state, request)
                 .await
                 .map(Json)
@@ -314,8 +309,7 @@ where
         };
 
     let get_reward_balance =
-        |State(state): State<S>, Path((height, address)): Path<(u64, String)>| async move {
-            let request = GetRewardBalanceRequest { height, address };
+        |State(state): State<S>, Path(request): Path<GetRewardBalanceRequest>| async move {
             handlers::get_reward_balance(&state, request)
                 .await
                 .map(Json)
@@ -325,20 +319,8 @@ where
                 })
         };
 
-    let get_latest_reward_balance = |State(state): State<S>, Path(address): Path<String>| async move {
-        let request = GetLatestRewardBalanceRequest { address };
-        handlers::get_latest_reward_balance(&state, request)
-            .await
-            .map(Json)
-            .map_err(|e| {
-                tracing::error!("get_latest_reward_balance error: {}", e);
-                ApiError::from(e)
-            })
-    };
-
     let get_reward_account_proof =
-        |State(state): State<S>, Path((height, address)): Path<(u64, String)>| async move {
-            let request = GetRewardAccountProofRequest { height, address };
+        |State(state): State<S>, Path(request): Path<GetRewardAccountProofRequest>| async move {
             handlers::get_reward_account_proof(&state, request)
                 .await
                 .map(Json)
@@ -348,97 +330,62 @@ where
                 })
         };
 
-    let get_latest_reward_account_proof = |State(state): State<S>, Path(address): Path<String>| async move {
-        let request = GetLatestRewardAccountProofRequest { address };
-        handlers::get_latest_reward_account_proof(&state, request)
-            .await
-            .map(Json)
-            .map_err(|e| {
-                tracing::error!("get_latest_reward_account_proof error: {}", e);
-                ApiError::from(e)
-            })
-    };
-
-    let get_reward_amounts =
-        |State(state): State<S>, Path((height, offset, limit)): Path<(u64, u64, u64)>| async move {
-            let request = GetRewardAmountsRequest {
-                height,
-                offset,
-                limit,
-            };
-            handlers::get_reward_amounts(&state, request)
+    let get_reward_balances =
+        |State(state): State<S>, Path(request): Path<GetRewardBalancesRequest>| async move {
+            handlers::get_reward_balances(&state, request)
                 .await
                 .map(Json)
                 .map_err(|e| {
-                    tracing::error!("get_reward_amounts error: {}", e);
+                    tracing::error!("get_reward_balances error: {}", e);
                     ApiError::from(e)
                 })
         };
 
-    let get_reward_merkle_tree_v2 = |State(state): State<S>, Path(height): Path<u64>| async move {
-        let request = GetRewardMerkleTreeRequest { height };
-        handlers::get_reward_merkle_tree_v2(&state, request)
-            .await
-            .map(Json)
-            .map_err(|e| {
-                tracing::error!("get_reward_merkle_tree_v2 error: {}", e);
-                ApiError::from(e)
-            })
-    };
+    let get_reward_merkle_tree_v2 =
+        |State(state): State<S>, Path(request): Path<GetRewardMerkleTreeRequest>| async move {
+            handlers::get_reward_merkle_tree_v2(&state, request)
+                .await
+                .map(Json)
+                .map_err(|e| {
+                    tracing::error!("get_reward_merkle_tree_v2 error: {}", e);
+                    ApiError::from(e)
+                })
+        };
 
     ApiRouter::new()
-        // Reward claim input (most important - for L1 contract interaction)
         .api_route(
             routes::v2::REWARD_CLAIM_INPUT_ROUTE.http,
             get_with(get_reward_claim_input, |op| {
                 op.description("Get reward claim input for L1 contract submission. Returns lifetime rewards and Merkle proof needed to call claimRewards() on the L1 contract.")
-                    .tag("Rewards - Contract Interaction")
+                    .tag("Rewards")
             }),
         )
-        // Reward balances
         .api_route(
             routes::v2::REWARD_BALANCE_ROUTE.http,
             get_with(get_reward_balance, |op| {
-                op.description("Get reward balance for an address at a specific block height")
-                    .tag("Rewards - Balances")
+                op.description("Get reward balance for an address at the latest finalized height")
+                    .tag("Rewards")
             }),
         )
-        .api_route(
-            routes::v2::LATEST_REWARD_BALANCE_ROUTE.http,
-            get_with(get_latest_reward_balance, |op| {
-                op.description("Get latest reward balance for an address at the most recent finalized height")
-                    .tag("Rewards - Balances")
-            }),
-        )
-        // Reward proofs
         .api_route(
             routes::v2::REWARD_ACCOUNT_PROOF_ROUTE.http,
             get_with(get_reward_account_proof, |op| {
-                op.description("Get Merkle proof for a reward account at a specific height. Returns version-aware proof (V1 for protocol ≤V3, V2 for V4+)")
-                    .tag("Rewards - Proofs")
-            }),
-        )
-        .api_route(
-            routes::v2::LATEST_REWARD_ACCOUNT_PROOF_ROUTE.http,
-            get_with(get_latest_reward_account_proof, |op| {
                 op.description("Get Merkle proof for a reward account at the latest finalized height. Returns V2 proof with Keccak256 hashing")
-                    .tag("Rewards - Proofs")
+                    .tag("Rewards")
             }),
         )
-        // Bulk queries
         .api_route(
-            routes::v2::REWARD_AMOUNTS_ROUTE.http,
-            get_with(get_reward_amounts, |op| {
-                op.description("Get paginated list of all reward amounts at a specific height. Limit must be ≤ 10000")
-                    .tag("Rewards - Bulk Queries")
+            routes::v2::REWARD_BALANCES_ROUTE.http,
+            get_with(get_reward_balances, |op| {
+                op.description("Get paginated list of all reward balances at a specific height. Limit must be ≤ 10000")
+                    .tag("Rewards")
             }),
         )
-        // Tree snapshots
         .api_route(
             routes::v2::REWARD_MERKLE_TREE_V2_ROUTE.http,
             get_with(get_reward_merkle_tree_v2, |op| {
                 op.description("Get raw RewardMerkleTreeV2 snapshot at a given height. Returns serialized merkle tree data")
-                    .tag("Rewards - Tree Snapshots")
+                    .tag("Rewards")
             }),
         )
         .finish_api(&mut api)

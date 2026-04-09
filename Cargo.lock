@@ -4604,6 +4604,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "axum 0.8.8",
+ "hex",
  "prost 0.14.3",
  "schemars 0.9.0",
  "serde",
@@ -4617,6 +4618,7 @@ dependencies = [
  "tonic-reflection",
  "tower 0.4.13",
  "tracing",
+ "tracing-subscriber 0.3.23",
 ]
 
 [[package]]

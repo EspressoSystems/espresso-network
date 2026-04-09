@@ -4,10 +4,9 @@
 //! All business logic is in handlers, this just adapts to the tonic interface.
 
 use serialization_api::v2::{
-    GetLatestRewardAccountProofRequest, GetLatestRewardBalanceRequest,
-    GetRewardAccountProofRequest, GetRewardAmountsRequest, GetRewardBalanceRequest,
+    GetRewardAccountProofRequest, GetRewardBalanceRequest, GetRewardBalancesRequest,
     GetRewardClaimInputRequest, GetRewardMerkleTreeRequest, RewardAccountQueryDataV2,
-    RewardAmounts, RewardBalance, RewardClaimInput, RewardMerkleTreeV2Data,
+    RewardBalance, RewardBalances, RewardClaimInput, RewardMerkleTreeV2Data,
 };
 use tonic::{Request, Response, Status};
 
@@ -53,16 +52,6 @@ where
             .map_err(|e| Status::internal(e.to_string()))
     }
 
-    async fn get_latest_reward_balance(
-        &self,
-        request: Request<GetLatestRewardBalanceRequest>,
-    ) -> Result<Response<RewardBalance>, Status> {
-        handlers::get_latest_reward_balance(&self.state, request.into_inner())
-            .await
-            .map(Response::new)
-            .map_err(|e| Status::internal(e.to_string()))
-    }
-
     async fn get_reward_account_proof(
         &self,
         request: Request<GetRewardAccountProofRequest>,
@@ -73,21 +62,11 @@ where
             .map_err(|e| Status::internal(e.to_string()))
     }
 
-    async fn get_latest_reward_account_proof(
+    async fn get_reward_balances(
         &self,
-        request: Request<GetLatestRewardAccountProofRequest>,
-    ) -> Result<Response<RewardAccountQueryDataV2>, Status> {
-        handlers::get_latest_reward_account_proof(&self.state, request.into_inner())
-            .await
-            .map(Response::new)
-            .map_err(|e| Status::internal(e.to_string()))
-    }
-
-    async fn get_reward_amounts(
-        &self,
-        request: Request<GetRewardAmountsRequest>,
-    ) -> Result<Response<RewardAmounts>, Status> {
-        handlers::get_reward_amounts(&self.state, request.into_inner())
+        request: Request<GetRewardBalancesRequest>,
+    ) -> Result<Response<RewardBalances>, Status> {
+        handlers::get_reward_balances(&self.state, request.into_inner())
             .await
             .map(Response::new)
             .map_err(|e| Status::internal(e.to_string()))

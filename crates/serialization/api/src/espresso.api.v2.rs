@@ -23,15 +23,12 @@ pub struct RewardClaimInput {
     #[prost(string, tag = "3")]
     pub auth_data: ::prost::alloc::string::String,
 }
-/// Request to get reward claim input
+/// Request to get reward claim input (at latest finalized height)
 #[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetRewardClaimInputRequest {
-    /// Block height (must match the height finalized in the Light Client contract)
-    #[prost(uint64, tag = "1")]
-    pub block_height: u64,
     /// Ethereum address to query rewards for (hex format, e.g. "0x1234...")
-    #[prost(string, tag = "2")]
+    #[prost(string, tag = "1")]
     pub address: ::prost::alloc::string::String,
 }
 /// Reward balance for an address
@@ -42,21 +39,10 @@ pub struct RewardBalance {
     #[prost(string, tag = "1")]
     pub amount: ::prost::alloc::string::String,
 }
-/// Request to get reward balance at a specific height
+/// Request to get reward balance (at latest finalized height)
 #[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetRewardBalanceRequest {
-    /// Block height to query
-    #[prost(uint64, tag = "1")]
-    pub height: u64,
-    /// Ethereum address to query
-    #[prost(string, tag = "2")]
-    pub address: ::prost::alloc::string::String,
-}
-/// Request to get latest reward balance
-#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct GetLatestRewardBalanceRequest {
     /// Ethereum address to query
     #[prost(string, tag = "1")]
     pub address: ::prost::alloc::string::String,
@@ -182,21 +168,10 @@ pub struct ForgottenSubtree {
     #[prost(string, tag = "1")]
     pub value: ::prost::alloc::string::String,
 }
-/// Request to get reward account proof at a specific height
+/// Request to get reward account proof (at latest finalized height)
 #[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetRewardAccountProofRequest {
-    /// Block height to query
-    #[prost(uint64, tag = "1")]
-    pub height: u64,
-    /// Ethereum address to query
-    #[prost(string, tag = "2")]
-    pub address: ::prost::alloc::string::String,
-}
-/// Request to get latest reward account proof
-#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct GetLatestRewardAccountProofRequest {
     /// Ethereum address to query
     #[prost(string, tag = "1")]
     pub address: ::prost::alloc::string::String,
@@ -212,10 +187,10 @@ pub struct RewardAmount {
     #[prost(string, tag = "2")]
     pub amount: ::prost::alloc::string::String,
 }
-/// Paginated list of reward amounts
+/// Paginated list of reward balances
 #[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct RewardAmounts {
+pub struct RewardBalances {
     /// List of reward amounts in this page
     #[prost(message, repeated, tag = "1")]
     pub amounts: ::prost::alloc::vec::Vec<RewardAmount>,
@@ -223,10 +198,10 @@ pub struct RewardAmounts {
     #[prost(uint64, tag = "2")]
     pub total: u64,
 }
-/// Request to get paginated reward amounts
+/// Request to get paginated reward balances
 #[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct GetRewardAmountsRequest {
+pub struct GetRewardBalancesRequest {
     /// Block height to query
     #[prost(uint64, tag = "1")]
     pub height: u64,

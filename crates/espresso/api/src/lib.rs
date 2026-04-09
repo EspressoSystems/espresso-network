@@ -2,8 +2,8 @@
 
 // Module declarations
 mod axum;
-mod grpc;
 pub mod handlers;
+mod tonic;
 pub mod v1;
 pub mod v2;
 
@@ -15,13 +15,13 @@ pub mod proto {
 // Re-exports
 pub use self::{
     axum::{create_combined_router, create_router_v1, create_router_v2, routes},
-    grpc::create_reward_service,
+    tonic::create_reward_service,
 };
 
 /// Start Axum HTTP server with combined v1 and v2 APIs
 ///
 /// This serves both APIs at /v1/* and /v2/* from a single state implementation.
-pub async fn serve_axum<S>(port: u16, state: S) -> Result<(), Box<dyn std::error::Error>>
+pub async fn serve_axum<S>(port: u16, state: S) -> anyhow::Result<()>
 where
     S: v1::RewardApi + v2::RewardApi + Clone + Send + Sync + 'static,
 {
@@ -44,10 +44,12 @@ where
 }
 
 /// Start Tonic gRPC server
-pub async fn serve_tonic<S>(port: u16, state: S) -> Result<(), Box<dyn std::error::Error>>
+pub async fn serve_tonic<S>(port: u16, state: S) -> anyhow::Result<()>
 where
     S: v2::RewardApi + Clone + Send + Sync + 'static,
 {
+    use ::tonic::transport::Server;
+
     let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
 
     let reward_service = create_reward_service(state);
@@ -61,7 +63,7 @@ where
         .build_v1()?;
 
     tracing::info!("gRPC server listening on {}", addr);
-    tonic::transport::Server::builder()
+    Server::builder()
         .add_service(reward_service)
         .add_service(reflection_service)
         .serve(addr)

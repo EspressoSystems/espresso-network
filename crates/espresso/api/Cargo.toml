@@ -6,19 +6,21 @@ edition = "2021"
 [dependencies]
 serialization-api = { path = "../../serialization/api" }
 axum = { workspace = true }
-tokio = { version = "1", features = ["full"] }
+tokio = { workspace = true }
 tower = "0.4"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-tonic = "0.14.5"
+serde = { workspace = true }
+serde_json = { workspace = true }
+tonic = { version = "0.14.5", features = ["transport"] }
 tonic-reflection = "0.14"
 tonic-prost = "0.14"
 prost = "0.14"
-tracing = "0.1"
+tracing = { workspace = true }
 aide = { version = "0.15.1", features = ["axum", "axum-json", "scalar", "swagger", "redoc"] }
 schemars = "0.9"
-async-trait = "0.1"
-anyhow = "1"
+async-trait = { workspace = true }
+anyhow = { workspace = true }
+hex = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 [build-dependencies]
 tonic-build = "0.14"
