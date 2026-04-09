@@ -690,13 +690,13 @@ impl PersistenceOptions for Options {
 
 #[derive(Debug, Clone, Copy)]
 pub enum DataMigration {
-    ValidatorAuthenticated,
+    X25519Keys,
 }
 
 impl DataMigration {
     pub fn as_str(&self) -> &'static str {
         match self {
-            Self::ValidatorAuthenticated => "validator_authenticated",
+            Self::X25519Keys => "x25519_keys",
         }
     }
 }
@@ -2293,26 +2293,16 @@ impl SequencerPersistence for Persistence {
         Ok(())
     }
 
-    /// Ensure the `authenticated` field is explicitly set for all validators.
+    /// Migrate stake table data to include x25519_key and p2p_addr fields.
     ///
-    /// This field was added to track validators with invalid Schnorr signatures.
-    /// All existing validators were authenticated (they passed validation before storage),
-    /// so we set authenticated=true for any records missing this field.
-    ///
-    /// # Migration Invariant
-    ///
-    /// This migration sets `authenticated=true` for all existing records. This is safe because:
-    /// - All validators in the database passed full signature validation before storage
-    /// - The normal registration path validates both BLS and Schnorr signatures
-    /// - Only after the `authenticated` field was added do we track unauthenticated validators
-    async fn migrate_validator_authenticated(&self) -> anyhow::Result<()> {
-        #[allow(deprecated)]
-        use espresso_types::v0_3::Validator;
+    /// Data written before x25519 support lacks these fields. This migration
+    /// deserializes legacy records and re-serializes them with the new fields set to None.
+    async fn migrate_x25519_keys(&self) -> anyhow::Result<()> {
+        use super::RegisteredValidatorNoX25519;
 
-        let name = DataMigration::ValidatorAuthenticated.as_str();
+        let name = DataMigration::X25519Keys.as_str();
 
         // Migrate bincode storage (epoch_drb_and_root.stake).
-        // We expect less than 10k epochs/rows, so we do it all in one transaction.
         if !self
             .is_migration_complete(name, "epoch_drb_and_root")
             .await?
@@ -2327,9 +2317,15 @@ impl SequencerPersistence for Persistence {
             let num_rows = rows.len();
             let mut tx = self.db.write().await?;
             for (epoch, stake_bytes) in rows {
-                #[allow(deprecated)]
-                let old_validators: IndexMap<Address, Validator<PubKey>> =
-                    bincode::deserialize(&stake_bytes).context("deserializing stake table")?;
+                // Try current format first
+                if bincode::deserialize::<AuthenticatedValidatorMap>(&stake_bytes).is_ok() {
+                    continue;
+                }
+
+                // Legacy format without x25519 fields
+                let old_validators: IndexMap<Address, RegisteredValidatorNoX25519> =
+                    bincode::deserialize(&stake_bytes)
+                        .context("deserializing legacy stake table")?;
                 let validators: AuthenticatedValidatorMap = old_validators
                     .into_iter()
                     .map(|(addr, v)| {
@@ -2337,7 +2333,7 @@ impl SequencerPersistence for Persistence {
                         (
                             addr,
                             AuthenticatedValidator::try_from(registered)
-                                .expect("migrate() sets authenticated=true"),
+                                .expect("stake tables only contain authenticated validators"),
                         )
                     })
                     .collect();
@@ -2345,10 +2341,7 @@ impl SequencerPersistence for Persistence {
                 let new_bytes =
                     bincode::serialize(&validators).context("serializing stake table")?;
 
-                tracing::debug!(
-                    epoch,
-                    "migrating validator authenticated field in stake table"
-                );
+                tracing::debug!(epoch, "migrating x25519 keys in stake table");
                 tx.execute(
                     query("UPDATE epoch_drb_and_root SET stake = $1 WHERE epoch = $2")
                         .bind(&new_bytes)
@@ -2360,12 +2353,11 @@ impl SequencerPersistence for Persistence {
             tx.commit().await?;
             tracing::info!(
                 num_rows,
-                "validator authenticated migration completed for epoch_drb_and_root"
+                "x25519_keys migration completed for epoch_drb_and_root"
             );
         }
 
         // Migrate JSONB storage (stake_table_validators).
-        // We expect less than 10k epochs/rows, so we do it all in one transaction.
         if !self
             .is_migration_complete(name, "stake_table_validators")
             .await?
@@ -2380,15 +2372,23 @@ impl SequencerPersistence for Persistence {
             let num_rows = rows.len();
             let mut tx = self.db.write().await?;
             for (epoch, address, validator_json) in rows {
-                #[allow(deprecated)]
-                let old_validator: Validator<PubKey> =
-                    serde_json::from_value(validator_json.clone())
-                        .context("deserializing validator")?;
-                let validator = old_validator.migrate();
+                // Check if JSON already has x25519 fields (can't rely on deserialization
+                // since serde_json fills missing Option<T> fields with None).
+                if validator_json
+                    .as_object()
+                    .is_some_and(|obj| obj.contains_key("x25519_key"))
+                {
+                    continue;
+                }
+
+                // Deserialize (serde_json fills missing Option fields with None),
+                // then re-serialize to ensure x25519_key and p2p_addr are present.
+                let validator: RegisteredValidator<PubKey> =
+                    serde_json::from_value(validator_json).context("deserializing validator")?;
 
                 let new_json = serde_json::to_value(&validator).context("serializing validator")?;
 
-                tracing::debug!(epoch, %address, "migrating validator authenticated field");
+                tracing::debug!(epoch, %address, "migrating x25519 keys for validator");
                 tx.execute(
                     query(
                         "UPDATE stake_table_validators SET validator = $1 WHERE epoch = $2 AND \
@@ -2405,7 +2405,7 @@ impl SequencerPersistence for Persistence {
             tx.commit().await?;
             tracing::info!(
                 num_rows,
-                "validator authenticated migration completed for stake_table_validators"
+                "x25519_keys migration completed for stake_table_validators"
             );
         }
 
@@ -3468,39 +3468,50 @@ mod test {
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_validator_authenticated_migration() {
-        // Create a mock registered validator
+    async fn test_x25519_keys_migration() {
+        use std::collections::HashMap;
+
+        use crate::persistence::RegisteredValidatorNoX25519;
+
         let mut validator = RegisteredValidator::mock();
-        validator.delegators.clear(); // Simplify for test
+        validator.delegators.clear();
         validator.stake = alloy::primitives::U256::from(1000u64);
 
         let epoch = 1i64;
         let address = validator.account;
 
-        // Serialize to JSON and remove the `authenticated` field to simulate old data
-        let mut validator_json = serde_json::to_value(&validator).unwrap();
-        validator_json
-            .as_object_mut()
-            .unwrap()
-            .remove("authenticated");
+        // Create legacy data without x25519 fields
+        let legacy = RegisteredValidatorNoX25519 {
+            account: validator.account,
+            stake_table_key: validator.stake_table_key,
+            state_ver_key: validator.state_ver_key.clone(),
+            stake: validator.stake,
+            commission: validator.commission,
+            delegators: HashMap::new(),
+            authenticated: true,
+        };
 
-        // Use the deprecated Validator type for bincode storage to simulate old data format
-        // (which has no `authenticated` field)
-        #[allow(deprecated)]
-        let old_validator: espresso_types::v0_3::Validator<BLSPubKey> =
-            serde_json::from_value(validator_json.clone()).unwrap();
-        let mut validator_map: IndexMap<Address, _> = IndexMap::new();
-        validator_map.insert(address, old_validator);
-        let stake_bytes = bincode::serialize(&validator_map).unwrap();
+        // Bincode: serialize as legacy map
+        let mut legacy_map: IndexMap<Address, RegisteredValidatorNoX25519> = IndexMap::new();
+        legacy_map.insert(address, legacy);
+        let stake_bytes = bincode::serialize(&legacy_map).unwrap();
 
-        // Create persistence and insert data directly
+        // JSON: serialize without x25519 fields
+        let json_legacy = RegisteredValidatorNoX25519 {
+            account: validator.account,
+            stake_table_key: validator.stake_table_key,
+            state_ver_key: validator.state_ver_key.clone(),
+            stake: validator.stake,
+            commission: validator.commission,
+            delegators: HashMap::new(),
+            authenticated: true,
+        };
+        let validator_json = serde_json::to_value(&json_legacy).unwrap();
+
         let db = Persistence::tmp_storage().await;
-
-        // First, create a persistence to set up the schema, then insert raw data
         let persistence = Persistence::connect(&db).await;
         let mut tx = persistence.db.write().await.unwrap();
 
-        // Insert into stake_table_validators with JSON missing the authenticated field
         tx.execute(
             query(
                 "INSERT INTO stake_table_validators (epoch, address, validator) VALUES ($1, $2, \
@@ -3513,7 +3524,6 @@ mod test {
         .await
         .unwrap();
 
-        // Insert into epoch_drb_and_root with bincode data
         tx.execute(
             query("INSERT INTO epoch_drb_and_root (epoch, stake) VALUES ($1, $2)")
                 .bind(epoch)
@@ -3522,17 +3532,17 @@ mod test {
         .await
         .unwrap();
 
-        // Reset migration state so it runs again on the newly inserted old-format data
+        // Reset migration state so it runs on the newly inserted data
         tx.execute(query(
             "UPDATE data_migrations SET completed = false, migrated_rows = 0 WHERE name = \
-             'validator_authenticated'",
+             'x25519_keys'",
         ))
         .await
         .unwrap();
 
         tx.commit().await.unwrap();
 
-        // Verify the data was inserted with missing authenticated field in JSON
+        // Verify JSON was inserted without x25519_key
         {
             let mut tx = persistence.db.read().await.unwrap();
             let row: (serde_json::Value,) =
@@ -3542,14 +3552,14 @@ mod test {
                     .await
                     .unwrap();
             let json_obj = row.0.as_object().unwrap();
-            assert!(!json_obj.contains_key("authenticated"));
+            assert!(!json_obj.contains_key("x25519_key"));
         }
 
-        // Create a new persistence and run migrations
+        // Run migrations
         let persistence = Persistence::connect(&db).await;
         persistence.migrate_storage().await.unwrap();
 
-        // Verify stake_table_validators now has authenticated explicitly set
+        // Verify stake_table_validators now has x25519_key field
         {
             let mut tx = persistence.db.read().await.unwrap();
             let row: (serde_json::Value,) =
@@ -3559,14 +3569,11 @@ mod test {
                     .await
                     .unwrap();
             let json_obj = row.0.as_object().unwrap();
-            assert!(json_obj.contains_key("authenticated"));
-            assert_eq!(
-                json_obj.get("authenticated").unwrap(),
-                &serde_json::Value::Bool(true)
-            );
+            assert!(json_obj.contains_key("x25519_key"));
+            assert!(json_obj.get("x25519_key").unwrap().is_null());
         }
 
-        // Verify epoch_drb_and_root stake was migrated to AuthenticatedValidatorMap
+        // Verify epoch_drb_and_root stake was migrated
         {
             let mut tx = persistence.db.read().await.unwrap();
             let row: (Vec<u8>,) = query_as("SELECT stake FROM epoch_drb_and_root WHERE epoch = $1")
@@ -3574,28 +3581,18 @@ mod test {
                 .fetch_one(tx.as_mut())
                 .await
                 .unwrap();
-            // Deserializing as AuthenticatedValidatorMap verifies authenticated=true
-            // (AuthenticatedValidator's Deserialize impl rejects authenticated=false)
             let migrated_map: AuthenticatedValidatorMap = bincode::deserialize(&row.0).unwrap();
             assert!(migrated_map.contains_key(&address));
+            let v = migrated_map.get(&address).unwrap();
+            assert!(v.x25519_key.is_none());
         }
 
-        // Verify migrated_rows was set correctly
+        // Verify migration tracking
         {
             let mut tx = persistence.db.read().await.unwrap();
             let row: (bool, i64) = query_as(
-                "SELECT completed, migrated_rows FROM data_migrations WHERE name = \
-                 'validator_authenticated' AND table_name = 'epoch_drb_and_root'",
-            )
-            .fetch_one(tx.as_mut())
-            .await
-            .unwrap();
-            assert!(row.0);
-            assert_eq!(row.1, 1);
-
-            let row: (bool, i64) = query_as(
-                "SELECT completed, migrated_rows FROM data_migrations WHERE name = \
-                 'validator_authenticated' AND table_name = 'stake_table_validators'",
+                "SELECT completed, migrated_rows FROM data_migrations WHERE name = 'x25519_keys' \
+                 AND table_name = 'epoch_drb_and_root'",
             )
             .fetch_one(tx.as_mut())
             .await
