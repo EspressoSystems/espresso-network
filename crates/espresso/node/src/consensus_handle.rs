@@ -1,18 +1,20 @@
 use std::{
     collections::HashMap,
+    fmt,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
 };
 
-use async_broadcast::{InactiveReceiver, Sender};
+use async_broadcast::InactiveReceiver;
 use async_lock::RwLock;
 use committable::Commitment;
 use futures::{StreamExt, stream::BoxStream};
 use hotshot::types::SystemContextHandle;
 use hotshot_new_protocol::{
     consensus::ConsensusOutput,
+    coordinator::{Coordinator, error::Severity},
     message::{Certificate2, Proposal as NewProposal},
     query::CoordinatorQuery,
 };
@@ -21,10 +23,17 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     event::Event,
     message::{Proposal as SignedProposal, UpgradeLock},
-    traits::{ValidatedState, node_implementation::NodeType, signature_key::SignatureKey},
+    traits::{
+        ValidatedState, network::ConnectedNetwork, node_implementation::NodeType,
+        signature_key::SignatureKey,
+    },
     utils::StateAndDelta,
 };
-use tokio::sync::{mpsc, oneshot};
+use tokio::{
+    spawn,
+    sync::{mpsc, oneshot},
+};
+use tokio_util::task::AbortOnDropHandle;
 use versions::version;
 
 #[derive(Clone, Debug)]
@@ -49,6 +58,32 @@ pub enum ConsensusEvent<T: NodeType> {
         sender: T::SignatureKey,
         data: Vec<u8>,
     },
+}
+
+impl<T: NodeType> fmt::Display for ConsensusEvent<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::LegacyEvent(event) => {
+                write!(f, "Legacy: {} view={}", event.event, event.view_number)
+            },
+            Self::NewDecide(event) => {
+                write!(f, "NewDecide: view={}", event.view_number)
+            },
+            Self::ViewChanged { view_number } => {
+                write!(f, "ViewChanged: view={view_number}")
+            },
+            Self::QuorumProposal { proposal, .. } => {
+                write!(
+                    f,
+                    "QuorumProposal: view={} epoch={}",
+                    proposal.data.view_number, proposal.data.epoch
+                )
+            },
+            Self::ExternalMessageReceived { .. } => {
+                write!(f, "ExternalMessageReceived")
+            },
+        }
+    }
 }
 
 pub fn event_from_output<T: NodeType>(output: &ConsensusOutput<T>) -> Option<ConsensusEvent<T>> {
@@ -82,6 +117,7 @@ pub fn event_from_output<T: NodeType>(output: &ConsensusOutput<T>) -> Option<Con
 pub struct ConsensusHandle<T: NodeType, I: hotshot::traits::NodeImplementation<T>> {
     legacy_handle: Arc<RwLock<SystemContextHandle<T, I>>>,
     query_tx: mpsc::Sender<CoordinatorQuery<T>>,
+    coordinator_task: AbortOnDropHandle<()>,
     coordinator_epoch_height: u64,
     new_protocol_active: AtomicBool,
     legacy_event_rx: InactiveReceiver<Event<T>>,
@@ -89,28 +125,31 @@ pub struct ConsensusHandle<T: NodeType, I: hotshot::traits::NodeImplementation<T
 }
 
 impl<T: NodeType, I: hotshot::traits::NodeImplementation<T>> ConsensusHandle<T, I> {
-    pub fn new(
+    pub fn new<CN: ConnectedNetwork<T::SignatureKey>>(
         legacy_handle: Arc<RwLock<SystemContextHandle<T, I>>>,
+        coordinator: Coordinator<T, CN>,
         query_tx: mpsc::Sender<CoordinatorQuery<T>>,
         coordinator_epoch_height: u64,
         legacy_event_rx: InactiveReceiver<Event<T>>,
         event_channel_capacity: usize,
-    ) -> (Self, Sender<ConsensusEvent<T>>) {
+    ) -> Self {
         let (mut event_tx, mut event_rx) =
             async_broadcast::broadcast::<ConsensusEvent<T>>(event_channel_capacity);
         event_tx.set_await_active(false);
         event_rx.set_overflow(true);
 
-        let adapter = Self {
+        let coordinator_task =
+            AbortOnDropHandle::new(spawn(run_coordinator(coordinator, event_tx)));
+
+        Self {
             legacy_handle,
             query_tx,
+            coordinator_task,
             coordinator_epoch_height,
             new_protocol_active: AtomicBool::new(false),
             legacy_event_rx,
             event_rx: event_rx.deactivate(),
-        };
-
-        (adapter, event_tx)
+        }
     }
 
     pub fn legacy_consensus(&self) -> Arc<RwLock<SystemContextHandle<T, I>>> {
@@ -338,13 +377,24 @@ impl<T: NodeType, I: hotshot::traits::NodeImplementation<T>> ConsensusHandle<T, 
             .map_err(|e| anyhow::anyhow!("{e}"))
     }
 
-    // TODO: implement for new protocol
     pub async fn update_leaf(
         &self,
         leaf: Leaf2<T>,
         state: Arc<T::ValidatedState>,
         delta: Option<Arc<<T::ValidatedState as ValidatedState<T>>::Delta>>,
     ) -> anyhow::Result<()> {
+        let view = leaf.view_number();
+        if self.new_protocol_at(view).await {
+            return self
+                .query(|tx| CoordinatorQuery::UpdateLeaf {
+                    view,
+                    leaf,
+                    state,
+                    delta,
+                    respond: tx,
+                })
+                .await;
+        }
         self.legacy_handle
             .read()
             .await
@@ -366,8 +416,50 @@ impl<T: NodeType, I: hotshot::traits::NodeImplementation<T>> ConsensusHandle<T, 
             .await;
     }
 
-    // TODO: implement for new protocol
     pub async fn shut_down(&self) {
+        self.coordinator_task.abort();
         self.legacy_handle.write().await.shut_down().await;
+    }
+}
+
+async fn run_coordinator<T: NodeType, CN: ConnectedNetwork<T::SignatureKey>>(
+    mut coordinator: Coordinator<T, CN>,
+    event_sender: async_broadcast::Sender<ConsensusEvent<T>>,
+) {
+    loop {
+        match coordinator.next_consensus_input().await {
+            Ok(input) => coordinator.apply_consensus(input).await,
+            Err(err) if err.severity == Severity::Critical => {
+                tracing::error!(%err, "coordinator: critical error");
+                return;
+            },
+            Err(err) => {
+                tracing::warn!(%err, "coordinator: non-critical error");
+            },
+        }
+        while let Some(output) = coordinator.outbox_mut().pop_front() {
+            if let Some(event) = event_from_output(&output) {
+                match event_sender.broadcast_direct(event).await {
+                    Ok(None) => {},
+                    Ok(Some(overflowed)) => {
+                        tracing::warn!(
+                            %overflowed,
+                            "coordinator event channel overflow, oldest event dropped"
+                        );
+                    },
+                    Err(err) => {
+                        tracing::warn!(%err, "failed to broadcast consensus event");
+                    },
+                }
+            }
+            if let Err(err) = coordinator.process_consensus_output(output).await {
+                if err.severity == Severity::Critical {
+                    tracing::error!(%err, "coordinator: critical error processing output");
+                    return;
+                } else {
+                    tracing::warn!(%err, "coordinator: error processing output");
+                }
+            }
+        }
     }
 }

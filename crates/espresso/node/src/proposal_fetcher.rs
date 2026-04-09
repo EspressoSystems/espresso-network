@@ -207,7 +207,7 @@ where
             if self.consensus_handle.state(view).await.is_none() {
                 let state = Arc::new(ValidatedState::from_header(leaf.block_header()));
                 if let Err(err) = self.consensus_handle.update_leaf(leaf, state, None).await {
-                    tracing::warn!("unable to update leaf: {err:#}");
+                    tracing::info!("unable to update leaf: {err:#}");
                 }
             }
 

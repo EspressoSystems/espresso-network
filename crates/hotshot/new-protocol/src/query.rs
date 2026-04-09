@@ -2,12 +2,13 @@ use std::sync::Arc;
 
 use hotshot_types::{
     data::{EpochNumber, Leaf2, ViewNumber},
-    traits::node_implementation::NodeType,
+    traits::{ValidatedState, node_implementation::NodeType},
     utils::StateAndDelta,
 };
 use oneshot::Sender;
 use tokio::sync::oneshot;
 
+#[allow(clippy::large_enum_variant)]
 pub enum CoordinatorQuery<T: NodeType> {
     CurrentView(Sender<ViewNumber>),
     CurrentEpoch(Sender<Option<EpochNumber>>),
@@ -21,5 +22,12 @@ pub enum CoordinatorQuery<T: NodeType> {
     GetStateAndDelta {
         view: ViewNumber,
         respond: Sender<StateAndDelta<T>>,
+    },
+    UpdateLeaf {
+        view: ViewNumber,
+        leaf: Leaf2<T>,
+        state: Arc<T::ValidatedState>,
+        delta: Option<Arc<<T::ValidatedState as ValidatedState<T>>::Delta>>,
+        respond: Sender<anyhow::Result<()>>,
     },
 }

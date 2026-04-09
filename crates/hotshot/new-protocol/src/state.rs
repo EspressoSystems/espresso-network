@@ -281,9 +281,15 @@ impl<T: NodeType> StateManager<T> {
     }
 
     /// Provide an externally-obtained validated state.
-    pub fn update_state(&mut self, state: T::ValidatedState, view: ViewNumber, leaf: Leaf2<T>) {
+    pub fn update_state(
+        &mut self,
+        state: Arc<T::ValidatedState>,
+        delta: Option<Delta<T>>,
+        view: ViewNumber,
+        leaf: Leaf2<T>,
+    ) {
         let commitment = leaf.commit();
-        self.insert_state(view, Arc::new(state), None, leaf);
+        self.insert_state(view, state, delta, leaf);
         if let Some((task, _)) = self.state_requests.remove(&commitment) {
             task.abort();
         }

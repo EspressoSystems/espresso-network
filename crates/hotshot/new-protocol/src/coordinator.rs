@@ -4,8 +4,9 @@ pub(crate) mod timer;
 use std::{sync::Arc, time::Duration};
 
 use bon::Builder;
+use hotshot::HotShotInitializer;
 use hotshot_types::{
-    data::{EpochNumber, Leaf2, ViewNumber},
+    data::{EpochNumber, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     simple_certificate::{QuorumCertificate2, TimeoutCertificate2},
     simple_vote::{HasEpoch, QuorumVote2, TimeoutVote2},
@@ -69,21 +70,19 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Coordinator<T, N> {
     pub fn new(
         membership_coordinator: EpochMembershipCoordinator<T>,
         network: N,
-        instance_state: Arc<T::InstanceState>,
+        initializer: &HotShotInitializer<T>,
         public_key: T::SignatureKey,
         private_key: <T::SignatureKey as SignatureKey>::PrivateKey,
-        genesis_leaf: Leaf2<T>,
-        epoch_height: u64,
         timeout_duration: Duration,
     ) -> (Self, mpsc::Sender<CoordinatorQuery<T>>) {
         let consensus = Consensus::new(
             membership_coordinator.clone(),
             public_key.clone(),
             private_key,
-            genesis_leaf,
-            epoch_height,
+            initializer.anchor_leaf.clone(),
+            initializer.epoch_height,
         );
-        let state_manager = StateManager::new(instance_state.clone());
+        let state_manager = StateManager::new(Arc::new(initializer.instance_state.clone()));
         let (query_tx, query_rx) = mpsc::channel(256);
 
         let lock = upgrade_lock();
@@ -116,11 +115,11 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Coordinator<T, N> {
             ))
             .checkpoint_collector(VoteCollector::new(membership_coordinator.clone(), lock))
             .epoch_manager(EpochManager::new(
-                epoch_height,
+                initializer.epoch_height,
                 membership_coordinator.clone(),
             ))
             .block_builder(BlockBuilder::new(
-                instance_state,
+                Arc::new(initializer.instance_state.clone()),
                 membership_coordinator.clone(),
                 BlockBuilderConfig::default(),
             ))
@@ -156,6 +155,16 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Coordinator<T, N> {
             },
             CoordinatorQuery::GetStateAndDelta { view, respond } => {
                 let _ = respond.send(self.state_manager.get_state_and_delta(&view));
+            },
+            CoordinatorQuery::UpdateLeaf {
+                view,
+                leaf,
+                state,
+                delta,
+                respond,
+            } => {
+                self.state_manager.update_state(state, delta, view, leaf);
+                let _ = respond.send(Ok(()));
             },
         }
     }
