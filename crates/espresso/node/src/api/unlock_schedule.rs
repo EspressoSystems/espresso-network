@@ -83,8 +83,9 @@ pub fn unlocked_amount_at(timestamp_secs: u64) -> U256 {
         .unwrap_or(U256::ZERO)
 }
 
-/// Computes circulating supply from on-chain data and the unlock schedule.
+/// Computes token supply metrics from on-chain data and the unlock schedule.
 ///
+/// - `total_issued          = initial_supply + reward_distributed`
 /// - `circulating           = initial_supply + reward_distributed - locked`
 /// - `circulating_ethereum  = total_supply_l1 - locked`
 ///
@@ -139,6 +140,17 @@ impl SupplyCalculator {
     /// `= total_supply_l1 - locked`
     pub fn circulating_supply_ethereum(&self) -> U256 {
         self.total_supply_l1.saturating_sub(self.locked())
+    }
+
+    /// Total issued supply: `initial_supply + total_reward_distributed`.
+    pub fn total_issued_supply(&self) -> U256 {
+        self.initial_supply
+            .saturating_add(self.total_reward_distributed)
+    }
+
+    /// Total rewards distributed by consensus.
+    pub fn total_reward_distributed(&self) -> U256 {
+        self.total_reward_distributed
     }
 }
 
@@ -438,5 +450,57 @@ mod tests {
         assert_eq!(calc.locked(), U256::ZERO);
         // circulating = initial + reward - locked = 100 + 0 - 0 = 100
         assert_eq!(calc.circulating_supply(), small_initial);
+    }
+
+    #[test]
+    fn test_total_issued_supply_with_rewards() {
+        let now = post_tge_time();
+        let initial_supply = mainnet_initial_supply();
+        let reward = Some(RewardAmount(parse_ether("100").unwrap()));
+        let calc = SupplyCalculator::new(mainnet_id(), now, initial_supply, initial_supply, reward);
+        assert_eq!(
+            calc.total_issued_supply(),
+            initial_supply + parse_ether("100").unwrap()
+        );
+    }
+
+    #[test]
+    fn test_total_issued_supply_zero_rewards() {
+        let now = post_tge_time();
+        let initial_supply = mainnet_initial_supply();
+        let calc = SupplyCalculator::new(mainnet_id(), now, initial_supply, initial_supply, None);
+        assert_eq!(calc.total_issued_supply(), initial_supply);
+    }
+
+    #[test]
+    fn test_total_issued_supply_chain_invariant() {
+        let now = post_tge_time();
+        let initial_supply = parse_ether("10000").unwrap();
+        let reward = Some(RewardAmount(parse_ether("500").unwrap()));
+        let total_supply_l1 = parse_ether("10200").unwrap();
+
+        let mainnet =
+            SupplyCalculator::new(mainnet_id(), now, initial_supply, total_supply_l1, reward);
+        let testnet =
+            SupplyCalculator::new(testnet_id(), now, initial_supply, total_supply_l1, reward);
+
+        assert_eq!(mainnet.total_issued_supply(), testnet.total_issued_supply());
+    }
+
+    #[test]
+    fn test_total_reward_distributed() {
+        let now = post_tge_time();
+        let initial_supply = mainnet_initial_supply();
+        let reward = Some(RewardAmount(parse_ether("200").unwrap()));
+        let calc = SupplyCalculator::new(mainnet_id(), now, initial_supply, initial_supply, reward);
+        assert_eq!(calc.total_reward_distributed(), parse_ether("200").unwrap());
+    }
+
+    #[test]
+    fn test_total_reward_distributed_zero() {
+        let now = post_tge_time();
+        let initial_supply = mainnet_initial_supply();
+        let calc = SupplyCalculator::new(mainnet_id(), now, initial_supply, initial_supply, None);
+        assert_eq!(calc.total_reward_distributed(), U256::ZERO);
     }
 }
