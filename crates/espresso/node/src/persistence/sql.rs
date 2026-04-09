@@ -3507,6 +3507,8 @@ mod testing {
 
 #[cfg(test)]
 mod test {
+    use std::sync::atomic::{AtomicU32, Ordering};
+
     use committable::{Commitment, CommitmentBoundsArkless};
     use espresso_types::{Header, Leaf, NodeState, ValidatedState, traits::NullEventConsumer};
     use futures::stream::TryStreamExt;
@@ -4494,8 +4496,6 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_retry_if_succeeds_immediately() {
-        use std::sync::atomic::{AtomicU32, Ordering};
-
         let calls = Arc::new(AtomicU32::new(0));
         let calls_clone = calls.clone();
 
@@ -4515,8 +4515,6 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_retry_if_retries_on_serialization_error() {
-        use std::sync::atomic::{AtomicU32, Ordering};
-
         let calls = Arc::new(AtomicU32::new(0));
         let calls_clone = calls.clone();
 
@@ -4541,8 +4539,6 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_retry_if_exhausts_retries() {
-        use std::sync::atomic::{AtomicU32, Ordering};
-
         let calls = Arc::new(AtomicU32::new(0));
         let calls_clone = calls.clone();
 
@@ -4564,8 +4560,6 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_retry_if_no_retry_on_other_errors() {
-        use std::sync::atomic::{AtomicU32, Ordering};
-
         let calls = Arc::new(AtomicU32::new(0));
         let calls_clone = calls.clone();
 
