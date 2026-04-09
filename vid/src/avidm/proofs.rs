@@ -72,7 +72,7 @@ impl AvidMScheme {
                 .clone()
                 .zip(share.content.mt_proofs.iter())
             {
-                if index > param.total_weights {
+                if index >= param.total_weights {
                     return Err(VidError::InvalidShare);
                 }
                 if visited_indices.contains(&index) {
@@ -510,5 +510,32 @@ mod tests {
         let proof = NsAvidMScheme::proof_of_incorrect_encoding(&param, &commit, &shares).unwrap();
         assert_eq!(proof.ns_index, 1);
         assert!(proof.verify(&param, &commit).unwrap().is_ok());
+    }
+
+    #[test]
+    fn test_bad_encoding_proof_rejects_boundary_index() {
+        // Regression test: proof_of_incorrect_encoding must reject shares with
+        // index == total_weights (off-by-one, previously used `>` instead of `>=`).
+        let param = AvidMScheme::setup(3usize, 6usize).unwrap();
+        let payload = [1u8; 50];
+        let weights = [1u32; 6];
+        let (commit, shares) = AvidMScheme::disperse(&param, &weights, &payload).unwrap();
+
+        // Construct a share whose range.end == total_weights (last valid share).
+        // This should succeed since range 5..6 means index 5 which is < 6.
+        let last_share = &shares[5];
+        assert_eq!(last_share.content.range.end, param.total_weights);
+        assert!(
+            AvidMScheme::verify_internal(&param, &commit, &last_share.content)
+                .is_ok_and(|r| r.is_ok())
+        );
+
+        // Construct a fake share with range.end > total_weights. This must be rejected.
+        let mut bad_share = shares[5].clone();
+        bad_share.content.range = param.total_weights..param.total_weights + 1;
+        assert!(
+            AvidMScheme::proof_of_incorrect_encoding(&param, &commit, &[bad_share]).is_err(),
+            "proof_of_incorrect_encoding must reject share with index >= total_weights"
+        );
     }
 }

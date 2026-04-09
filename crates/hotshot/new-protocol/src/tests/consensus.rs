@@ -284,6 +284,7 @@ async fn test_state_validation_failed_removes_proposal() {
                     &proposal.block_header,
                 ),
             ),
+            delta: None,
         }))
         .await;
 

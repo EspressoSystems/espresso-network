@@ -515,6 +515,7 @@ pub fn state_verified_input(
         view,
         commitment,
         state: Arc::new(state),
+        delta: None,
     })
 }
 
