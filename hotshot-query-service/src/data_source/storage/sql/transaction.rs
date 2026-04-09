@@ -673,7 +673,7 @@ where
         // duplicates, because SQL does not allow conflicting rows in a single upsert statement.
         let payload_rows = payload_rows
             .into_iter()
-            .unique_by(|(hash, ..)| hash.clone());
+            .unique_by(|(hash, ns_table, ..)| (hash.clone(), ns_table.clone()));
 
         self.upsert(
             "payload",
