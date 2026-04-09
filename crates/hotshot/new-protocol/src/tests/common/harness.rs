@@ -17,6 +17,7 @@ use crate::{
     coordinator::timer::Timer,
     epoch::EpochManager,
     helpers::upgrade_lock,
+    logging::KeyPrefix,
     message::Message,
     network::Network,
     outbox::Outbox,
@@ -90,6 +91,7 @@ impl TestHarness {
             .outbox(Outbox::new())
             .timer(Timer::new(timer_duration, ViewNumber::genesis()))
             .public_key(public_key)
+            .node_id(KeyPrefix::from(&public_key))
             .build();
         Self {
             coordinator,

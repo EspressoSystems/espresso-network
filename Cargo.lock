@@ -6186,6 +6186,7 @@ dependencies = [
  "hotshot-testing",
  "hotshot-types",
  "hotshot-utils",
+ "rand 0.8.5",
  "serde",
  "serde_bytes",
  "thiserror 2.0.18",
