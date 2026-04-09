@@ -463,23 +463,23 @@ compatibility concerns.
 
 ### Requirement Tests
 
-| Test                           | Requirement                |
-| ------------------------------ | -------------------------- |
-| TEST:register-v3-ok            | REQ:register-v3            |
-| TEST:set-network-config-ok     | REQ:set-network-config     |
-| TEST:update-p2p-addr-ok        | REQ:update-p2p-addr        |
-| TEST:x25519-uniqueness-ok      | REQ:x25519-uniqueness      |
-| TEST:x25519-nonzero-ok         | REQ:x25519-nonzero         |
-| TEST:p2p-nonempty-ok           | REQ:p2p-nonempty           |
-| TEST:p2p-maxlength-ok          | REQ:p2p-maxlength          |
-| TEST:event-register-v3-ok      | REQ:event-register-v3      |
-| TEST:event-network-config-ok   | REQ:event-network-config   |
-| TEST:rust-register-v3-ok       | REQ:rust-register-v3       |
-| TEST:rust-network-config-ok    | REQ:rust-network-config    |
-| TEST:upgrade-v2-to-v3-ok       | REQ:upgrade-v2-to-v3       |
-| TEST:upgrade-storage-compat-ok | REQ:upgrade-storage-compat |
-| TEST:cli-set-network-config-ok | REQ:cli-set-network-config |
-| TEST:cli-update-p2p-addr-ok    | REQ:cli-update-p2p-addr    |
+| Test                           | Requirement                | Implementation                                                                                   |
+| ------------------------------ | -------------------------- | ------------------------------------------------------------------------------------------------ |
+| TEST:register-v3-ok            | REQ:register-v3            | [`test_RegisterValidatorV3_Success`](../contracts/test/StakeTableV3.t.sol)                       |
+| TEST:set-network-config-ok     | REQ:set-network-config     | [`test_SetNetworkConfig_Success`](../contracts/test/StakeTableV3.t.sol)                          |
+| TEST:update-p2p-addr-ok        | REQ:update-p2p-addr        | [`test_UpdateP2pAddr_Success`](../contracts/test/StakeTableV3.t.sol)                             |
+| TEST:x25519-uniqueness-ok      | REQ:x25519-uniqueness      | [`test_RegisterValidatorV3_DuplicateX25519_Reverts`](../contracts/test/StakeTableV3.t.sol)       |
+| TEST:x25519-nonzero-ok         | REQ:x25519-nonzero         | [`test_RegisterValidatorV3_ZeroX25519_Reverts`](../contracts/test/StakeTableV3.t.sol)            |
+| TEST:p2p-nonempty-ok           | REQ:p2p-nonempty           | [`test_ValidateP2pAddr_Empty`](../contracts/test/StakeTableV3.t.sol)                             |
+| TEST:p2p-maxlength-ok          | REQ:p2p-maxlength          | [`test_ValidateP2pAddr_TooLong`](../contracts/test/StakeTableV3.t.sol)                           |
+| TEST:event-register-v3-ok      | REQ:event-register-v3      | [`test_RegisterValidatorV3_Success`](../contracts/test/StakeTableV3.t.sol)                       |
+| TEST:event-network-config-ok   | REQ:event-network-config   | [`test_SetNetworkConfig_Success`](../contracts/test/StakeTableV3.t.sol)                          |
+| TEST:rust-register-v3-ok       | REQ:rust-register-v3       | [`test_register_v3_sets_x25519_and_p2p`](../crates/espresso/types/src/v0/impls/stake_table.rs)   |
+| TEST:rust-network-config-ok    | REQ:rust-network-config    | [`test_network_config_update_sets_values`](../crates/espresso/types/src/v0/impls/stake_table.rs) |
+| TEST:upgrade-v2-to-v3-ok       | REQ:upgrade-v2-to-v3       | [`test_UpgradeV2ToV3_PreservesState`](../contracts/test/StakeTableUpgradeToV3.t.sol)             |
+| TEST:upgrade-storage-compat-ok | REQ:upgrade-storage-compat | not yet implemented                                                                              |
+| TEST:cli-set-network-config-ok | REQ:cli-set-network-config | [`test_set_network_config`](../staking-cli/src/registration.rs)                                  |
+| TEST:cli-update-p2p-addr-ok    | REQ:cli-update-p2p-addr    | [`test_update_p2p_addr`](../staking-cli/src/registration.rs)                                     |
 
 ### Contract Edge Cases
 
@@ -520,40 +520,44 @@ compatibility concerns.
 
 ### Contract Edge Case Tests
 
-| Test                                    | Edge Case                         |
-| --------------------------------------- | --------------------------------- |
-| TEST:register-v3-zero-x25519-fails      | EDGE:register-v3-zero-x25519      |
-| TEST:register-v3-empty-p2p-fails        | EDGE:register-v3-empty-p2p        |
-| TEST:register-v3-long-p2p-fails         | EDGE:register-v3-long-p2p         |
-| TEST:register-v3-duplicate-x25519-fails | EDGE:register-v3-duplicate-x25519 |
-| TEST:register-v2-deprecated-fails       | EDGE:register-v2-deprecated       |
-| TEST:set-config-inactive-fails          | EDGE:set-config-inactive          |
-| TEST:set-config-exited-fails            | EDGE:set-config-exited            |
-| TEST:set-config-zero-x25519-fails       | EDGE:set-config-zero-x25519       |
-| TEST:set-config-empty-p2p-fails         | EDGE:set-config-empty-p2p         |
-| TEST:set-config-duplicate-x25519-fails  | EDGE:set-config-duplicate-x25519  |
-| TEST:set-config-repeated-ok             | EDGE:set-config-repeated          |
-| TEST:set-config-paused-fails            | EDGE:set-config-paused            |
-| TEST:update-p2p-inactive-fails          | EDGE:update-p2p-inactive          |
-| TEST:update-p2p-exited-fails            | EDGE:update-p2p-exited            |
-| TEST:update-p2p-empty-fails             | EDGE:update-p2p-empty             |
-| TEST:update-p2p-long-fails              | EDGE:update-p2p-long              |
-| TEST:update-p2p-paused-fails            | EDGE:update-p2p-paused            |
-| TEST:update-p2p-repeated-ok             | EDGE:update-p2p-repeated          |
-| TEST:register-v3-boundary-p2p-ok        | EDGE:register-v3-boundary-p2p     |
-| TEST:set-config-own-x25519-fails        | EDGE:set-config-own-x25519        |
-| TEST:set-config-unregistered-fails      | EDGE:set-config-unregistered      |
-| TEST:p2p-no-colon-fails                 | EDGE:p2p-no-colon                 |
-| TEST:p2p-no-host-fails                  | EDGE:p2p-no-host                  |
-| TEST:p2p-no-port-fails                  | EDGE:p2p-no-port                  |
-| TEST:p2p-port-zero-fails                | EDGE:p2p-port-zero                |
-| TEST:p2p-port-overflow-fails            | EDGE:p2p-port-overflow            |
-| TEST:p2p-port-non-numeric-fails         | EDGE:p2p-port-non-numeric         |
-| TEST:p2p-port-leading-zero-ok           | EDGE:p2p-port-leading-zero        |
-| TEST:p2p-valid-ipv4-ok                  | EDGE:p2p-valid-ipv4               |
-| TEST:p2p-valid-ipv6-ok                  | EDGE:p2p-valid-ipv6               |
-| TEST:p2p-valid-hostname-ok              | EDGE:p2p-valid-hostname           |
-| TEST:p2p-multiaddr-fails                | EDGE:p2p-multiaddr                |
+All contract edge case tests are in [`contracts/test/StakeTableV3.t.sol`](../contracts/test/StakeTableV3.t.sol):
+
+| Test                                                      | Edge Case                         |
+| --------------------------------------------------------- | --------------------------------- |
+| [`test_RegisterValidatorV3_ZeroX25519_Reverts`][v3t]      | EDGE:register-v3-zero-x25519      |
+| [`test_RegisterValidatorV3_EmptyP2p_Reverts`][v3t]        | EDGE:register-v3-empty-p2p        |
+| [`test_RegisterValidatorV3_LongP2p_Reverts`][v3t]         | EDGE:register-v3-long-p2p         |
+| [`test_RegisterValidatorV3_DuplicateX25519_Reverts`][v3t] | EDGE:register-v3-duplicate-x25519 |
+| [`test_RegisterValidatorV2_Deprecated_Reverts`][v3t]      | EDGE:register-v2-deprecated       |
+| [`test_SetNetworkConfig_Inactive_Reverts`][v3t]           | EDGE:set-config-inactive          |
+| [`test_SetNetworkConfig_Exited_Reverts`][v3t]             | EDGE:set-config-exited            |
+| [`test_SetNetworkConfig_ZeroX25519_Reverts`][v3t]         | EDGE:set-config-zero-x25519       |
+| [`test_SetNetworkConfig_EmptyP2p_Reverts`][v3t]           | EDGE:set-config-empty-p2p         |
+| [`test_SetNetworkConfig_DuplicateX25519_Reverts`][v3t]    | EDGE:set-config-duplicate-x25519  |
+| [`test_SetNetworkConfig_Repeated_Success`][v3t]           | EDGE:set-config-repeated          |
+| [`test_SetNetworkConfig_Paused_Reverts`][v3t]             | EDGE:set-config-paused            |
+| [`test_UpdateP2pAddr_Inactive_Reverts`][v3t]              | EDGE:update-p2p-inactive          |
+| [`test_UpdateP2pAddr_Exited_Reverts`][v3t]                | EDGE:update-p2p-exited            |
+| [`test_UpdateP2pAddr_Empty_Reverts`][v3t]                 | EDGE:update-p2p-empty             |
+| [`test_UpdateP2pAddr_Long_Reverts`][v3t]                  | EDGE:update-p2p-long              |
+| [`test_UpdateP2pAddr_Paused_Reverts`][v3t]                | EDGE:update-p2p-paused            |
+| [`test_UpdateP2pAddr_Repeated_Success`][v3t]              | EDGE:update-p2p-repeated          |
+| [`test_ValidateP2pAddr_ExactMaxLength`][v3t]              | EDGE:register-v3-boundary-p2p     |
+| [`test_SetNetworkConfig_OwnX25519_Reverts`][v3t]          | EDGE:set-config-own-x25519        |
+| [`test_SetNetworkConfig_Inactive_Reverts`][v3t]           | EDGE:set-config-unregistered      |
+| [`test_ValidateP2pAddr_NoColon`][v3t]                     | EDGE:p2p-no-colon                 |
+| [`test_ValidateP2pAddr_EmptyHost`][v3t]                   | EDGE:p2p-no-host                  |
+| [`test_ValidateP2pAddr_EmptyPort`][v3t]                   | EDGE:p2p-no-port                  |
+| [`test_ValidateP2pAddr_PortZero`][v3t]                    | EDGE:p2p-port-zero                |
+| [`test_ValidateP2pAddr_PortOverflow`][v3t]                | EDGE:p2p-port-overflow            |
+| [`test_ValidateP2pAddr_PortNonNumeric`][v3t]              | EDGE:p2p-port-non-numeric         |
+| [`test_ValidateP2pAddr_LeadingZeroPort`][v3t]             | EDGE:p2p-port-leading-zero        |
+| [`test_ValidateP2pAddr_ValidIpv4`][v3t]                   | EDGE:p2p-valid-ipv4               |
+| [`test_ValidateP2pAddr_ValidIpv6`][v3t]                   | EDGE:p2p-valid-ipv6               |
+| [`test_ValidateP2pAddr_ValidHostname`][v3t]               | EDGE:p2p-valid-hostname           |
+| [`test_ValidateP2pAddr_Multiaddr`][v3t]                   | EDGE:p2p-multiaddr                |
+
+[v3t]: ../contracts/test/StakeTableV3.t.sol
 
 ### Rust Edge Cases
 
@@ -568,14 +572,18 @@ compatibility concerns.
 
 ### Rust Edge Case Tests
 
-| Test                                     | Edge Case                          |
-| ---------------------------------------- | ---------------------------------- |
-| TEST:rust-register-v3-invalid-sig-ok     | EDGE:rust-register-v3-invalid-sig  |
-| TEST:rust-register-v3-bad-p2p-ok         | EDGE:rust-register-v3-bad-p2p      |
-| TEST:rust-config-unknown-validator-fails | EDGE:rust-config-unknown-validator |
-| TEST:rust-config-zero-x25519-skip-ok     | EDGE:rust-config-zero-x25519-skip  |
-| TEST:rust-config-duplicate-x25519-fails  | EDGE:rust-config-duplicate-x25519  |
-| TEST:rust-config-bad-p2p-ok              | EDGE:rust-config-bad-p2p           |
+All Rust edge case tests are in [`crates/espresso/types/src/v0/impls/stake_table.rs`][rst]:
+
+| Test                                                      | Edge Case                          |
+| --------------------------------------------------------- | ---------------------------------- |
+| [`test_register_v3_invalid_sig`][rst]                     | EDGE:rust-register-v3-invalid-sig  |
+| [`test_register_v3_empty_p2p_sets_none`][rst]             | EDGE:rust-register-v3-bad-p2p      |
+| [`test_network_config_update_unknown_validator`][rst]     | EDGE:rust-config-unknown-validator |
+| [`test_network_config_update_zero_x25519_skips_key`][rst] | EDGE:rust-config-zero-x25519-skip  |
+| [`test_network_config_update_duplicate_x25519`][rst]      | EDGE:rust-config-duplicate-x25519  |
+| [`test_network_config_update_hostname_p2p`][rst]          | EDGE:rust-config-bad-p2p           |
+
+[rst]: ../crates/espresso/types/src/v0/impls/stake_table.rs
 
 ### Upgrade Edge Cases
 
@@ -589,13 +597,17 @@ compatibility concerns.
 
 ### Upgrade Edge Case Tests
 
-| Test                                           | Edge Case                                   |
-| ---------------------------------------------- | ------------------------------------------- |
-| TEST:upgrade-reinitialize-v3-fails             | EDGE:upgrade-reinitialize-v3                |
-| TEST:upgrade-unauthorized-fails                | EDGE:upgrade-unauthorized                   |
-| TEST:upgrade-v2-ops-after-v3-ok                | EDGE:upgrade-v2-ops-after-v3                |
-| TEST:upgrade-pending-undelegation-preserved-ok | EDGE:upgrade-pending-undelegation-preserved |
-| TEST:upgrade-exited-validator-preserved-ok     | EDGE:upgrade-exited-validator-preserved     |
+All upgrade tests are in [`contracts/test/StakeTableUpgradeToV3.t.sol`][upt]:
+
+| Test                                                     | Edge Case                                   |
+| -------------------------------------------------------- | ------------------------------------------- |
+| [`test_UpgradeV2ToV3_ReinitializeReverts`][upt]          | EDGE:upgrade-reinitialize-v3                |
+| [`test_UpgradeV2ToV3_UnauthorizedReverts`][upt]          | EDGE:upgrade-unauthorized                   |
+| [`test_UpgradeV2ToV3_V2OpsAfterUpgrade`][upt]            | EDGE:upgrade-v2-ops-after-v3                |
+| [`test_UpgradeV2ToV3_PendingUndelegationPreserved`][upt] | EDGE:upgrade-pending-undelegation-preserved |
+| [`test_UpgradeV2ToV3_ExitedValidatorPreserved`][upt]     | EDGE:upgrade-exited-validator-preserved     |
+
+[upt]: ../contracts/test/StakeTableUpgradeToV3.t.sol
 
 ### Invariant Tests
 
@@ -612,8 +624,12 @@ Existing invariants cover the new functions because network config changes do no
 
 ### Integration Tests
 
-| Test                             | Description                                                                                                                          |
-| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| TEST:e2e-register-v3-pipeline    | V3 registration event emitted on L1, fetched by sequencer, applied to stake table with x25519 key and p2p addr set on the validator. |
-| TEST:e2e-network-config-pipeline | NetworkConfigUpdated event emitted on L1, fetched by sequencer, validator's x25519 key and p2p addr updated in stake table state.    |
-| TEST:e2e-epoch-activation        | Validator sets network config, values appear in active validator set after epoch transition (2-3 epochs).                            |
+CLI integration tests are in [`staking-cli/src/registration.rs`](../staking-cli/src/registration.rs):
+
+| Test                                                            | Description                                                                                            |
+| --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| [`test_set_network_config`](../staking-cli/src/registration.rs) | Deploy V3, register validator, call setNetworkConfig, verify NetworkConfigUpdated event.               |
+| [`test_update_p2p_addr`](../staking-cli/src/registration.rs)    | Deploy V3, register validator, call updateP2pAddr, verify NetworkConfigUpdated event with zero x25519. |
+| TEST:e2e-register-v3-pipeline                                   | not yet implemented                                                                                    |
+| TEST:e2e-network-config-pipeline                                | not yet implemented                                                                                    |
+| TEST:e2e-epoch-activation                                       | not yet implemented                                                                                    |
