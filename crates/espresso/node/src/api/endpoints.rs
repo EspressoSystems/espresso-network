@@ -444,6 +444,23 @@ where
         .boxed()
     })?;
 
+    api.at("get_total_issued_supply", |_, state| {
+        async move {
+            let calc = fetch_supply_inputs(state).await?;
+            Ok(format_ether(calc.total_issued_supply()))
+        }
+        .boxed()
+    })?;
+
+    // Reuses fetch_supply_inputs for uniformity; the extra Ethereum fetches are cached.
+    api.at("get_total_reward_distributed", |_, state| {
+        async move {
+            let calc = fetch_supply_inputs(state).await?;
+            Ok(format_ether(calc.total_reward_distributed()))
+        }
+        .boxed()
+    })?;
+
     Ok(api)
 }
 
