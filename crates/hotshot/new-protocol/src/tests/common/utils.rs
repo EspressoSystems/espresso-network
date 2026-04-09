@@ -24,8 +24,8 @@ use hotshot_testing::{
 };
 use hotshot_types::{
     data::{
-        EpochNumber, Leaf2, QuorumProposalWrapper, VidCommitment, VidDisperse, VidDisperse2,
-        VidDisperseShare2, ViewNumber, vid_commitment,
+        EpochNumber, Leaf2, VidCommitment, VidDisperse, VidDisperse2, VidDisperseShare2,
+        ViewNumber, vid_commitment,
     },
     epoch_membership::EpochMembershipCoordinator,
     message::Proposal as SignedProposal,
@@ -41,7 +41,10 @@ use hotshot_types::{
         network::TestableNetworkingImplementation,
         signature_key::{SignatureKey, StakeTableEntryType},
     },
-    utils::{BuilderCommitment, is_epoch_transition},
+    utils::{
+        BuilderCommitment, epoch_from_block_number, is_epoch_root, is_epoch_transition,
+        is_last_block,
+    },
 };
 
 use crate::{
@@ -63,7 +66,7 @@ pub struct TestView {
     pub view_number: ViewNumber,
     pub epoch_number: EpochNumber,
     pub leader_public_key: BLSPubKey,
-    pub proposal: SignedProposal<TestTypes, QuorumProposalWrapper<TestTypes>>,
+    pub proposal: SignedProposal<TestTypes, Proposal<TestTypes>>,
     pub leaf: Leaf2<TestTypes>,
     pub vid_disperse: VidDisperse2<TestTypes>,
     pub vid_shares: Vec<VidDisperseShare2<TestTypes>>,
@@ -81,7 +84,7 @@ impl TestView {
         recipient_key: &BLSPubKey,
     ) -> ProposalMessage<TestTypes, Validated> {
         let inner_proposal = SignedProposal {
-            data: self.proposal.data.clone().into(),
+            data: self.proposal.data.clone(),
             signature: self.proposal.signature.clone(),
             _pd: std::marker::PhantomData,
         };
@@ -132,10 +135,10 @@ impl TestView {
     pub fn vote1_input(&self, node_index: u64) -> Message<TestTypes, Validated> {
         let (pub_key, priv_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], node_index);
         let data = hotshot_types::simple_vote::QuorumData2 {
-            leaf_commit: proposal_commitment(&self.proposal.data.clone().into()),
+            leaf_commit: proposal_commitment(&self.proposal.data.clone()),
             epoch: Some(self.epoch_number),
             block_number: Some(BlockHeader::<TestTypes>::block_number(
-                &self.proposal.data.proposal.block_header,
+                &self.proposal.data.block_header,
             )),
         };
         let vote = hotshot_types::simple_vote::SimpleVote::create_signed_vote(
@@ -165,11 +168,9 @@ impl TestView {
     pub fn vote2_input(&self, node_index: u64) -> Message<TestTypes, Validated> {
         let (pub_key, priv_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], node_index);
         let data = Vote2Data {
-            leaf_commit: proposal_commitment(&self.proposal.data.clone().into()),
+            leaf_commit: proposal_commitment(&self.proposal.data.clone()),
             epoch: self.epoch_number,
-            block_number: BlockHeader::<TestTypes>::block_number(
-                &self.proposal.data.proposal.block_header,
-            ),
+            block_number: BlockHeader::<TestTypes>::block_number(&self.proposal.data.block_header),
         };
         let vote = hotshot_types::simple_vote::SimpleVote::create_signed_vote(
             data,
@@ -260,37 +261,96 @@ impl TestData {
         // commitment changes. The *next* view's justify_qc must reference the
         // new cert1, so we propagate it forward through this variable.
         let mut prev_new_cert1: Option<Certificate1<TestTypes>> = None;
+        let mut prev_new_cert2: Option<Certificate2<TestTypes>> = None;
+        // DRB results computed from epoch root leaves, keyed by target epoch.
+        // With difficulty 0 the DRB equals SHA256(bincode(root_leaf.justify_qc.signatures)).
+        let mut computed_drbs: HashMap<u64, hotshot_types::drb::DrbResult> = HashMap::new();
 
         for gen_view in &gen_views {
             let view_number = gen_view.view_number;
-            let epoch = gen_view.epoch_number.unwrap_or(EpochNumber::genesis());
-            let epoch_membership = membership.membership_for_epoch(Some(epoch)).await.unwrap();
 
-            let mut proposal = gen_view.quorum_proposal.clone();
+            let mut proposal: Proposal<TestTypes> = gen_view.quorum_proposal.data.clone().into();
             let leader_public_key = gen_view.leader_public_key;
             let leader_private_key = keys
                 .get(&leader_public_key)
                 .expect("Leader key not found in key map");
 
             let (vid_disperse, vid_shares) = extract_vid_disperse(gen_view);
-            let block_number =
-                BlockHeader::<TestTypes>::block_number(&proposal.data.proposal.block_header);
+            let block_number = BlockHeader::<TestTypes>::block_number(&proposal.block_header);
+
+            // Compute epoch from block number (generator doesn't know about
+            // epoch boundaries, so all views get genesis epoch).
+            let epoch = if epoch_height > 0 && block_number > 0 {
+                EpochNumber::new(epoch_from_block_number(block_number, epoch_height))
+            } else {
+                gen_view.epoch_number.unwrap_or(EpochNumber::genesis())
+            };
+            // Use genesis membership for signing — same committee in tests.
+            let epoch_membership = membership
+                .membership_for_epoch(Some(EpochNumber::genesis()))
+                .await
+                .unwrap();
 
             // ---- epoch-aware patching ----
             let needs_justify_update = prev_new_cert1.is_some();
-            let needs_drb = epoch_height > 0 && is_epoch_transition(block_number, epoch_height);
+            let needs_drb = epoch > EpochNumber::genesis() + 1
+                && epoch_height > 0
+                && is_epoch_transition(block_number, epoch_height);
 
             if let Some(new_cert1) = prev_new_cert1.take() {
-                proposal.data.proposal.justify_qc = new_cert1;
+                proposal.justify_qc = new_cert1;
             }
             if needs_drb {
-                proposal.data.proposal.next_drb_result = Some(TEST_DRB_RESULT);
+                let next_epoch = *epoch + 1;
+                proposal.next_drb_result = computed_drbs.get(&next_epoch).copied();
+            }
+            // Always set epoch (may differ from generator output).
+            let gen_epoch = gen_view.epoch_number.unwrap_or(EpochNumber::genesis());
+            let epoch_patched = epoch != gen_epoch;
+            proposal.epoch = epoch;
+
+            let needs_new_epoch = is_last_block(block_number.saturating_sub(1), epoch_height);
+            if needs_new_epoch {
+                proposal.next_epoch_justify_qc = prev_new_cert2.clone();
             }
 
             // Recompute leaf and commitment (may differ from generator output
             // when we touched justify_qc or next_drb_result).
-            let leaf = Leaf2::from_quorum_proposal(&proposal.data);
+            let leaf = Leaf2::from(proposal.clone());
             let leaf_commit = leaf.commit();
+
+            // Compute DRB for epoch root blocks so transition-window
+            // proposals carry the correct next_drb_result.  We call
+            // add_epoch_root + compute_drb_result on the *generator's own*
+            // membership (not the harness's), mirroring what the
+            // EpochManager does in production.
+            if epoch_height > 0 && is_epoch_root(block_number, epoch_height) {
+                let target_epoch =
+                    EpochNumber::new(epoch_from_block_number(block_number, epoch_height) + 2);
+                let _ = <TestTypes as hotshot_types::traits::node_implementation::NodeType>
+                    ::Membership::add_epoch_root(
+                        membership.membership().clone(),
+                        proposal.block_header.clone(),
+                    )
+                    .await;
+                if let Ok(drb) = membership
+                    .compute_drb_result(target_epoch, leaf.clone())
+                    .await
+                {
+                    computed_drbs.insert(*target_epoch, drb);
+                }
+            }
+
+            // Re-sign the proposal when the leaf commitment changed due to patching.
+
+            let signature =
+                <BLSPubKey as SignatureKey>::sign(leader_private_key, leaf_commit.as_ref())
+                    .expect("Failed to sign patched leaf commitment");
+            let signed_proposal = SignedProposal {
+                data: proposal.clone(),
+                signature,
+                _pd: std::marker::PhantomData,
+            };
 
             let cert1 = build_cert1(
                 leaf_commit,
@@ -315,8 +375,14 @@ impl TestData {
 
             // Propagate the rebuilt cert1 so the next view's justify_qc is
             // consistent with our updated commitment.
-            if needs_drb || needs_justify_update {
+            if needs_drb || needs_justify_update || needs_new_epoch || epoch_patched {
                 prev_new_cert1 = Some(cert1.clone());
+            }
+            // Set prev_new_cert2 on the last block of each epoch so the
+            // first block of the next epoch can use it as
+            // next_epoch_justify_qc.
+            if is_last_block(block_number, epoch_height) {
+                prev_new_cert2 = Some(cert2.clone());
             }
 
             let timeout_cert = build_timeout_cert(
@@ -340,7 +406,7 @@ impl TestData {
                 view_number,
                 epoch_number: epoch,
                 leader_public_key,
-                proposal,
+                proposal: signed_proposal,
                 leaf,
                 vid_disperse,
                 vid_shares,
@@ -394,7 +460,15 @@ pub async fn mock_membership_with_num_nodes(
         .write()
         .await
         .set_first_epoch(EpochNumber::genesis(), [0u8; 32]);
-    EpochMembershipCoordinator::new(membership, num_nodes as u64, &TestStorage::default())
+
+    let coordinator =
+        EpochMembershipCoordinator::new(membership, num_nodes as u64, &TestStorage::default());
+    // Set the DRB difficulty selector so compute_drb_result can run.
+    // Difficulty 0 makes the computation instant for tests.
+    coordinator
+        .set_drb_difficulty_selector(std::sync::Arc::new(|_version| Box::pin(async { 0u64 })))
+        .await;
+    coordinator
 }
 
 pub fn key_map_with_num_nodes(num_nodes: u64) -> BTreeMap<BLSPubKey, BLSPrivKey> {
@@ -466,6 +540,7 @@ pub fn state_verified_input(
         view,
         commitment,
         state: Arc::new(state),
+        delta: None,
     })
 }
 
@@ -600,6 +675,34 @@ impl ConsensusHarness {
                 self.consensus
                     .apply(ConsensusInput::DrbResult(*epoch, TEST_DRB_RESULT), outbox)
                     .await;
+            },
+            ConsensusOutput::LeafDecided(leaves) => {
+                // Mirror the EpochManager: when an epoch-root block is decided,
+                // register the future epoch in the membership (add_epoch_root)
+                // and store a DRB result for it (compute_drb_result).
+                let epoch_height = self.consensus.epoch_height;
+                for leaf in leaves {
+                    let block_number = BlockHeader::<TestTypes>::block_number(leaf.block_header());
+                    if !is_epoch_root(block_number, *epoch_height) {
+                        continue;
+                    }
+                    let header = leaf.block_header().clone();
+                    <TestTypes as hotshot_types::traits::node_implementation::NodeType>::Membership::add_epoch_root(
+                        self.membership_coordinator.membership().clone(),
+                        header,
+                    )
+                    .await
+                    .expect("add_epoch_root should succeed in test harness");
+
+                    let epoch =
+                        hotshot_types::utils::epoch_from_block_number(block_number, *epoch_height);
+                    let target_epoch = EpochNumber::new(epoch + 2);
+                    self.membership_coordinator
+                        .membership()
+                        .write()
+                        .await
+                        .add_drb_result(target_epoch, TEST_DRB_RESULT);
+                }
             },
             _ => {},
         }

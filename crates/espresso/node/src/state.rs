@@ -28,7 +28,7 @@ use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION};
 
 use crate::{
     NodeState, SeqTypes,
-    api::RewardMerkleTreeDataSource,
+    api::{RewardMerkleTreeDataSource, RewardMerkleTreeV2Data},
     catchup::{CatchupStorage, SqlStateCatchup},
     persistence::ChainConfigPersistence,
 };
@@ -320,18 +320,24 @@ where
     Ok(state)
 }
 
-async fn store_genesis_state<T>(
-    mut tx: T,
+async fn store_genesis_state<S>(
+    storage: &S,
     chain_config: ChainConfig,
     state: &ValidatedState,
 ) -> anyhow::Result<()>
 where
-    T: SequencerStateUpdate,
+    S: SequencerStateDataSource,
+    for<'a> S::Transaction<'a>: SequencerStateUpdate,
 {
     ensure!(
         state.block_merkle_tree.num_leaves() == 0,
         "genesis state with non-empty block tree is unsupported"
     );
+
+    let mut tx = storage
+        .write()
+        .await
+        .context("starting transaction for genesis state")?;
 
     // Insert fee merkle tree nodes
     for (account, _) in state.fee_merkle_tree.iter() {
@@ -356,6 +362,17 @@ where
     tx.insert_chain_config(chain_config).await?;
 
     tx.commit().await?;
+
+    // Store the genesis reward tree at height 0 so catchup can find it.
+    let tree_data: RewardMerkleTreeV2Data = (&state.reward_merkle_tree_v2)
+        .try_into()
+        .context("serializing genesis reward tree")?;
+    let tree_bytes = bincode::serialize(&tree_data).context("serializing genesis reward tree")?;
+    storage
+        .persist_tree(0, tree_bytes)
+        .await
+        .context("storing genesis reward merkle tree")?;
+
     Ok(())
 }
 
@@ -410,11 +427,7 @@ where
         // If the last height is 0, we need to insert the genesis state, since this state is
         // never the result of a state update and thus is not inserted in the loop below.
         tracing::info!("storing genesis merklized state");
-        let tx = storage
-            .write()
-            .await
-            .context("starting transaction for genesis state")?;
-        store_genesis_state(tx, instance.chain_config, &instance.genesis_state)
+        store_genesis_state(&*storage, instance.chain_config, &instance.genesis_state)
             .await
             .context("storing genesis state")?;
     }

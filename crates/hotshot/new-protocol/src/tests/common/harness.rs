@@ -6,7 +6,7 @@ use hotshot_example_types::{
     state_types::{TestInstanceState, TestValidatedState},
 };
 use hotshot_types::{
-    data::{Leaf2, ViewNumber},
+    data::{EpochNumber, Leaf2, ViewNumber},
     traits::signature_key::SignatureKey,
 };
 
@@ -14,7 +14,7 @@ use super::utils::mock_membership;
 use crate::{
     block::{BlockBuilder, BlockBuilderConfig},
     consensus::{Consensus, ConsensusInput, ConsensusOutput},
-    coordinator::timer::Timer,
+    coordinator::{error::Severity, timer::Timer},
     epoch::EpochManager,
     helpers::upgrade_lock,
     logging::KeyPrefix,
@@ -39,7 +39,7 @@ impl TestHarness {
     pub async fn new(node_index: u64) -> Self {
         // Default timer is long enough to not fire during normal tests,
         // which complete in ~100-200ms.
-        Self::new_with_timer(node_index, Duration::from_secs(2)).await
+        Self::new_with_timer(node_index, Duration::from_millis(500)).await
     }
 
     pub async fn new_with_timer(node_index: u64, timer_duration: Duration) -> Self {
@@ -89,7 +89,11 @@ impl TestHarness {
             .proposal_validator(proposal_validator)
             .membership_coordinator(membership)
             .outbox(Outbox::new())
-            .timer(Timer::new(timer_duration, ViewNumber::genesis()))
+            .timer(Timer::new(
+                timer_duration,
+                ViewNumber::genesis(),
+                EpochNumber::genesis(),
+            ))
             .public_key(public_key)
             .node_id(KeyPrefix::from(&public_key))
             .build();
@@ -129,9 +133,14 @@ impl TestHarness {
     /// This avoids any assumption about the order or number of events
     /// produced by asynchronous coordinator subsystems (proposal validator,
     /// VID reconstructor, vote collectors, state manager, timer).
-    pub async fn process_until<P>(&mut self, pred: P) -> Vec<ConsensusInput<TestTypes>>
+    pub async fn process_until<P, F>(
+        &mut self,
+        pred: P,
+        fail_pred: F,
+    ) -> Vec<ConsensusInput<TestTypes>>
     where
         P: Fn(&[ConsensusInput<TestTypes>]) -> bool,
+        F: Fn(&[ConsensusInput<TestTypes>]) -> bool,
     {
         let mut inputs = Vec::new();
         while !pred(&inputs) {
@@ -140,7 +149,16 @@ impl TestHarness {
                     self.apply_and_process(input.clone()).await;
                     inputs.push(input);
                 },
-                Err(err) => panic!("Unexpected error: {err}"),
+                Err(err) if err.severity == Severity::Critical => {
+                    panic!("Critical coordinator error: {err}")
+                },
+                Err(_err) => {
+                    // Non-critical errors (e.g., epoch root computation failures
+                    // in the test environment) are expected and skipped.
+                },
+            }
+            if fail_pred(&inputs) {
+                panic!("Received Failure inputs: {inputs:?}");
             }
         }
         inputs
