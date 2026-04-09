@@ -34,7 +34,8 @@ INSERT INTO payload_temp
     SELECT DISTINCT ON (payload_hash, ns_table)
         payload_hash, ns_table, payload.data, size, num_transactions
     FROM header
-    JOIN payload ON header.height = payload.height;
+    JOIN payload ON header.height = payload.height
+    WHERE payload.data IS NOT NULL;
 DROP TABLE payload;
 ALTER TABLE payload_temp RENAME TO payload;
 
