@@ -4784,6 +4784,7 @@ dependencies = [
  "hotshot-contract-adapter",
  "hotshot-example-types",
  "hotshot-libp2p-networking",
+ "hotshot-new-protocol",
  "hotshot-query-service",
  "hotshot-types",
  "humantime",

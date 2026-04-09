@@ -518,51 +518,46 @@ async fn handle_events<N, P>(
     while let Some(event) = events.next().await {
         tracing::debug!(node_id, ?event, "consensus event");
 
-        match event {
-            ConsensusEvent::LegacyEvent(ref hotshot_event) => {
-                // Handle external messages from the legacy protocol.
-                if let hotshot_types::event::EventType::ExternalMessageReceived { ref data, .. } =
-                    hotshot_event.event
-                    && let Err(err) = external_event_handler.handle_event(data).await
+        // Handle external messages from either protocol.
+        match &event {
+            ConsensusEvent::LegacyEvent(hotshot_event) => {
+                if let hotshot_types::event::EventType::ExternalMessageReceived {
+                    ref data, ..
+                } = hotshot_event.event
                 {
-                    tracing::warn!("Failed to handle legacy external message: {:?}", err);
-                }
-
-                // Persistence and state signer consume the original HotShot event.
-                persistence
-                    .handle_event(hotshot_event, &event_consumer)
-                    .await;
-                state_signer
-                    .write()
-                    .await
-                    .handle_event(hotshot_event, &consensus_handle)
-                    .await;
-
-                // Forward to the event streaming service.
-                if let Some(events_streamer) = events_streamer.as_ref() {
-                    events_streamer
-                        .write()
-                        .await
-                        .handle_event(hotshot_event.clone())
-                        .await;
+                    if let Err(err) = external_event_handler.handle_event(data).await {
+                        tracing::warn!("Failed to handle legacy external message: {:?}", err);
+                    }
                 }
             },
-            ConsensusEvent::NewDecide(_new_decide) => {
-                // TODO: Handle new protocol decide events.
-                // This will need to translate NewDecideEvent into the format
-                // expected by persistence, state signer, and events streamer.
-            },
-            ConsensusEvent::ExternalMessageReceived { ref data, .. } => {
+            ConsensusEvent::ExternalMessageReceived { data, .. } => {
                 if let Err(err) = external_event_handler.handle_event(data).await {
                     tracing::warn!("Failed to handle external message: {:?}", err);
                 }
             },
-            ConsensusEvent::QuorumProposal { .. } => {
-                // Handled by the proposal fetcher via its own event stream.
-            },
-            ConsensusEvent::ViewChanged { .. } => {
-                // View changes are tracked internally by the adapter.
-            },
+            _ => {},
+        }
+
+        // Persistence: handles both legacy and new protocol events.
+        persistence.handle_event(&event, &event_consumer).await;
+
+        // State signer: accepts ConsensusEvent directly.
+        state_signer
+            .write()
+            .await
+            .handle_event(&event, &consensus_handle)
+            .await;
+
+        // Events streamer: only forward legacy events for now.
+        // TODO: translate NewDecide to legacy Event for events streamer subscribers.
+        if let ConsensusEvent::LegacyEvent(ref hotshot_event) = event {
+            if let Some(events_streamer) = events_streamer.as_ref() {
+                events_streamer
+                    .write()
+                    .await
+                    .handle_event(hotshot_event.clone())
+                    .await;
+            }
         }
     }
 }

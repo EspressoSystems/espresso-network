@@ -1,4 +1,7 @@
+use hotshot_new_protocol::message::{Certificate2, Proposal as NewProposal};
 use hotshot_types::{
+    data::ViewNumber,
+    message::Proposal as SignedProposal,
     signature_key::{BLSPubKey, SchnorrPubKey},
     traits::{node_implementation::NodeType, signature_key::SignatureKey},
 };
@@ -166,6 +169,30 @@ pub type Leaf = hotshot_types::data::Leaf<SeqTypes>;
 pub type Leaf2 = hotshot_types::data::Leaf2<SeqTypes>;
 
 pub type Event = hotshot::types::Event<SeqTypes>;
+
+#[derive(Clone, Debug)]
+pub struct NewDecideEvent<T: NodeType> {
+    pub view_number: ViewNumber,
+    pub leaves: Vec<hotshot_types::data::Leaf2<T>>,
+    pub cert2: Certificate2<T>,
+}
+
+#[derive(Clone, Debug)]
+pub enum ConsensusEvent<T: NodeType> {
+    LegacyEvent(hotshot::types::Event<T>),
+    NewDecide(NewDecideEvent<T>),
+    ViewChanged {
+        view_number: ViewNumber,
+    },
+    QuorumProposal {
+        proposal: SignedProposal<T, NewProposal<T>>,
+        sender: T::SignatureKey,
+    },
+    ExternalMessageReceived {
+        sender: T::SignatureKey,
+        data: Vec<u8>,
+    },
+}
 
 pub type PubKey = BLSPubKey;
 pub type PrivKey = <PubKey as SignatureKey>::PrivateKey;

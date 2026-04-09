@@ -9,13 +9,10 @@ use std::{
 use async_broadcast::{InactiveReceiver, Sender};
 use async_lock::RwLock;
 use committable::Commitment;
+pub use espresso_types::{ConsensusEvent, NewDecideEvent};
 use futures::{StreamExt, stream::BoxStream};
 use hotshot::types::SystemContextHandle;
-use hotshot_new_protocol::{
-    consensus::ConsensusOutput,
-    message::{Certificate2, Proposal as NewProposal},
-    query::CoordinatorQuery,
-};
+use hotshot_new_protocol::{consensus::ConsensusOutput, query::CoordinatorQuery};
 use hotshot_types::{
     data::{EpochNumber, Leaf2, QuorumProposalWrapper, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
@@ -26,30 +23,6 @@ use hotshot_types::{
 };
 use tokio::sync::{mpsc, oneshot};
 use versions::version;
-
-#[derive(Clone, Debug)]
-pub struct NewDecideEvent<T: NodeType> {
-    pub view_number: ViewNumber,
-    pub leaves: Vec<Leaf2<T>>,
-    pub cert2: Certificate2<T>,
-}
-
-#[derive(Clone, Debug)]
-pub enum ConsensusEvent<T: NodeType> {
-    LegacyEvent(Event<T>),
-    NewDecide(NewDecideEvent<T>),
-    ViewChanged {
-        view_number: ViewNumber,
-    },
-    QuorumProposal {
-        proposal: SignedProposal<T, NewProposal<T>>,
-        sender: T::SignatureKey,
-    },
-    ExternalMessageReceived {
-        sender: T::SignatureKey,
-        data: Vec<u8>,
-    },
-}
 
 pub fn event_from_output<T: NodeType>(output: &ConsensusOutput<T>) -> Option<ConsensusEvent<T>> {
     match output {

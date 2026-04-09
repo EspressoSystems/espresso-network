@@ -39,7 +39,7 @@ use super::{
     v0_3::{EventKey, IndexedStake, StakeTableEvent},
 };
 use crate::{
-    AuthenticatedValidatorMap, BlockMerkleTree, Event, FeeAccount, FeeAccountProof,
+    AuthenticatedValidatorMap, BlockMerkleTree, ConsensusEvent, Event, FeeAccount, FeeAccountProof,
     FeeMerkleCommitment, Leaf2, NetworkConfig, PubKey, SeqTypes,
     v0::impls::{StakeTableHash, ValidatedState},
     v0_3::{
@@ -787,37 +787,75 @@ pub trait SequencerPersistence:
     }
 
     /// Update storage based on an event from consensus.
-    async fn handle_event(&self, event: &Event, consumer: &(impl EventConsumer + 'static)) {
-        if let EventType::Decide {
-            leaf_chain,
-            committing_qc,
-            deciding_qc,
-            ..
-        } = &event.event
-        {
-            let Some(LeafInfo { leaf, .. }) = leaf_chain.first() else {
-                // No new leaves.
-                return;
-            };
+    async fn handle_event(
+        &self,
+        event: &ConsensusEvent<SeqTypes>,
+        consumer: &(impl EventConsumer + 'static),
+    ) {
+        match event {
+            ConsensusEvent::LegacyEvent(hotshot_event) => {
+                if let EventType::Decide {
+                    leaf_chain,
+                    committing_qc,
+                    deciding_qc,
+                    ..
+                } = &hotshot_event.event
+                {
+                    let Some(LeafInfo { leaf, .. }) = leaf_chain.first() else {
+                        return;
+                    };
 
-            // Associate each decided leaf with a QC.
-            let chain = leaf_chain.iter().zip(
-                // The first (most recent) leaf corresponds to the QC triggering the decide event.
-                std::iter::once((**committing_qc).clone())
-                    // Moving backwards in the chain, each leaf corresponds with the subsequent
-                    // leaf's justify QC.
-                    .chain(leaf_chain.iter().map(|leaf| CertificatePair::for_parent(&leaf.leaf))),
-            );
+                    let chain = leaf_chain.iter().zip(
+                        std::iter::once((**committing_qc).clone()).chain(
+                            leaf_chain
+                                .iter()
+                                .map(|leaf| CertificatePair::for_parent(&leaf.leaf)),
+                        ),
+                    );
 
-            if let Err(err) = self
-                .append_decided_leaves(leaf.view_number(), chain, deciding_qc.clone(), consumer)
-                .await
-            {
-                tracing::error!(
-                    "failed to save decided leaves, chain may not be up to date: {err:#}"
+                    if let Err(err) = self
+                        .append_decided_leaves(
+                            leaf.view_number(),
+                            chain,
+                            deciding_qc.clone(),
+                            consumer,
+                        )
+                        .await
+                    {
+                        tracing::error!(
+                            "failed to save decided leaves, chain may not be up to date: {err:#}"
+                        );
+                    }
+                }
+            },
+            ConsensusEvent::NewDecide(decide) => {
+                if decide.leaves.is_empty() {
+                    return;
+                }
+
+                let leaf_infos: Vec<_> = decide
+                    .leaves
+                    .iter()
+                    .map(|leaf| {
+                        let state = Arc::new(ValidatedState::from_header(leaf.block_header()));
+                        LeafInfo::new(leaf.clone(), state, None, None, None)
+                    })
+                    .collect();
+
+                let chain = leaf_infos.iter().zip(
+                    leaf_infos
+                        .iter()
+                        .map(|info| CertificatePair::for_parent(&info.leaf)),
                 );
-                return;
-            }
+
+                if let Err(err) = self
+                    .append_decided_leaves(decide.view_number, chain, None, consumer)
+                    .await
+                {
+                    tracing::error!("failed to save decided leaves from new protocol: {err:#}");
+                }
+            },
+            _ => {},
         }
     }
 
