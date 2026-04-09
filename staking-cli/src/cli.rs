@@ -708,6 +708,28 @@ pub async fn run() -> Result<()> {
                 metadata_uri,
             }
         },
+        Commands::SetNetworkConfig {
+            x25519_key,
+            p2p_addr,
+        } => {
+            if !config.export_calldata {
+                wallet.as_ref().ok_or_else(&require_wallet)?;
+            }
+            Transaction::SetNetworkConfig {
+                stake_table: stake_table_addr,
+                x25519_key: *x25519_key,
+                p2p_addr: p2p_addr.clone(),
+            }
+        },
+        Commands::UpdateP2pAddr { p2p_addr } => {
+            if !config.export_calldata {
+                wallet.as_ref().ok_or_else(&require_wallet)?;
+            }
+            Transaction::UpdateP2pAddr {
+                stake_table: stake_table_addr,
+                p2p_addr: p2p_addr.clone(),
+            }
+        },
         Commands::Approve { amount } => Transaction::Approve {
             token: token_addr,
             spender: stake_table_addr,

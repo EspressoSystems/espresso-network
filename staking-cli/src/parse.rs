@@ -21,6 +21,11 @@ pub fn parse_state_priv_key(s: &str) -> Result<StateSignKey, Tb64Error> {
     TaggedBase64::parse(s)?.try_into()
 }
 
+pub fn parse_bytes32(s: &str) -> Result<alloy::primitives::FixedBytes<32>, String> {
+    s.parse::<alloy::primitives::FixedBytes<32>>()
+        .map_err(|e| format!("Invalid bytes32: {e}"))
+}
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Add)]
 pub struct Commission(u16);
 

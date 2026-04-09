@@ -26,6 +26,7 @@ use hotshot_contract_adapter::{
             undelegateCall, updateCommissionCall, updateConsensusKeysCall,
             updateConsensusKeysV2Call, updateMetadataUriCall,
         },
+        StakeTableV3::{setNetworkConfigCall, updateP2pAddrCall},
     },
     stake_table::{StakeTableContractVersion, StateSignatureSol},
 };
@@ -86,6 +87,15 @@ pub enum Transaction {
     UpdateMetadataUri {
         stake_table: Address,
         metadata_uri: MetadataUri,
+    },
+    SetNetworkConfig {
+        stake_table: Address,
+        x25519_key: alloy::primitives::FixedBytes<32>,
+        p2p_addr: String,
+    },
+    UpdateP2pAddr {
+        stake_table: Address,
+        p2p_addr: String,
     },
     Transfer {
         token: Address,
@@ -283,6 +293,38 @@ impl Transaction {
                     args: vec![metadata_uri.to_string()],
                 }),
             ),
+            Self::SetNetworkConfig {
+                stake_table,
+                x25519_key,
+                p2p_addr,
+            } => (
+                stake_table,
+                setNetworkConfigCall {
+                    x25519Key: x25519_key,
+                    p2pAddr: p2p_addr.clone(),
+                }
+                .abi_encode()
+                .into(),
+                Some(FunctionInfo {
+                    signature: "setNetworkConfig(bytes32 x25519Key, string p2pAddr)".to_string(),
+                    args: vec![x25519_key.to_string(), p2p_addr],
+                }),
+            ),
+            Self::UpdateP2pAddr {
+                stake_table,
+                p2p_addr,
+            } => (
+                stake_table,
+                updateP2pAddrCall {
+                    p2pAddr: p2p_addr.clone(),
+                }
+                .abi_encode()
+                .into(),
+                Some(FunctionInfo {
+                    signature: "updateP2pAddr(string p2pAddr)".to_string(),
+                    args: vec![p2p_addr],
+                }),
+            ),
             Self::Transfer { token, to, amount } => (
                 token,
                 transferCall { to, value: amount }.abi_encode().into(),
@@ -338,6 +380,12 @@ impl Transaction {
                 format!("Update commission to {}", new_commission)
             },
             Self::UpdateMetadataUri { .. } => "Update metadata URI".to_string(),
+            Self::SetNetworkConfig { .. } => {
+                "Set network config (x25519 key and p2p address)".to_string()
+            },
+            Self::UpdateP2pAddr { p2p_addr, .. } => {
+                format!("Update p2p address to {}", p2p_addr)
+            },
             Self::Transfer { to, amount, .. } => {
                 format!("Transfer {} ESP to {}", format_esp(*amount), to)
             },
@@ -392,7 +440,9 @@ impl Transaction {
             | Self::UpdateConsensusKeys { .. }
             | Self::DeregisterValidator { .. }
             | Self::UpdateCommission { .. }
-            | Self::UpdateMetadataUri { .. } => result.maybe_decode_revert::<StakeTableV2Errors>(),
+            | Self::UpdateMetadataUri { .. }
+            | Self::SetNetworkConfig { .. }
+            | Self::UpdateP2pAddr { .. } => result.maybe_decode_revert::<StakeTableV2Errors>(),
         }
     }
 
@@ -466,6 +516,11 @@ mod tests {
                 "transfer(address to, uint256 value)",
                 transferCall::SELECTOR,
             ),
+            (
+                "setNetworkConfig(bytes32 x25519Key, string p2pAddr)",
+                setNetworkConfigCall::SELECTOR,
+            ),
+            ("updateP2pAddr(string p2pAddr)", updateP2pAddrCall::SELECTOR),
         ];
 
         for (named_sig, expected_selector) in cases {

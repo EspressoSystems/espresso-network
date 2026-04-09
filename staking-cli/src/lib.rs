@@ -379,6 +379,25 @@ pub(crate) enum Commands {
         #[clap(long, value_parser = parse::parse_bls_pub_key, env = "CONSENSUS_PUBLIC_KEY")]
         consensus_public_key: Option<BLSPubKey>,
     },
+    /// Set x25519 key and p2p address for a validator.
+    ///
+    /// Primary use: initial configuration for validators registered before V3.
+    /// Also usable to rotate the x25519 key.
+    SetNetworkConfig {
+        /// The x25519 public key (32 bytes, hex encoded with 0x prefix)
+        #[clap(long, value_parser = parse::parse_bytes32, env = "X25519_KEY")]
+        x25519_key: alloy::primitives::FixedBytes<32>,
+
+        /// The p2p address in host:port format
+        #[clap(long, env = "P2P_ADDR")]
+        p2p_addr: String,
+    },
+    /// Update only the p2p address for a validator.
+    UpdateP2pAddr {
+        /// The p2p address in host:port format
+        #[clap(long, env = "P2P_ADDR")]
+        p2p_addr: String,
+    },
     /// Approve stake table contract to move tokens
     Approve {
         #[clap(long, value_parser = parse_ether)]
