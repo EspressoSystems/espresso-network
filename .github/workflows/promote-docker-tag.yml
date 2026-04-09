@@ -1,0 +1,137 @@
+name: Promote Docker Tag
+
+on:
+  workflow_dispatch:
+    inputs:
+      floating-tag:
+        description: Floating tag to update
+        required: true
+        type: choice
+        options:
+          - decaf.rc
+          - decaf
+          - mainnet.rc
+          - mainnet
+      release-tag:
+        description: Source git tag (e.g. 20260408 or 20260408.rc1)
+        required: true
+        type: string
+      skip-progression:
+        description: Skip progression check (for hotfixes)
+        required: false
+        type: boolean
+        default: false
+
+env:
+  REGISTRY: ghcr.io/espressosystems/espresso-network
+  REFERENCE_SERVICE: espresso-node
+
+jobs:
+  check-progression:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate release-tag format
+        env:
+          TAG: ${{ inputs.release-tag }}
+        run: |
+          set -euo pipefail
+          if ! echo "$TAG" | grep -qE '^20[0-9]{2}[01][0-9][0-3][0-9](\..+|-.*)?$'; then
+            echo "::error::release-tag must match YYYYMMDD, YYYYMMDD.qualifier, or YYYYMMDD-description"
+            exit 1
+          fi
+
+      - name: Login to Github Container Repo
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Verify source image exists
+        env:
+          TAG: ${{ inputs.release-tag }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools inspect "$REGISTRY/$REFERENCE_SERVICE:$TAG"
+
+      - name: Check promotion progression
+        if: ${{ !inputs.skip-progression }}
+        env:
+          RELEASE_GIT_TAG: ${{ inputs.release-tag }}
+          FLOATING_DOCKER_TAG: ${{ inputs.floating-tag }}
+        run: |
+          set -euo pipefail
+
+          # The index digest isn't in --raw output, so we compare the amd64 manifest digest instead.
+          get_digest() {
+            docker buildx imagetools inspect --raw "$REGISTRY/$REFERENCE_SERVICE:$1" 2>/dev/null \
+              | jq -r '.manifests[] | select(.platform.architecture=="amd64" and .platform.os=="linux") | .digest'
+          }
+
+          check_prerequisite() {
+            local prerequisite_tag="$1"
+            local required_digest
+            required_digest=$(get_digest "$prerequisite_tag")
+            if [ -z "$required_digest" ]; then
+              echo "::error::Could not resolve digest for $prerequisite_tag -- does the tag exist?"
+              exit 1
+            fi
+            local release_digest
+            release_digest=$(get_digest "$RELEASE_GIT_TAG")
+            if [ "$release_digest" != "$required_digest" ]; then
+              echo "::error::Release must be promoted to $prerequisite_tag before $FLOATING_DOCKER_TAG"
+              exit 1
+            fi
+          }
+
+          case "$FLOATING_DOCKER_TAG" in
+            decaf.rc)  ;;
+            decaf)     check_prerequisite "decaf.rc" ;;
+            mainnet.rc) check_prerequisite "decaf" ;;
+            mainnet)   check_prerequisite "mainnet.rc" ;;
+          esac
+
+  promote:
+    needs: check-progression
+    runs-on: ubuntu-latest
+    environment: ${{ startsWith(inputs.floating-tag, 'mainnet') && 'mainnet-promotion' || '' }}
+    strategy:
+      matrix:
+        service:
+          - bridge
+          - builder
+          - cdn-broker
+          - cdn-marshal
+          - cdn-whitelist
+          - deploy
+          - espresso-dev-node
+          - nasty-client
+          - node-validator
+          - orchestrator
+          - prover-service
+          - espresso-node
+          - staking-cli
+          - state-relay-server
+          - submit-transactions
+    steps:
+      - name: Login to Github Container Repo
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Re-tag image
+        env:
+          SERVICE: ${{ matrix.service }}
+          FLOATING_DOCKER_TAG: ${{ inputs.floating-tag }}
+          RELEASE_GIT_TAG: ${{ inputs.release-tag }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create -t "$REGISTRY/$SERVICE:$FLOATING_DOCKER_TAG" "$REGISTRY/$SERVICE:$RELEASE_GIT_TAG"

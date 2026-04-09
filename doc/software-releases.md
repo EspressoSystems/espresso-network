@@ -1,12 +1,10 @@
 # Release Versioning
 
-## Tags
-
-### Git Tags
+## Git Tags
 
 Date-based. `-` for internal, `.` for qualifiers.
 
-| Tag            | GitHub Release | Audience                       |
+| Git Tag        | GitHub Release | Audience                       |
 | -------------- | -------------- | ------------------------------ |
 | `YYYYMMDD-*`   | Pre-release    | Internal testing               |
 | `YYYYMMDD.rcN` | Pre-release    | Safe to deploy, early adopters |
@@ -15,21 +13,28 @@ Date-based. `-` for internal, `.` for qualifiers.
 RC pre-releases are tested and safe to deploy. Operators willing to run canary versions are encouraged to use them and
 report issues.
 
-### Docker Floating Tags
+Multiple releases on the same day use `YYYYMMDD.1`, `YYYYMMDD.2`, etc.
 
-Git tags track the software version. Floating Docker tags track network rollout. These are separate concerns.
+Git tags are created via `create-release.yml`, which requires reviewer approval. The workflow validates the tag format,
+classifies it as release or pre-release, and creates both the git tag and GitHub Release with auto-generated notes. This
+triggers `build.yml`, which builds Docker images tagged with the git tag (e.g. git tag `20260408` produces Docker image
+`espresso-node:20260408`).
 
-| Floating Tag | Points to     | Audience                 |
+## Docker Floating Tags
+
+Floating Docker tags track network rollout. They are not git tags and are never created by `build.yml`.
+
+| Docker Tag   | Points to     | Audience                 |
 | ------------ | ------------- | ------------------------ |
 | `decaf.rc`   | Latest RC     | Canary decaf operators   |
 | `decaf`      | Latest stable | Decaf operators          |
 | `mainnet.rc` | Latest RC     | Canary mainnet operators |
 | `mainnet`    | Latest stable | Mainnet operators        |
 
-- Each release also produces an image tagged with its git tag (e.g. `20260408`, `20260408.rc1`).
-- Floating tags are moved via a manually triggered GitHub Action (see below).
-- Operator docs reference floating tags so they don't need updating on new releases.
-- Operators who prefer pinned versions use the date tag and watch GitHub Releases.
+Floating Docker tags are moved via `promote-docker-tag.yml` (see below).
+
+- Operator docs reference floating Docker tags so they don't need updating on new releases.
+- Operators who prefer pinned versions use the date-based Docker image tag and watch GitHub Releases.
 
 ## Branches
 
@@ -43,37 +48,43 @@ Release branches start with `release-`.
 ## Process
 
 1. Create `release-*` branch off main. Test and fixup.
-2. Tag `YYYYMMDD-description` for internal testing. GitHub Pre-release.
-3. Optionally tag `YYYYMMDD.rcN` for release candidates. GitHub Pre-release.
-4. Tag `YYYYMMDD`. GitHub Release.
-5. Move `decaf.rc` Docker tag.
-6. After confidence on decaf canaries, move `decaf` Docker tag.
-7. Move `mainnet.rc` Docker tag.
-8. After confidence on mainnet canaries, move `mainnet` Docker tag.
+2. Create git tag `YYYYMMDD-description` via `create-release.yml`. Creates GitHub Pre-release.
+3. Optionally create git tag `YYYYMMDD.rcN` via `create-release.yml`. Creates GitHub Pre-release.
+4. Create git tag `YYYYMMDD` via `create-release.yml`. Creates GitHub Release.
+5. Promote the release to `decaf.rc`.
+6. After confidence on decaf canaries, promote the release to `decaf`.
+7. Promote the release to `mainnet.rc`.
+8. After confidence on mainnet canaries, promote the release to `mainnet`.
 9. Post on Discord/Telegram with release link.
+
+### Hotfixes
+
+For critical bugfixes that need to skip the full decaf progression, the promote action supports a `skip-progression`
+flag. The `mainnet-promotion` environment approval still applies, so a reviewer must sign off. The action's run history
+records that progression was skipped.
+
+## Create Release Action
+
+`create-release.yml` creates git tags and GitHub Releases. Requires approval via the `release` environment.
+
+Inputs: `tag` (e.g. `20260408`), `ref` (branch or commit to tag).
+
+`gh workflow run create-release.yml -f tag=20260408 -f ref=release-vid-upgrade`
 
 ## Floating Tag Action
 
-A `workflow_dispatch` GitHub Action to move floating Docker tags. Inputs:
+`promote-docker-tag.yml` moves floating Docker tags. Re-tags the existing Docker image (no rebuild, just a manifest
+pointer). The action's run history serves as the audit trail for which release each network is running.
 
-- **floating-tag**: one of `decaf.rc`, `decaf`, `mainnet.rc`, `mainnet`
-- **release-tag**: the git tag to point to (e.g. `20260408` or `20260408.rc1`)
+Inputs: `floating-tag` (one of `decaf.rc`, `decaf`, `mainnet.rc`, `mainnet`), `release-tag` (the git tag to point to).
 
-The action pulls the image by its git tag and pushes it under the floating tag name. Floating tags exist only in the
-Docker registry, not as git tags. This avoids force-pushing git tags and avoids re-triggering `build.yml`. The action's
-run history serves as the audit trail for which release each network is running.
+`gh workflow run promote-docker-tag.yml -f floating-tag=decaf.rc -f release-tag=20260408`
+
+Enforces progression: `decaf.rc` -> `decaf` -> `mainnet.rc` -> `mainnet`. Use `skip-progression` for hotfixes.
 
 ### Protection
 
-The `build.yml` workflow triggers on any `YYYYMMDD*` git tag push and builds a Docker image. An accidental or
-unauthorized tag push would produce a Docker image that the floating tag action could then point to.
-
-- **Git tag protection rules**: Restrict who can push `YYYYMMDD` and `YYYYMMDD.rcN` tags. Internal testing tags
-  (`YYYYMMDD-*`) can remain unrestricted.
-- **Floating tag action**: Requires environment approval (GitHub environment protection rules) so moving `mainnet` or
-  `mainnet.rc` needs explicit sign-off.
-
-## Auto-Generated Release Notes
-
-Configure `.github/release.yml` to categorize PRs by label. See
-[GitHub docs](https://docs.github.com/en/repositories/releasing-projects-on-github/automatically-generated-release-notes).
+- **Git tags**: All `YYYYMMDD*` git tags are created via `create-release.yml`, which requires approval through the
+  `release` GitHub environment. Direct tag pushes should be blocked by git tag protection rules.
+- **Floating Docker tags**: Promoting to `mainnet` or `mainnet.rc` requires approval from a reviewer via the
+  `mainnet-promotion` GitHub environment.
