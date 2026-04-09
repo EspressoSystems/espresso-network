@@ -374,6 +374,9 @@ impl<P: Provider + Clone> TransactionProcessor<P> {
                     metadata_uri,
                     payload: *payload,
                     version: self.version,
+                    // TODO: add V3 support for demo
+                    x25519_key: None,
+                    p2p_addr: None,
                 }
                 .send(self.provider(from)?)
                 .await

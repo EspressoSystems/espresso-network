@@ -648,6 +648,9 @@ pub async fn run() -> Result<()> {
                 metadata_uri,
                 payload,
                 version,
+                // TODO: add CLI args for V3 registration
+                x25519_key: None,
+                p2p_addr: None,
             }
         },
         Commands::UpdateConsensusKeys { signature_args } => {

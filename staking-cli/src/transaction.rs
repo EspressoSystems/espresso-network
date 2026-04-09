@@ -26,7 +26,7 @@ use hotshot_contract_adapter::{
             undelegateCall, updateCommissionCall, updateConsensusKeysCall,
             updateConsensusKeysV2Call, updateMetadataUriCall,
         },
-        StakeTableV3::{setNetworkConfigCall, updateP2pAddrCall},
+        StakeTableV3::{registerValidatorV3Call, setNetworkConfigCall, updateP2pAddrCall},
     },
     stake_table::{StakeTableContractVersion, StateSignatureSol},
 };
@@ -71,6 +71,10 @@ pub enum Transaction {
         metadata_uri: MetadataUri,
         payload: NodeSignatures,
         version: StakeTableContractVersion,
+        /// Required for V3 registration.
+        x25519_key: Option<alloy::primitives::FixedBytes<32>>,
+        /// Required for V3 registration.
+        p2p_addr: Option<String>,
     },
     UpdateConsensusKeys {
         stake_table: Address,
@@ -198,6 +202,8 @@ impl Transaction {
                 metadata_uri,
                 payload,
                 version,
+                x25519_key,
+                p2p_addr,
             } => match version {
                 StakeTableContractVersion::V1 => (
                     stake_table,
@@ -225,15 +231,22 @@ impl Transaction {
                     .into(),
                     None,
                 ),
-                StakeTableContractVersion::V3 => {
-                    // V3 registration requires x25519_key and p2p_addr which are not
-                    // part of this Transaction variant. Use registerValidatorV3 via a
-                    // dedicated code path instead.
-                    unimplemented!(
-                        "V3 registration requires x25519_key and p2p_addr; use the V3-specific \
-                         registration flow"
-                    )
-                },
+                StakeTableContractVersion::V3 => (
+                    stake_table,
+                    registerValidatorV3Call {
+                        blsVK: G2PointSol::from(payload.bls_vk).into(),
+                        schnorrVK: EdOnBN254PointSol::from(payload.schnorr_vk).into(),
+                        blsSig: G1PointSol::from(payload.bls_signature).into(),
+                        schnorrSig: StateSignatureSol::from(payload.schnorr_signature).into(),
+                        commission: commission.to_evm(),
+                        metadataUri: metadata_uri.to_string(),
+                        x25519Key: x25519_key.expect("x25519_key is required for V3 registration"),
+                        p2pAddr: p2p_addr.expect("p2p_addr is required for V3 registration"),
+                    }
+                    .abi_encode()
+                    .into(),
+                    None,
+                ),
             },
             Self::UpdateConsensusKeys {
                 stake_table,

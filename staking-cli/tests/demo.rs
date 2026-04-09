@@ -239,6 +239,8 @@ impl DemoTestExt for TestSystem {
                 metadata_uri,
                 payload,
                 version: StakeTableContractVersion::V2,
+                x25519_key: None,
+                p2p_addr: None,
             }
             .send(&provider)
             .await?

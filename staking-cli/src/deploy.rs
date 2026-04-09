@@ -249,12 +249,21 @@ impl TestSystem {
             &self.state_key_pair.clone(),
         );
         let metadata_uri = "https://example.com/metadata".parse()?;
+        let (x25519_key, p2p_addr) = match self.version {
+            StakeTableContractVersion::V3 => (
+                Some(alloy::primitives::FixedBytes([42u8; 32])),
+                Some("127.0.0.1:8080".to_string()),
+            ),
+            _ => (None, None),
+        };
         Transaction::RegisterValidator {
             stake_table: self.stake_table,
             commission: self.commission,
             metadata_uri,
             payload,
             version: self.version,
+            x25519_key,
+            p2p_addr,
         }
         .send(&self.provider)
         .await?

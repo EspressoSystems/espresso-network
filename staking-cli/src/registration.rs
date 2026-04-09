@@ -89,6 +89,8 @@ mod test {
             metadata_uri,
             payload,
             version: StakeTableContractVersion::V2,
+            x25519_key: None,
+            p2p_addr: None,
         }
         .send(&system.provider)
         .await?
@@ -387,6 +389,8 @@ mod test {
             metadata_uri,
             payload,
             version: StakeTableContractVersion::V2,
+            x25519_key: None,
+            p2p_addr: None,
         }
         .send(&system.provider)
         .await?
@@ -399,6 +403,62 @@ mod test {
         assert_eq!(event.account, validator_address);
         assert_eq!(event.commission, system.commission.to_evm());
         assert_eq!(event.metadataUri, "");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_set_network_config() -> Result<()> {
+        let system = TestSystem::deploy_version(StakeTableContractVersion::V3).await?;
+        system.register_validator().await?;
+
+        let x25519_key = alloy::primitives::FixedBytes([1u8; 32]);
+        let p2p_addr = "192.168.1.1:8080".to_string();
+
+        let receipt = Transaction::SetNetworkConfig {
+            stake_table: system.stake_table,
+            x25519_key,
+            p2p_addr: p2p_addr.clone(),
+        }
+        .send(&system.provider)
+        .await?
+        .assert_success()
+        .await?;
+
+        let event = receipt
+            .decoded_log::<hotshot_contract_adapter::sol_types::StakeTableV3::NetworkConfigUpdated>(
+            )
+            .unwrap();
+        assert_eq!(event.validator, system.deployer_address);
+        assert_eq!(event.x25519Key, x25519_key);
+        assert_eq!(event.p2pAddr, p2p_addr);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_update_p2p_addr() -> Result<()> {
+        let system = TestSystem::deploy_version(StakeTableContractVersion::V3).await?;
+        system.register_validator().await?;
+
+        let p2p_addr = "10.0.0.1:9090".to_string();
+
+        let receipt = Transaction::UpdateP2pAddr {
+            stake_table: system.stake_table,
+            p2p_addr: p2p_addr.clone(),
+        }
+        .send(&system.provider)
+        .await?
+        .assert_success()
+        .await?;
+
+        let event = receipt
+            .decoded_log::<hotshot_contract_adapter::sol_types::StakeTableV3::NetworkConfigUpdated>(
+            )
+            .unwrap();
+        assert_eq!(event.validator, system.deployer_address);
+        assert_eq!(event.x25519Key, alloy::primitives::FixedBytes([0u8; 32]));
+        assert_eq!(event.p2pAddr, p2p_addr);
 
         Ok(())
     }

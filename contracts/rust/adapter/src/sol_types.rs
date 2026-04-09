@@ -221,6 +221,25 @@ impl From<stake_table_v3::BN254::G1Point> for stake_table_v2::BN254::G1Point {
     }
 }
 
+// Reverse conversions: StakeTableV2 types -> StakeTableV3 types
+impl From<G2PointSol> for stake_table_v3::BN254::G2Point {
+    fn from(v: G2PointSol) -> Self {
+        unsafe { std::mem::transmute(v) }
+    }
+}
+
+impl From<EdOnBN254PointSol> for stake_table_v3::EdOnBN254::EdOnBN254Point {
+    fn from(v: EdOnBN254PointSol) -> Self {
+        unsafe { std::mem::transmute(v) }
+    }
+}
+
+impl From<G1PointSol> for stake_table_v3::BN254::G1Point {
+    fn from(v: G1PointSol) -> Self {
+        unsafe { std::mem::transmute(v) }
+    }
+}
+
 // Transmute conversion functions for LightClientV3
 impl From<LightClientV3::finalizedStateReturn> for LightClientStateSol {
     fn from(v: LightClientV3::finalizedStateReturn) -> Self {
