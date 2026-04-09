@@ -354,6 +354,14 @@ pub(crate) enum Commands {
 
         #[clap(flatten)]
         metadata_uri_args: MetadataUriArgs,
+
+        /// x25519 public key (32 bytes, hex with 0x prefix). Required for V3 stake tables.
+        #[clap(long, value_parser = parse::parse_bytes32, env = "X25519_KEY")]
+        x25519_key: Option<alloy::primitives::FixedBytes<32>>,
+
+        /// p2p address in host:port format. Required for V3 stake tables.
+        #[clap(long, env = "P2P_ADDR")]
+        p2p_addr: Option<String>,
     },
     /// Update a validators Espresso consensus signing keys.
     UpdateConsensusKeys {

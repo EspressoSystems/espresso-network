@@ -614,6 +614,8 @@ pub async fn run() -> Result<()> {
             signature_args,
             commission,
             metadata_uri_args,
+            x25519_key,
+            p2p_addr,
         } => {
             let version = fetch_stake_table_version(&readonly_provider, stake_table_addr).await?;
             if config.export_calldata && matches!(version, StakeTableContractVersion::V1) {
@@ -621,6 +623,13 @@ pub async fn run() -> Result<()> {
                     "Calldata export is not supported for V1 stake table contracts. V1 is \
                      deprecated."
                 );
+            }
+            if matches!(version, StakeTableContractVersion::V3) {
+                if x25519_key.is_none() || p2p_addr.is_none() {
+                    anyhow::bail!(
+                        "V3 stake table requires --x25519-key and --p2p-addr for registration"
+                    );
+                }
             }
             if !config.export_calldata {
                 wallet.as_ref().ok_or_else(&require_wallet)?;
@@ -648,9 +657,8 @@ pub async fn run() -> Result<()> {
                 metadata_uri,
                 payload,
                 version,
-                // TODO: add CLI args for V3 registration
-                x25519_key: None,
-                p2p_addr: None,
+                x25519_key: *x25519_key,
+                p2p_addr: p2p_addr.clone(),
             }
         },
         Commands::UpdateConsensusKeys { signature_args } => {

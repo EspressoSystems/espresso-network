@@ -19,10 +19,11 @@ use crate::{
     proposals::{
         multisig::{
             LightClientV2UpgradeParams, MultisigOwnerCheck, StakeTableV2UpgradeParams,
-            TransferOwnershipParams, encode_generic_calldata,
+            StakeTableV3UpgradeParams, TransferOwnershipParams, encode_generic_calldata,
             transfer_ownership_from_multisig_to_timelock, upgrade_esp_token_v2_multisig_owner,
             upgrade_fee_contract_multisig_owner, upgrade_light_client_v2_multisig_owner,
             upgrade_light_client_v3_multisig_owner, upgrade_stake_table_v2_multisig_owner,
+            upgrade_stake_table_v3_multisig_owner,
         },
         timelock::{
             TimelockOperationParams, TimelockOperationPayload, TimelockOperationType,
@@ -495,6 +496,28 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                     // initializeV2() handles ownership transfer, so no separate call needed
                 }
             },
+            Contract::StakeTableV3 => {
+                let use_multisig = self.use_multisig;
+                tracing::info!(?use_multisig, "Upgrading to StakeTableV3");
+                if use_multisig {
+                    let calldata = upgrade_stake_table_v3_multisig_owner(
+                        provider,
+                        contracts,
+                        StakeTableV3UpgradeParams {
+                            multisig_address: self.multisig.context(
+                                "Multisig address required for StakeTableV3 upgrade with \
+                                 --use-multisig",
+                            )?,
+                        },
+                        MultisigOwnerCheck::RequireContract,
+                    )
+                    .await?
+                    .with_description("Upgrade StakeTable to V3".to_string());
+                    output_safe_tx_builder(&calldata, self.output_path.as_deref(), self.chain_id)?;
+                } else {
+                    crate::upgrade_stake_table_v3(provider, contracts).await?;
+                }
+            },
             Contract::OpsTimelock => {
                 let ops_timelock_delay = self
                     .ops_timelock_delay
@@ -609,6 +632,7 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
     pub async fn deploy_all(&self, contracts: &mut Contracts) -> Result<()> {
         self.deploy_to_stake_table_v1(contracts).await?;
         self.deploy(contracts, Contract::StakeTableV2).await?;
+        self.deploy(contracts, Contract::StakeTableV3).await?;
         self.deploy(contracts, Contract::LightClientV3).await?;
         self.deploy(contracts, Contract::RewardClaimProxy).await?;
         self.deploy(contracts, Contract::EspTokenV2).await?;
