@@ -129,16 +129,14 @@ async fn five_nodes_decide_same_chain_over_memory_network() {
 
     // Collect decided commits from each node until all reach the target.
     let mut node_commits: Vec<Vec<[u8; 32]>> = vec![Vec::new(); NUM_NODES];
-    let deadline = tokio::time::Instant::now() + MAX_RUNTIME;
     let mut progress: usize = 0;
     let mut tx_nonce: u64 = 0;
 
+    let deadline = tokio::time::Instant::now() + MAX_RUNTIME;
     while node_commits.iter().any(|s| s.len() < TARGET_DECISIONS) {
-        let now = tokio::time::Instant::now();
-        if now >= deadline {
-            panic!("timed out waiting for all nodes to decide");
-        }
-        let remaining = deadline - now;
+        let remaining = deadline
+            .checked_duration_since(tokio::time::Instant::now())
+            .expect("timed out waiting for all nodes to decide");
 
         // Feed a new transaction to every node.
         tx_nonce = tx_nonce.wrapping_add(1);

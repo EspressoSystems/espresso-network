@@ -40,6 +40,7 @@ impl<K: fmt::Display + ?Sized> From<&K> for KeyPrefix {
 
 impl fmt::Display for KeyPrefix {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(std::str::from_utf8(&self.0).unwrap())
+        let s = String::from_utf8_lossy(&self.0);
+        f.write_str(&s)
     }
 }
