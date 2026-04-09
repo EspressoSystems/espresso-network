@@ -101,16 +101,16 @@ async fn five_nodes_decide_same_chain_over_memory_network() {
                             }
                         }
                         let _ = output_tx.send(commits.clone());
-                    } else if let ConsensusOutput::ViewChanged(view, epoch) = &output {
-                        if *view > last_view {
-                            debug!(
-                                node = %coord.node_id(),
-                                view = %view,
-                                epoch = %epoch,
-                                "view changed"
-                            );
-                            last_view = *view;
-                        }
+                    } else if let ConsensusOutput::ViewChanged(view, epoch) = &output
+                        && *view > last_view
+                    {
+                        debug!(
+                            node = %coord.node_id(),
+                            view = %view,
+                            epoch = %epoch,
+                            "view changed"
+                        );
+                        last_view = *view;
                     }
 
                     let _ = coord.process_consensus_output(output).await;
@@ -121,10 +121,10 @@ async fn five_nodes_decide_same_chain_over_memory_network() {
 
     // Bootstrap: inject the first proposal (with per-recipient VID share).
     let test_data = TestData::new_with_num_nodes(3, NUM_NODES).await;
-    for i in 0..NUM_NODES {
+    for (i, chan) in input_channels.iter().enumerate() {
         let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], i as u64).0;
         let proposal_msg = test_data.views[0].proposal_input(&node_key);
-        input_channels[i].send(proposal_msg).unwrap();
+        chan.send(proposal_msg).unwrap();
     }
 
     // Collect decided commits from each node until all reach the target.
