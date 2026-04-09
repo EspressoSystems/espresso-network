@@ -1,3 +1,5 @@
+<!-- STATUS: draft, in testing -->
+
 # Release Versioning
 
 ## Git Tags
