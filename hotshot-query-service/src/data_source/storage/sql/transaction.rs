@@ -669,6 +669,12 @@ where
             .unzip();
         let tx_rows = tx_rows.into_iter().flatten().collect::<Vec<_>>();
 
+        // Multiple blocks in the range might have the same payload. We must filter out such
+        // duplicates, because SQL does not allow conflicting rows in a single upsert statement.
+        let payload_rows = payload_rows
+            .into_iter()
+            .unique_by(|(hash, ..)| hash.clone());
+
         self.upsert(
             "payload",
             ["hash", "ns_table", "size", "num_transactions", "data"],
@@ -725,6 +731,10 @@ where
             })
             .process_results(|iter| iter.unzip())?;
         let share_rows = share_rows.into_iter().flatten().collect::<Vec<_>>();
+
+        // Multiple blocks in the range might have the same VID common. We must filter out such
+        // duplicates, because SQL does not allow conflicting rows in a single upsert statement.
+        let common_rows = common_rows.into_iter().unique_by(|(hash, ..)| hash.clone());
 
         self.upsert("vid_common", ["hash", "data"], ["hash"], common_rows)
             .await
