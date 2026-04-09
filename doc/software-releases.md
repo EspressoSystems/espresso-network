@@ -2,6 +2,39 @@
 
 # Release Versioning
 
+```
+  Git Tags                            Docker
+  --------                            ------
+
+  release branch
+       |
+       | create-release.yml
+       v
+  YYYYMMDD-desc  ----build.yml---->  image:YYYYMMDD-desc
+  (Pre-release)
+       |
+       | create-release.yml
+       v
+  YYYYMMDD.rcN   ----build.yml---->  image:YYYYMMDD.rcN
+  (Pre-release)                           |
+       |                                  | promote + approval
+       | create-release.yml               v
+       v                             decaf.rc
+  YYYYMMDD       ----build.yml---->  image:YYYYMMDD
+  (Release)                               |
+                                          | promote + approval
+                                          v
+                                        decaf
+                                          |
+                                          | promote + approval
+                                          v
+                                      mainnet.rc
+                                          |
+                                          | promote + approval
+                                          v
+                                       mainnet
+```
+
 ## Git Tags
 
 Date-based. `-` for internal, `.` for qualifiers.
@@ -53,17 +86,17 @@ Release branches start with `release-`.
 2. Create git tag `YYYYMMDD-description` via `create-release.yml`. Creates GitHub Pre-release.
 3. Optionally create git tag `YYYYMMDD.rcN` via `create-release.yml`. Creates GitHub Pre-release.
 4. Create git tag `YYYYMMDD` via `create-release.yml`. Creates GitHub Release.
-5. Promote the release to `decaf.rc`.
-6. After confidence on decaf canaries, promote the release to `decaf`.
-7. Promote the release to `mainnet.rc`.
-8. After confidence on mainnet canaries, promote the release to `mainnet`.
+5. Promote the release to `decaf.rc` (requires approval).
+6. After confidence on decaf canaries, promote the release to `decaf` (requires approval).
+7. Promote the release to `mainnet.rc` (requires approval).
+8. After confidence on mainnet canaries, promote the release to `mainnet` (requires approval).
 9. Post on Discord/Telegram with release link.
 
 ### Hotfixes
 
 For critical bugfixes that need to skip the full decaf progression, the promote action supports a `skip-progression`
-flag. The `mainnet-promotion` environment approval still applies, so a reviewer must sign off. The action's run history
-records that progression was skipped.
+flag. The `release` environment approval still applies, so a reviewer must sign off. The action's run history records
+that progression was skipped.
 
 ## Create Release Action
 
@@ -88,5 +121,4 @@ Enforces progression: `decaf.rc` -> `decaf` -> `mainnet.rc` -> `mainnet`. Use `s
 
 - **Git tags**: All `YYYYMMDD*` git tags are created via `create-release.yml`, which requires approval through the
   `release` GitHub environment. Direct tag pushes should be blocked by git tag protection rules.
-- **Floating Docker tags**: Promoting to `mainnet` or `mainnet.rc` requires approval from a reviewer via the
-  `mainnet-promotion` GitHub environment.
+- **Floating Docker tags**: All promotions require approval from a reviewer via the `release` GitHub environment.

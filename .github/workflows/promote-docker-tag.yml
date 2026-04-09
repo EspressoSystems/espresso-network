@@ -98,7 +98,8 @@ jobs:
   promote:
     needs: check-progression
     runs-on: ubuntu-latest
-    environment: ${{ startsWith(inputs.floating-tag, 'mainnet') && 'mainnet-promotion' || '' }}
+    # TODO: re-enable after testing
+    # environment: release
     strategy:
       matrix:
         service:
