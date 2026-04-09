@@ -123,5 +123,4 @@ Enforces progression: `decaf.rc` -> `decaf` -> `mainnet.rc` -> `mainnet`. Use `s
   `release` GitHub environment. Direct tag pushes should be blocked by git tag protection rules.
 - **Floating Docker tags**: All promotions require approval from a reviewer via the `release` GitHub environment.
 
-Approval encourages a second set of eyes but GitHub does not enforce that the approver is a different person than the
-one who triggered the workflow. This is a trust-based process.
+The convention is to not self-approve. GitHub does not enforce this, but a second set of eyes is expected.
