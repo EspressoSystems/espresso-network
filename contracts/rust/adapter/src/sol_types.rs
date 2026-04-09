@@ -53,6 +53,7 @@ pub use crate::bindings::{
         self, BN254::G2Point as G2PointSol, EdOnBN254::EdOnBN254Point as EdOnBN254PointSol,
         StakeTableV2,
     },
+    stake_table_v3::StakeTableV3,
 };
 
 // For types that we need to interact with some functions but their bindings are not generated
@@ -189,6 +190,33 @@ impl From<G1PointSol> for stake_table_v2::BN254::G1Point {
 
 impl From<stake_table_v2::BN254::G1Point> for G1PointSol {
     fn from(v: stake_table_v2::BN254::G1Point) -> Self {
+        unsafe { std::mem::transmute(v) }
+    }
+}
+
+// Transmute conversions for StakeTableV3 types
+use crate::bindings::stake_table_v3;
+
+impl From<stake_table_v3::BN254::G2Point> for G2PointSol {
+    fn from(v: stake_table_v3::BN254::G2Point) -> Self {
+        unsafe { std::mem::transmute(v) }
+    }
+}
+
+impl From<stake_table_v3::EdOnBN254::EdOnBN254Point> for EdOnBN254PointSol {
+    fn from(v: stake_table_v3::EdOnBN254::EdOnBN254Point) -> Self {
+        unsafe { std::mem::transmute(v) }
+    }
+}
+
+impl From<stake_table_v3::BN254::G1Point> for G1PointSol {
+    fn from(v: stake_table_v3::BN254::G1Point) -> Self {
+        unsafe { std::mem::transmute(v) }
+    }
+}
+
+impl From<stake_table_v3::BN254::G1Point> for stake_table_v2::BN254::G1Point {
+    fn from(v: stake_table_v3::BN254::G1Point) -> Self {
         unsafe { std::mem::transmute(v) }
     }
 }

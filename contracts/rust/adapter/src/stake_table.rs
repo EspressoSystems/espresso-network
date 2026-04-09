@@ -19,7 +19,7 @@ use jf_signature::{
 
 use crate::sol_types::{
     StakeTableV2::{ConsensusKeysUpdatedV2, ValidatorRegisteredV2, getVersionReturn},
-    *,
+    StakeTableV3, *,
 };
 
 // Allows us to implement From on existing Bytes type
@@ -180,6 +180,20 @@ impl ValidatorRegisteredV2 {
             self.blsVK,
             self.schnorrVK,
             self.blsSig.into(),
+            &self.schnorrSig,
+        )?;
+        Ok(())
+    }
+}
+
+impl StakeTableV3::ValidatorRegisteredV3 {
+    /// Verify the BLS and Schnorr signatures in the event
+    pub fn authenticate(&self) -> Result<(), StakeTableSolError> {
+        authenticate_stake_table_validator_event(
+            self.account,
+            self.blsVK.clone().into(),
+            self.schnorrVK.clone().into(),
+            self.blsSig.clone().into(),
             &self.schnorrSig,
         )?;
         Ok(())

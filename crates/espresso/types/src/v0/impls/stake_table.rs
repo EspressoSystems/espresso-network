@@ -25,15 +25,19 @@ use committable::{Commitment, Committable, RawCommitmentBuilder};
 use futures::future::BoxFuture;
 use hotshot::types::{BLSPubKey, SchnorrPubKey, SignatureKey as _};
 use hotshot_contract_adapter::sol_types::{
+    EdOnBN254PointSol,
     EspToken::{self, EspTokenInstance},
+    G2PointSol,
     StakeTableV2::{
         self, CommissionUpdated, ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated,
-        StakeTableV2Events, Undelegated, UndelegatedV2, ValidatorExit, ValidatorExitV2,
-        ValidatorRegistered, ValidatorRegisteredV2,
+        Undelegated, UndelegatedV2, ValidatorExit, ValidatorExitV2, ValidatorRegistered,
+        ValidatorRegisteredV2,
     },
+    StakeTableV3::{NetworkConfigUpdated, StakeTableV3Events, ValidatorRegisteredV3},
 };
 use hotshot_types::{
     PeerConfig, PeerConnectInfo,
+    addr::NetAddr,
     data::{EpochNumber, ViewNumber, vid_disperse::VID_TARGET_TOTAL_STAKE},
     drb::{
         DrbResult,
@@ -50,6 +54,7 @@ use hotshot_types::{
     utils::{
         epoch_from_block_number, is_epoch_root, root_block_in_epoch, transition_block_for_epoch,
     },
+    x25519,
 };
 use humantime::format_duration;
 use indexmap::IndexMap;
@@ -118,75 +123,115 @@ impl DisplayLog for Log {
     }
 }
 
-impl TryFrom<StakeTableV2Events> for StakeTableEvent {
+/// Convert V3 event types to V2 event types using transmute.
+///
+/// V3 events that share the same Solidity definition as V2 events are structurally
+/// identical in their generated Rust types. This is the same pattern used in sol_types.rs
+/// for cross-binding type conversions.
+fn transmute_v3_to_v2<V3, V2>(v: V3) -> V2 {
+    // Safety: V3 and V2 types are generated from the same Solidity event definitions
+    // and have identical memory layouts.
+    assert_eq!(
+        std::mem::size_of::<V3>(),
+        std::mem::size_of::<V2>(),
+        "V3 and V2 event types must have the same size"
+    );
+    unsafe { std::mem::transmute_copy(&std::mem::ManuallyDrop::new(v)) }
+}
+
+impl TryFrom<StakeTableV3Events> for StakeTableEvent {
     type Error = anyhow::Error;
 
-    fn try_from(value: StakeTableV2Events) -> anyhow::Result<Self> {
+    fn try_from(value: StakeTableV3Events) -> anyhow::Result<Self> {
         match value {
-            StakeTableV2Events::ValidatorRegistered(v) => Ok(StakeTableEvent::Register(v)),
-            StakeTableV2Events::ValidatorRegisteredV2(v) => Ok(StakeTableEvent::RegisterV2(v)),
-            StakeTableV2Events::ValidatorExit(v) => Ok(StakeTableEvent::Deregister(v)),
-            StakeTableV2Events::ValidatorExitV2(v) => Ok(StakeTableEvent::DeregisterV2(v)),
-            StakeTableV2Events::Delegated(v) => Ok(StakeTableEvent::Delegate(v)),
-            StakeTableV2Events::Undelegated(v) => Ok(StakeTableEvent::Undelegate(v)),
-            StakeTableV2Events::UndelegatedV2(v) => Ok(StakeTableEvent::UndelegateV2(v)),
-            StakeTableV2Events::ConsensusKeysUpdated(v) => Ok(StakeTableEvent::KeyUpdate(v)),
-            StakeTableV2Events::ConsensusKeysUpdatedV2(v) => Ok(StakeTableEvent::KeyUpdateV2(v)),
-            StakeTableV2Events::CommissionUpdated(v) => Ok(StakeTableEvent::CommissionUpdate(v)),
-            StakeTableV2Events::ExitEscrowPeriodUpdated(v) => Err(anyhow::anyhow!(
-                "Unsupported StakeTableV2Events::ExitEscrowPeriodUpdated({v:?})"
+            StakeTableV3Events::ValidatorRegistered(v) => {
+                Ok(StakeTableEvent::Register(transmute_v3_to_v2(v)))
+            },
+            StakeTableV3Events::ValidatorRegisteredV2(v) => {
+                Ok(StakeTableEvent::RegisterV2(transmute_v3_to_v2(v)))
+            },
+            StakeTableV3Events::ValidatorRegisteredV3(v) => Ok(StakeTableEvent::RegisterV3(v)),
+            StakeTableV3Events::ValidatorExit(v) => {
+                Ok(StakeTableEvent::Deregister(transmute_v3_to_v2(v)))
+            },
+            StakeTableV3Events::ValidatorExitV2(v) => {
+                Ok(StakeTableEvent::DeregisterV2(transmute_v3_to_v2(v)))
+            },
+            StakeTableV3Events::Delegated(v) => {
+                Ok(StakeTableEvent::Delegate(transmute_v3_to_v2(v)))
+            },
+            StakeTableV3Events::Undelegated(v) => {
+                Ok(StakeTableEvent::Undelegate(transmute_v3_to_v2(v)))
+            },
+            StakeTableV3Events::UndelegatedV2(v) => {
+                Ok(StakeTableEvent::UndelegateV2(transmute_v3_to_v2(v)))
+            },
+            StakeTableV3Events::ConsensusKeysUpdated(v) => {
+                Ok(StakeTableEvent::KeyUpdate(transmute_v3_to_v2(v)))
+            },
+            StakeTableV3Events::ConsensusKeysUpdatedV2(v) => {
+                Ok(StakeTableEvent::KeyUpdateV2(transmute_v3_to_v2(v)))
+            },
+            StakeTableV3Events::CommissionUpdated(v) => {
+                Ok(StakeTableEvent::CommissionUpdate(transmute_v3_to_v2(v)))
+            },
+            StakeTableV3Events::NetworkConfigUpdated(v) => {
+                Ok(StakeTableEvent::NetworkConfigUpdate(v))
+            },
+            StakeTableV3Events::ExitEscrowPeriodUpdated(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV3Events::ExitEscrowPeriodUpdated({v:?})"
             )),
-            StakeTableV2Events::Initialized(v) => Err(anyhow::anyhow!(
-                "Unsupported StakeTableV2Events::Initialized({v:?})"
+            StakeTableV3Events::Initialized(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV3Events::Initialized({v:?})"
             )),
-            StakeTableV2Events::MaxCommissionIncreaseUpdated(v) => Err(anyhow::anyhow!(
-                "Unsupported StakeTableV2Events::MaxCommissionIncreaseUpdated({v:?})"
+            StakeTableV3Events::MaxCommissionIncreaseUpdated(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV3Events::MaxCommissionIncreaseUpdated({v:?})"
             )),
-            StakeTableV2Events::MinCommissionUpdateIntervalUpdated(v) => Err(anyhow::anyhow!(
-                "Unsupported StakeTableV2Events::MinCommissionUpdateIntervalUpdated({v:?})"
+            StakeTableV3Events::MinCommissionUpdateIntervalUpdated(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV3Events::MinCommissionUpdateIntervalUpdated({v:?})"
             )),
-            StakeTableV2Events::OwnershipTransferred(v) => Err(anyhow::anyhow!(
-                "Unsupported StakeTableV2Events::OwnershipTransferred({v:?})"
+            StakeTableV3Events::OwnershipTransferred(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV3Events::OwnershipTransferred({v:?})"
             )),
-            StakeTableV2Events::Paused(v) => Err(anyhow::anyhow!(
-                "Unsupported StakeTableV2Events::Paused({v:?})"
+            StakeTableV3Events::Paused(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV3Events::Paused({v:?})"
             )),
-            StakeTableV2Events::RoleAdminChanged(v) => Err(anyhow::anyhow!(
-                "Unsupported StakeTableV2Events::RoleAdminChanged({v:?})"
+            StakeTableV3Events::RoleAdminChanged(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV3Events::RoleAdminChanged({v:?})"
             )),
-            StakeTableV2Events::RoleGranted(v) => Err(anyhow::anyhow!(
-                "Unsupported StakeTableV2Events::RoleGranted({v:?})"
+            StakeTableV3Events::RoleGranted(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV3Events::RoleGranted({v:?})"
             )),
-            StakeTableV2Events::RoleRevoked(v) => Err(anyhow::anyhow!(
-                "Unsupported StakeTableV2Events::RoleRevoked({v:?})"
+            StakeTableV3Events::RoleRevoked(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV3Events::RoleRevoked({v:?})"
             )),
-            StakeTableV2Events::Unpaused(v) => Err(anyhow::anyhow!(
-                "Unsupported StakeTableV2Events::Unpaused({v:?})"
+            StakeTableV3Events::Unpaused(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV3Events::Unpaused({v:?})"
             )),
-            StakeTableV2Events::Upgraded(v) => Err(anyhow::anyhow!(
-                "Unsupported StakeTableV2Events::Upgraded({v:?})"
+            StakeTableV3Events::Upgraded(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV3Events::Upgraded({v:?})"
             )),
-            StakeTableV2Events::WithdrawalClaimed(v) => Err(anyhow::anyhow!(
-                "Unsupported StakeTableV2Events::WithdrawalClaimed({v:?})"
+            StakeTableV3Events::WithdrawalClaimed(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV3Events::WithdrawalClaimed({v:?})"
             )),
-            StakeTableV2Events::ValidatorExitClaimed(v) => Err(anyhow::anyhow!(
-                "Unsupported StakeTableV2Events::ValidatorExitClaimed({v:?})"
+            StakeTableV3Events::ValidatorExitClaimed(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV3Events::ValidatorExitClaimed({v:?})"
             )),
-            StakeTableV2Events::Withdrawal(v) => Err(anyhow::anyhow!(
-                "Unsupported StakeTableV2Events::Withdrawal({v:?})"
+            StakeTableV3Events::Withdrawal(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV3Events::Withdrawal({v:?})"
             )),
-            StakeTableV2Events::MetadataUriUpdated(v) => Err(anyhow::anyhow!(
-                "Unsupported StakeTableV2Events::MetadataUriUpdated({v:?})"
+            StakeTableV3Events::MetadataUriUpdated(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV3Events::MetadataUriUpdated({v:?})"
             )),
-            StakeTableV2Events::MinDelegateAmountUpdated(v) => Err(anyhow::anyhow!(
-                "Unsupported StakeTableV2Events::MinDelegateAmountUpdated({v:?})"
+            StakeTableV3Events::MinDelegateAmountUpdated(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV3Events::MinDelegateAmountUpdated({v:?})"
             )),
         }
     }
 }
 
 fn sort_stake_table_events(
-    event_logs: Vec<(StakeTableV2Events, Log)>,
+    event_logs: Vec<(StakeTableV3Events, Log)>,
 ) -> Result<Vec<(EventKey, StakeTableEvent)>, EventSortingError> {
     let mut events: Vec<(EventKey, StakeTableEvent)> = Vec::new();
 
@@ -216,6 +261,7 @@ pub struct StakeTableState {
     validator_exits: HashSet<Address>,
     used_bls_keys: HashSet<BLSPubKey>,
     used_schnorr_keys: HashSet<SchnorrPubKey>,
+    used_x25519_keys: HashSet<x25519::PublicKey>,
 }
 
 impl Committable for StakeTableState {
@@ -269,6 +315,7 @@ impl StakeTableState {
             validator_exits,
             used_bls_keys,
             used_schnorr_keys,
+            used_x25519_keys: HashSet::new(),
         }
     }
 
@@ -286,6 +333,10 @@ impl StakeTableState {
 
     pub fn used_schnorr_keys(&self) -> &HashSet<SchnorrPubKey> {
         &self.used_schnorr_keys
+    }
+
+    pub fn used_x25519_keys(&self) -> &HashSet<x25519::PublicKey> {
+        &self.used_x25519_keys
     }
 
     pub fn validator_exits(&self) -> &HashSet<Address> {
@@ -612,6 +663,140 @@ impl StakeTableState {
                     .ok_or(StakeTableError::ValidatorNotFound(validator))?;
                 val.commission = newCommission;
             },
+
+            StakeTableEvent::RegisterV3(ref reg) => {
+                let authenticated = reg.authenticate().is_ok();
+                if !authenticated {
+                    tracing::warn!(
+                        account = ?reg.account,
+                        "Validator registered with invalid signature"
+                    );
+                }
+
+                let ValidatorRegisteredV3 {
+                    account,
+                    blsVK,
+                    schnorrVK,
+                    commission,
+                    x25519Key,
+                    p2pAddr,
+                    ..
+                } = reg;
+
+                // Convert V3 binding types to canonical types via V2 intermediates
+                let stake_table_key: BLSPubKey = G2PointSol::from(blsVK.clone()).into();
+                let state_ver_key: SchnorrPubKey =
+                    EdOnBN254PointSol::from(schnorrVK.clone()).into();
+
+                if self.validator_exits.contains(account) {
+                    return Err(StakeTableError::ValidatorAlreadyExited(*account));
+                }
+
+                let entry = self.validators.entry(*account);
+                if let indexmap::map::Entry::Occupied(_) = entry {
+                    return Err(StakeTableError::AlreadyRegistered(*account));
+                }
+
+                if self.used_bls_keys.contains(&stake_table_key) {
+                    return Err(StakeTableError::BlsKeyAlreadyUsed(
+                        stake_table_key.to_string(),
+                    ));
+                }
+
+                if self.used_schnorr_keys.contains(&state_ver_key) {
+                    return Err(StakeTableError::SchnorrKeyAlreadyUsed(
+                        state_ver_key.to_string(),
+                    ));
+                }
+
+                // Parse x25519 key (zero means not provided)
+                let x25519_key = if x25519Key.0 != [0u8; 32] {
+                    let key = x25519::PublicKey::try_from(x25519Key.0.as_slice())
+                        .map_err(|e| {
+                            tracing::warn!(%e, account = ?account, "Invalid x25519 key");
+                        })
+                        .ok();
+                    if let Some(key) = key {
+                        if self.used_x25519_keys.contains(&key) {
+                            return Err(StakeTableError::X25519KeyAlreadyUsed(format!(
+                                "{:?}",
+                                x25519Key
+                            )));
+                        }
+                        self.used_x25519_keys.insert(key);
+                        Some(key)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                // Parse p2p addr
+                let p2p_addr = match p2pAddr.parse::<NetAddr>() {
+                    Ok(addr) => Some(addr),
+                    Err(e) => {
+                        if !p2pAddr.is_empty() {
+                            tracing::warn!(%e, account = ?account, "Failed to parse p2p addr");
+                        }
+                        None
+                    },
+                };
+
+                // All checks ok, applying changes
+                self.used_bls_keys.insert(stake_table_key);
+                self.used_schnorr_keys.insert(state_ver_key.clone());
+
+                entry.or_insert(RegisteredValidator {
+                    account: *account,
+                    stake_table_key,
+                    state_ver_key,
+                    stake: U256::ZERO,
+                    commission: *commission,
+                    delegators: HashMap::new(),
+                    authenticated,
+                    x25519_key,
+                    p2p_addr,
+                });
+            },
+
+            StakeTableEvent::NetworkConfigUpdate(NetworkConfigUpdated {
+                validator,
+                x25519Key,
+                ref p2pAddr,
+            }) => {
+                let val = self
+                    .validators
+                    .get_mut(&validator)
+                    .ok_or(StakeTableError::ValidatorNotFound(validator))?;
+
+                // Update x25519 key if non-zero (zero means unchanged)
+                if x25519Key.0 != [0u8; 32] {
+                    if let Ok(key) = x25519::PublicKey::try_from(x25519Key.0.as_slice()) {
+                        if self.used_x25519_keys.contains(&key) {
+                            return Err(StakeTableError::X25519KeyAlreadyUsed(format!(
+                                "{:?}",
+                                x25519Key
+                            )));
+                        }
+                        self.used_x25519_keys.insert(key);
+                        val.x25519_key = Some(key);
+                    } else {
+                        tracing::warn!(validator = ?validator, "Invalid x25519 key in NetworkConfigUpdate");
+                    }
+                }
+
+                // Update p2p addr
+                match p2pAddr.parse::<NetAddr>() {
+                    Ok(addr) => val.p2p_addr = Some(addr),
+                    Err(e) => {
+                        if !p2pAddr.is_empty() {
+                            tracing::warn!(%e, validator = ?validator, "Failed to parse p2p addr");
+                        }
+                        val.p2p_addr = None;
+                    },
+                }
+            },
         }
 
         Ok(Ok(()))
@@ -767,6 +952,12 @@ impl std::fmt::Debug for StakeTableEvent {
             StakeTableEvent::KeyUpdateV2(event) => write!(f, "KeyUpdateV2({:?})", event.account),
             StakeTableEvent::CommissionUpdate(event) => {
                 write!(f, "CommissionUpdate({:?})", event.validator)
+            },
+            StakeTableEvent::RegisterV3(event) => {
+                write!(f, "RegisterV3({:?})", event.account)
+            },
+            StakeTableEvent::NetworkConfigUpdate(event) => {
+                write!(f, "NetworkConfigUpdate({:?})", event.validator)
             },
         }
     }
@@ -985,10 +1176,11 @@ impl Fetcher {
     /// - `Ok(true)` if the event is valid and should be processed
     /// - `Ok(false)` if the event should be skipped (non-fatal error)
     /// - `Err(StakeTableError)` if a fatal error occurs
-    fn validate_event(event: &StakeTableV2Events, log: &Log) -> Result<bool, StakeTableError> {
+    fn validate_event(event: &StakeTableV3Events, log: &Log) -> Result<bool, StakeTableError> {
         match event {
-            StakeTableV2Events::ConsensusKeysUpdatedV2(evt) => {
-                if let Err(err) = evt.authenticate() {
+            StakeTableV3Events::ConsensusKeysUpdatedV2(evt) => {
+                let v2_evt: ConsensusKeysUpdatedV2 = transmute_v3_to_v2(evt.clone());
+                if let Err(err) = v2_evt.authenticate() {
                     tracing::warn!(
                         %err,
                         "Failed to authenticate ConsensusKeysUpdatedV2 event: {}",
@@ -997,15 +1189,11 @@ impl Fetcher {
                     return Ok(false);
                 }
             },
-            StakeTableV2Events::CommissionUpdated(CommissionUpdated {
-                validator,
-                newCommission,
-                ..
-            }) => {
-                if *newCommission > COMMISSION_BASIS_POINTS {
+            StakeTableV3Events::CommissionUpdated(evt) => {
+                if evt.newCommission > COMMISSION_BASIS_POINTS {
                     return Err(StakeTableError::InvalidCommission(
-                        *validator,
-                        *newCommission,
+                        evt.validator,
+                        evt.newCommission,
                     ));
                 }
             },
@@ -1094,6 +1282,7 @@ impl Fetcher {
                             .events([
                                 ValidatorRegistered::SIGNATURE,
                                 ValidatorRegisteredV2::SIGNATURE,
+                                ValidatorRegisteredV3::SIGNATURE,
                                 ValidatorExit::SIGNATURE,
                                 ValidatorExitV2::SIGNATURE,
                                 Delegated::SIGNATURE,
@@ -1102,6 +1291,7 @@ impl Fetcher {
                                 ConsensusKeysUpdated::SIGNATURE,
                                 ConsensusKeysUpdatedV2::SIGNATURE,
                                 CommissionUpdated::SIGNATURE,
+                                NetworkConfigUpdated::SIGNATURE,
                             ])
                             .address(contract)
                             .from_block(from)
@@ -1116,7 +1306,7 @@ impl Fetcher {
                 .into_iter()
                 .filter_map(|log| {
                     let event =
-                        StakeTableV2Events::decode_raw_log(log.topics(), &log.data().data).ok()?;
+                        StakeTableV3Events::decode_raw_log(log.topics(), &log.data().data).ok()?;
                     match Self::validate_event(&event, &log) {
                         Ok(true) => Some(Ok((event, log))),
                         Ok(false) => None,

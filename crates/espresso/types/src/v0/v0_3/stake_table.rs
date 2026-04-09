@@ -12,6 +12,7 @@ use hotshot_contract_adapter::sol_types::StakeTableV2::{
     CommissionUpdated, ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated, Undelegated,
     UndelegatedV2, ValidatorExit, ValidatorExitV2, ValidatorRegistered, ValidatorRegisteredV2,
 };
+use hotshot_contract_adapter::sol_types::StakeTableV3::{NetworkConfigUpdated, ValidatorRegisteredV3};
 use hotshot_types::{
     PeerConfig, data::EpochNumber, light_client::StateVerKey, network::PeerConfigKeys, x25519,
     addr::NetAddr
@@ -220,7 +221,7 @@ impl Drop for StakeTableUpdateTask {
 // (log block number, log index)
 pub type EventKey = (u64, u64);
 
-#[derive(Clone, derive_more::From, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, derive_more::From, serde::Serialize, serde::Deserialize)]
 pub enum StakeTableEvent {
     Register(ValidatorRegistered),
     RegisterV2(ValidatorRegisteredV2),
@@ -232,6 +233,16 @@ pub enum StakeTableEvent {
     KeyUpdate(ConsensusKeysUpdated),
     KeyUpdateV2(ConsensusKeysUpdatedV2),
     CommissionUpdate(CommissionUpdated),
+    RegisterV3(ValidatorRegisteredV3),
+    NetworkConfigUpdate(NetworkConfigUpdated),
+}
+
+impl PartialEq for StakeTableEvent {
+    fn eq(&self, other: &Self) -> bool {
+        // Not all inner types derive PartialEq (V3 bindings lack it).
+        // Compare via bincode serialization. Only used for dedup, not performance-critical.
+        bincode::serialize(self).ok() == bincode::serialize(other).ok()
+    }
 }
 
 #[derive(Debug, Error)]
@@ -264,6 +275,8 @@ pub enum StakeTableError {
     InvalidCommission(Address, u16),
     #[error("Schnorr key already used: {0}")]
     SchnorrKeyAlreadyUsed(String),
+    #[error("x25519 key already used: {0}")]
+    X25519KeyAlreadyUsed(String),
     #[error("Stake table event decode error {0}")]
     StakeTableEventDecodeError(#[from] alloy::sol_types::Error),
     #[error("Stake table events sorting error: {0}")]
