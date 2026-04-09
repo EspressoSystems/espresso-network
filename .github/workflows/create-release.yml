@@ -43,7 +43,8 @@ jobs:
   create:
     needs: validate
     runs-on: ubuntu-latest
-    environment: release
+    # TODO: re-enable after testing
+    # environment: release
     permissions:
       contents: write
     steps:
