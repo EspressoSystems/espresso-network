@@ -90,12 +90,16 @@ Design doc: [doc/stake-table-fast-finality.md](stake-table-fast-finality.md)
 - [x] `StakeTableContractVersion::V3` variant
 - [x] `Contract::StakeTableV3` enum variant
 - [x] V3 deploy path in `deploy_to_rpc`
-- [ ] Multisig/timelock path (`upgrade_stake_table_v3_multisig_owner()`)
-- [ ] `--upgrade-stake-table-v3` CLI flag in deployer builder
+- [x] Multisig/timelock path -- [`proposals/multisig.rs`](../contracts/rust/deployer/src/proposals/multisig.rs)
+- [x] Builder routing with multisig/EOA -- [`builder.rs`](../contracts/rust/deployer/src/builder.rs)
+- [x] V3 included in `deploy_all()`
+- [x] V3 is the default `StakeTableContractVersion`
 
-## Remaining
+## Phase 7: Invariant and compatibility tests
 
-- [ ] Invariant fuzz targets for `setNetworkConfig` and `updateP2pAddr`
-- [ ] Storage compatibility test against decaf/mainnet deployments
-- [ ] Multisig/timelock deployer path
-- [ ] Deployer CLI flag `--upgrade-stake-table-v3`
+- [x] Invariant fuzz targets -- [`StakeTableV2PropTestBase.sol`](../contracts/test/StakeTableV2PropTestBase.sol)
+- [x] MockStakeTableV3 -- [`MockStakeTableV3.sol`](../contracts/test/MockStakeTableV3.sol)
+- [x] Storage compatibility maxVersion=3 --
+      [`StorageUpgradeCompatibility.t.sol`](../contracts/test/StorageUpgradeCompatibility.t.sol)
+- [x] V3 default in all e2e and integration tests
+- [x] V3 added to parametrized tests (delegation, registration, persistence, event processing)
