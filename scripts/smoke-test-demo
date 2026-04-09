@@ -14,6 +14,16 @@ error_handler() {
 # load env vars in .env
 set -a; source .env; set +a;
 
+# Backward compat for renamed env vars
+if [ -z "${ESPRESSO_L1_PORT:-}" ] && [ -n "${ESPRESSO_SEQUENCER_L1_PORT:-}" ]; then
+    echo "ERROR: ESPRESSO_SEQUENCER_L1_PORT is deprecated, use ESPRESSO_L1_PORT instead" >&2
+    ESPRESSO_L1_PORT="$ESPRESSO_SEQUENCER_L1_PORT"
+fi
+if [ -z "${ESPRESSO_NODE_1_API_PORT:-}" ] && [ -n "${ESPRESSO_SEQUENCER1_API_PORT:-}" ]; then
+    echo "ERROR: ESPRESSO_SEQUENCER1_API_PORT is deprecated, use ESPRESSO_NODE_1_API_PORT instead" >&2
+    ESPRESSO_NODE_1_API_PORT="$ESPRESSO_SEQUENCER1_API_PORT"
+fi
+
 LOAD_GENERATOR=http://localhost:$ESPRESSO_SUBMIT_TRANSACTIONS_PRIVATE_PORT
 
 L1_PROVIDER=http://localhost:$ESPRESSO_L1_PORT

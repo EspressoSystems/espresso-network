@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -eEu -o pipefail
 
+# Backward compat: ESPRESSO_SEQUENCER_EMBEDDED_DB -> ESPRESSO_NODE_EMBEDDED_DB
+if [ -z "${ESPRESSO_NODE_EMBEDDED_DB:-}" ] && [ -n "${ESPRESSO_SEQUENCER_EMBEDDED_DB:-}" ]; then
+    echo "ERROR: ESPRESSO_SEQUENCER_EMBEDDED_DB is deprecated, use ESPRESSO_NODE_EMBEDDED_DB instead" >&2
+    ESPRESSO_NODE_EMBEDDED_DB="$ESPRESSO_SEQUENCER_EMBEDDED_DB"
+fi
 export ESPRESSO_NODE_EMBEDDED_DB=${ESPRESSO_NODE_EMBEDDED_DB:-false}
 
 # Trap SIGTERM and SIGINT signals and send them to the process group

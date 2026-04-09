@@ -8,6 +8,11 @@ set -eu
 # Dependencies: curl, jq, sh
 
 MODE="${1:-}"
+# Backward compat: SEQUENCER_URL -> ESPRESSO_API_URL
+if [ -z "${ESPRESSO_API_URL:-}" ] && [ -n "${SEQUENCER_URL:-}" ]; then
+    echo "ERROR: SEQUENCER_URL is deprecated, use ESPRESSO_API_URL instead" >&2
+    ESPRESSO_API_URL="$SEQUENCER_URL"
+fi
 ESPRESSO_API_URL="${ESPRESSO_API_URL:-http://localhost:24000}"
 POLL_INTERVAL="${POLL_INTERVAL:-5}"
 

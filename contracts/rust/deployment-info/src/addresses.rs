@@ -8,7 +8,8 @@ const ESP_TOKEN_PROXY_ADDRESS: &str = "ESP_TOKEN_PROXY_ADDRESS";
 const LIGHT_CLIENT_PROXY_ADDRESS: &str = "ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS";
 const FEE_CONTRACT_PROXY_ADDRESS: &str = "ESPRESSO_FEE_CONTRACT_PROXY_ADDRESS";
 const REWARD_CLAIM_PROXY_ADDRESS: &str = "ESPRESSO_REWARD_CLAIM_PROXY_ADDRESS";
-const MULTISIG_PREFIX: &str = "ESPRESSO_NODE_MULTISIG_";
+const MULTISIG_PREFIX: &str = "ESPRESSO_MULTISIG_";
+const LEGACY_MULTISIG_PREFIX: &str = "ESPRESSO_SEQUENCER_MULTISIG_";
 const MULTISIG_SUFFIX: &str = "_ADDRESS";
 const OPS_TIMELOCK_ADDRESS: &str = "ESPRESSO_OPS_TIMELOCK_ADDRESS";
 const SAFE_EXIT_TIMELOCK_ADDRESS: &str = "ESPRESSO_SAFE_EXIT_TIMELOCK_ADDRESS";
@@ -38,10 +39,21 @@ impl DeploymentAddresses {
 
         let mut multisigs = HashMap::new();
         for key in env_map.keys() {
-            if let Some(name) = key
+            // Try new prefix first, fall back to deprecated ESPRESSO_SEQUENCER_MULTISIG_*
+            let name = key
                 .strip_prefix(MULTISIG_PREFIX)
                 .and_then(|s| s.strip_suffix(MULTISIG_SUFFIX))
-            {
+                .or_else(|| {
+                    key.strip_prefix(LEGACY_MULTISIG_PREFIX)
+                        .and_then(|s| s.strip_suffix(MULTISIG_SUFFIX))
+                        .inspect(|_| {
+                            tracing::error!(
+                                "{key} is deprecated, use {MULTISIG_PREFIX}...{MULTISIG_SUFFIX} \
+                                 instead"
+                            );
+                        })
+                });
+            if let Some(name) = name {
                 let name = name.to_lowercase();
                 if let Some(addr) = parse_address(&env_map, key)? {
                     multisigs.insert(name, addr);
