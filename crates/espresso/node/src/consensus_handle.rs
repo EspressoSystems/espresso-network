@@ -98,7 +98,7 @@ pub fn event_from_output<T: NodeType>(output: &ConsensusOutput<T>) -> Option<Con
         ConsensusOutput::ViewChanged(view, _epoch) => {
             Some(ConsensusEvent::ViewChanged { view_number: *view })
         },
-        ConsensusOutput::ProposalReceived { proposal, sender } => {
+        ConsensusOutput::ProposalValidated { proposal, sender } => {
             Some(ConsensusEvent::QuorumProposal {
                 proposal: proposal.clone(),
                 sender: sender.clone(),

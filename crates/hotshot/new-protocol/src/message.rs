@@ -127,7 +127,6 @@ pub enum Validated {}
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 #[serde(bound(deserialize = "S: Deserialize<'de>"))]
 pub struct ProposalMessage<T: NodeType, S> {
-    pub sender: T::SignatureKey,
     pub proposal: SignedProposal<T, Proposal<T>>,
     pub vid_share: VidDisperseShare2<T>,
     #[serde(skip)]
@@ -135,13 +134,8 @@ pub struct ProposalMessage<T: NodeType, S> {
 }
 
 impl<T: NodeType> ProposalMessage<T, Validated> {
-    pub fn validated(
-        sender: T::SignatureKey,
-        p: SignedProposal<T, Proposal<T>>,
-        s: VidDisperseShare2<T>,
-    ) -> Self {
+    pub fn validated(p: SignedProposal<T, Proposal<T>>, s: VidDisperseShare2<T>) -> Self {
         Self {
-            sender,
             proposal: p,
             vid_share: s,
             _marker: PhantomData,
@@ -153,7 +147,6 @@ impl<T: NodeType, S> ProposalMessage<T, S> {
     #[cfg(test)]
     pub fn into_unchecked(self) -> ProposalMessage<T, Unchecked> {
         ProposalMessage {
-            sender: self.sender,
             proposal: self.proposal,
             vid_share: self.vid_share,
             _marker: PhantomData,

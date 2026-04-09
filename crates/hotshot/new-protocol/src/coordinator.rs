@@ -208,15 +208,11 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Coordinator<T, N> {
                     return Ok(ConsensusInput::Certificate2(cert2))
                 }
                 Some(item) = self.proposal_validator.next() => match item {
-                    Ok(p) => {
+                    Ok((sender, p)) => {
                         let s = p.vid_share.clone();
                         let m = p.proposal.data.block_header.metadata().clone();
                         self.vid_reconstructor.handle_vid_share(s, m);
-                        self.outbox.push_back(ConsensusOutput::ProposalReceived {
-                            proposal: p.proposal.clone(),
-                            sender: p.sender.clone(),
-                        });
-                        return Ok(ConsensusInput::Proposal(p))
+                        return Ok(ConsensusInput::Proposal(sender, p))
                     }
                     Err(e) => {
                         return Err(CoordinatorError::regular(e).context("proposal validation"))
@@ -447,11 +443,7 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Coordinator<T, N> {
                     let message = Message {
                         sender: self.public_key.clone(),
                         message_type: MessageType::Consensus(ConsensusMessage::Proposal(
-                            ProposalMessage::validated(
-                                self.public_key.clone(),
-                                proposal.clone(),
-                                vid_share,
-                            ),
+                            ProposalMessage::validated(proposal.clone(), vid_share),
                         )),
                     };
                     if let Err(err) = self.network.unicast(recipient_key, message).await {
@@ -535,7 +527,7 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Coordinator<T, N> {
                     .await
                     .map_err(|e| CoordinatorError::from(e).context("broadcast certificate1"))?
             },
-            ConsensusOutput::ProposalReceived { .. } => {},
+            ConsensusOutput::ProposalValidated { .. } => {},
             ConsensusOutput::ExternalMessageReceived { .. } => {},
             ConsensusOutput::ViewChanged(view, epoch) => {
                 self.consensus.set_view(view, epoch);
