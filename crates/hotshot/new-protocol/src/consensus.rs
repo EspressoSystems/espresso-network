@@ -30,6 +30,7 @@ use tracing::{debug, instrument, warn};
 use crate::{
     block::BlockAndHeaderRequest,
     helpers::{proposal_commitment, upgrade_lock},
+    logging::KeyPrefix,
     message::{
         Certificate1, Certificate2, CheckpointVote, EpochChangeMessage, Proposal, ProposalMessage,
         Validated, Vote1, Vote2,
@@ -117,6 +118,7 @@ pub struct Consensus<T: NodeType> {
 
     public_key: T::SignatureKey,
     private_key: <T::SignatureKey as SignatureKey>::PrivateKey,
+    node_id: KeyPrefix,
 
     garbage_collection_interval: BlockNumber,
     epoch_height: BlockNumber,
@@ -155,6 +157,7 @@ impl<T: NodeType> Consensus<T> {
             last_decided_view: ViewNumber::genesis(),
             headers: BTreeMap::new(),
             drb_results: BTreeMap::new(),
+            node_id: KeyPrefix::from(&public_key),
             public_key,
             timeout_view: ViewNumber::genesis(),
             current_epoch: None,
@@ -170,7 +173,7 @@ impl<T: NodeType> Consensus<T> {
     }
 
     /// Apply consensus to the given input and collect protocol outputs.
-    #[instrument(level = "debug", skip_all, fields(view = %input.view_number()))]
+    #[instrument(level = "debug", skip_all, fields(node = %self.node_id, view = %input.view_number()))]
     pub async fn apply(
         &mut self,
         input: ConsensusInput<T>,
@@ -614,9 +617,8 @@ impl<T: NodeType> Consensus<T> {
         Protocol::Continue
     }
 
-    #[instrument(level = "debug", skip(self, outbox))]
+    #[instrument(level = "debug", skip_all)]
     async fn maybe_propose(&mut self, view: ViewNumber, outbox: &mut Outbox<ConsensusOutput<T>>) {
-        let node_short = Self::short_key_prefix(&self.public_key);
         if self.proposed_views.contains(&view) {
             return;
         }
@@ -1038,7 +1040,7 @@ impl<T: NodeType> Consensus<T> {
         }
     }
 
-    #[instrument(level = "trace", skip(self))]
+    #[instrument(level = "trace", skip_all)]
     async fn is_leader(&self, view: ViewNumber, epoch: EpochNumber) -> bool {
         match self
             .stake_table_coordinator
