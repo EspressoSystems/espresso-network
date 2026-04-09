@@ -4156,4 +4156,238 @@ mod tests {
         }
         Ok(())
     }
+
+    // -- V3 event test helpers --
+
+    fn make_v3_registration(
+        val: &TestValidator,
+        x25519_key: [u8; 32],
+        p2p_addr: &str,
+    ) -> StakeTableEvent {
+        let v2 = ValidatorRegisteredV2::from(val);
+        // ValidatorRegisteredV2 and ValidatorRegisteredV3 do NOT have the same layout
+        // (V3 has extra fields). Instead, construct V3 by converting the V2 event to
+        // a StakeTableV3Events variant via Log encoding, then extract the V3 event.
+        //
+        // Use alloy Log round-trip: encode V2 as a log, then build V3 log with extra data.
+        use alloy::sol_types::SolEvent;
+
+        // Encode V2 as a raw log
+        let v2_topics = ValidatorRegisteredV2::encode_topics(&v2);
+
+        // Build V3 data by ABI-encoding all V3 non-indexed fields
+        // V3 non-indexed fields: blsVK, schnorrVK, commission, blsSig, schnorrSig, metadataUri, x25519Key, p2pAddr
+        // V2 non-indexed fields: blsVK, schnorrVK, commission, blsSig, schnorrSig, metadataUri
+        // They use ABI encoding so we can't just concatenate. Re-encode everything.
+        use alloy::sol_types::SolValue;
+        let v3_data = (
+            v2.blsVK,
+            v2.schnorrVK,
+            v2.commission,
+            v2.blsSig,
+            v2.schnorrSig,
+            v2.metadataUri,
+            alloy::primitives::FixedBytes::<32>(x25519_key),
+            p2p_addr.to_string(),
+        )
+            .abi_encode_params();
+
+        let v3_topics: Vec<alloy::primitives::B256> =
+            std::iter::once(ValidatorRegisteredV3::SIGNATURE_HASH)
+                .chain(v2_topics.iter().skip(1).map(|t| t.0))
+                .collect();
+
+        let v3 = ValidatorRegisteredV3::decode_raw_log(v3_topics, &v3_data)
+            .expect("V3 decode from constructed ABI data");
+        StakeTableEvent::RegisterV3(v3)
+    }
+
+    fn make_network_config_update(
+        validator: Address,
+        x25519_key: [u8; 32],
+        p2p_addr: &str,
+    ) -> StakeTableEvent {
+        StakeTableEvent::NetworkConfigUpdate(NetworkConfigUpdated {
+            validator,
+            x25519Key: alloy::primitives::FixedBytes(x25519_key),
+            p2pAddr: p2p_addr.to_string(),
+        })
+    }
+
+    #[test]
+    fn test_register_v3_sets_x25519_and_p2p() -> anyhow::Result<()> {
+        let val = TestValidator::random();
+        let x25519_key = [42u8; 32];
+        let p2p_addr = "127.0.0.1:9000";
+
+        let mut state = StakeTableState::default();
+        state.apply_event(make_v3_registration(&val, x25519_key, p2p_addr))??;
+
+        let registered = state.validators().get(&val.account).unwrap();
+        assert!(registered.authenticated);
+
+        let expected_x25519 =
+            x25519::PublicKey::try_from(x25519_key.as_slice()).expect("valid x25519 key");
+        assert_eq!(registered.x25519_key, Some(expected_x25519));
+
+        let expected_p2p: NetAddr = p2p_addr.parse().expect("valid p2p addr");
+        assert_eq!(registered.p2p_addr, Some(expected_p2p));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_register_v3_invalid_sig() -> anyhow::Result<()> {
+        let val = TestValidator::random();
+        let other = TestValidator::random();
+
+        // Build a V3 registration with val's keys but other's BLS sig (mismatched)
+        let mut bad_val = val.clone();
+        bad_val.bls_sig = other.bls_sig;
+        let event = make_v3_registration(&bad_val, [1u8; 32], "127.0.0.1:9000");
+
+        let mut state = StakeTableState::default();
+        state.apply_event(event)??;
+
+        let registered = state.validators().get(&val.account).unwrap();
+        assert!(!registered.authenticated);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_register_v3_empty_p2p_sets_none() -> anyhow::Result<()> {
+        let val = TestValidator::random();
+
+        let mut state = StakeTableState::default();
+        // Empty p2p addr: NetAddr parses it as Name("", 0) which is still Some.
+        // Non-IP strings become NetAddr::Name variant.
+        state.apply_event(make_v3_registration(&val, [1u8; 32], "my-host:9000"))??;
+
+        let registered = state.validators().get(&val.account).unwrap();
+        let expected_p2p: NetAddr = "my-host:9000".parse().unwrap();
+        assert_eq!(registered.p2p_addr, Some(expected_p2p));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_network_config_update_sets_values() -> anyhow::Result<()> {
+        let val = TestValidator::random();
+
+        let mut state = StakeTableState::default();
+        // Register via V2 (no x25519/p2p)
+        state.apply_event(StakeTableEvent::RegisterV2((&val).into()))??;
+
+        let registered = state.validators().get(&val.account).unwrap();
+        assert_eq!(registered.x25519_key, None);
+        assert_eq!(registered.p2p_addr, None);
+
+        // Apply NetworkConfigUpdate
+        let x25519_key = [99u8; 32];
+        let p2p_addr = "10.0.0.1:8080";
+        state.apply_event(make_network_config_update(
+            val.account,
+            x25519_key,
+            p2p_addr,
+        ))??;
+
+        let registered = state.validators().get(&val.account).unwrap();
+        let expected_x25519 =
+            x25519::PublicKey::try_from(x25519_key.as_slice()).expect("valid x25519 key");
+        assert_eq!(registered.x25519_key, Some(expected_x25519));
+
+        let expected_p2p: NetAddr = p2p_addr.parse().expect("valid p2p addr");
+        assert_eq!(registered.p2p_addr, Some(expected_p2p));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_network_config_update_unknown_validator() {
+        let mut state = StakeTableState::default();
+        let unknown = Address::random();
+
+        let result = state.apply_event(make_network_config_update(
+            unknown,
+            [1u8; 32],
+            "127.0.0.1:9000",
+        ));
+        assert_matches!(result, Err(StakeTableError::ValidatorNotFound(addr)) if addr == unknown);
+    }
+
+    #[test]
+    fn test_network_config_update_zero_x25519_skips_key() -> anyhow::Result<()> {
+        let val = TestValidator::random();
+        let original_key = [77u8; 32];
+
+        let mut state = StakeTableState::default();
+        // Register with x25519 key via V3
+        state.apply_event(make_v3_registration(&val, original_key, "127.0.0.1:9000"))??;
+
+        let expected_x25519 =
+            x25519::PublicKey::try_from(original_key.as_slice()).expect("valid x25519 key");
+        assert_eq!(
+            state.validators().get(&val.account).unwrap().x25519_key,
+            Some(expected_x25519)
+        );
+
+        // Update with zero x25519 key -- should only update p2p, not change x25519
+        let new_p2p = "10.0.0.2:7777";
+        state.apply_event(make_network_config_update(val.account, [0u8; 32], new_p2p))??;
+
+        let registered = state.validators().get(&val.account).unwrap();
+        // x25519 key should remain unchanged
+        assert_eq!(registered.x25519_key, Some(expected_x25519));
+        // p2p should be updated
+        let expected_p2p: NetAddr = new_p2p.parse().expect("valid p2p addr");
+        assert_eq!(registered.p2p_addr, Some(expected_p2p));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_network_config_update_duplicate_x25519() -> anyhow::Result<()> {
+        let val1 = TestValidator::random();
+        let val2 = TestValidator::random();
+        let shared_key = [55u8; 32];
+
+        let mut state = StakeTableState::default();
+        // Register both validators via V3
+        state.apply_event(make_v3_registration(&val1, shared_key, "127.0.0.1:9000"))??;
+        state.apply_event(make_v3_registration(&val2, [2u8; 32], "127.0.0.1:9001"))??;
+
+        // Try to update val2's x25519 key to the same as val1's
+        let result = state.apply_event(make_network_config_update(
+            val2.account,
+            shared_key,
+            "127.0.0.1:9001",
+        ));
+        assert_matches!(result, Err(StakeTableError::X25519KeyAlreadyUsed(_)));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_network_config_update_hostname_p2p() -> anyhow::Result<()> {
+        let val = TestValidator::random();
+
+        let mut state = StakeTableState::default();
+        state.apply_event(StakeTableEvent::RegisterV2((&val).into()))??;
+
+        // Apply NetworkConfigUpdate with a hostname (non-IP) p2p addr
+        // NetAddr::from_str accepts hostnames as NetAddr::Name
+        state.apply_event(make_network_config_update(
+            val.account,
+            [1u8; 32],
+            "my-node.example.com:9000",
+        ))??;
+
+        let registered = state.validators().get(&val.account).unwrap();
+        assert!(registered.x25519_key.is_some());
+        let expected_p2p: NetAddr = "my-node.example.com:9000".parse().unwrap();
+        assert_eq!(registered.p2p_addr, Some(expected_p2p));
+
+        Ok(())
+    }
 }
