@@ -2,89 +2,100 @@
 
 Design doc: [doc/stake-table-fast-finality.md](stake-table-fast-finality.md)
 
-After each phase stabilizes, update the design doc with links to test files and implementations.
-
 ## Phase 1: StakeTableV3.sol contract
 
-- [ ] `StakeTableV3 is StakeTableV2`
-- [ ] `initializeV3()` with `reinitializer(3)`
-- [ ] `getVersion()` returns `(3, 0, 0)`
-- [ ] `x25519Keys` mapping (`bytes32 => bool`)
-- [ ] `MAX_P2P_ADDR_LENGTH` constant (512)
-- [ ] `validateP2pAddr` (public pure): colon check, port parse, host non-empty
-- [ ] New errors: `InvalidX25519Key`, `X25519KeyAlreadyUsed`, `InvalidP2pAddr`
-- [ ] New events: `ValidatorRegisteredV3`, `NetworkConfigUpdated`
-- [ ] `registerValidatorV3`: full registration with x25519 + p2p
-- [ ] Override `registerValidatorV2` to revert `DeprecatedFunction()`
-- [ ] `setNetworkConfig`: set/rotate x25519 key + p2p addr
-- [ ] `updateP2pAddr`: update p2p addr only, emit `NetworkConfigUpdated` with `bytes32(0)` x25519
+- [x] `StakeTableV3 is StakeTableV2` -- [`contracts/src/StakeTableV3.sol`](../contracts/src/StakeTableV3.sol)
+- [x] `initializeV3()` with `reinitializer(3)`
+- [x] `getVersion()` returns `(3, 0, 0)`
+- [x] `x25519Keys` mapping (`bytes32 => bool`)
+- [x] `MAX_P2P_ADDR_LENGTH` constant (512)
+- [x] `validateP2pAddr` (public pure): colon check, port parse, host non-empty
+- [x] New errors: `InvalidX25519Key`, `X25519KeyAlreadyUsed`, `InvalidP2pAddr`
+- [x] New events: `ValidatorRegisteredV3`, `NetworkConfigUpdated`
+- [x] `registerValidatorV3`: full registration with x25519 + p2p
+- [x] Override `registerValidatorV2` to revert `DeprecatedFunction()`
+- [x] `setNetworkConfig`: set/rotate x25519 key + p2p addr
+- [x] `updateP2pAddr`: update p2p addr only, emit `NetworkConfigUpdated` with `bytes32(0)` x25519
 
 ## Phase 2: Contract tests
 
-### 2a: validateP2pAddr unit tests
+### 2a: validateP2pAddr unit tests -- [`contracts/test/StakeTableV3.t.sol`](../contracts/test/StakeTableV3.t.sol)
 
-- [ ] Valid: IPv4 (`192.168.1.1:8080`), IPv6 (`::1:8080`), hostname (`node.example.com:8080`)
-- [ ] Invalid: no colon, empty host (`:8080`), empty port (`host:`), port zero, port > 65535
-- [ ] Invalid: non-numeric port, multiaddr format (`/ip4/1.2.3.4/tcp/4001`)
-- [ ] Boundary: exactly `MAX_P2P_ADDR_LENGTH`, leading zero port (`host:08080`)
-- [ ] Empty string, exceeds max length
+- [x] Valid: IPv4, IPv6, hostname
+- [x] Invalid: no colon, empty host, empty port, port zero, port > 65535
+- [x] Invalid: non-numeric port, multiaddr format
+- [x] Boundary: exactly `MAX_P2P_ADDR_LENGTH`, leading zero port
+- [x] Empty string, exceeds max length
 
-### 2b: StakeTableV3 requirement and edge case tests
+### 2b: StakeTableV3 requirement and edge case tests -- [`contracts/test/StakeTableV3.t.sol`](../contracts/test/StakeTableV3.t.sol)
 
-- [ ] `registerValidatorV3` happy path + event check
-- [ ] `registerValidatorV3` edge cases: zero x25519, empty p2p, long p2p, duplicate x25519
-- [ ] `registerValidatorV2` deprecated revert after V3
-- [ ] `setNetworkConfig` happy path + event check
-- [ ] `setNetworkConfig` edge cases: inactive, exited, zero x25519, empty p2p, duplicate x25519
-- [ ] `setNetworkConfig` repeated with different keys (both succeed)
-- [ ] `setNetworkConfig` with own registered x25519 key (reverts)
-- [ ] `setNetworkConfig` from unregistered address (reverts)
-- [ ] `setNetworkConfig` paused (reverts)
-- [ ] `updateP2pAddr` happy path + event check
-- [ ] `updateP2pAddr` edge cases: inactive, exited, empty, long, paused
-- [ ] `updateP2pAddr` repeated with different addresses (both succeed)
-- [ ] Boundary: p2p addr exactly `MAX_P2P_ADDR_LENGTH` (succeeds)
+- [x] `registerValidatorV3` happy path + event check
+- [x] `registerValidatorV3` edge cases: zero x25519, empty p2p, long p2p, duplicate x25519
+- [x] `registerValidatorV2` deprecated revert after V3
+- [x] `setNetworkConfig` happy path + event check
+- [x] `setNetworkConfig` edge cases: inactive, exited, zero x25519, empty p2p, duplicate x25519
+- [x] `setNetworkConfig` repeated with different keys (both succeed)
+- [x] `setNetworkConfig` with own registered x25519 key (reverts)
+- [x] `setNetworkConfig` paused (reverts)
+- [x] `updateP2pAddr` happy path + event check
+- [x] `updateP2pAddr` edge cases: inactive, exited, empty, long, paused
+- [x] `updateP2pAddr` repeated with different addresses (both succeed)
 
-### 2c: Upgrade and invariant tests
+### 2c: Upgrade tests -- [`contracts/test/StakeTableUpgradeToV3.t.sol`](../contracts/test/StakeTableUpgradeToV3.t.sol)
 
-- [ ] `StakeTableUpgradeToV3.t.sol`: V1 -> V2 -> V3 upgrade preserves state
-- [ ] V2 operations still work after V3 upgrade (delegate, undelegate, claimWithdrawal, updateConsensusKeysV2)
-- [ ] `initializeV3()` twice reverts
-- [ ] Unauthorized upgrade reverts
-- [ ] Pending undelegation from V2 claimable after V3
-- [ ] Exited validator delegations claimable after V3
+- [x] V1 -> V2 -> V3 upgrade preserves state
+- [x] V2 operations still work after V3 upgrade
+- [x] `initializeV3()` twice reverts
+- [x] Unauthorized upgrade reverts
+- [x] Pending undelegation from V2 claimable after V3
+- [x] Exited validator delegations claimable after V3
 - [ ] Invariant targets: `setNetworkConfigOk/Any`, `updateP2pAddrOk/Any`
 - [ ] Storage compatibility: `StorageUpgradeCompatibility.t.sol` with `maxMajorVersion = 3`
 
 ## Phase 3: Rust bindings and event handling
 
-- [ ] `just gen-bindings` (regenerate with V3 ABI)
-- [ ] Add `RegisterV3`, `NetworkConfigUpdate` variants to `StakeTableEvent`
-- [ ] `TryFrom<StakeTableV3Events>` impl
-- [ ] `apply_event` handler for `RegisterV3` (same as V2 but sets x25519_key + p2p_addr)
-- [ ] `apply_event` handler for `NetworkConfigUpdate` (x25519 if non-zero, p2p_addr always)
-- [ ] `used_x25519_keys: HashSet<x25519::PublicKey>` in `StakeTableState`
-- [ ] Event filter: add `ValidatorRegisteredV3::SIGNATURE`, `NetworkConfigUpdated::SIGNATURE`
-- [ ] `contracts/rust/adapter/src/stake_table.rs`: authentication for V3 registration
+- [x] Generated bindings --
+      [`contracts/rust/adapter/src/bindings/stake_table_v3.rs`](../contracts/rust/adapter/src/bindings/stake_table_v3.rs)
+- [x] `RegisterV3`, `NetworkConfigUpdate` variants --
+      [`crates/espresso/types/src/v0/v0_3/stake_table.rs`](../crates/espresso/types/src/v0/v0_3/stake_table.rs)
+- [x] `TryFrom<StakeTableV3Events>` impl --
+      [`crates/espresso/types/src/v0/impls/stake_table.rs`](../crates/espresso/types/src/v0/impls/stake_table.rs)
+- [x] `apply_event` handlers for RegisterV3 and NetworkConfigUpdate
+- [x] `used_x25519_keys: HashSet` in `StakeTableState`
+- [x] Event filter with V3 signatures
+- [x] V3 authentication -- [`contracts/rust/adapter/src/stake_table.rs`](../contracts/rust/adapter/src/stake_table.rs)
 
-## Phase 4: Rust unit tests
+## Phase 4: Rust unit tests -- [`crates/espresso/types/src/v0/impls/stake_table.rs`](../crates/espresso/types/src/v0/impls/stake_table.rs)
 
-- [ ] `RegisterV3` with invalid BLS/Schnorr sig (registered as unauthenticated)
-- [ ] `RegisterV3` with unparsable p2p addr (warning, p2p_addr = None)
-- [ ] `NetworkConfigUpdate` for unknown validator (error)
-- [ ] `NetworkConfigUpdate` with `bytes32(0)` x25519 (skip key update, only update p2p)
-- [ ] `NetworkConfigUpdate` with duplicate x25519 key (error)
-- [ ] `NetworkConfigUpdate` with unparsable p2p addr (warning, p2p_addr = None)
+- [x] `test_register_v3_sets_x25519_and_p2p`
+- [x] `test_register_v3_invalid_sig`
+- [x] `test_register_v3_empty_p2p_sets_none`
+- [x] `test_network_config_update_sets_values`
+- [x] `test_network_config_update_unknown_validator`
+- [x] `test_network_config_update_zero_x25519_skips_key`
+- [x] `test_network_config_update_duplicate_x25519`
+- [x] `test_network_config_update_hostname_p2p`
 
-## Phase 5: Staking CLI
+## Phase 5: Staking CLI -- [`staking-cli/src/`](../staking-cli/src/)
 
-- [ ] `set-network-config --x25519-key <KEY> --p2p-addr <ADDR>` command
-- [ ] `update-p2p-addr --p2p-addr <ADDR>` command
-- [ ] Update register command with `--x25519-key` and `--p2p-addr` flags
-- [ ] Event display formatting for `ValidatorRegisteredV3` and `NetworkConfigUpdated`
+- [x] `set-network-config` command -- `cli.rs`, `transaction.rs`
+- [x] `update-p2p-addr` command -- `cli.rs`, `transaction.rs`
+- [x] V3 registration with x25519_key + p2p_addr -- `transaction.rs`
+- [x] Integration test: `test_set_network_config` -- `registration.rs`
+- [x] Integration test: `test_update_p2p_addr` -- `registration.rs`
 
-## Phase 6: Deployer
+## Phase 6: Deployer -- [`contracts/rust/deployer/src/lib.rs`](../contracts/rust/deployer/src/lib.rs)
 
-- [ ] `prepare_stake_table_v3_upgrade()` / `upgrade_stake_table_v3()`
+- [x] `upgrade_stake_table_v3()` with EOA admin
+- [x] `StakeTableContractVersion::V3` variant
+- [x] `Contract::StakeTableV3` enum variant
+- [x] V3 deploy path in `deploy_to_rpc`
 - [ ] Multisig/timelock path (`upgrade_stake_table_v3_multisig_owner()`)
-- [ ] `--upgrade-stake-table-v3` CLI flag
+- [ ] `--upgrade-stake-table-v3` CLI flag in deployer builder
+
+## Remaining
+
+- [ ] Invariant fuzz targets for `setNetworkConfig` and `updateP2pAddr`
+- [ ] Storage compatibility test against decaf/mainnet deployments
+- [ ] Multisig/timelock deployer path
+- [ ] Deployer CLI flag `--upgrade-stake-table-v3`
