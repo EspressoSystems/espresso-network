@@ -76,6 +76,8 @@ fn test_cli_version() -> Result<()> {
 #[case::claim_validator_exit(&["claim-validator-exit", "--validator-address", "0x1111111111111111111111111111111111111111"])]
 #[case::claim_rewards(&["--espresso-url", "http://localhost:1", "claim-rewards"])]
 #[case::transfer(&["transfer", "--amount", "100", "--to", "0x1111111111111111111111111111111111111111"])]
+#[case::set_network_config(&["set-network-config", "--x25519-key", "0x0000000000000000000000000000000000000000000000000000000000000001", "--p2p-addr", "127.0.0.1:8080"])]
+#[case::update_p2p_addr(&["update-p2p-addr", "--p2p-addr", "127.0.0.1:8080"])]
 #[test_log::test(tokio::test)]
 async fn test_cli_missing_signer_error(#[case] args: &[&str]) -> Result<()> {
     let system = deploy::TestSystem::deploy().await?;
@@ -283,40 +285,42 @@ async fn test_cli_delegate_error_decoding(#[case] mode: ExecutionMode) -> Result
 #[test_log::test(rstest::rstest)]
 #[tokio::test]
 async fn test_cli_register_validator(
-    #[values(StakeTableContractVersion::V1, StakeTableContractVersion::V2)]
+    #[values(
+        StakeTableContractVersion::V1,
+        StakeTableContractVersion::V2,
+        StakeTableContractVersion::V3
+    )]
     version: StakeTableContractVersion,
     #[values(Signer::Mnemonic, Signer::BrokeMnemonic)] signer: Signer,
 ) -> Result<()> {
     let system = TestSystem::deploy_version(version).await?;
     let mut cmd = system.cmd(signer);
+    cmd.arg("register-validator")
+        .arg("--consensus-private-key")
+        .arg(system.bls_private_key_str()?)
+        .arg("--state-private-key")
+        .arg(system.state_private_key_str()?)
+        .arg("--commission")
+        .arg("12.34")
+        .arg("--metadata-uri")
+        .arg("https://example.com/metadata")
+        .arg("--skip-metadata-validation");
+
+    if matches!(version, StakeTableContractVersion::V3) {
+        cmd.arg("--x25519-key")
+            .arg(format!("0x{}", alloy::hex::encode([42u8; 32])))
+            .arg("--p2p-addr")
+            .arg("127.0.0.1:8080");
+    }
+
     match signer {
         Signer::Mnemonic => {
-            cmd.arg("register-validator")
-                .arg("--consensus-private-key")
-                .arg(system.bls_private_key_str()?)
-                .arg("--state-private-key")
-                .arg(system.state_private_key_str()?)
-                .arg("--commission")
-                .arg("12.34")
-                .arg("--metadata-uri")
-                .arg("https://example.com/metadata")
-                .arg("--skip-metadata-validation")
-                .assert()
+            cmd.assert()
                 .success()
                 .stdout(str::contains("ValidatorRegistered"));
         },
         Signer::BrokeMnemonic => {
-            cmd.arg("register-validator")
-                .arg("--consensus-private-key")
-                .arg(system.bls_private_key_str()?)
-                .arg("--state-private-key")
-                .arg(system.state_private_key_str()?)
-                .arg("--commission")
-                .arg("12.34")
-                .arg("--metadata-uri")
-                .arg("https://example.com/metadata")
-                .arg("--skip-metadata-validation")
-                .assert()
+            cmd.assert()
                 .failure()
                 .stderr(str::contains("zero Ethereum balance"));
         },
@@ -2705,4 +2709,38 @@ ledger = false
         .assert()
         .failure()
         .stderr(str::contains("Multiple signers"));
+}
+
+#[test_log::test(tokio::test)]
+async fn test_cli_set_network_config() -> Result<()> {
+    let system = TestSystem::deploy_version(StakeTableContractVersion::V3).await?;
+    system.register_validator().await?;
+
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("set-network-config")
+        .arg("--x25519-key")
+        .arg(format!("0x{}", alloy::hex::encode([99u8; 32])))
+        .arg("--p2p-addr")
+        .arg("10.0.0.1:9090")
+        .assert()
+        .success();
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
+async fn test_cli_update_p2p_addr() -> Result<()> {
+    let system = TestSystem::deploy_version(StakeTableContractVersion::V3).await?;
+    system.register_validator().await?;
+
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("update-p2p-addr")
+        .arg("--p2p-addr")
+        .arg("192.168.1.1:7070")
+        .assert()
+        .success();
+
+    Ok(())
 }
