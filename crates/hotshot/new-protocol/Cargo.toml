@@ -17,6 +17,7 @@ async-broadcast = { workspace = true }
 async-lock = { workspace = true }
 async-trait = { workspace = true }
 bon = { workspace = true }
+cliquenet = { workspace = true }
 committable = { workspace = true }
 futures = { workspace = true }
 hotshot = { workspace = true }
@@ -27,6 +28,7 @@ hotshot-utils = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true }
 serde_bytes = { workspace = true }
+test-utils = { workspace = true }
 thiserror = { workspace = true }
 time = { workspace = true }
 tokio = { workspace = true }
