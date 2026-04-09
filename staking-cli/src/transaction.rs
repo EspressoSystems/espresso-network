@@ -225,6 +225,15 @@ impl Transaction {
                     .into(),
                     None,
                 ),
+                StakeTableContractVersion::V3 => {
+                    // V3 registration requires x25519_key and p2p_addr which are not
+                    // part of this Transaction variant. Use registerValidatorV3 via a
+                    // dedicated code path instead.
+                    unimplemented!(
+                        "V3 registration requires x25519_key and p2p_addr; use the V3-specific \
+                         registration flow"
+                    )
+                },
             },
             Self::UpdateConsensusKeys {
                 stake_table,
@@ -242,7 +251,7 @@ impl Transaction {
                     .into(),
                     None,
                 ),
-                StakeTableContractVersion::V2 => (
+                StakeTableContractVersion::V2 | StakeTableContractVersion::V3 => (
                     stake_table,
                     updateConsensusKeysV2Call::from((
                         G2PointSol::from(payload.bls_vk),

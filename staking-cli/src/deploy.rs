@@ -18,6 +18,7 @@ use anyhow::Result;
 use espresso_contract_deployer::{
     Contract, Contracts, DEFAULT_EXIT_ESCROW_PERIOD_SECONDS, build_provider, build_signer,
     builder::DeployerArgsBuilder, network_config::light_client_genesis_from_stake_table,
+    upgrade_stake_table_v3,
 };
 use espresso_types::{
     v0::v0_4::{
@@ -109,7 +110,7 @@ where
 
     let mut contracts = Contracts::new();
     let args = DeployerArgsBuilder::default()
-        .deployer(provider)
+        .deployer(provider.clone())
         .rpc_url(rpc_url)
         .mock_light_client(true)
         .genesis_lc_state(genesis_state)
@@ -136,6 +137,10 @@ where
     match stake_table_contract_version {
         StakeTableContractVersion::V1 => args.deploy_to_stake_table_v1(&mut contracts).await?,
         StakeTableContractVersion::V2 => args.deploy_all(&mut contracts).await?,
+        StakeTableContractVersion::V3 => {
+            args.deploy_all(&mut contracts).await?;
+            upgrade_stake_table_v3(&provider, &mut contracts).await?;
+        },
     };
 
     let stake_table = contracts
@@ -146,7 +151,9 @@ where
         .ok_or_else(|| anyhow::anyhow!("EspTokenProxy not deployed"))?;
     let reward_claim = match stake_table_contract_version {
         StakeTableContractVersion::V1 => None,
-        StakeTableContractVersion::V2 => contracts.address(Contract::RewardClaimProxy),
+        StakeTableContractVersion::V2 | StakeTableContractVersion::V3 => {
+            contracts.address(Contract::RewardClaimProxy)
+        },
     };
 
     Ok(DeployedContracts {

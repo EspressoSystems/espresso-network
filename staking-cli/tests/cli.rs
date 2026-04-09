@@ -787,7 +787,7 @@ async fn test_cli_claim_withdrawal(#[case] version: StakeTableContractVersion) -
     let mut cmd = system.cmd(Signer::Mnemonic);
     let expected_event = match version {
         StakeTableContractVersion::V1 => "Withdrawal",
-        StakeTableContractVersion::V2 => "WithdrawalClaimed",
+        StakeTableContractVersion::V2 | StakeTableContractVersion::V3 => "WithdrawalClaimed",
     };
     cmd.arg("claim-withdrawal")
         .arg("--validator-address")
@@ -810,7 +810,7 @@ async fn test_cli_claim_validator_exit(#[case] version: StakeTableContractVersio
     let mut cmd = system.cmd(Signer::Mnemonic);
     let expected_event = match version {
         StakeTableContractVersion::V1 => "Withdrawal",
-        StakeTableContractVersion::V2 => "ValidatorExitClaimed",
+        StakeTableContractVersion::V2 | StakeTableContractVersion::V3 => "ValidatorExitClaimed",
     };
     cmd.arg("claim-validator-exit")
         .arg("--validator-address")

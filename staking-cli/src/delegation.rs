@@ -60,7 +60,7 @@ mod test {
                 assert_eq!(event.validator, validator_address);
                 assert_eq!(event.amount, amount);
             },
-            StakeTableContractVersion::V2 => {
+            StakeTableContractVersion::V2 | StakeTableContractVersion::V3 => {
                 let event = receipt
                     .decoded_log::<StakeTableV2::UndelegatedV2>()
                     .unwrap();

@@ -132,7 +132,7 @@ mod test {
                     .unwrap();
                 assert_eq!(event.validator, system.deployer_address);
             },
-            StakeTableContractVersion::V2 => {
+            StakeTableContractVersion::V2 | StakeTableContractVersion::V3 => {
                 let event = receipt
                     .decoded_log::<StakeTableV2::ValidatorExitV2>()
                     .unwrap();

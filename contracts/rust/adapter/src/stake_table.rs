@@ -31,6 +31,7 @@ pub enum StakeTableContractVersion {
     V1,
     #[default]
     V2,
+    V3,
 }
 
 impl TryFrom<getVersionReturn> for StakeTableContractVersion {
@@ -40,6 +41,7 @@ impl TryFrom<getVersionReturn> for StakeTableContractVersion {
         match value.majorVersion {
             1 => Ok(StakeTableContractVersion::V1),
             2 => Ok(StakeTableContractVersion::V2),
+            3 => Ok(StakeTableContractVersion::V3),
             _ => anyhow::bail!("Unsupported stake table contract version: {:?}", value),
         }
     }

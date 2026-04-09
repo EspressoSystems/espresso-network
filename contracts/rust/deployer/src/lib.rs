@@ -185,6 +185,10 @@ pub struct DeployedContracts {
     #[clap(long, env = Contract::StakeTableV2)]
     stake_table_v2: Option<Address>,
 
+    /// Use an already-deployed StakeTableV3.sol instead of deploying a new one.
+    #[clap(long, env = Contract::StakeTableV3)]
+    stake_table_v3: Option<Address>,
+
     /// Use an already-deployed StakeTable.sol proxy instead of deploying a new one.
     #[clap(long, env = Contract::StakeTableProxy)]
     stake_table_proxy: Option<Address>,
@@ -233,6 +237,8 @@ pub enum Contract {
     StakeTable,
     #[display("ESPRESSO_SEQUENCER_STAKE_TABLE_V2_ADDRESS")]
     StakeTableV2,
+    #[display("ESPRESSO_SEQUENCER_STAKE_TABLE_V3_ADDRESS")]
+    StakeTableV3,
     #[display("ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS")]
     StakeTableProxy,
     #[display("ESPRESSO_SEQUENCER_REWARD_CLAIM_ADDRESS")]
@@ -342,6 +348,9 @@ impl From<DeployedContracts> for Contracts {
         }
         if let Some(addr) = deployed.stake_table_v2 {
             m.insert(Contract::StakeTableV2, addr);
+        }
+        if let Some(addr) = deployed.stake_table_v3 {
+            m.insert(Contract::StakeTableV3, addr);
         }
         if let Some(addr) = deployed.stake_table_proxy {
             m.insert(Contract::StakeTableProxy, addr);
@@ -1361,6 +1370,55 @@ pub async fn upgrade_stake_table_v2(
         tracing::info!(%v2_addr, "StakeTable successfully upgraded to");
     } else {
         anyhow::bail!("StakeTable upgrade failed: {:?}", receipt);
+    }
+
+    Ok(receipt)
+}
+
+/// Upgrade the stake table proxy from V2 to V3.
+///
+/// V3 adds x25519 key and p2p address registration. No data migration needed.
+pub async fn upgrade_stake_table_v3(
+    provider: impl Provider,
+    contracts: &mut Contracts,
+) -> Result<TransactionReceipt> {
+    tracing::info!("Upgrading StakeTableProxy to StakeTableV3");
+    let Some(proxy_addr) = contracts.address(Contract::StakeTableProxy) else {
+        anyhow::bail!("StakeTableProxy not found, can't upgrade")
+    };
+
+    let v3_addr = contracts
+        .deploy(
+            Contract::StakeTableV3,
+            StakeTableV3::deploy_builder(&provider),
+        )
+        .await?;
+
+    let init_data = StakeTableV3::new(Address::ZERO, &provider)
+        .initializeV3()
+        .calldata()
+        .to_owned();
+
+    let proxy = StakeTableV2::new(proxy_addr, &provider);
+    let receipt = proxy
+        .upgradeToAndCall(v3_addr, init_data)
+        .send()
+        .await?
+        .get_receipt()
+        .await?;
+
+    if receipt.inner.is_success() {
+        let proxy_as_v3 = StakeTableV3::new(proxy_addr, &provider);
+        let version_is_v3 = retry_until_true("StakeTableProxy V3 version check", || async {
+            Ok(proxy_as_v3.getVersion().call().await?.majorVersion == 3)
+        })
+        .await?;
+        if !version_is_v3 {
+            anyhow::bail!("StakeTableProxy version check failed after retries: expected V3");
+        }
+        tracing::info!(%v3_addr, "StakeTable successfully upgraded to V3");
+    } else {
+        anyhow::bail!("StakeTable V3 upgrade failed: {:?}", receipt);
     }
 
     Ok(receipt)

@@ -3167,6 +3167,7 @@ mod tests {
         let register: StakeTableEvent = match version {
             StakeTableContractVersion::V1 => ValidatorRegistered::from(&val).into(),
             StakeTableContractVersion::V2 => ValidatorRegisteredV2::from(&val).into(),
+            StakeTableContractVersion::V3 => ValidatorRegisteredV2::from(&val).into(),
         };
         let delegate: StakeTableEvent = Delegated {
             delegator: Address::random(),
@@ -3232,7 +3233,9 @@ mod tests {
 
         let event = match version {
             StakeTableContractVersion::V1 => StakeTableEvent::Register((&validator).into()),
-            StakeTableContractVersion::V2 => StakeTableEvent::RegisterV2((&validator).into()),
+            StakeTableContractVersion::V2 | StakeTableContractVersion::V3 => {
+                StakeTableEvent::RegisterV2((&validator).into())
+            },
         };
 
         state.apply_event(event).unwrap().unwrap();
@@ -3254,7 +3257,7 @@ mod tests {
             StakeTableContractVersion::V1 => {
                 stake_table_state.apply_event(StakeTableEvent::Register((&test_validator).into()))
             },
-            StakeTableContractVersion::V2 => {
+            StakeTableContractVersion::V2 | StakeTableContractVersion::V3 => {
                 stake_table_state.apply_event(StakeTableEvent::RegisterV2((&test_validator).into()))
             },
         }
@@ -3354,10 +3357,12 @@ mod tests {
 
         let dereg = match version {
             StakeTableContractVersion::V1 => StakeTableEvent::Deregister((&val).into()),
-            StakeTableContractVersion::V2 => StakeTableEvent::DeregisterV2(ValidatorExitV2 {
-                validator: val.account,
-                unlocksAt: U256::from(1000u64),
-            }),
+            StakeTableContractVersion::V2 | StakeTableContractVersion::V3 => {
+                StakeTableEvent::DeregisterV2(ValidatorExitV2 {
+                    validator: val.account,
+                    unlocksAt: U256::from(1000u64),
+                })
+            },
         };
         state.apply_event(dereg).unwrap().unwrap();
         assert!(!state.validators.contains_key(&val.account));
@@ -3392,13 +3397,15 @@ mod tests {
                 validator: val.account,
                 amount,
             }),
-            StakeTableContractVersion::V2 => StakeTableEvent::UndelegateV2(UndelegatedV2 {
-                delegator,
-                validator: val.account,
-                amount,
-                unlocksAt: U256::from(2000u64),
-                undelegationId: 1,
-            }),
+            StakeTableContractVersion::V2 | StakeTableContractVersion::V3 => {
+                StakeTableEvent::UndelegateV2(UndelegatedV2 {
+                    delegator,
+                    validator: val.account,
+                    amount,
+                    unlocksAt: U256::from(2000u64),
+                    undelegationId: 1,
+                })
+            },
         };
         state.apply_event(undelegate_event).unwrap().unwrap();
         let validator = state.validators.get(&val.account).unwrap();
@@ -3422,7 +3429,9 @@ mod tests {
 
         let event = match version {
             StakeTableContractVersion::V1 => StakeTableEvent::KeyUpdate((&new_keys).into()),
-            StakeTableContractVersion::V2 => StakeTableEvent::KeyUpdateV2((&new_keys).into()),
+            StakeTableContractVersion::V2 | StakeTableContractVersion::V3 => {
+                StakeTableEvent::KeyUpdateV2((&new_keys).into())
+            },
         };
 
         state.apply_event(event).unwrap().unwrap();
