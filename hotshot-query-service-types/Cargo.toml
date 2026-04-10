@@ -6,7 +6,7 @@ edition.workspace = true
 
 [features]
 default = ["sqlx"]
-sqlx = ["bincode", "serde_json", "dep:sqlx"]
+sqlx = ["bincode", "dep:sqlx"]
 testing = ["hotshot-example-types"]
 
 [dependencies]
@@ -20,10 +20,11 @@ hotshot-types.workspace = true
 itertools.workspace = true
 jf-advz.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 snafu.workspace = true
 surf-disco.workspace = true
 tide-disco.workspace = true
-time.workspace = true
+time = { workspace = true, features = ["formatting", "parsing"] }
 vbs.workspace = true
 versions.workspace = true
 
@@ -32,7 +33,6 @@ hotshot-example-types = { workspace = true, optional = true }
 
 # SQL dependencies.
 bincode = { workspace = true, optional = true }
-serde_json = { workspace = true, optional = true }
 sqlx = { workspace = true, optional = true }
 
 [lints]
