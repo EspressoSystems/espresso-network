@@ -1,5 +1,6 @@
 use std::{env, fmt, sync::Once};
 
+use hotshot::types::SignatureKey;
 use tracing_subscriber::EnvFilter;
 
 static LOG_INIT: Once = Once::new();
@@ -21,7 +22,7 @@ pub fn init_logging() {
 }
 
 fn use_color() -> bool {
-    env::var("NO_COLOR").map(|v| v.is_empty()).unwrap_or(true)
+    env::var_os("NO_COLOR").is_none()
 }
 
 const KEY_PREFIX_LEN: usize = 19;
@@ -29,11 +30,15 @@ const KEY_PREFIX_LEN: usize = 19;
 #[derive(Clone, Copy)]
 pub struct KeyPrefix([u8; KEY_PREFIX_LEN]);
 
-impl<K: fmt::Display + ?Sized> From<&K> for KeyPrefix {
+impl<K: SignatureKey> From<&K> for KeyPrefix {
     fn from(k: &K) -> Self {
         let s = k.to_string();
+        let bytes = s.as_bytes();
+
         let mut buf = [0u8; KEY_PREFIX_LEN];
-        buf.copy_from_slice(&s.as_bytes()[..KEY_PREFIX_LEN]);
+        let len = bytes.len().min(KEY_PREFIX_LEN);
+        buf[..len].copy_from_slice(&bytes[..len]);
+
         Self(buf)
     }
 }

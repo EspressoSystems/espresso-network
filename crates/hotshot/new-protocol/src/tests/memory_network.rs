@@ -73,18 +73,20 @@ async fn five_nodes_decide_same_chain_over_memory_network() {
             let mut last_view = ViewNumber::genesis();
 
             loop {
-                // Drain any externally injected messages (bootstrap + transactions).
-                while let Ok(msg) = input_rx.try_recv() {
-                    if let Some(input) = coord.on_network_message(msg.into_unchecked()).await {
-                        coord.apply_consensus(input).await;
+                tokio::select! {
+                    Some(msg) = input_rx.recv() => {
+                        if let Some(input) = coord.on_network_message(msg.into_unchecked()).await {
+                            coord.apply_consensus(input).await;
+                        }
+                    },
+                    result = coord.next_consensus_input() => {
+                        match result {
+                            Ok(input) => coord.apply_consensus(input).await,
+                            Err(err) if err.severity == Severity::Critical => break,
+                            Err(_) => continue,
+                        }
                     }
                 }
-
-                match coord.next_consensus_input().await {
-                    Ok(input) => coord.apply_consensus(input).await,
-                    Err(err) if err.severity == Severity::Critical => break,
-                    Err(_) => continue,
-                };
 
                 while let Some(output) = coord.outbox_mut().pop_front() {
                     if let ConsensusOutput::LeafDecided(leaves) = &output {
