@@ -73,7 +73,7 @@ pub(crate) fn is_state_validated(input: &ConsensusInput<TestTypes>) -> bool {
 }
 
 pub(crate) fn is_timeout(input: &ConsensusInput<TestTypes>) -> bool {
-    matches!(input, ConsensusInput::Timeout(_))
+    matches!(input, ConsensusInput::Timeout(..))
 }
 
 pub(crate) fn is_timeout_one_honest(input: &ConsensusInput<TestTypes>) -> bool {
@@ -82,6 +82,10 @@ pub(crate) fn is_timeout_one_honest(input: &ConsensusInput<TestTypes>) -> bool {
 
 pub(crate) fn is_timeout_cert(input: &ConsensusInput<TestTypes>) -> bool {
     matches!(input, ConsensusInput::TimeoutCertificate(_))
+}
+
+pub(crate) fn is_drb_result(input: &ConsensusInput<TestTypes>) -> bool {
+    matches!(input, ConsensusInput::DrbResult(..))
 }
 
 pub(crate) fn is_block_built(input: &ConsensusInput<TestTypes>) -> bool {
@@ -108,6 +112,27 @@ where
     A: 'a,
 {
     items.into_iter().filter(|it| pred(it)).count()
+}
+
+pub(crate) fn has_epoch_change<'a, I>(outputs: I) -> bool
+where
+    I: IntoIterator<Item = &'a ConsensusOutput<TestTypes>>,
+{
+    outputs
+        .into_iter()
+        .any(|e| matches!(e, ConsensusOutput::SendEpochChange(_)))
+}
+
+pub(crate) fn has_request_drb_for_epoch<'a, I>(
+    outputs: I,
+    epoch: hotshot_types::data::EpochNumber,
+) -> bool
+where
+    I: IntoIterator<Item = &'a ConsensusOutput<TestTypes>>,
+{
+    outputs
+        .into_iter()
+        .any(|e| matches!(e, ConsensusOutput::RequestDrbResult(e) if *e == epoch))
 }
 
 /// Find the node index (0..10) for a given public key.
