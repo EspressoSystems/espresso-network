@@ -35,6 +35,8 @@ jobs:
 
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: taiki-e/install-action@cargo-hack
       - uses: taiki-e/install-action@just

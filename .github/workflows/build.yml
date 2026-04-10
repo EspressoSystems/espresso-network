@@ -69,6 +69,8 @@ jobs:
 
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
@@ -135,6 +137,8 @@ jobs:
 
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
