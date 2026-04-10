@@ -32,6 +32,9 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
       # NOTE: no rust cache, this isn't a time critical job
 
       - name: Build without committed Cargo.lock

@@ -67,6 +67,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: rui314/setup-mold@v1
 
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
         with:
@@ -129,6 +132,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: rui314/setup-mold@v1
+
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2

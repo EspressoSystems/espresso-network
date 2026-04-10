@@ -39,6 +39,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main'  }}
@@ -53,6 +57,10 @@ jobs:
       runs-on: ubuntu-latest
       steps:
         - uses: actions/checkout@v4
+
+        - name: Install protoc
+          run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
         - uses: Swatinem/rust-cache@v2
           with:
             save-if: false
