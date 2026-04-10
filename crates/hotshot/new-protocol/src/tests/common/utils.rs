@@ -229,10 +229,6 @@ impl TestData {
         Self::new_with_epoch_height(num_views, 0).await
     }
 
-    pub async fn new_with_num_nodes(num_views: usize, num_nodes: usize) -> Self {
-        Self::new_with_epoch_height_and_num_nodes(num_views, 0, num_nodes).await
-    }
-
     /// Create test data with epoch-aware proposals. When `epoch_height > 0`,
     /// epoch transition views will have `next_drb_result` set to
     /// [`TEST_DRB_RESULT`] and all downstream commitments (leaf, cert1, cert2,
