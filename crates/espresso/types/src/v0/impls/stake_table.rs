@@ -3296,6 +3296,18 @@ mod tests {
             "Expected AlreadyRegistered error. version ={version:?} result={v2_already_registered_result:?}",
 
         );
+
+        // attempt using V3 registration with a different x25519 key (should also fail
+        // with AlreadyRegistered because the validator address is already registered)
+        let v3_already_registered_result = stake_table_state.clone().apply_event(
+            make_v3_registration(&test_validator, [43u8; 32], "127.0.0.1:9001"),
+        );
+
+        pretty_assertions::assert_matches!(
+            v3_already_registered_result,
+            Err(StakeTableError::AlreadyRegistered(account)) if account == test_validator.account,
+            "Expected AlreadyRegistered error. version ={version:?} result={v3_already_registered_result:?}",
+        );
     }
 
     #[test]

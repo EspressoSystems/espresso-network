@@ -502,6 +502,27 @@ contract StakeTableV3Test is Test {
         proxyV3.updateX25519Key(bytes32(uint256(2)));
     }
 
+    function test_UpdateNetworkConfig_AtomicRevert() public {
+        address validator = makeAddr("validator");
+        bytes32 regKey = bytes32(uint256(1));
+        registerValidatorV3(validator, "123", 500, "meta", regKey, "host:8080");
+
+        bytes32 newKey = bytes32(uint256(2));
+
+        // Try updateNetworkConfig with valid key but invalid addr (empty string)
+        vm.prank(validator);
+        vm.expectRevert(StakeTableV3.InvalidP2pAddr.selector);
+        proxyV3.updateNetworkConfig(newKey, "");
+
+        // Key should NOT be consumed -- can still use it
+        vm.expectEmit();
+        emit StakeTableV3.X25519KeyUpdated(validator, newKey);
+        vm.expectEmit();
+        emit StakeTableV3.P2pAddrUpdated(validator, "host:9090");
+        vm.prank(validator);
+        proxyV3.updateNetworkConfig(newKey, "host:9090");
+    }
+
     function test_UpdateX25519Key_Repeated_Success() public {
         address validator = makeAddr("validator");
         registerValidatorV3(validator, "123", 500, "meta", bytes32(uint256(1)), "host:8080");
