@@ -27,7 +27,8 @@ use hotshot_contract_adapter::{
             updateConsensusKeysV2Call, updateMetadataUriCall,
         },
         StakeTableV3::{
-            registerValidatorV3Call, setNetworkConfigCall, setP2pAddrCall, setX25519KeyCall,
+            StakeTableV3Errors, registerValidatorV3Call, setNetworkConfigCall, setP2pAddrCall,
+            setX25519KeyCall,
         },
     },
     stake_table::{StakeTableContractVersion, StateSignatureSol},
@@ -486,10 +487,10 @@ impl Transaction {
             | Self::UpdateConsensusKeys { .. }
             | Self::DeregisterValidator { .. }
             | Self::UpdateCommission { .. }
-            | Self::UpdateMetadataUri { .. }
-            | Self::SetNetworkConfig { .. }
-            | Self::SetX25519Key { .. }
-            | Self::SetP2pAddr { .. } => result.maybe_decode_revert::<StakeTableV2Errors>(),
+            | Self::UpdateMetadataUri { .. } => result.maybe_decode_revert::<StakeTableV2Errors>(),
+            Self::SetNetworkConfig { .. } | Self::SetX25519Key { .. } | Self::SetP2pAddr { .. } => {
+                result.maybe_decode_revert::<StakeTableV3Errors>()
+            },
         }
     }
 

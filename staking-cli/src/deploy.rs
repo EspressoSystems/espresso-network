@@ -18,7 +18,6 @@ use anyhow::Result;
 use espresso_contract_deployer::{
     Contract, Contracts, DEFAULT_EXIT_ESCROW_PERIOD_SECONDS, build_provider, build_signer,
     builder::DeployerArgsBuilder, network_config::light_client_genesis_from_stake_table,
-    upgrade_stake_table_v3,
 };
 use espresso_types::{
     v0::v0_4::{
@@ -136,11 +135,8 @@ where
 
     match stake_table_contract_version {
         StakeTableContractVersion::V1 => args.deploy_to_stake_table_v1(&mut contracts).await?,
-        StakeTableContractVersion::V2 => args.deploy_all(&mut contracts).await?,
-        StakeTableContractVersion::V3 => {
-            args.deploy_all(&mut contracts).await?;
-            upgrade_stake_table_v3(&provider, &mut contracts).await?;
-        },
+        StakeTableContractVersion::V2 => args.deploy_to_v2(&mut contracts).await?,
+        StakeTableContractVersion::V3 => args.deploy_all(&mut contracts).await?,
     };
 
     let stake_table = contracts

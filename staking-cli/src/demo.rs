@@ -368,15 +368,25 @@ impl<P: Provider + Clone> TransactionProcessor<P> {
                 payload,
             } => {
                 let metadata_uri = "https://example.com/metadata".parse()?;
+                let (x25519_key, p2p_addr) = match self.version {
+                    StakeTableContractVersion::V3 => {
+                        // Derive deterministic x25519 key from the validator address.
+                        let key_bytes = alloy::primitives::keccak256(from.as_slice());
+                        (
+                            Some(alloy::primitives::FixedBytes(key_bytes.0)),
+                            Some(format!("127.0.0.1:{}", 8080 + from.0[19] as u16)),
+                        )
+                    },
+                    _ => (None, None),
+                };
                 Transaction::RegisterValidator {
                     stake_table: self.stake_table,
                     commission,
                     metadata_uri,
                     payload: *payload,
                     version: self.version,
-                    // TODO: add V3 support for demo
-                    x25519_key: None,
-                    p2p_addr: None,
+                    x25519_key,
+                    p2p_addr,
                 }
                 .send(self.provider(from)?)
                 .await

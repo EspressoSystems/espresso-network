@@ -123,14 +123,11 @@ impl DisplayLog for Log {
     }
 }
 
-/// Convert V3 event types to V2 event types using transmute.
+/// Convert V3 binding types to V2 binding types.
 ///
-/// V3 events that share the same Solidity definition as V2 events are structurally
-/// identical in their generated Rust types. This is the same pattern used in sol_types.rs
-/// for cross-binding type conversions.
+/// The V3 ABI is a superset of V2. Shared events have structurally identical generated types
+/// in both binding modules. This transmute bridges the two for events that predate V3.
 fn transmute_v3_to_v2<V3, V2>(v: V3) -> V2 {
-    // Safety: V3 and V2 types are generated from the same Solidity event definitions
-    // and have identical memory layouts.
     assert_eq!(
         std::mem::size_of::<V3>(),
         std::mem::size_of::<V2>(),
@@ -710,23 +707,17 @@ impl StakeTableState {
 
                 // Parse x25519 key (zero means not provided)
                 let x25519_key = if x25519Key.0 != [0u8; 32] {
-                    let key = x25519::PublicKey::try_from(x25519Key.0.as_slice())
-                        .map_err(|e| {
-                            tracing::warn!(%e, account = ?account, "Invalid x25519 key");
-                        })
-                        .ok();
-                    if let Some(key) = key {
-                        if self.used_x25519_keys.contains(&key) {
-                            return Err(StakeTableError::X25519KeyAlreadyUsed(format!(
-                                "{:?}",
-                                x25519Key
-                            )));
-                        }
-                        self.used_x25519_keys.insert(key);
-                        Some(key)
-                    } else {
-                        None
+                    let key = x25519::PublicKey::try_from(x25519Key.0.as_slice()).map_err(|e| {
+                        StakeTableError::InvalidX25519Key(format!("{:?}: {e}", x25519Key))
+                    })?;
+                    if self.used_x25519_keys.contains(&key) {
+                        return Err(StakeTableError::X25519KeyAlreadyUsed(format!(
+                            "{:?}",
+                            x25519Key
+                        )));
                     }
+                    self.used_x25519_keys.insert(key);
+                    Some(key)
                 } else {
                     None
                 };
@@ -769,10 +760,7 @@ impl StakeTableState {
                     .ok_or(StakeTableError::ValidatorNotFound(validator))?;
 
                 let key = x25519::PublicKey::try_from(x25519Key.0.as_slice()).map_err(|e| {
-                    StakeTableError::X25519KeyAlreadyUsed(format!(
-                        "invalid x25519 key {:?}: {e}",
-                        x25519Key
-                    ))
+                    StakeTableError::InvalidX25519Key(format!("{:?}: {e}", x25519Key))
                 })?;
                 if self.used_x25519_keys.contains(&key) {
                     return Err(StakeTableError::X25519KeyAlreadyUsed(format!(
@@ -3179,7 +3167,9 @@ mod tests {
         let register: StakeTableEvent = match version {
             StakeTableContractVersion::V1 => ValidatorRegistered::from(&val).into(),
             StakeTableContractVersion::V2 => ValidatorRegisteredV2::from(&val).into(),
-            StakeTableContractVersion::V3 => ValidatorRegisteredV2::from(&val).into(),
+            StakeTableContractVersion::V3 => {
+                make_v3_registration(&val, [42u8; 32], "127.0.0.1:9000")
+            },
         };
         let delegate: StakeTableEvent = Delegated {
             delegator: Address::random(),
@@ -3246,8 +3236,9 @@ mod tests {
 
         let event = match version {
             StakeTableContractVersion::V1 => StakeTableEvent::Register((&validator).into()),
-            StakeTableContractVersion::V2 | StakeTableContractVersion::V3 => {
-                StakeTableEvent::RegisterV2((&validator).into())
+            StakeTableContractVersion::V2 => StakeTableEvent::RegisterV2((&validator).into()),
+            StakeTableContractVersion::V3 => {
+                make_v3_registration(&validator, [42u8; 32], "127.0.0.1:9000")
             },
         };
 
@@ -3271,9 +3262,14 @@ mod tests {
             StakeTableContractVersion::V1 => {
                 stake_table_state.apply_event(StakeTableEvent::Register((&test_validator).into()))
             },
-            StakeTableContractVersion::V2 | StakeTableContractVersion::V3 => {
+            StakeTableContractVersion::V2 => {
                 stake_table_state.apply_event(StakeTableEvent::RegisterV2((&test_validator).into()))
             },
+            StakeTableContractVersion::V3 => stake_table_state.apply_event(make_v3_registration(
+                &test_validator,
+                [42u8; 32],
+                "127.0.0.1:9000",
+            )),
         }
         .unwrap()
         .unwrap(); // Expect the first registration to succeed

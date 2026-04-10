@@ -18,7 +18,7 @@ use jf_signature::{
 };
 
 use crate::sol_types::{
-    StakeTableV2::{ConsensusKeysUpdatedV2, ValidatorRegisteredV2, getVersionReturn},
+    StakeTableV2::{self, ConsensusKeysUpdatedV2, ValidatorRegisteredV2, getVersionReturn},
     StakeTableV3, *,
 };
 
@@ -210,6 +210,32 @@ impl ConsensusKeysUpdatedV2 {
             self.blsVK,
             self.schnorrVK,
             self.blsSig.into(),
+            &self.schnorrSig,
+        )?;
+        Ok(())
+    }
+}
+
+impl StakeTableV3::ValidatorRegisteredV2 {
+    pub fn authenticate(&self) -> Result<(), StakeTableSolError> {
+        authenticate_stake_table_validator_event(
+            self.account,
+            self.blsVK.clone().into(),
+            self.schnorrVK.clone().into(),
+            self.blsSig.clone().into(),
+            &self.schnorrSig,
+        )?;
+        Ok(())
+    }
+}
+
+impl StakeTableV3::ConsensusKeysUpdatedV2 {
+    pub fn authenticate(&self) -> Result<(), StakeTableSolError> {
+        authenticate_stake_table_validator_event(
+            self.account,
+            self.blsVK.clone().into(),
+            self.schnorrVK.clone().into(),
+            self.blsSig.clone().into(),
             &self.schnorrSig,
         )?;
         Ok(())

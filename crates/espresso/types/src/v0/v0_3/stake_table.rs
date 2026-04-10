@@ -155,8 +155,16 @@ impl<KEY: SignatureKey> Committable for RegisteredValidator<KEY> {
             .fixed_size_field("stake", &to_fixed_bytes(self.stake))
             .constant_str("commission")
             .u16(self.commission);
-            //.var_size_field("x25519_key", self.x25519_key.as_ref().map(|k| k.as_slice()).unwrap_or_default())
-            //.var_size_field("p2p_addr", self.p2p_addr.as_ref().map(|a| a.to_string()).unwrap_or_default().as_bytes());
+
+        // x25519_key and p2p_addr are included in the commitment only when set.
+        // They are None until StakeTableV3 is deployed and the validator sets them.
+        // This maintains backwards compatibility with pre-V3 commitments.
+        if let Some(key) = &self.x25519_key {
+            builder = builder.var_size_field("x25519_key", key.as_slice());
+        }
+        if let Some(addr) = &self.p2p_addr {
+            builder = builder.var_size_field("p2p_addr", addr.to_string().as_bytes());
+        }
 
         builder = builder.constant_str("delegators");
         for (address, stake) in self.delegators.iter().sorted() {
@@ -242,9 +250,11 @@ pub enum StakeTableEvent {
 
 impl PartialEq for StakeTableEvent {
     fn eq(&self, other: &Self) -> bool {
-        // Not all inner types derive PartialEq (V3 bindings lack it).
-        // Compare via bincode serialization. Only used for dedup, not performance-critical.
-        bincode::serialize(self).ok() == bincode::serialize(other).ok()
+        // V3 binding event structs don't derive PartialEq. Compare via serialization.
+        match (bincode::serialize(self), bincode::serialize(other)) {
+            (Ok(a), Ok(b)) => a == b,
+            _ => false,
+        }
     }
 }
 
@@ -280,6 +290,8 @@ pub enum StakeTableError {
     SchnorrKeyAlreadyUsed(String),
     #[error("x25519 key already used: {0}")]
     X25519KeyAlreadyUsed(String),
+    #[error("Invalid x25519 key: {0}")]
+    InvalidX25519Key(String),
     #[error("Stake table event decode error {0}")]
     StakeTableEventDecodeError(#[from] alloy::sol_types::Error),
     #[error("Stake table events sorting error: {0}")]
@@ -356,6 +368,26 @@ mod tests {
     use hotshot_types::light_client::StateVerKey;
 
     use super::RegisteredValidator;
+
+    /// When x25519_key and p2p_addr are None (pre-V3), the commitment must remain unchanged.
+    /// Setting these fields must produce a different commitment.
+    #[test]
+    fn test_commitment_backwards_compat_none_fields() {
+        use hotshot_types::{addr::NetAddr, x25519};
+
+        let val = RegisteredValidator::<BLSPubKey>::mock();
+        assert!(val.x25519_key.is_none());
+        assert!(val.p2p_addr.is_none());
+        let commit_without = val.commit();
+
+        let mut val_with = val.clone();
+        val_with.x25519_key =
+            Some(x25519::PublicKey::try_from([42u8; 32].as_slice()).unwrap());
+        val_with.p2p_addr = Some("127.0.0.1:8080".parse::<NetAddr>().unwrap());
+        let commit_with = val_with.commit();
+
+        assert_ne!(commit_without, commit_with);
+    }
 
     /// Unauthenticated validators must produce a different commitment than authenticated ones.
     /// This ensures validators with invalid signatures are distinguishable in the commitment tree.

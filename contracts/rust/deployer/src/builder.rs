@@ -628,14 +628,20 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
         Ok(())
     }
 
-    /// Deploy all contracts
-    pub async fn deploy_all(&self, contracts: &mut Contracts) -> Result<()> {
+    /// Deploy all contracts up to and including V2.
+    pub async fn deploy_to_v2(&self, contracts: &mut Contracts) -> Result<()> {
         self.deploy_to_stake_table_v1(contracts).await?;
         self.deploy(contracts, Contract::StakeTableV2).await?;
-        self.deploy(contracts, Contract::StakeTableV3).await?;
         self.deploy(contracts, Contract::LightClientV3).await?;
         self.deploy(contracts, Contract::RewardClaimProxy).await?;
         self.deploy(contracts, Contract::EspTokenV2).await?;
+        Ok(())
+    }
+
+    /// Deploy all contracts including V3.
+    pub async fn deploy_all(&self, contracts: &mut Contracts) -> Result<()> {
+        self.deploy_to_v2(contracts).await?;
+        self.deploy(contracts, Contract::StakeTableV3).await?;
         Ok(())
     }
 
