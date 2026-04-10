@@ -194,11 +194,11 @@ async fn run_node<I: NodeImplementation<TestTypes>>(
                 last_view = *view;
             }
 
-            if let Err(err) = coord.process_consensus_output(output).await {
-                if err.severity == Severity::Critical {
-                    tracing::error!(%err, node = %coord.node_id(), "critical error processing output");
-                    return;
-                }
+            if let Err(err) = coord.process_consensus_output(output).await
+                && err.severity == Severity::Critical
+            {
+                tracing::error!(%err, node = %coord.node_id(), "critical error processing output");
+                return;
             }
         }
     }
