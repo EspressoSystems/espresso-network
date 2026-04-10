@@ -10,7 +10,7 @@ pub fn migrate_legacy_env_vars() {
         // ── contracts/rust/deployment-info/src/addresses.rs ──
         // ESP token proxy contract address
         (
-            "ESPRESSO_ESP_TOKEN_PROXY_ADDRESS",
+            "ESP_TOKEN_PROXY_ADDRESS",
             "ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS",
         ),
         // Fee contract proxy address
@@ -707,13 +707,10 @@ pub fn migrate_legacy_env_vars() {
             "ESPRESSO_SEQUENCER_STAKE_TABLE_V2_ADDRESS",
         ),
         // ESP token contract address
-        (
-            "ESPRESSO_ESP_TOKEN_ADDRESS",
-            "ESPRESSO_SEQUENCER_ESP_TOKEN_ADDRESS",
-        ),
+        ("ESP_TOKEN_ADDRESS", "ESPRESSO_SEQUENCER_ESP_TOKEN_ADDRESS"),
         // ESP token V2 contract address
         (
-            "ESPRESSO_ESP_TOKEN_V2_ADDRESS",
+            "ESP_TOKEN_V2_ADDRESS",
             "ESPRESSO_SEQUENCER_ESP_TOKEN_V2_ADDRESS",
         ),
         // Fee contract address
