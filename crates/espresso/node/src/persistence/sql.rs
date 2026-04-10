@@ -24,7 +24,9 @@ use espresso_types::{
         AuthenticatedValidator, EventKey, IndexedStake, RegisteredValidator, RewardAmount,
         StakeTableEvent,
     },
-    v0_4::{REWARD_MERKLE_TREE_V2_HEIGHT, RewardAccountV2, RewardMerkleTreeV2},
+    v0_4::{RewardAccountV2, RewardMerkleTreeV2, REWARD_MERKLE_TREE_V2_HEIGHT},
+    AuthenticatedValidatorMap, BackoffParams, BlockMerkleTree, FeeMerkleTree, Leaf, Leaf2,
+    NetworkConfig, Payload, PubKey, Ratio, RegisteredValidatorMap, StakeTableHash,
 };
 use futures::stream::StreamExt;
 use hotshot::InitializerEpochInfo;
@@ -1159,12 +1161,6 @@ impl Persistence {
                     .await?;
                     tx.execute(
                         query("DELETE FROM state_cert where view >= $1 AND view <= $2")
-                            .bind(from_view_i64)
-                            .bind(to_view_i64),
-                    )
-                    .await?;
-                    tx.execute(
-                        query("DELETE FROM decided_cert2 where view >= $1 AND view <= $2")
                             .bind(from_view_i64)
                             .bind(to_view_i64),
                     )
