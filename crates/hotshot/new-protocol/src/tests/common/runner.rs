@@ -140,10 +140,21 @@ impl TestRunner {
             }
         }
 
-        // Verify all nodes decided the same set of leaves.
-        let expected = &node_commits[0];
-        for (i, set) in node_commits.iter().enumerate().skip(1) {
-            if expected != set {
+        // Drain remaining messages so every node's commit set is up to date.
+        // Nodes may have continued deciding while we waited for slower peers.
+        for (idx, rx) in output_channels.iter_mut().enumerate() {
+            while let Ok(seq) = rx.try_recv() {
+                node_commits[idx] = seq;
+            }
+        }
+
+        // Verify chain consistency: the smallest decided set must be a subset
+        // of every other node's set.  Nodes may be at different heights (some
+        // decided more leaves), but a correct consensus never produces
+        // conflicting leaves.
+        let reference = node_commits.iter().min_by_key(|s| s.len()).unwrap().clone();
+        for (i, set) in node_commits.iter().enumerate() {
+            if !reference.is_subset(set) {
                 return Err(TestError::ChainDivergence { node: i });
             }
         }
