@@ -30,29 +30,55 @@ func (p Ports) DevNodeURL() string {
 	return fmt.Sprintf("http://localhost:%d", p.DevNode)
 }
 
-func AllocatePorts() (Ports, error) {
-	ports := make([]int, 3)
-	listeners := make([]net.Listener, 3)
-	for i := range listeners {
-		l, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			// Close any already opened listeners.
-			for j := 0; j < i; j++ {
-				listeners[j].Close()
-			}
-			return Ports{}, fmt.Errorf("failed to allocate port: %w", err)
-		}
-		listeners[i] = l
-		ports[i] = l.Addr().(*net.TCPAddr).Port
+// reservePort allocates a free TCP port and puts it into TIME_WAIT state.
+// This prevents the OS from handing it out via ephemeral allocation, while
+// still allowing explicit binds (like the dev node will do).
+// Mirrors the Rust reserve_tcp_port() in test-utils/src/lib.rs.
+func reservePort() (int, error) {
+	server, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return 0, fmt.Errorf("failed to listen: %w", err)
 	}
-	// Close all listeners so the dev node can bind to these ports.
-	for _, l := range listeners {
-		l.Close()
+	addr := server.Addr().(*net.TCPAddr)
+	port := addr.Port
+
+	// Complete a TCP handshake to force TIME_WAIT on close.
+	client, err := net.Dial("tcp", addr.String())
+	if err != nil {
+		server.Close()
+		return 0, fmt.Errorf("failed to dial: %w", err)
+	}
+	accepted, err := server.Accept()
+	if err != nil {
+		client.Close()
+		server.Close()
+		return 0, fmt.Errorf("failed to accept: %w", err)
+	}
+	// Close all sockets -- port enters TIME_WAIT.
+	accepted.Close()
+	client.Close()
+	server.Close()
+
+	return port, nil
+}
+
+func AllocatePorts() (Ports, error) {
+	apiPort, err := reservePort()
+	if err != nil {
+		return Ports{}, err
+	}
+	builderPort, err := reservePort()
+	if err != nil {
+		return Ports{}, err
+	}
+	devNodePort, err := reservePort()
+	if err != nil {
+		return Ports{}, err
 	}
 	return Ports{
-		SequencerAPI: ports[0],
-		Builder:      ports[1],
-		DevNode:      ports[2],
+		SequencerAPI: apiPort,
+		Builder:      builderPort,
+		DevNode:      devNodePort,
 	}, nil
 }
 
