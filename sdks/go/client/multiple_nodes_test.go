@@ -156,15 +156,15 @@ func TestFetchWithMajority(t *testing.T) {
 }
 
 func TestApiWithSingleEspressoDevNode(t *testing.T) {
-	ctx := setupDevNode(t)
+	ctx, info := setupDevNode(t)
 
 	// Test constructing the client with a single url to ensure that it requires more than one.
-	_, err := NewMultipleNodesClient([]string{devNodeURL})
+	_, err := NewMultipleNodesClient([]string{info.nodeURL})
 	if err == nil {
 		t.Fatal("Constructing the client with 1 url should result in an error")
 	}
 
-	client, err := NewMultipleNodesClient([]string{devNodeURL, devNodeURL})
+	client, err := NewMultipleNodesClient([]string{info.nodeURL, info.nodeURL})
 	if err != nil {
 		t.Fatal("Constructing the client with more than 1 url should succeed")
 	}
@@ -199,8 +199,8 @@ func TestApiWithSingleEspressoDevNode(t *testing.T) {
 }
 
 func TestNamespaceTransactionsInRangeForMultiClient(t *testing.T) {
-	ctx := setupDevNode(t)
-	client, err := NewMultipleNodesClient([]string{devNodeURL, devNodeURL})
+	ctx, info := setupDevNode(t)
+	client, err := NewMultipleNodesClient([]string{info.nodeURL, info.nodeURL})
 	require.NoError(t, err)
 	testNamespaceTransactionsInRange(t, ctx, client, "multi-client namespace test")
 }
