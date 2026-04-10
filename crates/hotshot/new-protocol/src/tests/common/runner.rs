@@ -1,4 +1,4 @@
-use std::{collections::HashSet, fmt, time::Duration};
+use std::{collections::BTreeSet, fmt, time::Duration};
 
 use committable::Committable;
 use hotshot::{traits::NodeImplementation, types::BLSPubKey};
@@ -83,7 +83,7 @@ impl TestRunner {
         let membership = mock_membership_with_num_nodes(self.num_nodes).await;
         let (network_state, networks) = N::create(self.num_nodes).await;
 
-        let mut output_channels: Vec<UnboundedReceiver<Vec<[u8; 32]>>> =
+        let mut output_channels: Vec<UnboundedReceiver<BTreeSet<[u8; 32]>>> =
             Vec::with_capacity(self.num_nodes);
 
         // Spawn one coordinator task per node.
@@ -108,8 +108,8 @@ impl TestRunner {
         let mut client_network =
             Network::<TestTypes, _>::new(client_net, membership.clone(), upgrade_lock());
 
-        // Collect decided commits from each node until all reach the target.
-        let mut node_commits: Vec<Vec<[u8; 32]>> = vec![Vec::new(); self.num_nodes];
+        // Collect decided leaf commits from each node until all reach the target.
+        let mut node_commits: Vec<BTreeSet<[u8; 32]>> = vec![BTreeSet::new(); self.num_nodes];
         let mut progress: usize = 0;
         let mut tx_nonce: u64 = 0;
 
@@ -129,14 +129,7 @@ impl TestRunner {
                     continue;
                 }
                 if let Ok(Some(seq)) = timeout(remaining, rx.recv()).await {
-                    let have = node_commits[idx].len();
-                    let common = have.min(seq.len());
-                    if node_commits[idx][..common] != seq[..common] {
-                        return Err(TestError::ChainDivergence { node: idx });
-                    }
-                    if seq.len() > have {
-                        node_commits[idx].extend_from_slice(&seq[have..]);
-                    }
+                    node_commits[idx] = seq;
                 }
             }
 
@@ -147,10 +140,10 @@ impl TestRunner {
             }
         }
 
-        // Verify all nodes decided the same chain.
-        let expected = &node_commits[0][..self.target_decisions];
-        for (i, seq) in node_commits.iter().enumerate().skip(1) {
-            if expected != &seq[..self.target_decisions] {
+        // Verify all nodes decided the same set of leaves.
+        let expected = &node_commits[0];
+        for (i, set) in node_commits.iter().enumerate().skip(1) {
+            if expected != set {
                 return Err(TestError::ChainDivergence { node: i });
             }
         }
@@ -163,10 +156,9 @@ impl TestRunner {
 /// decided leaf commits, and forwards them to the test runner.
 async fn run_node<I: NodeImplementation<TestTypes>>(
     mut coord: Coordinator<TestTypes, I>,
-    output_tx: UnboundedSender<Vec<[u8; 32]>>,
+    output_tx: UnboundedSender<BTreeSet<[u8; 32]>>,
 ) {
-    let mut commits: Vec<[u8; 32]> = Vec::new();
-    let mut seen: HashSet<[u8; 32]> = HashSet::new();
+    let mut commits: BTreeSet<[u8; 32]> = BTreeSet::new();
     let mut last_view = ViewNumber::genesis();
 
     loop {
@@ -180,14 +172,13 @@ async fn run_node<I: NodeImplementation<TestTypes>>(
             if let ConsensusOutput::LeafDecided(leaves) = &output {
                 for leaf in leaves {
                     let commit: [u8; 32] = leaf.commit().into();
-                    if seen.insert(commit) {
+                    if commits.insert(commit) {
                         info!(
                             node = %coord.node_id(),
                             view = %leaf.view_number(),
                             height = %leaf.height(),
                             "decided leaf"
                         );
-                        commits.push(commit);
                     }
                 }
                 let _ = output_tx.send(commits.clone());

@@ -201,15 +201,6 @@ impl<T: NodeType> Consensus<T> {
         outbox: &mut Outbox<ConsensusOutput<T>>,
     ) {
         let view = input.view_number();
-        // Ignore old inputs unless it's a DRB result
-        // TODO: This isn't correct, I think we need to process vote2 for views
-        // that haven't timed out, but are before the timeout view
-        if !matches!(input, ConsensusInput::DrbResult(_, _))
-            && !matches!(input, ConsensusInput::Timeout(..))
-            && view <= self.timeout_view
-        {
-            return;
-        }
         let proto = match input {
             ConsensusInput::Proposal(proposal) => self.handle_proposal(proposal, outbox).await,
             ConsensusInput::Certificate1(certificate) => {
@@ -842,6 +833,9 @@ impl<T: NodeType> Consensus<T> {
 
     #[instrument(level = "debug", skip_all)]
     async fn maybe_vote_1(&mut self, view: ViewNumber, outbox: &mut Outbox<ConsensusOutput<T>>) {
+        if view <= self.timeout_view {
+            return;
+        }
         if self.voted_1_views.contains(&view) {
             return;
         }
