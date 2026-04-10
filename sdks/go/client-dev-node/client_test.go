@@ -19,8 +19,7 @@ func TestFetchDevInfo(t *testing.T) {
 	require.NoError(t, err, "failed to allocate ports")
 
 	dir := t.TempDir()
-	cleanup := devnode.Start(t, ctx, ports, dir)
-	t.Cleanup(cleanup)
+	devnode.Start(t, ctx, ports, dir)
 
 	client := NewClient(fmt.Sprintf("%s/v0", ports.DevNodeURL()))
 
@@ -30,7 +29,7 @@ func TestFetchDevInfo(t *testing.T) {
 			break
 		}
 		if ctx.Err() != nil {
-			t.Fatal("timed out waiting for node to be available", err)
+			t.Fatal("timed out waiting for node to be available")
 		}
 		t.Log("waiting for node to be available", err)
 		time.Sleep(1 * time.Second)

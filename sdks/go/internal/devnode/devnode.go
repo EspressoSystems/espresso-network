@@ -82,7 +82,7 @@ func AllocatePorts() (Ports, error) {
 	}, nil
 }
 
-func Start(t *testing.T, ctx context.Context, ports Ports, storageDir string) func() {
+func Start(t *testing.T, ctx context.Context, ports Ports, storageDir string) {
 	t.Helper()
 
 	storageDir, err := filepath.Abs(storageDir)
@@ -100,8 +100,11 @@ func Start(t *testing.T, ctx context.Context, ports Ports, storageDir string) fu
 	} else {
 		t.Log("ESPRESSO_DEV_NODE_BIN not set, falling back to cargo run")
 		p = exec.CommandContext(ctx, "cargo", "run", "-p", "espresso-dev-node")
-		// Resolve repo root from this source file: sdks/go/internal/devnode/devnode.go
-		_, thisFile, _, _ := runtime.Caller(0)
+		// Resolve repo root from this source file at sdks/go/internal/devnode/
+		_, thisFile, _, ok := runtime.Caller(0)
+		if !ok {
+			t.Fatal("runtime.Caller failed")
+		}
 		p.Dir = filepath.Join(filepath.Dir(thisFile), "..", "..", "..", "..")
 	}
 
@@ -125,7 +128,6 @@ func Start(t *testing.T, ctx context.Context, ports Ports, storageDir string) fu
 	p.Env = env
 
 	if err := p.Start(); err != nil {
-		logFile.Close()
 		t.Fatalf("failed to start dev node: %v", err)
 	}
 
@@ -135,6 +137,7 @@ func Start(t *testing.T, ctx context.Context, ports Ports, storageDir string) fu
 		done <- p.Wait()
 	}()
 
+	// Cleanups run in LIFO order: kill process first, then read/close log.
 	t.Cleanup(func() {
 		logFile.Close()
 		if t.Failed() {
@@ -146,15 +149,13 @@ func Start(t *testing.T, ctx context.Context, ports Ports, storageDir string) fu
 			}
 		}
 	})
-
-	return func() {
+	t.Cleanup(func() {
 		if p.Process != nil {
 			_ = p.Process.Kill()
-			// Wait for process to actually exit to avoid zombies.
 			select {
 			case <-done:
 			case <-time.After(5 * time.Second):
 			}
 		}
-	}
+	})
 }

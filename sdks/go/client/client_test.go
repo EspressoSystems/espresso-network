@@ -26,8 +26,7 @@ func setupDevNode(t *testing.T) (context.Context, devNodeInfo) {
 	require.NoError(t, err, "failed to allocate ports")
 
 	dir := t.TempDir()
-	cleanup := devnode.Start(t, ctx, ports, dir)
-	t.Cleanup(cleanup)
+	devnode.Start(t, ctx, ports, dir)
 
 	err = waitForEspressoNode(ctx, ports.NodeURL())
 	require.NoError(t, err, "failed to start espresso dev node")
