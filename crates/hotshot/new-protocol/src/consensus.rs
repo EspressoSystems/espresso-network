@@ -222,7 +222,8 @@ impl<T: NodeType> Consensus<T> {
                 self.vid_shares.remove(&state_response.view);
                 return;
             },
-            ConsensusInput::Timeout(view, epoch) | ConsensusInput::TimeoutOneHonest(view, epoch) => {
+            ConsensusInput::Timeout(view, epoch)
+            | ConsensusInput::TimeoutOneHonest(view, epoch) => {
                 self.handle_timeout(view, epoch, outbox)
             },
             ConsensusInput::BlockBuilt {
