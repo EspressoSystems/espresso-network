@@ -62,6 +62,7 @@ test(test_vid2_success) |
 test(test_combined_network_half_dc) |
 test(test_staggered_restart_first_block) |
 test(/test_staggered_restart$/) |
+binary(test_epoch_success_overlap_2_f) |
 binary(test_epoch_success_overlap_3f) |
 binary(test_epoch_success_types_randomized_leader)
 """
