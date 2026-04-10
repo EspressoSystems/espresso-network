@@ -33,7 +33,7 @@ use hotshot_contract_adapter::sol_types::{
         Undelegated, UndelegatedV2, ValidatorExit, ValidatorExitV2, ValidatorRegistered,
         ValidatorRegisteredV2,
     },
-    StakeTableV3::{NetworkConfigUpdated, StakeTableV3Events, ValidatorRegisteredV3},
+    StakeTableV3::{P2pAddrUpdated, StakeTableV3Events, ValidatorRegisteredV3, X25519KeyUpdated},
 };
 use hotshot_types::{
     PeerConfig, PeerConnectInfo,
@@ -175,9 +175,8 @@ impl TryFrom<StakeTableV3Events> for StakeTableEvent {
             StakeTableV3Events::CommissionUpdated(v) => {
                 Ok(StakeTableEvent::CommissionUpdate(transmute_v3_to_v2(v)))
             },
-            StakeTableV3Events::NetworkConfigUpdated(v) => {
-                Ok(StakeTableEvent::NetworkConfigUpdate(v))
-            },
+            StakeTableV3Events::X25519KeyUpdated(v) => Ok(StakeTableEvent::X25519KeyUpdate(v)),
+            StakeTableV3Events::P2pAddrUpdated(v) => Ok(StakeTableEvent::P2pAddrUpdate(v)),
             StakeTableV3Events::ExitEscrowPeriodUpdated(v) => Err(anyhow::anyhow!(
                 "Unsupported StakeTableV3Events::ExitEscrowPeriodUpdated({v:?})"
             )),
@@ -760,9 +759,33 @@ impl StakeTableState {
                 });
             },
 
-            StakeTableEvent::NetworkConfigUpdate(NetworkConfigUpdated {
+            StakeTableEvent::X25519KeyUpdate(X25519KeyUpdated {
                 validator,
                 x25519Key,
+            }) => {
+                let val = self
+                    .validators
+                    .get_mut(&validator)
+                    .ok_or(StakeTableError::ValidatorNotFound(validator))?;
+
+                let key = x25519::PublicKey::try_from(x25519Key.0.as_slice()).map_err(|e| {
+                    StakeTableError::X25519KeyAlreadyUsed(format!(
+                        "invalid x25519 key {:?}: {e}",
+                        x25519Key
+                    ))
+                })?;
+                if self.used_x25519_keys.contains(&key) {
+                    return Err(StakeTableError::X25519KeyAlreadyUsed(format!(
+                        "{:?}",
+                        x25519Key
+                    )));
+                }
+                self.used_x25519_keys.insert(key);
+                val.x25519_key = Some(key);
+            },
+
+            StakeTableEvent::P2pAddrUpdate(P2pAddrUpdated {
+                validator,
                 ref p2pAddr,
             }) => {
                 let val = self
@@ -770,29 +793,10 @@ impl StakeTableState {
                     .get_mut(&validator)
                     .ok_or(StakeTableError::ValidatorNotFound(validator))?;
 
-                // Update x25519 key if non-zero (zero means unchanged)
-                if x25519Key.0 != [0u8; 32] {
-                    if let Ok(key) = x25519::PublicKey::try_from(x25519Key.0.as_slice()) {
-                        if self.used_x25519_keys.contains(&key) {
-                            return Err(StakeTableError::X25519KeyAlreadyUsed(format!(
-                                "{:?}",
-                                x25519Key
-                            )));
-                        }
-                        self.used_x25519_keys.insert(key);
-                        val.x25519_key = Some(key);
-                    } else {
-                        tracing::warn!(validator = ?validator, "Invalid x25519 key in NetworkConfigUpdate");
-                    }
-                }
-
-                // Update p2p addr
                 match p2pAddr.parse::<NetAddr>() {
                     Ok(addr) => val.p2p_addr = Some(addr),
                     Err(e) => {
-                        if !p2pAddr.is_empty() {
-                            tracing::warn!(%e, validator = ?validator, "Failed to parse p2p addr");
-                        }
+                        tracing::warn!(%e, validator = ?validator, "Failed to parse p2p addr");
                         val.p2p_addr = None;
                     },
                 }
@@ -956,8 +960,11 @@ impl std::fmt::Debug for StakeTableEvent {
             StakeTableEvent::RegisterV3(event) => {
                 write!(f, "RegisterV3({:?})", event.account)
             },
-            StakeTableEvent::NetworkConfigUpdate(event) => {
-                write!(f, "NetworkConfigUpdate({:?})", event.validator)
+            StakeTableEvent::X25519KeyUpdate(event) => {
+                write!(f, "X25519KeyUpdate({:?})", event.validator)
+            },
+            StakeTableEvent::P2pAddrUpdate(event) => {
+                write!(f, "P2pAddrUpdate({:?})", event.validator)
             },
         }
     }
@@ -1291,7 +1298,8 @@ impl Fetcher {
                                 ConsensusKeysUpdated::SIGNATURE,
                                 ConsensusKeysUpdatedV2::SIGNATURE,
                                 CommissionUpdated::SIGNATURE,
-                                NetworkConfigUpdated::SIGNATURE,
+                                X25519KeyUpdated::SIGNATURE,
+                                P2pAddrUpdated::SIGNATURE,
                             ])
                             .address(contract)
                             .from_block(from)
@@ -4220,14 +4228,16 @@ mod tests {
         StakeTableEvent::RegisterV3(v3)
     }
 
-    fn make_network_config_update(
-        validator: Address,
-        x25519_key: [u8; 32],
-        p2p_addr: &str,
-    ) -> StakeTableEvent {
-        StakeTableEvent::NetworkConfigUpdate(NetworkConfigUpdated {
+    fn make_x25519_key_update(validator: Address, x25519_key: [u8; 32]) -> StakeTableEvent {
+        StakeTableEvent::X25519KeyUpdate(X25519KeyUpdated {
             validator,
             x25519Key: alloy::primitives::FixedBytes(x25519_key),
+        })
+    }
+
+    fn make_p2p_addr_update(validator: Address, p2p_addr: &str) -> StakeTableEvent {
+        StakeTableEvent::P2pAddrUpdate(P2pAddrUpdated {
+            validator,
             p2pAddr: p2p_addr.to_string(),
         })
     }
@@ -4290,31 +4300,41 @@ mod tests {
     }
 
     #[test]
-    fn test_network_config_update_sets_values() -> anyhow::Result<()> {
+    fn test_x25519_key_update_sets_value() -> anyhow::Result<()> {
         let val = TestValidator::random();
 
         let mut state = StakeTableState::default();
-        // Register via V2 (no x25519/p2p)
         state.apply_event(StakeTableEvent::RegisterV2((&val).into()))??;
 
-        let registered = state.validators().get(&val.account).unwrap();
-        assert_eq!(registered.x25519_key, None);
-        assert_eq!(registered.p2p_addr, None);
+        assert_eq!(
+            state.validators().get(&val.account).unwrap().x25519_key,
+            None
+        );
 
-        // Apply NetworkConfigUpdate
         let x25519_key = [99u8; 32];
-        let p2p_addr = "10.0.0.1:8080";
-        state.apply_event(make_network_config_update(
-            val.account,
-            x25519_key,
-            p2p_addr,
-        ))??;
+        state.apply_event(make_x25519_key_update(val.account, x25519_key))??;
 
         let registered = state.validators().get(&val.account).unwrap();
         let expected_x25519 =
             x25519::PublicKey::try_from(x25519_key.as_slice()).expect("valid x25519 key");
         assert_eq!(registered.x25519_key, Some(expected_x25519));
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_p2p_addr_update_sets_value() -> anyhow::Result<()> {
+        let val = TestValidator::random();
+
+        let mut state = StakeTableState::default();
+        state.apply_event(StakeTableEvent::RegisterV2((&val).into()))??;
+
+        assert_eq!(state.validators().get(&val.account).unwrap().p2p_addr, None);
+
+        let p2p_addr = "10.0.0.1:8080";
+        state.apply_event(make_p2p_addr_update(val.account, p2p_addr))??;
+
+        let registered = state.validators().get(&val.account).unwrap();
         let expected_p2p: NetAddr = p2p_addr.parse().expect("valid p2p addr");
         assert_eq!(registered.p2p_addr, Some(expected_p2p));
 
@@ -4322,50 +4342,25 @@ mod tests {
     }
 
     #[test]
-    fn test_network_config_update_unknown_validator() {
+    fn test_x25519_key_update_unknown_validator() {
         let mut state = StakeTableState::default();
         let unknown = Address::random();
 
-        let result = state.apply_event(make_network_config_update(
-            unknown,
-            [1u8; 32],
-            "127.0.0.1:9000",
-        ));
+        let result = state.apply_event(make_x25519_key_update(unknown, [1u8; 32]));
         assert_matches!(result, Err(StakeTableError::ValidatorNotFound(addr)) if addr == unknown);
     }
 
     #[test]
-    fn test_network_config_update_zero_x25519_skips_key() -> anyhow::Result<()> {
-        let val = TestValidator::random();
-        let original_key = [77u8; 32];
-
+    fn test_p2p_addr_update_unknown_validator() {
         let mut state = StakeTableState::default();
-        // Register with x25519 key via V3
-        state.apply_event(make_v3_registration(&val, original_key, "127.0.0.1:9000"))??;
+        let unknown = Address::random();
 
-        let expected_x25519 =
-            x25519::PublicKey::try_from(original_key.as_slice()).expect("valid x25519 key");
-        assert_eq!(
-            state.validators().get(&val.account).unwrap().x25519_key,
-            Some(expected_x25519)
-        );
-
-        // Update with zero x25519 key -- should only update p2p, not change x25519
-        let new_p2p = "10.0.0.2:7777";
-        state.apply_event(make_network_config_update(val.account, [0u8; 32], new_p2p))??;
-
-        let registered = state.validators().get(&val.account).unwrap();
-        // x25519 key should remain unchanged
-        assert_eq!(registered.x25519_key, Some(expected_x25519));
-        // p2p should be updated
-        let expected_p2p: NetAddr = new_p2p.parse().expect("valid p2p addr");
-        assert_eq!(registered.p2p_addr, Some(expected_p2p));
-
-        Ok(())
+        let result = state.apply_event(make_p2p_addr_update(unknown, "127.0.0.1:9000"));
+        assert_matches!(result, Err(StakeTableError::ValidatorNotFound(addr)) if addr == unknown);
     }
 
     #[test]
-    fn test_network_config_update_duplicate_x25519() -> anyhow::Result<()> {
+    fn test_x25519_key_update_duplicate() -> anyhow::Result<()> {
         let val1 = TestValidator::random();
         let val2 = TestValidator::random();
         let shared_key = [55u8; 32];
@@ -4376,33 +4371,25 @@ mod tests {
         state.apply_event(make_v3_registration(&val2, [2u8; 32], "127.0.0.1:9001"))??;
 
         // Try to update val2's x25519 key to the same as val1's
-        let result = state.apply_event(make_network_config_update(
-            val2.account,
-            shared_key,
-            "127.0.0.1:9001",
-        ));
+        let result = state.apply_event(make_x25519_key_update(val2.account, shared_key));
         assert_matches!(result, Err(StakeTableError::X25519KeyAlreadyUsed(_)));
 
         Ok(())
     }
 
     #[test]
-    fn test_network_config_update_hostname_p2p() -> anyhow::Result<()> {
+    fn test_p2p_addr_update_hostname() -> anyhow::Result<()> {
         let val = TestValidator::random();
 
         let mut state = StakeTableState::default();
         state.apply_event(StakeTableEvent::RegisterV2((&val).into()))??;
 
-        // Apply NetworkConfigUpdate with a hostname (non-IP) p2p addr
-        // NetAddr::from_str accepts hostnames as NetAddr::Name
-        state.apply_event(make_network_config_update(
+        state.apply_event(make_p2p_addr_update(
             val.account,
-            [1u8; 32],
             "my-node.example.com:9000",
         ))??;
 
         let registered = state.validators().get(&val.account).unwrap();
-        assert!(registered.x25519_key.is_some());
         let expected_p2p: NetAddr = "my-node.example.com:9000".parse().unwrap();
         assert_eq!(registered.p2p_addr, Some(expected_p2p));
 

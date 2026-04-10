@@ -426,25 +426,54 @@ mod test {
         .assert_success()
         .await?;
 
-        let event = receipt
-            .decoded_log::<hotshot_contract_adapter::sol_types::StakeTableV3::NetworkConfigUpdated>(
-            )
+        let x25519_event = receipt
+            .decoded_log::<hotshot_contract_adapter::sol_types::StakeTableV3::X25519KeyUpdated>()
             .unwrap();
-        assert_eq!(event.validator, system.deployer_address);
-        assert_eq!(event.x25519Key, x25519_key);
-        assert_eq!(event.p2pAddr, p2p_addr);
+        assert_eq!(x25519_event.validator, system.deployer_address);
+        assert_eq!(x25519_event.x25519Key, x25519_key);
+
+        let p2p_event = receipt
+            .decoded_log::<hotshot_contract_adapter::sol_types::StakeTableV3::P2pAddrUpdated>()
+            .unwrap();
+        assert_eq!(p2p_event.validator, system.deployer_address);
+        assert_eq!(p2p_event.p2pAddr, p2p_addr);
 
         Ok(())
     }
 
     #[tokio::test]
-    async fn test_update_p2p_addr() -> Result<()> {
+    async fn test_set_x25519_key() -> Result<()> {
+        let system = TestSystem::deploy_version(StakeTableContractVersion::V3).await?;
+        system.register_validator().await?;
+
+        let x25519_key = alloy::primitives::FixedBytes([42u8; 32]);
+
+        let receipt = Transaction::SetX25519Key {
+            stake_table: system.stake_table,
+            x25519_key,
+        }
+        .send(&system.provider)
+        .await?
+        .assert_success()
+        .await?;
+
+        let event = receipt
+            .decoded_log::<hotshot_contract_adapter::sol_types::StakeTableV3::X25519KeyUpdated>()
+            .unwrap();
+        assert_eq!(event.validator, system.deployer_address);
+        assert_eq!(event.x25519Key, x25519_key);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_set_p2p_addr() -> Result<()> {
         let system = TestSystem::deploy_version(StakeTableContractVersion::V3).await?;
         system.register_validator().await?;
 
         let p2p_addr = "10.0.0.1:9090".to_string();
 
-        let receipt = Transaction::UpdateP2pAddr {
+        let receipt = Transaction::SetP2pAddr {
             stake_table: system.stake_table,
             p2p_addr: p2p_addr.clone(),
         }
@@ -454,11 +483,9 @@ mod test {
         .await?;
 
         let event = receipt
-            .decoded_log::<hotshot_contract_adapter::sol_types::StakeTableV3::NetworkConfigUpdated>(
-            )
+            .decoded_log::<hotshot_contract_adapter::sol_types::StakeTableV3::P2pAddrUpdated>()
             .unwrap();
         assert_eq!(event.validator, system.deployer_address);
-        assert_eq!(event.x25519Key, alloy::primitives::FixedBytes([0u8; 32]));
         assert_eq!(event.p2pAddr, p2p_addr);
 
         Ok(())

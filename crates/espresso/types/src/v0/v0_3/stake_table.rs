@@ -12,7 +12,9 @@ use hotshot_contract_adapter::sol_types::StakeTableV2::{
     CommissionUpdated, ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated, Undelegated,
     UndelegatedV2, ValidatorExit, ValidatorExitV2, ValidatorRegistered, ValidatorRegisteredV2,
 };
-use hotshot_contract_adapter::sol_types::StakeTableV3::{NetworkConfigUpdated, ValidatorRegisteredV3};
+use hotshot_contract_adapter::sol_types::StakeTableV3::{
+    P2pAddrUpdated, ValidatorRegisteredV3, X25519KeyUpdated,
+};
 use hotshot_types::{
     PeerConfig, data::EpochNumber, light_client::StateVerKey, network::PeerConfigKeys, x25519,
     addr::NetAddr
@@ -234,7 +236,8 @@ pub enum StakeTableEvent {
     KeyUpdateV2(ConsensusKeysUpdatedV2),
     CommissionUpdate(CommissionUpdated),
     RegisterV3(ValidatorRegisteredV3),
-    NetworkConfigUpdate(NetworkConfigUpdated),
+    X25519KeyUpdate(X25519KeyUpdated),
+    P2pAddrUpdate(P2pAddrUpdated),
 }
 
 impl PartialEq for StakeTableEvent {

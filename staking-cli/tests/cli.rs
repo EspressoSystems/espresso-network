@@ -77,7 +77,8 @@ fn test_cli_version() -> Result<()> {
 #[case::claim_rewards(&["--espresso-url", "http://localhost:1", "claim-rewards"])]
 #[case::transfer(&["transfer", "--amount", "100", "--to", "0x1111111111111111111111111111111111111111"])]
 #[case::set_network_config(&["set-network-config", "--x25519-key", "0x0000000000000000000000000000000000000000000000000000000000000001", "--p2p-addr", "127.0.0.1:8080"])]
-#[case::update_p2p_addr(&["update-p2p-addr", "--p2p-addr", "127.0.0.1:8080"])]
+#[case::set_x25519_key(&["set-x25519-key", "--x25519-key", "0x0000000000000000000000000000000000000000000000000000000000000001"])]
+#[case::set_p2p_addr(&["set-p2p-addr", "--p2p-addr", "127.0.0.1:8080"])]
 #[test_log::test(tokio::test)]
 async fn test_cli_missing_signer_error(#[case] args: &[&str]) -> Result<()> {
     let system = deploy::TestSystem::deploy().await?;
@@ -2730,13 +2731,29 @@ async fn test_cli_set_network_config() -> Result<()> {
 }
 
 #[test_log::test(tokio::test)]
-async fn test_cli_update_p2p_addr() -> Result<()> {
+async fn test_cli_set_x25519_key() -> Result<()> {
     let system = TestSystem::deploy_version(StakeTableContractVersion::V3).await?;
     system.register_validator().await?;
 
     system
         .cmd(Signer::Mnemonic)
-        .arg("update-p2p-addr")
+        .arg("set-x25519-key")
+        .arg("--x25519-key")
+        .arg("0x0000000000000000000000000000000000000000000000000000000000000042")
+        .assert()
+        .success();
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
+async fn test_cli_set_p2p_addr() -> Result<()> {
+    let system = TestSystem::deploy_version(StakeTableContractVersion::V3).await?;
+    system.register_validator().await?;
+
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("set-p2p-addr")
         .arg("--p2p-addr")
         .arg("192.168.1.1:7070")
         .assert()

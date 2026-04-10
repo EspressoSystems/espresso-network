@@ -26,7 +26,9 @@ use hotshot_contract_adapter::{
             undelegateCall, updateCommissionCall, updateConsensusKeysCall,
             updateConsensusKeysV2Call, updateMetadataUriCall,
         },
-        StakeTableV3::{registerValidatorV3Call, setNetworkConfigCall, updateP2pAddrCall},
+        StakeTableV3::{
+            registerValidatorV3Call, setNetworkConfigCall, setP2pAddrCall, setX25519KeyCall,
+        },
     },
     stake_table::{StakeTableContractVersion, StateSignatureSol},
 };
@@ -97,7 +99,11 @@ pub enum Transaction {
         x25519_key: alloy::primitives::FixedBytes<32>,
         p2p_addr: String,
     },
-    UpdateP2pAddr {
+    SetX25519Key {
+        stake_table: Address,
+        x25519_key: alloy::primitives::FixedBytes<32>,
+    },
+    SetP2pAddr {
         stake_table: Address,
         p2p_addr: String,
     },
@@ -332,18 +338,33 @@ impl Transaction {
                     args: vec![x25519_key.to_string(), p2p_addr],
                 }),
             ),
-            Self::UpdateP2pAddr {
+            Self::SetX25519Key {
+                stake_table,
+                x25519_key,
+            } => (
+                stake_table,
+                setX25519KeyCall {
+                    x25519Key: x25519_key,
+                }
+                .abi_encode()
+                .into(),
+                Some(FunctionInfo {
+                    signature: "setX25519Key(bytes32 x25519Key)".to_string(),
+                    args: vec![x25519_key.to_string()],
+                }),
+            ),
+            Self::SetP2pAddr {
                 stake_table,
                 p2p_addr,
             } => (
                 stake_table,
-                updateP2pAddrCall {
+                setP2pAddrCall {
                     p2pAddr: p2p_addr.clone(),
                 }
                 .abi_encode()
                 .into(),
                 Some(FunctionInfo {
-                    signature: "updateP2pAddr(string p2pAddr)".to_string(),
+                    signature: "setP2pAddr(string p2pAddr)".to_string(),
                     args: vec![p2p_addr],
                 }),
             ),
@@ -405,8 +426,11 @@ impl Transaction {
             Self::SetNetworkConfig { .. } => {
                 "Set network config (x25519 key and p2p address)".to_string()
             },
-            Self::UpdateP2pAddr { p2p_addr, .. } => {
-                format!("Update p2p address to {}", p2p_addr)
+            Self::SetX25519Key { x25519_key, .. } => {
+                format!("Set x25519 key to {}", x25519_key)
+            },
+            Self::SetP2pAddr { p2p_addr, .. } => {
+                format!("Set p2p address to {}", p2p_addr)
             },
             Self::Transfer { to, amount, .. } => {
                 format!("Transfer {} ESP to {}", format_esp(*amount), to)
@@ -464,7 +488,8 @@ impl Transaction {
             | Self::UpdateCommission { .. }
             | Self::UpdateMetadataUri { .. }
             | Self::SetNetworkConfig { .. }
-            | Self::UpdateP2pAddr { .. } => result.maybe_decode_revert::<StakeTableV2Errors>(),
+            | Self::SetX25519Key { .. }
+            | Self::SetP2pAddr { .. } => result.maybe_decode_revert::<StakeTableV2Errors>(),
         }
     }
 
@@ -542,7 +567,11 @@ mod tests {
                 "setNetworkConfig(bytes32 x25519Key, string p2pAddr)",
                 setNetworkConfigCall::SELECTOR,
             ),
-            ("updateP2pAddr(string p2pAddr)", updateP2pAddrCall::SELECTOR),
+            (
+                "setX25519Key(bytes32 x25519Key)",
+                setX25519KeyCall::SELECTOR,
+            ),
+            ("setP2pAddr(string p2pAddr)", setP2pAddrCall::SELECTOR),
         ];
 
         for (named_sig, expected_selector) in cases {

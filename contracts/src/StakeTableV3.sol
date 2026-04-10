@@ -14,7 +14,7 @@ import { BLSSig } from "./libraries/BLSSig.sol";
 /// 1. x25519 encryption key tracking with uniqueness enforcement
 /// 2. p2p address (host:port) validation and registration
 /// 3. `registerValidatorV3` replaces `registerValidatorV2` (which is now deprecated)
-/// 4. `setNetworkConfig` and `updateP2pAddr` for updating network configuration
+/// 4. `setX25519Key`, `setP2pAddr`, and `setNetworkConfig` for updating network configuration
 ///
 /// All new functions are virtual. Deprecated overrides are not virtual (same pattern as V2).
 contract StakeTableV3 is StakeTableV2 {
@@ -44,11 +44,15 @@ contract StakeTableV3 is StakeTableV2 {
         string p2pAddr
     );
 
-    /// @notice A validator updated their network configuration
+    /// @notice A validator updated their x25519 encryption key
     /// @param validator The address of the validator
-    /// @param x25519Key The new x25519 key (bytes32(0) if only p2p address updated)
+    /// @param x25519Key The new x25519 key
+    event X25519KeyUpdated(address indexed validator, bytes32 x25519Key);
+
+    /// @notice A validator updated their p2p address
+    /// @param validator The address of the validator
     /// @param p2pAddr The new p2p address
-    event NetworkConfigUpdated(address indexed validator, bytes32 x25519Key, string p2pAddr);
+    event P2pAddrUpdated(address indexed validator, string p2pAddr);
 
     // === Errors ===
 
@@ -193,12 +197,33 @@ contract StakeTableV3 is StakeTableV2 {
 
     // === Network Config ===
 
+    /// @notice Set or rotate the x25519 encryption key. The key must be unique (never previously
+    /// used). To also update the p2p address, use setNetworkConfig instead.
+    /// @param x25519Key The new x25519 encryption key (must be unique, never previously used)
+    function setX25519Key(bytes32 x25519Key) external virtual whenNotPaused {
+        ensureValidatorActive(msg.sender);
+        require(x25519Key != bytes32(0), InvalidX25519Key());
+        require(!x25519Keys[x25519Key], X25519KeyAlreadyUsed());
+        // Old x25519 keys are intentionally not freed. Key operations are rare for ~100 validators.
+        x25519Keys[x25519Key] = true;
+        emit X25519KeyUpdated(msg.sender, x25519Key);
+    }
+
+    /// @notice Update the p2p address. Use for operational changes like server migration.
+    /// @param p2pAddr The new p2p address (host:port)
+    function setP2pAddr(string memory p2pAddr) external virtual whenNotPaused {
+        ensureValidatorActive(msg.sender);
+        validateP2pAddr(p2pAddr);
+        emit P2pAddrUpdated(msg.sender, p2pAddr);
+    }
+
     /// @notice Set x25519 key and p2p address for an active validator.
     ///
     /// Primary use: initial configuration for validators registered before V3. Also usable to
     /// rotate the x25519 key. The x25519 key must be new (never used before); the p2p address
-    /// may be the same as the current one. To update only the p2p address without rotating the
-    /// x25519 key, use `updateP2pAddr` instead.
+    /// may be the same as the current one.
+    ///
+    /// Emits both X25519KeyUpdated and P2pAddrUpdated.
     ///
     /// @param x25519Key The new x25519 encryption key (must be unique, never previously used)
     /// @param p2pAddr The p2p address (host:port)
@@ -211,21 +236,11 @@ contract StakeTableV3 is StakeTableV2 {
 
         require(x25519Key != bytes32(0), InvalidX25519Key());
         require(!x25519Keys[x25519Key], X25519KeyAlreadyUsed());
-        validateP2pAddr(p2pAddr);
-
         // Old x25519 keys are intentionally not freed. Key operations are rare for ~100 validators.
         x25519Keys[x25519Key] = true;
+        emit X25519KeyUpdated(msg.sender, x25519Key);
 
-        emit NetworkConfigUpdated(msg.sender, x25519Key, p2pAddr);
-    }
-
-    /// @notice Update only the p2p address for an active validator. Does not change the x25519 key.
-    /// Use this for operational changes like server migration or IP rotation.
-    /// @param p2pAddr The new p2p address (host:port)
-    function updateP2pAddr(string memory p2pAddr) external virtual whenNotPaused {
-        ensureValidatorActive(msg.sender);
         validateP2pAddr(p2pAddr);
-
-        emit NetworkConfigUpdated(msg.sender, bytes32(0), p2pAddr);
+        emit P2pAddrUpdated(msg.sender, p2pAddr);
     }
 }

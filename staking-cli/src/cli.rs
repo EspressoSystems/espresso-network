@@ -732,11 +732,20 @@ pub async fn run() -> Result<()> {
                 p2p_addr: p2p_addr.clone(),
             }
         },
-        Commands::UpdateP2pAddr { p2p_addr } => {
+        Commands::SetX25519Key { x25519_key } => {
             if !config.export_calldata {
                 wallet.as_ref().ok_or_else(&require_wallet)?;
             }
-            Transaction::UpdateP2pAddr {
+            Transaction::SetX25519Key {
+                stake_table: stake_table_addr,
+                x25519_key: *x25519_key,
+            }
+        },
+        Commands::SetP2pAddr { p2p_addr } => {
+            if !config.export_calldata {
+                wallet.as_ref().ok_or_else(&require_wallet)?;
+            }
+            Transaction::SetP2pAddr {
                 stake_table: stake_table_addr,
                 p2p_addr: p2p_addr.clone(),
             }
