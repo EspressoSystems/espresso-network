@@ -1187,10 +1187,10 @@ const WRITE_BACKOFF: BackoffParams = BackoffParams::new(
 );
 
 fn is_serialization_error(err: &anyhow::Error) -> bool {
-    if let Some(sqlx::Error::Database(db_err)) = err.downcast_ref::<sqlx::Error>() {
-        return db_err.code().as_deref() == Some(PG_SERIALIZATION_FAILURE_CODE);
-    }
-    false
+    err.chain()
+        .filter_map(|e| e.downcast_ref::<sqlx::Error>())
+        .filter_map(|e| e.as_database_error())
+        .any(|e| e.code().as_deref() == Some(PG_SERIALIZATION_FAILURE_CODE))
 }
 
 const PRUNE_TABLES: &[&str] = &[
