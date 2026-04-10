@@ -559,8 +559,6 @@ async fn test_node_votes_with_computed_drb_in_epoch3() {
     );
 }
 
-/// Certificate1 formed from votes and certificate2 received from network
-/// are each forwarded exactly once. Duplicates from either source are ignored.
 /// f+1 timeout votes (OneHonestThreshold) trigger a TimeoutOneHonest input,
 /// which causes the node to emit its own timeout vote.
 #[tokio::test]
