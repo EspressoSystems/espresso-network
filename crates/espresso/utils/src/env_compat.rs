@@ -566,6 +566,12 @@ pub fn migrate_legacy_env_vars() {
             "ESPRESSO_NODE_PROPOSAL_FETCHER_NUM_WORKERS",
             "ESPRESSO_SEQUENCER_PROPOSAL_FETCHER_NUM_WORKERS",
         ),
+        // ── crates/espresso/types/src/v0/v0_4/state.rs ──
+        // Reward merkle tree concurrent update permits
+        (
+            "ESPRESSO_NODE_REWARD_MERKLE_TREE_PERMITS",
+            "ESPRESSO_SEQUENCER_REWARD_MERKLE_TREE_PERMITS",
+        ),
         // ── crates/espresso/types/src/v0/utils.rs ──
         // Disable catchup retries after first failure
         (
