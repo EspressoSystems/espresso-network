@@ -183,8 +183,8 @@ impl TryFrom<KeySetOptions> for KeySet {
             None => {
                 tracing::warn!(
                     "No x25519 key provided, generating a random ephemeral key. A persistent key \
-                     (via ESPRESSO_SEQUENCER_PRIVATE_X25519_KEY or mnemonic) will be required for \
-                     the Cliquenet protocol upgrade."
+                     (via ESPRESSO_NODE_PRIVATE_X25519_KEY or mnemonic) will be required for the \
+                     Cliquenet protocol upgrade."
                 );
                 x25519::Keypair::generate()
                     .context("generating random x25519 key")?
@@ -287,11 +287,8 @@ mod tests {
     fn key_file_without_x25519_succeeds() {
         let keys = generate_keys();
         let f = write_key_file(&[
-            format!(
-                "ESPRESSO_SEQUENCER_PRIVATE_STAKING_KEY={}",
-                staking_tb64(&keys)
-            ),
-            format!("ESPRESSO_SEQUENCER_PRIVATE_STATE_KEY={}", state_tb64(&keys)),
+            format!("ESPRESSO_NODE_PRIVATE_STAKING_KEY={}", staking_tb64(&keys)),
+            format!("ESPRESSO_NODE_PRIVATE_STATE_KEY={}", state_tb64(&keys)),
         ]);
         let opts = KeySetOptions {
             mnemonic: None,
@@ -308,15 +305,9 @@ mod tests {
     fn key_file_with_x25519_uses_provided() {
         let keys = generate_keys();
         let f = write_key_file(&[
-            format!(
-                "ESPRESSO_SEQUENCER_PRIVATE_STAKING_KEY={}",
-                staking_tb64(&keys)
-            ),
-            format!("ESPRESSO_SEQUENCER_PRIVATE_STATE_KEY={}", state_tb64(&keys)),
-            format!(
-                "ESPRESSO_SEQUENCER_PRIVATE_X25519_KEY={}",
-                x25519_tb64(&keys)
-            ),
+            format!("ESPRESSO_NODE_PRIVATE_STAKING_KEY={}", staking_tb64(&keys)),
+            format!("ESPRESSO_NODE_PRIVATE_STATE_KEY={}", state_tb64(&keys)),
+            format!("ESPRESSO_NODE_PRIVATE_X25519_KEY={}", x25519_tb64(&keys)),
         ]);
         let opts = KeySetOptions {
             mnemonic: None,
@@ -334,12 +325,9 @@ mod tests {
     fn key_file_with_malformed_x25519_fails() {
         let keys = generate_keys();
         let f = write_key_file(&[
-            format!(
-                "ESPRESSO_SEQUENCER_PRIVATE_STAKING_KEY={}",
-                staking_tb64(&keys)
-            ),
-            format!("ESPRESSO_SEQUENCER_PRIVATE_STATE_KEY={}", state_tb64(&keys)),
-            "ESPRESSO_SEQUENCER_PRIVATE_X25519_KEY=not-a-valid-key".to_string(),
+            format!("ESPRESSO_NODE_PRIVATE_STAKING_KEY={}", staking_tb64(&keys)),
+            format!("ESPRESSO_NODE_PRIVATE_STATE_KEY={}", state_tb64(&keys)),
+            "ESPRESSO_NODE_PRIVATE_X25519_KEY=not-a-valid-key".to_string(),
         ]);
         let opts = KeySetOptions {
             mnemonic: None,
