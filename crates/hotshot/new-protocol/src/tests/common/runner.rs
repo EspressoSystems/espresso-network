@@ -1,4 +1,4 @@
-use std::{collections::BTreeSet, fmt, time::Duration};
+use std::{collections::BTreeMap, fmt, time::Duration};
 
 use committable::Committable;
 use hotshot::{traits::NodeImplementation, types::BLSPubKey};
@@ -83,7 +83,7 @@ impl TestRunner {
         let membership = mock_membership_with_num_nodes(self.num_nodes).await;
         let (network_state, networks) = N::create(self.num_nodes).await;
 
-        let mut output_channels: Vec<UnboundedReceiver<BTreeSet<[u8; 32]>>> =
+        let mut output_channels: Vec<UnboundedReceiver<BTreeMap<ViewNumber, [u8; 32]>>> =
             Vec::with_capacity(self.num_nodes);
 
         // Spawn one coordinator task per node.
@@ -109,7 +109,8 @@ impl TestRunner {
             Network::<TestTypes, _>::new(client_net, membership.clone(), upgrade_lock());
 
         // Collect decided leaf commits from each node until all reach the target.
-        let mut node_commits: Vec<BTreeSet<[u8; 32]>> = vec![BTreeSet::new(); self.num_nodes];
+        let mut node_commits: Vec<BTreeMap<ViewNumber, [u8; 32]>> =
+            vec![BTreeMap::new(); self.num_nodes];
         let mut progress: usize = 0;
         let mut tx_nonce: u64 = 0;
 
@@ -140,21 +141,19 @@ impl TestRunner {
             }
         }
 
-        // Drain remaining messages so every node's commit set is up to date.
-        // Nodes may have continued deciding while we waited for slower peers.
-        for (idx, rx) in output_channels.iter_mut().enumerate() {
-            while let Ok(seq) = rx.try_recv() {
-                node_commits[idx] = seq;
+        // Truncate every node's map to the first `target_decisions` entries
+        // (by view).  Nodes at different heights will have extra trailing
+        // views; trimming those away lets us compare with strict equality.
+        for commits in &mut node_commits {
+            while commits.len() > self.target_decisions {
+                commits.pop_last();
             }
         }
 
-        // Verify chain consistency: the smallest decided set must be a subset
-        // of every other node's set.  Nodes may be at different heights (some
-        // decided more leaves), but a correct consensus never produces
-        // conflicting leaves.
-        let reference = node_commits.iter().min_by_key(|s| s.len()).unwrap().clone();
-        for (i, set) in node_commits.iter().enumerate() {
-            if !reference.is_subset(set) {
+        // Verify all nodes decided the same chain prefix.
+        let expected = &node_commits[0];
+        for (i, set) in node_commits.iter().enumerate().skip(1) {
+            if set != expected {
                 return Err(TestError::ChainDivergence { node: i });
             }
         }
@@ -167,9 +166,9 @@ impl TestRunner {
 /// decided leaf commits, and forwards them to the test runner.
 async fn run_node<I: NodeImplementation<TestTypes>>(
     mut coord: Coordinator<TestTypes, I>,
-    output_tx: UnboundedSender<BTreeSet<[u8; 32]>>,
+    output_tx: UnboundedSender<BTreeMap<ViewNumber, [u8; 32]>>,
 ) {
-    let mut commits: BTreeSet<[u8; 32]> = BTreeSet::new();
+    let mut commits: BTreeMap<ViewNumber, [u8; 32]> = BTreeMap::new();
     let mut last_view = ViewNumber::genesis();
 
     loop {
@@ -183,10 +182,12 @@ async fn run_node<I: NodeImplementation<TestTypes>>(
             if let ConsensusOutput::LeafDecided(leaves) = &output {
                 for leaf in leaves {
                     let commit: [u8; 32] = leaf.commit().into();
-                    if commits.insert(commit) {
+                    let view = leaf.view_number();
+                    if let std::collections::btree_map::Entry::Vacant(e) = commits.entry(view) {
+                        e.insert(commit);
                         info!(
                             node = %coord.node_id(),
-                            view = %leaf.view_number(),
+                            view = %view,
                             height = %leaf.height(),
                             "decided leaf"
                         );
