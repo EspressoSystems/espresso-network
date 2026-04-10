@@ -6186,12 +6186,14 @@ dependencies = [
  "hotshot-testing",
  "hotshot-types",
  "hotshot-utils",
+ "rand 0.8.5",
  "serde",
  "serde_bytes",
  "thiserror 2.0.18",
  "time 0.3.47",
  "tokio",
  "tracing",
+ "tracing-subscriber 0.3.23",
  "versions",
 ]
 
