@@ -278,6 +278,7 @@ impl<T: NodeType> Consensus<T> {
     }
 
     pub fn gc(&mut self, view: ViewNumber, _epoch: EpochNumber) {
+        self.proposed_views = self.proposed_views.split_off(&view);
         self.states_verified = self.states_verified.split_off(&view);
         self.blocks_reconstructed = self.blocks_reconstructed.split_off(&view);
         self.blocks = self.blocks.split_off(&view);
