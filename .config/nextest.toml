@@ -61,7 +61,7 @@ test(test_success_with_async_delay_2_with_epochs) |
 test(test_vid2_success) |
 test(test_combined_network_half_dc) |
 test(test_staggered_restart_first_block) |
-test(=test_staggered_restart) |
+test(/test_staggered_restart$/) |
 binary(test_epoch_success_overlap_3f) |
 binary(test_epoch_success_types_randomized_leader)
 """
