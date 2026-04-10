@@ -56,9 +56,9 @@ pub enum ConsensusInput<T: NodeType> {
     Proposal(ProposalMessage<T, Validated>),
     StateValidated(StateResponse<T>),
     StateValidationFailed(StateResponse<T>),
-    Timeout(ViewNumber),
+    Timeout(ViewNumber, EpochNumber),
     TimeoutCertificate(TimeoutCertificate2<T>),
-    TimeoutOneHonest(ViewNumber, Option<EpochNumber>),
+    TimeoutOneHonest(ViewNumber, EpochNumber),
     VidDisperseCreated(ViewNumber, VidDisperse2<T>),
     ViewSyncCertificate(ViewSyncFinalizeCertificate2<T>),
     DrbResult(EpochNumber, DrbResult),
@@ -121,7 +121,7 @@ pub struct Consensus<T: NodeType> {
     node_id: KeyPrefix,
 
     garbage_collection_interval: BlockNumber,
-    epoch_height: BlockNumber,
+    pub(crate) epoch_height: BlockNumber,
 }
 
 /// Protocol flow directive.
@@ -183,7 +183,10 @@ impl<T: NodeType> Consensus<T> {
         // Ignore old inputs unless it's a DRB result
         // TODO: This isn't correct, I think we need to process vote2 for views
         // that haven't timed out, but are before the timeout view
-        if !matches!(input, ConsensusInput::DrbResult(_, _)) && view <= self.timeout_view {
+        if !matches!(input, ConsensusInput::DrbResult(_, _))
+            && !matches!(input, ConsensusInput::Timeout(..))
+            && view <= self.timeout_view
+        {
             return;
         }
         let proto = match input {
@@ -224,8 +227,8 @@ impl<T: NodeType> Consensus<T> {
                 self.vid_shares.remove(&state_response.view);
                 return;
             },
-            ConsensusInput::Timeout(view) => self.handle_timeout(view, self.current_epoch, outbox),
-            ConsensusInput::TimeoutOneHonest(view, epoch) => {
+            ConsensusInput::Timeout(view, epoch)
+            | ConsensusInput::TimeoutOneHonest(view, epoch) => {
                 self.handle_timeout(view, epoch, outbox)
             },
             ConsensusInput::BlockBuilt {
@@ -324,7 +327,9 @@ impl<T: NodeType> Consensus<T> {
         // Validate the epoch transition rules.
         // - DRB result must be attached and match our calculated result.
         // - Next epoch justify QC (deciding QC) must be attached to the first proposal of the new epoch
-        if is_epoch_transition(block_number, *self.epoch_height) {
+        if proposal.epoch > EpochNumber::genesis() + 1
+            && is_epoch_transition(block_number, *self.epoch_height)
+        {
             let Some(drb) = self.drb_results.get(&(epoch + 1)) else {
                 debug!(%epoch, "no DRB result for epoch");
                 outbox.push_back(ConsensusOutput::RequestDrbResult(epoch + 1));
@@ -433,11 +438,14 @@ impl<T: NodeType> Consensus<T> {
     fn handle_timeout(
         &mut self,
         view: ViewNumber,
-        epoch: Option<EpochNumber>,
+        epoch: EpochNumber,
         outbox: &mut Outbox<ConsensusOutput<T>>,
     ) -> Protocol {
         self.timeout_view = max(self.timeout_view, view);
-        let data = TimeoutData2 { view, epoch };
+        let data = TimeoutData2 {
+            view,
+            epoch: Some(epoch),
+        };
         let vote = match SimpleVote::create_signed_vote(
             data,
             view,
@@ -674,8 +682,12 @@ impl<T: NodeType> Consensus<T> {
             return;
         }
 
-        // TODO: Handle epoch change and properly set next epoch qc drb result and state cert
-        let next_drb_result = if is_epoch_transition(header.block_number(), *self.epoch_height) {
+        // TODO: Handle epoch change state cert
+        // The first two epochs have no prior DRB computation so we skip the
+        // requirement — matching the same guard in handle_proposal.
+        let next_drb_result = if proposal.epoch > EpochNumber::genesis() + 1
+            && is_epoch_transition(header.block_number(), *self.epoch_height)
+        {
             let Some(drb) = self.drb_results.get(&EpochNumber::new(*proposal.epoch + 1)) else {
                 debug!(%proposal.epoch, "no DRB result for epoch");
                 return;
@@ -833,9 +845,14 @@ impl<T: NodeType> Consensus<T> {
         // Verify parent chain unless justify_qc is the genesis QC
         let parent_view = proposal.justify_qc.view_number();
 
-        // We don't need the genesis block to be reconstructed or verified
+        // We don't need the genesis block or the last block of the epoch to be reconstructed or verified
         // or the genesis qc to be verified
-        if parent_view != ViewNumber::genesis() {
+        if parent_view != ViewNumber::genesis()
+            && !is_last_block(
+                proposal.block_header.block_number().saturating_sub(1),
+                *self.epoch_height,
+            )
+        {
             // Verify we have the block for the QC on this commitment
             let Some(block_commitment) = self.blocks_reconstructed.get(&parent_view) else {
                 debug!(%parent_view, "block commitment not available");
@@ -1088,7 +1105,7 @@ impl<T: NodeType> ConsensusInput<T> {
             ConsensusInput::Proposal(prop) => prop.view_number(),
             ConsensusInput::StateValidated(response) => response.view,
             ConsensusInput::StateValidationFailed(request) => request.view,
-            ConsensusInput::Timeout(view) => *view,
+            ConsensusInput::Timeout(view, _) => *view,
             ConsensusInput::TimeoutOneHonest(view, _) => *view,
             ConsensusInput::TimeoutCertificate(cert) => {
                 // Add one because we are moving to the next view so all event
