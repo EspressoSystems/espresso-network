@@ -25,31 +25,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Add OpenAPI examples for path parameters
         .field_attribute(
             "GetRewardClaimInputRequest.address",
-            &format!(r#"#[schemars(example = "{}")]"#, EXAMPLE_ETH_ADDRESS),
+            format!(r#"#[schemars(example = "{}")]"#, EXAMPLE_ETH_ADDRESS),
         )
         .field_attribute(
             "GetRewardBalanceRequest.address",
-            &format!(r#"#[schemars(example = "{}")]"#, EXAMPLE_ETH_ADDRESS),
+            format!(r#"#[schemars(example = "{}")]"#, EXAMPLE_ETH_ADDRESS),
         )
         .field_attribute(
             "GetRewardAccountProofRequest.address",
-            &format!(r#"#[schemars(example = "{}")]"#, EXAMPLE_ETH_ADDRESS),
+            format!(r#"#[schemars(example = "{}")]"#, EXAMPLE_ETH_ADDRESS),
         )
         .field_attribute(
             "GetRewardBalancesRequest.height",
-            &format!(r#"#[schemars(example = "{}")]"#, EXAMPLE_HEIGHT),
+            format!(r#"#[schemars(example = "{}")]"#, EXAMPLE_HEIGHT),
         )
         .field_attribute(
             "GetRewardBalancesRequest.offset",
-            &format!(r#"#[schemars(example = "{}")]"#, EXAMPLE_OFFSET),
+            format!(r#"#[schemars(example = "{}")]"#, EXAMPLE_OFFSET),
         )
         .field_attribute(
             "GetRewardBalancesRequest.limit",
-            &format!(r#"#[schemars(example = "{}")]"#, EXAMPLE_LIMIT),
+            format!(r#"#[schemars(example = "{}")]"#, EXAMPLE_LIMIT),
         )
         .field_attribute(
             "GetRewardMerkleTreeRequest.height",
-            &format!(r#"#[schemars(example = "{}")]"#, EXAMPLE_HEIGHT),
+            format!(r#"#[schemars(example = "{}")]"#, EXAMPLE_HEIGHT),
         )
         .out_dir(&out_dir)
         .compile_protos(&["v2/common.proto", "v2/rewards.proto"], &[proto_root])?;
