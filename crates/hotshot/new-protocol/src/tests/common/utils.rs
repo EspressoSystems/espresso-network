@@ -91,7 +91,7 @@ impl TestView {
             .find(|s| s.recipient_key == *recipient_key)
             .expect("VID share not found for recipient key")
             .clone();
-        ProposalMessage::validated(self.leader_public_key, inner_proposal, vid_share)
+        ProposalMessage::validated(inner_proposal, vid_share)
     }
 
     /// Get the VidCommitment2 for this view (for BlockReconstructed events).
@@ -109,7 +109,7 @@ impl TestView {
         }
     }
     pub fn proposal_input_consensus(&self, recipient_key: &BLSPubKey) -> ConsensusInput<TestTypes> {
-        ConsensusInput::Proposal(self.proposal_message(recipient_key))
+        ConsensusInput::Proposal(self.leader_public_key, self.proposal_message(recipient_key))
     }
 
     /// Build an Event for block reconstructed.

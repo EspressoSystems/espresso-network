@@ -20,6 +20,7 @@ use crate::{
     message::{Proposal, convert_proposal},
     simple_certificate::{CertificatePair, LightClientStateUpdateCertificateV2, QuorumCertificate},
     traits::{ValidatedState, node_implementation::NodeType},
+    vote::HasViewNumber,
 };
 
 /// A status event emitted by a `HotShot` instance
@@ -261,6 +262,55 @@ pub enum EventType<TYPES: NodeType> {
         /// Serialized data of the message
         data: Vec<u8>,
     },
+}
+
+impl<TYPES: NodeType> std::fmt::Display for EventType<TYPES> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Error { error } => write!(f, "Error: {error}"),
+            Self::Decide { leaf_chain, .. } => {
+                let newest = leaf_chain.first().map(|l| l.leaf.view_number());
+                let oldest = leaf_chain.last().map(|l| l.leaf.view_number());
+                write!(
+                    f,
+                    "Decide: leaves={} oldest={:?} newest={:?}",
+                    leaf_chain.len(),
+                    oldest,
+                    newest,
+                )
+            },
+            Self::ReplicaViewTimeout { view_number } => {
+                write!(f, "ReplicaViewTimeout: view={view_number}")
+            },
+            Self::ViewFinished { view_number } => {
+                write!(f, "ViewFinished: view={view_number}")
+            },
+            Self::ViewTimeout { view_number } => {
+                write!(f, "ViewTimeout: view={view_number}")
+            },
+            Self::Transactions { transactions } => {
+                write!(f, "Transactions: count={}", transactions.len())
+            },
+            Self::DaProposal { proposal, .. } => {
+                write!(f, "DaProposal: view={}", proposal.data.view_number())
+            },
+            Self::QuorumProposal { proposal, .. } => {
+                write!(f, "QuorumProposal: view={}", proposal.data.view_number())
+            },
+            Self::UpgradeProposal { proposal, .. } => {
+                write!(
+                    f,
+                    "UpgradeProposal: view={} old_version={} new_version={}",
+                    proposal.data.view_number,
+                    proposal.data.upgrade_proposal.old_version,
+                    proposal.data.upgrade_proposal.new_version,
+                )
+            },
+            Self::ExternalMessageReceived { .. } => {
+                write!(f, "ExternalMessageReceived")
+            },
+        }
+    }
 }
 
 impl<TYPES: NodeType> EventType<TYPES> {

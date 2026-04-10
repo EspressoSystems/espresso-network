@@ -52,7 +52,7 @@ pub enum ConsensusInput<T: NodeType> {
     Certificate2(Certificate2<T>),
     EpochChange(EpochChangeMessage<T>),
     HeaderCreated(ViewNumber, T::BlockHeader),
-    Proposal(ProposalMessage<T, Validated>),
+    Proposal(T::SignatureKey, ProposalMessage<T, Validated>),
     StateValidated(StateResponse<T>),
     StateValidationFailed(StateResponse<T>),
     Timeout(ViewNumber),
@@ -91,7 +91,7 @@ pub enum ConsensusOutput<T: NodeType> {
     },
     LockUpdated(Certificate2<T>),
     ViewChanged(ViewNumber, EpochNumber),
-    ProposalReceived {
+    ProposalValidated {
         proposal: SignedProposal<T, Proposal<T>>,
         sender: T::SignatureKey,
     },
@@ -202,7 +202,9 @@ impl<T: NodeType> Consensus<T> {
             return;
         }
         let proto = match input {
-            ConsensusInput::Proposal(proposal) => self.handle_proposal(proposal, outbox).await,
+            ConsensusInput::Proposal(sender, proposal) => {
+                self.handle_proposal(sender, proposal, outbox).await
+            },
             ConsensusInput::Certificate1(certificate) => {
                 self.handle_certificate1(certificate).await
             },
@@ -342,6 +344,7 @@ impl<T: NodeType> Consensus<T> {
     #[instrument(level = "debug", skip_all)]
     async fn handle_proposal(
         &mut self,
+        sender: T::SignatureKey,
         proposal: ProposalMessage<T, Validated>,
         outbox: &mut Outbox<ConsensusOutput<T>>,
     ) -> Protocol {
@@ -352,6 +355,7 @@ impl<T: NodeType> Consensus<T> {
             return Protocol::Abort;
         }
 
+        let signed_proposal = proposal.proposal.clone();
         let vid_share = proposal.vid_share;
         let proposal = proposal.proposal.data;
         let epoch = proposal.epoch;
@@ -422,6 +426,11 @@ impl<T: NodeType> Consensus<T> {
         } else {
             epoch
         };
+
+        outbox.push_back(ConsensusOutput::ProposalValidated {
+            proposal: signed_proposal,
+            sender,
+        });
 
         if self.is_leader(view + 1, epoch).await {
             outbox.push_back(ConsensusOutput::RequestBlockAndHeader(
@@ -1131,7 +1140,7 @@ impl<T: NodeType> ConsensusInput<T> {
             ConsensusInput::Certificate1(cert) => cert.view_number(),
             ConsensusInput::Certificate2(cert) => cert.view_number(),
             ConsensusInput::HeaderCreated(view, _) => *view,
-            ConsensusInput::Proposal(prop) => prop.view_number(),
+            ConsensusInput::Proposal(_, prop) => prop.view_number(),
             ConsensusInput::StateValidated(response) => response.view,
             ConsensusInput::StateValidationFailed(request) => request.view,
             ConsensusInput::Timeout(view) => *view,

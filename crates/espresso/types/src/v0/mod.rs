@@ -194,6 +194,32 @@ pub enum ConsensusEvent<T: NodeType> {
     },
 }
 
+impl<T: NodeType> std::fmt::Display for ConsensusEvent<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::LegacyEvent(event) => {
+                write!(f, "Legacy: {} view={}", event.event, event.view_number)
+            },
+            Self::NewDecide(event) => {
+                write!(f, "NewDecide: view={}", event.view_number)
+            },
+            Self::ViewChanged { view_number } => {
+                write!(f, "ViewChanged: view={view_number}")
+            },
+            Self::QuorumProposal { proposal, .. } => {
+                write!(
+                    f,
+                    "QuorumProposal: view={} epoch={}",
+                    proposal.data.view_number, proposal.data.epoch
+                )
+            },
+            Self::ExternalMessageReceived { .. } => {
+                write!(f, "ExternalMessageReceived")
+            },
+        }
+    }
+}
+
 pub type PubKey = BLSPubKey;
 pub type PrivKey = <PubKey as SignatureKey>::PrivateKey;
 

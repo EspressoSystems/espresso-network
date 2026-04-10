@@ -19,7 +19,7 @@ use futures::{
 };
 use hotshot::SystemContext;
 use hotshot_events_service::events_source::{EventConsumer, EventsStreamer};
-use hotshot_new_protocol::coordinator::{Coordinator, error::Severity};
+use hotshot_new_protocol::coordinator::Coordinator;
 use hotshot_orchestrator::client::OrchestratorClient;
 use hotshot_types::{
     PeerConfig, ValidatorConfig,
@@ -41,7 +41,7 @@ use url::Url;
 use crate::{
     Node, SeqTypes, SequencerApiVersion,
     catchup::ParallelStateCatchup,
-    consensus_handle::{ConsensusEvent, ConsensusHandle, event_from_output},
+    consensus_handle::{ConsensusEvent, ConsensusHandle},
     external_event_handler::ExternalEventHandler,
     proposal_fetcher::ProposalFetcherConfig,
     request_response::{
@@ -139,6 +139,17 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
         let should_vote =
             state_signature::should_vote(&stake_table, &validator_config.state_public_key);
 
+        let epoch_height = initializer.epoch_height;
+
+        let (coordinator, query_tx) = Coordinator::<SeqTypes, CN>::new(
+            membership_coordinator.clone(),
+            coordinator_network,
+            &initializer,
+            validator_config.public_key,
+            validator_config.private_key.clone(),
+            Duration::from_secs(10),
+        );
+
         let event_streamer = Arc::new(RwLock::new(EventsStreamer::<SeqTypes>::new(
             stake_table.0,
             0,
@@ -160,31 +171,16 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
         .await?
         .0;
 
-        let genesis_validated_state = ValidatedState::default();
-        let genesis_leaf =
-            Leaf2::genesis(&genesis_validated_state, &instance_state, upgrade.base).await;
-
-        let epoch_height = network_config.config.epoch_height;
-        let (coordinator, query_tx) = Coordinator::<SeqTypes, CN>::new(
-            membership_coordinator.clone(),
-            coordinator_network,
-            Arc::new(instance_state.clone()),
-            validator_config.public_key,
-            validator_config.private_key.clone(),
-            genesis_leaf,
-            epoch_height,
-            Duration::from_secs(10),
-        );
         let legacy_event_rx = handle.event_stream_known_impl().deactivate();
         let hotshot_handle = Arc::new(RwLock::new(handle));
-        let (consensus_handle, event_sender) = ConsensusHandle::new(
+        let consensus_handle = Arc::new(ConsensusHandle::new(
             hotshot_handle.clone(),
+            coordinator,
             query_tx,
             epoch_height,
             legacy_event_rx,
             EXTERNAL_EVENT_CHANNEL_SIZE,
-        );
-        let consensus_handle = Arc::new(consensus_handle);
+        ));
 
         let mut state_signer = StateSigner::new(
             validator_config.state_private_key.clone(),
@@ -242,7 +238,6 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
 
         // Create the external event handler
         let mut tasks = TaskList::default();
-        tasks.spawn("coordinator", run_coordinator(coordinator, event_sender));
         let external_event_handler = ExternalEventHandler::new(
             &mut tasks,
             request_response_sender,
@@ -557,48 +552,6 @@ async fn handle_events<N, P>(
                     .await
                     .handle_event(hotshot_event.clone())
                     .await;
-            }
-        }
-    }
-}
-
-async fn run_coordinator<CN: ConnectedNetwork<PubKey>>(
-    mut coordinator: Coordinator<SeqTypes, CN>,
-    event_sender: async_broadcast::Sender<ConsensusEvent<SeqTypes>>,
-) {
-    loop {
-        match coordinator.next_consensus_input().await {
-            Ok(input) => coordinator.apply_consensus(input).await,
-            Err(err) if err.severity == Severity::Critical => {
-                tracing::error!(%err, "coordinator: critical error");
-                return;
-            },
-            Err(err) => {
-                tracing::warn!(%err, "coordinator: non-critical error");
-            },
-        }
-        while let Some(output) = coordinator.outbox_mut().pop_front() {
-            if let Some(event) = event_from_output(&output) {
-                match event_sender.broadcast_direct(event).await {
-                    Ok(None) => {},
-                    Ok(Some(overflowed)) => {
-                        tracing::debug!(
-                            ?overflowed,
-                            "coordinator event channel overflow, oldest event dropped"
-                        );
-                    },
-                    Err(err) => {
-                        tracing::warn!(%err, "failed to broadcast consensus event");
-                    },
-                }
-            }
-            if let Err(err) = coordinator.process_consensus_output(output).await {
-                if err.severity == Severity::Critical {
-                    tracing::error!(%err, "coordinator: critical error processing output");
-                    return;
-                } else {
-                    tracing::warn!(%err, "coordinator: error processing output");
-                }
             }
         }
     }
