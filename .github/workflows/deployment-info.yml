@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       # No rust cache, we have limited capacity on github
       
@@ -52,7 +52,7 @@ jobs:
 
       - name: Create PR with updated deployment info
         if: github.event_name != 'pull_request' && steps.changes.outputs.changed == 'true'
-        uses: peter-evans/create-pull-request@v7
+        uses: peter-evans/create-pull-request@v8
         with:
           commit-message: "chore: update deployment info"
           title: "chore: update deployment info"

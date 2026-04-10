@@ -20,7 +20,7 @@ jobs:
       - uses: taiki-e/install-action@just
 
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
@@ -39,7 +39,7 @@ jobs:
           cargo build --locked --release --features benchmarking,testing,embedded-db --bin espresso-dev-node
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: x86_64-unknown-linux-gnu-services-bench
           path: |
@@ -66,7 +66,7 @@ jobs:
     runs-on: buildjet-16vcpu-ubuntu-2204-arm
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
@@ -83,7 +83,7 @@ jobs:
           cargo build --locked --release --features benchmarking,testing,embedded-db --bin espresso-dev-node
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: aarch64-unknown-linux-gnu-services-bench
           path: |
@@ -129,25 +129,25 @@ jobs:
       bridge-tag: ${{ steps.bridge.outputs.tags }}
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Download executables AMD
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: x86_64-unknown-linux-gnu-services-bench
           path: target/amd64/release
 
       - name: Download executables ARM
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: aarch64-unknown-linux-gnu-services-bench
           path: target/arm64/release
 
       - name: Setup Docker BuildKit (buildx)
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Login to Github Container Repo
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         if: github.event_name != 'pull_request'
         with:
           registry: ghcr.io
@@ -155,14 +155,14 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Generate espresso-node docker metadata
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         id: espresso-node
         with:
           images: ghcr.io/espressosystems/espresso-network/espresso-node
           flavor: suffix=bench
 
       - name: Generate cdn-broker docker metadata
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         id: cdn-broker
         with:
           images: |
@@ -171,7 +171,7 @@ jobs:
           flavor: suffix=bench
 
       - name: Generate cdn-marshal docker metadata
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         id: cdn-marshal
         with:
           images: |
@@ -180,7 +180,7 @@ jobs:
           flavor: suffix=bench
 
       - name: Generate cdn-whitelist docker metadata
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         id: cdn-whitelist
         with:
           images: |
@@ -189,7 +189,7 @@ jobs:
           flavor: suffix=bench
 
       - name: Generate state-relay-server docker metadata
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         id: state-relay-server
         with:
           images: |
@@ -198,7 +198,7 @@ jobs:
           flavor: suffix=bench
 
       - name: Generate prover-service docker metadata
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         id: prover-service
         with:
           images: |
@@ -207,7 +207,7 @@ jobs:
           flavor: suffix=bench
 
       - name: Generate orchestrator docker metadata
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         id: orchestrator
         with:
           images: |
@@ -216,7 +216,7 @@ jobs:
           flavor: suffix=bench
 
       - name: Generate submit-transactions docker metadata
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         id: submit-transactions
         with:
           images: |
@@ -225,7 +225,7 @@ jobs:
           flavor: suffix=bench
 
       - name: Generate deploy metadata
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         id: deploy
         with:
           images: |
@@ -234,7 +234,7 @@ jobs:
           flavor: suffix=bench
 
       - name: Generate builder metadata
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         id: builder
         with:
           images: |
@@ -243,7 +243,7 @@ jobs:
           flavor: suffix=bench
 
       - name: Generate nasty-client metadata
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         id: nasty-client
         with:
           images: |
@@ -252,7 +252,7 @@ jobs:
           flavor: suffix=bench
 
       - name: Generate espresso-dev-node metadata
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         id: espresso-dev-node
         with:
           images: |
@@ -261,7 +261,7 @@ jobs:
           flavor: suffix=bench
 
       - name: Generate bridge metadata
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         id: bridge
         with:
           images: |
@@ -270,7 +270,7 @@ jobs:
           flavor: suffix=bench
 
       - name: Build and push espresso-node docker
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ./
           file: ./docker/espresso-node.Dockerfile
@@ -283,14 +283,14 @@ jobs:
       # sequencer-sqlite) as symlinks to the new names. This will be removed in a future release.
       # Consumers should migrate to ghcr.io/espressosystems/espresso-network/espresso-node.
       - name: Generate legacy sequencer docker metadata
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         id: legacy-sequencer
         with:
           images: ghcr.io/espressosystems/espresso-sequencer/sequencer
           flavor: suffix=bench
 
       - name: Build and push legacy sequencer docker with old binary names
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ./
           file: ./docker/espresso-node-legacy.Dockerfile
@@ -302,7 +302,7 @@ jobs:
           labels: ${{ steps.legacy-sequencer.outputs.labels }}
 
       - name: Build and push cdn-broker docker
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ./
           file: ./docker/cdn-broker.Dockerfile
@@ -312,7 +312,7 @@ jobs:
           labels: ${{ steps.cdn-broker.outputs.labels }}
 
       - name: Build and push cdn-marshal docker
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ./
           file: ./docker/cdn-marshal.Dockerfile
@@ -322,7 +322,7 @@ jobs:
           labels: ${{ steps.cdn-marshal.outputs.labels }}
 
       - name: Build and push cdn-whitelist docker
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ./
           file: ./docker/cdn-whitelist.Dockerfile
@@ -332,7 +332,7 @@ jobs:
           labels: ${{ steps.cdn-whitelist.outputs.labels }}
 
       - name: Build and push state-relay-server docker
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ./
           file: ./docker/state-relay-server.Dockerfile
@@ -342,7 +342,7 @@ jobs:
           labels: ${{ steps.state-relay-server.outputs.labels }}
 
       - name: Build and push prover-service docker
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ./
           file: ./docker/prover-service.Dockerfile
@@ -352,7 +352,7 @@ jobs:
           labels: ${{ steps.prover-service.outputs.labels }}
 
       - name: Build and push orchestrator docker
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ./
           file: ./docker/orchestrator.Dockerfile
@@ -362,7 +362,7 @@ jobs:
           labels: ${{ steps.orchestrator.outputs.labels }}
 
       - name: Build and push submit-transactions docker
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ./
           file: ./docker/submit-transactions.Dockerfile
@@ -372,7 +372,7 @@ jobs:
           labels: ${{ steps.submit-transactions.outputs.labels }}
 
       - name: Build and push deploy docker
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ./
           file: ./docker/deploy.Dockerfile
@@ -382,7 +382,7 @@ jobs:
           labels: ${{ steps.deploy.outputs.labels }}
 
       - name: Build and push builder docker
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ./
           file: ./docker/permissionless-builder.Dockerfile
@@ -392,7 +392,7 @@ jobs:
           labels: ${{ steps.builder.outputs.labels }}
 
       - name: Build and push nasty-client docker
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ./
           file: ./docker/nasty-client.Dockerfile
@@ -402,7 +402,7 @@ jobs:
           labels: ${{ steps.nasty-client.outputs.labels }}
 
       - name: Build and push espresso-dev-node docker
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ./
           file: ./docker/espresso-dev-node.Dockerfile
@@ -411,7 +411,7 @@ jobs:
           tags: ${{ steps.espresso-dev-node.outputs.tags }}
           labels: ${{ steps.espresso-dev-node.outputs.labels }}
       - name: Build and push bridge docker
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ./
           file: ./docker/espresso-bridge.Dockerfile
@@ -428,7 +428,7 @@ jobs:
       - uses: taiki-e/install-action@just
 
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Pull docker images
         run: |
