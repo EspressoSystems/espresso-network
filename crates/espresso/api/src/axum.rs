@@ -11,6 +11,7 @@ use aide::{
     scalar::Scalar,
     swagger::Swagger,
 };
+use schemars::transform::Transform;
 use axum::{
     extract::{Path, Request, State},
     http::{StatusCode, Uri},
@@ -352,7 +353,7 @@ where
                 })
         };
 
-    ApiRouter::new()
+    let router = ApiRouter::new()
         .api_route(
             routes::v2::REWARD_CLAIM_INPUT_ROUTE.http,
             get_with(get_reward_claim_input, |op| {
@@ -388,7 +389,50 @@ where
                     .tag("Rewards")
             }),
         )
-        .finish_api(&mut api)
+        .finish_api(&mut api);
+
+    // Transform examples (array) to example (singular) for OpenAPI 3.0/Swagger compatibility
+    if let Some(ref mut components) = api.components {
+        let mut transform = schemars::transform::SetSingleExample::default();
+        for schema in components.schemas.values_mut() {
+            transform.transform(&mut schema.json_schema);
+        }
+    }
+
+    // Also transform path parameter schemas
+    if let Some(ref mut paths) = api.paths {
+        let mut transform = schemars::transform::SetSingleExample::default();
+        for path_item_ref in paths.paths.values_mut() {
+            if let aide::openapi::ReferenceOr::Item(path_item) = path_item_ref {
+                for operation in [
+                    &mut path_item.get,
+                    &mut path_item.post,
+                    &mut path_item.put,
+                    &mut path_item.delete,
+                    &mut path_item.patch,
+                ]
+                .into_iter()
+                .flatten()
+                {
+                    for param in &mut operation.parameters {
+                        if let aide::openapi::ReferenceOr::Item(param_item) = param {
+                            let parameter_data = match param_item {
+                                aide::openapi::Parameter::Query { parameter_data, .. } => parameter_data,
+                                aide::openapi::Parameter::Header { parameter_data, .. } => parameter_data,
+                                aide::openapi::Parameter::Path { parameter_data, .. } => parameter_data,
+                                aide::openapi::Parameter::Cookie { parameter_data, .. } => parameter_data,
+                            };
+                            if let aide::openapi::ParameterSchemaOrContent::Schema(ref mut schema) = parameter_data.format {
+                                transform.transform(&mut schema.json_schema);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    router
         .route(routes::v2::OPENAPI_SPEC_ROUTE, get(serve_openapi_spec))
         .route(
             routes::v2::SWAGGER_ROUTE,

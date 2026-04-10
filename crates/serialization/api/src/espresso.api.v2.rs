@@ -29,6 +29,7 @@ pub struct RewardClaimInput {
 pub struct GetRewardClaimInputRequest {
     /// Ethereum address to query rewards for (hex format, e.g. "0x1234...")
     #[prost(string, tag = "1")]
+    #[schemars(example = "0x0000000000000000000000000000000000000000")]
     pub address: ::prost::alloc::string::String,
 }
 /// Reward balance for an address
@@ -45,6 +46,7 @@ pub struct RewardBalance {
 pub struct GetRewardBalanceRequest {
     /// Ethereum address to query
     #[prost(string, tag = "1")]
+    #[schemars(example = "0x0000000000000000000000000000000000000000")]
     pub address: ::prost::alloc::string::String,
 }
 /// Complete reward account query data with balance and merkle proof
@@ -174,6 +176,7 @@ pub struct ForgottenSubtree {
 pub struct GetRewardAccountProofRequest {
     /// Ethereum address to query
     #[prost(string, tag = "1")]
+    #[schemars(example = "0x0000000000000000000000000000000000000000")]
     pub address: ::prost::alloc::string::String,
 }
 /// Single reward amount entry
@@ -204,12 +207,15 @@ pub struct RewardBalances {
 pub struct GetRewardBalancesRequest {
     /// Block height to query
     #[prost(uint64, tag = "1")]
+    #[schemars(example = "1000000")]
     pub height: u64,
     /// Starting offset for pagination
     #[prost(uint64, tag = "2")]
+    #[schemars(example = "0")]
     pub offset: u64,
     /// Maximum number of results (limit ≤ 10000)
     #[prost(uint64, tag = "3")]
+    #[schemars(example = "100")]
     pub limit: u64,
 }
 /// Raw RewardMerkleTreeV2 snapshot data
@@ -226,5 +232,6 @@ pub struct RewardMerkleTreeV2Data {
 pub struct GetRewardMerkleTreeRequest {
     /// Block height to query
     #[prost(uint64, tag = "1")]
+    #[schemars(example = "1000000")]
     pub height: u64,
 }
