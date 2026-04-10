@@ -507,11 +507,14 @@ impl Transaction<Write> {
             self.execute(
                 query(&format!(
                     "
-                DELETE FROM {state_table} WHERE (path, created) IN
-                (SELECT path, created FROM
-                (SELECT path, created,
-                ROW_NUMBER() OVER (PARTITION BY path ORDER BY created DESC) as rank
-                FROM {state_table} WHERE created <= $1) ranked_nodes WHERE rank != 1)"
+                DELETE FROM {state_table}
+                WHERE {state_table}.created <= $1
+                  AND EXISTS (
+                    SELECT 1 FROM {state_table} AS t2
+                    WHERE t2.path = {state_table}.path
+                      AND t2.created > {state_table}.created
+                      AND t2.created <= $1
+                  )"
                 ))
                 .bind(height as i64),
             )
@@ -666,6 +669,12 @@ where
             .unzip();
         let tx_rows = tx_rows.into_iter().flatten().collect::<Vec<_>>();
 
+        // Multiple blocks in the range might have the same payload. We must filter out such
+        // duplicates, because SQL does not allow conflicting rows in a single upsert statement.
+        let payload_rows = payload_rows
+            .into_iter()
+            .unique_by(|(hash, ns_table, ..)| (hash.clone(), ns_table.clone()));
+
         self.upsert(
             "payload",
             ["hash", "ns_table", "size", "num_transactions", "data"],
@@ -722,6 +731,10 @@ where
             })
             .process_results(|iter| iter.unzip())?;
         let share_rows = share_rows.into_iter().flatten().collect::<Vec<_>>();
+
+        // Multiple blocks in the range might have the same VID common. We must filter out such
+        // duplicates, because SQL does not allow conflicting rows in a single upsert statement.
+        let common_rows = common_rows.into_iter().unique_by(|(hash, ..)| hash.clone());
 
         self.upsert("vid_common", ["hash", "data"], ["hash"], common_rows)
             .await

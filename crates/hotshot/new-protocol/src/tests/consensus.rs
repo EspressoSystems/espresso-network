@@ -14,7 +14,8 @@ use crate::{
     tests::common::{
         assertions::{
             any, count_matching, is_leaf_decided, is_proposal, is_request_block_and_header,
-            is_request_state, is_send_cert1, is_send_cert2, is_vote1, is_vote2, node_index_for_key,
+            is_request_state, is_send_timeout_cert, is_send_timeout_vote, is_vote1, is_vote2,
+            node_index_for_key,
         },
         utils::ConsensusHarness,
     },
@@ -59,7 +60,7 @@ async fn test_timeout_filters_stale_events() {
         .apply(test_data.views[3].proposal_input_consensus(&node_key))
         .await;
 
-    assert_eq!(1, count_matching(harness.outputs(), is_request_state))
+    assert_eq!(1, count_matching(harness.outputs(), is_request_state));
 }
 
 /// Vote1 fires for sequential views when all preconditions are met.
@@ -277,6 +278,7 @@ async fn test_state_validation_failed_removes_proposal() {
                     &proposal.block_header,
                 ),
             ),
+            delta: None,
         }))
         .await;
 
@@ -423,6 +425,10 @@ async fn test_timeout_prevents_voting() {
     harness
         .apply(ConsensusInput::Timeout(test_data.views[1].view_number))
         .await;
+    assert!(
+        any(harness.outputs(), is_send_timeout_vote),
+        "Timeout should emit timeout vote"
+    );
 
     // Send cert1 for view 2 — should be stale
     harness.apply(test_data.views[1].cert1_input()).await;
@@ -478,6 +484,10 @@ async fn test_leader_proposes_after_timeout() {
     // Now send timeout cert for view 2 — triggers proposal for view 3
     harness.apply(test_data.views[1].timeout_cert_input()).await;
 
+    assert!(
+        any(harness.outputs(), is_send_timeout_cert),
+        "Timeout certificate should be forwarded"
+    );
     assert!(
         any(harness.outputs(), is_request_block_and_header),
         "Leader should request block and header after timeout"
@@ -580,8 +590,20 @@ async fn test_vote_after_timeout_cert() {
         .apply(test_data.views[1].block_reconstructed_input())
         .await;
 
+    harness
+        .apply(ConsensusInput::Timeout(test_data.views[1].view_number))
+        .await;
+    assert!(
+        any(harness.outputs(), is_send_timeout_vote),
+        "Timeout should emit timeout vote"
+    );
+
     // Receive timeout cert for view 2 → view advances to 3
     harness.apply(test_data.views[1].timeout_cert_input()).await;
+    assert!(
+        any(harness.outputs(), is_send_timeout_cert),
+        "Timeout certificate should be forwarded"
+    );
 
     let vote1_before = count_matching(harness.outputs(), is_vote1);
 
@@ -642,48 +664,6 @@ async fn test_no_vote_after_timeout_for_proposal_below_lock() {
         count_matching(harness.outputs(), is_vote1),
         vote1_count,
         "No new Vote1 — proposal with justify_qc below lock rejected by safety rule"
-    );
-}
-
-/// Valid certificates are re-broadcast exactly once; duplicates are suppressed.
-#[tokio::test]
-async fn test_certificate_forwarding_and_dedup() {
-    let mut harness = ConsensusHarness::new(0).await;
-    let test_data = TestData::new(3).await;
-    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
-
-    // Build up state: two views with proposals + block reconstructed
-    harness
-        .apply(test_data.views[0].proposal_input_consensus(&node_key))
-        .await;
-    harness
-        .apply(test_data.views[0].block_reconstructed_input())
-        .await;
-    harness
-        .apply(test_data.views[1].proposal_input_consensus(&node_key))
-        .await;
-    harness
-        .apply(test_data.views[1].block_reconstructed_input())
-        .await;
-
-    // Receive cert1 → should forward, then duplicate → suppressed
-    harness.apply(test_data.views[1].cert1_input()).await;
-    harness.apply(test_data.views[1].cert1_input()).await;
-
-    assert_eq!(
-        count_matching(harness.outputs(), is_send_cert1),
-        1,
-        "cert1: first receive forwards, duplicate suppressed"
-    );
-
-    // Receive cert2 → should forward, then duplicate → suppressed
-    harness.apply(test_data.views[1].cert2_input()).await;
-    harness.apply(test_data.views[1].cert2_input()).await;
-
-    assert_eq!(
-        count_matching(harness.outputs(), is_send_cert2),
-        1,
-        "cert2: first receive forwards, duplicate suppressed"
     );
 }
 

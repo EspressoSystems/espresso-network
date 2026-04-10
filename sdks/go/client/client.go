@@ -248,7 +248,7 @@ func (s *WsStream[S]) NextRaw(ctx context.Context) (json.RawMessage, error) {
 		return nil, fmt.Errorf("%w: %v", ErrEphemeral, err)
 	}
 	if typ != websocket.MessageText {
-		return nil, fmt.Errorf("%w: %v", ErrPermanent, err)
+		return nil, fmt.Errorf("%w: unexpected non-text WebSocket message type: %v", ErrEphemeral, typ)
 	}
 	return msg, nil
 }
@@ -259,11 +259,11 @@ func (s *WsStream[S]) Next(ctx context.Context) (*S, error) {
 		return nil, fmt.Errorf("%w: %v", ErrEphemeral, err)
 	}
 	if typ != websocket.MessageText {
-		return nil, fmt.Errorf("%w: %v", ErrPermanent, err)
+		return nil, fmt.Errorf("%w: unexpected non-text WebSocket message type: %v", ErrEphemeral, typ)
 	}
 	var data S
 	if err := json.Unmarshal(msg, &data); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrPermanent, err)
+		return nil, fmt.Errorf("%w: %v", ErrEphemeral, err)
 	}
 	return &data, nil
 }
@@ -315,7 +315,7 @@ type NamespaceResponse struct {
 func (c *Client) getRawMessage(ctx context.Context, format string, args ...any) (json.RawMessage, error) {
 	res, err := c.tryGetRequest(ctx, c.baseUrl, format, args...)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrPermanent, err)
+		return nil, fmt.Errorf("%w: %v", ErrEphemeral, err)
 	}
 
 	defer res.Body.Close()
@@ -345,7 +345,7 @@ func (c *Client) get(ctx context.Context, out any, format string, args ...any) e
 		return err
 	}
 	if err := json.Unmarshal(body, out); err != nil {
-		return fmt.Errorf("%w: request failed with body %s and error %v", ErrPermanent, string(body), err)
+		return fmt.Errorf("%w: request failed with body %s and error %v", ErrEphemeral, string(body), err)
 	}
 	return nil
 }
