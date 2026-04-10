@@ -11,7 +11,6 @@ use aide::{
     scalar::Scalar,
     swagger::Swagger,
 };
-use schemars::transform::Transform;
 use axum::{
     extract::{Path, Request, State},
     http::{StatusCode, Uri},
@@ -20,6 +19,7 @@ use axum::{
     routing::get,
     Extension, Json, Router,
 };
+use schemars::transform::Transform;
 use serde::Serialize;
 use serialization_api::v2::{
     GetRewardAccountProofRequest, GetRewardBalanceRequest, GetRewardBalancesRequest,
@@ -357,8 +357,11 @@ where
         .api_route(
             routes::v2::REWARD_CLAIM_INPUT_ROUTE.http,
             get_with(get_reward_claim_input, |op| {
-                op.description("Get reward claim input for L1 contract submission. Returns lifetime rewards and Merkle proof needed to call claimRewards() on the L1 contract.")
-                    .tag("Rewards")
+                op.description(
+                    "Get reward claim input for L1 contract submission. Returns lifetime rewards \
+                     and Merkle proof needed to call claimRewards() on the L1 contract.",
+                )
+                .tag("Rewards")
             }),
         )
         .api_route(
@@ -371,22 +374,31 @@ where
         .api_route(
             routes::v2::REWARD_ACCOUNT_PROOF_ROUTE.http,
             get_with(get_reward_account_proof, |op| {
-                op.description("Get Merkle proof for a reward account at the latest finalized height. Returns V2 proof with Keccak256 hashing")
-                    .tag("Rewards")
+                op.description(
+                    "Get Merkle proof for a reward account at the latest finalized height. \
+                     Returns V2 proof with Keccak256 hashing",
+                )
+                .tag("Rewards")
             }),
         )
         .api_route(
             routes::v2::REWARD_BALANCES_ROUTE.http,
             get_with(get_reward_balances, |op| {
-                op.description("Get paginated list of all reward balances at a specific height. Limit must be ≤ 10000")
-                    .tag("Rewards")
+                op.description(
+                    "Get paginated list of all reward balances at a specific height. Limit must \
+                     be ≤ 10000",
+                )
+                .tag("Rewards")
             }),
         )
         .api_route(
             routes::v2::REWARD_MERKLE_TREE_V2_ROUTE.http,
             get_with(get_reward_merkle_tree_v2, |op| {
-                op.description("Get raw RewardMerkleTreeV2 snapshot at a given height. Returns serialized merkle tree data")
-                    .tag("Rewards")
+                op.description(
+                    "Get raw RewardMerkleTreeV2 snapshot at a given height. Returns serialized \
+                     merkle tree data",
+                )
+                .tag("Rewards")
             }),
         )
         .finish_api(&mut api);
@@ -417,12 +429,22 @@ where
                     for param in &mut operation.parameters {
                         if let aide::openapi::ReferenceOr::Item(param_item) = param {
                             let parameter_data = match param_item {
-                                aide::openapi::Parameter::Query { parameter_data, .. } => parameter_data,
-                                aide::openapi::Parameter::Header { parameter_data, .. } => parameter_data,
-                                aide::openapi::Parameter::Path { parameter_data, .. } => parameter_data,
-                                aide::openapi::Parameter::Cookie { parameter_data, .. } => parameter_data,
+                                aide::openapi::Parameter::Query { parameter_data, .. } => {
+                                    parameter_data
+                                },
+                                aide::openapi::Parameter::Header { parameter_data, .. } => {
+                                    parameter_data
+                                },
+                                aide::openapi::Parameter::Path { parameter_data, .. } => {
+                                    parameter_data
+                                },
+                                aide::openapi::Parameter::Cookie { parameter_data, .. } => {
+                                    parameter_data
+                                },
                             };
-                            if let aide::openapi::ParameterSchemaOrContent::Schema(ref mut schema) = parameter_data.format {
+                            if let aide::openapi::ParameterSchemaOrContent::Schema(ref mut schema) =
+                                parameter_data.format
+                            {
                                 transform.transform(&mut schema.json_schema);
                             }
                         }

@@ -23,7 +23,7 @@ use thiserror::Error;
 
 use crate::FeeAccount;
 
-// Newtype because type doesn't implement Hash, Display, SerDe, Ord, PartialOrd
+// Newtype because type doesn't implement Hash, Display, Ord, PartialOrd
 #[derive(PartialEq, Eq, Clone)]
 pub struct EthKeyPair {
     signing_key: SigningKey,
@@ -126,21 +126,6 @@ impl std::fmt::Debug for EthKeyPair {
     }
 }
 
-impl Serialize for EthKeyPair {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        self.signing_key.to_bytes().serialize(serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for EthKeyPair {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let bytes = <[u8; 32]>::deserialize(deserializer)?;
-        Ok(EthKeyPair::from(
-            SigningKey::from_slice(&bytes).map_err(serde::de::Error::custom)?,
-        ))
-    }
-}
-
 impl PartialOrd for EthKeyPair {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
@@ -231,14 +216,6 @@ mod tests {
             key1.address(),
             Address::parse_checksummed("0x70997970C51812dc3A010C7d01b50e0d17dc79C8", None).unwrap()
         );
-    }
-
-    #[test]
-    fn test_key_serde() {
-        let key = EthKeyPair::for_test();
-        let serialized = bincode::serialize(&key).unwrap();
-        let deserialized: EthKeyPair = bincode::deserialize(&serialized).unwrap();
-        assert_eq!(key, deserialized);
     }
 
     #[test]

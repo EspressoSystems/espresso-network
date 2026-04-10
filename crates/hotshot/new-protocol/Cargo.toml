@@ -12,6 +12,7 @@ rewind = []
 stats = []
 
 [dependencies]
+anyhow = { workspace = true }
 async-broadcast = { workspace = true }
 async-lock = { workspace = true }
 async-trait = { workspace = true }
@@ -24,6 +25,7 @@ hotshot-testing = { workspace = true }
 hotshot-types = { workspace = true }
 hotshot-utils = { workspace = true }
 serde = { workspace = true }
+serde_bytes = { workspace = true }
 thiserror = { workspace = true }
 time = { workspace = true }
 tokio = { workspace = true }

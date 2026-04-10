@@ -247,7 +247,7 @@ impl SequencerPersistence for NoStorage {
         Ok(())
     }
 
-    async fn migrate_validator_authenticated(&self) -> anyhow::Result<()> {
+    async fn migrate_x25519_keys(&self) -> anyhow::Result<()> {
         Ok(())
     }
 

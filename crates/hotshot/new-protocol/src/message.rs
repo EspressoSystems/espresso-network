@@ -1,16 +1,21 @@
 use std::marker::PhantomData;
 
-use committable::{Commitment, Committable};
+use committable::Commitment;
 use hotshot_types::{
-    data::{EpochNumber, Leaf2, QuorumProposal2, VidDisperseShare2, ViewNumber},
-    message::Proposal,
+    data::{
+        EpochNumber, Leaf2, QuorumProposal2, QuorumProposalWrapper, VidDisperseShare2,
+        ViewChangeEvidence2, ViewNumber,
+    },
+    drb::DrbResult,
+    message::Proposal as SignedProposal,
     simple_certificate::{
-        SimpleCertificate, SuccessThreshold, ViewSyncCommitCertificate2,
-        ViewSyncFinalizeCertificate2, ViewSyncPreCommitCertificate2,
+        LightClientStateUpdateCertificateV2, OneHonestThreshold, QuorumCertificate2,
+        SimpleCertificate, SuccessThreshold, TimeoutCertificate2, UpgradeCertificate,
+        ViewSyncCommitCertificate2, ViewSyncFinalizeCertificate2, ViewSyncPreCommitCertificate2,
     },
     simple_vote::{
-        HasEpoch, QuorumData2, QuorumMarker, QuorumVote2, SimpleVote, TimeoutVote2,
-        ViewSyncCommitVote2, ViewSyncFinalizeVote2, ViewSyncPreCommitVote2,
+        CheckpointData, HasEpoch, QuorumData2, QuorumVote2, SimpleVote, TimeoutData2, TimeoutVote2,
+        ViewSyncCommitVote2, ViewSyncFinalizeVote2, ViewSyncPreCommitVote2, Vote2Data,
     },
     traits::node_implementation::NodeType,
     vote::HasViewNumber,
@@ -22,6 +27,96 @@ pub type CheckpointVote<T> = SimpleVote<T, CheckpointData>;
 pub type CheckpointCertificate<T> = SimpleCertificate<T, CheckpointData, SuccessThreshold>;
 pub type Certificate1<T> = SimpleCertificate<T, QuorumData2<T>, SuccessThreshold>;
 pub type Certificate2<T> = SimpleCertificate<T, Vote2Data<T>, SuccessThreshold>;
+pub type TimeoutCertificate<T> = SimpleCertificate<T, TimeoutData2, SuccessThreshold>;
+pub type TimeoutOneHonest<T> = SimpleCertificate<T, TimeoutData2, OneHonestThreshold>;
+
+/// Proposal to append a block.
+#[derive(Debug, Serialize, Deserialize, Clone, Eq, PartialEq, Hash)]
+#[serde(bound(deserialize = ""))]
+pub struct Proposal<T: NodeType> {
+    /// The block header to append
+    pub block_header: T::BlockHeader,
+
+    /// view number for the proposal
+    pub view_number: ViewNumber,
+
+    /// The epoch number corresponding to the block number.
+    ///
+    /// Can be `None` for pre-epoch version.
+    pub epoch: EpochNumber,
+
+    /// certificate that the proposal is chaining from
+    pub justify_qc: QuorumCertificate2<T>,
+
+    /// certificate proving the last block of the epoch is decided
+    pub next_epoch_justify_qc: Option<Certificate2<T>>,
+
+    /// Possible upgrade certificate, which the leader may optionally attach.
+    pub upgrade_certificate: Option<UpgradeCertificate<T>>,
+
+    /// Possible timeout or view sync certificate.
+    ///
+    /// If the `justify_qc` is not for a proposal in the immediately preceding
+    /// view, then either a timeout or view sync certificate must be attached.
+    pub view_change_evidence: Option<ViewChangeEvidence2<T>>,
+
+    /// The DRB result for the next epoch.
+    ///
+    /// This is required only for the last block of the epoch. Nodes will verify
+    /// that it's consistent with the result from their computations.
+    #[serde(with = "serde_bytes")]
+    pub next_drb_result: Option<DrbResult>,
+
+    /// The light client state update certificate for the next epoch.
+    /// This is required for the epoch root.
+    pub state_cert: Option<LightClientStateUpdateCertificateV2<T>>,
+}
+
+impl<T: NodeType> HasViewNumber for Proposal<T> {
+    fn view_number(&self) -> ViewNumber {
+        self.view_number
+    }
+}
+
+impl<T: NodeType> HasEpoch for Proposal<T> {
+    fn epoch(&self) -> Option<EpochNumber> {
+        Some(self.epoch)
+    }
+}
+
+impl<T: NodeType> From<QuorumProposalWrapper<T>> for Proposal<T> {
+    fn from(wrapper: QuorumProposalWrapper<T>) -> Self {
+        let qp = wrapper.proposal;
+        Self {
+            block_header: qp.block_header,
+            view_number: qp.view_number,
+            epoch: qp.epoch.unwrap_or(EpochNumber::new(0)),
+            justify_qc: qp.justify_qc,
+            next_epoch_justify_qc: None,
+            upgrade_certificate: qp.upgrade_certificate,
+            view_change_evidence: qp.view_change_evidence,
+            next_drb_result: qp.next_drb_result,
+            state_cert: qp.state_cert,
+        }
+    }
+}
+
+impl<T: NodeType> From<Proposal<T>> for Leaf2<T> {
+    fn from(p: Proposal<T>) -> Self {
+        let qp = QuorumProposal2 {
+            block_header: p.block_header,
+            view_number: p.view_number,
+            epoch: Some(p.epoch),
+            justify_qc: p.justify_qc,
+            next_epoch_justify_qc: None,
+            upgrade_certificate: p.upgrade_certificate,
+            view_change_evidence: p.view_change_evidence,
+            next_drb_result: p.next_drb_result,
+            state_cert: p.state_cert,
+        };
+        Self::from_quorum_proposal(&QuorumProposalWrapper::from(qp))
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord, Hash, Deserialize)]
 pub enum Unchecked {}
@@ -32,14 +127,14 @@ pub enum Validated {}
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 #[serde(bound(deserialize = "S: Deserialize<'de>"))]
 pub struct ProposalMessage<T: NodeType, S> {
-    pub proposal: Proposal<T, QuorumProposal2<T>>,
+    pub proposal: SignedProposal<T, Proposal<T>>,
     pub vid_share: VidDisperseShare2<T>,
     #[serde(skip)]
     _marker: PhantomData<fn() -> S>,
 }
 
 impl<T: NodeType> ProposalMessage<T, Validated> {
-    pub fn validated(p: Proposal<T, QuorumProposal2<T>>, s: VidDisperseShare2<T>) -> Self {
+    pub fn validated(p: SignedProposal<T, Proposal<T>>, s: VidDisperseShare2<T>) -> Self {
         Self {
             proposal: p,
             vid_share: s,
@@ -65,62 +160,6 @@ impl<T: NodeType, S> HasViewNumber for ProposalMessage<T, S> {
     }
 }
 
-/// Data used for a yes vote.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
-#[serde(bound(deserialize = ""))]
-pub struct Vote2Data<T: NodeType> {
-    pub leaf_commit: Commitment<Leaf2<T>>,
-    pub epoch: EpochNumber,
-    pub block_number: u64,
-}
-
-/// Data used for checkpointing.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
-pub struct CheckpointData {
-    pub view: ViewNumber,
-    pub epoch: EpochNumber,
-}
-
-impl Committable for CheckpointData {
-    fn commit(&self) -> Commitment<Self> {
-        committable::RawCommitmentBuilder::new("CheckpointData")
-            .u64(*self.view)
-            .u64(*self.epoch)
-            .finalize()
-    }
-}
-
-impl HasViewNumber for CheckpointData {
-    fn view_number(&self) -> ViewNumber {
-        self.view
-    }
-}
-
-impl HasEpoch for CheckpointData {
-    fn epoch(&self) -> Option<EpochNumber> {
-        Some(self.epoch)
-    }
-}
-
-impl QuorumMarker for CheckpointData {}
-
-impl<T: NodeType> HasEpoch for Vote2Data<T> {
-    fn epoch(&self) -> Option<EpochNumber> {
-        Some(self.epoch)
-    }
-}
-
-impl<T: NodeType> Committable for Vote2Data<T> {
-    fn commit(&self) -> Commitment<Self> {
-        committable::RawCommitmentBuilder::new("Vote2Data")
-            .var_size_bytes(self.leaf_commit.as_ref())
-            .u64(*self.epoch)
-            .u64(self.block_number)
-            .constant_str("Vote2")
-            .finalize()
-    }
-}
-
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 #[serde(bound(deserialize = ""))]
 pub struct Vote1<T: NodeType> {
@@ -134,7 +173,36 @@ impl<T: NodeType> HasViewNumber for Vote1<T> {
     }
 }
 
-impl<T: NodeType> QuorumMarker for Vote2Data<T> {}
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
+#[serde(bound(deserialize = ""))]
+pub struct TimeoutVoteMessage<T: NodeType> {
+    pub vote: TimeoutVote2<T>,
+    pub lock: Option<Certificate1<T>>,
+}
+
+impl<T: NodeType> HasViewNumber for TimeoutVoteMessage<T> {
+    fn view_number(&self) -> ViewNumber {
+        self.vote.view_number()
+    }
+}
+
+/// Message sent at the end of an epoch by the current committee
+/// to the next committee.  Both certificates are on the last block of the epoch.
+/// The protocol spec only requires the second certificate, but for consistency
+/// in the code and with the existing Proposal and Leaf structures
+/// We include the Certificate1.  This allows us to use the Certificate1 as the
+/// Justify QC on the first proposal.  The Certificate2 also required on that proposal
+/// but as next_epoch_justify_qc on the Leaf.
+///
+/// We include the proposal because the new leader in the next epoch
+/// will need it to build a header for the first block of the next epoch.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
+#[serde(bound(deserialize = ""))]
+pub struct EpochChangeMessage<T: NodeType> {
+    pub cert1: Certificate1<T>,
+    pub cert2: Certificate2<T>,
+    pub proposal: Proposal<T>,
+}
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 #[serde(bound(deserialize = "S: Deserialize<'de>"))]
@@ -145,7 +213,9 @@ pub enum ConsensusMessage<T: NodeType, S> {
     Vote2(Vote2<T>),
     Certificate1(Certificate1<T>, T::SignatureKey),
     Certificate2(Certificate2<T>, T::SignatureKey),
-    TimeoutVote(TimeoutVote2<T>),
+    TimeoutVote(TimeoutVoteMessage<T>),
+    TimeoutCertificate(TimeoutCertificate2<T>),
+    EpochChange(EpochChangeMessage<T>),
     Checkpoint(CheckpointVote<T>),
 }
 
@@ -159,7 +229,9 @@ impl<T: NodeType, S> ConsensusMessage<T, S> {
             Self::Certificate1(c, k) => ConsensusMessage::Certificate1(c, k),
             Self::Certificate2(c, k) => ConsensusMessage::Certificate2(c, k),
             Self::TimeoutVote(v) => ConsensusMessage::TimeoutVote(v),
+            Self::TimeoutCertificate(c) => ConsensusMessage::TimeoutCertificate(c),
             Self::Checkpoint(v) => ConsensusMessage::Checkpoint(v),
+            Self::EpochChange(c) => ConsensusMessage::EpochChange(c),
         }
     }
 }
@@ -172,8 +244,10 @@ impl<T: NodeType, S> HasViewNumber for ConsensusMessage<T, S> {
             Self::Vote2(vote) => vote.view_number(),
             Self::Certificate1(certificate, _) => certificate.view_number(),
             Self::Certificate2(certificate, _) => certificate.view_number(),
-            Self::TimeoutVote(vote) => vote.view_number(),
+            Self::TimeoutVote(msg) => msg.view_number(),
+            Self::TimeoutCertificate(certificate) => certificate.view_number(),
             Self::Checkpoint(vote) => vote.view_number(),
+            Self::EpochChange(epoch_change) => epoch_change.cert1.view_number(),
         }
     }
 }

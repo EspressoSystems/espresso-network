@@ -133,10 +133,7 @@ impl v2::RewardApi for TestApi {
         <Self as v1::RewardApi>::get_reward_claim_input(self, 9999, address).await
     }
 
-    async fn get_reward_balance(
-        &self,
-        address: Self::Address,
-    ) -> Result<Self::RewardBalance> {
+    async fn get_reward_balance(&self, address: Self::Address) -> Result<Self::RewardBalance> {
         <Self as v1::RewardApi>::get_latest_reward_balance(self, address).await
     }
 

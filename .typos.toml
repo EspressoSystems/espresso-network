@@ -31,3 +31,5 @@ extend-exclude = [
 Forgetten = "Forgetten"
 # Common "spelling" of "type" in Rust/go
 typ = "typ"
+# Token Generation Event
+tge = "tge"

@@ -21,7 +21,7 @@ use jf_merkle_tree_compat::prelude::{
 };
 use serde_json;
 use serialization_api::v2::{
-    self, RewardAccountProofV2, RewardAccountQueryDataV2, RewardAmounts, RewardBalance,
+    self, RewardAccountProofV2, RewardAccountQueryDataV2, RewardBalance, RewardBalances,
     RewardClaimInput, RewardMerkleProofV2, RewardMerkleTreeV2Data, merkle_node,
     reward_merkle_proof_v2::ProofType,
 };
@@ -158,7 +158,7 @@ where
     type RewardClaimInput = InternalRewardClaimInput;
     type RewardBalance = U256;
     type RewardAccountQueryData = InternalRewardAccountQueryData;
-    type RewardAmounts = (Vec<(RewardAccountV2, InternalRewardAmount)>, u64); // (amounts, total)
+    type RewardBalances = (Vec<(RewardAccountV2, InternalRewardAmount)>, u64); // (amounts, total)
     type RewardMerkleTreeData = InternalRewardTreeData;
 
     // Deserialize proto/string types → internal types
@@ -213,10 +213,10 @@ where
         Ok(RewardAccountQueryDataV2 { balance, proof })
     }
 
-    fn serialize_reward_amounts(
+    fn serialize_reward_balances(
         &self,
-        value: &Self::RewardAmounts,
-    ) -> anyhow::Result<RewardAmounts> {
+        value: &Self::RewardBalances,
+    ) -> anyhow::Result<RewardBalances> {
         let (amounts_vec, total) = value;
 
         // Convert each account/amount pair to proto format
@@ -228,7 +228,7 @@ where
             })
             .collect();
 
-        Ok(RewardAmounts {
+        Ok(RewardBalances {
             amounts,
             total: *total,
         })
@@ -255,19 +255,17 @@ where
 {
     async fn get_reward_claim_input(
         &self,
-        block_height: u64,
         address: Self::Address,
     ) -> anyhow::Result<Self::RewardClaimInput> {
-        // Load the reward account proof from the data source
+        // Load the latest reward account proof from the data source
         let proof = self
             .data_source
-            .load_reward_account_proof_v2(block_height, address.into())
+            .load_latest_reward_account_proof_v2(address.into())
             .await
             .map_err(|err| {
                 anyhow::anyhow!(
-                    "failed to load reward account {:?} at height {}: {}",
+                    "failed to load latest reward account {:?}: {}",
                     address,
-                    block_height,
                     err
                 )
             })?;
@@ -275,58 +273,26 @@ where
         // Convert the proof to reward claim input and return internal type
         proof.to_reward_claim_input().map_err(|err| match err {
             RewardClaimError::ZeroRewardError => {
-                anyhow::anyhow!(
-                    "zero reward balance for {:?} at height {}",
-                    address,
-                    block_height
-                )
+                anyhow::anyhow!("zero reward balance for {:?}", address)
             },
             RewardClaimError::ProofConversionError(e) => {
-                anyhow::anyhow!(
-                    "failed to create solidity proof for {:?} at height {}: {}",
-                    address,
-                    block_height,
-                    e
-                )
+                anyhow::anyhow!("failed to create solidity proof for {:?}: {}", address, e)
             },
         })
     }
 
     async fn get_reward_balance(
         &self,
-        height: u64,
         address: Self::Address,
     ) -> anyhow::Result<Self::RewardBalance> {
-        // Load the reward account proof from the data source
-        let proof = self
-            .data_source
-            .load_reward_account_proof_v2(height, address.into())
-            .await
-            .map_err(|err| {
-                anyhow::anyhow!(
-                    "failed to load reward account {:?} at height {}: {}",
-                    address,
-                    height,
-                    err
-                )
-            })?;
-
-        // Return internal balance type
-        Ok(proof.balance)
-    }
-
-    async fn get_latest_reward_balance(
-        &self,
-        address: Self::Address,
-    ) -> anyhow::Result<Self::RewardBalance> {
-        // Load the latest reward account proof
+        // Load the latest reward account proof from the data source
         let proof = self
             .data_source
             .load_latest_reward_account_proof_v2(address.into())
             .await
             .map_err(|err| {
                 anyhow::anyhow!(
-                    "failed to load latest reward account for {:?}: {}",
+                    "failed to load latest reward account {:?}: {}",
                     address,
                     err
                 )
@@ -338,28 +304,9 @@ where
 
     async fn get_reward_account_proof(
         &self,
-        height: u64,
         address: Self::Address,
     ) -> anyhow::Result<Self::RewardAccountQueryData> {
-        // Load the reward account proof from the data source and return internal type
-        self.data_source
-            .load_reward_account_proof_v2(height, address.into())
-            .await
-            .map_err(|err| {
-                anyhow::anyhow!(
-                    "failed to load reward account proof for {:?} at height {}: {}",
-                    address,
-                    height,
-                    err
-                )
-            })
-    }
-
-    async fn get_latest_reward_account_proof(
-        &self,
-        address: Self::Address,
-    ) -> anyhow::Result<Self::RewardAccountQueryData> {
-        // Load the latest reward account proof and return internal type
+        // Load the latest reward account proof from the data source and return internal type
         self.data_source
             .load_latest_reward_account_proof_v2(address.into())
             .await
@@ -372,12 +319,12 @@ where
             })
     }
 
-    async fn get_reward_amounts(
+    async fn get_reward_balances(
         &self,
         height: u64,
         offset: u64,
         limit: u64,
-    ) -> anyhow::Result<Self::RewardAmounts> {
+    ) -> anyhow::Result<Self::RewardBalances> {
         // Validate limit (from reward.toml: limit <= 10000)
         if limit > 10000 {
             return Err(anyhow::anyhow!(

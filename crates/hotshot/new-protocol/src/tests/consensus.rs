@@ -1,132 +1,25 @@
 use std::sync::Arc;
 
 use hotshot::{traits::ValidatedState, types::BLSPubKey};
-use hotshot_example_types::{
-    block_types::TestBlockHeader,
-    node_types::{TEST_VERSIONS, TestTypes},
-    state_types::TestValidatedState,
-};
-use hotshot_types::{
-    data::{Leaf2, QuorumProposalWrapper, VidDisperse, ViewNumber},
-    epoch_membership::EpochMembershipCoordinator,
-    traits::signature_key::SignatureKey,
-};
+use hotshot_example_types::{node_types::TestTypes, state_types::TestValidatedState};
+use hotshot_types::{data::ViewNumber, traits::signature_key::SignatureKey};
 
-use super::common::utils::{MockBlock, TestData, mock_membership, state_verified_input};
+use super::common::utils::TestData;
 use crate::{
-    consensus::{Consensus, ConsensusInput, ConsensusOutput},
-    helpers::{proposal_commitment, upgrade_lock},
+    consensus::ConsensusInput,
+    helpers::proposal_commitment,
+    message::Proposal,
     outbox::Outbox,
     state::StateResponse,
-    tests::common::assertions::{
-        any, count_matching, is_leaf_decided, is_proposal, is_request_block_and_header,
-        is_request_state, is_vote1, is_vote2, node_index_for_key,
+    tests::common::{
+        assertions::{
+            any, count_matching, is_leaf_decided, is_proposal, is_request_block_and_header,
+            is_request_state, is_send_timeout_cert, is_send_timeout_vote, is_vote1, is_vote2,
+            node_index_for_key,
+        },
+        utils::ConsensusHarness,
     },
 };
-
-struct ConsensusHarness {
-    consensus: Consensus<TestTypes>,
-    membership_coordinator: EpochMembershipCoordinator<TestTypes>,
-    collected: Outbox<ConsensusOutput<TestTypes>>,
-}
-
-impl ConsensusHarness {
-    async fn new(node_index: u64) -> Self {
-        let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
-        let membership = mock_membership().await;
-        let consensus = Consensus::new(membership.clone(), public_key, private_key);
-        Self {
-            consensus,
-            membership_coordinator: membership,
-            collected: Outbox::new(),
-        }
-    }
-
-    /// Apply a ConsensusInput directly and drain outputs, auto-responding to
-    /// actions that consensus expects feedback for.
-    async fn apply(&mut self, input: ConsensusInput<TestTypes>) {
-        let mut outbox = Outbox::new();
-        self.consensus.apply(input, &mut outbox).await;
-        self.drain_outbox(&mut outbox).await;
-    }
-
-    async fn drain_outbox(&mut self, outbox: &mut Outbox<ConsensusOutput<TestTypes>>) {
-        while let Some(output) = outbox.pop_front() {
-            self.handle_output(&output, outbox).await;
-            self.collected.push_back(output);
-        }
-    }
-
-    async fn handle_output(
-        &mut self,
-        output: &ConsensusOutput<TestTypes>,
-        outbox: &mut Outbox<ConsensusOutput<TestTypes>>,
-    ) {
-        match output {
-            ConsensusOutput::RequestState(req) => {
-                let input = state_verified_input(&req.proposal, req.view);
-                self.consensus.apply(input, outbox).await;
-            },
-            ConsensusOutput::RequestBlockAndHeader(req) => {
-                let mock_block = MockBlock::new();
-                let wrapper = QuorumProposalWrapper::<TestTypes> {
-                    proposal: req.parent_proposal.clone(),
-                };
-                let parent_leaf = Leaf2::from_quorum_proposal(&wrapper);
-                let header = TestBlockHeader::new(
-                    &parent_leaf,
-                    mock_block.payload_commitment,
-                    mock_block.builder_commitment,
-                    mock_block.metadata,
-                    TEST_VERSIONS.test.base,
-                );
-                self.consensus
-                    .apply(ConsensusInput::HeaderCreated(req.view, header), outbox)
-                    .await;
-                self.consensus
-                    .apply(
-                        ConsensusInput::BlockBuilt {
-                            view: req.view,
-                            epoch: req.epoch,
-                            payload: mock_block.block,
-                            metadata: mock_block.metadata,
-                        },
-                        outbox,
-                    )
-                    .await;
-            },
-            ConsensusOutput::RequestVidDisperse {
-                view,
-                epoch,
-                payload,
-                metadata,
-            } => {
-                let vid_disperse = VidDisperse::calculate_vid_disperse(
-                    payload,
-                    &self.membership_coordinator,
-                    *view,
-                    Some(*epoch),
-                    Some(*epoch),
-                    metadata,
-                    &upgrade_lock(),
-                )
-                .await
-                .unwrap();
-                let VidDisperse::V2(vid) = vid_disperse.disperse else {
-                    panic!("VidDisperse is not a V2");
-                };
-                self.consensus
-                    .apply(ConsensusInput::VidDisperseCreated(*view, vid), outbox)
-                    .await;
-            },
-            _ => {},
-        }
-    }
-
-    fn outputs(&self) -> &Outbox<ConsensusOutput<TestTypes>> {
-        &self.collected
-    }
-}
 
 /// Fresh consensus with no locked_cert accepts any proposal (genesis safety).
 #[tokio::test]
@@ -167,7 +60,7 @@ async fn test_timeout_filters_stale_events() {
         .apply(test_data.views[3].proposal_input_consensus(&node_key))
         .await;
 
-    assert_eq!(1, count_matching(harness.outputs(), is_request_state))
+    assert_eq!(1, count_matching(harness.outputs(), is_request_state));
 }
 
 /// Vote1 fires for sequential views when all preconditions are met.
@@ -374,17 +267,18 @@ async fn test_state_validation_failed_removes_proposal() {
     harness.consensus.apply(proposal_input, &mut outbox).await;
     harness.collected.extend(outbox.take());
 
-    // Send StateValidationFailed — removes proposal
-    let proposal = &test_data.views[1].proposal.data.proposal;
+    // Send StateVerificationFailed — removes proposal
+    let proposal: Proposal<TestTypes> = test_data.views[1].proposal.data.clone().into();
     harness
         .apply(ConsensusInput::StateValidationFailed(StateResponse {
             view: test_data.views[1].view_number,
-            commitment: proposal_commitment(proposal),
+            commitment: proposal_commitment(&proposal),
             state: Arc::new(
                 <TestValidatedState as ValidatedState<TestTypes>>::from_header(
                     &proposal.block_header,
                 ),
             ),
+            delta: None,
         }))
         .await;
 
@@ -531,6 +425,10 @@ async fn test_timeout_prevents_voting() {
     harness
         .apply(ConsensusInput::Timeout(test_data.views[1].view_number))
         .await;
+    assert!(
+        any(harness.outputs(), is_send_timeout_vote),
+        "Timeout should emit timeout vote"
+    );
 
     // Send cert1 for view 2 — should be stale
     harness.apply(test_data.views[1].cert1_input()).await;
@@ -586,6 +484,10 @@ async fn test_leader_proposes_after_timeout() {
     // Now send timeout cert for view 2 — triggers proposal for view 3
     harness.apply(test_data.views[1].timeout_cert_input()).await;
 
+    assert!(
+        any(harness.outputs(), is_send_timeout_cert),
+        "Timeout certificate should be forwarded"
+    );
     assert!(
         any(harness.outputs(), is_request_block_and_header),
         "Leader should request block and header after timeout"
@@ -688,8 +590,20 @@ async fn test_vote_after_timeout_cert() {
         .apply(test_data.views[1].block_reconstructed_input())
         .await;
 
+    harness
+        .apply(ConsensusInput::Timeout(test_data.views[1].view_number))
+        .await;
+    assert!(
+        any(harness.outputs(), is_send_timeout_vote),
+        "Timeout should emit timeout vote"
+    );
+
     // Receive timeout cert for view 2 → view advances to 3
     harness.apply(test_data.views[1].timeout_cert_input()).await;
+    assert!(
+        any(harness.outputs(), is_send_timeout_cert),
+        "Timeout certificate should be forwarded"
+    );
 
     let vote1_before = count_matching(harness.outputs(), is_vote1);
 

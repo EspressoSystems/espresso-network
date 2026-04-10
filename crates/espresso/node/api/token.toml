@@ -1,3 +1,29 @@
 [route.get_total_minted_supply]
 PATH = ["total-minted-supply"]
-DOC = "Get the total supply of the espresso token, counting only tokens that have been minted on Ethereum. Notably, this does not include unminted tokens from (for example) unclaimed rewards, or other sources. The value is returned as a decimal in token units, equal to the raw `totalSupply` retrieved from the contract divided by 10^18. Calls are cached for an hour after retrieval, so this endpoint should not be used if realtime information from the contract is required."
+DOC = """ Get the total supply of the espresso token, counting only tokens that have been minted on
+Ethereum. Does not include unminted tokens from unclaimed rewards or other sources. The value is
+returned as a decimal in token units (raw totalSupply / 10^18). Calls are cached for an hour after
+retrieval. """
+
+[route.get_circulating_supply]
+PATH = ["circulating-supply"]
+
+DOC = """Circulating supply of the espresso token: initial_supply + reward_distributed - locked. On
+mainnet, locked tokens follow the unlock schedule. On other networks, locked is zero. Returns a
+decimal string in token units. """
+
+[route.get_circulating_supply_ethereum]
+PATH = ["circulating-supply-ethereum"]
+DOC = """Circulating supply of espresso tokens on Ethereum L1: total_supply_l1 - locked. On mainnet,
+locked tokens follow the unlock schedule. On other networks, locked is zero. Note: total_supply_l1
+grows as rewards are claimed (claiming mints on L1). Returns a decimal string in token units. """
+
+[route.get_total_issued_supply]
+PATH = ["total-issued-supply"]
+DOC = """Total issued supply of the espresso token: initial_supply + total_reward_distributed. Includes
+rewards that have not yet been claimed on Ethereum. Returns a decimal string in token units. """
+
+[route.get_total_reward_distributed]
+PATH = ["total-reward-distributed"]
+DOC = """Total rewards distributed by consensus. Includes rewards not yet claimed on Ethereum. Returns
+a decimal string in token units. """

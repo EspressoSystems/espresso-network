@@ -21,10 +21,11 @@ use crate::{
         error::{CoordinatorError, ErrorSource, Severity},
         timer::Timer,
     },
-    drb::DrbRequester,
+    epoch::{EpochManager, EpochRootResult},
     message::{
-        BlockMessage, Certificate2, CheckpointCertificate, CheckpointVote, ConsensusMessage,
-        Message, MessageType, ProposalMessage, TransactionMessage, Unchecked, Vote2,
+        self, BlockMessage, Certificate2, CheckpointCertificate, CheckpointVote, ConsensusMessage,
+        Message, MessageType, ProposalMessage, TimeoutOneHonest, TransactionMessage, Unchecked,
+        Vote2,
     },
     network::Network,
     outbox::Outbox,
@@ -45,8 +46,9 @@ pub struct Coordinator<T: NodeType, I: NodeImplementation<T>> {
     vote1_collector: VoteCollector<T, QuorumVote2<T>, QuorumCertificate2<T>>,
     vote2_collector: VoteCollector<T, Vote2<T>, Certificate2<T>>,
     timeout_collector: VoteCollector<T, TimeoutVote2<T>, TimeoutCertificate2<T>>,
+    timeout_one_honest_collector: VoteCollector<T, TimeoutVote2<T>, TimeoutOneHonest<T>>,
     checkpoint_collector: VoteCollector<T, CheckpointVote<T>, CheckpointCertificate<T>>,
-    drb_requester: DrbRequester,
+    epoch_manager: EpochManager<T>,
     block_builder: BlockBuilder<T>,
     proposal_validator: ProposalValidator<T>,
     #[builder(default)]
@@ -110,6 +112,9 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                 Some(tcert) = self.timeout_collector.next() => {
                     return Ok(ConsensusInput::TimeoutCertificate(tcert))
                 }
+                Some(out) = self.timeout_one_honest_collector.next() => {
+                    return Ok(ConsensusInput::TimeoutOneHonest(out.view_number(), out.data.epoch))
+                }
                 Some(cert1) = self.vote1_collector.next() => {
                     return Ok(ConsensusInput::Certificate1(cert1))
                 }
@@ -169,9 +174,15 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                         return Err(CoordinatorError::unspecified().context("vid reconstruction"))
                     }
                 },
-                Some((_epoch, _drb_result)) = self.drb_requester.next() => {
-                    todo!()
-                }
+                Some(result) = self.epoch_manager.next() => match result {
+                    Ok(EpochRootResult::DrbResult(epoch, drb_result)) => {
+                        return Ok(ConsensusInput::DrbResult(epoch, drb_result))
+                    }
+                    Ok(EpochRootResult::RootAdded(_epoch)) => {}
+                    Err(err) => {
+                        return Err(CoordinatorError::regular(err))
+                    }
+                },
                 else => {
                     return Err(CoordinatorError::critical(ErrorSource::NoInput))
                 }
@@ -224,7 +235,9 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
         match message.message_type {
             MessageType::Consensus(msg) => match msg {
                 ConsensusMessage::Proposal(p) => {
-                    self.proposal_validator.validate(p);
+                    if self.consensus.wants_proposal(&p) {
+                        self.proposal_validator.validate(p);
+                    }
                     None
                 },
                 ConsensusMessage::Vote1(vote1) => {
@@ -243,9 +256,20 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                 ConsensusMessage::Certificate2(certificate2, _key) => {
                     Some(ConsensusInput::Certificate2(certificate2))
                 },
-                ConsensusMessage::TimeoutVote(timeout_vote) => {
-                    self.timeout_collector.accumulate_vote(timeout_vote).await;
+                ConsensusMessage::TimeoutVote(timeout_msg) => {
+                    self.timeout_collector
+                        .accumulate_vote(timeout_msg.vote.clone())
+                        .await;
+                    self.timeout_one_honest_collector
+                        .accumulate_vote(timeout_msg.vote)
+                        .await;
                     None
+                },
+                ConsensusMessage::TimeoutCertificate(tc) => {
+                    Some(ConsensusInput::TimeoutCertificate(tc))
+                },
+                ConsensusMessage::EpochChange(epoch_change) => {
+                    Some(ConsensusInput::EpochChange(epoch_change))
                 },
                 ConsensusMessage::Checkpoint(checkpoint) => {
                     self.checkpoint_collector.accumulate_vote(checkpoint).await;
@@ -291,8 +315,8 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                     metadata,
                 });
             },
-            ConsensusOutput::RequestDRB(drb_input) => {
-                self.drb_requester.request_drb(drb_input);
+            ConsensusOutput::RequestDrbResult(epoch) => {
+                self.epoch_manager.request_drb_result(epoch);
             },
             ConsensusOutput::SendCheckpointVote(checkpoint_vote) => {
                 let message = Message {
@@ -306,10 +330,12 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                     .await
                     .map_err(|e| CoordinatorError::from(e).context("broadcast checkpoint vote"))?
             },
-            ConsensusOutput::Certificate1Formed(_) => {}, // TODO
-            ConsensusOutput::Certificate2Formed(_) => {}, // TODO
-            ConsensusOutput::LeafDecided(_) => {},        // TODO
-            ConsensusOutput::LockUpdated(_) => {},        // TODO
+            ConsensusOutput::LeafDecided(leaves) => {
+                for leaf in leaves {
+                    self.epoch_manager.handle_leaf_decided(leaf);
+                }
+            },
+            ConsensusOutput::LockUpdated(_) => {}, // TODO
             ConsensusOutput::RequestBlockAndHeader(request) => {
                 self.block_builder.request_block(request);
             },
@@ -335,15 +361,31 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                     }
                 }
             },
-            ConsensusOutput::SendTimeoutVote(vote) => {
+            ConsensusOutput::SendTimeoutVote(vote, lock) => {
                 let message = Message {
                     sender: self.public_key.clone(),
-                    message_type: MessageType::Consensus(ConsensusMessage::TimeoutVote(vote)),
+                    message_type: MessageType::Consensus(ConsensusMessage::TimeoutVote(
+                        message::TimeoutVoteMessage { vote, lock },
+                    )),
                 };
                 self.network
                     .broadcast(message)
                     .await
                     .map_err(|e| CoordinatorError::from(e).context("broadcast timeout vote"))?
+            },
+            ConsensusOutput::SendTimeoutCertificate(tc, view, epoch) => {
+                if let Some(leader) = self.leader(view, epoch).await {
+                    let message = Message {
+                        sender: self.public_key.clone(),
+                        message_type: MessageType::Consensus(ConsensusMessage::TimeoutCertificate(
+                            tc,
+                        )),
+                    };
+                    self.network
+                        .unicast(leader, message)
+                        .await
+                        .map_err(|e| CoordinatorError::from(e).context("timeout certificate"))?;
+                }
             },
             ConsensusOutput::SendVote1(vote1) => {
                 let message = Message {
@@ -365,8 +407,31 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                     .await
                     .map_err(|e| CoordinatorError::from(e).context("broadcast vote2"))?
             },
-            ConsensusOutput::TimeoutCertificateReceived(..) => {}, // TODO
-            ConsensusOutput::ViewSyncCertificateReceived(_) => {}, // TODO
+            ConsensusOutput::SendEpochChange(epoch_change) => {
+                let message = Message {
+                    sender: self.public_key.clone(),
+                    message_type: MessageType::Consensus(ConsensusMessage::EpochChange(
+                        epoch_change,
+                    )),
+                };
+                self.network
+                    .broadcast(message)
+                    .await
+                    .map_err(|e| CoordinatorError::from(e).context("broadcast epoch change"))?
+            },
+            ConsensusOutput::SendCertificate1(cert1) => {
+                let message = Message {
+                    sender: self.public_key.clone(),
+                    message_type: MessageType::Consensus(ConsensusMessage::Certificate1(
+                        cert1,
+                        self.public_key.clone(),
+                    )),
+                };
+                self.network
+                    .broadcast(message)
+                    .await
+                    .map_err(|e| CoordinatorError::from(e).context("broadcast certificate1"))?
+            },
             ConsensusOutput::ViewChanged(view, epoch) => {
                 self.timer.reset_with(view);
                 let txns = self.block_builder.on_view_changed(view, epoch);
@@ -419,15 +484,16 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
 
     fn gc(&mut self, view: ViewNumber, epoch: EpochNumber) {
         self.consensus.gc(view, epoch);
-        self.checkpoint_collector.gc(view);
+        self.checkpoint_collector.gc(view, epoch);
         self.network.gc(view, epoch);
         self.state_manager.gc(view);
         self.vid_disperser.gc(view);
         self.vid_reconstructor.gc(view);
-        self.vote1_collector.gc(view);
-        self.vote2_collector.gc(view);
-        self.timeout_collector.gc(view);
-        self.drb_requester.gc(epoch);
+        self.vote1_collector.gc(view, epoch);
+        self.vote2_collector.gc(view, epoch);
+        self.timeout_collector.gc(view, epoch);
+        self.timeout_one_honest_collector.gc(view, epoch);
+        self.epoch_manager.gc(epoch);
         self.block_builder.gc(view);
     }
 }

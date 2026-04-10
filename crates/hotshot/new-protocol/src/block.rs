@@ -4,11 +4,11 @@ use std::{
 };
 
 use committable::{Commitment, Committable};
-use hotshot::traits::BlockPayload;
+use hotshot::traits::{BlockPayload, ValidatedState as _};
 use hotshot_types::{
+    consensus::PayloadWithMetadata,
     data::{
-        EpochNumber, QuorumProposal2, VidCommitment, ViewNumber, vid_commitment,
-        vid_disperse::vid_total_weight,
+        EpochNumber, VidCommitment, ViewNumber, vid_commitment, vid_disperse::vid_total_weight,
     },
     epoch_membership::EpochMembershipCoordinator,
     traits::{
@@ -25,7 +25,7 @@ use tracing::{error, warn};
 use crate::{
     consensus::ConsensusInput,
     helpers::upgrade_lock,
-    message::{DedupManifest, TransactionMessage},
+    message::{DedupManifest, Proposal, TransactionMessage},
     state::HeaderRequest,
 };
 
@@ -43,15 +43,14 @@ pub enum BlockError {
 pub struct BlockAndHeaderRequest<T: NodeType> {
     pub view: ViewNumber,
     pub epoch: EpochNumber,
-    pub parent_proposal: QuorumProposal2<T>,
+    pub parent_proposal: Proposal<T>,
 }
 
 pub struct BlockBuilderOutput<T: NodeType> {
     pub view: ViewNumber,
     pub epoch: EpochNumber,
-    pub payload: T::BlockPayload,
-    pub metadata: <T::BlockPayload as BlockPayload<T>>::Metadata,
-    pub parent_proposal: QuorumProposal2<T>,
+    pub payload: PayloadWithMetadata<T>,
+    pub parent_proposal: Proposal<T>,
     pub builder_commitment: BuilderCommitment,
     pub builder_fee: BuilderFee<T>,
     pub payload_commitment: VidCommitment,
@@ -141,10 +140,17 @@ impl<T: NodeType> BlockBuilder<T> {
                 epoch,
                 hashes,
             };
+
+            let validated_state =
+                T::ValidatedState::from_header(&request.parent_proposal.block_header);
             let (payload, metadata) =
-                T::BlockPayload::from_transactions(txs, &T::ValidatedState::default(), &instance)
+                T::BlockPayload::from_transactions(txs, &validated_state, &instance)
                     .await
                     .map_err(|e| BlockError::PayloadConstruction(e.to_string()))?;
+            let payload: PayloadWithMetadata<T> = PayloadWithMetadata { payload, metadata };
+
+            let payload_bytes = payload.payload.encode();
+            let metadata_bytes = payload.metadata.encode();
 
             let total_weight = {
                 let target_mem = membership
@@ -153,18 +159,27 @@ impl<T: NodeType> BlockBuilder<T> {
                     .map_err(|_| BlockError::StakeTableUnavailable)?;
                 vid_total_weight::<T>(&target_mem.stake_table().await, Some(epoch))
             };
-            let payload_commitment =
-                vid_commitment(&payload.encode(), &metadata.encode(), total_weight, version);
+            let payload_commitment = {
+                vid_commitment(
+                    payload_bytes.as_ref(),
+                    metadata_bytes.as_ref(),
+                    total_weight,
+                    version,
+                )
+            };
 
-            let builder_commitment = payload.builder_commitment(&metadata);
+            let builder_commitment = payload.payload.builder_commitment(&payload.metadata);
             let (builder_key, builder_private_key) =
                 T::BuilderSignatureKey::generated_from_seed_indexed([0u8; 32], 0);
+            let block_size = payload_bytes.len() as u64;
+            let offered_fee = block_size;
             let builder_fee = BuilderFee {
-                fee_amount: 0,
+                fee_amount: offered_fee,
                 fee_account: builder_key,
-                fee_signature: T::BuilderSignatureKey::sign_builder_message(
+                fee_signature: T::BuilderSignatureKey::sign_fee(
                     &builder_private_key,
-                    builder_commitment.as_ref(),
+                    offered_fee,
+                    &payload.metadata,
                 )
                 .map_err(|_| BlockError::BuilderSignature)?,
             };
@@ -172,7 +187,6 @@ impl<T: NodeType> BlockBuilder<T> {
                 view,
                 epoch,
                 payload,
-                metadata,
                 parent_proposal: request.parent_proposal,
                 builder_commitment,
                 builder_fee,
@@ -337,7 +351,7 @@ impl<T: NodeType> From<&BlockBuilderOutput<T>> for HeaderRequest<T> {
             parent_proposal: output.parent_proposal.clone(),
             payload_commitment: output.payload_commitment,
             builder_commitment: output.builder_commitment.clone(),
-            metadata: output.metadata.clone(),
+            metadata: output.payload.metadata.clone(),
             builder_fee: output.builder_fee.clone(),
         }
     }
@@ -348,8 +362,8 @@ impl<T: NodeType> From<BlockBuilderOutput<T>> for ConsensusInput<T> {
         ConsensusInput::BlockBuilt {
             view: output.view,
             epoch: output.epoch,
-            payload: output.payload,
-            metadata: output.metadata,
+            payload: output.payload.payload,
+            metadata: output.payload.metadata,
         }
     }
 }
