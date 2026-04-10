@@ -15,7 +15,7 @@ use hotshot_example_types::{
     storage_types::TestStorage,
 };
 use hotshot_types::{
-    data::{Leaf2, ViewNumber},
+    data::{EpochNumber, Leaf2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     traits::{network::Topic, signature_key::SignatureKey},
 };
@@ -243,7 +243,11 @@ async fn build_coordinator(
         .proposal_validator(proposal_validator)
         .membership_coordinator(membership)
         .outbox(Outbox::new())
-        .timer(Timer::new(Duration::from_secs(2), ViewNumber::genesis()))
+        .timer(Timer::new(
+            Duration::from_secs(2),
+            ViewNumber::genesis(),
+            EpochNumber::genesis(),
+        ))
         .public_key(public_key)
         .build()
 }
