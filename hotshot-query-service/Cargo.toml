@@ -52,6 +52,7 @@ ark-serialize = { workspace = true }
 async-lock = { workspace = true }
 async-trait = { workspace = true }
 hotshot-query-service-types = { workspace = true }
+light-client = { workspace = true }
 
 # Dependencies enabled by feature "file-system-data-source".
 atomic_store = { workspace = true, optional = true }

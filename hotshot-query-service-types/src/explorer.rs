@@ -23,7 +23,6 @@ use time::format_description::well_known::Rfc3339;
 
 use self::{
     errors::{BadQuery, ExplorerAPIError, InvalidLimit, NotFound, QueryError, Unimplemented},
-    monetary_value::MonetaryValue,
     traits::{ExplorerHeader, ExplorerTransaction},
 };
 use crate::{
@@ -40,6 +39,8 @@ pub mod errors;
 pub mod monetary_value;
 pub mod sql;
 pub mod traits;
+
+pub use self::monetary_value::MonetaryValue;
 
 /// BlockIdentifier is an enum that represents multiple ways of referring to
 /// a specific Block.  These use cases are specific to a Block Explorer and

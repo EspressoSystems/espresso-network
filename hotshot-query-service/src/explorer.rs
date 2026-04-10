@@ -20,7 +20,6 @@ pub use data_source::*;
 use futures::FutureExt;
 pub use hotshot_query_service_types::explorer::Error;
 use hotshot_types::traits::node_implementation::NodeType;
-pub use monetary_value::*;
 pub use query_data::*;
 use serde::{Deserialize, Serialize};
 use tide_disco::{Api, api::ApiError, method::ReadState};
