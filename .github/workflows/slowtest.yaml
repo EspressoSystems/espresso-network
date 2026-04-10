@@ -56,7 +56,11 @@ jobs:
         with:
           comment_on_pr: false
 
-      # NOTE: no rust cache, these tests are very slow anyway
+      - name: Enable Rust Caching
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ${{ matrix.name }}
+          save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
 
       - name: Build slow test
         run: ${{ matrix.build-cmd }}

@@ -40,10 +40,8 @@ jobs:
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: test-artifacts
           prefix-key: v1-rust
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-          cache-provider: github
+          save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
 
       - name: Show memory
         run: free -h
@@ -76,10 +74,8 @@ jobs:
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: test-artifacts
-          save-if: false
           prefix-key: v1-rust
-          cache-provider: github
+          save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
 
       - name: Show memory
         run: free -h
@@ -109,10 +105,8 @@ jobs:
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: build-test-bins
           prefix-key: v1-rust
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-          cache-provider: github
+          save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
 
       - name: Build all binaries (postgres)
         run: |
@@ -157,10 +151,8 @@ jobs:
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
         with:
-          save-if: false
-          shared-key: build-test-bins
           prefix-key: v1-rust
-          cache-provider: github
+          save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
 
       - name: Build espresso-node-sqlite binary
         run: |
@@ -188,10 +180,8 @@ jobs:
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
         with:
-          save-if: false
-          shared-key: build-test-bins
           prefix-key: v1-rust
-          cache-provider: github
+          save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
 
       - name: Build espresso-dev-node binary
         run: |

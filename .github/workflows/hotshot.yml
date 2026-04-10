@@ -43,7 +43,7 @@ jobs:
         with:
           shared-key: "hotshot-tests"
           cache-on-failure: "true"
-          save-if: ${{ github.ref == 'refs/heads/main' && matrix.test_suites == 'test-ci-rest' }}
+          save-if: ${{ (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-')) && matrix.test_suites == 'test-ci-rest' }}
           prefix-key: v1-hotshot
 
       - uses: taiki-e/install-action@just
@@ -81,7 +81,7 @@ jobs:
         with:
           shared-key: "hotshot-tests"
           cache-on-failure: "true"
-          save-if: false
+          save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
           prefix-key: v1-hotshot
 
       - uses: taiki-e/install-action@nextest
@@ -109,10 +109,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         name: Enable Rust Caching
         with:
-          shared-key: "hotshot-examples"
+          shared-key: "hotshot-tests"
           cache-on-failure: "true"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-          prefix-key: v0-hotshot
+          save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
+          prefix-key: v1-hotshot
 
       - uses: taiki-e/install-action@just
 
