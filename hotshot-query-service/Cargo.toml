@@ -34,16 +34,16 @@ metrics-data-source = []
 # Enable the availability data source backed by a Postgres database.
 sql-data-source = ["include_dir", "refinery", "refinery-core", "sqlx", "log"]
 
-# Enable extra features useful for writing tests with a query service.
 testing = [
     "espresso-macros",
+    "hotshot-query-service-types/testing",
     "rand",
     "tempfile",
     "test-utils",
     "sql-data-source",
     "file-system-data-source",
     "pretty_assertions",
-]
+] # Enable extra features useful for writing tests with a query service.
 
 [dependencies]
 alloy = { workspace = true }
@@ -51,6 +51,7 @@ anyhow = { workspace = true }
 ark-serialize = { workspace = true }
 async-lock = { workspace = true }
 async-trait = { workspace = true }
+hotshot-query-service-types = { workspace = true }
 
 # Dependencies enabled by feature "file-system-data-source".
 atomic_store = { workspace = true, optional = true }

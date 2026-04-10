@@ -1,0 +1,39 @@
+[package]
+name = "hotshot-query-service-types"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+
+[features]
+default = ["sqlx"]
+sqlx = ["bincode", "serde_json", "dep:sqlx"]
+testing = ["hotshot-example-types"]
+
+[dependencies]
+anyhow.workspace = true
+committable.workspace = true
+derivative.workspace = true
+derive_more.workspace = true
+either.workspace = true
+hotshot-events-service.workspace = true
+hotshot-types.workspace = true
+itertools.workspace = true
+jf-advz.workspace = true
+serde.workspace = true
+snafu.workspace = true
+surf-disco.workspace = true
+tide-disco.workspace = true
+time.workspace = true
+vbs.workspace = true
+versions.workspace = true
+
+# Testing dependencies.
+hotshot-example-types = { workspace = true, optional = true }
+
+# SQL dependencies.
+bincode = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+sqlx = { workspace = true, optional = true }
+
+[lints]
+workspace = true

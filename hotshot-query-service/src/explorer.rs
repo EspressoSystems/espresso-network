@@ -10,23 +10,20 @@
 // You should have received a copy of the GNU General Public License along with this program. If not,
 // see <https://www.gnu.org/licenses/>.
 
-pub(crate) mod currency;
 pub(crate) mod data_source;
-pub(crate) mod errors;
-pub(crate) mod monetary_value;
 pub(crate) mod query_data;
-pub(crate) mod traits;
 
-use std::{fmt::Display, num::NonZeroUsize, path::Path};
+use std::{num::NonZeroUsize, path::Path};
 
 pub use currency::*;
 pub use data_source::*;
 use futures::FutureExt;
+pub use hotshot_query_service_types::explorer::Error;
 use hotshot_types::traits::node_implementation::NodeType;
 pub use monetary_value::*;
 pub use query_data::*;
 use serde::{Deserialize, Serialize};
-use tide_disco::{Api, StatusCode, api::ApiError, method::ReadState};
+use tide_disco::{Api, api::ApiError, method::ReadState};
 pub use traits::*;
 use vbs::version::StaticVersionType;
 
@@ -36,58 +33,6 @@ use crate::{
     api::load_api,
     availability::{QueryableHeader, QueryablePayload},
 };
-
-/// [Error] is an enum that represents the various errors that can be returned
-/// from the Explorer API.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum Error {
-    GetBlockDetail(GetBlockDetailError),
-    GetBlockSummaries(GetBlockSummariesError),
-    GetTransactionDetail(GetTransactionDetailError),
-    GetTransactionSummaries(GetTransactionSummariesError),
-    GetExplorerSummary(GetExplorerSummaryError),
-    GetSearchResults(GetSearchResultsError),
-}
-
-impl Error {
-    pub fn status(&self) -> StatusCode {
-        match self {
-            Error::GetBlockDetail(e) => e.status(),
-            Error::GetBlockSummaries(e) => e.status(),
-            Error::GetTransactionDetail(e) => e.status(),
-            Error::GetTransactionSummaries(e) => e.status(),
-            Error::GetExplorerSummary(e) => e.status(),
-            Error::GetSearchResults(e) => e.status(),
-        }
-    }
-}
-
-impl Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Error::GetBlockDetail(e) => e.fmt(f),
-            Error::GetBlockSummaries(e) => e.fmt(f),
-            Error::GetTransactionDetail(e) => e.fmt(f),
-            Error::GetTransactionSummaries(e) => e.fmt(f),
-            Error::GetExplorerSummary(e) => e.fmt(f),
-            Error::GetSearchResults(e) => e.fmt(f),
-        }
-    }
-}
-
-impl std::error::Error for Error {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Error::GetBlockDetail(e) => Some(e),
-            Error::GetBlockSummaries(e) => Some(e),
-            Error::GetTransactionDetail(e) => Some(e),
-            Error::GetTransactionSummaries(e) => Some(e),
-            Error::GetExplorerSummary(e) => Some(e),
-            Error::GetSearchResults(e) => Some(e),
-        }
-    }
-}
 
 /// [BlockDetailResponse] is a struct that represents the response from the
 /// `get_block_detail` endpoint.
