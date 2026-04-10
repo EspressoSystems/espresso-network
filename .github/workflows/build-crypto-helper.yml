@@ -43,6 +43,9 @@ jobs:
       - name: Add Rust target
         run: rustup target add ${{ matrix.target }}
 
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+
       - name: Set Environment
         # Install tools and set environment variables like this example
         # https://github.com/briansmith/ring/blob/main/mk/cargo.sh

@@ -24,6 +24,9 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+
       - uses: taiki-e/install-action@just
 
       - name: Build Rust Docs
