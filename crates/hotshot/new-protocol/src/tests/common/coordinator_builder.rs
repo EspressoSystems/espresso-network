@@ -1,5 +1,6 @@
-use std::{sync::Arc, time::Duration};
+use std::{marker::PhantomData, sync::Arc, time::Duration};
 
+use committable::Committable;
 use hotshot::{traits::NodeImplementation, types::BLSPubKey};
 use hotshot_example_types::{
     node_types::{TEST_VERSIONS, TestTypes},
@@ -8,6 +9,7 @@ use hotshot_example_types::{
 use hotshot_types::{
     data::{EpochNumber, Leaf2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
+    simple_vote::QuorumData2,
     traits::signature_key::SignatureKey,
 };
 
@@ -17,6 +19,7 @@ use crate::{
     coordinator::{Coordinator, timer::Timer},
     epoch::EpochManager,
     helpers::upgrade_lock,
+    message::{Certificate1, Proposal},
     network::Network,
     outbox::Outbox,
     proposal::ProposalValidator,
@@ -27,11 +30,10 @@ use crate::{
 
 /// Build a [`Coordinator`] for testing with an externally provided network.
 ///
-/// This is the generic version of the coordinator construction previously
-/// hardcoded in the memory-network test.  The caller is responsible for
-/// creating the network instance; everything else (keys, consensus, vote
-/// collectors, VID, block builder, state manager, epoch manager, proposal
-/// validator) is constructed here.
+/// The coordinator is fully bootstrapped: consensus is seeded with a genesis
+/// certificate and proposal so that the view-1 leader can propose without any
+/// external injection.  The initial `ViewChanged` and (for the leader)
+/// `RequestBlockAndHeader` outputs are already queued in the outbox.
 pub async fn build_test_coordinator<I: NodeImplementation<TestTypes>>(
     node_index: u64,
     network: I::Network,
@@ -50,7 +52,7 @@ pub async fn build_test_coordinator<I: NodeImplementation<TestTypes>>(
     let timeout_one_honest_collector = VoteCollector::new(membership.clone(), upgrade_lock());
     let checkpoint_collector = VoteCollector::new(membership.clone(), upgrade_lock());
 
-    let consensus = Consensus::new(
+    let mut consensus = Consensus::new(
         membership.clone(),
         public_key,
         private_key.clone(),
@@ -70,13 +72,22 @@ pub async fn build_test_coordinator<I: NodeImplementation<TestTypes>>(
     let genesis_state = TestValidatedState::default();
     let genesis_leaf =
         Leaf2::<TestTypes>::genesis(&genesis_state, &instance, TEST_VERSIONS.test.base).await;
-    state_manager.seed_state(ViewNumber::genesis(), Arc::new(genesis_state), genesis_leaf);
+    state_manager.seed_state(
+        ViewNumber::genesis(),
+        Arc::new(genesis_state),
+        genesis_leaf.clone(),
+    );
+
+    // Build a genesis cert1 and proposal so consensus can self-start.
+    let genesis_cert1 = build_genesis_cert1(&genesis_leaf);
+    let genesis_proposal = build_genesis_proposal(&genesis_leaf, &genesis_cert1);
+    consensus.seed_genesis(genesis_cert1, genesis_proposal);
 
     let proposal_validator = ProposalValidator::new(membership.clone());
 
     let network = Network::new(network, membership.clone(), upgrade_lock());
 
-    Coordinator::builder()
+    let mut coordinator = Coordinator::builder()
         .consensus(consensus)
         .network(network)
         .state_manager(state_manager)
@@ -98,5 +109,53 @@ pub async fn build_test_coordinator<I: NodeImplementation<TestTypes>>(
             EpochNumber::genesis(),
         ))
         .public_key(public_key)
-        .build()
+        .build();
+
+    // Emit initial ViewChanged + RequestBlockAndHeader (if leader).
+    coordinator.start().await;
+
+    // Process the initial outputs so the timer resets and block builder
+    // gets notified before the event loop starts.
+    while let Some(output) = coordinator.outbox_mut().pop_front() {
+        let _ = coordinator.process_consensus_output(output).await;
+    }
+
+    coordinator
+}
+
+/// Create a genesis `Certificate1` that references the genesis leaf.
+///
+/// Uses `QuorumCertificate2::new` with `None` signatures, matching the
+/// pattern used by `Leaf2::genesis` for its justify_qc.
+fn build_genesis_cert1(genesis_leaf: &Leaf2<TestTypes>) -> Certificate1<TestTypes> {
+    let data = QuorumData2 {
+        leaf_commit: genesis_leaf.commit(),
+        epoch: Some(EpochNumber::genesis()),
+        block_number: Some(0),
+    };
+    Certificate1::new(
+        data.clone(),
+        data.commit(),
+        ViewNumber::genesis(),
+        None,
+        PhantomData,
+    )
+}
+
+/// Create a genesis `Proposal` from the genesis leaf and cert.
+fn build_genesis_proposal(
+    genesis_leaf: &Leaf2<TestTypes>,
+    genesis_cert1: &Certificate1<TestTypes>,
+) -> Proposal<TestTypes> {
+    Proposal {
+        block_header: genesis_leaf.block_header().clone(),
+        view_number: ViewNumber::genesis(),
+        epoch: EpochNumber::genesis(),
+        justify_qc: genesis_cert1.clone(),
+        next_epoch_justify_qc: None,
+        upgrade_certificate: None,
+        view_change_evidence: None,
+        next_drb_result: None,
+        state_cert: None,
+    }
 }

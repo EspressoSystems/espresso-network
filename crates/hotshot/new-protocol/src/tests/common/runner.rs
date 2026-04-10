@@ -3,7 +3,10 @@ use std::{collections::HashSet, fmt, time::Duration};
 use committable::Committable;
 use hotshot::{traits::NodeImplementation, types::BLSPubKey};
 use hotshot_example_types::{block_types::TestTransaction, node_types::TestTypes};
-use hotshot_types::{data::ViewNumber, traits::signature_key::SignatureKey};
+use hotshot_types::{
+    data::ViewNumber,
+    traits::{network::ConnectedNetwork, signature_key::SignatureKey},
+};
 use rand::{RngCore, SeedableRng, rngs::StdRng};
 use tokio::{
     sync::mpsc::{self, UnboundedReceiver, UnboundedSender},
@@ -14,11 +17,12 @@ use tracing::{debug, info};
 use crate::{
     consensus::ConsensusOutput,
     coordinator::{Coordinator, error::Severity},
+    helpers::upgrade_lock,
     message::{BlockMessage, Message, MessageType, TransactionMessage, Validated},
+    network::Network,
     tests::common::{
-        coordinator_builder::build_test_coordinator,
-        network::TestNetwork,
-        utils::{TestData, mock_membership_with_num_nodes},
+        coordinator_builder::build_test_coordinator, network::TestNetwork,
+        utils::mock_membership_with_num_nodes,
     },
 };
 
@@ -71,24 +75,20 @@ impl fmt::Display for TestError {
 impl TestRunner {
     /// Run the integration test using the given network backend.
     ///
-    /// This spins up `self.num_nodes` coordinators connected via `N`, bootstraps
-    /// consensus with an initial proposal, feeds transactions, and waits until
-    /// every node has decided `self.target_decisions` leaves.  Finally it verifies
-    /// that all nodes decided the same chain prefix.
+    /// Spins up `self.num_nodes` coordinators connected via `N`.  Each
+    /// coordinator self-starts via the genesis bootstrap (no side-channel
+    /// injection needed).  Transactions are broadcast over the network using
+    /// a dedicated client network instance.
     pub async fn run<N: TestNetwork>(&self) -> Result<(), TestError> {
         let membership = mock_membership_with_num_nodes(self.num_nodes).await;
-        let (_network_state, networks) = N::create(self.num_nodes).await;
+        let (network_state, networks) = N::create(self.num_nodes).await;
 
-        let mut input_channels: Vec<UnboundedSender<Message<TestTypes, Validated>>> =
-            Vec::with_capacity(self.num_nodes);
         let mut output_channels: Vec<UnboundedReceiver<Vec<[u8; 32]>>> =
             Vec::with_capacity(self.num_nodes);
 
         // Spawn one coordinator task per node.
         for (i, network) in networks.into_iter().enumerate() {
-            let (input_tx, input_rx) = mpsc::unbounded_channel();
             let (output_tx, output_rx) = mpsc::unbounded_channel();
-            input_channels.push(input_tx);
             output_channels.push(output_rx);
 
             let coord = build_test_coordinator::<N::Impl>(
@@ -100,16 +100,13 @@ impl TestRunner {
             )
             .await;
 
-            tokio::spawn(run_node(coord, input_rx, output_tx));
+            tokio::spawn(run_node(coord, output_tx));
         }
 
-        // Bootstrap: inject the first proposal (with per-recipient VID share).
-        let test_data = TestData::new_with_num_nodes(3, self.num_nodes).await;
-        for (i, chan) in input_channels.iter().enumerate() {
-            let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], i as u64).0;
-            let proposal_msg = test_data.views[0].proposal_input(&node_key);
-            chan.send(proposal_msg).unwrap();
-        }
+        // Create a client network for broadcasting transactions.
+        let client_net = network_state.create_client().await;
+        let mut client_network =
+            Network::<TestTypes, _>::new(client_net, membership.clone(), upgrade_lock());
 
         // Collect decided commits from each node until all reach the target.
         let mut node_commits: Vec<Vec<[u8; 32]>> = vec![Vec::new(); self.num_nodes];
@@ -122,12 +119,9 @@ impl TestRunner {
                 .checked_duration_since(tokio::time::Instant::now())
                 .ok_or(TestError::Timeout)?;
 
-            // Feed a new transaction to every node.
+            // Broadcast a transaction over the network.
             tx_nonce = tx_nonce.wrapping_add(1);
-            broadcast_transaction(
-                &input_channels,
-                random_transaction(tx_nonce, self.transaction_size),
-            );
+            broadcast_transaction(&mut client_network, tx_nonce, self.transaction_size).await;
 
             // Collect any newly decided commits.
             for (idx, rx) in output_channels.iter_mut().enumerate() {
@@ -169,7 +163,6 @@ impl TestRunner {
 /// decided leaf commits, and forwards them to the test runner.
 async fn run_node<I: NodeImplementation<TestTypes>>(
     mut coord: Coordinator<TestTypes, I>,
-    mut input_rx: UnboundedReceiver<Message<TestTypes, Validated>>,
     output_tx: UnboundedSender<Vec<[u8; 32]>>,
 ) {
     let mut commits: Vec<[u8; 32]> = Vec::new();
@@ -177,13 +170,6 @@ async fn run_node<I: NodeImplementation<TestTypes>>(
     let mut last_view = ViewNumber::genesis();
 
     loop {
-        // Drain any externally injected messages (bootstrap + transactions).
-        while let Ok(msg) = input_rx.try_recv() {
-            if let Some(input) = coord.on_network_message(msg.into_unchecked()).await {
-                coord.apply_consensus(input).await;
-            }
-        }
-
         match coord.next_consensus_input().await {
             Ok(input) => coord.apply_consensus(input).await,
             Err(err) if err.severity == Severity::Critical => break,
@@ -222,6 +208,25 @@ async fn run_node<I: NodeImplementation<TestTypes>>(
     }
 }
 
+/// Broadcast a random transaction over the network.
+async fn broadcast_transaction<N: ConnectedNetwork<BLSPubKey>>(
+    client: &mut Network<TestTypes, N>,
+    nonce: u64,
+    size: usize,
+) {
+    let tx = random_transaction(nonce, size);
+    let (pk, _) = BLSPubKey::generated_from_seed_indexed([1; 32], 9999);
+    let msg: Message<TestTypes, Validated> = Message {
+        sender: pk,
+        message_type: MessageType::Block(BlockMessage::Transactions(TransactionMessage {
+            view: ViewNumber::genesis(),
+            transactions: vec![tx],
+        })),
+    };
+    // Best-effort: ignore send errors (network may not be fully ready yet).
+    let _ = client.broadcast(msg).await;
+}
+
 fn random_transaction(nonce: u64, size: usize) -> TestTransaction {
     let mut bytes = vec![0u8; size];
     let mut rng = StdRng::seed_from_u64(nonce);
@@ -230,21 +235,4 @@ fn random_transaction(nonce: u64, size: usize) -> TestTransaction {
         bytes[size - 8..].copy_from_slice(&nonce.to_le_bytes());
     }
     TestTransaction::new(bytes)
-}
-
-fn broadcast_transaction(
-    channels: &[UnboundedSender<Message<TestTypes, Validated>>],
-    tx: TestTransaction,
-) {
-    for (i, ch) in channels.iter().enumerate() {
-        let (pk, _) = BLSPubKey::generated_from_seed_indexed([0; 32], i as u64);
-        ch.send(Message {
-            sender: pk,
-            message_type: MessageType::Block(BlockMessage::Transactions(TransactionMessage {
-                view: ViewNumber::genesis(),
-                transactions: vec![tx.clone()],
-            })),
-        })
-        .expect("input channel closed");
-    }
 }

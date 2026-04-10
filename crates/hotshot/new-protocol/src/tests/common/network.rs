@@ -38,6 +38,12 @@ pub trait TestNetwork {
     >
     where
         Self: Sized;
+
+    /// Create a "client" network that can broadcast messages to the nodes
+    /// but does not participate in consensus.
+    fn create_client(
+        &self,
+    ) -> impl std::future::Future<Output = <Self::Impl as NodeImplementation<TestTypes>>::Network>;
 }
 
 // -- MemoryNetwork implementation -------------------------------------------
@@ -51,7 +57,6 @@ impl NodeImplementation<TestTypes> for MemoryNetworkImpl {
 }
 
 pub struct MemoryTestNetwork {
-    #[allow(dead_code)]
     pub group: Arc<MasterMap<BLSPubKey>>,
 }
 
@@ -68,6 +73,14 @@ impl TestNetwork for MemoryTestNetwork {
             .collect();
         (Self { group }, networks)
     }
+
+    async fn create_client(&self) -> MemoryNetwork<BLSPubKey> {
+        // Use a deterministic but distinct key for the client.  Index 9999
+        // avoids collision with normal node indices.
+        let (pk, _) = BLSPubKey::generated_from_seed_indexed([1; 32], 9999);
+        // Subscribe to no topics — the client only sends, never receives.
+        MemoryNetwork::new(&pk, &self.group, &[], None)
+    }
 }
 
 // -- Cliquenet implementation -----------------------------------------------
@@ -80,7 +93,9 @@ impl NodeImplementation<TestTypes> for CliquenetImpl {
     type Storage = TestStorage<TestTypes>;
 }
 
-pub struct CliquenetTestNetwork;
+pub struct CliquenetTestNetwork {
+    peer_infos: Vec<(BLSPubKey, PeerConnectInfo)>,
+}
 
 impl TestNetwork for CliquenetTestNetwork {
     type Impl = CliquenetImpl;
@@ -129,6 +144,24 @@ impl TestNetwork for CliquenetTestNetwork {
             networks.push(net);
         }
 
-        (Self, networks)
+        (Self { peer_infos }, networks)
+    }
+
+    async fn create_client(&self) -> Cliquenet<BLSPubKey> {
+        let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([1u8; 32], 9999);
+        let keypair = Keypair::derive_from::<BLSPubKey>(&private_key);
+        let port =
+            test_utils::reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let addr = NetAddr::Inet(std::net::Ipv4Addr::LOCALHOST.into(), port);
+        Cliquenet::create(
+            "test-client",
+            public_key,
+            keypair,
+            addr,
+            self.peer_infos.clone(),
+            Box::new(NoMetrics),
+        )
+        .await
+        .expect("cliquenet client creation should succeed")
     }
 }
