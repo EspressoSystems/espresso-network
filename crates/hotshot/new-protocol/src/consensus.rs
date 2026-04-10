@@ -30,6 +30,7 @@ use tracing::{debug, instrument, warn};
 use crate::{
     block::BlockAndHeaderRequest,
     helpers::{proposal_commitment, upgrade_lock},
+    logging::KeyPrefix,
     message::{
         Certificate1, Certificate2, CheckpointVote, EpochChangeMessage, Proposal, ProposalMessage,
         Validated, Vote1, Vote2,
@@ -90,6 +91,7 @@ pub enum ConsensusOutput<T: NodeType> {
 
 pub struct Consensus<T: NodeType> {
     proposals: BTreeMap<ViewNumber, Proposal<T>>,
+    proposed_views: BTreeSet<ViewNumber>,
     vid_shares: BTreeMap<ViewNumber, VidDisperseShare2<T>>,
     states_verified: BTreeMap<ViewNumber, Commitment<Leaf2<T>>>,
     blocks_reconstructed: BTreeMap<ViewNumber, VidCommitment2>,
@@ -116,6 +118,7 @@ pub struct Consensus<T: NodeType> {
 
     public_key: T::SignatureKey,
     private_key: <T::SignatureKey as SignatureKey>::PrivateKey,
+    node_id: KeyPrefix,
 
     garbage_collection_interval: BlockNumber,
     pub(crate) epoch_height: BlockNumber,
@@ -141,6 +144,7 @@ impl<T: NodeType> Consensus<T> {
     {
         Self {
             proposals: BTreeMap::new(),
+            proposed_views: BTreeSet::new(),
             vid_disperses: BTreeMap::new(),
             blocks: BTreeMap::new(),
             states_verified: BTreeMap::new(),
@@ -153,6 +157,7 @@ impl<T: NodeType> Consensus<T> {
             last_decided_view: ViewNumber::genesis(),
             headers: BTreeMap::new(),
             drb_results: BTreeMap::new(),
+            node_id: KeyPrefix::from(&public_key),
             public_key,
             timeout_view: ViewNumber::genesis(),
             current_epoch: None,
@@ -168,7 +173,7 @@ impl<T: NodeType> Consensus<T> {
     }
 
     /// Apply consensus to the given input and collect protocol outputs.
-    #[instrument(level = "debug", skip_all, fields(view = %input.view_number()))]
+    #[instrument(level = "debug", skip_all, fields(node = %self.node_id, view = %input.view_number()))]
     pub async fn apply(
         &mut self,
         input: ConsensusInput<T>,
@@ -276,6 +281,7 @@ impl<T: NodeType> Consensus<T> {
     }
 
     pub fn gc(&mut self, view: ViewNumber, _epoch: EpochNumber) {
+        self.proposed_views = self.proposed_views.split_off(&view);
         self.states_verified = self.states_verified.split_off(&view);
         self.blocks_reconstructed = self.blocks_reconstructed.split_off(&view);
         self.blocks = self.blocks.split_off(&view);
@@ -620,8 +626,12 @@ impl<T: NodeType> Consensus<T> {
         Protocol::Continue
     }
 
-    #[instrument(level = "debug", skip(self, outbox))]
+    #[instrument(level = "debug", skip_all)]
     async fn maybe_propose(&mut self, view: ViewNumber, outbox: &mut Outbox<ConsensusOutput<T>>) {
+        if self.proposed_views.contains(&view) {
+            return;
+        }
+
         let mut view_change_evidence = None;
         if let Some(view_sync_cert) = self.view_sync_certs.get(&view) {
             view_change_evidence = Some(ViewChangeEvidence2::ViewSync(view_sync_cert.clone()));
@@ -724,6 +734,7 @@ impl<T: NodeType> Consensus<T> {
             _pd: PhantomData,
         };
 
+        self.proposed_views.insert(view);
         outbox.push_back(ConsensusOutput::SendProposal(message, vid_disperse.clone()));
     }
 
@@ -1047,7 +1058,7 @@ impl<T: NodeType> Consensus<T> {
         }
     }
 
-    #[instrument(level = "trace", skip(self))]
+    #[instrument(level = "trace", skip_all)]
     async fn is_leader(&self, view: ViewNumber, epoch: EpochNumber) -> bool {
         match self
             .stake_table_coordinator

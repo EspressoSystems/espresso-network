@@ -22,6 +22,7 @@ use crate::{
         timer::Timer,
     },
     epoch::{EpochManager, EpochRootResult},
+    logging::KeyPrefix,
     message::{
         self, BlockMessage, Certificate2, CheckpointCertificate, CheckpointVote, ConsensusMessage,
         Message, MessageType, ProposalMessage, TimeoutOneHonest, TransactionMessage, Unchecked,
@@ -54,6 +55,8 @@ pub struct Coordinator<T: NodeType, I: NodeImplementation<T>> {
     #[builder(default)]
     outbox: Outbox<ConsensusOutput<T>>,
     public_key: T::SignatureKey,
+    #[builder(default = KeyPrefix::from(&public_key))]
+    node_id: KeyPrefix,
     timer: Timer,
 }
 
@@ -503,5 +506,9 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
         self.timeout_one_honest_collector.gc(view, epoch);
         self.epoch_manager.gc(epoch);
         self.block_builder.gc(view);
+    }
+
+    pub fn node_id(&self) -> &KeyPrefix {
+        &self.node_id
     }
 }

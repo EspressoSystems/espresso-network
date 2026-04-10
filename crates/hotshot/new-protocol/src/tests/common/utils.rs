@@ -229,13 +229,25 @@ impl TestData {
         Self::new_with_epoch_height(num_views, 0).await
     }
 
+    pub async fn new_with_num_nodes(num_views: usize, num_nodes: usize) -> Self {
+        Self::new_with_epoch_height_and_num_nodes(num_views, 0, num_nodes).await
+    }
+
     /// Create test data with epoch-aware proposals. When `epoch_height > 0`,
     /// epoch transition views will have `next_drb_result` set to
     /// [`TEST_DRB_RESULT`] and all downstream commitments (leaf, cert1, cert2,
     /// justify_qc chain) are kept consistent.
     pub async fn new_with_epoch_height(num_views: usize, epoch_height: u64) -> Self {
-        let membership = mock_membership().await;
-        let keys = key_map();
+        Self::new_with_epoch_height_and_num_nodes(num_views, epoch_height, 10).await
+    }
+
+    pub async fn new_with_epoch_height_and_num_nodes(
+        num_views: usize,
+        epoch_height: u64,
+        num_nodes: usize,
+    ) -> Self {
+        let membership = mock_membership_with_num_nodes(num_nodes).await;
+        let keys = key_map_with_num_nodes(num_nodes as u64);
         let node_key_map = Arc::new(keys.clone());
         let upgrade = TEST_VERSIONS.vid2;
 
@@ -409,18 +421,29 @@ impl TestData {
 }
 
 pub async fn mock_membership() -> EpochMembershipCoordinator<TestTypes> {
+    mock_membership_with_num_nodes(10).await
+}
+
+pub async fn mock_membership_with_num_nodes(
+    num_nodes: usize,
+) -> EpochMembershipCoordinator<TestTypes> {
     let network =
         <MemoryNetwork<BLSPubKey> as TestableNetworkingImplementation<TestTypes>>::generator(
-            10,
+            num_nodes,
             0,
             1,
-            10,
+            num_nodes,
             None,
             Duration::from_secs(1),
             &mut HashMap::new(),
         )(0)
         .await;
-    let members = gen_node_lists(10, 10, &TestNodeStakes::default()).0;
+    let members = gen_node_lists(
+        num_nodes as u64,
+        num_nodes as u64,
+        &TestNodeStakes::default(),
+    )
+    .0;
     let membership = Arc::new(RwLock::new(StrictMembership::<
         TestTypes,
         StaticStakeTable<BLSPubKey, SchnorrPubKey>,
@@ -446,9 +469,9 @@ pub async fn mock_membership() -> EpochMembershipCoordinator<TestTypes> {
     coordinator
 }
 
-pub fn key_map() -> BTreeMap<BLSPubKey, BLSPrivKey> {
+pub fn key_map_with_num_nodes(num_nodes: u64) -> BTreeMap<BLSPubKey, BLSPrivKey> {
     let mut map = BTreeMap::new();
-    for i in 0..10 {
+    for i in 0..num_nodes {
         let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], i);
         map.insert(public_key, private_key);
     }
