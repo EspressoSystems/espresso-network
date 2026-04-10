@@ -35,3 +35,16 @@ async fn ten_nodes_decide_over_memory_network() {
     .await
     .unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn epoch_changes_over_memory_network() {
+    TestRunner {
+        epoch_height: 10,
+        target_decisions: 50,
+        max_runtime: Duration::from_secs(60),
+        ..Default::default()
+    }
+    .run::<MemoryTestNetwork>()
+    .await
+    .unwrap();
+}
