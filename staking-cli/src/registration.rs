@@ -409,14 +409,14 @@ mod test {
     }
 
     #[tokio::test]
-    async fn test_set_network_config() -> Result<()> {
+    async fn test_update_network_config() -> Result<()> {
         let system = TestSystem::deploy_version(StakeTableContractVersion::V3).await?;
         system.register_validator().await?;
 
         let x25519_key = alloy::primitives::FixedBytes([1u8; 32]);
         let p2p_addr = "192.168.1.1:8080".to_string();
 
-        let receipt = Transaction::SetNetworkConfig {
+        let receipt = Transaction::UpdateNetworkConfig {
             stake_table: system.stake_table,
             x25519_key,
             p2p_addr: p2p_addr.clone(),
@@ -442,13 +442,13 @@ mod test {
     }
 
     #[tokio::test]
-    async fn test_set_x25519_key() -> Result<()> {
+    async fn test_update_x25519_key() -> Result<()> {
         let system = TestSystem::deploy_version(StakeTableContractVersion::V3).await?;
         system.register_validator().await?;
 
         let x25519_key = alloy::primitives::FixedBytes([42u8; 32]);
 
-        let receipt = Transaction::SetX25519Key {
+        let receipt = Transaction::UpdateX25519Key {
             stake_table: system.stake_table,
             x25519_key,
         }
@@ -467,13 +467,13 @@ mod test {
     }
 
     #[tokio::test]
-    async fn test_set_p2p_addr() -> Result<()> {
+    async fn test_update_p2p_addr() -> Result<()> {
         let system = TestSystem::deploy_version(StakeTableContractVersion::V3).await?;
         system.register_validator().await?;
 
         let p2p_addr = "10.0.0.1:9090".to_string();
 
-        let receipt = Transaction::SetP2pAddr {
+        let receipt = Transaction::UpdateP2pAddr {
             stake_table: system.stake_table,
             p2p_addr: p2p_addr.clone(),
         }

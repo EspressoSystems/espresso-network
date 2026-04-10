@@ -259,9 +259,9 @@ contract StakeTableV3Test is Test {
         proxyV3.registerValidatorV2(blsVK, schnorrVK, sig, schnorrSig, 500, "meta");
     }
 
-    // ========== setNetworkConfig ==========
+    // ========== updateNetworkConfig ==========
 
-    function test_SetNetworkConfig_Success() public {
+    function test_UpdateNetworkConfig_Success() public {
         address validator = makeAddr("validator");
         bytes32 regKey = bytes32(uint256(1));
         registerValidatorV3(validator, "123", 500, "meta", regKey, "host:8080");
@@ -274,17 +274,17 @@ contract StakeTableV3Test is Test {
         vm.expectEmit();
         emit StakeTableV3.P2pAddrUpdated(validator, newAddr);
         vm.prank(validator);
-        proxyV3.setNetworkConfig(newKey, newAddr);
+        proxyV3.updateNetworkConfig(newKey, newAddr);
     }
 
-    function test_SetNetworkConfig_Inactive_Reverts() public {
+    function test_UpdateNetworkConfig_Inactive_Reverts() public {
         address nobody = makeAddr("nobody");
         vm.prank(nobody);
         vm.expectRevert(S.ValidatorInactive.selector);
-        proxyV3.setNetworkConfig(bytes32(uint256(1)), "host:8080");
+        proxyV3.updateNetworkConfig(bytes32(uint256(1)), "host:8080");
     }
 
-    function test_SetNetworkConfig_Exited_Reverts() public {
+    function test_UpdateNetworkConfig_Exited_Reverts() public {
         address validator = makeAddr("validator");
         registerValidatorV3(validator, "123", 500, "meta", bytes32(uint256(1)), "host:8080");
 
@@ -293,28 +293,28 @@ contract StakeTableV3Test is Test {
 
         vm.prank(validator);
         vm.expectRevert(S.ValidatorAlreadyExited.selector);
-        proxyV3.setNetworkConfig(bytes32(uint256(2)), "host:9090");
+        proxyV3.updateNetworkConfig(bytes32(uint256(2)), "host:9090");
     }
 
-    function test_SetNetworkConfig_ZeroX25519_Reverts() public {
+    function test_UpdateNetworkConfig_ZeroX25519_Reverts() public {
         address validator = makeAddr("validator");
         registerValidatorV3(validator, "123", 500, "meta", bytes32(uint256(1)), "host:8080");
 
         vm.prank(validator);
         vm.expectRevert(StakeTableV3.InvalidX25519Key.selector);
-        proxyV3.setNetworkConfig(bytes32(0), "host:9090");
+        proxyV3.updateNetworkConfig(bytes32(0), "host:9090");
     }
 
-    function test_SetNetworkConfig_EmptyP2p_Reverts() public {
+    function test_UpdateNetworkConfig_EmptyP2p_Reverts() public {
         address validator = makeAddr("validator");
         registerValidatorV3(validator, "123", 500, "meta", bytes32(uint256(1)), "host:8080");
 
         vm.prank(validator);
         vm.expectRevert(StakeTableV3.InvalidP2pAddr.selector);
-        proxyV3.setNetworkConfig(bytes32(uint256(2)), "");
+        proxyV3.updateNetworkConfig(bytes32(uint256(2)), "");
     }
 
-    function test_SetNetworkConfig_DuplicateX25519_Reverts() public {
+    function test_UpdateNetworkConfig_DuplicateX25519_Reverts() public {
         bytes32 key1 = bytes32(uint256(1));
         bytes32 key2 = bytes32(uint256(2));
         registerValidatorV3(makeAddr("val1"), "1", 500, "meta", key1, "host1:8080");
@@ -322,10 +322,10 @@ contract StakeTableV3Test is Test {
 
         vm.prank(makeAddr("val2"));
         vm.expectRevert(StakeTableV3.X25519KeyAlreadyUsed.selector);
-        proxyV3.setNetworkConfig(key1, "host2:9090");
+        proxyV3.updateNetworkConfig(key1, "host2:9090");
     }
 
-    function test_SetNetworkConfig_Repeated_Success() public {
+    function test_UpdateNetworkConfig_Repeated_Success() public {
         address validator = makeAddr("validator");
         registerValidatorV3(validator, "123", 500, "meta", bytes32(uint256(1)), "host:8080");
 
@@ -335,7 +335,7 @@ contract StakeTableV3Test is Test {
         vm.expectEmit();
         emit StakeTableV3.P2pAddrUpdated(validator, "host:9090");
         vm.prank(validator);
-        proxyV3.setNetworkConfig(key2, "host:9090");
+        proxyV3.updateNetworkConfig(key2, "host:9090");
 
         bytes32 key3 = bytes32(uint256(3));
         vm.expectEmit();
@@ -343,20 +343,20 @@ contract StakeTableV3Test is Test {
         vm.expectEmit();
         emit StakeTableV3.P2pAddrUpdated(validator, "host:9091");
         vm.prank(validator);
-        proxyV3.setNetworkConfig(key3, "host:9091");
+        proxyV3.updateNetworkConfig(key3, "host:9091");
     }
 
-    function test_SetNetworkConfig_OwnX25519_Reverts() public {
+    function test_UpdateNetworkConfig_OwnX25519_Reverts() public {
         bytes32 key = bytes32(uint256(1));
         address validator = makeAddr("validator");
         registerValidatorV3(validator, "123", 500, "meta", key, "host:8080");
 
         vm.prank(validator);
         vm.expectRevert(StakeTableV3.X25519KeyAlreadyUsed.selector);
-        proxyV3.setNetworkConfig(key, "host:9090");
+        proxyV3.updateNetworkConfig(key, "host:9090");
     }
 
-    function test_SetNetworkConfig_Paused_Reverts() public {
+    function test_UpdateNetworkConfig_Paused_Reverts() public {
         address validator = makeAddr("validator");
         registerValidatorV3(validator, "123", 500, "meta", bytes32(uint256(1)), "host:8080");
 
@@ -365,29 +365,29 @@ contract StakeTableV3Test is Test {
 
         vm.prank(validator);
         vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
-        proxyV3.setNetworkConfig(bytes32(uint256(2)), "host:9090");
+        proxyV3.updateNetworkConfig(bytes32(uint256(2)), "host:9090");
     }
 
-    // ========== setP2pAddr ==========
+    // ========== updateP2pAddr ==========
 
-    function test_SetP2pAddr_Success() public {
+    function test_UpdateP2pAddr_Success() public {
         address validator = makeAddr("validator");
         registerValidatorV3(validator, "123", 500, "meta", bytes32(uint256(1)), "host:8080");
 
         vm.expectEmit();
         emit StakeTableV3.P2pAddrUpdated(validator, "newhost:9090");
         vm.prank(validator);
-        proxyV3.setP2pAddr("newhost:9090");
+        proxyV3.updateP2pAddr("newhost:9090");
     }
 
-    function test_SetP2pAddr_Inactive_Reverts() public {
+    function test_UpdateP2pAddr_Inactive_Reverts() public {
         address nobody = makeAddr("nobody");
         vm.prank(nobody);
         vm.expectRevert(S.ValidatorInactive.selector);
-        proxyV3.setP2pAddr("host:8080");
+        proxyV3.updateP2pAddr("host:8080");
     }
 
-    function test_SetP2pAddr_Exited_Reverts() public {
+    function test_UpdateP2pAddr_Exited_Reverts() public {
         address validator = makeAddr("validator");
         registerValidatorV3(validator, "123", 500, "meta", bytes32(uint256(1)), "host:8080");
 
@@ -396,19 +396,19 @@ contract StakeTableV3Test is Test {
 
         vm.prank(validator);
         vm.expectRevert(S.ValidatorAlreadyExited.selector);
-        proxyV3.setP2pAddr("host:9090");
+        proxyV3.updateP2pAddr("host:9090");
     }
 
-    function test_SetP2pAddr_Empty_Reverts() public {
+    function test_UpdateP2pAddr_Empty_Reverts() public {
         address validator = makeAddr("validator");
         registerValidatorV3(validator, "123", 500, "meta", bytes32(uint256(1)), "host:8080");
 
         vm.prank(validator);
         vm.expectRevert(StakeTableV3.InvalidP2pAddr.selector);
-        proxyV3.setP2pAddr("");
+        proxyV3.updateP2pAddr("");
     }
 
-    function test_SetP2pAddr_Long_Reverts() public {
+    function test_UpdateP2pAddr_Long_Reverts() public {
         address validator = makeAddr("validator");
         registerValidatorV3(validator, "123", 500, "meta", bytes32(uint256(1)), "host:8080");
 
@@ -419,10 +419,10 @@ contract StakeTableV3Test is Test {
 
         vm.prank(validator);
         vm.expectRevert(StakeTableV3.InvalidP2pAddr.selector);
-        proxyV3.setP2pAddr(string(buf));
+        proxyV3.updateP2pAddr(string(buf));
     }
 
-    function test_SetP2pAddr_Paused_Reverts() public {
+    function test_UpdateP2pAddr_Paused_Reverts() public {
         address validator = makeAddr("validator");
         registerValidatorV3(validator, "123", 500, "meta", bytes32(uint256(1)), "host:8080");
 
@@ -431,27 +431,27 @@ contract StakeTableV3Test is Test {
 
         vm.prank(validator);
         vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
-        proxyV3.setP2pAddr("host:9090");
+        proxyV3.updateP2pAddr("host:9090");
     }
 
-    function test_SetP2pAddr_Repeated_Success() public {
+    function test_UpdateP2pAddr_Repeated_Success() public {
         address validator = makeAddr("validator");
         registerValidatorV3(validator, "123", 500, "meta", bytes32(uint256(1)), "host:8080");
 
         vm.expectEmit();
         emit StakeTableV3.P2pAddrUpdated(validator, "host1:9090");
         vm.prank(validator);
-        proxyV3.setP2pAddr("host1:9090");
+        proxyV3.updateP2pAddr("host1:9090");
 
         vm.expectEmit();
         emit StakeTableV3.P2pAddrUpdated(validator, "host2:9091");
         vm.prank(validator);
-        proxyV3.setP2pAddr("host2:9091");
+        proxyV3.updateP2pAddr("host2:9091");
     }
 
-    // ========== setX25519Key ==========
+    // ========== updateX25519Key ==========
 
-    function test_SetX25519Key_Success() public {
+    function test_UpdateX25519Key_Success() public {
         address validator = makeAddr("validator");
         registerValidatorV3(validator, "123", 500, "meta", bytes32(uint256(1)), "host:8080");
 
@@ -459,26 +459,26 @@ contract StakeTableV3Test is Test {
         vm.expectEmit();
         emit StakeTableV3.X25519KeyUpdated(validator, newKey);
         vm.prank(validator);
-        proxyV3.setX25519Key(newKey);
+        proxyV3.updateX25519Key(newKey);
     }
 
-    function test_SetX25519Key_Inactive_Reverts() public {
+    function test_UpdateX25519Key_Inactive_Reverts() public {
         address nobody = makeAddr("nobody");
         vm.prank(nobody);
         vm.expectRevert(S.ValidatorInactive.selector);
-        proxyV3.setX25519Key(bytes32(uint256(1)));
+        proxyV3.updateX25519Key(bytes32(uint256(1)));
     }
 
-    function test_SetX25519Key_ZeroKey_Reverts() public {
+    function test_UpdateX25519Key_ZeroKey_Reverts() public {
         address validator = makeAddr("validator");
         registerValidatorV3(validator, "123", 500, "meta", bytes32(uint256(1)), "host:8080");
 
         vm.prank(validator);
         vm.expectRevert(StakeTableV3.InvalidX25519Key.selector);
-        proxyV3.setX25519Key(bytes32(0));
+        proxyV3.updateX25519Key(bytes32(0));
     }
 
-    function test_SetX25519Key_DuplicateKey_Reverts() public {
+    function test_UpdateX25519Key_DuplicateKey_Reverts() public {
         bytes32 key = bytes32(uint256(42));
         registerValidatorV3(makeAddr("val1"), "1", 500, "meta", key, "host1:8080");
 
@@ -487,10 +487,10 @@ contract StakeTableV3Test is Test {
 
         vm.prank(val2);
         vm.expectRevert(StakeTableV3.X25519KeyAlreadyUsed.selector);
-        proxyV3.setX25519Key(key);
+        proxyV3.updateX25519Key(key);
     }
 
-    function test_SetX25519Key_Paused_Reverts() public {
+    function test_UpdateX25519Key_Paused_Reverts() public {
         address validator = makeAddr("validator");
         registerValidatorV3(validator, "123", 500, "meta", bytes32(uint256(1)), "host:8080");
 
@@ -499,10 +499,10 @@ contract StakeTableV3Test is Test {
 
         vm.prank(validator);
         vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
-        proxyV3.setX25519Key(bytes32(uint256(2)));
+        proxyV3.updateX25519Key(bytes32(uint256(2)));
     }
 
-    function test_SetX25519Key_Repeated_Success() public {
+    function test_UpdateX25519Key_Repeated_Success() public {
         address validator = makeAddr("validator");
         registerValidatorV3(validator, "123", 500, "meta", bytes32(uint256(1)), "host:8080");
 
@@ -510,12 +510,12 @@ contract StakeTableV3Test is Test {
         vm.expectEmit();
         emit StakeTableV3.X25519KeyUpdated(validator, key2);
         vm.prank(validator);
-        proxyV3.setX25519Key(key2);
+        proxyV3.updateX25519Key(key2);
 
         bytes32 key3 = bytes32(uint256(3));
         vm.expectEmit();
         emit StakeTableV3.X25519KeyUpdated(validator, key3);
         vm.prank(validator);
-        proxyV3.setX25519Key(key3);
+        proxyV3.updateX25519Key(key3);
     }
 }

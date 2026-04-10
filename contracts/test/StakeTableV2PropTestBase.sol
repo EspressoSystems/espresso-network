@@ -54,9 +54,9 @@ contract FunctionCallTracking {
         FuncStats createActor;
         FuncStats createValidator;
         FuncStats advanceTime;
-        FuncStats setNetworkConfig;
-        FuncStats setP2pAddr;
-        FuncStats setX25519Key;
+        FuncStats updateNetworkConfig;
+        FuncStats updateP2pAddr;
+        FuncStats updateX25519Key;
     }
 
     struct CallStatsAny {
@@ -65,9 +65,9 @@ contract FunctionCallTracking {
         FuncStats undelegate;
         FuncStats deregisterValidator;
         FuncStats claimValidatorExit;
-        FuncStats setNetworkConfig;
-        FuncStats setP2pAddr;
-        FuncStats setX25519Key;
+        FuncStats updateNetworkConfig;
+        FuncStats updateP2pAddr;
+        FuncStats updateX25519Key;
     }
 
     struct CallStats {
@@ -650,18 +650,18 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         total += stats.ok.createActor.ok;
         total += stats.ok.createValidator.ok;
         total += stats.ok.advanceTime.ok;
-        total += stats.ok.setNetworkConfig.ok;
-        total += stats.ok.setP2pAddr.ok;
-        total += stats.ok.setX25519Key.ok;
+        total += stats.ok.updateNetworkConfig.ok;
+        total += stats.ok.updateP2pAddr.ok;
+        total += stats.ok.updateX25519Key.ok;
         // Any functions
         total += stats.any.registerValidator.ok;
         total += stats.any.delegate.ok;
         total += stats.any.undelegate.ok;
         total += stats.any.deregisterValidator.ok;
         total += stats.any.claimValidatorExit.ok;
-        total += stats.any.setNetworkConfig.ok;
-        total += stats.any.setP2pAddr.ok;
-        total += stats.any.setX25519Key.ok;
+        total += stats.any.updateNetworkConfig.ok;
+        total += stats.any.updateP2pAddr.ok;
+        total += stats.any.updateX25519Key.ok;
         return total;
     }
 
@@ -672,9 +672,9 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         total += stats.any.undelegate.reverts;
         total += stats.any.deregisterValidator.reverts;
         total += stats.any.claimValidatorExit.reverts;
-        total += stats.any.setNetworkConfig.reverts;
-        total += stats.any.setP2pAddr.reverts;
-        total += stats.any.setX25519Key.reverts;
+        total += stats.any.updateNetworkConfig.reverts;
+        total += stats.any.updateP2pAddr.reverts;
+        total += stats.any.updateX25519Key.reverts;
         return total;
     }
 
@@ -741,59 +741,62 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         }
     }
 
-    function setNetworkConfigOk(uint256 actorIndex) public withActiveValidator(actorIndex) {
+    function updateNetworkConfigOk(uint256 actorIndex) public withActiveValidator(actorIndex) {
         x25519KeyCounter++;
         bytes32 x25519Key = keccak256(abi.encode("x25519", x25519KeyCounter));
         string memory p2pAddr = "10.0.0.1:8080";
 
         ivm.prank(validator);
-        stakeTable.setNetworkConfig(x25519Key, p2pAddr);
+        stakeTable.updateNetworkConfig(x25519Key, p2pAddr);
         usedX25519Keys[x25519Key] = true;
-        stats.ok.setNetworkConfig.ok++;
+        stats.ok.updateNetworkConfig.ok++;
     }
 
-    function setP2pAddrOk(uint256 actorIndex) public withActiveValidator(actorIndex) {
+    function updateP2pAddrOk(uint256 actorIndex) public withActiveValidator(actorIndex) {
         ivm.prank(validator);
-        stakeTable.setP2pAddr("10.0.0.1:9090");
-        stats.ok.setP2pAddr.ok++;
+        stakeTable.updateP2pAddr("10.0.0.1:9090");
+        stats.ok.updateP2pAddr.ok++;
     }
 
-    function setX25519KeyOk(uint256 actorIndex) public withActiveValidator(actorIndex) {
+    function updateX25519KeyOk(uint256 actorIndex) public withActiveValidator(actorIndex) {
         x25519KeyCounter++;
         bytes32 x25519Key = keccak256(abi.encode("x25519-setkey", x25519KeyCounter));
 
         ivm.prank(validator);
-        stakeTable.setX25519Key(x25519Key);
+        stakeTable.updateX25519Key(x25519Key);
         usedX25519Keys[x25519Key] = true;
-        stats.ok.setX25519Key.ok++;
+        stats.ok.updateX25519Key.ok++;
     }
 
-    function setNetworkConfigAny(uint256 actorIndex, bytes32 x25519Key, string memory p2pAddr)
+    function updateNetworkConfigAny(uint256 actorIndex, bytes32 x25519Key, string memory p2pAddr)
         public
         useActor(actorIndex)
     {
-        try stakeTable.setNetworkConfig(x25519Key, p2pAddr) {
+        try stakeTable.updateNetworkConfig(x25519Key, p2pAddr) {
             usedX25519Keys[x25519Key] = true;
-            stats.any.setNetworkConfig.ok++;
+            stats.any.updateNetworkConfig.ok++;
         } catch {
-            stats.any.setNetworkConfig.reverts++;
+            stats.any.updateNetworkConfig.reverts++;
         }
     }
 
-    function setP2pAddrAny(uint256 actorIndex, string memory p2pAddr) public useActor(actorIndex) {
-        try stakeTable.setP2pAddr(p2pAddr) {
-            stats.any.setP2pAddr.ok++;
+    function updateP2pAddrAny(uint256 actorIndex, string memory p2pAddr)
+        public
+        useActor(actorIndex)
+    {
+        try stakeTable.updateP2pAddr(p2pAddr) {
+            stats.any.updateP2pAddr.ok++;
         } catch {
-            stats.any.setP2pAddr.reverts++;
+            stats.any.updateP2pAddr.reverts++;
         }
     }
 
-    function setX25519KeyAny(uint256 actorIndex, bytes32 x25519Key) public useActor(actorIndex) {
-        try stakeTable.setX25519Key(x25519Key) {
+    function updateX25519KeyAny(uint256 actorIndex, bytes32 x25519Key) public useActor(actorIndex) {
+        try stakeTable.updateX25519Key(x25519Key) {
             usedX25519Keys[x25519Key] = true;
-            stats.any.setX25519Key.ok++;
+            stats.any.updateX25519Key.ok++;
         } catch {
-            stats.any.setX25519Key.reverts++;
+            stats.any.updateX25519Key.reverts++;
         }
     }
 

@@ -391,7 +391,7 @@ pub(crate) enum Commands {
     ///
     /// Primary use: initial configuration for validators registered before V3.
     /// Also usable to rotate the x25519 key.
-    SetNetworkConfig {
+    UpdateNetworkConfig {
         /// The x25519 public key (32 bytes, hex encoded with 0x prefix)
         #[clap(long, value_parser = parse::parse_bytes32, env = "X25519_KEY")]
         x25519_key: alloy::primitives::FixedBytes<32>,
@@ -401,13 +401,13 @@ pub(crate) enum Commands {
         p2p_addr: String,
     },
     /// Set x25519 encryption key for a validator.
-    SetX25519Key {
+    UpdateX25519Key {
         /// The x25519 public key (32 bytes, hex encoded with 0x prefix)
         #[clap(long, value_parser = parse::parse_bytes32, env = "X25519_KEY")]
         x25519_key: alloy::primitives::FixedBytes<32>,
     },
     /// Set p2p address for a validator.
-    SetP2pAddr {
+    UpdateP2pAddr {
         /// The p2p address in host:port format
         #[clap(long, env = "P2P_ADDR")]
         p2p_addr: String,

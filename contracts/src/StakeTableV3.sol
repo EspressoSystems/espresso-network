@@ -14,8 +14,8 @@ import { BLSSig } from "./libraries/BLSSig.sol";
 /// 1. x25519 encryption key tracking with uniqueness enforcement
 /// 2. p2p address (host:port) validation and registration
 /// 3. `registerValidatorV3` replaces `registerValidatorV2` (which is now deprecated)
-/// 4. `setX25519Key`, `setP2pAddr`, and `setNetworkConfig` for updating network configuration
-///
+/// 4. `updateX25519Key`, `updateP2pAddr`, and `updateNetworkConfig` for updating network
+/// configuration
 /// All new functions are virtual. Deprecated overrides are not virtual (same pattern as V2).
 contract StakeTableV3 is StakeTableV2 {
     // === Storage ===
@@ -197,10 +197,10 @@ contract StakeTableV3 is StakeTableV2 {
 
     // === Network Config ===
 
-    /// @notice Set or rotate the x25519 encryption key. The key must be unique (never previously
-    /// used). To also update the p2p address, use setNetworkConfig instead.
+    /// @notice Update the x25519 encryption key. The key must be unique (never previously
+    /// used). To also update the p2p address, use updateNetworkConfig instead.
     /// @param x25519Key The new x25519 encryption key (must be unique, never previously used)
-    function setX25519Key(bytes32 x25519Key) external virtual whenNotPaused {
+    function updateX25519Key(bytes32 x25519Key) external virtual whenNotPaused {
         ensureValidatorActive(msg.sender);
         require(x25519Key != bytes32(0), InvalidX25519Key());
         require(!x25519Keys[x25519Key], X25519KeyAlreadyUsed());
@@ -211,13 +211,13 @@ contract StakeTableV3 is StakeTableV2 {
 
     /// @notice Update the p2p address. Use for operational changes like server migration.
     /// @param p2pAddr The new p2p address (host:port)
-    function setP2pAddr(string memory p2pAddr) external virtual whenNotPaused {
+    function updateP2pAddr(string memory p2pAddr) external virtual whenNotPaused {
         ensureValidatorActive(msg.sender);
         validateP2pAddr(p2pAddr);
         emit P2pAddrUpdated(msg.sender, p2pAddr);
     }
 
-    /// @notice Set x25519 key and p2p address for an active validator.
+    /// @notice Update x25519 key and p2p address for an active validator.
     ///
     /// Primary use: initial configuration for validators registered before V3. Also usable to
     /// rotate the x25519 key. The x25519 key must be new (never used before); the p2p address
@@ -227,7 +227,7 @@ contract StakeTableV3 is StakeTableV2 {
     ///
     /// @param x25519Key The new x25519 encryption key (must be unique, never previously used)
     /// @param p2pAddr The p2p address (host:port)
-    function setNetworkConfig(bytes32 x25519Key, string memory p2pAddr)
+    function updateNetworkConfig(bytes32 x25519Key, string memory p2pAddr)
         external
         virtual
         whenNotPaused

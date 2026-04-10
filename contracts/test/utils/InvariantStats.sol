@@ -110,9 +110,9 @@ contract InvariantStats {
         _logStat("delegateOk", callStats.ok.delegate);
         _logStat("deregisterValidatorOk", callStats.ok.deregisterValidator);
         _logStat("undelegateOk", callStats.ok.undelegate);
-        _logStat("setNetworkConfigOk", callStats.ok.setNetworkConfig);
-        _logStat("setP2pAddrOk", callStats.ok.setP2pAddr);
-        _logStat("setX25519KeyOk", callStats.ok.setX25519Key);
+        _logStat("updateNetworkConfigOk", callStats.ok.updateNetworkConfig);
+        _logStat("updateP2pAddrOk", callStats.ok.updateP2pAddr);
+        _logStat("updateX25519KeyOk", callStats.ok.updateX25519Key);
 
         console.log("-----------------------------------------------");
 
@@ -121,9 +121,9 @@ contract InvariantStats {
         _logStat("deregisterValidatorAny", callStats.any.deregisterValidator);
         _logStat("registerValidatorAny", callStats.any.registerValidator);
         _logStat("undelegateAny", callStats.any.undelegate);
-        _logStat("setNetworkConfigAny", callStats.any.setNetworkConfig);
-        _logStat("setP2pAddrAny", callStats.any.setP2pAddr);
-        _logStat("setX25519KeyAny", callStats.any.setX25519Key);
+        _logStat("updateNetworkConfigAny", callStats.any.updateNetworkConfig);
+        _logStat("updateP2pAddrAny", callStats.any.updateP2pAddr);
+        _logStat("updateX25519KeyAny", callStats.any.updateX25519Key);
 
         console.log("-----------------------------------------------");
         console.log(
