@@ -1,30 +1,34 @@
-use std::{collections::BTreeMap, fs::File, path::Path, time::Instant};
+use std::{collections::BTreeMap, fs::File, path::Path};
 
 use hotshot_example_types::node_types::TestTypes;
 use hotshot_new_protocol::consensus::{ConsensusInput, ConsensusOutput};
 use hotshot_types::vote::HasViewNumber;
 use serde::Serialize;
+use time::OffsetDateTime;
 
 /// Per-view timing measurements.
+///
+/// All timestamps are wall-clock nanoseconds since Unix epoch
+/// (`OffsetDateTime::now_utc().unix_timestamp_nanos()`), matching the
+/// old HotShot benchmark format. This allows direct cross-node comparison.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct ViewMetrics {
     pub view: u64,
     pub is_leader: bool,
-    pub proposal_recv_ns: Option<u128>,
-    pub state_validated_ns: Option<u128>,
-    pub vote1_sent_ns: Option<u128>,
-    pub cert1_formed_ns: Option<u128>,
-    pub vote2_sent_ns: Option<u128>,
-    pub cert2_formed_ns: Option<u128>,
-    pub leaf_decided_ns: Option<u128>,
-    pub proposal_sent_ns: Option<u128>,
-    pub vid_disperse_ns: Option<u128>,
-    pub block_reconstructed_ns: Option<u128>,
+    pub proposal_recv_ns: Option<i128>,
+    pub state_validated_ns: Option<i128>,
+    pub vote1_sent_ns: Option<i128>,
+    pub cert1_formed_ns: Option<i128>,
+    pub vote2_sent_ns: Option<i128>,
+    pub cert2_formed_ns: Option<i128>,
+    pub leaf_decided_ns: Option<i128>,
+    pub proposal_sent_ns: Option<i128>,
+    pub vid_disperse_ns: Option<i128>,
+    pub block_reconstructed_ns: Option<i128>,
 }
 
 /// Collects per-view timing metrics.
 pub struct MetricsCollector {
-    start: Instant,
     views: BTreeMap<u64, ViewMetrics>,
     node_id: u64,
     current_view: u64,
@@ -33,15 +37,14 @@ pub struct MetricsCollector {
 impl MetricsCollector {
     pub fn new(node_id: u64) -> Self {
         Self {
-            start: Instant::now(),
             views: BTreeMap::new(),
             node_id,
             current_view: 0,
         }
     }
 
-    fn elapsed_ns(&self) -> u128 {
-        self.start.elapsed().as_nanos()
+    fn now_ns() -> i128 {
+        OffsetDateTime::now_utc().unix_timestamp_nanos()
     }
 
     fn view_mut(&mut self, view: u64) -> &mut ViewMetrics {
@@ -53,7 +56,7 @@ impl MetricsCollector {
 
     /// Record a consensus input event.
     pub fn on_input(&mut self, input: &ConsensusInput<TestTypes>) {
-        let ts = self.elapsed_ns();
+        let ts = Self::now_ns();
         match input {
             ConsensusInput::Proposal(p) => {
                 let v = *p.view_number();
@@ -85,7 +88,7 @@ impl MetricsCollector {
 
     /// Record a consensus output event.
     pub fn on_output(&mut self, output: &ConsensusOutput<TestTypes>) {
-        let ts = self.elapsed_ns();
+        let ts = Self::now_ns();
         match output {
             ConsensusOutput::SendVote1(_) => {
                 self.view_mut(self.current_view).vote1_sent_ns = Some(ts);

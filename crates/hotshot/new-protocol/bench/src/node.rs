@@ -3,12 +3,12 @@ use std::{path::PathBuf, sync::Arc};
 use anyhow::Result;
 use hotshot::{traits::implementations::Cliquenet, types::BLSPubKey};
 use hotshot_example_types::{
-    node_types::{CliquenetImpl, TEST_VERSIONS, TestTypes},
+    node_types::{CliquenetImpl, TestTypes},
     state_types::{TestInstanceState, TestValidatedState},
 };
 use hotshot_new_protocol::{
     block::{BlockBuilder, BlockBuilderConfig},
-    consensus::{Consensus, ConsensusOutput},
+    consensus::Consensus,
     coordinator::{Coordinator, timer::Timer},
     epoch::EpochManager,
     helpers::upgrade_lock,
@@ -22,7 +22,7 @@ use hotshot_new_protocol::{
 use hotshot_types::{
     PeerConnectInfo,
     addr::NetAddr,
-    data::{Leaf2, ViewNumber},
+    data::{EpochNumber, Leaf2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     traits::{metrics::NoMetrics, signature_key::SignatureKey},
     x25519::Keypair,
@@ -103,14 +103,10 @@ async fn build_coordinator(
     network: Cliquenet<BLSPubKey>,
     cfg: &NodeConfig,
 ) -> BenchCoordinator {
+    let instance = Arc::new(TestInstanceState::default());
     let epoch_height = u64::MAX;
 
-    let instance = Arc::new(TestInstanceState::default());
-
-    let genesis_version = TEST_VERSIONS.test.base;
-    let genesis_state = TestValidatedState::default();
-
-    let consensus = Consensus::new(membership.clone(), public_key, private_key, epoch_height);
+    let mut consensus = Consensus::new(membership.clone(), public_key, private_key, epoch_height);
 
     let vote1_collector = VoteCollector::new(membership.clone(), upgrade_lock());
     let vote2_collector = VoteCollector::new(membership.clone(), upgrade_lock());
@@ -127,17 +123,32 @@ async fn build_coordinator(
     let block_builder = BlockBuilder::new(instance.clone(), membership.clone(), block_config);
 
     let mut state_manager = StateManager::new(instance.clone());
-    let genesis_leaf =
-        Leaf2::<TestTypes>::genesis(&genesis_state, &*instance, genesis_version).await;
-    state_manager.seed_state(ViewNumber::genesis(), Arc::new(genesis_state), genesis_leaf);
+    let genesis_state = TestValidatedState::default();
+    let genesis_leaf = Leaf2::<TestTypes>::genesis(
+        &genesis_state,
+        &instance,
+        hotshot_example_types::node_types::TEST_VERSIONS.test.base,
+    )
+    .await;
+    state_manager.seed_state(
+        ViewNumber::genesis(),
+        Arc::new(genesis_state),
+        genesis_leaf.clone(),
+    );
+
+    // Seed consensus with genesis cert + proposal so the view-1 leader
+    // can self-start without external injection from the orchestrator.
+    let genesis_cert1 = build_genesis_cert1(&genesis_leaf);
+    let genesis_proposal = build_genesis_proposal(&genesis_leaf, &genesis_cert1);
+    consensus.seed_genesis(genesis_cert1, genesis_proposal);
 
     let proposal_validator = ProposalValidator::new(membership.clone());
 
     let net = Network::new(network, membership.clone(), upgrade_lock());
 
-    let timer = Timer::new(cfg.timeout_duration(), ViewNumber::genesis());
+    let timer = Timer::new(cfg.timeout_duration(), ViewNumber::genesis(), EpochNumber::genesis());
 
-    Coordinator::builder()
+    let mut coordinator = Coordinator::builder()
         .consensus(consensus)
         .network(net)
         .state_manager(state_manager)
@@ -155,7 +166,17 @@ async fn build_coordinator(
         .outbox(Outbox::new())
         .timer(timer)
         .public_key(public_key)
-        .build()
+        .build();
+
+    // Emit initial ViewChanged and (for the leader) RequestBlockAndHeader.
+    coordinator.start().await;
+
+    // Process initial outputs so the timer resets before the event loop.
+    while let Some(output) = coordinator.outbox_mut().pop_front() {
+        let _ = coordinator.process_consensus_output(output).await;
+    }
+
+    coordinator
 }
 
 /// Run the coordinator with metrics instrumentation.
@@ -189,21 +210,6 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
         while let Some(output) = coordinator.outbox_mut().pop_front() {
             metrics.on_output(&output);
 
-            // Check if we've reached the target.
-            if let ConsensusOutput::LeafDecided(_) = &output {
-                let decided = metrics.max_decided_view();
-                if decided >= cfg.target_views {
-                    info!(
-                        node_id = cfg.node_id,
-                        decided_view = decided,
-                        "target views reached, shutting down"
-                    );
-                    let path = PathBuf::from(&cfg.output_file);
-                    metrics.write_csv(&path)?;
-                    return Ok(());
-                }
-            }
-
             if let Err(err) = coordinator.process_consensus_output(output).await {
                 if err.severity == hotshot_new_protocol::coordinator::error::Severity::Critical {
                     error!(%err, "critical error processing output");
@@ -214,9 +220,61 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
                 warn!(%err, "recoverable error processing output");
             }
         }
+
+        // Check after processing all outputs for this round.
+        let decided = metrics.max_decided_view();
+        if decided >= cfg.target_views {
+            info!(
+                node_id = cfg.node_id,
+                decided_view = decided,
+                "target views reached, shutting down"
+            );
+            let path = PathBuf::from(&cfg.output_file);
+            metrics.write_csv(&path)?;
+            return Ok(());
+        }
     }
 
     let path = PathBuf::from(&cfg.output_file);
     metrics.write_csv(&path)?;
     Ok(())
+}
+
+/// Create a genesis `Certificate1` that references the genesis leaf.
+fn build_genesis_cert1(
+    genesis_leaf: &Leaf2<TestTypes>,
+) -> hotshot_new_protocol::message::Certificate1<TestTypes> {
+    use committable::Committable;
+    use hotshot_types::simple_vote::QuorumData2;
+
+    let data = QuorumData2 {
+        leaf_commit: genesis_leaf.commit(),
+        epoch: Some(EpochNumber::genesis()),
+        block_number: Some(0),
+    };
+    hotshot_new_protocol::message::Certificate1::new(
+        data.clone(),
+        data.commit(),
+        ViewNumber::genesis(),
+        None,
+        std::marker::PhantomData,
+    )
+}
+
+/// Create a genesis `Proposal` from the genesis leaf and cert.
+fn build_genesis_proposal(
+    genesis_leaf: &Leaf2<TestTypes>,
+    genesis_cert1: &hotshot_new_protocol::message::Certificate1<TestTypes>,
+) -> hotshot_new_protocol::message::Proposal<TestTypes> {
+    hotshot_new_protocol::message::Proposal {
+        block_header: genesis_leaf.block_header().clone(),
+        view_number: ViewNumber::genesis(),
+        epoch: EpochNumber::genesis(),
+        justify_qc: genesis_cert1.clone(),
+        next_epoch_justify_qc: None,
+        upgrade_certificate: None,
+        view_change_evidence: None,
+        next_drb_result: None,
+        state_cert: None,
+    }
 }
