@@ -1,5 +1,5 @@
 pub mod error;
-pub(crate) mod timer;
+pub mod timer;
 
 use bon::Builder;
 use hotshot::traits::NodeImplementation;
