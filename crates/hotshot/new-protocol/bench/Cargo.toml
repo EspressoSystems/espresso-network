@@ -32,6 +32,7 @@ time = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+versions = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

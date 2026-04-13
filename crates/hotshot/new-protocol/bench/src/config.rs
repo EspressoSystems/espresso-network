@@ -53,6 +53,13 @@ pub struct NodeConfig {
     /// Output CSV file path.
     #[arg(long, default_value = "results.csv")]
     pub output_file: String,
+
+    /// Block payload size in bytes. When > 0, each leader creates a dummy
+    /// block of this size instead of going through the normal block builder.
+    /// This gives precise control over VID cost per view.
+    /// 0 means empty blocks (default).
+    #[arg(long, default_value_t = 0)]
+    pub block_size: usize,
 }
 
 impl NodeConfig {

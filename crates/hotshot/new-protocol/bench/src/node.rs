@@ -1,14 +1,18 @@
 use std::{path::PathBuf, sync::Arc};
 
 use anyhow::Result;
-use hotshot::{traits::implementations::Cliquenet, types::BLSPubKey};
+use hotshot::{
+    traits::{BlockPayload, implementations::Cliquenet},
+    types::BLSPubKey,
+};
 use hotshot_example_types::{
-    node_types::{CliquenetImpl, TestTypes},
+    block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
+    node_types::{CliquenetImpl, TEST_VERSIONS, TestTypes},
     state_types::{TestInstanceState, TestValidatedState},
 };
 use hotshot_new_protocol::{
     block::{BlockBuilder, BlockBuilderConfig},
-    consensus::Consensus,
+    consensus::{Consensus, ConsensusInput, ConsensusOutput},
     coordinator::{Coordinator, timer::Timer},
     epoch::EpochManager,
     helpers::upgrade_lock,
@@ -210,6 +214,35 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
         while let Some(output) = coordinator.outbox_mut().pop_front() {
             metrics.on_output(&output);
 
+            // When block_size is set, intercept block requests and inject a
+            // dummy block directly, bypassing the BlockBuilder entirely.
+            if let ConsensusOutput::RequestBlockAndHeader(ref req) = output
+                && cfg.block_size > 0
+            {
+                let block = build_test_block(cfg.block_size, cfg.total_nodes);
+                let parent_leaf = req.parent_proposal.clone().into();
+                let version = upgrade_lock::<TestTypes>().version_infallible(req.view);
+                let header = TestBlockHeader::new::<TestTypes>(
+                    &parent_leaf,
+                    block.payload_commitment,
+                    block.builder_commitment,
+                    block.metadata,
+                    version,
+                );
+                coordinator
+                    .apply_consensus(ConsensusInput::HeaderCreated(req.view, header))
+                    .await;
+                coordinator
+                    .apply_consensus(ConsensusInput::BlockBuilt {
+                        view: req.view,
+                        epoch: req.epoch,
+                        payload: block.block,
+                        metadata: block.metadata,
+                    })
+                    .await;
+                continue; // skip process_consensus_output for this one
+            }
+
             if let Err(err) = coordinator.process_consensus_output(output).await {
                 if err.severity == hotshot_new_protocol::coordinator::error::Severity::Critical {
                     error!(%err, "critical error processing output");
@@ -238,6 +271,42 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
     let path = PathBuf::from(&cfg.output_file);
     metrics.write_csv(&path)?;
     Ok(())
+}
+
+/// Build a dummy block with a single transaction of the given size.
+struct TestBlock {
+    block: TestBlockPayload,
+    metadata: TestMetadata,
+    payload_commitment: hotshot_types::data::VidCommitment,
+    builder_commitment: hotshot_types::utils::BuilderCommitment,
+}
+
+fn build_test_block(size: usize, num_nodes: usize) -> TestBlock {
+    use hotshot_types::traits::EncodeBytes;
+
+    let tx = TestTransaction::new(vec![0u8; size]);
+    let block = TestBlockPayload {
+        transactions: vec![tx],
+    };
+    let metadata = TestMetadata {
+        num_transactions: 1,
+    };
+    // Use the actual committee size so the commitment matches what
+    // VidDisperse::calculate_vid_disperse will produce.
+    let payload_commitment = hotshot_types::data::vid_commitment(
+        &block.encode(),
+        &metadata.encode(),
+        num_nodes,
+        versions::VID2_UPGRADE_VERSION,
+    );
+    let builder_commitment =
+        <TestBlockPayload as BlockPayload<TestTypes>>::builder_commitment(&block, &metadata);
+    TestBlock {
+        block,
+        metadata,
+        payload_commitment,
+        builder_commitment,
+    }
 }
 
 /// Create a genesis `Certificate1` that references the genesis leaf.

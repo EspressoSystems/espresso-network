@@ -17,33 +17,36 @@ const TIMEOUT_MS: u64 = 5000;
 /// Per-test timeout to prevent hanging.
 const TEST_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// Base port for CliqueNet. Each node gets `BASE_PORT + node_id`.
-const BASE_PORT: u16 = 19000;
-
-fn peer_list() -> Vec<String> {
+fn peer_list(base_port: u16) -> Vec<String> {
     (0..NUM_NODES)
-        .map(|i| format!("127.0.0.1:{}", BASE_PORT + i as u16))
+        .map(|i| format!("127.0.0.1:{}", base_port + i as u16))
         .collect()
 }
 
-fn node_config(node_id: u64, output_dir: &std::path::Path) -> NodeConfig {
+fn node_config(
+    node_id: u64,
+    output_dir: &std::path::Path,
+    block_size: usize,
+    base_port: u16,
+) -> NodeConfig {
     NodeConfig {
         node_id,
         total_nodes: NUM_NODES,
         seed: SEED,
         timeout_ms: TIMEOUT_MS,
         target_views: TARGET_VIEWS,
-        bind_addr: format!("127.0.0.1:{}", BASE_PORT + node_id as u16),
-        peers: peer_list(),
+        bind_addr: format!("127.0.0.1:{}", base_port + node_id as u16),
+        peers: peer_list(base_port),
         output_file: output_dir
             .join(format!("node_{node_id}.csv"))
             .to_string_lossy()
             .into_owned(),
+        block_size,
     }
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn smoke_5_nodes() {
+async fn smoke_5_nodes_empty_blocks() {
     tracing_subscriber::fmt()
         .with_env_filter("info")
         .try_init()
@@ -51,7 +54,7 @@ async fn smoke_5_nodes() {
 
     let tmp = TempDir::new().expect("failed to create temp dir");
 
-    let result = timeout(TEST_TIMEOUT, run_benchmark(tmp.path())).await;
+    let result = timeout(TEST_TIMEOUT, run_benchmark(tmp.path(), 0, 19000)).await;
 
     match result {
         Ok(Ok(())) => {},
@@ -60,13 +63,35 @@ async fn smoke_5_nodes() {
     }
 }
 
-async fn run_benchmark(output_dir: &std::path::Path) -> anyhow::Result<()> {
+#[tokio::test(flavor = "multi_thread")]
+async fn smoke_5_nodes_1kb_blocks() {
+    tracing_subscriber::fmt()
+        .with_env_filter("info")
+        .try_init()
+        .ok();
+
+    let tmp = TempDir::new().expect("failed to create temp dir");
+
+    let result = timeout(TEST_TIMEOUT, run_benchmark(tmp.path(), 1024, 19100)).await;
+
+    match result {
+        Ok(Ok(())) => {},
+        Ok(Err(e)) => panic!("benchmark failed: {e:#}"),
+        Err(_) => panic!("benchmark timed out after {TEST_TIMEOUT:?}"),
+    }
+}
+
+async fn run_benchmark(
+    output_dir: &std::path::Path,
+    block_size: usize,
+    base_port: u16,
+) -> anyhow::Result<()> {
     let mut node_handles = Vec::new();
 
     // Spawn all nodes as async tasks.  Each node self-bootstraps via
     // seed_genesis + start() — no orchestrator needed.
     for i in 0..NUM_NODES as u64 {
-        let cfg = node_config(i, output_dir);
+        let cfg = node_config(i, output_dir, block_size, base_port);
         node_handles.push(tokio::spawn(async move {
             hotshot_new_protocol_bench::node::run(cfg).await
         }));
