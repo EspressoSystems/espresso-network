@@ -34,7 +34,12 @@ pub async fn make_membership(num_nodes: usize) -> EpochMembershipCoordinator<Tes
         )(0)
         .await;
 
-    let members = gen_node_lists(num_nodes as u64, num_nodes as u64, &TestNodeStakes::default()).0;
+    let members = gen_node_lists(
+        num_nodes as u64,
+        num_nodes as u64,
+        &TestNodeStakes::default(),
+    )
+    .0;
 
     let membership = Arc::new(RwLock::new(StrictMembership::<
         TestTypes,

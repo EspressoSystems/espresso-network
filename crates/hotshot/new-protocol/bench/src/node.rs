@@ -39,8 +39,7 @@ type BenchCoordinator = Coordinator<TestTypes, CliquenetImpl>;
 
 /// Build and run a single benchmark node.
 pub async fn run(cfg: NodeConfig) -> Result<()> {
-    let (public_key, private_key) =
-        BLSPubKey::generated_from_seed_indexed([0u8; 32], cfg.node_id);
+    let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], cfg.node_id);
     info!(node_id = cfg.node_id, %public_key, "starting node");
 
     let membership = make_membership(cfg.total_nodes).await;
@@ -148,7 +147,11 @@ async fn build_coordinator(
 
     let net = Network::new(network, membership.clone(), upgrade_lock());
 
-    let timer = Timer::new(cfg.timeout_duration(), ViewNumber::genesis(), EpochNumber::genesis());
+    let timer = Timer::new(
+        cfg.timeout_duration(),
+        ViewNumber::genesis(),
+        EpochNumber::genesis(),
+    );
 
     let mut coordinator = Coordinator::builder()
         .consensus(consensus)
