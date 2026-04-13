@@ -30,7 +30,7 @@ func NewQuerySubmitter(baseUrl string) *QuerySubmitter {
 func (q *QuerySubmitter) SubmitTransaction(ctx context.Context, tx types.Transaction) (*types.TaggedBase64, error) {
 	response, err := q.tryPostRequest(ctx, q.baseUrl, tx)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrPermanent, err)
+		return nil, fmt.Errorf("%w: %v", ErrEphemeral, err)
 	}
 
 	defer response.Body.Close()
@@ -45,7 +45,7 @@ func (q *QuerySubmitter) SubmitTransaction(ctx context.Context, tx types.Transac
 
 	var hash types.TaggedBase64
 	if err := json.Unmarshal(body, &hash); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrPermanent, err)
+		return nil, fmt.Errorf("%w: %v", ErrEphemeral, err)
 	}
 
 	return &hash, nil

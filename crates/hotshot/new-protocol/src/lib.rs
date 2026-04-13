@@ -3,6 +3,7 @@ pub mod consensus;
 pub mod coordinator;
 pub mod epoch;
 pub mod helpers;
+pub mod logging;
 pub mod message;
 pub mod network;
 pub mod outbox;

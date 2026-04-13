@@ -28,6 +28,7 @@ use crate::{
     },
     epoch::{EpochManager, EpochRootResult},
     helpers::upgrade_lock,
+    logging::KeyPrefix,
     message::{
         self, BlockMessage, Certificate2, CheckpointCertificate, CheckpointVote, ConsensusMessage,
         Message, MessageType, ProposalMessage, TimeoutOneHonest, TransactionMessage, Unchecked,
@@ -62,6 +63,8 @@ pub struct Coordinator<T: NodeType, N> {
     #[builder(default)]
     outbox: Outbox<ConsensusOutput<T>>,
     public_key: T::SignatureKey,
+    #[builder(default = KeyPrefix::from(&public_key))]
+    node_id: KeyPrefix,
     timer: Timer,
 }
 
@@ -125,7 +128,11 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Coordinator<T, N> {
             ))
             .proposal_validator(ProposalValidator::new(membership_coordinator.clone()))
             .membership_coordinator(membership_coordinator)
-            .timer(Timer::new(timeout_duration, ViewNumber::genesis()))
+            .timer(Timer::new(
+                timeout_duration,
+                ViewNumber::genesis(),
+                EpochNumber::genesis(),
+            ))
             .public_key(public_key)
             .build();
 
@@ -183,7 +190,11 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Coordinator<T, N> {
                     }
                 },
                 () = &mut self.timer => {
-                    let input = ConsensusInput::Timeout(self.timer.view());
+                    let input = ConsensusInput::Timeout(self.timer.view(), self.timer.epoch());
+                    // Timer is only reset so we can resend the timeout vote
+                    // This isn't strictly necessary for the protocol, but it's a good idea to
+                    // resend the timeout vote to avoid a situation where the network is stuck
+                    // view because we fail to form a timeout certificate.
                     self.timer.reset();
                     return Ok(input)
                 }
@@ -199,7 +210,11 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Coordinator<T, N> {
                     return Ok(ConsensusInput::TimeoutCertificate(tcert))
                 }
                 Some(out) = self.timeout_one_honest_collector.next() => {
-                    return Ok(ConsensusInput::TimeoutOneHonest(out.view_number(), out.data.epoch))
+                    let Some(epoch) = out.data.epoch else {
+                        let msg = format!("missing epoch in view {}", out.view_number());
+                        return Err(CoordinatorError::regular(msg).context("gc timeout one honest"))
+                    };
+                    return Ok(ConsensusInput::TimeoutOneHonest(out.view_number(), epoch))
                 }
                 Some(cert1) = self.vote1_collector.next() => {
                     return Ok(ConsensusInput::Certificate1(cert1))
@@ -531,7 +546,7 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Coordinator<T, N> {
             ConsensusOutput::ExternalMessageReceived { .. } => {},
             ConsensusOutput::ViewChanged(view, epoch) => {
                 self.consensus.set_view(view, epoch);
-                self.timer.reset_with(view);
+                self.timer.reset_with_epoch(view, epoch);
                 let txns = self.block_builder.on_view_changed(view, epoch);
                 if !txns.is_empty() {
                     let next_view = view + 1;
@@ -593,5 +608,9 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Coordinator<T, N> {
         self.timeout_one_honest_collector.gc(view, epoch);
         self.epoch_manager.gc(epoch);
         self.block_builder.gc(view);
+    }
+
+    pub fn node_id(&self) -> &KeyPrefix {
+        &self.node_id
     }
 }

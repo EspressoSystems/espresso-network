@@ -2,7 +2,7 @@ use std::future::Future;
 
 use anyhow::Result;
 use espresso_types::{NamespaceId, SeqTypes, v0_3::StakeTableEvent};
-use hotshot_query_service::{
+use hotshot_query_service_types::{
     availability::{LeafId, LeafQueryData},
     node::BlockId,
 };
@@ -47,10 +47,7 @@ pub trait Client: Send + Sync + 'static {
         &self,
         start: usize,
         end: usize,
-    ) -> impl Send
-    + Future<
-        Output = Result<Vec<hotshot_query_service::availability::LeafQueryData<SeqTypes>>>,
-    >;
+    ) -> impl Send + Future<Output = Result<Vec<LeafQueryData<SeqTypes>>>>;
 
     /// Get a proof for the requested payload.
     ///
@@ -91,7 +88,7 @@ pub trait Client: Send + Sync + 'static {
 /// A [`Client`] connected to the HotShot query service.
 #[derive(Clone, Debug)]
 pub struct QueryServiceClient {
-    client: surf_disco::Client<hotshot_query_service::Error, StaticVersion<0, 1>>,
+    client: surf_disco::Client<hotshot_query_service_types::Error, StaticVersion<0, 1>>,
 }
 
 impl QueryServiceClient {
@@ -208,7 +205,7 @@ mod test {
     };
     use espresso_types::{Header, Transaction};
     use futures::{TryStreamExt, stream::StreamExt};
-    use hotshot_query_service::{
+    use hotshot_query_service_types::{
         Resolvable,
         availability::{BlockQueryData, LeafQueryData},
     };
