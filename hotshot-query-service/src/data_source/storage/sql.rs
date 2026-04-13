@@ -703,6 +703,10 @@ impl HasMetrics for SqlStorage {
 }
 
 impl SqlStorage {
+    async fn prune_write(&self) -> anyhow::Result<Transaction<Prune>> {
+        Transaction::new(&self.pool, self.pool_metrics.clone()).await
+    }
+
     async fn get_minimum_height(&self) -> QueryResult<Option<u64>> {
         let mut tx = self.read().await.map_err(|err| QueryError::Error {
             message: err.to_string(),
@@ -888,14 +892,14 @@ impl PruneStorage for SqlStorage {
                 message: format!("failed to commit save_pruned_height {e}"),
             })?;
 
-            let mut tx = self.write().await?;
+            let mut tx = self.prune_write().await?;
             tx.delete_batch(to).await?;
             tx.commit().await.map_err(|e| QueryError::Error {
                 message: format!("failed to commit delete_batch {e}"),
             })?;
 
             // Prune state tables in a separate transaction.
-            let mut tx = self.write().await?;
+            let mut tx = self.prune_write().await?;
             tx.delete_state_batch(state_tables, to).await?;
             tx.commit().await.map_err(|e| QueryError::Error {
                 message: format!("failed to commit {e}"),
@@ -945,14 +949,14 @@ impl PruneStorage for SqlStorage {
                         message: format!("failed to commit save_pruned_height {e}"),
                     })?;
 
-                    let mut tx = self.write().await?;
+                    let mut tx = self.prune_write().await?;
                     tx.delete_batch(to).await?;
                     tx.commit().await.map_err(|e| QueryError::Error {
                         message: format!("failed to commit delete_batch {e}"),
                     })?;
 
                     // Prune state tables in a separate transaction.
-                    let mut tx = self.write().await?;
+                    let mut tx = self.prune_write().await?;
                     tx.delete_state_batch(state_tables, to).await?;
                     tx.commit().await.map_err(|e| QueryError::Error {
                         message: format!("failed to commit {e}"),
@@ -1559,7 +1563,7 @@ mod test {
 
         // Prune up to height 500, keeping only the newest version of each node.
         let prune_height = 5678u64;
-        let mut tx = storage.write().await.unwrap();
+        let mut tx = storage.prune_write().await.unwrap();
         tx.delete_state_batch(vec!["test_tree".to_string()], prune_height)
             .await
             .unwrap();
