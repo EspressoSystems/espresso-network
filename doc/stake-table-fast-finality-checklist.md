@@ -14,7 +14,7 @@ Design doc: [doc/stake-table-fast-finality.md](stake-table-fast-finality.md)
 - [x] New events: `ValidatorRegisteredV3`, `NetworkConfigUpdated`
 - [x] `registerValidatorV3`: full registration with x25519 + p2p
 - [x] Override `registerValidatorV2` to revert `DeprecatedFunction()`
-- [x] `setNetworkConfig`: set/rotate x25519 key + p2p addr
+- [x] `updateNetworkConfig`: set/rotate x25519 key + p2p addr
 - [x] `updateP2pAddr`: update p2p addr only, emit `NetworkConfigUpdated` with `bytes32(0)` x25519
 
 ## Phase 2: Contract tests
@@ -32,11 +32,11 @@ Design doc: [doc/stake-table-fast-finality.md](stake-table-fast-finality.md)
 - [x] `registerValidatorV3` happy path + event check
 - [x] `registerValidatorV3` edge cases: zero x25519, empty p2p, long p2p, duplicate x25519
 - [x] `registerValidatorV2` deprecated revert after V3
-- [x] `setNetworkConfig` happy path + event check
-- [x] `setNetworkConfig` edge cases: inactive, exited, zero x25519, empty p2p, duplicate x25519
-- [x] `setNetworkConfig` repeated with different keys (both succeed)
-- [x] `setNetworkConfig` with own registered x25519 key (reverts)
-- [x] `setNetworkConfig` paused (reverts)
+- [x] `updateNetworkConfig` happy path + event check
+- [x] `updateNetworkConfig` edge cases: inactive, exited, zero x25519, empty p2p, duplicate x25519
+- [x] `updateNetworkConfig` repeated with different keys (both succeed)
+- [x] `updateNetworkConfig` with own registered x25519 key (reverts)
+- [x] `updateNetworkConfig` paused (reverts)
 - [x] `updateP2pAddr` happy path + event check
 - [x] `updateP2pAddr` edge cases: inactive, exited, empty, long, paused
 - [x] `updateP2pAddr` repeated with different addresses (both succeed)
@@ -49,7 +49,7 @@ Design doc: [doc/stake-table-fast-finality.md](stake-table-fast-finality.md)
 - [x] Unauthorized upgrade reverts
 - [x] Pending undelegation from V2 claimable after V3
 - [x] Exited validator delegations claimable after V3
-- [ ] Invariant targets: `setNetworkConfigOk/Any`, `updateP2pAddrOk/Any`
+- [ ] Invariant targets: `updateNetworkConfigOk/Any`, `updateP2pAddrOk/Any`
 - [ ] Storage compatibility: `StorageUpgradeCompatibility.t.sol` with `maxMajorVersion = 3`
 
 ## Phase 3: Rust bindings and event handling
@@ -78,10 +78,10 @@ Design doc: [doc/stake-table-fast-finality.md](stake-table-fast-finality.md)
 
 ## Phase 5: Staking CLI -- [`staking-cli/src/`](../staking-cli/src/)
 
-- [x] `set-network-config` command -- `cli.rs`, `transaction.rs`
+- [x] `update-network-config` command -- `cli.rs`, `transaction.rs`
 - [x] `update-p2p-addr` command -- `cli.rs`, `transaction.rs`
 - [x] V3 registration with x25519_key + p2p_addr -- `transaction.rs`
-- [x] Integration test: `test_set_network_config` -- `registration.rs`
+- [x] Integration test: `test_update_network_config` -- `registration.rs`
 - [x] Integration test: `test_update_p2p_addr` -- `registration.rs`
 
 ## Phase 6: Deployer -- [`contracts/rust/deployer/src/lib.rs`](../contracts/rust/deployer/src/lib.rs)
