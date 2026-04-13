@@ -1,4 +1,4 @@
-use hotshot_new_protocol::message::{Certificate2, Proposal as NewProposal};
+pub use hotshot_new_protocol::message::{Certificate2, Proposal as NewProposal};
 use hotshot_types::{
     data::ViewNumber,
     message::Proposal as SignedProposal,

@@ -427,6 +427,7 @@ impl Inner {
         &mut self,
         view: ViewNumber,
         deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
+        cert2: Option<espresso_types::Certificate2<SeqTypes>>,
         consumer: &impl EventConsumer,
     ) -> anyhow::Result<Vec<RangeInclusive<ViewNumber>>> {
         // Generate a decide event for each leaf, to be processed by the event consumer. We make a
@@ -507,6 +508,7 @@ impl Inner {
                         event: EventType::Decide {
                             committing_qc: Arc::new(cert),
                             deciding_qc,
+                            cert2: cert2.clone().map(Arc::new),
                             leaf_chain: Arc::new(vec![leaf]),
                             block_size: None,
                         },
@@ -731,6 +733,7 @@ impl SequencerPersistence for Persistence {
         view: ViewNumber,
         leaf_chain: impl IntoIterator<Item = (&LeafInfo<SeqTypes>, CertificatePair<SeqTypes>)> + Send,
         deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
+        cert2: Option<espresso_types::Certificate2<SeqTypes>>,
         consumer: &impl EventConsumer,
     ) -> anyhow::Result<()> {
         let mut inner = self.inner.write().await;
@@ -787,7 +790,7 @@ impl SequencerPersistence for Persistence {
         }
 
         match inner
-            .generate_decide_events(view, deciding_qc, consumer)
+            .generate_decide_events(view, deciding_qc, cert2, consumer)
             .await
         {
             Err(err) => {

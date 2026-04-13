@@ -99,8 +99,8 @@ use crate::{
     Header, Payload, QueryError, QueryResult,
     availability::{
         AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, BlockWithTransaction, Fetch,
-        FetchStream, HeaderQueryData, LeafId, LeafQueryData, NamespaceId, PayloadMetadata,
-        PayloadQueryData, QueryableHeader, QueryablePayload, TransactionHash,
+        FetchStream, HeaderQueryData, LeafId, LeafQueryData, NamespaceId, NewProtocolCert2,
+        PayloadMetadata, PayloadQueryData, QueryableHeader, QueryablePayload, TransactionHash,
         UpdateAvailabilityData, VidCommonMetadata, VidCommonQueryData,
     },
     data_source::fetching::{leaf::RangeRequest, vid::VidCommonRangeFetcher},
@@ -779,7 +779,7 @@ where
 
         // Save the new decided leaf.
         self.fetcher
-            .store(&(info.leaf.clone(), info.qc_chain))
+            .store(&(info.leaf.clone(), info.qc_chain, info.cert2))
             .await;
 
         // Trigger a fetch of the parent leaf, if we don't already have it.
@@ -2196,7 +2196,11 @@ trait Storable<Types: NodeType>: Clone {
 }
 
 impl<Types: NodeType> HeightIndexed
-    for (LeafQueryData<Types>, Option<[CertificatePair<Types>; 2]>)
+    for (
+        LeafQueryData<Types>,
+        Option<[CertificatePair<Types>; 2]>,
+        Option<NewProtocolCert2<Types>>,
+    )
 {
     fn height(&self) -> u64 {
         self.0.height()
@@ -2204,7 +2208,11 @@ impl<Types: NodeType> HeightIndexed
 }
 
 impl<Types: NodeType> Storable<Types>
-    for (LeafQueryData<Types>, Option<[CertificatePair<Types>; 2]>)
+    for (
+        LeafQueryData<Types>,
+        Option<[CertificatePair<Types>; 2]>,
+        Option<NewProtocolCert2<Types>>,
+    )
 {
     fn debug_name(&self) -> String {
         format!("leaf {} with QC chain", self.0.height())
@@ -2221,7 +2229,11 @@ impl<Types: NodeType> Storable<Types>
     ) -> anyhow::Result<()> {
         storage
             .insert_leaf_with_qc_chain(&self.0, self.1.clone())
-            .await
+            .await?;
+        if let Some(cert2) = &self.2 {
+            storage.insert_cert2(self.0.height(), cert2.clone()).await?;
+        }
+        Ok(())
     }
 }
 

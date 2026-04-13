@@ -1352,7 +1352,7 @@ mod tests {
 
         // Decide a newer view, view 1.
         storage
-            .append_decided_leaves(ViewNumber::new(1), [], None, &NullEventConsumer)
+            .append_decided_leaves(ViewNumber::new(1), [], None, None, &NullEventConsumer)
             .await
             .unwrap();
 
@@ -1384,7 +1384,7 @@ mod tests {
 
         // Decide an even newer view, triggering GC of the old data.
         storage
-            .append_decided_leaves(ViewNumber::new(2), [], None, &NullEventConsumer)
+            .append_decided_leaves(ViewNumber::new(2), [], None, None, &NullEventConsumer)
             .await
             .unwrap();
         assert!(

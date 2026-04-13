@@ -133,17 +133,22 @@ where
     async fn scan(self) {
         let mut events = self.consensus_handle.event_stream();
         while let Some(event) = events.next().await {
-            let ConsensusEvent::LegacyEvent(Event {
-                event: EventType::QuorumProposal { proposal, .. },
-                ..
-            }) = event
-            else {
-                continue;
+            // Whenever we see a quorum proposal, ensure we have the chain of proposals stretching
+            // back to the anchor. This allows state replay from the decided state.
+            let (parent_view, parent_leaf) = match event {
+                ConsensusEvent::LegacyEvent(Event {
+                    event: EventType::QuorumProposal { proposal, .. },
+                    ..
+                }) => {
+                    let qc = proposal.data.justify_qc();
+                    (qc.view_number, qc.data.leaf_commit)
+                },
+                ConsensusEvent::QuorumProposal { proposal, .. } => {
+                    let qc = &proposal.data.justify_qc;
+                    (qc.view_number, qc.data.leaf_commit)
+                },
+                _ => continue,
             };
-            // Whenever we see a quorum proposal, ensure we have the chain of proposals stretching back
-            // to the anchor. This allows state replay from the decided state.
-            let parent_view = proposal.data.justify_qc().view_number;
-            let parent_leaf = proposal.data.justify_qc().data.leaf_commit;
             self.request((parent_view, parent_leaf)).await;
         }
     }

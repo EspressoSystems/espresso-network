@@ -780,6 +780,7 @@ impl Persistence {
     async fn generate_decide_events(
         &self,
         deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
+        cert2: Option<espresso_types::Certificate2<SeqTypes>>,
         consumer: &impl EventConsumer,
     ) -> anyhow::Result<()> {
         let mut last_processed_view: Option<i64> = self
@@ -985,6 +986,7 @@ impl Persistence {
                             leaf_chain: Arc::new(leaf_chain),
                             committing_qc: Arc::new(final_qc),
                             deciding_qc,
+                            cert2: cert2.clone().map(Arc::new),
                             block_size: None,
                         },
                     })
@@ -1413,6 +1415,7 @@ impl SequencerPersistence for Persistence {
         view: ViewNumber,
         leaf_chain: impl IntoIterator<Item = (&LeafInfo<SeqTypes>, CertificatePair<SeqTypes>)> + Send,
         deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
+        cert2: Option<espresso_types::Certificate2<SeqTypes>>,
         consumer: &(impl EventConsumer + 'static),
     ) -> anyhow::Result<()> {
         let values = leaf_chain
@@ -1451,7 +1454,10 @@ impl SequencerPersistence for Persistence {
 
         // Generate an event for the new leaves and, only if it succeeds, clean up data we no longer
         // need.
-        if let Err(err) = self.generate_decide_events(deciding_qc, consumer).await {
+        if let Err(err) = self
+            .generate_decide_events(deciding_qc, cert2, consumer)
+            .await
+        {
             // GC/event processing failure is not an error, since by this point we have at least
             // managed to persist the decided leaves successfully, and GC will just run again at the
             // next decide. Log an error but do not return it.
@@ -3921,7 +3927,7 @@ mod test {
         // the target, because of the minimum retention.
         tracing::info!("decide view 1");
         storage
-            .append_decided_leaves(data_view + 1, [], None, &NullEventConsumer)
+            .append_decided_leaves(data_view + 1, [], None, None, &NullEventConsumer)
             .await
             .unwrap();
         assert_eq!(
@@ -3941,7 +3947,7 @@ mod test {
         // retention) so it gets pruned.
         tracing::info!("decide view 2");
         storage
-            .append_decided_leaves(data_view + 2, [], None, &NullEventConsumer)
+            .append_decided_leaves(data_view + 2, [], None, None, &NullEventConsumer)
             .await
             .unwrap();
         assert!(storage.load_vid_share(data_view).await.unwrap().is_none(),);

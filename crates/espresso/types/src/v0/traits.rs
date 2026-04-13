@@ -39,8 +39,8 @@ use super::{
     v0_3::{EventKey, IndexedStake, StakeTableEvent},
 };
 use crate::{
-    AuthenticatedValidatorMap, BlockMerkleTree, ConsensusEvent, Event, FeeAccount, FeeAccountProof,
-    FeeMerkleCommitment, Leaf2, NetworkConfig, PubKey, SeqTypes,
+    AuthenticatedValidatorMap, BlockMerkleTree, Certificate2, ConsensusEvent, Event, FeeAccount,
+    FeeAccountProof, FeeMerkleCommitment, Leaf2, NetworkConfig, PubKey, SeqTypes,
     v0::impls::{StakeTableHash, ValidatedState},
     v0_3::{
         ChainConfig, RegisteredValidator, RewardAccountProofV1, RewardAccountV1, RewardAmount,
@@ -818,6 +818,7 @@ pub trait SequencerPersistence:
                             leaf.view_number(),
                             chain,
                             deciding_qc.clone(),
+                            None,
                             consumer,
                         )
                         .await
@@ -849,7 +850,13 @@ pub trait SequencerPersistence:
                 );
 
                 if let Err(err) = self
-                    .append_decided_leaves(decide.view_number, chain, None, consumer)
+                    .append_decided_leaves(
+                        decide.view_number,
+                        chain,
+                        None,
+                        Some(decide.cert2.clone()),
+                        consumer,
+                    )
                     .await
                 {
                     tracing::error!("failed to save decided leaves from new protocol: {err:#}");
@@ -889,6 +896,7 @@ pub trait SequencerPersistence:
         decided_view: ViewNumber,
         leaf_chain: impl IntoIterator<Item = (&LeafInfo<SeqTypes>, CertificatePair<SeqTypes>)> + Send,
         deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
+        cert2: Option<Certificate2<SeqTypes>>,
         consumer: &(impl EventConsumer + 'static),
     ) -> anyhow::Result<()>;
 

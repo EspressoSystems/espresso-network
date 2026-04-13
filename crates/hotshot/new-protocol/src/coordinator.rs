@@ -166,6 +166,9 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Coordinator<T, N> {
                 self.state_manager.update_state(state, delta, view, leaf);
                 let _ = respond.send(Ok(()));
             },
+            CoordinatorQuery::RequestProposal { view, respond, .. } => {
+                let _ = respond.send(self.consensus.signed_proposal(&view).cloned());
+            },
         }
     }
 

@@ -15,6 +15,7 @@ use std::iter::once;
 
 use anyhow::{Context, ensure};
 use async_trait::async_trait;
+use committable::Committable;
 use futures::future::Future;
 use hotshot::types::{Event, EventType};
 use hotshot_types::{
@@ -85,6 +86,7 @@ where
             leaf_chain,
             committing_qc,
             deciding_qc,
+            cert2,
             ..
         } = &event.event
         {
@@ -180,6 +182,12 @@ where
                 {
                     let qc_chain = [committing_qc.as_ref().clone(), deciding_qc.as_ref().clone()];
                     info = info.with_qc_chain(qc_chain);
+                }
+                // Attach cert2 to the leaf it commits to (the most recent decided leaf).
+                if let Some(cert2) = cert2
+                    && cert2.data.leaf_commit == leaf2.commit()
+                {
+                    info = info.with_cert2((**cert2).clone());
                 }
                 if let Err(err) = self.append(info).await {
                     tracing::error!(height, "failed to append leaf information: {err:#}");

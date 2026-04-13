@@ -72,6 +72,7 @@ impl SequencerPersistence for NoStorage {
         view_number: ViewNumber,
         leaves: impl IntoIterator<Item = (&LeafInfo<SeqTypes>, CertificatePair<SeqTypes>)> + Send,
         deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
+        _cert2: Option<espresso_types::Certificate2<SeqTypes>>,
         consumer: &impl EventConsumer,
     ) -> anyhow::Result<()> {
         let leaves = leaves
@@ -94,6 +95,7 @@ impl SequencerPersistence for NoStorage {
                         leaf_chain: Arc::new(vec![leaf_info.clone()]),
                         committing_qc: Arc::new(qc),
                         deciding_qc,
+                        cert2: None,
                         block_size: None,
                     },
                 })

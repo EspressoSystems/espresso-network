@@ -10,7 +10,7 @@ use async_broadcast::InactiveReceiver;
 use async_lock::RwLock;
 use committable::Commitment;
 pub use espresso_types::{ConsensusEvent, NewDecideEvent};
-use futures::{StreamExt, stream::BoxStream};
+use futures::{FutureExt, StreamExt, future::BoxFuture, stream::BoxStream};
 use hotshot::types::SystemContextHandle;
 use hotshot_new_protocol::{
     consensus::ConsensusOutput,
@@ -21,7 +21,7 @@ use hotshot_types::{
     data::{EpochNumber, Leaf2, QuorumProposalWrapper, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     event::Event,
-    message::{Proposal as SignedProposal, UpgradeLock},
+    message::{Proposal as SignedProposal, UpgradeLock, convert_proposal},
     traits::{
         ValidatedState, network::ConnectedNetwork, node_implementation::NodeType,
         signature_key::SignatureKey,
@@ -299,21 +299,35 @@ impl<T: NodeType, I: hotshot::traits::NodeImplementation<T>> ConsensusHandle<T, 
             .vote_participation(epoch)
     }
 
-    // TODO: implement for new protocol
     pub async fn request_proposal(
         &self,
         view: ViewNumber,
         leaf_commitment: Commitment<Leaf2<T>>,
     ) -> anyhow::Result<
-        impl futures::Future<Output = anyhow::Result<SignedProposal<T, QuorumProposalWrapper<T>>>>,
+        BoxFuture<'static, anyhow::Result<SignedProposal<T, QuorumProposalWrapper<T>>>>,
     > {
+        if self.new_protocol_at(view).await {
+            let result = self
+                .query(|tx| CoordinatorQuery::RequestProposal {
+                    view,
+                    leaf_commitment,
+                    respond: tx,
+                })
+                .await;
+            return Ok(async move {
+                result
+                    .map(convert_proposal)
+                    .ok_or_else(|| anyhow::anyhow!("proposal not found for view {view}"))
+            }
+            .boxed());
+        }
         let future = self
             .legacy_handle
             .read()
             .await
             .request_proposal(view, leaf_commitment)
             .map_err(|e| anyhow::anyhow!("{e}"))?;
-        Ok(async move { future.await.map_err(|e| anyhow::anyhow!("{e}")) })
+        Ok(async move { future.await.map_err(|e| anyhow::anyhow!("{e}")) }.boxed())
     }
 
     // TODO: implement for new protocol
@@ -355,8 +369,12 @@ impl<T: NodeType, I: hotshot::traits::NodeImplementation<T>> ConsensusHandle<T, 
             .map_err(|e| anyhow::anyhow!("{e}"))
     }
 
-    // TODO: implement for new protocol
     pub async fn start_consensus(&self) {
+        if self.new_protocol().await {
+            // New protocol consensus is already running via the coordinator task.
+            // Don't start legacy HotShot consensus tasks.
+            return;
+        }
         self.legacy_handle
             .read()
             .await

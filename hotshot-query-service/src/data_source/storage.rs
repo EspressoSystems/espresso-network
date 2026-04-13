@@ -70,9 +70,9 @@ use tagged_base64::TaggedBase64;
 use crate::{
     Header, Payload, QueryResult, Transaction,
     availability::{
-        BlockId, BlockQueryData, LeafId, LeafQueryData, NamespaceId, PayloadMetadata,
-        PayloadQueryData, QueryableHeader, QueryablePayload, TransactionHash, VidCommonMetadata,
-        VidCommonQueryData,
+        BlockId, BlockQueryData, LeafId, LeafQueryData, NamespaceId, NewProtocolCert2,
+        PayloadMetadata, PayloadQueryData, QueryableHeader, QueryablePayload, TransactionHash,
+        VidCommonMetadata, VidCommonQueryData,
     },
     explorer::{
         query_data::{
@@ -243,6 +243,11 @@ where
         height: u64,
         qc_chain: Option<[CertificatePair<Types>; 2]>,
     ) -> impl Send + Future<Output = anyhow::Result<()>>;
+    fn insert_cert2(
+        &mut self,
+        height: u64,
+        cert2: NewProtocolCert2<Types>,
+    ) -> impl Send + Future<Output = anyhow::Result<()>>;
     fn insert_leaf_range<'a>(
         &mut self,
         leaves: impl Send + IntoIterator<IntoIter: Send, Item = &'a LeafQueryData<Types>>,
@@ -289,6 +294,7 @@ where
     ) -> QueryResult<TimeWindowQueryData<Header<Types>>>;
 
     async fn latest_qc_chain(&mut self) -> QueryResult<Option<[CertificatePair<Types>; 2]>>;
+    async fn load_cert2(&mut self, height: u64) -> QueryResult<Option<NewProtocolCert2<Types>>>;
 
     /// Search the given range of the database for missing objects.
     async fn sync_status_for_range(

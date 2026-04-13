@@ -1,12 +1,16 @@
 use std::sync::Arc;
 
+use committable::Commitment;
 use hotshot_types::{
     data::{EpochNumber, Leaf2, ViewNumber},
+    message::Proposal as SignedProposal,
     traits::{ValidatedState, node_implementation::NodeType},
     utils::StateAndDelta,
 };
 use oneshot::Sender;
 use tokio::sync::oneshot;
+
+use crate::message::Proposal;
 
 #[allow(clippy::large_enum_variant)]
 pub enum CoordinatorQuery<T: NodeType> {
@@ -29,5 +33,10 @@ pub enum CoordinatorQuery<T: NodeType> {
         state: Arc<T::ValidatedState>,
         delta: Option<Arc<<T::ValidatedState as ValidatedState<T>>::Delta>>,
         respond: Sender<anyhow::Result<()>>,
+    },
+    RequestProposal {
+        view: ViewNumber,
+        leaf_commitment: Commitment<Leaf2<T>>,
+        respond: Sender<Option<SignedProposal<T, Proposal<T>>>>,
     },
 }

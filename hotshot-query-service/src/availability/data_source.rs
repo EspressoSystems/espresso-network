@@ -24,9 +24,13 @@ use futures::{
 };
 use hotshot_types::{
     data::{VidCommitment, VidShare},
-    simple_certificate::CertificatePair,
+    simple_certificate::{CertificatePair, SimpleCertificate, SuccessThreshold},
+    simple_vote::Vote2Data,
     traits::node_implementation::NodeType,
 };
+
+/// A Certificate2 from the new protocol that proves finality of a leaf.
+pub type NewProtocolCert2<Types> = SimpleCertificate<Types, Vote2Data<Types>, SuccessThreshold>;
 
 use super::{
     BlockWithTransaction,
@@ -308,6 +312,8 @@ pub struct BlockInfo<Types: NodeType> {
     pub vid_common: Option<VidCommonQueryData<Types>>,
     pub vid_share: Option<VidShare>,
     pub qc_chain: Option<[CertificatePair<Types>; 2]>,
+    /// New protocol finality proof: cert2 alone proves finality.
+    pub cert2: Option<NewProtocolCert2<Types>>,
 }
 
 impl<Types: NodeType> From<LeafQueryData<Types>> for BlockInfo<Types> {
@@ -335,11 +341,17 @@ impl<Types: NodeType> BlockInfo<Types> {
             vid_common,
             vid_share,
             qc_chain: None,
+            cert2: None,
         }
     }
 
     pub fn with_qc_chain(mut self, qc_chain: [CertificatePair<Types>; 2]) -> Self {
         self.qc_chain = Some(qc_chain);
+        self
+    }
+
+    pub fn with_cert2(mut self, cert2: NewProtocolCert2<Types>) -> Self {
+        self.cert2 = Some(cert2);
         self
     }
 }

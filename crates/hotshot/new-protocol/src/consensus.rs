@@ -103,6 +103,7 @@ pub enum ConsensusOutput<T: NodeType> {
 
 pub struct Consensus<T: NodeType> {
     proposals: BTreeMap<ViewNumber, Proposal<T>>,
+    signed_proposals: BTreeMap<ViewNumber, SignedProposal<T, Proposal<T>>>,
     vid_shares: BTreeMap<ViewNumber, VidDisperseShare2<T>>,
     states_verified: BTreeMap<ViewNumber, Commitment<Leaf2<T>>>,
     blocks_reconstructed: BTreeMap<ViewNumber, VidCommitment2>,
@@ -158,6 +159,7 @@ impl<T: NodeType> Consensus<T> {
     {
         Self {
             proposals: BTreeMap::new(),
+            signed_proposals: BTreeMap::new(),
             vid_disperses: BTreeMap::new(),
             blocks: BTreeMap::new(),
             states_verified: BTreeMap::new(),
@@ -325,6 +327,10 @@ impl<T: NodeType> Consensus<T> {
             || self.proposals.contains_key(&p.view_number()))
     }
 
+    pub fn signed_proposal(&self, view: &ViewNumber) -> Option<&SignedProposal<T, Proposal<T>>> {
+        self.signed_proposals.get(view)
+    }
+
     pub fn gc(&mut self, view: ViewNumber, _epoch: EpochNumber) {
         self.states_verified = self.states_verified.split_off(&view);
         self.blocks_reconstructed = self.blocks_reconstructed.split_off(&view);
@@ -336,6 +342,7 @@ impl<T: NodeType> Consensus<T> {
         self.view_sync_certs = self.view_sync_certs.split_off(&view);
         self.headers = self.headers.split_off(&view);
         self.leaves = self.leaves.split_off(&view);
+        self.signed_proposals = self.signed_proposals.split_off(&view);
         self.voted_1_views = self.voted_1_views.split_off(&view);
         self.voted_2_views = self.voted_2_views.split_off(&view);
         self.last_decided_view = self.last_decided_view.max(view);
@@ -408,6 +415,7 @@ impl<T: NodeType> Consensus<T> {
         let payload_size = vid_share.payload_byte_len();
 
         self.proposals.insert(view, proposal.clone());
+        self.signed_proposals.insert(view, signed_proposal.clone());
         self.leaves.insert(view, proposal.clone().into());
         self.vid_shares.insert(view, vid_share);
 

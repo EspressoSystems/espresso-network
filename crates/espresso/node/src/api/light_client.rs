@@ -71,6 +71,7 @@ where
     };
     let mut leaves = state.get_leaf_range(requested..endpoint).await;
     let mut proof = LeafProof::default();
+    let mut last_height = None;
 
     while let Some(leaf) = leaves.next().await {
         let leaf = leaf
@@ -78,17 +79,41 @@ where
             .await
             .ok_or_else(|| not_found("missing leaves"))?;
 
+        last_height = Some(leaf.height());
         if proof.push(leaf) {
             return Ok(proof);
         }
     }
 
-    // We reached the end of the range of interest without encountering a 3-chain. Thus, if the last
-    // leaf in the chain is not already assumed finalized by the client, we must prove it finalized
-    // by appending two more QCs.
+    // We reached the end of the range of interest without encountering a 3-chain. Thus, if the
+    // last leaf in the chain is not already assumed finalized by the client, we must prove it
+    // finalized by appending a finality proof.
     if finalized.is_none() {
+        if let Some(height) = last_height {
+            // Try new protocol cert2.
+            let cert2 = state
+                .read()
+                .await
+                .map_err(|err| Error::Custom {
+                    message: err.to_string(),
+                    status: StatusCode::INTERNAL_SERVER_ERROR,
+                })?
+                .load_cert2(height)
+                .await
+                .map_err(|err| Error::Custom {
+                    message: err.to_string(),
+                    status: StatusCode::INTERNAL_SERVER_ERROR,
+                })?;
+
+            if let Some(cert2) = cert2 {
+                proof.add_cert2(cert2);
+                return Ok(proof);
+            }
+        }
+
+        // HotStuff2 QC 2-chain.
         let Some([committing_qc, deciding_qc]) = qc_chain else {
-            return Err(not_found("missing QC 2-chain to prove finality"));
+            return Err(not_found("missing finality proof"));
         };
         proof.add_qc_chain(Arc::new(committing_qc), Arc::new(deciding_qc));
     }

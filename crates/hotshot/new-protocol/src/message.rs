@@ -101,9 +101,9 @@ impl<T: NodeType> From<QuorumProposalWrapper<T>> for Proposal<T> {
     }
 }
 
-impl<T: NodeType> From<Proposal<T>> for Leaf2<T> {
+impl<T: NodeType> From<Proposal<T>> for QuorumProposalWrapper<T> {
     fn from(p: Proposal<T>) -> Self {
-        let qp = QuorumProposal2 {
+        QuorumProposalWrapper::from(QuorumProposal2 {
             block_header: p.block_header,
             view_number: p.view_number,
             epoch: Some(p.epoch),
@@ -113,8 +113,13 @@ impl<T: NodeType> From<Proposal<T>> for Leaf2<T> {
             view_change_evidence: p.view_change_evidence,
             next_drb_result: p.next_drb_result,
             state_cert: p.state_cert,
-        };
-        Self::from_quorum_proposal(&QuorumProposalWrapper::from(qp))
+        })
+    }
+}
+
+impl<T: NodeType> From<Proposal<T>> for Leaf2<T> {
+    fn from(p: Proposal<T>) -> Self {
+        Self::from_quorum_proposal(&QuorumProposalWrapper::from(p))
     }
 }
 

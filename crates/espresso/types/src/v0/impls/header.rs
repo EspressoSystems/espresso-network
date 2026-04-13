@@ -208,7 +208,10 @@ impl<'de> Deserialize<'de> for Header {
                         seq.next_element()?
                             .ok_or_else(|| de::Error::missing_field("fields"))?,
                     )),
-                    EitherOrVersion::Version(Version { major: 0, minor: 6 }) => Ok(Header::V6(
+                    EitherOrVersion::Version(Version {
+                        major: 0,
+                        minor: 6..=8,
+                    }) => Ok(Header::V6(
                         seq.next_element()?
                             .ok_or_else(|| de::Error::missing_field("fields"))?,
                     )),
@@ -249,7 +252,10 @@ impl<'de> Deserialize<'de> for Header {
                         EitherOrVersion::Version(Version { major: 0, minor: 5 }) => Ok(Header::V5(
                             serde_json::from_value(fields.clone()).map_err(de::Error::custom)?,
                         )),
-                        EitherOrVersion::Version(Version { major: 0, minor: 6 }) => Ok(Header::V6(
+                        EitherOrVersion::Version(Version {
+                            major: 0,
+                            minor: 6..=8,
+                        }) => Ok(Header::V6(
                             serde_json::from_value(fields.clone()).map_err(de::Error::custom)?,
                         )),
                         EitherOrVersion::Version(v) => {
@@ -424,7 +430,8 @@ impl Header {
                 next_stake_table_hash,
                 leader_counts: leader_counts.expect("leader_counts required for V5 header"),
             }),
-            (0, 6) => Self::V6(v0_6::Header {
+            // V6 header format is used for v0.6, v0.7, and v0.8 (new protocol).
+            (0, 6) | (0, 7) | (0, 8) => Self::V6(v0_6::Header {
                 chain_config: chain_config.into(),
                 height,
                 timestamp,
@@ -441,7 +448,7 @@ impl Header {
                 reward_merkle_tree_root: reward_merkle_tree_root_v2,
                 total_reward_distributed: total_reward_distributed.unwrap_or_default(),
                 next_stake_table_hash,
-                leader_counts: leader_counts.expect("leader_counts required for V6 header"),
+                leader_counts: leader_counts.expect("leader_counts required for V6+ header"),
             }),
             // This case should never occur
             // but if it does, we must panic
@@ -728,7 +735,8 @@ impl Header {
                 next_stake_table_hash,
                 leader_counts: leader_counts.expect("leader_counts is required for V5 headers"),
             }),
-            (0, 6) => Self::V6(v0_6::Header {
+            // V6 header format is used for v0.6, v0.7, and v0.8 (new protocol).
+            (0, 6) | (0, 7) | (0, 8) => Self::V6(v0_6::Header {
                 chain_config: chain_config.into(),
                 height,
                 timestamp,
@@ -745,7 +753,7 @@ impl Header {
                 builder_signature: builder_signature.first().copied(),
                 total_reward_distributed: total_reward_distributed.unwrap_or_default(),
                 next_stake_table_hash,
-                leader_counts: leader_counts.expect("leader_counts is required for V6 headers"),
+                leader_counts: leader_counts.expect("leader_counts is required for V6+ headers"),
             }),
             // This case should never occur
             // but if it does, we must panic

@@ -57,7 +57,8 @@ use super::{
 use crate::{
     Header, Payload, QueryError, QueryResult,
     availability::{
-        BlockQueryData, LeafQueryData, QueryableHeader, QueryablePayload, VidCommonQueryData,
+        BlockQueryData, LeafQueryData, NewProtocolCert2, QueryableHeader, QueryablePayload,
+        VidCommonQueryData,
     },
     data_source::{
         storage::{NodeStorage, UpdateAvailabilityStorage, pruning::PrunedHeightStorage},
@@ -561,6 +562,23 @@ where
                 .context("inserting QC chain")?;
         }
 
+        Ok(())
+    }
+
+    async fn insert_cert2(
+        &mut self,
+        height: u64,
+        cert2: NewProtocolCert2<Types>,
+    ) -> anyhow::Result<()> {
+        let cert2_json = serde_json::to_value(&cert2)?;
+        self.upsert(
+            "cert2",
+            ["height", "data"],
+            ["height"],
+            [(height as i64, cert2_json)],
+        )
+        .await
+        .context("inserting cert2")?;
         Ok(())
     }
 
