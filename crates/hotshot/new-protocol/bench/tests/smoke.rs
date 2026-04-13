@@ -47,10 +47,7 @@ fn node_config(
 
 #[tokio::test(flavor = "multi_thread")]
 async fn smoke_5_nodes_empty_blocks() {
-    tracing_subscriber::fmt()
-        .with_env_filter("info")
-        .try_init()
-        .ok();
+    hotshot_new_protocol::logging::init_logging();
 
     let tmp = TempDir::new().expect("failed to create temp dir");
 
@@ -65,10 +62,7 @@ async fn smoke_5_nodes_empty_blocks() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn smoke_5_nodes_1kb_blocks() {
-    tracing_subscriber::fmt()
-        .with_env_filter("info")
-        .try_init()
-        .ok();
+    hotshot_new_protocol::logging::init_logging();
 
     let tmp = TempDir::new().expect("failed to create temp dir");
 

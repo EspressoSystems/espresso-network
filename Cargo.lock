@@ -6217,7 +6217,6 @@ dependencies = [
  "time 0.3.47",
  "tokio",
  "tracing",
- "tracing-subscriber 0.3.23",
  "versions",
 ]
 
