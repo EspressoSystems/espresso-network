@@ -6,8 +6,8 @@ use ark_serialize::CanonicalSerialize;
 use base64::{Engine, prelude::BASE64_STANDARD};
 use committable::{Commitment, Committable, RawCommitmentBuilder};
 use either::Either;
-use hotshot_query_service::{
-    availability::QueryableHeader, explorer::ExplorerHeader, types::HeightIndexed,
+use hotshot_query_service_types::{
+    HeightIndexed, availability::QueryableHeader, explorer::traits::ExplorerHeader,
 };
 use hotshot_types::{
     data::{EpochNumber, VidCommitment, ViewNumber, vid_commitment},

@@ -23,13 +23,10 @@
 //! * snapshots of the state right now, with no way to query historical snapshots
 //! * summary statistics
 
-use std::{borrow::Cow, fmt::Display, path::PathBuf};
+use std::{borrow::Cow, path::PathBuf};
 
-use derive_more::From;
 use futures::FutureExt;
-use serde::{Deserialize, Serialize};
-use snafu::Snafu;
-use tide_disco::{Api, RequestError, StatusCode, api::ApiError, method::ReadState};
+use tide_disco::{Api, api::ApiError, method::ReadState};
 use vbs::version::StaticVersionType;
 
 use crate::api::load_api;
@@ -37,6 +34,7 @@ use crate::api::load_api;
 pub(crate) mod data_source;
 
 pub use data_source::*;
+pub use hotshot_query_service_types::status::Error;
 
 #[derive(Default)]
 pub struct Options {
@@ -47,27 +45,6 @@ pub struct Options {
     /// These optional files may contain route definitions for application-specific routes that have
     /// been added as extensions to the basic status API.
     pub extensions: Vec<toml::Value>,
-}
-
-#[derive(Clone, Debug, From, Snafu, Deserialize, Serialize)]
-pub enum Error {
-    Request { source: RequestError },
-    Internal { reason: String },
-}
-
-impl Error {
-    pub fn status(&self) -> StatusCode {
-        match self {
-            Self::Request { .. } => StatusCode::BAD_REQUEST,
-            Self::Internal { .. } => StatusCode::INTERNAL_SERVER_ERROR,
-        }
-    }
-}
-
-fn internal<M: Display>(msg: M) -> Error {
-    Error::Internal {
-        reason: msg.to_string(),
-    }
 }
 
 pub fn define_api<State, Ver: StaticVersionType + 'static>(
@@ -86,17 +63,17 @@ where
     )?;
     api.with_version(api_ver)
         .get("block_height", |_, state| {
-            async { state.block_height().await.map_err(internal) }.boxed()
+            async { state.block_height().await.map_err(Error::internal) }.boxed()
         })?
         .get("success_rate", |_, state| {
-            async { state.success_rate().await.map_err(internal) }.boxed()
+            async { state.success_rate().await.map_err(Error::internal) }.boxed()
         })?
         .get("time_since_last_decide", |_, state| {
             async {
                 state
                     .elapsed_time_since_last_decide()
                     .await
-                    .map_err(internal)
+                    .map_err(Error::internal)
             }
             .boxed()
         })?
@@ -116,7 +93,7 @@ mod test {
     use surf_disco::Client;
     use tempfile::TempDir;
     use test_utils::reserve_tcp_port;
-    use tide_disco::{App, Url};
+    use tide_disco::{App, StatusCode, Url};
     use toml::toml;
 
     use super::*;

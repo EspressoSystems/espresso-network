@@ -9,10 +9,10 @@ use espresso_types::{
     Header, Leaf2, NamespaceId, PubKey, SeqTypes, StakeTableState, Transaction,
     select_active_validator_set,
 };
-use hotshot_query_service::{
+use hotshot_query_service_types::{
+    HeightIndexed,
     availability::{BlockQueryData, LeafId, LeafQueryData, PayloadQueryData, VidCommonQueryData},
     node::BlockId,
-    types::HeightIndexed,
 };
 use hotshot_types::{data::EpochNumber, stake_table::StakeTableEntry, utils::root_block_in_epoch};
 use serde::{Deserialize, Serialize};
@@ -709,7 +709,7 @@ fn header_matches_id(header: &Header, id: BlockId<SeqTypes>) -> bool {
 #[cfg(test)]
 mod test {
     use espresso_types::NsIndex;
-    use hotshot_query_service::availability::TransactionIndex;
+    use hotshot_query_service_types::availability::TransactionIndex;
     use pretty_assertions::assert_eq;
     use versions::DRB_AND_HEADER_UPGRADE_VERSION;
 
