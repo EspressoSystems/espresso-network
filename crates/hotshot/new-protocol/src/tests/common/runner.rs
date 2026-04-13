@@ -1,4 +1,8 @@
-use std::{collections::BTreeMap, fmt, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+    time::Duration,
+};
 
 use committable::Committable;
 use hotshot::{traits::NodeImplementation, types::BLSPubKey};
@@ -6,6 +10,7 @@ use hotshot_example_types::{block_types::TestTransaction, node_types::TestTypes}
 use hotshot_types::{
     data::ViewNumber,
     traits::{network::ConnectedNetwork, signature_key::SignatureKey},
+    vote::HasViewNumber,
 };
 use rand::{RngCore, SeedableRng, rngs::StdRng};
 use tokio::{
@@ -40,6 +45,10 @@ pub struct TestRunner {
     pub view_timeout: Duration,
     /// Size (in bytes) of each random transaction.
     pub transaction_size: usize,
+    /// Views that are expected to timeout.  If a node times out in a view
+    /// not in this set the test fails.  If a node decides a leaf for a view
+    /// in this set the test also fails.
+    pub expected_failed_views: BTreeSet<ViewNumber>,
 }
 
 impl Default for TestRunner {
@@ -51,6 +60,7 @@ impl Default for TestRunner {
             epoch_height: 1000,
             view_timeout: Duration::from_secs(2),
             transaction_size: 64 * 1024,
+            expected_failed_views: BTreeSet::new(),
         }
     }
 }
@@ -58,7 +68,23 @@ impl Default for TestRunner {
 #[derive(Debug)]
 pub enum TestError {
     Timeout,
-    ChainDivergence { node: usize },
+    ChainDivergence {
+        node: usize,
+    },
+    UnexpectedDecide {
+        node: usize,
+        view: ViewNumber,
+    },
+    NotEnoughDecided {
+        view: ViewNumber,
+        decided_count: usize,
+        threshold: usize,
+    },
+    NotEnoughTimedOut {
+        view: ViewNumber,
+        timeout_count: usize,
+        threshold: usize,
+    },
 }
 
 impl fmt::Display for TestError {
@@ -68,8 +94,41 @@ impl fmt::Display for TestError {
             Self::ChainDivergence { node } => {
                 write!(f, "node {node} decided a different chain prefix")
             },
+            Self::UnexpectedDecide { node, view } => {
+                write!(
+                    f,
+                    "node {node} decided view {view} which was expected to fail"
+                )
+            },
+            Self::NotEnoughDecided {
+                view,
+                decided_count,
+                threshold,
+            } => {
+                write!(
+                    f,
+                    "not enough nodes decided view {view} decided_count={decided_count} \
+                     threshold={threshold}"
+                )
+            },
+            Self::NotEnoughTimedOut {
+                view,
+                timeout_count,
+                threshold,
+            } => {
+                write!(
+                    f,
+                    "not enough nodes timed out view {view} timeout_count={timeout_count} \
+                     threshold={threshold}"
+                )
+            },
         }
     }
+}
+
+enum NodeEvent {
+    Decided(BTreeMap<ViewNumber, [u8; 32]>),
+    TimedOut(ViewNumber),
 }
 
 impl TestRunner {
@@ -83,7 +142,7 @@ impl TestRunner {
         let membership = mock_membership_with_num_nodes(self.num_nodes).await;
         let (network_state, networks) = N::create(self.num_nodes).await;
 
-        let mut output_channels: Vec<UnboundedReceiver<BTreeMap<ViewNumber, [u8; 32]>>> =
+        let mut output_channels: Vec<UnboundedReceiver<NodeEvent>> =
             Vec::with_capacity(self.num_nodes);
 
         // Spawn one coordinator task per node.
@@ -111,7 +170,7 @@ impl TestRunner {
         // Collect decided leaf commits from each node until all reach the target.
         let mut node_commits: Vec<BTreeMap<ViewNumber, [u8; 32]>> =
             vec![BTreeMap::new(); self.num_nodes];
-        let mut progress: usize = 0;
+        let mut node_timeouts: Vec<BTreeSet<ViewNumber>> = vec![BTreeSet::new(); self.num_nodes];
         let mut tx_nonce: u64 = 0;
 
         let deadline = tokio::time::Instant::now() + self.max_runtime;
@@ -124,37 +183,72 @@ impl TestRunner {
             tx_nonce = tx_nonce.wrapping_add(1);
             broadcast_transaction(&mut client_network, tx_nonce, self.transaction_size).await;
 
-            // Collect any newly decided commits.
+            // Collect events from each node.
             for (idx, rx) in output_channels.iter_mut().enumerate() {
                 if node_commits[idx].len() >= self.target_decisions {
                     continue;
                 }
-                if let Ok(Some(seq)) = timeout(remaining, rx.recv()).await {
-                    node_commits[idx] = seq;
+                if let Ok(Some(event)) = timeout(remaining, rx.recv()).await {
+                    match event {
+                        NodeEvent::Decided(commits) => node_commits[idx] = commits,
+                        NodeEvent::TimedOut(view) => {
+                            node_timeouts[idx].insert(view);
+                        },
+                    }
+                } else {
+                    return Err(TestError::Timeout);
                 }
             }
-
-            let new_progress = node_commits.iter().map(|s| s.len()).min().unwrap_or(0);
-            if new_progress > progress {
-                progress = new_progress;
-                info!("decided_counter={progress}/{}", self.target_decisions);
-            }
         }
 
-        // Truncate every node's map to the first `target_decisions` entries
-        // (by view).  Nodes at different heights will have extra trailing
-        // views; trimming those away lets us compare with strict equality.
-        for commits in &mut node_commits {
-            while commits.len() > self.target_decisions {
-                commits.pop_last();
-            }
-        }
+        let threshold = self.num_nodes * 2 / 3;
 
-        // Verify all nodes decided the same chain prefix.
-        let expected = &node_commits[0];
-        for (i, set) in node_commits.iter().enumerate().skip(1) {
-            if set != expected {
-                return Err(TestError::ChainDivergence { node: i });
+        let last_view = self.expected_failed_views.len() + self.target_decisions;
+        // Check that the view was expected to fail and no nodes decided it, or
+        // that a quorum of nodes decided the same thing, and no node decided a different thing.
+        for v in 1..=last_view {
+            let view = ViewNumber::new(v.try_into().unwrap());
+            if self.expected_failed_views.contains(&view) {
+                let mut timeout_count = 0;
+                for (i, commits) in node_commits.iter().enumerate() {
+                    if commits.contains_key(&view) {
+                        return Err(TestError::UnexpectedDecide { node: i, view });
+                    }
+                    if node_timeouts[i].contains(&view) {
+                        timeout_count += 1;
+                    }
+                }
+                if timeout_count < threshold {
+                    return Err(TestError::NotEnoughTimedOut {
+                        view,
+                        timeout_count,
+                        threshold,
+                    });
+                }
+            } else {
+                let mut reference = None;
+                let mut decided_count = 0;
+                for (i, commits) in node_commits.iter().enumerate() {
+                    let commit = commits.get(&view);
+                    if commit.is_some() {
+                        decided_count += 1;
+                    }
+                    match reference {
+                        None => reference = commit,
+                        Some(ref ref_commit) => {
+                            if commit.is_some_and(|c| &c != ref_commit) {
+                                return Err(TestError::ChainDivergence { node: i });
+                            }
+                        },
+                    }
+                }
+                if decided_count < threshold {
+                    return Err(TestError::NotEnoughDecided {
+                        view,
+                        decided_count,
+                        threshold,
+                    });
+                }
             }
         }
 
@@ -166,7 +260,7 @@ impl TestRunner {
 /// decided leaf commits, and forwards them to the test runner.
 async fn run_node<I: NodeImplementation<TestTypes>>(
     mut coord: Coordinator<TestTypes, I>,
-    output_tx: UnboundedSender<BTreeMap<ViewNumber, [u8; 32]>>,
+    output_tx: UnboundedSender<NodeEvent>,
 ) {
     let mut commits: BTreeMap<ViewNumber, [u8; 32]> = BTreeMap::new();
     let mut last_view = ViewNumber::genesis();
@@ -193,7 +287,11 @@ async fn run_node<I: NodeImplementation<TestTypes>>(
                         );
                     }
                 }
-                let _ = output_tx.send(commits.clone());
+                let _ = output_tx.send(NodeEvent::Decided(commits.clone()));
+            } else if let ConsensusOutput::SendTimeoutVote(vote, _) = &output {
+                let view = vote.view_number();
+                debug!(node = %coord.node_id(), %view, "timeout vote");
+                let _ = output_tx.send(NodeEvent::TimedOut(view));
             } else if let ConsensusOutput::ViewChanged(view, epoch) = &output
                 && *view > last_view
             {

@@ -15,7 +15,6 @@ async fn three_nodes_decide_over_memory_network() {
     TestRunner {
         num_nodes: 3,
         target_decisions: 50,
-        max_runtime: Duration::from_secs(60),
         ..Default::default()
     }
     .run::<MemoryTestNetwork>()
@@ -41,7 +40,6 @@ async fn epoch_changes_over_memory_network() {
     TestRunner {
         epoch_height: 10,
         target_decisions: 50,
-        max_runtime: Duration::from_secs(60),
         ..Default::default()
     }
     .run::<MemoryTestNetwork>()
