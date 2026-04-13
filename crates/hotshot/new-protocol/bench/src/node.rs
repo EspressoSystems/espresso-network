@@ -3,7 +3,7 @@ use std::{path::PathBuf, sync::Arc};
 use anyhow::Result;
 use hotshot::{traits::implementations::Cliquenet, types::BLSPubKey};
 use hotshot_example_types::{
-    node_types::{CliquenetImpl, TestTypes},
+    node_types::{CliquenetImpl, TEST_VERSIONS, TestTypes},
     state_types::{TestInstanceState, TestValidatedState},
 };
 use hotshot_new_protocol::{
@@ -39,7 +39,7 @@ pub async fn run(cfg: NodeConfig) -> Result<()> {
         BLSPubKey::generated_from_seed_indexed([cfg.seed; 32], cfg.node_id);
     info!(node_id = cfg.node_id, %public_key, "starting node");
 
-    let membership = make_membership(cfg.total_nodes).await;
+    let membership = make_membership(cfg.total_nodes, cfg.seed).await;
     let network = create_network(cfg.node_id, &public_key, &private_key, &cfg).await?;
 
     let coordinator = build_coordinator(public_key, private_key, membership, network, &cfg).await;
@@ -103,8 +103,12 @@ async fn build_coordinator(
     network: Cliquenet<BLSPubKey>,
     cfg: &NodeConfig,
 ) -> BenchCoordinator {
-    let instance = Arc::new(TestInstanceState::default());
     let epoch_height = u64::MAX;
+
+    let instance = Arc::new(TestInstanceState::default());
+
+    let genesis_version = TEST_VERSIONS.test.base;
+    let genesis_state = TestValidatedState::default();
 
     let consensus = Consensus::new(membership.clone(), public_key, private_key, epoch_height);
 
@@ -122,14 +126,9 @@ async fn build_coordinator(
     let block_config = BlockBuilderConfig::default();
     let block_builder = BlockBuilder::new(instance.clone(), membership.clone(), block_config);
 
-    let mut state_manager = StateManager::new(instance);
-    let genesis_state = TestValidatedState::default();
-    let genesis_leaf = Leaf2::<TestTypes>::genesis(
-        &genesis_state,
-        &TestInstanceState::default(),
-        hotshot_example_types::node_types::TEST_VERSIONS.test.base,
-    )
-    .await;
+    let mut state_manager = StateManager::new(instance.clone());
+    let genesis_leaf =
+        Leaf2::<TestTypes>::genesis(&genesis_state, &*instance, genesis_version).await;
     state_manager.seed_state(ViewNumber::genesis(), Arc::new(genesis_state), genesis_leaf);
 
     let proposal_validator = ProposalValidator::new(membership.clone());

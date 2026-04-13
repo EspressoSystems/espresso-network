@@ -1,19 +1,32 @@
-use std::{sync::Arc, time::Duration};
+use std::{collections::BTreeMap, time::Duration};
 
 use anyhow::Result;
-use futures::StreamExt;
-use hotshot::{traits::implementations::Cliquenet, types::BLSPubKey};
-use hotshot_example_types::node_types::{TEST_VERSIONS, TestTypes};
+use committable::Committable;
+use hotshot::{
+    traits::{BlockPayload, implementations::Cliquenet},
+    types::{BLSPrivKey, BLSPubKey},
+};
+use hotshot_example_types::{
+    block_types::TestBlockPayload,
+    node_types::TestTypes,
+    state_types::{TestInstanceState, TestValidatedState},
+};
 use hotshot_new_protocol::{
     helpers::upgrade_lock,
-    message::{ConsensusMessage, Message, MessageType, Validated},
+    message::{ConsensusMessage, Message, MessageType, Proposal, ProposalMessage, Validated},
 };
-use hotshot_testing::view_generator::TestViewGenerator;
+use hotshot_testing::helpers::build_cert;
 use hotshot_types::{
     PeerConnectInfo,
     addr::NetAddr,
-    data::{VidDisperse, VidDisperseShare2, ViewNumber},
-    traits::{metrics::NoMetrics, network::ConnectedNetwork, signature_key::SignatureKey},
+    data::{EpochNumber, Leaf2, VidDisperse, VidDisperseShare2, ViewNumber},
+    message::Proposal as SignedProposal,
+    simple_certificate::QuorumCertificate2,
+    simple_vote::{QuorumData2, QuorumVote2},
+    traits::{
+        block_contents::BlockHeader, metrics::NoMetrics, network::ConnectedNetwork,
+        signature_key::SignatureKey,
+    },
     x25519::Keypair,
 };
 use tracing::info;
@@ -26,7 +39,8 @@ pub async fn run(cfg: OrchestratorConfig) -> Result<()> {
 
     // Use a separate key identity for the orchestrator (index = total_nodes).
     let orch_index = cfg.total_nodes as u64;
-    let (_orch_pk, orch_sk) = BLSPubKey::generated_from_seed_indexed([cfg.seed; 32], orch_index);
+    let (_orch_pk, orch_sk) =
+        <BLSPubKey as SignatureKey>::generated_from_seed_indexed([cfg.seed; 32], orch_index);
     let orch_pk = BLSPubKey::from_private(&orch_sk);
     let orch_keypair = Keypair::derive_from::<BLSPubKey>(&orch_sk);
 
@@ -38,7 +52,8 @@ pub async fn run(cfg: OrchestratorConfig) -> Result<()> {
     // Build peer list (all consensus nodes).
     let mut parties = Vec::new();
     for (i, addr_str) in cfg.peers.iter().enumerate() {
-        let (_peer_pk, peer_sk) = BLSPubKey::generated_from_seed_indexed([cfg.seed; 32], i as u64);
+        let (_peer_pk, peer_sk) =
+            <BLSPubKey as SignatureKey>::generated_from_seed_indexed([cfg.seed; 32], i as u64);
         let peer_pk = BLSPubKey::from_private(&peer_sk);
         let peer_keypair = Keypair::derive_from::<BLSPubKey>(&peer_sk);
         let peer_addr: NetAddr = addr_str
@@ -54,7 +69,7 @@ pub async fn run(cfg: OrchestratorConfig) -> Result<()> {
     }
 
     let net = Cliquenet::create(
-        "orchestrator",
+        "bench",
         orch_pk,
         orch_keypair,
         bind_addr,
@@ -68,25 +83,94 @@ pub async fn run(cfg: OrchestratorConfig) -> Result<()> {
     info!("waiting for nodes to connect...");
     tokio::time::sleep(Duration::from_secs(5)).await;
 
-    // Generate test data for view 1 using the same membership the nodes will use.
-    let membership = crate::membership::make_membership(cfg.total_nodes).await;
-    let keys = key_map(cfg.total_nodes, cfg.seed);
-    let node_key_map = Arc::new(keys.clone());
+    // Build membership (same as nodes use).
+    let membership = crate::membership::make_membership(cfg.total_nodes, cfg.seed).await;
 
-    let mut generator =
-        TestViewGenerator::generate(membership.clone(), node_key_map, TEST_VERSIONS.vid2);
+    // Build key map for TestViewGenerator.
+    let key_map: BTreeMap<BLSPubKey, BLSPrivKey> = (0..cfg.total_nodes as u64)
+        .map(|i| {
+            let (pk, sk) = BLSPubKey::generated_from_seed_indexed([0u8; 32], i);
+            (pk, sk)
+        })
+        .collect();
 
-    // Generate view 1 data.
-    let gen_view = (&mut generator)
-        .next()
+    let instance = TestInstanceState::default();
+    let validated_state = TestValidatedState::default();
+    let lock = upgrade_lock::<TestTypes>();
+
+    // Create genesis leaf.
+    let genesis_leaf = Leaf2::<TestTypes>::genesis(
+        &validated_state,
+        &instance,
+        hotshot_example_types::node_types::TEST_VERSIONS.test.base,
+    )
+    .await;
+    let genesis_leaf_commit = <Leaf2<TestTypes> as Committable>::commit(&genesis_leaf);
+
+    // Determine view-1 leader.
+    let view_1 = ViewNumber::new(1);
+    let epoch = EpochNumber::genesis();
+    let epoch_membership = membership
+        .membership_for_epoch(Some(epoch))
         .await
-        .expect("should generate view 1");
+        .map_err(|e| anyhow::anyhow!("failed to get epoch membership: {e}"))?;
+    let leader_pk: BLSPubKey = epoch_membership
+        .leader(view_1)
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to determine view-1 leader: {e}"))?;
 
-    let leader_pk = gen_view.leader_public_key;
-    info!(%leader_pk, "view 1 leader identified, sending genesis proposals");
+    let leader_sk = key_map
+        .get(&leader_pk)
+        .ok_or_else(|| anyhow::anyhow!("view-1 leader not found in key map"))?;
 
-    // Extract VID disperse and shares.
-    let VidDisperse::V2(vid_disperse) = gen_view.vid_disperse.data.clone() else {
+    info!(%leader_pk, "view 1 leader identified");
+
+    // Build genesis justify QC (Certificate1 over genesis leaf at view 0).
+    let qc_data = QuorumData2::<TestTypes> {
+        leaf_commit: genesis_leaf_commit,
+        epoch: Some(epoch),
+        block_number: Some(BlockHeader::<TestTypes>::block_number(
+            genesis_leaf.block_header(),
+        )),
+    };
+    let justify_qc: QuorumCertificate2<TestTypes> = build_cert::<
+        TestTypes,
+        QuorumData2<TestTypes>,
+        QuorumVote2<TestTypes>,
+        QuorumCertificate2<TestTypes>,
+    >(
+        qc_data,
+        &epoch_membership,
+        ViewNumber::genesis(),
+        &leader_pk,
+        leader_sk,
+        &lock,
+    )
+    .await;
+
+    // Create empty payload for view 1.
+    let (payload, metadata) = <TestBlockPayload as BlockPayload<TestTypes>>::from_transactions(
+        [],
+        &validated_state,
+        &instance,
+    )
+    .await
+    .map_err(|e| anyhow::anyhow!("failed to create empty payload: {e}"))?;
+
+    // Compute VID disperse for view-1 payload.
+    let vid_result = VidDisperse::calculate_vid_disperse(
+        &payload,
+        &membership,
+        view_1,
+        Some(epoch),
+        Some(epoch),
+        &metadata,
+        &lock,
+    )
+    .await
+    .map_err(|e| anyhow::anyhow!("VID disperse failed: {e}"))?;
+
+    let VidDisperse::V2(vid_disperse) = vid_result.disperse else {
         anyhow::bail!("expected V2 VID disperse");
     };
 
@@ -104,23 +188,52 @@ pub async fn run(cfg: OrchestratorConfig) -> Result<()> {
         })
         .collect();
 
-    // Convert the quorum proposal into the new protocol's proposal format.
-    let inner_proposal = hotshot_types::message::Proposal {
-        data: gen_view.quorum_proposal.data.clone().into(),
-        signature: gen_view.quorum_proposal.signature.clone(),
+    // Build the view-1 header with the VID commitment from the disperse above.
+    let payload_commitment =
+        hotshot_types::data::VidCommitment::V2(vid_disperse.payload_commitment);
+    let builder_commitment =
+        <TestBlockPayload as BlockPayload<TestTypes>>::builder_commitment(&payload, &metadata);
+
+    use hotshot_example_types::block_types::TestBlockHeader;
+    let version = lock.version_infallible(view_1);
+    let header = TestBlockHeader::new(
+        &genesis_leaf,
+        payload_commitment,
+        builder_commitment,
+        metadata,
+        version,
+    );
+
+    // Build the new-protocol Proposal.
+    let proposal = Proposal::<TestTypes> {
+        block_header: header,
+        view_number: view_1,
+        epoch,
+        justify_qc,
+        next_epoch_justify_qc: None,
+        upgrade_certificate: None,
+        view_change_evidence: None,
+        next_drb_result: None,
+        state_cert: None,
+    };
+
+    // Sign the proposal (leader signs the leaf commitment).
+    let leaf: Leaf2<TestTypes> = proposal.clone().into();
+    let leaf_commit = <Leaf2<TestTypes> as Committable>::commit(&leaf);
+    let signature = BLSPubKey::sign(leader_sk, leaf_commit.as_ref())
+        .map_err(|e| anyhow::anyhow!("failed to sign proposal: {e}"))?;
+
+    let signed_proposal = SignedProposal {
+        data: proposal,
+        signature,
         _pd: std::marker::PhantomData,
     };
 
+    info!("sending genesis proposals to {} nodes", vid_shares.len());
+
     // Send a proposal message to each node with its specific VID share.
-    // We construct as `Validated` and serialize — the `Validated`/`Unchecked` marker
-    // is a zero-sized PhantomData with `#[serde(skip)]`, so the bytes are identical
-    // and will deserialize as `Unchecked` on the receiving node.
-    let lock = upgrade_lock::<TestTypes>();
     for vid_share in &vid_shares {
-        let proposal_msg = hotshot_new_protocol::message::ProposalMessage::validated(
-            inner_proposal.clone(),
-            vid_share.clone(),
-        );
+        let proposal_msg = ProposalMessage::validated(signed_proposal.clone(), vid_share.clone());
         let message: Message<TestTypes, Validated> = Message {
             sender: leader_pk,
             message_type: MessageType::Consensus(ConsensusMessage::Proposal(proposal_msg)),
@@ -129,7 +242,7 @@ pub async fn run(cfg: OrchestratorConfig) -> Result<()> {
         let bytes = lock
             .serialize(&message)
             .map_err(|e| anyhow::anyhow!("serialization failed: {e}"))?;
-        net.direct_message(ViewNumber::new(1), bytes, vid_share.recipient_key)
+        net.direct_message(view_1, bytes, vid_share.recipient_key)
             .await
             .map_err(|e| anyhow::anyhow!("failed to send proposal: {e}"))?;
     }
@@ -144,17 +257,4 @@ pub async fn run(cfg: OrchestratorConfig) -> Result<()> {
     info!("orchestrator shutting down");
 
     Ok(())
-}
-
-fn key_map(
-    num_nodes: usize,
-    seed: u8,
-) -> std::collections::BTreeMap<BLSPubKey, hotshot::types::BLSPrivKey> {
-    let mut map = std::collections::BTreeMap::new();
-    for i in 0..num_nodes {
-        let (public_key, private_key) =
-            BLSPubKey::generated_from_seed_indexed([seed; 32], i as u64);
-        map.insert(public_key, private_key);
-    }
-    map
 }

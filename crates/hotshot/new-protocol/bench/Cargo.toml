@@ -18,6 +18,7 @@ path = "src/bin/orchestrator.rs"
 anyhow = { workspace = true }
 async-lock = { workspace = true }
 clap = { workspace = true }
+committable = { workspace = true }
 cliquenet = { workspace = true }
 csv = { workspace = true }
 futures = { workspace = true }
@@ -27,12 +28,13 @@ hotshot-new-protocol = { workspace = true }
 hotshot-testing = { workspace = true }
 hotshot-types = { workspace = true }
 serde = { workspace = true }
-test-utils = { workspace = true }
 time = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-versions = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
 
 [lints]
 workspace = true

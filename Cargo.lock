@@ -6205,6 +6205,7 @@ dependencies = [
  "async-lock 3.4.2",
  "clap 4.6.0",
  "cliquenet",
+ "committable",
  "csv",
  "futures",
  "hotshot",
@@ -6213,12 +6214,11 @@ dependencies = [
  "hotshot-testing",
  "hotshot-types",
  "serde",
- "test-utils",
+ "tempfile",
  "time 0.3.47",
  "tokio",
  "tracing",
  "tracing-subscriber 0.3.23",
- "versions",
 ]
 
 [[package]]

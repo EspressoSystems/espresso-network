@@ -20,16 +20,13 @@ use hotshot_types::{
     },
 };
 
-/// Create an `EpochMembershipCoordinator` with `num_nodes` validators.
+/// Create an `EpochMembershipCoordinator<TestTypes>` with `num_nodes` validators.
 ///
-/// Uses a dummy `MemoryNetwork` internally (only needed for the membership trait
-/// constructor). Epoch height is set to `u64::MAX` to effectively disable epoch
-/// transitions.
-pub async fn make_membership(num_nodes: usize) -> EpochMembershipCoordinator<TestTypes> {
-    let n = num_nodes as u64;
-
-    // The membership constructor requires a network instance. We use a MemoryNetwork
-    // solely for this purpose — it is not used for actual communication.
+/// Uses `StrictMembership<TestTypes, StaticStakeTable>` with deterministic keys
+/// derived from a fixed seed of [0; 32] (as used by gen_node_lists).
+/// The `seed` parameter is accepted for API compatibility but the membership
+/// always uses the standard test seed.
+pub async fn make_membership(num_nodes: usize, _seed: u8) -> EpochMembershipCoordinator<TestTypes> {
     let network =
         <MemoryNetwork<BLSPubKey> as TestableNetworkingImplementation<TestTypes>>::generator(
             num_nodes,
@@ -42,8 +39,12 @@ pub async fn make_membership(num_nodes: usize) -> EpochMembershipCoordinator<Tes
         )(0)
         .await;
 
-    let members = gen_node_lists(n, n, &TestNodeStakes::default()).0;
-    let epoch_height = u64::MAX;
+    let members = gen_node_lists(
+        num_nodes as u64,
+        num_nodes as u64,
+        &TestNodeStakes::default(),
+    )
+    .0;
 
     let membership = Arc::new(RwLock::new(StrictMembership::<
         TestTypes,
@@ -54,7 +55,7 @@ pub async fn make_membership(num_nodes: usize) -> EpochMembershipCoordinator<Tes
         TestStorage::default(),
         network,
         members[0].stake_table_entry.public_key(),
-        epoch_height,
+        u64::MAX,
     )));
 
     // Initialize epoch data so membership works with epoch-aware versions (VID2 etc.).
@@ -63,5 +64,5 @@ pub async fn make_membership(num_nodes: usize) -> EpochMembershipCoordinator<Tes
         .await
         .set_first_epoch(EpochNumber::genesis(), [0u8; 32]);
 
-    EpochMembershipCoordinator::new(membership, epoch_height, &TestStorage::default())
+    EpochMembershipCoordinator::new(membership, u64::MAX, &TestStorage::<TestTypes>::default())
 }
