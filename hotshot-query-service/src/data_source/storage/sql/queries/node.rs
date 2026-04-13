@@ -237,7 +237,7 @@ where
             .bind(limit as i64)
             .fetch(self.as_mut());
         let window = rows
-            .map(|row| parse_header::<Types>(row?))
+            .map(|row| parse_header::<Types, _>(row?))
             .try_collect::<Vec<_>>()
             .await?;
 
@@ -268,7 +268,7 @@ where
                 .bind(end as i64)
                 .fetch_optional(self.as_mut())
                 .await?
-                .map(parse_header::<Types>)
+                .map(parse_header::<Types, _>)
                 .transpose()?
         } else {
             // If we have been limited, return a `null` next block indicating an incomplete window.
@@ -694,7 +694,7 @@ impl<Mode: TransactionMode> Transaction<Mode> {
             .bind(limit as i64)
             .fetch(self.as_mut());
         let window: Vec<_> = rows
-            .map(|row| parse_header::<Types>(row?))
+            .map(|row| parse_header::<Types, _>(row?))
             .try_collect()
             .await?;
 
@@ -711,7 +711,7 @@ impl<Mode: TransactionMode> Transaction<Mode> {
                 .bind(end as i64)
                 .fetch_optional(self.as_mut())
                 .await?
-                .map(parse_header::<Types>)
+                .map(parse_header::<Types, _>)
                 .transpose()?
         } else {
             // If we have been limited, return a `null` next block indicating an incomplete window.
@@ -744,7 +744,7 @@ impl<Mode: TransactionMode> Transaction<Mode> {
             .bind(start as i64)
             .fetch_optional(self.as_mut())
             .await?
-            .map(parse_header::<Types>)
+            .map(parse_header::<Types, _>)
             .transpose()?;
 
         Ok(TimeWindowQueryData { window, prev, next })
