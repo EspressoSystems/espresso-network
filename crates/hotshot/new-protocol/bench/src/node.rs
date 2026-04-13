@@ -68,8 +68,7 @@ async fn create_network(
         if i == node_id {
             continue; // skip self
         }
-        let (_peer_pk, peer_sk) = BLSPubKey::generated_from_seed_indexed([0u8; 32], i);
-        let peer_pk = BLSPubKey::from_private(&peer_sk);
+        let (peer_pk, peer_sk) = BLSPubKey::generated_from_seed_indexed([0u8; 32], i);
         let peer_keypair = Keypair::derive_from::<BLSPubKey>(&peer_sk);
         let peer_addr: NetAddr = addr_str
             .parse()
@@ -187,6 +186,7 @@ async fn build_coordinator(
 /// Run coordinator with metrics instrumentation and block injection.
 async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -> Result<()> {
     let mut metrics = MetricsCollector::new(cfg.node_id);
+    let output_path = PathBuf::from(&cfg.output_file);
 
     info!(
         node_id = cfg.node_id,
@@ -246,8 +246,7 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
             if let Err(err) = coordinator.process_consensus_output(output).await {
                 if err.severity == hotshot_new_protocol::coordinator::error::Severity::Critical {
                     error!(%err, "critical error processing output");
-                    let path = PathBuf::from(&cfg.output_file);
-                    metrics.write_csv(&path)?;
+                    metrics.write_csv(&output_path)?;
                     return Err(anyhow::anyhow!("{err}"));
                 }
                 warn!(%err, "recoverable error processing output");
@@ -262,14 +261,12 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
                 decided_view = decided,
                 "target views reached, shutting down"
             );
-            let path = PathBuf::from(&cfg.output_file);
-            metrics.write_csv(&path)?;
+            metrics.write_csv(&output_path)?;
             return Ok(());
         }
     }
 
-    let path = PathBuf::from(&cfg.output_file);
-    metrics.write_csv(&path)?;
+    metrics.write_csv(&output_path)?;
     Ok(())
 }
 
