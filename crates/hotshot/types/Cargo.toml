@@ -29,12 +29,14 @@ async-trait = { workspace = true }
 bincode = { workspace = true }
 bitvec = { workspace = true }
 blake3 = { workspace = true }
+bs58 = { workspace = true }
 clap = { workspace = true }
 committable = { workspace = true }
 derive_more = { workspace = true }
 digest = { workspace = true }
 displaydoc = { workspace = true }
 dyn-clone = { workspace = true }
+ed25519-compact = { workspace = true }
 either = { workspace = true }
 futures = { workspace = true }
 generic-array = { workspace = true }
@@ -50,6 +52,7 @@ libp2p-identity = { workspace = true }
 memoize = { workspace = true }
 mnemonic = { workspace = true }
 multiaddr = { workspace = true }
+parking_lot = { workspace = true }
 rand = { workspace = true }
 rand_chacha = { workspace = true }
 serde = { workspace = true }
@@ -58,6 +61,7 @@ serde_bytes = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 tagged-base64 = { workspace = true }
+test-utils = { workspace = true }
 thiserror = { workspace = true }
 time = { workspace = true }
 tokio = { workspace = true }

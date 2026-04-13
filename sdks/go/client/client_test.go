@@ -3,41 +3,106 @@ package client
 import (
 	"context"
 	"fmt"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"testing"
 	"time"
 
-	tagged_base64 "github.com/EspressoSystems/espresso-network/sdks/go/tagged-base64"
+	"github.com/EspressoSystems/espresso-network/sdks/go/internal/devnode"
 	types "github.com/EspressoSystems/espresso-network/sdks/go/types"
 	"github.com/EspressoSystems/espresso-network/sdks/go/verification"
-	"github.com/ethereum/go-ethereum/log"
 	"github.com/stretchr/testify/require"
 )
 
-var workingDir = "../../../"
+type devNodeInfo struct {
+	nodeURL    string
+	builderURL string
+}
+
+func setupDevNode(t *testing.T) (context.Context, devNodeInfo) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	ports, err := devnode.AllocatePorts()
+	require.NoError(t, err, "failed to allocate ports")
+
+	dir := t.TempDir()
+	devnode.Start(t, ctx, ports, dir)
+
+	err = waitForEspressoNode(ctx, ports.NodeURL())
+	require.NoError(t, err, "failed to start espresso dev node")
+
+	return ctx, devNodeInfo{nodeURL: ports.NodeURL(), builderURL: ports.BuilderURL()}
+}
+
+func testNamespaceTransactionsInRange(t *testing.T, ctx context.Context, client EspressoClient, txPayload string) {
+	t.Helper()
+
+	namespace := uint64(12345)
+	tx := types.Transaction{Namespace: namespace, Payload: []byte(txPayload)}
+	_, err := client.SubmitTransaction(ctx, tx)
+	require.NoError(t, err, "failed to submit transaction")
+
+	var blocksWithNamespaceTransactions []types.NamespaceTransactionsRangeData
+	err = waitForWith(ctx, 30*time.Second, 2*time.Second, func() bool {
+		height, fetchErr := client.FetchLatestBlockHeight(ctx)
+		if fetchErr != nil || height < 2 {
+			return false
+		}
+		blocksWithNamespaceTransactions, fetchErr = client.FetchNamespaceTransactionsInRange(ctx, 1, height, namespace)
+		return fetchErr == nil && len(blocksWithNamespaceTransactions) > 0
+	})
+	require.NoError(t, err, "failed to fetch namespace transactions in range")
+
+	for _, block := range blocksWithNamespaceTransactions {
+		for _, txn := range block.Transactions {
+			require.Equal(t, namespace, txn.Namespace)
+			require.NotEmpty(t, txn.Payload)
+		}
+	}
+	_, err = client.FetchNamespaceTransactionsInRange(ctx, 0, 1000, namespace)
+	require.Error(t, err, "expected error for large range")
+}
 
 func TestApiWithEspressoDevNode(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx, info := setupDevNode(t)
+	client := NewClient(info.nodeURL)
 
-	dir, err := os.MkdirTemp("", "espresso-dev-node")
-	if err != nil {
-		panic(err)
-	}
-	defer os.RemoveAll(dir)
-	cleanup := runDevNode(ctx, dir)
-	defer cleanup()
+	ClientTestHelper(ctx, client, t)
 
-	err = waitForEspressoNode(ctx)
+	var clientOptions []EspressoClientConfigOption
+	builderSubmitter, err := NewBuilderSubmitter([]string{info.builderURL})
 	if err != nil {
-		t.Fatal("failed to start espresso dev node", err)
+		t.Fatal("failed to create builder submitter", err)
 	}
 
-	client := NewClient("http://localhost:21000")
+	clientOptions = append(clientOptions, WithTransactionSubmitter(builderSubmitter))
+	clientOptions = append(clientOptions, WithBaseUrl(info.nodeURL))
 
-	_, err = client.FetchLatestBlockHeight(ctx)
+	client, err = NewClientFromOptions(clientOptions...)
+	if err != nil {
+		t.Fatal("failed to create espresso client with builder submitter")
+	}
+
+	ClientTestHelper(ctx, client, t)
+
+	clientOptions = []EspressoClientConfigOption{}
+	querySubmitter := NewQuerySubmitter(info.nodeURL)
+	if err != nil {
+		t.Fatal("failed to create builder submitter", err)
+	}
+	clientOptions = append(clientOptions, WithTransactionSubmitter(querySubmitter))
+	clientOptions = append(clientOptions, WithBaseUrl(info.nodeURL))
+
+	client, err = NewClientFromOptions(clientOptions...)
+	if err != nil {
+		t.Fatal("Failed to create query submitter based client")
+	}
+	ClientTestHelper(ctx, client, t)
+}
+
+func ClientTestHelper(ctx context.Context, client EspressoClient, t *testing.T) {
+
+	_, err := client.FetchLatestBlockHeight(ctx)
 	if err != nil {
 		t.Fatal("failed to fetch block height", err)
 	}
@@ -108,54 +173,6 @@ func TestApiWithEspressoDevNode(t *testing.T) {
 	}
 }
 
-func runDevNode(ctx context.Context, tmpDir string) func() {
-	tmpDir, err := filepath.Abs(tmpDir)
-	if err != nil {
-		panic(err)
-	}
-
-	var p *exec.Cmd
-	if bin := os.Getenv("ESPRESSO_DEV_NODE_BIN"); bin != "" {
-		if _, err := os.Stat(bin); err != nil {
-			panic(fmt.Sprintf("ESPRESSO_DEV_NODE_BIN=%s does not exist: %v", bin, err))
-		}
-		fmt.Println("using pre-built espresso-dev-node binary:", bin)
-		p = exec.CommandContext(ctx, bin)
-	} else {
-		fmt.Println("ESPRESSO_DEV_NODE_BIN not set, falling back to cargo run (this will compile espresso-dev-node)")
-		p = exec.CommandContext(ctx, "cargo", "run", "-p", "espresso-dev-node")
-		p.Dir = workingDir
-	}
-
-	env := os.Environ()
-	env = append(env, "ESPRESSO_SEQUENCER_API_PORT=21000")
-	env = append(env, "ESPRESSO_BUILDER_PORT=23000")
-	env = append(env, "ESPRESSO_DEV_NODE_PORT=20000")
-	env = append(env, "ESPRESSO_SEQUENCER_ETH_MNEMONIC=test test test test test test test test test test test junk")
-	env = append(env, "ESPRESSO_DEPLOYER_ACCOUNT_INDEX=0")
-	env = append(env, "ESPRESSO_SEQUENCER_STORAGE_PATH="+tmpDir)
-	p.Env = env
-
-	go func() {
-		if err := p.Run(); err != nil {
-			if err.Error() != "signal: killed" {
-				log.Error(err.Error())
-				panic(err)
-			}
-		}
-	}()
-
-	return func() {
-		if p.Process != nil {
-			err := p.Process.Kill()
-			if err != nil {
-				log.Error(err.Error())
-				panic(err)
-			}
-		}
-	}
-}
-
 func waitForWith(
 	ctxinput context.Context,
 	timeout time.Duration,
@@ -177,73 +194,32 @@ func waitForWith(
 	}
 }
 
-func waitForEspressoNode(ctx context.Context) error {
-	err := waitForWith(ctx, 200*time.Second, 1*time.Second, func() bool {
-		out, err := exec.Command("curl", "-s", "-L", "-f", "http://localhost:21000/availability").Output()
-		if err != nil {
-			log.Warn("error executing curl command:", "err", err)
-			return false
-		}
-
-		return len(out) > 0
+func waitForEspressoNode(ctx context.Context, nodeURL string) error {
+	client := NewClient(nodeURL)
+	return waitForWith(ctx, 200*time.Second, 1*time.Second, func() bool {
+		height, err := client.FetchLatestBlockHeight(ctx)
+		return err == nil && height >= 2
 	})
-	if err != nil {
-		return err
-	}
-	// Wait a bit for dev node to be ready totally
-	time.Sleep(30 * time.Second)
-	return nil
 }
 
 func TestExplorerFetchTransactionByHash(t *testing.T) {
+	ctx, info := setupDevNode(t)
+	client := NewClient(info.nodeURL)
 
-	ctx := context.Background()
-	client := NewClient("https://query-0.main.net.espresso.network")
+	tx := types.Transaction{Namespace: 1, Payload: []byte("explorer test")}
+	hash, err := client.SubmitTransaction(ctx, tx)
+	require.NoError(t, err, "failed to submit transaction")
 
-	txHash, err := tagged_base64.Parse("TX~onVqqws4O51Phy0QLzXaQkVpV_8VyVbYtSvmRAlF6p-K")
-	if err != nil {
-		t.Fatal("failed to parse tx hash", err)
-	}
-	_, err = client.FetchExplorerTransactionByHash(ctx, txHash)
-	if err != nil {
-		t.Fatal("failed to fetch block height", err)
-	}
+	// Explorer indexes asynchronously, so poll until the transaction is available.
+	err = waitForWith(ctx, 30*time.Second, 2*time.Second, func() bool {
+		_, fetchErr := client.FetchExplorerTransactionByHash(ctx, hash)
+		return fetchErr == nil
+	})
+	require.NoError(t, err, "failed to fetch transaction by hash from explorer")
 }
 
 func TestNamespaceTransactionsInRange(t *testing.T) {
-	ctx := context.Background()
-	client := NewClient("https://query.decaf.testnet.espresso.network")
-
-	namespace := uint64(22266222)
-	startHeight := uint64(6386698)
-	endHeight := uint64(6386700)
-
-	blocksWithNamespaceTransactions, err := client.FetchNamespaceTransactionsInRange(ctx, startHeight, endHeight, namespace)
-	if err != nil {
-		t.Fatal("failed to fetch namespace transactions in range", err)
-	}
-
-	if len(blocksWithNamespaceTransactions) != 2 {
-		t.Fatalf("expected 2 blocks with namespace transactions, got %d", len(blocksWithNamespaceTransactions))
-	}
-
-	for _, blocks := range blocksWithNamespaceTransactions {
-		for _, tx := range blocks.Transactions {
-			if tx.Namespace != namespace {
-				t.Fatalf("expected namespace %d, got %d", namespace, tx.Namespace)
-			}
-			if len(tx.Payload) == 0 {
-				t.Fatal("transaction payload is empty")
-			}
-		}
-	}
-
-	startHeight = uint64(6386698)
-	endHeight = uint64(6389700)
-
-	// test if startHeight and endHeight are greater than 100 (which is the limit) then it throws an error
-	_, err = client.FetchNamespaceTransactionsInRange(ctx, startHeight, endHeight, namespace)
-	if err == nil {
-		t.Fatal("expected error for large range, but got none")
-	}
+	ctx, info := setupDevNode(t)
+	client := NewClient(info.nodeURL)
+	testNamespaceTransactionsInRange(t, ctx, client, "namespace range test")
 }

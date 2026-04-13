@@ -6,10 +6,17 @@ members = [
     "client",
     "contracts/rust/adapter",
     "contracts/rust/deployer",
+    "contracts/rust/deployment-info",
     "contracts/rust/diff-test",
     "contracts/rust/gen-vk-contract",
+    "contracts/rust/safe-tx-builder",
     "crates/builder",
     "crates/cliquenet",
+    "crates/espresso/dev-node",
+    "crates/espresso/node",
+    "crates/espresso/node-sqlite",
+    "crates/espresso/types",
+    "crates/espresso/utils",
     "crates/hotshot-builder/legacy",
     "crates/hotshot-builder/refactored",
     "crates/hotshot/builder-api",
@@ -18,6 +25,7 @@ members = [
     "crates/hotshot/hotshot",
     "crates/hotshot/libp2p-networking",
     "crates/hotshot/macros",
+    "crates/hotshot/new-protocol",
     "crates/hotshot/orchestrator",
     "crates/hotshot/task",
     "crates/hotshot/task-impls",
@@ -25,7 +33,6 @@ members = [
     "crates/hotshot/types",
     "crates/hotshot/utils",
     "crates/versions",
-    "espresso-dev-node",
     "hotshot-events-service",
     "hotshot-query-service",
     "hotshot-state-prover",
@@ -34,18 +41,14 @@ members = [
     "node-metrics",
     "request-response",
     "sdks/crypto-helper",
-    "sequencer",
-    "sequencer-sqlite",
     "slow-tests",
     "staking-cli",
     "test-utils",
     "tests",
-    "types",
-    "utils",
     "vid",
 ]
 
-# All crates except sequencer-sqlite and espresso-dev-node, to avoid turning on embedded-db feature
+# All crates except espresso-node-sqlite and espresso-dev-node, to avoid turning on embedded-db feature
 # for the whole workspace by default.
 default-members = [
     "alloy-compat",
@@ -53,6 +56,8 @@ default-members = [
     "client",
     "contracts/rust/adapter",
     "contracts/rust/deployer",
+    "contracts/rust/deployment-info",
+    "contracts/rust/safe-tx-builder",
     "contracts/rust/diff-test",
     "contracts/rust/gen-vk-contract",
     "crates/builder",
@@ -69,6 +74,7 @@ default-members = [
     "crates/hotshot/testing",
     "crates/hotshot/types",
     "crates/hotshot/utils",
+    "crates/hotshot/new-protocol",
     "crates/hotshot-builder/legacy",
     "crates/hotshot-builder/refactored",
     "hotshot-events-service",
@@ -79,16 +85,17 @@ default-members = [
     "node-metrics",
     "request-response",
     "sdks/crypto-helper",
-    "sequencer",
+    "crates/espresso/node",
     "slow-tests",
     "staking-cli",
     "test-utils",
     "tests",
-    "types",
-    "utils",
+    "crates/espresso/types",
+    "crates/espresso/utils",
     "vid",
 ]
-exclude = ["sequencer-sqlite"]
+exclude = ["crates/espresso/node-sqlite"]
+# Note: workspace members/default-members reference directory paths, not crate names.
 
 [workspace.package]
 version = "0.1.0"
@@ -96,14 +103,14 @@ authors = ["Espresso Systems <hello@espressosys.com>"]
 edition = "2024"
 
 [workspace.dependencies]
-alloy = { version = "1.0", features = ["eips", "provider-ws", "json-rpc", "signer-mnemonic", "node-bindings", "getrandom", "signer-ledger" ] }
+alloy = { version = "1.0", features = ["eips", "provider-ws", "json-rpc", "signer-mnemonic", "node-bindings", "getrandom", "signer-ledger"] }
 alloy-compat = { path = "alloy-compat" }
 anyhow = "1.0"
 ark-bls12-381 = "0.5"
 ark-bn254 = "0.5"
 ark-ec = "0.5"
 ark-ed-on-bn254 = "0.5"
-ark-ff = { version = "0.5", features = [ "asm" ] }
+ark-ff = { version = "0.5", features = ["asm"] }
 ark-poly = "0.5"
 ark-serialize = { version = "0.5", features = ["derive"] }
 ark-srs = "0.3.3"
@@ -132,7 +139,7 @@ byteorder = { version = "1" }
 bytes = { version = "1.11.0", features = ["serde"] }
 bytesize = "1.3"
 cbor4ii = { version = "1.0", features = ["serde1"] }
-cdn-broker = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "0.6.2-bcompat-patch2", package = "cdn-broker", features = [ "global-permits" ] }
+cdn-broker = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "0.6.2-bcompat-patch2", package = "cdn-broker", features = ["global-permits"] }
 cdn-client = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "0.6.2-bcompat-patch2", package = "cdn-client" }
 cdn-marshal = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "0.6.2-bcompat-patch2", package = "cdn-marshal" }
 chrono = { version = "0.4", features = ["serde"] }
@@ -144,7 +151,7 @@ cld = "0.5"
 client = { path = "client" }
 cliquenet = { path = "crates/cliquenet", features = ["metrics"] }
 coarsetime = "0.1.34"
-committable = { git = "https://github.com/EspressoSystems/commit.git", features = [ "ark-serialize" ] }
+committable = { git = "https://github.com/EspressoSystems/commit.git", features = ["ark-serialize"] }
 criterion = "0.8.1"
 csv = "1"
 custom_debug = "0.6"
@@ -165,7 +172,10 @@ es-version = { git = "https://github.com/EspressoSystems/es-version.git", branch
 escargot = "0.5.10"
 espresso-contract-deployer = { path = "contracts/rust/deployer" }
 espresso-macros = { git = "https://github.com/EspressoSystems/espresso-macros.git", tag = "0.1.0" }
-espresso-types = { path = "types" }
+espresso-node = { path = "crates/espresso/node", default-features = false }
+espresso-safe-tx-builder = { path = "contracts/rust/safe-tx-builder" }
+espresso-types = { path = "crates/espresso/types" }
+espresso-utils = { path = "crates/espresso/utils" }
 ethers = { version = "2.0", features = ["solc", "ws"] }
 ethers-core = "2.0"
 fluent-asserter = "0.1.9"
@@ -185,6 +195,7 @@ hotshot-events-service = { path = "hotshot-events-service" }
 hotshot-example-types = { path = "crates/hotshot/example-types" }
 hotshot-libp2p-networking = { path = "crates/hotshot/libp2p-networking" }
 hotshot-macros = { path = "crates/hotshot/macros" }
+hotshot-new-protocol = { path = "crates/hotshot/new-protocol" }
 hotshot-orchestrator = { path = "crates/hotshot/orchestrator" }
 hotshot-query-service = { path = "hotshot-query-service" }
 hotshot-state-prover = { path = "hotshot-state-prover" }
@@ -198,23 +209,23 @@ include_dir = "0.7"
 indexmap = { version = "2", features = ["serde"] }
 insta = { version = "1.43", features = ["yaml"] }
 itertools = "0.14"
-jf-advz = { git = "https://github.com/EspressoSystems/jellyfish-compat", tag = "jf-advz-v0.2.4", features = [ "std", "parallel" ] }
+jf-advz = { git = "https://github.com/EspressoSystems/jellyfish-compat", tag = "jf-advz-v0.2.4", features = ["std", "parallel"] }
 jf-crhf = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-crhf-v0.2.0" }
 jf-merkle-tree = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-merkle-tree-v0.4.0" }
-jf-merkle-tree-compat = { git = "https://github.com/EspressoSystems/jellyfish-compat", tag = "jf-merkle-tree-compat-v0.3.1", features = [ "std" ] }
-jf-pcs = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-pcs-v0.3.0", features = [ "std", "parallel", ] }
-jf-plonk = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-plonk-v0.7.0", features = [ "test-apis" ] }
-jf-plonk-compat = { package = "jf-plonk", git = "https://github.com/EspressoSystems/jellyfish", branch = "jf-relation-v0.5.0-compat", features = [ "std" ] }
+jf-merkle-tree-compat = { git = "https://github.com/EspressoSystems/jellyfish-compat", tag = "jf-merkle-tree-compat-v0.3.1", features = ["std"] }
+jf-pcs = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-pcs-v0.3.0", features = ["std", "parallel"] }
+jf-plonk = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-plonk-v0.7.0", features = ["test-apis"] }
+jf-plonk-compat = { package = "jf-plonk", git = "https://github.com/EspressoSystems/jellyfish", branch = "jf-relation-v0.5.0-compat", features = ["std"] }
 jf-poseidon2 = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-poseidon2-v0.2.0", features = ["bn254"] }
-jf-relation = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-relation-v0.5.0", features = [ "std" ] }
-jf-relation-compat = { package = "jf-relation", git = "https://github.com/EspressoSystems/jellyfish", branch = "jf-relation-v0.5.0-compat", features = [ "std" ] }
-jf-rescue = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-rescue-v0.3.0", features = [ "std", "parallel", "gadgets" ] }
-jf-rescue-compat = { package = "jf-rescue", git = "https://github.com/EspressoSystems/jellyfish", branch = "jf-relation-v0.5.0-compat", features = [ "gadgets" ] }
-jf-signature = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-signature-v0.4.0", features = [ "std", "bls", "schnorr", "gadgets" ] }
-jf-signature-compat = { package = "jf-signature", git = "https://github.com/EspressoSystems/jellyfish", branch = "jf-relation-v0.5.0-compat", features = [ "schnorr", "bls", "gadgets" ] }
+jf-relation = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-relation-v0.5.0", features = ["std"] }
+jf-relation-compat = { package = "jf-relation", git = "https://github.com/EspressoSystems/jellyfish", branch = "jf-relation-v0.5.0-compat", features = ["std"] }
+jf-rescue = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-rescue-v0.3.0", features = ["std", "parallel", "gadgets"] }
+jf-rescue-compat = { package = "jf-rescue", git = "https://github.com/EspressoSystems/jellyfish", branch = "jf-relation-v0.5.0-compat", features = ["gadgets"] }
+jf-signature = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-signature-v0.4.0", features = ["std", "bls", "schnorr", "gadgets"] }
+jf-signature-compat = { package = "jf-signature", git = "https://github.com/EspressoSystems/jellyfish", branch = "jf-relation-v0.5.0-compat", features = ["schnorr", "bls", "gadgets"] }
 jf-utils = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-utils-v0.5.0" }
 lazy_static = "1"
-libp2p = { package = "libp2p", version = "0.56", default-features = false, features = [ "macros", "autonat", "cbor", "dns", "gossipsub", "identify", "kad", "quic", "request-response", "secp256k1", "serde", "tokio" ] }
+libp2p = { package = "libp2p", version = "0.56", default-features = false, features = ["macros", "autonat", "cbor", "dns", "gossipsub", "identify", "kad", "quic", "request-response", "secp256k1", "serde", "tokio"] }
 libp2p-identity = { version = "0.2", features = ["ed25519", "serde"] }
 libp2p-swarm-derive = { version = "0.35" }
 light-client = { path = "light-client", features = ["clap"] }
@@ -259,9 +270,8 @@ reqwest = { version = "0.12", features = ["rustls-tls", "json"] }
 rstest = "0.25.0"
 rstest_reuse = "0.7.0"
 rust_decimal = "1.36.0"
+scopeguard = "1.2.0"
 semver = "1"
-sequencer = { path = "sequencer", default-features = false }
-sequencer-utils = { path = "utils" }
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde-inline-default = "0.2"
 serde_arrays = "0.2.0"
@@ -281,7 +291,7 @@ syn = { version = "2", features = ["full", "extra-traits"] }
 sysinfo = "0.33.1"
 tagged-base64 = "0.4.1"
 tempfile = "3.10"
-test-log = { version = "0.2", features = [ "color", "trace" ] }
+test-log = { version = "0.2", features = ["color", "trace"] }
 test-utils = { path = "test-utils" }
 thiserror = "2"
 tide-disco = "0.9"
@@ -321,7 +331,7 @@ debug = "full"
 
 [profile.test]
 opt-level = 1
-[profile.test.package.sequencer]
+[profile.test.package.espresso-node]
 opt-level = 0
 [profile.test.package.hotshot-testing]
 opt-level = 0

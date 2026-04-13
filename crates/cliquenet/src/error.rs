@@ -1,8 +1,9 @@
 use std::io;
 
+use hotshot_types::addr::NetAddr;
 use thiserror::Error;
 
-use crate::{Address, frame::InvalidHeader};
+use crate::frame::InvalidHeader;
 
 /// The empty type has no values.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -17,7 +18,7 @@ pub enum NetworkError {
 
     /// Bind error.
     #[error("error binding to address {0}: {1}")]
-    Bind(Address, #[source] io::Error),
+    Bind(NetAddr, #[source] io::Error),
 
     /// The received frame header is not valid.
     #[error("invalid frame header: {0}")]
@@ -50,4 +51,20 @@ pub enum NetworkError {
     /// An operation timed out.
     #[error("timeout")]
     Timeout,
+}
+
+#[derive(Debug, Error)]
+#[error("network down")]
+pub struct NetworkDown(());
+
+impl NetworkDown {
+    pub(crate) const fn new() -> Self {
+        Self(())
+    }
+}
+
+impl From<NetworkDown> for NetworkError {
+    fn from(_: NetworkDown) -> Self {
+        Self::ChannelClosed
+    }
 }

@@ -69,6 +69,7 @@ use hotshot_types::{
 use rand::{SeedableRng, rngs::StdRng};
 use surf_disco::Url;
 use tracing::{debug, error, info, warn};
+use versions::{MIN_SUPPORTED_VERSION, Upgrade};
 
 #[derive(Debug, Clone)]
 /// Arguments passed to the orchestrator
@@ -221,7 +222,7 @@ pub fn read_orchestrator_init_config<TYPES: NodeType>() -> (NetworkConfig<TYPES>
     if let Some(total_nodes_string) = matches.get_one::<String>("total_nodes") {
         config.config.num_nodes_with_stake = total_nodes_string.parse::<NonZeroUsize>().unwrap();
         config.config.known_nodes_with_stake =
-            vec![PeerConfig::default(); config.config.num_nodes_with_stake.get() as usize];
+            vec![PeerConfig::test_default(); config.config.num_nodes_with_stake.get() as usize];
         error!(
             "config.config.total_nodes: {:?}",
             config.config.num_nodes_with_stake
@@ -281,7 +282,7 @@ pub fn load_config_from_file<TYPES: NodeType>(config_file: &str) -> NetworkConfi
 
     // initialize it with size for better assignment of peers' config
     config.config.known_nodes_with_stake =
-        vec![PeerConfig::default(); config.config.num_nodes_with_stake.get() as usize];
+        vec![PeerConfig::test_default(); config.config.num_nodes_with_stake.get() as usize];
 
     config
 }
@@ -362,12 +363,14 @@ pub trait RunDa<
     /// get the anchored view
     /// Note: sequencing leaf does not have state, so does not return state
     async fn initialize_state_and_hotshot(&self) -> SystemContextHandle<TYPES, NODE> {
+        let upgrade = Upgrade::trivial(MIN_SUPPORTED_VERSION);
+
         let initializer = hotshot::HotShotInitializer::<TYPES>::from_genesis(
             TestInstanceState::default(),
             self.config().config.epoch_height,
             self.config().config.epoch_start_block,
             vec![],
-            self.config().config.upgrade,
+            upgrade,
         )
         .await
         .expect("Couldn't generate genesis block");
@@ -400,6 +403,7 @@ pub trait RunDa<
             state_sk,
             config.node_index,
             config.config,
+            upgrade,
             EpochMembershipCoordinator::new(membership, epoch_height, &storage.clone()),
             network,
             initializer,
@@ -535,7 +539,7 @@ pub trait RunDa<
             .hotshot
             .membership_coordinator
             .membership_for_epoch(genesis_epoch_from_version(
-                context.hotshot.upgrade_lock.upgrade.base,
+                context.hotshot.upgrade_lock.upgrade().base,
             ))
             .await
             .unwrap()
@@ -882,10 +886,10 @@ where
     }
 }
 
-#[allow(clippy::too_many_lines)]
 /// Main entry point for validators
 /// # Panics
 /// if unable to get the local ip address
+#[allow(clippy::too_many_lines)]
 pub async fn main_entry_point<
     TYPES: NodeType<
             Transaction = TestTransaction,
@@ -911,7 +915,7 @@ pub async fn main_entry_point<
     let orchestrator_client: OrchestratorClient = OrchestratorClient::new(args.url.clone());
 
     // We assume one node will not call this twice to generate two validator_config-s with same identity.
-    let validator_config = NetworkConfig::<TYPES>::generate_init_validator_config(
+    let validator_config = NetworkConfig::<TYPES>::generate_init_test_validator_config(
         orchestrator_client
             .get_node_index_for_init_validator_config()
             .await,

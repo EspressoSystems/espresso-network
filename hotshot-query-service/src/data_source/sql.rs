@@ -335,13 +335,21 @@ pub mod testing {
         for SqlDataSource<MockTypes, P>
     {
         type Storage = TmpDb;
+        type S = SqlStorage;
+        type P = P;
 
         async fn create(_node_id: usize) -> Self::Storage {
             TmpDb::init().await
         }
 
-        async fn connect(tmp_db: &Self::Storage) -> Self {
-            tmp_db.config().connect(Default::default()).await.unwrap()
+        async fn build(
+            tmp_db: &Self::Storage,
+            opt: impl Send + FnOnce(Builder<MockTypes, P>) -> Builder<MockTypes, P>,
+        ) -> Self {
+            opt(tmp_db.config().builder(Default::default()).await.unwrap())
+                .build()
+                .await
+                .unwrap()
         }
 
         async fn reset(tmp_db: &Self::Storage) -> Self {
@@ -351,17 +359,6 @@ pub mod testing {
                 .connect(Default::default())
                 .await
                 .unwrap()
-        }
-
-        async fn leaf_only_ds(tmp_db: &Self::Storage) -> Self {
-            let config = tmp_db.config();
-            let builder = config.builder(Default::default()).await.unwrap();
-
-            builder
-                .leaf_only()
-                .build()
-                .await
-                .expect("failed to build leaf only sql ds")
         }
 
         async fn handle_event(&self, event: &Event<MockTypes>) {
@@ -384,6 +381,7 @@ mod generic_test {
 
 #[cfg(all(test, not(target_os = "windows")))]
 mod test {
+    use futures::StreamExt;
     use hotshot_example_types::{
         node_types::TEST_VERSIONS,
         state_types::{TestInstanceState, TestValidatedState},
@@ -397,8 +395,8 @@ mod test {
     use super::*;
     use crate::{
         availability::{
-            AvailabilityDataSource, BlockInfo, LeafQueryData, UpdateAvailabilityData,
-            VidCommonQueryData,
+            AvailabilityDataSource, BlockInfo, BlockQueryData, LeafQueryData,
+            UpdateAvailabilityData, VidCommonQueryData,
         },
         data_source::{
             Transaction, VersionedDataSource,
@@ -440,9 +438,7 @@ mod test {
         // Re-insert the common data with the share.
         let share0 = VidShare::V0(disperse.shares[0].clone());
         let mut tx = ds.write().await.unwrap();
-        tx.insert_vid(common.clone(), Some(share0.clone()))
-            .await
-            .unwrap();
+        tx.insert_vid(&common, Some(&share0)).await.unwrap();
         tx.commit().await.unwrap();
         assert_eq!(ds.get_vid_common(0).await.await, common);
         assert_eq!(
@@ -450,6 +446,76 @@ mod test {
                 .await
                 .unwrap(),
             share0
+        );
+    }
+
+    /// Test subscription streams for identical payloads.
+    ///
+    /// The specific case that may be problematic is this:
+    /// * We get a `Decide` which is missing the payload and/or VID common
+    /// * _But_ we already have a block with an identical payload/VID common
+    /// * We call `store_and_notify` without the payload/VID common, meaning existing subscription
+    ///   streams will not get notified
+    /// * We call `Fetcher::get` got fetch the missing data, but because we already have data in the
+    ///   database that satisfies, the request, we do not spawn a fetch and notify
+    ///
+    /// This specifically affects subscription streams which are following the chain head. In all
+    /// other cases, we would try explicitly loading the next object in the stream from the database
+    /// before passively waiting for it, and this would succeed. Only in the case of a stream
+    /// following the head, do we rely on a passive notification without a corresponding explicit
+    /// fetch, even though the explicit fetch would have actually succeeded.
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_subscribe_identical_payload() {
+        let storage = D::create(0).await;
+        let ds = <D as DataSourceLifeCycle>::connect(&storage).await;
+
+        let mut blocks = ds.subscribe_blocks(0).await;
+        let mut vid = ds.subscribe_vid_common(0).await;
+
+        // Send a decide event with all relevant data.
+        let mut leaf =
+            LeafQueryData::genesis(&Default::default(), &Default::default(), TEST_VERSIONS.test)
+                .await;
+        let block = BlockQueryData::genesis(
+            &Default::default(),
+            &Default::default(),
+            TEST_VERSIONS.test.base,
+        )
+        .await;
+        let common = VidCommonQueryData::genesis(
+            &Default::default(),
+            &Default::default(),
+            TEST_VERSIONS.test.base,
+        )
+        .await;
+        tracing::info!("first decide");
+        ds.append(BlockInfo::new(
+            leaf.clone(),
+            Some(block.clone()),
+            Some(common.clone()),
+            None,
+        ))
+        .await
+        .unwrap();
+
+        tracing::info!("waiting for first block and VID");
+        assert_eq!(blocks.next().await.unwrap(), block);
+        assert_eq!(vid.next().await.unwrap(), common);
+
+        // Send a decide event with only the next leaf.
+        leaf.leaf.block_header_mut().block_number += 1;
+        tracing::info!("second decide");
+        ds.append(leaf.clone().into()).await.unwrap();
+
+        tracing::info!("waiting for second block and VID");
+        assert_eq!(
+            blocks.next().await.unwrap(),
+            BlockQueryData::new(leaf.header().clone(), block.payload)
+        );
+        assert_eq!(
+            vid.next().await.unwrap(),
+            VidCommonQueryData::new(leaf.header().clone(), common.common)
         );
     }
 }

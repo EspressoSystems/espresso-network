@@ -45,6 +45,15 @@ default-filter = 'deps(hotshot-testing)'
 final-status-level = "flaky"
 threads-required = "num-test-threads"
 
+# cross_tests! macro tests: use binary() not test(), because the macro names the
+# binary after the file but the test function is always the base test name.
+#
+# Example: `cargo nextest list ..`
+#     package:binary
+#         test
+#
+#     hotshot-testing::test_epoch_success_overlap_3f:
+#         test_epoch_success::testtypesrandomizedcommitteemembers_stablequorumfilterconfig_123_6__stablequorumfilterconfig_123_6___::cliquenetimpl_::test_epoch_success
 [[profile.hotshot.overrides]]
 filter = """
 test(test_success_with_async_delay_with_epochs) |
@@ -52,8 +61,10 @@ test(test_success_with_async_delay_2_with_epochs) |
 test(test_vid2_success) |
 test(test_combined_network_half_dc) |
 test(test_staggered_restart_first_block) |
-test(test_epoch_success_overlap_3f) |
-test(test_epoch_success_types_randomized_leader)
+test(/test_staggered_restart$/) |
+binary(test_epoch_success_overlap_2_f) |
+binary(test_epoch_success_overlap_3f) |
+binary(test_epoch_success_types_randomized_leader)
 """
 retries = 3
 

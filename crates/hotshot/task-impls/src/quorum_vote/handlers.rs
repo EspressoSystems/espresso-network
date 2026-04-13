@@ -92,10 +92,7 @@ pub(crate) async fn handle_quorum_proposal_validated<
     task_state: &mut QuorumVoteTaskState<TYPES, I>,
     event_sender: &Sender<Arc<HotShotEvent<TYPES>>>,
 ) -> Result<()> {
-    let version = task_state
-        .upgrade_lock
-        .version(proposal.view_number())
-        .await?;
+    let version = task_state.upgrade_lock.version(proposal.view_number())?;
 
     let LeafChainTraversalOutcome {
         new_locked_view_number,
@@ -115,7 +112,7 @@ pub(crate) async fn handle_quorum_proposal_validated<
             decide_from_proposal_2::<TYPES, I>(
                 proposal,
                 OuterConsensus::new(Arc::clone(&task_state.consensus.inner_consensus)),
-                Arc::clone(&task_state.upgrade_lock.decided_upgrade_certificate),
+                &task_state.upgrade_lock,
                 &task_state.public_key,
                 version >= EPOCH_VERSION,
                 &task_state.membership,
@@ -129,7 +126,7 @@ pub(crate) async fn handle_quorum_proposal_validated<
         decide_from_proposal::<TYPES, I>(
             proposal,
             OuterConsensus::new(Arc::clone(&task_state.consensus.inner_consensus)),
-            Arc::clone(&task_state.upgrade_lock.decided_upgrade_certificate),
+            &task_state.upgrade_lock,
             &task_state.public_key,
             version >= EPOCH_VERSION,
             &task_state.membership,
@@ -140,15 +137,11 @@ pub(crate) async fn handle_quorum_proposal_validated<
     };
 
     if let (Some(cert), Some(_)) = (decided_upgrade_cert.clone(), new_decided_view_number) {
-        let mut decided_certificate_lock = task_state
+        task_state
             .upgrade_lock
-            .decided_upgrade_certificate
-            .write()
-            .await;
-        *decided_certificate_lock = Some(cert.clone());
-        drop(decided_certificate_lock);
+            .set_decided_upgrade_cert(cert.clone());
         if cert.data.new_version >= EPOCH_VERSION
-            && task_state.upgrade_lock.upgrade.base < EPOCH_VERSION
+            && task_state.upgrade_lock.upgrade().base < EPOCH_VERSION
         {
             let epoch_height = task_state.consensus.read().await.epoch_height;
             let first_epoch_number = EpochNumber::new(epoch_from_block_number(
@@ -391,7 +384,7 @@ pub(crate) async fn update_shared_state<TYPES: NodeType>(
         bail!("Parent state not found! Consensus internally inconsistent");
     };
 
-    let version = upgrade_lock.version(view_number).await?;
+    let version = upgrade_lock.version(view_number)?;
 
     let now = Instant::now();
     let (validated_state, state_delta) = parent_state
@@ -490,7 +483,6 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>>(
         &private_key,
         &upgrade_lock,
     )
-    .await
     .wrap()
     .context(error!("Failed to sign vote. This should never happen."))?;
     let now = Instant::now();
@@ -508,7 +500,7 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>>(
 
     // Make epoch root vote
 
-    let epoch_enabled = upgrade_lock.epochs_enabled(view_number).await;
+    let epoch_enabled = upgrade_lock.epochs_enabled(view_number);
     if extended_vote && epoch_enabled {
         tracing::debug!("sending extended vote to everybody",);
         broadcast_event(

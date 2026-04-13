@@ -58,13 +58,14 @@ use std::{
     marker::PhantomData,
     ops::{Bound, Range, RangeBounds},
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context, bail};
 use async_lock::Semaphore;
 use async_trait::async_trait;
 use backoff::{ExponentialBackoff, ExponentialBackoffBuilder, backoff::Backoff};
+use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use futures::{
     channel::oneshot,
@@ -73,14 +74,15 @@ use futures::{
 };
 use hotshot_types::{
     data::VidShare,
+    simple_certificate::CertificatePair,
     traits::{
-        metrics::{Gauge, Metrics},
+        metrics::{Counter, Gauge, Histogram, Metrics},
         node_implementation::NodeType,
     },
 };
 use jf_merkle_tree_compat::{MerkleTreeScheme, prelude::MerkleProof};
 use tagged_base64::TaggedBase64;
-use tokio::{spawn, time::sleep};
+use tokio::{spawn, sync::Mutex, time::sleep};
 use tracing::Instrument;
 
 use super::{
@@ -91,7 +93,6 @@ use super::{
         MerklizedStateHeightStorage, MerklizedStateStorage, NodeStorage, UpdateAggregatesStorage,
         UpdateAvailabilityStorage,
         pruning::{PruneStorage, PrunedHeightDataSource, PrunedHeightStorage},
-        sql::MigrateTypes,
     },
 };
 use crate::{
@@ -102,8 +103,9 @@ use crate::{
         PayloadQueryData, QueryableHeader, QueryablePayload, TransactionHash,
         UpdateAvailabilityData, VidCommonMetadata, VidCommonQueryData,
     },
+    data_source::fetching::{leaf::RangeRequest, vid::VidCommonRangeFetcher},
     explorer::{self, ExplorerDataSource},
-    fetching::{self, Provider, request},
+    fetching::{self, NonEmptyRange, Provider, request},
     merklized_state::{
         MerklizedState, MerklizedStateDataSource, MerklizedStateHeightPersistence, Snapshot,
     },
@@ -124,8 +126,8 @@ mod transaction;
 mod vid;
 
 use self::{
-    block::PayloadFetcher,
-    leaf::LeafFetcher,
+    block::{PayloadFetcher, PayloadRangeFetcher},
+    leaf::{LeafFetcher, LeafRangeFetcher},
     transaction::TransactionRequest,
     vid::{VidCommonFetcher, VidCommonRequest},
 };
@@ -138,15 +140,15 @@ pub struct Builder<Types, S, P> {
     rate_limit: usize,
     range_chunk_size: usize,
     proactive_interval: Duration,
-    proactive_range_chunk_size: Option<usize>,
+    proactive_range_chunk_size: usize,
     sync_status_chunk_size: usize,
     active_fetch_delay: Duration,
     chunk_fetch_delay: Duration,
     proactive_fetching: bool,
     aggregator: bool,
     aggregator_chunk_size: Option<usize>,
-    types_migration_batch_size: u64,
     leaf_only: bool,
+    sync_status_ttl: Duration,
     _types: PhantomData<Types>,
 }
 
@@ -167,15 +169,15 @@ impl<Types, S, P> Builder<Types, S, P> {
             rate_limit: 32,
             range_chunk_size: 25,
             proactive_interval: Duration::from_hours(8),
-            proactive_range_chunk_size: None,
+            proactive_range_chunk_size: 100,
             sync_status_chunk_size: 100_000,
             active_fetch_delay: Duration::from_millis(50),
             chunk_fetch_delay: Duration::from_millis(100),
             proactive_fetching: true,
             aggregator: true,
             aggregator_chunk_size: None,
-            types_migration_batch_size: 10000,
             leaf_only: false,
+            sync_status_ttl: Duration::from_mins(5),
             _types: Default::default(),
         }
     }
@@ -245,11 +247,8 @@ impl<Types, S, P> Builder<Types, S, P> {
     /// This is similar to [`Self::with_range_chunk_size`], but only affects the chunk size for
     /// proactive fetching scans, not for normal subscription streams. This can be useful to tune
     /// the proactive scanner to be more or less greedy with persistent storage resources.
-    ///
-    /// By default (i.e. if this method is not called) the proactive range chunk size will be set to
-    /// whatever the normal range chunk size is.
     pub fn with_proactive_range_chunk_size(mut self, range_chunk_size: usize) -> Self {
-        self.proactive_range_chunk_size = Some(range_chunk_size);
+        self.proactive_range_chunk_size = range_chunk_size;
         self
     }
 
@@ -257,6 +256,16 @@ impl<Types, S, P> Builder<Types, S, P> {
     /// missing objects.
     pub fn with_sync_status_chunk_size(mut self, chunk_size: usize) -> Self {
         self.sync_status_chunk_size = chunk_size;
+        self
+    }
+
+    /// Duration to cache sync status results for.
+    ///
+    /// Computing the sync status is expensive, and it typically doesn't change that quickly. Thus,
+    /// it makes sense to cache the results whenever we do compute it, and return those cached
+    /// results if they are not too old.
+    pub fn with_sync_status_ttl(mut self, ttl: Duration) -> Self {
+        self.sync_status_ttl = ttl;
         self
     }
 
@@ -321,14 +330,6 @@ impl<Types, S, P> Builder<Types, S, P> {
         self
     }
 
-    /// Sets the batch size for the types migration.
-    /// Determines how many `(leaf, vid)` rows are selected from the old types table
-    /// and migrated at once.
-    pub fn with_types_migration_batch_size(mut self, batch: u64) -> Self {
-        self.types_migration_batch_size = batch;
-        self
-    }
-
     pub fn is_leaf_only(&self) -> bool {
         self.leaf_only
     }
@@ -339,7 +340,7 @@ where
     Types: NodeType,
     Payload<Types>: QueryablePayload<Types>,
     Header<Types>: QueryableHeader<Types>,
-    S: PruneStorage + VersionedDataSource + HasMetrics + MigrateTypes<Types> + 'static,
+    S: PruneStorage + VersionedDataSource + HasMetrics + 'static,
     for<'a> S::ReadOnly<'a>: AvailabilityStorage<Types>
         + PrunedHeightStorage
         + NodeStorage<Types>
@@ -404,7 +405,7 @@ where
     Payload<Types>: QueryablePayload<Types>,
     S: PruneStorage + Send + Sync + 'static,
 {
-    async fn new(storage: Arc<S>) -> Self {
+    async fn new(storage: Arc<S>, backoff: ExponentialBackoff) -> Self {
         let cfg = storage.get_pruning_config();
         let Some(cfg) = cfg else {
             return Self {
@@ -415,9 +416,12 @@ where
 
         let future = async move {
             for i in 1.. {
-                tracing::warn!("starting pruner run {i} ");
-                Self::prune(storage.clone()).await;
+                // Delay before we start the pruner run to avoid a useless and expensive prune
+                // immediately on startup.
                 sleep(cfg.interval()).await;
+
+                tracing::warn!("starting pruner run {i} ");
+                Self::prune(storage.clone(), &backoff).await;
             }
         };
 
@@ -429,22 +433,32 @@ where
         }
     }
 
-    async fn prune(storage: Arc<S>) {
+    async fn prune(storage: Arc<S>, backoff: &ExponentialBackoff) {
         // We loop until the whole run pruner run is complete
         let mut pruner = S::Pruner::default();
-        loop {
-            match storage.prune(&mut pruner).await {
-                Ok(Some(height)) => {
-                    tracing::warn!("Pruned to height {height}");
-                },
-                Ok(None) => {
-                    tracing::warn!("pruner run complete.");
-                    break;
-                },
-                Err(e) => {
-                    tracing::error!("pruner run failed: {e:?}");
-                    break;
-                },
+        'run: loop {
+            let mut backoff = backoff.clone();
+            backoff.reset();
+            'batch: loop {
+                match storage.prune(&mut pruner).await {
+                    Ok(Some(height)) => {
+                        tracing::warn!("Pruned to height {height}");
+                        break 'batch;
+                    },
+                    Ok(None) => {
+                        tracing::warn!("pruner run complete.");
+                        break 'run;
+                    },
+                    Err(e) => {
+                        tracing::warn!("error pruning batch: {e:#}");
+                        if let Some(delay) = backoff.next_backoff() {
+                            sleep(delay).await;
+                        } else {
+                            tracing::error!("pruning run failed after too many errors: {e:#}");
+                            break 'run;
+                        }
+                    },
+                }
             }
         }
     }
@@ -455,7 +469,7 @@ where
     Types: NodeType,
     Payload<Types>: QueryablePayload<Types>,
     Header<Types>: QueryableHeader<Types>,
-    S: VersionedDataSource + PruneStorage + HasMetrics + MigrateTypes<Types> + 'static,
+    S: VersionedDataSource + PruneStorage + HasMetrics + 'static,
     for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types> + UpdateAggregatesStorage<Types>,
     for<'a> S::ReadOnly<'a>: AvailabilityStorage<Types>
         + NodeStorage<Types>
@@ -476,21 +490,12 @@ where
             .unwrap_or(builder.range_chunk_size);
         let proactive_fetching = builder.proactive_fetching;
         let proactive_interval = builder.proactive_interval;
-        let proactive_range_chunk_size = builder
-            .proactive_range_chunk_size
-            .unwrap_or(builder.range_chunk_size);
-        let migration_batch_size = builder.types_migration_batch_size;
+        let proactive_range_chunk_size = builder.proactive_range_chunk_size;
+        let backoff = builder.backoff.build();
         let scanner_metrics = ScannerMetrics::new(builder.storage.metrics());
         let aggregator_metrics = AggregatorMetrics::new(builder.storage.metrics());
 
         let fetcher = Arc::new(Fetcher::new(builder).await?);
-
-        // Migrate the old types to new PoS types
-        // This is a one-time operation that should be done before starting the data source
-        // It migrates leaf1 storage to leaf2
-        // and vid to vid2
-        fetcher.storage.migrate_types(migration_batch_size).await?;
-
         let scanner = if proactive_fetching && !leaf_only {
             Some(BackgroundTask::spawn(
                 "proactive scanner",
@@ -517,7 +522,7 @@ where
 
         let storage = fetcher.storage.clone();
 
-        let pruner = Pruner::new(storage).await;
+        let pruner = Pruner::new(storage, backoff).await;
         let ds = Self {
             fetcher,
             scanner,
@@ -771,32 +776,82 @@ where
 {
     async fn append(&self, info: BlockInfo<Types>) -> anyhow::Result<()> {
         let height = info.height() as usize;
-        let fetch_block = info.block.is_none();
-        let fetch_vid = info.vid_common.is_none();
+
+        // Save the new decided leaf.
+        self.fetcher
+            .store(&(info.leaf.clone(), info.qc_chain))
+            .await;
 
         // Trigger a fetch of the parent leaf, if we don't already have it.
         leaf::trigger_fetch_for_parent(&self.fetcher, &info.leaf);
 
-        self.fetcher.store_and_notify(info).await;
-
-        if fetch_block || fetch_vid {
-            // If data related to this block is missing, try and fetch it. Do this in an async task:
-            // we're triggering a fire-and-forget fetch; we don't need to block the caller on this.
-            let fetcher = self.fetcher.clone();
-            let span = tracing::info_span!("fetch missing data", height);
-            spawn(
-                async move {
-                    tracing::info!(fetch_block, fetch_vid, "fetching missing data");
-                    if fetch_block {
-                        fetcher.get::<PayloadMetadata<Types>>(height).await;
-                    }
-                    if fetch_vid {
-                        fetcher.get::<VidCommonMetadata<Types>>(height).await;
-                    }
-                }
-                .instrument(span),
-            );
+        // Store and notify the block data and VID common, if available. Spawn a fetch to retrieve
+        // it, if not.
+        //
+        // Note a special case here: if the data was not available in the decide event, but _is_
+        // available locally in the database, without having to spawn a fetch for it, we _must_
+        // notify now. Thus, we must pattern match to distinguish `Fetch::Ready`/`Fetch::Pending`.
+        //
+        // Why? As soon as we inserted the leaf, the corresponding object may become available, if
+        // we already had an identical payload/VID common in the database, from a different block.
+        // Then calling `get()` will not spawn a fetch/notification, and existing fetches waiting
+        // for the newly decided object to arrive will miss it. Thus, if `get()` returned a `Ready`
+        // object, it is our responsibility, as the task processing newly decided objects, to make
+        // sure those fetches get notified.
+        let block = match info.block {
+            Some(block) => Some(block),
+            None => match self.fetcher.get::<BlockQueryData<Types>>(height).await {
+                Fetch::Ready(block) => Some(block),
+                Fetch::Pending(fut) => {
+                    let span = tracing::info_span!("fetch missing block", height);
+                    spawn(
+                        async move {
+                            tracing::info!("fetching missing block");
+                            fut.await;
+                        }
+                        .instrument(span),
+                    );
+                    None
+                },
+            },
+        };
+        if let Some(block) = &block {
+            self.fetcher.store(block).await;
         }
+        let vid = match info.vid_common {
+            Some(vid) => Some(vid),
+            None => match self.fetcher.get::<VidCommonQueryData<Types>>(height).await {
+                Fetch::Ready(vid) => Some(vid),
+                Fetch::Pending(fut) => {
+                    let span = tracing::info_span!("fetch missing VID common", height);
+                    spawn(
+                        async move {
+                            tracing::info!("fetching missing VID common");
+                            fut.await;
+                        }
+                        .instrument(span),
+                    );
+                    None
+                },
+            },
+        };
+        if let Some(vid) = &vid {
+            self.fetcher.store(&(vid.clone(), info.vid_share)).await;
+        }
+
+        // Send notifications for the new objects after storing all of them. This ensures that as
+        // soon as a fetch for any of these objects resolves, the corresponding data will
+        // immediately be available. This isn't strictly required for correctness; after all,
+        // objects can generally be fetched as asynchronously as we want. But this is the most
+        // intuitive behavior to provide when possible.
+        info.leaf.notify(&self.fetcher.notifiers).await;
+        if let Some(block) = &block {
+            block.notify(&self.fetcher.notifiers).await;
+        }
+        if let Some(vid) = &vid {
+            vid.notify(&self.fetcher.notifiers).await;
+        }
+
         Ok(())
     }
 }
@@ -835,8 +890,11 @@ where
     notifiers: Notifiers<Types>,
     provider: Arc<P>,
     leaf_fetcher: Arc<LeafFetcher<Types, S, P>>,
+    leaf_range_fetcher: Arc<LeafRangeFetcher<Types, S, P>>,
     payload_fetcher: Option<Arc<PayloadFetcher<Types, S, P>>>,
+    payload_range_fetcher: Option<Arc<PayloadRangeFetcher<Types, S, P>>>,
     vid_common_fetcher: Option<Arc<VidCommonFetcher<Types, S, P>>>,
+    vid_common_range_fetcher: Option<Arc<VidCommonRangeFetcher<Types, S, P>>>,
     range_chunk_size: usize,
     sync_status_chunk_size: usize,
     // Duration to sleep after each active fetch,
@@ -849,6 +907,8 @@ where
     // retry failed loads.
     retry_semaphore: Arc<Semaphore>,
     leaf_only: bool,
+    sync_status_metrics: SyncStatusMetrics,
+    sync_status: Mutex<CachedSyncStatus>,
 }
 
 impl<Types, S, P> VersionedDataSource for Fetcher<Types, S, P>
@@ -879,38 +939,53 @@ impl<Types, S, P> Fetcher<Types, S, P>
 where
     Types: NodeType,
     Header<Types>: QueryableHeader<Types>,
-    S: VersionedDataSource + Sync,
+    S: VersionedDataSource + HasMetrics + Sync,
     for<'a> S::ReadOnly<'a>: PrunedHeightStorage + NodeStorage<Types>,
 {
     pub async fn new(builder: Builder<Types, S, P>) -> anyhow::Result<Self> {
         let retry_semaphore = Arc::new(Semaphore::new(builder.rate_limit));
         let backoff = builder.backoff.build();
 
-        let (payload_fetcher, vid_fetcher) = if builder.is_leaf_only() {
-            (None, None)
-        } else {
-            (
-                Some(Arc::new(fetching::Fetcher::new(
-                    retry_semaphore.clone(),
-                    backoff.clone(),
-                ))),
-                Some(Arc::new(fetching::Fetcher::new(
-                    retry_semaphore.clone(),
-                    backoff.clone(),
-                ))),
-            )
-        };
+        let (payload_fetcher, payload_range_fetcher, vid_common_fetcher, vid_common_range_fetcher) =
+            if builder.is_leaf_only() {
+                (None, None, None, None)
+            } else {
+                (
+                    Some(Arc::new(fetching::Fetcher::new(
+                        retry_semaphore.clone(),
+                        backoff.clone(),
+                    ))),
+                    Some(Arc::new(fetching::Fetcher::new(
+                        retry_semaphore.clone(),
+                        backoff.clone(),
+                    ))),
+                    Some(Arc::new(fetching::Fetcher::new(
+                        retry_semaphore.clone(),
+                        backoff.clone(),
+                    ))),
+                    Some(Arc::new(fetching::Fetcher::new(
+                        retry_semaphore.clone(),
+                        backoff.clone(),
+                    ))),
+                )
+            };
         let leaf_fetcher = fetching::Fetcher::new(retry_semaphore.clone(), backoff.clone());
+        let leaf_range_fetcher = fetching::Fetcher::new(retry_semaphore.clone(), backoff.clone());
 
         let leaf_only = builder.leaf_only;
+        let sync_status_metrics =
+            SyncStatusMetrics::new(builder.storage.metrics(), builder.sync_status_chunk_size);
 
         Ok(Self {
             storage: Arc::new(builder.storage),
             notifiers: Default::default(),
             provider: Arc::new(builder.provider),
             leaf_fetcher: Arc::new(leaf_fetcher),
+            leaf_range_fetcher: Arc::new(leaf_range_fetcher),
             payload_fetcher,
-            vid_common_fetcher: vid_fetcher,
+            payload_range_fetcher,
+            vid_common_fetcher,
+            vid_common_range_fetcher,
             range_chunk_size: builder.range_chunk_size,
             sync_status_chunk_size: builder.sync_status_chunk_size,
             active_fetch_delay: builder.active_fetch_delay,
@@ -918,6 +993,8 @@ where
             backoff,
             retry_semaphore,
             leaf_only,
+            sync_status_metrics,
+            sync_status: Mutex::new(CachedSyncStatus::new(builder.sync_status_ttl)),
         })
     }
 }
@@ -968,6 +1045,7 @@ where
         let span = tracing::warn_span!("get retry", ?req);
         spawn(
             async move {
+                backoff.reset();
                 let mut delay = backoff.next_backoff().unwrap_or(Duration::from_secs(1));
                 loop {
                     let res = {
@@ -1224,6 +1302,7 @@ where
             let span = tracing::warn_span!("get_chunk retry", ?chunk);
             spawn(
                 async move {
+                    backoff.reset();
                     let mut delay = backoff.next_backoff().unwrap_or(Duration::from_secs(1));
                     loop {
                         let res = {
@@ -1407,52 +1486,68 @@ where
                 for range in sync_status.blocks.ranges {
                     metrics.scanned_blocks.set(range.start);
                     if range.status != SyncStatus::Missing {
+                        metrics.scanned_blocks.set(range.end);
                         continue;
                     }
 
                     tracing::info!(?range, "fetching missing block range");
-                    self.clone()
+
+                    // Break the range into manageable, aligned chunks (which improves cacheability
+                    // for the upstream server).
+                    //
+                    // We iterate in reverse order because leaves are inherently fetched in reverse,
+                    // since we cannot (actively) fetch a leaf until we have the subsequent leaf,
+                    // which tells us what the hash of its parent should be.
+                    for chunk in range_chunks_aligned_rev(
+                        Bound::Included(range.start),
+                        range.end - 1,
+                        chunk_size,
+                    ) {
+                        tracing::info!(?chunk, "fetching missing block chunk");
+
                         // Fetching the payload metadata is enough to trigger an active fetch of the
                         // corresponding leaf and the full block if they are missing.
-                        //
-                        // We iterate in reverse order because leaves are inherently fetched in
-                        // reverse, since we cannot (actively) fetch a leaf until we have the
-                        // subsequent leaf, which tells us what the hash of its parent should be.
-                        .get_range_with_chunk_size_rev::<PayloadMetadata<Types>>(
-                            chunk_size,
-                            Bound::Included(range.start),
-                            range.end - 1,
-                        )
-                        .then(|fetch| async move {fetch.await;})
-                        .collect::<()>()
+                        self.get::<NonEmptyRange<BlockQueryData<Types>>>(RangeRequest {
+                            start: chunk.start as u64,
+                            end: chunk.end as u64,
+                        })
+                        .await
                         .await;
-                    metrics
-                        .missing_blocks
-                        .update((range.start as i64) - (range.end as i64));
+
+                        metrics
+                            .missing_blocks
+                            .update((chunk.start as i64) - (chunk.end as i64));
+                        metrics.scanned_blocks.set(chunk.end);
+                    }
                 }
 
                 // Do the same for VID.
                 for range in sync_status.vid_common.ranges {
                     metrics.scanned_vid.set(range.start);
                     if range.status != SyncStatus::Missing {
+                        metrics.scanned_vid.set(range.end);
                         continue;
                     }
 
                     tracing::info!(?range, "fetching missing VID range");
-                    self.clone()
-                        .get_range_with_chunk_size_rev::<VidCommonMetadata<Types>>(
-                            chunk_size,
-                            Bound::Included(range.start),
-                            range.end - 1,
-                        )
-                        .then(|fetch| async move {
-                            fetch.await;
+                    for chunk in range_chunks_aligned_rev(
+                        Bound::Included(range.start),
+                        range.end - 1,
+                        chunk_size,
+                    ) {
+                        tracing::info!(?chunk, "fetching missing VID chunk");
+                        self.get::<NonEmptyRange<VidCommonQueryData<Types>>>(RangeRequest {
+                            start: chunk.start as u64,
+                            end: chunk.end as u64,
                         })
-                        .collect::<()>()
+                        .await
                         .await;
-                    metrics
-                        .missing_vid
-                        .update((range.start as i64) - (range.end as i64));
+
+                        metrics
+                            .missing_vid
+                            .update((chunk.start as i64) - (chunk.end as i64));
+                        metrics.scanned_vid.set(chunk.end);
+                    }
                 }
 
                 tracing::info!("completed proactive scan, will scan again in {interval:?}");
@@ -1477,6 +1572,16 @@ where
     P: Send + Sync,
 {
     async fn sync_status(&self) -> anyhow::Result<SyncStatusQueryData> {
+        // Check the cache first. This prevents the expensive sync_status queries from being run too
+        // often, and also ensures that if two tasks try to get the sync status at the same time,
+        // only one will actually compute it; the other will find the cache populated by the time it
+        // gets a lock on the mutex.
+        let mut cache = self.sync_status.lock().await;
+        if let Some(sync_status) = cache.try_get() {
+            return Ok(sync_status.clone());
+        }
+        tracing::debug!("updating sync status");
+
         let heights = {
             let mut tx = self
                 .read()
@@ -1499,7 +1604,6 @@ where
             res.blocks.ranges.push(range);
             res.leaves.ranges.push(range);
             res.vid_common.ranges.push(range);
-            res.vid_shares.ranges.push(range);
 
             height + 1
         } else {
@@ -1513,6 +1617,7 @@ where
             self.sync_status_chunk_size,
         ) {
             tracing::debug!(chunk.start, chunk.end, "checking sync status in sub-range");
+            let metrics = self.sync_status_metrics.start_range(&chunk);
             let mut tx = self
                 .read()
                 .await
@@ -1531,9 +1636,10 @@ where
             res.blocks.extend(range_status.blocks);
             res.leaves.extend(range_status.leaves);
             res.vid_common.extend(range_status.vid_common);
-            res.vid_shares.extend(range_status.vid_shares);
+            metrics.end();
         }
 
+        cache.update(res.clone());
         Ok(res)
     }
 }
@@ -1638,38 +1744,11 @@ where
     for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
 {
     /// Store an object and notify anyone waiting on this object that it is available.
-    async fn store_and_notify<T>(&self, obj: T)
+    async fn store_and_notify<T>(&self, obj: &T)
     where
         T: Storable<Types>,
     {
-        let try_store = || async {
-            let mut tx = self.storage.write().await?;
-            obj.clone().store(&mut tx, self.leaf_only).await?;
-            tx.commit().await
-        };
-
-        // Store the object in local storage, so we can avoid fetching it in the future.
-        let mut backoff = self.backoff.clone();
-        backoff.reset();
-        loop {
-            let Err(err) = try_store().await else {
-                break;
-            };
-            // It is unfortunate if this fails, but we can still proceed by notifying with the
-            // object that we fetched, keeping it in memory. Log the error, retry a few times, and
-            // eventually move on.
-            tracing::warn!(
-                "failed to store fetched {} {}: {err:#}",
-                T::name(),
-                obj.height()
-            );
-
-            let Some(delay) = backoff.next_backoff() else {
-                break;
-            };
-            tracing::info!(?delay, "retrying failed operation");
-            sleep(delay).await;
-        }
+        self.store(obj).await;
 
         // Send a notification about the newly received object. It is important that we do this
         // _after_ our attempt to store the object in local storage, otherwise there is a potential
@@ -1696,6 +1775,39 @@ where
         // storage, and eventually some other task will come along, find the object missing from
         // storage, and re-fetch it.
         obj.notify(&self.notifiers).await;
+    }
+
+    async fn store<T>(&self, obj: &T)
+    where
+        T: Storable<Types>,
+    {
+        let try_store = || async {
+            let mut tx = self.storage.write().await?;
+            obj.clone().store(&mut tx, self.leaf_only).await?;
+            tx.commit().await
+        };
+
+        // Store the object in local storage, so we can avoid fetching it in the future.
+        let mut backoff = self.backoff.clone();
+        backoff.reset();
+        loop {
+            let Err(err) = try_store().await else {
+                break;
+            };
+            // It is unfortunate if this fails, but we can still proceed by notifying with the
+            // object that we fetched, keeping it in memory. Log the error, retry a few times, and
+            // eventually move on.
+            tracing::warn!(
+                obj = obj.debug_name(),
+                "failed to store fetched object: {err:#}"
+            );
+
+            let Some(delay) = backoff.next_backoff() else {
+                break;
+            };
+            tracing::info!(?delay, "retrying failed operation");
+            sleep(delay).await;
+        }
     }
 }
 
@@ -1952,16 +2064,22 @@ where
 /// A provider which can be used as a fetcher by the availability service.
 pub trait AvailabilityProvider<Types: NodeType>:
     Provider<Types, request::LeafRequest<Types>>
+    + Provider<Types, request::LeafRangeRequest<Types>>
     + Provider<Types, request::PayloadRequest>
+    + Provider<Types, request::BlockRangeRequest>
     + Provider<Types, request::VidCommonRequest>
+    + Provider<Types, request::VidCommonRangeRequest>
     + Sync
     + 'static
 {
 }
 impl<Types: NodeType, P> AvailabilityProvider<Types> for P where
     P: Provider<Types, request::LeafRequest<Types>>
+        + Provider<Types, request::LeafRangeRequest<Types>>
         + Provider<Types, request::PayloadRequest>
+        + Provider<Types, request::BlockRangeRequest>
         + Provider<Types, request::VidCommonRequest>
+        + Provider<Types, request::VidCommonRangeRequest>
         + Sync
         + 'static
 {
@@ -2062,55 +2180,48 @@ where
 }
 
 /// An object which can be stored in the database.
-trait Storable<Types: NodeType>: HeightIndexed + Clone {
-    /// The name of this type of object, for debugging purposes.
-    fn name() -> &'static str;
+trait Storable<Types: NodeType>: Clone {
+    /// The name of this object, for debugging purposes.
+    fn debug_name(&self) -> String;
 
     /// Notify anyone waiting for this object that it has become available.
     fn notify(&self, notifiers: &Notifiers<Types>) -> impl Send + Future<Output = ()>;
 
     /// Store the object in the local database.
     fn store(
-        self,
-        storage: &mut (impl UpdateAvailabilityStorage<Types> + Send),
+        &self,
+        storage: &mut impl UpdateAvailabilityStorage<Types>,
         leaf_only: bool,
     ) -> impl Send + Future<Output = anyhow::Result<()>>;
 }
 
-impl<Types: NodeType> Storable<Types> for BlockInfo<Types> {
-    fn name() -> &'static str {
-        "block info"
+impl<Types: NodeType> HeightIndexed
+    for (LeafQueryData<Types>, Option<[CertificatePair<Types>; 2]>)
+{
+    fn height(&self) -> u64 {
+        self.0.height()
+    }
+}
+
+impl<Types: NodeType> Storable<Types>
+    for (LeafQueryData<Types>, Option<[CertificatePair<Types>; 2]>)
+{
+    fn debug_name(&self) -> String {
+        format!("leaf {} with QC chain", self.0.height())
     }
 
     async fn notify(&self, notifiers: &Notifiers<Types>) {
-        self.leaf.notify(notifiers).await;
-
-        if let Some(block) = &self.block {
-            block.notify(notifiers).await;
-        }
-        if let Some(vid) = &self.vid_common {
-            vid.notify(notifiers).await;
-        }
+        self.0.notify(notifiers).await;
     }
 
     async fn store(
-        self,
-        storage: &mut (impl UpdateAvailabilityStorage<Types> + Send),
-        leaf_only: bool,
+        &self,
+        storage: &mut impl UpdateAvailabilityStorage<Types>,
+        _leaf_only: bool,
     ) -> anyhow::Result<()> {
         storage
-            .insert_leaf_with_qc_chain(self.leaf, self.qc_chain)
-            .await?;
-
-        if let Some(common) = self.vid_common {
-            (common, self.vid_share).store(storage, leaf_only).await?;
-        }
-
-        if let Some(block) = self.block {
-            block.store(storage, leaf_only).await?;
-        }
-
-        Ok(())
+            .insert_leaf_with_qc_chain(&self.0, self.1.clone())
+            .await
     }
 }
 
@@ -2120,16 +2231,7 @@ where
     R: RangeBounds<usize>,
 {
     // Transform range to explicit start (inclusive) and end (exclusive) bounds.
-    let mut start = match range.start_bound() {
-        Bound::Included(i) => *i,
-        Bound::Excluded(i) => *i + 1,
-        Bound::Unbounded => 0,
-    };
-    let end = match range.end_bound() {
-        Bound::Included(i) => *i + 1,
-        Bound::Excluded(i) => *i,
-        Bound::Unbounded => usize::MAX,
-    };
+    let Range { mut start, end } = range_to_bounds(range);
     std::iter::from_fn(move || {
         let chunk_end = min(start + chunk_size, end);
         if chunk_end == start {
@@ -2142,14 +2244,59 @@ where
     })
 }
 
+/// Break a range into fixed-alignment chunks.
+///
+/// Each chunk is of size `alignment`, and starts on a multiple of `alignment`, with the possible
+/// exception of the first chunk (which may be misaligned and small) and the last (which may be
+/// small).
+#[allow(dead_code)]
+fn range_chunks_aligned<R>(range: R, alignment: usize) -> impl Iterator<Item = Range<usize>>
+where
+    R: RangeBounds<usize>,
+{
+    // Transform range to explicit start (inclusive) and end (exclusive) bounds.
+    let Range { mut start, end } = range_to_bounds(range);
+
+    // If necessary, generate a partial first chunk to force the remaining chunks into alignment.
+    let first = if start.is_multiple_of(alignment) {
+        None
+    } else {
+        // The partial first chunk ends at the next multiple of the alignment, or at the end of the
+        // overall range, whichever comes first.
+        let chunk_end = min(start.next_multiple_of(alignment), end);
+        let chunk = start..chunk_end;
+
+        // Start the series of aligned chunks at the end of the partial first chunk.
+        start = chunk_end;
+        Some(chunk)
+    };
+
+    first.into_iter().chain(range_chunks(start..end, alignment))
+}
+
+/// Transform a range to explicit start (inclusive) and end (exclusive) bounds.
+fn range_to_bounds(range: impl RangeBounds<usize>) -> Range<usize> {
+    let start = match range.start_bound() {
+        Bound::Included(i) => *i,
+        Bound::Excluded(i) => *i + 1,
+        Bound::Unbounded => 0,
+    };
+    let end = match range.end_bound() {
+        Bound::Included(i) => *i + 1,
+        Bound::Excluded(i) => *i,
+        Bound::Unbounded => usize::MAX,
+    };
+    Range { start, end }
+}
+
 /// Break a range into fixed-size chunks, starting from the end and moving towards the start.
 ///
 /// While the chunks are yielded in reverse order, from `end` to `start`, each individual chunk is
 /// in the usual ascending order. That is, the first chunk ends with `end` and the last chunk starts
 /// with `start`.
 ///
-/// Note that unlike [`range_chunks_rev`], which accepts any range and yields an infinite iterator
-/// if the range has no upper bound, this function requires there to be a defined upper bound,
+/// Note that unlike [`range_chunks`], which accepts any range and yields an infinite iterator if
+/// the range has no upper bound, this function requires there to be a defined upper bound,
 /// otherwise we don't know where the reversed iterator should _start_. The `end` bound given here
 /// is inclusive; i.e. the end of the first chunk yielded by the stream will be exactly `end`.
 fn range_chunks_rev(
@@ -2176,6 +2323,56 @@ fn range_chunks_rev(
         end = chunk_start;
         Some(chunk)
     })
+}
+
+/// Break a range into fixed-alignment chunks, starting from the end and moving towards the start.
+///
+/// Each chunk is of size `alignment`, and starts on a multiple of `alignment` (that is, the lower
+/// bound an _exclusive_ upper bound of each chunk are multiples of `alignment`), with the possible
+/// exception of the first chunk (the last chunk in numerical order, which may be small) and the
+/// last (which may be misaligned and small).
+///
+/// While the chunks are yielded in reverse order, from `end` to `start`, each individual chunk is
+/// in the usual ascending order. That is, the first chunk ends with `end` and the last chunk starts
+/// with `start`.
+///
+/// Note that unlike [`range_chunks_aligned`], which accepts any range and yields an infinite
+/// iterator if the range has no upper bound, this function requires there to be a defined upper
+/// bound, otherwise we don't know where the reversed iterator should _start_. The `end` bound given
+/// here is inclusive; i.e. the end of the first chunk yielded by the stream will be exactly `end`.
+fn range_chunks_aligned_rev(
+    start: Bound<usize>,
+    end: usize,
+    alignment: usize,
+) -> impl Iterator<Item = Range<usize>> {
+    // Transform the start bound to be inclusive.
+    let start = match start {
+        Bound::Included(i) => i,
+        Bound::Excluded(i) => i + 1,
+        Bound::Unbounded => 0,
+    };
+    // Transform the end bound to be exclusive.
+    let mut end = end + 1;
+
+    // If necessary, generate a partial first chunk to force the remaining chunks into alignment.
+    let first = if end.is_multiple_of(alignment) {
+        None
+    } else {
+        // The partial first chunk starts at the previous multiple of the alignment, or at the start
+        // of the overall range, whichever comes first.
+        let next_multiple = end.next_multiple_of(alignment);
+        let prev_multiple = next_multiple - alignment;
+        let chunk_start = max(prev_multiple, start);
+        let chunk = chunk_start..end;
+
+        // Start the reverse series of aligned chunks at the start of the partial first chunk.
+        end = chunk_start;
+        Some(chunk)
+    };
+
+    first
+        .into_iter()
+        .chain(range_chunks_rev(Bound::Included(start), end - 1, alignment))
 }
 
 trait ResultExt<T, E> {
@@ -2243,6 +2440,98 @@ impl AggregatorMetrics {
         Self {
             height: group.create_gauge("height".into(), None),
         }
+    }
+}
+
+#[derive(Debug)]
+struct SyncStatusMetrics {
+    current_range_start: Box<dyn Gauge>,
+    current_range_end: Box<dyn Gauge>,
+    current_start_time: Box<dyn Gauge>,
+    avg_rate: Box<dyn Histogram>,
+    ranges_scanned: Box<dyn Counter>,
+    running: Box<dyn Gauge>,
+}
+
+impl SyncStatusMetrics {
+    fn new(metrics: &PrometheusMetrics, size: usize) -> Self {
+        let group = metrics.subgroup("sync_status".into());
+        group.create_gauge("range_size".into(), None).set(size);
+
+        Self {
+            current_range_start: group.create_gauge("current_range_start".into(), None),
+            current_range_end: group.create_gauge("current_range_end".into(), None),
+            current_start_time: group
+                .create_gauge("current_range_start_time".into(), Some("s".into())),
+            avg_rate: group
+                .create_histogram("avg_time_per_block_scanned".into(), Some("ms".into())),
+            ranges_scanned: group.create_counter("ranges_scanned".into(), None),
+            running: group.create_gauge("running".into(), None),
+        }
+    }
+
+    fn start_range(&self, range: &Range<usize>) -> SyncStatusRangeMetrics<'_> {
+        let start = Utc::now();
+        self.current_range_start.set(range.start);
+        self.current_range_end.set(range.end);
+        self.current_start_time.set(start.timestamp() as usize);
+        self.running.set(1);
+        SyncStatusRangeMetrics {
+            size: range.end - range.start,
+            start,
+            metrics: self,
+        }
+    }
+}
+
+#[must_use]
+#[derive(Debug)]
+struct SyncStatusRangeMetrics<'a> {
+    size: usize,
+    start: DateTime<Utc>,
+    metrics: &'a SyncStatusMetrics,
+}
+
+impl<'a> SyncStatusRangeMetrics<'a> {
+    fn end(self) {
+        let elapsed = Utc::now() - self.start;
+        self.metrics
+            .avg_rate
+            .add_point((elapsed.num_milliseconds() as f64) / (self.size as f64));
+        self.metrics.ranges_scanned.add(1);
+        self.metrics.running.set(0);
+    }
+}
+
+#[derive(Debug)]
+struct CachedSyncStatus {
+    last_updated: Instant,
+    ttl: Duration,
+    cached: Option<SyncStatusQueryData>,
+}
+
+impl CachedSyncStatus {
+    fn new(ttl: Duration) -> Self {
+        Self {
+            last_updated: Instant::now(),
+            ttl,
+            cached: None,
+        }
+    }
+
+    /// Return the cached sync status, if present and fresh.
+    fn try_get(&self) -> Option<&SyncStatusQueryData> {
+        if self.last_updated.elapsed() > self.ttl {
+            // Cached value is stale.
+            return None;
+        }
+        self.cached.as_ref()
+    }
+
+    /// Refresh the cache with an updated value.
+    fn update(&mut self, value: SyncStatusQueryData) {
+        self.last_updated = Instant::now();
+        self.cached = Some(value);
     }
 }
 
@@ -2347,6 +2636,32 @@ mod test {
     }
 
     #[test]
+    fn test_range_chunks_aligned() {
+        #![allow(clippy::single_range_in_vec_init)]
+
+        // Aligned first chunk, partial last chunk.
+        assert_eq!(
+            range_chunks_aligned(2..5, 2).collect::<Vec<_>>(),
+            [2..4, 4..5]
+        );
+
+        // Misaligned first chunk, complete last chunk.
+        assert_eq!(
+            range_chunks_aligned(1..4, 2).collect::<Vec<_>>(),
+            [1..2, 2..4]
+        );
+
+        // Incomplete chunk.
+        assert_eq!(range_chunks_aligned(1..3, 10).collect::<Vec<_>>(), [1..3]);
+
+        // Unbounded.
+        assert_eq!(
+            range_chunks_aligned(1.., 2).take(5).collect::<Vec<_>>(),
+            [1..2, 2..4, 4..6, 6..8, 8..10]
+        );
+    }
+
+    #[test]
     fn test_range_chunks_rev() {
         // Inclusive bounds, partial last chunk.
         assert_eq!(
@@ -2373,6 +2688,29 @@ mod test {
         );
     }
 
+    #[test]
+    fn test_range_chunks_aligned_rev() {
+        #![allow(clippy::single_range_in_vec_init)]
+
+        // Aligned first chunk, partial last chunk.
+        assert_eq!(
+            range_chunks_aligned_rev(Bound::Included(1), 3, 2).collect::<Vec<_>>(),
+            [2..4, 1..2]
+        );
+
+        // Misaligned first chunk, complete last chunk.
+        assert_eq!(
+            range_chunks_aligned_rev(Bound::Included(0), 2, 2).collect::<Vec<_>>(),
+            [2..3, 0..2]
+        );
+
+        // Incomplete chunk.
+        assert_eq!(
+            range_chunks_aligned_rev(Bound::Excluded(0), 3, 10).collect::<Vec<_>>(),
+            [1..4]
+        );
+    }
+
     async fn test_sync_status(chunk_size: usize, present_ranges: &[(usize, usize)]) {
         let block_height = present_ranges.last().unwrap().1;
         let storage = TmpDb::init().await;
@@ -2381,6 +2719,7 @@ mod test {
             .unwrap();
         let ds = MockSqlDataSource::builder(db, NoFetching)
             .with_sync_status_chunk_size(chunk_size)
+            .with_sync_status_ttl(Duration::ZERO)
             .build()
             .await
             .unwrap();
@@ -2405,9 +2744,9 @@ mod test {
             let mut tx = ds.write().await.unwrap();
 
             for &(start, end) in present_ranges {
-                for leaf in leaves[start..end].iter() {
+                for leaf in &leaves[start..end] {
                     tracing::info!(height = leaf.height(), "insert leaf");
-                    tx.insert_leaf(leaf.clone()).await.unwrap();
+                    tx.insert_leaf(leaf).await.unwrap();
                 }
             }
 
@@ -2491,5 +2830,71 @@ mod test {
     #[test_log::test]
     async fn test_sync_status_multiple_chunks_missing_range_overlapping_chunk() {
         test_sync_status(5, &[(0, 1), (4, 5)]).await;
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_load_range_incomplete() {
+        let storage = TmpDb::init().await;
+        let db = SqlStorage::connect(storage.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+        {
+            let mut tx = db.write().await.unwrap();
+            tx.insert_leaf(
+                &LeafQueryData::<MockTypes>::genesis(
+                    &Default::default(),
+                    &Default::default(),
+                    TEST_VERSIONS.test,
+                )
+                .await,
+            )
+            .await
+            .unwrap();
+            tx.insert_block(
+                &BlockQueryData::<MockTypes>::genesis(
+                    &Default::default(),
+                    &Default::default(),
+                    TEST_VERSIONS.test.base,
+                )
+                .await,
+            )
+            .await
+            .unwrap();
+            tx.insert_vid(
+                &VidCommonQueryData::<MockTypes>::genesis(
+                    &Default::default(),
+                    &Default::default(),
+                    TEST_VERSIONS.test.base,
+                )
+                .await,
+                None,
+            )
+            .await
+            .unwrap();
+            tx.commit().await.unwrap();
+        }
+
+        let mut tx = db.read().await.unwrap();
+        let req = RangeRequest { start: 0, end: 100 };
+
+        let err = <NonEmptyRange<BlockQueryData<MockTypes>>>::load(&mut tx, req)
+            .await
+            .unwrap_err();
+        tracing::info!("loading partial block range failed as expected: {err:#}");
+        assert!(matches!(err, QueryError::Missing));
+
+        let err =
+            <NonEmptyRange<LeafQueryData<MockTypes>> as Fetchable<MockTypes>>::load(&mut tx, req)
+                .await
+                .unwrap_err();
+        tracing::info!("loading partial leaf range failed as expected: {err:#}");
+        assert!(matches!(err, QueryError::Missing));
+
+        let err = <NonEmptyRange<VidCommonQueryData<MockTypes>>>::load(&mut tx, req)
+            .await
+            .unwrap_err();
+        tracing::info!("loading partial VID common range failed as expected: {err:#}");
+        assert!(matches!(err, QueryError::Missing));
     }
 }

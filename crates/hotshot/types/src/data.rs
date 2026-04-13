@@ -17,7 +17,6 @@ use std::{
     time::Duration,
 };
 
-use async_lock::RwLock;
 use bincode::Options;
 use committable::{Commitment, CommitmentBoundsArkless, Committable, RawCommitmentBuilder};
 use hotshot_utils::anytrace::*;
@@ -41,6 +40,7 @@ use crate::{
         ViewSyncFinalizeCertificate2,
     },
     simple_vote::{HasEpoch, QuorumData, QuorumData2, UpgradeProposalData, VersionedVoteData},
+    stake_table::StakeTableEntries,
     traits::{
         BlockPayload,
         block_contents::{BlockHeader, BuilderFee, EncodeBytes, TestableBlock},
@@ -155,6 +155,21 @@ impl Committable for EpochNumber {
 }
 
 impl_u64_wrapper!(EpochNumber, 1u64);
+
+#[derive(
+    Copy, Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
+#[serde(transparent)]
+pub struct BlockNumber(u64);
+
+impl Committable for BlockNumber {
+    fn commit(&self) -> Commitment<Self> {
+        let builder = RawCommitmentBuilder::new("BlockNumber Commitment");
+        builder.u64(self.0).finalize()
+    }
+}
+
+impl_u64_wrapper!(BlockNumber, 0u64);
 
 /// A proposal to start providing data availability for a block.
 #[derive(derive_more::Debug, Serialize, Deserialize, Clone, Eq, PartialEq, Hash)]
@@ -431,6 +446,9 @@ impl<'a> VidCommonRef<'a> {
             (Self::V0(common), VidCommitment::V0(comm)) => {
                 ADVZScheme::is_consistent(comm, common).is_ok()
             },
+            // We don't check consistency here because for V1 the VidCommon is simply the VidParam,
+            // which doesn't contain any information about the payload, and has nothing to do with
+            // the commitment. The meaningful checks are in VID share verification.
             (Self::V1(_), VidCommitment::V1(_)) => true,
             (Self::V2(common), VidCommitment::V2(comm)) => {
                 AvidmGf2Scheme::is_consistent(comm, common)
@@ -572,8 +590,8 @@ impl<TYPES: NodeType> VidDisperse<TYPES> {
         metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
         upgrade_lock: &UpgradeLock<TYPES>,
     ) -> Result<VidDisperseAndDuration<TYPES>> {
-        let epochs_enabled = upgrade_lock.epochs_enabled(view).await;
-        let upgraded_vid2 = upgrade_lock.upgraded_vid2(view).await;
+        let epochs_enabled = upgrade_lock.epochs_enabled(view);
+        let upgraded_vid2 = upgrade_lock.upgraded_vid2(view);
         if upgraded_vid2 {
             VidDisperse2::calculate_vid_disperse(
                 payload,
@@ -984,6 +1002,43 @@ pub struct QuorumProposal2<TYPES: NodeType> {
     pub state_cert: Option<LightClientStateUpdateCertificateV2<TYPES>>,
 }
 
+impl<TYPES: NodeType> QuorumProposal2<TYPES> {
+    pub async fn validate_certs(
+        &self,
+        membership: EpochMembershipCoordinator<TYPES>,
+        upgrade_lock: &UpgradeLock<TYPES>,
+    ) -> Result<()> {
+        let stake_table = membership.membership_for_epoch(self.epoch).await?;
+        let entries = StakeTableEntries::<TYPES>::from(stake_table.stake_table().await).0;
+        let threshold = stake_table.success_threshold().await;
+        self.justify_qc
+            .is_valid_cert(&entries, threshold, upgrade_lock)?;
+        let view_change_view = match &self.view_change_evidence {
+            Some(ViewChangeEvidence2::Timeout(timeout_cert)) => {
+                timeout_cert.is_valid_cert(&entries, threshold, upgrade_lock)?;
+                Some(timeout_cert.view_number() + 1)
+            },
+            Some(ViewChangeEvidence2::ViewSync(view_sync_cert)) => {
+                view_sync_cert.is_valid_cert(&entries, threshold, upgrade_lock)?;
+                Some(view_sync_cert.view_number())
+            },
+            _ => None,
+        };
+        if !(self.justify_qc.view_number() + 1 == self.view_number()
+            || view_change_view == Some(self.view_number()))
+        {
+            bail!("Invalid view change evidence");
+        }
+        Ok(())
+    }
+    pub fn is_validate_block_height(&self) -> bool {
+        self.justify_qc
+            .data()
+            .block_number
+            .is_some_and(|bn| bn + 1 == self.block_header.block_number())
+    }
+}
+
 /// Legacy version of `QuorumProposal2` corresponding to consensus protocol version V3.
 ///
 /// `QuorumProposal2` state_cert field was updated to use new
@@ -1099,7 +1154,7 @@ impl<TYPES: NodeType> QuorumProposal2<TYPES> {
         epoch_height: u64,
     ) -> Result<()> {
         let calculated_epoch = option_epoch_from_block_number(
-            upgrade_lock.epochs_enabled(self.view_number()).await,
+            upgrade_lock.epochs_enabled(self.view_number()),
             self.block_header.block_number(),
             epoch_height,
         );
@@ -1616,11 +1671,7 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
     /// # Errors
     /// Returns an error if the certificates are not identical, or that when we no longer see a
     /// cert, it's for the right reason.
-    pub async fn extends_upgrade(
-        &self,
-        parent: &Self,
-        decided_upgrade_certificate: &Arc<RwLock<Option<UpgradeCertificate<TYPES>>>>,
-    ) -> Result<()> {
+    pub fn extends_upgrade(&self, parent: &Self, upgrade: &UpgradeLock<TYPES>) -> Result<()> {
         match (self.upgrade_certificate(), parent.upgrade_certificate()) {
             // Easiest cases are:
             //   - no upgrade certificate on either: this is the most common case, and is always fine.
@@ -1630,7 +1681,7 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
             //    - no longer care because we have passed new_version_first_view, or
             //    - no longer care because we have passed `decide_by` without deciding the certificate.
             (None, Some(parent_cert)) => {
-                let decided_upgrade_certificate_read = decided_upgrade_certificate.read().await;
+                let decided_upgrade_certificate_read = upgrade.decided_upgrade_cert();
                 ensure!(
                     self.view_number() > parent_cert.data.new_version_first_view
                         || (self.view_number() > parent_cert.data.decide_by
@@ -1817,8 +1868,7 @@ impl<TYPES: NodeType> QuorumCertificate<TYPES> {
         };
 
         let versioned_data =
-            VersionedVoteData::<_, _>::new_infallible(data.clone(), genesis_view, &upgrade_lock)
-                .await;
+            VersionedVoteData::<_, _>::new_infallible(data.clone(), genesis_view, &upgrade_lock);
 
         let bytes: [u8; 32] = versioned_data.commit().into();
 
@@ -1846,7 +1896,7 @@ impl<TYPES: NodeType> QuorumCertificate2<TYPES> {
         let genesis_view = ViewNumber::genesis();
 
         let genesis_leaf = Leaf2::genesis(validated_state, instance_state, upgrade.base).await;
-        let block_number = if upgrade_lock.epochs_enabled(genesis_view).await {
+        let block_number = if upgrade_lock.epochs_enabled(genesis_view) {
             Some(genesis_leaf.height())
         } else {
             None
@@ -1858,8 +1908,7 @@ impl<TYPES: NodeType> QuorumCertificate2<TYPES> {
         };
 
         let versioned_data =
-            VersionedVoteData::<_, _>::new_infallible(data.clone(), genesis_view, &upgrade_lock)
-                .await;
+            VersionedVoteData::<_, _>::new_infallible(data.clone(), genesis_view, &upgrade_lock);
 
         let bytes: [u8; 32] = versioned_data.commit().into();
 
@@ -2003,11 +2052,7 @@ impl<TYPES: NodeType> Leaf<TYPES> {
     /// # Errors
     /// Returns an error if the certificates are not identical, or that when we no longer see a
     /// cert, it's for the right reason.
-    pub async fn extends_upgrade(
-        &self,
-        parent: &Self,
-        decided_upgrade_certificate: &Arc<RwLock<Option<UpgradeCertificate<TYPES>>>>,
-    ) -> Result<()> {
+    pub fn extends_upgrade(&self, parent: &Self, upgrade: &UpgradeLock<TYPES>) -> Result<()> {
         match (self.upgrade_certificate(), parent.upgrade_certificate()) {
             // Easiest cases are:
             //   - no upgrade certificate on either: this is the most common case, and is always fine.
@@ -2017,7 +2062,7 @@ impl<TYPES: NodeType> Leaf<TYPES> {
             //    - no longer care because we have passed new_version_first_view, or
             //    - no longer care because we have passed `decide_by` without deciding the certificate.
             (None, Some(parent_cert)) => {
-                let decided_upgrade_certificate_read = decided_upgrade_certificate.read().await;
+                let decided_upgrade_certificate_read = upgrade.decided_upgrade_cert();
                 ensure!(
                     self.view_number() > parent_cert.data.new_version_first_view
                         || (self.view_number() > parent_cert.data.decide_by

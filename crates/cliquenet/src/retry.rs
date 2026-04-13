@@ -3,6 +3,7 @@ use std::{
     convert::Infallible,
     fmt::{self, Display},
     hash::Hash,
+    result::Result as StdResult,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -10,8 +11,10 @@ use std::{
 };
 
 use bytes::{Bytes, BytesMut};
+use hotshot_types::addr::NetAddr;
 use nohash_hasher::IntMap;
 use parking_lot::Mutex;
+use scopeguard::{ScopeGuard, guard};
 use tokio::{
     spawn,
     sync::mpsc::{Sender, error::TrySendError},
@@ -21,7 +24,7 @@ use tokio::{
 use tracing::warn;
 
 use crate::{
-    Address, Id, NUM_DELAYS, NetConf, Network, NetworkError, PublicKey, Role, net::Command,
+    Id, NUM_DELAYS, NetConf, Network, NetworkDown, NetworkError, PublicKey, Role, net::Command,
 };
 
 type Result<T> = std::result::Result<T, NetworkError>;
@@ -49,7 +52,6 @@ pub struct Retry<K> {
 
 #[derive(Debug)]
 struct Inner<K> {
-    this: K,
     net: Network<K>,
     sender: Sender<Command<K>>,
     id: AtomicU64,
@@ -105,7 +107,7 @@ struct Trailer {
 }
 
 /// Data we have received but could not acknowledge yet.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Pending<K> {
     src: K,
     data: Bytes,
@@ -130,7 +132,6 @@ where
         let retry = spawn(retry(buffer.clone(), net.sender(), delays));
         Ok(Self {
             inner: Arc::new(Inner {
-                this: net.public_key().clone(),
                 sender: net.sender(),
                 net,
                 buffer,
@@ -139,6 +140,15 @@ where
                 pending: Mutex::new(BTreeMap::new()),
             }),
         })
+    }
+
+    pub async fn close(&self) {
+        self.inner.retry.abort();
+        self.inner.net.close().await;
+    }
+
+    pub fn parties(&self, r: Option<Role>) -> Vec<K> {
+        self.inner.net.parties(r)
     }
 
     pub async fn broadcast<B>(&self, b: B, data: Vec<u8>) -> Result<Id>
@@ -162,33 +172,43 @@ where
         self.send(b.into(), Target::Single(to), data).await
     }
 
-    pub async fn add(&self, peers: Vec<(K, PublicKey, Address)>) -> Result<()> {
-        self.inner.net.add(peers).await
+    pub async fn add(
+        &self,
+        r: Role,
+        peers: Vec<(K, PublicKey, NetAddr)>,
+    ) -> StdResult<(), NetworkDown> {
+        self.inner.net.add(r, peers).await
     }
 
-    pub async fn remove(&self, peers: Vec<K>) -> Result<()> {
+    pub async fn remove(&self, peers: Vec<K>) -> StdResult<(), NetworkDown> {
         self.inner.net.remove(peers).await
     }
 
-    pub async fn assign(&self, r: Role, peers: Vec<K>) -> Result<()> {
+    pub async fn assign(&self, r: Role, peers: Vec<K>) -> StdResult<(), NetworkDown> {
         self.inner.net.assign(r, peers).await
     }
 
     pub async fn receive(&self) -> Result<(K, Bytes)> {
-        let pending = self.inner.pending.lock().pop_first();
-        if let Some((_, Pending { src, data, trailer })) = pending {
+        let first_entry = self.inner.pending.lock().pop_first();
+        if let Some((key, val)) = first_entry {
+            let pending = &self.inner.pending;
+            // Put the pending value back if the future is dropped:
+            let guard = guard((key, val.clone()), |(k, v)| {
+                pending.lock().insert(k, v);
+            });
             self.inner
                 .sender
-                .send(Command::Unicast(src.clone(), None, trailer.clone()))
+                .send(Command::Unicast(val.src.clone(), None, val.trailer.clone()))
                 .await
                 .map_err(|_| NetworkError::ChannelClosed)?;
-            return Ok((src, data));
+            let _ = ScopeGuard::into_inner(guard);
+            return Ok((val.src, val.data));
         }
         loop {
             let (src, mut bytes) = self.inner.net.receive().await?;
 
             let Some((trailer, trailer_bytes)) = Trailer::from_bytes(&mut bytes) else {
-                warn!(node = %self.inner.this, "invalid trailer");
+                warn!(node = %self.inner.net.label, "invalid trailer");
                 continue;
             };
 
@@ -261,6 +281,17 @@ where
         msg.extend_from_slice(&trailer.to_bytes());
         let msg = msg.freeze();
 
+        if msg.len() > self.inner.net.max_message_size {
+            warn!(
+                name = %self.inner.net.name,
+                node = %self.inner.net.label,
+                len  = %msg.len(),
+                max  = %self.inner.net.max_message_size,
+                "message too large to send"
+            );
+            return Err(NetworkError::MessageTooLarge);
+        }
+
         let now = Instant::now();
 
         let rem = match to {
@@ -286,7 +317,7 @@ where
                     .send(Command::Broadcast(Some(id), msg.clone()))
                     .await
                     .map_err(|_| NetworkError::ChannelClosed)?;
-                self.inner.net.parties(Role::Active)
+                self.inner.net.parties(Some(Role::Active))
             },
         };
 
@@ -387,24 +418,32 @@ impl fmt::Display for Bucket {
     }
 }
 
+// Besides the actual meta information, the last byte of the trailer encodes its
+// total length (including the length byte itself).
 impl Trailer {
-    const SIZE: usize = 16;
+    const SIZE: usize = 17;
 
     fn from_bytes(bytes: &mut Bytes) -> Option<(Self, Bytes)> {
-        if bytes.len() < Self::SIZE {
+        let len: usize = bytes.last().copied()?.into();
+        if len < Self::SIZE || bytes.len() < len {
             return None;
         }
-        let slice = bytes.split_off(bytes.len() - Self::SIZE);
-        let both = u128::from_be_bytes(slice[..].try_into().ok()?);
+        let slice = bytes.split_off(bytes.len() - len);
+        let id = u64::from_be_bytes(slice[len - 9..len - 1].try_into().ok()?);
+        let bucket = u64::from_be_bytes(slice[len - 17..len - 9].try_into().ok()?);
         let this = Self {
-            bucket: ((both >> 64) as u64).into(),
-            id: (both as u64).into(),
+            bucket: bucket.into(),
+            id: id.into(),
         };
         Some((this, slice))
     }
 
     fn to_bytes(self) -> [u8; Self::SIZE] {
-        (u128::from(self.bucket.0) << 64 | u128::from(self.id.0)).to_be_bytes()
+        let mut buf = [0; Self::SIZE];
+        buf[..8].copy_from_slice(&self.bucket.0.to_be_bytes()[..]);
+        buf[8..16].copy_from_slice(&self.id.0.to_be_bytes()[..]);
+        buf[16] = Self::SIZE as u8;
+        buf
     }
 }
 

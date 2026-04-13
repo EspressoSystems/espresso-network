@@ -40,6 +40,7 @@ mod tests {
                 PeerConfig::<TestTypes> {
                     stake_table_entry: pub_key.stake_table_entry(U256::from(1u64)),
                     state_ver_key: state_key,
+                    connect_info: None,
                 }
             })
             .collect();
@@ -297,11 +298,11 @@ mod tests {
     #[test]
     fn test_epoch_transition_preserves_history() {
         let (stake_table, threshold) = make_stake_table(5);
-        let mut consensus = make_test_consensus(stake_table.clone(), threshold, None);
+        let mut consensus = make_test_consensus(stake_table.clone(), threshold, Some(EpochNumber::new(1)));
 
         // Apply 3 QCs in epoch None; nodes [0,1,2] sign each.
         for view in 1u64..=3 {
-            let qc = make_qc(&stake_table, view, &[0, 1, 2], None);
+            let qc = make_qc(&stake_table, view, &[0, 1, 2], Some(EpochNumber::new(1)));
             consensus.update_vote_participation(qc).unwrap();
         }
 
@@ -309,7 +310,7 @@ mod tests {
         let result = consensus.update_vote_participation_epoch(
             stake_table.clone(),
             threshold,
-            Some(EpochNumber::new(1)),
+            Some(EpochNumber::new(2)),
         );
         assert!(result.is_ok(), "epoch transition should succeed");
 
@@ -317,7 +318,7 @@ mod tests {
 
         // Previous epoch: nodes 0,1,2 each signed 3 of 3 views → 1.0;
         // nodes 3,4 signed 0 of 3 views → 0.0.
-        let prev = consensus.vote_participation(None);
+        let prev = consensus.vote_participation(Some(EpochNumber::new(1)));
         for i in 0..3usize {
             let ratio = prev[&node_keys[i]];
             assert!(

@@ -44,13 +44,13 @@ use tokio::{
 };
 use tracing::{Instrument, info_span};
 use url::Url;
-use versions::{Upgrade, VERSION_0_1};
+use versions::{MIN_SUPPORTED_VERSION, Upgrade};
 
 use super::mocks::{MockMembership, MockNodeImpl, MockTransaction, MockTypes};
 use crate::{
     SignatureKey,
     availability::{AvailabilityDataSource, UpdateAvailabilityData},
-    data_source::{FileSystemDataSource, SqlDataSource, VersionedDataSource},
+    data_source::{FileSystemDataSource, SqlDataSource, VersionedDataSource, fetching::Builder},
     fetching::provider::NoFetching,
     node::NodeDataSource,
     status::{StatusDataSource, UpdateStatusData},
@@ -104,6 +104,7 @@ impl<D: DataSourceLifeCycle + UpdateStatusData> MockNetwork<D> {
             .map(|id| PeerConfig {
                 stake_table_entry: pub_keys[id].stake_table_entry(U256::from(stake)),
                 state_ver_key: state_key_pairs[id].ver_key(),
+                connect_info: None,
             })
             .collect::<Vec<_>>();
 
@@ -154,9 +155,9 @@ impl<D: DataSourceLifeCycle + UpdateStatusData> MockNetwork<D> {
             stake_table_capacity: hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY,
             drb_difficulty: DIFFICULTY_LEVEL,
             drb_upgrade_difficulty: DIFFICULTY_LEVEL,
-            upgrade: Upgrade::trivial(VERSION_0_1),
         };
         update_config(&mut config);
+        let upgrade = Upgrade::trivial(MIN_SUPPORTED_VERSION);
 
         let nodes = join_all(
             priv_keys
@@ -215,7 +216,7 @@ impl<D: DataSourceLifeCycle + UpdateStatusData> MockNetwork<D> {
                             0,
                             0,
                             vec![],
-                            config.upgrade,
+                            upgrade,
                         )
                         .await
                         .unwrap();
@@ -226,6 +227,7 @@ impl<D: DataSourceLifeCycle + UpdateStatusData> MockNetwork<D> {
                             state_priv_keys[node_id].clone(),
                             node_id as u64,
                             config,
+                            upgrade,
                             memberships,
                             network,
                             init,
@@ -355,12 +357,27 @@ pub trait DataSourceLifeCycle: Clone + Send + Sync + Sized + 'static {
     /// alive as long as the related data sources are open.
     type Storage: Send + Sync;
 
+    /// Type parameter for builder.
+    type S;
+
+    /// Type parameter for builder.
+    type P;
+
     async fn create(node_id: usize) -> Self::Storage;
-    async fn connect(storage: &Self::Storage) -> Self;
+    async fn build(
+        storage: &Self::Storage,
+        opt: impl Send
+        + FnOnce(Builder<MockTypes, Self::S, Self::P>) -> Builder<MockTypes, Self::S, Self::P>,
+    ) -> Self;
     async fn reset(storage: &Self::Storage) -> Self;
     async fn handle_event(&self, event: &Event<MockTypes>);
-    async fn leaf_only_ds(_storage: &Self::Storage) -> Self {
-        panic!("not supported")
+
+    async fn connect(storage: &Self::Storage) -> Self {
+        Self::build(storage, |builder| builder).await
+    }
+
+    async fn leaf_only_ds(storage: &Self::Storage) -> Self {
+        Self::build(storage, |builder| builder.leaf_only()).await
     }
 
     /// Setup runs after setting up the network but before starting a test.

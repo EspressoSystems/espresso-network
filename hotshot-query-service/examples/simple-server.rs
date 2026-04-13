@@ -165,6 +165,7 @@ async fn init_consensus(
         .map(|(pub_key, state_key_pair)| PeerConfig::<MockTypes> {
             stake_table_entry: pub_key.stake_table_entry(U256::from(1)),
             state_ver_key: state_key_pair.ver_key(),
+            connect_info: None,
         })
         .collect::<Vec<_>>();
 
@@ -218,7 +219,6 @@ async fn init_consensus(
         stake_table_capacity: hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY,
         drb_difficulty: 0,
         drb_upgrade_difficulty: 0,
-        upgrade: MOCK_UPGRADE,
     };
 
     let nodes = join_all(priv_keys.into_iter().zip(data_sources).enumerate().map(
@@ -263,6 +263,7 @@ async fn init_consensus(
                     state_private_keys[node_id].clone(),
                     node_id as u64,
                     config,
+                    MOCK_UPGRADE,
                     coordinator,
                     network,
                     HotShotInitializer::from_genesis(

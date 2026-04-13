@@ -106,7 +106,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static> SystemContextHandl
             kind: MessageKind::<TYPES>::External(msg),
         };
         let view: ViewNumber = message.view_number();
-        let serialized_message = self.hotshot.upgrade_lock.serialize(&message).await?;
+        let serialized_message = self.hotshot.upgrade_lock.serialize(&message)?;
 
         match recipients {
             RecipientList::Broadcast => {

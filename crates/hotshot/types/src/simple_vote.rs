@@ -32,7 +32,7 @@ use crate::{
 };
 
 /// Marker that data should use the quorum cert type
-pub(crate) trait QuorumMarker {}
+pub trait QuorumMarker {}
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 /// Data used for a yes vote.
@@ -170,6 +170,64 @@ pub struct UpgradeData2 {
     pub epoch: Option<EpochNumber>,
 }
 
+/// Data used for a yes vote.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
+#[serde(bound(deserialize = ""))]
+pub struct Vote2Data<T: NodeType> {
+    pub leaf_commit: Commitment<Leaf2<T>>,
+    pub epoch: EpochNumber,
+    pub block_number: u64,
+}
+
+/// Data used .
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
+#[serde(bound(deserialize = ""))]
+pub struct CheckpointData {
+    pub view: ViewNumber,
+    pub epoch: EpochNumber,
+}
+
+impl Committable for CheckpointData {
+    fn commit(&self) -> Commitment<Self> {
+        committable::RawCommitmentBuilder::new("CheckpointData")
+            .u64(*self.view)
+            .u64(*self.epoch)
+            .finalize()
+    }
+}
+
+impl HasViewNumber for CheckpointData {
+    fn view_number(&self) -> ViewNumber {
+        self.view
+    }
+}
+
+impl HasEpoch for CheckpointData {
+    fn epoch(&self) -> Option<EpochNumber> {
+        Some(self.epoch)
+    }
+}
+
+impl QuorumMarker for CheckpointData {}
+impl<T: NodeType> QuorumMarker for Vote2Data<T> {}
+
+impl<T: NodeType> HasEpoch for Vote2Data<T> {
+    fn epoch(&self) -> Option<EpochNumber> {
+        Some(self.epoch)
+    }
+}
+
+impl<T: NodeType> Committable for Vote2Data<T> {
+    fn commit(&self) -> Commitment<Self> {
+        committable::RawCommitmentBuilder::new("Vote2Data")
+            .var_size_bytes(self.leaf_commit.as_ref())
+            .u64(*self.epoch)
+            .u64(self.block_number)
+            .constant_str("Vote2")
+            .finalize()
+    }
+}
+
 /// Marker trait for data or commitments that can be voted on.
 /// Only structs in this file can implement voteable.  This is enforced with the `Sealed` trait
 /// Sealing this trait prevents creating new vote types outside this file.
@@ -256,16 +314,14 @@ impl<TYPES: NodeType, DATA: Voteable<TYPES> + 'static> SimpleVote<TYPES, DATA> {
     /// Creates and signs a simple vote
     /// # Errors
     /// If we are unable to sign the data
-    pub async fn create_signed_vote(
+    pub fn create_signed_vote(
         data: DATA,
         view: ViewNumber,
         pub_key: &TYPES::SignatureKey,
         private_key: &<TYPES::SignatureKey as SignatureKey>::PrivateKey,
         upgrade_lock: &UpgradeLock<TYPES>,
     ) -> Result<Self> {
-        let commit = VersionedVoteData::new(data.clone(), view, upgrade_lock)
-            .await?
-            .commit();
+        let commit = VersionedVoteData::new(data.clone(), view, upgrade_lock)?.commit();
 
         let signature = (
             pub_key.clone(),
@@ -304,12 +360,8 @@ impl<TYPES: NodeType, DATA: Voteable<TYPES>> VersionedVoteData<TYPES, DATA> {
     /// # Errors
     ///
     /// Returns an error if `upgrade_lock.version(view)` is unable to return a version we support
-    pub async fn new(
-        data: DATA,
-        view: ViewNumber,
-        upgrade_lock: &UpgradeLock<TYPES>,
-    ) -> Result<Self> {
-        let version = upgrade_lock.version(view).await?;
+    pub fn new(data: DATA, view: ViewNumber, upgrade_lock: &UpgradeLock<TYPES>) -> Result<Self> {
+        let version = upgrade_lock.version(view)?;
 
         Ok(Self {
             data,
@@ -322,12 +374,8 @@ impl<TYPES: NodeType, DATA: Voteable<TYPES>> VersionedVoteData<TYPES, DATA> {
     /// Create a new `VersionedVoteData` struct
     ///
     /// This function cannot error, but may use an invalid version.
-    pub async fn new_infallible(
-        data: DATA,
-        view: ViewNumber,
-        upgrade_lock: &UpgradeLock<TYPES>,
-    ) -> Self {
-        let version = upgrade_lock.version_infallible(view).await;
+    pub fn new_infallible(data: DATA, view: ViewNumber, upgrade_lock: &UpgradeLock<TYPES>) -> Self {
+        let version = upgrade_lock.version_infallible(view);
 
         Self {
             data,

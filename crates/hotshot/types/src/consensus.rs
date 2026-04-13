@@ -392,6 +392,11 @@ type VoteParticipationMap<TYPES> = (
     u64,
 );
 
+type VoteParticipationMap<TYPES> = (
+    HashMap<<<TYPES as NodeType>::SignatureKey as SignatureKey>::VerificationKeyType, u64>,
+    u64,
+);
+
 #[derive(Clone, Debug)]
 struct VoteParticipation<TYPES: NodeType> {
     /// Current epoch
@@ -503,6 +508,20 @@ impl<TYPES: NodeType> VoteParticipation<TYPES> {
         if epoch == self.epoch {
             return Ok(());
         }
+
+        self.previous_epoch_participation.insert(
+            self.epoch,
+            (
+                self.current_epoch_participation.clone(),
+                self.current_epoch_num_views,
+            ),
+        );
+
+        self.previous_epoch_participation = self.previous_epoch_participation.split_off(
+            &self
+                .epoch
+                .map(|e| EpochNumber::new(e.saturating_sub(EPOCH_PARTICIPATION_HISTORY))),
+        );
 
         self.previous_epoch_participation.insert(
             self.epoch,
@@ -1011,11 +1030,6 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         self.validator_participation.proposal_participation(epoch)
     }
 
-    /// Get the current proposal participation epoch
-    pub fn current_proposal_participation_epoch(&self) -> EpochNumber {
-        self.validator_participation.current_epoch()
-    }
-
     /// Update the vote participation
     pub fn update_vote_participation(&mut self, qc: QuorumCertificate2<TYPES>) -> Result<()> {
         self.vote_participation.update_participation(qc)
@@ -1045,11 +1059,6 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         epoch: Option<EpochNumber>,
     ) -> HashMap<<TYPES::SignatureKey as SignatureKey>::VerificationKeyType, f64> {
         self.vote_participation.vote_participation(epoch)
-    }
-
-    /// Get the current vote participation epoch
-    pub fn current_vote_participation_epoch(&self) -> Option<EpochNumber> {
-        self.vote_participation.current_epoch()
     }
 
     /// Get the parent Leaf Info from a given leaf and our public key.

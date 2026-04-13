@@ -109,7 +109,7 @@ where
         launcher.metadata.test_config.epoch_height,
         launcher.metadata.test_config.epoch_start_block,
         vec![],
-        hotshot_config.upgrade,
+        launcher.metadata.upgrade,
     )
     .await
     .unwrap();
@@ -147,6 +147,7 @@ where
         state_private_key,
         node_id,
         hotshot_config,
+        launcher.metadata.upgrade,
         coordinator,
         network,
         initializer,
@@ -191,12 +192,10 @@ pub async fn build_cert<
         private_key,
         upgrade_lock,
     )
-    .await
     .expect("Failed to sign data!");
 
     let vote_commitment =
         VersionedVoteData::new(vote.date().clone(), vote.view_number(), upgrade_lock)
-            .await
             .expect("Failed to create VersionedVoteData!")
             .commit();
 
@@ -258,7 +257,6 @@ pub async fn build_assembled_sig<
             &private_key_i,
             upgrade_lock,
         )
-        .await
         .expect("Failed to sign data!");
         let original_signature: <TYPES::SignatureKey as SignatureKey>::PureAssembledSignatureType =
             vote.signature();
@@ -380,11 +378,11 @@ pub async fn build_da_certificate<TYPES: NodeType>(
         &encoded_transactions,
         &metadata.encode(),
         membership.total_nodes().await,
-        upgrade_lock.version_infallible(view_number).await,
+        upgrade_lock.version_infallible(view_number),
     );
 
     let next_epoch_da_payload_commitment =
-        if upgrade_lock.epochs_enabled(view_number).await && membership.epoch().is_some() {
+        if upgrade_lock.epochs_enabled(view_number) && membership.epoch().is_some() {
             Some(vid_commitment(
                 &encoded_transactions,
                 &metadata.encode(),
@@ -393,7 +391,7 @@ pub async fn build_da_certificate<TYPES: NodeType>(
                     .await?
                     .total_nodes()
                     .await,
-                upgrade_lock.version_infallible(view_number).await,
+                upgrade_lock.version_infallible(view_number),
             ))
         } else {
             None

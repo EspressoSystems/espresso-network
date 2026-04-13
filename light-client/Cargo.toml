@@ -7,12 +7,7 @@ edition.workspace = true
 [features]
 default = ["decaf"]
 decaf = []
-testing = [
-    "espresso-types/testing",
-    "bitvec",
-    "hotshot-contract-adapter",
-    "rand",
-]
+testing = ["espresso-types/testing", "bitvec", "hotshot-contract-adapter", "rand"]
 
 [dependencies]
 alloy = { workspace = true }
@@ -44,9 +39,9 @@ hotshot-contract-adapter = { workspace = true, optional = true }
 rand = { workspace = true, optional = true }
 
 [dev-dependencies]
+espresso-node = { workspace = true, default-features = false, features = ["testing"] }
 light-client = { path = ".", features = ["testing"] }
 pretty_assertions = { workspace = true }
-sequencer = { workspace = true, default-features = false, features = ["testing"] }
 test-log = { workspace = true }
 test-utils = { workspace = true }
 

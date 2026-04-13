@@ -237,7 +237,7 @@ impl AvidMScheme {
         payload_byte_len: usize,
     ) -> VidResult<(AvidMCommit, Vec<AvidMShare>)> {
         // let payload_byte_len = payload.len();
-        let total_weights = distribution.iter().sum::<u32>() as usize;
+        let total_weights = distribution.iter().map(|&w| w as usize).sum::<usize>();
         if total_weights != param.total_weights {
             return Err(VidError::Argument(
                 "Weight distribution is inconsistent with the given param".to_string(),
@@ -253,10 +253,10 @@ impl AvidMScheme {
         // consecutive raw shares ranging as `ranges[i]`.
         let ranges: Vec<_> = distribution
             .iter()
-            .scan(0, |sum, w| {
+            .scan(0usize, |sum, w| {
                 let prefix_sum = *sum;
-                *sum += w;
-                Some(prefix_sum as usize..*sum as usize)
+                *sum += *w as usize;
+                Some(prefix_sum..*sum)
             })
             .collect();
         let shares: Vec<_> = ranges
@@ -306,7 +306,8 @@ impl AvidMScheme {
         commit: &AvidMCommit,
         share: &RawAvidMShare,
     ) -> VidResult<crate::VerificationResult> {
-        if share.range.end > param.total_weights
+        if share.range.is_empty()
+            || share.range.end > param.total_weights
             || share.range.len() != share.payload.len()
             || share.range.len() != share.mt_proofs.len()
         {

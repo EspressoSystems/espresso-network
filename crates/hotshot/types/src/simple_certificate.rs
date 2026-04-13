@@ -174,7 +174,7 @@ impl<TYPES: NodeType, THRESHOLD: Threshold<TYPES>> Certificate<TYPES, DaData>
             _pd: PhantomData,
         }
     }
-    async fn is_valid_cert(
+    fn is_valid_cert(
         &self,
         stake_table: &[<TYPES::SignatureKey as SignatureKey>::StakeTableEntry],
         threshold: U256,
@@ -185,7 +185,7 @@ impl<TYPES: NodeType, THRESHOLD: Threshold<TYPES>> Certificate<TYPES, DaData>
         }
         let real_qc_pp =
             <TYPES::SignatureKey as SignatureKey>::public_parameter(stake_table, threshold);
-        let commit = self.data_commitment(upgrade_lock).await?;
+        let commit = self.data_commitment(upgrade_lock)?;
 
         let Some(ref signatures) = self.signatures else {
             bail!("No signatures found while validating certificate");
@@ -224,15 +224,11 @@ impl<TYPES: NodeType, THRESHOLD: Threshold<TYPES>> Certificate<TYPES, DaData>
     fn data(&self) -> &Self::Voteable {
         &self.data
     }
-    async fn data_commitment(
+    fn data_commitment(
         &self,
         upgrade_lock: &UpgradeLock<TYPES>,
     ) -> Result<Commitment<VersionedVoteData<TYPES, DaData>>> {
-        Ok(
-            VersionedVoteData::new(self.data.clone(), self.view_number, upgrade_lock)
-                .await?
-                .commit(),
-        )
+        Ok(VersionedVoteData::new(self.data.clone(), self.view_number, upgrade_lock)?.commit())
     }
 }
 
@@ -258,7 +254,7 @@ impl<TYPES: NodeType, THRESHOLD: Threshold<TYPES>> Certificate<TYPES, DaData2>
             _pd: PhantomData,
         }
     }
-    async fn is_valid_cert(
+    fn is_valid_cert(
         &self,
         stake_table: &[<TYPES::SignatureKey as SignatureKey>::StakeTableEntry],
         threshold: U256,
@@ -269,15 +265,15 @@ impl<TYPES: NodeType, THRESHOLD: Threshold<TYPES>> Certificate<TYPES, DaData2>
         }
         let real_qc_pp =
             <TYPES::SignatureKey as SignatureKey>::public_parameter(stake_table, threshold);
-        let commit = self.data_commitment(upgrade_lock).await?;
+        let commit = self.data_commitment(upgrade_lock)?;
+        let signatures = self
+            .signatures
+            .as_ref()
+            .ok_or_else(|| warn!("missing signatures"))?;
 
-        <TYPES::SignatureKey as SignatureKey>::check(
-            &real_qc_pp,
-            commit.as_ref(),
-            self.signatures.as_ref().unwrap(),
-        )
-        .wrap()
-        .context(|e| warn!("Signature check failed: {e}"))
+        <TYPES::SignatureKey as SignatureKey>::check(&real_qc_pp, commit.as_ref(), signatures)
+            .wrap()
+            .context(|e| warn!("Signature check failed: {e}"))
     }
     fn signers(
         &self,
@@ -308,15 +304,11 @@ impl<TYPES: NodeType, THRESHOLD: Threshold<TYPES>> Certificate<TYPES, DaData2>
     fn data(&self) -> &Self::Voteable {
         &self.data
     }
-    async fn data_commitment(
+    fn data_commitment(
         &self,
         upgrade_lock: &UpgradeLock<TYPES>,
     ) -> Result<Commitment<VersionedVoteData<TYPES, DaData2>>> {
-        Ok(
-            VersionedVoteData::new(self.data.clone(), self.view_number, upgrade_lock)
-                .await?
-                .commit(),
-        )
+        Ok(VersionedVoteData::new(self.data.clone(), self.view_number, upgrade_lock)?.commit())
     }
 }
 
@@ -345,7 +337,7 @@ impl<
             _pd: PhantomData,
         }
     }
-    async fn is_valid_cert(
+    fn is_valid_cert(
         &self,
         stake_table: &[<TYPES::SignatureKey as SignatureKey>::StakeTableEntry],
         threshold: U256,
@@ -356,15 +348,15 @@ impl<
         }
         let real_qc_pp =
             <TYPES::SignatureKey as SignatureKey>::public_parameter(stake_table, threshold);
-        let commit = self.data_commitment(upgrade_lock).await?;
+        let commit = self.data_commitment(upgrade_lock)?;
+        let signatures = self
+            .signatures
+            .as_ref()
+            .ok_or_else(|| warn!("missing signatures"))?;
 
-        <TYPES::SignatureKey as SignatureKey>::check(
-            &real_qc_pp,
-            commit.as_ref(),
-            self.signatures.as_ref().unwrap(),
-        )
-        .wrap()
-        .context(|e| warn!("Signature check failed: {e}"))
+        <TYPES::SignatureKey as SignatureKey>::check(&real_qc_pp, commit.as_ref(), signatures)
+            .wrap()
+            .context(|e| warn!("Signature check failed: {e}"))
     }
     fn signers(
         &self,
@@ -396,15 +388,11 @@ impl<
     fn data(&self) -> &Self::Voteable {
         &self.data
     }
-    async fn data_commitment(
+    fn data_commitment(
         &self,
         upgrade_lock: &UpgradeLock<TYPES>,
     ) -> Result<Commitment<VersionedVoteData<TYPES, VOTEABLE>>> {
-        Ok(
-            VersionedVoteData::new(self.data.clone(), self.view_number, upgrade_lock)
-                .await?
-                .commit(),
-        )
+        Ok(VersionedVoteData::new(self.data.clone(), self.view_number, upgrade_lock)?.commit())
     }
 }
 
@@ -464,7 +452,6 @@ impl<TYPES: NodeType> UpgradeCertificate<TYPES> {
                 membership_upgrade_threshold,
                 upgrade_lock,
             )
-            .await
             .context(|e| warn!("Invalid upgrade certificate: {e}"))?;
         }
 

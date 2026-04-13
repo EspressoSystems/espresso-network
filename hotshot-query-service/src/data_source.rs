@@ -129,12 +129,16 @@ pub mod availability_tests {
 
     use committable::Committable;
     use futures::stream::StreamExt;
+    use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_types::{data::Leaf2, vote::HasViewNumber};
 
     use super::test_helpers::*;
     use crate::{
-        availability::{BlockId, payload_size},
-        data_source::storage::{AvailabilityStorage, NodeStorage},
+        availability::{BlockId, BlockQueryData, LeafQueryData, VidCommonQueryData, payload_size},
+        data_source::{
+            Transaction,
+            storage::{AvailabilityStorage, NodeStorage, UpdateAvailabilityStorage},
+        },
         node::NodeDataSource,
         testing::{
             consensus::{MockNetwork, TestableDataSource},
@@ -558,6 +562,62 @@ pub mod availability_tests {
             self.0.end_bound()
         }
     }
+
+    /// Regression test for a SQL bug.
+    ///
+    /// In PostgreSQL, upserting with multiple conflicting rows in a single statement is not
+    /// allowed.
+    #[tokio::test]
+    #[test_log::test]
+    pub async fn test_insert_consecutive_identical_blocks<D: TestableDataSource>()
+    where
+        for<'a> D::Transaction<'a>: UpdateAvailabilityStorage<MockTypes>,
+    {
+        let storage = D::create(0).await;
+        let ds = D::connect(&storage).await;
+
+        let leaf = LeafQueryData::<MockTypes>::genesis(
+            &Default::default(),
+            &Default::default(),
+            TEST_VERSIONS.test,
+        )
+        .await;
+        let block = BlockQueryData::<MockTypes>::genesis(
+            &Default::default(),
+            &Default::default(),
+            TEST_VERSIONS.test.base,
+        )
+        .await;
+        let vid = VidCommonQueryData::<MockTypes>::genesis(
+            &Default::default(),
+            &Default::default(),
+            TEST_VERSIONS.test.base,
+        )
+        .await;
+
+        let mut leaf2 = leaf.clone();
+        leaf2.leaf.block_header_mut().block_number += 1;
+        let block2 =
+            BlockQueryData::<MockTypes>::new(leaf2.header().clone(), block.payload.clone());
+        let vid2 = VidCommonQueryData::<MockTypes>::new(leaf2.header().clone(), vid.common.clone());
+
+        {
+            let mut tx = ds.write().await.unwrap();
+            tx.insert_leaf_range([&leaf, &leaf2]).await.unwrap();
+            tx.insert_block_range([&block, &block2]).await.unwrap();
+            tx.insert_vid_range([(&vid, None), (&vid2, None)])
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+        }
+
+        assert_eq!(ds.get_leaf(0).await.await, leaf);
+        assert_eq!(ds.get_leaf(1).await.await, leaf2);
+        assert_eq!(ds.get_block(0).await.await, block);
+        assert_eq!(ds.get_block(1).await.await, block2);
+        assert_eq!(ds.get_vid_common(0).await.await, vid);
+        assert_eq!(ds.get_vid_common(1).await.await, vid2);
+    }
 }
 
 /// Generic tests we can instantiate for any data source with reliable, versioned persistent storage.
@@ -619,8 +679,8 @@ pub mod persistence_tests {
 
         // Insert, but do not commit, some data and check that we can read it back.
         let mut tx = ds.write().await.unwrap();
-        tx.insert_leaf(leaf.clone()).await.unwrap();
-        tx.insert_block(block.clone()).await.unwrap();
+        tx.insert_leaf(&leaf).await.unwrap();
+        tx.insert_block(&block).await.unwrap();
 
         assert_eq!(tx.block_height().await.unwrap(), 2);
         assert_eq!(leaf, tx.get_leaf(1.into()).await.unwrap());
@@ -669,8 +729,8 @@ pub mod persistence_tests {
 
         // Insert some data and check that we can read it back.
         let mut tx = ds.write().await.unwrap();
-        tx.insert_leaf(leaf.clone()).await.unwrap();
-        tx.insert_block(block.clone()).await.unwrap();
+        tx.insert_leaf(&leaf).await.unwrap();
+        tx.insert_block(&block).await.unwrap();
         tx.commit().await.unwrap();
 
         assert_eq!(
@@ -731,8 +791,8 @@ pub mod persistence_tests {
         // Insert, but do not commit, some data and check that we can read it back.
         tracing::info!("write");
         let mut tx = ds.write().await.unwrap();
-        tx.insert_leaf(leaf.clone()).await.unwrap();
-        tx.insert_block(block.clone()).await.unwrap();
+        tx.insert_leaf(&leaf).await.unwrap();
+        tx.insert_block(&block).await.unwrap();
 
         assert_eq!(tx.block_height().await.unwrap(), 2);
         assert_eq!(leaf, tx.get_leaf(1.into()).await.unwrap());
@@ -755,8 +815,8 @@ pub mod persistence_tests {
 
         tracing::info!("write again");
         let mut tx = ds.write().await.unwrap();
-        tx.insert_leaf(leaf.clone()).await.unwrap();
-        tx.insert_block(block.clone()).await.unwrap();
+        tx.insert_leaf(&leaf).await.unwrap();
+        tx.insert_block(&block).await.unwrap();
         tx.commit().await.unwrap();
 
         // Read the data back. We should have _only_ the data that was written in the final
@@ -828,7 +888,10 @@ pub mod node_tests {
         for<'a> D::Transaction<'a>: UpdateAvailabilityStorage<MockTypes>,
     {
         let storage = D::create(0).await;
-        let ds = D::connect(&storage).await;
+        let ds = D::build(&storage, |builder| {
+            builder.with_sync_status_ttl(Duration::ZERO)
+        })
+        .await;
 
         // Set up a mock VID scheme to use for generating test data.
         let mut vid = advz_scheme(2);
@@ -850,30 +913,37 @@ pub mod node_tests {
             )
             .await,
         ];
+        let dispersal = vid.disperse([]).unwrap();
+        let mut vid_commons = vec![VidCommonQueryData::new(
+            leaves[0].header().clone(),
+            VidCommon::V0(dispersal.common.clone()),
+        )];
         for i in 0..2 {
+            // Generate a unique payload and VID data, so that missing data is actually missing
+            // (otherwise it could be borrowed from another block).
+            let (payload, metadata) = <MockPayload as BlockPayload<MockTypes>>::from_transactions(
+                vec![mock_transaction(vec![i as u8])],
+                &Default::default(),
+                &Default::default(),
+            )
+            .await
+            .unwrap();
+            let dispersal = vid.disperse(payload.encode()).unwrap();
+
             let mut leaf = leaves[i].clone();
             leaf.leaf.block_header_mut().block_number += 1;
-            leaves.push(leaf);
+            leaf.leaf.block_header_mut().payload_commitment = VidCommitment::V0(dispersal.commit);
+            leaf.leaf.block_header_mut().metadata = metadata;
+            let block = BlockQueryData::new(leaf.header().clone(), payload);
+            let vid_common = VidCommonQueryData::new(
+                leaf.header().clone(),
+                VidCommon::V0(dispersal.common.clone()),
+            );
 
-            let mut block = blocks[i].clone();
-            block.header.block_number += 1;
+            leaves.push(leaf);
             blocks.push(block);
+            vid_commons.push(vid_common);
         }
-        // Generate mock VID data. We reuse the same (empty) payload for each block, but with
-        // different metadata.
-        let disperse = vid.disperse([]).unwrap();
-        let vid = leaves
-            .iter()
-            .map(|leaf| {
-                (
-                    VidCommonQueryData::new(
-                        leaf.header().clone(),
-                        VidCommon::V0(disperse.common.clone()),
-                    ),
-                    disperse.shares[0].clone(),
-                )
-            })
-            .collect::<Vec<_>>();
 
         // At first, the node is fully synced.
         assert!(ds.sync_status().await.unwrap().is_fully_synced());
@@ -893,14 +963,6 @@ pub mod node_tests {
                     }]
                 },
                 vid_common: ResourceSyncStatus {
-                    missing: 1,
-                    ranges: vec![SyncStatusRange {
-                        start: 0,
-                        end: 1,
-                        status: SyncStatus::Missing,
-                    }]
-                },
-                vid_shares: ResourceSyncStatus {
                     missing: 1,
                     ranges: vec![SyncStatusRange {
                         start: 0,
@@ -942,14 +1004,6 @@ pub mod node_tests {
                         status: SyncStatus::Missing,
                     }]
                 },
-                vid_shares: ResourceSyncStatus {
-                    missing: 3,
-                    ranges: vec![SyncStatusRange {
-                        start: 0,
-                        end: 3,
-                        status: SyncStatus::Missing,
-                    }]
-                },
                 leaves: ResourceSyncStatus {
                     missing: 1,
                     ranges: vec![
@@ -977,7 +1031,7 @@ pub mod node_tests {
         // Insert VID common without a corresponding share.
         {
             let mut tx = ds.write().await.unwrap();
-            tx.insert_vid(vid[0].0.clone(), None).await.unwrap();
+            tx.insert_vid(&vid_commons[0].clone(), None).await.unwrap();
             tx.commit().await.unwrap();
         }
         assert_eq!(
@@ -1006,14 +1060,6 @@ pub mod node_tests {
                         },
                     ]
                 },
-                vid_shares: ResourceSyncStatus {
-                    missing: 3,
-                    ranges: vec![SyncStatusRange {
-                        start: 0,
-                        end: 3,
-                        status: SyncStatus::Missing,
-                    }]
-                },
                 leaves: ResourceSyncStatus {
                     missing: 1,
                     ranges: vec![
@@ -1041,91 +1087,55 @@ pub mod node_tests {
         // Rectify the missing data.
         {
             let mut tx = ds.write().await.unwrap();
-            tx.insert_block(blocks[0].clone()).await.unwrap();
-            tx.insert_vid(vid[0].0.clone(), Some(VidShare::V0(vid[0].1.clone())))
-                .await
-                .unwrap();
-            tx.insert_leaf(leaves[1].clone()).await.unwrap();
-            tx.insert_block(blocks[1].clone()).await.unwrap();
-            tx.insert_vid(vid[1].0.clone(), Some(VidShare::V0(vid[1].1.clone())))
-                .await
-                .unwrap();
-            tx.insert_block(blocks[2].clone()).await.unwrap();
-            tx.insert_vid(vid[2].0.clone(), Some(VidShare::V0(vid[2].1.clone())))
-                .await
-                .unwrap();
+            tx.insert_block(&blocks[0]).await.unwrap();
+            tx.insert_vid(&vid_commons[0], None).await.unwrap();
+            tx.insert_leaf(&leaves[1]).await.unwrap();
+            tx.insert_block(&blocks[1]).await.unwrap();
+            tx.insert_vid(&vid_commons[1], None).await.unwrap();
+            tx.insert_block(&blocks[2]).await.unwrap();
+            tx.insert_vid(&vid_commons[2], None).await.unwrap();
             tx.commit().await.unwrap();
         }
 
         // Some data sources (e.g. file system) don't support out-of-order insertion of missing
-        // data. These would have just ignored the insertion of `vid[0]` (the share) and
-        // `leaves[1]`. Detect if this is the case; then we allow 1 missing leaf and 1 missing VID
-        // share.
-        let (leaves, vid_shares) = if ds.get_leaf(1).await.try_resolve().is_err() {
+        // data. These would have just ignored the insertion of `leaves[1]`. Detect if this is the
+        // case; then we allow 1 missing leaf.
+        let leaves = if ds.get_leaf(1).await.try_resolve().is_err() {
             tracing::warn!(
-                "data source does not support out-of-order filling, allowing one missing leaf and \
-                 VID share"
+                "data source does not support out-of-order filling, allowing one missing leaf"
             );
-            (
-                ResourceSyncStatus {
-                    missing: 1,
-                    ranges: vec![
-                        SyncStatusRange {
-                            start: 0,
-                            end: 1,
-                            status: SyncStatus::Present,
-                        },
-                        SyncStatusRange {
-                            start: 1,
-                            end: 2,
-                            status: SyncStatus::Missing,
-                        },
-                        SyncStatusRange {
-                            start: 2,
-                            end: 3,
-                            status: SyncStatus::Present,
-                        },
-                    ],
-                },
-                ResourceSyncStatus {
-                    missing: 1,
-                    ranges: vec![
-                        SyncStatusRange {
-                            start: 0,
-                            end: 1,
-                            status: SyncStatus::Missing,
-                        },
-                        SyncStatusRange {
-                            start: 1,
-                            end: 3,
-                            status: SyncStatus::Present,
-                        },
-                    ],
-                },
-            )
+            ResourceSyncStatus {
+                missing: 1,
+                ranges: vec![
+                    SyncStatusRange {
+                        start: 0,
+                        end: 1,
+                        status: SyncStatus::Present,
+                    },
+                    SyncStatusRange {
+                        start: 1,
+                        end: 2,
+                        status: SyncStatus::Missing,
+                    },
+                    SyncStatusRange {
+                        start: 2,
+                        end: 3,
+                        status: SyncStatus::Present,
+                    },
+                ],
+            }
         } else {
-            (
-                ResourceSyncStatus {
-                    missing: 0,
-                    ranges: vec![SyncStatusRange {
-                        start: 0,
-                        end: 3,
-                        status: SyncStatus::Present,
-                    }],
-                },
-                ResourceSyncStatus {
-                    missing: 0,
-                    ranges: vec![SyncStatusRange {
-                        start: 0,
-                        end: 3,
-                        status: SyncStatus::Present,
-                    }],
-                },
-            )
+            ResourceSyncStatus {
+                missing: 0,
+                ranges: vec![SyncStatusRange {
+                    start: 0,
+                    end: 3,
+                    status: SyncStatus::Present,
+                }],
+            }
         };
         let expected_sync_status = SyncStatusQueryData {
             leaves,
-            vid_shares,
             blocks: ResourceSyncStatus {
                 missing: 0,
                 ranges: vec![SyncStatusRange {
@@ -1144,15 +1154,6 @@ pub mod node_tests {
             },
             pruned_height: None,
         };
-        assert_eq!(ds.sync_status().await.unwrap(), expected_sync_status);
-
-        // If we re-insert one of the VID entries without a share, it should not overwrite the share
-        // that we already have; that is, `insert_vid` should be monotonic.
-        {
-            let mut tx = ds.write().await.unwrap();
-            tx.insert_vid(vid[0].0.clone(), None).await.unwrap();
-            tx.commit().await.unwrap();
-        }
         assert_eq!(ds.sync_status().await.unwrap(), expected_sync_status);
     }
 
@@ -1311,7 +1312,7 @@ pub mod node_tests {
         // already have.
         {
             let mut tx = ds.write().await.unwrap();
-            tx.insert_vid(common.clone(), None).await.unwrap();
+            tx.insert_vid(&common, None).await.unwrap();
             tx.commit().await.unwrap();
         }
         {
@@ -1640,7 +1641,7 @@ pub mod node_tests {
         {
             let (leaf, qcs) = leaf_with_qc_chain(2).await;
             let mut tx = ds.write().await.unwrap();
-            tx.insert_leaf_with_qc_chain(leaf, Some(qcs.clone()))
+            tx.insert_leaf_with_qc_chain(&leaf, Some(qcs.clone()))
                 .await
                 .unwrap();
             tx.commit().await.unwrap();
@@ -1656,7 +1657,7 @@ pub mod node_tests {
         {
             let (leaf, _) = leaf_with_qc_chain(3).await;
             let mut tx = ds.write().await.unwrap();
-            tx.insert_leaf_with_qc_chain(leaf, None).await.unwrap();
+            tx.insert_leaf_with_qc_chain(&leaf, None).await.unwrap();
             tx.commit().await.unwrap();
 
             assert_eq!(
@@ -1670,7 +1671,9 @@ pub mod node_tests {
         {
             let (leaf, qcs) = leaf_with_qc_chain(1).await;
             let mut tx = ds.write().await.unwrap();
-            tx.insert_leaf_with_qc_chain(leaf, Some(qcs)).await.unwrap();
+            tx.insert_leaf_with_qc_chain(&leaf, Some(qcs))
+                .await
+                .unwrap();
             tx.commit().await.unwrap();
 
             assert_eq!(

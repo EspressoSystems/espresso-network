@@ -15,7 +15,9 @@ anyhow = { workspace = true }
 client = { workspace = true }
 dotenvy = { workspace = true }
 espresso-contract-deployer = { workspace = true }
+espresso-node = { workspace = true, default-features = false, features = ["testing"] }
 espresso-types = { workspace = true, features = ["testing"] }
+espresso-utils = { workspace = true }
 futures = { workspace = true }
 hotshot-contract-adapter = { workspace = true }
 hotshot-state-prover = { workspace = true }
@@ -23,8 +25,6 @@ hotshot-types = { workspace = true }
 jf-signature = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true }
-sequencer = { workspace = true, default-features = false, features = ["testing"] }
-sequencer-utils = { workspace = true }
 staking-cli = { workspace = true }
 surf-disco = { workspace = true }
 tagged-base64 = { workspace = true }
