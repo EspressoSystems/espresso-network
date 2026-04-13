@@ -1,24 +1,10 @@
 use std::time::Duration;
 
-use clap::{Parser, Subcommand};
-
-#[derive(Parser)]
-#[command(name = "new-protocol-bench")]
-#[command(about = "Benchmark binary for the new consensus protocol")]
-pub struct Cli {
-    #[command(subcommand)]
-    pub command: Command,
-}
-
-#[derive(Subcommand)]
-pub enum Command {
-    /// Run a single consensus node.
-    Node(NodeConfig),
-    /// Run the orchestrator that bootstraps consensus.
-    Orchestrator(OrchestratorConfig),
-}
+use clap::Parser;
 
 #[derive(Parser, Clone)]
+#[command(name = "new-protocol-node")]
+#[command(about = "Benchmark node for the new consensus protocol")]
 pub struct NodeConfig {
     /// This node's index (0-based).
     #[arg(long)]
@@ -66,27 +52,4 @@ impl NodeConfig {
     pub fn timeout_duration(&self) -> Duration {
         Duration::from_millis(self.timeout_ms)
     }
-}
-
-#[derive(Parser, Clone)]
-pub struct OrchestratorConfig {
-    /// Total number of consensus nodes.
-    #[arg(long)]
-    pub total_nodes: usize,
-
-    /// Seed for deterministic key generation (must match nodes).
-    #[arg(long, default_value_t = 0)]
-    pub seed: u8,
-
-    /// Number of views to run.
-    #[arg(long, default_value_t = 100)]
-    pub target_views: u64,
-
-    /// Address to bind CliqueNet on (e.g. "0.0.0.0:9100").
-    #[arg(long)]
-    pub bind_addr: String,
-
-    /// Comma-separated list of all node addresses in order of node index.
-    #[arg(long, value_delimiter = ',')]
-    pub peers: Vec<String>,
 }

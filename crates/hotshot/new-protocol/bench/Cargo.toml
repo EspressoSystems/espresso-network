@@ -10,10 +10,6 @@ license = "MIT"
 name = "new-protocol-node"
 path = "src/bin/node.rs"
 
-[[bin]]
-name = "new-protocol-orchestrator"
-path = "src/bin/orchestrator.rs"
-
 [dependencies]
 anyhow = { workspace = true }
 async-lock = { workspace = true }
@@ -21,7 +17,6 @@ clap = { workspace = true }
 committable = { workspace = true }
 cliquenet = { workspace = true }
 csv = { workspace = true }
-futures = { workspace = true }
 hotshot = { workspace = true, features = ["hotshot-testing"] }
 hotshot-example-types = { workspace = true }
 hotshot-new-protocol = { workspace = true }

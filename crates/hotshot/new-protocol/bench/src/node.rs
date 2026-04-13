@@ -7,7 +7,7 @@ use hotshot::{
 };
 use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
-    node_types::{CliquenetImpl, TEST_VERSIONS, TestTypes},
+    node_types::{CliquenetImpl, TestTypes},
     state_types::{TestInstanceState, TestValidatedState},
 };
 use hotshot_new_protocol::{

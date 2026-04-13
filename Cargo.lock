@@ -6207,7 +6207,6 @@ dependencies = [
  "cliquenet",
  "committable",
  "csv",
- "futures",
  "hotshot",
  "hotshot-example-types",
  "hotshot-new-protocol",
