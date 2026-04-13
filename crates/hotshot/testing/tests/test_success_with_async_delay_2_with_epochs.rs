@@ -37,6 +37,14 @@ cross_tests!(
             ..TestDescription::default()
         };
 
+
+        let timing_data = TimingData {
+            next_view_timeout: 12_000,
+            ..Default::default()
+        };
+
+        metadata.timing_data = timing_data;
+
         metadata.test_config.epoch_height = 10;
         metadata.overall_safety_properties.num_successful_views = 30;
         let mut config = DelayConfig::default();
