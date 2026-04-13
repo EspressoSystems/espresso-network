@@ -201,14 +201,31 @@ impl TestRunner {
             }
         }
 
-        let threshold = self.num_nodes * 2 / 3;
+        Self::verify_correctness(
+            &node_commits,
+            &node_timeouts,
+            &self.expected_failed_views,
+            self.target_decisions,
+        )
+    }
 
-        let last_view = self.expected_failed_views.len() + self.target_decisions;
-        // Check that the view was expected to fail and no nodes decided it, or
-        // that a quorum of nodes decided the same thing, and no node decided a different thing.
+    /// Verify that the collected per-node commits and timeouts are consistent:
+    ///  - Views expected to fail were not decided by any node, and a quorum timed out.
+    ///  - All other views were decided by a quorum, and all nodes that decided
+    ///    agree on the same leaf commitment.
+    fn verify_correctness(
+        node_commits: &[BTreeMap<ViewNumber, [u8; 32]>],
+        node_timeouts: &[BTreeSet<ViewNumber>],
+        expected_failed_views: &BTreeSet<ViewNumber>,
+        target_decisions: usize,
+    ) -> Result<(), TestError> {
+        let num_nodes = node_commits.len();
+        let threshold = num_nodes * 2 / 3;
+
+        let last_view = expected_failed_views.len() + target_decisions;
         for v in 1..=last_view {
             let view = ViewNumber::new(v.try_into().unwrap());
-            if self.expected_failed_views.contains(&view) {
+            if expected_failed_views.contains(&view) {
                 let mut timeout_count = 0;
                 for (i, commits) in node_commits.iter().enumerate() {
                     if commits.contains_key(&view) {
