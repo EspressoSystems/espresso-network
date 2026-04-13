@@ -338,24 +338,12 @@ mod tests {
         }
     }
 
-    /// Transitioning to the same epoch (or a lower epoch) should return an error.
+    /// Transitioning to a lower epoch should return an error.
     #[test]
-    fn test_epoch_transition_rejects_same_or_lower_epoch() {
+    fn test_epoch_transition_rejects_lower_epoch() {
         let (stake_table, threshold) = make_stake_table(3);
         let mut consensus =
             make_test_consensus(stake_table.clone(), threshold, Some(EpochNumber::new(3)));
-
-        // Transition to the same epoch → Err.
-        assert!(
-            consensus
-                .update_vote_participation_epoch(
-                    stake_table.clone(),
-                    threshold,
-                    Some(EpochNumber::new(3)),
-                )
-                .is_err(),
-            "same epoch should return Err"
-        );
 
         // Transition to a lower epoch → Err.
         assert!(

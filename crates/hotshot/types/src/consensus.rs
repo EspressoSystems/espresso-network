@@ -293,7 +293,7 @@ struct ValidatorParticipation<TYPES: NodeType> {
     /// Current epoch participation by key maps key -> (num leader, num times proposed)
     current_epoch_participation: ValidatorParticipationMap<TYPES>,
 
-    /// Last epoch participation by key maps key -> (num leader, num times proposed)
+    /// Previous epochs participation ordered by epoch number, maps epoch -> key -> (num leader, num times proposed)
     previous_epoch_participation: BTreeMap<EpochNumber, ValidatorParticipationMap<TYPES>>,
 }
 
@@ -381,6 +381,10 @@ impl<TYPES: NodeType> ValidatorParticipation<TYPES> {
             })
             .collect()
     }
+
+    fn current_epoch(&self) -> EpochNumber {
+        self.epoch
+    }
 }
 
 type VoteParticipationMap<TYPES> = (
@@ -409,7 +413,7 @@ struct VoteParticipation<TYPES: NodeType> {
     current_epoch_participation:
         HashMap<<TYPES::SignatureKey as SignatureKey>::VerificationKeyType, u64>,
 
-    /// Last epoch participation by key maps key -> num times voted
+    /// Previous epochs participation ordered by epoch number, maps epoch -> key -> num times voted
     previous_epoch_participation: BTreeMap<Option<EpochNumber>, VoteParticipationMap<TYPES>>,
 }
 
@@ -447,7 +451,7 @@ impl<TYPES: NodeType> VoteParticipation<TYPES> {
     fn update_participation(&mut self, qc: QuorumCertificate2<TYPES>) -> Result<()> {
         ensure!(
             qc.epoch() == self.epoch,
-            warn!(
+            info!(
                 "Incorrect epoch while updating vote participation, current epoch: {:?}, QC epoch \
                  {:?}",
                 self.epoch,
@@ -488,12 +492,30 @@ impl<TYPES: NodeType> VoteParticipation<TYPES> {
         epoch: Option<EpochNumber>,
     ) -> Result<()> {
         ensure!(
-            epoch > self.epoch,
-            info!(
-                "New epoch not greater than current epoch while updating vote participation \
-                 epoch, current epoch: {:?}, new epoch {:?}",
+            epoch >= self.epoch,
+            warn!(
+                "New epoch less than current epoch while updating vote participation epoch, \
+                 current epoch: {:?}, new epoch {:?}",
                 self.epoch, epoch
             )
+        );
+        // Same epoch, do nothing
+        if epoch == self.epoch {
+            return Ok(());
+        }
+
+        self.previous_epoch_participation.insert(
+            self.epoch,
+            (
+                self.current_epoch_participation.clone(),
+                self.current_epoch_num_views,
+            ),
+        );
+
+        self.previous_epoch_participation = self.previous_epoch_participation.split_off(
+            &self
+                .epoch
+                .map(|e| EpochNumber::new(e.saturating_sub(EPOCH_PARTICIPATION_HISTORY))),
         );
 
         self.previous_epoch_participation.insert(
@@ -580,6 +602,10 @@ impl<TYPES: NodeType> VoteParticipation<TYPES> {
         } else {
             *num_votes as f64 / total_views as f64
         }
+    }
+
+    fn current_epoch(&self) -> Option<EpochNumber> {
+        self.epoch
     }
 }
 
@@ -994,6 +1020,11 @@ impl<TYPES: NodeType> Consensus<TYPES> {
             .current_proposal_participation()
     }
 
+    /// Get the current proposal participation epoch
+    pub fn current_proposal_participation_epoch(&self) -> EpochNumber {
+        self.validator_participation.current_epoch()
+    }
+
     /// Get the proposal participation for a given epoch
     pub fn proposal_participation(&self, epoch: EpochNumber) -> HashMap<TYPES::SignatureKey, f64> {
         self.validator_participation.proposal_participation(epoch)
@@ -1020,6 +1051,11 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         &self,
     ) -> HashMap<<TYPES::SignatureKey as SignatureKey>::VerificationKeyType, f64> {
         self.vote_participation.current_vote_participation()
+    }
+
+    /// Get the current vote participation
+    pub fn current_vote_participation_epoch(&self) -> Option<EpochNumber> {
+        self.vote_participation.current_epoch()
     }
 
     /// Get the previous vote participation
