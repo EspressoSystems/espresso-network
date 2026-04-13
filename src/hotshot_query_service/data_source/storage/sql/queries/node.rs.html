@@ -237,7 +237,7 @@
 <a href=#237 id=237 data-nosnippet>237</a>            .bind(limit <span class="kw">as </span>i64)
 <a href=#238 id=238 data-nosnippet>238</a>            .fetch(<span class="self">self</span>.as_mut());
 <a href=#239 id=239 data-nosnippet>239</a>        <span class="kw">let </span>window = rows
-<a href=#240 id=240 data-nosnippet>240</a>            .map(|row| parse_header::&lt;Types&gt;(row<span class="question-mark">?</span>))
+<a href=#240 id=240 data-nosnippet>240</a>            .map(|row| parse_header::&lt;Types, <span class="kw">_</span>&gt;(row<span class="question-mark">?</span>))
 <a href=#241 id=241 data-nosnippet>241</a>            .try_collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
 <a href=#242 id=242 data-nosnippet>242</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#243 id=243 data-nosnippet>243</a>
@@ -268,7 +268,7 @@
 <a href=#268 id=268 data-nosnippet>268</a>                .bind(end <span class="kw">as </span>i64)
 <a href=#269 id=269 data-nosnippet>269</a>                .fetch_optional(<span class="self">self</span>.as_mut())
 <a href=#270 id=270 data-nosnippet>270</a>                .<span class="kw">await</span><span class="question-mark">?
-<a href=#271 id=271 data-nosnippet>271</a>                </span>.map(parse_header::&lt;Types&gt;)
+<a href=#271 id=271 data-nosnippet>271</a>                </span>.map(parse_header::&lt;Types, <span class="kw">_</span>&gt;)
 <a href=#272 id=272 data-nosnippet>272</a>                .transpose()<span class="question-mark">?
 <a href=#273 id=273 data-nosnippet>273</a>        </span>} <span class="kw">else </span>{
 <a href=#274 id=274 data-nosnippet>274</a>            <span class="comment">// If we have been limited, return a `null` next block indicating an incomplete window.
@@ -682,7 +682,7 @@
 <a href=#682 id=682 data-nosnippet>682</a>            .bind(limit <span class="kw">as </span>i64)
 <a href=#683 id=683 data-nosnippet>683</a>            .fetch(<span class="self">self</span>.as_mut());
 <a href=#684 id=684 data-nosnippet>684</a>        <span class="kw">let </span>window: Vec&lt;<span class="kw">_</span>&gt; = rows
-<a href=#685 id=685 data-nosnippet>685</a>            .map(|row| parse_header::&lt;Types&gt;(row<span class="question-mark">?</span>))
+<a href=#685 id=685 data-nosnippet>685</a>            .map(|row| parse_header::&lt;Types, <span class="kw">_</span>&gt;(row<span class="question-mark">?</span>))
 <a href=#686 id=686 data-nosnippet>686</a>            .try_collect()
 <a href=#687 id=687 data-nosnippet>687</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#688 id=688 data-nosnippet>688</a>
@@ -699,7 +699,7 @@
 <a href=#699 id=699 data-nosnippet>699</a>                .bind(end <span class="kw">as </span>i64)
 <a href=#700 id=700 data-nosnippet>700</a>                .fetch_optional(<span class="self">self</span>.as_mut())
 <a href=#701 id=701 data-nosnippet>701</a>                .<span class="kw">await</span><span class="question-mark">?
-<a href=#702 id=702 data-nosnippet>702</a>                </span>.map(parse_header::&lt;Types&gt;)
+<a href=#702 id=702 data-nosnippet>702</a>                </span>.map(parse_header::&lt;Types, <span class="kw">_</span>&gt;)
 <a href=#703 id=703 data-nosnippet>703</a>                .transpose()<span class="question-mark">?
 <a href=#704 id=704 data-nosnippet>704</a>        </span>} <span class="kw">else </span>{
 <a href=#705 id=705 data-nosnippet>705</a>            <span class="comment">// If we have been limited, return a `null` next block indicating an incomplete window.
@@ -732,7 +732,7 @@
 <a href=#732 id=732 data-nosnippet>732</a>            .bind(start <span class="kw">as </span>i64)
 <a href=#733 id=733 data-nosnippet>733</a>            .fetch_optional(<span class="self">self</span>.as_mut())
 <a href=#734 id=734 data-nosnippet>734</a>            .<span class="kw">await</span><span class="question-mark">?
-<a href=#735 id=735 data-nosnippet>735</a>            </span>.map(parse_header::&lt;Types&gt;)
+<a href=#735 id=735 data-nosnippet>735</a>            </span>.map(parse_header::&lt;Types, <span class="kw">_</span>&gt;)
 <a href=#736 id=736 data-nosnippet>736</a>            .transpose()<span class="question-mark">?</span>;
 <a href=#737 id=737 data-nosnippet>737</a>
 <a href=#738 id=738 data-nosnippet>738</a>        <span class="prelude-val">Ok</span>(TimeWindowQueryData { window, prev, next })

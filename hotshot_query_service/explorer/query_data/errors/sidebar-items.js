@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"struct":["BadQuery","InvalidLimit","NotFound","QueryError","Unimplemented"],"trait":["ExplorerAPIError"]};

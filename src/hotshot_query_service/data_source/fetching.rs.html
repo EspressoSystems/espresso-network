@@ -2195,707 +2195,699 @@
 <a href=#2195 id=2195 data-nosnippet>2195</a>    ) -&gt; <span class="kw">impl </span>Send + Future&lt;Output = anyhow::Result&lt;()&gt;&gt;;
 <a href=#2196 id=2196 data-nosnippet>2196</a>}
 <a href=#2197 id=2197 data-nosnippet>2197</a>
-<a href=#2198 id=2198 data-nosnippet>2198</a><span class="kw">impl</span>&lt;Types: NodeType&gt; HeightIndexed
+<a href=#2198 id=2198 data-nosnippet>2198</a><span class="kw">impl</span>&lt;Types: NodeType&gt; Storable&lt;Types&gt;
 <a href=#2199 id=2199 data-nosnippet>2199</a>    <span class="kw">for </span>(LeafQueryData&lt;Types&gt;, <span class="prelude-ty">Option</span>&lt;[CertificatePair&lt;Types&gt;; <span class="number">2</span>]&gt;)
 <a href=#2200 id=2200 data-nosnippet>2200</a>{
-<a href=#2201 id=2201 data-nosnippet>2201</a>    <span class="kw">fn </span>height(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; u64 {
-<a href=#2202 id=2202 data-nosnippet>2202</a>        <span class="self">self</span>.<span class="number">0</span>.height()
+<a href=#2201 id=2201 data-nosnippet>2201</a>    <span class="kw">fn </span>debug_name(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String {
+<a href=#2202 id=2202 data-nosnippet>2202</a>        <span class="macro">format!</span>(<span class="string">"leaf {} with QC chain"</span>, <span class="self">self</span>.<span class="number">0</span>.height())
 <a href=#2203 id=2203 data-nosnippet>2203</a>    }
-<a href=#2204 id=2204 data-nosnippet>2204</a>}
-<a href=#2205 id=2205 data-nosnippet>2205</a>
-<a href=#2206 id=2206 data-nosnippet>2206</a><span class="kw">impl</span>&lt;Types: NodeType&gt; Storable&lt;Types&gt;
-<a href=#2207 id=2207 data-nosnippet>2207</a>    <span class="kw">for </span>(LeafQueryData&lt;Types&gt;, <span class="prelude-ty">Option</span>&lt;[CertificatePair&lt;Types&gt;; <span class="number">2</span>]&gt;)
-<a href=#2208 id=2208 data-nosnippet>2208</a>{
-<a href=#2209 id=2209 data-nosnippet>2209</a>    <span class="kw">fn </span>debug_name(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String {
-<a href=#2210 id=2210 data-nosnippet>2210</a>        <span class="macro">format!</span>(<span class="string">"leaf {} with QC chain"</span>, <span class="self">self</span>.<span class="number">0</span>.height())
-<a href=#2211 id=2211 data-nosnippet>2211</a>    }
-<a href=#2212 id=2212 data-nosnippet>2212</a>
-<a href=#2213 id=2213 data-nosnippet>2213</a>    <span class="kw">async fn </span>notify(<span class="kw-2">&amp;</span><span class="self">self</span>, notifiers: <span class="kw-2">&amp;</span>Notifiers&lt;Types&gt;) {
-<a href=#2214 id=2214 data-nosnippet>2214</a>        <span class="self">self</span>.<span class="number">0</span>.notify(notifiers).<span class="kw">await</span>;
-<a href=#2215 id=2215 data-nosnippet>2215</a>    }
-<a href=#2216 id=2216 data-nosnippet>2216</a>
-<a href=#2217 id=2217 data-nosnippet>2217</a>    <span class="kw">async fn </span>store(
-<a href=#2218 id=2218 data-nosnippet>2218</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#2219 id=2219 data-nosnippet>2219</a>        storage: <span class="kw-2">&amp;mut </span><span class="kw">impl </span>UpdateAvailabilityStorage&lt;Types&gt;,
-<a href=#2220 id=2220 data-nosnippet>2220</a>        _leaf_only: bool,
-<a href=#2221 id=2221 data-nosnippet>2221</a>    ) -&gt; anyhow::Result&lt;()&gt; {
-<a href=#2222 id=2222 data-nosnippet>2222</a>        storage
-<a href=#2223 id=2223 data-nosnippet>2223</a>            .insert_leaf_with_qc_chain(<span class="kw-2">&amp;</span><span class="self">self</span>.<span class="number">0</span>, <span class="self">self</span>.<span class="number">1</span>.clone())
-<a href=#2224 id=2224 data-nosnippet>2224</a>            .<span class="kw">await
-<a href=#2225 id=2225 data-nosnippet>2225</a>    </span>}
-<a href=#2226 id=2226 data-nosnippet>2226</a>}
-<a href=#2227 id=2227 data-nosnippet>2227</a>
-<a href=#2228 id=2228 data-nosnippet>2228</a><span class="doccomment">/// Break a range into fixed-size chunks.
-<a href=#2229 id=2229 data-nosnippet>2229</a></span><span class="kw">fn </span>range_chunks&lt;R&gt;(range: R, chunk_size: usize) -&gt; <span class="kw">impl </span>Iterator&lt;Item = Range&lt;usize&gt;&gt;
-<a href=#2230 id=2230 data-nosnippet>2230</a><span class="kw">where
-<a href=#2231 id=2231 data-nosnippet>2231</a>    </span>R: RangeBounds&lt;usize&gt;,
-<a href=#2232 id=2232 data-nosnippet>2232</a>{
-<a href=#2233 id=2233 data-nosnippet>2233</a>    <span class="comment">// Transform range to explicit start (inclusive) and end (exclusive) bounds.
-<a href=#2234 id=2234 data-nosnippet>2234</a>    </span><span class="kw">let </span>Range { <span class="kw-2">mut </span>start, end } = range_to_bounds(range);
-<a href=#2235 id=2235 data-nosnippet>2235</a>    std::iter::from_fn(<span class="kw">move </span>|| {
-<a href=#2236 id=2236 data-nosnippet>2236</a>        <span class="kw">let </span>chunk_end = min(start + chunk_size, end);
-<a href=#2237 id=2237 data-nosnippet>2237</a>        <span class="kw">if </span>chunk_end == start {
-<a href=#2238 id=2238 data-nosnippet>2238</a>            <span class="kw">return </span><span class="prelude-val">None</span>;
-<a href=#2239 id=2239 data-nosnippet>2239</a>        }
-<a href=#2240 id=2240 data-nosnippet>2240</a>
-<a href=#2241 id=2241 data-nosnippet>2241</a>        <span class="kw">let </span>chunk = start..chunk_end;
-<a href=#2242 id=2242 data-nosnippet>2242</a>        start = chunk_end;
-<a href=#2243 id=2243 data-nosnippet>2243</a>        <span class="prelude-val">Some</span>(chunk)
-<a href=#2244 id=2244 data-nosnippet>2244</a>    })
-<a href=#2245 id=2245 data-nosnippet>2245</a>}
-<a href=#2246 id=2246 data-nosnippet>2246</a>
-<a href=#2247 id=2247 data-nosnippet>2247</a><span class="doccomment">/// Break a range into fixed-alignment chunks.
-<a href=#2248 id=2248 data-nosnippet>2248</a>///
-<a href=#2249 id=2249 data-nosnippet>2249</a>/// Each chunk is of size `alignment`, and starts on a multiple of `alignment`, with the possible
-<a href=#2250 id=2250 data-nosnippet>2250</a>/// exception of the first chunk (which may be misaligned and small) and the last (which may be
-<a href=#2251 id=2251 data-nosnippet>2251</a>/// small).
-<a href=#2252 id=2252 data-nosnippet>2252</a></span><span class="attr">#[allow(dead_code)]
-<a href=#2253 id=2253 data-nosnippet>2253</a></span><span class="kw">fn </span>range_chunks_aligned&lt;R&gt;(range: R, alignment: usize) -&gt; <span class="kw">impl </span>Iterator&lt;Item = Range&lt;usize&gt;&gt;
-<a href=#2254 id=2254 data-nosnippet>2254</a><span class="kw">where
-<a href=#2255 id=2255 data-nosnippet>2255</a>    </span>R: RangeBounds&lt;usize&gt;,
-<a href=#2256 id=2256 data-nosnippet>2256</a>{
-<a href=#2257 id=2257 data-nosnippet>2257</a>    <span class="comment">// Transform range to explicit start (inclusive) and end (exclusive) bounds.
-<a href=#2258 id=2258 data-nosnippet>2258</a>    </span><span class="kw">let </span>Range { <span class="kw-2">mut </span>start, end } = range_to_bounds(range);
-<a href=#2259 id=2259 data-nosnippet>2259</a>
-<a href=#2260 id=2260 data-nosnippet>2260</a>    <span class="comment">// If necessary, generate a partial first chunk to force the remaining chunks into alignment.
-<a href=#2261 id=2261 data-nosnippet>2261</a>    </span><span class="kw">let </span>first = <span class="kw">if </span>start.is_multiple_of(alignment) {
-<a href=#2262 id=2262 data-nosnippet>2262</a>        <span class="prelude-val">None
-<a href=#2263 id=2263 data-nosnippet>2263</a>    </span>} <span class="kw">else </span>{
-<a href=#2264 id=2264 data-nosnippet>2264</a>        <span class="comment">// The partial first chunk ends at the next multiple of the alignment, or at the end of the
-<a href=#2265 id=2265 data-nosnippet>2265</a>        // overall range, whichever comes first.
-<a href=#2266 id=2266 data-nosnippet>2266</a>        </span><span class="kw">let </span>chunk_end = min(start.next_multiple_of(alignment), end);
-<a href=#2267 id=2267 data-nosnippet>2267</a>        <span class="kw">let </span>chunk = start..chunk_end;
+<a href=#2204 id=2204 data-nosnippet>2204</a>
+<a href=#2205 id=2205 data-nosnippet>2205</a>    <span class="kw">async fn </span>notify(<span class="kw-2">&amp;</span><span class="self">self</span>, notifiers: <span class="kw-2">&amp;</span>Notifiers&lt;Types&gt;) {
+<a href=#2206 id=2206 data-nosnippet>2206</a>        <span class="self">self</span>.<span class="number">0</span>.notify(notifiers).<span class="kw">await</span>;
+<a href=#2207 id=2207 data-nosnippet>2207</a>    }
+<a href=#2208 id=2208 data-nosnippet>2208</a>
+<a href=#2209 id=2209 data-nosnippet>2209</a>    <span class="kw">async fn </span>store(
+<a href=#2210 id=2210 data-nosnippet>2210</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#2211 id=2211 data-nosnippet>2211</a>        storage: <span class="kw-2">&amp;mut </span><span class="kw">impl </span>UpdateAvailabilityStorage&lt;Types&gt;,
+<a href=#2212 id=2212 data-nosnippet>2212</a>        _leaf_only: bool,
+<a href=#2213 id=2213 data-nosnippet>2213</a>    ) -&gt; anyhow::Result&lt;()&gt; {
+<a href=#2214 id=2214 data-nosnippet>2214</a>        storage
+<a href=#2215 id=2215 data-nosnippet>2215</a>            .insert_leaf_with_qc_chain(<span class="kw-2">&amp;</span><span class="self">self</span>.<span class="number">0</span>, <span class="self">self</span>.<span class="number">1</span>.clone())
+<a href=#2216 id=2216 data-nosnippet>2216</a>            .<span class="kw">await
+<a href=#2217 id=2217 data-nosnippet>2217</a>    </span>}
+<a href=#2218 id=2218 data-nosnippet>2218</a>}
+<a href=#2219 id=2219 data-nosnippet>2219</a>
+<a href=#2220 id=2220 data-nosnippet>2220</a><span class="doccomment">/// Break a range into fixed-size chunks.
+<a href=#2221 id=2221 data-nosnippet>2221</a></span><span class="kw">fn </span>range_chunks&lt;R&gt;(range: R, chunk_size: usize) -&gt; <span class="kw">impl </span>Iterator&lt;Item = Range&lt;usize&gt;&gt;
+<a href=#2222 id=2222 data-nosnippet>2222</a><span class="kw">where
+<a href=#2223 id=2223 data-nosnippet>2223</a>    </span>R: RangeBounds&lt;usize&gt;,
+<a href=#2224 id=2224 data-nosnippet>2224</a>{
+<a href=#2225 id=2225 data-nosnippet>2225</a>    <span class="comment">// Transform range to explicit start (inclusive) and end (exclusive) bounds.
+<a href=#2226 id=2226 data-nosnippet>2226</a>    </span><span class="kw">let </span>Range { <span class="kw-2">mut </span>start, end } = range_to_bounds(range);
+<a href=#2227 id=2227 data-nosnippet>2227</a>    std::iter::from_fn(<span class="kw">move </span>|| {
+<a href=#2228 id=2228 data-nosnippet>2228</a>        <span class="kw">let </span>chunk_end = min(start + chunk_size, end);
+<a href=#2229 id=2229 data-nosnippet>2229</a>        <span class="kw">if </span>chunk_end == start {
+<a href=#2230 id=2230 data-nosnippet>2230</a>            <span class="kw">return </span><span class="prelude-val">None</span>;
+<a href=#2231 id=2231 data-nosnippet>2231</a>        }
+<a href=#2232 id=2232 data-nosnippet>2232</a>
+<a href=#2233 id=2233 data-nosnippet>2233</a>        <span class="kw">let </span>chunk = start..chunk_end;
+<a href=#2234 id=2234 data-nosnippet>2234</a>        start = chunk_end;
+<a href=#2235 id=2235 data-nosnippet>2235</a>        <span class="prelude-val">Some</span>(chunk)
+<a href=#2236 id=2236 data-nosnippet>2236</a>    })
+<a href=#2237 id=2237 data-nosnippet>2237</a>}
+<a href=#2238 id=2238 data-nosnippet>2238</a>
+<a href=#2239 id=2239 data-nosnippet>2239</a><span class="doccomment">/// Break a range into fixed-alignment chunks.
+<a href=#2240 id=2240 data-nosnippet>2240</a>///
+<a href=#2241 id=2241 data-nosnippet>2241</a>/// Each chunk is of size `alignment`, and starts on a multiple of `alignment`, with the possible
+<a href=#2242 id=2242 data-nosnippet>2242</a>/// exception of the first chunk (which may be misaligned and small) and the last (which may be
+<a href=#2243 id=2243 data-nosnippet>2243</a>/// small).
+<a href=#2244 id=2244 data-nosnippet>2244</a></span><span class="attr">#[allow(dead_code)]
+<a href=#2245 id=2245 data-nosnippet>2245</a></span><span class="kw">fn </span>range_chunks_aligned&lt;R&gt;(range: R, alignment: usize) -&gt; <span class="kw">impl </span>Iterator&lt;Item = Range&lt;usize&gt;&gt;
+<a href=#2246 id=2246 data-nosnippet>2246</a><span class="kw">where
+<a href=#2247 id=2247 data-nosnippet>2247</a>    </span>R: RangeBounds&lt;usize&gt;,
+<a href=#2248 id=2248 data-nosnippet>2248</a>{
+<a href=#2249 id=2249 data-nosnippet>2249</a>    <span class="comment">// Transform range to explicit start (inclusive) and end (exclusive) bounds.
+<a href=#2250 id=2250 data-nosnippet>2250</a>    </span><span class="kw">let </span>Range { <span class="kw-2">mut </span>start, end } = range_to_bounds(range);
+<a href=#2251 id=2251 data-nosnippet>2251</a>
+<a href=#2252 id=2252 data-nosnippet>2252</a>    <span class="comment">// If necessary, generate a partial first chunk to force the remaining chunks into alignment.
+<a href=#2253 id=2253 data-nosnippet>2253</a>    </span><span class="kw">let </span>first = <span class="kw">if </span>start.is_multiple_of(alignment) {
+<a href=#2254 id=2254 data-nosnippet>2254</a>        <span class="prelude-val">None
+<a href=#2255 id=2255 data-nosnippet>2255</a>    </span>} <span class="kw">else </span>{
+<a href=#2256 id=2256 data-nosnippet>2256</a>        <span class="comment">// The partial first chunk ends at the next multiple of the alignment, or at the end of the
+<a href=#2257 id=2257 data-nosnippet>2257</a>        // overall range, whichever comes first.
+<a href=#2258 id=2258 data-nosnippet>2258</a>        </span><span class="kw">let </span>chunk_end = min(start.next_multiple_of(alignment), end);
+<a href=#2259 id=2259 data-nosnippet>2259</a>        <span class="kw">let </span>chunk = start..chunk_end;
+<a href=#2260 id=2260 data-nosnippet>2260</a>
+<a href=#2261 id=2261 data-nosnippet>2261</a>        <span class="comment">// Start the series of aligned chunks at the end of the partial first chunk.
+<a href=#2262 id=2262 data-nosnippet>2262</a>        </span>start = chunk_end;
+<a href=#2263 id=2263 data-nosnippet>2263</a>        <span class="prelude-val">Some</span>(chunk)
+<a href=#2264 id=2264 data-nosnippet>2264</a>    };
+<a href=#2265 id=2265 data-nosnippet>2265</a>
+<a href=#2266 id=2266 data-nosnippet>2266</a>    first.into_iter().chain(range_chunks(start..end, alignment))
+<a href=#2267 id=2267 data-nosnippet>2267</a>}
 <a href=#2268 id=2268 data-nosnippet>2268</a>
-<a href=#2269 id=2269 data-nosnippet>2269</a>        <span class="comment">// Start the series of aligned chunks at the end of the partial first chunk.
-<a href=#2270 id=2270 data-nosnippet>2270</a>        </span>start = chunk_end;
-<a href=#2271 id=2271 data-nosnippet>2271</a>        <span class="prelude-val">Some</span>(chunk)
-<a href=#2272 id=2272 data-nosnippet>2272</a>    };
-<a href=#2273 id=2273 data-nosnippet>2273</a>
-<a href=#2274 id=2274 data-nosnippet>2274</a>    first.into_iter().chain(range_chunks(start..end, alignment))
-<a href=#2275 id=2275 data-nosnippet>2275</a>}
-<a href=#2276 id=2276 data-nosnippet>2276</a>
-<a href=#2277 id=2277 data-nosnippet>2277</a><span class="doccomment">/// Transform a range to explicit start (inclusive) and end (exclusive) bounds.
-<a href=#2278 id=2278 data-nosnippet>2278</a></span><span class="kw">fn </span>range_to_bounds(range: <span class="kw">impl </span>RangeBounds&lt;usize&gt;) -&gt; Range&lt;usize&gt; {
-<a href=#2279 id=2279 data-nosnippet>2279</a>    <span class="kw">let </span>start = <span class="kw">match </span>range.start_bound() {
-<a href=#2280 id=2280 data-nosnippet>2280</a>        Bound::Included(i) =&gt; <span class="kw-2">*</span>i,
-<a href=#2281 id=2281 data-nosnippet>2281</a>        Bound::Excluded(i) =&gt; <span class="kw-2">*</span>i + <span class="number">1</span>,
-<a href=#2282 id=2282 data-nosnippet>2282</a>        Bound::Unbounded =&gt; <span class="number">0</span>,
-<a href=#2283 id=2283 data-nosnippet>2283</a>    };
-<a href=#2284 id=2284 data-nosnippet>2284</a>    <span class="kw">let </span>end = <span class="kw">match </span>range.end_bound() {
-<a href=#2285 id=2285 data-nosnippet>2285</a>        Bound::Included(i) =&gt; <span class="kw-2">*</span>i + <span class="number">1</span>,
-<a href=#2286 id=2286 data-nosnippet>2286</a>        Bound::Excluded(i) =&gt; <span class="kw-2">*</span>i,
-<a href=#2287 id=2287 data-nosnippet>2287</a>        Bound::Unbounded =&gt; usize::MAX,
-<a href=#2288 id=2288 data-nosnippet>2288</a>    };
-<a href=#2289 id=2289 data-nosnippet>2289</a>    Range { start, end }
-<a href=#2290 id=2290 data-nosnippet>2290</a>}
-<a href=#2291 id=2291 data-nosnippet>2291</a>
-<a href=#2292 id=2292 data-nosnippet>2292</a><span class="doccomment">/// Break a range into fixed-size chunks, starting from the end and moving towards the start.
-<a href=#2293 id=2293 data-nosnippet>2293</a>///
-<a href=#2294 id=2294 data-nosnippet>2294</a>/// While the chunks are yielded in reverse order, from `end` to `start`, each individual chunk is
-<a href=#2295 id=2295 data-nosnippet>2295</a>/// in the usual ascending order. That is, the first chunk ends with `end` and the last chunk starts
-<a href=#2296 id=2296 data-nosnippet>2296</a>/// with `start`.
-<a href=#2297 id=2297 data-nosnippet>2297</a>///
-<a href=#2298 id=2298 data-nosnippet>2298</a>/// Note that unlike [`range_chunks`], which accepts any range and yields an infinite iterator if
-<a href=#2299 id=2299 data-nosnippet>2299</a>/// the range has no upper bound, this function requires there to be a defined upper bound,
-<a href=#2300 id=2300 data-nosnippet>2300</a>/// otherwise we don't know where the reversed iterator should _start_. The `end` bound given here
-<a href=#2301 id=2301 data-nosnippet>2301</a>/// is inclusive; i.e. the end of the first chunk yielded by the stream will be exactly `end`.
-<a href=#2302 id=2302 data-nosnippet>2302</a></span><span class="kw">fn </span>range_chunks_rev(
-<a href=#2303 id=2303 data-nosnippet>2303</a>    start: Bound&lt;usize&gt;,
-<a href=#2304 id=2304 data-nosnippet>2304</a>    end: usize,
-<a href=#2305 id=2305 data-nosnippet>2305</a>    chunk_size: usize,
-<a href=#2306 id=2306 data-nosnippet>2306</a>) -&gt; <span class="kw">impl </span>Iterator&lt;Item = Range&lt;usize&gt;&gt; {
-<a href=#2307 id=2307 data-nosnippet>2307</a>    <span class="comment">// Transform the start bound to be inclusive.
-<a href=#2308 id=2308 data-nosnippet>2308</a>    </span><span class="kw">let </span>start = <span class="kw">match </span>start {
-<a href=#2309 id=2309 data-nosnippet>2309</a>        Bound::Included(i) =&gt; i,
-<a href=#2310 id=2310 data-nosnippet>2310</a>        Bound::Excluded(i) =&gt; i + <span class="number">1</span>,
-<a href=#2311 id=2311 data-nosnippet>2311</a>        Bound::Unbounded =&gt; <span class="number">0</span>,
-<a href=#2312 id=2312 data-nosnippet>2312</a>    };
-<a href=#2313 id=2313 data-nosnippet>2313</a>    <span class="comment">// Transform the end bound to be exclusive.
-<a href=#2314 id=2314 data-nosnippet>2314</a>    </span><span class="kw">let </span><span class="kw-2">mut </span>end = end + <span class="number">1</span>;
-<a href=#2315 id=2315 data-nosnippet>2315</a>
-<a href=#2316 id=2316 data-nosnippet>2316</a>    std::iter::from_fn(<span class="kw">move </span>|| {
-<a href=#2317 id=2317 data-nosnippet>2317</a>        <span class="kw">let </span>chunk_start = max(start, end.saturating_sub(chunk_size));
-<a href=#2318 id=2318 data-nosnippet>2318</a>        <span class="kw">if </span>end &lt;= chunk_start {
-<a href=#2319 id=2319 data-nosnippet>2319</a>            <span class="kw">return </span><span class="prelude-val">None</span>;
-<a href=#2320 id=2320 data-nosnippet>2320</a>        }
-<a href=#2321 id=2321 data-nosnippet>2321</a>
-<a href=#2322 id=2322 data-nosnippet>2322</a>        <span class="kw">let </span>chunk = chunk_start..end;
-<a href=#2323 id=2323 data-nosnippet>2323</a>        end = chunk_start;
-<a href=#2324 id=2324 data-nosnippet>2324</a>        <span class="prelude-val">Some</span>(chunk)
-<a href=#2325 id=2325 data-nosnippet>2325</a>    })
-<a href=#2326 id=2326 data-nosnippet>2326</a>}
-<a href=#2327 id=2327 data-nosnippet>2327</a>
-<a href=#2328 id=2328 data-nosnippet>2328</a><span class="doccomment">/// Break a range into fixed-alignment chunks, starting from the end and moving towards the start.
-<a href=#2329 id=2329 data-nosnippet>2329</a>///
-<a href=#2330 id=2330 data-nosnippet>2330</a>/// Each chunk is of size `alignment`, and starts on a multiple of `alignment` (that is, the lower
-<a href=#2331 id=2331 data-nosnippet>2331</a>/// bound an _exclusive_ upper bound of each chunk are multiples of `alignment`), with the possible
-<a href=#2332 id=2332 data-nosnippet>2332</a>/// exception of the first chunk (the last chunk in numerical order, which may be small) and the
-<a href=#2333 id=2333 data-nosnippet>2333</a>/// last (which may be misaligned and small).
-<a href=#2334 id=2334 data-nosnippet>2334</a>///
-<a href=#2335 id=2335 data-nosnippet>2335</a>/// While the chunks are yielded in reverse order, from `end` to `start`, each individual chunk is
-<a href=#2336 id=2336 data-nosnippet>2336</a>/// in the usual ascending order. That is, the first chunk ends with `end` and the last chunk starts
-<a href=#2337 id=2337 data-nosnippet>2337</a>/// with `start`.
-<a href=#2338 id=2338 data-nosnippet>2338</a>///
-<a href=#2339 id=2339 data-nosnippet>2339</a>/// Note that unlike [`range_chunks_aligned`], which accepts any range and yields an infinite
-<a href=#2340 id=2340 data-nosnippet>2340</a>/// iterator if the range has no upper bound, this function requires there to be a defined upper
-<a href=#2341 id=2341 data-nosnippet>2341</a>/// bound, otherwise we don't know where the reversed iterator should _start_. The `end` bound given
-<a href=#2342 id=2342 data-nosnippet>2342</a>/// here is inclusive; i.e. the end of the first chunk yielded by the stream will be exactly `end`.
-<a href=#2343 id=2343 data-nosnippet>2343</a></span><span class="kw">fn </span>range_chunks_aligned_rev(
-<a href=#2344 id=2344 data-nosnippet>2344</a>    start: Bound&lt;usize&gt;,
-<a href=#2345 id=2345 data-nosnippet>2345</a>    end: usize,
-<a href=#2346 id=2346 data-nosnippet>2346</a>    alignment: usize,
-<a href=#2347 id=2347 data-nosnippet>2347</a>) -&gt; <span class="kw">impl </span>Iterator&lt;Item = Range&lt;usize&gt;&gt; {
-<a href=#2348 id=2348 data-nosnippet>2348</a>    <span class="comment">// Transform the start bound to be inclusive.
-<a href=#2349 id=2349 data-nosnippet>2349</a>    </span><span class="kw">let </span>start = <span class="kw">match </span>start {
-<a href=#2350 id=2350 data-nosnippet>2350</a>        Bound::Included(i) =&gt; i,
-<a href=#2351 id=2351 data-nosnippet>2351</a>        Bound::Excluded(i) =&gt; i + <span class="number">1</span>,
-<a href=#2352 id=2352 data-nosnippet>2352</a>        Bound::Unbounded =&gt; <span class="number">0</span>,
-<a href=#2353 id=2353 data-nosnippet>2353</a>    };
-<a href=#2354 id=2354 data-nosnippet>2354</a>    <span class="comment">// Transform the end bound to be exclusive.
-<a href=#2355 id=2355 data-nosnippet>2355</a>    </span><span class="kw">let </span><span class="kw-2">mut </span>end = end + <span class="number">1</span>;
-<a href=#2356 id=2356 data-nosnippet>2356</a>
-<a href=#2357 id=2357 data-nosnippet>2357</a>    <span class="comment">// If necessary, generate a partial first chunk to force the remaining chunks into alignment.
-<a href=#2358 id=2358 data-nosnippet>2358</a>    </span><span class="kw">let </span>first = <span class="kw">if </span>end.is_multiple_of(alignment) {
-<a href=#2359 id=2359 data-nosnippet>2359</a>        <span class="prelude-val">None
-<a href=#2360 id=2360 data-nosnippet>2360</a>    </span>} <span class="kw">else </span>{
-<a href=#2361 id=2361 data-nosnippet>2361</a>        <span class="comment">// The partial first chunk starts at the previous multiple of the alignment, or at the start
-<a href=#2362 id=2362 data-nosnippet>2362</a>        // of the overall range, whichever comes first.
-<a href=#2363 id=2363 data-nosnippet>2363</a>        </span><span class="kw">let </span>next_multiple = end.next_multiple_of(alignment);
-<a href=#2364 id=2364 data-nosnippet>2364</a>        <span class="kw">let </span>prev_multiple = next_multiple - alignment;
-<a href=#2365 id=2365 data-nosnippet>2365</a>        <span class="kw">let </span>chunk_start = max(prev_multiple, start);
-<a href=#2366 id=2366 data-nosnippet>2366</a>        <span class="kw">let </span>chunk = chunk_start..end;
-<a href=#2367 id=2367 data-nosnippet>2367</a>
-<a href=#2368 id=2368 data-nosnippet>2368</a>        <span class="comment">// Start the reverse series of aligned chunks at the start of the partial first chunk.
-<a href=#2369 id=2369 data-nosnippet>2369</a>        </span>end = chunk_start;
-<a href=#2370 id=2370 data-nosnippet>2370</a>        <span class="prelude-val">Some</span>(chunk)
-<a href=#2371 id=2371 data-nosnippet>2371</a>    };
-<a href=#2372 id=2372 data-nosnippet>2372</a>
-<a href=#2373 id=2373 data-nosnippet>2373</a>    first
-<a href=#2374 id=2374 data-nosnippet>2374</a>        .into_iter()
-<a href=#2375 id=2375 data-nosnippet>2375</a>        .chain(range_chunks_rev(Bound::Included(start), end - <span class="number">1</span>, alignment))
-<a href=#2376 id=2376 data-nosnippet>2376</a>}
-<a href=#2377 id=2377 data-nosnippet>2377</a>
-<a href=#2378 id=2378 data-nosnippet>2378</a><span class="kw">trait </span>ResultExt&lt;T, E&gt; {
-<a href=#2379 id=2379 data-nosnippet>2379</a>    <span class="kw">fn </span>ok_or_trace(<span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;T&gt;
-<a href=#2380 id=2380 data-nosnippet>2380</a>    <span class="kw">where
-<a href=#2381 id=2381 data-nosnippet>2381</a>        </span>E: Display;
-<a href=#2382 id=2382 data-nosnippet>2382</a>}
-<a href=#2383 id=2383 data-nosnippet>2383</a>
-<a href=#2384 id=2384 data-nosnippet>2384</a><span class="kw">impl</span>&lt;T, E&gt; ResultExt&lt;T, E&gt; <span class="kw">for </span><span class="prelude-ty">Result</span>&lt;T, E&gt; {
-<a href=#2385 id=2385 data-nosnippet>2385</a>    <span class="kw">fn </span>ok_or_trace(<span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;T&gt;
-<a href=#2386 id=2386 data-nosnippet>2386</a>    <span class="kw">where
-<a href=#2387 id=2387 data-nosnippet>2387</a>        </span>E: Display,
-<a href=#2388 id=2388 data-nosnippet>2388</a>    {
-<a href=#2389 id=2389 data-nosnippet>2389</a>        <span class="kw">match </span><span class="self">self </span>{
-<a href=#2390 id=2390 data-nosnippet>2390</a>            <span class="prelude-val">Ok</span>(t) =&gt; <span class="prelude-val">Some</span>(t),
-<a href=#2391 id=2391 data-nosnippet>2391</a>            <span class="prelude-val">Err</span>(err) =&gt; {
-<a href=#2392 id=2392 data-nosnippet>2392</a>                <span class="macro">tracing::info!</span>(
-<a href=#2393 id=2393 data-nosnippet>2393</a>                    <span class="string">"error loading resource from local storage, will try to fetch: {err:#}"
-<a href=#2394 id=2394 data-nosnippet>2394</a>                </span>);
-<a href=#2395 id=2395 data-nosnippet>2395</a>                <span class="prelude-val">None
-<a href=#2396 id=2396 data-nosnippet>2396</a>            </span>},
-<a href=#2397 id=2397 data-nosnippet>2397</a>        }
-<a href=#2398 id=2398 data-nosnippet>2398</a>    }
-<a href=#2399 id=2399 data-nosnippet>2399</a>}
-<a href=#2400 id=2400 data-nosnippet>2400</a>
-<a href=#2401 id=2401 data-nosnippet>2401</a><span class="attr">#[derive(Debug)]
-<a href=#2402 id=2402 data-nosnippet>2402</a></span><span class="kw">struct </span>ScannerMetrics {
-<a href=#2403 id=2403 data-nosnippet>2403</a>    <span class="doccomment">/// Whether a scan is currently running (1) or not (0).
-<a href=#2404 id=2404 data-nosnippet>2404</a>    </span>running: Box&lt;<span class="kw">dyn </span>Gauge&gt;,
-<a href=#2405 id=2405 data-nosnippet>2405</a>    <span class="doccomment">/// The current number that is running.
-<a href=#2406 id=2406 data-nosnippet>2406</a>    </span>current_scan: Box&lt;<span class="kw">dyn </span>Gauge&gt;,
-<a href=#2407 id=2407 data-nosnippet>2407</a>    <span class="doccomment">/// Number of blocks processed in the current scan.
-<a href=#2408 id=2408 data-nosnippet>2408</a>    </span>scanned_blocks: Box&lt;<span class="kw">dyn </span>Gauge&gt;,
-<a href=#2409 id=2409 data-nosnippet>2409</a>    <span class="doccomment">/// Number of VID entries processed in the current scan.
-<a href=#2410 id=2410 data-nosnippet>2410</a>    </span>scanned_vid: Box&lt;<span class="kw">dyn </span>Gauge&gt;,
-<a href=#2411 id=2411 data-nosnippet>2411</a>    <span class="doccomment">/// The number of missing blocks discovered and not yet resolved in the current scan.
-<a href=#2412 id=2412 data-nosnippet>2412</a>    </span>missing_blocks: Box&lt;<span class="kw">dyn </span>Gauge&gt;,
-<a href=#2413 id=2413 data-nosnippet>2413</a>    <span class="doccomment">/// The number of missing VID entries discovered and not yet resolved in the current scan.
-<a href=#2414 id=2414 data-nosnippet>2414</a>    </span>missing_vid: Box&lt;<span class="kw">dyn </span>Gauge&gt;,
-<a href=#2415 id=2415 data-nosnippet>2415</a>}
-<a href=#2416 id=2416 data-nosnippet>2416</a>
-<a href=#2417 id=2417 data-nosnippet>2417</a><span class="kw">impl </span>ScannerMetrics {
-<a href=#2418 id=2418 data-nosnippet>2418</a>    <span class="kw">fn </span>new(metrics: <span class="kw-2">&amp;</span>PrometheusMetrics) -&gt; <span class="self">Self </span>{
-<a href=#2419 id=2419 data-nosnippet>2419</a>        <span class="kw">let </span>group = metrics.subgroup(<span class="string">"scanner"</span>.into());
-<a href=#2420 id=2420 data-nosnippet>2420</a>        <span class="self">Self </span>{
-<a href=#2421 id=2421 data-nosnippet>2421</a>            running: group.create_gauge(<span class="string">"running"</span>.into(), <span class="prelude-val">None</span>),
-<a href=#2422 id=2422 data-nosnippet>2422</a>            current_scan: group.create_gauge(<span class="string">"current"</span>.into(), <span class="prelude-val">None</span>),
-<a href=#2423 id=2423 data-nosnippet>2423</a>            scanned_blocks: group.create_gauge(<span class="string">"scanned_blocks"</span>.into(), <span class="prelude-val">None</span>),
-<a href=#2424 id=2424 data-nosnippet>2424</a>            scanned_vid: group.create_gauge(<span class="string">"scanned_vid"</span>.into(), <span class="prelude-val">None</span>),
-<a href=#2425 id=2425 data-nosnippet>2425</a>            missing_blocks: group.create_gauge(<span class="string">"missing_blocks"</span>.into(), <span class="prelude-val">None</span>),
-<a href=#2426 id=2426 data-nosnippet>2426</a>            missing_vid: group.create_gauge(<span class="string">"missing_vid"</span>.into(), <span class="prelude-val">None</span>),
-<a href=#2427 id=2427 data-nosnippet>2427</a>        }
-<a href=#2428 id=2428 data-nosnippet>2428</a>    }
-<a href=#2429 id=2429 data-nosnippet>2429</a>}
-<a href=#2430 id=2430 data-nosnippet>2430</a>
-<a href=#2431 id=2431 data-nosnippet>2431</a><span class="attr">#[derive(Debug)]
-<a href=#2432 id=2432 data-nosnippet>2432</a></span><span class="kw">struct </span>AggregatorMetrics {
-<a href=#2433 id=2433 data-nosnippet>2433</a>    <span class="doccomment">/// The block height for which aggregate statistics are currently available.
-<a href=#2434 id=2434 data-nosnippet>2434</a>    </span>height: Box&lt;<span class="kw">dyn </span>Gauge&gt;,
-<a href=#2435 id=2435 data-nosnippet>2435</a>}
-<a href=#2436 id=2436 data-nosnippet>2436</a>
-<a href=#2437 id=2437 data-nosnippet>2437</a><span class="kw">impl </span>AggregatorMetrics {
-<a href=#2438 id=2438 data-nosnippet>2438</a>    <span class="kw">fn </span>new(metrics: <span class="kw-2">&amp;</span>PrometheusMetrics) -&gt; <span class="self">Self </span>{
-<a href=#2439 id=2439 data-nosnippet>2439</a>        <span class="kw">let </span>group = metrics.subgroup(<span class="string">"aggregator"</span>.into());
-<a href=#2440 id=2440 data-nosnippet>2440</a>        <span class="self">Self </span>{
-<a href=#2441 id=2441 data-nosnippet>2441</a>            height: group.create_gauge(<span class="string">"height"</span>.into(), <span class="prelude-val">None</span>),
-<a href=#2442 id=2442 data-nosnippet>2442</a>        }
-<a href=#2443 id=2443 data-nosnippet>2443</a>    }
-<a href=#2444 id=2444 data-nosnippet>2444</a>}
-<a href=#2445 id=2445 data-nosnippet>2445</a>
-<a href=#2446 id=2446 data-nosnippet>2446</a><span class="attr">#[derive(Debug)]
-<a href=#2447 id=2447 data-nosnippet>2447</a></span><span class="kw">struct </span>SyncStatusMetrics {
-<a href=#2448 id=2448 data-nosnippet>2448</a>    current_range_start: Box&lt;<span class="kw">dyn </span>Gauge&gt;,
-<a href=#2449 id=2449 data-nosnippet>2449</a>    current_range_end: Box&lt;<span class="kw">dyn </span>Gauge&gt;,
-<a href=#2450 id=2450 data-nosnippet>2450</a>    current_start_time: Box&lt;<span class="kw">dyn </span>Gauge&gt;,
-<a href=#2451 id=2451 data-nosnippet>2451</a>    avg_rate: Box&lt;<span class="kw">dyn </span>Histogram&gt;,
-<a href=#2452 id=2452 data-nosnippet>2452</a>    ranges_scanned: Box&lt;<span class="kw">dyn </span>Counter&gt;,
-<a href=#2453 id=2453 data-nosnippet>2453</a>    running: Box&lt;<span class="kw">dyn </span>Gauge&gt;,
-<a href=#2454 id=2454 data-nosnippet>2454</a>}
-<a href=#2455 id=2455 data-nosnippet>2455</a>
-<a href=#2456 id=2456 data-nosnippet>2456</a><span class="kw">impl </span>SyncStatusMetrics {
-<a href=#2457 id=2457 data-nosnippet>2457</a>    <span class="kw">fn </span>new(metrics: <span class="kw-2">&amp;</span>PrometheusMetrics, size: usize) -&gt; <span class="self">Self </span>{
-<a href=#2458 id=2458 data-nosnippet>2458</a>        <span class="kw">let </span>group = metrics.subgroup(<span class="string">"sync_status"</span>.into());
-<a href=#2459 id=2459 data-nosnippet>2459</a>        group.create_gauge(<span class="string">"range_size"</span>.into(), <span class="prelude-val">None</span>).set(size);
-<a href=#2460 id=2460 data-nosnippet>2460</a>
-<a href=#2461 id=2461 data-nosnippet>2461</a>        <span class="self">Self </span>{
-<a href=#2462 id=2462 data-nosnippet>2462</a>            current_range_start: group.create_gauge(<span class="string">"current_range_start"</span>.into(), <span class="prelude-val">None</span>),
-<a href=#2463 id=2463 data-nosnippet>2463</a>            current_range_end: group.create_gauge(<span class="string">"current_range_end"</span>.into(), <span class="prelude-val">None</span>),
-<a href=#2464 id=2464 data-nosnippet>2464</a>            current_start_time: group
-<a href=#2465 id=2465 data-nosnippet>2465</a>                .create_gauge(<span class="string">"current_range_start_time"</span>.into(), <span class="prelude-val">Some</span>(<span class="string">"s"</span>.into())),
-<a href=#2466 id=2466 data-nosnippet>2466</a>            avg_rate: group
-<a href=#2467 id=2467 data-nosnippet>2467</a>                .create_histogram(<span class="string">"avg_time_per_block_scanned"</span>.into(), <span class="prelude-val">Some</span>(<span class="string">"ms"</span>.into())),
-<a href=#2468 id=2468 data-nosnippet>2468</a>            ranges_scanned: group.create_counter(<span class="string">"ranges_scanned"</span>.into(), <span class="prelude-val">None</span>),
-<a href=#2469 id=2469 data-nosnippet>2469</a>            running: group.create_gauge(<span class="string">"running"</span>.into(), <span class="prelude-val">None</span>),
-<a href=#2470 id=2470 data-nosnippet>2470</a>        }
-<a href=#2471 id=2471 data-nosnippet>2471</a>    }
-<a href=#2472 id=2472 data-nosnippet>2472</a>
-<a href=#2473 id=2473 data-nosnippet>2473</a>    <span class="kw">fn </span>start_range(<span class="kw-2">&amp;</span><span class="self">self</span>, range: <span class="kw-2">&amp;</span>Range&lt;usize&gt;) -&gt; SyncStatusRangeMetrics&lt;<span class="lifetime">'_</span>&gt; {
-<a href=#2474 id=2474 data-nosnippet>2474</a>        <span class="kw">let </span>start = Utc::now();
-<a href=#2475 id=2475 data-nosnippet>2475</a>        <span class="self">self</span>.current_range_start.set(range.start);
-<a href=#2476 id=2476 data-nosnippet>2476</a>        <span class="self">self</span>.current_range_end.set(range.end);
-<a href=#2477 id=2477 data-nosnippet>2477</a>        <span class="self">self</span>.current_start_time.set(start.timestamp() <span class="kw">as </span>usize);
-<a href=#2478 id=2478 data-nosnippet>2478</a>        <span class="self">self</span>.running.set(<span class="number">1</span>);
-<a href=#2479 id=2479 data-nosnippet>2479</a>        SyncStatusRangeMetrics {
-<a href=#2480 id=2480 data-nosnippet>2480</a>            size: range.end - range.start,
-<a href=#2481 id=2481 data-nosnippet>2481</a>            start,
-<a href=#2482 id=2482 data-nosnippet>2482</a>            metrics: <span class="self">self</span>,
-<a href=#2483 id=2483 data-nosnippet>2483</a>        }
-<a href=#2484 id=2484 data-nosnippet>2484</a>    }
+<a href=#2269 id=2269 data-nosnippet>2269</a><span class="doccomment">/// Transform a range to explicit start (inclusive) and end (exclusive) bounds.
+<a href=#2270 id=2270 data-nosnippet>2270</a></span><span class="kw">fn </span>range_to_bounds(range: <span class="kw">impl </span>RangeBounds&lt;usize&gt;) -&gt; Range&lt;usize&gt; {
+<a href=#2271 id=2271 data-nosnippet>2271</a>    <span class="kw">let </span>start = <span class="kw">match </span>range.start_bound() {
+<a href=#2272 id=2272 data-nosnippet>2272</a>        Bound::Included(i) =&gt; <span class="kw-2">*</span>i,
+<a href=#2273 id=2273 data-nosnippet>2273</a>        Bound::Excluded(i) =&gt; <span class="kw-2">*</span>i + <span class="number">1</span>,
+<a href=#2274 id=2274 data-nosnippet>2274</a>        Bound::Unbounded =&gt; <span class="number">0</span>,
+<a href=#2275 id=2275 data-nosnippet>2275</a>    };
+<a href=#2276 id=2276 data-nosnippet>2276</a>    <span class="kw">let </span>end = <span class="kw">match </span>range.end_bound() {
+<a href=#2277 id=2277 data-nosnippet>2277</a>        Bound::Included(i) =&gt; <span class="kw-2">*</span>i + <span class="number">1</span>,
+<a href=#2278 id=2278 data-nosnippet>2278</a>        Bound::Excluded(i) =&gt; <span class="kw-2">*</span>i,
+<a href=#2279 id=2279 data-nosnippet>2279</a>        Bound::Unbounded =&gt; usize::MAX,
+<a href=#2280 id=2280 data-nosnippet>2280</a>    };
+<a href=#2281 id=2281 data-nosnippet>2281</a>    Range { start, end }
+<a href=#2282 id=2282 data-nosnippet>2282</a>}
+<a href=#2283 id=2283 data-nosnippet>2283</a>
+<a href=#2284 id=2284 data-nosnippet>2284</a><span class="doccomment">/// Break a range into fixed-size chunks, starting from the end and moving towards the start.
+<a href=#2285 id=2285 data-nosnippet>2285</a>///
+<a href=#2286 id=2286 data-nosnippet>2286</a>/// While the chunks are yielded in reverse order, from `end` to `start`, each individual chunk is
+<a href=#2287 id=2287 data-nosnippet>2287</a>/// in the usual ascending order. That is, the first chunk ends with `end` and the last chunk starts
+<a href=#2288 id=2288 data-nosnippet>2288</a>/// with `start`.
+<a href=#2289 id=2289 data-nosnippet>2289</a>///
+<a href=#2290 id=2290 data-nosnippet>2290</a>/// Note that unlike [`range_chunks`], which accepts any range and yields an infinite iterator if
+<a href=#2291 id=2291 data-nosnippet>2291</a>/// the range has no upper bound, this function requires there to be a defined upper bound,
+<a href=#2292 id=2292 data-nosnippet>2292</a>/// otherwise we don't know where the reversed iterator should _start_. The `end` bound given here
+<a href=#2293 id=2293 data-nosnippet>2293</a>/// is inclusive; i.e. the end of the first chunk yielded by the stream will be exactly `end`.
+<a href=#2294 id=2294 data-nosnippet>2294</a></span><span class="kw">fn </span>range_chunks_rev(
+<a href=#2295 id=2295 data-nosnippet>2295</a>    start: Bound&lt;usize&gt;,
+<a href=#2296 id=2296 data-nosnippet>2296</a>    end: usize,
+<a href=#2297 id=2297 data-nosnippet>2297</a>    chunk_size: usize,
+<a href=#2298 id=2298 data-nosnippet>2298</a>) -&gt; <span class="kw">impl </span>Iterator&lt;Item = Range&lt;usize&gt;&gt; {
+<a href=#2299 id=2299 data-nosnippet>2299</a>    <span class="comment">// Transform the start bound to be inclusive.
+<a href=#2300 id=2300 data-nosnippet>2300</a>    </span><span class="kw">let </span>start = <span class="kw">match </span>start {
+<a href=#2301 id=2301 data-nosnippet>2301</a>        Bound::Included(i) =&gt; i,
+<a href=#2302 id=2302 data-nosnippet>2302</a>        Bound::Excluded(i) =&gt; i + <span class="number">1</span>,
+<a href=#2303 id=2303 data-nosnippet>2303</a>        Bound::Unbounded =&gt; <span class="number">0</span>,
+<a href=#2304 id=2304 data-nosnippet>2304</a>    };
+<a href=#2305 id=2305 data-nosnippet>2305</a>    <span class="comment">// Transform the end bound to be exclusive.
+<a href=#2306 id=2306 data-nosnippet>2306</a>    </span><span class="kw">let </span><span class="kw-2">mut </span>end = end + <span class="number">1</span>;
+<a href=#2307 id=2307 data-nosnippet>2307</a>
+<a href=#2308 id=2308 data-nosnippet>2308</a>    std::iter::from_fn(<span class="kw">move </span>|| {
+<a href=#2309 id=2309 data-nosnippet>2309</a>        <span class="kw">let </span>chunk_start = max(start, end.saturating_sub(chunk_size));
+<a href=#2310 id=2310 data-nosnippet>2310</a>        <span class="kw">if </span>end &lt;= chunk_start {
+<a href=#2311 id=2311 data-nosnippet>2311</a>            <span class="kw">return </span><span class="prelude-val">None</span>;
+<a href=#2312 id=2312 data-nosnippet>2312</a>        }
+<a href=#2313 id=2313 data-nosnippet>2313</a>
+<a href=#2314 id=2314 data-nosnippet>2314</a>        <span class="kw">let </span>chunk = chunk_start..end;
+<a href=#2315 id=2315 data-nosnippet>2315</a>        end = chunk_start;
+<a href=#2316 id=2316 data-nosnippet>2316</a>        <span class="prelude-val">Some</span>(chunk)
+<a href=#2317 id=2317 data-nosnippet>2317</a>    })
+<a href=#2318 id=2318 data-nosnippet>2318</a>}
+<a href=#2319 id=2319 data-nosnippet>2319</a>
+<a href=#2320 id=2320 data-nosnippet>2320</a><span class="doccomment">/// Break a range into fixed-alignment chunks, starting from the end and moving towards the start.
+<a href=#2321 id=2321 data-nosnippet>2321</a>///
+<a href=#2322 id=2322 data-nosnippet>2322</a>/// Each chunk is of size `alignment`, and starts on a multiple of `alignment` (that is, the lower
+<a href=#2323 id=2323 data-nosnippet>2323</a>/// bound an _exclusive_ upper bound of each chunk are multiples of `alignment`), with the possible
+<a href=#2324 id=2324 data-nosnippet>2324</a>/// exception of the first chunk (the last chunk in numerical order, which may be small) and the
+<a href=#2325 id=2325 data-nosnippet>2325</a>/// last (which may be misaligned and small).
+<a href=#2326 id=2326 data-nosnippet>2326</a>///
+<a href=#2327 id=2327 data-nosnippet>2327</a>/// While the chunks are yielded in reverse order, from `end` to `start`, each individual chunk is
+<a href=#2328 id=2328 data-nosnippet>2328</a>/// in the usual ascending order. That is, the first chunk ends with `end` and the last chunk starts
+<a href=#2329 id=2329 data-nosnippet>2329</a>/// with `start`.
+<a href=#2330 id=2330 data-nosnippet>2330</a>///
+<a href=#2331 id=2331 data-nosnippet>2331</a>/// Note that unlike [`range_chunks_aligned`], which accepts any range and yields an infinite
+<a href=#2332 id=2332 data-nosnippet>2332</a>/// iterator if the range has no upper bound, this function requires there to be a defined upper
+<a href=#2333 id=2333 data-nosnippet>2333</a>/// bound, otherwise we don't know where the reversed iterator should _start_. The `end` bound given
+<a href=#2334 id=2334 data-nosnippet>2334</a>/// here is inclusive; i.e. the end of the first chunk yielded by the stream will be exactly `end`.
+<a href=#2335 id=2335 data-nosnippet>2335</a></span><span class="kw">fn </span>range_chunks_aligned_rev(
+<a href=#2336 id=2336 data-nosnippet>2336</a>    start: Bound&lt;usize&gt;,
+<a href=#2337 id=2337 data-nosnippet>2337</a>    end: usize,
+<a href=#2338 id=2338 data-nosnippet>2338</a>    alignment: usize,
+<a href=#2339 id=2339 data-nosnippet>2339</a>) -&gt; <span class="kw">impl </span>Iterator&lt;Item = Range&lt;usize&gt;&gt; {
+<a href=#2340 id=2340 data-nosnippet>2340</a>    <span class="comment">// Transform the start bound to be inclusive.
+<a href=#2341 id=2341 data-nosnippet>2341</a>    </span><span class="kw">let </span>start = <span class="kw">match </span>start {
+<a href=#2342 id=2342 data-nosnippet>2342</a>        Bound::Included(i) =&gt; i,
+<a href=#2343 id=2343 data-nosnippet>2343</a>        Bound::Excluded(i) =&gt; i + <span class="number">1</span>,
+<a href=#2344 id=2344 data-nosnippet>2344</a>        Bound::Unbounded =&gt; <span class="number">0</span>,
+<a href=#2345 id=2345 data-nosnippet>2345</a>    };
+<a href=#2346 id=2346 data-nosnippet>2346</a>    <span class="comment">// Transform the end bound to be exclusive.
+<a href=#2347 id=2347 data-nosnippet>2347</a>    </span><span class="kw">let </span><span class="kw-2">mut </span>end = end + <span class="number">1</span>;
+<a href=#2348 id=2348 data-nosnippet>2348</a>
+<a href=#2349 id=2349 data-nosnippet>2349</a>    <span class="comment">// If necessary, generate a partial first chunk to force the remaining chunks into alignment.
+<a href=#2350 id=2350 data-nosnippet>2350</a>    </span><span class="kw">let </span>first = <span class="kw">if </span>end.is_multiple_of(alignment) {
+<a href=#2351 id=2351 data-nosnippet>2351</a>        <span class="prelude-val">None
+<a href=#2352 id=2352 data-nosnippet>2352</a>    </span>} <span class="kw">else </span>{
+<a href=#2353 id=2353 data-nosnippet>2353</a>        <span class="comment">// The partial first chunk starts at the previous multiple of the alignment, or at the start
+<a href=#2354 id=2354 data-nosnippet>2354</a>        // of the overall range, whichever comes first.
+<a href=#2355 id=2355 data-nosnippet>2355</a>        </span><span class="kw">let </span>next_multiple = end.next_multiple_of(alignment);
+<a href=#2356 id=2356 data-nosnippet>2356</a>        <span class="kw">let </span>prev_multiple = next_multiple - alignment;
+<a href=#2357 id=2357 data-nosnippet>2357</a>        <span class="kw">let </span>chunk_start = max(prev_multiple, start);
+<a href=#2358 id=2358 data-nosnippet>2358</a>        <span class="kw">let </span>chunk = chunk_start..end;
+<a href=#2359 id=2359 data-nosnippet>2359</a>
+<a href=#2360 id=2360 data-nosnippet>2360</a>        <span class="comment">// Start the reverse series of aligned chunks at the start of the partial first chunk.
+<a href=#2361 id=2361 data-nosnippet>2361</a>        </span>end = chunk_start;
+<a href=#2362 id=2362 data-nosnippet>2362</a>        <span class="prelude-val">Some</span>(chunk)
+<a href=#2363 id=2363 data-nosnippet>2363</a>    };
+<a href=#2364 id=2364 data-nosnippet>2364</a>
+<a href=#2365 id=2365 data-nosnippet>2365</a>    first
+<a href=#2366 id=2366 data-nosnippet>2366</a>        .into_iter()
+<a href=#2367 id=2367 data-nosnippet>2367</a>        .chain(range_chunks_rev(Bound::Included(start), end - <span class="number">1</span>, alignment))
+<a href=#2368 id=2368 data-nosnippet>2368</a>}
+<a href=#2369 id=2369 data-nosnippet>2369</a>
+<a href=#2370 id=2370 data-nosnippet>2370</a><span class="kw">trait </span>ResultExt&lt;T, E&gt; {
+<a href=#2371 id=2371 data-nosnippet>2371</a>    <span class="kw">fn </span>ok_or_trace(<span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;T&gt;
+<a href=#2372 id=2372 data-nosnippet>2372</a>    <span class="kw">where
+<a href=#2373 id=2373 data-nosnippet>2373</a>        </span>E: Display;
+<a href=#2374 id=2374 data-nosnippet>2374</a>}
+<a href=#2375 id=2375 data-nosnippet>2375</a>
+<a href=#2376 id=2376 data-nosnippet>2376</a><span class="kw">impl</span>&lt;T, E&gt; ResultExt&lt;T, E&gt; <span class="kw">for </span><span class="prelude-ty">Result</span>&lt;T, E&gt; {
+<a href=#2377 id=2377 data-nosnippet>2377</a>    <span class="kw">fn </span>ok_or_trace(<span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;T&gt;
+<a href=#2378 id=2378 data-nosnippet>2378</a>    <span class="kw">where
+<a href=#2379 id=2379 data-nosnippet>2379</a>        </span>E: Display,
+<a href=#2380 id=2380 data-nosnippet>2380</a>    {
+<a href=#2381 id=2381 data-nosnippet>2381</a>        <span class="kw">match </span><span class="self">self </span>{
+<a href=#2382 id=2382 data-nosnippet>2382</a>            <span class="prelude-val">Ok</span>(t) =&gt; <span class="prelude-val">Some</span>(t),
+<a href=#2383 id=2383 data-nosnippet>2383</a>            <span class="prelude-val">Err</span>(err) =&gt; {
+<a href=#2384 id=2384 data-nosnippet>2384</a>                <span class="macro">tracing::info!</span>(
+<a href=#2385 id=2385 data-nosnippet>2385</a>                    <span class="string">"error loading resource from local storage, will try to fetch: {err:#}"
+<a href=#2386 id=2386 data-nosnippet>2386</a>                </span>);
+<a href=#2387 id=2387 data-nosnippet>2387</a>                <span class="prelude-val">None
+<a href=#2388 id=2388 data-nosnippet>2388</a>            </span>},
+<a href=#2389 id=2389 data-nosnippet>2389</a>        }
+<a href=#2390 id=2390 data-nosnippet>2390</a>    }
+<a href=#2391 id=2391 data-nosnippet>2391</a>}
+<a href=#2392 id=2392 data-nosnippet>2392</a>
+<a href=#2393 id=2393 data-nosnippet>2393</a><span class="attr">#[derive(Debug)]
+<a href=#2394 id=2394 data-nosnippet>2394</a></span><span class="kw">struct </span>ScannerMetrics {
+<a href=#2395 id=2395 data-nosnippet>2395</a>    <span class="doccomment">/// Whether a scan is currently running (1) or not (0).
+<a href=#2396 id=2396 data-nosnippet>2396</a>    </span>running: Box&lt;<span class="kw">dyn </span>Gauge&gt;,
+<a href=#2397 id=2397 data-nosnippet>2397</a>    <span class="doccomment">/// The current number that is running.
+<a href=#2398 id=2398 data-nosnippet>2398</a>    </span>current_scan: Box&lt;<span class="kw">dyn </span>Gauge&gt;,
+<a href=#2399 id=2399 data-nosnippet>2399</a>    <span class="doccomment">/// Number of blocks processed in the current scan.
+<a href=#2400 id=2400 data-nosnippet>2400</a>    </span>scanned_blocks: Box&lt;<span class="kw">dyn </span>Gauge&gt;,
+<a href=#2401 id=2401 data-nosnippet>2401</a>    <span class="doccomment">/// Number of VID entries processed in the current scan.
+<a href=#2402 id=2402 data-nosnippet>2402</a>    </span>scanned_vid: Box&lt;<span class="kw">dyn </span>Gauge&gt;,
+<a href=#2403 id=2403 data-nosnippet>2403</a>    <span class="doccomment">/// The number of missing blocks discovered and not yet resolved in the current scan.
+<a href=#2404 id=2404 data-nosnippet>2404</a>    </span>missing_blocks: Box&lt;<span class="kw">dyn </span>Gauge&gt;,
+<a href=#2405 id=2405 data-nosnippet>2405</a>    <span class="doccomment">/// The number of missing VID entries discovered and not yet resolved in the current scan.
+<a href=#2406 id=2406 data-nosnippet>2406</a>    </span>missing_vid: Box&lt;<span class="kw">dyn </span>Gauge&gt;,
+<a href=#2407 id=2407 data-nosnippet>2407</a>}
+<a href=#2408 id=2408 data-nosnippet>2408</a>
+<a href=#2409 id=2409 data-nosnippet>2409</a><span class="kw">impl </span>ScannerMetrics {
+<a href=#2410 id=2410 data-nosnippet>2410</a>    <span class="kw">fn </span>new(metrics: <span class="kw-2">&amp;</span>PrometheusMetrics) -&gt; <span class="self">Self </span>{
+<a href=#2411 id=2411 data-nosnippet>2411</a>        <span class="kw">let </span>group = metrics.subgroup(<span class="string">"scanner"</span>.into());
+<a href=#2412 id=2412 data-nosnippet>2412</a>        <span class="self">Self </span>{
+<a href=#2413 id=2413 data-nosnippet>2413</a>            running: group.create_gauge(<span class="string">"running"</span>.into(), <span class="prelude-val">None</span>),
+<a href=#2414 id=2414 data-nosnippet>2414</a>            current_scan: group.create_gauge(<span class="string">"current"</span>.into(), <span class="prelude-val">None</span>),
+<a href=#2415 id=2415 data-nosnippet>2415</a>            scanned_blocks: group.create_gauge(<span class="string">"scanned_blocks"</span>.into(), <span class="prelude-val">None</span>),
+<a href=#2416 id=2416 data-nosnippet>2416</a>            scanned_vid: group.create_gauge(<span class="string">"scanned_vid"</span>.into(), <span class="prelude-val">None</span>),
+<a href=#2417 id=2417 data-nosnippet>2417</a>            missing_blocks: group.create_gauge(<span class="string">"missing_blocks"</span>.into(), <span class="prelude-val">None</span>),
+<a href=#2418 id=2418 data-nosnippet>2418</a>            missing_vid: group.create_gauge(<span class="string">"missing_vid"</span>.into(), <span class="prelude-val">None</span>),
+<a href=#2419 id=2419 data-nosnippet>2419</a>        }
+<a href=#2420 id=2420 data-nosnippet>2420</a>    }
+<a href=#2421 id=2421 data-nosnippet>2421</a>}
+<a href=#2422 id=2422 data-nosnippet>2422</a>
+<a href=#2423 id=2423 data-nosnippet>2423</a><span class="attr">#[derive(Debug)]
+<a href=#2424 id=2424 data-nosnippet>2424</a></span><span class="kw">struct </span>AggregatorMetrics {
+<a href=#2425 id=2425 data-nosnippet>2425</a>    <span class="doccomment">/// The block height for which aggregate statistics are currently available.
+<a href=#2426 id=2426 data-nosnippet>2426</a>    </span>height: Box&lt;<span class="kw">dyn </span>Gauge&gt;,
+<a href=#2427 id=2427 data-nosnippet>2427</a>}
+<a href=#2428 id=2428 data-nosnippet>2428</a>
+<a href=#2429 id=2429 data-nosnippet>2429</a><span class="kw">impl </span>AggregatorMetrics {
+<a href=#2430 id=2430 data-nosnippet>2430</a>    <span class="kw">fn </span>new(metrics: <span class="kw-2">&amp;</span>PrometheusMetrics) -&gt; <span class="self">Self </span>{
+<a href=#2431 id=2431 data-nosnippet>2431</a>        <span class="kw">let </span>group = metrics.subgroup(<span class="string">"aggregator"</span>.into());
+<a href=#2432 id=2432 data-nosnippet>2432</a>        <span class="self">Self </span>{
+<a href=#2433 id=2433 data-nosnippet>2433</a>            height: group.create_gauge(<span class="string">"height"</span>.into(), <span class="prelude-val">None</span>),
+<a href=#2434 id=2434 data-nosnippet>2434</a>        }
+<a href=#2435 id=2435 data-nosnippet>2435</a>    }
+<a href=#2436 id=2436 data-nosnippet>2436</a>}
+<a href=#2437 id=2437 data-nosnippet>2437</a>
+<a href=#2438 id=2438 data-nosnippet>2438</a><span class="attr">#[derive(Debug)]
+<a href=#2439 id=2439 data-nosnippet>2439</a></span><span class="kw">struct </span>SyncStatusMetrics {
+<a href=#2440 id=2440 data-nosnippet>2440</a>    current_range_start: Box&lt;<span class="kw">dyn </span>Gauge&gt;,
+<a href=#2441 id=2441 data-nosnippet>2441</a>    current_range_end: Box&lt;<span class="kw">dyn </span>Gauge&gt;,
+<a href=#2442 id=2442 data-nosnippet>2442</a>    current_start_time: Box&lt;<span class="kw">dyn </span>Gauge&gt;,
+<a href=#2443 id=2443 data-nosnippet>2443</a>    avg_rate: Box&lt;<span class="kw">dyn </span>Histogram&gt;,
+<a href=#2444 id=2444 data-nosnippet>2444</a>    ranges_scanned: Box&lt;<span class="kw">dyn </span>Counter&gt;,
+<a href=#2445 id=2445 data-nosnippet>2445</a>    running: Box&lt;<span class="kw">dyn </span>Gauge&gt;,
+<a href=#2446 id=2446 data-nosnippet>2446</a>}
+<a href=#2447 id=2447 data-nosnippet>2447</a>
+<a href=#2448 id=2448 data-nosnippet>2448</a><span class="kw">impl </span>SyncStatusMetrics {
+<a href=#2449 id=2449 data-nosnippet>2449</a>    <span class="kw">fn </span>new(metrics: <span class="kw-2">&amp;</span>PrometheusMetrics, size: usize) -&gt; <span class="self">Self </span>{
+<a href=#2450 id=2450 data-nosnippet>2450</a>        <span class="kw">let </span>group = metrics.subgroup(<span class="string">"sync_status"</span>.into());
+<a href=#2451 id=2451 data-nosnippet>2451</a>        group.create_gauge(<span class="string">"range_size"</span>.into(), <span class="prelude-val">None</span>).set(size);
+<a href=#2452 id=2452 data-nosnippet>2452</a>
+<a href=#2453 id=2453 data-nosnippet>2453</a>        <span class="self">Self </span>{
+<a href=#2454 id=2454 data-nosnippet>2454</a>            current_range_start: group.create_gauge(<span class="string">"current_range_start"</span>.into(), <span class="prelude-val">None</span>),
+<a href=#2455 id=2455 data-nosnippet>2455</a>            current_range_end: group.create_gauge(<span class="string">"current_range_end"</span>.into(), <span class="prelude-val">None</span>),
+<a href=#2456 id=2456 data-nosnippet>2456</a>            current_start_time: group
+<a href=#2457 id=2457 data-nosnippet>2457</a>                .create_gauge(<span class="string">"current_range_start_time"</span>.into(), <span class="prelude-val">Some</span>(<span class="string">"s"</span>.into())),
+<a href=#2458 id=2458 data-nosnippet>2458</a>            avg_rate: group
+<a href=#2459 id=2459 data-nosnippet>2459</a>                .create_histogram(<span class="string">"avg_time_per_block_scanned"</span>.into(), <span class="prelude-val">Some</span>(<span class="string">"ms"</span>.into())),
+<a href=#2460 id=2460 data-nosnippet>2460</a>            ranges_scanned: group.create_counter(<span class="string">"ranges_scanned"</span>.into(), <span class="prelude-val">None</span>),
+<a href=#2461 id=2461 data-nosnippet>2461</a>            running: group.create_gauge(<span class="string">"running"</span>.into(), <span class="prelude-val">None</span>),
+<a href=#2462 id=2462 data-nosnippet>2462</a>        }
+<a href=#2463 id=2463 data-nosnippet>2463</a>    }
+<a href=#2464 id=2464 data-nosnippet>2464</a>
+<a href=#2465 id=2465 data-nosnippet>2465</a>    <span class="kw">fn </span>start_range(<span class="kw-2">&amp;</span><span class="self">self</span>, range: <span class="kw-2">&amp;</span>Range&lt;usize&gt;) -&gt; SyncStatusRangeMetrics&lt;<span class="lifetime">'_</span>&gt; {
+<a href=#2466 id=2466 data-nosnippet>2466</a>        <span class="kw">let </span>start = Utc::now();
+<a href=#2467 id=2467 data-nosnippet>2467</a>        <span class="self">self</span>.current_range_start.set(range.start);
+<a href=#2468 id=2468 data-nosnippet>2468</a>        <span class="self">self</span>.current_range_end.set(range.end);
+<a href=#2469 id=2469 data-nosnippet>2469</a>        <span class="self">self</span>.current_start_time.set(start.timestamp() <span class="kw">as </span>usize);
+<a href=#2470 id=2470 data-nosnippet>2470</a>        <span class="self">self</span>.running.set(<span class="number">1</span>);
+<a href=#2471 id=2471 data-nosnippet>2471</a>        SyncStatusRangeMetrics {
+<a href=#2472 id=2472 data-nosnippet>2472</a>            size: range.end - range.start,
+<a href=#2473 id=2473 data-nosnippet>2473</a>            start,
+<a href=#2474 id=2474 data-nosnippet>2474</a>            metrics: <span class="self">self</span>,
+<a href=#2475 id=2475 data-nosnippet>2475</a>        }
+<a href=#2476 id=2476 data-nosnippet>2476</a>    }
+<a href=#2477 id=2477 data-nosnippet>2477</a>}
+<a href=#2478 id=2478 data-nosnippet>2478</a>
+<a href=#2479 id=2479 data-nosnippet>2479</a><span class="attr">#[must_use]
+<a href=#2480 id=2480 data-nosnippet>2480</a>#[derive(Debug)]
+<a href=#2481 id=2481 data-nosnippet>2481</a></span><span class="kw">struct </span>SyncStatusRangeMetrics&lt;<span class="lifetime">'a</span>&gt; {
+<a href=#2482 id=2482 data-nosnippet>2482</a>    size: usize,
+<a href=#2483 id=2483 data-nosnippet>2483</a>    start: DateTime&lt;Utc&gt;,
+<a href=#2484 id=2484 data-nosnippet>2484</a>    metrics: <span class="kw-2">&amp;</span><span class="lifetime">'a </span>SyncStatusMetrics,
 <a href=#2485 id=2485 data-nosnippet>2485</a>}
 <a href=#2486 id=2486 data-nosnippet>2486</a>
-<a href=#2487 id=2487 data-nosnippet>2487</a><span class="attr">#[must_use]
-<a href=#2488 id=2488 data-nosnippet>2488</a>#[derive(Debug)]
-<a href=#2489 id=2489 data-nosnippet>2489</a></span><span class="kw">struct </span>SyncStatusRangeMetrics&lt;<span class="lifetime">'a</span>&gt; {
-<a href=#2490 id=2490 data-nosnippet>2490</a>    size: usize,
-<a href=#2491 id=2491 data-nosnippet>2491</a>    start: DateTime&lt;Utc&gt;,
-<a href=#2492 id=2492 data-nosnippet>2492</a>    metrics: <span class="kw-2">&amp;</span><span class="lifetime">'a </span>SyncStatusMetrics,
-<a href=#2493 id=2493 data-nosnippet>2493</a>}
-<a href=#2494 id=2494 data-nosnippet>2494</a>
-<a href=#2495 id=2495 data-nosnippet>2495</a><span class="kw">impl</span>&lt;<span class="lifetime">'a</span>&gt; SyncStatusRangeMetrics&lt;<span class="lifetime">'a</span>&gt; {
-<a href=#2496 id=2496 data-nosnippet>2496</a>    <span class="kw">fn </span>end(<span class="self">self</span>) {
-<a href=#2497 id=2497 data-nosnippet>2497</a>        <span class="kw">let </span>elapsed = Utc::now() - <span class="self">self</span>.start;
-<a href=#2498 id=2498 data-nosnippet>2498</a>        <span class="self">self</span>.metrics
-<a href=#2499 id=2499 data-nosnippet>2499</a>            .avg_rate
-<a href=#2500 id=2500 data-nosnippet>2500</a>            .add_point((elapsed.num_milliseconds() <span class="kw">as </span>f64) / (<span class="self">self</span>.size <span class="kw">as </span>f64));
-<a href=#2501 id=2501 data-nosnippet>2501</a>        <span class="self">self</span>.metrics.ranges_scanned.add(<span class="number">1</span>);
-<a href=#2502 id=2502 data-nosnippet>2502</a>        <span class="self">self</span>.metrics.running.set(<span class="number">0</span>);
-<a href=#2503 id=2503 data-nosnippet>2503</a>    }
-<a href=#2504 id=2504 data-nosnippet>2504</a>}
-<a href=#2505 id=2505 data-nosnippet>2505</a>
-<a href=#2506 id=2506 data-nosnippet>2506</a><span class="attr">#[derive(Debug)]
-<a href=#2507 id=2507 data-nosnippet>2507</a></span><span class="kw">struct </span>CachedSyncStatus {
-<a href=#2508 id=2508 data-nosnippet>2508</a>    last_updated: Instant,
-<a href=#2509 id=2509 data-nosnippet>2509</a>    ttl: Duration,
-<a href=#2510 id=2510 data-nosnippet>2510</a>    cached: <span class="prelude-ty">Option</span>&lt;SyncStatusQueryData&gt;,
-<a href=#2511 id=2511 data-nosnippet>2511</a>}
-<a href=#2512 id=2512 data-nosnippet>2512</a>
-<a href=#2513 id=2513 data-nosnippet>2513</a><span class="kw">impl </span>CachedSyncStatus {
-<a href=#2514 id=2514 data-nosnippet>2514</a>    <span class="kw">fn </span>new(ttl: Duration) -&gt; <span class="self">Self </span>{
-<a href=#2515 id=2515 data-nosnippet>2515</a>        <span class="self">Self </span>{
-<a href=#2516 id=2516 data-nosnippet>2516</a>            last_updated: Instant::now(),
-<a href=#2517 id=2517 data-nosnippet>2517</a>            ttl,
-<a href=#2518 id=2518 data-nosnippet>2518</a>            cached: <span class="prelude-val">None</span>,
+<a href=#2487 id=2487 data-nosnippet>2487</a><span class="kw">impl</span>&lt;<span class="lifetime">'a</span>&gt; SyncStatusRangeMetrics&lt;<span class="lifetime">'a</span>&gt; {
+<a href=#2488 id=2488 data-nosnippet>2488</a>    <span class="kw">fn </span>end(<span class="self">self</span>) {
+<a href=#2489 id=2489 data-nosnippet>2489</a>        <span class="kw">let </span>elapsed = Utc::now() - <span class="self">self</span>.start;
+<a href=#2490 id=2490 data-nosnippet>2490</a>        <span class="self">self</span>.metrics
+<a href=#2491 id=2491 data-nosnippet>2491</a>            .avg_rate
+<a href=#2492 id=2492 data-nosnippet>2492</a>            .add_point((elapsed.num_milliseconds() <span class="kw">as </span>f64) / (<span class="self">self</span>.size <span class="kw">as </span>f64));
+<a href=#2493 id=2493 data-nosnippet>2493</a>        <span class="self">self</span>.metrics.ranges_scanned.add(<span class="number">1</span>);
+<a href=#2494 id=2494 data-nosnippet>2494</a>        <span class="self">self</span>.metrics.running.set(<span class="number">0</span>);
+<a href=#2495 id=2495 data-nosnippet>2495</a>    }
+<a href=#2496 id=2496 data-nosnippet>2496</a>}
+<a href=#2497 id=2497 data-nosnippet>2497</a>
+<a href=#2498 id=2498 data-nosnippet>2498</a><span class="attr">#[derive(Debug)]
+<a href=#2499 id=2499 data-nosnippet>2499</a></span><span class="kw">struct </span>CachedSyncStatus {
+<a href=#2500 id=2500 data-nosnippet>2500</a>    last_updated: Instant,
+<a href=#2501 id=2501 data-nosnippet>2501</a>    ttl: Duration,
+<a href=#2502 id=2502 data-nosnippet>2502</a>    cached: <span class="prelude-ty">Option</span>&lt;SyncStatusQueryData&gt;,
+<a href=#2503 id=2503 data-nosnippet>2503</a>}
+<a href=#2504 id=2504 data-nosnippet>2504</a>
+<a href=#2505 id=2505 data-nosnippet>2505</a><span class="kw">impl </span>CachedSyncStatus {
+<a href=#2506 id=2506 data-nosnippet>2506</a>    <span class="kw">fn </span>new(ttl: Duration) -&gt; <span class="self">Self </span>{
+<a href=#2507 id=2507 data-nosnippet>2507</a>        <span class="self">Self </span>{
+<a href=#2508 id=2508 data-nosnippet>2508</a>            last_updated: Instant::now(),
+<a href=#2509 id=2509 data-nosnippet>2509</a>            ttl,
+<a href=#2510 id=2510 data-nosnippet>2510</a>            cached: <span class="prelude-val">None</span>,
+<a href=#2511 id=2511 data-nosnippet>2511</a>        }
+<a href=#2512 id=2512 data-nosnippet>2512</a>    }
+<a href=#2513 id=2513 data-nosnippet>2513</a>
+<a href=#2514 id=2514 data-nosnippet>2514</a>    <span class="doccomment">/// Return the cached sync status, if present and fresh.
+<a href=#2515 id=2515 data-nosnippet>2515</a>    </span><span class="kw">fn </span>try_get(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>SyncStatusQueryData&gt; {
+<a href=#2516 id=2516 data-nosnippet>2516</a>        <span class="kw">if </span><span class="self">self</span>.last_updated.elapsed() &gt; <span class="self">self</span>.ttl {
+<a href=#2517 id=2517 data-nosnippet>2517</a>            <span class="comment">// Cached value is stale.
+<a href=#2518 id=2518 data-nosnippet>2518</a>            </span><span class="kw">return </span><span class="prelude-val">None</span>;
 <a href=#2519 id=2519 data-nosnippet>2519</a>        }
-<a href=#2520 id=2520 data-nosnippet>2520</a>    }
-<a href=#2521 id=2521 data-nosnippet>2521</a>
-<a href=#2522 id=2522 data-nosnippet>2522</a>    <span class="doccomment">/// Return the cached sync status, if present and fresh.
-<a href=#2523 id=2523 data-nosnippet>2523</a>    </span><span class="kw">fn </span>try_get(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>SyncStatusQueryData&gt; {
-<a href=#2524 id=2524 data-nosnippet>2524</a>        <span class="kw">if </span><span class="self">self</span>.last_updated.elapsed() &gt; <span class="self">self</span>.ttl {
-<a href=#2525 id=2525 data-nosnippet>2525</a>            <span class="comment">// Cached value is stale.
-<a href=#2526 id=2526 data-nosnippet>2526</a>            </span><span class="kw">return </span><span class="prelude-val">None</span>;
-<a href=#2527 id=2527 data-nosnippet>2527</a>        }
-<a href=#2528 id=2528 data-nosnippet>2528</a>        <span class="self">self</span>.cached.as_ref()
-<a href=#2529 id=2529 data-nosnippet>2529</a>    }
-<a href=#2530 id=2530 data-nosnippet>2530</a>
-<a href=#2531 id=2531 data-nosnippet>2531</a>    <span class="doccomment">/// Refresh the cache with an updated value.
-<a href=#2532 id=2532 data-nosnippet>2532</a>    </span><span class="kw">fn </span>update(<span class="kw-2">&amp;mut </span><span class="self">self</span>, value: SyncStatusQueryData) {
-<a href=#2533 id=2533 data-nosnippet>2533</a>        <span class="self">self</span>.last_updated = Instant::now();
-<a href=#2534 id=2534 data-nosnippet>2534</a>        <span class="self">self</span>.cached = <span class="prelude-val">Some</span>(value);
-<a href=#2535 id=2535 data-nosnippet>2535</a>    }
-<a href=#2536 id=2536 data-nosnippet>2536</a>}
-<a href=#2537 id=2537 data-nosnippet>2537</a>
-<a href=#2538 id=2538 data-nosnippet>2538</a><span class="doccomment">/// Turn a fallible passive fetch future into an infallible "fetch".
-<a href=#2539 id=2539 data-nosnippet>2539</a>///
-<a href=#2540 id=2540 data-nosnippet>2540</a>/// Basically, we ignore failures due to a channel sender being dropped, which should never happen.
-<a href=#2541 id=2541 data-nosnippet>2541</a></span><span class="kw">fn </span>passive&lt;T&gt;(
-<a href=#2542 id=2542 data-nosnippet>2542</a>    req: <span class="kw">impl </span>Debug + Send + <span class="lifetime">'static</span>,
-<a href=#2543 id=2543 data-nosnippet>2543</a>    fut: <span class="kw">impl </span>Future&lt;Output = <span class="prelude-ty">Option</span>&lt;T&gt;&gt; + Send + <span class="lifetime">'static</span>,
-<a href=#2544 id=2544 data-nosnippet>2544</a>) -&gt; Fetch&lt;T&gt;
-<a href=#2545 id=2545 data-nosnippet>2545</a><span class="kw">where
-<a href=#2546 id=2546 data-nosnippet>2546</a>    </span>T: Send + <span class="lifetime">'static</span>,
-<a href=#2547 id=2547 data-nosnippet>2547</a>{
-<a href=#2548 id=2548 data-nosnippet>2548</a>    Fetch::Pending(
-<a href=#2549 id=2549 data-nosnippet>2549</a>        fut.then(<span class="kw">move </span>|opt| <span class="kw">async move </span>{
-<a href=#2550 id=2550 data-nosnippet>2550</a>            <span class="kw">match </span>opt {
-<a href=#2551 id=2551 data-nosnippet>2551</a>                <span class="prelude-val">Some</span>(t) =&gt; t,
-<a href=#2552 id=2552 data-nosnippet>2552</a>                <span class="prelude-val">None </span>=&gt; {
-<a href=#2553 id=2553 data-nosnippet>2553</a>                    <span class="comment">// If `passive_fetch` returns `None`, it means the notifier was dropped without
-<a href=#2554 id=2554 data-nosnippet>2554</a>                    // ever sending a notification. In this case, the correct behavior is actually
-<a href=#2555 id=2555 data-nosnippet>2555</a>                    // to block forever (unless the `Fetch` itself is dropped), since the semantics
-<a href=#2556 id=2556 data-nosnippet>2556</a>                    // of `Fetch` are to never fail. This is analogous to fetching an object which
-<a href=#2557 id=2557 data-nosnippet>2557</a>                    // doesn't actually exist: the `Fetch` will never return.
-<a href=#2558 id=2558 data-nosnippet>2558</a>                    //
-<a href=#2559 id=2559 data-nosnippet>2559</a>                    // However, for ease of debugging, and since this is never expected to happen in
-<a href=#2560 id=2560 data-nosnippet>2560</a>                    // normal usage, we panic instead. This should only happen in two cases:
-<a href=#2561 id=2561 data-nosnippet>2561</a>                    // * The server was shut down (dropping the notifier) without cleaning up some
-<a href=#2562 id=2562 data-nosnippet>2562</a>                    //   background tasks. This will not affect runtime behavior, but should be
-<a href=#2563 id=2563 data-nosnippet>2563</a>                    //   fixed if it happens.
-<a href=#2564 id=2564 data-nosnippet>2564</a>                    // * There is a very unexpected runtime bug resulting in the notifier being
-<a href=#2565 id=2565 data-nosnippet>2565</a>                    //   dropped. If this happens, things are very broken in any case, and it is
-<a href=#2566 id=2566 data-nosnippet>2566</a>                    //   better to panic loudly than simply block forever.
-<a href=#2567 id=2567 data-nosnippet>2567</a>                    </span><span class="macro">panic!</span>(<span class="string">"notifier dropped without satisfying request {req:?}"</span>);
-<a href=#2568 id=2568 data-nosnippet>2568</a>                },
-<a href=#2569 id=2569 data-nosnippet>2569</a>            }
-<a href=#2570 id=2570 data-nosnippet>2570</a>        })
-<a href=#2571 id=2571 data-nosnippet>2571</a>        .boxed(),
-<a href=#2572 id=2572 data-nosnippet>2572</a>    )
-<a href=#2573 id=2573 data-nosnippet>2573</a>}
-<a href=#2574 id=2574 data-nosnippet>2574</a>
-<a href=#2575 id=2575 data-nosnippet>2575</a><span class="doccomment">/// Get the result of the first future to return `Some`, if either do.
-<a href=#2576 id=2576 data-nosnippet>2576</a></span><span class="kw">async fn </span>select_some&lt;T&gt;(
-<a href=#2577 id=2577 data-nosnippet>2577</a>    a: <span class="kw">impl </span>Future&lt;Output = <span class="prelude-ty">Option</span>&lt;T&gt;&gt; + Unpin,
-<a href=#2578 id=2578 data-nosnippet>2578</a>    b: <span class="kw">impl </span>Future&lt;Output = <span class="prelude-ty">Option</span>&lt;T&gt;&gt; + Unpin,
-<a href=#2579 id=2579 data-nosnippet>2579</a>) -&gt; <span class="prelude-ty">Option</span>&lt;T&gt; {
-<a href=#2580 id=2580 data-nosnippet>2580</a>    <span class="kw">match </span>future::select(a, b).<span class="kw">await </span>{
-<a href=#2581 id=2581 data-nosnippet>2581</a>        <span class="comment">// If the first future resolves with `Some`, immediately return the result.
-<a href=#2582 id=2582 data-nosnippet>2582</a>        </span>Either::Left((<span class="prelude-val">Some</span>(a), <span class="kw">_</span>)) =&gt; <span class="prelude-val">Some</span>(a),
-<a href=#2583 id=2583 data-nosnippet>2583</a>        Either::Right((<span class="prelude-val">Some</span>(b), <span class="kw">_</span>)) =&gt; <span class="prelude-val">Some</span>(b),
-<a href=#2584 id=2584 data-nosnippet>2584</a>
-<a href=#2585 id=2585 data-nosnippet>2585</a>        <span class="comment">// If the first future resolves with `None`, wait for the result of the second future.
-<a href=#2586 id=2586 data-nosnippet>2586</a>        </span>Either::Left((<span class="prelude-val">None</span>, b)) =&gt; b.<span class="kw">await</span>,
-<a href=#2587 id=2587 data-nosnippet>2587</a>        Either::Right((<span class="prelude-val">None</span>, a)) =&gt; a.<span class="kw">await</span>,
-<a href=#2588 id=2588 data-nosnippet>2588</a>    }
-<a href=#2589 id=2589 data-nosnippet>2589</a>}
-<a href=#2590 id=2590 data-nosnippet>2590</a>
-<a href=#2591 id=2591 data-nosnippet>2591</a><span class="attr">#[cfg(test)]
-<a href=#2592 id=2592 data-nosnippet>2592</a></span><span class="kw">mod </span>test {
-<a href=#2593 id=2593 data-nosnippet>2593</a>    <span class="kw">use </span>hotshot_example_types::node_types::TEST_VERSIONS;
-<a href=#2594 id=2594 data-nosnippet>2594</a>
-<a href=#2595 id=2595 data-nosnippet>2595</a>    <span class="kw">use </span>super::<span class="kw-2">*</span>;
-<a href=#2596 id=2596 data-nosnippet>2596</a>    <span class="kw">use </span>crate::{
-<a href=#2597 id=2597 data-nosnippet>2597</a>        data_source::{
-<a href=#2598 id=2598 data-nosnippet>2598</a>            sql::testing::TmpDb,
-<a href=#2599 id=2599 data-nosnippet>2599</a>            storage::{SqlStorage, StorageConnectionType},
-<a href=#2600 id=2600 data-nosnippet>2600</a>        },
-<a href=#2601 id=2601 data-nosnippet>2601</a>        fetching::provider::NoFetching,
-<a href=#2602 id=2602 data-nosnippet>2602</a>        testing::{consensus::MockSqlDataSource, mocks::MockTypes},
-<a href=#2603 id=2603 data-nosnippet>2603</a>    };
+<a href=#2520 id=2520 data-nosnippet>2520</a>        <span class="self">self</span>.cached.as_ref()
+<a href=#2521 id=2521 data-nosnippet>2521</a>    }
+<a href=#2522 id=2522 data-nosnippet>2522</a>
+<a href=#2523 id=2523 data-nosnippet>2523</a>    <span class="doccomment">/// Refresh the cache with an updated value.
+<a href=#2524 id=2524 data-nosnippet>2524</a>    </span><span class="kw">fn </span>update(<span class="kw-2">&amp;mut </span><span class="self">self</span>, value: SyncStatusQueryData) {
+<a href=#2525 id=2525 data-nosnippet>2525</a>        <span class="self">self</span>.last_updated = Instant::now();
+<a href=#2526 id=2526 data-nosnippet>2526</a>        <span class="self">self</span>.cached = <span class="prelude-val">Some</span>(value);
+<a href=#2527 id=2527 data-nosnippet>2527</a>    }
+<a href=#2528 id=2528 data-nosnippet>2528</a>}
+<a href=#2529 id=2529 data-nosnippet>2529</a>
+<a href=#2530 id=2530 data-nosnippet>2530</a><span class="doccomment">/// Turn a fallible passive fetch future into an infallible "fetch".
+<a href=#2531 id=2531 data-nosnippet>2531</a>///
+<a href=#2532 id=2532 data-nosnippet>2532</a>/// Basically, we ignore failures due to a channel sender being dropped, which should never happen.
+<a href=#2533 id=2533 data-nosnippet>2533</a></span><span class="kw">fn </span>passive&lt;T&gt;(
+<a href=#2534 id=2534 data-nosnippet>2534</a>    req: <span class="kw">impl </span>Debug + Send + <span class="lifetime">'static</span>,
+<a href=#2535 id=2535 data-nosnippet>2535</a>    fut: <span class="kw">impl </span>Future&lt;Output = <span class="prelude-ty">Option</span>&lt;T&gt;&gt; + Send + <span class="lifetime">'static</span>,
+<a href=#2536 id=2536 data-nosnippet>2536</a>) -&gt; Fetch&lt;T&gt;
+<a href=#2537 id=2537 data-nosnippet>2537</a><span class="kw">where
+<a href=#2538 id=2538 data-nosnippet>2538</a>    </span>T: Send + <span class="lifetime">'static</span>,
+<a href=#2539 id=2539 data-nosnippet>2539</a>{
+<a href=#2540 id=2540 data-nosnippet>2540</a>    Fetch::Pending(
+<a href=#2541 id=2541 data-nosnippet>2541</a>        fut.then(<span class="kw">move </span>|opt| <span class="kw">async move </span>{
+<a href=#2542 id=2542 data-nosnippet>2542</a>            <span class="kw">match </span>opt {
+<a href=#2543 id=2543 data-nosnippet>2543</a>                <span class="prelude-val">Some</span>(t) =&gt; t,
+<a href=#2544 id=2544 data-nosnippet>2544</a>                <span class="prelude-val">None </span>=&gt; {
+<a href=#2545 id=2545 data-nosnippet>2545</a>                    <span class="comment">// If `passive_fetch` returns `None`, it means the notifier was dropped without
+<a href=#2546 id=2546 data-nosnippet>2546</a>                    // ever sending a notification. In this case, the correct behavior is actually
+<a href=#2547 id=2547 data-nosnippet>2547</a>                    // to block forever (unless the `Fetch` itself is dropped), since the semantics
+<a href=#2548 id=2548 data-nosnippet>2548</a>                    // of `Fetch` are to never fail. This is analogous to fetching an object which
+<a href=#2549 id=2549 data-nosnippet>2549</a>                    // doesn't actually exist: the `Fetch` will never return.
+<a href=#2550 id=2550 data-nosnippet>2550</a>                    //
+<a href=#2551 id=2551 data-nosnippet>2551</a>                    // However, for ease of debugging, and since this is never expected to happen in
+<a href=#2552 id=2552 data-nosnippet>2552</a>                    // normal usage, we panic instead. This should only happen in two cases:
+<a href=#2553 id=2553 data-nosnippet>2553</a>                    // * The server was shut down (dropping the notifier) without cleaning up some
+<a href=#2554 id=2554 data-nosnippet>2554</a>                    //   background tasks. This will not affect runtime behavior, but should be
+<a href=#2555 id=2555 data-nosnippet>2555</a>                    //   fixed if it happens.
+<a href=#2556 id=2556 data-nosnippet>2556</a>                    // * There is a very unexpected runtime bug resulting in the notifier being
+<a href=#2557 id=2557 data-nosnippet>2557</a>                    //   dropped. If this happens, things are very broken in any case, and it is
+<a href=#2558 id=2558 data-nosnippet>2558</a>                    //   better to panic loudly than simply block forever.
+<a href=#2559 id=2559 data-nosnippet>2559</a>                    </span><span class="macro">panic!</span>(<span class="string">"notifier dropped without satisfying request {req:?}"</span>);
+<a href=#2560 id=2560 data-nosnippet>2560</a>                },
+<a href=#2561 id=2561 data-nosnippet>2561</a>            }
+<a href=#2562 id=2562 data-nosnippet>2562</a>        })
+<a href=#2563 id=2563 data-nosnippet>2563</a>        .boxed(),
+<a href=#2564 id=2564 data-nosnippet>2564</a>    )
+<a href=#2565 id=2565 data-nosnippet>2565</a>}
+<a href=#2566 id=2566 data-nosnippet>2566</a>
+<a href=#2567 id=2567 data-nosnippet>2567</a><span class="doccomment">/// Get the result of the first future to return `Some`, if either do.
+<a href=#2568 id=2568 data-nosnippet>2568</a></span><span class="kw">async fn </span>select_some&lt;T&gt;(
+<a href=#2569 id=2569 data-nosnippet>2569</a>    a: <span class="kw">impl </span>Future&lt;Output = <span class="prelude-ty">Option</span>&lt;T&gt;&gt; + Unpin,
+<a href=#2570 id=2570 data-nosnippet>2570</a>    b: <span class="kw">impl </span>Future&lt;Output = <span class="prelude-ty">Option</span>&lt;T&gt;&gt; + Unpin,
+<a href=#2571 id=2571 data-nosnippet>2571</a>) -&gt; <span class="prelude-ty">Option</span>&lt;T&gt; {
+<a href=#2572 id=2572 data-nosnippet>2572</a>    <span class="kw">match </span>future::select(a, b).<span class="kw">await </span>{
+<a href=#2573 id=2573 data-nosnippet>2573</a>        <span class="comment">// If the first future resolves with `Some`, immediately return the result.
+<a href=#2574 id=2574 data-nosnippet>2574</a>        </span>Either::Left((<span class="prelude-val">Some</span>(a), <span class="kw">_</span>)) =&gt; <span class="prelude-val">Some</span>(a),
+<a href=#2575 id=2575 data-nosnippet>2575</a>        Either::Right((<span class="prelude-val">Some</span>(b), <span class="kw">_</span>)) =&gt; <span class="prelude-val">Some</span>(b),
+<a href=#2576 id=2576 data-nosnippet>2576</a>
+<a href=#2577 id=2577 data-nosnippet>2577</a>        <span class="comment">// If the first future resolves with `None`, wait for the result of the second future.
+<a href=#2578 id=2578 data-nosnippet>2578</a>        </span>Either::Left((<span class="prelude-val">None</span>, b)) =&gt; b.<span class="kw">await</span>,
+<a href=#2579 id=2579 data-nosnippet>2579</a>        Either::Right((<span class="prelude-val">None</span>, a)) =&gt; a.<span class="kw">await</span>,
+<a href=#2580 id=2580 data-nosnippet>2580</a>    }
+<a href=#2581 id=2581 data-nosnippet>2581</a>}
+<a href=#2582 id=2582 data-nosnippet>2582</a>
+<a href=#2583 id=2583 data-nosnippet>2583</a><span class="attr">#[cfg(test)]
+<a href=#2584 id=2584 data-nosnippet>2584</a></span><span class="kw">mod </span>test {
+<a href=#2585 id=2585 data-nosnippet>2585</a>    <span class="kw">use </span>hotshot_example_types::node_types::TEST_VERSIONS;
+<a href=#2586 id=2586 data-nosnippet>2586</a>
+<a href=#2587 id=2587 data-nosnippet>2587</a>    <span class="kw">use </span>super::<span class="kw-2">*</span>;
+<a href=#2588 id=2588 data-nosnippet>2588</a>    <span class="kw">use </span>crate::{
+<a href=#2589 id=2589 data-nosnippet>2589</a>        data_source::{
+<a href=#2590 id=2590 data-nosnippet>2590</a>            sql::testing::TmpDb,
+<a href=#2591 id=2591 data-nosnippet>2591</a>            storage::{SqlStorage, StorageConnectionType},
+<a href=#2592 id=2592 data-nosnippet>2592</a>        },
+<a href=#2593 id=2593 data-nosnippet>2593</a>        fetching::provider::NoFetching,
+<a href=#2594 id=2594 data-nosnippet>2594</a>        testing::{consensus::MockSqlDataSource, mocks::MockTypes},
+<a href=#2595 id=2595 data-nosnippet>2595</a>    };
+<a href=#2596 id=2596 data-nosnippet>2596</a>
+<a href=#2597 id=2597 data-nosnippet>2597</a>    <span class="attr">#[test]
+<a href=#2598 id=2598 data-nosnippet>2598</a>    </span><span class="kw">fn </span>test_range_chunks() {
+<a href=#2599 id=2599 data-nosnippet>2599</a>        <span class="comment">// Inclusive bounds, partial last chunk.
+<a href=#2600 id=2600 data-nosnippet>2600</a>        </span><span class="macro">assert_eq!</span>(
+<a href=#2601 id=2601 data-nosnippet>2601</a>            range_chunks(<span class="number">0</span>..=<span class="number">4</span>, <span class="number">2</span>).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
+<a href=#2602 id=2602 data-nosnippet>2602</a>            [<span class="number">0</span>..<span class="number">2</span>, <span class="number">2</span>..<span class="number">4</span>, <span class="number">4</span>..<span class="number">5</span>]
+<a href=#2603 id=2603 data-nosnippet>2603</a>        );
 <a href=#2604 id=2604 data-nosnippet>2604</a>
-<a href=#2605 id=2605 data-nosnippet>2605</a>    <span class="attr">#[test]
-<a href=#2606 id=2606 data-nosnippet>2606</a>    </span><span class="kw">fn </span>test_range_chunks() {
-<a href=#2607 id=2607 data-nosnippet>2607</a>        <span class="comment">// Inclusive bounds, partial last chunk.
-<a href=#2608 id=2608 data-nosnippet>2608</a>        </span><span class="macro">assert_eq!</span>(
-<a href=#2609 id=2609 data-nosnippet>2609</a>            range_chunks(<span class="number">0</span>..=<span class="number">4</span>, <span class="number">2</span>).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
-<a href=#2610 id=2610 data-nosnippet>2610</a>            [<span class="number">0</span>..<span class="number">2</span>, <span class="number">2</span>..<span class="number">4</span>, <span class="number">4</span>..<span class="number">5</span>]
-<a href=#2611 id=2611 data-nosnippet>2611</a>        );
-<a href=#2612 id=2612 data-nosnippet>2612</a>
-<a href=#2613 id=2613 data-nosnippet>2613</a>        <span class="comment">// Inclusive bounds, complete last chunk.
-<a href=#2614 id=2614 data-nosnippet>2614</a>        </span><span class="macro">assert_eq!</span>(
-<a href=#2615 id=2615 data-nosnippet>2615</a>            range_chunks(<span class="number">0</span>..=<span class="number">5</span>, <span class="number">2</span>).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
-<a href=#2616 id=2616 data-nosnippet>2616</a>            [<span class="number">0</span>..<span class="number">2</span>, <span class="number">2</span>..<span class="number">4</span>, <span class="number">4</span>..<span class="number">6</span>]
-<a href=#2617 id=2617 data-nosnippet>2617</a>        );
-<a href=#2618 id=2618 data-nosnippet>2618</a>
-<a href=#2619 id=2619 data-nosnippet>2619</a>        <span class="comment">// Exclusive bounds, partial last chunk.
-<a href=#2620 id=2620 data-nosnippet>2620</a>        </span><span class="macro">assert_eq!</span>(
-<a href=#2621 id=2621 data-nosnippet>2621</a>            range_chunks(<span class="number">0</span>..<span class="number">5</span>, <span class="number">2</span>).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
-<a href=#2622 id=2622 data-nosnippet>2622</a>            [<span class="number">0</span>..<span class="number">2</span>, <span class="number">2</span>..<span class="number">4</span>, <span class="number">4</span>..<span class="number">5</span>]
-<a href=#2623 id=2623 data-nosnippet>2623</a>        );
-<a href=#2624 id=2624 data-nosnippet>2624</a>
-<a href=#2625 id=2625 data-nosnippet>2625</a>        <span class="comment">// Exclusive bounds, complete last chunk.
-<a href=#2626 id=2626 data-nosnippet>2626</a>        </span><span class="macro">assert_eq!</span>(
-<a href=#2627 id=2627 data-nosnippet>2627</a>            range_chunks(<span class="number">0</span>..<span class="number">6</span>, <span class="number">2</span>).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
-<a href=#2628 id=2628 data-nosnippet>2628</a>            [<span class="number">0</span>..<span class="number">2</span>, <span class="number">2</span>..<span class="number">4</span>, <span class="number">4</span>..<span class="number">6</span>]
-<a href=#2629 id=2629 data-nosnippet>2629</a>        );
-<a href=#2630 id=2630 data-nosnippet>2630</a>
-<a href=#2631 id=2631 data-nosnippet>2631</a>        <span class="comment">// Unbounded.
-<a href=#2632 id=2632 data-nosnippet>2632</a>        </span><span class="macro">assert_eq!</span>(
-<a href=#2633 id=2633 data-nosnippet>2633</a>            range_chunks(<span class="number">0</span>.., <span class="number">2</span>).take(<span class="number">5</span>).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
-<a href=#2634 id=2634 data-nosnippet>2634</a>            [<span class="number">0</span>..<span class="number">2</span>, <span class="number">2</span>..<span class="number">4</span>, <span class="number">4</span>..<span class="number">6</span>, <span class="number">6</span>..<span class="number">8</span>, <span class="number">8</span>..<span class="number">10</span>]
-<a href=#2635 id=2635 data-nosnippet>2635</a>        );
-<a href=#2636 id=2636 data-nosnippet>2636</a>    }
-<a href=#2637 id=2637 data-nosnippet>2637</a>
-<a href=#2638 id=2638 data-nosnippet>2638</a>    <span class="attr">#[test]
-<a href=#2639 id=2639 data-nosnippet>2639</a>    </span><span class="kw">fn </span>test_range_chunks_aligned() {
-<a href=#2640 id=2640 data-nosnippet>2640</a>        <span class="attr">#![allow(clippy::single_range_in_vec_init)]
-<a href=#2641 id=2641 data-nosnippet>2641</a>
-<a href=#2642 id=2642 data-nosnippet>2642</a>        </span><span class="comment">// Aligned first chunk, partial last chunk.
-<a href=#2643 id=2643 data-nosnippet>2643</a>        </span><span class="macro">assert_eq!</span>(
-<a href=#2644 id=2644 data-nosnippet>2644</a>            range_chunks_aligned(<span class="number">2</span>..<span class="number">5</span>, <span class="number">2</span>).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
-<a href=#2645 id=2645 data-nosnippet>2645</a>            [<span class="number">2</span>..<span class="number">4</span>, <span class="number">4</span>..<span class="number">5</span>]
-<a href=#2646 id=2646 data-nosnippet>2646</a>        );
-<a href=#2647 id=2647 data-nosnippet>2647</a>
-<a href=#2648 id=2648 data-nosnippet>2648</a>        <span class="comment">// Misaligned first chunk, complete last chunk.
-<a href=#2649 id=2649 data-nosnippet>2649</a>        </span><span class="macro">assert_eq!</span>(
-<a href=#2650 id=2650 data-nosnippet>2650</a>            range_chunks_aligned(<span class="number">1</span>..<span class="number">4</span>, <span class="number">2</span>).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
-<a href=#2651 id=2651 data-nosnippet>2651</a>            [<span class="number">1</span>..<span class="number">2</span>, <span class="number">2</span>..<span class="number">4</span>]
-<a href=#2652 id=2652 data-nosnippet>2652</a>        );
-<a href=#2653 id=2653 data-nosnippet>2653</a>
-<a href=#2654 id=2654 data-nosnippet>2654</a>        <span class="comment">// Incomplete chunk.
-<a href=#2655 id=2655 data-nosnippet>2655</a>        </span><span class="macro">assert_eq!</span>(range_chunks_aligned(<span class="number">1</span>..<span class="number">3</span>, <span class="number">10</span>).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(), [<span class="number">1</span>..<span class="number">3</span>]);
-<a href=#2656 id=2656 data-nosnippet>2656</a>
-<a href=#2657 id=2657 data-nosnippet>2657</a>        <span class="comment">// Unbounded.
-<a href=#2658 id=2658 data-nosnippet>2658</a>        </span><span class="macro">assert_eq!</span>(
-<a href=#2659 id=2659 data-nosnippet>2659</a>            range_chunks_aligned(<span class="number">1</span>.., <span class="number">2</span>).take(<span class="number">5</span>).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
-<a href=#2660 id=2660 data-nosnippet>2660</a>            [<span class="number">1</span>..<span class="number">2</span>, <span class="number">2</span>..<span class="number">4</span>, <span class="number">4</span>..<span class="number">6</span>, <span class="number">6</span>..<span class="number">8</span>, <span class="number">8</span>..<span class="number">10</span>]
-<a href=#2661 id=2661 data-nosnippet>2661</a>        );
-<a href=#2662 id=2662 data-nosnippet>2662</a>    }
+<a href=#2605 id=2605 data-nosnippet>2605</a>        <span class="comment">// Inclusive bounds, complete last chunk.
+<a href=#2606 id=2606 data-nosnippet>2606</a>        </span><span class="macro">assert_eq!</span>(
+<a href=#2607 id=2607 data-nosnippet>2607</a>            range_chunks(<span class="number">0</span>..=<span class="number">5</span>, <span class="number">2</span>).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
+<a href=#2608 id=2608 data-nosnippet>2608</a>            [<span class="number">0</span>..<span class="number">2</span>, <span class="number">2</span>..<span class="number">4</span>, <span class="number">4</span>..<span class="number">6</span>]
+<a href=#2609 id=2609 data-nosnippet>2609</a>        );
+<a href=#2610 id=2610 data-nosnippet>2610</a>
+<a href=#2611 id=2611 data-nosnippet>2611</a>        <span class="comment">// Exclusive bounds, partial last chunk.
+<a href=#2612 id=2612 data-nosnippet>2612</a>        </span><span class="macro">assert_eq!</span>(
+<a href=#2613 id=2613 data-nosnippet>2613</a>            range_chunks(<span class="number">0</span>..<span class="number">5</span>, <span class="number">2</span>).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
+<a href=#2614 id=2614 data-nosnippet>2614</a>            [<span class="number">0</span>..<span class="number">2</span>, <span class="number">2</span>..<span class="number">4</span>, <span class="number">4</span>..<span class="number">5</span>]
+<a href=#2615 id=2615 data-nosnippet>2615</a>        );
+<a href=#2616 id=2616 data-nosnippet>2616</a>
+<a href=#2617 id=2617 data-nosnippet>2617</a>        <span class="comment">// Exclusive bounds, complete last chunk.
+<a href=#2618 id=2618 data-nosnippet>2618</a>        </span><span class="macro">assert_eq!</span>(
+<a href=#2619 id=2619 data-nosnippet>2619</a>            range_chunks(<span class="number">0</span>..<span class="number">6</span>, <span class="number">2</span>).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
+<a href=#2620 id=2620 data-nosnippet>2620</a>            [<span class="number">0</span>..<span class="number">2</span>, <span class="number">2</span>..<span class="number">4</span>, <span class="number">4</span>..<span class="number">6</span>]
+<a href=#2621 id=2621 data-nosnippet>2621</a>        );
+<a href=#2622 id=2622 data-nosnippet>2622</a>
+<a href=#2623 id=2623 data-nosnippet>2623</a>        <span class="comment">// Unbounded.
+<a href=#2624 id=2624 data-nosnippet>2624</a>        </span><span class="macro">assert_eq!</span>(
+<a href=#2625 id=2625 data-nosnippet>2625</a>            range_chunks(<span class="number">0</span>.., <span class="number">2</span>).take(<span class="number">5</span>).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
+<a href=#2626 id=2626 data-nosnippet>2626</a>            [<span class="number">0</span>..<span class="number">2</span>, <span class="number">2</span>..<span class="number">4</span>, <span class="number">4</span>..<span class="number">6</span>, <span class="number">6</span>..<span class="number">8</span>, <span class="number">8</span>..<span class="number">10</span>]
+<a href=#2627 id=2627 data-nosnippet>2627</a>        );
+<a href=#2628 id=2628 data-nosnippet>2628</a>    }
+<a href=#2629 id=2629 data-nosnippet>2629</a>
+<a href=#2630 id=2630 data-nosnippet>2630</a>    <span class="attr">#[test]
+<a href=#2631 id=2631 data-nosnippet>2631</a>    </span><span class="kw">fn </span>test_range_chunks_aligned() {
+<a href=#2632 id=2632 data-nosnippet>2632</a>        <span class="attr">#![allow(clippy::single_range_in_vec_init)]
+<a href=#2633 id=2633 data-nosnippet>2633</a>
+<a href=#2634 id=2634 data-nosnippet>2634</a>        </span><span class="comment">// Aligned first chunk, partial last chunk.
+<a href=#2635 id=2635 data-nosnippet>2635</a>        </span><span class="macro">assert_eq!</span>(
+<a href=#2636 id=2636 data-nosnippet>2636</a>            range_chunks_aligned(<span class="number">2</span>..<span class="number">5</span>, <span class="number">2</span>).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
+<a href=#2637 id=2637 data-nosnippet>2637</a>            [<span class="number">2</span>..<span class="number">4</span>, <span class="number">4</span>..<span class="number">5</span>]
+<a href=#2638 id=2638 data-nosnippet>2638</a>        );
+<a href=#2639 id=2639 data-nosnippet>2639</a>
+<a href=#2640 id=2640 data-nosnippet>2640</a>        <span class="comment">// Misaligned first chunk, complete last chunk.
+<a href=#2641 id=2641 data-nosnippet>2641</a>        </span><span class="macro">assert_eq!</span>(
+<a href=#2642 id=2642 data-nosnippet>2642</a>            range_chunks_aligned(<span class="number">1</span>..<span class="number">4</span>, <span class="number">2</span>).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
+<a href=#2643 id=2643 data-nosnippet>2643</a>            [<span class="number">1</span>..<span class="number">2</span>, <span class="number">2</span>..<span class="number">4</span>]
+<a href=#2644 id=2644 data-nosnippet>2644</a>        );
+<a href=#2645 id=2645 data-nosnippet>2645</a>
+<a href=#2646 id=2646 data-nosnippet>2646</a>        <span class="comment">// Incomplete chunk.
+<a href=#2647 id=2647 data-nosnippet>2647</a>        </span><span class="macro">assert_eq!</span>(range_chunks_aligned(<span class="number">1</span>..<span class="number">3</span>, <span class="number">10</span>).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(), [<span class="number">1</span>..<span class="number">3</span>]);
+<a href=#2648 id=2648 data-nosnippet>2648</a>
+<a href=#2649 id=2649 data-nosnippet>2649</a>        <span class="comment">// Unbounded.
+<a href=#2650 id=2650 data-nosnippet>2650</a>        </span><span class="macro">assert_eq!</span>(
+<a href=#2651 id=2651 data-nosnippet>2651</a>            range_chunks_aligned(<span class="number">1</span>.., <span class="number">2</span>).take(<span class="number">5</span>).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
+<a href=#2652 id=2652 data-nosnippet>2652</a>            [<span class="number">1</span>..<span class="number">2</span>, <span class="number">2</span>..<span class="number">4</span>, <span class="number">4</span>..<span class="number">6</span>, <span class="number">6</span>..<span class="number">8</span>, <span class="number">8</span>..<span class="number">10</span>]
+<a href=#2653 id=2653 data-nosnippet>2653</a>        );
+<a href=#2654 id=2654 data-nosnippet>2654</a>    }
+<a href=#2655 id=2655 data-nosnippet>2655</a>
+<a href=#2656 id=2656 data-nosnippet>2656</a>    <span class="attr">#[test]
+<a href=#2657 id=2657 data-nosnippet>2657</a>    </span><span class="kw">fn </span>test_range_chunks_rev() {
+<a href=#2658 id=2658 data-nosnippet>2658</a>        <span class="comment">// Inclusive bounds, partial last chunk.
+<a href=#2659 id=2659 data-nosnippet>2659</a>        </span><span class="macro">assert_eq!</span>(
+<a href=#2660 id=2660 data-nosnippet>2660</a>            range_chunks_rev(Bound::Included(<span class="number">0</span>), <span class="number">4</span>, <span class="number">2</span>).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
+<a href=#2661 id=2661 data-nosnippet>2661</a>            [<span class="number">3</span>..<span class="number">5</span>, <span class="number">1</span>..<span class="number">3</span>, <span class="number">0</span>..<span class="number">1</span>]
+<a href=#2662 id=2662 data-nosnippet>2662</a>        );
 <a href=#2663 id=2663 data-nosnippet>2663</a>
-<a href=#2664 id=2664 data-nosnippet>2664</a>    <span class="attr">#[test]
-<a href=#2665 id=2665 data-nosnippet>2665</a>    </span><span class="kw">fn </span>test_range_chunks_rev() {
-<a href=#2666 id=2666 data-nosnippet>2666</a>        <span class="comment">// Inclusive bounds, partial last chunk.
-<a href=#2667 id=2667 data-nosnippet>2667</a>        </span><span class="macro">assert_eq!</span>(
-<a href=#2668 id=2668 data-nosnippet>2668</a>            range_chunks_rev(Bound::Included(<span class="number">0</span>), <span class="number">4</span>, <span class="number">2</span>).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
-<a href=#2669 id=2669 data-nosnippet>2669</a>            [<span class="number">3</span>..<span class="number">5</span>, <span class="number">1</span>..<span class="number">3</span>, <span class="number">0</span>..<span class="number">1</span>]
-<a href=#2670 id=2670 data-nosnippet>2670</a>        );
-<a href=#2671 id=2671 data-nosnippet>2671</a>
-<a href=#2672 id=2672 data-nosnippet>2672</a>        <span class="comment">// Inclusive bounds, complete last chunk.
-<a href=#2673 id=2673 data-nosnippet>2673</a>        </span><span class="macro">assert_eq!</span>(
-<a href=#2674 id=2674 data-nosnippet>2674</a>            range_chunks_rev(Bound::Included(<span class="number">0</span>), <span class="number">5</span>, <span class="number">2</span>).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
-<a href=#2675 id=2675 data-nosnippet>2675</a>            [<span class="number">4</span>..<span class="number">6</span>, <span class="number">2</span>..<span class="number">4</span>, <span class="number">0</span>..<span class="number">2</span>]
-<a href=#2676 id=2676 data-nosnippet>2676</a>        );
-<a href=#2677 id=2677 data-nosnippet>2677</a>
-<a href=#2678 id=2678 data-nosnippet>2678</a>        <span class="comment">// Exclusive bounds, partial last chunk.
-<a href=#2679 id=2679 data-nosnippet>2679</a>        </span><span class="macro">assert_eq!</span>(
-<a href=#2680 id=2680 data-nosnippet>2680</a>            range_chunks_rev(Bound::Excluded(<span class="number">0</span>), <span class="number">5</span>, <span class="number">2</span>).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
-<a href=#2681 id=2681 data-nosnippet>2681</a>            [<span class="number">4</span>..<span class="number">6</span>, <span class="number">2</span>..<span class="number">4</span>, <span class="number">1</span>..<span class="number">2</span>]
-<a href=#2682 id=2682 data-nosnippet>2682</a>        );
-<a href=#2683 id=2683 data-nosnippet>2683</a>
-<a href=#2684 id=2684 data-nosnippet>2684</a>        <span class="comment">// Exclusive bounds, complete last chunk.
-<a href=#2685 id=2685 data-nosnippet>2685</a>        </span><span class="macro">assert_eq!</span>(
-<a href=#2686 id=2686 data-nosnippet>2686</a>            range_chunks_rev(Bound::Excluded(<span class="number">0</span>), <span class="number">4</span>, <span class="number">2</span>).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
-<a href=#2687 id=2687 data-nosnippet>2687</a>            [<span class="number">3</span>..<span class="number">5</span>, <span class="number">1</span>..<span class="number">3</span>]
-<a href=#2688 id=2688 data-nosnippet>2688</a>        );
-<a href=#2689 id=2689 data-nosnippet>2689</a>    }
-<a href=#2690 id=2690 data-nosnippet>2690</a>
-<a href=#2691 id=2691 data-nosnippet>2691</a>    <span class="attr">#[test]
-<a href=#2692 id=2692 data-nosnippet>2692</a>    </span><span class="kw">fn </span>test_range_chunks_aligned_rev() {
-<a href=#2693 id=2693 data-nosnippet>2693</a>        <span class="attr">#![allow(clippy::single_range_in_vec_init)]
-<a href=#2694 id=2694 data-nosnippet>2694</a>
-<a href=#2695 id=2695 data-nosnippet>2695</a>        </span><span class="comment">// Aligned first chunk, partial last chunk.
-<a href=#2696 id=2696 data-nosnippet>2696</a>        </span><span class="macro">assert_eq!</span>(
-<a href=#2697 id=2697 data-nosnippet>2697</a>            range_chunks_aligned_rev(Bound::Included(<span class="number">1</span>), <span class="number">3</span>, <span class="number">2</span>).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
-<a href=#2698 id=2698 data-nosnippet>2698</a>            [<span class="number">2</span>..<span class="number">4</span>, <span class="number">1</span>..<span class="number">2</span>]
-<a href=#2699 id=2699 data-nosnippet>2699</a>        );
-<a href=#2700 id=2700 data-nosnippet>2700</a>
-<a href=#2701 id=2701 data-nosnippet>2701</a>        <span class="comment">// Misaligned first chunk, complete last chunk.
-<a href=#2702 id=2702 data-nosnippet>2702</a>        </span><span class="macro">assert_eq!</span>(
-<a href=#2703 id=2703 data-nosnippet>2703</a>            range_chunks_aligned_rev(Bound::Included(<span class="number">0</span>), <span class="number">2</span>, <span class="number">2</span>).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
-<a href=#2704 id=2704 data-nosnippet>2704</a>            [<span class="number">2</span>..<span class="number">3</span>, <span class="number">0</span>..<span class="number">2</span>]
-<a href=#2705 id=2705 data-nosnippet>2705</a>        );
-<a href=#2706 id=2706 data-nosnippet>2706</a>
-<a href=#2707 id=2707 data-nosnippet>2707</a>        <span class="comment">// Incomplete chunk.
-<a href=#2708 id=2708 data-nosnippet>2708</a>        </span><span class="macro">assert_eq!</span>(
-<a href=#2709 id=2709 data-nosnippet>2709</a>            range_chunks_aligned_rev(Bound::Excluded(<span class="number">0</span>), <span class="number">3</span>, <span class="number">10</span>).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
-<a href=#2710 id=2710 data-nosnippet>2710</a>            [<span class="number">1</span>..<span class="number">4</span>]
-<a href=#2711 id=2711 data-nosnippet>2711</a>        );
-<a href=#2712 id=2712 data-nosnippet>2712</a>    }
-<a href=#2713 id=2713 data-nosnippet>2713</a>
-<a href=#2714 id=2714 data-nosnippet>2714</a>    <span class="kw">async fn </span>test_sync_status(chunk_size: usize, present_ranges: <span class="kw-2">&amp;</span>[(usize, usize)]) {
-<a href=#2715 id=2715 data-nosnippet>2715</a>        <span class="kw">let </span>block_height = present_ranges.last().unwrap().<span class="number">1</span>;
-<a href=#2716 id=2716 data-nosnippet>2716</a>        <span class="kw">let </span>storage = TmpDb::init().<span class="kw">await</span>;
-<a href=#2717 id=2717 data-nosnippet>2717</a>        <span class="kw">let </span>db = SqlStorage::connect(storage.config(), StorageConnectionType::Query)
-<a href=#2718 id=2718 data-nosnippet>2718</a>            .<span class="kw">await
-<a href=#2719 id=2719 data-nosnippet>2719</a>            </span>.unwrap();
-<a href=#2720 id=2720 data-nosnippet>2720</a>        <span class="kw">let </span>ds = MockSqlDataSource::builder(db, NoFetching)
-<a href=#2721 id=2721 data-nosnippet>2721</a>            .with_sync_status_chunk_size(chunk_size)
-<a href=#2722 id=2722 data-nosnippet>2722</a>            .with_sync_status_ttl(Duration::ZERO)
-<a href=#2723 id=2723 data-nosnippet>2723</a>            .build()
-<a href=#2724 id=2724 data-nosnippet>2724</a>            .<span class="kw">await
-<a href=#2725 id=2725 data-nosnippet>2725</a>            </span>.unwrap();
-<a href=#2726 id=2726 data-nosnippet>2726</a>
-<a href=#2727 id=2727 data-nosnippet>2727</a>        <span class="comment">// Generate some mock leaves to insert.
-<a href=#2728 id=2728 data-nosnippet>2728</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>leaves: Vec&lt;LeafQueryData&lt;MockTypes&gt;&gt; = <span class="macro">vec!</span>[
-<a href=#2729 id=2729 data-nosnippet>2729</a>            LeafQueryData::&lt;MockTypes&gt;::genesis(
-<a href=#2730 id=2730 data-nosnippet>2730</a>                <span class="kw-2">&amp;</span>Default::default(),
-<a href=#2731 id=2731 data-nosnippet>2731</a>                <span class="kw-2">&amp;</span>Default::default(),
-<a href=#2732 id=2732 data-nosnippet>2732</a>                TEST_VERSIONS.test,
-<a href=#2733 id=2733 data-nosnippet>2733</a>            )
-<a href=#2734 id=2734 data-nosnippet>2734</a>            .<span class="kw">await</span>,
-<a href=#2735 id=2735 data-nosnippet>2735</a>        ];
-<a href=#2736 id=2736 data-nosnippet>2736</a>        <span class="kw">for </span>i <span class="kw">in </span><span class="number">1</span>..block_height {
-<a href=#2737 id=2737 data-nosnippet>2737</a>            <span class="kw">let </span><span class="kw-2">mut </span>leaf = leaves[i - <span class="number">1</span>].clone();
-<a href=#2738 id=2738 data-nosnippet>2738</a>            leaf.leaf.block_header_mut().block_number = i <span class="kw">as </span>u64;
-<a href=#2739 id=2739 data-nosnippet>2739</a>            leaves.push(leaf);
-<a href=#2740 id=2740 data-nosnippet>2740</a>        }
-<a href=#2741 id=2741 data-nosnippet>2741</a>
-<a href=#2742 id=2742 data-nosnippet>2742</a>        <span class="comment">// Set up.
-<a href=#2743 id=2743 data-nosnippet>2743</a>        </span>{
-<a href=#2744 id=2744 data-nosnippet>2744</a>            <span class="kw">let </span><span class="kw-2">mut </span>tx = ds.write().<span class="kw">await</span>.unwrap();
-<a href=#2745 id=2745 data-nosnippet>2745</a>
-<a href=#2746 id=2746 data-nosnippet>2746</a>            <span class="kw">for </span><span class="kw-2">&amp;</span>(start, end) <span class="kw">in </span>present_ranges {
-<a href=#2747 id=2747 data-nosnippet>2747</a>                <span class="kw">for </span>leaf <span class="kw">in </span><span class="kw-2">&amp;</span>leaves[start..end] {
-<a href=#2748 id=2748 data-nosnippet>2748</a>                    <span class="macro">tracing::info!</span>(height = leaf.height(), <span class="string">"insert leaf"</span>);
-<a href=#2749 id=2749 data-nosnippet>2749</a>                    tx.insert_leaf(leaf).<span class="kw">await</span>.unwrap();
-<a href=#2750 id=2750 data-nosnippet>2750</a>                }
-<a href=#2751 id=2751 data-nosnippet>2751</a>            }
-<a href=#2752 id=2752 data-nosnippet>2752</a>
-<a href=#2753 id=2753 data-nosnippet>2753</a>            <span class="kw">if </span>present_ranges[<span class="number">0</span>].<span class="number">0 </span>&gt; <span class="number">0 </span>{
-<a href=#2754 id=2754 data-nosnippet>2754</a>                tx.save_pruned_height((present_ranges[<span class="number">0</span>].<span class="number">0 </span>- <span class="number">1</span>) <span class="kw">as </span>u64)
-<a href=#2755 id=2755 data-nosnippet>2755</a>                    .<span class="kw">await
-<a href=#2756 id=2756 data-nosnippet>2756</a>                    </span>.unwrap();
-<a href=#2757 id=2757 data-nosnippet>2757</a>            }
-<a href=#2758 id=2758 data-nosnippet>2758</a>
-<a href=#2759 id=2759 data-nosnippet>2759</a>            tx.commit().<span class="kw">await</span>.unwrap();
-<a href=#2760 id=2760 data-nosnippet>2760</a>        }
-<a href=#2761 id=2761 data-nosnippet>2761</a>
-<a href=#2762 id=2762 data-nosnippet>2762</a>        <span class="kw">let </span>sync_status = ds.sync_status().<span class="kw">await</span>.unwrap().leaves;
-<a href=#2763 id=2763 data-nosnippet>2763</a>
-<a href=#2764 id=2764 data-nosnippet>2764</a>        <span class="comment">// Verify missing.
-<a href=#2765 id=2765 data-nosnippet>2765</a>        </span><span class="kw">let </span>present: usize = present_ranges.iter().map(|(start, end)| end - start).sum();
-<a href=#2766 id=2766 data-nosnippet>2766</a>        <span class="macro">assert_eq!</span>(
-<a href=#2767 id=2767 data-nosnippet>2767</a>            sync_status.missing,
-<a href=#2768 id=2768 data-nosnippet>2768</a>            block_height - present - present_ranges[<span class="number">0</span>].<span class="number">0
-<a href=#2769 id=2769 data-nosnippet>2769</a>        </span>);
-<a href=#2770 id=2770 data-nosnippet>2770</a>
-<a href=#2771 id=2771 data-nosnippet>2771</a>        <span class="comment">// Verify ranges.
-<a href=#2772 id=2772 data-nosnippet>2772</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>ranges = sync_status.ranges.into_iter();
-<a href=#2773 id=2773 data-nosnippet>2773</a>        <span class="kw">let </span><span class="kw-2">mut </span>prev = <span class="number">0</span>;
-<a href=#2774 id=2774 data-nosnippet>2774</a>        <span class="kw">for </span><span class="kw-2">&amp;</span>(start, end) <span class="kw">in </span>present_ranges {
-<a href=#2775 id=2775 data-nosnippet>2775</a>            <span class="kw">if </span><span class="macro">start !</span>= prev {
-<a href=#2776 id=2776 data-nosnippet>2776</a>                <span class="kw">let </span>range = ranges.next().unwrap();
-<a href=#2777 id=2777 data-nosnippet>2777</a>                <span class="macro">assert_eq!</span>(
-<a href=#2778 id=2778 data-nosnippet>2778</a>                    range,
-<a href=#2779 id=2779 data-nosnippet>2779</a>                    SyncStatusRange {
-<a href=#2780 id=2780 data-nosnippet>2780</a>                        start: prev,
-<a href=#2781 id=2781 data-nosnippet>2781</a>                        end: start,
-<a href=#2782 id=2782 data-nosnippet>2782</a>                        status: <span class="kw">if </span>prev == <span class="number">0 </span>{
-<a href=#2783 id=2783 data-nosnippet>2783</a>                            SyncStatus::Pruned
-<a href=#2784 id=2784 data-nosnippet>2784</a>                        } <span class="kw">else </span>{
-<a href=#2785 id=2785 data-nosnippet>2785</a>                            SyncStatus::Missing
-<a href=#2786 id=2786 data-nosnippet>2786</a>                        },
-<a href=#2787 id=2787 data-nosnippet>2787</a>                    }
-<a href=#2788 id=2788 data-nosnippet>2788</a>                );
-<a href=#2789 id=2789 data-nosnippet>2789</a>            }
-<a href=#2790 id=2790 data-nosnippet>2790</a>            <span class="kw">let </span>range = ranges.next().unwrap();
-<a href=#2791 id=2791 data-nosnippet>2791</a>            <span class="macro">assert_eq!</span>(
-<a href=#2792 id=2792 data-nosnippet>2792</a>                range,
-<a href=#2793 id=2793 data-nosnippet>2793</a>                SyncStatusRange {
-<a href=#2794 id=2794 data-nosnippet>2794</a>                    start,
-<a href=#2795 id=2795 data-nosnippet>2795</a>                    end,
-<a href=#2796 id=2796 data-nosnippet>2796</a>                    status: SyncStatus::Present,
-<a href=#2797 id=2797 data-nosnippet>2797</a>                }
-<a href=#2798 id=2798 data-nosnippet>2798</a>            );
-<a href=#2799 id=2799 data-nosnippet>2799</a>            prev = end;
-<a href=#2800 id=2800 data-nosnippet>2800</a>        }
-<a href=#2801 id=2801 data-nosnippet>2801</a>
-<a href=#2802 id=2802 data-nosnippet>2802</a>        <span class="kw">if </span><span class="macro">prev !</span>= block_height {
-<a href=#2803 id=2803 data-nosnippet>2803</a>            <span class="kw">let </span>range = ranges.next().unwrap();
-<a href=#2804 id=2804 data-nosnippet>2804</a>            <span class="macro">assert_eq!</span>(
-<a href=#2805 id=2805 data-nosnippet>2805</a>                range,
-<a href=#2806 id=2806 data-nosnippet>2806</a>                SyncStatusRange {
-<a href=#2807 id=2807 data-nosnippet>2807</a>                    start: prev,
-<a href=#2808 id=2808 data-nosnippet>2808</a>                    end: block_height,
-<a href=#2809 id=2809 data-nosnippet>2809</a>                    status: SyncStatus::Missing,
-<a href=#2810 id=2810 data-nosnippet>2810</a>                }
-<a href=#2811 id=2811 data-nosnippet>2811</a>            );
-<a href=#2812 id=2812 data-nosnippet>2812</a>        }
-<a href=#2813 id=2813 data-nosnippet>2813</a>
-<a href=#2814 id=2814 data-nosnippet>2814</a>        <span class="macro">assert_eq!</span>(ranges.next(), <span class="prelude-val">None</span>);
-<a href=#2815 id=2815 data-nosnippet>2815</a>    }
-<a href=#2816 id=2816 data-nosnippet>2816</a>
-<a href=#2817 id=2817 data-nosnippet>2817</a>    <span class="attr">#[tokio::test]
-<a href=#2818 id=2818 data-nosnippet>2818</a>    #[test_log::test]
-<a href=#2819 id=2819 data-nosnippet>2819</a>    </span><span class="kw">async fn </span>test_sync_status_multiple_chunks() {
-<a href=#2820 id=2820 data-nosnippet>2820</a>        test_sync_status(<span class="number">10</span>, <span class="kw-2">&amp;</span>[(<span class="number">0</span>, <span class="number">1</span>), (<span class="number">3</span>, <span class="number">5</span>), (<span class="number">8</span>, <span class="number">10</span>)]).<span class="kw">await</span>;
-<a href=#2821 id=2821 data-nosnippet>2821</a>    }
-<a href=#2822 id=2822 data-nosnippet>2822</a>
-<a href=#2823 id=2823 data-nosnippet>2823</a>    <span class="attr">#[tokio::test]
-<a href=#2824 id=2824 data-nosnippet>2824</a>    #[test_log::test]
-<a href=#2825 id=2825 data-nosnippet>2825</a>    </span><span class="kw">async fn </span>test_sync_status_multiple_chunks_present_range_overlapping_chunk() {
-<a href=#2826 id=2826 data-nosnippet>2826</a>        test_sync_status(<span class="number">5</span>, <span class="kw-2">&amp;</span>[(<span class="number">1</span>, <span class="number">4</span>)]).<span class="kw">await</span>;
-<a href=#2827 id=2827 data-nosnippet>2827</a>    }
-<a href=#2828 id=2828 data-nosnippet>2828</a>
-<a href=#2829 id=2829 data-nosnippet>2829</a>    <span class="attr">#[tokio::test]
-<a href=#2830 id=2830 data-nosnippet>2830</a>    #[test_log::test]
-<a href=#2831 id=2831 data-nosnippet>2831</a>    </span><span class="kw">async fn </span>test_sync_status_multiple_chunks_missing_range_overlapping_chunk() {
-<a href=#2832 id=2832 data-nosnippet>2832</a>        test_sync_status(<span class="number">5</span>, <span class="kw-2">&amp;</span>[(<span class="number">0</span>, <span class="number">1</span>), (<span class="number">4</span>, <span class="number">5</span>)]).<span class="kw">await</span>;
-<a href=#2833 id=2833 data-nosnippet>2833</a>    }
-<a href=#2834 id=2834 data-nosnippet>2834</a>
-<a href=#2835 id=2835 data-nosnippet>2835</a>    <span class="attr">#[tokio::test]
-<a href=#2836 id=2836 data-nosnippet>2836</a>    #[test_log::test]
-<a href=#2837 id=2837 data-nosnippet>2837</a>    </span><span class="kw">async fn </span>test_load_range_incomplete() {
-<a href=#2838 id=2838 data-nosnippet>2838</a>        <span class="kw">let </span>storage = TmpDb::init().<span class="kw">await</span>;
-<a href=#2839 id=2839 data-nosnippet>2839</a>        <span class="kw">let </span>db = SqlStorage::connect(storage.config(), StorageConnectionType::Query)
-<a href=#2840 id=2840 data-nosnippet>2840</a>            .<span class="kw">await
-<a href=#2841 id=2841 data-nosnippet>2841</a>            </span>.unwrap();
-<a href=#2842 id=2842 data-nosnippet>2842</a>        {
-<a href=#2843 id=2843 data-nosnippet>2843</a>            <span class="kw">let </span><span class="kw-2">mut </span>tx = db.write().<span class="kw">await</span>.unwrap();
-<a href=#2844 id=2844 data-nosnippet>2844</a>            tx.insert_leaf(
-<a href=#2845 id=2845 data-nosnippet>2845</a>                <span class="kw-2">&amp;</span>LeafQueryData::&lt;MockTypes&gt;::genesis(
-<a href=#2846 id=2846 data-nosnippet>2846</a>                    <span class="kw-2">&amp;</span>Default::default(),
-<a href=#2847 id=2847 data-nosnippet>2847</a>                    <span class="kw-2">&amp;</span>Default::default(),
-<a href=#2848 id=2848 data-nosnippet>2848</a>                    TEST_VERSIONS.test,
-<a href=#2849 id=2849 data-nosnippet>2849</a>                )
-<a href=#2850 id=2850 data-nosnippet>2850</a>                .<span class="kw">await</span>,
-<a href=#2851 id=2851 data-nosnippet>2851</a>            )
-<a href=#2852 id=2852 data-nosnippet>2852</a>            .<span class="kw">await
-<a href=#2853 id=2853 data-nosnippet>2853</a>            </span>.unwrap();
-<a href=#2854 id=2854 data-nosnippet>2854</a>            tx.insert_block(
-<a href=#2855 id=2855 data-nosnippet>2855</a>                <span class="kw-2">&amp;</span>BlockQueryData::&lt;MockTypes&gt;::genesis(
-<a href=#2856 id=2856 data-nosnippet>2856</a>                    <span class="kw-2">&amp;</span>Default::default(),
-<a href=#2857 id=2857 data-nosnippet>2857</a>                    <span class="kw-2">&amp;</span>Default::default(),
-<a href=#2858 id=2858 data-nosnippet>2858</a>                    TEST_VERSIONS.test.base,
-<a href=#2859 id=2859 data-nosnippet>2859</a>                )
-<a href=#2860 id=2860 data-nosnippet>2860</a>                .<span class="kw">await</span>,
-<a href=#2861 id=2861 data-nosnippet>2861</a>            )
-<a href=#2862 id=2862 data-nosnippet>2862</a>            .<span class="kw">await
-<a href=#2863 id=2863 data-nosnippet>2863</a>            </span>.unwrap();
-<a href=#2864 id=2864 data-nosnippet>2864</a>            tx.insert_vid(
-<a href=#2865 id=2865 data-nosnippet>2865</a>                <span class="kw-2">&amp;</span>VidCommonQueryData::&lt;MockTypes&gt;::genesis(
-<a href=#2866 id=2866 data-nosnippet>2866</a>                    <span class="kw-2">&amp;</span>Default::default(),
-<a href=#2867 id=2867 data-nosnippet>2867</a>                    <span class="kw-2">&amp;</span>Default::default(),
-<a href=#2868 id=2868 data-nosnippet>2868</a>                    TEST_VERSIONS.test.base,
-<a href=#2869 id=2869 data-nosnippet>2869</a>                )
-<a href=#2870 id=2870 data-nosnippet>2870</a>                .<span class="kw">await</span>,
-<a href=#2871 id=2871 data-nosnippet>2871</a>                <span class="prelude-val">None</span>,
-<a href=#2872 id=2872 data-nosnippet>2872</a>            )
-<a href=#2873 id=2873 data-nosnippet>2873</a>            .<span class="kw">await
-<a href=#2874 id=2874 data-nosnippet>2874</a>            </span>.unwrap();
-<a href=#2875 id=2875 data-nosnippet>2875</a>            tx.commit().<span class="kw">await</span>.unwrap();
-<a href=#2876 id=2876 data-nosnippet>2876</a>        }
-<a href=#2877 id=2877 data-nosnippet>2877</a>
-<a href=#2878 id=2878 data-nosnippet>2878</a>        <span class="kw">let </span><span class="kw-2">mut </span>tx = db.read().<span class="kw">await</span>.unwrap();
-<a href=#2879 id=2879 data-nosnippet>2879</a>        <span class="kw">let </span>req = RangeRequest { start: <span class="number">0</span>, end: <span class="number">100 </span>};
-<a href=#2880 id=2880 data-nosnippet>2880</a>
-<a href=#2881 id=2881 data-nosnippet>2881</a>        <span class="kw">let </span>err = &lt;NonEmptyRange&lt;BlockQueryData&lt;MockTypes&gt;&gt;&gt;::load(<span class="kw-2">&amp;mut </span>tx, req)
-<a href=#2882 id=2882 data-nosnippet>2882</a>            .<span class="kw">await
-<a href=#2883 id=2883 data-nosnippet>2883</a>            </span>.unwrap_err();
-<a href=#2884 id=2884 data-nosnippet>2884</a>        <span class="macro">tracing::info!</span>(<span class="string">"loading partial block range failed as expected: {err:#}"</span>);
-<a href=#2885 id=2885 data-nosnippet>2885</a>        <span class="macro">assert!</span>(<span class="macro">matches!</span>(err, QueryError::Missing));
-<a href=#2886 id=2886 data-nosnippet>2886</a>
-<a href=#2887 id=2887 data-nosnippet>2887</a>        <span class="kw">let </span>err =
-<a href=#2888 id=2888 data-nosnippet>2888</a>            &lt;NonEmptyRange&lt;LeafQueryData&lt;MockTypes&gt;&gt; <span class="kw">as </span>Fetchable&lt;MockTypes&gt;&gt;::load(<span class="kw-2">&amp;mut </span>tx, req)
-<a href=#2889 id=2889 data-nosnippet>2889</a>                .<span class="kw">await
-<a href=#2890 id=2890 data-nosnippet>2890</a>                </span>.unwrap_err();
-<a href=#2891 id=2891 data-nosnippet>2891</a>        <span class="macro">tracing::info!</span>(<span class="string">"loading partial leaf range failed as expected: {err:#}"</span>);
-<a href=#2892 id=2892 data-nosnippet>2892</a>        <span class="macro">assert!</span>(<span class="macro">matches!</span>(err, QueryError::Missing));
-<a href=#2893 id=2893 data-nosnippet>2893</a>
-<a href=#2894 id=2894 data-nosnippet>2894</a>        <span class="kw">let </span>err = &lt;NonEmptyRange&lt;VidCommonQueryData&lt;MockTypes&gt;&gt;&gt;::load(<span class="kw-2">&amp;mut </span>tx, req)
-<a href=#2895 id=2895 data-nosnippet>2895</a>            .<span class="kw">await
-<a href=#2896 id=2896 data-nosnippet>2896</a>            </span>.unwrap_err();
-<a href=#2897 id=2897 data-nosnippet>2897</a>        <span class="macro">tracing::info!</span>(<span class="string">"loading partial VID common range failed as expected: {err:#}"</span>);
-<a href=#2898 id=2898 data-nosnippet>2898</a>        <span class="macro">assert!</span>(<span class="macro">matches!</span>(err, QueryError::Missing));
-<a href=#2899 id=2899 data-nosnippet>2899</a>    }
-<a href=#2900 id=2900 data-nosnippet>2900</a>}
+<a href=#2664 id=2664 data-nosnippet>2664</a>        <span class="comment">// Inclusive bounds, complete last chunk.
+<a href=#2665 id=2665 data-nosnippet>2665</a>        </span><span class="macro">assert_eq!</span>(
+<a href=#2666 id=2666 data-nosnippet>2666</a>            range_chunks_rev(Bound::Included(<span class="number">0</span>), <span class="number">5</span>, <span class="number">2</span>).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
+<a href=#2667 id=2667 data-nosnippet>2667</a>            [<span class="number">4</span>..<span class="number">6</span>, <span class="number">2</span>..<span class="number">4</span>, <span class="number">0</span>..<span class="number">2</span>]
+<a href=#2668 id=2668 data-nosnippet>2668</a>        );
+<a href=#2669 id=2669 data-nosnippet>2669</a>
+<a href=#2670 id=2670 data-nosnippet>2670</a>        <span class="comment">// Exclusive bounds, partial last chunk.
+<a href=#2671 id=2671 data-nosnippet>2671</a>        </span><span class="macro">assert_eq!</span>(
+<a href=#2672 id=2672 data-nosnippet>2672</a>            range_chunks_rev(Bound::Excluded(<span class="number">0</span>), <span class="number">5</span>, <span class="number">2</span>).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
+<a href=#2673 id=2673 data-nosnippet>2673</a>            [<span class="number">4</span>..<span class="number">6</span>, <span class="number">2</span>..<span class="number">4</span>, <span class="number">1</span>..<span class="number">2</span>]
+<a href=#2674 id=2674 data-nosnippet>2674</a>        );
+<a href=#2675 id=2675 data-nosnippet>2675</a>
+<a href=#2676 id=2676 data-nosnippet>2676</a>        <span class="comment">// Exclusive bounds, complete last chunk.
+<a href=#2677 id=2677 data-nosnippet>2677</a>        </span><span class="macro">assert_eq!</span>(
+<a href=#2678 id=2678 data-nosnippet>2678</a>            range_chunks_rev(Bound::Excluded(<span class="number">0</span>), <span class="number">4</span>, <span class="number">2</span>).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
+<a href=#2679 id=2679 data-nosnippet>2679</a>            [<span class="number">3</span>..<span class="number">5</span>, <span class="number">1</span>..<span class="number">3</span>]
+<a href=#2680 id=2680 data-nosnippet>2680</a>        );
+<a href=#2681 id=2681 data-nosnippet>2681</a>    }
+<a href=#2682 id=2682 data-nosnippet>2682</a>
+<a href=#2683 id=2683 data-nosnippet>2683</a>    <span class="attr">#[test]
+<a href=#2684 id=2684 data-nosnippet>2684</a>    </span><span class="kw">fn </span>test_range_chunks_aligned_rev() {
+<a href=#2685 id=2685 data-nosnippet>2685</a>        <span class="attr">#![allow(clippy::single_range_in_vec_init)]
+<a href=#2686 id=2686 data-nosnippet>2686</a>
+<a href=#2687 id=2687 data-nosnippet>2687</a>        </span><span class="comment">// Aligned first chunk, partial last chunk.
+<a href=#2688 id=2688 data-nosnippet>2688</a>        </span><span class="macro">assert_eq!</span>(
+<a href=#2689 id=2689 data-nosnippet>2689</a>            range_chunks_aligned_rev(Bound::Included(<span class="number">1</span>), <span class="number">3</span>, <span class="number">2</span>).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
+<a href=#2690 id=2690 data-nosnippet>2690</a>            [<span class="number">2</span>..<span class="number">4</span>, <span class="number">1</span>..<span class="number">2</span>]
+<a href=#2691 id=2691 data-nosnippet>2691</a>        );
+<a href=#2692 id=2692 data-nosnippet>2692</a>
+<a href=#2693 id=2693 data-nosnippet>2693</a>        <span class="comment">// Misaligned first chunk, complete last chunk.
+<a href=#2694 id=2694 data-nosnippet>2694</a>        </span><span class="macro">assert_eq!</span>(
+<a href=#2695 id=2695 data-nosnippet>2695</a>            range_chunks_aligned_rev(Bound::Included(<span class="number">0</span>), <span class="number">2</span>, <span class="number">2</span>).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
+<a href=#2696 id=2696 data-nosnippet>2696</a>            [<span class="number">2</span>..<span class="number">3</span>, <span class="number">0</span>..<span class="number">2</span>]
+<a href=#2697 id=2697 data-nosnippet>2697</a>        );
+<a href=#2698 id=2698 data-nosnippet>2698</a>
+<a href=#2699 id=2699 data-nosnippet>2699</a>        <span class="comment">// Incomplete chunk.
+<a href=#2700 id=2700 data-nosnippet>2700</a>        </span><span class="macro">assert_eq!</span>(
+<a href=#2701 id=2701 data-nosnippet>2701</a>            range_chunks_aligned_rev(Bound::Excluded(<span class="number">0</span>), <span class="number">3</span>, <span class="number">10</span>).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
+<a href=#2702 id=2702 data-nosnippet>2702</a>            [<span class="number">1</span>..<span class="number">4</span>]
+<a href=#2703 id=2703 data-nosnippet>2703</a>        );
+<a href=#2704 id=2704 data-nosnippet>2704</a>    }
+<a href=#2705 id=2705 data-nosnippet>2705</a>
+<a href=#2706 id=2706 data-nosnippet>2706</a>    <span class="kw">async fn </span>test_sync_status(chunk_size: usize, present_ranges: <span class="kw-2">&amp;</span>[(usize, usize)]) {
+<a href=#2707 id=2707 data-nosnippet>2707</a>        <span class="kw">let </span>block_height = present_ranges.last().unwrap().<span class="number">1</span>;
+<a href=#2708 id=2708 data-nosnippet>2708</a>        <span class="kw">let </span>storage = TmpDb::init().<span class="kw">await</span>;
+<a href=#2709 id=2709 data-nosnippet>2709</a>        <span class="kw">let </span>db = SqlStorage::connect(storage.config(), StorageConnectionType::Query)
+<a href=#2710 id=2710 data-nosnippet>2710</a>            .<span class="kw">await
+<a href=#2711 id=2711 data-nosnippet>2711</a>            </span>.unwrap();
+<a href=#2712 id=2712 data-nosnippet>2712</a>        <span class="kw">let </span>ds = MockSqlDataSource::builder(db, NoFetching)
+<a href=#2713 id=2713 data-nosnippet>2713</a>            .with_sync_status_chunk_size(chunk_size)
+<a href=#2714 id=2714 data-nosnippet>2714</a>            .with_sync_status_ttl(Duration::ZERO)
+<a href=#2715 id=2715 data-nosnippet>2715</a>            .build()
+<a href=#2716 id=2716 data-nosnippet>2716</a>            .<span class="kw">await
+<a href=#2717 id=2717 data-nosnippet>2717</a>            </span>.unwrap();
+<a href=#2718 id=2718 data-nosnippet>2718</a>
+<a href=#2719 id=2719 data-nosnippet>2719</a>        <span class="comment">// Generate some mock leaves to insert.
+<a href=#2720 id=2720 data-nosnippet>2720</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>leaves: Vec&lt;LeafQueryData&lt;MockTypes&gt;&gt; = <span class="macro">vec!</span>[
+<a href=#2721 id=2721 data-nosnippet>2721</a>            LeafQueryData::&lt;MockTypes&gt;::genesis(
+<a href=#2722 id=2722 data-nosnippet>2722</a>                <span class="kw-2">&amp;</span>Default::default(),
+<a href=#2723 id=2723 data-nosnippet>2723</a>                <span class="kw-2">&amp;</span>Default::default(),
+<a href=#2724 id=2724 data-nosnippet>2724</a>                TEST_VERSIONS.test,
+<a href=#2725 id=2725 data-nosnippet>2725</a>            )
+<a href=#2726 id=2726 data-nosnippet>2726</a>            .<span class="kw">await</span>,
+<a href=#2727 id=2727 data-nosnippet>2727</a>        ];
+<a href=#2728 id=2728 data-nosnippet>2728</a>        <span class="kw">for </span>i <span class="kw">in </span><span class="number">1</span>..block_height {
+<a href=#2729 id=2729 data-nosnippet>2729</a>            <span class="kw">let </span><span class="kw-2">mut </span>leaf = leaves[i - <span class="number">1</span>].clone();
+<a href=#2730 id=2730 data-nosnippet>2730</a>            leaf.leaf.block_header_mut().block_number = i <span class="kw">as </span>u64;
+<a href=#2731 id=2731 data-nosnippet>2731</a>            leaves.push(leaf);
+<a href=#2732 id=2732 data-nosnippet>2732</a>        }
+<a href=#2733 id=2733 data-nosnippet>2733</a>
+<a href=#2734 id=2734 data-nosnippet>2734</a>        <span class="comment">// Set up.
+<a href=#2735 id=2735 data-nosnippet>2735</a>        </span>{
+<a href=#2736 id=2736 data-nosnippet>2736</a>            <span class="kw">let </span><span class="kw-2">mut </span>tx = ds.write().<span class="kw">await</span>.unwrap();
+<a href=#2737 id=2737 data-nosnippet>2737</a>
+<a href=#2738 id=2738 data-nosnippet>2738</a>            <span class="kw">for </span><span class="kw-2">&amp;</span>(start, end) <span class="kw">in </span>present_ranges {
+<a href=#2739 id=2739 data-nosnippet>2739</a>                <span class="kw">for </span>leaf <span class="kw">in </span><span class="kw-2">&amp;</span>leaves[start..end] {
+<a href=#2740 id=2740 data-nosnippet>2740</a>                    <span class="macro">tracing::info!</span>(height = leaf.height(), <span class="string">"insert leaf"</span>);
+<a href=#2741 id=2741 data-nosnippet>2741</a>                    tx.insert_leaf(leaf).<span class="kw">await</span>.unwrap();
+<a href=#2742 id=2742 data-nosnippet>2742</a>                }
+<a href=#2743 id=2743 data-nosnippet>2743</a>            }
+<a href=#2744 id=2744 data-nosnippet>2744</a>
+<a href=#2745 id=2745 data-nosnippet>2745</a>            <span class="kw">if </span>present_ranges[<span class="number">0</span>].<span class="number">0 </span>&gt; <span class="number">0 </span>{
+<a href=#2746 id=2746 data-nosnippet>2746</a>                tx.save_pruned_height((present_ranges[<span class="number">0</span>].<span class="number">0 </span>- <span class="number">1</span>) <span class="kw">as </span>u64)
+<a href=#2747 id=2747 data-nosnippet>2747</a>                    .<span class="kw">await
+<a href=#2748 id=2748 data-nosnippet>2748</a>                    </span>.unwrap();
+<a href=#2749 id=2749 data-nosnippet>2749</a>            }
+<a href=#2750 id=2750 data-nosnippet>2750</a>
+<a href=#2751 id=2751 data-nosnippet>2751</a>            tx.commit().<span class="kw">await</span>.unwrap();
+<a href=#2752 id=2752 data-nosnippet>2752</a>        }
+<a href=#2753 id=2753 data-nosnippet>2753</a>
+<a href=#2754 id=2754 data-nosnippet>2754</a>        <span class="kw">let </span>sync_status = ds.sync_status().<span class="kw">await</span>.unwrap().leaves;
+<a href=#2755 id=2755 data-nosnippet>2755</a>
+<a href=#2756 id=2756 data-nosnippet>2756</a>        <span class="comment">// Verify missing.
+<a href=#2757 id=2757 data-nosnippet>2757</a>        </span><span class="kw">let </span>present: usize = present_ranges.iter().map(|(start, end)| end - start).sum();
+<a href=#2758 id=2758 data-nosnippet>2758</a>        <span class="macro">assert_eq!</span>(
+<a href=#2759 id=2759 data-nosnippet>2759</a>            sync_status.missing,
+<a href=#2760 id=2760 data-nosnippet>2760</a>            block_height - present - present_ranges[<span class="number">0</span>].<span class="number">0
+<a href=#2761 id=2761 data-nosnippet>2761</a>        </span>);
+<a href=#2762 id=2762 data-nosnippet>2762</a>
+<a href=#2763 id=2763 data-nosnippet>2763</a>        <span class="comment">// Verify ranges.
+<a href=#2764 id=2764 data-nosnippet>2764</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>ranges = sync_status.ranges.into_iter();
+<a href=#2765 id=2765 data-nosnippet>2765</a>        <span class="kw">let </span><span class="kw-2">mut </span>prev = <span class="number">0</span>;
+<a href=#2766 id=2766 data-nosnippet>2766</a>        <span class="kw">for </span><span class="kw-2">&amp;</span>(start, end) <span class="kw">in </span>present_ranges {
+<a href=#2767 id=2767 data-nosnippet>2767</a>            <span class="kw">if </span><span class="macro">start !</span>= prev {
+<a href=#2768 id=2768 data-nosnippet>2768</a>                <span class="kw">let </span>range = ranges.next().unwrap();
+<a href=#2769 id=2769 data-nosnippet>2769</a>                <span class="macro">assert_eq!</span>(
+<a href=#2770 id=2770 data-nosnippet>2770</a>                    range,
+<a href=#2771 id=2771 data-nosnippet>2771</a>                    SyncStatusRange {
+<a href=#2772 id=2772 data-nosnippet>2772</a>                        start: prev,
+<a href=#2773 id=2773 data-nosnippet>2773</a>                        end: start,
+<a href=#2774 id=2774 data-nosnippet>2774</a>                        status: <span class="kw">if </span>prev == <span class="number">0 </span>{
+<a href=#2775 id=2775 data-nosnippet>2775</a>                            SyncStatus::Pruned
+<a href=#2776 id=2776 data-nosnippet>2776</a>                        } <span class="kw">else </span>{
+<a href=#2777 id=2777 data-nosnippet>2777</a>                            SyncStatus::Missing
+<a href=#2778 id=2778 data-nosnippet>2778</a>                        },
+<a href=#2779 id=2779 data-nosnippet>2779</a>                    }
+<a href=#2780 id=2780 data-nosnippet>2780</a>                );
+<a href=#2781 id=2781 data-nosnippet>2781</a>            }
+<a href=#2782 id=2782 data-nosnippet>2782</a>            <span class="kw">let </span>range = ranges.next().unwrap();
+<a href=#2783 id=2783 data-nosnippet>2783</a>            <span class="macro">assert_eq!</span>(
+<a href=#2784 id=2784 data-nosnippet>2784</a>                range,
+<a href=#2785 id=2785 data-nosnippet>2785</a>                SyncStatusRange {
+<a href=#2786 id=2786 data-nosnippet>2786</a>                    start,
+<a href=#2787 id=2787 data-nosnippet>2787</a>                    end,
+<a href=#2788 id=2788 data-nosnippet>2788</a>                    status: SyncStatus::Present,
+<a href=#2789 id=2789 data-nosnippet>2789</a>                }
+<a href=#2790 id=2790 data-nosnippet>2790</a>            );
+<a href=#2791 id=2791 data-nosnippet>2791</a>            prev = end;
+<a href=#2792 id=2792 data-nosnippet>2792</a>        }
+<a href=#2793 id=2793 data-nosnippet>2793</a>
+<a href=#2794 id=2794 data-nosnippet>2794</a>        <span class="kw">if </span><span class="macro">prev !</span>= block_height {
+<a href=#2795 id=2795 data-nosnippet>2795</a>            <span class="kw">let </span>range = ranges.next().unwrap();
+<a href=#2796 id=2796 data-nosnippet>2796</a>            <span class="macro">assert_eq!</span>(
+<a href=#2797 id=2797 data-nosnippet>2797</a>                range,
+<a href=#2798 id=2798 data-nosnippet>2798</a>                SyncStatusRange {
+<a href=#2799 id=2799 data-nosnippet>2799</a>                    start: prev,
+<a href=#2800 id=2800 data-nosnippet>2800</a>                    end: block_height,
+<a href=#2801 id=2801 data-nosnippet>2801</a>                    status: SyncStatus::Missing,
+<a href=#2802 id=2802 data-nosnippet>2802</a>                }
+<a href=#2803 id=2803 data-nosnippet>2803</a>            );
+<a href=#2804 id=2804 data-nosnippet>2804</a>        }
+<a href=#2805 id=2805 data-nosnippet>2805</a>
+<a href=#2806 id=2806 data-nosnippet>2806</a>        <span class="macro">assert_eq!</span>(ranges.next(), <span class="prelude-val">None</span>);
+<a href=#2807 id=2807 data-nosnippet>2807</a>    }
+<a href=#2808 id=2808 data-nosnippet>2808</a>
+<a href=#2809 id=2809 data-nosnippet>2809</a>    <span class="attr">#[tokio::test]
+<a href=#2810 id=2810 data-nosnippet>2810</a>    #[test_log::test]
+<a href=#2811 id=2811 data-nosnippet>2811</a>    </span><span class="kw">async fn </span>test_sync_status_multiple_chunks() {
+<a href=#2812 id=2812 data-nosnippet>2812</a>        test_sync_status(<span class="number">10</span>, <span class="kw-2">&amp;</span>[(<span class="number">0</span>, <span class="number">1</span>), (<span class="number">3</span>, <span class="number">5</span>), (<span class="number">8</span>, <span class="number">10</span>)]).<span class="kw">await</span>;
+<a href=#2813 id=2813 data-nosnippet>2813</a>    }
+<a href=#2814 id=2814 data-nosnippet>2814</a>
+<a href=#2815 id=2815 data-nosnippet>2815</a>    <span class="attr">#[tokio::test]
+<a href=#2816 id=2816 data-nosnippet>2816</a>    #[test_log::test]
+<a href=#2817 id=2817 data-nosnippet>2817</a>    </span><span class="kw">async fn </span>test_sync_status_multiple_chunks_present_range_overlapping_chunk() {
+<a href=#2818 id=2818 data-nosnippet>2818</a>        test_sync_status(<span class="number">5</span>, <span class="kw-2">&amp;</span>[(<span class="number">1</span>, <span class="number">4</span>)]).<span class="kw">await</span>;
+<a href=#2819 id=2819 data-nosnippet>2819</a>    }
+<a href=#2820 id=2820 data-nosnippet>2820</a>
+<a href=#2821 id=2821 data-nosnippet>2821</a>    <span class="attr">#[tokio::test]
+<a href=#2822 id=2822 data-nosnippet>2822</a>    #[test_log::test]
+<a href=#2823 id=2823 data-nosnippet>2823</a>    </span><span class="kw">async fn </span>test_sync_status_multiple_chunks_missing_range_overlapping_chunk() {
+<a href=#2824 id=2824 data-nosnippet>2824</a>        test_sync_status(<span class="number">5</span>, <span class="kw-2">&amp;</span>[(<span class="number">0</span>, <span class="number">1</span>), (<span class="number">4</span>, <span class="number">5</span>)]).<span class="kw">await</span>;
+<a href=#2825 id=2825 data-nosnippet>2825</a>    }
+<a href=#2826 id=2826 data-nosnippet>2826</a>
+<a href=#2827 id=2827 data-nosnippet>2827</a>    <span class="attr">#[tokio::test]
+<a href=#2828 id=2828 data-nosnippet>2828</a>    #[test_log::test]
+<a href=#2829 id=2829 data-nosnippet>2829</a>    </span><span class="kw">async fn </span>test_load_range_incomplete() {
+<a href=#2830 id=2830 data-nosnippet>2830</a>        <span class="kw">let </span>storage = TmpDb::init().<span class="kw">await</span>;
+<a href=#2831 id=2831 data-nosnippet>2831</a>        <span class="kw">let </span>db = SqlStorage::connect(storage.config(), StorageConnectionType::Query)
+<a href=#2832 id=2832 data-nosnippet>2832</a>            .<span class="kw">await
+<a href=#2833 id=2833 data-nosnippet>2833</a>            </span>.unwrap();
+<a href=#2834 id=2834 data-nosnippet>2834</a>        {
+<a href=#2835 id=2835 data-nosnippet>2835</a>            <span class="kw">let </span><span class="kw-2">mut </span>tx = db.write().<span class="kw">await</span>.unwrap();
+<a href=#2836 id=2836 data-nosnippet>2836</a>            tx.insert_leaf(
+<a href=#2837 id=2837 data-nosnippet>2837</a>                <span class="kw-2">&amp;</span>LeafQueryData::&lt;MockTypes&gt;::genesis(
+<a href=#2838 id=2838 data-nosnippet>2838</a>                    <span class="kw-2">&amp;</span>Default::default(),
+<a href=#2839 id=2839 data-nosnippet>2839</a>                    <span class="kw-2">&amp;</span>Default::default(),
+<a href=#2840 id=2840 data-nosnippet>2840</a>                    TEST_VERSIONS.test,
+<a href=#2841 id=2841 data-nosnippet>2841</a>                )
+<a href=#2842 id=2842 data-nosnippet>2842</a>                .<span class="kw">await</span>,
+<a href=#2843 id=2843 data-nosnippet>2843</a>            )
+<a href=#2844 id=2844 data-nosnippet>2844</a>            .<span class="kw">await
+<a href=#2845 id=2845 data-nosnippet>2845</a>            </span>.unwrap();
+<a href=#2846 id=2846 data-nosnippet>2846</a>            tx.insert_block(
+<a href=#2847 id=2847 data-nosnippet>2847</a>                <span class="kw-2">&amp;</span>BlockQueryData::&lt;MockTypes&gt;::genesis(
+<a href=#2848 id=2848 data-nosnippet>2848</a>                    <span class="kw-2">&amp;</span>Default::default(),
+<a href=#2849 id=2849 data-nosnippet>2849</a>                    <span class="kw-2">&amp;</span>Default::default(),
+<a href=#2850 id=2850 data-nosnippet>2850</a>                    TEST_VERSIONS.test.base,
+<a href=#2851 id=2851 data-nosnippet>2851</a>                )
+<a href=#2852 id=2852 data-nosnippet>2852</a>                .<span class="kw">await</span>,
+<a href=#2853 id=2853 data-nosnippet>2853</a>            )
+<a href=#2854 id=2854 data-nosnippet>2854</a>            .<span class="kw">await
+<a href=#2855 id=2855 data-nosnippet>2855</a>            </span>.unwrap();
+<a href=#2856 id=2856 data-nosnippet>2856</a>            tx.insert_vid(
+<a href=#2857 id=2857 data-nosnippet>2857</a>                <span class="kw-2">&amp;</span>VidCommonQueryData::&lt;MockTypes&gt;::genesis(
+<a href=#2858 id=2858 data-nosnippet>2858</a>                    <span class="kw-2">&amp;</span>Default::default(),
+<a href=#2859 id=2859 data-nosnippet>2859</a>                    <span class="kw-2">&amp;</span>Default::default(),
+<a href=#2860 id=2860 data-nosnippet>2860</a>                    TEST_VERSIONS.test.base,
+<a href=#2861 id=2861 data-nosnippet>2861</a>                )
+<a href=#2862 id=2862 data-nosnippet>2862</a>                .<span class="kw">await</span>,
+<a href=#2863 id=2863 data-nosnippet>2863</a>                <span class="prelude-val">None</span>,
+<a href=#2864 id=2864 data-nosnippet>2864</a>            )
+<a href=#2865 id=2865 data-nosnippet>2865</a>            .<span class="kw">await
+<a href=#2866 id=2866 data-nosnippet>2866</a>            </span>.unwrap();
+<a href=#2867 id=2867 data-nosnippet>2867</a>            tx.commit().<span class="kw">await</span>.unwrap();
+<a href=#2868 id=2868 data-nosnippet>2868</a>        }
+<a href=#2869 id=2869 data-nosnippet>2869</a>
+<a href=#2870 id=2870 data-nosnippet>2870</a>        <span class="kw">let </span><span class="kw-2">mut </span>tx = db.read().<span class="kw">await</span>.unwrap();
+<a href=#2871 id=2871 data-nosnippet>2871</a>        <span class="kw">let </span>req = RangeRequest { start: <span class="number">0</span>, end: <span class="number">100 </span>};
+<a href=#2872 id=2872 data-nosnippet>2872</a>
+<a href=#2873 id=2873 data-nosnippet>2873</a>        <span class="kw">let </span>err = &lt;NonEmptyRange&lt;BlockQueryData&lt;MockTypes&gt;&gt;&gt;::load(<span class="kw-2">&amp;mut </span>tx, req)
+<a href=#2874 id=2874 data-nosnippet>2874</a>            .<span class="kw">await
+<a href=#2875 id=2875 data-nosnippet>2875</a>            </span>.unwrap_err();
+<a href=#2876 id=2876 data-nosnippet>2876</a>        <span class="macro">tracing::info!</span>(<span class="string">"loading partial block range failed as expected: {err:#}"</span>);
+<a href=#2877 id=2877 data-nosnippet>2877</a>        <span class="macro">assert!</span>(<span class="macro">matches!</span>(err, QueryError::Missing));
+<a href=#2878 id=2878 data-nosnippet>2878</a>
+<a href=#2879 id=2879 data-nosnippet>2879</a>        <span class="kw">let </span>err =
+<a href=#2880 id=2880 data-nosnippet>2880</a>            &lt;NonEmptyRange&lt;LeafQueryData&lt;MockTypes&gt;&gt; <span class="kw">as </span>Fetchable&lt;MockTypes&gt;&gt;::load(<span class="kw-2">&amp;mut </span>tx, req)
+<a href=#2881 id=2881 data-nosnippet>2881</a>                .<span class="kw">await
+<a href=#2882 id=2882 data-nosnippet>2882</a>                </span>.unwrap_err();
+<a href=#2883 id=2883 data-nosnippet>2883</a>        <span class="macro">tracing::info!</span>(<span class="string">"loading partial leaf range failed as expected: {err:#}"</span>);
+<a href=#2884 id=2884 data-nosnippet>2884</a>        <span class="macro">assert!</span>(<span class="macro">matches!</span>(err, QueryError::Missing));
+<a href=#2885 id=2885 data-nosnippet>2885</a>
+<a href=#2886 id=2886 data-nosnippet>2886</a>        <span class="kw">let </span>err = &lt;NonEmptyRange&lt;VidCommonQueryData&lt;MockTypes&gt;&gt;&gt;::load(<span class="kw-2">&amp;mut </span>tx, req)
+<a href=#2887 id=2887 data-nosnippet>2887</a>            .<span class="kw">await
+<a href=#2888 id=2888 data-nosnippet>2888</a>            </span>.unwrap_err();
+<a href=#2889 id=2889 data-nosnippet>2889</a>        <span class="macro">tracing::info!</span>(<span class="string">"loading partial VID common range failed as expected: {err:#}"</span>);
+<a href=#2890 id=2890 data-nosnippet>2890</a>        <span class="macro">assert!</span>(<span class="macro">matches!</span>(err, QueryError::Missing));
+<a href=#2891 id=2891 data-nosnippet>2891</a>    }
+<a href=#2892 id=2892 data-nosnippet>2892</a>}
 </code></pre></div></section></main></body></html>

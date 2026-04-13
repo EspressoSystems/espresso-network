@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["SyncStatus"],"struct":["Limits","ResourceSyncStatus","SyncStatusQueryData","SyncStatusRange","TimeWindowQueryData"]};
+window.SIDEBAR_ITEMS = {"enum":["BlockId","Error","SyncStatus"],"struct":["CustomSnafu","Limits","QuerySnafu","QueryVidSnafu","QueryWindowSnafu","RequestSnafu","ResourceSyncStatus","SyncStatusQueryData","SyncStatusRange","TimeWindowQueryData"],"type":["BlockHash"]};

@@ -9,10 +9,10 @@
 <a href=#9 id=9 data-nosnippet>9</a>    Header, Leaf2, NamespaceId, PubKey, SeqTypes, StakeTableState, Transaction,
 <a href=#10 id=10 data-nosnippet>10</a>    select_active_validator_set,
 <a href=#11 id=11 data-nosnippet>11</a>};
-<a href=#12 id=12 data-nosnippet>12</a><span class="kw">use </span>hotshot_query_service::{
-<a href=#13 id=13 data-nosnippet>13</a>    availability::{BlockQueryData, LeafId, LeafQueryData, PayloadQueryData, VidCommonQueryData},
-<a href=#14 id=14 data-nosnippet>14</a>    node::BlockId,
-<a href=#15 id=15 data-nosnippet>15</a>    types::HeightIndexed,
+<a href=#12 id=12 data-nosnippet>12</a><span class="kw">use </span>hotshot_query_service_types::{
+<a href=#13 id=13 data-nosnippet>13</a>    HeightIndexed,
+<a href=#14 id=14 data-nosnippet>14</a>    availability::{BlockQueryData, LeafId, LeafQueryData, PayloadQueryData, VidCommonQueryData},
+<a href=#15 id=15 data-nosnippet>15</a>    node::BlockId,
 <a href=#16 id=16 data-nosnippet>16</a>};
 <a href=#17 id=17 data-nosnippet>17</a><span class="kw">use </span>hotshot_types::{data::EpochNumber, stake_table::StakeTableEntry, utils::root_block_in_epoch};
 <a href=#18 id=18 data-nosnippet>18</a><span class="kw">use </span>serde::{Deserialize, Serialize};
@@ -709,7 +709,7 @@
 <a href=#709 id=709 data-nosnippet>709</a><span class="attr">#[cfg(test)]
 <a href=#710 id=710 data-nosnippet>710</a></span><span class="kw">mod </span>test {
 <a href=#711 id=711 data-nosnippet>711</a>    <span class="kw">use </span>espresso_types::NsIndex;
-<a href=#712 id=712 data-nosnippet>712</a>    <span class="kw">use </span>hotshot_query_service::availability::TransactionIndex;
+<a href=#712 id=712 data-nosnippet>712</a>    <span class="kw">use </span>hotshot_query_service_types::availability::TransactionIndex;
 <a href=#713 id=713 data-nosnippet>713</a>    <span class="kw">use </span>pretty_assertions::assert_eq;
 <a href=#714 id=714 data-nosnippet>714</a>    <span class="kw">use </span>versions::DRB_AND_HEADER_UPGRADE_VERSION;
 <a href=#715 id=715 data-nosnippet>715</a>

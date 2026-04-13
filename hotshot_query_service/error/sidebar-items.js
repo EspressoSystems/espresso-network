@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["Error"],"struct":["AvailabilitySnafu","CustomSnafu","ExplorerSnafu","MerklizedStateSnafu","NodeSnafu","StatusSnafu"]};
+window.SIDEBAR_ITEMS = {"enum":["Error"]};
