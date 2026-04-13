@@ -1,9 +1,5 @@
 //! Smoke test: spawn a small committee (5 nodes) in-process
 //! and verify that consensus advances and produces CSV metrics.
-//!
-//! Nodes self-bootstrap via `seed_genesis` + `start()` — no external
-//! orchestrator is needed to inject the first proposal.
-
 use std::time::Duration;
 
 use hotshot_new_protocol_bench::config::NodeConfig;
@@ -12,9 +8,7 @@ use tokio::time::timeout;
 
 const NUM_NODES: usize = 5;
 const TARGET_VIEWS: u64 = 10;
-const SEED: u8 = 0;
 const TIMEOUT_MS: u64 = 5000;
-/// Per-test timeout to prevent hanging.
 const TEST_TIMEOUT: Duration = Duration::from_secs(60);
 
 fn peer_list(base_port: u16) -> Vec<String> {
@@ -32,7 +26,6 @@ fn node_config(
     NodeConfig {
         node_id,
         total_nodes: NUM_NODES,
-        seed: SEED,
         timeout_ms: TIMEOUT_MS,
         target_views: TARGET_VIEWS,
         bind_addr: format!("127.0.0.1:{}", base_port + node_id as u16),
@@ -82,8 +75,6 @@ async fn run_benchmark(
 ) -> anyhow::Result<()> {
     let mut node_handles = Vec::new();
 
-    // Spawn all nodes as async tasks.  Each node self-bootstraps via
-    // seed_genesis + start() — no orchestrator needed.
     for i in 0..NUM_NODES as u64 {
         let cfg = node_config(i, output_dir, block_size, base_port);
         node_handles.push(tokio::spawn(async move {

@@ -40,10 +40,10 @@ type BenchCoordinator = Coordinator<TestTypes, CliquenetImpl>;
 /// Build and run a single benchmark node.
 pub async fn run(cfg: NodeConfig) -> Result<()> {
     let (public_key, private_key) =
-        BLSPubKey::generated_from_seed_indexed([cfg.seed; 32], cfg.node_id);
+        BLSPubKey::generated_from_seed_indexed([0u8; 32], cfg.node_id);
     info!(node_id = cfg.node_id, %public_key, "starting node");
 
-    let membership = make_membership(cfg.total_nodes, cfg.seed).await;
+    let membership = make_membership(cfg.total_nodes).await;
     let network = create_network(cfg.node_id, &public_key, &private_key, &cfg).await?;
 
     let coordinator = build_coordinator(public_key, private_key, membership, network, &cfg).await;
@@ -63,15 +63,13 @@ async fn create_network(
         .parse()
         .map_err(|e| anyhow::anyhow!("invalid bind address '{}': {e}", cfg.bind_addr))?;
 
-    // Build peer list: for each peer address, derive the corresponding public key
-    // and x25519 key from the deterministic seed.
     let mut parties = Vec::new();
     for (i, addr_str) in cfg.peers.iter().enumerate() {
         let i = i as u64;
         if i == node_id {
             continue; // skip self
         }
-        let (_peer_pk, peer_sk) = BLSPubKey::generated_from_seed_indexed([cfg.seed; 32], i);
+        let (_peer_pk, peer_sk) = BLSPubKey::generated_from_seed_indexed([0u8; 32], i);
         let peer_pk = BLSPubKey::from_private(&peer_sk);
         let peer_keypair = Keypair::derive_from::<BLSPubKey>(&peer_sk);
         let peer_addr: NetAddr = addr_str
@@ -183,7 +181,7 @@ async fn build_coordinator(
     coordinator
 }
 
-/// Run the coordinator with metrics instrumentation.
+/// Run coordinator with metrics instrumentation and block injection.
 async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -> Result<()> {
     let mut metrics = MetricsCollector::new(cfg.node_id);
 
@@ -214,8 +212,7 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
         while let Some(output) = coordinator.outbox_mut().pop_front() {
             metrics.on_output(&output);
 
-            // When block_size is set, intercept block requests and inject a
-            // dummy block directly, bypassing the BlockBuilder entirely.
+            // Intercept block requests and inject test block (bypassing BlockBuilder).
             if let ConsensusOutput::RequestBlockAndHeader(ref req) = output
                 && cfg.block_size > 0
             {
@@ -273,7 +270,7 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
     Ok(())
 }
 
-/// Build a dummy block with a single transaction of the given size.
+/// Build a test block with a single transaction of the given size.
 struct TestBlock {
     block: TestBlockPayload,
     metadata: TestMetadata,

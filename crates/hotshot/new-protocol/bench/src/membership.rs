@@ -21,12 +21,7 @@ use hotshot_types::{
 };
 
 /// Create an `EpochMembershipCoordinator<TestTypes>` with `num_nodes` validators.
-///
-/// Uses `StrictMembership<TestTypes, StaticStakeTable>` with deterministic keys
-/// derived from a fixed seed of [0; 32] (as used by gen_node_lists).
-/// The `seed` parameter is accepted for API compatibility but the membership
-/// always uses the standard test seed.
-pub async fn make_membership(num_nodes: usize, _seed: u8) -> EpochMembershipCoordinator<TestTypes> {
+pub async fn make_membership(num_nodes: usize) -> EpochMembershipCoordinator<TestTypes> {
     let network =
         <MemoryNetwork<BLSPubKey> as TestableNetworkingImplementation<TestTypes>>::generator(
             num_nodes,
@@ -39,12 +34,7 @@ pub async fn make_membership(num_nodes: usize, _seed: u8) -> EpochMembershipCoor
         )(0)
         .await;
 
-    let members = gen_node_lists(
-        num_nodes as u64,
-        num_nodes as u64,
-        &TestNodeStakes::default(),
-    )
-    .0;
+    let members = gen_node_lists(num_nodes as u64, num_nodes as u64, &TestNodeStakes::default()).0;
 
     let membership = Arc::new(RwLock::new(StrictMembership::<
         TestTypes,
@@ -58,7 +48,6 @@ pub async fn make_membership(num_nodes: usize, _seed: u8) -> EpochMembershipCoor
         u64::MAX,
     )));
 
-    // Initialize epoch data so membership works with epoch-aware versions (VID2 etc.).
     membership
         .write()
         .await

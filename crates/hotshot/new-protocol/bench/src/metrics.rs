@@ -7,10 +7,6 @@ use serde::Serialize;
 use time::OffsetDateTime;
 
 /// Per-view timing measurements.
-///
-/// All timestamps are wall-clock nanoseconds since Unix epoch
-/// (`OffsetDateTime::now_utc().unix_timestamp_nanos()`), matching the
-/// old HotShot benchmark format. This allows direct cross-node comparison.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct ViewMetrics {
     pub view: u64,
