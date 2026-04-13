@@ -158,10 +158,10 @@ impl TryFrom<KeySetOptions> for KeySet {
                     "ESPRESSO_NODE_PRIVATE_STATE_KEY",
                 )?);
             }
-            // Inlined instead of using read_from_key_file because we need to tolerate
-            // a missing key (falls through to random generation) but still fail on malformed.
+            // Tolerate missing x25519 key (falls through to random generation)
+            // but still fail on malformed.
             if x25519.is_none()
-                && let Some(raw) = vars.get("ESPRESSO_NODE_PRIVATE_X25519_KEY")
+                && let Some(raw) = lookup_key_file_var(&vars, "ESPRESSO_NODE_PRIVATE_X25519_KEY")
             {
                 x25519 = Some(
                     TaggedBase64::parse(raw)
@@ -204,12 +204,24 @@ fn read_from_key_file<
     T: TryFrom<TaggedBase64, Error: Send + Sync + std::error::Error + 'static>,
 >(
     vars: &HashMap<String, String>,
-    env: &str,
+    key: &str,
 ) -> anyhow::Result<T> {
-    TaggedBase64::parse(vars.get(env).context(format!("key file missing {env}"))?)
-        .context(format!("key file has malformed {env}"))?
+    let val = lookup_key_file_var(vars, key).context(format!("key file missing {key}"))?;
+    TaggedBase64::parse(val)
+        .context(format!("key file has malformed {key}"))?
         .try_into()
-        .context(format!("key file has malformed {env}"))
+        .context(format!("key file has malformed {key}"))
+}
+
+/// Look up a key file variable by new name, falling back to the deprecated
+/// `ESPRESSO_SEQUENCER_` prefix if the new name is not found.
+fn lookup_key_file_var<'a>(vars: &'a HashMap<String, String>, key: &str) -> Option<&'a String> {
+    vars.get(key).or_else(|| {
+        let legacy = key.replacen("ESPRESSO_NODE_", "ESPRESSO_SEQUENCER_", 1);
+        vars.get(&legacy).inspect(|_| {
+            tracing::warn!("Key file uses deprecated {legacy}, please rename to {key}");
+        })
+    })
 }
 
 #[cfg(test)]
@@ -343,5 +355,32 @@ mod tests {
                 .to_string()
                 .contains("malformed")
         );
+    }
+
+    #[test]
+    fn key_file_with_legacy_sequencer_names() {
+        let keys = generate_keys();
+        let f = write_key_file(&[
+            format!(
+                "ESPRESSO_SEQUENCER_PRIVATE_STAKING_KEY={}",
+                staking_tb64(&keys)
+            ),
+            format!("ESPRESSO_SEQUENCER_PRIVATE_STATE_KEY={}", state_tb64(&keys)),
+            format!(
+                "ESPRESSO_SEQUENCER_PRIVATE_X25519_KEY={}",
+                x25519_tb64(&keys)
+            ),
+        ]);
+        let opts = KeySetOptions {
+            mnemonic: None,
+            index: None,
+            key_file: Some(f.path().to_path_buf()),
+            private_staking_key: None,
+            private_state_key: None,
+            private_x25519_key: None,
+        };
+        let result = KeySet::try_from(opts).unwrap();
+        assert_eq!(result.staking, keys.staking);
+        assert_eq!(result.x25519, keys.x25519);
     }
 }
