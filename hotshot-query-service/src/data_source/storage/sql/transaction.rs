@@ -449,57 +449,14 @@ impl Transaction<Write> {
 /// Pruning mutations, run under READ COMMITTED isolation on Postgres.
 impl Transaction<Prune> {
     /// Delete a batch of data for pruning.
+    ///
+    /// Payloads/vid_common are GC'd after header deletion using NOT EXISTS. Under READ
+    /// COMMITTED, if a concurrent insert holds a lock on a payload row, the DELETE waits
+    /// and re-evaluates with a fresh snapshot after the insert commits. If the payload was
+    /// already deleted, the inserting SERIALIZABLE transaction gets a serialization error
+    /// and retries, recreating the payload.
     #[instrument(skip(self))]
     pub(super) async fn delete_batch(&mut self, height: u64) -> anyhow::Result<()> {
-        // Delete payloads which are only referenced by the headers we're going to delete.
-        let res = query(
-            "WITH to_delete AS (
-                SELECT h.payload_hash, h.ns_table FROM header AS h
-                 WHERE (h.payload_hash, h.ns_table) IN (
-                    SELECT range.payload_hash, range.ns_table
-                      FROM header AS range
-                     WHERE range.height <= $1
-                 )
-                GROUP BY h.payload_hash, h.ns_table
-                HAVING count(*) <= 1
-            )
-            DELETE FROM payload AS p
-             WHERE (p.hash, p.ns_table) IN (SELECT * FROM to_delete)",
-        )
-        .bind(height as i64)
-        .execute(self.as_mut())
-        .await
-        .context("deleting payloads")?;
-        tracing::debug!(
-            rows_affected = res.rows_affected(),
-            "garbage collected payloads"
-        );
-
-        // Delete VID common which are only referenced by the headers we're going to delete.
-        let res = query(
-            "WITH to_delete AS (
-                SELECT h.payload_hash FROM header AS h
-                 WHERE h.payload_hash IN (
-                    SELECT range.payload_hash
-                      FROM header AS range
-                     WHERE range.height <= $1
-                 )
-                GROUP BY h.payload_hash
-                HAVING count(*) <= 1
-            )
-            DELETE FROM vid_common AS v
-             WHERE v.hash IN (SELECT * FROM to_delete)",
-        )
-        .bind(height as i64)
-        .execute(self.as_mut())
-        .await
-        .context("deleting VID common")?;
-        tracing::debug!(
-            rows_affected = res.rows_affected(),
-            "garbage collected VID common"
-        );
-
-        // Delete dependent tables individually before deleting headers.
         let res = query("DELETE FROM transactions WHERE block_height <= $1")
             .bind(height as i64)
             .execute(self.as_mut())
@@ -520,6 +477,36 @@ impl Transaction<Prune> {
             .await
             .context("deleting headers")?;
         tracing::debug!(rows_affected = res.rows_affected(), "pruned headers");
+
+        let res = query(
+            "DELETE FROM payload AS p
+             WHERE NOT EXISTS (
+                SELECT 1 FROM header AS h
+                WHERE h.payload_hash = p.hash AND h.ns_table = p.ns_table
+             )",
+        )
+        .execute(self.as_mut())
+        .await
+        .context("garbage collecting payloads")?;
+        tracing::debug!(
+            rows_affected = res.rows_affected(),
+            "garbage collected payloads"
+        );
+
+        let res = query(
+            "DELETE FROM vid_common AS v
+             WHERE NOT EXISTS (
+                SELECT 1 FROM header AS h
+                WHERE h.payload_hash = v.hash
+             )",
+        )
+        .execute(self.as_mut())
+        .await
+        .context("garbage collecting VID common")?;
+        tracing::debug!(
+            rows_affected = res.rows_affected(),
+            "garbage collected VID common"
+        );
 
         Ok(())
     }
