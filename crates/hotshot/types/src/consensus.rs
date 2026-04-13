@@ -392,11 +392,6 @@ type VoteParticipationMap<TYPES> = (
     u64,
 );
 
-type VoteParticipationMap<TYPES> = (
-    HashMap<<<TYPES as NodeType>::SignatureKey as SignatureKey>::VerificationKeyType, u64>,
-    u64,
-);
-
 #[derive(Clone, Debug)]
 struct VoteParticipation<TYPES: NodeType> {
     /// Current epoch
@@ -1025,6 +1020,11 @@ impl<TYPES: NodeType> Consensus<TYPES> {
             .current_proposal_participation()
     }
 
+    /// Get the current proposal participation epoch
+    pub fn current_proposal_participation_epoch(&self) -> EpochNumber {
+        self.validator_participation.current_epoch()
+    }
+
     /// Get the proposal participation for a given epoch
     pub fn proposal_participation(&self, epoch: EpochNumber) -> HashMap<TYPES::SignatureKey, f64> {
         self.validator_participation.proposal_participation(epoch)
@@ -1051,6 +1051,11 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         &self,
     ) -> HashMap<<TYPES::SignatureKey as SignatureKey>::VerificationKeyType, f64> {
         self.vote_participation.current_vote_participation()
+    }
+
+    /// Get the current vote participation
+    pub fn current_vote_participation_epoch(&self) -> Option<EpochNumber> {
+        self.vote_participation.current_epoch()
     }
 
     /// Get the previous vote participation
