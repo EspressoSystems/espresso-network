@@ -68,7 +68,7 @@ contract UpgradeFeeContractScript is Script {
         // validate that the new implementation contract is upgrade safe
         Upgrades.validateUpgrade(upgradeContractName, opts);
 
-        // get the deployer to depley the new implementation contract
+        // get the deployer to deploy the new implementation contract
         address deployer;
         string memory ledgerCommand = vm.envString("USE_HARDWARE_WALLET");
         if (keccak256(bytes(ledgerCommand)) == keccak256(bytes("true"))) {
