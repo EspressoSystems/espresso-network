@@ -63,7 +63,7 @@ is_localhost_rpc() {
 }
 
 if is_localhost_rpc "$RPC_URL"; then
-    unset ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS
+    ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS="${ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS:-}"
 fi
 
 # Function to prompt user for confirmation on real testnets
