@@ -7,7 +7,7 @@ authors = { workspace = true }
 license = "MIT"
 
 [[bin]]
-name = "new-protocol-node"
+name = "new-protocol-bench-node"
 path = "src/bin/node.rs"
 
 [dependencies]

@@ -3,7 +3,7 @@ use std::time::Duration;
 use clap::Parser;
 
 #[derive(Parser, Clone)]
-#[command(name = "new-protocol-node")]
+#[command(name = "new-protocol-bench-node")]
 #[command(about = "Benchmark node for the new consensus protocol")]
 pub struct NodeConfig {
     /// This node's index.
