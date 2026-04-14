@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::BTreeSet, sync::Arc};
 
 use hotshot::{
     traits::{
@@ -27,13 +27,16 @@ pub trait TestNetwork {
     /// Create `num_nodes` interconnected networks.
     ///
     /// Returns `Self` (which may hold shared state like a `MasterMap`) together
-    /// with one network instance per node.
+    /// with one network instance per node.  Nodes in `skip_nodes` are not
+    /// created; their position in the returned `Vec` is `None`.
+    #[allow(clippy::type_complexity)]
     fn create(
         num_nodes: usize,
+        skip_nodes: &BTreeSet<usize>,
     ) -> impl std::future::Future<
         Output = (
             Self,
-            Vec<<Self::Impl as NodeImplementation<TestTypes>>::Network>,
+            Vec<Option<<Self::Impl as NodeImplementation<TestTypes>>::Network>>,
         ),
     >
     where
@@ -63,22 +66,33 @@ pub struct MemoryTestNetwork {
 impl TestNetwork for MemoryTestNetwork {
     type Impl = MemoryNetworkImpl;
 
-    async fn create(num_nodes: usize) -> (Self, Vec<MemoryNetwork<BLSPubKey>>) {
+    async fn create(
+        num_nodes: usize,
+        skip_nodes: &BTreeSet<usize>,
+    ) -> (Self, Vec<Option<MemoryNetwork<BLSPubKey>>>) {
         let group: Arc<MasterMap<BLSPubKey>> = MasterMap::new();
+
         let networks = (0..num_nodes)
             .map(|i| {
                 let (pk, _) = BLSPubKey::generated_from_seed_indexed([0; 32], i as u64);
-                MemoryNetwork::new(&pk, &group, &[Topic::Global], None)
+                let topics: &[Topic] = if skip_nodes.contains(&i) {
+                    &[]
+                } else {
+                    &[Topic::Global]
+                };
+                let net = MemoryNetwork::new(&pk, &group, topics, None);
+                if skip_nodes.contains(&i) {
+                    None
+                } else {
+                    Some(net)
+                }
             })
             .collect();
         (Self { group }, networks)
     }
 
     async fn create_client(&self) -> MemoryNetwork<BLSPubKey> {
-        // Use a deterministic but distinct key for the client.  Index 9999
-        // avoids collision with normal node indices.
         let (pk, _) = BLSPubKey::generated_from_seed_indexed([1; 32], 9999);
-        // Subscribe to no topics — the client only sends, never receives.
         MemoryNetwork::new(&pk, &self.group, &[], None)
     }
 }
@@ -100,7 +114,10 @@ pub struct CliquenetTestNetwork {
 impl TestNetwork for CliquenetTestNetwork {
     type Impl = CliquenetImpl;
 
-    async fn create(num_nodes: usize) -> (Self, Vec<Cliquenet<BLSPubKey>>) {
+    async fn create(
+        num_nodes: usize,
+        skip_nodes: &BTreeSet<usize>,
+    ) -> (Self, Vec<Option<Cliquenet<BLSPubKey>>>) {
         // Generate keys and addresses for all parties.
         let parties: Vec<(Keypair, BLSPubKey, NetAddr)> = (0..num_nodes)
             .map(|i| {
@@ -128,9 +145,14 @@ impl TestNetwork for CliquenetTestNetwork {
             })
             .collect();
 
-        // Create each Cliquenet node.
+        // Create each Cliquenet node (skip down nodes — sends to them
+        // fail gracefully over TCP).
         let mut networks = Vec::with_capacity(num_nodes);
-        for (keypair, public_key, addr) in &parties {
+        for (i, (keypair, public_key, addr)) in parties.iter().enumerate() {
+            if skip_nodes.contains(&i) {
+                networks.push(None);
+                continue;
+            }
             let net = Cliquenet::create(
                 "test",
                 *public_key,
@@ -141,7 +163,7 @@ impl TestNetwork for CliquenetTestNetwork {
             )
             .await
             .expect("cliquenet creation should succeed");
-            networks.push(net);
+            networks.push(Some(net));
         }
 
         (Self { peer_infos }, networks)

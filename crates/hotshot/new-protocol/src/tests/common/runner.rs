@@ -49,6 +49,10 @@ pub struct TestRunner {
     /// not in this set the test fails.  If a node decides a leaf for a view
     /// in this set the test also fails.
     pub expected_failed_views: BTreeSet<ViewNumber>,
+    /// Node indices that are offline for the entire test.  Down nodes do
+    /// not run a coordinator.  Views where a down node is leader are
+    /// expected to timeout.
+    pub down_nodes: BTreeSet<usize>,
 }
 
 impl Default for TestRunner {
@@ -61,6 +65,7 @@ impl Default for TestRunner {
             view_timeout: Duration::from_secs(2),
             transaction_size: 64 * 1024,
             expected_failed_views: BTreeSet::new(),
+            down_nodes: BTreeSet::new(),
         }
     }
 }
@@ -72,6 +77,10 @@ pub enum TestError {
         node: usize,
     },
     UnexpectedDecide {
+        node: usize,
+        view: ViewNumber,
+    },
+    UnexpectedTimeout {
         node: usize,
         view: ViewNumber,
     },
@@ -98,6 +107,12 @@ impl fmt::Display for TestError {
                 write!(
                     f,
                     "node {node} decided view {view} which was expected to fail"
+                )
+            },
+            Self::UnexpectedTimeout { node, view } => {
+                write!(
+                    f,
+                    "node {node} timed out on view {view} which was expected to succeed"
                 )
             },
             Self::NotEnoughDecided {
@@ -132,6 +147,28 @@ enum NodeEvent {
 }
 
 impl TestRunner {
+    /// Compute the views that will fail because their leader is a down node.
+    /// Leader for view `v` is node `v % num_nodes`.
+    fn failed_views_from_down_nodes(&self) -> BTreeSet<ViewNumber> {
+        let mut result = BTreeSet::new();
+        let mut successful = 0;
+        let mut view = 1usize;
+        loop {
+            let vn = ViewNumber::new(view as u64);
+            let leader = view % self.num_nodes;
+            if self.down_nodes.contains(&leader) || self.expected_failed_views.contains(&vn) {
+                result.insert(vn);
+            } else {
+                successful += 1;
+                if successful >= self.target_decisions {
+                    break;
+                }
+            }
+            view += 1;
+        }
+        result
+    }
+
     /// Run the integration test using the given network backend.
     ///
     /// Spins up `self.num_nodes` coordinators connected via `N`.  Each
@@ -140,15 +177,21 @@ impl TestRunner {
     /// a dedicated client network instance.
     pub async fn run<N: TestNetwork>(&self) -> Result<(), TestError> {
         let membership = mock_membership_with_num_nodes(self.num_nodes).await;
-        let (network_state, networks) = N::create(self.num_nodes).await;
+        let (network_state, networks) = N::create(self.num_nodes, &self.down_nodes).await;
 
-        let mut output_channels: Vec<UnboundedReceiver<NodeEvent>> =
+        let mut output_channels: Vec<Option<UnboundedReceiver<NodeEvent>>> =
             Vec::with_capacity(self.num_nodes);
 
-        // Spawn one coordinator task per node.
+        // Spawn one coordinator task per node.  Down nodes are not
+        // subscribed to any topic, so their slot is `None`.
         for (i, network) in networks.into_iter().enumerate() {
+            let Some(network) = network else {
+                output_channels.push(None);
+                continue;
+            };
+
             let (output_tx, output_rx) = mpsc::unbounded_channel();
-            output_channels.push(output_rx);
+            output_channels.push(Some(output_rx));
 
             let coord = build_test_coordinator::<N::Impl>(
                 i as u64,
@@ -167,14 +210,20 @@ impl TestRunner {
         let mut client_network =
             Network::<TestTypes, _>::new(client_net, membership.clone(), upgrade_lock());
 
-        // Collect decided leaf commits from each node until all reach the target.
+        let all_expected_failures = self.failed_views_from_down_nodes();
+
+        // Collect decided leaf commits from each node until all live nodes reach the target.
         let mut node_commits: Vec<BTreeMap<ViewNumber, [u8; 32]>> =
             vec![BTreeMap::new(); self.num_nodes];
         let mut node_timeouts: Vec<BTreeSet<ViewNumber>> = vec![BTreeSet::new(); self.num_nodes];
         let mut tx_nonce: u64 = 0;
 
         let deadline = tokio::time::Instant::now() + self.max_runtime;
-        while node_commits.iter().any(|s| s.len() < self.target_decisions) {
+        while node_commits
+            .iter()
+            .enumerate()
+            .any(|(i, s)| !self.down_nodes.contains(&i) && s.len() < self.target_decisions)
+        {
             let remaining = deadline
                 .checked_duration_since(tokio::time::Instant::now())
                 .ok_or(TestError::Timeout)?;
@@ -183,15 +232,21 @@ impl TestRunner {
             tx_nonce = tx_nonce.wrapping_add(1);
             broadcast_transaction(&mut client_network, tx_nonce, self.transaction_size).await;
 
-            // Collect events from each node.
-            for (idx, rx) in output_channels.iter_mut().enumerate() {
+            // Collect events from each live node.
+            for (idx, rx_opt) in output_channels.iter_mut().enumerate() {
+                let Some(rx) = rx_opt else { continue };
                 if node_commits[idx].len() >= self.target_decisions {
                     continue;
                 }
                 if let Ok(Some(event)) = timeout(remaining, rx.recv()).await {
                     match event {
-                        NodeEvent::Decided(commits) => node_commits[idx] = commits,
+                        NodeEvent::Decided(commits) => {
+                            node_commits[idx] = commits;
+                        },
                         NodeEvent::TimedOut(view) => {
+                            if !all_expected_failures.contains(&view) {
+                                return Err(TestError::UnexpectedTimeout { node: idx, view });
+                            }
                             node_timeouts[idx].insert(view);
                         },
                     }
@@ -204,8 +259,9 @@ impl TestRunner {
         Self::verify_correctness(
             &node_commits,
             &node_timeouts,
-            &self.expected_failed_views,
+            &all_expected_failures,
             self.target_decisions,
+            &self.down_nodes,
         )
     }
 
@@ -218,9 +274,11 @@ impl TestRunner {
         node_timeouts: &[BTreeSet<ViewNumber>],
         expected_failed_views: &BTreeSet<ViewNumber>,
         target_decisions: usize,
+        down_nodes: &BTreeSet<usize>,
     ) -> Result<(), TestError> {
         let num_nodes = node_commits.len();
-        let threshold = num_nodes * 2 / 3;
+        let live_nodes = num_nodes - down_nodes.len();
+        let threshold = live_nodes * 2 / 3;
 
         let last_view = expected_failed_views.len() + target_decisions;
         for v in 1..=last_view {
@@ -228,6 +286,9 @@ impl TestRunner {
             if expected_failed_views.contains(&view) {
                 let mut timeout_count = 0;
                 for (i, commits) in node_commits.iter().enumerate() {
+                    if down_nodes.contains(&i) {
+                        continue;
+                    }
                     if commits.contains_key(&view) {
                         return Err(TestError::UnexpectedDecide { node: i, view });
                     }
@@ -246,6 +307,9 @@ impl TestRunner {
                 let mut reference = None;
                 let mut decided_count = 0;
                 for (i, commits) in node_commits.iter().enumerate() {
+                    if down_nodes.contains(&i) {
+                        continue;
+                    }
                     let commit = commits.get(&view);
                     if commit.is_some() {
                         decided_count += 1;

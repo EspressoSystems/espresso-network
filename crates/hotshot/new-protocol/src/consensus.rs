@@ -379,7 +379,7 @@ impl<T: NodeType> Consensus<T> {
 
         outbox.push_back(ConsensusOutput::RequestState(StateRequest {
             view: proposal.view_number(),
-            parent_view: proposal.view_number().saturating_sub(1).into(),
+            parent_view: proposal.justify_qc.view_number(),
             epoch,
             block: proposal.block_header.block_number().into(),
             proposal: proposal.clone(),
