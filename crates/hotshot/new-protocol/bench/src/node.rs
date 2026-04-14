@@ -232,17 +232,17 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
                     block.metadata,
                     version,
                 );
-                coordinator
-                    .apply_consensus(ConsensusInput::HeaderCreated(req.view, header))
-                    .await;
-                coordinator
-                    .apply_consensus(ConsensusInput::BlockBuilt {
-                        view: req.view,
-                        epoch: req.epoch,
-                        payload: block.block,
-                        metadata: block.metadata,
-                    })
-                    .await;
+                let header_input = ConsensusInput::HeaderCreated(req.view, header);
+                metrics.on_input(&header_input);
+                coordinator.apply_consensus(header_input).await;
+                let block_input = ConsensusInput::BlockBuilt {
+                    view: req.view,
+                    epoch: req.epoch,
+                    payload: block.block,
+                    metadata: block.metadata,
+                };
+                metrics.on_input(&block_input);
+                coordinator.apply_consensus(block_input).await;
                 continue; // skip process_consensus_output for this one
             }
 

@@ -11,16 +11,18 @@ use time::OffsetDateTime;
 pub struct ViewMetrics {
     pub view: u64,
     pub is_leader: bool,
+    pub header_created_ns: Option<i128>,
+    pub block_built_ns: Option<i128>,
+    pub vid_disperse_ns: Option<i128>,
+    pub proposal_sent_ns: Option<i128>,
     pub proposal_recv_ns: Option<i128>,
     pub state_validated_ns: Option<i128>,
     pub vote1_sent_ns: Option<i128>,
+    pub block_reconstructed_ns: Option<i128>,
     pub cert1_formed_ns: Option<i128>,
     pub vote2_sent_ns: Option<i128>,
     pub cert2_formed_ns: Option<i128>,
     pub leaf_decided_ns: Option<i128>,
-    pub proposal_sent_ns: Option<i128>,
-    pub vid_disperse_ns: Option<i128>,
-    pub block_reconstructed_ns: Option<i128>,
 }
 
 /// Collects per-view timing metrics.
@@ -54,6 +56,20 @@ impl MetricsCollector {
     pub fn on_input(&mut self, input: &ConsensusInput<TestTypes>) {
         let ts = Self::now_ns();
         match input {
+            // Leader: block building pipeline
+            ConsensusInput::HeaderCreated(view, _) => {
+                let v = **view;
+                self.view_mut(v).header_created_ns = Some(ts);
+            },
+            ConsensusInput::BlockBuilt { view, .. } => {
+                let v = **view;
+                self.view_mut(v).block_built_ns = Some(ts);
+            },
+            ConsensusInput::VidDisperseCreated(view, _) => {
+                let v = **view;
+                self.view_mut(v).vid_disperse_ns = Some(ts);
+            },
+            // Replica: proposal processing
             ConsensusInput::Proposal(p) => {
                 let v = *p.view_number();
                 self.view_mut(v).proposal_recv_ns = Some(ts);
@@ -62,21 +78,25 @@ impl MetricsCollector {
                 let v = *resp.view;
                 self.view_mut(v).state_validated_ns = Some(ts);
             },
-            ConsensusInput::Certificate1(cert) => {
-                let v = *cert.view_number();
-                self.view_mut(v).cert1_formed_ns = Some(ts);
-            },
-            ConsensusInput::Certificate2(cert) => {
-                let v = *cert.view_number();
-                self.view_mut(v).cert2_formed_ns = Some(ts);
-            },
-            ConsensusInput::VidDisperseCreated(view, _) => {
-                let v = **view;
-                self.view_mut(v).vid_disperse_ns = Some(ts);
-            },
+            // Both: phase 1 completion + reconstruction
             ConsensusInput::BlockReconstructed(view, _) => {
                 let v = **view;
                 self.view_mut(v).block_reconstructed_ns = Some(ts);
+            },
+            ConsensusInput::Certificate1(cert) => {
+                let v = *cert.view_number();
+                let m = self.view_mut(v);
+                if m.cert1_formed_ns.is_none() {
+                    m.cert1_formed_ns = Some(ts);
+                }
+            },
+            // Both: phase 2
+            ConsensusInput::Certificate2(cert) => {
+                let v = *cert.view_number();
+                let m = self.view_mut(v);
+                if m.cert2_formed_ns.is_none() {
+                    m.cert2_formed_ns = Some(ts);
+                }
             },
             _ => {},
         }
@@ -86,6 +106,14 @@ impl MetricsCollector {
     pub fn on_output(&mut self, output: &ConsensusOutput<TestTypes>) {
         let ts = Self::now_ns();
         match output {
+            // Leader: proposal ready to send (before network I/O)
+            ConsensusOutput::SendProposal(proposal, _) => {
+                let v = *proposal.data.view_number;
+                let m = self.view_mut(v);
+                m.proposal_sent_ns = Some(ts);
+                m.is_leader = true;
+            },
+            // Replica: votes
             ConsensusOutput::SendVote1(vote) => {
                 let v = *vote.view_number();
                 self.view_mut(v).vote1_sent_ns = Some(ts);
@@ -94,12 +122,7 @@ impl MetricsCollector {
                 let v = *vote.view_number();
                 self.view_mut(v).vote2_sent_ns = Some(ts);
             },
-            ConsensusOutput::SendProposal(proposal, _) => {
-                let v = *proposal.data.view_number;
-                let m = self.view_mut(v);
-                m.proposal_sent_ns = Some(ts);
-                m.is_leader = true;
-            },
+            // Decide
             ConsensusOutput::LeafDecided(leaves) => {
                 for leaf in leaves {
                     let v = *leaf.view_number();
