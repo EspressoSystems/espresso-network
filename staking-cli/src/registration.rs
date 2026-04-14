@@ -81,7 +81,7 @@ mod test {
 
     #[tokio::test]
     async fn test_register_validator() -> Result<()> {
-        let system = TestSystem::deploy().await?;
+        let system = TestSystem::deploy_version(StakeTableContractVersion::V2).await?;
         let validator_address = system.deployer_address;
         let payload = NodeSignatures::create(
             validator_address,
@@ -238,7 +238,7 @@ mod test {
     /// allows staking transactions targeting these validators.
     #[tokio::test]
     async fn test_integration_unauthenticated_validator_registered_events_kept() -> Result<()> {
-        let system = TestSystem::deploy().await?;
+        let system = TestSystem::deploy_version(StakeTableContractVersion::V2).await?;
 
         // register a validator with correct signature
         system.register_validator().await?;
@@ -382,7 +382,7 @@ mod test {
 
     #[tokio::test]
     async fn test_register_validator_with_empty_metadata_uri() -> Result<()> {
-        let system = TestSystem::deploy().await?;
+        let system = TestSystem::deploy_version(StakeTableContractVersion::V2).await?;
         let validator_address = system.deployer_address;
         let payload = NodeSignatures::create(
             validator_address,

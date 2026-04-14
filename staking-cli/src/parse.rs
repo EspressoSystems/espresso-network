@@ -24,7 +24,9 @@ pub fn parse_state_priv_key(s: &str) -> Result<StateSignKey, Tb64Error> {
 }
 
 pub fn parse_x25519_key(s: &str) -> Result<x25519::PublicKey, String> {
-    x25519::PublicKey::try_from(s).map_err(|e| format!("Invalid x25519 public key (bs58): {e}"))
+    TaggedBase64::parse(s)
+        .map_err(|e| e.to_string())
+        .and_then(|tb| x25519::PublicKey::try_from(tb).map_err(|e| e.to_string()))
 }
 
 pub fn parse_net_addr(s: &str) -> Result<NetAddr, String> {

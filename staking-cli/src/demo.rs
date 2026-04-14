@@ -1993,7 +1993,7 @@ mod test {
 
     #[test_log::test(tokio::test)]
     async fn test_delegation_below_minimum() -> Result<()> {
-        let system = TestSystem::deploy().await?;
+        let system = TestSystem::deploy_version(StakeTableContractVersion::V2).await?;
 
         // Set min delegate amount higher than the demo amounts (100-500 ESP range)
         let high_min = parse_ether("2000")?;

@@ -161,7 +161,9 @@ impl fmt::Debug for PublicKey {
 
 impl fmt::Display for PublicKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        <Self as fmt::Debug>::fmt(self, f)
+        let tb =
+            TaggedBase64::new(X25519_PUBLIC_KEY, &self.as_bytes()[..]).map_err(|_| fmt::Error)?;
+        write!(f, "{tb}")
     }
 }
 
@@ -205,6 +207,27 @@ impl TryFrom<&str> for SecretKey {
             .into_vec()
             .map_err(|_| InvalidSecretKey(()))
             .and_then(|v| SecretKey::try_from(v.as_slice()))
+    }
+}
+
+const X25519_PUBLIC_KEY: &str = "X25519_PK";
+
+impl TryFrom<TaggedBase64> for PublicKey {
+    type Error = Tb64Error;
+
+    fn try_from(tb: TaggedBase64) -> Result<Self, Self::Error> {
+        if tb.tag() != X25519_PUBLIC_KEY {
+            return Err(Tb64Error::InvalidTag);
+        }
+        Self::try_from(tb.as_ref()).map_err(|_| Tb64Error::InvalidData)
+    }
+}
+
+impl TryFrom<PublicKey> for TaggedBase64 {
+    type Error = Tb64Error;
+
+    fn try_from(k: PublicKey) -> Result<Self, Self::Error> {
+        TaggedBase64::new(X25519_PUBLIC_KEY, &k.as_bytes()[..])
     }
 }
 

@@ -309,7 +309,7 @@ async fn test_cli_register_validator(
         .arg("--skip-metadata-validation");
 
     if matches!(version, StakeTableContractVersion::V3) {
-        let key = x25519::PublicKey::try_from(&[42u8; 32][..]).unwrap();
+        let key = x25519::Keypair::generate().unwrap().public_key();
         cmd.arg("--x25519-key")
             .arg(key.to_string())
             .arg("--p2p-addr")
@@ -2723,7 +2723,7 @@ async fn test_cli_update_network_config() -> Result<()> {
     let system = TestSystem::deploy_version(StakeTableContractVersion::V3).await?;
     system.register_validator().await?;
 
-    let key = x25519::PublicKey::try_from(&[99u8; 32][..]).unwrap();
+    let key = x25519::Keypair::generate().unwrap().public_key();
     system
         .cmd(Signer::Mnemonic)
         .arg("update-network-config")
@@ -2742,7 +2742,7 @@ async fn test_cli_update_x25519_key() -> Result<()> {
     let system = TestSystem::deploy_version(StakeTableContractVersion::V3).await?;
     system.register_validator().await?;
 
-    let key = x25519::PublicKey::try_from(&[42u8; 32][..]).unwrap();
+    let key = x25519::Keypair::generate().unwrap().public_key();
     system
         .cmd(Signer::Mnemonic)
         .arg("update-x25519-key")
@@ -2797,7 +2797,7 @@ async fn test_cli_register_v3_missing_x25519_key() -> Result<()> {
 async fn test_cli_register_v3_missing_p2p_addr() -> Result<()> {
     let system = TestSystem::deploy_version(StakeTableContractVersion::V3).await?;
 
-    let key = x25519::PublicKey::try_from(&[42u8; 32][..]).unwrap();
+    let key = x25519::Keypair::generate().unwrap().public_key();
     system
         .cmd(Signer::Mnemonic)
         .arg("register-validator")

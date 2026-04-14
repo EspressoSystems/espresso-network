@@ -357,7 +357,7 @@ pub(crate) enum Commands {
         #[clap(flatten)]
         metadata_uri_args: MetadataUriArgs,
 
-        /// x25519 public key (bs58-encoded, output by keygen). Required for V3 stake tables.
+        /// x25519 public key (tagged base64, output by keygen). Required for V3 stake tables.
         #[clap(long, value_parser = parse::parse_x25519_key, env = "X25519_KEY")]
         x25519_key: Option<x25519::PublicKey>,
 
@@ -394,7 +394,7 @@ pub(crate) enum Commands {
     /// Primary use: initial configuration for validators registered before V3.
     /// Also usable to rotate the x25519 key.
     UpdateNetworkConfig {
-        /// The x25519 public key (bs58-encoded, output by keygen)
+        /// The x25519 public key (tagged base64, output by keygen)
         #[clap(long, value_parser = parse::parse_x25519_key, env = "X25519_KEY")]
         x25519_key: x25519::PublicKey,
 
@@ -404,7 +404,7 @@ pub(crate) enum Commands {
     },
     /// Set x25519 encryption key for a validator.
     UpdateX25519Key {
-        /// The x25519 public key (bs58-encoded, output by keygen)
+        /// The x25519 public key (tagged base64, output by keygen)
         #[clap(long, value_parser = parse::parse_x25519_key, env = "X25519_KEY")]
         x25519_key: x25519::PublicKey,
     },
