@@ -34,7 +34,7 @@ use hotshot_contract_adapter::{
     stake_table::StakeTableContractVersion,
 };
 use hotshot_state_prover::v3::mock_ledger::STAKE_TABLE_CAPACITY_FOR_TEST;
-use hotshot_types::light_client::StateKeyPair;
+use hotshot_types::{light_client::StateKeyPair, x25519};
 use jf_merkle_tree_compat::{MerkleCommitment, MerkleTreeScheme, UniversalMerkleTreeScheme};
 use rand::{CryptoRng, Rng as _, RngCore, SeedableRng as _, rngs::StdRng};
 use tokio::net::TcpListener;
@@ -247,8 +247,8 @@ impl TestSystem {
         let metadata_uri = "https://example.com/metadata".parse()?;
         let (x25519_key, p2p_addr) = match self.version {
             StakeTableContractVersion::V3 => (
-                Some(alloy::primitives::FixedBytes([42u8; 32])),
-                Some("127.0.0.1:8080".to_string()),
+                Some(x25519::PublicKey::try_from(&[42u8; 32][..]).unwrap()),
+                Some("127.0.0.1:8080".parse().unwrap()),
             ),
             _ => (None, None),
         };

@@ -93,9 +93,10 @@ contract StakeTableV3 is StakeTableV2 {
 
     // === Validation ===
 
-    /// @notice Validate a p2p address in host:port format
+    /// @notice Validate a p2p address in host:port format.
     /// @param p2pAddr The p2p address to validate
-    /// @dev Host must be non-empty, port must be 1-65535
+    /// @dev Minimal validation to catch common misconfiguration errors early. The contract cannot
+    /// verify that the address is actually reachable.
     function validateP2pAddr(string memory p2pAddr) public pure virtual {
         bytes memory b = bytes(p2pAddr);
         require(b.length > 0 && b.length <= MAX_P2P_ADDR_LENGTH, InvalidP2pAddr());

@@ -29,7 +29,7 @@ use hotshot_contract_adapter::{
     sol_types::{EspToken, StakeTableV2},
     stake_table::StakeTableContractVersion,
 };
-use hotshot_types::{light_client::StateKeyPair, signature_key::BLSKeyPair};
+use hotshot_types::{light_client::StateKeyPair, signature_key::BLSKeyPair, x25519};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use thiserror::Error;
@@ -373,8 +373,15 @@ impl<P: Provider + Clone> TransactionProcessor<P> {
                         // Derive deterministic x25519 key from the validator address.
                         let key_bytes = alloy::primitives::keccak256(from.as_slice());
                         (
-                            Some(alloy::primitives::FixedBytes(key_bytes.0)),
-                            Some(format!("127.0.0.1:{}", 8080 + from.0[19] as u16)),
+                            Some(
+                                x25519::PublicKey::try_from(&key_bytes.0[..])
+                                    .expect("valid x25519 public key"),
+                            ),
+                            Some(
+                                format!("127.0.0.1:{}", 8080 + from.0[19] as u16)
+                                    .parse()
+                                    .expect("valid net addr"),
+                            ),
                         )
                     },
                     _ => (None, None),

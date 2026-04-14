@@ -10,7 +10,7 @@ use alloy::{
 use anyhow::Result;
 use common::{MetadataCommand, Signer, TestSystemExt, base_cmd};
 use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
-use hotshot_types::signature_key::BLSPubKey;
+use hotshot_types::{signature_key::BLSPubKey, x25519};
 use predicates::{prelude::PredicateBooleanExt, str};
 use rand::{SeedableRng as _, rngs::StdRng};
 use serde::Deserialize;
@@ -51,6 +51,7 @@ mod common;
 #[rstest::rstest]
 #[case::v1(StakeTableContractVersion::V1)]
 #[case::v2(StakeTableContractVersion::V2)]
+#[case::v3(StakeTableContractVersion::V3)]
 #[tokio::test(flavor = "multi_thread")]
 async fn stake_table_versions(#[case] _version: StakeTableContractVersion) {}
 
@@ -308,8 +309,9 @@ async fn test_cli_register_validator(
         .arg("--skip-metadata-validation");
 
     if matches!(version, StakeTableContractVersion::V3) {
+        let key = x25519::PublicKey::try_from(&[42u8; 32][..]).unwrap();
         cmd.arg("--x25519-key")
-            .arg(format!("0x{}", alloy::hex::encode([42u8; 32])))
+            .arg(key.to_string())
             .arg("--p2p-addr")
             .arg("127.0.0.1:8080");
     }
@@ -856,7 +858,11 @@ async fn test_cli_stake_for_demo_three_validators(
 #[test_log::test(rstest::rstest)]
 #[tokio::test]
 async fn stake_for_demo_delegation_config_helper(
-    #[values(StakeTableContractVersion::V1, StakeTableContractVersion::V2)]
+    #[values(
+        StakeTableContractVersion::V1,
+        StakeTableContractVersion::V2,
+        StakeTableContractVersion::V3
+    )]
     version: StakeTableContractVersion,
     #[values(
         DelegationConfig::EqualAmounts,
@@ -2713,15 +2719,16 @@ ledger = false
 }
 
 #[test_log::test(tokio::test)]
-async fn test_cli_set_network_config() -> Result<()> {
+async fn test_cli_update_network_config() -> Result<()> {
     let system = TestSystem::deploy_version(StakeTableContractVersion::V3).await?;
     system.register_validator().await?;
 
+    let key = x25519::PublicKey::try_from(&[99u8; 32][..]).unwrap();
     system
         .cmd(Signer::Mnemonic)
         .arg("update-network-config")
         .arg("--x25519-key")
-        .arg(format!("0x{}", alloy::hex::encode([99u8; 32])))
+        .arg(key.to_string())
         .arg("--p2p-addr")
         .arg("10.0.0.1:9090")
         .assert()
@@ -2731,15 +2738,16 @@ async fn test_cli_set_network_config() -> Result<()> {
 }
 
 #[test_log::test(tokio::test)]
-async fn test_cli_set_x25519_key() -> Result<()> {
+async fn test_cli_update_x25519_key() -> Result<()> {
     let system = TestSystem::deploy_version(StakeTableContractVersion::V3).await?;
     system.register_validator().await?;
 
+    let key = x25519::PublicKey::try_from(&[42u8; 32][..]).unwrap();
     system
         .cmd(Signer::Mnemonic)
         .arg("update-x25519-key")
         .arg("--x25519-key")
-        .arg("0x0000000000000000000000000000000000000000000000000000000000000042")
+        .arg(key.to_string())
         .assert()
         .success();
 
@@ -2747,7 +2755,7 @@ async fn test_cli_set_x25519_key() -> Result<()> {
 }
 
 #[test_log::test(tokio::test)]
-async fn test_cli_set_p2p_addr() -> Result<()> {
+async fn test_cli_update_p2p_addr() -> Result<()> {
     let system = TestSystem::deploy_version(StakeTableContractVersion::V3).await?;
     system.register_validator().await?;
 
@@ -2758,6 +2766,53 @@ async fn test_cli_set_p2p_addr() -> Result<()> {
         .arg("192.168.1.1:7070")
         .assert()
         .success();
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
+async fn test_cli_register_v3_missing_x25519_key() -> Result<()> {
+    let system = TestSystem::deploy_version(StakeTableContractVersion::V3).await?;
+
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("register-validator")
+        .arg("--consensus-private-key")
+        .arg(system.bls_private_key_str()?)
+        .arg("--state-private-key")
+        .arg(system.state_private_key_str()?)
+        .arg("--commission")
+        .arg("12.34")
+        .arg("--skip-metadata-validation")
+        .arg("--p2p-addr")
+        .arg("127.0.0.1:8080")
+        .assert()
+        .failure()
+        .stderr(str::contains("--x25519-key"));
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
+async fn test_cli_register_v3_missing_p2p_addr() -> Result<()> {
+    let system = TestSystem::deploy_version(StakeTableContractVersion::V3).await?;
+
+    let key = x25519::PublicKey::try_from(&[42u8; 32][..]).unwrap();
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("register-validator")
+        .arg("--consensus-private-key")
+        .arg(system.bls_private_key_str()?)
+        .arg("--state-private-key")
+        .arg(system.state_private_key_str()?)
+        .arg("--commission")
+        .arg("12.34")
+        .arg("--skip-metadata-validation")
+        .arg("--x25519-key")
+        .arg(key.to_string())
+        .assert()
+        .failure()
+        .stderr(str::contains("--p2p-addr"));
 
     Ok(())
 }

@@ -51,7 +51,10 @@ pub async fn fetch_commission(
 
 #[cfg(test)]
 mod test {
-    use alloy::{primitives::U256, providers::WalletProvider as _};
+    use alloy::{
+        primitives::{FixedBytes, U256},
+        providers::WalletProvider as _,
+    };
     use anyhow::Result;
     use espresso_contract_deployer::build_provider;
     use espresso_types::{
@@ -60,9 +63,13 @@ mod test {
     };
     use hotshot_contract_adapter::{
         evm::DecodeRevert as _,
-        sol_types::{EdOnBN254PointSol, G1PointSol, G2PointSol, StakeTableV2::StakeTableV2Errors},
+        sol_types::{
+            EdOnBN254PointSol, G1PointSol, G2PointSol, StakeTableV2::StakeTableV2Errors,
+            StakeTableV3,
+        },
         stake_table::{StateSignatureSol, sign_address_bls, sign_address_schnorr},
     };
+    use hotshot_types::{addr::NetAddr, x25519};
     use rand::{SeedableRng as _, rngs::StdRng};
     use rstest::rstest;
 
@@ -413,13 +420,14 @@ mod test {
         let system = TestSystem::deploy_version(StakeTableContractVersion::V3).await?;
         system.register_validator().await?;
 
-        let x25519_key = alloy::primitives::FixedBytes([1u8; 32]);
-        let p2p_addr = "192.168.1.1:8080".to_string();
+        let x25519_key = x25519::PublicKey::try_from(&[1u8; 32][..]).unwrap();
+        let p2p_addr: NetAddr = "192.168.1.1:8080".parse().unwrap();
 
+        let p2p_str = p2p_addr.to_string();
         let receipt = Transaction::UpdateNetworkConfig {
             stake_table: system.stake_table,
             x25519_key,
-            p2p_addr: p2p_addr.clone(),
+            p2p_addr,
         }
         .send(&system.provider)
         .await?
@@ -427,16 +435,16 @@ mod test {
         .await?;
 
         let x25519_event = receipt
-            .decoded_log::<hotshot_contract_adapter::sol_types::StakeTableV3::X25519KeyUpdated>()
+            .decoded_log::<StakeTableV3::X25519KeyUpdated>()
             .unwrap();
         assert_eq!(x25519_event.validator, system.deployer_address);
-        assert_eq!(x25519_event.x25519Key, x25519_key);
+        assert_eq!(x25519_event.x25519Key, FixedBytes(x25519_key.as_bytes()));
 
         let p2p_event = receipt
-            .decoded_log::<hotshot_contract_adapter::sol_types::StakeTableV3::P2pAddrUpdated>()
+            .decoded_log::<StakeTableV3::P2pAddrUpdated>()
             .unwrap();
         assert_eq!(p2p_event.validator, system.deployer_address);
-        assert_eq!(p2p_event.p2pAddr, p2p_addr);
+        assert_eq!(p2p_event.p2pAddr, p2p_str);
 
         Ok(())
     }
@@ -446,7 +454,7 @@ mod test {
         let system = TestSystem::deploy_version(StakeTableContractVersion::V3).await?;
         system.register_validator().await?;
 
-        let x25519_key = alloy::primitives::FixedBytes([42u8; 32]);
+        let x25519_key = x25519::PublicKey::try_from(&[42u8; 32][..]).unwrap();
 
         let receipt = Transaction::UpdateX25519Key {
             stake_table: system.stake_table,
@@ -458,10 +466,10 @@ mod test {
         .await?;
 
         let event = receipt
-            .decoded_log::<hotshot_contract_adapter::sol_types::StakeTableV3::X25519KeyUpdated>()
+            .decoded_log::<StakeTableV3::X25519KeyUpdated>()
             .unwrap();
         assert_eq!(event.validator, system.deployer_address);
-        assert_eq!(event.x25519Key, x25519_key);
+        assert_eq!(event.x25519Key, FixedBytes(x25519_key.as_bytes()));
 
         Ok(())
     }
@@ -471,11 +479,12 @@ mod test {
         let system = TestSystem::deploy_version(StakeTableContractVersion::V3).await?;
         system.register_validator().await?;
 
-        let p2p_addr = "10.0.0.1:9090".to_string();
+        let p2p_addr: NetAddr = "10.0.0.1:9090".parse().unwrap();
+        let p2p_str = p2p_addr.to_string();
 
         let receipt = Transaction::UpdateP2pAddr {
             stake_table: system.stake_table,
-            p2p_addr: p2p_addr.clone(),
+            p2p_addr,
         }
         .send(&system.provider)
         .await?
@@ -483,10 +492,10 @@ mod test {
         .await?;
 
         let event = receipt
-            .decoded_log::<hotshot_contract_adapter::sol_types::StakeTableV3::P2pAddrUpdated>()
+            .decoded_log::<StakeTableV3::P2pAddrUpdated>()
             .unwrap();
         assert_eq!(event.validator, system.deployer_address);
-        assert_eq!(event.p2pAddr, p2p_addr);
+        assert_eq!(event.p2pAddr, p2p_str);
 
         Ok(())
     }

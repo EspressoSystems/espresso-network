@@ -6,7 +6,7 @@
 
 use alloy::{
     network::Ethereum,
-    primitives::{Address, Bytes, U256},
+    primitives::{Address, Bytes, FixedBytes, U256},
     providers::{PendingTransactionBuilder, Provider},
     rpc::types::{TransactionInput, TransactionRequest},
     sol_types::SolCall,
@@ -33,6 +33,7 @@ use hotshot_contract_adapter::{
     },
     stake_table::{StakeTableContractVersion, StateSignatureSol},
 };
+use hotshot_types::{addr::NetAddr, x25519};
 
 use crate::{
     metadata::MetadataUri, output::format_esp, parse::Commission, signature::NodeSignatures,
@@ -75,9 +76,9 @@ pub enum Transaction {
         payload: NodeSignatures,
         version: StakeTableContractVersion,
         /// Required for V3 registration.
-        x25519_key: Option<alloy::primitives::FixedBytes<32>>,
+        x25519_key: Option<x25519::PublicKey>,
         /// Required for V3 registration.
-        p2p_addr: Option<String>,
+        p2p_addr: Option<NetAddr>,
     },
     UpdateConsensusKeys {
         stake_table: Address,
@@ -97,16 +98,16 @@ pub enum Transaction {
     },
     UpdateNetworkConfig {
         stake_table: Address,
-        x25519_key: alloy::primitives::FixedBytes<32>,
-        p2p_addr: String,
+        x25519_key: x25519::PublicKey,
+        p2p_addr: NetAddr,
     },
     UpdateX25519Key {
         stake_table: Address,
-        x25519_key: alloy::primitives::FixedBytes<32>,
+        x25519_key: x25519::PublicKey,
     },
     UpdateP2pAddr {
         stake_table: Address,
-        p2p_addr: String,
+        p2p_addr: NetAddr,
     },
     Transfer {
         token: Address,
@@ -119,8 +120,8 @@ impl Transaction {
     /// Returns the contract address, encoded calldata, and optional function info for this state
     /// change. Function info is `None` for calls with struct arguments that cannot be represented
     /// as simple string values for Safe TX Builder.
-    pub fn calldata(self) -> (Address, Bytes, Option<FunctionInfo>) {
-        match self {
+    pub fn calldata(self) -> Result<(Address, Bytes, Option<FunctionInfo>)> {
+        Ok(match self {
             Self::Approve {
                 token,
                 spender,
@@ -247,8 +248,14 @@ impl Transaction {
                         schnorrSig: StateSignatureSol::from(payload.schnorr_signature).into(),
                         commission: commission.to_evm(),
                         metadataUri: metadata_uri.to_string(),
-                        x25519Key: x25519_key.expect("x25519_key is required for V3 registration"),
-                        p2pAddr: p2p_addr.expect("p2p_addr is required for V3 registration"),
+                        x25519Key: FixedBytes(
+                            x25519_key
+                                .context("V3 registration requires --x25519-key")?
+                                .as_bytes(),
+                        ),
+                        p2pAddr: p2p_addr
+                            .context("V3 registration requires --p2p-addr")?
+                            .to_string(),
                     }
                     .abi_encode()
                     .into(),
@@ -326,49 +333,60 @@ impl Transaction {
                 stake_table,
                 x25519_key,
                 p2p_addr,
-            } => (
-                stake_table,
-                updateNetworkConfigCall {
-                    x25519Key: x25519_key,
-                    p2pAddr: p2p_addr.clone(),
-                }
-                .abi_encode()
-                .into(),
-                Some(FunctionInfo {
-                    signature: "updateNetworkConfig(bytes32 x25519Key, string p2pAddr)".to_string(),
-                    args: vec![x25519_key.to_string(), p2p_addr],
-                }),
-            ),
+            } => {
+                let x25519_bytes = FixedBytes(x25519_key.as_bytes());
+                let p2p_addr_str = p2p_addr.to_string();
+                (
+                    stake_table,
+                    updateNetworkConfigCall {
+                        x25519Key: x25519_bytes,
+                        p2pAddr: p2p_addr_str.clone(),
+                    }
+                    .abi_encode()
+                    .into(),
+                    Some(FunctionInfo {
+                        signature: "updateNetworkConfig(bytes32 x25519Key, string p2pAddr)"
+                            .to_string(),
+                        args: vec![x25519_bytes.to_string(), p2p_addr_str],
+                    }),
+                )
+            },
             Self::UpdateX25519Key {
                 stake_table,
                 x25519_key,
-            } => (
-                stake_table,
-                updateX25519KeyCall {
-                    x25519Key: x25519_key,
-                }
-                .abi_encode()
-                .into(),
-                Some(FunctionInfo {
-                    signature: "updateX25519Key(bytes32 x25519Key)".to_string(),
-                    args: vec![x25519_key.to_string()],
-                }),
-            ),
+            } => {
+                let x25519_bytes = FixedBytes(x25519_key.as_bytes());
+                (
+                    stake_table,
+                    updateX25519KeyCall {
+                        x25519Key: x25519_bytes,
+                    }
+                    .abi_encode()
+                    .into(),
+                    Some(FunctionInfo {
+                        signature: "updateX25519Key(bytes32 x25519Key)".to_string(),
+                        args: vec![x25519_bytes.to_string()],
+                    }),
+                )
+            },
             Self::UpdateP2pAddr {
                 stake_table,
                 p2p_addr,
-            } => (
-                stake_table,
-                updateP2pAddrCall {
-                    p2pAddr: p2p_addr.clone(),
-                }
-                .abi_encode()
-                .into(),
-                Some(FunctionInfo {
-                    signature: "updateP2pAddr(string p2pAddr)".to_string(),
-                    args: vec![p2p_addr],
-                }),
-            ),
+            } => {
+                let p2p_addr_str = p2p_addr.to_string();
+                (
+                    stake_table,
+                    updateP2pAddrCall {
+                        p2pAddr: p2p_addr_str.clone(),
+                    }
+                    .abi_encode()
+                    .into(),
+                    Some(FunctionInfo {
+                        signature: "updateP2pAddr(string p2pAddr)".to_string(),
+                        args: vec![p2p_addr_str],
+                    }),
+                )
+            },
             Self::Transfer { token, to, amount } => (
                 token,
                 transferCall { to, value: amount }.abi_encode().into(),
@@ -377,7 +395,7 @@ impl Transaction {
                     args: vec![to.to_string(), amount.to_string()],
                 }),
             ),
-        }
+        })
     }
 
     pub fn description(&self) -> String {
@@ -439,11 +457,11 @@ impl Transaction {
         }
     }
 
-    fn to_transaction_request(&self) -> TransactionRequest {
-        let (to, data, _) = self.clone().calldata();
-        TransactionRequest::default()
+    fn to_transaction_request(&self) -> Result<TransactionRequest> {
+        let (to, data, _) = self.clone().calldata()?;
+        Ok(TransactionRequest::default()
             .to(to)
-            .input(TransactionInput::new(data))
+            .input(TransactionInput::new(data)))
     }
 
     /// Validates the delegate amount against the minimum required by the contract.
@@ -495,7 +513,7 @@ impl Transaction {
     }
 
     pub async fn simulate(&self, provider: &impl Provider, from: Address) -> Result<()> {
-        let tx = self.to_transaction_request().from(from);
+        let tx = self.to_transaction_request()?.from(from);
         let result = provider.call(tx).await;
         self.decode_revert(result)
             .context("Transaction simulation failed")?;
@@ -511,7 +529,7 @@ impl Transaction {
         provider: impl Provider,
     ) -> Result<PendingTransactionBuilder<Ethereum>> {
         self.log_intent();
-        let tx = self.to_transaction_request();
+        let tx = self.to_transaction_request()?;
         let pending = provider.send_transaction(tx).await;
         self.decode_revert(pending)
     }

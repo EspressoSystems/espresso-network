@@ -2,8 +2,10 @@ use std::{fmt::Display, str::FromStr as _};
 
 use derive_more::{Add, From};
 use hotshot_types::{
+    addr::NetAddr,
     light_client::StateSignKey,
     signature_key::{BLSPrivKey, BLSPubKey},
+    x25519,
 };
 use rust_decimal::{Decimal, prelude::ToPrimitive as _};
 use tagged_base64::{TaggedBase64, Tb64Error};
@@ -21,9 +23,13 @@ pub fn parse_state_priv_key(s: &str) -> Result<StateSignKey, Tb64Error> {
     TaggedBase64::parse(s)?.try_into()
 }
 
-pub fn parse_bytes32(s: &str) -> Result<alloy::primitives::FixedBytes<32>, String> {
-    s.parse::<alloy::primitives::FixedBytes<32>>()
-        .map_err(|e| format!("Invalid bytes32: {e}"))
+pub fn parse_x25519_key(s: &str) -> Result<x25519::PublicKey, String> {
+    x25519::PublicKey::try_from(s).map_err(|e| format!("Invalid x25519 public key (bs58): {e}"))
+}
+
+pub fn parse_net_addr(s: &str) -> Result<NetAddr, String> {
+    s.parse()
+        .map_err(|e| format!("Invalid network address (expected host:port): {e}"))
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Add)]

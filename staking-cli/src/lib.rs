@@ -10,8 +10,10 @@ use clap_serde_derive::ClapSerde;
 use espresso_contract_deployer::provider::connect_ledger;
 use espresso_utils::logging;
 pub(crate) use hotshot_types::{
+    addr::NetAddr,
     light_client::StateSignKey,
     signature_key::{BLSPrivKey, BLSPubKey},
+    x25519,
 };
 pub(crate) use jf_signature::bls_over_bn254::KeyPair as BLSKeyPair;
 use metadata::MetadataUriArgs;
@@ -355,13 +357,13 @@ pub(crate) enum Commands {
         #[clap(flatten)]
         metadata_uri_args: MetadataUriArgs,
 
-        /// x25519 public key (32 bytes, hex with 0x prefix). Required for V3 stake tables.
-        #[clap(long, value_parser = parse::parse_bytes32, env = "X25519_KEY")]
-        x25519_key: Option<alloy::primitives::FixedBytes<32>>,
+        /// x25519 public key (bs58-encoded, output by keygen). Required for V3 stake tables.
+        #[clap(long, value_parser = parse::parse_x25519_key, env = "X25519_KEY")]
+        x25519_key: Option<x25519::PublicKey>,
 
         /// p2p address in host:port format. Required for V3 stake tables.
-        #[clap(long, env = "P2P_ADDR")]
-        p2p_addr: Option<String>,
+        #[clap(long, value_parser = parse::parse_net_addr, env = "P2P_ADDR")]
+        p2p_addr: Option<NetAddr>,
     },
     /// Update a validators Espresso consensus signing keys.
     UpdateConsensusKeys {
@@ -392,25 +394,25 @@ pub(crate) enum Commands {
     /// Primary use: initial configuration for validators registered before V3.
     /// Also usable to rotate the x25519 key.
     UpdateNetworkConfig {
-        /// The x25519 public key (32 bytes, hex encoded with 0x prefix)
-        #[clap(long, value_parser = parse::parse_bytes32, env = "X25519_KEY")]
-        x25519_key: alloy::primitives::FixedBytes<32>,
+        /// The x25519 public key (bs58-encoded, output by keygen)
+        #[clap(long, value_parser = parse::parse_x25519_key, env = "X25519_KEY")]
+        x25519_key: x25519::PublicKey,
 
         /// The p2p address in host:port format
-        #[clap(long, env = "P2P_ADDR")]
-        p2p_addr: String,
+        #[clap(long, value_parser = parse::parse_net_addr, env = "P2P_ADDR")]
+        p2p_addr: NetAddr,
     },
     /// Set x25519 encryption key for a validator.
     UpdateX25519Key {
-        /// The x25519 public key (32 bytes, hex encoded with 0x prefix)
-        #[clap(long, value_parser = parse::parse_bytes32, env = "X25519_KEY")]
-        x25519_key: alloy::primitives::FixedBytes<32>,
+        /// The x25519 public key (bs58-encoded, output by keygen)
+        #[clap(long, value_parser = parse::parse_x25519_key, env = "X25519_KEY")]
+        x25519_key: x25519::PublicKey,
     },
-    /// Set p2p address for a validator.
+    /// Update p2p address for a validator.
     UpdateP2pAddr {
         /// The p2p address in host:port format
-        #[clap(long, env = "P2P_ADDR")]
-        p2p_addr: String,
+        #[clap(long, value_parser = parse::parse_net_addr, env = "P2P_ADDR")]
+        p2p_addr: NetAddr,
     },
     /// Approve stake table contract to move tokens
     Approve {
