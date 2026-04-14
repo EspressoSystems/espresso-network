@@ -1,4 +1,7 @@
-use std::{collections::BTreeSet, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::{Arc, Mutex},
+};
 
 use hotshot::{
     traits::{
@@ -11,7 +14,11 @@ use hotshot_example_types::{node_types::TestTypes, storage_types::TestStorage};
 use hotshot_types::{
     PeerConnectInfo,
     addr::NetAddr,
-    traits::{metrics::NoMetrics, network::Topic, signature_key::SignatureKey},
+    traits::{
+        metrics::NoMetrics,
+        network::{ConnectedNetwork, Topic},
+        signature_key::SignatureKey,
+    },
     x25519::Keypair,
 };
 use serde::{Deserialize, Serialize};
@@ -47,6 +54,18 @@ pub trait TestNetwork {
     fn create_client(
         &self,
     ) -> impl std::future::Future<Output = <Self::Impl as NodeImplementation<TestTypes>>::Network>;
+
+    /// Create a network for a single node.  Used to bring a node online
+    /// mid-test (restart or late-start).
+    fn create_node(
+        &self,
+        node_index: usize,
+    ) -> impl std::future::Future<Output = <Self::Impl as NodeImplementation<TestTypes>>::Network>;
+
+    /// Shut down a previously created node's network so its internal
+    /// buffers don't block broadcasts.  Must be called before
+    /// [`create_node`](Self::create_node) when restarting a node.
+    fn shutdown_node(&self, node_index: usize) -> impl std::future::Future<Output = ()>;
 }
 
 // -- MemoryNetwork implementation -------------------------------------------
@@ -61,6 +80,9 @@ impl NodeImplementation<TestTypes> for MemoryNetworkImpl {
 
 pub struct MemoryTestNetwork {
     pub group: Arc<MasterMap<BLSPubKey>>,
+    /// Clones of created node networks, keyed by index.  Used to call
+    /// `shut_down` on old networks before replacing them during restarts.
+    node_networks: Mutex<BTreeMap<usize, MemoryNetwork<BLSPubKey>>>,
 }
 
 impl TestNetwork for MemoryTestNetwork {
@@ -71,6 +93,7 @@ impl TestNetwork for MemoryTestNetwork {
         skip_nodes: &BTreeSet<usize>,
     ) -> (Self, Vec<Option<MemoryNetwork<BLSPubKey>>>) {
         let group: Arc<MasterMap<BLSPubKey>> = MasterMap::new();
+        let mut stored = BTreeMap::new();
 
         let networks = (0..num_nodes)
             .map(|i| {
@@ -84,16 +107,40 @@ impl TestNetwork for MemoryTestNetwork {
                 if skip_nodes.contains(&i) {
                     None
                 } else {
+                    stored.insert(i, net.clone());
                     Some(net)
                 }
             })
             .collect();
-        (Self { group }, networks)
+        (
+            Self {
+                group,
+                node_networks: Mutex::new(stored),
+            },
+            networks,
+        )
     }
 
     async fn create_client(&self) -> MemoryNetwork<BLSPubKey> {
         let (pk, _) = BLSPubKey::generated_from_seed_indexed([1; 32], 9999);
         MemoryNetwork::new(&pk, &self.group, &[], None)
+    }
+
+    async fn create_node(&self, node_index: usize) -> MemoryNetwork<BLSPubKey> {
+        let (pk, _) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index as u64);
+        let net = MemoryNetwork::new(&pk, &self.group, &[Topic::Global], None);
+        self.node_networks
+            .lock()
+            .unwrap()
+            .insert(node_index, net.clone());
+        net
+    }
+
+    async fn shutdown_node(&self, node_index: usize) {
+        let net = self.node_networks.lock().unwrap().remove(&node_index);
+        if let Some(net) = net {
+            net.shut_down().await;
+        }
     }
 }
 
@@ -185,5 +232,30 @@ impl TestNetwork for CliquenetTestNetwork {
         )
         .await
         .expect("cliquenet client creation should succeed")
+    }
+
+    async fn create_node(&self, node_index: usize) -> Cliquenet<BLSPubKey> {
+        let (public_key, private_key) =
+            BLSPubKey::generated_from_seed_indexed([0u8; 32], node_index as u64);
+        let keypair = Keypair::derive_from::<BLSPubKey>(&private_key);
+        let port =
+            test_utils::reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let addr = NetAddr::Inet(std::net::Ipv4Addr::LOCALHOST.into(), port);
+        Cliquenet::create(
+            "test",
+            public_key,
+            keypair,
+            addr,
+            self.peer_infos.clone(),
+            Box::new(NoMetrics),
+        )
+        .await
+        .expect("cliquenet node creation should succeed")
+    }
+
+    async fn shutdown_node(&self, _node_index: usize) {
+        // Cliquenet uses TCP; when the coordinator task is aborted the TCP
+        // listener closes and subsequent sends fail gracefully.  No
+        // explicit cleanup needed.
     }
 }

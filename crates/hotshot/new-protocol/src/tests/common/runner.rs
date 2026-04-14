@@ -15,6 +15,7 @@ use hotshot_types::{
 use rand::{RngCore, SeedableRng, rngs::StdRng};
 use tokio::{
     sync::mpsc::{self, UnboundedReceiver, UnboundedSender},
+    task::JoinHandle,
     time::timeout,
 };
 use tracing::{debug, info};
@@ -30,6 +31,28 @@ use crate::{
         utils::mock_membership_with_num_nodes,
     },
 };
+
+/// Action to apply to a node at a specific view.
+#[derive(Clone, Debug)]
+pub struct NodeChange {
+    /// Node index to modify.
+    pub idx: usize,
+    /// Action to perform.
+    pub action: NodeAction,
+}
+
+/// Actions that can be applied to a node during a test.
+#[derive(Clone, Debug)]
+pub enum NodeAction {
+    /// Restart: shut down the node and create a fresh coordinator from
+    /// genesis (blank state).
+    Restart,
+    /// Start: bring a node that was initially offline into the network
+    /// with a fresh coordinator from genesis.
+    Start,
+    /// Shutdown: take the node offline.
+    Shutdown,
+}
 
 /// Configuration for a multi-node integration test.
 pub struct TestRunner {
@@ -53,6 +76,10 @@ pub struct TestRunner {
     /// not run a coordinator.  Views where a down node is leader are
     /// expected to timeout.
     pub down_nodes: BTreeSet<usize>,
+    /// View-triggered node changes.  Each entry is `(view, changes)`.
+    /// Changes are applied when any node first decides a leaf at or past
+    /// the specified view.
+    pub node_changes: Vec<(u64, Vec<NodeChange>)>,
 }
 
 impl Default for TestRunner {
@@ -66,6 +93,7 @@ impl Default for TestRunner {
             transaction_size: 64 * 1024,
             expected_failed_views: BTreeSet::new(),
             down_nodes: BTreeSet::new(),
+            node_changes: Vec::new(),
         }
     }
 }
@@ -93,6 +121,11 @@ pub enum TestError {
         view: ViewNumber,
         timeout_count: usize,
         threshold: usize,
+    },
+    InsufficientDecisions {
+        node: usize,
+        decided: usize,
+        target: usize,
     },
 }
 
@@ -137,6 +170,16 @@ impl fmt::Display for TestError {
                      threshold={threshold}"
                 )
             },
+            Self::InsufficientDecisions {
+                node,
+                decided,
+                target,
+            } => {
+                write!(
+                    f,
+                    "node {node} only decided {decided} views (target: {target})"
+                )
+            },
         }
     }
 }
@@ -147,6 +190,28 @@ enum NodeEvent {
 }
 
 impl TestRunner {
+    /// Compute the set of nodes that should be offline at test start.
+    ///
+    /// This is the union of permanently-down nodes (`down_nodes`) and any
+    /// node whose first action in `node_changes` is `Start` (meaning it
+    /// begins offline and is brought up later).
+    fn initially_down_nodes(&self) -> BTreeSet<usize> {
+        let mut down = self.down_nodes.clone();
+        let mut first_action_seen: BTreeSet<usize> = BTreeSet::new();
+        let mut sorted_changes: Vec<_> = self.node_changes.iter().collect();
+        sorted_changes.sort_by_key(|(v, _)| *v);
+        for (_, changes) in sorted_changes {
+            for change in changes {
+                if first_action_seen.insert(change.idx)
+                    && matches!(change.action, NodeAction::Start)
+                {
+                    down.insert(change.idx);
+                }
+            }
+        }
+        down
+    }
+
     /// Compute the views that will fail because their leader is a down node.
     /// Leader for view `v` is node `v % num_nodes`.
     fn failed_views_from_down_nodes(&self) -> BTreeSet<ViewNumber> {
@@ -175,17 +240,25 @@ impl TestRunner {
     /// coordinator self-starts via the genesis bootstrap (no side-channel
     /// injection needed).  Transactions are broadcast over the network using
     /// a dedicated client network instance.
+    ///
+    /// When `node_changes` is non-empty, nodes are dynamically started,
+    /// restarted, or shut down at the specified views.  Verification is
+    /// adjusted to account for the dynamic topology.
     pub async fn run<N: TestNetwork>(&self) -> Result<(), TestError> {
+        let has_dynamic_changes = !self.node_changes.is_empty();
         let membership = mock_membership_with_num_nodes(self.num_nodes).await;
-        let (network_state, networks) = N::create(self.num_nodes, &self.down_nodes).await;
+        let initially_down = self.initially_down_nodes();
+        let (network_state, networks) = N::create(self.num_nodes, &initially_down).await;
 
+        let mut node_handles: Vec<Option<JoinHandle<()>>> = Vec::with_capacity(self.num_nodes);
         let mut output_channels: Vec<Option<UnboundedReceiver<NodeEvent>>> =
             Vec::with_capacity(self.num_nodes);
+        let mut currently_down = initially_down;
 
-        // Spawn one coordinator task per node.  Down nodes are not
-        // subscribed to any topic, so their slot is `None`.
+        // Spawn one coordinator task per live node.
         for (i, network) in networks.into_iter().enumerate() {
             let Some(network) = network else {
+                node_handles.push(None);
                 output_channels.push(None);
                 continue;
             };
@@ -202,7 +275,7 @@ impl TestRunner {
             )
             .await;
 
-            tokio::spawn(run_node(coord, output_tx));
+            node_handles.push(Some(tokio::spawn(run_node(coord, output_tx))));
         }
 
         // Create a client network for broadcasting transactions.
@@ -210,23 +283,90 @@ impl TestRunner {
         let mut client_network =
             Network::<TestTypes, _>::new(client_net, membership.clone(), upgrade_lock());
 
-        let all_expected_failures = self.failed_views_from_down_nodes();
+        // Build pending changes sorted by view.
+        let mut pending_changes: BTreeMap<u64, Vec<NodeChange>> = BTreeMap::new();
+        for (view, changes) in &self.node_changes {
+            pending_changes
+                .entry(*view)
+                .or_default()
+                .extend(changes.clone());
+        }
+
+        let all_expected_failures = if has_dynamic_changes {
+            BTreeSet::new()
+        } else {
+            self.failed_views_from_down_nodes()
+        };
 
         // Collect decided leaf commits from each node until all live nodes reach the target.
         let mut node_commits: Vec<BTreeMap<ViewNumber, [u8; 32]>> =
             vec![BTreeMap::new(); self.num_nodes];
         let mut node_timeouts: Vec<BTreeSet<ViewNumber>> = vec![BTreeSet::new(); self.num_nodes];
+        let mut max_decided_view: u64 = 0;
         let mut tx_nonce: u64 = 0;
 
         let deadline = tokio::time::Instant::now() + self.max_runtime;
         while node_commits
             .iter()
             .enumerate()
-            .any(|(i, s)| !self.down_nodes.contains(&i) && s.len() < self.target_decisions)
+            .any(|(i, s)| !currently_down.contains(&i) && s.len() < self.target_decisions)
         {
             let remaining = deadline
                 .checked_duration_since(tokio::time::Instant::now())
                 .ok_or(TestError::Timeout)?;
+
+            // Apply pending node changes when progress reaches their view.
+            if has_dynamic_changes {
+                let views_to_apply: Vec<u64> = pending_changes
+                    .range(..=max_decided_view)
+                    .map(|(&v, _)| v)
+                    .collect();
+                for view in views_to_apply {
+                    let changes = pending_changes.remove(&view).unwrap();
+                    for change in &changes {
+                        info!(
+                            node = change.idx,
+                            view,
+                            action = ?change.action,
+                            "applying node change"
+                        );
+                        match change.action {
+                            NodeAction::Restart | NodeAction::Start => {
+                                // Kill existing task if any.
+                                if let Some(handle) = node_handles[change.idx].take() {
+                                    handle.abort();
+                                }
+                                // Shut down the old network so its internal
+                                // buffers don't block broadcasts.
+                                network_state.shutdown_node(change.idx).await;
+                                // Create a fresh coordinator from genesis.
+                                let net = network_state.create_node(change.idx).await;
+                                let (tx, rx) = mpsc::unbounded_channel();
+                                let coord = build_test_coordinator::<N::Impl>(
+                                    change.idx as u64,
+                                    net,
+                                    membership.clone(),
+                                    self.epoch_height,
+                                    self.view_timeout,
+                                )
+                                .await;
+                                node_handles[change.idx] = Some(tokio::spawn(run_node(coord, tx)));
+                                output_channels[change.idx] = Some(rx);
+                                currently_down.remove(&change.idx);
+                                node_commits[change.idx] = BTreeMap::new();
+                            },
+                            NodeAction::Shutdown => {
+                                if let Some(handle) = node_handles[change.idx].take() {
+                                    handle.abort();
+                                }
+                                network_state.shutdown_node(change.idx).await;
+                                output_channels[change.idx] = None;
+                                currently_down.insert(change.idx);
+                            },
+                        }
+                    }
+                }
+            }
 
             // Broadcast a transaction over the network.
             tx_nonce = tx_nonce.wrapping_add(1);
@@ -241,10 +381,16 @@ impl TestRunner {
                 if let Ok(Some(event)) = timeout(remaining, rx.recv()).await {
                     match event {
                         NodeEvent::Decided(commits) => {
+                            if let Some(&max_v) = commits.keys().last() {
+                                let v: u64 = *max_v;
+                                if v > max_decided_view {
+                                    max_decided_view = v;
+                                }
+                            }
                             node_commits[idx] = commits;
                         },
                         NodeEvent::TimedOut(view) => {
-                            if !all_expected_failures.contains(&view) {
+                            if !has_dynamic_changes && !all_expected_failures.contains(&view) {
                                 return Err(TestError::UnexpectedTimeout { node: idx, view });
                             }
                             node_timeouts[idx].insert(view);
@@ -256,13 +402,17 @@ impl TestRunner {
             }
         }
 
-        Self::verify_correctness(
-            &node_commits,
-            &node_timeouts,
-            &all_expected_failures,
-            self.target_decisions,
-            &self.down_nodes,
-        )
+        if has_dynamic_changes {
+            Self::verify_restart_correctness(&node_commits, &currently_down, self.target_decisions)
+        } else {
+            Self::verify_correctness(
+                &node_commits,
+                &node_timeouts,
+                &all_expected_failures,
+                self.target_decisions,
+                &self.down_nodes,
+            )
+        }
     }
 
     /// Verify that the collected per-node commits and timeouts are consistent:
@@ -329,6 +479,53 @@ impl TestRunner {
                         decided_count,
                         threshold,
                     });
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Verify correctness for tests with dynamic node changes (restarts
+    /// and late starts).
+    ///
+    /// Unlike [`verify_correctness`](Self::verify_correctness) which checks
+    /// per-view quorum, this method checks:
+    /// 1. All currently-live nodes decided at least `target_decisions` views.
+    /// 2. No chain divergence: any view decided by multiple nodes has the
+    ///    same leaf commitment.
+    fn verify_restart_correctness(
+        node_commits: &[BTreeMap<ViewNumber, [u8; 32]>],
+        down_nodes: &BTreeSet<usize>,
+        target_decisions: usize,
+    ) -> Result<(), TestError> {
+        // Check all currently-live nodes reached target_decisions.
+        for (i, commits) in node_commits.iter().enumerate() {
+            if down_nodes.contains(&i) {
+                continue;
+            }
+            if commits.len() < target_decisions {
+                return Err(TestError::InsufficientDecisions {
+                    node: i,
+                    decided: commits.len(),
+                    target: target_decisions,
+                });
+            }
+        }
+
+        // Check no chain divergence across all nodes.
+        let mut view_commits: BTreeMap<ViewNumber, [u8; 32]> = BTreeMap::new();
+        for (i, commits) in node_commits.iter().enumerate() {
+            for (&view, &commit) in commits {
+                match view_commits.entry(view) {
+                    std::collections::btree_map::Entry::Vacant(e) => {
+                        e.insert(commit);
+                    },
+                    std::collections::btree_map::Entry::Occupied(e) => {
+                        if *e.get() != commit {
+                            return Err(TestError::ChainDivergence { node: i });
+                        }
+                    },
                 }
             }
         }
