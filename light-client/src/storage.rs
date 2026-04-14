@@ -5,9 +5,9 @@ use anyhow::{Context, Result};
 use derive_more::{Display, From};
 use espresso_types::{PubKey, SeqTypes, StakeTableState, v0_3::RegisteredValidator};
 use futures::TryStreamExt;
-use hotshot_query_service::{
+use hotshot_query_service_types::{
+    HeightIndexed,
     availability::{BlockId, LeafId, LeafQueryData},
-    types::HeightIndexed,
 };
 use hotshot_types::{data::EpochNumber, light_client::StateVerKey};
 use serde_json::Value;
