@@ -38,7 +38,7 @@ RUN chmod +x /bin/espresso-node
 # Upon restart, the config will be loaded from this file and the node will be able to resume
 # progress. The user should connect this path to a Docker volume to ensure persistence of the
 # configuration beyond the lifetime of the Docker container itself.
-ENV ESPRESSO_NODE_STORAGE_PATH=/store/sequencer
+ENV ESPRESSO_NODE_STORAGE_PATH=/store/espresso
 
 # Set an L1 safety margin by default. This enables fast startup on chains where the L1 genesis block
 # is very old.
