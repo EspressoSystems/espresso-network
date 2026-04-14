@@ -909,13 +909,13 @@ pub trait SequencerPersistence:
         self.migrate_reward_merkle_tree_v2()
             .await
             .context("failed to migrate reward merkle tree v2")?;
-        self.migrate_validator_authenticated().await?;
+        self.migrate_x25519_keys().await?;
         tracing::warn!("consensus storage has been migrated to new types");
 
         Ok(())
     }
 
-    async fn migrate_validator_authenticated(&self) -> anyhow::Result<()>;
+    async fn migrate_x25519_keys(&self) -> anyhow::Result<()>;
 
     async fn migrate_anchor_leaf(&self) -> anyhow::Result<()>;
     async fn migrate_da_proposals(&self) -> anyhow::Result<()>;

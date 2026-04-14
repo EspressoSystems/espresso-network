@@ -17,3 +17,13 @@ PATH = ["circulating-supply-ethereum"]
 DOC = """Circulating supply of espresso tokens on Ethereum L1: total_supply_l1 - locked. On mainnet,
 locked tokens follow the unlock schedule. On other networks, locked is zero. Note: total_supply_l1
 grows as rewards are claimed (claiming mints on L1). Returns a decimal string in token units. """
+
+[route.get_total_issued_supply]
+PATH = ["total-issued-supply"]
+DOC = """Total issued supply of the espresso token: initial_supply + total_reward_distributed. Includes
+rewards that have not yet been claimed on Ethereum. Returns a decimal string in token units. """
+
+[route.get_total_reward_distributed]
+PATH = ["total-reward-distributed"]
+DOC = """Total rewards distributed by consensus. Includes rewards not yet claimed on Ethereum. Returns
+a decimal string in token units. """

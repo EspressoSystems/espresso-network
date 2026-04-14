@@ -17,14 +17,14 @@ use std::{collections::VecDeque, num::NonZeroUsize};
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
 use futures::stream::{self, StreamExt, TryStreamExt};
-use hotshot_types::traits::{block_contents::BlockHeader, node_implementation::NodeType};
+use hotshot_types::traits::node_implementation::NodeType;
 use itertools::Itertools;
 use sqlx::{FromRow, Row};
 use tagged_base64::{Tagged, TaggedBase64};
 
 use super::{
     super::transaction::{Transaction, TransactionMode, query},
-    BLOCK_COLUMNS, Database, Db, DecodeError,
+    BLOCK_COLUMNS,
 };
 use crate::{
     Header, Payload, QueryError, QueryResult, Transaction as HotshotTransaction,
@@ -35,77 +35,14 @@ use crate::{
         ExplorerHistograms, ExplorerSummary, GenesisOverview, GetBlockDetailError,
         GetBlockSummariesError, GetBlockSummariesRequest, GetExplorerSummaryError,
         GetSearchResultsError, GetTransactionDetailError, GetTransactionSummariesError,
-        GetTransactionSummariesRequest, MonetaryValue, SearchResult, TransactionIdentifier,
-        TransactionRange, TransactionSummary, TransactionSummaryFilter,
+        GetTransactionSummariesRequest, SearchResult, TransactionIdentifier, TransactionRange,
+        TransactionSummary, TransactionSummaryFilter,
         errors::{self, NotFound},
         query_data::TransactionDetailResponse,
         traits::ExplorerHeader,
     },
     types::HeightIndexed,
 };
-
-impl From<sqlx::Error> for GetExplorerSummaryError {
-    fn from(err: sqlx::Error) -> Self {
-        Self::from(QueryError::from(err))
-    }
-}
-
-impl From<sqlx::Error> for GetTransactionDetailError {
-    fn from(err: sqlx::Error) -> Self {
-        Self::from(QueryError::from(err))
-    }
-}
-
-impl From<sqlx::Error> for GetTransactionSummariesError {
-    fn from(err: sqlx::Error) -> Self {
-        Self::from(QueryError::from(err))
-    }
-}
-
-impl From<sqlx::Error> for GetBlockDetailError {
-    fn from(err: sqlx::Error) -> Self {
-        Self::from(QueryError::from(err))
-    }
-}
-
-impl From<sqlx::Error> for GetBlockSummariesError {
-    fn from(err: sqlx::Error) -> Self {
-        Self::from(QueryError::from(err))
-    }
-}
-
-impl From<sqlx::Error> for GetSearchResultsError {
-    fn from(err: sqlx::Error) -> Self {
-        Self::from(QueryError::from(err))
-    }
-}
-
-impl<'r, Types> FromRow<'r, <Db as Database>::Row> for BlockSummary<Types>
-where
-    Types: NodeType,
-    Header<Types>: BlockHeader<Types> + ExplorerHeader<Types>,
-    Payload<Types>: QueryablePayload<Types>,
-{
-    fn from_row(row: &'r <Db as Database>::Row) -> sqlx::Result<Self> {
-        BlockQueryData::<Types>::from_row(row)?
-            .try_into()
-            .decode_error("malformed block summary")
-    }
-}
-
-impl<'r, Types> FromRow<'r, <Db as Database>::Row> for BlockDetail<Types>
-where
-    Types: NodeType,
-    Header<Types>: BlockHeader<Types> + ExplorerHeader<Types>,
-    Payload<Types>: QueryablePayload<Types>,
-    BalanceAmount<Types>: Into<MonetaryValue>,
-{
-    fn from_row(row: &'r <Db as Database>::Row) -> sqlx::Result<Self> {
-        BlockQueryData::<Types>::from_row(row)?
-            .try_into()
-            .decode_error("malformed block detail")
-    }
-}
 
 lazy_static::lazy_static! {
     static ref GET_BLOCK_SUMMARIES_QUERY_FOR_LATEST: String = {

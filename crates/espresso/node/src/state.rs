@@ -19,16 +19,17 @@ use hotshot_query_service::{
     status::StatusDataSource,
     types::HeightIndexed,
 };
+use hotshot_types::utils::is_last_block;
 use jf_merkle_tree_compat::{
     LookupResult, MerkleTreeScheme, ToTraversalPath, UniversalMerkleTreeScheme,
 };
 use tokio::time::sleep;
 use vbs::version::Version;
-use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION};
+use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, EPOCH_VERSION};
 
 use crate::{
     NodeState, SeqTypes,
-    api::RewardMerkleTreeDataSource,
+    api::{RewardMerkleTreeDataSource, RewardMerkleTreeV2Data},
     catchup::{CatchupStorage, SqlStateCatchup},
     persistence::ChainConfigPersistence,
 };
@@ -266,7 +267,30 @@ where
     .await
     .context("computing state update")?;
 
-    if version > EPOCH_VERSION && !delta.rewards_delta.is_empty() {
+    let has_changed_accounts = version > EPOCH_VERSION && !delta.rewards_delta.is_empty();
+    // For EPOCH_REWARD_VERSION+ we must persist the reward tree at every epoch
+    // boundary, even when no rewards were distributed. During a V4→V5 upgrade
+    // the first post upgrade epoch boundary skips rewards (the previous epoch's
+    // header is pre-V5), leaving rewards_delta empty. Without saving here, the
+    // tree would be missing from storage and catchup requests from peers or
+    // subsequent epoch reward calculations would fail.
+    //
+    // Example: V4→V5 upgrade at block 9756, epoch_height=3000.
+    // At block 12000 (first epoch boundary post upgrade), handle_epoch_rewards
+    // skips rewards because the previous epoch's boundary (block 9000) is pre-V5,
+    // so rewards_delta is empty. Without saving here, the tree is never persisted
+    // at height 12000. Later at block 15000, the epoch 4 reward calculation calls
+    // fetch_reward_merkle_tree_v2(height=12000) to catch up missing accounts and
+    // fails because no tree exists in storage at that height.
+    let is_epoch_boundary = version >= EPOCH_REWARD_VERSION
+        && is_last_block(
+            block_number,
+            instance
+                .epoch_height
+                .expect("epoch_height should be set for version > V3"),
+        );
+
+    if has_changed_accounts || is_epoch_boundary {
         storage
             .save_and_gc_reward_tree_v2(
                 instance,
@@ -320,18 +344,24 @@ where
     Ok(state)
 }
 
-async fn store_genesis_state<T>(
-    mut tx: T,
+async fn store_genesis_state<S>(
+    storage: &S,
     chain_config: ChainConfig,
     state: &ValidatedState,
 ) -> anyhow::Result<()>
 where
-    T: SequencerStateUpdate,
+    S: SequencerStateDataSource,
+    for<'a> S::Transaction<'a>: SequencerStateUpdate,
 {
     ensure!(
         state.block_merkle_tree.num_leaves() == 0,
         "genesis state with non-empty block tree is unsupported"
     );
+
+    let mut tx = storage
+        .write()
+        .await
+        .context("starting transaction for genesis state")?;
 
     // Insert fee merkle tree nodes
     for (account, _) in state.fee_merkle_tree.iter() {
@@ -356,6 +386,17 @@ where
     tx.insert_chain_config(chain_config).await?;
 
     tx.commit().await?;
+
+    // Store the genesis reward tree at height 0 so catchup can find it.
+    let tree_data: RewardMerkleTreeV2Data = (&state.reward_merkle_tree_v2)
+        .try_into()
+        .context("serializing genesis reward tree")?;
+    let tree_bytes = bincode::serialize(&tree_data).context("serializing genesis reward tree")?;
+    storage
+        .persist_tree(0, tree_bytes)
+        .await
+        .context("storing genesis reward merkle tree")?;
+
     Ok(())
 }
 
@@ -410,11 +451,7 @@ where
         // If the last height is 0, we need to insert the genesis state, since this state is
         // never the result of a state update and thus is not inserted in the loop below.
         tracing::info!("storing genesis merklized state");
-        let tx = storage
-            .write()
-            .await
-            .context("starting transaction for genesis state")?;
-        store_genesis_state(tx, instance.chain_config, &instance.genesis_state)
+        store_genesis_state(&*storage, instance.chain_config, &instance.genesis_state)
             .await
             .context("storing genesis state")?;
     }

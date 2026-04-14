@@ -40,6 +40,7 @@ INSERT INTO payload_temp
     SELECT payload_hash, ns_table, payload.data, size, num_transactions
     FROM header
     JOIN payload ON header.height = payload.height
+    WHERE payload.data IS NOT NULL
     GROUP BY payload_hash, ns_table;
 DROP TABLE payload;
 ALTER TABLE payload_temp RENAME TO payload;

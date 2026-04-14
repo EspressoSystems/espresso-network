@@ -1,4 +1,4 @@
-use hotshot_query_service::availability::VerifiableInclusion;
+use hotshot_query_service_types::availability::VerifiableInclusion;
 use hotshot_types::data::{VidCommitment, VidCommon};
 use serde::{Deserialize, Serialize};
 

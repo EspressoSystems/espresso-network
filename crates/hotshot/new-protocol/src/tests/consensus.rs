@@ -2,7 +2,10 @@ use std::sync::Arc;
 
 use hotshot::{traits::ValidatedState, types::BLSPubKey};
 use hotshot_example_types::{node_types::TestTypes, state_types::TestValidatedState};
-use hotshot_types::{data::ViewNumber, traits::signature_key::SignatureKey};
+use hotshot_types::{
+    data::{EpochNumber, ViewNumber},
+    traits::signature_key::SignatureKey,
+};
 
 use super::common::utils::TestData;
 use crate::{
@@ -47,7 +50,10 @@ async fn test_timeout_filters_stale_events() {
 
     // Set timeout at view 3
     harness
-        .apply(ConsensusInput::Timeout(ViewNumber::new(3)))
+        .apply(ConsensusInput::Timeout(
+            ViewNumber::new(3),
+            EpochNumber::genesis(),
+        ))
         .await;
 
     // Send stale proposal (view 2, which is <= timeout_view 3)
@@ -268,7 +274,7 @@ async fn test_state_validation_failed_removes_proposal() {
     harness.collected.extend(outbox.take());
 
     // Send StateVerificationFailed — removes proposal
-    let proposal: Proposal<TestTypes> = test_data.views[1].proposal.data.clone().into();
+    let proposal: Proposal<TestTypes> = test_data.views[1].proposal.data.clone();
     harness
         .apply(ConsensusInput::StateValidationFailed(StateResponse {
             view: test_data.views[1].view_number,
@@ -278,6 +284,7 @@ async fn test_state_validation_failed_removes_proposal() {
                     &proposal.block_header,
                 ),
             ),
+            delta: None,
         }))
         .await;
 
@@ -422,7 +429,10 @@ async fn test_timeout_prevents_voting() {
 
     // Timeout view 2 — now cert1 for view 2 should be dropped
     harness
-        .apply(ConsensusInput::Timeout(test_data.views[1].view_number))
+        .apply(ConsensusInput::Timeout(
+            test_data.views[1].view_number,
+            test_data.views[1].epoch_number,
+        ))
         .await;
     assert!(
         any(harness.outputs(), is_send_timeout_vote),
@@ -590,7 +600,10 @@ async fn test_vote_after_timeout_cert() {
         .await;
 
     harness
-        .apply(ConsensusInput::Timeout(test_data.views[1].view_number))
+        .apply(ConsensusInput::Timeout(
+            test_data.views[1].view_number,
+            test_data.views[1].epoch_number,
+        ))
         .await;
     assert!(
         any(harness.outputs(), is_send_timeout_vote),

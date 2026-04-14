@@ -3,36 +3,35 @@ package client
 import (
 	"context"
 	"fmt"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/EspressoSystems/espresso-network/sdks/go/internal/devnode"
 	types "github.com/EspressoSystems/espresso-network/sdks/go/types"
 	"github.com/EspressoSystems/espresso-network/sdks/go/verification"
-	"github.com/ethereum/go-ethereum/log"
 	"github.com/stretchr/testify/require"
 )
 
-var workingDir = "../../../"
+type devNodeInfo struct {
+	nodeURL    string
+	builderURL string
+}
 
-const devNodeURL = "http://localhost:21000"
-const devNodeBuilderURL = "http://localhost:23000"
-
-func setupDevNode(t *testing.T) context.Context {
+func setupDevNode(t *testing.T) (context.Context, devNodeInfo) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	dir := t.TempDir()
-	cleanup := runDevNode(ctx, dir)
-	t.Cleanup(cleanup)
+	ports, err := devnode.AllocatePorts()
+	require.NoError(t, err, "failed to allocate ports")
 
-	err := waitForEspressoNode(ctx)
+	dir := t.TempDir()
+	devnode.Start(t, ctx, ports, dir)
+
+	err = waitForEspressoNode(ctx, ports.NodeURL())
 	require.NoError(t, err, "failed to start espresso dev node")
 
-	return ctx
+	return ctx, devNodeInfo{nodeURL: ports.NodeURL(), builderURL: ports.BuilderURL()}
 }
 
 func testNamespaceTransactionsInRange(t *testing.T, ctx context.Context, client EspressoClient, txPayload string) {
@@ -65,19 +64,19 @@ func testNamespaceTransactionsInRange(t *testing.T, ctx context.Context, client 
 }
 
 func TestApiWithEspressoDevNode(t *testing.T) {
-	ctx := setupDevNode(t)
-	client := NewClient(devNodeURL)
+	ctx, info := setupDevNode(t)
+	client := NewClient(info.nodeURL)
 
 	ClientTestHelper(ctx, client, t)
 
 	var clientOptions []EspressoClientConfigOption
-	builderSubmitter, err := NewBuilderSubmitter([]string{devNodeBuilderURL})
+	builderSubmitter, err := NewBuilderSubmitter([]string{info.builderURL})
 	if err != nil {
 		t.Fatal("failed to create builder submitter", err)
 	}
 
 	clientOptions = append(clientOptions, WithTransactionSubmitter(builderSubmitter))
-	clientOptions = append(clientOptions, WithBaseUrl(devNodeURL))
+	clientOptions = append(clientOptions, WithBaseUrl(info.nodeURL))
 
 	client, err = NewClientFromOptions(clientOptions...)
 	if err != nil {
@@ -87,12 +86,12 @@ func TestApiWithEspressoDevNode(t *testing.T) {
 	ClientTestHelper(ctx, client, t)
 
 	clientOptions = []EspressoClientConfigOption{}
-	querySubmitter := NewQuerySubmitter(devNodeURL)
+	querySubmitter := NewQuerySubmitter(info.nodeURL)
 	if err != nil {
 		t.Fatal("failed to create builder submitter", err)
 	}
 	clientOptions = append(clientOptions, WithTransactionSubmitter(querySubmitter))
-	clientOptions = append(clientOptions, WithBaseUrl(devNodeURL))
+	clientOptions = append(clientOptions, WithBaseUrl(info.nodeURL))
 
 	client, err = NewClientFromOptions(clientOptions...)
 	if err != nil {
@@ -174,54 +173,6 @@ func ClientTestHelper(ctx context.Context, client EspressoClient, t *testing.T) 
 	}
 }
 
-func runDevNode(ctx context.Context, tmpDir string) func() {
-	tmpDir, err := filepath.Abs(tmpDir)
-	if err != nil {
-		panic(err)
-	}
-
-	var p *exec.Cmd
-	if bin := os.Getenv("ESPRESSO_DEV_NODE_BIN"); bin != "" {
-		if _, err := os.Stat(bin); err != nil {
-			panic(fmt.Sprintf("ESPRESSO_DEV_NODE_BIN=%s does not exist: %v", bin, err))
-		}
-		fmt.Println("using pre-built espresso-dev-node binary:", bin)
-		p = exec.CommandContext(ctx, bin)
-	} else {
-		fmt.Println("ESPRESSO_DEV_NODE_BIN not set, falling back to cargo run (this will compile espresso-dev-node)")
-		p = exec.CommandContext(ctx, "cargo", "run", "-p", "espresso-dev-node")
-		p.Dir = workingDir
-	}
-
-	env := os.Environ()
-	env = append(env, "ESPRESSO_SEQUENCER_API_PORT=21000")
-	env = append(env, "ESPRESSO_BUILDER_PORT=23000")
-	env = append(env, "ESPRESSO_DEV_NODE_PORT=20000")
-	env = append(env, "ESPRESSO_SEQUENCER_ETH_MNEMONIC=test test test test test test test test test test test junk")
-	env = append(env, "ESPRESSO_DEPLOYER_ACCOUNT_INDEX=0")
-	env = append(env, "ESPRESSO_SEQUENCER_STORAGE_PATH="+tmpDir)
-	p.Env = env
-
-	go func() {
-		if err := p.Run(); err != nil {
-			if err.Error() != "signal: killed" {
-				log.Error(err.Error())
-				panic(err)
-			}
-		}
-	}()
-
-	return func() {
-		if p.Process != nil {
-			err := p.Process.Kill()
-			if err != nil {
-				log.Error(err.Error())
-				panic(err)
-			}
-		}
-	}
-}
-
 func waitForWith(
 	ctxinput context.Context,
 	timeout time.Duration,
@@ -243,8 +194,8 @@ func waitForWith(
 	}
 }
 
-func waitForEspressoNode(ctx context.Context) error {
-	client := NewClient(devNodeURL)
+func waitForEspressoNode(ctx context.Context, nodeURL string) error {
+	client := NewClient(nodeURL)
 	return waitForWith(ctx, 200*time.Second, 1*time.Second, func() bool {
 		height, err := client.FetchLatestBlockHeight(ctx)
 		return err == nil && height >= 2
@@ -252,8 +203,8 @@ func waitForEspressoNode(ctx context.Context) error {
 }
 
 func TestExplorerFetchTransactionByHash(t *testing.T) {
-	ctx := setupDevNode(t)
-	client := NewClient(devNodeURL)
+	ctx, info := setupDevNode(t)
+	client := NewClient(info.nodeURL)
 
 	tx := types.Transaction{Namespace: 1, Payload: []byte("explorer test")}
 	hash, err := client.SubmitTransaction(ctx, tx)
@@ -268,7 +219,7 @@ func TestExplorerFetchTransactionByHash(t *testing.T) {
 }
 
 func TestNamespaceTransactionsInRange(t *testing.T) {
-	ctx := setupDevNode(t)
-	client := NewClient(devNodeURL)
+	ctx, info := setupDevNode(t)
+	client := NewClient(info.nodeURL)
 	testNamespaceTransactionsInRange(t, ctx, client, "namespace range test")
 }
