@@ -4783,6 +4783,7 @@ dependencies = [
  "hotshot-example-types",
  "hotshot-libp2p-networking",
  "hotshot-query-service",
+ "hotshot-query-service-types",
  "hotshot-types",
  "humantime",
  "indexmap 2.13.0",
@@ -6247,6 +6248,7 @@ dependencies = [
  "hotshot-events-service",
  "hotshot-example-types",
  "hotshot-query-service",
+ "hotshot-query-service-types",
  "hotshot-testing",
  "hotshot-types",
  "include_dir",
@@ -6254,6 +6256,7 @@ dependencies = [
  "jf-advz",
  "jf-merkle-tree-compat",
  "lazy_static",
+ "light-client",
  "log",
  "pretty_assertions",
  "prometheus",
@@ -6281,6 +6284,35 @@ dependencies = [
  "url",
  "vbs",
  "vec1",
+ "versions",
+]
+
+[[package]]
+name = "hotshot-query-service-types"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "ark-serialize 0.5.0",
+ "bincode",
+ "committable",
+ "derivative",
+ "derive_more 2.1.1",
+ "either",
+ "hotshot-events-service",
+ "hotshot-example-types",
+ "hotshot-types",
+ "itertools 0.14.0",
+ "jf-advz",
+ "jf-merkle-tree-compat",
+ "serde",
+ "serde_json",
+ "snafu 0.8.9",
+ "sqlx",
+ "surf-disco",
+ "tagged-base64",
+ "tide-disco",
+ "time 0.3.47",
+ "vbs",
  "versions",
 ]
 
@@ -8233,7 +8265,7 @@ dependencies = [
  "espresso-types",
  "futures",
  "hotshot-contract-adapter",
- "hotshot-query-service",
+ "hotshot-query-service-types",
  "hotshot-types",
  "jf-advz",
  "jf-merkle-tree-compat",
