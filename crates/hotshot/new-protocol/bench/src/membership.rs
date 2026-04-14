@@ -22,6 +22,7 @@ use hotshot_types::{
 
 /// Create an `EpochMembershipCoordinator<TestTypes>` with `num_nodes` validators.
 pub async fn make_membership(num_nodes: usize) -> EpochMembershipCoordinator<TestTypes> {
+    // Throwaway network; actual networking uses Cliquenet.
     let network =
         <MemoryNetwork<BLSPubKey> as TestableNetworkingImplementation<TestTypes>>::generator(
             num_nodes,

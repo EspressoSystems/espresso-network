@@ -30,6 +30,7 @@ versions = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+test-utils = { workspace = true }
 
 [lints]
 workspace = true

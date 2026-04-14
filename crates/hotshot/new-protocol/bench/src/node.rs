@@ -177,7 +177,9 @@ async fn build_coordinator(
 
     // Process initial outputs so the timer resets before the event loop.
     while let Some(output) = coordinator.outbox_mut().pop_front() {
-        let _ = coordinator.process_consensus_output(output).await;
+        if let Err(e) = coordinator.process_consensus_output(output).await {
+            warn!(%e, "error processing initial output");
+        }
     }
 
     coordinator
@@ -204,7 +206,8 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
                 if err.severity == hotshot_new_protocol::coordinator::error::Severity::Critical =>
             {
                 error!(%err, "critical error in consensus input");
-                break;
+                metrics.write_csv(&output_path)?;
+                return Err(anyhow::anyhow!("{err}"));
             },
             Err(err) => {
                 warn!(%err, "recoverable error in consensus input");
@@ -265,9 +268,6 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
             return Ok(());
         }
     }
-
-    metrics.write_csv(&output_path)?;
-    Ok(())
 }
 
 /// Build a test block with a single transaction of the given size.

@@ -86,20 +86,25 @@ impl MetricsCollector {
     pub fn on_output(&mut self, output: &ConsensusOutput<TestTypes>) {
         let ts = Self::now_ns();
         match output {
-            ConsensusOutput::SendVote1(_) => {
-                self.view_mut(self.current_view).vote1_sent_ns = Some(ts);
+            ConsensusOutput::SendVote1(vote) => {
+                let v = *vote.view_number();
+                self.view_mut(v).vote1_sent_ns = Some(ts);
             },
-            ConsensusOutput::SendVote2(_) => {
-                self.view_mut(self.current_view).vote2_sent_ns = Some(ts);
+            ConsensusOutput::SendVote2(vote) => {
+                let v = *vote.view_number();
+                self.view_mut(v).vote2_sent_ns = Some(ts);
             },
-            ConsensusOutput::SendProposal(..) => {
-                let v = self.current_view;
+            ConsensusOutput::SendProposal(proposal, _) => {
+                let v = *proposal.data.view_number;
                 let m = self.view_mut(v);
                 m.proposal_sent_ns = Some(ts);
                 m.is_leader = true;
             },
-            ConsensusOutput::LeafDecided(_) => {
-                self.view_mut(self.current_view).leaf_decided_ns = Some(ts);
+            ConsensusOutput::LeafDecided(leaves) => {
+                for leaf in leaves {
+                    let v = *leaf.view_number();
+                    self.view_mut(v).leaf_decided_ns = Some(ts);
+                }
             },
             ConsensusOutput::ViewChanged(view, _epoch) => {
                 self.current_view = **view;
