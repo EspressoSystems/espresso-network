@@ -20,22 +20,20 @@
 //! fully synced with the entire history of the chain. However, the node will _eventually_ sync and
 //! return the expected counts.
 
-use std::{fmt::Display, ops::Bound, path::PathBuf};
+use std::{ops::Bound, path::PathBuf};
 
-use derive_more::From;
 use futures::FutureExt;
 use hotshot_types::traits::node_implementation::NodeType;
-use serde::{Deserialize, Serialize};
-use snafu::{ResultExt, Snafu};
-use tide_disco::{Api, RequestError, StatusCode, api::ApiError, method::ReadState};
+use snafu::ResultExt;
+use tide_disco::{Api, api::ApiError, method::ReadState};
 use vbs::version::StaticVersionType;
 
-use crate::{Header, QueryError, api::load_api, availability::QueryableHeader};
+use crate::{Header, api::load_api, availability::QueryableHeader};
 
 pub(crate) mod data_source;
 pub(crate) mod query_data;
 pub use data_source::*;
-pub use query_data::*;
+pub use hotshot_query_service_types::node::*;
 
 #[derive(Debug)]
 pub struct Options {
@@ -57,57 +55,6 @@ impl Default for Options {
             api_path: None,
             extensions: vec![],
             window_limit: 500,
-        }
-    }
-}
-
-#[derive(Clone, Debug, From, Snafu, Deserialize, Serialize)]
-#[snafu(visibility(pub))]
-pub enum Error {
-    Request {
-        source: RequestError,
-    },
-    #[snafu(display("{source}"))]
-    Query {
-        source: QueryError,
-    },
-    #[snafu(display("error fetching VID share for block {block}: {source}"))]
-    #[from(ignore)]
-    QueryVid {
-        source: QueryError,
-        block: String,
-    },
-    #[snafu(display(
-        "error fetching window starting from {start} and ending at time {end}: {source}"
-    ))]
-    #[from(ignore)]
-    QueryWindow {
-        source: QueryError,
-        start: String,
-        end: u64,
-    },
-    #[snafu(display("error {status}: {message}"))]
-    Custom {
-        message: String,
-        status: StatusCode,
-    },
-}
-
-impl Error {
-    pub fn internal<M: Display>(message: M) -> Self {
-        Self::Custom {
-            message: message.to_string(),
-            status: StatusCode::INTERNAL_SERVER_ERROR,
-        }
-    }
-
-    pub fn status(&self) -> StatusCode {
-        match self {
-            Self::Request { .. } => StatusCode::BAD_REQUEST,
-            Self::Query { source, .. }
-            | Self::QueryVid { source, .. }
-            | Self::QueryWindow { source, .. } => source.status(),
-            Self::Custom { status, .. } => *status,
         }
     }
 }
@@ -233,7 +180,7 @@ mod test {
     use surf_disco::Client;
     use tempfile::TempDir;
     use test_utils::reserve_tcp_port;
-    use tide_disco::{App, Error as _};
+    use tide_disco::{App, Error as _, StatusCode};
     use tokio::time::sleep;
     use toml::toml;
 
