@@ -1,7 +1,12 @@
-use std::future::Future;
+use std::{
+    fmt::{Debug, Display},
+    future::Future,
+    time::Duration,
+};
 
-use anyhow::Result;
+use anyhow::{Context, Result, anyhow};
 use espresso_types::{NamespaceId, SeqTypes, v0_3::StakeTableEvent};
+use futures::{TryFuture, TryFutureExt};
 use hotshot_query_service_types::{
     availability::{LeafId, LeafQueryData},
     node::BlockId,
@@ -92,17 +97,21 @@ pub trait Client: Send + Sync + 'static {
     ) -> impl Send + Future<Output = Result<Vec<StakeTableEvent>>>;
 }
 
+type HttpClient = surf_disco::Client<hotshot_query_service_types::Error, StaticVersion<0, 1>>;
+
 /// A [`Client`] connected to the HotShot query service.
 #[derive(Clone, Debug)]
 pub struct QueryServiceClient {
-    client: surf_disco::Client<hotshot_query_service_types::Error, StaticVersion<0, 1>>,
+    client: HttpClient,
 }
 
 impl QueryServiceClient {
     /// Connect to a HotShot query service at the given base URL.
     pub fn new(url: Url) -> Self {
         Self {
-            client: surf_disco::Client::new(url),
+            client: surf_disco::Client::builder(url)
+                .set_timeout(Some(Duration::from_secs(1)))
+                .build(),
         }
     }
 }
@@ -201,6 +210,86 @@ fn fmt_block_id(id: BlockId<SeqTypes>) -> String {
     }
 }
 
+impl<T> Client for Vec<T>
+where
+    T: Client,
+{
+    async fn block_height(&self) -> Result<u64> {
+        get_any(self, T::block_height).await
+    }
+
+    async fn get_leaves_in_range(
+        &self,
+        start: usize,
+        end: usize,
+    ) -> Result<Vec<LeafQueryData<SeqTypes>>> {
+        get_any(self, |client| client.get_leaves_in_range(start, end)).await
+    }
+
+    async fn header_proof(&self, root: u64, id: BlockId<SeqTypes>) -> Result<HeaderProof> {
+        get_any(self, |client| client.header_proof(root, id)).await
+    }
+
+    async fn leaf_proof(
+        &self,
+        id: impl Into<LeafRequest> + Send,
+        finalized: Option<u64>,
+    ) -> Result<LeafProof> {
+        let id = id.into();
+        get_any(self, |client| client.leaf_proof(id, finalized)).await
+    }
+
+    async fn namespace_proof(&self, height: u64, namespace: NamespaceId) -> Result<NamespaceProof> {
+        get_any(self, |client: &T| client.namespace_proof(height, namespace)).await
+    }
+
+    async fn namespace_proofs_in_range(
+        &self,
+        start: u64,
+        end: u64,
+        namespace: NamespaceId,
+    ) -> Result<Vec<NamespaceProof>> {
+        get_any(self, |client| {
+            client.namespace_proofs_in_range(start, end, namespace)
+        })
+        .await
+    }
+
+    async fn payload_proof(&self, height: u64) -> Result<PayloadProof> {
+        get_any(self, |client| client.payload_proof(height)).await
+    }
+
+    async fn payload_proofs_in_range(&self, start: u64, end: u64) -> Result<Vec<PayloadProof>> {
+        get_any(self, |client| client.payload_proofs_in_range(start, end)).await
+    }
+
+    async fn stake_table_events(&self, epoch: EpochNumber) -> Result<Vec<StakeTableEvent>> {
+        get_any(self, |client| client.stake_table_events(epoch)).await
+    }
+}
+
+async fn get_any<T, F>(clients: impl IntoIterator<Item = T>, get: impl Fn(T) -> F) -> Result<F::Ok>
+where
+    F: TryFuture,
+    F::Error: Display + Send + Sync + 'static,
+{
+    let mut res = Err(anyhow!("failed to fetch from all providers"));
+    for (i, p) in clients.into_iter().enumerate() {
+        match TryFutureExt::into_future(get(p)).await {
+            Ok(res) => {
+                return Ok(res);
+            },
+            Err(err) => {
+                tracing::info!("failed to fetch from provider {i}: {err:#}",);
+                res = res.context(err);
+                continue;
+            },
+        }
+    }
+
+    res
+}
+
 #[cfg(test)]
 mod test {
     use std::time::Duration;
@@ -233,6 +322,15 @@ mod test {
         testing::AlwaysTrueQuorum,
     };
 
+    fn client(url: Url) -> impl Client {
+        // Run all tests with a multi-client where the first client is an invalid URL, to stress
+        // test failover.
+        vec![
+            QueryServiceClient::new("http://notarealurl".parse().unwrap()),
+            QueryServiceClient::new(url),
+        ]
+    }
+
     #[tokio::test]
     #[test_log::test]
     async fn test_block_height() {
@@ -255,7 +353,7 @@ mod test {
             .build();
 
         let _network = TestNetwork::new(config, Upgrade::trivial(EPOCH_VERSION)).await;
-        let client = QueryServiceClient::new(url);
+        let client = client(url);
 
         // Check that the block height increases over time.
         let initial_height = client.block_height().await.unwrap();
@@ -294,11 +392,10 @@ mod test {
             .build();
 
         let _network = TestNetwork::new(config, Upgrade::trivial(EPOCH_VERSION)).await;
-        let client = QueryServiceClient::new(url);
+        let client = client(url.clone());
 
         // Wait for a chain of leaves to be produced.
-        let leaves: Vec<LeafQueryData<SeqTypes>> = client
-            .client
+        let leaves: Vec<LeafQueryData<SeqTypes>> = HttpClient::new(url)
             .socket("availability/stream/leaves/1")
             .subscribe()
             .await
@@ -378,11 +475,11 @@ mod test {
             .build();
 
         let _network = TestNetwork::new(config, Upgrade::trivial(EPOCH_VERSION)).await;
-        let client = QueryServiceClient::new(url);
+        let client = client(url.clone());
+        let http = HttpClient::new(url);
 
         // Wait for a chain of blocks to be produced.
-        let headers: Vec<Header> = client
-            .client
+        let headers: Vec<Header> = http
             .socket("availability/stream/headers/1")
             .subscribe()
             .await
@@ -393,12 +490,7 @@ mod test {
             .unwrap();
         // Wait for the state API to catch up.
         loop {
-            let state_height: u64 = client
-                .client
-                .get("block-state/block-height")
-                .send()
-                .await
-                .unwrap();
+            let state_height: u64 = http.get("block-state/block-height").send().await.unwrap();
             if state_height >= 2 {
                 break;
             }
@@ -460,11 +552,10 @@ mod test {
             .build();
 
         let _network = TestNetwork::new(config, Upgrade::trivial(EPOCH_VERSION)).await;
-        let client = QueryServiceClient::new(url);
+        let client = client(url.clone());
 
         // Wait for a few blocks to be produced.
-        let blocks: Vec<BlockQueryData<SeqTypes>> = client
-            .client
+        let blocks: Vec<BlockQueryData<SeqTypes>> = HttpClient::new(url)
             .socket("availability/stream/blocks/1")
             .subscribe()
             .await
@@ -516,7 +607,8 @@ mod test {
             .build();
 
         let network = TestNetwork::new(config, Upgrade::trivial(EPOCH_VERSION)).await;
-        let client = QueryServiceClient::new(url);
+        let client = client(url.clone());
+        let http = HttpClient::new(url);
 
         // Submit a couple of transactions to form non-empty blocks.
         let ns = NamespaceId::from(1u64);
@@ -531,8 +623,7 @@ mod test {
             let block = wait_for_decide_on_handle(&mut events, &tx).await.0;
             tracing::info!(block, hash = %tx.commit(), ?tx, "transaction included");
 
-            let header: Header = client
-                .client
+            let header: Header = http
                 .get(&format!("availability/header/{block}"))
                 .send()
                 .await
@@ -567,8 +658,7 @@ mod test {
         );
         // All other blocks in the range should be empty.
         for (i, proof) in proofs.iter().enumerate().take(proofs.len() - 1).skip(1) {
-            let header = client
-                .client
+            let header = http
                 .get(&format!(
                     "availability/header/{}",
                     headers[0].height() + (i as u64)

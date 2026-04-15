@@ -425,10 +425,8 @@ impl Options {
             .with_block_provider(db_provider.clone())
             .with_vid_common_provider(db_provider);
         // If that fails, fetch missing data from peers.
-        for peer in query_opt.peers {
-            tracing::info!("will fetch missing data from {peer}");
-            provider = provider.with_provider(LightClientProvider::new(peer, state.clone()).await?);
-        }
+        provider =
+            provider.with_provider(LightClientProvider::new(query_opt.peers, state.clone()).await?);
 
         let ds = sql::DataSource::create(mod_opt.clone(), provider, false).await?;
         let inner_storage = ds.inner();

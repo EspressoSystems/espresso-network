@@ -1679,11 +1679,14 @@ where
 /// serving fetches using the [`LightClient`].
 #[derive(Debug)]
 struct LightClientProvider {
-    light_client: BoxLazy<LightClient<SqliteStorage, QueryServiceClient>>,
+    light_client: BoxLazy<LightClient<SqliteStorage, Vec<QueryServiceClient>>>,
 }
 
 impl LightClientProvider {
-    pub async fn new<N, P>(url: Url, state: ApiState<N, P>) -> anyhow::Result<Self>
+    pub async fn new<N, P>(
+        peers: impl IntoIterator<Item = Url>,
+        state: ApiState<N, P>,
+    ) -> anyhow::Result<Self>
     where
         N: ConnectedNetwork<PubKey>,
         P: SequencerPersistence,
@@ -1691,6 +1694,7 @@ impl LightClientProvider {
         let db = SqliteStorage::default()
             .await
             .context("creating SQLite database for light client")?;
+        let client = peers.into_iter().map(QueryServiceClient::new).collect();
         let init_light_client = async move {
             let config = state.network_config().await;
             let epoch_height = config.config.epoch_height;
@@ -1711,7 +1715,7 @@ impl LightClientProvider {
                     .map(|peer| peer.stake_table_entry)
                     .collect(),
             };
-            LightClient::from_genesis(db, QueryServiceClient::new(url), genesis)
+            LightClient::from_genesis(db, client, genesis)
         };
         Ok(Self {
             light_client: Arc::pin(Lazy::from_future(init_light_client.boxed())),
@@ -1723,7 +1727,7 @@ impl LightClientProvider {
 impl<T> Provider<SeqTypes, T> for LightClientProvider
 where
     T: fetching::Request<SeqTypes> + 'static,
-    LightClient<SqliteStorage, QueryServiceClient>: Provider<SeqTypes, T>,
+    LightClient<SqliteStorage, Vec<QueryServiceClient>>: Provider<SeqTypes, T>,
 {
     async fn fetch(&self, req: T) -> Option<T::Response> {
         self.light_client.as_ref().get().await.fetch(req).await
@@ -5708,7 +5712,9 @@ mod test {
         let config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(SqlDataSource::options(
                 &storage[0],
-                Options::with_port(api_port).catchup(Default::default()),
+                Options::with_port(api_port)
+                    .catchup(Default::default())
+                    .light_client(Default::default()),
             ))
             .network_config(network_config)
             .persistences(persistence.clone())
@@ -5951,7 +5957,7 @@ mod test {
         let config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(SqlDataSource::options(
                 &storage[0],
-                Options::with_port(api_port),
+                Options::with_port(api_port).light_client(Default::default()),
             ))
             .network_config(network_config)
             .persistences(persistence.clone())
@@ -7180,7 +7186,7 @@ mod test {
         let config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(SqlDataSource::options(
                 &storage[0],
-                Options::with_port(api_port),
+                Options::with_port(api_port).light_client(Default::default()),
             ))
             .network_config(network_config)
             .persistences(persistence.clone())

@@ -100,12 +100,7 @@ where
     N: ConnectedNetwork<PubKey>,
     P: SequencerPersistence,
 {
-    let mut provider = Provider::default();
-    for peer in peers {
-        tracing::info!("will fetch missing data from {peer}");
-        provider = provider.with_provider(LightClientProvider::new(peer, state.clone()).await?);
-    }
-    Ok(provider)
+    Ok(Provider::default().with_provider(LightClientProvider::new(peers, state.clone()).await?))
 }
 
 pub(crate) trait SubmitDataSource<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> {
