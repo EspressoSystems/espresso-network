@@ -892,7 +892,7 @@ impl PruneStorage for SqlStorage {
                 message: format!("failed to commit save_pruned_height {e}"),
             })?;
 
-            let mut tx = self.write().await?;
+            let mut tx = self.prune_write().await?;
             tx.delete_batch(to).await?;
             tx.commit().await.map_err(|e| QueryError::Error {
                 message: format!("failed to commit delete_batch {e}"),
@@ -949,7 +949,7 @@ impl PruneStorage for SqlStorage {
                         message: format!("failed to commit save_pruned_height {e}"),
                     })?;
 
-                    let mut tx = self.write().await?;
+                    let mut tx = self.prune_write().await?;
                     tx.delete_batch(to).await?;
                     tx.commit().await.map_err(|e| QueryError::Error {
                         message: format!("failed to commit delete_batch {e}"),
