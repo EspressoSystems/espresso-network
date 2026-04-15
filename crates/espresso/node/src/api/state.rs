@@ -173,14 +173,12 @@ where
         address: &str,
         value: &Self::RewardClaimInput,
     ) -> anyhow::Result<RewardClaimInput> {
-        // Serialize auth_data directly to match serde's hex encoding
-        let auth_data = serde_json::to_value(&value.auth_data)
-            .and_then(|v| {
-                v.as_str()
-                    .ok_or_else(|| serde_json::Error::custom("auth_data not a string"))
-                    .map(|s| s.to_string())
-            })
-            .map_err(|e| anyhow::anyhow!("failed to serialize auth_data: {}", e))?;
+        // Serialize auth_data directly - it serializes to a hex string via serde
+        let auth_data = serde_json::to_string(&value.auth_data)
+            .map_err(|e| anyhow::anyhow!("failed to serialize auth_data: {}", e))?
+            // Remove quotes added by JSON string serialization
+            .trim_matches('"')
+            .to_string();
 
         Ok(RewardClaimInput {
             address: address.to_string(),
