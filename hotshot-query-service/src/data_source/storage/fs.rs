@@ -45,7 +45,7 @@ use super::{
 use crate::{
     Header, MissingSnafu, NotFoundSnafu, Payload, QueryError, QueryResult,
     availability::{
-        NamespaceId,
+        Certificate2, NamespaceId,
         data_source::{BlockId, LeafId},
         query_data::{
             BlockHash, BlockQueryData, LeafHash, LeafQueryData, PayloadQueryData, QueryableHeader,
@@ -83,6 +83,7 @@ where
     block_storage: LedgerLog<BlockQueryData<Types>>,
     vid_storage: LedgerLog<(VidCommonQueryData<Types>, Option<VidShare>)>,
     latest_qc_chain: Option<[CertificatePair<Types>; 2]>,
+    cert2s: BTreeMap<u64, Certificate2<Types>>,
 }
 
 impl<Types> FileSystemStorageInner<Types>
@@ -204,6 +205,7 @@ where
                 block_storage: LedgerLog::create(loader, "blocks", CACHED_BLOCKS_COUNT)?,
                 vid_storage: LedgerLog::create(loader, "vid_common", CACHED_VID_COMMON_COUNT)?,
                 latest_qc_chain: None,
+                cert2s: BTreeMap::new(),
             }),
             metrics: Default::default(),
         })
@@ -276,6 +278,7 @@ where
                 vid_storage,
                 top_storage: None,
                 latest_qc_chain: None,
+                cert2s: BTreeMap::new(),
             }),
             metrics: Default::default(),
         })
@@ -652,6 +655,15 @@ where
         Ok(())
     }
 
+    async fn insert_cert2(
+        &mut self,
+        height: u64,
+        cert2: Certificate2<Types>,
+    ) -> anyhow::Result<()> {
+        self.inner.cert2s.insert(height, cert2);
+        Ok(())
+    }
+
     async fn insert_leaf_range<'a>(
         &mut self,
         leaves: impl Send + IntoIterator<Item = &'a LeafQueryData<Types>>,
@@ -885,6 +897,22 @@ where
 
     async fn latest_qc_chain(&mut self) -> QueryResult<Option<[CertificatePair<Types>; 2]>> {
         Ok(self.inner.latest_qc_chain.clone())
+    }
+
+    async fn load_cert2(&mut self, height: u64) -> QueryResult<Option<Certificate2<Types>>> {
+        Ok(self.inner.cert2s.get(&height).cloned())
+    }
+
+    async fn load_cert2_at_or_above(
+        &mut self,
+        height: u64,
+    ) -> QueryResult<Option<Certificate2<Types>>> {
+        Ok(self
+            .inner
+            .cert2s
+            .range(height..)
+            .next()
+            .map(|(_, c)| c.clone()))
     }
 }
 

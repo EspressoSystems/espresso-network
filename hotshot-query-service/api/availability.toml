@@ -361,6 +361,15 @@ The allowable length of the requested range may be restricted by an implementati
 (see `/limits`). Requests for ranges exceeding these limits will fail with a 400 status code.
 """
 
+[route.get_cert2]
+PATH = ["cert2/:height"]
+":height" = "Integer"
+DOC = """
+Get the finality certificate (Certificate2) at block `:height`.
+
+In the new consensus protocol, a Certificate2 is the proof that a block has been finalized.
+"""
+
 [route.get_limits]
 PATH = ["limits"]
 DOC = """

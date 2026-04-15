@@ -707,6 +707,13 @@ where
             })
         }
         .boxed()
+    })?
+    .get("get_cert2", |req, state| {
+        async move {
+            let height: u64 = req.integer_param("height")?;
+            state.get_cert2(height).await.map_err(|err| err.into())
+        }
+        .boxed()
     })?;
     Ok(api)
 }

@@ -27,10 +27,10 @@ use super::VersionedDataSource;
 use crate::{
     Header, Payload, QueryResult, Transaction,
     availability::{
-        AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, BlockWithTransaction, Fetch,
-        FetchStream, LeafId, LeafQueryData, NamespaceId, PayloadMetadata, PayloadQueryData,
-        QueryableHeader, QueryablePayload, TransactionHash, UpdateAvailabilityData,
-        VidCommonMetadata, VidCommonQueryData,
+        AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, BlockWithTransaction,
+        Certificate2, Fetch, FetchStream, LeafId, LeafQueryData, NamespaceId, PayloadMetadata,
+        PayloadQueryData, QueryableHeader, QueryablePayload, TransactionHash,
+        UpdateAvailabilityData, VidCommonMetadata, VidCommonQueryData,
     },
     data_source::storage::pruning::PrunedHeightDataSource,
     explorer::{self, ExplorerDataSource, ExplorerHeader, ExplorerTransaction},
@@ -309,6 +309,10 @@ where
         h: TransactionHash<Types>,
     ) -> Fetch<BlockWithTransaction<Types>> {
         self.data_source.get_block_containing_transaction(h).await
+    }
+
+    async fn get_cert2(&self, height: u64) -> QueryResult<Option<Certificate2<Types>>> {
+        self.data_source.get_cert2(height).await
     }
 }
 
