@@ -416,58 +416,43 @@ impl Transaction<Write> {
     }
 }
 
+/// Returns a delay to inject between pruning DELETE statements, read from the
+/// `PRUNE_SLOW_DELAY_MS` environment variable. Returns `None` when the variable is unset or zero.
+fn prune_slow_delay() -> Option<Duration> {
+    std::env::var("PRUNE_SLOW_DELAY_MS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .filter(|&ms| ms > 0)
+        .map(Duration::from_millis)
+}
+
 /// Query service specific mutations.
 impl Transaction<Write> {
     /// Delete a batch of data for pruning.
     #[instrument(skip(self))]
     pub(super) async fn delete_batch(&mut self, height: u64) -> anyhow::Result<()> {
-        // Delete payloads which are only referenced by the headers we're going to delete.
-        let res = query(
-            "WITH to_delete AS (
-                SELECT h.payload_hash, h.ns_table FROM header AS h
-                 WHERE (h.payload_hash, h.ns_table) IN (
-                    SELECT range.payload_hash, range.ns_table
-                      FROM header AS range
-                     WHERE range.height <= $1
-                 )
-                GROUP BY h.payload_hash, h.ns_table
-                HAVING count(*) <= 1
-            )
-            DELETE FROM payload AS p
-             WHERE (p.hash, p.ns_table) IN (SELECT * FROM to_delete)",
-        )
-        .bind(height as i64)
-        .execute(self.as_mut())
-        .await
-        .context("deleting payloads")?;
-        tracing::debug!(
-            rows_affected = res.rows_affected(),
-            "garbage collected payloads"
-        );
+        let delay = prune_slow_delay();
 
-        // Delete VID common which are only referenced by the headers we're going to delete.
-        let res = query(
-            "WITH to_delete AS (
-                SELECT h.payload_hash FROM header AS h
-                 WHERE h.payload_hash IN (
-                    SELECT range.payload_hash
-                      FROM header AS range
-                     WHERE range.height <= $1
-                 )
-                GROUP BY h.payload_hash
-                HAVING count(*) <= 1
-            )
-            DELETE FROM vid_common AS v
-             WHERE v.hash IN (SELECT * FROM to_delete)",
-        )
-        .bind(height as i64)
-        .execute(self.as_mut())
-        .await
-        .context("deleting VID common")?;
-        tracing::debug!(
-            rows_affected = res.rows_affected(),
-            "garbage collected VID common"
-        );
+        // Delete dependent tables individually before deleting headers.
+        let res = query("DELETE FROM payload WHERE height <= $1")
+            .bind(height as i64)
+            .execute(self.as_mut())
+            .await
+            .context("deleting payloads")?;
+        tracing::debug!(rows_affected = res.rows_affected(), "pruned payloads");
+        if let Some(d) = delay {
+            sleep(d).await;
+        }
+
+        let res = query("DELETE FROM vid2 WHERE height <= $1")
+            .bind(height as i64)
+            .execute(self.as_mut())
+            .await
+            .context("deleting vid")?;
+        tracing::debug!(rows_affected = res.rows_affected(), "pruned vid");
+        if let Some(d) = delay {
+            sleep(d).await;
+        }
 
         // Delete dependent tables individually before deleting headers.
         let res = query("DELETE FROM transactions WHERE block_height <= $1")
@@ -476,6 +461,9 @@ impl Transaction<Write> {
             .await
             .context("deleting transactions")?;
         tracing::debug!(rows_affected = res.rows_affected(), "pruned transactions");
+        if let Some(d) = delay {
+            sleep(d).await;
+        }
 
         let res = query("DELETE FROM leaf2 WHERE height <= $1")
             .bind(height as i64)
@@ -483,6 +471,9 @@ impl Transaction<Write> {
             .await
             .context("deleting leaf2")?;
         tracing::debug!(rows_affected = res.rows_affected(), "pruned leaf2");
+        if let Some(d) = delay {
+            sleep(d).await;
+        }
 
         let res = query("DELETE FROM header WHERE height <= $1")
             .bind(height as i64)
@@ -503,6 +494,8 @@ impl Transaction<Write> {
         state_tables: Vec<String>,
         height: u64,
     ) -> anyhow::Result<()> {
+        let delay = prune_slow_delay();
+
         for state_table in state_tables {
             self.execute(
                 query(&format!(
@@ -519,6 +512,9 @@ impl Transaction<Write> {
                 .bind(height as i64),
             )
             .await?;
+            if let Some(d) = delay {
+                sleep(d).await;
+            }
         }
 
         Ok(())
