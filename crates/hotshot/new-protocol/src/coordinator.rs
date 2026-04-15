@@ -86,7 +86,7 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Coordinator<T, N> {
             initializer.epoch_height,
         );
 
-        // todo:
+        // TODO
         let genesis_cert1 = initializer.high_qc.clone();
         let genesis_proposal = message::Proposal {
             block_header: initializer.anchor_leaf.block_header().clone(),
@@ -101,7 +101,14 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Coordinator<T, N> {
         };
         consensus.seed_genesis(genesis_cert1, genesis_proposal);
 
-        let state_manager = StateManager::new(Arc::new(initializer.instance_state.clone()));
+         // todo:
+         
+        let mut state_manager = StateManager::new(Arc::new(initializer.instance_state.clone()));
+        state_manager.seed_state(
+            ViewNumber::genesis(),
+            initializer.anchor_state.clone(),
+            initializer.anchor_leaf.clone(),
+        );
         let (query_tx, query_rx) = mpsc::channel(256);
 
         let lock = upgrade_lock();
