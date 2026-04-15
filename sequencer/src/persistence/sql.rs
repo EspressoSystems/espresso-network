@@ -1161,7 +1161,7 @@ impl Persistence {
 }
 
 /// Maximum number of retries on PostgreSQL serialization conflicts (error 40001).
-const WRITE_RETRY_MAX: u32 = 5;
+const WRITE_RETRY_MAX: u32 = 100;
 
 /// Backoff parameters for write-transaction retries.
 const WRITE_BACKOFF: BackoffParams = BackoffParams::new(
