@@ -3,7 +3,7 @@
 pub mod routes;
 
 use aide::{
-    axum::{routing::get_with, ApiRouter},
+    axum::{ApiRouter, routing::get_with},
     generate::GenContext,
     openapi::{Info, MediaType, OpenApi, Operation, Response as OpenApiResponse, SchemaObject},
     operation::OperationOutput,
@@ -12,12 +12,12 @@ use aide::{
     swagger::Swagger,
 };
 use axum::{
+    Extension, Json, Router,
     extract::{Path, Request, State},
     http::{StatusCode, Uri},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::get,
-    Extension, Json, Router,
 };
 use schemars::transform::Transform;
 use serde::Serialize;
@@ -286,7 +286,7 @@ where
             handlers::get_reward_merkle_tree_v2(&state, request)
                 .await
                 .map(Json)
-            };
+        };
 
     let router = ApiRouter::new()
         .api_route(
