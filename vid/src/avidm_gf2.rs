@@ -6,6 +6,7 @@ use anyhow::anyhow;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use jf_merkle_tree::{MerkleTreeScheme, hasher::HasherNode};
 use jf_utils::canonical;
+use p3_maybe_rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 use tagged_base64::tagged;
@@ -150,7 +151,7 @@ impl AvidmGf2Scheme {
 
         let shares = [original, recovery].concat();
         let share_digests: Vec<_> = shares
-            .iter()
+            .par_iter()
             .map(|share| HasherNode::from(sha3::Keccak256::digest(share)))
             .collect();
         let mt = MerkleTree::from_elems(None, &share_digests)?;
@@ -197,7 +198,7 @@ impl VidScheme for AvidmGf2Scheme {
             })
             .collect();
         let shares: Vec<_> = ranges
-            .into_iter()
+            .into_par_iter()
             .map(|range| AvidmGf2Share {
                 range: range.clone(),
                 payload: shares[range.clone()].to_vec(),

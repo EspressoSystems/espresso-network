@@ -3,6 +3,7 @@
 use std::ops::Range;
 
 use jf_merkle_tree::MerkleTreeScheme;
+use p3_maybe_rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use super::{AvidmGf2Commit, AvidmGf2Share};
@@ -88,7 +89,7 @@ impl NsAvidmGf2Scheme {
         let ns_table = ns_table.into_iter().collect::<Vec<_>>();
         let ns_lens = ns_table.iter().map(|r| r.len()).collect::<Vec<_>>();
         let ns_commits = ns_table
-            .into_iter()
+            .into_par_iter()
             .map(|ns_range| AvidmGf2Scheme::commit(param, &payload[ns_range]))
             .collect::<Result<Vec<_>, _>>()?;
         let common = NsAvidmGf2Common {
@@ -123,16 +124,13 @@ impl NsAvidmGf2Scheme {
         ns_table: impl IntoIterator<Item = Range<usize>>,
     ) -> VidResult<(NsAvidmGf2Commit, NsAvidmGf2Common, Vec<NsAvidmGf2Share>)> {
         let num_storage_nodes = distribution.len();
-        let mut ns_commits = vec![];
-        let mut disperses = vec![];
-        let mut ns_lens = vec![];
-        for ns_range in ns_table {
-            ns_lens.push(ns_range.len());
-            let (commit, shares) =
-                AvidmGf2Scheme::disperse(param, distribution, &payload[ns_range])?;
-            ns_commits.push(commit);
-            disperses.push(shares);
-        }
+        let ns_table = ns_table.into_iter().collect::<Vec<_>>();
+        let ns_lens: Vec<_> = ns_table.iter().map(|r| r.len()).collect();
+        let ns_results: Vec<_> = ns_table
+            .into_par_iter()
+            .map(|ns_range| AvidmGf2Scheme::disperse(param, distribution, &payload[ns_range]))
+            .collect::<Result<Vec<_>, _>>()?;
+        let (ns_commits, disperses): (Vec<_>, Vec<_>) = ns_results.into_iter().unzip();
         let common = NsAvidmGf2Common {
             param: param.clone(),
             ns_commits,
@@ -194,11 +192,11 @@ impl NsAvidmGf2Scheme {
         if shares.is_empty() {
             return Err(VidError::InsufficientShares);
         }
-        let mut result = vec![];
-        for ns_index in 0..common.ns_lens.len() {
-            result.append(&mut Self::ns_recover(common, ns_index, shares)?)
-        }
-        Ok(result)
+        let ns_payloads: Vec<_> = (0..common.ns_lens.len())
+            .into_par_iter()
+            .map(|ns_index| Self::ns_recover(common, ns_index, shares))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(ns_payloads.into_iter().flatten().collect())
     }
 
     /// Recover the payload for a given namespace.
