@@ -348,15 +348,15 @@ where
 
         let offset_usize = offset as usize;
         let limit_usize = limit as usize;
-        let end = std::cmp::min(offset_usize + limit_usize, tree_data.balances.len());
-
         let total = tree_data.balances.len() as u64;
 
-        // Get the slice
-        let slice = tree_data
-            .balances
-            .get(offset_usize..end)
-            .ok_or_else(|| anyhow::anyhow!("offset {} out of bounds", offset))?;
+        // Validate offset is within bounds
+        if offset_usize > tree_data.balances.len() {
+            return Err(anyhow::anyhow!("offset {} out of bounds", offset));
+        }
+
+        let end = std::cmp::min(offset_usize + limit_usize, tree_data.balances.len());
+        let slice = &tree_data.balances[offset_usize..end];
 
         // Reverse order (matching Tide implementation) and return internal type with total
         let reversed: Vec<_> = slice.iter().rev().copied().collect();
@@ -573,13 +573,14 @@ where
 
         let offset_usize = offset as usize;
         let limit_usize = limit as usize;
-        let end = std::cmp::min(offset_usize + limit_usize, tree_data.balances.len());
 
-        // Get the slice
-        let slice = tree_data
-            .balances
-            .get(offset_usize..end)
-            .ok_or_else(|| anyhow::anyhow!("offset {} out of bounds", offset))?;
+        // Validate offset is within bounds
+        if offset_usize > tree_data.balances.len() {
+            return Err(anyhow::anyhow!("offset {} out of bounds", offset));
+        }
+
+        let end = std::cmp::min(offset_usize + limit_usize, tree_data.balances.len());
+        let slice = &tree_data.balances[offset_usize..end];
 
         // Reverse order (matching Tide implementation) and convert to (Address, U256)
         let result: Vec<(alloy::primitives::Address, U256)> = slice
