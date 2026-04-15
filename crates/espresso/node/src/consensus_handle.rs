@@ -393,6 +393,7 @@ async fn run_coordinator<T: NodeType, CN: ConnectedNetwork<T::SignatureKey>>(
     mut coordinator: Coordinator<T, CN>,
     event_sender: async_broadcast::Sender<ConsensusEvent<T>>,
 ) {
+    coordinator.start().await;
     loop {
         match coordinator.next_consensus_input().await {
             Ok(input) => coordinator.apply_consensus(input).await,
