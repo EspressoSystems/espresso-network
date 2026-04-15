@@ -165,6 +165,7 @@ pub struct PeerConfig<TYPES: NodeType> {
     /// The peer's state public key. This is the Schnorr Public Key used to
     /// verify HotShot state in the state-prover.
     pub state_ver_key: TYPES::StateSignatureKey,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub connect_info: Option<PeerConnectInfo>,
 }
 
