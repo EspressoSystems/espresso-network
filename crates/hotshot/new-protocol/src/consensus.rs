@@ -194,6 +194,27 @@ impl<T: NodeType> Consensus<T> {
         }
     }
 
+    /// Seed the genesis state so that the view-1 leader can propose without
+    /// any external bootstrap injection.
+    ///
+    /// Stores a genesis certificate and proposal at view 0, sets the locked
+    /// certificate, and sets the current epoch.  After calling this, a
+    /// subsequent `apply` that triggers `maybe_propose(view=1)` will find the
+    /// parent cert and proposal it needs.
+    pub fn seed_genesis(&mut self, genesis_cert1: Certificate1<T>, genesis_proposal: Proposal<T>) {
+        self.current_epoch = Some(genesis_proposal.epoch);
+        self.certs
+            .insert(ViewNumber::genesis(), genesis_cert1.clone());
+        self.locked_cert = Some(genesis_cert1);
+        self.proposals
+            .insert(ViewNumber::genesis(), genesis_proposal);
+    }
+
+    /// Return the proposal stored at the given view, if any.
+    pub fn proposal_at(&self, view: ViewNumber) -> Option<&Proposal<T>> {
+        self.proposals.get(&view)
+    }
+
     /// Apply consensus to the given input and collect protocol outputs.
     #[instrument(level = "debug", skip_all, fields(node = %self.node_id, view = %input.view_number()))]
     pub async fn apply(

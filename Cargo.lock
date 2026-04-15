@@ -6202,6 +6202,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "hotshot-new-protocol-bench"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-lock 3.4.2",
+ "clap 4.6.0",
+ "cliquenet",
+ "committable",
+ "csv",
+ "hotshot",
+ "hotshot-example-types",
+ "hotshot-new-protocol",
+ "hotshot-testing",
+ "hotshot-types",
+ "serde",
+ "tempfile",
+ "test-utils",
+ "time 0.3.47",
+ "tokio",
+ "tracing",
+ "versions",
+]
+
+[[package]]
 name = "hotshot-orchestrator"
 version = "0.1.0"
 dependencies = [
