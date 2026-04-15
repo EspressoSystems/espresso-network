@@ -17,7 +17,7 @@ use hotshot_types::{
     vote::HasViewNumber,
 };
 use tokio::{select, sync::mpsc};
-use tracing::{error, warn};
+use tracing::warn;
 
 use crate::{
     block::{BlockAndHeaderRequest, BlockBuilder, BlockBuilderConfig},
@@ -167,34 +167,6 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Coordinator<T, N> {
                         parent_proposal: genesis_proposal,
                     },
                 ));
-        }
-    }
-
-    /// Convenience method to run the coordinator event loop.
-    ///
-    /// Combines `next_consensus_input`, `apply_consensus` and outbox processing.
-    pub async fn run(mut self) {
-        loop {
-            match self.next_consensus_input().await {
-                Ok(input) => self.apply_consensus(input).await,
-                Err(err) if err.severity == Severity::Critical => {
-                    error!(%err, "while awaiting next consensus input");
-                    return;
-                },
-                Err(err) => {
-                    warn!(%err, "while awaiting next consensus input");
-                },
-            }
-            while let Some(output) = self.outbox.pop_front() {
-                if let Err(err) = self.process_consensus_output(output).await {
-                    if err.severity == Severity::Critical {
-                        error!(%err, "while processing consensus output");
-                        return;
-                    } else {
-                        warn!(%err, "while processing consensus output");
-                    }
-                }
-            }
         }
     }
 

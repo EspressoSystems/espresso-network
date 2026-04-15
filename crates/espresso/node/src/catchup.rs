@@ -1748,27 +1748,37 @@ pub async fn add_fee_accounts_to_state<I: hotshot::traits::NodeImplementation<Se
     leaf: Leaf2,
 ) -> anyhow::Result<()> {
     let (existing_state, delta) = consensus_handle.state_and_delta(*view).await;
-    let mut state = match existing_state {
-        Some(existing) => (*existing).clone(),
+    let (state, delta) = match existing_state {
+        Some(existing) => {
+            let mut state = (*existing).clone();
+            for account in accounts {
+                if let Some((proof, _)) = FeeAccountProof::prove(tree, (*account).into()) {
+                    if let Err(err) = proof.remember(&mut state.fee_merkle_tree) {
+                        tracing::warn!(
+                            ?view,
+                            %account,
+                            "cannot update fetched account state: {err:#}"
+                        );
+                    }
+                } else {
+                    tracing::warn!(?view, %account, "cannot update fetched account state because account is not in the merkle tree");
+                };
+            }
+            (Arc::new(state), delta)
+        },
         None => {
+            // If we don't already have a leaf for this view, or if we don't have the view
+            // at all, we can create a new view based on the recovered leaf and add it to
+            // our state map. In this case, we must also add the leaf to the saved leaves
+            // map to ensure consistency.
             let mut state = ValidatedState::from_header(leaf.block_header());
             state.fee_merkle_tree = tree.clone();
-            state
+            (Arc::new(state), None)
         },
     };
 
-    for account in accounts {
-        if let Some((proof, _)) = FeeAccountProof::prove(tree, (*account).into()) {
-            if let Err(err) = proof.remember(&mut state.fee_merkle_tree) {
-                tracing::warn!(?view, %account, "cannot update fetched account state: {err:#}");
-            }
-        } else {
-            tracing::warn!(?view, %account, "cannot update fetched account state because account is not in the merkle tree");
-        };
-    }
-
     consensus_handle
-        .update_leaf(leaf, Arc::new(state), delta)
+        .update_leaf(leaf, state, delta)
         .await
         .with_context(|| "failed to update leaf")?;
 
@@ -1785,27 +1795,37 @@ pub async fn add_v2_reward_accounts_to_state<I: hotshot::traits::NodeImplementat
     leaf: Leaf2,
 ) -> anyhow::Result<()> {
     let (existing_state, delta) = consensus_handle.state_and_delta(*view).await;
-    let mut state = match existing_state {
-        Some(existing) => (*existing).clone(),
+    let (state, delta) = match existing_state {
+        Some(existing) => {
+            let mut state = (*existing).clone();
+            for account in accounts {
+                if let Some((proof, _)) = RewardAccountProofV2::prove(tree, (*account).into()) {
+                    if let Err(err) = proof.remember(&mut state.reward_merkle_tree_v2) {
+                        tracing::warn!(
+                            ?view,
+                            %account,
+                            "cannot update fetched account state: {err:#}"
+                        );
+                    }
+                } else {
+                    tracing::warn!(?view, %account, "cannot update fetched account state because account is not in the merkle tree");
+                };
+            }
+            (Arc::new(state), delta)
+        },
         None => {
+            // If we don't already have a leaf for this view, or if we don't have the view
+            // at all, we can create a new view based on the recovered leaf and add it to
+            // our state map. In this case, we must also add the leaf to the saved leaves
+            // map to ensure consistency.
             let mut state = ValidatedState::from_header(leaf.block_header());
             state.reward_merkle_tree_v2 = tree.clone();
-            state
+            (Arc::new(state), None)
         },
     };
 
-    for account in accounts {
-        if let Some((proof, _)) = RewardAccountProofV2::prove(tree, (*account).into()) {
-            if let Err(err) = proof.remember(&mut state.reward_merkle_tree_v2) {
-                tracing::warn!(?view, %account, "cannot update fetched account state: {err:#}");
-            }
-        } else {
-            tracing::warn!(?view, %account, "cannot update fetched account state because account is not in the merkle tree");
-        };
-    }
-
     consensus_handle
-        .update_leaf(leaf, Arc::new(state), delta)
+        .update_leaf(leaf, state, delta)
         .await
         .with_context(|| "failed to update leaf")?;
 
@@ -1822,27 +1842,37 @@ pub async fn add_v1_reward_accounts_to_state<I: hotshot::traits::NodeImplementat
     leaf: Leaf2,
 ) -> anyhow::Result<()> {
     let (existing_state, delta) = consensus_handle.state_and_delta(*view).await;
-    let mut state = match existing_state {
-        Some(existing) => (*existing).clone(),
+    let (state, delta) = match existing_state {
+        Some(existing) => {
+            let mut state = (*existing).clone();
+            for account in accounts {
+                if let Some((proof, _)) = RewardAccountProofV1::prove(tree, (*account).into()) {
+                    if let Err(err) = proof.remember(&mut state.reward_merkle_tree_v1) {
+                        tracing::warn!(
+                            ?view,
+                            %account,
+                            "cannot update fetched account state: {err:#}"
+                        );
+                    }
+                } else {
+                    tracing::warn!(?view, %account, "cannot update fetched account state because account is not in the merkle tree");
+                };
+            }
+            (Arc::new(state), delta)
+        },
         None => {
+            // If we don't already have a leaf for this view, or if we don't have the view
+            // at all, we can create a new view based on the recovered leaf and add it to
+            // our state map. In this case, we must also add the leaf to the saved leaves
+            // map to ensure consistency.
             let mut state = ValidatedState::from_header(leaf.block_header());
             state.reward_merkle_tree_v1 = tree.clone();
-            state
+            (Arc::new(state), None)
         },
     };
 
-    for account in accounts {
-        if let Some((proof, _)) = RewardAccountProofV1::prove(tree, (*account).into()) {
-            if let Err(err) = proof.remember(&mut state.reward_merkle_tree_v1) {
-                tracing::warn!(?view, %account, "cannot update fetched account state: {err:#}");
-            }
-        } else {
-            tracing::warn!(?view, %account, "cannot update fetched account state because account is not in the merkle tree");
-        };
-    }
-
     consensus_handle
-        .update_leaf(leaf, Arc::new(state), delta)
+        .update_leaf(leaf, state, delta)
         .await
         .with_context(|| "failed to update leaf")?;
 
