@@ -96,13 +96,15 @@ async fn serve_openapi_spec(Extension(api): Extension<OpenApi>) -> Json<OpenApi>
 /// Middleware to rewrite root paths to /v2 paths
 ///
 /// Requests to `/rewards/...` get rewritten to `/v2/rewards/...`
-/// Paths already prefixed with `/v1` or `/v2` are left unchanged
+/// Paths already prefixed with `/v2` are left unchanged
+///
+/// Note: This middleware is only applied to the v2 router, so v1 routes never pass through it
 async fn rewrite_root_to_v2(mut req: Request, next: Next) -> Response {
     let uri = req.uri().clone();
     let path = uri.path();
 
-    // Only rewrite unversioned paths (not starting with /v1 or /v2)
-    if !path.starts_with("/v1") && !path.starts_with("/v2") && path != "/" {
+    // Only rewrite unversioned paths (not starting with /v2)
+    if !path.starts_with("/v2") && path != "/" {
         let new_path = format!("/v2{}", path);
         let pq = if let Some(q) = uri.query() {
             format!("{}?{}", new_path, q)
@@ -136,12 +138,9 @@ where
     S: v1::RewardApi + v2::RewardApi + Clone + Send + Sync + 'static,
 {
     let router_v1 = create_router_v1(state.clone());
-    let router = create_router_v2(state);
+    let router_v2 = create_router_v2(state).layer(middleware::from_fn(rewrite_root_to_v2));
 
-    router
-        .merge(router_v1)
-        .route("/", get(redirect_to_docs))
-        .layer(middleware::from_fn(rewrite_root_to_v2))
+    router_v2.merge(router_v1).route("/", get(redirect_to_docs))
 }
 
 /// Create v1 router without OpenAPI documentation (internal types)
