@@ -8486,6 +8486,7 @@ dependencies = [
  "hotshot-query-service",
  "hotshot-query-service-types",
  "hotshot-types",
+ "itertools 0.14.0",
  "jf-advz",
  "jf-merkle-tree-compat",
  "light-client",

@@ -351,6 +351,9 @@ mod test {
                 .payload_hash(),
             leaves[0].payload_hash()
         );
+
+        // Get a range of leaves.
+        assert_eq!(client.get_leaves_in_range(1, 3).await.unwrap(), leaves);
     }
 
     #[tokio::test]
@@ -459,26 +462,36 @@ mod test {
         let _network = TestNetwork::new(config, Upgrade::trivial(EPOCH_VERSION)).await;
         let client = QueryServiceClient::new(url);
 
-        // Wait for a block to be produced.
-        let block: BlockQueryData<SeqTypes> = client
+        // Wait for a few blocks to be produced.
+        let blocks: Vec<BlockQueryData<SeqTypes>> = client
             .client
             .socket("availability/stream/blocks/1")
             .subscribe()
             .await
             .unwrap()
-            .next()
+            .take(2)
+            .try_collect()
             .await
-            .unwrap()
             .unwrap();
 
         let proof = client.payload_proof(1).await.unwrap();
-        assert_eq!(proof.verify(block.header()).unwrap(), *block.payload());
+        assert_eq!(
+            proof.verify(blocks[0].header()).unwrap(),
+            *blocks[0].payload()
+        );
 
         // The block will be empty, but check at least that the namespace proof method hits the
         // correct endpoint and deserializes correctly.
         let ns = NamespaceId::from(0u64);
         let ns_proof = client.namespace_proof(1, ns).await.unwrap();
-        assert_eq!(ns_proof.verify(block.header(), ns).unwrap(), vec![]);
+        assert_eq!(ns_proof.verify(blocks[0].header(), ns).unwrap(), vec![]);
+
+        // Get a range of payloads.
+        let proofs = client.payload_proofs_in_range(1, 3).await.unwrap();
+        assert_eq!(proofs.len(), 2);
+        for (block, proof) in blocks.iter().zip(proofs) {
+            assert_eq!(proof.verify(block.header()).unwrap(), *block.payload());
+        }
     }
 
     #[tokio::test]

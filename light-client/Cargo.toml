@@ -44,6 +44,7 @@ rand = { workspace = true, optional = true }
 espresso-node = { workspace = true, default-features = false, features = [
     "testing",
 ] }
+itertools = { workspace = true }
 light-client = { path = ".", features = ["testing"] }
 pretty_assertions = { workspace = true }
 test-log = { workspace = true }

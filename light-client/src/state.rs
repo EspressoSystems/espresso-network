@@ -771,6 +771,7 @@ fn header_matches_id(header: &Header, id: BlockId<SeqTypes>) -> bool {
 mod test {
     use espresso_types::NsIndex;
     use hotshot_query_service_types::availability::TransactionIndex;
+    use itertools::izip;
     use pretty_assertions::assert_eq;
     use versions::DRB_AND_HEADER_UPGRADE_VERSION;
 
@@ -1224,6 +1225,7 @@ mod test {
             client.genesis().await,
         );
 
+        let mut hashes = vec![];
         for i in 1..10 {
             let payload = client.payload(i).await;
             let res = lc.fetch_payload(BlockId::Number(i)).await.unwrap();
@@ -1231,6 +1233,19 @@ mod test {
             assert_eq!(res.height(), i as u64);
             assert_eq!(res.block_hash(), client.leaf(i).await.block_hash());
             assert_eq!(res.hash(), client.leaf(i).await.payload_hash());
+            hashes.push(res.hash());
+        }
+
+        // Test ranged fetching.
+        let blocks = lc.fetch_blocks_in_range(1, 10).await.unwrap();
+        let vid = lc.fetch_vid_common_in_range(1, 10).await.unwrap();
+        assert_eq!(blocks.len(), 9);
+        assert_eq!(vid.len(), 9);
+        for (i, (hash, block, vid)) in izip!(hashes, blocks, vid).enumerate() {
+            assert_eq!(block.height() as usize, i + 1);
+            assert_eq!(vid.height() as usize, i + 1);
+            assert_eq!(block.payload_hash(), hash);
+            assert_eq!(vid.payload_hash(), hash);
         }
     }
 
