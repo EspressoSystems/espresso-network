@@ -1,0 +1,26 @@
+version: "3"
+
+processes:
+  espresso-node-0:
+    environment:
+      - ESPRESSO_SEQUENCER_DATABASE_PRUNE=true
+      - ESPRESSO_SEQUENCER_PRUNER_BATCH_SIZE=10
+      - ESPRESSO_SEQUENCER_PRUNER_INTERVAL=5s
+      - ESPRESSO_SEQUENCER_PRUNER_MINIMUM_RETENTION=30s
+      - ESPRESSO_SEQUENCER_PRUNER_TARGET_RETENTION=1m
+      - ESPRESSO_SEQUENCER_PRUNER_PRUNING_THRESHOLD=1MB
+      - ESPRESSO_SEQUENCER_PRUNER_MAX_USAGE=100 # basis points (1%), forces pruning to always run
+      - RUST_LOG=info,libp2p=off,cliquenet=error,hotshot_query_service::data_source::storage=debug,espresso_node::persistence=debug,hotshot_consensus=debug
+
+  install-slow-delete-triggers:
+    command: |
+      until PGPASSWORD=password psql -h localhost -p ${ESPRESSO_SEQUENCER0_DB_PORT} -U root -d espresso -c "SET search_path TO hotshot; SELECT 1 FROM block_merkle_tree LIMIT 0"; do
+        echo "Waiting for tables..."
+        sleep 2
+      done
+      PGPASSWORD=password psql -h localhost -p ${ESPRESSO_SEQUENCER0_DB_PORT} -U root -d espresso -f scripts/pruning-debug/slow-delete-triggers.sql
+      echo "Triggers installed"
+    namespace: setup
+    depends_on:
+      espresso-node-0:
+        condition: process_healthy
