@@ -33,12 +33,13 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    espresso_utils::env_compat::migrate_legacy_env_vars();
+    let migrated_envs = espresso_utils::env_compat::migrate_legacy_env_vars();
     // Parse the command line arguments
     let args = Args::parse();
 
     // Initialize tracing
     tracing_subscriber::fmt::init();
+    espresso_utils::env_compat::log_migrated_env_vars(&migrated_envs);
 
     // Create a new `OrchestratorClient` from the supplied URL
     let orchestrator_client = OrchestratorClient::new(

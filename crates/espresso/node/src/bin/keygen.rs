@@ -112,9 +112,10 @@ struct Options {
 }
 
 fn main() -> anyhow::Result<()> {
-    espresso_utils::env_compat::migrate_legacy_env_vars();
+    let migrated_envs = espresso_utils::env_compat::migrate_legacy_env_vars();
     let mut opts = Options::parse();
     opts.logging.init();
+    espresso_utils::env_compat::log_migrated_env_vars(&migrated_envs);
 
     tracing::debug!(
         "Generating {} keypairs with scheme {}",

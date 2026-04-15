@@ -99,9 +99,10 @@ struct NonPermissionedBuilderOptions {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    espresso_utils::env_compat::migrate_legacy_env_vars();
+    let migrated_envs = espresso_utils::env_compat::migrate_legacy_env_vars();
     let opt = NonPermissionedBuilderOptions::parse();
     opt.logging.init();
+    espresso_utils::env_compat::log_migrated_env_vars(&migrated_envs);
 
     let genesis = Genesis::from_file(&opt.genesis_file)?;
     tracing::info!(?genesis, "genesis");

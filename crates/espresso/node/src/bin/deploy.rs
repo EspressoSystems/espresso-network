@@ -467,10 +467,11 @@ enum Command {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    espresso_utils::env_compat::migrate_legacy_env_vars();
+    let migrated_envs = espresso_utils::env_compat::migrate_legacy_env_vars();
     let opt = Options::parse();
 
     opt.logging.init();
+    espresso_utils::env_compat::log_migrated_env_vars(&migrated_envs);
 
     let mut contracts = Contracts::from(opt.contracts);
     contracts.set_cooldown(opt.post_deployment_cooldown);

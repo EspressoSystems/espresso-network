@@ -15,9 +15,10 @@ use super::{
 use crate::keyset::KeySet;
 
 pub async fn main() -> anyhow::Result<()> {
-    espresso_utils::env_compat::migrate_legacy_env_vars();
+    let migrated_envs = espresso_utils::env_compat::migrate_legacy_env_vars();
     let opt = Options::parse();
     opt.logging.init();
+    espresso_utils::env_compat::log_migrated_env_vars(&migrated_envs);
 
     let mut modules = opt.modules();
     tracing::warn!(?modules, "sequencer starting up");

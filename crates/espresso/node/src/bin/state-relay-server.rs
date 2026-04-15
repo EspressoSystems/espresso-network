@@ -35,9 +35,10 @@ struct Args {
 
 #[tokio::main]
 async fn main() {
-    espresso_utils::env_compat::migrate_legacy_env_vars();
+    let migrated_envs = espresso_utils::env_compat::migrate_legacy_env_vars();
     let args = Args::parse();
     args.logging.init();
+    espresso_utils::env_compat::log_migrated_env_vars(&migrated_envs);
 
     tracing::info!(port = args.port, "starting state relay server");
 

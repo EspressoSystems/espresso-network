@@ -104,9 +104,10 @@ struct Args {
 
 #[tokio::main]
 async fn main() {
-    espresso_utils::env_compat::migrate_legacy_env_vars();
+    let migrated_envs = espresso_utils::env_compat::migrate_legacy_env_vars();
     let args = Args::parse();
     args.logging.init();
+    espresso_utils::env_compat::log_migrated_env_vars(&migrated_envs);
 
     // Remove sensitive info from URLs to log for easier debugging
     for url in &args.l1_provider_url {

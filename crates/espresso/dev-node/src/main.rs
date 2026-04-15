@@ -237,7 +237,7 @@ struct ChainInfo {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    espresso_utils::env_compat::migrate_legacy_env_vars();
+    let migrated_envs = espresso_utils::env_compat::migrate_legacy_env_vars();
     let cli_params = Args::parse();
 
     let Args {
@@ -272,6 +272,7 @@ async fn main() -> anyhow::Result<()> {
     } = cli_params;
 
     logging.init();
+    espresso_utils::env_compat::log_migrated_env_vars(&migrated_envs);
 
     let mut anvil_statefile = NamedTempFile::new()?;
     let (l1_url, anvil) = if let Some(url) = rpc_url {

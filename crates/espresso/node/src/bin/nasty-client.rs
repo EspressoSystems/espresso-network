@@ -1400,9 +1400,10 @@ async fn serve(port: u16, metrics: PrometheusMetrics) {
 
 #[tokio::main]
 async fn main() {
-    espresso_utils::env_compat::migrate_legacy_env_vars();
+    let migrated_envs = espresso_utils::env_compat::migrate_legacy_env_vars();
     let opt = Options::parse();
     opt.logging.init();
+    espresso_utils::env_compat::log_migrated_env_vars(&migrated_envs);
 
     let metrics = PrometheusMetrics::default();
     let total_actions = metrics.create_counter("total_actions".into(), None);

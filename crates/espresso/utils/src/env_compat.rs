@@ -5,7 +5,9 @@
 /// copied to the new name and a deprecation warning is emitted.
 ///
 /// Call this function early in `main()`, before clap parsing.
-pub fn migrate_legacy_env_vars() {
+/// Returns the list of migrated `(old, new)` pairs. Pass to [`log_migrated_env_vars`]
+/// after tracing is initialized.
+pub fn migrate_legacy_env_vars() -> Vec<(&'static str, &'static str)> {
     const MAPPINGS: &[(&str, &str)] = &[
         // ── contracts/rust/deployment-info/src/addresses.rs ──
         // ESP token proxy contract address
@@ -746,16 +748,27 @@ pub fn migrate_legacy_env_vars() {
         ),
     ];
 
+    let mut migrated = Vec::new();
     for &(new, old) in MAPPINGS {
         if std::env::var(new).is_err()
             && let Ok(val) = std::env::var(old)
         {
-            // Log to stderr immediately (tracing may not be initialized yet).
             eprintln!("WARNING: {old} is deprecated, use {new} instead");
-            // Also log via tracing for structured logging (no-op if tracing is not yet initialized).
-            tracing::warn!(%old, %new, "deprecated env var detected, mapping to new name");
             // SAFETY: called once at startup before spawning threads.
             unsafe { std::env::set_var(new, val) };
+            migrated.push((old, new));
         }
+    }
+    migrated
+}
+
+/// Log migrated env vars via tracing. Call after tracing is initialized.
+pub fn log_migrated_env_vars(migrated: &[(&str, &str)]) {
+    if migrated.is_empty() {
+        return;
+    }
+
+    for &(old, new) in migrated {
+        tracing::warn!(old, new, "migrated deprecated env var");
     }
 }
