@@ -26,10 +26,7 @@ use crate::{
     helpers::upgrade_lock,
     message::{BlockMessage, Message, MessageType, TransactionMessage, Validated},
     network::Network,
-    tests::common::{
-        coordinator_builder::build_test_coordinator, network::TestNetwork,
-        utils::mock_membership_with_num_nodes,
-    },
+    tests::common::{coordinator_builder::build_test_coordinator, network::TestNetwork},
 };
 
 /// Action to apply to a node at a specific view.
@@ -122,11 +119,6 @@ pub enum TestError {
         timeout_count: usize,
         threshold: usize,
     },
-    InsufficientDecisions {
-        node: usize,
-        decided: usize,
-        target: usize,
-    },
 }
 
 impl fmt::Display for TestError {
@@ -168,16 +160,6 @@ impl fmt::Display for TestError {
                     f,
                     "not enough nodes timed out view {view} timeout_count={timeout_count} \
                      threshold={threshold}"
-                )
-            },
-            Self::InsufficientDecisions {
-                node,
-                decided,
-                target,
-            } => {
-                write!(
-                    f,
-                    "node {node} only decided {decided} views (target: {target})"
                 )
             },
         }
@@ -245,8 +227,6 @@ impl TestRunner {
     /// restarted, or shut down at the specified views.  Verification is
     /// adjusted to account for the dynamic topology.
     pub async fn run<N: TestNetwork>(&self) -> Result<(), TestError> {
-        let has_dynamic_changes = !self.node_changes.is_empty();
-        let membership = mock_membership_with_num_nodes(self.num_nodes).await;
         let initially_down = self.initially_down_nodes();
         let (network_state, networks) = N::create(self.num_nodes, &initially_down).await;
 
@@ -255,7 +235,8 @@ impl TestRunner {
             Vec::with_capacity(self.num_nodes);
         let mut currently_down = initially_down;
 
-        // Spawn one coordinator task per live node.
+        // Spawn one coordinator task per live node.  Each node gets its
+        // own membership instance so they don't share internal state.
         for (i, network) in networks.into_iter().enumerate() {
             let Some(network) = network else {
                 node_handles.push(None);
@@ -266,10 +247,11 @@ impl TestRunner {
             let (output_tx, output_rx) = mpsc::unbounded_channel();
             output_channels.push(Some(output_rx));
 
+            let membership = network_state.create_membership(self.num_nodes).await;
             let coord = build_test_coordinator::<N::Impl>(
                 i as u64,
                 network,
-                membership.clone(),
+                membership,
                 self.epoch_height,
                 self.view_timeout,
             )
@@ -280,8 +262,9 @@ impl TestRunner {
 
         // Create a client network for broadcasting transactions.
         let client_net = network_state.create_client().await;
+        let client_membership = network_state.create_membership(self.num_nodes).await;
         let mut client_network =
-            Network::<TestTypes, _>::new(client_net, membership.clone(), upgrade_lock());
+            Network::<TestTypes, _>::new(client_net, client_membership, upgrade_lock());
 
         // Build pending changes sorted by view.
         let mut pending_changes: BTreeMap<u64, Vec<NodeChange>> = BTreeMap::new();
@@ -292,11 +275,7 @@ impl TestRunner {
                 .extend(changes.clone());
         }
 
-        let all_expected_failures = if has_dynamic_changes {
-            BTreeSet::new()
-        } else {
-            self.failed_views_from_down_nodes()
-        };
+        let all_expected_failures = self.failed_views_from_down_nodes();
 
         // Collect decided leaf commits from each node until all live nodes reach the target.
         let mut node_commits: Vec<BTreeMap<ViewNumber, [u8; 32]>> =
@@ -316,7 +295,7 @@ impl TestRunner {
                 .ok_or(TestError::Timeout)?;
 
             // Apply pending node changes when progress reaches their view.
-            if has_dynamic_changes {
+            if !self.node_changes.is_empty() {
                 let views_to_apply: Vec<u64> = pending_changes
                     .range(..=max_decided_view)
                     .map(|(&v, _)| v)
@@ -342,10 +321,12 @@ impl TestRunner {
                                 // Create a fresh coordinator from genesis.
                                 let net = network_state.create_node(change.idx).await;
                                 let (tx, rx) = mpsc::unbounded_channel();
+                                let membership =
+                                    network_state.create_membership(self.num_nodes).await;
                                 let coord = build_test_coordinator::<N::Impl>(
                                     change.idx as u64,
                                     net,
-                                    membership.clone(),
+                                    membership,
                                     self.epoch_height,
                                     self.view_timeout,
                                 )
@@ -390,9 +371,6 @@ impl TestRunner {
                             node_commits[idx] = commits;
                         },
                         NodeEvent::TimedOut(view) => {
-                            if !has_dynamic_changes && !all_expected_failures.contains(&view) {
-                                return Err(TestError::UnexpectedTimeout { node: idx, view });
-                            }
                             node_timeouts[idx].insert(view);
                         },
                     }
@@ -402,17 +380,13 @@ impl TestRunner {
             }
         }
 
-        if has_dynamic_changes {
-            Self::verify_restart_correctness(&node_commits, &currently_down, self.target_decisions)
-        } else {
-            Self::verify_correctness(
-                &node_commits,
-                &node_timeouts,
-                &all_expected_failures,
-                self.target_decisions,
-                &self.down_nodes,
-            )
-        }
+        Self::verify_correctness(
+            &node_commits,
+            &node_timeouts,
+            &all_expected_failures,
+            self.target_decisions,
+            &currently_down,
+        )
     }
 
     /// Verify that the collected per-node commits and timeouts are consistent:
@@ -479,53 +453,6 @@ impl TestRunner {
                         decided_count,
                         threshold,
                     });
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Verify correctness for tests with dynamic node changes (restarts
-    /// and late starts).
-    ///
-    /// Unlike [`verify_correctness`](Self::verify_correctness) which checks
-    /// per-view quorum, this method checks:
-    /// 1. All currently-live nodes decided at least `target_decisions` views.
-    /// 2. No chain divergence: any view decided by multiple nodes has the
-    ///    same leaf commitment.
-    fn verify_restart_correctness(
-        node_commits: &[BTreeMap<ViewNumber, [u8; 32]>],
-        down_nodes: &BTreeSet<usize>,
-        target_decisions: usize,
-    ) -> Result<(), TestError> {
-        // Check all currently-live nodes reached target_decisions.
-        for (i, commits) in node_commits.iter().enumerate() {
-            if down_nodes.contains(&i) {
-                continue;
-            }
-            if commits.len() < target_decisions {
-                return Err(TestError::InsufficientDecisions {
-                    node: i,
-                    decided: commits.len(),
-                    target: target_decisions,
-                });
-            }
-        }
-
-        // Check no chain divergence across all nodes.
-        let mut view_commits: BTreeMap<ViewNumber, [u8; 32]> = BTreeMap::new();
-        for (i, commits) in node_commits.iter().enumerate() {
-            for (&view, &commit) in commits {
-                match view_commits.entry(view) {
-                    std::collections::btree_map::Entry::Vacant(e) => {
-                        e.insert(commit);
-                    },
-                    std::collections::btree_map::Entry::Occupied(e) => {
-                        if *e.get() != commit {
-                            return Err(TestError::ChainDivergence { node: i });
-                        }
-                    },
                 }
             }
         }

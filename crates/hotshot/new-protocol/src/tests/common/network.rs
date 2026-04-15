@@ -14,6 +14,7 @@ use hotshot_example_types::{node_types::TestTypes, storage_types::TestStorage};
 use hotshot_types::{
     PeerConnectInfo,
     addr::NetAddr,
+    epoch_membership::EpochMembershipCoordinator,
     traits::{
         metrics::NoMetrics,
         network::{ConnectedNetwork, Topic},
@@ -66,6 +67,14 @@ pub trait TestNetwork {
     /// buffers don't block broadcasts.  Must be called before
     /// [`create_node`](Self::create_node) when restarting a node.
     fn shutdown_node(&self, node_index: usize) -> impl std::future::Future<Output = ()>;
+
+    /// Create an independent membership coordinator whose internal
+    /// fetcher is connected to this test network so epoch catchup can
+    /// reach peers.
+    fn create_membership(
+        &self,
+        num_nodes: usize,
+    ) -> impl std::future::Future<Output = EpochMembershipCoordinator<TestTypes>>;
 }
 
 // -- MemoryNetwork implementation -------------------------------------------
@@ -141,6 +150,10 @@ impl TestNetwork for MemoryTestNetwork {
         if let Some(net) = net {
             net.shut_down().await;
         }
+    }
+
+    async fn create_membership(&self, num_nodes: usize) -> EpochMembershipCoordinator<TestTypes> {
+        super::utils::mock_membership_with_network(num_nodes, Some(self.group.clone())).await
     }
 }
 
@@ -257,5 +270,10 @@ impl TestNetwork for CliquenetTestNetwork {
         // Cliquenet uses TCP; when the coordinator task is aborted the TCP
         // listener closes and subsequent sends fail gracefully.  No
         // explicit cleanup needed.
+    }
+
+    async fn create_membership(&self, num_nodes: usize) -> EpochMembershipCoordinator<TestTypes> {
+        // Cliquenet doesn't have a MasterMap; use an isolated network.
+        super::utils::mock_membership_with_num_nodes(num_nodes).await
     }
 }

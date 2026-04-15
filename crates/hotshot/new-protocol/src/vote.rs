@@ -20,12 +20,16 @@ use tracing::{instrument, warn};
 use crate::helpers::upgrade_lock;
 
 pub struct VoteCollector<T: NodeType, V, C> {
+    // NOTE: `tasks` is declared before `accumulators` so that on drop the
+    // JoinSet aborts running tasks before the channel senders in
+    // `accumulators` are closed.  This prevents `run_per_view` from
+    // observing a closed channel and hitting `unreachable!()`.
+    tasks: JoinSet<C>,
     accumulators: BTreeMap<ViewNumber, (mpsc::Sender<V>, AbortHandle)>,
     completed_certificates: BTreeSet<ViewNumber>,
     epoch_membership_coordinator: EpochMembershipCoordinator<T>,
     membership_cache: BTreeMap<EpochNumber, EpochMembership<T>>,
     upgrade_lock: UpgradeLock<T>,
-    tasks: JoinSet<C>,
 }
 
 impl<T, V, C> VoteCollector<T, V, C>

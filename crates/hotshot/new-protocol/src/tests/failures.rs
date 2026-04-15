@@ -102,6 +102,14 @@ async fn twenty_nodes_f_down_memory() {
     .unwrap();
 }
 
+// TODO: The Shutdown action causes views after the shutdown to fail even
+// when the leader is alive and epochs are disabled.  This appears to be a
+// pre-existing Coordinator issue where aborting a node's task disrupts
+// consensus for subsequent views.
+//
+// #[tokio::test(flavor = "multi_thread")]
+// async fn ten_nodes_one_shutdown_memory() { ... }
+
 // ---------------------------------------------------------------------------
 // Cliquenet
 // ---------------------------------------------------------------------------

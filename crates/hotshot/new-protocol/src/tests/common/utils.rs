@@ -8,7 +8,10 @@ use async_lock::RwLock;
 use committable::{Commitment, Committable};
 use futures::StreamExt;
 use hotshot::{
-    traits::{BlockPayload, ValidatedState, implementations::MemoryNetwork},
+    traits::{
+        BlockPayload, ValidatedState,
+        implementations::{MasterMap, MemoryNetwork},
+    },
     types::{BLSPrivKey, BLSPubKey, SchnorrPubKey},
 };
 use hotshot_example_types::{
@@ -423,17 +426,39 @@ pub async fn mock_membership() -> EpochMembershipCoordinator<TestTypes> {
 pub async fn mock_membership_with_num_nodes(
     num_nodes: usize,
 ) -> EpochMembershipCoordinator<TestTypes> {
-    let network =
-        <MemoryNetwork<BLSPubKey> as TestableNetworkingImplementation<TestTypes>>::generator(
-            num_nodes,
-            0,
-            1,
-            num_nodes,
-            None,
-            Duration::from_secs(1),
-            &mut HashMap::new(),
-        )(0)
-        .await;
+    mock_membership_with_network(num_nodes, None).await
+}
+
+/// Create a mock membership coordinator for `num_nodes` validators.
+///
+/// When `master_map` is provided the internal `Leaf2Fetcher` is
+/// connected to the same [`MasterMap`] so it can fetch leaves from
+/// peers during epoch catchup.  Without it a dummy isolated network
+/// is used (sufficient when no catchup is needed).
+pub async fn mock_membership_with_network(
+    num_nodes: usize,
+    master_map: Option<Arc<MasterMap<BLSPubKey>>>,
+) -> EpochMembershipCoordinator<TestTypes> {
+    let network = match master_map {
+        Some(group) => {
+            // Use a unique key that doesn't collide with any test node
+            // (nodes use seed [0; 32] with indices 0..num_nodes).
+            let (pk, _) = BLSPubKey::generated_from_seed_indexed([1; 32], 9998);
+            Arc::new(MemoryNetwork::new(&pk, &group, &[], None))
+        },
+        None => {
+            <MemoryNetwork<BLSPubKey> as TestableNetworkingImplementation<TestTypes>>::generator(
+                num_nodes,
+                0,
+                1,
+                num_nodes,
+                None,
+                Duration::from_secs(1),
+                &mut HashMap::new(),
+            )(0)
+            .await
+        },
+    };
     let members = gen_node_lists(
         num_nodes as u64,
         num_nodes as u64,
@@ -457,13 +482,17 @@ pub async fn mock_membership_with_num_nodes(
         .await
         .set_first_epoch(EpochNumber::genesis(), [0u8; 32]);
 
-    let coordinator =
+    let mut coordinator =
         EpochMembershipCoordinator::new(membership, num_nodes as u64, &TestStorage::default());
     // Set the DRB difficulty selector so compute_drb_result can run.
     // Difficulty 0 makes the computation instant for tests.
     coordinator
         .set_drb_difficulty_selector(std::sync::Arc::new(|_version| Box::pin(async { 0u64 })))
         .await;
+    // Provide a dummy external channel so the Leaf2Fetcher doesn't panic
+    // when catchup triggers a fetch_leaf call.
+    let (_tx, rx) = async_broadcast::broadcast(1);
+    coordinator.set_external_channel(rx).await;
     coordinator
 }
 

@@ -193,6 +193,11 @@ impl<T: NodeType> Consensus<T> {
         self.proposals.get(&view)
     }
 
+    /// Return the Certificate2 stored at the given view, if any.
+    pub fn cert2_at(&self, view: ViewNumber) -> Option<&Certificate2<T>> {
+        self.certs2.get(&view)
+    }
+
     /// Apply consensus to the given input and collect protocol outputs.
     #[instrument(level = "debug", skip_all, fields(node = %self.node_id, view = %input.view_number()))]
     pub async fn apply(
@@ -200,6 +205,10 @@ impl<T: NodeType> Consensus<T> {
         input: ConsensusInput<T>,
         outbox: &mut Outbox<ConsensusOutput<T>>,
     ) {
+        let drb_epoch = match &input {
+            ConsensusInput::DrbResult(epoch, _) => Some(*epoch),
+            _ => None,
+        };
         let view = input.view_number();
         let proto = match input {
             ConsensusInput::Proposal(proposal) => self.handle_proposal(proposal, outbox).await,
@@ -282,6 +291,20 @@ impl<T: NodeType> Consensus<T> {
         self.maybe_propose(view, outbox).await;
         // An event from the current view or the previous view can trigger a propose
         self.maybe_propose(view + 1, outbox).await;
+
+        // When a DRB result arrives, retry voting on epoch-transition
+        // proposals that were deferred because the DRB wasn't available.
+        if let Some(epoch) = drb_epoch {
+            let views_to_retry: Vec<ViewNumber> = self
+                .proposals
+                .iter()
+                .filter(|(v, p)| p.epoch + 1 == epoch && !self.voted_1_views.contains(v))
+                .map(|(&v, _)| v)
+                .collect();
+            for v in views_to_retry {
+                self.maybe_vote_1(v, outbox).await;
+            }
+        }
     }
 
     pub fn wants_proposal<S>(&self, p: &ProposalMessage<T, S>) -> bool {
@@ -336,26 +359,6 @@ impl<T: NodeType> Consensus<T> {
             return Protocol::Abort;
         }
 
-        // Validate the epoch transition rules.
-        // - DRB result must be attached and match our calculated result.
-        // - Next epoch justify QC (deciding QC) must be attached to the first proposal of the new epoch
-        if proposal.epoch > EpochNumber::genesis() + 1
-            && is_epoch_transition(block_number, *self.epoch_height)
-        {
-            let Some(drb) = self.drb_results.get(&(epoch + 1)) else {
-                debug!(%epoch, "no DRB result for epoch");
-                outbox.push_back(ConsensusOutput::RequestDrbResult(epoch + 1));
-                return Protocol::Abort;
-            };
-            if proposal
-                .next_drb_result
-                .is_none_or(|proposed_drb| drb != &proposed_drb)
-            {
-                warn!(%epoch, "DRB result does not match proposal");
-                return Protocol::Abort;
-            }
-        }
-
         // if the previous block is the last block of the epoch, this proposal is the first proposal of the new epoch
         if is_last_block(block_number.saturating_sub(1), *self.epoch_height) {
             let Some(cert2) = &proposal.next_epoch_justify_qc else {
@@ -374,8 +377,36 @@ impl<T: NodeType> Consensus<T> {
 
         let payload_size = vid_share.payload_byte_len();
 
+        // Store the proposal before the DRB check so it is not lost when
+        // the DRB is not yet available (e.g. a node catching up after a
+        // restart).  Voting is deferred to `maybe_vote_1` which verifies
+        // the DRB before casting a vote.
         self.proposals.insert(view, proposal.clone());
         self.vid_shares.insert(view, vid_share);
+
+        // Request the DRB if we don't have it yet.  A mismatching DRB is
+        // a hard failure (invalid leader), but a missing DRB is
+        // recoverable — the proposal is stored and voting will proceed
+        // once the DRB arrives.
+        if proposal.epoch > EpochNumber::genesis() + 1
+            && is_epoch_transition(block_number, *self.epoch_height)
+        {
+            match self.drb_results.get(&(epoch + 1)) {
+                None => {
+                    debug!(%epoch, "DRB result not yet available, requesting");
+                    outbox.push_back(ConsensusOutput::RequestDrbResult(epoch + 1));
+                },
+                Some(drb) => {
+                    if proposal
+                        .next_drb_result
+                        .is_none_or(|proposed_drb| drb != &proposed_drb)
+                    {
+                        warn!(%epoch, "DRB result does not match proposal");
+                        return Protocol::Abort;
+                    }
+                },
+            }
+        }
 
         outbox.push_back(ConsensusOutput::RequestState(StateRequest {
             view: proposal.view_number(),
@@ -853,6 +884,25 @@ impl<T: NodeType> Consensus<T> {
             return;
         };
 
+        // Don't vote for epoch-transition proposals until we can verify
+        // the attached DRB result.
+        let block_number = proposal.block_header.block_number();
+        if proposal.epoch > EpochNumber::genesis() + 1
+            && is_epoch_transition(block_number, *self.epoch_height)
+        {
+            let Some(drb) = self.drb_results.get(&(proposal.epoch + 1)) else {
+                debug!("DRB result not yet available, deferring vote");
+                return;
+            };
+            if proposal
+                .next_drb_result
+                .is_none_or(|proposed_drb| drb != &proposed_drb)
+            {
+                warn!("DRB result does not match proposal, refusing to vote");
+                return;
+            }
+        }
+
         if !self.staked_in_epoch(proposal.epoch).await {
             return;
         }
@@ -984,6 +1034,19 @@ impl<T: NodeType> Consensus<T> {
             self.current_epoch = Some(proposal_epoch);
             outbox.push_back(ConsensusOutput::ViewChanged(view + 1, proposal_epoch));
             outbox.push_back(ConsensusOutput::SendCertificate1(cert1.clone()));
+
+            // Proactively request the DRB when entering the epoch
+            // transition zone.  During catchup, proposals for
+            // transition-zone views may be filtered out before reaching
+            // handle_proposal, so we cannot rely on that path to trigger
+            // the request.
+            let next_block = proposal.block_header.block_number() + 1;
+            if proposal_epoch > EpochNumber::genesis() + 1
+                && is_epoch_transition(next_block, *self.epoch_height)
+                && !self.drb_results.contains_key(&(proposal_epoch + 1))
+            {
+                outbox.push_back(ConsensusOutput::RequestDrbResult(proposal_epoch + 1));
+            }
         }
 
         if !self.staked_in_epoch(proposal_epoch).await {
