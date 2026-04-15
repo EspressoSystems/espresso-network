@@ -176,6 +176,7 @@ jobs:
           - deploy
           - espresso-dev-node
           - nasty-client
+          - new-protocol-bench-node
           - node-validator
           - orchestrator
           - prover-service
@@ -284,6 +285,7 @@ jobs:
           - deploy
           - espresso-dev-node
           - nasty-client
+          - new-protocol-bench-node
           - node-validator
           - orchestrator
           - prover-service
@@ -368,6 +370,7 @@ jobs:
           - deploy
           - espresso-dev-node
           - nasty-client
+          - new-protocol-bench-node
           - node-validator
           - orchestrator
           - prover-service

@@ -1,5 +1,5 @@
 pub mod error;
-pub(crate) mod timer;
+pub mod timer;
 
 use std::{sync::Arc, time::Duration};
 
@@ -17,10 +17,10 @@ use hotshot_types::{
     vote::HasViewNumber,
 };
 use tokio::{select, sync::mpsc};
-use tracing::warn;
+use tracing::{error, warn};
 
 use crate::{
-    block::{BlockBuilder, BlockBuilderConfig},
+    block::{BlockAndHeaderRequest, BlockBuilder, BlockBuilderConfig},
     consensus::{Consensus, ConsensusInput, ConsensusOutput},
     coordinator::{
         error::{CoordinatorError, ErrorSource, Severity},
@@ -137,6 +137,65 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Coordinator<T, N> {
             .build();
 
         (coordinator, query_tx)
+    }
+
+    /// Bootstrap the coordinator so the view-1 leader can propose.
+    ///
+    /// Emits an initial `ViewChanged(1)` and, if this node is the view-1
+    /// leader, a `RequestBlockAndHeader` for view 1.  Call this after
+    /// `seed_genesis` on the inner `Consensus` instance.
+    pub async fn start(&mut self) {
+        let view = ViewNumber::new(1);
+        let epoch = EpochNumber::genesis();
+
+        self.outbox
+            .push_back(ConsensusOutput::ViewChanged(view, epoch));
+
+        if let Some(leader) = self.leader(view, epoch).await
+            && leader == self.public_key
+        {
+            let genesis_proposal = self
+                .consensus
+                .proposal_at(ViewNumber::genesis())
+                .expect("genesis proposal must be seeded before start()")
+                .clone();
+            self.outbox
+                .push_back(ConsensusOutput::RequestBlockAndHeader(
+                    BlockAndHeaderRequest {
+                        view,
+                        epoch,
+                        parent_proposal: genesis_proposal,
+                    },
+                ));
+        }
+    }
+
+    /// Convenience method to run the coordinator event loop.
+    ///
+    /// Combines `next_consensus_input`, `apply_consensus` and outbox processing.
+    pub async fn run(mut self) {
+        loop {
+            match self.next_consensus_input().await {
+                Ok(input) => self.apply_consensus(input).await,
+                Err(err) if err.severity == Severity::Critical => {
+                    error!(%err, "while awaiting next consensus input");
+                    return;
+                },
+                Err(err) => {
+                    warn!(%err, "while awaiting next consensus input");
+                },
+            }
+            while let Some(output) = self.outbox.pop_front() {
+                if let Err(err) = self.process_consensus_output(output).await {
+                    if err.severity == Severity::Critical {
+                        error!(%err, "while processing consensus output");
+                        return;
+                    } else {
+                        warn!(%err, "while processing consensus output");
+                    }
+                }
+            }
+        }
     }
 
     fn handle_query(&mut self, query: CoordinatorQuery<T>) {
