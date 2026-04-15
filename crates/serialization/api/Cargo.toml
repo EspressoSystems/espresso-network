@@ -1,20 +1,20 @@
 [package]
 name = "serialization-api"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
 
 [package.metadata]
 # Mark as generated to prevent manual edits
 generated = true
 
 [dependencies]
-prost = "0.14"
+prost = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-schemars = "0.9"
+schemars = { workspace = true }
 anyhow = { workspace = true }
 
 [dev-dependencies]
 
 [build-dependencies]
-prost-build = "0.14"
+prost-build = { workspace = true }

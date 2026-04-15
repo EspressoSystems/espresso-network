@@ -1,27 +1,27 @@
 [package]
 name = "espresso-api"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
 
 [dependencies]
 serialization-api = { path = "../../serialization/api" }
 axum = { workspace = true }
 tokio = { workspace = true }
-tower = "0.4"
+tower = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-tonic = { version = "0.14.5", features = ["transport"] }
-tonic-reflection = "0.14"
-tonic-prost = "0.14"
-prost = "0.14"
+tonic = { workspace = true }
+tonic-reflection = { workspace = true }
+tonic-prost = { workspace = true }
+prost = { workspace = true }
 tracing = { workspace = true }
-aide = { version = "0.15.1", features = ["axum", "axum-json", "scalar", "swagger", "redoc"] }
-schemars = "0.9"
+aide = { workspace = true }
+schemars = { workspace = true }
 async-trait = { workspace = true }
 anyhow = { workspace = true }
 hex = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 [build-dependencies]
-tonic-build = "0.14"
-tonic-prost-build = "0.14"
+tonic-build = { workspace = true }
+tonic-prost-build = { workspace = true }
