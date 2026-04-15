@@ -5206,7 +5206,7 @@ mod test {
 
         for i in 1..=3 {
             let _st = client
-                .get::<Vec<PeerConfigLegacy<SeqTypes>>>(&format!("node/stake-table/{}", i as u64))
+                .get::<Vec<PeerConfig<SeqTypes>>>(&format!("node/stake-table/{}", i as u64))
                 .send()
                 .await
                 .expect("failed to get stake table");
