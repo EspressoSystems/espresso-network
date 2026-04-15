@@ -34,6 +34,9 @@ use versions::EPOCH_VERSION;
 use crate::{
     PeerConfig,
     data::{EpochNumber, Leaf2, VidCommitment, ViewNumber},
+    message::UpgradeLock,
+    simple_certificate::{SimpleCertificate, SuccessThreshold},
+    simple_vote::Vote2Data,
     stake_table::StakeTableEntries,
     traits::{ValidatedState, node_implementation::NodeType},
     vote::{Certificate, HasViewNumber},
@@ -107,7 +110,7 @@ pub async fn verify_leaf_chain<T: NodeType>(
     stake_table: &[PeerConfig<T>],
     success_threshold: U256,
     expected_height: u64,
-    upgrade_lock: &crate::message::UpgradeLock<T>,
+    upgrade_lock: &UpgradeLock<T>,
 ) -> anyhow::Result<Leaf2<T>> {
     // Sort the leaf chain by view number
     leaf_chain.sort_by_key(|l| l.view_number());
@@ -171,6 +174,57 @@ pub async fn verify_leaf_chain<T: NodeType>(
         last_leaf = leaf;
     }
     Err(anyhow!("Epoch Root was not found in the decided chain"))
+}
+
+/// Verify a leaf chain using a Certificate2 (new protocol).
+///
+/// In the new protocol Certificate2 proves finality for the leaf it commits to.
+/// The cert2 is validated against the stake table, then the chain is walked from the
+/// certified leaf back to `expected_height` via justify_qc links.
+pub async fn verify_leaf_chain_with_cert2<T: NodeType>(
+    mut leaf_chain: Vec<Leaf2<T>>,
+    stake_table: &[PeerConfig<T>],
+    success_threshold: U256,
+    expected_height: u64,
+    upgrade_lock: &UpgradeLock<T>,
+    cert2: SimpleCertificate<T, Vote2Data<T>, SuccessThreshold>,
+) -> anyhow::Result<Leaf2<T>> {
+    leaf_chain.sort_by_key(|l| l.view_number());
+    leaf_chain.reverse();
+
+    ensure!(!leaf_chain.is_empty(), "empty leaf chain");
+
+    let stake_table_entries = StakeTableEntries::<T>::from(stake_table.to_vec()).0;
+
+    cert2.is_valid_cert(&stake_table_entries, success_threshold, upgrade_lock)?;
+
+    ensure!(
+        cert2.data.leaf_commit == leaf_chain[0].commit(),
+        "cert2 does not match the newest leaf in the chain"
+    );
+
+    if leaf_chain[0].height() == expected_height {
+        return Ok(leaf_chain[0].clone());
+    }
+
+    let mut current = &leaf_chain[0];
+    for leaf in leaf_chain[1..].iter() {
+        if current.justify_qc().view_number() != leaf.view_number()
+            || current.justify_qc().data().leaf_commit != leaf.commit()
+        {
+            continue;
+        }
+        leaf.justify_qc()
+            .is_valid_cert(&stake_table_entries, success_threshold, upgrade_lock)?;
+        if leaf.height() == expected_height {
+            return Ok(leaf.clone());
+        }
+        current = leaf;
+    }
+
+    Err(anyhow!(
+        "Epoch Root was not found in the cert2-finalized chain"
+    ))
 }
 
 impl<TYPES: NodeType> ViewInner<TYPES> {

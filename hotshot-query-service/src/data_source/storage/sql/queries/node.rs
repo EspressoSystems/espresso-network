@@ -32,7 +32,7 @@ use super::{
 };
 use crate::{
     Header, MissingSnafu, QueryError, QueryResult,
-    availability::{NamespaceId, NewProtocolCert2, QueryableHeader},
+    availability::{Certificate2, NamespaceId, QueryableHeader},
     data_source::storage::{
         Aggregate, AggregatesStorage, NodeStorage, PayloadMetadata, UpdateAggregatesStorage,
     },
@@ -292,7 +292,7 @@ where
         Ok(qcs)
     }
 
-    async fn load_cert2(&mut self, height: u64) -> QueryResult<Option<NewProtocolCert2<Types>>> {
+    async fn load_cert2(&mut self, height: u64) -> QueryResult<Option<Certificate2<Types>>> {
         let Some((json,)) = query_as("SELECT data FROM cert2 WHERE height = $1")
             .bind(height as i64)
             .fetch_optional(self.as_mut())
@@ -302,6 +302,23 @@ where
         };
         let cert2 = serde_json::from_value(json).decode_error("malformed cert2")?;
         Ok(cert2)
+    }
+
+    async fn load_cert2_at_or_above(
+        &mut self,
+        height: u64,
+    ) -> QueryResult<Option<Certificate2<Types>>> {
+        let Some((_h, json)): Option<(i64, serde_json::Value)> = query_as(
+            "SELECT height, data FROM cert2 WHERE height >= $1 ORDER BY height ASC LIMIT 1",
+        )
+        .bind(height as i64)
+        .fetch_optional(self.as_mut())
+        .await?
+        else {
+            return Ok(None);
+        };
+        let cert2 = serde_json::from_value(json).decode_error("malformed cert2")?;
+        Ok(Some(cert2))
     }
 }
 

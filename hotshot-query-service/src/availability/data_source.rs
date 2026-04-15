@@ -17,16 +17,11 @@ use futures::{
     future::Future,
     stream::{BoxStream, StreamExt},
 };
+pub use hotshot_new_protocol::message::Certificate2;
 pub use hotshot_query_service_types::availability::{BlockId, LeafId};
 use hotshot_types::{
-    data::VidShare,
-    simple_certificate::{CertificatePair, SimpleCertificate, SuccessThreshold},
-    simple_vote::Vote2Data,
-    traits::node_implementation::NodeType,
+    data::VidShare, simple_certificate::CertificatePair, traits::node_implementation::NodeType,
 };
-
-/// A Certificate2 from the new protocol that proves finality of a leaf.
-pub type NewProtocolCert2<Types> = SimpleCertificate<Types, Vote2Data<Types>, SuccessThreshold>;
 
 use super::{
     BlockWithTransaction,
@@ -36,7 +31,7 @@ use super::{
         QueryablePayload, TransactionHash, VidCommonMetadata, VidCommonQueryData,
     },
 };
-use crate::{Header, Payload, types::HeightIndexed};
+use crate::{Header, Payload, QueryResult, types::HeightIndexed};
 
 pub type FetchStream<T> = BoxStream<'static, Fetch<T>>;
 
@@ -230,6 +225,10 @@ where
             .then(Fetch::resolve)
             .boxed()
     }
+
+    async fn get_cert2(&self, _height: u64) -> QueryResult<Option<Certificate2<Types>>> {
+        Ok(None)
+    }
 }
 
 /// Information about a block.
@@ -248,7 +247,7 @@ pub struct BlockInfo<Types: NodeType> {
     pub vid_share: Option<VidShare>,
     pub qc_chain: Option<[CertificatePair<Types>; 2]>,
     /// New protocol finality proof: cert2 alone proves finality.
-    pub cert2: Option<NewProtocolCert2<Types>>,
+    pub cert2: Option<Certificate2<Types>>,
 }
 
 impl<Types: NodeType> From<LeafQueryData<Types>> for BlockInfo<Types> {
@@ -285,7 +284,7 @@ impl<Types: NodeType> BlockInfo<Types> {
         self
     }
 
-    pub fn with_cert2(mut self, cert2: NewProtocolCert2<Types>) -> Self {
+    pub fn with_cert2(mut self, cert2: Certificate2<Types>) -> Self {
         self.cert2 = Some(cert2);
         self
     }

@@ -98,8 +98,8 @@ use super::{
 use crate::{
     Header, Payload, QueryError, QueryResult,
     availability::{
-        AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, BlockWithTransaction, Fetch,
-        FetchStream, HeaderQueryData, LeafId, LeafQueryData, NamespaceId, NewProtocolCert2,
+        AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, BlockWithTransaction,
+        Certificate2, Fetch, FetchStream, HeaderQueryData, LeafId, LeafQueryData, NamespaceId,
         PayloadMetadata, PayloadQueryData, QueryableHeader, QueryablePayload, TransactionHash,
         UpdateAvailabilityData, VidCommonMetadata, VidCommonQueryData,
     },
@@ -761,6 +761,10 @@ where
         h: TransactionHash<Types>,
     ) -> Fetch<BlockWithTransaction<Types>> {
         self.fetcher.clone().get(TransactionRequest::from(h)).await
+    }
+
+    async fn get_cert2(&self, height: u64) -> QueryResult<Option<Certificate2<Types>>> {
+        self.fetcher.get_cert2(height).await
     }
 }
 
@@ -1740,6 +1744,45 @@ where
 impl<Types, S, P> Fetcher<Types, S, P>
 where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
+    Payload<Types>: QueryablePayload<Types>,
+    S: VersionedDataSource + 'static,
+    for<'a> S::ReadOnly<'a>: NodeStorage<Types>,
+    for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
+    P: AvailabilityProvider<Types>,
+{
+    /// Get a cert2 from local storage, or kick off a background fetch and return `None`.
+    async fn get_cert2(self: &Arc<Self>, height: u64) -> QueryResult<Option<Certificate2<Types>>> {
+        // Try local storage first.
+        {
+            let mut tx = self.read().await.map_err(|err| QueryError::Error {
+                message: err.to_string(),
+            })?;
+            if let Ok(Some(cert2)) = tx.load_cert2(height).await {
+                return Ok(Some(cert2));
+            }
+        }
+
+        // todo:
+        let fetcher = Arc::clone(self);
+        spawn(async move {
+            let cert2 = fetcher
+                .provider
+                .fetch(request::Certificate2Request { height })
+                .await
+                .flatten();
+            if let Some(cert2) = cert2 {
+                fetcher.store(&(height, cert2)).await;
+            }
+        });
+
+        Ok(None)
+    }
+}
+
+impl<Types, S, P> Fetcher<Types, S, P>
+where
+    Types: NodeType,
     S: VersionedDataSource,
     for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
 {
@@ -2069,6 +2112,7 @@ pub trait AvailabilityProvider<Types: NodeType>:
     + Provider<Types, request::BlockRangeRequest>
     + Provider<Types, request::VidCommonRequest>
     + Provider<Types, request::VidCommonRangeRequest>
+    + Provider<Types, request::Certificate2Request>
     + Sync
     + 'static
 {
@@ -2080,6 +2124,7 @@ impl<Types: NodeType, P> AvailabilityProvider<Types> for P where
         + Provider<Types, request::BlockRangeRequest>
         + Provider<Types, request::VidCommonRequest>
         + Provider<Types, request::VidCommonRangeRequest>
+        + Provider<Types, request::Certificate2Request>
         + Sync
         + 'static
 {
@@ -2199,7 +2244,7 @@ impl<Types: NodeType> Storable<Types>
     for (
         LeafQueryData<Types>,
         Option<[CertificatePair<Types>; 2]>,
-        Option<NewProtocolCert2<Types>>,
+        Option<Certificate2<Types>>,
     )
 {
     fn debug_name(&self) -> String {
@@ -2222,6 +2267,24 @@ impl<Types: NodeType> Storable<Types>
             storage.insert_cert2(self.0.height(), cert2.clone()).await?;
         }
         Ok(())
+    }
+}
+
+impl<Types: NodeType> Storable<Types> for (u64, Certificate2<Types>) {
+    fn debug_name(&self) -> String {
+        format!("cert2 at height {}", self.0)
+    }
+
+    async fn notify(&self, _notifiers: &Notifiers<Types>) {
+        // No passive listeners for cert2.
+    }
+
+    async fn store(
+        &self,
+        storage: &mut impl UpdateAvailabilityStorage<Types>,
+        _leaf_only: bool,
+    ) -> anyhow::Result<()> {
+        storage.insert_cert2(self.0, self.1.clone()).await
     }
 }
 

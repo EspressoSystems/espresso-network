@@ -23,8 +23,49 @@ use light_client::consensus::{
 };
 use tide_disco::{Api, RequestParams, StatusCode, method::ReadState};
 use vbs::version::StaticVersionType;
+use versions::CLIQUENET_VERSION;
 
 use crate::api::data_source::{NodeStateDataSource, StakeTableDataSource};
+
+/// Build a leaf proof for the new protocol (cert2-based finality).
+///
+/// In the new protocol, Certificate2 alone proves finality. We find the first cert2 at or above
+/// the requested height, then build the leaf chain from `requested` up to that cert2's height.
+async fn get_leaf_proof_new_protocol<State>(
+    state: &State,
+    requested: usize,
+    fetch_timeout: Duration,
+) -> Result<LeafProof, Error>
+where
+    State: AvailabilityDataSource<SeqTypes> + VersionedDataSource,
+    for<'a> State::ReadOnly<'a>: NodeStorage<SeqTypes>,
+{
+    let cert2 = state
+        .read()
+        .await
+        .map_err(internal)?
+        .load_cert2_at_or_above(requested as u64)
+        .await
+        .map_err(internal)?
+        .ok_or_else(|| not_found("no cert2 finality proof available"))?;
+
+    // Build leaf chain from requested up to (and including) the cert2 height.
+    let cert2_height = cert2.data.block_number as usize;
+    let mut leaves = state.get_leaf_range(requested..cert2_height + 1).await;
+    let mut proof = LeafProof::default();
+
+    while let Some(leaf) = leaves.next().await {
+        let leaf = leaf
+            .with_timeout(fetch_timeout)
+            .await
+            .ok_or_else(|| not_found("missing leaves"))?;
+
+        proof.push(leaf);
+    }
+
+    proof.add_cert2(cert2);
+    Ok(proof)
+}
 
 async fn get_leaf_proof<State>(
     state: &State,
@@ -71,7 +112,6 @@ where
     };
     let mut leaves = state.get_leaf_range(requested..endpoint).await;
     let mut proof = LeafProof::default();
-    let mut last_height = None;
 
     while let Some(leaf) = leaves.next().await {
         let leaf = leaf
@@ -79,7 +119,6 @@ where
             .await
             .ok_or_else(|| not_found("missing leaves"))?;
 
-        last_height = Some(leaf.height());
         if proof.push(leaf) {
             return Ok(proof);
         }
@@ -89,28 +128,6 @@ where
     // last leaf in the chain is not already assumed finalized by the client, we must prove it
     // finalized by appending a finality proof.
     if finalized.is_none() {
-        if let Some(height) = last_height {
-            // Try new protocol cert2.
-            let cert2 = state
-                .read()
-                .await
-                .map_err(|err| Error::Custom {
-                    message: err.to_string(),
-                    status: StatusCode::INTERNAL_SERVER_ERROR,
-                })?
-                .load_cert2(height)
-                .await
-                .map_err(|err| Error::Custom {
-                    message: err.to_string(),
-                    status: StatusCode::INTERNAL_SERVER_ERROR,
-                })?;
-
-            if let Some(cert2) = cert2 {
-                proof.add_cert2(cert2);
-                return Ok(proof);
-            }
-        }
-
         // HotStuff2 QC 2-chain.
         let Some([committing_qc, deciding_qc]) = qc_chain else {
             return Err(not_found("missing finality proof"));
@@ -311,7 +328,21 @@ where
             let finalized = req
                 .opt_integer_param("finalized")
                 .map_err(bad_param("finalized"))?;
-            get_leaf_proof(state, requested, finalized, fetch_timeout).await
+
+            // Check the version of the requested leaf to decide which finality proof
+            // to use.
+            let header = state
+                .get_header(requested)
+                .await
+                .with_timeout(fetch_timeout)
+                .await
+                .ok_or_else(|| not_found(format!("unknown header {requested}")))?;
+
+            if header.version() >= CLIQUENET_VERSION {
+                get_leaf_proof_new_protocol(state, requested, fetch_timeout).await
+            } else {
+                get_leaf_proof(state, requested, finalized, fetch_timeout).await
+            }
         }
         .boxed()
     })?
@@ -565,6 +596,13 @@ where
     move |err| Error::Custom {
         message: format!("{name}: {err:#}"),
         status: StatusCode::BAD_REQUEST,
+    }
+}
+
+fn internal(err: impl Display) -> Error {
+    Error::Custom {
+        message: err.to_string(),
+        status: StatusCode::INTERNAL_SERVER_ERROR,
     }
 }
 

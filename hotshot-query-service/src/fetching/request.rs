@@ -24,7 +24,8 @@ use hotshot_types::{
 use crate::{
     Payload,
     availability::{
-        BlockQueryData, LeafHash, LeafQueryData, QcHash, QueryableHeader, VidCommonQueryData,
+        BlockQueryData, Certificate2, LeafHash, LeafQueryData, QcHash, QueryableHeader,
+        VidCommonQueryData,
     },
     fetching::NonEmptyRange,
 };
@@ -173,4 +174,16 @@ pub struct LeafRangeRequest<Types: NodeType> {
 
 impl<Types: NodeType> Request<Types> for LeafRangeRequest<Types> {
     type Response = NonEmptyRange<LeafQueryData<Types>>;
+}
+
+/// A request for a cert2 at a given height.
+///
+/// The response is `Option<Certificate2>` since not every height has a cert2.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Certificate2Request {
+    pub height: u64,
+}
+
+impl<Types: NodeType> Request<Types> for Certificate2Request {
+    type Response = Option<Certificate2<Types>>;
 }

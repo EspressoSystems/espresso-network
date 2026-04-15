@@ -45,7 +45,7 @@ use super::{
 use crate::{
     Header, MissingSnafu, NotFoundSnafu, Payload, QueryError, QueryResult,
     availability::{
-        NamespaceId, NewProtocolCert2,
+        Certificate2, NamespaceId,
         data_source::{BlockId, LeafId},
         query_data::{
             BlockHash, BlockQueryData, LeafHash, LeafQueryData, PayloadQueryData, QueryableHeader,
@@ -83,7 +83,7 @@ where
     block_storage: LedgerLog<BlockQueryData<Types>>,
     vid_storage: LedgerLog<(VidCommonQueryData<Types>, Option<VidShare>)>,
     latest_qc_chain: Option<[CertificatePair<Types>; 2]>,
-    cert2s: std::collections::BTreeMap<u64, NewProtocolCert2<Types>>,
+    cert2s: std::collections::BTreeMap<u64, Certificate2<Types>>,
 }
 
 impl<Types> FileSystemStorageInner<Types>
@@ -658,7 +658,7 @@ where
     async fn insert_cert2(
         &mut self,
         height: u64,
-        cert2: NewProtocolCert2<Types>,
+        cert2: Certificate2<Types>,
     ) -> anyhow::Result<()> {
         self.inner.cert2s.insert(height, cert2);
         Ok(())
@@ -899,8 +899,20 @@ where
         Ok(self.inner.latest_qc_chain.clone())
     }
 
-    async fn load_cert2(&mut self, height: u64) -> QueryResult<Option<NewProtocolCert2<Types>>> {
+    async fn load_cert2(&mut self, height: u64) -> QueryResult<Option<Certificate2<Types>>> {
         Ok(self.inner.cert2s.get(&height).cloned())
+    }
+
+    async fn load_cert2_at_or_above(
+        &mut self,
+        height: u64,
+    ) -> QueryResult<Option<Certificate2<Types>>> {
+        Ok(self
+            .inner
+            .cert2s
+            .range(height..)
+            .next()
+            .map(|(_, c)| c.clone()))
     }
 }
 

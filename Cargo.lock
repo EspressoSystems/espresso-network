@@ -6250,6 +6250,7 @@ dependencies = [
  "hotshot",
  "hotshot-events-service",
  "hotshot-example-types",
+ "hotshot-new-protocol",
  "hotshot-query-service",
  "hotshot-query-service-types",
  "hotshot-testing",
