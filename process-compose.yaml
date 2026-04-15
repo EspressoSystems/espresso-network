@@ -115,6 +115,7 @@ processes:
         condition: process_completed
       espresso-node-0:
         condition: process_healthy
+    availability: *run-forever
 
   fund-builder:
     command: espresso-bridge deposit
@@ -226,16 +227,6 @@ processes:
       - ESPRESSO_SEQUENCER_IDENTITY_LATITUDE=40.7128
       - ESPRESSO_SEQUENCER_IDENTITY_LONGITUDE=-74.0060
       - ESPRESSO_SEQUENCER_PUBLIC_API_URL=http://localhost:${ESPRESSO_SEQUENCER0_API_PORT}/
-      # Aggressive pruning to reproduce proposal timeout issue
-      - ESPRESSO_SEQUENCER_DATABASE_PRUNE=true
-      - ESPRESSO_SEQUENCER_PRUNER_BATCH_SIZE=10
-      - ESPRESSO_SEQUENCER_PRUNER_INTERVAL=5s
-      - ESPRESSO_SEQUENCER_PRUNER_MINIMUM_RETENTION=30s
-      - ESPRESSO_SEQUENCER_PRUNER_TARGET_RETENTION=1m
-      - ESPRESSO_SEQUENCER_PRUNER_PRUNING_THRESHOLD=1MB
-      - ESPRESSO_SEQUENCER_PRUNER_MAX_USAGE=100
-      # Debug logging for storage and consensus
-      - RUST_LOG=info,libp2p=off,hotshot_query_service::data_source::storage=debug,espresso_node::persistence=debug,hotshot_consensus=debug
     depends_on:
       orchestrator:
         condition: process_healthy
@@ -691,20 +682,6 @@ processes:
       success_threshold: 2
       failure_threshold: 20
     availability: *run-forever
-
-  install-slow-delete-triggers:
-    command: |
-      until PGPASSWORD=password psql -h localhost -p ${ESPRESSO_SEQUENCER0_DB_PORT} -U root -d espresso -c "SET search_path TO hotshot; SELECT 1 FROM block_merkle_tree LIMIT 0"; do
-        echo "Waiting for tables..."
-        sleep 2
-      done
-      PGPASSWORD=password psql -h localhost -p ${ESPRESSO_SEQUENCER0_DB_PORT} -U root -d espresso -f scripts/seed-merkle-trees.sql
-      echo "Triggers installed"
-    namespace: setup
-    depends_on:
-      espresso-node-0:
-        condition: process_healthy
-    availability: *exit-ok
 
   block-explorer:
     command:
