@@ -17,7 +17,6 @@ use futures::{
 use hotshot_query_service::{
     ApiState as AppState, Error,
     data_source::{ExtensibleDataSource, MetricsDataSource},
-    fetching::provider::QueryServiceProvider,
     status::{self, UpdateStatusData},
 };
 use hotshot_types::traits::{
@@ -40,7 +39,7 @@ use super::{
 };
 use crate::{
     SequencerApiVersion,
-    api::endpoints::RewardMerkleTreeVersion,
+    api::{LightClientProvider, endpoints::RewardMerkleTreeVersion},
     catchup::CatchupStorage,
     context::{SequencerContext, TaskList},
     persistence,
@@ -364,7 +363,7 @@ impl Options {
     {
         let ds = <fs::DataSource as SequencerDataSource>::create(
             mod_opt,
-            provider(query_opt.peers, bind_version),
+            provider(query_opt.peers, &state).await?,
             false,
         )
         .await?;
@@ -428,7 +427,7 @@ impl Options {
         // If that fails, fetch missing data from peers.
         for peer in query_opt.peers {
             tracing::info!("will fetch missing data from {peer}");
-            provider = provider.with_provider(QueryServiceProvider::new(peer, bind_version));
+            provider = provider.with_provider(LightClientProvider::new(peer, state.clone()).await?);
         }
 
         let ds = sql::DataSource::create(mod_opt.clone(), provider, false).await?;

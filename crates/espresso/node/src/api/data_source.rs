@@ -20,7 +20,7 @@ use hotshot::types::BLSPubKey;
 use hotshot_query_service::{
     availability::{AvailabilityDataSource, VidCommonQueryData},
     data_source::{UpdateDataSource, VersionedDataSource},
-    fetching::provider::{AnyProvider, QueryServiceProvider},
+    fetching::provider::AnyProvider,
     node::NodeDataSource,
     status::StatusDataSource,
 };
@@ -40,7 +40,12 @@ use super::{
     options::{Options, Query},
     sql,
 };
-use crate::{SeqTypes, SequencerApiVersion, U256, persistence, state_cert::StateCertFetchError};
+use crate::{
+    SeqTypes, U256,
+    api::{ApiState, LightClientProvider},
+    persistence,
+    state_cert::StateCertFetchError,
+};
 
 pub trait DataSourceOptions: PersistenceOptions {
     type DataSource: SequencerDataSource<Options = Self>;
@@ -87,16 +92,20 @@ pub trait SequencerDataSource:
 pub type Provider = AnyProvider<SeqTypes>;
 
 /// Create a provider for fetching missing data from a list of peer query services.
-pub fn provider(
+pub(super) async fn provider<N, P>(
     peers: impl IntoIterator<Item = Url>,
-    bind_version: SequencerApiVersion,
-) -> Provider {
+    state: &ApiState<N, P>,
+) -> anyhow::Result<Provider>
+where
+    N: ConnectedNetwork<PubKey>,
+    P: SequencerPersistence,
+{
     let mut provider = Provider::default();
     for peer in peers {
         tracing::info!("will fetch missing data from {peer}");
-        provider = provider.with_provider(QueryServiceProvider::new(peer, bind_version));
+        provider = provider.with_provider(LightClientProvider::new(peer, state.clone()).await?);
     }
-    provider
+    Ok(provider)
 }
 
 pub(crate) trait SubmitDataSource<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> {

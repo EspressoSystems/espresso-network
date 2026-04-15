@@ -13,12 +13,14 @@ testing = ["espresso-types/testing", "bitvec", "hotshot-contract-adapter", "rand
 alloy = { workspace = true }
 anyhow = { workspace = true }
 async-lock = { workspace = true }
+async-trait = { workspace = true }
 clap = { workspace = true, optional = true }
 committable = { workspace = true }
 derivative = { workspace = true }
 derive_more = { workspace = true }
 espresso-types = { workspace = true }
 futures = { workspace = true }
+hotshot-query-service = { workspace = true }
 hotshot-query-service-types = { workspace = true }
 hotshot-types = { workspace = true }
 jf-advz = { workspace = true }

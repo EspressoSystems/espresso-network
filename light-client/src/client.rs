@@ -56,6 +56,13 @@ pub trait Client: Send + Sync + 'static {
     /// must already be known anyways.
     fn payload_proof(&self, height: u64) -> impl Send + Future<Output = Result<PayloadProof>>;
 
+    /// Get proofs for the payloads in `[start, end)`.
+    fn payload_proofs_in_range(
+        &self,
+        start: u64,
+        end: u64,
+    ) -> impl Send + Future<Output = Result<Vec<PayloadProof>>>;
+
     /// Get a proof for the requested namespace.
     ///
     /// This method accepts only a `height`, not the more flexible [`BlockId`] type, because a
@@ -146,6 +153,11 @@ impl Client for QueryServiceClient {
 
     async fn payload_proof(&self, height: u64) -> Result<PayloadProof> {
         let path = format!("/light-client/payload/{height}");
+        Ok(self.client.get(&path).send().await?)
+    }
+
+    async fn payload_proofs_in_range(&self, start: u64, end: u64) -> Result<Vec<PayloadProof>> {
+        let path = format!("/light-client/payload/{start}/{end}");
         Ok(self.client.get(&path).send().await?)
     }
 

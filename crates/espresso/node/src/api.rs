@@ -1,5 +1,11 @@
 use std::{collections::HashMap, pin::Pin, sync::Arc, time::Duration};
 
+use ::light_client::{
+    LightClient,
+    client::QueryServiceClient,
+    state::Genesis,
+    storage::{SqliteStorage, Storage},
+};
 use alloy::primitives::U256;
 use anyhow::{Context, bail, ensure};
 use async_lock::RwLock;
@@ -34,7 +40,11 @@ use hotshot_contract_adapter::sol_types::EspToken;
 use hotshot_events_service::events_source::{
     EventFilterSet, EventsSource, EventsStreamer, StartupInfo,
 };
-use hotshot_query_service::{availability::VidCommonQueryData, data_source::ExtensibleDataSource};
+use hotshot_query_service::{
+    availability::VidCommonQueryData,
+    data_source::ExtensibleDataSource,
+    fetching::{self, Provider},
+};
 use hotshot_types::{
     PeerConfig,
     data::{EpochNumber, VidCommitment, VidCommon, VidShare, ViewNumber},
@@ -54,6 +64,7 @@ use rand::Rng;
 use request_response::RequestType;
 use serde::{Deserialize, Serialize};
 use tokio::time::timeout;
+use url::Url;
 use vbs::version::Version;
 
 use self::data_source::{HotShotConfigDataSource, NodeStateDataSource, StateSignatureDataSource};
@@ -1655,6 +1666,67 @@ where
 
     fn garbage_collect(&self, height: u64) -> impl Send + Future<Output = anyhow::Result<()>> {
         async move { (**self).garbage_collect(height).await }
+    }
+}
+
+/// [`Provider`] implementation wrapping a lazy [`LightClient`].
+///
+/// The [`LightClient`] requires a genesis to initialize itself, which we can get from the
+/// [`ApiState`]. However, the [`Provider`] instance must be provided to the API data source at
+/// initialization time, while the [`ApiState`] is only initialized lazily. This is a provider
+/// implementation which is itself initialized lazily: [`Provider::fetch`] calls will time out until
+/// the underlying [`ApiState`] is fully initialized, at which point this provider will start
+/// serving fetches using the [`LightClient`].
+#[derive(Debug)]
+struct LightClientProvider {
+    light_client: BoxLazy<LightClient<SqliteStorage, QueryServiceClient>>,
+}
+
+impl LightClientProvider {
+    pub async fn new<N, P>(url: Url, state: ApiState<N, P>) -> anyhow::Result<Self>
+    where
+        N: ConnectedNetwork<PubKey>,
+        P: SequencerPersistence,
+    {
+        let db = SqliteStorage::default()
+            .await
+            .context("creating SQLite database for light client")?;
+        let init_light_client = async move {
+            let config = state.network_config().await;
+            let epoch_height = config.config.epoch_height;
+            let first_epoch =
+                epoch_from_block_number(config.config.epoch_start_block, epoch_height);
+
+            let genesis = Genesis {
+                epoch_height,
+
+                // Dynamic state starts from the third epoch, since we need the prior epoch's root
+                // to have the upgraded header with the stake table hash.
+                first_epoch_with_dynamic_stake_table: EpochNumber::new(first_epoch + 2),
+
+                stake_table: config
+                    .config
+                    .known_nodes_with_stake
+                    .into_iter()
+                    .map(|peer| peer.stake_table_entry)
+                    .collect(),
+            };
+            LightClient::from_genesis(db, QueryServiceClient::new(url), genesis)
+        };
+        Ok(Self {
+            light_client: Arc::pin(Lazy::from_future(init_light_client.boxed())),
+        })
+    }
+}
+
+#[async_trait]
+impl<T> Provider<SeqTypes, T> for LightClientProvider
+where
+    T: fetching::Request<SeqTypes> + 'static,
+    LightClient<SqliteStorage, QueryServiceClient>: Provider<SeqTypes, T>,
+{
+    async fn fetch(&self, req: T) -> Option<T::Response> {
+        self.light_client.as_ref().get().await.fetch(req).await
     }
 }
 
