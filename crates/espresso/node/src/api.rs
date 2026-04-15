@@ -3649,11 +3649,7 @@ mod test {
         .await;
     }
 
-    async fn test_upgrade_helper(upgrade: Upgrade) {
-        test_upgrade_helper_with_nodes::<5>(upgrade).await;
-    }
-
-    async fn test_upgrade_helper_with_nodes<const NUM_NODES: usize>(upgrade: Upgrade) {
+    async fn test_upgrade_helper<const NUM_NODES: usize = 5>(upgrade: Upgrade) {
         // wait this number of views beyond the configured first view
         // before asserting anything.
         let wait_extra_views = 10;
