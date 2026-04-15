@@ -3642,7 +3642,7 @@ mod test {
     async fn test_epoch_reward_upgrade() {
         // Use fewer nodes: epoch mode from view 0 is resource-heavy on CI with
         // postgres Docker containers, causing view timeouts and consensus stall.
-        test_upgrade_helper_with_nodes::<3>(Upgrade::new(
+        test_upgrade_helper::<3>(Upgrade::new(
             versions::DRB_AND_HEADER_UPGRADE_VERSION,
             versions::EPOCH_REWARD_VERSION,
         ))
