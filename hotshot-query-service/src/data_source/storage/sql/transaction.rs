@@ -446,8 +446,8 @@ impl Transaction<Write> {
     }
 }
 
-/// Pruning mutations, run under READ COMMITTED isolation on Postgres.
-impl Transaction<Prune> {
+/// Pruning mutations for availability data, run under SERIALIZABLE isolation.
+impl Transaction<Write> {
     /// Delete a batch of data for pruning.
     ///
     /// Payloads/vid_common are GC'd after header deletion using NOT EXISTS. Under READ
@@ -510,7 +510,10 @@ impl Transaction<Prune> {
 
         Ok(())
     }
+}
 
+/// Pruning mutations for state tables, run under READ COMMITTED isolation on Postgres.
+impl Transaction<Prune> {
     /// Prune merklized state tables.
     ///
     /// Only deletes nodes having `created <= height` that are not the newest node at their position.
