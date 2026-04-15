@@ -447,11 +447,23 @@ impl Transaction<Write> {
     }
 }
 
+/// Returns a delay to inject between pruning DELETE statements, read from the
+/// `PRUNE_SLOW_DELAY_MS` environment variable. Returns `None` when the variable is unset or zero.
+fn prune_slow_delay() -> Option<Duration> {
+    std::env::var("PRUNE_SLOW_DELAY_MS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .filter(|&ms| ms > 0)
+        .map(Duration::from_millis)
+}
+
 /// Query service specific mutations.
 impl Transaction<Write> {
     /// Delete a batch of data for pruning.
     #[instrument(skip(self))]
     pub(super) async fn delete_batch(&mut self, height: u64) -> anyhow::Result<()> {
+        let delay = prune_slow_delay();
+
         // Delete dependent tables individually before deleting headers.
         let res = query("DELETE FROM payload WHERE height <= $1")
             .bind(height as i64)
@@ -459,6 +471,9 @@ impl Transaction<Write> {
             .await
             .context("deleting payloads")?;
         tracing::debug!(rows_affected = res.rows_affected(), "pruned payloads");
+        if let Some(d) = delay {
+            sleep(d).await;
+        }
 
         let res = query("DELETE FROM vid2 WHERE height <= $1")
             .bind(height as i64)
@@ -466,6 +481,9 @@ impl Transaction<Write> {
             .await
             .context("deleting vid")?;
         tracing::debug!(rows_affected = res.rows_affected(), "pruned vid");
+        if let Some(d) = delay {
+            sleep(d).await;
+        }
 
         let res = query("DELETE FROM transactions WHERE block_height <= $1")
             .bind(height as i64)
@@ -473,6 +491,9 @@ impl Transaction<Write> {
             .await
             .context("deleting transactions")?;
         tracing::debug!(rows_affected = res.rows_affected(), "pruned transactions");
+        if let Some(d) = delay {
+            sleep(d).await;
+        }
 
         let res = query("DELETE FROM leaf2 WHERE height <= $1")
             .bind(height as i64)
@@ -480,6 +501,9 @@ impl Transaction<Write> {
             .await
             .context("deleting leaf2")?;
         tracing::debug!(rows_affected = res.rows_affected(), "pruned leaf2");
+        if let Some(d) = delay {
+            sleep(d).await;
+        }
 
         let res = query("DELETE FROM header WHERE height <= $1")
             .bind(height as i64)
@@ -500,6 +524,8 @@ impl Transaction<Write> {
         state_tables: Vec<String>,
         height: u64,
     ) -> anyhow::Result<()> {
+        let delay = prune_slow_delay();
+
         for state_table in state_tables {
             self.execute(
                 query(&format!(
@@ -516,6 +542,9 @@ impl Transaction<Write> {
                 .bind(height as i64),
             )
             .await?;
+            if let Some(d) = delay {
+                sleep(d).await;
+            }
         }
 
         Ok(())
