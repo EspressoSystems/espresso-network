@@ -11,10 +11,19 @@ use serialization_api::v2::{
 use tonic::{Request, Response, Status};
 
 use crate::{
+    error::ApiError,
     handlers,
     proto::reward_service_server::{RewardService, RewardServiceServer},
     v2,
 };
+
+/// Convert ApiError to tonic::Status with proper status code mapping
+fn map_error(err: ApiError) -> Status {
+    match err {
+        ApiError::BadRequest(e) => Status::invalid_argument(e.to_string()),
+        ApiError::Internal(e) => Status::internal(e.to_string()),
+    }
+}
 
 /// gRPC reward service implementation wrapping a RewardApi implementation
 pub struct RewardServiceImpl<S> {
@@ -39,7 +48,7 @@ where
         handlers::get_reward_claim_input(&self.state, request.into_inner())
             .await
             .map(Response::new)
-            .map_err(|e| Status::internal(e.to_string()))
+            .map_err(map_error)
     }
 
     async fn get_reward_balance(
@@ -49,7 +58,7 @@ where
         handlers::get_reward_balance(&self.state, request.into_inner())
             .await
             .map(Response::new)
-            .map_err(|e| Status::internal(e.to_string()))
+            .map_err(map_error)
     }
 
     async fn get_reward_account_proof(
@@ -59,7 +68,7 @@ where
         handlers::get_reward_account_proof(&self.state, request.into_inner())
             .await
             .map(Response::new)
-            .map_err(|e| Status::internal(e.to_string()))
+            .map_err(map_error)
     }
 
     async fn get_reward_balances(
@@ -69,7 +78,7 @@ where
         handlers::get_reward_balances(&self.state, request.into_inner())
             .await
             .map(Response::new)
-            .map_err(|e| Status::internal(e.to_string()))
+            .map_err(map_error)
     }
 
     async fn get_reward_merkle_tree_v2(
@@ -79,7 +88,7 @@ where
         handlers::get_reward_merkle_tree_v2(&self.state, request.into_inner())
             .await
             .map(Response::new)
-            .map_err(|e| Status::internal(e.to_string()))
+            .map_err(map_error)
     }
 }
 

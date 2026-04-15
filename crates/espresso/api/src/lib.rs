@@ -2,6 +2,7 @@
 
 // Module declarations
 mod axum;
+pub mod error;
 pub mod handlers;
 mod tonic;
 pub mod v1;

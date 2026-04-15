@@ -26,7 +26,7 @@ use serialization_api::v2::{
     GetRewardClaimInputRequest, GetRewardMerkleTreeRequest,
 };
 
-use crate::{handlers, v1, v2};
+use crate::{error::ApiError, handlers, v1, v2};
 
 /// API error response
 #[derive(Debug, Serialize, schemars::JsonSchema)]
@@ -34,43 +34,18 @@ struct ErrorResponse {
     error: String,
 }
 
-/// Wrapper for anyhow::Error that implements IntoResponse with better status codes
-struct ApiError(anyhow::Error);
-
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        let err_str = self.0.to_string().to_lowercase();
-
-        // Determine status code based on error message
-        let status = if err_str.contains("not found")
-            || err_str.contains("no data")
-            || err_str.contains("missing")
-            || err_str.contains("does not exist")
-        {
-            StatusCode::NOT_FOUND
-        } else if err_str.contains("invalid")
-            || err_str.contains("parse")
-            || err_str.contains("bad")
-            || err_str.contains("malformed")
-            || err_str.contains("limit")
-            || err_str.contains("offset")
-        {
-            StatusCode::BAD_REQUEST
-        } else {
-            StatusCode::INTERNAL_SERVER_ERROR
+        let status = match self {
+            ApiError::BadRequest(_) => StatusCode::BAD_REQUEST,
+            ApiError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
 
         let body = Json(ErrorResponse {
-            error: self.0.to_string(),
+            error: self.to_string(),
         });
 
         (status, body).into_response()
-    }
-}
-
-impl From<anyhow::Error> for ApiError {
-    fn from(err: anyhow::Error) -> Self {
-        Self(err)
     }
 }
 
@@ -106,11 +81,7 @@ impl OperationOutput for ApiError {
         operation: &mut Operation,
     ) -> Vec<(Option<u16>, OpenApiResponse)> {
         if let Some(response) = Self::operation_response(ctx, operation) {
-            vec![
-                (Some(400), response.clone()),
-                (Some(404), response.clone()),
-                (Some(500), response),
-            ]
+            vec![(Some(400), response.clone()), (Some(500), response)]
         } else {
             vec![]
         }
@@ -185,10 +156,7 @@ where
                 .get_reward_claim_input(height, address)
                 .await
                 .map(Json)
-                .map_err(|e| {
-                    tracing::error!("get_reward_claim_input error: {}", e);
-                    ApiError::from(e)
-                })
+                .map_err(ApiError::Internal)
         };
 
     let get_reward_balance =
@@ -197,10 +165,7 @@ where
                 .get_reward_balance(height, address)
                 .await
                 .map(Json)
-                .map_err(|e| {
-                    tracing::error!("get_reward_balance error: {}", e);
-                    ApiError::from(e)
-                })
+                .map_err(ApiError::Internal)
         };
 
     let get_latest_reward_balance = |State(state): State<S>, Path(address): Path<String>| async move {
@@ -208,10 +173,7 @@ where
             .get_latest_reward_balance(address)
             .await
             .map(Json)
-            .map_err(|e| {
-                tracing::error!("get_latest_reward_balance error: {}", e);
-                ApiError::from(e)
-            })
+            .map_err(ApiError::Internal)
     };
 
     let get_reward_account_proof =
@@ -220,10 +182,7 @@ where
                 .get_reward_account_proof(height, address)
                 .await
                 .map(Json)
-                .map_err(|e| {
-                    tracing::error!("get_reward_account_proof error: {}", e);
-                    ApiError::from(e)
-                })
+                .map_err(ApiError::Internal)
         };
 
     let get_latest_reward_account_proof = |State(state): State<S>, Path(address): Path<String>| async move {
@@ -231,10 +190,7 @@ where
             .get_latest_reward_account_proof(address)
             .await
             .map(Json)
-            .map_err(|e| {
-                tracing::error!("get_latest_reward_account_proof error: {}", e);
-                ApiError::from(e)
-            })
+            .map_err(ApiError::Internal)
     };
 
     let get_reward_amounts =
@@ -243,10 +199,7 @@ where
                 .get_reward_amounts(height, offset, limit)
                 .await
                 .map(Json)
-                .map_err(|e| {
-                    tracing::error!("get_reward_amounts error: {}", e);
-                    ApiError::from(e)
-                })
+                .map_err(ApiError::Internal)
         };
 
     let get_reward_merkle_tree_v2 = |State(state): State<S>, Path(height): Path<u64>| async move {
@@ -254,10 +207,7 @@ where
             .get_reward_merkle_tree_v2(height)
             .await
             .map(Json)
-            .map_err(|e| {
-                tracing::error!("get_reward_merkle_tree_v2 error: {}", e);
-                ApiError::from(e)
-            })
+            .map_err(ApiError::Internal)
     };
 
     // Build plain Axum router without OpenAPI (for v1 - internal types)
@@ -309,10 +259,6 @@ where
             handlers::get_reward_claim_input(&state, request)
                 .await
                 .map(Json)
-                .map_err(|e| {
-                    tracing::error!("get_reward_claim_input error: {}", e);
-                    ApiError::from(e)
-                })
         };
 
     let get_reward_balance =
@@ -320,10 +266,6 @@ where
             handlers::get_reward_balance(&state, request)
                 .await
                 .map(Json)
-                .map_err(|e| {
-                    tracing::error!("get_reward_balance error: {}", e);
-                    ApiError::from(e)
-                })
         };
 
     let get_reward_account_proof =
@@ -331,10 +273,6 @@ where
             handlers::get_reward_account_proof(&state, request)
                 .await
                 .map(Json)
-                .map_err(|e| {
-                    tracing::error!("get_reward_account_proof error: {}", e);
-                    ApiError::from(e)
-                })
         };
 
     let get_reward_balances =
@@ -342,10 +280,6 @@ where
             handlers::get_reward_balances(&state, request)
                 .await
                 .map(Json)
-                .map_err(|e| {
-                    tracing::error!("get_reward_balances error: {}", e);
-                    ApiError::from(e)
-                })
         };
 
     let get_reward_merkle_tree_v2 =
@@ -353,11 +287,7 @@ where
             handlers::get_reward_merkle_tree_v2(&state, request)
                 .await
                 .map(Json)
-                .map_err(|e| {
-                    tracing::error!("get_reward_merkle_tree_v2 error: {}", e);
-                    ApiError::from(e)
-                })
-        };
+            };
 
     let router = ApiRouter::new()
         .api_route(
