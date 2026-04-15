@@ -242,14 +242,14 @@ mod test {
     use std::time::Duration;
 
     use alloy::node_bindings::Anvil;
-    use espresso_types::{FeeVersion, SequencerVersions};
+    use espresso_node::api;
+    use espresso_node::api::data_source::testing::TestableSequencerDataSource;
+    use espresso_node::api::sql::DataSource;
+    use espresso_node::api::test_helpers::{TestNetwork, TestNetworkConfigBuilder};
+    use espresso_node::testing::TestConfigBuilder;
     use hotshot_query_service::data_source::SqlDataSource;
+    use hotshot_query_service::testing::mocks::MOCK_UPGRADE;
     use portpicker::pick_unused_port;
-    use sequencer::api;
-    use sequencer::api::data_source::testing::TestableSequencerDataSource;
-    use sequencer::api::sql::DataSource;
-    use sequencer::api::test_helpers::{TestNetwork, TestNetworkConfigBuilder};
-    use sequencer::testing::TestConfigBuilder;
     use staking_ui_service::input::espresso::testing::start_pos_network;
     use staking_ui_service::types::common::{ESPTokenAmount, L1BlockId};
     use staking_ui_service::types::global::{ActiveNodeSetSnapshot, FullNodeSetSnapshot};
@@ -402,8 +402,7 @@ mod test {
             .persistences([persistence.clone()])
             .network_config(test_config)
             .build();
-        let mut network =
-            TestNetwork::new(config, SequencerVersions::<FeeVersion, FeeVersion>::new()).await;
+        let mut network = TestNetwork::new(config, MOCK_UPGRADE).await;
 
         // Start staking service.
         let port = pick_unused_port().unwrap();

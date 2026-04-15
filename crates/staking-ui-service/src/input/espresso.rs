@@ -18,7 +18,7 @@ use hotshot_types::{
         election::{RandomizedCommittee, generate_stake_cdf, select_randomized_leader},
     },
     stake_table::StakeTableEntry,
-    traits::{block_contents::BlockHeader, node_implementation::ConsensusTime},
+    traits::block_contents::BlockHeader,
     utils::{epoch_from_block_number, transition_block_for_epoch},
 };
 use tokio::time::sleep;

@@ -14,13 +14,14 @@ required-features = ["rand"]
 default = []
 testing = [
     "espresso-contract-deployer",
+    "espresso-node",
     "espresso-types/testing",
     "hotshot-state-prover",
     "jf-signature",
     "pretty_assertions",
     "rand",
-    "sequencer",
     "staking-cli",
+    "versions",
 ]
 
 [dependencies]
@@ -40,12 +41,12 @@ committable = { git = "https://github.com/EspressoSystems/commit.git", features 
 ] }
 derivative = "2"
 derive_more = "2.0"
-espresso-types = { git = "https://github.com/EspressoSystems/espresso-network.git" }
+espresso-types = { git = "https://github.com/EspressoSystems/espresso-network.git", tag = "20260414" }
 futures = "0.3"
 hickory-resolver = "0.25"
-hotshot-contract-adapter = { git = "https://github.com/EspressoSystems/espresso-network.git" }
-hotshot-query-service = { git = "https://github.com/EspressoSystems/espresso-network.git" }
-hotshot-types = { git = "https://github.com/EspressoSystems/espresso-network.git" }
+hotshot-contract-adapter = { git = "https://github.com/EspressoSystems/espresso-network.git", tag = "20260414" }
+hotshot-query-service = { git = "https://github.com/EspressoSystems/espresso-network.git", tag = "20260414" }
+hotshot-types = { git = "https://github.com/EspressoSystems/espresso-network.git", tag = "20260414" }
 im = { version = "15", features = ["serde"] }
 log-panics = { version = "2.0", features = ["with-backtrace"] }
 parking_lot = "0.12"
@@ -67,18 +68,19 @@ vbs = "0.1"
 
 # Testing dependencies
 async-trait = "0.1.89"
-espresso-contract-deployer = { git = "https://github.com/EspressoSystems/espresso-network.git", optional = true }
-hotshot-state-prover = { git = "https://github.com/EspressoSystems/espresso-network.git", optional = true }
+espresso-contract-deployer = { git = "https://github.com/EspressoSystems/espresso-network.git", tag = "20260414", optional = true }
+espresso-node = { git = "https://github.com/EspressoSystems/espresso-network.git", tag = "20260414", features = [
+    "embedded-db",
+    "testing",
+], optional = true }
+hotshot-state-prover = { git = "https://github.com/EspressoSystems/espresso-network.git", tag = "20260414", optional = true }
 jf-signature = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-signature-v0.4.0", features = [
     "std",
 ], optional = true }
 pretty_assertions = { version = "1", optional = true }
 rand = { version = "0.8", optional = true }
-sequencer = { git = "https://github.com/EspressoSystems/espresso-network.git", features = [
-    "embedded-db",
-    "testing",
-], optional = true }
-staking-cli = { git = "https://github.com/EspressoSystems/espresso-network.git", optional = true }
+staking-cli = { git = "https://github.com/EspressoSystems/espresso-network.git", tag = "20260414", optional = true }
+versions = { git = "https://github.com/EspressoSystems/espresso-network.git", tag = "20260414", optional = true }
 
 [build-dependencies]
 anyhow = "1"
@@ -95,13 +97,3 @@ test-log = { version = "0.2", features = [
     "trace",
 ], default-features = false }
 warp = { version = "0.4", features = ["server"] }
-
-[patch."https://github.com/EspressoSystems/espresso-network.git"]
-espresso-types = { git = "https://github.com/EspressoSystems//espresso-network.git", branch = "release-mainnet-1.0.0-rc" }
-hotshot-contract-adapter = { git = "https://github.com/EspressoSystems//espresso-network.git", branch = "release-mainnet-1.0.0-rc" }
-hotshot-query-service = { git = "https://github.com/EspressoSystems//espresso-network.git", branch = "release-mainnet-1.0.0-rc" }
-hotshot-types = { git = "https://github.com/EspressoSystems//espresso-network.git", branch = "release-mainnet-1.0.0-rc" }
-espresso-contract-deployer = { git = "https://github.com/EspressoSystems//espresso-network.git", branch = "release-mainnet-1.0.0-rc" }
-hotshot-state-prover = { git = "https://github.com/EspressoSystems//espresso-network.git", branch = "release-mainnet-1.0.0-rc" }
-sequencer = { git = "https://github.com/EspressoSystems//espresso-network.git", branch = "release-mainnet-1.0.0-rc" }
-staking-cli = { git = "https://github.com/EspressoSystems//espresso-network.git", branch = "release-mainnet-1.0.0-rc" }

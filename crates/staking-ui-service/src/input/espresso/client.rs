@@ -496,24 +496,14 @@ mod test {
 
     use crate::input::espresso::{
         State,
-        testing::{DEFAULT_TOKEN_SUPPLY, EPOCH_HEIGHT, MemoryStorage, start_pos_network},
+        testing::{DEFAULT_TOKEN_SUPPLY, EPOCH_HEIGHT, MemoryStorage, UPGRADE, start_pos_network},
     };
     use crate::metrics::PrometheusMetrics;
 
     use super::*;
 
     use async_lock::RwLock;
-    use espresso_types::{MaxSupportedVersion, SequencerVersions, traits::PersistenceOptions};
-    use hotshot_query_service::data_source::SqlDataSource;
-    use hotshot_types::{
-        data::EpochNumber,
-        traits::{
-            block_contents::BlockHeader,
-            node_implementation::{ConsensusTime, Versions},
-        },
-    };
-    use portpicker::pick_unused_port;
-    use sequencer::{
+    use espresso_node::{
         api::{
             Options,
             data_source::testing::TestableSequencerDataSource,
@@ -522,10 +512,12 @@ mod test {
         },
         testing::TestConfigBuilder,
     };
+    use espresso_types::traits::PersistenceOptions;
+    use hotshot_query_service::data_source::SqlDataSource;
+    use hotshot_types::{data::EpochNumber, traits::block_contents::BlockHeader};
+    use portpicker::pick_unused_port;
     use surf_disco::{Error, StatusCode};
     use tokio::task::spawn;
-
-    type V = SequencerVersions<MaxSupportedVersion, MaxSupportedVersion>;
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_epochs() {
@@ -576,7 +568,7 @@ mod test {
                         .build(),
                 )
                 .build();
-            let mut network = TestNetwork::new(config, V::new()).await;
+            let mut network = TestNetwork::new(config, UPGRADE).await;
 
             let opt = QueryServiceOptions::new(format!("http://localhost:{port}").parse().unwrap());
             let client = QueryServiceClient::new(opt, DEFAULT_TOKEN_SUPPLY)
@@ -603,7 +595,7 @@ mod test {
             .persistences([persistence.clone()])
             .network_config(TestConfigBuilder::default().build())
             .build();
-        let network = TestNetwork::new(config, V::new()).await;
+        let network = TestNetwork::new(config, UPGRADE).await;
 
         let opt = QueryServiceOptions::new(format!("http://localhost:{port}").parse().unwrap());
         let client = QueryServiceClient::new(opt, DEFAULT_TOKEN_SUPPLY)
@@ -634,7 +626,7 @@ mod test {
             .persistences([persistence.clone()])
             .network_config(TestConfigBuilder::default().build())
             .build();
-        let mut network = TestNetwork::new(config, V::new()).await;
+        let mut network = TestNetwork::new(config, UPGRADE).await;
 
         let opt = QueryServiceOptions {
             polling_interval: if ws {
@@ -694,7 +686,7 @@ mod test {
             .persistences([persistence])
             .network_config(TestConfigBuilder::default().build())
             .build();
-        let mut network = TestNetwork::new(config, V::new()).await;
+        let mut network = TestNetwork::new(config, UPGRADE).await;
 
         // The same stream should pick up exactly where we left off.
         wait_for_leaves(&client, &mut leaves, next_leaf..next_leaf + 5).await;
@@ -811,7 +803,7 @@ mod test {
     }
 
     async fn get_stake_table<P: PersistenceOptions, const NUM_NODES: usize>(
-        network: &TestNetwork<P, NUM_NODES, impl Versions>,
+        network: &TestNetwork<P, NUM_NODES>,
         epoch: EpochNumber,
     ) -> AuthenticatedValidatorMap {
         network

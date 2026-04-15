@@ -16,26 +16,7 @@ use alloy::{
 use async_lock::RwLock;
 use bitvec::vec::BitVec;
 use espresso_contract_deployer::build_signer;
-use espresso_types::{
-    AuthenticatedValidatorMap, ChainConfig, DrbAndHeaderUpgradeVersion, Leaf2, NodeState, PubKey,
-    SeqTypes, SequencerVersions, ValidatedState, traits::PersistenceOptions,
-    v0_3::RegisteredValidator,
-};
-use futures::{Stream, StreamExt, stream};
-use hotshot_query_service::data_source::{SqlDataSource, sql::testing::TmpDb};
-use hotshot_types::{
-    data::{EpochNumber, QuorumProposal2, QuorumProposalWrapper, ViewNumber},
-    drb::DrbResult,
-    simple_certificate::QuorumCertificate2,
-    traits::{
-        node_implementation::ConsensusTime,
-        signature_key::{SignatureKey, StateSignatureKey},
-    },
-    utils::{epoch_from_block_number, is_transition_block, transition_block_for_epoch},
-};
-use jf_signature::schnorr::VerKey;
-use rand::{RngCore, SeedableRng, rngs::StdRng};
-use sequencer::{
+use espresso_node::{
     api::{
         self,
         data_source::testing::TestableSequencerDataSource,
@@ -44,10 +25,27 @@ use sequencer::{
     },
     testing::TestConfigBuilder,
 };
+use espresso_types::{
+    AuthenticatedValidatorMap, ChainConfig, Leaf2, MOCK_SEQUENCER_VERSIONS, NodeState, PubKey,
+    SeqTypes, ValidatedState, traits::PersistenceOptions, v0_3::RegisteredValidator,
+};
+use futures::{Stream, StreamExt, stream};
+use hotshot_query_service::data_source::{SqlDataSource, sql::testing::TmpDb};
+use hotshot_types::{
+    data::{EpochNumber, QuorumProposal2, QuorumProposalWrapper, ViewNumber},
+    drb::DrbResult,
+    simple_certificate::QuorumCertificate2,
+    traits::signature_key::{SignatureKey, StateSignatureKey},
+    utils::{epoch_from_block_number, is_transition_block, transition_block_for_epoch},
+};
+use jf_signature::schnorr::VerKey;
+use rand::{RngCore, SeedableRng, rngs::StdRng};
 use staking_cli::{
     DEV_MNEMONIC,
     demo::{DelegationConfig, StakingTransactions},
 };
+use vbs::version::Version;
+use versions::Upgrade;
 
 use crate::{
     Error, Result,
@@ -64,7 +62,7 @@ use crate::{
     },
 };
 
-type V = SequencerVersions<DrbAndHeaderUpgradeVersion, DrbAndHeaderUpgradeVersion>;
+pub(super) const UPGRADE: Upgrade = Upgrade::trivial(Version { major: 0, minor: 4 });
 
 /// An Espresso client pre-loaded with a stake table and a series of leaves.
 #[derive(Clone, Debug)]
@@ -110,6 +108,8 @@ impl EspressoClient for MockEspressoClient {
                     account,
                     stake_table_key,
                     state_ver_key,
+                    x25519_key: None,
+                    p2p_addr: None,
                     stake,
                     commission: 0,
                     // Self-delegate.
@@ -242,18 +242,26 @@ impl MockEspressoClient {
     }
 
     async fn make_leaf(&self, height: u64, view_number: ViewNumber) -> Leaf2 {
-        let mut block_header = Leaf2::genesis::<V>(&Default::default(), &NodeState::mock())
-            .await
-            .block_header()
-            .clone();
+        let mut block_header = Leaf2::genesis(
+            &Default::default(),
+            &NodeState::mock(),
+            MOCK_SEQUENCER_VERSIONS.base,
+        )
+        .await
+        .block_header()
+        .clone();
         *block_header.height_mut() = height;
         let epoch = epoch_from_block_number(height, self.epoch_height);
         let proposal: QuorumProposalWrapper<SeqTypes> = QuorumProposal2 {
             block_header,
             view_number,
             epoch: Some(EpochNumber::new(epoch)),
-            justify_qc: QuorumCertificate2::genesis::<V>(&Default::default(), &NodeState::mock())
-                .await,
+            justify_qc: QuorumCertificate2::genesis(
+                &Default::default(),
+                &NodeState::mock(),
+                UPGRADE,
+            )
+            .await,
             next_epoch_justify_qc: None,
             upgrade_certificate: None,
             view_change_evidence: None,
@@ -428,7 +436,7 @@ pub const EPOCH_HEIGHT: u64 = 20;
 pub async fn start_pos_network(
     port: u16,
 ) -> (
-    TestNetwork<impl PersistenceOptions, 1, V>,
+    TestNetwork<impl PersistenceOptions, 1>,
     ContractDeployment,
     TmpDb,
 ) {
@@ -487,7 +495,7 @@ pub async fn start_pos_network(
         .network_config(test_config)
         .states([state])
         .build();
-    let network = TestNetwork::new(config, V::new()).await;
+    let network = TestNetwork::new(config, UPGRADE).await;
 
     (network, deployment, storage)
 }
