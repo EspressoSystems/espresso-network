@@ -534,13 +534,21 @@ where
                 })?
                 .map(EpochNumber::new);
 
-            state
+            let stake_table = state
                 .read(|state| state.get_stake_table(epoch).boxed())
                 .await
                 .map_err(|err| node::Error::Custom {
                     message: format!("failed to get stake table for epoch={epoch:?}. err={err:#}"),
                     status: StatusCode::NOT_FOUND,
-                })
+                })?;
+
+            // Convert to legacy format for backward compatibility
+            let legacy_stake_table: Vec<_> = stake_table
+                .into_iter()
+                .map(|peer| peer.to_legacy())
+                .collect();
+
+            Ok(legacy_stake_table)
         }
         .boxed()
     })?
@@ -568,7 +576,7 @@ where
                 })?
                 .map(EpochNumber::new);
 
-            state
+            let da_stake_table = state
                 .read(|state| state.get_da_stake_table(epoch).boxed())
                 .await
                 .map_err(|err| node::Error::Custom {
@@ -576,7 +584,15 @@ where
                         "failed to get DA stake table for epoch={epoch:?}. err={err:#}"
                     ),
                     status: StatusCode::NOT_FOUND,
-                })
+                })?;
+
+            // Convert to legacy format for backward compatibility
+            let legacy_da_stake_table: Vec<_> = da_stake_table
+                .into_iter()
+                .map(|peer| peer.to_legacy())
+                .collect();
+
+            Ok(legacy_da_stake_table)
         }
         .boxed()
     })?

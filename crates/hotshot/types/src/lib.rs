@@ -155,6 +155,18 @@ pub struct PeerConnectInfo {
     pub p2p_addr: NetAddr,
 }
 
+/// Legacy structure of peers' config without connect_info, for backward compatibility.
+#[derive(Clone, Debug, Display, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(bound(deserialize = ""))]
+pub struct PeerConfigLegacy<TYPES: NodeType> {
+    /// The peer's public key and stake value. The key is the BLS Public Key used to
+    /// verify Stake Holder in the application layer.
+    pub stake_table_entry: <TYPES::SignatureKey as SignatureKey>::StakeTableEntry,
+    /// The peer's state public key. This is the Schnorr Public Key used to
+    /// verify HotShot state in the state-prover.
+    pub state_ver_key: TYPES::StateSignatureKey,
+}
+
 /// Structure of peers' config, including public key, stake value, and state key.
 #[derive(Clone, Display, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(bound(deserialize = ""))]
@@ -165,7 +177,7 @@ pub struct PeerConfig<TYPES: NodeType> {
     /// The peer's state public key. This is the Schnorr Public Key used to
     /// verify HotShot state in the state-prover.
     pub state_ver_key: TYPES::StateSignatureKey,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub connect_info: Option<PeerConnectInfo>,
 }
 
@@ -174,6 +186,23 @@ impl<TYPES: NodeType> PeerConfig<TYPES> {
     pub fn test_default() -> Self {
         let default_validator_config = ValidatorConfig::<TYPES>::test_default();
         default_validator_config.public_config()
+    }
+
+    /// Convert to legacy format (without connect_info) for backward compatibility
+    pub fn to_legacy(&self) -> PeerConfigLegacy<TYPES> {
+        PeerConfigLegacy {
+            stake_table_entry: self.stake_table_entry.clone(),
+            state_ver_key: self.state_ver_key.clone(),
+        }
+    }
+
+    /// Convert from legacy format (connect_info will be None)
+    pub fn from_legacy(legacy: PeerConfigLegacy<TYPES>) -> Self {
+        Self {
+            stake_table_entry: legacy.stake_table_entry,
+            state_ver_key: legacy.state_ver_key,
+            connect_info: None,
+        }
     }
 
     /// Serialize a peer's config to bytes
