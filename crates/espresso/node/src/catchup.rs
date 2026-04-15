@@ -1713,6 +1713,10 @@ pub async fn add_fee_accounts_to_state<I: hotshot::traits::NodeImplementation<Se
             (Arc::new(state), delta)
         },
         None => {
+            // If we don't already have a leaf for this view, or if we don't have the view
+            // at all, we can create a new view based on the recovered leaf and add it to
+            // our state map. In this case, we must also add the leaf to the saved leaves
+            // map to ensure consistency.
             let mut state = ValidatedState::from_header(leaf.block_header());
             state.fee_merkle_tree = tree.clone();
             (Arc::new(state), None)
@@ -1756,6 +1760,10 @@ pub async fn add_v2_reward_accounts_to_state<I: hotshot::traits::NodeImplementat
             (Arc::new(state), delta)
         },
         None => {
+            // If we don't already have a leaf for this view, or if we don't have the view
+            // at all, we can create a new view based on the recovered leaf and add it to
+            // our state map. In this case, we must also add the leaf to the saved leaves
+            // map to ensure consistency.
             let mut state = ValidatedState::from_header(leaf.block_header());
             state.reward_merkle_tree_v2 = tree.clone();
             (Arc::new(state), None)
@@ -1799,6 +1807,10 @@ pub async fn add_v1_reward_accounts_to_state<I: hotshot::traits::NodeImplementat
             (Arc::new(state), delta)
         },
         None => {
+            // If we don't already have a leaf for this view, or if we don't have the view
+            // at all, we can create a new view based on the recovered leaf and add it to
+            // our state map. In this case, we must also add the leaf to the saved leaves
+            // map to ensure consistency.
             let mut state = ValidatedState::from_header(leaf.block_header());
             state.reward_merkle_tree_v1 = tree.clone();
             (Arc::new(state), None)
