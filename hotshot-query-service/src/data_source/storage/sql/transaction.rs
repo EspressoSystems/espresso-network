@@ -159,7 +159,7 @@ impl TransactionMode for Read {
         // transactions in read-only mode, and always has serializable concurrency unless we
         // explicitly opt in to dirty reads with a pragma.
         #[cfg(not(feature = "embedded-db"))]
-        conn.execute("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE, READ ONLY, DEFERRABLE")
+        conn.execute("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE, READ ONLY")
             .await?;
 
         Ok(())
