@@ -146,7 +146,7 @@ pub struct NsTableBuilder {
 }
 
 /// Index of a transaction.
-pub type Index = hotshot_query_service::availability::TransactionIndex<crate::SeqTypes>;
+pub type Index = hotshot_query_service_types::availability::TransactionIndex<crate::SeqTypes>;
 
 /// Index for an entry in a ns table.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]

@@ -38,7 +38,6 @@ use crate::{
     },
     explorer::traits::{ExplorerHeader, ExplorerTransaction},
     merklized_state::MerklizedState,
-    types::HeightIndexed,
 };
 
 pub type MockHeader = TestBlockHeader;
@@ -101,12 +100,6 @@ impl ExplorerTransaction<MockTypes> for MockTransaction {
 
     fn payload_size(&self) -> u64 {
         self.bytes().len() as u64
-    }
-}
-
-impl HeightIndexed for MockHeader {
-    fn height(&self) -> u64 {
-        self.block_number
     }
 }
 

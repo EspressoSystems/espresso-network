@@ -1,5 +1,5 @@
 use committable::{Commitment, Committable};
-use hotshot_query_service::explorer::ExplorerTransaction;
+use hotshot_query_service_types::explorer::traits::ExplorerTransaction;
 use hotshot_types::traits::block_contents::Transaction as HotShotTransaction;
 use serde::{Deserialize, Deserializer, de::Error};
 
