@@ -11,7 +11,7 @@ pub mod state;
 pub mod vid;
 pub mod vote;
 
-mod proposal;
+pub mod proposal;
 
 #[cfg(test)]
 mod tests;
