@@ -512,6 +512,9 @@ impl Transaction<Prune> {
             .await
             .context("deleting transactions")?;
         tracing::debug!(rows_affected = res.rows_affected(), "pruned transactions");
+        if let Some(d) = delay {
+            sleep(d).await;
+        }
 
         let res = query("DELETE FROM leaf2 WHERE height <= $1")
             .bind(height as i64)
@@ -519,6 +522,9 @@ impl Transaction<Prune> {
             .await
             .context("deleting leaf2")?;
         tracing::debug!(rows_affected = res.rows_affected(), "pruned leaf2");
+        if let Some(d) = delay {
+            sleep(d).await;
+        }
 
         let res = query("DELETE FROM header WHERE height <= $1")
             .bind(height as i64)
@@ -569,6 +575,8 @@ impl Transaction<Prune> {
         state_tables: Vec<String>,
         height: u64,
     ) -> anyhow::Result<()> {
+        let delay = prune_slow_delay();
+
         for state_table in state_tables {
             self.execute(
                 query(&format!(
@@ -585,6 +593,9 @@ impl Transaction<Prune> {
                 .bind(height as i64),
             )
             .await?;
+            if let Some(d) = delay {
+                sleep(d).await;
+            }
         }
 
         Ok(())
