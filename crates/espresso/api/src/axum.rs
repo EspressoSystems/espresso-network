@@ -127,12 +127,18 @@ async fn serve_openapi_spec(Extension(api): Extension<OpenApi>) -> Json<OpenApi>
 /// Requests to `/rewards/...` get rewritten to `/v2/rewards/...`
 /// Paths already prefixed with `/v1` or `/v2` are left unchanged
 async fn rewrite_root_to_v2(mut req: Request, next: Next) -> Response {
-    let path = req.uri().path();
+    let uri = req.uri().clone();
+    let path = uri.path();
 
     // Only rewrite unversioned paths (not starting with /v1 or /v2)
     if !path.starts_with("/v1") && !path.starts_with("/v2") && path != "/" {
         let new_path = format!("/v2{}", path);
-        if let Ok(new_uri) = Uri::builder().path_and_query(new_path).build() {
+        let pq = if let Some(q) = uri.query() {
+            format!("{}?{}", new_path, q)
+        } else {
+            new_path
+        };
+        if let Ok(new_uri) = Uri::builder().path_and_query(pq).build() {
             *req.uri_mut() = new_uri;
         }
     }
