@@ -16,7 +16,7 @@ use clap_serde_derive::ClapSerde;
 use hotshot_contract_adapter::sol_types::{
     EspToken::{self, EspTokenEvents},
     RewardClaim::RewardClaimEvents,
-    StakeTableV2::StakeTableV2Events,
+    StakeTableV3::StakeTableV3Events,
 };
 use hotshot_types::{
     light_client::{StateKeyPair, StateVerKey},
@@ -115,53 +115,65 @@ fn exit(msg: impl AsRef<str>) -> ! {
 // foundry. We instead format those types nicely with tagged base64.
 fn decode_and_display_logs(logs: &[Log]) {
     for log in logs {
-        if let Ok(decoded) = StakeTableV2Events::decode_log(log.as_ref()) {
+        if let Ok(decoded) = StakeTableV3Events::decode_log(log.as_ref()) {
             match &decoded.data {
-                StakeTableV2Events::ValidatorRegistered(e) => output_success(format!(
+                StakeTableV3Events::ValidatorRegistered(e) => output_success(format!(
                     "event: ValidatorRegistered {{ account: {}, blsVk: {}, schnorrVk: {}, \
                      commission: {} }}",
                     e.account,
-                    BLSPubKey::from(e.blsVk),
-                    StateVerKey::from(e.schnorrVk),
+                    BLSPubKey::from(e.blsVk.clone()),
+                    StateVerKey::from(e.schnorrVk.clone()),
                     e.commission
                 )),
-                StakeTableV2Events::ValidatorRegisteredV2(e) => output_success(format!(
+                StakeTableV3Events::ValidatorRegisteredV2(e) => output_success(format!(
                     "event: ValidatorRegisteredV2 {{ account: {}, blsVK: {}, schnorrVK: {}, \
                      commission: {}, metadataUri: {} }}",
                     e.account,
-                    BLSPubKey::from(e.blsVK),
-                    StateVerKey::from(e.schnorrVK),
+                    BLSPubKey::from(e.blsVK.clone()),
+                    StateVerKey::from(e.schnorrVK.clone()),
                     e.commission,
                     e.metadataUri
                 )),
-                StakeTableV2Events::Delegated(e) => output_success(format!("event: {e:?}")),
-                StakeTableV2Events::Undelegated(e) => output_success(format!("event: {e:?}")),
-                StakeTableV2Events::UndelegatedV2(e) => output_success(format!("event: {e:?}")),
-                StakeTableV2Events::ValidatorExit(e) => output_success(format!("event: {e:?}")),
-                StakeTableV2Events::ValidatorExitV2(e) => output_success(format!("event: {e:?}")),
-                StakeTableV2Events::ConsensusKeysUpdated(e) => output_success(format!(
+                StakeTableV3Events::ValidatorRegisteredV3(e) => output_success(format!(
+                    "event: ValidatorRegisteredV3 {{ account: {}, commission: {}, metadataUri: \
+                     {}, x25519Key: {}, p2pAddr: {} }}",
+                    e.account, e.commission, e.metadataUri, e.x25519Key, e.p2pAddr
+                )),
+                StakeTableV3Events::Delegated(e) => output_success(format!("event: {e:?}")),
+                StakeTableV3Events::Undelegated(e) => output_success(format!("event: {e:?}")),
+                StakeTableV3Events::UndelegatedV2(e) => output_success(format!("event: {e:?}")),
+                StakeTableV3Events::ValidatorExit(e) => output_success(format!("event: {e:?}")),
+                StakeTableV3Events::ValidatorExitV2(e) => output_success(format!("event: {e:?}")),
+                StakeTableV3Events::ConsensusKeysUpdated(e) => output_success(format!(
                     "event: ConsensusKeysUpdated {{ account: {}, blsVK: {}, schnorrVK: {} }}",
                     e.account,
-                    BLSPubKey::from(e.blsVK),
-                    StateVerKey::from(e.schnorrVK)
+                    BLSPubKey::from(e.blsVK.clone()),
+                    StateVerKey::from(e.schnorrVK.clone())
                 )),
-                StakeTableV2Events::ConsensusKeysUpdatedV2(e) => output_success(format!(
+                StakeTableV3Events::ConsensusKeysUpdatedV2(e) => output_success(format!(
                     "event: ConsensusKeysUpdatedV2 {{ account: {}, blsVK: {}, schnorrVK: {} }}",
                     e.account,
-                    BLSPubKey::from(e.blsVK),
-                    StateVerKey::from(e.schnorrVK)
+                    BLSPubKey::from(e.blsVK.clone()),
+                    StateVerKey::from(e.schnorrVK.clone())
                 )),
-                StakeTableV2Events::CommissionUpdated(e) => output_success(format!("event: {e:?}")),
-                StakeTableV2Events::MetadataUriUpdated(e) => output_success(format!(
+                StakeTableV3Events::CommissionUpdated(e) => output_success(format!("event: {e:?}")),
+                StakeTableV3Events::MetadataUriUpdated(e) => output_success(format!(
                     "event: MetadataUriUpdated {{ validator: {}, metadataUri: {} }}",
                     e.validator, e.metadataUri
                 )),
-                StakeTableV2Events::Withdrawal(e) => output_success(format!("event: {e:?}")),
-                StakeTableV2Events::WithdrawalClaimed(e) => output_success(format!("event: {e:?}")),
-                StakeTableV2Events::ValidatorExitClaimed(e) => {
+                StakeTableV3Events::Withdrawal(e) => output_success(format!("event: {e:?}")),
+                StakeTableV3Events::WithdrawalClaimed(e) => output_success(format!("event: {e:?}")),
+                StakeTableV3Events::ValidatorExitClaimed(e) => {
                     output_success(format!("event: {e:?}"))
                 },
-
+                StakeTableV3Events::X25519KeyUpdated(e) => output_success(format!(
+                    "event: X25519KeyUpdated {{ validator: {}, x25519Key: {} }}",
+                    e.validator, e.x25519Key
+                )),
+                StakeTableV3Events::P2pAddrUpdated(e) => output_success(format!(
+                    "event: P2pAddrUpdated {{ validator: {}, p2pAddr: {} }}",
+                    e.validator, e.p2pAddr
+                )),
                 _ => {},
             }
         } else if let Ok(decoded) = EspTokenEvents::decode_log(log.as_ref()) {
@@ -624,12 +636,12 @@ pub async fn run() -> Result<()> {
                      deprecated."
                 );
             }
-            if matches!(version, StakeTableContractVersion::V3) {
-                if x25519_key.is_none() || p2p_addr.is_none() {
-                    anyhow::bail!(
-                        "V3 stake table requires --x25519-key and --p2p-addr for registration"
-                    );
-                }
+            if matches!(version, StakeTableContractVersion::V3)
+                && (x25519_key.is_none() || p2p_addr.is_none())
+            {
+                anyhow::bail!(
+                    "V3 stake table requires --x25519-key and --p2p-addr for registration"
+                );
             }
             if !config.export_calldata {
                 wallet.as_ref().ok_or_else(&require_wallet)?;

@@ -4155,7 +4155,7 @@ mod test {
             .unwrap();
 
         let staking_priv_keys = network_config.staking_priv_keys();
-        let account = staking_priv_keys[0].0.clone();
+        let account = staking_priv_keys[0].signer.clone();
         let address = account.address();
 
         let block_height = 60;

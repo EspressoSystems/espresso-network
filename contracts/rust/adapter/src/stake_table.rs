@@ -17,9 +17,12 @@ use jf_signature::{
     schnorr,
 };
 
-use crate::sol_types::{
-    StakeTableV2::{self, ConsensusKeysUpdatedV2, ValidatorRegisteredV2, getVersionReturn},
-    StakeTableV3, *,
+use crate::{
+    bindings::stake_table_v3,
+    sol_types::{
+        StakeTableV2::{self, ConsensusKeysUpdatedV2, ValidatorRegisteredV2, getVersionReturn},
+        StakeTableV3, *,
+    },
 };
 
 // Allows us to implement From on existing Bytes type
@@ -34,16 +37,28 @@ pub enum StakeTableContractVersion {
     V3,
 }
 
+fn version_from_major(major: u8) -> anyhow::Result<StakeTableContractVersion> {
+    match major {
+        1 => Ok(StakeTableContractVersion::V1),
+        2 => Ok(StakeTableContractVersion::V2),
+        3 => Ok(StakeTableContractVersion::V3),
+        _ => anyhow::bail!("Unsupported stake table contract version: {major}"),
+    }
+}
+
 impl TryFrom<getVersionReturn> for StakeTableContractVersion {
     type Error = anyhow::Error;
 
     fn try_from(value: getVersionReturn) -> anyhow::Result<Self> {
-        match value.majorVersion {
-            1 => Ok(StakeTableContractVersion::V1),
-            2 => Ok(StakeTableContractVersion::V2),
-            3 => Ok(StakeTableContractVersion::V3),
-            _ => anyhow::bail!("Unsupported stake table contract version: {:?}", value),
-        }
+        version_from_major(value.majorVersion)
+    }
+}
+
+impl TryFrom<StakeTableV3::getVersionReturn> for StakeTableContractVersion {
+    type Error = anyhow::Error;
+
+    fn try_from(value: StakeTableV3::getVersionReturn) -> anyhow::Result<Self> {
+        version_from_major(value.majorVersion)
     }
 }
 
@@ -69,6 +84,18 @@ impl From<EdOnBN254PointSol> for StateVerKey {
     fn from(value: EdOnBN254PointSol) -> Self {
         let point: ark_ed_on_bn254::EdwardsAffine = value.into();
         Self::from(point)
+    }
+}
+
+impl From<stake_table_v3::BN254::G2Point> for BLSPubKey {
+    fn from(value: stake_table_v3::BN254::G2Point) -> Self {
+        G2PointSol::from(value).into()
+    }
+}
+
+impl From<stake_table_v3::EdOnBN254::EdOnBN254Point> for StateVerKey {
+    fn from(value: stake_table_v3::EdOnBN254::EdOnBN254Point) -> Self {
+        EdOnBN254PointSol::from(value).into()
     }
 }
 

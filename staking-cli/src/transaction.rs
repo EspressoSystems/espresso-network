@@ -20,14 +20,11 @@ use hotshot_contract_adapter::{
         EspToken::{EspTokenErrors, approveCall, transferCall},
         G1PointSol, G2PointSol,
         RewardClaim::{RewardClaimErrors, claimRewardsCall},
-        StakeTableV2::{
-            StakeTableV2Errors, claimValidatorExitCall, claimWithdrawalCall, delegateCall,
-            deregisterValidatorCall, registerValidatorCall, registerValidatorV2Call,
-            undelegateCall, updateCommissionCall, updateConsensusKeysCall,
-            updateConsensusKeysV2Call, updateMetadataUriCall,
-        },
         StakeTableV3::{
-            StakeTableV3Errors, registerValidatorV3Call, updateNetworkConfigCall,
+            StakeTableV3Errors, claimValidatorExitCall, claimWithdrawalCall, delegateCall,
+            deregisterValidatorCall, registerValidatorCall, registerValidatorV2Call,
+            registerValidatorV3Call, undelegateCall, updateCommissionCall, updateConsensusKeysCall,
+            updateConsensusKeysV2Call, updateMetadataUriCall, updateNetworkConfigCall,
             updateP2pAddrCall, updateX25519KeyCall,
         },
     },
@@ -216,8 +213,8 @@ impl Transaction {
                 StakeTableContractVersion::V1 => (
                     stake_table,
                     registerValidatorCall::from((
-                        G2PointSol::from(payload.bls_vk),
-                        EdOnBN254PointSol::from(payload.schnorr_vk),
+                        G2PointSol::from(payload.bls_vk).into(),
+                        EdOnBN254PointSol::from(payload.schnorr_vk).into(),
                         G1PointSol::from(payload.bls_signature).into(),
                         commission.to_evm(),
                     ))
@@ -228,8 +225,8 @@ impl Transaction {
                 StakeTableContractVersion::V2 => (
                     stake_table,
                     registerValidatorV2Call::from((
-                        G2PointSol::from(payload.bls_vk),
-                        EdOnBN254PointSol::from(payload.schnorr_vk),
+                        G2PointSol::from(payload.bls_vk).into(),
+                        EdOnBN254PointSol::from(payload.schnorr_vk).into(),
                         G1PointSol::from(payload.bls_signature).into(),
                         StateSignatureSol::from(payload.schnorr_signature).into(),
                         commission.to_evm(),
@@ -270,8 +267,8 @@ impl Transaction {
                 StakeTableContractVersion::V1 => (
                     stake_table,
                     updateConsensusKeysCall::from((
-                        G2PointSol::from(payload.bls_vk),
-                        EdOnBN254PointSol::from(payload.schnorr_vk),
+                        G2PointSol::from(payload.bls_vk).into(),
+                        EdOnBN254PointSol::from(payload.schnorr_vk).into(),
                         G1PointSol::from(payload.bls_signature).into(),
                     ))
                     .abi_encode()
@@ -281,8 +278,8 @@ impl Transaction {
                 StakeTableContractVersion::V2 | StakeTableContractVersion::V3 => (
                     stake_table,
                     updateConsensusKeysV2Call::from((
-                        G2PointSol::from(payload.bls_vk),
-                        EdOnBN254PointSol::from(payload.schnorr_vk),
+                        G2PointSol::from(payload.bls_vk).into(),
+                        EdOnBN254PointSol::from(payload.schnorr_vk).into(),
                         G1PointSol::from(payload.bls_signature).into(),
                         StateSignatureSol::from(payload.schnorr_signature).into(),
                     ))
@@ -474,10 +471,13 @@ impl Transaction {
             ..
         } = self
         {
-            use hotshot_contract_adapter::sol_types::StakeTableV2;
-            let st = StakeTableV2::new(*stake_table, provider);
+            use hotshot_contract_adapter::sol_types::StakeTableV3;
+            let st = StakeTableV3::new(*stake_table, provider);
             let version: StakeTableContractVersion = st.getVersion().call().await?.try_into()?;
-            if let StakeTableContractVersion::V2 = version {
+            if matches!(
+                version,
+                StakeTableContractVersion::V2 | StakeTableContractVersion::V3
+            ) {
                 let min_amount = st.minDelegateAmount().call().await?;
                 if amount < &min_amount {
                     bail!(
@@ -505,8 +505,8 @@ impl Transaction {
             | Self::UpdateConsensusKeys { .. }
             | Self::DeregisterValidator { .. }
             | Self::UpdateCommission { .. }
-            | Self::UpdateMetadataUri { .. } => result.maybe_decode_revert::<StakeTableV2Errors>(),
-            Self::UpdateNetworkConfig { .. }
+            | Self::UpdateMetadataUri { .. }
+            | Self::UpdateNetworkConfig { .. }
             | Self::UpdateX25519Key { .. }
             | Self::UpdateP2pAddr { .. } => result.maybe_decode_revert::<StakeTableV3Errors>(),
         }

@@ -6,7 +6,7 @@ use alloy::{
 use anyhow::Result;
 use hotshot_contract_adapter::{
     evm::DecodeRevert as _,
-    sol_types::StakeTableV2::{self, StakeTableV2Errors},
+    sol_types::StakeTableV3::{self, StakeTableV3Errors},
     stake_table::StakeTableContractVersion,
 };
 
@@ -20,12 +20,12 @@ pub async fn update_commission(
     stake_table_addr: Address,
     new_commission: Commission,
 ) -> Result<PendingTransactionBuilder<Ethereum>> {
-    let stake_table = StakeTableV2::new(stake_table_addr, provider);
+    let stake_table = StakeTableV3::new(stake_table_addr, provider);
     stake_table
         .updateCommission(new_commission.to_evm())
         .send()
         .await
-        .maybe_decode_revert::<StakeTableV2Errors>()
+        .maybe_decode_revert::<StakeTableV3Errors>()
 }
 
 /// Fetch validator commission rate.
@@ -36,7 +36,7 @@ pub async fn fetch_commission(
     stake_table_addr: Address,
     validator: Address,
 ) -> Result<Commission> {
-    let stake_table = StakeTableV2::new(stake_table_addr, provider);
+    let stake_table = StakeTableV3::new(stake_table_addr, provider);
     let version: StakeTableContractVersion = stake_table.getVersion().call().await?.try_into()?;
     if matches!(version, StakeTableContractVersion::V1) {
         anyhow::bail!("fetching commission is not supported with stake table V1");
@@ -64,8 +64,8 @@ mod test {
     use hotshot_contract_adapter::{
         evm::DecodeRevert as _,
         sol_types::{
-            EdOnBN254PointSol, G1PointSol, G2PointSol, StakeTableV2::StakeTableV2Errors,
-            StakeTableV3,
+            EdOnBN254PointSol, G1PointSol, G2PointSol,
+            StakeTableV3::{self, StakeTableV3Errors},
         },
         stake_table::{StateSignatureSol, sign_address_bls, sign_address_schnorr},
     };
@@ -105,14 +105,20 @@ mod test {
         .await?;
 
         let event = receipt
-            .decoded_log::<StakeTableV2::ValidatorRegisteredV2>()
+            .decoded_log::<StakeTableV3::ValidatorRegisteredV2>()
             .unwrap();
         assert_eq!(event.account, validator_address);
         assert_eq!(event.commission, system.commission.to_evm());
         assert_eq!(event.metadataUri, "https://example.com/metadata");
 
-        assert_eq!(event.blsVK, system.bls_key_pair.ver_key().into());
-        assert_eq!(event.schnorrVK, system.state_key_pair.ver_key().into());
+        assert_eq!(
+            event.blsVK,
+            G2PointSol::from(system.bls_key_pair.ver_key()).into()
+        );
+        assert_eq!(
+            event.schnorrVK,
+            EdOnBN254PointSol::from(system.state_key_pair.ver_key()).into()
+        );
 
         event.data.authenticate()?;
         Ok(())
@@ -138,13 +144,13 @@ mod test {
         match version {
             StakeTableContractVersion::V1 => {
                 let event = receipt
-                    .decoded_log::<StakeTableV2::ValidatorExit>()
+                    .decoded_log::<StakeTableV3::ValidatorExit>()
                     .unwrap();
                 assert_eq!(event.validator, system.deployer_address);
             },
             StakeTableContractVersion::V2 | StakeTableContractVersion::V3 => {
                 let event = receipt
-                    .decoded_log::<StakeTableV2::ValidatorExitV2>()
+                    .decoded_log::<StakeTableV3::ValidatorExitV2>()
                     .unwrap();
                 assert_eq!(event.validator, system.deployer_address);
                 let block = system
@@ -166,8 +172,8 @@ mod test {
         system.register_validator().await?;
         let validator_address = system.deployer_address;
         let mut rng = StdRng::from_seed([43u8; 32]);
-        let (_, new_bls, new_schnorr) = TestSystem::gen_keys(&mut rng);
-        let payload = NodeSignatures::create(validator_address, &new_bls, &new_schnorr);
+        let keys = TestSystem::gen_keys(&mut rng);
+        let payload = NodeSignatures::create(validator_address, &keys.bls, &keys.state);
 
         let receipt = Transaction::UpdateConsensusKeys {
             stake_table: system.stake_table,
@@ -180,12 +186,15 @@ mod test {
         .await?;
 
         let event = receipt
-            .decoded_log::<StakeTableV2::ConsensusKeysUpdatedV2>()
+            .decoded_log::<StakeTableV3::ConsensusKeysUpdatedV2>()
             .unwrap();
         assert_eq!(event.account, system.deployer_address);
 
-        assert_eq!(event.blsVK, new_bls.ver_key().into());
-        assert_eq!(event.schnorrVK, new_schnorr.ver_key().into());
+        assert_eq!(event.blsVK, G2PointSol::from(keys.bls.ver_key()).into());
+        assert_eq!(
+            event.schnorrVK,
+            EdOnBN254PointSol::from(keys.state.ver_key()).into()
+        );
 
         event.data.authenticate()?;
 
@@ -197,7 +206,7 @@ mod test {
         let system = TestSystem::deploy().await?;
 
         // Set commission update interval to 1 second for testing
-        let stake_table = StakeTableV2::new(system.stake_table, &system.provider);
+        let stake_table = StakeTableV3::new(system.stake_table, &system.provider);
         stake_table
             .setMinCommissionUpdateInterval(U256::from(1)) // 1 second
             .send()
@@ -222,7 +231,7 @@ mod test {
         .await?;
 
         let event = receipt
-            .decoded_log::<StakeTableV2::CommissionUpdated>()
+            .decoded_log::<StakeTableV3::CommissionUpdated>()
             .unwrap();
         assert_eq!(event.validator, validator_address);
         assert_eq!(event.newCommission, new_commission.to_evm());
@@ -252,28 +261,24 @@ mod test {
             /* polling_interval */ None,
         );
         let validator_address = provider.default_signer_address();
-        let (_, bls_key_pair, schnorr_key_pair) =
-            TestSystem::gen_keys(&mut StdRng::from_seed([1u8; 32]));
-        let (_, _, other_schnorr_key_pair) =
-            TestSystem::gen_keys(&mut StdRng::from_seed([2u8; 32]));
+        let keys = TestSystem::gen_keys(&mut StdRng::from_seed([1u8; 32]));
+        let other_keys = TestSystem::gen_keys(&mut StdRng::from_seed([2u8; 32]));
 
-        let bls_vk = G2PointSol::from(bls_key_pair.ver_key());
-        let bls_sig = G1PointSol::from(sign_address_bls(&bls_key_pair, validator_address));
-        let schnorr_vk = EdOnBN254PointSol::from(schnorr_key_pair.ver_key());
+        let bls_vk = G2PointSol::from(keys.bls.ver_key());
+        let bls_sig = G1PointSol::from(sign_address_bls(&keys.bls, validator_address));
+        let schnorr_vk = EdOnBN254PointSol::from(keys.state.ver_key());
 
         // create a valid schnorr signature with the *wrong* key
-        let schnorr_sig_other_key = StateSignatureSol::from(sign_address_schnorr(
-            &other_schnorr_key_pair,
-            validator_address,
-        ));
+        let schnorr_sig_other_key =
+            StateSignatureSol::from(sign_address_schnorr(&other_keys.state, validator_address));
 
-        let stake_table = StakeTableV2::new(system.stake_table, provider);
+        let stake_table = StakeTableV3::new(system.stake_table, provider);
 
         // register a validator with the schnorr sig from another key
         let receipt = stake_table
             .registerValidatorV2(
-                bls_vk,
-                schnorr_vk,
+                bls_vk.into(),
+                schnorr_vk.into(),
                 bls_sig.into(),
                 schnorr_sig_other_key.into(),
                 Commission::try_from("12.34")?.to_evm(),
@@ -281,7 +286,7 @@ mod test {
             )
             .send()
             .await
-            .maybe_decode_revert::<StakeTableV2Errors>()?
+            .maybe_decode_revert::<StakeTableV3Errors>()?
             .assert_success()
             .await?;
 
@@ -305,7 +310,7 @@ mod test {
     /// Unauthenticated consensus key updates (with incorrect schnorr signature) are removed.
     #[tokio::test]
     async fn test_integration_unauthenticated_update_consensus_keys_events_removed() -> Result<()> {
-        let system = TestSystem::deploy().await?;
+        let system = TestSystem::deploy_version(StakeTableContractVersion::V2).await?;
 
         // register a validator with correct signature
         system.register_validator().await?;
@@ -313,30 +318,31 @@ mod test {
 
         // NOTE: we can't register a validator with a bad BLS signature because the contract will revert
 
-        let (_, new_bls_key_pair, new_schnorr_key_pair) =
-            TestSystem::gen_keys(&mut StdRng::from_seed([1u8; 32]));
-        let (_, _, other_schnorr_key_pair) =
-            TestSystem::gen_keys(&mut StdRng::from_seed([2u8; 32]));
+        let new_keys = TestSystem::gen_keys(&mut StdRng::from_seed([1u8; 32]));
+        let other_keys = TestSystem::gen_keys(&mut StdRng::from_seed([2u8; 32]));
 
-        let bls_vk = G2PointSol::from(new_bls_key_pair.ver_key());
-        let bls_sig = G1PointSol::from(sign_address_bls(&new_bls_key_pair, validator_address));
-        let schnorr_vk = EdOnBN254PointSol::from(new_schnorr_key_pair.ver_key());
+        let bls_vk = G2PointSol::from(new_keys.bls.ver_key());
+        let bls_sig = G1PointSol::from(sign_address_bls(&new_keys.bls, validator_address));
+        let schnorr_vk = EdOnBN254PointSol::from(new_keys.state.ver_key());
 
         // create a valid schnorr signature with the *wrong* key
-        let schnorr_sig_other_key = StateSignatureSol::from(sign_address_schnorr(
-            &other_schnorr_key_pair,
-            validator_address,
-        ))
-        .into();
+        let schnorr_sig_other_key =
+            StateSignatureSol::from(sign_address_schnorr(&other_keys.state, validator_address))
+                .into();
 
-        let stake_table = StakeTableV2::new(system.stake_table, system.provider);
+        let stake_table = StakeTableV3::new(system.stake_table, system.provider);
 
         // update consensus keys with the schnorr sig from another key
         let receipt = stake_table
-            .updateConsensusKeysV2(bls_vk, schnorr_vk, bls_sig.into(), schnorr_sig_other_key)
+            .updateConsensusKeysV2(
+                bls_vk.into(),
+                schnorr_vk.into(),
+                bls_sig.into(),
+                schnorr_sig_other_key,
+            )
             .send()
             .await
-            .maybe_decode_revert::<StakeTableV2Errors>()?
+            .maybe_decode_revert::<StakeTableV3Errors>()?
             .assert_success()
             .await?;
 
@@ -372,7 +378,7 @@ mod test {
         .await?;
 
         let event = receipt
-            .decoded_log::<StakeTableV2::MetadataUriUpdated>()
+            .decoded_log::<StakeTableV3::MetadataUriUpdated>()
             .unwrap();
         assert_eq!(event.validator, system.deployer_address);
         assert_eq!(event.metadataUri, new_uri.to_string());
@@ -406,7 +412,7 @@ mod test {
         .await?;
 
         let event = receipt
-            .decoded_log::<StakeTableV2::ValidatorRegisteredV2>()
+            .decoded_log::<StakeTableV3::ValidatorRegisteredV2>()
             .unwrap();
         assert_eq!(event.account, validator_address);
         assert_eq!(event.commission, system.commission.to_evm());
@@ -454,7 +460,7 @@ mod test {
         let system = TestSystem::deploy_version(StakeTableContractVersion::V3).await?;
         system.register_validator().await?;
 
-        let x25519_key = x25519::PublicKey::try_from(&[42u8; 32][..]).unwrap();
+        let x25519_key = x25519::Keypair::generate().unwrap().public_key();
 
         let receipt = Transaction::UpdateX25519Key {
             stake_table: system.stake_table,
@@ -516,7 +522,7 @@ mod test {
         .await?;
 
         let event = receipt
-            .decoded_log::<StakeTableV2::MetadataUriUpdated>()
+            .decoded_log::<StakeTableV3::MetadataUriUpdated>()
             .unwrap();
         assert_eq!(event.validator, system.deployer_address);
         assert_eq!(event.metadataUri, "");

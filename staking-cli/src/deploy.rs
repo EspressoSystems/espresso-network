@@ -29,7 +29,7 @@ use espresso_types::{
 use hotshot_contract_adapter::{
     sol_types::{
         EspToken::{self, EspTokenInstance},
-        LightClientV3Mock, StakeTableV2,
+        LightClientV3Mock, StakeTableV3,
     },
     stake_table::StakeTableContractVersion,
 };
@@ -42,7 +42,7 @@ use url::Url;
 use warp::{Filter, http::StatusCode};
 
 use crate::{
-    BLSKeyPair, DEV_MNEMONIC, parse::Commission, receipt::ReceiptExt as _,
+    BLSKeyPair, DEV_MNEMONIC, demo::StakingKeySet, parse::Commission, receipt::ReceiptExt as _,
     registration::fetch_commission, signature::NodeSignatures, transaction::Transaction,
 };
 
@@ -217,6 +217,7 @@ pub struct TestSystem {
     pub port: Option<u16>,
     pub bls_key_pair: BLSKeyPair,
     pub state_key_pair: StateKeyPair,
+    pub x25519_keypair: x25519::Keypair,
     pub commission: Commission,
     pub approval_amount: U256,
     pub version: StakeTableContractVersion,
@@ -227,15 +228,14 @@ pub struct TestSystem {
 }
 
 impl TestSystem {
-    /// Note: Generates random keys, the Ethereum key won't match the deployer key.
-    pub fn gen_keys(
-        rng: &mut (impl RngCore + CryptoRng),
-    ) -> (PrivateKeySigner, BLSKeyPair, StateKeyPair) {
-        (
-            PrivateKeySigner::random_with(rng),
-            BLSKeyPair::generate(rng),
-            StateKeyPair::generate_from_seed(rng.r#gen()),
-        )
+    /// Generate a random key set. The Ethereum key won't match any deployer key.
+    pub fn gen_keys(rng: &mut (impl RngCore + CryptoRng)) -> StakingKeySet {
+        StakingKeySet {
+            signer: PrivateKeySigner::random_with(rng),
+            bls: BLSKeyPair::generate(rng),
+            state: StateKeyPair::generate_from_seed(rng.r#gen()),
+            x25519: x25519::Keypair::generated_from_seed_indexed(rng.r#gen(), 0).unwrap(),
+        }
     }
 
     pub async fn register_validator(&self) -> Result<()> {
@@ -247,7 +247,7 @@ impl TestSystem {
         let metadata_uri = "https://example.com/metadata".parse()?;
         let (x25519_key, p2p_addr) = match self.version {
             StakeTableContractVersion::V3 => (
-                Some(x25519::PublicKey::try_from(&[42u8; 32][..]).unwrap()),
+                Some(self.x25519_keypair.public_key()),
                 Some("127.0.0.1:8080".parse().unwrap()),
             ),
             _ => (None, None),
@@ -329,7 +329,7 @@ impl TestSystem {
     }
 
     pub async fn get_min_commission_increase_interval(&self) -> Result<U256> {
-        let stake_table = StakeTableV2::new(self.stake_table, &self.provider);
+        let stake_table = StakeTableV3::new(self.stake_table, &self.provider);
         let interval = stake_table.minCommissionIncreaseInterval().call().await?;
         Ok(interval)
     }
@@ -363,7 +363,7 @@ impl TestSystem {
     }
 
     pub async fn set_min_delegate_amount(&self, amount: U256) -> Result<()> {
-        let stake_table = StakeTableV2::new(self.stake_table, &self.provider);
+        let stake_table = StakeTableV3::new(self.stake_table, &self.provider);
         stake_table
             .setMinDelegateAmount(amount)
             .send()
@@ -374,7 +374,7 @@ impl TestSystem {
     }
 
     pub async fn setup_reward_claim_mock(&self, balance: U256) -> Result<Url> {
-        let stake_table = StakeTableV2::new(self.stake_table, &self.provider);
+        let stake_table = StakeTableV3::new(self.stake_table, &self.provider);
         let light_client_addr = stake_table.lightClient().call().await?;
         let light_client = LightClientV3Mock::new(light_client_addr, &self.provider);
 
@@ -515,7 +515,7 @@ impl TestSystem {
             .await?;
 
         let mut rng = StdRng::from_seed([42u8; 32]);
-        let (_, bls_key_pair, state_key_pair) = Self::gen_keys(&mut rng);
+        let keys = Self::gen_keys(&mut rng);
 
         Ok(Self {
             provider,
@@ -527,8 +527,9 @@ impl TestSystem {
             exit_escrow_period,
             rpc_url,
             port: Some(port),
-            bls_key_pair,
-            state_key_pair,
+            bls_key_pair: keys.bls,
+            state_key_pair: keys.state,
+            x25519_keypair: keys.x25519,
             commission: Commission::try_from("12.34")?,
             approval_amount,
             version: stake_table_contract_version,
@@ -570,7 +571,7 @@ impl TestSystem {
             .await?;
 
         let mut rng = StdRng::from_seed([42u8; 32]);
-        let (_, bls_key_pair, state_key_pair) = Self::gen_keys(&mut rng);
+        let keys = Self::gen_keys(&mut rng);
 
         Ok(Self {
             provider,
@@ -582,8 +583,9 @@ impl TestSystem {
             exit_escrow_period,
             rpc_url,
             port: None,
-            bls_key_pair,
-            state_key_pair,
+            bls_key_pair: keys.bls,
+            state_key_pair: keys.state,
+            x25519_keypair: keys.x25519,
             commission: Commission::try_from("12.34")?,
             approval_amount,
             version: StakeTableContractVersion::V3,
@@ -599,7 +601,7 @@ mod test {
     #[tokio::test]
     async fn test_deploy() -> Result<()> {
         let system = TestSystem::deploy().await?;
-        let stake_table = StakeTableV2::new(system.stake_table, &system.provider);
+        let stake_table = StakeTableV3::new(system.stake_table, &system.provider);
         // sanity check that we can fetch the exit escrow period
         assert_eq!(
             stake_table.exitEscrowPeriod().call().await?,
