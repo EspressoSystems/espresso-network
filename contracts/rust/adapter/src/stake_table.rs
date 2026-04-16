@@ -424,10 +424,10 @@ mod proptest_p2p_addr {
             ("[a-z]{1,5}", 1..65535u16).prop_map(|(h, p)| format!(" {h}:{p} ")),
             // Double colon before port
             "[a-z]{1,5}".prop_map(|h| format!("{h}::8080")),
-            // Very long host (exceeds Solidity 512 max)
-            (1..65535u16).prop_map(|p| format!("{}:{p}", "a".repeat(520))),
-            // Random bytes (UTF-8 lossy)
-            prop::collection::vec(any::<u8>(), 0..100)
+            // Long host (around Solidity 512 byte boundary)
+            (400..600usize, 1..65535u16).prop_map(|(len, p)| format!("{}:{p}", "a".repeat(len))),
+            // Random bytes (UTF-8 lossy, up to Solidity max of 512)
+            prop::collection::vec(any::<u8>(), 0..512)
                 .prop_map(|v| String::from_utf8_lossy(&v).to_string()),
         ]
     }
@@ -443,8 +443,12 @@ mod proptest_p2p_addr {
         });
         let contract = StakeTableV3::new(contract_addr, &provider);
 
+        let cases = std::env::var("PROPTEST_CASES")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(512);
         let mut runner = TestRunner::new(ProptestConfig {
-            cases: 512,
+            cases,
             ..ProptestConfig::default()
         });
 
