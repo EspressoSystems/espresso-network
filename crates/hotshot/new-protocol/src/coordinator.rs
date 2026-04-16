@@ -580,6 +580,16 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                     .await
                     .map_err(|e| e.context("unicast transactions"))?;
                 }
+
+                // Proactively fetch DRBs for the next epoch so
+                // late-starting nodes have them before they need to
+                // propose or verify certs in a new epoch. The dedup
+                // in request_drb_result makes repeated calls free.
+                let next_epoch = epoch + 1;
+                if next_epoch > EpochNumber::genesis() + 1 {
+                    self.epoch_manager.request_drb_result(next_epoch);
+                    self.epoch_manager.request_drb_result(next_epoch + 1);
+                }
             },
         }
         Ok(())

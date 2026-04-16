@@ -1,4 +1,7 @@
-use std::{collections::BTreeMap, mem::swap};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    mem::swap,
+};
 
 use hotshot_types::{
     data::{BlockNumber, EpochNumber, Leaf2},
@@ -35,6 +38,9 @@ pub struct EpochManager<T: NodeType> {
     fetch_tx: mpsc::UnboundedSender<LeafFetchRequest<T>>,
     /// Pending leaf fetch responses, keyed by block height.
     pending_fetches: BTreeMap<u64, Vec<oneshot::Sender<DecidedLeafEntry<T>>>>,
+    /// Epochs for which a `request_drb_result` task is already in flight,
+    /// used to avoid spawning duplicate fetch tasks.
+    pending_drb_requests: BTreeSet<EpochNumber>,
 }
 
 impl<T: NodeType> EpochManager<T> {
@@ -61,6 +67,7 @@ impl<T: NodeType> EpochManager<T> {
                 leaf_store,
                 fetch_tx,
                 pending_fetches: BTreeMap::new(),
+                pending_drb_requests: BTreeSet::new(),
             },
             fetch_rx,
         )
@@ -148,6 +155,11 @@ impl<T: NodeType> EpochManager<T> {
     }
 
     pub fn request_drb_result(&mut self, epoch: EpochNumber) {
+        // Avoid spawning duplicate fetch tasks for the same epoch.
+        if self.pending_drb_requests.contains(&epoch) {
+            return;
+        }
+        self.pending_drb_requests.insert(epoch);
         let membership_coordinator = self.membership_coordinator.clone();
         let leaf_store = self.leaf_store.clone();
         let epoch_height = self.epoch_height;
@@ -155,13 +167,21 @@ impl<T: NodeType> EpochManager<T> {
         let handles = self.handles.entry(epoch).or_default();
 
         handles.push(self.tasks.spawn(async move {
-            // Fast path: stake table and DRB already available.
-            if let Ok(stake_table) = membership_coordinator
-                .stake_table_for_epoch(Some(epoch))
-                .await
+            // Fast path: DRB already available — check without triggering
+            // the membership catchup (which would race with the slow path
+            // below).
             {
-                if let Ok(drb) = stake_table.get_epoch_drb().await {
-                    return Ok(EpochRootResult::DrbResult(epoch, drb));
+                let membership = membership_coordinator.membership().read().await;
+                if let Ok(true) = membership.has_randomized_stake_table(epoch) {
+                    drop(membership);
+                    if let Ok(stake_table) = membership_coordinator
+                        .membership_for_epoch(Some(epoch))
+                        .await
+                    {
+                        if let Ok(drb) = stake_table.get_epoch_drb().await {
+                            return Ok(EpochRootResult::DrbResult(epoch, drb));
+                        }
+                    }
                 }
             }
 
@@ -191,8 +211,12 @@ impl<T: NodeType> EpochManager<T> {
                 .await
                 .map_err(EpochManagerError::EpochRoot)?;
 
-            // Try to get the DRB from the transition leaf (which carries
-            // next_drb_result).
+            // Try to get the DRB from the transition leaf in the local
+            // store (which carries next_drb_result).  We intentionally do
+            // NOT fetch the transition leaf from peers here because it may
+            // not have been decided yet (the transition block is often the
+            // very block we need the DRB to propose), and the 10-second
+            // fetch timeout would block catchup.
             let drb_epoch = epoch.saturating_sub(1);
             let transition_height = transition_block_for_epoch(drb_epoch, *epoch_height);
 
@@ -207,20 +231,7 @@ impl<T: NodeType> EpochManager<T> {
                 }
             }
 
-            // Also try fetching the transition leaf from peers.
-            if let Ok(transition_entry) = fetch_leaf_from_peers(&fetch_tx, transition_height).await
-            {
-                if let Some(drb) = transition_entry.leaf.next_drb_result {
-                    membership_coordinator
-                        .membership()
-                        .write()
-                        .await
-                        .add_drb_result(epoch, drb);
-                    return Ok(EpochRootResult::DrbResult(epoch, drb));
-                }
-            }
-
-            // Fall back to local DRB computation.
+            // Compute the DRB locally from the epoch root leaf.
             membership_coordinator
                 .compute_drb_result(epoch, root_entry.leaf)
                 .await

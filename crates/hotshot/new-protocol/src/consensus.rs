@@ -418,20 +418,14 @@ impl<T: NodeType> Consensus<T> {
         if proposal.epoch > EpochNumber::genesis() + 1
             && is_epoch_transition(block_number, *self.epoch_height)
         {
-            match self.drb_results.get(&(epoch + 1)) {
-                None => {
-                    debug!(%epoch, "DRB result not yet available, requesting");
-                    outbox.push_back(ConsensusOutput::RequestDrbResult(epoch + 1));
-                },
-                Some(drb) => {
-                    if proposal
-                        .next_drb_result
-                        .is_none_or(|proposed_drb| drb != &proposed_drb)
-                    {
-                        warn!(%epoch, "DRB result does not match proposal");
-                        return Protocol::Abort;
-                    }
-                },
+            if let Some(drb) = self.drb_results.get(&(epoch + 1)) {
+                if proposal
+                    .next_drb_result
+                    .is_none_or(|proposed_drb| drb != &proposed_drb)
+                {
+                    warn!(%epoch, "DRB result does not match proposal");
+                    return Protocol::Abort;
+                }
             }
         }
 
@@ -1087,19 +1081,6 @@ impl<T: NodeType> Consensus<T> {
             self.current_epoch = Some(proposal_epoch);
             outbox.push_back(ConsensusOutput::ViewChanged(view + 1, proposal_epoch));
             outbox.push_back(ConsensusOutput::SendCertificate1(cert1.clone()));
-
-            // Proactively request the DRB when entering the epoch
-            // transition zone.  During catchup, proposals for
-            // transition-zone views may be filtered out before reaching
-            // handle_proposal, so we cannot rely on that path to trigger
-            // the request.
-            let next_block = proposal.block_header.block_number() + 1;
-            if proposal_epoch > EpochNumber::genesis() + 1
-                && is_epoch_transition(next_block, *self.epoch_height)
-                && !self.drb_results.contains_key(&(proposal_epoch + 1))
-            {
-                outbox.push_back(ConsensusOutput::RequestDrbResult(proposal_epoch + 1));
-            }
         }
 
         if !self.staked_in_epoch(proposal_epoch).await {
