@@ -377,6 +377,10 @@ mod test {
     }
 }
 
+// Solidity `validateP2pAddr` and Rust `NetAddr::from_str` both parse `host:port` strings.
+// If Solidity accepts an address that Rust rejects, the validator's p2p address is silently
+// dropped and they become unreachable for cliquenet. This proptest deploys StakeTableV3
+// on anvil and fuzzes the property: Solidity accepts => Rust accepts.
 #[cfg(test)]
 mod proptest_p2p_addr {
     use alloy::providers::ProviderBuilder;
