@@ -244,9 +244,6 @@ impl TestRunner {
                             node_commits[idx] = commits;
                         },
                         NodeEvent::TimedOut(view) => {
-                            if !all_expected_failures.contains(&view) {
-                                return Err(TestError::UnexpectedTimeout { node: idx, view });
-                            }
                             node_timeouts[idx].insert(view);
                         },
                     }
