@@ -33,7 +33,8 @@ use super::{
 use crate::{
     availability::{NamespaceId, QueryableHeader},
     data_source::storage::{
-        Aggregate, AggregatesStorage, NodeStorage, PayloadMetadata, UpdateAggregatesStorage,
+        pruning::PrunedHeightStorage, Aggregate, AggregatesStorage, NodeStorage, PayloadMetadata,
+        UpdateAggregatesStorage,
     },
     node::{BlockId, SyncStatus, TimeWindowQueryData, WindowStart},
     types::HeightIndexed,
@@ -132,14 +133,23 @@ where
     where
         ID: Into<BlockId<Types>> + Send + Sync,
     {
+        let pruned_height: i64 = self
+            .load_pruned_height()
+            .await
+            .map_err(|err| QueryError::Error {
+                message: format!("{err:#}"),
+            })?
+            .map(|h| h as i64)
+            .unwrap_or(-1);
         let mut query = QueryBuilder::default();
         let where_clause = query.header_where_clause(id.into())?;
+        let ph = query.bind(pruned_height)?;
         // ORDER BY h.height ASC ensures that if there are duplicate blocks (this can happen when
         // selecting by payload ID, as payloads are not unique), we return the first one.
         let sql = format!(
             "SELECT v.share AS share FROM vid2 AS v
                JOIN header AS h ON v.height = h.height
-              WHERE {where_clause}
+              WHERE {where_clause} AND h.height > {ph}
               ORDER BY h.height
               LIMIT 1"
         );
@@ -178,10 +188,18 @@ where
         // NULL share.
         let sql = "SELECT l.max_height, l.total_leaves, p.null_payloads, v.total_vid, \
                    vn.null_vid, pruned_height FROM
-                (SELECT max(leaf2.height) AS max_height, count(*) AS total_leaves FROM leaf2) AS l,
-                (SELECT count(*) AS null_payloads FROM payload WHERE data IS NULL) AS p,
-                (SELECT count(*) AS total_vid FROM vid2) AS v,
-                (SELECT count(*) AS null_vid FROM vid2 WHERE share IS NULL) AS vn,
+                (SELECT max(leaf2.height) AS max_height, count(*) AS total_leaves FROM leaf2
+                  WHERE height > COALESCE(
+                    (SELECT last_height FROM pruned_height ORDER BY id DESC LIMIT 1), -1)) AS l,
+                (SELECT count(*) AS null_payloads FROM payload WHERE data IS NULL
+                  AND height > COALESCE(
+                    (SELECT last_height FROM pruned_height ORDER BY id DESC LIMIT 1), -1)) AS p,
+                (SELECT count(*) AS total_vid FROM vid2
+                  WHERE height > COALESCE(
+                    (SELECT last_height FROM pruned_height ORDER BY id DESC LIMIT 1), -1)) AS v,
+                (SELECT count(*) AS null_vid FROM vid2 WHERE share IS NULL
+                  AND height > COALESCE(
+                    (SELECT last_height FROM pruned_height ORDER BY id DESC LIMIT 1), -1)) AS vn,
                 (SELECT(SELECT last_height FROM pruned_height ORDER BY id DESC LIMIT 1) as \
                    pruned_height)
             ";
