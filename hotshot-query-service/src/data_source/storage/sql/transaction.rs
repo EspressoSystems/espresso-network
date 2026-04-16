@@ -705,9 +705,10 @@ where
     ) -> anyhow::Result<()> {
         let vid = vid.into_iter();
 
-        // Ignore objects below the pruned height.
-        let pruned_height = self.load_pruned_height().await?;
-        let vid = vid.skip_while(|(common, _)| pruned_height.is_some_and(|h| common.height() <= h));
+        // We intentionally do not call load_pruned_height() here. Reading pruned_height inside a
+        // SERIALIZABLE write transaction creates a rw-anti-dependency with save_pruned_height
+        // (the pruner's separate Tx1), making this transaction a pivot in SSI abort cycles.
+        // If this data is already pruned, the pruner will delete it again on its next run.
 
         let (common_rows, share_rows): (Vec<_>, Vec<_>) = vid
             .map(|(common, share)| {

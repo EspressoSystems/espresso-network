@@ -203,7 +203,10 @@ async fn main() {
 
     let mut blocks = client
         .socket_with_config(
-            &format!("availability/stream/blocks/{}", block_height - 1),
+            &format!(
+                "availability/stream/blocks/{}",
+                block_height.saturating_sub(1)
+            ),
             websocket_config,
         )
         .subscribe()
