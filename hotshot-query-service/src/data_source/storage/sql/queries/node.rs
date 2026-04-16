@@ -269,13 +269,22 @@ where
             WindowStart::Hash(h) => self.load_header::<Types>(h).await?.block_number(),
         };
 
+        let pruned_height: i64 = self
+            .load_pruned_height()
+            .await
+            .map_err(|err| QueryError::Error {
+                message: format!("{err:#}"),
+            })?
+            .map(|h| h as i64)
+            .unwrap_or(-1);
+
         // Find all blocks starting from `first_block` with timestamps less than `end`. Block
         // timestamps are monotonically increasing, so this query is guaranteed to return a
         // contiguous range of blocks ordered by increasing height.
         let sql = format!(
             "SELECT {HEADER_COLUMNS}
                FROM header AS h
-              WHERE h.height >= $1 AND h.timestamp < $2
+              WHERE h.height >= $1 AND h.timestamp < $2 AND h.height > $4
               ORDER BY h.height
               LIMIT $3"
         );
@@ -283,6 +292,7 @@ where
             .bind(first_block as i64)
             .bind(end as i64)
             .bind(limit as i64)
+            .bind(pruned_height)
             .fetch(self.as_mut());
         let window = rows
             .map(|row| parse_header::<Types>(row?))
@@ -308,12 +318,13 @@ where
             let sql = format!(
                 "SELECT {HEADER_COLUMNS}
                FROM header AS h
-              WHERE h.timestamp >= $1
+              WHERE h.timestamp >= $1 AND h.height > $2
               ORDER BY h.timestamp, h.height
               LIMIT 1"
             );
             query(&sql)
                 .bind(end as i64)
+                .bind(pruned_height)
                 .fetch_optional(self.as_mut())
                 .await?
                 .map(parse_header::<Types>)
@@ -495,6 +506,15 @@ impl<Mode: TransactionMode> Transaction<Mode> {
         end: u64,
         limit: usize,
     ) -> QueryResult<TimeWindowQueryData<Header<Types>>> {
+        let pruned_height: i64 = self
+            .load_pruned_height()
+            .await
+            .map_err(|err| QueryError::Error {
+                message: format!("{err:#}"),
+            })?
+            .map(|h| h as i64)
+            .unwrap_or(-1);
+
         // Find all blocks whose timestamps fall within the window [start, end). Block timestamps
         // are monotonically increasing, so this query is guaranteed to return a contiguous range of
         // blocks ordered by increasing height.
@@ -509,7 +529,7 @@ impl<Mode: TransactionMode> Transaction<Mode> {
         let sql = format!(
             "SELECT {HEADER_COLUMNS}
                FROM header AS h
-              WHERE h.timestamp >= $1 AND h.timestamp < $2
+              WHERE h.timestamp >= $1 AND h.timestamp < $2 AND h.height > $4
               ORDER BY h.timestamp, h.height
               LIMIT $3"
         );
@@ -517,6 +537,7 @@ impl<Mode: TransactionMode> Transaction<Mode> {
             .bind(start as i64)
             .bind(end as i64)
             .bind(limit as i64)
+            .bind(pruned_height)
             .fetch(self.as_mut());
         let window: Vec<_> = rows
             .map(|row| parse_header::<Types>(row?))
@@ -528,12 +549,13 @@ impl<Mode: TransactionMode> Transaction<Mode> {
             let sql = format!(
                 "SELECT {HEADER_COLUMNS}
                FROM header AS h
-              WHERE h.timestamp >= $1
+              WHERE h.timestamp >= $1 AND h.height > $2
               ORDER BY h.timestamp, h.height
               LIMIT 1"
             );
             query(&sql)
                 .bind(end as i64)
+                .bind(pruned_height)
                 .fetch_optional(self.as_mut())
                 .await?
                 .map(parse_header::<Types>)
@@ -561,12 +583,13 @@ impl<Mode: TransactionMode> Transaction<Mode> {
         let sql = format!(
             "SELECT {HEADER_COLUMNS}
                FROM header AS h
-              WHERE h.timestamp < $1
+              WHERE h.timestamp < $1 AND h.height > $2
               ORDER BY h.timestamp DESC, h.height DESC
               LIMIT 1"
         );
         let prev = query(&sql)
             .bind(start as i64)
+            .bind(pruned_height)
             .fetch_optional(self.as_mut())
             .await?
             .map(parse_header::<Types>)
