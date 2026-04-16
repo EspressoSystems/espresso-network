@@ -50,8 +50,10 @@ members = [
     "vid",
 ]
 
-# All crates except espresso-node-sqlite and espresso-dev-node, to avoid turning on embedded-db feature
-# for the whole workspace by default.
+# All crates except espresso-node-sqlite, espresso-dev-node, hotshot-examples, and crypto-helper.
+# espresso-node-sqlite/espresso-dev-node: embedded-db feature conflict
+# hotshot-examples: no tests, only needed for manual testing via `just hotshot::example`
+# crypto-helper: vendored openssl leaks to workspace via feature unification
 default-members = [
     "alloy-compat",
     "benchmark-stats",
@@ -66,7 +68,6 @@ default-members = [
     "crates/cliquenet",
     "crates/hotshot/builder-api",
     "crates/hotshot/example-types",
-    "crates/hotshot/examples",
     "crates/hotshot/hotshot",
     "crates/hotshot/libp2p-networking",
     "crates/hotshot/macros",
@@ -397,15 +398,58 @@ inherits = "dev"
 strip = "none"
 debug = "full"
 
+# Workspace crates: opt-level 0 (not cached on CI, recompile every run).
+# Dependencies: opt-level 1 via "*" (cached on CI, rarely recompile).
+# Consensus crates: opt-level 1 (hotshot tests fail with too many failed views at opt-level 0).
+# Crypto/ZK-heavy crates: opt-level 3 (finite field math, merkle trees, proofs).
 [profile.test]
+opt-level = 0
+
+[profile.test.package."*"]
 opt-level = 1
-[profile.test.package.espresso-node]
-opt-level = 0
-[profile.test.package.hotshot-testing]
-opt-level = 0
+[profile.test.package.hotshot]
+opt-level = 1
+[profile.test.package.hotshot-types]
+opt-level = 1
+[profile.test.package.hotshot-task-impls]
+opt-level = 1
+[profile.test.package.hotshot-task]
+opt-level = 1
+[profile.test.package.hotshot-example-types]
+opt-level = 1
+[profile.test.package.espresso-types]
+opt-level = 1
+[profile.test.package.vid]
+opt-level = 1
+[profile.test.package.hotshot-builder-api]
+opt-level = 1
+[profile.test.package.hotshot-builder-legacy]
+opt-level = 1
+[profile.test.package.hotshot-utils]
+opt-level = 1
+[profile.test.package.hotshot-libp2p-networking]
+opt-level = 1
+[profile.test.package.hotshot-contract-adapter]
+opt-level = 1
+[profile.test.package.cliquenet]
+opt-level = 1
+[profile.test.package.hotshot-macros]
+opt-level = 1
+[profile.test.package.test-utils]
+opt-level = 1
 [profile.test.package.hotshot-state-prover]
 opt-level = 3
 [profile.test.package.jf-merkle-tree]
+opt-level = 3
+[profile.test.package.ark-ff]
+opt-level = 3
+[profile.test.package.ark-ec]
+opt-level = 3
+[profile.test.package.ark-bn254]
+opt-level = 3
+[profile.test.package.ark-bls12-381]
+opt-level = 3
+[profile.test.package.ark-poly]
 opt-level = 3
 
 [profile.test-docker]
