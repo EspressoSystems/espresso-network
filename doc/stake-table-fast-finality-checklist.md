@@ -11,11 +11,11 @@ Design doc: [doc/stake-table-fast-finality.md](stake-table-fast-finality.md)
 - [x] `MAX_P2P_ADDR_LENGTH` constant (512)
 - [x] `validateP2pAddr` (public pure): colon check, port parse, host non-empty
 - [x] New errors: `InvalidX25519Key`, `X25519KeyAlreadyUsed`, `InvalidP2pAddr`
-- [x] New events: `ValidatorRegisteredV3`, `NetworkConfigUpdated`
+- [x] New events: `ValidatorRegisteredV3`, `X25519KeyUpdated`, `P2pAddrUpdated`
 - [x] `registerValidatorV3`: full registration with x25519 + p2p
 - [x] Override `registerValidatorV2` to revert `DeprecatedFunction()`
 - [x] `updateNetworkConfig`: set/rotate x25519 key + p2p addr
-- [x] `updateP2pAddr`: update p2p addr only, emit `NetworkConfigUpdated` with `bytes32(0)` x25519
+- [x] `updateP2pAddr`: update p2p addr only, emit `P2pAddrUpdated`
 
 ## Phase 2: Contract tests
 

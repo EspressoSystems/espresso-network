@@ -53,7 +53,7 @@ pub use crate::bindings::{
         self, BN254::G2Point as G2PointSol, EdOnBN254::EdOnBN254Point as EdOnBN254PointSol,
         StakeTableV2,
     },
-    stake_table_v3::StakeTableV3,
+    stake_table_v3::{self, StakeTableV3},
 };
 
 // For types that we need to interact with some functions but their bindings are not generated
@@ -195,8 +195,6 @@ impl From<stake_table_v2::BN254::G1Point> for G1PointSol {
 }
 
 // Transmute conversions for StakeTableV3 types
-use crate::bindings::stake_table_v3;
-
 impl From<stake_table_v3::BN254::G2Point> for G2PointSol {
     fn from(v: stake_table_v3::BN254::G2Point) -> Self {
         unsafe { std::mem::transmute(v) }

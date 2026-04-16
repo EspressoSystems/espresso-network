@@ -121,6 +121,8 @@ contract StakeTableV3 is StakeTableV2 {
             require(c >= 0x30 && c <= 0x39, InvalidP2pAddr());
             port = port * 10 + (c - 0x30);
         }
+        // Reject leading zeros in port (e.g. "08080")
+        if (portLen > 1 && b[colonIdx + 1] == 0x30) revert InvalidP2pAddr();
         require(port > 0 && port <= 65535, InvalidP2pAddr());
     }
 

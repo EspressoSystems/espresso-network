@@ -108,8 +108,14 @@ contract StakeTableV3Test is Test {
         proxyV3.validateP2pAddr("host:abc");
     }
 
-    function test_ValidateP2pAddr_LeadingZeroPort() public view {
+    function test_ValidateP2pAddr_LeadingZeroPort() public {
+        vm.expectRevert(StakeTableV3.InvalidP2pAddr.selector);
         proxyV3.validateP2pAddr("host:08080");
+    }
+
+    function test_ValidateP2pAddr_SingleZeroPort_Reverts() public {
+        vm.expectRevert(StakeTableV3.InvalidP2pAddr.selector);
+        proxyV3.validateP2pAddr("host:0");
     }
 
     function test_ValidateP2pAddr_Empty() public {
@@ -467,6 +473,18 @@ contract StakeTableV3Test is Test {
         vm.prank(nobody);
         vm.expectRevert(S.ValidatorInactive.selector);
         proxyV3.updateX25519Key(bytes32(uint256(1)));
+    }
+
+    function test_UpdateX25519Key_Exited_Reverts() public {
+        address validator = makeAddr("validator");
+        registerValidatorV3(validator, "123", 500, "meta", bytes32(uint256(1)), "host:8080");
+
+        vm.prank(validator);
+        proxyV3.deregisterValidator();
+
+        vm.prank(validator);
+        vm.expectRevert(S.ValidatorAlreadyExited.selector);
+        proxyV3.updateX25519Key(bytes32(uint256(2)));
     }
 
     function test_UpdateX25519Key_ZeroKey_Reverts() public {

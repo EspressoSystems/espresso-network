@@ -339,6 +339,69 @@ impl StakeTableState {
         &self.validator_exits
     }
 
+    /// Shared registration logic for V2 and V3 register events.
+    ///
+    /// V1 Register is NOT handled here because it has different behavior
+    /// (no auth, SchnorrKeyAlreadyUsed returns `Ok(Err(...))` instead of `Err(...)`).
+    fn register_validator(
+        &mut self,
+        account: Address,
+        stake_table_key: BLSPubKey,
+        state_ver_key: SchnorrPubKey,
+        commission: u16,
+        authenticated: bool,
+        x25519_key: Option<x25519::PublicKey>,
+        p2p_addr: Option<NetAddr>,
+    ) -> ApplyEventResult<()> {
+        if self.validator_exits.contains(&account) {
+            return Err(StakeTableError::ValidatorAlreadyExited(account));
+        }
+
+        let entry = self.validators.entry(account);
+        if let indexmap::map::Entry::Occupied(_) = entry {
+            return Err(StakeTableError::AlreadyRegistered(account));
+        }
+
+        if self.used_bls_keys.contains(&stake_table_key) {
+            return Err(StakeTableError::BlsKeyAlreadyUsed(
+                stake_table_key.to_string(),
+            ));
+        }
+
+        if self.used_schnorr_keys.contains(&state_ver_key) {
+            return Err(StakeTableError::SchnorrKeyAlreadyUsed(
+                state_ver_key.to_string(),
+            ));
+        }
+
+        if let Some(key) = &x25519_key {
+            if self.used_x25519_keys.contains(key) {
+                return Err(StakeTableError::X25519KeyAlreadyUsed(format!("{key:?}")));
+            }
+        }
+
+        // All checks ok, applying changes
+        self.used_bls_keys.insert(stake_table_key);
+        self.used_schnorr_keys.insert(state_ver_key.clone());
+        if let Some(key) = &x25519_key {
+            self.used_x25519_keys.insert(*key);
+        }
+
+        entry.or_insert(RegisteredValidator {
+            account,
+            stake_table_key,
+            state_ver_key,
+            stake: U256::ZERO,
+            commission,
+            delegators: HashMap::new(),
+            authenticated,
+            x25519_key,
+            p2p_addr,
+        });
+
+        Ok(Ok(()))
+    }
+
     /// Applies a stake table event to this state.
     ///
     ///
@@ -415,45 +478,15 @@ impl StakeTableState {
                 let stake_table_key: BLSPubKey = (*blsVK).into();
                 let state_ver_key: SchnorrPubKey = (*schnorrVK).into();
 
-                // Reject if validator already exited
-                if self.validator_exits.contains(account) {
-                    return Err(StakeTableError::ValidatorAlreadyExited(*account));
-                }
-
-                let entry = self.validators.entry(*account);
-                if let indexmap::map::Entry::Occupied(_) = entry {
-                    return Err(StakeTableError::AlreadyRegistered(*account));
-                }
-
-                // The stake table v2 contract enforces that each bls key is only used once.
-                if self.used_bls_keys.contains(&stake_table_key) {
-                    return Err(StakeTableError::BlsKeyAlreadyUsed(
-                        stake_table_key.to_string(),
-                    ));
-                }
-
-                // The stake table v2 contract enforces schnorr key is only used once.
-                if self.used_schnorr_keys.contains(&state_ver_key) {
-                    return Err(StakeTableError::SchnorrKeyAlreadyUsed(
-                        state_ver_key.to_string(),
-                    ));
-                }
-
-                // All checks ok, applying changes
-                self.used_bls_keys.insert(stake_table_key);
-                self.used_schnorr_keys.insert(state_ver_key.clone());
-
-                entry.or_insert(RegisteredValidator {
-                    account: *account,
+                return self.register_validator(
+                    *account,
                     stake_table_key,
                     state_ver_key,
-                    stake: U256::ZERO,
-                    commission: *commission,
-                    delegators: HashMap::new(),
+                    *commission,
                     authenticated,
-                    x25519_key: None,
-                    p2p_addr: None,
-                });
+                    None,
+                    None,
+                );
             },
 
             StakeTableEvent::Deregister(ValidatorExit { validator })
@@ -684,40 +717,13 @@ impl StakeTableState {
                 let state_ver_key: SchnorrPubKey =
                     EdOnBN254PointSol::from(schnorrVK.clone()).into();
 
-                if self.validator_exits.contains(account) {
-                    return Err(StakeTableError::ValidatorAlreadyExited(*account));
-                }
-
-                let entry = self.validators.entry(*account);
-                if let indexmap::map::Entry::Occupied(_) = entry {
-                    return Err(StakeTableError::AlreadyRegistered(*account));
-                }
-
-                if self.used_bls_keys.contains(&stake_table_key) {
-                    return Err(StakeTableError::BlsKeyAlreadyUsed(
-                        stake_table_key.to_string(),
-                    ));
-                }
-
-                if self.used_schnorr_keys.contains(&state_ver_key) {
-                    return Err(StakeTableError::SchnorrKeyAlreadyUsed(
-                        state_ver_key.to_string(),
-                    ));
-                }
-
                 // Parse x25519 key (zero means not provided)
                 let x25519_key = if x25519Key.0 != [0u8; 32] {
-                    let key = x25519::PublicKey::try_from(x25519Key.0.as_slice()).map_err(|e| {
-                        StakeTableError::InvalidX25519Key(format!("{:?}: {e}", x25519Key))
-                    })?;
-                    if self.used_x25519_keys.contains(&key) {
-                        return Err(StakeTableError::X25519KeyAlreadyUsed(format!(
-                            "{:?}",
-                            x25519Key
-                        )));
-                    }
-                    self.used_x25519_keys.insert(key);
-                    Some(key)
+                    Some(
+                        x25519::PublicKey::try_from(x25519Key.0.as_slice()).map_err(|e| {
+                            StakeTableError::InvalidX25519Key(format!("{:?}: {e}", x25519Key))
+                        })?,
+                    )
                 } else {
                     None
                 };
@@ -733,21 +739,15 @@ impl StakeTableState {
                     },
                 };
 
-                // All checks ok, applying changes
-                self.used_bls_keys.insert(stake_table_key);
-                self.used_schnorr_keys.insert(state_ver_key.clone());
-
-                entry.or_insert(RegisteredValidator {
-                    account: *account,
+                return self.register_validator(
+                    *account,
                     stake_table_key,
                     state_ver_key,
-                    stake: U256::ZERO,
-                    commission: *commission,
-                    delegators: HashMap::new(),
+                    *commission,
                     authenticated,
                     x25519_key,
                     p2p_addr,
-                });
+                );
             },
 
             StakeTableEvent::X25519KeyUpdate(X25519KeyUpdated {
@@ -1174,8 +1174,7 @@ impl Fetcher {
     fn validate_event(event: &StakeTableV3Events, log: &Log) -> Result<bool, StakeTableError> {
         match event {
             StakeTableV3Events::ConsensusKeysUpdatedV2(evt) => {
-                let v2_evt: ConsensusKeysUpdatedV2 = transmute_v3_to_v2(evt.clone());
-                if let Err(err) = v2_evt.authenticate() {
+                if let Err(err) = evt.authenticate() {
                     tracing::warn!(
                         %err,
                         "Failed to authenticate ConsensusKeysUpdatedV2 event: {}",
@@ -4292,7 +4291,7 @@ mod tests {
     }
 
     #[test]
-    fn test_register_v3_empty_p2p_sets_none() -> anyhow::Result<()> {
+    fn test_register_v3_hostname_p2p() -> anyhow::Result<()> {
         let val = TestValidator::random();
 
         let mut state = StakeTableState::default();

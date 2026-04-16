@@ -210,8 +210,7 @@ impl ValidatorRegisteredV2 {
             self.schnorrVK,
             self.blsSig.into(),
             &self.schnorrSig,
-        )?;
-        Ok(())
+        )
     }
 }
 
@@ -224,8 +223,7 @@ impl StakeTableV3::ValidatorRegisteredV3 {
             self.schnorrVK.clone().into(),
             self.blsSig.clone().into(),
             &self.schnorrSig,
-        )?;
-        Ok(())
+        )
     }
 }
 
@@ -238,8 +236,7 @@ impl ConsensusKeysUpdatedV2 {
             self.schnorrVK,
             self.blsSig.into(),
             &self.schnorrSig,
-        )?;
-        Ok(())
+        )
     }
 }
 
@@ -251,8 +248,7 @@ impl StakeTableV3::ValidatorRegisteredV2 {
             self.schnorrVK.clone().into(),
             self.blsSig.clone().into(),
             &self.schnorrSig,
-        )?;
-        Ok(())
+        )
     }
 }
 
@@ -264,8 +260,7 @@ impl StakeTableV3::ConsensusKeysUpdatedV2 {
             self.schnorrVK.clone().into(),
             self.blsSig.clone().into(),
             &self.schnorrSig,
-        )?;
-        Ok(())
+        )
     }
 }
 

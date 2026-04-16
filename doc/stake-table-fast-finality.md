@@ -358,17 +358,13 @@ pub enum StakeTableEvent {
 
 ### Commitment considerations
 
-The `Committable` impl for `RegisteredValidator` in `crates/espresso/types/src/v0/v0_3/stake_table.rs` currently has
-x25519 and p2p addr commented out. Uncommenting these is a commitment-breaking change.
+The `Committable` impl for `RegisteredValidator` conditionally includes x25519_key and p2p_addr only when they are
+`Some`. This is backward compatible: these fields are `None` until the StakeTableV3 contract is deployed and a validator
+explicitly sets them via `registerValidatorV3`, `updateNetworkConfig`, `updateX25519Key`, or `updateP2pAddr`. Pre-V3
+validators keep the same commitment as before.
 
-Options:
-
-1. Gate behind a protocol version: only include in commitment for blocks after the version that activates this feature.
-2. Keep them out of the commitment: x25519 and p2p addr are network-layer data, not consensus state. Validators don't
-   need to agree on these values for consensus to work.
-
-Recommend option 2 for now. These values are for peer discovery, not for consensus validation. If needed later, option 1
-can be added.
+This approach was chosen over keeping them out of the commitment entirely because including them ensures all nodes agree
+on the network config for each validator, which matters for fast finality peer discovery.
 
 ### Epoch activation delay
 

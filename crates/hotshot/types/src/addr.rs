@@ -116,10 +116,23 @@ impl std::str::FromStr for NetAddr {
             } else {
                 0
             };
+            // Strip brackets from IPv6 addresses like `[::1]`.
+            let a = if a.starts_with('[') && a.ends_with(']') {
+                &a[1..a.len() - 1]
+            } else {
+                a
+            };
             IpAddr::from_str(a)
                 .map(|a| Self::Inet(a, p))
                 .or_else(|_| Ok(Self::Name(a.to_string().into(), p)))
         };
+        // Handle bracketed IPv6 like `[::1]:8080` or `[::1]` (no port).
+        if s.starts_with('[') {
+            return match s.find("]:") {
+                Some(i) => parse(&s[..i + 1], Some(&s[i + 2..])),
+                None => parse(s, None),
+            };
+        }
         match s.rsplit_once(':') {
             None => parse(s, None),
             Some((a, p)) => parse(a, Some(p)),
@@ -188,5 +201,29 @@ mod tests {
         };
         assert_eq!("sub.domain.com", &h);
         assert_eq!(1234, p);
+    }
+
+    #[test]
+    fn test_parse_bracketed_ipv6() {
+        let a: NetAddr = "[::1]:1234".parse().unwrap();
+        let NetAddr::Inet(a, p) = a else {
+            unreachable!()
+        };
+        assert_eq!("::1".parse::<IpAddr>().unwrap(), a);
+        assert_eq!(1234, p);
+
+        let a: NetAddr = "[2001:db8::1]:443".parse().unwrap();
+        let NetAddr::Inet(a, p) = a else {
+            unreachable!()
+        };
+        assert_eq!("2001:db8::1".parse::<IpAddr>().unwrap(), a);
+        assert_eq!(443, p);
+
+        let a: NetAddr = "[::1]".parse().unwrap();
+        let NetAddr::Inet(a, p) = a else {
+            unreachable!()
+        };
+        assert_eq!("::1".parse::<IpAddr>().unwrap(), a);
+        assert_eq!(0, p);
     }
 }
