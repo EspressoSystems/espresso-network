@@ -52,7 +52,16 @@ where
     Header<Types>: QueryableHeader<Types>,
 {
     async fn block_height(&mut self) -> QueryResult<usize> {
-        match query_as::<(Option<i64>,)>("SELECT max(height) FROM header")
+        let pruned_height: i64 = self
+            .load_pruned_height()
+            .await
+            .map_err(|err| QueryError::Error {
+                message: format!("{err:#}"),
+            })?
+            .map(|h| h as i64)
+            .unwrap_or(-1);
+        match query_as::<(Option<i64>,)>("SELECT max(height) FROM header WHERE height > $1")
+            .bind(pruned_height)
             .fetch_one(self.as_mut())
             .await?
         {
