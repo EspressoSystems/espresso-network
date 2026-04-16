@@ -86,7 +86,7 @@ impl Default for TestRunner {
             target_decisions: 100,
             max_runtime: Duration::from_secs(60),
             epoch_height: 1000,
-            view_timeout: Duration::from_secs(2),
+            view_timeout: Duration::from_secs(5),
             transaction_size: 64 * 1024,
             expected_failed_views: BTreeSet::new(),
             down_nodes: BTreeSet::new(),
