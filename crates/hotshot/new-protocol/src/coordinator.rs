@@ -23,7 +23,7 @@ use crate::{
         timer::Timer,
     },
     epoch::{EpochManager, EpochRootResult},
-    leaf_store::{DecidedLeafEntry, EpochLeafStore},
+    leaf_store::DecidedLeafEntry,
     logging::KeyPrefix,
     message::{
         self, BlockMessage, CatchupMessage, Certificate2, CheckpointCertificate, CheckpointVote,
@@ -52,7 +52,6 @@ pub struct Coordinator<T: NodeType, I: NodeImplementation<T>> {
     timeout_one_honest_collector: VoteCollector<T, TimeoutVote2<T>, TimeoutOneHonest<T>>,
     checkpoint_collector: VoteCollector<T, CheckpointVote<T>, CheckpointCertificate<T>>,
     epoch_manager: EpochManager<T>,
-    leaf_store: EpochLeafStore<T>,
     leaf_fetch_rx: tokio::sync::mpsc::UnboundedReceiver<crate::leaf_store::LeafFetchRequest<T>>,
     block_builder: BlockBuilder<T>,
     proposal_validator: ProposalValidator<T>,
@@ -382,7 +381,7 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
             MessageType::Catchup(msg) => {
                 match msg {
                     CatchupMessage::LeafRequest(req) => {
-                        let entry = self.leaf_store.get(req.block_height);
+                        let entry = self.epoch_manager.leaf_store().get(req.block_height);
                         let response = Message {
                             sender: self.public_key.clone(),
                             message_type: MessageType::Catchup(CatchupMessage::LeafResponse(
@@ -459,7 +458,9 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                         || is_epoch_transition(block_number, epoch_height)
                     {
                         if let Some(cert2) = self.consensus.cert2_at(leaf.view_number()) {
-                            self.leaf_store.insert(leaf.clone(), cert2.clone());
+                            self.epoch_manager
+                                .leaf_store()
+                                .insert(leaf.clone(), cert2.clone());
                         }
                     }
                 }
@@ -641,7 +642,7 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
         if *epoch > 3 {
             let epoch_height = *self.consensus.epoch_height;
             let min_height = root_block_in_epoch(epoch.saturating_sub(3), epoch_height);
-            self.leaf_store.gc(min_height);
+            self.epoch_manager.leaf_store().gc(min_height);
         }
     }
 

@@ -114,7 +114,7 @@ async fn build_coordinator(
     let timeout_one_honest_collector = VoteCollector::new(membership.clone(), upgrade_lock());
     let checkpoint_collector = VoteCollector::new(membership.clone(), upgrade_lock());
 
-    let epoch_manager = EpochManager::new(epoch_height, membership.clone());
+    let (epoch_manager, leaf_fetch_rx) = EpochManager::new(epoch_height, membership.clone());
 
     let vid_disperser = VidDisperser::new(membership.clone());
     let vid_reconstructor = VidReconstructor::new();
@@ -164,6 +164,7 @@ async fn build_coordinator(
         .vid_disperser(vid_disperser)
         .vid_reconstructor(vid_reconstructor)
         .epoch_manager(epoch_manager)
+        .leaf_fetch_rx(leaf_fetch_rx)
         .block_builder(block_builder)
         .proposal_validator(proposal_validator)
         .membership_coordinator(membership)

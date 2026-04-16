@@ -426,6 +426,8 @@ impl<T: NodeType> Consensus<T> {
                     warn!(%epoch, "DRB result does not match proposal");
                     return Protocol::Abort;
                 }
+            } else {
+                outbox.push_back(ConsensusOutput::RequestDrbResult(epoch + 1));
             }
         }
 

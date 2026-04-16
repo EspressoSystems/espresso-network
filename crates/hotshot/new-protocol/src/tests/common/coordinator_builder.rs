@@ -19,7 +19,6 @@ use crate::{
     coordinator::{Coordinator, timer::Timer},
     epoch::EpochManager,
     helpers::upgrade_lock,
-    leaf_store::EpochLeafStore,
     message::{Certificate1, Certificate2, Proposal},
     network::Network,
     outbox::Outbox,
@@ -45,9 +44,7 @@ pub async fn build_test_coordinator<I: NodeImplementation<TestTypes>>(
     let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
     let instance = Arc::new(TestInstanceState::default());
 
-    let leaf_store = EpochLeafStore::new();
-    let (epoch_manager, leaf_fetch_rx) =
-        EpochManager::new(epoch_height, membership.clone(), leaf_store.clone());
+    let (epoch_manager, leaf_fetch_rx) = EpochManager::new(epoch_height, membership.clone());
 
     let vote1_collector = VoteCollector::new(membership.clone(), upgrade_lock());
     let vote2_collector = VoteCollector::new(membership.clone(), upgrade_lock());
@@ -90,7 +87,9 @@ pub async fn build_test_coordinator<I: NodeImplementation<TestTypes>>(
     // Store the genesis leaf in the leaf store so that epoch catchup can
     // find it.  The genesis block is the epoch root for the earliest
     // epochs and must be available for peers requesting catchup data.
-    leaf_store.insert(genesis_leaf.clone(), genesis_cert2);
+    epoch_manager
+        .leaf_store()
+        .insert(genesis_leaf.clone(), genesis_cert2);
 
     let proposal_validator = ProposalValidator::new(membership.clone());
 
@@ -108,7 +107,6 @@ pub async fn build_test_coordinator<I: NodeImplementation<TestTypes>>(
         .vid_disperser(vid_disperser)
         .vid_reconstructor(vid_reconstructor)
         .epoch_manager(epoch_manager)
-        .leaf_store(leaf_store)
         .leaf_fetch_rx(leaf_fetch_rx)
         .block_builder(block_builder)
         .proposal_validator(proposal_validator)

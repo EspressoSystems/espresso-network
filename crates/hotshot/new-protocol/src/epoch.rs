@@ -52,7 +52,6 @@ impl<T: NodeType> EpochManager<T> {
     pub fn new<B>(
         epoch_height: B,
         membership_coordinator: EpochMembershipCoordinator<T>,
-        leaf_store: EpochLeafStore<T>,
     ) -> (Self, mpsc::UnboundedReceiver<LeafFetchRequest<T>>)
     where
         B: Into<BlockNumber>,
@@ -64,7 +63,7 @@ impl<T: NodeType> EpochManager<T> {
                 membership_coordinator,
                 tasks: JoinSet::new(),
                 handles: BTreeMap::new(),
-                leaf_store,
+                leaf_store: EpochLeafStore::new(),
                 fetch_tx,
                 pending_fetches: BTreeMap::new(),
                 pending_drb_requests: BTreeSet::new(),
