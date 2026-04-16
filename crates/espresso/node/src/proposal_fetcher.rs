@@ -22,7 +22,7 @@ use tracing::Instrument;
 
 use crate::{
     SeqTypes,
-    consensus_handle::{ConsensusEvent, ConsensusHandle},
+    consensus_handle::{ConsensusHandle, CoordinatorEvent},
     context::{ConsensusNode, TaskList},
 };
 
@@ -133,7 +133,7 @@ where
     async fn scan(self) {
         let mut events = self.consensus_handle.event_stream();
         while let Some(event) = events.next().await {
-            let ConsensusEvent::LegacyEvent(Event {
+            let CoordinatorEvent::LegacyEvent(Event {
                 event: EventType::QuorumProposal { proposal, .. },
                 ..
             }) = event

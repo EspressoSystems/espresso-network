@@ -84,8 +84,6 @@ pub enum ConsensusOutput<T: NodeType> {
         payload: T::BlockPayload,
         metadata: <T::BlockPayload as BlockPayload<T>>::Metadata,
     },
-    Certificate1Formed(Certificate1<T>),
-    Certificate2Formed(Certificate2<T>),
     LeafDecided {
         leaves: Vec<Leaf2<T>>,
         cert2: Certificate2<T>,
@@ -95,10 +93,6 @@ pub enum ConsensusOutput<T: NodeType> {
     ProposalValidated {
         proposal: SignedProposal<T, Proposal<T>>,
         sender: T::SignatureKey,
-    },
-    ExternalMessageReceived {
-        sender: T::SignatureKey,
-        data: Vec<u8>,
     },
 }
 
@@ -125,7 +119,7 @@ pub struct Consensus<T: NodeType> {
     voted_2_views: BTreeSet<ViewNumber>,
 
     timeout_view: ViewNumber,
-    cur_view: ViewNumber,
+    current_view: ViewNumber,
     current_epoch: Option<EpochNumber>,
 
     // TODO: We need a next epoch stake table to handle the transition
@@ -179,7 +173,7 @@ impl<T: NodeType> Consensus<T> {
             node_id: KeyPrefix::from(&public_key),
             public_key,
             timeout_view: ViewNumber::genesis(),
-            cur_view: ViewNumber::genesis(),
+            current_view: ViewNumber::genesis(),
             current_epoch: None,
             stake_table_coordinator: membership_coordinator,
             voted_1_views: BTreeSet::new(),
@@ -323,26 +317,25 @@ impl<T: NodeType> Consensus<T> {
         &self.last_decided_leaf
     }
 
-    pub fn undecided_leaves(&self) -> Vec<Leaf2<T>> {
+    pub fn undecided_leaves(&self) -> impl Iterator<Item = &Leaf2<T>> {
         self.leaves
             .range((
                 std::ops::Bound::Excluded(self.last_decided_view),
                 std::ops::Bound::Unbounded,
             ))
-            .map(|(_, leaf)| leaf.clone())
-            .collect()
+            .map(|(_, leaf)| leaf)
     }
 
-    pub fn cur_view(&self) -> ViewNumber {
-        self.cur_view
+    pub fn current_view(&self) -> ViewNumber {
+        self.current_view
     }
 
-    pub fn cur_epoch(&self) -> Option<EpochNumber> {
+    pub fn current_epoch(&self) -> Option<EpochNumber> {
         self.current_epoch
     }
 
     pub fn set_view(&mut self, view: ViewNumber, epoch: EpochNumber) {
-        self.cur_view = view;
+        self.current_view = view;
         self.current_epoch = Some(epoch);
     }
 

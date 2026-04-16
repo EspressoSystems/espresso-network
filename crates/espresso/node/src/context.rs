@@ -41,7 +41,7 @@ use url::Url;
 use crate::{
     Node, SeqTypes, SequencerApiVersion,
     catchup::ParallelStateCatchup,
-    consensus_handle::{ConsensusEvent, ConsensusHandle},
+    consensus_handle::{ConsensusHandle, CoordinatorEvent},
     external_event_handler::ExternalEventHandler,
     proposal_fetcher::ProposalFetcherConfig,
     request_response::{
@@ -141,14 +141,14 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
 
         let epoch_height = initializer.epoch_height;
 
-        let (coordinator, query_tx) = Coordinator::<SeqTypes, CN>::new(
-            membership_coordinator.clone(),
-            coordinator_network,
-            &initializer,
-            validator_config.public_key,
-            validator_config.private_key.clone(),
-            Duration::from_secs(10),
-        );
+        let (coordinator, query_tx) = Coordinator::<SeqTypes, CN>::maker()
+            .membership_coordinator(membership_coordinator.clone())
+            .network(coordinator_network)
+            .initializer(&initializer)
+            .public_key(validator_config.public_key)
+            .private_key(validator_config.private_key.clone())
+            .timeout_duration(Duration::from_secs(10))
+            .make();
 
         let event_streamer = Arc::new(RwLock::new(EventsStreamer::<SeqTypes>::new(
             stake_table.0,
@@ -344,7 +344,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
     }
 
     /// Stream consensus events.
-    pub fn event_stream(&self) -> BoxStream<'static, ConsensusEvent<SeqTypes>> {
+    pub fn event_stream(&self) -> BoxStream<'static, CoordinatorEvent<SeqTypes>> {
         self.consensus_handle.event_stream()
     }
 
@@ -486,7 +486,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> Drop for SequencerCon
 async fn handle_events<N, P>(
     consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<N, P>>>,
     node_id: u64,
-    mut events: impl Stream<Item = ConsensusEvent<SeqTypes>> + Unpin,
+    mut events: impl Stream<Item = CoordinatorEvent<SeqTypes>> + Unpin,
     persistence: Arc<P>,
     state_signer: Arc<RwLock<StateSigner<SequencerApiVersion>>>,
     external_event_handler: ExternalEventHandler,
@@ -514,7 +514,7 @@ async fn handle_events<N, P>(
         tracing::debug!(node_id, ?event, "consensus event");
 
         match event {
-            ConsensusEvent::LegacyEvent(ref hotshot_event) => {
+            CoordinatorEvent::LegacyEvent(ref hotshot_event) => {
                 // Handle external messages from the legacy protocol.
                 if let hotshot_types::event::EventType::ExternalMessageReceived { ref data, .. } =
                     hotshot_event.event
@@ -542,20 +542,20 @@ async fn handle_events<N, P>(
                         .await;
                 }
             },
-            ConsensusEvent::NewDecide(_new_decide) => {
+            CoordinatorEvent::NewDecide(_new_decide) => {
                 // TODO: Handle new protocol decide events.
                 // This will need to translate NewDecideEvent into the format
                 // expected by persistence, state signer, and events streamer.
             },
-            ConsensusEvent::ExternalMessageReceived { ref data, .. } => {
+            CoordinatorEvent::ExternalMessageReceived { ref data, .. } => {
                 if let Err(err) = external_event_handler.handle_event(data).await {
                     tracing::warn!("Failed to handle external message: {:?}", err);
                 }
             },
-            ConsensusEvent::QuorumProposal { .. } => {
+            CoordinatorEvent::QuorumProposal { .. } => {
                 // Handled by the proposal fetcher via its own event stream.
             },
-            ConsensusEvent::ViewChanged { .. } => {
+            CoordinatorEvent::ViewChanged { .. } => {
                 // View changes are tracked internally by the adapter.
             },
         }

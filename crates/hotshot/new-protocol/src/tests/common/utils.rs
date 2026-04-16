@@ -77,7 +77,7 @@ pub struct TestView {
 }
 
 impl TestView {
-    /// Build a ProposalMessage suitable for sending as a ConsensusEvent::Proposal.
+    /// Build a ProposalMessage suitable for sending as a CoordinatorEvent::Proposal.
     /// `recipient_key` is the public key of the node that will receive the VID share.
     pub fn proposal_message(
         &self,

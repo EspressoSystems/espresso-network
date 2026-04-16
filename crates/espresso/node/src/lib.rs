@@ -851,7 +851,7 @@ pub mod testing {
     use super::*;
     use crate::{
         catchup::ParallelStateCatchup,
-        consensus_handle::ConsensusEvent,
+        consensus_handle::CoordinatorEvent,
         persistence::no_storage::{self, NoStorage},
     };
 
@@ -1523,7 +1523,7 @@ pub mod testing {
     // Wait for decide event, make sure it matches submitted transaction. Return the block number
     // containing the transaction and the block payload size
     pub async fn wait_for_decide_on_handle(
-        events: &mut (impl Stream<Item = ConsensusEvent<SeqTypes>> + Unpin),
+        events: &mut (impl Stream<Item = CoordinatorEvent<SeqTypes>> + Unpin),
         submitted_txn: &Transaction,
     ) -> (u64, usize) {
         let commitment = submitted_txn.commit();
@@ -1533,7 +1533,7 @@ pub mod testing {
             let event = events.next().await.unwrap();
             tracing::info!("Received event from handle: {event:?}");
 
-            if let ConsensusEvent::LegacyEvent(Event {
+            if let CoordinatorEvent::LegacyEvent(Event {
                 event: EventType::Decide { leaf_chain, .. },
                 ..
             }) = event
@@ -1565,13 +1565,13 @@ pub mod testing {
     /// Waits until a node has reached the given target epoch (exclusive).
     /// The function returns once the first event indicates an epoch higher than `target_epoch`.
     pub async fn wait_for_epochs(
-        events: &mut (impl futures::Stream<Item = ConsensusEvent<SeqTypes>> + std::marker::Unpin),
+        events: &mut (impl futures::Stream<Item = CoordinatorEvent<SeqTypes>> + std::marker::Unpin),
         epoch_height: u64,
         target_epoch: u64,
     ) {
         tracing::info!(target_epoch, "waiting for epoch");
         while let Some(event) = events.next().await {
-            if let ConsensusEvent::LegacyEvent(Event {
+            if let CoordinatorEvent::LegacyEvent(Event {
                 event: EventType::Decide { leaf_chain, .. },
                 ..
             }) = event
@@ -1607,7 +1607,7 @@ mod test {
 
     use self::testing::run_test_builder;
     use super::*;
-    use crate::consensus_handle::ConsensusEvent;
+    use crate::consensus_handle::CoordinatorEvent;
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_skeleton_instantiation() {
@@ -1707,7 +1707,7 @@ mod test {
         loop {
             let event = events.next().await.unwrap();
             tracing::info!("Received event from handle: {event:?}");
-            let ConsensusEvent::LegacyEvent(Event {
+            let CoordinatorEvent::LegacyEvent(Event {
                 event: EventType::Decide { leaf_chain, .. },
                 ..
             }) = event
