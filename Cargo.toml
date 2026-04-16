@@ -26,6 +26,7 @@ members = [
     "crates/hotshot/libp2p-networking",
     "crates/hotshot/macros",
     "crates/hotshot/new-protocol",
+    "crates/hotshot/new-protocol/bench",
     "crates/hotshot/orchestrator",
     "crates/hotshot/task",
     "crates/hotshot/task-impls",
@@ -76,6 +77,7 @@ default-members = [
     "crates/hotshot/types",
     "crates/hotshot/utils",
     "crates/hotshot/new-protocol",
+    "crates/hotshot/new-protocol/bench",
     "crates/hotshot-builder/legacy",
     "crates/hotshot-builder/refactored",
     "hotshot-events-service",
@@ -209,6 +211,7 @@ hotshot-example-types = { path = "crates/hotshot/example-types" }
 hotshot-libp2p-networking = { path = "crates/hotshot/libp2p-networking" }
 hotshot-macros = { path = "crates/hotshot/macros" }
 hotshot-new-protocol = { path = "crates/hotshot/new-protocol" }
+hotshot-new-protocol-bench = { path = "crates/hotshot/new-protocol/bench" }
 hotshot-orchestrator = { path = "crates/hotshot/orchestrator" }
 hotshot-query-service = { path = "hotshot-query-service" }
 hotshot-query-service-types = { path = "hotshot-query-service-types" }
