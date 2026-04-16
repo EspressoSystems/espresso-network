@@ -141,7 +141,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
 
         let epoch_height = initializer.epoch_height;
 
-        let (coordinator, query_tx) = Coordinator::<SeqTypes, CN>::maker()
+        let coordinator = Coordinator::<SeqTypes, CN>::maker()
             .membership_coordinator(membership_coordinator.clone())
             .network(coordinator_network)
             .initializer(&initializer)
@@ -176,7 +176,6 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
         let consensus_handle = Arc::new(ConsensusHandle::new(
             hotshot_handle.clone(),
             coordinator,
-            query_tx,
             epoch_height,
             legacy_event_rx,
             EXTERNAL_EVENT_CHANNEL_SIZE,

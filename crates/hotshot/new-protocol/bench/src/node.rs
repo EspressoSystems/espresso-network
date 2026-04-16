@@ -19,7 +19,6 @@ use hotshot_new_protocol::{
     network::Network,
     outbox::Outbox,
     proposal::ProposalValidator,
-    query::CoordinatorQuery,
     state::StateManager,
     vid::{VidDisperser, VidReconstructor},
     vote::VoteCollector,
@@ -32,7 +31,6 @@ use hotshot_types::{
     traits::{metrics::NoMetrics, signature_key::SignatureKey},
     x25519::Keypair,
 };
-use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
 use crate::{config::NodeConfig, membership::make_membership, metrics::MetricsCollector};
@@ -157,13 +155,10 @@ async fn build_coordinator(
         EpochNumber::genesis(),
     );
 
-    let (_query_tx, query_rx) = mpsc::channel::<CoordinatorQuery<TestTypes>>(256);
-
     let mut coordinator = Coordinator::builder()
         .consensus(consensus)
         .network(net)
         .state_manager(state_manager)
-        .query_rx(query_rx)
         .vote1_collector(vote1_collector)
         .vote2_collector(vote2_collector)
         .timeout_collector(timeout_collector)

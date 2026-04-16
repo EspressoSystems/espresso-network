@@ -79,12 +79,10 @@ impl TestHarness {
 
         let network = Network::new(MockNetwork::default(), membership.clone(), upgrade_lock());
 
-        let (_query_tx, query_rx) = tokio::sync::mpsc::channel(64);
         let coordinator = MockCoordinator::builder()
             .consensus(consensus)
             .network(network)
             .state_manager(state_manager)
-            .query_rx(query_rx)
             .vote1_collector(vote1_collector)
             .vote2_collector(vote2_collector)
             .timeout_collector(timeout_collector)

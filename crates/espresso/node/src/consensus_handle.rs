@@ -13,10 +13,10 @@ use committable::Commitment;
 use futures::{StreamExt, stream::BoxStream};
 use hotshot::types::SystemContextHandle;
 use hotshot_new_protocol::{
+    client::{ClientApi, UpdateLeaf},
     consensus::ConsensusOutput,
     coordinator::{Coordinator, CoordinatorOutput, error::Severity},
     message::{Certificate2, Proposal as NewProposal},
-    query::CoordinatorQuery,
 };
 use hotshot_types::{
     data::{EpochNumber, Leaf2, QuorumProposalWrapper, ViewNumber},
@@ -29,10 +29,7 @@ use hotshot_types::{
     },
     utils::StateAndDelta,
 };
-use tokio::{
-    spawn,
-    sync::{mpsc, oneshot},
-};
+use tokio::spawn;
 use tokio_util::task::AbortOnDropHandle;
 use versions::version;
 
@@ -120,9 +117,9 @@ fn coordinator_event<T: NodeType>(output: &CoordinatorOutput<T>) -> Option<Coord
 
 pub struct ConsensusHandle<T: NodeType, I: hotshot::traits::NodeImplementation<T>> {
     legacy_handle: Arc<RwLock<SystemContextHandle<T, I>>>,
-    query_tx: mpsc::Sender<CoordinatorQuery<T>>,
+    client_api: ClientApi<T>,
     coordinator_task: AbortOnDropHandle<()>,
-    coordinator_epoch_height: u64,
+    epoch_height: u64,
     new_protocol_active: AtomicBool,
     legacy_event_rx: InactiveReceiver<Event<T>>,
     event_rx: InactiveReceiver<CoordinatorEvent<T>>,
@@ -132,11 +129,12 @@ impl<T: NodeType, I: hotshot::traits::NodeImplementation<T>> ConsensusHandle<T, 
     pub fn new<CN: ConnectedNetwork<T::SignatureKey>>(
         legacy_handle: Arc<RwLock<SystemContextHandle<T, I>>>,
         coordinator: Coordinator<T, CN>,
-        query_tx: mpsc::Sender<CoordinatorQuery<T>>,
-        coordinator_epoch_height: u64,
+        epoch_height: u64,
         legacy_event_rx: InactiveReceiver<Event<T>>,
         event_channel_capacity: usize,
     ) -> Self {
+        let client_api = coordinator.client_api().clone();
+
         let (mut event_tx, mut event_rx) =
             async_broadcast::broadcast::<CoordinatorEvent<T>>(event_channel_capacity);
         event_tx.set_await_active(false);
@@ -147,9 +145,9 @@ impl<T: NodeType, I: hotshot::traits::NodeImplementation<T>> ConsensusHandle<T, 
 
         Self {
             legacy_handle,
-            query_tx,
+            client_api,
             coordinator_task,
-            coordinator_epoch_height,
+            epoch_height,
             new_protocol_active: AtomicBool::new(false),
             legacy_event_rx,
             event_rx: event_rx.deactivate(),
@@ -160,16 +158,8 @@ impl<T: NodeType, I: hotshot::traits::NodeImplementation<T>> ConsensusHandle<T, 
         self.legacy_handle.clone()
     }
 
-    async fn query<R>(
-        &self,
-        make_query: impl FnOnce(oneshot::Sender<R>) -> CoordinatorQuery<T>,
-    ) -> R {
-        let (tx, rx) = oneshot::channel();
-        self.query_tx
-            .send(make_query(tx))
-            .await
-            .expect("coordinator channel closed");
-        rx.await.expect("coordinator dropped response sender")
+    pub fn client_api(&self) -> &ClientApi<T> {
+        &self.client_api
     }
 
     async fn new_protocol_at(&self, view: ViewNumber) -> bool {
@@ -211,14 +201,22 @@ impl<T: NodeType, I: hotshot::traits::NodeImplementation<T>> ConsensusHandle<T, 
 
     pub async fn current_view(&self) -> ViewNumber {
         if self.new_protocol().await {
-            return self.query(CoordinatorQuery::CurrentView).await;
+            return self
+                .client_api
+                .current_view()
+                .await
+                .expect("coordinator channel closed");
         }
         self.legacy_handle.read().await.cur_view().await
     }
 
     pub async fn decided_leaf(&self) -> Leaf2<T> {
         if self.new_protocol().await {
-            return self.query(CoordinatorQuery::DecidedLeaf).await;
+            return self
+                .client_api
+                .decided_leaf()
+                .await
+                .expect("coordinator channel closed");
         }
         self.legacy_handle.read().await.decided_leaf().await
     }
@@ -226,8 +224,10 @@ impl<T: NodeType, I: hotshot::traits::NodeImplementation<T>> ConsensusHandle<T, 
     pub async fn decided_state(&self) -> Arc<T::ValidatedState> {
         if self.new_protocol().await {
             return self
-                .query(CoordinatorQuery::DecidedState)
+                .client_api
+                .decided_state()
                 .await
+                .expect("coordinator channel closed")
                 .expect("decided state must exist");
         }
         self.legacy_handle.read().await.decided_state().await
@@ -236,8 +236,10 @@ impl<T: NodeType, I: hotshot::traits::NodeImplementation<T>> ConsensusHandle<T, 
     pub async fn state(&self, view: ViewNumber) -> Option<Arc<T::ValidatedState>> {
         if self.new_protocol_at(view).await {
             return self
-                .query(|tx| CoordinatorQuery::GetState { view, respond: tx })
-                .await;
+                .client_api
+                .state(view)
+                .await
+                .expect("coordinator channel closed");
         }
         self.legacy_handle.read().await.state(view).await
     }
@@ -245,8 +247,10 @@ impl<T: NodeType, I: hotshot::traits::NodeImplementation<T>> ConsensusHandle<T, 
     pub async fn state_and_delta(&self, view: ViewNumber) -> StateAndDelta<T> {
         if self.new_protocol_at(view).await {
             return self
-                .query(|tx| CoordinatorQuery::GetStateAndDelta { view, respond: tx })
-                .await;
+                .client_api
+                .state_and_delta(view)
+                .await
+                .expect("coordinator channel closed");
         }
         self.legacy_handle
             .read()
@@ -260,7 +264,11 @@ impl<T: NodeType, I: hotshot::traits::NodeImplementation<T>> ConsensusHandle<T, 
 
     pub async fn undecided_leaves(&self) -> Vec<Leaf2<T>> {
         if self.new_protocol().await {
-            return self.query(CoordinatorQuery::UndecidedLeaves).await;
+            return self
+                .client_api
+                .undecided_leaves()
+                .await
+                .expect("coordinator channel closed");
         }
         self.legacy_handle
             .read()
@@ -274,14 +282,18 @@ impl<T: NodeType, I: hotshot::traits::NodeImplementation<T>> ConsensusHandle<T, 
 
     pub async fn current_epoch(&self) -> Option<EpochNumber> {
         if self.new_protocol().await {
-            return self.query(CoordinatorQuery::CurrentEpoch).await;
+            return self
+                .client_api
+                .current_epoch()
+                .await
+                .expect("coordinator channel closed");
         }
         self.legacy_handle.read().await.cur_epoch().await
     }
 
     pub async fn epoch_height(&self) -> u64 {
         if self.new_protocol().await {
-            return self.coordinator_epoch_height;
+            return self.epoch_height;
         }
         self.legacy_handle.read().await.epoch_height
     }
@@ -390,14 +402,15 @@ impl<T: NodeType, I: hotshot::traits::NodeImplementation<T>> ConsensusHandle<T, 
         let view = leaf.view_number();
         if self.new_protocol_at(view).await {
             return self
-                .query(|tx| CoordinatorQuery::UpdateLeaf {
+                .client_api
+                .update_leaf(UpdateLeaf {
                     view,
                     leaf,
                     state,
                     delta,
-                    respond: tx,
                 })
-                .await;
+                .await
+                .map_err(|e| anyhow::anyhow!("{e}"));
         }
         self.legacy_handle
             .read()

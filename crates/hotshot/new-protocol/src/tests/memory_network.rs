@@ -221,13 +221,10 @@ async fn build_coordinator(
     let network = MemoryNetwork::new(&public_key, &group, &[Topic::Global], None);
     let network = Network::new(network, membership.clone(), upgrade_lock());
 
-    let (_query_tx, query_rx) = mpsc::channel(256);
-
     Coordinator::builder()
         .consensus(consensus)
         .network(network)
         .state_manager(state_manager)
-        .query_rx(query_rx)
         .vote1_collector(vote1_collector)
         .vote2_collector(vote2_collector)
         .timeout_collector(timeout_collector)

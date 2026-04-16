@@ -1,4 +1,5 @@
 pub mod block;
+pub mod client;
 pub mod consensus;
 pub mod coordinator;
 pub mod epoch;
@@ -7,7 +8,6 @@ pub mod logging;
 pub mod message;
 pub mod network;
 pub mod outbox;
-pub mod query;
 pub mod state;
 pub mod vid;
 pub mod vote;
