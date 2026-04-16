@@ -15,24 +15,20 @@
 //! The state API provides an interface for serving queries against arbitrarily old snapshots of the state.
 //! This allows a full Merkle tree to be reconstructed from storage.
 //! If any parent state is missing then the partial snapshot can not be queried.
-use std::{
-    fmt::{Debug, Display},
-    path::PathBuf,
-};
+use std::{fmt::Display, path::PathBuf};
 
-use derive_more::From;
 use futures::FutureExt;
 use hotshot_types::traits::node_implementation::NodeType;
-use serde::{Deserialize, Serialize};
-use snafu::{ResultExt, Snafu};
+use snafu::ResultExt;
 use tagged_base64::TaggedBase64;
-use tide_disco::{Api, RequestError, StatusCode, api::ApiError, method::ReadState};
+use tide_disco::{Api, StatusCode, api::ApiError, method::ReadState};
 use vbs::version::StaticVersionType;
 
-use crate::{QueryError, api::load_api};
+use crate::api::load_api;
 
 pub(crate) mod data_source;
 pub use data_source::*;
+pub use hotshot_query_service_types::merklized_state::*;
 
 #[derive(Default)]
 pub struct Options {
@@ -43,32 +39,6 @@ pub struct Options {
     /// These optional files may contain route definitions for application-specific routes that have
     /// been added as extensions to the basic status API.
     pub extensions: Vec<toml::Value>,
-}
-
-#[derive(Clone, Debug, From, Snafu, Deserialize, Serialize)]
-pub enum Error {
-    Request {
-        source: RequestError,
-    },
-    #[snafu(display("{source}"))]
-    Query {
-        source: QueryError,
-    },
-    #[snafu(display("error {status}: {message}"))]
-    Custom {
-        message: String,
-        status: StatusCode,
-    },
-}
-
-impl Error {
-    pub fn status(&self) -> StatusCode {
-        match self {
-            Self::Request { .. } => StatusCode::BAD_REQUEST,
-            Self::Query { source, .. } => source.status(),
-            Self::Custom { status, .. } => *status,
-        }
-    }
 }
 
 pub fn define_api<

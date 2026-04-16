@@ -23,8 +23,7 @@ use espresso_types::{
         RewardMerkleTreeV1, StakeTableEvent,
     },
     v0_4::{
-        PermittedRewardMerkleTreeV2, RewardAccountProofV2, RewardAccountQueryDataV2,
-        RewardAccountV2, RewardMerkleTreeV2,
+        PermittedRewardMerkleTreeV2, RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleTreeV2,
     },
 };
 use futures::{
@@ -44,6 +43,7 @@ use hotshot_types::{
     network::NetworkConfig,
     simple_certificate::LightClientStateUpdateCertificateV2,
     traits::{election::Membership, network::ConnectedNetwork},
+    utils::epoch_from_block_number,
     vid::avidm::{AvidMScheme, init_avidm_param},
     vote::HasViewNumber,
 };
@@ -54,6 +54,7 @@ use rand::Rng;
 use request_response::RequestType;
 use serde::{Deserialize, Serialize};
 use tokio::time::timeout;
+use vbs::version::Version;
 
 use self::data_source::{HotShotConfigDataSource, NodeStateDataSource, StateSignatureDataSource};
 use crate::{
@@ -78,6 +79,7 @@ pub mod fs;
 pub mod light_client;
 pub mod options;
 pub mod sql;
+pub mod unlock_schedule;
 mod update;
 
 pub use options::Options;
@@ -194,8 +196,16 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> EventsSource<SeqTypes
 impl<N: ConnectedNetwork<PubKey>, D: Send + Sync, P: SequencerPersistence> TokenDataSource<SeqTypes>
     for StorageState<N, P, D>
 {
+    async fn get_initial_supply_l1(&self) -> anyhow::Result<U256> {
+        self.as_ref().get_initial_supply_l1().await
+    }
+
     async fn get_total_supply_l1(&self) -> anyhow::Result<U256> {
         self.as_ref().get_total_supply_l1().await
+    }
+
+    async fn get_decided_header(&self) -> espresso_types::Header {
+        self.as_ref().get_decided_header().await
     }
 }
 
@@ -257,16 +267,16 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, P: SequencerPersistence> StakeTableDa
         self.as_ref().current_proposal_participation().await
     }
     /// Get all the validator participation for the previous epoch
-    async fn previous_proposal_participation(&self) -> HashMap<PubKey, f64> {
-        self.as_ref().previous_proposal_participation().await
+    async fn proposal_participation(&self, epoch: EpochNumber) -> HashMap<PubKey, f64> {
+        self.as_ref().proposal_participation(epoch).await
     }
     /// Get all the vote participation for the current epoch
     async fn current_vote_participation(&self) -> HashMap<PubKey, f64> {
         self.as_ref().current_vote_participation().await
     }
-    /// Get all the vote participation for the previous epoch
-    async fn previous_vote_participation(&self) -> HashMap<PubKey, f64> {
-        self.as_ref().previous_vote_participation().await
+    /// Get all the vote participation for a given epoch
+    async fn vote_participation(&self, epoch: EpochNumber) -> HashMap<PubKey, f64> {
+        self.as_ref().vote_participation(epoch).await
     }
 
     async fn get_all_validators(
@@ -292,6 +302,22 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, P: SequencerPersistence> StakeTableDa
 impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> TokenDataSource<SeqTypes>
     for ApiState<N, P>
 {
+    async fn get_initial_supply_l1(&self) -> anyhow::Result<U256> {
+        let node_state = self.sequencer_context.as_ref().get().await.node_state();
+        let fetcher = node_state
+            .coordinator
+            .membership()
+            .read()
+            .await
+            .fetcher()
+            .clone();
+        let cached = *fetcher.initial_supply.read().await;
+        match cached {
+            Some(supply) => Ok(supply),
+            None => Ok(fetcher.fetch_and_update_initial_supply().await?),
+        }
+    }
+
     async fn get_total_supply_l1(&self) -> anyhow::Result<U256> {
         match self.token_supply.get(&()).await {
             Some(supply) => Ok(supply),
@@ -314,6 +340,17 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> TokenDataSource<SeqTy
                 Ok(supply)
             },
         }
+    }
+
+    async fn get_decided_header(&self) -> espresso_types::Header {
+        self.consensus()
+            .await
+            .read()
+            .await
+            .decided_leaf()
+            .await
+            .block_header()
+            .clone()
     }
 }
 
@@ -443,8 +480,8 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StakeTableDataSource<
             .current_proposal_participation()
     }
 
-    /// Get the previous proposal participation.
-    async fn previous_proposal_participation(&self) -> HashMap<PubKey, f64> {
+    /// Get the proposal participation for a given epoch.
+    async fn proposal_participation(&self, epoch: EpochNumber) -> HashMap<PubKey, f64> {
         self.consensus()
             .await
             .read()
@@ -452,7 +489,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StakeTableDataSource<
             .consensus()
             .read()
             .await
-            .previous_proposal_participation()
+            .proposal_participation(epoch)
     }
 
     /// Get the current vote participation.
@@ -467,8 +504,8 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StakeTableDataSource<
             .current_vote_participation()
     }
 
-    /// Get the previous vote participation.
-    async fn previous_vote_participation(&self) -> HashMap<PubKey, f64> {
+    /// Get the vote participation for a given epoch.
+    async fn vote_participation(&self, epoch: EpochNumber) -> HashMap<PubKey, f64> {
         self.consensus()
             .await
             .read()
@@ -476,7 +513,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StakeTableDataSource<
             .consensus()
             .read()
             .await
-            .previous_vote_participation()
+            .vote_participation(Some(epoch))
     }
 
     async fn get_all_validators(
@@ -829,6 +866,18 @@ where
 {
     async fn node_state(&self) -> NodeState {
         self.as_ref().node_state().await
+    }
+}
+
+impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, D: CatchupStorage + Send + Sync>
+    data_source::DatabaseMetadataSource for StorageState<N, P, D>
+where
+    N: ConnectedNetwork<PubKey>,
+    P: SequencerPersistence,
+    D: data_source::DatabaseMetadataSource + Send + Sync,
+{
+    async fn get_table_sizes(&self) -> anyhow::Result<Vec<data_source::TableSize>> {
+        self.inner().get_table_sizes().await
     }
 }
 
@@ -1316,127 +1365,57 @@ pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
         _account: RewardAccountV1,
     ) -> impl Send + Future<Output = anyhow::Result<RewardAccountQueryDataV1>>;
 
-    fn save_reward_merkle_tree_v2(
+    fn save_and_gc_reward_tree_v2(
         &self,
         node_state: &NodeState,
         height: u64,
+        version: Version,
         merkle_tree: &RewardMerkleTreeV2,
     ) -> impl Send + Future<Output = anyhow::Result<()>> {
         async move {
-            {
-                let serialization =
-                    bincode::serialize(&TryInto::<RewardMerkleTreeV2Data>::try_into(merkle_tree)?)
-                        .context("Merkle tree serialization failed; this should never happen.")?;
-                self.persist_tree(height, serialization).await?;
+            let serialization =
+                bincode::serialize(&TryInto::<RewardMerkleTreeV2Data>::try_into(merkle_tree)?)
+                    .context("Merkle tree serialization failed")?;
+            self.persist_tree(height, serialization).await?;
+
+            // Skip garbage collection in tests
+            if cfg!(any(test, feature = "testing")) {
+                return Ok(());
             }
 
-            // it's imperative that we do not block the state update loop from this point on.
-            // ultimately, we would retry in the next iteration anyway;
-            // all the information already exists.
-            //
-            // in tests we run this check every block, while in release builds we do not. however,
-            // in either case the actual work should still not occur every block, since the proofs
-            // are not generated unless they were not already stored for the previous light client
-            // finalized height.
-
-            if cfg!(any(test, feature = "testing")) {
-                let finalized_hotshot_height = height;
-
-                // check to see whether we have proofs at that height already stored
-                if !self.proof_exists(finalized_hotshot_height).await {
-                    let Ok(permitted_tree) = self
-                        .load_reward_merkle_tree_v2(finalized_hotshot_height)
-                        .await
-                    else {
-                        return Ok(());
-                    };
-
-                    let tree = permitted_tree.tree;
-
-                    // we try to be careful to avoid allocating for all the proofs immediately,
-                    // but note that there are no guarantees here (if e.g. the database is slow)
-                    let iter =
-                        tree.iter()
-                            .filter_map(|(account, balance): (&RewardAccountV2, _)| {
-                                let proof = RewardAccountProofV2::prove(&tree, (*account).into())?;
-
-                                let proof = RewardAccountQueryDataV2 {
-                                    balance: (*balance).into(),
-                                    proof: proof.0,
-                                };
-
-                                let serialized_account = bincode::serialize(&account).ok()?;
-                                let serialized_proof = bincode::serialize(&proof).ok()?;
-
-                                Some((serialized_account, serialized_proof))
-                            });
-
-                    let Ok(_) = self.persist_proofs(finalized_hotshot_height, iter).await else {
-                        return Ok(());
-                    };
-
-                    // tree is dropped here
-                }
-            // we offset the check by the node id, just to mitigate having the entire network
-            // doing this calculation at the same time.
-            } else if (height + node_state.node_id).is_multiple_of(30) {
-                let Ok(finalized_hotshot_height) = node_state.finalized_hotshot_height().await
-                else {
-                    // if we can't get the finalized hotshot height, there's nothing to do
+            let finalized_hotshot_height = match node_state.finalized_hotshot_height().await {
+                Ok(h) => h,
+                Err(err) => {
+                    tracing::warn!("failed to get finalized hotshot height: {err:#}");
                     return Ok(());
-                };
+                },
+            };
 
-                // as soon as we know the finalized height,
-                // we can garbage collect anything that we know we won't need
-                if let Err(err) = self
-                    .garbage_collect(std::cmp::min(height, finalized_hotshot_height))
-                    .await
-                {
-                    tracing::debug!("Failed to garbage collect reward merkle tree: {err}");
-                }
+            // Never garbage collect beyond the current block or the finalized L1 height.
+            let mut gc_height = height.min(finalized_hotshot_height);
 
-                // check to see whether we have proofs at that height already stored
-                if !self.proof_exists(finalized_hotshot_height).await {
-                    let Ok(permitted_tree) = self
-                        .load_reward_merkle_tree_v2(finalized_hotshot_height)
-                        .await
-                    else {
-                        return Ok(());
-                    };
-
-                    let tree = permitted_tree.tree;
-
-                    // we try to be careful to avoid allocating for all the proofs immediately,
-                    // but note that there are no guarantees here (if e.g. the database is slow)
-                    let iter =
-                        tree.iter()
-                            .filter_map(|(account, balance): (&RewardAccountV2, _)| {
-                                let proof = RewardAccountProofV2::prove(&tree, (*account).into())?;
-
-                                let proof = RewardAccountQueryDataV2 {
-                                    balance: (*balance).into(),
-                                    proof: proof.0,
-                                };
-
-                                let serialized_account = bincode::serialize(&account).ok()?;
-                                let serialized_proof = bincode::serialize(&proof).ok()?;
-
-                                Some((serialized_account, serialized_proof))
-                            });
-
-                    let Ok(_) = self.persist_proofs(finalized_hotshot_height, iter).await else {
-                        return Ok(());
-                    };
-
-                    let _ = self.garbage_collect(finalized_hotshot_height).await;
-
-                    // tree is dropped here
-                }
+            // For epoch reward versions, also retain the last 4 epochs
+            if version >= versions::EPOCH_REWARD_VERSION
+                && let Some(epoch_height) = node_state.epoch_height
+            {
+                let current_epoch = epoch_from_block_number(height, epoch_height);
+                let gc_epoch = current_epoch.saturating_sub(4);
+                gc_height = gc_height.min(gc_epoch * epoch_height);
+            }
+            if let Err(err) = self.garbage_collect(gc_height).await {
+                tracing::info!(gc_height, "failed to garbage collect: {err:#}");
             }
 
             Ok(())
         }
     }
+
+    fn persist_reward_proofs(
+        &self,
+        node_state: &NodeState,
+        height: u64,
+        version: Version,
+    ) -> impl Send + Future<Output = anyhow::Result<()>>;
 
     fn load_reward_merkle_tree_v2(
         &self,
@@ -1458,19 +1437,11 @@ pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
 
     fn load_reward_account_proof_v2(
         &self,
-        height: u64,
-        account: RewardAccountV2,
+        _height: u64,
+        _account: RewardAccountV2,
     ) -> impl Send + Future<Output = anyhow::Result<RewardAccountQueryDataV2>> {
-        async move {
-            let serialized_account = bincode::serialize(&account).context(
-                "Failed to serialize RewardAccountV2 for lookup; this should never happen.",
-            )?;
-            let proof_bytes = self.load_proof(height, serialized_account).await?;
-
-            bincode::deserialize::<RewardAccountQueryDataV2>(&proof_bytes).context(
-                "Failed to deserialize RewardAccountQueryDataV2 for height {height} from storage; \
-                 this should never happen.",
-            )
+        async {
+            bail!("load_reward_account_proof_v2 is not supported for this data source");
         }
     }
 
@@ -1509,6 +1480,7 @@ pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
         &self,
         height: u64,
         account: Vec<u8>,
+        epoch_height: u64,
     ) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>>;
 
     fn load_latest_proof(
@@ -1528,6 +1500,17 @@ impl RewardMerkleTreeDataSource for hotshot_query_service::data_source::MetricsD
         _height: u64,
         _account: RewardAccountV1,
     ) -> impl Send + Future<Output = anyhow::Result<RewardAccountQueryDataV1>> {
+        async {
+            bail!("reward merklized state is not supported for this data source");
+        }
+    }
+
+    fn persist_reward_proofs(
+        &self,
+        _node_state: &NodeState,
+        _height: u64,
+        _version: Version,
+    ) -> impl Send + Future<Output = anyhow::Result<()>> {
         async {
             bail!("reward merklized state is not supported for this data source");
         }
@@ -1569,6 +1552,7 @@ impl RewardMerkleTreeDataSource for hotshot_query_service::data_source::MetricsD
         &self,
         _height: u64,
         _account: Vec<u8>,
+        _epoch_height: u64,
     ) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {
         async move {
             bail!("reward merklized state is not supported for this data source");
@@ -1593,7 +1577,7 @@ impl<T, S> RewardMerkleTreeDataSource
     for hotshot_query_service::data_source::ExtensibleDataSource<T, S>
 where
     T: RewardMerkleTreeDataSource,
-    S: Send + Sync + Clone + 'static,
+    S: Send + Sync + Clone + NodeStateDataSource + 'static,
 {
     async fn load_v1_reward_account_proof(
         &self,
@@ -1603,6 +1587,28 @@ where
         self.inner()
             .load_v1_reward_account_proof(height, account)
             .await
+    }
+
+    async fn load_reward_account_proof_v2(
+        &self,
+        height: u64,
+        account: RewardAccountV2,
+    ) -> anyhow::Result<RewardAccountQueryDataV2> {
+        let epoch_height = self
+            .as_ref()
+            .node_state()
+            .await
+            .epoch_height
+            .context("epoch height not found")?;
+        let serialized_account = bincode::serialize(&account)
+            .context("Failed to serialize RewardAccountV2 for lookup; this should never happen.")?;
+        let proof_bytes = self
+            .inner()
+            .load_proof(height, serialized_account, epoch_height)
+            .await?;
+
+        bincode::deserialize::<RewardAccountQueryDataV2>(&proof_bytes)
+            .context("Failed to deserialize RewardAccountQueryDataV2 from storage")
     }
 
     fn persist_tree(
@@ -1633,8 +1639,9 @@ where
         &self,
         height: u64,
         account: Vec<u8>,
+        epoch_height: u64,
     ) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {
-        async move { self.inner().load_proof(height, account).await }
+        async move { self.inner().load_proof(height, account, epoch_height).await }
     }
 
     fn load_latest_proof(
@@ -1646,6 +1653,19 @@ where
 
     fn proof_exists(&self, height: u64) -> impl Send + Future<Output = bool> {
         async move { self.inner().proof_exists(height).await }
+    }
+
+    fn persist_reward_proofs(
+        &self,
+        node_state: &NodeState,
+        height: u64,
+        version: Version,
+    ) -> impl Send + Future<Output = anyhow::Result<()>> {
+        async move {
+            self.inner()
+                .persist_reward_proofs(node_state, height, version)
+                .await
+        }
     }
 }
 
@@ -1742,6 +1762,7 @@ pub mod test_helpers {
         api_config: Option<Options>,
         network_config: Option<TestConfig<{ NUM_NODES }>>,
         contracts: Option<Contracts>,
+        initial_token_supply: Option<U256>,
     }
 
     impl Default for TestNetworkConfigBuilder<5, no_storage::Options, NullStateCatchup> {
@@ -1753,6 +1774,7 @@ pub mod test_helpers {
                 network_config: None,
                 api_config: None,
                 contracts: None,
+                initial_token_supply: None,
             }
         }
     }
@@ -1769,6 +1791,7 @@ pub mod test_helpers {
                 network_config: None,
                 api_config: None,
                 contracts: None,
+                initial_token_supply: None,
             }
         }
     }
@@ -1783,6 +1806,11 @@ pub mod test_helpers {
             self
         }
 
+        pub fn initial_token_supply(mut self, supply: U256) -> Self {
+            self.initial_token_supply = Some(supply);
+            self
+        }
+
         pub fn persistences<NP: PersistenceOptions>(
             self,
             persistence: [NP; NUM_NODES],
@@ -1794,6 +1822,7 @@ pub mod test_helpers {
                 api_config: self.api_config,
                 persistence: Some(persistence),
                 contracts: self.contracts,
+                initial_token_supply: self.initial_token_supply,
             }
         }
 
@@ -1813,6 +1842,7 @@ pub mod test_helpers {
                 api_config: self.api_config,
                 persistence: self.persistence,
                 contracts: self.contracts,
+                initial_token_supply: self.initial_token_supply,
             }
         }
 
@@ -1873,7 +1903,7 @@ pub mod test_helpers {
                 .multisig_pauser(signer.address())
                 .token_name("Espresso".to_string())
                 .token_symbol("ESP".to_string())
-                .initial_token_supply(U256::from(100000u64))
+                .initial_token_supply(self.initial_token_supply.unwrap_or(U256::from(100000u64)))
                 .ops_timelock_delay(U256::from(0))
                 .ops_timelock_admin(signer.address())
                 .ops_timelock_proposers(vec![signer.address()])
@@ -2946,8 +2976,8 @@ mod test {
     use alloy::{
         eips::BlockId,
         network::EthereumWallet,
-        primitives::U256,
-        providers::{Provider, ProviderBuilder},
+        primitives::{Address, U256},
+        providers::ProviderBuilder,
     };
     use async_lock::Mutex;
     use committable::{Commitment, Committable};
@@ -2959,7 +2989,7 @@ mod test {
         ADVZNamespaceProofQueryData, FeeAmount, Header, L1Client, L1ClientOptions,
         MOCK_SEQUENCER_VERSIONS, NamespaceId, NamespaceProofQueryData, NsProof,
         RegisteredValidatorMap, RewardDistributor, StakeTableState, StateCertQueryDataV1,
-        StateCertQueryDataV2, ValidatedState,
+        StateCertQueryDataV2, ValidatedState, ValidatorLeaderCounts,
         config::PublicHotShotConfig,
         traits::{MembershipPersistence, NullEventConsumer, PersistenceOptions},
         v0_3::{COMMISSION_BASIS_POINTS, Fetcher, RewardAmount, RewardMerkleProofV1},
@@ -3029,9 +3059,7 @@ mod test {
         endpoint: &str,
         height: u64,
     ) {
-        const MAX_RETRIES: usize = 30;
-
-        for _retry in 0..=MAX_RETRIES {
+        for _retry in 0.. {
             let bh = client
                 .get::<u64>(endpoint)
                 .send()
@@ -3043,8 +3071,6 @@ mod test {
             }
             sleep(Duration::from_secs(3)).await;
         }
-
-        panic!("Max retries reached. {endpoint} block height did not exceed {height}");
     }
     use crate::{
         api::{
@@ -3612,17 +3638,35 @@ mod test {
         test_upgrade_helper(Upgrade::new(FEE_VERSION, EPOCH_VERSION)).await;
     }
 
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_epoch_reward_upgrade() {
+        // Use fewer nodes: epoch mode from view 0 is resource-heavy on CI with
+        // postgres Docker containers, causing view timeouts and consensus stall.
+        test_upgrade_helper_with_nodes::<3>(Upgrade::new(
+            versions::DRB_AND_HEADER_UPGRADE_VERSION,
+            versions::EPOCH_REWARD_VERSION,
+        ))
+        .await;
+    }
+
     async fn test_upgrade_helper(upgrade: Upgrade) {
+        test_upgrade_helper_with_nodes::<5>(upgrade).await;
+    }
+
+    async fn test_upgrade_helper_with_nodes<const NUM_NODES: usize>(upgrade: Upgrade) {
         // wait this number of views beyond the configured first view
         // before asserting anything.
         let wait_extra_views = 10;
-        // Number of nodes running in the test network.
-        const NUM_NODES: usize = 5;
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let epoch_start_block = if upgrade.base >= versions::EPOCH_VERSION {
+            0
+        } else {
+            321
+        };
 
         let test_config = TestConfigBuilder::default()
             .epoch_height(200)
-            .epoch_start_block(321)
+            .epoch_start_block(epoch_start_block)
             .set_upgrades(upgrade.target)
             .await
             .build();
@@ -3632,11 +3676,20 @@ mod test {
         assert_ne!(chain_config_genesis, chain_config_upgrade);
         tracing::debug!(?chain_config_genesis, ?chain_config_upgrade);
 
-        let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
-            .api_config(Options::from(options::Http {
-                port,
-                max_connections: None,
-            }))
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let mut builder = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(port),
+            ))
+            .persistences(persistence)
             .catchups(std::array::from_fn(|_| {
                 StatePeers::<SequencerApiVersion>::from_urls(
                     vec![format!("http://localhost:{port}").parse().unwrap()],
@@ -3645,8 +3698,19 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .network_config(test_config)
-            .build();
+            .network_config(test_config);
+
+        // When the base version already has epochs, the base chain config must
+        // include the stake_table_contract
+        if upgrade.base >= versions::EPOCH_VERSION {
+            let state = ValidatedState {
+                chain_config: chain_config_upgrade.into(),
+                ..Default::default()
+            };
+            builder = builder.states(std::array::from_fn(|_| state.clone()));
+        }
+
+        let config = builder.build();
 
         let mut network = TestNetwork::new(config, upgrade).await;
         let mut events = network.server.event_stream().await;
@@ -4637,6 +4701,450 @@ mod test {
         Ok(())
     }
 
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_epoch_reward_distribution_basic() -> anyhow::Result<()> {
+        const EPOCH_HEIGHT: u64 = 10;
+        const NUM_NODES: usize = 5;
+
+        const V6: Upgrade = Upgrade::trivial(version(0, 6));
+
+        let network_config = TestConfigBuilder::default()
+            .epoch_height(EPOCH_HEIGHT)
+            .build();
+
+        let api_port = reserve_tcp_port().expect("No ports free for query service");
+
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let config = TestNetworkConfigBuilder::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(api_port),
+            ))
+            .network_config(network_config)
+            .persistences(persistence.clone())
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<StaticVersion<0, 1>>::from_urls(
+                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                    Default::default(),
+                    Duration::from_secs(2),
+                    &NoMetrics,
+                )
+            }))
+            .pos_hook(DelegationConfig::MultipleDelegators, Default::default(), V6)
+            .await
+            .unwrap()
+            .build();
+
+        let _network = TestNetwork::new(config, V6).await;
+        let client: Client<ServerError, SequencerApiVersion> =
+            Client::new(format!("http://localhost:{api_port}").parse().unwrap());
+
+        // Wait for chain to reach epoch 5
+        let height_client: Client<ServerError, StaticVersion<0, 1>> =
+            Client::new(format!("http://localhost:{api_port}").parse().unwrap());
+        wait_until_block_height(&height_client, "node/block-height", EPOCH_HEIGHT * 5).await;
+
+        let mut leaves = client
+            .socket("availability/stream/leaves/0")
+            .subscribe::<LeafQueryData<SeqTypes>>()
+            .await
+            .unwrap();
+
+        // Epochs 1-3: verify no rewards
+        while let Some(leaf) = leaves.next().await {
+            let leaf = leaf.unwrap();
+            let header = leaf.header();
+            let height = header.height();
+
+            let total_distributed = header.total_reward_distributed().unwrap();
+            assert_eq!(
+                total_distributed.0,
+                U256::ZERO,
+                "epochs 1-3 should have no rewards, height={height}"
+            );
+
+            if height == EPOCH_HEIGHT * 3 {
+                break;
+            }
+        }
+
+        while let Some(leaf) = leaves.next().await {
+            let leaf = leaf.unwrap();
+            let header = leaf.header();
+            let height = header.height();
+
+            if height == EPOCH_HEIGHT * 4 {
+                let total_distributed = header.total_reward_distributed().unwrap();
+                assert!(total_distributed.0 > U256::ZERO,);
+                break;
+            }
+        }
+
+        while let Some(leaf) = leaves.next().await {
+            let leaf = leaf.unwrap();
+            let header = leaf.header();
+            let height = header.height();
+
+            if height == EPOCH_HEIGHT * 5 {
+                let total_distributed = header.total_reward_distributed().unwrap();
+                assert!(total_distributed.0 > U256::ZERO,);
+                break;
+            }
+        }
+
+        Ok(())
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_epoch_reward_total_distributed_rewards() -> anyhow::Result<()> {
+        // Epochs 1-3: No rewards distributed (total_reward_distributed = 0)
+        // Epoch 4: Rewards only distributed in the LAST block
+        // Epoch 5: All blocks before last have same total as epoch 4 last block,
+        //          last block has higher total because of new distribution
+        const EPOCH_HEIGHT: u64 = 10;
+        const NUM_NODES: usize = 5;
+
+        const V6: Upgrade = Upgrade::trivial(version(0, 6));
+
+        let network_config = TestConfigBuilder::default()
+            .epoch_height(EPOCH_HEIGHT)
+            .build();
+
+        let api_port = reserve_tcp_port().expect("No ports free for query service");
+
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let config = TestNetworkConfigBuilder::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(api_port),
+            ))
+            .network_config(network_config)
+            .persistences(persistence.clone())
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<StaticVersion<0, 1>>::from_urls(
+                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                    Default::default(),
+                    Duration::from_secs(2),
+                    &NoMetrics,
+                )
+            }))
+            .pos_hook(DelegationConfig::MultipleDelegators, Default::default(), V6)
+            .await
+            .unwrap()
+            .build();
+
+        let _network = TestNetwork::new(config, V6).await;
+        let client: Client<ServerError, SequencerApiVersion> =
+            Client::new(format!("http://localhost:{api_port}").parse().unwrap());
+
+        let height_client: Client<ServerError, StaticVersion<0, 1>> =
+            Client::new(format!("http://localhost:{api_port}").parse().unwrap());
+        wait_until_block_height(&height_client, "node/block-height", EPOCH_HEIGHT * 5).await;
+
+        let mut leaves = client
+            .socket("availability/stream/leaves/0")
+            .subscribe::<LeafQueryData<SeqTypes>>()
+            .await
+            .unwrap();
+
+        while let Some(leaf) = leaves.next().await {
+            let leaf = leaf.unwrap();
+            let header = leaf.header();
+            let height = header.height();
+
+            let total_distributed = header.total_reward_distributed().unwrap();
+            assert_eq!(total_distributed.0, U256::ZERO,);
+
+            if height == EPOCH_HEIGHT * 3 {
+                break;
+            }
+        }
+
+        while let Some(leaf) = leaves.next().await {
+            let leaf = leaf.unwrap();
+            let header = leaf.header();
+            let height = header.height();
+
+            let total_distributed = header.total_reward_distributed().unwrap();
+
+            if height < EPOCH_HEIGHT * 4 {
+                assert_eq!(total_distributed.0, U256::ZERO,);
+            } else {
+                assert!(total_distributed.0 > U256::ZERO,);
+                break;
+            }
+        }
+
+        let epoch4_last_reward = {
+            let header = client
+                .get::<Header>(&format!("availability/header/{}", EPOCH_HEIGHT * 4))
+                .send()
+                .await
+                .unwrap();
+            header.total_reward_distributed().unwrap()
+        };
+
+        assert!(
+            epoch4_last_reward.0 > U256::ZERO,
+            "epoch 4 last block should have positive rewards"
+        );
+
+        while let Some(leaf) = leaves.next().await {
+            let leaf = leaf.unwrap();
+            let header = leaf.header();
+            let height = header.height();
+
+            let total_distributed = header.total_reward_distributed().unwrap();
+
+            if height < EPOCH_HEIGHT * 5 {
+                assert_eq!(total_distributed, epoch4_last_reward,);
+            } else {
+                assert!(total_distributed.0 > epoch4_last_reward.0,);
+                break;
+            }
+        }
+
+        Ok(())
+    }
+
+    // test actual rewards
+    // todo: test each account rewards by querying merklized state api
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_reward_state_v2_epoch_distribution() -> anyhow::Result<()> {
+        const EPOCH_HEIGHT: u64 = 10;
+        const NUM_NODES: usize = 5;
+        const NUM_EPOCHS: u64 = 6;
+        const V6: Upgrade = Upgrade::trivial(version(0, 6));
+
+        let network_config = TestConfigBuilder::default()
+            .epoch_height(EPOCH_HEIGHT)
+            .build();
+
+        let api_port = reserve_tcp_port().expect("No ports free for query service");
+
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let config = TestNetworkConfigBuilder::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(api_port),
+            ))
+            .network_config(network_config)
+            .persistences(persistence.clone())
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<StaticVersion<0, 1>>::from_urls(
+                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                    Default::default(),
+                    Duration::from_secs(2),
+                    &NoMetrics,
+                )
+            }))
+            .pos_hook(DelegationConfig::MultipleDelegators, Default::default(), V6)
+            .await
+            .unwrap()
+            .build();
+
+        let network = TestNetwork::new(config, V6).await;
+        let client: Client<ServerError, SequencerApiVersion> =
+            Client::new(format!("http://localhost:{api_port}").parse().unwrap());
+
+        let node_state = network.server.node_state();
+        let coordinator = node_state.coordinator;
+
+        let mut expected_total_distributed = U256::ZERO;
+
+        let mut leaves = client
+            .socket("availability/stream/leaves/0")
+            .subscribe::<LeafQueryData<SeqTypes>>()
+            .await
+            .unwrap();
+
+        while let Some(leaf) = leaves.next().await {
+            let leaf = leaf.unwrap();
+            let header = leaf.header();
+            let height = header.height();
+
+            let epoch = epoch_from_block_number(height, EPOCH_HEIGHT);
+
+            let is_epoch_last_block = height % EPOCH_HEIGHT == 0;
+
+            if epoch <= 3 {
+                continue;
+            }
+
+            let header_total_distributed = header
+                .total_reward_distributed()
+                .expect("total_reward_distributed should exist");
+
+            if is_epoch_last_block {
+                let prev_epoch = epoch - 1;
+                let prev_epoch_number = EpochNumber::new(prev_epoch);
+                let membership = coordinator.membership().read().await;
+                let prev_block_reward = membership
+                    .epoch_block_reward(prev_epoch_number)
+                    .expect("epoch block reward should exist");
+                drop(membership);
+
+                let epoch_total = prev_block_reward.0 * U256::from(EPOCH_HEIGHT);
+                expected_total_distributed += epoch_total;
+            }
+
+            assert_eq!(
+                header_total_distributed.0, expected_total_distributed,
+                "total_reward_distributed mismatch at height {height}"
+            );
+
+            if height >= NUM_EPOCHS * EPOCH_HEIGHT {
+                break;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Verifies that the `leader_counts` array in V6 headers is correct.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_epoch_leader_counts() -> anyhow::Result<()> {
+        const EPOCH_HEIGHT: u64 = 10;
+        const NUM_NODES: usize = 5;
+        const NUM_EPOCHS: u64 = 6;
+        const V6: Upgrade = Upgrade::trivial(version(0, 6));
+
+        let network_config = TestConfigBuilder::default()
+            .epoch_height(EPOCH_HEIGHT)
+            .build();
+
+        let api_port = reserve_tcp_port().expect("No ports free for query service");
+
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let config = TestNetworkConfigBuilder::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(api_port),
+            ))
+            .network_config(network_config)
+            .persistences(persistence.clone())
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<StaticVersion<0, 1>>::from_urls(
+                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                    Default::default(),
+                    Duration::from_secs(2),
+                    &NoMetrics,
+                )
+            }))
+            .pos_hook(DelegationConfig::MultipleDelegators, Default::default(), V6)
+            .await
+            .unwrap()
+            .build();
+
+        let network = TestNetwork::new(config, V6).await;
+        let client: Client<ServerError, SequencerApiVersion> =
+            Client::new(format!("http://localhost:{api_port}").parse().unwrap());
+
+        let node_state = network.server.node_state();
+        let coordinator = node_state.coordinator;
+
+        // Track expected leader counts by address
+        let mut expected_counts: HashMap<Address, u16> = HashMap::new();
+
+        let mut leaves = client
+            .socket("availability/stream/leaves/0")
+            .subscribe::<LeafQueryData<SeqTypes>>()
+            .await
+            .unwrap();
+
+        while let Some(leaf) = leaves.next().await {
+            let leaf = leaf.unwrap();
+            let header = leaf.header();
+            let height = header.height();
+            let epoch = epoch_from_block_number(height, EPOCH_HEIGHT);
+            let epoch_number = EpochNumber::new(epoch);
+
+            if epoch <= 2 {
+                continue;
+            }
+
+            let header_leader_counts = header
+                .leader_counts()
+                .expect("V6 header must have leader_counts");
+
+            // Reset counts at the start of a new epoch
+            let is_epoch_start = (height - 1) % EPOCH_HEIGHT == 0;
+            if is_epoch_start {
+                expected_counts.clear();
+            }
+
+            // Determine the leader for this block and track by address
+            let view_number = leaf.leaf().view_number();
+            let membership = coordinator.membership().read().await;
+            let leader = membership
+                .leader(view_number, Some(epoch_number))
+                .expect("leader should exist");
+            let leader_address = membership
+                .address(&epoch_number, leader)
+                .expect("leader should have an address");
+
+            let validator_leader_counts =
+                ValidatorLeaderCounts::new(&membership, &epoch_number, *header_leader_counts)
+                    .expect("ValidatorLeaderCounts should build from header leader_counts");
+            drop(membership);
+
+            *expected_counts.entry(leader_address).or_insert(0) += 1;
+
+            let header_counts: HashMap<Address, u16> = validator_leader_counts
+                .active_leaders()
+                .map(|(v, count)| (v.account, count))
+                .collect();
+
+            assert_eq!(
+                header_counts, expected_counts,
+                "leader_counts mismatch at height {height} (epoch {epoch})"
+            );
+
+            if height % EPOCH_HEIGHT == 0 {
+                let total: u16 = expected_counts.values().sum();
+                assert_eq!(
+                    total, EPOCH_HEIGHT as u16,
+                    "total leader_counts at epoch boundary should equal EPOCH_HEIGHT at height \
+                     {height}"
+                );
+            }
+
+            if height >= NUM_EPOCHS * EPOCH_HEIGHT {
+                break;
+            }
+        }
+
+        Ok(())
+    }
+
     #[rstest]
     #[case(POS_V3)]
     #[case(POS_V4)]
@@ -5226,9 +5734,12 @@ mod test {
             "final state"
         );
 
+        let height = decided_leaf.height();
+        let num_leaves = state.block_merkle_tree.num_leaves();
+        tracing::info!(height, num_leaves, "checking block merkle tree state");
         state
             .block_merkle_tree
-            .lookup(decided_leaf.height() - 1)
+            .lookup(height - 1)
             .expect_ok()
             .unwrap_or_else(|err| {
                 panic!(
@@ -5641,12 +6152,19 @@ mod test {
         Ok(())
     }
 
+    /// `chain_id`: None = default (35353, non-mainnet), Some(1) = mainnet
     #[rstest]
-    #[case(POS_V4)]
+    #[case(POS_V4, None)]
+    #[case(POS_V4, Some(1u64))]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_token_supply_api(#[case] upgrade: Upgrade) -> anyhow::Result<()> {
-        let epoch_height = 10;
+    async fn test_token_supply_api(
+        #[case] upgrade: Upgrade,
+        #[case] chain_id: Option<u64>,
+    ) -> anyhow::Result<()> {
+        use alloy::primitives::utils::parse_ether;
+        use espresso_types::v0_3::ChainConfig;
 
+        let epoch_height = 10;
         let network_config = TestConfigBuilder::default()
             .epoch_height(epoch_height)
             .build();
@@ -5654,7 +6172,6 @@ mod test {
         let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         const NUM_NODES: usize = 1;
-        // Initialize nodes.
         let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
         let persistence: [_; NUM_NODES] = storage
             .iter()
@@ -5663,7 +6180,12 @@ mod test {
             .try_into()
             .unwrap();
 
-        let config = TestNetworkConfigBuilder::with_num_nodes()
+        // Use the real initial supply (3.59B tokens) so the unlock schedule
+        // produces realistic locked/unlocked values in the supply calculations.
+        let initial_supply_tokens = U256::from(3_590_000_000u64);
+        let initial_supply_wei = parse_ether("3590000000").unwrap();
+
+        let mut builder = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(SqlDataSource::options(
                 &storage[0],
                 Options::with_port(api_port),
@@ -5678,6 +6200,22 @@ mod test {
                     &NoMetrics,
                 )
             }))
+            .initial_token_supply(initial_supply_tokens);
+
+        // Must set states before pos_hook, which preserves chain_id from state[0].
+        if let Some(id) = chain_id {
+            let state = ValidatedState {
+                chain_config: ChainConfig {
+                    chain_id: U256::from(id).into(),
+                    ..Default::default()
+                }
+                .into(),
+                ..Default::default()
+            };
+            builder = builder.states(std::array::from_fn(|_| state.clone()));
+        }
+
+        let config = builder
             .pos_hook(
                 DelegationConfig::VariableAmounts,
                 Default::default(),
@@ -5701,14 +6239,37 @@ mod test {
             .await
             .unwrap();
 
-        let total_minted_supply = client
-            .get::<String>("token/total-minted-supply")
+        let minted: String = client
+            .get("token/total-minted-supply")
             .send()
             .await
-            .expect("failed to get total_minted_supply");
-        tracing::info!("total_minted_supply={total_minted_supply:?}");
+            .expect("total-minted-supply");
+        let circ_eth: String = client
+            .get("token/circulating-supply-ethereum")
+            .send()
+            .await
+            .expect("circulating-supply-ethereum");
+        let circulating: String = client
+            .get("token/circulating-supply")
+            .send()
+            .await
+            .expect("circulating-supply");
+        tracing::info!(%minted, %circ_eth, %circulating);
 
-        assert_eq!(total_minted_supply, "100000.0");
+        let minted = parse_ether(&minted)?;
+        let circ_eth = parse_ether(&circ_eth)?;
+        let circ = parse_ether(&circulating)?;
+
+        assert_eq!(minted, initial_supply_wei);
+        assert!(circ_eth <= minted);
+        assert!(circ >= circ_eth);
+        assert!(circ > U256::ZERO);
+
+        if chain_id == Some(1) {
+            // Proves the unlock schedule is hooked up: locked > 0 means
+            // the mainnet code path ran. Vesting ends ~2032; delete after.
+            assert!(circ_eth < minted);
+        }
 
         Ok(())
     }
@@ -5812,21 +6373,29 @@ mod test {
         let token = EspToken::new(token_address, provider.clone());
 
         let init_log = fetcher
-            .scan_token_contract_initialized_event_log(stake_table_init_block, token)
+            .scan_token_contract_initialized_event_log(stake_table_init_block, token.clone())
             .await
             .unwrap();
 
-        let init_tx = provider
-            .get_transaction_receipt(
-                init_log
-                    .transaction_hash
-                    .context(format!("transaction hash not found. init_log={init_log:?}"))?,
-            )
+        let init_block = init_log.block_number.context("missing block number")?;
+        let init_tx_hash = init_log
+            .transaction_hash
+            .context("missing transaction hash")?;
+
+        let transfer_logs = token
+            .Transfer_filter()
+            .from_block(init_block)
+            .to_block(init_block)
+            .query()
             .await
-            .unwrap()
             .unwrap();
 
-        let mint_transfer = init_tx.decoded_log::<EspToken::Transfer>().unwrap();
+        let (mint_transfer, _) = transfer_logs
+            .iter()
+            .find(|(transfer, log)| {
+                log.transaction_hash == Some(init_tx_hash) && transfer.from == Address::ZERO
+            })
+            .context("no mint transfer event in init tx")?;
 
         assert!(mint_transfer.value > U256::ZERO);
 
@@ -7486,5 +8055,87 @@ mod test {
             .await
             .unwrap_err();
         assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+    }
+
+    /// Test that `fetch_leaf` returns a leaf with exactly the requested block height.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_fetch_leaf_returns_exact_height() -> anyhow::Result<()> {
+        const EPOCH_HEIGHT: u64 = 10;
+        const NUM_NODES: usize = 5;
+        const TARGET_HEIGHT: u64 = EPOCH_HEIGHT * 3 + 2;
+
+        let network_config = TestConfigBuilder::default()
+            .epoch_height(EPOCH_HEIGHT)
+            .build();
+
+        let port = reserve_tcp_port().expect("No ports free for query service");
+
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let catchup_peers = std::array::from_fn(|_| {
+            StatePeers::<StaticVersion<0, 1>>::from_urls(
+                vec![format!("http://localhost:{port}").parse().unwrap()],
+                Default::default(),
+                Duration::from_secs(2),
+                &NoMetrics,
+            )
+        });
+
+        let config = TestNetworkConfigBuilder::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(port),
+            ))
+            .network_config(network_config)
+            .persistences(persistence)
+            .catchups(catchup_peers)
+            .pos_hook(
+                DelegationConfig::MultipleDelegators,
+                Default::default(),
+                POS_V4,
+            )
+            .await?
+            .build();
+
+        let network = TestNetwork::new(config, POS_V4).await;
+
+        // Wait for chain to advance past our target height
+        let height_client: Client<ServerError, StaticVersion<0, 1>> =
+            Client::new(format!("http://localhost:{port}").parse().unwrap());
+        wait_until_block_height(&height_client, "node/block-height", TARGET_HEIGHT + 5).await;
+
+        // Get the stake table and threshold for the epoch containing TARGET_HEIGHT
+        let coordinator = network.server.node_state().coordinator;
+        let epoch = EpochNumber::new(epoch_from_block_number(TARGET_HEIGHT, EPOCH_HEIGHT));
+        let membership = coordinator.membership().read().await;
+        let stake_table = membership.stake_table(Some(epoch));
+        let success_threshold = membership.success_threshold(Some(epoch));
+        drop(membership);
+
+        // Use StatePeers to fetch the leaf at the exact target height
+        let catchup = StatePeers::<StaticVersion<0, 1>>::from_urls(
+            vec![format!("http://localhost:{port}").parse().unwrap()],
+            Default::default(),
+            Duration::from_secs(5),
+            &NoMetrics,
+        );
+
+        let leaf = catchup
+            .fetch_leaf(TARGET_HEIGHT, stake_table, success_threshold)
+            .await?;
+
+        assert_eq!(
+            leaf.height(),
+            TARGET_HEIGHT,
+            "fetch_leaf must return the leaf at exactly the requested height"
+        );
+
+        Ok(())
     }
 }

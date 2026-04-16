@@ -4,7 +4,7 @@ use alloy::primitives::{Address, U256};
 use anyhow::{Context, bail};
 use committable::{Commitment, Committable};
 use either::Either;
-use hotshot_query_service::merklized_state::MerklizedState;
+use hotshot_query_service_types::merklized_state::MerklizedState;
 use hotshot_types::{
     data::{BlockError, EpochNumber, ViewNumber},
     traits::{
@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use time::OffsetDateTime;
 use vbs::version::Version;
-use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION};
+use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, EPOCH_VERSION};
 
 use super::{
     BlockMerkleCommitment, BlockSize, FeeMerkleCommitment, L1Client, fee_info::FeeError,
@@ -48,6 +48,7 @@ use crate::{
         Delta, REWARD_MERKLE_TREE_V2_HEIGHT, RewardAccountV2, RewardMerkleCommitmentV2,
         RewardMerkleTreeV2,
     },
+    v0_5::LeaderCounts,
 };
 
 /// This enum is not used in code but functions as an index of
@@ -176,6 +177,17 @@ pub enum ProposalValidationError {
     TotalRewardsMismatch {
         proposed: RewardAmount,
         actual: RewardAmount,
+    },
+    #[error("Leader counts missing in V6 header")]
+    LeaderCountsMissing,
+    #[error("Leader index missing for V6 validation")]
+    LeaderIndexMissing,
+    #[error("Leader counts should reset at epoch start but didn't")]
+    LeaderCountsNotReset,
+    #[error("Invalid leader counts: expected {expected:?}, proposed {proposed:?}")]
+    InvalidLeaderCounts {
+        expected: Box<LeaderCounts>,
+        proposed: Box<LeaderCounts>,
     },
 }
 
@@ -516,9 +528,12 @@ pub(crate) struct ValidatedTransition<'a> {
     total_rewards_distributed: Option<RewardAmount>,
     version: Version,
     validation_start_time: OffsetDateTime,
+    epoch_height: Option<u64>,
+    leader_index: Option<usize>,
 }
 
 impl<'a> ValidatedTransition<'a> {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         state: ValidatedState,
         parent: &'a Header,
@@ -526,6 +541,8 @@ impl<'a> ValidatedTransition<'a> {
         total_rewards_distributed: Option<RewardAmount>,
         version: Version,
         validation_start_time: OffsetDateTime,
+        epoch_height: Option<u64>,
+        leader_index: Option<usize>,
     ) -> Self {
         let expected_chain_config = state
             .chain_config
@@ -539,6 +556,8 @@ impl<'a> ValidatedTransition<'a> {
             total_rewards_distributed,
             version,
             validation_start_time,
+            epoch_height,
+            leader_index,
         }
     }
 
@@ -572,6 +591,7 @@ impl<'a> ValidatedTransition<'a> {
         self.validate_l1_head()?;
         self.validate_namespace_table()?;
         self.validate_total_rewards_distributed()?;
+        self.validate_leader_counts()?;
 
         Ok(self)
     }
@@ -802,6 +822,48 @@ impl<'a> ValidatedTransition<'a> {
         }
         Ok(())
     }
+
+    /// Validate leader_counts field in V6 headers.
+    ///
+    /// Uses the leader_index passed during construction to calculate expected counts
+    /// and validate
+    fn validate_leader_counts(&self) -> Result<(), ProposalValidationError> {
+        if self.version < EPOCH_REWARD_VERSION {
+            return Ok(());
+        }
+
+        let Some(epoch_height) = self.epoch_height else {
+            return Err(ProposalValidationError::NoEpochHeight);
+        };
+
+        let Some(leader_index) = self.leader_index else {
+            return Err(ProposalValidationError::LeaderIndexMissing);
+        };
+
+        let proposed_counts = self
+            .proposal
+            .header
+            .leader_counts()
+            .ok_or(ProposalValidationError::LeaderCountsMissing)?;
+
+        let proposed_height = self.proposal.header.height();
+
+        let expected_counts = Header::calculate_leader_counts(
+            self.parent,
+            proposed_height,
+            leader_index,
+            epoch_height,
+        );
+
+        if proposed_counts != &expected_counts {
+            return Err(ProposalValidationError::InvalidLeaderCounts {
+                expected: Box::new(expected_counts),
+                proposed: Box::new(*proposed_counts),
+            });
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(any(test, feature = "testing"))]
@@ -985,6 +1047,42 @@ impl ValidatedState {
         // total_rewards_distributed is only present in >= V4
         let total_rewards_distributed = if version < EPOCH_VERSION {
             None
+        } else if version >= EPOCH_REWARD_VERSION {
+            let parent_header = parent_leaf.block_header();
+            let epoch_height = instance
+                .epoch_height
+                .context("epoch height not in instance state for V6")?;
+            let leader_index = Header::get_leader_index(
+                version,
+                proposed_header.height(),
+                view_number.u64(),
+                instance,
+            )
+            .await?
+            .context("leader index not found for V6")?;
+            let leader_counts = Header::calculate_leader_counts(
+                parent_header,
+                proposed_header.height(),
+                leader_index,
+                epoch_height,
+            );
+            let (epoch_rewards_applied, changed_accounts) = Header::handle_epoch_rewards(
+                proposed_header.height(),
+                &leader_counts,
+                instance,
+                &mut validated_state,
+                proposed_header.reward_merkle_tree_root().right(),
+            )
+            .await?;
+
+            delta.rewards_delta.extend(changed_accounts);
+
+            // V6+: parent's total + epoch rewards applied at this boundary
+            let parent_total = parent_leaf
+                .block_header()
+                .total_reward_distributed()
+                .unwrap_or_default();
+            Some(RewardAmount(parent_total.0 + epoch_rewards_applied.0))
         } else if let Some(reward_distributor) = distribute_block_reward(
             instance,
             &mut validated_state,
@@ -1023,6 +1121,7 @@ impl ValidatedState {
             UpgradeType::Epoch { chain_config } => chain_config,
             UpgradeType::DrbAndHeader { chain_config } => chain_config,
             UpgradeType::Da { chain_config } => chain_config,
+            UpgradeType::EpochReward { chain_config } => chain_config,
         };
 
         self.chain_config = cf.into();
@@ -1173,6 +1272,12 @@ impl HotShotState<SeqTypes> for ValidatedState {
             validate_next_stake_table_hash(instance, proposed_header).await?;
         }
 
+        // Get leader index for V6+ validation
+        let leader_index =
+            Header::get_leader_index(version, proposed_header.height(), view_number, instance)
+                .await
+                .map_err(|e| BlockError::InvalidBlockHeader(e.to_string()))?;
+
         // Validate the proposal.
         let validated_state = ValidatedTransition::new(
             validated_state,
@@ -1181,6 +1286,8 @@ impl HotShotState<SeqTypes> for ValidatedState {
             total_rewards_distributed,
             version,
             validation_start_time,
+            instance.epoch_height,
+            leader_index,
         )
         .validate()?
         .wait_for_l1(&instance.l1_client)
@@ -1412,7 +1519,7 @@ mod test {
     use super::*;
     use crate::{
         BlockSize, FeeAccountProof, FeeMerkleProof, Leaf, Payload, TimestampMillis, Transaction,
-        eth_signature_key::EthKeyPair, mock::MockStateCatchup, v0_1, v0_2, v0_3, v0_4, v0_5,
+        eth_signature_key::EthKeyPair, mock::MockStateCatchup, v0_1, v0_2, v0_3, v0_4, v0_5, v0_6,
     };
 
     impl Transaction {
@@ -1461,6 +1568,12 @@ mod test {
                     timestamp_millis,
                     ..parent.clone()
                 }),
+                Header::V6(parent) => Header::V6(v0_6::Header {
+                    height: parent.height + 1,
+                    timestamp,
+                    timestamp_millis,
+                    ..parent.clone()
+                }),
             }
         }
         /// Replaces builder signature w/ invalid one.
@@ -1493,6 +1606,11 @@ mod test {
                     ..header.clone()
                 }),
                 Header::V5(header) => Header::V5(v0_5::Header {
+                    fee_info,
+                    builder_signature: Some(sig),
+                    ..header.clone()
+                }),
+                Header::V6(header) => Header::V6(v0_6::Header {
                     fee_info,
                     builder_signature: Some(sig),
                     ..header.clone()
@@ -1537,6 +1655,11 @@ mod test {
                     builder_signature: Some(sig),
                     ..parent.clone()
                 }),
+                Header::V6(parent) => Header::V6(v0_6::Header {
+                    fee_info,
+                    builder_signature: Some(sig),
+                    ..parent.clone()
+                }),
             }
         }
     }
@@ -1552,8 +1675,10 @@ mod test {
                 parent,
                 proposal,
                 total_rewards_distributed: None,
+                epoch_height: instance.epoch_height,
                 version: version(0, 1),
                 validation_start_time,
+                leader_index: None,
             }
         }
     }
@@ -2120,6 +2245,11 @@ mod test {
                 fee_info: FeeInfo::new(account, data),
                 ..header
             }),
+            Header::V6(header) => Header::V6(v0_6::Header {
+                builder_signature: Some(sig),
+                fee_info: FeeInfo::new(account, data),
+                ..header
+            }),
         };
 
         validate_builder_fee(&header).unwrap();
@@ -2161,6 +2291,8 @@ mod test {
             Some(actual_total),
             version(0, 4),
             validation_start_time,
+            None, // epoch_height - not needed for V4 tests
+            None,
         );
 
         validated_transition
@@ -2183,6 +2315,8 @@ mod test {
             Some(actual_total),
             version(0, 4),
             validation_start_time,
+            None, // epoch_height - not needed for V4 tests
+            None,
         )
         .validate_total_rewards_distributed()
         .unwrap_err();
@@ -2211,6 +2345,8 @@ mod test {
             None,
             MAX_SUPPORTED_VERSION,
             OffsetDateTime::now_utc(),
+            None, // epoch_height
+            None,
         )
         .validate_timestamp()
         .unwrap_err();
@@ -2229,6 +2365,8 @@ mod test {
             None,
             MAX_SUPPORTED_VERSION,
             validation_start_time,
+            None, // epoch_height
+            None,
         )
         .validate_timestamp()
         .unwrap();

@@ -187,7 +187,7 @@ impl Default for PrunerCfg {
             minimum_retention: Duration::from_secs(24 * 3600),
             // 7 days
             target_retention: Duration::from_secs(7 * 24 * 3600),
-            batch_size: 30000,
+            batch_size: 1000,
             // 80%
             max_usage: 8000,
             // 1.5 hour

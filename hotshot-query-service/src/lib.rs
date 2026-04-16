@@ -435,50 +435,15 @@ use derive_more::{Deref, From, Into};
 pub use error::Error;
 use futures::{future::BoxFuture, stream::StreamExt};
 use hotshot::types::SystemContextHandle;
-use hotshot_types::traits::{
-    BlockPayload,
-    node_implementation::{NodeImplementation, NodeType},
+pub use hotshot_query_service_types::{
+    ErrorSnafu, Header, Leaf2, Metadata, MissingSnafu, NotFoundSnafu, Payload, QueryError,
+    QueryResult, QuorumCertificate, SignatureKey, Transaction,
 };
-pub use hotshot_types::{data::Leaf2, simple_certificate::QuorumCertificate};
+use hotshot_types::traits::node_implementation::{NodeImplementation, NodeType};
 pub use resolvable::Resolvable;
-use serde::{Deserialize, Serialize};
-use snafu::Snafu;
 use task::BackgroundTask;
-use tide_disco::{App, StatusCode, method::ReadState};
+use tide_disco::{App, method::ReadState};
 use vbs::version::StaticVersionType;
-
-pub type Payload<Types> = <Types as NodeType>::BlockPayload;
-pub type Header<Types> = <Types as NodeType>::BlockHeader;
-pub type Metadata<Types> = <Payload<Types> as BlockPayload<Types>>::Metadata;
-/// Item within a [`Payload`].
-pub type Transaction<Types> = <Payload<Types> as BlockPayload<Types>>::Transaction;
-pub type SignatureKey<Types> = <Types as NodeType>::SignatureKey;
-
-#[derive(Clone, Debug, Snafu, Deserialize, Serialize)]
-#[snafu(visibility(pub))]
-pub enum QueryError {
-    /// The requested resource does not exist or is not known to this query service.
-    NotFound,
-    /// The requested resource exists but is not currently available.
-    ///
-    /// In most cases a missing resource can be recovered from DA.
-    Missing,
-    /// There was an error while trying to fetch the requested resource.
-    #[snafu(display("Failed to fetch requested resource: {message}"))]
-    #[snafu(context(suffix(ErrorSnafu)))]
-    Error { message: String },
-}
-
-impl QueryError {
-    pub fn status(&self) -> StatusCode {
-        match self {
-            Self::NotFound | Self::Missing => StatusCode::NOT_FOUND,
-            Self::Error { .. } => StatusCode::INTERNAL_SERVER_ERROR,
-        }
-    }
-}
-
-pub type QueryResult<T> = Result<T, QueryError>;
 
 #[derive(Default)]
 pub struct Options {
@@ -834,7 +799,11 @@ mod test {
     async fn test_composition() {
         let dir = TempDir::with_prefix("test_composition").unwrap();
         let mut loader = AtomicStoreLoader::create(dir.path(), "test_composition").unwrap();
-        let hotshot_qs = MockDataSource::create_with_store(&mut loader, Default::default())
+        let hotshot_qs = MockDataSource::create_builder_with_store(&mut loader, Default::default())
+            .await
+            .unwrap()
+            .with_sync_status_ttl(Duration::ZERO)
+            .build()
             .await
             .unwrap();
 

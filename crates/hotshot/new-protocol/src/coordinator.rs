@@ -1,5 +1,5 @@
 pub mod error;
-pub(crate) mod timer;
+pub mod timer;
 
 use bon::Builder;
 use hotshot::traits::NodeImplementation;
@@ -15,27 +15,30 @@ use tokio::select;
 use tracing::{error, warn};
 
 use crate::{
+    block::{BlockAndHeaderRequest, BlockBuilder},
     consensus::{Consensus, ConsensusInput, ConsensusOutput},
     coordinator::{
         error::{CoordinatorError, ErrorSource, Severity},
         timer::Timer,
     },
-    drb::DrbRequester,
+    epoch::{EpochManager, EpochRootResult},
+    logging::KeyPrefix,
     message::{
-        Certificate2, CheckpointCertificate, CheckpointVote, ConsensusMessage, Message,
-        MessageType, ProposalMessage, Unchecked, Vote2,
+        self, BlockMessage, Certificate2, CheckpointCertificate, CheckpointVote, ConsensusMessage,
+        Message, MessageType, ProposalMessage, TimeoutOneHonest, TransactionMessage, Unchecked,
+        Vote2,
     },
     network::Network,
     outbox::Outbox,
     proposal::ProposalValidator,
-    state::{StateManager, StateManagerOutput},
+    state::{HeaderRequest, StateManager, StateManagerOutput},
     vid::{VidDisperseRequest, VidDisperser, VidReconstructor},
     vote::VoteCollector,
 };
 
 #[derive(Builder)]
 pub struct Coordinator<T: NodeType, I: NodeImplementation<T>> {
-    _membership_coordinator: EpochMembershipCoordinator<T>,
+    membership_coordinator: EpochMembershipCoordinator<T>,
     consensus: Consensus<T>,
     network: Network<T, I::Network>,
     state_manager: StateManager<T>,
@@ -44,16 +47,51 @@ pub struct Coordinator<T: NodeType, I: NodeImplementation<T>> {
     vote1_collector: VoteCollector<T, QuorumVote2<T>, QuorumCertificate2<T>>,
     vote2_collector: VoteCollector<T, Vote2<T>, Certificate2<T>>,
     timeout_collector: VoteCollector<T, TimeoutVote2<T>, TimeoutCertificate2<T>>,
+    timeout_one_honest_collector: VoteCollector<T, TimeoutVote2<T>, TimeoutOneHonest<T>>,
     checkpoint_collector: VoteCollector<T, CheckpointVote<T>, CheckpointCertificate<T>>,
-    drb_requester: DrbRequester,
+    epoch_manager: EpochManager<T>,
+    block_builder: BlockBuilder<T>,
     proposal_validator: ProposalValidator<T>,
     #[builder(default)]
     outbox: Outbox<ConsensusOutput<T>>,
     public_key: T::SignatureKey,
+    #[builder(default = KeyPrefix::from(&public_key))]
+    node_id: KeyPrefix,
     timer: Timer,
 }
 
 impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
+    /// Bootstrap the coordinator so the view-1 leader can propose.
+    ///
+    /// Emits an initial `ViewChanged(1)` and, if this node is the view-1
+    /// leader, a `RequestBlockAndHeader` for view 1.  Call this after
+    /// `seed_genesis` on the inner `Consensus` instance.
+    pub async fn start(&mut self) {
+        let view = ViewNumber::new(1);
+        let epoch = EpochNumber::genesis();
+
+        self.outbox
+            .push_back(ConsensusOutput::ViewChanged(view, epoch));
+
+        if let Some(leader) = self.leader(view, epoch).await
+            && leader == self.public_key
+        {
+            let genesis_proposal = self
+                .consensus
+                .proposal_at(ViewNumber::genesis())
+                .expect("genesis proposal must be seeded before start()")
+                .clone();
+            self.outbox
+                .push_back(ConsensusOutput::RequestBlockAndHeader(
+                    BlockAndHeaderRequest {
+                        view,
+                        epoch,
+                        parent_proposal: genesis_proposal,
+                    },
+                ));
+        }
+    }
+
     /// Convenience method to run the coordinator event loop.
     ///
     /// Combines `next_consensus_input`, `apply_consensus` and outbox processing.
@@ -96,7 +134,11 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                     }
                 },
                 () = &mut self.timer => {
-                    let input = ConsensusInput::Timeout(self.timer.view());
+                    let input = ConsensusInput::Timeout(self.timer.view(), self.timer.epoch());
+                    // Timer is only reset so we can resend the timeout vote
+                    // This isn't strictly necessary for the protocol, but it's a good idea to
+                    // resend the timeout vote to avoid a situation where the network is stuck
+                    // view because we fail to form a timeout certificate.
                     self.timer.reset();
                     return Ok(input)
                 }
@@ -107,6 +149,13 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                 }
                 Some(tcert) = self.timeout_collector.next() => {
                     return Ok(ConsensusInput::TimeoutCertificate(tcert))
+                }
+                Some(out) = self.timeout_one_honest_collector.next() => {
+                    let Some(epoch) = out.data.epoch else {
+                        let msg = format!("missing epoch in view {}", out.view_number());
+                        return Err(CoordinatorError::regular(msg).context("gc timeout one honest"))
+                    };
+                    return Ok(ConsensusInput::TimeoutOneHonest(out.view_number(), epoch))
                 }
                 Some(cert1) = self.vote1_collector.next() => {
                     return Ok(ConsensusInput::Certificate1(cert1))
@@ -132,25 +181,50 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                     };
                     self.gc(cert.view_number(), epoch);
                 }
+                Some(item) = self.block_builder.next() => match item {
+                    Ok(block) => {
+                        self.state_manager.request_header(HeaderRequest::from(&block));
+                        let next_view = block.view + 1;
+                        let epoch = block.epoch;
+                        let manifest = block.manifest.clone();
+                        self.unicast_to_leader(
+                            next_view,
+                            epoch,
+                            BlockMessage::DedupManifest(manifest),
+                        )
+                        .await?;
+                        return Ok(block.into())
+                    }
+                    Err(err) => {
+                        return Err(CoordinatorError::regular(err).context("block building"))
+                    }
+                },
                 Some(item) = self.vid_disperser.next() => match item {
-                    Ok((view, _, disperse)) => {
-                        return Ok(ConsensusInput::VidDisperseCreated(view, disperse))
+                    Ok(out) => {
+                        return Ok(ConsensusInput::VidDisperseCreated(out.view, out.disperse))
                     }
                     Err(()) => {
                         return Err(CoordinatorError::unspecified().context("vid disperse"))
                     }
                 },
                 Some(item) = self.vid_reconstructor.next() => match item {
-                    Ok((view, commitment, _)) => {
-                        return Ok(ConsensusInput::BlockReconstructed(view, commitment))
+                    Ok(out) => {
+                        self.block_builder.on_block_reconstructed(out.tx_commitments);
+                        return Ok(ConsensusInput::BlockReconstructed(out.view, out.payload_commitment))
                     }
                     Err(()) => {
                         return Err(CoordinatorError::unspecified().context("vid reconstruction"))
                     }
                 },
-                Some((_epoch, _drb_result)) = self.drb_requester.next() => {
-                    todo!()
-                }
+                Some(result) = self.epoch_manager.next() => match result {
+                    Ok(EpochRootResult::DrbResult(epoch, drb_result)) => {
+                        return Ok(ConsensusInput::DrbResult(epoch, drb_result))
+                    }
+                    Ok(EpochRootResult::RootAdded(_epoch)) => {}
+                    Err(err) => {
+                        return Err(CoordinatorError::regular(err))
+                    }
+                },
                 else => {
                     return Err(CoordinatorError::critical(ErrorSource::NoInput))
                 }
@@ -203,7 +277,9 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
         match message.message_type {
             MessageType::Consensus(msg) => match msg {
                 ConsensusMessage::Proposal(p) => {
-                    self.proposal_validator.validate(p);
+                    if self.consensus.wants_proposal(&p) {
+                        self.proposal_validator.validate(p);
+                    }
                     None
                 },
                 ConsensusMessage::Vote1(vote1) => {
@@ -222,17 +298,38 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                 ConsensusMessage::Certificate2(certificate2, _key) => {
                     Some(ConsensusInput::Certificate2(certificate2))
                 },
-                ConsensusMessage::TimeoutVote(timeout_vote) => {
-                    self.timeout_collector.accumulate_vote(timeout_vote).await;
+                ConsensusMessage::TimeoutVote(timeout_msg) => {
+                    self.timeout_collector
+                        .accumulate_vote(timeout_msg.vote.clone())
+                        .await;
+                    self.timeout_one_honest_collector
+                        .accumulate_vote(timeout_msg.vote)
+                        .await;
                     None
                 },
-                ConsensusMessage::Transactions(..) => {
-                    todo!()
+                ConsensusMessage::TimeoutCertificate(tc) => {
+                    Some(ConsensusInput::TimeoutCertificate(tc))
+                },
+                ConsensusMessage::EpochChange(epoch_change) => {
+                    Some(ConsensusInput::EpochChange(epoch_change))
                 },
                 ConsensusMessage::Checkpoint(checkpoint) => {
                     self.checkpoint_collector.accumulate_vote(checkpoint).await;
                     None
                 },
+            },
+            MessageType::Block(msg) => {
+                match msg {
+                    BlockMessage::Transactions(msg) => self.block_builder.on_transactions(msg),
+                    BlockMessage::DedupManifest(manifest) => {
+                        if let Some(view_leader) = self.leader(manifest.view, manifest.epoch).await
+                            && view_leader == message.sender
+                        {
+                            self.block_builder.on_dedup_manifest(manifest)
+                        }
+                    },
+                }
+                None
             },
             MessageType::ViewSync(_) => todo!(),
             MessageType::External(_) => todo!(),
@@ -260,8 +357,8 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                     metadata,
                 });
             },
-            ConsensusOutput::RequestDRB(drb_input) => {
-                self.drb_requester.request_drb(drb_input);
+            ConsensusOutput::RequestDrbResult(epoch) => {
+                self.epoch_manager.request_drb_result(epoch);
             },
             ConsensusOutput::SendCheckpointVote(checkpoint_vote) => {
                 let message = Message {
@@ -275,12 +372,16 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                     .await
                     .map_err(|e| CoordinatorError::from(e).context("broadcast checkpoint vote"))?
             },
-            ConsensusOutput::Certificate1Formed(_) => {}, // TODO
-            ConsensusOutput::Certificate2Formed(_) => {}, // TODO
-            ConsensusOutput::LeafDecided(_) => {},        // TODO
-            ConsensusOutput::LockUpdated(_) => {},        // TODO
-            ConsensusOutput::RequestBlockAndHeader(_) => {}, // TODO
-            ConsensusOutput::RequestProposal(..) => {},   // TODO
+            ConsensusOutput::LeafDecided(leaves) => {
+                for leaf in leaves {
+                    self.epoch_manager.handle_leaf_decided(leaf);
+                }
+            },
+            ConsensusOutput::LockUpdated(_) => {}, // TODO
+            ConsensusOutput::RequestBlockAndHeader(request) => {
+                self.block_builder.request_block(request);
+            },
+            ConsensusOutput::RequestProposal(..) => {}, // TODO
             ConsensusOutput::SendProposal(proposal, vid_disperse) => {
                 // TODO: This may be done async in network so we do not spend
                 // too much time here in this loop.
@@ -302,15 +403,31 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                     }
                 }
             },
-            ConsensusOutput::SendTimeoutVote(vote) => {
+            ConsensusOutput::SendTimeoutVote(vote, lock) => {
                 let message = Message {
                     sender: self.public_key.clone(),
-                    message_type: MessageType::Consensus(ConsensusMessage::TimeoutVote(vote)),
+                    message_type: MessageType::Consensus(ConsensusMessage::TimeoutVote(
+                        message::TimeoutVoteMessage { vote, lock },
+                    )),
                 };
                 self.network
                     .broadcast(message)
                     .await
                     .map_err(|e| CoordinatorError::from(e).context("broadcast timeout vote"))?
+            },
+            ConsensusOutput::SendTimeoutCertificate(tc, view, epoch) => {
+                if let Some(leader) = self.leader(view, epoch).await {
+                    let message = Message {
+                        sender: self.public_key.clone(),
+                        message_type: MessageType::Consensus(ConsensusMessage::TimeoutCertificate(
+                            tc,
+                        )),
+                    };
+                    self.network
+                        .unicast(leader, message)
+                        .await
+                        .map_err(|e| CoordinatorError::from(e).context("timeout certificate"))?;
+                }
             },
             ConsensusOutput::SendVote1(vote1) => {
                 let message = Message {
@@ -332,25 +449,97 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                     .await
                     .map_err(|e| CoordinatorError::from(e).context("broadcast vote2"))?
             },
-            ConsensusOutput::TimeoutCertificateReceived(..) => {}, // TODO
-            ConsensusOutput::ViewSyncCertificateReceived(_) => {}, // TODO
-            ConsensusOutput::ViewChanged(view, _) => {
-                self.timer.reset_with(view);
+            ConsensusOutput::SendEpochChange(epoch_change) => {
+                let message = Message {
+                    sender: self.public_key.clone(),
+                    message_type: MessageType::Consensus(ConsensusMessage::EpochChange(
+                        epoch_change,
+                    )),
+                };
+                self.network
+                    .broadcast(message)
+                    .await
+                    .map_err(|e| CoordinatorError::from(e).context("broadcast epoch change"))?
+            },
+            ConsensusOutput::SendCertificate1(cert1) => {
+                let message = Message {
+                    sender: self.public_key.clone(),
+                    message_type: MessageType::Consensus(ConsensusMessage::Certificate1(
+                        cert1,
+                        self.public_key.clone(),
+                    )),
+                };
+                self.network
+                    .broadcast(message)
+                    .await
+                    .map_err(|e| CoordinatorError::from(e).context("broadcast certificate1"))?
+            },
+            ConsensusOutput::ViewChanged(view, epoch) => {
+                self.timer.reset_with_epoch(view, epoch);
+                let txns = self.block_builder.on_view_changed(view, epoch);
+                if !txns.is_empty() {
+                    let next_view = view + 1;
+                    self.unicast_to_leader(
+                        next_view,
+                        epoch,
+                        BlockMessage::Transactions(TransactionMessage {
+                            view: next_view,
+                            transactions: txns,
+                        }),
+                    )
+                    .await
+                    .map_err(|e| e.context("unicast transactions"))?;
+                }
             },
         }
         Ok(())
     }
 
+    async fn unicast_to_leader(
+        &mut self,
+        view: ViewNumber,
+        epoch: EpochNumber,
+        msg: BlockMessage<T>,
+    ) -> Result<(), CoordinatorError> {
+        let Some(leader) = self.leader(view, epoch).await else {
+            warn!(%view, %epoch, "failed to resolve leader for unicast");
+            return Ok(());
+        };
+        let message = Message {
+            sender: self.public_key.clone(),
+            message_type: MessageType::Block(msg),
+        };
+        self.network
+            .unicast(leader, message)
+            .await
+            .map_err(|e| CoordinatorError::from(e).context("leader unicast"))
+    }
+
+    async fn leader(&self, view: ViewNumber, epoch: EpochNumber) -> Option<T::SignatureKey> {
+        let membership = self
+            .membership_coordinator
+            .membership_for_epoch(Some(epoch))
+            .await
+            .ok()?;
+        membership.leader(view).await.ok()
+    }
+
     fn gc(&mut self, view: ViewNumber, epoch: EpochNumber) {
         self.consensus.gc(view, epoch);
-        self.checkpoint_collector.gc(view);
+        self.checkpoint_collector.gc(view, epoch);
         self.network.gc(view, epoch);
         self.state_manager.gc(view);
         self.vid_disperser.gc(view);
         self.vid_reconstructor.gc(view);
-        self.vote1_collector.gc(view);
-        self.vote2_collector.gc(view);
-        self.timeout_collector.gc(view);
-        self.drb_requester.gc(epoch);
+        self.vote1_collector.gc(view, epoch);
+        self.vote2_collector.gc(view, epoch);
+        self.timeout_collector.gc(view, epoch);
+        self.timeout_one_honest_collector.gc(view, epoch);
+        self.epoch_manager.gc(epoch);
+        self.block_builder.gc(view);
+    }
+
+    pub fn node_id(&self) -> &KeyPrefix {
+        &self.node_id
     }
 }

@@ -19,7 +19,7 @@ derivative = { workspace = true }
 derive_more = { workspace = true }
 espresso-types = { workspace = true }
 futures = { workspace = true }
-hotshot-query-service = { workspace = true }
+hotshot-query-service-types = { workspace = true }
 hotshot-types = { workspace = true }
 jf-advz = { workspace = true }
 jf-merkle-tree-compat = { workspace = true }
@@ -39,9 +39,11 @@ hotshot-contract-adapter = { workspace = true, optional = true }
 rand = { workspace = true, optional = true }
 
 [dev-dependencies]
+espresso-node = { workspace = true, default-features = false, features = [
+    "testing",
+] }
 light-client = { path = ".", features = ["testing"] }
 pretty_assertions = { workspace = true }
-espresso-node = { workspace = true, default-features = false, features = ["testing"] }
 test-log = { workspace = true }
 test-utils = { workspace = true }
 

@@ -86,17 +86,25 @@ mod impl_testable_data_source {
     use hotshot::types::Event;
 
     use super::*;
-    use crate::testing::{consensus::DataSourceLifeCycle, mocks::MockTypes};
+    use crate::{
+        data_source::fetching::Builder,
+        testing::{consensus::DataSourceLifeCycle, mocks::MockTypes},
+    };
 
     #[async_trait]
     impl DataSourceLifeCycle for MetricsDataSource {
         type Storage = PrometheusMetrics;
+        type S = ();
+        type P = ();
 
         async fn create(_node_id: usize) -> Self::Storage {
             Default::default()
         }
 
-        async fn connect(storage: &Self::Storage) -> Self {
+        async fn build(
+            storage: &Self::Storage,
+            _opt: impl Send + FnOnce(Builder<MockTypes, (), ()>) -> Builder<MockTypes, (), ()>,
+        ) -> Self {
             Self {
                 metrics: storage.clone(),
             }

@@ -22,6 +22,7 @@ use vec1::Vec1;
 
 pub use crate::utils::{View, ViewInner};
 use crate::{
+    constants::EPOCH_PARTICIPATION_HISTORY,
     data::{
         EpochNumber, Leaf2, QuorumProposalWrapper, VidCommitment, VidDisperse,
         VidDisperseAndDuration, VidDisperseShare, ViewNumber,
@@ -284,14 +285,16 @@ impl HotShotActionViews {
     }
 }
 
+type ValidatorParticipationMap<TYPES> = HashMap<<TYPES as NodeType>::SignatureKey, (u64, u64)>;
+
 #[derive(Debug, Clone)]
 struct ValidatorParticipation<TYPES: NodeType> {
     epoch: EpochNumber,
     /// Current epoch participation by key maps key -> (num leader, num times proposed)
-    current_epoch_participation: HashMap<TYPES::SignatureKey, (u64, u64)>,
+    current_epoch_participation: ValidatorParticipationMap<TYPES>,
 
-    /// Last epoch participation by key maps key -> (num leader, num times proposed)
-    last_epoch_participation: HashMap<TYPES::SignatureKey, (u64, u64)>,
+    /// Previous epochs participation ordered by epoch number, maps epoch -> key -> (num leader, num times proposed)
+    previous_epoch_participation: BTreeMap<EpochNumber, ValidatorParticipationMap<TYPES>>,
 }
 
 impl<TYPES: NodeType> ValidatorParticipation<TYPES> {
@@ -299,7 +302,7 @@ impl<TYPES: NodeType> ValidatorParticipation<TYPES> {
         Self {
             epoch: EpochNumber::genesis(),
             current_epoch_participation: HashMap::new(),
-            last_epoch_participation: HashMap::new(),
+            previous_epoch_participation: BTreeMap::new(),
         }
     }
 
@@ -326,36 +329,17 @@ impl<TYPES: NodeType> ValidatorParticipation<TYPES> {
         if epoch <= self.epoch {
             return;
         }
+        self.previous_epoch_participation
+            .insert(self.epoch, self.current_epoch_participation.clone());
+
+        self.previous_epoch_participation =
+            self.previous_epoch_participation
+                .split_off(&EpochNumber::new(
+                    self.epoch.saturating_sub(EPOCH_PARTICIPATION_HISTORY),
+                ));
+
         self.epoch = epoch;
-        self.last_epoch_participation = self.current_epoch_participation.clone();
         self.current_epoch_participation = HashMap::new();
-    }
-
-    fn get_participation(&self, key: TYPES::SignatureKey) -> (f64, Option<f64>) {
-        let current_epoch_participation = self
-            .current_epoch_participation
-            .get(&key)
-            .unwrap_or(&(0, 0));
-        let num_leader = current_epoch_participation.0;
-        let num_proposed = current_epoch_participation.1;
-
-        let current_epoch_participation_ratio = if num_leader == 0 {
-            0.0
-        } else {
-            num_proposed as f64 / num_leader as f64
-        };
-        let last_epoch_participation = self.last_epoch_participation.get(&key);
-        let last_epoch_participation_ratio = last_epoch_participation.map(|(leader, proposed)| {
-            if *leader == 0 {
-                0.0
-            } else {
-                *proposed as f64 / *leader as f64
-            }
-        });
-        (
-            current_epoch_participation_ratio,
-            last_epoch_participation_ratio,
-        )
     }
 
     fn current_proposal_participation(&self) -> HashMap<TYPES::SignatureKey, f64> {
@@ -373,8 +357,17 @@ impl<TYPES: NodeType> ValidatorParticipation<TYPES> {
             })
             .collect()
     }
-    fn previous_proposal_participation(&self) -> HashMap<TYPES::SignatureKey, f64> {
-        self.last_epoch_participation
+    fn proposal_participation(&self, epoch: EpochNumber) -> HashMap<TYPES::SignatureKey, f64> {
+        let tracked_participation = if epoch == self.epoch {
+            self.current_epoch_participation.clone()
+        } else {
+            self.previous_epoch_participation
+                .get(&epoch)
+                .unwrap_or(&HashMap::new())
+                .clone()
+        };
+
+        tracked_participation
             .iter()
             .map(|(key, (leader, proposed))| {
                 (
@@ -388,7 +381,16 @@ impl<TYPES: NodeType> ValidatorParticipation<TYPES> {
             })
             .collect()
     }
+
+    fn current_epoch(&self) -> EpochNumber {
+        self.epoch
+    }
 }
+
+type VoteParticipationMap<TYPES> = (
+    HashMap<<<TYPES as NodeType>::SignatureKey as SignatureKey>::VerificationKeyType, u64>,
+    u64,
+);
 
 #[derive(Clone, Debug)]
 struct VoteParticipation<TYPES: NodeType> {
@@ -411,12 +413,8 @@ struct VoteParticipation<TYPES: NodeType> {
     current_epoch_participation:
         HashMap<<TYPES::SignatureKey as SignatureKey>::VerificationKeyType, u64>,
 
-    /// Number of views in the last epoch
-    last_epoch_num_views: u64,
-
-    /// Last epoch participation by key maps key -> num times voted
-    last_epoch_participation:
-        HashMap<<TYPES::SignatureKey as SignatureKey>::VerificationKeyType, u64>,
+    /// Previous epochs participation ordered by epoch number, maps epoch -> key -> num times voted
+    previous_epoch_participation: BTreeMap<Option<EpochNumber>, VoteParticipationMap<TYPES>>,
 }
 
 impl<TYPES: NodeType> VoteParticipation<TYPES> {
@@ -446,15 +444,14 @@ impl<TYPES: NodeType> VoteParticipation<TYPES> {
             view_set: HashSet::new(),
             current_epoch_num_views: 0u64,
             current_epoch_participation,
-            last_epoch_num_views: 0u64,
-            last_epoch_participation: HashMap::new(),
+            previous_epoch_participation: BTreeMap::new(),
         }
     }
 
     fn update_participation(&mut self, qc: QuorumCertificate2<TYPES>) -> Result<()> {
         ensure!(
             qc.epoch() == self.epoch,
-            warn!(
+            info!(
                 "Incorrect epoch while updating vote participation, current epoch: {:?}, QC epoch \
                  {:?}",
                 self.epoch,
@@ -495,17 +492,47 @@ impl<TYPES: NodeType> VoteParticipation<TYPES> {
         epoch: Option<EpochNumber>,
     ) -> Result<()> {
         ensure!(
-            epoch > self.epoch,
-            info!(
-                "New epoch not greater than current epoch while updating vote participation \
-                 epoch, current epoch: {:?}, new epoch {:?}",
+            epoch >= self.epoch,
+            warn!(
+                "New epoch less than current epoch while updating vote participation epoch, \
+                 current epoch: {:?}, new epoch {:?}",
                 self.epoch, epoch
             )
         );
+        // Same epoch, do nothing
+        if epoch == self.epoch {
+            return Ok(());
+        }
+
+        self.previous_epoch_participation.insert(
+            self.epoch,
+            (
+                self.current_epoch_participation.clone(),
+                self.current_epoch_num_views,
+            ),
+        );
+
+        self.previous_epoch_participation = self.previous_epoch_participation.split_off(
+            &self
+                .epoch
+                .map(|e| EpochNumber::new(e.saturating_sub(EPOCH_PARTICIPATION_HISTORY))),
+        );
+
+        self.previous_epoch_participation.insert(
+            self.epoch,
+            (
+                self.current_epoch_participation.clone(),
+                self.current_epoch_num_views,
+            ),
+        );
+
+        self.previous_epoch_participation = self.previous_epoch_participation.split_off(
+            &self
+                .epoch
+                .map(|e| EpochNumber::new(e.saturating_sub(EPOCH_PARTICIPATION_HISTORY))),
+        );
 
         self.epoch = epoch;
-        self.last_epoch_participation = self.current_epoch_participation.clone();
-        self.last_epoch_num_views = self.current_epoch_num_views;
         self.current_epoch_num_views = 0;
         self.view_set = HashSet::new();
         let current_epoch_participation: HashMap<_, _> = stake_table
@@ -528,24 +555,6 @@ impl<TYPES: NodeType> VoteParticipation<TYPES> {
         Ok(())
     }
 
-    fn get_participation(&self, key: TYPES::SignatureKey) -> (Option<f64>, Option<f64>) {
-        let maybe_current_num_votes = self
-            .current_epoch_participation
-            .get(&key.to_verification_key());
-
-        let current_epoch_vote_ratio = maybe_current_num_votes
-            .map(|num_votes| Self::calculate_ratio(num_votes, self.current_epoch_num_views));
-
-        let maybe_last_num_votes = self
-            .last_epoch_participation
-            .get(&key.to_verification_key());
-
-        let last_epoch_vote_ratio = maybe_last_num_votes
-            .map(|num_votes| Self::calculate_ratio(num_votes, self.last_epoch_num_views));
-
-        (current_epoch_vote_ratio, last_epoch_vote_ratio)
-    }
-
     fn current_vote_participation(
         &self,
     ) -> HashMap<<TYPES::SignatureKey as SignatureKey>::VerificationKeyType, f64> {
@@ -559,15 +568,29 @@ impl<TYPES: NodeType> VoteParticipation<TYPES> {
             })
             .collect()
     }
-    fn previous_vote_participation(
+    fn vote_participation(
         &self,
+        epoch: Option<EpochNumber>,
     ) -> HashMap<<TYPES::SignatureKey as SignatureKey>::VerificationKeyType, f64> {
-        self.last_epoch_participation
+        let tracked_participation = if epoch == self.epoch {
+            (
+                self.current_epoch_participation.clone(),
+                self.current_epoch_num_views,
+            )
+        } else {
+            self.previous_epoch_participation
+                .get(&epoch)
+                .unwrap_or(&(HashMap::new(), 0))
+                .clone()
+        };
+
+        tracked_participation
+            .0
             .iter()
             .map(|(key, votes)| {
                 (
                     key.clone(),
-                    Self::calculate_ratio(votes, self.last_epoch_num_views),
+                    Self::calculate_ratio(votes, tracked_participation.1),
                 )
             })
             .collect()
@@ -579,6 +602,10 @@ impl<TYPES: NodeType> VoteParticipation<TYPES> {
         } else {
             *num_votes as f64 / total_views as f64
         }
+    }
+
+    fn current_epoch(&self) -> Option<EpochNumber> {
+        self.epoch
     }
 }
 
@@ -987,21 +1014,20 @@ impl<TYPES: NodeType> Consensus<TYPES> {
             .update_participation_epoch(epoch);
     }
 
-    /// Get the validator participation
-    pub fn get_validator_participation(&self, key: TYPES::SignatureKey) -> (f64, Option<f64>) {
-        self.validator_participation.get_participation(key)
-    }
-
     /// Get the current proposal participation
     pub fn current_proposal_participation(&self) -> HashMap<TYPES::SignatureKey, f64> {
         self.validator_participation
             .current_proposal_participation()
     }
 
-    /// Get the previous proposal participation
-    pub fn previous_proposal_participation(&self) -> HashMap<TYPES::SignatureKey, f64> {
-        self.validator_participation
-            .previous_proposal_participation()
+    /// Get the current proposal participation epoch
+    pub fn current_proposal_participation_epoch(&self) -> EpochNumber {
+        self.validator_participation.current_epoch()
+    }
+
+    /// Get the proposal participation for a given epoch
+    pub fn proposal_participation(&self, epoch: EpochNumber) -> HashMap<TYPES::SignatureKey, f64> {
+        self.validator_participation.proposal_participation(epoch)
     }
 
     /// Update the vote participation
@@ -1020,11 +1046,6 @@ impl<TYPES: NodeType> Consensus<TYPES> {
             .update_participation_epoch(stake_table, success_threshold, epoch)
     }
 
-    /// Get the vote participation
-    pub fn get_participation(&self, key: TYPES::SignatureKey) -> (Option<f64>, Option<f64>) {
-        self.vote_participation.get_participation(key)
-    }
-
     /// Get the current vote participation
     pub fn current_vote_participation(
         &self,
@@ -1032,11 +1053,17 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         self.vote_participation.current_vote_participation()
     }
 
+    /// Get the current vote participation
+    pub fn current_vote_participation_epoch(&self) -> Option<EpochNumber> {
+        self.vote_participation.current_epoch()
+    }
+
     /// Get the previous vote participation
-    pub fn previous_vote_participation(
+    pub fn vote_participation(
         &self,
+        epoch: Option<EpochNumber>,
     ) -> HashMap<<TYPES::SignatureKey as SignatureKey>::VerificationKeyType, f64> {
-        self.vote_participation.previous_vote_participation()
+        self.vote_participation.vote_participation(epoch)
     }
 
     /// Get the parent Leaf Info from a given leaf and our public key.

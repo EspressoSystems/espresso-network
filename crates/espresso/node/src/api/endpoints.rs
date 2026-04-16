@@ -5,6 +5,7 @@ use std::{
     env,
 };
 
+use alloy::primitives::utils::format_ether;
 use anyhow::{Context, Result};
 use committable::Committable;
 use espresso_types::{
@@ -13,9 +14,8 @@ use espresso_types::{
     v0_4::{RewardAccountV2, RewardClaimError},
 };
 
-use crate::{
-    U256,
-    api::{RewardAmount, RewardMerkleTreeV2Data, data_source::TokenDataSource},
+use crate::api::{
+    RewardAmount, RewardMerkleTreeV2Data, data_source::TokenDataSource, unlock_schedule,
 };
 // re-exported here to avoid breaking changes in consumers
 // "deprecated" does not work with "pub use": https://github.com/rust-lang/rust/issues/30827
@@ -45,8 +45,8 @@ use tide_disco::{Api, Error as _, RequestParams, StatusCode, method::ReadState};
 use vbs::version::{StaticVersion, StaticVersionType};
 
 use super::data_source::{
-    CatchupDataSource, HotShotConfigDataSource, NodeStateDataSource, StakeTableDataSource,
-    StateSignatureDataSource, SubmitDataSource,
+    CatchupDataSource, DatabaseMetadataSource, HotShotConfigDataSource, NodeStateDataSource,
+    StakeTableDataSource, StateSignatureDataSource, SubmitDataSource,
 };
 use crate::{SeqTypes, SequencerApiVersion, SequencerPersistence, api::RewardMerkleTreeDataSource};
 
@@ -400,6 +400,7 @@ where
         + Sync
         + TokenDataSource<SeqTypes>
         + NodeDataSource<SeqTypes>
+        + NodeStateDataSource
         + AvailabilityDataSource<SeqTypes>,
 {
     // Extend the base API
@@ -422,16 +423,84 @@ where
                     status: StatusCode::NOT_FOUND,
                 })?;
 
-            let scale = U256::from(10u64.pow(18));
-            let quotient = value / scale;
-            let remainder = value % scale;
+            Ok(format_ether(value))
+        }
+        .boxed()
+    })?;
 
-            Ok(format!("{quotient}.{remainder}"))
+    api.at("get_circulating_supply", |_, state| {
+        async move {
+            let calc = fetch_supply_inputs(state).await?;
+            Ok(format_ether(calc.circulating_supply()))
+        }
+        .boxed()
+    })?;
+
+    api.at("get_circulating_supply_ethereum", |_, state| {
+        async move {
+            let calc = fetch_supply_inputs(state).await?;
+            Ok(format_ether(calc.circulating_supply_ethereum()))
+        }
+        .boxed()
+    })?;
+
+    api.at("get_total_issued_supply", |_, state| {
+        async move {
+            let calc = fetch_supply_inputs(state).await?;
+            Ok(format_ether(calc.total_issued_supply()))
+        }
+        .boxed()
+    })?;
+
+    // Reuses fetch_supply_inputs for uniformity; the extra Ethereum fetches are cached.
+    api.at("get_total_reward_distributed", |_, state| {
+        async move {
+            let calc = fetch_supply_inputs(state).await?;
+            Ok(format_ether(calc.total_reward_distributed()))
         }
         .boxed()
     })?;
 
     Ok(api)
+}
+
+/// Fetch state data and build a [`unlock_schedule::SupplyCalculator`].
+async fn fetch_supply_inputs<S: ReadState>(
+    state: &S,
+) -> Result<unlock_schedule::SupplyCalculator, node::Error>
+where
+    S::State: Send + Sync + TokenDataSource<SeqTypes> + NodeStateDataSource,
+{
+    let node_state = state.read(|s| s.node_state().boxed()).await;
+    let chain_id = node_state.chain_config.chain_id;
+
+    let header = state.read(|s| s.get_decided_header().boxed()).await;
+    let now_secs = header.timestamp_internal();
+    let total_reward_distributed = header.total_reward_distributed();
+
+    let initial_supply = state
+        .read(|s| s.get_initial_supply_l1().boxed())
+        .await
+        .map_err(|err| node::Error::Custom {
+            message: format!("failed to get initial supply: {err:#}"),
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+        })?;
+
+    let total_supply_l1 = state
+        .read(|s| s.get_total_supply_l1().boxed())
+        .await
+        .map_err(|err| node::Error::Custom {
+            message: format!("failed to get total supply: {err:#}"),
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+        })?;
+
+    Ok(unlock_schedule::SupplyCalculator::new(
+        chain_id,
+        now_secs,
+        initial_supply,
+        total_supply_l1,
+        total_reward_distributed,
+    ))
 }
 
 pub(super) fn node<S>(api_ver: semver::Version) -> Result<Api<S, node::Error, StaticVersion<0, 1>>>
@@ -583,10 +652,17 @@ where
         }
         .boxed()
     })?
-    .at("previous_proposal_participation", |_, state| {
+    .at("proposal_participation", |req, state| {
         async move {
+            let epoch = req.integer_param::<_, u64>("epoch").map_err(|_| {
+                hotshot_query_service::node::Error::Custom {
+                    message: "Epoch number is required".to_string(),
+                    status: StatusCode::BAD_REQUEST,
+                }
+            })?;
+
             Ok(state
-                .read(|state| state.previous_proposal_participation().boxed())
+                .read(|state| state.proposal_participation(epoch.into()).boxed())
                 .await)
         }
         .boxed()
@@ -599,10 +675,17 @@ where
         }
         .boxed()
     })?
-    .at("previous_vote_participation", |_, state| {
+    .at("vote_participation", |req, state| {
         async move {
+            let epoch = req.integer_param::<_, u64>("epoch").map_err(|_| {
+                hotshot_query_service::node::Error::Custom {
+                    message: "Epoch number is required".to_string(),
+                    status: StatusCode::BAD_REQUEST,
+                }
+            })?;
+
             Ok(state
-                .read(|state| state.previous_vote_participation().boxed())
+                .read(|state| state.vote_participation(epoch.into()).boxed())
                 .await)
         }
         .boxed()
@@ -626,6 +709,31 @@ where
 
     Ok(api)
 }
+
+pub(super) fn database<S, ApiVer: StaticVersionType + 'static>(
+    api_ver: semver::Version,
+) -> Result<Api<S, Error, ApiVer>>
+where
+    S: 'static + Send + Sync + ReadState,
+    <S as ReadState>::State: Send + Sync + DatabaseMetadataSource,
+{
+    let toml = toml::from_str::<toml::Value>(include_str!("../../api/database.toml"))?;
+    let mut api = Api::<S, Error, ApiVer>::new(toml)?;
+
+    api.with_version(api_ver)
+        .at("get_table_sizes", |_req, state| {
+            async move {
+                state
+                    .read(|state| state.get_table_sizes().boxed())
+                    .await
+                    .map_err(|err| Error::internal(format!("failed to get table sizes: {err:#}")))
+            }
+            .boxed()
+        })?;
+
+    Ok(api)
+}
+
 pub(super) fn submit<N, P, S, ApiVer: StaticVersionType + 'static>(
     api_ver: semver::Version,
 ) -> Result<Api<S, Error, ApiVer>>

@@ -272,11 +272,11 @@ impl<TYPES: NodeType> ADVZDisperseShare<TYPES> {
             common: first_vid_disperse_share.common,
             shares: share_map,
         };
-        let _ = it.map(|vid_disperse_share| {
+        it.for_each(|vid_disperse_share| {
             vid_disperse.shares.insert(
                 vid_disperse_share.recipient_key.clone(),
                 vid_disperse_share.share.clone(),
-            )
+            );
         });
         Some(vid_disperse)
     }
@@ -561,11 +561,11 @@ impl<TYPES: NodeType> AvidMDisperse<TYPES> {
             payload_byte_len,
             common: first_vid_disperse_share.common,
         };
-        let _ = it.map(|vid_disperse_share| {
+        it.for_each(|vid_disperse_share| {
             vid_disperse.shares.insert(
                 vid_disperse_share.recipient_key.clone(),
                 vid_disperse_share.share.clone(),
-            )
+            );
         });
         Some(vid_disperse)
     }
@@ -823,11 +823,11 @@ impl<TYPES: NodeType> AvidmGf2Disperse<TYPES> {
             payload_byte_len,
             common: first_vid_disperse_share.common,
         };
-        let _ = it.map(|vid_disperse_share| {
+        it.for_each(|vid_disperse_share| {
             vid_disperse.shares.insert(
                 vid_disperse_share.recipient_key.clone(),
                 vid_disperse_share.share.clone(),
-            )
+            );
         });
         Some(vid_disperse)
     }

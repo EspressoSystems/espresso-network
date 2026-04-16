@@ -51,12 +51,11 @@ jobs:
       - uses: taiki-e/install-action@nextest
       - uses: rui314/setup-mold@v1
 
-      - name: Collect Workflow Telemetry
-        uses: catchpoint/workflow-telemetry-action@v2
+      - name: Enable Rust Caching
+        uses: Swatinem/rust-cache@v2
         with:
-          comment_on_pr: false
-
-      # NOTE: no rust cache, these tests are very slow anyway
+          shared-key: ${{ matrix.name }}
+          save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
 
       - name: Build slow test
         run: ${{ matrix.build-cmd }}

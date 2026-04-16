@@ -129,12 +129,16 @@ pub mod availability_tests {
 
     use committable::Committable;
     use futures::stream::StreamExt;
+    use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_types::{data::Leaf2, vote::HasViewNumber};
 
     use super::test_helpers::*;
     use crate::{
-        availability::{BlockId, payload_size},
-        data_source::storage::{AvailabilityStorage, NodeStorage},
+        availability::{BlockId, BlockQueryData, LeafQueryData, VidCommonQueryData, payload_size},
+        data_source::{
+            Transaction,
+            storage::{AvailabilityStorage, NodeStorage, UpdateAvailabilityStorage},
+        },
         node::NodeDataSource,
         testing::{
             consensus::{MockNetwork, TestableDataSource},
@@ -558,6 +562,62 @@ pub mod availability_tests {
             self.0.end_bound()
         }
     }
+
+    /// Regression test for a SQL bug.
+    ///
+    /// In PostgreSQL, upserting with multiple conflicting rows in a single statement is not
+    /// allowed.
+    #[tokio::test]
+    #[test_log::test]
+    pub async fn test_insert_consecutive_identical_blocks<D: TestableDataSource>()
+    where
+        for<'a> D::Transaction<'a>: UpdateAvailabilityStorage<MockTypes>,
+    {
+        let storage = D::create(0).await;
+        let ds = D::connect(&storage).await;
+
+        let leaf = LeafQueryData::<MockTypes>::genesis(
+            &Default::default(),
+            &Default::default(),
+            TEST_VERSIONS.test,
+        )
+        .await;
+        let block = BlockQueryData::<MockTypes>::genesis(
+            &Default::default(),
+            &Default::default(),
+            TEST_VERSIONS.test.base,
+        )
+        .await;
+        let vid = VidCommonQueryData::<MockTypes>::genesis(
+            &Default::default(),
+            &Default::default(),
+            TEST_VERSIONS.test.base,
+        )
+        .await;
+
+        let mut leaf2 = leaf.clone();
+        leaf2.leaf.block_header_mut().block_number += 1;
+        let block2 =
+            BlockQueryData::<MockTypes>::new(leaf2.header().clone(), block.payload.clone());
+        let vid2 = VidCommonQueryData::<MockTypes>::new(leaf2.header().clone(), vid.common.clone());
+
+        {
+            let mut tx = ds.write().await.unwrap();
+            tx.insert_leaf_range([&leaf, &leaf2]).await.unwrap();
+            tx.insert_block_range([&block, &block2]).await.unwrap();
+            tx.insert_vid_range([(&vid, None), (&vid2, None)])
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+        }
+
+        assert_eq!(ds.get_leaf(0).await.await, leaf);
+        assert_eq!(ds.get_leaf(1).await.await, leaf2);
+        assert_eq!(ds.get_block(0).await.await, block);
+        assert_eq!(ds.get_block(1).await.await, block2);
+        assert_eq!(ds.get_vid_common(0).await.await, vid);
+        assert_eq!(ds.get_vid_common(1).await.await, vid2);
+    }
 }
 
 /// Generic tests we can instantiate for any data source with reliable, versioned persistent storage.
@@ -828,7 +888,10 @@ pub mod node_tests {
         for<'a> D::Transaction<'a>: UpdateAvailabilityStorage<MockTypes>,
     {
         let storage = D::create(0).await;
-        let ds = D::connect(&storage).await;
+        let ds = D::build(&storage, |builder| {
+            builder.with_sync_status_ttl(Duration::ZERO)
+        })
+        .await;
 
         // Set up a mock VID scheme to use for generating test data.
         let mut vid = advz_scheme(2);

@@ -315,6 +315,7 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
             .fetch_leaf(height, stake_table, success_threshold)
             .await
     }
+
     async fn try_fetch_accounts(
         &self,
         retry: usize,

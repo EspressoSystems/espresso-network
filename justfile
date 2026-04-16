@@ -66,16 +66,14 @@ fix *args:
 lint *args:
     just clippy {{args}} -- -D warnings
 
+# postgres and sqlite variants checked separately to cover all code
 clippy *args:
-    # check all targets in default workspace members
-    cargo clippy --features testing --all-targets {{args}}
-    # check entire workspace (including espresso-node-sqlite crate) with embedded-db feature
+    cargo clippy --workspace --exclude espresso-node-sqlite --exclude espresso-dev-node --features testing --all-targets {{args}}
     cargo clippy --workspace --features "embedded-db testing" --all-targets {{args}}
 
+# postgres and sqlite variants checked separately to cover all code
 check *args:
-    # postgres
-    cargo check {{args}}
-    # embedded-db
+    cargo check --workspace --exclude espresso-node-sqlite --exclude espresso-dev-node {{args}}
     cargo check -p espresso-node-sqlite -p espresso-dev-node {{args}}
 
 build profile="dev" features="":
@@ -105,6 +103,12 @@ demo-native-fee-to-drb-header-upgrade *args: (build "test" "--no-default-feature
 demo-native-da-committees *args: (build "test" "--no-default-features")
     ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo-da-committees.toml scripts/demo-native -f process-compose.yaml {{args}}
 
+demo-native-epoch-reward *args: (build "test" "--no-default-features")
+    ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo-epoch-reward.toml scripts/demo-native -f process-compose.yaml {{args}}
+
+demo-native-epoch-reward-upgrade *args: (build "test" "--no-default-features")
+    ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo-epoch-reward-upgrade.toml scripts/demo-native -f process-compose.yaml {{args}}
+
 demo-native-benchmark:
     cargo build --release --features benchmarking
     scripts/demo-native
@@ -126,13 +130,14 @@ anvil *args:
 # espresso-node-sqlite: no tests, enables embedded-db feature
 # slow-tests: slow and serial tests
 # espresso-dev-node: enables embedded-db
-nextest_excludes := "--exclude espresso-node-sqlite --exclude hotshot-testing --exclude hotshot-new-protocol --exclude slow-tests --exclude espresso-dev-node"
+# espresso-crypto-helper: vendored openssl leaks to workspace via feature unification
+nextest_excludes := "--exclude espresso-node-sqlite --exclude hotshot-testing --exclude hotshot-new-protocol --exclude slow-tests --exclude espresso-dev-node --exclude hotshot-examples --exclude espresso-crypto-helper"
 
 nextest *args:
-    cargo nextest run --locked --workspace {{nextest_excludes}} --verbose {{args}}
+    cargo nextest run --locked --workspace {{nextest_excludes}} --lib --bins --tests --verbose {{args}}
 
 nextest-archive archive-file *args:
-    cargo nextest archive --locked --workspace {{nextest_excludes}} --archive-file {{archive-file}} {{args}}
+    cargo nextest archive --locked --workspace {{nextest_excludes}} --lib --bins --tests --archive-file {{archive-file}} {{args}}
 
 test *args:
     @echo 'Omitting slow tests. Use `test-slow` for those. Or `test-all` for all tests.'
@@ -193,9 +198,17 @@ test-demo test_name:
 			features="--no-default-features"
 			test="test_native_demo_da_committee"
 			;;
+		epoch-reward-base)
+			features="--no-default-features"
+			test="test_native_demo_epoch_reward_base"
+			;;
+		epoch-reward-upgrade)
+			features="--no-default-features"
+			test="test_native_demo_epoch_reward_upgrade"
+			;;
 		*)
 			echo "Unknown test: {{test_name}}"
-			echo "Available tests: base, pos-base, drb-header-base, pos-upgrade, drb-header-upgrade, fee-to-drb-header-upgrade, da-committees"
+			echo "Available tests: base, pos-base, drb-header-base, epoch-reward-base, pos-upgrade, drb-header-upgrade, fee-to-drb-header-upgrade, da-committees, epoch-reward-upgrade"
 			exit 1
 			;;
 	esac
@@ -370,3 +383,4 @@ contracts-test-network *args='-vv':
         exit 1
     fi
     forge test --match-test test_Network_ --jobs 1 {{args}}
+

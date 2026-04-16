@@ -8,6 +8,7 @@ use std::{
     time::Instant,
 };
 
+use alloy::primitives::Address;
 use anyhow::{Context, anyhow, bail};
 use async_lock::RwLock;
 use async_trait::async_trait;
@@ -44,10 +45,39 @@ use hotshot_types::{
 };
 use itertools::Itertools;
 
+use super::RegisteredValidatorNoX25519;
 use crate::{
     RECENT_STAKE_TABLES_LIMIT, ViewNumber,
     persistence::{migrate_network_config, persistence_metrics::PersistenceMetricsValue},
 };
+
+/// Deserialize a stake table from bytes, trying current and legacy formats.
+/// Returns (stake_tuple, needs_rewrite) where needs_rewrite=true means legacy format was used.
+fn deserialize_stake_table(bytes: &[u8]) -> anyhow::Result<(StakeTuple, bool)> {
+    // Try current format (RegisteredValidator with x25519 fields).
+    if let Ok(stake) = bincode::deserialize::<StakeTuple>(bytes) {
+        return Ok((stake, false));
+    }
+
+    // Legacy: RegisteredValidator without x25519_key/p2p_addr.
+    type LegacyMap = indexmap::IndexMap<Address, RegisteredValidatorNoX25519>;
+    type LegacyTuple = (LegacyMap, Option<RewardAmount>, Option<StakeTableHash>);
+    let legacy: LegacyTuple = bincode::deserialize(bytes)
+        .context("failed to deserialize stake table (tried current and legacy formats)")?;
+    let migrated: AuthenticatedValidatorMap = legacy
+        .0
+        .into_iter()
+        .map(|(addr, v)| {
+            let registered = v.migrate();
+            (
+                addr,
+                AuthenticatedValidator::try_from(registered)
+                    .expect("stake tables only contain authenticated validators"),
+            )
+        })
+        .collect();
+    Ok(((migrated, legacy.1, legacy.2), true))
+}
 
 /// Options for file system backed persistence.
 #[derive(Parser, Clone, Debug)]
@@ -1302,7 +1332,7 @@ impl SequencerPersistence for Persistence {
             });
         }
 
-        result.sort_by(|a, b| a.epoch.cmp(&b.epoch));
+        result.sort_by_key(|a| a.epoch);
 
         // Keep only the most recent epochs
         let start = result
@@ -1456,7 +1486,7 @@ impl MembershipPersistence for Persistence {
         let limit = limit as usize;
         let inner = self.inner.read().await;
         let path = &inner.stake_table_dir_path();
-        let sorted_files = epoch_files(&path)?
+        let sorted_files = epoch_files(path)?
             .sorted_by(|(e1, _), (e2, _)| e2.cmp(e1))
             .take(limit);
         let mut validator_sets: Vec<IndexedStake> = Vec::new();

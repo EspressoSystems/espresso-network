@@ -117,8 +117,9 @@ pub(crate) trait NodeStateDataSource {
 }
 
 pub(crate) trait TokenDataSource<T: NodeType> {
-    /// Get the stake table for a given epoch
+    fn get_initial_supply_l1(&self) -> impl Send + Future<Output = anyhow::Result<U256>>;
     fn get_total_supply_l1(&self) -> impl Send + Future<Output = anyhow::Result<U256>>;
+    fn get_decided_header(&self) -> impl Send + Future<Output = espresso_types::Header>;
 }
 
 #[derive(Serialize, Deserialize)]
@@ -166,15 +167,19 @@ pub(crate) trait StakeTableDataSource<T: NodeType> {
         &self,
     ) -> impl Send + Future<Output = HashMap<BLSPubKey, f64>>;
 
-    /// Get the previous proposal participation.
-    fn previous_proposal_participation(
+    /// Get the proposal participation for a given epoch.
+    fn proposal_participation(
         &self,
+        epoch: EpochNumber,
     ) -> impl Send + Future<Output = HashMap<BLSPubKey, f64>>;
     /// Get the current vote participation.
     fn current_vote_participation(&self) -> impl Send + Future<Output = HashMap<BLSPubKey, f64>>;
 
-    /// Get the previous vote participation.
-    fn previous_vote_participation(&self) -> impl Send + Future<Output = HashMap<BLSPubKey, f64>>;
+    /// Get the vote participation for a given epoch.
+    fn vote_participation(
+        &self,
+        epoch: EpochNumber,
+    ) -> impl Send + Future<Output = HashMap<BLSPubKey, f64>>;
 
     fn get_all_validators(
         &self,
@@ -354,6 +359,22 @@ pub trait StateCertFetchingDataSource<Types: NodeType> {
         epoch: u64,
         timeout: Duration,
     ) -> Result<LightClientStateUpdateCertificateV2<Types>, StateCertFetchError>;
+}
+
+/// Database table size information.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct TableSize {
+    pub table_name: String,
+    pub row_count: i64,
+    pub total_size_bytes: Option<i64>,
+}
+
+/// Data source for database metadata and statistics.
+///
+/// This trait is only implemented by SQL-based storage backends (PostgreSQL and SQLite).
+pub(crate) trait DatabaseMetadataSource {
+    /// Get the sizes of all tables in the database.
+    fn get_table_sizes(&self) -> impl Send + Future<Output = anyhow::Result<Vec<TableSize>>>;
 }
 
 #[cfg(any(test, feature = "testing"))]

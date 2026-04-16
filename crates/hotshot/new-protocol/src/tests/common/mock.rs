@@ -24,9 +24,9 @@ pub mod testing {
     #[derive(Clone, Debug, Deserialize, Serialize, Hash, Eq, PartialEq)]
     pub struct MockNetworkImpl;
 
-    impl<TYPES: NodeType> NodeImplementation<TYPES> for MockNetworkImpl {
+    impl<T: NodeType> NodeImplementation<T> for MockNetworkImpl {
         type Network = MockNetwork;
-        type Storage = TestStorage<TYPES>;
+        type Storage = TestStorage<T>;
     }
 
     pub type MockCoordinator = Coordinator<TestTypes, MockNetworkImpl>;
