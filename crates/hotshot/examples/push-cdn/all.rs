@@ -21,22 +21,17 @@ use hotshot::{
     types::SignatureKey,
 };
 use hotshot_example_types::state_types::TestTypes;
+use hotshot_examples::infra::{
+    BUILDER_BASE_PORT, OrchestratorArgs, gen_local_address, read_orchestrator_init_config,
+    run_orchestrator,
+};
 use hotshot_orchestrator::client::ValidatorArgs;
 use hotshot_types::traits::node_implementation::NodeType;
-use infra::{BUILDER_BASE_PORT, gen_local_address};
 use rand::{RngCore, SeedableRng, rngs::StdRng};
 use tokio::spawn;
-
-use crate::{
-    infra::{OrchestratorArgs, read_orchestrator_init_config, run_orchestrator},
-    types::{Network, NodeImpl, ThisRun},
-};
-
-/// The infra implementation
-#[path = "../infra/mod.rs"]
-pub mod infra;
-
 use tracing::error;
+
+use crate::types::{Network, NodeImpl, ThisRun};
 
 #[tokio::main]
 async fn main() {
@@ -151,12 +146,14 @@ async fn main() {
         let orchestrator_url = orchestrator_url.clone();
         let builder_address = gen_local_address::<BUILDER_BASE_PORT>(i);
         let node = spawn(async move {
-            infra::main_entry_point::<TestTypes, Network, NodeImpl, ThisRun>(ValidatorArgs {
-                url: orchestrator_url,
-                advertise_address: None,
-                builder_address: Some(builder_address),
-                network_config_file: None,
-            })
+            hotshot_examples::infra::main_entry_point::<TestTypes, Network, NodeImpl, ThisRun>(
+                ValidatorArgs {
+                    url: orchestrator_url,
+                    advertise_address: None,
+                    builder_address: Some(builder_address),
+                    network_config_file: None,
+                },
+            )
             .await;
         });
         nodes.push(node);

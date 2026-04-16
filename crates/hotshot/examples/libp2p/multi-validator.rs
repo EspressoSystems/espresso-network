@@ -17,10 +17,6 @@ use crate::types::{Network, NodeImpl, ThisRun};
 /// types used for this example
 pub mod types;
 
-/// general infra used for this example
-#[path = "../infra/mod.rs"]
-pub mod infra;
-
 #[tokio::main]
 #[instrument]
 async fn main() {
@@ -34,7 +30,7 @@ async fn main() {
         let args = args.clone();
 
         let node = spawn(async move {
-            infra::main_entry_point::<TestTypes, Network, NodeImpl, ThisRun>(
+            hotshot_examples::infra::main_entry_point::<TestTypes, Network, NodeImpl, ThisRun>(
                 ValidatorArgs::from_multi_args(args, node_index),
             )
             .await;

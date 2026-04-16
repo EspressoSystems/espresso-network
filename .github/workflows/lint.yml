@@ -45,7 +45,7 @@ jobs:
 
       - name: Run clippy
         run: |
-          cargo clippy --features testing --all-targets --keep-going -- -D warnings
+          cargo clippy --workspace --exclude sequencer-sqlite --exclude espresso-dev-node --features testing --all-targets --keep-going -- -D warnings
 
   clippy-embedded:
       name: clippy (embedded-db)

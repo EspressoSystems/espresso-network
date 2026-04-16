@@ -53,11 +53,6 @@ jobs:
       - name: Show memory
         run: free -h
 
-      - name: Collect Workflow Telemetry
-        uses: catchpoint/workflow-telemetry-action@v2
-        with:
-          comment_on_pr: false
-
       - name: Build integration tests
         run: |
           just hotshot::${{ matrix.test_suites }} --no-run
