@@ -4349,6 +4349,31 @@ mod tests {
     }
 
     #[test]
+    fn test_p2p_addr_unparsable_sets_none() -> anyhow::Result<()> {
+        let val = TestValidator::random();
+
+        let mut state = StakeTableState::default();
+        state.apply_event(StakeTableEvent::RegisterV2((&val).into()))??;
+
+        // Set a valid address first.
+        state.apply_event(make_p2p_addr_update(val.account, "10.0.0.1:8080"))??;
+        assert!(
+            state
+                .validators()
+                .get(&val.account)
+                .unwrap()
+                .p2p_addr
+                .is_some()
+        );
+
+        // An address with an invalid port that Rust's NetAddr parser rejects degrades to None.
+        state.apply_event(make_p2p_addr_update(val.account, "host:notaport"))??;
+        assert_eq!(state.validators().get(&val.account).unwrap().p2p_addr, None);
+
+        Ok(())
+    }
+
+    #[test]
     fn test_x25519_key_update_unknown_validator() {
         let mut state = StakeTableState::default();
         let unknown = Address::random();
