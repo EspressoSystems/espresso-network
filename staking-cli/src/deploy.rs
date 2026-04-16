@@ -135,7 +135,9 @@ where
 
     match stake_table_contract_version {
         StakeTableContractVersion::V1 => args.deploy_to_stake_table_v1(&mut contracts).await?,
-        StakeTableContractVersion::V2 => args.deploy_all(&mut contracts).await?,
+        StakeTableContractVersion::V2 | StakeTableContractVersion::V3 => {
+            args.deploy_all(&mut contracts).await?
+        },
     };
 
     let stake_table = contracts
@@ -146,7 +148,9 @@ where
         .ok_or_else(|| anyhow::anyhow!("EspTokenProxy not deployed"))?;
     let reward_claim = match stake_table_contract_version {
         StakeTableContractVersion::V1 => None,
-        StakeTableContractVersion::V2 => contracts.address(Contract::RewardClaimProxy),
+        StakeTableContractVersion::V2 | StakeTableContractVersion::V3 => {
+            contracts.address(Contract::RewardClaimProxy)
+        },
     };
 
     Ok(DeployedContracts {

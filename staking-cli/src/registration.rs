@@ -88,7 +88,7 @@ mod test {
             commission: system.commission,
             metadata_uri,
             payload,
-            version: StakeTableContractVersion::V2,
+            version: StakeTableContractVersion::V3,
         }
         .send(&system.provider)
         .await?
@@ -112,6 +112,7 @@ mod test {
     #[rstest]
     #[case(StakeTableContractVersion::V1)]
     #[case(StakeTableContractVersion::V2)]
+    #[case(StakeTableContractVersion::V3)]
     #[tokio::test]
     async fn test_deregister_validator(#[case] version: StakeTableContractVersion) -> Result<()> {
         let system = TestSystem::deploy_version(version).await?;
@@ -132,7 +133,7 @@ mod test {
                     .unwrap();
                 assert_eq!(event.validator, system.deployer_address);
             },
-            StakeTableContractVersion::V2 => {
+            StakeTableContractVersion::V2 | StakeTableContractVersion::V3 => {
                 let event = receipt
                     .decoded_log::<StakeTableV2::ValidatorExitV2>()
                     .unwrap();
@@ -162,7 +163,7 @@ mod test {
         let receipt = Transaction::UpdateConsensusKeys {
             stake_table: system.stake_table,
             payload,
-            version: StakeTableContractVersion::V2,
+            version: StakeTableContractVersion::V3,
         }
         .send(&system.provider)
         .await?
@@ -386,7 +387,7 @@ mod test {
             commission: system.commission,
             metadata_uri,
             payload,
-            version: StakeTableContractVersion::V2,
+            version: StakeTableContractVersion::V3,
         }
         .send(&system.provider)
         .await?

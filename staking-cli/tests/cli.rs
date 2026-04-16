@@ -51,6 +51,7 @@ mod common;
 #[rstest::rstest]
 #[case::v1(StakeTableContractVersion::V1)]
 #[case::v2(StakeTableContractVersion::V2)]
+#[case::v3(StakeTableContractVersion::V3)]
 #[tokio::test(flavor = "multi_thread")]
 async fn stake_table_versions(#[case] _version: StakeTableContractVersion) {}
 
@@ -283,7 +284,11 @@ async fn test_cli_delegate_error_decoding(#[case] mode: ExecutionMode) -> Result
 #[test_log::test(rstest::rstest)]
 #[tokio::test]
 async fn test_cli_register_validator(
-    #[values(StakeTableContractVersion::V1, StakeTableContractVersion::V2)]
+    #[values(
+        StakeTableContractVersion::V1,
+        StakeTableContractVersion::V2,
+        StakeTableContractVersion::V3
+    )]
     version: StakeTableContractVersion,
     #[values(Signer::Mnemonic, Signer::BrokeMnemonic)] signer: Signer,
 ) -> Result<()> {
@@ -787,7 +792,7 @@ async fn test_cli_claim_withdrawal(#[case] version: StakeTableContractVersion) -
     let mut cmd = system.cmd(Signer::Mnemonic);
     let expected_event = match version {
         StakeTableContractVersion::V1 => "Withdrawal",
-        StakeTableContractVersion::V2 => "WithdrawalClaimed",
+        StakeTableContractVersion::V2 | StakeTableContractVersion::V3 => "WithdrawalClaimed",
     };
     cmd.arg("claim-withdrawal")
         .arg("--validator-address")
@@ -810,7 +815,7 @@ async fn test_cli_claim_validator_exit(#[case] version: StakeTableContractVersio
     let mut cmd = system.cmd(Signer::Mnemonic);
     let expected_event = match version {
         StakeTableContractVersion::V1 => "Withdrawal",
-        StakeTableContractVersion::V2 => "ValidatorExitClaimed",
+        StakeTableContractVersion::V2 | StakeTableContractVersion::V3 => "ValidatorExitClaimed",
     };
     cmd.arg("claim-validator-exit")
         .arg("--validator-address")
@@ -851,7 +856,11 @@ async fn test_cli_stake_for_demo_three_validators(
 #[test_log::test(rstest::rstest)]
 #[tokio::test]
 async fn stake_for_demo_delegation_config_helper(
-    #[values(StakeTableContractVersion::V1, StakeTableContractVersion::V2)]
+    #[values(
+        StakeTableContractVersion::V1,
+        StakeTableContractVersion::V2,
+        StakeTableContractVersion::V3
+    )]
     version: StakeTableContractVersion,
     #[values(
         DelegationConfig::EqualAmounts,
@@ -1465,7 +1474,10 @@ async fn test_cli_all_operations_manual_inspect(
 
     // Setup reward claim mock early to avoid nonce synchronization issues. The mock setup uses
     // system.provider which gets out of sync if we do transactions through the CLI.
-    let espresso_url = if matches!(version, StakeTableContractVersion::V2) {
+    let espresso_url = if matches!(
+        version,
+        StakeTableContractVersion::V2 | StakeTableContractVersion::V3
+    ) {
         let reward_balance = parse_ether("1.234")?;
         let url = system.setup_reward_claim_mock(reward_balance).await?;
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -1534,7 +1546,10 @@ async fn test_cli_all_operations_manual_inspect(
         .clone();
     println!("{}", String::from_utf8_lossy(&output));
 
-    if matches!(version, StakeTableContractVersion::V2) {
+    if matches!(
+        version,
+        StakeTableContractVersion::V2 | StakeTableContractVersion::V3
+    ) {
         let output = system
             .cmd(Signer::Mnemonic)
             .arg("update-commission")

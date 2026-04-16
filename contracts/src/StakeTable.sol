@@ -312,12 +312,12 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
         }
     }
 
-    // @dev We don't check the validity of the schnorr verifying key but providing a zero key is
-    // definitely a mistake by the caller, therefore we revert.
+    // @dev We do not perform full Schnorr key validation on-chain, but reject known invalid
+    // placeholders that should never be used as verifier keys.
     function ensureNonZeroSchnorrKey(EdOnBN254.EdOnBN254Point memory schnorrVK) internal pure {
-        EdOnBN254.EdOnBN254Point memory zeroSchnorrKey = EdOnBN254.EdOnBN254Point(0, 0);
-
-        if (schnorrVK.isEqual(zeroSchnorrKey)) {
+        bool isZeroPlaceholder = schnorrVK.x == 0 && schnorrVK.y == 0;
+        bool isIdentity = schnorrVK.x == 0 && schnorrVK.y == 1;
+        if (isZeroPlaceholder || isIdentity) {
             revert InvalidSchnorrVK();
         }
     }

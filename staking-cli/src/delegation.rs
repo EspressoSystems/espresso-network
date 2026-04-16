@@ -15,6 +15,7 @@ mod test {
     #[rstest]
     #[case(StakeTableContractVersion::V1)]
     #[case(StakeTableContractVersion::V2)]
+    #[case(StakeTableContractVersion::V3)]
     #[tokio::test]
     async fn test_delegate(#[case] version: StakeTableContractVersion) -> Result<()> {
         let system = TestSystem::deploy_version(version).await?;
@@ -39,6 +40,7 @@ mod test {
     #[rstest]
     #[case(StakeTableContractVersion::V1)]
     #[case(StakeTableContractVersion::V2)]
+    #[case(StakeTableContractVersion::V3)]
     #[tokio::test]
     async fn test_undelegate(#[case] version: StakeTableContractVersion) -> Result<()> {
         let system = TestSystem::deploy_version(version).await?;
@@ -60,7 +62,7 @@ mod test {
                 assert_eq!(event.validator, validator_address);
                 assert_eq!(event.amount, amount);
             },
-            StakeTableContractVersion::V2 => {
+            StakeTableContractVersion::V2 | StakeTableContractVersion::V3 => {
                 let event = receipt
                     .decoded_log::<StakeTableV2::UndelegatedV2>()
                     .unwrap();
