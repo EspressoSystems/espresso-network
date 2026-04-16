@@ -1,12 +1,9 @@
-use std::{
-    fmt::{Debug, Display},
-    future::Future,
-    time::Duration,
-};
+use std::{fmt::Debug, future::Future, time::Duration};
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use espresso_types::{NamespaceId, SeqTypes, v0_3::StakeTableEvent};
-use futures::{TryFuture, TryFutureExt};
+use futures::{FutureExt, TryFuture, TryFutureExt, future::select_ok};
+use hotshot_query_service::testing::sleep;
 use hotshot_query_service_types::{
     availability::{LeafId, LeafQueryData},
     node::BlockId,
@@ -110,7 +107,7 @@ impl QueryServiceClient {
     pub fn new(url: Url) -> Self {
         Self {
             client: surf_disco::Client::builder(url)
-                .set_timeout(Some(Duration::from_secs(1)))
+                .set_timeout(Some(Duration::from_secs(10)))
                 .build(),
         }
     }
@@ -268,26 +265,38 @@ where
     }
 }
 
-async fn get_any<T, F>(clients: impl IntoIterator<Item = T>, get: impl Fn(T) -> F) -> Result<F::Ok>
+async fn get_any<T, F>(
+    clients: impl IntoIterator<Item = T>,
+    get: impl Fn(T) -> F + Sync,
+) -> Result<F::Ok>
 where
-    F: TryFuture,
-    F::Error: Display + Send + Sync + 'static,
+    T: Send + Sync,
+    F: TryFuture<Error = anyhow::Error> + Send,
 {
-    let mut res = Err(anyhow!("failed to fetch from all providers"));
-    for (i, p) in clients.into_iter().enumerate() {
-        match TryFutureExt::into_future(get(p)).await {
-            Ok(res) => {
-                return Ok(res);
-            },
-            Err(err) => {
-                tracing::info!("failed to fetch from provider {i}: {err:#}",);
-                res = res.context(err);
-                continue;
-            },
-        }
-    }
+    let timeout = Duration::from_millis(250);
+    let (res, _) = select_ok(clients.into_iter().enumerate().map(|(i, client)| {
+        let get = &get;
+        async move {
+            // We start the request on each client in a staggered manner, waiting a fairly short
+            // `timeout` in between starting each request. This gives us best-of-both-worlds
+            // behavior:
+            //
+            // * We can use a generous timeout for each individual request, increasing the
+            //   likelihood that we will still succeed in the worst case where all clients are slow.
+            //   In fact, we have no explicit timeout here. Each request will be cancelled when any
+            //   request completes, or when a timeout fires in the underlying client or in the
+            //   caller.
+            // * We can still complete relatively quickly in the case when _any_ client is fast,
+            //   even when the first client in the list is very slow.
+            sleep(timeout * (i as u32)).await;
 
-    res
+            TryFutureExt::into_future(get(client)).await
+        }
+        .boxed()
+    }))
+    .await
+    .context("failed to fetch from all clients")?;
+    Ok(res)
 }
 
 #[cfg(test)]
