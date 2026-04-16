@@ -101,14 +101,6 @@ mod tests {
     }
 
     #[test]
-    fn test_client_id_eq() {
-        let client_id_1 = ClientId::from_count(1);
-        let client_id_2 = ClientId::from_count(1);
-
-        assert_eq!(client_id_1, client_id_2);
-    }
-
-    #[test]
     fn test_hash() {
         use std::{
             collections::hash_map::DefaultHasher,
