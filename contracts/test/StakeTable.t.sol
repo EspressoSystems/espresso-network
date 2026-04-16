@@ -1471,6 +1471,46 @@ contract StakeTableUpgradeV2Test is Test {
         vm.stopPrank();
     }
 
+    function test_RegisterValidatorV3_validSchnorrKey() public {
+        vm.startPrank(stakeTableRegisterTest.admin());
+        S proxy = stakeTableRegisterTest.stakeTable();
+        proxy.upgradeToAndCall(address(new StakeTableV3()), "");
+        vm.stopPrank();
+
+        address validator = makeAddr("validator");
+        (
+            BN254.G2Point memory blsVK,
+            EdOnBN254.EdOnBN254Point memory schnorrVK,
+            BN254.G1Point memory blsSig
+        ) = stakeTableRegisterTest.genClientWallet(validator, "1");
+
+        vm.startPrank(validator);
+        StakeTableV3 proxyV3 = StakeTableV3(address(proxy));
+        bytes memory schnorrSig = new bytes(64);
+        proxyV3.registerValidatorV2(blsVK, schnorrVK, blsSig, schnorrSig, 0, "dummy-meta");
+        vm.stopPrank();
+    }
+
+    function test_RevertWhen_RegisterValidatorV3ZeroSchnorrKey() public {
+        vm.startPrank(stakeTableRegisterTest.admin());
+        S proxy = stakeTableRegisterTest.stakeTable();
+        proxy.upgradeToAndCall(address(new StakeTableV3()), "");
+        vm.stopPrank();
+
+        address validator = makeAddr("validator");
+        (BN254.G2Point memory blsVK,, BN254.G1Point memory blsSig) =
+            stakeTableRegisterTest.genClientWallet(validator, "1");
+
+        vm.startPrank(validator);
+        StakeTableV3 proxyV3 = StakeTableV3(address(proxy));
+        bytes memory schnorrSig = new bytes(64);
+        EdOnBN254.EdOnBN254Point memory zeroSchnorrVK = EdOnBN254.EdOnBN254Point(0, 0);
+
+        vm.expectRevert(S.InvalidSchnorrVK.selector);
+        proxyV3.registerValidatorV2(blsVK, zeroSchnorrVK, blsSig, schnorrSig, 0, "dummy-meta");
+        vm.stopPrank();
+    }
+
     function test_RevertWhen_UpdateConsensusKeysV3IdentitySchnorrKey() public {
         vm.startPrank(stakeTableRegisterTest.admin());
         S proxy = stakeTableRegisterTest.stakeTable();
