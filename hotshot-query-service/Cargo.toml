@@ -43,7 +43,7 @@ testing = [
     "sql-data-source",
     "file-system-data-source",
     "pretty_assertions",
-] # Enable extra features useful for writing tests with a query service.
+]
 
 [dependencies]
 alloy = { workspace = true }

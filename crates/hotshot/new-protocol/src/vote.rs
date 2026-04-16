@@ -15,7 +15,7 @@ use tokio::{
     sync::mpsc::{self},
     task::{AbortHandle, JoinSet},
 };
-use tracing::{instrument, warn};
+use tracing::{debug, instrument, warn};
 
 use crate::helpers::upgrade_lock;
 
@@ -65,6 +65,9 @@ where
                     }
                     self.completed_certificates.insert(cert.view_number());
                     return Some(cert);
+                },
+                Some(Err(e)) if e.is_cancelled() => {
+                    debug!("Vote collection task cancelled: {e}");
                 },
                 Some(Err(e)) => {
                     warn!("Error in vote collection task: {e}");
