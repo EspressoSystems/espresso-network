@@ -376,3 +376,99 @@ mod test {
         }
     }
 }
+
+#[cfg(test)]
+mod proptest_p2p_addr {
+    use alloy::providers::ProviderBuilder;
+    use hotshot_types::addr::NetAddr;
+    use proptest::{
+        prelude::*,
+        test_runner::{Config as ProptestConfig, TestRunner},
+    };
+
+    use crate::sol_types::StakeTableV3;
+
+    fn p2p_addr_strategy() -> impl Strategy<Value = String> {
+        prop_oneof![
+            // Valid IPv4:port
+            (1..255u8, 1..255u8, 1..255u8, 1..255u8, 1..65535u16)
+                .prop_map(|(a, b, c, d, p)| format!("{a}.{b}.{c}.{d}:{p}")),
+            // Valid hostname:port
+            ("[a-z][a-z0-9.-]{0,20}", 1..65535u16).prop_map(|(h, p)| format!("{h}:{p}")),
+            // Edge: missing port
+            "[a-z][a-z0-9.-]{0,20}".prop_map(|h| h.to_string()),
+            // Edge: empty string
+            Just("".to_string()),
+            // Edge: port 0
+            "[a-z]{1,10}".prop_map(|h| format!("{h}:0")),
+            // Edge: leading zero port
+            "[a-z]{1,10}".prop_map(|h| format!("{h}:08080")),
+            // Edge: port too large
+            "[a-z]{1,10}".prop_map(|h| format!("{h}:99999")),
+            // Edge: non-digit port
+            ("[a-z]{1,10}", "[a-z]{1,5}").prop_map(|(h, p)| format!("{h}:{p}")),
+            // Edge: just a colon
+            Just(":".to_string()),
+            // Edge: colon at start
+            (1..65535u16).prop_map(|p| format!(":{p}")),
+            // Multiple colons (IPv6-like)
+            (1..65535u16).prop_map(|p| format!("::1:{p}")),
+            // Bracketed IPv6
+            (1..65535u16).prop_map(|p| format!("[::1]:{p}")),
+            // Two valid addresses concatenated
+            (1..255u8, 1..255u8, 1..65535u16, 1..65535u16)
+                .prop_map(|(a, b, p1, p2)| format!("{a}.{b}.0.1:{p1},{a}.{b}.0.2:{p2}")),
+            // Host with special chars
+            ("[a-z]{1,5}", 1..65535u16).prop_map(|(h, p)| format!("{h}_name:{p}")),
+            // Whitespace in host or port
+            ("[a-z]{1,5}", 1..65535u16).prop_map(|(h, p)| format!(" {h}:{p} ")),
+            // Double colon before port
+            "[a-z]{1,5}".prop_map(|h| format!("{h}::8080")),
+            // Very long host (exceeds Solidity 512 max)
+            (1..65535u16).prop_map(|p| format!("{}:{p}", "a".repeat(520))),
+            // Random bytes (UTF-8 lossy)
+            prop::collection::vec(any::<u8>(), 0..100)
+                .prop_map(|v| String::from_utf8_lossy(&v).to_string()),
+        ]
+    }
+
+    #[test]
+    fn solidity_rust_p2p_validation_equivalence() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+
+        let provider = ProviderBuilder::new().connect_anvil_with_wallet();
+        let contract_addr = rt.block_on(async {
+            let contract = StakeTableV3::deploy(&provider).await.unwrap();
+            *contract.address()
+        });
+        let contract = StakeTableV3::new(contract_addr, &provider);
+
+        let mut runner = TestRunner::new(ProptestConfig {
+            cases: 512,
+            ..ProptestConfig::default()
+        });
+
+        runner
+            .run(&p2p_addr_strategy(), |addr_str| {
+                let (sol_valid, rust_valid) = rt.block_on(async {
+                    let sol_valid = contract
+                        .validateP2pAddr(addr_str.clone())
+                        .call()
+                        .await
+                        .is_ok();
+                    let rust_valid = addr_str.parse::<NetAddr>().is_ok();
+                    (sol_valid, rust_valid)
+                });
+
+                if sol_valid {
+                    prop_assert!(
+                        rust_valid,
+                        "Solidity accepted '{}' but Rust rejected it",
+                        addr_str
+                    );
+                }
+                Ok(())
+            })
+            .unwrap();
+    }
+}
