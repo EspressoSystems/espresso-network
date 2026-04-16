@@ -61,7 +61,7 @@ use crate::{
         VidCommonQueryData,
     },
     data_source::{
-        storage::{NodeStorage, UpdateAvailabilityStorage, pruning::PrunedHeightStorage},
+        storage::{pruning::PrunedHeightStorage, NodeStorage, UpdateAvailabilityStorage},
         update,
     },
     merklized_state::{MerklizedState, UpdateStateData},
