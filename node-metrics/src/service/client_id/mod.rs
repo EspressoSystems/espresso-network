@@ -103,8 +103,9 @@ mod tests {
     #[test]
     fn test_client_id_eq() {
         let client_id_1 = ClientId::from_count(1);
+        let client_id_2 = ClientId::from_count(1);
 
-        client_id_1.assert_receiver_is_total_eq();
+        assert_eq!(client_id_1, client_id_2);
     }
 
     #[test]
