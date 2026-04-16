@@ -348,7 +348,7 @@ mod tests {
                 address: stake_table_addr,
                 default_admin_address: deployer_address,
                 default_admin_name: "test_multisig".to_string(),
-                version: "2.0.0".to_string(),
+                version: "3.0.0".to_string(),
                 pauser_address: deployer_address,
                 pauser_name: "test_multisig".to_string(),
             }
