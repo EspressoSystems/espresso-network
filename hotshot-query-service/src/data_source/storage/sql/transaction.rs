@@ -64,7 +64,7 @@ use crate::{
         BlockQueryData, LeafQueryData, QueryableHeader, QueryablePayload, VidCommonQueryData,
     },
     data_source::{
-        storage::{pruning::PrunedHeightStorage, NodeStorage, UpdateAvailabilityStorage},
+        storage::{pruning::PrunedHeightStorage, UpdateAvailabilityStorage},
         update,
     },
     merklized_state::{MerklizedState, UpdateStateData},
@@ -637,9 +637,20 @@ where
         )
         .await?;
 
-        let block_height = NodeStorage::<Types>::block_height(self).await? as u64;
-        if height + 1 >= block_height {
-            // If this is the latest leaf we know about, also store it's QC chain so that we can
+        // Check whether this is the latest leaf by querying leaf2 directly. We intentionally
+        // avoid calling block_height() here — that would read from the header table inside a
+        // write transaction, creating an SSI rw-anti-dependency with the pruner's
+        // DELETE FROM header WHERE height <= $pruned that can form a serialization cycle.
+        // Reading leaf2 WHERE height > $this_height is safe: it is disjoint from the pruner's
+        // DELETE FROM leaf2 WHERE height <= $pruned (because this height > pruned height, so
+        // anything > this height is definitely > pruned height).
+        let (has_newer_leaf,): (bool,) =
+            query_as::<(bool,)>("SELECT EXISTS (SELECT 1 FROM leaf2 WHERE height > $1)")
+                .bind(height as i64)
+                .fetch_one(self.as_mut())
+                .await?;
+        if !has_newer_leaf {
+            // If this is the latest leaf we know about, also store its QC chain so that we can
             // prove to clients that this leaf is finalized. (If it is not the latest leaf, this
             // is unnecessary, since we can prove it is an ancestor of some later, finalized
             // leaf.)
