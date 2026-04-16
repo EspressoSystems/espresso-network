@@ -6028,6 +6028,7 @@ dependencies = [
  "jf-utils",
  "num-bigint",
  "num-traits",
+ "proptest",
  "rand 0.8.5",
  "serde",
  "serde_arrays",

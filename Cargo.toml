@@ -319,6 +319,7 @@ priority-queue = "2"
 proc-macro2 = "1"
 prometheus = { version = "0.13", default-features = false }
 prometheus-parse = "0.2.5"
+proptest = "1"
 quick_cache = "0.6"
 quickcheck = "1.0"
 quote = "1"
