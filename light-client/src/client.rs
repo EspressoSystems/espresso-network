@@ -1,15 +1,19 @@
-use std::{fmt::Debug, future::Future, time::Duration};
+use std::{fmt::Debug, future::Future, pin::pin, time::Duration};
 
 use anyhow::{Context, Result};
+use derive_builder::Builder;
 use espresso_types::{NamespaceId, SeqTypes, v0_3::StakeTableEvent};
-use futures::{FutureExt, TryFuture, TryFutureExt, future::select_ok};
-use hotshot_query_service::testing::sleep;
+use futures::{
+    FutureExt, TryFuture, TryFutureExt,
+    future::{BoxFuture, Either, select, select_ok},
+};
 use hotshot_query_service_types::{
     availability::{LeafId, LeafQueryData},
     node::BlockId,
 };
 use hotshot_types::data::EpochNumber;
 use surf_disco::Url;
+use tokio::time::sleep;
 use vbs::version::StaticVersion;
 
 use crate::{
@@ -207,12 +211,42 @@ fn fmt_block_id(id: BlockId<SeqTypes>) -> String {
     }
 }
 
-impl<T> Client for Vec<T>
+#[derive(Clone, Debug, Builder)]
+#[builder(pattern = "owned")]
+pub struct FallbackClient<T> {
+    /// Duration to wait on one client before starting a fallback request on the next.
+    ///
+    /// When a fallback request is started, the original request will _not_ be cancelled, and so the
+    /// overall operation can complete if the original request completes shortly after the fallback
+    /// request is spawned. However, in the event that the original request takes a very long time
+    /// or does not complete at all, the fallback allows the overall request to complete without
+    /// much delay.
+    #[builder(default = Duration::from_millis(300))]
+    fallback_delay: Duration,
+
+    /// Ordered list of clients.
+    ///
+    /// Requests to the [`FallbackClient`] will be tried on each client successively, falling back
+    /// down the list until success.
+    clients: Vec<T>,
+}
+
+impl<T> FallbackClient<T> {
+    pub fn new(clients: Vec<T>) -> Result<Self, FallbackClientBuilderError> {
+        Self::builder().clients(clients).build()
+    }
+
+    pub fn builder() -> FallbackClientBuilder<T> {
+        Default::default()
+    }
+}
+
+impl<T> Client for FallbackClient<T>
 where
     T: Client,
 {
     async fn block_height(&self) -> Result<u64> {
-        get_any(self, T::block_height).await
+        self.get_any(&self.clients, T::block_height).await
     }
 
     async fn get_leaves_in_range(
@@ -220,11 +254,15 @@ where
         start: usize,
         end: usize,
     ) -> Result<Vec<LeafQueryData<SeqTypes>>> {
-        get_any(self, |client| client.get_leaves_in_range(start, end)).await
+        self.get_any(&self.clients, |client| {
+            client.get_leaves_in_range(start, end)
+        })
+        .await
     }
 
     async fn header_proof(&self, root: u64, id: BlockId<SeqTypes>) -> Result<HeaderProof> {
-        get_any(self, |client| client.header_proof(root, id)).await
+        self.get_any(&self.clients, |client| client.header_proof(root, id))
+            .await
     }
 
     async fn leaf_proof(
@@ -233,11 +271,15 @@ where
         finalized: Option<u64>,
     ) -> Result<LeafProof> {
         let id = id.into();
-        get_any(self, |client| client.leaf_proof(id, finalized)).await
+        self.get_any(&self.clients, |client| client.leaf_proof(id, finalized))
+            .await
     }
 
     async fn namespace_proof(&self, height: u64, namespace: NamespaceId) -> Result<NamespaceProof> {
-        get_any(self, |client: &T| client.namespace_proof(height, namespace)).await
+        self.get_any(&self.clients, |client: &T| {
+            client.namespace_proof(height, namespace)
+        })
+        .await
     }
 
     async fn namespace_proofs_in_range(
@@ -246,57 +288,90 @@ where
         end: u64,
         namespace: NamespaceId,
     ) -> Result<Vec<NamespaceProof>> {
-        get_any(self, |client| {
+        self.get_any(&self.clients, |client| {
             client.namespace_proofs_in_range(start, end, namespace)
         })
         .await
     }
 
     async fn payload_proof(&self, height: u64) -> Result<PayloadProof> {
-        get_any(self, |client| client.payload_proof(height)).await
+        self.get_any(&self.clients, |client| client.payload_proof(height))
+            .await
     }
 
     async fn payload_proofs_in_range(&self, start: u64, end: u64) -> Result<Vec<PayloadProof>> {
-        get_any(self, |client| client.payload_proofs_in_range(start, end)).await
+        self.get_any(&self.clients, |client| {
+            client.payload_proofs_in_range(start, end)
+        })
+        .await
     }
 
     async fn stake_table_events(&self, epoch: EpochNumber) -> Result<Vec<StakeTableEvent>> {
-        get_any(self, |client| client.stake_table_events(epoch)).await
+        self.get_any(&self.clients, |client| client.stake_table_events(epoch))
+            .await
     }
 }
 
-async fn get_any<T, F>(
-    clients: impl IntoIterator<Item = T>,
-    get: impl Fn(T) -> F + Sync,
-) -> Result<F::Ok>
-where
-    T: Send + Sync,
-    F: TryFuture<Error = anyhow::Error> + Send,
-{
-    let timeout = Duration::from_millis(250);
-    let (res, _) = select_ok(clients.into_iter().enumerate().map(|(i, client)| {
-        let get = &get;
-        async move {
-            // We start the request on each client in a staggered manner, waiting a fairly short
-            // `timeout` in between starting each request. This gives us best-of-both-worlds
-            // behavior:
-            //
-            // * We can use a generous timeout for each individual request, increasing the
-            //   likelihood that we will still succeed in the worst case where all clients are slow.
-            //   In fact, we have no explicit timeout here. Each request will be cancelled when any
-            //   request completes, or when a timeout fires in the underlying client or in the
-            //   caller.
-            // * We can still complete relatively quickly in the case when _any_ client is fast,
-            //   even when the first client in the list is very slow.
-            sleep(timeout * (i as u32)).await;
+impl<T> FallbackClient<T> {
+    async fn get_any<C, F>(
+        &self,
+        clients: impl IntoIterator<Item = C, IntoIter: Send>,
+        get: impl Fn(C) -> F + Send,
+    ) -> Result<F::Ok>
+    where
+        C: Send + Sync,
+        F: TryFuture<Ok: Send, Error = anyhow::Error> + Send,
+    {
+        Self::get_any_recursive(0, self.fallback_delay, clients.into_iter(), get).await
+    }
 
-            TryFutureExt::into_future(get(client)).await
+    fn get_any_recursive<'a, C, F>(
+        i: usize,
+        timeout: Duration,
+        mut clients: impl Iterator<Item = C> + Send + 'a,
+        get: impl Fn(C) -> F + Send + 'a,
+    ) -> BoxFuture<'a, Result<F::Ok>>
+    where
+        C: Send + Sync + 'a,
+        F: TryFuture<Ok: Send, Error = anyhow::Error> + Send + 'a,
+    {
+        async move {
+            let client = clients.next().context("failed to fetch on all clients")?;
+            match select(
+                pin!(TryFutureExt::into_future(get(client))),
+                pin!(sleep(timeout)),
+            )
+            .await
+            {
+                Either::Left((Ok(res), _)) => {
+                    tracing::debug!("fetch succeeded on client {i}");
+                    Ok(res)
+                },
+                Either::Left((Err(err), _)) => {
+                    // If the pending future fails, abandon it and immediately start the fallback
+                    // even if we haven't hit the timeout.
+                    tracing::warn!("failed to fetch on client {i}: {err:#}");
+                    Self::get_any_recursive(i + 1, timeout, clients, get).await
+                },
+                Either::Right((_, fut)) => {
+                    // The timeout has elapsed. Start the request on the next client, but also keep
+                    // polling the in-progress future from the first request, since there is still a
+                    // chance that it will complete before the fallback request.
+                    tracing::info!(
+                        "fetch on client {i} took longer than {timeout:?}, starting fallback \
+                         request"
+                    );
+                    Ok(select_ok([
+                        fut.boxed(),
+                        Self::get_any_recursive(i + 1, timeout, clients, get),
+                    ])
+                    .await?
+                    .0)
+                },
+            }
         }
         .boxed()
-    }))
-    .await
-    .context("failed to fetch from all clients")?;
-    Ok(res)
+    }
 }
 
 #[cfg(test)]
@@ -332,12 +407,13 @@ mod test {
     };
 
     fn client(url: Url) -> impl Client {
-        // Run all tests with a multi-client where the first client is an invalid URL, to stress
+        // Run all tests with a fallback client where the first client is an invalid URL, to stress
         // test failover.
-        vec![
+        FallbackClient::new(vec![
             QueryServiceClient::new("http://notarealurl".parse().unwrap()),
             QueryServiceClient::new(url),
-        ]
+        ])
+        .unwrap()
     }
 
     #[tokio::test]

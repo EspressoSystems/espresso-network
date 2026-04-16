@@ -8478,6 +8478,7 @@ dependencies = [
  "clap 4.6.1",
  "committable",
  "derivative",
+ "derive_builder",
  "derive_more 2.1.1",
  "espresso-node",
  "espresso-types",

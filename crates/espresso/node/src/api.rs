@@ -2,7 +2,7 @@ use std::{collections::HashMap, pin::Pin, sync::Arc, time::Duration};
 
 use ::light_client::{
     LightClient,
-    client::QueryServiceClient,
+    client::{FallbackClient, QueryServiceClient},
     state::Genesis,
     storage::{SqliteStorage, Storage},
 };
@@ -1679,7 +1679,7 @@ where
 /// serving fetches using the [`LightClient`].
 #[derive(Debug)]
 struct LightClientProvider {
-    light_client: BoxLazy<LightClient<SqliteStorage, Vec<QueryServiceClient>>>,
+    light_client: BoxLazy<LightClient<SqliteStorage, FallbackClient<QueryServiceClient>>>,
 }
 
 impl LightClientProvider {
@@ -1694,7 +1694,7 @@ impl LightClientProvider {
         let db = SqliteStorage::default()
             .await
             .context("creating SQLite database for light client")?;
-        let client = peers.into_iter().map(QueryServiceClient::new).collect();
+        let client = FallbackClient::new(peers.into_iter().map(QueryServiceClient::new).collect())?;
         let init_light_client = async move {
             let config = state.network_config().await;
             let epoch_height = config.config.epoch_height;
@@ -1727,7 +1727,7 @@ impl LightClientProvider {
 impl<T> Provider<SeqTypes, T> for LightClientProvider
 where
     T: fetching::Request<SeqTypes> + 'static,
-    LightClient<SqliteStorage, Vec<QueryServiceClient>>: Provider<SeqTypes, T>,
+    LightClient<SqliteStorage, FallbackClient<QueryServiceClient>>: Provider<SeqTypes, T>,
 {
     async fn fetch(&self, req: T) -> Option<T::Response> {
         self.light_client.as_ref().get().await.fetch(req).await
