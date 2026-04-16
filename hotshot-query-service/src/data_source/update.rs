@@ -224,9 +224,9 @@ where
                         Some(share) => (
                             Some(VidCommonQueryData::new(
                                 leaf.block_header().clone(),
-                                VidCommon::V2(share.common.clone()),
+                                VidCommon::V2(share.data.common.clone()),
                             )),
-                            Some(VidShare::V2(share.share.clone())),
+                            Some(VidShare::V2(share.data.share.clone())),
                         ),
                         None => (None, None),
                     };

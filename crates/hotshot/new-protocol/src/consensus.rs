@@ -453,6 +453,7 @@ impl<T: NodeType> Consensus<T> {
         self.view_sync_certs = self.view_sync_certs.split_off(&view);
         self.headers = self.headers.split_off(&view);
         self.leaves = self.leaves.split_off(&view);
+        self.proposals = self.proposals.split_off(&view);
         self.signed_proposals = self.signed_proposals.split_off(&view);
         self.voted_1_views = self.voted_1_views.split_off(&view);
         self.voted_2_views = self.voted_2_views.split_off(&view);
@@ -958,7 +959,9 @@ impl<T: NodeType> Consensus<T> {
         let mut parent_view = proposal.justify_qc.view_number();
         let mut parent_commit = proposal.justify_qc.data.leaf_commit;
 
-        while let Some(proposal) = self.proposals.get(&parent_view) {
+        while parent_view > self.last_decided_view
+            && let Some(proposal) = self.proposals.get(&parent_view)
+        {
             let proposal_commit = proposal_commitment(proposal);
             if proposal_commit != parent_commit {
                 break;

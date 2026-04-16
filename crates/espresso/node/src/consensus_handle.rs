@@ -42,15 +42,19 @@ pub fn event_from_output<T: NodeType>(output: &ConsensusOutput<T>) -> Option<Con
             cert1,
             cert2,
             vid_shares,
-        } => leaves.first().map(|first_leaf| {
-            ConsensusEvent::NewDecide(NewDecideEvent {
+        } => {
+            let Some(first_leaf) = leaves.first() else {
+                tracing::warn!("coordinator emitted LeafDecided with empty leaves");
+                return None;
+            };
+            Some(ConsensusEvent::NewDecide(NewDecideEvent {
                 view_number: first_leaf.view_number(),
                 leaves: leaves.clone(),
                 cert1: cert1.clone(),
                 cert2: cert2.clone(),
                 vid_shares: vid_shares.clone(),
-            })
-        }),
+            }))
+        },
         ConsensusOutput::ViewChanged(view, _epoch) => {
             Some(ConsensusEvent::ViewChanged { view_number: *view })
         },
