@@ -95,6 +95,16 @@ impl<T: NodeType> EpochManager<T> {
         &self.leaf_store
     }
 
+    /// Register a pending leaf fetch so that [`handle_leaf_response`] can
+    /// resolve it when the response arrives from a peer.
+    pub fn register_pending_fetch(
+        &mut self,
+        height: u64,
+        sender: oneshot::Sender<DecidedLeafEntry<T>>,
+    ) {
+        self.pending_fetches.entry(height).or_default().push(sender);
+    }
+
     pub fn handle_leaf_decided(&mut self, leaf: Leaf2<T>) {
         let block_number = leaf.block_header().block_number();
 

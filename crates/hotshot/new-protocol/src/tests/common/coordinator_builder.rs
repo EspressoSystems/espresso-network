@@ -20,7 +20,7 @@ use crate::{
     epoch::EpochManager,
     helpers::upgrade_lock,
     leaf_store::EpochLeafStore,
-    message::{Certificate1, Proposal},
+    message::{Certificate1, Certificate2, Proposal},
     network::Network,
     outbox::Outbox,
     proposal::ProposalValidator,
@@ -83,8 +83,14 @@ pub async fn build_test_coordinator<I: NodeImplementation<TestTypes>>(
 
     // Build a genesis cert1 and proposal so consensus can self-start.
     let genesis_cert1 = build_genesis_cert1(&genesis_leaf);
+    let genesis_cert2 = build_genesis_cert2(&genesis_leaf);
     let genesis_proposal = build_genesis_proposal(&genesis_leaf, &genesis_cert1);
     consensus.seed_genesis(genesis_cert1, genesis_proposal);
+
+    // Store the genesis leaf in the leaf store so that epoch catchup can
+    // find it.  The genesis block is the epoch root for the earliest
+    // epochs and must be available for peers requesting catchup data.
+    leaf_store.insert(genesis_leaf.clone(), genesis_cert2);
 
     let proposal_validator = ProposalValidator::new(membership.clone());
 
@@ -139,6 +145,24 @@ fn build_genesis_cert1(genesis_leaf: &Leaf2<TestTypes>) -> Certificate1<TestType
         block_number: Some(0),
     };
     Certificate1::new(
+        data.clone(),
+        data.commit(),
+        ViewNumber::genesis(),
+        None,
+        PhantomData,
+    )
+}
+
+/// Create a genesis `Certificate2` that references the genesis leaf.
+fn build_genesis_cert2(genesis_leaf: &Leaf2<TestTypes>) -> Certificate2<TestTypes> {
+    use hotshot_types::simple_vote::Vote2Data;
+
+    let data = Vote2Data {
+        leaf_commit: genesis_leaf.commit(),
+        epoch: EpochNumber::genesis(),
+        block_number: 0,
+    };
+    Certificate2::new(
         data.clone(),
         data.commit(),
         ViewNumber::genesis(),

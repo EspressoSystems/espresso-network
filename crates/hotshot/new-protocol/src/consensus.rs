@@ -109,6 +109,11 @@ pub struct Consensus<T: NodeType> {
     voted_1_views: BTreeSet<ViewNumber>,
     voted_2_views: BTreeSet<ViewNumber>,
 
+    /// Certificates whose epoch membership was not yet available when they
+    /// arrived.  They are retried when new epoch data becomes available.
+    pending_certs1: BTreeMap<ViewNumber, Certificate1<T>>,
+    pending_certs2: BTreeMap<ViewNumber, Certificate2<T>>,
+
     timeout_view: ViewNumber,
     current_epoch: Option<EpochNumber>,
 
@@ -130,6 +135,16 @@ enum Protocol {
     Abort,
     /// Continue with protocol.
     Continue,
+}
+
+/// Result of attempting to verify a certificate's epoch membership.
+enum CertVerification {
+    /// Certificate is cryptographically valid.
+    Valid,
+    /// Certificate is cryptographically invalid (bad signature).
+    Invalid,
+    /// The epoch's stake table is not yet available (catchup in progress).
+    EpochUnavailable,
 }
 
 impl<T: NodeType> Consensus<T> {
@@ -164,6 +179,8 @@ impl<T: NodeType> Consensus<T> {
             stake_table_coordinator: membership_coordinator,
             voted_1_views: BTreeSet::new(),
             voted_2_views: BTreeSet::new(),
+            pending_certs1: BTreeMap::new(),
+            pending_certs2: BTreeMap::new(),
             private_key,
             vid_shares: BTreeMap::new(),
             // TODO: make this configurable or Constant
@@ -213,10 +230,10 @@ impl<T: NodeType> Consensus<T> {
         let proto = match input {
             ConsensusInput::Proposal(proposal) => self.handle_proposal(proposal, outbox).await,
             ConsensusInput::Certificate1(certificate) => {
-                self.handle_certificate1(certificate).await
+                self.handle_certificate1(certificate, outbox).await
             },
             ConsensusInput::Certificate2(certificate) => {
-                self.handle_certificate2(certificate).await
+                self.handle_certificate2(certificate, outbox).await
             },
             ConsensusInput::TimeoutCertificate(certificate) => {
                 self.handle_timeout_certificate(certificate, outbox).await
@@ -305,6 +322,14 @@ impl<T: NodeType> Consensus<T> {
                 self.maybe_vote_1(v, outbox).await;
             }
         }
+
+        // When new epoch data arrives (DRB result or epoch change), retry
+        // any pending certificates that were deferred because their epoch
+        // membership wasn't available yet.
+        if drb_epoch.is_some() || !self.pending_certs1.is_empty() || !self.pending_certs2.is_empty()
+        {
+            self.retry_pending_certs(outbox).await;
+        }
     }
 
     pub fn wants_proposal<S>(&self, p: &ProposalMessage<T, S>) -> bool {
@@ -323,6 +348,8 @@ impl<T: NodeType> Consensus<T> {
         self.vid_disperses = self.vid_disperses.split_off(&view);
         self.certs = self.certs.split_off(&view);
         self.certs2 = self.certs2.split_off(&view);
+        self.pending_certs1 = self.pending_certs1.split_off(&view);
+        self.pending_certs2 = self.pending_certs2.split_off(&view);
         self.timeout_certs = self.timeout_certs.split_off(&view);
         self.view_sync_certs = self.view_sync_certs.split_off(&view);
         self.headers = self.headers.split_off(&view);
@@ -438,7 +465,11 @@ impl<T: NodeType> Consensus<T> {
     }
 
     #[instrument(level = "debug", skip_all)]
-    async fn handle_certificate1(&mut self, certificate: Certificate1<T>) -> Protocol {
+    async fn handle_certificate1(
+        &mut self,
+        certificate: Certificate1<T>,
+        outbox: &mut Outbox<ConsensusOutput<T>>,
+    ) -> Protocol {
         let view = certificate.view_number();
         if self.certs.contains_key(&view) {
             return Protocol::Continue;
@@ -449,16 +480,29 @@ impl<T: NodeType> Consensus<T> {
         };
         // TODO: This signature check is slow (> 1ms).  We should consider
         // if this should be done off the main thread.
-        if !self.verify_cert(&certificate, certificate_epoch).await {
-            warn!(%view, "certificate1 not verified");
-            return Protocol::Abort;
+        match self.try_verify_cert(&certificate, certificate_epoch).await {
+            CertVerification::Valid => {},
+            CertVerification::Invalid => {
+                warn!(%view, "certificate1 not verified");
+                return Protocol::Abort;
+            },
+            CertVerification::EpochUnavailable => {
+                debug!(%view, %certificate_epoch, "certificate1 deferred (epoch unavailable)");
+                self.pending_certs1.insert(view, certificate);
+                outbox.push_back(ConsensusOutput::RequestDrbResult(certificate_epoch));
+                return Protocol::Continue;
+            },
         }
         self.certs.insert(view, certificate);
         Protocol::Continue
     }
 
     #[instrument(level = "debug", skip_all)]
-    async fn handle_certificate2(&mut self, certificate: Certificate2<T>) -> Protocol {
+    async fn handle_certificate2(
+        &mut self,
+        certificate: Certificate2<T>,
+        outbox: &mut Outbox<ConsensusOutput<T>>,
+    ) -> Protocol {
         let view = certificate.view_number();
         if self.certs2.contains_key(&view) {
             return Protocol::Continue;
@@ -469,9 +513,18 @@ impl<T: NodeType> Consensus<T> {
         };
         // TODO: This signature check is slow (> 1ms).  We should consider
         // if this should be done off the main thread.
-        if !self.verify_cert(&certificate, certificate_epoch).await {
-            warn!(%view, "certificate2 not verified");
-            return Protocol::Abort;
+        match self.try_verify_cert(&certificate, certificate_epoch).await {
+            CertVerification::Valid => {},
+            CertVerification::Invalid => {
+                warn!(%view, "certificate2 not verified");
+                return Protocol::Abort;
+            },
+            CertVerification::EpochUnavailable => {
+                debug!(%view, %certificate_epoch, "certificate2 deferred (epoch unavailable)");
+                self.pending_certs2.insert(view, certificate);
+                outbox.push_back(ConsensusOutput::RequestDrbResult(certificate_epoch));
+                return Protocol::Continue;
+            },
         }
         self.certs2.insert(view, certificate);
         Protocol::Continue
@@ -1133,6 +1186,88 @@ impl<T: NodeType> Consensus<T> {
                 warn!(%epoch, %err, "failed to get stake table");
                 false
             },
+        }
+    }
+
+    /// Try to verify a certificate, distinguishing between "epoch not available"
+    /// and "cryptographically invalid".
+    #[instrument(level = "trace", skip_all)]
+    async fn try_verify_cert<A, C>(&self, cert: &C, epoch: EpochNumber) -> CertVerification
+    where
+        C: vote::Certificate<T, A>,
+    {
+        match self
+            .stake_table_coordinator
+            .membership_for_epoch(Some(epoch))
+            .await
+        {
+            Ok(stake_table) => {
+                let entries = StakeTableEntries::<T>::from(stake_table.stake_table().await).0;
+                let threshold = stake_table.success_threshold().await;
+                match cert.is_valid_cert(&entries, threshold, &upgrade_lock::<T>()) {
+                    Ok(()) => CertVerification::Valid,
+                    Err(err) => {
+                        warn!(%epoch, %err, "invalid threshold signature");
+                        CertVerification::Invalid
+                    },
+                }
+            },
+            Err(_) => CertVerification::EpochUnavailable,
+        }
+    }
+
+    /// Retry verification of pending certificates whose epoch may now be available.
+    async fn retry_pending_certs(&mut self, outbox: &mut Outbox<ConsensusOutput<T>>) {
+        // Retry pending cert1s.
+        let pending = std::mem::take(&mut self.pending_certs1);
+        for (view, cert) in pending {
+            let Some(epoch) = cert.epoch() else {
+                continue;
+            };
+            match self.try_verify_cert(&cert, epoch).await {
+                CertVerification::Valid => {
+                    self.certs.insert(view, cert);
+                },
+                CertVerification::Invalid => {
+                    warn!(%view, "deferred certificate1 invalid");
+                },
+                CertVerification::EpochUnavailable => {
+                    self.pending_certs1.insert(view, cert);
+                },
+            }
+        }
+
+        // Retry pending cert2s.
+        let pending = std::mem::take(&mut self.pending_certs2);
+        for (view, cert) in pending {
+            let Some(epoch) = cert.epoch() else {
+                continue;
+            };
+            match self.try_verify_cert(&cert, epoch).await {
+                CertVerification::Valid => {
+                    self.certs2.insert(view, cert);
+                },
+                CertVerification::Invalid => {
+                    warn!(%view, "deferred certificate2 invalid");
+                },
+                CertVerification::EpochUnavailable => {
+                    self.pending_certs2.insert(view, cert);
+                },
+            }
+        }
+
+        // Process newly verified certs through the consensus pipeline.
+        let views_to_retry: Vec<ViewNumber> = self
+            .certs
+            .keys()
+            .chain(self.certs2.keys())
+            .copied()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        for v in views_to_retry {
+            self.maybe_vote_2_and_update_lock(v, outbox).await;
+            self.maybe_decide(v, outbox);
         }
     }
 

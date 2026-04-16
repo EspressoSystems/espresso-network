@@ -30,6 +30,8 @@ pub struct VoteCollector<T: NodeType, V, C> {
     epoch_membership_coordinator: EpochMembershipCoordinator<T>,
     membership_cache: BTreeMap<EpochNumber, EpochMembership<T>>,
     upgrade_lock: UpgradeLock<T>,
+    /// Votes received before their epoch membership was available.
+    pending_votes: Vec<V>,
 }
 
 impl<T, V, C> VoteCollector<T, V, C>
@@ -50,6 +52,7 @@ where
             membership_cache: BTreeMap::new(),
             upgrade_lock,
             tasks: JoinSet::new(),
+            pending_votes: Vec::new(),
         }
     }
 
@@ -77,6 +80,8 @@ where
             return;
         }
         let Some(membership) = self.resolve_membership(&vote).await else {
+            // Epoch membership not yet available — buffer for later retry.
+            self.pending_votes.push(vote);
             return;
         };
         let (tx, _abort_handle) = self.accumulators.entry(view).or_insert_with(|| {
@@ -88,6 +93,15 @@ where
             (tx, abort_handle)
         });
         let _ = tx.send(vote).await;
+    }
+
+    /// Retry accumulation of votes that were buffered because their epoch
+    /// membership was not available.
+    pub async fn retry_pending_votes(&mut self) {
+        let pending = std::mem::take(&mut self.pending_votes);
+        for vote in pending {
+            self.accumulate_vote(vote).await;
+        }
     }
 
     async fn resolve_membership(&mut self, vote: &V) -> Option<EpochMembership<T>> {

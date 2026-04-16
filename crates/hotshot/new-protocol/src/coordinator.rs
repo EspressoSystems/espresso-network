@@ -223,17 +223,36 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                 },
                 Some(result) = self.epoch_manager.next() => match result {
                     Ok(EpochRootResult::DrbResult(epoch, drb_result)) => {
+                        // New epoch data available — retry votes that were
+                        // buffered because their membership wasn't ready.
+                        self.vote1_collector.retry_pending_votes().await;
+                        self.vote2_collector.retry_pending_votes().await;
+                        self.timeout_collector.retry_pending_votes().await;
+                        self.timeout_one_honest_collector.retry_pending_votes().await;
                         return Ok(ConsensusInput::DrbResult(epoch, drb_result))
                     }
-                    Ok(EpochRootResult::RootAdded(_epoch)) => {}
+                    Ok(EpochRootResult::RootAdded(_epoch)) => {
+                        // New epoch root registered — retry buffered votes.
+                        self.vote1_collector.retry_pending_votes().await;
+                        self.vote2_collector.retry_pending_votes().await;
+                        self.timeout_collector.retry_pending_votes().await;
+                        self.timeout_one_honest_collector.retry_pending_votes().await;
+                    }
                     Err(err) => {
                         return Err(CoordinatorError::regular(err))
                     }
                 },
                 Some(fetch_req) = self.leaf_fetch_rx.recv() => {
-                    // A catchup task needs a leaf from peers. Send requests
-                    // to members of the first epoch's stake table (always
-                    // available).
+                    // A catchup task needs a leaf from peers. Register the
+                    // oneshot sender so handle_leaf_response can resolve it
+                    // when the response arrives.
+                    self.epoch_manager.register_pending_fetch(
+                        fetch_req.height,
+                        fetch_req.response_tx,
+                    );
+
+                    // Send requests to members of the first epoch's stake
+                    // table (always available).
                     if let Ok(membership) = self.membership_coordinator
                         .stake_table_for_epoch(Some(EpochNumber::genesis())).await
                     {
