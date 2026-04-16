@@ -8,16 +8,16 @@ use async_lock::{Mutex, RwLock};
 use committable::{Commitment, Committable, RawCommitmentBuilder};
 use derive_more::derive::{From, Into};
 use hotshot::types::SignatureKey;
-use hotshot_contract_adapter::sol_types::StakeTableV2::{
-    CommissionUpdated, ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated, Undelegated,
-    UndelegatedV2, ValidatorExit, ValidatorExitV2, ValidatorRegistered, ValidatorRegisteredV2,
-};
-use hotshot_contract_adapter::sol_types::StakeTableV3::{
-    P2pAddrUpdated, ValidatorRegisteredV3, X25519KeyUpdated,
+use hotshot_contract_adapter::sol_types::{
+    StakeTableV2::{
+        CommissionUpdated, ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated, Undelegated,
+        UndelegatedV2, ValidatorExit, ValidatorExitV2, ValidatorRegistered, ValidatorRegisteredV2,
+    },
+    StakeTableV3::{P2pAddrUpdated, ValidatorRegisteredV3, X25519KeyUpdated},
 };
 use hotshot_types::{
-    PeerConfig, data::EpochNumber, light_client::StateVerKey, network::PeerConfigKeys, x25519,
-    addr::NetAddr
+    PeerConfig, addr::NetAddr, data::EpochNumber, light_client::StateVerKey,
+    network::PeerConfigKeys, x25519,
 };
 use itertools::Itertools;
 use jf_utils::to_bytes;
@@ -27,10 +27,10 @@ use tokio::task::JoinHandle;
 
 use super::L1Client;
 use crate::{
-    traits::{MembershipPersistence, StateCatchup},
-    v0::{impls::StakeTableHash, ChainConfig},
-    v0_3::RewardAmount,
     AuthenticatedValidatorMap, SeqTypes,
+    traits::{MembershipPersistence, StateCatchup},
+    v0::{ChainConfig, impls::StakeTableHash},
+    v0_3::RewardAmount,
 };
 /// Stake table holding all staking information (DA and non-DA stakers)
 #[derive(Debug, Clone, Serialize, Deserialize, From)]
@@ -73,7 +73,7 @@ pub struct RegisteredValidator<KEY: SignatureKey> {
     /// Public X25519 key for network communication.
     pub x25519_key: Option<x25519::PublicKey>,
     /// Network address.
-    pub p2p_addr: Option<NetAddr>
+    pub p2p_addr: Option<NetAddr>,
 }
 
 /// Validator eligible for consensus participation.
@@ -231,7 +231,7 @@ impl Drop for StakeTableUpdateTask {
 // (log block number, log index)
 pub type EventKey = (u64, u64);
 
-#[derive(Clone, derive_more::From, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, derive_more::From, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum StakeTableEvent {
     Register(ValidatorRegistered),
     RegisterV2(ValidatorRegisteredV2),
@@ -246,16 +246,6 @@ pub enum StakeTableEvent {
     RegisterV3(ValidatorRegisteredV3),
     X25519KeyUpdate(X25519KeyUpdated),
     P2pAddrUpdate(P2pAddrUpdated),
-}
-
-impl PartialEq for StakeTableEvent {
-    fn eq(&self, other: &Self) -> bool {
-        // V3 binding event structs don't derive PartialEq. Compare via serialization.
-        match (bincode::serialize(self), bincode::serialize(other)) {
-            (Ok(a), Ok(b)) => a == b,
-            _ => false,
-        }
-    }
 }
 
 #[derive(Debug, Error)]
@@ -381,8 +371,7 @@ mod tests {
         let commit_without = val.commit();
 
         let mut val_with = val.clone();
-        val_with.x25519_key =
-            Some(x25519::PublicKey::try_from([42u8; 32].as_slice()).unwrap());
+        val_with.x25519_key = Some(x25519::PublicKey::try_from([42u8; 32].as_slice()).unwrap());
         val_with.p2p_addr = Some("127.0.0.1:8080".parse::<NetAddr>().unwrap());
         let commit_with = val_with.commit();
 

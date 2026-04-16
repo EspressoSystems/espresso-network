@@ -240,6 +240,20 @@ impl From<G1PointSol> for stake_table_v3::BN254::G1Point {
     }
 }
 
+impl PartialEq for StakeTableV3::ValidatorRegisteredV3 {
+    fn eq(&self, other: &Self) -> bool {
+        self.account == other.account
+            && self.blsVK == other.blsVK
+            && self.schnorrVK == other.schnorrVK
+            && self.commission == other.commission
+            && self.blsSig == other.blsSig
+            && self.schnorrSig == other.schnorrSig
+            && self.metadataUri == other.metadataUri
+            && self.x25519Key == other.x25519Key
+            && self.p2pAddr == other.p2pAddr
+    }
+}
+
 // Transmute conversion functions for LightClientV3
 impl From<LightClientV3::finalizedStateReturn> for LightClientStateSol {
     fn from(v: LightClientV3::finalizedStateReturn) -> Self {
