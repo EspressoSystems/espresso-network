@@ -32,7 +32,8 @@ use crate::{
         PayloadQueryData, QueryableHeader, QueryablePayload, TransactionHash, VidCommonQueryData,
     },
     data_source::storage::{
-        AvailabilityStorage, PayloadMetadata, VidCommonMetadata, sql::sqlx::Row,
+        pruning::PrunedHeightStorage, sql::sqlx::Row, AvailabilityStorage, PayloadMetadata,
+        VidCommonMetadata,
     },
     types::HeightIndexed,
 };
@@ -46,14 +47,23 @@ where
     Header<Types>: QueryableHeader<Types>,
 {
     async fn get_leaf(&mut self, id: LeafId<Types>) -> QueryResult<LeafQueryData<Types>> {
+        let pruned_height: i64 = self
+            .load_pruned_height()
+            .await
+            .map_err(|err| QueryError::Error {
+                message: format!("{err:#}"),
+            })?
+            .map(|h| h as i64)
+            .unwrap_or(-1);
         let mut query = QueryBuilder::default();
         let where_clause = match id {
             LeafId::Number(n) => format!("height = {}", query.bind(n as i64)?),
             LeafId::Hash(h) => format!("hash = {}", query.bind(h.to_string())?),
         };
+        let ph = query.bind(pruned_height)?;
         let row = query
             .query(&format!(
-                "SELECT {LEAF_COLUMNS} FROM leaf2 WHERE {where_clause} LIMIT 1"
+                "SELECT {LEAF_COLUMNS} FROM leaf2 WHERE {where_clause} AND height > {ph} LIMIT 1"
             ))
             .fetch_one(self.as_mut())
             .await?;
@@ -62,6 +72,14 @@ where
     }
 
     async fn get_block(&mut self, id: BlockId<Types>) -> QueryResult<BlockQueryData<Types>> {
+        let pruned_height: i64 = self
+            .load_pruned_height()
+            .await
+            .map_err(|err| QueryError::Error {
+                message: format!("{err:#}"),
+            })?
+            .map(|h| h as i64)
+            .unwrap_or(-1);
         let mut query = QueryBuilder::default();
         let where_clause = query.header_where_clause(id)?;
         let sql = format!(
@@ -81,6 +99,14 @@ where
     }
 
     async fn get_payload(&mut self, id: BlockId<Types>) -> QueryResult<PayloadQueryData<Types>> {
+        let pruned_height: i64 = self
+            .load_pruned_height()
+            .await
+            .map_err(|err| QueryError::Error {
+                message: format!("{err:#}"),
+            })?
+            .map(|h| h as i64)
+            .unwrap_or(-1);
         let mut query = QueryBuilder::default();
         let where_clause = query.header_where_clause(id)?;
         let sql = format!(
@@ -99,6 +125,14 @@ where
         &mut self,
         id: BlockId<Types>,
     ) -> QueryResult<PayloadMetadata<Types>> {
+        let pruned_height: i64 = self
+            .load_pruned_height()
+            .await
+            .map_err(|err| QueryError::Error {
+                message: format!("{err:#}"),
+            })?
+            .map(|h| h as i64)
+            .unwrap_or(-1);
         let mut query = QueryBuilder::default();
         let where_clause = query.header_where_clause(id)?;
         let sql = format!(
@@ -124,6 +158,14 @@ where
         &mut self,
         id: BlockId<Types>,
     ) -> QueryResult<VidCommonQueryData<Types>> {
+        let pruned_height: i64 = self
+            .load_pruned_height()
+            .await
+            .map_err(|err| QueryError::Error {
+                message: format!("{err:#}"),
+            })?
+            .map(|h| h as i64)
+            .unwrap_or(-1);
         let mut query = QueryBuilder::default();
         let where_clause = query.header_where_clause(id)?;
         let sql = format!(
@@ -142,6 +184,14 @@ where
         &mut self,
         id: BlockId<Types>,
     ) -> QueryResult<VidCommonMetadata<Types>> {
+        let pruned_height: i64 = self
+            .load_pruned_height()
+            .await
+            .map_err(|err| QueryError::Error {
+                message: format!("{err:#}"),
+            })?
+            .map(|h| h as i64)
+            .unwrap_or(-1);
         let mut query = QueryBuilder::default();
         let where_clause = query.header_where_clause(id)?;
         let sql = format!(
@@ -340,8 +390,17 @@ where
         &mut self,
         hash: TransactionHash<Types>,
     ) -> QueryResult<BlockQueryData<Types>> {
+        let pruned_height: i64 = self
+            .load_pruned_height()
+            .await
+            .map_err(|err| QueryError::Error {
+                message: format!("{err:#}"),
+            })?
+            .map(|h| h as i64)
+            .unwrap_or(-1);
         let mut query = QueryBuilder::default();
         let hash_param = query.bind(hash.to_string())?;
+        let ph = query.bind(pruned_height)?;
 
         // ORDER BY ASC ensures that if there are duplicate transactions, we return the first
         // one.
@@ -350,7 +409,7 @@ where
                 FROM header AS h
                 JOIN payload AS p ON (h.payload_hash, h.ns_table) = (p.hash, p.ns_table)
                 JOIN transactions AS t ON t.block_height = h.height
-                WHERE t.hash = {hash_param}
+                WHERE t.hash = {hash_param} AND h.height > {ph}
                 ORDER BY t.block_height, t.ns_id, t.position
                 LIMIT 1"
         );
