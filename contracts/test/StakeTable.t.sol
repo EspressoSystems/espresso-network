@@ -37,6 +37,7 @@ import { EspToken } from "../src/EspToken.sol";
 // Target contracts
 import { StakeTable as S } from "../src/StakeTable.sol";
 import { StakeTableV2 } from "../src/StakeTableV2.sol";
+import { StakeTableV3 } from "../src/StakeTableV3.sol";
 
 contract StakeTable_register_Test is LightClientCommonTest {
     S public stakeTable;
@@ -1447,6 +1448,53 @@ contract StakeTableUpgradeV2Test is Test {
         bytes memory schnorrSig = new bytes(64);
 
         proxyV2.registerValidatorV2(blsVK, schnorrVK, blsSig, schnorrSig, 0, "dummy-meta");
+        vm.stopPrank();
+    }
+
+    function test_RevertWhen_RegisterValidatorV3IdentitySchnorrKey() public {
+        vm.startPrank(stakeTableRegisterTest.admin());
+        S proxy = stakeTableRegisterTest.stakeTable();
+        proxy.upgradeToAndCall(address(new StakeTableV3()), "");
+        vm.stopPrank();
+
+        address validator = makeAddr("validator");
+        (BN254.G2Point memory blsVK,, BN254.G1Point memory blsSig) =
+            stakeTableRegisterTest.genClientWallet(validator, "1");
+
+        vm.startPrank(validator);
+        StakeTableV3 proxyV3 = StakeTableV3(address(proxy));
+        bytes memory schnorrSig = new bytes(64);
+        EdOnBN254.EdOnBN254Point memory identitySchnorrVK = EdOnBN254.EdOnBN254Point(0, 1);
+
+        vm.expectRevert(S.InvalidSchnorrVK.selector);
+        proxyV3.registerValidatorV2(blsVK, identitySchnorrVK, blsSig, schnorrSig, 0, "dummy-meta");
+        vm.stopPrank();
+    }
+
+    function test_RevertWhen_UpdateConsensusKeysV3IdentitySchnorrKey() public {
+        vm.startPrank(stakeTableRegisterTest.admin());
+        S proxy = stakeTableRegisterTest.stakeTable();
+        proxy.upgradeToAndCall(address(new StakeTableV3()), "");
+        vm.stopPrank();
+
+        address validator = makeAddr("validator");
+        (
+            BN254.G2Point memory blsVK,
+            EdOnBN254.EdOnBN254Point memory schnorrVK,
+            BN254.G1Point memory blsSig
+        ) = stakeTableRegisterTest.genClientWallet(validator, "1");
+
+        vm.startPrank(validator);
+        StakeTableV3 proxyV3 = StakeTableV3(address(proxy));
+        bytes memory schnorrSig = new bytes(64);
+        proxyV3.registerValidatorV2(blsVK, schnorrVK, blsSig, schnorrSig, 0, "dummy-meta");
+
+        (BN254.G2Point memory newBlsVK,, BN254.G1Point memory newBlsSig) =
+            stakeTableRegisterTest.genClientWallet(validator, "2");
+        EdOnBN254.EdOnBN254Point memory identitySchnorrVK = EdOnBN254.EdOnBN254Point(0, 1);
+
+        vm.expectRevert(S.InvalidSchnorrVK.selector);
+        proxyV3.updateConsensusKeysV2(newBlsVK, identitySchnorrVK, newBlsSig, schnorrSig);
         vm.stopPrank();
     }
 
