@@ -312,12 +312,11 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
         }
     }
 
-    // @dev We do not perform full Schnorr key validation on-chain, but reject known invalid
-    // placeholders that should never be used as verifier keys.
+    // @dev We do not perform full Schnorr key validation on-chain, but reject affine encodings with
+    // `x == 0` on EdOnBN254: those are exactly the identity `(0,1)`, the order-2 point `(0,-1)`,
+    // and the off-curve `(0,0)` placeholder — none are suitable verifier keys.
     function ensureNonZeroSchnorrKey(EdOnBN254.EdOnBN254Point memory schnorrVK) internal pure {
-        bool isZeroPlaceholder = schnorrVK.x == 0 && schnorrVK.y == 0;
-        bool isIdentity = schnorrVK.x == 0 && schnorrVK.y == 1;
-        if (isZeroPlaceholder || isIdentity) {
+        if (schnorrVK.x == 0) {
             revert InvalidSchnorrVK();
         }
     }

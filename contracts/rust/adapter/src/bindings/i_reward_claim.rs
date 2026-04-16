@@ -140,11 +140,12 @@ pub mod IRewardClaim {
     pub static DEPLOYED_BYTECODE: alloy_sol_types::private::Bytes = alloy_sol_types::private::Bytes::from_static(
         b"",
     );
-    #[derive(serde::Serialize, serde::Deserialize, Default, Debug, PartialEq, Eq, Hash)]
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `AlreadyClaimed()` and selector `0x646cf558`.
-    ```solidity
-    error AlreadyClaimed();
-    ```*/
+```solidity
+error AlreadyClaimed();
+```*/
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct AlreadyClaimed;
@@ -163,11 +164,13 @@ pub mod IRewardClaim {
         type UnderlyingRustTuple<'a> = ();
         #[cfg(test)]
         #[allow(dead_code, unreachable_patterns)]
-        fn _type_assertion(_t: alloy_sol_types::private::AssertTypeEq<UnderlyingRustTuple>) {
+        fn _type_assertion(
+            _t: alloy_sol_types::private::AssertTypeEq<UnderlyingRustTuple>,
+        ) {
             match _t {
                 alloy_sol_types::private::AssertTypeEq::<
                     <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                >(_) => {},
+                >(_) => {}
             }
         }
         #[automatically_derived]
@@ -187,7 +190,9 @@ pub mod IRewardClaim {
         #[automatically_derived]
         impl alloy_sol_types::SolError for AlreadyClaimed {
             type Parameters<'a> = UnderlyingSolTuple<'a>;
-            type Token<'a> = <Self::Parameters<'a> as alloy_sol_types::SolType>::Token<'a>;
+            type Token<'a> = <Self::Parameters<
+                'a,
+            > as alloy_sol_types::SolType>::Token<'a>;
             const SIGNATURE: &'static str = "AlreadyClaimed()";
             const SELECTOR: [u8; 4] = [100u8, 108u8, 245u8, 88u8];
             #[inline]
@@ -202,18 +207,19 @@ pub mod IRewardClaim {
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<'_> as alloy_sol_types::SolType>::abi_decode_sequence_validate(
-                    data,
-                )
-                .map(Self::new)
+                <Self::Parameters<
+                    '_,
+                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                    .map(Self::new)
             }
         }
     };
-    #[derive(serde::Serialize, serde::Deserialize, Default, Debug, PartialEq, Eq, Hash)]
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `DailyLimitExceeded()` and selector `0x194bd314`.
-    ```solidity
-    error DailyLimitExceeded();
-    ```*/
+```solidity
+error DailyLimitExceeded();
+```*/
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct DailyLimitExceeded;
@@ -232,11 +238,13 @@ pub mod IRewardClaim {
         type UnderlyingRustTuple<'a> = ();
         #[cfg(test)]
         #[allow(dead_code, unreachable_patterns)]
-        fn _type_assertion(_t: alloy_sol_types::private::AssertTypeEq<UnderlyingRustTuple>) {
+        fn _type_assertion(
+            _t: alloy_sol_types::private::AssertTypeEq<UnderlyingRustTuple>,
+        ) {
             match _t {
                 alloy_sol_types::private::AssertTypeEq::<
                     <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                >(_) => {},
+                >(_) => {}
             }
         }
         #[automatically_derived]
@@ -256,7 +264,9 @@ pub mod IRewardClaim {
         #[automatically_derived]
         impl alloy_sol_types::SolError for DailyLimitExceeded {
             type Parameters<'a> = UnderlyingSolTuple<'a>;
-            type Token<'a> = <Self::Parameters<'a> as alloy_sol_types::SolType>::Token<'a>;
+            type Token<'a> = <Self::Parameters<
+                'a,
+            > as alloy_sol_types::SolType>::Token<'a>;
             const SIGNATURE: &'static str = "DailyLimitExceeded()";
             const SELECTOR: [u8; 4] = [25u8, 75u8, 211u8, 20u8];
             #[inline]
@@ -271,18 +281,19 @@ pub mod IRewardClaim {
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<'_> as alloy_sol_types::SolType>::abi_decode_sequence_validate(
-                    data,
-                )
-                .map(Self::new)
+                <Self::Parameters<
+                    '_,
+                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                    .map(Self::new)
             }
         }
     };
-    #[derive(serde::Serialize, serde::Deserialize, Default, Debug, PartialEq, Eq, Hash)]
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `InvalidAuthRoot()` and selector `0x328b8878`.
-    ```solidity
-    error InvalidAuthRoot();
-    ```*/
+```solidity
+error InvalidAuthRoot();
+```*/
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct InvalidAuthRoot;
@@ -301,11 +312,13 @@ pub mod IRewardClaim {
         type UnderlyingRustTuple<'a> = ();
         #[cfg(test)]
         #[allow(dead_code, unreachable_patterns)]
-        fn _type_assertion(_t: alloy_sol_types::private::AssertTypeEq<UnderlyingRustTuple>) {
+        fn _type_assertion(
+            _t: alloy_sol_types::private::AssertTypeEq<UnderlyingRustTuple>,
+        ) {
             match _t {
                 alloy_sol_types::private::AssertTypeEq::<
                     <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                >(_) => {},
+                >(_) => {}
             }
         }
         #[automatically_derived]
@@ -325,7 +338,9 @@ pub mod IRewardClaim {
         #[automatically_derived]
         impl alloy_sol_types::SolError for InvalidAuthRoot {
             type Parameters<'a> = UnderlyingSolTuple<'a>;
-            type Token<'a> = <Self::Parameters<'a> as alloy_sol_types::SolType>::Token<'a>;
+            type Token<'a> = <Self::Parameters<
+                'a,
+            > as alloy_sol_types::SolType>::Token<'a>;
             const SIGNATURE: &'static str = "InvalidAuthRoot()";
             const SELECTOR: [u8; 4] = [50u8, 139u8, 136u8, 120u8];
             #[inline]
@@ -340,18 +355,19 @@ pub mod IRewardClaim {
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<'_> as alloy_sol_types::SolType>::abi_decode_sequence_validate(
-                    data,
-                )
-                .map(Self::new)
+                <Self::Parameters<
+                    '_,
+                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                    .map(Self::new)
             }
         }
     };
-    #[derive(serde::Serialize, serde::Deserialize, Default, Debug, PartialEq, Eq, Hash)]
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `InvalidRewardAmount()` and selector `0x38539865`.
-    ```solidity
-    error InvalidRewardAmount();
-    ```*/
+```solidity
+error InvalidRewardAmount();
+```*/
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct InvalidRewardAmount;
@@ -370,11 +386,13 @@ pub mod IRewardClaim {
         type UnderlyingRustTuple<'a> = ();
         #[cfg(test)]
         #[allow(dead_code, unreachable_patterns)]
-        fn _type_assertion(_t: alloy_sol_types::private::AssertTypeEq<UnderlyingRustTuple>) {
+        fn _type_assertion(
+            _t: alloy_sol_types::private::AssertTypeEq<UnderlyingRustTuple>,
+        ) {
             match _t {
                 alloy_sol_types::private::AssertTypeEq::<
                     <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                >(_) => {},
+                >(_) => {}
             }
         }
         #[automatically_derived]
@@ -394,7 +412,9 @@ pub mod IRewardClaim {
         #[automatically_derived]
         impl alloy_sol_types::SolError for InvalidRewardAmount {
             type Parameters<'a> = UnderlyingSolTuple<'a>;
-            type Token<'a> = <Self::Parameters<'a> as alloy_sol_types::SolType>::Token<'a>;
+            type Token<'a> = <Self::Parameters<
+                'a,
+            > as alloy_sol_types::SolType>::Token<'a>;
             const SIGNATURE: &'static str = "InvalidRewardAmount()";
             const SELECTOR: [u8; 4] = [56u8, 83u8, 152u8, 101u8];
             #[inline]
@@ -409,18 +429,19 @@ pub mod IRewardClaim {
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<'_> as alloy_sol_types::SolType>::abi_decode_sequence_validate(
-                    data,
-                )
-                .map(Self::new)
+                <Self::Parameters<
+                    '_,
+                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                    .map(Self::new)
             }
         }
     };
-    #[derive(serde::Serialize, serde::Deserialize, Default, Debug, PartialEq, Eq, Hash)]
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Event with signature `RewardsClaimed(address,uint256)` and selector `0xfc30cddea38e2bf4d6ea7d3f9ed3b6ad7f176419f4963bd81318067a4aee73fe`.
-    ```solidity
-    event RewardsClaimed(address indexed user, uint256 amount);
-    ```*/
+```solidity
+event RewardsClaimed(address indexed user, uint256 amount);
+```*/
     #[allow(
         non_camel_case_types,
         non_snake_case,
@@ -445,18 +466,19 @@ pub mod IRewardClaim {
         #[automatically_derived]
         impl alloy_sol_types::SolEvent for RewardsClaimed {
             type DataTuple<'a> = (alloy::sol_types::sol_data::Uint<256>,);
-            type DataToken<'a> = <Self::DataTuple<'a> as alloy_sol_types::SolType>::Token<'a>;
+            type DataToken<'a> = <Self::DataTuple<
+                'a,
+            > as alloy_sol_types::SolType>::Token<'a>;
             type TopicList = (
                 alloy_sol_types::sol_data::FixedBytes<32>,
                 alloy::sol_types::sol_data::Address,
             );
             const SIGNATURE: &'static str = "RewardsClaimed(address,uint256)";
-            const SIGNATURE_HASH: alloy_sol_types::private::B256 =
-                alloy_sol_types::private::B256::new([
-                    252u8, 48u8, 205u8, 222u8, 163u8, 142u8, 43u8, 244u8, 214u8, 234u8, 125u8,
-                    63u8, 158u8, 211u8, 182u8, 173u8, 127u8, 23u8, 100u8, 25u8, 244u8, 150u8, 59u8,
-                    216u8, 19u8, 24u8, 6u8, 122u8, 74u8, 238u8, 115u8, 254u8,
-                ]);
+            const SIGNATURE_HASH: alloy_sol_types::private::B256 = alloy_sol_types::private::B256::new([
+                252u8, 48u8, 205u8, 222u8, 163u8, 142u8, 43u8, 244u8, 214u8, 234u8,
+                125u8, 63u8, 158u8, 211u8, 182u8, 173u8, 127u8, 23u8, 100u8, 25u8, 244u8,
+                150u8, 59u8, 216u8, 19u8, 24u8, 6u8, 122u8, 74u8, 238u8, 115u8, 254u8,
+            ]);
             const ANONYMOUS: bool = false;
             #[allow(unused_variables)]
             #[inline]
@@ -474,20 +496,22 @@ pub mod IRewardClaim {
                 topics: &<Self::TopicList as alloy_sol_types::SolType>::RustType,
             ) -> alloy_sol_types::Result<()> {
                 if topics.0 != Self::SIGNATURE_HASH {
-                    return Err(alloy_sol_types::Error::invalid_event_signature_hash(
-                        Self::SIGNATURE,
-                        topics.0,
-                        Self::SIGNATURE_HASH,
-                    ));
+                    return Err(
+                        alloy_sol_types::Error::invalid_event_signature_hash(
+                            Self::SIGNATURE,
+                            topics.0,
+                            Self::SIGNATURE_HASH,
+                        ),
+                    );
                 }
                 Ok(())
             }
             #[inline]
             fn tokenize_body(&self) -> Self::DataToken<'_> {
                 (
-                    <alloy::sol_types::sol_data::Uint<256> as alloy_sol_types::SolType>::tokenize(
-                        &self.amount,
-                    ),
+                    <alloy::sol_types::sol_data::Uint<
+                        256,
+                    > as alloy_sol_types::SolType>::tokenize(&self.amount),
                 )
             }
             #[inline]
@@ -502,7 +526,9 @@ pub mod IRewardClaim {
                 if out.len() < <Self::TopicList as alloy_sol_types::TopicList>::COUNT {
                     return Err(alloy_sol_types::Error::Overrun);
                 }
-                out[0usize] = alloy_sol_types::abi::token::WordToken(Self::SIGNATURE_HASH);
+                out[0usize] = alloy_sol_types::abi::token::WordToken(
+                    Self::SIGNATURE_HASH,
+                );
                 out[1usize] = <alloy::sol_types::sol_data::Address as alloy_sol_types::EventTopic>::encode_topic(
                     &self.user,
                 );
@@ -526,11 +552,12 @@ pub mod IRewardClaim {
             }
         }
     };
-    #[derive(serde::Serialize, serde::Deserialize, Default, Debug, PartialEq, Eq, Hash)]
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `claimRewards(uint256,bytes)` and selector `0x549dd8c3`.
-    ```solidity
-    function claimRewards(uint256 lifetimeRewards, bytes memory authData) external;
-    ```*/
+```solidity
+function claimRewards(uint256 lifetimeRewards, bytes memory authData) external;
+```*/
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct claimRewardsCall {
@@ -565,11 +592,13 @@ pub mod IRewardClaim {
             );
             #[cfg(test)]
             #[allow(dead_code, unreachable_patterns)]
-            fn _type_assertion(_t: alloy_sol_types::private::AssertTypeEq<UnderlyingRustTuple>) {
+            fn _type_assertion(
+                _t: alloy_sol_types::private::AssertTypeEq<UnderlyingRustTuple>,
+            ) {
                 match _t {
                     alloy_sol_types::private::AssertTypeEq::<
                         <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                    >(_) => {},
+                    >(_) => {}
                 }
             }
             #[automatically_derived]
@@ -598,11 +627,13 @@ pub mod IRewardClaim {
             type UnderlyingRustTuple<'a> = ();
             #[cfg(test)]
             #[allow(dead_code, unreachable_patterns)]
-            fn _type_assertion(_t: alloy_sol_types::private::AssertTypeEq<UnderlyingRustTuple>) {
+            fn _type_assertion(
+                _t: alloy_sol_types::private::AssertTypeEq<UnderlyingRustTuple>,
+            ) {
                 match _t {
                     alloy_sol_types::private::AssertTypeEq::<
                         <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                    >(_) => {},
+                    >(_) => {}
                 }
             }
             #[automatically_derived]
@@ -621,7 +652,9 @@ pub mod IRewardClaim {
             }
         }
         impl claimRewardsReturn {
-            fn _tokenize(&self) -> <claimRewardsCall as alloy_sol_types::SolCall>::ReturnToken<'_> {
+            fn _tokenize(
+                &self,
+            ) -> <claimRewardsCall as alloy_sol_types::SolCall>::ReturnToken<'_> {
                 ()
             }
         }
@@ -631,10 +664,14 @@ pub mod IRewardClaim {
                 alloy::sol_types::sol_data::Uint<256>,
                 alloy::sol_types::sol_data::Bytes,
             );
-            type Token<'a> = <Self::Parameters<'a> as alloy_sol_types::SolType>::Token<'a>;
+            type Token<'a> = <Self::Parameters<
+                'a,
+            > as alloy_sol_types::SolType>::Token<'a>;
             type Return = claimRewardsReturn;
             type ReturnTuple<'a> = ();
-            type ReturnToken<'a> = <Self::ReturnTuple<'a> as alloy_sol_types::SolType>::Token<'a>;
+            type ReturnToken<'a> = <Self::ReturnTuple<
+                'a,
+            > as alloy_sol_types::SolType>::Token<'a>;
             const SIGNATURE: &'static str = "claimRewards(uint256,bytes)";
             const SELECTOR: [u8; 4] = [84u8, 157u8, 216u8, 195u8];
             #[inline]
@@ -646,9 +683,9 @@ pub mod IRewardClaim {
             #[inline]
             fn tokenize(&self) -> Self::Token<'_> {
                 (
-                    <alloy::sol_types::sol_data::Uint<256> as alloy_sol_types::SolType>::tokenize(
-                        &self.lifetimeRewards,
-                    ),
+                    <alloy::sol_types::sol_data::Uint<
+                        256,
+                    > as alloy_sol_types::SolType>::tokenize(&self.lifetimeRewards),
                     <alloy::sol_types::sol_data::Bytes as alloy_sol_types::SolType>::tokenize(
                         &self.authData,
                     ),
@@ -660,30 +697,36 @@ pub mod IRewardClaim {
             }
             #[inline]
             fn abi_decode_returns(data: &[u8]) -> alloy_sol_types::Result<Self::Return> {
-                <Self::ReturnTuple<'_> as alloy_sol_types::SolType>::abi_decode_sequence(data)
+                <Self::ReturnTuple<
+                    '_,
+                > as alloy_sol_types::SolType>::abi_decode_sequence(data)
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(data: &[u8]) -> alloy_sol_types::Result<Self::Return> {
-                <Self::ReturnTuple<'_> as alloy_sol_types::SolType>::abi_decode_sequence_validate(
-                    data,
-                )
-                .map(Into::into)
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                <Self::ReturnTuple<
+                    '_,
+                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                    .map(Into::into)
             }
         }
     };
-    #[derive(serde::Serialize, serde::Deserialize, Default, Debug, PartialEq, Eq, Hash)]
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `claimedRewards(address)` and selector `0xbd834345`.
-    ```solidity
-    function claimedRewards(address claimer) external view returns (uint256);
-    ```*/
+```solidity
+function claimedRewards(address claimer) external view returns (uint256);
+```*/
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct claimedRewardsCall {
         #[allow(missing_docs)]
         pub claimer: alloy::sol_types::private::Address,
     }
-    #[derive(serde::Serialize, serde::Deserialize, Default, Debug, PartialEq, Eq, Hash)]
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`claimedRewards(address)`](claimedRewardsCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -707,11 +750,13 @@ pub mod IRewardClaim {
             type UnderlyingRustTuple<'a> = (alloy::sol_types::private::Address,);
             #[cfg(test)]
             #[allow(dead_code, unreachable_patterns)]
-            fn _type_assertion(_t: alloy_sol_types::private::AssertTypeEq<UnderlyingRustTuple>) {
+            fn _type_assertion(
+                _t: alloy_sol_types::private::AssertTypeEq<UnderlyingRustTuple>,
+            ) {
                 match _t {
                     alloy_sol_types::private::AssertTypeEq::<
                         <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                    >(_) => {},
+                    >(_) => {}
                 }
             }
             #[automatically_derived]
@@ -734,26 +779,32 @@ pub mod IRewardClaim {
             #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = (alloy::sol_types::sol_data::Uint<256>,);
             #[doc(hidden)]
-            type UnderlyingRustTuple<'a> = (alloy::sol_types::private::primitives::aliases::U256,);
+            type UnderlyingRustTuple<'a> = (
+                alloy::sol_types::private::primitives::aliases::U256,
+            );
             #[cfg(test)]
             #[allow(dead_code, unreachable_patterns)]
-            fn _type_assertion(_t: alloy_sol_types::private::AssertTypeEq<UnderlyingRustTuple>) {
+            fn _type_assertion(
+                _t: alloy_sol_types::private::AssertTypeEq<UnderlyingRustTuple>,
+            ) {
                 match _t {
                     alloy_sol_types::private::AssertTypeEq::<
                         <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                    >(_) => {},
+                    >(_) => {}
                 }
             }
             #[automatically_derived]
             #[doc(hidden)]
-            impl ::core::convert::From<claimedRewardsReturn> for UnderlyingRustTuple<'_> {
+            impl ::core::convert::From<claimedRewardsReturn>
+            for UnderlyingRustTuple<'_> {
                 fn from(value: claimedRewardsReturn) -> Self {
                     (value._0,)
                 }
             }
             #[automatically_derived]
             #[doc(hidden)]
-            impl ::core::convert::From<UnderlyingRustTuple<'_>> for claimedRewardsReturn {
+            impl ::core::convert::From<UnderlyingRustTuple<'_>>
+            for claimedRewardsReturn {
                 fn from(tuple: UnderlyingRustTuple<'_>) -> Self {
                     Self { _0: tuple.0 }
                 }
@@ -762,10 +813,14 @@ pub mod IRewardClaim {
         #[automatically_derived]
         impl alloy_sol_types::SolCall for claimedRewardsCall {
             type Parameters<'a> = (alloy::sol_types::sol_data::Address,);
-            type Token<'a> = <Self::Parameters<'a> as alloy_sol_types::SolType>::Token<'a>;
+            type Token<'a> = <Self::Parameters<
+                'a,
+            > as alloy_sol_types::SolType>::Token<'a>;
             type Return = alloy::sol_types::private::primitives::aliases::U256;
             type ReturnTuple<'a> = (alloy::sol_types::sol_data::Uint<256>,);
-            type ReturnToken<'a> = <Self::ReturnTuple<'a> as alloy_sol_types::SolType>::Token<'a>;
+            type ReturnToken<'a> = <Self::ReturnTuple<
+                'a,
+            > as alloy_sol_types::SolType>::Token<'a>;
             const SIGNATURE: &'static str = "claimedRewards(address)";
             const SELECTOR: [u8; 4] = [189u8, 131u8, 67u8, 69u8];
             #[inline]
@@ -785,41 +840,46 @@ pub mod IRewardClaim {
             #[inline]
             fn tokenize_returns(ret: &Self::Return) -> Self::ReturnToken<'_> {
                 (
-                    <alloy::sol_types::sol_data::Uint<256> as alloy_sol_types::SolType>::tokenize(
-                        ret,
-                    ),
+                    <alloy::sol_types::sol_data::Uint<
+                        256,
+                    > as alloy_sol_types::SolType>::tokenize(ret),
                 )
             }
             #[inline]
             fn abi_decode_returns(data: &[u8]) -> alloy_sol_types::Result<Self::Return> {
-                <Self::ReturnTuple<'_> as alloy_sol_types::SolType>::abi_decode_sequence(data).map(
-                    |r| {
+                <Self::ReturnTuple<
+                    '_,
+                > as alloy_sol_types::SolType>::abi_decode_sequence(data)
+                    .map(|r| {
                         let r: claimedRewardsReturn = r.into();
                         r._0
-                    },
-                )
+                    })
             }
             #[inline]
-            fn abi_decode_returns_validate(data: &[u8]) -> alloy_sol_types::Result<Self::Return> {
-                <Self::ReturnTuple<'_> as alloy_sol_types::SolType>::abi_decode_sequence_validate(
-                    data,
-                )
-                .map(|r| {
-                    let r: claimedRewardsReturn = r.into();
-                    r._0
-                })
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                <Self::ReturnTuple<
+                    '_,
+                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                    .map(|r| {
+                        let r: claimedRewardsReturn = r.into();
+                        r._0
+                    })
             }
         }
     };
-    #[derive(serde::Serialize, serde::Deserialize, Default, Debug, PartialEq, Eq, Hash)]
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `totalClaimed()` and selector `0xd54ad2a1`.
-    ```solidity
-    function totalClaimed() external view returns (uint256);
-    ```*/
+```solidity
+function totalClaimed() external view returns (uint256);
+```*/
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct totalClaimedCall;
-    #[derive(serde::Serialize, serde::Deserialize, Default, Debug, PartialEq, Eq, Hash)]
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`totalClaimed()`](totalClaimedCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -843,11 +903,13 @@ pub mod IRewardClaim {
             type UnderlyingRustTuple<'a> = ();
             #[cfg(test)]
             #[allow(dead_code, unreachable_patterns)]
-            fn _type_assertion(_t: alloy_sol_types::private::AssertTypeEq<UnderlyingRustTuple>) {
+            fn _type_assertion(
+                _t: alloy_sol_types::private::AssertTypeEq<UnderlyingRustTuple>,
+            ) {
                 match _t {
                     alloy_sol_types::private::AssertTypeEq::<
                         <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                    >(_) => {},
+                    >(_) => {}
                 }
             }
             #[automatically_derived]
@@ -870,14 +932,18 @@ pub mod IRewardClaim {
             #[allow(dead_code)]
             type UnderlyingSolTuple<'a> = (alloy::sol_types::sol_data::Uint<256>,);
             #[doc(hidden)]
-            type UnderlyingRustTuple<'a> = (alloy::sol_types::private::primitives::aliases::U256,);
+            type UnderlyingRustTuple<'a> = (
+                alloy::sol_types::private::primitives::aliases::U256,
+            );
             #[cfg(test)]
             #[allow(dead_code, unreachable_patterns)]
-            fn _type_assertion(_t: alloy_sol_types::private::AssertTypeEq<UnderlyingRustTuple>) {
+            fn _type_assertion(
+                _t: alloy_sol_types::private::AssertTypeEq<UnderlyingRustTuple>,
+            ) {
                 match _t {
                     alloy_sol_types::private::AssertTypeEq::<
                         <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                    >(_) => {},
+                    >(_) => {}
                 }
             }
             #[automatically_derived]
@@ -898,10 +964,14 @@ pub mod IRewardClaim {
         #[automatically_derived]
         impl alloy_sol_types::SolCall for totalClaimedCall {
             type Parameters<'a> = ();
-            type Token<'a> = <Self::Parameters<'a> as alloy_sol_types::SolType>::Token<'a>;
+            type Token<'a> = <Self::Parameters<
+                'a,
+            > as alloy_sol_types::SolType>::Token<'a>;
             type Return = alloy::sol_types::private::primitives::aliases::U256;
             type ReturnTuple<'a> = (alloy::sol_types::sol_data::Uint<256>,);
-            type ReturnToken<'a> = <Self::ReturnTuple<'a> as alloy_sol_types::SolType>::Token<'a>;
+            type ReturnToken<'a> = <Self::ReturnTuple<
+                'a,
+            > as alloy_sol_types::SolType>::Token<'a>;
             const SIGNATURE: &'static str = "totalClaimed()";
             const SELECTOR: [u8; 4] = [213u8, 74u8, 210u8, 161u8];
             #[inline]
@@ -917,34 +987,39 @@ pub mod IRewardClaim {
             #[inline]
             fn tokenize_returns(ret: &Self::Return) -> Self::ReturnToken<'_> {
                 (
-                    <alloy::sol_types::sol_data::Uint<256> as alloy_sol_types::SolType>::tokenize(
-                        ret,
-                    ),
+                    <alloy::sol_types::sol_data::Uint<
+                        256,
+                    > as alloy_sol_types::SolType>::tokenize(ret),
                 )
             }
             #[inline]
             fn abi_decode_returns(data: &[u8]) -> alloy_sol_types::Result<Self::Return> {
-                <Self::ReturnTuple<'_> as alloy_sol_types::SolType>::abi_decode_sequence(data).map(
-                    |r| {
+                <Self::ReturnTuple<
+                    '_,
+                > as alloy_sol_types::SolType>::abi_decode_sequence(data)
+                    .map(|r| {
                         let r: totalClaimedReturn = r.into();
                         r._0
-                    },
-                )
+                    })
             }
             #[inline]
-            fn abi_decode_returns_validate(data: &[u8]) -> alloy_sol_types::Result<Self::Return> {
-                <Self::ReturnTuple<'_> as alloy_sol_types::SolType>::abi_decode_sequence_validate(
-                    data,
-                )
-                .map(|r| {
-                    let r: totalClaimedReturn = r.into();
-                    r._0
-                })
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                <Self::ReturnTuple<
+                    '_,
+                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                    .map(|r| {
+                        let r: totalClaimedReturn = r.into();
+                        r._0
+                    })
             }
         }
     };
     ///Container for all the [`IRewardClaim`](self) function calls.
-    #[derive(Clone, serde::Serialize, serde::Deserialize)]
+    #[derive(Clone)]
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive()]
     pub enum IRewardClaimCalls {
         #[allow(missing_docs)]
         claimRewards(claimRewardsCall),
@@ -985,13 +1060,15 @@ pub mod IRewardClaim {
             match Self::SELECTORS.binary_search(&selector) {
                 ::core::result::Result::Ok(idx) => {
                     ::core::option::Option::Some(Self::SIGNATURES[idx])
-                },
+                }
                 ::core::result::Result::Err(_) => ::core::option::Option::None,
             }
         }
         /// Returns the enum variant name for the given selector, if known.
         #[inline]
-        pub fn name_by_selector(selector: [u8; 4usize]) -> ::core::option::Option<&'static str> {
+        pub fn name_by_selector(
+            selector: [u8; 4usize],
+        ) -> ::core::option::Option<&'static str> {
             let sig = Self::signature_by_selector(selector)?;
             sig.split_once('(').map(|(name, _)| name)
         }
@@ -1004,11 +1081,15 @@ pub mod IRewardClaim {
         #[inline]
         fn selector(&self) -> [u8; 4] {
             match self {
-                Self::claimRewards(_) => <claimRewardsCall as alloy_sol_types::SolCall>::SELECTOR,
+                Self::claimRewards(_) => {
+                    <claimRewardsCall as alloy_sol_types::SolCall>::SELECTOR
+                }
                 Self::claimedRewards(_) => {
                     <claimedRewardsCall as alloy_sol_types::SolCall>::SELECTOR
-                },
-                Self::totalClaimed(_) => <totalClaimedCall as alloy_sol_types::SolCall>::SELECTOR,
+                }
+                Self::totalClaimed(_) => {
+                    <totalClaimedCall as alloy_sol_types::SolCall>::SELECTOR
+                }
             }
         }
         #[inline]
@@ -1021,35 +1102,54 @@ pub mod IRewardClaim {
         }
         #[inline]
         #[allow(non_snake_case)]
-        fn abi_decode_raw(selector: [u8; 4], data: &[u8]) -> alloy_sol_types::Result<Self> {
-            static DECODE_SHIMS: &[fn(&[u8]) -> alloy_sol_types::Result<IRewardClaimCalls>] = &[
+        fn abi_decode_raw(
+            selector: [u8; 4],
+            data: &[u8],
+        ) -> alloy_sol_types::Result<Self> {
+            static DECODE_SHIMS: &[fn(
+                &[u8],
+            ) -> alloy_sol_types::Result<IRewardClaimCalls>] = &[
                 {
-                    fn claimRewards(data: &[u8]) -> alloy_sol_types::Result<IRewardClaimCalls> {
-                        <claimRewardsCall as alloy_sol_types::SolCall>::abi_decode_raw(data)
+                    fn claimRewards(
+                        data: &[u8],
+                    ) -> alloy_sol_types::Result<IRewardClaimCalls> {
+                        <claimRewardsCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                                data,
+                            )
                             .map(IRewardClaimCalls::claimRewards)
                     }
                     claimRewards
                 },
                 {
-                    fn claimedRewards(data: &[u8]) -> alloy_sol_types::Result<IRewardClaimCalls> {
-                        <claimedRewardsCall as alloy_sol_types::SolCall>::abi_decode_raw(data)
+                    fn claimedRewards(
+                        data: &[u8],
+                    ) -> alloy_sol_types::Result<IRewardClaimCalls> {
+                        <claimedRewardsCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                                data,
+                            )
                             .map(IRewardClaimCalls::claimedRewards)
                     }
                     claimedRewards
                 },
                 {
-                    fn totalClaimed(data: &[u8]) -> alloy_sol_types::Result<IRewardClaimCalls> {
-                        <totalClaimedCall as alloy_sol_types::SolCall>::abi_decode_raw(data)
+                    fn totalClaimed(
+                        data: &[u8],
+                    ) -> alloy_sol_types::Result<IRewardClaimCalls> {
+                        <totalClaimedCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                                data,
+                            )
                             .map(IRewardClaimCalls::totalClaimed)
                     }
                     totalClaimed
                 },
             ];
             let Ok(idx) = Self::SELECTORS.binary_search(&selector) else {
-                return Err(alloy_sol_types::Error::unknown_selector(
-                    <Self as alloy_sol_types::SolInterface>::NAME,
-                    selector,
-                ));
+                return Err(
+                    alloy_sol_types::Error::unknown_selector(
+                        <Self as alloy_sol_types::SolInterface>::NAME,
+                        selector,
+                    ),
+                );
             };
             DECODE_SHIMS[idx](data)
         }
@@ -1061,41 +1161,48 @@ pub mod IRewardClaim {
         ) -> alloy_sol_types::Result<Self> {
             static DECODE_VALIDATE_SHIMS: &[fn(
                 &[u8],
-            )
-                -> alloy_sol_types::Result<IRewardClaimCalls>] = &[
+            ) -> alloy_sol_types::Result<IRewardClaimCalls>] = &[
                 {
-                    fn claimRewards(data: &[u8]) -> alloy_sol_types::Result<IRewardClaimCalls> {
+                    fn claimRewards(
+                        data: &[u8],
+                    ) -> alloy_sol_types::Result<IRewardClaimCalls> {
                         <claimRewardsCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                            data,
-                        )
-                        .map(IRewardClaimCalls::claimRewards)
+                                data,
+                            )
+                            .map(IRewardClaimCalls::claimRewards)
                     }
                     claimRewards
                 },
                 {
-                    fn claimedRewards(data: &[u8]) -> alloy_sol_types::Result<IRewardClaimCalls> {
+                    fn claimedRewards(
+                        data: &[u8],
+                    ) -> alloy_sol_types::Result<IRewardClaimCalls> {
                         <claimedRewardsCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                            data,
-                        )
-                        .map(IRewardClaimCalls::claimedRewards)
+                                data,
+                            )
+                            .map(IRewardClaimCalls::claimedRewards)
                     }
                     claimedRewards
                 },
                 {
-                    fn totalClaimed(data: &[u8]) -> alloy_sol_types::Result<IRewardClaimCalls> {
+                    fn totalClaimed(
+                        data: &[u8],
+                    ) -> alloy_sol_types::Result<IRewardClaimCalls> {
                         <totalClaimedCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                            data,
-                        )
-                        .map(IRewardClaimCalls::totalClaimed)
+                                data,
+                            )
+                            .map(IRewardClaimCalls::totalClaimed)
                     }
                     totalClaimed
                 },
             ];
             let Ok(idx) = Self::SELECTORS.binary_search(&selector) else {
-                return Err(alloy_sol_types::Error::unknown_selector(
-                    <Self as alloy_sol_types::SolInterface>::NAME,
-                    selector,
-                ));
+                return Err(
+                    alloy_sol_types::Error::unknown_selector(
+                        <Self as alloy_sol_types::SolInterface>::NAME,
+                        selector,
+                    ),
+                );
             };
             DECODE_VALIDATE_SHIMS[idx](data)
         }
@@ -1103,33 +1210,50 @@ pub mod IRewardClaim {
         fn abi_encoded_size(&self) -> usize {
             match self {
                 Self::claimRewards(inner) => {
-                    <claimRewardsCall as alloy_sol_types::SolCall>::abi_encoded_size(inner)
-                },
+                    <claimRewardsCall as alloy_sol_types::SolCall>::abi_encoded_size(
+                        inner,
+                    )
+                }
                 Self::claimedRewards(inner) => {
-                    <claimedRewardsCall as alloy_sol_types::SolCall>::abi_encoded_size(inner)
-                },
+                    <claimedRewardsCall as alloy_sol_types::SolCall>::abi_encoded_size(
+                        inner,
+                    )
+                }
                 Self::totalClaimed(inner) => {
-                    <totalClaimedCall as alloy_sol_types::SolCall>::abi_encoded_size(inner)
-                },
+                    <totalClaimedCall as alloy_sol_types::SolCall>::abi_encoded_size(
+                        inner,
+                    )
+                }
             }
         }
         #[inline]
         fn abi_encode_raw(&self, out: &mut alloy_sol_types::private::Vec<u8>) {
             match self {
                 Self::claimRewards(inner) => {
-                    <claimRewardsCall as alloy_sol_types::SolCall>::abi_encode_raw(inner, out)
-                },
+                    <claimRewardsCall as alloy_sol_types::SolCall>::abi_encode_raw(
+                        inner,
+                        out,
+                    )
+                }
                 Self::claimedRewards(inner) => {
-                    <claimedRewardsCall as alloy_sol_types::SolCall>::abi_encode_raw(inner, out)
-                },
+                    <claimedRewardsCall as alloy_sol_types::SolCall>::abi_encode_raw(
+                        inner,
+                        out,
+                    )
+                }
                 Self::totalClaimed(inner) => {
-                    <totalClaimedCall as alloy_sol_types::SolCall>::abi_encode_raw(inner, out)
-                },
+                    <totalClaimedCall as alloy_sol_types::SolCall>::abi_encode_raw(
+                        inner,
+                        out,
+                    )
+                }
             }
         }
     }
     ///Container for all the [`IRewardClaim`](self) custom errors.
-    #[derive(Clone, serde::Serialize, serde::Deserialize, Debug, PartialEq, Eq, Hash)]
+    #[derive(Clone)]
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Debug, PartialEq, Eq, Hash)]
     pub enum IRewardClaimErrors {
         #[allow(missing_docs)]
         AlreadyClaimed(AlreadyClaimed),
@@ -1175,13 +1299,15 @@ pub mod IRewardClaim {
             match Self::SELECTORS.binary_search(&selector) {
                 ::core::result::Result::Ok(idx) => {
                     ::core::option::Option::Some(Self::SIGNATURES[idx])
-                },
+                }
                 ::core::result::Result::Err(_) => ::core::option::Option::None,
             }
         }
         /// Returns the enum variant name for the given selector, if known.
         #[inline]
-        pub fn name_by_selector(selector: [u8; 4usize]) -> ::core::option::Option<&'static str> {
+        pub fn name_by_selector(
+            selector: [u8; 4usize],
+        ) -> ::core::option::Option<&'static str> {
             let sig = Self::signature_by_selector(selector)?;
             sig.split_once('(').map(|(name, _)| name)
         }
@@ -1194,16 +1320,18 @@ pub mod IRewardClaim {
         #[inline]
         fn selector(&self) -> [u8; 4] {
             match self {
-                Self::AlreadyClaimed(_) => <AlreadyClaimed as alloy_sol_types::SolError>::SELECTOR,
+                Self::AlreadyClaimed(_) => {
+                    <AlreadyClaimed as alloy_sol_types::SolError>::SELECTOR
+                }
                 Self::DailyLimitExceeded(_) => {
                     <DailyLimitExceeded as alloy_sol_types::SolError>::SELECTOR
-                },
+                }
                 Self::InvalidAuthRoot(_) => {
                     <InvalidAuthRoot as alloy_sol_types::SolError>::SELECTOR
-                },
+                }
                 Self::InvalidRewardAmount(_) => {
                     <InvalidRewardAmount as alloy_sol_types::SolError>::SELECTOR
-                },
+                }
             }
         }
         #[inline]
@@ -1216,20 +1344,31 @@ pub mod IRewardClaim {
         }
         #[inline]
         #[allow(non_snake_case)]
-        fn abi_decode_raw(selector: [u8; 4], data: &[u8]) -> alloy_sol_types::Result<Self> {
-            static DECODE_SHIMS: &[fn(&[u8]) -> alloy_sol_types::Result<IRewardClaimErrors>] = &[
+        fn abi_decode_raw(
+            selector: [u8; 4],
+            data: &[u8],
+        ) -> alloy_sol_types::Result<Self> {
+            static DECODE_SHIMS: &[fn(
+                &[u8],
+            ) -> alloy_sol_types::Result<IRewardClaimErrors>] = &[
                 {
                     fn DailyLimitExceeded(
                         data: &[u8],
                     ) -> alloy_sol_types::Result<IRewardClaimErrors> {
-                        <DailyLimitExceeded as alloy_sol_types::SolError>::abi_decode_raw(data)
+                        <DailyLimitExceeded as alloy_sol_types::SolError>::abi_decode_raw(
+                                data,
+                            )
                             .map(IRewardClaimErrors::DailyLimitExceeded)
                     }
                     DailyLimitExceeded
                 },
                 {
-                    fn InvalidAuthRoot(data: &[u8]) -> alloy_sol_types::Result<IRewardClaimErrors> {
-                        <InvalidAuthRoot as alloy_sol_types::SolError>::abi_decode_raw(data)
+                    fn InvalidAuthRoot(
+                        data: &[u8],
+                    ) -> alloy_sol_types::Result<IRewardClaimErrors> {
+                        <InvalidAuthRoot as alloy_sol_types::SolError>::abi_decode_raw(
+                                data,
+                            )
                             .map(IRewardClaimErrors::InvalidAuthRoot)
                     }
                     InvalidAuthRoot
@@ -1238,24 +1377,32 @@ pub mod IRewardClaim {
                     fn InvalidRewardAmount(
                         data: &[u8],
                     ) -> alloy_sol_types::Result<IRewardClaimErrors> {
-                        <InvalidRewardAmount as alloy_sol_types::SolError>::abi_decode_raw(data)
+                        <InvalidRewardAmount as alloy_sol_types::SolError>::abi_decode_raw(
+                                data,
+                            )
                             .map(IRewardClaimErrors::InvalidRewardAmount)
                     }
                     InvalidRewardAmount
                 },
                 {
-                    fn AlreadyClaimed(data: &[u8]) -> alloy_sol_types::Result<IRewardClaimErrors> {
-                        <AlreadyClaimed as alloy_sol_types::SolError>::abi_decode_raw(data)
+                    fn AlreadyClaimed(
+                        data: &[u8],
+                    ) -> alloy_sol_types::Result<IRewardClaimErrors> {
+                        <AlreadyClaimed as alloy_sol_types::SolError>::abi_decode_raw(
+                                data,
+                            )
                             .map(IRewardClaimErrors::AlreadyClaimed)
                     }
                     AlreadyClaimed
                 },
             ];
             let Ok(idx) = Self::SELECTORS.binary_search(&selector) else {
-                return Err(alloy_sol_types::Error::unknown_selector(
-                    <Self as alloy_sol_types::SolInterface>::NAME,
-                    selector,
-                ));
+                return Err(
+                    alloy_sol_types::Error::unknown_selector(
+                        <Self as alloy_sol_types::SolInterface>::NAME,
+                        selector,
+                    ),
+                );
             };
             DECODE_SHIMS[idx](data)
         }
@@ -1267,25 +1414,26 @@ pub mod IRewardClaim {
         ) -> alloy_sol_types::Result<Self> {
             static DECODE_VALIDATE_SHIMS: &[fn(
                 &[u8],
-            )
-                -> alloy_sol_types::Result<IRewardClaimErrors>] = &[
+            ) -> alloy_sol_types::Result<IRewardClaimErrors>] = &[
                 {
                     fn DailyLimitExceeded(
                         data: &[u8],
                     ) -> alloy_sol_types::Result<IRewardClaimErrors> {
                         <DailyLimitExceeded as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                            data,
-                        )
-                        .map(IRewardClaimErrors::DailyLimitExceeded)
+                                data,
+                            )
+                            .map(IRewardClaimErrors::DailyLimitExceeded)
                     }
                     DailyLimitExceeded
                 },
                 {
-                    fn InvalidAuthRoot(data: &[u8]) -> alloy_sol_types::Result<IRewardClaimErrors> {
+                    fn InvalidAuthRoot(
+                        data: &[u8],
+                    ) -> alloy_sol_types::Result<IRewardClaimErrors> {
                         <InvalidAuthRoot as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                            data,
-                        )
-                        .map(IRewardClaimErrors::InvalidAuthRoot)
+                                data,
+                            )
+                            .map(IRewardClaimErrors::InvalidAuthRoot)
                     }
                     InvalidAuthRoot
                 },
@@ -1294,25 +1442,31 @@ pub mod IRewardClaim {
                         data: &[u8],
                     ) -> alloy_sol_types::Result<IRewardClaimErrors> {
                         <InvalidRewardAmount as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                            data,
-                        )
-                        .map(IRewardClaimErrors::InvalidRewardAmount)
+                                data,
+                            )
+                            .map(IRewardClaimErrors::InvalidRewardAmount)
                     }
                     InvalidRewardAmount
                 },
                 {
-                    fn AlreadyClaimed(data: &[u8]) -> alloy_sol_types::Result<IRewardClaimErrors> {
-                        <AlreadyClaimed as alloy_sol_types::SolError>::abi_decode_raw_validate(data)
+                    fn AlreadyClaimed(
+                        data: &[u8],
+                    ) -> alloy_sol_types::Result<IRewardClaimErrors> {
+                        <AlreadyClaimed as alloy_sol_types::SolError>::abi_decode_raw_validate(
+                                data,
+                            )
                             .map(IRewardClaimErrors::AlreadyClaimed)
                     }
                     AlreadyClaimed
                 },
             ];
             let Ok(idx) = Self::SELECTORS.binary_search(&selector) else {
-                return Err(alloy_sol_types::Error::unknown_selector(
-                    <Self as alloy_sol_types::SolInterface>::NAME,
-                    selector,
-                ));
+                return Err(
+                    alloy_sol_types::Error::unknown_selector(
+                        <Self as alloy_sol_types::SolInterface>::NAME,
+                        selector,
+                    ),
+                );
             };
             DECODE_VALIDATE_SHIMS[idx](data)
         }
@@ -1320,39 +1474,61 @@ pub mod IRewardClaim {
         fn abi_encoded_size(&self) -> usize {
             match self {
                 Self::AlreadyClaimed(inner) => {
-                    <AlreadyClaimed as alloy_sol_types::SolError>::abi_encoded_size(inner)
-                },
+                    <AlreadyClaimed as alloy_sol_types::SolError>::abi_encoded_size(
+                        inner,
+                    )
+                }
                 Self::DailyLimitExceeded(inner) => {
-                    <DailyLimitExceeded as alloy_sol_types::SolError>::abi_encoded_size(inner)
-                },
+                    <DailyLimitExceeded as alloy_sol_types::SolError>::abi_encoded_size(
+                        inner,
+                    )
+                }
                 Self::InvalidAuthRoot(inner) => {
-                    <InvalidAuthRoot as alloy_sol_types::SolError>::abi_encoded_size(inner)
-                },
+                    <InvalidAuthRoot as alloy_sol_types::SolError>::abi_encoded_size(
+                        inner,
+                    )
+                }
                 Self::InvalidRewardAmount(inner) => {
-                    <InvalidRewardAmount as alloy_sol_types::SolError>::abi_encoded_size(inner)
-                },
+                    <InvalidRewardAmount as alloy_sol_types::SolError>::abi_encoded_size(
+                        inner,
+                    )
+                }
             }
         }
         #[inline]
         fn abi_encode_raw(&self, out: &mut alloy_sol_types::private::Vec<u8>) {
             match self {
                 Self::AlreadyClaimed(inner) => {
-                    <AlreadyClaimed as alloy_sol_types::SolError>::abi_encode_raw(inner, out)
-                },
+                    <AlreadyClaimed as alloy_sol_types::SolError>::abi_encode_raw(
+                        inner,
+                        out,
+                    )
+                }
                 Self::DailyLimitExceeded(inner) => {
-                    <DailyLimitExceeded as alloy_sol_types::SolError>::abi_encode_raw(inner, out)
-                },
+                    <DailyLimitExceeded as alloy_sol_types::SolError>::abi_encode_raw(
+                        inner,
+                        out,
+                    )
+                }
                 Self::InvalidAuthRoot(inner) => {
-                    <InvalidAuthRoot as alloy_sol_types::SolError>::abi_encode_raw(inner, out)
-                },
+                    <InvalidAuthRoot as alloy_sol_types::SolError>::abi_encode_raw(
+                        inner,
+                        out,
+                    )
+                }
                 Self::InvalidRewardAmount(inner) => {
-                    <InvalidRewardAmount as alloy_sol_types::SolError>::abi_encode_raw(inner, out)
-                },
+                    <InvalidRewardAmount as alloy_sol_types::SolError>::abi_encode_raw(
+                        inner,
+                        out,
+                    )
+                }
             }
         }
     }
     ///Container for all the [`IRewardClaim`](self) events.
-    #[derive(Clone, serde::Serialize, serde::Deserialize, Debug, PartialEq, Eq, Hash)]
+    #[derive(Clone)]
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Debug, PartialEq, Eq, Hash)]
     pub enum IRewardClaimEvents {
         #[allow(missing_docs)]
         RewardsClaimed(RewardsClaimed),
@@ -1364,16 +1540,21 @@ pub mod IRewardClaim {
         /// No guarantees are made about the order of the selectors.
         ///
         /// Prefer using `SolInterface` methods instead.
-        pub const SELECTORS: &'static [[u8; 32usize]] = &[[
-            252u8, 48u8, 205u8, 222u8, 163u8, 142u8, 43u8, 244u8, 214u8, 234u8, 125u8, 63u8, 158u8,
-            211u8, 182u8, 173u8, 127u8, 23u8, 100u8, 25u8, 244u8, 150u8, 59u8, 216u8, 19u8, 24u8,
-            6u8, 122u8, 74u8, 238u8, 115u8, 254u8,
-        ]];
+        pub const SELECTORS: &'static [[u8; 32usize]] = &[
+            [
+                252u8, 48u8, 205u8, 222u8, 163u8, 142u8, 43u8, 244u8, 214u8, 234u8,
+                125u8, 63u8, 158u8, 211u8, 182u8, 173u8, 127u8, 23u8, 100u8, 25u8, 244u8,
+                150u8, 59u8, 216u8, 19u8, 24u8, 6u8, 122u8, 74u8, 238u8, 115u8, 254u8,
+            ],
+        ];
         /// The names of the variants in the same order as `SELECTORS`.
-        pub const VARIANT_NAMES: &'static [&'static str] = &[::core::stringify!(RewardsClaimed)];
+        pub const VARIANT_NAMES: &'static [&'static str] = &[
+            ::core::stringify!(RewardsClaimed),
+        ];
         /// The signatures in the same order as `SELECTORS`.
-        pub const SIGNATURES: &'static [&'static str] =
-            &[<RewardsClaimed as alloy_sol_types::SolEvent>::SIGNATURE];
+        pub const SIGNATURES: &'static [&'static str] = &[
+            <RewardsClaimed as alloy_sol_types::SolEvent>::SIGNATURE,
+        ];
         /// Returns the signature for the given selector, if known.
         #[inline]
         pub fn signature_by_selector(
@@ -1382,13 +1563,15 @@ pub mod IRewardClaim {
             match Self::SELECTORS.binary_search(&selector) {
                 ::core::result::Result::Ok(idx) => {
                     ::core::option::Option::Some(Self::SIGNATURES[idx])
-                },
+                }
                 ::core::result::Result::Err(_) => ::core::option::Option::None,
             }
         }
         /// Returns the enum variant name for the given selector, if known.
         #[inline]
-        pub fn name_by_selector(selector: [u8; 32usize]) -> ::core::option::Option<&'static str> {
+        pub fn name_by_selector(
+            selector: [u8; 32usize],
+        ) -> ::core::option::Option<&'static str> {
             let sig = Self::signature_by_selector(selector)?;
             sig.split_once('(').map(|(name, _)| name)
         }
@@ -1403,18 +1586,23 @@ pub mod IRewardClaim {
         ) -> alloy_sol_types::Result<Self> {
             match topics.first().copied() {
                 Some(<RewardsClaimed as alloy_sol_types::SolEvent>::SIGNATURE_HASH) => {
-                    <RewardsClaimed as alloy_sol_types::SolEvent>::decode_raw_log(topics, data)
+                    <RewardsClaimed as alloy_sol_types::SolEvent>::decode_raw_log(
+                            topics,
+                            data,
+                        )
                         .map(Self::RewardsClaimed)
-                },
-                _ => alloy_sol_types::private::Err(alloy_sol_types::Error::InvalidLog {
-                    name: <Self as alloy_sol_types::SolEventInterface>::NAME,
-                    log: alloy_sol_types::private::Box::new(
-                        alloy_sol_types::private::LogData::new_unchecked(
-                            topics.to_vec(),
-                            data.to_vec().into(),
+                }
+                _ => {
+                    alloy_sol_types::private::Err(alloy_sol_types::Error::InvalidLog {
+                        name: <Self as alloy_sol_types::SolEventInterface>::NAME,
+                        log: alloy_sol_types::private::Box::new(
+                            alloy_sol_types::private::LogData::new_unchecked(
+                                topics.to_vec(),
+                                data.to_vec().into(),
+                            ),
                         ),
-                    ),
-                }),
+                    })
+                }
             }
         }
     }
@@ -1424,21 +1612,21 @@ pub mod IRewardClaim {
             match self {
                 Self::RewardsClaimed(inner) => {
                     alloy_sol_types::private::IntoLogData::to_log_data(inner)
-                },
+                }
             }
         }
         fn into_log_data(self) -> alloy_sol_types::private::LogData {
             match self {
                 Self::RewardsClaimed(inner) => {
                     alloy_sol_types::private::IntoLogData::into_log_data(inner)
-                },
+                }
             }
         }
     }
     use alloy::contract as alloy_contract;
     /**Creates a new wrapper around an on-chain [`IRewardClaim`](self) contract instance.
 
-    See the [wrapper's documentation](`IRewardClaimInstance`) for more details.*/
+See the [wrapper's documentation](`IRewardClaimInstance`) for more details.*/
     #[inline]
     pub const fn new<
         P: alloy_contract::private::Provider<N>,
@@ -1451,41 +1639,43 @@ pub mod IRewardClaim {
     }
     /**Deploys this contract using the given `provider` and constructor arguments, if any.
 
-    Returns a new instance of the contract, if the deployment was successful.
+Returns a new instance of the contract, if the deployment was successful.
 
-    For more fine-grained control over the deployment process, use [`deploy_builder`] instead.*/
+For more fine-grained control over the deployment process, use [`deploy_builder`] instead.*/
     #[inline]
-    pub fn deploy<P: alloy_contract::private::Provider<N>, N: alloy_contract::private::Network>(
-        __provider: P,
-    ) -> impl ::core::future::Future<Output = alloy_contract::Result<IRewardClaimInstance<P, N>>>
-    {
-        IRewardClaimInstance::<P, N>::deploy(__provider)
-    }
-    /**Creates a `RawCallBuilder` for deploying this contract using the given `provider`
-    and constructor arguments, if any.
-
-    This is a simple wrapper around creating a `RawCallBuilder` with the data set to
-    the bytecode concatenated with the constructor's ABI-encoded arguments.*/
-    #[inline]
-    pub fn deploy_builder<
+    pub fn deploy<
         P: alloy_contract::private::Provider<N>,
         N: alloy_contract::private::Network,
     >(
         __provider: P,
-    ) -> alloy_contract::RawCallBuilder<P, N> {
+    ) -> impl ::core::future::Future<
+        Output = alloy_contract::Result<IRewardClaimInstance<P, N>>,
+    > {
+        IRewardClaimInstance::<P, N>::deploy(__provider)
+    }
+    /**Creates a `RawCallBuilder` for deploying this contract using the given `provider`
+and constructor arguments, if any.
+
+This is a simple wrapper around creating a `RawCallBuilder` with the data set to
+the bytecode concatenated with the constructor's ABI-encoded arguments.*/
+    #[inline]
+    pub fn deploy_builder<
+        P: alloy_contract::private::Provider<N>,
+        N: alloy_contract::private::Network,
+    >(__provider: P) -> alloy_contract::RawCallBuilder<P, N> {
         IRewardClaimInstance::<P, N>::deploy_builder(__provider)
     }
     /**A [`IRewardClaim`](self) instance.
 
-    Contains type-safe methods for interacting with an on-chain instance of the
-    [`IRewardClaim`](self) contract located at a given `address`, using a given
-    provider `P`.
+Contains type-safe methods for interacting with an on-chain instance of the
+[`IRewardClaim`](self) contract located at a given `address`, using a given
+provider `P`.
 
-    If the contract bytecode is available (see the [`sol!`](alloy_sol_types::sol!)
-    documentation on how to provide it), the `deploy` and `deploy_builder` methods can
-    be used to deploy a new instance of the contract.
+If the contract bytecode is available (see the [`sol!`](alloy_sol_types::sol!)
+documentation on how to provide it), the `deploy` and `deploy_builder` methods can
+be used to deploy a new instance of the contract.
 
-    See the [module-level documentation](self) for all the available methods.*/
+See the [module-level documentation](self) for all the available methods.*/
     #[derive(Clone)]
     pub struct IRewardClaimInstance<P, N = alloy_contract::private::Ethereum> {
         address: alloy_sol_types::private::Address,
@@ -1496,20 +1686,22 @@ pub mod IRewardClaim {
     impl<P, N> ::core::fmt::Debug for IRewardClaimInstance<P, N> {
         #[inline]
         fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
-            f.debug_tuple("IRewardClaimInstance")
-                .field(&self.address)
-                .finish()
+            f.debug_tuple("IRewardClaimInstance").field(&self.address).finish()
         }
     }
     /// Instantiation and getters/setters.
-    impl<P: alloy_contract::private::Provider<N>, N: alloy_contract::private::Network>
-        IRewardClaimInstance<P, N>
-    {
+    impl<
+        P: alloy_contract::private::Provider<N>,
+        N: alloy_contract::private::Network,
+    > IRewardClaimInstance<P, N> {
         /**Creates a new wrapper around an on-chain [`IRewardClaim`](self) contract instance.
 
-        See the [wrapper's documentation](`IRewardClaimInstance`) for more details.*/
+See the [wrapper's documentation](`IRewardClaimInstance`) for more details.*/
         #[inline]
-        pub const fn new(address: alloy_sol_types::private::Address, __provider: P) -> Self {
+        pub const fn new(
+            address: alloy_sol_types::private::Address,
+            __provider: P,
+        ) -> Self {
             Self {
                 address,
                 provider: __provider,
@@ -1518,20 +1710,22 @@ pub mod IRewardClaim {
         }
         /**Deploys this contract using the given `provider` and constructor arguments, if any.
 
-        Returns a new instance of the contract, if the deployment was successful.
+Returns a new instance of the contract, if the deployment was successful.
 
-        For more fine-grained control over the deployment process, use [`deploy_builder`] instead.*/
+For more fine-grained control over the deployment process, use [`deploy_builder`] instead.*/
         #[inline]
-        pub async fn deploy(__provider: P) -> alloy_contract::Result<IRewardClaimInstance<P, N>> {
+        pub async fn deploy(
+            __provider: P,
+        ) -> alloy_contract::Result<IRewardClaimInstance<P, N>> {
             let call_builder = Self::deploy_builder(__provider);
             let contract_address = call_builder.deploy().await?;
             Ok(Self::new(contract_address, call_builder.provider))
         }
         /**Creates a `RawCallBuilder` for deploying this contract using the given `provider`
-        and constructor arguments, if any.
+and constructor arguments, if any.
 
-        This is a simple wrapper around creating a `RawCallBuilder` with the data set to
-        the bytecode concatenated with the constructor's ABI-encoded arguments.*/
+This is a simple wrapper around creating a `RawCallBuilder` with the data set to
+the bytecode concatenated with the constructor's ABI-encoded arguments.*/
         #[inline]
         pub fn deploy_builder(__provider: P) -> alloy_contract::RawCallBuilder<P, N> {
             alloy_contract::RawCallBuilder::new_raw_deploy(
@@ -1572,9 +1766,10 @@ pub mod IRewardClaim {
         }
     }
     /// Function calls.
-    impl<P: alloy_contract::private::Provider<N>, N: alloy_contract::private::Network>
-        IRewardClaimInstance<P, N>
-    {
+    impl<
+        P: alloy_contract::private::Provider<N>,
+        N: alloy_contract::private::Network,
+    > IRewardClaimInstance<P, N> {
         /// Creates a new call builder using this contract instance's provider and address.
         ///
         /// Note that the call can be any function call, not just those defined in this
@@ -1591,10 +1786,12 @@ pub mod IRewardClaim {
             lifetimeRewards: alloy::sol_types::private::primitives::aliases::U256,
             authData: alloy::sol_types::private::Bytes,
         ) -> alloy_contract::SolCallBuilder<&P, claimRewardsCall, N> {
-            self.call_builder(&claimRewardsCall {
-                lifetimeRewards,
-                authData,
-            })
+            self.call_builder(
+                &claimRewardsCall {
+                    lifetimeRewards,
+                    authData,
+                },
+            )
         }
         ///Creates a new call builder for the [`claimedRewards`] function.
         pub fn claimedRewards(
@@ -1604,14 +1801,17 @@ pub mod IRewardClaim {
             self.call_builder(&claimedRewardsCall { claimer })
         }
         ///Creates a new call builder for the [`totalClaimed`] function.
-        pub fn totalClaimed(&self) -> alloy_contract::SolCallBuilder<&P, totalClaimedCall, N> {
+        pub fn totalClaimed(
+            &self,
+        ) -> alloy_contract::SolCallBuilder<&P, totalClaimedCall, N> {
             self.call_builder(&totalClaimedCall)
         }
     }
     /// Event filters.
-    impl<P: alloy_contract::private::Provider<N>, N: alloy_contract::private::Network>
-        IRewardClaimInstance<P, N>
-    {
+    impl<
+        P: alloy_contract::private::Provider<N>,
+        N: alloy_contract::private::Network,
+    > IRewardClaimInstance<P, N> {
         /// Creates a new event filter using this contract instance's provider and address.
         ///
         /// Note that the type can be any event, not just those defined in this contract.
@@ -1622,7 +1822,9 @@ pub mod IRewardClaim {
             alloy_contract::Event::new_sol(&self.provider, &self.address)
         }
         ///Creates a new event filter for the [`RewardsClaimed`] event.
-        pub fn RewardsClaimed_filter(&self) -> alloy_contract::Event<&P, RewardsClaimed, N> {
+        pub fn RewardsClaimed_filter(
+            &self,
+        ) -> alloy_contract::Event<&P, RewardsClaimed, N> {
             self.event_filter::<RewardsClaimed>()
         }
     }

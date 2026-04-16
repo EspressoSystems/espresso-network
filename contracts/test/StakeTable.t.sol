@@ -250,6 +250,12 @@ contract StakeTable_register_Test is LightClientCommonTest {
         vm.expectRevert(S.InvalidSchnorrVK.selector);
         stakeTable.registerValidator(blsVK, identitySchnorrVK, sig, COMMISSION);
 
+        // revert when the schnorrVK is the x=0 order-2 point (0, -1) on EdOnBN254
+        EdOnBN254.EdOnBN254Point memory order2SchnorrVK =
+            EdOnBN254.EdOnBN254Point(0, EdOnBN254.P_MOD - 1);
+        vm.expectRevert(S.InvalidSchnorrVK.selector);
+        stakeTable.registerValidator(blsVK, order2SchnorrVK, sig, COMMISSION);
+
         vm.stopPrank();
     }
 
@@ -439,6 +445,12 @@ contract StakeTable_register_Test is LightClientCommonTest {
         EdOnBN254.EdOnBN254Point memory identitySchnorrVK = EdOnBN254.EdOnBN254Point(0, 1);
         vm.expectRevert(S.InvalidSchnorrVK.selector);
         stakeTable.updateConsensusKeys(newBlsVK, identitySchnorrVK, newSig);
+
+        // Step 6: reject x=0 order-2 point (0, -1)
+        EdOnBN254.EdOnBN254Point memory order2SchnorrVK =
+            EdOnBN254.EdOnBN254Point(0, EdOnBN254.P_MOD - 1);
+        vm.expectRevert(S.InvalidSchnorrVK.selector);
+        stakeTable.updateConsensusKeys(newBlsVK, order2SchnorrVK, newSig);
 
         vm.stopPrank();
     }
