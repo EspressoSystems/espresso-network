@@ -87,26 +87,13 @@ contract StakeTableV3 is StakeTableV2 {
         BN254.G1Point memory blsSig,
         bytes memory schnorrSig
     ) public virtual override whenNotPaused {
-        address validator = msg.sender;
-
-        ensureValidatorActive(validator);
-        ensureNonZeroSchnorrKey(schnorrVK);
         _ensureSchnorrKeyNotIdentity(schnorrVK);
-        ensureNewKeys(blsVK, schnorrVK);
-
-        bytes memory message = abi.encode(validator);
-        BLSSig.verifyBlsSig(message, blsSig, blsVK);
-
-        if (schnorrSig.length != 64) {
-            revert InvalidSchnorrSig();
-        }
-
-        blsKeys[_hashBlsKey(blsVK)] = true;
-        schnorrKeys[_hashSchnorrKey(schnorrVK)] = true;
-
-        emit ConsensusKeysUpdatedV2(validator, blsVK, schnorrVK, blsSig, schnorrSig);
+        super.updateConsensusKeysV2(blsVK, schnorrVK, blsSig, schnorrSig);
     }
 
+    /// @dev (0, 1) is the identity (neutral element) on the twisted Edwards curve over BN254.
+    /// @dev Schnorr signatures are trivially forgeable when the public key is the identity point so
+    /// we reject it.
     function _ensureSchnorrKeyNotIdentity(EdOnBN254.EdOnBN254Point memory schnorrVK) internal pure {
         if (schnorrVK.x == 0 && schnorrVK.y == 1) {
             revert InvalidSchnorrVK();
