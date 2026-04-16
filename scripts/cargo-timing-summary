@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+file="${1:?usage: cargo-timing-summary <cargo-timing.html>}"
+
+[[ -f "$file" ]] || { echo "file not found: $file" >&2; exit 1; }
+
+duration=$(sed -n 's/^DURATION = \([0-9]*\);$/\1/p' "$file")
+json=$(sed -n '/^const UNIT_DATA = \[$/,/^\];$/{ /^const UNIT_DATA/d; /^\];$/d; p; }' "$file")
+
+echo "## Cargo Build Timings (total: ${duration}s)"
+echo ""
+echo "| Crate | Target | Duration |"
+echo "|-------|--------|----------|"
+
+echo "[$json]" |
+  jq -r '
+    sort_by(-.duration)
+    | .[0:20]
+    | .[]
+    | .target as $t
+    | ($t | gsub("^ +"; "") | gsub("\\\\\""; "\"")) as $clean
+    | "| \(.name) | \($clean) | \(.duration)s |"
+  '
