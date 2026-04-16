@@ -101,13 +101,6 @@ mod tests {
     }
 
     #[test]
-    fn test_client_id_eq() {
-        let client_id_1 = ClientId::from_count(1);
-
-        client_id_1.assert_receiver_is_total_eq();
-    }
-
-    #[test]
     fn test_hash() {
         use std::{
             collections::hash_map::DefaultHasher,

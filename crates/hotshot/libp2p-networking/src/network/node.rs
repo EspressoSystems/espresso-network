@@ -302,8 +302,7 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                     [(
                         StreamProtocol::new("/HotShot/direct_message/1.0"),
                         ProtocolSupport::Full,
-                    )]
-                    .into_iter(),
+                    )],
                     rrconfig.clone(),
                 );
 
