@@ -754,7 +754,8 @@ pub fn migrate_legacy_env_vars() -> Vec<(&'static str, &'static str)> {
             && let Ok(val) = std::env::var(old)
         {
             eprintln!("WARNING: {old} is deprecated, use {new} instead");
-            // SAFETY: called once at startup before spawning threads.
+            // SAFETY: called from sync fn main() before tokio runtime starts,
+            // guaranteeing single-threaded execution.
             unsafe { std::env::set_var(new, val) };
             migrated.push((old, new));
         }

@@ -235,9 +235,14 @@ struct ChainInfo {
     multisig_address: Option<Address>,
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
     let migrated_envs = espresso_utils::env_compat::migrate_legacy_env_vars();
+    tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(async_main(migrated_envs))
+}
+
+async fn async_main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
     let cli_params = Args::parse();
 
     let Args {

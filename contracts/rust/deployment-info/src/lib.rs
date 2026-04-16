@@ -98,13 +98,14 @@ pub(crate) fn get_crate_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
-pub async fn run() -> Result<()> {
+pub async fn run(migrated_envs: Vec<(&str, &str)>) -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
         .init();
+    espresso_utils::env_compat::log_migrated_env_vars(&migrated_envs);
 
     let args = Args::parse();
     let crate_dir = get_crate_dir();
