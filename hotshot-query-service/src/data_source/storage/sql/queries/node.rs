@@ -34,7 +34,8 @@ use crate::{
     Header, MissingSnafu, QueryError, QueryResult,
     availability::{NamespaceId, QueryableHeader},
     data_source::storage::{
-        Aggregate, AggregatesStorage, NodeStorage, PayloadMetadata, UpdateAggregatesStorage,
+        pruning::PrunedHeightStorage, Aggregate, AggregatesStorage, NodeStorage, PayloadMetadata,
+        UpdateAggregatesStorage,
     },
     node::{
         BlockId, ResourceSyncStatus, SyncStatus, SyncStatusQueryData, SyncStatusRange,
@@ -135,13 +136,22 @@ where
     where
         ID: Into<BlockId<Types>> + Send + Sync,
     {
+        let pruned_height: i64 = self
+            .load_pruned_height()
+            .await
+            .map_err(|err| QueryError::Error {
+                message: format!("{err:#}"),
+            })?
+            .map(|h| h as i64)
+            .unwrap_or(-1);
         let mut query = QueryBuilder::default();
         let where_clause = query.header_where_clause(id.into())?;
+        let ph = query.bind(pruned_height)?;
         // ORDER BY h.height ASC ensures that if there are duplicate blocks (this can happen when
         // selecting by payload ID, as payloads are not unique), we return the first one.
         let sql = format!(
             "SELECT vid_share FROM header AS h
-              WHERE {where_clause}
+              WHERE {where_clause} AND h.height > {ph}
               ORDER BY h.height
               LIMIT 1"
         );
