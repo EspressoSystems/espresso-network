@@ -14,8 +14,8 @@ use async_lock::RwLock;
 use async_trait::async_trait;
 use clap::Parser;
 use espresso_types::{
-    AuthenticatedValidatorMap, Leaf, Leaf2, NetworkConfig, Payload, PubKey, RegisteredValidatorMap,
-    SeqTypes, StakeTableHash,
+    AuthenticatedValidatorMap, ConsensusEvent, Leaf, Leaf2, NetworkConfig, Payload, PubKey,
+    RegisteredValidatorMap, SeqTypes, StakeTableHash,
     traits::{EventsPersistenceRead, MembershipPersistence, StakeTuple},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
     v0_3::{
@@ -427,7 +427,6 @@ impl Inner {
         &mut self,
         view: ViewNumber,
         deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
-        cert2: Option<espresso_types::Certificate2<SeqTypes>>,
         consumer: &impl EventConsumer,
     ) -> anyhow::Result<Vec<RangeInclusive<ViewNumber>>> {
         // Generate a decide event for each leaf, to be processed by the event consumer. We make a
@@ -503,16 +502,15 @@ impl Inner {
                 };
 
                 consumer
-                    .handle_event(&Event {
+                    .handle_event(&ConsensusEvent::LegacyEvent(Event {
                         view_number: view,
                         event: EventType::Decide {
                             committing_qc: Arc::new(cert),
                             deciding_qc,
-                            cert2: cert2.clone().map(Arc::new),
                             leaf_chain: Arc::new(vec![leaf]),
                             block_size: None,
                         },
-                    })
+                    }))
                     .await?;
             }
             if let Some((start, end, current_height)) = current_interval.as_mut() {
@@ -733,7 +731,6 @@ impl SequencerPersistence for Persistence {
         view: ViewNumber,
         leaf_chain: impl IntoIterator<Item = (&LeafInfo<SeqTypes>, CertificatePair<SeqTypes>)> + Send,
         deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
-        cert2: Option<espresso_types::Certificate2<SeqTypes>>,
         consumer: &impl EventConsumer,
     ) -> anyhow::Result<()> {
         let mut inner = self.inner.write().await;
@@ -790,7 +787,7 @@ impl SequencerPersistence for Persistence {
         }
 
         match inner
-            .generate_decide_events(view, deciding_qc, cert2, consumer)
+            .generate_decide_events(view, deciding_qc, consumer)
             .await
         {
             Err(err) => {

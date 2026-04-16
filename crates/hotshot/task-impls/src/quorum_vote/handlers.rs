@@ -282,7 +282,6 @@ pub(crate) async fn handle_quorum_proposal_validated<
                     leaf_chain: Arc::new(leaf_views.clone()),
                     committing_qc: committing_qc.clone(),
                     deciding_qc: deciding_qc.map(Arc::new),
-                    cert2: None,
                     block_size: included_txns.map(|txns| txns.len().try_into().unwrap()),
                 },
             },

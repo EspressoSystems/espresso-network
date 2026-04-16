@@ -1,7 +1,5 @@
 pub use hotshot_new_protocol::message::{Certificate2, Proposal as NewProposal};
 use hotshot_types::{
-    data::ViewNumber,
-    message::Proposal as SignedProposal,
     signature_key::{BLSPubKey, SchnorrPubKey},
     traits::{node_implementation::NodeType, signature_key::SignatureKey},
 };
@@ -48,7 +46,7 @@ use vbs::version::StaticVersion;
 // instead we write `with_minor_versions!(some_macro!(args))`.
 macro_rules! with_minor_versions {
     ($m:ident!($($arg:tt),*)) => {
-        $m!($($arg,)* v0_1, v0_2, v0_3, v0_4, v0_5, v0_6);
+        $m!($($arg,)* v0_1, v0_2, v0_3, v0_4, v0_5, v0_6, v0_7, v0_8);
     };
 }
 
@@ -170,55 +168,7 @@ pub type Leaf2 = hotshot_types::data::Leaf2<SeqTypes>;
 
 pub type Event = hotshot::types::Event<SeqTypes>;
 
-#[derive(Clone, Debug)]
-pub struct NewDecideEvent<T: NodeType> {
-    pub view_number: ViewNumber,
-    pub leaves: Vec<hotshot_types::data::Leaf2<T>>,
-    pub cert2: Certificate2<T>,
-}
-
-#[derive(Clone, Debug)]
-pub enum ConsensusEvent<T: NodeType> {
-    LegacyEvent(hotshot::types::Event<T>),
-    NewDecide(NewDecideEvent<T>),
-    ViewChanged {
-        view_number: ViewNumber,
-    },
-    QuorumProposal {
-        proposal: SignedProposal<T, NewProposal<T>>,
-        sender: T::SignatureKey,
-    },
-    ExternalMessageReceived {
-        sender: T::SignatureKey,
-        data: Vec<u8>,
-    },
-}
-
-impl<T: NodeType> std::fmt::Display for ConsensusEvent<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::LegacyEvent(event) => {
-                write!(f, "Legacy: {} view={}", event.event, event.view_number)
-            },
-            Self::NewDecide(event) => {
-                write!(f, "NewDecide: view={}", event.view_number)
-            },
-            Self::ViewChanged { view_number } => {
-                write!(f, "ViewChanged: view={view_number}")
-            },
-            Self::QuorumProposal { proposal, .. } => {
-                write!(
-                    f,
-                    "QuorumProposal: view={} epoch={}",
-                    proposal.data.view_number, proposal.data.epoch
-                )
-            },
-            Self::ExternalMessageReceived { .. } => {
-                write!(f, "ExternalMessageReceived")
-            },
-        }
-    }
-}
+pub use hotshot_new_protocol::consensus::{ConsensusEvent, NewDecideEvent};
 
 pub type PubKey = BLSPubKey;
 pub type PrivKey = <PubKey as SignatureKey>::PrivateKey;

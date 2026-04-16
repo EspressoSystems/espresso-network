@@ -101,8 +101,8 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Coordinator<T, N> {
         };
         consensus.seed_genesis(genesis_cert1, genesis_proposal);
 
-         // todo:
-         
+        // todo:
+
         let mut state_manager = StateManager::new(Arc::new(initializer.instance_state.clone()));
         state_manager.seed_state(
             ViewNumber::genesis(),
@@ -170,6 +170,20 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Coordinator<T, N> {
     pub async fn start(&mut self) {
         let view = ViewNumber::new(1);
         let epoch = EpochNumber::genesis();
+
+        // TODO:
+        if self.consensus.last_decided_leaf().view_number() == ViewNumber::genesis() {
+            self.outbox.push_back(ConsensusOutput::LeafDecided {
+                leaves: vec![self.consensus.last_decided_leaf().clone()],
+                cert1: self
+                    .consensus
+                    .cert1_at(ViewNumber::genesis())
+                    .cloned()
+                    .expect("genesis cert1 must be seeded"),
+                cert2: None,
+                vid_shares: vec![None],
+            });
+        }
 
         self.outbox
             .push_back(ConsensusOutput::ViewChanged(view, epoch));
@@ -378,10 +392,11 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Coordinator<T, N> {
                 header: Some(hdr),
             } => Some(ConsensusInput::HeaderCreated(response.view, hdr)),
             StateManagerOutput::Header {
-                response: _,
+                response,
                 header: None,
             } => {
-                todo!()
+                tracing::warn!(view = %response.view, "header creation failed");
+                None
             },
         }
     }

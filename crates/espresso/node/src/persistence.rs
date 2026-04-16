@@ -149,7 +149,8 @@ mod tests {
         network_config::light_client_genesis_from_stake_table,
     };
     use espresso_types::{
-        Event, L1Client, L1ClientOptions, Leaf, Leaf2, NodeState, PubKey, SeqTypes, ValidatedState,
+        ConsensusEvent, Event, L1Client, L1ClientOptions, Leaf, Leaf2, NodeState, PubKey, SeqTypes,
+        ValidatedState,
         traits::{
             EventConsumer, EventsPersistenceRead, MembershipPersistence, NullEventConsumer,
             PersistenceOptions, SequencerPersistence,
@@ -245,8 +246,10 @@ mod tests {
 
     #[async_trait]
     impl EventConsumer for EventCollector {
-        async fn handle_event(&self, event: &Event) -> anyhow::Result<()> {
-            self.events.write().await.push(event.clone());
+        async fn handle_event(&self, event: &ConsensusEvent<SeqTypes>) -> anyhow::Result<()> {
+            if let ConsensusEvent::LegacyEvent(event) = event {
+                self.events.write().await.push(event.clone());
+            }
             Ok(())
         }
     }
@@ -256,7 +259,7 @@ mod tests {
 
     #[async_trait]
     impl EventConsumer for FailConsumer {
-        async fn handle_event(&self, _: &Event) -> anyhow::Result<()> {
+        async fn handle_event(&self, _: &ConsensusEvent<SeqTypes>) -> anyhow::Result<()> {
             bail!("mock error injection");
         }
     }
@@ -809,7 +812,6 @@ mod tests {
                     .iter()
                     .map(|(leaf, qc)| (leaf, CertificatePair::non_epoch_change((*qc).clone()))),
                 None,
-                None,
                 &consumer,
             )
             .await
@@ -874,7 +876,6 @@ mod tests {
                     &leaf_info(leaves[3].clone()),
                     CertificatePair::non_epoch_change(qcs[3].clone()),
                 )],
-                None,
                 None,
                 &consumer,
             )
@@ -1152,7 +1153,6 @@ mod tests {
                     .iter()
                     .map(|(leaf, qc)| (leaf, CertificatePair::non_epoch_change(qc.clone()))),
                 None,
-                None,
                 &FailConsumer,
             )
             .await
@@ -1206,7 +1206,6 @@ mod tests {
                 leaf_chain
                     .iter()
                     .map(|(leaf, qc)| (leaf, CertificatePair::non_epoch_change(qc.clone()))),
-                None,
                 None,
                 &consumer,
             )
@@ -1356,7 +1355,7 @@ mod tests {
 
         // Decide a newer view, view 1.
         storage
-            .append_decided_leaves(ViewNumber::new(1), [], None, None, &NullEventConsumer)
+            .append_decided_leaves(ViewNumber::new(1), [], None, &NullEventConsumer)
             .await
             .unwrap();
 
@@ -1388,7 +1387,7 @@ mod tests {
 
         // Decide an even newer view, triggering GC of the old data.
         storage
-            .append_decided_leaves(ViewNumber::new(2), [], None, None, &NullEventConsumer)
+            .append_decided_leaves(ViewNumber::new(2), [], None, &NullEventConsumer)
             .await
             .unwrap();
         assert!(
@@ -2039,7 +2038,6 @@ mod tests {
                     CertificatePair::non_epoch_change(qc0),
                 )],
                 None,
-                None,
                 &FailConsumer,
             )
             .await
@@ -2059,7 +2057,6 @@ mod tests {
                 Some(Arc::new(CertificatePair::non_epoch_change(
                     deciding_qc.clone(),
                 ))),
-                None,
                 &consumer,
             )
             .await

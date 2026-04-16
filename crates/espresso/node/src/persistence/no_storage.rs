@@ -4,8 +4,8 @@ use std::{collections::BTreeMap, sync::Arc};
 use anyhow::bail;
 use async_trait::async_trait;
 use espresso_types::{
-    AuthenticatedValidatorMap, Leaf2, NetworkConfig, PubKey, RegisteredValidatorMap,
-    StakeTableHash,
+    AuthenticatedValidatorMap, ConsensusEvent, Leaf2, NetworkConfig, PubKey,
+    RegisteredValidatorMap, StakeTableHash,
     traits::{EventsPersistenceRead, MembershipPersistence, StakeTuple},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
     v0_3::{EventKey, IndexedStake, RegisteredValidator, RewardAmount, StakeTableEvent},
@@ -72,7 +72,6 @@ impl SequencerPersistence for NoStorage {
         view_number: ViewNumber,
         leaves: impl IntoIterator<Item = (&LeafInfo<SeqTypes>, CertificatePair<SeqTypes>)> + Send,
         deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
-        _cert2: Option<espresso_types::Certificate2<SeqTypes>>,
         consumer: &impl EventConsumer,
     ) -> anyhow::Result<()> {
         let leaves = leaves
@@ -89,16 +88,15 @@ impl SequencerPersistence for NoStorage {
             };
 
             consumer
-                .handle_event(&Event {
+                .handle_event(&ConsensusEvent::LegacyEvent(Event {
                     view_number,
                     event: EventType::Decide {
                         leaf_chain: Arc::new(vec![leaf_info.clone()]),
                         committing_qc: Arc::new(qc),
                         deciding_qc,
-                        cert2: None,
                         block_size: None,
                     },
-                })
+                }))
                 .await?;
         }
         Ok(())

@@ -88,7 +88,12 @@ pub enum ConsensusOutput<T: NodeType> {
     Certificate2Formed(Certificate2<T>),
     LeafDecided {
         leaves: Vec<Leaf2<T>>,
-        cert2: Certificate2<T>,
+        /// Certificate1 (QC) that certifies the most recent (first) leaf in the chain.
+        /// Each older leaf's cert1 is available as the next leaf's `justify_qc`.
+        cert1: Certificate1<T>,
+        cert2: Option<Certificate2<T>>,
+        // TODO(new-protocol): remove this field once the coordinator has storage
+        vid_shares: Vec<Option<SignedProposal<T, VidDisperseShare2<T>>>>,
     },
     LockUpdated(Certificate2<T>),
     ViewChanged(ViewNumber, EpochNumber),
@@ -100,6 +105,66 @@ pub enum ConsensusOutput<T: NodeType> {
         sender: T::SignatureKey,
         data: Vec<u8>,
     },
+}
+
+/// A decided leaf with its Certificate1 (QC).
+#[derive(Clone, Debug)]
+pub struct NewDecideEvent<T: NodeType> {
+    pub view_number: ViewNumber,
+    pub leaves: Vec<Leaf2<T>>,
+    /// Certificate1 (QC) that certifies the most recent (first) leaf in the chain.
+    /// Each older leaf's cert1 is the next leaf's `justify_qc`.
+    pub cert1: Certificate1<T>,
+    pub cert2: Option<Certificate2<T>>,
+    /// VID shares for decided leaves, parallel to `leaves`. Pre-signed so the
+    // TODO(new-protocol): remove this field once the coordinator has storage
+    pub vid_shares: Vec<Option<SignedProposal<T, VidDisperseShare2<T>>>>,
+}
+
+/// Events emitted by the consensus coordinator.
+///
+/// This enum covers both legacy HotShot events and new protocol events.
+#[derive(Clone, Debug)]
+pub enum ConsensusEvent<T: NodeType> {
+    LegacyEvent(hotshot::types::Event<T>),
+    NewDecide(NewDecideEvent<T>),
+    ViewChanged {
+        view_number: ViewNumber,
+    },
+    QuorumProposal {
+        proposal: SignedProposal<T, Proposal<T>>,
+        sender: T::SignatureKey,
+    },
+    ExternalMessageReceived {
+        sender: T::SignatureKey,
+        data: Vec<u8>,
+    },
+}
+
+impl<T: NodeType> std::fmt::Display for ConsensusEvent<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::LegacyEvent(event) => {
+                write!(f, "Legacy: {} view={}", event.event, event.view_number)
+            },
+            Self::NewDecide(event) => {
+                write!(f, "NewDecide: view={}", event.view_number)
+            },
+            Self::ViewChanged { view_number } => {
+                write!(f, "ViewChanged: view={view_number}")
+            },
+            Self::QuorumProposal { proposal, .. } => {
+                write!(
+                    f,
+                    "QuorumProposal: view={} epoch={}",
+                    proposal.data.view_number, proposal.data.epoch
+                )
+            },
+            Self::ExternalMessageReceived { .. } => {
+                write!(f, "ExternalMessageReceived")
+            },
+        }
+    }
 }
 
 pub struct Consensus<T: NodeType> {
@@ -213,6 +278,22 @@ impl<T: NodeType> Consensus<T> {
     /// Return the proposal stored at the given view, if any.
     pub fn proposal_at(&self, view: ViewNumber) -> Option<&Proposal<T>> {
         self.proposals.get(&view)
+    }
+
+    /// Return the Certificate1 (QC) stored at the given view, if any.
+    pub fn cert1_at(&self, view: ViewNumber) -> Option<&Certificate1<T>> {
+        self.certs.get(&view)
+    }
+
+    // TODO(new-protocol): remove this field once the coordinator has storage
+    fn signed_vid_share(
+        &self,
+        view: ViewNumber,
+    ) -> Option<SignedProposal<T, VidDisperseShare2<T>>> {
+        self.vid_shares
+            .get(&view)?
+            .clone()
+            .to_proposal(&self.private_key)
     }
 
     /// Apply consensus to the given input and collect protocol outputs.
@@ -861,7 +942,10 @@ impl<T: NodeType> Consensus<T> {
             outbox.push_back(ConsensusOutput::SendEpochChange(epoch_change));
         }
         // we have a second certificate, and matching proposal, it is decided.
-        let leaf: Leaf2<T> = proposal.clone().into();
+        let mut leaf: Leaf2<T> = proposal.clone().into();
+        if let Some(payload) = self.blocks.get(&view) {
+            leaf.fill_block_payload_unchecked(payload.clone());
+        }
         self.last_decided_view = max(self.last_decided_view, leaf.view_number());
         self.last_decided_leaf = leaf.clone();
         let mut gc = None;
@@ -869,6 +953,7 @@ impl<T: NodeType> Consensus<T> {
             gc = Some((leaf.view_number(), leaf.justify_qc().epoch()));
         }
         let mut decided = vec![leaf];
+        let mut vid_shares = vec![self.signed_vid_share(view)];
 
         let mut parent_view = proposal.justify_qc.view_number();
         let mut parent_commit = proposal.justify_qc.data.leaf_commit;
@@ -878,19 +963,30 @@ impl<T: NodeType> Consensus<T> {
             if proposal_commit != parent_commit {
                 break;
             }
-            let leaf: Leaf2<T> = proposal.clone().into();
+            let mut leaf: Leaf2<T> = proposal.clone().into();
+            if let Some(payload) = self.blocks.get(&parent_view) {
+                leaf.fill_block_payload_unchecked(payload.clone());
+            }
             if gc.is_none()
                 && leaf.block_header().block_number() % *self.garbage_collection_interval == 0
             {
                 gc = Some((leaf.view_number(), leaf.justify_qc().epoch()));
             }
+            vid_shares.push(self.signed_vid_share(parent_view));
             decided.push(leaf);
             parent_view = proposal.justify_qc.view_number();
             parent_commit = proposal.justify_qc.data.leaf_commit;
         }
+        let cert1 = self
+            .certs
+            .get(&view)
+            .cloned()
+            .expect("cert1 must exist if cert2 exists");
         outbox.push_back(ConsensusOutput::LeafDecided {
             leaves: decided,
-            cert2: cert2.clone(),
+            cert1,
+            cert2: Some(cert2.clone()),
+            vid_shares,
         });
         if let Some(gc) = gc {
             let gc_data = CheckpointData {

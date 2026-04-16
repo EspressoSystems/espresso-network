@@ -18,11 +18,7 @@ use crate::{
     },
     error::HotShotError,
     message::{Proposal, convert_proposal},
-    simple_certificate::{
-        CertificatePair, LightClientStateUpdateCertificateV2, QuorumCertificate, SimpleCertificate,
-        SuccessThreshold,
-    },
-    simple_vote::Vote2Data,
+    simple_certificate::{CertificatePair, LightClientStateUpdateCertificateV2, QuorumCertificate},
     traits::{ValidatedState, node_implementation::NodeType},
     vote::HasViewNumber,
 };
@@ -210,12 +206,6 @@ pub enum EventType<TYPES: NodeType> {
         /// Together with `qc`, this forms a 2-chain, which is sufficient for a light client to
         /// verify that the leaf chain contained in this event is in fact decided.
         deciding_qc: Option<Arc<CertificatePair<TYPES>>>,
-        /// New protocol Certificate2 that proves finality of the most recent leaf.
-        ///
-        /// Present only for blocks decided under the new protocol. In the new protocol,
-        /// Certificate2 alone proves finality (round 2 voting requires having seen
-        /// Certificate1, so round 1 quorum is implicitly proven).
-        cert2: Option<Arc<SimpleCertificate<TYPES, Vote2Data<TYPES>, SuccessThreshold>>>,
         /// Optional information of the number of transactions in the block, for logging purposes.
         block_size: Option<u64>,
     },

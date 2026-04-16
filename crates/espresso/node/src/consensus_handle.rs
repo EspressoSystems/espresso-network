@@ -37,11 +37,18 @@ use versions::version;
 
 pub fn event_from_output<T: NodeType>(output: &ConsensusOutput<T>) -> Option<ConsensusEvent<T>> {
     match output {
-        ConsensusOutput::LeafDecided { leaves, cert2 } => leaves.first().map(|first_leaf| {
+        ConsensusOutput::LeafDecided {
+            leaves,
+            cert1,
+            cert2,
+            vid_shares,
+        } => leaves.first().map(|first_leaf| {
             ConsensusEvent::NewDecide(NewDecideEvent {
                 view_number: first_leaf.view_number(),
                 leaves: leaves.clone(),
+                cert1: cert1.clone(),
                 cert2: cert2.clone(),
+                vid_shares: vid_shares.clone(),
             })
         }),
         ConsensusOutput::ViewChanged(view, _epoch) => {

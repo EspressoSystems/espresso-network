@@ -572,7 +572,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
                             )]),
                             committing_qc: Arc::new(CertificatePair::non_epoch_change(qc)),
                             deciding_qc: None,
-                            cert2: None,
                             block_size: None,
                         },
                     },
